@@ -233,3 +233,102 @@ mod tests {
         assert_eq!(d.next_frame(), Err(ProtoError::FrameTooLarge));
     }
 }
+
+// ── Исходные байты вложенных сообщений (spec 035, FR-030, T057) ─────────────────────────────────────
+
+/// Поля верхнего уровня сообщения по сырым байтам: `(номер, тип провода, байты значения length-delimited)`.
+fn wire_fields(mut b: &[u8]) -> Result<Vec<(u32, u8, &[u8])>> {
+    fn varint(b: &mut &[u8]) -> Result<u64> {
+        let mut v = 0u64;
+        for i in 0..10 {
+            let (&x, rest) = b.split_first().ok_or(ProtoError::Malformed)?;
+            *b = rest;
+            v |= u64::from(x & 0x7f) << (7 * i);
+            if x & 0x80 == 0 {
+                return Ok(v);
+            }
+        }
+        Err(ProtoError::Malformed)
+    }
+    let mut out = Vec::new();
+    while !b.is_empty() {
+        let key = varint(&mut b)?;
+        let number = u32::try_from(key >> 3).map_err(|_| ProtoError::Malformed)?;
+        let wire = (key & 7) as u8;
+        match wire {
+            0 => {
+                varint(&mut b)?;
+                out.push((number, wire, &[][..]));
+            }
+            1 | 5 => {
+                let n = if wire == 1 { 8 } else { 4 };
+                if b.len() < n {
+                    return Err(ProtoError::Malformed);
+                }
+                b = &b[n..];
+                out.push((number, wire, &[][..]));
+            }
+            2 => {
+                let n = usize::try_from(varint(&mut b)?).map_err(|_| ProtoError::Malformed)?;
+                if b.len() < n {
+                    return Err(ProtoError::Malformed);
+                }
+                let (v, rest) = b.split_at(n);
+                b = rest;
+                out.push((number, wire, v));
+            }
+            _ => return Err(ProtoError::Malformed),
+        }
+    }
+    Ok(out)
+}
+
+/// Исходные байты каждого вхождения поля-сообщения `field` (повторяемого) в `msg` — по порядку, без разбора и
+/// пересборки: подписанное хранится и пересылается побайтно, с неизвестными полями любой глубины (FR-030).
+pub fn raw_repeated(msg: &[u8], field: u32) -> Result<Vec<Vec<u8>>> {
+    let mut out = Vec::new();
+    for (n, wire, v) in wire_fields(msg)? {
+        if n == field {
+            if wire != 2 {
+                return Err(ProtoError::Malformed);
+            }
+            out.push(v.to_vec());
+        }
+    }
+    Ok(out)
+}
+
+/// Исходные байты одиночного поля-сообщения `field`; `None` — поля нет. Повтор поля — отказ: prost слил бы
+/// вхождения, и сохранённые байты разошлись бы с проверенными.
+pub fn raw_field(msg: &[u8], field: u32) -> Result<Option<Vec<u8>>> {
+    let mut all = raw_repeated(msg, field)?;
+    match all.len() {
+        0 => Ok(None),
+        1 => Ok(all.pop()),
+        _ => Err(ProtoError::Malformed),
+    }
+}
+
+/// Дописать исходные байты сообщения как поле `field` (то же на проводе, что вложенное сообщение).
+pub fn put_raw(field: u32, raw: &[u8], out: &mut Vec<u8>) {
+    prost::encoding::bytes::encode(field, &raw.to_vec(), out);
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use super::*;
+
+    #[test]
+    fn raw_fields_keep_unknown_and_refuse_duplicates() {
+        let mut inner = Vec::new();
+        prost::encoding::string::encode(99, &"будущее".to_string(), &mut inner);
+        let mut msg = Vec::new();
+        put_raw(1, &inner, &mut msg);
+        prost::encoding::bool::encode(2, &true, &mut msg);
+        put_raw(1, b"", &mut msg);
+        assert_eq!(raw_repeated(&msg, 1).unwrap(), vec![inner.clone(), vec![]]);
+        assert_eq!(raw_field(&msg, 1).unwrap_err(), ProtoError::Malformed);
+        assert_eq!(raw_field(&msg, 3).unwrap(), None);
+        assert!(raw_repeated(&[0x0a, 0x05, 1], 1).is_err(), "обрезанное — отказ");
+    }
+}

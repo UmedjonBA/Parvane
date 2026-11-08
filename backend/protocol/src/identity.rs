@@ -313,6 +313,14 @@ impl DeviceLog {
         Ok(Self { user: user.to_string(), ..Default::default() })
     }
 
+    /// spec 035 (FR-030, T057): следующая запись исходными байтами (как пришла) — проверка и применение те же, что
+    /// у `apply`; хранить и пересылать вызывающий обязан `raw`. Возвращает разобранную запись.
+    pub fn apply_raw(&mut self, raw: &[u8]) -> Result<SignedOp> {
+        let op: SignedOp = decode_checked(raw, Origin::Client)?;
+        self.apply(&op)?;
+        Ok(op)
+    }
+
     /// Применить следующую запись. Корень после генезиса неизменен; смена
     /// корня = новый журнал и предупреждение KEY-1 (решает вызывающий).
     pub fn apply(&mut self, op: &SignedOp) -> Result<()> {

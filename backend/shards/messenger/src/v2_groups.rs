@@ -304,6 +304,27 @@ pub(crate) async fn rebuild_windows(ctx: &V2) {
     }
 }
 
+/// spec 035 (T101, `messenger --migration-check`): окна членства, какими их даёт журнал группы. `None` — журнал не
+/// перестраивается.
+pub(crate) async fn expected_windows(ctx: &V2, group_id: &[u8]) -> Option<std::collections::BTreeMap<(String, i64), Option<i64>>> {
+    let (_, steps) = replay(ctx, group_id).await.ok()??;
+    let mut m: std::collections::BTreeMap<(String, i64), Option<i64>> = std::collections::BTreeMap::new();
+    for st in &steps {
+        let v = st.version as i64;
+        for u in &st.left {
+            for ((who, _), exit) in m.iter_mut() {
+                if who == u && exit.is_none() {
+                    *exit = Some(v);
+                }
+            }
+        }
+        for u in &st.joined {
+            m.entry((u.clone(), v)).or_insert(None);
+        }
+    }
+    Some(m)
+}
+
 /// Версия закрытия последнего окна членства `user` (None — окна нет либо оно открыто).
 pub(crate) async fn last_exit(pool: &SqlitePool, group_id: &[u8], user: &str) -> Result<Option<u64>, ErrorCode> {
     let r: Option<(Option<i64>,)> = sqlx::query_as("SELECT exit_v FROM group_membership_windows WHERE group_id = ? AND user = ? ORDER BY join_v DESC LIMIT 1")
@@ -331,7 +352,15 @@ fn entry_ts_ms(entry: &GroupStateEntry) -> Option<i64> {
 }
 
 /// Принять запись журнала от участника `actor` (подписант обязан совпасть с сессией).
-async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupState, ErrorCode> {
+/// spec 035 (FR-030, T057): исходные байты записи журнала группы из тела запроса (поле `field`) — хранятся и
+/// отдаются как пришли; повтор поля — отказ (prost слил бы вхождения).
+fn raw_entry(body: &[u8], field: u32) -> Result<Vec<u8>, ErrorCode> {
+    parvane_protocol::codec::raw_field(body, field).map_err(|_| ErrorCode::Invalid)?.ok_or(ErrorCode::Invalid)
+}
+
+/// Принять запись журнала группы: `raw` — её исходные байты (FR-030: в журнал ложатся они, не пересборка).
+async fn append(ctx: &V2, actor: &str, raw: Vec<u8>) -> Result<GroupState, ErrorCode> {
+    let entry: GroupStateEntry = decode_checked(&raw, Origin::Client).map_err(|_| ErrorCode::Invalid)?;
     let g = entry.group.clone().ok_or(ErrorCode::Invalid)?;
     parvane_protocol::address::check_ref(&g).map_err(|_| ErrorCode::Invalid)?;
     if g.domain != server_domain() {
@@ -402,7 +431,7 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     sqlx::query("INSERT INTO group_state_log (group_id, version, entry, at, signer_user, signer_root) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(&g.id)
         .bind(next.version as i64)
-        .bind(entry.encode_to_vec())
+        .bind(&raw)
         .bind(now_unix())
         .bind(&signer.user)
         .bind(signer.root_key.to_vec())
@@ -647,7 +676,8 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
         name if name.starts_with("group.public.") => crate::v2_public::dispatch(ctx, name, req).await,
         "group.state.append" => {
             let r: gpb::StateAppendRequest = body(&req)?;
-            let s = append(ctx, &user, r.entry.ok_or(ErrorCode::Invalid)?).await?;
+            r.entry.ok_or(ErrorCode::Invalid)?;
+            let s = append(ctx, &user, raw_entry(&req.body, 1)?).await?;
             Ok(gpb::StateAppendResponse { version: s.version }.encode_to_vec())
         }
         "group.epoch.publish_send_key" => {
@@ -656,7 +686,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             if !matches!(change_of(&e), Some(Change::NewEpoch(_))) {
                 return Err(ErrorCode::Invalid);
             }
-            let s = append(ctx, &user, e).await?;
+            let s = append(ctx, &user, raw_entry(&req.body, 1)?).await?;
             Ok(gpb::EpochPublishSendKeyResponse { epoch: s.epoch }.encode_to_vec())
         }
         "group.state.sync" => {
@@ -709,16 +739,19 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                     .await
                     .map_err(db_err)?;
             let more = rows.len() > 1024;
-            let mut entries = Vec::with_capacity(rows.len().min(1024));
+            // spec 035 (FR-030, T057): записи — исходными байтами из журнала (поле 1 `entries`), без пересборки
+            let mut out = Vec::new();
             let mut signer_hints = Vec::with_capacity(rows.len().min(1024));
             for (e, signer) in rows.into_iter().take(1024) {
-                if let Ok(entry) = GroupStateEntry::decode(e.as_slice()) {
-                    entries.push(entry);
+                if GroupStateEntry::decode(e.as_slice()).is_ok() {
+                    parvane_protocol::codec::put_raw(1, &e, &mut out);
                     // Подсказка, чей журнал устройств добрать (клиент проверяет сам).
                     signer_hints.push(signer.unwrap_or_default());
                 }
             }
-            Ok(gpb::StateSyncResponse { entries, more, signer_hints }.encode_to_vec())
+            // Остальные поля — тем же сообщением следом (склейка сообщений protobuf = слияние полей)
+            out.extend(gpb::StateSyncResponse { entries: vec![], more, signer_hints }.encode_to_vec());
+            Ok(out)
         }
         // Подписки на группы других серверов (spec 035, PV-014)
         "group.remote.subscribe" => {
@@ -735,7 +768,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             let r: gpb::InviteCreateRequest = body(&req)?;
             let e = r.entry.ok_or(ErrorCode::Invalid)?;
             let Some(Change::InviteKey(a)) = change_of(&e) else { return Err(ErrorCode::Invalid) };
-            let s = append(ctx, &user, e).await?;
+            let s = append(ctx, &user, raw_entry(&req.body, 1)?).await?;
             let id = group::link_id(&a.link_public_key);
             let l = s.invite_links.get(&id).ok_or(ErrorCode::Unavailable)?;
             Ok(gpb::InviteCreateResponse { invite: Some(invite_info(&id, l)) }.encode_to_vec())
@@ -746,7 +779,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             if !matches!(change_of(&e), Some(Change::InviteKeyRevoke(_))) {
                 return Err(ErrorCode::Invalid);
             }
-            append(ctx, &user, e).await?;
+            append(ctx, &user, raw_entry(&req.body, 1)?).await?;
             Ok(gpb::InviteRevokeResponse {}.encode_to_vec())
         }
         "group.invite.delete" => {
@@ -822,7 +855,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             }
             // Публичная ссылка (spec 023): вступление сразу, проверки — в движке
             if crate::v2_public::public_link_id(&s) == Some(id) {
-                let s2 = append(ctx, &user, e).await?;
+                let s2 = append(ctx, &user, raw_entry(&req.body, 1)?).await?;
                 return Ok(gpb::JoinResponse { pending: false, version: s2.version }.encode_to_vec());
             }
             let l = s.invite_links.get(&id).ok_or(ErrorCode::NotFound)?;
@@ -850,7 +883,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                 notify_invite_admins(ctx, &s).await;
                 return Ok(gpb::JoinResponse { pending: true, version: s.version }.encode_to_vec());
             }
-            let s2 = append(ctx, &user, e).await?;
+            let s2 = append(ctx, &user, raw_entry(&req.body, 1)?).await?;
             Ok(gpb::JoinResponse { pending: false, version: s2.version }.encode_to_vec())
         }
         "group.request.list" => {
@@ -891,7 +924,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                     Some(Change::AddMember(a)) if a.member.as_ref().map(|m| m.address.as_str()) == Some(who.as_str()) => {}
                     _ => return Err(ErrorCode::Invalid),
                 }
-                append(ctx, &user, e).await?;
+                append(ctx, &user, raw_entry(&req.body, 4)?).await?;
             }
             sqlx::query("DELETE FROM group_join_requests_v2 WHERE group_id = ? AND user = ?").bind(&g.id).bind(&who).execute(&ctx.v2).await.map_err(db_err)?;
             if !r.approve {

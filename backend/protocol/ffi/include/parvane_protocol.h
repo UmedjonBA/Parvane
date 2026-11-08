@@ -91,6 +91,13 @@ char *pv_engine_call(struct PvEngine *e,
                      const char *args_json);
 
 /**
+ * Переходный период desktop/android (spec 035 T125, как WASM `PvEngine.adoptStateKeys`): ключи личного состояния
+ * прежнего клиента — в модель (ключи не выходят из движка). Результат — итог движка (`Outcome`, JSON) либо
+ * `{"error": …}`; освобождать `pv_free_string`.
+ */
+char *pv_engine_adopt_state_keys(struct PvEngine *e, const struct PvClient *c);
+
+/**
  * Закрыть модель.
  */
 void pv_engine_free(struct PvEngine *e);

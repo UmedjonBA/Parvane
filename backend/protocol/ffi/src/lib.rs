@@ -169,6 +169,24 @@ pub unsafe extern "C" fn pv_engine_call(e: *mut PvEngine, name: *const c_char, a
     cstring(r.unwrap_or_else(|_| MALFORMED.to_string()))
 }
 
+/// Переходный период desktop/android (spec 035 T125, как WASM `PvEngine.adoptStateKeys`): ключи личного состояния
+/// прежнего клиента — в модель (ключи не выходят из движка). Результат — итог движка (`Outcome`, JSON) либо
+/// `{"error": …}`; освобождать `pv_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_engine_adopt_state_keys(e: *mut PvEngine, c: *const PvClient) -> *mut c_char {
+    let (Some(e), Some(c)) = (e.as_mut(), c.as_ref()) else {
+        return cstring(MALFORMED.to_string());
+    };
+    let r = catch_unwind(AssertUnwindSafe(|| {
+        let keys = c.inner.inner.state_keys_all();
+        match e.inner.adopt_state_keys(&keys) {
+            Ok(o) => serde_json::to_string(&o).unwrap_or_else(|_| MALFORMED.to_string()),
+            Err(err) => parvane_protocol::model::err_json(err),
+        }
+    }));
+    cstring(r.unwrap_or_else(|_| MALFORMED.to_string()))
+}
+
 /// Закрыть модель.
 #[no_mangle]
 pub unsafe extern "C" fn pv_engine_free(e: *mut PvEngine) {

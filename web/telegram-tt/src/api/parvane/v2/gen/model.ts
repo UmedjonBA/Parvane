@@ -138,6 +138,25 @@ export function serverInputKindFromJson(v: unknown): ServerInputKind {
   return byNum[n] ?? ServerInputKindValues[0];
 }
 
+export interface AuditDump {
+  jsonl: string;
+}
+
+export function auditDumpFromJson(v: unknown): AuditDump {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const jsonl = pick(j, 'jsonl', 'jsonl');
+  const out: AuditDump = {
+    jsonl: jsonl === undefined || jsonl === null ? '' : String(jsonl),
+  };
+  return out;
+}
+
+export function auditDumpToJson(m: AuditDump): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.jsonl === '')) j.jsonl = m.jsonl;
+  return j;
+}
+
 export interface Capabilities {
   sendText: boolean;
   sendMedia: boolean;
@@ -462,6 +481,7 @@ export interface EngineConfig {
   memoryBudgetBytes: string;
   deviceKey: Uint8Array;
   vectors: boolean;
+  legacyPresent: boolean;
 }
 
 export function engineConfigFromJson(v: unknown): EngineConfig {
@@ -474,6 +494,7 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
   const memoryBudgetBytes = pick(j, 'memory_budget_bytes', 'memoryBudgetBytes');
   const deviceKey = pick(j, 'device_key', 'deviceKey');
   const vectors = pick(j, 'vectors', 'vectors');
+  const legacyPresent = pick(j, 'legacy_present', 'legacyPresent');
   const out: EngineConfig = {
     user: user === undefined || user === null ? '' : String(user),
     deviceId: deviceId === undefined || deviceId === null ? '' : String(deviceId),
@@ -483,6 +504,7 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
     memoryBudgetBytes: memoryBudgetBytes === undefined || memoryBudgetBytes === null ? '' : String(memoryBudgetBytes),
     deviceKey: deviceKey === undefined || deviceKey === null ? new Uint8Array(0) : fromBase64(String(deviceKey)),
     vectors: vectors === undefined || vectors === null ? false : Boolean(vectors),
+    legacyPresent: legacyPresent === undefined || legacyPresent === null ? false : Boolean(legacyPresent),
   };
   return out;
 }
@@ -497,6 +519,7 @@ export function engineConfigToJson(m: EngineConfig): Record<string, unknown> {
   if (!((m.memoryBudgetBytes === '' || m.memoryBudgetBytes === '0'))) j.memory_budget_bytes = m.memoryBudgetBytes;
   if (!(m.deviceKey.length === 0)) j.device_key = toBase64(m.deviceKey);
   if (!(!m.vectors)) j.vectors = m.vectors;
+  if (!(!m.legacyPresent)) j.legacy_present = m.legacyPresent;
   return j;
 }
 
@@ -1399,6 +1422,29 @@ export function kindFormatToJson(m: KindFormat): Record<string, unknown> {
   return j;
 }
 
+export interface LegacyRecord {
+  key: string;
+  value: Uint8Array;
+}
+
+export function legacyRecordFromJson(v: unknown): LegacyRecord {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const key = pick(j, 'key', 'key');
+  const value = pick(j, 'value', 'value');
+  const out: LegacyRecord = {
+    key: key === undefined || key === null ? '' : String(key),
+    value: value === undefined || value === null ? new Uint8Array(0) : fromBase64(String(value)),
+  };
+  return out;
+}
+
+export function legacyRecordToJson(m: LegacyRecord): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.key === '')) j.key = m.key;
+  if (!(m.value.length === 0)) j.value = toBase64(m.value);
+  return j;
+}
+
 export interface MarkValue {
   field: number;
   value: Uint8Array;
@@ -1529,6 +1575,64 @@ export function messageViewToJson(m: MessageView): Record<string, unknown> {
   if (!(m.replyQuote === undefined)) j.reply_quote = viewTextToJson(m.replyQuote!);
   if (!(!m.silent)) j.silent = m.silent;
   if (!((m.order === '' || m.order === '0'))) j.order = m.order;
+  return j;
+}
+
+export interface MigrateStatus {
+  point: number;
+  done: boolean;
+  reportJson: string;
+}
+
+export function migrateStatusFromJson(v: unknown): MigrateStatus {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const point = pick(j, 'point', 'point');
+  const done = pick(j, 'done', 'done');
+  const reportJson = pick(j, 'report_json', 'reportJson');
+  const out: MigrateStatus = {
+    point: point === undefined || point === null ? 0 : Number(point),
+    done: done === undefined || done === null ? false : Boolean(done),
+    reportJson: reportJson === undefined || reportJson === null ? '' : String(reportJson),
+  };
+  return out;
+}
+
+export function migrateStatusToJson(m: MigrateStatus): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.point === 0)) j.point = m.point;
+  if (!(!m.done)) j.done = m.done;
+  if (!(m.reportJson === '')) j.report_json = m.reportJson;
+  return j;
+}
+
+export interface MigrateStep {
+  layer: string;
+  records: LegacyRecord[];
+  last: boolean;
+  chunk: number;
+}
+
+export function migrateStepFromJson(v: unknown): MigrateStep {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const layer = pick(j, 'layer', 'layer');
+  const records = pick(j, 'records', 'records');
+  const last = pick(j, 'last', 'last');
+  const chunk = pick(j, 'chunk', 'chunk');
+  const out: MigrateStep = {
+    layer: layer === undefined || layer === null ? '' : String(layer),
+    records: Array.isArray(records) ? records.map((x) => legacyRecordFromJson(x)) : [],
+    last: last === undefined || last === null ? false : Boolean(last),
+    chunk: chunk === undefined || chunk === null ? 0 : Number(chunk),
+  };
+  return out;
+}
+
+export function migrateStepToJson(m: MigrateStep): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.layer === '')) j.layer = m.layer;
+  if (m.records.length) j.records = m.records.map((x) => legacyRecordToJson(x));
+  if (!(!m.last)) j.last = m.last;
+  if (!(m.chunk === 0)) j.chunk = m.chunk;
   return j;
 }
 

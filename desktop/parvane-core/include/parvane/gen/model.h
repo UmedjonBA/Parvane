@@ -125,6 +125,7 @@ enum class ServerInputKind : int32_t {
 void to_json(nlohmann::json &j, const ServerInputKind &v);
 void from_json(const nlohmann::json &j, ServerInputKind &v);
 
+struct AuditDump;
 struct Capabilities;
 struct CapabilitiesRequest;
 struct ChatAnchor;
@@ -164,9 +165,12 @@ struct IntentStateSetRemove;
 struct IntentTyping;
 struct JournalState;
 struct KindFormat;
+struct LegacyRecord;
 struct MarkValue;
 struct MessageRemove;
 struct MessageView;
+struct MigrateStatus;
+struct MigrateStep;
 struct MigrationPlan;
 struct MigrationProgress;
 struct ModelChange;
@@ -217,6 +221,12 @@ struct ViewTaskOffer;
 struct ViewText;
 struct Wrap;
 struct WriteBlocked;
+
+struct AuditDump {
+    std::string jsonl;
+};
+void to_json(nlohmann::json &j, const AuditDump &m);
+void from_json(const nlohmann::json &j, AuditDump &m);
 
 struct Capabilities {
     bool send_text = false;
@@ -272,6 +282,7 @@ struct EngineConfig {
     uint64_t memory_budget_bytes = 0;
     std::string device_key;
     bool vectors = false;
+    bool legacy_present = false;
 };
 void to_json(nlohmann::json &j, const EngineConfig &m);
 void from_json(const nlohmann::json &j, EngineConfig &m);
@@ -352,12 +363,36 @@ struct KindFormat {
 void to_json(nlohmann::json &j, const KindFormat &m);
 void from_json(const nlohmann::json &j, KindFormat &m);
 
+struct LegacyRecord {
+    std::string key;
+    std::string value;
+};
+void to_json(nlohmann::json &j, const LegacyRecord &m);
+void from_json(const nlohmann::json &j, LegacyRecord &m);
+
 struct MarkValue {
     uint32_t field = 0;
     std::string value;
 };
 void to_json(nlohmann::json &j, const MarkValue &m);
 void from_json(const nlohmann::json &j, MarkValue &m);
+
+struct MigrateStatus {
+    uint32_t point = 0;
+    bool done = false;
+    std::string report_json;
+};
+void to_json(nlohmann::json &j, const MigrateStatus &m);
+void from_json(const nlohmann::json &j, MigrateStatus &m);
+
+struct MigrateStep {
+    std::string layer;
+    std::vector<LegacyRecord> records;
+    bool last = false;
+    uint32_t chunk = 0;
+};
+void to_json(nlohmann::json &j, const MigrateStep &m);
+void from_json(const nlohmann::json &j, MigrateStep &m);
 
 struct MigrationPlan {
     std::vector<std::string> steps;

@@ -811,8 +811,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.device.log_append" => {
             require_user(&req)?;
             let r: pb::DeviceLogAppendRequest = body(&req)?;
-            let op = r.entry.ok_or(ErrorCode::Invalid)?;
-            let v = log_append(ctx, &req.user, &op).await?;
+            r.entry.ok_or(ErrorCode::Invalid)?;
+            // spec 035 (FR-030, T057): запись журнала — исходными байтами из тела запроса
+            let raw = parvane_protocol::codec::raw_field(&req.body, 1).map_err(|_| ErrorCode::Invalid)?.ok_or(ErrorCode::Invalid)?;
+            let v = log_append(ctx, &req.user, &raw).await?;
             Ok(pb::DeviceLogAppendResponse { version: v }.encode_to_vec())
         }
         "identity.device.log_sync" => {
@@ -829,7 +831,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
-            Ok(pb::DeviceLogSyncResponse { entries, more, genesis_hash, deleted: false }.encode_to_vec())
+            Ok(with_raw_entries(&entries, pb::DeviceLogSyncResponse { entries: vec![], more, genesis_hash, deleted: false }.encode_to_vec()))
         }
         "identity.device.log_sync_anon" => {
             let r: pb::DeviceLogSyncAnonRequest = body(&req)?;
@@ -843,7 +845,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
-            Ok(pb::DeviceLogSyncAnonResponse { entries, more, genesis_hash, deleted: false }.encode_to_vec())
+            Ok(with_raw_entries(&entries, pb::DeviceLogSyncAnonResponse { entries: vec![], more, genesis_hash, deleted: false }.encode_to_vec()))
         }
         "identity.device.publish_certificate" => {
             require_user(&req)?;
@@ -1293,17 +1295,18 @@ async fn store_state(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: &str, l
 }
 
 /// Добавить запись в журнал (проверка цепочки движком) и применить последствия.
-pub(crate) async fn log_append(ctx: &V2Ctx, user: &str, op: &SignedOp) -> Result<u64, ErrorCode> {
+/// `raw` — исходные байты записи (`SignedOp`): в журнал ложатся они, не пересборка (spec 035, FR-030).
+pub(crate) async fn log_append(ctx: &V2Ctx, user: &str, raw: &[u8]) -> Result<u64, ErrorCode> {
     let mut log = load_log(ctx, user).await?;
     let before_revoked = log.revoked.clone();
     let before_devices: std::collections::BTreeSet<String> = log.devices.keys().cloned().collect();
-    log.apply(op).map_err(|e| e.code())?;
-    let hash = parvane_protocol::identity::device_log_hash(op);
+    let op = log.apply_raw(raw).map_err(|e| e.code())?;
+    let hash = parvane_protocol::identity::device_log_hash(&op);
     let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
     sqlx::query("INSERT INTO device_log (user, version, entry, hash, created_at) VALUES (?, ?, ?, ?, ?)")
         .bind(user)
         .bind(log.version as i64)
-        .bind(op.encode_to_vec())
+        .bind(raw)
         .bind(hash.to_vec())
         .bind(now_unix())
         .execute(&mut *tx)
@@ -1356,7 +1359,19 @@ async fn revoke_effects(ctx: &V2Ctx, user: &str, device_id: &str) {
     info!("v2: устройство отозвано: {} / {}", user, device_id);
 }
 
-async fn log_sync(ctx: &V2Ctx, user: &str, after: u64) -> Result<(Vec<SignedOp>, bool), ErrorCode> {
+/// Ответ синка журнала: записи (поле 1 `entries`) исходными байтами из журнала, остальные поля — `rest` следом
+/// (склейка сообщений protobuf = слияние полей). spec 035, FR-030.
+fn with_raw_entries(entries: &[Vec<u8>], rest: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for e in entries {
+        parvane_protocol::codec::put_raw(1, e, &mut out);
+    }
+    out.extend(rest);
+    out
+}
+
+/// Записи журнала после `after` — исходными байтами (как легли в журнал).
+async fn log_sync(ctx: &V2Ctx, user: &str, after: u64) -> Result<(Vec<Vec<u8>>, bool), ErrorCode> {
     if !parvane_protocol::address::is_valid_address(user) {
         return Err(ErrorCode::Invalid);
     }
@@ -1367,7 +1382,7 @@ async fn log_sync(ctx: &V2Ctx, user: &str, after: u64) -> Result<(Vec<SignedOp>,
         .await
         .map_err(db_err)?;
     let more = rows.len() > 256;
-    let entries = rows.into_iter().take(256).filter_map(|(e,)| SignedOp::decode(e.as_slice()).ok()).collect();
+    let entries = rows.into_iter().take(256).filter_map(|(e,)| SignedOp::decode(e.as_slice()).is_ok().then_some(e)).collect();
     Ok((entries, more))
 }
 
@@ -1420,8 +1435,9 @@ pub(crate) async fn store_otks(conn: &mut sqlx::SqliteConnection, user: &str, de
 }
 
 async fn publish_certificate(ctx: &V2Ctx, req: &ShardRequest, r: pb::DevicePublishCertificateRequest) -> Reply {
-    if let Some(entry) = r.log_entry.filter(|e| !e.body.is_empty()) {
-        log_append(ctx, &req.user, &entry).await?;
+    if r.log_entry.as_ref().is_some_and(|e| !e.body.is_empty()) {
+        let raw = parvane_protocol::codec::raw_field(&req.body, 1).map_err(|_| ErrorCode::Invalid)?.ok_or(ErrorCode::Invalid)?;
+        log_append(ctx, &req.user, &raw).await?;
     }
     let log = load_log(ctx, &req.user).await?;
     let dev: &VerifiedDevice = log.active(&req.device_id).ok_or(ErrorCode::Forbidden)?;

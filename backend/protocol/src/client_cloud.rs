@@ -43,6 +43,9 @@ struct CloudLocal {
     cut: dom::EpochCut,
     /// spec 035 (FR-032, S7-22): с прошлого снимка была непонятая целиком операция — снимок без `complete`.
     opaque: bool,
+    /// spec 035 (FR-032…FR-035, T054): отметки `range-hold` журнала контейнера; пока накрывают диапазон —
+    /// заменяющий снимок запрещён.
+    holds: Vec<crate::pb::parvane::engine::v1::RangeHold>,
 }
 
 /// Итог приёма страницы журнала контейнера облака (`domain.op.sync`).
@@ -95,6 +98,11 @@ struct PersistedCloud {
     held_ops: Vec<String>,
     #[serde(default)]
     head_op_id: String,
+    /// spec 035 (T054): отметки `range-hold` (b64 `RangeHolds`) и «разобрано не всё»; нет поля — запись прежнего вида.
+    #[serde(default)]
+    holds: String,
+    #[serde(default)]
+    opaque: Option<bool>,
 }
 
 fn cloud_role_of(access: &ContainerAccess, user: &str) -> Option<CloudRole> {
@@ -283,6 +291,7 @@ impl Client {
             json_cache: JsonCache::default(),
                 cut: dom::EpochCut::default(),
                 opaque: false,
+                holds: vec![],
             },
         );
         Ok((id, OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) })))
@@ -321,6 +330,7 @@ impl Client {
             snapshot_seq: existing.as_ref().map_or(0, |c| c.snapshot_seq),
             cut: existing.as_ref().map(|c| c.cut.clone()).unwrap_or_default(),
             opaque: existing.as_ref().is_none_or(|c| c.opaque),
+            holds: existing.as_ref().map(|c| c.holds.clone()).unwrap_or_default(),
             pending_ops: existing.map(|c| c.pending_ops).unwrap_or_default(),
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
@@ -411,8 +421,9 @@ impl Client {
     fn cloud_open_one(c: &mut CloudLocal, op: &ContainerOp, author: &DomainAuthor) -> Result<usize> {
         let key = c.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &c.access.container, key)?;
-        // Непонятое целиком в снимок не войдёт — такой снимок журнал не обрезает (FR-032)
-        if crate::unknown::scan("parvane.cloud.v1.CloudBatch", &pt).map_or(true, |r| !r.is_empty()) {
+        // Непонятое в снимок из разобранного не войдёт — отметка диапазона запрещает заменяющий снимок (FR-032)
+        let journal = dom::hold_journal(&c.access.container);
+        if crate::hold::note(&mut c.holds, &journal, "parvane.cloud.v1.CloudBatch", op.seq, op.seq, &pt) {
             c.opaque = true;
         }
         let decoded = cloud::decode_batch(&pt).inspect_err(|_| c.opaque = true)?;
@@ -532,6 +543,9 @@ impl Client {
         let key = c.keys.get(s.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_snapshot(&s, &c.access.container, key)?;
         let decoded = cloud::decode_snapshot(&pt)?;
+        // Снимок составителя новее этой версии: его непонятое накрывает весь диапазон снимка (FR-032)
+        let journal = dom::hold_journal(&c.access.container);
+        crate::hold::note(&mut c.holds, &journal, crate::hold::CLOUD_SNAPSHOT_TYPE, 1, s.upto_seq.max(1), &pt);
         // Метки снимка проходят ту же защиту, что и метки операций: негодная метка — отказ всему снимку
         let snap_max = cloud::guard_snapshot(&c.guard, &decoded, s.upto_seq)?;
         c.state.merge_snapshot(&decoded)?;
@@ -596,13 +610,19 @@ impl Client {
         }
         let epoch = c.access.epoch;
         let key = c.keys.get(epoch).ok_or(ProtoError::Crypto)?;
-        let pt = c.state.to_snapshot(ts_ms.max(0) as u64).encode_to_vec();
+        // FR-035: заменяющий снимок над непонятым запрещён — журнал остаётся источником (исход 2 FR-034)
+        let pt = match c.state.replacement_snapshot(&c.holds, &c.access.container, c.head_seq, ts_ms.max(0) as u64) {
+            Ok(snap) => snap.encode_to_vec(),
+            Err(ProtoError::RangeHeld) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
         if pt.len() > dom::MAX_SNAPSHOT_PLAINTEXT {
             return Err(ClientError::Proto(ProtoError::FieldLimit("snapshot")));
         }
-        // `complete` (FR-032): ничего не отложено и не удержано (проверено выше) и каждая операция диапазона понята
-        // целиком. Отметку `range-hold` хранилища движка (spec 035, фазы 5–6) добавить сюда же.
-        let s = dom::seal_snapshot_complete(&self.acc, &c.access.container, epoch, key, c.head_seq, &pt, ts_ms, !c.opaque)?;
+        // `complete` (FR-032, FR-077): ничего не отложено и не удержано (проверено выше), отметок `range-hold` в
+        // диапазоне нет (снимок разрешён выше) и каждая операция диапазона разобрана.
+        let complete = !c.opaque && dom::replacement_allowed(&c.holds, &c.access.container, c.head_seq).is_ok();
+        let s = dom::seal_snapshot_complete(&self.acc, &c.access.container, epoch, key, c.head_seq, &pt, ts_ms, complete)?;
         c.snapshot_seq = c.head_seq;
         c.opaque = false;
         Ok(Some(OutRequest::id("domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(s) })))
@@ -895,6 +915,8 @@ impl Client {
                 pending_ops: c.pending_ops.iter().map(|o| b64(&o.encode_to_vec())).collect(),
                 held_ops: c.cut.held.iter().map(|o| b64(&o.encode_to_vec())).collect(),
                 head_op_id: b64(&c.cut.head_op_id),
+                holds: b64(&crate::hold::encode(&c.holds)),
+                opaque: Some(c.opaque),
             })
             .collect()
     }
@@ -914,10 +936,12 @@ impl Client {
         let pending_ops = pc.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
         let held = pc.held_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
         let cut = dom::EpochCut { held, head_op_id: unb64(&pc.head_op_id)? };
+        let holds = if pc.holds.is_empty() { vec![] } else { crate::hold::decode(&unb64(&pc.holds)?)? };
+        let opaque = pc.opaque.unwrap_or(true);
         let id = access.container_ref()?.id.clone();
         self.cloud.insert(
             id,
-            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque: true },
+            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque, holds },
         );
         Ok(())
     }

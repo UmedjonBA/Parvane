@@ -1430,7 +1430,8 @@ describe('GPHOTO-1: фото частной группы шифруется, с�
     expect(group).toContain('const INVITE_AVATAR_INFO: &[u8] = b"parvane/group-avatar-invite/v1\\0";');
     ['backend/protocol/src/host.rs', 'backend/protocol/wasm/src/lib.rs'].forEach((file) => {
       expect(readRepo(file), file).toContain('"avatarKey": ');
-      expect(readRepo(file), file).toContain('self.inner.group_avatar_key(&s.group.id)');
+      // host.rs: сведения группы — общая функция `group_info_value(c, …)` (её же зовёт выгрузка сверки spec 035)
+      expect(readRepo(file), file).toMatch(/(self\.inner|\bc)\.group_avatar_key\(&s\.group\.id\)/);
     });
     expect(r.secretBytes).toBe(32);
   });
