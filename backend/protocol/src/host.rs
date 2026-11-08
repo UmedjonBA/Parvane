@@ -148,6 +148,15 @@ fn disp(d: Disposition) -> &'static str {
     }
 }
 
+/// Критичная заглушка (spec 035, STUB_CRITICAL): к `disposition: "stub"` — `critical: true` (прежние хосты
+/// видят ту же заглушку, новые запрещают ответ, правку и пересылку).
+fn with_critical(mut v: Value, d: Disposition) -> Value {
+    if d == Disposition::StubCritical {
+        v["critical"] = json!(true);
+    }
+    v
+}
+
 /// Доказательство авторства (`proof`, base64) — в событие, если есть (REPORT-1, A0008-2).
 fn with_proof(mut v: Value, proof: &[u8]) -> Value {
     if !proof.is_empty() {
@@ -159,14 +168,14 @@ fn with_proof(mut v: Value, proof: &[u8]) -> Value {
 fn event_json(e: &Event) -> Value {
     let content = |c: &Content| serde_json::to_value(c).unwrap_or(Value::Null);
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
+        }), *disposition), proof),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof),
+        }), *disposition), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),

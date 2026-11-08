@@ -1,3 +1,4 @@
+/* eslint-disable no-null/no-null -- ожидания векторов: JSON null = «поля нет» */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -45,7 +46,9 @@ function matches(exp: Json, act: Json, vars: Map<string, string>, at: string): v
   }
   if (Array.isArray(exp)) {
     const a = Array.isArray(act) ? act : [];
-    if (a.length !== exp.length) throw new Error(`${at}: длина ${a.length} вместо ${exp.length} — ${JSON.stringify(act)}`);
+    if (a.length !== exp.length) {
+      throw new Error(`${at}: длина ${a.length} вместо ${exp.length} — ${JSON.stringify(act)}`);
+    }
     exp.forEach((x, i) => matches(x, a[i], vars, `${at}[${i}]`));
     return;
   }
@@ -158,7 +161,12 @@ describe('ENGINE-1 / T106: векторы модели движка через W
       return commit(b);
     };
     const { host } = await ModelHost.open({
-      user: 'alice@local', device_id: 'd1', domain: 'local', now_ms: '1800000000000', vectors: true, device_key: DEVICE_KEY,
+      user: 'alice@local',
+      device_id: 'd1',
+      domain: 'local',
+      now_ms: '1800000000000',
+      vectors: true,
+      device_key: DEVICE_KEY,
     }, { store, send: (r) => order.push(`req:${r.method}`) }, (cfg) => PvEngine.open(cfg));
     order.length = 0;
     await host.submit({ state_create: { object: { kind: 'OBJECT_KIND_FOLDER', key: '7' }, set: [] } });

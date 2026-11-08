@@ -205,6 +205,11 @@ export class PvClient {
      */
     formerAddresses(): string[];
     /**
+     * Секрет фото группы участникам (spec 035, PV-005): содержимое `GroupAvatarKey` (proto3-JSON) для
+     * `prepareGroup` — после смены фото и после новой эпохи. undefined — секрета нет либо фото открытое.
+     */
+    groupAvatarKeyContent(group: string): string | undefined;
+    /**
      * D-03 (C1-03): версия журнала группы, на которую сослался участник, а у
      * нас её нет (undefined — не отстаём). Пока отстаём, prepareGroup и
      * groupRotateEpoch отказывают need groupLog.
@@ -234,6 +239,15 @@ export class PvClient {
      * Ответ `group.state.sync` → версия после применения.
      */
     groupIngest(domain: string, group: string, sync_response: Uint8Array): bigint;
+    /**
+     * Секрет фото для превью по ссылке (D1, base64): журнал группы принят по ссылке; undefined — обёртки нет.
+     */
+    groupInviteAvatarKey(group: string, url: string): string | undefined;
+    /**
+     * Превью по ссылке с фото (spec 035, D1): записи `InviteAvatarWrap` для своих ссылок группы (`links_json` —
+     * массив ссылок целиком).
+     */
+    groupInviteAvatarWraps(group: string, links_json: string): Array<any>;
     /**
      * Новая ссылка-приглашение → {request, url} (секрет — только в url).
      */
@@ -272,6 +286,11 @@ export class PvClient {
     groupRequestDecide(group: string, user: string, approve: boolean, via_link_hex?: string | null): any;
     groupRotateEpoch(group: string): Array<any>;
     /**
+     * spec 035 (PV-005): новое фото частной группы — запись `SetInfo` с `avatar_key_id` (секрета в журнале нет).
+     * `key_b64` — секрет фото (пусто — открытое фото публичной группы); пустой `file_id` — снять фото.
+     */
+    groupSetPhoto(group: string, file_id: string, avatar_domain: string, key_b64: string): any;
+    /**
      * Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
      */
     groupSetPublic(group: string, _public: boolean, name: string, preview: boolean, history: boolean): any;
@@ -300,7 +319,7 @@ export class PvClient {
     hasStateKey(): boolean;
     /**
      * Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
-     * из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+     * из текущего и прежних ключей состояния и прежние адреса клиента.
      */
     historySession(): PvHistory | undefined;
     /**
@@ -599,10 +618,6 @@ export class PvClient {
      * (один запрос — запись журнала).
      */
     signOutDevice(device_id: string): any;
-    /**
-     * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
-     */
-    stateSession(): PvState | undefined;
     syncRequest(): any;
     /**
      * Принятые секреты ссылок-приглашений: JSON `[{"group": hex, "url": …}]`.
@@ -647,6 +662,11 @@ export class PvEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
+     * переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
+     */
+    adoptStateKeys(client: PvClient): string;
+    /**
      * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
      * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
      */
@@ -673,79 +693,6 @@ export class PvHistory {
     free(): void;
     [Symbol.dispose](): void;
     call(name: string, args_json: string): string;
-}
-
-/**
- * Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
- * шифрование записей ключом личного состояния из клиента (ключ не выходит
- * в JS). Курсор — в памяти: при запуске журнал читается с начала.
- */
-export class PvState {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    callSet(record_json: string): Array<any>;
-    /**
-     * Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
-     * → тела `state.append`. Граница по собеседнику только растёт.
-     */
-    chatCleared(cleared_json: string): Array<any>;
-    /**
-     * Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
-     * `ScheduledMessage[]`); отправлять с op_id отложенного, затем `markSent`.
-     */
-    claimDue(now_ms: number): string;
-    /**
-     * Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer`
-     * → тела `state.append`. Множество по ссылке, запись целиком по метке.
-     */
-    cloudContainerSet(container_json: string): Array<any>;
-    /**
-     * Хост хочет состояние `desired_json` (StateSnapshot) по видам `kinds`:
-     * операции разницы применяются локально, наружу — тела `state.append`.
-     */
-    diff(desired_json: string, kinds: string[]): Array<any>;
-    /**
-     * Ссылка снята (отозвана или удалена): `link_id` — base64.
-     */
-    groupInviteRemove(link_id_b64: string): Array<any>;
-    /**
-     * Ссылка-приглашение группы v2 (T160): proto3-JSON `state.v1.GroupInvite`
-     * → тела `state.append`. LWW по `link_id`.
-     */
-    groupInviteSet(invite_json: string): Array<any>;
-    /**
-     * Ответ `state.sync` → JSON `{more, applied, rejected}`. Нерасшифрованные
-     * (чужой ключ) и отвергнутые записи пропускаются — одинаково везде.
-     */
-    ingest(resp: Uint8Array): string;
-    loadSentGuard(ids: string[]): void;
-    /**
-     * Отметка «отложенное отправлено» (op_id — base64 из снимка).
-     */
-    markSent(op_id_b64: string): Array<any>;
-    /**
-     * Первый запуск: локальные данные (StateSnapshot) → начальные операции.
-     */
-    migrate(local_json: string): Array<any>;
-    /**
-     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
-     * Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
-     */
-    plannerContainerSet(domain: string, id_hex: string): Array<any>;
-    /**
-     * Локальный журнал уже отправленных этим устройством (hex; хранит хост).
-     */
-    sentGuard(): string[];
-    /**
-     * Сведённое состояние: proto3-JSON `state.v1.StateSnapshot`.
-     */
-    snapshot(): string;
-    /**
-     * Тело `state.sync` от курсора.
-     */
-    syncRequest(): Uint8Array;
 }
 
 /**
@@ -997,7 +944,6 @@ export interface InitOutput {
     readonly __wbg_pvclient_free: (a: number, b: number) => void;
     readonly __wbg_pvengine_free: (a: number, b: number) => void;
     readonly __wbg_pvhistory_free: (a: number, b: number) => void;
-    readonly __wbg_pvstate_free: (a: number, b: number) => void;
     readonly __wbg_pvstore_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
     readonly decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1066,6 +1012,7 @@ export interface InitOutput {
     readonly pvclient_exportRootEscrow: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_forgetRoot: (a: number) => void;
     readonly pvclient_formerAddresses: (a: number, b: number) => void;
+    readonly pvclient_groupAvatarKeyContent: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
@@ -1073,6 +1020,8 @@ export interface InitOutput {
     readonly pvclient_groupForget: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupInfo: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupIngest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly pvclient_groupInviteAvatarKey: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_groupInviteAvatarWraps: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupInviteCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupJoin: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -1083,6 +1032,7 @@ export interface InitOutput {
     readonly pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_groupSetPhoto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
@@ -1162,7 +1112,6 @@ export interface InitOutput {
     readonly pvclient_shareInviteLinks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_sharePlannerWithOwnDevices: (a: number, b: number) => void;
     readonly pvclient_signOutDevice: (a: number, b: number, c: number, d: number) => void;
-    readonly pvclient_stateSession: (a: number) => number;
     readonly pvclient_syncRequest: (a: number) => number;
     readonly pvclient_takeSharedInvites: (a: number, b: number) => void;
     readonly pvclient_tokenBatchSize: (a: number) => number;
@@ -1175,26 +1124,12 @@ export interface InitOutput {
     readonly pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvengine_adoptStateKeys: (a: number, b: number, c: number) => void;
     readonly pvengine_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvengine_engineInfo: (a: number, b: number) => void;
     readonly pvengine_open: (a: number, b: number, c: number) => void;
     readonly pvengine_revision: (a: number) => number;
     readonly pvhistory_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_claimDue: (a: number, b: number, c: number) => void;
-    readonly pvstate_cloudContainerSet: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_diff: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvstate_groupInviteRemove: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_groupInviteSet: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_ingest: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_loadSentGuard: (a: number, b: number, c: number) => void;
-    readonly pvstate_markSent: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_migrate: (a: number, b: number, c: number, d: number) => void;
-    readonly pvstate_plannerContainerSet: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvstate_sentGuard: (a: number, b: number) => void;
-    readonly pvstate_snapshot: (a: number, b: number) => void;
-    readonly pvstate_syncRequest: (a: number, b: number) => void;
     readonly pvstore_beginRotation: (a: number, b: number) => void;
     readonly pvstore_committed: (a: number, b: number, c: number) => void;
     readonly pvstore_failed: (a: number, b: number, c: number, d: number) => void;

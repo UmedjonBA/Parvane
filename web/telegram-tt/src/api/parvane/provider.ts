@@ -41,6 +41,7 @@ import {
 import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
+import { STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
@@ -567,6 +568,10 @@ const stateJournal = createStateJournal({
       .catch((e: unknown) => logDebug(`стикеры: наборы из журнала не применены: ${String(e)}`));
   },
   applyContacts: (addresses, info, removed) => applyJournalContacts(addresses, info, removed),
+  // Избранные стикеры с других своих устройств (FR-075) — tt перечитывает список
+  applyFavedStickers: () => sendUpdate({ '@type': 'updateFavoriteStickers' }),
+  // T117: журнал личного состояния закрыт более новой версией — правки не сохраняются до обновления
+  onWriteBlocked: () => window.dispatchEvent(new CustomEvent(STATE_WRITE_BLOCKED_EVENT)),
   log: logDebug,
 });
 
@@ -1007,6 +1012,9 @@ const groupController = createGroupController({
   sendUpdate,
   log: logDebug,
   buildAvatarPhoto,
+  rememberGroupPhoto: (fileId, avatarKey) => {
+    void mediaService.rememberGroupPhoto(fileId, avatarKey);
+  },
   getV2: () => v2Controller,
   getUnconfirmedTemplate: () => getLangStringByKey('ParvaneGroupUnconfirmedMember'),
 });
@@ -3487,6 +3495,17 @@ const methods = {
     return auditJsonl(lines);
   },
 
+  /** e2e (только диаг-сборка, spec 035 T110/T111): показ личного состояния модели и избранные стикеры. */
+  parvaneDiagStateView() {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return Promise.resolve(undefined);
+    const json = stateJournal.snapshotJson();
+    return Promise.resolve({
+      snapshot: json ? JSON.parse(json) as unknown : undefined,
+      faved: stateJournal.favedStickers(),
+      isAttached: stateJournal.isAttached(),
+    });
+  },
+
   /** Замер п. 21 плана 15 окт (только диаг-сборка): `count` строк истории «Избранного» прямо в кэш истории. */
   async parvaneDiagSeedHistory({ count }: { count: number }) {
     if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return false;
@@ -4113,19 +4132,31 @@ const methods = {
     return { hash: String(Date.now()), stickers: await resolveStickerRefs(refs, loadStickerSetContent) };
   },
 
+  // Избранные — объект FAVED_STICKER журнала личного состояния (spec 035, FR-075): видны на всех своих
+  // устройствах; без журнала (вход ещё не завершён) — список устройства
   async fetchFavoriteStickers() {
-    const refs = localState.loadStickerRefs('favestickers') || [];
+    const refs = stateJournal.isAttached()
+      ? stateJournal.favedStickers().slice(0, FAVORITE_STICKERS_LIMIT)
+      : localState.loadStickerRefs('favestickers') || [];
     return { hash: String(Date.now()), stickers: await resolveStickerRefs(refs, loadStickerSetContent) };
   },
 
-  faveSticker({ sticker, unfave }: { sticker: ApiSticker; unfave?: boolean }) {
+  async faveSticker({ sticker, unfave }: { sticker: ApiSticker; unfave?: boolean }) {
     const ref = stickerRefOf(sticker);
-    if (!ref) return Promise.resolve(undefined);
+    if (!ref) return undefined;
+    if (stateJournal.isAttached()) {
+      await stateJournal.faveSticker(ref.setId, ref.stickerId, !unfave);
+      // Сверх предела — самые старые уходят из избранного (как у Telegram)
+      const extra = unfave ? [] : stateJournal.favedStickers().slice(FAVORITE_STICKERS_LIMIT);
+      for (const old of extra) await stateJournal.faveSticker(old.setId, old.stickerId, false);
+      sendUpdate({ '@type': 'updateFavoriteStickers' });
+      return true;
+    }
     const faves = localState.loadStickerRefs('favestickers') || [];
     localState.saveStickerRefs('favestickers', unfave
       ? dropStickerRef(faves, ref) : pushStickerRef(faves, ref, FAVORITE_STICKERS_LIMIT));
     sendUpdate({ '@type': 'updateFavoriteStickers' });
-    return Promise.resolve(true);
+    return true;
   },
 
   removeRecentSticker({ sticker }: { sticker: ApiSticker }) {

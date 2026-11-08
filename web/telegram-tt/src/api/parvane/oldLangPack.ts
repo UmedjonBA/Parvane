@@ -474,6 +474,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
 
   // ── Стикеры, вложения, медиа ────────────────────────────────────────────
   'Stickers.AddToFavorites': 'Add to Favorites',
+  AddToFavorites: 'Add to Favorites',
   'Stickers.RemoveFromFavorites': 'Remove from Favorites',
   StickersCopy: 'Copy Link',
   'StickerPack.StickerCount': { oneValue: '%@ sticker', otherValue: '%@ stickers' },
@@ -1904,6 +1905,7 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'PeerInfo.AllowedReactions.MaxCountValue': '%@',
 
   'Stickers.AddToFavorites': 'В избранное',
+  AddToFavorites: 'В избранное',
   'Stickers.RemoveFromFavorites': 'Убрать из избранного',
   StickersCopy: 'Копировать ссылку',
   'StickerPack.StickerCount': {

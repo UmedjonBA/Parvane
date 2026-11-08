@@ -1109,9 +1109,12 @@ describe('PROTO-1: в клиенте нет собственного разбо�
       // JSON разбирается только из ответов движка (proto3-JSON pbjson) и своих настроек
       const parses = source.match(/JSON\.parse\(([^)]*)/g) || [];
       parses.forEach((call) => {
-        // (журнал состояния: `session` — сессия движка, `host.decode` — движок)
-        expect(call, `${file}: ${call}`)
-          .toMatch(/JSON\.parse\((pv\.|codec\.decode|client\.|session\.|host\.decode|String\(e$|localStorage\.)/);
+        // (журнал состояния: `session` — сессия движка, `host.decode` — движок; `this.engine` — модель в engine.ts)
+        const sources = [
+          'pv\\.', 'codec\\.decode', 'client\\.', 'session\\.', 'host\\.decode', 'this\\.engine\\.', 'String\\(e$',
+          'localStorage\\.',
+        ];
+        expect(call, `${file}: ${call}`).toMatch(new RegExp(`JSON\\.parse\\((${sources.join('|')})`));
       });
     });
   });
@@ -1306,7 +1309,8 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     expect(controller).toContain('deps.onStateReady?.(stateHost, \'self\');');
     expect(controller).toContain('deps.onStateReady?.(stateHost, \'peer\');');
     const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
-    expect(journal).toContain('const carried = rekey === \'self\' && session ? session.snapshot() : undefined;');
+    expect(journal).toContain('const carried = rekey === \'self\' && session ? readSnapshot() : undefined;');
+    expect(journal).toContain('await write(carried, { rewrite: true });');
     expect(journal).toContain('} else if (rekey && !isReadable) {');
   });
 
@@ -1436,7 +1440,12 @@ describe('GPHOTO-1: фото частной группы шифруется, с�
     expect(photo).toContain(`const DOMAIN = '${r.derive.domain}';`);
     r.derive.labels.forEach((label) => expect(photo).toContain(`derive('${label}', secret)`));
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toContain('avatar_key: patch.avatarFileId !== undefined');
+    // spec 035 (PV-005, D1): секрет — вне журнала: отпечаток в SetInfo, участникам — конвертом, ссылкам — обёрткой
+    expect(controller).toContain('req = client!.groupSetPhoto(hex, patch.avatarFileId, \'\', patch.avatarKey || \'\')');
+    expect(controller).toContain('JSON.parse(client.groupAvatarKeyContent(hex)!) as V2Content;');
+    expect(controller).toContain('client!.groupInviteAvatarWraps(hex, JSON.stringify(links))');
+    expect(controller).toContain('client!.groupInviteAvatarKey(hex, url)');
+    expect(controller).not.toContain('avatar_key: patch.avatarFileId');
     expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
       .toContain('mediaService.uploadGroupPhoto(photo, mimeType)');
   });
@@ -3080,7 +3089,7 @@ describe('conformance CONTACT-1: свои контакты, имя и замет
     expect(String(rule('CONTACT-1').clients!.web)).not.toContain('ОТКРЫТО');
     const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
     expect(journal).toMatch(/const MANAGED_KINDS[\s\S]{0,200}'contacts'/);
-    expect(journal).toContain('session.migrate(JSON.stringify({ contacts: localContacts() }))');
+    expect(journal).toContain('await write({ contacts: localContacts() });');
     expect(journal).toContain('projectContacts(snap);');
     const proto = readRepo('proto/parvane/state/v1/state.proto');
     expect(proto).toContain('Contact contact_set = 38;');
@@ -3213,4 +3222,37 @@ describe('spec 035 PROTO_MINOR: самописные Hello совпадают с
     expect(match, `${file}: константа PROTO_MINOR не найдена`).toBeTruthy();
     expect(Number(match![1])).toBe(engineMinor);
   });
+});
+
+// ENGINE-1 (spec 035, T107): смысл — в модели движка. Web не сводит личное состояние сам (нет лампортов, сравнения
+// меток, прежнего `PvState` и `state.append`), модель (`PvEngine`) вызывается только из `v2/engine.ts`, ответы
+// сервера на её запросы — через `ingest`.
+describe('ENGINE-1 (web): модель движка — единственный источник смысла', () => {
+  const V2 = 'web/telegram-tt/src/api/parvane/v2';
+  const strip = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  it('v2/stateJournal.ts: нет сведения — ни лампортов, ни меток, ни прежнего журнала state.v1', () => {
+    const journal = strip(readRepo(`${V2}/stateJournal.ts`));
+    expect(journal).not.toMatch(/lamport|stamp|PvState|'state\.(append|sync)'|\.diff\(|\.migrate\(/i);
+    // Желаемое уходит модели, показ — из модели
+    expect(journal).toContain('await session.apply(desired, { ...opts, base: fromBase ? projectedBase : undefined });');
+    expect(journal).toContain('viewCache = session.view();');
+  });
+
+  it('модель вызывается только из v2/engine.ts, ответы сервера — через ingest', () => {
+    const dir = path.join(REPO_ROOT, V2);
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'engine.ts')
+      .filter((f) => /\bPvEngine\b|\.adoptStateKeys\(|'stateApplyV1'|'stateViewV1'/.test(readRepo(`${V2}/${f}`)));
+    expect(offenders).toEqual([]);
+    const engine = readRepo(`${V2}/engine.ts`);
+    expect(engine).toContain('kind: \'SERVER_INPUT_KIND_RESPONSE\', req_id: reqId, body: b64(body), error,');
+    // Пачка хранилища — до запросов того же итога (SYNC-1)
+    const drive = engine.slice(engine.indexOf('private async drive('));
+    expect(drive.indexOf('await this.deps.store.commit(typed);')).toBeLessThan(drive.indexOf('this.deps.send(r)'));
+  });
+
+  // Остаток T113/T114 (переход входящих и групп на модель): пока личность, инбокс и группы ведёт прежний клиент
+  it.todo('v2/contentMap.ts: нет разбора видов содержимого (входящие — MessageView модели)');
+  it.todo('прав групп вне движка нет: композер и меню — по capabilities модели (GROUP-2)');
 });

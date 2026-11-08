@@ -48,6 +48,7 @@ import { processDeepLink } from '../../util/deeplink';
 import * as mediaLoader from '../../util/mediaLoader';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
 import { oldTranslate } from '../../util/oldLangProvider';
+import { STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
@@ -445,6 +446,15 @@ const Main = ({
       });
     window.addEventListener('parvane-upgrade-required', handleUpgradeRequired);
     return () => window.removeEventListener('parvane-upgrade-required', handleUpgradeRequired);
+  }, [showDialog]);
+
+  // Parvane (spec 035, T117): журнал личного состояния закрыт более новой версией — правки здесь не сохраняются
+  useEffect(() => {
+    const handleStateBlocked = () => {
+      showDialog({ data: { type: 'localized', text: { key: 'ParvaneStateNeedsUpdate' } } });
+    };
+    window.addEventListener(STATE_WRITE_BLOCKED_EVENT, handleStateBlocked);
+    return () => window.removeEventListener(STATE_WRITE_BLOCKED_EVENT, handleStateBlocked);
   }, [showDialog]);
 
   // Parvane: ключ восстановления корня (spec 007, D-12) — показать один раз

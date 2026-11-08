@@ -5,12 +5,13 @@ import type { StoreBatch, StorePut, StoreReads } from './gen/model';
 
 import init, * as pv from '../../../lib/parvane-protocol/parvane_protocol';
 import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url';
-import { base64ToBytes } from './base64';
 import { storeBatchFromJson, storeLoadedToJson, storeReadsFromJson } from './gen/model';
+import { base64ToBytes } from './base64';
+import { errorCodeNumber } from './transport';
 
 export type Protocol = typeof pv;
 export type {
-  PvClient, PvHistory, PvState,
+  PvClient, PvHistory,
 } from '../../../lib/parvane-protocol/parvane_protocol';
 
 let loading: Promise<Protocol> | undefined;
@@ -108,7 +109,11 @@ export class ModelError extends Error {
   }
 }
 
-type EngineLike = { call: (name: string, args: string) => string; free?: () => void };
+type EngineLike = {
+  call: (name: string, args: string) => string;
+  free?: () => void;
+  adoptStateKeys?: (client: pv.PvClient) => string;
+};
 
 function b64(bytes: Uint8Array) {
   let s = '';
@@ -128,7 +133,7 @@ export class ModelHost {
   static async open(config: ModelJson, deps: ModelHostDeps, engineFactory?: (cfg: string) => EngineLike) {
     const make = engineFactory ?? ((cfg: string) => {
       if (!loaded) throw new Error('движок не загружен');
-      return loaded.PvEngine.open(cfg) as EngineLike;
+      return loaded.PvEngine.open(cfg);
     });
     const host = new ModelHost(make(JSON.stringify(config)), deps);
     const opened: ModelJson[] = [];
@@ -187,6 +192,16 @@ export class ModelHost {
     return this.raw(name, args) as T;
   }
 
+  /** Переходный период (T114): ключи личного состояния прежнего клиента — в модель (внутри WASM, в JS не выходят). */
+  adoptStateKeys(client: pv.PvClient) {
+    return this.serial(() => {
+      if (!this.engine.adoptStateKeys) throw new ModelError('UnknownCall');
+      const out = JSON.parse(this.engine.adoptStateKeys(client)) as ModelJson;
+      if (typeof out.error === 'string') throw new ModelError(out.error);
+      return this.drive(out);
+    });
+  }
+
   close() {
     this.closed = true;
     this.engine.free?.();
@@ -200,8 +215,8 @@ export class ModelHost {
 
   private raw(name: string, args: unknown): ModelJson {
     if (this.closed) throw new ModelError('Closed');
-    const text = this.engine.call(name, typeof args === 'string' ? args : JSON.stringify(args ?? {}));
-    const out = JSON.parse(text) as ModelJson;
+    const argsJson = typeof args === 'string' ? args : JSON.stringify(args ?? {});
+    const out = JSON.parse(this.engine.call(name, argsJson)) as ModelJson;
     if (typeof out.error === 'string') throw new ModelError(out.error);
     return out;
   }
@@ -260,4 +275,134 @@ export class MemoryModelStore implements ModelStore {
     }
     return Promise.resolve(out);
   }
+}
+
+// ── Личное состояние через модель (переходный период web, T114) ─────────────────────────────────────────
+//
+// Личность, инбокс, группы и разделы пока ведёт прежний клиент (`PvClient`); личное состояние (`state.v2`,
+// `state.ops.*`) — модель: сведение, метки и разница «желаемое ↔ сведённое» только в движке. Хранилище модели — в
+// памяти вкладки: журнал читается с начала при каждом запуске (как прежний `PvState`), неотправленные правки
+// переживают перезагрузку через «несохранённые виды» localState. Постоянное хранилище модели появится вместе с
+// переносом (T115), когда модель возьмёт на себя и личность.
+
+/** Показ личного состояния моделью: снимок в форме `state.v1`, избранные стикеры, журнал закрыт для записи. */
+export type StateModelView = {
+  snapshot: Record<string, unknown>;
+  faved_stickers: { set_id: string; sticker_id: string; added_ms: string }[];
+  write_blocked: boolean;
+};
+
+export type StateModel = {
+  view: () => StateModelView;
+  /** Желаемое (`state.v1.StateSnapshot`): `kinds` — управляемые виды, `prune` — удалить пропавшие из них,
+   * `rewrite` — переписать объекты целиком (новый ключ). Ждёт ответов сервера. */
+  apply: (
+    desired: unknown, opts?: { kinds?: string[]; prune?: boolean; rewrite?: boolean; base?: unknown },
+  ) => Promise<void>;
+  submit: (intent: ModelJson) => Promise<void>;
+  /** Свои неотправленные — серверу, затем догон журнала до головы. */
+  sync: () => Promise<void>;
+  /** Изменился показ (свои и чужие операции). */
+  onChange: (listener: (() => void) | undefined) => void;
+  close: () => void;
+};
+
+function unb64(text?: string) {
+  if (!text) return new Uint8Array(0);
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
+export type StateModelDeps = {
+  user: string;
+  deviceId: string;
+  domain: string;
+  client: pv.PvClient;
+  /** Запрос серверу по каналу личности. */
+  call: (method: string, body: Uint8Array) => Promise<Uint8Array>;
+  log: (message: string) => void;
+  /** Тесты: своя фабрика движка. */
+  engineFactory?: (cfg: string) => EngineLike;
+};
+
+/** Открыть модель личного состояния поверх прежнего клиента. */
+export async function openStateModel(deps: StateModelDeps): Promise<StateModel> {
+  let inflight = 0;
+  // Запросов, не дошедших до сервера: правка, чьи записи не приняты, — отказ (localState оставит вид
+  // «несохранённым» и повторит его после переподключения; модель держит запись до ответа)
+  let failed = 0;
+  let idleWaiters: (() => void)[] = [];
+  let listener: (() => void) | undefined;
+  // Хост появляется после открытия; запросы до него не уходят
+  const ref: { host?: ModelHost } = {};
+  const settle = () => {
+    if (inflight) return;
+    const waiters = idleWaiters;
+    idleWaiters = [];
+    waiters.forEach((w) => w());
+  };
+  const idle = () => (inflight ? new Promise<void>((resolve) => idleWaiters.push(resolve)) : Promise.resolve());
+  const send = (req: ModelRequest) => {
+    inflight++;
+    const body = unb64(req.body);
+    void deps.call(req.method, body)
+      .then((resp) => ref.host!.ingestResponse(req.req_id, resp, 0), (e: unknown) => {
+        deps.log(`модель: ${req.method}: ${String((e as Error)?.message ?? e)}`);
+        failed++;
+        return ref.host!.ingestResponse(req.req_id, new Uint8Array(0), errorCodeNumber(e));
+      })
+      .catch((e: unknown) => deps.log(`модель: ответ ${req.method} не принят: ${String(e)}`))
+      .finally(() => {
+        inflight--;
+        settle();
+      });
+  };
+  const deviceKey = crypto.getRandomValues(new Uint8Array(32));
+  const opened = await ModelHost.open({
+    user: deps.user,
+    device_id: deps.deviceId,
+    domain: deps.domain,
+    now_ms: String(Date.now()),
+    device_key: b64(deviceKey),
+  }, {
+    store: new MemoryModelStore(),
+    send: (r) => send(r),
+    onDelta: (d) => {
+      const changes = (d.changes as ModelJson[] | undefined) ?? [];
+      if (changes.some((c) => c.state_changed || c.write_blocked)) listener?.();
+    },
+    log: deps.log,
+  }, deps.engineFactory);
+  const { host } = opened;
+  ref.host = host;
+  await host.adoptStateKeys(deps.client);
+  const model: StateModel = {
+    view: () => host.peek<StateModelView>('stateViewV1'),
+    apply: async (desired, opts = {}) => {
+      const before = failed;
+      await host.run('stateApplyV1', {
+        snapshot: desired,
+        kinds: opts.kinds ?? [],
+        prune: Boolean(opts.prune),
+        rewrite: Boolean(opts.rewrite),
+        base: opts.base,
+      });
+      await idle();
+      if (failed > before) throw new ModelError('Unavailable');
+    },
+    submit: async (intent) => {
+      const before = failed;
+      await host.submit(intent);
+      await idle();
+      if (failed > before) throw new ModelError('Unavailable');
+    },
+    sync: async () => {
+      await host.ingestEvent('journal.state');
+      await idle();
+    },
+    onChange: (next) => {
+      listener = next;
+    },
+    close: () => host.close(),
+  };
+  return model;
 }
