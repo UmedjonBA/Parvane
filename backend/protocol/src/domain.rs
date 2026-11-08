@@ -365,6 +365,18 @@ pub fn seal_snapshot_complete(
     Ok(Snapshot { container: container.r#ref.clone(), upto_seq, key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author), complete })
 }
 
+/// spec 035 (FR-032…FR-035, T054): имя журнала контейнера в отметках `range-hold` (`hold.rs`).
+pub fn hold_journal(container: &Container) -> String {
+    format!("domain:{}", container.r#ref.as_ref().map(|r| hex::encode(&r.id)).unwrap_or_default())
+}
+
+/// Заменяющий снимок контейнера до `upto_seq` (FR-035): разрешён, только если ни одна отметка `range-hold`
+/// журнала не накрывает `1..=upto_seq` — иначе явный отказ `RangeHeld`, журнал и снимок прежние (FR-034).
+/// `complete` снимка (FR-077) ставится только поверх этого разрешения.
+pub fn replacement_allowed(holds: &[crate::pb::parvane::engine::v1::RangeHold], container: &Container, upto_seq: u64) -> Result<()> {
+    crate::hold::check(holds, &hold_journal(container), 1, upto_seq)
+}
+
 pub fn verify_snapshot_seal(s: &Snapshot) -> Result<VerifiedSeal> {
     verify_seal_inner(s.author.as_ref(), OP_SNAPSHOT, s.container.as_ref(), s.key_epoch, &s.aead_ciphertext, s.upto_seq, s.complete)
 }

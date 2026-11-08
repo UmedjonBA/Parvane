@@ -10,6 +10,7 @@
 //! - свои структуры (результаты сессии, `historyView`) — camelCase, числа — числами, байты тел — base64.
 
 use base64::Engine as _;
+use prost::Message as _;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -261,8 +262,16 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
             "historyNeedsReplace" => {
                 json!(history::needs_replace(a.i("lastFullSyncMs")?, a.i("tombstonesSinceMs")?, a.u("cursor")?, a.u("uptoSeq")?))
             }
+            // `holds` (b64 `RangeHolds`, необязательно) и `uptoSeq`: точка над диапазоном с непонятым — отказ (T055)
             "historyCompact" => {
-                let out = history::compact(&a.list::<RowState>("states")?, a.i("nowMs")?).map_err(err)?;
+                let states = a.list::<RowState>("states")?;
+                let out = match a.get("holds") {
+                    Some(_) => {
+                        let holds = crate::hold::decode(&a.bytes("holds")?).map_err(err)?;
+                        history::compact_checked(&states, a.i("nowMs")?, &holds, a.u("uptoSeq")?).map_err(err)?
+                    }
+                    None => history::compact(&states, a.i("nowMs")?).map_err(err)?,
+                };
                 Value::Array(out.iter().map(to_json).collect())
             }
             // uptoSeq/checkpointId/chains (S7-4) — позиция сводки, id точки и книга цепочек автора; без них — сводка
@@ -386,6 +395,15 @@ impl HostHistory {
                     }
                 }
                 return call_static(name, &args).unwrap_or_else(|| Err(super::call::UNKNOWN_CALL.to_string()));
+            }
+            // spec 035 (T055, FR-032): запись прежнего ключа → тело `history.append` той же записи под текущим ключом
+            // (исходные байты, без разбора); `null` — запись уже под текущим ключом.
+            "reseal" => {
+                let id = history::parse_id(a.s("opId")?).map_err(err)?;
+                match s.reseal_record(&id, a.flag("chunk"), &a.bytes("ciphertext")?).map_err(err)? {
+                    Some(r) => json!({"body": b64(&r.encode_to_vec())}),
+                    None => Value::Null,
+                }
             }
             "ingestCommit" => {
                 let r: CommitResponse = crate::codec::decode_checked(&a.bytes("resp")?, crate::limits::Origin::Server).map_err(err)?;

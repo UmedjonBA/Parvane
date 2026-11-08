@@ -950,6 +950,19 @@ impl PlannerState {
         Ok(())
     }
 
+    /// spec 035 (FR-035): проекция для показа — только известное этой версии (разобранное состояние).
+    pub fn view(&self) -> PlannerSnapshot {
+        self.to_snapshot()
+    }
+
+    /// spec 035 (FR-035, T054): заменяющий снимок журнала контейнера до `upto_seq` — только если отметки
+    /// `range-hold` (`holds`, журнал `domain::hold_journal`) не накрывают диапазон; иначе `RangeHeld`, и
+    /// прежний журнал остаётся источником (FR-034: движок будущего прочтёт своё из операций).
+    pub fn replacement_snapshot(&self, holds: &[crate::pb::parvane::engine::v1::RangeHold], container: &crate::pb::parvane::core::v2::Container, upto_seq: u64) -> Result<PlannerSnapshot> {
+        super::replacement_allowed(holds, container, upto_seq)?;
+        Ok(self.to_snapshot())
+    }
+
     /// Снимок: все объекты с метками, включая надгробия.
     pub fn to_snapshot(&self) -> PlannerSnapshot {
         PlannerSnapshot {
