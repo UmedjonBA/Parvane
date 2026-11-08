@@ -1070,9 +1070,12 @@ export function createV2Controller(deps: Deps) {
       await persistNow();
       await openModel(storage, self, auth.deviceId, desc.domain);
       client = engineClient();
-      // Устройство с личностью (журнал своих устройств в модели не пуст) — прежнее состояние
+      // Устройство с личностью (журнал своих устройств в модели не пуст) — прежнее состояние. Незавершённое
+      // вступление (запись вступления на месте) — всегда повтор вступления: модель могла записать клиента с
+      // ключами нового корня отложенной записью раньше, чем сервер подтвердил журнал
+      const pendingJoin = await storage.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
       const engineSelf = client.selfAddress();
-      const saved = client.logVersion(engineSelf) > 0n;
+      const saved = !pendingJoin && client.logVersion(engineSelf) > 0n;
       if (saved) {
         // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес
         if (engineSelf !== self && !(await followOwnRename(engineSelf, self))) {
@@ -1106,7 +1109,6 @@ export function createV2Controller(deps: Deps) {
           'parvane.identity.v2.DeviceLogSyncRequest',
           JSON.stringify({ user: { address: self }, after_version: '0' }),
         ));
-        const pendingJoin = await storage.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
         if (pendingJoin) {
           // Запрос вступления уже строился: состояние клиента с ключами устройства
           // сохранено — повторяем тот же запрос, а не выпускаем новые ключи
