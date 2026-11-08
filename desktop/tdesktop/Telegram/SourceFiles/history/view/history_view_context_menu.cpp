@@ -208,6 +208,18 @@ void AddPhotoActions(
 			}
 		}, &st::menuIconCopy);
 	}
+	// Parvane (ревью UI 7 ноя, п. 26): «Сохранить в облако» и у фото (в том числе элемента альбома), как web
+	if (item && !list->hasCopyMediaRestriction(item)) {
+		const auto controller = list->controller();
+		menu->addAction(tr::lng_parvane_cloud_menu_save(tr::now), [=] {
+			const auto path = Parvane::PhotoToTempFile(photo);
+			if (path.isEmpty()) {
+				controller->showToast(tr::lng_parvane_cloud_photo_not_loaded(tr::now));
+				return;
+			}
+			Parvane::ShowCloudSaveDialog(controller, { path });
+		}, &st::menuIconDownload);
+	}
 	if (photo->hasAttachedStickers()) {
 		const auto controller = list->controller();
 		auto callback = [=] {

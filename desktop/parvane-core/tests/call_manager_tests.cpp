@@ -94,6 +94,13 @@ static bool waitFor(Pred p, int ms = 3000) {
 
 static std::unique_ptr<MediaBackend> stub() { return std::make_unique<StubMediaBackend>(); }
 
+// Заглушка, запоминающая последнее состояние камеры (ревью UI 7 ноя, п. 27)
+static std::atomic<int> g_videoEnabled{-1};
+struct CameraStub final : StubMediaBackend {
+    void setVideoEnabled(bool enabled) override { g_videoEnabled = enabled ? 1 : 0; }
+};
+static std::unique_ptr<MediaBackend> cameraStub() { return std::make_unique<CameraStub>(); }
+
 int main() {
     std::printf("=== parvane-core: менеджеры звонков (v2, без стека) ===\n");
     {
@@ -119,7 +126,7 @@ int main() {
         cb.onMediaState = [&](const std::string &peer, bool audio, bool video) {
             if (peer == "alice@local" && audio && !video) bobSawMuted = true;
         };
-        CallManager alice("alice@local", &keyA, stub, ca);
+        CallManager alice("alice@local", &keyA, cameraStub, ca);
         CallManager bob("bob@local", &keyB, stub, cb);
         CallManager carol("carol@local", &keyC, stub, cc);
         relay.attach("alice@local", [&](const std::string &from, const json &s) { alice.handleV2Signal(from, s); });
@@ -133,6 +140,10 @@ int main() {
         check(waitFor([&] { return alice.state() == CallState::Active && bob.state() == CallState::Active; }),
               "оба в звонке (Active)");
         check(!alice.callId().empty() && alice.callId() == bob.callId(), "общий id звонка");
+        alice.setVideoEnabled(false);
+        check(g_videoEnabled.load() == 0, "камера выключается в движке звонка");
+        alice.setVideoEnabled(true);
+        check(g_videoEnabled.load() == 1, "камера включается снова");
         alice.sendMediaState(true, false);
         check(waitFor([&] { return bobSawMuted.load(); }), "spec 024: bob видит, что у alice выключен микрофон");
         // carol звонит занятому bob — «занято»

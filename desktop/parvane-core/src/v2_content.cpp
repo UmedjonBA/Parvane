@@ -196,6 +196,14 @@ json mediaToV2(const json &c, const std::string &kind) {
     // spec 028: сервер блоба (пусто — домен отправителя); миниатюра (JPEG ≤ 320 px, base64)
     if (!str(c, "blob_domain").empty()) m["blob_domain"] = str(c, "blob_domain");
     if (!str(c, "thumbnail").empty()) m["thumbnail"] = str(c, "thumbnail");
+    // MEDIA-2: спойлер — только фото/видео/GIF (как web MEDIA_SPOILER_KINDS); альбом — 16 байт base64
+    if (c.contains("spoiler") && c["spoiler"].is_boolean() && c["spoiler"].get<bool>()
+        && (kind == "photo" || kind == "video" || kind == "gif")) {
+        m["spoiler"] = true;
+    }
+    if (const auto a = str(c, "album_id"); !a.empty()) {
+        if (const auto raw = b64decode(a); raw && raw->size() == 16) m["album_id"] = a;
+    }
     return m;
 }
 
@@ -242,7 +250,34 @@ json mediaFromV2(const json &m) {
     if (const auto d = !str(m, "blob_domain").empty() ? str(m, "blob_domain") : str(m, "blobDomain"); !d.empty()) {
         c["blob_domain"] = d;
     }
+    const auto kind = str(c, "kind");
+    if (m.contains("spoiler") && m["spoiler"].is_boolean() && m["spoiler"].get<bool>()
+        && (kind == "photo" || kind == "video" || kind == "gif")) {
+        c["spoiler"] = true;
+    }
+    if (const auto a = str(m, "album_id"); !a.empty()) {
+        if (const auto raw = b64decode(a); raw && raw->size() == 16) c["album_id"] = a;
+    }
     return c;
+}
+
+// QUOTE-1: цитата ≤ 1024 байт (max_len схемы — байты UTF-8), обрезка по границе символа; сущности — только
+// целиком внутри обрезанного фрагмента (смещения UTF-16).
+std::string clipUtf8(const std::string &s, std::size_t limit) {
+    if (s.size() <= limit) return s;
+    auto n = limit;
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+    return s.substr(0, n);
+}
+
+std::size_t utf16Length(const std::string &s) {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const auto b = static_cast<unsigned char>(s[i]);
+        if ((b & 0xC0) == 0x80) continue;
+        n += (b >= 0xF0) ? 2 : 1;
+    }
+    return n;
 }
 
 } // namespace
@@ -713,7 +748,38 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
     if (c.contains("ttl_secs") && c["ttl_secs"].is_number() && c["ttl_secs"].get<int>() > 0) {
         out["ttl_secs"] = c["ttl_secs"];
     }
-    if (!replyTo.empty()) out["reply_to"] = ref(replyTo);
+    // «Отправить без звука» (`Content.silent`): у получателя уведомление без звука
+    if (c.contains("silent") && c["silent"].is_boolean() && c["silent"].get<bool>()) out["silent"] = true;
+    // MEDIA-2: подпись над медиа
+    if (c.contains("invert_media") && c["invert_media"].is_boolean() && c["invert_media"].get<bool>()) {
+        out["invert_media"] = true;
+    }
+    if (!replyTo.empty()) {
+        out["reply_to"] = ref(replyTo);
+        // QUOTE-1: цитата — только вместе с ответом
+        if (c.contains("reply_quote") && c["reply_quote"].is_object()) {
+            const auto &q = c["reply_quote"];
+            const auto text = clipUtf8(str(q, "text"), 1024);
+            if (!text.empty()) {
+                json rq{{"text", text}};
+                if (q.contains("entities") && q["entities"].is_array()) {
+                    const auto len = utf16Length(text);
+                    auto inside = json::array();
+                    for (const auto &e : q["entities"]) {
+                        if (!e.is_object()) continue;
+                        const auto off = e.value("offset", 0), l = e.value("length", 0);
+                        if (off >= 0 && l > 0 && std::size_t(off + l) <= len) inside.push_back(e);
+                    }
+                    auto e = entitiesToV2(inside);
+                    if (!e.empty()) rq["entities"] = e;
+                }
+                if (q.contains("offset") && q["offset"].is_number_integer() && q["offset"].get<int>() > 0) {
+                    rq["offset"] = q["offset"];
+                }
+                out["reply_quote"] = rq;
+            }
+        }
+    }
     if (!str(c, "forwarded_from").empty() || !str(c, "forwarded_name").empty()) {
         json f = json::object();
         if (!str(c, "forwarded_from").empty()) f["from_user"] = json{{"address", str(c, "forwarded_from")}};
@@ -884,6 +950,23 @@ std::optional<json> fromV2(const json &c) {
     }
     if (c.contains("ttl_secs") && c["ttl_secs"].is_number() && c["ttl_secs"].get<int>() > 0) {
         out["ttl_secs"] = c["ttl_secs"];
+    }
+    if (c.contains("silent") && c["silent"].is_boolean() && c["silent"].get<bool>()) out["silent"] = true;
+    if (c.contains("invert_media") && c["invert_media"].is_boolean() && c["invert_media"].get<bool>()) {
+        out["invert_media"] = true;
+    }
+    if (c.contains("reply_to") && c.contains("reply_quote") && c["reply_quote"].is_object()
+        && !str(c["reply_quote"], "text").empty()) {
+        const auto &q = c["reply_quote"];
+        json rq{{"text", clipUtf8(str(q, "text"), 1024)}};
+        if (q.contains("entities")) {
+            auto e = entitiesFromV2(q["entities"]);
+            if (!e.empty()) rq["entities"] = e;
+        }
+        if (q.contains("offset") && q["offset"].is_number_integer() && q["offset"].get<int>() > 0) {
+            rq["offset"] = q["offset"];
+        }
+        out["reply_quote"] = rq;
     }
     if (c.contains("forward") && c["forward"].is_object()) {
         const auto &f = c["forward"];

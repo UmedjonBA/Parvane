@@ -152,6 +152,9 @@ ChatData *ensureGroupChat(
 			}
 		}
 	}
+	if (result) {
+		RestoreChatWallPaper(result); // обои чата на устройстве (ревью UI 7 ноя, раздел 5)
+	}
 	return result;
 }
 
@@ -689,9 +692,16 @@ void RefreshGroups() {
 	// эфемерными каналами сессии (ensureEphemeral при публикации группы). Делать нечего.
 }
 
-void CreateGroup(const QString &name, const QStringList &members, bool channel) {
+void CreateGroup(const QString &name, const QStringList &members, bool channel,
+		Fn<void(const QString &groupId, const QString &error)> done) {
 	const auto token = Token().toStdString();
+	const auto finish = [done](QString groupId, QString error) {
+		if (done) {
+			crl::on_main([=] { done(groupId, error); });
+		}
+	};
 	if (token.empty() || name.isEmpty()) {
+		finish(QString(), QString());
 		return;
 	}
 	std::vector<std::string> mem;
@@ -700,11 +710,9 @@ void CreateGroup(const QString &name, const QStringList &members, bool channel) 
 	}
 	const auto nameStd = name.toStdString();
 	const auto kind = std::string(channel ? "channel" : "group");
-	crl::async([token, nameStd, kind, mem] {
-		// Протокол v2: все участники на v2 — группа v2 (журнал состояния,
-		// эпохи); иначе — v1. Чат группы синтезирует событие groupUpdated.
-		// Сессия v2 ещё поднимается (сразу после входа) — дождаться, а не
-		// создать молча v1-группу (как web isV2Peer ждёт starting).
+	crl::async([token, nameStd, kind, mem, finish] {
+		// Протокол v2: группа — журнал состояния и эпохи. Чат группы синтезирует событие groupUpdated.
+		// Сессия v2 ещё поднимается (сразу после входа) — дождаться (как web isV2Peer ждёт starting).
 		{
 			std::shared_ptr<parvane::v2::Session> starting;
 			{
@@ -721,16 +729,27 @@ void CreateGroup(const QString &name, const QStringList &members, bool channel) 
 				if (!address.empty()) {
 					LOG(("Parvane: группа v2 '%1' создана: %2")
 						.arg(QString::fromStdString(nameStd), QString::fromStdString(address)));
+					finish(QString::fromStdString(address), QString());
 					return;
 				}
 			} catch (const std::exception &e) {
 				LOG(("Parvane: группа v2 не создана: %1 — НЕ создана")
 					.arg(QString::fromUtf8(e.what())));
+				finish(QString(), QString());
 				return;
 			}
 		}
 		LOG(("Parvane: группа '%1' не создана (сессия v2 не готова)").arg(QString::fromStdString(nameStd)));
+		finish(QString(), QString());
 	});
+}
+
+void SetGroupTtl(const QString &groupId, int seconds) {
+	if (groupId.isEmpty() || seconds <= 0) {
+		return;
+	}
+	SetPeerTtlLocal(groupId, seconds);
+	LOG(("Parvane: TTL чата %1 = %2с").arg(groupId).arg(seconds));
 }
 
 // ── Админка групп (add/kick/role/leave) ──────────────────────────────────────
@@ -1254,12 +1273,13 @@ not_null<UserData*> EnsureUser(not_null<Main::Session*> session, const QString &
 	return ensurePeerUser(session, IdForAddress(address), address);
 }
 
-void OpenGroupChat(const QString &groupId) {
+void OpenGroupChat(const QString &groupId, const QString &title) {
 	const auto session = g_sessionWeak.get();
 	if (!session || groupId.isEmpty()) {
 		return;
 	}
-	const auto chat = ensureGroupChat(session, groupId, g_knownGroups.value(groupId), 0);
+	const auto known = g_knownGroups.value(groupId);
+	const auto chat = ensureGroupChat(session, groupId, known.isEmpty() ? title : known, 0);
 	const auto window = Core::App().activeWindow();
 	const auto controller = window ? window->sessionController() : nullptr;
 	if (chat && controller) {
@@ -1285,6 +1305,22 @@ bool JoinByInviteLink(const QString &url) {
 }
 void LeaveGroup(const QString &groupId) {
 	groupAdminAction(groupId, SelfAddress(), u"remove"_q); // сам себя = выйти
+}
+
+void LeaveGroup(const QString &groupId, GroupOpDone done) {
+	if (!RunV2GroupChange(u"выход из группы %1"_q.arg(groupId), groupId, [](const nlohmann::json &) {
+			return nlohmann::json{ { "leave", nlohmann::json::object() } };
+		}, done) && done) {
+		done(false, u"not_v2"_q);
+	}
+}
+
+void DeleteGroup(const QString &groupId, GroupOpDone done) {
+	if (!RunV2GroupChange(u"group.delete %1"_q.arg(groupId), groupId, [](const nlohmann::json &) {
+			return nlohmann::json{ { "delete_group", nlohmann::json::object() } };
+		}, done) && done) {
+		done(false, u"not_v2"_q);
+	}
 }
 
 

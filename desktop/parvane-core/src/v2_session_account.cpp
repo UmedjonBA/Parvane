@@ -798,6 +798,8 @@ std::string Session::requestTelegramKey(bool again) {
         const auto code = codeOf(e);
         if (code == "ERROR_CODE_NOT_FOUND") return "no_telegram";
         if (code == "ERROR_CODE_RATE_LIMITED") return "limit";
+        // S7-1: запрос этого устройства держит другой вход (тот же device_id, другой ключ) — замены нет
+        if (code == "ERROR_CODE_FORBIDDEN") return "intercepted";
         log("запрос ключа через Telegram не отправлен: " + code);
         return "failed";
     }
@@ -816,7 +818,15 @@ json Session::pollTelegramKey(bool done) {
             call(false, "identity.recovery.tg_poll", encodeMessage("parvane.identity.v2.RecoveryTgPollRequest", json{{"done", done}})));
         if (!r.is_object()) return r;
         const auto code = r.value("code", std::string());
-        if (!code.empty()) tgCode_ = code;
+        // S7-1: показанный код опросом не заменяется. Другой код — запрос перехвачен: ответ владельца
+        // ушёл бы не нам, его не ждём и не открываем
+        if (!done && telegramCodeIntercepted(tgCode_, code)) {
+            log("запрос ключа через Telegram перехвачен: код запроса сменился");
+            r["intercepted"] = true;
+            r["recovery_key"] = std::string();
+            return r;
+        }
+        if (!code.empty() && tgCode_.empty()) tgCode_ = code;
         if (done) {
             tgEphSecret_.assign(tgEphSecret_.size(), '\0');
             tgEphSecret_.clear();

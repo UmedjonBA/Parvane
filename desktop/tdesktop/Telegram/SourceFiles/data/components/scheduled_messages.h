@@ -50,6 +50,9 @@ public:
 		const MTPDupdateShortSentMessage &update,
 		not_null<HistoryItem*> local);
 
+	// Parvane: очередь отложенных изменилась — список чата перечитывается из неё (без MTProto)
+	void refreshFromParvane(not_null<History*> history);
+
 	[[nodiscard]] rpl::producer<> updates(not_null<History*> history);
 	[[nodiscard]] Data::MessagesSlice list(not_null<History*> history) const;
 	[[nodiscard]] Data::MessagesSlice list(

@@ -982,6 +982,9 @@ void CloudSync::answerInvite(const std::string &id, bool accept) {
                           container ? container->owner : std::string()};
     if (!accept) leaveNow(id);
     if (hooks_.recordEntry) hooks_.recordEntry(entry);
+    // Вид папки (invite → shared) сменился: новая ревизия, иначе хост (снимок по ключу статус/ревизия/число папок —
+    // android jni_sections, desktop parvane_sections_data) не перерисует принятую папку (final9 tgx_protocol_web_flow)
+    touch();
     if (hooks_.onChanged) hooks_.onChanged();
 }
 

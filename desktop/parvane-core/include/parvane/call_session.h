@@ -45,6 +45,9 @@ public:
     // Заглушить/включить свой микрофон (mute). По умолчанию no-op.
     virtual void setMuted(bool /*muted*/) {}
 
+    // Выключить/включить свою камеру (трек остаётся, кадры не идут; ревью UI 7 ноя, п. 27). По умолчанию no-op.
+    virtual void setVideoEnabled(bool /*enabled*/) {}
+
     // Движок → сессия: локальный ICE-кандидат (переслать собеседнику).
     std::function<void(std::string candidate)> onLocalIce;
     // Движок → сессия: P2P-соединение установлено/разорвано.
@@ -107,6 +110,8 @@ public:
     void dismiss();
     // Заглушить/включить свой микрофон.
     void setMuted(bool muted) { if (media_engine_) media_engine_->setMuted(muted); }
+    // Выключить/включить свою камеру.
+    void setVideoEnabled(bool enabled) { if (media_engine_) media_engine_->setVideoEnabled(enabled); }
 
     [[nodiscard]] CallState state() const { return state_; }
     [[nodiscard]] PeerAuth peerAuth() const { return peerAuth_; }

@@ -1,0 +1,20 @@
+lng_parvane_group_leave_failed
+Couldn't leave the group. Check your connection and try again.
+Не удалось выйти из группы. Проверьте связь и попробуйте ещё раз.
+
+lng_parvane_call_window_title
+Parvane — call
+Parvane — звонок
+
+lng_parvane_cloud_photo_not_loaded
+The photo hasn't loaded yet — try again in a moment.
+Фото ещё не загрузилось — попробуйте чуть позже.
+
+lng_parvane_chat_wallpaper_custom
+Your own picture can only be set as the background for all chats.
+Свою картинку можно поставить только фоном для всех чатов.
+
+lng_parvane_emoji_pack_added
+Emoji added to your sets
+Эмодзи добавлены в ваши наборы
+

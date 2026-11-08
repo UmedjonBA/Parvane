@@ -1,5 +1,6 @@
 // Parvane fork: тесты крипто линковки (ECDH P-256 → HKDF → AES-GCM, SAS v2, commitment).
 #include "parvane/linking.h"
+#include "parvane/v2_session.h"
 
 #include <cstdio>
 #include <string>
@@ -78,6 +79,14 @@ int main() {
     check(viaBack && b->open(a->publicB64(), *viaBack).value_or("") == plain, "fromPrivateScalar: бокс открывается под исходный ключ");
     check(!EphemeralKey::fromPrivateScalar(scalar, b->publicB64()).has_value(), "fromPrivateScalar: чужой открытый ключ → nullopt");
     check(!EphemeralKey::fromPrivateScalar(scalar.substr(0, 31), a->publicB64()).has_value(), "fromPrivateScalar: не 32 байта → nullopt");
+
+    // S7-1 / RECOVER-2: код запроса ключа через Telegram из опроса не заменяет показанный; другой код —
+    // запрос перехвачен (сессия, вошедшая паролем с тем же device_id, начала свой запрос)
+    using parvane::v2::telegramCodeIntercepted;
+    check(!telegramCodeIntercepted("111111", "111111"), "telegram: тот же код — запрос наш");
+    check(telegramCodeIntercepted("111111", "222222"), "telegram: код сменился — перехвачен");
+    check(!telegramCodeIntercepted("", "222222"), "telegram: своего кода нет (перезапуск) — код из опроса берётся");
+    check(!telegramCodeIntercepted("111111", ""), "telegram: опрос без кода (запрос истёк) — не перехват");
 
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;

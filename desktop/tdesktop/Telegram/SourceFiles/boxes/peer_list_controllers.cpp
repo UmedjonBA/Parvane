@@ -75,6 +75,11 @@ object_ptr<Ui::BoxContent> PrepareContactsBox(
 			return _wheelClicks.events();
 		}
 
+		// Parvane: поиск бокса находит и новых людей — по нику в каталоге identity
+		[[nodiscard]] rpl::producer<QString> searchPlaceholder() const override {
+			return tr::lng_parvane_contacts_search_nick();
+		}
+
 	protected:
 		std::unique_ptr<PeerListRow> createRow(
 				not_null<UserData*> user) override {
@@ -106,9 +111,7 @@ object_ptr<Ui::BoxContent> PrepareContactsBox(
 
 		const auto state = box->lifetime().make_state<State>();
 		box->addButton(tr::lng_close(), [=] { box->closeBox(); });
-		box->addLeftButton(
-			tr::lng_profile_add_contact(),
-			[=] { window->showAddContact(); });
+		// Parvane: «Добавить контакт» по телефону нет — новых людей находит поиск этого бокса (по нику)
 		state->toggleSort = box->addTopButton(st::contactsSortButton, [=] {
 			const auto online = (state->mode.current() == Mode::Online);
 			const auto mode = online ? Mode::Alphabet : Mode::Online;

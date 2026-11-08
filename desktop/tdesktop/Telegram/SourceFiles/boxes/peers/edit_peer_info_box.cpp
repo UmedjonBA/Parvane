@@ -1573,7 +1573,10 @@ void Controller::fillManageSection() {
 		&& isChannel
 		&& channel->canPostMessages();
 	const auto canEditStickers = isChannel && channel->canEditStickers();
-	const auto canDeleteChannel = isChannel && channel->canDelete();
+	// Parvane (ревью UI 7 ноя, п. 19): группа/канал Parvane — ChatData; удалить может владелец
+	const auto canDeleteChannel = (isChannel && channel->canDelete())
+		|| (!isChannel && _peer->asChat() && _peer->asChat()->amCreator()
+			&& !Parvane::GroupIdForChat(_peer).isEmpty());
 	const auto canEditColorIndex = isChannel && channel->canEditEmoji();
 	const auto canViewOrEditDiscussionLink = isChannel
 		&& (channel->discussionLink()
@@ -2994,6 +2997,11 @@ void Controller::savePhoto() {
 }
 
 void Controller::deleteWithConfirmation() {
+	if (!Parvane::GroupIdForChat(_peer).isEmpty()) { // ревью UI 7 ноя, п. 19
+		_navigation->parentController()->hideLayer();
+		Parvane::ConfirmLeaveOrDeleteGroup(_navigation->uiShow(), _peer);
+		return;
+	}
 	const auto channel = _peer->asChannel();
 	Assert(channel != nullptr);
 

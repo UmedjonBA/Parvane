@@ -1656,6 +1656,13 @@ void ApiWrap::saveStickerSets(
 		: _session->data().stickers().setsOrderRef();
 
 	using Flag = Data::StickersSetFlag;
+	// Parvane (ревью UI 7 ноя, п. 23): удалённый свой набор — каталог на диске и запись журнала PACK-3, иначе
+	// при следующем запуске набор возвращался
+	if (type == Data::StickersType::Stickers) {
+		for (const auto removedSetId : localRemoved) {
+			Parvane::RemoveLocalStickerPack(_session, removedSetId);
+		}
+	}
 	for (const auto removedSetId : localRemoved) {
 		if ((removedSetId == Data::Stickers::CloudRecentSetId)
 			|| (removedSetId == Data::Stickers::CloudRecentAttachedSetId)) {
@@ -1832,6 +1839,9 @@ void ApiWrap::saveStickerSets(
 		storage.writeFavedStickers();
 	}
 	_session->data().stickers().notifyUpdated(type);
+	if (type == Data::StickersType::Stickers) {
+		Parvane::SaveLocalStickerOrder(_session); // порядок своих наборов — на устройстве (п. 23)
+	}
 
 	if (setDisenableRequests.empty()) {
 		stickersSaveOrder();
@@ -3208,6 +3218,13 @@ void ApiWrap::resolveJumpToDate(
 		Dialogs::Key chat,
 		const QDate &date,
 		Fn<void(not_null<PeerData*>, MsgId)> callback) {
+	// Parvane: история чата целиком на устройстве — переход по ней (messages.getHistory нет)
+	if (const auto history = chat.history(); history && !chat.topic() && !chat.sublist()) {
+		if (const auto id = Parvane::LocalMessageAtDate(history, date)) {
+			callback(history->peer, *id);
+			return;
+		}
+	}
 	if (const auto peer = chat.peer()) {
 		const auto topic = chat.topic();
 		const auto sublist = chat.sublist();
@@ -3504,6 +3521,14 @@ mtpRequestId ApiWrap::requestGlobalMedia(
 		int32 offsetRate,
 		Data::MessagePosition offsetPosition,
 		Fn<void(Api::GlobalMediaResult)> done) {
+	// Parvane (ревью UI 7 ноя, п. 16): вкладки «Фото / Видео / Ссылки / Файлы / Музыка / Голосовые» глобального
+	// поиска — по своему индексу общих медиа всех чатов (MTProto messages.searchGlobal нет); всё одной страницей.
+	if (const auto parvane = true) {
+		done(offsetPosition.fullId.peer
+			? Api::GlobalMediaResult()
+			: Parvane::GlobalMediaLocal(_session, type, query));
+		return 0;
+	}
 	auto prepared = Api::PrepareGlobalMediaRequest(
 		_session,
 		offsetRate,
@@ -3588,8 +3613,19 @@ void ApiWrap::forwardMessages(
 	// Parvane: пересылаем каждое сообщение получателю через шину (текст/медиа).
 	// Локальное эхо создаёт штатный tdesktop; мы лишь доставляем содержимое.
 	if (const auto peer = action.history ? action.history->peer.get() : nullptr) {
+		const auto silentScope = Parvane::SilentSendScope(action.options.silent);
+		const auto scheduleScope = Parvane::ScheduleSendScope(action.options.scheduled);
+		const auto dropNames = (draft.options != Data::ForwardOptions::PreserveInfo);
+		const auto dropCaptions = (draft.options == Data::ForwardOptions::NoNamesAndCaptions);
 		for (const auto &item : draft.items) {
-			Parvane::MirrorForward(peer, item);
+			Parvane::MirrorForward(peer, item, dropNames, dropCaptions);
+		}
+		if (action.options.scheduled) {
+			// Отложенная пересылка — в очереди Parvane (раздел «Запланированные»), эха в чате сейчас нет
+			if (successCallback) {
+				successCallback();
+			}
+			return;
 		}
 	}
 
@@ -3627,9 +3663,9 @@ void ApiWrap::forwardMessages(
 	}
 
 	const auto count = int(draft.items.size());
-	const auto genClientSideMessage = action.generateLocal
-		&& (count < 2)
-		&& (draft.options == Data::ForwardOptions::PreserveInfo);
+	// Parvane: сервера, который вернул бы пересланное, нет — локальное эхо всегда (и пачкой, и без автора);
+	// «скрыть имя / подписи» применяются к эху ниже (parvaneDropForwardInfo)
+	const auto genClientSideMessage = action.generateLocal;
 	const auto history = action.history;
 	const auto peer = history->peer;
 
@@ -3811,6 +3847,12 @@ void ApiWrap::forwardMessages(
 				// forwarded messages don't have effects
 				//.effectId = action.options.effectId,
 			}, item);
+			if (draft.options != Data::ForwardOptions::PreserveInfo) {
+				if (const auto local = _session->data().message(newId)) {
+					local->parvaneDropForwardInfo(
+						draft.options == Data::ForwardOptions::NoNamesAndCaptions);
+				}
+			}
 			_session->data().registerMessageRandomId(randomId, newId);
 			if (!localIds) {
 				localIds = std::make_shared<base::flat_map<uint64, FullMsgId>>();
@@ -4293,6 +4335,7 @@ void ApiWrap::sendMessage(
 	// Parvane fork: запланированное (action.options.scheduled) — в локальную
 	// очередь Parvane и ВЫХОД (нативная вкладка Scheduled завязана на MTProto).
 	// Сообщение уйдёт в назначенное время обычным E2E-путём.
+	const auto parvaneSilent = Parvane::SilentSendScope(action.options.silent);
 	if (action.options.scheduled > 0) {
 		Parvane::ScheduleOutgoing(
 			peer.get(),
@@ -4311,7 +4354,10 @@ void ApiWrap::sendMessage(
 		TextWithEntities{
 			textWithTags.text,
 			TextUtilities::ConvertTextTagsToEntities(textWithTags.tags) },
-		action.replyTo.messageId.msg.bare);
+		action.replyTo.messageId.msg.bare,
+		action.replyTo.quote, // QUOTE-1
+		action.replyTo.quoteOffset,
+		action.options.invertCaption); // MEDIA-2: текст над карточкой ссылки
 
 	auto sending = TextWithEntities();
 	auto left = TextWithEntities {

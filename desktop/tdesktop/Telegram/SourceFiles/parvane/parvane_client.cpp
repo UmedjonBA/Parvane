@@ -1,11 +1,16 @@
 // Parvane fork: см. parvane_client.h.
 #include "parvane/parvane_client_internal.h"
+#include <condition_variable>
+#include <QtCore/QRandomGenerator>
 #include "data/data_message_reactions.h" // PARVANE_AUTOSTATE react
 #include "parvane/parvane_article_view.h"
 #include "parvane/parvane_local_files.h"
 #include "parvane/parvane_safe_open.h" // DecodeImageBounded
 #include "data/data_photo_media.h"
 #include "boxes/share_box.h" // хук PARVANE_AUTOFORWARD_MULTI: колбэк окна выбора чатов
+#include "data/components/scheduled_messages.h" // раздел «Запланированные» из очереди
+#include "ui/layers/show.h" // тосты звонков из Calls::Instance
+#include "history/history_item_components.h" // HiddenSenderInfo (пересылка)
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
 #include <condition_variable>
 #include <thread>
@@ -664,8 +669,8 @@ void WriteMediaCache(const QString &fileId, const std::string &bytes) {
 
 // ── Журнал истории (spec 033) ───────────────────────────────────────────────
 // Строки хранит журнал истории аккаунта ядра (RowState: удаление, правка, реакции, закреп сведены движком;
-// parvane_client_history.cpp). Своё отправленное этим устройством — в журнал сразу (≤ 300 мс), входящее — с
-// задержкой, если другое своё устройство его ещё не записало.
+// parvane_client_history.cpp). Своё и входящее — одной пачкой через случайные 30–120 с (S7-3: по времени записи
+// сервер не отличит автора); входящее — если другое своё устройство его ещё не записало.
 void HistoryAppend(const parvane::StoredMessage &sm) {
 	HistoryRecordMessage(sm, /*own=*/true);
 }
@@ -2010,7 +2015,9 @@ void sendTextAsync(
 		const nlohmann::json &entities,
 		const std::string &preId,
 		const std::optional<std::string> &replyToUuid = std::nullopt,
-		const nlohmann::json &webpage = nlohmann::json()) {
+		const nlohmann::json &webpage = nlohmann::json(),
+		bool silent = false,
+		const nlohmann::json &extra = nlohmann::json()) {
 	const auto from = SelfAddress().toStdString();
 	const auto to = toAddress.toStdString();
 	const auto body = text.toStdString();
@@ -2042,6 +2049,12 @@ void sendTextAsync(
 			if (ttl > 0) {
 				content["ttl_secs"] = ttl;
 			}
+			if (silent) {
+				content["silent"] = true; // «Отправить без звука» (Content.silent)
+			}
+			if (extra.is_object()) {
+				content.update(extra); // пересылка: forwarded_from / forwarded_name
+			}
 			if (t) {
 				if (auto packs = BuildEmojiPacks(entities, BlobRecipientsFor(to)); !packs.empty()) {
 					content["emoji_packs"] = packs;
@@ -2071,6 +2084,9 @@ void sendTextAsync(
 			}
 			if (!id.empty() && ttl == 0) {
 				auto content = parvane::textContent(body, entities, webpage);
+				if (extra.is_object()) {
+					content.update(extra); // цитата ответа, текст над карточкой, пересылка — и после перезапуска
+				}
 				cacheOwnOutgoing(id, from, content);
 			}
 			if (!id.empty() && ttl > 0) {
@@ -2115,6 +2131,9 @@ void sendTextAsync(
 				own.to = to;
 				own.ts = QDateTime::currentSecsSinceEpoch();
 				own.content = parvane::textContent(body, entities, webpage);
+				if (extra.is_object()) {
+					own.content.update(extra);
+				}
 				if (replyToUuid) {
 					own.reply_to = *replyToUuid;
 				}
@@ -2160,8 +2179,12 @@ void sendContentAsync(const QString &toAddress, const std::string &contentJson) 
 // (сгенерирован на main).
 void sendInnerAsync(
 		const QString &toAddress,
-		const nlohmann::json &content,
+		const nlohmann::json &contentIn,
 		const std::string &preId) {
+	auto content = contentIn;
+	if (SendingSilent()) {
+		content["silent"] = true; // «Отправить без звука»: опрос, геопозиция, стикер, карточка
+	}
 	const auto to = toAddress.toStdString();
 	const auto generation = AccountGeneration();
 	crl::async([=] {
@@ -3497,10 +3520,88 @@ void SignOutDeletedAccount() {
 	}
 }
 
+namespace {
+int g_silentScope = 0; // main: идёт отправка «без звука» (SilentSendScope)
+} // namespace
+
+SilentSendScope::SilentSendScope(bool silent) : _active(silent) {
+	if (_active) {
+		++g_silentScope;
+	}
+}
+
+SilentSendScope::~SilentSendScope() {
+	if (_active) {
+		--g_silentScope;
+	}
+}
+
+bool SendingSilent() {
+	return g_silentScope > 0;
+}
+
+std::optional<MsgId> LocalMessageAtDate(not_null<History*> history, const QDate &date) {
+	if (!SessionActive()) {
+		return std::nullopt;
+	}
+	const auto from = TimeId(date.startOfDay().toSecsSinceEpoch());
+	auto last = MsgId();
+	auto found = MsgId();
+	for (const auto &block : history->blocks) {
+		for (const auto &view : block->messages) {
+			const auto item = view->data();
+			if (!item->isRegular()) {
+				continue;
+			}
+			last = item->id;
+			if (!found && item->date() >= from) {
+				found = item->id;
+			}
+		}
+	}
+	const auto result = found ? found : last;
+	LOG(("Parvane: «Перейти к дате» %1 → msg %2%3")
+		.arg(date.toString(Qt::ISODate))
+		.arg(result.bare)
+		.arg(found ? QString() : u" (позже всех — последнее)"_q));
+	return result ? result : ShowAtTheEndMsgId;
+}
+
+void MirrorOutgoingImpl(
+		PeerData *peer,
+		const TextWithEntities &textWithEntities,
+		std::int64_t replyToMsgId,
+		const nlohmann::json &extra);
+
 void MirrorOutgoing(
 		PeerData *peer,
 		const TextWithEntities &textWithEntities,
-		std::int64_t replyToMsgId) {
+		std::int64_t replyToMsgId,
+		const TextWithEntities &quote,
+		int quoteOffset,
+		bool invertMedia) {
+	auto extra = nlohmann::json::object();
+	// QUOTE-1: «Цитировать и ответить» — выделенный фрагмент; ядро шлёт его только вместе с ответом
+	if (replyToMsgId && !quote.text.isEmpty()) {
+		extra["reply_quote"] = {
+			{ "text", quote.text.toStdString() },
+			{ "entities", entitiesToJson(quote.entities) },
+			{ "offset", std::max(quoteOffset, 0) },
+		};
+		LOG(("Parvane: исходящий ответ с цитатой (%1 симв.)").arg(quote.text.size()));
+	}
+	// MEDIA-2: текст с карточкой ссылки — над ней
+	if (invertMedia) {
+		extra["invert_media"] = true;
+	}
+	MirrorOutgoingImpl(peer, textWithEntities, replyToMsgId, extra.empty() ? nlohmann::json() : extra);
+}
+
+void MirrorOutgoingImpl(
+		PeerData *peer,
+		const TextWithEntities &textWithEntities,
+		std::int64_t replyToMsgId,
+		const nlohmann::json &extra) {
 	const auto &text = textWithEntities.text;
 	if (!peer || text.isEmpty()) {
 		return;
@@ -3544,15 +3645,16 @@ void MirrorOutgoing(
 			.arg(QString::fromStdString(preId)).arg(mentionCount));
 	}
 	const auto url = firstUrlInText(text);
+	const auto silent = SendingSilent();
 	if (url.isEmpty()) {
-		sendTextAsync(address, text, entitiesJson, preId, replyToUuid);
+		sendTextAsync(address, text, entitiesJson, preId, replyToUuid, nlohmann::json(), silent, extra);
 		return;
 	}
 	// Есть ссылка — тянем OG-превью и отправляем ПОСЛЕ (или без превью по ошибке/
 	// таймауту). preId уже в очереди, так что локальное эхо свяжется корректно.
 	const auto textCopy = text;
 	fetchWebpage(url, [=](nlohmann::json wp) {
-		sendTextAsync(address, textCopy, entitiesJson, preId, replyToUuid, wp);
+		sendTextAsync(address, textCopy, entitiesJson, preId, replyToUuid, wp, silent, extra);
 	});
 }
 
@@ -3560,9 +3662,35 @@ void ForwardPollCopy(const QString &toAddress, const QString &contentJson);
 
 void ForwardMediaReshared(const QString &toAddress, const QString &contentJson, int attempt = 0);
 
-void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
+void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item, bool dropNames, bool dropCaptions) {
 	if (!toPeer) {
 		return;
+	}
+	// «Переслано от» (как web forwardMessages): автор исходного сообщения; «Скрыть имя отправителя» — копия
+	// без автора, «Скрыть подписи» — и без подписи к медиа (ревью 7 ноя, п. 18)
+	auto forwardInfo = nlohmann::json::object();
+	if (!dropNames) {
+		auto fromAddress = QString();
+		auto fromName = QString();
+		if (const auto original = item->originalSender()) {
+			if (const auto user = original->asUser()) {
+				fromAddress = user->isSelf() ? SelfAddress() : AddressForUser(user);
+			} else {
+				fromAddress = GroupIdForChat(original);
+			}
+			// Имя, заданное самим автором (CONTACT-1 п. 4): своё имя контакта в провод не уходит
+			fromName = (original->isUser() && !fromAddress.isEmpty() && !original->isSelf())
+				? DisplayNameFor(fromAddress)
+				: original->name();
+		} else if (const auto hidden = item->originalHiddenSenderInfo()) {
+			fromName = hidden->name;
+		}
+		if (!fromAddress.isEmpty()) {
+			forwardInfo["forwarded_from"] = fromAddress.toStdString();
+		}
+		if (!fromName.isEmpty()) {
+			forwardInfo["forwarded_name"] = fromName.toStdString();
+		}
 	}
 	// Адрес получателя: 1-на-1 — адрес собеседника, группа/канал — адрес группы
 	// (как MirrorOutgoing; пересылка в группу раньше молча не уходила).
@@ -3603,27 +3731,66 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
 			}
 		}
 	}
+	const auto withForward = [&](const QString &contentJson) {
+		auto content = nlohmann::json::parse(contentJson.toStdString(), nullptr, false);
+		if (!content.is_object()) {
+			return contentJson;
+		}
+		content.erase("forwarded_from");
+		content.erase("forwarded_name");
+		content.update(forwardInfo);
+		if (dropCaptions) {
+			content.erase("caption");
+			content.erase("caption_entities");
+			content.erase("entities");
+		}
+		return QString::fromStdString(content.dump());
+	};
 	// Опрос: пересылка = независимая копия (новый uuid, голоса с нуля).
-	if (item->media() && item->media()->poll()
+	if (!SchedulingDue() && item->media() && item->media()->poll()
 		&& found != g_mediaContentByMsgId.constEnd()) {
-		ForwardPollCopy(address, found.value());
+		ForwardPollCopy(address, withForward(found.value()));
 		return;
 	}
 	// Медиа — блоб перезаливается под нового получателя (гранты cloud выдаются
 	// только при загрузке; см. ForwardMediaReshared).
-	if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
-		ForwardMediaReshared(address, found.value());
+	if (!SchedulingDue() && item->media() && found != g_mediaContentByMsgId.constEnd()) {
+		ForwardMediaReshared(address, withForward(found.value()));
 		return;
 	}
 	const auto text = item->originalText();
+	if (SchedulingDue()) {
+		// «Запланировать» пересылку: готовое содержимое в очередь (медиа — с секретом скачивания исходного блоба,
+		// CAP-1, как web при неудачной перезаливке)
+		auto content = nlohmann::json();
+		if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
+			content = nlohmann::json::parse(withForward(found.value()).toStdString(), nullptr, false);
+		} else if (!text.text.isEmpty()) {
+			content = parvane::textContent(text.text.toStdString(), entitiesToJson(text.entities));
+			content.update(forwardInfo);
+		}
+		if (content.is_object() && ScheduleContent(toPeer, content)) {
+			return;
+		}
+		LOG(("Parvane: пересылка не запланирована — нет содержимого"));
+		return;
+	}
 	if (!text.text.isEmpty()) {
-		MirrorOutgoing(toPeer, text); // с форматированием (entities сохраняются)
+		// с форматированием (entities сохраняются)
+		MirrorOutgoingImpl(toPeer, text, 0, forwardInfo);
 	}
 }
 
 void MirrorClearHistory(not_null<PeerData*> peer) {
 	const auto session = &peer->session();
-	const auto peerAddr = AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	// Группа — её адрес (ревью UI 7 ноя, п. 15: прежде AddressForId(0) — очистка группы не доезжала до своих устройств)
+	const auto peerAddr = peer->isChat()
+		? GroupIdForChat(peer)
+		: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	if (peerAddr.isEmpty()) {
+		LOG(("Parvane: очистка чата — адрес не найден"));
+		return;
+	}
 	const auto self = SelfAddress();
 	// Граница очистки для журнала личного состояния v2 (T145): время самого
 	// позднего скрываемого сообщения — остальные свои устройства скрывают всё,
@@ -3710,7 +3877,7 @@ void ForwardMediaReshared(const QString &toAddress, const QString &contentJson, 
 	sendContentAsync(toAddress, contentJson.toStdString());
 }
 
-// Своя мутация сообщения → операция журнала истории (сразу, ≤ 300 мс) с тем же op_id, что и E2E-мутация
+// Своя мутация сообщения → операция журнала истории (общей пачкой с входящим, S7-3) с тем же op_id, что и E2E-мутация
 // собеседнику: свои устройства, получившие копию из инбокса, узнают её в журнале и не пишут второй раз.
 namespace {
 [[nodiscard]] QString OwnMutationTarget(MsgId msgId) {
@@ -4137,6 +4304,16 @@ void extractMediaMeta(
 
 } // namespace Internal
 
+// MEDIA-2: альбом — одно случайное album_id (16 байт) у всех элементов, элементы уходят подряд в порядке альбома
+// (загрузки блобов идут параллельно, отправка содержимого ждёт своей очереди). Ключ — groupId альбома tdesktop.
+struct AlbumSendSeq {
+	std::string albumId;
+	std::mutex mutex;
+	std::condition_variable cv;
+	std::size_t next = 0;
+};
+QHash<uint64, std::shared_ptr<AlbumSendSeq>> g_albumSends; // main
+
 void MirrorOutgoingFile(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &file) {
@@ -4194,8 +4371,56 @@ void MirrorOutgoingFile(
 	const auto mimeStd = file->filemime.toStdString();
 	const auto captionStd = file->caption.text.toStdString();
 	const auto bytesStd = std::string(bytes.constData(), bytes.size());
+	const auto silent = file->to.options.silent;
+	// MEDIA-2: спойлер, подпись над медиа, альбом
+	const auto spoiler = file->spoiler;
+	const auto invert = file->to.options.invertCaption;
+	auto albumSeq = std::shared_ptr<AlbumSendSeq>();
+	auto albumIndex = std::size_t(0);
+	if (const auto album = file->album; album && album->items.size() > 1) {
+		auto &seq = g_albumSends[album->groupId];
+		if (!seq) {
+			seq = std::make_shared<AlbumSendSeq>();
+			auto raw = QByteArray(16, '\0');
+			QRandomGenerator::system()->fillRange(reinterpret_cast<quint32*>(raw.data()), 4);
+			seq->albumId = raw.toBase64().toStdString();
+		}
+		albumSeq = seq;
+		for (std::size_t i = 0; i != album->items.size(); ++i) {
+			if (album->items[i].taskId == file->taskId) {
+				albumIndex = i;
+			}
+		}
+		if (albumIndex + 1 == album->items.size()) {
+			g_albumSends.remove(album->groupId); // последний элемент — запись больше не нужна
+		}
+	}
 
 	crl::async([=] {
+		// Очередь альбома: элемент, вышедший раньше времени по любой причине, всё равно двигает очередь
+		struct AlbumTurn {
+			std::shared_ptr<AlbumSendSeq> seq;
+			std::size_t index = 0;
+			bool waited = false;
+			void wait() {
+				if (!seq || waited) {
+					return;
+				}
+				waited = true;
+				auto lock = std::unique_lock(seq->mutex);
+				seq->cv.wait_for(lock, std::chrono::seconds(60), [&] { return seq->next >= index; });
+			}
+			~AlbumTurn() {
+				if (!seq) {
+					return;
+				}
+				{
+					auto lock = std::lock_guard(seq->mutex);
+					seq->next = std::max(seq->next, index + 1);
+				}
+				seq->cv.notify_all();
+			}
+		} turn{ albumSeq, albumIndex };
 		const auto t = ControlSnapshot();
 		const auto isGroup = parvane::v2::isGroupAddress(to);
 		if (!t) {
@@ -4225,6 +4450,19 @@ void MirrorOutgoingFile(
 			AttachBlobCap(content, fileId);
 			if (ttl > 0) {
 				content["ttl_secs"] = ttl;
+			}
+			if (silent) {
+				content["silent"] = true;
+			}
+			if (spoiler) {
+				content["spoiler"] = true; // ядро переносит только для фото/видео/GIF
+			}
+			if (invert) {
+				content["invert_media"] = true;
+			}
+			if (turn.seq) {
+				content["album_id"] = turn.seq->albumId;
+				turn.wait(); // элементы альбома уходят подряд, в порядке альбома
 			}
 			std::string id;
 			if (!isGroup) {
@@ -4474,6 +4712,10 @@ QHash<QString, QPair<qint64, std::string>> g_packHashByDir;
 
 } // namespace Internal
 
+namespace {
+void PushScheduled(ScheduledItem item); // ниже, раздел отложенных (безымянное пространство)
+} // namespace
+
 void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 	if (!peer || !document) {
 		return;
@@ -4536,6 +4778,8 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			packInfo = it.value();
 		}
 	}
+	const auto silent = SendingSilent();
+	const auto due = SchedulingDue(); // «Запланировать»: содержимое — в очередь отложенных, блоб уже в облаке
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		const auto isGroup = parvane::v2::isGroupAddress(to);
@@ -4569,6 +4813,9 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			}
 			if (ttl > 0) {
 				content["ttl_secs"] = ttl;
+			}
+			if (silent) {
+				content["silent"] = true;
 			}
 			// pack_ref: архив набора в cloud (кэш на сессию по setId).
 			if (packSetId) {
@@ -4606,6 +4853,20 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 					content["pack_ref"] = parvane::json::parse(
 						refStr.toStdString());
 				}
+			}
+			if (due) {
+				crl::on_main([=] {
+					ScheduledItem item;
+					item.id = QString::fromStdString(parvane::newUuidV7());
+					item.address = QString::fromStdString(to);
+					item.dueAt = due;
+					item.silent = silent;
+					item.kind = u"content"_q;
+					item.content = content;
+					PushScheduled(std::move(item));
+					LOG(("Parvane: %1 запланирован → %2").arg(QString::fromStdString(kind), QString::fromStdString(to)));
+				});
+				return;
 			}
 			std::string id;
 			if (!isGroup) {
@@ -4667,10 +4928,18 @@ namespace Internal {
 // Синтезировать/обновить один эмодзи-набор из каталога `dir` под ИМЕНЕМ
 // `rawName` (важно: docId считается по rawName, одинаковому у отправителя и
 // получателя). Возвращает setId (0 — пусто). Только main-поток.
+// A0085-2: принятые из входящих паки — кэш устройства с квотой (не свои наборы): набор только для показа
+// эмодзи в сообщениях (installed=false — без даты установки и места в панели), свой — по «Добавить» в окне набора.
+[[nodiscard]] QString ReceivedEmojiRoot() {
+	return cWorkingDir() + u"tdata/parvane-emoji-received"_q;
+}
+QSet<quint64> g_receivedEmojiSets; // main: наборы из кэша принятых (окно набора предлагает «Добавить»)
+
 [[nodiscard]] quint64 FeedCustomEmojiSet(
 		not_null<Main::Session*> session,
 		const QString &rawName,
-		const QString &dir) {
+		const QString &dir,
+		bool installed = true) {
 	const auto packDir = QDir(dir);
 	const auto files = packDir.entryList(
 		{ u"*.webp"_q, u"*.png"_q, u"*.tgs"_q, u"*.webm"_q },
@@ -4732,7 +5001,7 @@ namespace Internal {
 	}
 	using SFlag = MTPDstickerSet::Flag;
 	const auto set = MTP_stickerSet(
-		MTP_flags(SFlag::f_installed_date | SFlag::f_emojis),
+		MTP_flags((installed ? SFlag::f_installed_date : SFlag(0)) | SFlag::f_emojis),
 		MTP_int(int(base::unixtime::now())),
 		MTP_long(setId), MTP_long(0),
 		MTP_string(rawName), MTP_string(rawName),
@@ -4749,8 +5018,13 @@ namespace Internal {
 			Core::FileLocation(path));
 	}
 	auto &order = stickers.emojiSetsOrderRef();
-	if (!order.contains(setId)) {
+	if (installed && !order.contains(setId)) {
 		order.push_back(setId);
+	}
+	if (installed) {
+		g_receivedEmojiSets.remove(setId);
+	} else {
+		g_receivedEmojiSets.insert(setId);
 	}
 	g_emojiPackDirs.insert(setId, PackDirInfo{
 		packDir.absolutePath(), rawName, int(docs.size()) });
@@ -4780,6 +5054,26 @@ void LoadLocalCustomEmoji(not_null<Main::Session*> session) {
 	}
 	if (loaded > 0) {
 		session->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+	}
+}
+
+// Кэш принятых паков не больше `keep` каталогов: давно не использованные (по отметке `.used`) — прочь.
+void EvictReceivedEmojiPacks(int keep) {
+	const auto root = QDir(ReceivedEmojiRoot());
+	auto dirs = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+	if (dirs.size() <= keep) {
+		return;
+	}
+	const auto usedAt = [](const QFileInfo &dir) {
+		const auto used = QFileInfo(dir.absoluteFilePath() + u"/.used"_q);
+		return used.exists() ? used.lastModified() : dir.lastModified();
+	};
+	std::sort(dirs.begin(), dirs.end(), [&](const QFileInfo &a, const QFileInfo &b) {
+		return usedAt(a) < usedAt(b);
+	});
+	for (auto i = 0; i < dirs.size() - keep; ++i) {
+		QDir(dirs[i].absoluteFilePath()).removeRecursively();
+		LOG(("Parvane: эмодзи-пак «%1» вытеснен из кэша принятых").arg(dirs[i].fileName()));
 	}
 }
 
@@ -4813,28 +5107,31 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 			|| g_packInstallBusy.contains(fileId)) {
 			continue;
 		}
-		const auto dest = CustomEmojiRoot() + u"/"_q + SanitizePackName(rawName);
-		// Квота: автоматически принятые паки ограничены (число каталогов и новых
-		// паков за запуск), иначе поток сообщений с уникальными именами заполнит
-		// диск и замедлит старт (LoadLocalCustomEmoji декодирует всё в UI-потоке).
-		constexpr auto kMaxEmojiPackDirs = 64;
-		constexpr auto kMaxAutoPacksPerRun = 16;
-		static auto autoPacksThisRun = 0;
-		if (!QDir(dest).exists()
-			&& (autoPacksThisRun >= kMaxAutoPacksPerRun
-				|| QDir(CustomEmojiRoot()).entryList(
-					QDir::Dirs | QDir::NoDotAndDotDot).size() >= kMaxEmojiPackDirs)) {
-			LOG(("Parvane: эмодзи-пак «%1» не принят — достигнута квота автоприёма").arg(rawName));
-			continue;
-		}
-		// Защита от подмены: НЕ перезаписываем уже существующий пак (свой или
-		// ранее полученный) — иначе отправитель, зная имя, подменил бы содержимое
-		// (и docId, детерминированный от имени|файла). Существующий пак уже
-		// загружается LoadLocalCustomEmoji на старте.
-		if (QDir(dest).exists()) {
+		// Свой набор (ParvaneEmoji) с этим именем — уже загружен на старте, не перезаписываем (подмена docId)
+		if (QDir(CustomEmojiRoot() + u"/"_q + SanitizePackName(rawName)).exists()) {
 			g_emojiPackMaterialized.insert(rawName);
 			continue;
 		}
+		// A0085-2: принятый пак — в кэш устройства `tdata/parvane-emoji-received`, а не в свои наборы; уже принятый —
+		// показать из кэша без сети (при воспроизведении истории тоже)
+		const auto dest = ReceivedEmojiRoot() + u"/"_q + SanitizePackName(rawName);
+		if (QDir(dest).exists()) {
+			QFile(dest + u"/.used"_q).open(QIODevice::WriteOnly); // отметка использования для вытеснения
+			if (FeedCustomEmojiSet(session, rawName, dest, false)) {
+				session->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+			}
+			g_emojiPackMaterialized.insert(rawName);
+			continue;
+		}
+		// Квота: новых паков за запуск и всего в кэше; сверх — вытесняется давно не использованный
+		constexpr auto kMaxReceivedPacks = 32;
+		constexpr auto kMaxAutoPacksPerRun = 16;
+		static auto autoPacksThisRun = 0;
+		if (autoPacksThisRun >= kMaxAutoPacksPerRun) {
+			LOG(("Parvane: эмодзи-пак «%1» не принят — достигнута квота автоприёма").arg(rawName));
+			continue;
+		}
+		EvictReceivedEmojiPacks(kMaxReceivedPacks - 1);
 		++autoPacksThisRun;
 		g_packInstallBusy.insert(fileId);
 		const auto fidStd = fileId.toStdString();
@@ -4884,7 +5181,7 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 				if (!s || written <= 0) {
 					return;
 				}
-				if (FeedCustomEmojiSet(s, rawName, dest)) {
+				if (FeedCustomEmojiSet(s, rawName, dest, false)) {
 					s->data().stickers().notifyUpdated(Data::StickersType::Emoji);
 					// Перерисовать открытые сообщения — кастом-эмодзи резолвятся.
 					s->data().stickers().notifyRecentUpdated(Data::StickersType::Emoji);
@@ -5476,6 +5773,17 @@ not_null<UserData*> ensurePeerUser(
 	if (g_deletedPeers.contains(address)) {
 		flags |= MTPDuser::Flag::f_deleted; // spec 027: «Удалённый аккаунт»
 	}
+	// CONTACT-1: свой контакт — флаг контакта (родной список «Контакты», «Изменить контакт») и своё имя/фамилия
+	// вместо имени из каталога; в провод своё имя не уходит (MirrorForward берёт DisplayNameFor)
+	const auto contactRecord = (address != SelfAddress()) ? ContactRecordFor(address) : nullptr;
+	const auto contact = contactRecord
+		? std::make_optional(*contactRecord)
+		: std::optional<ContactRecord>();
+	const auto ownName = contact && !(contact->first.isEmpty() && contact->last.isEmpty());
+	if (contact) {
+		flags |= MTPDuser::Flag::f_contact;
+	}
+	flags |= MTPDuser::Flag::f_last_name;
 	// Профиль (имя + аватар) спрашиваем у каталога, если не спрашивали вовсе
 	// либо ответ устарел. Условие «имя неизвестно» здесь было ошибкой: после
 	// первого резолва имя известно всегда, и смена аватара уже не подхватывалась.
@@ -5493,8 +5801,8 @@ not_null<UserData*> ensurePeerUser(
 		MTP_flags(flags),
 		MTP_long(id),
 		MTPlong(),                    // access_hash
-		MTP_string(DisplayNameFor(address)), // first_name — отображаемое имя
-		MTPstring(),                  // last_name
+		MTP_string(ownName ? contact->first : DisplayNameFor(address)), // first_name — отображаемое имя
+		MTP_string(ownName ? contact->last : QString()),                // last_name — своя фамилия контакта
 		MTP_string(address),          // username — уникальный адрес (@handle)
 		MTPstring(),                  // phone
 		MTPUserProfilePhoto(),
@@ -5531,6 +5839,14 @@ not_null<UserData*> ensurePeerUser(
 	}
 	// processUser выше стёр userpic пустым фото — возвращаем аватар из кэша.
 	applyAvatar(result, address);
+	RestoreChatWallPaper(result); // обои чата на устройстве (ревью UI 7 ноя, раздел 5)
+	// CONTACT-1: заметка о контакте (родной блок «Заметки» профиля)
+	if (address != SelfAddress()) {
+		const auto note = contact ? contact->note : QString();
+		if (result->note().text != note) {
+			result->setNote(TextWithEntities{ note });
+		}
+	}
 	// Блок-лист с диска/из журнала состояния (T132): флаг живёт только в памяти
 	// tdesktop, после рестарта его возвращаем при первом появлении пользователя.
 	if (g_blockedAddrs.contains(address) && !result->isBlocked()) {
@@ -5916,6 +6232,51 @@ void RequestPreviewPhoto(PhotoId photoId, const nlohmann::json &photo) {
 		page);
 }
 
+// Превью ссылки в поле ввода (ревью UI 7 ноя, п. 20): шард preview, как у отправки (fetchWebpage), но без
+// загрузки картинки (отправка возьмёт её сама) — карточка заголовка и описания над полем.
+void ResolveComposePreviewImpl(
+		not_null<Main::Session*> session,
+		const QString &url,
+		Fn<void(WebPageData*)> done) {
+	const auto weak = base::make_weak(session.get());
+	const auto urlStd = url.toStdString();
+	crl::async([=] {
+		auto wp = nlohmann::json();
+		if (const auto t = ControlSnapshot()) {
+			try {
+				wp = parvane::v2::account::previewLink(*t, urlStd).toJson();
+			} catch (const std::exception &) {
+			}
+		}
+		crl::on_main([=] {
+			const auto s = weak.get();
+			if (!s) {
+				return;
+			}
+			auto page = wp.is_object() ? wp : nlohmann::json();
+			if (page.is_object()) {
+				page.erase("image");
+				page.erase("image_mime");
+			}
+			const auto hasText = page.is_object()
+				&& (!page.value("title", std::string()).empty()
+					|| !page.value("description", std::string()).empty());
+			if (!hasText) {
+				LOG(("Parvane: превью ссылки в поле ввода — нет данных"));
+				done(nullptr);
+				return;
+			}
+			const auto media = buildWebpageMedia(page);
+			auto result = (WebPageData*)nullptr;
+			media.match([&](const MTPDmessageMediaWebPage &data) {
+				result = s->data().processWebpage(data.vwebpage()).get();
+			}, [](const auto &) {});
+			LOG(("Parvane: превью ссылки в поле ввода готово"));
+			done(result);
+		});
+	});
+}
+
 // content kind=location {lat,long[,live_period,heading,accuracy]} →
 // MTP_messageMediaGeo / MTP_messageMediaGeoLive (нативный рендер карты и
 // таймера live-локации; обновления позиции приходят правкой сообщения).
@@ -6068,6 +6429,112 @@ QHash<QString, QString> g_cardContent;
 	}));
 }
 
+// Оформление входящего, которого нет в аргументах buildMessage: «без звука» и «переслано от» (ревью 7 ноя,
+// п. 35 и 18). Записывается по uuid в injectOnMain, читается при сборке по msgId (медиа собирается позже, после
+// скачивания). Только main.
+struct MessageDecor {
+	bool silent = false;
+	QString forwardedName;
+	std::int64_t forwardedTs = 0;
+	// MEDIA-2: альбом (grouped_id tdesktop — от album_id, чата, автора и номера серии подряд идущих) и подпись над
+	// медиа; QUOTE-1: цитата ответа
+	std::uint64_t groupedId = 0;
+	bool invertMedia = false;
+	bool spoiler = false; // MEDIA-2: медиа под спойлером
+	QString quoteText;
+	nlohmann::json quoteEntities;
+	int quoteOffset = 0;
+	[[nodiscard]] bool any() const {
+		return silent || !forwardedName.isEmpty() || groupedId || invertMedia || spoiler || !quoteText.isEmpty();
+	}
+};
+// MEDIA-2: серия альбома в чате — подряд идущие сообщения одного автора с одним album_id, не больше 10
+// (parvane::clientsafety::albumGroups — то же правило с тестом). Только main.
+struct AlbumRun {
+	QString author;
+	QString albumId;
+	int run = 0;
+	std::size_t count = 0;
+};
+QHash<QString, AlbumRun> g_albumRuns; // чат → последняя серия
+QHash<QString, MessageDecor> g_decorByUuid;
+QSet<QString> g_silentUuids;
+MessageDecor g_buildDecor;
+
+void NoteMessageDecor(
+		const QString &uuid,
+		const nlohmann::json &content,
+		std::int64_t ts,
+		const QString &chat = QString(),
+		const QString &author = QString()) {
+	if (!content.is_object()) {
+		return;
+	}
+	auto decor = MessageDecor();
+	{
+		const auto albumId = (content.contains("album_id") && content["album_id"].is_string())
+			? QString::fromStdString(content["album_id"].get<std::string>())
+			: QString();
+		auto &run = g_albumRuns[chat];
+		const auto joins = !albumId.isEmpty() && run.albumId == albumId && run.author == author
+			&& run.count < parvane::clientsafety::kMaxAlbumItems;
+		if (!joins) {
+			++run.run;
+			run.count = 0;
+		}
+		run.author = author;
+		run.albumId = albumId;
+		++run.count;
+		if (!albumId.isEmpty() && !chat.isEmpty()) {
+			decor.groupedId = IdForAddress(u"album:"_q + albumId + '|' + chat + '|' + author
+				+ '|' + QString::number(run.run)) & 0x3FFFFFFFFFFFFFFFULL;
+			decor.groupedId |= 1; // не ноль
+		}
+	}
+	decor.invertMedia = content.contains("invert_media") && content["invert_media"].is_boolean()
+		&& content["invert_media"].get<bool>();
+	decor.spoiler = content.contains("spoiler") && content["spoiler"].is_boolean() && content["spoiler"].get<bool>();
+	if (content.contains("reply_quote") && content["reply_quote"].is_object()) {
+		const auto &q = content["reply_quote"];
+		decor.quoteText = QString::fromStdString(q.value("text", std::string()));
+		decor.quoteEntities = q.value("entities", nlohmann::json::array());
+		decor.quoteOffset = q.value("offset", 0);
+	}
+	decor.silent = content.contains("silent") && content["silent"].is_boolean() && content["silent"].get<bool>();
+	const auto str = [&](const char *key) {
+		return (content.contains(key) && content[key].is_string())
+			? QString::fromStdString(content[key].get<std::string>())
+			: QString();
+	};
+	decor.forwardedName = str("forwarded_name");
+	if (decor.forwardedName.isEmpty()) {
+		decor.forwardedName = str("forwarded_from");
+	}
+	decor.forwardedTs = ts;
+	if (decor.silent && !g_silentUuids.contains(uuid)) {
+		g_silentUuids.insert(uuid);
+		LOG(("Parvane: msg %1 без звука (Content.silent)").arg(uuid));
+	}
+	if (decor.any()) {
+		if (!g_decorByUuid.contains(uuid) && !decor.forwardedName.isEmpty()) {
+			LOG(("Parvane: msg %1 переслано от «%2»").arg(uuid, LogSecret(decor.forwardedName)));
+		}
+		if (!g_decorByUuid.contains(uuid) && decor.groupedId) {
+			LOG(("Parvane: msg %1 — элемент альбома %2").arg(uuid).arg(decor.groupedId));
+		}
+		if (!g_decorByUuid.contains(uuid) && decor.spoiler) {
+			LOG(("Parvane: msg %1 — медиа под спойлером").arg(uuid));
+		}
+		if (!g_decorByUuid.contains(uuid) && decor.invertMedia) {
+			LOG(("Parvane: msg %1 — подпись над медиа").arg(uuid));
+		}
+		if (!g_decorByUuid.contains(uuid) && !decor.quoteText.isEmpty()) {
+			LOG(("Parvane: msg %1 — ответ с цитатой (%2 симв.)").arg(uuid).arg(decor.quoteText.size()));
+		}
+		g_decorByUuid.insert(uuid, decor);
+	}
+}
+
 [[nodiscard]] MTPMessage buildMessage(
 		std::uint64_t authorId,
 		std::uint64_t peerId,
@@ -6089,7 +6556,27 @@ QHash<QString, QString> g_cardContent;
 		: peerFromUser(UserId(BareId(peerId)));
 	using Flag = MTPDmessage::Flag;
 	const auto hasEntities = (entities.v.size() > 0);
+	const auto &decor = g_buildDecor;
+	const auto fwdHeader = decor.forwardedName.isEmpty()
+		? MTPMessageFwdHeader()
+		: MTP_messageFwdHeader(
+			MTP_flags(MTPDmessageFwdHeader::Flag::f_from_name),
+			MTPPeer(),                              // from_id
+			MTP_string(decor.forwardedName),        // from_name
+			MTP_int(int(decor.forwardedTs ? decor.forwardedTs : ts)),
+			MTPint(),                               // channel_post
+			MTPstring(),                            // post_author
+			MTPPeer(),                              // saved_from_peer
+			MTPint(),                               // saved_from_msg_id
+			MTPPeer(),                              // saved_from_id
+			MTPstring(),                            // saved_from_name
+			MTPint(),                               // saved_date
+			MTPstring());                           // psa_type
 	const auto flags = Flag::f_from_id
+		| (decor.silent ? Flag::f_silent : Flag(0))
+		| (decor.groupedId ? Flag::f_grouped_id : Flag(0))
+		| (decor.invertMedia ? Flag::f_invert_media : Flag(0))
+		| (decor.forwardedName.isEmpty() ? Flag(0) : Flag::f_fwd_from)
 		| (out ? Flag::f_out : Flag(0))
 		| (hasMedia ? Flag::f_media : Flag(0))
 		| (hasEntities ? Flag::f_entities : Flag(0))
@@ -6097,17 +6584,27 @@ QHash<QString, QString> g_cardContent;
 		| (mentionsSelf ? Flag::f_mentioned : Flag(0)) // «вас упомянули»
 		| (replyToMsgId ? Flag::f_reply_to : Flag(0))
 		| (markup ? Flag::f_reply_markup : Flag(0));
+	// QUOTE-1: цитата ответа — родной блок цитаты tdesktop (quote_text/quote_entities/quote_offset)
+	using ReplyFlag = MTPDmessageReplyHeader::Flag;
+	const auto hasQuote = replyToMsgId && !decor.quoteText.isEmpty();
+	const auto quoteEntities = hasQuote
+		? Api::EntitiesToMTP(g_sessionWeak.get(), entitiesFromJson(decor.quoteEntities), Api::ConvertOption::SkipLocal)
+		: MTPVector<MTPMessageEntity>();
 	const auto replyHeader = replyToMsgId
 		? MTP_messageReplyHeader(
-			MTP_flags(MTPDmessageReplyHeader::Flag::f_reply_to_msg_id),
+			MTP_flags(ReplyFlag::f_reply_to_msg_id
+				| (hasQuote
+					? (ReplyFlag::f_quote | ReplyFlag::f_quote_text | ReplyFlag::f_quote_offset
+						| (quoteEntities.v.isEmpty() ? ReplyFlag(0) : ReplyFlag::f_quote_entities))
+					: ReplyFlag(0))),
 			MTP_int(int(replyToMsgId)),
 			MTPPeer(),                      // reply_to_peer_id
 			MTPMessageFwdHeader(),          // reply_from
 			MTPMessageMedia(),              // reply_media
 			MTPint(),                       // reply_to_top_id
-			MTPstring(),                    // quote_text
-			MTPVector<MTPMessageEntity>(),  // quote_entities
-			MTPint(),                       // quote_offset
+			hasQuote ? MTP_string(decor.quoteText) : MTPstring(), // quote_text
+			quoteEntities,                  // quote_entities
+			hasQuote ? MTP_int(decor.quoteOffset) : MTPint(), // quote_offset
 			MTPint(),                       // todo_item_id
 			MTPbytes())                     // poll_option
 		: MTPMessageReplyHeader();
@@ -6119,7 +6616,7 @@ QHash<QString, QString> g_cardContent;
 		MTPstring(),                // from_rank
 		peerToMTP(dialogPeer),      // peer_id — диалог с собеседником
 		MTPPeer(),                  // saved_peer_id
-		MTPMessageFwdHeader(),      // fwd_from
+		fwdHeader,                  // fwd_from («переслано от»)
 		MTPlong(),                  // via_bot_id
 		MTPlong(),                  // via_business_bot_id
 		MTPPeer(),                  // guestchat_via_from
@@ -6134,7 +6631,7 @@ QHash<QString, QString> g_cardContent;
 		MTPMessageReplies(),
 		MTPint(),                   // edit_date
 		MTPstring(),                // post_author
-		MTPlong(),                  // grouped_id
+		decor.groupedId ? MTP_long(decor.groupedId) : MTPlong(), // grouped_id (MEDIA-2: альбом)
 		MTPMessageReactions(),
 		MTPVector<MTPRestrictionReason>(),
 		ttlSecs > 0 ? MTP_int(ttlSecs) : MTPint(), // ttl_period (self-destruct)
@@ -6147,6 +6644,22 @@ QHash<QString, QString> g_cardContent;
 		MTPint(),                   // schedule_repeat_period
 		MTPstring(),                // summary_from_language
 		MTPRichMessage());
+}
+
+// MEDIA-2: медиа сообщения под спойлером (по оформлению его uuid)
+[[nodiscard]] bool DecorSpoiler(MsgId msgId) {
+	const auto uuid = g_msgIdToUuid.value(msgId.bare);
+	return !uuid.isEmpty() && g_decorByUuid.value(uuid).spoiler;
+}
+
+// Сборка входящего с оформлением по его uuid (msgId → uuid уже записан к моменту сборки)
+template <typename ...Args>
+[[nodiscard]] MTPMessage buildMessageFor(MsgId msgId, Args &&...args) {
+	const auto uuid = g_msgIdToUuid.value(msgId.bare);
+	g_buildDecor = uuid.isEmpty() ? MessageDecor() : g_decorByUuid.value(uuid);
+	auto result = buildMessage(std::forward<Args>(args)...);
+	g_buildDecor = MessageDecor();
+	return result;
 }
 
 // ── приём медиа (Фаза 4b) ──────────────────────────────────────────────────
@@ -6445,7 +6958,8 @@ void injectMediaOnMain(
 	using Flag = MTPDmessageMediaDocument::Flag;
 	const auto mflags = Flag::f_document
 		| ((kind == u"voice"_q) ? Flag::f_voice : Flag(0))
-		| ((kind == u"video_note"_q) ? Flag::f_round : Flag(0));
+		| ((kind == u"video_note"_q) ? Flag::f_round : Flag(0))
+		| (DecorSpoiler(msgId) ? Flag::f_spoiler : Flag(0)); // MEDIA-2
 	const auto media = MTP_messageMediaDocument(
 		MTP_flags(mflags),
 		mtpDoc,
@@ -6471,7 +6985,7 @@ void injectMediaOnMain(
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildMessage(authorId, senderId, out, ts, caption, media,
+		buildMessageFor(msgId, authorId, senderId, out, ts, caption, media,
 			/*hasMedia=*/true, 0, peerIsChat,
 			MTPVector<MTPMessageEntity>(), ttlSecs),
 		MessageFlags(),
@@ -6590,14 +7104,14 @@ void injectPhotoOnMain(
 		MTP_int(session->mainDcId()));
 	using Flag = MTPDmessageMediaPhoto::Flag;
 	const auto media = MTP_messageMediaPhoto(
-		MTP_flags(Flag::f_photo),
+		MTP_flags(Flag::f_photo | (DecorSpoiler(msgId) ? Flag::f_spoiler : Flag(0))), // MEDIA-2: спойлер
 		mtpPhoto,
 		MTPint(),                       // ttl_seconds
 		MTPDocument());                 // video
 
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildMessage(authorId, senderId, out, ts, caption, media,
+		buildMessageFor(msgId, authorId, senderId, out, ts, caption, media,
 			/*hasMedia=*/true, 0, peerIsChat,
 			MTPVector<MTPMessageEntity>(), ttlSecs),
 		MessageFlags(),
@@ -6650,13 +7164,18 @@ QHash<DocumentId, DeferredMedia> g_deferredMedia; // main
 		not_null<Main::Session*> session,
 		const QString &kind,
 		std::int64_t size,
-		bool peerIsChat) {
+		bool peerIsChat,
+		bool peerIsChannel) {
 	using namespace Data::AutoDownload;
+	// Ревью UI 7 ноя, п. 24: и голосовые, и «кружки»; источник «Каналы» — для канала Parvane (ChatData)
 	const auto type = (kind == u"video"_q) ? Type::AutoPlayVideo
 		: (kind == u"audio"_q) ? Type::Music
+		: (kind == u"voice"_q) ? Type::VoiceMessage
+		: (kind == u"video_note"_q) ? Type::AutoPlayVideoMessage
 		: Type::File;
 	return session->settings().autoDownload().shouldDownload(
-		peerIsChat ? Source::Group : Source::User,
+		!peerIsChat ? Source::User
+			: (peerIsChannel ? Source::Channel : Source::Group),
 		type,
 		size);
 }
@@ -6690,11 +7209,13 @@ void pumpMediaDownload(
 	const auto fileKeyStd = fileKey.toStdString();
 	const auto fileNonceStd = fileNonce.toStdString();
 	// Автозагрузка выключена для такого файла — сообщение сразу, файл по нажатию (уже скачанное — из кэша, как раньше)
-	if ((kind == u"file"_q || kind == u"video"_q || kind == u"audio"_q)
+	if ((kind == u"file"_q || kind == u"video"_q || kind == u"audio"_q
+			|| kind == u"voice"_q || kind == u"video_note"_q)
 		&& ttlSecs <= 0
 		&& IsSafeFileId(fileId)
 		&& !QFile::exists(MediaCachePath(fileId))) {
-		if (const auto session = g_sessionWeak.get(); session && !ShouldAutoDownload(session, kind, size, peerIsChat)) {
+		if (const auto session = g_sessionWeak.get(); session && !ShouldAutoDownload(session, kind, size, peerIsChat,
+				peerIsChat && g_knownGroups.contains(from) && IsChannelChat(session->data().chat(ChatId(BareId(IdForAddress(from))))))) {
 			const auto mediaId = docIdFromFileId(fileId);
 			g_deferredMedia.insert(DocumentId(mediaId), DeferredMedia{
 				.fileId = fileId,
@@ -6759,6 +7280,14 @@ void pumpMediaDownload(
 				WriteMediaCache(fileId, bytes); // эфемерное (TTL) в постоянный кэш не кладём
 			}
 		}
+		// C7-8: чужой стикер/GIF — только с сигнатурой своего вида, иначе декодер выбрал бы плагин Qt по содержимому
+		if ((kind == u"sticker"_q || kind == u"gif"_q)
+			&& !ForeignMediaFormatAllowed(
+				QByteArray::fromRawData(bytes.data(), int(std::min<size_t>(bytes.size(), 64))),
+				kind == u"sticker"_q)) {
+			LOG(("Parvane: %1 %2 отклонён — формат по сигнатуре не из разрешённых").arg(kind, fileId));
+			return;
+		}
 		const auto path = WriteMediaWorkCopy(fileId + u"_"_q + SafeFileName(filename), bytes);
 		if (path.isEmpty()) {
 			LOG(("Parvane: не записать медиа-файл %1").arg(fileId));
@@ -6787,7 +7316,10 @@ void pumpMediaDownload(
 		auto realW = width;
 		auto realH = height;
 		if (kind == u"sticker"_q) {
-			const auto real = QImageReader(path).size();
+			const auto format = parvane::clientsafety::sniffFormat(std::string_view(bytes.data(), std::min<size_t>(bytes.size(), 64)));
+			const auto real = parvane::clientsafety::isDecodableImage(format)
+				? QImageReader(path, QByteArray::fromStdString(format)).size()
+				: QSize();
 			if (real.isValid() && real.width() > 0 && real.height() > 0) {
 				realW = real.width();
 				realH = real.height();
@@ -6837,6 +7369,10 @@ bool StartDeferredDownloadImpl(not_null<DocumentData*> document, const QString &
 	const auto docId = document->id;
 	const auto generation = AccountGeneration();
 	LOG(("Parvane: медиа %1 — скачивание по нажатию").arg(info.fileId));
+	// Ход загрузки: блоб скачивается целиком воркером (штатного загрузчика tdesktop с радиалом нет) — тост
+	if (const auto window = Core::App().activeWindow()) {
+		window->showToast(tr::lng_parvane_media_downloading(tr::now, lt_name, info.filename));
+	}
 	crl::async([=] {
 		auto bytes = std::string();
 		auto d = DownloadChatBlob(
@@ -6868,6 +7404,9 @@ bool StartDeferredDownloadImpl(not_null<DocumentData*> document, const QString &
 			if (path.isEmpty()) {
 				it->running = false;
 				LOG(("Parvane: медиа %1 по нажатию не скачано").arg(info.fileId));
+				if (const auto window = Core::App().activeWindow()) {
+					window->showToast(tr::lng_parvane_media_download_failed(tr::now, lt_name, info.filename));
+				}
 				return;
 			}
 			g_deferredMedia.erase(it);
@@ -7248,17 +7787,7 @@ void injectPollMessage(
 		RegisterPeer(peerAddress);
 		peerId = IdForAddress(peerAddress);
 		authorId = isOwn ? IdForAddress(self) : peerId;
-		ensurePeerUser(session, peerId, peerAddress);
-		// Личная переписка → собеседник становится контактом (список Contacts
-		// показывает реальных людей, а не дамп директории). Себя (Избранное)
-		// контактом не помечаем.
-		if (peerAddress != self) {
-			if (const auto u = session->data().userLoaded(UserId(BareId(peerId)))) {
-				if (!u->isContact()) {
-					u->setIsContact(true);
-				}
-			}
-		}
+		ensurePeerUser(session, peerId, peerAddress); // контакт — только явный (CONTACT-1), не по переписке
 		if (!isOwn) {
 			const auto u = session->data().userLoaded(UserId(BareId(peerId)));
 			if (u && u->isBlocked()) {
@@ -7340,7 +7869,7 @@ void injectPollMessage(
 		QString::fromStdString(sm.content.dump())); // для пересылки опроса
 	const auto item = session->data().addNewMessage(
 		msgId,
-		buildMessage(authorId, peerId, isOwn, sm.ts, QString(),
+		buildMessageFor(msgId, authorId, peerId, isOwn, sm.ts, QString(),
 			buildPollMedia(st, sm.content), /*hasMedia=*/true,
 			/*replyToMsgId=*/0, /*peerIsChat=*/isGroup),
 		MessageFlags(),
@@ -7520,6 +8049,11 @@ void injectOnMain(
 		}
 		const auto from = QString::fromStdString(sm.from);
 		const auto uuid = QString::fromStdString(sm.id);
+		{
+			const auto to = QString::fromStdString(sm.to);
+			const auto chat = !to.contains('@') ? to : (from == self ? to : from);
+			NoteMessageDecor(uuid, sm.content, sm.ts, chat, from);
+		}
 		if (IsCleared(uuid)) {
 			continue; // скрыто «для меня» (удалённый/очищенный чат)
 		}
@@ -7843,7 +8377,7 @@ void injectOnMain(
 			const auto gIsLoc = (parvane::contentKind(sm.content) == "location");
 			const auto gItem = session->data().addNewMessage(
 				gMsgId,
-				buildMessage(gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
+				buildMessageFor(gMsgId, gAuthorId, gChatId, gOwn, sm.ts, gtextQ,
 					gHasWp ? buildWebpageMedia(gWpJson)
 						: gIsLoc ? buildLocationMedia(sm.content) : MTPMessageMedia(),
 					gHasWp || gIsLoc, 0, /*peerIsChat=*/true, gEntities,
@@ -7907,7 +8441,7 @@ void injectOnMain(
 			g_msgIdToUuid.insert(msgId.bare, uuid);
 			const auto item = session->data().addNewMessage(
 				msgId,
-				buildMessage(authorId, peerId, out, sm.ts, QString(),
+				buildMessageFor(msgId, authorId, peerId, out, sm.ts, QString(),
 					MTP_messageMediaUnsupported(), /*hasMedia=*/true),
 				MessageFlags(),
 				NewMessageType::Unread);
@@ -8018,7 +8552,7 @@ void injectOnMain(
 		}
 		const auto item = session->data().addNewMessage(
 			msgId,
-			buildMessage(authorId, peerId, out, sm.ts, text,
+			buildMessageFor(msgId, authorId, peerId, out, sm.ts, text,
 				hasWp ? buildWebpageMedia(wpJson)
 					: isLoc ? buildLocationMedia(sm.content) : MTPMessageMedia(),
 				/*hasMedia=*/hasWp || isLoc, replyToMsgId,
@@ -8312,6 +8846,10 @@ bool MirrorPollCreate(PeerData *peer, const PollData &data) {
 	if ((flags & PollData::Flag::HideResultsUntilClose) && content.contains("close_ms")) {
 		content["hide_results"] = true;
 	}
+	// «Запланировать»: опрос — в очередь отложенных, уйдёт в срок (п. 7 ревью 7 ноя)
+	if (ScheduleContent(peer, content)) {
+		return true;
+	}
 	// Локальное эхо + PollState — общий путь инъекции (isOwn по from==self).
 	parvane::StoredMessage own;
 	own.id = parvane::newUuidV7();
@@ -8461,16 +8999,25 @@ void ForwardPollCopy(const QString &toAddress, const QString &contentJson) {
 // (MTProto). Локальное эхо через общий путь инъекции + журнал; на провод —
 // E2E-inner (сервер видит только шифртекст).
 // ── Запланированные сообщения (локальная очередь+таймер, паритет web
-// localState.ts). Нативная вкладка Scheduled завязана на MTProto (в форке нет),
-// поэтому сообщение просто уходит в назначенное время обычным путём и
-// появляется в чате тогда же. Персист в tdata — переживает рестарт.
+// localState.ts). Очередь показывается родным разделом «Запланированные» tdesktop: `Data::ScheduledMessages`
+// берёт список у ScheduledHistory (вместо messages.getScheduledHistory), удаление / «Отправить сейчас» /
+// перенос и правка — DeleteScheduled / SendScheduledNow / EditScheduled. Текст — в журнале личного состояния
+// (state.v1 ScheduledMessage, все свои устройства), файлы, опросы и геопозиция — только на этом устройстве
+// (как web: там медиа живёт до закрытия вкладки). Срок проверяется раз в 5 с (как web), поэтому далёкие сроки
+// не упираются в предел таймера; «когда будет в сети» уходит, когда собеседник появился в сети.
 std::vector<ScheduledItem> g_scheduled; // под g_sessionMutex
 namespace Internal {
 void FireScheduledGated(const ScheduledItem &item); // журнал состояния v2 (ниже)
 } // namespace Internal
-QSet<QString> g_scheduledArmed;         // id, для которых таймер уже взведён (main)
+QSet<QString> g_scheduledArmed;         // устарело (проверка сроков — таймером); чистится при выходе
+std::unique_ptr<base::Timer> g_scheduledTimer; // main
+QHash<QString, int> g_scheduledNum;     // id отложенного → номер в разделе «Запланированные» (main)
+QHash<int, QString> g_scheduledByNum;
+int g_scheduledNextNum = 1;
+QSet<QString> g_scheduledShownAddresses; // адреса, чей раздел уже заполнялся (main)
 
 QString ScheduledPath() { return cWorkingDir() + u"tdata/parvane-scheduled.json"_q; }
+QString ScheduledBlobDir() { return cWorkingDir() + u"tdata/parvane-scheduled"_q; }
 
 void SaveScheduledLocked() {
 	auto arr = nlohmann::json::array();
@@ -8481,20 +9028,178 @@ void SaveScheduledLocked() {
 			{"entities", it.entities},
 			{"due", it.dueAt}};
 		if (it.replyTo) j["reply_to"] = *it.replyTo;
+		if (it.silent) j["silent"] = true;
+		if (!it.kind.isEmpty()) {
+			j["kind"] = it.kind.toStdString();
+			j["content"] = it.content;
+			j["file_path"] = it.filePath.toStdString();
+			j["file_name"] = it.fileName.toStdString();
+			j["file_mime"] = it.fileMime.toStdString();
+			j["file_type"] = it.fileType;
+			j["caption_tags"] = it.captionTags.toBase64().toStdString();
+			j["waveform"] = it.waveform.toBase64().toStdString();
+			j["duration_ms"] = it.durationMs;
+			j["width"] = it.width;
+			j["height"] = it.height;
+			if (!it.album.isEmpty()) {
+				j["album"] = it.album.toStdString();
+			}
+		}
 		arr.push_back(std::move(j));
 	}
 	StoreWrite(ScheduledPath(), QString::fromStdString(arr.dump()).toUtf8());
 }
 
-// Отправить одно запланированное сообщение сейчас (main-поток): локальное эхо
-// через общий путь инъекции + журнал, на провод — E2E-inner (kind=text).
+namespace {
+
+[[nodiscard]] int ScheduledNumFor(const QString &id) {
+	if (const auto i = g_scheduledNum.constFind(id); i != g_scheduledNum.constEnd()) {
+		return i.value();
+	}
+	const auto num = g_scheduledNextNum++;
+	g_scheduledNum.insert(id, num);
+	g_scheduledByNum.insert(num, id);
+	return num;
+}
+
+[[nodiscard]] History *ScheduledHistoryOf(not_null<Main::Session*> session, const QString &address) {
+	if (address.isEmpty()) {
+		return nullptr;
+	}
+	if (address == SelfAddress()) {
+		return session->data().history(session->user());
+	}
+	if (g_knownGroups.contains(address) || parvane::v2::isGroupAddress(address.toStdString())) {
+		return session->data().historyLoaded(peerFromChat(ChatId(BareId(IdForAddress(address)))));
+	}
+	return session->data().historyLoaded(peerFromUser(UserId(BareId(IdForAddress(address)))));
+}
+
+// Раздел «Запланированные» и значок над полем ввода перечитывают очередь (main)
+void RefreshScheduledViews(QSet<QString> addresses) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	addresses.unite(g_scheduledShownAddresses);
+	for (const auto &address : addresses) {
+		if (const auto history = ScheduledHistoryOf(session, address)) {
+			session->scheduledMessages().refreshFromParvane(history);
+		}
+	}
+}
+
+[[nodiscard]] QSet<QString> AddressesOf(const std::vector<ScheduledItem> &items) {
+	auto result = QSet<QString>();
+	for (const auto &item : items) {
+		result.insert(item.address);
+	}
+	return result;
+}
+
+[[nodiscard]] QByteArray ScheduledFileBytes(const ScheduledItem &item) {
+	return item.filePath.isEmpty() ? QByteArray() : StoreRead(item.filePath);
+}
+
+void DropScheduledFile(const ScheduledItem &item) {
+	if (!item.filePath.isEmpty()) {
+		QFile::remove(item.filePath);
+	}
+}
+
+} // namespace
+
+// Отправить одно запланированное сообщение сейчас (main-поток). Текст и готовое содержимое: локальное эхо через
+// общий путь инъекции + журнал, на провод — E2E-inner. Файл — штатным путём отправки tdesktop (FileLoadTask →
+// SendConfirmedFile → MirrorOutgoingFile), как если бы пользователь отправил его сейчас.
 void FireScheduled(const ScheduledItem &item) {
 	const auto session = g_sessionWeak.get();
 	if (!session || !SessionActive()) {
 		return;
 	}
-	auto content = parvane::textContent(
-		item.text.toStdString(), item.entities);
+	if (item.kind == u"file"_q) {
+		const auto history = HistoryForAddress(session, item.address); // создаёт чат, если его ещё нет
+		const auto bytes = ScheduledFileBytes(item);
+		DropScheduledFile(item);
+		if (!history || bytes.isEmpty()) {
+			LOG(("Parvane: запланированный файл не отправлен → %1 (нет %2)")
+				.arg(item.address, history ? u"байтов"_q : u"чата"_q));
+			return;
+		}
+		auto action = Api::SendAction(history);
+		action.options.silent = item.silent;
+		action.clearDraft = false;
+		const auto type = SendMediaType(item.fileType);
+		if (type == SendMediaType::Audio || type == SendMediaType::Round) {
+			auto waveform = VoiceWaveform();
+			for (const auto byte : item.waveform) {
+				waveform.push_back(char(byte));
+			}
+			session->api().sendVoiceMessage(
+				bytes,
+				waveform,
+				crl::time(item.durationMs),
+				type == SendMediaType::Round,
+				action);
+		} else {
+			auto list = Ui::PreparedList();
+			const auto add = [&](const ScheduledItem &it, const QByteArray &content) {
+				auto file = Ui::PreparedFile(QString());
+				file.content = content;
+				file.displayName = it.fileName;
+				file.caption = TextWithTags{
+					it.text,
+					TextUtilities::DeserializeTags(it.captionTags, it.text.size()),
+				};
+				list.files.push_back(std::move(file));
+			};
+			// Остальные элементы того же альбома — сейчас же и одним альбомом (их таймеры потом ничего не найдут)
+			auto rest = std::vector<ScheduledItem>();
+			if (!item.album.isEmpty()) {
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				for (auto i = g_scheduled.begin(); i != g_scheduled.end();) {
+					if (i->kind == u"file"_q && i->album == item.album && i->address == item.address) {
+						rest.push_back(*i);
+						i = g_scheduled.erase(i);
+					} else {
+						++i;
+					}
+				}
+				if (!rest.empty()) {
+					SaveScheduledLocked();
+				}
+			}
+			// Порядок альбома — порядок постановки (id — UUIDv7, растёт со временем)
+			rest.push_back(item);
+			std::sort(rest.begin(), rest.end(), [](const ScheduledItem &a, const ScheduledItem &b) {
+				return a.id < b.id;
+			});
+			for (const auto &it : rest) {
+				if (it.id == item.id) {
+					add(it, bytes);
+					continue;
+				}
+				const auto more = ScheduledFileBytes(it);
+				DropScheduledFile(it);
+				if (!more.isEmpty()) {
+					add(it, more);
+				}
+			}
+			auto album = (list.files.size() > 1) ? std::make_shared<SendingAlbum>() : nullptr;
+			if (album) {
+				LOG(("Parvane: запланированный альбом из %1 элементов отправляется одним альбомом").arg(list.files.size()));
+			}
+			session->api().sendFiles(std::move(list), type, album, action);
+		}
+		LOG(("Parvane: запланированное отправлено → %1 (файл %2)").arg(item.address, item.fileName));
+		return;
+	}
+	auto content = (item.kind == u"content"_q)
+		? item.content
+		: parvane::textContent(item.text.toStdString(), item.entities);
+	if (item.silent) {
+		content["silent"] = true;
+	}
 	parvane::StoredMessage own;
 	own.id = item.id.toStdString();
 	own.from = SelfAddress().toStdString();
@@ -8502,47 +9207,120 @@ void FireScheduled(const ScheduledItem &item) {
 	own.ts = QDateTime::currentSecsSinceEpoch();
 	own.content = content;
 	if (item.replyTo) own.reply_to = *item.replyTo;
+	if (parvane::contentKind(content) == "poll") {
+		injectPollMessage(session, own);
+	} else {
+		// Пометка «своё отправлено» — ПОСЛЕ инъекции: injectOnMain пропускает свои uuid из этого набора как уже
+		// показанное эхо (тот же порядок, что у геопозиции; до 7 ноя пометка шла раньше и эхо не появлялось)
+		injectOnMain(session, { own }, /*live=*/false);
+	}
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_ownSentUuids.insert(own.id);
 	}
-	injectOnMain(session, { own }, /*live=*/false);
 	HistoryAppend(own);
 	sendInnerAsync(item.address, content, own.id);
 	LOG(("Parvane: запланированное отправлено → %1").arg(item.address));
 }
 
-// Взвести таймеры на все элементы очереди (idempotent). Просроченные — сразу.
-void ArmScheduledTimers() {
-	std::vector<ScheduledItem> due, pending;
+// Наступившие сроки (раз в 5 с и сразу после изменений очереди). Просроченные — сразу.
+void CheckDueScheduled() {
+	if (!SessionActive()) {
+		return;
+	}
+	const auto session = g_sessionWeak.get();
+	const auto now = QDateTime::currentSecsSinceEpoch();
+	std::vector<ScheduledItem> due;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		const auto now = QDateTime::currentSecsSinceEpoch();
 		for (const auto &it : g_scheduled) {
-			if (g_scheduledArmed.contains(it.id)) continue;
-			g_scheduledArmed.insert(it.id);
-			(it.dueAt <= now ? due : pending).push_back(it);
+			if (it.dueAt == kScheduledUntilOnline) {
+				continue;
+			}
+			if (it.dueAt <= now) {
+				due.push_back(it);
+			}
 		}
 	}
-	// Снятие из очереди + отправка; снятое журналом состояния (удалено или
-	// отправлено другим устройством) не уходит (FireScheduledGated).
+	// «Отправить, когда будет в сети»: собеседник в сети по присутствию
+	if (session) {
+		std::vector<ScheduledItem> waiting;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			for (const auto &it : g_scheduled) {
+				if (it.dueAt == kScheduledUntilOnline) {
+					waiting.push_back(it);
+				}
+			}
+		}
+		for (const auto &it : waiting) {
+			const auto user = session->data().userLoaded(UserId(BareId(IdForAddress(it.address))));
+			if (user && user->lastseen().isOnline(base::unixtime::now())) {
+				LOG(("Parvane: %1 в сети — отправляю отложенное «когда будет в сети»").arg(it.address));
+				due.push_back(it);
+			}
+		}
+	}
+	// Снятие из очереди + отправка; снятое журналом состояния (удалено или отправлено другим устройством) не
+	// уходит (FireScheduledGated)
 	for (const auto &it : due) {
 		FireScheduledGated(it);
 	}
-	for (const auto &it : pending) {
-		// Клампим задержку (защита от переполнения при испорченном далёком due
-		// на диске): максимум ~24 дня.
-		const auto secs = std::clamp<qint64>(
-			it.dueAt - QDateTime::currentSecsSinceEpoch(), 0, qint64(2000000));
-		// Таймер — аккаунта, взведшего его: после выхода (и входа другим в том же окне) молчит (ревью 21 окт)
-		const auto generation = AccountGeneration();
-		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it, generation] {
-			if (!AccountGenerationIs(generation)) {
-				return;
-			}
-			FireScheduledGated(it);
-		});
+	if (!due.empty()) {
+		RefreshScheduledViews(AddressesOf(due));
 	}
+}
+
+// Запустить проверку сроков (idempotent)
+void ArmScheduledTimers() {
+	if (!g_scheduledTimer) {
+		g_scheduledTimer = std::make_unique<base::Timer>([] { CheckDueScheduled(); });
+	}
+	if (!g_scheduledTimer->isActive()) {
+		g_scheduledTimer->callEach(5 * crl::time(1000));
+	}
+	CheckDueScheduled();
+}
+
+namespace {
+
+void PushScheduled(ScheduledItem item) {
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_scheduled.push_back(item);
+		SaveScheduledLocked();
+	}
+	LOG(("Parvane: сообщение запланировано → %1 на %2%3")
+		.arg(item.address)
+		.arg(item.dueAt == kScheduledUntilOnline
+			? u"«когда будет в сети»"_q
+			: QDateTime::fromSecsSinceEpoch(item.dueAt).toString(Qt::ISODate))
+		.arg(item.kind.isEmpty() ? QString() : (u" ("_q + item.kind + u")"_q)));
+	if (item.kind.isEmpty()) {
+		ScheduleStateFlush("scheduled"); // журнал личного состояния v2 (T098)
+	}
+	RefreshScheduledViews({ item.address });
+	ArmScheduledTimers();
+}
+
+TimeId g_schedulingDue = 0; // main: идёт отправка «Запланировать» не-текста (ScheduleSendScope)
+
+} // namespace
+
+void RefreshScheduledViewsFor(const QSet<QString> &addresses) {
+	RefreshScheduledViews(addresses);
+}
+
+ScheduleSendScope::ScheduleSendScope(TimeId due) : _was(g_schedulingDue) {
+	g_schedulingDue = due;
+}
+
+ScheduleSendScope::~ScheduleSendScope() {
+	g_schedulingDue = _was;
+}
+
+TimeId SchedulingDue() {
+	return g_schedulingDue;
 }
 
 // Поставить сообщение в очередь на dueAt (unix-сек). Врезка вместо нативной
@@ -8552,16 +9330,7 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 	if (!peer || textWithEntities.text.isEmpty()) {
 		return;
 	}
-	QString address;
-	if (peer->isChat()) {
-		const auto chatBare = std::uint64_t(peerToChat(peer->id).bare);
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		address = g_chatIdToGroupId.value(chatBare);
-	} else if (peer->isUser()) {
-		address = peer->isSelf()
-			? SelfAddress()
-			: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
-	}
+	const auto address = BusAddressForPeer(peer);
 	if (address.isEmpty()) {
 		return;
 	}
@@ -8575,20 +9344,420 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 	item.text = textWithEntities.text;
 	item.entities = entitiesJson;
 	item.dueAt = dueAt;
+	item.silent = SendingSilent();
 	if (replyToMsgId != 0) {
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		const auto it = g_msgIdToUuid.find(replyToMsgId);
 		if (it != g_msgIdToUuid.end()) item.replyTo = it.value().toStdString();
 	}
+	PushScheduled(std::move(item));
+}
+
+bool ScheduleContent(PeerData *peer, const nlohmann::json &content) {
+	const auto due = SchedulingDue();
+	if (!peer || !due) {
+		return false;
+	}
+	const auto address = BusAddressForPeer(peer);
+	if (address.isEmpty()) {
+		return false;
+	}
+	ScheduledItem item;
+	item.id = QString::fromStdString(parvane::newUuidV7());
+	item.address = address;
+	item.dueAt = due;
+	item.silent = SendingSilent();
+	item.kind = u"content"_q;
+	item.content = content;
+	PushScheduled(std::move(item));
+	return true;
+}
+
+bool ScheduleOutgoingFile(
+		not_null<Main::Session*> session,
+		const std::shared_ptr<FilePrepareResult> &file) {
+	if (!file || !file->to.options.scheduled) {
+		return false;
+	}
+	const auto peer = session->data().peerLoaded(file->to.peer);
+	const auto address = peer ? BusAddressForPeer(peer) : QString();
+	if (address.isEmpty()) {
+		return false;
+	}
+	// Байты — как в MirrorOutgoingFile: память, файл на диске либо части сжатого фото
+	auto bytes = file->content;
+	if (bytes.isEmpty() && !file->filepath.isEmpty()) {
+		auto f = QFile(file->filepath);
+		if (f.open(QIODevice::ReadOnly)) {
+			bytes = f.readAll();
+		}
+	}
+	if (bytes.isEmpty() && !file->fileparts.empty()) {
+		for (const auto &part : file->fileparts) {
+			bytes.append(part);
+		}
+	}
+	if (bytes.isEmpty()) {
+		return false;
+	}
+	ScheduledItem item;
+	item.id = QString::fromStdString(parvane::newUuidV7());
+	item.address = address;
+	item.dueAt = file->to.options.scheduled;
+	item.silent = file->to.options.silent;
+	item.kind = u"file"_q;
+	item.text = file->caption.text;
+	item.captionTags = TextUtilities::SerializeTags(file->caption.tags);
+	item.fileName = file->filename.isEmpty() ? u"file"_q : file->filename;
+	item.fileMime = file->filemime;
+	item.fileType = int(file->type);
+	if (file->album && file->album->items.size() > 1) {
+		item.album = QString::number(file->album->groupId); // альбом не разбивается по сроку (ревью 7 ноя, хвост этапа 2)
+	}
+	int durationSecs = 0;
+	extractMediaMeta(file, durationSecs, item.width, item.height);
+	item.durationMs = qint64(durationSecs) * 1000;
+	file->document.match([&](const MTPDdocument &d) {
+		for (const auto &attr : d.vattributes().v) {
+			attr.match([&](const MTPDdocumentAttributeAudio &a) {
+				if (const auto wf = a.vwaveform()) {
+					const auto decoded = documentWaveformDecode(qba(*wf));
+					for (const auto value : decoded) {
+						item.waveform.push_back(char(value));
+					}
+				}
+			}, [](const auto &) {});
+		}
+	}, [](const MTPDdocumentEmpty &) {});
+	QDir().mkpath(ScheduledBlobDir());
+	item.filePath = ScheduledBlobDir() + u"/"_q + item.id + u".bin"_q;
+	if (!StoreWrite(item.filePath, bytes)) {
+		LOG(("Parvane: файл не запланирован — не записать %1").arg(item.filePath));
+		return false;
+	}
+	PushScheduled(std::move(item));
+	return true;
+}
+
+// ── раздел «Запланированные» ─────────────────────────────────────────────────
+
+std::optional<MTPmessages_Messages> ScheduledHistory(not_null<History*> history) {
+	const auto session = &history->session();
+	if (!SessionActive() || g_sessionWeak.get() != session) {
+		return std::nullopt;
+	}
+	const auto address = BusAddressForPeer(history->peer);
+	if (address.isEmpty()) {
+		return std::nullopt;
+	}
+	g_scheduledShownAddresses.insert(address);
+	std::vector<ScheduledItem> items;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		g_scheduled.push_back(item);
+		for (const auto &it : g_scheduled) {
+			if (it.address == address) {
+				items.push_back(it);
+			}
+		}
+	}
+	const auto selfId = IdForAddress(SelfAddress());
+	const auto peerIsChat = history->peer->isChat();
+	const auto peerBare = std::uint64_t(peerIsChat
+		? peerToChat(history->peer->id).bare
+		: peerToUser(history->peer->id).bare);
+	auto messages = QVector<MTPMessage>();
+	for (const auto &it : items) {
+		const auto num = ScheduledNumFor(it.id);
+		auto media = MTPMessageMedia();
+		auto hasMedia = false;
+		auto text = it.text;
+		auto entities = MTPVector<MTPMessageEntity>();
+		if (it.kind == u"content"_q) {
+			const auto kind = parvane::contentKind(it.content);
+			if (kind == "poll") {
+				auto st = PollState();
+				st.uuid = it.id;
+				st.pollId = std::uint64_t(docIdFromFileId(u"scheduled:"_q + it.id));
+				media = buildPollMedia(st, it.content);
+				hasMedia = true;
+			} else if (kind == "location") {
+				media = buildLocationMedia(it.content);
+				hasMedia = true;
+			} else if (kind == "text") {
+				text = QString::fromStdString(it.content.value("text", std::string()));
+				entities = Api::EntitiesToMTP(session, entitiesFromJson(parvane::contentEntities(it.content)));
+			} else if (it.content.contains("file_id")) {
+				// Отложенная пересылка медиа: в разделе — файлом с именем (картинки исходного блоба нет на диске)
+				const auto str = [&](const char *key) {
+					return (it.content.contains(key) && it.content[key].is_string())
+						? QString::fromStdString(it.content[key].get<std::string>())
+						: QString();
+				};
+				const auto docKind = QString::fromStdString(kind);
+				const auto doc = buildLocalMtpDocument(session, docIdFromFileId(u"scheduled:"_q + it.id),
+					(docKind == u"voice"_q || docKind == u"video_note"_q || docKind == u"video"_q)
+						? docKind
+						: u"file"_q,
+					str("mime").isEmpty() ? u"application/octet-stream"_q : str("mime"),
+					it.content.value("size_bytes", std::int64_t(0)),
+					str("filename").isEmpty() ? (docKind + u".bin"_q) : str("filename"),
+					it.dueAt, it.content.value("duration_secs", 0), 0, 0);
+				media = MTP_messageMediaDocument(
+					MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+					doc,
+					MTPVector<MTPDocument>(),
+					MTPPhoto(),
+					MTPint(),
+					MTPint());
+				hasMedia = true;
+				text = str("caption");
+			}
+		} else if (it.kind == u"file"_q) {
+			const auto type = SendMediaType(it.fileType);
+			const auto docId = docIdFromFileId(u"scheduled:"_q + it.id);
+			if (type == SendMediaType::Photo) {
+				const auto mtpPhoto = MTP_photo(
+					MTP_flags(0),
+					MTP_long(docId),
+					MTP_long(0),
+					MTP_bytes(),
+					MTP_int(int(it.dueAt)),
+					MTP_vector<MTPPhotoSize>(QVector<MTPPhotoSize>{ MTP_photoSize(
+						MTP_string("y"),
+						MTP_int(std::max(it.width, 1)),
+						MTP_int(std::max(it.height, 1)),
+						MTP_int(0)) }),
+					MTPVector<MTPVideoSize>(),
+					MTP_int(session->mainDcId()));
+				media = MTP_messageMediaPhoto(
+					MTP_flags(MTPDmessageMediaPhoto::Flag::f_photo),
+					mtpPhoto,
+					MTPint(),
+					MTPDocument());
+			} else {
+				const auto kind = (type == SendMediaType::Audio) ? u"voice"_q
+					: (type == SendMediaType::Round) ? u"video_note"_q
+					: it.fileMime.startsWith(u"video/"_q) ? u"video"_q
+					: u"file"_q;
+				const auto doc = buildLocalMtpDocument(session, docId, kind, it.fileMime, 0, it.fileName,
+					it.dueAt, int(it.durationMs / 1000), it.width, it.height);
+				using DFlag = MTPDmessageMediaDocument::Flag;
+				media = MTP_messageMediaDocument(
+					MTP_flags(DFlag::f_document | ((type == SendMediaType::Audio) ? DFlag::f_voice
+						: (type == SendMediaType::Round) ? DFlag::f_round : DFlag(0))),
+					doc,
+					MTPVector<MTPDocument>(),
+					MTPPhoto(),
+					MTPint(),
+					MTPint());
+			}
+			hasMedia = true;
+			const auto tags = TextUtilities::DeserializeTags(it.captionTags, text.size());
+			entities = Api::EntitiesToMTP(session, TextUtilities::ConvertTextTagsToEntities(tags));
+		} else {
+			entities = Api::EntitiesToMTP(session, entitiesFromJson(it.entities));
+		}
+		auto replyTo = std::int64_t(0);
+		if (it.replyTo) {
+			replyTo = g_uuidToMsgId.value(QString::fromStdString(*it.replyTo), 0);
+		}
+		auto message = buildMessage(selfId, peerBare, true, it.dueAt, text, media, hasMedia, replyTo,
+			peerIsChat, entities);
+		// id — номер в разделе (MsgId «на сервере» отложенных); дата — срок отправки
+		message.match([&](const MTPDmessage &d) {
+			messages.push_back(MTP_message(
+				MTP_flags(d.vflags().v | (it.silent ? MTPDmessage::Flag::f_silent : MTPDmessage::Flag(0))),
+				MTP_int(num),
+				*d.vfrom_id(),
+				MTPint(),
+				MTPstring(),
+				d.vpeer_id(),
+				MTPPeer(),
+				MTPMessageFwdHeader(),
+				MTPlong(),
+				MTPlong(),
+				MTPPeer(),
+				d.vreply_to() ? *d.vreply_to() : MTPMessageReplyHeader(),
+				d.vdate(),
+				d.vmessage(),
+				d.vmedia() ? *d.vmedia() : MTPMessageMedia(),
+				MTPReplyMarkup(),
+				d.ventities() ? *d.ventities() : MTPVector<MTPMessageEntity>(),
+				MTPint(),
+				MTPint(),
+				MTPMessageReplies(),
+				MTPint(),
+				MTPstring(),
+				MTPlong(),
+				MTPMessageReactions(),
+				MTPVector<MTPRestrictionReason>(),
+				MTPint(),
+				MTPint(),
+				MTPlong(),
+				MTPFactCheck(),
+				MTPint(),
+				MTPlong(),
+				MTPSuggestedPost(),
+				MTPint(),
+				MTPstring(),
+				MTPRichMessage()));
+		}, [](const auto &) {});
+	}
+	LOG(("Parvane: раздел «Запланированные» %1: %2").arg(address).arg(messages.size()));
+	return MTP_messages_messages(
+		MTP_vector<MTPMessage>(messages),
+		MTP_vector<MTPForumTopic>(),
+		MTP_vector<MTPChat>(),
+		MTP_vector<MTPUser>());
+}
+
+void AfterScheduledParsed(not_null<History*> history) {
+	// Фото в разделе: картинка — из локальной копии (сервера Telegram, откуда её взял бы tdesktop, нет)
+	const auto session = &history->session();
+	const auto address = BusAddressForPeer(history->peer);
+	std::vector<ScheduledItem> items;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (const auto &it : g_scheduled) {
+			if (it.address == address && it.kind == u"file"_q && SendMediaType(it.fileType) == SendMediaType::Photo) {
+				items.push_back(it);
+			}
+		}
+	}
+	for (const auto &it : items) {
+		const auto photo = session->data().photo(PhotoId(docIdFromFileId(u"scheduled:"_q + it.id)));
+		if (photo->hasExact(Data::PhotoSize::Large)) {
+			continue;
+		}
+		const auto raw = ScheduledFileBytes(it);
+		auto image = QImage::fromData(raw);
+		if (image.isNull()) {
+			continue;
+		}
+		const auto large = Images::FromImageInMemory(image, "JPG", raw);
+		photo->updateImages(QByteArray(), large, large, large, ImageWithLocation(), ImageWithLocation(), 0);
+		KeepPhotoPreview(photo, image);
+	}
+}
+
+namespace {
+
+[[nodiscard]] std::vector<QString> ScheduledIdsOf(const QVector<MTPint> &nums) {
+	auto result = std::vector<QString>();
+	for (const auto &num : nums) {
+		const auto id = g_scheduledByNum.value(num.v);
+		if (!id.isEmpty()) {
+			result.push_back(id);
+		}
+	}
+	return result;
+}
+
+} // namespace
+
+bool DeleteScheduled(not_null<PeerData*> peer, const QVector<MTPint> &nums) {
+	if (!SessionActive()) {
+		return false;
+	}
+	const auto ids = ScheduledIdsOf(nums);
+	auto removed = std::vector<ScheduledItem>();
+	auto text = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto i = g_scheduled.begin(); i != g_scheduled.end();) {
+			if (ranges::contains(ids, i->id)) {
+				text = text || i->kind.isEmpty();
+				removed.push_back(*i);
+				i = g_scheduled.erase(i);
+			} else {
+				++i;
+			}
+		}
 		SaveScheduledLocked();
 	}
-	LOG(("Parvane: сообщение запланировано → %1 на %2")
-		.arg(address).arg(QDateTime::fromSecsSinceEpoch(dueAt).toString(Qt::ISODate)));
-	ArmScheduledTimers();
-	ScheduleStateFlush("scheduled"); // журнал личного состояния v2 (T098)
+	for (const auto &it : removed) {
+		DropScheduledFile(it);
+	}
+	LOG(("Parvane: удалено запланированных %1 (%2)").arg(removed.size()).arg(BusAddressForPeer(peer)));
+	if (text) {
+		ScheduleStateFlush("scheduled");
+	}
+	RefreshScheduledViews({ BusAddressForPeer(peer) });
+	return true;
+}
+
+bool SendScheduledNow(not_null<PeerData*> peer, const QVector<MTPint> &nums) {
+	if (!SessionActive()) {
+		return false;
+	}
+	const auto ids = ScheduledIdsOf(nums);
+	auto now = std::vector<ScheduledItem>();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (const auto &it : g_scheduled) {
+			if (ranges::contains(ids, it.id)) {
+				now.push_back(it);
+			}
+		}
+	}
+	ranges::sort(now, ranges::less(), &ScheduledItem::dueAt);
+	for (const auto &it : now) {
+		LOG(("Parvane: «Отправить сейчас» отложенного → %1").arg(it.address));
+		FireScheduledGated(it);
+	}
+	RefreshScheduledViews({ BusAddressForPeer(peer) });
+	return true;
+}
+
+bool EditScheduled(not_null<HistoryItem*> item, const TextWithEntities &text, TimeId due, bool textChanged) {
+	if (!item->isScheduled() || !SessionActive()) {
+		return false;
+	}
+	const auto id = g_scheduledByNum.value(
+		item->history()->session().scheduledMessages().lookupId(item).bare);
+	if (id.isEmpty()) {
+		return false;
+	}
+	auto address = QString();
+	auto journaled = false;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		for (auto &it : g_scheduled) {
+			if (it.id != id) {
+				continue;
+			}
+			address = it.address;
+			journaled = it.kind.isEmpty();
+			if (due > 0) {
+				it.dueAt = due;
+			}
+			if (textChanged && (it.kind.isEmpty() || it.kind == u"file"_q)) {
+				it.text = text.text;
+				if (it.kind.isEmpty()) {
+					it.entities = entitiesToJson(text.entities);
+					for (auto &me : detectMentions(text.text)) {
+						it.entities.push_back(std::move(me));
+					}
+				} else {
+					it.captionTags = TextUtilities::SerializeTags(
+						TextUtilities::ConvertEntitiesToTextTags(text.entities));
+				}
+			}
+		}
+		SaveScheduledLocked();
+	}
+	if (address.isEmpty()) {
+		return false;
+	}
+	LOG(("Parvane: отложенное изменено → %1 на %2%3")
+		.arg(address)
+		.arg(QDateTime::fromSecsSinceEpoch(due > 0 ? due : item->date()).toString(Qt::ISODate))
+		.arg(textChanged ? u" (текст)"_q : QString()));
+	if (journaled) {
+		ScheduleStateFlush("scheduled");
+	}
+	RefreshScheduledViews({ address });
+	return true;
 }
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
@@ -8610,13 +9779,33 @@ void RestoreScheduled() {
 		for (const auto &j : arr) {
 			if (!j.is_object()) continue;
 			ScheduledItem it;
-			it.id = QString::fromStdString(j.value("id", std::string()));
-			it.address = QString::fromStdString(j.value("address", std::string()));
-			it.text = QString::fromStdString(j.value("text", std::string()));
+			const auto str = [&](const char *key) {
+				return (j.contains(key) && j[key].is_string())
+					? QString::fromStdString(j[key].get<std::string>())
+					: QString();
+			};
+			it.id = str("id");
+			it.address = str("address");
+			it.text = str("text");
 			it.entities = j.contains("entities") ? j["entities"] : nlohmann::json::array();
 			it.dueAt = j.value("due", qint64(0));
 			if (j.contains("reply_to") && j["reply_to"].is_string())
 				it.replyTo = j["reply_to"].get<std::string>();
+			it.silent = j.value("silent", false);
+			it.kind = str("kind");
+			if (!it.kind.isEmpty()) {
+				it.content = j.contains("content") ? j["content"] : nlohmann::json();
+				it.filePath = str("file_path");
+				it.fileName = str("file_name");
+				it.fileMime = str("file_mime");
+				it.fileType = j.value("file_type", 0);
+				it.captionTags = QByteArray::fromBase64(str("caption_tags").toUtf8());
+				it.waveform = QByteArray::fromBase64(str("waveform").toUtf8());
+				it.durationMs = j.value("duration_ms", qint64(0));
+				it.width = j.value("width", 0);
+				it.height = j.value("height", 0);
+				it.album = str("album");
+			}
 			if (!it.id.isEmpty() && !it.address.isEmpty()) g_scheduled.push_back(it);
 		}
 	}
@@ -8822,11 +10011,26 @@ void PollTelegramRecovery(int generation, std::int64_t startedMs) {
 	if (!TelegramGenerationIs(generation, TelegramRecoveryState::Waiting) || !reply.is_object()) {
 		return;
 	}
+	// S7-1: код запроса сменился — запрос перехвачен другим входом; ответа не ждём
+	if (reply.value("intercepted", false)) {
+		LOG(("Parvane: ключ восстановления: запрос перехвачен другим входом"));
+		StopTelegramRecovery(TelegramRecoveryState::Intercepted);
+		return;
+	}
 	const auto key = reply.value("recovery_key", std::string());
 	if (key.empty()) {
 		// Сервер запроса не помнит (перезапуск) — просим заново, без нового сообщения
 		if (!reply.value("pending", false)) {
-			(void)s->requestTelegramKey(false);
+			if (s->requestTelegramKey(false) == "intercepted") {
+				StopTelegramRecovery(TelegramRecoveryState::Intercepted);
+				return;
+			}
+			// Новый запрос — новый код: экран показывает код из ответа сервера, не из опроса
+			{
+				std::lock_guard<std::mutex> lk(g_tgMutex);
+				g_tgCode = QString::fromStdString(s->telegramCode());
+			}
+			PublishLinkingStatus();
 		}
 		return;
 	}
@@ -8883,6 +10087,8 @@ void StartTelegramRecovery(bool again) {
 			? TelegramRecoveryState::Unavailable
 			: (requested == "limit")
 			? TelegramRecoveryState::Limit
+			: (requested == "intercepted")
+			? TelegramRecoveryState::Intercepted
 			: TelegramRecoveryState::Failed);
 		return;
 	}
@@ -9390,6 +10596,10 @@ bool MirrorLocationIfOurs(
 	const int ttl = PeerTtl(address);
 	if (ttl > 0) {
 		content["ttl_secs"] = ttl;
+	}
+	// «Запланировать»: геопозиция — в очередь отложенных (трансляцию не откладываем)
+	if (livePeriod <= 0 && ScheduleContent(peer, content)) {
+		return true;
 	}
 	parvane::StoredMessage own;
 	own.id = parvane::newUuidV7();
@@ -9902,6 +11112,7 @@ void SetOwnAvatar(PeerData *selfPeer, const QImage &image) {
 // ── звонки: публичное API (кнопка UI / debug-хуки) ───────────────────────────
 
 void PlaceCall(const QString &peer, bool video) {
+	ApplyCallDeviceSettings(); // «Звук и камера» (ревью UI 7 ноя, п. 22)
 	RegisterPeer(peer);
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -9945,6 +11156,7 @@ void NotifyOwnDevicesAboutCall(const std::string &callId, const char *reason) {
 }
 
 void AcceptCall() {
+	ApplyCallDeviceSettings(); // «Звук и камера» (ревью UI 7 ноя, п. 22)
 	std::shared_ptr<parvane::CallManager> m;
 	std::shared_ptr<parvane::GroupCallManager> g;
 	{
@@ -9969,7 +11181,13 @@ void AcceptCall() {
 	m->accept();
 }
 
+// Своё состояние микрофона/камеры в текущем звонке (для sendMediaState обоих флагов). Только main.
+bool g_callAudioMuted = false;
+bool g_callVideoOff = false;
+
 void HangupCall() {
+	g_callAudioMuted = false; // следующий звонок — с микрофоном и камерой (ревью UI 7 ноя, п. 27)
+	g_callVideoOff = false;
 	std::shared_ptr<parvane::CallManager> m;
 	std::shared_ptr<parvane::GroupCallManager> g;
 	{
@@ -10001,6 +11219,7 @@ void HangupCall() {
 
 // Заглушить/включить свой микрофон (кнопка в окне звонка).
 void ToggleMute(bool muted) {
+	g_callAudioMuted = muted;
 	std::shared_ptr<parvane::CallManager> m;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -10008,7 +11227,7 @@ void ToggleMute(bool muted) {
 	}
 	if (m) {
 		m->setMuted(muted);
-		m->sendMediaState(muted, false); // spec 024: собеседник видит «микрофон отключён»
+		m->sendMediaState(muted, g_callVideoOff); // spec 024: собеседник видит «микрофон отключён»
 	}
 	std::shared_ptr<parvane::GroupCallManager> g;
 	{
@@ -10016,8 +11235,24 @@ void ToggleMute(bool muted) {
 		g = g_groupCallManager;
 	}
 	if (g && !g->groupCallId().empty()) {
-		crl::async([g, muted] { g->sendMediaState(muted, false); });
+		crl::async([g, muted, video = g_callVideoOff] { g->sendMediaState(muted, video); });
 	}
+}
+
+// Кнопка камеры панели звонка (ревью UI 7 ноя, п. 27): кадры своей камеры не идут, собеседник видит аватар
+// (spec 024 — Content media_state с выключенной камерой).
+void ToggleCamera(bool off) {
+	g_callVideoOff = off;
+	std::shared_ptr<parvane::CallManager> m;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_callManager;
+	}
+	if (m) {
+		m->setVideoEnabled(!off);
+		m->sendMediaState(g_callAudioMuted, off);
+	}
+	LOG(("Parvane: звонок — камера %1").arg(off ? u"выключена"_q : u"включена"_q));
 }
 
 // Рингтон звонка (штатные звуки tdesktop call_incoming/call_outgoing, в цикле).
@@ -10077,6 +11312,47 @@ void EndCallsForLogout() {
 }
 
 // Начать групповой звонок по чат-пиру (кнопка звонка в шапке группы).
+bool StartCallForUser(not_null<UserData*> user, bool video) {
+	if (!SessionActive()) {
+		return false;
+	}
+	auto address = user->isSelf() ? QString() : AddressForUser(user);
+	if (address.isEmpty()) {
+		address = user->username();
+	}
+	if (address.isEmpty() || user->isSelf() || user->isServiceUser()) {
+		LOG(("Parvane: звонок — адрес собеседника неизвестен"));
+		return true; // в MTProto всё равно не уходим
+	}
+	LOG(("Parvane: звонок из интерфейса → %1 (%2)").arg(address, video ? u"video"_q : u"audio"_q));
+	PlaceCall(address, video);
+	return true;
+}
+
+bool CanGroupCall(not_null<PeerData*> peer) {
+	return SessionActive()
+		&& peer->isChat()
+		&& !GroupIdForChat(peer).isEmpty()
+		&& !IsChannelChat(peer)
+		&& !IsPublicPreview(peer)
+		&& !peer->asChat()->haveLeft();
+}
+
+bool StartGroupCallForPeer(not_null<PeerData*> peer, std::shared_ptr<Ui::Show> show) {
+	if (!SessionActive()) {
+		return false;
+	}
+	if (!CanGroupCall(peer)) {
+		if (show) {
+			show->showToast(tr::lng_parvane_group_call_unavailable(tr::now));
+		}
+		return true;
+	}
+	LOG(("Parvane: групповой звонок из интерфейса → %1").arg(GroupIdForChat(peer)));
+	StartGroupCallForChat(peer, false);
+	return true;
+}
+
 void StartGroupCallForChat(PeerData *chat, bool video) {
 	if (!chat || !chat->isChat()) {
 		return;
@@ -10093,6 +11369,7 @@ void StartGroupCallForChat(PeerData *chat, bool video) {
 }
 
 void StartGroupCall(const QString &groupId, bool video) {
+	ApplyCallDeviceSettings(); // «Звук и камера» (ревью UI 7 ноя, п. 22)
 	const auto token = Token().toStdString();
 	if (token.empty()) {
 		return;
@@ -10933,6 +12210,18 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			.arg(docs.size()));
 	}
 	if (loaded > 0) {
+		// Порядок своих наборов, выставленный в «Стикерах» (п. 23 ревью UI 7 ноя): по сохранённым именам каталогов
+		const auto saved = LocalStickerOrder();
+		if (!saved.isEmpty()) {
+			auto &order = stickers.setsOrderRef();
+			auto rank = [&](std::uint64_t id) {
+				const auto i = saved.indexOf(QFileInfo(g_stickerPackDirs.value(id).dir).fileName());
+				return (i >= 0) ? i : int(saved.size());
+			};
+			std::stable_sort(order.begin(), order.end(), [&](std::uint64_t a, std::uint64_t b) {
+				return rank(a) < rank(b);
+			});
+		}
 		stickers.notifyUpdated(Data::StickersType::Stickers);
 		// Диагностика: не стёр ли кто-то наши наборы позже (storage-чейн и т.п.).
 		const auto weakS = base::make_weak(session.get());
@@ -11340,6 +12629,11 @@ void ResetAccountState(const char *why) {
 		g_packRefUploaded.clear();
 	}
 	g_scheduledArmed.clear();
+	g_scheduledTimer = nullptr;
+	StopPlannerReminders();
+	g_scheduledShownAddresses.clear();
+	g_silentUuids.clear();
+	g_decorByUuid.clear();
 	g_pendingGroupMsgs.clear();
 	g_deletedPeers.clear();
 	g_sharedMedia.clear();
@@ -11364,6 +12658,12 @@ void ResetAccountState(const char *why) {
 	g_previewPhotosRequested.clear();
 	g_hiddenGifs.clear();
 	g_hiddenGifsLoaded = false;
+	// C7-6 (ревью 7 ноя): ключи и capability отложенных загрузок и GIF-1 прежнего аккаунта — прочь
+	g_deferredMedia.clear();
+	g_gifRefs.clear();
+	g_gifDocs.clear();
+	g_gifLoading.clear();
+	LOG(("Parvane: сброс аккаунта — отложенные загрузки и ссылки GIF очищены"));
 	g_pendingRecoveryKey.clear();
 	g_presenceSubscribed = false;
 	g_presenceTimer = nullptr;
@@ -11508,6 +12808,7 @@ void AutoL2Step(
 } // namespace Internal
 
 void AfterSessionReady(not_null<Main::Session*> session) {
+	ApplyCallDeviceSettings(); // устройства звонка из «Звук и камера» и для принятого группового звонка
 	const auto weak = base::make_weak(session);
 	// Откладываем на main, чтобы конструктор Main::Session завершился.
 	crl::on_main(weak, [=] {
@@ -11521,6 +12822,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		session->lifetime().add([] { previousEnded = true; });
 		g_sessionWeak = weak;
 		Sections::StartSectionHooks(); // spec 029: хуки сценариев разделов
+		StartPlannerReminders(); // напоминания «Плана» (ревью 7 ноя, п. 12)
+		base::call_delayed(8 * crl::time(1000), [] { StartDailyUiHooks(); }); // PARVANE_AUTOUI
 		// Рестарт: tdesktop возобновил кэшированную сессию, минуя экран логина
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
 		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
@@ -11541,6 +12844,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		LoadNotifyState();  // снимок настроек уведомлений
 		ApplySavedNotify(session); // и сразу в tdesktop: иначе всё «заглушено» (MTProto умолчаний нет)
+		session->data().reactions().refreshDefault(); // встроенный набор реакций (BuiltinReactions)
 		LoadBlockedState(); // блок-лист (применяется к пользователям по мере появления)
 		LoadDialogState();  // архив и закреп (применяются после воспроизведения истории)
 		if (SelfAddress().isEmpty()) {
@@ -13257,6 +14561,101 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 }
 
 
+std::optional<MTPmessages_AvailableReactions> BuiltinReactions(not_null<Main::Session*> session) {
+	// Тот же список и порядок, что web provider.ts BUILTIN_REACTIONS (android принимает любые эмодзи)
+	static const auto kEmoji = std::vector<QString>{
+		QString::fromUtf8("\xF0\x9F\x91\x8D"),         // 👍
+		QString::fromUtf8("\xE2\x9D\xA4\xEF\xB8\x8F"), // ❤️
+		QString::fromUtf8("\xF0\x9F\x94\xA5"),         // 🔥
+		QString::fromUtf8("\xF0\x9F\x98\x82"),         // 😂
+		QString::fromUtf8("\xF0\x9F\x91\x8F"),         // 👏
+		QString::fromUtf8("\xF0\x9F\x8E\x89"),         // 🎉
+		QString::fromUtf8("\xF0\x9F\xA4\x94"),         // 🤔
+	};
+	if (g_sessionWeak.get() != session.get()) {
+		return std::nullopt;
+	}
+	const auto dir = cWorkingDir() + u"tdata/parvane-reactions"_q;
+	QDir().mkpath(dir);
+	// «Вспышка вокруг» реакции — пустая картинка (у встроенного набора анимаций нет; флаг общий с center_icon)
+	const auto nonePath = dir + u"/none.png"_q;
+	if (!QFile::exists(nonePath)) {
+		auto none = QImage(QSize(2, 2), QImage::Format_ARGB32_Premultiplied);
+		none.fill(Qt::transparent);
+		none.save(nonePath, "PNG");
+	}
+	const auto noneId = std::int64_t(IdForAddress(u"reaction:none"_q) & ~(std::uint64_t(1) << 63));
+	const auto noneDoc = buildLocalMtpDocument(session, noneId, u"sticker"_q, u"image/png"_q,
+		QFileInfo(nonePath).size(), QString(), 0, 0, 2, 2, nonePath);
+	session->data().processDocument(noneDoc)->setLocation(Core::FileLocation(nonePath));
+	auto list = QVector<MTPAvailableReaction>();
+	auto index = 0;
+	for (const auto &text : kEmoji) {
+		const auto emoji = Ui::Emoji::Find(text);
+		if (!emoji) {
+			LOG(("Parvane: реакция %1 — нет такого эмодзи").arg(text));
+			continue;
+		}
+		// Картинка — эмодзи приложения (не данные пользователя, на диске открыто можно)
+		const auto path = dir + u"/r%1.png"_q.arg(index++);
+		if (!QFile::exists(path)) {
+			const auto size = Ui::Emoji::GetSizeLarge();
+			auto image = QImage(QSize(size, size), QImage::Format_ARGB32_Premultiplied);
+			image.fill(Qt::transparent);
+			{
+				auto p = QPainter(&image);
+				Ui::Emoji::Draw(p, emoji, size, 0, 0);
+			}
+			image.save(path, "PNG");
+		}
+		// Значок в пузыре (center_icon) у Telegram — эмодзи посередине с полями: без полей он вдвое крупнее чипа
+		const auto centerPath = dir + u"/c%1.png"_q.arg(index - 1);
+		if (!QFile::exists(centerPath)) {
+			const auto size = Ui::Emoji::GetSizeLarge();
+			auto image = QImage(QSize(size * 2, size * 2), QImage::Format_ARGB32_Premultiplied);
+			image.fill(Qt::transparent);
+			{
+				auto p = QPainter(&image);
+				Ui::Emoji::Draw(p, emoji, size, size / 2, size / 2);
+			}
+			image.save(centerPath, "PNG");
+		}
+		const auto docId = std::int64_t(IdForAddress(u"reaction:"_q + emoji->id()) & ~(std::uint64_t(1) << 63));
+		const auto size = QFileInfo(path).size();
+		const auto mtpDoc = buildLocalMtpDocument(session, docId, u"sticker"_q, u"image/png"_q, size,
+			text, 0, 0, Ui::Emoji::GetSizeLarge(), Ui::Emoji::GetSizeLarge(), path);
+		const auto doc = session->data().processDocument(mtpDoc);
+		doc->setLocation(Core::FileLocation(path));
+		const auto centerId = std::int64_t(IdForAddress(u"reaction-center:"_q + emoji->id()) & ~(std::uint64_t(1) << 63));
+		const auto centerDoc = buildLocalMtpDocument(session, centerId, u"sticker"_q, u"image/png"_q,
+			QFileInfo(centerPath).size(), text, 0, 0, Ui::Emoji::GetSizeLarge() * 2, Ui::Emoji::GetSizeLarge() * 2,
+			centerPath);
+		session->data().processDocument(centerDoc)->setLocation(Core::FileLocation(centerPath));
+		list.push_back(MTP_availableReaction(
+			MTP_flags(MTPDavailableReaction::Flag::f_center_icon),
+			MTP_string(text),
+			MTP_string(text),
+			mtpDoc, // static_icon
+			mtpDoc, // appear_animation
+			mtpDoc, // select_animation
+			mtpDoc, // activate_animation
+			noneDoc, // effect_animation
+			noneDoc, // around_animation
+			centerDoc)); // center_icon
+	}
+	LOG(("Parvane: встроенные реакции: %1").arg(list.size()));
+	return MTP_messages_availableReactions(MTP_int(1), MTP_vector<MTPAvailableReaction>(list));
+}
+
+bool IsSilentItem(not_null<const HistoryItem*> item) {
+	const auto uuid = g_msgIdToUuid.value(item->id.bare);
+	if (uuid.isEmpty() || !g_silentUuids.contains(uuid)) {
+		return false;
+	}
+	LOG(("Parvane: уведомление без звука (silent) msg %1").arg(uuid));
+	return true;
+}
+
 bool StartDeferredDownload(not_null<DocumentData*> document, const QString &saveTo) {
 	return Internal::StartDeferredDownloadImpl(document, saveTo);
 }
@@ -13264,5 +14663,125 @@ bool StartDeferredDownload(not_null<DocumentData*> document, const QString &save
 bool IsDeferredDownload(uint64 documentId) {
 	return Internal::IsDeferredDownloadImpl(documentId);
 }
+
+bool IsReceivedEmojiSet(uint64 setId) {
+	return g_receivedEmojiSets.contains(setId);
+}
+
+// A0085-2: «Добавить эмодзи» в окне набора — принятый пак становится своим (копия в ParvaneEmoji)
+bool InstallReceivedEmojiSet(not_null<Main::Session*> session, uint64 setId) {
+	if (!g_receivedEmojiSets.contains(setId)) {
+		return false;
+	}
+	const auto info = g_emojiPackDirs.value(setId);
+	const auto from = QDir(info.dir);
+	const auto dest = CustomEmojiRoot() + u"/"_q + SanitizePackName(info.name);
+	if (info.dir.isEmpty() || !from.exists() || QDir(dest).exists() || !QDir().mkpath(dest)) {
+		return false;
+	}
+	for (const auto &name : from.entryList(QDir::Files | QDir::Hidden)) {
+		if (name != u".used"_q) {
+			QFile::copy(from.filePath(name), dest + u"/"_q + name);
+		}
+	}
+	WriteRawPackName(dest, info.name);
+	if (!FeedCustomEmojiSet(session, info.name, dest, true)) {
+		return false;
+	}
+	session->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+	LOG(("Parvane: эмодзи-пак «%1» добавлен в свои наборы").arg(info.name));
+	return true;
+}
+
+void ResolveComposePreview(
+		not_null<Main::Session*> session,
+		const QString &url,
+		Fn<void(WebPageData*)> done) {
+	Internal::ResolveComposePreviewImpl(session, url, std::move(done));
+}
+
+// ── п. 23 ревью UI 7 ноя: свои наборы стикеров — удаление и снятие из журнала PACK-3 ──
+namespace Internal {
+
+QString LocalStickerPackDir(std::uint64_t setId) { // main
+	return g_stickerPackDirs.value(setId).dir;
+}
+
+// Набор убран из окна «Стикеры» либо снят журналом на другом устройстве: набор из памяти tdesktop и каталог с диска.
+void DropLocalStickerSet(not_null<Main::Session*> session, std::uint64_t setId, const QString &dir) { // main
+	auto &stickers = session->data().stickers();
+	stickers.setsOrderRef().removeAll(setId);
+	stickers.setsRef().remove(setId);
+	g_stickerPackDirs.remove(setId);
+	if (!dir.isEmpty() && dir.startsWith(StickerPacksRoot() + '/')) {
+		QDir(dir).removeRecursively();
+	}
+	stickers.notifyUpdated(Data::StickersType::Stickers);
+	session->local().writeInstalledStickers();
+}
+
+} // namespace Internal
+
+bool RemoveLocalStickerPack(not_null<Main::Session*> session, uint64 setId) { // main
+	const auto info = g_stickerPackDirs.value(setId);
+	if (info.dir.isEmpty()) {
+		return false;
+	}
+	const auto dir = info.dir;
+	const auto packName = QFileInfo(dir).fileName();
+	const auto byName = QString::fromStdString("n:" + parvane::pack::sanitizeName(packName.toStdString()));
+	const auto weak = base::make_weak(session.get());
+	const auto generation = AccountGeneration();
+	g_stickerPackDirs.remove(setId); // повторное удаление того же набора не запускать
+	crl::async([=] {
+		const auto archive = BuildPackArchive(dir);
+		const auto hash = archive.empty() ? std::string() : parvane::pack::archiveContentHashB64(archive);
+		crl::on_main([=] {
+			const auto s = weak.get();
+			if (!s || !AccountGenerationIs(generation)) {
+				return;
+			}
+			ForgetStickerPackRecord(byName, hash.empty() ? QString() : QString::fromStdString("h:" + hash));
+			DropLocalStickerSet(s, setId, dir);
+			LOG(("Parvane: стикеры: набор «%1» удалён (каталог и журнал состояния)").arg(packName));
+		});
+	});
+	return true;
+}
+
+namespace Internal {
+// Запись набора снята журналом (удалена на другом своём устройстве) — убрать набор и здесь (PACK-3).
+void RemoveStickerPackFromJournal(const QString &key) { // main
+	const auto session = g_sessionWeak.get();
+	if (!session || key.size() < 3) {
+		return;
+	}
+	const auto root = StickerPacksRoot();
+	const auto generation = AccountGeneration();
+	crl::async([=] {
+		auto packName = QString();
+		if (key.startsWith(u"h:"_q)) {
+			packName = FindInstalledPackByHash(root, key.mid(2).toStdString());
+		} else if (key.startsWith(u"n:"_q)) {
+			const auto rootDir = QDir(root);
+			for (const auto &name : rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+				if (("n:" + parvane::pack::sanitizeName(name.toStdString())) == key.toStdString()) {
+					packName = name;
+					break;
+				}
+			}
+		}
+		crl::on_main([=] {
+			const auto s = g_sessionWeak.get();
+			if (!s || packName.isEmpty() || !AccountGenerationIs(generation)) {
+				return;
+			}
+			const auto setId = std::uint64_t(docIdFromFileId(u"pack:"_q + packName));
+			DropLocalStickerSet(s, setId, root + u"/"_q + packName);
+			LOG(("Parvane: стикеры: набор «%1» снят журналом состояния — удалён и здесь").arg(packName));
+		});
+	});
+}
+} // namespace Internal
 
 } // namespace Parvane

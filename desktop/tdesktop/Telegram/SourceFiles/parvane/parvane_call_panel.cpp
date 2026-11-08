@@ -37,6 +37,7 @@ namespace Parvane {
 void HangupCall();
 void AcceptCall();
 void ToggleMute(bool muted);
+void ToggleCamera(bool off); // ревью UI 7 ноя, п. 27: кнопка камеры (parvane_client.cpp)
 
 namespace {
 
@@ -61,6 +62,7 @@ private:
 	Ui::FlatLabel _fingerprint;
 	Ui::FlatLabel _remoteMuted; // «микрофон собеседника отключён» (spec 024)
 	Ui::CallButton _mute;
+	Ui::CallButton _camera;   // видеозвонок: выключить/включить свою камеру (ревью UI 7 ноя, п. 27)
 	Ui::CallButton _hangup;
 	Ui::CallButton _answer;   // входящий: «Ответить» (зелёная)
 	Ui::CallButton _decline;  // входящий: «Отклонить» (красная)
@@ -68,6 +70,7 @@ private:
 	std::unique_ptr<Calls::VideoBubble> _remoteVideo; // видео собеседника (нативно)
 	std::unique_ptr<Calls::VideoBubble> _localVideo;  // своя камера (self-preview)
 	rpl::variable<bool> _muted = false;
+	rpl::variable<bool> _cameraOff = false;
 	QString _peerName;
 	bool _remoteCameraOff = false; // spec 024: собеседник выключил камеру — аватар вместо видео
 	QTimer _timer;
@@ -83,6 +86,7 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 , _fingerprint(_gl.widget(), st::callStatus)
 , _remoteMuted(_gl.widget(), st::callRemoteAudioMute)
 , _mute(_gl.widget(), st::callMicrophoneMute, &st::callMicrophoneUnmute)
+, _camera(_gl.widget(), st::callCameraMute, &st::callCameraUnmute)
 , _hangup(_gl.widget(), st::callHangup)
 , _answer(_gl.widget(), st::callAnswer)
 , _decline(_gl.widget(), st::callHangup)
@@ -93,7 +97,7 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	const auto body = _gl.widget();
 	_userpic = std::make_unique<Calls::Userpic>(body, peer, _muted.value());
 
-	win->setTitle(QString::fromUtf8("Parvane — звонок"));
+	win->setTitle(tr::lng_parvane_call_window_title(tr::now)); // ревью UI 7 ноя, п. 28: строки — EN+RU
 	// Своё окно звонка — НИКОГДА не гасит приложение при закрытии (иначе закрылось
 	// бы и главное окно). Закрытие крестиком = завершить звонок.
 	win->setAttribute(Qt::WA_QuitOnClose, false);
@@ -111,13 +115,14 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	_peerName = peer->shortName();
 	_remoteMuted.hide();
 	_status.setText(_incoming
-		? (_video ? QString::fromUtf8("Входящий видеозвонок")
-			: QString::fromUtf8("Входящий звонок"))
-		: QString::fromUtf8("Вызов…"));
+		? (_video ? tr::lng_call_video_incoming(tr::now)
+			: tr::lng_call_incoming(tr::now))
+		: tr::lng_call_status_ringing(tr::now));
 
 	// Активные кнопки (mute/hangup) и входящие (answer/decline) — показываем нужную
 	// пару по режиму.
 	_mute.setVisible(!_incoming);
+	_camera.setVisible(!_incoming && _video);
 	_hangup.setVisible(!_incoming);
 	_answer.setVisible(_incoming);
 	_decline.setVisible(_incoming);
@@ -125,6 +130,19 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	_mute.setClickedCallback([this] {
 		_muted = !_muted.current();
 		Parvane::ToggleMute(_muted.current());
+	});
+	_camera.setText(tr::lng_call_stop_video());
+	_cameraOff.value() | rpl::on_next([this](bool off) {
+		_camera.setProgress(off ? 1. : 0.);
+		_camera.setText(off ? tr::lng_call_start_video() : tr::lng_call_stop_video());
+		if (const auto track = Parvane::CallLocalVideoTrack()) {
+			// Своя врезка гаснет вместе с камерой (VideoBubble смотрит на состояние трека)
+			track->setState(off ? Webrtc::VideoState::Inactive : Webrtc::VideoState::Active);
+		}
+	}, _gl.widget()->lifetime());
+	_camera.setClickedCallback([this] {
+		_cameraOff = !_cameraOff.current();
+		Parvane::ToggleCamera(_cameraOff.current());
 	});
 	// Отбой/отклонение: завершаем звонок И сразу закрываем окно (не ждём Ended —
 	// если звонок так и не соединился, состояние могло застрять). CloseNativeCallPanel
@@ -239,6 +257,13 @@ void CallPanel::layout() {
 		: static_cast<Ui::CallButton*>(&_hangup);
 	const int by = h - right->height() - 40;
 	const int gap = 56;
+	if (!_incoming && _video) {
+		// Видеозвонок: камера | микрофон | отбой
+		_mute.move((w - _mute.width()) / 2, by);
+		_camera.move(_mute.x() - gap / 2 - _camera.width(), by);
+		_hangup.move(_mute.x() + _mute.width() + gap / 2, by);
+		return;
+	}
 	left->move(w / 2 - left->width() - gap / 2, by);
 	right->move(w / 2 + gap / 2, by);
 }
@@ -251,8 +276,9 @@ void CallPanel::switchToActive() {
 	_answer.setVisible(false);
 	_decline.setVisible(false);
 	_mute.setVisible(true);
+	_camera.setVisible(_video);
 	_hangup.setVisible(true);
-	_status.setText(QString::fromUtf8("Соединение…"));
+	_status.setText(tr::lng_call_status_connecting(tr::now));
 	layout();
 }
 

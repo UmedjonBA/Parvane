@@ -2649,19 +2649,39 @@ bool Widget::search(bool inCache, SearchRequestDelay delay) {
 	// Parvane: поиск ВНУТРИ чата — локально по загруженным сообщениям (MTProto
 	// messages.search заглушён; всё подтянуто полным ресинком). Ищем подстроку в
 	// тексте, свежие — первыми, и сразу отдаём результат в UI без сети.
-	if (inPeer && !trimmed.isEmpty() && !fromPeer && inTags.empty()) {
+	// Ревью UI 7 ноя, п. 17: «От пользователя» и метки (реакции-теги «Избранного») — тоже локально.
+	if (inPeer && (!trimmed.isEmpty() || fromPeer || !inTags.empty())) {
 		cancelSearchRequest();
 		const auto history = session().data().history(inPeer);
 		auto found = std::vector<not_null<HistoryItem*>>();
+		const auto hasTags = [&](not_null<HistoryItem*> item) {
+			for (const auto &tag : inTags) {
+				const auto &list = item->reactions();
+				if (ranges::find(list, tag, &Data::MessageReaction::id) == end(list)) {
+					return false;
+				}
+			}
+			return true;
+		};
 		for (const auto &block : history->blocks) {
 			for (const auto &view : block->messages) {
 				const auto item = view->data();
-				if (item->originalText().text.contains(
-						trimmed, Qt::CaseInsensitive)) {
+				if (item->isService()) {
+					continue;
+				}
+				if ((trimmed.isEmpty() || item->originalText().text.contains(
+						trimmed, Qt::CaseInsensitive))
+					&& (!fromPeer || item->from() == fromPeer)
+					&& hasTags(item)) {
 					found.push_back(item);
 				}
 			}
 		}
+		LOG(("Parvane: поиск в чате «%1» от %2, меток %3 — найдено %4")
+			.arg(trimmed)
+			.arg(fromPeer ? fromPeer->name() : u"всех"_q)
+			.arg(inTags.size())
+			.arg(found.size()));
 		ranges::reverse(found); // свежие первыми
 		const auto count = int(found.size());
 		currentSearchProcess()->full = true;

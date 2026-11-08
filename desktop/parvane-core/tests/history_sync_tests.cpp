@@ -139,6 +139,9 @@ struct FakeServer {
     std::optional<Cp> cp;
     std::size_t appends = 0, chunkAppends = 0, commits = 0;
     std::atomic<std::int64_t> clock{1700000000000};
+    // Злонамеренный сервер (S7-4): записи, которые он не отдаёт в sync; отказ следующей записи (обрыв)
+    std::set<std::uint64_t> hidden;
+    int failAppends = 0;
 
     static std::string record(std::uint64_t seq, const Rec &r) {
         std::string out;
@@ -171,6 +174,10 @@ struct FakeServer {
         };
         std::string out;
         if (method == "history.append") {
+            if (failAppends > 0) {
+                --failAppends;
+                throw v2::V2Error("ERROR_CODE_UNAVAILABLE");
+            }
             const Rec r{b(1), b(2), u(3) != 0};
             for (const auto &[seq, x] : log) {
                 if (x.opId != r.opId) continue;
@@ -196,7 +203,7 @@ struct FakeServer {
             std::size_t n = 0;
             bool more = false;
             for (auto it = log.upper_bound(after); it != log.end(); ++it) {
-                if (skip && it->second.chunk) continue;
+                if ((skip && it->second.chunk) || hidden.count(it->first)) continue;
                 if (n == 3) { // маленькая страница — проверить листание
                     more = true;
                     break;
@@ -265,6 +272,8 @@ static const std::string kBob = "bob@local";
 // Свой адрес хоста для новых устройств теста (пусто — kSelf). Иной адрес при сессии движка под kSelf — модель смены
 // ника: хост знает новый адрес, движок — прежний (свои строки до смены — под прежним).
 static std::string g_deviceSelf;
+// Окно пачки записи для новых устройств теста (S7-3)
+static std::int64_t g_batchMin = 100, g_batchMax = 200;
 
 struct Device {
     std::string dir;
@@ -311,10 +320,8 @@ struct Device {
         };
         if (clock) cfg.nowMs = [this] { return clock->load(); };
         cfg.thread = thread;
-        cfg.ownDelayMs = 50;
-        cfg.markDelayMs = 50;
-        cfg.incomingMinMs = 100;
-        cfg.incomingMaxMs = 200;
+        cfg.batchMinMs = g_batchMin;
+        cfg.batchMaxMs = g_batchMax;
         cfg.pollMs = 60000;
         cfg.retryMs = 200;
         sync = std::make_unique<hs::HistorySync>(std::move(cfg));
@@ -734,7 +741,81 @@ int main() {
         check(s7.headSeq() == head, "восстановленное входящее, уже бывшее в журнале, не дублируется");
     }
 
-    // Фоновый поток: своё уходит само ≤ 300 мс, уведомление журнала — sync сразу
+    // S7-3: своё и входящее — одной записью в срок пачки, не раньше её нижней границы (прежде своё уходило ≤ 300 мс)
+    {
+        FakeServer s9;
+        g_batchMin = 1500;
+        g_batchMax = 1600;
+        Device x("bx", s9, blob, key, true);
+        g_batchMin = 100;
+        g_batchMax = 200;
+        x.sync->start();
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!x.sync->status().value("joined", false) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(3)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        const auto before = s9.headSeq();
+        x.sync->record(hs::rowOpFromWire(wire(uid(70), kSelf, kBob, 7000, "своё"), bobChat()), true);
+        x.sync->record(hs::rowOpFromWire(wire(uid(71), kBob, kSelf, 7001, "входящее"), bobChat()), false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        check(s9.headSeq() == before, "своё не уходит раньше окна пачки (нет «≤ 300 мс»)");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        while (s9.headSeq() == before && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        check(s9.headSeq() == before + 1, "своё и входящее — одной записью", std::to_string(s9.headSeq() - before));
+        {
+            std::lock_guard<std::mutex> lk(s9.mu);
+            const auto &ct = s9.log.rbegin()->second.ct;
+            const auto plain = ct.size() - 28;
+            check(plain == 512 || plain == 2048 || plain == 8192 || plain == 32768, "запись выровнена по сетке L2", std::to_string(plain));
+        }
+        x.sync->stop();
+    }
+
+    // S7-4: запись, спрятанная сервером, — пропуск в цепочке писателя; повтор после обрыва — те же тела, без пропуска
+    {
+        FakeServer s10;
+        Device x("cx", s10, blob, key), y("cy", s10, blob, key);
+        x.sync->syncNow();
+        for (int i = 0; i < 3; ++i) {
+            x.sync->record(hs::rowOpFromWire(wire(uid(80 + i), kSelf, kBob, 8000 + i, "цепочка"), bobChat()), true);
+            if (i == 1) {
+                s10.failAppends = 1; // обрыв: тело остаётся в очереди и уходит тем же при следующей записи
+                check(!x.sync->flushNow(), "запись не ушла (обрыв)");
+                check(x.sync->status().value("pendingBodies", 0) == 1, "запечатанное тело ждёт повтора");
+            }
+            x.sync->flushNow();
+        }
+        check(y.sync->syncNow() && !y.loggedContains("сервер не отдал"), "повтор после обрыва — без пропуска в цепочке");
+        Device z("cz", s10, blob, key);
+        {
+            std::lock_guard<std::mutex> lk(s10.mu);
+            s10.hidden.insert(2);
+        }
+        z.sync->syncNow();
+        check(z.loggedContains("сервер не отдал 1 записей"), "спрятанная сервером запись видна как пропуск");
+    }
+
+    // S7-4: сервер выдаёт старую сводку за точку с большим upto_seq — точка не применяется, курсор стоит
+    {
+        FakeServer s11;
+        Device x("sx", s11, blob, key);
+        x.sync->syncNow();
+        x.sync->record(hs::rowOpFromWire(wire(uid(90), kSelf, kBob, 9000, "до точки"), bobChat()), true);
+        x.sync->flushNow();
+        check(x.sync->syncNow() && x.sync->checkpointNow(true) && s11.cp, "точка записана");
+        x.sync->record(hs::goneOp(uid(90), bobChat(), hs::stampOf(9100, uid(91)), true), true);
+        x.sync->flushNow();
+        {
+            std::lock_guard<std::mutex> lk(s11.mu);
+            s11.cp->upto = s11.head; // удаление «спрятано» за точкой со старой сводкой
+        }
+        Device c("sc", s11, blob, key);
+        check(!c.sync->syncNow(), "новое устройство: точка со старой сводкой не принята");
+        check(c.loggedContains("не сходится со своей сводкой"), "причина — в журнале диагностики");
+        check(c.sync->status().value("cursor", 0) == 0 && !c.visible(uid(90)), "курсор не перепрыгнул точку");
+    }
+
+    // Фоновый поток: своё уходит само в срок пачки, уведомление журнала — sync сразу
     {
         FakeServer s6;
         Device x("tx", s6, blob, key, true), y("ty", s6, blob, key, true);

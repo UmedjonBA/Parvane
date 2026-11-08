@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/background_preview_box.h"
+#include "parvane/parvane_client.h" // обои чата на устройстве
 
 #include "base/unixtime.h"
 #include "boxes/peers/edit_peer_color_box.h"
@@ -588,6 +589,11 @@ void BackgroundPreviewBox::uploadForPeer(bool both) {
 	if (_uploadId) {
 		return;
 	}
+	// Parvane: своя картинка для одного чата — загрузки обоев на сервер нет
+	if (const auto parvane = true) {
+		_controller->showToast(tr::lng_parvane_chat_wallpaper_custom(tr::now));
+		return;
+	}
 
 	const auto session = &_controller->session();
 	const auto ready = Window::Theme::PrepareWallPaper(
@@ -661,6 +667,13 @@ void BackgroundPreviewBox::setExistingForPeer(
 			return;
 		}
 	}
+	// Parvane: обои чата — на устройстве (файл tdata), MTProto messages.setChatWallPaper нет
+	if (const auto parvane = true) {
+		Parvane::SaveChatWallPaper(_forPeer, paper);
+		_forPeer->setWallPaper(paper);
+		_controller->finishChatThemeEdit(_forPeer);
+		return;
+	}
 	const auto api = &_controller->session().api();
 	using Flag = MTPmessages_SetChatWallPaper::Flag;
 	api->request(MTPmessages_SetChatWallPaper(
@@ -716,10 +729,8 @@ void BackgroundPreviewBox::applyForPeer() {
 		}
 	}
 
-	if (forChannel()) {
-		checkLevelForChannel();
-		return;
-	} else if (_fromMessageId || !_forPeer->session().premiumPossible()) {
+	// Parvane (ревью UI 7 ноя, раздел 5): обои чата — на этом устройстве; «для обоих» в протоколе нет
+	if (forChannel() || _fromMessageId || !_forPeer->session().premiumPossible() || true) {
 		applyForPeer(false);
 		return;
 	} else if (_forBothOverlay) {

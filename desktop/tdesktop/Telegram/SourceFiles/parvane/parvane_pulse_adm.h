@@ -16,4 +16,9 @@ namespace Parvane {
 [[nodiscard]] webrtc::scoped_refptr<webrtc::AudioDeviceModule>
 CreatePulseAudioDeviceModule();
 
+// Устройства звонка из «Звук и камера» (ревью UI 7 ноя, п. 22): id из настроек tdesktop (OpenAL — описание
+// устройства); при открытии потока сопоставляются с устройствами PulseAudio, не нашлось — устройство по умолчанию.
+// Звать на главном потоке перед звонком.
+void SetCallAudioDevices(const std::string &playbackId, const std::string &captureId);
+
 } // namespace Parvane

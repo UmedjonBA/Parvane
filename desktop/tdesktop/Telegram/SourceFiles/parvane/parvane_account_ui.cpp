@@ -123,6 +123,7 @@ void RunWork(not_null<QObject*> guard, Fn<QString()> work, Fn<void(QString)> don
 	case TelegramRecoveryState::Failed: return tr::lng_parvane_tg_recover_failed(tr::now);
 	case TelegramRecoveryState::Limit: return tr::lng_parvane_tg_recover_limit(tr::now);
 	case TelegramRecoveryState::Expired: return tr::lng_parvane_tg_recover_expired(tr::now);
+	case TelegramRecoveryState::Intercepted: return tr::lng_parvane_tg_recover_intercepted(tr::now);
 	case TelegramRecoveryState::Idle:
 	case TelegramRecoveryState::Unavailable: break;
 	}

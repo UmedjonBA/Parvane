@@ -1004,6 +1004,15 @@ void Reactions::requestRecent() {
 }
 
 void Reactions::requestDefault() {
+	// Parvane: набора реакций с сервера Telegram нет — встроенный набор, общий с web и android
+	if (const auto builtin = Parvane::BuiltinReactions(&_owner->session())) {
+		if (_available.empty()) {
+			builtin->match([&](const MTPDmessages_availableReactions &data) {
+				updateDefault(data);
+			}, [](const auto &) {});
+		}
+		return;
+	}
 	if (_defaultRequestId) {
 		return;
 	}

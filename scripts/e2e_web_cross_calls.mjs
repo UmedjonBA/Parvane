@@ -99,6 +99,9 @@ try {
   console.log(`e2e_web_cross_calls (${PAIR}): web → desktop соединён, звук от desktop принят`);
 
   // ── desktop → web: десктоп перезапускается с хуком вызова, web принимает ────
+  // Второй звонок desktop идёт БЕЗ звукового сервера (PULSE_SERVER на несуществующий сокет): так бывает на машине без
+  // PulseAudio/PipeWire (стенд MSI, 8 ноя 2026) и при пропавшем микрофоне. Звонок обязан слать RTP (тишину) — прежде
+  // ADM отказывал в StartRecording, и web не получал ни пакета («media is not flowing» при connected/connected).
   // tdesktop при перезапуске начинает лог заново — журнал первого звонка берём сейчас
   const firstCallLog = readDesktopLog(bobWorkdir);
   await stopDesktop(desktop);
@@ -109,6 +112,7 @@ try {
     PARVANE_NO_LINK_OFFER: '1',
     PARVANE_AUTOCALL: alice,
     PARVANE_PROTO_V2: '1',
+    PULSE_SERVER: `unix:${bobWorkdir}/no-audio-server/native`,
   });
   await waitDesktopLog(bobWorkdir, /AUTOCALL → /, 90000, desktop, { since: restartFrom });
   await page.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: CALL_TIMEOUT_MS });
@@ -118,7 +122,11 @@ try {
   await expectMediaFlowing(page, { audio: true });
   await page.getByRole('button', { name: 'End Call' }).click();
   await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  // запись о захвате без устройства — признак, что звонок шёл именно без звукового сервера
+  await waitDesktopLog(bobWorkdir, /PulseAudio call-in не открылся: .*собеседнику уходит тишина/, 5000, desktop,
+    { since: restartFrom });
   console.log(`e2e_web_cross_calls (${PAIR}): desktop → web соединён, звук от desktop принят`);
+  console.log(`e2e_web_cross_calls (${PAIR}): без звукового сервера desktop шлёт тишину — медиа идёт`);
 
   // Путь сигналинга — запечатанные конверты v2 (D-08) в обе стороны
   const desktopLog = `${firstCallLog}\n${readDesktopLog(bobWorkdir)}`;

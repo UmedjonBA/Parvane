@@ -8933,6 +8933,19 @@
 "lng_parvane_chat_mode_off_you" = "Вы выключили усиленную приватность";
 "lng_parvane_upgrade_available" = "Доступна новая версия Parvane. Обновите приложение — эта версия скоро перестанет работать.";
 "lng_parvane_upgrade_required" = "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.";
+"lng_parvane_group_leave_failed" = "Не удалось выйти из группы. Проверьте связь и попробуйте ещё раз.";
+"lng_parvane_call_window_title" = "Parvane — звонок";
+"lng_parvane_cloud_photo_not_loaded" = "Фото ещё не загрузилось — попробуйте чуть позже.";
+"lng_parvane_chat_wallpaper_custom" = "Свою картинку можно поставить только фоном для всех чатов.";
+"lng_parvane_emoji_pack_added" = "Эмодзи добавлены в ваши наборы";
+"lng_parvane_media_downloading" = "Скачивается {name}…";
+"lng_parvane_media_download_failed" = "Не удалось скачать {name}. Нажмите на файл, чтобы повторить.";
+"lng_parvane_group_create_failed" = "Не удалось создать группу. Проверьте связь и попробуйте ещё раз.";
+"lng_parvane_group_call" = "Групповой звонок";
+"lng_parvane_group_call_unavailable" = "В этом чате групповой звонок недоступен";
+"lng_parvane_contacts_search_nick" = "Поиск по нику";
+"lng_parvane_reminder_title" = "Напоминание: {title}";
+"lng_parvane_reminder_starts" = "Начало в {time}";
 "lng_parvane_gif_add_file" = "Добавить GIF из файла";
 "lng_parvane_gif_added" = "GIF добавлен в сохранённые на всех ваших устройствах.";
 "lng_parvane_gif_add_failed" = "Не удалось добавить файл как GIF (до 20 МБ: GIF, MP4, WebM).";
@@ -10060,6 +10073,7 @@
 "lng_parvane_tg_recover_failed" = "Не удалось подключить устройство. Проверьте связь и попробуйте ещё раз.";
 "lng_parvane_tg_recover_limit" = "Слишком много запросов. Подождите минуту и попробуйте ещё раз.";
 "lng_parvane_tg_recover_expired" = "Запрос устарел. Попросите бота прислать сообщение ещё раз.";
+"lng_parvane_tg_recover_intercepted" = "Запрос ключа перехвачен: с этим устройством вошёл кто-то ещё и начал свой запрос. Не отвечайте боту. Если это были не вы — смените пароль.";
 "lng_parvane_tg_recover_again" = "Прислать сообщение ещё раз";
 "lng_parvane_link_pending_title" = "Или подтвердите на другом устройстве";
 "lng_parvane_link_pending_text" = "Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код {code}.";

@@ -2619,6 +2619,16 @@ void HistoryItem::updateSentContent(
 	history()->owner().requestItemResize(this);
 }
 
+void HistoryItem::parvaneDropForwardInfo(bool dropCaption) {
+	if (Has<HistoryMessageForwarded>()) {
+		RemoveComponents(HistoryMessageForwarded::Bit());
+	}
+	if (dropCaption && _media) {
+		setText(TextWithEntities());
+	}
+	history()->owner().requestItemViewRefresh(this);
+}
+
 void HistoryItem::updateForwardedInfo(const MTPMessageFwdHeader *fwd) {
 	const auto forwarded = Get<HistoryMessageForwarded>();
 	if (!fwd) {

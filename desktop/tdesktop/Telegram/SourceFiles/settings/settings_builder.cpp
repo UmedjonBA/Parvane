@@ -86,6 +86,13 @@ namespace {
 		u"privacy/archive_and_mute"_q,
 		u"sessions/auto-terminate"_q,
 		u"folders/show-tags"_q,
+		// Ревью UI 7 ноя, п. 25: экраны, скрытые в окне Parvane (реакции в уведомлениях — MTProto
+		// account.getReactionsNotifySettings, автоматизация чатов — бизнес Telegram, редактор/акцент темы — облачные
+		// темы Telegram)
+		u"notifications/reactions"_q,
+		u"edit/chat-automation"_q,
+		u"chat/themes-edit"_q,
+		u"chat/themes-system-accent"_q,
 	};
 	for (const auto &prefix : kPrefixes) {
 		if (id.startsWith(prefix)) {

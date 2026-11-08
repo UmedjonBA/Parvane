@@ -399,8 +399,15 @@ bool MainWindow::showSectionInExistingLayer(
 }
 
 void MainWindow::showMainMenu() {
-	// Parvane: бокового главного меню Telegram нет — его заменяют рейка разделов и «Профиль»
-	// (кнопка в шапке, свайп по списку чатов, ссылки tg://settings больше его не открывают)
+	// Parvane: бокового главного меню Telegram нет — его заменяют рейка разделов и «Профиль». Гамбургер
+	// шапки списка, кнопка полосы папок, свайп по списку и ссылки tg://settings открывают «Профиль»,
+	// как кнопка рейки (ревью 7 ноя, п. 11)
+	if (_passcodeLock || _setupEmailLock) return;
+	if (const auto controller = sessionController()) {
+		if (isHidden()) showFromTray();
+		LOG(("Parvane: главное меню → «Профиль»"));
+		controller->showSettings();
+	}
 	return;
 	if (_passcodeLock || _setupEmailLock) return;
 

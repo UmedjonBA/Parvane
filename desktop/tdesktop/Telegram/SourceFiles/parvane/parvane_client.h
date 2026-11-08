@@ -25,6 +25,7 @@ class UserData;
 class HistoryItem;
 class History;
 class DocumentData;
+class WebPageData;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
@@ -33,7 +34,20 @@ struct PollData;           // data/data_poll.h (опросы)
 
 namespace Data {
 enum class DefaultNotify : uint8_t;
+class WallPaper;
 } // namespace Data
+
+namespace Api {
+struct GlobalMediaResult; // data/data_search_controller.h
+} // namespace Api
+
+namespace Storage {
+enum class SharedMediaType : signed char;
+} // namespace Storage
+
+namespace Ui {
+class Show;
+} // namespace Ui
 
 namespace Main {
 class Session;
@@ -171,6 +185,7 @@ enum class TelegramRecoveryState {
 	Limit,       // слишком часто
 	Expired,     // ответа не было 15 минут
 	Unavailable, // Telegram к аккаунту не привязан
+	Intercepted, // S7-1: запрос этого устройства перехвачен другим входом — ответа не ждём
 };
 struct LinkingStatus {
 	bool needsLinking = false;
@@ -428,6 +443,17 @@ void SetProfileFields(const ProfileFields &fields);
 void MirrorNotifySettings(not_null<const PeerData*> peer);
 // Блокировка собеседника (локальная): список на диск и в журнал состояния.
 void MirrorBlock(not_null<PeerData*> peer, bool blocked);
+// CONTACT-1: свои контакты через вид `contacts` журнала состояния (своё имя видно только владельцу, в провод не
+// уходит). Родной бокс правки контакта, меню и профиль tdesktop зовут это вместо contacts.addContact/deleteContacts.
+struct ContactInfo {
+	QString first;
+	QString last;
+	QString note;
+};
+[[nodiscard]] std::optional<ContactInfo> ContactFor(not_null<UserData*> user);
+bool SetContact(not_null<UserData*> user, const QString &first, const QString &last, const QString &note);
+bool SetContactNote(not_null<UserData*> user, const QString &note);
+bool RemoveContact(not_null<UserData*> user);
 // T024: черновик поля ввода — в журнал личного состояния (как web). true — обработан здесь (MTProto не нужен).
 bool MirrorDraft(not_null<History*> history, const TextWithTags &text);
 // Архив и закреп чатов (локальные): адреса на диск и в журнал состояния.
@@ -440,13 +466,40 @@ void MirrorUnreadMark(not_null<History*> history, bool unread);
 void MirrorQuickReaction(const QString &emoji, std::uint64_t customId);
 void MirrorNotifyDefault(Data::DefaultNotify type);
 
+// Встроенный набор реакций (как web BUILTIN_REACTIONS: 👍 ❤️ 🔥 😂 👏 🎉 🤔): картинки — эмодзи приложения,
+// документы локальные. nullopt — сессии Parvane нет.
+[[nodiscard]] std::optional<MTPmessages_AvailableReactions> BuiltinReactions(not_null<Main::Session*> session);
+
+// «Перейти к дате»: первое сообщение чата не раньше начала дня date по локальной истории; дата позже всех
+// сообщений — последнее. nullopt — сессии Parvane нет (тогда штатный путь). Пустой чат — 0 (ShowAtTheEnd).
+[[nodiscard]] std::optional<MsgId> LocalMessageAtDate(not_null<History*> history, const QDate &date);
+
+// «Отправить без звука» (меню отправки): пока объект жив, всё, что уходит через Mirror* на главном потоке,
+// несёт `Content.silent` — у получателя уведомление без звука. Только main.
+class SilentSendScope final {
+public:
+	explicit SilentSendScope(bool silent);
+	~SilentSendScope();
+	SilentSendScope(const SilentSendScope&) = delete;
+	SilentSendScope &operator=(const SilentSendScope&) = delete;
+
+private:
+	bool _active = false;
+};
+[[nodiscard]] bool SendingSilent();
+// Входящее с `silent` (Content.silent) — уведомление без звука (window/notifications_manager.cpp).
+[[nodiscard]] bool IsSilentItem(not_null<const HistoryItem*> item);
+
 // Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес
 // получателя — из реестра по userId пира; если неизвестен/нет сессии — no-op.
 // Неблокирующая: публикация уходит на воркер-поток.
 void MirrorOutgoing(
 	PeerData *peer,
 	const TextWithEntities &text,
-	std::int64_t replyToMsgId = 0);
+	std::int64_t replyToMsgId = 0,
+	const TextWithEntities &quote = TextWithEntities(),
+	int quoteOffset = 0,
+	bool invertMedia = false);
 
 // Зеркалит исходящее МЕДИА-сообщение (Фаза 4). Грузит байты файла в cloud-шард
 // (CloudClient, чанками), затем публикует msg.chat.send с медиа-MessageContent
@@ -471,7 +524,8 @@ void MirrorTyping(PeerData *peer);
 
 // Пересылает сообщение (текст или медиа) пиру toPeer через шину. Медиа —
 // повторной ссылкой на уже загруженный в cloud блоб (без пере-загрузки).
-void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item);
+// dropNames — «Скрыть имя отправителя» (копия без «переслано от»), dropCaptions — и без подписей к медиа.
+void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item, bool dropNames = false, bool dropCaptions = false);
 
 // Зеркалит реакцию на сообщение (msg.chat.react). emoji пустой — снять свою.
 // Вызывается из HistoryItem::toggleReaction после локального обновления.
@@ -551,8 +605,12 @@ void HangupCall();
 // списке диалогов). Звать после логина и при обновлениях.
 void RefreshGroups();
 // Создаёт группу (channel=false) или канал (channel=true) с участниками и
-// синтезирует её локально.
-void CreateGroup(const QString &name, const QStringList &members, bool channel);
+// синтезирует её локально. done (на main): адрес новой группы либо пустой адрес и текст ошибки
+// (пустой — общий «не удалось»).
+void CreateGroup(const QString &name, const QStringList &members, bool channel,
+	Fn<void(const QString &groupId, const QString &error)> done = nullptr);
+// Таймер самоуничтожения новой группы (секунды; 0 — нет), как OnPeerTtlChanged.
+void SetGroupTtl(const QString &groupId, int seconds);
 
 // Админка групп: добавить/удалить участника, промоут/демоут (роль admin/member),
 // выйти самому. groupId — адрес группы. Все зовут messenger (owner/admin проверка
@@ -596,6 +654,9 @@ void JoinPublicGroup(not_null<PeerData*> peer);
 // Результат операции: ok и код ошибки сервера (forbidden|bad_request|limit|…)
 // либо текст исключения. Вызывается на main-потоке после RefreshGroups.
 using GroupOpDone = Fn<void(bool ok, const QString &error)>;
+// Выход из группы / удаление группы владельцем с исходом (ревью UI 7 ноя, п. 19): чат убирается только после успеха.
+void LeaveGroup(const QString &groupId, GroupOpDone done);
+void DeleteGroup(const QString &groupId, GroupOpDone done);
 // Роль участника по кэшу сведений (owner|admin|member|banned), "" — неизвестно.
 [[nodiscard]] QString GroupRoleOf(const QString &groupId, const QString &address);
 // Нативные права админа участника (по гранулярному набору провода; legacy —
@@ -695,7 +756,8 @@ void ListJoinRequests(const QString &groupId,
 void DecideJoinRequest(const QString &groupId, const QString &member, bool approve, GroupOpDone done);
 // UserData по адресу (синтез при отсутствии) и открытие чата группы.
 [[nodiscard]] not_null<UserData*> EnsureUser(not_null<Main::Session*> session, const QString &address);
-void OpenGroupChat(const QString &groupId);
+// title — имя для чата, которого ещё нет в списке групп (только что создан).
+void OpenGroupChat(const QString &groupId, const QString &title = QString());
 
 // ── стикеры/GIF (паритет) ────────────────────────────────────────────────────
 // Зеркалит отправку СУЩЕСТВУЮЩЕГО документа (стикер из панели / GIF из
@@ -739,14 +801,39 @@ void MirrorLiveLocationUpdate(
 	double lon,
 	int livePeriod);
 
-// Запланированные сообщения: очередь+таймер (нативная вкладка Scheduled в
-// форке без MTProto не работает; сообщение уходит в назначенное время).
+// Запланированные сообщения: локальная очередь (текст — и в журнале личного состояния), срок — проверкой раз
+// в 5 с; показываются родным разделом «Запланированные» (Data::ScheduledMessages ← ScheduledHistory).
 void ScheduleOutgoing(
 	PeerData *peer,
 	const TextWithEntities &text,
 	std::int64_t replyToMsgId,
 	qint64 dueAtUnix);
 void RestoreScheduled();
+// «Запланировать» не-текст: пока объект жив, опрос и геопозиция (Mirror* на главном потоке) уходят в очередь
+// на срок due, а не сразу. Только main.
+class ScheduleSendScope final {
+public:
+	explicit ScheduleSendScope(TimeId due);
+	~ScheduleSendScope();
+	ScheduleSendScope(const ScheduleSendScope&) = delete;
+	ScheduleSendScope &operator=(const ScheduleSendScope&) = delete;
+
+private:
+	TimeId _was = 0;
+};
+[[nodiscard]] TimeId SchedulingDue();
+// Файл/фото/видео/голосовое с options.scheduled (Api::SendConfirmedFile) — в очередь; true — запланировано
+bool ScheduleOutgoingFile(
+	not_null<Main::Session*> session,
+	const std::shared_ptr<FilePrepareResult> &file);
+// Список раздела «Запланированные» чата (nullopt — не чат Parvane); после разбора — картинки фото
+[[nodiscard]] std::optional<MTPmessages_Messages> ScheduledHistory(not_null<History*> history);
+void AfterScheduledParsed(not_null<History*> history);
+// Действия раздела: номера — «серверные» id отложенных (ScheduledMessages::lookupId). true — обработано
+bool DeleteScheduled(not_null<PeerData*> peer, const QVector<MTPint> &nums);
+bool SendScheduledNow(not_null<PeerData*> peer, const QVector<MTPint> &nums);
+// Перенос (due > 0) и правка текста/подписи отложенного
+bool EditScheduled(not_null<HistoryItem*> item, const TextWithEntities &text, TimeId due, bool textChanged);
 
 // Проголосовать. options — байты выбранных вариантов ("0","1",…); пусто —
 // отозвать голос. Локально применяется сразу, остальным уходит poll_vote.
@@ -768,6 +855,12 @@ void OnPeerTtlChanged(not_null<PeerData*> peer);
 void StartGroupCall(const QString &groupId, bool video);
 // Групповой звонок по чат-пиру (для кнопки звонка в шапке группы).
 void StartGroupCallForChat(PeerData *chat, bool video);
+// Входы Calls::Instance (все кнопки звонка tdesktop): true — звонок Parvane запущен (или отказ показан),
+// штатный MTProto-путь не нужен.
+bool StartCallForUser(not_null<UserData*> user, bool video);
+bool StartGroupCallForPeer(not_null<PeerData*> peer, std::shared_ptr<Ui::Show> show);
+// Чат — группа Parvane (не канал), в которой можно позвонить всем
+[[nodiscard]] bool CanGroupCall(not_null<PeerData*> peer);
 // Выйти из текущего группового звонка.
 void LeaveGroupCall();
 
@@ -808,5 +901,43 @@ void ClearMediaCache();
 
 // Переменная окружения dev/e2e-хука: в сборке без PARVANE_DEV всегда nullptr (NAT-11 — хуков в релизе нет)
 [[nodiscard]] const char *DevEnv(const char *name);
+
+// ── этап 4 ревью UI 7 ноя 2026 (parvane_client_rare.cpp) ──
+// п. 14: «Открепить все» — каждое закреплённое тем же путём, что одиночное (MirrorPin); true — сделано здесь.
+bool UnpinAllMessages(not_null<History*> history);
+// п. 16: вкладки медиа глобального поиска — по своему индексу общих медиа всех чатов, свежие первыми.
+[[nodiscard]] Api::GlobalMediaResult GlobalMediaLocal(
+	not_null<Main::Session*> session,
+	Storage::SharedMediaType type,
+	const QString &query);
+// п. 19: «Удалить и покинуть» — подтверждение; владелец удаляет группу; чат убирается после успеха.
+void ConfirmLeaveOrDeleteGroup(std::shared_ptr<Ui::Show> show, not_null<PeerData*> peer);
+void LeaveOrDeleteGroupNow(not_null<PeerData*> peer, Fn<void(bool ok)> done);
+// п. 21: «Настройки архива» (0 — держать, 1 — кроме чатов из папок, 2 — возвращать незаглушённые) и их применение
+// к новому входящему (History::newItemAdded).
+[[nodiscard]] int ArchiveUnarchiveMode();
+void SetArchiveUnarchiveMode(int mode);
+void MaybeUnarchiveOnIncoming(not_null<History*> history);
+// п. 23: порядок своих наборов стикеров (имена каталогов) — на устройстве; удаление набора — каталог и журнал PACK-3.
+void SaveLocalStickerOrder(not_null<Main::Session*> session);
+[[nodiscard]] QStringList LocalStickerOrder();
+bool RemoveLocalStickerPack(not_null<Main::Session*> session, uint64 setId);
+// Раздел 5: обои одного чата — на этом устройстве (MTProto messages.setChatWallPaper нет); восстановление — при
+// синтезе собеседника/группы.
+void SaveChatWallPaper(not_null<PeerData*> peer, const Data::WallPaper &paper);
+void RestoreChatWallPaper(not_null<PeerData*> peer);
+// п. 20: превью ссылки в поле ввода через шард preview (null — превью нет).
+void ResolveComposePreview(
+	not_null<Main::Session*> session,
+	const QString &url,
+	Fn<void(WebPageData*)> done);
+// A0085-2: эмодзи-пак, принятый из входящего (кэш устройства, не свой набор); «Добавить эмодзи» — копия в свои.
+[[nodiscard]] bool IsReceivedEmojiSet(uint64 setId);
+bool InstallReceivedEmojiSet(not_null<Main::Session*> session, uint64 setId);
+// п. 31: @упоминание / ссылка на ник — по каталогу identity (null — не найден).
+void ResolveAddressForLink(
+	not_null<Main::Session*> session,
+	const QString &username,
+	Fn<void(PeerData*)> done);
 
 } // namespace Parvane

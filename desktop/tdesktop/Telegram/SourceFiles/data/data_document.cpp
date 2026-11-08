@@ -1450,7 +1450,9 @@ QString DocumentData::filepath(bool check) const {
 bool DocumentData::saveFromData() {
 	// Parvane: внутренняя копия медиа — не «сохранённый» файл, а кэш; сохранение копирует её в папку загрузок
 	if (Parvane::IsInternalMediaPath(filepath(true))) {
-		return saveInternalCopy();
+		// Отмена окна «Сохранить как» — тоже исход: иначе вызывающий показывал окно второй раз (ревью UI 7 ноя)
+		auto cancelled = false;
+		return saveInternalCopy(&cancelled) || cancelled;
 	}
 	return !filepath(true).isEmpty() || saveFromDataChecked();
 }
@@ -1464,11 +1466,14 @@ bool DocumentData::saveFromDataSilent() {
 			&& saveFromDataChecked());
 }
 
-bool DocumentData::saveInternalCopy() {
+bool DocumentData::saveInternalCopy(bool *cancelled) {
 	// Путь — по настройкам («Путь для сохранения», «Спрашивать путь»), имя — исходное имя файла
 	const auto source = filepath(true);
 	const auto path = DocumentFileNameForSave(this);
 	if (path.isEmpty()) {
+		if (cancelled) {
+			*cancelled = true;
+		}
 		return false;
 	}
 	QFile::remove(path);

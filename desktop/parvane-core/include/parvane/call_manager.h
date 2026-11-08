@@ -56,6 +56,8 @@ public:
     bool dismissIncoming(const std::string &callId);
     // Заглушить/включить свой микрофон в текущем звонке.
     void setMuted(bool muted);
+    // Выключить/включить свою камеру в текущем звонке (кнопка панели звонка; собеседнику — sendMediaState).
+    void setVideoEnabled(bool enabled);
     // spec 024: сообщить собеседнику, что свой микрофон/камера выключены.
     void sendMediaState(bool audioMuted, bool videoMuted);
     // id текущего звонка ("" — звонка нет).

@@ -817,6 +817,16 @@ void StickerSetBox::updateButtons() {
 	} else if (_inner->loaded() && _inner->parvaneLocal()) {
 		// Parvane: свой набор устройства — просмотр и отправка стикера;
 		// ссылки t.me/addstickers, архива и установки через MTProto нет.
+		// A0085-2: принятый из сообщения эмодзи-пак — только по согласию: «Добавить эмодзи»
+		if (_inner->setType() == Data::StickersType::Emoji
+			&& Parvane::IsReceivedEmojiSet(_inner->setId())) {
+			addButton(tr::lng_stickers_add_emoji(), [=] {
+				if (Parvane::InstallReceivedEmojiSet(_session, _inner->setId())) {
+					showToast(tr::lng_parvane_emoji_pack_added(tr::now));
+				}
+				closeBox();
+			});
+		}
 		addButton(tr::lng_close(), [=] { closeBox(); });
 	} else if (_inner->loaded()) {
 		const auto type = _inner->setType();

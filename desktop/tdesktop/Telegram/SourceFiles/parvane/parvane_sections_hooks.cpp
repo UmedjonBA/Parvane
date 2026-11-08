@@ -1,7 +1,7 @@
 // Parvane fork: хуки сценариев для разделов (spec 029, T066) — `verify_*.sh` и пары с web проверяют «План»,
 // «Знания» и «Облако» без UI: действия по таймеру и маркеры снимков в журнале.
 //
-//   PARVANE_AUTOPLANNER=task:<название>@<сек>[,event:<название>|<день>|<начало>|<конец>@<сек>]
+//   PARVANE_AUTOPLANNER=task:<название>@<сек>[,event:<название>|<день>|<начало>|<конец>[|<напомнить, мин>]@<сек>]
 //   PARVANE_AUTONOTES=note:<заголовок>|<текст>@<сек> (текст `file=<путь>` — из файла: в нём можно `,` и `@`)
 //   PARVANE_AUTOCLOUD=folder:<имя>@<сек>
 //
@@ -112,6 +112,9 @@ void RunPlannerStep(const HookStep &step) {
 				event.day = parts[1].toStdString();
 				event.start = parts[2].toStdString();
 				event.end = parts[3].toStdString();
+				if (parts.size() > 4 && !parts[4].isEmpty()) {
+					event.remind = parts[4].toInt(); // «Напомнить» за N минут (напоминания, ревью 7 ноя п. 12)
+				}
 				state.events.push_back(std::move(event));
 			});
 			LOG(("Parvane: autoplanner event %1 → отправлено").arg(parts[0]));

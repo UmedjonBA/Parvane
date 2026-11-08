@@ -2298,9 +2298,10 @@ std::vector<Suggestions::Key> Suggestions::TabKeysFor(
 		not_null<Window::SessionController*> controller) {
 	// Parvane (spec 030): без «Приложений» (ботов и мини-приложений нет) и «Постов» (поиска по публичным
 	// постам сервер не даёт) — вкладки открывали пустые экраны Telegram
+	// Ревью UI 7 ноя, п. 36: без «Каналов» — это каталог рекомендаций Telegram (channels.getChannelRecommendations)
+	// и список ChannelData, а каналы Parvane — ChatData; публичные группы ищутся в «Чатах»
 	auto result = std::vector<Key>{
 		{ Tab::Chats },
-		{ Tab::Channels },
 		{ Tab::Media, MediaType::Photo },
 		{ Tab::Media, MediaType::Video },
 		{ Tab::Downloads },

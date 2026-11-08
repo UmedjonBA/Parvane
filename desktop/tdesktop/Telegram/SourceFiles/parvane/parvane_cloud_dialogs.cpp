@@ -5,6 +5,10 @@
 #include "parvane/parvane_cloud.h"
 #include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_cloud_internal.h"
+#include "data/data_photo.h"
+#include "data/data_photo_media.h"
+#include "parvane/parvane_local_files.h"
+#include <QtCore/QBuffer>
 
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_mascot.h"
@@ -1206,6 +1210,28 @@ void SendToChat(not_null<Window::SessionController*> controller, std::vector<Ent
 // ── связь с чатами (`CloudChatDialogs`) ─────────────────────────────────────
 
 namespace Parvane {
+
+QString PhotoToTempFile(not_null<PhotoData*> photo) {
+	const auto media = photo->activeMediaView();
+	auto bytes = media ? media->imageBytes(Data::PhotoSize::Large) : QByteArray();
+	if (bytes.isEmpty() && media) {
+		if (const auto image = media->image(Data::PhotoSize::Large)) {
+			auto buffer = QBuffer(&bytes);
+			buffer.open(QIODevice::WriteOnly);
+			image->original().save(&buffer, "JPG", 92);
+		}
+	}
+	if (bytes.isEmpty()) {
+		return QString();
+	}
+	const auto dir = MakeTempDir(u"cloud"_q);
+	if (dir.isEmpty()) {
+		return QString();
+	}
+	const auto path = dir + u"/photo_"_q
+		+ QDateTime::fromSecsSinceEpoch(photo->date()).toString(u"yyyy-MM-dd_HH-mm-ss"_q) + u".jpg"_q;
+	return WriteTempFile(path, bytes) ? path : QString();
+}
 
 void ShowCloudSaveDialog(not_null<Window::SessionController*> controller, const QStringList &paths) {
 	using namespace Cloud;

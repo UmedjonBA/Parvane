@@ -1063,6 +1063,11 @@ void TopBar::setupUserpicButton(
 			return false;
 		}
 		if (const auto user = peer->asUser()) {
+			// Parvane (ревью UI 7 ноя, п. 29): «Установить фото для…» / «Предложить фото» — MTProto
+			// (photos.uploadContactProfilePhoto); фото пользователя задаёт только он сам
+			if (const auto parvane = true) {
+				return false;
+			}
 			return user->isContact()
 				&& !user->isSelf()
 				&& !user->isInaccessible()

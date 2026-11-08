@@ -487,6 +487,13 @@ TextWithEntities Session::createInternalLink(
 
 TextWithEntities Session::createInternalLinkFull(
 		TextWithEntities query) const {
+	// Parvane (ревью UI 7 ноя, п. 30): ссылка на профиль по адресу user@server — своя (`https://<сервер>/#@ник`),
+	// не t.me
+	if (query.text.contains('@') && !query.text.contains('/')) {
+		if (const auto link = Parvane::ProfileLink(query.text); !link.isEmpty()) {
+			return TextWithEntities::Simple(link);
+		}
+	}
 	return TextWithEntities::Simple(ValidatedInternalLinksDomain(this))
 		.append(std::move(query));
 }

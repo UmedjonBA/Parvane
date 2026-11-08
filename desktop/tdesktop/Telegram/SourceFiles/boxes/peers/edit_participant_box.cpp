@@ -598,7 +598,8 @@ void EditAdminBox::prepare() {
 		changes
 	));
 
-	const auto hasRank = canSave() && (chat || channel->isMegagroup());
+	// Parvane (п. 32): поля метки в окне админа нет — метки протокол не хранит
+	const auto hasRank = false && canSave() && (chat || channel->isMegagroup());
 
 	{
 		const auto aboutAddAdminsInner = inner->add(
@@ -820,6 +821,10 @@ void EditAdminBox::refreshButtons() {
 }
 
 bool EditAdminBox::canTransferOwnership() const {
+	// Parvane (ревью UI 7 ноя, п. 33): передачи владельца в журнале группы v2 нет (и пароля 2FA Telegram)
+	if (const auto parvane = true) {
+		return false;
+	}
 	if (user()->isInaccessible() || user()->isBot() || user()->isSelf()) {
 		return false;
 	} else if (const auto chat = peer()->asChat()) {

@@ -973,6 +973,9 @@ void Histories::deleteMessages(const MessageIdsList &ids, bool revoke) {
 		history->owner().histories().deleteMessages(history, ids, revoke);
 	}
 	for (const auto &[peer, ids] : scheduledIdsByPeer) {
+		if (Parvane::DeleteScheduled(peer, ids)) {
+			continue; // Parvane: отложенные — локальная очередь клиента
+		}
 		peer->session().api().request(MTPmessages_DeleteScheduledMessages(
 			peer->input(),
 			MTP_vector<MTPint>(ids)

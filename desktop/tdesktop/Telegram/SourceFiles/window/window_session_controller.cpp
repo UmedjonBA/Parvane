@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_session_controller.h"
+#include "boxes/peer_list_controllers.h" // PrepareContactsBox
 
 #include "parvane/parvane_client.h" // Parvane: локальные результаты опроса
 
@@ -536,6 +537,24 @@ void SessionNavigation::resolveUsername(
 			done(peer);
 			return;
 		}
+	}
+	// Parvane (ревью UI 7 ноя, п. 31): адрес — в каталоге identity; не нашёлся — «не найден», а не тишина
+	if (const auto parvane = true) {
+		const auto weak = base::make_weak(this);
+		Parvane::ResolveAddressForLink(_session, username, [=](PeerData *peer) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			} else if (peer) {
+				done(not_null(peer));
+			} else {
+				strong->parentController()->show(
+					Ui::MakeInformBox(
+						tr::lng_username_not_found(tr::now, lt_user, username)),
+					Ui::LayerOption::CloseOther);
+			}
+		});
+		return;
 	}
 	_api.request(base::take(_resolveRequestId)).cancel();
 	using Flag = MTPcontacts_ResolveUsername::Flag;
@@ -3210,7 +3229,10 @@ void SessionController::setActiveChatsFilter(
 }
 
 void SessionController::showAddContact() {
-	_window->show(Box<AddContactBox>(&session()));
+	// Parvane: контактов по телефону нет (собеседник становится контактом при переписке) — «Добавить контакт»
+	// открывает поиск людей по нику (тот же бокс «Контакты», его поиск идёт в каталог identity)
+	LOG(("Parvane: «Добавить контакт» → поиск по нику"));
+	_window->show(PrepareContactsBox(this));
 }
 
 void SessionController::showNewGroup() {

@@ -15,6 +15,7 @@
 #include <string>
 
 class QWidget;
+class PhotoData;
 
 namespace Data {
 class Thread;
@@ -30,6 +31,8 @@ namespace Parvane {
 // загрузить туда локальные файлы. Отличие от web: файл сообщения не копируется на сервере (`cloud.blob.copy` из
 // медиа чатов), а загружается заново из локального файла — вызывающий передаёт пути уже скачанных вложений.
 void ShowCloudSaveDialog(not_null<Window::SessionController*> controller, const QStringList &paths);
+// Фото сообщения → временный JPEG в tdata/parvane-tmp/cloud (для «Сохранить в облако»); "" — картинка не загружена.
+[[nodiscard]] QString PhotoToTempFile(not_null<PhotoData*> photo);
 
 // «Из облака» (web `requestCloudAttach`): выбрать файлы личного диска и отправить их в чат `thread` штатной
 // отправкой файлов (скачиваются во временный каталог и уходят через `MainWidget::sendPaths` — без копии блоба

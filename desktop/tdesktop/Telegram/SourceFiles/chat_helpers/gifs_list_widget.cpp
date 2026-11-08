@@ -148,7 +148,7 @@ GifsListWidget::GifsListWidget(
 	}, lifetime());
 
 	_mosaic.setPadding(st::gifsPadding
-		+ QMargins(-st::emojiPanRadius, _search->height(), 0, 0));
+		+ QMargins(-st::emojiPanRadius, _search ? _search->height() : 0, 0, 0));
 	_mosaic.setRightSkip(st::inlineResultsSkip);
 }
 
@@ -179,12 +179,15 @@ object_ptr<TabbedSelector::InnerFooter> GifsListWidget::createFooter() {
 	_footer = result;
 	_chosenSetId = Data::Stickers::RecentSetId;
 
-	GifSectionsValue(
-		&session()
-	) | rpl::on_next([=](std::vector<GifSection> &&list) {
-		_sections = std::move(list);
-		refreshIcons();
-	}, _footer->lifetime());
+	// Parvane: категории — эмодзи-поиск того же inline-бота; без него — только «Сохранённые»
+	if ((false)) {
+		GifSectionsValue(
+			&session()
+		) | rpl::on_next([=](std::vector<GifSection> &&list) {
+			_sections = std::move(list);
+			refreshIcons();
+		}, _footer->lifetime());
+	}
 
 	_footer->setChosen(
 	) | rpl::on_next([=](uint64 setId) {
@@ -277,7 +280,7 @@ GifsListWidget::~GifsListWidget() {
 }
 
 void GifsListWidget::cancelGifsSearch() {
-	_search->setLoading(false);
+	if (_search) _search->setLoading(false);
 	if (_inlineRequestId) {
 		_api.request(_inlineRequestId).cancel();
 		_inlineRequestId = 0;
@@ -289,7 +292,7 @@ void GifsListWidget::cancelGifsSearch() {
 }
 
 void GifsListWidget::inlineResultsDone(const MTPmessages_BotResults &result) {
-	_search->setLoading(false);
+	if (_search) _search->setLoading(false);
 	_inlineRequestId = 0;
 
 	auto it = _inlineCache.find(_inlineQuery);
@@ -852,6 +855,12 @@ bool GifsListWidget::refreshInlineRows(int32 *added) {
 }
 
 void GifsListWidget::setupSearch() {
+	// Parvane: поиск GIF — inline-бот Telegram (@gif), которого нет; панель — «Сохранённые GIF» и свои
+	// загруженные (GIF-1), без поля поиска и категорий. В форке всегда Parvane
+	constexpr auto kTelegramGifSearch = false;
+	if (!kTelegramGifSearch) {
+		return;
+	}
 	const auto session = &_show->session();
 	_search = MakeSearch(this, st(), [=](std::vector<QString> &&query) {
 		const auto accumulated = ranges::accumulate(query, QString(), [](
@@ -877,13 +886,13 @@ int32 GifsListWidget::showInlineRows(bool newResults) {
 }
 
 void GifsListWidget::searchForGifs(const QString &query) {
-	if (query.isEmpty()) {
+	if (query.isEmpty() || !_search) {
 		cancelGifsSearch();
 		return;
 	}
 
 	if (_inlineQuery != query) {
-		_search->setLoading(false);
+		if (_search) _search->setLoading(false);
 		if (_inlineRequestId) {
 			_api.request(_inlineRequestId).cancel();
 			_inlineRequestId = 0;
@@ -932,7 +941,7 @@ void GifsListWidget::sendInlineRequest() {
 
 	if (!_searchBot) {
 		// Wait for the bot being resolved.
-		_search->setLoading(true);
+		if (_search) _search->setLoading(true);
 		_inlineRequestTimer.start(kSearchRequestDelay);
 		return;
 	}
@@ -944,12 +953,12 @@ void GifsListWidget::sendInlineRequest() {
 	if (it != _inlineCache.cend()) {
 		nextOffset = it->second->nextOffset;
 		if (nextOffset.isEmpty()) {
-			_search->setLoading(false);
+			if (_search) _search->setLoading(false);
 			return;
 		}
 	}
 
-	_search->setLoading(true);
+	if (_search) _search->setLoading(true);
 	_inlineRequestId = _api.request(MTPmessages_GetInlineBotResults(
 		MTP_flags(0),
 		_searchBot->inputUser(),
@@ -961,7 +970,7 @@ void GifsListWidget::sendInlineRequest() {
 		inlineResultsDone(result);
 	}).fail([this] {
 		// show error?
-		_search->setLoading(false);
+		if (_search) _search->setLoading(false);
 		_inlineRequestId = 0;
 	}).handleAllErrors().send();
 }

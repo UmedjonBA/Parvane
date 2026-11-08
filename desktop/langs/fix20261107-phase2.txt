@@ -1,0 +1,31 @@
+lng_parvane_group_create_failed
+Couldn't create the group. Check your connection and try again.
+Не удалось создать группу. Проверьте связь и попробуйте ещё раз.
+
+lng_parvane_group_call
+Group call
+Групповой звонок
+
+lng_parvane_group_call_unavailable
+A group call is not available in this chat
+В этом чате групповой звонок недоступен
+
+lng_parvane_contacts_search_nick
+Search by nickname
+Поиск по нику
+
+lng_parvane_reminder_title
+Reminder: {title}
+Напоминание: {title}
+
+lng_parvane_reminder_starts
+Starts at {time}
+Начало в {time}
+
+lng_parvane_media_downloading
+Downloading {name}…
+Скачивается {name}…
+
+lng_parvane_media_download_failed
+Couldn't download {name}. Tap the file to try again.
+Не удалось скачать {name}. Нажмите на файл, чтобы повторить.

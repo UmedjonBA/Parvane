@@ -93,14 +93,18 @@ void MessagesSearch::searchMessages(Request request) {
 	// Parvane: локальный поиск по загруженным сообщениям диалога (MTProto
 	// messages.search заглушён; у нас всё подтянуто полным ресинком). Ищем
 	// подстроку в тексте, свежие — первыми.
-	if (!_request.query.trimmed().isEmpty()) {
+	// Ревью UI 7 ноя, п. 17: и по автору («От пользователя») без текста.
+	if (!_request.query.trimmed().isEmpty() || _request.from) {
 		const auto q = _request.query.trimmed();
+		const auto from = _request.from;
 		auto ids = MessageIdsList();
 		for (const auto &block : _history->blocks) {
 			for (const auto &view : block->messages) {
 				const auto item = view->data();
-				if (item->originalText().text.contains(
-						q, Qt::CaseInsensitive)) {
+				if (!item->isService()
+					&& (q.isEmpty() || item->originalText().text.contains(
+						q, Qt::CaseInsensitive))
+					&& (!from || item->from() == from)) {
 					ids.push_back(item->fullId());
 				}
 			}

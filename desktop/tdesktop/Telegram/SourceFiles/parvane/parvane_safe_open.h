@@ -8,6 +8,7 @@
 // `markdown::linkNeedsConfirmation`) с тестами.
 #pragma once
 
+#include <parvane/client_safety.h>
 #include <parvane/sections/cloud_model.h>
 
 #include <QtCore/QBuffer>
@@ -34,14 +35,16 @@ inline constexpr int kDecodeAllocationLimitMb = 192;
 	if (!buffer.open(QIODevice::ReadOnly)) {
 		return QImage();
 	}
-	auto reader = QImageReader(&buffer);
-	// Байты чужие: разбираем только форматы из белого списка (не все установленные плагины Qt — TGA, TIFF, XPM…)
-	// и только с размером в заголовке, чтобы предел площади действовал всегда
-	const auto format = reader.format().toLower();
-	if (format != "jpeg" && format != "jpg" && format != "png" && format != "gif"
-		&& format != "webp" && format != "bmp") {
+	// Байты чужие: формат — по сигнатуре (C7-8, ревью 7 ноя), декодер выбирается явно — плагины Qt (kimageformats:
+	// avif, jxl, heif, TGA, TIFF…) содержимое даже не пробуют; только с размером в заголовке, чтобы предел площади
+	// действовал всегда
+	const auto format = parvane::clientsafety::sniffFormat(
+		std::string_view(bytes.constData(), size_t(bytes.size())));
+	if (!parvane::clientsafety::isDecodableImage(format)) {
 		return QImage();
 	}
+	auto reader = QImageReader(&buffer, QByteArray::fromStdString(format));
+	reader.setDecideFormatFromContent(false);
 	reader.setAllocationLimit(kDecodeAllocationLimitMb);
 	reader.setAutoTransform(true);
 	const auto size = reader.size();
@@ -56,6 +59,16 @@ inline constexpr int kDecodeAllocationLimitMb = 192;
 		image = image.scaled(maxSide, maxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 	}
 	return image;
+}
+
+// C7-8: чужой стикер/GIF на диске — только с сигнатурой своего вида (стикер: png/webp/tgs/webm; GIF: gif/mp4/webm);
+// иначе tdesktop отдал бы файл декодеру по содержимому (любому плагину Qt).
+[[nodiscard]] inline bool ForeignMediaFormatAllowed(const QByteArray &head, bool sticker) {
+	const auto format = parvane::clientsafety::sniffFormat(
+		std::string_view(head.constData(), size_t(head.size())));
+	return sticker
+		? parvane::clientsafety::isAllowedStickerFormat(format)
+		: parvane::clientsafety::isAllowedGifFormat(format);
 }
 
 // Имя файла на диске из чужого имени (без `/`, управляющих знаков, ведущих точек; не длиннее 200 байт)

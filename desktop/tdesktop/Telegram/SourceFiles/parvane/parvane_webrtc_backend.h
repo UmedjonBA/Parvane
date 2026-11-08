@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <parvane/call_session.h> // parvane::MediaBackend
 
@@ -14,5 +15,9 @@ namespace Parvane {
 // фабрики/потоков/устройства при первом вызове. nullptr при фатальной ошибке
 // инициализации webrtc (тогда вызывающий откатывается на заглушку).
 [[nodiscard]] std::unique_ptr<parvane::MediaBackend> MakeWebrtcBackend();
+
+// Устройства звонка из «Звук и камера» (ревью UI 7 ноя, п. 22): динамики, микрофон (→ PulseAudio) и камера.
+// Звать на главном потоке перед звонком — значения берутся из Core::Settings.
+void ApplyCallDeviceSettings();
 
 } // namespace Parvane

@@ -402,18 +402,31 @@ HistorySync::HistorySync(HistorySyncConfig cfg) : cfg_(std::move(cfg)) {
                 pendingMarks_[it.key()] = it.value();
             }
         }
+        // Запечатанные, но не отправленные тела — повторяются как есть (номера цепочки писателя без пропусков)
+        if (pending.contains("bodies") && pending["bodies"].is_array()) {
+            for (const auto &b : pending["bodies"]) {
+                if (b.is_string() && !b.get<std::string>().empty()) bodies_.push_back(b.get<std::string>());
+            }
+        }
     }
-    const auto t = now();
     // Входящее, не записанное до остановки: снова в очередь (после первого sync — та же проверка «уже в журнале»)
     if (pending.is_object() && pending.contains("incoming") && pending["incoming"].is_array()) {
         for (const auto &x : pending["incoming"]) {
             if (x.is_object() && x.contains("op") && !str(x, "key").empty()) {
-                incoming_.push_back(Incoming{x["op"], str(x, "key"), t + cfg_.incomingMinMs});
+                incoming_.push_back(Incoming{x["op"], str(x, "key"), 0});
             }
         }
     }
-    if (!pendingOwn_.empty()) ownDue_ = t;
-    if (!pendingMarks_.empty()) marksDue_ = t;
+    // Не записанное до остановки — новой пачкой (не в момент запуска)
+    if (!pendingOwn_.empty() || !pendingMarks_.empty() || !incoming_.empty()) {
+        const auto due = batchDueLocked();
+        for (auto &x : incoming_) x.due = due;
+    }
+}
+
+std::int64_t HistorySync::batchDueLocked() {
+    if (!batchDue_) batchDue_ = now() + randomIn(cfg_.batchMinMs, cfg_.batchMaxMs);
+    return batchDue_;
 }
 
 HistorySync::~HistorySync() {
@@ -566,10 +579,10 @@ void HistorySync::savePendingLocked() {
     if (!cfg_.store) return;
     json marks = json::object();
     for (const auto &[k, m] : pendingMarks_) marks[k] = m;
-    // Входящее ждёт записи 1–5 с: на диске, чтобы остановка или падение процесса в этом окне его не теряли
+    // Входящее ждёт пачки: на диске, чтобы остановка или падение процесса в этом окне его не теряли
     json incoming = json::array();
     for (const auto &x : incoming_) incoming.push_back(json{{"op", x.op}, {"key", x.key}});
-    cfg_.store->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}, {"incoming", incoming}});
+    cfg_.store->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}, {"incoming", incoming}, {"bodies", bodies_}});
 }
 
 json HistorySync::applyToStore(const json &op, bool *changed) {
@@ -664,12 +677,13 @@ json HistorySync::record(const json &op, bool own, const std::string &requiredAu
     const auto key = opKey(op);
     {
         std::lock_guard<std::mutex> lk(mu_);
+        // S7-3: своё и входящее — одной пачкой (по времени записи сервер не отличит автора от получателя)
         if (own) {
             pendingOwn_.push_back(op);
-            if (!ownDue_) ownDue_ = now() + cfg_.ownDelayMs;
+            batchDueLocked();
             savePendingLocked();
         } else if (!key.empty() && !seen_.count(key)) {
-            incoming_.push_back(Incoming{op, key, now() + randomIn(cfg_.incomingMinMs, cfg_.incomingMaxMs)});
+            incoming_.push_back(Incoming{op, key, batchDueLocked()});
             savePendingLocked();
         }
     }
@@ -692,7 +706,7 @@ std::vector<json> HistorySync::advanceMark(const json &mark, bool own) {
     if (own && merged) {
         std::lock_guard<std::mutex> lk(mu_);
         pendingMarks_[key] = *merged;
-        if (!marksDue_) marksDue_ = now() + cfg_.markDelayMs;
+        batchDueLocked();
         savePendingLocked();
     }
     // Входящие, которые этот сдвиг сделал прочитанными (квитанции собеседникам)
@@ -818,15 +832,23 @@ void HistorySync::deliver(std::vector<json> &rows, std::map<std::string, json> &
     marks.clear();
 }
 
-std::vector<json> HistorySync::getRecordsLocked(const std::vector<std::uint64_t> &seqs, json *recordsOut) {
+std::vector<json> HistorySync::getRecordsLocked(const std::vector<std::uint64_t> &seqs, json *recordsOut, const json *expect,
+                                                bool *mismatched) {
     std::vector<json> ops;
     if (recordsOut) *recordsOut = json::array();
+    if (mismatched) *mismatched = false;
     std::vector<std::uint64_t> rest = seqs;
     while (!rest.empty() && !stop_) {
         const std::vector<std::uint64_t> batch(rest.begin(), rest.begin() + std::min(rest.size(), std::size_t(256)));
         const auto body = engine("getRequest", json{{"seqs", batch}});
         const auto resp = req("history.get", v2::fromBase64(body.get<std::string>()));
-        const auto r = engine("ingest", json{{"resp", v2::toBase64(resp)}});
+        json args{{"resp", v2::toBase64(resp)}};
+        if (expect && expect->is_object() && !expect->empty()) args["expect"] = *expect;
+        const auto r = engine("ingest", args);
+        if (r.value("mismatched", 0) > 0) {
+            if (mismatched) *mismatched = true;
+            return {};
+        }
         std::set<std::uint64_t> got;
         const auto &allOps = field(r, "ops");
         for (const auto &rec : field(r, "records")) {
@@ -857,7 +879,8 @@ std::vector<json> HistorySync::getRecordsLocked(const std::vector<std::uint64_t>
     return ops;
 }
 
-bool HistorySync::appendLocked(const std::vector<json> &ops, bool chunk, std::vector<std::uint64_t> *seqs) {
+bool HistorySync::appendLocked(const std::vector<json> &ops, bool chunk, std::vector<std::uint64_t> *seqs,
+                               std::vector<std::string> *opIds) {
     if (ops.empty()) return true;
     const auto sealed = engine("seal", json{{"ops", ops}, {"chunk", chunk}, {"tsMs", now()}});
     for (const auto &rec : sealed) {
@@ -865,6 +888,7 @@ bool HistorySync::appendLocked(const std::vector<json> &ops, bool chunk, std::ve
             const auto resp = req("history.append", v2::fromBase64(str(rec, "body")));
             const auto r = engine("ingestAppend", json{{"resp", v2::toBase64(resp)}});
             if (seqs) seqs->push_back(u64(r["seq"]));
+            if (opIds) opIds->push_back(str(rec, "opId"));
         } catch (const std::exception &e) {
             if (isCode(e, "ERROR_CODE_DUPLICATE") && !chunk) continue; // запись уже есть
             throw;
@@ -901,9 +925,9 @@ bool HistorySync::migrateLocked() {
     }
     std::lock_guard<std::mutex> lk(mu_);
     for (const auto &[k, m] : marks) pendingMarks_[k] = m;
-    if (!marks.empty()) marksDue_ = now();
     for (const auto &[id, st] : states) pendingOwn_.push_back(json{{"state", st}});
-    if (!states.empty()) ownDue_ = now();
+    // Перенос — один раз при первом запуске, к сообщениям не привязан: пишется сразу (flushLocked без срока)
+    if (!marks.empty() || !states.empty()) batchDueLocked();
     meta_["migrated"] = true;
     savePendingLocked();
     saveMetaLocked();
@@ -920,6 +944,24 @@ bool HistorySync::loadCheckpointLocked(const json &cp, bool isJoin) {
         for (const auto &op : getRecordsLocked({summarySeq}, &summaryRecs)) {
             if (op.contains("summary")) summary = op["summary"];
         }
+    }
+    // Сводки нет — курсор за точку не двигаем: иначе сервер, не отдав её, заставил бы пропустить всё до неё (S7-4)
+    if (!summary.is_object()) {
+        log("сводка точки " + std::to_string(cpId) + " не прочитана — точка не применяется, повтор позже");
+        return false;
+    }
+    // S7-4: сводка называет свою позицию и id точки — старую сводку за новую точку сервер не выдаст
+    json chains;
+    try {
+        json args{{"checkpoint", cp}, {"summary", summary}};
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (meta_.contains("chains") && meta_["chains"].is_object()) args["chains"] = meta_["chains"];
+        }
+        chains = engine("historyVerifyCheckpoint", args)["chains"];
+    } catch (const std::exception &e) {
+        log("точка " + std::to_string(cpId) + " не сходится со своей сводкой — журнал не применяется: " + e.what());
+        return false;
     }
     std::int64_t since = 0, lastFull = 0;
     std::uint64_t cursor = 0;
@@ -960,7 +1002,11 @@ bool HistorySync::loadCheckpointLocked(const json &cp, bool isJoin) {
         return monthOfKey(str(a, "key")) > monthOfKey(str(b, "key"));
     });
     std::vector<std::uint64_t> seqs;
-    for (const auto &r : refs) seqs.push_back(u64(r["seq"]));
+    json expect = json::object(); // номер → op_id сегмента по сводке (S7-4)
+    for (const auto &r : refs) {
+        seqs.push_back(u64(r["seq"]));
+        if (!str(r, "op_id").empty()) expect[std::to_string(u64(r["seq"]))] = str(r, "op_id");
+    }
     for (const auto &s : field(cp, "chunkSeqs").is_array() ? field(cp, "chunkSeqs") : json::array()) {
         const auto v = u64(s);
         if (v && v != summarySeq && std::find(seqs.begin(), seqs.end(), v) == seqs.end()) seqs.push_back(v);
@@ -969,7 +1015,12 @@ bool HistorySync::loadCheckpointLocked(const json &cp, bool isJoin) {
     for (std::size_t i = 0; i < seqs.size() && !stop_; i += kGetBatch) {
         const std::vector<std::uint64_t> batch(seqs.begin() + i, seqs.begin() + std::min(seqs.size(), i + kGetBatch));
         json recs;
-        const auto ops = getRecordsLocked(batch, &recs);
+        bool mismatched = false;
+        const auto ops = getRecordsLocked(batch, &recs, &expect, &mismatched);
+        if (mismatched) {
+            log("сервер подменил сегмент точки " + std::to_string(cpId) + " — журнал не применяется");
+            return false;
+        }
         for (const auto &rec : recs) {
             if (rec.value("stale", false)) staleSeqs.insert(u64(rec["seq"]));
         }
@@ -984,9 +1035,10 @@ bool HistorySync::loadCheckpointLocked(const json &cp, bool isJoin) {
         for (const auto &r : refs) {
             const auto seq = u64(r["seq"]);
             segments[str(r, "key")] = json{{"digest", str(r, "digest")}, {"seq", seq},
-                                           {"stale", summaryStale || staleSeqs.count(seq) > 0}};
+                                           {"stale", summaryStale || staleSeqs.count(seq) > 0}, {"opId", str(r, "op_id")}};
         }
         meta_["segments"] = segments;
+        if (chains.is_object()) meta_["chains"] = chains;
         meta_["segmentsOf"] = cpId;
         meta_["checkpoint"] = cp;
         meta_["cursor"] = std::max(meta_.value("cursor", std::uint64_t(0)), upto);
@@ -1045,7 +1097,7 @@ bool HistorySync::pullLocked() {
         }
         const auto body = engine("syncRequest", json{{"afterSeq", cursor}, {"skipChunks", true}});
         const auto resp = req("history.sync", v2::fromBase64(body.get<std::string>()));
-        const auto r = engine("ingest", json{{"resp", v2::toBase64(resp)}});
+        auto r = ingestChained(resp);
         const auto head = u64(field(r, "headSeq"));
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -1063,6 +1115,10 @@ bool HistorySync::pullLocked() {
                 ok = false;
                 break;
             }
+            r = ingestChained(resp); // записи после точки — по книге цепочек точки
+        }
+        if (const auto gaps = r.value("gaps", std::uint64_t(0)); gaps > 0) {
+            log("сервер не отдал " + std::to_string(gaps) + " записей журнала (пропуск в цепочке писателя)");
         }
         if (r.value("rejected", 0) > 0) {
             std::lock_guard<std::mutex> lk(mu_);
@@ -1089,6 +1145,7 @@ bool HistorySync::pullLocked() {
             }
             meta_["cursor"] = c;
             meta_["rejectStreak"] = 0;
+            if (r.contains("chains") && r["chains"].is_object()) meta_["chains"] = r["chains"];
             saveMetaLocked();
             if (!more) break;
         }
@@ -1102,28 +1159,87 @@ bool HistorySync::pullLocked() {
     return ok;
 }
 
+json HistorySync::ingestChained(const std::string &resp) {
+    json args{{"resp", v2::toBase64(resp)}};
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (meta_.contains("chains") && meta_["chains"].is_object()) {
+            args["chains"] = meta_["chains"];
+        } else {
+            // Книги ещё нет: журнал виден с начала (курсор 0 без точки) — полная, иначе точка отсчёта
+            args["chainsComplete"] = meta_.value("cursor", std::uint64_t(0)) == 0 && !meta_.contains("checkpoint");
+        }
+    }
+    return engine("ingest", args);
+}
+
+bool HistorySync::sendBodiesLocked() {
+    for (;;) {
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (bodies_.empty()) return true;
+            body = bodies_.front();
+        }
+        try {
+            const auto resp = req("history.append", v2::fromBase64(body));
+            engine("ingestAppend", json{{"resp", v2::toBase64(resp)}});
+        } catch (const std::exception &e) {
+            if (isCode(e, "ERROR_CODE_DUPLICATE")) {
+                // запись с этим op_id уже есть (повтор после обрыва)
+            } else if (isCode(e, "ERROR_CODE_INVALID")) {
+                log("запись отвергнута сервером (INVALID) и снята с очереди");
+            } else {
+                log(std::string("запись не ушла: ") + e.what());
+                std::lock_guard<std::mutex> lk(mu_);
+                bodiesRetryAt_ = now() + cfg_.retryMs;
+                if (isCode(e, "ERROR_CODE_LIMIT")) {
+                    meta_["forceCheckpoint"] = true;
+                    nextCheckpoint_ = now();
+                }
+                return false;
+            }
+        }
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!bodies_.empty() && bodies_.front() == body) bodies_.erase(bodies_.begin());
+        bodiesRetryAt_ = 0;
+        savePendingLocked();
+    }
+}
+
 bool HistorySync::flushLocked(bool includeIncoming, bool dueOnly) {
+    // Сначала — тела, запечатанные раньше (повтор как есть)
+    {
+        bool retryLater = false;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            retryLater = dueOnly && bodiesRetryAt_ && now() < bodiesRetryAt_;
+        }
+        if (retryLater || !sendBodiesLocked()) return false;
+    }
     const auto t = now();
     std::vector<json> ops;
     std::size_t ownCount = 0;
     std::map<std::string, json> marksSent;
+    bool due = false;
     {
         std::lock_guard<std::mutex> lk(mu_);
-        if (!dueOnly || (ownDue_ && ownDue_ <= t)) {
+        // S7-3: всё в очереди — одной пачкой в срок (без отдельных сроков своего, маркеров и входящего)
+        due = !dueOnly || (batchDue_ && batchDue_ <= t);
+        if (due) {
             ownCount = pendingOwn_.size();
             ops.insert(ops.end(), pendingOwn_.begin(), pendingOwn_.end());
-        }
-        if (!dueOnly || (marksDue_ && marksDue_ <= t)) {
             marksSent = pendingMarks_;
             for (const auto &[k, m] : marksSent) ops.push_back(json{{"read", m}});
         }
     }
+    if (!due) return true;
     std::vector<Incoming> incoming;
     if (includeIncoming) {
         bool any = false;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            for (const auto &x : incoming_) any = any || !dueOnly || x.due <= t;
+            any = !incoming_.empty();
         }
         if (any) {
             // Перед записью входящего — дотянуть журнал: другое своё устройство могло уже записать
@@ -1133,52 +1249,52 @@ bool HistorySync::flushLocked(bool includeIncoming, bool dueOnly) {
                 log(std::string("sync перед записью входящего: ") + e.what());
             }
             std::lock_guard<std::mutex> lk(mu_);
-            std::vector<Incoming> keep;
             for (auto &x : incoming_) {
-                if (dueOnly && x.due > t) {
-                    keep.push_back(std::move(x));
-                } else if (!seen_.count(x.key)) {
-                    incoming.push_back(std::move(x));
-                }
+                if (!seen_.count(x.key)) incoming.push_back(std::move(x));
             }
-            incoming_ = std::move(keep);
+            incoming_.clear();
         }
         for (const auto &x : incoming) ops.push_back(x.op);
     }
-    if (ops.empty()) {
-        std::lock_guard<std::mutex> lk(mu_);
-        if (includeIncoming) savePendingLocked(); // уже бывшее в журнале снято с очереди
-        if (!ownCount) ownDue_ = pendingOwn_.empty() ? 0 : ownDue_;
-        if (marksSent.empty()) marksDue_ = pendingMarks_.empty() ? 0 : marksDue_;
-        return true;
+    json sealed = json::array();
+    if (!ops.empty()) {
+        try {
+            sealed = engine("seal", json{{"ops", ops}, {"chunk", false}, {"tsMs", t}});
+        } catch (const std::exception &e) {
+            // Негодная операция (движок отверг) — по одной, чтобы остальные не терялись
+            log(std::string("пачка не запечатана, по одной: ") + e.what());
+            for (const auto &op : ops) {
+                try {
+                    for (const auto &rec : engine("seal", json{{"ops", json::array({op})}, {"chunk", false}, {"tsMs", t}})) {
+                        sealed.push_back(rec);
+                    }
+                } catch (const std::exception &e2) {
+                    log(std::string("операция не запечатана: ") + e2.what());
+                }
+            }
+        }
     }
-    try {
-        appendLocked(ops, false, nullptr);
-    } catch (const std::exception &e) {
-        log(std::string("запись не ушла: ") + e.what());
+    {
         std::lock_guard<std::mutex> lk(mu_);
-        for (auto &x : incoming) {
-            x.due = t + cfg_.retryMs;
-            incoming_.push_back(std::move(x));
+        for (const auto &rec : sealed) bodies_.push_back(str(rec, "body"));
+        pendingOwn_.erase(pendingOwn_.begin(), pendingOwn_.begin() + std::min(ownCount, pendingOwn_.size()));
+        for (const auto &[k, m] : marksSent) {
+            if (const auto it = pendingMarks_.find(k); it != pendingMarks_.end() && it->second == m) pendingMarks_.erase(it);
+        }
+        // Пришедшее во время записи — следующей пачкой
+        batchDue_ = 0;
+        if (!pendingOwn_.empty() || !pendingMarks_.empty() || !incoming_.empty()) {
+            const auto next = batchDueLocked();
+            for (auto &x : incoming_) x.due = next;
         }
         savePendingLocked();
-        if (ownCount) ownDue_ = t + cfg_.retryMs;
-        if (!marksSent.empty()) marksDue_ = t + cfg_.retryMs;
-        if (isCode(e, "ERROR_CODE_LIMIT")) {
-            meta_["forceCheckpoint"] = true;
-            nextCheckpoint_ = t;
-        }
-        return false;
     }
-    std::lock_guard<std::mutex> lk(mu_);
-    pendingOwn_.erase(pendingOwn_.begin(), pendingOwn_.begin() + std::min(ownCount, pendingOwn_.size()));
-    for (const auto &[k, m] : marksSent) {
-        if (const auto it = pendingMarks_.find(k); it != pendingMarks_.end() && it->second == m) pendingMarks_.erase(it);
+    for (const auto &op : ops) noteSeen(op);
+    const bool sent = sendBodiesLocked();
+    if (sent && !sealed.empty()) {
+        log("в журнал записано (записей " + std::to_string(sealed.size()) + ", операций " + std::to_string(ops.size()) + ")");
     }
-    ownDue_ = pendingOwn_.empty() ? 0 : t + cfg_.ownDelayMs;
-    marksDue_ = pendingMarks_.empty() ? 0 : t + cfg_.markDelayMs;
-    savePendingLocked();
-    return true;
+    return sent;
 }
 
 bool HistorySync::maybeCheckpointLocked(bool force) {
@@ -1234,10 +1350,18 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
             json recs;
             for (const auto &op : getRecordsLocked({u64(cp["summarySeq"])}, &recs)) {
                 if (!op.contains("summary")) continue;
+                // Сводка не сходится с точкой (S7-4) — её сегменты не берём, точка перезальёт всё
+                try {
+                    engine("historyVerifyCheckpoint", json{{"checkpoint", cp}, {"summary", op["summary"]}});
+                } catch (const std::exception &e) {
+                    log(std::string("сводка прежней точки не сходится с ней: ") + e.what());
+                    continue;
+                }
                 const bool stale = !recs.empty() && recs[0].value("stale", false);
                 known = json::object();
                 for (const auto &r : field(op["summary"], "segments")) {
-                    known[str(r, "key")] = json{{"digest", str(r, "digest")}, {"seq", u64(r["seq"])}, {"stale", stale}};
+                    known[str(r, "key")] = json{{"digest", str(r, "digest")}, {"seq", u64(r["seq"])}, {"stale", stale},
+                                                {"opId", str(r, "op_id")}};
                 }
             }
         }
@@ -1281,10 +1405,12 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
             const auto partKey = i == 0 ? key : key + "#" + std::to_string(i + 1);
             const auto digest = call("historySegmentDigest", json{{"states", parts[i]}}).get<std::string>();
             std::uint64_t seq = 0;
+            std::string opId;
             if (known.contains(partKey)) {
                 const auto &k = known[partKey];
                 if (str(k, "digest") == digest && !k.value("stale", false) && liveSeqs.count(u64(k["seq"]))) {
                     seq = u64(k["seq"]);
+                    opId = str(k, "opId");
                     ++reused;
                 }
             }
@@ -1293,20 +1419,24 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
                 ops.reserve(parts[i].size());
                 for (const auto &s : parts[i]) ops.push_back(json{{"state", s}});
                 std::vector<std::uint64_t> got;
-                appendLocked(ops, true, &got);
-                if (got.empty()) return false;
+                std::vector<std::string> gotIds;
+                appendLocked(ops, true, &got, &gotIds);
+                if (got.empty() || gotIds.size() != got.size()) return false;
                 seq = got.front();
+                opId = gotIds.front();
                 for (std::size_t j = 1; j < got.size(); ++j) {
                     // Движок разбил часть на несколько записей — каждая своей ссылкой
                     const auto extraKey = partKey + "." + std::to_string(j + 1);
-                    segments.push_back(json{{"key", extraKey}, {"digest", digest}, {"seq", std::to_string(got[j])}});
-                    newKnown[extraKey] = json{{"digest", digest}, {"seq", got[j]}, {"stale", true}};
+                    segments.push_back(json{{"key", extraKey}, {"digest", digest}, {"seq", std::to_string(got[j])}, {"op_id", gotIds[j]}});
+                    newKnown[extraKey] = json{{"digest", digest}, {"seq", got[j]}, {"stale", true}, {"opId", gotIds[j]}};
                     chunkSeqs.push_back(got[j]);
                 }
                 ++uploaded;
             }
-            segments.push_back(json{{"key", partKey}, {"digest", digest}, {"seq", std::to_string(seq)}});
-            newKnown[partKey] = json{{"digest", digest}, {"seq", seq}, {"stale", false}};
+            json ref{{"key", partKey}, {"digest", digest}, {"seq", std::to_string(seq)}};
+            if (!opId.empty()) ref["op_id"] = opId;
+            segments.push_back(std::move(ref));
+            newKnown[partKey] = json{{"digest", digest}, {"seq", seq}, {"stale", false}, {"opId", opId}};
             chunkSeqs.push_back(seq);
         }
     }
@@ -1334,12 +1464,26 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
     cfg_.store->forEachMark([&](const std::string &chatKey, const json &m) {
         if (!byChat.count(chatKey)) chats.push_back(json{{"chat", field(m, "chat")}, {"mark", m}, {"unread", 0}, {"rows", 0}});
     });
-    const auto summaryOp = call("historySummary", json{{"chats", chats}, {"segments", segments},
-                                                       {"tombstonesSinceMs", t - kHorizonMs}});
+    // S7-4: сводка называет свой будущий номер (голова + 1), id точки и цепочки писателей; другой номер — журнал
+    // дописан во время сборки, точка откладывается
+    const auto headResp = req("history.head", v2::fromBase64(engine("headRequest", json::object()).get<std::string>()));
+    const auto headNow = u64(field(engine("ingestHead", json{{"resp", v2::toBase64(headResp)}}), "headSeq"));
+    json summaryArgs{{"chats", chats}, {"segments", segments}, {"tombstonesSinceMs", t - kHorizonMs},
+                     {"uptoSeq", headNow + 1}, {"checkpointId", expected + 1}};
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (meta_.contains("chains") && meta_["chains"].is_object()) summaryArgs["chains"] = meta_["chains"];
+        else summaryArgs["chainsComplete"] = false;
+    }
+    const auto summaryOp = engine("historySummary", summaryArgs);
     std::vector<std::uint64_t> sseq;
     appendLocked({summaryOp}, true, &sseq);
     if (sseq.empty()) return false;
     const auto summarySeq = sseq.back();
+    if (summarySeq != headNow + 1) {
+        log("точка отложена: журнал дописан во время сборки сводки");
+        return false;
+    }
     // Гонка: чужие записи между головой и сводкой были бы удалены точкой — тогда не фиксируем
     std::uint64_t cursor = 0;
     {
@@ -1430,7 +1574,9 @@ json HistorySync::status() {
            {"joined", meta_.value("joined", false)},
            {"checkpointId", meta_.contains("checkpoint") && meta_["checkpoint"].is_object() ? u64(meta_["checkpoint"]["id"]) : 0},
            {"pendingOwn", pendingOwn_.size() + pendingMarks_.size()},
-           {"pendingIncoming", incoming_.size()}};
+           {"pendingIncoming", incoming_.size()},
+           {"pendingBodies", bodies_.size()},
+           {"batchDueMs", batchDue_}};
     {
         std::unique_lock<std::mutex> e(engMu_, std::try_to_lock);
         s["engine"] = e.owns_lock() ? engine_ != nullptr : true;
@@ -1526,9 +1672,8 @@ void HistorySync::loop() {
                 if (x > 0 && x < wakeAt) wakeAt = x;
             };
             if (!ready) consider(retryAt_);
-            if (!pendingOwn_.empty()) consider(ownDue_ ? ownDue_ : now());
-            if (!pendingMarks_.empty()) consider(marksDue_ ? marksDue_ : now());
-            for (const auto &x : incoming_) consider(x.due);
+            if (!pendingOwn_.empty() || !pendingMarks_.empty() || !incoming_.empty()) consider(batchDue_ ? batchDue_ : now());
+            if (!bodies_.empty()) consider(bodiesRetryAt_ ? bodiesRetryAt_ : now());
             consider(nextCheckpoint_);
         }
         const auto waitMs = std::max<std::int64_t>(10, wakeAt - now());

@@ -614,6 +614,10 @@ void Set(
 bool ShowPremiumPreview(
 		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<PeerData*> peer) {
+	// Parvane (ревью UI 7 ноя, п. 37): подписок нет — свой цвет имени выбирается без Premium (как цвет папок)
+	if (const auto parvane = true) {
+		return false;
+	}
 	if (!peer->isSelf() || show->session().premium()) {
 		return false;
 	}

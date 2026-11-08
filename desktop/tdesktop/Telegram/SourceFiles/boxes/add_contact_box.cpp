@@ -718,11 +718,79 @@ TimeId GroupInfoBox::ttlPeriod() const {
 			.periodDefaultHistoryTTLCurrent();
 }
 
+void GroupInfoBox::submitForTest(
+		const QString &title,
+		const std::vector<not_null<PeerData*>> &users) {
+	_title->setText(title);
+	if (_type != Type::Group) {
+		createChannel(title, QString());
+	} else {
+		createGroup(nullptr, title, users);
+	}
+}
+
+void GroupInfoBox::createParvane(
+		base::weak_qptr<Ui::BoxContent> selectUsersBox,
+		const QString &title,
+		const QString &description,
+		const std::vector<not_null<PeerData*>> &users,
+		bool channel) {
+	if (_parvaneCreating) {
+		return;
+	}
+	auto members = QStringList();
+	for (const auto &peer : users) {
+		if (const auto user = peer->asUser(); user && !user->isSelf()) {
+			const auto address = Parvane::AddressForUser(user);
+			if (!address.isEmpty()) {
+				members.push_back(address);
+			}
+		}
+	}
+	_parvaneCreating = true;
+	auto image = _photo ? _photo->takeResultImage() : QImage();
+	const auto period = ttlPeriod();
+	const auto weak = base::make_weak(this);
+	const auto show = uiShow();
+	Parvane::CreateGroup(title, members, channel, [=](
+			const QString &groupId,
+			const QString &error) {
+		if (groupId.isEmpty()) {
+			if (const auto strong = weak.get()) {
+				strong->_parvaneCreating = false;
+			}
+			show->showToast(error.isEmpty()
+				? tr::lng_parvane_group_create_failed(tr::now)
+				: error);
+			return;
+		}
+		// Сведения, которых нет в записи создания, — отдельными правками журнала группы
+		if (!image.isNull()) {
+			Parvane::SetGroupPhoto(groupId, image, nullptr);
+		}
+		if (!description.isEmpty()) {
+			Parvane::SetGroupAbout(groupId, description, nullptr);
+		}
+		Parvane::SetGroupTtl(groupId, period);
+		if (const auto strong = selectUsersBox.get()) {
+			strong->closeBox();
+		}
+		if (const auto strong = weak.get()) {
+			strong->closeBox();
+		}
+		Parvane::OpenGroupChat(groupId, title);
+	});
+}
+
 void GroupInfoBox::createGroup(
 		base::weak_qptr<Ui::BoxContent> selectUsersBox,
 		const QString &title,
 		const std::vector<not_null<PeerData*>> &users) {
 	if (_creationRequestId) {
+		return;
+	}
+	if (!_canAddBot) {
+		createParvane(selectUsersBox, title, QString(), users, false);
 		return;
 	}
 	using TLUsers = MTPInputUser;
@@ -775,7 +843,7 @@ void GroupInfoBox::createGroup(
 }
 
 void GroupInfoBox::submit() {
-	if (_creationRequestId || _creatingInviteLink) {
+	if (_creationRequestId || _creatingInviteLink || _parvaneCreating) {
 		return;
 	}
 
@@ -821,6 +889,12 @@ void GroupInfoBox::createChannel(
 		const QString &title,
 		const QString &description) {
 	Expects(!_creationRequestId);
+
+	if (!_canAddBot) {
+		// Канал Parvane — группа v2 вида «канал»; супергруппа и форум — обычная группа
+		createParvane(nullptr, title, description, {}, _type == Type::Channel);
+		return;
+	}
 
 	using Flag = MTPchannels_CreateChannel::Flag;
 	const auto flags = Flag()

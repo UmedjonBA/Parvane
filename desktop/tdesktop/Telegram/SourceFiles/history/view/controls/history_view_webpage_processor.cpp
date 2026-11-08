@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/controls/history_view_webpage_processor.h"
+#include "parvane/parvane_client.h" // превью ссылки через шард preview
 
 #include "base/unixtime.h"
 #include "data/data_chat_participant_status.h"
@@ -152,6 +153,23 @@ void WebpageResolver::request(const QString &link, bool force) {
 		_cache.emplace(link, nullptr);
 		_resolved.fire_copy(link);
 	};
+	// Parvane (ревью UI 7 ноя, п. 20): превью — шард preview, без MTProto messages.getWebPagePreview
+	if (const auto parvane = true) {
+		_requestLink = link;
+		const auto weak = base::make_weak(this);
+		Parvane::ResolveComposePreview(_session, link, [=](WebPageData *page) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (strong->_requestLink == link) {
+				strong->_requestLink = QString();
+			}
+			strong->_cache.emplace(link, page);
+			strong->_resolved.fire_copy(link);
+		});
+		return;
+	}
 	_requestLink = link;
 	_requestId = _api.request(
 		MTPmessages_GetWebPagePreview(

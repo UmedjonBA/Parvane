@@ -28,6 +28,8 @@
 # PARVANE_DEV_HOOKS=1 И gateway на loopback; содержимое сообщений (LogSecret) пишет в log.txt только при
 # PARVANE_LOG_CONTENT=1. Сценарии запускают клиент и напрямую, и через start_client — экспорт для всех.
 export PARVANE_DEV_HOOKS=1 PARVANE_LOG_CONTENT=1
+# Ревью 7 ноя 2026 (S7-3): журнал истории пишется пачкой раз в 30–120 с; на стенде — окно 1–3 с (dev-хук ядра)
+export PARVANE_HISTORY_BATCH_MS="${PARVANE_HISTORY_BATCH_MS:-1000,3000}"
 RC=0
 PV_DOMAIN="${PV_DOMAIN:-local}"
 PV_NATS_PORT="${PV_NATS_PORT:-4222}"

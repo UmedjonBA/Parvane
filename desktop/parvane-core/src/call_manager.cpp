@@ -122,6 +122,11 @@ void CallManager::setMuted(bool muted) {
     if (session_) session_->setMuted(muted);
 }
 
+void CallManager::setVideoEnabled(bool enabled) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (session_) session_->setVideoEnabled(enabled);
+}
+
 CallState CallManager::state() {
     std::lock_guard<std::mutex> lk(mutex_);
     return session_ ? session_->state() : CallState::Idle;

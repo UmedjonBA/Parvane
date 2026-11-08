@@ -491,6 +491,19 @@ static void lifecycleTests() {
         r.server("aa01", r.t.me);
         r.server("bb02", "bob@local");
         r.sync.ensure(true);
+        {
+            // Принять: вид папки сменился, ревизия выросла (хост перерисовывает снимок по ревизии, не по виду)
+            Rig a;
+            a.entries.push_back({"aa01", "local", "root", "", false, ""});
+            a.server("aa01", a.t.me);
+            a.server("bb02", "bob@local");
+            a.sync.ensure(true);
+            const auto before = a.sync.revision();
+            a.sync.answerInvite("bb02", true);
+            const auto list = a.sync.containers();
+            check(a.sync.revision() > before && list.size() == 2 && list[1].kind == "shared",
+                  "принять приглашение — папка совместная, ревизия облака выросла");
+        }
         r.sync.answerInvite("bb02", false);
         check(r.t.countSent("domain.grant.leave") == 1 && r.recorded.back().status == "declined"
                   && r.recorded.back().owner == "bob@local",

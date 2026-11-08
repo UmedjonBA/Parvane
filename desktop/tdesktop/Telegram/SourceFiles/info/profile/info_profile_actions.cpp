@@ -779,6 +779,10 @@ void SetupAboutPeerIdDrag(
 void DeleteContactNote(
 		not_null<UserData*> user,
 		Fn<void(const QString &)> showError = nullptr) {
+	if (const auto parvane = true) { // CONTACT-1: заметка — в записи контакта журнала состояния
+		Parvane::SetContactNote(user, QString());
+		return;
+	}
 	user->session().api().request(MTPcontacts_UpdateContactNote(
 		user->inputUser(),
 		MTP_textWithEntities(MTP_string(), MTP_vector<MTPMessageEntity>())
@@ -2311,7 +2315,7 @@ Section DetailsFiller::makeAddAsContact(not_null<UserData*> user) {
 	AddMainButton(
 		raw->entity(),
 		tr::lng_info_add_as_contact(),
-		rpl::single(false), // Parvane: contacts.addContact (MTProto) — пункта нет
+		rpl::single(true), // Parvane: «Добавить в контакты» → журнал состояния (CONTACT-1)
 		[=, controller = _controller->parentController()] {
 			controller->uiShow()->show(
 				Box(EditContactBox, controller, user));
@@ -2772,7 +2776,7 @@ void ActionsFiller::addEditContactAction(not_null<UserData*> user) {
 	AddActionButton(
 		_wrap,
 		tr::lng_info_edit_contact(),
-		rpl::single(false), // Parvane: EditContactBox — contacts.addContact (MTProto)
+		IsContactValue(user), // Parvane: EditContactBox → журнал состояния (CONTACT-1)
 		edit,
 		&st::infoIconEdit);
 }
@@ -2782,7 +2786,7 @@ void ActionsFiller::addDeleteContactAction(not_null<UserData*> user) {
 	AddActionButton(
 		_wrap,
 		tr::lng_info_delete_contact(),
-		rpl::single(false), // Parvane: contacts.deleteContacts (MTProto)
+		IsContactValue(user), // Parvane: «Удалить контакт» → журнал состояния (CONTACT-1)
 		[=] { Window::PeerMenuDeleteContact(controller, user); },
 		&st::infoIconDelete);
 }

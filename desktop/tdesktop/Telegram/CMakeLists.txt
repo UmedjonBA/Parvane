@@ -40,7 +40,10 @@ set(parvane_client_sources
     ${src_loc}/parvane/parvane_client_devices.cpp
     ${src_loc}/parvane/parvane_client_linking.cpp
     ${src_loc}/parvane/parvane_client_export.cpp
-    ${src_loc}/parvane/parvane_client_history.cpp)
+    ${src_loc}/parvane/parvane_client_history.cpp
+    ${src_loc}/parvane/parvane_planner_reminders.cpp
+    ${src_loc}/parvane/parvane_daily_hooks.cpp
+    ${src_loc}/parvane/parvane_client_rare.cpp)
 if (PARVANE_DEV)
     set_source_files_properties(${parvane_client_sources}
         PROPERTIES COMPILE_DEFINITIONS PARVANE_DEV=1)

@@ -158,6 +158,18 @@ constexpr auto kDefaultChargeStars = 10;
 					&AdminRightLabel::flags),
 				end(first));
 		}
+		// Parvane (ревью UI 7 ноя, п. 38): права админа группы — только те, что знает журнал группы v2
+		// (AdminRights: сведения, удаление, бан, приглашение, закреп, назначение админов). Видеочатов Telegram,
+		// меток, анонимности, заявок отдельным правом и Stories нет.
+		if (const auto parvane = true) {
+			second.erase(ranges::remove_if(second, [](const AdminRightLabel &label) {
+				return label.flags != ChatAdminRights(Flag::AddAdmins);
+			}), end(second));
+			return {
+				{ std::nullopt, std::move(first) },
+				{ std::nullopt, std::move(second) },
+			};
+		}
 		return {
 			{ std::nullopt, std::move(first) },
 			{ tr::lng_rights_channel_manage_stories(), std::move(stories) },

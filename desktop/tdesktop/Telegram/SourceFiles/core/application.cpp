@@ -150,6 +150,10 @@ constexpr auto kClearEmojiImageSourceTimeout = 10 * crl::time(1000);
 	}
 	static const auto kDenied = std::vector<QString>{
 		u"settings/premium"_q,
+		// Ревью UI 7 ноя, раздел 5: список «Звонки» — история звонков Telegram (messages.search с фильтром
+		// phoneCalls); записей звонков в чатах Parvane нет. Раздел «Звонки» настроек (звук и камера) остаётся.
+		u"settings/calls/all"_q,
+		u"settings/calls/start-call"_q,
 		u"settings/stars"_q,
 		u"settings/ton"_q,
 		u"settings/send-gift"_q,

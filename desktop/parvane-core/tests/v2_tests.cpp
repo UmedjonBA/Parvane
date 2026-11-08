@@ -172,6 +172,68 @@ int main() {
         check(back && (*back)["entities"][1]["data"] == "https://a.b", "entities ← v2 (data)");
         check(back && (*back)["webpage"]["title"] == "T", "webpage ← v2");
         check(back && (*back)["ttl_secs"] == 30, "ttl_secs сохранён");
+        check(back && !back->contains("silent"), "без silent — поля нет");
+    }
+    {
+        // «Отправить без звука» (Content.silent) и пересылка без автора/подписи (ревью 7 ноя, п. 35 и 18)
+        const json silent = {{"kind", "text"}, {"text", "тихо"}, {"silent", true}};
+        const auto v = v2::toV2(silent);
+        check(v && (*v)["silent"] == true, "silent → Content.silent");
+        const auto back = v ? v2::fromV2(*v) : std::nullopt;
+        check(back && (*back)["silent"] == true, "silent ← Content.silent");
+        const auto camel = v2::fromV2(json{{"text", {{"text", "x"}}}, {"silent", false}});
+        check(camel && !camel->contains("silent"), "silent=false не переносится");
+        const json fwd = {{"kind", "text"}, {"text", "x"}, {"forwarded_from", "bob@local"}, {"forwarded_name", "Bob"}};
+        const auto fv = v2::toV2(fwd);
+        check(fv && (*fv)["forward"]["from_name"] == "Bob", "forward → ForwardInfo");
+        const auto fb = fv ? v2::fromV2(*fv) : std::nullopt;
+        check(fb && (*fb)["forwarded_name"] == "Bob" && (*fb)["forwarded_from"] == "bob@local", "forward ← ForwardInfo");
+    }
+    {
+        // MEDIA-2 (спойлер, альбом, подпись над медиа) и QUOTE-1 (цитата в ответе) — этап 4 ревью 7 ноя
+        const std::string album = "AAECAwQFBgcICQoLDA0ODw=="; // 16 байт
+        const json photo = {{"kind", "photo"}, {"file_id", "f1"}, {"mime", "image/jpeg"}, {"caption", "над"},
+                            {"spoiler", true}, {"album_id", album}, {"invert_media", true}};
+        const auto v = v2::toV2(photo);
+        check(v && (*v)["media"]["spoiler"] == true, "spoiler → Media.spoiler");
+        check(v && (*v)["media"]["album_id"] == album, "album_id → Media.album_id");
+        check(v && (*v)["invert_media"] == true, "invert_media → Content.invert_media");
+        const auto body = v ? v2::encodeMessage("parvane.msg.v2.Content", *v) : std::string();
+        const auto decoded = body.empty() ? json() : v2::decodeMessage("parvane.msg.v2.Content", body);
+        check(decoded.is_object() && decoded["media"].value("spoiler", false)
+                  && decoded["media"].value("album_id", std::string()) == album
+                  && decoded.value("invert_media", false),
+              "MEDIA-2: поля проходят кодек движка");
+        const auto back = decoded.is_object() ? v2::fromV2(decoded) : std::nullopt;
+        check(back && (*back)["spoiler"] == true && (*back)["album_id"] == album && (*back)["invert_media"] == true,
+              "MEDIA-2 ← v2");
+        const auto file = v2::toV2(json{{"kind", "file"}, {"file_id", "f2"}, {"spoiler", true},
+                                        {"album_id", "c2hvcnQ="}});
+        check(file && !(*file)["media"].contains("spoiler"), "спойлер у файла не уходит");
+        check(file && !(*file)["media"].contains("album_id"), "album_id не 16 байт — не уходит");
+        // Цитата: только вместе с ответом; ≤ 1024 байт по границе символа; сущности внутри фрагмента
+        const json reply = {{"kind", "text"}, {"text", "ответ"},
+                            {"reply_quote", {{"text", "жирно и всё"}, {"offset", 3},
+                                             {"entities", json::array({
+                                                 json{{"type", "bold"}, {"offset", 0}, {"length", 5}},
+                                                 json{{"type", "italic"}, {"offset", 6}, {"length", 50}}})}}}};
+        const auto rv = v2::toV2(reply, "0192f0e4-1a2b-7c3d-8e4f-001122334455");
+        check(rv && (*rv)["reply_quote"]["text"] == "жирно и всё" && (*rv)["reply_quote"]["offset"] == 3,
+              "reply_quote → Content.reply_quote");
+        check(rv && (*rv)["reply_quote"]["entities"].size() == 1, "сущность за краем цитаты отброшена");
+        const auto rb = rv ? v2::fromV2(*rv) : std::nullopt;
+        check(rb && (*rb)["reply_quote"]["text"] == "жирно и всё"
+                  && (*rb)["reply_quote"]["entities"][0]["type"] == "bold",
+              "reply_quote ← v2");
+        check(!v2::toV2(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", "q"}}}})->contains("reply_quote"),
+              "цитата без ответа не уходит");
+        auto longQuote = std::string();
+        for (int i = 0; i < 700; ++i) longQuote += "ж"; // 1400 байт
+        const auto lv = v2::toV2(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", longQuote}}}},
+                                 "0192f0e4-1a2b-7c3d-8e4f-001122334455");
+        check(lv && (*lv)["reply_quote"]["text"].get<std::string>().size() == 1024, "цитата обрезана до 1024 байт");
+        const auto lbody = lv ? v2::encodeMessage("parvane.msg.v2.Content", *lv) : std::string();
+        check(!lbody.empty(), "обрезанная цитата проходит лимиты движка");
     }
     {
         const json photo = {{"kind", "photo"}, {"file_id", "f1"}, {"width", 10}, {"height", 20},

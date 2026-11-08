@@ -58,6 +58,8 @@ void GlobalPrivacy::reload(Fn<void()> callback) {
 	if (Parvane::StrangersPolicyAvailable()) {
 		_newRequirePremium = !Parvane::StrangersAllowed();
 	}
+	// «Настройки архива» — на устройстве (ревью UI 7 ноя, п. 21)
+	_unarchiveOnNewMessage = UnarchiveOnNewMessage(Parvane::ArchiveUnarchiveMode());
 	for (const auto &callback : base::take(_callbacks)) {
 		callback();
 	}
@@ -227,6 +229,9 @@ void GlobalPrivacy::update(
 		Parvane::SetStrangersAllowed(!newRequirePremium);
 	}
 	_archiveAndMute = archiveAndMute;
+	if (unarchiveOnNewMessage != _unarchiveOnNewMessage.current()) {
+		Parvane::SetArchiveUnarchiveMode(int(unarchiveOnNewMessage)); // ревью UI 7 ноя, п. 21
+	}
 	_unarchiveOnNewMessage = unarchiveOnNewMessage;
 	_hideReadTime = hideReadTime;
 	_newRequirePremium = newRequirePremium;

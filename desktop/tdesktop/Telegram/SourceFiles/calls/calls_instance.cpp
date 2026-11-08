@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_instance.h"
+#include "parvane/parvane_client.h" // Parvane::StartCallForUser
 
 #include "calls/calls_call.h"
 #include "calls/group/calls_group_common.h"
@@ -199,6 +200,11 @@ Instance::~Instance() {
 void Instance::startOutgoingCall(
 		not_null<UserData*> user,
 		StartOutgoingCallArgs args) {
+	// Parvane: один вход для всех кнопок звонка (шапка чата, профиль, «перезвонить», список звонков,
+	// приглашение) — звонок v2 по сигналам Parvane, а не phone.requestCall
+	if (Parvane::StartCallForUser(user, args.video)) {
+		return;
+	}
 	if (activateCurrentCall()) {
 		return;
 	}
@@ -220,6 +226,10 @@ void Instance::startOrJoinGroupCall(
 		std::shared_ptr<Ui::Show> show,
 		not_null<PeerData*> peer,
 		StartGroupCallArgs args) {
+	// Parvane: групповой звонок группы — mesh v2 со всеми участниками (видеочатов Telegram нет)
+	if (Parvane::StartGroupCallForPeer(peer, show)) {
+		return;
+	}
 	confirmLeaveCurrent(show, peer, args, [=](StartGroupCallArgs args) {
 		using JoinConfirm = Calls::StartGroupCallArgs::JoinConfirm;
 		const auto context = (args.confirm == JoinConfirm::Always)

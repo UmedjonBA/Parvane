@@ -318,12 +318,19 @@ void SendExistingDocument(
 	// Локальное эхо делает SendExistingMedia ниже; MTProto-запрос уйдёт в
 	// никуда — контент доставляет наш мост.
 	const auto history = message.action.history;
-	SendExistingMedia(
-		std::move(message),
-		document,
-		inputMedia,
-		document->stickerOrGifOrigin(),
-		std::move(localMessageId));
+	const auto silent = message.action.options.silent;
+	// Parvane (хвост этапа 2): «Запланировать» стикер/GIF — в очередь отложенных, без эха в чате сейчас
+	const auto scheduled = message.action.options.scheduled;
+	if (!scheduled) {
+		SendExistingMedia(
+			std::move(message),
+			document,
+			inputMedia,
+			document->stickerOrGifOrigin(),
+			std::move(localMessageId));
+	}
+	const auto silentScope = Parvane::SilentSendScope(silent);
+	const auto scheduleScope = Parvane::ScheduleSendScope(scheduled);
 	Parvane::MirrorOutgoingSticker(history->peer, document);
 
 	if (document->sticker()) {
@@ -499,7 +506,9 @@ bool SendDice(MessageToSend &message) {
 }
 
 void SendLocation(SendAction action, float64 lat, float64 lon) {
-	// Parvane: геолокация через шину (E2E), минуя MTProto.
+	// Parvane: геолокация через шину (E2E), минуя MTProto; «без звука» и «запланировать» — тоже наши.
+	const auto silentScope = Parvane::SilentSendScope(action.options.silent);
+	const auto scheduleScope = Parvane::ScheduleSendScope(action.options.scheduled);
 	if (const auto peer = action.history->peer.get();
 			Parvane::MirrorLocationIfOurs(peer, lat, lon)) {
 		return;
@@ -516,6 +525,8 @@ void SendLocation(SendAction action, float64 lat, float64 lon) {
 
 void SendVenue(SendAction action, Data::InputVenue venue) {
 	// Parvane: venue отправляем как обычную точку (карта в E2E-content).
+	const auto silentScope = Parvane::SilentSendScope(action.options.silent);
+	const auto scheduleScope = Parvane::ScheduleSendScope(action.options.scheduled);
 	if (const auto peer = action.history->peer.get();
 			Parvane::MirrorLocationIfOurs(peer, venue.lat, venue.lon)) {
 		return;
@@ -587,6 +598,10 @@ void SendConfirmedFile(
 	// состояние проставляет наблюдатель newItemAdded (Parvane::AfterSessionReady,
 	// setRealId). Байты файла MirrorOutgoingFile читает синхронно ниже.
 	//   session->uploader().upload(newId, file);  // отключено в форке
+	// «Запланировать» файл/фото/видео/голосовое: в очередь отложенных (раздел «Запланированные»), без эха в чате
+	if (!isEditing && Parvane::ScheduleOutgoingFile(session, file)) {
+		return;
+	}
 	Parvane::MirrorOutgoingFile(session, file);
 
 	auto action = SendAction(history, file->to.options);

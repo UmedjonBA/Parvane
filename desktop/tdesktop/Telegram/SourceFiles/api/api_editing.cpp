@@ -312,6 +312,30 @@ mtpRequestId EditMessage(
 	const auto session = &item->history()->session();
 	const auto api = &session->api();
 
+	// Parvane: отложенное — в локальной очереди (перенос срока, правка текста/подписи); MTProto нет
+	if (item->isScheduled()
+		&& Parvane::EditScheduled(
+			item,
+			textWithEntities,
+			options.scheduled,
+			!(textWithEntities == item->originalText()))) {
+		const auto requestId = -1;
+		crl::on_main(session, [=] {
+			// «Не изменено» — экран правки закрывается, список уже перечитан из очереди
+			const auto type = u"MESSAGE_NOT_MODIFIED"_q;
+			if constexpr (ErrorWithId<FailCallback>) {
+				fail(type, requestId);
+			} else if constexpr (ErrorWithoutId<FailCallback>) {
+				fail(type);
+			} else if constexpr (WithoutCallback<FailCallback>) {
+				fail();
+			} else {
+				t_bad_callback(fail);
+			}
+		});
+		return requestId;
+	}
+
 	const auto text = textWithEntities.text;
 	const auto sentEntities = EntitiesToMTP(
 		session,

@@ -1744,11 +1744,11 @@ const std::vector<LocalUrlHandler> &InternalUrlHandlers() {
 			ShowCollectibleUsername,
 		},
 		{
-			u"^username_link/([a-zA-Z0-9\\-\\_\\.]+)@([0-9]+)$"_q,
+			u"^username_link/([a-zA-Z0-9\\-\\_\\.@]+)@([0-9]+)$"_q, // Parvane: ник — адрес user@server (ревью UI 7 ноя, п. 30)
 			CopyUsernameLink,
 		},
 		{
-			u"^username_regular/([a-zA-Z0-9\\-\\_\\.]+)@([0-9]+)$"_q,
+			u"^username_regular/([a-zA-Z0-9\\-\\_\\.@]+)@([0-9]+)$"_q, // Parvane: ник — адрес user@server (ревью UI 7 ноя, п. 30)
 			CopyUsername,
 		},
 		{

@@ -5,12 +5,16 @@
 // в движке (`parvane-protocol`, модуль `history`, C ABI `pv_history_call`/`pv_call`; контракт —
 // `specs/033-history-sync/contracts/engine-api.md`). Здесь — ввод-вывод вокруг движка:
 //   - хранилище строк хоста (`RowStore`: RowState по id, перебор по чату, маркеры, служебные документы);
-//   - очередь записи в журнал: свои действия — через ≤ 300 мс (маркер — ≤ 1 с), входящее — через случайные 1–5 с
-//     и только то, чего устройство ещё не видело в журнале;
+//   - очередь записи в журнал (ревью 7 ноя 2026, S7-3): свои действия, маркеры и входящее — одной пачкой через
+//     случайные 30–120 с после первого события в очереди (по времени записи сервер не отличит автора сообщения от
+//     получателя), входящее — только то, чего устройство ещё не видело в журнале; запечатанные тела хранятся и
+//     повторяются как есть (номера цепочки писателя без пропусков, S7-4);
 //   - sync по событию `{"type":"journal","journal":"history"}` и раз в 60 с; курсор, наибольшая виденная голова
 //     (откат сервера — журнал не применяется), время полной синхронизации, флаг миграции — на диске (RowStore);
-//   - вход нового устройства: history.head → сводка (список чатов) → сегменты свежими первыми →
-//     history.sync(after = upto, skip_chunks); `compacted` в ответе sync → точка (замена при `historyNeedsReplace`);
+//   - вход нового устройства: history.head → сводка (сверена с точкой, historyVerifyCheckpoint) → сегменты свежими
+//     первыми (op_id — из сводки) → history.sync(after = upto, skip_chunks) с книгой цепочек писателей (пропуск
+//     номера — предупреждение); `compacted` в ответе sync → точка (замена при `historyNeedsReplace`); точка, не
+//     сошедшаяся со сводкой, не применяется и курсор не двигает (S7-4);
 //   - контрольная точка (устройство с курсором = голова; > 5000 записей после точки или точке > 24 ч; задержка
 //     0–60 с; неизменные сегменты — прежний seq; `stale` и всё после смены ключа состояния — заново; отказ CAS —
 //     не повторять до новой точки);
@@ -175,10 +179,11 @@ struct HistorySyncConfig {
     std::function<void(const std::string &)> log;
     std::function<std::int64_t()> nowMs; // для тестов; по умолчанию — системные часы
 
-    std::int64_t ownDelayMs = 300;
-    std::int64_t markDelayMs = 1000;
-    std::int64_t incomingMinMs = 1000;
-    std::int64_t incomingMaxMs = 5000;
+    // Окно пачки записи (S7-3): всё в очереди уходит одной записью через случайные [batchMinMs, batchMaxMs] после
+    // первого события. Хост может сузить окно для сценариев (desktop — PARVANE_HISTORY_BATCH_MS в dev-сборке со
+    // стендом на loopback, android — debug-сборка).
+    std::int64_t batchMinMs = 30000;
+    std::int64_t batchMaxMs = 120000;
     std::int64_t pollMs = 60000;
     std::int64_t retryMs = 5000;
     std::uint64_t checkpointRecords = 5000;
@@ -214,14 +219,15 @@ public:
     void onSessionEvent(const json &ev);
 
     // Событие истории на этом устройстве → historyApply к строке хранилища → сохранить → в очередь журнала.
-    // own — действие пользователя этого устройства (≤ 300 мс), иначе входящее (1–5 с, если журнал его ещё не знает).
+    // own — действие пользователя этого устройства, иначе входящее (пишется, если журнал его ещё не знает); то и другое —
+    // общей пачкой (S7-3).
     // Неизвестная цель — сирота. Результат — новый RowState (null — операция отвергнута движком, причина в логе).
     // Своя строка (from == self) сдвигает маркер чата до неё (READ-2, FR-011).
     // requiredAuthor — мутация допустима только для сообщения этого автора (правка; удаление в группе не админом):
     // строка известна — проверка сразу (чужая — отказ, null); неизвестна — мутация ждёт в памяти, пока строка не
     // придёт (из инбокса или журнала), и применяется только при совпадении автора.
     json record(const json &op, bool own, const std::string &requiredAuthor = std::string());
-    // Маркер «прочитано до» (ReadMark). Сводится максимумом; own — в журнал через ≤ 1 с. Результат — строки
+    // Маркер «прочитано до» (ReadMark). Сводится максимумом; own — в журнал общей пачкой. Результат — строки
     // входящих, которые стали прочитанными (для квитанций собеседникам); пусто — маркер не сдвинулся.
     std::vector<json> advanceMark(const json &mark, bool own);
 
@@ -273,8 +279,18 @@ private:
     bool joinLocked();
     bool pullLocked();
     bool loadCheckpointLocked(const json &cp, bool isJoin);
-    std::vector<json> getRecordsLocked(const std::vector<std::uint64_t> &seqs, json *recordsOut);
-    bool appendLocked(const std::vector<json> &ops, bool chunk, std::vector<std::uint64_t> *seqs);
+    // expect — {номер: op_id} (сегменты по сводке, S7-4); *mismatched — сервер отдал под номером другую запись.
+    std::vector<json> getRecordsLocked(const std::vector<std::uint64_t> &seqs, json *recordsOut, const json *expect = nullptr,
+                                       bool *mismatched = nullptr);
+    // Записи-сегменты (chunk) и прочее, что можно запечатать заново при повторе; opIds — op_id записей.
+    bool appendLocked(const std::vector<json> &ops, bool chunk, std::vector<std::uint64_t> *seqs,
+                      std::vector<std::string> *opIds = nullptr);
+    // Разбор страницы sync с книгой цепочек (meta_["chains"]).
+    json ingestChained(const std::string &resp);
+    // Отправить запечатанные тела очереди по порядку; false — не все ушли (повтор позже).
+    bool sendBodiesLocked();
+    // Срок текущей пачки (под mu_): назначить, если пачки нет.
+    std::int64_t batchDueLocked();
     bool flushLocked(bool includeIncoming, bool dueOnly);
     bool maybeCheckpointLocked(bool force);
     bool buildCheckpointLocked(const json &head);
@@ -284,7 +300,9 @@ private:
     json meta_;
     std::vector<json> pendingOwn_;          // свои операции (на диске — aux "pending")
     std::map<std::string, json> pendingMarks_; // chatKey → маркер к записи
-    std::int64_t ownDue_ = 0, marksDue_ = 0;
+    std::int64_t batchDue_ = 0;                // срок пачки (S7-3); 0 — очередь пуста
+    std::vector<std::string> bodies_;          // запечатанные тела (base64) к отправке по порядку (на диске)
+    std::int64_t bodiesRetryAt_ = 0;
     std::vector<Incoming> incoming_;
     std::unordered_set<std::string> seen_;
     std::deque<std::string> seenOrder_;

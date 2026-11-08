@@ -283,6 +283,7 @@ int main() {
     run("history/unread", "history/unread.json", 8);
     run("history/segment", "history/segment.json", 8);
     run("history/aead", "history/aead.json", 6);
+    run("history/checkpoint", "history/checkpoint.json", 6); // S7-3/S7-4: сверка точки, цепочки, выравнивание
     runHistoryClient();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;

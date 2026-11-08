@@ -181,8 +181,24 @@ struct ScheduledItem {
 	QString text;
 	nlohmann::json entities;
 	std::optional<std::string> replyTo;
-	qint64 dueAt = 0;  // unix-секунды
+	qint64 dueAt = 0;  // unix-секунды; kScheduledUntilOnline — «когда будет в сети»
+	bool silent = false; // «Отправить без звука»
+	// Вид: "" — текст (журнал личного состояния, как web), "content" — готовое содержимое (опрос, геопозиция),
+	// "file" — файл/фото/видео/голосовое/кружок. Не-текст живёт только на этом устройстве (web — только во вкладке).
+	QString kind;
+	nlohmann::json content;  // kind=content
+	QString filePath;        // kind=file: байты в tdata/parvane-scheduled/<id>.bin (зашифрованы, P-13)
+	QString fileName;
+	QString fileMime;
+	int fileType = 0;        // SendMediaType
+	QByteArray captionTags;  // TextUtilities::SerializeTags подписи
+	QByteArray waveform;     // голосовое
+	qint64 durationMs = 0;
+	int width = 0;
+	int height = 0;
+	QString album; // kind=file: элемент альбома (groupId tdesktop) — по сроку уходит одним альбомом (ревью 7 ноя)
 };
+inline constexpr qint64 kScheduledUntilOnline = 0x7FFFFFFE; // Api::kScheduledUntilOnlineTimestamp
 
 namespace Internal {
 
@@ -306,6 +322,8 @@ void NoteGroupPublic(const QString &address, const parvane::json &info);
 void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew);
 [[nodiscard]] QString StateDomain();
 [[nodiscard]] History *HistoryForAddress(not_null<Main::Session*> session, const QString &address);
+// Адрес пира для отправки через шину (группа → group_id, юзер → адрес)
+[[nodiscard]] QString BusAddressForPeer(PeerData *peer);
 [[nodiscard]] QString StateSyncedPath();
 void NoteStateEdited(const char *kind);
 void ApplyDialogState(not_null<Main::Session*> session);
@@ -374,12 +392,26 @@ extern QString g_outboxReadOwner;
 // Мутация сообщения v2-чата собеседнику/группе с повтором до успеха (parvane_client.cpp).
 bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId = std::string());
 
+// CONTACT-1 (parvane_client_state.cpp): свой контакт по адресу (своё имя/фамилия, заметка); nullptr — не контакт.
+// Указатель живёт до следующей правки контактов. Только main.
+struct ContactRecord {
+	QString first;
+	QString last;
+	QString note;
+};
+[[nodiscard]] const ContactRecord *ContactRecordFor(const QString &address);
+// Каталог своего набора стикеров по setId ("" — не свой локальный набор; parvane_client.cpp, main).
+[[nodiscard]] QString LocalStickerPackDir(std::uint64_t setId);
+
 // PACK-3 (parvane_client_state.cpp): набор поставлен на этом устройстве — запись в журнал состояния (main).
 void RecordStickerPack(const parvane::json &ref, bool emoji);
 void RecordNewLocalStickerPacks(); // новые локальные наборы — в облако и журнал (PACK-3)
 // GIF-1: сохранённый GIF — запись журнала packs с ключом g:<sha256>; снятие — удаление записи
 void RecordSavedGif(const parvane::json &fileRef, const std::string &sha256Hex);
 void ForgetSavedGif(const std::string &sha256Hex);
+// п. 23: свой набор удалён здесь — запись журнала packs прочь; запись снята журналом — набор прочь и здесь
+void ForgetStickerPackRecord(const QString &byName, const QString &byHash);
+void RemoveStickerPackFromJournal(const QString &key);
 
 } // namespace Internal
 using namespace Internal;
@@ -426,6 +458,17 @@ void MarkPeerDeleted(const QString &address, bool deleted);
 void SaveScheduledLocked();
 void FireScheduled(const ScheduledItem &item);
 void ArmScheduledTimers();
+// «Запланировать» опрос/геопозицию (ScheduleSendScope активен): содержимое — в очередь; true — запланировано
+bool ScheduleContent(PeerData *peer, const nlohmann::json &content);
+// Напоминания «Плана» (parvane_planner_reminders.cpp): таймер по readReminders ядра; при входе / выходе
+void StartPlannerReminders();
+void StopPlannerReminders();
+// Хук сценариев PARVANE_AUTOUI (parvane_daily_hooks.cpp) — штатные кнопки без мыши
+void StartDailyUiHooks();
+// Шаги этапа 4 ревью (parvane_client_rare.cpp): true — шаг узнан и выполнен
+bool RunRareUiStep(const QString &op, const QStringList &args);
+// Раздел «Запланированные» перечитывает очередь этих адресов (и уже показанных)
+void RefreshScheduledViewsFor(const QSet<QString> &addresses);
 bool RunV2GroupChange( const QString &tag, const QString &gid, std::function<parvane::json(const parvane::json &info)> change, GroupOpDone done);
 void ApplyNotifyBlob(const QString &json);
 void groupAdminAction(const QString &groupId, const QString &member, const QString &action);

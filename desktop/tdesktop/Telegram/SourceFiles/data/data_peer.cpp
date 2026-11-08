@@ -1835,7 +1835,8 @@ bool PeerData::canRevokeFullHistory() const {
 			&& session().serverConfig().revokePrivateInbox
 			&& (session().serverConfig().revokePrivateTimeLimit == 0x7FFFFFFF);
 	} else if (const auto chat = asChat()) {
-		return chat->amCreator();
+		// Parvane (ревью UI 7 ноя, п. 15): очистки истории группы «для всех» в протоколе нет — только у себя
+		return false && chat->amCreator();
 	} else if (const auto megagroup = asMegagroup()) {
 		return megagroup->amCreator()
 			&& megagroup->membersCountKnown()
@@ -1908,6 +1909,10 @@ bool PeerData::canManageGroupCall() const {
 }
 
 bool PeerData::canManageRanks() const {
+	// Parvane (ревью UI 7 ноя, п. 32): меток участника в протоколе нет (в web тоже) — пункты меню и поле скрыты
+	if (const auto parvane = true) {
+		return false;
+	}
 	if (const auto chat = asChat()) {
 		return chat->amCreator()
 			|| (chat->adminRights() & ChatAdminRight::ManageRanks);

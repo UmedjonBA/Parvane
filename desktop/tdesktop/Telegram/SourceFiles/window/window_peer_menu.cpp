@@ -814,6 +814,9 @@ void Filler::addDeleteChat() {
 	_addAction({
 		.text = ((_peer->isUser() || _sublist)
 			? tr::lng_profile_delete_conversation(tr::now)
+			// Parvane: владелец группы не выходит, а удаляет её (ревью UI 7 ноя, п. 19)
+			: (_peer->isChat() && _peer->asChat()->amCreator() && !Parvane::GroupIdForChat(_peer).isEmpty())
+			? tr::lng_profile_delete_group(tr::now)
 			: tr::lng_profile_clear_and_exit(tr::now)),
 		.handler = (_sublist
 			? DeleteSublistHandler(_controller, _sublist)
@@ -999,11 +1002,7 @@ void Filler::addReport() {
 }
 
 void Filler::addNewContact() {
-	// Parvane: контакты Telegram (contacts.addContact/deleteContacts, EditContactBox) — MTProto; в Parvane собеседник
-	// личного чата — контакт сам, правки контакта нет.
-	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
-		return;
-	}
+	// Parvane: EditContactBox пишет свой контакт в журнал состояния (CONTACT-1)
 	const auto user = _peer->asUser();
 	if (!user
 		|| user->isContact()
@@ -1042,11 +1041,7 @@ void Filler::addShareContact() {
 }
 
 void Filler::addEditContact() {
-	// Parvane: контакты Telegram (contacts.addContact/deleteContacts, EditContactBox) — MTProto; в Parvane собеседник
-	// личного чата — контакт сам, правки контакта нет.
-	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
-		return;
-	}
+	// Parvane: EditContactBox пишет свой контакт в журнал состояния (CONTACT-1)
 	const auto user = _peer->asUser();
 	if (!user || !user->isContact() || user->isSelf()) {
 		return;
@@ -1102,10 +1097,7 @@ void Filler::addNewMembers() {
 }
 
 void Filler::addDeleteContact() {
-	// Parvane: contacts.deleteContacts (MTProto) — пункта нет.
-	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
-		return;
-	}
+	// Parvane: «Удалить контакт» → журнал состояния (CONTACT-1)
 	const auto user = _peer->asUser();
 	if (!user || !user->isContact() || user->isSelf()) {
 		return;
@@ -2050,11 +2042,7 @@ void PeerMenuDeleteContact(
 		user->name());
 	const auto deleteSure = [=](Fn<void()> &&close) {
 		close();
-		user->session().api().request(MTPcontacts_DeleteContacts(
-			MTP_vector<MTPInputUser>(1, user->inputUser())
-		)).done([=](const MTPUpdates &result) {
-			user->session().api().applyUpdates(result);
-		}).send();
+		Parvane::RemoveContact(user); // CONTACT-1: надгробие contact_remove в журнале состояния
 	};
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		Ui::AddSkip(box->verticalLayout());
@@ -3635,14 +3623,17 @@ base::weak_qptr<Ui::BoxContent> ShowSendNowMessagesBox(
 					MTP_int(session->scheduledMessages().lookupId(item)));
 			}
 		}
-		session->api().request(MTPmessages_SendScheduledMessages(
-			history->peer->input(),
-			MTP_vector<MTPint>(ids)
-		)).done([=](const MTPUpdates &result) {
-			session->api().applyUpdates(result);
-		}).fail([=](const MTP::Error &error) {
-			session->api().sendMessageFail(error, history->peer);
-		}).send();
+		// Parvane: «Отправить сейчас» — из локальной очереди отложенных
+		if (!Parvane::SendScheduledNow(history->peer, ids)) {
+			session->api().request(MTPmessages_SendScheduledMessages(
+				history->peer->input(),
+				MTP_vector<MTPint>(ids)
+			)).done([=](const MTPUpdates &result) {
+				session->api().applyUpdates(result);
+			}).fail([=](const MTP::Error &error) {
+				session->api().sendMessageFail(error, history->peer);
+			}).send();
+		}
 		if (callback) {
 			callback();
 		}
@@ -3756,6 +3747,10 @@ void UnpinAllMessages(
 		close();
 		const auto strong = weak.get();
 		if (!strong) {
+			return;
+		}
+		// Parvane (ревью UI 7 ноя, п. 14): открепить каждое закреплённое тем же путём, что одиночное (MirrorPin)
+		if (Parvane::UnpinAllMessages(strong->owningHistory())) {
 			return;
 		}
 		const auto api = &strong->session().api();
@@ -3916,11 +3911,11 @@ Fn<void()> DeleteAndLeaveHandler(
 		not_null<PeerData*> peer) {
 	// Parvane: наша группа — «выйти» идёт в messenger (group.removemember self),
 	// затем локально убираем чат; без MTProto.
+	// Ревью UI 7 ноя, п. 19: с подтверждением; владельцу — «Удалить группу» (выйти он не может), чат убирается
+	// только после успеха.
 	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
-		const auto session = &peer->session();
 		return [=] {
-			Parvane::LeaveGroup(gid);
-			session->data().deleteConversationLocally(peer);
+			Parvane::ConfirmLeaveOrDeleteGroup(controller->uiShow(), peer);
 		};
 	}
 	return [=] {
@@ -3957,6 +3952,17 @@ bool FillVideoChatMenu(
 	const auto peer = request.key.peer();
 	if (!peer || peer->isUser()) {
 		return false;
+	}
+	// Parvane: вместо видеочата Telegram (начать / запланировать / RTMP) — один пункт «Групповой звонок»
+	if (Parvane::SessionActive()) {
+		if (!Parvane::CanGroupCall(peer)) {
+			return false;
+		}
+		addAction(
+			tr::lng_parvane_group_call(tr::now),
+			[=] { Parvane::StartGroupCallForChat(peer, false); },
+			&st::menuIconPhone);
+		return true;
 	}
 
 	const auto callback = [=](Calls::StartGroupCallArgs &&args) {

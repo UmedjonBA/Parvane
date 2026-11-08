@@ -10,6 +10,9 @@
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
 #include "parvane/parvane_call_video.h" // сырые кадры → нативный видео-трек
 #include "parvane/parvane_pulse_adm.h"  // свой ADM (PulseAudio) вместо dummy
+#include "core/application.h"         // «Звук и камера»: Core::App().settings()
+#include "core/core_settings.h"
+#include <mutex>
 
 #include <parvane/crypto.h> // parvane-core: SAS (sasEmoji)
 
@@ -102,6 +105,15 @@ private:
 	std::function<void(webrtc::RTCError)> _cb;
 };
 
+// Камера из «Звук и камера» (Core::Settings::cameraDeviceId — uniqueId устройства webrtc); пусто — первая свободная
+std::mutex g_cameraIdMutex;
+std::string g_cameraId;
+
+[[nodiscard]] std::string SelectedCameraId() {
+	std::lock_guard<std::mutex> lk(g_cameraIdMutex);
+	return (g_cameraId == "default") ? std::string() : g_cameraId;
+}
+
 // Источник видео с камеры (V4L2): VideoCaptureModule → VideoBroadcaster. Кадры от
 // камеры считаются (для проверки без дисплея) и раздаются трекам/энкодеру.
 class CameraSource : public webrtc::VideoTrackSource,
@@ -120,7 +132,20 @@ public:
 			return false;
 		}
 		const auto count = info->NumberOfDevices();
+		// «Звук и камера» (ревью UI 7 ноя, п. 22): выбранная камера — первой; занята или нет — следующие
+		auto order = std::vector<std::uint32_t>();
+		const auto selected = SelectedCameraId();
 		for (std::uint32_t idx = 0; idx < count; ++idx) {
+			char id[260] = { 0 }, name[260] = { 0 };
+			const auto ok = info->GetDeviceName(idx, name, sizeof(name), id, sizeof(id)) == 0;
+			if (ok && !selected.empty()
+				&& (selected == id || selected == name)) {
+				order.insert(order.begin(), idx);
+			} else {
+				order.push_back(idx);
+			}
+		}
+		for (const auto idx : order) {
 			char id[260] = { 0 }, name[260] = { 0 };
 			if (info->GetDeviceName(idx, name, sizeof(name), id, sizeof(id)) != 0) {
 				continue;
@@ -236,6 +261,19 @@ public:
 
 	void setWantVideo(bool on) override { _wantVideo = on; }
 
+	// Свой микрофон и камера (ревью UI 7 ноя, п. 27): трек остаётся в соединении, кадры/звук не идут
+	void setMuted(bool muted) override {
+		if (_track) {
+			_track->set_enabled(!muted);
+		}
+	}
+	void setVideoEnabled(bool enabled) override {
+		if (_videoTrack) {
+			_videoTrack->set_enabled(enabled);
+			LOG(("Parvane: камера %1").arg(enabled ? "включена" : "выключена"));
+		}
+	}
+
 	void close() override {
 		_alive->store(false); // отложенные колбэки SDP-наблюдателей после этого ничего не делают
 		if (_remoteVideoSink) {
@@ -250,6 +288,7 @@ public:
 			_pc = nullptr;
 		}
 		_track = nullptr;
+		_videoTrack = nullptr;
 	}
 
 private:
@@ -381,6 +420,7 @@ private:
 			if (ok) {
 				_cameraSource = cam;
 				auto videoTrack = g.factory->CreateVideoTrack(cam, "video0");
+				_videoTrack = videoTrack;
 				_pc->AddTrack(videoTrack, { "stream0" });
 				LOG(("Parvane: видео-трек добавлен (камера)"));
 			} else {
@@ -450,6 +490,7 @@ private:
 
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> _pc;
 	webrtc::scoped_refptr<webrtc::AudioTrackInterface> _track;
+	webrtc::scoped_refptr<webrtc::VideoTrackInterface> _videoTrack;
 	webrtc::scoped_refptr<CameraSource> _cameraSource;
 	std::unique_ptr<RemoteVideoSink> _remoteVideoSink;
 	bool _wantVideo = false;
@@ -466,6 +507,20 @@ std::unique_ptr<parvane::MediaBackend> MakeWebrtcBackend() {
 		return nullptr;
 	}
 	return std::make_unique<WebrtcMediaBackend>();
+}
+
+void ApplyCallDeviceSettings() {
+	const auto &settings = Core::App().settings();
+	const auto orFallback = [](const QString &call, const QString &common) {
+		return (call.isEmpty() ? common : call).toStdString();
+	};
+	SetCallAudioDevices(
+		orFallback(settings.callPlaybackDeviceId(), settings.playbackDeviceId()),
+		orFallback(settings.callCaptureDeviceId(), settings.captureDeviceId()));
+	{
+		std::lock_guard<std::mutex> lk(g_cameraIdMutex);
+		g_cameraId = settings.cameraDeviceId().toStdString();
+	}
 }
 
 } // namespace Parvane

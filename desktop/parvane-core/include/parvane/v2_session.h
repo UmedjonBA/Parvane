@@ -115,6 +115,13 @@ struct SessionConfig {
     std::string deviceDescription = "Parvane Desktop";
 };
 
+// S7-1 (как web `isTelegramCodeIntercepted`): опрос запроса ключа через Telegram вернул код, отличный от
+// показанного на экране, — запрос перехвачен другим входом с этим устройством. Показанный код опросом НЕ
+// заменяется; код из опроса берётся, только если своего ещё нет.
+[[nodiscard]] inline bool telegramCodeIntercepted(const std::string &shown, const std::string &polled) {
+    return !shown.empty() && !polled.empty() && polled != shown;
+}
+
 // Итог входа нового устройства по ключу восстановления (как web `KeyJoinOutcome`).
 struct KeyJoinOutcome {
     std::string result; // "ok" | "bad_key" | "no_backup" | "failed"
@@ -297,7 +304,7 @@ public:
     // Ключ этого аккаунта в Telegram ещё не уходил (аккаунт до spec 015).
     bool canSendKeyToTelegram();
     // Новое устройство (needsLinking): попросить бота спросить ключ у владельца —
-    // "sent" | "no_telegram" | "limit" | "failed".
+    // "sent" | "no_telegram" | "limit" | "intercepted" (S7-1: запрос держит другой вход) | "failed".
     std::string requestTelegramKey(bool again);
     // Ответ владельца боту: {"recovery_key"?, "pending"}; null — сбой. done — ключ применён.
     json pollTelegramKey(bool done);

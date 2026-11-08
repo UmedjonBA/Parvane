@@ -120,6 +120,11 @@ public:
 		RequestPeerQuery query,
 		Fn<void(not_null<PeerData*>)> done);
 
+	// Parvane: e2e-хук PARVANE_AUTOUI — тот же путь «Создать», что у кнопки бокса
+	void submitForTest(
+		const QString &title,
+		const std::vector<not_null<PeerData*>> &users);
+
 protected:
 	void prepare() override;
 	void setInnerFocus() override;
@@ -127,6 +132,13 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
+	// Parvane: группа и канал создаются записью журнала группы v2 (Parvane::CreateGroup), не MTProto
+	void createParvane(
+		base::weak_qptr<Ui::BoxContent> selectUsersBox,
+		const QString &title,
+		const QString &description,
+		const std::vector<not_null<PeerData*>> &users,
+		bool channel);
 	void createChannel(const QString &title, const QString &description);
 	void createGroup(
 		base::weak_qptr<Ui::BoxContent> selectUsersBox,
@@ -157,6 +169,7 @@ private:
 
 	// group / channel creation
 	mtpRequestId _creationRequestId = 0;
+	bool _parvaneCreating = false;
 	bool _creatingInviteLink = false;
 	ChannelData *_createdChannel = nullptr;
 	TimeId _ttlPeriod = 0;

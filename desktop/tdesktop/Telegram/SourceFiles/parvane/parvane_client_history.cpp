@@ -362,6 +362,18 @@ void EnsureHistory(const QString &self) {
 	cfg.log = [](const std::string &m) {
 		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
 	};
+	// S7-3: журнал пишется пачкой раз в 30–120 с; сценарии стенда (dev-сборка, PARVANE_DEV_HOOKS=1 и gateway на
+	// loopback — ParvaneDevEnv) сужают окно: PARVANE_HISTORY_BATCH_MS=<мин>,<макс> (verify_lib.sh — 1000,3000)
+	if (const char *bv = ParvaneDevEnv("PARVANE_HISTORY_BATCH_MS"); bv && *bv) {
+		const auto parts = QString::fromUtf8(bv).split(',');
+		auto okLo = false, okHi = false;
+		const auto lo = parts.value(0).toLongLong(&okLo);
+		const auto hi = parts.value(1, parts.value(0)).toLongLong(&okHi);
+		if (okLo && okHi && lo >= 0 && hi >= lo) {
+			cfg.batchMinMs = lo;
+			cfg.batchMaxMs = hi;
+		}
+	}
 	auto sync = std::make_shared<parvane::history::HistorySync>(std::move(cfg));
 	{
 		std::lock_guard<std::mutex> lk(g_historyMutex);

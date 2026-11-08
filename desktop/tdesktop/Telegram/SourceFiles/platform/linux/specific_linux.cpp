@@ -5,6 +5,8 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
+#include "parvane/client_safety.h" // C7-5: Exec= ярлыка автозапуска (parvane-core)
+#include <QtCore/QCryptographicHash>
 #include "platform/linux/specific_linux.h"
 
 #include "base/openssl_help.h"
@@ -642,8 +644,19 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done) {
 		const auto autostart = QStandardPaths::writableLocation(
 			QStandardPaths::GenericConfigLocation)
 			+ u"/autostart/"_q;
-		const auto target = autostart + u"parvane-desktop.desktop"_q;
 		const auto exe = cExeDir() + cExeName();
+		const auto launcher = QDir::homePath() + u"/.local/bin/parvane-desktop"_q;
+		const auto viaLauncher = QFileInfo(launcher).isExecutable();
+		// Свой профиль (`-workdir`) без лаунчера — свой ярлык: иначе второй профиль затирал ярлык первого (ревью 7 ноя)
+		const auto defaultWorkdir = QDir(QDir::homePath() + u"/.local/share/Parvane"_q).absolutePath();
+		const auto workdir = QDir(cWorkingDir()).absolutePath();
+		const auto tag = (viaLauncher || workdir == defaultWorkdir)
+			? QString()
+			: QString::fromLatin1(QCryptographicHash::hash(
+				workdir.toUtf8(),
+				QCryptographicHash::Sha256).toHex().left(8));
+		const auto target = autostart
+			+ QString::fromStdString(parvane::clientsafety::autostartFileName(tag.toStdString()));
 		// Ярлык прежних версий форка — только если он наш (Exec на этот бинарь); ярлык Telegram не трогаем
 		{
 			auto old = QFile(autostart + QGuiApplication::desktopFileName() + u".desktop"_q);
@@ -658,15 +671,21 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done) {
 		if (!enabled) {
 			return !QFile::exists(target) || QFile::remove(target);
 		}
-		const auto quote = [](const QString &value) {
-			auto escaped = value;
-			escaped.replace('\\', u"\\\\"_q).replace('"', u"\\\""_q);
-			return u"\""_q + escaped + u"\""_q;
+		// C7-5: экранирование по спецификации Desktop Entry (`\`, `"`, `` ` ``, `$`, `%`); путь с переводом строки — отказ
+		const auto quote = [](const QString &value) -> std::optional<QString> {
+			const auto quoted = parvane::clientsafety::desktopExecQuote(value.toStdString());
+			return quoted ? std::make_optional(QString::fromStdString(*quoted)) : std::nullopt;
 		};
-		const auto launcher = QDir::homePath() + u"/.local/bin/parvane-desktop"_q;
-		const auto command = QFileInfo(launcher).isExecutable()
-			? quote(launcher) + u" -autostart"_q
-			: quote(exe) + u" -workdir "_q + quote(cWorkingDir()) + u" -autostart"_q;
+		const auto qLauncher = quote(launcher);
+		const auto qExe = quote(exe);
+		const auto qWorkdir = quote(cWorkingDir());
+		if (viaLauncher ? !qLauncher : (!qExe || !qWorkdir)) {
+			LOG(("Parvane: автозапуск не включён — в пути недопустимые символы"));
+			return false;
+		}
+		const auto command = viaLauncher
+			? *qLauncher + u" -autostart"_q
+			: *qExe + u" -workdir "_q + *qWorkdir + u" -autostart"_q;
 		if (!QDir(autostart).exists()) {
 			QDir().mkpath(autostart);
 		}

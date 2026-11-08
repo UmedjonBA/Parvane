@@ -1332,6 +1332,8 @@ void TopBarWidget::updateControlsVisibility() {
 					&& !user->isInaccessible()
 					&& !peer->isServiceUser();
 			}
+			// Parvane: в группе та же кнопка звонит всем участникам (mesh v2)
+			return Parvane::CanGroupCall(peer);
 		}
 		return false;
 	}();
@@ -1339,6 +1341,9 @@ void TopBarWidget::updateControlsVisibility() {
 		&& callsEnabled
 		&& !_chooseForReportReason);
 	const auto groupCallsEnabled = [&] {
+		if (Parvane::SessionActive()) {
+			return false; // видеочатов Telegram (и их «запланировать» / RTMP) у Parvane нет
+		}
 		if (const auto peer = _activeChat.key.peer()) {
 			if (!peer->isUser() && peer->canManageGroupCall()) {
 				return true;

@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "apiwrap.h"
+#include "parvane/parvane_client.h" // Parvane::ScheduledHistory
 
 namespace Data {
 namespace {
@@ -481,10 +482,29 @@ Data::MessagesSlice ScheduledMessages::list(
 	return result;
 }
 
+void ScheduledMessages::refreshFromParvane(not_null<History*> history) {
+	if (auto list = Parvane::ScheduledHistory(history)) {
+		parse(history, *list);
+		Parvane::AfterScheduledParsed(history);
+		_updates.fire_copy(history);
+	}
+}
+
 void ScheduledMessages::request(not_null<History*> history) {
 	const auto peer = history->peer;
 	if (peer->isBroadcast() && !Data::CanSendAnything(peer)) {
 		return;
+	}
+	// Parvane: отложенные — локальная очередь клиента (messages.getScheduledHistory нет)
+	if (Parvane::SessionActive()) {
+		const auto requested = _requests.find(history);
+		if (requested == end(_requests) || !requested->second.lastReceived) {
+			if (auto list = Parvane::ScheduledHistory(history)) {
+				parse(history, *list);
+				Parvane::AfterScheduledParsed(history);
+			}
+		}
+		return; // изменения очереди приходят refreshFromParvane
 	}
 	auto &request = _requests[history];
 	if (request.requestId || TooEarlyForRequest(request.lastReceived)) {

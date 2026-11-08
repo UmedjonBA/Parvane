@@ -225,6 +225,8 @@ void Polls::create(
 		Fn<void()> done,
 		Fn<void(bool fileReferenceExpired)> fail) {
 	// Parvane: опрос уходит в шину (E2E) + локальное эхо; MTProto не зовём.
+	const auto silentScope = Parvane::SilentSendScope(action.options.silent);
+	const auto scheduleScope = Parvane::ScheduleSendScope(action.options.scheduled);
 	if (Parvane::MirrorPollCreate(action.history->peer, data)) {
 		done();
 		return;

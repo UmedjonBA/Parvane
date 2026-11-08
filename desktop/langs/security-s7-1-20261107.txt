@@ -1,0 +1,3 @@
+lng_parvane_tg_recover_intercepted
+The key request was intercepted: someone else signed in as this device and started their own request. Do not reply to the bot. If it wasn't you, change your password.
+Запрос ключа перехвачен: с этим устройством вошёл кто-то ещё и начал свой запрос. Не отвечайте боту. Если это были не вы — смените пароль.

@@ -1612,6 +1612,9 @@ void History::newItemAdded(not_null<HistoryItem*> item, NewAddType type) {
 	const auto stillShow = item->showNotification(); // Could be read already.
 	if (stillShow) {
 		Core::App().notifications().schedule(notification);
+		if (!item->out()) {
+			Parvane::MaybeUnarchiveOnIncoming(this); // «Настройки архива» (ревью UI 7 ноя, п. 21)
+		}
 	}
 	if (item->out()) {
 		if (item->isFromScheduled() && unreadCountRefreshNeeded(item->id)) {

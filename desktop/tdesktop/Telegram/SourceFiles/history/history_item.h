@@ -543,6 +543,8 @@ public:
 	[[nodiscard]] uint64 fullRichPageVersion() const;
 	[[nodiscard]] bool computeDropForwardedInfo() const;
 	void setText(TextWithEntities textWithEntities);
+	// Parvane: пересылка «скрыть имя отправителя» (и «скрыть подписи») — локальное эхо без «переслано от»
+	void parvaneDropForwardInfo(bool dropCaption);
 	void applyLocalRichPage(std::shared_ptr<const Iv::RichPage> page);
 	void applyLocalRichPage(
 		std::shared_ptr<const Iv::RichPage> page,

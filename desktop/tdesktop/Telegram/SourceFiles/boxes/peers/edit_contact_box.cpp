@@ -36,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_common.h"
 #include "lottie/lottie_frame_generator.h"
 #include "main/main_session.h"
+#include "parvane/parvane_client.h" // CONTACT-1: свой контакт через журнал состояния
 #include "settings/settings_common.h"
 #include "ui/animated_icon.h"
 #include "ui/controls/emoji_button_factory.h"
@@ -88,6 +89,19 @@ void SendRequest(
 		const QString &phone,
 		const TextWithEntities &note) {
 	const auto wasContact = user->isContact();
+	// Parvane (CONTACT-1): своё имя/фамилия и заметка (простой текст) — вид `contacts` журнала личного состояния
+	// вместо MTProto contacts.addContact; телефона у Parvane нет.
+	if (const auto parvane = true) {
+		Parvane::SetContact(user, first, last, note.text);
+		if (box) {
+			if (!wasContact) {
+				box->showToast(
+					tr::lng_new_contact_add_done(tr::now, lt_user, user->shortName()));
+			}
+			box->closeBox();
+		}
+		return;
+	}
 	using Flag = MTPcontacts_AddContact::Flag;
 	user->session().api().request(MTPcontacts_AddContact(
 		MTP_flags(Flag::f_note
@@ -306,9 +320,8 @@ void Controller::setupCover() {
 			_box,
 			_window,
 			_user,
-			(_phone.isEmpty()
-				? tr::lng_contact_mobile_hidden()
-				: rpl::single(Ui::FormatPhone(_phone)))),
+			// Parvane: телефона нет — под именем адрес собеседника
+			rpl::single(u"@"_q + _user->username())),
 		style::margins());
 }
 
@@ -423,7 +436,8 @@ void Controller::initNameFields(
 }
 
 void Controller::setupWarning() {
-	if (_user->isContact() || !_phone.isEmpty()) {
+	// Parvane: предупреждение о телефоне не к месту — телефонов у Parvane нет
+	if (const auto parvane = true; parvane || _user->isContact() || !_phone.isEmpty()) {
 		return;
 	}
 	_box->addRow(
@@ -553,7 +567,9 @@ void Controller::setupNotesField() {
 }
 
 void Controller::setupPhotoButtons() {
-	if (!_user->isContact()) {
+	// Parvane (ревью UI 7 ноя, п. 29): «Предложить фото», «Установить фото для…», «Предложить день рождения» —
+	// MTProto (photos.uploadContactProfilePhoto, users.suggestBirthday); чужое фото у Parvane задаёт только владелец
+	if (const auto parvane = true; parvane || !_user->isContact()) {
 		return;
 	}
 	const auto iconPlaceholder = st::restoreUserpicIcon.size * 2;
@@ -756,6 +772,11 @@ void Controller::setupDeleteContactButton() {
 			_user->name());
 		const auto deleteSure = [=](Fn<void()> &&close) {
 			close();
+			if (const auto parvane = true) { // CONTACT-1: надгробие contact_remove в журнале
+				Parvane::RemoveContact(_user);
+				_box->closeBox();
+				return;
+			}
 			_user->session().api().request(MTPcontacts_DeleteContacts(
 				MTP_vector<MTPInputUser>(1, _user->inputUser())
 			)).done([=](const MTPUpdates &result) {

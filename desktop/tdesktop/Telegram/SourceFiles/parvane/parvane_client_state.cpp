@@ -275,7 +275,13 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 // десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
 const std::vector<std::string> kV2StateKinds{
 	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts", "unread", "reaction", "packs",
+	"contacts",
 };
+// CONTACT-1: свои контакты (адрес → своё имя/фамилия и заметка) — зеркало вида `contacts` журнала, файл аккаунта
+// `tdata/parvane-contacts-<адрес>.json` {self, contacts:[{address, first, last, note}]}. Только main.
+QHash<QString, ContactRecord> g_contacts;
+bool g_contactsLoaded = false;
+void LoadContactsLocal();
 // PACK-3: записи вида `packs` (state.v1.StickerPack) — зеркало журнала на этом устройстве, файл аккаунта
 // `tdata/parvane-sticker-packs-<адрес>.json` {self, packs, migrated}. Только main.
 parvane::json g_stickerPackRecords = parvane::json::array();
@@ -438,10 +444,15 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		items = g_scheduled;
 	}
 	for (const auto &it : items) {
+		if (!it.kind.isEmpty()) {
+			continue; // файлы, опросы, геопозиция, пересылка — только на этом устройстве (как web)
+		}
 		auto peer = StatePeerOf(it.address);
-		const auto content = parvane::v2::toV2(
-			parvane::textContent(it.text.toStdString(), it.entities),
-			it.replyTo.value_or(std::string()));
+		auto plain = parvane::textContent(it.text.toStdString(), it.entities);
+		if (it.silent) {
+			plain["silent"] = true; // «без звука» — и у отложенного (Content.silent)
+		}
+		const auto content = parvane::v2::toV2(plain, it.replyTo.value_or(std::string()));
 		if (peer.is_null() || !content) {
 			continue;
 		}
@@ -513,6 +524,20 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		quickReaction["emoji"] = g_quickEmoji.toStdString();
 	}
 	LoadStickerPacksLocal();
+	LoadContactsLocal();
+	auto contacts = parvane::json::array();
+	{
+		auto addresses = g_contacts.keys();
+		std::sort(addresses.begin(), addresses.end()); // отпечаток вида не зависит от порядка QHash
+		for (const auto &address : addresses) {
+			const auto &c = g_contacts[address];
+			auto entry = parvane::json{ { "user", { { "address", address.toStdString() } } } };
+			if (!c.first.isEmpty()) entry["first_name"] = c.first.toStdString();
+			if (!c.last.isEmpty()) entry["last_name"] = c.last.toStdString();
+			if (!c.note.isEmpty()) entry["note"] = c.note.toStdString();
+			contacts.push_back(std::move(entry));
+		}
+	}
 	auto drafts = parvane::json::array();
 	LoadDraftsLocal();
 	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
@@ -545,6 +570,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "unread_marks", std::move(unreadMarks) },
 		{ "quick_reaction", std::move(quickReaction) },
 		{ "sticker_packs", g_stickerPackRecords },
+		{ "contacts", std::move(contacts) },
 	};
 }
 
@@ -596,6 +622,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "unread", digest(canon("unread_marks", false)) },
 		{ "reaction", digest(canon("quick_reaction", true)) },
 		{ "packs", digest(canon("sticker_packs", false)) },
+		{ "contacts", digest(canon("contacts", false)) },
 	};
 }
 
@@ -823,6 +850,7 @@ void ProjectScheduled(const parvane::json &snap) {
 					continue;
 				}
 				item.text = QString::fromStdString(v1->value("text", std::string()));
+				item.silent = v1->value("silent", false);
 				item.entities = v1->contains("entities") ? (*v1)["entities"] : parvane::json::array();
 				if (content.contains("reply_to")) {
 					if (const auto r = parvane::v2::b64ToUuid(content["reply_to"].value("op_id", std::string()))) {
@@ -836,22 +864,36 @@ void ProjectScheduled(const parvane::json &snap) {
 		}
 	}
 	auto changed = false;
+	auto touched = QSet<QString>();
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		const auto ids = [](const std::vector<ScheduledItem> &v) {
 			auto r = std::vector<QString>();
-			for (const auto &i : v) r.push_back(i.id + ':' + QString::number(i.dueAt) + ':' + i.text);
+			for (const auto &i : v) {
+				if (i.kind.isEmpty()) {
+					r.push_back(i.id + ':' + QString::number(i.dueAt) + ':' + i.text);
+				}
+			}
 			ranges::sort(r);
 			return r;
 		};
 		changed = ids(next) != ids(g_scheduled);
 		if (changed) {
+			for (const auto &i : g_scheduled) touched.insert(i.address);
+			for (const auto &i : next) touched.insert(i.address);
+			// Не-текст в журнал не попадает — живёт только здесь и сводкой журнала не снимается
+			for (const auto &i : g_scheduled) {
+				if (!i.kind.isEmpty()) {
+					next.push_back(i);
+				}
+			}
 			g_scheduled = std::move(next);
 			SaveScheduledLocked();
 		}
 	}
 	if (changed) {
 		LOG(("Parvane: v2: журнал состояния → отложенные"));
+		RefreshScheduledViewsFor(touched);
 		ArmScheduledTimers();
 	}
 }
@@ -1156,7 +1198,7 @@ void ProjectStickerPacks(const parvane::json &snap) { // main
 					RemoveSavedGifFromJournal(key.mid(2)); // GIF-1: убран на другом устройстве
 					continue;
 				}
-				LOG(("Parvane: стикеры: набор %1 убран из журнала состояния — на desktop набор остаётся").arg(key));
+				RemoveStickerPackFromJournal(key); // PACK-3: снят на другом своём устройстве (ревью UI 7 ноя, п. 23)
 			}
 		}
 		g_stickerPackRecords = std::move(next);
@@ -1192,6 +1234,27 @@ void RecordStickerPack(const parvane::json &ref, bool emoji) { // main
 	g_stickerPacksTried.insert(QString::fromStdString(key)); // набор стоит здесь
 	SaveStickerPacksLocal();
 	LOG(("Parvane: стикеры: набор %1 записан в журнал состояния").arg(QString::fromStdString(key)));
+	ScheduleStateFlush("packs");
+}
+
+// Свой набор удалён на этом устройстве — его запись (по имени или отпечатку) прочь из журнала (п. 23)
+void ForgetStickerPackRecord(const QString &byName, const QString &byHash) { // main
+	LoadStickerPacksLocal();
+	auto next = parvane::json::array();
+	for (const auto &item : g_stickerPackRecords) {
+		const auto key = StickerPackRecordKey(item);
+		if (key == byName || (!byHash.isEmpty() && key == byHash)) {
+			g_stickerPacksTried.remove(key);
+			continue;
+		}
+		next.push_back(item);
+	}
+	if (next.size() == g_stickerPackRecords.size()) {
+		return;
+	}
+	g_stickerPackRecords = std::move(next);
+	SaveStickerPacksLocal();
+	LOG(("Parvane: стикеры: запись набора убрана из журнала состояния"));
 	ScheduleStateFlush("packs");
 }
 
@@ -1495,6 +1558,116 @@ void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) 
 	}
 }
 
+// ── CONTACT-1: свои контакты, своё имя контакта и заметка (вид `contacts`) ──
+[[nodiscard]] QString ContactsPath() {
+	return AccountFilePath(u"parvane-contacts-"_q, SelfAddress(), u".json"_q);
+}
+
+void LoadContactsLocal() { // main
+	if (g_contactsLoaded) {
+		return;
+	}
+	const auto path = ContactsPath();
+	if (path.isEmpty()) {
+		return; // адрес ещё неизвестен — прочитаем позже
+	}
+	g_contactsLoaded = true;
+	const auto j = parvane::json::parse(StoreRead(path).toStdString(), nullptr, false);
+	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()
+		|| !j.contains("contacts") || !j["contacts"].is_array()) {
+		return;
+	}
+	for (const auto &c : j["contacts"]) {
+		const auto address = QString::fromStdString(c.value("address", std::string()));
+		if (address.contains('@')) {
+			g_contacts.insert(address, ContactRecord{
+				QString::fromStdString(c.value("first", std::string())),
+				QString::fromStdString(c.value("last", std::string())),
+				QString::fromStdString(c.value("note", std::string())),
+			});
+		}
+	}
+}
+
+void SaveContactsLocal() { // main
+	const auto path = ContactsPath();
+	if (path.isEmpty()) {
+		return;
+	}
+	auto list = parvane::json::array();
+	for (auto i = g_contacts.constBegin(); i != g_contacts.constEnd(); ++i) {
+		list.push_back({
+			{ "address", i.key().toStdString() },
+			{ "first", i->first.toStdString() },
+			{ "last", i->last.toStdString() },
+			{ "note", i->note.toStdString() },
+		});
+	}
+	StoreWrite(path, QByteArray::fromStdString(parvane::json{
+		{ "self", SelfAddress().toStdString() },
+		{ "contacts", std::move(list) },
+	}.dump()));
+}
+
+const ContactRecord *ContactRecordFor(const QString &address) { // main
+	LoadContactsLocal();
+	const auto i = g_contacts.constFind(address);
+	return (i != g_contacts.constEnd()) ? &i.value() : nullptr;
+}
+
+// Контакт сменился — пересобрать пользователя (имя, флаг контакта, заметка; ensurePeerUser читает g_contacts).
+void RefreshContactUser(not_null<Main::Session*> session, const QString &address) { // main
+	if (address == SelfAddress()) {
+		return;
+	}
+	RegisterPeer(address);
+	ensurePeerUser(session, IdForAddress(address), address);
+}
+
+void ProjectContacts(not_null<Main::Session*> session, const parvane::json &snap) { // main
+	LoadContactsLocal();
+	auto next = QHash<QString, ContactRecord>();
+	if (snap.contains("contacts") && snap["contacts"].is_array()) {
+		for (const auto &c : snap["contacts"]) {
+			const auto user = c.value("user", parvane::json());
+			const auto address = user.is_object()
+				? QString::fromStdString(user.value("address", std::string()))
+				: QString();
+			if (!address.contains('@')) {
+				continue;
+			}
+			next.insert(address, ContactRecord{
+				QString::fromStdString(c.value("first_name", std::string())),
+				QString::fromStdString(c.value("last_name", std::string())),
+				QString::fromStdString(c.value("note", std::string())),
+			});
+		}
+	}
+	auto touched = QSet<QString>();
+	for (auto i = next.constBegin(); i != next.constEnd(); ++i) {
+		const auto was = g_contacts.constFind(i.key());
+		if (was == g_contacts.constEnd() || was->first != i->first || was->last != i->last || was->note != i->note) {
+			touched.insert(i.key());
+		}
+	}
+	for (auto i = g_contacts.constBegin(); i != g_contacts.constEnd(); ++i) {
+		if (!next.contains(i.key())) {
+			touched.insert(i.key());
+		}
+	}
+	if (touched.isEmpty()) {
+		return;
+	}
+	g_contacts = std::move(next);
+	SaveContactsLocal();
+	for (const auto &address : touched) {
+		RefreshContactUser(session, address);
+	}
+	LOG(("Parvane: v2: журнал состояния → контакты (%1 изменений, всего %2)")
+		.arg(touched.size())
+		.arg(g_contacts.size()));
+}
+
 void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.is_object()) {
 		return;
@@ -1509,6 +1682,7 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	ProjectUnreadAndReaction(session, snap);
 	ProjectStickerPacks(snap);
 	ProjectDrafts(session, snap);
+	ProjectContacts(session, snap);
 	g_stateApplying = false;
 	SaveFolders(session);
 }
@@ -2247,6 +2421,74 @@ void ResetStateAccountData() {
 	g_stickerPacksMigrated = false;
 	g_stickerPacksMigrating = false;
 	g_stickerPacksTried.clear();
+	g_contacts.clear();
+	g_contactsLoaded = false;
+}
+
+// CONTACT-1: «Новый контакт» / «Изменить» / «Удалить контакт» и заметка из родного бокса правки контакта
+// (boxes/peers/edit_contact_box.cpp) и меню профиля — вместо MTProto contacts.addContact/deleteContacts.
+std::optional<ContactInfo> ContactFor(not_null<UserData*> user) { // main
+	const auto address = AddressForUser(user);
+	if (const auto c = address.isEmpty() ? nullptr : ContactRecordFor(address)) {
+		return ContactInfo{ c->first, c->last, c->note };
+	}
+	return std::nullopt;
+}
+
+bool SetContact(not_null<UserData*> user, const QString &first, const QString &last, const QString &note) { // main
+	const auto address = AddressForUser(user);
+	if (address.isEmpty() || user->isSelf()) {
+		return false;
+	}
+	LoadContactsLocal();
+	auto record = ContactRecord{ first.trimmed(), last.trimmed(), note.trimmed() };
+	// Форма, предзаполненная именем самого собеседника и сохранённая без правки, своего имени не задаёт (п. 2)
+	if (record.last.isEmpty() && record.first == DisplayNameFor(address)) {
+		record.first.clear();
+	}
+	const auto clip = [](QString &v, int bytes) {
+		while (v.toUtf8().size() > bytes) {
+			v.chop(1);
+		}
+	};
+	clip(record.first, 256);
+	clip(record.last, 256);
+	clip(record.note, 4096);
+	const auto was = g_contacts.constFind(address);
+	if (was != g_contacts.constEnd()
+		&& was->first == record.first && was->last == record.last && was->note == record.note) {
+		return true;
+	}
+	g_contacts.insert(address, record);
+	SaveContactsLocal();
+	RefreshContactUser(&user->session(), address);
+	LOG(("Parvane: контакт %1 сохранён (своё имя «%2», заметка %3 симв.)")
+		.arg(address, (record.first + ' ' + record.last).trimmed())
+		.arg(record.note.size()));
+	ScheduleStateFlush("contacts");
+	return true;
+}
+
+bool SetContactNote(not_null<UserData*> user, const QString &note) { // main
+	const auto current = ContactFor(user);
+	return SetContact(
+		user,
+		current ? current->first : QString(),
+		current ? current->last : QString(),
+		note);
+}
+
+bool RemoveContact(not_null<UserData*> user) { // main
+	const auto address = AddressForUser(user);
+	LoadContactsLocal();
+	if (address.isEmpty() || !g_contacts.remove(address)) {
+		return false;
+	}
+	SaveContactsLocal();
+	RefreshContactUser(&user->session(), address);
+	LOG(("Parvane: контакт %1 удалён (имя и заметка стёрты)").arg(address));
+	ScheduleStateFlush("contacts");
+	return true;
 }
 
 // Блок-лист аккаунта для экрана «Заблокированные пользователи»: MTProto contacts.getBlocked у нас нет, список берётся из

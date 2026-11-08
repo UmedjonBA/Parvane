@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/weak_ptr.h"
+
 #include "data/data_drafts.h"
 #include "chat_helpers/message_field.h"
 #include "mtproto/sender.h"
@@ -50,7 +52,7 @@ struct WebpageParsed {
 	}
 };
 
-class WebpageResolver final {
+class WebpageResolver final : public base::has_weak_ptr { // Parvane: ответ шарда preview после разрушения
 public:
 	explicit WebpageResolver(not_null<Main::Session*> session);
 
