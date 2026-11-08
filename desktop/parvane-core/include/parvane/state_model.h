@@ -1,10 +1,10 @@
-// Parvane fork (spec 035 T125, переходный период desktop/android, как web `openStateModel` в v2/engine.ts): личное
-// состояние — через модель движка (`state.v2`, `state.ops.*`). Личность, инбокс и группы пока ведёт прежний клиент
-// (`v2::Client`); его ключи личного состояния передаются модели внутри движка (`adoptStateKeys`). Хост отдаёт
-// ЖЕЛАЕМОЕ в форме снимка `state.v1` (`stateApplyV1`): разницу «желаемое ↔ `base`» по полям (Patch/Create/Delete),
-// сведение по регистрам и метки считает только движок (ENGINE-1); показ — `stateViewV1` (сведённое в форме
-// `state.v1`, избранные стикеры, журнал закрыт для записи). Хранилище модели — во временном каталоге профиля,
-// стирается при открытии: журнал читается с начала при каждом подключении (как прежний `PvState`).
+// Parvane fork (spec 035 T125, как web `openStateModel` в v2/engine.ts): личное состояние — через модель движка
+// (`state.v2`, `state.ops.*`) той же модели, что держит клиентское ядро сессии (`v2::Client` поверх `engine::Host`):
+// ключи личного состояния не выходят из движка, хранилище — общее хранилище модели профиля (курсор журнала и
+// сведённое переживают перезапуск). Хост отдаёт ЖЕЛАЕМОЕ в форме снимка `state.v1` (`stateApplyV1`): разницу
+// «желаемое ↔ `base`» по полям (Patch/Create/Delete), сведение по регистрам и метки считает только движок
+// (ENGINE-1); показ — `stateViewV1` (сведённое в форме `state.v1`, избранные стикеры, журнал закрыт для записи).
+// Запросы шагов модели исполняет сессия (`Runner`: отправка, ответ — `ingest`, изменения модели — хосту).
 // Не потокобезопасен: вызывать под мьютексом сессии.
 #pragma once
 
@@ -17,23 +17,20 @@
 
 namespace parvane::engine {
 class Host;
-}
+struct Step;
+} // namespace parvane::engine
 
 namespace parvane::v2 {
 
 using nlohmann::json;
-class Client;
 
 class StateModel {
 public:
-    // Отправить запрос модели (OutRequest: method, channel, body base64, dest_domain) и вернуть тело ответа; при
-    // отказе — *errorCode = номер ErrorCode (UNAVAILABLE — сбой связи), тело пустое.
-    using Send = std::function<std::string(const json &request, int *errorCode)>;
+    // Исполнить итог шага модели: запросы — серверу по порядку, ответы — `ingest` (и их итоги — тем же путём),
+    // изменения — хосту. false — шаг с ошибкой или запрос не дошёл (связь, отказ).
+    using Runner = std::function<bool(const engine::Step &step)>;
 
-    // nullptr — у клиента нет ключа личного состояния или модель не открылась (*error).
-    static std::unique_ptr<StateModel> open(const Client &client, const std::string &user, const std::string &deviceId,
-                                            const std::string &domain, const std::string &dir, Send send,
-                                            std::string *error = nullptr);
+    StateModel(std::shared_ptr<engine::Host> host, Runner run);
     ~StateModel();
     StateModel(const StateModel &) = delete;
     StateModel &operator=(const StateModel &) = delete;
@@ -54,11 +51,8 @@ public:
     bool sync();
 
 private:
-    StateModel(std::unique_ptr<engine::Host> host, Send send);
-    bool run(const json &step); // исполнить запросы итога шага (ответы — через ingest), false — отказ хоть одного
-
-    std::unique_ptr<engine::Host> host_;
-    Send send_;
+    std::shared_ptr<engine::Host> host_;
+    Runner run_;
 };
 
 // Номер ErrorCode по имени (`ERROR_CODE_UNAVAILABLE` → 11); незнакомое — UNAVAILABLE.

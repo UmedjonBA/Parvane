@@ -38,6 +38,8 @@ struct FsOps {
 
 // Настоящая ФС (POSIX).
 FsOps &posixFs();
+// ФС в памяти (модель движка без профиля: тесты, разовые проверки); ничего не переживает процесс.
+std::unique_ptr<FsOps> memoryFs();
 
 struct Put {
     std::string key;

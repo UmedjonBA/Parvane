@@ -3,6 +3,8 @@
 
 #include "parvane/blobcrypt.h"
 #include "parvane/crypto.h"
+#include "parvane/engine_host.h"
+#include "parvane/migrate_legacy.h"
 #include "parvane/keybundle.h"
 #include "parvane/l2_ticker.h"
 #include "parvane/storecrypt.h"
@@ -22,6 +24,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <regex>
 #include <utility>
 
@@ -35,7 +38,6 @@ constexpr int kNeedAttempts = 6;
 // parvane.msg.v2.TypingAction
 constexpr int kTypingTyping = 1;
 constexpr int kTypingCancel = 2;
-constexpr int kMaxSyncPages = 1000;
 constexpr int kGroupSyncPages = 50;
 // Смена эпохи — не чаще раза в 10 с (R8): повтор после отказа по частоте.
 constexpr std::int64_t kEpochRetryMs = 11000;
@@ -58,6 +60,10 @@ constexpr int kGroupKindChannel = 2;
 constexpr int kRoleAdmin = 2;
 constexpr int kRoleOwner = 3;
 constexpr const char *kPinListMain = "PIN_LIST_MAIN";
+// Потолок кругов «запрос модели → ответ → новые запросы» одного шага и шагов переноса (spec 035)
+constexpr int kModelRounds = 512;
+constexpr int kMigrateSteps = 400;
+constexpr int kUnavailableCode = 11;
 
 std::string sha256(const std::string &data) {
     unsigned char h[EVP_MAX_MD_SIZE];
@@ -133,11 +139,39 @@ std::string Session::deviceIdFor(const std::string &stateDir) {
 
 json Session::sessionProofFor(const std::string &stateDir, std::int64_t tsMs) {
     const auto key = storecrypt::readFile(stateDir + "/key");
-    const auto state = storecrypt::readFile(stateDir + "/state");
-    if (key.size() != 32 || state.empty()) return nullptr;
+    if (key.size() != 32) return nullptr;
     try {
-        auto c = Client::import(state, key);
-        return json{{"proof", c->call("sessionProof", json{{"tsMs", tsMs}})}, {"tsMs", tsMs}};
+        // Модель профиля (spec 035): клиент — в её хранилище; открывается только существующий профиль (без корня
+        // хранилища модель создала бы новый)
+        const auto storeDir = stateDir + "/store";
+        if (std::filesystem::exists(storeDir)) {
+            std::string err;
+            auto st = store_fs::Store::open(storeDir, store_fs::posixFs(), &err);
+            if (st && !st->read(store_fs::Reads{{"root"}}).empty()) {
+                st.reset();
+                const json cfg{{"user", "proof@local"},
+                               {"device_id", storecrypt::readFile(stateDir + "/device")},
+                               {"domain", "local"},
+                               {"now_ms", std::to_string(tsMs)},
+                               {"device_key", toBase64(key)},
+                               {"host_driven", true}};
+                auto host = engine::Host::open(cfg, storeDir, &err);
+                if (host) {
+                    Client c(std::shared_ptr<engine::Host>(std::move(host)));
+                    if (c.logVersion(c.call("selfAddress").get<std::string>()) > 0) {
+                        return json{{"proof", c.call("sessionProof", json{{"tsMs", tsMs}})}, {"tsMs", tsMs}};
+                    }
+                }
+            }
+        }
+        // До переноса — прежнее состояние (экспорт под ключом), модель в памяти
+        if (storecrypt::readFile(stateDir + "/engine-migrated").empty()) {
+            const auto state = storecrypt::readFile(stateDir + "/state");
+            if (state.empty()) return nullptr;
+            auto c = Client::import(state, key);
+            return json{{"proof", c->call("sessionProof", json{{"tsMs", tsMs}})}, {"tsMs", tsMs}};
+        }
+        return nullptr;
     } catch (const std::exception &) {
         // Состояние не читается — вход как с нового устройства (сервер решит сам)
         return nullptr;
@@ -593,9 +627,9 @@ bool Session::connectLocked(std::string *error) {
                 }
             }
             const auto savedDevice = readStateFile("device");
-            const auto saved = readStateFile("state");
-            if (!saved.empty() && savedDevice == auth.deviceId) {
-                client_ = Client::import(saved, storageKey_);
+            if (!openHostLocked(auth.deviceId, error)) return false;
+            if (hostHadProfile_ && savedDevice == auth.deviceId) {
+                client_ = std::make_unique<Client>(host_);
                 log("состояние устройства загружено");
                 // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес (как web start())
                 if (const auto engineSelf = client_->call("selfAddress");
@@ -624,10 +658,11 @@ bool Session::connectLocked(std::string *error) {
                     // сеть — свой журнал перечитается после готовности
                 }
             } else {
-                if (!saved.empty()) {
+                if (hostHadProfile_) {
                     log("сохранённое состояние другого устройства (" + savedDevice + ") — не используется");
                 }
-                auto c = Client::create(cfg_.self, auth.deviceId, domain_);
+                auto c = std::make_unique<Client>(host_);
+                c->replaceNew();
                 // Первое v2-устройство пользователя — корень и журнал устройств.
                 // Если журнал уже есть (другое устройство на v2) — нужна
                 // линковка этого устройства (LINK-1 v2); до неё — только v1.
@@ -681,7 +716,8 @@ bool Session::connectLocked(std::string *error) {
                 }
             }
             if (!client_) {
-                auto c = Client::create(cfg_.self, auth.deviceId, domain_);
+                auto c = std::make_unique<Client>(host_);
+                c->replaceNew();
                 const auto created = c->createIdentity(cfg_.otkCount);
                 client_ = std::move(c);
                 // Сначала — на диск (корень/копия, устройство, состояние, запросы
@@ -941,31 +977,259 @@ void Session::runRequestsLocked(const json &reqs) {
     }
 }
 
-std::optional<Session::Exported> Session::exportLocked() {
-    if (!client_ || storageKey_.size() != 32) return std::nullopt;
-    try {
-        return Exported{++exportSeq_, client_->exportState(storageKey_)};
-    } catch (const std::exception &e) {
-        log(std::string("состояние не сохранено: ") + e.what());
-        return std::nullopt;
-    }
+// spec 035 T125: состояние клиента — в хранилище модели; сохранение — шаг `flush` (пачка только изменённого,
+// fsync раньше запросов), без полного экспорта хостом.
+void Session::persistLocked() {
+    if (!host_) return;
+    driveLocked(host_->step("flush", json::object()));
 }
 
-bool Session::writeExported(const Exported &e) {
-    std::lock_guard<std::mutex> lk(persistMu_);
-    // Уже записан более новый снимок — в нём есть и это состояние
-    if (e.seq <= writtenSeq_) return true;
-    counters::get().persist++;
-    if (!writeStateFile("state", e.blob)) {
-        log("состояние не сохранено: запись файла");
+// Модель профиля (spec 035): каталог `store/` в каталоге состояния, ключ устройства — ключ состояния `key` (тот же
+// 32-байтовый ключ, что прежде шифровал экспорт). Состояние другого устройства — в сторону (`store-<устройство>-<мс>`),
+// прежнее состояние этого устройства (`state` без отметки «перенесено») — разовым переносом.
+bool Session::openHostLocked(const std::string &deviceId, std::string *error) {
+    if (host_ && hostDevice_ == deviceId) return true;
+    host_.reset();
+    hostHadProfile_ = false;
+    const auto storeDir = cfg_.stateDir + "/store";
+    const auto savedDevice = readStateFile("device");
+    std::error_code ec;
+    // Временный каталог прежней модели личного состояния (фаза 12) больше не нужен
+    std::filesystem::remove_all(cfg_.stateDir + "/state-model", ec);
+    if (!savedDevice.empty() && savedDevice != deviceId && std::filesystem::exists(storeDir, ec)) {
+        const auto aside = cfg_.stateDir + "/store-" + savedDevice + "-" + std::to_string(nowMs());
+        std::filesystem::rename(storeDir, aside, ec);
+        log("хранилище модели другого устройства отложено: " + aside);
+    }
+    bool existed = false;
+    {
+        std::string err;
+        if (std::filesystem::exists(storeDir, ec)) {
+            auto st = store_fs::Store::open(storeDir, store_fs::posixFs(), &err);
+            if (!st) {
+                if (error) *error = "хранилище модели не открылось: " + err;
+                return false;
+            }
+            existed = !st->read(store_fs::Reads{{"root"}}).empty();
+        }
+    }
+    const bool legacy = savedDevice == deviceId && !readStateFile("state").empty() && readStateFile("engine-migrated").empty();
+    const json config{{"user", cfg_.self},
+                      {"device_id", deviceId},
+                      {"domain", domain_},
+                      {"now_ms", std::to_string(nowMs())},
+                      {"device_key", toBase64(storageKey_)},
+                      {"host_driven", true},
+                      {"legacy_present", legacy}};
+    std::string err;
+    engine::Step opened;
+    auto host = engine::Host::open(config, storeDir, &err, store_fs::posixFs(), &opened);
+    if (!host) {
+        if (error) *error = "модель не открылась: " + err;
+        log("модель не открылась: " + err);
         return false;
     }
-    writtenSeq_ = e.seq;
+    host_ = std::shared_ptr<engine::Host>(std::move(host));
+    hostDevice_ = deviceId;
+    modelOpenState_.clear();
+    noteOpenLocked(opened);
+    if (modelOpenState_ == "OPEN_STATE_MIGRATION_NEEDED" && !migrateLegacyLocked(error)) {
+        host_.reset();
+        hostDevice_.clear();
+        return false;
+    }
+    if (modelOpenState_ == "OPEN_STATE_TOO_NEW") {
+        // Хранилище записано более новой версией: писать нельзя (FR-026) — «обновите приложение»
+        outbox_.push_back(json{{"type", "upgradeRequired"}, {"reason", "storeTooNew"}});
+        if (error) *error = "ERROR_CODE_UPGRADE_REQUIRED";
+        host_.reset();
+        hostDevice_.clear();
+        return false;
+    }
+    if (modelOpenState_ != "OPEN_STATE_READY") {
+        if (error) *error = "модель не открылась (" + modelOpenState_ + ")";
+        host_.reset();
+        hostDevice_.clear();
+        return false;
+    }
+    hostHadProfile_ = existed || legacy;
     return true;
 }
 
-void Session::persistLocked() {
-    if (const auto e = exportLocked()) writeExported(*e);
+// spec 035 T127 (contracts/migration.md): прежнее состояние — в модель шагами `migrateStep`. Записи старых мест
+// отдаёт хост (`legacyRecords`) либо ядро само (каталог состояния v2 и его соседи, migrate_legacy.h); разбор и
+// запись поколения 1, журнал состояния и сверка — в движке. После READY с шагом `mark-legacy` старое только
+// помечается «перенесено» (отметка рядом), удаляет его пользователь (D2).
+bool Session::migrateLegacyLocked(std::string *error) {
+    json input = cfg_.legacyRecords ? cfg_.legacyRecords() : json();
+    if (!input.is_object()) {
+        const auto dir = std::filesystem::path(cfg_.stateDir);
+        const auto collected = migrate_legacy::collect(dir.parent_path().string(), cfg_.self);
+        input = migrate_legacy::toJson(collected);
+        for (const auto &k : collected.unreadable) log("перенос: файл не открылся — " + k);
+        // Каталог состояния не по имени desktop (android `v2-<адрес>`): экспорт движка и его ключ — общими ключами
+        // перечня `migrate:engine-*` (любой слой)
+        bool hasEngine = false;
+        for (const auto &r : input.value("records", json::array())) {
+            const auto k = r.value("key", std::string());
+            if (k.size() > 6 && k.compare(k.size() - 6, 6, "/state") == 0) hasEngine = true;
+        }
+        if (!hasEngine) {
+            const auto state = readStateFile("state");
+            if (!state.empty() && storageKey_.size() == 32) {
+                input["records"].push_back(json{{"key", "migrate:engine-state"}, {"value", toBase64(state)}});
+                input["records"].push_back(json{{"key", "migrate:engine-key"}, {"value", toBase64(storageKey_)}});
+            }
+        }
+    }
+    const auto layer = input.value("layer", cfg_.migrationLayer);
+    const auto records = input.value("records", json::array());
+    log("перенос прежнего состояния в модель: " + std::to_string(records.size()) + " записей");
+    auto progress = [this](const json &status, bool done, bool failed) {
+        if (!cfg_.onMigration) return;
+        cfg_.onMigration(json{{"point", status.value("point", 0)}, {"total", 7}, {"done", done}, {"failed", failed}});
+    };
+    progress(json{{"point", 0}}, false, false);
+    driveLocked(host_->step("migrateStep", json{{"layer", layer}, {"records", records}, {"last", true}}));
+    for (int i = 0; i < kMigrateSteps && modelOpenState_ != "OPEN_STATE_READY" && !stopping_; ++i) {
+        const auto status = host_->raw("migrateStatus", json::object());
+        progress(status, false, false);
+        if (status.value("done", false) && modelOpenState_ != "OPEN_STATE_READY") {
+            log("перенос остановлен: " + status.value("report_json", std::string()));
+            progress(status, true, true);
+            if (error) *error = "перенос остановлен";
+            return false;
+        }
+        driveLocked(host_->step("migrateStep", json::object()));
+    }
+    if (modelOpenState_ != "OPEN_STATE_READY") {
+        // Прерван (сеть, остановка): следующий запуск продолжит с начала — перенос идемпотентен
+        progress(json{{"point", 0}}, true, true);
+        if (error) *error = "перенос не закончен";
+        return false;
+    }
+    const bool mark = modelOpenSteps_.empty()
+        || std::find(modelOpenSteps_.begin(), modelOpenSteps_.end(), json("mark-legacy")) != modelOpenSteps_.end();
+    if (mark) {
+        // Старые файлы не трогаются — только отметка «перенесено» (её читает и следующий запуск: legacy_present)
+        if (!writeStateFile("engine-migrated", std::to_string(nowMs()))) {
+            if (error) *error = "отметка переноса не записана";
+            return false;
+        }
+        // Журнал личного состояния перенесён движком (state.v1 → state.v2): локальные данные заново не сеются
+        writeStateFile("state-migrated", "state.v2");
+        driveLocked(host_->step("migrateFinish", json::object()));
+    }
+    progress(json{{"point", 7}}, true, false);
+    log("прежнее состояние перенесено в модель");
+    return true;
+}
+
+std::string Session::modelAuditDump() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!host_) return {};
+    const auto out = host_->raw("auditDump", json::object());
+    return out.is_object() ? out.value("jsonl", std::string()) : std::string();
+}
+
+void Session::noteOpenLocked(const engine::Step &st) {
+    if (!st.open.is_object()) return;
+    const auto state = st.open.value("state", json());
+    if (state.is_string()) modelOpenState_ = state.get<std::string>();
+    if (st.open.contains("migration") && st.open["migration"].is_object()) {
+        modelOpenSteps_ = st.open["migration"].value("steps", json::array());
+    } else {
+        modelOpenSteps_ = json::array();
+    }
+}
+
+// Итог шага модели: запросы — серверу по порядку, ответы — `ingest` (их итоги — тем же путём); события записей
+// инбокса — наружу (events либо очередь outbox_), нужды клиента — добрать и повторить ждущие записи (`retry`;
+// исчерпаны повторы — `skip`: запись без подтверждения, сервер отдаст её снова). Пачки уже зафиксированы шагом —
+// подтверждение инбокса уходит только после них (SYNC-1, OPT-024).
+bool Session::driveLocked(const engine::Step &first, std::vector<json> *events) {
+    bool ok = true;
+    std::vector<json> local;
+    auto &out = events ? *events : local;
+    std::deque<json> queue;
+    std::vector<std::string> needs;
+    std::uint64_t batches = 0;
+    auto absorb = [&](const engine::Step &st) {
+        if (!st.ok()) {
+            ok = false;
+            log("модель: " + st.error);
+        }
+        noteOpenLocked(st);
+        batches += st.batches;
+        counters::get().persist += st.batches;
+        for (const auto &ch : st.changes) {
+            if (ch.contains("client_events") && ch["client_events"].is_object()) {
+                const auto list = json::parse(ch["client_events"].value("json", std::string("[]")), nullptr, false);
+                if (list.is_array()) {
+                    for (const auto &e : list) out.push_back(e);
+                }
+            }
+            if (ch.contains("needs") && ch["needs"].is_object() && ch["needs"].value("kind", std::string()) == "client") {
+                const auto d = ch["needs"].value("detail", std::string());
+                if (!d.empty() && std::find(needs.begin(), needs.end(), d) == needs.end()) needs.push_back(d);
+            }
+        }
+        for (const auto &r : st.requests) queue.push_back(r);
+    };
+    absorb(first);
+    for (int round = 0; round < kModelRounds; ++round) {
+        if (queue.empty()) {
+            if (needs.empty() || stopping_) break;
+            bool all = true;
+            for (const auto &d : needs) {
+                const auto need = json::parse(d, nullptr, false);
+                try {
+                    all = satisfyLocked(EngineError(json{{"need", need}}.dump())) && all;
+                } catch (const std::exception &e) {
+                    log(std::string("добор данных не удался: ") + e.what());
+                    all = false;
+                }
+            }
+            needs.clear();
+            const char *method = "retry";
+            if (all) {
+                needAttempts_ = 0;
+            } else if (++needAttempts_ >= kNeedAttempts) {
+                needAttempts_ = 0;
+                method = "skip";
+                log("запись не открыта — пропуск (сервер отдаст её снова)");
+            }
+            absorb(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_EVENT"}, {"method", method}}));
+            continue;
+        }
+        const auto r = std::move(queue.front());
+        queue.pop_front();
+        const auto method = r.value("method", std::string());
+        int code = 0;
+        std::string body;
+        try {
+            const bool anon = r.value("channel", std::string()) == "REQUEST_CHANNEL_ANON";
+            if (method == "msg.inbox.ack") {
+                statAcks_++;
+                counters::get().inboxAck++;
+                if (batches > 0) statPersistBeforeAck_++;
+            }
+            body = call(anon, method, fromBase64(r.value("body", std::string())), r.value("dest_domain", std::string()));
+        } catch (const V2Error &e) {
+            code = errorCodeNumber(e.code());
+        } catch (const std::exception &) {
+            code = kUnavailableCode;
+        }
+        if (code != 0) ok = false;
+        absorb(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_RESPONSE"},
+                                  {"method", method},
+                                  {"req_id", r.contains("req_id") ? r["req_id"] : json("0")},
+                                  {"body", toBase64(body)},
+                                  {"error", code}}));
+    }
+    lastDriveBatches_ = batches;
+    if (!events && !local.empty()) absorbLocked(std::move(local));
+    return ok;
 }
 
 Session::InboxStats Session::inboxStats() const {
@@ -1066,54 +1330,12 @@ bool Session::satisfyLocked(const std::exception &ex) {
 
 // ── приём ───────────────────────────────────────────────────────────────────
 
-void Session::openRecordLocked(const std::string &bytes, std::vector<json> &events) {
-    if (!client_) return;
-    json got;
-    bool opened = false;
-    for (int i = 0; i < kNeedAttempts && !opened; ++i) {
-        try {
-            got = client_->openRecord(bytes);
-            opened = true;
-        } catch (const std::exception &e) {
-            bool more = false;
-            try {
-                more = satisfyLocked(e);
-            } catch (const std::exception &inner) {
-                log(std::string("добор данных не удался: ") + inner.what());
-            }
-            if (!more) {
-                log(std::string("запись не открыта: ") + e.what());
-                return;
-            }
-        }
-    }
-    if (got.is_array()) {
-        for (auto &ev : got) events.push_back(std::move(ev));
-    }
-    const auto err = client_->lastError();
-    if (!err.empty()) log("ошибка записи: " + err);
-}
-
 void Session::syncAllLocked(std::vector<json> &events) {
-    if (!client_) return;
-    for (int page = 0; page < kMaxSyncPages; ++page) {
-        const auto req = parseRequest(client_->syncRequest());
-        const auto resp = call(req.anon, req.method, req.body);
-        const auto batch = splitSyncResponse(resp);
-        counters::get().syncPages++;
-        const auto &records = batch.contains("records") ? batch["records"] : json::array();
-        for (const auto &r : records) {
-            if (r.is_string()) openRecordLocked(fromBase64(r.get<std::string>()), events);
-        }
-        if (!batch.value("more", false) || records.empty()) break;
-    }
-    persistLocked(); // до ack — см. обработчик inbox.record
-    try {
-        const auto ack = parseRequest(client_->ackRequest());
-        counters::get().syncAck++;
-        call(ack.anon, ack.method, ack.body);
-    } catch (const std::exception &) {
-    }
+    if (!client_ || !host_) return;
+    // Страницы журнала инбокса запрашивает модель (по одной, следующая — после разбора), записи открывает клиент
+    // модели, подтверждение — после фиксации пачки с применённым (SYNC-1)
+    counters::get().syncPages++;
+    driveLocked(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_EVENT"}, {"method", "inbox.poll"}}), &events);
 }
 
 void Session::syncNow() {
@@ -1336,59 +1558,47 @@ bool Session::acquirePeerKey(const std::string &peer) {
 void Session::openPendingRecords() {
     for (;;) {
         if (inboxHeld_) return;
-        // OPT-024: всё, что накопилось к этому моменту, — одной пачкой: одно сохранение и один ack
+        // OPT-024: всё, что накопилось к этому моменту, — одной пачкой: один шаг модели (`inbox.records`), одна
+        // фиксация хранилища и один ack после неё
         std::deque<std::string> batch;
         {
             std::lock_guard<std::mutex> lk(recordsMu_);
             if (records_.empty()) return;
             batch.swap(records_);
         }
-        std::optional<Exported> snapshot;
-        std::optional<OutRequest> ack;
-        {
-            std::lock_guard<std::recursive_mutex> lk(engineMu_);
-            if (!client_) {
-                // Сессия закрыта — записи без ack сервер отдаст заново
-                std::lock_guard<std::mutex> rl(recordsMu_);
-                records_.clear();
-                return;
-            }
-            std::size_t total = 0;
-            for (const auto &body : batch) {
-                std::vector<json> events;
-                openRecordLocked(body, events);
-                total += events.size();
-                absorbLocked(std::move(events));
-                counters::get().inboxRecords++;
-                statRecords_++;
-            }
-            log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total));
-            reciprocateKeysLocked(); // T185: записи могли принести ключ участника группы
-            // Сначала на диск (сессии Olm продвинулись), потом ack: процесс, убитый между ними, иначе терял
-            // входящую сессию навсегда. Снимок — здесь, запись и ack — вне мьютекса движка.
-            snapshot = exportLocked();
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!client_ || !host_) {
+            // Сессия закрыта — записи без ack сервер отдаст заново
+            std::lock_guard<std::mutex> rl(recordsMu_);
+            records_.clear();
+            return;
+        }
+        json records = json::array();
+        for (const auto &body : batch) {
             try {
-                ack = parseRequest(client_->ackRequest());
-            } catch (const std::exception &) {
+                records.push_back(decodeMessage("parvane.msg.v2.InboxRecord", body));
+            } catch (const std::exception &e) {
+                log(std::string("запись инбокса не разобрана: ") + e.what());
             }
         }
-        counters::get().inboxPersist++;
-        statPersists_++;
-        const bool onDisk = snapshot && writeExported(*snapshot);
-        if (!onDisk) {
-            // Не записано — ack не шлём: сервер отдаст записи заново
-            log("записи инбокса: состояние не сохранено — ack отложен");
+        std::string body;
+        try {
+            body = encodeMessage("parvane.msg.v2.InboxSyncResponse", json{{"records", records}});
+        } catch (const std::exception &e) {
+            log(std::string("пачка записей инбокса не собрана: ") + e.what());
             continue;
         }
-        if (ack) {
-            try {
-                counters::get().inboxAck++;
-                statAcks_++;
-                statPersistBeforeAck_++;
-                call(ack->anon, ack->method, ack->body);
-            } catch (const std::exception &) {
-            }
-        }
+        std::vector<json> events;
+        const auto st = host_->ingest(json{{"kind", "SERVER_INPUT_KIND_EVENT"}, {"method", "inbox.records"}, {"body", toBase64(body)}});
+        driveLocked(st, &events);
+        const auto total = events.size();
+        absorbLocked(std::move(events));
+        counters::get().inboxRecords += batch.size();
+        counters::get().inboxPersist += lastDriveBatches_;
+        statRecords_ += batch.size();
+        statPersists_ += lastDriveBatches_;
+        log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total));
+        reciprocateKeysLocked(); // T185: записи могли принести ключ участника группы
     }
 }
 
@@ -1600,11 +1810,14 @@ void Session::dropIdentityLocked() {
     ready_ = false;
     client_.reset();
     state_.reset();
+    host_.reset(); // модель закрыта: её хранилище уходит в карантин целиком, следующее подключение — новое
+    hostDevice_.clear();
+    hostHadProfile_ = false;
     // Вердикт «replaced» приходит голым ответом сервера без доказательства сброса (A0072-1): файлы личности не
     // стираются, а уходят в карантин `replaced-<мс>` рядом — настоящий сброс ничего не теряет, а подмену можно откатить
     const std::string quarantine = cfg_.stateDir + "/replaced-" + std::to_string(nowMs());
     const bool hasQuarantine = ::mkdir(quarantine.c_str(), 0700) == 0;
-    for (const char *name : {"state", "root", "root-backup", "root-backup-sent", "root-backup-received", "own-devices", "state-migrated"}) {
+    for (const char *name : {"store", "state", "root", "root-backup", "root-backup-sent", "root-backup-received", "own-devices", "state-migrated"}) {
         const std::string from = cfg_.stateDir + "/" + name;
         if (!hasQuarantine || std::rename(from.c_str(), (quarantine + "/" + name).c_str()) != 0) {
             std::remove(from.c_str());
@@ -1652,7 +1865,9 @@ std::string Session::recoverWithKey(const std::string &recoveryKey) {
             return "bad_key";
         }
         try {
-            auto c = Client::create(cfg_.self, deviceId_, domain_);
+            if (!host_) throw std::runtime_error("модель не открыта");
+            auto c = std::make_unique<Client>(host_);
+            c->replaceNew();
             const auto ownLog = call(false, "identity.device.log_sync",
                 encodeMessage("parvane.identity.v2.DeviceLogSyncRequest",
                               json{{"user", {{"address", cfg_.self}}}, {"after_version", "0"}}));
@@ -1676,7 +1891,13 @@ std::string Session::recoverWithKey(const std::string &recoveryKey) {
             std::fill(root.begin(), root.end(), '\0');
             client_.reset();
             std::remove((cfg_.stateDir + "/publish").c_str());
-            std::remove((cfg_.stateDir + "/state").c_str());
+            // Недовосстановленный клиент модели не остаётся (на диск он не попадал)
+            if (host_) {
+                try {
+                    Client(host_).replaceNew();
+                } catch (const std::exception &) {
+                }
+            }
             log(std::string("восстановление по ключу не удалось: ") + e.what());
             return "failed";
         }
@@ -1699,7 +1920,9 @@ std::string Session::resetIdentity(const std::string &password) {
             return "bad_password";
         }
         try {
-            auto c = Client::create(cfg_.self, deviceId_, domain_);
+            if (!host_) throw std::runtime_error("модель не открыта");
+            auto c = std::make_unique<Client>(host_);
+            c->replaceNew();
             const auto created = c->resetIdentity(cfg_.otkCount);
             // Первый запрос — замена журнала (нужна свежая переаутентификация):
             // здесь «сеть → диск», повтор после рестарта без пароля не прошёл бы.
@@ -3373,26 +3596,13 @@ std::string Session::historyAddress(const json &peer) {
 bool Session::openStateLocked() {
     if (state_) return true;
     if (!client_ || !ready_) return false;
-    std::string error;
-    state_ = StateModel::open(
-        *client_, cfg_.self, deviceId_, domainNow(), cfg_.stateDir + "/state-model",
-        [this](const json &r, int *code) -> std::string {
-            try {
-                const bool anon = r.value("channel", std::string()) == "REQUEST_CHANNEL_ANON";
-                return call(anon, r.value("method", std::string()), fromBase64(r.value("body", std::string())),
-                            r.value("dest_domain", std::string()));
-            } catch (const V2Error &e) {
-                *code = errorCodeNumber(e.code());
-            } catch (const std::exception &) {
-                *code = errorCodeNumber("ERROR_CODE_UNAVAILABLE");
-            }
-            return std::string();
-        },
-        &error);
-    if (!state_) {
-        log("журнал состояния: модель не открыта: " + error);
+    if (!host_ || !client_->hasStateKey()) {
+        log("журнал состояния: нет ключа личного состояния");
         return false;
     }
+    // Та же модель, что держит клиентское ядро: ключи личного состояния не выходят из движка, курсор журнала и
+    // сведённое — в её хранилище (переживают перезапуск)
+    state_ = std::make_unique<StateModel>(host_, [this](const engine::Step &st) { return driveLocked(st); });
     if (stateBase_.is_null()) {
         stateBase_ = json::parse(readStateFile("state-base"), nullptr, false);
         if (!stateBase_.is_object()) stateBase_ = json::object();

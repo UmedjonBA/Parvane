@@ -341,3 +341,40 @@ fn skipped_record_lets_the_following_ones_through() {
     }
     assert_eq!(texts, vec!["первое".to_string()], "повтор пропущенной открывается");
 }
+
+/// OPT-024 (desktop/android T121/T125): живые записи, накопленные хостом к началу разбора, подаются модели одним
+/// событием `inbox.records` — одна пачка хранилища и одно подтверждение после неё, события — по порядку.
+#[test]
+fn accumulated_records_are_one_batch_and_one_ack() {
+    let mut srv = Server::default();
+    let (mut ha, mut hb) = (Host::default(), Host::default());
+    let mut alice = identity(&mut ha, &mut srv, "alice@local", 3);
+    let mut bob = identity(&mut hb, &mut srv, "bob@local", 4);
+    flush(&mut hb, &mut bob);
+    share_key(&mut bob, "bob@local", &mut alice);
+    // Журнал отправителя заранее — записи открываются без нужд
+    let resp = ipb::DeviceLogSyncResponse { entries: srv.logs["alice@local"].clone(), more: false, genesis_hash: vec![], deleted: false };
+    cc(&mut bob, "ingestLog", json!({"user": "alice@local", "syncResponse": b64e(&resp.encode_to_vec())})).unwrap();
+    let words = ["раз", "два", "три", "четыре", "пять"];
+    for w in words {
+        send_text(&mut alice, &mut srv, "alice@local", "bob@local", w, "");
+    }
+    let records = srv.inbox[&("bob@local".to_string(), "d1".to_string())].clone();
+    assert!(records.len() >= words.len());
+    let body = InboxSyncResponse { records, more: false };
+    let args = json!({"kind": "SERVER_INPUT_KIND_EVENT", "method": "inbox.records", "body": b64e(&body.encode_to_vec())});
+    let out = raw(&mut bob, "ingest", &args);
+    assert!(out.get("error").is_none(), "{out}");
+    hb.log.clear();
+    let st = hb.drive(&mut bob, out, true);
+    assert!(client_needs(&st.changes).is_empty(), "журнал отправителя уже есть — нужд нет: {:?}", st.changes);
+    let texts = event_texts(&st.changes);
+    let batches = st.batches;
+    assert_eq!(texts, words.iter().map(|w| w.to_string()).collect::<Vec<_>>());
+    assert_eq!(batches, 1, "одна пачка на все записи: {:?}", hb.log);
+    let acks = hb.log.iter().filter(|l| *l == "req:msg.inbox.ack").count();
+    assert_eq!(acks, 1, "одно подтверждение: {:?}", hb.log);
+    let commit = hb.log.iter().position(|l| l.starts_with("commit:")).unwrap();
+    let ack = hb.log.iter().position(|l| l == "req:msg.inbox.ack").unwrap();
+    assert!(commit < ack, "на диске раньше ack: {:?}", hb.log);
+}

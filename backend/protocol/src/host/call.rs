@@ -164,13 +164,14 @@ impl HostClient {
                 Value::Null
             }
             "hasRoot" => json!(self.root.is_some()),
+            // Корень — аргументом `rootSecret` (desktop/android: корень из своего хранилища) либо уже открытый в памяти
             "recoverWithRoot" => {
-                let root = self.root.clone().ok_or_else(|| err(ProtoError::NotFound))?;
+                let root = self.root_or(a.bo("rootSecret")?)?;
                 let r: ipb::DeviceLogSyncResponse = decode_checked(&a.b("logResponse")?, Origin::Server).map_err(err)?;
                 reqs(&self.inner.recover_with_root(&root, r.entries, a.n("otkCount")?).map_err(err)?)
             }
             "rotateSsk" => {
-                let root = self.root.clone().ok_or_else(|| err(ProtoError::NotFound))?;
+                let root = self.root_or(a.bo("rootSecret")?)?;
                 reqs(&self.inner.rotate_ssk_with_secret(&root).map_err(err)?)
             }
             "ownSskExposed" => json!(c.own_ssk_exposed()),

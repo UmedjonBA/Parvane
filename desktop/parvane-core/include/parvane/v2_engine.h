@@ -17,10 +17,11 @@
 
 #include <nlohmann/json.hpp>
 
-struct PvClient;
 struct PvAnonPlanner;
-struct PvStateSession;
-struct PvHistorySession;
+
+namespace parvane::engine {
+class Host;
+}
 
 namespace parvane::v2 {
 
@@ -135,26 +136,37 @@ private:
     PvAnonPlanner *p_ = nullptr;
 };
 
-// Клиентское ядро устройства (состояние Olm, журналы, курсор инбокса).
-// Не потокобезопасно: вызывающий сериализует доступ.
+// Клиентское ядро устройства (ключи, журналы устройств и групп, эпохи, сессии, курсор инбокса) — в модели движка
+// (spec 035 T125, contracts/engine-api.md): каждый вызов — `clientCall` модели `engine::Host` теми же именами и
+// аргументами, что единая точка входа `host::call` (web `EngineClient`; android — то же ядро). Состояние клиента
+// лежит в хранилище модели (`store_fs`) и уходит на диск следующим шагом модели (`flush`) — своего экспорта у хоста
+// нет. Каждый вызов атомарен (мьютекс модели); составные действия сериализует вызывающий.
 class Client {
 public:
+    explicit Client(std::shared_ptr<engine::Host> host);
     ~Client();
     Client(const Client &) = delete;
     Client &operator=(const Client &) = delete;
 
+    // Клиент в модели без профиля (хранилище в памяти): тесты и разовые проверки. Бросают EngineError.
     [[nodiscard]] static std::unique_ptr<Client> create(const std::string &user,
                                                         const std::string &deviceId,
                                                         const std::string &domain);
-    // Состояние, зашифрованное ключом (32 байта) — pv_client_export.
+    // Экспорт прежнего клиента (под ключом 32 байта) — импортом в модель в памяти.
     [[nodiscard]] static std::unique_ptr<Client> import(const std::string &blob,
                                                         const std::string &key32);
+    // Сменить клиента модели: новое устройство (пользователь, устройство и домен модели) либо импорт экспорта.
+    // Бросают EngineError.
+    void replaceNew();
+    void replaceImport(const std::string &blob, const std::string &key32);
+    // Экспорт состояния клиента под ключом (копия ключей аккаунта, линковка) — чтение модели.
     [[nodiscard]] std::string exportState(const std::string &key32) const;
+    [[nodiscard]] const std::shared_ptr<engine::Host> &host() const { return host_; }
 
-    // spec 029: любая функция клиента по имени WASM-обвязки (`plannerSeal`, `groupInfo`, `renamePrepare`, …)
-    // с тем же смыслом, что в web `controller.ts`: аргументы — объект (байты — base64), результат — значение
-    // JSON (запросы — {chan, method, body, dest?}). Бросает EngineError (need — добрать и повторить).
-    json call(const std::string &name, const json &args = json::object());
+    // Любая функция клиента по имени единой точки входа (`plannerSeal`, `groupInfo`, `renamePrepare`, …) с тем же
+    // смыслом, что в web `controller.ts`: аргументы — объект (байты — base64), результат — значение JSON (запросы —
+    // {chan, method, body, dest?}). Бросает EngineError (need — добрать и повторить).
+    json call(const std::string &name, const json &args = json::object()) const;
 
     // Первое v2-устройство: корень, журнал, сертификат, OTK.
     // → {"requests":[…], "rootSecret": base64}.
@@ -174,21 +186,22 @@ public:
     [[nodiscard]] json tokenRequest(const std::string &keyList, const std::string &serverKey,
                                     std::size_t count);
     std::size_t tokenResponse(const std::string &resp);
-    // content — proto3-JSON parvane.msg.v2.Content; opId — UUID ("" — новый).
-    // → массив запросов. Бросает EngineError (в т.ч. need).
     // Сигнал личного звонка (D-08): proto3-JSON parvane.call.v2.CallSignal →
     // массив запросов (оффер — call.ring_sealed, прочее — call.signal_sealed,
     // анонимный канал). Бросает (need — как prepareDirect).
     [[nodiscard]] json prepareCall(const std::string &peer, const json &signal);
+    // content — proto3-JSON parvane.msg.v2.Content; opId — UUID ("" — новый).
+    // → массив запросов. Бросает EngineError (в т.ч. need).
     [[nodiscard]] json prepareDirect(const std::string &peer, const json &content,
                                      const std::string &opId);
-    // Запись журнала инбокса (байты InboxRecord) → массив событий.
+    // Запись журнала инбокса (байты InboxRecord) → массив событий. Сессия подаёт записи модели (`ingest`, режим хоста);
+    // прямой вызов — тесты.
     [[nodiscard]] json openRecord(const std::string &record);
     [[nodiscard]] std::string lastError();
     [[nodiscard]] std::uint64_t logVersion(const std::string &user) const;
     // C1-06: копия корня (32 байта rootSecret из createIdentity) под ключом
-    // восстановления (generateRecoveryKey) и обратно (сверка с журналом).
-    // Бросают EngineError.
+    // восстановления (generateRecoveryKey) и обратно (сверка с журналом; открытый корень остаётся в памяти модели
+    // до rotateSsk). Бросают EngineError.
     [[nodiscard]] std::string exportRootBackup(const std::string &root32,
                                                const std::string &recoveryKey) const;
     [[nodiscard]] std::string importRootBackup(const std::string &blob,
@@ -279,7 +292,7 @@ public:
     [[nodiscard]] json shareDeliveryKey(const std::string &peer);
     // T142: группы v2 — своим новым устройствам (JSON-массив запросов).
     [[nodiscard]] json shareGroupsWithOwnDevices(const json &devices);
-    // Сменить SSK корнем (32 байта секрета) → запросы. Бросает.
+    // Сменить SSK корнем (32 байта секрета; пусто — корень, уже открытый в модели) → запросы. Бросает.
     [[nodiscard]] json rotateSsk(const std::string &root32);
     // Свой SSK раскрыт отзывом державшего его устройства и ещё не сменён.
     [[nodiscard]] bool ownSskExposed() const;
@@ -323,55 +336,14 @@ public:
     [[nodiscard]] bool hasStateKey() const;
     // Создать ключ, если его нет; true — создан (сохранить состояние).
     bool ensureStateKey();
-    PvClient *raw() const { return c_; }
 
 private:
-    explicit Client(PvClient *c) : c_(c) {}
-    PvClient *c_ = nullptr;
-};
-
-// Сессия журнала личного состояния (STATE-1): сведение и шифрование — в
-// движке. Курсор в памяти: при запуске журнал читается с начала.
-// Тела state.append — байты (std::string). Не потокобезопасна.
-class StateSession {
-public:
-    // nullptr — у клиента нет ключа личного состояния.
-    [[nodiscard]] static std::unique_ptr<StateSession> open(const Client &client);
-    ~StateSession();
-    StateSession(const StateSession &) = delete;
-    StateSession &operator=(const StateSession &) = delete;
-
-    [[nodiscard]] std::string syncRequest() const;
-    // spec 029: функция журнала по имени WASM `PvState` (`callSet`, `cloudContainerSet`, …). Бросает.
-    json call(const std::string &name, const json &args = json::object());
-    // Ответ state.sync → {"more","applied","rejected"}. Бросает.
-    json ingest(const std::string &resp);
-    // proto3-JSON state.v1.StateSnapshot.
-    [[nodiscard]] json snapshot() const;
-    // Желаемое состояние по видам → тела state.append. Бросает.
-    [[nodiscard]] std::vector<std::string> diff(const json &desired, const std::vector<std::string> &kinds);
-    // Первый запуск: локальный снимок → тела state.append. Бросает.
-    [[nodiscard]] std::vector<std::string> migrate(const json &local);
-    // Отложенные к отправке этим устройством (ScheduledMessage[]).
-    [[nodiscard]] json claimDue(std::int64_t nowMs);
-    [[nodiscard]] std::vector<std::string> markSent(const std::string &opIdB64);
-    // Чат очищен «у себя» до момента (proto3-JSON state.v1.ChatCleared) →
-    // тела state.append. Бросает.
-    [[nodiscard]] std::vector<std::string> chatCleared(const json &cleared);
-    // Ссылка-приглашение группы v2 (proto3-JSON state.v1.GroupInvite) и её
-    // снятие (link_id — base64) → тела state.append. Бросают.
-    [[nodiscard]] std::vector<std::string> groupInviteSet(const json &invite);
-    [[nodiscard]] std::vector<std::string> groupInviteRemove(const std::string &linkIdB64);
-
-private:
-    explicit StateSession(PvStateSession *s) : s_(s) {}
-    PvStateSession *s_ = nullptr;
+    std::shared_ptr<engine::Host> host_;
 };
 
 // Сессия журнала истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): шифрование и разбор записей — в движке
-// (`pv_client_history_session`, контракт `specs/033-history-sync/contracts/engine-api.md`). Ключ истории выводится из
-// текущего и прежних ключей личного состояния клиента на момент открытия — после смены ключа сессию открыть заново.
-// Курсор, голову журнала и строки хранит хост (`parvane::history::HistorySync`). Не потокобезопасна.
+// (`historyCall` модели: ключ истории выводится из текущего и прежних ключей личного состояния клиента модели и
+// обновляется после их смены). Курсор, голову журнала и строки хранит хост (`parvane::history::HistorySync`).
 class HistorySession {
 public:
     // nullptr — у клиента нет ключа личного состояния.
@@ -384,8 +356,8 @@ public:
     json call(const std::string &name, const json &args = json::object());
 
 private:
-    explicit HistorySession(PvHistorySession *s) : s_(s) {}
-    PvHistorySession *s_ = nullptr;
+    explicit HistorySession(std::shared_ptr<engine::Host> host) : host_(std::move(host)) {}
+    std::shared_ptr<engine::Host> host_;
 };
 
 } // namespace parvane::v2

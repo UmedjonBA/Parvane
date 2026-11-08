@@ -12,6 +12,7 @@
 #include "ui/layers/show.h" // тосты звонков из Calls::Instance
 #include "history/history_item_components.h" // HiddenSenderInfo (пересылка)
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
+#include <parvane/migrate_legacy.h> // spec 035 T127: читатель старых мест tdata для разового переноса
 #include <condition_variable>
 #include <thread>
 #include <deque>
@@ -1895,6 +1896,45 @@ void HandleRecoveryKey(const std::string &key) {
 		: QString();
 }
 
+// spec 035 T127: ход разового переноса прежнего состояния в хранилище модели — нативным тостом окна (EN+RU):
+// шаги переноса, итог; прерванный перенос повторится при следующем подключении (старое не тронуто).
+void ShowMigrationProgress(int point, int total, bool done, bool failed) {
+	static auto shownPoint = -1;
+	const auto window = Core::App().activeWindow();
+	if (failed) {
+		shownPoint = -1;
+		LOG(("Parvane: v2: перенос прежнего состояния не закончен — повтор при следующем подключении"));
+		if (window) {
+			window->showToast(tr::lng_parvane_migration_failed(tr::now));
+		}
+		return;
+	}
+	if (done) {
+		if (shownPoint >= 0 && window) {
+			window->showToast(tr::lng_parvane_migration_done(tr::now));
+		}
+		shownPoint = -1;
+		return;
+	}
+	if (point == shownPoint) {
+		return;
+	}
+	shownPoint = point;
+	LOG(("Parvane: v2: перенос прежнего состояния, шаг %1 из %2").arg(point).arg(total));
+	if (window) {
+		window->showToast(Ui::Toast::Config{
+			.title = tr::lng_parvane_migration_title(tr::now),
+			.text = { tr::lng_parvane_migration_progress(
+				tr::now,
+				lt_step,
+				QString::number(std::max(point, 1)),
+				lt_total,
+				QString::number(total)) },
+			.duration = crl::time(4000),
+		});
+	}
+}
+
 // Поднять v2-сессию (под g_sessionMutex из StartSession: адрес и JWT уже есть).
 void StartV2Locked() {
 	if (!V2Enabled()) {
@@ -1935,6 +1975,39 @@ void StartV2Locked() {
 		}
 	};
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
+	// spec 035 T127: старые места tdata по перечню (слой desktop) — разовым переносом в хранилище модели
+	cfg.migrationLayer = "desktop";
+	cfg.legacyRecords = [tdata = TdataDir().toStdString(), self] {
+		// Файлы аккаунта, которые пишет сам клиент (слой desktop перечня): маркеры, служебное журнала истории,
+		// наборы стикеров, контакты, фоны чатов, очистка «у себя», ключи разделов
+		static const std::vector<parvane::migrate_legacy::AccountFile> files = {
+			{ "parvane-readmarks-", ".json", false },
+			{ "parvane-history-sync-", "-", true },
+			{ "parvane-sticker-packs-", ".json", false },
+			{ "parvane-contacts-", ".json", false },
+			{ "parvane-chat-wallpapers-", ".json", false },
+			{ "parvane-cleared-", ".txt", false },
+			{ "parvane-domain-keys-", ".json", false },
+		};
+		const auto collected = parvane::migrate_legacy::collect(tdata, self, files);
+		for (const auto &key : collected.unreadable) {
+			LOG(("Parvane: v2: перенос — файл не открылся: %1").arg(QString::fromStdString(key)));
+		}
+		auto out = parvane::migrate_legacy::toJson(collected);
+		out["layer"] = "desktop";
+		return out;
+	};
+	cfg.onMigration = [generation = AccountGeneration()](const parvane::json &p) {
+		const auto point = p.value("point", 0);
+		const auto total = p.value("total", 7);
+		const auto done = p.value("done", false);
+		const auto failed = p.value("failed", false);
+		crl::on_main([=] {
+			if (AccountGenerationIs(generation)) {
+				ShowMigrationProgress(point, total, done, failed);
+			}
+		});
+	};
 	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
 		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
 	}

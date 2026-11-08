@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <mutex>
@@ -1092,6 +1093,20 @@ int main() {
     // Офлайн: bob гаснет, alice пишет, bob поднимается из сохранённого состояния.
     bob.s->stop();
     bob.s.reset();
+    // spec 035 T125: состояние клиента — в хранилище модели (`store/`, пачки store_fs), полного экспорта хостом
+    // (файл `state`) нет; временного каталога прежней модели личного состояния — тоже
+    {
+        namespace fsx = std::filesystem;
+        std::size_t packs = 0;
+        std::error_code ec;
+        for (const auto &e : fsx::directory_iterator(dir + "/bob/store", ec)) {
+            const auto n = e.path().filename().string();
+            if (n.rfind("pack-", 0) == 0 || n.rfind("batch-", 0) == 0) ++packs;
+        }
+        check(packs > 0, "T125: состояние bob — пачками хранилища модели", std::to_string(packs));
+        check(!fsx::exists(dir + "/bob/state"), "T125: полного экспорта состояния (файл state) нет");
+        check(!fsx::exists(dir + "/bob/state-model"), "T125: временного хранилища личного состояния нет");
+    }
     const auto u3 = v2::newUuidV7();
     try {
         alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("v2-offline-" + suffix)), u3);

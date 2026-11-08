@@ -671,6 +671,18 @@ std::atomic<bool> g_auditDumpStarted = false;
 		out << parvane::audit::jsonl(lines);
 	}
 	std::rename(tmp.c_str(), path.c_str());
+	// spec 035 (T123, contracts/migration.md): выгрузка «после» — новым движком (`auditDump` модели профиля)
+	if (const auto s = V2Ready()) {
+		const auto model = s->modelAuditDump();
+		if (!model.empty()) {
+			const auto modelPath = path + ".model";
+			{
+				std::ofstream out(modelPath + ".tmp", std::ios::binary | std::ios::trunc);
+				out << model;
+			}
+			std::rename((modelPath + ".tmp").c_str(), modelPath.c_str());
+		}
+	}
 	return std::to_string(lines.size());
 }
 

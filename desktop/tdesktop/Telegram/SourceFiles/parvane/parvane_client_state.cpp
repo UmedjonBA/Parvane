@@ -2217,6 +2217,17 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	if (type == "legacyV1") {
 		return true; // кадры v1 больше не разбираются (spec 029): v1 удалён
 	}
+	if (type == "upgradeRequired") {
+		// spec 035 (US5, FR-026): хранилище модели записано более новой версией — «обновите приложение»
+		LOG(("Parvane: v2: хранилище устройства новее приложения (%1)")
+			.arg(QString::fromStdString(ev.value("reason", std::string()))));
+		crl::on_main([] {
+			if (const auto window = Core::App().activeWindow()) {
+				window->showToast(tr::lng_parvane_store_too_new(tr::now));
+			}
+		});
+		return true;
+	}
 	if (type == "needsLinking") {
 		// Debug для e2e (T130): других устройств аккаунта нет —
 		// PARVANE_AUTORECOVER=<ключ восстановления> либо PARVANE_AUTORESET=1
