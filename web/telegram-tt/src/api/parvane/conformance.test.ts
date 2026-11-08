@@ -1364,7 +1364,9 @@ describe('RECOVER-1: смена корня собеседника, восста�
     expect(client).toMatch(/LogVerdict::RootChanged\)[\s\S]{0,200}_ => Err\(ProtoError::BrokenChain\)/);
     const identity = readRepo('backend/shards/identity/src/v2.rs');
     [r.backupMethods.set, r.backupMethods.get].forEach((method) => expect(identity).toContain(`"${method}" =>`));
-    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries, more, ${r.genesisField}, deleted: false }`);
+    // Ответ несёт генезис журнала; записи — исходными байтами (spec 035 T057, `with_raw_entries`)
+    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries: vec![], more, ${r.genesisField}, deleted: false }`);
+    expect(identity).toContain('with_raw_entries(&entries, pb::DeviceLogSyncAnonResponse');
     const proto = readRepo('proto/parvane/identity/v2/identity.proto');
     [r.backupMethods.set, r.backupMethods.get, r.resetMethod, r.reauthMethod].forEach((method) => {
       expect(proto, method).toContain(`name: "${method}"`);
