@@ -91,6 +91,13 @@ char *pv_engine_call(struct PvEngine *e,
                      const char *args_json);
 
 /**
+ * Переходный период desktop/android (spec 035 T125, как WASM `PvEngine.adoptStateKeys`): ключи личного состояния
+ * прежнего клиента — в модель (ключи не выходят из движка). Результат — итог движка (`Outcome`, JSON) либо
+ * `{"error": …}`; освобождать `pv_free_string`.
+ */
+char *pv_engine_adopt_state_keys(struct PvEngine *e, const struct PvClient *c);
+
+/**
  * Закрыть модель.
  */
 void pv_engine_free(struct PvEngine *e);
@@ -139,11 +146,6 @@ struct PvBytes pv_client_export(struct PvClient *c,
                                 uintptr_t key_len,
                                 char **err);
 
-/**
- * Импорт Olm-аккаунта v1 (JSON-pickle parvane-e2e).
- */
-bool pv_client_import_v1_account(struct PvClient *c, const char *pickle_json, char **err);
-
 char *pv_client_create_identity(struct PvClient *c, uintptr_t otk, char **err);
 
 char *pv_client_link_grant_material(struct PvClient *c, char **err);
@@ -152,8 +154,6 @@ char *pv_client_join_with_grant(struct PvClient *c,
                                 const char *material,
                                 uintptr_t otk,
                                 char **err);
-
-char *pv_client_otk_request(struct PvClient *c, uintptr_t n, char **err);
 
 char *pv_client_sync_request(struct PvClient *c, char **err);
 
@@ -470,23 +470,6 @@ char *pv_client_log_devices(const struct PvClient *c,
                             const char *user);
 
 /**
- * Опубликовать/сократить свой список v1-устройств (FR-058): JSON
- * `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
- */
-char *pv_client_legacy_devices_request(struct PvClient *c,
-                                       const char *devices_json,
-                                       char **err);
-
-/**
- * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
- * для v1-устройств из подписанных списков.
- */
-char *pv_client_legacy_deliver_request(const struct PvClient *c,
-                                       const char *message_id,
-                                       const char *send_payload_json,
-                                       char **err);
-
-/**
  * Запас слепых жетонов.
  */
 uintptr_t pv_client_token_count(const struct PvClient *c);
@@ -629,12 +612,6 @@ char *pv_state_mark_sent(struct PvStateSession *s,
                          char **err);
 
 /**
- * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
- * `parvane.state.v1.CallRecord` → JSON-массив base64 тел `state.append`.
- */
-char *pv_state_call_set(struct PvStateSession *s, const char *record_json, char **err);
-
-/**
  * Ссылка-приглашение группы v2 (T160): proto3-JSON
  * `parvane.state.v1.GroupInvite` → JSON-массив base64 тел `state.append`.
  */
@@ -662,12 +639,6 @@ void pv_state_load_sent_guard(struct PvStateSession *s, const char *ids_json);
 
 uint64_t pv_client_log_version(const struct PvClient *c, const char *user);
 
-void pv_client_set_peer_delivery_key(struct PvClient *c,
-                                     const char *user,
-                                     const uint8_t *key,
-                                     uintptr_t len,
-                                     uint64_t generation);
-
 struct PvBytes pv_encode_hello(int32_t channel, const char *kind, const char *version);
 
 struct PvBytes pv_encode_auth(const char *token);
@@ -690,8 +661,6 @@ struct PvBytes pv_encode_request_to(uint64_t id,
                                     const char *dest,
                                     uint32_t pad_to);
 
-struct PvBytes pv_encode_ping(uint64_t nonce);
-
 char *pv_decode_frame(const uint8_t *bytes, uintptr_t len, char **err);
 
 char *pv_verify_server_descriptor(const uint8_t *bytes, uintptr_t len, char **err);
@@ -709,17 +678,6 @@ char *pv_decode_message(const char *type_name, const uint8_t *bytes, uintptr_t l
  * Тело запроса любого метода реестра из proto3-JSON (T161).
  */
 struct PvBytes pv_encode_method_request(const char *method, const char *json, char **err);
-
-/**
- * Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
- * base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака».
- */
-struct PvBytes pv_encode_upload_chunk(const char *upload_id,
-                                      uint32_t index,
-                                      int32_t bucket,
-                                      const uint8_t *data,
-                                      uintptr_t len,
-                                      char **err);
 
 /**
  * Ответ любого метода реестра → proto3-JSON (T161).

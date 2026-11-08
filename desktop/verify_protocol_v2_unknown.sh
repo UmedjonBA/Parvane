@@ -3,11 +3,13 @@
 # неизвестного вида подряд — 10 заглушек «не поддерживается», журнал инбокса не
 # застревает: обычный текст ПОСЛЕ них доставлен и показан. Отправитель — Rust-
 # инжектор `backend/tests/integration/tests/v2_inject.rs` (фича test-inject,
-# тот же, что у web-пары `unknown-kinds`).
+# тот же, что у web-пары `unknown-kinds`). spec 035 (T128, FR-041): ещё 2 сообщения вида из критичного диапазона
+# 1000–1999 — заглушка «нужна новая версия Parvane» (STUB_CRITICAL), отличная от обычной.
 # Бинарь tdesktop — с -DPARVANE_DEV=ON. Инжектор собирается здесь (cargo --no-run).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 S=$(date +%s)
 N=10
+NC=2
 SB="$ROOT/../local-workdirs/verify-protocol-v2-unknown"
 (cd "$ROOT/../backend" && cargo test -q -p parvane-integration --test v2_inject --no-run >"$SB.build.log" 2>&1) \
   || bad "инжектор не собрался (см. $SB.build.log)"
@@ -23,14 +25,16 @@ PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия готова" || bad "bob: v2 не поднялся"
 
 (cd "$ROOT/../backend" && PARVANE_INJECT_GATEWAY_TCP=127.0.0.1:9223 PARVANE_INJECT_FROM="$INJ" \
-  PARVANE_INJECT_TO=bob@local PARVANE_INJECT_TEXT="$FINAL" PARVANE_INJECT_COUNT=$N \
+  PARVANE_INJECT_TO=bob@local PARVANE_INJECT_TEXT="$FINAL" PARVANE_INJECT_COUNT=$N PARVANE_INJECT_CRITICAL=$NC \
   timeout 300 cargo test -q -p parvane-integration --test v2_inject -- --ignored --nocapture >"$SB/inject.log" 2>&1)
 grep -q "INJECT OK" "$SB/inject.log" && ok "инжектор отправил $N неизвестных + текст" || bad "инжектор не отработал (см. $SB/inject.log)"
 
 wait_log "$BL" "входящее msg [0-9a-f-]+ \($INJ\): $FINAL" 90 && ok "bob: текст после неизвестных доставлен (журнал не застрял)" \
   || bad "bob: текст после неизвестных не пришёл"
-STUBS=$(grep -c "заглушка unsupported msg [0-9a-f-]* ($INJ)" "$BL")
+STUBS=$(grep -c "заглушка unsupported msg [0-9a-f-]* ($INJ)$" "$BL")
 [ "$STUBS" = "$N" ] && ok "bob: $N заглушек «не поддерживается»" || bad "bob: заглушек $STUBS, ожидалось $N"
+CRIT=$(grep -c "заглушка unsupported msg [0-9a-f-]* ($INJ) критичная" "$BL")
+[ "$CRIT" = "$NC" ] && ok "bob: $NC критичных заглушек «нужна новая версия Parvane»" || bad "bob: критичных заглушек $CRIT, ожидалось $NC"
 LAST_STUB=$(grep -n "заглушка unsupported msg [0-9a-f-]* ($INJ)" "$BL" | tail -1 | cut -d: -f1)
 TEXT_AT=$(grep -n "входящее msg [0-9a-f-]* ($INJ): $FINAL" "$BL" | head -1 | cut -d: -f1)
 [ -n "$LAST_STUB" ] && [ -n "$TEXT_AT" ] && [ "$TEXT_AT" -gt "$LAST_STUB" ] \

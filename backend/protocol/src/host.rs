@@ -1221,6 +1221,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn critical_stub_is_marked_in_event() {
+        let ev = |d| Event::Direct {
+            seq: 1, chat: "bob@local".into(), from: "bob@local".into(), device: "d1".into(), op_id: vec![1; 16],
+            ts_ms: 1, content: Content::default(), disposition: d, proof: vec![],
+        };
+        let crit = event_json(&ev(Disposition::StubCritical));
+        assert_eq!(crit["disposition"], json!("stub"));
+        assert_eq!(crit["critical"], json!(true));
+        let plain = event_json(&ev(Disposition::Stub));
+        assert_eq!(plain["disposition"], json!("stub"));
+        assert!(plain.get("critical").is_none());
+    }
+
+    #[test]
     fn grant_numbers_are_required_and_not_truncated() {
         assert_eq!(grant_numbers(&json!({"gen": 3})).unwrap(), (3, None));
         assert_eq!(grant_numbers(&json!({"gen": 3, "sk": "00", "skv": 7})).unwrap(), (3, Some(7)));

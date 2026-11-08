@@ -388,7 +388,6 @@ void Session::applyRevocationLocked(const json &outcome) {
     persistLocked();
     if (outcome.contains("stateKeyVersion") && !outcome["stateKeyVersion"].is_null()) {
         state_.reset();
-        pendingAppends_.clear();
         stateRekeyed_ = true;
         outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
     }

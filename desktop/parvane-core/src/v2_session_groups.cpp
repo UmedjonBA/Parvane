@@ -68,28 +68,92 @@ bool Session::applyGroupChangeLocked(const std::string &hex, const json &change)
     return true;
 }
 
+json Session::setInfoKeepPhoto(const json &g, const std::string &name, const std::string &about) {
+    // spec 035 (PV-005): секрета фото в журнале нет — запись сведений несёт только avatar_key_id («секрет идёт со
+    // своим файлом»), прежний файл и его ключ остаются
+    return json{{"set_info", {{"name", name},
+                              {"about", about},
+                              {"avatar_file_id", g.value("avatarFileId", std::string())},
+                              {"avatar_key_id", hexToB64(g.value("avatarKeyId", std::string()))}}}};
+}
+
+void Session::sendGroupPhotoKeyLocked(const std::string &hex) {
+    // Секрет фото частной группы участникам — конвертом эпохи (GroupAvatarKey), держателям своих ссылок —
+    // InviteAvatarWrap (превью по ссылке с фото, D1). После смены фото и после каждой новой эпохи.
+    try {
+        std::vector<std::string> links;
+        const auto all = loadInvites();
+        const auto address = groupAddress(hex);
+        if (all.contains(address) && all[address].is_array()) {
+            for (const auto &r : all[address]) {
+                if (const auto url = r.value("url", std::string()); !url.empty()) links.push_back(url);
+            }
+        }
+        const auto f = client_->groupPhotoFollowups(hex, links);
+        if (f.contains("content") && f["content"].is_object()) {
+            ensureTokensLocked(groupMembersLocked(hex).size());
+            runRequestsLocked(withNeedsJsonLocked([&] { return client_->prepareGroup(hex, f["content"], newUuidV7()); }));
+        }
+        if (f.contains("requests") && f["requests"].is_array()) {
+            for (const auto &r : f["requests"]) {
+                const auto req = parseRequest(r);
+                call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
+            }
+        }
+    } catch (const std::exception &e) {
+        log(std::string("секрет фото группы не разослан: ") + e.what());
+    }
+}
+
+bool Session::setGroupPhotoLocked(const std::string &hex, const std::string &fileId, const std::string &keyB64) {
+    json reqJson;
+    try {
+        reqJson = client_->groupSetPhoto(hex, fileId, std::string(), keyB64);
+    } catch (const std::exception &e) {
+        log(std::string("фото группы отклонено движком: ") + e.what());
+        return false;
+    }
+    try {
+        const auto req = parseRequest(reqJson);
+        call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
+    } catch (const std::exception &e) {
+        log(std::string("фото группы отклонено сервером: ") + e.what());
+        resyncGroupLocked(hex);
+        return false;
+    }
+    try {
+        syncGroupLocked(hex); // запись с новым avatar_key_id — в журнал, тогда секрет сходится со своим файлом
+    } catch (const std::exception &e) {
+        log(std::string("журнал группы после смены фото: ") + e.what());
+    }
+    if (!keyB64.empty()) sendGroupPhotoKeyLocked(hex);
+    persistLocked();
+    publishGroupLocked(hex);
+    return true;
+}
+
 bool Session::setGroupInfo(const std::string &address, const std::optional<std::string> &name,
                            const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId,
                            const std::optional<std::string> &avatarKey) {
     if (!ready_ || !isGroupAddress(address)) return false;
     const auto hex = groupHex(address);
-    bool ok = false;
+    bool ok = true;
     {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (!client_) return false;
         const auto current = client_->groupInfo(hex);
         if (!current) return false;
-        const json next{{"name", name.value_or(current->value("name", std::string()))},
-                        {"about", about.value_or(current->value("about", std::string()))},
-                        {"avatar_file_id", avatarFileId.value_or(current->value("avatarFileId", std::string()))},
-                        // Ключ фото частной группы идёт со своим файлом (A0089-5): новый файл без ключа — открытое фото
-                        {"avatar_key", avatarFileId ? avatarKey.value_or(std::string()) : current->value("avatarKey", std::string())}};
-        const bool same = next["name"] == current->value("name", std::string())
-            && next["about"] == current->value("about", std::string())
-            && next["avatar_file_id"] == current->value("avatarFileId", std::string())
-            && next["avatar_key"] == current->value("avatarKey", std::string());
+        const auto nextName = name.value_or(current->value("name", std::string()));
+        const auto nextAbout = about.value_or(current->value("about", std::string()));
         // Ничего не меняется — записи в журнале не будет
-        ok = same || applyGroupChangeLocked(hex, json{{"set_info", next}});
+        if (nextName != current->value("name", std::string()) || nextAbout != current->value("about", std::string())) {
+            ok = applyGroupChangeLocked(hex, setInfoKeepPhoto(*current, nextName, nextAbout));
+        }
+        // Ключ фото частной группы идёт со своим файлом (A0089-5): новый файл без ключа — открытое фото
+        const bool photo = avatarFileId
+            && (*avatarFileId != current->value("avatarFileId", std::string())
+                || avatarKey.value_or(std::string()) != current->value("avatarKey", std::string()));
+        if (ok && photo) ok = setGroupPhotoLocked(hex, *avatarFileId, avatarKey.value_or(std::string()));
     }
     flushAsync();
     return ok;

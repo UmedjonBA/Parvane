@@ -73,7 +73,14 @@ inline constexpr const char *kChatModeKind = "chat_mode";
 [[nodiscard]] std::string v2Kind(const json &v2);
 
 // Содержимое заглушки «сообщение не поддерживается» (нативный путь клиента).
-[[nodiscard]] inline json unsupportedContent() { return json{{"kind", "unsupported"}}; }
+// critical (spec 035 T128, US5): вид из диапазона критичных номеров — «обновите приложение», а не просто
+// «не поддерживается» (событие движка с "critical": true).
+[[nodiscard]] inline json unsupportedContent(bool critical = false) {
+    return critical ? json{{"kind", "unsupported"}, {"critical", true}} : json{{"kind", "unsupported"}};
+}
+[[nodiscard]] inline bool isCriticalStub(const json &content) {
+    return content.is_object() && content.value("kind", std::string()) == "unsupported" && content.value("critical", false);
+}
 
 // Событие движка "direct" (1-на-1) или "group" (группа v2), разложенное для
 // конвейера клиента.

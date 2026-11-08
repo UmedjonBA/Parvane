@@ -1725,9 +1725,19 @@ void StateSyncNow() {
 			});
 			return;
 		}
-		crl::on_main([snap = r["snapshot"], generation] {
+		// spec 035 (US5): журнал закрыт для записи более новой версией — правки отсюда не уходят, сказать один раз
+		const auto blocked = s->stateWriteBlocked();
+		crl::on_main([snap = r["snapshot"], generation, blocked] {
 			if (!AccountGenerationIs(generation)) {
 				return;
+			}
+			static auto told = false;
+			if (blocked && !told) {
+				told = true;
+				LOG(("Parvane: v2: журнал состояния закрыт для записи более новой версией"));
+				if (const auto window = Core::App().activeWindow()) {
+					window->showToast(tr::lng_parvane_write_blocked(tr::now));
+				}
 			}
 			if (const auto session = g_sessionWeak.get()) {
 				ProjectState(session, snap);
@@ -1909,13 +1919,11 @@ void AttachStateJournal() {
 		}
 		parvane::json snap;
 		try {
-			snap = s->stateAttach(local);
+			// T150: локальная правка этих видов новее журнала — сначала она (разница от того, что было
+			// показано до правки), затем снимок (иначе проекция её откатит)
+			snap = s->stateAttach(local, dirty);
 			if (snap.is_object() && !dirty.empty()) {
-				// T150: локальная правка этих видов новее журнала — сначала она,
-				// затем снимок (иначе проекция её откатит)
-				const auto r = s->stateSync(local, dirty);
-				if (r.is_object() && r.contains("snapshot")) {
-					snap = r["snapshot"];
+				{
 					auto names = QStringList();
 					for (const auto &kind : dirty) {
 						names.push_back(QString::fromStdString(kind));

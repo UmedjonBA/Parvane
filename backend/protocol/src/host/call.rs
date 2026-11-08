@@ -394,6 +394,15 @@ impl HostClient {
                 };
                 req(&c.group_set_photo(&a.hex("group")?, a.se("fileId"), a.se("avatarDomain"), key.as_ref()).map_err(err)?)
             }
+            // spec 035 (PV-006, contracts/group-access.md): журнал частной группы до вступления — `group.state.sync` с
+            // доказательством знания секрета ссылки (подпись ключом ссылки над группой, своим адресом и временем)
+            "groupSyncByLink" => {
+                let crate::invite::ParsedInvite::V2(parts) = crate::invite::parse(a.s("url")?).map_err(err)? else {
+                    return Err(err(ProtoError::InvalidField("invite")));
+                };
+                let group = Ref { domain: a.se("domain").to_string(), id: a.hex("group")? };
+                req(&c.group_sync_by_link(&group, a.u("afterVersion")?, &parts, a.i("tsMs")?).map_err(err)?)
+            }
             "groupAvatarKeyContent" => opt(c.group_avatar_key_content(&a.hex("group")?).map(|c| serde_json::to_string(&c).unwrap_or_default())),
             "groupInviteAvatarWraps" => {
                 let links: Vec<String> = serde_json::from_str(&a.text("linksJson")?).map_err(|_| malformed())?;

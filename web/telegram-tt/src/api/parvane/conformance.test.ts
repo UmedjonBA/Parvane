@@ -1459,9 +1459,15 @@ describe('GPHOTO-1: фото частной группы шифруется, с�
     r.derive.labels.forEach((label) => expect(blob).toContain(`groupPhotoLabel("${label}", `));
     expect(readRepo('desktop/parvane-core/tests/blobcrypt_tests.cpp')).toContain(r.vector.capability);
     const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
-    expect(core).toContain('{"avatar_key", (p.is_object() && p.contains("avatar_file_id"))');
-    expect(readRepo('desktop/parvane-core/src/v2_session_groups.cpp'))
-      .toContain('{"avatar_key", avatarFileId ? avatarKey.value_or(std::string())');
+    // spec 035 (PV-005): секрета в журнале нет — новое фото своей записью с avatar_key_id, секрет участникам
+    // конвертом GroupAvatarKey, правка сведений сохраняет avatar_key_id
+    expect(core).toContain('ok = setGroupPhotoLocked(hex, p["avatar_file_id"].get<std::string>(), key);');
+    expect(core).not.toContain('{"avatar_key",');
+    const groups = readRepo('desktop/parvane-core/src/v2_session_groups.cpp');
+    expect(groups).toContain('{"avatar_key_id", hexToB64(g.value("avatarKeyId", std::string()))}');
+    expect(groups).toContain('client_->groupSetPhoto(hex, fileId, std::string(), keyB64)');
+    expect(groups).toContain('client_->groupPhotoFollowups(hex, links)');
+    expect(readRepo('desktop/parvane-core/src/v2_engine.cpp')).toContain('call("groupAvatarKeyContent"');
     const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_groups.cpp');
     expect(desktop).toContain('s->uploadGroupPhoto(bytesStd)');
     expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'))
@@ -3224,6 +3230,62 @@ describe('spec 035 PROTO_MINOR: самописные Hello совпадают с
     const match = pattern.exec(readRepo(file));
     expect(match, `${file}: константа PROTO_MINOR не найдена`).toBeTruthy();
     expect(Number(match![1])).toBe(engineMinor);
+  });
+});
+
+// spec 035 T122 (FR-095, SC-005): ENGINE-1 «смысл решает движок» — desktop. Разбор содержимого, сведение личного
+// состояния и права групп — только в модели движка; клиент переводит готовые представления (`MessageView`,
+// `StateView`, `GroupView`, `Capabilities`) в объекты tdesktop. Модель вызывается только из хоста ядра
+// `engine_host.cpp` (общий с android), хранилище модели — только файловый адаптер `store_fs`.
+// Пункты `it.fails` — то, что на desktop ещё НЕ переведено на модель (T125/T126): пока старый разбор на месте, они
+// «проходят»; как только перевод сделан, vitest требует снять `.fails` — правило закрыто для desktop.
+describe('ENGINE-1: desktop — смысл решает движок', () => {
+  const coreSrc = 'desktop/parvane-core/src';
+  const coreFiles = readdirSync(path.join(REPO_ROOT, coreSrc)).filter((f) => f.endsWith('.cpp'));
+  const tdesktopDir = 'desktop/tdesktop/Telegram/SourceFiles/parvane';
+  const tdesktopFiles = readdirSync(path.join(REPO_ROOT, tdesktopDir)).filter((f) => /\.(cpp|h)$/.test(f));
+  const callsModel = (text: string) => /\bpv_engine_(open|call|free)\b/.test(text);
+
+  it('модель движка (`pv_engine_*`) вызывается только из хоста ядра engine_host.cpp', () => {
+    const offenders = [
+      ...coreFiles.filter((f) => f !== 'engine_host.cpp' && callsModel(readRepo(`${coreSrc}/${f}`))),
+      ...tdesktopFiles.filter((f) => callsModel(readRepo(`${tdesktopDir}/${f}`))),
+    ];
+    expect(offenders).toEqual([]);
+    const host = readRepo(`${coreSrc}/engine_host.cpp`);
+    // Порядок итога: пачка хранилища фиксируется ДО запросов того же итога, затем storeCommitted
+    const commit = host.indexOf('commitJson(');
+    const requests = host.indexOf('st.requests.push_back');
+    const committed = host.indexOf('"storeCommitted"');
+    expect(commit).toBeGreaterThan(0);
+    expect(requests).toBeGreaterThan(commit);
+    expect(committed).toBeGreaterThan(requests);
+  });
+
+  it.fails('v2_content.cpp не разбирает виды содержимого (перевод MessageView, T125)', () => {
+    expect(readRepo(`${coreSrc}/v2_content.cpp`)).not.toMatch(/\bv2Kind\(|\bfromV2\(|"parvane\.msg\.v2\.Content"/);
+  });
+
+  it('личное состояние desktop — через модель: ни лампортов, ни меток, ни прежнего журнала state.v1 (T125)', () => {
+    const client = readRepo(`${tdesktopDir}/parvane_client_state.cpp`);
+    expect(client).not.toMatch(/lamport|stamp|"state\.(append|sync)"|->diff\(|->migrate\(/i);
+    const session = readDesktopSession();
+    expect(session).not.toMatch(/"state\.(append|sync)"|StateSession::open|state_->diff\(|state_->migrate\(/);
+    // Желаемое — модели (разница от показанного хостом), показ — из модели
+    expect(session).toContain('state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json())');
+    const model = readRepo(`${coreSrc}/state_model.cpp`);
+    expect(model).toContain('host_->step("stateApplyV1", args)');
+    expect(model).toContain('host_->read("stateViewV1", json::object())');
+    expect(model).toContain('{"kind", "SERVER_INPUT_KIND_RESPONSE"}');
+  });
+
+  // Показ состояния в tdesktop — пока из снимка формы state.v1 (stateViewV1), не из StateView модели (T126)
+  it.fails('parvane_client_state.cpp — показ из StateView модели (T126)', () => {
+    expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`)).not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
+  });
+
+  it.fails('права групп по типу содержимого — из Capabilities движка, не из chat_rules (GROUP-2, T126)', () => {
+    expect(readRepo('desktop/parvane-core/include/parvane/chat_rules.h')).not.toMatch(/GROUP-2/);
   });
 });
 

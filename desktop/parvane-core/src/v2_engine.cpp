@@ -489,6 +489,24 @@ json Client::groupJoin(const std::string &url) {
     return parseOrThrow(result(out, err));
 }
 
+json Client::groupSyncByLink(const std::string &url, const std::string &domain, const std::string &groupHex,
+                             std::uint64_t afterVersion, std::int64_t tsMs) {
+    return call("groupSyncByLink", json{{"url", url}, {"domain", domain}, {"group", groupHex},
+                                        {"afterVersion", afterVersion}, {"tsMs", tsMs}});
+}
+
+json Client::groupSetPhoto(const std::string &groupHex, const std::string &fileId, const std::string &avatarDomain,
+                           const std::string &keyB64) {
+    return call("groupSetPhoto", json{{"group", groupHex}, {"fileId", fileId}, {"avatarDomain", avatarDomain}, {"keyB64", keyB64}});
+}
+
+json Client::groupPhotoFollowups(const std::string &groupHex, const std::vector<std::string> &links) {
+    auto content = call("groupAvatarKeyContent", json{{"group", groupHex}});
+    if (content.is_string()) content = json::parse(content.get<std::string>(), nullptr, false);
+    const auto wraps = call("groupInviteAvatarWraps", json{{"group", groupHex}, {"linksJson", json(links).dump()}});
+    return json{{"content", content.is_object() ? content : json()}, {"requests", wraps.is_array() ? wraps : json::array()}};
+}
+
 json Client::logDevices(const std::string &user) const {
     auto v = json::parse(take(pv_client_log_devices(c_, user.c_str())), nullptr, false);
     return v.is_object() ? v : json{{"v2", json::array()}, {"legacy", json::array()}};

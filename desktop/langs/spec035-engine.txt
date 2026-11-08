@@ -1,0 +1,11 @@
+lng_parvane_stub_critical
+This message needs a newer version of Parvane. Update the app to see it.
+Для этого сообщения нужна новая версия Parvane. Обновите приложение, чтобы его увидеть.
+
+lng_parvane_write_blocked
+These settings were changed in a newer version of Parvane. Update the app to change them on this device.
+Эти настройки изменены в более новой версии Parvane. Обновите приложение, чтобы менять их на этом устройстве.
+
+lng_parvane_store_too_new
+Data on this device was saved by a newer version of Parvane. Update the app — until then you can only view it.
+Данные на этом устройстве сохранены более новой версией Parvane. Обновите приложение — до этого их можно только просматривать.

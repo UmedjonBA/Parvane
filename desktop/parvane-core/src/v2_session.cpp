@@ -11,6 +11,7 @@
 #include "parvane/v2_engine.h"
 #include "parvane/test_counters.h"
 #include "parvane/v2_link.h"
+#include "parvane/state_model.h"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -36,7 +37,6 @@ constexpr int kTypingTyping = 1;
 constexpr int kTypingCancel = 2;
 constexpr int kMaxSyncPages = 1000;
 constexpr int kGroupSyncPages = 50;
-constexpr int kStateSyncPages = 1000;
 // Смена эпохи — не чаще раза в 10 с (R8): повтор после отказа по частоте.
 constexpr std::int64_t kEpochRetryMs = 11000;
 // Проверка расписания партии жетонов (FR-063): срок задаёт движок, здесь — шаг.
@@ -229,7 +229,6 @@ void Session::stop() {
     if (id) id->close(); // запрос с другого потока держит свою копию и получит UNAVAILABLE
     closeAllAnon();
     state_.reset();
-    pendingAppends_.clear();
     outbox_.clear();
     client_.reset();
 }
@@ -942,14 +941,50 @@ void Session::runRequestsLocked(const json &reqs) {
     }
 }
 
-void Session::persistLocked() {
-    if (!client_ || storageKey_.size() != 32) return;
-    counters::get().persist++;
+std::optional<Session::Exported> Session::exportLocked() {
+    if (!client_ || storageKey_.size() != 32) return std::nullopt;
     try {
-        writeStateFile("state", client_->exportState(storageKey_));
+        return Exported{++exportSeq_, client_->exportState(storageKey_)};
     } catch (const std::exception &e) {
         log(std::string("состояние не сохранено: ") + e.what());
+        return std::nullopt;
     }
+}
+
+bool Session::writeExported(const Exported &e) {
+    std::lock_guard<std::mutex> lk(persistMu_);
+    // Уже записан более новый снимок — в нём есть и это состояние
+    if (e.seq <= writtenSeq_) return true;
+    counters::get().persist++;
+    if (!writeStateFile("state", e.blob)) {
+        log("состояние не сохранено: запись файла");
+        return false;
+    }
+    writtenSeq_ = e.seq;
+    return true;
+}
+
+void Session::persistLocked() {
+    if (const auto e = exportLocked()) writeExported(*e);
+}
+
+Session::InboxStats Session::inboxStats() const {
+    return InboxStats{statRecords_.load(), statPersists_.load(), statAcks_.load(), statPersistBeforeAck_.load()};
+}
+
+void Session::holdInboxForTest(bool hold) {
+    inboxHeld_ = hold;
+    if (!hold) {
+        post([this] {
+            openPendingRecords();
+            flush();
+        });
+    }
+}
+
+std::size_t Session::pendingInboxForTest() {
+    std::lock_guard<std::mutex> lk(recordsMu_);
+    return records_.size();
 }
 
 bool Session::satisfyLocked(const std::exception &ex) {
@@ -1300,36 +1335,60 @@ bool Session::acquirePeerKey(const std::string &peer) {
 // События уходят в outbox_; onEvent здесь не зовётся — отдаёт их flush вызывающего.
 void Session::openPendingRecords() {
     for (;;) {
-        std::string body;
+        if (inboxHeld_) return;
+        // OPT-024: всё, что накопилось к этому моменту, — одной пачкой: одно сохранение и один ack
+        std::deque<std::string> batch;
         {
             std::lock_guard<std::mutex> lk(recordsMu_);
             if (records_.empty()) return;
-            body = std::move(records_.front());
-            records_.pop_front();
+            batch.swap(records_);
         }
-        std::vector<json> events;
-        std::lock_guard<std::recursive_mutex> lk(engineMu_);
-        if (!client_) {
-            // Сессия закрыта — записи без ack сервер отдаст заново
-            std::lock_guard<std::mutex> rl(recordsMu_);
-            records_.clear();
-            return;
+        std::optional<Exported> snapshot;
+        std::optional<OutRequest> ack;
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (!client_) {
+                // Сессия закрыта — записи без ack сервер отдаст заново
+                std::lock_guard<std::mutex> rl(recordsMu_);
+                records_.clear();
+                return;
+            }
+            std::size_t total = 0;
+            for (const auto &body : batch) {
+                std::vector<json> events;
+                openRecordLocked(body, events);
+                total += events.size();
+                absorbLocked(std::move(events));
+                counters::get().inboxRecords++;
+                statRecords_++;
+            }
+            log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total));
+            reciprocateKeysLocked(); // T185: записи могли принести ключ участника группы
+            // Сначала на диск (сессии Olm продвинулись), потом ack: процесс, убитый между ними, иначе терял
+            // входящую сессию навсегда. Снимок — здесь, запись и ack — вне мьютекса движка.
+            snapshot = exportLocked();
+            try {
+                ack = parseRequest(client_->ackRequest());
+            } catch (const std::exception &) {
+            }
         }
-        openRecordLocked(body, events);
-        log("запись инбокса: событий " + std::to_string(events.size()));
-        absorbLocked(std::move(events));
-        counters::get().inboxRecords++;
-        // Сначала на диск (сессии Olm продвинулись), потом ack: процесс,
-        // убитый между ними, иначе терял входящую сессию навсегда.
         counters::get().inboxPersist++;
-        persistLocked();
-        try {
-            const auto ack = parseRequest(client_->ackRequest());
-            counters::get().inboxAck++;
-            call(ack.anon, ack.method, ack.body);
-        } catch (const std::exception &) {
+        statPersists_++;
+        const bool onDisk = snapshot && writeExported(*snapshot);
+        if (!onDisk) {
+            // Не записано — ack не шлём: сервер отдаст записи заново
+            log("записи инбокса: состояние не сохранено — ack отложен");
+            continue;
         }
-        reciprocateKeysLocked(); // T185: запись могла принести ключ участника группы
+        if (ack) {
+            try {
+                counters::get().inboxAck++;
+                statAcks_++;
+                statPersistBeforeAck_++;
+                call(ack->anon, ack->method, ack->body);
+            } catch (const std::exception &) {
+            }
+        }
     }
 }
 
@@ -1541,7 +1600,6 @@ void Session::dropIdentityLocked() {
     ready_ = false;
     client_.reset();
     state_.reset();
-    pendingAppends_.clear();
     // Вердикт «replaced» приходит голым ответом сервера без доказательства сброса (A0072-1): файлы личности не
     // стираются, а уходят в карантин `replaced-<мс>` рядом — настоящий сброс ничего не теряет, а подмену можно откатить
     const std::string quarantine = cfg_.stateDir + "/replaced-" + std::to_string(nowMs());
@@ -1787,8 +1845,7 @@ bool Session::revokeDevice(const std::string &deviceId) {
         persistLocked();
         if (outcome.contains("stateKeyVersion") && !outcome["stateKeyVersion"].is_null()) {
             state_.reset();
-            pendingAppends_.clear();
-            stateRekeyed_ = true;
+                    stateRekeyed_ = true;
             stateCarry_ = std::move(carry);
             outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
         }
@@ -2026,8 +2083,7 @@ void Session::absorbLocked(std::vector<json> events) {
         if (type == "stateKeyRotated") {
             // Своё устройство передало (новый) ключ личного состояния — журнал заново.
             state_.reset();
-            pendingAppends_.clear();
-            stateRekeyPeer_ = true;
+                    stateRekeyPeer_ = true;
             // rotated — журнал истории открывает сессию заново и пишет точку под новым ключом (HIST-2)
             outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
             continue;
@@ -2095,7 +2151,7 @@ std::vector<std::string> Session::groupMembersLocked(const std::string &hex) {
     return out;
 }
 
-void Session::syncGroupLocked(const std::string &hex, const std::string &linkId) {
+void Session::syncGroupLocked(const std::string &hex, const std::string &inviteUrl) {
     if (!client_) return;
     syncingGroups_.insert(hex);
     try {
@@ -2103,11 +2159,17 @@ void Session::syncGroupLocked(const std::string &hex, const std::string &linkId)
             const auto before = client_->groupVersion(hex);
             // Журнал группы — у её сервера (spec 028)
             const auto gdomain = groupDomainLocked(hex);
-            json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}},
-                     {"after_version", std::to_string(before)}};
-            if (!linkId.empty()) req["invite_link_id"] = hexToB64(linkId);
-            const auto resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req),
-                                   gdomain);
+            std::string resp;
+            if (!inviteUrl.empty()) {
+                // spec 035 (PV-006): до вступления частная группа отдаёт журнал только с доказательством знания
+                // секрета ссылки — подписью ключом ссылки над группой, своим адресом и временем
+                const auto req = parseRequest(client_->groupSyncByLink(inviteUrl, gdomain, hex, before, nowMs()));
+                resp = call(req.anon, req.method, req.body, gdomain);
+            } else {
+                const json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}},
+                               {"after_version", std::to_string(before)}};
+                resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req), gdomain);
+            }
             withNeedsLocked([&] { return client_->groupIngest(gdomain, hex, resp); });
             if (client_->groupVersion(hex) == before) break;
         }
@@ -2516,6 +2578,10 @@ void Session::rotateEpochOnceLocked(const std::string &hex) {
             log(std::string("ключи эпохи не доставлены: ") + e.what());
         }
     }
+    // spec 035 (PV-005): новые участники получают секрет фото частной группы только конвертом новой эпохи
+    if (const auto info = client_->groupInfo(hex); info && !info->value("avatarKey", std::string()).empty()) {
+        sendGroupPhotoKeyLocked(hex);
+    }
     persistLocked();
     const auto g = client_->groupInfo(hex);
     log("новая эпоха группы " + hex + ": " + (g ? std::to_string(g->value("epoch", 0ull)) : std::string("?")));
@@ -2697,14 +2763,22 @@ bool Session::changeGroup(const std::string &address, const json &change, std::s
                 return (p.is_object() && p.contains(key) && p[key].is_string())
                     ? p[key].get<std::string>() : g->value(have, std::string());
             };
-            resolved = json{{"set_info", {{"name", pick("name", "name")}, {"about", pick("about", "about")},
-                                          {"avatar_file_id", pick("avatar_file_id", "avatarFileId")},
-                                          // Ключ фото частной группы (A0089-5) идёт со своим файлом: меняется файл —
-                                          // ключ из патча (нет — открытое фото), иначе прежний из журнала
-                                          {"avatar_key", (p.is_object() && p.contains("avatar_file_id"))
-                                                             ? ((p.contains("avatar_key") && p["avatar_key"].is_string())
-                                                                    ? p["avatar_key"].get<std::string>() : std::string())
-                                                             : g->value("avatarKey", std::string())}}}};
+            // spec 035 (PV-005): новое фото — своей записью с avatar_key_id и конвертом секрета участникам; ключ фото
+            // частной группы (A0089-5) идёт со своим файлом: меняется файл — ключ из патча (нет — открытое фото)
+            if (p.is_object() && p.contains("avatar_file_id") && p["avatar_file_id"].is_string()) {
+                const auto nameChanged = pick("name", "name") != g->value("name", std::string())
+                    || pick("about", "about") != g->value("about", std::string());
+                if (nameChanged && !applyGroupChangeLocked(hex, setInfoKeepPhoto(*g, pick("name", "name"), pick("about", "about")))) {
+                    if (errorCode) *errorCode = "failed";
+                    return false;
+                }
+                const auto key = (p.contains("avatar_key") && p["avatar_key"].is_string()) ? p["avatar_key"].get<std::string>() : std::string();
+                ok = setGroupPhotoLocked(hex, p["avatar_file_id"].get<std::string>(), key);
+                if (ok && errorCode) errorCode->clear();
+                flushAsync();
+                return ok;
+            }
+            resolved = setInfoKeepPhoto(*g, pick("name", "name"), pick("about", "about"));
         }
         json reqJson;
         try {
@@ -2830,8 +2904,7 @@ void Session::shareInviteLocked(const std::string &address, const json &record) 
         }
         if (record.contains("usageLimit")) invite["usage_limit"] = record["usageLimit"];
         if (record.value("isRequestNeeded", false)) invite["requires_approval"] = true;
-        for (const auto &b : state_->groupInviteSet(invite)) pendingAppends_.push_back(b);
-        pushAppendsLocked();
+        applyStateLocked(json{{"invites", json::array({invite})}}, "ссылка-приглашение");
     } catch (const std::exception &e) {
         log(std::string("ссылка-приглашение в журнале состояния: ") + e.what());
     }
@@ -2957,8 +3030,9 @@ bool Session::revokeInvite(const std::string &address, const std::string &url) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (state_) {
         try {
-            for (const auto &b : state_->groupInviteRemove(hexToB64(linkId))) pendingAppends_.push_back(b);
-            pushAppendsLocked();
+            if (!state_->submit(json{{"state_delete", {{"object", {{"kind", "OBJECT_KIND_GROUP_INVITE"}, {"key", linkId}}}}}})) {
+                log("снятие ссылки-приглашения в журнале состояния не дошло");
+            }
         } catch (const std::exception &e) {
             log(std::string("снятие ссылки-приглашения в журнале состояния: ") + e.what());
         }
@@ -3130,7 +3204,7 @@ json Session::checkInvite(const std::string &url) {
         std::string about, avatar, avatarKey;
         if (!isMember && !hex.empty()) {
             try {
-                syncGroupLocked(hex, parsed->value("linkId", std::string()));
+                syncGroupLocked(hex, url);
                 if (const auto info = client_->groupInfo(hex)) {
                     about = info->value("about", std::string());
                     avatar = info->value("avatarFileId", std::string());
@@ -3168,7 +3242,7 @@ json Session::joinByInvite(const std::string &url) {
             const auto check = inviteGroupLocked(linkId, parsed->value("domain", std::string()));
             const auto hex = b64ToHex(check.contains("group") ? check["group"].value("id", std::string()) : std::string());
             if (hex.empty()) throw V2Error("ERROR_CODE_NOT_FOUND");
-            syncGroupLocked(hex, linkId);
+            syncGroupLocked(hex, url);
             const auto req = parseRequest(client_->groupJoin(url));
             std::string resp;
             try {
@@ -3294,31 +3368,53 @@ std::string Session::historyAddress(const json &peer) {
     return {};
 }
 
-// ── журнал личного состояния (T098) ────────────────────────────────────────
+// ── журнал личного состояния (T098; spec 035 — через модель движка, state.v2) ─────────────────────────────
 
 bool Session::openStateLocked() {
     if (state_) return true;
     if (!client_ || !ready_) return false;
-    state_ = StateSession::open(*client_);
-    return state_ != nullptr;
+    std::string error;
+    state_ = StateModel::open(
+        *client_, cfg_.self, deviceId_, domainNow(), cfg_.stateDir + "/state-model",
+        [this](const json &r, int *code) -> std::string {
+            try {
+                const bool anon = r.value("channel", std::string()) == "REQUEST_CHANNEL_ANON";
+                return call(anon, r.value("method", std::string()), fromBase64(r.value("body", std::string())),
+                            r.value("dest_domain", std::string()));
+            } catch (const V2Error &e) {
+                *code = errorCodeNumber(e.code());
+            } catch (const std::exception &) {
+                *code = errorCodeNumber("ERROR_CODE_UNAVAILABLE");
+            }
+            return std::string();
+        },
+        &error);
+    if (!state_) {
+        log("журнал состояния: модель не открыта: " + error);
+        return false;
+    }
+    if (stateBase_.is_null()) {
+        stateBase_ = json::parse(readStateFile("state-base"), nullptr, false);
+        if (!stateBase_.is_object()) stateBase_ = json::object();
+    }
+    return true;
 }
 
 bool Session::pullStateLocked() {
-    std::int64_t applied = 0;
-    for (int page = 0; page < kStateSyncPages; ++page) {
-        const auto resp = call(false, "state.sync", state_->syncRequest());
-        const auto r = state_->ingest(resp);
-        applied += r.value("applied", 0);
-        if (!r.value("more", false)) break;
-    }
-    return applied > 0;
+    return state_->sync();
 }
 
-void Session::pushAppendsLocked() {
-    while (!pendingAppends_.empty()) {
-        call(false, "state.append", pendingAppends_.front());
-        pendingAppends_.pop_front();
-    }
+// Что хост показывает теперь — база разницы следующей правки (spec 035 US2); переживает перезапуск
+json Session::projectStateLocked() {
+    auto snap = state_->snapshot();
+    stateBase_ = snap;
+    writeStateFile("state-base", snap.dump());
+    return snap;
+}
+
+void Session::applyStateLocked(const json &desired, const char *what) {
+    // Явная запись одного элемента (не разница снимков): желаемое — только этот элемент
+    if (!state_->apply(desired)) log(std::string("журнал состояния: запись не дошла (") + what + ")");
 }
 
 bool Session::stateAvailable() {
@@ -3326,10 +3422,9 @@ bool Session::stateAvailable() {
     return client_ && client_->hasStateKey();
 }
 
-json Session::stateAttach(const json &local) {
+json Session::stateAttach(const json &local, const std::vector<std::string> &dirtyKinds) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     state_.reset();
-    pendingAppends_.clear();
     if (!openStateLocked()) {
         log("журнал состояния недоступен — нет ключа личного состояния");
         return nullptr;
@@ -3354,64 +3449,73 @@ json Session::stateAttach(const json &local) {
     stateRekeyPeer_ = false;
     stateRekeyPeerTries_ = 0;
     if (stateRekeyed_ && !readable) {
-        // Ключ состояния сменён, записей под новым ключом ещё нет: пустой снимок
-        // стёр бы папки и блок-лист у хоста — переносим состояние под новый ключ.
+        // Ключ состояния сменён, записей под новым ключом ещё нет: пустой снимок стёр бы папки и блок-лист у хоста —
+        // переносим состояние под новый ключ (объекты целиком: прежние записи новым ключом не читаются)
         const auto carry = stateCarry_ ? *stateCarry_ : (local.is_object() ? local : json::object());
-        const auto bodies = state_->migrate(carry);
-        for (const auto &b : bodies) pendingAppends_.push_back(b);
-        pushAppendsLocked();
-        log("журнал состояния перенесён под новый ключ (" + std::to_string(bodies.size()) + " записей)");
+        const bool ok = state_->apply(carry, {}, false, true);
+        log(std::string("журнал состояния перенесён под новый ключ") + (ok ? "" : " — не полностью"));
     }
     stateRekeyed_ = false;
     stateCarry_.reset();
-    if (readStateFile("state-migrated").empty()) {
-        // Первый запуск на v2: локальные данные — начальными записями журнала.
-        const auto bodies = state_->migrate(local.is_object() ? local : json::object());
-        for (const auto &b : bodies) pendingAppends_.push_back(b);
-        pushAppendsLocked();
-        writeStateFile("state-migrated", "1");
-        log("локальное состояние перенесено в журнал (" + std::to_string(bodies.size()) + " записей)");
+    if (readStateFile("state-migrated") != "state.v2") { // прежняя отметка «1» — перенос в state.v1
+        // spec 035: первый запуск на state.v2 — локальные данные (они же сведённый прежний журнал state.v1)
+        // начальными объектами нового журнала; уже записанное другими устройствами не дублируется (те же ключи
+        // объектов, регистры по полям)
+        if (state_->apply(local.is_object() ? local : json::object())) {
+            writeStateFile("state-migrated", "state.v2");
+            log("локальное состояние записано в журнал state.v2");
+        } else {
+            log("локальное состояние в журнал state.v2 не записано — повтор при следующем подключении");
+        }
+    }
+    if (local.is_object() && !dirtyKinds.empty()) {
+        // База — показанное до правки (файл state-base прошлого запуска), не только что сведённое: иначе правка
+        // другого устройства, пришедшая за время без связи, откатилась бы
+        if (!pushDesiredLocked(local, dirtyKinds)) log("несохранённая правка в журнал не дошла — повтор при синке");
+        pullStateLocked();
     }
     log("журнал состояния подключён");
     mergeSharedInvitesLocked();
-    return state_->snapshot();
+    return projectStateLocked();
+}
+
+bool Session::pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds) {
+    // Желаемое = показанное + поля управляемых видов хоста; время блокировки и чужие списки закрепа
+    // сохраняются (как web buildDesired). Разницу считает модель — от того, что хост показывал (base).
+    const auto current = state_->snapshot();
+    json full = current;
+    for (auto it = desired.begin(); it != desired.end(); ++it) full[it.key()] = it.value();
+    if (full.contains("blocked") && full["blocked"].is_array()) {
+        std::map<std::string, json> at;
+        if (current.contains("blocked") && current["blocked"].is_array()) {
+            for (const auto &b : current["blocked"]) {
+                at[peerKey(b.value("peer", json()))] = b.value("blocked_at_ms", json(nullptr));
+            }
+        }
+        for (auto &b : full["blocked"]) {
+            if (b.contains("blocked_at_ms") && !b["blocked_at_ms"].is_null()) continue;
+            const auto hit = at.find(peerKey(b.value("peer", json())));
+            b["blocked_at_ms"] = (hit != at.end() && !hit->second.is_null()) ? hit->second : json(std::to_string(nowMs()));
+        }
+    }
+    if (desired.contains("pinned") && current.contains("pinned") && current["pinned"].is_array()) {
+        for (const auto &p : current["pinned"]) {
+            if (!isMainPinList(p.value("list", json()))) full["pinned"].push_back(p);
+        }
+    }
+    const bool hasBase = stateBase_.is_object() && !stateBase_.empty();
+    return state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json());
 }
 
 json Session::stateSync(const json &desired, const std::vector<std::string> &kinds) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return nullptr;
-    if (desired.is_object() && !kinds.empty()) {
-        // Желаемое = сведённое + поля управляемых видов хоста; время блокировки
-        // и чужие списки закрепа сохраняются (как web buildDesired).
-        const auto current = state_->snapshot();
-        json full = current;
-        for (auto it = desired.begin(); it != desired.end(); ++it) full[it.key()] = it.value();
-        if (full.contains("blocked") && full["blocked"].is_array()) {
-            std::map<std::string, json> at;
-            if (current.contains("blocked") && current["blocked"].is_array()) {
-                for (const auto &b : current["blocked"]) {
-                    at[peerKey(b.value("peer", json()))] = b.value("blocked_at_ms", json(nullptr));
-                }
-            }
-            for (auto &b : full["blocked"]) {
-                if (b.contains("blocked_at_ms") && !b["blocked_at_ms"].is_null()) continue;
-                const auto hit = at.find(peerKey(b.value("peer", json())));
-                b["blocked_at_ms"] = (hit != at.end() && !hit->second.is_null()) ? hit->second : json(std::to_string(nowMs()));
-            }
-        }
-        if (desired.contains("pinned") && current.contains("pinned") && current["pinned"].is_array()) {
-            for (const auto &p : current["pinned"]) {
-                if (!isMainPinList(p.value("list", json()))) full["pinned"].push_back(p);
-            }
-        }
-        const auto bodies = state_->diff(full, kinds);
-        for (const auto &b : bodies) pendingAppends_.push_back(b);
-    }
-    // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её).
-    pushAppendsLocked();
+    // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). Не дошла — исключение: хост
+    // держит вид «несохранённым» (T150) и досылает при следующем подключении
+    if (desired.is_object() && !kinds.empty() && !pushDesiredLocked(desired, kinds)) throw V2Error("ERROR_CODE_UNAVAILABLE");
     const bool changed = pullStateLocked();
     if (changed) mergeSharedInvitesLocked();
-    return json{{"changed", changed}, {"snapshot", state_->snapshot()}};
+    return json{{"changed", changed}, {"snapshot", projectStateLocked()}};
 }
 
 bool Session::stateScheduledSent(const std::string &opIdB64) {
@@ -3429,42 +3533,57 @@ void Session::stateChatCleared(const std::string &address, std::int64_t untilMs)
     if (address.empty() || untilMs <= 0) return;
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return;
-    try {
-        const json peer = isGroupAddress(address)
-            ? json{{"group", {{"domain", groupDomainLocked(groupHex(address))}, {"id", hexToB64(groupHex(address))}}}}
-            : json{{"user", {{"address", address}}}};
-        const json cleared{{"peer", peer}, {"cleared_until_ms", std::to_string(untilMs)}};
-        for (const auto &b : state_->chatCleared(cleared)) pendingAppends_.push_back(b);
-        pushAppendsLocked();
-    } catch (const std::exception &e) {
-        log(std::string("очистка чата в журнале состояния: ") + e.what());
-    }
+    const json peer = isGroupAddress(address)
+        ? json{{"group", {{"domain", groupDomainLocked(groupHex(address))}, {"id", hexToB64(groupHex(address))}}}}
+        : json{{"user", {{"address", address}}}};
+    applyStateLocked(json{{"cleared", json::array({json{{"peer", peer}, {"cleared_until_ms", std::to_string(untilMs)}}})}},
+                     "очистка чата");
 }
 
 bool Session::stateCall(const std::string &name, const json &args) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return false;
-    try {
-        for (const auto &b : state_->call(name, args)) {
-            if (b.is_string()) pendingAppends_.push_back(fromBase64(b.get<std::string>()));
-        }
-        pushAppendsLocked();
-        return true;
-    } catch (const std::exception &e) {
-        log("запись журнала состояния (" + name + "): " + e.what());
+    // Прежние функции журнала state.v1 по имени — элементом желаемого (запись целиком по ключу объекта)
+    json desired;
+    if (name == "plannerContainerSet") {
+        desired = json{{"planner_container", {{"ref", {{"domain", args.value("domain", std::string())},
+                                                       {"id", hexToB64(args.value("idHex", std::string()))}}}}}};
+    } else if (name == "cloudContainerSet" || name == "callSet") {
+        auto c = args.value(name == "callSet" ? "recordJson" : "containerJson", json());
+        if (c.is_string()) c = json::parse(c.get<std::string>(), nullptr, false);
+        if (!c.is_object()) return false;
+        desired = json{{name == "callSet" ? "calls" : "cloud_containers", json::array({c})}};
+    } else {
+        log("запись журнала состояния (" + name + "): нет такой записи");
         return false;
     }
+    const bool ok = state_->apply(desired);
+    if (!ok) log("запись журнала состояния (" + name + "): не дошла");
+    return ok;
 }
 
 void Session::stateMarkSent(const std::string &opIdB64) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return;
-    try {
-        for (const auto &b : state_->markSent(opIdB64)) pendingAppends_.push_back(b);
-        pushAppendsLocked();
-    } catch (const std::exception &e) {
-        log(std::string("отметка отправки отложенного: ") + e.what());
-    }
+    applyStateLocked(json{{"scheduled_sent", json::array({opIdB64})}}, "отметка отправки отложенного");
+}
+
+json Session::stateFavedStickers() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return json::array();
+    return state_->view().value("faved_stickers", json::array());
+}
+
+bool Session::stateFaveSticker(const std::string &setId, const std::string &stickerId, bool on) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return false;
+    return state_->submit(json{{"fave_sticker", {{"set_id", setId}, {"sticker_id", stickerId}, {"on", on}}}});
+}
+
+bool Session::stateWriteBlocked() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return false;
+    return state_->view().value("write_blocked", false);
 }
 
 } // namespace parvane::v2

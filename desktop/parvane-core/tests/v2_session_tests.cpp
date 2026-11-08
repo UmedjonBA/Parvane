@@ -311,6 +311,30 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
               "имя и описание группы — оба на месте", g.value("name", std::string()));
     }
 
+    // spec 035 (PV-005, GPHOTO-1): фото частной группы — секрета в журнале нет (только avatar_key_id), участники
+    // получают его конвертом эпохи; правка названия после этого фото не снимает
+    {
+        const std::string photoKey = "UGhvdG9TZWNyZXRPZlRoZUdyb3VwRm9yVGVzdHMxMjM="; // 32 байта, выдуманные
+        const auto fileId = "pvb2-photo-" + suffix;
+        check(alice.s->setGroupInfo(group, std::nullopt, std::nullopt, fileId, photoKey), "PV-005: фото группы задано");
+        const auto a = alice.s->groupInfo(group);
+        check(a.value("avatarFileId", std::string()) == fileId && a.value("avatarKey", std::string()) == photoKey
+                  && !a.value("avatarKeyId", std::string()).empty(),
+              "PV-005: у alice файл, секрет и avatar_key_id", a.value("avatarKeyId", std::string()));
+        bool got = false;
+        for (int i = 0; i < 40 && !got; ++i) {
+            const auto b = bob.s->groupInfo(group);
+            got = b.value("avatarFileId", std::string()) == fileId && b.value("avatarKey", std::string()) == photoKey;
+            if (!got) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        check(got, "PV-005: bob получил секрет фото конвертом (не из журнала)");
+        check(alice.s->setGroupInfo(group, std::string("Кружок+ ") + suffix, std::nullopt, std::nullopt),
+              "PV-005: название после фото");
+        const auto a2 = alice.s->groupInfo(group);
+        check(a2.value("avatarFileId", std::string()) == fileId && a2.value("avatarKey", std::string()) == photoKey,
+              "PV-005: правка названия фото не сняла (avatar_key_id прежний)", a2.value("avatarKeyId", std::string()));
+    }
+
     // spec 023: публичная группа — имя, поиск, вступление по открытому секрету, история для новых
     const auto pubName = "pub" + suffix;
     const auto madePublic = alice.s->setGroupPublic(group, true, pubName, true, true);
@@ -948,6 +972,47 @@ int main() {
     check(alice.inbox.wait([&](const v2::Incoming &x) {
         return x.kind == v2::Incoming::Kind::Read && !x.targets.empty() && x.targets[0] == u1;
     }), "alice получила квитанцию прочтения");
+
+    // spec 035 T121 (OPT-024): 50 записей инбокса подряд → одно сохранение состояния и один ack, сохранение раньше
+    // ack. Разбор у bob придержан, пока все 50 не придут, — пачка детерминирована.
+    {
+        bob.s->holdInboxForTest(true);
+        const auto before = bob.s->inboxStats();
+        constexpr int kBurst = 50;
+        for (int i = 0; i < kBurst; ++i) {
+            try {
+                alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("opt024-" + std::to_string(i) + "-" + suffix)),
+                                     v2::newUuidV7());
+            } catch (const std::exception &e) {
+                check(false, "OPT-024: alice → bob отправлено", e.what());
+                break;
+            }
+        }
+        bool queued = false;
+        for (int i = 0; i < 200 && !queued; ++i) {
+            queued = bob.s->pendingInboxForTest() >= kBurst;
+            if (!queued) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        check(queued, "OPT-024: 50 записей у bob в очереди", std::to_string(bob.s->pendingInboxForTest()));
+        bob.s->holdInboxForTest(false);
+        check(textArrived(bob.inbox, "opt024-" + std::to_string(kBurst - 1) + "-" + suffix, alice.user, nullptr, 30000),
+              "OPT-024: bob получил все 50");
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const auto after = bob.s->inboxStats();
+        const auto info = "записей " + std::to_string(after.records - before.records) + ", сохранений "
+            + std::to_string(after.persists - before.persists) + ", ack " + std::to_string(after.acks - before.acks);
+        check(after.records - before.records == kBurst, "OPT-024: разобрано 50 записей", info);
+        check(after.persists - before.persists == 1, "OPT-024: 50 записей → 1 сохранение состояния", info);
+        check(after.acks - before.acks == 1, "OPT-024: 50 записей → 1 ack", info);
+        check(after.persistBeforeAck - before.persistBeforeAck == after.acks - before.acks,
+              "OPT-024: каждый ack — после сохранения на диск", info);
+        if (env("PARVANE_V2_ONLY", "") == "opt024") {
+            alice.s->stop();
+            bob.s->stop();
+            std::printf("=== OPT-024: %d проверок, ошибок %d ===\n", g_total, g_fail);
+            return g_fail ? 1 : 0;
+        }
+    }
 
     // T131 (FR-062, D-08): блоб вложения без гранта получателю — по секрету
     // capability; получатель качает анонимным каналом.

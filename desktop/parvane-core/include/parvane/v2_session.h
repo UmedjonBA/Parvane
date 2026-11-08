@@ -69,6 +69,7 @@
 
 #include "parvane/queue_watchdog.h"
 #include "parvane/reconnect_backoff.h"
+#include "parvane/state_model.h"
 
 namespace parvane::v2 {
 
@@ -78,7 +79,7 @@ class AnonPlanner;
 class Client;
 class Connection;
 class L2Ticker;
-class StateSession;
+class StateModel;
 class HistorySession;
 
 struct SessionConfig {
@@ -204,6 +205,19 @@ public:
     // журнал устройств и поднять сессию. Не блокирует; исход — событие готовности
     // или снова needsLinking (событие `needsLinking`).
     void joinWithGrant(std::string material);
+
+    // spec 035 T121 (OPT-024): записи инбокса, накопившиеся к началу разбора, разбираются ПАЧКОЙ — одно сохранение
+    // состояния и один ack на пачку, сохранение на диск раньше ack. Счётчики этой сессии и задержка разбора — для
+    // тестов (holdInboxForTest(true) — записи только копятся; false — разобрать накопленное).
+    struct InboxStats {
+        std::uint64_t records = 0;
+        std::uint64_t persists = 0;
+        std::uint64_t acks = 0;
+        std::uint64_t persistBeforeAck = 0; // ack, перед которым состояние с этими записями уже на диске
+    };
+    [[nodiscard]] InboxStats inboxStats() const;
+    void holdInboxForTest(bool hold);
+    [[nodiscard]] std::size_t pendingInboxForTest();
 
     // Собеседник на v2 (есть журнал устройств)? Блокирующий (сеть при промахе
     // кэша). Кэш: да — 10 мин, нет — 30 с. Не готово/self — false.
@@ -489,7 +503,9 @@ public:
     // Прочитать журнал; при первом запуске (файла state-migrated нет)
     // перенести локальный снимок local (proto3-JSON StateSnapshot).
     // → сведённый снимок; null — журнал недоступен (нет ключа).
-    json stateAttach(const json &local);
+    // dirtyKinds (T150): виды, правленные без журнала, — уходят в журнал разницей от показанного до правки, до
+    // проекции снимка.
+    json stateAttach(const json &local, const std::vector<std::string> &dirtyKinds = {});
     // Своя правка (desired — поля видов kinds в StateSnapshot) → записи
     // журнала, затем чужие записи. → {"changed":bool,"snapshot":{…}};
     // null — журнал недоступен.
@@ -497,6 +513,12 @@ public:
     // Отложенное (op_id base64) уже отправлено каким-то устройством? (синк журнала)
     bool stateScheduledSent(const std::string &opIdB64);
     void stateMarkSent(const std::string &opIdB64);
+    // spec 035 (US8, FR-075): избранные стикеры — объекты FAVED_STICKER журнала state.v2 (модель движка):
+    // [{set_id, sticker_id, added_ms}]; «В избранное»/«Убрать» — намерение fave_sticker.
+    json stateFavedStickers();
+    bool stateFaveSticker(const std::string &setId, const std::string &stickerId, bool on);
+    // spec 035 (US5): журнал закрыт для записи более новой версией (критичный вид) — «обновите приложение».
+    bool stateWriteBlocked();
     // «Удалить чат у себя» (T145): граница очистки чата с собеседником/группой —
     // запись журнала состояния; остальные свои устройства скрывают сообщения
     // не позже untilMs (поле снимка "cleared": [{"peer","cleared_until_ms"}]).
@@ -519,6 +541,19 @@ private:
     std::mutex recordsMu_;
     std::deque<std::string> records_;
     void openPendingRecords();
+    std::atomic<bool> inboxHeld_{false};
+    std::atomic<std::uint64_t> statRecords_{0}, statPersists_{0}, statAcks_{0}, statPersistBeforeAck_{0};
+    // OPT-024: снимок состояния снимается под engineMu_, пишется на диск вне его (persistMu_). Номер снимка — под
+    // engineMu_; более старый снимок поверх более нового не пишется.
+    struct Exported {
+        std::uint64_t seq = 0;
+        std::string blob;
+    };
+    std::optional<Exported> exportLocked();
+    bool writeExported(const Exported &e);
+    std::uint64_t exportSeq_ = 0;
+    std::mutex persistMu_;
+    std::uint64_t writtenSeq_ = 0;
     void workerLoop();
     void connectOnce();
     bool connectLocked(std::string *error);
@@ -555,8 +590,14 @@ private:
     // То же для операций с JSON-результатом (для файлов сессии вне v2_session.cpp).
     json withNeedsJsonLocked(const std::function<json()> &f);
     // Группы.
-    void syncGroupLocked(const std::string &hex, const std::string &linkId = std::string());
+    // inviteUrl — ссылка целиком: журнал до вступления по доказательству знания её секрета (spec 035, PV-006)
+    void syncGroupLocked(const std::string &hex, const std::string &inviteUrl = std::string());
     void resyncGroupLocked(const std::string &hex);
+    // spec 035 (PV-005, GPHOTO-1): сведения без смены фото (avatar_key_id прежний), новое фото своей записью и
+    // рассылка его секрета (GroupAvatarKey участникам, InviteAvatarWrap своим ссылкам).
+    [[nodiscard]] static json setInfoKeepPhoto(const json &groupInfo, const std::string &name, const std::string &about);
+    bool setGroupPhotoLocked(const std::string &hex, const std::string &fileId, const std::string &keyB64);
+    void sendGroupPhotoKeyLocked(const std::string &hex);
     void publishGroupLocked(const std::string &hex);
     void noteGroupL2Locked(const std::string &hex, const json &info);
     void noteL2StateLocked(bool force = false);
@@ -649,7 +690,9 @@ private:
     // Журнал состояния.
     bool openStateLocked();
     bool pullStateLocked();
-    void pushAppendsLocked();
+    json projectStateLocked();
+    bool pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds);
+    void applyStateLocked(const json &desired, const char *what);
     void log(const std::string &m) const;
     std::string readStateFile(const std::string &name) const;
     bool writeStateFile(const std::string &name, const std::string &data) const;
@@ -694,7 +737,7 @@ private:
     bool privacyPresenceNobody_ = false;
     // Какие поля правило это устройство и ещё не сохранило (маска kPrivacy*).
     unsigned privacyDirty_ = 0;
-    std::unique_ptr<StateSession> state_;
+    std::unique_ptr<StateModel> state_;
     // Ключ личного состояния сменён (D-16): старые записи новым ключом не
     // читаются. stateRekeyed_ — следующий stateAttach не отдаёт хосту пустой
     // снимок, а переносит состояние под новый ключ: stateCarry_ (сведённое до
@@ -706,7 +749,7 @@ private:
     // позже (как web `attach(…, 'peer')`)
     bool stateRekeyPeer_ = false;
     int stateRekeyPeerTries_ = 0; // повторов без записей; после потолка — перенос своего (журнал под ключом пуст)
-    std::deque<std::string> pendingAppends_;
+    json stateBase_; // что хост показывал последним (база разницы правок, файл state-base)
     std::atomic<bool> ready_{false};
     std::atomic<bool> needsLinking_{false};
     std::string linkMaterial_; // под engineMu_: грант линковки до вступления
