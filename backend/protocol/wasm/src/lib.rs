@@ -1955,3 +1955,36 @@ mod tests {
         assert_eq!(super::version(), parvane_protocol::version());
     }
 }
+
+/// spec 035 (T070, contracts/engine-api.md): модель движка — намерения → изменения модели. Граница —
+/// proto3-JSON типов `engine/v1/model.proto`; ошибка вызова — `{"error": "<вид>"}` в строке результата,
+/// ошибка открытия — исключение с той же строкой. Прежние поштучные экспорты (`Client`, `history*`, …)
+/// остаются до перехода web на модель (T118).
+#[wasm_bindgen]
+pub struct PvEngine {
+    inner: parvane_protocol::model::Engine,
+}
+
+#[wasm_bindgen]
+impl PvEngine {
+    /// Открыть по конфигурации (`EngineConfig`, JSON); дальше — `call("start", "{}")`.
+    pub fn open(config_json: &str) -> Result<PvEngine, JsValue> {
+        parvane_protocol::model::Engine::open_json(config_json).map(|inner| PvEngine { inner }).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
+    /// `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
+    pub fn call(&mut self, name: &str, args_json: &str) -> String {
+        self.inner.call(name, args_json)
+    }
+
+    /// Ревизия последнего выпущенного изменения модели.
+    pub fn revision(&self) -> f64 {
+        self.inner.revision() as f64
+    }
+
+    #[wasm_bindgen(js_name = engineInfo)]
+    pub fn engine_info(&self) -> String {
+        parvane_protocol::engine_info_json()
+    }
+}

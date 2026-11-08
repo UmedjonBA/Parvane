@@ -637,6 +637,32 @@ export class PvClient {
 }
 
 /**
+ * spec 035 (T070, contracts/engine-api.md): модель движка — намерения → изменения модели. Граница —
+ * proto3-JSON типов `engine/v1/model.proto`; ошибка вызова — `{"error": "<вид>"}` в строке результата,
+ * ошибка открытия — исключение с той же строкой. Прежние поштучные экспорты (`Client`, `history*`, …)
+ * остаются до перехода web на модель (T118).
+ */
+export class PvEngine {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
+     * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
+     */
+    call(name: string, args_json: string): string;
+    engineInfo(): string;
+    /**
+     * Открыть по конфигурации (`EngineConfig`, JSON); дальше — `call("start", "{}")`.
+     */
+    static open(config_json: string): PvEngine;
+    /**
+     * Ревизия последнего выпущенного изменения модели.
+     */
+    revision(): number;
+}
+
+/**
  * Сессия журнала истории аккаунта (spec 033): `call(name, argsJson)` → JSON-текст результата (имена и
  * аргументы — `specs/033-history-sync/contracts/engine-api.md`: `syncRequest`, `ingest`, `seal`,
  * `headRequest`, `ingestHead`, `getRequest`, `commitRequest`, `ingestAppend`, `ingestCommit`; статические
@@ -876,6 +902,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_pvanonplanner_free: (a: number, b: number) => void;
     readonly __wbg_pvclient_free: (a: number, b: number) => void;
+    readonly __wbg_pvengine_free: (a: number, b: number) => void;
     readonly __wbg_pvhistory_free: (a: number, b: number) => void;
     readonly __wbg_pvstate_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
@@ -1054,6 +1081,10 @@ export interface InitOutput {
     readonly pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvengine_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvengine_engineInfo: (a: number, b: number) => void;
+    readonly pvengine_open: (a: number, b: number, c: number) => void;
+    readonly pvengine_revision: (a: number) => number;
     readonly pvhistory_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;

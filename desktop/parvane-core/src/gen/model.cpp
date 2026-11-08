@@ -421,6 +421,8 @@ void to_json(nlohmann::json &j, const EngineConfig &m) {
     }
     if (m.now_ms != 0) j["now_ms"] = std::to_string(m.now_ms);
     if (m.memory_budget_bytes != 0) j["memory_budget_bytes"] = std::to_string(m.memory_budget_bytes);
+    if (!m.device_key.empty()) j["device_key"] = toBase64(m.device_key);
+    if (m.vectors) j["vectors"] = m.vectors;
 }
 
 void from_json(const nlohmann::json &j, EngineConfig &m) {
@@ -432,6 +434,8 @@ void from_json(const nlohmann::json &j, EngineConfig &m) {
         for (const auto &x : *v) m.features.push_back(x.get<std::string>());
     if (const auto *v = pick(j, "now_ms", "nowMs")) m.now_ms = numFrom<int64_t>((*v));
     if (const auto *v = pick(j, "memory_budget_bytes", "memoryBudgetBytes")) m.memory_budget_bytes = numFrom<uint64_t>((*v));
+    if (const auto *v = pick(j, "device_key", "deviceKey")) m.device_key = fromBase64((*v).get<std::string>());
+    if (const auto *v = pick(j, "vectors", "vectors")) m.vectors = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const EngineError &m) {
@@ -879,6 +883,16 @@ void to_json(nlohmann::json &j, const Tick &m) {
 void from_json(const nlohmann::json &j, Tick &m) {
     m = Tick{};
     if (const auto *v = pick(j, "now_ms", "nowMs")) m.now_ms = numFrom<int64_t>((*v));
+}
+
+void to_json(nlohmann::json &j, const UnlockPin &m) {
+    j = nlohmann::json::object();
+    if (!m.pin.empty()) j["pin"] = m.pin;
+}
+
+void from_json(const nlohmann::json &j, UnlockPin &m) {
+    m = UnlockPin{};
+    if (const auto *v = pick(j, "pin", "pin")) m.pin = (*v).get<std::string>();
 }
 
 void to_json(nlohmann::json &j, const UserRef &m) {
@@ -1410,6 +1424,10 @@ void to_json(nlohmann::json &j, const ViewMedia &m) {
     if (m.caption.has_value()) j["caption"] = *m.caption;
     if (m.spoiler) j["spoiler"] = m.spoiler;
     if (m.caption_above) j["caption_above"] = m.caption_above;
+    if (!m.waveform.empty()) j["waveform"] = toBase64(m.waveform);
+    if (!m.album_id.empty()) j["album_id"] = toBase64(m.album_id);
+    if (!m.title.empty()) j["title"] = m.title;
+    if (!m.performer.empty()) j["performer"] = m.performer;
 }
 
 void from_json(const nlohmann::json &j, ViewMedia &m) {
@@ -1430,6 +1448,10 @@ void from_json(const nlohmann::json &j, ViewMedia &m) {
     if (const auto *v = pick(j, "caption", "caption")) m.caption = (*v).get<ViewText>();
     if (const auto *v = pick(j, "spoiler", "spoiler")) m.spoiler = (*v).get<bool>();
     if (const auto *v = pick(j, "caption_above", "captionAbove")) m.caption_above = (*v).get<bool>();
+    if (const auto *v = pick(j, "waveform", "waveform")) m.waveform = fromBase64((*v).get<std::string>());
+    if (const auto *v = pick(j, "album_id", "albumId")) m.album_id = fromBase64((*v).get<std::string>());
+    if (const auto *v = pick(j, "title", "title")) m.title = (*v).get<std::string>();
+    if (const auto *v = pick(j, "performer", "performer")) m.performer = (*v).get<std::string>();
 }
 
 void to_json(nlohmann::json &j, const ViewSticker &m) {
@@ -1768,6 +1790,10 @@ void to_json(nlohmann::json &j, const MessageView &m) {
     if (m.pinned) j["pinned"] = m.pinned;
     if (m.ttl_secs != 0) j["ttl_secs"] = m.ttl_secs;
     if (m.delivery != Delivery{}) j["delivery"] = m.delivery;
+    if (!m.forward_name.empty()) j["forward_name"] = m.forward_name;
+    if (m.reply_quote.has_value()) j["reply_quote"] = *m.reply_quote;
+    if (m.silent) j["silent"] = m.silent;
+    if (m.order != 0) j["order"] = std::to_string(m.order);
 }
 
 void from_json(const nlohmann::json &j, MessageView &m) {
@@ -1787,6 +1813,10 @@ void from_json(const nlohmann::json &j, MessageView &m) {
     if (const auto *v = pick(j, "pinned", "pinned")) m.pinned = (*v).get<bool>();
     if (const auto *v = pick(j, "ttl_secs", "ttlSecs")) m.ttl_secs = numFrom<uint32_t>((*v));
     if (const auto *v = pick(j, "delivery", "delivery")) m.delivery = (*v).get<Delivery>();
+    if (const auto *v = pick(j, "forward_name", "forwardName")) m.forward_name = (*v).get<std::string>();
+    if (const auto *v = pick(j, "reply_quote", "replyQuote")) m.reply_quote = (*v).get<ViewText>();
+    if (const auto *v = pick(j, "silent", "silent")) m.silent = (*v).get<bool>();
+    if (const auto *v = pick(j, "order", "order")) m.order = numFrom<int64_t>((*v));
 }
 
 void to_json(nlohmann::json &j, const ChatView &m) {
@@ -1908,6 +1938,7 @@ void to_json(nlohmann::json &j, const Outcome &m) {
         j["requests"] = a;
     }
     if (m.delta.has_value()) j["delta"] = *m.delta;
+    if (m.open.has_value()) j["open"] = *m.open;
 }
 
 void from_json(const nlohmann::json &j, Outcome &m) {
@@ -1918,6 +1949,7 @@ void from_json(const nlohmann::json &j, Outcome &m) {
     if (const auto *v = pick(j, "requests", "requests"); v && v->is_array())
         for (const auto &x : *v) m.requests.push_back(x.get<OutRequest>());
     if (const auto *v = pick(j, "delta", "delta")) m.delta = (*v).get<ModelDelta>();
+    if (const auto *v = pick(j, "open", "open")) m.open = (*v).get<OpenResult>();
 }
 
 void to_json(nlohmann::json &j, const ChatPage &m) {

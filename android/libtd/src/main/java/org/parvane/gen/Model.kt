@@ -465,7 +465,9 @@ data class EngineConfig(
     val domain: String = "",
     val features: List<String> = emptyList(),
     val nowMs: Long = 0L,
-    val memoryBudgetBytes: Long = 0L
+    val memoryBudgetBytes: Long = 0L,
+    val deviceKey: ByteArray = ByteArray(0),
+    val vectors: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -475,6 +477,8 @@ data class EngineConfig(
         if (features.isNotEmpty()) j.put("features", JSONArray().apply { features.forEach { put(it) } })
         if (!(nowMs == 0L)) j.put("now_ms", nowMs.toString())
         if (!(memoryBudgetBytes == 0L)) j.put("memory_budget_bytes", memoryBudgetBytes.toString())
+        if (!(deviceKey.isEmpty())) j.put("device_key", toBase64(deviceKey))
+        if (!(!vectors)) j.put("vectors", vectors)
         return j
     }
 
@@ -486,7 +490,9 @@ data class EngineConfig(
                 domain = j.pick("domain", "domain")?.let { it.toString() } ?: "",
                 features = (j.pick("features", "features") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString() } } } ?: emptyList(),
                 nowMs = j.pick("now_ms", "nowMs")?.let { it.toString().toLong() } ?: 0L,
-                memoryBudgetBytes = j.pick("memory_budget_bytes", "memoryBudgetBytes")?.let { it.toString().toLong() } ?: 0L
+                memoryBudgetBytes = j.pick("memory_budget_bytes", "memoryBudgetBytes")?.let { it.toString().toLong() } ?: 0L,
+                deviceKey = j.pick("device_key", "deviceKey")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
+                vectors = j.pick("vectors", "vectors")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -1325,7 +1331,11 @@ data class MessageView(
     val reactions: List<ViewReaction> = emptyList(),
     val pinned: Boolean = false,
     val ttlSecs: Long = 0L,
-    val delivery: Delivery = Delivery.values()[0]
+    val delivery: Delivery = Delivery.values()[0],
+    val forwardName: String = "",
+    val replyQuote: ViewText? = null,
+    val silent: Boolean = false,
+    val order: Long = 0L
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -1343,6 +1353,10 @@ data class MessageView(
         if (!(!pinned)) j.put("pinned", pinned)
         if (!(ttlSecs == 0L)) j.put("ttl_secs", ttlSecs)
         if (!(delivery == Delivery.values()[0])) j.put("delivery", delivery.name)
+        if (!(forwardName.isEmpty())) j.put("forward_name", forwardName)
+        if (!(replyQuote == null)) j.put("reply_quote", replyQuote!!.toJson())
+        if (!(!silent)) j.put("silent", silent)
+        if (!(order == 0L)) j.put("order", order.toString())
         return j
     }
 
@@ -1362,7 +1376,11 @@ data class MessageView(
                 reactions = (j.pick("reactions", "reactions") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { ViewReaction.fromJson(it as JSONObject) } } } ?: emptyList(),
                 pinned = j.pick("pinned", "pinned")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 ttlSecs = j.pick("ttl_secs", "ttlSecs")?.let { it.toString().toLong() } ?: 0L,
-                delivery = j.pick("delivery", "delivery")?.let { Delivery.fromJson(it) } ?: Delivery.values()[0]
+                delivery = j.pick("delivery", "delivery")?.let { Delivery.fromJson(it) } ?: Delivery.values()[0],
+                forwardName = j.pick("forward_name", "forwardName")?.let { it.toString() } ?: "",
+                replyQuote = j.pick("reply_quote", "replyQuote")?.let { ViewText.fromJson(it as JSONObject) } ?: null,
+                silent = j.pick("silent", "silent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L
             )
         }
     }
@@ -1639,7 +1657,8 @@ data class Outcome(
     val storeBatch: StoreBatch? = null,
     val storeReads: List<StoreReads> = emptyList(),
     val requests: List<OutRequest> = emptyList(),
-    val delta: ModelDelta? = null
+    val delta: ModelDelta? = null,
+    val open: OpenResult? = null
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -1647,6 +1666,7 @@ data class Outcome(
         if (storeReads.isNotEmpty()) j.put("store_reads", JSONArray().apply { storeReads.forEach { put(it.toJson()) } })
         if (requests.isNotEmpty()) j.put("requests", JSONArray().apply { requests.forEach { put(it.toJson()) } })
         if (!(delta == null)) j.put("delta", delta!!.toJson())
+        if (!(open == null)) j.put("open", open!!.toJson())
         return j
     }
 
@@ -1656,7 +1676,8 @@ data class Outcome(
                 storeBatch = j.pick("store_batch", "storeBatch")?.let { StoreBatch.fromJson(it as JSONObject) } ?: null,
                 storeReads = (j.pick("store_reads", "storeReads") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { StoreReads.fromJson(it as JSONObject) } } } ?: emptyList(),
                 requests = (j.pick("requests", "requests") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { OutRequest.fromJson(it as JSONObject) } } } ?: emptyList(),
-                delta = j.pick("delta", "delta")?.let { ModelDelta.fromJson(it as JSONObject) } ?: null
+                delta = j.pick("delta", "delta")?.let { ModelDelta.fromJson(it as JSONObject) } ?: null,
+                open = j.pick("open", "open")?.let { OpenResult.fromJson(it as JSONObject) } ?: null
             )
         }
     }
@@ -2091,6 +2112,24 @@ data class Tick(
     }
 }
 
+data class UnlockPin(
+    val pin: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(pin.isEmpty())) j.put("pin", pin)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): UnlockPin {
+            return UnlockPin(
+                pin = j.pick("pin", "pin")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
 data class UnreadChanged(
     val chat: Peer? = null,
     val count: Long = 0L,
@@ -2380,7 +2419,11 @@ data class ViewMedia(
     val thumb: ByteArray = ByteArray(0),
     val caption: ViewText? = null,
     val spoiler: Boolean = false,
-    val captionAbove: Boolean = false
+    val captionAbove: Boolean = false,
+    val waveform: ByteArray = ByteArray(0),
+    val albumId: ByteArray = ByteArray(0),
+    val title: String = "",
+    val performer: String = ""
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -2400,6 +2443,10 @@ data class ViewMedia(
         if (!(caption == null)) j.put("caption", caption!!.toJson())
         if (!(!spoiler)) j.put("spoiler", spoiler)
         if (!(!captionAbove)) j.put("caption_above", captionAbove)
+        if (!(waveform.isEmpty())) j.put("waveform", toBase64(waveform))
+        if (!(albumId.isEmpty())) j.put("album_id", toBase64(albumId))
+        if (!(title.isEmpty())) j.put("title", title)
+        if (!(performer.isEmpty())) j.put("performer", performer)
         return j
     }
 
@@ -2421,7 +2468,11 @@ data class ViewMedia(
                 thumb = j.pick("thumb", "thumb")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
                 caption = j.pick("caption", "caption")?.let { ViewText.fromJson(it as JSONObject) } ?: null,
                 spoiler = j.pick("spoiler", "spoiler")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                captionAbove = j.pick("caption_above", "captionAbove")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                captionAbove = j.pick("caption_above", "captionAbove")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                waveform = j.pick("waveform", "waveform")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
+                albumId = j.pick("album_id", "albumId")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
+                title = j.pick("title", "title")?.let { it.toString() } ?: "",
+                performer = j.pick("performer", "performer")?.let { it.toString() } ?: ""
             )
         }
     }

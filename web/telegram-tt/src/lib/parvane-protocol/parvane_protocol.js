@@ -3242,6 +3242,108 @@ export class PvClient {
 if (Symbol.dispose) PvClient.prototype[Symbol.dispose] = PvClient.prototype.free;
 
 /**
+ * spec 035 (T070, contracts/engine-api.md): модель движка — намерения → изменения модели. Граница —
+ * proto3-JSON типов `engine/v1/model.proto`; ошибка вызова — `{"error": "<вид>"}` в строке результата,
+ * ошибка открытия — исключение с той же строкой. Прежние поштучные экспорты (`Client`, `history*`, …)
+ * остаются до перехода web на модель (T118).
+ */
+export class PvEngine {
+    static __wrap(ptr) {
+        const obj = Object.create(PvEngine.prototype);
+        obj.__wbg_ptr = ptr;
+        PvEngineFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        PvEngineFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_pvengine_free(ptr, 0);
+    }
+    /**
+     * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
+     * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
+     * @param {string} name
+     * @param {string} args_json
+     * @returns {string}
+     */
+    call(name, args_json) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(args_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvengine_call(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred3_0 = r0;
+            deferred3_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    engineInfo() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvengine_engineInfo(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Открыть по конфигурации (`EngineConfig`, JSON); дальше — `call("start", "{}")`.
+     * @param {string} config_json
+     * @returns {PvEngine}
+     */
+    static open(config_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(config_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvengine_open(retptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return PvEngine.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Ревизия последнего выпущенного изменения модели.
+     * @returns {number}
+     */
+    revision() {
+        const ret = wasm.pvengine_revision(this.__wbg_ptr);
+        return ret;
+    }
+}
+if (Symbol.dispose) PvEngine.prototype[Symbol.dispose] = PvEngine.prototype.free;
+
+/**
  * Сессия журнала истории аккаунта (spec 033): `call(name, argsJson)` → JSON-текст результата (имена и
  * аргументы — `specs/033-history-sync/contracts/engine-api.md`: `syncRequest`, `ingest`, `seal`,
  * `headRequest`, `ingestHead`, `getRequest`, `commitRequest`, `ingestAppend`, `ingestCommit`; статические
@@ -4583,6 +4685,9 @@ const PvAnonPlannerFinalization = (typeof FinalizationRegistry === 'undefined')
 const PvClientFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvclient_free(ptr, 1));
+const PvEngineFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_pvengine_free(ptr, 1));
 const PvHistoryFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvhistory_free(ptr, 1));

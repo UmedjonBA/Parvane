@@ -196,6 +196,7 @@ struct StorePut;
 struct StoreReads;
 struct Stored;
 struct Tick;
+struct UnlockPin;
 struct UnreadChanged;
 struct UserRef;
 struct ViewArticle;
@@ -269,6 +270,8 @@ struct EngineConfig {
     std::vector<std::string> features;
     int64_t now_ms = 0;
     uint64_t memory_budget_bytes = 0;
+    std::string device_key;
+    bool vectors = false;
 };
 void to_json(nlohmann::json &j, const EngineConfig &m);
 void from_json(const nlohmann::json &j, EngineConfig &m);
@@ -503,6 +506,12 @@ struct Tick {
 };
 void to_json(nlohmann::json &j, const Tick &m);
 void from_json(const nlohmann::json &j, Tick &m);
+
+struct UnlockPin {
+    std::string pin;
+};
+void to_json(nlohmann::json &j, const UnlockPin &m);
+void from_json(const nlohmann::json &j, UnlockPin &m);
 
 struct UserRef {
     std::string address;
@@ -764,6 +773,10 @@ struct ViewMedia {
     std::optional<ViewText> caption;
     bool spoiler = false;
     bool caption_above = false;
+    std::string waveform;
+    std::string album_id;
+    std::string title;
+    std::string performer;
 };
 void to_json(nlohmann::json &j, const ViewMedia &m);
 void from_json(const nlohmann::json &j, ViewMedia &m);
@@ -922,6 +935,10 @@ struct MessageView {
     bool pinned = false;
     uint32_t ttl_secs = 0;
     Delivery delivery = {};
+    std::string forward_name;
+    std::optional<ViewText> reply_quote;
+    bool silent = false;
+    int64_t order = 0;
 };
 void to_json(nlohmann::json &j, const MessageView &m);
 void from_json(const nlohmann::json &j, MessageView &m);
@@ -972,6 +989,7 @@ struct Outcome {
     std::vector<StoreReads> store_reads;
     std::vector<OutRequest> requests;
     std::optional<ModelDelta> delta;
+    std::optional<OpenResult> open;
 };
 void to_json(nlohmann::json &j, const Outcome &m);
 void from_json(const nlohmann::json &j, Outcome &m);

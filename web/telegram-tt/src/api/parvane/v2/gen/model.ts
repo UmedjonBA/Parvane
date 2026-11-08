@@ -460,6 +460,8 @@ export interface EngineConfig {
   features: string[];
   nowMs: string;
   memoryBudgetBytes: string;
+  deviceKey: Uint8Array;
+  vectors: boolean;
 }
 
 export function engineConfigFromJson(v: unknown): EngineConfig {
@@ -470,6 +472,8 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
   const features = pick(j, 'features', 'features');
   const nowMs = pick(j, 'now_ms', 'nowMs');
   const memoryBudgetBytes = pick(j, 'memory_budget_bytes', 'memoryBudgetBytes');
+  const deviceKey = pick(j, 'device_key', 'deviceKey');
+  const vectors = pick(j, 'vectors', 'vectors');
   const out: EngineConfig = {
     user: user === undefined || user === null ? '' : String(user),
     deviceId: deviceId === undefined || deviceId === null ? '' : String(deviceId),
@@ -477,6 +481,8 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
     features: Array.isArray(features) ? features.map((x) => String(x)) : [],
     nowMs: nowMs === undefined || nowMs === null ? '' : String(nowMs),
     memoryBudgetBytes: memoryBudgetBytes === undefined || memoryBudgetBytes === null ? '' : String(memoryBudgetBytes),
+    deviceKey: deviceKey === undefined || deviceKey === null ? new Uint8Array(0) : fromBase64(String(deviceKey)),
+    vectors: vectors === undefined || vectors === null ? false : Boolean(vectors),
   };
   return out;
 }
@@ -489,6 +495,8 @@ export function engineConfigToJson(m: EngineConfig): Record<string, unknown> {
   if (m.features.length) j.features = m.features.map((x) => x);
   if (!((m.nowMs === '' || m.nowMs === '0'))) j.now_ms = m.nowMs;
   if (!((m.memoryBudgetBytes === '' || m.memoryBudgetBytes === '0'))) j.memory_budget_bytes = m.memoryBudgetBytes;
+  if (!(m.deviceKey.length === 0)) j.device_key = toBase64(m.deviceKey);
+  if (!(!m.vectors)) j.vectors = m.vectors;
   return j;
 }
 
@@ -1452,6 +1460,10 @@ export interface MessageView {
   pinned: boolean;
   ttlSecs: number;
   delivery: Delivery;
+  forwardName: string;
+  replyQuote?: ViewText;
+  silent: boolean;
+  order: string;
 }
 
 export function messageViewFromJson(v: unknown): MessageView {
@@ -1470,6 +1482,10 @@ export function messageViewFromJson(v: unknown): MessageView {
   const pinned = pick(j, 'pinned', 'pinned');
   const ttlSecs = pick(j, 'ttl_secs', 'ttlSecs');
   const delivery = pick(j, 'delivery', 'delivery');
+  const forwardName = pick(j, 'forward_name', 'forwardName');
+  const replyQuote = pick(j, 'reply_quote', 'replyQuote');
+  const silent = pick(j, 'silent', 'silent');
+  const order = pick(j, 'order', 'order');
   const out: MessageView = {
     id: id === undefined || id === null ? new Uint8Array(0) : fromBase64(String(id)),
     chat: chat === undefined || chat === null ? undefined : peerFromJson(chat),
@@ -1485,6 +1501,10 @@ export function messageViewFromJson(v: unknown): MessageView {
     pinned: pinned === undefined || pinned === null ? false : Boolean(pinned),
     ttlSecs: ttlSecs === undefined || ttlSecs === null ? 0 : Number(ttlSecs),
     delivery: delivery === undefined || delivery === null ? DeliveryValues[0] : deliveryFromJson(delivery),
+    forwardName: forwardName === undefined || forwardName === null ? '' : String(forwardName),
+    replyQuote: replyQuote === undefined || replyQuote === null ? undefined : viewTextFromJson(replyQuote),
+    silent: silent === undefined || silent === null ? false : Boolean(silent),
+    order: order === undefined || order === null ? '' : String(order),
   };
   return out;
 }
@@ -1505,6 +1525,10 @@ export function messageViewToJson(m: MessageView): Record<string, unknown> {
   if (!(!m.pinned)) j.pinned = m.pinned;
   if (!(m.ttlSecs === 0)) j.ttl_secs = m.ttlSecs;
   if (!(m.delivery === DeliveryValues[0])) j.delivery = m.delivery;
+  if (!(m.forwardName === '')) j.forward_name = m.forwardName;
+  if (!(m.replyQuote === undefined)) j.reply_quote = viewTextToJson(m.replyQuote!);
+  if (!(!m.silent)) j.silent = m.silent;
+  if (!((m.order === '' || m.order === '0'))) j.order = m.order;
   return j;
 }
 
@@ -1818,6 +1842,7 @@ export interface Outcome {
   storeReads: StoreReads[];
   requests: OutRequest[];
   delta?: ModelDelta;
+  open?: OpenResult;
 }
 
 export function outcomeFromJson(v: unknown): Outcome {
@@ -1826,11 +1851,13 @@ export function outcomeFromJson(v: unknown): Outcome {
   const storeReads = pick(j, 'store_reads', 'storeReads');
   const requests = pick(j, 'requests', 'requests');
   const delta = pick(j, 'delta', 'delta');
+  const open = pick(j, 'open', 'open');
   const out: Outcome = {
     storeBatch: storeBatch === undefined || storeBatch === null ? undefined : storeBatchFromJson(storeBatch),
     storeReads: Array.isArray(storeReads) ? storeReads.map((x) => storeReadsFromJson(x)) : [],
     requests: Array.isArray(requests) ? requests.map((x) => outRequestFromJson(x)) : [],
     delta: delta === undefined || delta === null ? undefined : modelDeltaFromJson(delta),
+    open: open === undefined || open === null ? undefined : openResultFromJson(open),
   };
   return out;
 }
@@ -1841,6 +1868,7 @@ export function outcomeToJson(m: Outcome): Record<string, unknown> {
   if (m.storeReads.length) j.store_reads = m.storeReads.map((x) => storeReadsToJson(x));
   if (m.requests.length) j.requests = m.requests.map((x) => outRequestToJson(x));
   if (!(m.delta === undefined)) j.delta = modelDeltaToJson(m.delta!);
+  if (!(m.open === undefined)) j.open = openResultToJson(m.open!);
   return j;
 }
 
@@ -2317,6 +2345,25 @@ export function tickToJson(m: Tick): Record<string, unknown> {
   return j;
 }
 
+export interface UnlockPin {
+  pin: string;
+}
+
+export function unlockPinFromJson(v: unknown): UnlockPin {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const pin = pick(j, 'pin', 'pin');
+  const out: UnlockPin = {
+    pin: pin === undefined || pin === null ? '' : String(pin),
+  };
+  return out;
+}
+
+export function unlockPinToJson(m: UnlockPin): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.pin === '')) j.pin = m.pin;
+  return j;
+}
+
 export interface UnreadChanged {
   chat?: Peer;
   count: number;
@@ -2648,6 +2695,10 @@ export interface ViewMedia {
   caption?: ViewText;
   spoiler: boolean;
   captionAbove: boolean;
+  waveform: Uint8Array;
+  albumId: Uint8Array;
+  title: string;
+  performer: string;
 }
 
 export function viewMediaFromJson(v: unknown): ViewMedia {
@@ -2668,6 +2719,10 @@ export function viewMediaFromJson(v: unknown): ViewMedia {
   const caption = pick(j, 'caption', 'caption');
   const spoiler = pick(j, 'spoiler', 'spoiler');
   const captionAbove = pick(j, 'caption_above', 'captionAbove');
+  const waveform = pick(j, 'waveform', 'waveform');
+  const albumId = pick(j, 'album_id', 'albumId');
+  const title = pick(j, 'title', 'title');
+  const performer = pick(j, 'performer', 'performer');
   const out: ViewMedia = {
     kind: kind === undefined || kind === null ? '' : String(kind),
     fileId: fileId === undefined || fileId === null ? '' : String(fileId),
@@ -2685,6 +2740,10 @@ export function viewMediaFromJson(v: unknown): ViewMedia {
     caption: caption === undefined || caption === null ? undefined : viewTextFromJson(caption),
     spoiler: spoiler === undefined || spoiler === null ? false : Boolean(spoiler),
     captionAbove: captionAbove === undefined || captionAbove === null ? false : Boolean(captionAbove),
+    waveform: waveform === undefined || waveform === null ? new Uint8Array(0) : fromBase64(String(waveform)),
+    albumId: albumId === undefined || albumId === null ? new Uint8Array(0) : fromBase64(String(albumId)),
+    title: title === undefined || title === null ? '' : String(title),
+    performer: performer === undefined || performer === null ? '' : String(performer),
   };
   return out;
 }
@@ -2707,6 +2766,10 @@ export function viewMediaToJson(m: ViewMedia): Record<string, unknown> {
   if (!(m.caption === undefined)) j.caption = viewTextToJson(m.caption!);
   if (!(!m.spoiler)) j.spoiler = m.spoiler;
   if (!(!m.captionAbove)) j.caption_above = m.captionAbove;
+  if (!(m.waveform.length === 0)) j.waveform = toBase64(m.waveform);
+  if (!(m.albumId.length === 0)) j.album_id = toBase64(m.albumId);
+  if (!(m.title === '')) j.title = m.title;
+  if (!(m.performer === '')) j.performer = m.performer;
   return j;
 }
 

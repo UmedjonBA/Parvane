@@ -56,6 +56,12 @@ message EngineConfig {
   repeated string features = 4 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 64];
   int64 now_ms = 5;
   uint64 memory_budget_bytes = 6;
+  // Ключ устройства (32 байта): обёртка DEK хранилища `wrap:device` (contracts/storage.md). Нет — профиль
+  // открывается только PIN (`unlockPin`), до этого `LOCKED`.
+  bytes device_key = 7 [(parvane.core.v2.max_len) = 32];
+  // Режим векторов `vectors/model/*` (FR-053): разрешён вызов `vectorInput` — ввод без шифрования (входящее
+  // содержимое, операции журнала истории, сведения группы). В выпуске хост его не включает.
+  bool vectors = 8;
 }
 
 enum OpenState {
@@ -173,6 +179,12 @@ message ViewMedia {
   ViewText caption = 14;
   bool spoiler = 15;
   bool caption_above = 16;
+  // Волна голосового (сэмплы 0..31 байтами).
+  bytes waveform = 17 [(parvane.core.v2.max_len) = 256];
+  bytes album_id = 18 [(parvane.core.v2.max_len) = 16];
+  // Метаданные аудиофайла.
+  string title = 19 [(parvane.core.v2.max_len) = 256];
+  string performer = 20 [(parvane.core.v2.max_len) = 256];
 }
 
 message ViewSticker {
@@ -273,6 +285,13 @@ message MessageView {
   bool pinned = 12;
   uint32 ttl_secs = 13;
   Delivery delivery = 14;
+  // Имя автора пересланного (если адреса нет).
+  string forward_name = 15 [(parvane.core.v2.max_len) = 128];
+  // Ответ с цитатой (QUOTE-1).
+  ViewText reply_quote = 16;
+  bool silent = 17;
+  // Порядок в ленте (ORDER-1): ключ страниц — `MsgAnchor{ts_ms = order, id}`.
+  int64 order = 18;
 }
 
 message ChatView {
@@ -616,6 +635,13 @@ message Outcome {
   repeated StoreReads store_reads = 2 [(parvane.core.v2.max_items) = 64];
   repeated OutRequest requests = 3 [(parvane.core.v2.max_items) = 1024];
   ModelDelta delta = 4;
+  // Итог открытия (после `start` → `storeLoaded`); нет — открытие не завершилось этим вызовом.
+  OpenResult open = 5;
+}
+
+// Ответ на PIN (`unlockPin`).
+message UnlockPin {
+  string pin = 1 [(parvane.core.v2.max_len) = 256];
 }
 
 // ── Аргументы вызовов ───────────────────────────────────────────────────────────────────────────────────

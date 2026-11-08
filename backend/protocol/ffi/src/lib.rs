@@ -49,6 +49,11 @@ fn cstring(s: String) -> *mut c_char {
     CString::new(s.replace('\0', "")).map(CString::into_raw).unwrap_or(ptr::null_mut())
 }
 
+/// Строка с секретом → C: копия уходит хосту, исходная `Zeroizing` стирается у вызывающего.
+fn cstring_secret(s: &zeroize::Zeroizing<String>) -> *mut c_char {
+    CString::new(s.as_bytes().to_vec()).map(CString::into_raw).unwrap_or(ptr::null_mut())
+}
+
 unsafe fn str_arg<'a>(p: *const c_char) -> Option<&'a str> {
     if p.is_null() {
         return None;
@@ -119,6 +124,54 @@ pub unsafe extern "C" fn parvane_protocol_bytes_free(b: PvBytes) {
 #[no_mangle]
 pub extern "C" fn pv_engine_info() -> *mut c_char {
     cstring(parvane_protocol::engine_info_json())
+}
+
+/// spec 035 (T070, contracts/engine-api.md): модель движка. Владеет хост; освобождать `pv_engine_free`.
+pub struct PvEngine {
+    inner: parvane_protocol::model::Engine,
+}
+
+const MALFORMED: &str = r#"{"error":"Malformed"}"#;
+
+/// Открыть модель по конфигурации (`EngineConfig`, JSON). NULL — ошибка; тогда `*err` (если не NULL) —
+/// JSON `{"error": "<вид>"}`, освобождать `pv_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_engine_open(config_json: *const c_char, err: *mut *mut c_char) -> *mut PvEngine {
+    let r = catch_unwind(AssertUnwindSafe(|| match str_arg(config_json) {
+        Some(cfg) => parvane_protocol::model::Engine::open_json(cfg),
+        None => Err(MALFORMED.to_string()),
+    }));
+    let e = match r {
+        Ok(Ok(inner)) => return Box::into_raw(Box::new(PvEngine { inner })),
+        Ok(Err(e)) => e,
+        Err(_) => MALFORMED.to_string(),
+    };
+    if !err.is_null() {
+        *err = cstring(e);
+    }
+    ptr::null_mut()
+}
+
+/// Вызов модели по имени → JSON результата (ошибка — `{"error": "<вид>"}`, незнакомое имя —
+/// `{"error": "UnknownCall"}`); освобождать `pv_free_string`. `args_json` NULL — `{}`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_engine_call(e: *mut PvEngine, name: *const c_char, args_json: *const c_char) -> *mut c_char {
+    if e.is_null() {
+        return cstring(MALFORMED.to_string());
+    }
+    let r = catch_unwind(AssertUnwindSafe(|| match str_arg(name) {
+        Some(name) => (*e).inner.call(name, str_arg(args_json).unwrap_or("{}")),
+        None => MALFORMED.to_string(),
+    }));
+    cstring(r.unwrap_or_else(|_| MALFORMED.to_string()))
+}
+
+/// Закрыть модель.
+#[no_mangle]
+pub unsafe extern "C" fn pv_engine_free(e: *mut PvEngine) {
+    if !e.is_null() {
+        drop(Box::from_raw(e));
+    }
 }
 
 /// Освободить строку движка (то же, что `parvane_protocol_string_free`; имя из contracts/versioning.md).
@@ -209,8 +262,8 @@ pub unsafe extern "C" fn pv_client_import_v1_account(c: *mut PvClient, pickle_js
 pub unsafe extern "C" fn pv_client_create_identity(c: *mut PvClient, otk: usize, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || {
         let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        let r: Result<String, String> = c.create_identity(otk);
-        r.map(cstring)
+        // OPT-015: строка с корнем стирается после передачи в C
+        c.create_identity(otk).map(|s| cstring_secret(&s))
     })
 }
 
@@ -303,8 +356,8 @@ pub unsafe extern "C" fn pv_client_recover_with_root(
 pub unsafe extern "C" fn pv_client_reset_identity(c: *mut PvClient, otk: usize, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || {
         let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        let r: Result<String, String> = c.reset_identity(otk);
-        r.map(cstring)
+        // OPT-015: строка с корнем стирается после передачи в C
+        c.reset_identity(otk).map(|s| cstring_secret(&s))
     })
 }
 
@@ -1436,6 +1489,33 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&s).unwrap();
             assert_eq!(v["protoMinor"], parvane_protocol::limits::PROTO_MINOR_035);
             assert_eq!(v["engineApi"], parvane_protocol::ENGINE_API);
+        }
+    }
+
+    /// spec 035 T070: модель движка через C ABI — открытие, `start` (чтение корня), незнакомый вызов, ошибка
+    /// открытия, освобождение.
+    #[test]
+    fn engine_model_over_c_abi() {
+        unsafe {
+            let mut err: *mut c_char = ptr::null_mut();
+            let bad = CString::new(r#"{"user":"нет","device_id":"d1"}"#).unwrap();
+            assert!(pv_engine_open(bad.as_ptr(), &mut err).is_null());
+            let e = CStr::from_ptr(err).to_str().unwrap().to_string();
+            pv_free_string(err);
+            assert_eq!(e, r#"{"error":"BadAddress"}"#);
+            let cfg = CString::new(r#"{"user":"alice@local","device_id":"d1","domain":"local","device_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="}"#).unwrap();
+            let eng = pv_engine_open(cfg.as_ptr(), ptr::null_mut());
+            assert!(!eng.is_null());
+            let name = CString::new("start").unwrap();
+            let p = pv_engine_call(eng, name.as_ptr(), ptr::null());
+            let out: serde_json::Value = serde_json::from_str(CStr::from_ptr(p).to_str().unwrap()).unwrap();
+            pv_free_string(p);
+            assert_eq!(out["store_reads"][0]["keys"][0], "root");
+            let name = CString::new("nope").unwrap();
+            let p = pv_engine_call(eng, name.as_ptr(), ptr::null());
+            assert_eq!(CStr::from_ptr(p).to_str().unwrap(), r#"{"error":"UnknownCall"}"#);
+            pv_free_string(p);
+            pv_engine_free(eng);
         }
     }
 
