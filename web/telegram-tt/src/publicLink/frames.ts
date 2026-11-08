@@ -93,10 +93,15 @@ function frame(field: number, body: Uint8Array) {
   return concatBytes([fieldVarint(FRAME_PROTO_MAJOR, PROTO_MAJOR), fieldBytes(field, body, true)]);
 }
 
-/** Первый кадр клиента: `Hello{client{kind, version}, channel}` (`proto_minor = 0`). */
+/** Минор протокола страницы = `PROTO_MINOR` движка (gateway отвергает ниже минимума); сверку держит `frames.test.ts`. */
+export const PROTO_MINOR = 1;
+
+/** Первый кадр клиента: `Hello{proto_minor, client{kind, version}, channel}`. */
 export function encodeHello(channel: number, clientKind: string, clientVersion: string) {
   const client = concatBytes([fieldString(1, clientKind), fieldString(2, clientVersion)]);
-  return frame(FRAME_HELLO, concatBytes([fieldBytes(3, client, true), fieldVarint(4, channel)]));
+  return frame(FRAME_HELLO, concatBytes([
+    fieldVarint(1, PROTO_MINOR), fieldBytes(3, client, true), fieldVarint(4, channel),
+  ]));
 }
 
 /** `Request{id, method, body, timeout_ms}`. */
