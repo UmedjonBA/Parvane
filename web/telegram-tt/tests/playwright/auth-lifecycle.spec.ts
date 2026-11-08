@@ -62,6 +62,8 @@ test('logs out through settings and clears the local session state', async ({ pa
     hasState: true,
     loginAddress: user,
   });
+  const { profileId } = await readSecureStateSnapshot(page, user);
+  expect(profileId).toBeTruthy();
 
   await openProfile(page);
   // «Log Out» — последняя строка экрана «Профиль», затем подтверждение в диалоге
@@ -70,12 +72,15 @@ test('logs out through settings and clears the local session state', async ({ pa
 
   // Инвариант logout — очистка локального состояния; вид переходного экрана
   // авторизации отличается между движками и проверяется после reload
-  // Ключи, зашифрованный state и адрес логина удалены
-  await expect.poll(async () => readSecureStateSnapshot(page, user), {
+  // Указатель профиля, ключ профиля, записи базы профиля (корень, состояние движка) и адрес логина удалены
+  await expect.poll(async () => readSecureStateSnapshot(page, user, { profileId }), {
     timeout: LOGIN_TIMEOUT_MS,
   }).toMatchObject({
+    profileId: undefined,
     hasKey: false,
+    hasRoot: false,
     hasState: false,
+    recordCount: 0,
     hasLoginAddress: false,
     legacyE2eKeyCount: 0,
   });

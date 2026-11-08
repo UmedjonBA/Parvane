@@ -1359,7 +1359,7 @@ export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
 }
 
 // Отладка кэша истории: ключи записей `m:<uuid>` шифрованного хранилища (IndexedDB)
-// этого аккаунта — видно, какие сообщения записаны на диск
+// этого браузера — видно, какие сообщения записаны на диск
 export async function dumpHistoryCacheKeys(page, label) {
   const keys = await page.evaluate(async () => {
     const out = [];
@@ -1375,7 +1375,9 @@ export async function dumpHistoryCacheKeys(page, label) {
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => resolve([]);
         });
-        const records = all.map(String).filter((key) => /:m:/.test(key)).map((key) => key.split(':m:')[1]);
+        // Хранилище движка (spec 035): `g<поколение>/history-row/m:<uuid>`; прежнее: `rec:<адрес>:m:<uuid>`
+        const records = all.map(String).map((key) => key.match(/(?:\/history-row\/|:)m:(.+)$/)?.[1])
+          .filter(Boolean);
         if (records.length) out.push(`${name}/${storeName}: ${records.length} — ${records.join(' ')}`);
       }
       db.close();

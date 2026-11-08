@@ -805,6 +805,27 @@ export const {
   getStorageMigration,
 } = api;
 
+/**
+ * Есть ли запись профиля — без создания профиля (диаг-методы провайдера, сценарии e2e). `undefined` — профиль
+ * заблокирован PIN и запись не прочитать.
+ */
+export async function peekSecureRecord(user: string, name: string): Promise<boolean | undefined> {
+  const ctx = DEFAULT_CTX;
+  if (await isLegacyUser(ctx, user)) {
+    return (await (await LegacyE2eStorage.open(user)).loadBytesRecord(name)) !== undefined;
+  }
+  const p = await openProfile(ctx, user, false);
+  if (!p) return false;
+  await ensureReady(p).catch(() => undefined);
+  if (p.engine.state() !== 'ready') return undefined;
+  return (await readRecord(p, name)) !== undefined;
+}
+
+/** Профиль хранилища адреса есть (новый или прежний `parvane-e2e-v2`) — без создания. */
+export async function hasSecureProfile(user: string) {
+  return Boolean(await profileIdOf(DEFAULT_CTX, user)) || isLegacyUser(DEFAULT_CTX, user);
+}
+
 /** Ход фоновой смены ключа хранилища (T044) — для экрана хода. Возвращает отписку. */
 export function onStorageMigration(listener: (user: string, state: StorageMigration) => void) {
   migrationListeners.add(listener);

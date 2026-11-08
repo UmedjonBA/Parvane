@@ -157,23 +157,16 @@ async function ensureSignedIn(page) {
   await leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Шифрованное хранилище устройства (`secureStorage.ts`): IndexedDB `parvane-e2e-v2` /
-// `secure-state`, именованные записи `rec:<адрес>:<имя>`
-function dropSecureRecords(page, address, names) {
-  return page.evaluate((keys) => new Promise((resolve, reject) => {
-    const open = indexedDB.open('parvane-e2e-v2');
-    open.onupgradeneeded = () => open.transaction.abort();
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction('secure-state', 'readwrite');
-      keys.forEach((key) => tx.objectStore('secure-state').delete(key));
-      tx.onerror = () => reject(tx.error);
-      tx.oncomplete = () => {
-        open.result.close();
-        resolve();
-      };
-    };
-  }), names.map((name) => `rec:${address}:${name}`));
+// Шифрованное хранилище устройства (`secureStorage.ts`, spec 035 — записи под AAD в `parvane-store-v3-<профиль>`):
+// снаружи записи не адресуются — проверка и удаление методами диаг-сборки провайдера
+async function callDiag(page, method, params) {
+  await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, { timeout: 60000 });
+  return page.evaluate(([fn, args]) => window.__parvaneDiagCallApi(fn, args), [method, params]);
+}
+
+async function dropSecureRecords(page, address, names) {
+  const done = await callDiag(page, 'parvaneDiagDropSecureRecords', { names, address });
+  if (!done) throw new Error(`записи хранилища ${address} не удалены: ${names.join(', ')}`);
 }
 
 /** Сообщения бота для одного владельца: забираем и сразу подтверждаем доставку. */

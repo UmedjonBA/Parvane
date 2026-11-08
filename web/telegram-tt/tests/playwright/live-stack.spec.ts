@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  callDiagApi,
   LOGIN_TIMEOUT_MS,
   openApp,
+  readSecureStateSnapshot,
   registerAndSignIn,
   requireGatewayUrl,
 } from './helpers';
@@ -18,52 +20,21 @@ test('registers and signs in through the live production stack', async ({ page }
   await expect(page.locator('#auth-phone-number-form')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 
-  const storage = await page.evaluate(async ({ address, password, timeoutMs }) => {
-    const localEntries = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)]);
-    const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('parvane-e2e-v2');
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    const read = <T,>(key: string) => new Promise<T | undefined>((resolve, reject) => {
-      const request = db.transaction('secure-state').objectStore('secure-state').get(key);
-      request.onsuccess = () => resolve(request.result as T | undefined);
-      request.onerror = () => reject(request.error);
-    });
-    // Состояние движка v2 — именованная запись под non-extractable ключом: байтами `v2-engine-bin`
-    // (secureStorage.ts: `rec:<адрес>:<имя>`, v2/controller.ts: STATE_BYTES_RECORD; прежняя `v2-engine` — JSON).
-    // Пишется после подъёма движка, уже за экраном входа — ждём её появления
-    const key = await read<CryptoKey>(`key:${address}`);
-    let state: { version: number; ciphertext: ArrayBuffer } | undefined;
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      state = await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine-bin`)
-        ?? await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine`);
-      if (state || Date.now() > deadline) break;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 250);
-      });
-    }
-    db.close();
-    return {
-      passwordLeaked: JSON.stringify(localEntries).includes(password),
-      legacyCredentials: localStorage.getItem('parvane:creds'),
-      savedAddress: localStorage.getItem('parvane:login-address'),
-      legacyE2eKeys: localEntries.filter(([keyName]) => keyName.startsWith('parvane:e2e:')),
-      keyExtractable: key?.extractable,
-      stateVersion: state?.version,
-      ciphertextLeaked: state
-        ? new TextDecoder().decode(state.ciphertext).includes(password)
-        : true,
-    };
-  }, { address: user, password: E2E_PASSWORD, timeoutMs: LOGIN_TIMEOUT_MS });
-  expect(storage.legacyCredentials).toBeNull();
+  // Хранилище движка (spec 035): ключ профиля non-extractable, состояние движка v2 записано (оно пишется
+  // после подъёма движка, уже за экраном входа — ждём) и открывается ключом профиля; пароля нет ни в
+  // значениях базы профиля, ни в localStorage
+  await expect.poll(async () => (await readSecureStateSnapshot(page, user)).hasState, {
+    timeout: LOGIN_TIMEOUT_MS,
+  }).toBe(true);
+  const storage = await readSecureStateSnapshot(page, user, { secret: E2E_PASSWORD });
   expect(storage).toMatchObject({
-    passwordLeaked: false,
-    savedAddress: user,
-    legacyE2eKeys: [],
+    hasKey: true,
     keyExtractable: false,
-    stateVersion: 2,
-    ciphertextLeaked: false,
+    hasRoot: true,
+    secretLeaked: false,
+    loginAddress: user,
+    legacyE2eKeyCount: 0,
   });
+  expect(await page.evaluate(() => localStorage.getItem('parvane:creds'))).toBeNull();
+  expect(await callDiagApi(page, 'parvaneDiagHasSecureRecord', { name: 'v2-engine-bin' })).toBe(true);
 });

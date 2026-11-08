@@ -123,8 +123,8 @@ import {
   verifyGifBytes,
 } from './savedGifJournal';
 import {
-  clearSecureSession, getStorageMigration, hasStoragePin, isStorageUnlocked, loadSecureSession, onStorageLocked,
-  renameStorageUser,
+  clearSecureSession, getStorageMigration, hasSecureProfile, hasStoragePin, isStorageUnlocked, loadSecureSession,
+  onStorageLocked, peekSecureRecord, renameStorageUser,
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
@@ -3436,6 +3436,28 @@ const methods = {
       logDebug(`выгрузка: вложение ${fileId} не скачано: ${String(err)}`);
       return undefined;
     }
+  },
+
+  /**
+   * Удалить именованные записи защищённого хранилища профиля (только диаг-сборка; сценарии e2e). Адрес — свой
+   * по умолчанию; профиль не создаётся: нет профиля — `false`.
+   */
+  async parvaneDiagDropSecureRecords({ names, address }: { names: string[]; address?: string }) {
+    const user = address || store.self;
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !user || !(await hasSecureProfile(user))) return false;
+    const storage = await SecureE2eStorage.open(user);
+    await storage.deleteRecords(names);
+    return true;
+  },
+
+  /**
+   * Есть ли именованная запись защищённого хранилища профиля и открывается ли она его ключом (только
+   * диаг-сборка; сценарии e2e). Адрес — свой по умолчанию; профиль не создаётся.
+   */
+  async parvaneDiagHasSecureRecord({ name, address }: { name: string; address?: string }) {
+    const user = address || store.self;
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !user) return undefined;
+    return peekSecureRecord(user, name);
   },
 
   /** Счётчики-базис SC-009 (spec 035, T009; только диаг-сборка). */

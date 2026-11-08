@@ -89,27 +89,54 @@ async function loginWithPassword(page, nick) {
   await enterPassword(page);
 }
 
-// Шифрованное хранилище устройства (`secureStorage.ts`): IndexedDB
-// `parvane-e2e-v2` / `secure-state`, именованные записи `rec:<адрес>:<имя>`.
-// Значения — шифртекст под non-extractable ключом; сценарию достаточно знать,
-// есть ли запись, и уметь её удалить
-const secureRecordKey = (address, name) => `rec:${address}:${name}`;
+// Шифрованное хранилище устройства (`secureStorage.ts`, spec 035 — записи под AAD в `parvane-store-v3-<профиль>`):
+// снаружи записи не адресуются — проверка и удаление методами диаг-сборки провайдера
+async function callDiag(page, method, params) {
+  await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, { timeout: 60000 });
+  return page.evaluate(([fn, args]) => window.__parvaneDiagCallApi(fn, args), [method, params]);
+}
+
+async function dropSecureRecords(page, address, names) {
+  const done = await callDiag(page, 'parvaneDiagDropSecureRecords', { names, address });
+  if (!done) throw new Error(`записи хранилища ${address} не удалены: ${names.join(', ')}`);
+}
 
 function hasSecureRecord(page, address, name) {
-  return page.evaluate((key) => new Promise((resolve, reject) => {
-    const open = indexedDB.open('parvane-e2e-v2');
-    // Базы ещё нет — не создаём пустую (приложение ждёт в ней своё хранилище)
-    open.onupgradeneeded = () => open.transaction.abort();
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const request = open.result.transaction('secure-state').objectStore('secure-state').get(key);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        open.result.close();
-        resolve(request.result !== undefined);
+  return callDiag(page, 'parvaneDiagHasSecureRecord', { name, address });
+}
+
+// Профиль хранилища адреса есть: указатель `profile/<адрес>` каталога `parvane-store-v3` либо прежняя база
+// `parvane-e2e-v2` с ключом адреса. Читается напрямую — после выхода экран входа диаг-хуков провайдера не
+// выставляет. Отсутствующую базу не создаём (приложение открывает её со своей схемой)
+function hasSecureProfile(page, address) {
+  return page.evaluate(async (user) => {
+    const openExisting = (name) => new Promise((resolve, reject) => {
+      const request = indexedDB.open(name);
+      let isMissing = false;
+      request.onupgradeneeded = () => {
+        isMissing = true;
+        request.transaction.abort();
       };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => (isMissing ? resolve(undefined) : reject(request.error));
+    });
+    const has = async (dbName, storeName, key) => {
+      const db = await openExisting(dbName);
+      if (!db) return false;
+      try {
+        if (!db.objectStoreNames.contains(storeName)) return false;
+        return await new Promise((resolve, reject) => {
+          const request = db.transaction(storeName).objectStore(storeName).getKey(key);
+          request.onsuccess = () => resolve(request.result !== undefined);
+          request.onerror = () => reject(request.error);
+        });
+      } finally {
+        db.close();
+      }
     };
-  }), secureRecordKey(address, name));
+    return (await has('parvane-store-v3', 'records', `profile/${user}`))
+      || (await has('parvane-e2e-v2', 'secure-state', `key:${user}`));
+  }, address);
 }
 
 async function waitSecureRecord(page, address, name, message) {
@@ -118,24 +145,6 @@ async function waitSecureRecord(page, address, name, message) {
     assert(Date.now() < deadline, message);
     await page.waitForTimeout(200);
   }
-}
-
-function dropSecureRecords(page, address, names) {
-  return page.evaluate((keys) => new Promise((resolve, reject) => {
-    const open = indexedDB.open('parvane-e2e-v2');
-    // Базы ещё нет — не создаём пустую (приложение ждёт в ней своё хранилище)
-    open.onupgradeneeded = () => open.transaction.abort();
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction('secure-state', 'readwrite');
-      keys.forEach((key) => tx.objectStore('secure-state').delete(key));
-      tx.onerror = () => reject(tx.error);
-      tx.oncomplete = () => {
-        open.result.close();
-        resolve();
-      };
-    };
-  }), names.map((name) => secureRecordKey(address, name)));
 }
 
 // Вход по паролю на том же устройстве: сохранённый JWT сессии («keep me signed
@@ -284,8 +293,12 @@ try {
   // ── Полный выход стирает хранилище устройства вместе с секретом доверия:
   // следующий вход на нём снова требует Telegram ──
   await logOut(s1.page);
-  assert.equal(await hasSecureRecord(s1.page, address, 'trust-secret'), false,
-    'секрет доверия пережил полный выход');
+  // Выход сам перезагружает страницу — чтение посреди навигации повторяем
+  const wipeDeadline = Date.now() + LOGIN_TIMEOUT_MS;
+  while (await hasSecureProfile(s1.page, address).catch(() => true)) {
+    assert(Date.now() < wipeDeadline, 'хранилище устройства (с секретом доверия) пережило полный выход');
+    await s1.page.waitForTimeout(250);
+  }
   await loginWithPassword(s1.page, nick);
   const { token: reloginToken } = await waitTelegramScreen(s1.page, 'Confirm sign-in');
   assert.equal(await s1.page.locator('#LeftColumn').count(), 0, 'после выхода вход прошёл без подтверждения');

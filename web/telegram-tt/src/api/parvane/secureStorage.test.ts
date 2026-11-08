@@ -18,9 +18,9 @@ vi.mock('idb-keyval', async (importOriginal) => {
 });
 
 import {
-  clearSecureSession, clearTrustSecret, hasStoragePin, isStorageUnlocked, loadSecureSession, loadTrustSecret,
-  lockStorage, saveSecureSession, saveTrustSecret, SecureE2eStorage, secureStorageInternals, setStoragePin,
-  unlockStorageWithPin,
+  clearSecureSession, clearTrustSecret, hasSecureProfile, hasStoragePin, isStorageUnlocked, loadSecureSession,
+  loadTrustSecret, lockStorage, peekSecureRecord, saveSecureSession, saveTrustSecret, SecureE2eStorage,
+  secureStorageInternals, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
 import { LegacyE2eStorage } from './secureStorageLegacy';
 
@@ -45,6 +45,21 @@ describe('secure E2E storage', () => {
     await expect(crypto.subtle.exportKey('raw', key!)).rejects.toThrow();
     const raw = [...(await secureStorageInternals.rawRecords(USER)).values()].join('');
     expect(raw).not.toContain(Buffer.from('sensitive state').toString('hex'));
+  });
+
+  it('peeks a record without creating the profile (diag hooks of e2e scenarios)', async () => {
+    const ghost = 'peek-ghost@local';
+    await expect(peekSecureRecord(ghost, 'trust-secret')).resolves.toBe(false);
+    await expect(hasSecureProfile(ghost)).resolves.toBe(false);
+    expect(await secureStorageInternals.profileIdOf(ghost)).toBeUndefined();
+
+    await saveTrustSecret(USER, 'trust-1');
+    await expect(hasSecureProfile(USER)).resolves.toBe(true);
+    await expect(peekSecureRecord(USER, 'trust-secret')).resolves.toBe(true);
+    await expect(peekSecureRecord(USER, 'session-token')).resolves.toBe(false);
+    await SecureE2eStorage.clear(USER);
+    await expect(peekSecureRecord(USER, 'trust-secret')).resolves.toBe(false);
+    await expect(hasSecureProfile(USER)).resolves.toBe(false);
   });
 
   it('binds ciphertext to the account identity', async () => {
