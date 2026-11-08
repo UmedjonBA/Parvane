@@ -23,6 +23,16 @@ pub type BoxFut = Pin<Box<dyn Future<Output = Reply> + Send>>;
 /// Обработчик: (метод, запрос) → ответ.
 pub type Handler = Arc<dyn Fn(&'static MethodInfo, ShardRequest) -> BoxFut + Send + Sync>;
 
+/// spec 035 (FR-046, contracts/versioning.md): `<шард> --engine-info` печатает `engineInfo()` движка, с
+/// которым собран шард, и выходит — первым делом в `main`, до логов, NATS и базы (проверка состава
+/// выпуска `scripts/verify_release_manifest.sh` идёт без стека).
+pub fn exit_if_engine_info() {
+    if std::env::args().skip(1).any(|a| a == "--engine-info") {
+        println!("{}", parvane_protocol::engine_info_json());
+        std::process::exit(0);
+    }
+}
+
 /// Свой домен сервера (`PARVANE_DOMAIN`, как у шардов: без `@`, нижний регистр, по умолчанию `local`).
 pub fn own_domain() -> &'static str {
     static D: std::sync::OnceLock<String> = std::sync::OnceLock::new();

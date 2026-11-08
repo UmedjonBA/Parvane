@@ -545,6 +545,9 @@ pub fn call_static(name: &str, args: &Value) -> R {
     Ok(match name {
         "version" => json!(crate::version()),
         "protoMajor" => json!(crate::PROTO_MAJOR),
+        // spec 035: пять осей версий (то же, что WASM `engineInfo` и C ABI `pv_engine_info`).
+        "engineInfo" => serde_json::to_value(crate::engine_info()).map_err(|_| err(ProtoError::Malformed))?,
+        "schemaMessageNames" => json!(crate::schema::MESSAGES.iter().map(|m| m.name).collect::<Vec<_>>()),
         "parseInvite" => parsed(super::parse_invite(a.s("url")?)?),
         "grantWithRootBackup" => json!(b64(&super::grant_with_root_backup(&a.b("material")?, &a.b("backup")?).map_err(err)?)),
         "grantRootBackup" => opt(super::grant_root_backup(&a.b("material")?).map(|b| b64(&b))),

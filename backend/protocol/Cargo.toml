@@ -13,6 +13,9 @@ crate-type = ["rlib"]
 # произвольных байтов Content (вид из будущей версии). Выключена по умолчанию;
 # включается только dev-зависимостью parvane-integration.
 test-inject = []
+# spec 035 T025: «движок будущего» (`parvane.sample.v1.Future*`, модуль `sample_future`) для круга
+# совместимости в тестах. В выпуск (WASM, staticlib, шарды) не включается.
+future-schema = []
 
 [dependencies]
 prost = "0.14"
@@ -35,12 +38,18 @@ zeroize = "1"
 chacha20poly1305 = "0.10"
 # Журнал истории аккаунта (spec 033): AES-256-GCM.
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+# spec 035: PBKDF2-HMAC-SHA256 обёртки DEK под PIN (уже в дереве зависимостей через hkdf).
+hmac = "0.12"
 
 [build-dependencies]
 prost-build = "0.14"
 pbjson-build = "0.9"
 prost-reflect = "0.16"
+sha2 = "0.10"
+# Имена типов Rust так, как их даёт prost-build (тот же heck).
+heck = "0.5"
 
 [dev-dependencies]
 hex = "0.4"
 proptest = "1"
+sha2 = "0.10"

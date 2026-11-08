@@ -165,13 +165,15 @@ stack_start() { # stack_start <scratch> [env-для-identity]
 }
 # gateway отдельно (перезапуск с другими лимитами: PV_GATEWAY_ENV="A=1 B=2")
 GW_PID=""
+# spec 035 (FR-047): минимум минорной версии протокола стека = PROTO_MINOR_035 (backend/protocol/src/limits.rs).
+PV_V2_MIN_MINOR="${PV_V2_MIN_MINOR:-1}"
 gateway_start() {
   local creds=()
   creds=(PARVANE_NATS_USER=gateway PARVANE_NATS_PASS="$(nats_pass gateway)")
   # shellcheck disable=SC2086
   env PARVANE_NATS_URL="nats://127.0.0.1:$PV_NATS_PORT" "${creds[@]}" PARVANE_DOMAIN="$PV_DOMAIN" \
     PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$PV_GW_TCP_PORT" PARVANE_GATEWAY_BIND="127.0.0.1:$PV_GW_WS_PORT" \
-    PARVANE_LOG_LEVEL=info ${PV_GATEWAY_ENV:-} "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
+    PARVANE_V2_MIN_MINOR="$PV_V2_MIN_MINOR" PARVANE_LOG_LEVEL=info ${PV_GATEWAY_ENV:-} "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
   PIDS+=($GW_PID)
 }
 # Работает и из чужого шелла (стек поднят другим скриптом, GW_PID пуст — так tgx_conformance_flow.sh

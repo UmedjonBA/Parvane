@@ -239,6 +239,9 @@ if rg -n 'Permissions Violation|authorization violation' "$TEMP_ROOT"/*.log; the
   exit 1
 fi
 
+# spec 035 (FR-047): минимум минорной версии протокола стека = PROTO_MINOR_035 (backend/protocol/src/limits.rs);
+# сценарий старого клиента подменяет его через $1 (run_web_protocol_upgrade_e2e.sh).
+PARVANE_V2_MIN_MINOR="${PARVANE_V2_MIN_MINOR:-1}"
 # $1 — дополнительное окружение gateway (строка «ИМЯ=значение …»)
 start_gateway() {
   env \
@@ -247,6 +250,7 @@ start_gateway() {
     PARVANE_NATS_PASS="$GATEWAY_PASS" \
     PARVANE_GATEWAY_BIND="127.0.0.1:$GATEWAY_WS_PORT" \
     PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$GATEWAY_TCP_PORT" \
+    PARVANE_V2_MIN_MINOR="$PARVANE_V2_MIN_MINOR" \
     PARVANE_LOG_LEVEL=info \
     $1 \
     "$ROOT/backend/target/debug/gateway" >>"$TEMP_ROOT/gateway.log" 2>&1 &

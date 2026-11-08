@@ -49,6 +49,12 @@ pub enum ProtoError {
     BrokenChain,
     #[error("объект не найден")]
     NotFound,
+    /// spec 035 (FR-025): формат хранилища или записи новее известного движку — только чтение известного.
+    #[error("формат новее известного этой версии")]
+    TooNew,
+    /// spec 035: хранилище заблокировано (PIN не введён) — DEK в памяти нет.
+    #[error("хранилище заблокировано")]
+    Locked,
 }
 
 impl ProtoError {
@@ -77,6 +83,8 @@ impl ProtoError {
             ProtoError::RateLimited => "RateLimited",
             ProtoError::BrokenChain => "BrokenChain",
             ProtoError::NotFound => "NotFound",
+            ProtoError::TooNew => "TooNew",
+            ProtoError::Locked => "Locked",
         }
     }
 
@@ -90,6 +98,7 @@ impl ProtoError {
             ProtoError::RateLimited => ErrorCode::RateLimited,
             ProtoError::FrameTooLarge => ErrorCode::Limit,
             ProtoError::NotFound => ErrorCode::NotFound,
+            ProtoError::TooNew => ErrorCode::UpgradeRequired,
             _ => ErrorCode::Invalid,
         }
     }

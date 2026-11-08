@@ -102,7 +102,8 @@ impl Shared {
             stream_nats,
             descriptor: RwLock::new(None),
             revoked: tx.clone(),
-            min_minor: std::env::var("PARVANE_V2_MIN_MINOR").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            // spec 035 (FR-047): по умолчанию — минимум выпуска; ниже — UPGRADE_REQUIRED и закрытие.
+            min_minor: std::env::var("PARVANE_V2_MIN_MINOR").ok().and_then(|v| v.parse().ok()).unwrap_or(parvane_protocol::limits::PROTO_MINOR_035),
             features: env_list("PARVANE_V2_FEATURES"),
             operators: env_list("PARVANE_OPERATORS"),
             eph: ephemeral::EphState::default(),

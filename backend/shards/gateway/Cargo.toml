@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 parvane-types = { path = "../../shared/parvane-types" }
 parvane-protocol = { path = "../../protocol" }
+parvane-v2rt = { path = "../../shared/parvane-v2rt" }
 prost = "0.14"
 tokio-tungstenite = "0.24"
 

@@ -21,6 +21,7 @@ insecure-test-transport = []
 parvane-types = { path = "../../shared/parvane-types" }
 parvane-db = { path = "../../shared/parvane-db" }
 parvane-protocol = { path = "../../protocol" }
+parvane-v2rt = { path = "../../shared/parvane-v2rt" }
 parvane-netguard = { path = "../../shared/parvane-netguard" }
 futures = { workspace = true }
 prost = "0.14"

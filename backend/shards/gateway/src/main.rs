@@ -45,6 +45,8 @@ fn reverify_secs() -> u64 {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // spec 035: `--engine-info` — состав выпуска; выход до логов, NATS и базы.
+    parvane_v2rt::exit_if_engine_info();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("PARVANE_LOG_LEVEL")

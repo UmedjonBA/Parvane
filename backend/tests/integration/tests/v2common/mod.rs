@@ -35,7 +35,7 @@ impl Conn {
         s.set_nodelay(true).unwrap();
         let mut c = Conn { s, dec: TcpDecoder::new(), next_id: 0, tx_bytes: 0, rx_bytes: 0, events: vec![] };
         c.write(TCP_MAGIC);
-        c.send(frame::Kind::Hello(Hello { proto_minor: 0, channel: channel as i32, ..Default::default() }));
+        c.send(frame::Kind::Hello(Hello { proto_minor: parvane_protocol::PROTO_MINOR, channel: channel as i32, ..Default::default() }));
         let w = c.recv().expect("welcome");
         (c, w)
     }

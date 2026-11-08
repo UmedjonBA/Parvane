@@ -1,0 +1,118 @@
+// Хранилище движка (spec 035, contracts/storage.md, FR-020…FR-028). Локальные типы движка — на провод
+// не выходят; из них генерируются типы клиентов (`gen_bindings`, contracts/codegen.md).
+//
+// Хранилище — словарь «ключ (строка) → байты» у хоста. Движок sans-IO: сам не пишет и не читает, а
+// выпускает пачки `StoreBatch` (одна атомарная транзакция хоста) и чтения `StoreReads`; хост подаёт
+// прочитанное обратно (`StoreLoaded`). Ключ записи — `g<generation>/<kind>/<name>`, корень — `root`
+// (значение — `Root`, открытое, без секретов); значение записи — `Stored`.
+syntax = "proto3";
+
+package parvane.engine.v1;
+
+import "parvane/core/v2/options.proto";
+
+// Запись хранилища. AAD шифра = "parvane/store/v1\0" ‖ store_id(16) ‖ u32be(format) ‖ kind ‖ "\0" ‖
+// u32be(generation) ‖ name, где name — ключ записи без префикса поколения и вида.
+message Stored {
+  // Версия формата ЭТОГО вида; растёт при смене смысла/раскладки payload.
+  uint32 format = 1;
+  // Вид записи (`backend/protocol/src/model/store_kinds.rs`).
+  string kind = 2 [(parvane.core.v2.max_len) = 64];
+  // Поколение хранилища, в котором записана запись.
+  uint32 generation = 3;
+  // nonce(12) ‖ AES-256-GCM(открытый текст) ‖ tag(16).
+  bytes payload = 4 [(parvane.core.v2.max_len) = 4194304];
+}
+
+// Наибольший формат вида, которым писали это хранилище (`TOO_NEW` у движка, не знающего его).
+message KindFormat {
+  string kind = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 format = 2;
+}
+
+// Обёртка DEK поколения ключом устройства: web — non-extractable ключ IndexedDB, ядро — ключ из
+// хранилища ОС / файла профиля. wrapped_dek = nonce(12) ‖ AES-256-GCM(DEK) ‖ tag(16), AAD =
+// "parvane/store/wrap/v1\0" ‖ store_id ‖ u32be(generation) ‖ "device".
+message DeviceWrap {
+  bytes wrapped_dek = 1 [(parvane.core.v2.max_len) = 60];
+}
+
+// Обёртка DEK поколения ключом из PIN: KEK = PBKDF2-HMAC-SHA256(PIN, salt, iterations, 32); wrapped_dek —
+// как у DeviceWrap с меткой "pin"; check = SHA-256("parvane/store/pin-check/v1\0" ‖ KEK)[0..16] —
+// отличить неверный PIN от испорченной обёртки.
+message PinWrap {
+  bytes salt = 1 [(parvane.core.v2.max_len) = 16];
+  uint32 iterations = 2;
+  bytes wrapped_dek = 3 [(parvane.core.v2.max_len) = 60];
+  bytes check = 4 [(parvane.core.v2.max_len) = 16];
+}
+
+message Wrap {
+  // Поколение, чей DEK обёрнут.
+  uint32 generation = 1;
+  oneof kind {
+    DeviceWrap device = 2;
+    PinWrap pin = 3;
+  }
+}
+
+// Корень профиля — одна открытая запись по ключу `root`.
+message Root {
+  // 16 случайных байт профиля, не зависят от адреса (FR-022).
+  bytes store_id = 1 [(parvane.core.v2.max_len) = 16];
+  uint32 active_generation = 2;
+  // Перенос поколения в P1–P3: новое поколение (0 — нет).
+  uint32 pending_generation = 3;
+  // Обёртки DEK активного и (при переносе) нового поколения.
+  repeated Wrap wraps = 4 [(parvane.core.v2.max_items) = 8];
+  repeated KindFormat kinds_max_format = 5 [(parvane.core.v2.max_items) = 256];
+  // Перенос поколения в P4–P6: прежнее поколение, записи которого ещё удаляются (0 — нет).
+  uint32 retiring_generation = 6;
+}
+
+// Запись пачки: ключ носителя и значение (закодированный `Stored`, у `root` — `Root`).
+message StorePut {
+  string key = 1 [(parvane.core.v2.max_len) = 1024];
+  bytes value = 2 [(parvane.core.v2.max_len) = 4194304];
+}
+
+// Атомарная пачка: хост MUST применить её одной транзакцией (сначала deletes, затем puts) и только
+// потом отправлять запросы того же результата движка; затем — `storeCommitted{batch_id}`.
+message StoreBatch {
+  uint64 batch_id = 1;
+  repeated StorePut puts = 2 [(parvane.core.v2.max_items) = 4096];
+  repeated string deletes = 3 [
+    (parvane.core.v2.max_items) = 4096,
+    (parvane.core.v2.max_len) = 1024
+  ];
+}
+
+// Чтение: ключи (только существующие) и/или префикс — ключи с префиксом строго после `after` по
+// возрастанию, не больше `limit` (0 — без предела).
+message StoreReads {
+  uint64 read_id = 1;
+  repeated string keys = 2 [
+    (parvane.core.v2.max_items) = 4096,
+    (parvane.core.v2.max_len) = 1024
+  ];
+  string prefix = 3 [(parvane.core.v2.max_len) = 1024];
+  string after = 4 [(parvane.core.v2.max_len) = 1024];
+  uint32 limit = 5;
+}
+
+// Прочитанное хостом по `StoreReads`.
+message StoreLoaded {
+  uint64 read_id = 1;
+  repeated StorePut entries = 2 [(parvane.core.v2.max_items) = 4096];
+}
+
+// Ход переноса поколения (вид `migration-progress`, имя `rotation`): номер точки P1–P6 и отчёт.
+message MigrationProgress {
+  uint32 from_generation = 1;
+  uint32 to_generation = 2;
+  uint32 point = 3;
+  repeated string errors = 4 [
+    (parvane.core.v2.max_items) = 64,
+    (parvane.core.v2.max_len) = 1024
+  ];
+}

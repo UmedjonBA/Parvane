@@ -5,6 +5,25 @@ use super::limits::{admit, Access, V2Rate};
 use parvane_protocol::pb::parvane::core::v2::{Channel, ErrorCode};
 use parvane_protocol::schema::method;
 
+/// spec 035 T024 (FR-047): прод и все e2e-стеки ставят минимум минорной версии = `PROTO_MINOR_035` —
+/// значение в окружении не расходится с константой движка.
+#[test]
+fn min_minor_env_matches_release_minor() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let want = parvane_protocol::limits::PROTO_MINOR_035.to_string();
+    let compose = std::fs::read_to_string(root.join("backend/infra/deploy/docker-compose.yml")).unwrap();
+    assert_eq!(compose.matches(&format!("PARVANE_V2_MIN_MINOR: \"{want}\"")).count(), 2, "compose: gateway и federation");
+    for (f, needle) in [
+        ("scripts/run_web_e2e.sh", format!("PARVANE_V2_MIN_MINOR=\"${{PARVANE_V2_MIN_MINOR:-{want}}}\"")),
+        ("desktop/verify_lib.sh", format!("PV_V2_MIN_MINOR=\"${{PV_V2_MIN_MINOR:-{want}}}\"")),
+        ("android/tgx_lib.sh", format!("PV_V2_MIN_MINOR=\"${{PV_V2_MIN_MINOR:-{want}}}\"")),
+        ("backend/shards/gateway/.env.example", format!("PARVANE_V2_MIN_MINOR={want}")),
+    ] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap_or_default();
+        assert!(text.contains(&needle), "{f}: нет {needle}");
+    }
+}
+
 fn id_session(authed: bool) -> Access {
     Access { channel: Channel::Identified, authed, operator: false, reauth_until_ms: 0 }
 }

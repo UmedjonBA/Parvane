@@ -1,0 +1,23 @@
+{
+  "suite": "storage/generation",
+  "description": "spec 035 contracts/storage.md «Перенос поколения» P1–P6: прерывание (процесс убит сразу после фиксации пачки, на которой перенос дошёл до точки) оставляет ровно одно активное поколение, в котором открываются ВСЕ записи; после продолжения — активно g+1, записей g на носителе нет, все записи открываются и равны исходным. Записи — в records (открытый текст hex). Ожидания по таблице контракта, FR-053.",
+  "records": [
+    {"kind": "state-object", "name": "FOLDER/2", "plain_hex": "0a03776f726b"},
+    {"kind": "state-object", "name": "CONTACT/bob@x", "plain_hex": "0a03426f62"},
+    {"kind": "history-row", "name": "bob@x/0001", "plain_hex": "08011203686921"},
+    {"kind": "history-row", "name": "bob@x/0002", "plain_hex": ""},
+    {"kind": "engine-core", "name": "keys", "plain_hex": "00112233445566778899aabbccddeeff"},
+    {"kind": "outbox", "name": "0190aa", "plain_hex": "ff"},
+    {"kind": "range-hold", "name": "state/1-9", "plain_hex": "0801"}
+  ],
+  "batch_limit": 3,
+  "cases": [
+    {"name": "без прерывания", "interrupt_at": null, "expect": {"active_after_crash": 2, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P1", "interrupt_at": 1, "expect": {"active_after_crash": 1, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P2", "interrupt_at": 2, "expect": {"active_after_crash": 1, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P3", "interrupt_at": 3, "expect": {"active_after_crash": 1, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P4", "interrupt_at": 4, "expect": {"active_after_crash": 2, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P5", "interrupt_at": 5, "expect": {"active_after_crash": 2, "active_after_resume": 2, "old_keys_after_resume": 0}},
+    {"name": "прерывание на P6", "interrupt_at": 6, "expect": {"active_after_crash": 2, "active_after_resume": 2, "old_keys_after_resume": 0}}
+  ]
+}

@@ -20,6 +20,9 @@ pub struct Config {
     pub insecure_http: bool,
     /// Файл описателя (`/.well-known/parvane`), который пишет identity; отдаётся в тестовом режиме.
     pub well_known_file: Option<String>,
+    /// spec 035 (FR-047): минимум `proto_minor` описателя партнёра; ниже — `UPGRADE_REQUIRED` в ответе S2S
+    /// (`PARVANE_FEDERATION_MIN_MINOR`, иначе `PARVANE_V2_MIN_MINOR`, иначе минимум выпуска).
+    pub min_minor: u32,
 }
 
 fn env(name: &str) -> String {
@@ -38,6 +41,13 @@ pub fn server_domain() -> String {
     } else {
         d
     }
+}
+
+fn min_minor() -> u32 {
+    ["PARVANE_FEDERATION_MIN_MINOR", "PARVANE_V2_MIN_MINOR"]
+        .iter()
+        .find_map(|n| env(n).parse().ok())
+        .unwrap_or(parvane_protocol::limits::PROTO_MINOR_035)
 }
 
 impl Config {
@@ -61,6 +71,7 @@ impl Config {
             rate_per_sec: env_f64("PARVANE_FEDERATION_RATE_PER_SEC", 50.0),
             insecure_http,
             well_known_file,
+            min_minor: min_minor(),
         }
     }
 

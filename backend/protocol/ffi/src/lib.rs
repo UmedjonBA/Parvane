@@ -114,6 +114,26 @@ pub unsafe extern "C" fn parvane_protocol_bytes_free(b: PvBytes) {
     }
 }
 
+/// spec 035 (FR-046, contracts/versioning.md): `engineInfo()` этой сборки движка — JSON-строка;
+/// освобождать `pv_free_string`.
+#[no_mangle]
+pub extern "C" fn pv_engine_info() -> *mut c_char {
+    cstring(parvane_protocol::engine_info_json())
+}
+
+/// Освободить строку движка (то же, что `parvane_protocol_string_free`; имя из contracts/versioning.md).
+#[no_mangle]
+pub unsafe extern "C" fn pv_free_string(s: *mut c_char) {
+    parvane_protocol_string_free(s)
+}
+
+/// Полные имена всех сообщений схемы — JSON-массив строк (тесты кодеков во всех обвязках, spec 035 T012);
+/// освобождать `pv_free_string`.
+#[no_mangle]
+pub extern "C" fn pv_schema_message_names() -> *mut c_char {
+    cstring(serde_json::to_string(&parvane_protocol::schema::MESSAGES.iter().map(|m| m.name).collect::<Vec<_>>()).unwrap_or_default())
+}
+
 // ── единая точка входа (spec 029): функции движка по именам WASM-обвязки ───
 
 fn parse_args(args: *const c_char) -> Result<serde_json::Value, String> {
@@ -1404,6 +1424,53 @@ pub unsafe extern "C" fn pv_anon_planner_open_count(p: *const PvAnonPlanner) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// spec 035 T014: `pv_engine_info` — та же `engineInfo()`, что у движка этой сборки.
+    #[test]
+    fn engine_info_over_c_abi() {
+        unsafe {
+            let p = pv_engine_info();
+            let s = CStr::from_ptr(p).to_str().unwrap().to_string();
+            pv_free_string(p);
+            assert_eq!(s, parvane_protocol::engine_info_json());
+            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(v["protoMinor"], parvane_protocol::limits::PROTO_MINOR_035);
+            assert_eq!(v["engineApi"], parvane_protocol::ENGINE_API);
+        }
+    }
+
+    /// spec 035 T012: каждое сообщение схемы проходит кругооборот через C ABI `pv_encode_message`/
+    /// `pv_decode_message` (пустое и «максимально заполненное»).
+    #[test]
+    fn every_schema_message_has_a_codec_over_c_abi() {
+        unsafe {
+            let p = pv_schema_message_names();
+            let names: Vec<String> = serde_json::from_str(CStr::from_ptr(p).to_str().unwrap()).unwrap();
+            pv_free_string(p);
+            assert_eq!(names.len(), parvane_protocol::schema::MESSAGES.len());
+            for n in &names {
+                let tn = CString::new(n.as_str()).unwrap();
+                let full = parvane_protocol::schema::sample_bytes(n).unwrap();
+                let mut err: *mut c_char = ptr::null_mut();
+                let j = pv_decode_message(tn.as_ptr(), full.as_ptr(), full.len(), &mut err);
+                assert!(!j.is_null() && err.is_null(), "{n}: decode");
+                let json = CStr::from_ptr(j).to_str().unwrap().to_string();
+                parvane_protocol_string_free(j);
+                let jc = CString::new(json.clone()).unwrap();
+                let b = pv_encode_message(tn.as_ptr(), jc.as_ptr(), &mut err);
+                assert!(err.is_null(), "{n}: encode");
+                let again = std::slice::from_raw_parts(b.data, b.len).to_vec();
+                parvane_protocol_bytes_free(b);
+                assert_eq!(parvane_protocol::host::decode_message(n, &again).unwrap(), json, "{n}: кругооборот");
+            }
+            let mut err: *mut c_char = ptr::null_mut();
+            let bad = CString::new("parvane.nope.v1.Nope").unwrap();
+            let e = CString::new("{}").unwrap();
+            let _ = pv_encode_message(bad.as_ptr(), e.as_ptr(), &mut err);
+            assert!(!err.is_null(), "незнакомый тип принят");
+            parvane_protocol_string_free(err);
+        }
+    }
 
     #[test]
     fn version_is_c_string() {

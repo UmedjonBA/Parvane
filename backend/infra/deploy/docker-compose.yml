@@ -78,6 +78,9 @@ services:
       # Протокол v2: ключ сервера (Ed25519, 0600) и описатель для /.well-known/parvane
       PARVANE_SERVER_KEY_FILE: /data/identity-server-ed25519.pem
       PARVANE_WELL_KNOWN_FILE: /well-known/parvane.json
+      # spec 035 (FR-047): минимум минорной версии протокола = PROTO_MINOR_035 (backend/protocol/src/limits.rs);
+      # ниже — UPGRADE_REQUIRED (клиенту — и закрытие; S2S-партнёру — в ответе S2S).
+      PARVANE_V2_MIN_MINOR: "1"
       PARVANE_LOG_LEVEL: info
       # Федерация (spec 028): identity подписывает межсерверные кадры и объявляет точку входа
       PARVANE_FEDERATION: ${PARVANE_FEDERATION:-off}
@@ -251,6 +254,9 @@ services:
       # считается по X-Forwarded-For (GW-01/GW-02).
       PARVANE_GATEWAY_MAX_CONNS: "2000"
       PARVANE_GATEWAY_MAX_CONNS_PER_IP: "64"
+      # spec 035 (FR-047): минимум минорной версии протокола = PROTO_MINOR_035 (backend/protocol/src/limits.rs);
+      # ниже — UPGRADE_REQUIRED (клиенту — и закрытие; S2S-партнёру — в ответе S2S).
+      PARVANE_V2_MIN_MINOR: "1"
       PARVANE_LOG_LEVEL: info
     mem_limit: 1g
     pids_limit: 512

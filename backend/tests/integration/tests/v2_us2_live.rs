@@ -209,7 +209,7 @@ impl V2 {
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         s.write_all(TCP_MAGIC).unwrap();
         let mut c = V2 { s, dec: TcpDecoder::new(), next_id: 0, events: vec![] };
-        c.send(frame::Kind::Hello(Hello { proto_minor: 0, channel: channel as i32, ..Default::default() }));
+        c.send(frame::Kind::Hello(Hello { proto_minor: parvane_protocol::PROTO_MINOR, channel: channel as i32, ..Default::default() }));
         let w = c.recv().expect("welcome");
         assert!(matches!(w.kind, Some(frame::Kind::Welcome(_))), "{w:?}");
         c

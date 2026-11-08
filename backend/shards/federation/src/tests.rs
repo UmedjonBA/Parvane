@@ -70,6 +70,7 @@ async fn domain_bucket_limits_bursts() {
         rate_per_sec: 0.001,
         insecure_http: false,
         well_known_file: None,
+        min_minor: parvane_protocol::limits::PROTO_MINOR_035,
     };
     let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
     let Ok(nc) = async_nats::ConnectOptions::new().retry_on_initial_connect().connect("nats://127.0.0.1:1").await else { return };
@@ -103,6 +104,7 @@ async fn failed_discovery_is_remembered_and_rate_limited() {
         rate_per_sec: 1.0,
         insecure_http: false,
         well_known_file: None,
+        min_minor: parvane_protocol::limits::PROTO_MINOR_035,
     };
     let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
     let Ok(nc) = async_nats::ConnectOptions::new().retry_on_initial_connect().connect("nats://127.0.0.1:1").await else { return };
@@ -126,6 +128,7 @@ fn test_cfg(endpoints: &[(&str, &str)]) -> crate::config::Config {
         rate_per_sec: 1.0,
         insecure_http: false,
         well_known_file: None,
+        min_minor: parvane_protocol::limits::PROTO_MINOR_035,
     }
 }
 

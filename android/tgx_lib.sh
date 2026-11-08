@@ -9,6 +9,10 @@
 #   tgx_logwait <regex> [сек=60] — дождаться строки в logcat (поток пишется в $TGX_LOG)
 # Логи шва: тег parvane (ядро/JNI) и ParvaneClient (Kotlin).
 TGX="${TGX_DIR:-/home/ub/AppData/android/tgx}"
+# spec 035 (FR-047): минимум минорной версии протокола стека (gateway и federation из verify_lib.sh) =
+# PROTO_MINOR_035 (backend/protocol/src/limits.rs); APK этого выпуска шлёт его в Hello.
+PV_V2_MIN_MINOR="${PV_V2_MIN_MINOR:-1}"
+export PARVANE_V2_MIN_MINOR="$PV_V2_MIN_MINOR"
 TGX_PKG=org.parvane.tgx
 a() { timeout 25 adb "$@"; } # эмулятор может умереть — каждая команда с таймаутом
 tgx_env() {

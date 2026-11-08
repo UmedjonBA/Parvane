@@ -10,6 +10,8 @@ mod v2;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // spec 035: `--engine-info` — состав выпуска; выход до логов, NATS и базы.
+    parvane_v2rt::exit_if_engine_info();
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(

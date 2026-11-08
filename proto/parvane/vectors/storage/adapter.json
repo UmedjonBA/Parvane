@@ -1,0 +1,73 @@
+{
+  "suite": "storage/adapter",
+  "description": "spec 035 T016, contracts/storage.md «Операции хоста»: общий набор для адаптеров хранилища хоста (web — IndexedDB parvane-store-v3, ядро desktop/android — store_fs). Хранилище — словарь ключ (строка UTF-8) → байты. Шаги: batch — одна атомарная пачка store_batch (сначала deletes, затем puts; удаление отсутствующего ключа — не ошибка); batch_interrupted — та же пачка, прерванная на любом шаге записи (адаптер ядра перебирает все точки отказа слоя ФС, web — отменённая транзакция): пачка атомарна — после reopen содержимое либо как до пачки, либо как после неё целиком, никогда частично (expect_one_of — допустимые состояния); reopen — закрыть и открыть заново (перезапуск процесса); pack — упаковка журнала пачек (у web — ничего); read — store_reads: keys (только существующие, в порядке запроса) и/или prefix (ключи с префиксом строго после after, по возрастанию байтов ключа, не больше limit; limit 0 — без предела), expect — ожидаемые записи; expect_all — всё содержимое по возрастанию ключа. value — hex. Ожидания написаны руками, FR-053.",
+  "cases": [
+    {
+      "name": "пачки, чтение по ключам и префиксу",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "root", "value_hex": "0801"}, {"key": "g1/state-object/A", "value_hex": "aa"}, {"key": "g1/state-object/B", "value_hex": "bb"}], "deletes": []},
+        {"op": "batch", "puts": [{"key": "g1/history-row/x/1", "value_hex": "01"}, {"key": "g1/history-row/x/2", "value_hex": ""}], "deletes": ["g1/state-object/B", "g1/nope"]},
+        {"op": "read", "keys": ["g1/state-object/B", "root", "g1/state-object/A"], "expect": [{"key": "root", "value_hex": "0801"}, {"key": "g1/state-object/A", "value_hex": "aa"}]},
+        {"op": "read", "prefix": "g1/", "after": "", "limit": 0, "expect": [{"key": "g1/history-row/x/1", "value_hex": "01"}, {"key": "g1/history-row/x/2", "value_hex": ""}, {"key": "g1/state-object/A", "value_hex": "aa"}]},
+        {"op": "read", "prefix": "g1/", "after": "g1/history-row/x/1", "limit": 1, "expect": [{"key": "g1/history-row/x/2", "value_hex": ""}]},
+        {"op": "read", "prefix": "g1/history-row/", "after": "g1/history-row/x/2", "limit": 10, "expect": []},
+        {"op": "reopen"},
+        {"op": "expect_all", "entries": [{"key": "g1/history-row/x/1", "value_hex": "01"}, {"key": "g1/history-row/x/2", "value_hex": ""}, {"key": "g1/state-object/A", "value_hex": "aa"}, {"key": "root", "value_hex": "0801"}]}
+      ]
+    },
+    {
+      "name": "префикс поколения не захватывает соседнее (g1/ и g10/)",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "g1/k/a", "value_hex": "01"}, {"key": "g10/k/a", "value_hex": "0a"}, {"key": "g2/k/a", "value_hex": "02"}], "deletes": []},
+        {"op": "read", "prefix": "g1/", "after": "", "limit": 0, "expect": [{"key": "g1/k/a", "value_hex": "01"}]},
+        {"op": "read", "prefix": "g", "after": "", "limit": 0, "expect": [{"key": "g1/k/a", "value_hex": "01"}, {"key": "g10/k/a", "value_hex": "0a"}, {"key": "g2/k/a", "value_hex": "02"}]}
+      ]
+    },
+    {
+      "name": "удаление и запись того же ключа в одной пачке — запись остаётся",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "a", "value_hex": "01"}], "deletes": []},
+        {"op": "batch", "puts": [{"key": "a", "value_hex": "02"}], "deletes": ["a"]},
+        {"op": "reopen"},
+        {"op": "expect_all", "entries": [{"key": "a", "value_hex": "02"}]}
+      ]
+    },
+    {
+      "name": "прерванная пачка не оставляет следов, следующая пишется",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "root", "value_hex": "01"}, {"key": "g1/s/A", "value_hex": "aa"}], "deletes": []},
+        {"op": "batch_interrupted", "puts": [{"key": "root", "value_hex": "02"}, {"key": "g2/s/A", "value_hex": "a2"}], "deletes": ["g1/s/A"]},
+        {"op": "reopen"},
+        {"op": "expect_one_of", "options": [
+          [{"key": "g1/s/A", "value_hex": "aa"}, {"key": "root", "value_hex": "01"}],
+          [{"key": "g2/s/A", "value_hex": "a2"}, {"key": "root", "value_hex": "02"}]
+        ]},
+        {"op": "batch", "puts": [{"key": "root", "value_hex": "03"}, {"key": "g1/s/B", "value_hex": "bb"}], "deletes": ["g1/s/A", "g2/s/A"]},
+        {"op": "reopen"},
+        {"op": "expect_all", "entries": [{"key": "g1/s/B", "value_hex": "bb"}, {"key": "root", "value_hex": "03"}]}
+      ]
+    },
+    {
+      "name": "упаковка сохраняет содержимое и порядок пачек",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "a", "value_hex": "01"}, {"key": "b", "value_hex": "02"}], "deletes": []},
+        {"op": "batch", "puts": [{"key": "a", "value_hex": "11"}], "deletes": ["b"]},
+        {"op": "pack"},
+        {"op": "batch", "puts": [{"key": "c", "value_hex": "03"}], "deletes": []},
+        {"op": "reopen"},
+        {"op": "expect_all", "entries": [{"key": "a", "value_hex": "11"}, {"key": "c", "value_hex": "03"}]},
+        {"op": "pack"},
+        {"op": "reopen"},
+        {"op": "expect_all", "entries": [{"key": "a", "value_hex": "11"}, {"key": "c", "value_hex": "03"}]}
+      ]
+    },
+    {
+      "name": "ключи и значения не ASCII и пустые",
+      "steps": [
+        {"op": "batch", "puts": [{"key": "g1/state-object/CONTACT/вася@x", "value_hex": "d0b2"}, {"key": "g1/engine-core/", "value_hex": ""}], "deletes": []},
+        {"op": "reopen"},
+        {"op": "read", "prefix": "g1/", "after": "", "limit": 0, "expect": [{"key": "g1/engine-core/", "value_hex": ""}, {"key": "g1/state-object/CONTACT/вася@x", "value_hex": "d0b2"}]}
+      ]
+    }
+  ]
+}

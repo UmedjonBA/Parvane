@@ -1153,131 +1153,16 @@ pub fn encode_upload_chunk(upload_id: &str, index: u32, bucket: i32, data: &[u8]
     Ok(bytes)
 }
 
-/// Тело запроса из proto3-JSON по имени типа (для методов, которые хост
-/// вызывает сам: вход, профиль, журналы, бандлы, облако).
+/// proto3-JSON → байты по полному имени типа — для ВСЕХ сообщений схемы (spec 035, FR-050: тонкий
+/// вызов сгенерированного `type_codec`). Незнакомый тип — `UnknownMethod`.
 pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, String> {
-    macro_rules! enc {
-        ($($name:literal => $t:ty),* $(,)?) => {
-            match type_name {
-                $($name => {
-                    let m: $t = serde_json::from_str(json_text).map_err(|_| err(ProtoError::Malformed))?;
-                    Ok(m.encode_to_vec())
-                })*
-                _ => Err(err(ProtoError::UnknownMethod)),
-            }
-        };
-    }
-    enc! {
-        "parvane.core.v2.SignedServerDescriptor" => crate::pb::parvane::core::v2::SignedServerDescriptor,
-        "parvane.identity.v2.SessionIssueRequest" => ipb::SessionIssueRequest,
-        "parvane.identity.v2.AccountRegisterRequest" => ipb::AccountRegisterRequest,
-        "parvane.identity.v2.AccountConfirmEmailRequest" => ipb::AccountConfirmEmailRequest,
-        "parvane.identity.v2.AccountRegisterStatusRequest" => ipb::AccountRegisterStatusRequest,
-        "parvane.identity.v2.SessionReauthRequest" => ipb::SessionReauthRequest,
-        "parvane.identity.v2.AccountSet2faRequest" => ipb::AccountSet2faRequest,
-        "parvane.identity.v2.AccountChangePasswordRequest" => ipb::AccountChangePasswordRequest,
-        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
-        "parvane.identity.v2.AccountDeleteRequest" => ipb::AccountDeleteRequest,
-        "parvane.identity.v2.ProfileResolveRequest" => ipb::ProfileResolveRequest,
-        "parvane.identity.v2.ProfileSetNameRequest" => ipb::ProfileSetNameRequest,
-        "parvane.identity.v2.ProfileSetAvatarRequest" => ipb::ProfileSetAvatarRequest,
-        "parvane.identity.v2.DirectorySearchRequest" => ipb::DirectorySearchRequest,
-        "parvane.identity.v2.DeviceLogSyncAnonRequest" => ipb::DeviceLogSyncAnonRequest,
-        "parvane.identity.v2.DeviceLogSyncRequest" => ipb::DeviceLogSyncRequest,
-        "parvane.identity.v2.RootBackupSetRequest" => ipb::RootBackupSetRequest,
-        "parvane.identity.v2.RecoveryTgSendRequest" => ipb::RecoveryTgSendRequest,
-        "parvane.identity.v2.RecoveryTgRequestRequest" => ipb::RecoveryTgRequestRequest,
-        "parvane.identity.v2.RecoveryTgPollRequest" => ipb::RecoveryTgPollRequest,
-        "parvane.identity.v2.TelegramPullRequest" => ipb::TelegramPullRequest,
-        "parvane.identity.v2.TelegramReplyRequest" => ipb::TelegramReplyRequest,
-        "parvane.identity.v2.DeviceFetchBundleAnonRequest" => ipb::DeviceFetchBundleAnonRequest,
-        "parvane.identity.v2.DeviceRevokeRequest" => ipb::DeviceRevokeRequest,
-        "parvane.identity.v2.PrivacySetRequest" => ipb::PrivacySetRequest,
-        "parvane.identity.v2.PrivacyGetRequest" => ipb::PrivacyGetRequest,
-        "parvane.group.v2.StateSyncRequest" => gpb::StateSyncRequest,
-        "parvane.group.v2.InviteCheckRequest" => gpb::InviteCheckRequest,
-        "parvane.msg.v2.Text" => crate::pb::parvane::msg::v2::Text,
-        "parvane.msg.v2.Content" => Content,
-        "parvane.group.v2.InviteListRequest" => gpb::InviteListRequest,
-        "parvane.group.v2.RequestListRequest" => gpb::RequestListRequest,
-        "parvane.cloud.v1.UploadChunkRequest" => crate::pb::parvane::cloud::v1::UploadChunkRequest,
-        "parvane.cloud.v1.UploadCompleteRequest" => crate::pb::parvane::cloud::v1::UploadCompleteRequest,
-        "parvane.cloud.v1.DownloadRequest" => crate::pb::parvane::cloud::v1::DownloadRequest,
-        "parvane.cloud.v1.DownloadCapRequest" => crate::pb::parvane::cloud::v1::DownloadCapRequest,
-        "parvane.cloud.v1.LinkGetRequest" => crate::pb::parvane::cloud::v1::LinkGetRequest,
-        "parvane.cloud.v1.LinkDownloadRequest" => crate::pb::parvane::cloud::v1::LinkDownloadRequest,
-        "parvane.preview.v2.LinkRequest" => crate::pb::parvane::preview::v2::LinkRequest,
-        "parvane.preview.v2.MapTileRequest" => crate::pb::parvane::preview::v2::MapTileRequest,
-        "parvane.push.v1.RegisterRequest" => crate::pb::parvane::push::v1::RegisterRequest,
-        "parvane.push.v1.UnregisterRequest" => crate::pb::parvane::push::v1::UnregisterRequest,
-        "parvane.history.v1.AppendRequest" => crate::pb::parvane::history::v1::AppendRequest,
-        "parvane.history.v1.SyncRequest" => crate::pb::parvane::history::v1::SyncRequest,
-        "parvane.history.v1.HeadRequest" => crate::pb::parvane::history::v1::HeadRequest,
-        "parvane.history.v1.GetRequest" => crate::pb::parvane::history::v1::GetRequest,
-        "parvane.history.v1.CommitRequest" => crate::pb::parvane::history::v1::CommitRequest,
-    }
+    crate::type_codec::encode_by_type(type_name, json_text).unwrap_or(Err(ProtoError::UnknownMethod)).map_err(err)
 }
 
-/// Байты ответа → proto3-JSON по полному имени типа (ответы методов,
-/// которые хост разбирает сам: проверка ссылки, вступление, тексты черновиков).
+/// Байты (лимиты схемы проверяются до разбора) → proto3-JSON по полному имени типа — для ВСЕХ
+/// сообщений схемы (spec 035, FR-050). Незнакомый тип — `UnknownMethod`.
 pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
-    macro_rules! dec {
-        ($($name:literal => $t:ty),* $(,)?) => {
-            match type_name {
-                $($name => {
-                    let m: $t = decode_checked(bytes, Origin::Server).map_err(err)?;
-                    serde_json::to_string(&m).map_err(|_| err(ProtoError::Malformed))
-                })*
-                _ => Err(err(ProtoError::UnknownMethod)),
-            }
-        };
-    }
-    dec! {
-        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
-        "parvane.identity.v2.AccountDeleteRequest" => ipb::AccountDeleteRequest,
-        "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
-        "parvane.identity.v2.AccountRenameResponse" => ipb::AccountRenameResponse,
-        "parvane.identity.v2.AccountDeleteResponse" => ipb::AccountDeleteResponse,
-        "parvane.identity.v2.AccountRegisterResponse" => ipb::AccountRegisterResponse,
-        "parvane.identity.v2.AccountRegisterStatusResponse" => ipb::AccountRegisterStatusResponse,
-        "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,
-        "parvane.identity.v2.SessionReauthResponse" => ipb::SessionReauthResponse,
-        "parvane.identity.v2.AccountSet2faResponse" => ipb::AccountSet2faResponse,
-        "parvane.identity.v2.AccountGet2faResponse" => ipb::AccountGet2faResponse,
-        "parvane.identity.v2.ProfileResolveResponse" => ipb::ProfileResolveResponse,
-        "parvane.identity.v2.DirectorySearchResponse" => ipb::DirectorySearchResponse,
-        "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
-        "parvane.identity.v2.RootBackupGetResponse" => ipb::RootBackupGetResponse,
-        "parvane.identity.v2.RecoveryTgPollResponse" => ipb::RecoveryTgPollResponse,
-        "parvane.identity.v2.RecoveryTgRequestResponse" => ipb::RecoveryTgRequestResponse,
-        "parvane.identity.v2.TelegramPullResponse" => ipb::TelegramPullResponse,
-        "parvane.identity.v2.TelegramReplyResponse" => ipb::TelegramReplyResponse,
-        "parvane.identity.v2.PrivacyGetResponse" => ipb::PrivacyGetResponse,
-        "parvane.msg.v2.InboxSyncResponse" => crate::pb::parvane::msg::v2::InboxSyncResponse,
-        "parvane.msg.v2.InboxSubscribeResponse" => crate::pb::parvane::msg::v2::InboxSubscribeResponse,
-        "parvane.msg.v2.DeliverSealedResponse" => crate::pb::parvane::msg::v2::DeliverSealedResponse,
-        "parvane.group.v2.InviteCheckResponse" => gpb::InviteCheckResponse,
-        "parvane.group.v2.JoinResponse" => gpb::JoinResponse,
-        "parvane.msg.v2.Text" => crate::pb::parvane::msg::v2::Text,
-        "parvane.msg.v2.Content" => Content,
-        "parvane.group.v2.InviteListResponse" => gpb::InviteListResponse,
-        "parvane.group.v2.RequestListResponse" => gpb::RequestListResponse,
-        "parvane.cloud.v1.UploadChunkResponse" => crate::pb::parvane::cloud::v1::UploadChunkResponse,
-        "parvane.cloud.v1.UploadCompleteResponse" => crate::pb::parvane::cloud::v1::UploadCompleteResponse,
-        "parvane.cloud.v1.DownloadResponse" => crate::pb::parvane::cloud::v1::DownloadResponse,
-        "parvane.cloud.v1.DownloadCapResponse" => crate::pb::parvane::cloud::v1::DownloadCapResponse,
-        "parvane.cloud.v1.LinkGetResponse" => crate::pb::parvane::cloud::v1::LinkGetResponse,
-        "parvane.cloud.v1.LinkDownloadResponse" => crate::pb::parvane::cloud::v1::LinkDownloadResponse,
-        "parvane.preview.v2.LinkResponse" => crate::pb::parvane::preview::v2::LinkResponse,
-        "parvane.preview.v2.MapTileResponse" => crate::pb::parvane::preview::v2::MapTileResponse,
-        "parvane.push.v1.DescribeResponse" => crate::pb::parvane::push::v1::DescribeResponse,
-        "parvane.history.v1.AppendResponse" => crate::pb::parvane::history::v1::AppendResponse,
-        "parvane.history.v1.SyncResponse" => crate::pb::parvane::history::v1::SyncResponse,
-        "parvane.history.v1.HeadResponse" => crate::pb::parvane::history::v1::HeadResponse,
-        "parvane.history.v1.GetResponse" => crate::pb::parvane::history::v1::GetResponse,
-        "parvane.history.v1.CommitResponse" => crate::pb::parvane::history::v1::CommitResponse,
-        "parvane.msg.v2.JournalNotice" => crate::pb::parvane::msg::v2::JournalNotice,
-    }
+    crate::type_codec::decode_by_type(type_name, bytes, Origin::Server).unwrap_or(Err(ProtoError::UnknownMethod)).map_err(err)
 }
 
 /// base64 → байты (помощник для хостов без своей base64).
