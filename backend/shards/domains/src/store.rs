@@ -587,7 +587,8 @@ impl Domains {
         let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
         // S7-22: квота журнала — в байтах и операциях на контейнер и на писателя (получатель гранта пишет в свою
         // долю, а не в долю владельца; иначе редактор совместной папки переводил весь «План» владельца в LIMIT).
-        let (head, bytes): (i64, i64) = sqlx::query_as("SELECT head_seq, log_bytes FROM containers WHERE id = ?")
+        // spec 035 (S7-22): потолок операций — по живым операциям (после обрезки журнала снимком место освобождается)
+        let (head, bytes): (i64, i64) = sqlx::query_as("SELECT head_seq - truncated_upto, log_bytes FROM containers WHERE id = ?")
             .bind(&id)
             .fetch_one(&mut *tx)
             .await
@@ -642,8 +643,13 @@ impl Domains {
         self.require(&id, user, GrantLevel::Read).await?;
         let budget = if r.max_bytes == 0 || r.max_bytes > domain::SYNC_MAX_BYTES { domain::SYNC_MAX_BYTES } else { r.max_bytes } as usize;
         let after = i64::try_from(r.after_seq).map_err(|_| ErrorCode::Invalid)?;
+        // spec 035 (S7-22, FR-077): курсор внутри обрезанного журнала — пустая страница и граница: клиент берёт снимок
+        let (truncated,): (i64,) = sqlx::query_as("SELECT truncated_upto FROM containers WHERE id = ?").bind(&id).fetch_one(&self.pool).await.map_err(db_err)?;
+        if after < truncated {
+            return Ok(DomainOpSyncResponse { ops: vec![], more: false, truncated_upto: truncated as u64 }.encode_to_vec());
+        }
         let p = self.sync_page(&id, after, budget).await?;
-        Ok(DomainOpSyncResponse { ops: p.ops, more: p.more }.encode_to_vec())
+        Ok(DomainOpSyncResponse { ops: p.ops, more: p.more, truncated_upto: truncated as u64 }.encode_to_vec())
     }
 
     /// S7-21: страница журнала — сначала только номера и размеры, затем тела ровно тех операций, что входят в
@@ -890,7 +896,8 @@ impl Domains {
         self.author_is_caller(&seal.signer, user).await?;
         // Хранится только самый свежий снимок (больший upto_seq; при равном —
         // более новая эпоха, например перешифрованный после отзыва).
-        sqlx::query(
+        let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
+        let stored = sqlx::query(
             "INSERT INTO container_snapshots (container, upto_seq, key_epoch, snapshot, at) VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(container) DO UPDATE SET upto_seq = excluded.upto_seq, key_epoch = excluded.key_epoch, snapshot = excluded.snapshot, at = excluded.at \
              WHERE excluded.upto_seq > container_snapshots.upto_seq \
@@ -901,9 +908,17 @@ impl Domains {
         .bind(s.key_epoch as i64)
         .bind(s.encode_to_vec())
         .bind(now_unix())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
-        .map_err(db_err)?;
+        .map_err(db_err)?
+        .rows_affected()
+            > 0;
+        // spec 035 (S7-22, FR-077): принятый снимок с `complete` (подписан автором) — операции `seq ≤ upto_seq`
+        // больше не нужны никому: удаляются, квота контейнера и писателей уменьшается
+        if stored && s.complete {
+            truncate_log(&mut tx, &id, s.upto_seq as i64).await?;
+        }
+        tx.commit().await.map_err(db_err)?;
         Ok(DomainSnapshotPutResponse {}.encode_to_vec())
     }
 
@@ -918,6 +933,41 @@ impl Domains {
         let snapshot = row.map(|(b,)| Snapshot::decode(b.as_slice())).transpose().map_err(db_err)?;
         Ok(DomainSnapshotGetResponse { snapshot }.encode_to_vec())
     }
+}
+
+/// Обрезать журнал контейнера до `upto` включительно (spec 035, S7-22) в транзакции вызывающего.
+async fn truncate_log(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id: &[u8], upto: i64) -> Result<(), ErrorCode> {
+    let gone: Vec<(String, i64)> = sqlx::query_as("DELETE FROM container_log WHERE container = ? AND seq <= ? RETURNING author, LENGTH(op)")
+        .bind(id)
+        .bind(upto)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db_err)?;
+    let mut per_author: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut total = 0i64;
+    for (author, len) in gone {
+        total += len;
+        let e = per_author.entry(author).or_default();
+        e.0 += 1;
+        e.1 += len;
+    }
+    for (author, (ops, bytes)) in per_author {
+        sqlx::query("UPDATE log_usage SET ops = MAX(ops - ?, 0), bytes = MAX(bytes - ?, 0) WHERE user = ?")
+            .bind(ops)
+            .bind(bytes)
+            .bind(author)
+            .execute(&mut **tx)
+            .await
+            .map_err(db_err)?;
+    }
+    sqlx::query("UPDATE containers SET log_bytes = MAX(log_bytes - ?, 0), truncated_upto = MAX(truncated_upto, ?) WHERE id = ?")
+        .bind(total)
+        .bind(upto)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .map_err(db_err)?;
+    Ok(())
 }
 
 fn db_err_str<E>(_: E) -> ErrorCode {

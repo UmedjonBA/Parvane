@@ -421,7 +421,7 @@ impl HostClient {
             "plannerIngestGrants" => json!(c.planner_ingest_grants(&a.b("grantsResponse")?).map_err(cerr)?),
             "plannerIngestSync" => {
                 let r = c.planner_ingest_sync(&a.b("syncResponse")?).map_err(cerr)?;
-                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "missingEpoch": r.missing_epoch})
+                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "missingEpoch": r.missing_epoch, "needSnapshot": r.need_snapshot})
             }
             "plannerIngestSnapshot" => json!(c.planner_ingest_snapshot(&a.b("snapshotResponse")?).map_err(cerr)?),
             "plannerPrepareLocal" => {
@@ -460,7 +460,7 @@ impl HostClient {
             "cloudIngestGrants" => json!(c.cloud_ingest_grants(&a.hex("id")?, &a.b("grantsResponse")?).map_err(cerr)?),
             "cloudIngestSync" => {
                 let r = c.cloud_ingest_sync(&a.hex("id")?, &a.b("syncResponse")?, a.flag("strict")?).map_err(cerr)?;
-                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "authorsBehind": r.authors_behind, "missingEpoch": r.missing_epoch})
+                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "authorsBehind": r.authors_behind, "missingEpoch": r.missing_epoch, "needSnapshot": r.need_snapshot})
             }
             "cloudIngestSnapshot" => json!(c.cloud_ingest_snapshot(&a.hex("id")?, &a.b("snapshotResponse")?).map_err(cerr)?),
             "cloudPrepareLocal" => {

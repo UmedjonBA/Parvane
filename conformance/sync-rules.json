@@ -1655,7 +1655,23 @@
         "secretHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
         "capability": "19cd81b03ce6d287485c70b72571c74a2edac62fd5418737d7edc6b55f8411e3",
         "key": "9afab6a58c6441be27962c9ee7ac075a4506252d4d840268bd3a33601e665e42",
-        "nonce": "af79ac7f89284db688e10912"
+        "nonce": "af79ac7f89284db688e10912",
+        "avatarKeyIdHex": "ae216c2ef5247a3782c135efa279a3e4"
+      },
+      "spec035": {
+        "note": "PV-005, D1 (8 ноя 2026): секрет фото больше не в открытом журнале; SetInfo.avatar_key (4) зарезервировано",
+        "recordField": "SetInfo.avatar_key_id = 6",
+        "keyIdBytes": 16,
+        "keyId": "SHA-256(secret)[..16]",
+        "keyContent": "msg.v2.Content.group_avatar_key = 25 (GroupAvatarKey{file_id, avatar_key, info_version})",
+        "inviteWrap": {
+          "change": "GroupChange.invite_avatar_wrap = 20 (InviteAvatarWrap{link_id, avatar_key_id, wrapped})",
+          "kdf": "HKDF-SHA256(ikm = секрет ссылки, info = \"parvane/group-avatar-invite/v1\\0\" ‖ group_id ‖ link_id)",
+          "aead": "ChaCha20-Poly1305, AAD = link_id ‖ avatar_key_id, wrapped = nonce(12) ‖ ct ‖ tag",
+          "wrappedBytes": 60
+        },
+        "engine": "backend/protocol/src/group.rs (avatar_key_id, wrap_invite_avatar, open_invite_avatar, GroupState::avatar_key_matches, invite_avatar_key), client.rs (group_set_photo, group_avatar_key, group_avatar_key_content, group_invite_avatar_wraps, group_invite_avatar_key)",
+        "tests": "group::tests::set_info_has_no_avatar_key_bytes, group::tests::invite_avatar_wrap_opens_only_with_link_secret"
       },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/groupPhoto.ts (deriveGroupPhotoKeys), media.ts (uploadGroupPhoto, rememberGroupPhoto), provider.ts (editChatPhoto), v2/controller.ts (setGroupInfo, toWireGroupInfo)",

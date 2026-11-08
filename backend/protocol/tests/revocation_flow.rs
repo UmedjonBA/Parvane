@@ -1226,3 +1226,81 @@ fn owner_sign_out_keeps_keys_and_allows_stolen_later() {
     sync_peer_log(&srv, &mut bob, "alice@local");
     assert!(bob.ssk_pending("alice@local"));
 }
+
+/// spec 035 (FR-074, R12): смена SSK корнем — ОДНА запись журнала устройств с переподписанными сертификатами
+/// оставшихся устройств: собеседник ни в одной версии журнала не видит «SSK новый, действующих устройств нет»;
+/// запись прежним SSK после версии смены отвергается (`BadSignature`).
+#[test]
+fn ssk_rotation_is_one_entry_and_old_ssk_refused_after() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, root) = setup(&mut srv, "alice@local");
+    let _alice2 = link(&mut srv, &mut alice, "d2");
+    let _alice3 = link(&mut srv, &mut alice, "d3");
+    let (old_ssk, _, _, _) = alice.link_grant_material().unwrap();
+    let before = srv.logs["alice@local"].len();
+    let reqs = alice.rotate_ssk(&root).unwrap();
+    let appends = reqs.iter().filter(|r| r.method == "identity.device.log_append").count();
+    exec(&mut srv, &alice, &reqs);
+    let all = srv.logs["alice@local"].clone();
+    // Собеседник применяет журнал по одной записи: после каждой версии у Алисы есть действующие устройства
+    let mut log = DeviceLog::new("alice@local").unwrap();
+    for (i, op) in all.iter().enumerate() {
+        log.apply(op).unwrap();
+        // Генезис (версия 1) устройств ещё не несёт
+        assert!(i == 0 || !log.devices.is_empty(), "версия {}: SSK есть, действующих устройств нет", i + 1);
+    }
+    assert_eq!(appends, 1, "смена SSK и пересертификация — одна запись");
+    assert_eq!(all.len(), before + 1);
+    assert_eq!(log.devices.len(), 3, "все три устройства переподписаны новым SSK");
+    // Запись прежним SSK после смены — BadSignature
+    let old = ed25519_dalek::SigningKey::from_bytes(&old_ssk);
+    let e = parvane_protocol::identity::device_log_entry(
+        "alice@local",
+        log.version + 1,
+        log.head_hash,
+        parvane_protocol::pb::parvane::core::v2::user_device_log_entry::Change::RevokeDeviceId("d2".into()),
+        None,
+    );
+    let stale = parvane_protocol::identity::sign_device_log_entry(&old, &e).unwrap();
+    assert_eq!(log.apply(&stale).unwrap_err(), parvane_protocol::ProtoError::BadSignature);
+}
+
+/// spec 035 (FR-074; откаченный 30 окт 2026 случай): «завершить все сеансы» дважды подряд — оба отзыва приняты
+/// (отзыв + смена SSK корнем), собеседник принимает журнал целиком и предупреждения KEY-1 не видит.
+#[test]
+fn terminate_all_sessions_twice_with_root() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, root) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let _alice2 = link(&mut srv, &mut alice, "d2");
+    let _alice3 = link(&mut srv, &mut alice, "d3");
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    for dev in ["d2", "d3"] {
+        advance(11_000);
+        drain(&mut srv, &mut alice);
+        let mut o = None;
+        for _ in 0..10 {
+            match alice.revoke_device_with_root(dev, &root) {
+                Ok(x) => {
+                    o = Some(x);
+                    break;
+                }
+                Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+                Err(e) => panic!("{dev}: {e:?}"),
+            }
+        }
+        let o = o.unwrap();
+        exec(&mut srv, &alice, &o.requests);
+        assert!(!o.ssk_rotation_required);
+        assert!(!alice.own_ssk_exposed(), "{dev}: SSK сменён");
+        sync_peer_log(&srv, &mut bob, "alice@local");
+        assert!(!bob.ssk_pending("alice@local"), "{dev}");
+    }
+    let mut log = DeviceLog::new("alice@local").unwrap();
+    for op in &srv.logs["alice@local"] {
+        log.apply(op).unwrap();
+    }
+    assert_eq!(log.devices.keys().cloned().collect::<Vec<_>>(), vec!["d1".to_string()]);
+}

@@ -161,6 +161,8 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             json!({"container_key": {"container": {"domain": "local", "id": OP}, "domain": "sample", "key_epoch": "1", "key": KEY32, "grant_version": "4", "grant_head_hash": CAP32}}),
             service.clone(),
         ),
+        // spec 035 (PV-005, GPHOTO-1): секрет фото частной группы — служебный конверт эпохи, в ленту не идёт
+        ("group-avatar-key", json!({"group_avatar_key": {"file_id": "photo-1", "avatar_key": KEY32, "info_version": "7"}}), service.clone()),
         ("state-key", json!({"state_key": {"user": {"address": "alice@local"}, "state_key": KEY32, "key_version": 2}}), service),
         // Режим «усиленная приватность» (L2-1): видимое служебное сообщение
         // чата — содержимое UI `chat_mode`, клиент рисует его нативным

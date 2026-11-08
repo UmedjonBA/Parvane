@@ -37,6 +37,10 @@ struct PlannerLocal {
     json_cache: JsonCache,
     /// Граница эпохи по подписанным данным (S7-6).
     cut: dom::EpochCut,
+    /// spec 035 (FR-032, S7-22): с прошлого снимка была операция, которую движок понял не целиком (неизвестные
+    /// поля, виды, значения либо не разобрал) — снимок без `complete`, журнал не обрезается. После восстановления
+    /// из персиста — `true` (не знаем, что было).
+    opaque: bool,
 }
 
 /// Итог приёма страницы журнала планировщика (`domain.op.sync`).
@@ -49,6 +53,8 @@ pub struct PlannerIngest {
     pub missing_epoch: Option<u64>,
     /// Журнал грантов отстаёт (эпоха операции новее) — `domain.grant.list`, затем повтор.
     pub grants_behind: bool,
+    /// spec 035 (S7-22): курсор внутри обрезанного сервером журнала — `domain.snapshot.get`, затем синк дальше.
+    pub need_snapshot: bool,
 }
 
 /// Локальная правка: операция с метками (хост хранит до подтверждения сервера).
@@ -165,6 +171,7 @@ impl Client {
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
             cut: dom::EpochCut::default(),
+            opaque: false,
         });
         Ok(OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }))
     }
@@ -198,6 +205,7 @@ impl Client {
             head_seq: existing.as_ref().map(|p| p.head_seq).unwrap_or(0),
             snapshot_seq: existing.as_ref().map(|p| p.snapshot_seq).unwrap_or(0),
             cut: existing.as_ref().map(|p| p.cut.clone()).unwrap_or_default(),
+            opaque: existing.as_ref().is_none_or(|p| p.opaque),
             pending_ops: existing.map(|p| p.pending_ops).unwrap_or_default(),
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
@@ -268,8 +276,12 @@ impl Client {
     fn planner_open_one(p: &mut PlannerLocal, op: &ContainerOp, author_device: &str) -> Result<usize> {
         let key = p.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &p.access.container, key)?;
-        let decoded = planner::decode_op(&pt)?;
-        planner::guard_op(&mut p.guard, &decoded)?;
+        // Непонятое целиком в снимок не войдёт — такой снимок журнал не обрезает (FR-032)
+        if crate::unknown::scan("parvane.planner.v1.PlannerOp", &pt).map_or(true, |r| !r.is_empty()) {
+            p.opaque = true;
+        }
+        let decoded = planner::decode_op(&pt).inspect_err(|_| p.opaque = true)?;
+        planner::guard_op(&mut p.guard, &decoded).inspect_err(|_| p.opaque = true)?;
         p.state.apply_op(&decoded, author_device)
     }
 
@@ -301,6 +313,13 @@ impl Client {
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
         let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         let mut out = PlannerIngest { more: r.more, ..Default::default() };
+        // spec 035 (S7-22): сервер обрезал журнал дальше курсора — сначала снимок (`domain.snapshot.get`)
+        if r.truncated_upto > p.head_seq {
+            out.need_snapshot = true;
+            out.more = false;
+            out.head_seq = p.head_seq;
+            return Ok(out);
+        }
         for op in r.ops {
             if op.seq <= p.head_seq {
                 continue;
@@ -427,8 +446,11 @@ impl Client {
         if pt.len() > dom::MAX_SNAPSHOT_PLAINTEXT {
             return Err(ClientError::Proto(ProtoError::FieldLimit("snapshot")));
         }
-        let s = dom::seal_snapshot(&self.acc, &p.access.container, epoch, key, p.head_seq, &pt, ts_ms)?;
+        // `complete` (FR-032): ничего не отложено и не удержано (проверено выше) и каждая операция диапазона понята
+        // целиком. Отметку `range-hold` хранилища движка (spec 035, фазы 5–6) добавить сюда же.
+        let s = dom::seal_snapshot_complete(&self.acc, &p.access.container, epoch, key, p.head_seq, &pt, ts_ms, !p.opaque)?;
         p.snapshot_seq = p.head_seq;
+        p.opaque = false;
         Ok(Some(OutRequest::id("domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(s) })))
     }
 
@@ -572,7 +594,7 @@ impl Client {
         let pending_ops = pp.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
         let held = pp.held_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
         let cut = dom::EpochCut { held, head_op_id: unb64(&pp.head_op_id)? };
-        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut });
+        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque: true });
         Ok(())
     }
 }

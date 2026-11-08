@@ -165,6 +165,11 @@ message Rename {
 message RotateSelfSigning {
   bytes self_signing_key = 1 [(max_len) = 32];
   bytes root_signature = 2 [(max_len) = 64];
+  // spec 035 (FR-074, R12): сертификаты оставшихся устройств, переподписанные новым SSK, — в той же записи, что и
+  // смена (подпись корнем): нет версии журнала «SSK новый, действующих устройств нет». Только устройства, действовавшие
+  // до смены, с теми же ключами. После версии смены записи, подписанные прежним SSK, отвергаются (BadSignature).
+  // В генезисе пусто.
+  repeated SignedDeviceCertificate resigned = 3 [(max_items) = 64];
 }
 
 message LegacyDeviceSet {

@@ -91,7 +91,11 @@ pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
     tokio::spawn(crate::v2_fed::serve(ctx.clone()));
     tokio::spawn(crate::v2_rename::serve(ctx.clone()));
     let c4 = ctx.clone();
-    tokio::spawn(async move { crate::v2_groups::rebuild_link_index(&c4).await });
+    tokio::spawn(async move {
+        crate::v2_groups::rebuild_link_index(&c4).await;
+        // spec 035 (миграция 0008): окна членства журналов, принятых до неё
+        crate::v2_groups::rebuild_windows(&c4).await;
+    });
     let c3 = ctx.clone();
     tokio::spawn(async move {
         let mut t = tokio::time::interval(Duration::from_secs(3600));
@@ -299,7 +303,7 @@ impl V2 {
     }
 
     /// Живое событие записи журнала (после фиксации транзакции).
-    async fn publish_live(&self, a: Appended, item: inbox_record::Item) {
+    pub(crate) async fn publish_live(&self, a: Appended, item: inbox_record::Item) {
         let live = InboxRecord { seq: a.seq, received_ms: a.received_ms, item: Some(item) }.encode_to_vec();
         if let Err(e) = self.nc.publish(format!("{INBOX_PREFIX}{}", a.dev), live.into()).await {
             warn!("v2: живое событие инбокса не отправлено: {}", e);
@@ -557,6 +561,30 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
             }
         }
     }
+    // Остаток S7-16 (spec 035, FR-073): неподтверждённое уведомление журнала той же группы замещается — клиенту
+    // нужно лишь «журнал группы изменился», версию он берёт синком журнала
+    let group_key = group_notice_key(item);
+    if let Some(k) = &group_key {
+        let gone: Vec<(i64,)> = sqlx::query_as(
+            "DELETE FROM inbox_log WHERE device = ? AND group_key = ? AND seq > COALESCE((SELECT acked_seq FROM inbox_device WHERE device = ?), 0) RETURNING LENGTH(item)",
+        )
+        .bind(&dev)
+        .bind(k)
+        .bind(&dev)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db_err)?;
+        if !gone.is_empty() {
+            let freed: i64 = gone.iter().map(|(l,)| *l).sum();
+            sqlx::query("UPDATE inbox_device SET records = MAX(records - ?, 0), bytes = MAX(bytes - ?, 0) WHERE device = ?")
+                .bind(gone.len() as i64)
+                .bind(freed)
+                .bind(&dev)
+                .execute(&mut **tx)
+                .await
+                .map_err(db_err)?;
+        }
+    }
     let (seq,): (i64,) = sqlx::query_as(
         "INSERT INTO inbox_device (device, next_seq, records, bytes) VALUES (?, 1, 1, ?) ON CONFLICT(device) DO UPDATE SET next_seq = next_seq + 1, records = records + 1, bytes = bytes + excluded.bytes RETURNING next_seq",
     )
@@ -565,15 +593,26 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
     .fetch_one(&mut **tx)
     .await
     .map_err(db_err)?;
-    sqlx::query("INSERT INTO inbox_log (device, seq, item, received_at) VALUES (?, ?, ?, ?)")
+    sqlx::query("INSERT INTO inbox_log (device, seq, item, received_at, group_key) VALUES (?, ?, ?, ?, ?)")
         .bind(&dev)
         .bind(seq)
         .bind(&bytes)
         .bind(now_ms / 1000)
+        .bind(&group_key)
         .execute(&mut **tx)
         .await
         .map_err(db_err)?;
     Ok(Appended { dev, seq: seq as u64, received_ms: now_ms })
+}
+
+/// Ключ группы уведомления журнала группы в инбоксе (`inbox_log.group_key`): `<домен>/<hex id>`; прочие записи — нет.
+fn group_notice_key(item: &inbox_record::Item) -> Option<String> {
+    match item {
+        inbox_record::Item::GroupState(mpb::GroupStateNotice { group: Some(g), .. }) => {
+            Some(format!("{}/{}", g.domain.to_ascii_lowercase(), g.id.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        }
+        _ => None,
+    }
 }
 
 /// Потратить жетон в транзакции (повтор → DUPLICATE).
@@ -719,6 +758,46 @@ mod spent_tests {
         let over = append_in(&mut tx, "gina@local", "d1", &notice(4)).await;
         std::env::remove_var("PARVANE_V2_INBOX_MAX_RECORDS");
         assert_eq!(over.err(), Some(ErrorCode::Limit));
+    }
+
+    /// Остаток S7-16 (spec 035, FR-073): неподтверждённое уведомление журнала группы замещается следующим той же
+    /// пары (устройство, группа) — офлайн-устройство копит одно уведомление на группу, а не по одному на запись.
+    #[tokio::test]
+    async fn group_state_notices_replace_unacked_of_same_group() {
+        let p = pool().await;
+        let g = |id: u8| parvane_protocol::pb::parvane::core::v2::Ref { domain: "local".into(), id: vec![id; 32] };
+        let notice = |id: u8, v: u64| inbox_record::Item::GroupState(mpb::GroupStateNotice { group: Some(g(id)), version: v });
+        for v in 1..=100 {
+            let mut tx = p.begin().await.unwrap();
+            append_in(&mut tx, "hana@local", "d1", &notice(1, v)).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        // Другая группа и другое устройство — свои уведомления
+        let mut tx = p.begin().await.unwrap();
+        append_in(&mut tx, "hana@local", "d1", &notice(2, 1)).await.unwrap();
+        append_in(&mut tx, "hana@local", "d2", &notice(1, 100)).await.unwrap();
+        tx.commit().await.unwrap();
+        let dev = device_key("hana@local", "d1").unwrap();
+        let (page, _) = sync_page(&p, &dev, 0, 0).await.unwrap();
+        let of_group1: Vec<_> = page
+            .iter()
+            .filter_map(|r| match &r.item {
+                Some(inbox_record::Item::GroupState(n)) if n.group.as_ref().is_some_and(|x| x.id == vec![1; 32]) => Some(n.version),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(of_group1, vec![100], "одно, последнее уведомление группы");
+        assert_eq!(page.len(), 2);
+        let (n, b): (i64, i64) = sqlx::query_as("SELECT records, bytes FROM inbox_device WHERE device = ?").bind(&dev).fetch_one(&p).await.unwrap();
+        let (rn, rb): (i64, i64) = sqlx::query_as("SELECT COUNT(*), SUM(LENGTH(item)) FROM inbox_log WHERE device = ?").bind(&dev).fetch_one(&p).await.unwrap();
+        assert_eq!((n, b), (rn, rb), "учёт объёма после замещения");
+        // Подтверждённое уведомление не замещается (его могли уже показать) — замещается только неподтверждённое
+        sqlx::query("UPDATE inbox_device SET acked_seq = next_seq WHERE device = ?").bind(&dev).execute(&p).await.unwrap();
+        let mut tx = p.begin().await.unwrap();
+        append_in(&mut tx, "hana@local", "d1", &notice(1, 101)).await.unwrap();
+        tx.commit().await.unwrap();
+        let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM inbox_log WHERE device = ?").bind(&dev).fetch_one(&p).await.unwrap();
+        assert_eq!(left, 3);
     }
 
     #[tokio::test]
