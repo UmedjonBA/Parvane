@@ -64,7 +64,7 @@ try {
   // alice1 шлёт bob стикер встроенного набора
   await openPrivateChatStrict(a1, BOB);
   await waitDiag(a1);
-  const stickerId = await a1.evaluate(async ({ setId, nick }) => {
+  const sentId = await a1.evaluate(async ({ setId, nick }) => {
     const g = window.__parvaneGetGlobal();
     const user = Object.values(g.users.byId).find((u) => u.usernames?.some(({ username }) => username === nick));
     const chat = g.chats.byId[user.id];
@@ -73,16 +73,22 @@ try {
     await window.__parvaneDiagCallApi('sendMessage', { chat, sticker });
     return sticker.id;
   }, { setId: BUILTIN_SET, nick: BOB.split('@')[0] });
-  assert.ok(stickerId, 'нет стикера');
+  assert.ok(sentId, 'нет стикера');
 
   // Пункт «В избранное» в меню стикера в ленте (нативное меню Web A)
   const sticker = a1.locator('.Transition_slide-active > .MessageList .Message').last();
   await sticker.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await a1.waitForFunction((id) => {
+  // Стикер в ленте — как его построил провайдер (id и набор — из сообщения, не из запроса отправки)
+  const shown = await (await a1.waitForFunction(() => {
     const g = window.__parvaneGetGlobal();
-    return Object.values(g.messages.byChatId).some((c) => Object.values(c.byId || {})
-      .some((m) => m.content?.sticker?.id === id));
-  }, stickerId, { timeout: LOGIN_TIMEOUT_MS });
+    const found = Object.values(g.messages.byChatId).flatMap((c) => Object.values(c.byId || {}))
+      .filter((m) => m.content?.sticker).sort((x, y) => y.date - x.date)[0];
+    return found ? found.content.sticker : undefined;
+  }, undefined, { timeout: LOGIN_TIMEOUT_MS })).jsonValue();
+  // В избранном — id стикера в наборе (FR-075), у сообщения `id` — файл загрузки
+  const stickerId = shown.parvaneSetStickerId;
+  assert.equal(stickerId, sentId, 'у стикера в ленте нет id в наборе');
+  console.log(`стикер в ленте: ${stickerId} (отправлен ${sentId}), набор ${JSON.stringify(shown.stickerSetInfo)}`);
   await openMessageMenuOn(sticker);
   const fave = a1.locator('.MessageContextMenu').getByRole('menuitem', { name: 'Add to Favorites', exact: true });
   await fave.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -101,11 +107,9 @@ try {
   console.log('избранное на втором устройстве');
 
   // Убрать на втором — уходит и с первого
-  await a2.evaluate(async ({ setId, id }) => {
-    const set = await window.__parvaneDiagCallApi('fetchStickerSet', { stickerSetInfo: { id: setId } });
-    const s = set.stickers.find((x) => x.id === id);
-    await window.__parvaneDiagCallApi('faveSticker', { sticker: s, unfave: true });
-  }, { setId: BUILTIN_SET, id: stickerId });
+  await a2.evaluate(async (sticker) => {
+    await window.__parvaneDiagCallApi('faveSticker', { sticker, unfave: true });
+  }, shown);
   await waitFaved(a1, 'alice1 после снятия', (ids) => !ids.includes(stickerId));
   console.log('снятие с избранного доехало до первого устройства');
   console.log('E2E_WEB_FAVE_STICKER_OK');

@@ -1382,9 +1382,9 @@ impl Engine {
                     self.push_req(w, req, Purpose::GroupSync { group: g, join: Some(parts) });
                 }
             }
-            // Принято либо DUPLICATE (тот же op_id уже записан другими байтами — перенос с другого устройства): запись
-            // есть. Окончательный отказ (схема, право) — повтор той же записи бессмыслен: тоже снять
-            Purpose::StateAppend(op_id) if error == 0 || matches!(error, 1 | 2) || error == crate::pb::parvane::core::v2::ErrorCode::Duplicate as i32 => {
+            // Записано (DUPLICATE: тот же op_id уже записан другими байтами — перенос с другого устройства) либо
+            // окончательный отказ (схема, право) — повтор той же записи бессмыслен
+            Purpose::StateAppend(op_id) if matches!(error, 0..=2 | 4) => {
                 self.state_unsent.remove(&hex::encode(&op_id));
                 self.dirty.state_raw.insert(hex::encode(&op_id), None);
             }

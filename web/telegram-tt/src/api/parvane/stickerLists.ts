@@ -13,7 +13,9 @@ export const FAVORITE_STICKERS_LIMIT = 10;
 export function stickerRefOf(sticker: ApiSticker): StickerRef | undefined {
   const info = sticker.stickerSetInfo;
   const setId = info && 'id' in info ? info.id : undefined;
-  return setId && sticker.id ? { setId, stickerId: sticker.id } : undefined;
+  // Стикер из ленты: `id` — файл загрузки, id в наборе — `parvaneSetStickerId` (FR-075)
+  const stickerId = sticker.parvaneSetStickerId || sticker.id;
+  return setId && stickerId ? { setId, stickerId } : undefined;
 }
 
 const isSame = (a: StickerRef, b: StickerRef) => a.setId === b.setId && a.stickerId === b.stickerId;

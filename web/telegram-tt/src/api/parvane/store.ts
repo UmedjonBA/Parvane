@@ -960,6 +960,8 @@ function buildMessageContent(
           isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
+          // FR-075: id стикера в наборе — «В избранное» из ленты
+          parvaneSetStickerId: content.sticker_id || undefined,
         }),
       };
     }

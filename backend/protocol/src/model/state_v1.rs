@@ -4,10 +4,10 @@
 //! видам) и отметки (`Mark`). Сведение — только в движке (`state2`): хост не сравнивает метки и не знает
 //! лампортов (ENGINE-1). Показ обратно — `state_view_v1`: сведённое состояние в форме снимка `state.v1`.
 //!
-//! Раскладка объектов — та же, что у разового переноса журнала `state.v1` (`migrate/state_v1.rs`, фаза 10):
-//! поле верхнего уровня — регистр (списки, в том числе `Folder.include_peers`, — регистром целиком), ключи —
-//! `peer_key`, hex op_id/call_id/link_id, `<домен>:<hex id>` у облака; отметки — `SCHEDULED` 1, `CHAT_CLEARED` 2.
-//! При слиянии с фазой 10 `objects_of`/`project_v1` берутся оттуда (один перевод на движок).
+//! Раскладка объектов — одна с разовым переносом журнала `state.v1` (`migrate::state_v1::objects_of` /
+//! `project_v1`, фаза 10): поле верхнего уровня — регистр (списки, в том числе `Folder.include_peers`, —
+//! регистром целиком: правка списка — замена значения поля, не `SetAdd`/`SetRemove`), ключи — `peer_key`, hex
+//! op_id/call_id/link_id, `<домен>:<hex id>` у облака; отметки — `SCHEDULED` 1, `CHAT_CLEARED` 2.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,193 +17,10 @@ use serde_json::{json, Value};
 
 use super::{split_fields, Engine, Work};
 use crate::error::{ProtoError, Result};
-use crate::pb::parvane::core::v2::{Ref, UserRef};
-use crate::pb::parvane::state::v1::{self as v1, peer, state_op::Op as V1Op, Peer, PeerKey};
+use crate::migrate::state_v1::{objects_of, project_v1, Obj};
+use crate::pb::parvane::state::v1 as v1;
 use crate::pb::parvane::state::v2::{self as s2, state_op::Op as SOp, FieldValue, ObjectKey, ObjectKind as K};
-use crate::state::{self, PersonalState};
-use crate::state2::{State2, MARK_CHAT_CLEARED, MARK_SCHEDULED_SENT};
-
-/// Объект `state.v2`, собранный из снимка `state.v1`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Obj {
-    pub kind: i32,
-    pub key: String,
-    pub fields: Vec<FieldValue>,
-    pub marks: Vec<(u32, Vec<u8>)>,
-}
-
-fn be_min(v: u64) -> Vec<u8> {
-    let b = v.to_be_bytes();
-    let i = b.iter().position(|x| *x != 0).unwrap_or(7);
-    b[i..].to_vec()
-}
-
-fn be_val(b: &[u8]) -> u64 {
-    b.iter().fold(0u64, |a, x| a.wrapping_shl(8) | u64::from(*x))
-}
-
-fn fields_of<M: Message>(m: &M) -> Vec<FieldValue> {
-    split_fields(&m.encode_to_vec())
-}
-
-fn pk(p: &Option<Peer>) -> Result<String> {
-    state::peer_key(p.as_ref().ok_or(ProtoError::InvalidField("peer"))?)
-}
-
-fn obj(kind: K, key: String, fields: Vec<FieldValue>) -> Obj {
-    Obj { kind: kind as i32, key, fields, marks: vec![] }
-}
-
-/// Объекты `state.v2` из снимка `state.v1` (порядок — по (вид, ключ)). Негодный элемент снимка пропускается.
-pub fn objects_of(s: &v1::StateSnapshot) -> Vec<Obj> {
-    let mut out: BTreeMap<(i32, String), Obj> = BTreeMap::new();
-    let mut put = |o: Obj| {
-        out.insert((o.kind, o.key.clone()), o);
-    };
-    for f in &s.folders {
-        put(obj(K::Folder, f.id.to_string(), fields_of(f)));
-    }
-    if let Some(o) = &s.folder_order {
-        put(obj(K::FolderOrder, String::new(), fields_of(o)));
-    }
-    for b in &s.blocked {
-        if let Ok(k) = pk(&b.peer) {
-            put(obj(K::Block, k, fields_of(b)));
-        }
-    }
-    for n in &s.notify {
-        if let Ok(k) = pk(&n.peer) {
-            put(obj(K::PeerNotify, k, fields_of(n)));
-        }
-    }
-    if let Some(d) = &s.notify_defaults {
-        put(obj(K::NotifyDefaults, String::new(), fields_of(d)));
-    }
-    for d in &s.drafts {
-        if let Ok(k) = pk(&d.peer) {
-            put(obj(K::Draft, k, fields_of(d)));
-        }
-    }
-    for m in &s.scheduled {
-        put(obj(K::Scheduled, hex::encode(&m.op_id), fields_of(m)));
-    }
-    for p in &s.archived {
-        if let Ok(k) = state::peer_key(p) {
-            put(obj(K::Archive, k, vec![]));
-        }
-    }
-    for o in &s.pinned {
-        put(obj(K::PinList, o.list.to_string(), fields_of(o)));
-    }
-    for c in &s.calls {
-        put(obj(K::Call, hex::encode(&c.call_id), fields_of(c)));
-    }
-    for i in &s.invites {
-        put(obj(K::GroupInvite, hex::encode(&i.link_id), fields_of(i)));
-    }
-    if let Some(c) = &s.planner_container {
-        put(obj(K::PlannerContainer, String::new(), fields_of(c)));
-    }
-    for c in &s.cloud_containers {
-        if let Some(r) = &c.r#ref {
-            put(obj(K::CloudContainer, format!("{}:{}", r.domain, hex::encode(&r.id)), fields_of(c)));
-        }
-    }
-    for p in &s.unread_marks {
-        if let Ok(k) = state::peer_key(p) {
-            put(obj(K::UnreadMark, k, vec![]));
-        }
-    }
-    if let Some(q) = &s.quick_reaction {
-        put(obj(K::QuickReaction, String::new(), fields_of(q)));
-    }
-    for p in &s.sticker_packs {
-        let kind = if p.set_id.starts_with("g:") { K::SavedGif } else { K::StickerPack };
-        put(obj(kind, p.set_id.clone(), fields_of(p)));
-    }
-    for c in &s.contacts {
-        if let Some(a) = c.user.as_ref().map(|u| u.address.clone()) {
-            put(obj(K::Contact, a, fields_of(c)));
-        }
-    }
-    let mut marks: Vec<Obj> = vec![];
-    for id in &s.scheduled_sent {
-        marks.push(Obj { kind: K::Scheduled as i32, key: hex::encode(id), fields: vec![], marks: vec![(MARK_SCHEDULED_SENT, vec![1])] });
-    }
-    for c in &s.cleared {
-        if let (true, Ok(k)) = (c.cleared_until_ms > 0, pk(&c.peer)) {
-            marks.push(Obj { kind: K::ChatCleared as i32, key: k, fields: vec![], marks: vec![(MARK_CHAT_CLEARED, be_min(c.cleared_until_ms as u64))] });
-        }
-    }
-    for m in marks {
-        let e = out.entry((m.kind, m.key.clone())).or_insert_with(|| Obj { fields: vec![], marks: vec![], ..m.clone() });
-        e.marks.extend(m.marks);
-    }
-    out.into_values().collect()
-}
-
-/// Собеседник из ключа `u:<адрес>` / `g:<домен>:<hex id>`.
-pub fn peer_of_key(k: &str) -> Option<Peer> {
-    if let Some(a) = k.strip_prefix("u:") {
-        return Some(Peer { kind: Some(peer::Kind::User(UserRef { address: a.into() })) });
-    }
-    let (domain, id) = k.strip_prefix("g:")?.rsplit_once(':')?;
-    Some(Peer { kind: Some(peer::Kind::Group(Ref { domain: domain.into(), id: hex::decode(id).ok()? })) })
-}
-
-/// Снимок `state.v1` из сведённого `state.v2` (только известное и видимое). `FAVED_STICKER` в старом снимке не
-/// представим — его показ отдельно (`faved_stickers` в `state_view_v1`).
-pub fn project_v1(s: &State2) -> v1::StateSnapshot {
-    let mut ps = PersonalState::new();
-    let mut n: u64 = 0;
-    let mut apply = |k: V1Op| {
-        n += 1;
-        let mut id = [0u8; 16];
-        id[8..].copy_from_slice(&n.to_be_bytes());
-        let o = v1::StateOp { op_id: id.to_vec(), lamport: 1, device_id: "view".into(), ts_ms: 0, op: Some(k) };
-        let _ = ps.apply(&o);
-    };
-    for v in s.view() {
-        let val = v.value.as_slice();
-        let mark = |f: u32| v.marks.iter().find(|(x, _)| *x == f).map(|(_, b)| be_val(b));
-        let peer = || peer_of_key(&v.key).map(|p| PeerKey { peer: Some(p) });
-        let k = match K::try_from(v.kind) {
-            Ok(K::Folder) => v1::Folder::decode(val).ok().map(|mut f| {
-                f.id = v.key.parse().unwrap_or(f.id);
-                V1Op::FolderSet(f)
-            }),
-            Ok(K::FolderOrder) => v1::FolderOrder::decode(val).ok().map(V1Op::FolderOrder),
-            Ok(K::Block) => v1::BlockEntry::decode(val).ok().map(V1Op::BlockSet),
-            Ok(K::PeerNotify) => v1::PeerNotify::decode(val).ok().map(V1Op::NotifySet),
-            Ok(K::NotifyDefaults) => v1::NotifyDefaults::decode(val).ok().map(V1Op::NotifyDefaults),
-            Ok(K::Draft) => v1::Draft::decode(val).ok().map(V1Op::DraftSet),
-            Ok(K::Scheduled) => {
-                if mark(MARK_SCHEDULED_SENT).is_some() {
-                    hex::decode(&v.key).ok().map(|id| V1Op::ScheduledSent(v1::ScheduledRef { op_id: id }))
-                } else {
-                    v1::ScheduledMessage::decode(val).ok().filter(|m| !m.op_id.is_empty()).map(V1Op::ScheduledSet)
-                }
-            }
-            Ok(K::Archive) => peer().map(V1Op::ArchiveSet),
-            Ok(K::PinList) => v1::PinnedOrder::decode(val).ok().map(V1Op::PinnedOrder),
-            Ok(K::Call) => v1::CallRecord::decode(val).ok().map(V1Op::CallSet),
-            Ok(K::GroupInvite) => v1::GroupInvite::decode(val).ok().map(V1Op::GroupInviteSet),
-            Ok(K::PlannerContainer) => v1::PlannerContainer::decode(val).ok().map(V1Op::PlannerContainerSet),
-            Ok(K::CloudContainer) => v1::CloudContainer::decode(val).ok().map(V1Op::CloudContainerSet),
-            Ok(K::UnreadMark) => peer().map(V1Op::UnreadMarkSet),
-            Ok(K::QuickReaction) => v1::QuickReaction::decode(val).ok().map(V1Op::QuickReaction),
-            Ok(K::StickerPack | K::SavedGif) => v1::StickerPack::decode(val).ok().map(V1Op::StickerPackSet),
-            Ok(K::Contact) => v1::Contact::decode(val).ok().map(V1Op::ContactSet),
-            Ok(K::ChatCleared) => mark(MARK_CHAT_CLEARED)
-                .and_then(|ms| Some(V1Op::ChatCleared(v1::ChatCleared { peer: peer_of_key(&v.key), cleared_until_ms: i64::try_from(ms).ok()? }))),
-            _ => None,
-        };
-        if let Some(k) = k {
-            apply(k);
-        }
-    }
-    ps.snapshot()
-}
+use crate::state2::MARK_SCHEDULED_SENT;
 
 /// Виды объектов, которыми управляет имя вида хоста (`folders`, `blocked`, `notify`, `drafts`, `scheduled`,
 /// `archived`, `pinned`, `unread`, `reaction`, `packs`, `contacts` — как у прежнего `diff`).
@@ -276,11 +93,11 @@ impl Engine {
         let base: Option<BTreeMap<(i32, String), Obj>> = match a.base {
             Some(b) if !b.is_null() => {
                 let bs: v1::StateSnapshot = serde_json::from_value(b).map_err(|_| ProtoError::Malformed)?;
-                Some(objects_of(&bs).into_iter().map(|o| ((o.kind, o.key.clone()), o)).collect())
+                Some(objects_of(&bs)?.into_iter().map(|o| ((o.kind, o.key.clone()), o)).collect())
             }
             _ => None,
         };
-        let want = objects_of(&snap);
+        let want = objects_of(&snap)?;
         let kinds = managed(&a.kinds);
         let in_scope = |kind: i32| kinds.is_empty() || kinds.contains(&kind);
         let mut w = Work::default();
@@ -395,6 +212,9 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pb::parvane::core::v2::UserRef;
+    use crate::pb::parvane::state::v1::{peer, Peer};
+    use crate::state2::State2;
 
     #[test]
     fn objects_roundtrip_through_v1_view() {
@@ -403,7 +223,7 @@ mod tests {
             archived: vec![Peer { kind: Some(peer::Kind::User(UserRef { address: "bob@local".into() })) }],
             ..Default::default()
         };
-        let objs = objects_of(&snap);
+        let objs = objects_of(&snap).unwrap();
         assert_eq!(objs.len(), 2);
         let mut s = State2::new();
         for (i, o) in objs.iter().enumerate() {

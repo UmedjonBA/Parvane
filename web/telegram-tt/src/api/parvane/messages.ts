@@ -677,6 +677,8 @@ export function createMessageController(deps: MessageDependencies) {
       width: sticker.width || 256,
       height: sticker.height || 256,
       pack_ref: packRef,
+      // FR-075: id стикера в наборе — получатель может добавить его в избранное
+      sticker_id: setId ? sticker.id : undefined,
       ttl_secs: ttlSecs || undefined,
       silent: isSilent || undefined,
       ...mediaCrypto,
@@ -687,7 +689,7 @@ export function createMessageController(deps: MessageDependencies) {
     const message: ApiMessage = {
       id,
       chatId: chat.id,
-      content: { sticker: { ...sticker, id: fileId } },
+      content: { sticker: { ...sticker, id: fileId, parvaneSetStickerId: setId ? sticker.id : undefined } },
       date: Math.floor(Date.now() / 1000),
       isOutgoing: true,
       senderId: deps.selfId(),

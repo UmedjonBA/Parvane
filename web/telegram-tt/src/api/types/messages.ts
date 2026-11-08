@@ -72,6 +72,9 @@ export interface ApiSticker {
   hasEffect?: boolean;
   isFree?: boolean;
   shouldUseTextColor?: boolean;
+  // Parvane (spec 035, FR-075): у стикера в ленте `id` — файл загрузки; id стикера в его наборе (`Sticker.sticker_id`)
+  // — для «В избранное» из сообщения
+  parvaneSetStickerId?: string;
 }
 
 export interface ApiStickerSet {

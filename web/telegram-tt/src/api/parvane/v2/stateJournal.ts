@@ -260,13 +260,19 @@ export function createStateJournal(deps: Deps) {
     });
   }
 
+  // Отметка переноса: '2' — локальное перенесено в журнал state.v2 (spec 035). Профиль с прежней отметкой '1'
+  // (перенос в замороженный state.v1) переносит локальную копию ещё раз — в новый журнал; одинаковые значения с
+  // других своих устройств сводятся без дублей. Разовый перенос замороженного журнала движком — с переходом web
+  // целиком на модель (T115)
+  const MIGRATED = '2';
+
   function migratedKey() {
     return `parvane:v2state-migrated:${deps.getStore().self}`;
   }
 
   function isMigrated() {
     try {
-      return localStorage.getItem(migratedKey()) === '1';
+      return localStorage.getItem(migratedKey()) === MIGRATED;
     } catch {
       return false;
     }
@@ -281,7 +287,7 @@ export function createStateJournal(deps: Deps) {
 
   function markKindMigrated(kind: LocalStateKind) {
     try {
-      localStorage.setItem(kindMigratedKey(kind), '1');
+      localStorage.setItem(kindMigratedKey(kind), MIGRATED);
     } catch {
       // приватный режим — перенос повторится и сойдётся (LWW)
     }
@@ -299,7 +305,7 @@ export function createStateJournal(deps: Deps) {
     if (!session) return;
     const kinds = LATE_KINDS.filter((kind) => {
       try {
-        return localStorage.getItem(kindMigratedKey(kind)) !== '1';
+        return localStorage.getItem(kindMigratedKey(kind)) !== MIGRATED;
       } catch {
         return true; // приватный режим — переносим
       }
@@ -319,7 +325,7 @@ export function createStateJournal(deps: Deps) {
 
   function markMigrated() {
     try {
-      localStorage.setItem(migratedKey(), '1');
+      localStorage.setItem(migratedKey(), MIGRATED);
     } catch {
       // приватный режим — повторная миграция сходится (union по LWW)
     }
