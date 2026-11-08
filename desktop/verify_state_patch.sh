@@ -21,12 +21,14 @@ OFFLINE=PARVANE_GATEWAY_URL=127.0.0.1:9
 
 # ── собеседники и чаты у alice ───────────────────────────────────────────────
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-PC=$(start_client "$C" carol@local PARVANE_NO_LINK_OFFER=1)
+# carol пишет alice первой: чат с ней есть на обоих устройствах alice (в папку добавляют существующий чат)
+PC=$(start_client "$C" carol@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOSEND_V2=alice@local:привет-от-carol-$S")
 wait_log "$BL" "v2: готов" 90 && wait_log "$CL" "v2: готов" 90 && ok "bob и carol: v2 готовы" || bad "собеседники не поднялись"
 P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOSEND_V2=bob@local:знакомство-$S" \
-  "PARVANE_AUTOFOLDER=Работа:bob@local")
+  "PARVANE_AUTOFOLDER=Работа:bob@local" "PARVANE_AUTOPATCH=contact-name|bob@local|Боб@12")
 wait_log "$L1" "v2: готов" 90 && ok "alice1: v2 готова" || bad "alice1: v2 не поднялась"
 wait_log "$BL" "входящее msg [0-9a-f-]+ \(alice@local\): знакомство-$S" 60 || bad "bob не получил текст alice1"
+wait_log "$L1" "входящее msg [0-9a-f-]+ \(carol@local\): привет-от-carol-$S" 150 || bad "alice1 не получила текст carol"
 wait_log "$L1" "AUTOFOLDER создал папку 'Работа'" 30 && ok "alice1: папка «Работа» с bob" || bad "alice1: папка не создана"
 stop_pid "$PB"; stop_pid "$PC"
 
@@ -34,6 +36,8 @@ P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)
 wait_linked "$L2" 150 && ok "alice2 привязана" || bad "alice2 не привязана"
 wait_log "$L2" "журнал личного состояния подключён" 90 || bad "alice2: журнал состояния не подключён"
 wait_log "$L2" "журнал состояния → папки" 60 && ok "alice2: папка пришла из журнала" || bad "alice2: папки нет"
+wait_log "$L2" "журнал состояния → контакты" 60 && ok "alice2: контакт bob пришёл из журнала" || bad "alice2: контакта нет"
+wait_log "$L2" "msg [0-9a-f-]+ \(carol@local\): привет-от-carol-$S" 60 || bad "alice2: чата с carol нет"
 sleep 3
 stop_pid "$P1"; stop_pid "$P2"
 

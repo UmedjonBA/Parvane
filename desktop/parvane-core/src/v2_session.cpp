@@ -3457,12 +3457,12 @@ json Session::stateAttach(const json &local) {
     }
     stateRekeyed_ = false;
     stateCarry_.reset();
-    if (readStateFile("state-v2-seeded").empty()) {
+    if (readStateFile("state-migrated") != "state.v2") { // прежняя отметка «1» — перенос в state.v1
         // spec 035: первый запуск на state.v2 — локальные данные (они же сведённый прежний журнал state.v1)
         // начальными объектами нового журнала; уже записанное другими устройствами не дублируется (те же ключи
         // объектов, регистры по полям)
         if (state_->apply(local.is_object() ? local : json::object())) {
-            writeStateFile("state-v2-seeded", "1");
+            writeStateFile("state-migrated", "state.v2");
             log("локальное состояние записано в журнал state.v2");
         } else {
             log("локальное состояние в журнал state.v2 не записано — повтор при следующем подключении");
