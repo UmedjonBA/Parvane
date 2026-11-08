@@ -349,3 +349,34 @@ async fn v2_group_access_matrix_live() {
 fn check(name: &str, got: Result<Vec<u64>, ErrorCode>, want: Result<Vec<u64>, ErrorCode>) -> Option<String> {
     (got != want).then(|| format!("{name}: ждали {want:?}, получили {got:?}"))
 }
+
+/// spec 035 T057 (FR-030): запись журнала группы с неизвестным полем верхнего уровня (клиент новее сервера)
+/// ложится в журнал и отдаётся участнику побайтно — пересборка из разобранной записи его теряла.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_group_entry_stored_as_received_live() {
+    let Some((stack, _nc)) = start().await else { return };
+    let addr = stack.gateway_tcp.clone();
+    let p = free_port();
+    tokio::task::spawn_blocking(move || {
+        let (owner_u, mem_u) = (format!("rw{p}@local"), format!("rm{p}@local"));
+        let mut owner = Device::register(&addr, &owner_u, "d1");
+        let mut mem = Device::register(&addr, &mem_u, "d1");
+        let perms = Permissions { send_messages: true, ..Default::default() };
+        let (g, r) = owner.client.group_create(GroupKind::Group, "Клуб садоводов", &[mem_u.clone()], perms).unwrap();
+        owner.exec(&r).expect("генезис");
+        let r = owner.client.group_change(&g.id, Change::SetInfo(gpb::SetInfo { name: "Клуб садоводов и огородников".into(), ..Default::default() })).unwrap();
+        let mut entry = parvane_protocol::codec::raw_field(&r.body, 1).unwrap().unwrap();
+        // Поле 15 `GroupStateEntry` — из схемы будущего (выдуманное значение)
+        prost::encoding::string::encode(15, &"будущее поле записи".to_string(), &mut entry);
+        let mut body = Vec::new();
+        parvane_protocol::codec::put_raw(1, &entry, &mut body);
+        owner.id.call("group.state.append", body).expect("запись с неизвестным полем принята");
+        let b = mem.id.call("group.state.sync", gpb::StateSyncRequest { group: Some(g.clone()), after_version: 0, ..Default::default() }.encode_to_vec()).unwrap();
+        let entries = parvane_protocol::codec::raw_repeated(&b, 1).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1], entry, "запись отдана побайтно, как пришла");
+        assert_eq!(gpb::StateSyncResponse::decode(b.as_slice()).unwrap().entries.len(), 2, "ответ разбирается");
+    })
+    .await
+    .unwrap();
+}

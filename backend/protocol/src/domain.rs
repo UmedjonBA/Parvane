@@ -701,6 +701,14 @@ impl ContainerAccess {
     }
 
     /// Применить запись журнала грантов ("grant", "revoke", "rotate" или "leave").
+    /// spec 035 (FR-030, T057): запись журнала грантов исходными байтами (как пришла) — то же, что `apply`;
+    /// хранить и пересылать вызывающий обязан `raw`. Возвращает разобранную запись и событие.
+    pub fn apply_raw(&mut self, raw: &[u8], resolve: KeyResolver, groups: Membership) -> Result<(SignedOp, GrantEvent)> {
+        let op: SignedOp = decode_checked(raw, Origin::Client)?;
+        let ev = self.apply(&op, resolve, groups)?;
+        Ok((op, ev))
+    }
+
     pub fn apply(&mut self, op: &SignedOp, resolve: KeyResolver, groups: Membership) -> Result<GrantEvent> {
         // op_type — из присланного тела; verify_op сверит его с подписью.
         let body: OpBody = decode_checked(&op.body, Origin::Client)?;

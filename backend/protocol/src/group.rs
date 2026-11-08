@@ -429,6 +429,20 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
     apply_with(state, entry, resolve, None)
 }
 
+/// spec 035 (FR-030, T057): запись журнала группы — исходными байтами, как пришла. Проверяет и применяет то же,
+/// что `apply_with`; вызывающий хранит и пересылает `raw`, а не пересобранную запись (неизвестное поле
+/// верхнего уровня `GroupStateEntry`/`SignedOp` пересборка потеряла бы). Возвращает разобранную запись и состояние.
+pub fn apply_raw(
+    state: Option<&GroupState>,
+    raw: &[u8],
+    resolve: &dyn Fn(&[u8; 32], u64) -> Option<SignerInfo>,
+    lookup: Option<&Lookup<'_>>,
+) -> Result<(GroupStateEntry, GroupState)> {
+    let entry: GroupStateEntry = crate::codec::decode_checked(raw, crate::limits::Origin::Client)?;
+    let next = apply_with(state, &entry, resolve, lookup)?;
+    Ok((entry, next))
+}
+
 /// Сведения о журналах устройств для записей после смены ника (spec 026).
 pub struct Lookup<'a> {
     /// Подписант по ключу, версии журнала и подсказке адреса: ключ устройства после смены ника есть в двух
