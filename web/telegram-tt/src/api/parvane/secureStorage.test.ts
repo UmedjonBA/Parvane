@@ -22,6 +22,7 @@ import {
   lockStorage, saveSecureSession, saveTrustSecret, SecureE2eStorage, secureStorageInternals, setStoragePin,
   unlockStorageWithPin,
 } from './secureStorage';
+import { LegacyE2eStorage } from './secureStorageLegacy';
 
 const USER = 'secure-storage@local';
 
@@ -37,17 +38,13 @@ describe('secure E2E storage', () => {
     await expect(storage.load()).resolves.toEqual({
       pickleKey: 'unique-secret', plaintext: 'sensitive state',
     });
-    const key = await get<CryptoKey>(
-      secureStorageInternals.keyId(USER),
-      secureStorageInternals.store,
-    );
-    const record = await get<{ ciphertext: ArrayBuffer }>(
-      secureStorageInternals.stateId(USER),
-      secureStorageInternals.store,
-    );
+    // spec 035: ключ устройства профиля лежит под non-extractable ключом WebCrypto
+    const id = await secureStorageInternals.profileIdOf(USER);
+    const key = await get<CryptoKey>(id!, secureStorageInternals.keysStore);
     expect(key?.extractable).toBe(false);
     await expect(crypto.subtle.exportKey('raw', key!)).rejects.toThrow();
-    expect(new TextDecoder().decode(record?.ciphertext)).not.toContain('sensitive state');
+    const raw = [...(await secureStorageInternals.rawRecords(USER)).values()].join('');
+    expect(raw).not.toContain(Buffer.from('sensitive state').toString('hex'));
   });
 
   it('binds ciphertext to the account identity', async () => {
@@ -62,7 +59,9 @@ describe('secure E2E storage', () => {
   it('fails closed when ciphertext outlives its protection key', async () => {
     const storage = await SecureE2eStorage.open(USER);
     await storage.save({ value: 'must not be reset silently' });
-    await del(secureStorageInternals.keyId(USER), secureStorageInternals.store);
+    const id = await secureStorageInternals.profileIdOf(USER);
+    await del(id!, secureStorageInternals.keysStore);
+    secureStorageInternals.forgetAll();
 
     await expect(SecureE2eStorage.open(USER)).rejects.toThrow('protection key is missing');
   });
@@ -127,6 +126,22 @@ describe('secure E2E storage batches (perf A6)', () => {
 });
 
 describe('secure E2E storage compatibility', () => {
+  it('a profile created before spec 035 is still served by the legacy store (until T115)', async () => {
+    const user = 'legacy-profile@local';
+    await SecureE2eStorage.clear(user);
+    const old = await LegacyE2eStorage.open(user);
+    await old.save({ engine: 'old' });
+    await old.saveRecord('m:1', { id: 1 });
+    secureStorageInternals.forgetAll();
+    const facade = await SecureE2eStorage.open(user);
+    expect(await facade.load()).toEqual({ engine: 'old' });
+    expect(await facade.loadRecord('m:1')).toEqual({ id: 1 });
+    await facade.saveRecord('m:2', { id: 2 });
+    expect(await (await LegacyE2eStorage.open(user)).loadRecord('m:2')).toEqual({ id: 2 });
+    expect(await secureStorageInternals.profileIdOf(user)).toBeUndefined();
+    await SecureE2eStorage.clear(user);
+  });
+
   it('keeps the legacy AAD for the state record so old profiles still decrypt', () => {
     const decoder = new TextDecoder();
     const state = decoder.decode(secureStorageInternals.additionalData('erin@local'));
@@ -148,10 +163,9 @@ describe('secure session secrets', () => {
     await saveSecureSession(USER2, 'jwt-1');
     expect(await loadTrustSecret(USER2)).toBe('trust-1');
     expect(await loadSecureSession(USER2)).toBe('jwt-1');
-    const record = await get<{ ciphertext: ArrayBuffer }>(
-      secureStorageInternals.recordId(USER2, 'trust-secret'), secureStorageInternals.store,
-    );
-    expect(new TextDecoder().decode(record?.ciphertext)).not.toContain('trust-1');
+    const raw = await secureStorageInternals.rawRecords(USER2);
+    expect(raw.has('trust-secret')).toBe(true);
+    expect(raw.get('trust-secret')).not.toContain(Buffer.from('trust-1').toString('hex'));
     await clearTrustSecret(USER2);
     await clearSecureSession(USER2);
     expect(await loadTrustSecret(USER2)).toBeUndefined();
@@ -167,7 +181,7 @@ describe('P-39: optional storage PIN', () => {
     await SecureE2eStorage.clear(USER3);
   });
 
-  it('re-keys state under a PIN-derived key, removes the IndexedDB key and requires unlock', async () => {
+  it('puts the DEK under a PIN-derived key, removes the device key record and requires unlock', async () => {
     const storage = await SecureE2eStorage.open(USER3);
     await storage.save({ pickleKey: 'pin-secret' });
     await saveSecureSession(USER3, 'jwt-pin');
@@ -176,13 +190,15 @@ describe('P-39: optional storage PIN', () => {
     await setStoragePin(USER3, '1234-pin-x');
     expect(await hasStoragePin(USER3)).toBe(true);
     expect(isStorageUnlocked(USER3)).toBe(true);
-    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeUndefined();
+    expect(await secureStorageInternals.hasDeviceRecord(USER3)).toBe(false);
     // Разблокировано в памяти: читается
     await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
     expect(await loadSecureSession(USER3)).toBe('jwt-pin');
 
     // «Перезагрузка»: без PIN хранилище закрыто
+    await secureStorageInternals.settled(USER3);
     lockStorage(USER3);
+    secureStorageInternals.forgetAll();
     expect(isStorageUnlocked(USER3)).toBe(false);
     await expect(SecureE2eStorage.open(USER3)).rejects.toThrow(/locked/);
     expect(await loadSecureSession(USER3)).toBeUndefined();
@@ -195,7 +211,7 @@ describe('P-39: optional storage PIN', () => {
     // Снятие PIN: обратно на IndexedDB-ключ, данные целы
     await setStoragePin(USER3, '');
     expect(await hasStoragePin(USER3)).toBe(false);
-    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeDefined();
+    expect(await secureStorageInternals.hasDeviceRecord(USER3)).toBe(true);
     await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
   });
 

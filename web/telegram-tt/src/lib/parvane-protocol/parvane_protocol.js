@@ -3651,6 +3651,385 @@ export class PvState {
 if (Symbol.dispose) PvState.prototype[Symbol.dispose] = PvState.prototype.free;
 
 /**
+ * Открытое хранилище профиля (одна вкладка).
+ */
+export class PvStore {
+    static __wrap(ptr) {
+        const obj = Object.create(PvStore.prototype);
+        obj.__wbg_ptr = ptr;
+        PvStoreFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        PvStoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_pvstore_free(ptr, 0);
+    }
+    /**
+     * P1 переноса поколения (смена DEK после установки PIN): пачка с корнем.
+     * @returns {any}
+     */
+    beginRotation() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_beginRotation(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Хост зафиксировал пачку.
+     * @param {number} batch_id
+     */
+    committed(batch_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_committed(retptr, this.__wbg_ptr, batch_id);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Хост не смог зафиксировать пачку.
+     * @param {number} batch_id
+     * @param {string} reason
+     */
+    failed(batch_id, reason) {
+        const ptr0 = passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.pvstore_failed(this.__wbg_ptr, batch_id, ptr0, len0);
+    }
+    /**
+     * Открыть запись по ключу носителя и значению.
+     * @param {string} key
+     * @param {Uint8Array} value
+     * @returns {Uint8Array}
+     */
+    open(key, value) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(key, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(value, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvstore_open(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v3 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Корень сменила другая вкладка: принять его (`ready` | `locked` | `too_new`).
+     * @param {Uint8Array} root
+     * @returns {string}
+     */
+    refreshRoot(root) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(root, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstore_refreshRoot(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Байты корня (для записи `root` вне пачки движка не нужны — тесты, сверка).
+     * @returns {Uint8Array}
+     */
+    rootBytes() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_rootBytes(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Сводка корня (JSON): поколения, чем обёрнуто, соль и итерации PIN.
+     * @returns {string}
+     */
+    rootInfo() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_rootInfo(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Прочитанное по `read` переноса: `keys[i]` → `values[i]` (Uint8Array).
+     * @param {number} read_id
+     * @param {Array<any>} keys
+     * @param {Array<any>} values
+     */
+    rotationLoaded(read_id, keys, values) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_rotationLoaded(retptr, this.__wbg_ptr, read_id, addHeapObject(keys), addHeapObject(values));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Следующее действие переноса: `{type: 'read', readId, prefix, after, limit}` | `{type: 'write', batch}` |
+     * `{type: 'continue'}` | `{type: 'done'}` | `{type: 'aborted', errors}`.
+     * @returns {any}
+     */
+    rotationNext() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_rotationNext(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Номер зафиксированной точки переноса (1–6) или 0.
+     * @returns {number}
+     */
+    rotationPoint() {
+        const ret = wasm.pvstore_rotationPoint(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Записей в пачке переноса (тесты).
+     * @param {number} n
+     */
+    setBatchLimit(n) {
+        wasm.pvstore_setBatchLimit(this.__wbg_ptr, n);
+    }
+    /**
+     * `ready` | `locked` | `too_new`.
+     * @returns {string}
+     */
+    state() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_state(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Забыть DEK.
+     */
+    storeLock() {
+        wasm.pvstore_storeLock(this.__wbg_ptr);
+    }
+    /**
+     * Снять PIN: обёртка ключом устройства — пачка только с корнем.
+     * @param {Uint8Array} device_key
+     * @returns {any}
+     */
+    storeRemovePin(device_key) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(device_key, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstore_storeRemovePin(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Установить/сменить PIN: обёртка `pin` (соль 16 байт, итерации, KEK хоста) вместо прежней — пачка только
+     * с корнем; записи данных не трогаются (FR-021).
+     * @param {Uint8Array} salt
+     * @param {number} iterations
+     * @param {Uint8Array} kek
+     * @returns {any}
+     */
+    storeSetPin(salt, iterations, kek) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(salt, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(kek, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvstore_storeSetPin(retptr, this.__wbg_ptr, ptr0, len0, iterations, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Разблокировать: ключом устройства (32 байта) либо KEK из PIN (32 байта, `pin = true`).
+     * @param {Uint8Array} key
+     * @param {boolean} pin
+     */
+    storeUnlock(key, pin) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(key, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstore_storeUnlock(retptr, this.__wbg_ptr, ptr0, len0, pin);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Разблокировать PIN-строкой (вывод PBKDF2 в движке — медленнее WebCrypto; тесты и запасной путь).
+     * @param {string} pin
+     */
+    storeUnlockPin(pin) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(pin, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstore_storeUnlockPin(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Обернуть DEK ключом устройства (новый профиль) — пачка только с корнем.
+     * @param {Uint8Array} device_key
+     * @returns {any}
+     */
+    storeWrapDevice(device_key) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(device_key, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvstore_storeWrapDevice(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Пачка записей (`kinds[i]`, `names[i]`, `values[i]`: Uint8Array) и удалений (`delKinds[i]`, `delNames[i]`).
+     * @param {Array<any>} kinds
+     * @param {Array<any>} names
+     * @param {Array<any>} values
+     * @param {Array<any>} del_kinds
+     * @param {Array<any>} del_names
+     * @returns {any}
+     */
+    write(kinds, names, values, del_kinds, del_names) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvstore_write(retptr, this.__wbg_ptr, addHeapObject(kinds), addHeapObject(names), addHeapObject(values), addHeapObject(del_kinds), addHeapObject(del_names));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+}
+if (Symbol.dispose) PvStore.prototype[Symbol.dispose] = PvStore.prototype.free;
+
+/**
  * Разобрать кадр сервера → объект {kind, …} (тела — Uint8Array).
  * @param {Uint8Array} bytes
  * @returns {any}
@@ -4330,6 +4709,30 @@ export function start() {
 }
 
 /**
+ * Открыть хранилище: байты корня (`root`) с носителя либо пусто — новый профиль (поколение 1, новый DEK;
+ * обёртку даёт `storeWrapDevice`). Существующее — заблокировано до `storeUnlock`.
+ * @param {Uint8Array} root
+ * @returns {PvStore}
+ */
+export function storeOpen(root) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(root, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.storeOpen(retptr, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        if (r2) {
+            throw takeObject(r1);
+        }
+        return PvStore.__wrap(r0);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
  * REPORT-1 (A0008-2): подтвердить авторство сообщения из жалобы — `proof` (из события) и `op_id`
  * (UUID-строка), автор и начало текста совпадают с подписанным; `group_hex` не пуст — и группа беседы. Возвращает JSON `{ok, root?, deviceId?}`.
  * @param {Uint8Array} proof
@@ -4466,7 +4869,15 @@ function __wbg_get_imports() {
         __wbg_getRandomValues_cc7f052a444bb2ce: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
+        __wbg_get_unchecked_6e0ad6d2a41b06f6: function(arg0, arg1) {
+            const ret = getObject(arg0)[arg1 >>> 0];
+            return addHeapObject(ret);
+        },
         __wbg_length_1f0964f4a5e2c6d8: function(arg0) {
+            const ret = getObject(arg0).length;
+            return ret;
+        },
+        __wbg_length_370319915dc99107: function(arg0) {
             const ret = getObject(arg0).length;
             return ret;
         },
@@ -4476,6 +4887,10 @@ function __wbg_get_imports() {
         },
         __wbg_new_32b398fb48b6d94a: function() {
             const ret = new Array();
+            return addHeapObject(ret);
+        },
+        __wbg_new_cd45aabdf6073e84: function(arg0) {
+            const ret = new Uint8Array(getObject(arg0));
             return addHeapObject(ret);
         },
         __wbg_new_da52cf8fe3429cb2: function() {
@@ -4589,6 +5004,9 @@ const PvHistoryFinalization = (typeof FinalizationRegistry === 'undefined')
 const PvStateFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvstate_free(ptr, 1));
+const PvStoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_pvstore_free(ptr, 1));
 
 function addHeapObject(obj) {
     if (heap_next === heap.length) heap.push(heap.length + 1);

@@ -723,6 +723,93 @@ export class PvState {
 }
 
 /**
+ * Открытое хранилище профиля (одна вкладка).
+ */
+export class PvStore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * P1 переноса поколения (смена DEK после установки PIN): пачка с корнем.
+     */
+    beginRotation(): any;
+    /**
+     * Хост зафиксировал пачку.
+     */
+    committed(batch_id: number): void;
+    /**
+     * Хост не смог зафиксировать пачку.
+     */
+    failed(batch_id: number, reason: string): void;
+    /**
+     * Открыть запись по ключу носителя и значению.
+     */
+    open(key: string, value: Uint8Array): Uint8Array;
+    /**
+     * Корень сменила другая вкладка: принять его (`ready` | `locked` | `too_new`).
+     */
+    refreshRoot(root: Uint8Array): string;
+    /**
+     * Байты корня (для записи `root` вне пачки движка не нужны — тесты, сверка).
+     */
+    rootBytes(): Uint8Array;
+    /**
+     * Сводка корня (JSON): поколения, чем обёрнуто, соль и итерации PIN.
+     */
+    rootInfo(): string;
+    /**
+     * Прочитанное по `read` переноса: `keys[i]` → `values[i]` (Uint8Array).
+     */
+    rotationLoaded(read_id: number, keys: Array<any>, values: Array<any>): void;
+    /**
+     * Следующее действие переноса: `{type: 'read', readId, prefix, after, limit}` | `{type: 'write', batch}` |
+     * `{type: 'continue'}` | `{type: 'done'}` | `{type: 'aborted', errors}`.
+     */
+    rotationNext(): any;
+    /**
+     * Номер зафиксированной точки переноса (1–6) или 0.
+     */
+    rotationPoint(): number;
+    /**
+     * Записей в пачке переноса (тесты).
+     */
+    setBatchLimit(n: number): void;
+    /**
+     * `ready` | `locked` | `too_new`.
+     */
+    state(): string;
+    /**
+     * Забыть DEK.
+     */
+    storeLock(): void;
+    /**
+     * Снять PIN: обёртка ключом устройства — пачка только с корнем.
+     */
+    storeRemovePin(device_key: Uint8Array): any;
+    /**
+     * Установить/сменить PIN: обёртка `pin` (соль 16 байт, итерации, KEK хоста) вместо прежней — пачка только
+     * с корнем; записи данных не трогаются (FR-021).
+     */
+    storeSetPin(salt: Uint8Array, iterations: number, kek: Uint8Array): any;
+    /**
+     * Разблокировать: ключом устройства (32 байта) либо KEK из PIN (32 байта, `pin = true`).
+     */
+    storeUnlock(key: Uint8Array, pin: boolean): void;
+    /**
+     * Разблокировать PIN-строкой (вывод PBKDF2 в движке — медленнее WebCrypto; тесты и запасной путь).
+     */
+    storeUnlockPin(pin: string): void;
+    /**
+     * Обернуть DEK ключом устройства (новый профиль) — пачка только с корнем.
+     */
+    storeWrapDevice(device_key: Uint8Array): any;
+    /**
+     * Пачка записей (`kinds[i]`, `names[i]`, `values[i]`: Uint8Array) и удалений (`delKinds[i]`, `delNames[i]`).
+     */
+    write(kinds: Array<any>, names: Array<any>, values: Array<any>, del_kinds: Array<any>, del_names: Array<any>): any;
+}
+
+/**
  * Разобрать кадр сервера → объект {kind, …} (тела — Uint8Array).
  */
 export function decodeFrame(bytes: Uint8Array): any;
@@ -855,6 +942,12 @@ export function splitSyncResponse(bytes: Uint8Array): any;
 export function start(): void;
 
 /**
+ * Открыть хранилище: байты корня (`root`) с носителя либо пусто — новый профиль (поколение 1, новый DEK;
+ * обёртку даёт `storeWrapDevice`). Существующее — заблокировано до `storeUnlock`.
+ */
+export function storeOpen(root: Uint8Array): PvStore;
+
+/**
  * REPORT-1 (A0008-2): подтвердить авторство сообщения из жалобы — `proof` (из события) и `op_id`
  * (UUID-строка), автор и начало текста совпадают с подписанным; `group_hex` не пуст — и группа беседы. Возвращает JSON `{ok, root?, deviceId?}`.
  */
@@ -878,6 +971,7 @@ export interface InitOutput {
     readonly __wbg_pvclient_free: (a: number, b: number) => void;
     readonly __wbg_pvhistory_free: (a: number, b: number) => void;
     readonly __wbg_pvstate_free: (a: number, b: number) => void;
+    readonly __wbg_pvstore_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
     readonly decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly decodeMethodResponse: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1070,6 +1164,25 @@ export interface InitOutput {
     readonly pvstate_sentGuard: (a: number, b: number) => void;
     readonly pvstate_snapshot: (a: number, b: number) => void;
     readonly pvstate_syncRequest: (a: number, b: number) => void;
+    readonly pvstore_beginRotation: (a: number, b: number) => void;
+    readonly pvstore_committed: (a: number, b: number, c: number) => void;
+    readonly pvstore_failed: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstore_open: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvstore_refreshRoot: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstore_rootBytes: (a: number, b: number) => void;
+    readonly pvstore_rootInfo: (a: number, b: number) => void;
+    readonly pvstore_rotationLoaded: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvstore_rotationNext: (a: number, b: number) => void;
+    readonly pvstore_rotationPoint: (a: number) => number;
+    readonly pvstore_setBatchLimit: (a: number, b: number) => void;
+    readonly pvstore_state: (a: number, b: number) => void;
+    readonly pvstore_storeLock: (a: number) => void;
+    readonly pvstore_storeRemovePin: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstore_storeSetPin: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvstore_storeUnlock: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvstore_storeUnlockPin: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstore_storeWrapDevice: (a: number, b: number, c: number, d: number) => void;
+    readonly pvstore_write: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly recoveryTgKeypair: (a: number) => void;
     readonly recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1077,6 +1190,7 @@ export interface InitOutput {
     readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly splitSyncResponse: (a: number, b: number, c: number) => void;
     readonly start: () => void;
+    readonly storeOpen: (a: number, b: number, c: number) => void;
     readonly verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly verifyServerDescriptor: (a: number, b: number, c: number) => void;
     readonly version: (a: number) => void;

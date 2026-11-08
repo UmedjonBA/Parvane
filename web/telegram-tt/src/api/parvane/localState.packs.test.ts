@@ -73,7 +73,8 @@ describe('C7-3: ключи наборов стикеров и GIF — не в lo
     await state.hydrate();
     state.saveStickerPacks([GIF, PACK]);
     expectNoSecrets();
-    expect(localStorage.getItem(KEY)).toContain('file-gif-1');
+    // spec 035 T046: зеркало вида — тоже не в localStorage, а в хранилище движка
+    expect(localStorage.getItem(KEY)).toBeFalsy();
     expect(state.loadStickerPacks()).toEqual([GIF, PACK]);
     await state.flushPackSecrets();
 

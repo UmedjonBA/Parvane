@@ -9,6 +9,9 @@ import type { HReadMark } from './v2/historyModel';
 import type { WireStoredMessage } from './wire';
 
 import { hasMediaContent, isAuthorHidden } from './forwardOptions';
+import {
+  forgetPersonal, hydratePersonal, personalGet, personalRemove, personalSet, renamePersonal, takeLegacyLocal,
+} from './personalStore';
 import { SecureE2eStorage } from './secureStorage';
 import { parseStickerRefs } from './stickerLists';
 import { newMessageId } from './wire';
@@ -141,6 +144,13 @@ export function createLocalState(deps: LocalStateDependencies) {
   let scheduledNextId = SCHEDULED_ID_BASE;
 
   const storageKey = (part: string) => `parvane:${part}:${deps.getStore().self}`;
+  // spec 035 T046 (PV-020): личные данные — в хранилище движка (`personalStore.ts`), чтение — из памяти после
+  // `hydrate()`; в localStorage остаются только служебные флаги (`statedirty`, `repair`)
+  const personal = {
+    getItem: (part: string) => personalGet(deps.getStore().self, part),
+    setItem: (part: string, value: string) => personalSet(deps.getStore().self, part, value),
+    removeItem: (part: string) => personalRemove(deps.getStore().self, part),
+  };
 
   // Журнал личного состояния (T098) слушает правки пользователя; запись
   // пришедшего из журнала (applyingJournal) слушателя не будит
@@ -265,6 +275,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Загрузить журнал и черновики (один раз на сессию) — с миграцией из
   // localStorage. Зовётся перед первым чтением (sync/fetchChats).
   async function hydrate() {
+    await hydratePersonal(deps.getStore().self);
     if (isJournalLoaded && draftsCache && packSecrets) return;
     const storage = await secureStorage();
     if (!storage) {
@@ -301,7 +312,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       if (migrated.length) await storage.saveRecords(migrated.map((m) => [`${JOURNAL_PREFIX}${m.id}`, m]));
       if (trimmed.length) await storage.deleteRecords(trimmed.map((id) => `${JOURNAL_PREFIX}${id}`));
       if (legacyRecord.length) await storage.deleteRecord('journal').catch(() => undefined);
-      if (legacyLocal.length) localStorage.removeItem(storageKey('hist'));
+      if (legacyLocal.length) takeLegacyLocal(deps.getStore().self, 'hist');
     }
     // P-44: очередь запланированных (текст сообщений) — тоже в шифрованном
     // хранилище, с миграцией из localStorage
@@ -313,7 +324,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       scheduledNextId = Math.max(scheduledNextId, ...scheduledQueue.map((entry) => entry.id + 1));
       if (legacy.length) {
         await storage.saveRecord('scheduled', scheduledQueue.filter((entry) => !entry.params));
-        localStorage.removeItem(storageKey('scheduled'));
+        takeLegacyLocal(deps.getStore().self, 'scheduled');
       }
     }
     if (!draftsCache) {
@@ -323,7 +334,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       if (Object.keys(legacy).length) {
         draftsCache = { ...legacy, ...draftsCache };
         await storage.saveRecord('drafts', draftsCache);
-        localStorage.removeItem(storageKey('drafts'));
+        takeLegacyLocal(deps.getStore().self, 'drafts');
       }
     }
   }
@@ -413,7 +424,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // этого пир, известный по составу общей группы, всплывал бы пустым чатом
   function loadDeletedChats(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('deletedchats')) || '[]');
+      return JSON.parse(personal.getItem('deletedchats') || '[]');
     } catch {
       return [];
     }
@@ -421,7 +432,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function markChatDeleted(address: string) {
     const list = loadDeletedChats();
-    if (!list.includes(address)) localStorage.setItem(storageKey('deletedchats'), JSON.stringify([...list, address]));
+    if (!list.includes(address)) personal.setItem('deletedchats', JSON.stringify([...list, address]));
   }
 
   // Граница очистки чата «у себя» (T145): адрес → время (мс), не позже
@@ -429,7 +440,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // остальные свои устройства (в v1 — нотис `cleared` с id сообщений)
   function loadClearedUntil(): Record<string, number> {
     try {
-      const map = JSON.parse(localStorage.getItem(storageKey('cleareduntil')) || '{}') as Record<string, number>;
+      const map = JSON.parse(personal.getItem('cleareduntil') || '{}') as Record<string, number>;
       return map && typeof map === 'object' ? map : {};
     } catch {
       return {};
@@ -442,7 +453,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     if ((map[address] || 0) >= untilMs) return false;
     map[address] = untilMs;
     try {
-      localStorage.setItem(storageKey('cleareduntil'), JSON.stringify(map));
+      personal.setItem('cleareduntil', JSON.stringify(map));
     } catch {
       // Квота/приватный режим: граница живёт до перезагрузки
     }
@@ -452,7 +463,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   function unmarkChatDeleted(address: string) {
     const list = loadDeletedChats();
     if (list.includes(address)) {
-      localStorage.setItem(storageKey('deletedchats'), JSON.stringify(list.filter((item) => item !== address)));
+      personal.setItem('deletedchats', JSON.stringify(list.filter((item) => item !== address)));
     }
   }
 
@@ -521,7 +532,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       if (!storage) return undefined;
       return storage.saveRecord('scheduled', persistable).then(() => {
         try {
-          localStorage.removeItem(storageKey('scheduled'));
+          takeLegacyLocal(deps.getStore().self, 'scheduled');
         } catch {
           // приватный режим
         }
@@ -799,14 +810,14 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function loadPeerTtl(): Record<string, number> {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('ttl')) || '{}');
+      return JSON.parse(personal.getItem('ttl') || '{}');
     } catch {
       return {};
     }
   }
 
   function savePeerTtl(map: Record<string, number>) {
-    localStorage.setItem(storageKey('ttl'), JSON.stringify(map));
+    personal.setItem('ttl', JSON.stringify(map));
   }
 
   // Таймеры TTL: setTimeout переполняется на ~24.8 сутках (срабатывал сразу
@@ -841,14 +852,14 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function loadBlocked(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('blocked')) || '[]');
+      return JSON.parse(personal.getItem('blocked') || '[]');
     } catch {
       return [];
     }
   }
 
   function saveBlocked(list: string[]) {
-    localStorage.setItem(storageKey('blocked'), JSON.stringify(list));
+    personal.setItem('blocked', JSON.stringify(list));
     notifyChange('blocked');
   }
 
@@ -859,14 +870,14 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Явно добавленные контакты (адреса) — телефонной книги у Parvane нет
   function loadContacts(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('contacts')) || '[]');
+      return JSON.parse(personal.getItem('contacts') || '[]');
     } catch {
       return [];
     }
   }
 
   function saveContacts(list: string[]) {
-    localStorage.setItem(storageKey('contacts'), JSON.stringify(list));
+    personal.setItem('contacts', JSON.stringify(list));
     notifyChange('contacts');
   }
 
@@ -874,7 +885,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // было (null) — показываются первые встроенные, как раньше
   function loadStickerRefs(kind: 'favestickers' | 'recentstickers'): StickerRef[] | undefined {
     try {
-      const raw = localStorage.getItem(storageKey(kind));
+      const raw = personal.getItem(kind);
       // eslint-disable-next-line no-null/no-null -- getItem отдаёт null, если записи нет
       return raw === null ? undefined : parseStickerRefs(JSON.parse(raw));
     } catch {
@@ -884,7 +895,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveStickerRefs(kind: 'favestickers' | 'recentstickers', refs: StickerRef[]) {
     try {
-      localStorage.setItem(storageKey(kind), JSON.stringify(refs));
+      personal.setItem(kind, JSON.stringify(refs));
     } catch {
       // квота — список живёт до перезагрузки
     }
@@ -893,7 +904,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Порядок наборов стикеров («Динамический порядок наборов», B12): id наборов, первым — последний отправленный
   function loadStickerSetOrder(): string[] {
     try {
-      const raw = JSON.parse(localStorage.getItem(storageKey('stickersetorder')) || '[]') as unknown;
+      const raw = JSON.parse(personal.getItem('stickersetorder') || '[]') as unknown;
       return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
     } catch {
       return [];
@@ -902,7 +913,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveStickerSetOrder(order: string[]) {
     try {
-      localStorage.setItem(storageKey('stickersetorder'), JSON.stringify(order));
+      personal.setItem('stickersetorder', JSON.stringify(order));
     } catch {
       // квота — порядок живёт до перезагрузки
     }
@@ -911,7 +922,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Своё имя контакта и заметка (CONTACT-1) по адресу; между своими устройствами — журналом (`contacts`)
   function loadContactInfo(): Record<string, LocalContactInfo> {
     try {
-      const map = JSON.parse(localStorage.getItem(storageKey('contactinfo')) || '{}') as unknown;
+      const map = JSON.parse(personal.getItem('contactinfo') || '{}') as unknown;
       return map && typeof map === 'object' && !Array.isArray(map) ? map as Record<string, LocalContactInfo> : {};
     } catch {
       return {};
@@ -919,34 +930,34 @@ export function createLocalState(deps: LocalStateDependencies) {
   }
 
   function saveContactInfo(map: Record<string, LocalContactInfo>) {
-    localStorage.setItem(storageKey('contactinfo'), JSON.stringify(map));
+    personal.setItem('contactinfo', JSON.stringify(map));
     notifyChange('contacts');
   }
 
   function loadNonContacts(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('noncontacts')) || '[]');
+      return JSON.parse(personal.getItem('noncontacts') || '[]');
     } catch {
       return [];
     }
   }
 
   function saveNonContacts(list: string[]) {
-    localStorage.setItem(storageKey('noncontacts'), JSON.stringify(list));
+    personal.setItem('noncontacts', JSON.stringify(list));
   }
 
   // «Отметить непрочитанным»: адреса чатов с ручной пометкой; между своими
   // устройствами — журналом личного состояния (`unread_marks`)
   function loadUnreadMarks(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('unreadpeers')) || '[]');
+      return JSON.parse(personal.getItem('unreadpeers') || '[]');
     } catch {
       return [];
     }
   }
 
   function saveUnreadMarks(addresses: string[]) {
-    localStorage.setItem(storageKey('unreadpeers'), JSON.stringify(addresses));
+    personal.setItem('unreadpeers', JSON.stringify(addresses));
     notifyChange('unread');
   }
 
@@ -954,8 +965,8 @@ export function createLocalState(deps: LocalStateDependencies) {
   // только в памяти) — переносятся один раз, когда чаты уже известны
   function takeLegacyUnreadMarks(): string[] {
     try {
-      const ids = JSON.parse(localStorage.getItem(storageKey('unreadmarks')) || '[]') as string[];
-      localStorage.removeItem(storageKey('unreadmarks'));
+      const ids = JSON.parse(personal.getItem('unreadmarks') || '[]') as string[];
+      personal.removeItem('unreadmarks');
       return Array.isArray(ids) ? ids : [];
     } catch {
       return [];
@@ -964,7 +975,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function loadQuickReaction(): LocalQuickReaction | undefined {
     try {
-      const raw = localStorage.getItem(storageKey('quickreaction'));
+      const raw = personal.getItem('quickreaction');
       const value = raw ? JSON.parse(raw) as LocalQuickReaction : undefined;
       return value?.emoji || value?.documentId ? value : undefined;
     } catch {
@@ -974,9 +985,9 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveQuickReaction(reaction: LocalQuickReaction | undefined) {
     if (reaction) {
-      localStorage.setItem(storageKey('quickreaction'), JSON.stringify(reaction));
+      personal.setItem('quickreaction', JSON.stringify(reaction));
     } else {
-      localStorage.removeItem(storageKey('quickreaction'));
+      personal.removeItem('quickreaction');
     }
     notifyChange('reaction');
   }
@@ -987,7 +998,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // hydrate(). Записанное до hydrate() держится в `pendingPackSecrets` и сводится с загруженным
   function loadStickerPackMirror(): LocalStickerPack[] {
     try {
-      const list = JSON.parse(localStorage.getItem(storageKey('stickerpacks')) || '[]') as unknown;
+      const list = JSON.parse(personal.getItem('stickerpacks') || '[]') as unknown;
       return Array.isArray(list)
         ? (list as LocalStickerPack[]).filter((p) => typeof p?.set_id === 'string' && p.ref?.file_id)
         : [];
@@ -998,7 +1009,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function writeStickerPackMirror(packs: LocalStickerPack[]) {
     try {
-      localStorage.setItem(storageKey('stickerpacks'), JSON.stringify(packs.map(stripPackSecret)));
+      personal.setItem('stickerpacks', JSON.stringify(packs.map(stripPackSecret)));
     } catch {
       // Квота: запись уйдёт в журнал из памяти вкладки, пока она жива
     }
@@ -1091,7 +1102,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // переживает перезагрузку
   function loadPendingReceipts(): Record<string, string[]> {
     try {
-      const map = JSON.parse(localStorage.getItem(storageKey('receipts')) || '{}') as unknown;
+      const map = JSON.parse(personal.getItem('receipts') || '{}') as unknown;
       return map && typeof map === 'object' && !Array.isArray(map) ? map as Record<string, string[]> : {};
     } catch {
       return {};
@@ -1100,8 +1111,8 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function savePendingReceipts(map: Record<string, string[]>) {
     try {
-      if (Object.keys(map).length) localStorage.setItem(storageKey('receipts'), JSON.stringify(map));
-      else localStorage.removeItem(storageKey('receipts'));
+      if (Object.keys(map).length) personal.setItem('receipts', JSON.stringify(map));
+      else personal.removeItem('receipts');
     } catch {
       // квота — повтор живёт до перезагрузки
     }
@@ -1143,7 +1154,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // умеет отзыв — без памяти каждая сессия плодила бы новую ссылку
   function loadInviteLinks(): Record<string, { link: string; date: number }> {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('invites')) || '{}');
+      return JSON.parse(personal.getItem('invites') || '{}');
     } catch {
       return {};
     }
@@ -1151,7 +1162,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveInviteLinks(map: Record<string, { link: string; date: number }>) {
     try {
-      localStorage.setItem(storageKey('invites'), JSON.stringify(map));
+      personal.setItem('invites', JSON.stringify(map));
     } catch {
       // квота — ссылка останется в памяти сессии
     }
@@ -1181,14 +1192,14 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function loadFolders(): { id: number; [key: string]: unknown }[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('folders')) || '[]');
+      return JSON.parse(personal.getItem('folders') || '[]');
     } catch {
       return [];
     }
   }
 
   function saveFolders(folders: { id: number; [key: string]: unknown }[]) {
-    localStorage.setItem(storageKey('folders'), JSON.stringify(folders));
+    personal.setItem('folders', JSON.stringify(folders));
     notifyChange('folders');
   }
 
@@ -1196,7 +1207,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Хранится отдельно от списка папок (их записи журнала не трогаются); в журнал уходит как id 0 в folder_order.
   function loadAllFolderIndex(): number {
     try {
-      const value = Number(localStorage.getItem(storageKey('folders_all_index')) || '0');
+      const value = Number(personal.getItem('folders_all_index') || '0');
       return Number.isInteger(value) && value > 0 ? value : 0;
     } catch {
       return 0;
@@ -1205,7 +1216,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveAllFolderIndex(index: number) {
     try {
-      localStorage.setItem(storageKey('folders_all_index'), String(Math.max(0, Math.floor(index))));
+      personal.setItem('folders_all_index', String(Math.max(0, Math.floor(index))));
     } catch {
       // квота — переживём
     }
@@ -1241,7 +1252,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Закреплённые чаты (адреса пиров, порядок = порядок пина) и архив
   function loadPinned(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('pinned')) || '[]');
+      return JSON.parse(personal.getItem('pinned') || '[]');
     } catch {
       return [];
     }
@@ -1250,17 +1261,17 @@ export function createLocalState(deps: LocalStateDependencies) {
   function setPinned(address: string, shouldPin: boolean) {
     const pinned = loadPinned().filter((a) => a !== address);
     if (shouldPin) pinned.unshift(address);
-    localStorage.setItem(storageKey('pinned'), JSON.stringify(pinned));
+    personal.setItem('pinned', JSON.stringify(pinned));
     notifyChange('pinned');
   }
 
   function savePinnedList(list: string[]) {
-    localStorage.setItem(storageKey('pinned'), JSON.stringify(list));
+    personal.setItem('pinned', JSON.stringify(list));
   }
 
   function loadArchived(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('archived')) || '[]');
+      return JSON.parse(personal.getItem('archived') || '[]');
     } catch {
       return [];
     }
@@ -1269,39 +1280,39 @@ export function createLocalState(deps: LocalStateDependencies) {
   function setArchived(address: string, shouldArchive: boolean) {
     const archived = loadArchived().filter((a) => a !== address);
     if (shouldArchive) archived.push(address);
-    localStorage.setItem(storageKey('archived'), JSON.stringify(archived));
+    personal.setItem('archived', JSON.stringify(archived));
     notifyChange('archived');
   }
 
   function saveArchivedList(list: string[]) {
-    localStorage.setItem(storageKey('archived'), JSON.stringify(list));
+    personal.setItem('archived', JSON.stringify(list));
   }
 
   // Notify-настройки чатов (mute/превью) по адресу пира/группы
   function loadNotifyExceptions(): Record<string, Record<string, unknown>> {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('notify')) || '{}');
+      return JSON.parse(personal.getItem('notify') || '{}');
     } catch {
       return {};
     }
   }
 
   function saveNotifyExceptions(map: Record<string, Record<string, unknown>>) {
-    localStorage.setItem(storageKey('notify'), JSON.stringify(map));
+    personal.setItem('notify', JSON.stringify(map));
     notifyChange('notify');
   }
 
   // Дефолты уведомлений по типам чатов (users/groups/channels)
   function loadNotifyDefaults(): Record<string, Record<string, unknown>> {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('notifydefaults')) || '{}');
+      return JSON.parse(personal.getItem('notifydefaults') || '{}');
     } catch {
       return {};
     }
   }
 
   function saveNotifyDefaults(map: Record<string, Record<string, unknown>>) {
-    localStorage.setItem(storageKey('notifydefaults'), JSON.stringify(map));
+    personal.setItem('notifydefaults', JSON.stringify(map));
     notifyChange('notify');
   }
 
@@ -1320,6 +1331,7 @@ export function createLocalState(deps: LocalStateDependencies) {
         || DEVICE_PERSONAL_PREFIXES.some((prefix) => key.startsWith(prefix)))) keys.push(key);
     }
     keys.forEach((key) => localStorage.removeItem(key));
+    forgetPersonal(user);
     resetSecureCaches();
     void SecureE2eStorage.clearRecords(user).catch(() => undefined);
   }
@@ -1328,7 +1340,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // стор сводит адреса цепочки к одному id
   function loadRenames(): [string, string][] {
     try {
-      const list = JSON.parse(localStorage.getItem(storageKey('renames')) || '[]');
+      const list = JSON.parse(personal.getItem('renames') || '[]');
       return Array.isArray(list) ? list.filter((p): p is [string, string] => Array.isArray(p)
         && typeof p[0] === 'string' && typeof p[1] === 'string') : [];
     } catch {
@@ -1338,20 +1350,21 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   // `owner` — чей список (по умолчанию текущий пользователь; при своей смене ника — новый адрес)
   function saveRename(oldAddress: string, newAddress: string, owner?: string) {
-    const key = owner ? `parvane:renames:${owner}` : storageKey('renames');
+    const user = owner || deps.getStore().self;
     let list: [string, string][];
     try {
-      list = (JSON.parse(localStorage.getItem(key) || '[]') as [string, string][])
+      list = (JSON.parse(personalGet(user, 'renames') || '[]') as [string, string][])
         .filter(([from]) => from !== oldAddress);
     } catch {
       list = [];
     }
     list.push([oldAddress, newAddress]);
-    localStorage.setItem(key, JSON.stringify(list));
+    personalSet(user, 'renames', JSON.stringify(list));
   }
 
   // Своя смена ника: записи localStorage `parvane:<что>:<прежний адрес>` — под новым адресом
   function moveUserData(oldUser: string, newUser: string) {
+    renamePersonal(oldUser, newUser);
     const suffix = `:${oldUser}`;
     const moves: [string, string][] = [];
     for (let i = 0; i < localStorage.length; i++) {

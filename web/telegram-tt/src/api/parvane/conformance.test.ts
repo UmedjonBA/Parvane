@@ -2214,8 +2214,12 @@ describe('RENAME-1: смена ника — журнал прежнего адр
       .forEach((f) => expect(controller).toContain(f));
     expect(controller).toMatch(/'renamed'\) await followPeerRename\(user, verdict\)/);
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('registerUserRename(');
-    expect(readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts'))
-      .toContain('export async function migrateStorageUser(');
+    // spec 035 T047: хранилище под `store_id` — при смене ника переносится только указатель «адрес → профиль»
+    const secure = readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts');
+    expect(secure).toContain('async function renameIn(ctx: Ctx, oldUser: string, newUser: string) {');
+    expect(secure).not.toContain('export async function migrateStorageUser(');
+    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
+      .toContain('await renameStorageUser(oldAddress, newAddress);');
     expect(r.clients.web).toContain('e2e_web_rename.mjs');
   });
 

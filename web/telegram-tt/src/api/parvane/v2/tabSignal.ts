@@ -44,3 +44,34 @@ export function createTabSignal(self: () => string, onSignal: (kind: JournalKind
     },
   };
 }
+
+// spec 035 T045 (contracts/storage.md, FR-027): события хранилища движка между вкладками одного профиля. Смена
+// обёртки DEK (`storage-wrap-changed`: установка/смена/снятие PIN, начало переноса поколения) и переключение
+// поколения (`storage-generation-switched`) — остальные вкладки перечитывают корень до следующей записи;
+// блокировка (`storage-locked`) — забывают DEK. Канал — по профилю хранилища, не по адресу.
+export type StorageSignal = 'storage-wrap-changed' | 'storage-locked' | 'storage-generation-switched';
+
+const STORAGE_SIGNALS: StorageSignal[] = ['storage-wrap-changed', 'storage-locked', 'storage-generation-switched'];
+const STORAGE_CHANNEL_PREFIX = 'parvane-store:';
+
+export function createStorageSignal(profile: string, tab: string, onSignal: (kind: StorageSignal) => void) {
+  const channel = typeof BroadcastChannel === 'undefined'
+    ? undefined
+    : new BroadcastChannel(`${STORAGE_CHANNEL_PREFIX}${profile}`);
+  if (channel) {
+    channel.onmessage = (event: MessageEvent<{ kind?: StorageSignal; tab?: string }>) => {
+      const { kind, tab: from } = event.data || {};
+      if (kind && STORAGE_SIGNALS.includes(kind) && from !== tab) onSignal(kind);
+    };
+  }
+  return {
+    post: (kind: StorageSignal) => {
+      try {
+        channel?.postMessage({ kind, tab });
+      } catch {
+        // канал закрыт — вкладка сверит корень перед следующей записью
+      }
+    },
+    close: () => channel?.close(),
+  };
+}

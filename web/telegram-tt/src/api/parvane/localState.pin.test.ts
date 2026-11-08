@@ -16,6 +16,7 @@ type PersonalModule = {
   saveGroupCache?: (user: string, info: unknown, isListed: boolean) => void;
   loadGroupCache?: (user: string) => { name?: string }[];
   flushPersonal?: () => Promise<void>;
+  forgetPersonal?: (user: string) => void;
 };
 
 const values = new Map<string, string>();
@@ -79,6 +80,7 @@ describe('PV-020: личные данные не в localStorage', () => {
 
     // Перезапуск: читается из хранилища движка
     await personal!.flushPersonal?.();
+    personal!.forgetPersonal?.(SELF);
     (secureStorageInternals as unknown as { forgetAll?: () => void }).forgetAll?.();
     const again = makeState();
     await again.hydrate();

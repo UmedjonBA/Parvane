@@ -83,24 +83,18 @@ export class StoreIdb {
       const range = reads.after && reads.after >= reads.prefix
         ? IDBKeyRange.bound(reads.after, upper, true, false)
         : IDBKeyRange.bound(reads.prefix, upper, false, false);
-      await new Promise<void>((resolve, reject) => {
-        const cur = store.openCursor(range);
-        cur.onerror = () => reject(cur.error);
-        cur.onsuccess = () => {
-          const c = cur.result;
-          if (!c) {
-            resolve();
-            return;
-          }
-          const key = c.key as string;
-          if (!key.startsWith(reads.prefix) || (reads.limit !== 0 && out.length >= reads.limit)) {
-            resolve();
-            return;
-          }
-          out.push({ key, value: asBytes(c.value) });
-          c.continue();
-        };
-      });
+      // Ключи и значения диапазона двумя запросами одной транзакции, а не курсором по записи (spec 035: чтение
+      // 20 000 записей курсором шло секунды)
+      const count = reads.limit !== 0 ? Math.max(0, reads.limit - out.length) : undefined;
+      if (count !== 0) {
+        const [keys, values] = await Promise.all([
+          request(store.getAllKeys(range, count)), request(store.getAll(range, count)),
+        ]);
+        keys.forEach((k, i) => {
+          const key = k as string;
+          if (key.startsWith(reads.prefix)) out.push({ key, value: asBytes(values[i]) });
+        });
+      }
     }
     return out;
   }
@@ -111,6 +105,14 @@ export class StoreIdb {
     const store = tx.objectStore(RECORDS);
     const [keys, values] = await Promise.all([request(store.getAllKeys()), request(store.getAll())]);
     return keys.map((k, i) => ({ key: k as string, value: asBytes(values[i]) }));
+  }
+
+  // Стереть всё содержимое одной транзакцией («стереть данные этого устройства», выход).
+  async clearAll(): Promise<void> {
+    const tx = this.db.transaction(RECORDS, 'readwrite');
+    const finished = done(tx);
+    tx.objectStore(RECORDS).clear();
+    await finished;
   }
 
   // Граница движка — proto3-JSON `parvane.engine.v1.StoreBatch`.

@@ -102,6 +102,7 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { buildOldLangPack } from './oldLangPack';
+import { hydratePersonal } from './personalStore';
 import { PollStore } from './polls';
 import { savePrivacySetting } from './privacySave';
 import { isCurrentAvatarDeleted } from './profilePhoto';
@@ -121,7 +122,8 @@ import {
   verifyGifBytes,
 } from './savedGifJournal';
 import {
-  clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, migrateStorageUser,
+  clearSecureSession, getStorageMigration, hasStoragePin, isStorageUnlocked, loadSecureSession, onStorageLocked,
+  renameStorageUser,
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
@@ -1583,7 +1585,20 @@ function logDebug(message: string) {
 // P-39: хранилище под PIN — спрашиваем PIN до открытия E2E/сессии.
 // Минимальный UI: нативный prompt (3 попытки); при отказе хранилище остаётся
 // закрытым — E2E и сохранённая сессия недоступны до перезагрузки
+// spec 035 T045: другая вкладка установила PIN или сменила ключ поколением — у этой вкладки нет нового DEK, писать
+// ей нельзя. Перезагрузка спросит PIN (ensureStorageUnlocked) и откроет хранилище заново
+onStorageLocked((user) => {
+  if (user !== store.self || typeof window === 'undefined') return;
+  window.location.reload();
+});
+
 async function ensureStorageUnlocked(user: string) {
+  await promptStorageUnlock(user);
+  // spec 035 T046: личные данные (контакты, блокировки, папки…) — в память до первого чтения
+  await hydratePersonal(user).catch(() => undefined);
+}
+
+async function promptStorageUnlock(user: string) {
   if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return;
   const prompts = buildOldLangPack('en');
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1617,7 +1632,8 @@ async function moveAccountLocal(oldAddress: string, newAddress: string) {
   localState.moveUserData(oldAddress, newAddress);
   localState.saveRename(oldAddress, newAddress, newAddress);
   try {
-    await migrateStorageUser(oldAddress, newAddress);
+    // spec 035 T047: записи под `store_id` профиля — переносится только указатель «адрес → профиль»
+    await renameStorageUser(oldAddress, newAddress);
   } catch (e) {
     logDebug(`хранилище не перенесено на новый адрес: ${String(e)}`);
   }
@@ -4448,13 +4464,19 @@ const methods = {
     if (!store.self) return undefined;
     try {
       await ensureStorageUnlocked(store.self);
+      // spec 035: смена обёртки DEK одной транзакцией; смена DEK поколением идёт фоном (ход — parvaneGetStorageMigration)
       await setStoragePin(store.self, pin);
-      if (!pin) lockStorage(store.self);
       return true;
     } catch (err) {
       logDebug(`PIN хранилища: ${String(err)}`);
       return undefined;
     }
+  },
+
+  // spec 035 T044: ход фоновой смены ключа хранилища после установки PIN (экран хода в настройках)
+  parvaneGetStorageMigration() {
+    if (!store.self) return undefined;
+    return getStorageMigration(store.self);
   },
 
   /** Ошибка — ключ словаря с причиной (`ParvaneChangePassword*`), пусто — причина неизвестна. */
