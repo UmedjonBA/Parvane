@@ -234,6 +234,16 @@ public:
                                          bool requiresApproval);
     // Вступление по ссылке v2 → запрос group.join. Бросает.
     [[nodiscard]] json groupJoin(const std::string &url);
+    // spec 035 (PV-006): журнал частной группы по ссылке до вступления — запрос group.state.sync с доказательством
+    // знания секрета ссылки (url — ссылка целиком). Бросает.
+    [[nodiscard]] json groupSyncByLink(const std::string &url, const std::string &domain, const std::string &groupHex,
+                                       std::uint64_t afterVersion, std::int64_t tsMs) const;
+    // spec 035 (PV-005): новое фото группы → запрос SetInfo с avatar_key_id (keyB64 "" — открытое фото, fileId "" —
+    // снять фото). Бросает.
+    [[nodiscard]] json groupSetPhoto(const std::string &groupHex, const std::string &fileId,
+                                     const std::string &avatarDomain, const std::string &keyB64);
+    // После смены фото (журнал перечитан) и новой эпохи → {"content": GroupAvatarKey | null, "requests": [...]}.
+    [[nodiscard]] json groupPhotoFollowups(const std::string &groupHex, const std::vector<std::string> &links);
     // Устройства пользователя по журналу → {"v2":[…],"legacy":[…]}.
     // + "legacySet" (список v1-устройств публиковался) и "legacyKeys"
     // ([{deviceId, identity, signing}] — подписанный список, FR-058).

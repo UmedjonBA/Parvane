@@ -252,15 +252,6 @@ pub unsafe extern "C" fn pv_client_export(c: *mut PvClient, key: *const u8, key_
     })
 }
 
-/// Импорт Olm-аккаунта v1 (JSON-pickle parvane-e2e).
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_import_v1_account(c: *mut PvClient, pickle_json: *const c_char, err: *mut *mut c_char) -> bool {
-    guard(err, false, || {
-        let c = c.as_mut().ok_or_else(bad_arg)?;
-        c.inner.import_v1_account_json(str_arg(pickle_json).ok_or_else(bad_arg)?).map(|_| true)
-    })
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_create_identity(c: *mut PvClient, otk: usize, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || {
@@ -284,15 +275,6 @@ pub unsafe extern "C" fn pv_client_join_with_grant(c: *mut PvClient, material: *
     guard(err, ptr::null_mut(), || {
         let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
         let r: Result<String, String> = c.join_with_grant(str_arg(material).ok_or_else(bad_arg)?, otk);
-        r.map(cstring)
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_otk_request(c: *mut PvClient, n: usize, err: *mut *mut c_char) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        let r: Result<String, String> = Ok(c.otk_request(n));
         r.map(cstring)
     })
 }
@@ -809,6 +791,69 @@ pub unsafe extern "C" fn pv_client_group_join(c: *mut PvClient, url: *const c_ch
     })
 }
 
+/// spec 035 (PV-006): журнал частной группы по ссылке до вступления — запрос `group.state.sync` с доказательством
+/// знания секрета ссылки (JSON запроса, как у прочих `pv_client_group_*`).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_group_sync_by_link(
+    c: *const PvClient,
+    url: *const c_char,
+    domain: *const c_char,
+    group_hex: *const c_char,
+    after_version: u64,
+    ts_ms: i64,
+    err: *mut *mut c_char,
+) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
+        c.group_sync_by_link(
+            str_arg(url).ok_or_else(bad_arg)?,
+            str_arg(domain).ok_or_else(bad_arg)?,
+            str_arg(group_hex).ok_or_else(bad_arg)?,
+            after_version,
+            ts_ms,
+        )
+        .map(cstring)
+    })
+}
+
+/// spec 035 (PV-005, GPHOTO-1): новое фото группы → JSON запроса `SetInfo` с `avatar_key_id`; `key_b64` — секрет фото
+/// частной группы ("" — открытое фото), пустой `file_id` — снять фото.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_group_set_photo(
+    c: *mut PvClient,
+    group_hex: *const c_char,
+    file_id: *const c_char,
+    avatar_domain: *const c_char,
+    key_b64: *const c_char,
+    err: *mut *mut c_char,
+) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        c.group_set_photo(
+            str_arg(group_hex).ok_or_else(bad_arg)?,
+            str_arg(file_id).ok_or_else(bad_arg)?,
+            str_arg(avatar_domain).unwrap_or(""),
+            str_arg(key_b64).unwrap_or(""),
+        )
+        .map(cstring)
+    })
+}
+
+/// После смены фото и новой эпохи: `{"content": GroupAvatarKey | null, "requests": [InviteAvatarWrap…]}`
+/// (`links_json` — ссылки группы целиком).
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_group_photo_followups(
+    c: *mut PvClient,
+    group_hex: *const c_char,
+    links_json: *const c_char,
+    err: *mut *mut c_char,
+) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
+        c.group_photo_followups(str_arg(group_hex).ok_or_else(bad_arg)?, str_arg(links_json).unwrap_or("")).map(cstring)
+    })
+}
+
 /// Разобрать ссылку-приглашение → `{"kind":"v2","domain","linkId"}` |
 /// `{"kind":"legacy","token"}`; ошибка (в err) — не ссылка-приглашение.
 #[no_mangle]
@@ -826,34 +871,6 @@ pub unsafe extern "C" fn pv_client_log_devices(c: *const PvClient, user: *const 
         _ => cstring(r#"{"v2":[],"legacy":[]}"#.into()),
     }
 })).unwrap_or_else(|_| ptr::null_mut())
-}
-
-/// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
-/// `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_legacy_devices_request(c: *mut PvClient, devices_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        let r: Result<String, String> = c.legacy_devices_request(str_arg(devices_json).ok_or_else(bad_arg)?);
-        r.map(cstring)
-    })
-}
-
-/// Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
-/// для v1-устройств из подписанных списков.
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_legacy_deliver_request(
-    c: *const PvClient,
-    message_id: *const c_char,
-    send_payload_json: *const c_char,
-    err: *mut *mut c_char,
-) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
-        let r: Result<String, String> =
-            c.legacy_deliver_request(str_arg(message_id).ok_or_else(bad_arg)?, str_arg(send_payload_json).ok_or_else(bad_arg)?);
-        r.map(cstring)
-    })
 }
 
 /// Запас слепых жетонов.
@@ -1117,16 +1134,6 @@ pub unsafe extern "C" fn pv_state_mark_sent(s: *mut PvStateSession, op_id_b64: *
     })
 }
 
-/// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-/// `parvane.state.v1.CallRecord` → JSON-массив base64 тел `state.append`.
-#[no_mangle]
-pub unsafe extern "C" fn pv_state_call_set(s: *mut PvStateSession, record_json: *const c_char, err: *mut *mut c_char) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let s = s.as_mut().ok_or_else(bad_arg)?;
-        s.inner.call_set(str_arg(record_json).ok_or_else(bad_arg)?).map(cstring)
-    })
-}
-
 /// Ссылка-приглашение группы v2 (T160): proto3-JSON
 /// `parvane.state.v1.GroupInvite` → JSON-массив base64 тел `state.append`.
 #[no_mangle]
@@ -1181,16 +1188,6 @@ pub unsafe extern "C" fn pv_client_log_version(c: *const PvClient, user: *const 
         _ => 0,
     }
 })).unwrap_or_else(|_| 0)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_set_peer_delivery_key(c: *mut PvClient, user: *const c_char, key: *const u8, len: usize, generation: u64) {
-    // A0001-1: паника в движке не пересекает границу C
-    catch_unwind(AssertUnwindSafe(|| {
-    if let (Some(c), Some(u)) = (c.as_mut(), str_arg(user)) {
-        c.inner.set_peer_delivery_key(u, bytes_arg(key, len), generation);
-    }
-})).unwrap_or_else(|_| ())
 }
 
 // ── кадры и помощники ───────────────────────────────────────────────────────
@@ -1250,14 +1247,6 @@ pub unsafe extern "C" fn pv_encode_request_to(
 }
 
 #[no_mangle]
-pub extern "C" fn pv_encode_ping(nonce: u64) -> PvBytes {
-    // A0001-1: паника в движке не пересекает границу C
-    catch_unwind(AssertUnwindSafe(|| {
-    PvBytes::from_vec(host::encode_ping(nonce))
-})).unwrap_or_else(|_| PvBytes::empty())
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn pv_decode_frame(bytes: *const u8, len: usize, err: *mut *mut c_char) -> *mut c_char {
     guard(err, ptr::null_mut(), || host::decode_frame(bytes_arg(bytes, len)).map(cstring))
 }
@@ -1291,13 +1280,6 @@ pub unsafe extern "C" fn pv_encode_method_request(method: *const c_char, json: *
     guard(err, PvBytes::empty(), || {
         host::encode_method_request(str_arg(method).ok_or_else(bad_arg)?, str_arg(json).ok_or_else(bad_arg)?).map(PvBytes::from_vec)
     })
-}
-
-/// Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
-/// base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака».
-#[no_mangle]
-pub unsafe extern "C" fn pv_encode_upload_chunk(upload_id: *const c_char, index: u32, bucket: i32, data: *const u8, len: usize, err: *mut *mut c_char) -> PvBytes {
-    guard(err, PvBytes::empty(), || host::encode_upload_chunk(str_arg(upload_id).ok_or_else(bad_arg)?, index, bucket, bytes_arg(data, len)).map(PvBytes::from_vec))
 }
 
 /// Ответ любого метода реестра → proto3-JSON (T161).

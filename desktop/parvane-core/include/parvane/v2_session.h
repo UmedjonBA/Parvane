@@ -581,8 +581,14 @@ private:
     // То же для операций с JSON-результатом (для файлов сессии вне v2_session.cpp).
     json withNeedsJsonLocked(const std::function<json()> &f);
     // Группы.
-    void syncGroupLocked(const std::string &hex, const std::string &linkId = std::string());
+    // inviteUrl — ссылка целиком: журнал до вступления по доказательству знания её секрета (spec 035, PV-006)
+    void syncGroupLocked(const std::string &hex, const std::string &inviteUrl = std::string());
     void resyncGroupLocked(const std::string &hex);
+    // spec 035 (PV-005, GPHOTO-1): сведения без смены фото (avatar_key_id прежний), новое фото своей записью и
+    // рассылка его секрета (GroupAvatarKey участникам, InviteAvatarWrap своим ссылкам).
+    [[nodiscard]] static json setInfoKeepPhoto(const json &groupInfo, const std::string &name, const std::string &about);
+    bool setGroupPhotoLocked(const std::string &hex, const std::string &fileId, const std::string &keyB64);
+    void sendGroupPhotoKeyLocked(const std::string &hex);
     void publishGroupLocked(const std::string &hex);
     void noteGroupL2Locked(const std::string &hex, const json &info);
     void noteL2StateLocked(bool force = false);

@@ -489,6 +489,27 @@ json Client::groupJoin(const std::string &url) {
     return parseOrThrow(result(out, err));
 }
 
+json Client::groupSyncByLink(const std::string &url, const std::string &domain, const std::string &groupHex,
+                             std::uint64_t afterVersion, std::int64_t tsMs) const {
+    char *err = nullptr;
+    char *out = pv_client_group_sync_by_link(c_, url.c_str(), domain.c_str(), groupHex.c_str(), afterVersion, tsMs, &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::groupSetPhoto(const std::string &groupHex, const std::string &fileId, const std::string &avatarDomain,
+                           const std::string &keyB64) {
+    char *err = nullptr;
+    char *out = pv_client_group_set_photo(c_, groupHex.c_str(), fileId.c_str(), avatarDomain.c_str(), keyB64.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
+json Client::groupPhotoFollowups(const std::string &groupHex, const std::vector<std::string> &links) {
+    char *err = nullptr;
+    const auto l = json(links).dump();
+    char *out = pv_client_group_photo_followups(c_, groupHex.c_str(), l.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 json Client::logDevices(const std::string &user) const {
     auto v = json::parse(take(pv_client_log_devices(c_, user.c_str())), nullptr, false);
     return v.is_object() ? v : json{{"v2", json::array()}, {"legacy", json::array()}};

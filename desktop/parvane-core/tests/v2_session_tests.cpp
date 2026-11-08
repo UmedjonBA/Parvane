@@ -311,6 +311,30 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
               "имя и описание группы — оба на месте", g.value("name", std::string()));
     }
 
+    // spec 035 (PV-005, GPHOTO-1): фото частной группы — секрета в журнале нет (только avatar_key_id), участники
+    // получают его конвертом эпохи; правка названия после этого фото не снимает
+    {
+        const std::string photoKey = "UGhvdG9TZWNyZXRPZlRoZUdyb3VwRm9yVGVzdHMxMjM="; // 32 байта, выдуманные
+        const auto fileId = "pvb2-photo-" + suffix;
+        check(alice.s->setGroupInfo(group, std::nullopt, std::nullopt, fileId, photoKey), "PV-005: фото группы задано");
+        const auto a = alice.s->groupInfo(group);
+        check(a.value("avatarFileId", std::string()) == fileId && a.value("avatarKey", std::string()) == photoKey
+                  && !a.value("avatarKeyId", std::string()).empty(),
+              "PV-005: у alice файл, секрет и avatar_key_id", a.value("avatarKeyId", std::string()));
+        bool got = false;
+        for (int i = 0; i < 40 && !got; ++i) {
+            const auto b = bob.s->groupInfo(group);
+            got = b.value("avatarFileId", std::string()) == fileId && b.value("avatarKey", std::string()) == photoKey;
+            if (!got) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        check(got, "PV-005: bob получил секрет фото конвертом (не из журнала)");
+        check(alice.s->setGroupInfo(group, std::string("Кружок+ ") + suffix, std::nullopt, std::nullopt),
+              "PV-005: название после фото");
+        const auto a2 = alice.s->groupInfo(group);
+        check(a2.value("avatarFileId", std::string()) == fileId && a2.value("avatarKey", std::string()) == photoKey,
+              "PV-005: правка названия фото не сняла (avatar_key_id прежний)", a2.value("avatarKeyId", std::string()));
+    }
+
     // spec 023: публичная группа — имя, поиск, вступление по открытому секрету, история для новых
     const auto pubName = "pub" + suffix;
     const auto madePublic = alice.s->setGroupPublic(group, true, pubName, true, true);

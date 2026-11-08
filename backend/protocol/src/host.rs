@@ -714,6 +714,39 @@ impl HostClient {
         self.inner.group_join(&parts).map(|r| req_json(&r).to_string()).map_err(err)
     }
 
+    /// spec 035 (PV-006, contracts/group-access.md): журнал частной группы до вступления — `group.state.sync` с
+    /// доказательством знания секрета ссылки (подпись ключом ссылки над группой, своим адресом и временем).
+    pub fn group_sync_by_link(&self, url: &str, domain: &str, group_hex: &str, after_version: u64, ts_ms: i64) -> Result<String, String> {
+        let crate::invite::ParsedInvite::V2(parts) = crate::invite::parse(url).map_err(err)? else {
+            return Err(err(ProtoError::InvalidField("invite")));
+        };
+        let group = Ref { domain: domain.into(), id: group_id(group_hex)? };
+        self.inner.group_sync_by_link(&group, after_version, &parts, ts_ms).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// spec 035 (PV-005, GPHOTO-1): новое фото группы → запрос `SetInfo` с `avatar_key_id` (секрета в журнале нет);
+    /// `key_b64` — секрет фото частной группы (пусто — открытое фото), пустой `file_id` — снять фото.
+    pub fn group_set_photo(&mut self, group_hex: &str, file_id: &str, avatar_domain: &str, key_b64: &str) -> Result<String, String> {
+        let key: Option<[u8; 32]> = if key_b64.is_empty() {
+            None
+        } else {
+            let raw = unb64(key_b64)?;
+            Some(<[u8; 32]>::try_from(raw.as_slice()).map_err(|_| err(ProtoError::InvalidField("avatar_key")))?)
+        };
+        self.inner.group_set_photo(&group_id(group_hex)?, file_id, avatar_domain, key.as_ref()).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// После смены фото (журнал перечитан) и после новой эпохи: секрет фото участникам — содержимое
+    /// `GroupAvatarKey` (proto3-JSON, хост шлёт его `prepare_group`), держателям ссылок (`links_json` — ссылки
+    /// целиком) — записи `InviteAvatarWrap`. `{"content": … | null, "requests": [...]}`.
+    pub fn group_photo_followups(&mut self, group_hex: &str, links_json: &str) -> Result<String, String> {
+        let gid = group_id(group_hex)?;
+        let links: Vec<String> = if links_json.trim().is_empty() { vec![] } else { serde_json::from_str(links_json).map_err(|_| err(ProtoError::Malformed))? };
+        let content = self.inner.group_avatar_key_content(&gid).map(|c| serde_json::to_value(&c).unwrap_or(Value::Null)).unwrap_or(Value::Null);
+        let wraps = self.inner.group_invite_avatar_wraps(&gid, &links).map_err(err)?;
+        Ok(json!({"content": content, "requests": wraps.iter().map(req_json).collect::<Vec<_>>()}).to_string())
+    }
+
     /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
     pub fn group_set_public(&mut self, group_hex: &str, public: bool, name: &str, preview: bool, history: bool) -> Result<String, String> {
         self.inner.group_set_public(&group_id(group_hex)?, public, name, preview, history).map(|r| req_json(&r).to_string()).map_err(err)

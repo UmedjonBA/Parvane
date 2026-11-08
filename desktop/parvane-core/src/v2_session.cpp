@@ -2155,7 +2155,7 @@ std::vector<std::string> Session::groupMembersLocked(const std::string &hex) {
     return out;
 }
 
-void Session::syncGroupLocked(const std::string &hex, const std::string &linkId) {
+void Session::syncGroupLocked(const std::string &hex, const std::string &inviteUrl) {
     if (!client_) return;
     syncingGroups_.insert(hex);
     try {
@@ -2163,11 +2163,17 @@ void Session::syncGroupLocked(const std::string &hex, const std::string &linkId)
             const auto before = client_->groupVersion(hex);
             // Журнал группы — у её сервера (spec 028)
             const auto gdomain = groupDomainLocked(hex);
-            json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}},
-                     {"after_version", std::to_string(before)}};
-            if (!linkId.empty()) req["invite_link_id"] = hexToB64(linkId);
-            const auto resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req),
-                                   gdomain);
+            std::string resp;
+            if (!inviteUrl.empty()) {
+                // spec 035 (PV-006): до вступления частная группа отдаёт журнал только с доказательством знания
+                // секрета ссылки — подписью ключом ссылки над группой, своим адресом и временем
+                const auto req = parseRequest(client_->groupSyncByLink(inviteUrl, gdomain, hex, before, nowMs()));
+                resp = call(req.anon, req.method, req.body, gdomain);
+            } else {
+                const json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}},
+                               {"after_version", std::to_string(before)}};
+                resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req), gdomain);
+            }
             withNeedsLocked([&] { return client_->groupIngest(gdomain, hex, resp); });
             if (client_->groupVersion(hex) == before) break;
         }
@@ -2576,6 +2582,10 @@ void Session::rotateEpochOnceLocked(const std::string &hex) {
             log(std::string("ключи эпохи не доставлены: ") + e.what());
         }
     }
+    // spec 035 (PV-005): новые участники получают секрет фото частной группы только конвертом новой эпохи
+    if (const auto info = client_->groupInfo(hex); info && !info->value("avatarKey", std::string()).empty()) {
+        sendGroupPhotoKeyLocked(hex);
+    }
     persistLocked();
     const auto g = client_->groupInfo(hex);
     log("новая эпоха группы " + hex + ": " + (g ? std::to_string(g->value("epoch", 0ull)) : std::string("?")));
@@ -2757,14 +2767,22 @@ bool Session::changeGroup(const std::string &address, const json &change, std::s
                 return (p.is_object() && p.contains(key) && p[key].is_string())
                     ? p[key].get<std::string>() : g->value(have, std::string());
             };
-            resolved = json{{"set_info", {{"name", pick("name", "name")}, {"about", pick("about", "about")},
-                                          {"avatar_file_id", pick("avatar_file_id", "avatarFileId")},
-                                          // Ключ фото частной группы (A0089-5) идёт со своим файлом: меняется файл —
-                                          // ключ из патча (нет — открытое фото), иначе прежний из журнала
-                                          {"avatar_key", (p.is_object() && p.contains("avatar_file_id"))
-                                                             ? ((p.contains("avatar_key") && p["avatar_key"].is_string())
-                                                                    ? p["avatar_key"].get<std::string>() : std::string())
-                                                             : g->value("avatarKey", std::string())}}}};
+            // spec 035 (PV-005): новое фото — своей записью с avatar_key_id и конвертом секрета участникам; ключ фото
+            // частной группы (A0089-5) идёт со своим файлом: меняется файл — ключ из патча (нет — открытое фото)
+            if (p.is_object() && p.contains("avatar_file_id") && p["avatar_file_id"].is_string()) {
+                const auto nameChanged = pick("name", "name") != g->value("name", std::string())
+                    || pick("about", "about") != g->value("about", std::string());
+                if (nameChanged && !applyGroupChangeLocked(hex, setInfoKeepPhoto(*g, pick("name", "name"), pick("about", "about")))) {
+                    if (errorCode) *errorCode = "failed";
+                    return false;
+                }
+                const auto key = (p.contains("avatar_key") && p["avatar_key"].is_string()) ? p["avatar_key"].get<std::string>() : std::string();
+                ok = setGroupPhotoLocked(hex, p["avatar_file_id"].get<std::string>(), key);
+                if (ok && errorCode) errorCode->clear();
+                flushAsync();
+                return ok;
+            }
+            resolved = setInfoKeepPhoto(*g, pick("name", "name"), pick("about", "about"));
         }
         json reqJson;
         try {
@@ -3190,7 +3208,7 @@ json Session::checkInvite(const std::string &url) {
         std::string about, avatar, avatarKey;
         if (!isMember && !hex.empty()) {
             try {
-                syncGroupLocked(hex, parsed->value("linkId", std::string()));
+                syncGroupLocked(hex, url);
                 if (const auto info = client_->groupInfo(hex)) {
                     about = info->value("about", std::string());
                     avatar = info->value("avatarFileId", std::string());
@@ -3228,7 +3246,7 @@ json Session::joinByInvite(const std::string &url) {
             const auto check = inviteGroupLocked(linkId, parsed->value("domain", std::string()));
             const auto hex = b64ToHex(check.contains("group") ? check["group"].value("id", std::string()) : std::string());
             if (hex.empty()) throw V2Error("ERROR_CODE_NOT_FOUND");
-            syncGroupLocked(hex, linkId);
+            syncGroupLocked(hex, url);
             const auto req = parseRequest(client_->groupJoin(url));
             std::string resp;
             try {
