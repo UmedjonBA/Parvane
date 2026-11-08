@@ -20,6 +20,7 @@ pub mod delta;
 pub mod features;
 pub mod intent;
 pub mod journal;
+pub mod migration;
 pub mod paging;
 pub mod store_kinds;
 pub mod views;
@@ -84,6 +85,9 @@ pub(crate) enum Purpose {
     StateSync,
     HistoryAppend,
     HistorySync,
+    /// Разовый перенос (spec 035, US1): чтение замороженного журнала `state.v1` и нового `state.v2`.
+    MigrateV1Sync,
+    MigrateV2Sync,
     Other,
 }
 
@@ -155,6 +159,8 @@ pub(crate) struct Dirty {
     pub chats: BTreeSet<String>,
     /// Подтверждение инбокса выпустить после фиксации пачки.
     pub ack: bool,
+    /// Прочие записи (вид, имя, открытый текст): ход переноса, карантин, старое исходящее.
+    pub extra: Vec<(String, String, Vec<u8>)>,
 }
 
 /// Работа одного вызова.
@@ -202,6 +208,12 @@ pub struct Engine {
     pending_root: Option<StoreBatch>,
     /// Свои операции личного состояния, ещё не принятые сервером (вид `state-raw`, имя — hex op_id).
     pub(crate) state_unsent: BTreeMap<String, Vec<u8>>,
+    /// Разовый перенос старых хранилищ (spec 035, US1): идёт — `Some`.
+    pub(crate) migration: Option<Box<migration::MigrationRun>>,
+    /// Ход переноса с диска (`migration-progress/legacy`).
+    pub(crate) migration_progress: Option<migration::Progress>,
+    /// Своё исходящее прежней версии, не ставшее строкой истории (`outbox/legacy`, JSON как лежало).
+    pub(crate) legacy_outbox: Vec<Value>,
 }
 
 fn now_or(ms: i64) -> i64 {
@@ -327,6 +339,9 @@ impl Engine {
             dirty: Dirty::default(),
             pending_root: None,
             state_unsent: BTreeMap::new(),
+            migration: None,
+            migration_progress: None,
+            legacy_outbox: vec![],
         })
     }
 
@@ -353,6 +368,10 @@ impl Engine {
             "viewGroup" => parse::<epb::ViewGroupRequest>(args).and_then(|a| self.view_group(a.group.as_ref())).map(|g| json_of(&g)),
             "capabilities" => parse::<epb::CapabilitiesRequest>(args).and_then(|a| self.capabilities(a.chat.as_ref())).map(|c| json_of(&c)),
             "engineInfo" => Ok(crate::engine_info_json()),
+            "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
+            "migrateFinish" => self.migrate_finish().map(|o| json_of(&o)),
+            "migrateStatus" => Ok(json_of(&self.migrate_status())),
+            "auditDump" => Ok(json_of(&epb::AuditDump { jsonl: self.audit_dump() })),
             "vectorInput" if self.cfg.vectors => self.vector_input(args).map(|o| json_of(&o)),
             _ => return serde_json::json!({"error": "UnknownCall"}).to_string(),
         };
@@ -451,6 +470,13 @@ impl Engine {
     fn root_loaded(&mut self, l: &StoreLoaded, w: &mut Work) -> Result<()> {
         let root = l.entries.iter().find(|e| e.key == store::ROOT_KEY);
         let Some(root) = root else {
+            if self.cfg.legacy_present {
+                // Старые хранилища есть, нового ещё нет: разовый перенос (`migrateStep`), до него — ничего не пишем.
+                self.open_state = OpenState::MigrationNeeded;
+                self.stage = Stage::Open;
+                w.open = Some(OpenResult { state: OpenState::MigrationNeeded as i32, migration: Some(migration::plan(None)) });
+                return Ok(());
+            }
             // Новый профиль: корень, DEK поколения 1, обёртка ключом устройства.
             let mut st = Store::create();
             let key: [u8; 32] = self.cfg.device_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("device_key"))?;
@@ -532,6 +558,8 @@ impl Engine {
                     }
                     self.marks.insert(chat.to_string(), m);
                 }
+                ("migration-progress", migration::PROGRESS_NAME) => self.migration_progress = migration::Progress::from_bytes(&plain),
+                ("outbox", migration::LEGACY_OUTBOX) => self.legacy_outbox = serde_json::from_slice(&plain).unwrap_or_default(),
                 ("outbox", _) => {
                     if let Ok(item) = serde_json::from_slice::<OutboxItem>(&plain) {
                         if let Some(id) = paging::id16(&item.op_id) {
@@ -569,7 +597,15 @@ impl Engine {
         }
         self.refresh_groups(w, true);
         self.stage = Stage::Open;
-        w.open = Some(OpenResult { state: self.open_state as i32, migration: None });
+        if let Some(plan) = migration::plan_after_open(self.migration_progress.as_ref(), self.cfg.legacy_present) {
+            // Перенос прерван до переключения: начать заново (перенос идемпотентен), до этого не писать
+            if self.open_state == OpenState::Ready && plan.0 {
+                self.open_state = OpenState::MigrationNeeded;
+            }
+            w.open = Some(OpenResult { state: self.open_state as i32, migration: Some(plan.1) });
+        } else {
+            w.open = Some(OpenResult { state: self.open_state as i32, migration: None });
+        }
         // Неотправленное до перезапуска — снова в путь
         let ids: Vec<Id> = self.outbox.keys().copied().collect();
         for id in ids {
@@ -653,7 +689,7 @@ impl Engine {
         let d = std::mem::take(&mut self.dirty);
         let root = self.pending_root.take();
         let Some(st) = &self.store else { return Ok(root) };
-        if self.open_state != OpenState::Ready {
+        if !matches!(self.open_state, OpenState::Ready | OpenState::MigrationNeeded) {
             return Ok(root);
         }
         let mut puts: Vec<(String, String, Vec<u8>)> = vec![];
@@ -700,6 +736,7 @@ impl Engine {
                 deletes.push(("outbox".into(), hex::encode(id)));
             }
         }
+        puts.extend(d.extra);
         let _ = st;
         if puts.is_empty() && deletes.is_empty() {
             return Ok(root);
@@ -1047,6 +1084,9 @@ impl Engine {
             ServerInputKind::Response => {
                 let purpose = self.inflight.remove(&si.req_id).unwrap_or(Purpose::Other);
                 self.on_response(purpose, si.error, &si.body, &mut w)?;
+                if self.migration.is_some() {
+                    self.migrate_advance(&mut w)?;
+                }
             }
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
@@ -1205,11 +1245,14 @@ impl Engine {
                     self.push_req(w, req, Purpose::GroupSync { group: g, join: Some(parts) });
                 }
             }
-            Purpose::StateAppend(op_id) if error == 0 => {
+            // DUPLICATE: тот же op_id уже записан другими байтами (перенос с другого устройства) — запись есть
+            Purpose::StateAppend(op_id) if error == 0 || error == crate::pb::parvane::core::v2::ErrorCode::Duplicate as i32 => {
                 self.state_unsent.remove(&hex::encode(&op_id));
                 self.dirty.state_raw.insert(hex::encode(&op_id), None);
             }
             Purpose::StateSync if error == 0 => self.ingest_state_sync(body, w)?,
+            Purpose::MigrateV1Sync => self.migrate_response(true, error, body, w)?,
+            Purpose::MigrateV2Sync => self.migrate_response(false, error, body, w)?,
             Purpose::HistorySync if error == 0 => self.ingest_history_sync(body, w)?,
             _ => {}
         }
@@ -1231,9 +1274,14 @@ impl Engine {
     }
 
     fn ingest_state_sync(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
+        self.ingest_state_sync_as(body, w, Purpose::StateSync).map(|_| ())
+    }
+
+    /// Ответ `state.ops.sync`: применить записи; есть ещё — следующая страница с целью `next`. Возвращает «есть ещё».
+    pub(crate) fn ingest_state_sync_as(&mut self, body: &[u8], w: &mut Work, next: Purpose) -> Result<bool> {
         let r: s2::SyncResponse = decode_checked(body, Origin::Server)?;
-        let Some(c) = &self.client else { return Ok(()) };
-        let Some((key, _)) = c.state_key() else { return Ok(()) };
+        let Some(c) = &self.client else { return Ok(false) };
+        let Some((key, _)) = c.state_key() else { return Ok(false) };
         let key = key.clone();
         let user = c.user.clone();
         let mut touched = BTreeSet::new();
@@ -1255,11 +1303,12 @@ impl Engine {
         if self.state.write_blocked() {
             w.delta.push(Change::WriteBlocked(epb::WriteBlocked { journal: crate::hold::STATE.into(), reason: epb::JournalWrite::BlockedCriticalUnknown as i32 }));
         }
-        if r.more {
+        let more = r.more && !r.records.is_empty();
+        if more {
             let req = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
-            self.push_req(w, req, Purpose::StateSync);
+            self.push_req(w, req, next);
         }
-        Ok(())
+        Ok(more)
     }
 
     fn ingest_history_sync(&mut self, body: &[u8], w: &mut Work) -> Result<()> {

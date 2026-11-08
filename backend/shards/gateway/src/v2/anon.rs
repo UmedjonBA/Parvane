@@ -60,6 +60,8 @@ pub(crate) fn shard_request(m: &MethodInfo, s: &SessionIdentity<'_>, body: Vec<u
         source_tag: 0,
         // Срок ответа ставит сессия по таймауту запроса (OPT-003).
         deadline_ms: 0,
+        // Минор клиента ставит сессия (spec 035, T150).
+        client_minor: 0,
     }
 }
 

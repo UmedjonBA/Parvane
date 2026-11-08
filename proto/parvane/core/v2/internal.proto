@@ -42,6 +42,10 @@ message ShardRequest {
   // никто не ждёт, не выполняется (иначе под перегрузкой шард делал её, а клиент тем временем повторял запрос).
   // 0 — срока нет (прежнее поведение). Ставят только gateway и federation.
   fixed64 deadline_ms = 11 [(actor) = ACTOR_SERVER_SET];
+  // spec 035 (T150, D2): `proto_minor` из Hello сессии (gateway пропускает только ≥ минимума). Шард messenger отмечает
+  // по нему устройства, подключавшиеся с новым выпуском (`messenger --migration-status`). Ставит только gateway и
+  // только для канала ID; 0 — нет отметки.
+  uint32 client_minor = 12 [(actor) = ACTOR_SERVER_SET];
 }
 
 message ShardResponse {

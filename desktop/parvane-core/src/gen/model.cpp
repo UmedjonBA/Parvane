@@ -329,6 +329,16 @@ void from_json(const nlohmann::json &j, ServerInputKind &v) {
     v = static_cast<ServerInputKind>(j.get<int32_t>());
 }
 
+void to_json(nlohmann::json &j, const AuditDump &m) {
+    j = nlohmann::json::object();
+    if (!m.jsonl.empty()) j["jsonl"] = m.jsonl;
+}
+
+void from_json(const nlohmann::json &j, AuditDump &m) {
+    m = AuditDump{};
+    if (const auto *v = pick(j, "jsonl", "jsonl")) m.jsonl = (*v).get<std::string>();
+}
+
 void to_json(nlohmann::json &j, const Capabilities &m) {
     j = nlohmann::json::object();
     if (m.send_text) j["send_text"] = m.send_text;
@@ -423,6 +433,7 @@ void to_json(nlohmann::json &j, const EngineConfig &m) {
     if (m.memory_budget_bytes != 0) j["memory_budget_bytes"] = std::to_string(m.memory_budget_bytes);
     if (!m.device_key.empty()) j["device_key"] = toBase64(m.device_key);
     if (m.vectors) j["vectors"] = m.vectors;
+    if (m.legacy_present) j["legacy_present"] = m.legacy_present;
 }
 
 void from_json(const nlohmann::json &j, EngineConfig &m) {
@@ -436,6 +447,7 @@ void from_json(const nlohmann::json &j, EngineConfig &m) {
     if (const auto *v = pick(j, "memory_budget_bytes", "memoryBudgetBytes")) m.memory_budget_bytes = numFrom<uint64_t>((*v));
     if (const auto *v = pick(j, "device_key", "deviceKey")) m.device_key = fromBase64((*v).get<std::string>());
     if (const auto *v = pick(j, "vectors", "vectors")) m.vectors = (*v).get<bool>();
+    if (const auto *v = pick(j, "legacy_present", "legacyPresent")) m.legacy_present = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const EngineError &m) {
@@ -575,6 +587,18 @@ void from_json(const nlohmann::json &j, KindFormat &m) {
     if (const auto *v = pick(j, "format", "format")) m.format = numFrom<uint32_t>((*v));
 }
 
+void to_json(nlohmann::json &j, const LegacyRecord &m) {
+    j = nlohmann::json::object();
+    if (!m.key.empty()) j["key"] = m.key;
+    if (!m.value.empty()) j["value"] = toBase64(m.value);
+}
+
+void from_json(const nlohmann::json &j, LegacyRecord &m) {
+    m = LegacyRecord{};
+    if (const auto *v = pick(j, "key", "key")) m.key = (*v).get<std::string>();
+    if (const auto *v = pick(j, "value", "value")) m.value = fromBase64((*v).get<std::string>());
+}
+
 void to_json(nlohmann::json &j, const MarkValue &m) {
     j = nlohmann::json::object();
     if (m.field != 0) j["field"] = m.field;
@@ -585,6 +609,41 @@ void from_json(const nlohmann::json &j, MarkValue &m) {
     m = MarkValue{};
     if (const auto *v = pick(j, "field", "field")) m.field = numFrom<uint32_t>((*v));
     if (const auto *v = pick(j, "value", "value")) m.value = fromBase64((*v).get<std::string>());
+}
+
+void to_json(nlohmann::json &j, const MigrateStatus &m) {
+    j = nlohmann::json::object();
+    if (m.point != 0) j["point"] = m.point;
+    if (m.done) j["done"] = m.done;
+    if (!m.report_json.empty()) j["report_json"] = m.report_json;
+}
+
+void from_json(const nlohmann::json &j, MigrateStatus &m) {
+    m = MigrateStatus{};
+    if (const auto *v = pick(j, "point", "point")) m.point = numFrom<uint32_t>((*v));
+    if (const auto *v = pick(j, "done", "done")) m.done = (*v).get<bool>();
+    if (const auto *v = pick(j, "report_json", "reportJson")) m.report_json = (*v).get<std::string>();
+}
+
+void to_json(nlohmann::json &j, const MigrateStep &m) {
+    j = nlohmann::json::object();
+    if (!m.layer.empty()) j["layer"] = m.layer;
+    if (!m.records.empty()) {
+        auto a = nlohmann::json::array();
+        for (const auto &x : m.records) a.push_back(x);
+        j["records"] = a;
+    }
+    if (m.last) j["last"] = m.last;
+    if (m.chunk != 0) j["chunk"] = m.chunk;
+}
+
+void from_json(const nlohmann::json &j, MigrateStep &m) {
+    m = MigrateStep{};
+    if (const auto *v = pick(j, "layer", "layer")) m.layer = (*v).get<std::string>();
+    if (const auto *v = pick(j, "records", "records"); v && v->is_array())
+        for (const auto &x : *v) m.records.push_back(x.get<LegacyRecord>());
+    if (const auto *v = pick(j, "last", "last")) m.last = (*v).get<bool>();
+    if (const auto *v = pick(j, "chunk", "chunk")) m.chunk = numFrom<uint32_t>((*v));
 }
 
 void to_json(nlohmann::json &j, const MigrationPlan &m) {
