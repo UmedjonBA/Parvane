@@ -318,8 +318,14 @@ impl HostHistory {
     /// Вызов функции сессии по имени (`syncRequest`, `ingest`, `seal`, …); незнакомое имя — статические
     /// функции `history*`, иначе `UnknownCall`.
     pub fn call(&mut self, name: &str, args: &Value) -> R {
+        session_call(&self.inner, name, args)
+    }
+}
+
+/// Вызов функции сессии журнала истории по имени (общий для `HostHistory` и модели движка, `historyCall`).
+pub fn session_call(s: &HistorySession, name: &str, args: &Value) -> R {
+    {
         let a = Args(args);
-        let s = &self.inner;
         Ok(match name {
             "syncRequest" => {
                 let max = u32::try_from(a.uo("maxBytes")?).map_err(|_| missing("maxBytes"))?;
@@ -412,7 +418,9 @@ impl HostHistory {
             _ => return call_static(name, args).unwrap_or_else(|| Err(super::call::UNKNOWN_CALL.to_string())),
         })
     }
+}
 
+impl HostHistory {
     /// Тело `history.sync` (байты) — для хостов без JSON.
     pub fn sync_request(&self, after_seq: u64, skip_chunks: bool) -> Vec<u8> {
         self.inner.sync_request(after_seq, skip_chunks, 0)

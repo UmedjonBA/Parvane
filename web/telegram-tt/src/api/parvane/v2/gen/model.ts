@@ -157,6 +157,25 @@ export function auditDumpToJson(m: AuditDump): Record<string, unknown> {
   return j;
 }
 
+export interface CallResult {
+  resultJson: string;
+}
+
+export function callResultFromJson(v: unknown): CallResult {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const resultJson = pick(j, 'result_json', 'resultJson');
+  const out: CallResult = {
+    resultJson: resultJson === undefined || resultJson === null ? '' : String(resultJson),
+  };
+  return out;
+}
+
+export function callResultToJson(m: CallResult): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.resultJson === '')) j.result_json = m.resultJson;
+  return j;
+}
+
 export interface Capabilities {
   sendText: boolean;
   sendMedia: boolean;
@@ -367,6 +386,75 @@ export function chatViewToJson(m: ChatView): Record<string, unknown> {
   return j;
 }
 
+export interface ClientCall {
+  name: string;
+  argsJson: string;
+}
+
+export function clientCallFromJson(v: unknown): ClientCall {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const name = pick(j, 'name', 'name');
+  const argsJson = pick(j, 'args_json', 'argsJson');
+  const out: ClientCall = {
+    name: name === undefined || name === null ? '' : String(name),
+    argsJson: argsJson === undefined || argsJson === null ? '' : String(argsJson),
+  };
+  return out;
+}
+
+export function clientCallToJson(m: ClientCall): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.name === '')) j.name = m.name;
+  if (!(m.argsJson === '')) j.args_json = m.argsJson;
+  return j;
+}
+
+export interface ClientEvents {
+  json: string;
+}
+
+export function clientEventsFromJson(v: unknown): ClientEvents {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const json = pick(j, 'json', 'json');
+  const out: ClientEvents = {
+    json: json === undefined || json === null ? '' : String(json),
+  };
+  return out;
+}
+
+export function clientEventsToJson(m: ClientEvents): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.json === '')) j.json = m.json;
+  return j;
+}
+
+export interface ClientReplace {
+  mode: string;
+  blob: Uint8Array;
+  key: Uint8Array;
+}
+
+export function clientReplaceFromJson(v: unknown): ClientReplace {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const mode = pick(j, 'mode', 'mode');
+  const blob = pick(j, 'blob', 'blob');
+  const key = pick(j, 'key', 'key');
+  const out: ClientReplace = {
+    mode: mode === undefined || mode === null ? '' : String(mode),
+    blob: blob === undefined || blob === null ? new Uint8Array(0) : fromBase64(String(blob)),
+    key: key === undefined || key === null ? new Uint8Array(0) : fromBase64(String(key)),
+  };
+  return out;
+}
+
+export function clientReplaceToJson(m: ClientReplace): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.mode === '')) j.mode = m.mode;
+  if (!(m.blob.length === 0)) j.blob = toBase64(m.blob);
+  if (!(m.key.length === 0)) j.key = toBase64(m.key);
+  return j;
+}
+
 export interface ComposeContent {
   replyTo: Uint8Array;
   silent: boolean;
@@ -482,6 +570,7 @@ export interface EngineConfig {
   deviceKey: Uint8Array;
   vectors: boolean;
   legacyPresent: boolean;
+  hostDriven: boolean;
 }
 
 export function engineConfigFromJson(v: unknown): EngineConfig {
@@ -495,6 +584,7 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
   const deviceKey = pick(j, 'device_key', 'deviceKey');
   const vectors = pick(j, 'vectors', 'vectors');
   const legacyPresent = pick(j, 'legacy_present', 'legacyPresent');
+  const hostDriven = pick(j, 'host_driven', 'hostDriven');
   const out: EngineConfig = {
     user: user === undefined || user === null ? '' : String(user),
     deviceId: deviceId === undefined || deviceId === null ? '' : String(deviceId),
@@ -505,6 +595,7 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
     deviceKey: deviceKey === undefined || deviceKey === null ? new Uint8Array(0) : fromBase64(String(deviceKey)),
     vectors: vectors === undefined || vectors === null ? false : Boolean(vectors),
     legacyPresent: legacyPresent === undefined || legacyPresent === null ? false : Boolean(legacyPresent),
+    hostDriven: hostDriven === undefined || hostDriven === null ? false : Boolean(hostDriven),
   };
   return out;
 }
@@ -520,6 +611,7 @@ export function engineConfigToJson(m: EngineConfig): Record<string, unknown> {
   if (!(m.deviceKey.length === 0)) j.device_key = toBase64(m.deviceKey);
   if (!(!m.vectors)) j.vectors = m.vectors;
   if (!(!m.legacyPresent)) j.legacy_present = m.legacyPresent;
+  if (!(!m.hostDriven)) j.host_driven = m.hostDriven;
   return j;
 }
 
@@ -1691,7 +1783,7 @@ export function migrationProgressToJson(m: MigrationProgress): Record<string, un
 }
 
 export interface ModelChange {
-  change?: { case: 'chatUpsert'; value: ChatView } | { case: 'chatRemove'; value: Peer } | { case: 'messageUpsert'; value: MessageView } | { case: 'messageRemove'; value: MessageRemove } | { case: 'stateChanged'; value: StateChanged } | { case: 'groupChanged'; value: GroupView } | { case: 'notice'; value: Notice } | { case: 'unreadChanged'; value: UnreadChanged } | { case: 'writeBlocked'; value: WriteBlocked } | { case: 'needs'; value: Need };
+  change?: { case: 'chatUpsert'; value: ChatView } | { case: 'chatRemove'; value: Peer } | { case: 'messageUpsert'; value: MessageView } | { case: 'messageRemove'; value: MessageRemove } | { case: 'stateChanged'; value: StateChanged } | { case: 'groupChanged'; value: GroupView } | { case: 'notice'; value: Notice } | { case: 'unreadChanged'; value: UnreadChanged } | { case: 'writeBlocked'; value: WriteBlocked } | { case: 'needs'; value: Need } | { case: 'clientEvents'; value: ClientEvents };
 }
 
 export function modelChangeFromJson(v: unknown): ModelChange {
@@ -1738,6 +1830,10 @@ export function modelChangeFromJson(v: unknown): ModelChange {
     const x = pick(j, 'needs', 'needs');
     if (x !== undefined && x !== null) out.change = { case: 'needs', value: needFromJson(x) };
   }
+  {
+    const x = pick(j, 'client_events', 'clientEvents');
+    if (x !== undefined && x !== null) out.change = { case: 'clientEvents', value: clientEventsFromJson(x) };
+  }
   return out;
 }
 
@@ -1753,6 +1849,7 @@ export function modelChangeToJson(m: ModelChange): Record<string, unknown> {
   if (m.change?.case === 'unreadChanged') j.unread_changed = unreadChangedToJson(m.change.value);
   if (m.change?.case === 'writeBlocked') j.write_blocked = writeBlockedToJson(m.change.value);
   if (m.change?.case === 'needs') j.needs = needToJson(m.change.value);
+  if (m.change?.case === 'clientEvents') j.client_events = clientEventsToJson(m.change.value);
   return j;
 }
 

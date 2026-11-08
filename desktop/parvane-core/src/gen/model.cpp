@@ -339,6 +339,16 @@ void from_json(const nlohmann::json &j, AuditDump &m) {
     if (const auto *v = pick(j, "jsonl", "jsonl")) m.jsonl = (*v).get<std::string>();
 }
 
+void to_json(nlohmann::json &j, const CallResult &m) {
+    j = nlohmann::json::object();
+    if (!m.result_json.empty()) j["result_json"] = m.result_json;
+}
+
+void from_json(const nlohmann::json &j, CallResult &m) {
+    m = CallResult{};
+    if (const auto *v = pick(j, "result_json", "resultJson")) m.result_json = (*v).get<std::string>();
+}
+
 void to_json(nlohmann::json &j, const Capabilities &m) {
     j = nlohmann::json::object();
     if (m.send_text) j["send_text"] = m.send_text;
@@ -395,6 +405,42 @@ void from_json(const nlohmann::json &j, ChatListRequest &m) {
     if (const auto *v = pick(j, "folder", "folder")) m.folder = numFrom<uint32_t>((*v));
 }
 
+void to_json(nlohmann::json &j, const ClientCall &m) {
+    j = nlohmann::json::object();
+    if (!m.name.empty()) j["name"] = m.name;
+    if (!m.args_json.empty()) j["args_json"] = m.args_json;
+}
+
+void from_json(const nlohmann::json &j, ClientCall &m) {
+    m = ClientCall{};
+    if (const auto *v = pick(j, "name", "name")) m.name = (*v).get<std::string>();
+    if (const auto *v = pick(j, "args_json", "argsJson")) m.args_json = (*v).get<std::string>();
+}
+
+void to_json(nlohmann::json &j, const ClientEvents &m) {
+    j = nlohmann::json::object();
+    if (!m.json.empty()) j["json"] = m.json;
+}
+
+void from_json(const nlohmann::json &j, ClientEvents &m) {
+    m = ClientEvents{};
+    if (const auto *v = pick(j, "json", "json")) m.json = (*v).get<std::string>();
+}
+
+void to_json(nlohmann::json &j, const ClientReplace &m) {
+    j = nlohmann::json::object();
+    if (!m.mode.empty()) j["mode"] = m.mode;
+    if (!m.blob.empty()) j["blob"] = toBase64(m.blob);
+    if (!m.key.empty()) j["key"] = toBase64(m.key);
+}
+
+void from_json(const nlohmann::json &j, ClientReplace &m) {
+    m = ClientReplace{};
+    if (const auto *v = pick(j, "mode", "mode")) m.mode = (*v).get<std::string>();
+    if (const auto *v = pick(j, "blob", "blob")) m.blob = fromBase64((*v).get<std::string>());
+    if (const auto *v = pick(j, "key", "key")) m.key = fromBase64((*v).get<std::string>());
+}
+
 void to_json(nlohmann::json &j, const CriticalRange &m) {
     j = nlohmann::json::object();
     if (!m.name.empty()) j["name"] = m.name;
@@ -434,6 +480,7 @@ void to_json(nlohmann::json &j, const EngineConfig &m) {
     if (!m.device_key.empty()) j["device_key"] = toBase64(m.device_key);
     if (m.vectors) j["vectors"] = m.vectors;
     if (m.legacy_present) j["legacy_present"] = m.legacy_present;
+    if (m.host_driven) j["host_driven"] = m.host_driven;
 }
 
 void from_json(const nlohmann::json &j, EngineConfig &m) {
@@ -448,6 +495,7 @@ void from_json(const nlohmann::json &j, EngineConfig &m) {
     if (const auto *v = pick(j, "device_key", "deviceKey")) m.device_key = fromBase64((*v).get<std::string>());
     if (const auto *v = pick(j, "vectors", "vectors")) m.vectors = (*v).get<bool>();
     if (const auto *v = pick(j, "legacy_present", "legacyPresent")) m.legacy_present = (*v).get<bool>();
+    if (const auto *v = pick(j, "host_driven", "hostDriven")) m.host_driven = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const EngineError &m) {
@@ -1950,6 +1998,7 @@ void to_json(nlohmann::json &j, const ModelChange &m) {
     if (const auto *p = std::get_if<8>(&m.change)) j["unread_changed"] = *p;
     if (const auto *p = std::get_if<9>(&m.change)) j["write_blocked"] = *p;
     if (const auto *p = std::get_if<10>(&m.change)) j["needs"] = *p;
+    if (const auto *p = std::get_if<11>(&m.change)) j["client_events"] = *p;
 }
 
 void from_json(const nlohmann::json &j, ModelChange &m) {
@@ -1964,6 +2013,7 @@ void from_json(const nlohmann::json &j, ModelChange &m) {
     if (const auto *v = pick(j, "unread_changed", "unreadChanged")) m.change.emplace<8>(v->get<UnreadChanged>());
     if (const auto *v = pick(j, "write_blocked", "writeBlocked")) m.change.emplace<9>(v->get<WriteBlocked>());
     if (const auto *v = pick(j, "needs", "needs")) m.change.emplace<10>(v->get<Need>());
+    if (const auto *v = pick(j, "client_events", "clientEvents")) m.change.emplace<11>(v->get<ClientEvents>());
 }
 
 void to_json(nlohmann::json &j, const ModelDelta &m) {

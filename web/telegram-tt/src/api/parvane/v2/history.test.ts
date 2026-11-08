@@ -3,10 +3,11 @@ import {
 } from 'vitest';
 
 import type { WireStoredMessage } from '../wire';
+import type { PvClient } from './engine';
 import type { HistoryHost, HistorySyncState } from './history';
 
-import { PvClient } from '../../../lib/parvane-protocol/parvane_protocol';
 import { createHistoryRows } from '../historyRows';
+import { openMemoryClient } from './engine';
 import { createHistoryJournal } from './history';
 import { newStamp, rowOpFromStored } from './historyModel';
 import { createMessageIndex } from './messageIndex';
@@ -256,11 +257,11 @@ function createDevice(client: PvClient, server: ReturnType<typeof createServer>,
 }
 
 function account() {
-  const first = new PvClient(SELF, 'device-a', 'local');
+  const first = openMemoryClient(SELF, 'device-a', 'local');
   first.ensureStateKey();
   const key = new Uint8Array(32).fill(7);
   const state = first.export(key);
-  return { first, clone: () => PvClient.importState(state, key) };
+  return { first, clone: () => openMemoryClient(SELF, 'device-a', 'local', { blob: state, key }) };
 }
 
 function text(id: string, from: string, to: string, tsMs: number, body: string): WireStoredMessage {

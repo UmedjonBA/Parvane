@@ -7,6 +7,12 @@
 // Входящие записи журнала инбокса открывает движок; содержимое перекладывается
 // в WireStoredMessage и идёт в ТОТ ЖЕ конвейер отображения, что и v1
 // (sync.applyExternal) — UI не знает, по какому протоколу пришло сообщение.
+//
+// spec 035 (T113): клиентское ядро живёт в модели движка (`ModelHost`, режим хоста `host_driven`). Контроллер не
+// держит прежний клиент WASM: действия клиента — `clientCall` модели (`EngineClient`), состояние клиента — в
+// хранилище модели внутри защищённого хранилища профиля, записи инбокса и уведомления сервера — `ingest` модели;
+// события записей и нужды клиента модель отдаёт изменениями (`client_events`, `needs`), подтверждение инбокса —
+// после того как события применены здесь и записаны (SYNC-1).
 
 import type { WireCallSignal } from '../callengine';
 import type { BlobSession } from '../cloudBlobs';
@@ -17,7 +23,8 @@ import type {
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { V2Content } from './contentMap';
-import type { Protocol, PvClient } from './engine';
+import type { ModelJson, Protocol } from './engine';
+import type { EngineClient as PvClient } from './engineClient';
 import type { HistoryHost } from './history';
 import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
@@ -41,8 +48,10 @@ import {
 import {
   BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
 } from './control';
-import { createDeferredWrite } from './deferredWrite';
-import { loadProtocol, openStateModel, parseEngineError } from './engine';
+import {
+  createModelSender, loadProtocol, MemoryModelStore, ModelHost, openStateModel, parseEngineError, secureModelStore,
+} from './engine';
+import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
 import {
   applyEditPatch, compareMarkPoint, encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
@@ -329,11 +338,14 @@ const STATE_BYTES_RECORD = 'v2-engine-bin';
 // Состояние движка, снятое при «личность сброшена» (со слов сервера, подпись корня не проверена): не стирается
 // безвозвратно, живёт до успешной привязки/восстановления этого устройства
 const DROPPED_STATE_RECORD = 'v2-engine-dropped';
-// Отложенная запись состояния движка: не чаще раза в PERSIST_DEBOUNCE_MS и не
-// позже PERSIST_MAX_DELAY_MS после первого изменения; перед ack, при уходе со
-// страницы и в важных местах (вступление, отзыв, ротации) — сразу
-const PERSIST_DEBOUNCE_MS = 400;
-const PERSIST_MAX_DELAY_MS = 2000;
+// spec 035 (T113): ключ обёртки хранилища модели (32 байта, base64) — запись защищённого хранилища профиля
+const MODEL_KEY_RECORD = 'v2-model-device-key';
+// spec 035 (T115): состояние прежнего клиента (`v2-engine-bin`/`v2-engine`) перенесено в модель — старое не читается
+const ENGINE_MIGRATED_RECORD = 'v2-engine-migrated';
+// Опрос модели (сроки, инбокс раз в минуту — POLL_MS движка)
+const MODEL_TICK_MS = 15000;
+// Повторов добора нужды записи инбокса, после которых запись пропускается (сервер отдаст её снова)
+const NEED_ATTEMPTS = 6;
 const GROUP_RESYNC_MS = 3000;
 // Через сколько сторож очереди движка сообщает о зависшей задаче
 const SERIAL_WATCHDOG_MS = 20000;
@@ -547,94 +559,195 @@ export function createV2Controller(deps: Deps) {
     return next;
   }
 
-  // perf A1: состояние движка пишется отложенно; `persist()` только помечает
-  // изменение (прежние вызывающие ничего не ждут), `persistNow()` — дописать уже
-  // помеченное (перед чтением с диска, остановкой, экспортом), `persistUrgent()` —
-  // движок только что изменён и снимок нужен на диске сейчас. `persistNow()` после
-  // изменения без пометки не пишет ничего: так сброс личности на месте оставлял на
-  // диске прежнюю, и перезапуск принимал её за сброс «другим устройством»
-  let hasLegacyState = false;
-  const stateWriter = createDeferredWrite<{ owner: PvClient; target: SecureE2eStorage; bytes: Uint8Array }>({
-    debounceMs: PERSIST_DEBOUNCE_MS,
-    maxDelayMs: PERSIST_MAX_DELAY_MS,
-    snapshot: () => (client && storage && storageKey
-      ? { owner: client, target: storage, bytes: client.export(storageKey) }
-      : undefined),
-    store: async ({ owner, target, bytes }) => {
-      // Движок подменили другим (перезапуск, линковка) — снимок прежнего не
-      // пишем; после выхода (`reset`) снимок последнего состояния дописывается
-      if (client && owner !== client) {
-        deps.log('v2: снимок состояния прежнего движка не записан (движок сменён)');
-        return;
-      }
-      await target.saveBytesRecord(STATE_BYTES_RECORD, bytes);
-      if (hasLegacyState) {
-        hasLegacyState = false;
-        await target.deleteRecord(STATE_RECORD).catch(() => undefined);
-      }
-    },
-    onError: (e) => deps.log(`v2: состояние движка не записано: ${String(e)}`),
-  });
-
-  let isPersistSkipLogged = false;
+  // spec 035 (T113): состояние клиента пишет модель (пачкой хранилища в записи профиля). `persist()` — отложенная
+  // запись (прежние вызывающие ничего не ждут), `persistNow()`/`persistUrgent()` — изменённое на диске до возврата.
   function persist(): Promise<void> {
-    if (client && storage && storageKey) {
-      stateWriter.mark();
-    } else if (!isPersistSkipLogged) {
-      isPersistSkipLogged = true;
-      const has = (value: unknown) => (value ? 'есть' : 'нет');
-      deps.log(`v2: persist пропущен (движок ${has(client)}, хранилище ${has(storage)}, ключ ${has(storageKey)})`);
-    }
+    host?.scheduleFlush();
     return Promise.resolve();
   }
 
-  function persistNow(): Promise<void> {
-    return stateWriter.flush();
+  async function persistNow(): Promise<void> {
+    if (host) await host.flush();
   }
 
-  /** Состояние изменилось и должно лечь на диск до возврата (правки пользователя в облаке и плане). */
   function persistUrgent(): Promise<void> {
-    if (client && storage && storageKey) stateWriter.mark();
-    return stateWriter.flush();
+    return persistNow();
   }
 
-  /** Состояние движка с диска: байтами либо прежней записью base64. */
-  async function loadEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
+  /** Прежнее состояние клиента (до переноса в модель, T115): байтами либо прежней записью base64. */
+  async function loadLegacyEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
     const bytes = await target.loadBytesRecord(STATE_BYTES_RECORD);
-    if (bytes) {
-      deps.log(`v2: состояние движка с диска (${bytes.length} байт)`);
-      return bytes;
-    }
+    if (bytes) return bytes;
     const legacy = await target.loadRecord<string>(STATE_RECORD);
-    hasLegacyState = Boolean(legacy);
-    deps.log(legacy ? 'v2: состояние движка с диска (прежняя запись base64)' : 'v2: состояния движка на диске нет');
     return legacy ? unb64(legacy) : undefined;
   }
 
-  // Стереть состояние с диска: отложенный снимок отменяется, начатая запись
-  // дожидается — иначе она легла бы поверх стирания
-  async function deleteEngineState(target: SecureE2eStorage) {
-    stateWriter.discard();
-    await stateWriter.settled();
-    await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
-    await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+  /** Клиент модели — с чистого листа (новое устройство); прежний снимок — по `archive` в DROPPED_STATE_RECORD. */
+  async function resetEngineState(target: SecureE2eStorage, archive: boolean) {
+    if (!host) return;
+    if (archive && storageKey) {
+      try {
+        const bytes = new EngineClient(host).export(storageKey);
+        await target.saveBytesRecord(DROPPED_STATE_RECORD, bytes).catch(() => undefined);
+      } catch (e) {
+        deps.log(`v2: снимок прежнего состояния не снят: ${String(e)}`);
+      }
+    }
+    host.clientReplace('new');
+    await host.flush();
   }
 
-  /** Снять состояние движка с рабочего места, но оставить копию: решение «личность сброшена» принято по ответу
-   * сервера, и ошибочное стирание ключей устройства необратимо. Копия уходит после успешной привязки. */
+  /** Решение «личность сброшена» принято по ответу сервера, а стирание ключей устройства необратимо: снимок
+   * прежнего состояния остаётся копией до успешной привязки. */
   async function archiveEngineState(target: SecureE2eStorage) {
-    const bytes = await loadEngineState(target).catch(() => undefined);
-    if (bytes) await target.saveBytesRecord(DROPPED_STATE_RECORD, bytes).catch(() => undefined);
-    await deleteEngineState(target);
+    await resetEngineState(target, true);
   }
 
-  /** Новое состояние движка (восстановление, сброс личности): оба вида записи — иначе прежний снимок побеждает. */
-  async function saveFreshEngineState(target: SecureE2eStorage, fresh: PvClient, key: Uint8Array) {
-    stateWriter.discard();
-    await stateWriter.settled();
-    await target.saveBytesRecord(STATE_BYTES_RECORD, fresh.export(key));
-    await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+  /** Новое состояние клиента (восстановление, сброс личности) — на диске сейчас; копия прежнего не нужна. */
+  async function saveFreshEngineState(target: SecureE2eStorage) {
+    await persistNow();
     await target.deleteRecord(DROPPED_STATE_RECORD).catch(() => undefined);
+  }
+
+  // ── модель движка (spec 035 T113) ───────────────────────────────────────────────────────────────────────
+  let host: ModelHost | undefined;
+  let hostUser = '';
+  let modelOpenState = '';
+  let modelTimer: ReturnType<typeof setInterval> | undefined;
+  let stateListener: (() => void) | undefined;
+  const sender = createModelSender((req, body) => {
+    const chan: Chan = req.channel === 'REQUEST_CHANNEL_ANON' ? 'anon' : 'id';
+    return call(chan, req.method, body, req.dest_domain || undefined);
+  }, deps.log);
+
+  /** Клиент модели (то же ядро, что держит модель; хост своего экземпляра не держит). */
+  function engineClient(): PvClient {
+    if (!host) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    return new EngineClient(host);
+  }
+
+  /** Открыть модель профиля над защищённым хранилищем (тот же профиль и пользователь — прежняя модель). */
+  async function openModel(target: SecureE2eStorage, self: string, deviceId: string, domain: string) {
+    if (host && hostUser === self) return host;
+    host?.close();
+    host = undefined;
+    let deviceKey = await target.loadRecord<string>(MODEL_KEY_RECORD);
+    if (!deviceKey) {
+      deviceKey = b64(crypto.getRandomValues(new Uint8Array(32)));
+      await target.saveRecord(MODEL_KEY_RECORD, deviceKey);
+    }
+    const migrated = Boolean(await target.loadRecord<boolean>(ENGINE_MIGRATED_RECORD).catch(() => undefined));
+    const legacy = migrated ? undefined : await loadLegacyEngineState(target);
+    modelOpenState = '';
+    const opened = await ModelHost.open({
+      user: self,
+      device_id: deviceId,
+      domain,
+      now_ms: String(Date.now()),
+      device_key: deviceKey,
+      host_driven: true,
+      legacy_present: Boolean(legacy),
+    }, {
+      store: secureModelStore(target),
+      send: (r) => sender.send(r),
+      onDelta: (d) => onModelDelta(d),
+      onOpen: (o) => {
+        modelOpenState = typeof o.state === 'string' ? o.state : '';
+      },
+      log: deps.log,
+    });
+    host = opened.host;
+    hostUser = self;
+    sender.bind(host);
+    if (modelOpenState === 'OPEN_STATE_MIGRATION_NEEDED') await migrateLegacyEngine(target, legacy);
+    if (modelOpenState !== 'OPEN_STATE_READY') {
+      deps.log(`v2: модель не открылась (${modelOpenState || 'нет итога'})`);
+      const code = modelOpenState === 'OPEN_STATE_TOO_NEW' ? 'ERROR_CODE_UPGRADE_REQUIRED' : 'ERROR_CODE_UNAVAILABLE';
+      throw new V2Error(code);
+    }
+    return host;
+  }
+
+  /** Разовый перенос (T115, contracts/migration.md): состояние прежнего клиента — в модель шагами `migrateStep`
+   * (слой web); старые записи только помечаются «перенесено» после `READY` с шагом `mark-legacy`. */
+  async function migrateLegacyEngine(target: SecureE2eStorage, legacy: Uint8Array | undefined) {
+    if (!host) return;
+    const savedKey = await target.loadRecord<string>(KEY_RECORD);
+    const records: { key: string; value: string }[] = [];
+    if (legacy) records.push({ key: 'record:v2-engine-bin', value: b64(legacy) });
+    if (savedKey) {
+      records.push({ key: 'record:v2-storage-key', value: b64(new TextEncoder().encode(JSON.stringify(savedKey))) });
+    }
+    deps.log(`v2: перенос состояния клиента в модель (${records.length} записей)`);
+    let out: ModelJson = await host.run('migrateStep', { layer: 'web', records, last: true });
+    for (let i = 0; i < 400 && modelOpenState !== 'OPEN_STATE_READY'; i++) {
+      await sender.idle();
+      if (modelOpenState === 'OPEN_STATE_READY') break;
+      const status = host.peek<{ point?: number; done?: boolean; report_json?: string }>('migrateStatus');
+      if (status.done && modelOpenState !== 'OPEN_STATE_READY') {
+        deps.log(`v2: перенос остановлен: ${status.report_json || ''}`);
+        break;
+      }
+      out = await host.run('migrateStep', {});
+    }
+    const steps = ((out.open as ModelJson | undefined)?.migration as { steps?: string[] } | undefined)?.steps;
+    if (modelOpenState !== 'OPEN_STATE_READY') return;
+    if (!steps || steps.includes('mark-legacy')) {
+      await target.saveRecord(ENGINE_MIGRATED_RECORD, true);
+      await host.run('migrateFinish', {});
+    }
+    deps.log('v2: состояние клиента перенесено в модель');
+  }
+
+  /** Изменения модели: события записей инбокса — тем же путём, что прежде; нужды клиента — добрать и повторить. */
+  async function onModelDelta(delta: ModelJson) {
+    const changes = (delta.changes as ModelJson[] | undefined) ?? [];
+    for (const ch of changes) {
+      if (ch.state_changed || ch.write_blocked) stateListener?.();
+      const clientEvents = ch.client_events as { json?: string } | undefined;
+      if (clientEvents?.json) await applyRecordEvents(JSON.parse(clientEvents.json) as EngineEvent[]);
+      const need = ch.needs as { kind?: string; detail?: string } | undefined;
+      if (need?.kind === 'client' && need.detail) queueNeed(need.detail);
+    }
+  }
+
+  const pendingNeeds = new Map<string, string>();
+  let needsScheduled = false;
+  let needAttempts = 0;
+
+  /** Нужда записи инбокса — добрать в очереди контроллера (не из обработчика изменений) и повторить запись. */
+  function queueNeed(detail: string) {
+    pendingNeeds.set(detail, detail);
+    if (needsScheduled) return;
+    needsScheduled = true;
+    void serial(async () => {
+      needsScheduled = false;
+      const list = [...pendingNeeds.values()];
+      pendingNeeds.clear();
+      let ok = true;
+      for (const n of list) {
+        ok = await satisfy(`{"need":${n}}`).catch(() => false) && ok;
+      }
+      if (!host) return;
+      if (ok) {
+        needAttempts = 0;
+        await host.ingestEvent('retry');
+      } else if (++needAttempts >= NEED_ATTEMPTS) {
+        needAttempts = 0;
+        deps.log('v2: запись не открыта — пропуск (сервер отдаст её снова)');
+        await host.ingestEvent('skip');
+      } else {
+        await host.ingestEvent('retry');
+      }
+    }).catch((e: unknown) => deps.log(`v2: нужда записи не добрана: ${String(e)}`));
+  }
+
+  /** Опрос модели (сроки, страховочный синк инбокса и личного состояния). */
+  function startModelTicks() {
+    if (modelTimer) return;
+    modelTimer = setInterval(() => {
+      if (ready && host) void host.tick().catch(() => undefined);
+    }, MODEL_TICK_MS);
   }
 
   /** Повтор подключения через задержку ряда повторов (или заданную). */
@@ -879,7 +992,10 @@ export function createV2Controller(deps: Deps) {
     const auth = await conn.auth(token);
     ownDeviceId = auth.deviceId;
     conn.onEvent = (ev) => {
-      if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
+      // Запись инбокса — модели (`ingest`): события и нужды вернутся изменениями модели
+      if (ev.eventKind === 'inbox.record') {
+        void host?.ingestRecord(ev.body).catch((e: unknown) => deps.log(`v2: запись инбокса: ${String(e)}`));
+      }
       if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
       if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
     };
@@ -900,6 +1016,7 @@ export function createV2Controller(deps: Deps) {
     await call('id', 'msg.inbox.subscribe', new Uint8Array());
     ready = true;
     readyClient = client;
+    startModelTicks();
     const deferredChecks = [...pendingDeletedChecks];
     pendingDeletedChecks.clear();
     deferredChecks.forEach((user) => void checkPeerDeleted(user));
@@ -949,19 +1066,21 @@ export function createV2Controller(deps: Deps) {
 
       // Прежние версии хранили корень открыто (C1-06) — стираем
       await storage.deleteRecord('v2-root').catch(() => undefined);
-      // Отложенный снимок прежнего движка (перезапуск после обрыва) — на диск до
-      // чтения, иначе поднялось бы устаревшее состояние
+      // Отложенная запись прежней модели (перезапуск после обрыва) — на диск до чтения
       await persistNow();
-      const saved = await loadEngineState(storage);
+      await openModel(storage, self, auth.deviceId, desc.domain);
+      client = engineClient();
+      // Устройство с личностью (журнал своих устройств в модели не пуст) — прежнее состояние. Незавершённое
+      // вступление (запись вступления на месте) — всегда повтор вступления: модель могла записать клиента с
+      // ключами нового корня отложенной записью раньше, чем сервер подтвердил журнал
+      const pendingJoin = await storage.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
+      const engineSelf = client.selfAddress();
+      const saved = !pendingJoin && client.logVersion(engineSelf) > 0n;
       if (saved) {
-        client?.free();
-        client = pv.PvClient.importState(saved, storageKey);
         // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес
-        const engineSelf = client.selfAddress();
         if (engineSelf !== self && !(await followOwnRename(engineSelf, self))) {
           // Прежний снимок не должен победить при следующем запуске (иначе привязка новой личности не состоится)
           await archiveEngineState(storage);
-          client.free();
           client = undefined;
           needsLinking = true;
           deps.onNeedsLinking?.();
@@ -978,8 +1097,9 @@ export function createV2Controller(deps: Deps) {
           return;
         }
       } else {
-        client?.free();
-        client = new pv.PvClient(self, auth.deviceId, desc.domain);
+        // Новое устройство: клиент модели — с чистого листа под device_id этой сессии
+        host!.clientReplace('new');
+        client = engineClient();
         // Первое v2-устройство пользователя — корень и журнал устройств.
         // Если у пользователя уже есть журнал (другое устройство на v2) —
         // этому устройству нужна линковка (LINK-1 v2); до неё — только v1.
@@ -989,12 +1109,11 @@ export function createV2Controller(deps: Deps) {
           'parvane.identity.v2.DeviceLogSyncRequest',
           JSON.stringify({ user: { address: self }, after_version: '0' }),
         ));
-        const pendingJoin = await storage.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
         if (pendingJoin) {
-          // Запрос вступления уже строился: состояние движка с ключами устройства
+          // Запрос вступления уже строился: состояние клиента с ключами устройства
           // сохранено — повторяем тот же запрос, а не выпускаем новые ключи
-          client.free();
-          client = pv.PvClient.importState(unb64(pendingJoin.state), storageKey);
+          host!.clientReplace('import', unb64(pendingJoin.state), storageKey);
+          client = engineClient();
           if (!(await finishJoin(pendingJoin))) return;
         } else if (pv.deviceLogEntries(ownLog) > 0) {
           if (!linkMaterial) {
@@ -1003,7 +1122,6 @@ export function createV2Controller(deps: Deps) {
           }
           if (!linkMaterial) {
             deps.log('v2: у аккаунта уже есть журнал устройств — нужна линковка этого устройства');
-            client.free();
             client = undefined;
             needsLinking = true;
             deps.onNeedsLinking?.();
@@ -1109,7 +1227,7 @@ export function createV2Controller(deps: Deps) {
   async function abandonJoin() {
     await storage?.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
     await storage?.deleteRecord(PENDING_GRANT_RECORD).catch(() => undefined);
-    client?.free();
+    host?.clientReplace('new');
     client = undefined;
     needsLinking = true;
     deps.onNeedsLinking?.();
@@ -1192,41 +1310,19 @@ export function createV2Controller(deps: Deps) {
     await new Promise(() => undefined);
   }
 
+  /** Догон журнала инбокса: страницы запрашивает и применяет модель (события — `onModelDelta`), подтверждение —
+   * после записи применённого (SYNC-1). Ждёт, пока все запросы модели отвечены. */
   async function syncAll() {
-    if (!client || !pv) return;
-    for (let page = 0; page < 1000; page++) {
-      const req = client.syncRequest() as OutReq;
-
-      const resp = await call(req.chan, req.method, req.body, req.dest);
-      const batch = pv.splitSyncResponse(resp) as { records: Uint8Array[]; more: boolean };
-      for (const r of batch.records) {
-        await openRecord(r);
-      }
-      if (!batch.more || !batch.records.length) break;
-    }
-    // Порядок: строки истории уже на диске (`applyExternal` сбрасывает кэш на
-    // каждую), состояние движка с курсором — перед ack, после которого сервер
-    // записи повторно не отдаст
-    await persistUrgent();
-    const ack = client.ackRequest() as OutReq;
-    await call(ack.chan, ack.method, ack.body, ack.dest).catch(() => undefined);
+    if (!client || !host) return;
+    await host.ingestEvent('inbox.poll');
+    await sender.idle();
+    await persistNow();
   }
 
-  async function openRecord(bytes: Uint8Array) {
+  /** События записи инбокса (из изменений модели) — в конвейер показа. */
+  async function applyRecordEvents(events: EngineEvent[]) {
     if (!client) return;
     scheduleReciprocate(); // T185: запись могла принести ключ доступа участника группы
-    let events: EngineEvent[] = [];
-    for (let i = 0; i < 6; i++) {
-      try {
-        events = JSON.parse(client.openRecord(bytes)) as EngineEvent[];
-        break;
-      } catch (e) {
-        if (!(await satisfy(e).catch(() => false))) {
-          deps.log(`v2: запись не открыта: ${String(e)}`);
-          return;
-        }
-      }
-    }
     for (const ev of events) {
       try {
         await applyEvent(ev);
@@ -1242,7 +1338,7 @@ export function createV2Controller(deps: Deps) {
         else scheduleGroupResync(ev.group.id);
       }
     }
-    const err = client.lastError();
+    const err = client?.lastError();
     if (err) deps.log(`v2: ошибка записи: ${err}`);
     await absorbSharedInvites();
     await persist();
@@ -1782,7 +1878,6 @@ export function createV2Controller(deps: Deps) {
     await storage?.deleteRecord(BUNDLE_SEQ_RECORD).catch(() => undefined);
     bundleKeyB64 = undefined;
     rootBackupB64 = undefined;
-    client?.free();
     client = undefined;
     needsLinking = true;
     deps.onNeedsLinking?.();
@@ -1795,7 +1890,6 @@ export function createV2Controller(deps: Deps) {
       idConn.close();
     }
     await persistNow();
-    client?.free();
     client = undefined;
     starting = undefined;
     await start();
@@ -1811,8 +1905,7 @@ export function createV2Controller(deps: Deps) {
   async function exportBackup(): Promise<V2DeviceBackup | undefined> {
     if (!ready || !client || !storage || !storageKey) return undefined;
     await persistNow();
-    const state = await loadEngineState(storage);
-    if (!state) return undefined;
+    const state = client.export(storageKey);
     return {
       key: b64(storageKey),
       state: b64(state),
@@ -1829,8 +1922,14 @@ export function createV2Controller(deps: Deps) {
     isHalted = true;
     const target = storage || await SecureE2eStorage.open(self);
     await target.saveRecord(KEY_RECORD, backup.key);
-    stateWriter.discard();
-    await stateWriter.settled();
+    // Модель профиля — заново: следующий запуск перенесёт состояние из копии (как прежнюю запись, T115)
+    host?.close();
+    host = undefined;
+    hostUser = '';
+    client = undefined;
+    const modelRecords = (await target.loadModelRecords('model:')).map((r) => r.name);
+    await target.writeModelRecords([], modelRecords);
+    await target.deleteRecord(ENGINE_MIGRATED_RECORD).catch(() => undefined);
     await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
     await target.saveRecord(STATE_RECORD, backup.state);
     if (backup.rootBackup) await target.saveRecord(ROOT_BACKUP_RECORD, backup.rootBackup);
@@ -2316,14 +2415,13 @@ export function createV2Controller(deps: Deps) {
       return { result: 'failed' };
     }
     if (!state?.backup) return { result: 'no_backup' };
-    const probe = new pv.PvClient(self, ownDeviceId, serverDomain);
+    const probe = engineClient();
     try {
       probe.importRootBackupFor(unb64(state.backup), recoveryKey.trim());
     } catch {
       return { result: 'bad_key' };
     } finally {
       probe.forgetRoot();
-      probe.free();
     }
     const bundleKey = await deriveBundleKey(recoveryKey, self).catch(() => undefined);
     const opened = bundleKey && state.key_bundle
@@ -2420,11 +2518,11 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: копия корня не получена: ${String(e)}`);
       return 'failed';
     }
-    const fresh = new pv.PvClient(self, ownDeviceId, serverDomain);
+    host?.clientReplace('new');
+    const fresh = engineClient();
     try {
       fresh.importRootBackupFor(backup, recoveryKey.trim());
     } catch {
-      fresh.free();
       return 'bad_key';
     }
     try {
@@ -2435,7 +2533,7 @@ export function createV2Controller(deps: Deps) {
       await run(fresh.recoverWithRoot(ownLog, OTK_COUNT) as OutReq[]);
       await sealRootEscrow(fresh);
       fresh.forgetRoot();
-      await saveFreshEngineState(storage, fresh, storageKey);
+      await saveFreshEngineState(storage);
       rootBackupB64 = b64(backup);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
       needsLinking = false;
@@ -2443,9 +2541,11 @@ export function createV2Controller(deps: Deps) {
       deps.log('v2: устройство восстановлено ключом восстановления (прежние устройства отозваны)');
     } catch (e) {
       deps.log(`v2: восстановление по ключу не удалось: ${String(e)}`);
+      // Полусделанное восстановление не должно стать «сохранённой личностью» при следующем запуске
+      host?.clientReplace('new');
       return 'failed';
     } finally {
-      fresh.free();
+      fresh.forgetRoot();
     }
     return (await restart()) ? 'ok' : 'failed';
   }
@@ -2464,7 +2564,8 @@ export function createV2Controller(deps: Deps) {
     } catch {
       return 'bad_password';
     }
-    const fresh = new pv.PvClient(deps.getSelf(), ownDeviceId, serverDomain);
+    host?.clientReplace('new');
+    const fresh = engineClient();
     let recoveryKey: string;
     try {
       const created = fresh.resetIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
@@ -2475,7 +2576,7 @@ export function createV2Controller(deps: Deps) {
       fresh.forgetRoot();
       created.rootSecret.fill(0);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
-      await saveFreshEngineState(storage, fresh, storageKey);
+      await saveFreshEngineState(storage);
       needsLinking = false;
       await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
@@ -2483,9 +2584,10 @@ export function createV2Controller(deps: Deps) {
       deps.log('v2: личность сброшена — новый корень и журнал устройств');
     } catch (e) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
+      host?.clientReplace('new');
       return 'failed';
     } finally {
-      fresh.free();
+      fresh.forgetRoot();
     }
     if (!(await restart())) return 'failed';
     return 'ok';
@@ -4586,16 +4688,16 @@ export function createV2Controller(deps: Deps) {
 
   // spec 035 T114: личное состояние — модель движка (`state.ops.*`); ключи — у прежнего клиента (переходят в WASM)
   const stateHost: StateJournalHost = {
-    openModel: async () => {
-      if (!ready || !client || !client.hasStateKey() || !ownDeviceId) return undefined;
-      return openStateModel({
-        user: deps.getSelf(),
-        deviceId: ownDeviceId,
-        domain: serverDomain,
-        client,
-        call: (method, body) => call('id', method, body),
-        log: deps.log,
-      });
+    openModel: () => {
+      if (!ready || !client || !client.hasStateKey() || !host) return Promise.resolve(undefined);
+      // Ключи личного состояния — у клиента той же модели; сведённое и неотправленное — в её хранилище
+      return Promise.resolve(openStateModel({
+        host,
+        sender,
+        subscribe: (listener) => {
+          stateListener = listener;
+        },
+      }));
     },
     encode: (type, json) => pv!.encodeMessage(type, json),
     decode: (type, bytes) => pv!.decodeMessage(type, bytes),
@@ -4759,7 +4861,6 @@ export function createV2Controller(deps: Deps) {
       idConn.onClose = undefined;
       idConn.close();
     }
-    client?.free();
     client = undefined;
     starting = undefined;
     await start();
@@ -4773,30 +4874,54 @@ export function createV2Controller(deps: Deps) {
    * требует его только от устройства, уже действующего в журнале.
    */
   async function sessionProof(user: string, deviceId: string) {
+    let temp: ModelHost | undefined;
     try {
-      const pvm = await loadProtocol();
+      await loadProtocol();
       const st = await SecureE2eStorage.open(user);
       const savedKey = await st.loadRecord<string>(KEY_RECORD);
       // Вступление в журнал, прерванное перезагрузкой (запись на сервере могла пройти): ключи устройства — в
       // записи незавершённого вступления, устройство уже в журнале и без доказательства не войдёт
       const pending = await st.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
-      const saved = pending ? unb64(pending.state) : await loadEngineState(st);
-      if (!savedKey || !saved) {
-        deps.log('v2: доказательство устройства — нет ключа или состояния на диске');
+      const deviceKey = await st.loadRecord<string>(MODEL_KEY_RECORD);
+      const hasModel = Boolean(deviceKey && await st.loadModelRecord('model:root'));
+      const migrated = Boolean(await st.loadRecord<boolean>(ENGINE_MIGRATED_RECORD).catch(() => undefined));
+      const legacy = pending || (hasModel && migrated) ? undefined : await loadLegacyEngineState(st);
+      const snapshot = pending ? unb64(pending.state) : legacy;
+      const config = {
+        user,
+        device_id: deviceId || 'proof',
+        domain: serverDomain || 'local',
+        now_ms: String(Date.now()),
+        host_driven: true,
+      };
+      const noSend = { send: () => undefined, log: deps.log };
+      if (snapshot) {
+        if (!savedKey) {
+          deps.log('v2: доказательство устройства — нет ключа снимка на диске');
+          return undefined;
+        }
+        temp = (await ModelHost.open({ ...config, device_key: b64(crypto.getRandomValues(new Uint8Array(32))) }, {
+          ...noSend, store: new MemoryModelStore(),
+        })).host;
+        temp.clientReplace('import', snapshot, unb64(savedKey));
+      } else if (hasModel) {
+        const store = secureModelStore(st);
+        temp = (await ModelHost.open({ ...config, device_key: deviceKey }, { ...noSend, store })).host;
+      } else {
+        deps.log('v2: доказательство устройства — нет состояния на диске');
         return undefined;
       }
-      const c = pvm.PvClient.importState(saved, unb64(savedKey));
-      try {
-        // Состояние и зеркало device_id — одного хранилища; при расхождении
-        // сервер отвергнет подпись, и вход пойдёт как с нового устройства
-        const tsMs = Date.now();
-        return { proof: b64(c.sessionProof(tsMs)), tsMs };
-      } finally {
-        c.free();
-      }
+      // Состояние и зеркало device_id — одного хранилища; при расхождении
+      // сервер отвергнет подпись, и вход пойдёт как с нового устройства
+      const c = new EngineClient(temp);
+      if (c.logVersion(c.selfAddress()) === 0n) return undefined;
+      const tsMs = Date.now();
+      return { proof: b64(c.sessionProof(tsMs)), tsMs };
     } catch (err) {
       deps.log(`v2: доказательство устройства не построено: ${String(err)}`);
       return undefined;
+    } finally {
+      temp?.close();
     }
   }
 
@@ -4971,9 +5096,13 @@ export function createV2Controller(deps: Deps) {
       blobConns.closeAll();
       anonPlanner?.free();
       anonPlanner = undefined;
-      // Снимок снимается синхронно до освобождения движка; запись доходит сама
-      void persistNow();
-      client?.free();
+      // Изменённое модели дописывается само; модель закрывается после записи
+      const closing = host;
+      host = undefined;
+      hostUser = '';
+      if (closing) void closing.flush().finally(() => closing.close());
+      if (modelTimer) clearInterval(modelTimer);
+      modelTimer = undefined;
       client = undefined;
       readyClient = undefined;
       if (reconnectTimer) clearTimeout(reconnectTimer);

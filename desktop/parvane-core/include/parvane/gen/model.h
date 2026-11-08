@@ -126,12 +126,16 @@ void to_json(nlohmann::json &j, const ServerInputKind &v);
 void from_json(const nlohmann::json &j, ServerInputKind &v);
 
 struct AuditDump;
+struct CallResult;
 struct Capabilities;
 struct CapabilitiesRequest;
 struct ChatAnchor;
 struct ChatListRequest;
 struct ChatPage;
 struct ChatView;
+struct ClientCall;
+struct ClientEvents;
+struct ClientReplace;
 struct ComposeContent;
 struct CriticalRange;
 struct DeviceWrap;
@@ -228,6 +232,12 @@ struct AuditDump {
 void to_json(nlohmann::json &j, const AuditDump &m);
 void from_json(const nlohmann::json &j, AuditDump &m);
 
+struct CallResult {
+    std::string result_json;
+};
+void to_json(nlohmann::json &j, const CallResult &m);
+void from_json(const nlohmann::json &j, CallResult &m);
+
 struct Capabilities {
     bool send_text = false;
     bool send_media = false;
@@ -259,6 +269,27 @@ struct ChatListRequest {
 void to_json(nlohmann::json &j, const ChatListRequest &m);
 void from_json(const nlohmann::json &j, ChatListRequest &m);
 
+struct ClientCall {
+    std::string name;
+    std::string args_json;
+};
+void to_json(nlohmann::json &j, const ClientCall &m);
+void from_json(const nlohmann::json &j, ClientCall &m);
+
+struct ClientEvents {
+    std::string json;
+};
+void to_json(nlohmann::json &j, const ClientEvents &m);
+void from_json(const nlohmann::json &j, ClientEvents &m);
+
+struct ClientReplace {
+    std::string mode;
+    std::string blob;
+    std::string key;
+};
+void to_json(nlohmann::json &j, const ClientReplace &m);
+void from_json(const nlohmann::json &j, ClientReplace &m);
+
 struct CriticalRange {
     std::string name;
     uint32_t from = 0;
@@ -283,6 +314,7 @@ struct EngineConfig {
     std::string device_key;
     bool vectors = false;
     bool legacy_present = false;
+    bool host_driven = false;
 };
 void to_json(nlohmann::json &j, const EngineConfig &m);
 void from_json(const nlohmann::json &j, EngineConfig &m);
@@ -1006,8 +1038,8 @@ void to_json(nlohmann::json &j, const HistoryPage &m);
 void from_json(const nlohmann::json &j, HistoryPage &m);
 
 struct ModelChange {
-    // oneof change: chat_upsert, chat_remove, message_upsert, message_remove, state_changed, group_changed, notice, unread_changed, write_blocked, needs
-    std::variant<std::monostate, ChatView, Peer, MessageView, MessageRemove, StateChanged, GroupView, Notice, UnreadChanged, WriteBlocked, Need> change;
+    // oneof change: chat_upsert, chat_remove, message_upsert, message_remove, state_changed, group_changed, notice, unread_changed, write_blocked, needs, client_events
+    std::variant<std::monostate, ChatView, Peer, MessageView, MessageRemove, StateChanged, GroupView, Notice, UnreadChanged, WriteBlocked, Need, ClientEvents> change;
 };
 void to_json(nlohmann::json &j, const ModelChange &m);
 void from_json(const nlohmann::json &j, ModelChange &m);

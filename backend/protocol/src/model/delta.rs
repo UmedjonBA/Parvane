@@ -24,7 +24,7 @@ fn place(c: &Change) -> Option<String> {
         Change::GroupChanged(g) => format!("g/{}", g.group.as_ref().map(|r| hex::encode(&r.id)).unwrap_or_default()),
         Change::UnreadChanged(u) => format!("u/{}", peer(&u.chat)),
         Change::WriteBlocked(w) => format!("w/{}", w.journal),
-        Change::Notice(_) | Change::Needs(_) => return None,
+        Change::Notice(_) | Change::Needs(_) | Change::ClientEvents(_) => return None,
     })
 }
 

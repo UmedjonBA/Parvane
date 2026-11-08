@@ -7,12 +7,12 @@ import init, * as pv from '../../../lib/parvane-protocol/parvane_protocol';
 import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url';
 import { storeBatchFromJson, storeLoadedToJson, storeReadsFromJson } from './gen/model';
 import { base64ToBytes } from './base64';
+import { EngineClient } from './engineClient';
 import { errorCodeNumber } from './transport';
 
 export type Protocol = typeof pv;
-export type {
-  PvClient, PvHistory,
-} from '../../../lib/parvane-protocol/parvane_protocol';
+// spec 035 (T113): клиент — в модели движка; прежние имена типов — у её интерфейса (`engineClient.ts`)
+export type { EngineClient as PvClient, EngineHistory as PvHistory } from './engineClient';
 
 let loading: Promise<Protocol> | undefined;
 let loaded: Protocol | undefined;
@@ -95,8 +95,11 @@ export interface ModelHostDeps {
   store: ModelStore;
   /** Отправить запрос; ответ — `host.ingestResponse(req_id, …)`. Вызывается только после фиксации пачки. */
   send: (req: ModelRequest) => void;
-  /** Изменения модели по порядку (`ModelDelta` proto3-JSON). */
-  onDelta?: (delta: ModelJson) => void;
+  /** Изменения модели по порядку (`ModelDelta` proto3-JSON). Обещание ждётся ДО фиксации пачки того же итога:
+   * хост успевает записать своё (события инбокса в режиме хоста) раньше, чем модель отметит запись применённой
+   * и выпустит подтверждение (SYNC-1). Внутри обработчика нельзя ждать других вызовов модели (`run`, `flush`):
+   * они встают в очередь за текущим итогом и возвращаются сразу. */
+  onDelta?: (delta: ModelJson) => void | Promise<void>;
   /** Итог открытия (`OpenResult`). */
   onOpen?: (open: ModelJson) => void;
   log?: (message: string) => void;
@@ -109,10 +112,25 @@ export class ModelError extends Error {
   }
 }
 
+/** Ошибка действия клиента модели (`clientCall`): строкой — JSON `{"need": …}` либо `{"error": …}`, как прежняя
+ * обвязка (`parseEngineError(String(e))`). */
+export class EngineCallError extends Error {
+  constructor(readonly raw: string) {
+    super(raw);
+  }
+
+  override toString() {
+    return this.raw;
+  }
+}
+
+/** Отложенная запись состояния модели (как прежний снимок клиента, perf A1). */
+const FLUSH_DEBOUNCE_MS = 400;
+const FLUSH_MAX_DELAY_MS = 2000;
+
 type EngineLike = {
   call: (name: string, args: string) => string;
   free?: () => void;
-  adoptStateKeys?: (client: pv.PvClient) => string;
 };
 
 function b64(bytes: Uint8Array) {
@@ -126,6 +144,13 @@ export class ModelHost {
   private chain: Promise<unknown> = Promise.resolve();
 
   private closed = false;
+
+  // Обработчик изменений идёт: вызов модели из него встаёт в очередь и не ждётся (иначе взаимная блокировка)
+  private inDelta = 0;
+
+  private flushTimer?: ReturnType<typeof setTimeout>;
+
+  private flushFirstAt = 0;
 
   constructor(private readonly engine: EngineLike, private readonly deps: ModelHostDeps) {}
 
@@ -147,9 +172,65 @@ export class ModelHost {
     return { host, open: opened[opened.length - 1] };
   }
 
-  /** Вызов модели с выполнением итога; результат — итог (`Outcome`) первого вызова. */
+  /** Вызов модели с выполнением итога; результат — итог (`Outcome`) первого вызова. Из обработчика изменений —
+   * в очередь без ожидания (результат — пустой итог). */
   run(name: string, args: unknown): Promise<ModelJson> {
-    return this.serial(() => this.drive(this.raw(name, args)));
+    const queued = this.serial(() => this.drive(this.raw(name, args)));
+    if (!this.inDelta) return queued;
+    queued.catch((e: unknown) => this.deps.log?.(`модель: ${name} из обработчика: ${String(e)}`));
+    return Promise.resolve({});
+  }
+
+  /** Действие или чтение клиентского ядра модели (`clientCall`), синхронно; изменённое ляжет на диск отложенной
+   * записью (`flush`). Ошибка — `EngineCallError` с JSON `{"need": …}` / `{"error": …}`. */
+  clientCall(name: string, args: Record<string, unknown> = {}): unknown {
+    if (this.closed) throw new EngineCallError('{"error":"Closed"}');
+    const argsJson = JSON.stringify({ name, args_json: JSON.stringify(args) });
+    const out = JSON.parse(this.engine.call('clientCall', argsJson)) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    this.scheduleFlush();
+    return JSON.parse(out.result_json ?? 'null');
+  }
+
+  /** Функция сессии журнала истории модели (`historyCall`): результат — JSON-текст, ошибка — исключение. */
+  historyCall(name: string, argsJson: string): string {
+    const out = JSON.parse(this.engine.call('historyCall', JSON.stringify({ name, args_json: argsJson || '{}' }))) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    return out.result_json ?? 'null';
+  }
+
+  /** Сменить клиент модели: новое устройство либо импорт экспорта (`blob` под `key`). */
+  clientReplace(mode: 'new' | 'import', blob?: Uint8Array, key?: Uint8Array) {
+    const out = this.raw('clientReplace', {
+      mode, blob: blob ? b64(blob) : undefined, key: key ? b64(key) : undefined,
+    });
+    this.scheduleFlush();
+    return out;
+  }
+
+  /** Записать изменённое сейчас: на диске до возврата (из обработчика изменений — только в очередь). */
+  flush() {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    this.flushFirstAt = 0;
+    if (this.closed) return Promise.resolve({});
+    return this.run('flush', {});
+  }
+
+  /** Записать изменённое отложенно (debounce 400 мс, не дольше 2 с от первого изменения). */
+  scheduleFlush() {
+    if (this.closed) return;
+    const now = Date.now();
+    if (!this.flushFirstAt) this.flushFirstAt = now;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    const delay = Math.max(0, Math.min(FLUSH_DEBOUNCE_MS, this.flushFirstAt + FLUSH_MAX_DELAY_MS - now));
+    this.flushTimer = setTimeout(() => {
+      void this.flush().catch((e: unknown) => this.deps.log?.(`модель: отложенная запись: ${String(e)}`));
+    }, delay);
   }
 
   /** Намерение (`Intent` proto3-JSON, например `{state_patch: {...}}`). */
@@ -166,6 +247,11 @@ export class ModelHost {
     return this.run('ingest', {
       kind: 'SERVER_INPUT_KIND_RESPONSE', req_id: reqId, body: b64(body), error,
     });
+  }
+
+  /** Запись журнала инбокса (живое уведомление `inbox.record`). */
+  ingestRecord(body: Uint8Array) {
+    return this.run('ingest', { kind: 'SERVER_INPUT_KIND_INBOX_RECORD', body: b64(body) });
   }
 
   /** Событие сервера, адресованное модели (`method` — вид события). */
@@ -192,17 +278,9 @@ export class ModelHost {
     return this.raw(name, args) as T;
   }
 
-  /** Переходный период (T114): ключи личного состояния прежнего клиента — в модель (внутри WASM, в JS не выходят). */
-  adoptStateKeys(client: pv.PvClient) {
-    return this.serial(() => {
-      if (!this.engine.adoptStateKeys) throw new ModelError('UnknownCall');
-      const out = JSON.parse(this.engine.adoptStateKeys(client)) as ModelJson;
-      if (typeof out.error === 'string') throw new ModelError(out.error);
-      return this.drive(out);
-    });
-  }
-
   close() {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
     this.closed = true;
     this.engine.free?.();
   }
@@ -228,7 +306,16 @@ export class ModelHost {
     while (queue.length) {
       const out = queue.pop()!;
       const delta = out.delta as ModelJson | undefined;
-      if (delta) this.deps.onDelta?.(delta);
+      if (delta && this.deps.onDelta) {
+        this.inDelta++;
+        try {
+          await this.deps.onDelta(delta);
+        } catch (e) {
+          this.deps.log?.(`модель: изменения не применены хостом: ${String(e)}`);
+        } finally {
+          this.inDelta--;
+        }
+      }
       if (out.open) this.deps.onOpen?.(out.open as ModelJson);
       const batch = out.store_batch as ModelJson | undefined;
       let batchId: string | undefined;
@@ -277,13 +364,168 @@ export class MemoryModelStore implements ModelStore {
   }
 }
 
-// ── Личное состояние через модель (переходный период web, T114) ─────────────────────────────────────────
+// ── Модель в памяти: клиент без профиля (тесты, разовые проверки; spec 035 T113/T118) ─────────────────────────
 //
-// Личность, инбокс, группы и разделы пока ведёт прежний клиент (`PvClient`); личное состояние (`state.v2`,
-// `state.ops.*`) — модель: сведение, метки и разница «желаемое ↔ сведённое» только в движке. Хранилище модели — в
-// памяти вкладки: журнал читается с начала при каждом запуске (как прежний `PvState`), неотправленные правки
-// переживают перезагрузку через «несохранённые виды» localState. Постоянное хранилище модели появится вместе с
-// переносом (T115), когда модель возьмёт на себя и личность.
+// Модель открывается синхронно над пустым хранилищем в памяти (пачки не сохраняются); клиент — её ядро. Снимок
+// прежнего клиента (`blob` под `key`) — импортом.
+
+class MemoryCore {
+  private closed = false;
+
+  constructor(private readonly engine: EngineLike) {}
+
+  clientCall(name: string, args: Record<string, unknown>): unknown {
+    const argsJson = JSON.stringify({ name, args_json: JSON.stringify(args) });
+    const out = JSON.parse(this.engine.call('clientCall', argsJson)) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    return JSON.parse(out.result_json ?? 'null');
+  }
+
+  historyCall(name: string, argsJson: string): string {
+    const out = JSON.parse(this.engine.call('historyCall', JSON.stringify({ name, args_json: argsJson || '{}' }))) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    return out.result_json ?? 'null';
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.engine.free?.();
+  }
+}
+
+/** Клиент модели в памяти (`user`, устройство, домен); `snapshot` — экспорт прежнего клиента. */
+export function openMemoryClient(
+  user: string, deviceId: string, domain = 'local', snapshot?: { blob: Uint8Array; key: Uint8Array },
+): EngineClient {
+  const memory = { engine: pv.PvEngine.open(JSON.stringify({
+    user,
+    device_id: deviceId,
+    domain,
+    now_ms: String(Date.now()),
+    device_key: b64(crypto.getRandomValues(new Uint8Array(32))),
+    host_driven: true,
+  })) };
+  const { engine } = memory;
+  const start = JSON.parse(memory.engine.call('start', '{}')) as { store_reads?: { read_id?: string }[] };
+  const readId = start.store_reads?.[0]?.read_id ?? '1';
+  JSON.parse(memory.engine.call('storeLoaded', JSON.stringify({ read_id: readId, entries: [] })));
+  if (snapshot) {
+    const out = JSON.parse(memory.engine.call('clientReplace', JSON.stringify({
+      mode: 'import', blob: b64(snapshot.blob), key: b64(snapshot.key),
+    }))) as { error?: string };
+    if (out.error) {
+      engine.free();
+      throw new EngineCallError(JSON.stringify(out));
+    }
+  }
+  const client = new EngineClient(new MemoryCore(engine));
+  client.ownsCore = true;
+  return client;
+}
+
+// ── Хранилище модели в профиле web (spec 035 T113) ─────────────────────────────────────────────────────────
+//
+// Модель шифрует свои записи своим DEK; записи лежат в защищённом хранилище профиля (`SecureE2eStorage`) под
+// именами `model:<ключ модели>` — поэтому на них действуют PIN, смена поколения и вкладки профиля. Пачка модели —
+// одна запись хранилища (записи и удаления вместе).
+
+/** Что модели нужно от защищённого хранилища профиля (`SecureE2eStorage`). */
+export interface ModelRecords {
+  writeModelRecords(puts: [name: string, bytes: Uint8Array][], deletes: string[]): Promise<unknown>;
+  loadModelRecord(name: string): Promise<Uint8Array | undefined>;
+  loadModelRecords(prefix: string): Promise<{ name: string; bytes: Uint8Array }[]>;
+}
+
+const MODEL_PREFIX = 'model:';
+
+function modelName(key: string) {
+  return `${MODEL_PREFIX}${key.replace(/\//g, '~')}`;
+}
+
+function modelKey(name: string) {
+  return name.slice(MODEL_PREFIX.length).replace(/~/g, '/');
+}
+
+/** Хранилище модели поверх записей профиля. */
+export function secureModelStore(records: ModelRecords): ModelStore {
+  return {
+    commit: async (batch) => {
+      await records.writeModelRecords(
+        batch.puts.map((p) => [modelName(p.key), p.value]),
+        batch.deletes.map(modelName),
+      );
+    },
+    read: async (reads) => {
+      const out: StorePut[] = [];
+      for (const key of reads.keys) {
+        const value = await records.loadModelRecord(modelName(key));
+        if (value) out.push({ key, value });
+      }
+      if (reads.prefix) {
+        const rows = (await records.loadModelRecords(modelName(reads.prefix)))
+          .map((r) => ({ key: modelKey(r.name), value: r.bytes }))
+          .filter((r) => r.key.startsWith(reads.prefix) && r.key > reads.after)
+          .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+        out.push(...(reads.limit ? rows.slice(0, reads.limit) : rows));
+      }
+      return out;
+    },
+  };
+}
+
+/** Отправка запросов модели: ответ — `ingestResponse`, учёт запросов в пути (ожидание «всё отвечено»). */
+export function createModelSender(
+  call: (req: ModelRequest, body: Uint8Array) => Promise<Uint8Array>,
+  log: (message: string) => void,
+) {
+  let inflight = 0;
+  let failed = 0;
+  let waiters: (() => void)[] = [];
+  let host: ModelHost | undefined;
+  const settle = () => {
+    if (inflight) return;
+    const list = waiters;
+    waiters = [];
+    list.forEach((w) => w());
+  };
+  return {
+    bind(next: ModelHost) {
+      host = next;
+    },
+    send(req: ModelRequest) {
+      inflight++;
+      void call(req, unb64(req.body))
+        .then((resp) => host?.ingestResponse(req.req_id, resp, 0), (e: unknown) => {
+          log(`модель: ${req.method}: ${String((e as Error)?.message ?? e)}`);
+          failed++;
+          return host?.ingestResponse(req.req_id, new Uint8Array(0), errorCodeNumber(e));
+        })
+        .catch((e: unknown) => log(`модель: ответ ${req.method} не принят: ${String(e)}`))
+        .finally(() => {
+          inflight--;
+          settle();
+        });
+    },
+    /** Все запросы модели отвечены. */
+    idle: () => (inflight ? new Promise<void>((resolve) => {
+      waiters.push(resolve);
+    }) : Promise.resolve()),
+    failures: () => failed,
+  };
+}
+
+export type ModelSender = ReturnType<typeof createModelSender>;
+
+// ── Личное состояние через модель (T114) ──────────────────────────────────────────────────────────────────
+//
+// Личное состояние (`state.v2`, `state.ops.*`) ведёт модель того же профиля, что и клиентское ядро: сведение,
+// метки и разница «желаемое ↔ сведённое» только в движке; сведённое и неотправленное лежат в хранилище модели и
+// переживают перезапуск.
 
 /** Показ личного состояния моделью: снимок в форме `state.v1`, избранные стикеры, журнал закрыт для записи. */
 export type StateModelView = {
@@ -313,72 +555,20 @@ function unb64(text?: string) {
 }
 
 export type StateModelDeps = {
-  user: string;
-  deviceId: string;
-  domain: string;
-  client: pv.PvClient;
-  /** Запрос серверу по каналу личности. */
-  call: (method: string, body: Uint8Array) => Promise<Uint8Array>;
-  log: (message: string) => void;
-  /** Тесты: своя фабрика движка. */
-  engineFactory?: (cfg: string) => EngineLike;
+  host: ModelHost;
+  sender: ModelSender;
+  /** Подписка на изменения личного состояния модели (из общего обработчика изменений хоста). */
+  subscribe: (listener: (() => void) | undefined) => void;
 };
 
-/** Открыть модель личного состояния поверх прежнего клиента. */
-export async function openStateModel(deps: StateModelDeps): Promise<StateModel> {
-  let inflight = 0;
-  // Запросов, не дошедших до сервера: правка, чьи записи не приняты, — отказ (localState оставит вид
-  // «несохранённым» и повторит его после переподключения; модель держит запись до ответа)
-  let failed = 0;
-  let idleWaiters: (() => void)[] = [];
-  let listener: (() => void) | undefined;
-  // Хост появляется после открытия; запросы до него не уходят
-  const ref: { host?: ModelHost } = {};
-  const settle = () => {
-    if (inflight) return;
-    const waiters = idleWaiters;
-    idleWaiters = [];
-    waiters.forEach((w) => w());
-  };
-  const idle = () => (inflight ? new Promise<void>((resolve) => idleWaiters.push(resolve)) : Promise.resolve());
-  const send = (req: ModelRequest) => {
-    inflight++;
-    const body = unb64(req.body);
-    void deps.call(req.method, body)
-      .then((resp) => ref.host!.ingestResponse(req.req_id, resp, 0), (e: unknown) => {
-        deps.log(`модель: ${req.method}: ${String((e as Error)?.message ?? e)}`);
-        failed++;
-        return ref.host!.ingestResponse(req.req_id, new Uint8Array(0), errorCodeNumber(e));
-      })
-      .catch((e: unknown) => deps.log(`модель: ответ ${req.method} не принят: ${String(e)}`))
-      .finally(() => {
-        inflight--;
-        settle();
-      });
-  };
-  const deviceKey = crypto.getRandomValues(new Uint8Array(32));
-  const opened = await ModelHost.open({
-    user: deps.user,
-    device_id: deps.deviceId,
-    domain: deps.domain,
-    now_ms: String(Date.now()),
-    device_key: b64(deviceKey),
-  }, {
-    store: new MemoryModelStore(),
-    send: (r) => send(r),
-    onDelta: (d) => {
-      const changes = (d.changes as ModelJson[] | undefined) ?? [];
-      if (changes.some((c) => c.state_changed || c.write_blocked)) listener?.();
-    },
-    log: deps.log,
-  }, deps.engineFactory);
-  const { host } = opened;
-  ref.host = host;
-  await host.adoptStateKeys(deps.client);
-  const model: StateModel = {
+/** Личное состояние поверх модели профиля. */
+export function openStateModel(deps: StateModelDeps): StateModel {
+  const { host, sender } = deps;
+  let closed = false;
+  return {
     view: () => host.peek<StateModelView>('stateViewV1'),
     apply: async (desired, opts = {}) => {
-      const before = failed;
+      const before = sender.failures();
       await host.run('stateApplyV1', {
         snapshot: desired,
         kinds: opts.kinds ?? [],
@@ -386,23 +576,25 @@ export async function openStateModel(deps: StateModelDeps): Promise<StateModel> 
         rewrite: Boolean(opts.rewrite),
         base: opts.base,
       });
-      await idle();
-      if (failed > before) throw new ModelError('Unavailable');
+      await sender.idle();
+      if (sender.failures() > before) throw new ModelError('Unavailable');
     },
     submit: async (intent) => {
-      const before = failed;
+      const before = sender.failures();
       await host.submit(intent);
-      await idle();
-      if (failed > before) throw new ModelError('Unavailable');
+      await sender.idle();
+      if (sender.failures() > before) throw new ModelError('Unavailable');
     },
     sync: async () => {
       await host.ingestEvent('journal.state');
-      await idle();
+      await sender.idle();
     },
     onChange: (next) => {
-      listener = next;
+      if (!closed) deps.subscribe(next);
     },
-    close: () => host.close(),
+    close: () => {
+      closed = true;
+      deps.subscribe(undefined);
+    },
   };
-  return model;
 }

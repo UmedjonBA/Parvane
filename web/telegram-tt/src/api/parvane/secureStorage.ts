@@ -50,6 +50,16 @@ const KEYS = createStore('parvane-store-v3-keys', 'keys');
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+function toB64(bytes: Uint8Array) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(out);
+}
+
+function fromB64(text: string) {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
 function kindOf(name: string): string {
   if (name.startsWith('m:')) return 'history-row';
   if (name.startsWith('j:')) return 'outbox';
@@ -563,6 +573,37 @@ export class SecureE2eStorage {
   async deleteRecord(name: string) {
     if (this.legacy) return this.legacy.deleteRecord(name);
     return writeRecords(this.ctx, await this.profile(), [], [name]);
+  }
+
+  // ── записи хранилища модели движка (spec 035 T113, `v2/engine.ts` `secureModelStore`) ──────────────────
+  // Модель шифрует свои записи сама (свой DEK); здесь они лежат ещё и под ключом профиля (PIN, вкладки, смена
+  // поколения — как у остальных записей). Пачка модели — одна запись хранилища: записи и удаления вместе.
+
+  async writeModelRecords(puts: [name: string, bytes: Uint8Array][], deletes: string[]) {
+    if (this.legacy) {
+      // Прежний профиль (до T115): значение — JSON с именем, иначе префиксное чтение не вернёт имён
+      if (puts.length) await this.legacy.saveRecords(puts.map(([name, bytes]) => [name, { k: name, v: toB64(bytes) }]));
+      if (deletes.length) await this.legacy.deleteRecords(deletes);
+      return undefined;
+    }
+    if (!puts.length && !deletes.length) return undefined;
+    return writeRecords(this.ctx, await this.profile(), puts, deletes);
+  }
+
+  async loadModelRecord(name: string): Promise<Uint8Array | undefined> {
+    if (this.legacy) {
+      const r = await this.legacy.loadRecord<{ k: string; v: string }>(name);
+      return r?.v !== undefined ? fromB64(r.v) : undefined;
+    }
+    return readRecord(await this.profile(), name);
+  }
+
+  async loadModelRecords(prefix: string): Promise<{ name: string; bytes: Uint8Array }[]> {
+    if (this.legacy) {
+      const rows = await this.legacy.loadRecordsByPrefix<{ k: string; v: string }>(prefix);
+      return rows.filter((r) => r && typeof r.k === 'string').map((r) => ({ name: r.k, bytes: fromB64(r.v) }));
+    }
+    return (await readPrefix(await this.profile(), prefix)).filter((r) => r.name.startsWith(prefix));
   }
 
   static async clear(user: string) {
