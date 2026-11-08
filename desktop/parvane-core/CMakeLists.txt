@@ -52,6 +52,7 @@ add_library(parvane_core STATIC
     src/blobcrypt.cpp
     src/storecrypt.cpp
     src/store_fs.cpp
+    src/engine_store.cpp
     src/gen/model.cpp
     src/local_files.cpp
     src/keybackup.cpp
@@ -118,7 +119,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     # Живой тест сессии гоняет и разделы «План»/«Облако» поверх сессии (spec 029, T026)
     target_link_libraries(parvane_v2_session_tests PRIVATE parvane_sections)
     # Общие векторы conformance v2 (SEAL-1, GSEAL-1, приглашения) через C ABI и векторы форматов web ↔ desktop
-    foreach(t protocol_vectors webcompat engine_abi)
+    foreach(t protocol_vectors webcompat engine_abi engine_store)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
         target_include_directories(parvane_${t}_tests PRIVATE ${PARVANE_BACKEND_DIR}/protocol/ffi/include)
@@ -128,7 +129,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     enable_testing()
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
               reconnect_backoff queue_watchdog protocol_vectors webcompat engine_abi transport local_files blob_download dev_hooks chat_rules
-              history_sync client_safety store_fs)
+              history_sync client_safety store_fs engine_store)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

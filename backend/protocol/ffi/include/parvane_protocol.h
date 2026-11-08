@@ -34,6 +34,11 @@ typedef struct PvHistorySession PvHistorySession;
 typedef struct PvStateSession PvStateSession;
 
 /**
+ * Хранилище движка профиля (непрозрачный указатель, освобождать `pv_store_free`).
+ */
+typedef struct PvStoreHandle PvStoreHandle;
+
+/**
  * Байтовый буфер движка.
  */
 typedef struct PvBytes {
@@ -815,6 +820,119 @@ void pv_anon_planner_closed(struct PvAnonPlanner *p,
  * Открытых соединений с получателем (для тестов/диагностики).
  */
 uintptr_t pv_anon_planner_open_count(const struct PvAnonPlanner *p);
+
+/**
+ * Открыть хранилище: байты корня (`root`) либо пусто (`len = 0`) — новый профиль (поколение 1, новый DEK;
+ * обёртку даёт `pv_store_wrap_device`). Существующее — заблокировано до `pv_store_unlock_*`.
+ */
+struct PvStoreHandle *pv_store_open(const uint8_t *root,
+                                    uintptr_t len,
+                                    char **err);
+
+void pv_store_free(struct PvStoreHandle *h);
+
+/**
+ * Состояние и сводка корня (JSON: `state`, `activeGeneration`, `pendingGeneration`, `retiringGeneration`,
+ * `wraps`); освобождать `pv_free_string`.
+ */
+char *pv_store_info(struct PvStoreHandle *h);
+
+/**
+ * Байты корня (сверка корня на носителе).
+ */
+struct PvBytes pv_store_root(struct PvStoreHandle *h);
+
+/**
+ * Разблокировать ключом устройства (32 байта: desktop — производная локального ключа tdata, android —
+ * ключ под Android Keystore; тот же, что у `storecrypt::setKey`).
+ */
+bool pv_store_unlock_device(struct PvStoreHandle *h,
+                            const uint8_t *key,
+                            uintptr_t len,
+                            char **err);
+
+/**
+ * Разблокировать PIN (обёртка `pin`). Неверный PIN — ошибка `Crypto`.
+ */
+bool pv_store_unlock_pin(struct PvStoreHandle *h,
+                         const char *pin,
+                         char **err);
+
+/**
+ * Обернуть DEK ключом устройства (новый профиль, снятие PIN) — пачка только с корнем (JSON `StoreBatch`).
+ */
+char *pv_store_wrap_device(struct PvStoreHandle *h,
+                           const uint8_t *key,
+                           uintptr_t len,
+                           char **err);
+
+/**
+ * Установить/сменить PIN — пачка только с корнем; записи данных не трогаются (FR-021).
+ */
+char *pv_store_set_pin(struct PvStoreHandle *h,
+                       const char *pin,
+                       char **err);
+
+/**
+ * Забыть DEK.
+ */
+void pv_store_lock(struct PvStoreHandle *h);
+
+/**
+ * Корень сменил другой процесс того же профиля: принять (JSON состояния как `pv_store_info`).
+ */
+bool pv_store_refresh_root(struct PvStoreHandle *h,
+                           const uint8_t *root,
+                           uintptr_t len,
+                           char **err);
+
+/**
+ * Пачка записей и удалений: `{"puts": [{"kind", "name", "value"(base64)}], "deletes": [{"kind", "name"}]}` →
+ * JSON `StoreBatch` (во время переноса — в оба поколения).
+ */
+char *pv_store_write(struct PvStoreHandle *h,
+                     const char *ops_json,
+                     char **err);
+
+/**
+ * Открыть запись по ключу носителя и значению; освобождать `parvane_protocol_bytes_free`.
+ */
+struct PvBytes pv_store_open_record(struct PvStoreHandle *h,
+                                    const char *key,
+                                    const uint8_t *value,
+                                    uintptr_t len,
+                                    char **err);
+
+/**
+ * Хост зафиксировал пачку.
+ */
+void pv_store_committed(struct PvStoreHandle *h, uint64_t batch_id);
+
+/**
+ * Хост не смог зафиксировать пачку (нет места, ошибка записи).
+ */
+void pv_store_failed(struct PvStoreHandle *h,
+                     uint64_t batch_id,
+                     const char *reason);
+
+/**
+ * P1 переноса поколения — JSON `StoreBatch`.
+ */
+char *pv_store_begin_rotation(struct PvStoreHandle *h, char **err);
+
+/**
+ * Следующее действие переноса (JSON): `{"type":"read","reads":StoreReads}` | `{"type":"write","batch":StoreBatch}`
+ * | `{"type":"continue"}` | `{"type":"done"}` | `{"type":"aborted","errors":[…]}`.
+ */
+char *pv_store_rotation_next(struct PvStoreHandle *h,
+                             char **err);
+
+/**
+ * Прочитанное по `read` переноса — JSON `StoreLoaded` (как отдаёт `store_fs::Store::readJson`).
+ */
+bool pv_store_rotation_loaded(struct PvStoreHandle *h,
+                              const char *loaded_json,
+                              char **err);
 
 #ifdef __cplusplus
 }  // extern "C"

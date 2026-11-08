@@ -19,6 +19,9 @@ use std::ptr;
 
 use parvane_protocol::host::{self, HostClient};
 
+// spec 035 T048: хранилище движка (`pv_store_*`) — отдельным модулем.
+mod store;
+
 static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
 
 /// Байтовый буфер движка.
