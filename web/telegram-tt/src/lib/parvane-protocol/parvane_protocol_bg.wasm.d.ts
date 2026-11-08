@@ -186,7 +186,6 @@ export const pvclient_tokenRequest: (a: number, b: number, c: number, d: number,
 export const pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-export const pvengine_adoptStateKeys: (a: number, b: number, c: number) => void;
 export const pvengine_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvengine_engineInfo: (a: number, b: number) => void;
 export const pvengine_open: (a: number, b: number, c: number) => void;

@@ -667,11 +667,6 @@ export class PvEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
-     * переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
-     */
-    adoptStateKeys(client: PvClient): string;
-    /**
      * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
      * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
      */
@@ -1130,7 +1125,6 @@ export interface InitOutput {
     readonly pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly pvengine_adoptStateKeys: (a: number, b: number, c: number) => void;
     readonly pvengine_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvengine_engineInfo: (a: number, b: number) => void;
     readonly pvengine_open: (a: number, b: number, c: number) => void;

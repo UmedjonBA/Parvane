@@ -3406,29 +3406,6 @@ export class PvEngine {
         wasm.__wbg_pvengine_free(ptr, 0);
     }
     /**
-     * Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
-     * переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
-     * @param {PvClient} client
-     * @returns {string}
-     */
-    adoptStateKeys(client) {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            _assertClass(client, PvClient);
-            wasm.pvengine_adoptStateKeys(retptr, this.__wbg_ptr, client.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
      * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
      * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
      * @param {string} name
@@ -4931,12 +4908,6 @@ function addHeapObject(obj) {
 
     heap[idx] = obj;
     return idx;
-}
-
-function _assertClass(instance, klass) {
-    if (!(instance instanceof klass)) {
-        throw new Error(`expected instance of ${klass.name}`);
-    }
 }
 
 function dropObject(idx) {
