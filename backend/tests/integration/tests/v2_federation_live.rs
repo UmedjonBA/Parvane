@@ -414,6 +414,11 @@ impl Dev {
     fn group_sync(&mut self, g: &parvane_protocol::pb::parvane::core::v2::Ref) {
         use parvane_protocol::pb::parvane::group::v2 as gpb;
         let dest = if g.domain == self.own_domain() { String::new() } else { g.domain.clone() };
+        // spec 035 (PV-014): записи группы другого сервера свой сервер кладёт только подписанным — как движок
+        // при вступлении (model `refresh_groups`)
+        if !dest.is_empty() {
+            let _ = self.id.call("group.remote.subscribe", gpb::RemoteSubscribeRequest { group: Some(g.clone()) }.encode_to_vec());
+        }
         for _ in 0..8 {
             let after = self.client.group_version(&g.id);
             // Исключённому журнал больше не отдают (FORBIDDEN) — как внутри одного сервера.
