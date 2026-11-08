@@ -98,7 +98,7 @@ const ContactList: FC<OwnProps & StateProps> = ({
         ))
       ) : viewportIds && !viewportIds.length ? (
         <p className="no-results" key="no-results" dir="auto">
-          {filter.length ? 'No contacts matched your search.' : 'Contact list is empty.'}
+          {filter.length ? lang('ParvaneContactsNoMatch') : lang('ParvaneContactsEmpty')}
         </p>
       ) : (
         <Loading key="loading" />

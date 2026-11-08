@@ -184,6 +184,29 @@ try {
   assert.equal(await articleBody.locator('li').count(), 2, 'два пункта списка');
   assert.equal(await articleBody.locator('strong').filter({ hasText: 'спальник' }).count(), 1, 'жирный');
   assert.equal(await articleBody.locator('a[href="https://example.org/map"]').count(), 1, 'ссылка');
+  // C7-4: подпись «вокзала» не совпадает с адресом — переход только через окно с настоящим адресом, вкладка сама
+  // не открывается
+  let popups = 0;
+  const onPopup = () => {
+    popups += 1;
+  };
+  bobPage.context().on('page', onPopup);
+  await articleBody.locator('a[href="https://example.org/map"]').click();
+  // Окно SafeLinkModal (новый Modal Web A, без класса `.Modal`) — по тексту с настоящим адресом
+  const safeLink = bobPage.getByText('Do you want to open https://example.org/map', { exact: false });
+  await safeLink.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).catch(async (e) => {
+    const modals = await bobPage.locator('[role="dialog"]').allInnerTexts().catch(() => []);
+    console.log(`C7-4: окна ${JSON.stringify(modals).slice(0, 2000)}, вкладок открыто ${popups}`);
+    if (SHOT_DIR) await bobPage.screenshot({ path: `${SHOT_DIR}/article-safelink-fail.png` });
+    throw e;
+  });
+  await bobPage.waitForTimeout(500);
+  assert.equal(popups, 0, 'ссылка с другой подписью не открылась без подтверждения');
+  await bobPage.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+  await safeLink.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  bobPage.context().off('page', onPopup);
+  await viewer.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: ссылка статьи с другой подписью — через окно подтверждения (C7-4)');
   assert.equal(await articleBody.locator('blockquote').count(), 1, 'цитата');
   await expectImageEmbed(articleBody, 'карта.png');
   await expectVideoEmbed(articleBody, 'клип.webm');

@@ -8,6 +8,7 @@
 // журнал не подключается — всё как раньше.
 
 import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../../types';
+import type { LocalContactInfo, SContact } from '../contactInfo';
 import type {
   createLocalState, JournalScheduled, LocalQuickReaction, LocalStateKind, LocalStickerPack,
 } from '../localState';
@@ -19,7 +20,9 @@ import type { PvState } from './engine';
 import { MAIN_THREAD_ID } from '../../types';
 
 import { ARCHIVED_FOLDER_ID } from '../../../config';
+import { contactsFromState, contactsToState, mergeContactsLocalWins } from '../contactInfo';
 import { apiEntitiesToWire, wireEntitiesToApi } from '../entities';
+import { soundFromState, soundToState } from '../notifyDefaults';
 import {
   b64ToUuid, uuidToB64, type V2Content, type V2Text, v2ToWire, wireToV2,
 } from './contentMap';
@@ -57,6 +60,8 @@ type Deps = {
   onAppended?: () => void;
   /** Свои наборы стикеров из журнала (PACK-3): установить недостающие, снять убранные (`removed`). */
   applyStickerPacks?: (packs: LocalStickerPack[], removed: string[]) => void;
+  /** Контакты из журнала (CONTACT-1): явные контакты, их имена и заметки; `removed` — убранные из контактов. */
+  applyContacts?: (addresses: string[], info: Record<string, LocalContactInfo>, removed: string[]) => void;
   log: (message: string) => void;
 };
 
@@ -109,6 +114,7 @@ type SSnapshot = {
   unread_marks?: SPeer[];
   quick_reaction?: SQuickReaction;
   sticker_packs?: LocalStickerPack[];
+  contacts?: SContact[];
   [key: string]: unknown;
 };
 // `state.v1.GroupInvite`: ссылка-приглашение группы v2 (bytes — base64)
@@ -132,9 +138,11 @@ const NOTIFY_DEFAULT_TYPES = ['users', 'groups', 'channels'] as const;
 
 const MANAGED_KINDS: LocalStateKind[] = [
   'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify', 'unread', 'reaction', 'packs',
+  'contacts',
 ];
 // Виды, появившиеся в журнале позже первого переноса (миграция — один раз на вид)
-const LATE_KINDS: LocalStateKind[] = ['notify', 'unread', 'reaction', 'packs'];
+// `contacts` переносится иначе — только недостающим (контакты разных устройств складываются, а не вытесняются)
+const LATE_KINDS: LocalStateKind[] = ['notify', 'unread', 'reaction', 'packs', 'contacts'];
 const PIN_LIST_MAIN = 'PIN_LIST_MAIN';
 // Причина завершения звонка (`call.v2.HangupReason`): имя и числовое значение
 const HANGUP_NORMAL = 'HANGUP_REASON_NORMAL';
@@ -288,8 +296,14 @@ export function createStateJournal(deps: Deps) {
         return true; // приватный режим — переносим
       }
     });
+    if (kinds.includes('contacts')) {
+      const bodies = session.migrate(JSON.stringify({ contacts: localContacts() }));
+      append(...bodies);
+      await pushAppends();
+      if (bodies.length) deps.log(`v2: контакты перенесены в журнал (${bodies.length} записей)`);
+    }
     const current = readSnapshot();
-    const empty = kinds.filter((kind) => isKindEmpty(current, kind));
+    const empty = kinds.filter((kind) => kind !== 'contacts' && isKindEmpty(current, kind));
     if (empty.length) {
       const bodies = session.diff(JSON.stringify(buildDesired(current, empty)), empty);
       append(...bodies);
@@ -322,6 +336,9 @@ export function createStateJournal(deps: Deps) {
     host = nextHost;
     session = nextSession;
     await serial(async () => {
+      // Ключи наборов стикеров и GIF (C7-3), черновики — в шифрованном хранилище: до загрузки снимок отдал бы
+      // в журнал записи без них
+      await deps.localState.hydrate().catch(() => undefined);
       const isReadable = await pullRemote();
       if (carried) {
         const bodies = session!.migrate(carried);
@@ -412,7 +429,11 @@ export function createStateJournal(deps: Deps) {
     const kinds = deps.localState.loadDirtyKinds().filter((kind) => MANAGED_KINDS.includes(kind));
     if (!kinds.length) return;
     const revision = deps.localState.getDirtyRevision();
-    const bodies = session.diff(JSON.stringify(buildDesired(readSnapshot())), kinds);
+    const current = readSnapshot();
+    const desired = buildDesired(current);
+    // Контакты: свои правки поверх журнала без удалений — там могут быть контакты с других устройств
+    if (kinds.includes('contacts')) desired.contacts = mergeContactsLocalWins(current.contacts, desired.contacts || []);
+    const bodies = session.diff(JSON.stringify(desired), kinds);
     append(...bodies);
     await pushAppends();
     deps.localState.clearDirtyKinds(revision);
@@ -674,6 +695,8 @@ export function createStateJournal(deps: Deps) {
           pick.quick_reaction = full.quick_reaction;
         } else if (kind === 'packs') {
           pick.sticker_packs = full.sticker_packs;
+        } else if (kind === 'contacts') {
+          pick.contacts = full.contacts;
         }
       });
       return pick;
@@ -707,7 +730,12 @@ export function createStateJournal(deps: Deps) {
       unread_marks: localState.loadUnreadMarks().map(peerOf).filter(isPeer),
       quick_reaction: reactionToState(localState.loadQuickReaction()),
       sticker_packs: localState.loadStickerPacks(),
+      contacts: localContacts(),
     };
+  }
+
+  function localContacts() {
+    return contactsToState(deps.localState.loadContacts(), deps.localState.loadContactInfo());
   }
 
   function folderToState(folder: ApiChatFolder): SFolder | undefined {
@@ -748,7 +776,10 @@ export function createStateJournal(deps: Deps) {
     const address = store.getAddressForId(entry.chatId);
     const peer = address ? peerOf(address) : undefined;
     if (!peer) return undefined;
-    const content = wireToV2({ kind: 'text', text: entry.text || '', entities: apiEntitiesToWire(entry.entities) });
+    // «Без звука» — `Content.silent` внутри сериализованного содержимого отложенного
+    const content = wireToV2({
+      kind: 'text', text: entry.text || '', entities: apiEntitiesToWire(entry.entities), silent: entry.silent,
+    });
     return {
       op_id: uuidToB64(entry.opId),
       peer,
@@ -772,6 +803,7 @@ export function createStateJournal(deps: Deps) {
       projectUnreadMarks(snap);
       projectQuickReaction(snap);
       projectStickerPacks(snap);
+      projectContacts(snap);
     });
     projectScheduled(snap);
     projectCalls(snap);
@@ -928,6 +960,19 @@ export function createStateJournal(deps: Deps) {
     deps.applyStickerPacks?.(next, before.filter((p) => !kept.has(p.set_id)).map((p) => p.set_id));
   }
 
+  function projectContacts(snap: SSnapshot) {
+    const { localState } = deps;
+    const before = localState.loadContacts();
+    const beforeInfo = localState.loadContactInfo();
+    const { addresses, info } = contactsFromState(snap.contacts);
+    const isSameList = JSON.stringify([...before].sort()) === JSON.stringify([...addresses].sort());
+    if (isSameList && JSON.stringify(sortKeys(beforeInfo)) === JSON.stringify(sortKeys(info))) return;
+    localState.saveContacts(addresses);
+    localState.saveContactInfo(info);
+    const kept = new Set(addresses);
+    deps.applyContacts?.(addresses, info, before.filter((address) => !kept.has(address)));
+  }
+
   function projectQuickReaction(snap: SSnapshot) {
     const { localState } = deps;
     const next = reactionFromState(snap.quick_reaction);
@@ -989,6 +1034,7 @@ export function createStateJournal(deps: Deps) {
         scheduledAt: Math.floor(Number(s.send_at_ms || 0) / MS_IN_SECOND),
         text: content.text,
         entities: content.entities,
+        silent: content.silent,
       });
     });
     deps.localState.applyJournalScheduled(list);
@@ -1014,7 +1060,9 @@ export function createStateJournal(deps: Deps) {
       const content = JSON.parse(host.decode('parvane.msg.v2.Content', b64ToBytes(b64))) as V2Content;
       const wire = v2ToWire(content);
       if (wire?.kind !== 'text' || !wire.text) return undefined;
-      return { text: wire.text, entities: wireEntitiesToApi(wire.entities, wire.text.length) };
+      return {
+        text: wire.text, entities: wireEntitiesToApi(wire.entities, wire.text.length), silent: wire.silent || undefined,
+      };
     } catch {
       return undefined;
     }
@@ -1067,6 +1115,10 @@ export function createStateJournal(deps: Deps) {
   };
 }
 
+function sortKeys<T>(map: Record<string, T>) {
+  return Object.keys(map).sort().map((key) => [key, map[key]]);
+}
+
 // Настройки уведомлений: локальный вид (секунды эпохи, поля tt) ↔ журнал
 function notifyToState(settings: LocalNotify): SNotify {
   const mutedUntil = typeof settings.mutedUntil === 'number' ? settings.mutedUntil : 0;
@@ -1074,6 +1126,7 @@ function notifyToState(settings: LocalNotify): SNotify {
     mute_until_ms: String(Math.max(0, mutedUntil) * 1000),
     show_previews: typeof settings.shouldShowPreviews === 'boolean' ? settings.shouldShowPreviews : undefined,
     silent: typeof settings.isSilentPosting === 'boolean' ? settings.isSilentPosting : undefined,
+    sound: soundToState(settings.hasSound),
   };
 }
 
@@ -1081,6 +1134,8 @@ function notifyFromState(settings: SNotify | undefined, previous: LocalNotify | 
   const out: LocalNotify = { ...previous, mutedUntil: Math.floor(Number(settings?.mute_until_ms || 0) / 1000) };
   if (typeof settings?.show_previews === 'boolean') out.shouldShowPreviews = settings.show_previews;
   if (typeof settings?.silent === 'boolean') out.isSilentPosting = settings.silent;
+  const hasSound = soundFromState(settings?.sound);
+  if (hasSound !== undefined) out.hasSound = hasSound;
   return out;
 }
 

@@ -105,7 +105,7 @@ addActionHandler('searchMessagesGlobal', (global, actions, payload): ActionRetur
   }
 
   const {
-    query, resultsByType, chatId,
+    query, resultsByType, chatId, minDate, maxDate,
   } = selectTabState(global, tabId).globalSearch;
   const {
     totalCount, foundIds, nextOffsetId, nextOffsetPeerId, nextOffsetRate,
@@ -128,6 +128,9 @@ addActionHandler('searchMessagesGlobal', (global, actions, payload): ActionRetur
     offsetId: nextOffsetId,
     offsetPeer,
     peer: chat,
+    // Parvane: подсказка даты (`setGlobalSearchDate`) отбирает сообщения этих суток (B1 ревью 7 ноя 2026)
+    minDate,
+    maxDate,
     tabId,
   });
 });

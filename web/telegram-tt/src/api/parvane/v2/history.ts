@@ -1,11 +1,12 @@
 // Журнал истории аккаунта (spec 033, HIST-1, HIST-2, READ-2): клиентская сторона.
 // Сервер (шард messenger) хранит зашифрованные записи; шифрует, пакует и разбирает их сессия движка
 // (`PvClient.historySession()` → `PvHistory`), строки сводит хранилище строк (`historyRows.ts`). Здесь —
-// жизненный цикл: очередь записи (свои действия ≤ 300 мс, маркер ≤ 1 с, входящее через случайные 1–5 с и только
-// если его ещё нет в журнале), догон по живому уведомлению `JournalNotice` и страховочный опрос раз в 60 с, вход
-// нового устройства (голова → сводка → сегменты → журнал после точки), контрольная точка (сегменты по чату и месяцу,
-// неизменившиеся — прежним номером), замена истории дальше горизонта надгробий, перенос локальной истории (один
-// раз) и защита от отката сервера.
+// жизненный цикл: очередь записи (ревью 7 ноя 2026, S7-3: своё, маркеры и входящее — одной пачкой по таймеру
+// 30–120 с с дрожанием, входящее — только если его ещё нет в журнале; по времени записи сервер не отличит автора
+// сообщения от получателя), догон по живому уведомлению `JournalNotice` и страховочный опрос раз в 60 с, вход
+// нового устройства (голова → сводка, сверенная с точкой → сегменты с op_id из сводки → журнал после точки, номера
+// цепочек писателей без пропусков — S7-4), контрольная точка (сегменты по месяцу, неизменившиеся — прежним номером),
+// замена истории дальше горизонта надгробий, перенос локальной истории (один раз) и защита от отката сервера.
 
 import type { HistoryRows } from '../historyRows';
 import type { PvHistory } from './engine';
@@ -35,8 +36,10 @@ export type HistorySyncState = {
   checkpointId?: number;
   checkpointUpto?: number;
   checkpointCreatedMs?: number;
-  // Сегменты текущей точки (ключ, отпечаток, номер) — неизменившиеся переходят в следующую
-  segments?: { key: string; digest: string; seq: number }[];
+  // Сегменты текущей точки (ключ, отпечаток, номер, op_id записи) — неизменившиеся переходят в следующую
+  segments?: { key: string; digest: string; seq: number; opId?: string }[];
+  // Книга цепочек писателей (S7-4, непрозрачна — ведёт движок): пропуск номера — сервер спрятал запись
+  chains?: unknown;
   // Сегменты, запечатанные не текущим ключом/адресом: при следующей точке перезаливаются
   staleSegments?: number[];
   // Ключ личного состояния сменён: следующая точка перезаливает все сегменты (иначе новое устройство не прочтёт)
@@ -52,6 +55,11 @@ type IngestResult = {
   headSeq: number;
   compacted?: Checkpoint;
   rejected: number;
+  // op_id записи не тот, что назван сводкой для её номера (`expect`)
+  mismatched?: number;
+  // С книгой цепочек: обновлённая книга и число спрятанных сервером записей
+  chains?: unknown;
+  gaps?: number;
 };
 type Checkpoint = { id: number; uptoSeq: number; summarySeq: number; chunkSeqs: number[]; createdMs: number };
 type QueueItem = { op: HOp; due: number; key?: string; markChat?: string };
@@ -73,13 +81,22 @@ type Deps = {
   log: (message: string) => void;
   now?: () => number;
   random?: () => number;
+  /** Окно пачки записи [мин, макс] мс (тесты); по умолчанию — HISTORY_BATCH_*_MS (диаг-сборка — короче). */
+  batchMs?: [number, number];
 };
 
-export const HISTORY_OWN_DELAY_MS = 300;
-export const HISTORY_MARK_DELAY_MS = 1000;
-export const HISTORY_INCOMING_MIN_MS = 1000;
-export const HISTORY_INCOMING_MAX_MS = 5000;
+// S7-3: всё, что устройство пишет в журнал (своё отправленное и действия, маркеры, входящее), уходит одной пачкой
+// через случайные 30–120 с после первого события в очереди: время и размер записи (выровнен по сетке L2 движком)
+// одинаковы у автора сообщения и у получателей. Своим устройствам сообщение и так приходит сразу — копией
+export const HISTORY_BATCH_MIN_MS = 30000;
+export const HISTORY_BATCH_MAX_MS = 120000;
 export const HISTORY_POLL_MS = 60000;
+// e2e (только диаг-сборка, `VITE_PARVANE_DIAG_HOOKS=1`): короткое окно пачки, сценарии не ждут по две минуты;
+// `localStorage['parvane:e2e:historyBatchMs'] = "мин,макс"` — своё окно
+const E2E_BATCH_STORAGE_KEY = 'parvane:e2e:historyBatchMs';
+const E2E_BATCH_DEFAULT_MS: [number, number] = [1000, 3000];
+const ARE_DIAG_HOOKS_ENABLED = import.meta.env?.VITE_PARVANE_DIAG_HOOKS === '1';
+const OUTBOX_SAVE_MS = 300;
 // Контрольная точка: записей после прежней точки больше порога либо точке больше суток; случайная задержка
 export const CHECKPOINT_RECORDS = 5000;
 export const CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000;
@@ -97,9 +114,25 @@ const RETRY_MAX_MS = 60000;
 const RATE_LIMIT_PAUSE_MS = 1000;
 const RATE_LIMIT_RETRIES = 20;
 
+/** Окно пачки записи в журнал: прод — 30–120 с; диаг-сборка (e2e) — короткое или из localStorage. */
+export function historyBatchWindow(): [number, number] {
+  if (!ARE_DIAG_HOOKS_ENABLED) return [HISTORY_BATCH_MIN_MS, HISTORY_BATCH_MAX_MS];
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(E2E_BATCH_STORAGE_KEY) : undefined;
+    const [lo, hi] = (raw || '').split(',').map(Number);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo >= 0 && hi >= lo) return [lo, hi];
+  } catch {
+    // хранилище недоступно — окно по умолчанию
+  }
+  return E2E_BATCH_DEFAULT_MS;
+}
+
 export function createHistoryJournal(deps: Deps) {
   const now = deps.now || Date.now;
   const random = deps.random || Math.random;
+  const [batchMinMs, batchMaxMs] = deps.batchMs || historyBatchWindow();
+  // Срок текущей пачки: все события очереди уходят вместе в этот момент
+  let batchDue: number | undefined;
   let host: HistoryHost | undefined;
   let session: PvHistory | undefined;
   // Свои адреса сессии (текущий и прежние после смены ника) — набор «своих» для непрочитанного
@@ -191,6 +224,11 @@ export function createHistoryJournal(deps: Deps) {
       bodies: Array.from(new Set([...saved.bodies, ...outbox.bodies])),
     };
     if (myGeneration !== generation) return;
+    // Не записанное до перезагрузки уходит новой пачкой (не в момент запуска)
+    if (outbox.ops.length) {
+      const due = nextBatchDue();
+      outbox.ops = outbox.ops.map((item) => ({ ...item, due }));
+    }
     await deps.rows.ensureMarks();
     listenVisibility();
     deps.log('история: журнал подключён');
@@ -211,6 +249,7 @@ export function createHistoryJournal(deps: Deps) {
     host = undefined;
     isSynced = false;
     isRolledBack = false;
+    batchDue = undefined;
   }
 
   function reset() {
@@ -266,10 +305,10 @@ export function createHistoryJournal(deps: Deps) {
   async function pull() {
     if (!session || !host || isRolledBack) return;
     if (!state.cursor && !state.checkpointId) await bootstrap();
-    for (let page = 0; page < SYNC_PAGES && session; page++) {
+    for (let page = 0; page < SYNC_PAGES && session && !isRolledBack; page++) {
       const body = callSession<string>('syncRequest', { afterSeq: state.cursor, skipChunks: true });
       const resp = await request('history.sync', body);
-      const r = callSession<IngestResult>('ingest', { resp });
+      let r = ingestChained(resp);
       if (r.headSeq < state.headSeq) {
         isRolledBack = true;
         deps.log(`история: сервер вернул журнал назад (голова ${r.headSeq} < ${state.headSeq}) — не применяется`);
@@ -278,6 +317,13 @@ export function createHistoryJournal(deps: Deps) {
       state.headSeq = Math.max(state.headSeq, r.headSeq);
       if (r.compacted && state.cursor < r.compacted.uptoSeq) {
         await loadCheckpoint(r.compacted, true);
+        if (isRolledBack) return;
+        // Записи после точки — по книге цепочек точки
+        r = ingestChained(resp);
+      }
+      state.chains = r.chains;
+      if (r.gaps) {
+        deps.log(`история: сервер не отдал ${r.gaps} записей журнала (пропуск в цепочке писателя) — проверьте сервер`);
       }
       if (r.rejected) deps.log(`история: ${r.rejected} записей журнала не открылись`);
       await deps.rows.applyJournalOps(r.ops);
@@ -294,6 +340,14 @@ export function createHistoryJournal(deps: Deps) {
     await saveState();
   }
 
+  /** Разбор страницы журнала с книгой цепочек (S7-4). Книги ещё нет: журнал виден с начала — полная. */
+  function ingestChained(resp: string) {
+    const args: Record<string, unknown> = { resp };
+    if (state.chains) args.chains = state.chains;
+    else args.chainsComplete = !state.cursor && !state.checkpointId;
+    return callSession<IngestResult>('ingest', args);
+  }
+
   /** Вход нового устройства (курсор 0): голова → точка (сводка, затем сегменты), дальше — обычный синк. */
   async function bootstrap() {
     const resp = await request('history.head', callSession<string>('headRequest'));
@@ -302,13 +356,13 @@ export function createHistoryJournal(deps: Deps) {
     if (head.checkpoint) await loadCheckpoint(head.checkpoint, false);
   }
 
-  async function getRecords(seqs: number[]): Promise<IngestResult[]> {
+  async function getRecords(seqs: number[], expect?: Record<string, string>): Promise<IngestResult[]> {
     const out: IngestResult[] = [];
     let rest = seqs.slice();
     while (rest.length && session) {
       const batch = rest.slice(0, GET_BATCH);
       const resp = await request('history.get', callSession<string>('getRequest', { seqs: batch }));
-      const r = callSession<IngestResult>('ingest', { resp });
+      const r = callSession<IngestResult>('ingest', expect ? { resp, expect } : { resp });
       out.push(r);
       const got = new Set(r.records.map((record) => record.seq));
       // Страница ограничена размером: не поместившиеся — следующим запросом; пустой ответ — их на сервере нет
@@ -324,8 +378,20 @@ export function createHistoryJournal(deps: Deps) {
     const [summaryResult] = await getRecords([cp.summarySeq]);
     const summary = summaryResult?.ops.find((op) => op.summary)?.summary;
     if (!summary) {
-      deps.log(`история: сводка точки ${cp.id} не прочитана`);
-      state.cursor = Math.max(state.cursor, cp.uptoSeq);
+      // Курсор за точку не двигается: иначе сервер, не отдав сводку, заставил бы пропустить всё до неё (S7-4)
+      deps.log(`история: сводка точки ${cp.id} не прочитана — точка не применяется, повтор позже`);
+      isRolledBack = true;
+      return;
+    }
+    // S7-4: сводка называет свою позицию и id точки — старую сводку за новую точку сервер не выдаст
+    let chains: unknown;
+    try {
+      chains = callSession<{ chains: unknown }>('historyVerifyCheckpoint', {
+        checkpoint: cp, summary, ...(state.chains ? { chains: state.chains } : {}),
+      }).chains;
+    } catch (e) {
+      deps.log(`история: точка ${cp.id} не сходится со своей сводкой — журнал не применяется: ${String(e)}`);
+      isRolledBack = true;
       return;
     }
     const tombstonesSinceMs = Number(summary.tombstones_since_ms || 0);
@@ -346,7 +412,15 @@ export function createHistoryJournal(deps: Deps) {
     const segments = orderSegments(summary.segments || []);
     const stale: number[] = [];
     for (let i = 0; i < segments.length; i += GET_BATCH) {
-      const results = await getRecords(segments.slice(i, i + GET_BATCH).map((ref) => Number(ref.seq)));
+      const part = segments.slice(i, i + GET_BATCH);
+      // Сегмент под номером из сводки — именно та запись (op_id в AAD), не прежняя версия (S7-4)
+      const expect = Object.fromEntries(part.filter((ref) => ref.op_id).map((ref) => [String(ref.seq), ref.op_id!]));
+      const results = await getRecords(part.map((ref) => Number(ref.seq)), expect);
+      if (results.some((r) => r.mismatched)) {
+        deps.log(`история: сервер подменил сегмент точки ${cp.id} — журнал не применяется`);
+        isRolledBack = true;
+        return;
+      }
       for (const r of results) {
         await deps.rows.applyJournalOps(r.ops);
         r.ops.forEach(noteSeen);
@@ -359,22 +433,30 @@ export function createHistoryJournal(deps: Deps) {
     state.checkpointUpto = cp.uptoSeq;
     state.checkpointCreatedMs = cp.createdMs;
     state.segments = (summary.segments || []).map((ref) => ({
-      key: ref.key, digest: ref.digest || '', seq: Number(ref.seq),
+      key: ref.key, digest: ref.digest || '', seq: Number(ref.seq), opId: ref.op_id,
     }));
     state.staleSegments = stale;
     state.casFailedFor = undefined;
+    state.chains = chains;
     await saveState();
   }
 
   // ── запись ─────────────────────────────────────────────────────────────────
 
-  /** Операция в очередь записи: своя — через ≤ 300 мс (маркер — ≤ 1 с), входящее — через 1–5 с, если её к тому
-   * времени нет в журнале. */
+  /** Срок пачки: текущей, если она ещё не ушла, иначе новой — через случайные 30–120 с (S7-3). */
+  function nextBatchDue() {
+    const t = now();
+    if (batchDue === undefined || batchDue <= t || !outbox.ops.length) {
+      batchDue = t + batchMinMs + random() * (batchMaxMs - batchMinMs);
+    }
+    return batchDue;
+  }
+
+  /** Операция в очередь записи: своя, маркер и входящее — одной пачкой (S7-3); входящее пишется, только если
+   * его к тому времени нет в журнале. */
   function enqueue(op: HOp, { isOwn }: { isOwn: boolean }) {
     const t = now();
-    let due = t + HISTORY_OWN_DELAY_MS;
-    if (op.read) due = t + HISTORY_MARK_DELAY_MS;
-    else if (!isOwn) due = t + HISTORY_INCOMING_MIN_MS + random() * (HISTORY_INCOMING_MAX_MS - HISTORY_INCOMING_MIN_MS);
+    const due = nextBatchDue();
     const markChat = op.read ? addressForPeer(op.read.chat) : undefined;
     if (markChat) outbox.ops = outbox.ops.filter((item) => item.markChat !== markChat);
     outbox.ops.push({
@@ -389,7 +471,7 @@ export function createHistoryJournal(deps: Deps) {
     outboxSaveTimer = setTimeout(() => {
       outboxSaveTimer = undefined;
       void deps.saveOutbox(outbox).catch(() => undefined);
-    }, HISTORY_OWN_DELAY_MS);
+    }, OUTBOX_SAVE_MS);
   }
 
   function scheduleFlush(delayMs: number) {
@@ -413,11 +495,16 @@ export function createHistoryJournal(deps: Deps) {
     return a > b || (a === b && known.up_to_id >= mark.up_to_id);
   }
 
-  async function flush() {
+  async function flush(isForced = false) {
     if (!session || !host) return;
     const t = now();
-    const due = outbox.ops.filter((item) => item.due <= t);
-    outbox.ops = outbox.ops.filter((item) => item.due > t);
+    const isDue = (item: QueueItem) => isForced || item.due <= t;
+    // Перед записью входящего — догнать журнал: другое своё устройство могло записать его раньше
+    if (outbox.ops.some((item) => isDue(item) && item.key)) {
+      await pull().catch((e: unknown) => deps.log(`история: синк перед записью: ${String(e)}`));
+    }
+    const due = outbox.ops.filter(isDue);
+    outbox.ops = outbox.ops.filter((item) => !isDue(item));
     const ops = due
       .filter((item) => !(item.key && seen.has(item.key)) && !(item.op.read && isMarkInJournal(item.op.read)))
       .map((item) => item.op);
@@ -480,17 +567,17 @@ export function createHistoryJournal(deps: Deps) {
     }
   }
 
-  async function appendOne(op: HOp | HOp[], isChunk: boolean): Promise<number[]> {
+  async function appendOne(op: HOp | HOp[], isChunk: boolean): Promise<{ seq: number; opId: string }[]> {
     const sealed = callSession<{ opId: string; body: string }[]>('seal', {
       ops: Array.isArray(op) ? op : [op], chunk: isChunk,
     });
-    const seqs: number[] = [];
-    for (const { body } of sealed) {
+    const out: { seq: number; opId: string }[] = [];
+    for (const { body, opId } of sealed) {
       const seq = await appendBody(body);
       if (seq === undefined) throw new Error('сегмент не записан');
-      seqs.push(seq);
+      out.push({ seq, opId });
     }
-    return seqs;
+    return out;
   }
 
   // ── перенос локальной истории (FR-024, один раз) ───────────────────────────
@@ -539,12 +626,19 @@ export function createHistoryJournal(deps: Deps) {
     if (head.checkpoint && head.checkpoint.id !== state.checkpointId) {
       // Точку сменило другое устройство: её сегменты — основа следующей (с прежними номерами)
       const [summaryResult] = await getRecords([head.checkpoint.summarySeq]);
-      const summary = summaryResult?.ops.find((op) => op.summary)?.summary;
+      let summary = summaryResult?.ops.find((op) => op.summary)?.summary;
+      // Сводка не сходится с точкой (S7-4) — её сегменты не берём: следующая точка перезальёт всё
+      try {
+        if (summary) callSession('historyVerifyCheckpoint', { checkpoint: head.checkpoint, summary });
+      } catch (e) {
+        deps.log(`история: сводка точки ${head.checkpoint.id} не сходится с точкой: ${String(e)}`);
+        summary = undefined;
+      }
       state.checkpointId = head.checkpoint.id;
       state.checkpointUpto = head.checkpoint.uptoSeq;
       state.checkpointCreatedMs = head.checkpoint.createdMs;
       state.segments = (summary?.segments || []).map((ref) => ({
-        key: ref.key, digest: ref.digest || '', seq: Number(ref.seq),
+        key: ref.key, digest: ref.digest || '', seq: Number(ref.seq), opId: ref.op_id,
       }));
       state.casFailedFor = undefined;
     }
@@ -567,18 +661,39 @@ export function createHistoryJournal(deps: Deps) {
       const prevSeg = state.forceReupload ? undefined
         : state.segments?.find((s) => s.key === part.key && s.digest === digest && !stale.has(s.seq));
       if (prevSeg) {
-        refs.push({ key: part.key, digest, seq: prevSeg.seq });
+        refs.push({
+          key: part.key, digest, seq: prevSeg.seq, ...(prevSeg.opId ? { op_id: prevSeg.opId } : {}),
+        });
         continue;
       }
-      const seqs = await appendOne(part.states.map((s) => ({ state: s })), true);
+      const written = await appendOne(part.states.map((s) => ({ state: s })), true);
       uploaded += 1;
-      if (seqs.length === 1) refs.push({ key: part.key, digest, seq: seqs[0] });
-      else seqs.forEach((seq, i) => refs.push({ key: `${part.key}~${i}`, digest: '', seq }));
+      if (written.length === 1) refs.push({ key: part.key, digest, seq: written[0].seq, op_id: written[0].opId });
+      else {
+        written.forEach(({ seq, opId }, i) => refs.push({
+          key: `${part.key}~${i}`, digest: '', seq, op_id: opId,
+        }));
+      }
     }
+    // S7-4: сводка называет свой будущий номер (голова + 1) и id точки; другой номер — журнал дописан, точка
+    // откладывается
+    const headNow = callSession<{ headSeq: number }>('ingestHead', {
+      resp: await request('history.head', callSession<string>('headRequest')),
+    }).headSeq;
+    const expected = state.checkpointId || 0;
     const summaryOp = callSession<HOp>('historySummary', {
-      chats: deps.rows.summarizeChats(states), segments: refs, tombstonesSinceMs: nowMs - TOMBSTONE_HORIZON_MS,
+      chats: deps.rows.summarizeChats(states),
+      segments: refs,
+      tombstonesSinceMs: nowMs - TOMBSTONE_HORIZON_MS,
+      uptoSeq: headNow + 1,
+      checkpointId: expected + 1,
+      ...(state.chains ? { chains: state.chains } : { chainsComplete: false }),
     });
-    const [summarySeq] = await appendOne(summaryOp, true);
+    const [{ seq: summarySeq }] = await appendOne(summaryOp, true);
+    if (summarySeq !== headNow + 1) {
+      deps.log('история: журнал дописан во время сборки точки — точка отложена');
+      return;
+    }
     // Пока точка собиралась, другое устройство могло дописать журнал: такие записи вошли бы под обрезку
     const checkResp = await request('history.sync', callSession<string>('syncRequest', {
       afterSeq: snapshotCursor, skipChunks: true,
@@ -588,7 +703,6 @@ export function createHistoryJournal(deps: Deps) {
       deps.log('история: журнал дописан во время сборки точки — точка отложена');
       return;
     }
-    const expected = state.checkpointId || 0;
     try {
       const resp = await request('history.checkpoint.commit', callSession<string>('commitRequest', {
         expected, uptoSeq: summarySeq, summarySeq, chunkSeqs: refs.map((ref) => Number(ref.seq)),
@@ -597,7 +711,9 @@ export function createHistoryJournal(deps: Deps) {
       state.checkpointId = checkpointId;
       state.checkpointUpto = summarySeq;
       state.checkpointCreatedMs = nowMs;
-      state.segments = refs.map((ref) => ({ key: ref.key, digest: ref.digest || '', seq: Number(ref.seq) }));
+      state.segments = refs.map((ref) => ({
+        key: ref.key, digest: ref.digest || '', seq: Number(ref.seq), opId: ref.op_id,
+      }));
       state.staleSegments = [];
       state.forceReupload = false;
       state.cursor = Math.max(state.cursor, summarySeq);
@@ -653,7 +769,8 @@ export function createHistoryJournal(deps: Deps) {
     selfAddresses: () => selves.slice(),
     /** Для тестов и диагностики: состояние журнала на устройстве. */
     getState: () => ({ ...state }),
-    flushNow: () => serial(flush),
+    /** Записать очередь сейчас, не дожидаясь срока пачки (тесты, диагностика). */
+    flushNow: () => serial(() => flush(true)),
   };
 }
 

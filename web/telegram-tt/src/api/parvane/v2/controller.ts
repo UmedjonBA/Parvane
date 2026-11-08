@@ -23,7 +23,9 @@ import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
-import { destFor, destForInvite, destForUser } from './address';
+import {
+  destFor, destForInvite, destForUser, groupDomainFor, knownGroupDomain,
+} from './address';
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { createBlobConnPool } from './blobConns';
 import {
@@ -57,6 +59,7 @@ import { createL2Ticker } from './l2Ticks';
 import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createPlannerSync } from './planner';
 import { createReconnectBackoff } from './reconnectBackoff';
+import { isTelegramCodeIntercepted } from './telegramCode';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
 type Deps = {
@@ -259,7 +262,7 @@ export type KeyJoinOutcome = {
   planner?: string;
   cloud?: string;
 };
-export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'failed';
+export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'intercepted' | 'failed';
 // Итог отзыва устройства (движок: `revokeDevice`)
 type RevokeOutcome = {
   requests: OutReq[];
@@ -1270,6 +1273,16 @@ export function createV2Controller(deps: Deps) {
     return messages.find(uuid);
   }
 
+  // C7-2 (ревью 7 ноя 2026): цель мутации — известное сообщение ДРУГОГО чата (участник общей группы личным
+  // сообщением удалял, закреплял и менял реакции сообщений группы). Сирота (мутация раньше сообщения) — не «известное»:
+  // её чат сверит движок, когда придёт само сообщение
+  async function isOtherChatTarget(uuid: string, inThisChat: (m: WireStoredMessage) => boolean) {
+    const known = await knownMessage(uuid);
+    if (!known || (known.hs && !known.hs.row) || inThisChat(known)) return false;
+    deps.log(`v2: мутация для ${uuid} пришла из другого чата — пропуск`);
+    return true;
+  }
+
   async function update(uuid: string, patch: (m: WireStoredMessage) => WireStoredMessage) {
     const m = await knownMessage(uuid);
     if (!m) return;
@@ -1567,7 +1580,8 @@ export function createV2Controller(deps: Deps) {
         const isAdmin = isGroup && canDeleteInGroup(ev.group!.id, author);
         for (const t of c.delete.targets) {
           const target = b64ToUuid(t.op_id);
-          if (target) {
+          // C7-2: известное сообщение другого чата не трогаем (неизвестное — сирота, чат сверит движок)
+          if (target && !await isOtherChatTarget(target, inThisChat)) {
             await history.ingest({
               gone: {
                 target, chat: hpeer, stamp, scope, by: author, by_admin: isAdmin || undefined,
@@ -1579,14 +1593,14 @@ export function createV2Controller(deps: Deps) {
       }
       if (c.reaction?.target) {
         const target = b64ToUuid(c.reaction.target.op_id);
-        if (!target || !hpeer || !history) return;
+        if (!target || !hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
         const emoji = c.reaction.remove ? '' : c.reaction.emoji || '';
         await history.ingest({ react: { target, chat: hpeer, user: author, stamp, emoji } }, { source, author });
         return;
       }
       if (c.pin?.target) {
         const target = b64ToUuid(c.pin.target.op_id);
-        if (!target || !hpeer || !history) return;
+        if (!target || !hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
         await history.ingest({ pin: { target, chat: hpeer, stamp, pinned: !c.pin.unpin } }, { source, author });
         return;
       }
@@ -2209,6 +2223,8 @@ export function createV2Controller(deps: Deps) {
     } catch (e) {
       if (e instanceof V2Error && e.code === 'ERROR_CODE_NOT_FOUND') return 'no_telegram';
       if (e instanceof V2Error && e.code === 'ERROR_CODE_RATE_LIMITED') return 'limit';
+      // S7-1: запрос этого устройства держит другой вход (тот же device_id, другой ключ) — замены нет
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_FORBIDDEN') return 'intercepted';
       deps.log(`v2: запрос ключа через Telegram не отправлен: ${String(e)}`);
       return 'failed';
     }
@@ -2224,8 +2240,14 @@ export function createV2Controller(deps: Deps) {
         await call('id', 'identity.recovery.tg_poll', pv.encodeMessage(
           'parvane.identity.v2.RecoveryTgPollRequest', JSON.stringify({ done }),
         )),
-      )) as { recovery_key?: string; pending?: boolean; sealed_key?: string; code?: string };
-      if (r.code) telegramCode = r.code;
+      )) as { recovery_key?: string; pending?: boolean; sealed_key?: string; code?: string; intercepted?: boolean };
+      // S7-1: показанный код опросом не заменяется. Другой код — запрос перехвачен: ответ владельца ушёл бы
+      // не нам, его не ждём и не открываем
+      if (!done && isTelegramCodeIntercepted(telegramCode, r.code)) {
+        deps.log('v2: запрос ключа через Telegram перехвачен — код запроса сменился');
+        return { ...r, recovery_key: '', intercepted: true };
+      }
+      if (r.code && !telegramCode) telegramCode = r.code;
       if (done) {
         telegramEph?.secret.fill(0);
         telegramEph = undefined;
@@ -3435,7 +3457,17 @@ export function createV2Controller(deps: Deps) {
   /** Домен сервера группы (spec 028): из журнала/ключа движка, до вступления — из ссылки. */
   function groupDomainOf(hex: string) {
     // Домен известной движку группы — главный: ответ чужого сервера на invite.check не переопределяет его
-    return client?.groupDomain(hex) || inviteGroupDomains.get(hex) || serverDomain;
+    return groupDomainFor(engineGroupDomain(hex), inviteGroupDomains.get(hex), serverDomain);
+  }
+
+  /** Домен группы, если движок её знает; для незнакомой группы движок отвечает своим доменом — это не знание. */
+  function engineGroupDomain(hex: string) {
+    if (!client || !hex) return undefined;
+    try {
+      return knownGroupDomain(client.groupDomain(hex), client.groupVersion(hex) > 0, serverDomain);
+    } catch {
+      return undefined;
+    }
   }
 
   function groupRequestBody(hex: string, after: bigint | number, linkId?: string) {
@@ -4235,7 +4267,7 @@ export function createV2Controller(deps: Deps) {
   /** Запомнить сервер группы из ссылки — только для группы, которой движок ещё не знает, и если сервер в ответе
    * не называет другой домен, чем ссылка. */
   function noteInviteDomain(hex: string, dest: string | undefined, claimed?: string) {
-    if (!hex || !dest || client?.groupDomain(hex)) return;
+    if (!hex || !dest || engineGroupDomain(hex)) return;
     if (claimed && claimed.toLowerCase() !== dest.toLowerCase()) return;
     inviteGroupDomains.set(hex, dest);
   }

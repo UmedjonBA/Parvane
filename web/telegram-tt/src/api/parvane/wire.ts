@@ -12,6 +12,12 @@ export type WireTextEntity = {
   data?: string;
 };
 
+export type WireReplyQuote = {
+  text: string;
+  entities?: WireTextEntity[];
+  offset?: number;
+};
+
 export type WireWebPage = {
   url: string;
   site_name?: string;
@@ -74,6 +80,16 @@ export type WireMessageContent = {
   ttl_secs?: number;
   forwarded_from?: string;
   forwarded_name?: string;
+  // «Без звука» (`Content.silent`, A4): получатель показывает уведомление без звука
+  silent?: boolean;
+  // MEDIA-2: фото/видео/GIF под спойлером (`Media.spoiler`)
+  spoiler?: boolean;
+  // MEDIA-2: подпись (или текст с карточкой ссылки) над медиа (`Content.invert_media`)
+  invert_media?: boolean;
+  // MEDIA-2: альбом — одно значение у всех элементов (`Media.album_id`, 16 байт base64)
+  album_id?: string;
+  // QUOTE-1: цитата из сообщения, на которое отвечают (`Content.reply_quote`)
+  reply_quote?: WireReplyQuote;
   lat?: number;
   long?: number;
   // Live-локация: период трансляции (сек от ts сообщения), курс, точность (м).

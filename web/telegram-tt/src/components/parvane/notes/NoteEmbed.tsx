@@ -10,6 +10,7 @@ import { resolveEmbed } from './notesEmbeds';
 
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import MarkdownLink from '../markdown/MarkdownLink';
 import MediaEmbed from '../markdown/MediaEmbed';
 
 import styles from './Knowledge.module.scss';
@@ -59,9 +60,7 @@ const NoteEmbed = ({
 
   if (embed.url) {
     return (
-      <a className={styles.link} href={embed.url} target="_blank" rel="noopener noreferrer">
-        {embed.alt || embed.url}
-      </a>
+      <MarkdownLink className={styles.link} url={embed.url} text={embed.alt || embed.url} />
     );
   }
 

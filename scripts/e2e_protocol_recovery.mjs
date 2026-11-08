@@ -113,6 +113,10 @@ try {
   assert.ok(recoveryKey, 'bob1: ключ восстановления не найден в диалоге');
   const alicePage = sessions.alice.page;
 
+  // Счётчики — до переписки: журнал истории пишет своё и входящее одной пачкой (S7-3, на стенде через 1–3 с), и
+  // пачка может уйти раньше, чем alice увидит ответ
+  const countLog = (needle) => logs.bob1.filter((l) => l.includes(needle)).length;
+  const journalBefore = countLog('история: в журнал записано');
   const before = `rc-before-${suffix}`;
   await openPrivateChatStrict(alicePage, bob);
   await sendText(alicePage, before);
@@ -122,9 +126,7 @@ try {
   await sendText(sessions.bob1.page, answer);
   await findMessage(alicePage, answer).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Копия корня и копия ключей аккаунта должны быть на сервере до потери устройства, переписка — в журнале
-  // истории аккаунта (spec 033: истории в копии ключей больше нет; входящее пишется через 1–5 с)
-  const countLog = (needle) => logs.bob1.filter((l) => l.includes(needle)).length;
-  const journalBefore = countLog('история: в журнал записано');
+  // истории аккаунта (spec 033: истории в копии ключей больше нет)
   const writesBefore = countLog('копия ключей аккаунта обновлена');
   for (let waited = 0; waited < 150; waited++) {
     if (countLog('история: в журнал записано') > journalBefore

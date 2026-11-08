@@ -2558,6 +2558,11 @@ describe('FED-1: федерация — запрос объекту чужого
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     ['function groupDomainOf(', 'async function requestForeignTokens(', 'function setBlobDomain(']
       .forEach((f) => expect(controller).toContain(f));
+    // Домен группы от движка — только через knownGroupDomain: для незнакомой группы движок отвечает своим доменом,
+    // и ссылка группы другого сервера уходила своему серверу (NOT_FOUND, шаг 2б e2e_web_federation)
+    expect(controller.match(/client\??\.groupDomain\(/g) || []).toHaveLength(1);
+    expect(controller)
+      .toContain('knownGroupDomain(client.groupDomain(hex), client.groupVersion(hex) > 0, serverDomain)');
     const en = readRepo('web/telegram-tt/src/assets/localization/fallback.strings');
     const ru = readRepo('web/telegram-tt/src/assets/localization/ru.strings');
     ['ParvaneFederationDisabled', 'ParvaneFederationDomainBlocked', 'ParvaneFederationRefused',
@@ -2709,7 +2714,7 @@ function readWebSources(dir = path.join(process.cwd(), 'src/api/parvane')): { fi
 
 describe('HIST-1: удалённое не воскресает; событие раньше сообщения применяется', () => {
   const r = rule('HIST-1') as unknown as {
-    ownDelayMs: number; markDelayMs: number; incomingDelayMs: [number, number]; pollMs: number;
+    batchDelayMs: [number, number]; pollMs: number;
     goneScopes: string[]; deleteForMeSendsToPeer: boolean; directChatDeleteAnyForEveryone: boolean;
     engineSuite: string; vectors: string; clients: { desktop: string; android: string };
   };
@@ -2721,9 +2726,9 @@ describe('HIST-1: удалённое не воскресает; событие �
 
   it('web: константы очереди журнала совпадают с правилом', async () => {
     const history = await import('./v2/history');
-    expect(history.HISTORY_OWN_DELAY_MS).toBe(r.ownDelayMs);
-    expect(history.HISTORY_MARK_DELAY_MS).toBe(r.markDelayMs);
-    expect([history.HISTORY_INCOMING_MIN_MS, history.HISTORY_INCOMING_MAX_MS]).toEqual(r.incomingDelayMs);
+    // S7-3: своё, маркеры и входящее — одной пачкой через 30–120 с (раздельных задержек «своё ≤ 300 мс» нет)
+    expect([history.HISTORY_BATCH_MIN_MS, history.HISTORY_BATCH_MAX_MS]).toEqual(r.batchDelayMs);
+    expect(history).not.toHaveProperty('HISTORY_OWN_DELAY_MS');
     expect(history.HISTORY_POLL_MS).toBe(r.pollMs);
   });
 
@@ -2759,10 +2764,9 @@ describe('HIST-1: удалённое не воскресает; событие �
 
   it('desktop: ядро parvane-core — очередь, строки RowState, права, «только у меня» (spec 033 T022–T025)', () => {
     const header = readRepo('desktop/parvane-core/include/parvane/history_sync.h');
-    expect(header).toContain(`std::int64_t ownDelayMs = ${r.ownDelayMs};`);
-    expect(header).toContain(`std::int64_t markDelayMs = ${r.markDelayMs};`);
-    expect(header).toContain(`std::int64_t incomingMinMs = ${r.incomingDelayMs[0]};`);
-    expect(header).toContain(`std::int64_t incomingMaxMs = ${r.incomingDelayMs[1]};`);
+    expect(header).toContain(`std::int64_t batchMinMs = ${r.batchDelayMs[0]};`);
+    expect(header).toContain(`std::int64_t batchMaxMs = ${r.batchDelayMs[1]};`);
+    expect(header).not.toMatch(/ownDelayMs|incomingMinMs/);
     expect(header).toContain(`std::int64_t pollMs = ${r.pollMs};`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
     // Сведение — движком; входящее пишется, только если журнал его ещё не знает; мутация до строки ждёт автора
@@ -2831,12 +2835,26 @@ describe('HIST-1: удалённое не воскресает; событие �
 describe('HIST-2: контрольная точка, горизонт надгробий, откат сервера', () => {
   const r = rule('HIST-2') as unknown as {
     checkpointRecords: number; checkpointAgeMs: number; checkpointJitterMs: number; tombstoneHorizonDays: number;
-    engineSuite: string; vectors: string;
+    engineSuite: string; vectors: string; checkpointSuite: string; checkpointVectors: string;
   };
 
   it('векторы сегментов и горизонта проходит движок клиента (WASM)', async () => {
     const { runConformanceVectors } = await import('../../lib/parvane-protocol/parvane_protocol');
     expect(runConformanceVectors(r.engineSuite, readRepo(r.vectors))).toBeGreaterThan(0);
+  });
+
+  it('S7-4: векторы сверки точки, цепочек писателей и выравнивания проходит движок клиента (WASM)', async () => {
+    const { runConformanceVectors } = await import('../../lib/parvane-protocol/parvane_protocol');
+    expect(runConformanceVectors(r.checkpointSuite, readRepo(r.checkpointVectors))).toBeGreaterThan(0);
+    const source = readRepo('web/telegram-tt/src/api/parvane/v2/history.ts');
+    // Сводка сверяется с точкой; сегменты — по op_id из сводки; журнал — с книгой цепочек
+    expect(source).toContain('callSession<{ chains: unknown }>(\'historyVerifyCheckpoint\', {');
+    expect(source).toContain('if (results.some((r) => r.mismatched)) {');
+    expect(source).toContain('uptoSeq: headNow + 1,');
+    expect(source).toContain('else args.chainsComplete = !state.cursor && !state.checkpointId;');
+    const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
+    expect(core).toContain('engine("historyVerifyCheckpoint"');
+    expect(core).toContain('{"uptoSeq", headNow + 1}');
   });
 
   it('web: условия точки и горизонт совпадают с правилом; сегменты — свежие первыми', async () => {
@@ -2846,9 +2864,10 @@ describe('HIST-2: контрольная точка, горизонт надгр
     expect(history.CHECKPOINT_JITTER_MS).toBe(r.checkpointJitterMs);
     expect(history.TOMBSTONE_HORIZON_MS).toBe(r.tombstoneHorizonDays * 24 * 60 * 60 * 1000);
     const ordered = history.orderSegments([
-      { key: 'u:a@x|2026-01', seq: 1 }, { key: 'u:a@x|2026-10', seq: 2 }, { key: 'u:b@x|2026-10#1', seq: 3 },
+      { key: 'm|2026-01', seq: 1 }, { key: 'u:a@x|2026-10', seq: 2 }, { key: 'm|2026-10#1', seq: 3 },
     ]);
-    expect(ordered.map((ref) => ref.seq)).toEqual([2, 3, 1]);
+    // Ключи прежнего вида (чат|месяц) и нового (m|месяц, S7-5) — по одному месяцу
+    expect(ordered.map((ref) => ref.seq)).toEqual([3, 2, 1]);
     const source = readRepo('web/telegram-tt/src/api/parvane/v2/history.ts');
     expect(source).toContain('callSession<boolean>(\'historyNeedsReplace\'');
     expect(source).toContain('if (r.headSeq < state.headSeq) {');
@@ -2890,7 +2909,7 @@ describe('HIST-2: контрольная точка, горизонт надгр
 });
 
 describe('READ-2: прочитанное на одном своём устройстве прочитано на всех, включая новое', () => {
-  const r = rule('READ-2') as unknown as { engineSuite: string; vectors: string; markWriteDelayMs: number };
+  const r = rule('READ-2') as unknown as { engineSuite: string; vectors: string; markWriteDelayMs: [number, number] };
 
   it('векторы непрочитанного, маркеров и прав удаления проходит движок клиента (WASM)', async () => {
     const { runConformanceVectors } = await import('../../lib/parvane-protocol/parvane_protocol');
@@ -2899,7 +2918,8 @@ describe('READ-2: прочитанное на одном своём устрой
 
   it('web: маркер сдвигают прочтение, своё отправленное и копия своей квитанции; счётчик — движком', async () => {
     const history = await import('./v2/history');
-    expect(history.HISTORY_MARK_DELAY_MS).toBe(r.markWriteDelayMs);
+    // Маркер — той же пачкой, что всё остальное (S7-3)
+    expect([history.HISTORY_BATCH_MIN_MS, history.HISTORY_BATCH_MAX_MS]).toEqual(r.markWriteDelayMs);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     expect(controller).toContain('if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id, \'inbox\');');
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
@@ -2944,7 +2964,7 @@ describe('READ-2: прочитанное на одном своём устрой
 
   it('desktop: маркер, своя квитанция READ, счётчик tdesktop от маркера (spec 033 T024)', () => {
     expect(readRepo('desktop/parvane-core/include/parvane/history_sync.h'))
-      .toContain(`std::int64_t markDelayMs = ${r.markWriteDelayMs};`);
+      .toContain(`std::int64_t batchMaxMs = ${r.markWriteDelayMs[1]};`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
     // Своё сообщение с любого своего устройства сдвигает маркер; счётчик — historyIsUnread движка
     expect(core).toContain('if (const auto m = markAt(st); m.is_object()) advanceMark(m, own);');
@@ -3017,5 +3037,58 @@ describe('conformance GIF-1: свои GIF на всех своих устрой�
     expect(provider).toContain('uploadBlob(blob, fileName, mimeType, { encrypt: true, withCapability: true })');
     const journal = readRepo('web/telegram-tt/src/api/parvane/savedGifJournal.ts');
     expect(journal).toContain('const GIF_KEY_PREFIX = \'g:\';');
+  });
+});
+
+// CONTACT-1 (7 ноя 2026): свои контакты с именем и заметкой — вид contacts журнала личного состояния
+describe('conformance CONTACT-1: свои контакты, имя и заметка на всех своих устройствах', () => {
+  it('web: вид contacts управляется журналом, своё имя не уходит в заголовок пересылки', () => {
+    expect(String(rule('CONTACT-1').clients!.web)).not.toContain('ОТКРЫТО');
+    const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
+    expect(journal).toMatch(/const MANAGED_KINDS[\s\S]{0,200}'contacts'/);
+    expect(journal).toContain('session.migrate(JSON.stringify({ contacts: localContacts() }))');
+    expect(journal).toContain('projectContacts(snap);');
+    const proto = readRepo('proto/parvane/state/v1/state.proto');
+    expect(proto).toContain('Contact contact_set = 38;');
+    expect(proto).toContain('PeerKey contact_remove = 39;');
+    expect(proto).toContain('repeated Contact contacts = 19');
+    const engine = readRepo('backend/protocol/src/state.rs');
+    expect(engine).toContain('"contacts" => m.contacts = true,');
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toContain('name: currentStore.getPublicDisplayName(originalSender || fromAddress),');
+  });
+});
+
+// MEDIA-2 (7 ноя 2026): спойлер медиа, подпись над медиа, альбомы
+describe('conformance MEDIA-2: спойлер медиа, подпись над медиа, альбомы', () => {
+  it('web: поля в схеме и в перекладке, альбом уходит подряд, получатель группирует', () => {
+    expect(String(rule('MEDIA-2').clients!.web)).not.toContain('ОТКРЫТО');
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain('bool spoiler = 15;');
+    expect(proto).toContain('bytes album_id = 16');
+    expect(proto).toContain('bool invert_media = 104;');
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    expect(map).toContain('album_id: c.album_id || undefined,');
+    expect(map).toContain('if (c.invert_media) out.invert_media = true;');
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toContain('const albumTurn = params.groupedId ? albumQueue.enter(params.groupedId) : undefined;');
+    expect(messages).toContain('await albumReady;');
+    const store = readRepo('web/telegram-tt/src/api/parvane/store.ts');
+    expect(store).toContain('this.albums.groupedId(chatId, stored.from, stored.content.album_id, id)');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messageExtras.ts'))
+      .toContain('export const ALBUM_MAX_ITEMS = 10;');
+  });
+});
+
+// QUOTE-1 (7 ноя 2026): цитата в ответе
+describe('conformance QUOTE-1: цитата в ответе', () => {
+  it('web и движок: reply_quote только при reply_to', () => {
+    expect(String(rule('QUOTE-1').clients!.web)).not.toContain('ОТКРЫТО');
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain('ReplyQuote reply_quote = 105;');
+    const guard = readRepo('backend/protocol/src/content_guard.rs');
+    expect(guard).toContain('if c.reply_to.is_none() {');
+    const store = readRepo('web/telegram-tt/src/api/parvane/store.ts');
+    expect(store).toContain('replyInfoWithQuote(replyKey.id, stored.content.reply_quote)');
   });
 });

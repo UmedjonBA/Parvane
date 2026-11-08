@@ -41,6 +41,7 @@ const SUITES: [string, string, number][] = [
   ['history/unread', 'history/unread.json', 5],
   ['history/segment', 'history/segment.json', 5],
   ['history/aead', 'history/aead.json', 2],
+  ['history/checkpoint', 'history/checkpoint.json', 6],
 ];
 
 type CallCase = {

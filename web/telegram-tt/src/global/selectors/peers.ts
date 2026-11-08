@@ -11,6 +11,8 @@ import { selectTabState } from './tabs';
 import { selectPeerProfileColor } from './ui';
 import { selectBot, selectUser, selectUserFullInfo } from './users';
 
+const IS_PARVANE_MAIN_TAB_DISABLED = true;
+
 export function selectPeer<T extends GlobalState>(global: T, peerId: string): ApiPeer | undefined {
   return selectUser(global, peerId) || selectChat(global, peerId);
 }
@@ -75,6 +77,9 @@ export function selectPeerHasProfileBackground<T extends GlobalState>(global: T,
 }
 
 export function selectCanUpdateMainTab<T extends GlobalState>(global: T, peerId: string) {
+  // Parvane: главная вкладка профиля — настройка, которую видят другие (`account.setMainProfileTab` Telegram); поля
+  // для неё в профиле identity и в журнале группы нет — пункт скрыт (B9 ревью 7 ноя 2026)
+  if (IS_PARVANE_MAIN_TAB_DISABLED) return false;
   if (global.currentUserId === peerId) {
     return true;
   }

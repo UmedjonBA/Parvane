@@ -228,6 +228,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneTgRecoverFailed: 'Could not connect this device. Check your connection and try again.',
   ParvaneTgRecoverLimit: 'Too many requests. Wait a minute and try again.',
   ParvaneTgRecoverExpired: 'The request has expired. Ask the bot to send the message again.',
+  ParvaneTgRecoverIntercepted: 'The key request was intercepted: someone else signed in as this device and started '
+    + 'their own request. Do not reply to the bot. If it wasn\'t you, change your password.',
   ParvaneTgRecoverAgain: 'Send the message again',
   ParvaneTgSendTitle: 'Recovery key in Telegram',
   ParvaneTgSendText: 'Enter your recovery key once — we will send it to your Telegram chat with the Parvane bot. '
@@ -546,6 +548,11 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneStoragePinEnabled: 'PIN is set',
   ParvaneStoragePinDone: 'Storage PIN updated',
   ParvaneStoragePinFailed: 'Could not update the storage PIN',
+  // QUOTE-1: пункт меню выделенного текста чужого сообщения
+  lng_context_quote_and_reply: 'Reply with Quote',
+  ParvaneContactsNoMatch: 'No contacts matched your search.',
+  ParvaneContactsEmpty: 'Contact list is empty.',
+  ParvanePrivacySaveFailed: 'The server did not save the setting. Check the connection and try again',
   ParvaneStoragePinPrompt: 'Enter the storage PIN to unlock your E2E keys',
   ParvaneChangePasswordDone: 'Password changed. Devices trusted for two-factor must confirm sign-in again.',
   ParvaneChangePasswordFailed: 'Could not change the password',
@@ -1613,6 +1620,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneTgRecoverFailed: 'Не удалось подключить устройство. Проверьте связь и попробуйте ещё раз.',
   ParvaneTgRecoverLimit: 'Слишком много запросов. Подождите минуту и попробуйте ещё раз.',
   ParvaneTgRecoverExpired: 'Запрос устарел. Попросите бота прислать сообщение ещё раз.',
+  ParvaneTgRecoverIntercepted: 'Запрос ключа перехвачен: с этим устройством вошёл кто-то ещё и начал свой запрос. '
+    + 'Не отвечайте боту. Если это были не вы — смените пароль.',
   ParvaneTgRecoverAgain: 'Прислать сообщение ещё раз',
   ParvaneTgSendTitle: 'Ключ восстановления в Telegram',
   ParvaneTgSendText: 'Введите ключ восстановления один раз — мы отправим его вам в Telegram, в чат с ботом Parvane. '
@@ -1962,6 +1971,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneStoragePinEnabled: 'PIN установлен',
   ParvaneStoragePinDone: 'PIN хранилища обновлён',
   ParvaneStoragePinFailed: 'Не удалось обновить PIN хранилища',
+  lng_context_quote_and_reply: 'Ответить с цитатой',
+  ParvaneContactsNoMatch: 'Контакты по запросу не найдены.',
+  ParvaneContactsEmpty: 'Список контактов пуст.',
+  ParvanePrivacySaveFailed: 'Сервер не сохранил настройку. Проверьте связь и попробуйте ещё раз',
   ParvaneStoragePinPrompt: 'Введите PIN хранилища, чтобы разблокировать E2E-ключи',
   ParvaneChangePasswordDone: 'Пароль изменён. Доверенные для 2FA устройства подтвердят вход заново.',
   ParvaneChangePasswordFailed: 'Не удалось сменить пароль',

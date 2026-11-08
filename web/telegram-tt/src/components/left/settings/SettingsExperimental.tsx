@@ -37,6 +37,9 @@ type StateProps = {
   shouldDebugExportedSenders?: boolean;
 };
 
+// Parvane: транспорт GramJS (HTTP, exported senders) и тестовый сервер Telegram провайдер не читает (C3)
+const IS_MTPROTO_OPTIONS_SHOWN = false;
+
 const SettingsExperimental = ({
   isActive,
   shouldForceHttpTransport,
@@ -111,14 +114,16 @@ const SettingsExperimental = ({
         />
         <p className="settings-item-description pt-3" dir="auto">{lang('lng_settings_experimental_about')}</p>
       </div>
-      <Island>
-        <ListItem
-          href={newAccountUrl}
-          icon="add-user"
-        >
-          <div className="title">Login on Test Server</div>
-        </ListItem>
-      </Island>
+      {IS_MTPROTO_OPTIONS_SHOWN && (
+        <Island>
+          <ListItem
+            href={newAccountUrl}
+            icon="add-user"
+          >
+            <div className="title">Login on Test Server</div>
+          </ListItem>
+        </Island>
+      )}
       <Island>
         <ListItem
           onClick={handleRequestConfetti}
@@ -143,30 +148,34 @@ const SettingsExperimental = ({
           <div className="title">Vaporize this button</div>
         </ListItem>
       </Island>
-      <Island>
-        <Checkbox
-          label="Allow HTTP Transport"
-          checked={Boolean(shouldAllowHttpTransport)}
-          onCheck={() => setSharedSettingOption({ shouldAllowHttpTransport: !shouldAllowHttpTransport })}
-        />
-        <Checkbox
-          label="Force HTTP Transport"
-          disabled={!shouldAllowHttpTransport}
-          checked={Boolean(shouldForceHttpTransport)}
-          onCheck={() => setSharedSettingOption({ shouldForceHttpTransport: !shouldForceHttpTransport })}
-        />
-      </Island>
+      {IS_MTPROTO_OPTIONS_SHOWN && (
+        <Island>
+          <Checkbox
+            label="Allow HTTP Transport"
+            checked={Boolean(shouldAllowHttpTransport)}
+            onCheck={() => setSharedSettingOption({ shouldAllowHttpTransport: !shouldAllowHttpTransport })}
+          />
+          <Checkbox
+            label="Force HTTP Transport"
+            disabled={!shouldAllowHttpTransport}
+            checked={Boolean(shouldForceHttpTransport)}
+            onCheck={() => setSharedSettingOption({ shouldForceHttpTransport: !shouldForceHttpTransport })}
+          />
+        </Island>
+      )}
       <Island>
         <Checkbox
           label={lang('DebugMenuEnableLogs')}
           checked={Boolean(shouldCollectDebugLogs)}
           onCheck={() => setSharedSettingOption({ shouldCollectDebugLogs: !shouldCollectDebugLogs })}
         />
-        <Checkbox
-          label="Enable exported senders debug"
-          checked={Boolean(shouldDebugExportedSenders)}
-          onCheck={() => setSharedSettingOption({ shouldDebugExportedSenders: !shouldDebugExportedSenders })}
-        />
+        {IS_MTPROTO_OPTIONS_SHOWN && (
+          <Checkbox
+            label="Enable exported senders debug"
+            checked={Boolean(shouldDebugExportedSenders)}
+            onCheck={() => setSharedSettingOption({ shouldDebugExportedSenders: !shouldDebugExportedSenders })}
+          />
+        )}
         <ListItem
           onClick={handleDownloadLog}
           icon="bug"

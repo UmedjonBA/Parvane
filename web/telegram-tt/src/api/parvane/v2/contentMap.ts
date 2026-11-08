@@ -7,6 +7,10 @@
 import type { WireMessageContent, WirePackRef, WireTextEntity } from '../wire';
 
 const ARTICLE_RECV_MAX_LENGTH = 65536;
+// MEDIA-2: спойлер медиа Telegram — у фото, видео и GIF
+const MEDIA_SPOILER_KINDS = new Set(['photo', 'video', 'gif']);
+// QUOTE-1: предел текста цитаты (`ReplyQuote.text`, `max_len` схемы — в байтах UTF-8)
+const REPLY_QUOTE_MAX_BYTES = 1024;
 
 // proto3-JSON: имена полей как в схеме, enum — строками, bytes — base64,
 // 64-битные — строками.
@@ -42,6 +46,7 @@ export type V2Media = {
   caption_entities?: V2Entity[];
   thumbnail?: string;
   spoiler?: boolean;
+  album_id?: string;
   title?: string;
   performer?: string;
   capability?: string;
@@ -105,6 +110,9 @@ export type V2Content = {
   reply_to?: V2MessageRef;
   forward?: { from_user?: { address: string }; from_name?: string };
   silent?: boolean;
+  // MEDIA-2, QUOTE-1
+  invert_media?: boolean;
+  reply_quote?: { text?: string; entities?: V2Entity[]; offset?: number };
 };
 
 // ── UUID ↔ base64 (id сообщений: UUIDv7 в UI, 16 байт в протоколе) ─────────
@@ -249,6 +257,9 @@ function mediaToV2(c: WireMessageContent): V2Media {
     performer: c.audio_performer,
     thumbnail: c.thumbnail,
     capability: c.capability,
+    // MEDIA-2: спойлер и альбом — только у фото/видео/GIF/файлов (не у голосовых и кружков)
+    spoiler: c.spoiler && MEDIA_SPOILER_KINDS.has(c.kind) ? true : undefined,
+    album_id: c.album_id || undefined,
   };
 }
 
@@ -282,6 +293,8 @@ function mediaFromV2(m: V2Media): WireMessageContent {
     thumbnail: m.thumbnail || undefined,
     capability: m.capability || undefined,
     blob_domain: m.blob_domain || m.blobDomain || undefined,
+    spoiler: m.spoiler && MEDIA_SPOILER_KINDS.has(MEDIA_WIRE[m.kind] || 'file') ? true : undefined,
+    album_id: m.album_id || undefined,
   };
   return prune(out);
 }
@@ -429,7 +442,20 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
       throw new Error(`v2: вид содержимого ${c.kind} не поддерживается`);
   }
   if (c.ttl_secs) out.ttl_secs = c.ttl_secs;
-  if (replyTo) out.reply_to = ref(replyTo);
+  if (c.silent) out.silent = true;
+  if (c.invert_media) out.invert_media = true;
+  if (replyTo) {
+    out.reply_to = ref(replyTo);
+    // QUOTE-1: цитата — только вместе с ответом
+    const quote = truncateUtf8(c.reply_quote?.text || '', REPLY_QUOTE_MAX_BYTES);
+    if (quote) {
+      out.reply_quote = {
+        text: quote,
+        entities: entitiesToV2(c.reply_quote!.entities?.filter((e) => e.offset + e.length <= quote.length)),
+        offset: c.reply_quote!.offset || undefined,
+      };
+    }
+  }
   if (c.forwarded_from || c.forwarded_name) {
     out.forward = {
       from_user: c.forwarded_from ? { address: c.forwarded_from } : undefined,
@@ -437,6 +463,20 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
     };
   }
   return out;
+}
+
+/** Строка не длиннее `maxBytes` байт UTF-8, без разрыва символа (предел `max_len` схемы — в байтах). */
+export function truncateUtf8(value: string, maxBytes: number) {
+  let bytes = 0;
+  let end = 0;
+  for (const char of value) {
+    const code = char.codePointAt(0)!;
+    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += char.length;
+  }
+  return value.slice(0, end);
 }
 
 export function isWebUrl(value: string) {
@@ -568,6 +608,15 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
   }
   if (!out) return undefined;
   if (c.ttl_secs) out.ttl_secs = c.ttl_secs;
+  if (c.silent) out.silent = true;
+  if (c.invert_media) out.invert_media = true;
+  if (c.reply_to && c.reply_quote?.text) {
+    out.reply_quote = prune({
+      text: truncateUtf8(c.reply_quote.text, REPLY_QUOTE_MAX_BYTES),
+      entities: entitiesFromV2(c.reply_quote.entities),
+      offset: c.reply_quote.offset || undefined,
+    });
+  }
   if (c.forward) {
     out.forwarded_from = c.forward.from_user?.address;
     out.forwarded_name = c.forward.from_name;

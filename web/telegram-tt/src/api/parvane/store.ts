@@ -12,6 +12,9 @@ import type {
 import { withAutoEntities } from './autoEntities';
 import { wireEntitiesToApi } from './entities';
 import { thumbnailFromWire } from './mediaThumb';
+import {
+  albumFields, createAlbumIndex, replyInfoWithQuote, withMediaSpoiler,
+} from './messageExtras';
 import { buildParvaneSticker, registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
@@ -111,6 +114,9 @@ export class ParvaneStore {
   // отвечал по msgKeyByUuid, который заполняет allocateMessageId — и локальное
   // эхо с провалившейся отправкой считалось «известным»
   private storedUuids = new Set<string>();
+
+  // MEDIA-2: члены альбомов по (чат, автор, album_id) — для группировки не больше 10
+  private albums = createAlbumIndex();
 
   // P-18: первое появление адреса пользователя — повод подписаться на его
   // presence (вместо presence.* всех). Устанавливает провайдер
@@ -303,8 +309,37 @@ export class ParvaneStore {
     this.displayNameByAddress.set(address, name);
   }
 
-  getDisplayName(address: string) {
+  // Своё имя контакта (CONTACT-1): видно только владельцу — шапки, список чатов, звонки, уведомления
+  private contactNameByAddress = new Map<string, { firstName: string; lastName?: string }>();
+
+  setContactName(address: string, name: { firstName: string; lastName?: string } | undefined) {
+    if (name?.firstName || name?.lastName) {
+      this.contactNameByAddress.set(address, { firstName: name.firstName, lastName: name.lastName || undefined });
+    } else {
+      this.contactNameByAddress.delete(address);
+    }
+  }
+
+  replaceContactNames(info: Record<string, { firstName?: string; lastName?: string }>) {
+    this.contactNameByAddress.clear();
+    Object.entries(info).forEach(([address, name]) => {
+      this.setContactName(address, { firstName: name.firstName || '', lastName: name.lastName });
+    });
+  }
+
+  getContactName(address: string) {
+    return this.isContact(address) ? this.contactNameByAddress.get(address) : undefined;
+  }
+
+  /** Имя, заданное самим пользователем (в провод — только оно: заголовок пересылки и т.п.). */
+  getPublicDisplayName(address: string) {
     return this.displayNameByAddress.get(address) || address.split('@')[0];
+  }
+
+  getDisplayName(address: string) {
+    const contact = this.getContactName(address);
+    const contactName = contact ? [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim() : '';
+    return contactName || this.getPublicDisplayName(address);
   }
 
   // Явно убранные из контактов (иначе собеседник возвращался бы по правилу
@@ -516,7 +551,7 @@ export class ParvaneStore {
       // юзер всегда premium; чужим не ставим, чтобы не рисовать бейджи
       isPremium: isSelf ? true : undefined,
       type: this.deletedUsers.has(address) ? 'userTypeDeleted' : 'userTypeRegular',
-      firstName: this.getDisplayName(address),
+      ...this.buildUserName(address),
       // Username = local-part адреса: включает @-автокомплит и упоминания
       usernames: [{ username: address.split('@')[0], isActive: true, isEditable: false }],
       phoneNumber: this.profileByAddress.get(address)?.phone || '',
@@ -526,6 +561,12 @@ export class ParvaneStore {
       },
       avatarPhotoId: this.avatarByAddress.get(address),
     };
+  }
+
+  private buildUserName(address: string): Pick<ApiUser, 'firstName' | 'lastName'> {
+    const contact = this.getContactName(address);
+    if (!contact) return { firstName: this.getPublicDisplayName(address) };
+    return { firstName: contact.firstName, lastName: contact.lastName };
   }
 
   // Упоминание == '@<local-part>' или полный '@адрес' в тексте сообщения
@@ -619,16 +660,23 @@ export class ParvaneStore {
 
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;
     const isChatMode = stored.content.kind === 'chat_mode';
+    const content = isChatMode ? this.buildChatModeContent(stored, isOutgoing)
+      : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
+        : withMediaSpoiler(buildMessageContent(stored, (key) => this.getLangString?.(key)), stored.content.spoiler);
+    // MEDIA-2: альбом — подряд идущие сообщения одного автора с одним `album_id`, не больше 10
+    const groupedId = stored.content.album_id && stored.from && !stored.deleted
+      ? this.albums.groupedId(chatId, stored.from, stored.content.album_id, id) : undefined;
 
     return {
       id,
       chatId,
-      content: isChatMode ? this.buildChatModeContent(stored, isOutgoing)
-        : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
-          : buildMessageContent(stored, (key) => this.getLangString?.(key)),
+      content,
+      ...albumFields(content, groupedId),
+      // MEDIA-2: подпись над медиа
+      isInvertedMedia: stored.content.invert_media && !stored.deleted ? true : undefined,
       date: stored.ts,
-      // Служебное сообщение о режиме чата не шумит (без звука уведомления)
-      isSilent: isChatMode ? true : undefined,
+      // Служебное сообщение о режиме чата не шумит; «Отправить без звука» (A4) — поле `silent` содержимого
+      isSilent: isChatMode || stored.content.silent ? true : undefined,
       isForwardingAllowed: true,
       isOutgoing,
       senderId: stored.from ? this.getIdForAddress(stored.from) : undefined,
@@ -637,7 +685,7 @@ export class ParvaneStore {
       editDate: stored.edited && stored.updated_at ? stored.updated_at : undefined,
       isPinned: stored.pinned ? true : undefined,
       replyInfo: replyKey && replyKey.chatId === chatId
-        ? { type: 'message', replyToMsgId: replyKey.id }
+        ? replyInfoWithQuote(replyKey.id, stored.content.reply_quote)
         : undefined,
       reactions: buildReactions(stored, (address) => this.getIdForAddress(address)),
       forwardInfo: stored.content.forwarded_from ? {

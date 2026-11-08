@@ -243,6 +243,10 @@ try {
   sessions.bob = bob;
   console.log('OK: перезагрузка сразу после записи журнала — устройство поднялось само, ключ ушёл в Telegram');
 
+  // Счётчики — ДО переписки: по S7-3 своё и входящее уходят в журнал истории одной пачкой (окно стенда 1–3 с), и пачка
+  // успевала уйти раньше подсчёта. 
+  const countLog = (needle) => alice1.logs.filter((line) => line.includes(needle)).length;
+  const journalBefore = countLog('история: в журнал записано');
   // ── Переписка и задача планировщика на первом устройстве ──
   const fromAlice = `from-alice-${suffix}`;
   const fromBob = `from-bob-${suffix}`;
@@ -255,12 +259,7 @@ try {
   const taskName = `task-${suffix}`;
   await createTask(alice1.page, taskName);
   await closePlanner(alice1.page);
-
-  // Копия ключей аккаунта с ключами планировщика — на сервере (первая уходит сразу после запуска, обновлённая — по
-  // минутной проверке), а переписка — в журнале истории аккаунта (spec 033: истории в копии больше нет; своё
-  // пишется через ≤ 300 мс, входящее — через 1–5 с)
-  const countLog = (needle) => alice1.logs.filter((line) => line.includes(needle)).length;
-  const journalBefore = countLog('история: в журнал записано');
+  // копия ключей — после создания контейнера планировщика (иначе засчитается копия без его ключа)
   const writesBefore = countLog('копия ключей аккаунта обновлена');
   const snapshotDeadline = Date.now() + 150000;
   while (countLog('история: в журнал записано') === journalBefore

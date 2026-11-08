@@ -110,7 +110,9 @@ export default memo(withGlobal<OwnProps>(
     const isChannel = Boolean(chat) && isChatChannel(chat);
     const isGroup = Boolean(chat) && isChatBasicGroup(chat);
     const isSuperGroup = Boolean(chat) && isChatSuperGroup(chat);
-    const canPinForAll = (isPrivateChat && !isChatWithSelf) || isSuperGroup || isGroup;
+    // Parvane: закреп всегда общий для чата и без уведомления — «только для меня» и «уведомить всех» провайдер не
+    // поддерживает (B7 ревью 7 ноя 2026), галочка не показывается
+    const canPinForAll = false;
     const contactName = chatId && isUserId(chatId)
       ? getUserFirstOrLastName(selectUser(global, chatId))
       : undefined;

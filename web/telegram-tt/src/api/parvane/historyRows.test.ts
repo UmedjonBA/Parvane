@@ -265,3 +265,57 @@ describe('READ-2: маркер «прочитано до» и непрочита
     expect(chat.rows).toBe(2);
   });
 });
+
+// C7-2 (ревью 7 ноя 2026): участник общей группы личным сообщением не трогает сообщения группы — строка прежнего кэша
+// без `hs` и строка вне журнала (самоуничтожение, заглушка) сверяются со СВОИМ чатом, а не с чатом операции
+describe('C7-2: мутация из чужого чата не действует на строку без hs', () => {
+  const MALLORY = 'mallory@local';
+  const MALLORY_PEER = { user: { address: MALLORY } };
+  const groupMsg = (extra: Partial<WireStoredMessage['content']> = {}): WireStoredMessage => ({
+    id: ID1, from: PEER, to: GROUP, ts: 100, content: { kind: 'text', text: 'в группе', ...extra },
+  });
+  const ctx = { source: 'inbox' as const, author: MALLORY };
+
+  it.each([
+    ['прежняя строка', {}],
+    ['самоуничтожающаяся строка', { ttl_secs: 30 }],
+  ])('%s: удаление, реакция и закреп из личного чата отвергаются', async (_, extra) => {
+    const t = makeRows([groupMsg(extra)]);
+    const ops: HOp[] = [
+      { gone: { target: ID1, chat: MALLORY_PEER, stamp: newStamp(), scope: 'GONE_SCOPE_EVERYONE', by: MALLORY } },
+      { react: { target: ID1, chat: MALLORY_PEER, user: MALLORY, stamp: newStamp(), emoji: '👍' } },
+      { pin: { target: ID1, chat: MALLORY_PEER, stamp: newStamp(), pinned: true } },
+    ];
+    for (const op of ops) {
+      expect(await t.rows.ingest(op, ctx)).toBeUndefined();
+    }
+    const row = t.records.get(ID1)!;
+    expect(row.deleted).toBeFalsy();
+    expect(row.pinned).toBeFalsy();
+    expect(row.reactors || []).toEqual([]);
+    expect(row.to).toBe(GROUP);
+    expect(t.enqueued).toEqual([]);
+  });
+
+  it('удаление чужого сообщения самоуничтожающейся строки группы — по правилам группы', async () => {
+    const t = makeRows([groupMsg({ ttl_secs: 30 })]);
+    // В группе чужое удаляет только админ: операция из группы от не-админа не проходит
+    expect(await t.rows.ingest({
+      gone: { target: ID1, chat: GROUP_PEER, stamp: newStamp(), scope: 'GONE_SCOPE_EVERYONE', by: MALLORY },
+    }, ctx)).toBeUndefined();
+    expect(t.records.get(ID1)?.deleted).toBeFalsy();
+    // Автор удаляет своё
+    expect(await t.rows.ingest({
+      gone: { target: ID1, chat: GROUP_PEER, stamp: newStamp(), scope: 'GONE_SCOPE_EVERYONE', by: PEER },
+    }, { source: 'inbox', author: PEER })).toBeDefined();
+    expect(t.records.get(ID1)?.deleted).toBe(true);
+  });
+
+  it('прежняя строка своего чата по-прежнему удаляется участником личного чата', async () => {
+    const t = makeRows([text(ID2, SELF, PEER, 100)]);
+    const stored = await t.rows.ingest({
+      gone: { target: ID2, chat: DIRECT, stamp: newStamp(), scope: 'GONE_SCOPE_EVERYONE', by: PEER },
+    }, { source: 'inbox', author: PEER });
+    expect(stored?.deleted).toBe(true);
+  });
+});

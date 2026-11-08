@@ -27,6 +27,8 @@ import {
   selectBot, selectIsCurrentUserPremium, selectUser, selectUserFullInfo,
 } from './users';
 
+const IS_PARVANE_FOLDER_LINKS_DISABLED = true;
+
 export function selectChat<T extends GlobalState>(global: T, chatId: string): ApiChat | undefined {
   return global.chats.byId[chatId];
 }
@@ -243,6 +245,9 @@ export function selectCanInviteToChat<T extends GlobalState>(global: T, chatId: 
 }
 
 export function selectCanShareFolder<T extends GlobalState>(global: T, folderId: number) {
+  // Parvane: ссылки на папки (`chatlists.exportChatlistInvite`) — серверная функция Telegram, у Parvane её нет; как
+  // `IS_FOLDER_LINKS_SUPPORTED` в редакторе папки, пункт «Поделиться» скрыт и в меню вкладки (B11 ревью 7 ноя 2026)
+  if (IS_PARVANE_FOLDER_LINKS_DISABLED) return false;
   const folder = selectChatFolder(global, folderId);
   if (!folder) return false;
 

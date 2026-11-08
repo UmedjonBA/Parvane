@@ -34,9 +34,17 @@ export type HRowState = {
   pending_edits?: HEdit[];
   pending_gones?: HGone[];
 };
-export type HSegmentRef = { key: string; digest?: string; seq: string | number };
+export type HSegmentRef = { key: string; digest?: string; seq: string | number; op_id?: string };
 export type HChatSummary = { chat: HPeer; last?: HRowState; mark?: HReadMark; unread?: number; rows?: number };
-export type HSummary = { tombstones_since_ms?: string | number; chats?: HChatSummary[]; segments?: HSegmentRef[] };
+export type HSummary = {
+  tombstones_since_ms?: string | number;
+  chats?: HChatSummary[];
+  segments?: HSegmentRef[];
+  // S7-4: позиция сводки, id точки, цепочки писателей (сводки до ревью 7 ноя 2026 — без них)
+  upto_seq?: string | number;
+  checkpoint_id?: string | number;
+  chains_complete?: boolean;
+};
 export type HOp = {
   row?: HMessageRow;
   gone?: HGone;

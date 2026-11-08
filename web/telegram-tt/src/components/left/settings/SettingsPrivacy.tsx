@@ -234,9 +234,17 @@ const SettingsPrivacy = ({
     void (callParvane('parvaneGetGroupAddPolicy', {}) as Promise<{ policy: string } | undefined>)
       .then((state) => setAllowGroupAdd(state?.policy !== 'nobody'));
   }, []);
+  // B14: сервер не принял — переключатель возвращается, пользователь видит уведомление
+  const notifyPrivacyFailed = useLastCallback(() => {
+    showNotification({ message: oldLang('ParvanePrivacySaveFailed') });
+  });
   const handleGroupAddChange = useLastCallback((allowed: boolean) => {
     setAllowGroupAdd(allowed);
-    void callParvane('parvaneSetGroupAddPolicy', { policy: allowed ? 'anyone' : 'nobody' });
+    void callParvane('parvaneSetGroupAddPolicy', { policy: allowed ? 'anyone' : 'nobody' }).then((isSaved) => {
+      if (isSaved) return;
+      setAllowGroupAdd(!allowed);
+      notifyPrivacyFailed();
+    });
   });
 
   // Протокол v2 (spec 007, T079): сообщения от незнакомых (анонимные жетоны)
@@ -256,7 +264,11 @@ const SettingsPrivacy = ({
   const handleCallsChange = useLastCallback((isAllowed: boolean) => {
     const isPresenceShown = callPresence?.isPresenceShown ?? true;
     setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed }));
-    void callParvane('parvaneSetCallsPolicy', { isAllowed });
+    void callParvane('parvaneSetCallsPolicy', { isAllowed }).then((isSaved) => {
+      if (isSaved) return;
+      setCallPresence((current) => (current ? { ...current, areCallsAllowed: !isAllowed } : current));
+      notifyPrivacyFailed();
+    });
   });
   const handleRelayChange = useLastCallback((isRelayOnly: boolean) => {
     setCallPresence((current) => (current ? { ...current, isRelayOnly } : current));
@@ -265,11 +277,19 @@ const SettingsPrivacy = ({
   const handlePresenceChange = useLastCallback((isShown: boolean) => {
     const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
     setCallPresence((current) => ({ ...current, isAvailable: true, areCallsAllowed, isPresenceShown: isShown }));
-    void callParvane('parvaneSetPresencePolicy', { isShown });
+    void callParvane('parvaneSetPresencePolicy', { isShown }).then((isSaved) => {
+      if (isSaved) return;
+      setCallPresence((current) => (current ? { ...current, isPresenceShown: !isShown } : current));
+      notifyPrivacyFailed();
+    });
   });
   const handleStrangersChange = useLastCallback((isAllowed: boolean) => {
     setStrangers({ isAvailable: true, isAllowed });
-    void callParvane('parvaneSetStrangersPolicy', { isAllowed });
+    void callParvane('parvaneSetStrangersPolicy', { isAllowed }).then((isSaved) => {
+      if (isSaved) return;
+      setStrangers({ isAvailable: true, isAllowed: !isAllowed });
+      notifyPrivacyFailed();
+    });
   });
 
   // P-39: опциональный PIN хранилища (E2E-ключи + сохранённая сессия).

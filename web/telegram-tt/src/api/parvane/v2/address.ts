@@ -23,6 +23,23 @@ export function destForInvite(domain: string | undefined, own: string, pageHost?
   return destFor(domain, own);
 }
 
+/**
+ * Домен сервера группы, который действительно знает движок (журнал прочитан или ждёт ключ эпохи с контекстом).
+ * `groupDomain` движка для незнакомой группы отвечает СВОИМ доменом — это «не знаю», а не ответ: принимать его
+ * за знание нельзя, иначе журнал и вступление по ссылке группы другого сервера уходили своему серверу
+ * (он отвечал `NOT_FOUND`). Без журнала свой домен от движка — «не знаю».
+ */
+export function knownGroupDomain(engineDomain: string | undefined, hasLog: boolean, own: string): string | undefined {
+  if (!engineDomain) return undefined;
+  if (hasLog) return engineDomain;
+  return engineDomain.toLowerCase() === own.toLowerCase() ? undefined : engineDomain;
+}
+
+/** Сервер группы: известный движку домен главный, до вступления — домен из ссылки, иначе свой. */
+export function groupDomainFor(known: string | undefined, fromInvite: string | undefined, own: string): string {
+  return known || fromInvite || own;
+}
+
 /** Адресат запроса о пользователе (журнал, бандл, жетоны его сервера). */
 export function destForUser(address: string, own: string): string | undefined {
   return destFor(domainOf(address), own);

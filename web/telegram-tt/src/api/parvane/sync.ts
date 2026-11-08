@@ -297,12 +297,12 @@ export function createSyncController(deps: SyncDependencies) {
           const restored = store.buildApiUser(userInfo.username);
           deps.sendUpdate({ '@type': 'updateUser', id: restored.id, user: restored });
         }
-        const previousName = store.getDisplayName(userInfo.username);
+        const previousName = store.getPublicDisplayName(userInfo.username);
         store.setDisplayName(userInfo.username, userInfo.display_name || userInfo.username);
         // Имя сменилось (или только что узнали): список чатов и шапки берут
         // его из объекта пользователя — раньше список ждал этот ответ целиком,
         // теперь он не блокирует старт, а имя доезжает апдейтом
-        if (store.getDisplayName(userInfo.username) !== previousName) {
+        if (store.getPublicDisplayName(userInfo.username) !== previousName) {
           const user = store.buildApiUser(userInfo.username);
           deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
         }

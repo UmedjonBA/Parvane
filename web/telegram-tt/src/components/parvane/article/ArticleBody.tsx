@@ -12,6 +12,7 @@ import { findMedia } from './articleMedia';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import MarkdownBlocks from '../markdown/MarkdownBlocks';
+import MarkdownLink from '../markdown/MarkdownLink';
 import MediaEmbed from '../markdown/MediaEmbed';
 
 import styles from './Article.module.scss';
@@ -31,9 +32,7 @@ const ArticleBody = ({ title, markdown, media }: OwnProps) => {
   const renderEmbed = useLastCallback((embed: MdEmbed) => {
     if (embed.url) {
       return (
-        <a className={styles.link} href={embed.url} target="_blank" rel="noopener noreferrer">
-          {embed.alt || embed.url}
-        </a>
+        <MarkdownLink className={styles.link} url={embed.url} text={embed.alt || embed.url} />
       );
     }
     return <ArticleEmbed embed={embed} item={findMedia(media, embed.name)} />;

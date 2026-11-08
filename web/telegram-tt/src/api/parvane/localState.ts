@@ -1,11 +1,16 @@
 import type { SendMessageParams } from '../../types';
 import type { ApiChat, ApiMessage, ApiUpdate } from '../types';
+import type { LocalContactInfo } from './contactInfo';
+import type { ForwardOptions } from './forwardOptions';
+import type { StickerRef } from './stickerLists';
 import type { ParvaneStore } from './store';
 import type { HistorySyncState } from './v2/history';
 import type { HReadMark } from './v2/historyModel';
 import type { WireStoredMessage } from './wire';
 
+import { hasMediaContent, isAuthorHidden } from './forwardOptions';
 import { SecureE2eStorage } from './secureStorage';
+import { parseStickerRefs } from './stickerLists';
 import { newMessageId } from './wire';
 
 type ScheduledEntry = {
@@ -18,14 +23,25 @@ type ScheduledEntry = {
   text?: string;
   entities?: SendMessageParams['entities'];
   replyToMsgId?: number;
+  // «Без звука» (`Content.silent` внутри `ScheduledMessage.content`)
+  silent?: boolean;
   // Медиа/опрос/стикер нельзя восстановить из localStorage, поэтому полные
   // параметры живут только до конца текущей вкладки.
   params?: SendMessageParams;
+  // Отложенная пересылка (A3) — тоже только во вкладке: исходное сообщение и параметры меню пересылки
+  forward?: ScheduledForward;
+};
+
+export type ScheduledForward = {
+  fromChat: ApiChat;
+  toChat: ApiChat;
+  message: ApiMessage;
+  options: ForwardOptions;
 };
 
 // Вид локальных данных, изменённых пользователем (журнал личного состояния, T098)
 export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned' | 'notify'
-  | 'unread' | 'reaction' | 'packs';
+  | 'unread' | 'reaction' | 'packs' | 'contacts';
 
 // Свой набор стикеров/эмодзи в журнале состояния (`state.v1.StickerPack`, PACK-3): id набора и ссылка на архив
 // в облаке — поля `PackArchive` (как `pack_ref` сообщения: bytes — base64)
@@ -39,6 +55,32 @@ export type LocalStickerPack = {
   added_ms?: string;
 };
 
+// Секреты блоба записи вида `packs` (C7-3): хранятся отдельно от зеркала в localStorage
+const PACK_SECRETS = 'packsecrets';
+type PackSecret = { key?: string; nonce?: string; capability?: string };
+
+function packSecretOf(pack: LocalStickerPack): PackSecret | undefined {
+  const { key, nonce, capability } = pack.ref;
+  if (!key && !nonce && !capability) return undefined;
+  const secret: PackSecret = {};
+  if (key) secret.key = key;
+  if (nonce) secret.nonce = nonce;
+  if (capability) secret.capability = capability;
+  return secret;
+}
+
+function stripPackSecret(pack: LocalStickerPack): LocalStickerPack {
+  const {
+    key, nonce, capability, ...ref
+  } = pack.ref;
+  return { ...pack, ref };
+}
+
+function withPackSecret(pack: LocalStickerPack, secret: PackSecret | undefined): LocalStickerPack {
+  if (!secret || packSecretOf(pack)) return pack;
+  return { ...pack, ref: { ...pack.ref, ...secret } };
+}
+
 // Быстрая реакция: эмодзи либо id собственного эмодзи (журнал состояния, `state.v1.QuickReaction`)
 export type LocalQuickReaction = { emoji?: string; documentId?: string };
 
@@ -49,7 +91,20 @@ export type JournalScheduled = {
   scheduledAt: number;
   text?: string;
   entities?: SendMessageParams['entities'];
+  silent?: boolean;
 };
+
+// «Отправить, когда будет в сети» (как desktop: `send_at_ms` = 0x7FFFFFFE × 1000, `Api::kScheduledUntilOnline`)
+export const SCHEDULED_UNTIL_ONLINE = 0x7FFFFFFE;
+
+/** Отложенные, которым пора: срок наступил, либо «когда в сети» — и собеседник в сети. */
+export function selectDueScheduled<T extends { chatId: string; scheduledAt: number }>(
+  queue: T[], nowSecs: number, isPeerOnline: (chatId: string) => boolean,
+): T[] {
+  return queue.filter((entry) => (entry.scheduledAt === SCHEDULED_UNTIL_ONLINE
+    ? isPeerOnline(entry.chatId)
+    : entry.scheduledAt <= nowSecs));
+}
 
 type LocalStateDependencies = {
   getStore: () => ParvaneStore;
@@ -58,6 +113,11 @@ type LocalStateDependencies = {
   sendUpdate: (update: ApiUpdate) => void;
   buildLocalContent: (uuid: string, params: SendMessageParams) => ApiMessage['content'];
   sendMessage: (params: SendMessageParams, uuid?: string) => Promise<unknown>;
+  // Собеседник чата сейчас в сети (присутствие v2) — для «Отправить, когда будет в сети»
+  isPeerOnline?: (chatId: string) => boolean;
+  forwardMessages?: (params: {
+    fromChat: ApiChat; toChat: ApiChat; messages: ApiMessage[];
+  } & ForwardOptions) => Promise<unknown>;
 };
 
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
@@ -156,6 +216,12 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Записи журнала идут одна за другой: удаление не должно обогнать запись
   let journalChain: Promise<void> = Promise.resolve();
   let draftsCache: Record<string, Record<string, unknown>> | undefined;
+  // Ключи записей вида `packs` (C7-3): загруженные из шифрованного хранилища (undefined — ещё нет) и записанные до
+  // загрузки (с перечнем наборов той записи)
+  let packSecrets: Record<string, PackSecret> | undefined;
+  let pendingPackSecrets: Record<string, PackSecret> = {};
+  let packSetsBeforeLoad: Set<string> | undefined;
+  let packSecretsChain: Promise<void> = Promise.resolve();
   let draftsSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   function compareJournal(a: WireStoredMessage, b: WireStoredMessage) {
@@ -199,13 +265,14 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Загрузить журнал и черновики (один раз на сессию) — с миграцией из
   // localStorage. Зовётся перед первым чтением (sync/fetchChats).
   async function hydrate() {
-    if (isJournalLoaded && draftsCache) return;
+    if (isJournalLoaded && draftsCache && packSecrets) return;
     const storage = await secureStorage();
     if (!storage) {
       journalCache = journalCache || [];
       draftsCache = draftsCache || {};
       return;
     }
+    if (!packSecrets) await hydratePackSecrets(storage);
     if (!isJournalLoaded) {
       isJournalLoaded = true;
       // Записи `j:<uuid>` (perf A6) + разовый перенос прежних форматов: одной
@@ -427,6 +494,10 @@ export function createLocalState(deps: LocalStateDependencies) {
     isJournalLoaded = false;
     journalChain = Promise.resolve();
     draftsCache = undefined;
+    packSecrets = undefined;
+    pendingPackSecrets = {};
+    packSetsBeforeLoad = undefined;
+    packSecretsChain = Promise.resolve();
     securePromise = undefined;
     secureUser = '';
     if (draftsSaveTimer) clearTimeout(draftsSaveTimer);
@@ -445,7 +516,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   }
 
   function persistScheduledQueue() {
-    const persistable = scheduledQueue.filter((entry) => !entry.params);
+    const persistable = scheduledQueue.filter((entry) => !entry.params && !entry.forward);
     void secureStorage()?.then((storage) => {
       if (!storage) return undefined;
       return storage.saveRecord('scheduled', persistable).then(() => {
@@ -459,6 +530,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   }
 
   function buildScheduledApiMessage(entry: ScheduledEntry): ApiMessage {
+    if (entry.forward) return buildScheduledForward(entry, entry.forward);
     const content = entry.params
       ? deps.buildLocalContent(crypto.randomUUID(), entry.params)
       : { text: { text: entry.text || '', entities: entry.entities } };
@@ -470,8 +542,41 @@ export function createLocalState(deps: LocalStateDependencies) {
       isOutgoing: true,
       senderId: deps.selfId(),
       isScheduled: true,
+      isSilent: entry.silent || undefined,
       replyInfo: entry.replyToMsgId ? { type: 'message', replyToMsgId: entry.replyToMsgId } : undefined,
     };
+  }
+
+  function buildScheduledForward(entry: ScheduledEntry, forward: ScheduledForward): ApiMessage {
+    const { message, options } = forward;
+    const content = options.noCaptions && hasMediaContent(message.content) && message.content.text
+      ? (({ text: _caption, ...rest }) => rest)(message.content)
+      : message.content;
+    return {
+      id: entry.id,
+      chatId: entry.chatId,
+      content,
+      date: entry.scheduledAt,
+      isOutgoing: true,
+      senderId: deps.selfId(),
+      isScheduled: true,
+      forwardInfo: isAuthorHidden(options) ? undefined : {
+        date: message.date,
+        isChannelPost: false,
+        fromChatId: message.senderId || forward.fromChat.id,
+      },
+    };
+  }
+
+  function scheduleForward(forward: ScheduledForward, scheduledAt: number) {
+    loadScheduledQueue();
+    const entry: ScheduledEntry = {
+      id: scheduledNextId++, chatId: forward.toChat.id, scheduledAt, forward,
+    };
+    scheduledQueue.push(entry);
+    deps.sendUpdate({
+      '@type': 'newScheduledMessage', chatId: entry.chatId, id: entry.id, message: buildScheduledApiMessage(entry),
+    });
   }
 
   function rebuildChatForScheduled(chatId: string): ApiChat | undefined {
@@ -514,6 +619,14 @@ export function createLocalState(deps: LocalStateDependencies) {
       applyFromJournal(() => removeScheduled(entry.chatId, [entry.id]));
       return;
     }
+    if (entry.forward) {
+      applyFromJournal(() => removeScheduled(entry.chatId, [entry.id]));
+      const { fromChat, toChat, message, options } = entry.forward;
+      await deps.forwardMessages?.({
+        fromChat, toChat, messages: [message], ...options,
+      });
+      return;
+    }
     const chat = entry.params?.chat || rebuildChatForScheduled(entry.chatId);
     applyFromJournal(() => removeScheduled(entry.chatId, [entry.id]));
     if (!chat) return;
@@ -523,6 +636,7 @@ export function createLocalState(deps: LocalStateDependencies) {
         chat,
         text: entry.text,
         entities: entry.entities,
+        isSilent: entry.silent || undefined,
         replyInfo: entry.replyToMsgId ? { type: 'message', replyToMsgId: entry.replyToMsgId } : undefined,
       };
     await deps.sendMessage(params, entry.opId);
@@ -539,6 +653,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       scheduledAt: params.scheduledAt!,
       text: params.text,
       entities: params.entities,
+      silent: params.isSilent || undefined,
       replyToMsgId: params.replyInfo?.type === 'message' ? params.replyInfo.replyToMsgId : undefined,
       params: hasMedia ? { ...params } : undefined,
       opId: hasMedia ? undefined : newMessageId(),
@@ -563,6 +678,7 @@ export function createLocalState(deps: LocalStateDependencies) {
       scheduledAt: entry.scheduledAt,
       text: entry.text,
       entities: entry.entities,
+      silent: entry.silent,
     }));
   }
 
@@ -578,10 +694,12 @@ export function createLocalState(deps: LocalStateDependencies) {
       list.forEach((item) => {
         const existing = scheduledQueue.find((entry) => entry.opId === item.opId);
         if (existing) {
-          if (existing.scheduledAt === item.scheduledAt && existing.text === item.text) return;
+          if (existing.scheduledAt === item.scheduledAt && existing.text === item.text
+            && Boolean(existing.silent) === Boolean(item.silent)) return;
           existing.scheduledAt = item.scheduledAt;
           existing.text = item.text;
           existing.entities = item.entities;
+          existing.silent = item.silent;
           deps.sendUpdate({
             '@type': 'updateScheduledMessage',
             chatId: existing.chatId,
@@ -596,6 +714,7 @@ export function createLocalState(deps: LocalStateDependencies) {
           scheduledAt: item.scheduledAt,
           text: item.text,
           entities: item.entities,
+          silent: item.silent,
           opId: item.opId,
         };
         scheduledQueue.push(entry);
@@ -611,7 +730,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (!deps.getStore().self || !deps.isAuthorized()) return;
     loadScheduledQueue();
     const now = Math.floor(Date.now() / 1000);
-    const due = scheduledQueue.filter((entry) => entry.scheduledAt <= now);
+    const due = selectDueScheduled(scheduledQueue, now, (chatId) => Boolean(deps.isPeerOnline?.(chatId)));
     for (const entry of due) {
       await fireScheduled(entry);
     }
@@ -748,6 +867,60 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function saveContacts(list: string[]) {
     localStorage.setItem(storageKey('contacts'), JSON.stringify(list));
+    notifyChange('contacts');
+  }
+
+  // «Избранные» и «Недавние» стикеры (A6): ссылки «набор + стикер», только на этом устройстве. Недавних ещё не
+  // было (null) — показываются первые встроенные, как раньше
+  function loadStickerRefs(kind: 'favestickers' | 'recentstickers'): StickerRef[] | undefined {
+    try {
+      const raw = localStorage.getItem(storageKey(kind));
+      // eslint-disable-next-line no-null/no-null -- getItem отдаёт null, если записи нет
+      return raw === null ? undefined : parseStickerRefs(JSON.parse(raw));
+    } catch {
+      return undefined;
+    }
+  }
+
+  function saveStickerRefs(kind: 'favestickers' | 'recentstickers', refs: StickerRef[]) {
+    try {
+      localStorage.setItem(storageKey(kind), JSON.stringify(refs));
+    } catch {
+      // квота — список живёт до перезагрузки
+    }
+  }
+
+  // Порядок наборов стикеров («Динамический порядок наборов», B12): id наборов, первым — последний отправленный
+  function loadStickerSetOrder(): string[] {
+    try {
+      const raw = JSON.parse(localStorage.getItem(storageKey('stickersetorder')) || '[]') as unknown;
+      return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveStickerSetOrder(order: string[]) {
+    try {
+      localStorage.setItem(storageKey('stickersetorder'), JSON.stringify(order));
+    } catch {
+      // квота — порядок живёт до перезагрузки
+    }
+  }
+
+  // Своё имя контакта и заметка (CONTACT-1) по адресу; между своими устройствами — журналом (`contacts`)
+  function loadContactInfo(): Record<string, LocalContactInfo> {
+    try {
+      const map = JSON.parse(localStorage.getItem(storageKey('contactinfo')) || '{}') as unknown;
+      return map && typeof map === 'object' && !Array.isArray(map) ? map as Record<string, LocalContactInfo> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveContactInfo(map: Record<string, LocalContactInfo>) {
+    localStorage.setItem(storageKey('contactinfo'), JSON.stringify(map));
+    notifyChange('contacts');
   }
 
   function loadNonContacts(): string[] {
@@ -808,7 +981,11 @@ export function createLocalState(deps: LocalStateDependencies) {
     notifyChange('reaction');
   }
 
-  function loadStickerPacks(): LocalStickerPack[] {
+  // C7-3 (ревью 7 ноя 2026): зеркало вида `packs` журнала личного состояния (наборы PACK-3, свои GIF GIF-1) несёт
+  // ключ, nonce и capability блоба. В localStorage — только без них (копия профиля или XSS давали бы ключи вместе с
+  // доступом к шифртексту); секреты — записью `packsecrets` шифрованного хранилища (A0028-7), в памяти — после
+  // hydrate(). Записанное до hydrate() держится в `pendingPackSecrets` и сводится с загруженным
+  function loadStickerPackMirror(): LocalStickerPack[] {
     try {
       const list = JSON.parse(localStorage.getItem(storageKey('stickerpacks')) || '[]') as unknown;
       return Array.isArray(list)
@@ -819,13 +996,74 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
-  function saveStickerPacks(packs: LocalStickerPack[]) {
+  function writeStickerPackMirror(packs: LocalStickerPack[]) {
     try {
-      localStorage.setItem(storageKey('stickerpacks'), JSON.stringify(packs));
+      localStorage.setItem(storageKey('stickerpacks'), JSON.stringify(packs.map(stripPackSecret)));
     } catch {
       // Квота: запись уйдёт в журнал из памяти вкладки, пока она жива
     }
+  }
+
+  function loadStickerPacks(): LocalStickerPack[] {
+    const secrets = { ...packSecrets, ...pendingPackSecrets };
+    return loadStickerPackMirror().map((pack) => withPackSecret(pack, secrets[pack.set_id]));
+  }
+
+  function saveStickerPacks(packs: LocalStickerPack[]) {
+    const known = { ...packSecrets, ...pendingPackSecrets };
+    const next: Record<string, PackSecret> = {};
+    packs.forEach((pack) => {
+      // Запись без ключей (список прочитан до hydrate) не затирает сохранённые ключи набора
+      const secret = packSecretOf(pack) || known[pack.set_id];
+      if (secret) next[pack.set_id] = secret;
+    });
+    if (packSecrets) {
+      packSecrets = next;
+    } else {
+      pendingPackSecrets = next;
+      packSetsBeforeLoad = new Set(packs.map((pack) => pack.set_id));
+    }
+    writeStickerPackMirror(packs);
+    if (packSecrets) persistPackSecrets();
     notifyChange('packs');
+  }
+
+  function persistPackSecrets() {
+    const pending = secureStorage();
+    const value = packSecrets || {};
+    packSecretsChain = packSecretsChain.then(() => pending).then((storage) => storage?.saveRecord(PACK_SECRETS, value))
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[parvane] ключи наборов стикеров не сохранены: ${String(err)}`);
+      });
+  }
+
+  /** Дождаться записи ключей наборов на диск (тесты, выход). */
+  function flushPackSecrets() {
+    return packSecretsChain;
+  }
+
+  // Загрузка ключей (hydrate) и разовый перенос: прежние записи localStorage с ключами — в шифрованное хранилище,
+  // затем localStorage переписывается без них
+  async function hydratePackSecrets(storage: SecureE2eStorage) {
+    const stored = (await storage.loadRecord<Record<string, PackSecret>>(PACK_SECRETS)) || {};
+    const mirror = loadStickerPackMirror();
+    const inline: Record<string, PackSecret> = {};
+    mirror.forEach((pack) => {
+      const secret = packSecretOf(pack);
+      if (secret) inline[pack.set_id] = secret;
+    });
+    const merged: Record<string, PackSecret> = {};
+    const present = packSetsBeforeLoad || new Set(mirror.map((pack) => pack.set_id));
+    present.forEach((setId) => {
+      const secret = pendingPackSecrets[setId] || inline[setId] || stored[setId];
+      if (secret) merged[setId] = secret;
+    });
+    packSecrets = merged;
+    pendingPackSecrets = {};
+    packSetsBeforeLoad = undefined;
+    if (JSON.stringify(merged) !== JSON.stringify(stored)) await storage.saveRecord(PACK_SECRETS, merged);
+    if (Object.keys(inline).length) writeStickerPackMirror(mirror);
   }
 
   // Прежний учёт прочитанного (список uuid в localStorage, до spec 033) — только для разового переноса в маркеры
@@ -1227,6 +1465,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadArchived,
     loadBlocked,
     loadContacts,
+    loadContactInfo,
+    loadStickerRefs,
+    loadStickerSetOrder,
     loadNonContacts,
     loadDeletedChats,
     loadUnreadMarks,
@@ -1262,6 +1503,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     rescheduleMessage,
     saveBlocked,
     saveContacts,
+    saveContactInfo,
+    saveStickerRefs,
+    saveStickerSetOrder,
     saveNonContacts,
     saveUnreadMarks,
     takeLegacyUnreadMarks,
@@ -1269,6 +1513,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveQuickReaction,
     loadStickerPacks,
     saveStickerPacks,
+    flushPackSecrets,
     saveRepairAttempts,
     saveDraft,
     saveFolders,
@@ -1278,6 +1523,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     setPinned,
     savePeerTtl,
     scheduleMessage,
+    scheduleForward,
     scheduleTtlDeletion,
     sendScheduledMessages,
   };

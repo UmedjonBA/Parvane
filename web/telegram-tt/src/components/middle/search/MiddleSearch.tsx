@@ -705,7 +705,7 @@ const MiddleSearch = ({
           >
             {renderTypeTag('chat')}
             {renderTypeTag('myChats')}
-            {renderTypeTag('channels')}
+            {/* Parvane: «Публичные посты» — каталог публичных каналов Telegram, у Parvane его нет (B4) */}
           </div>
         )}
         {Boolean(hasResultsContainer || hasMemberResults) && (

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import {
+  afterEach, describe, expect, it, vi,
+} from 'vitest';
 
 import type { WireStoredMessage } from '../wire';
 import type { HistoryHost, HistorySyncState } from './history';
@@ -112,6 +114,8 @@ function createServer() {
   let lastSeq = 0;
   let point: Point | undefined;
   const commits: Point[] = [];
+  // Злонамеренный сервер: записи, которые он не отдаёт в sync
+  const hidden = new Set<number>();
 
   const recordBytes = (r: Rec) => encode([[1, r.seq], [2, r.opId], [3, r.ct], [4, r.chunk]]);
   const pointBytes = (p: Point) => encode([[1, p.id], [2, p.upto], [3, p.summary], [4, p.chunks], [5, p.created]]);
@@ -136,7 +140,7 @@ function createServer() {
       const skipChunks = num(f, 3) === 1;
       const compacted = point && after < point.upto ? point : undefined;
       if (compacted) after = compacted.upto;
-      const list = records.filter((r) => r.seq > after && !(skipChunks && r.chunk));
+      const list = records.filter((r) => r.seq > after && !(skipChunks && r.chunk) && !hidden.has(r.seq));
       const fields: [number, number | boolean | Uint8Array | number[] | undefined][] = list
         .map((r) => [1, recordBytes(r)]);
       fields.push([3, lastSeq]);
@@ -171,6 +175,12 @@ function createServer() {
     records: () => records,
     commits,
     point: () => point,
+    /** Злонамеренный сервер: не отдавать запись в sync. */
+    hide: (seq: number) => hidden.add(seq),
+    /** Злонамеренный сервер: подменить текущую точку. */
+    tamperPoint: (patch: Partial<Point>) => {
+      point = { ...point!, ...patch };
+    },
     /** Сервер «откатился»: последние записи пропали, голова меньше. */
     rollback: (count: number) => {
       records = records.slice(0, records.length - count);
@@ -183,6 +193,7 @@ function createServer() {
 
 function createDevice(client: PvClient, server: ReturnType<typeof createServer>, opts: {
   clock?: { now: number }; initial?: WireStoredMessage[]; state?: HistorySyncState; readUuids?: string[];
+  batchMs?: [number, number];
 } = {}) {
   const records = new Map<string, WireStoredMessage>((opts.initial || []).map((m) => [m.id, m]));
   const marks = new Map<string, unknown>();
@@ -232,6 +243,7 @@ function createDevice(client: PvClient, server: ReturnType<typeof createServer>,
     log: (message) => logs.push(message),
     now: clock ? () => clock.now : undefined,
     random: () => 0,
+    batchMs: opts.batchMs,
   });
   const host: HistoryHost = {
     openSession: () => client.historySession(),
@@ -436,5 +448,92 @@ describe('журнал истории: два своих устройства и
     expect(visible(b)).toEqual([ID1]);
     a.journal.reset();
     b.journal.reset();
+  });
+});
+
+describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('S7-3: своё и входящее уходят одной пачкой не раньше 30 с (без «своё ≤ 300 мс»)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const server = createServer();
+    const { first, clone } = account();
+    const a = createDevice(first, server, { batchMs: [30000, 120000] });
+    await a.journal.attach(a.host);
+    const before = server.records().length;
+    await a.rows.ingest(rowOpFromStored(text(ID1, SELF, PEER, JAN_2026_MS, 'моё'), DIRECT, JAN_2026_MS), {
+      source: 'own',
+    });
+    await vi.advanceTimersByTimeAsync(10000);
+    await a.rows.ingest(rowOpFromStored(text(ID2, PEER, SELF, JAN_2026_MS + 1, 'входящее'), DIRECT, JAN_2026_MS + 1), {
+      source: 'inbox', author: PEER,
+    });
+    await vi.advanceTimersByTimeAsync(19000);
+    // Прежняя очередь записала бы своё через 300 мс, входящее — через 1–5 с
+    expect(server.records().length).toBe(before);
+    await vi.advanceTimersByTimeAsync(2000);
+    const written = server.records().slice(before);
+    expect(written.length).toBe(1);
+    // Запись выровнена по сетке L2 (nonce 12 + тег 16)
+    expect([512, 2048, 8192, 32768]).toContain(written[0].ct.length - 28);
+    vi.useRealTimers();
+    // Новое устройство получает и своё, и входящее
+    const b = createDevice(clone(), server);
+    await b.journal.attach(b.host);
+    expect(visible(b)).toEqual([ID1, ID2]);
+    a.journal.reset();
+    b.journal.reset();
+  });
+
+  it('S7-4: запись, спрятанная сервером, видна как пропуск в цепочке писателя', async () => {
+    const server = createServer();
+    const { first, clone } = account();
+    const a = createDevice(first, server);
+    await a.journal.attach(a.host);
+    for (const [id, body] of [[ID1, 'раз'], [ID2, 'два'], [ID3, 'три']] as const) {
+      await a.rows.ingest(rowOpFromStored(text(id, SELF, PEER, JAN_2026_MS, body), DIRECT, JAN_2026_MS), {
+        source: 'own',
+      });
+      await a.journal.flushNow();
+    }
+    const middle = server.records().find((r) => !r.chunk && r.seq > 1)!;
+    server.hide(middle.seq);
+    const b = createDevice(clone(), server);
+    await b.journal.attach(b.host);
+    expect(b.logs.some((line) => line.includes('сервер не отдал 1 записей'))).toBe(true);
+    a.journal.reset();
+    b.journal.reset();
+  });
+
+  it('S7-4: старая сводка при большем upto_seq — точка не применяется, записи не пропускаются', async () => {
+    const server = createServer();
+    const clock = { now: OCT_2026_MS };
+    const { first, clone } = account();
+    const a = createDevice(first, server, { clock });
+    await a.journal.attach(a.host);
+    await a.rows.ingest(rowOpFromStored(text(ID1, SELF, PEER, JAN_2026_MS, 'раз'), DIRECT, JAN_2026_MS), {
+      source: 'own',
+    });
+    clock.now += 1000;
+    await a.journal.flushNow();
+    await a.journal.attach(a.host, 'self');
+    await waitFor(() => server.commits.length === 1);
+    // После точки — ещё запись (удаление), сервер выдаёт прежнюю сводку за точку «до неё»
+    await a.rows.ingest({ gone: { target: ID1, chat: DIRECT, stamp: newStamp(), scope: 'GONE_SCOPE_EVERYONE' } }, {
+      source: 'own',
+    });
+    clock.now += 1000;
+    await a.journal.flushNow();
+    const head = server.records().at(-1)!.seq;
+    server.tamperPoint({ upto: head });
+    const c = createDevice(clone(), server);
+    await c.journal.attach(c.host);
+    expect(c.logs.some((line) => line.includes('не сходится со своей сводкой'))).toBe(true);
+    expect(c.state()?.cursor || 0).toBe(0);
+    expect(visible(c)).toEqual([]);
+    a.journal.reset();
+    c.journal.reset();
   });
 });

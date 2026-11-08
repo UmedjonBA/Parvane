@@ -2,6 +2,7 @@ import type { SendMessageParams } from '../../types';
 import type {
   ApiChat, ApiMessage, ApiMessageEntity, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
+import type { ForwardOptions } from './forwardOptions';
 import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
@@ -18,12 +19,17 @@ import { bytesToBase64 } from './v2/base64';
 import { withAutoEntities } from './autoEntities';
 import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
+import { applyForwardOptions } from './forwardOptions';
 import {
   buildApiVideoFromSavedRecord,
   loadSavedGifRecords,
   type SavedGifRecord,
   storeSavedGifRecords,
 } from './gifs';
+import {
+  albumFields, createAlbumIds, createAlbumSendQueue, quoteFromReplyInfo, replyInfoWithQuote, sendExtras,
+  withMediaSpoiler,
+} from './messageExtras';
 import {
   buildPvpkArchive,
   findInstalledPackBySetId,
@@ -63,6 +69,8 @@ type MessageDependencies = {
   // дозагрузка документов эмодзи по docId (заполняет реестр docId → набор)
   resolveCustomPack?: (setId: string) => Promise<{ pack: StoredPack } | undefined>;
   primeCustomEmoji?: (docIds: string[]) => Promise<unknown>;
+  // Отправленный стикер — в «Недавние» (A6, хранятся на устройстве)
+  onStickerSent?: (sticker: ApiSticker, shouldUpdateSetOrder?: boolean) => void;
   // Протокол v2 (spec 007): переписка идёт только им (T110). Опционален ради
   // юнит-тестов отдельных функций контроллера
   v2?: ReturnType<typeof createV2Controller>;
@@ -494,7 +502,7 @@ export function createMessageController(deps: MessageDependencies) {
     return savedGifs.find((gif) => savedGifHashes.get(gif.id) === sha256);
   }
 
-  async function sendGif(chat: ApiChat, gif: ApiVideo) {
+  async function sendGif(chat: ApiChat, gif: ApiVideo, isSilent = false) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
@@ -522,6 +530,7 @@ export function createMessageController(deps: MessageDependencies) {
       duration_secs: Math.round(gif.duration),
       size_bytes: blob.size,
       ttl_secs: ttlSecs || undefined,
+      silent: isSilent || undefined,
       ...mediaCrypto,
     };
     deps.media.cacheBlob(fileId, blob, mimeType);
@@ -637,7 +646,7 @@ export function createMessageController(deps: MessageDependencies) {
     return ref;
   }
 
-  async function sendSticker(chat: ApiChat, sticker: ApiSticker) {
+  async function sendSticker(chat: ApiChat, sticker: ApiSticker, isSilent = false, shouldUpdateSetOrder = false) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
@@ -669,6 +678,7 @@ export function createMessageController(deps: MessageDependencies) {
       height: sticker.height || 256,
       pack_ref: packRef,
       ttl_secs: ttlSecs || undefined,
+      silent: isSilent || undefined,
       ...mediaCrypto,
     };
     deps.media.cacheBlob(fileId, blob, mime);
@@ -685,6 +695,7 @@ export function createMessageController(deps: MessageDependencies) {
     currentStore.putMessage(message);
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message });
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, id, ttlSecs);
+    deps.onStickerSent?.(sticker, shouldUpdateSetOrder);
   }
 
   // Карточка задания обновляется как опрос: тот же `updateMessage` с полным содержимым
@@ -789,7 +800,7 @@ export function createMessageController(deps: MessageDependencies) {
     };
     correctAnswers?: number[];
     solution?: string;
-  }) {
+  }, isSilent = false) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
@@ -833,6 +844,7 @@ export function createMessageController(deps: MessageDependencies) {
       no_revote: flags.noRevote || undefined,
       shuffle: flags.shuffle || undefined,
       hide_results: flags.hideResults || undefined,
+      silent: isSilent || undefined,
     }, uuid);
     const id = currentStore.allocateMessageId(chat.id, uuid);
     const message: ApiMessage = {
@@ -860,6 +872,10 @@ export function createMessageController(deps: MessageDependencies) {
     });
   }
 
+  // MEDIA-2: альбом — одно случайное `album_id` на tt-шный `groupedId`, элементы уходят подряд
+  const albumIdOf = createAlbumIds();
+  const albumQueue = createAlbumSendQueue();
+
   function sendMessageLocal(params: SendMessageParams, fixedUuid?: string) {
     const { chat, replyInfo } = params;
     if (!chat) return Promise.resolve(undefined);
@@ -867,16 +883,21 @@ export function createMessageController(deps: MessageDependencies) {
     const uuid = fixedUuid || newMessageId();
     const id = currentStore.allocateMessageId(chat.id, uuid);
     const replyToMsgId = replyInfo?.type === 'message' ? replyInfo.replyToMsgId : undefined;
+    const content = withMediaSpoiler(
+      deps.media.buildLocalContent(uuid, params), params.attachment?.shouldSendAsSpoiler,
+    );
     const message: ApiMessage = {
       id,
       chatId: chat.id,
-      content: deps.media.buildLocalContent(uuid, params),
+      content,
       date: Math.floor(Date.now() / 1000),
       isForwardingAllowed: true,
       isOutgoing: true,
       senderId: deps.selfId(),
       sendingState: 'messageSendingStatePending',
-      replyInfo: replyToMsgId ? { type: 'message', replyToMsgId } : undefined,
+      replyInfo: replyToMsgId ? replyInfoWithQuote(replyToMsgId, quoteFromReplyInfo(replyInfo)) : undefined,
+      isInvertedMedia: params.isInvertedMedia && params.text ? true : undefined,
+      ...albumFields(content, params.groupedId),
     };
     uuidBySentLocalKey.set(`${chat.id}:${id}`, uuid);
     deps.sendUpdate({
@@ -896,19 +917,32 @@ export function createMessageController(deps: MessageDependencies) {
       deps.localState.scheduleMessage(params);
       return;
     }
+    // «Отправить без звука» (A4): поле `silent` содержимого v2 — у получателя уведомление без звука
+    const isSilent = Boolean(params.isSilent);
     if (params.poll && params.chat) {
-      await sendPoll(params.chat, params.poll);
+      await sendPoll(params.chat, params.poll, isSilent);
       return;
     }
     if (params.sticker && params.chat) {
-      await sendSticker(params.chat, params.sticker);
+      await sendSticker(params.chat, params.sticker, isSilent, Boolean(params.shouldUpdateStickerSetOrder));
       return;
     }
     if (params.gif && params.chat) {
-      await sendGif(params.chat, params.gif);
+      await sendGif(params.chat, params.gif, isSilent);
       return;
     }
 
+    // Место в очереди альбома берётся синхронно, в порядке вызовов элементов (MEDIA-2)
+    const albumTurn = params.groupedId ? albumQueue.enter(params.groupedId) : undefined;
+    try {
+      await sendRegularMessage(params, fixedUuid, albumTurn?.ready);
+    } finally {
+      albumTurn?.done();
+    }
+  }
+
+  async function sendRegularMessage(params: SendMessageParams, fixedUuid?: string, albumReady?: Promise<void>) {
+    const isSilent = Boolean(params.isSilent);
     const localMessage = params.localMessage || await sendMessageLocal(params, fixedUuid);
     const { chat, attachment } = params;
     if (!localMessage || !chat) return;
@@ -1097,10 +1131,16 @@ export function createMessageController(deps: MessageDependencies) {
       }
     }
 
+    if (isSilent) wireContent.silent = true;
+    // MEDIA-2 / QUOTE-1: спойлер, подпись над медиа, альбом, цитата ответа
+    Object.assign(wireContent, sendExtras(params, albumIdOf));
+    if (wireContent.spoiler) sentContent = withMediaSpoiler(sentContent, true);
     const plainContent = wireContent;
     // Время и место в ленте — момент нажатия (ORDER-1), а не конец отправки
     const ts = localMessage.date;
     try {
+      // Элемент альбома уходит после предыдущего (загрузки шли параллельно)
+      await albumReady;
       // Протокол v2: собеседник или группа с журналом (D-13); иначе отправить нечем
       const isSentViaV2 = await requireV2().trySend(
         toAddress, wireContent as unknown as WireMessageContent, uuid, replyToUuid,
@@ -1597,12 +1637,22 @@ export function createMessageController(deps: MessageDependencies) {
     sendMessageLocal,
     sendMessage,
 
-    async forwardMessages({ fromChat, toChat, messages }: {
-      fromChat: ApiChat; toChat: ApiChat; messages: ApiMessage[];
-    }) {
+    async forwardMessages({
+      fromChat, toChat, messages, isSilent, scheduledAt, noAuthors, noCaptions,
+    }: {
+      fromChat: ApiChat; toChat: ApiChat; messages: ApiMessage[]; scheduledAt?: number;
+    } & ForwardOptions) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(toChat.id);
       if (!toAddress) return undefined;
+      const options: ForwardOptions = { isSilent, noAuthors, noCaptions };
+      // Отложенная пересылка (A3): в очередь отложенных этой вкладки, как отложенное медиа
+      if (scheduledAt) {
+        messages.forEach((message) => deps.localState.scheduleForward({
+          fromChat, toChat, message, options,
+        }, scheduledAt));
+        return true;
+      }
       const fromAddress = currentStore.getAddressForId(fromChat.id) || '';
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       for (const message of messages) {
@@ -1644,10 +1694,12 @@ export function createMessageController(deps: MessageDependencies) {
           if (packRef) wireContent.pack_ref = packRef;
         }
         const originalSender = message.senderId ? currentStore.getAddressForId(message.senderId) : fromAddress;
-        wireContent.forwarded_from = originalSender || fromAddress;
-        wireContent.forwarded_name = originalSender
-          ? currentStore.getDisplayName(originalSender)
-          : currentStore.getDisplayName(fromAddress);
+        // Имя автора в проводе — заданное им самим, не своё имя контакта (CONTACT-1: оно видно только владельцу)
+        const forwarded = applyForwardOptions(wireContent, content, {
+          address: originalSender || fromAddress,
+          name: currentStore.getPublicDisplayName(originalSender || fromAddress),
+        }, options);
+        content = forwarded.content;
         // TTL целевого чата распространяется и на пересланное
         wireContent.ttl_secs = ttlSecs || undefined;
         const uuid = await publishInner(toAddress, wireContent);
@@ -1660,12 +1712,12 @@ export function createMessageController(deps: MessageDependencies) {
           isForwardingAllowed: true,
           isOutgoing: true,
           senderId: deps.selfId(),
-          forwardInfo: {
+          forwardInfo: forwarded.hasForwardHeader ? {
             date: message.date,
             isChannelPost: false,
             fromChatId: originalSender ? currentStore.getIdForAddress(originalSender) : undefined,
             hiddenUserName: wireContent.forwarded_name as string,
-          },
+          } : undefined,
         };
         currentStore.putMessage(localMessage);
         deps.sendUpdate({ '@type': 'newMessage', chatId: toChat.id, id, message: localMessage });

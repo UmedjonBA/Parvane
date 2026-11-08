@@ -147,6 +147,44 @@ describe('markdown', () => {
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
+  // C7-1 (ревью 7 ноя 2026): статья от собеседника (до 64 КБ) не вешает вкладку — заголовок с длинным хвостом пробелов,
+  // `{#id}` и строка-разделитель таблицы разбираются линейным проходом (было O(n²) через регулярки с якорем `$`)
+  it.each([
+    ['заголовок + пробелы', `# a${' '.repeat(64000)}b`],
+    ['заголовок + табуляции', `# a${'\t'.repeat(64000)}b`],
+    ['заголовок + пробелы и #', `# a${' #'.repeat(32000)}b`],
+    ['заголовок + {# и пробелы', `# a{#${' '.repeat(64000)}b`],
+    ['заголовок + id-знаки', `# a {#${'x'.repeat(64000)}`],
+    ['разделитель таблицы', `a|b\n${' '.repeat(64000)}x`],
+    ['разделитель таблицы ячейками', `a|b\n${'|---'.repeat(16000)}x`],
+    ['разделитель таблицы с пробелами', `a|b\n---${' '.repeat(64000)}x`],
+    ['встроенный файл + пробелы', `![[a]]${' '.repeat(64000)}x`],
+    ['черта + пробелы', `- - -${' '.repeat(64000)}x`],
+    ['пункт + пробелы', `-${' '.repeat(64000)}`],
+  ])('C7-1: %s — за 200 мс', (_, text) => {
+    const started = performance.now();
+    parseMarkdown(text);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+
+  it('C7-1: заголовок и таблица разбираются как прежде', () => {
+    expect(parseMarkdown('## Раздел ##  ')[0]).toMatchObject({ type: 'heading', level: 2, text: 'Раздел' });
+    expect(parseMarkdown('# Раздел#')[0]).toMatchObject({ text: 'Раздел#' });
+    expect(parseMarkdown('# ###')[0]).toMatchObject({ text: '' });
+    expect(parseMarkdown('# Раздел {#my-id}')[0]).toMatchObject({ text: 'Раздел', id: 'my-id' });
+    expect(parseMarkdown('# Раздел{#}')[0]).toMatchObject({ text: 'Раздел{#}' });
+    expect(parseMarkdown(`# Раздел {#${'x'.repeat(101)}}`)[0]).toMatchObject({ text: `Раздел {#${'x'.repeat(101)}}` });
+    expect(parseMarkdown(`# Раздел \t{#${'x'.repeat(100)}}`)[0]).toMatchObject({ text: 'Раздел', id: 'x'.repeat(100) });
+    expect(parseMarkdown('a|b\n:---|---:\n1|2')[0]).toMatchObject({ type: 'table', align: ['left', 'right'] });
+    expect(parseMarkdown('a|b\n:--|--:\n1|2')[0]).toMatchObject({ type: 'paragraph' });
+    expect(parseMarkdown('a|b\n| :---: | ---- |\n1|2')[0])
+      .toMatchObject({ type: 'table', align: ['center', undefined] });
+    expect(parseMarkdown('a|b\n--|---\n1|2')[0]).toMatchObject({ type: 'paragraph' });
+    expect(parseMarkdown('a|b\n---||---\n1|2')[0]).toMatchObject({ type: 'paragraph' });
+    expect(parseMarkdown('a|b\n|---|---||\n1|2')[0]).toMatchObject({ type: 'paragraph' });
+    expect(parseMarkdown('a|b\n---\n1|2')[0]).toMatchObject({ type: 'table' });
+  });
+
   it('общий образец разбора совпадает с conformance/markdown (ядро desktop/android сверяет тот же файл)', () => {
     const expected = buildExpected(readFileSync(FIXTURE, 'utf8'));
     if (process.env.PARVANE_WRITE_MD_FIXTURE || !existsSync(EXPECTED)) {

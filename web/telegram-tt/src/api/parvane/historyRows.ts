@@ -10,9 +10,11 @@ import type { WireStoredMessage } from './wire';
 import {
   addressForPeer, applyEditPatch, applyOp, canDelete, compareMarkPoint, decodeBody, type HOp, type HReadMark,
   type HRowState, isAfterMark,
-  isGroupPeer, isJournalable, isUnreadRow, legacyState, markMerge, nonCountedKinds, opTarget, peerForAddress,
+  isJournalable, isUnreadRow, legacyState, markMerge, nonCountedKinds, opTarget, peerForAddress,
   rowTsMs, storedFromState,
 } from './v2/historyModel';
+
+const V2_GROUP_ADDRESS_PREFIX = 'v2g:';
 
 export type HistorySource = 'own' | 'inbox' | 'journal';
 
@@ -97,9 +99,18 @@ export function createHistoryRows(deps: Deps) {
     const self = deps.self();
     const isOwn = ownChecker();
     const prev = await deps.index.find(target);
+    const chat = chatPeerOf(op);
+    // Строка без состояния движка (прежний кэш, вне журнала): движок не знает её чата, поэтому чат сверяется здесь —
+    // по самой строке, а не по операции. Иначе участник общей группы личным сообщением удалял, закреплял и менял
+    // реакции сообщений группы (C7-2, ревью 7 ноя 2026)
+    const prevAddress = prev && !prev.hs ? chatAddressOf(prev) : undefined;
+    if (prevAddress && chat && addressForPeer(chat) !== prevAddress) {
+      deps.log(`история: операция над ${target} из другого чата — пропуск`);
+      return undefined;
+    }
     // Сообщение вне журнала (самоуничтожение, заглушка нечитаемого вида): мутация — прямо по строке, как раньше
-    if (prev && !prev.hs && !prev.deleted && !isJournalable(prev)) {
-      if (ctx.source === 'journal' || !isAllowedOutsideJournal(op, prev, ctx)) return undefined;
+    if (prev && prevAddress && !prev.deleted && !isJournalable(prev)) {
+      if (ctx.source === 'journal' || !isAllowedOutsideJournal(op, prev, prevAddress, ctx)) return undefined;
       const patched = patchOutsideJournal(prev, op, isOwn);
       if (!patched) return undefined;
       deps.index.set(patched);
@@ -108,9 +119,10 @@ export function createHistoryRows(deps: Deps) {
       await deps.show(patched);
       return patched;
     }
-    const chat = chatPeerOf(op);
     let base = prev?.hs;
-    if (!base && prev && chat) base = legacyState(prev, chat);
+    // Прежняя строка — в СВОЁМ чате (с чатом операции он совпал выше)
+    const prevChat = prevAddress ? peerForAddress(prevAddress, deps.domain()) : undefined;
+    if (!base && prev && prevChat) base = legacyState(prev, prevChat);
     // Права (автор правки, право удаления) проверяет движок по полям `by`/`by_admin` операции — и когда строка
     // придёт позже мутации: недействительная мутация не применяется ни в каком порядке (HIST-1)
     let next: HRowState;
@@ -347,11 +359,14 @@ export type HistoryRows = ReturnType<typeof createHistoryRows>;
 
 // Строка вне журнала (самоуничтожение, заглушка) движком не сводится — то же правило прав здесь: правка — только
 // автор, удаление — `historyCanDelete`
-function isAllowedOutsideJournal(op: HOp, prev: WireStoredMessage, ctx: HistoryIngestContext) {
+// (вид чата — по адресу самой строки `prevAddress`, не по операции: C7-2)
+function isAllowedOutsideJournal(
+  op: HOp, prev: WireStoredMessage, prevAddress: string, ctx: HistoryIngestContext,
+) {
   if (ctx.source === 'own' || !ctx.author) return true;
   if (op.edit) return prev.from === ctx.author;
   if (!op.gone) return true;
-  const isGroup = isGroupPeer(op.gone.chat);
+  const isGroup = prevAddress.startsWith(V2_GROUP_ADDRESS_PREFIX);
   return canDelete(isGroup ? 'group' : 'user', prev.from, ctx.author, ctx.isAdmin);
 }
 

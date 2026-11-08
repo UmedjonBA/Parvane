@@ -303,6 +303,16 @@ try {
   await showPackSection(aliceSession.page, packName);
   await assertPackTiles(packSection(aliceSession.page, packName), 'панель автора пака после перезагрузки');
 
+  // C7-3: зеркало журнала наборов в localStorage — без ключа, nonce и capability блоба (они в шифрованном хранилище)
+  for (const [name, session] of [['Alice', aliceSession], ['Bob', bobSession]]) {
+    const mirror = await session.page.evaluate(() => Object.keys(localStorage)
+      .filter((key) => key.startsWith('parvane:stickerpacks:')).map((key) => localStorage.getItem(key) || '').join(''));
+    for (const field of ['"key"', '"nonce"', '"capability"']) {
+      assert(!mirror.includes(field), `${name}: в localStorage наборов есть ${field}`);
+    }
+    console.log(`${name}: зеркало наборов в localStorage без ключей (${mirror.length} знаков)`);
+  }
+
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);
 

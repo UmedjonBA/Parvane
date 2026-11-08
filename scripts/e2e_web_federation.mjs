@@ -1,19 +1,21 @@
 // Федерация (spec 028) в браузере: Аня и Вера на сервере A, Борис на сервере B (одна сборка web, у каждого
 // сервера свой gateway). Истории спеки в браузере:
-//   1 — личный чат: Аня находит Бориса по полному адресу `ник@сервер`, переписка в обе стороны, история;
+//   1 — личный чат: Аня находит Бориса по полному адресу `ник@сервер`, переписка в обе стороны, история,
+//       документ 12 МиБ с сервера A — несколько окон gateway B (PV-015);
 //   2 — группа на сервере A с участником с B: сообщения всех троих видят все;
 //   3 — личный звонок A ↔ B и групповой звонок группы с участниками с обоих серверов;
 //   4 — совместная папка облака на A, редактор с B: файлы с обоих серверов скачиваются обеими сторонами;
 //   2б — ссылка-приглашение в группу сервера A: Борис (B) получает её в чате, нажимает и вступает.
 // Запуск: scripts/run_web_federation_e2e.sh (поднимает оба сервера).
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import { CLOUD_STEP_TIMEOUT_MS, cloudDriver } from './e2e_web_cloud_lib.mjs';
 import {
   dismissRecoveryKeyDialog, exchangeMessages, expectMediaFlowing, findMessage, findMessageContainer, preparePage,
-  readInvitesScreen, sendText,
+  readInvitesScreen, sendText, sha256OfDownload,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-federation-e2e-1';
@@ -36,6 +38,22 @@ const FILE_A = 'с-сервера-a.txt';
 const FILE_B = 'с-сервера-b.txt';
 const CONTENT_A = 'Файл Ани, лежит на сервере A 5c1d';
 const CONTENT_B = 'Файл Бориса, лежит на сервере B 7e2f';
+// PV-015: документ больше окна gateway (16 кусков по 512 КиБ = 8 МиБ) — скачивается с чужого сервера несколькими
+// окнами; раньше federation нумеровал куски каждого окна с 0, и второе окно обрывало поток
+const BIG_FILE = `fed-big-${suffix}.bin`;
+const BIG_BYTES = randomBytes(12 * 1024 * 1024);
+
+/** Отправить документ в открытый чат через меню вложений. */
+async function sendDocument(page, file) {
+  await page.getByRole('button', { name: 'Add an attachment' }).click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('menuitem', { name: 'Document' }).click();
+  await (await chooser).setFiles(file);
+  const caption = page.locator('#editable-message-text-modal');
+  await caption.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await caption.press('Enter');
+  await caption.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+}
 
 /** Открыть чат по полному адресу (поиск находит пользователя другого сервера у его сервера). */
 async function openByAddress(page, address) {
@@ -157,6 +175,15 @@ try {
   await openListed(a, nick(boris));
   await findMessage(a, 'ответ с сервера B').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: история переписки между серверами пережила перезагрузку');
+  await sendDocument(a, { name: BIG_FILE, mimeType: 'application/octet-stream', buffer: BIG_BYTES });
+  await openListed(b, nick(anya));
+  const bigBubble = b.locator('.Transition_slide-active > .MessageList .Message')
+    .filter({ has: b.locator('.File') }).filter({ hasText: BIG_FILE }).last();
+  await bigBubble.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  const bigDownload = await sha256OfDownload(b, bigBubble.locator('.File .file-icon-container'));
+  assert.equal(bigDownload.sha256, createHash('sha256').update(BIG_BYTES).digest('hex'),
+    'Борис (B) скачал документ 12 МиБ с сервера A не целиком');
+  console.log('OK: документ 12 МиБ (больше окна в 16 кусков) скачан с другого сервера побайтно');
   await typingProbe(b, a, '«печатает» Бориса (B) видит Аня (A)');
   await typingProbe(a, b, '«печатает» Ани (A) видит Борис (B)');
 

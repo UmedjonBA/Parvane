@@ -56,7 +56,9 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
   const areProfilesEnabled = Boolean(chat?.areProfilesShown);
 
   const canAddNewAdmins = Boolean(chat?.isCreator || (chat && getHasAdminRight(chat, 'addAdmins')));
-  const canToggleSignatures = isChannel && getHasAdminRight(chat!, 'postMessages');
+  // Parvane: подписи авторов постов канала требуют поля в журнале группы и имени автора в содержимом поста — пока
+  // нет, блок скрыт (B10 ревью 7 ноя 2026)
+  const canToggleSignatures = false;
 
   const adminMembers = useMemo(() => {
     if (!adminMembersById) {

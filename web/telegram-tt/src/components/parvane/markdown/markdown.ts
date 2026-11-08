@@ -56,7 +56,6 @@ export type MdBlock = (
 ) & { line: number } | MdEmbed;
 
 const EMBED = /^\s*!(?:\[\[([^\]|]+)(?:\|([^\]]*))?\]\]|\[([^\]]*)\]\(([^)\s]+)(?:\s[^)]*)?\))\s*$/;
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 const FRONT_MATTER = /^---\n[\s\S]*?\n---(?:\n|$)/;
 const SAFE_URL = /^(?:https?:|mailto:)/i;
 const WEB_URL = /^https?:\/\//i;
@@ -132,14 +131,77 @@ function isFenceClose(line: string, fence: Fence) {
 function headingOf(line: string) {
   const match = /^ {0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
   if (!match) return undefined;
-  let text = match[2].replace(/[ \t]+#+[ \t]*$/, '').replace(/^#+[ \t]*$/, '').trim();
+  // Хвост и свой id — проходом с конца строки, как в ядре: регулярка с `$` без якоря в начале квадратична на
+  // длинном хвосте пробелов (C7-1, ревью 7 ноя 2026)
+  let text = stripClosingHashes(match[2]).replace(/^#+[ \t]*$/, '').trim();
   let id: string | undefined;
-  const custom = /[ \t]*\{#([\p{L}\p{N}_-]{1,100})\}$/u.exec(text);
-  if (custom) {
-    id = custom[1];
-    text = text.slice(0, custom.index).trim();
+  // /[ \t]*\{#([\p{L}\p{N}_-]{1,100})\}$/u
+  const open = text.endsWith('}') ? text.lastIndexOf('{#') : -1;
+  if (open >= 0) {
+    const body = text.slice(open + 2, -1);
+    if (body.length <= 200 && /^[\p{L}\p{N}_-]{1,100}$/u.test(body)) {
+      id = body;
+      text = text.slice(0, open).trim();
+    }
   }
   return { level: match[1].length as 1 | 2 | 3 | 4 | 5 | 6, text, id };
+}
+
+function isTabOrSpace(c: string | undefined) {
+  return c === ' ' || c === '\t';
+}
+
+function isSpaceChar(c: string | undefined) {
+  return c !== undefined && /\s/.test(c);
+}
+
+// .replace(/[ \t]+#+[ \t]*$/, '') — закрывающие `#` заголовка
+function stripClosingHashes(text: string) {
+  let end = text.length;
+  while (end > 0 && isTabOrSpace(text[end - 1])) end--;
+  let hashes = end;
+  while (hashes > 0 && text[hashes - 1] === '#') hashes--;
+  if (hashes === end || hashes === 0 || !isTabOrSpace(text[hashes - 1])) return text;
+  let start = hashes;
+  while (start > 0 && isTabOrSpace(text[start - 1])) start--;
+  return text.slice(0, start);
+}
+
+// /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/ — одним проходом, как в ядре (C7-1)
+function isTableSeparator(line: string) {
+  const n = line.length;
+  let i = 0;
+  const skipSpace = () => {
+    while (i < n && isSpaceChar(line[i])) i++;
+  };
+  // Ячейка `:?-{3,}:?\s*`
+  const cell = () => {
+    let j = i;
+    if (line[j] === ':') j++;
+    const dashes = j;
+    while (j < n && line[j] === '-') j++;
+    if (j - dashes < 3) return false;
+    if (line[j] === ':') j++;
+    while (j < n && isSpaceChar(line[j])) j++;
+    i = j;
+    return true;
+  };
+  skipSpace();
+  if (line[i] === '|') i++;
+  skipSpace();
+  if (!cell()) return false;
+  while (i < n && line[i] === '|') {
+    const save = i;
+    i++;
+    skipSpace();
+    if (!cell()) {
+      i = save;
+      break;
+    }
+  }
+  if (line[i] === '|') i++;
+  skipSpace();
+  return i === n;
 }
 
 function isRule(line: string) {
@@ -289,7 +351,7 @@ function parseBlocks(lines: string[], lineNos: number[], depth: number): MdBlock
       i++;
       continue;
     }
-    if (line.includes('|') && !paragraph.length && TABLE_SEPARATOR.test(lines[i + 1] || '')) {
+    if (line.includes('|') && !paragraph.length && isTableSeparator(lines[i + 1] || '')) {
       flush();
       const header = splitRow(line).slice(0, MAX_TABLE_COLUMNS);
       const align = splitRow(lines[i + 1]).map(alignOf);
@@ -1141,4 +1203,25 @@ export function collectTexts(blocks: MdBlock[], out: string[] = []) {
     }
   }
   return out;
+}
+
+// ── ссылки: подтверждение перехода (C7-4, ревью 7 ноя 2026) ─────────────────────────────────────────────────
+
+// Адрес для сравнения с подписью: без пробелов по краям, схемы, `www.`, завершающей `/`, в нижнем регистре ASCII
+// (то же, что `comparableUrl` ядра desktop/android)
+function comparableUrl(value: string) {
+  let v = value.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const prefix = ['https://', 'http://', 'mailto:'].find((p) => v.startsWith(p));
+  if (prefix) v = v.slice(prefix.length);
+  if (v.startsWith('www.')) v = v.slice(4);
+  let end = v.length;
+  while (end > 0 && v[end - 1] === '/') end--;
+  return v.slice(0, end);
+}
+
+/** Подпись ссылки не совпадает с адресом — переход только через окно с настоящим адресом (`linkNeedsConfirmation`
+ * ядра): `[https://свой-сервер/login](https://чужой.example)` иначе вёл бы на чужой сайт, не показав его */
+export function linkNeedsConfirmation(text: string, url: string) {
+  if (!text.trim()) return false;
+  return comparableUrl(text) !== comparableUrl(url);
 }

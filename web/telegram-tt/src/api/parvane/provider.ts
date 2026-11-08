@@ -23,13 +23,17 @@ import type {
   ApiUserStatus,
   ApiVideo,
   ApiWallpaper,
+  ApiWebPageFull,
   OnApiUpdate } from '../types';
 import type { ServerInfo } from './connectionController';
+import type { LocalContactInfo } from './contactInfo';
 import type { GatewayConnection } from './gateway';
+import type { SearchFilters } from './localSearch';
 import type { LocalStickerPack } from './localState';
+import type { StickerRef } from './stickerLists';
 import type { PackFile, StoredPack } from './stickerPacks';
 import type { WirePackRef, WireUserInfo } from './wire';
-import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
+import { MAIN_THREAD_ID } from '../types';
 
 import {
   ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
@@ -65,9 +69,11 @@ import {
 } from './authStorage';
 import { createCallController } from './calls';
 import { createCloudDrive } from './cloudDrive';
+import { buildComposerWebPage } from './composerWebPage';
 import {
   AccountDeletionPendingError, canonicalAddress, createConnectionController, TwoFactorRequiredError,
 } from './connectionController';
+import { contactNameOverride, withContactName, withContactNote } from './contactInfo';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
 import {
@@ -90,11 +96,15 @@ import {
   sasCodeV2,
   sealLinkBox,
 } from './linking';
+import { findFirstMessageIdAfterDate, searchMessages } from './localSearch';
 import { createLocalState } from './localState';
 import { createMediaService } from './media';
 import { createMessageController } from './messages';
+import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
+import { savePrivacySetting } from './privacySave';
+import { isCurrentAvatarDeleted } from './profilePhoto';
 import { createReminderScheduler } from './reminders';
 import {
   buildGifFileName,
@@ -115,6 +125,10 @@ import {
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
+import {
+  dropStickerRef, FAVORITE_STICKERS_LIMIT, matchStickersForEmoji, moveSetToTop, pushStickerRef, RECENT_STICKERS_LIMIT,
+  resolveStickerRefs, sortSetsByOrder, stickerRefOf,
+} from './stickerLists';
 import {
   buildApiCustomEmojiSetFromPack,
   buildApiStickerSetFromPack,
@@ -395,15 +409,38 @@ function writeAudience(key: string, value: 'anyone' | 'nobody') {
 }
 
 // Приватность v2 целиком (T079): identity.privacy.set перезаписывает все поля
-function pushV2Privacy() {
-  if (!v2Controller.isReady()) return;
-  void v2Controller.setPrivacy({
-    groupAdd: readGroupAddPolicy(),
-    strangers: readStrangersAllowed(),
-    callsFrom: readAudience(callsPolicyKey(store.self)),
-    presence: readAudience(presencePolicyKey(store.self)),
-  })
-    .catch((err: unknown) => logDebug(`v2: приватность не сохранена: ${String(err)}`));
+async function pushV2Privacy(): Promise<boolean> {
+  if (!v2Controller.isReady()) {
+    logDebug('v2: приватность не сохранена: движок не готов');
+    return false;
+  }
+  try {
+    await v2Controller.setPrivacy({
+      groupAdd: readGroupAddPolicy(),
+      strangers: readStrangersAllowed(),
+      callsFrom: readAudience(callsPolicyKey(store.self)),
+      presence: readAudience(presencePolicyKey(store.self)),
+    });
+    return true;
+  } catch (err) {
+    logDebug(`v2: приватность не сохранена: ${String(err)}`);
+    return false;
+  }
+}
+
+function writeLocalPolicy(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // приватный режим — настройка не переживёт reload
+  }
+}
+
+// Отказ сервера — прежнее значение на устройстве, экран откатывает переключатель (B14)
+function savePrivacyValue(key: string, read: () => string, next: string) {
+  return savePrivacySetting({
+    read, write: (value) => writeLocalPolicy(key, value), next, push: pushV2Privacy,
+  });
 }
 
 // FR-040: источник истины приватности — сервер. Перед показом настройки
@@ -501,6 +538,10 @@ const localState = createLocalState({
   sendUpdate,
   buildLocalContent: mediaService.buildLocalContent,
   sendMessage: sendMessageFromSchedule,
+  // «Отправить, когда будет в сети»: connectionController собран ниже, срок проверяется позже
+  isPeerOnline: (chatId) => connectionController.isPeerOnline(store.getAddressForId(chatId)),
+  // Отложенная пересылка (A3): messageController собран ниже, срок наступает позже
+  forwardMessages: (params) => messageController.methods.forwardMessages(params),
 });
 
 // Журнал личного состояния v2 (T098): подключается, когда поднят v2-стек
@@ -522,8 +563,63 @@ const stateJournal = createStateJournal({
     void applyJournalStickerPacks(packs, removed)
       .catch((e: unknown) => logDebug(`стикеры: наборы из журнала не применены: ${String(e)}`));
   },
+  applyContacts: (addresses, info, removed) => applyJournalContacts(addresses, info, removed),
   log: logDebug,
 });
+
+// Недавних ещё не было — первые встроенные стикеры (как до A6)
+const DEFAULT_RECENT_STICKERS = 6;
+function defaultRecentStickerRefs(): StickerRef[] {
+  return (getBuiltinStickerSet().stickers || []).slice(0, DEFAULT_RECENT_STICKERS)
+    .map(stickerRefOf).filter((ref): ref is StickerRef => Boolean(ref));
+}
+
+async function loadStickerSetContent(setId: string) {
+  return (await methods.fetchStickerSet({ stickerSetInfo: { id: setId } })).stickers;
+}
+
+const COMPOSER_PREVIEW_CACHE = 20;
+const composerPreviews = new Map<string, ApiWebPageFull>();
+
+async function decodePreviewImage(imageBase64: string, mime: string) {
+  try {
+    const blob = new Blob([base64ToBytes(imageBase64)], { type: mime });
+    const bitmap = await createImageBitmap(blob);
+    const size = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return { blobUrl: URL.createObjectURL(blob), ...size };
+  } catch {
+    return undefined;
+  }
+}
+
+// Контакты с других своих устройств (CONTACT-1): явные контакты, свои имена и заметки
+function applyJournalContacts(addresses: string[], info: Record<string, LocalContactInfo>, removed: string[]) {
+  const { removed: nonContacts } = store.getContactLists();
+  const nextNonContacts = nonContacts.filter((address) => !addresses.includes(address))
+    .concat(removed.filter((address) => !nonContacts.includes(address)));
+  store.setContacts(addresses, nextNonContacts);
+  localState.saveNonContacts(nextNonContacts);
+  store.replaceContactNames(info);
+  new Set([...addresses, ...removed]).forEach((address) => {
+    if (address === store.self) return;
+    const user = store.buildApiUser(address);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    // Заметку профиль перечитывает сам при открытии (`fetchFullUser`): частичный fullInfo скрыл бы остальное
+    if (removed.includes(address)) sendUpdate({ '@type': 'deleteContact', id: user.id });
+  });
+}
+
+/** Своё имя контакта (форма «Новый контакт» / «Изменить»); имя, совпадающее с заданным самим собеседником, — не своё. */
+function saveContactName(address: string, firstName?: string, lastName?: string) {
+  const all = localState.loadContactInfo();
+  const name = contactNameOverride(store.getPublicDisplayName(address), firstName, lastName);
+  const next = withContactName(all[address], name);
+  if (next) all[address] = next;
+  else delete all[address];
+  store.setContactName(address, name);
+  localState.saveContactInfo(all);
+}
 
 // ── Свои наборы стикеров и эмодзи на всех своих устройствах (PACK-3, 5 ноя 2026) ─────────────────────────
 // Установленный набор записывается в журнал личного состояния ссылкой на архив в облаке (тот же `pack_ref`, что у
@@ -1225,6 +1321,16 @@ messageController = createMessageController({
   log: logDebug,
   resolveCustomPack: (setId) => resolveCustomPack(setId),
   primeCustomEmoji: (docIds) => methods.fetchCustomEmoji({ documentId: docIds }),
+  onStickerSent: (sticker, shouldUpdateSetOrder) => {
+    const ref = stickerRefOf(sticker);
+    if (!ref) return;
+    const recent = localState.loadStickerRefs('recentstickers') || defaultRecentStickerRefs();
+    localState.saveStickerRefs('recentstickers', pushStickerRef(recent, ref, RECENT_STICKERS_LIMIT));
+    // «Динамический порядок наборов» (B12): набор отправленного стикера — первым
+    if (!shouldUpdateSetOrder) return;
+    localState.saveStickerSetOrder(moveSetToTop(localState.loadStickerSetOrder(), ref.setId));
+    sendUpdate({ '@type': 'updateMoveStickerSetToTop', id: ref.setId });
+  },
 });
 
 const connectionController = createConnectionController({
@@ -1273,6 +1379,7 @@ const connectionController = createConnectionController({
     messageController.reset();
     localState.reset();
     store.setContacts(localState.loadContacts(), localState.loadNonContacts());
+    store.replaceContactNames(localState.loadContactInfo());
     polls.reset();
     taskOffers.reset();
   },
@@ -1520,6 +1627,15 @@ async function moveAccountLocal(oldAddress: string, newAddress: string) {
 // ── методы (подмножество Methods, остальное — заглушки) ──────────────────────
 
 const RECENT_STATUS: ApiUserStatus = { type: 'userStatusRecently' };
+
+// Фоновые вызовы tt, на которые честный ответ — «нечего»: не пишут `api-missing` в журнал диагностики
+const PARVANE_SILENT_STUB_NAMES = [
+  'fetchMessageReactions', 'fetchMessageViews', 'fetchFactChecks', 'fetchSavedReactionTags', 'fetchRecentReactions',
+  'readAllReactions', 'readAllPollVotes', 'sendEmojiInteraction', 'sendWatchingEmojiInteraction',
+] as const;
+const PARVANE_SILENT_STUBS = Object.fromEntries(
+  PARVANE_SILENT_STUB_NAMES.map((name) => [name, () => Promise.resolve(undefined)]),
+) as Record<(typeof PARVANE_SILENT_STUB_NAMES)[number], () => Promise<undefined>>;
 const INSTALLED_PACK_DATE = Math.floor(Date.now() / 1000);
 
 function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
@@ -1688,7 +1804,8 @@ const TELEGRAM_KEY_POLL_MAX_MS = 30000;
 const TELEGRAM_KEY_POLL_GROWTH = 1.5;
 const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
 
-type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
+type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired'
+  | 'intercepted';
 const telegramRecovery: { state: TelegramRecoveryState; timer?: number; generation: number; startedAt?: number } = {
   state: 'idle', generation: 0,
 };
@@ -1835,9 +1952,19 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
   }
   const reply = await v2Controller.pollTelegramKey(false);
   if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting' || !reply) return;
+  // S7-1: код запроса сменился — запрос перехвачен другим входом с этим устройством; ответа не ждём
+  if (reply.intercepted) {
+    logDebug('ключ восстановления: запрос перехвачен другим входом');
+    stopTelegramRecovery('intercepted');
+    return;
+  }
   if (!reply.recovery_key) {
     // Сервер запроса не помнит (перезапуск) — просим заново, без нового сообщения
-    if (!reply.pending) void v2Controller.requestTelegramKey(false);
+    if (!reply.pending) {
+      void v2Controller.requestTelegramKey(false).then((again) => {
+        if (again === 'intercepted' && generation === telegramRecovery.generation) stopTelegramRecovery('intercepted');
+      });
+    }
     return;
   }
   window.clearTimeout(telegramRecovery.timer);
@@ -2286,6 +2413,14 @@ function persistContacts() {
   localState.saveNonContacts(removed);
 }
 
+function saveContactNote(address: string, text: string | undefined) {
+  const all = localState.loadContactInfo();
+  const next = withContactNote(all[address], text);
+  if (next) all[address] = next;
+  else delete all[address];
+  localState.saveContactInfo(all);
+}
+
 function addContactAddress(address: string) {
   store.addContact(address);
   persistContacts();
@@ -2378,6 +2513,11 @@ const methods = {
   fetchTopPeers() {
     return Promise.resolve(undefined);
   },
+
+  // Фоновые запросы tt без пользы для Parvane (замечания ревью 7 ноя 2026): счётчики реакций и просмотров
+  // приходят в самих сообщениях (E2E), проверки фактов, метки «Избранного», серверные отметки «реакции/голоса
+  // прочитаны» и анимированные эмодзи собеседнику — функции сервера Telegram. Пусто — вместо `api-missing`
+  ...PARVANE_SILENT_STUBS,
 
   async fetchChats({ archived }: { archived?: boolean }) {
     await syncController.ensureSynced();
@@ -2673,9 +2813,22 @@ const methods = {
     if (!result) void getV2Bridge().control.deleteBlob(fileId).catch(() => undefined);
     return dropPrevious(result, fileId);
   },
-  // tt зовёт при удалении «не текущего» фото профиля; у группы фото одно
-  deleteProfilePhotos() {
-    return Promise.resolve(true);
+  // «Удалить» фото профиля (B8): у аккаунта фото одно — удаление текущего снимает аватар в identity
+  async deleteProfilePhotos(photos: ApiPhoto[]) {
+    const current = store.getAvatar(store.self);
+    if (!connection || !isCurrentAvatarDeleted(photos, current)) return true;
+    try {
+      await connection.request(TOPIC_IDENTITY_SETAVATAR, JSON.stringify({ token, file_id: '' }));
+    } catch (error) {
+      logDebug(`фото профиля не удалено: ${String(error)}`);
+      return undefined;
+    }
+    store.setAvatar(store.self, undefined);
+    void getV2Bridge().control.deleteBlob(current!).catch(() => undefined);
+    const user = store.buildApiUser(store.self);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
+    sendUpdate({ '@type': 'updateCurrentUser', currentUser: user, currentUserFullInfo: {} });
+    return true;
   },
 
   // Экраны профиля и канала запрашивают это фоном; в Parvane нет историй,
@@ -2723,21 +2876,20 @@ const methods = {
   // ── пины и архив чатов (локальный persist) ──────────────────────────────────
 
   // Дефолты уведомлений по типам чатов — локальный persist
+  // Со звуком и текстом, пока пользователь не выбрал иное (как умолчания сервера Telegram; A1 ревью 7 ноя)
   fetchNotifyDefaultSettings() {
-    const stored = localState.loadNotifyDefaults();
-    return Promise.resolve({
-      users: stored.users || {},
-      groups: stored.groups || {},
-      channels: stored.channels || {},
-    });
+    return Promise.resolve(withNotifyDefaults(localState.loadNotifyDefaults()));
   },
 
-  updateNotificationSettings(peerType: string, settings: { isMuted?: boolean; shouldShowPreviews?: boolean }) {
+  updateNotificationSettings(peerType: string, settings: {
+    isMuted?: boolean; shouldShowPreviews?: boolean; hasSound?: boolean;
+  }) {
     const defaults = localState.loadNotifyDefaults();
-    defaults[peerType] = {
+    defaults[peerType] = mergeNotifyDefault(defaults[peerType], {
       mutedUntil: settings.isMuted ? MUTE_INDEFINITE_TIMESTAMP : UNMUTE_TIMESTAMP,
       shouldShowPreviews: settings.shouldShowPreviews,
-    };
+      hasSound: settings.hasSound,
+    });
     localState.saveNotifyDefaults(defaults);
     return Promise.resolve(true);
   },
@@ -3066,21 +3218,34 @@ const methods = {
     });
   },
 
-  searchMessagesGlobal({ query, type }: { query?: string; type?: string }) {
-    // Вкладки поиска по типу («Музыка», «Ссылки», «Медиа») получают только сообщения своего типа
-    const found = searchLocalMessages(query);
-    return Promise.resolve(buildSearchResults(
-      type && type !== 'text' ? found.filter((m) => matchesMediaType(m, type)) : found,
-    ));
+  // Вкладки типа без запроса — последние по типу со всех чатов; с запросом — подпись, имя файла, название (A7);
+  // отбор по дате (B1) и «Сообщения из: личные / группы / каналы» (B2)
+  searchMessagesGlobal({
+    query, type, context, minDate, maxDate,
+  }: {
+    query?: string; type?: string; context?: SearchFilters['context']; minDate?: number; maxDate?: number;
+  }) {
+    const all = store.getChatIds().flatMap((id) => store.getMessages(id));
+    return Promise.resolve(buildSearchResults(searchMessages(all, query, type, {
+      minDate, maxDate, context, chatKindOf,
+    })));
   },
 
-  searchMessagesInChat({ peer, query, type }: { peer: { id: string }; query?: string; type?: string }) {
-    // Вкладки профиля (Media/Files/Links/Voice/Music) зовут без query, но с
-    // type — фильтруем по типу контента вместо текстового поиска
-    if (type && type !== 'text') {
-      return Promise.resolve(buildSearchResults(filterMediaMessages(peer.id, type)));
-    }
-    return Promise.resolve(buildSearchResults(searchLocalMessages(query, peer.id)));
+  searchMessagesInChat({
+    peer, query, type, fromPeer, minDate, maxDate,
+  }: {
+    peer: { id: string }; query?: string; type?: string; fromPeer?: { id: string }; minDate?: number; maxDate?: number;
+  }) {
+    // Вкладки профиля (Media/Files/Links/Voice/Music) зовут без query, но с type; «От пользователя» (B3)
+    return Promise.resolve(buildSearchResults(searchMessages(store.getMessages(peer.id), query, type, {
+      fromId: fromPeer?.id, minDate, maxDate,
+    })));
+  },
+
+  // «Перейти к дате» (A5): история чата — на устройстве
+  async findFirstMessageIdAfterDate({ chat, timestamp }: { chat: ApiChat; timestamp: number }) {
+    await syncController.ensureSynced().catch(() => undefined);
+    return findFirstMessageIdAfterDate(store.getMessages(chat.id), timestamp);
   },
 
   oldFetchLangPack({ langCode }: { langCode: string }) {
@@ -3325,6 +3490,33 @@ const methods = {
     return mediaService.fetchLinkPreview(url);
   },
 
+  // Предпросмотр ссылки над полем ввода (A2): карточка без загрузки картинки в облако
+  async fetchWebPagePreview({ text }: { text?: { text?: string } }) {
+    const found = mediaService.detectWebPage(text?.text);
+    if (!found) return undefined;
+    const cached = composerPreviews.get(found.url);
+    if (cached) return cached;
+    const preview = await mediaService.fetchLinkPreview(found.url);
+    const image = preview?.imageBase64 && preview.imageMime
+      ? await decodePreviewImage(preview.imageBase64, preview.imageMime) : undefined;
+    const page = buildComposerWebPage(found.url, preview && {
+      siteName: preview.siteName, title: preview.title, description: preview.description, image,
+    });
+    // Без связи — карточка по имени сайта, но не в кэш: метаданные придут при следующей правке текста
+    if (preview) {
+      if (composerPreviews.size >= COMPOSER_PREVIEW_CACHE) {
+        const oldest = composerPreviews.keys().next().value;
+        if (oldest !== undefined) {
+          const photoUrl = composerPreviews.get(oldest)?.photo?.blobUrl;
+          if (photoUrl) URL.revokeObjectURL(photoUrl);
+          composerPreviews.delete(oldest);
+        }
+      }
+      composerPreviews.set(found.url, page);
+    }
+    return page;
+  },
+
   // Галерея — только свои картинки: встроенные фоны собираются на экране из градиента и рисунка
   // (`wallpaperCombo.ts`) и рисуются по требованию. Своя картинка живёт в шифрованном хранилище (фон темы
   // и копия последней загруженной) — возвращаем её плитку, иначе после перезагрузки её не выбрать снова
@@ -3378,8 +3570,23 @@ const methods = {
       registerPackBlobs(built.blobs);
       return withoutStickers(built.set);
     });
-    const hash = `1:${customSets.map(({ id }) => id).sort().join(',')}`;
-    return { hash, sets: [withoutStickers(set), ...customSets] };
+    const sets = sortSetsByOrder([withoutStickers(set), ...customSets], localState.loadStickerSetOrder());
+    const hash = `1:${sets.map(({ id }) => id).join(',')}`;
+    return { hash, sets };
+  },
+
+  // «Предлагать стикеры» по одиночному эмодзи (B13): стикеры установленных наборов с этим эмодзи, порядок наборов —
+  // как в панели (`fetchStickerSets`). Ответ «приветственных» стикеров (`👋⭐️`) — тем же путём
+  async fetchStickersForEmoji({ emoji }: { emoji: string; hash?: string }) {
+    const order = localState.loadStickerSetOrder();
+    const packs = (await loadInstalledPacks(store.self)).filter((pack) => !pack.isEmoji);
+    const sets = sortSetsByOrder([getBuiltinStickerSet(), ...packs.map((pack) => {
+      const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
+      registerPackBlobs(built.blobs);
+      return built.set;
+    })], order);
+    const stickers = matchStickersForEmoji(sets.flatMap((set) => set.stickers || []), emoji);
+    return { stickers, hash: `e:${emoji}:${stickers.map(({ id }) => id).join(',')}` };
   },
 
   async fetchStickerSet(params?: { stickerSetInfo?: { id?: string; shortName?: string } }) {
@@ -3834,9 +4041,38 @@ const methods = {
     return { set: result.set, stickers: result.stickers || [], packs };
   },
 
-  fetchRecentStickers() {
-    const set = getBuiltinStickerSet();
-    return Promise.resolve({ hash: '1', stickers: (set.stickers || []).slice(0, 6) });
+  // «Недавние» и «Избранные» стикеры (A6) — на устройстве
+  async fetchRecentStickers() {
+    const refs = localState.loadStickerRefs('recentstickers') || defaultRecentStickerRefs();
+    return { hash: String(Date.now()), stickers: await resolveStickerRefs(refs, loadStickerSetContent) };
+  },
+
+  async fetchFavoriteStickers() {
+    const refs = localState.loadStickerRefs('favestickers') || [];
+    return { hash: String(Date.now()), stickers: await resolveStickerRefs(refs, loadStickerSetContent) };
+  },
+
+  faveSticker({ sticker, unfave }: { sticker: ApiSticker; unfave?: boolean }) {
+    const ref = stickerRefOf(sticker);
+    if (!ref) return Promise.resolve(undefined);
+    const faves = localState.loadStickerRefs('favestickers') || [];
+    localState.saveStickerRefs('favestickers', unfave
+      ? dropStickerRef(faves, ref) : pushStickerRef(faves, ref, FAVORITE_STICKERS_LIMIT));
+    sendUpdate({ '@type': 'updateFavoriteStickers' });
+    return Promise.resolve(true);
+  },
+
+  removeRecentSticker({ sticker }: { sticker: ApiSticker }) {
+    const ref = stickerRefOf(sticker);
+    if (!ref) return Promise.resolve(undefined);
+    const recent = localState.loadStickerRefs('recentstickers') || defaultRecentStickerRefs();
+    localState.saveStickerRefs('recentstickers', dropStickerRef(recent, ref));
+    return Promise.resolve(true);
+  },
+
+  clearRecentStickers() {
+    localState.saveStickerRefs('recentstickers', []);
+    return Promise.resolve(true);
   },
 
   fetchFeaturedStickers() {
@@ -4109,13 +4345,7 @@ const methods = {
   },
 
   parvaneSetGroupAddPolicy({ policy }: { policy: 'anyone' | 'nobody' }) {
-    try {
-      localStorage.setItem(groupAddPolicyKey(store.self), policy);
-    } catch {
-      // приватный режим — настройка не переживёт reload
-    }
-    pushV2Privacy();
-    return Promise.resolve(true);
+    return savePrivacyValue(groupAddPolicyKey(store.self), readGroupAddPolicy, policy);
   },
 
   // Протокол v2: «сообщения от незнакомых» (T079). Настройка есть только у
@@ -4147,15 +4377,23 @@ const methods = {
   },
 
   parvaneSetCallsPolicy({ isAllowed }: { isAllowed: boolean }) {
-    writeAudience(callsPolicyKey(store.self), isAllowed ? 'anyone' : 'nobody');
-    pushV2Privacy();
-    return Promise.resolve(true);
+    const key = callsPolicyKey(store.self);
+    return savePrivacySetting<'anyone' | 'nobody'>({
+      read: () => readAudience(key),
+      write: (value) => writeAudience(key, value),
+      next: isAllowed ? 'anyone' : 'nobody',
+      push: pushV2Privacy,
+    });
   },
 
   parvaneSetPresencePolicy({ isShown }: { isShown: boolean }) {
-    writeAudience(presencePolicyKey(store.self), isShown ? 'anyone' : 'nobody');
-    pushV2Privacy();
-    return Promise.resolve(true);
+    const key = presencePolicyKey(store.self);
+    return savePrivacySetting<'anyone' | 'nobody'>({
+      read: () => readAudience(key),
+      write: (value) => writeAudience(key, value),
+      next: isShown ? 'anyone' : 'nobody',
+      push: pushV2Privacy,
+    });
   },
 
   async parvaneGetStrangersPolicy() {
@@ -4164,13 +4402,11 @@ const methods = {
   },
 
   parvaneSetStrangersPolicy({ isAllowed }: { isAllowed: boolean }) {
-    try {
-      localStorage.setItem(strangersPolicyKey(store.self), isAllowed ? 'anyone' : 'nobody');
-    } catch {
-      // приватный режим — настройка не переживёт reload
-    }
-    pushV2Privacy();
-    return Promise.resolve(true);
+    return savePrivacyValue(
+      strangersPolicyKey(store.self),
+      () => (readStrangersAllowed() ? 'anyone' : 'nobody'),
+      isAllowed ? 'anyone' : 'nobody',
+    );
   },
 
   // Протокол v2: режим чата «усиленная приватность» (L2, FR-036). Личный чат —
@@ -4431,15 +4667,34 @@ const methods = {
     return { users, userStatusesById };
   },
 
-  // «Добавить в контакты» из профиля / «Новый контакт» по нику
-  updateContact({ id }: { id: string; firstName?: string; lastName?: string }) {
+  // «Добавить в контакты» из профиля / «Новый контакт» по нику / «Изменить»: своё имя и заметка (CONTACT-1)
+  updateContact({
+    id, firstName, lastName, note,
+  }: { id: string; firstName?: string; lastName?: string; note?: { text: string } }) {
     const address = store.getAddressForId(id);
     if (!address || address === store.self) return Promise.resolve(undefined);
-    addContactAddress(address);
+    store.addContact(address);
+    persistContacts();
+    // «Добавить в контакты» без формы имени не передаёт — своё имя, если было, остаётся
+    if (firstName !== undefined || lastName !== undefined) saveContactName(address, firstName, lastName);
+    if (note) saveContactNote(address, note.text);
+    const user = store.buildApiUser(address);
+    sendUpdate({ '@type': 'updateUser', id: user.id, user });
     return Promise.resolve(true);
   },
 
-  async importContact({ phone }: { phone?: string; firstName?: string; lastName?: string }) {
+  updateContactNote(user: ApiUser, note?: { text: string }) {
+    const address = store.getAddressForId(user.id);
+    if (!address || address === store.self) return Promise.resolve(undefined);
+    if (!store.getContactLists().added.includes(address)) {
+      store.addContact(address);
+      persistContacts();
+    }
+    saveContactNote(address, note?.text);
+    return Promise.resolve(true);
+  },
+
+  async importContact({ phone, firstName, lastName }: { phone?: string; firstName?: string; lastName?: string }) {
     // tt передаёт «телефон» — у нас это ник или ник@сервер
     const input = (phone || '').trim().replace(/^@/, '').toLowerCase();
     if (!input) return undefined;
@@ -4448,6 +4703,7 @@ const methods = {
     if (address === store.self) return undefined;
     const id = await methods.parvaneResolveExactAddress({ address });
     if (!id) return undefined;
+    saveContactName(address, firstName, lastName);
     addContactAddress(address);
     return id;
   },
@@ -4456,8 +4712,17 @@ const methods = {
     const address = store.getAddressForId(id);
     if (!address) return Promise.resolve(undefined);
     store.removeContact(address);
+    // Своё имя и заметка уходят вместе с контактом (как в Telegram)
+    const info = localState.loadContactInfo();
+    if (info[address]) {
+      delete info[address];
+      localState.saveContactInfo(info);
+    }
+    store.setContactName(address, undefined);
     persistContacts();
     sendUpdate({ '@type': 'deleteContact', id });
+    const user = store.buildApiUser(address);
+    sendUpdate({ '@type': 'updateUser', id, user });
     return Promise.resolve(undefined);
   },
 
@@ -4582,6 +4847,10 @@ const methods = {
         commonChatsCount: 0,
         bio: profile?.bio || undefined,
         birthday,
+        note: (() => {
+          const note = localState.loadContactInfo()[address]?.note;
+          return note ? { text: note, entities: [] } : undefined;
+        })(),
         // personal_channel — group_id группы Parvane; tt ждёт id чата
         personalChannelId: profile?.personalChannel
           ? store.getIdForAddress(profile.personalChannel, 'group')
@@ -4702,33 +4971,12 @@ function ensureEmojiNameData() {
   return emojiNameDataPromise;
 }
 
-function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
-  const needle = query?.trim().toLowerCase();
-  if (!needle) return [];
-  const chatIds = chatId ? [chatId] : store.getChatIds();
-  return chatIds
-    .flatMap((id) => store.getMessages(id))
-    .filter((m) => m.content.text?.text.toLowerCase().includes(needle))
-    .sort((a, b) => b.date - a.date);
-}
-
-function matchesMediaType(message: ApiMessage, type: string): boolean {
-  const c = message.content;
-  switch (type) {
-    case 'media': return Boolean(c.photo || (c.video && !c.video.isRound && !c.video.isGif));
-    case 'documents': return Boolean(c.document);
-    case 'links': return Boolean(c.text?.text && (/https?:\/\//.test(c.text.text) || c.text.entities?.some(
-      (e) => e.type === ApiMessageEntityTypes.Url || e.type === ApiMessageEntityTypes.TextUrl,
-    )));
-    case 'voice': return Boolean(c.voice || (c.video && c.video.isRound));
-    case 'audio': return Boolean(c.audio);
-    case 'gif': return Boolean(c.video?.isGif);
-    default: return false;
-  }
-}
-
-function filterMediaMessages(chatId: string, type: string): ApiMessage[] {
-  return store.getMessages(chatId).filter((m) => matchesMediaType(m, type)).sort((a, b) => b.date - a.date);
+// Вид чата для отбора «Сообщения из» глобального поиска (B2)
+function chatKindOf(chatId: string): 'users' | 'groups' | 'channels' {
+  const address = store.getAddressForId(chatId);
+  const info = address ? store.getGroupInfo(address) : undefined;
+  if (info) return info.kind === 'channel' ? 'channels' : 'groups';
+  return chatId.startsWith('-') ? 'groups' : 'users';
 }
 
 function buildSearchResults(messages: ApiMessage[]) {

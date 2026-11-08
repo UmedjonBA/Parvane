@@ -37,7 +37,8 @@ type StateProps = GlobalState['activeSessions'];
 
 // Parvane: авто-линковка истории — статус собственного оффера и запросы
 // других устройств опрашиваются, пока экран открыт
-type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
+type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired'
+  | 'intercepted';
 type LinkStatus = {
   isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean; telegram?: TelegramRecoveryState;
   telegramCode?: string;
@@ -50,6 +51,7 @@ const TELEGRAM_RECOVERY_TEXT: Partial<Record<TelegramRecoveryState, string>> = {
   failed: 'ParvaneTgRecoverFailed',
   limit: 'ParvaneTgRecoverLimit',
   expired: 'ParvaneTgRecoverExpired',
+  intercepted: 'ParvaneTgRecoverIntercepted',
 };
 type LinkOffer = { deviceId: string; code?: string };
 // Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —

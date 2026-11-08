@@ -92,7 +92,7 @@ const SettingsPrivacyBlockedUsers: FC<OwnProps & StateProps> = ({
         ripple
         narrow
         contextActions={[{
-          title: 'Unblock',
+          title: lang('Unblock'),
           icon: 'unlock',
           handler: () => {
             handleUnblockClick(contactId);

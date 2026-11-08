@@ -15,6 +15,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
+import MarkdownLink from './MarkdownLink';
 
 import '../../common/code/CodeBlock.scss';
 import styles from './Markdown.module.scss';
@@ -295,10 +296,11 @@ function renderInline(text: string, context: Context): TeactNode[] {
         j++;
       }
       const url = part.url!;
+      const label = parts.slice(i, j).map((p) => p.text).join('');
       nodes.push(url.startsWith('#') ? (
         <a key={key} className={styles.link} href={url} data-md-anchor={safeDecode(url.slice(1))}>{group}</a>
       ) : (
-        <a key={key} className={styles.link} href={url} target="_blank" rel="noopener noreferrer">{group}</a>
+        <MarkdownLink key={key} className={styles.link} url={url} text={label}>{group}</MarkdownLink>
       ));
       i = j;
       continue;

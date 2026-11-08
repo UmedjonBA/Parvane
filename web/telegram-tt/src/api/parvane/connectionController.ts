@@ -128,6 +128,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   const typingClearTimers = new Map<string, number>();
   // P-18: presence — только конкретных собеседников, а не всех пользователей сервера
   const watchedPresence = new Set<string>();
+  // Адрес → до какого момента (мс) собеседник «в сети» по последнему кадру присутствия
+  const onlineUntilByAddress = new Map<string, number>();
 
   function deviceMirrorKey(user: string) {
     return `parvane:device:${user}`;
@@ -280,10 +282,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
     if (!from || from === store.self) return;
     // L2-1: собеседник чата с режимом «усиленная приватность» «в сети» не показывается
     if (!isEphemeralAllowed(from)) return;
+    const nowSecs = Math.floor(Date.now() / 1000);
+    onlineUntilByAddress.set(from, (nowSecs + PRESENCE_TTL_SECS) * 1000);
     deps.sendUpdate({
       '@type': 'updateUserStatus',
       userId: store.getIdForAddress(from),
-      status: { type: 'userStatusOnline', expires: Math.floor(Date.now() / 1000) + PRESENCE_TTL_SECS },
+      // `wasOnline` — как у Telegram: «был(а) в сети» видно, значит доступно «Отправить, когда будет в сети»
+      status: { type: 'userStatusOnline', expires: nowSecs + PRESENCE_TTL_SECS, wasOnline: nowSecs },
     });
   }
 
@@ -586,6 +591,12 @@ export function createConnectionController(deps: ConnectionDependencies) {
     typingClearTimers.forEach((timer) => window.clearTimeout(timer));
     typingClearTimers.clear();
     watchedPresence.clear();
+    onlineUntilByAddress.clear();
+  }
+
+  function isPeerOnline(address: string | undefined) {
+    if (!address) return false;
+    return (onlineUntilByAddress.get(address) || 0) > Date.now();
   }
 
   return {
@@ -603,6 +614,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
     refreshEphemeral,
     showV2Typing,
     showV2Presence,
+    isPeerOnline,
     connectWithToken,
     rememberDeviceId: writeDeviceIdMirror,
     currentDeviceId: readDeviceIdMirror,

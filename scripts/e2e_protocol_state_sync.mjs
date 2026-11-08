@@ -507,6 +507,40 @@ try {
   await waitLog('bob1', 'снят (журнал состояния)');
   console.log('OK: PACK-3 — свой набор стикеров появился на втором устройстве, снятие — на обоих');
 
+  // ── CONTACT-1: своё имя контакта и заметка — на втором устройстве ≤ 10 с; в БД сервера их нет ──
+  const contactFirst = `Wren${suffix.slice(-4)}`;
+  const contactNote = `Fieldnote ${suffix.slice(-6)}`;
+  const contactSet = await bob1Page.evaluate(async ({ name, first, note }) => {
+    const g = window.__parvaneGetGlobal();
+    const user = Object.values(g.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    if (!user) return 'нет пользователя';
+    await window.__parvaneDiagCallApi('updateContact', { id: user.id, firstName: first, lastName: 'Quill' });
+    await window.__parvaneDiagCallApi('updateContactNote', user, { text: note, entities: [] });
+    return 'ok';
+  }, { name: aliceName, first: contactFirst, note: contactNote });
+  assert.equal(contactSet, 'ok', `bob1: контакт не изменён: ${contactSet}`);
+  const contactStarted = Date.now();
+  await bob2Page.waitForFunction(({ name, first }) => {
+    const g = globalThis.__parvaneGetGlobal?.();
+    const user = g && Object.values(g.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    return user?.firstName === first && user.lastName === 'Quill';
+  }, { name: aliceName, first: contactFirst }, { timeout: STATE_SYNC_BUDGET_MS });
+  console.log(`своё имя контакта на втором устройстве через ${Date.now() - contactStarted} мс`);
+  const noteOnBob2 = await bob2Page.evaluate(async (name) => {
+    const g = window.__parvaneGetGlobal();
+    const user = Object.values(g.users.byId)
+      .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+    const full = await window.__parvaneDiagCallApi('fetchFullUser', { id: user.id });
+    return full?.fullInfo?.note?.text;
+  }, aliceName);
+  assert.equal(noteOnBob2, contactNote, 'bob2: заметка о контакте не пришла');
+  // Своё имя и заметка — внутри шифрования журнала: открытым текстом в БД сервера их нет
+  assert.deepEqual(serverFilesContaining(contactFirst), [], 'своё имя контакта лежит в БД сервера открытым');
+  assert.deepEqual(serverFilesContaining(contactNote), [], 'заметка о контакте лежит в БД сервера открытым');
+  console.log('OK: CONTACT-1 — своё имя и заметка контакта на втором устройстве, на сервере только шифртекст');
+
   for (const who of names) {
     assert.ok(!logs[who].some((l) => l.includes('запуск не удался')), `${who}: ${logs[who].join(' | ')}`);
   }

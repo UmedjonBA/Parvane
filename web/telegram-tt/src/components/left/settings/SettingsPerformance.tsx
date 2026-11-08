@@ -64,7 +64,7 @@ const PERFORMANCE_OPTIONS: PerformanceSection[] = [
     { key: 'messageBlur', label: 'SettingsPerformanceMessageBlur', disabled: !IS_BACKDROP_BLUR_SUPPORTED },
     { key: 'rightColumnAnimations', label: 'SettingsPerformanceRightColumn' },
     { key: 'snapEffect', label: 'SettingsPerformanceThanos' },
-    { key: 'textStreaming', label: 'SettingsPerformanceTextStreaming' },
+    // Parvane: «Постепенный вывод текста» — для черновиков ботов/ИИ (`updateChatTypingDraft`), у Parvane их нет (C2)
   ]],
   ['SettingsPerformanceStickers', [
     { key: 'animatedEmoji', label: 'SettingsPerformanceAnimatedEmoji' },

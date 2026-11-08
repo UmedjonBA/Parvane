@@ -74,6 +74,9 @@ import UserBirthday from './UserBirthday';
 
 import styles from './ChatExtra.module.scss';
 
+// Parvane: коллекционных ников (Fragment) нет
+const IS_COLLECTIBLE_USERNAMES_SUPPORTED = false;
+
 type OwnProps = {
   chatOrUserId: string;
   isOwnProfile?: boolean;
@@ -287,7 +290,8 @@ const ChatExtra = ({
 
   function copy(text: string, entity: string) {
     copyTextToClipboard(text);
-    showNotification({ message: `${entity} was copied` });
+    // Parvane: «Скопировано: …» из словаря (прежняя английская строка была и в русском интерфейсе)
+    showNotification({ message: oldLang('ExactTextCopied', entity) });
   }
 
   const formattedNumber = phoneNumber && formatPhoneNumberWithCode(phoneCodeList, phoneNumber);
@@ -301,7 +305,9 @@ const ChatExtra = ({
   });
 
   const handleUsernameClick = useLastCallback((username: ApiUsername, isChat?: boolean) => {
-    if (!username.isEditable) {
+    // Parvane: ник неизменяем (`isEditable: false`), но коллекционных ников (Fragment) нет — сразу копировать с
+    // уведомлением «скопировано» (B16 ревью 7 ноя 2026)
+    if (!username.isEditable && IS_COLLECTIBLE_USERNAMES_SUPPORTED) {
       requestCollectibleInfo({ collectible: username.username, peerId: peerId!, type: 'username' });
       return;
     }

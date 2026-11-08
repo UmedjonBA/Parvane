@@ -1,6 +1,7 @@
 // Контакты: по умолчанию список пуст (каталог сервера не показываем),
 // «Новый контакт» по нику добавляет пользователя, собеседник с перепиской
-// попадает в контакты сам, «Удалить контакт» убирает. Всё переживает reload.
+// попадает в контакты сам, «Удалить контакт» убирает. Своё имя контакта и «Заметка» (CONTACT-1) показываются
+// вместо имени собеседника. Всё переживает reload.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -71,23 +72,28 @@ try {
   // кадр, стирается, и «Done» остаётся выключенной. Вводим, пока форма не
   // примет оба значения (кнопка включилась)
   const firstNameInput = page.getByLabel('First name (required)').last();
+  const lastNameInput = page.getByLabel('Last name').last();
   const doneButton = page.getByRole('button', { name: 'Done' }).last();
+  // Своё имя контакта (выдуманное) — вместо имени, которое bob задал себе сам
+  const ownName = 'Robin Contact';
   const formDeadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
     await nickInput.fill(nick(bob));
-    await firstNameInput.fill('Bob');
+    await firstNameInput.fill('Robin');
+    await lastNameInput.fill('Contact');
     const isReady = await doneButton.isEnabled({ timeout: 2000 }).catch(() => false);
-    if (isReady && await nickInput.inputValue() === nick(bob) && await firstNameInput.inputValue() === 'Bob') break;
+    if (isReady && await nickInput.inputValue() === nick(bob) && await firstNameInput.inputValue() === 'Robin'
+      && await lastNameInput.inputValue() === 'Contact') break;
     assert(Date.now() < formDeadline, 'new contact form never accepted the nickname and the first name');
     await page.waitForTimeout(300);
   }
   await doneButton.click();
   await nickInput.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-  // importContact открывает чат с добавленным; экран контактов остаётся открыт
-  await page.locator('#MiddleColumn').getByText(nick(bob)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await contactRow(page, nick(bob)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // importContact открывает чат с добавленным; экран контактов остаётся открыт. Шапка и список — своим именем
+  await page.locator('#MiddleColumn').getByText(ownName).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await contactRow(page, ownName).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await contactRow(page, nick(carol)).count(), 0, 'carol не должна быть в контактах');
-  console.log('OK: контакт по нику добавлен и виден в списке');
+  console.log('OK: контакт по нику добавлен и виден в списке под своим именем');
   await closeContacts(page);
 
   // ── Профиль собеседника: отпечаток ключа безопасности (12 групп hex) ──────
@@ -97,6 +103,24 @@ try {
   await page.locator('#RightColumn').getByText(/^([0-9a-f]{4} ){11}[0-9a-f]{4}$/).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: в профиле показан отпечаток ключа безопасности');
+
+  // ── «Изменить» → «Заметка»: сохраняется и показывается в профиле ─────────
+  const noteText = 'Plays the cello on Fridays';
+  await page.locator('#RightColumn').getByRole('button', { name: 'Edit' }).first().click();
+  const noteInput = page.locator('#RightColumn #user-note');
+  await noteInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await noteInput.fill(noteText);
+  const saveButton = page.locator('#RightColumn').getByRole('button', { name: 'Save' });
+  await saveButton.click();
+  // Кнопка сохранения после «Готово» уезжает анимацией, но в DOM остаётся — ждём саму заметку в fullInfo
+  await page.waitForFunction((text) => {
+    const g = window.__parvaneGetGlobal?.();
+    return Object.values(g?.users.fullInfoById || {}).some((info) => info?.note?.text === text);
+  }, noteText, { timeout: LOGIN_TIMEOUT_MS });
+  // Экран «Изменить» после сохранения остаётся открытым (как в Telegram) — назад к профилю
+  await page.locator('#RightColumn').getByRole('button', { name: 'Back' }).first().click();
+  await page.locator('#RightColumn').getByText(noteText).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: заметка о контакте сохранена и видна в профиле');
   await page.keyboard.press('Escape');
 
   // ── Переписка делает собеседника контактом ────────────────────────────────
@@ -116,9 +140,15 @@ try {
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.getByPlaceholder('Search').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openContacts(page);
-  await contactRow(page, nick(bob)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await contactRow(page, ownName).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await contactRow(page, nick(carol)).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: контакты пережили reload');
+  await contactRow(page, ownName).first().click();
+  await page.locator('#MiddleColumn').getByText(ownName).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#MiddleColumn .ChatInfo, #MiddleColumn .chat-info-wrapper, #MiddleColumn .MiddleHeader').first().click();
+  await page.locator('#RightColumn').getByText(noteText).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: своё имя контакта и заметка пережили reload');
+  await page.keyboard.press('Escape');
 
   assertNoPageErrors({ alice: aliceSession, bob: bobSession, carol: carolSession });
   console.log('OK: контакты — пустой список, добавление по нику, переписка, persist');
