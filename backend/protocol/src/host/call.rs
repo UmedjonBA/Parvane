@@ -379,6 +379,13 @@ impl HostClient {
                 };
                 req(&c.group_request_decide_via(&a.hex("group")?, a.s("user")?, a.flag("approve")?, &via).map_err(err)?)
             }
+            "groupSyncByLinkRequest" => {
+                let crate::invite::ParsedInvite::V2(parts) = crate::invite::parse(a.s("url")?).map_err(err)? else {
+                    return Err(missing("invite"));
+                };
+                let g = Ref { domain: a.se("domain").to_string(), id: a.hex("group")? };
+                req(&c.group_sync_by_link(&g, a.u("after")?, &parts, a.i("tsMs")?).map_err(err)?)
+            }
             // spec 035 (PV-005, D1): фото частной группы под секретом вне открытого журнала
             "groupSetPhoto" => {
                 let key = match a.bo("keyB64")? {

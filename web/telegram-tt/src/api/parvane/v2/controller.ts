@@ -3482,22 +3482,26 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  function groupRequestBody(hex: string, after: bigint | number, linkId?: string) {
+  function groupRequestBody(hex: string, after: bigint | number) {
     return pv!.encodeMessage('parvane.group.v2.StateSyncRequest', JSON.stringify({
       group: { domain: groupDomainOf(hex), id: hexToB64(hex) },
       after_version: String(after),
-      invite_link_id: linkId ? hexToB64(linkId) : undefined,
     }));
   }
 
   /** Догнать журнал группы (записи после своей версии) и применить отложенное. */
-  async function syncGroup(hex: string, linkId?: string) {
+  async function syncGroup(hex: string, inviteUrl?: string) {
     if (!client || !pv) return;
     const started = client.groupVersion(hex);
     try {
       for (let page = 0; page < GROUP_SYNC_PAGES; page++) {
         const before = client.groupVersion(hex);
-        const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId), groupDomainOf(hex));
+        // Посторонний читает журнал по ссылке с доказательством ключа ссылки (spec 035, PV-006)
+        const domain = groupDomainOf(hex);
+        const body = inviteUrl
+          ? (client.groupSyncByLinkRequest(domain, hex, Number(before), inviteUrl, Date.now()) as OutReq).body
+          : groupRequestBody(hex, before);
+        const resp = await call('id', 'group.state.sync', body, groupDomainOf(hex));
         await withNeeds(() => client!.groupIngest(groupDomainOf(hex), hex, resp));
         if (client.groupVersion(hex) === before) break;
       }
@@ -3826,9 +3830,14 @@ export function createV2Controller(deps: Deps) {
   async function shareGroupAvatar(hex: string) {
     if (!client) return;
     try {
+      // Своя запись SetInfo ещё не в журнале движка — догнать журнал группы, иначе секрет не сходится с отпечатком
+      if (!client.groupAvatarKeyContent(hex)) await serial(() => syncGroup(hex));
       if (client.groupAvatarKeyContent(hex)) {
         const content = JSON.parse(client.groupAvatarKeyContent(hex)!) as V2Content;
         await sendContent(groupAddress(hex), content, newMessageId());
+        deps.log(`v2: секрет фото группы ${hex} разослан участникам`);
+      } else {
+        deps.log(`v2: секрет фото группы ${hex} не сошёлся с журналом — участникам не разослан`);
       }
       const links = (await listInvites(groupAddress(hex))).map(({ url }) => url);
       if (!links.length) return;
@@ -4351,7 +4360,7 @@ export function createV2Controller(deps: Deps) {
       } | undefined;
       if (hex && !readGroup(hex)?.members.some(({ user }) => user === self)) {
         preview = await serial(async () => {
-          await syncGroup(hex, parsed.linkId);
+          await syncGroup(hex, url);
           const g = readGroup(hex);
           // Секрет фото для превью — из обёртки по секрету ссылки (D1); журнал группы ещё в движке
           let avatarKey: string | undefined;
@@ -4401,7 +4410,7 @@ export function createV2Controller(deps: Deps) {
       // Группа другого сервера (spec 028): журнал и запись вступления — её серверу
       noteInviteDomain(hex, dest, check.group?.domain);
       return await serial(async () => {
-        await syncGroup(hex, parsed.linkId);
+        await syncGroup(hex, url);
         const req = client!.groupJoin(url) as OutReq;
         let resp: Uint8Array;
         try {

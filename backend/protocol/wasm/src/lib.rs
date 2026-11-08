@@ -1295,6 +1295,17 @@ impl PvClient {
         Ok(self.inner.group_invite_avatar_key(&group_id(group)?, &parts).map(|k| b64_std(&k)))
     }
 
+    /// spec 035 (PV-006): `group.state.sync` по ссылке-приглашению с `invite_proof` (подпись ключом ссылки над
+    /// группой, адресом и временем) — без неё посторонний журнал группы не получит.
+    #[wasm_bindgen(js_name = groupSyncByLinkRequest)]
+    pub fn group_sync_by_link_request(&self, domain: &str, group: &str, after: f64, url: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let parvane_protocol::invite::ParsedInvite::V2(parts) = parvane_protocol::invite::parse(url).map_err(err_proto)? else {
+            return Err(err_proto(ProtoError::InvalidField("invite")));
+        };
+        let g = Ref { domain: domain.to_string(), id: group_id(group)? };
+        self.inner.group_sync_by_link(&g, after as u64, &parts, ts_ms as i64).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
     /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
     #[wasm_bindgen(js_name = groupSetPublic)]
     pub fn group_set_public(&mut self, group: &str, public: bool, name: &str, preview: bool, history: bool) -> Result<JsValue, JsValue> {

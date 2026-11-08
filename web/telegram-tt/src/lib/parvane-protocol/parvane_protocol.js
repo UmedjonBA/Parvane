@@ -1564,6 +1564,37 @@ export class PvClient {
         }
     }
     /**
+     * spec 035 (PV-006): `group.state.sync` по ссылке-приглашению с `invite_proof` (подпись ключом ссылки над
+     * группой, адресом и временем) — без неё посторонний журнал группы не получит.
+     * @param {string} domain
+     * @param {string} group
+     * @param {number} after
+     * @param {string} url
+     * @param {number} ts_ms
+     * @returns {any}
+     */
+    groupSyncByLinkRequest(domain, group, after, url, ts_ms) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(url, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupSyncByLinkRequest(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, after, ptr2, len2, ts_ms);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * FR-028 (T080): участники по данным сервера (`claimed`) без
      * подтверждённой записи журнала + добавленные отвергнутыми записями.
      * @param {string} group

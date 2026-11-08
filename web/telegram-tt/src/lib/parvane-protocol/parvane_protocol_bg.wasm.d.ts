@@ -95,6 +95,7 @@ export const pvclient_groupRequestDecide: (a: number, b: number, c: number, d: n
 export const pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupSetPhoto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+export const pvclient_groupSyncByLinkRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupsRekeyPending: (a: number) => number;

@@ -295,6 +295,11 @@ export class PvClient {
      */
     groupSetPublic(group: string, _public: boolean, name: string, preview: boolean, history: boolean): any;
     /**
+     * spec 035 (PV-006): `group.state.sync` по ссылке-приглашению с `invite_proof` (подпись ключом ссылки над
+     * группой, адресом и временем) — без неё посторонний журнал группы не получит.
+     */
+    groupSyncByLinkRequest(domain: string, group: string, after: number, url: string, ts_ms: number): any;
+    /**
      * FR-028 (T080): участники по данным сервера (`claimed`) без
      * подтверждённой записи журнала + добавленные отвергнутыми записями.
      */
@@ -1034,6 +1039,7 @@ export interface InitOutput {
     readonly pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupSetPhoto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly pvclient_groupSyncByLinkRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupsRekeyPending: (a: number) => number;
