@@ -42,6 +42,13 @@ internal object SeamText {
         "report_failed" -> if (ru) "Жалоба не отправлена. Попробуйте позже" else "Report not sent. Try again later"
         "upgrade_required" -> if (ru) "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить."
             else "This version of Parvane is no longer supported. Update the app to continue."
+        // spec 035 (US5, FR-041/FR-042): критичный вид из более новой версии — «обновите приложение» (строки дублируют
+        // values/parvane.xml и values-ru/parvane.xml оверлея: шов — чистый JVM без ресурсов)
+        "stub_critical" -> if (ru) "Это сообщение требует новой версии Parvane. Обновите приложение, чтобы его увидеть."
+            else "This message needs a newer version of Parvane. Update the app to see it."
+        "upgrade_state_blocked" -> if (ru) "Настройки чатов изменены более новой версией Parvane. Обновите приложение — до этого правки папок, черновиков и контактов на этом устройстве не сохраняются."
+            else "Chat settings were changed by a newer version of Parvane. Update the app — until then, changes to folders, drafts and contacts on this device are not saved."
+        "too_new" -> if (ru) "Сервер работает на более новой версии протокола. Обновите приложение." else "The server uses a newer protocol version. Update the app."
         // платные сообщения (Telegram Stars) вне скоупа — пункт экрана X скрыт оверлеем, отказ честный
         "paid_messages_unsupported" -> if (ru) "Платные сообщения не поддерживаются" else "Paid messages are not supported"
         // вход (spec 031: отказы v2 — кодами, текст выбирает клиент)

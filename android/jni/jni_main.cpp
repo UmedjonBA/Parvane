@@ -1,6 +1,7 @@
 // Parvane Android (spec 031): окружение JNI — загрузка, очередь событий в Kotlin, хранилище, сообщения в памяти,
 // кэш групп и режима L2, кэш медиа, стирание данных при выходе (NAT-16). Журнал истории — jni_history.cpp (spec 033).
 #include "jni_internal.h"
+#include "event_queue.h"
 
 #include <parvane/gateway_ws_transport.h>
 #include <parvane/local_files.h>
@@ -34,7 +35,7 @@ bool g_debugBuild = false;
 namespace {
 
 jclass g_coreClass = nullptr; // org.parvane.core.ParvaneCore
-jmethodID g_onEvent = nullptr; // static void onEvent(String)
+jmethodID g_onEvent = nullptr; // static void onEvents(String) — пачка событий JSON-массивом
 
 } // namespace
 
@@ -75,65 +76,70 @@ std::string errorCodeOf(const std::exception &e) {
 
 namespace {
 
-// Kotlin получает события строго по одному: поток очереди и реплей журнала (поток io) не пересекаются — живое
+// Kotlin получает события строго по порядку: поток очереди и реплей журнала (поток io) не пересекаются — живое
 // событие ждёт конца реплея и встаёт после истории (ORDER-1, NAT-06). Рекурсивный: реплей, начатый из обработчика
 // события, идёт на том же потоке.
 std::recursive_mutex g_onEventMu;
 
-void callOnEvent(const std::string &s) {
-    if (!g_vm || !g_coreClass || !g_onEvent) return;
-    std::lock_guard<std::recursive_mutex> serial(g_onEventMu);
-    JNIEnv *env = nullptr;
-    bool attached = false;
-    parvane::counters::get().jniEvents++; // SC-009 (spec 035, T009): базис «присоединений на событие»
-    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
-        parvane::counters::get().jniAttach++;
-        attached = true;
+// Пачка → ParvaneCore.onEvents(String) — JSON-массив событий по порядку (spec 035 T135)
+void callOnEvents(JNIEnv *env, const std::vector<std::string> &batch) {
+    if (!env || !g_coreClass || !g_onEvent || batch.empty()) return;
+    std::string s = "[";
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+        if (i) s += ',';
+        s += batch[i];
     }
+    s += ']';
+    std::lock_guard<std::recursive_mutex> serial(g_onEventMu);
+    parvane::counters::get().jniEvents += batch.size(); // SC-009: событий на присоединение
     jstring js = parvane::jniutf::toJava(env, s);
     env->CallStaticVoidMethod(g_coreClass, g_onEvent, js);
     env->DeleteLocalRef(js);
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
-    if (attached) g_vm->DetachCurrentThread();
 }
 
-// Обработчики Kotlin зовут ядро прямо из onEvent; событие из потока чтения соединения дало бы взаимную
-// блокировку (27 сен 2026) — поэтому очередь и отдельный поток, строго по порядку.
-std::mutex g_emitMu;
-std::condition_variable g_emitCv;
-std::deque<std::string> g_emitQueue;
-bool g_emitThreadStarted = false;
+// Обработчики Kotlin зовут ядро прямо из onEvents; событие из потока чтения соединения дало бы взаимную
+// блокировку (27 сен 2026) — поэтому очередь и отдельный поток. spec 035 T135 (NAT-06, SC-009): поток очереди
+// присоединяется к JVM один раз за жизнь, события уходят пачками, очередь с потолком — переполнение ставит на паузу
+// поток чтения соединения (event_queue.h). Очередь живёт до конца процесса (не разрушается при выходе).
+thread_local JNIEnv *t_queueEnv = nullptr;
 
-void emitLoop() {
-    for (;;) {
-        std::string s;
-        {
-            std::unique_lock<std::mutex> lk(g_emitMu);
-            g_emitCv.wait(lk, [] { return !g_emitQueue.empty(); });
-            s = std::move(g_emitQueue.front());
-            g_emitQueue.pop_front();
-        }
-        callOnEvent(s);
-    }
+pvjni::EventQueue &queue() {
+    static pvjni::EventQueue *q = new pvjni::EventQueue(
+        pvjni::EventQueueLimits{},
+        [](const std::vector<std::string> &batch) { callOnEvents(t_queueEnv, batch); },
+        [] {
+            JNIEnv *env = nullptr;
+            if (!g_vm || g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+            parvane::counters::get().jniAttach++;
+            t_queueEnv = env;
+            return true;
+        },
+        [] {
+            t_queueEnv = nullptr;
+            if (g_vm) g_vm->DetachCurrentThread();
+        });
+    return *q;
 }
 
 } // namespace
 
 void emit(const json &event) {
     if (!g_vm || !g_coreClass || !g_onEvent) return;
-    {
-        std::lock_guard<std::mutex> lk(g_emitMu);
-        g_emitQueue.push_back(event.dump());
-        if (!g_emitThreadStarted) {
-            g_emitThreadStarted = true;
-            std::thread(emitLoop).detach();
-        }
-    }
-    g_emitCv.notify_one();
+    queue().push(event.dump());
 }
 
-void emitNow(const json &event) { callOnEvent(event.dump()); }
+// Реплей журнала (поток io — поток JVM): синхронно, пачкой из одного события
+void emitNow(const json &event) {
+    if (!g_vm || !g_coreClass || !g_onEvent) return;
+    JNIEnv *env = nullptr;
+    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        // Не поток JVM (не бывает: реплей зовёт Kotlin) — через очередь, порядок тот же
+        queue().push(event.dump());
+        return;
+    }
+    callOnEvents(env, {event.dump()});
+}
 
 void noteFederationFailure(const std::string &error) {
     static const std::pair<const char *, const char *> kReasons[] = {
@@ -540,7 +546,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
     jclass local = env->FindClass("org/parvane/core/ParvaneCore");
     if (!local) return JNI_ERR;
     g_coreClass = static_cast<jclass>(env->NewGlobalRef(local));
-    g_onEvent = env->GetStaticMethodID(g_coreClass, "onEvent", "(Ljava/lang/String;)V");
+    // Пачка событий ядра — JSON-массив по порядку (spec 035 T135)
+    g_onEvent = env->GetStaticMethodID(g_coreClass, "onEvents", "(Ljava/lang/String;)V");
     return g_onEvent ? JNI_VERSION_1_6 : JNI_ERR;
 }
 

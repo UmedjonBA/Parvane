@@ -34,7 +34,27 @@ object ParvaneCore {
         listeners = listeners - listener
     }
 
-    /** Вызывается из JNI (поток очереди событий). */
+    /**
+     * Вызывается из JNI (поток очереди событий, присоединённый к JVM один раз; реплей журнала — поток io): пачка
+     * событий ядра JSON-массивом. Разбирается строго по порядку (ORDER-1, NAT-06): каждое событие — всем
+     * подписчикам, затем следующее (spec 035 T135).
+     */
+    @JvmStatic
+    fun onEvents(batch: String) {
+        val events = try {
+            JSONArray(batch)
+        } catch (e: Exception) {
+            Log.w(TAG, "битая пачка событий ядра")
+            return
+        }
+        for (i in 0 until events.length()) {
+            val event = events.optJSONObject(i)
+            if (event == null) { Log.w(TAG, "битое событие ядра"); continue }
+            dispatch(event)
+        }
+    }
+
+    /** Одно событие ядра (JSON-объект) — подписчикам. */
     @JvmStatic
     fun onEvent(json: String) {
         val event = try {
@@ -43,6 +63,10 @@ object ParvaneCore {
             Log.w(TAG, "битое событие ядра")
             return
         }
+        dispatch(event)
+    }
+
+    private fun dispatch(event: JSONObject) {
         listeners.forEach { l ->
             try {
                 l.onEvent(event)
@@ -176,7 +200,14 @@ object ParvaneCore {
     fun fingerprint(user: String): String = nativeFingerprint(user)
 
     // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────
-    fun stateAttach(localJson: String): JSONObject? = nativeStateAttach(localJson).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** [dirty] — виды, правленные без журнала (T150): в журнал при подключении разницей от показанного до правки (spec 035 T134). */
+    fun stateAttach(localJson: String, dirty: Collection<String> = emptyList()): JSONObject? =
+        nativeStateAttach(localJson, JSONArray(dirty.toList()).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** spec 035 (FR-075): избранные стикеры из модели — [{set_id, sticker_id, added_ms}]; null — журнал недоступен. */
+    fun stateFavedStickers(): JSONArray? = nativeStateFavedStickers().takeIf { it.isNotEmpty() }?.let { JSONArray(it) }
+    fun stateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean = nativeStateFaveSticker(setId, stickerId, on)
+    /** spec 035 (US5): журнал закрыт для записи более новой версией — «обновите приложение». */
+    fun stateWriteBlocked(): Boolean = nativeStateWriteBlocked()
     fun stateSync(desiredJson: String, kinds: List<String>): JSONObject? =
         nativeStateSync(desiredJson, JSONArray(kinds).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     fun stateScheduledSent(opIdB64: String): Boolean = nativeStateScheduledSent(opIdB64)
@@ -272,7 +303,10 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSetAvatar(path: String): String
     @JvmStatic private external fun nativeClearAvatar(): Boolean
     @JvmStatic private external fun nativeFingerprint(user: String): String
-    @JvmStatic private external fun nativeStateAttach(localJson: String): String
+    @JvmStatic private external fun nativeStateAttach(localJson: String, dirtyJson: String): String
+    @JvmStatic private external fun nativeStateFavedStickers(): String
+    @JvmStatic private external fun nativeStateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean
+    @JvmStatic private external fun nativeStateWriteBlocked(): Boolean
     @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String
     @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
     @JvmStatic private external fun nativeStateMarkSent(opIdB64: String)

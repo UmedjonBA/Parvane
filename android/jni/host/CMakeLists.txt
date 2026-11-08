@@ -31,6 +31,10 @@ find_package(OpenSSL REQUIRED)
 add_library(parvane_protocol_jni SHARED
     ${JNI_DIR}/protocol_jni.cpp
     ${JNI_DIR}/event_probe_jni.cpp
+    ${JNI_DIR}/model_jni.cpp
+    ${CORE}/src/engine_host.cpp
+    ${CORE}/src/store_fs.cpp
+    ${CORE}/src/gen/model.cpp
     ${CORE}/src/v2_engine.cpp
     ${CORE}/src/v2_content.cpp
     ${CORE}/src/pack_archive.cpp

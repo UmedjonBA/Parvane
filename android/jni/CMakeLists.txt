@@ -98,6 +98,8 @@ add_library(parvane_jni SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_push.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_sections.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_planner_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/model_jni.cpp       # EngineHost — хост модели движка ядра (spec 035)
+    ${CMAKE_CURRENT_SOURCE_DIR}/event_probe_jni.cpp # проба очереди событий (spec 035 T131)
     ${CMAKE_CURRENT_SOURCE_DIR}/protocol_jni.cpp)   # ParvaneProtocol (движок v2 без сети, векторы)
 target_link_libraries(parvane_jni PRIVATE parvane_sections parvane_core log)
 target_compile_options(parvane_jni PRIVATE -fvisibility=hidden)

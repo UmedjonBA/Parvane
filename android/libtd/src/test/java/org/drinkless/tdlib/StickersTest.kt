@@ -29,6 +29,18 @@ class StickersTest {
             uploads++
             return JSONObject().put("file_id", "01a0f000-0000-7000-8000-00000000ab$uploads").put("name", rawName).put("count", 2).put("key", "k").put("nonce", "n")
         }
+        // spec 035 (FR-075): избранные — объекты модели (здесь — в памяти, как FAVED_STICKER: ключ set_id/sticker_id)
+        var journal = true
+        val faved = LinkedHashMap<String, Long>()
+        var clock = 1_800_000_000_000L
+        override fun favedStickers(): org.json.JSONArray? = if (!journal) null else org.json.JSONArray().also { a ->
+            faved.forEach { (k, t) -> a.put(JSONObject().put("set_id", k.substringBefore('/')).put("sticker_id", k.substringAfter('/')).put("added_ms", t.toString())) }
+        }
+        override fun faveSticker(setId: String, stickerId: String, on: Boolean): Boolean {
+            if (!journal) return false
+            if (on) faved["$setId/$stickerId"] = clock++ else faved.remove("$setId/$stickerId")
+            return true
+        }
     }
 
     private fun setup(): Triple<Stickers, FakeCore, ArrayList<TdApi.Update>> {
@@ -85,6 +97,46 @@ class StickersTest {
         assertEquals(1, st.recents().stickers.size)
         assertTrue(st.addFavorite(input) is TdApi.Ok); assertEquals(1, st.favorites().stickers.size)
         assertTrue(st.removeFavorite(input) is TdApi.Ok); assertEquals(0, st.favorites().stickers.size)
+    }
+
+    /** spec 035 T138 (FR-075): «В избранное» — намерение модели (FAVED_STICKER), список — из модели, новые сначала; без журнала — честный отказ. */
+    @Test
+    fun favoritesGoThroughModelIntents() {
+        val (st, core, updates) = setup()
+        val p = st.index.registerReceived(ref("Cats"), false)
+        val set = st.stickerSet(p.setId) as TdApi.StickerSet
+        assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[0].sticker.id)) is TdApi.Ok)
+        assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[1].sticker.id)) is TdApi.Ok)
+        assertEquals(setOf("${p.setId}/00-1f600.webp", "${p.setId}/01-1f602.png"), core.faved.keys)
+        assertEquals(listOf("01-1f602.png", "00-1f600.webp"), st.favorites().stickers.map { s -> st.resolveInput(TdApi.InputFileId(s.sticker.id))!!.file.name })
+        assertTrue(updates.any { it is TdApi.UpdateFavoriteStickers && it.stickerIds.size == 2 })
+        // правка другого устройства: модель сняла стикер — показ следует модели
+        core.faved.remove("${p.setId}/00-1f600.webp")
+        assertTrue(st.refreshFavorites()); assertEquals(1, st.favorites().stickers.size)
+        core.journal = false
+        assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[0].sticker.id)) is TdApi.Error)
+    }
+
+    /** spec 035 T138: прежний локальный список избранных переносится в модель один раз и из файла уходит. */
+    @Test
+    fun legacyFavoritesMigrateToModelOnce() {
+        val root = Files.createTempDirectory("pv-st").toFile()
+        val core = FakeCore(root)
+        val store = ParvaneStore().apply { self = "alice@local" }
+        val first = Stickers(store, root, { }, core)
+        val p = first.index.registerReceived(ref("Cats"), false)
+        first.stickerSet(p.setId) // набор скачан (файлы на диске, индекс сохранён)
+        File(root, "stickers-state.json").writeText(JSONObject().put("recent", org.json.JSONArray())
+            .put("favorite", org.json.JSONArray().put("${p.setId}:01-1f602.png").put("${p.setId}:00-1f600.webp")).toString())
+        val st = Stickers(store, root, { }, core)
+        core.journal = false
+        assertEquals(false, st.migrateFavorites())
+        core.journal = true
+        assertTrue(st.migrateFavorites())
+        assertEquals(listOf("${p.setId}/00-1f600.webp", "${p.setId}/01-1f602.png"), core.faved.keys.toList())
+        assertEquals(2, st.favorites().stickers.size)
+        assertEquals(0, JSONObject(File(root, "stickers-state.json").readText()).optJSONArray("favorite")?.length() ?: 0)
+        assertEquals(false, Stickers(store, root, { }, core).migrateFavorites())
     }
 
     @Test

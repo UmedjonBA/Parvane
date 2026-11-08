@@ -57,7 +57,7 @@ aapt=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/aapt | tail -1)
 DEXDUMP=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/dexdump | tail -1)
 DX="$LOG/dex"; rm -rf "$DX"; mkdir -p "$DX"; (cd "$DX" && unzip -q -o "$REL" 'classes*.dex')
 for d in "$DX"/classes*.dex; do "$DEXDUMP" "$d" 2>/dev/null; done > "$DX/dump.txt"
-for m in onEvent mediaCreate mediaCreateOffer mediaAcceptOffer mediaSetRemoteAnswer mediaAddIce mediaSetVideo mediaSetMuted mediaClose; do
+for m in onEvents onEvent mediaCreate mediaCreateOffer mediaAcceptOffer mediaSetRemoteAnswer mediaAddIce mediaSetVideo mediaSetMuted mediaClose; do
   grep -q "name *: '$m'" "$DX/dump.txt" || { echo "R8 выбросил $m — release сломан (keep-правила setup-tgx.sh)"; exit 7; }
 done
 echo "методы для ядра в release на месте"
