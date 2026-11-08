@@ -1602,6 +1602,7 @@ export interface MessageView {
   replyQuote?: ViewText;
   silent: boolean;
   order: string;
+  wire: string;
 }
 
 export function messageViewFromJson(v: unknown): MessageView {
@@ -1624,6 +1625,7 @@ export function messageViewFromJson(v: unknown): MessageView {
   const replyQuote = pick(j, 'reply_quote', 'replyQuote');
   const silent = pick(j, 'silent', 'silent');
   const order = pick(j, 'order', 'order');
+  const wire = pick(j, 'wire', 'wire');
   const out: MessageView = {
     id: id === undefined || id === null ? new Uint8Array(0) : fromBase64(String(id)),
     chat: chat === undefined || chat === null ? undefined : peerFromJson(chat),
@@ -1643,6 +1645,7 @@ export function messageViewFromJson(v: unknown): MessageView {
     replyQuote: replyQuote === undefined || replyQuote === null ? undefined : viewTextFromJson(replyQuote),
     silent: silent === undefined || silent === null ? false : Boolean(silent),
     order: order === undefined || order === null ? '' : String(order),
+    wire: wire === undefined || wire === null ? '' : String(wire),
   };
   return out;
 }
@@ -1667,6 +1670,7 @@ export function messageViewToJson(m: MessageView): Record<string, unknown> {
   if (!(m.replyQuote === undefined)) j.reply_quote = viewTextToJson(m.replyQuote!);
   if (!(!m.silent)) j.silent = m.silent;
   if (!((m.order === '' || m.order === '0'))) j.order = m.order;
+  if (!(m.wire === '')) j.wire = m.wire;
   return j;
 }
 
@@ -2239,6 +2243,72 @@ export function rootToJson(m: Root): Record<string, unknown> {
   if (m.wraps.length) j.wraps = m.wraps.map((x) => wrapToJson(x));
   if (m.kindsMaxFormat.length) j.kinds_max_format = m.kindsMaxFormat.map((x) => kindFormatToJson(x));
   if (!(m.retiringGeneration === 0)) j.retiring_generation = m.retiringGeneration;
+  return j;
+}
+
+export interface RowsAllRequest {
+  views: boolean;
+  states: boolean;
+  marks: boolean;
+}
+
+export function rowsAllRequestFromJson(v: unknown): RowsAllRequest {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const views = pick(j, 'views', 'views');
+  const states = pick(j, 'states', 'states');
+  const marks = pick(j, 'marks', 'marks');
+  const out: RowsAllRequest = {
+    views: views === undefined || views === null ? false : Boolean(views),
+    states: states === undefined || states === null ? false : Boolean(states),
+    marks: marks === undefined || marks === null ? false : Boolean(marks),
+  };
+  return out;
+}
+
+export function rowsAllRequestToJson(m: RowsAllRequest): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(!m.views)) j.views = m.views;
+  if (!(!m.states)) j.states = m.states;
+  if (!(!m.marks)) j.marks = m.marks;
+  return j;
+}
+
+export interface RowsApply {
+  opsJson: string;
+  receiptsJson: string;
+  forgetJson: string;
+  wipe: boolean;
+  nowMs: string;
+  rowsJson: string;
+}
+
+export function rowsApplyFromJson(v: unknown): RowsApply {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const opsJson = pick(j, 'ops_json', 'opsJson');
+  const receiptsJson = pick(j, 'receipts_json', 'receiptsJson');
+  const forgetJson = pick(j, 'forget_json', 'forgetJson');
+  const wipe = pick(j, 'wipe', 'wipe');
+  const nowMs = pick(j, 'now_ms', 'nowMs');
+  const rowsJson = pick(j, 'rows_json', 'rowsJson');
+  const out: RowsApply = {
+    opsJson: opsJson === undefined || opsJson === null ? '' : String(opsJson),
+    receiptsJson: receiptsJson === undefined || receiptsJson === null ? '' : String(receiptsJson),
+    forgetJson: forgetJson === undefined || forgetJson === null ? '' : String(forgetJson),
+    wipe: wipe === undefined || wipe === null ? false : Boolean(wipe),
+    nowMs: nowMs === undefined || nowMs === null ? '' : String(nowMs),
+    rowsJson: rowsJson === undefined || rowsJson === null ? '' : String(rowsJson),
+  };
+  return out;
+}
+
+export function rowsApplyToJson(m: RowsApply): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.opsJson === '')) j.ops_json = m.opsJson;
+  if (!(m.receiptsJson === '')) j.receipts_json = m.receiptsJson;
+  if (!(m.forgetJson === '')) j.forget_json = m.forgetJson;
+  if (!(!m.wipe)) j.wipe = m.wipe;
+  if (!((m.nowMs === '' || m.nowMs === '0'))) j.now_ms = m.nowMs;
+  if (!(m.rowsJson === '')) j.rows_json = m.rowsJson;
   return j;
 }
 

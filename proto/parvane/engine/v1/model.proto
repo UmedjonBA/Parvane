@@ -335,6 +335,9 @@ message MessageView {
   bool silent = 17;
   // Порядок в ленте (ORDER-1): ключ страниц — `MsgAnchor{ts_ms = order, id}`.
   int64 order = 18;
+  // Возможность `wire_rows` (web, spec 035 T114): строка в виде содержимого хоста — JSON-объект `{content, reply_to?,
+  // proof?, reactors?: [{user, emoji, ts}], …}` (правка уже наложена движком). Без возможности — пусто.
+  string wire = 19 [(parvane.core.v2.max_len) = 4194304];
 }
 
 message ChatView {
@@ -758,6 +761,34 @@ message ClientReplace {
   string mode = 1 [(parvane.core.v2.max_len) = 16];
   bytes blob = 2 [(parvane.core.v2.max_len) = 4194304];
   bytes key = 3 [(parvane.core.v2.max_len) = 32];
+}
+
+// Строки истории хоста (`rowsApply`, режим `host_driven`, spec 035 T114): хост подаёт операции журнала истории
+// (своё, входящее, записи журнала), квитанции «прочитано» на своё исходящее, локальное удаление строк; сведение,
+// место в ленте (ORDER-1), маркеры «прочитано до» и хранение — модель. Журнал истории по-прежнему пишет хост.
+// Итог — `Outcome`: пачка хранилища только со строками и маркерами; каждая строка, чьё состояние изменилось, —
+// `messageUpsert` (видна) либо `messageRemove` (надгробие, сирота, снята), неизменённая — ничем.
+message RowsApply {
+  // JSON-массив `HistoryOp` в JSON журнала истории (`historyApply`: id сообщений — UUID-строки).
+  string ops_json = 1 [(parvane.core.v2.max_len) = 4194304];
+  // JSON-массив `{chat: Peer, target: uuid}`: квитанция «прочитано» на своё исходящее (доставка READ).
+  string receipts_json = 2 [(parvane.core.v2.max_len) = 4194304];
+  // JSON-массив `{chat: Peer, target: uuid}`: строку убрать у себя без надгробия (очистка истории, самоуничтожение).
+  string forget_json = 3 [(parvane.core.v2.max_len) = 4194304];
+  // Стереть все строки и маркеры (замена истории точкой журнала, HIST-2).
+  bool wipe = 4;
+  int64 now_ms = 5;
+  // JSON-массив `{hs: RowState, order?}`: строки прежнего кэша хоста — сведение с известным, место прежнее.
+  string rows_json = 6 [(parvane.core.v2.max_len) = 4194304];
+}
+
+// `rowsAll` (режим `host_driven`): все строки модели. Результат — `CallResult`, JSON `{views?: [MessageView
+// proto3-JSON — и служебные строки ленты: голос, закрытие опроса], states?: [RowState в JSON журнала истории — и
+// надгробия], marks?: [ReadMark в JSON журнала истории]}`.
+message RowsAllRequest {
+  bool views = 1;
+  bool states = 2;
+  bool marks = 3;
 }
 
 message EngineError {

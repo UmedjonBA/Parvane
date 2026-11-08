@@ -19,6 +19,7 @@ pub mod capabilities;
 pub mod client_core;
 pub mod delta;
 pub mod features;
+pub mod host_rows;
 pub mod intent;
 pub mod journal;
 pub mod migration;
@@ -173,6 +174,8 @@ pub(crate) struct Dirty {
     pub rows: BTreeSet<(String, Id)>,
     pub rows_gone: BTreeSet<(String, Id)>,
     pub marks: BTreeSet<String>,
+    /// Маркеры, стёртые заменой истории (`rowsApply{wipe}`).
+    pub marks_gone: BTreeSet<String>,
     pub outbox: BTreeSet<Id>,
     pub outbox_gone: BTreeSet<Id>,
     pub state_raw: BTreeMap<String, Option<Vec<u8>>>,
@@ -412,6 +415,9 @@ impl Engine {
             }
             "clientReplace" => parse(args).and_then(|a| self.client_replace(a)).map(|_| "{}".to_string()),
             "flush" => self.flush().map(|o| json_of(&o)),
+            "rowsApply" => parse::<epb::RowsApply>(args).and_then(|a| self.rows_apply(a)).map(|o| json_of(&o)),
+            "rowsAll" => parse::<epb::RowsAllRequest>(args)
+                .map(|a| json_of(&epb::CallResult { result_json: self.rows_all(&a).to_string() })),
             "stateViewV1" => Ok(self.state_view_v1().to_string()),
             "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
             "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
@@ -777,6 +783,11 @@ impl Engine {
                 puts.push(("history-mark".into(), chat.clone(), m.encode_to_vec()));
             }
         }
+        for chat in &d.marks_gone {
+            if !self.marks.contains_key(chat) {
+                deletes.push(("history-mark".into(), chat.clone()));
+            }
+        }
         for id in &d.outbox {
             if let Some(o) = self.outbox.get(id) {
                 puts.push(("outbox".into(), hex::encode(id), serde_json::to_vec(o).unwrap_or_default()));
@@ -808,9 +819,17 @@ impl Engine {
     // ── представления ─────────────────────────────────────────────────────────
 
     pub(crate) fn message_view(&self, chat_key: &str, row: &Row) -> Option<MessageView> {
+        let _ = chat_key;
+        self.message_view_as(row, false)
+    }
+
+    /// Представление строки; `service` — и служебные строки ленты (голос, закрытие опроса) в виде хоста
+    /// (`wire_rows`: хост восстанавливает по ним опросы), в ленту они не входят.
+    fn message_view_as(&self, row: &Row, service: bool) -> Option<MessageView> {
         if !row.visible() {
             return None;
         }
+        let wire_mode = self.has_feature(features::WIRE_ROWS);
         let v = history::view(&row.state).ok()?;
         let r = row.state.row.as_ref()?;
         let body = v.get("body").and_then(Value::as_object).cloned().unwrap_or_default();
@@ -824,8 +843,11 @@ impl Engine {
         let has = |f: &str| self.has_feature(f);
         let body_view = if disposition == Disposition::Show { views::wire_to_body(&content, &has) } else { None };
         if disposition == Disposition::Show && body_view.is_none() {
-            // Не показывается (голос/закрытие опроса и прочее служебное в ленте)
-            return None;
+            // Не показывается (голос/закрытие опроса и прочее служебное в ленте); хост с `wire_rows` рисует все виды
+            // сам — ему не отдаются только служебные строки ленты
+            if !wire_mode || (!service && features::WIRE_SERVICE_KINDS.contains(&kind)) {
+                return None;
+            }
         }
         let selves = self.selves();
         let outgoing = selves.contains(&r.from);
@@ -845,7 +867,7 @@ impl Engine {
             text: q.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
             entities: vec![],
         });
-        let _ = chat_key;
+        let wire = if wire_mode { views::wire_row(&row.state).map(|v| v.to_string()).unwrap_or_default() } else { String::new() };
         Some(MessageView {
             id: row.state.target.clone(),
             chat: row.state.chat.clone(),
@@ -865,6 +887,7 @@ impl Engine {
             reply_quote,
             silent: content.get("silent").and_then(Value::as_bool).unwrap_or(false),
             order: row.order,
+            wire,
         })
     }
 
@@ -908,7 +931,7 @@ impl Engine {
     pub(crate) fn chat_view(&self, chat: &str) -> Option<ChatView> {
         let peer = self.peers.get(chat)?.clone();
         let rows = self.chats.get(chat);
-        let last = rows.and_then(|c| c.last_visible()).and_then(|r| self.message_view(chat, r));
+        let last = rows.and_then(|c| self.last_shown(c)).and_then(|r| self.message_view(chat, r));
         let title = match &peer.kind {
             Some(peer::Kind::User(u)) => u.address.clone(),
             Some(peer::Kind::Group(g)) => self.groups.get(&g.id).map(|f| f.title.clone()).unwrap_or_default(),
@@ -993,12 +1016,21 @@ impl Engine {
 
     // ── чтение ────────────────────────────────────────────────────────────────
 
+    /// Последняя строка чата для списка: видимая; у хоста с `wire_rows` — и показываемая (служебная строка ленты —
+    /// голос опроса — последней не бывает).
+    fn last_shown<'a>(&self, c: &'a ChatRows) -> Option<&'a Row> {
+        if !self.has_feature(features::WIRE_ROWS) {
+            return c.last_visible();
+        }
+        c.rows_rev().find(|r| self.message_view_as(r, false).is_some())
+    }
+
     pub fn chat_list(&self, req: &ChatListRequest) -> ChatPage {
         let limit = (req.limit as usize).clamp(1, 200);
         let mut all: Vec<(i64, String)> = self
             .chats
             .iter()
-            .filter_map(|(k, c)| c.last_visible().map(|r| (r.order, k.clone())))
+            .filter_map(|(k, c)| self.last_shown(c).map(|r| (r.order, k.clone())))
             .collect();
         all.sort_by(|a, b| b.cmp(a));
         let after = req.after.as_ref().map(|a| (a.ts_ms, a.chat_key.clone()));

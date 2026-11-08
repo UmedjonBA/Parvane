@@ -192,6 +192,8 @@ struct RangeHold;
 struct RangeHolds;
 struct Ref;
 struct Root;
+struct RowsAllRequest;
+struct RowsApply;
 struct ServerInput;
 struct StateChanged;
 struct StateObjectView;
@@ -504,6 +506,25 @@ struct Ref {
 };
 void to_json(nlohmann::json &j, const Ref &m);
 void from_json(const nlohmann::json &j, Ref &m);
+
+struct RowsAllRequest {
+    bool views = false;
+    bool states = false;
+    bool marks = false;
+};
+void to_json(nlohmann::json &j, const RowsAllRequest &m);
+void from_json(const nlohmann::json &j, RowsAllRequest &m);
+
+struct RowsApply {
+    std::string ops_json;
+    std::string receipts_json;
+    std::string forget_json;
+    bool wipe = false;
+    int64_t now_ms = 0;
+    std::string rows_json;
+};
+void to_json(nlohmann::json &j, const RowsApply &m);
+void from_json(const nlohmann::json &j, RowsApply &m);
 
 struct ServerInput {
     ServerInputKind kind = {};
@@ -1006,6 +1027,7 @@ struct MessageView {
     std::optional<ViewText> reply_quote;
     bool silent = false;
     int64_t order = 0;
+    std::string wire;
 };
 void to_json(nlohmann::json &j, const MessageView &m);
 void from_json(const nlohmann::json &j, MessageView &m);

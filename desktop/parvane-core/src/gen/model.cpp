@@ -852,6 +852,40 @@ void from_json(const nlohmann::json &j, Ref &m) {
     if (const auto *v = pick(j, "id", "id")) m.id = fromBase64((*v).get<std::string>());
 }
 
+void to_json(nlohmann::json &j, const RowsAllRequest &m) {
+    j = nlohmann::json::object();
+    if (m.views) j["views"] = m.views;
+    if (m.states) j["states"] = m.states;
+    if (m.marks) j["marks"] = m.marks;
+}
+
+void from_json(const nlohmann::json &j, RowsAllRequest &m) {
+    m = RowsAllRequest{};
+    if (const auto *v = pick(j, "views", "views")) m.views = (*v).get<bool>();
+    if (const auto *v = pick(j, "states", "states")) m.states = (*v).get<bool>();
+    if (const auto *v = pick(j, "marks", "marks")) m.marks = (*v).get<bool>();
+}
+
+void to_json(nlohmann::json &j, const RowsApply &m) {
+    j = nlohmann::json::object();
+    if (!m.ops_json.empty()) j["ops_json"] = m.ops_json;
+    if (!m.receipts_json.empty()) j["receipts_json"] = m.receipts_json;
+    if (!m.forget_json.empty()) j["forget_json"] = m.forget_json;
+    if (m.wipe) j["wipe"] = m.wipe;
+    if (m.now_ms != 0) j["now_ms"] = std::to_string(m.now_ms);
+    if (!m.rows_json.empty()) j["rows_json"] = m.rows_json;
+}
+
+void from_json(const nlohmann::json &j, RowsApply &m) {
+    m = RowsApply{};
+    if (const auto *v = pick(j, "ops_json", "opsJson")) m.ops_json = (*v).get<std::string>();
+    if (const auto *v = pick(j, "receipts_json", "receiptsJson")) m.receipts_json = (*v).get<std::string>();
+    if (const auto *v = pick(j, "forget_json", "forgetJson")) m.forget_json = (*v).get<std::string>();
+    if (const auto *v = pick(j, "wipe", "wipe")) m.wipe = (*v).get<bool>();
+    if (const auto *v = pick(j, "now_ms", "nowMs")) m.now_ms = numFrom<int64_t>((*v));
+    if (const auto *v = pick(j, "rows_json", "rowsJson")) m.rows_json = (*v).get<std::string>();
+}
+
 void to_json(nlohmann::json &j, const ServerInput &m) {
     j = nlohmann::json::object();
     if (m.kind != ServerInputKind{}) j["kind"] = m.kind;
@@ -1901,6 +1935,7 @@ void to_json(nlohmann::json &j, const MessageView &m) {
     if (m.reply_quote.has_value()) j["reply_quote"] = *m.reply_quote;
     if (m.silent) j["silent"] = m.silent;
     if (m.order != 0) j["order"] = std::to_string(m.order);
+    if (!m.wire.empty()) j["wire"] = m.wire;
 }
 
 void from_json(const nlohmann::json &j, MessageView &m) {
@@ -1924,6 +1959,7 @@ void from_json(const nlohmann::json &j, MessageView &m) {
     if (const auto *v = pick(j, "reply_quote", "replyQuote")) m.reply_quote = (*v).get<ViewText>();
     if (const auto *v = pick(j, "silent", "silent")) m.silent = (*v).get<bool>();
     if (const auto *v = pick(j, "order", "order")) m.order = numFrom<int64_t>((*v));
+    if (const auto *v = pick(j, "wire", "wire")) m.wire = (*v).get<std::string>();
 }
 
 void to_json(nlohmann::json &j, const ChatView &m) {

@@ -932,6 +932,9 @@ pub fn effective_content(body: &Map<String, Value>) -> Option<Map<String, Value>
                     None => c.remove("entities"),
                 };
                 c.remove("webpage");
+                if let Some(wp) = p.get("webpage").filter(|w| !w.is_null()) {
+                    c.insert("webpage".into(), wp.clone());
+                }
             } else {
                 c.insert("caption".into(), t.clone());
                 match p.get("entities") {
@@ -947,6 +950,25 @@ pub fn effective_content(body: &Map<String, Value>) -> Option<Map<String, Value>
         }
     }
     Some(c)
+}
+
+/// Строка в виде содержимого хоста (возможность `wire_rows`, spec 035 T114): тело строки с наложенной правкой —
+/// `{content, reply_to?, proof?, …прочие поля тела, reactors?: [{user, emoji, ts}]}`; невидимая строка — `None`.
+pub fn wire_row(s: &crate::pb::parvane::history::v1::RowState) -> Option<Value> {
+    let body = crate::history::view_body(s)?;
+    let content = effective_content(&body)?;
+    let mut out: Map<String, Value> = body.into_iter().filter(|(k, _)| k != "content" && k != "edit_patch").collect();
+    out.insert("content".into(), Value::Object(content));
+    let reactors: Vec<Value> = s
+        .reacts
+        .iter()
+        .filter(|r| !r.emoji.is_empty())
+        .map(|r| json!({"user": r.user, "emoji": r.emoji, "ts": r.stamp.as_ref().map(|st| st.ts_ms.div_euclid(1000)).unwrap_or(0)}))
+        .collect();
+    if !reactors.is_empty() {
+        out.insert("reactors".into(), Value::Array(reactors));
+    }
+    Some(Value::Object(out))
 }
 
 // ── показ ───────────────────────────────────────────────────────────────────
