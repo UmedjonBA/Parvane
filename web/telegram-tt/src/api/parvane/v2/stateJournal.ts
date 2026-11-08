@@ -23,7 +23,7 @@ import { contactsFromState, contactsToState, mergeContactsLocalWins } from '../c
 import { apiEntitiesToWire, wireEntitiesToApi } from '../entities';
 import { soundFromState, soundToState } from '../notifyDefaults';
 import {
-  b64ToUuid, uuidToB64, type V2Content, type V2Text, v2ToWire, wireToV2,
+  b64ToUuid, contentOfWire, uuidToB64, type V2Content, type V2Text, wireOfContent,
 } from './contentMap';
 import { isV2GroupAddress } from './controller';
 import { isTimerSyncMode, pollDelay } from './l2';
@@ -780,7 +780,7 @@ export function createStateJournal(deps: Deps) {
     const peer = peerOf(address);
     const text = (draft as ApiDraft).text;
     if (!peer || !text?.text) return undefined;
-    const v2Text = wireToV2({ kind: 'text', text: text.text, entities: apiEntitiesToWire(text.entities) }).text;
+    const v2Text = contentOfWire({ kind: 'text', text: text.text, entities: apiEntitiesToWire(text.entities) }).text;
     return {
       peer,
       text: bytesToB64(host!.encode('parvane.msg.v2.Text', JSON.stringify(v2Text || {}))),
@@ -793,7 +793,7 @@ export function createStateJournal(deps: Deps) {
     const peer = address ? peerOf(address) : undefined;
     if (!peer) return undefined;
     // «Без звука» — `Content.silent` внутри сериализованного содержимого отложенного
-    const content = wireToV2({
+    const content = contentOfWire({
       kind: 'text', text: entry.text || '', entities: apiEntitiesToWire(entry.entities), silent: entry.silent,
     });
     return {
@@ -1065,7 +1065,7 @@ export function createStateJournal(deps: Deps) {
     if (!host) return undefined;
     try {
       const v2Text = JSON.parse(host.decode('parvane.msg.v2.Text', b64ToBytes(b64))) as V2Text;
-      const wire = v2ToWire({ text: v2Text });
+      const wire = wireOfContent({ text: v2Text });
       if (wire?.kind !== 'text' || !wire.text) return undefined;
       return { text: wire.text, entities: wireEntitiesToApi(wire.entities, wire.text.length) };
     } catch {
@@ -1077,7 +1077,7 @@ export function createStateJournal(deps: Deps) {
     if (!host) return undefined;
     try {
       const content = JSON.parse(host.decode('parvane.msg.v2.Content', b64ToBytes(b64))) as V2Content;
-      const wire = v2ToWire(content);
+      const wire = wireOfContent(content);
       if (wire?.kind !== 'text' || !wire.text) return undefined;
       return {
         text: wire.text, entities: wireEntitiesToApi(wire.entities, wire.text.length), silent: wire.silent || undefined,

@@ -5,16 +5,11 @@ import type {
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 import type { createV2Controller, V2InviteRecord, V2PublicCard } from './v2/controller';
-import type {
-  WireDefaultPermissions, WireGroupInfo, WireGroupMember, WireMessageContent,
-} from './wire';
-import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
+import type { WireGroupInfo, WireGroupMember } from './wire';
+import { MAIN_THREAD_ID } from '../types';
 
-import { detectAutoEntities } from './autoEntities';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
-import {
-  fromBannedRights, normalizePermissions, toAdminRights, toWireAdminRights,
-} from './store';
+import { fromBannedRights, toAdminRights, toWireAdminRights } from './store';
 
 const V2_GROUP_PREFIX = 'v2g:';
 
@@ -42,36 +37,6 @@ function isInviteManager(member?: WireGroupMember) {
   if (!member) return false;
   if (member.role === 'owner') return true;
   return member.role === 'admin' && toAdminRights(member.admin_rights).inviteUsers === true;
-}
-
-const MEDIA_KINDS = new Set(['photo', 'video', 'file', 'voice', 'video_note', 'audio']);
-const STICKER_KINDS = new Set(['sticker', 'gif']);
-
-// Права по типу содержимого проверяются только на клиентах (сервер видит
-// шифртекст): отправитель без права не выберет тип в композере, получатель
-// скрывает сообщение запрещённого типа от участника без роли (FR-009)
-export function isContentAllowedForMember(perms: WireDefaultPermissions | undefined, content: WireMessageContent) {
-  const p = normalizePermissions(perms);
-  if (!p.send_messages) return false;
-  if (!p.send_media && MEDIA_KINDS.has(content.kind)) return false;
-  if (!p.send_stickers_gifs && STICKER_KINDS.has(content.kind)) return false;
-  if (!p.send_polls && content.kind === 'poll') return false;
-  if (!p.embed_links && content.kind === 'text') {
-    if (content.webpage) return false;
-    // Сущности на проводе — короткие имена (`url`, `text_url`), в API — длинные;
-    // проверка должна ловить оба (WEB-06: ссылка-сущность проходила фильтр)
-    const linkTypes = ['MessageEntityUrl', 'MessageEntityTextUrl', 'url', 'text_url'];
-    if (content.entities?.some((e) => linkTypes.includes(e.type))) {
-      return false;
-    }
-  }
-  if (!p.embed_links) {
-    // Голая ссылка без сущностей и ссылка в подписи медиа — тоже ссылка: приёмник сам размечает её
-    // при показе (autoEntities), значит и проверять надо по тому же разбору
-    const body = content.kind === 'text' ? content.text : content.caption;
-    if (body && detectAutoEntities(body).some((e) => e.type === ApiMessageEntityTypes.Url)) return false;
-  }
-  return true;
 }
 
 type GroupDependencies = {

@@ -5,6 +5,7 @@
 import type {
   ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiMessage, ApiUser, ApiWebPage,
 } from '../types';
+import type { ChatCapabilities } from './v2/controller';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireStoredMessage,
 } from './wire';
@@ -62,6 +63,10 @@ const STUB_FALLBACK = {
 };
 
 export class ParvaneStore {
+  // GROUP-2 (spec 035 T114): что можно композеру в группе — решает модель движка (`capabilities`); ставит
+  // провайдер. `defaultBannedRights` — только показ прав группы по умолчанию (экран «Разрешения»)
+  static capabilitiesOf?: (address: string) => ChatCapabilities | undefined;
+
   self = '';
 
   // Карточки превью ссылок по id (`wp<uuid>`): история из кэша отдаёт их вместе с сообщениями (`fetchMessages`),
@@ -607,6 +612,8 @@ export class ParvaneStore {
       adminRights: selfRole === 'admin' ? toAdminRights(selfMember?.admin_rights, isChannel) : undefined,
       // Права по умолчанию — только у групп: в канале пишут владелец и админы
       defaultBannedRights: !isChannel ? toBannedRights(info.default_permissions) : undefined,
+      currentUserBannedRights: !isChannel
+        ? bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id)) : undefined,
       // Фото группы — открытый объект cloud, как аватар пользователя: tt
       // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
       avatarPhotoId: info.avatar || undefined,
@@ -1037,6 +1044,33 @@ export function normalizePermissions(perms?: WireDefaultPermissions): Required<W
 }
 
 // Разрешения → запреты tt (`ApiChatBannedRights`: `true` = запрещено)
+/** Запреты композера tt по решению движка (`Capabilities`); решения нет (модель не открыта) — `undefined`. */
+export function bannedRightsFromCapabilities(c?: ChatCapabilities): ApiChatBannedRights | undefined {
+  if (!c) return undefined;
+  const out: ApiChatBannedRights = {};
+  if (!c.send_text) {
+    out.sendMessages = true;
+    out.sendPlain = true;
+  }
+  if (!c.send_media) {
+    out.sendMedia = true;
+    out.sendPhotos = true;
+    out.sendVideos = true;
+    out.sendRoundvideos = true;
+    out.sendAudios = true;
+    out.sendVoices = true;
+    out.sendDocs = true;
+  }
+  if (!c.send_stickers) {
+    out.sendStickers = true;
+    out.sendGifs = true;
+  }
+  if (!c.send_polls) out.sendPolls = true;
+  if (!c.send_links) out.embedLinks = true;
+  if (!c.pin) out.pinMessages = true;
+  return out;
+}
+
 export function toBannedRights(perms?: WireDefaultPermissions): ApiChatBannedRights {
   const p = normalizePermissions(perms);
   const out: ApiChatBannedRights = {};

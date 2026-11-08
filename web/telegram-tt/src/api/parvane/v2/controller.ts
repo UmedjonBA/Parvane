@@ -22,14 +22,14 @@ import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
-import type { V2Content } from './contentMap';
+import type { ContentView, V2Content } from './contentMap';
 import type { ModelJson, Protocol } from './engine';
 import type { EngineClient as PvClient } from './engineClient';
 import type { HistoryHost } from './history';
 import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
-import { loadGroupCache, personalStoreInternals, saveGroupCache as saveGroupCacheFor } from '../personalStore';
+import { withDetectedLinks } from '../autoEntities';
 import { SecureE2eStorage } from '../secureStorage';
 import { newMessageId } from '../wire';
 import {
@@ -42,9 +42,7 @@ import {
 } from './callMap';
 import { createCloudSync } from './cloud';
 import { coMembersOf } from './coMembers';
-import {
-  b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
-} from './contentMap';
+import { contentOfWire, contentView, ref } from './contentMap';
 import {
   BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
 } from './control';
@@ -308,6 +306,21 @@ type LogDevices = {
   root?: string;
 };
 
+/** Что разрешено композеру и меню чата (`Capabilities` модели, proto3-JSON: ложное опущено; GROUP-2). */
+export type ChatCapabilities = {
+  send_text?: boolean;
+  send_media?: boolean;
+  send_stickers?: boolean;
+  send_polls?: boolean;
+  send_links?: boolean;
+  delete_everyone?: boolean;
+  pin?: boolean;
+  edit?: boolean;
+  react?: boolean;
+  forward?: boolean;
+  reply?: boolean;
+};
+
 type EngineEvent = {
   type: string;
   seq: number;
@@ -319,6 +332,8 @@ type EngineEvent = {
   // Доказательство авторства (core.v2.MessageProof, base64) — для жалобы
   proof?: string;
   content?: V2Content;
+  /** Разбор содержимого движком (spec 035 T114, ENGINE-1). */
+  view?: ContentView;
   disposition?: string;
   /** Заглушка критичного вида (spec 035, STUB_CRITICAL). */
   critical?: boolean;
@@ -1345,10 +1360,8 @@ export function createV2Controller(deps: Deps) {
   }
 
   function dropGroup(hex: string) {
-    const g = readGroup(hex);
     const address = groupAddress(hex);
     client?.groupForget(hex);
-    if (g) saveGroupCache(toWireGroupInfo(hex, g), false);
     l2Gate.forget(address);
     if (publishedGroups.delete(address)) deps.onGroupLeft(address);
   }
@@ -1623,7 +1636,9 @@ export function createV2Controller(deps: Deps) {
     if ((ev.type === 'direct' || isGroup) && ev.content && ev.opId && ev.from) {
       const self = deps.getSelf();
       const chat = ev.chat || ev.from;
-      const c = ev.content;
+      // ENGINE-1 (spec 035 T114): вид содержимого разобрал движок — класс, строка, ответ, мутация
+      const view = ev.view || contentView(ev.content);
+      const mutation = view.mutation;
       const author = ev.from;
       // Собеседник написал по v2 — он «липкий» (D-13): наши ответы и мутации его
       // сообщений идут только по v2, даже если стек в этот момент переподнимается
@@ -1662,15 +1677,10 @@ export function createV2Controller(deps: Deps) {
       const source = author === self && !ev.seq ? 'own' : 'inbox';
       const stamp = { ts_ms: String(ev.tsMs || Date.now()), op_id: ev.opId };
       const history = deps.history;
-      if (c.edit?.target) {
-        const target = b64ToUuid(c.edit.target.op_id);
-        if (!target || !hpeer || !history) return;
-        const patch: EditPatch = {};
-        if (c.edit.text) {
-          const t = v2ToWire({ text: c.edit.text })!;
-          Object.assign(patch, { text: t.text, entities: t.entities, webpage: t.webpage });
-        }
-        if (c.edit.location) patch.fields = v2ToWire({ location: c.edit.location });
+      if (mutation?.kind === 'edit') {
+        const { target } = mutation;
+        if (!hpeer || !history) return;
+        const patch: EditPatch = mutation.patch;
         const known = await knownMessage(target);
         const isVisible = known && !known.deleted && inThisChat(known);
         const body = isVisible ? { content: applyEditPatch(known.content, patch) } : { edit_patch: patch };
@@ -1679,17 +1689,16 @@ export function createV2Controller(deps: Deps) {
         });
         return;
       }
-      if (c.delete?.targets) {
+      if (mutation?.kind === 'delete') {
         if (!hpeer || !history) return;
         // Своя копия «только у меня» (прежние версии слали её мутацией) — область ME; остальное — у всех
-        const scope = author === self && !c.delete.for_everyone ? 'GONE_SCOPE_ME' : 'GONE_SCOPE_EVERYONE';
+        const scope = author === self && !mutation.forEveryone ? 'GONE_SCOPE_ME' : 'GONE_SCOPE_EVERYONE';
         // Чужое сообщение группы удаляет и админ с правом удалять (жалоба, spec 024): право подписанта
         // проверил движок (`mutation_authorized`), здесь — что автор мутации и правда такой админ
         const isAdmin = isGroup && canDeleteInGroup(ev.group!.id, author);
-        for (const t of c.delete.targets) {
-          const target = b64ToUuid(t.op_id);
+        for (const target of mutation.targets) {
           // C7-2: известное сообщение другого чата не трогаем (неизвестное — сирота, чат сверит движок)
-          if (target && !await isOtherChatTarget(target, inThisChat)) {
+          if (!await isOtherChatTarget(target, inThisChat)) {
             await history.ingest({
               gone: {
                 target, chat: hpeer, stamp, scope, by: author, by_admin: isAdmin || undefined,
@@ -1699,28 +1708,26 @@ export function createV2Controller(deps: Deps) {
         }
         return;
       }
-      if (c.reaction?.target) {
-        const target = b64ToUuid(c.reaction.target.op_id);
-        if (!target || !hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
-        const emoji = c.reaction.remove ? '' : c.reaction.emoji || '';
+      if (mutation?.kind === 'reaction') {
+        const { target, emoji } = mutation;
+        if (!hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
         await history.ingest({ react: { target, chat: hpeer, user: author, stamp, emoji } }, { source, author });
         return;
       }
-      if (c.pin?.target) {
-        const target = b64ToUuid(c.pin.target.op_id);
-        if (!target || !hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
-        await history.ingest({ pin: { target, chat: hpeer, stamp, pinned: !c.pin.unpin } }, { source, author });
+      if (mutation?.kind === 'pin') {
+        const { target, pinned } = mutation;
+        if (!hpeer || !history || await isOtherChatTarget(target, inThisChat)) return;
+        await history.ingest({ pin: { target, chat: hpeer, stamp, pinned } }, { source, author });
         return;
       }
-      if (c.receipt?.messages) {
-        if (c.receipt.kind !== 'RECEIPT_KIND_READ') return;
+      if (mutation?.kind === 'receipt') {
+        if (!mutation.read) return;
         if (author === self) {
           // Копия своей квитанции с другого своего устройства (READ-2, быстрая дорога): маркер чата — до самой
           // поздней из прочитанных там строк
           let best: { tsMs: number; id: string } | undefined;
-          for (const t of c.receipt.messages) {
-            const target = b64ToUuid(t.op_id);
-            const known = target ? await knownMessage(target) : undefined;
+          for (const target of mutation.targets) {
+            const known = await knownMessage(target);
             if (!known || !inThisChat(known)) continue;
             const tsMs = rowTsMs(known);
             if (!best || compareMarkPoint(tsMs, known.id, best.tsMs, best.id) > 0) best = { tsMs, id: known.id };
@@ -1728,19 +1735,17 @@ export function createV2Controller(deps: Deps) {
           if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id, 'inbox');
           return;
         }
-        for (const t of c.receipt.messages) {
-          const target = b64ToUuid(t.op_id);
+        for (const target of mutation.targets) {
           // Квитанция — только на своё исходящее в этом чате (✓✓, локальная пометка строки)
-          if (target) {
-            await update(target, (m) => (inThisChat(m) && m.from === self && !m.read ? { ...m, read: true } : m));
-          }
+          await update(target, (m) => (inThisChat(m) && m.from === self && !m.read ? { ...m, read: true } : m));
         }
         return;
       }
       // Вид, который клиент не умеет показать (например, контакт), — заглушка,
       // как в desktop и android; служебные виды движка в чат не попадают
-      const wire = v2ToWire(c) || (v2Class(c) === 'stub' ? { kind: 'unsupported' } : undefined);
+      const wire = view.wire || (view.class === 'stub' ? { kind: 'unsupported' } : undefined);
       if (!wire) return;
+      const isChatMode = wire.kind === 'chat_mode';
       // Вложение собеседника с другого сервера лежит на его сервере (spec 028): помечаем, чтобы
       // скачивание и пересылка знали сервер блоба
       const authorDomain = destForUser(author, serverDomain);
@@ -1753,14 +1758,14 @@ export function createV2Controller(deps: Deps) {
         }
       }
       // Режим L2 группы задаёт только запись её журнала (`set_privacy_mode`)
-      if (c.chat_mode && isGroup) return;
+      if (isChatMode && isGroup) return;
       const stored: WireStoredMessage = {
         id: ev.opId,
         from: author,
         to,
         ts: Math.floor((ev.tsMs || Date.now()) / 1000),
         content: wire,
-        reply_to: b64ToUuid(c.reply_to?.op_id),
+        reply_to: view.replyTo,
         proof: author !== self ? ev.proof : undefined,
       };
       const hpeerRow = isJournalable(stored) ? peerForAddress(isGroup ? to : peer, serverDomain) : undefined;
@@ -1778,7 +1783,7 @@ export function createV2Controller(deps: Deps) {
         await deps.applyExternal(stored);
       }
       // Собеседник (или своё другое устройство) сменил режим L2 личного чата
-      if (c.chat_mode) announceL2(author === self ? chat : author);
+      if (isChatMode) announceL2(author === self ? chat : author);
       // Чат в режиме L2 (spec 025): вложение качается сразу, а не при просмотре — по скачиванию не видно,
       // когда человек открыл чат
       if (author !== self && wire.file_id && readL2(to === self ? author : to)?.active) {
@@ -3426,7 +3431,7 @@ export function createV2Controller(deps: Deps) {
       return false;
     }
     try {
-      await sendContent(to, wireToV2(wire, replyTo), uuid);
+      await sendContent(to, contentOfWire(wire, replyTo), uuid);
     } catch (e) {
       deps.log(`v2: сообщение ${to} не отправлено: ${String(e)}`);
       throw e;
@@ -3441,11 +3446,11 @@ export function createV2Controller(deps: Deps) {
   async function tryEdit(to: string, uuid: string, wire: WireMessageContent): Promise<boolean> {
     if (!(await isV2Chat(to))) return false;
     const edit: V2Content['edit'] = { target: ref(uuid) };
-    if (wire.kind === 'location') edit.location = wireToV2(wire).location;
+    if (wire.kind === 'location') edit.location = contentOfWire(wire).location;
     else {
       edit.text = {
         text: wire.kind === 'text' ? wire.text : wire.caption,
-        entities: wireToV2({ kind: 'text', text: '', entities: wire.entities }).text?.entities,
+        entities: contentOfWire({ kind: 'text', text: '', entities: wire.entities }).text?.entities,
       };
     }
     await sendMutation(to, { edit });
@@ -3689,7 +3694,6 @@ export function createV2Controller(deps: Deps) {
     const address = info.group_id;
     const self = deps.getSelf();
     const isMember = g.members.some(({ user }) => user === self);
-    saveGroupCache(info, isMember && !g.deleted);
     if (!isMember || g.deleted) {
       if (publishedGroups.delete(address)) deps.onGroupLeft(address);
       l2Gate.forget(address);
@@ -3873,7 +3877,6 @@ export function createV2Controller(deps: Deps) {
       const g = readGroup(hex)!;
       publishedGroups.add(groupAddress(hex));
       const info = toWireGroupInfo(hex, g);
-      saveGroupCache(info, true);
       return info;
     });
   }
@@ -3994,16 +3997,40 @@ export function createV2Controller(deps: Deps) {
     return g ? toWireGroupInfo(hex, g) : undefined;
   }
 
-  // Сведения v2-групп для UI до подъёма движка (история из кэша кладётся в
-  // чат группы, только если группа уже зарегистрирована). Только метаданные
-  // spec 035 T046 (PV-020): кэш — в хранилище движка (`personalStore.ts`), не в localStorage
+  // Сведения v2-групп для UI (история из кэша кладётся в чат группы, только если группа уже зарегистрирована).
+  // spec 035 T118 (OPT-016): своего кэша сведений групп у web нет — журналы групп лежат в хранилище модели
+  // движка и читаются сразу после её открытия; записей кэша на старте — ноль
   function cachedGroups(): WireGroupInfo[] {
-    return loadGroupCache(deps.getSelf());
+    if (!client) return [];
+    const self = deps.getSelf();
+    return client.groupList().flatMap((hex) => {
+      const g = readGroup(hex);
+      if (!g || g.deleted || !g.members.some(({ user }) => user === self)) return [];
+      return [toWireGroupInfo(hex, g)];
+    });
   }
 
-  function saveGroupCache(info: WireGroupInfo, isListed: boolean) {
-    // OPT-016: правки копятся и пишутся одной записью (счётчик SC-009 — в personalStore)
-    saveGroupCacheFor(deps.getSelf(), info, isListed);
+  // GROUP-2 (spec 035 T114): права по типу содержимого и роли решает модель движка — приёмный фильтр
+  // (`contentHidden`) и композер (`capabilities`); без модели — не скрывать и не решать
+  function groupContentHidden(address: string, author: string, content: WireMessageContent): boolean {
+    const chat = host && isV2GroupAddress(address) ? peerForAddress(address, serverDomain) : undefined;
+    if (!chat) return false;
+    try {
+      const wire = withDetectedLinks(content);
+      return Boolean(host!.peek<{ hidden?: boolean }>('contentHidden', { chat, from: author, wire }).hidden);
+    } catch {
+      return false;
+    }
+  }
+
+  function chatCapabilities(address: string): ChatCapabilities | undefined {
+    const chat = host && ready ? peerForAddress(address, serverDomain) : undefined;
+    if (!chat) return undefined;
+    try {
+      return host!.peek<ChatCapabilities>('capabilities', { chat });
+    } catch {
+      return undefined;
+    }
   }
 
   // ── ссылки-приглашения v2 (D-04, T084/T125) ─────────────────────────────────
@@ -4534,7 +4561,6 @@ export function createV2Controller(deps: Deps) {
         deps.log(`v2: вступление в группу ${hex} по ссылке`);
         publishedGroups.add(groupAddress(hex));
         const info = toWireGroupInfo(hex, readGroup(hex)!);
-        saveGroupCache(info, true);
         return { status: 'ok' as const, info };
       });
     } catch (e) {
@@ -4639,7 +4665,6 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: вступление в публичную группу ${hex}`);
       publishedGroups.add(groupAddress(hex));
       const info = toWireGroupInfo(hex, readGroup(hex)!);
-      saveGroupCache(info, true);
       return info;
     });
   }
@@ -4947,7 +4972,7 @@ export function createV2Controller(deps: Deps) {
     planner,
     /** Счётчики-базис SC-009 (spec 035, T009): записи кэша групп с запуска страницы. */
     auditCounters: () => ({
-      groupCacheWrites: personalStoreInternals.groupCacheWrites(), groups: client?.groupList().length ?? 0,
+      groupCacheWrites: 0, groups: client?.groupList().length ?? 0,
     }),
     /** Источники выгрузки «ничего не потеряно» (spec 035, T007): JSON движка, только чтение. */
     auditSources: () => {
@@ -5007,6 +5032,8 @@ export function createV2Controller(deps: Deps) {
     // Дождаться записи состояния движка (перед стиранием хранилища устройства)
     settleState: persistNow,
     cachedGroups,
+    groupContentHidden,
+    chatCapabilities,
     changeGroup,
     setGroupInfo,
     checkInvite,

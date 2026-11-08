@@ -9,7 +9,6 @@ import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { rowTsMs } from './v2/historyModel';
 import { createBatchedResolver } from './batchedResolver';
-import { isContentAllowedForMember } from './groups';
 import { readPollFields } from './polls';
 import { buildWebPage, compareStoredOrder, type ParvaneStore } from './store';
 import {
@@ -68,6 +67,8 @@ type SyncDependencies = {
   rememberSavedGif: (gif: ApiVideo) => void;
   // perf A2: индекс строк истории по uuid для мутаций v2 — наполняется здесь
   rememberStored?: (stored: WireStoredMessage) => void;
+  // GROUP-2: скрыть ли сообщение группы правами по типу содержимого (решает модель движка; нет модели — нет)
+  groupContentHidden?: (groupAddress: string, author: string, content: WireMessageContent) => boolean;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
 };
@@ -485,10 +486,8 @@ export function createSyncController(deps: SyncDependencies) {
     if (!stored.from || stored.from === store.self || !store.isGroupAddress(stored.to)) return false;
     // Служебное сообщение о режиме группы собрано из её проверенного журнала
     if (stored.content.kind === 'chat_mode') return false;
-    const info = store.getGroupInfo(stored.to);
-    const role = info?.members.find(({ address }) => address === stored.from)?.role;
-    if (!info || role !== 'member') return false;
-    if (isContentAllowedForMember(info.default_permissions, stored.content)) return false;
+    // GROUP-2 (spec 035 T114): роль автора, права группы и вид содержимого сверяет движок (`contentHidden` модели)
+    if (!deps.groupContentHidden?.(stored.to, stored.from, stored.content)) return false;
     diagLog('group-perm-hidden', { uuid: stored.id, kind: stored.content.kind, from: stored.from });
     deps.log(`сообщение ${stored.id} (${stored.content.kind}) от ${stored.from} скрыто правами группы`);
     return true;

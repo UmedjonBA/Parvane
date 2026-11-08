@@ -16,9 +16,9 @@ function branch(marker: string) {
 
 describe('C7-2: мутации v2 — только по сообщениям своего чата', () => {
   it.each([
-    ['удаление', 'if (c.delete?.targets) {'],
-    ['реакция', 'if (c.reaction?.target) {'],
-    ['закреп', 'if (c.pin?.target) {'],
+    ['удаление', 'if (mutation?.kind === \'delete\') {'],
+    ['реакция', 'if (mutation?.kind === \'reaction\') {'],
+    ['закреп', 'if (mutation?.kind === \'pin\') {'],
   ])('%s сверяет чат цели до записи в журнал истории', (_, marker) => {
     const body = branch(marker);
     const check = body.indexOf('isOtherChatTarget(target, inThisChat)');

@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
+import { initSync } from '../../lib/parvane-protocol/parvane_protocol';
 import { bytesToBase64 } from './v2/base64';
-import { v2ToWire, wireToV2 } from './v2/contentMap';
+import { contentOfWire, wireOfContent } from './v2/contentMap';
 import {
   encodeThumbnail, fitThumbSize, THUMB_MAX_BYTES, THUMB_MAX_SIDE, thumbBytes, thumbnailFromWire,
 } from './mediaThumb';
+
+// Виды содержимого разбирает движок (spec 035 T114) — WASM нужен и юнит-тестам
+beforeAll(() => {
+  initSync({ module: readFileSync(path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm')) });
+});
 
 describe('message media thumbnails (perf A10)', () => {
   it('fits the thumbnail into 320 px keeping the aspect ratio and never upscales', () => {
@@ -29,14 +37,14 @@ describe('message media thumbnails (perf A10)', () => {
   it('carries the thumbnail through the v2 content mapping both ways', () => {
     const thumbnail = bytesToBase64(new Uint8Array([0xff, 0xd8, 9, 9, 9]));
     const wire = {
-      kind: 'photo', file_id: 'f1', mime: 'image/jpeg', width: 640, height: 480, file_key: 'k', file_nonce: 'n',
-      capability: 'c', thumbnail,
+      kind: 'photo', file_id: 'f1', mime: 'image/jpeg', width: 640, height: 480, file_key: 'aw==', file_nonce: 'bg==',
+      capability: 'Yw==', thumbnail,
     };
-    const v2 = wireToV2(wire);
+    const v2 = contentOfWire(wire);
     expect(v2.media?.thumbnail).toBe(thumbnail);
-    expect(v2ToWire(v2)?.thumbnail).toBe(thumbnail);
+    expect(wireOfContent(v2)?.thumbnail).toBe(thumbnail);
     // Без миниатюры поле не появляется
-    expect(v2ToWire(wireToV2({ ...wire, thumbnail: undefined }))).not.toHaveProperty('thumbnail');
+    expect(wireOfContent(contentOfWire({ ...wire, thumbnail: undefined }))).not.toHaveProperty('thumbnail');
   });
 
   it('returns undefined where the platform cannot draw a frame (jsdom)', async () => {

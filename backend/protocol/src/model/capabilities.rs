@@ -107,7 +107,8 @@ impl GroupFacts {
         let p = &self.perms;
         match &c.kind {
             Some(content::Kind::Media(m)) if m.kind == MediaKind::Animation as i32 => p.send_stickers_gifs,
-            Some(content::Kind::Media(_)) => p.send_media,
+            // Ссылка в подписи медиа — тоже ссылка (GROUP-2 `embed_links`, как текст)
+            Some(content::Kind::Media(_)) => p.send_media && (p.embed_links || !super::views::has_link(c)),
             Some(content::Kind::Sticker(_)) => p.send_stickers_gifs,
             Some(content::Kind::Poll(_)) => p.send_polls,
             Some(content::Kind::Text(_)) => p.embed_links || !super::views::has_link(c),
@@ -132,13 +133,32 @@ impl GroupFacts {
         let _ = now_ms;
         !match &c.kind {
             Some(content::Kind::Media(m)) if m.kind == MediaKind::Animation as i32 => p.send_stickers_gifs,
-            Some(content::Kind::Media(_)) => p.send_media,
+            // Ссылка в подписи медиа — тоже ссылка (GROUP-2 `embed_links`, как текст)
+            Some(content::Kind::Media(_)) => p.send_media && (p.embed_links || !super::views::has_link(c)),
             Some(content::Kind::Sticker(_)) => p.send_stickers_gifs,
             Some(content::Kind::Poll(_)) => p.send_polls,
             Some(content::Kind::Text(_)) => p.embed_links || !super::views::has_link(c),
             Some(content::Kind::Article(a)) => p.send_media || a.media.is_empty(),
             _ => true,
         }
+    }
+
+    /// Сверка conformance GROUP-2: скрыл бы приёмный фильтр содержимое автора с ролью `role` (`member`, `admin`,
+    /// `owner`, иное — не в составе) при правах по умолчанию `perms`.
+    pub fn hidden_for_role(perms: Permissions, role: &str, c: &Content) -> bool {
+        let author = "author@conformance";
+        let mut g = GroupFacts { owner: "owner@conformance".into(), perms, ..Default::default() };
+        match role {
+            "owner" => g.owner = author.into(),
+            "admin" => {
+                g.members.insert(author.into(), (Role::Admin as i32, AdminRights::default(), 0));
+            }
+            "member" => {
+                g.members.insert(author.into(), (Role::Member as i32, AdminRights::default(), 0));
+            }
+            _ => {}
+        }
+        g.hides(author, c, 0)
     }
 
     pub fn view(&self, me: &str) -> GroupView {

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { isContentAllowedForMember } from './groups';
+import { historyCall, initSync } from '../../lib/parvane-protocol/parvane_protocol';
+import { withDetectedLinks } from './autoEntities';
 import { packRefCacheKey, shouldReusePackRef } from './messages';
 import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
 import { ParvaneStore, shouldApplyGroupInfo } from './store';
@@ -969,30 +970,44 @@ describe('GROUP-2: права по типу содержимого соблюд�
     allowed: boolean;
   };
 
+  // spec 035 T114 (ENGINE-1): роль автора, права и вид содержимого решает движок (`GroupFacts::hides`) — web
+  // зовёт его (`contentHidden` модели; статически — `groupContentHidden`), своей формулы у web нет
+  const hidden = (perms: Record<string, boolean>, role: string | null, wire: Record<string, unknown>) => {
+    initSync({ module: readFileSync(path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm')) });
+    return JSON.parse(historyCall('groupContentHidden', JSON.stringify({
+      perms, role: role || 'none', wire: withDetectedLinks(wire as never),
+    }))) as boolean;
+  };
+  const allPerms = {
+    send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true,
+  };
+  const wireOf = (kind: string): Record<string, unknown> => (kind === 'audio'
+    ? { kind: 'file', mime: 'audio/mpeg' } : { kind, text: 'x' });
+
   it.each(rule2.cases as Case[])('$name', (testCase) => {
-    if (testCase.role !== 'member') {
-      // владелец/админ/неизвестная роль под фильтр не подпадают — решает вызывающий (sync.ts)
-      expect(testCase.allowed).toBe(true);
-      return;
-    }
-    const content = {
-      kind: testCase.kind,
-      text: 'x',
+    const wire = {
+      ...wireOf(testCase.kind),
       ...(testCase.hasLink ? { webpage: { url: 'https://x' } } : {}),
-    } as never;
-    expect(isContentAllowedForMember(testCase.perms as never, content)).toBe(testCase.allowed);
+    };
+    expect(!hidden(testCase.perms, testCase.role, wire)).toBe(testCase.allowed);
   });
 
-  it('таблица contentKinds совпадает с реализацией веба', () => {
-    const groups = readFileSync(path.join(process.cwd(), 'src/api/parvane/groups.ts'), 'utf8');
+  it('таблица contentKinds — у движка; web передаёт решение ему', () => {
     for (const kind of rule2.contentKinds!.send_media) {
-      expect(groups, kind).toMatch(new RegExp(`MEDIA_KINDS[^;]*'${kind}'`));
+      expect(hidden({ ...allPerms, send_media: false }, 'member', wireOf(kind)), kind).toBe(true);
+      expect(hidden(allPerms, 'member', wireOf(kind)), kind).toBe(false);
     }
     for (const kind of rule2.contentKinds!.send_stickers_gifs) {
-      expect(groups, kind).toMatch(new RegExp(`STICKER_KINDS[^;]*'${kind}'`));
+      expect(hidden({ ...allPerms, send_stickers_gifs: false }, 'member', wireOf(kind)), kind).toBe(true);
     }
+    expect(hidden({ ...allPerms, send_polls: false }, 'member', wireOf('poll'))).toBe(true);
+    // Ссылка, которую приёмник разметит сам (голый адрес, адрес в подписи), — тоже ссылка
+    const noLinks = { ...allPerms, embed_links: false };
+    expect(hidden(noLinks, 'member', { kind: 'text', text: 'см. example.org' })).toBe(true);
+    expect(hidden(noLinks, 'member', { kind: 'photo', caption: 'https://x.ru' })).toBe(true);
+    expect(hidden(noLinks, 'member', { kind: 'photo', caption: 'фото' })).toBe(false);
     const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(sync).toMatch(/role !== 'member'/);
+    expect(sync).toMatch(/deps\.groupContentHidden\?\.\(stored\.to, stored\.from, stored\.content\)/);
     expect(sync).toMatch(/group-perm-hidden/);
   });
 
@@ -1524,9 +1539,10 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     );
     expect(blobPool).toContain('new V2Connection(pv, deps.gatewayUrl(), CHANNEL_ANONYMOUS)');
     expect(controller).toMatch(/blobConns\.run\(\s*`file:\$\{fileId\}`/);
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    expect(map).toContain(`${r.contentField}: c.${r.contentField},`);
-    expect(map).toContain(`${r.contentField}: m.${r.contentField} || undefined,`);
+    // spec 035 T114: перекладка содержимого — в движке (`views.rs`), web её не держит
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    expect(map).toContain(`set(&mut o, "${r.contentField}", c.get("${r.contentField}"));`);
+    expect(map).toContain(`o.insert("${r.contentField}".into(), json!(b64(&m.${r.contentField})));`);
   });
 
   it('desktop и android: общее ядро, секрет в содержимом, анонимное скачивание', () => {
@@ -1957,8 +1973,8 @@ describe('TASK-1: задание в чат — видимые сообщения
   });
 
   it('web: разбор обоих видов, хранилище решений, принятие один раз на аккаунт', () => {
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
     expect(sync).toContain('function handleTaskOfferContent(stored: WireStoredMessage) {');
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
@@ -2093,8 +2109,8 @@ describe('CLOUD-1: приглашение в папку облака — вид�
   });
 
   it('web, desktop и android: приглашение разбирается и показывается текстом', () => {
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'cloud_invite\':');
     const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
     expect(core).toContain('} else if (c.contains("cloud_invite") && c["cloud_invite"].is_object()) {');
@@ -2126,8 +2142,8 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
   });
 
   it('web, desktop и android: статья разбирается и показывается', () => {
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'article\':');
     const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
     expect(core).toContain('} else if (c.contains("article") && c["article"].is_object()) {');
@@ -2163,8 +2179,8 @@ describe('REPORT-1: жалоба админам группы — карточк�
   });
 
   it('web: жалоба разбирается, показывается карточкой и отправляется', () => {
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('buildModReportContent');
     expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('async reportMessages(');
     expect(r.clients.web).toContain('e2e_web_reports.mjs');
@@ -3122,9 +3138,9 @@ describe('conformance MEDIA-2: спойлер медиа, подпись над 
     expect(proto).toContain('bool spoiler = 15;');
     expect(proto).toContain('bytes album_id = 16');
     expect(proto).toContain('bool invert_media = 104;');
-    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
-    expect(map).toContain('album_id: c.album_id || undefined,');
-    expect(map).toContain('if (c.invert_media) out.invert_media = true;');
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    expect(map).toContain('set(&mut o, "album_id", c.get("album_id"));');
+    expect(map).toContain('out.insert("invert_media".into(), json!(true));');
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).toContain('const albumTurn = params.groupedId ? albumQueue.enter(params.groupedId) : undefined;');
     expect(messages).toContain('await albumReady;');
@@ -3336,7 +3352,36 @@ describe('ENGINE-1 (web): модель движка — единственный
       .toBeLessThan(drive.indexOf('await this.deps.store.commit(typed);'));
   });
 
-  // Остаток T114 (показ и права групп из модели): строки истории и права пока считает хост
-  it.todo('v2/contentMap.ts: нет разбора видов содержимого (входящие — MessageView модели)');
-  it.todo('прав групп вне движка нет: композер и меню — по capabilities модели (GROUP-2)');
+  // T114: виды содержимого разбирает движок (`views.rs content_view`/`wire_to_content`) — тот же разбор, из
+  // которого модель строит `MessageView`; web получает его готовым в событии (`ev.view`) и кладёт строку журнала
+  it('v2/contentMap.ts: нет разбора видов содержимого (входящие — разбор движка)', () => {
+    const map = strip(readRepo(`${V2}/contentMap.ts`));
+    expect(map).not.toMatch(/switch \(c\.kind\)|case 'photo'|MEDIA_KIND|ENTITY_TO_V2/);
+    expect(map).not.toMatch(/\bc\.(text|media|sticker|poll|edit|delete)\b/);
+    expect(map).not.toMatch(/export function (v2ToWire|wireToV2|v2Class)\b/);
+    expect(map).toContain('historyStatic<ContentView>(\'contentView\', { content: c })');
+    expect(map).toContain('historyStatic<V2Content>(\'contentOfWire\'');
+    const controller = strip(readRepo(`${V2}/controller.ts`));
+    expect(controller).toContain('const view = ev.view || contentView(ev.content);');
+    expect(controller).not.toMatch(/\bc\.(edit|delete|reaction|pin|receipt|chat_mode|reply_to)\b/);
+    expect(controller).not.toMatch(/v2ToWire|wireToV2|v2Class/);
+    const journal = strip(readRepo(`${V2}/stateJournal.ts`));
+    expect(journal).not.toMatch(/v2ToWire|wireToV2/);
+    // Разбор — у события движка: один и тот же для web, desktop и android
+    expect(readRepo('backend/protocol/src/host.rs')).toContain('"view": crate::model::views::content_view(c)');
+  });
+
+  it('прав групп вне движка нет: приёмный фильтр и композер — по модели (GROUP-2)', () => {
+    const groups = strip(readRepo('web/telegram-tt/src/api/parvane/groups.ts'));
+    expect(groups).not.toMatch(/isContentAllowedForMember|MEDIA_KINDS|STICKER_KINDS|send_stickers_gifs|send_polls/);
+    const sync = strip(readRepo('web/telegram-tt/src/api/parvane/sync.ts'));
+    expect(sync).not.toMatch(/default_permissions|role !== 'member'/);
+    expect(sync).toContain('deps.groupContentHidden?.(stored.to, stored.from, stored.content)');
+    const controller = strip(readRepo(`${V2}/controller.ts`));
+    expect(controller).toContain('host!.peek<{ hidden?: boolean }>(\'contentHidden\', { chat, from: author, wire })');
+    expect(controller).toContain('host!.peek<ChatCapabilities>(\'capabilities\', { chat })');
+    const store = strip(readRepo('web/telegram-tt/src/api/parvane/store.ts'));
+    expect(store).toContain('currentUserBannedRights: !isChannel');
+    expect(store).toContain('bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id))');
+  });
 });

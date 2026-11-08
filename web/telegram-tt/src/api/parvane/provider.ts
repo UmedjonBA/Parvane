@@ -1155,10 +1155,14 @@ const syncController = createSyncController({
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
   rememberStored: messageIndex.set,
+  groupContentHidden: (group, author, content) => v2Controller.groupContentHidden(group, author, content),
   history: { isUnread: historyRows.isUnread, ensureMarks: historyRows.ensureMarks },
   sendUpdate,
   log: logDebug,
 });
+
+// GROUP-2 (spec 035 T114): композер группы — по решению модели движка
+ParvaneStore.capabilitiesOf = (address) => v2Controller.chatCapabilities(address);
 
 // Ключ восстановления нового корня v2 (D-12): отдаётся UI ровно один раз
 let pendingRecoveryKey: string | undefined;
