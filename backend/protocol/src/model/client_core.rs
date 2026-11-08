@@ -241,6 +241,15 @@ impl Engine {
         }
     }
 
+    /// Хост не смог добрать нужду первой ждущей записи (повторы исчерпаны): запись пропускается — курсор её не
+    /// отмечает, сервер отдаст её снова при следующем синке, — следующие идут дальше (как прежний хост web).
+    pub(crate) fn host_skip(&mut self, w: &mut Work) {
+        if !self.pending_inbox.is_empty() {
+            self.pending_inbox.remove(0);
+        }
+        self.host_retry(w);
+    }
+
     /// Запросить следующую страницу журнала инбокса (одна в пути).
     pub(crate) fn inbox_sync(&mut self, w: &mut Work) {
         if self.inflight.values().chain(w.requests.iter().map(|(_, p)| p)).any(|p| matches!(p, Purpose::InboxSync)) {

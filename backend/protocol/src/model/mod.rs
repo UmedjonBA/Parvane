@@ -1262,6 +1262,7 @@ impl Engine {
                 // Хост добрал нужду клиента (режим хоста) либо данные пришли — повторить ждущее
                 "retry" if self.cfg.host_driven => self.host_retry(&mut w),
                 "retry" => self.retry_waiting(&mut w),
+                "skip" if self.cfg.host_driven => self.host_skip(&mut w),
                 // Живое уведомление/переподключение: страница журнала инбокса сейчас
                 "inbox.poll" => self.inbox_sync(&mut w),
                 // Хост узнал о новых записях журнала личного состояния (`JournalNotice{STATE}` прежнего клиента)

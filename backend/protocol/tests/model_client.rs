@@ -311,3 +311,33 @@ fn client_replace_starts_a_fresh_device() {
     let st = flush(&mut host, &mut e);
     assert!(st.puts.contains(&"engine-core".to_string()));
 }
+
+#[test]
+fn skipped_record_lets_the_following_ones_through() {
+    let mut srv = Server::default();
+    let (mut ha, mut hb) = (Host::default(), Host::default());
+    let mut alice = identity(&mut ha, &mut srv, "alice@local", 3);
+    let mut bob = identity(&mut hb, &mut srv, "bob@local", 4);
+    flush(&mut hb, &mut bob);
+    share_key(&mut bob, "bob@local", &mut alice);
+    send_text(&mut alice, &mut srv, "alice@local", "bob@local", "первое", "");
+    let first = record_bytes(&srv, "bob@local", 0);
+    let out = ingest_record(&mut bob, &first);
+    let st = hb.drive(&mut bob, out, true);
+    assert_eq!(client_needs(&st.changes).len(), 1);
+    // Хост сдался: запись пропущена, подтверждения её нет (сервер отдаст снова)
+    let out = raw(&mut bob, "ingest", &json!({"kind": "SERVER_INPUT_KIND_EVENT", "method": "skip"}));
+    assert!(methods(&out).iter().all(|m| m != "msg.inbox.ack"), "{out}");
+    let st = hb.drive(&mut bob, out, true);
+    assert!(event_texts(&st.changes).is_empty());
+    // Пропущенная больше не держит очередь: повтор после добора открывается
+    let resp = ipb::DeviceLogSyncResponse { entries: srv.logs["alice@local"].clone(), more: false, genesis_hash: vec![], deleted: false };
+    cc(&mut bob, "ingestLog", json!({"user": "alice@local", "syncResponse": b64e(&resp.encode_to_vec())})).unwrap();
+    let count = srv.inbox[&("bob@local".to_string(), "d1".to_string())].len();
+    let mut texts = vec![];
+    for i in 0..count {
+        let out = ingest_record(&mut bob, &record_bytes(&srv, "bob@local", i));
+        texts.extend(event_texts(&hb.drive(&mut bob, out, true).changes));
+    }
+    assert_eq!(texts, vec!["первое".to_string()], "повтор пропущенной открывается");
+}
