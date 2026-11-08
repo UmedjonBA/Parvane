@@ -170,11 +170,11 @@ fn event_json(e: &Event) -> Value {
     match e {
         Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
-            "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
+            "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "view": crate::model::views::content_view(c), "disposition": disp(*disposition)
         }), *disposition), proof),
         Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
-            "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
+            "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "view": crate::model::views::content_view(c), "disposition": disp(*disposition)
         }), *disposition), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),

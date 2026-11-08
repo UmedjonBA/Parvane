@@ -5,16 +5,11 @@ import type {
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 import type { createV2Controller, V2InviteRecord, V2PublicCard } from './v2/controller';
-import type {
-  WireDefaultPermissions, WireGroupInfo, WireGroupMember, WireMessageContent,
-} from './wire';
-import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
+import type { WireGroupInfo, WireGroupMember } from './wire';
+import { MAIN_THREAD_ID } from '../types';
 
-import { detectAutoEntities } from './autoEntities';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
-import {
-  fromBannedRights, normalizePermissions, toAdminRights, toWireAdminRights,
-} from './store';
+import { fromBannedRights, toAdminRights, toWireAdminRights } from './store';
 
 const V2_GROUP_PREFIX = 'v2g:';
 
@@ -42,36 +37,6 @@ function isInviteManager(member?: WireGroupMember) {
   if (!member) return false;
   if (member.role === 'owner') return true;
   return member.role === 'admin' && toAdminRights(member.admin_rights).inviteUsers === true;
-}
-
-const MEDIA_KINDS = new Set(['photo', 'video', 'file', 'voice', 'video_note', 'audio']);
-const STICKER_KINDS = new Set(['sticker', 'gif']);
-
-// Права по типу содержимого проверяются только на клиентах (сервер видит
-// шифртекст): отправитель без права не выберет тип в композере, получатель
-// скрывает сообщение запрещённого типа от участника без роли (FR-009)
-export function isContentAllowedForMember(perms: WireDefaultPermissions | undefined, content: WireMessageContent) {
-  const p = normalizePermissions(perms);
-  if (!p.send_messages) return false;
-  if (!p.send_media && MEDIA_KINDS.has(content.kind)) return false;
-  if (!p.send_stickers_gifs && STICKER_KINDS.has(content.kind)) return false;
-  if (!p.send_polls && content.kind === 'poll') return false;
-  if (!p.embed_links && content.kind === 'text') {
-    if (content.webpage) return false;
-    // Сущности на проводе — короткие имена (`url`, `text_url`), в API — длинные;
-    // проверка должна ловить оба (WEB-06: ссылка-сущность проходила фильтр)
-    const linkTypes = ['MessageEntityUrl', 'MessageEntityTextUrl', 'url', 'text_url'];
-    if (content.entities?.some((e) => linkTypes.includes(e.type))) {
-      return false;
-    }
-  }
-  if (!p.embed_links) {
-    // Голая ссылка без сущностей и ссылка в подписи медиа — тоже ссылка: приёмник сам размечает её
-    // при показе (autoEntities), значит и проверять надо по тому же разбору
-    const body = content.kind === 'text' ? content.text : content.caption;
-    if (body && detectAutoEntities(body).some((e) => e.type === ApiMessageEntityTypes.Url)) return false;
-  }
-  return true;
 }
 
 type GroupDependencies = {
@@ -114,6 +79,9 @@ export function pickPrimaryInvite<T extends {
 export function createGroupController(deps: GroupDependencies) {
   // Незавершённые запросы основной ссылки — по одному на группу
   const v2PrimaryRequests = new Map<string, Promise<V2InviteRecord | undefined>>();
+  // Идёт создание группы «по заявке» (spec 014): чат публикуется журналом ещё до конца создания, и экран ссылок,
+  // успевший спросить основную ссылку, создал бы ОТКРЫТУЮ — запрос основной ждёт конца таких созданий
+  const requestGroupCreations = new Set<Promise<unknown>>();
 
   function v2Of(address: string) {
     const v2 = deps.getV2?.();
@@ -219,6 +187,11 @@ export function createGroupController(deps: GroupDependencies) {
     if (!deps.getConnection() || !v2?.isReady()) return undefined;
     const store = deps.getStore();
     const members = users.map((user) => store.getAddressForId(user.id)).filter(Boolean);
+    let markDone: (() => void) | undefined;
+    const creation = new Promise<void>((resolve) => {
+      markDone = resolve;
+    });
+    if (isJoinRequestNeeded) requestGroupCreations.add(creation);
     try {
       const v2Info = await v2.createGroup(title, members, kind);
       if (!v2Info) return undefined;
@@ -243,6 +216,9 @@ export function createGroupController(deps: GroupDependencies) {
     } catch (error) {
       deps.log(`группа v2 не создана: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
+    } finally {
+      requestGroupCreations.delete(creation);
+      markDone?.();
     }
   }
 
@@ -411,6 +387,7 @@ export function createGroupController(deps: GroupDependencies) {
   // Основная ссылка группы v2: первая без параметров, созданная этим
   // устройством (секрет ссылки есть только у создателя); нет — создаём
   async function ensureV2Primary(v2: V2Groups, address: string) {
+    if (requestGroupCreations.size) await Promise.allSettled([...requestGroupCreations]);
     const inFlight = v2PrimaryRequests.get(address);
     if (inFlight) return inFlight;
     const findPrimary = async () => pickPrimaryInvite(await v2.listInvites(address));

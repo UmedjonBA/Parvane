@@ -42,6 +42,7 @@ const NICK = { alice: `seed-alice-${SUFFIX}`, bob: `seed-bob-${SUFFIX}`, carol: 
 const ADDR = Object.fromEntries(Object.entries(NICK).map(([who, nick]) => [who, `${nick}@local`]));
 const GROUP = `Выдуманный клуб ${SUFFIX}`;
 const CLOUD_FOLDER = `Общая папка ${SUFFIX}`;
+const PHOTO_GROUP = `Выдуманный фотоклуб ${SUFFIX}`;
 const NOTE_TITLE = `Заметка о вымышленном походе ${SUFFIX}`;
 const WIDE = { width: 1400, height: 900 };
 // Окно пачки журнала истории в диаг-сборке (по умолчанию 1–3 с) — записи успевают уйти до выгрузок
@@ -230,6 +231,28 @@ try {
       await api(a, 'createGroupChat', { title: `${GROUP} — секция ${i}`, users: [`$user:${NICK.bob}`] });
     }
   });
+  // Частная группа с ОТКРЫТЫМ фото (как до GPHOTO-1): фото ставится, пока группа публичная (открытый блоб без
+  // секрета), затем группа снова частная. Разовый перенос просит админа перезалить такое фото с секретом
+  // (`needs{group_avatar_reupload}`, FR-071) — это проверяет T109
+  await step('открытое фото частной группы', async () => {
+    await resetUi(a);
+    await api(a, 'createGroupChat', { title: PHOTO_GROUP, users: [`$user:${NICK.bob}`] });
+    await a.waitForFunction((title) => Object.values(window.__parvaneGetGlobal().chats.byId).some((ch) => ch.title === title),
+      PHOTO_GROUP, { timeout: 60000 });
+    const publicName = `seedphoto${SUFFIX}`;
+    assert.ok(await api(a, 'setChatUsername', { chat: `$chat:${PHOTO_GROUP}`, username: publicName }), 'группа не стала публичной');
+    const png = buildPngBuffer(64, [0x45, 0x85, 0x88]).toString('base64');
+    const photo = await a.evaluate(async ({ b64, title }) => {
+      const g = window.__parvaneGetGlobal();
+      const chat = Object.values(g.chats.byId).find((ch) => ch.title === title);
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      const file = new File([bytes], 'выдуманное-фото.png', { type: 'image/png' });
+      return window.__parvaneDiagCallApi('editChatPhoto', { chatId: chat.id, photo: file });
+    }, { b64: png, title: PHOTO_GROUP });
+    assert.ok(photo, 'фото не поставлено');
+    assert.ok(await api(a, 'setChatUsername', { chat: `$chat:${PHOTO_GROUP}`, username: '' }), 'группа не стала частной');
+    return PHOTO_GROUP;
+  });
   await step('папка', () => api(a, 'editChatFolder', {
     id: 2,
     folderUpdate: {
@@ -351,6 +374,15 @@ try {
     const result = await api(c, 'parvaneSetStoragePin', { pin: STORAGE_PIN });
     return { result, pin: STORAGE_PIN };
   });
+  // Эталон «до» профиля под PIN — то, что прежний код читает ПОСЛЕ перезапуска (PIN спрашивается окном): записи,
+  // которые он сам не смог бы открыть (PV-001), переносу показать нечем (T109)
+  await step('перезапуск carol под PIN', async () => {
+    c.on('dialog', (d) => { void d.accept(STORAGE_PIN); });
+    await c.reload();
+    await c.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await c.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, { timeout: LOGIN_TIMEOUT_MS });
+    await pause(10000);
+  });
 
   await pause(HISTORY_SETTLE_MS);
 
@@ -383,12 +415,20 @@ try {
 
   await step('выгрузка сервера', async () => {
     assert.ok(BACKEND_DIR, 'нет PARVANE_E2E_BACKEND_LOG_DIR');
+    // Профили закрыты ДО копии баз: курсоры и подтверждения профиля не уходят дальше копии сервера (T109)
+    for (const context of Object.values(ctx)) {
+      // eslint-disable-next-line no-await-in-loop
+      await context.close().catch(() => undefined);
+    }
+    await pause(3000);
     const out = join(OUT, 'audit', 'server.jsonl');
     execFileSync('python3', [join(ROOT, 'scripts/migration_audit_server.py'), '--dump', BACKEND_DIR, '-o', out]);
     // Копия баз (вместе с -wal/-shm) — сервер этого же состояния для сценария переноса
     const dbDir = join(OUT, 'profiles', 'server');
     mkdirSync(dbDir, { recursive: true });
-    const copied = readdirSync(BACKEND_DIR).filter((n) => /\.db(-wal|-shm)?$/.test(n) || n === 'parvane.json');
+    // Ключ подписи JWT identity — тоже: сессии профилей сида принимаются тем же сервером (T109)
+    const copied = readdirSync(BACKEND_DIR)
+      .filter((n) => /\.db(-wal|-shm)?$/.test(n) || n === 'parvane.json' || /^identity-.*\.pem$/.test(n));
     copied.forEach((n) => copyFileSync(join(BACKEND_DIR, n), join(dbDir, n)));
     return { tables: execFileSync('wc', ['-l', out]).toString().trim(), copied: copied.length };
   });
@@ -401,6 +441,7 @@ try {
   const failedRequired = results.filter((r) => !r.ok && REQUIRED.has(r.step)).map((r) => r.step);
   const summary = {
     created: new Date().toISOString(), suffix: SUFFIX, addresses: ADDR, group: GROUP, cloudFolder: CLOUD_FOLDER,
+    photoGroup: PHOTO_GROUP,
     password: PASSWORD, storagePin: { carol: STORAGE_PIN }, results, failedRequired,
   };
   writeFileSync(join(OUT, 'seed-summary.json'), `${JSON.stringify(summary, undefined, 1)}\n`);

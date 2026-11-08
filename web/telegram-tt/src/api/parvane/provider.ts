@@ -1155,10 +1155,14 @@ const syncController = createSyncController({
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
   rememberStored: messageIndex.set,
+  groupContentHidden: (group, author, content) => v2Controller.groupContentHidden(group, author, content),
   history: { isUnread: historyRows.isUnread, ensureMarks: historyRows.ensureMarks },
   sendUpdate,
   log: logDebug,
 });
+
+// GROUP-2 (spec 035 T114): композер группы — по решению модели движка
+ParvaneStore.capabilitiesOf = (address) => v2Controller.chatCapabilities(address);
 
 // Ключ восстановления нового корня v2 (D-12): отдаётся UI ровно один раз
 let pendingRecoveryKey: string | undefined;
@@ -1191,6 +1195,21 @@ const v2Controller = createV2Controller({
   },
   rememberGroupPhoto: (fileId, avatarKey) => {
     void mediaService.rememberGroupPhoto(fileId, avatarKey);
+  },
+  // spec 035 T115: прежняя история — тем же сбором, что выгрузка «до» (`parvaneAuditDump`)
+  legacyHistory: async () => ({
+    states: await historyRows.collectStates(),
+    marks: await localState.loadReadMarks(),
+    ownJournal: await localState.readOwnJournal(),
+    cleared: localState.loadClearedUntil(),
+  }),
+  reuploadGroupPhoto: async (address, fileId) => {
+    const media = await mediaService.downloadBlob(fileId);
+    if (!media) return false;
+    const { fileId: fresh, avatarKey } = await mediaService.uploadGroupPhoto(media.blob, media.mimeType);
+    const isDone = await groupController.setGroupInfo(address, { avatarFileId: fresh, avatarKey });
+    if (!isDone) void getV2Bridge().control.deleteBlob(fresh).catch(() => undefined);
+    return Boolean(isDone);
   },
   getToken: () => token,
   getSelf: () => store.self,
@@ -3474,9 +3493,17 @@ const methods = {
     return v2Controller.auditCounters();
   },
 
+  /** e2e (только диаг-сборка, spec 035 T109): состояние модели после разового переноса. */
+  parvaneDiagMigration() {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return Promise.resolve(undefined);
+    return Promise.resolve(v2Controller.migrationState());
+  },
+
   /** Выгрузка «ничего не потеряно» (spec 035, T007; только диаг-сборка): JSONL `{kind, key, digest}`. */
-  async parvaneAuditDump() {
+  async parvaneAuditDump({ source }: { source?: 'engine' } = {}) {
     if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return undefined;
+    // spec 035 T109: выгрузка модели движка после разового переноса (`auditDump` модели, contracts/migration.md)
+    if (source === 'engine') return v2Controller.engineAuditDump();
     const sources = v2Controller.auditSources();
     const marks = await localState.loadReadMarks();
     const lines = await buildAuditDump({

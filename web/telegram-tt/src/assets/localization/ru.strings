@@ -2387,3 +2387,8 @@
 "KnowledgePreviewShow" = "Показать просмотр";
 "KnowledgePreviewHide" = "Вернуться к правке";
 "KnowledgePreviewTitle" = "Просмотр";
+"ParvaneMigrationTitle" = "Обновляем данные на этом устройстве";
+"ParvaneMigrationStorage" = "Переносим зашифрованное хранилище в новый формат";
+"ParvaneMigrationEngine" = "Переносим чаты, ключи и настройки в новый формат";
+"ParvaneMigrationKeepOpen" = "Не закрывайте вкладку. Ничего не удаляется: прежние данные остаются, пока вы их не удалите.";
+"ParvaneMigrationFailed" = "Обновление не завершилось. Данные целы — оно продолжится при следующем запуске.";

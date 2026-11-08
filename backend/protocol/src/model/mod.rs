@@ -397,6 +397,7 @@ impl Engine {
             "viewState" => parse(args).map(|a| json_of(&self.view_state(&a))),
             "viewGroup" => parse::<epb::ViewGroupRequest>(args).and_then(|a| self.view_group(a.group.as_ref())).map(|g| json_of(&g)),
             "capabilities" => parse::<epb::CapabilitiesRequest>(args).and_then(|a| self.capabilities(a.chat.as_ref())).map(|c| json_of(&c)),
+            "contentHidden" => self.content_hidden(args).map(|h| serde_json::json!({"hidden": h}).to_string()),
             "engineInfo" => Ok(crate::engine_info_json()),
             "clientCall" | "historyCall" => {
                 let a: epb::ClientCall = match parse(args) {
@@ -659,6 +660,11 @@ impl Engine {
         let unsent: Vec<(String, Vec<u8>)> = self.state_unsent.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for (op_hex, pt) in unsent {
             self.send_state_raw(&op_hex, &pt, w);
+        }
+        // FR-071: открытое фото частной группы, которое ещё не перезалито (перенос прерван после нужды, хост закрыт
+        // до перезалива), — нужда снова при каждом открытии; хост сверяет журнал группы перед перезаливом
+        if self.open_state == OpenState::Ready {
+            self.avatar_reupload_needs(w);
         }
         Ok(())
     }
@@ -1065,11 +1071,36 @@ impl Engine {
         Ok(f.view(&self.cfg.user))
     }
 
+    /// Сведения группы для решений «прямо сейчас»: из журнала группы клиента модели (режим хоста — без ожидания
+    /// `flush`), иначе последние сведённые.
+    fn live_group_facts(&self, id: &[u8]) -> Option<std::borrow::Cow<'_, GroupFacts>> {
+        if let Some(c) = &self.client {
+            if let Some(s) = c.group_state(id) {
+                return Some(std::borrow::Cow::Owned(GroupFacts::from_state(s, c.group_avatar_key(id))));
+            }
+        }
+        self.groups.get(id).map(std::borrow::Cow::Borrowed)
+    }
+
+    /// Приёмный фильтр GROUP-2 (spec 035 T114): скрыть ли сообщение автора `from` с содержимым `wire` (формат
+    /// экспорта) в чате `chat`. Личный чат и неизвестная группа — не скрывать.
+    pub fn content_hidden(&self, args: &str) -> Result<bool> {
+        let v: Value = serde_json::from_str(args).map_err(|_| ProtoError::Malformed)?;
+        let chat: Peer = serde_json::from_value(v.get("chat").cloned().ok_or(ProtoError::InvalidField("chat"))?).map_err(|_| ProtoError::Malformed)?;
+        let Some(peer::Kind::Group(g)) = &chat.kind else { return Ok(false) };
+        let from = v.get("from").and_then(Value::as_str).unwrap_or("");
+        let Some(Value::Object(wire)) = v.get("wire") else { return Err(ProtoError::InvalidField("wire")) };
+        let Some(f) = self.live_group_facts(&g.id) else { return Ok(false) };
+        // Вид, которого движок не знает (служебное «режим чата» и прочее), правами по типу не скрывается
+        let Ok(content) = views::wire_to_content(wire, None) else { return Ok(false) };
+        Ok(f.hides(from, &content, self.now_ms))
+    }
+
     pub fn capabilities(&self, chat: Option<&Peer>) -> Result<epb::Capabilities> {
         let p = chat.ok_or(ProtoError::InvalidField("chat"))?;
         let mut c = match &p.kind {
             Some(peer::Kind::User(_)) => capabilities::direct(),
-            Some(peer::Kind::Group(g)) => match self.groups.get(&g.id) {
+            Some(peer::Kind::Group(g)) => match self.live_group_facts(&g.id) {
                 Some(f) => f.capabilities(&self.cfg.user, self.now_ms),
                 // Сведений группы ещё нет — ничего не разрешать до журнала (GROUP-3)
                 None => epb::Capabilities { forward: true, ..Default::default() },

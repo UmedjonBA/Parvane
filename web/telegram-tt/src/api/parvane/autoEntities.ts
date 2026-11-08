@@ -9,6 +9,7 @@
 // не распознаются вовсе.
 
 import type { ApiMessageEntity } from '../types';
+import type { WireMessageContent } from './wire';
 import { ApiMessageEntityTypes } from '../types';
 
 import { isSafeEntityUrl } from './entities';
@@ -198,4 +199,23 @@ export function withAutoEntities(text: string | undefined, entities?: ApiMessage
   }));
   if (!auto.length) return entities;
   return sortEntities([...(entities || []), ...auto]);
+}
+
+// GROUP-2 (spec 035 T114): ссылка, которую приёмник разметит при показе (голый адрес в тексте, адрес в подписи
+// медиа), — тоже ссылка. Право решает движок по содержимому (`contentHidden` модели), поэтому содержимое уходит
+// ему с той же разметкой ссылок, что увидит человек; сущности API-имён (`MessageEntityUrl`) — в именах провода.
+const WIRE_LINK_TYPES: Record<string, string> = {
+  MessageEntityUrl: 'url', MessageEntityTextUrl: 'text_url', url: 'url', text_url: 'text_url',
+};
+
+export function withDetectedLinks(content: WireMessageContent): WireMessageContent {
+  const body = content.kind === 'text' ? content.text : content.caption;
+  const known = (content.entities || []).flatMap((e) => (WIRE_LINK_TYPES[e.type]
+    ? [{ ...e, type: WIRE_LINK_TYPES[e.type] }] : []));
+  const detected = body ? detectAutoEntities(body).filter((e) => e.type === ApiMessageEntityTypes.Url) : [];
+  if (!known.length && !detected.length) return content;
+  return {
+    ...content,
+    entities: [...known, ...detected.map(({ offset, length }) => ({ type: 'url', offset, length }))],
+  };
 }

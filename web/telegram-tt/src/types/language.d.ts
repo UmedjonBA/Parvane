@@ -3176,6 +3176,11 @@ export interface LangPair {
   'KnowledgePreviewShow': undefined;
   'KnowledgePreviewHide': undefined;
   'KnowledgePreviewTitle': undefined;
+  'ParvaneMigrationTitle': undefined;
+  'ParvaneMigrationStorage': undefined;
+  'ParvaneMigrationEngine': undefined;
+  'ParvaneMigrationKeepOpen': undefined;
+  'ParvaneMigrationFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

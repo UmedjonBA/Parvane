@@ -13,6 +13,8 @@
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
 
+use crate::error::ProtoError;
+
 use crate::pb::parvane::engine::v1::{
     compose_content, view_body, ComposeContent, ViewArticle, ViewBody, ViewCloudInvite, ViewEntity, ViewLocation,
     ViewMedia, ViewPoll, ViewService, ViewSticker, ViewTaskOffer, ViewText,
@@ -330,6 +332,8 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             if let Some(p) = s.pack_ref.as_ref().and_then(pack_to_wire) {
                 o.insert("pack_ref".into(), p);
             }
+            // FR-075: id стикера в наборе (web `v2ToWire`)
+            put(&mut o, "sticker_id", json!(s.sticker_id));
             o
         }
         K::Location(l) => {
@@ -489,6 +493,391 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
         put(&mut o, "forwarded_name", json!(f.from_name));
     }
     Some(Value::Object(o))
+}
+
+// ── формат экспорта → Content (web `wireToV2`, spec 035 T114) ─────────────────
+
+/// Значение есть и «истинно» по правилам JS (`x || undefined`): не null, не пустая строка, не `false`, не 0.
+fn truthy(v: Option<&Value>) -> Option<&Value> {
+    v.filter(|v| match v {
+        Value::Null => false,
+        Value::String(s) => !s.is_empty(),
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        _ => true,
+    })
+}
+
+/// Вставить поле, если значение «истинно» (proto3 по умолчанию — то же отсутствие поля).
+fn set(o: &mut Map<String, Value>, k: &str, v: Option<&Value>) {
+    if let Some(v) = truthy(v) {
+        o.insert(k.to_string(), v.clone());
+    }
+}
+
+fn ref_of_uuid(s: &str) -> Value {
+    json!({"op_id": b64(&id_of_uuid(s))})
+}
+
+fn entities_to_v2(list: Option<&Value>) -> Option<Value> {
+    let Some(Value::Array(a)) = list else { return None };
+    if a.is_empty() {
+        return None;
+    }
+    let out: Vec<Value> = a
+        .iter()
+        .filter_map(|e| {
+            let name = e.get("type")?.as_str()?;
+            let t = entity_type(name)?;
+            let mut o = Map::new();
+            o.insert("type".into(), json!(t.as_str_name()));
+            o.insert("offset".into(), e.get("offset").cloned().unwrap_or(json!(0)));
+            o.insert("length".into(), e.get("length").cloned().unwrap_or(json!(0)));
+            let data = e.get("data");
+            match t {
+                EntityType::TextUrl => set(&mut o, "url", data),
+                EntityType::Pre => set(&mut o, "language", data),
+                EntityType::CustomEmoji => set(&mut o, "custom_emoji_id", data),
+                _ => {}
+            }
+            Some(Value::Object(o))
+        })
+        .collect();
+    Some(Value::Array(out))
+}
+
+fn pack_to_v2(p: &Value) -> Option<Value> {
+    let p = p.as_object()?;
+    let mut o = Map::new();
+    for k in ["file_id", "name", "count", "key", "nonce", "capability", "content_hash", "blob_domain"] {
+        set(&mut o, k, p.get(k));
+    }
+    Some(Value::Object(o))
+}
+
+fn wave_to_b64(w: Option<&Value>) -> Option<Value> {
+    let Some(Value::Array(a)) = w else { return None };
+    if a.is_empty() {
+        return None;
+    }
+    let bytes: Vec<u8> = a.iter().map(|x| x.as_f64().unwrap_or(0.0).clamp(0.0, 255.0) as u8).collect();
+    Some(json!(b64(&bytes)))
+}
+
+fn media_kind_v2(wire_kind: &str, mime: &str) -> &'static str {
+    match wire_kind {
+        "file" if mime.starts_with("audio/") => "MEDIA_KIND_AUDIO",
+        "photo" => "MEDIA_KIND_PHOTO",
+        "video" => "MEDIA_KIND_VIDEO",
+        "voice" => "MEDIA_KIND_VOICE",
+        "video_note" => "MEDIA_KIND_VIDEO_NOTE",
+        "gif" => "MEDIA_KIND_ANIMATION",
+        _ => "MEDIA_KIND_FILE",
+    }
+}
+
+fn media_to_v2(c: &Map<String, Value>, kind: &str) -> Map<String, Value> {
+    let mut o = Map::new();
+    o.insert("kind".into(), json!(media_kind_v2(kind, &str_of(c, "mime"))));
+    set(&mut o, "file_id", c.get("file_id"));
+    set(&mut o, "mime", c.get("mime"));
+    if let Some(n) = c.get("size_bytes").and_then(Value::as_f64) {
+        set(&mut o, "size", Some(&json!((n as u64).to_string())).filter(|_| n != 0.0));
+    }
+    if let Some(d) = c.get("duration_secs").and_then(Value::as_f64) {
+        set(&mut o, "duration_ms", Some(&json!((d * 1000.0).round() as u64)));
+    }
+    set(&mut o, "width", c.get("width"));
+    set(&mut o, "height", c.get("height"));
+    set(&mut o, "waveform", wave_to_b64(c.get("waveform")).as_ref());
+    set(&mut o, "file_key", c.get("file_key"));
+    set(&mut o, "file_nonce", c.get("file_nonce"));
+    set(&mut o, "name", c.get("filename"));
+    set(&mut o, "caption", c.get("caption"));
+    set(&mut o, "caption_entities", entities_to_v2(c.get("entities")).as_ref());
+    set(&mut o, "blob_domain", c.get("blob_domain"));
+    set(&mut o, "title", c.get("audio_title"));
+    set(&mut o, "performer", c.get("audio_performer"));
+    set(&mut o, "thumbnail", c.get("thumbnail"));
+    set(&mut o, "capability", c.get("capability"));
+    // MEDIA-2: спойлер и альбом — только у фото/видео/GIF/файлов (не у голосовых и кружков)
+    if bool_of(c, "spoiler") && spoiler_kind(kind) {
+        o.insert("spoiler".into(), json!(true));
+    }
+    set(&mut o, "album_id", c.get("album_id"));
+    o
+}
+
+fn texts(v: Option<&Value>) -> Option<Value> {
+    let Some(Value::Array(a)) = v else { return None };
+    Some(Value::Array(a.iter().map(|t| json!({"text": t})).collect()))
+}
+
+/// Содержимое формата экспорта (внутреннее содержимое web `WireMessageContent`) → `Content` (proto3-JSON того же
+/// вида, что строил web `wireToV2`; `reply_to` — UUID ответа). Неизвестный вид — `InvalidField("kind")`.
+pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> Result<Value, ProtoError> {
+    let kind = str_of(c, "kind");
+    let mut out = Map::new();
+    let inner = match kind.as_str() {
+        "text" => {
+            let mut t = Map::new();
+            t.insert("text".into(), json!(str_of(c, "text")));
+            set(&mut t, "entities", entities_to_v2(c.get("entities")).as_ref());
+            if let Some(Value::Object(w)) = c.get("webpage") {
+                let mut p = Map::new();
+                for k in ["url", "site_name", "title", "description"] {
+                    set(&mut p, k, w.get(k));
+                }
+                if let Some(Value::Object(ph)) = w.get("photo") {
+                    p.insert("image".into(), Value::Object(media_to_v2(ph, &str_of(ph, "kind"))));
+                }
+                t.insert("preview".into(), Value::Object(p));
+            }
+            if let Some(Value::Array(packs)) = c.get("emoji_packs") {
+                t.insert("emoji_packs".into(), Value::Array(packs.iter().filter_map(pack_to_v2).collect()));
+            }
+            ("text", Value::Object(t))
+        }
+        "photo" | "video" | "voice" | "video_note" | "gif" | "file" => ("media", Value::Object(media_to_v2(c, &kind))),
+        "sticker" => {
+            let mut s = Map::new();
+            let pack = c.get("pack_ref").and_then(Value::as_object);
+            set(&mut s, "pack", pack.and_then(|p| p.get("name")));
+            // FR-075: id стикера в наборе (не file_id загрузки); стикер без набора — пусто
+            set(&mut s, "sticker_id", c.get("sticker_id"));
+            set(&mut s, "emoji", c.get("filename"));
+            let mut m = media_to_v2(c, "photo");
+            m.remove("caption");
+            s.insert("media".into(), Value::Object(m));
+            if let Some(p) = c.get("pack_ref").and_then(pack_to_v2) {
+                s.insert("pack_ref".into(), p);
+            }
+            ("sticker", Value::Object(s))
+        }
+        "location" => {
+            let mut l = Map::new();
+            set(&mut l, "latitude", c.get("lat"));
+            set(&mut l, "longitude", c.get("long"));
+            set(&mut l, "live_period_s", c.get("live_period"));
+            set(&mut l, "heading", c.get("heading"));
+            set(&mut l, "accuracy_m", c.get("accuracy"));
+            ("location", Value::Object(l))
+        }
+        "poll" => {
+            let mut p = Map::new();
+            set(&mut p, "question", c.get("question"));
+            set(&mut p, "options", texts(c.get("options")).as_ref());
+            for k in ["is_public", "is_multiple", "is_quiz", "correct", "solution", "no_revote", "shuffle", "hide_results"] {
+                set(&mut p, k, c.get(k));
+            }
+            if let Some(ms) = truthy(c.get("close_ms")).and_then(Value::as_f64) {
+                p.insert("close_ms".into(), json!((ms as i64).to_string()));
+            }
+            ("poll", Value::Object(p))
+        }
+        "poll_vote" => {
+            let mut v = Map::new();
+            if let Some(p) = truthy(c.get("poll")).and_then(Value::as_str) {
+                v.insert("poll".into(), ref_of_uuid(p));
+            }
+            set(&mut v, "option_indexes", c.get("options"));
+            // POLL-1: итоги анонимного опроса от автора
+            if truthy(c.get("tally")).is_some() {
+                v.insert("tally".into(), json!(true));
+                v.insert("counts".into(), c.get("counts").cloned().filter(|x| !x.is_null()).unwrap_or(json!([])));
+                set(&mut v, "voters", c.get("voters"));
+            }
+            ("poll_vote", Value::Object(v))
+        }
+        "poll_close" => {
+            let mut v = Map::new();
+            if let Some(p) = truthy(c.get("poll")).and_then(Value::as_str) {
+                v.insert("poll".into(), ref_of_uuid(p));
+            }
+            ("poll_close", Value::Object(v))
+        }
+        "task_offer" => {
+            let mut t = Map::new();
+            set(&mut t, "name", c.get("name"));
+            for k in ["description", "day", "start", "minutes", "due", "text"] {
+                set(&mut t, k, c.get(k));
+            }
+            set(&mut t, "steps", texts(c.get("steps")).as_ref());
+            ("task_offer", Value::Object(t))
+        }
+        "cloud_invite" => {
+            let mut t = Map::new();
+            set(&mut t, "container", c.get("container"));
+            for k in ["name", "role", "text"] {
+                set(&mut t, k, c.get(k));
+            }
+            ("cloud_invite", Value::Object(t))
+        }
+        "mod_report" => {
+            let mut r = Map::new();
+            set(&mut r, "group", c.get("report_group"));
+            for k in ["reason", "comment", "text"] {
+                set(&mut r, k, c.get(k));
+            }
+            if let Some(Value::Array(list)) = c.get("reported") {
+                let messages: Vec<Value> = list
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .map(|m| {
+                        let mut x = Map::new();
+                        x.insert("op_id".into(), json!(b64(&id_of_uuid(&str_of(m, "op_id")))));
+                        x.insert("author".into(), json!({"address": str_of(m, "author")}));
+                        set(&mut x, "text", m.get("text"));
+                        let ts = m.get("ts").and_then(Value::as_f64).unwrap_or(0.0);
+                        x.insert("ts_ms".into(), json!(((ts * 1000.0) as i64).to_string()));
+                        set(&mut x, "proof", m.get("proof"));
+                        Value::Object(x)
+                    })
+                    .collect();
+                r.insert("messages".into(), Value::Array(messages));
+            }
+            ("mod_report", Value::Object(r))
+        }
+        "article" => {
+            let mut a = Map::new();
+            for k in ["title", "markdown", "text"] {
+                set(&mut a, k, c.get(k));
+            }
+            if let Some(Value::Array(media)) = c.get("article_media") {
+                if !media.is_empty() {
+                    let list = media.iter().filter_map(Value::as_object).map(|m| Value::Object(media_to_v2(m, &str_of(m, "kind"))));
+                    a.insert("media".into(), Value::Array(list.collect()));
+                }
+            }
+            ("article", Value::Object(a))
+        }
+        "task_response" => {
+            let mut t = Map::new();
+            if let Some(o) = truthy(c.get("offer")).and_then(Value::as_str) {
+                t.insert("offer".into(), ref_of_uuid(o));
+            }
+            let accepted = truthy(c.get("accepted")).is_some();
+            t.insert("decision".into(), json!(if accepted { "TASK_DECISION_ACCEPTED" } else { "TASK_DECISION_DECLINED" }));
+            set(&mut t, "text", c.get("text"));
+            ("task_response", Value::Object(t))
+        }
+        _ => return Err(ProtoError::InvalidField("kind")),
+    };
+    out.insert(inner.0.into(), inner.1);
+    set(&mut out, "ttl_secs", c.get("ttl_secs"));
+    if truthy(c.get("silent")).is_some() {
+        out.insert("silent".into(), json!(true));
+    }
+    if truthy(c.get("invert_media")).is_some() {
+        out.insert("invert_media".into(), json!(true));
+    }
+    if let Some(r) = reply_to.filter(|r| !r.is_empty()) {
+        out.insert("reply_to".into(), ref_of_uuid(r));
+        // QUOTE-1: цитата — только вместе с ответом
+        let q = c.get("reply_quote").and_then(Value::as_object);
+        let quote = utf8_prefix(q.and_then(|q| q.get("text")).and_then(Value::as_str).unwrap_or(""), REPLY_QUOTE_MAX_BYTES);
+        if let (false, Some(q)) = (quote.is_empty(), q) {
+            let len = quote.encode_utf16().count() as f64;
+            let fits: Vec<Value> = match q.get("entities") {
+                Some(Value::Array(a)) => a
+                    .iter()
+                    .filter(|e| {
+                        let off = e.get("offset").and_then(Value::as_f64).unwrap_or(0.0);
+                        let l = e.get("length").and_then(Value::as_f64).unwrap_or(0.0);
+                        off + l <= len
+                    })
+                    .cloned()
+                    .collect(),
+                _ => vec![],
+            };
+            let mut x = Map::new();
+            x.insert("text".into(), json!(quote));
+            set(&mut x, "entities", entities_to_v2(Some(&Value::Array(fits))).as_ref());
+            set(&mut x, "offset", q.get("offset"));
+            out.insert("reply_quote".into(), Value::Object(x));
+        }
+    }
+    let (from, name) = (truthy(c.get("forwarded_from")), truthy(c.get("forwarded_name")));
+    if from.is_some() || name.is_some() {
+        let mut f = Map::new();
+        if let Some(a) = from {
+            f.insert("from_user".into(), json!({"address": a}));
+        }
+        set(&mut f, "from_name", name);
+        out.insert("forward".into(), Value::Object(f));
+    }
+    Ok(Value::Object(out))
+}
+
+/// То же, разобранным `Content` (proto3-JSON проверяется схемой).
+pub fn wire_to_content(c: &Map<String, Value>, reply_to: Option<&str>) -> Result<Content, ProtoError> {
+    serde_json::from_value(wire_to_content_json(c, reply_to)?).map_err(|_| ProtoError::Malformed)
+}
+
+fn uuid16(r: Option<&MessageRef>) -> Option<String> {
+    r.filter(|r| r.op_id.len() == 16).map(|r| uuid_of(&r.op_id))
+}
+
+/// Что содержимое значит для клиента (spec 035 T114, ENGINE-1): класс, содержимое строки формата экспорта
+/// (сообщение), ответ и разобранная мутация — клиенты больше не разбирают виды сами. JSON:
+/// `{"class": "message"|"mutation"|"service"|"stub", "wire"?, "replyTo"?, "mutation"?: {"kind": "edit", "target",
+/// "patch": {text?, entities?, webpage?, fields?}} | {"kind": "delete", "targets", "forEveryone"} | {"kind":
+/// "reaction", "target", "emoji"} | {"kind": "pin", "target", "pinned"} | {"kind": "receipt", "read", "targets"}}`.
+pub fn content_view(c: &Content) -> Value {
+    use content::Kind as K;
+    let class = match class_of(c) {
+        Class::Message => "message",
+        Class::Mutation => "mutation",
+        Class::Service => "service",
+        Class::Stub => "stub",
+    };
+    let mut o = Map::new();
+    o.insert("class".into(), json!(class));
+    if let Some(w) = content_to_wire(c) {
+        o.insert("wire".into(), w);
+    }
+    if let Some(r) = uuid16(c.reply_to.as_ref()) {
+        o.insert("replyTo".into(), json!(r));
+    }
+    let targets = |list: &[MessageRef]| -> Value { Value::Array(list.iter().filter_map(|r| uuid16(Some(r))).map(Value::String).collect()) };
+    let mutation = match &c.kind {
+        Some(K::Edit(e)) => {
+            let mut patch = Map::new();
+            if let Some(t) = &e.text {
+                let only = Content { kind: Some(K::Text(t.clone())), ..Default::default() };
+                if let Some(Value::Object(w)) = content_to_wire(&only) {
+                    for k in ["text", "entities", "webpage"] {
+                        if let Some(v) = w.get(k) {
+                            patch.insert(k.into(), v.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(l) = &e.location {
+                let only = Content { kind: Some(K::Location(l.clone())), ..Default::default() };
+                if let Some(w) = content_to_wire(&only) {
+                    patch.insert("fields".into(), w);
+                }
+            }
+            uuid16(e.target.as_ref()).map(|t| json!({"kind": "edit", "target": t, "patch": patch}))
+        }
+        Some(K::Delete(d)) => Some(json!({"kind": "delete", "targets": targets(&d.targets), "forEveryone": d.for_everyone})),
+        Some(K::Reaction(r)) => {
+            let emoji = if r.remove { "" } else { r.emoji.as_str() };
+            uuid16(r.target.as_ref()).map(|t| json!({"kind": "reaction", "target": t, "emoji": emoji}))
+        }
+        Some(K::Pin(p)) => uuid16(p.target.as_ref()).map(|t| json!({"kind": "pin", "target": t, "pinned": !p.unpin})),
+        Some(K::Receipt(r)) => Some(json!({
+            "kind": "receipt",
+            "read": r.kind == crate::pb::parvane::msg::v2::ReceiptKind::Read as i32,
+            "targets": targets(&r.messages),
+        })),
+        _ => None,
+    };
+    if let Some(m) = mutation {
+        o.insert("mutation".into(), m);
+    }
+    Value::Object(o)
 }
 
 /// Тело строки истории: `{"content": …, "reply_to"?: uuid}` (ключи по алфавиту — каноничный JSON).

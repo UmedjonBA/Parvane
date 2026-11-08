@@ -455,6 +455,9 @@ class ParvaneStore {
             "service" -> TdApi.MessageCustomServiceAction(c.optString("text"))
             // Режим «усиленная приватность» (L2-1): смена режима — видимое служебное сообщение чата,
             // текст EN/RU по локали; `anon` — автор записи группы неизвестен
+            // spec 035 (US5, STUB_CRITICAL): вид из диапазона критичных номеров более новой версии — не «не
+            // поддерживается», а «обновите приложение» (событие ядра с "critical": true, как desktop/web)
+            "unsupported" -> if (c.optBoolean("critical")) TdApi.MessageCustomServiceAction(SeamText.of("stub_critical")!!) else TdApi.MessageUnsupported()
             L2Mode.CONTENT_KIND -> TdApi.MessageCustomServiceAction(
                 L2Mode.serviceText(c, out, if (from.isEmpty() || c.optBoolean("anon")) "" else displayName(from)))
             else -> TdApi.MessageUnsupported()

@@ -9,7 +9,7 @@ import { initSync, runConformanceVectors } from '../../lib/parvane-protocol/parv
 import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
 } from './v2/callMap';
-import { v2Class, type V2Content, v2ToWire } from './v2/contentMap';
+import { contentView, type V2Content, wireOfContent } from './v2/contentMap';
 import { decodeIceCandidate } from './iceCandidate';
 import { linkCommitment, sasCodeV2 } from './linking';
 
@@ -101,12 +101,12 @@ describe('векторы протокола v2 через WASM-движок', ()
     it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
       const content = c.expect.content!;
       // движок велел показать заглушку — клиент содержимое не разбирает
-      const got = c.expect.disposition === 'stub' ? 'stub' : v2Class(content);
+      const got = c.expect.disposition === 'stub' ? 'stub' : contentView(content).class;
       expect(got).toBe(c.client!.class);
       if (c.client!.class === 'message') {
-        expect(v2ToWire(content)).toMatchObject(c.client!.v1!);
+        expect(wireOfContent(content)).toMatchObject(c.client!.v1!);
       } else if (c.expect.disposition !== 'stub') {
-        expect(v2ToWire(content)).toBeUndefined();
+        expect(wireOfContent(content)).toBeUndefined();
       }
     });
   });

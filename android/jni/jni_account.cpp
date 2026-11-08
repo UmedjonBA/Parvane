@@ -914,12 +914,18 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeFingerprint(JN
 
 // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────────
 
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateAttach(JNIEnv *env, jclass, jstring localJson) {
+// dirtyJson — виды, правленные без журнала (T150, файл state-dirty шва): уходят в журнал при подключении разницей от
+// показанного ДО правки (база — state-base прошлого запуска), раньше проекции снимка (spec 035 T134). Отдельный синк
+// после подключения считал разницу от только что сведённого и откатывал правки другого устройства.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateAttach(JNIEnv *env, jclass, jstring localJson, jstring dirtyJson) {
     const auto s = v2Ready();
     if (!s) return jout(env, "");
     try {
         const auto local = json::parse(jstr(env, localJson), nullptr, false);
-        const auto snap = s->stateAttach(local.is_object() ? local : json::object());
+        const auto dirtyJ = json::parse(jstr(env, dirtyJson), nullptr, false);
+        std::vector<std::string> dirtyKinds;
+        if (dirtyJ.is_array()) for (const auto &k : dirtyJ) if (k.is_string()) dirtyKinds.push_back(k.get<std::string>());
+        const auto snap = s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds);
         return jout(env, snap.is_object() ? snap.dump() : std::string());
     } catch (const std::exception &e) {
         LOGE("журнал состояния: %s", e.what());
@@ -950,6 +956,26 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSchedule
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeStateMarkSent(JNIEnv *env, jclass, jstring opIdB64) {
     if (const auto s = v2Ready()) s->stateMarkSent(jstr(env, opIdB64));
+}
+
+// spec 035 (US8, FR-075): избранные стикеры — объекты FAVED_STICKER модели: [{set_id, sticker_id, added_ms}]
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateFavedStickers(JNIEnv *env, jclass) {
+    const auto s = v2Ready();
+    if (!s) return jout(env, "");
+    try { return jout(env, s->stateFavedStickers().dump()); } catch (const std::exception &) { return jout(env, ""); }
+}
+
+// «В избранное» / «Убрать из избранного» — намерение модели fave_sticker; true — ушло в журнал.
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateFaveSticker(JNIEnv *env, jclass, jstring setId, jstring stickerId, jboolean on) {
+    const auto s = v2Ready();
+    try { return s && s->stateFaveSticker(jstr(env, setId), jstr(env, stickerId), on == JNI_TRUE) ? JNI_TRUE : JNI_FALSE; }
+    catch (const std::exception &) { return JNI_FALSE; }
+}
+
+// spec 035 (US5): журнал личного состояния закрыт для записи более новой версией (критичный вид) — «обновите приложение».
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateWriteBlocked(JNIEnv *, jclass) {
+    const auto s = v2Ready();
+    try { return s && s->stateWriteBlocked() ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &) { return JNI_FALSE; }
 }
 
 // Любая запись журнала по имени (`callSet` — история звонков, …): true — ушла.

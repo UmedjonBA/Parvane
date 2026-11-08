@@ -1,7 +1,9 @@
-// spec 035 (до T115): прежнее хранилище web — IndexedDB `parvane-e2e-v2`, ключ в экземпляре, PIN перешифровкой
-// всех записей (находки PV-001/PV-002). Новые профили сюда не попадают: их ведёт хранилище движка
-// (`secureStorage.ts`). Профили, созданные до spec 035, обслуживаются этим модулем без изменений, пока
-// перенос T115 (Phase 10/11) не переложит их записи в `parvane-store-v3`; после переноса модуль удаляется.
+// spec 035 T115: прежнее хранилище web — IndexedDB `parvane-e2e-v2` (ключ в экземпляре, PIN перешифровкой всех
+// записей — находки PV-001/PV-002). Новые профили сюда не попадают: их ведёт хранилище движка (`secureStorage.ts`).
+// Профиль, созданный до spec 035, при первом открытии (с PIN — после ввода PIN) разово переносится в
+// `parvane-store-v3` (`secureStorage.ts migrateLegacyIn`): этот модуль только читает его записи и ставит отметку
+// «перенесено»; записей прежнего профиля он больше не пишет и не перешифровывает. Удаление прежней базы и модуля —
+// вручную по решению D2 (T149).
 import {
   createStore, del, delMany, get, promisifyRequest, set, setMany,
 } from 'idb-keyval';
@@ -269,6 +271,7 @@ export class LegacyE2eStorage {
       del(stateId(user), STORAGE),
       del(keyId(user), STORAGE),
       del(pinId(user), STORAGE),
+      del(`migrated:${user}`, STORAGE),
       LegacyE2eStorage.clearRecords(user),
     ]);
   }
@@ -288,7 +291,6 @@ export class LegacyE2eStorage {
 const PIN_ITERATIONS = 310_000;
 // Новый PIN — не короче: копию профиля перебирают офлайн, и 4 символа × PBKDF2 — часы на видеокарте (WEB-15).
 // Прежние короткие PIN по-прежнему открывают хранилище; сменить на короткий нельзя
-const STORAGE_PIN_MIN_LENGTH = 8;
 const PIN_CHECK_PLAINTEXT = 'parvane-pin-check-v1';
 
 type PinRecord = { version: number; salt: ArrayBuffer; check: EncryptedRecord };
@@ -379,114 +381,59 @@ export function legacyLockStorage(user: string) {
 }
 
 // Перешифровать все записи пользователя с ключа `from` на ключ `to`
-async function rekeyAll(user: string, from: CryptoKey, to: CryptoKey) {
-  const state = await get<EncryptedRecord>(stateId(user), STORAGE);
-  if (state) {
-    const plain = await decryptWith<unknown>(from, additionalData(user), state);
-    if (plain === undefined) throw new Error('E2E state cannot be re-keyed: current key does not open it.');
-    await set(stateId(user), await encryptWith(to, additionalData(user), plain), STORAGE);
-  }
-  // Именованные записи — байтами как есть (среди них двоичные: состояние
-  // движка v2, архивы паков — JSON они не являются), одним чтением диапазона
-  // и записью пачками
-  const prefix = recordId(user, '');
-  const { keys: userKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
-  const rekeyed = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
+// ── разовый перенос (T115) ─────────────────────────────────────────────────────────────────────────────────
+
+/** Отметка переноса: `pending` — id профиля `parvane-store-v3`, в который идёт перенос (повтор после прерывания —
+ * в тот же профиль, частичная копия перезаписывается); `done` — перенос сверен и переключён. */
+export type LegacyMigrationMark = { pending?: string; done?: string; at?: number; records?: number };
+
+function migrationId(user: string) {
+  return `migrated:${user}`;
+}
+
+export async function legacyMigrationMark(user: string): Promise<LegacyMigrationMark | undefined> {
+  return get<LegacyMigrationMark>(migrationId(user), STORAGE);
+}
+
+/** Отметка «перенесено» (единственная запись, которую перенос делает в прежней базе; данные не трогаются). */
+export async function legacySetMigrationMark(user: string, mark: LegacyMigrationMark) {
+  await set(migrationId(user), mark, STORAGE);
+}
+
+/** Всё прежнее хранилище адреса открытым текстом — для разового переноса. `undefined` — профиль под PIN и
+ * не разблокирован. Запись, которая не открывается своим ключом, пропускается (её не открыл бы и прежний код). */
+export async function legacyExportAll(user: string): Promise<
+{ state?: Uint8Array; records: [name: string, bytes: Uint8Array][]; skipped: number } | undefined
+> {
+  const key = await resolveProtectionKey(user);
+  if (!key) return undefined;
+  const open = async (aad: ArrayBuffer, record: EncryptedRecord | undefined) => {
     if (!record || record.version !== STORAGE_VERSION) return undefined;
-    const name = userKeys[index].slice(prefix.length);
-    const aad = additionalData(user, name);
     try {
-      const plain = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: record.iv, additionalData: aad }, from, record.ciphertext,
-      );
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, to, plain);
-      return [userKeys[index], { version: STORAGE_VERSION, iv: iv.buffer, ciphertext }] as [string, EncryptedRecord];
+      return new Uint8Array(await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: record.iv, additionalData: aad }, key, record.ciphertext,
+      ));
     } catch {
       return undefined;
     }
-  });
-  const entries = rekeyed.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
-  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
-    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
-  }
-}
-
-// Установить PIN (пусто — снять). Требует разблокированного хранилища
-export async function legacySetStoragePin(user: string, pin: string) {
-  const current = await resolveProtectionKey(user);
-  if (!current) throw new Error('Storage is locked: unlock with the current PIN first.');
-  if (pin && pin.length < STORAGE_PIN_MIN_LENGTH) throw new Error('Storage PIN is too short.');
-  if (!pin) {
-    // Снятие PIN: обратно на IndexedDB-ключ
-    const fresh = await generateProtectionKey();
-    await rekeyAll(user, current, fresh);
-    await set(keyId(user), fresh, STORAGE);
-    await del(pinId(user), STORAGE);
-    unlockedKeys.delete(user);
-    return;
-  }
-  const salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
-  const next = await derivePinKey(pin, salt);
-  await rekeyAll(user, current, next);
-  const check = await encryptWith(next, additionalData(user, 'pin-check'), PIN_CHECK_PLAINTEXT);
-  await set(pinId(user), { version: STORAGE_VERSION, salt, check } satisfies PinRecord, STORAGE);
-  await del(keyId(user), STORAGE);
-  unlockedKeys.set(user, next);
-}
-
-// Смена ника (spec 026): всё хранилище пользователя — под новым адресом. Адрес входит в AAD записей, поэтому
-// записи перешифровываются тем же ключом с новым AAD; ключ (либо PIN) переходит к новому адресу. Прежние
-// записи стираются после записи новых. Требует разблокированного хранилища
-export async function legacyMigrateStorageUser(oldUser: string, newUser: string) {
-  if (oldUser === newUser) return;
-  const key = await resolveProtectionKey(oldUser);
-  if (!key) throw new Error('Storage is locked: unlock with the PIN first.');
-  const reseal = async (aadFrom: ArrayBuffer, aadTo: ArrayBuffer, record: EncryptedRecord) => {
-    const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: record.iv, additionalData: aadFrom }, key, record.ciphertext,
-    );
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aadTo }, key, plain);
-    return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext } satisfies EncryptedRecord;
   };
-  const state = await get<EncryptedRecord>(stateId(oldUser), STORAGE);
-  if (state && state.version === STORAGE_VERSION) {
-    await set(stateId(newUser), await reseal(additionalData(oldUser), additionalData(newUser), state), STORAGE);
-  }
-  const prefix = recordId(oldUser, '');
-  const { keys: oldKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
-  const moved = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
-    if (!record || record.version !== STORAGE_VERSION) return undefined;
-    const name = oldKeys[index].slice(prefix.length);
-    try {
-      const sealed = await reseal(additionalData(oldUser, name), additionalData(newUser, name), record);
-      return [recordId(newUser, name), sealed] as [string, EncryptedRecord];
-    } catch {
-      return undefined;
-    }
+  const state = await open(additionalData(user), await get<EncryptedRecord>(stateId(user), STORAGE));
+  const prefix = recordId(user, '');
+  const { keys: userKeys, values } = await entriesByPrefix<EncryptedRecord>(prefix);
+  let skipped = 0;
+  const opened = await mapInBatches(values, CRYPTO_BATCH, async (record, index) => {
+    const name = userKeys[index].slice(prefix.length);
+    const bytes = await open(additionalData(user, name), record);
+    if (!bytes) skipped += 1;
+    return bytes ? [name, bytes] as [string, Uint8Array] : undefined;
   });
-  const entries = moved.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
-  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
-    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
-  }
-  const pin = await get<PinRecord>(pinId(oldUser), STORAGE);
-  if (pin) {
-    const check = await encryptWith(key, additionalData(newUser, 'pin-check'), PIN_CHECK_PLAINTEXT);
-    await set(pinId(newUser), { version: STORAGE_VERSION, salt: pin.salt, check } satisfies PinRecord, STORAGE);
-    unlockedKeys.set(newUser, key);
-  } else {
-    await set(keyId(newUser), key, STORAGE);
-  }
-  await delMany([stateId(oldUser), keyId(oldUser), pinId(oldUser), ...oldKeys], STORAGE);
-  unlockedKeys.delete(oldUser);
+  return {
+    state,
+    records: opened.filter((entry): entry is [string, Uint8Array] => entry !== undefined),
+    skipped,
+  };
 }
 
-// ── Именованные секреты сессии под тем же ключом хранилища ─────────────────
-// P-14: секрет доверия 2FA — раньше лежал в localStorage открытым текстом.
-// P-39: пароль аккаунта НЕ сохраняется вовсе; «keep me signed in» держит
-// JWT (живёт сутки, отзываемый, привязан к устройству) — им сессия
-// возобновляется после reload без ввода пароля.
 async function saveSecret(user: string, name: string, value: string) {
   const key = await resolveProtectionKey(user);
   if (!key) throw new Error('Storage is locked.');
@@ -527,6 +474,11 @@ export async function legacyClearSecureSession(user: string) {
 
 export const legacyStorageInternals = {
   store: STORAGE,
+  // Тесты: профиль под PIN в прежнем формате (как его оставляла прежняя установка PIN)
+  derivePinKey,
+  encryptWith,
+  pinCheckPlaintext: PIN_CHECK_PLAINTEXT,
+  storageVersion: STORAGE_VERSION,
   keyId,
   stateId,
   pinId,

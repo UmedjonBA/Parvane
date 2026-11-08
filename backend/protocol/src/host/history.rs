@@ -20,6 +20,9 @@ use crate::error::ProtoError;
 use crate::history::{self, ChatKind, HistorySession};
 use crate::pb::parvane::history::v1::{AppendResponse, ChatSummary, Checkpoint, CommitResponse, HistoryOp, ReadMark, RowState, SegmentRef, Summary};
 use crate::pb::parvane::state::v1::Peer;
+use crate::pb::parvane::msg::v2::Content;
+use crate::model::capabilities::GroupFacts;
+use crate::model::views;
 
 type R = Result<Value, String>;
 
@@ -102,6 +105,27 @@ pub fn from_json<T: DeserializeOwned>(v: &Value) -> Result<T, String> {
     };
     ids_in(&mut v);
     serde_json::from_value(v).map_err(|_| err(ProtoError::Malformed))
+}
+
+/// `Content` из proto3-JSON (объектом либо строкой).
+fn content_arg(v: &Value) -> Result<Content, String> {
+    let v = match v {
+        Value::String(s) => serde_json::from_str::<Value>(s).map_err(|_| err(ProtoError::Malformed))?,
+        other => other.clone(),
+    };
+    serde_json::from_value(v).map_err(|_| err(ProtoError::Malformed))
+}
+
+/// Содержимое формата экспорта (`wire`, объектом либо строкой).
+fn wire_arg(a: &Args<'_>) -> Result<serde_json::Map<String, Value>, String> {
+    match a.get("wire") {
+        Some(Value::Object(m)) => Ok(m.clone()),
+        Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
+            Ok(Value::Object(m)) => Ok(m),
+            _ => Err(err(ProtoError::Malformed)),
+        },
+        _ => Err(missing("wire")),
+    }
 }
 
 struct Args<'a>(&'a Value);
@@ -294,6 +318,24 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
             }
             "historyNewStamp" => to_json(&history::new_stamp(a.io("tsMs", now_ms())?)),
             "historyUnreadKinds" => json!(history::NON_COUNTED_KINDS),
+            // spec 035 T114 (ENGINE-1): виды содержимого разбирает движок, не клиент
+            "contentView" => {
+                let c: Content = content_arg(a.get("content").ok_or_else(|| missing("content"))?)?;
+                views::content_view(&c)
+            }
+            "contentOfWire" => {
+                let wire = wire_arg(&a)?;
+                let c = views::wire_to_content(&wire, a.get("replyTo").and_then(Value::as_str)).map_err(err)?;
+                serde_json::to_value(&c).map_err(|_| err(ProtoError::Malformed))?
+            }
+            // GROUP-2 (сверка conformance): скрыл бы приёмный фильтр содержимое автора с ролью `role` при правах
+            // группы по умолчанию `perms`
+            "groupContentHidden" => {
+                let perms: crate::pb::parvane::group::v2::Permissions =
+                    serde_json::from_value(a.get("perms").cloned().unwrap_or(json!({}))).map_err(|_| err(ProtoError::Malformed))?;
+                let c = views::wire_to_content(&wire_arg(&a)?, None).map_err(err)?;
+                json!(GroupFacts::hidden_for_role(perms, a.get("role").and_then(Value::as_str).unwrap_or("member"), &c))
+            }
             _ => return Err(super::call::UNKNOWN_CALL.to_string()),
         })
     })();

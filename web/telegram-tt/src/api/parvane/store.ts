@@ -5,6 +5,7 @@
 import type {
   ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiMessage, ApiUser, ApiWebPage,
 } from '../types';
+import type { ChatCapabilities } from './v2/controller';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireStoredMessage,
 } from './wire';
@@ -62,6 +63,10 @@ const STUB_FALLBACK = {
 };
 
 export class ParvaneStore {
+  // GROUP-2 (spec 035 T114): что можно композеру в группе — решает модель движка (`capabilities`); ставит
+  // провайдер. `defaultBannedRights` — только показ прав группы по умолчанию (экран «Разрешения»)
+  static capabilitiesOf?: (address: string) => ChatCapabilities | undefined;
+
   self = '';
 
   // Карточки превью ссылок по id (`wp<uuid>`): история из кэша отдаёт их вместе с сообщениями (`fetchMessages`),
@@ -595,6 +600,8 @@ export class ParvaneStore {
     const selfMember = info.members.find(({ address }) => address === this.self);
     const selfRole = selfMember?.role;
     if (this.isPublicPreview(info)) return this.buildPublicPreviewChat(info);
+    const defaults = toBannedRights(info.default_permissions);
+    const caps = ParvaneStore.capabilitiesOf?.(info.group_id);
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
@@ -604,9 +611,16 @@ export class ParvaneStore {
       // tt узнаёт админа только по adminRights: Manage-экраны, постинг в
       // канале, кнопки модерации. Права гранулярные (spec 003); legacy-админ
       // без явного набора от сервера приходит с полным
-      adminRights: selfRole === 'admin' ? toAdminRights(selfMember?.admin_rights, isChannel) : undefined,
+      // Меню сообщений (удалить у всех чужое, закреп) — по решению движка (`capabilities`, T114)
+      adminRights: selfRole === 'admin'
+        ? adminRightsWithCapabilities(toAdminRights(selfMember?.admin_rights, isChannel), caps) : undefined,
       // Права по умолчанию — только у групп: в канале пишут владелец и админы
-      defaultBannedRights: !isChannel ? toBannedRights(info.default_permissions) : undefined,
+      defaultBannedRights: !isChannel ? defaults : undefined,
+      // Сверх прав по умолчанию (немота участника и т. п.) — тем же решением движка; запрет, совпадающий с правом
+      // по умолчанию, второй раз не ставится (tt показывает по нему «запрещено в группе», а не «вас ограничили»)
+      currentUserBannedRights: !isChannel
+        ? extraBannedRights(bannedRightsFromCapabilities(caps), defaults)
+        : undefined,
       // Фото группы — открытый объект cloud, как аватар пользователя: tt
       // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
       avatarPhotoId: info.avatar || undefined,
@@ -1037,6 +1051,47 @@ export function normalizePermissions(perms?: WireDefaultPermissions): Required<W
 }
 
 // Разрешения → запреты tt (`ApiChatBannedRights`: `true` = запрещено)
+/** Запреты композера tt по решению движка (`Capabilities`); решения нет (модель не открыта) — `undefined`. */
+export function bannedRightsFromCapabilities(c?: ChatCapabilities): ApiChatBannedRights | undefined {
+  if (!c) return undefined;
+  const out: ApiChatBannedRights = {};
+  if (!c.send_text) {
+    out.sendMessages = true;
+    out.sendPlain = true;
+  }
+  if (!c.send_media) {
+    out.sendMedia = true;
+    out.sendPhotos = true;
+    out.sendVideos = true;
+    out.sendRoundvideos = true;
+    out.sendAudios = true;
+    out.sendVoices = true;
+    out.sendDocs = true;
+  }
+  if (!c.send_stickers) {
+    out.sendStickers = true;
+    out.sendGifs = true;
+  }
+  if (!c.send_polls) out.sendPolls = true;
+  if (!c.send_links) out.embedLinks = true;
+  if (!c.pin) out.pinMessages = true;
+  return out;
+}
+
+/** Права админа для меню сообщений tt: «удалить у всех» чужое и закреп — как решил движок (`Capabilities`). */
+export function adminRightsWithCapabilities(rights: ApiChatAdminRights, c?: ChatCapabilities): ApiChatAdminRights {
+  if (!c) return rights;
+  return { ...rights, deleteMessages: c.delete_everyone || undefined, pinMessages: c.pin || undefined };
+}
+
+/** Запреты решения движка, которых нет среди запретов по умолчанию; нет таких — `undefined`. */
+export function extraBannedRights(rights: ApiChatBannedRights | undefined, defaults: ApiChatBannedRights) {
+  if (!rights) return undefined;
+  const extra = Object.fromEntries(Object.entries(rights)
+    .filter(([key, value]) => value && !defaults[key as keyof ApiChatBannedRights])) as ApiChatBannedRights;
+  return Object.keys(extra).length ? extra : undefined;
+}
+
 export function toBannedRights(perms?: WireDefaultPermissions): ApiChatBannedRights {
   const p = normalizePermissions(perms);
   const out: ApiChatBannedRights = {};
