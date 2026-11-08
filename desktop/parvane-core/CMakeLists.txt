@@ -55,6 +55,7 @@ add_library(parvane_core STATIC
     src/engine_store.cpp
     src/engine_host.cpp
     src/migrate_legacy.cpp
+    src/state_model.cpp
     src/gen/model.cpp
     src/local_files.cpp
     src/keybackup.cpp

@@ -145,6 +145,18 @@ Step Host::step(const std::string &name, const json &args) {
     return st;
 }
 
+Step Host::adoptStateKeys(const PvClient *client) {
+    std::lock_guard<std::mutex> lk(mu_);
+    Step st;
+    auto out = parseOut(pv_engine_adopt_state_keys(e_, client));
+    if (isError(out)) {
+        st.error = out["error"].get<std::string>();
+        return st;
+    }
+    driveLocked(std::move(out), st);
+    return st;
+}
+
 json Host::read(const std::string &name, const json &args) {
     std::lock_guard<std::mutex> lk(mu_);
     for (int i = 0; i < 8; ++i) {

@@ -1725,9 +1725,19 @@ void StateSyncNow() {
 			});
 			return;
 		}
-		crl::on_main([snap = r["snapshot"], generation] {
+		// spec 035 (US5): журнал закрыт для записи более новой версией — правки отсюда не уходят, сказать один раз
+		const auto blocked = s->stateWriteBlocked();
+		crl::on_main([snap = r["snapshot"], generation, blocked] {
 			if (!AccountGenerationIs(generation)) {
 				return;
+			}
+			static auto told = false;
+			if (blocked && !told) {
+				told = true;
+				LOG(("Parvane: v2: журнал состояния закрыт для записи более новой версией"));
+				if (const auto window = Core::App().activeWindow()) {
+					window->showToast(tr::lng_parvane_write_blocked(tr::now));
+				}
 			}
 			if (const auto session = g_sessionWeak.get()) {
 				ProjectState(session, snap);

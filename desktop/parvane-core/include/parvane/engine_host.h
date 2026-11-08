@@ -22,6 +22,7 @@
 #include "parvane/store_fs.h"
 
 struct PvEngine;
+struct PvClient;
 
 namespace parvane::engine {
 
@@ -54,6 +55,9 @@ public:
     Step submit(const json &intent) { return step("submit", intent); }
     Step ingest(const json &input) { return step("ingest", input); }
     Step tick(std::int64_t nowMs) { return step("tick", json{{"now_ms", std::to_string(nowMs)}}); }
+
+    // Переходный период (T125): ключи личного состояния прежнего клиента — в модель (ключи не выходят из движка).
+    Step adoptStateKeys(const PvClient *client);
 
     // Чтение (`historyPage`, `chatList`, `viewState`, `viewGroup`, `capabilities`, `engineInfo`). Ответ
     // `{pending: store_reads}` хост дочитывает сам и повторяет вызов. Ошибка — `{"error": вид}`.
