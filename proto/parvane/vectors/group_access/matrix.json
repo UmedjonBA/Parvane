@@ -1,0 +1,19 @@
+{
+  "suite": "group_access",
+  "description": "spec 035 (contracts/group-access.md, FR-070, PV-006/PV-007, GROUP-3): какие записи журнала группы сервер отдаёт по group.state.sync каждой роли запрашивающего. Ожидания написаны руками по матрице. Факты роли: member — действующий участник; window — последнее окно членства (none — никогда не вступал, closed — вышел, исключён или забанен после вступления); banned — в списке забаненных; link — передан invite_link_id действующей ссылки; proof — invite_proof (none, valid — верная свежая подпись ключом этой ссылки, invalid — неверная или несвежая); pending — заявка в group_join_requests_v2. Ответ: all — записи (after, H]; upto_exit — (after, exit_v] последнего окна (exit_v — версия записи выхода, исключения или бана); forbidden — Forbidden. Проверяет messenger v2_groups::tests::access_matrix_* и живой parvane-integration --test v2_group_access_live.",
+  "cases": [
+    { "name": "member", "row": 1, "viewer": { "member": true, "window": "open", "banned": false, "link": false, "proof": "none", "pending": false }, "expect": { "private": "all", "public": "all" } },
+    { "name": "former_left_or_removed", "row": 2, "viewer": { "member": false, "window": "closed", "banned": false, "link": false, "proof": "none", "pending": false }, "expect": { "private": "upto_exit", "public": "all" } },
+    { "name": "former_banned", "row": 3, "viewer": { "member": false, "window": "closed", "banned": true, "link": false, "proof": "none", "pending": false }, "expect": { "private": "upto_exit", "public": "forbidden" } },
+    { "name": "invited_with_proof", "row": 4, "viewer": { "member": false, "window": "none", "banned": false, "link": true, "proof": "valid", "pending": false }, "expect": { "private": "all", "public": "all" } },
+    { "name": "invited_link_id_only", "row": 5, "viewer": { "member": false, "window": "none", "banned": false, "link": true, "proof": "none", "pending": false }, "expect": { "private": "forbidden", "public": "all" } },
+    { "name": "invited_bad_proof", "row": 5, "viewer": { "member": false, "window": "none", "banned": false, "link": true, "proof": "invalid", "pending": false }, "expect": { "private": "forbidden", "public": "all" } },
+    { "name": "former_with_live_link_no_proof", "row": 6, "viewer": { "member": false, "window": "closed", "banned": false, "link": true, "proof": "none", "pending": false }, "expect": { "private": "upto_exit", "public": "all" } },
+    { "name": "former_with_proof_rejoining", "row": 7, "viewer": { "member": false, "window": "closed", "banned": false, "link": true, "proof": "valid", "pending": false }, "expect": { "private": "all", "public": "all" } },
+    { "name": "pending_approval_no_fresh_proof", "row": 8, "viewer": { "member": false, "window": "none", "banned": false, "link": false, "proof": "none", "pending": true }, "expect": { "private": "all", "public": "all" } },
+    { "name": "pending_approval_with_proof", "row": 8, "viewer": { "member": false, "window": "none", "banned": false, "link": true, "proof": "valid", "pending": true }, "expect": { "private": "all", "public": "all" } },
+    { "name": "banned_outsider", "row": 9, "viewer": { "member": false, "window": "none", "banned": true, "link": true, "proof": "valid", "pending": false }, "expect": { "private": "forbidden", "public": "forbidden" } },
+    { "name": "banned_outsider_no_link", "row": 9, "viewer": { "member": false, "window": "none", "banned": true, "link": false, "proof": "none", "pending": false }, "expect": { "private": "forbidden", "public": "forbidden" } },
+    { "name": "outsider", "row": 10, "viewer": { "member": false, "window": "none", "banned": false, "link": false, "proof": "none", "pending": false }, "expect": { "private": "forbidden", "public": "all" } }
+  ]
+}

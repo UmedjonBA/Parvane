@@ -1000,6 +1000,26 @@
       },
       "expect": {
         "content": {
+          "group_avatar_key": {
+            "avatar_key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+            "file_id": "photo-1",
+            "info_version": "7"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "ca012d0a0770686f746f2d31122007070707070707070707070707070707070707070707070707070707070707071807"
+      },
+      "name": "group-avatar-key"
+    },
+    {
+      "client": {
+        "class": "service"
+      },
+      "expect": {
+        "content": {
           "state_key": {
             "key_version": 2,
             "state_key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",

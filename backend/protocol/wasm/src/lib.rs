@@ -827,6 +827,8 @@ impl PvClient {
         set(&o, "headSeq", &JsValue::from_f64(r.head_seq as f64));
         set(&o, "more", &JsValue::from_bool(r.more));
         set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
+        // spec 035 (S7-22): курсор внутри обрезанного журнала — взять снимок
+        set(&o, "needSnapshot", &JsValue::from_bool(r.need_snapshot));
         if let Some(e) = r.missing_epoch {
             set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
         }
@@ -972,6 +974,7 @@ impl PvClient {
         set(&o, "more", &JsValue::from_bool(r.more));
         set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
         set(&o, "authorsBehind", &JsValue::from_bool(r.authors_behind));
+        set(&o, "needSnapshot", &JsValue::from_bool(r.need_snapshot));
         if let Some(e) = r.missing_epoch {
             set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
         }
@@ -1316,7 +1319,7 @@ impl PvClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64_std(&s.avatar_key), "migratedFrom": s.migrated_from,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64_std(&self.inner.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch,
             // ENG-06: и после ухода устройства участника — новую эпоху начинает тот, кто вправе
             "epochStale": s.epoch_stale || self.inner.group_rekey_pending(&s.group.id),

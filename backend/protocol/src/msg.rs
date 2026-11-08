@@ -419,6 +419,20 @@ pub fn is_trackable(c: &Content) -> bool {
     )
 }
 
+/// `Sticker.sticker_id` (spec 035, FR-075, R13, PACK-1): id элемента манифеста архива набора — имя файла записи
+/// индекса архива (basename, `.webp`/`.png`/`.tgs`/`.webm`, ≤ 64 байт); пусто — стикер без набора. Не `file_id`
+/// загрузки: у каждой загрузки он свой, а id манифеста одинаков у всех, кто установил набор (избранное, PACK-3).
+pub fn is_pack_sticker_id(id: &str) -> bool {
+    if id.is_empty() {
+        return true;
+    }
+    if id.len() > 64 || id.contains('/') || id.contains('\\') {
+        return false;
+    }
+    let Some((stem, ext)) = id.rsplit_once('.') else { return false };
+    !stem.is_empty() && matches!(ext.to_ascii_lowercase().as_str(), "webp" | "png" | "tgs" | "webm")
+}
+
 /// Мутация (правка/удаление/реакция/закреп/квитанция) и её цели.
 pub fn mutation_targets(c: &Content) -> Vec<&[u8]> {
     fn one(r: &Option<MessageRef>) -> Vec<&[u8]> {

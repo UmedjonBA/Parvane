@@ -1242,6 +1242,21 @@ describe('TYPING-1: «печатает» в чате v2 — только эфе�
       + '[\\s\\S]{0,300}\\(void\\)s->sendTyping\\(chat\\);'));
     expect(readAndroidJni()).not.toMatch(/msgTyping\(|msg\.typing\./);
   });
+
+  it('spec 035 (FR-076): «печатает» группы — только подпись с channel_id, прежней подписи нет нигде', () => {
+    // Клиенты подписывают «печатает» группы только движком, каналом эпохи
+    const client = readRepo('backend/protocol/src/client.rs');
+    expect(client).toContain('group::sign_group_typing(&send, &state.group, epoch, &c.id, &nonce, &payload)');
+    const group = readRepo('backend/protocol/src/group.rs');
+    expect(group).not.toContain('fn verify_group_typing_legacy');
+    expect(group).toContain('if channel_id.len() != crate::ephemeral::CHANNEL_ID_LEN {');
+    expect(readRepo('backend/protocol/src/sign.rs')).not.toContain('pub const GROUP_TYPING: &[u8]');
+    expect(readRepo('proto/parvane/msg/v2/msg.proto')).not.toContain('принимается сервером от старых клиентов');
+    // Своей подписи «печатает» у клиентов нет — только движок
+    [readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts'), readDesktopSource(), readAndroidJni()].forEach((src) => {
+      expect(src).not.toContain('parvane/v2/group-typing');
+    });
+  });
 });
 
 describe('REVOKE-1: отзыв своего устройства на v2', () => {
@@ -1386,19 +1401,28 @@ describe('RECOVER-1: смена корня собеседника, восста�
   });
 });
 
-describe('GPHOTO-1: фото частной группы шифруется, секрет — в SetInfo.avatar_key', () => {
+describe('GPHOTO-1: фото частной группы шифруется, секрет — конвертом эпохи (spec 035)', () => {
   const r = rule('GPHOTO-1') as unknown as {
     secretBytes: number;
     derive: { domain: string; labels: string[] };
     vector: { capability: string; key: string; nonce: string };
   };
 
-  it('схема: avatar_key — поле 4 SetInfo; движок хранит и отдаёт ключ', () => {
+  it('схема (spec 035, PV-005): секрета в журнале нет — avatar_key_id и конверт эпохи; движок отдаёт сошедшийся ключ', () => {
     const proto = readRepo('proto/parvane/group/v2/group.proto');
-    expect(proto).toContain(`bytes avatar_key = 4 [(parvane.core.v2.max_len) = ${r.secretBytes}];`);
-    expect(readRepo('backend/protocol/src/group.rs')).toContain('s.avatar_key = i.avatar_key.clone();');
-    expect(readRepo('backend/protocol/src/host.rs')).toContain('"avatarKey"');
-    expect(readRepo('backend/protocol/wasm/src/lib.rs')).toContain('"avatarKey"');
+    expect(proto).toContain('reserved "avatar_key";');
+    expect(proto).not.toContain('bytes avatar_key = 4');
+    expect(proto).toContain('bytes avatar_key_id = 6 [(parvane.core.v2.max_len) = 16];');
+    expect(proto).toContain('InviteAvatarWrap invite_avatar_wrap = 20;');
+    expect(readRepo('proto/parvane/msg/v2/content.proto')).toContain('GroupAvatarKey group_avatar_key = 25;');
+    const group = readRepo('backend/protocol/src/group.rs');
+    expect(group).toContain('s.avatar_key_id = i.avatar_key_id.clone();');
+    expect(group).toContain('const INVITE_AVATAR_INFO: &[u8] = b"parvane/group-avatar-invite/v1\\0";');
+    ['backend/protocol/src/host.rs', 'backend/protocol/wasm/src/lib.rs'].forEach((file) => {
+      expect(readRepo(file), file).toContain('"avatarKey": ');
+      expect(readRepo(file), file).toContain('self.inner.group_avatar_key(&s.group.id)');
+    });
+    expect(r.secretBytes).toBe(32);
   });
 
   it('web: те же метки вывода, секрет едет с файлом, правка названия ключ сохраняет', () => {

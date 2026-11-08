@@ -1506,6 +1506,8 @@ struct MiniDomains {
     grants: Vec<SignedOp>,
     ops: Vec<parvane_protocol::pb::parvane::core::v2::ContainerOp>,
     snapshot: Option<parvane_protocol::pb::parvane::core::v2::Snapshot>,
+    /// spec 035 (S7-22): журнал обрезан до (как шард domains после снимка с `complete`).
+    truncated_upto: u64,
 }
 
 impl MiniDomains {
@@ -1526,7 +1528,7 @@ impl MiniDomains {
                 let c = self.container.as_ref().unwrap();
                 assert_eq!(op.key_epoch, c.key_epoch, "операция не текущей эпохи");
                 parvane_protocol::domain::verify_op_seal(&op).unwrap();
-                op.seq = self.ops.len() as u64 + 1;
+                op.seq = self.head_seq() + 1;
                 self.ops.push(op);
             }
             "domain.key.rotate" => {
@@ -1539,7 +1541,14 @@ impl MiniDomains {
             }
             "domain.snapshot.put" => {
                 let q: c2::DomainSnapshotPutRequest = decode_checked(&r.body, Origin::Client).unwrap();
-                self.snapshot = Some(q.snapshot.unwrap());
+                let snap = q.snapshot.unwrap();
+                parvane_protocol::domain::verify_snapshot_seal(&snap).unwrap();
+                if snap.complete {
+                    self.truncated_upto = self.truncated_upto.max(snap.upto_seq);
+                    let cut = self.truncated_upto;
+                    self.ops.retain(|o| o.seq > cut);
+                }
+                self.snapshot = Some(snap);
             }
             _ => srv.handle(user, device, r),
         }
@@ -1550,7 +1559,7 @@ impl MiniDomains {
             container: self.container.clone(),
             genesis: self.genesis.clone(),
             level: 3,
-            head_seq: self.ops.len() as u64,
+            head_seq: self.head_seq(),
             grant_version: self.grants.len() as u64,
         }
         .encode_to_vec()
@@ -1562,7 +1571,16 @@ impl MiniDomains {
     }
 
     fn sync_response(&self, after: u64) -> Vec<u8> {
-        parvane_protocol::pb::parvane::core::v2::DomainOpSyncResponse { ops: self.ops.iter().filter(|o| o.seq > after).cloned().collect(), more: false }.encode_to_vec()
+        let ops = if after < self.truncated_upto { vec![] } else { self.ops.iter().filter(|o| o.seq > after).cloned().collect() };
+        parvane_protocol::pb::parvane::core::v2::DomainOpSyncResponse { ops, more: false, truncated_upto: self.truncated_upto }.encode_to_vec()
+    }
+
+    fn snapshot_response(&self) -> Vec<u8> {
+        parvane_protocol::pb::parvane::core::v2::DomainSnapshotGetResponse { snapshot: self.snapshot.clone() }.encode_to_vec()
+    }
+
+    fn head_seq(&self) -> u64 {
+        self.ops.last().map(|o| o.seq).unwrap_or(self.truncated_upto)
     }
 }
 
@@ -1699,6 +1717,45 @@ fn planner_container_shared_with_own_devices_and_rotated_on_revoke() {
 
     // Снимок по порогу: до 200 операций запроса нет.
     assert!(alice.planner_snapshot_request(1).unwrap().is_none());
+}
+
+/// spec 035 (S7-22, FR-077): движок ставит `complete` в снимок, понимая весь диапазон; новое устройство с курсором
+/// внутри обрезанного журнала берёт снимок и продолжает без потерь.
+#[test]
+fn planner_truncated_cursor_takes_snapshot() {
+    let mut srv = Server::default();
+    let mut dom = MiniDomains::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let create = alice.planner_create(1).unwrap();
+    dom.handle(&mut srv, "alice@local", "d1", &create);
+    let n = parvane_protocol::domain::planner::SNAPSHOT_EVERY;
+    for i in 0..n {
+        planner_edit(&mut dom, &mut srv, &mut alice, &format!(r#"{{"changes":[{{"task":{{"id":"t{i}","name":"Задача {i}"}}}}]}}"#));
+    }
+    let r = alice.planner_ingest_sync(&dom.sync_response(0)).unwrap();
+    assert_eq!(r.head_seq, n);
+    let snap = alice.planner_snapshot_request(1).unwrap().expect("порог снимка");
+    dom.handle(&mut srv, "alice@local", "d1", &snap);
+    assert!(dom.snapshot.as_ref().unwrap().complete, "весь диапазон понятен — complete");
+    assert_eq!((dom.truncated_upto, dom.ops.len()), (n, 0), "журнал обрезан до снимка");
+    planner_edit(&mut dom, &mut srv, &mut alice, r#"{"changes":[{"task":{"id":"after","name":"После снимка"}}]}"#);
+
+    // Новое устройство: ключи из экспорта линковки, журнал с нуля
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice2.planner_keys_import(&alice.planner_keys_export().unwrap()).unwrap();
+    alice2.planner_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    let r = alice2.planner_ingest_sync(&dom.sync_response(0)).unwrap();
+    assert!(r.need_snapshot, "курсор внутри обрезанного: {r:?}");
+    assert_eq!((r.applied, r.head_seq), (0, 0), "курсор без снимка не двигается");
+    assert_eq!(alice2.planner_ingest_snapshot(&dom.snapshot_response()).unwrap(), n);
+    let r = alice2.planner_ingest_sync(&dom.sync_response(alice2.planner_head_seq())).unwrap();
+    assert!(!r.need_snapshot);
+    assert_eq!((r.applied, r.head_seq), (1, n + 1));
+    assert_eq!(planner_tasks(&alice2).len() as u64, n + 1, "ничего не потеряно");
 }
 
 #[test]
@@ -2539,4 +2596,47 @@ fn group_and_container_domains_are_known_to_the_host() {
     let (id, create) = alice.cloud_create(1).unwrap();
     assert_eq!(alice.cloud_domain(&id), "a.example");
     assert_eq!(dest_of(&create).as_deref(), Some("a.example"));
+}
+
+/// spec 035 (PV-005, GPHOTO-1): секрет фото частной группы — не в журнале (сервер его не видит), а служебным
+/// конвертом эпохи: участник принимает его, сверив с `avatar_key_id` журнала, в ленту он не попадает; посторонний
+/// секрета не получает.
+#[test]
+fn group_photo_key_rides_epoch_envelope() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let carol = setup(&mut srv, "carol@local");
+    // Ключи доступа друг друга (как в direct_group_multidevice_and_restore): раздача ключей эпохи по E2E
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("привет")));
+    drain(&mut srv, &mut bob);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("и тебе")));
+    drain(&mut srv, &mut alice);
+    let perms = Permissions { send_messages: true, send_media: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Фото", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    let secret = [5u8; 32];
+    let req = alice.group_set_photo(&g.id, "photo-1", "", Some(&secret)).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    for e in &srv.groups[&g.id] {
+        assert!(!e.encode_to_vec().windows(32).any(|x| x == secret), "секрет фото в журнале у сервера");
+    }
+    assert_eq!(alice.group_avatar_key(&g.id), Some(secret));
+    let content = alice.group_avatar_key_content(&g.id).expect("секрет у админа");
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &content));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(!ev.iter().any(|e| matches!(e, Event::Group { .. })), "служебный конверт в ленте: {ev:?}");
+    assert_eq!(bob.group_avatar_key(&g.id), Some(secret), "{ev:?} {:?}", bob.last_error);
+    assert_eq!(carol.group_avatar_key(&g.id), None);
+    // Подменённый секрет участник не принимает: не сходится с avatar_key_id журнала
+    let fake = Content {
+        kind: Some(content::Kind::GroupAvatarKey(mpb::GroupAvatarKey { file_id: "photo-1".into(), avatar_key: vec![6; 32], info_version: 0 })),
+        ..Default::default()
+    };
+    run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &fake));
+    drain(&mut srv, &mut alice);
+    assert_eq!(alice.group_avatar_key(&g.id), Some(secret));
 }

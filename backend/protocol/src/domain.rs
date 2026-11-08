@@ -234,7 +234,7 @@ fn seal_signed(
     plaintext: &[u8],
     ts_ms: i64,
 ) -> Result<Sealed> {
-    seal_signed_with(signer, op_type, aad_ctx, container, epoch, key, upto, plaintext, ts_ms, None)
+    seal_signed_with(signer, op_type, aad_ctx, container, epoch, key, upto, plaintext, ts_ms, None, false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -249,6 +249,7 @@ fn seal_signed_with(
     plaintext: &[u8],
     ts_ms: i64,
     op_id: Option<Vec<u8>>,
+    complete: bool,
 ) -> Result<Sealed> {
     let r = container_ref(container)?;
     check_domain_name(&container.domain)?;
@@ -261,7 +262,7 @@ fn seal_signed_with(
     };
     let aad = seal_aad(aad_ctx, r, &container.domain, epoch, upto, &h.op_id);
     let ciphertext = aead_seal(key, &aad, plaintext)?;
-    let digest = SealDigest { key_epoch: epoch, ciphertext_sha256: Sha256::digest(&ciphertext).to_vec(), upto_seq: upto.unwrap_or(0) };
+    let digest = SealDigest { key_epoch: epoch, ciphertext_sha256: Sha256::digest(&ciphertext).to_vec(), upto_seq: upto.unwrap_or(0), complete };
     let author = sign::sign_op(signer, h, digest.encode_to_vec())?;
     Ok(Sealed { ciphertext, author })
 }
@@ -275,7 +276,8 @@ pub struct VerifiedSeal {
     pub ts_ms: i64,
 }
 
-fn verify_seal_inner(author: Option<&SignedOp>, op_type: &str, container: Option<&Ref>, epoch: u64, ct: &[u8], upto: u64) -> Result<VerifiedSeal> {
+#[allow(clippy::too_many_arguments)]
+fn verify_seal_inner(author: Option<&SignedOp>, op_type: &str, container: Option<&Ref>, epoch: u64, ct: &[u8], upto: u64, complete: bool) -> Result<VerifiedSeal> {
     let author = author.ok_or(ProtoError::InvalidField("author"))?;
     let container = container.ok_or(ProtoError::InvalidField("container"))?;
     address::check_ref(container)?;
@@ -288,7 +290,8 @@ fn verify_seal_inner(author: Option<&SignedOp>, op_type: &str, container: Option
     let v = sign::verify_op(author, DOMAIN, op_type, None)?;
     v.require_target(container)?;
     let d: SealDigest = decode_checked(&v.payload, Origin::Client)?;
-    if d.key_epoch != epoch || d.upto_seq != upto {
+    // spec 035: `complete` снимка — под подписью автора (сервер по нему обрезает журнал)
+    if d.key_epoch != epoch || d.upto_seq != upto || d.complete != complete {
         return Err(ProtoError::ContextMismatch);
     }
     if d.ciphertext_sha256.as_slice() != Sha256::digest(ct).as_slice() {
@@ -316,13 +319,13 @@ pub fn seal_op_with_id(signer: &dyn OpSigner, container: &Container, epoch: u64,
     if op_id.len() != 16 {
         return Err(ProtoError::InvalidField("op_id"));
     }
-    let s = seal_signed_with(signer, OP_OP, ctx::DOMAIN_OP_AAD, container, epoch, key, None, plaintext, ts_ms, Some(op_id.to_vec()))?;
+    let s = seal_signed_with(signer, OP_OP, ctx::DOMAIN_OP_AAD, container, epoch, key, None, plaintext, ts_ms, Some(op_id.to_vec()), false)?;
     Ok(ContainerOp { container: container.r#ref.clone(), key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author), seq: 0 })
 }
 
 /// Проверка подписи автора и дайджеста шифртекста (сервер и клиент; ключ не нужен).
 pub fn verify_op_seal(op: &ContainerOp) -> Result<VerifiedSeal> {
-    verify_seal_inner(op.author.as_ref(), OP_OP, op.container.as_ref(), op.key_epoch, &op.aead_ciphertext, 0)
+    verify_seal_inner(op.author.as_ref(), OP_OP, op.container.as_ref(), op.key_epoch, &op.aead_ciphertext, 0, false)
 }
 
 /// Снять AEAD операции (после проверки подписи — fail-closed).
@@ -336,17 +339,34 @@ pub fn open_op(op: &ContainerOp, container: &Container, key: &[u8; KEY_LEN]) -> 
     aead_open(key, &aad, &op.aead_ciphertext)
 }
 
-/// Зашифровать и подписать снимок состояния до `upto_seq` включительно.
+/// Зашифровать и подписать снимок состояния до `upto_seq` включительно (без `complete`: журнал не обрезается).
 pub fn seal_snapshot(signer: &dyn OpSigner, container: &Container, epoch: u64, key: &[u8; KEY_LEN], upto_seq: u64, plaintext: &[u8], ts_ms: i64) -> Result<Snapshot> {
+    seal_snapshot_complete(signer, container, epoch, key, upto_seq, plaintext, ts_ms, false)
+}
+
+/// Снимок с отметкой `complete` (spec 035, FR-032/FR-077): составитель понимает весь диапазон `≤ upto_seq` —
+/// ставить только если ни одна операция диапазона не отложена, не удержана и не осталась неразобранной; тогда
+/// сервер обрезает журнал до `upto_seq`.
+#[allow(clippy::too_many_arguments)]
+pub fn seal_snapshot_complete(
+    signer: &dyn OpSigner,
+    container: &Container,
+    epoch: u64,
+    key: &[u8; KEY_LEN],
+    upto_seq: u64,
+    plaintext: &[u8],
+    ts_ms: i64,
+    complete: bool,
+) -> Result<Snapshot> {
     if plaintext.len() > MAX_SNAPSHOT_PLAINTEXT {
         return Err(ProtoError::FieldLimit("plaintext"));
     }
-    let s = seal_signed(signer, OP_SNAPSHOT, ctx::DOMAIN_SNAPSHOT_AAD, container, epoch, key, Some(upto_seq), plaintext, ts_ms)?;
-    Ok(Snapshot { container: container.r#ref.clone(), upto_seq, key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author) })
+    let s = seal_signed_with(signer, OP_SNAPSHOT, ctx::DOMAIN_SNAPSHOT_AAD, container, epoch, key, Some(upto_seq), plaintext, ts_ms, None, complete)?;
+    Ok(Snapshot { container: container.r#ref.clone(), upto_seq, key_epoch: epoch, aead_ciphertext: s.ciphertext, author: Some(s.author), complete })
 }
 
 pub fn verify_snapshot_seal(s: &Snapshot) -> Result<VerifiedSeal> {
-    verify_seal_inner(s.author.as_ref(), OP_SNAPSHOT, s.container.as_ref(), s.key_epoch, &s.aead_ciphertext, s.upto_seq)
+    verify_seal_inner(s.author.as_ref(), OP_SNAPSHOT, s.container.as_ref(), s.key_epoch, &s.aead_ciphertext, s.upto_seq, s.complete)
 }
 
 pub fn open_snapshot(s: &Snapshot, container: &Container, key: &[u8; KEY_LEN]) -> Result<Zeroizing<Vec<u8>>> {
@@ -1227,7 +1247,7 @@ mod tests {
         // Чужой ключ — AEAD не снимается.
         assert_eq!(open_op(&op, &c, &new_epoch_key()), Err(ProtoError::Crypto));
         // Операция не проходит как снимок.
-        let snap = Snapshot { container: op.container.clone(), upto_seq: 0, key_epoch: 1, aead_ciphertext: op.aead_ciphertext.clone(), author: op.author.clone() };
+        let snap = Snapshot { container: op.container.clone(), upto_seq: 0, key_epoch: 1, aead_ciphertext: op.aead_ciphertext.clone(), author: op.author.clone(), complete: false };
         assert!(verify_snapshot_seal(&snap).is_err());
     }
 

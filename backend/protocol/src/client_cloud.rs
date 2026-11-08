@@ -41,6 +41,8 @@ struct CloudLocal {
     json_cache: JsonCache,
     /// Граница эпохи по подписанным данным (S7-6).
     cut: dom::EpochCut,
+    /// spec 035 (FR-032, S7-22): с прошлого снимка была непонятая целиком операция — снимок без `complete`.
+    opaque: bool,
 }
 
 /// Итог приёма страницы журнала контейнера облака (`domain.op.sync`).
@@ -56,6 +58,8 @@ pub struct CloudIngest {
     /// Ключ автора операции неизвестен (новое устройство участника): обновить
     /// журналы устройств участников и повторить страницу.
     pub authors_behind: bool,
+    /// spec 035 (S7-22): курсор внутри обрезанного сервером журнала — `domain.snapshot.get`, затем синк дальше.
+    pub need_snapshot: bool,
 }
 
 /// Роль пользователя в контейнере облака.
@@ -278,6 +282,7 @@ impl Client {
                 last_op_epoch: 0,
             json_cache: JsonCache::default(),
                 cut: dom::EpochCut::default(),
+                opaque: false,
             },
         );
         Ok((id, OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) })))
@@ -315,6 +320,7 @@ impl Client {
             head_seq: existing.as_ref().map_or(0, |c| c.head_seq),
             snapshot_seq: existing.as_ref().map_or(0, |c| c.snapshot_seq),
             cut: existing.as_ref().map(|c| c.cut.clone()).unwrap_or_default(),
+            opaque: existing.as_ref().is_none_or(|c| c.opaque),
             pending_ops: existing.map(|c| c.pending_ops).unwrap_or_default(),
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
@@ -405,8 +411,12 @@ impl Client {
     fn cloud_open_one(c: &mut CloudLocal, op: &ContainerOp, author: &DomainAuthor) -> Result<usize> {
         let key = c.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &c.access.container, key)?;
-        let decoded = cloud::decode_batch(&pt)?;
-        cloud::guard_batch(&mut c.guard, &decoded)?;
+        // Непонятое целиком в снимок не войдёт — такой снимок журнал не обрезает (FR-032)
+        if crate::unknown::scan("parvane.cloud.v1.CloudBatch", &pt).map_or(true, |r| !r.is_empty()) {
+            c.opaque = true;
+        }
+        let decoded = cloud::decode_batch(&pt).inspect_err(|_| c.opaque = true)?;
+        cloud::guard_batch(&mut c.guard, &decoded).inspect_err(|_| c.opaque = true)?;
         c.state.apply_batch_from(&decoded, author)
     }
 
@@ -440,6 +450,13 @@ impl Client {
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         let mut out = CloudIngest { more: r.more, ..Default::default() };
+        // spec 035 (S7-22): сервер обрезал журнал дальше курсора — сначала снимок (`domain.snapshot.get`)
+        if r.truncated_upto > c.head_seq {
+            out.need_snapshot = true;
+            out.more = false;
+            out.head_seq = c.head_seq;
+            return Ok(out);
+        }
         for op in r.ops {
             if op.seq <= c.head_seq {
                 continue;
@@ -583,8 +600,11 @@ impl Client {
         if pt.len() > dom::MAX_SNAPSHOT_PLAINTEXT {
             return Err(ClientError::Proto(ProtoError::FieldLimit("snapshot")));
         }
-        let s = dom::seal_snapshot(&self.acc, &c.access.container, epoch, key, c.head_seq, &pt, ts_ms)?;
+        // `complete` (FR-032): ничего не отложено и не удержано (проверено выше) и каждая операция диапазона понята
+        // целиком. Отметку `range-hold` хранилища движка (spec 035, фазы 5–6) добавить сюда же.
+        let s = dom::seal_snapshot_complete(&self.acc, &c.access.container, epoch, key, c.head_seq, &pt, ts_ms, !c.opaque)?;
         c.snapshot_seq = c.head_seq;
+        c.opaque = false;
         Ok(Some(OutRequest::id("domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(s) })))
     }
 
@@ -897,7 +917,7 @@ impl Client {
         let id = access.container_ref()?.id.clone();
         self.cloud.insert(
             id,
-            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut },
+            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque: true },
         );
         Ok(())
     }

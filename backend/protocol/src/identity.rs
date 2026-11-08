@@ -338,9 +338,12 @@ impl DeviceLog {
         if genesis {
             // Генезис: корень + первый SSK, подписано корнем.
             let root = key32(&entry.root_key)?;
-            let Change::RotateSelfSigningKey(RotateSelfSigning { self_signing_key, root_signature }) = change else {
+            let Change::RotateSelfSigningKey(RotateSelfSigning { self_signing_key, root_signature, resigned }) = change else {
                 return Err(ProtoError::BrokenChain);
             };
+            if !resigned.is_empty() {
+                return Err(ProtoError::InvalidField("resigned"));
+            }
             if v.signer != root {
                 return Err(ProtoError::BadSignature);
             }
@@ -363,13 +366,41 @@ impl DeviceLog {
                         return Err(ProtoError::BadSignature);
                     }
                     verify_self_signing(&self.root_key, &self.user, &r.self_signing_key, &r.root_signature)?;
-                    self.ssk = key32(&r.self_signing_key)?;
-                    // Сертификаты старого SSK недействительны.
+                    let new_ssk = key32(&r.self_signing_key)?;
+                    // spec 035 (FR-074, R12): оставшиеся устройства переподписаны новым SSK в ЭТОЙ же записи — нет
+                    // версии журнала «SSK новый, действующих устройств нет». Переподписать можно только устройство,
+                    // действовавшее до смены, с теми же ключами и не меньшим serial.
+                    let mut kept = BTreeMap::new();
+                    for signed in &r.resigned {
+                        let dev = verify_certificate(signed, Some(&self.user))?;
+                        if dev.root_key != self.root_key || dev.ssk != new_ssk {
+                            return Err(ProtoError::BadCertificate);
+                        }
+                        let id = dev.cert.device_id.clone();
+                        let prev = self.devices.get(&id).ok_or(ProtoError::Forbidden)?;
+                        if prev.cert.olm_ed25519 != dev.cert.olm_ed25519 || prev.cert.olm_curve25519 != dev.cert.olm_curve25519 {
+                            return Err(ProtoError::BadCertificate);
+                        }
+                        if self.max_serial.get(&id).is_some_and(|p| dev.cert.serial < *p) || kept.contains_key(&id) {
+                            return Err(ProtoError::BrokenChain);
+                        }
+                        kept.insert(id, dev);
+                    }
+                    self.ssk = new_ssk;
+                    // Сертификаты старого SSK недействительны (кроме переподписанных этой записью).
                     self.devices.clear();
                     self.ssk_exposed = false;
                     self.close_eras(None, entry.version, false);
                     self.ssk_holders.clear();
                     self.left_holders.clear();
+                    for (id, dev) in kept {
+                        self.max_serial.insert(id.clone(), dev.cert.serial);
+                        if holds_ssk(&dev.cert) {
+                            self.ssk_holders.insert(id.clone());
+                        }
+                        self.eras.push(KeyEra { device_id: id.clone(), key: key32(&dev.cert.olm_ed25519)?, from: entry.version, until: None, revoked: false });
+                        self.devices.insert(id, dev);
+                    }
                 }
                 Change::AddDevice(signed) => {
                     if v.signer != self.ssk {
@@ -594,17 +625,40 @@ pub fn sign_certificate(ssk: &SigningKey, root_pub: &[u8; 32], root_signature_ov
 /// Смена SSK (D-12): запись журнала, подписанная корнем. Возвращает запись и
 /// подпись корня над новым SSK (для сертификатов).
 pub fn rotate_ssk_entry(root: &SigningKey, user: &str, version: u64, prev_hash: [u8; 32], new_ssk: &SigningKey) -> Result<(SignedOp, Vec<u8>)> {
+    let (op, sig, _) = rotate_ssk_entry_resigned(root, user, version, prev_hash, new_ssk, &[])?;
+    Ok((op, sig))
+}
+
+/// Смена SSK с переподписью (spec 035, FR-074): сертификаты `certs` оставшихся устройств подписываются новым SSK и
+/// едут в той же записи (`RotateSelfSigning.resigned`), подписанной корнем. Возвращает запись, подпись корня над
+/// новым SSK и переподписанные сертификаты (своё устройство берёт свой).
+pub fn rotate_ssk_entry_resigned(
+    root: &SigningKey,
+    user: &str,
+    version: u64,
+    prev_hash: [u8; 32],
+    new_ssk: &SigningKey,
+    certs: &[DeviceCertificate],
+) -> Result<(SignedOp, Vec<u8>, Vec<SignedDeviceCertificate>)> {
+    if certs.len() > MAX_RESIGNED {
+        return Err(ProtoError::FieldLimit("resigned"));
+    }
     let pub_key = new_ssk.verifying_key().to_bytes();
     let root_signature = sign_self_signing(root, user, &pub_key)?;
+    let root_pub = root.verifying_key().to_bytes();
+    let resigned: Vec<SignedDeviceCertificate> = certs.iter().map(|c| sign_certificate(new_ssk, &root_pub, root_signature.clone(), c)).collect();
     let e = device_log_entry(
         user,
         version,
         prev_hash,
-        Change::RotateSelfSigningKey(RotateSelfSigning { self_signing_key: pub_key.to_vec(), root_signature: root_signature.clone() }),
+        Change::RotateSelfSigningKey(RotateSelfSigning { self_signing_key: pub_key.to_vec(), root_signature: root_signature.clone(), resigned: resigned.clone() }),
         None,
     );
-    Ok((sign_device_log_entry(root, &e)?, root_signature))
+    Ok((sign_device_log_entry(root, &e)?, root_signature, resigned))
 }
+
+/// Потолок переподписанных сертификатов в записи смены SSK (схема: `max_items = 64`).
+pub const MAX_RESIGNED: usize = 64;
 
 impl RootIdentity {
     /// Доказательство владения ключом устройства + сертификат.
@@ -624,6 +678,7 @@ impl RootIdentity {
             Change::RotateSelfSigningKey(RotateSelfSigning {
                 self_signing_key: ssk.to_vec(),
                 root_signature: sign_self_signing(&self.root, &self.user, &ssk)?,
+                resigned: vec![],
             }),
             Some(self.root_pub()),
         );

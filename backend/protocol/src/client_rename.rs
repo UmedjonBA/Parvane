@@ -137,6 +137,7 @@ impl Client {
             DevChange::RotateSelfSigningKey(crate::pb::parvane::core::v2::RotateSelfSigning {
                 self_signing_key: ssk_pub.to_vec(),
                 root_signature: root_sig.clone(),
+                resigned: vec![],
             }),
             Some(root_pub),
         );

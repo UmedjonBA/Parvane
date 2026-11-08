@@ -178,6 +178,8 @@ message SealDigest {
   bytes ciphertext_sha256 = 2 [(max_len) = 32];
   // Только для снимка: последний seq журнала, покрытый снимком.
   uint64 upto_seq = 3;
+  // Только для снимка (spec 035, FR-077): `Snapshot.complete` под подписью автора.
+  bool complete = 4;
 }
 
 // Операция журнала контейнера. aead_ciphertext = nonce(12) ‖ ChaCha20-Poly1305
@@ -228,6 +230,10 @@ message Snapshot {
   uint64 key_epoch = 3;
   bytes aead_ciphertext = 4 [(max_len) = 3145756];
   SignedOp author = 5;
+  // spec 035 (FR-032, FR-077, S7-22): составитель понимает весь диапазон `≤ upto_seq` (ни одной операции, которую
+  // его движок не разобрал, не отложил или удержал) — сервер вправе обрезать журнал до `upto_seq`. Входит в
+  // подписанный `SealDigest.complete`; без него снимок журнал не обрезает.
+  bool complete = 6;
 }
 
 // Раздача ключа эпохи участнику по E2E (как GroupKeyShare). Встраивание в
@@ -289,6 +295,9 @@ message DomainOpSyncRequest {
 message DomainOpSyncResponse {
   repeated ContainerOp ops = 1 [(max_items) = 1024];
   bool more = 2;
+  // spec 035 (FR-077, S7-22): операции `seq ≤ truncated_upto` удалены сервером после снимка с `complete`. Курсор
+  // клиента меньше — `ops` пуст: взять снимок (`domain.snapshot.get`) и продолжить с его `upto_seq`.
+  uint64 truncated_upto = 3;
 }
 
 message DomainGrantSetRequest {

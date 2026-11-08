@@ -30,7 +30,7 @@ use crate::pb::parvane::core::v2::{
     GroupContext, GroupEnvelope, GroupEnvelopeInner, GroupInviteKeyAnnounce, GroupStateEntry, OpHeader, Ref, SignedOp,
 };
 use crate::pb::parvane::group::v2::{
-    group_change::Change, AdminRights, GroupChange, GroupKind, GroupStateChange, Permissions, RevokedFloor, Role,
+    group_change::Change, AdminRights, GroupChange, GroupKind, GroupStateChange, InviteAvatarWrap, Permissions, RevokedFloor, Role,
 };
 use crate::pb::parvane::msg::v2::{content, Content, MediaKind};
 use crate::sign::{self, ctx, OpSigner};
@@ -112,9 +112,11 @@ pub struct GroupState {
     pub name: String,
     pub about: String,
     pub avatar_file_id: String,
-    /// Секрет фото частной группы (A0089-5): из него выводятся ключ PVB2 и capability блоба; пусто — фото открытое
-    /// (публичная группа, записи до A0089-5).
-    pub avatar_key: Vec<u8>,
+    /// spec 035 (PV-005): SHA-256(секрет фото)[..16]; сам секрет (A0089-5: из него выводятся ключ PVB2 и capability
+    /// блоба) — у участников из конверта эпохи (`GroupAvatarKey`), в журнале его нет. Пусто — фото открытое.
+    pub avatar_key_id: Vec<u8>,
+    /// spec 035 (D1): секрет фото под ключом из секрета ссылки, по действующей ссылке (link_id → обёртка).
+    pub invite_avatar_wraps: BTreeMap<[u8; 32], InviteAvatarWrap>,
     /// Прежний `group_id` группы v1, из которой эта переведена (T180); иначе пусто.
     pub migrated_from: String,
     pub default_permissions: Permissions,
@@ -154,6 +156,88 @@ pub struct PublicInfo {
     pub preview: bool,
     pub history: bool,
     pub link_public_key: [u8; 32],
+}
+
+/// Длина `avatar_key_id` (spec 035, PV-005).
+pub const AVATAR_KEY_ID_LEN: usize = 16;
+/// Длина обёртки секрета фото: nonce ‖ 32 байта ‖ тег.
+const INVITE_WRAP_LEN: usize = 12 + 32 + 16;
+const INVITE_AVATAR_INFO: &[u8] = b"parvane/group-avatar-invite/v1\0";
+
+/// `avatar_key_id` = SHA-256(секрет фото)[..16] (spec 035, `data-model.md` §6).
+pub fn avatar_key_id(avatar_key: &[u8; 32]) -> [u8; AVATAR_KEY_ID_LEN] {
+    let d = Sha256::digest(avatar_key);
+    let mut out = [0u8; AVATAR_KEY_ID_LEN];
+    out.copy_from_slice(&d[..AVATAR_KEY_ID_LEN]);
+    out
+}
+
+fn invite_wrap_key(link_seed: &[u8; 32], group: &Ref, link_id: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
+    let mut info = INVITE_AVATAR_INFO.to_vec();
+    info.extend_from_slice(&group.id);
+    info.extend_from_slice(link_id);
+    let mut k = Zeroizing::new([0u8; 32]);
+    hkdf::Hkdf::<Sha256>::new(None, link_seed).expand(&info, &mut *k).map_err(|_| ProtoError::Crypto)?;
+    Ok(k)
+}
+
+fn invite_wrap_aad(link_id: &[u8; 32], key_id: &[u8]) -> Vec<u8> {
+    let mut a = link_id.to_vec();
+    a.extend_from_slice(key_id);
+    a
+}
+
+/// Обёртка секрета фото для держателя ссылки (spec 035, D1): ключ — HKDF-SHA256 из секрета ссылки (он есть только
+/// во фрагменте адреса), AEAD ChaCha20-Poly1305 с AAD = link_id ‖ avatar_key_id. Запись журнала —
+/// `Change::InviteAvatarWrap`.
+pub fn wrap_invite_avatar(link_seed: &[u8; 32], group: &Ref, avatar_key: &[u8; 32]) -> Result<InviteAvatarWrap> {
+    let link_id = link_id(ed25519_dalek::SigningKey::from_bytes(link_seed).verifying_key().as_bytes());
+    let kid = avatar_key_id(avatar_key);
+    let key = invite_wrap_key(link_seed, group, &link_id)?;
+    let mut nonce = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    let ct = ChaCha20Poly1305::new(Key::from_slice(&*key))
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: avatar_key, aad: &invite_wrap_aad(&link_id, &kid) })
+        .map_err(|_| ProtoError::Crypto)?;
+    let mut wrapped = nonce.to_vec();
+    wrapped.extend_from_slice(&ct);
+    Ok(InviteAvatarWrap { link_id: link_id.to_vec(), avatar_key_id: kid.to_vec(), wrapped })
+}
+
+/// Открыть обёртку секретом ссылки; секрет сверяется с `avatar_key_id` обёртки.
+pub fn open_invite_avatar(link_seed: &[u8; 32], group: &Ref, w: &InviteAvatarWrap) -> Result<Zeroizing<[u8; 32]>> {
+    let link_id: [u8; 32] = w.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
+    if w.wrapped.len() != INVITE_WRAP_LEN {
+        return Err(ProtoError::InvalidField("wrapped"));
+    }
+    let key = invite_wrap_key(link_seed, group, &link_id)?;
+    let pt = Zeroizing::new(
+        ChaCha20Poly1305::new(Key::from_slice(&*key))
+            .decrypt(Nonce::from_slice(&w.wrapped[..12]), Payload { msg: &w.wrapped[12..], aad: &invite_wrap_aad(&link_id, &w.avatar_key_id) })
+            .map_err(|_| ProtoError::Crypto)?,
+    );
+    let out: [u8; 32] = pt.as_slice().try_into().map_err(|_| ProtoError::Crypto)?;
+    if avatar_key_id(&out).as_slice() != w.avatar_key_id.as_slice() {
+        return Err(ProtoError::Crypto);
+    }
+    Ok(Zeroizing::new(out))
+}
+
+impl GroupState {
+    /// Секрет фото из конверта эпохи сходится с журналом: тот же файл и SHA-256(секрет)[..16] = `avatar_key_id`.
+    pub fn avatar_key_matches(&self, file_id: &str, avatar_key: &[u8; 32]) -> bool {
+        !self.avatar_key_id.is_empty() && self.avatar_file_id == file_id && avatar_key_id(avatar_key).as_slice() == self.avatar_key_id.as_slice()
+    }
+
+    /// Превью по ссылке (D1): секрет фото из обёртки ссылки с секретом `link_seed`.
+    pub fn invite_avatar_key(&self, link_seed: &[u8; 32]) -> Option<Zeroizing<[u8; 32]>> {
+        let id = link_id(ed25519_dalek::SigningKey::from_bytes(link_seed).verifying_key().as_bytes());
+        let w = self.invite_avatar_wraps.get(&id)?;
+        if w.avatar_key_id != self.avatar_key_id {
+            return None;
+        }
+        open_invite_avatar(link_seed, &self.group, w).ok()
+    }
 }
 
 /// Сколько отозванных ссылок группа помнит (остальные неотличимы от несуществующих).
@@ -423,7 +507,8 @@ pub fn apply_with(
                 name: cr.name.clone(),
                 about: cr.about.clone(),
                 avatar_file_id: String::new(),
-                avatar_key: Vec::new(),
+                avatar_key_id: Vec::new(),
+                invite_avatar_wraps: BTreeMap::new(),
                 migrated_from: cr.migrated_from.clone(),
                 default_permissions: cr.default_permissions.unwrap_or_default(),
                 owner: signer.user.clone(),
@@ -588,11 +673,15 @@ pub fn apply_with(
             }
             s.name = i.name.clone();
             s.about = i.about.clone();
-            if !i.avatar_key.is_empty() && (i.avatar_key.len() != 32 || i.avatar_file_id.is_empty()) {
-                return Err(ProtoError::InvalidField("avatar_key"));
+            if !i.avatar_key_id.is_empty() && (i.avatar_key_id.len() != AVATAR_KEY_ID_LEN || i.avatar_file_id.is_empty()) {
+                return Err(ProtoError::InvalidField("avatar_key_id"));
+            }
+            // Новое фото — обёртки прежнего секрета для ссылок больше не годятся
+            if i.avatar_key_id != s.avatar_key_id || i.avatar_file_id != s.avatar_file_id {
+                s.invite_avatar_wraps.clear();
             }
             s.avatar_file_id = i.avatar_file_id.clone();
-            s.avatar_key = i.avatar_key.clone();
+            s.avatar_key_id = i.avatar_key_id.clone();
         }
         Change::SetPrivacyMode(m) => {
             // Право — как у изменения сведений группы; новой эпохи не требует
@@ -684,6 +773,23 @@ pub fn apply_with(
                     s.revoked_links.insert(id, link);
                 }
             }
+            s.invite_avatar_wraps.remove(&id);
+        }
+        Change::InviteAvatarWrap(w) => {
+            // spec 035 (D1): секрет фото для превью по действующей ссылке — пишет админ со сменой сведений либо
+            // приглашением, или создатель ссылки; обёртка — под текущий секрет фото
+            let id: [u8; 32] = w.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
+            let creator = s.invite_links.get(&id).map(|l| l.creator.clone()).ok_or(ProtoError::Forbidden)?;
+            if !(s.admin_can(&actor, |r| r.change_info) || s.admin_can(&actor, |r| r.invite_users) || creator == actor) {
+                return forbid();
+            }
+            if s.avatar_key_id.is_empty() || w.avatar_key_id != s.avatar_key_id {
+                return Err(ProtoError::InvalidField("avatar_key_id"));
+            }
+            if w.wrapped.len() != INVITE_WRAP_LEN {
+                return Err(ProtoError::InvalidField("wrapped"));
+            }
+            s.invite_avatar_wraps.insert(id, w.clone());
         }
         Change::RenameMember(r) => {
             // spec 026: участник сменил ник — пишет он сам новым адресом; доказательство — запись `Rename`
@@ -1014,19 +1120,15 @@ pub fn sign_group_typing(send_key: &dyn OpSigner, group: &Ref, epoch: u64, chann
     sign::sign_ctx(send_key, ctx::GROUP_TYPING_V2, &[&p])
 }
 
+/// spec 035 (FR-076, TYPING-1): `channel_id` обязателен; прежняя подпись без него не принимается.
 pub fn verify_group_typing(send_public_key: &[u8; 32], group: &Ref, epoch: u64, channel_id: &[u8], nonce: &[u8], payload: &[u8], sig: &[u8]) -> Result<()> {
+    if channel_id.len() != crate::ephemeral::CHANNEL_ID_LEN {
+        return Err(ProtoError::InvalidField("channel_id"));
+    }
     let mut p = envelope_aad(group, epoch, nonce);
     p.extend_from_slice(channel_id);
     p.extend_from_slice(payload);
     sign::verify_ctx(send_public_key, sig, ctx::GROUP_TYPING_V2, &[&p])
-}
-
-/// Прежняя подпись без `channel_id` — приём от клиентов старых сборок на переходе (канал присутствия
-/// всё равно закрыт `typing_publish`). Клиенты её больше не выпускают.
-pub fn verify_group_typing_legacy(send_public_key: &[u8; 32], group: &Ref, epoch: u64, nonce: &[u8], payload: &[u8], sig: &[u8]) -> Result<()> {
-    let mut p = envelope_aad(group, epoch, nonce);
-    p.extend_from_slice(payload);
-    sign::verify_ctx(send_public_key, sig, ctx::GROUP_TYPING, &[&p])
 }
 
 #[cfg(test)]
@@ -1222,22 +1324,75 @@ mod tests {
         apply(None, &e, &w.resolve()).unwrap()
     }
 
+    /// spec 035 (PV-005, T081): секрет фото частной группы не лежит в открытом журнале — запись `SetInfo` несёт
+    /// только `avatar_key_id`; участник по `GroupAvatarKey` (конверт эпохи) сверяет секрет с журналом, подменённый
+    /// секрет не принимается; кривой `avatar_key_id` и фото без файла отвергаются.
     #[test]
-    fn set_info_keeps_avatar_key() {
-        // A0089-5: ключ фото частной группы едет в записи SetInfo; кривой ключ отвергается
+    fn set_info_has_no_avatar_key_bytes() {
         let w = World::new(&["alice@x", "bob@x"]);
         let s = genesis(&w);
-        let info = |key: Vec<u8>, file: &str| Change::SetInfo(SetInfo { name: "G".into(), avatar_file_id: file.into(), avatar_key: key, ..Default::default() });
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", info(vec![7; 32], "f1"), 1).unwrap();
+        let secret = [7u8; 32];
+        let info = |kid: Vec<u8>, file: &str| Change::SetInfo(SetInfo { name: "G".into(), avatar_file_id: file.into(), avatar_key_id: kid, ..Default::default() });
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", info(avatar_key_id(&secret).to_vec(), "f1"), 1).unwrap();
+        let bytes = e.encode_to_vec();
+        assert!(!bytes.windows(32).any(|x| x == secret), "секрет фото в байтах записи журнала");
         let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
-        assert_eq!((s2.avatar_file_id.as_str(), s2.avatar_key.as_slice()), ("f1", &[7u8; 32][..]));
-        // смена на открытое фото (публичная группа / старый клиент) ключ снимает
+        assert_eq!((s2.avatar_file_id.as_str(), s2.avatar_key_id.as_slice()), ("f1", &avatar_key_id(&secret)[..]));
+        // Участник принимает секрет из конверта эпохи, только если он сходится с журналом
+        assert!(s2.avatar_key_matches("f1", &secret));
+        assert!(!s2.avatar_key_matches("f1", &[8u8; 32]), "подменённый секрет");
+        assert!(!s2.avatar_key_matches("f2", &secret), "секрет чужого файла");
+        // Открытое фото (публичная группа) — без секрета
         let e = build_entry(w.k("alice@x"), Some(&s2), "x", info(Vec::new(), "f2"), 1).unwrap();
-        assert!(apply(Some(&s2), &e, &w.resolve()).unwrap().avatar_key.is_empty());
+        let s3 = apply(Some(&s2), &e, &w.resolve()).unwrap();
+        assert!(s3.avatar_key_id.is_empty() && !s3.avatar_key_matches("f2", &secret));
         let bad = build_entry(w.k("alice@x"), Some(&s2), "x", info(vec![1; 5], "f3"), 1).unwrap();
         assert!(apply(Some(&s2), &bad, &w.resolve()).is_err());
-        let orphan = build_entry(w.k("alice@x"), Some(&s2), "x", info(vec![1; 32], ""), 1).unwrap();
+        let orphan = build_entry(w.k("alice@x"), Some(&s2), "x", info(vec![1; 16], ""), 1).unwrap();
         assert!(apply(Some(&s2), &orphan, &w.resolve()).is_err());
+    }
+
+    /// spec 035 (D1, T083): превью по ссылке с фото — держатель секрета ссылки открывает секрет фото из
+    /// `InviteAvatarWrap` своей ссылки; держатель одного `link_id` (и сервер) — нет; запись пишет админ, отзыв
+    /// ссылки и смена фото обёртку снимают; обёртка под чужой `avatar_key_id` не принимается.
+    #[test]
+    fn invite_avatar_wrap_opens_only_with_link_secret() {
+        let w = World::new(&["alice@x", "bob@x"]);
+        let s = genesis(&w);
+        let secret = [9u8; 32];
+        let info = Change::SetInfo(SetInfo { name: "G".into(), avatar_file_id: "f1".into(), avatar_key_id: avatar_key_id(&secret).to_vec(), ..Default::default() });
+        let s = apply(Some(&s), &build_entry(w.k("alice@x"), Some(&s), "x", info, 1).unwrap(), &w.resolve()).unwrap();
+        let (link, parts) = crate::invite::generate("x.example").unwrap();
+        let announce = GroupInviteKeyAnnounce { link_public_key: link.verifying_key().to_bytes().to_vec(), ..Default::default() };
+        let s = apply(Some(&s), &build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKey(announce), 1).unwrap(), &w.resolve()).unwrap();
+        let seed: [u8; 32] = parts.seed.as_slice().try_into().unwrap();
+        let lid: [u8; 32] = parts.link_id.as_slice().try_into().unwrap();
+        let wrap = wrap_invite_avatar(&seed, &s.group, &secret).unwrap();
+        assert_eq!(wrap.link_id, lid.to_vec());
+        // Участник без права менять сведения обёртку не пишет
+        let by_bob = build_entry(w.k("bob@x"), Some(&s), "x", Change::InviteAvatarWrap(wrap.clone()), 1).unwrap();
+        assert_eq!(apply(Some(&s), &by_bob, &w.resolve()), Err(ProtoError::Forbidden));
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteAvatarWrap(wrap.clone()), 1).unwrap();
+        assert!(!e.encode_to_vec().windows(32).any(|x| x == secret), "секрет фото в байтах записи");
+        let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
+        // Держатель ссылки (секрет из фрагмента) — открывает
+        assert_eq!(*s2.invite_avatar_key(&seed).unwrap(), secret);
+        // Держатель одного link_id: секрет ссылки не тот — не открывает
+        let mut wrong = seed;
+        wrong[0] ^= 1;
+        assert!(s2.invite_avatar_key(&wrong).is_none());
+        assert!(open_invite_avatar(&wrong, &s2.group, &wrap).is_err());
+        // Обёртка под другой секрет фото не принимается
+        let stale = wrap_invite_avatar(&seed, &s.group, &[1u8; 32]).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s2), "x", Change::InviteAvatarWrap(stale), 1).unwrap();
+        assert!(apply(Some(&s2), &e, &w.resolve()).is_err());
+        // Смена фото и отзыв ссылки обёртку снимают
+        let info2 = Change::SetInfo(SetInfo { name: "G".into(), avatar_file_id: "f2".into(), avatar_key_id: avatar_key_id(&[3u8; 32]).to_vec(), ..Default::default() });
+        let s3 = apply(Some(&s2), &build_entry(w.k("alice@x"), Some(&s2), "x", info2, 1).unwrap(), &w.resolve()).unwrap();
+        assert!(s3.invite_avatar_wraps.is_empty() && s3.invite_avatar_key(&seed).is_none());
+        let revoke = Change::InviteKeyRevoke(crate::pb::parvane::group::v2::InviteKeyRevoke { link_id: lid.to_vec() });
+        let s4 = apply(Some(&s2), &build_entry(w.k("alice@x"), Some(&s2), "x", revoke, 1).unwrap(), &w.resolve()).unwrap();
+        assert!(s4.invite_avatar_wraps.is_empty());
     }
 
     #[test]
@@ -1555,6 +1710,26 @@ mod typing_sig_tests {
         let sig = sign_group_typing(&sk, &g, 5, &ch_a, &nonce, b"pl");
         verify_group_typing(&pk, &g, 5, &ch_a, &nonce, b"pl", &sig).unwrap();
         assert!(verify_group_typing(&pk, &g, 5, &ch_b, &nonce, b"pl", &sig).is_err(), "другой канал");
-        assert!(verify_group_typing_legacy(&pk, &g, 5, &nonce, b"pl", &sig).is_err(), "контексты разные");
+    }
+
+    /// spec 035 (FR-076, TYPING-1): прежняя подпись «печатает» (`parvane/v2/group-typing\0`, без `channel_id`) не
+    /// принимается; `channel_id` обязателен (16 байт) — и с новой подписью над пустым каналом отказ.
+    #[test]
+    fn typing_legacy_signature_rejected() {
+        use ed25519_dalek::Signer;
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let g = Ref { domain: "local".into(), id: vec![1; 16] };
+        let nonce = [3u8; 16];
+        let mut legacy = envelope_aad(&g, 5, &nonce);
+        legacy.extend_from_slice(b"pl");
+        let mut msg = b"parvane/v2/group-typing\0".to_vec();
+        msg.extend_from_slice(&legacy);
+        let old = sk.sign(&msg).to_bytes();
+        assert!(verify_group_typing(&pk, &g, 5, &[], &nonce, b"pl", &old).is_err(), "прежняя подпись без канала");
+        assert!(verify_group_typing(&pk, &g, 5, &[1u8; 16], &nonce, b"pl", &old).is_err(), "прежняя подпись с каналом");
+        let empty = sign_group_typing(&sk, &g, 5, &[], &nonce, b"pl");
+        assert!(verify_group_typing(&pk, &g, 5, &[], &nonce, b"pl", &empty).is_err(), "пустой channel_id");
+        assert!(!sign::ctx::ALL.contains(&&b"parvane/v2/group-typing\0"[..]), "прежнего контекста нет в списке");
     }
 }
