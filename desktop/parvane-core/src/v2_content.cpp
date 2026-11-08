@@ -591,7 +591,7 @@ std::string v2Kind(const json &v2) {
                                   "poll_close", "receipt", "edit", "delete", "reaction", "pin",
                                   "call", "group_key", "delivery_key", "contact", "container_key",
                                   "state_key", "chat_mode", "task_offer", "task_response",
-                                  "cloud_invite", "article", "mod_report"};
+                                  "cloud_invite", "article", "mod_report", "group_avatar_key"};
     if (!v2.is_object()) return {};
     for (const char *k : kinds) {
         if (v2.contains(k) && !v2[k].is_null()) return k;
@@ -1068,7 +1068,7 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     // Служебные виды движка (ключи групп/доставки/состояния, звонки) — не
     // сообщения чата.
     if (kind == "group_key" || kind == "delivery_key" || kind == "container_key"
-        || kind == "state_key" || kind == "call") {
+        || kind == "state_key" || kind == "call" || kind == "group_avatar_key") {
         return in;
     }
     if (auto v1 = fromV2(c)) {

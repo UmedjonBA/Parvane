@@ -367,13 +367,13 @@ data class ChatView(
 }
 
 sealed interface ComposeContentKind {
-    data class Text(val value: ViewText) : ComposeContentKind
-    data class Media(val value: ViewMedia) : ComposeContentKind
-    data class Sticker(val value: ViewSticker) : ComposeContentKind
-    data class Poll(val value: ViewPoll) : ComposeContentKind
-    data class Location(val value: ViewLocation) : ComposeContentKind
-    data class Contact(val value: ViewContact) : ComposeContentKind
-    data class Article(val value: ViewArticle) : ComposeContentKind
+    data class Text(val value: org.parvane.gen.ViewText) : ComposeContentKind
+    data class Media(val value: org.parvane.gen.ViewMedia) : ComposeContentKind
+    data class Sticker(val value: org.parvane.gen.ViewSticker) : ComposeContentKind
+    data class Poll(val value: org.parvane.gen.ViewPoll) : ComposeContentKind
+    data class Location(val value: org.parvane.gen.ViewLocation) : ComposeContentKind
+    data class Contact(val value: org.parvane.gen.ViewContact) : ComposeContentKind
+    data class Article(val value: org.parvane.gen.ViewArticle) : ComposeContentKind
 }
 
 data class ComposeContent(
@@ -727,25 +727,25 @@ data class HistoryPageRequest(
 }
 
 sealed interface IntentKind {
-    data class Send(val value: IntentSend) : IntentKind
-    data class Edit(val value: IntentEdit) : IntentKind
-    data class DeleteMessages(val value: IntentDelete) : IntentKind
-    data class React(val value: IntentReact) : IntentKind
-    data class Pin(val value: IntentPin) : IntentKind
-    data class Read(val value: IntentRead) : IntentKind
-    data class Typing(val value: IntentTyping) : IntentKind
-    data class StatePatch(val value: IntentStatePatch) : IntentKind
-    data class StateCreate(val value: IntentStateCreate) : IntentKind
-    data class StateDelete(val value: IntentStateDelete) : IntentKind
-    data class StateSetAdd(val value: IntentStateSetAdd) : IntentKind
-    data class StateSetRemove(val value: IntentStateSetRemove) : IntentKind
-    data class GroupCreate(val value: IntentGroupCreate) : IntentKind
-    data class GroupChange(val value: IntentGroupChange) : IntentKind
-    data class GroupJoinByLink(val value: IntentGroupJoinByLink) : IntentKind
-    data class DomainOp(val value: IntentDomainOp) : IntentKind
-    data class FaveSticker(val value: IntentFaveSticker) : IntentKind
-    data class RotateSsk(val value: IntentRotateSsk) : IntentKind
-    data class Revoke(val value: IntentRevoke) : IntentKind
+    data class Send(val value: org.parvane.gen.IntentSend) : IntentKind
+    data class Edit(val value: org.parvane.gen.IntentEdit) : IntentKind
+    data class DeleteMessages(val value: org.parvane.gen.IntentDelete) : IntentKind
+    data class React(val value: org.parvane.gen.IntentReact) : IntentKind
+    data class Pin(val value: org.parvane.gen.IntentPin) : IntentKind
+    data class Read(val value: org.parvane.gen.IntentRead) : IntentKind
+    data class Typing(val value: org.parvane.gen.IntentTyping) : IntentKind
+    data class StatePatch(val value: org.parvane.gen.IntentStatePatch) : IntentKind
+    data class StateCreate(val value: org.parvane.gen.IntentStateCreate) : IntentKind
+    data class StateDelete(val value: org.parvane.gen.IntentStateDelete) : IntentKind
+    data class StateSetAdd(val value: org.parvane.gen.IntentStateSetAdd) : IntentKind
+    data class StateSetRemove(val value: org.parvane.gen.IntentStateSetRemove) : IntentKind
+    data class GroupCreate(val value: org.parvane.gen.IntentGroupCreate) : IntentKind
+    data class GroupChange(val value: org.parvane.gen.IntentGroupChange) : IntentKind
+    data class GroupJoinByLink(val value: org.parvane.gen.IntentGroupJoinByLink) : IntentKind
+    data class DomainOp(val value: org.parvane.gen.IntentDomainOp) : IntentKind
+    data class FaveSticker(val value: org.parvane.gen.IntentFaveSticker) : IntentKind
+    data class RotateSsk(val value: org.parvane.gen.IntentRotateSsk) : IntentKind
+    data class Revoke(val value: org.parvane.gen.IntentRevoke) : IntentKind
 }
 
 data class Intent(
@@ -1096,12 +1096,12 @@ data class IntentSend(
 }
 
 data class IntentStateCreate(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val set: List<FieldValue> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (set.isNotEmpty()) j.put("set", JSONArray().apply { set.forEach { put(it.toJson()) } })
         return j
     }
@@ -1109,7 +1109,7 @@ data class IntentStateCreate(
     companion object {
         fun fromJson(j: JSONObject): IntentStateCreate {
             return IntentStateCreate(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 set = (j.pick("set", "set") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { FieldValue.fromJson(it as JSONObject) } } } ?: emptyList()
             )
         }
@@ -1117,31 +1117,31 @@ data class IntentStateCreate(
 }
 
 data class IntentStateDelete(
-    val object: ObjectKey? = null
+    val `object`: ObjectKey? = null
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         return j
     }
 
     companion object {
         fun fromJson(j: JSONObject): IntentStateDelete {
             return IntentStateDelete(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null
             )
         }
     }
 }
 
 data class IntentStatePatch(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val set: List<FieldValue> = emptyList(),
     val clear: List<Long> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (set.isNotEmpty()) j.put("set", JSONArray().apply { set.forEach { put(it.toJson()) } })
         if (clear.isNotEmpty()) j.put("clear", JSONArray().apply { clear.forEach { put(it) } })
         return j
@@ -1150,7 +1150,7 @@ data class IntentStatePatch(
     companion object {
         fun fromJson(j: JSONObject): IntentStatePatch {
             return IntentStatePatch(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 set = (j.pick("set", "set") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { FieldValue.fromJson(it as JSONObject) } } } ?: emptyList(),
                 clear = (j.pick("clear", "clear") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString().toLong() } } } ?: emptyList()
             )
@@ -1159,13 +1159,13 @@ data class IntentStatePatch(
 }
 
 data class IntentStateSetAdd(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val field: Long = 0L,
     val element: ByteArray = ByteArray(0)
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (!(field == 0L)) j.put("field", field)
         if (!(element.isEmpty())) j.put("element", toBase64(element))
         return j
@@ -1174,7 +1174,7 @@ data class IntentStateSetAdd(
     companion object {
         fun fromJson(j: JSONObject): IntentStateSetAdd {
             return IntentStateSetAdd(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 field = j.pick("field", "field")?.let { it.toString().toLong() } ?: 0L,
                 element = j.pick("element", "element")?.let { fromBase64(it.toString()) } ?: ByteArray(0)
             )
@@ -1183,13 +1183,13 @@ data class IntentStateSetAdd(
 }
 
 data class IntentStateSetRemove(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val field: Long = 0L,
     val element: ByteArray = ByteArray(0)
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (!(field == 0L)) j.put("field", field)
         if (!(element.isEmpty())) j.put("element", toBase64(element))
         return j
@@ -1198,7 +1198,7 @@ data class IntentStateSetRemove(
     companion object {
         fun fromJson(j: JSONObject): IntentStateSetRemove {
             return IntentStateSetRemove(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 field = j.pick("field", "field")?.let { it.toString().toLong() } ?: 0L,
                 element = j.pick("element", "element")?.let { fromBase64(it.toString()) } ?: ByteArray(0)
             )
@@ -1435,16 +1435,16 @@ data class MigrationProgress(
 }
 
 sealed interface ModelChangeChange {
-    data class ChatUpsert(val value: ChatView) : ModelChangeChange
-    data class ChatRemove(val value: Peer) : ModelChangeChange
-    data class MessageUpsert(val value: MessageView) : ModelChangeChange
-    data class MessageRemove(val value: MessageRemove) : ModelChangeChange
-    data class StateChanged(val value: StateChanged) : ModelChangeChange
-    data class GroupChanged(val value: GroupView) : ModelChangeChange
-    data class Notice(val value: Notice) : ModelChangeChange
-    data class UnreadChanged(val value: UnreadChanged) : ModelChangeChange
-    data class WriteBlocked(val value: WriteBlocked) : ModelChangeChange
-    data class Needs(val value: Need) : ModelChangeChange
+    data class ChatUpsert(val value: org.parvane.gen.ChatView) : ModelChangeChange
+    data class ChatRemove(val value: org.parvane.gen.Peer) : ModelChangeChange
+    data class MessageUpsert(val value: org.parvane.gen.MessageView) : ModelChangeChange
+    data class MessageRemove(val value: org.parvane.gen.MessageRemove) : ModelChangeChange
+    data class StateChanged(val value: org.parvane.gen.StateChanged) : ModelChangeChange
+    data class GroupChanged(val value: org.parvane.gen.GroupView) : ModelChangeChange
+    data class Notice(val value: org.parvane.gen.Notice) : ModelChangeChange
+    data class UnreadChanged(val value: org.parvane.gen.UnreadChanged) : ModelChangeChange
+    data class WriteBlocked(val value: org.parvane.gen.WriteBlocked) : ModelChangeChange
+    data class Needs(val value: org.parvane.gen.Need) : ModelChangeChange
 }
 
 data class ModelChange(
@@ -1684,8 +1684,8 @@ data class Outcome(
 }
 
 sealed interface PeerKind {
-    data class User(val value: UserRef) : PeerKind
-    data class Group(val value: Ref) : PeerKind
+    data class User(val value: org.parvane.gen.UserRef) : PeerKind
+    data class Group(val value: org.parvane.gen.Ref) : PeerKind
 }
 
 data class Peer(
@@ -1870,12 +1870,12 @@ data class ServerInput(
 }
 
 data class StateChanged(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val view: StateObjectView? = null
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (!(view == null)) j.put("view", view!!.toJson())
         return j
     }
@@ -1883,7 +1883,7 @@ data class StateChanged(
     companion object {
         fun fromJson(j: JSONObject): StateChanged {
             return StateChanged(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 view = j.pick("view", "view")?.let { StateObjectView.fromJson(it as JSONObject) } ?: null
             )
         }
@@ -1891,13 +1891,13 @@ data class StateChanged(
 }
 
 data class StateObjectView(
-    val object: ObjectKey? = null,
+    val `object`: ObjectKey? = null,
     val fields: List<FieldValue> = emptyList(),
     val marks: List<MarkValue> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        if (!(object == null)) j.put("object", object!!.toJson())
+        if (!(`object` == null)) j.put("object", `object`!!.toJson())
         if (fields.isNotEmpty()) j.put("fields", JSONArray().apply { fields.forEach { put(it.toJson()) } })
         if (marks.isNotEmpty()) j.put("marks", JSONArray().apply { marks.forEach { put(it.toJson()) } })
         return j
@@ -1906,7 +1906,7 @@ data class StateObjectView(
     companion object {
         fun fromJson(j: JSONObject): StateObjectView {
             return StateObjectView(
-                object = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
+                `object` = j.pick("object", "object")?.let { ObjectKey.fromJson(it as JSONObject) } ?: null,
                 fields = (j.pick("fields", "fields") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { FieldValue.fromJson(it as JSONObject) } } } ?: emptyList(),
                 marks = (j.pick("marks", "marks") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { MarkValue.fromJson(it as JSONObject) } } } ?: emptyList()
             )
@@ -2194,17 +2194,17 @@ data class ViewArticle(
 }
 
 sealed interface ViewBodyKind {
-    data class Text(val value: ViewText) : ViewBodyKind
-    data class Media(val value: ViewMedia) : ViewBodyKind
-    data class Sticker(val value: ViewSticker) : ViewBodyKind
-    data class Poll(val value: ViewPoll) : ViewBodyKind
-    data class Location(val value: ViewLocation) : ViewBodyKind
-    data class Contact(val value: ViewContact) : ViewBodyKind
-    data class Call(val value: ViewCall) : ViewBodyKind
-    data class TaskOffer(val value: ViewTaskOffer) : ViewBodyKind
-    data class Article(val value: ViewArticle) : ViewBodyKind
-    data class CloudInvite(val value: ViewCloudInvite) : ViewBodyKind
-    data class Service(val value: ViewService) : ViewBodyKind
+    data class Text(val value: org.parvane.gen.ViewText) : ViewBodyKind
+    data class Media(val value: org.parvane.gen.ViewMedia) : ViewBodyKind
+    data class Sticker(val value: org.parvane.gen.ViewSticker) : ViewBodyKind
+    data class Poll(val value: org.parvane.gen.ViewPoll) : ViewBodyKind
+    data class Location(val value: org.parvane.gen.ViewLocation) : ViewBodyKind
+    data class Contact(val value: org.parvane.gen.ViewContact) : ViewBodyKind
+    data class Call(val value: org.parvane.gen.ViewCall) : ViewBodyKind
+    data class TaskOffer(val value: org.parvane.gen.ViewTaskOffer) : ViewBodyKind
+    data class Article(val value: org.parvane.gen.ViewArticle) : ViewBodyKind
+    data class CloudInvite(val value: org.parvane.gen.ViewCloudInvite) : ViewBodyKind
+    data class Service(val value: org.parvane.gen.ViewService) : ViewBodyKind
 }
 
 data class ViewBody(
@@ -2653,8 +2653,8 @@ data class ViewText(
 }
 
 sealed interface WrapKind {
-    data class Device(val value: DeviceWrap) : WrapKind
-    data class Pin(val value: PinWrap) : WrapKind
+    data class Device(val value: org.parvane.gen.DeviceWrap) : WrapKind
+    data class Pin(val value: org.parvane.gen.PinWrap) : WrapKind
 }
 
 data class Wrap(

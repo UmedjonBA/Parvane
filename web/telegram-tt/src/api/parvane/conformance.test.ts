@@ -1257,7 +1257,9 @@ describe('TYPING-1: «печатает» в чате v2 — только эфе�
     expect(readRepo('backend/protocol/src/sign.rs')).not.toContain('pub const GROUP_TYPING: &[u8]');
     expect(readRepo('proto/parvane/msg/v2/msg.proto')).not.toContain('принимается сервером от старых клиентов');
     // Своей подписи «печатает» у клиентов нет — только движок
-    [readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts'), readDesktopSource(), readAndroidJni()].forEach((src) => {
+    const webController = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    const clients = [webController, readDesktopSource(), readAndroidJni()];
+    clients.forEach((src) => {
       expect(src).not.toContain('parvane/v2/group-typing');
     });
   });
@@ -1412,7 +1414,7 @@ describe('GPHOTO-1: фото частной группы шифруется, с�
     vector: { capability: string; key: string; nonce: string };
   };
 
-  it('схема (spec 035, PV-005): секрета в журнале нет — avatar_key_id и конверт эпохи; движок отдаёт сошедшийся ключ', () => {
+  it('схема (spec 035, PV-005): секрета в журнале нет — avatar_key_id и конверт эпохи; ключ — сошедшийся', () => {
     const proto = readRepo('proto/parvane/group/v2/group.proto');
     expect(proto).toContain('reserved "avatar_key";');
     expect(proto).not.toContain('bytes avatar_key = 4');

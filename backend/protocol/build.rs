@@ -1126,6 +1126,16 @@ fn kt_is_default(t: &BTy, v: &str) -> String {
     }
 }
 
+/// Имя поля Kotlin: жёсткие ключевые слова — в обратных кавычках (`object`, `in`, `is`…).
+fn kt_name(name: &str) -> String {
+    const HARD: &[&str] = &[
+        "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is",
+        "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof",
+        "val", "var", "when", "while",
+    ];
+    if HARD.contains(&name) { format!("`{name}`") } else { name.to_string() }
+}
+
 fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
     let mut s = format!("// {GEN_NOTE}\n// Граница движка — proto3-JSON: имена полей схемы, int64 — строка, bytes — base64, enum — имя.\n@file:Suppress(\"unused\", \"ArrayInDataClass\")\n\npackage org.parvane.gen\n\nimport org.json.JSONArray\nimport org.json.JSONObject\n\n");
     s.push_str(
@@ -1148,7 +1158,12 @@ fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
             let iname = format!("{}{}", m.name, upper_first(&o.camel));
             s.push_str(&format!("sealed interface {iname} {{\n"));
             for f in &o.members {
-                s.push_str(&format!("    data class {}(val value: {}) : {iname}\n", upper_first(&f.camel), kt_ty(&f.ty)));
+                // Полное имя типа: вариант oneof может называться так же, как тип сообщения (`MessageRemove`)
+                let vt = match &f.ty {
+                    BTy::Enum(n) | BTy::Msg(n) => format!("org.parvane.gen.{n}"),
+                    other => kt_ty(other),
+                };
+                s.push_str(&format!("    data class {}(val value: {vt}) : {iname}\n", upper_first(&f.camel)));
             }
             s.push_str("}\n\n");
         }
@@ -1157,15 +1172,15 @@ fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
         for f in &m.fields {
             let t = kt_ty(&f.ty);
             if f.repeated {
-                params.push(format!("    val {}: List<{t}> = emptyList()", f.camel));
+                params.push(format!("    val {}: List<{t}> = emptyList()", kt_name(&f.camel)));
             } else if matches!(f.ty, BTy::Msg(_)) {
-                params.push(format!("    val {}: {t}? = null", f.camel));
+                params.push(format!("    val {}: {t}? = null", kt_name(&f.camel)));
             } else {
-                params.push(format!("    val {}: {t} = {}", f.camel, kt_default(&f.ty)));
+                params.push(format!("    val {}: {t} = {}", kt_name(&f.camel), kt_default(&f.ty)));
             }
         }
         for o in &m.oneofs {
-            params.push(format!("    val {}: {}{}? = null", o.camel, m.name, upper_first(&o.camel)));
+            params.push(format!("    val {}: {}{}? = null", kt_name(&o.camel), m.name, upper_first(&o.camel)));
         }
         s.push_str(&params.join(",\n"));
         s.push_str("\n) {\n    fun toJson(): JSONObject {\n        val j = JSONObject()\n");
@@ -1174,16 +1189,16 @@ fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
                 s.push_str(&format!(
                     "        if ({c}.isNotEmpty()) j.put(\"{p}\", JSONArray().apply {{ {c}.forEach {{ put({}) }} }})\n",
                     kt_to(&f.ty, "it"),
-                    c = f.camel,
+                    c = kt_name(&f.camel),
                     p = f.proto
                 ));
             } else {
-                let v = if matches!(f.ty, BTy::Msg(_)) { format!("{}!!", f.camel) } else { f.camel.clone() };
-                s.push_str(&format!("        if (!({})) j.put(\"{}\", {})\n", kt_is_default(&f.ty, &f.camel), f.proto, kt_to(&f.ty, &v)));
+                let v = if matches!(f.ty, BTy::Msg(_)) { format!("{}!!", kt_name(&f.camel)) } else { kt_name(&f.camel) };
+                s.push_str(&format!("        if (!({})) j.put(\"{}\", {})\n", kt_is_default(&f.ty, &kt_name(&f.camel)), f.proto, kt_to(&f.ty, &v)));
             }
         }
         for o in &m.oneofs {
-            s.push_str(&format!("        when (val o = {}) {{\n", o.camel));
+            s.push_str(&format!("        when (val o = {}) {{\n", kt_name(&o.camel)));
             for f in &o.members {
                 s.push_str(&format!(
                     "            is {}{}.{} -> j.put(\"{}\", {})\n",
@@ -1199,13 +1214,13 @@ fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
         s.push_str("        return j\n    }\n\n    companion object {\n");
         s.push_str(&format!("        fun fromJson(j: JSONObject): {} {{\n", m.name));
         for o in &m.oneofs {
-            s.push_str(&format!("            var {}: {}{}? = null\n", o.camel, m.name, upper_first(&o.camel)));
+            s.push_str(&format!("            var {}: {}{}? = null\n", kt_name(&o.camel), m.name, upper_first(&o.camel)));
             for f in &o.members {
                 s.push_str(&format!(
                     "            j.pick(\"{}\", \"{}\")?.let {{ {} = {}{}.{}({}) }}\n",
                     f.proto,
                     f.camel,
-                    o.camel,
+                    kt_name(&o.camel),
                     m.name,
                     upper_first(&o.camel),
                     upper_first(&f.camel),
@@ -1220,15 +1235,15 @@ fn gen_kt(msgs: &[BMsg], enums: &[BEnum]) -> String {
             if f.repeated {
                 args.push(format!(
                     "                {} = ({get} as? JSONArray)?.let {{ a -> (0 until a.length()).map {{ i -> a.get(i).let {{ {} }} }} }} ?: emptyList()",
-                    f.camel,
+                    kt_name(&f.camel),
                     kt_from(&f.ty, "it")
                 ));
             } else {
-                args.push(format!("                {} = {get}?.let {{ {} }} ?: {}", f.camel, kt_from(&f.ty, "it"), kt_default(&f.ty)));
+                args.push(format!("                {} = {get}?.let {{ {} }} ?: {}", kt_name(&f.camel), kt_from(&f.ty, "it"), kt_default(&f.ty)));
             }
         }
         for o in &m.oneofs {
-            args.push(format!("                {} = {}", o.camel, o.camel));
+            args.push(format!("                {} = {}", kt_name(&o.camel), kt_name(&o.camel)));
         }
         s.push_str(&args.join(",\n"));
         s.push_str("\n            )\n        }\n    }\n}\n\n");
