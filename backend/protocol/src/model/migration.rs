@@ -27,6 +27,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::capabilities::GroupFacts;
 use super::{Engine, Purpose, Work};
 use crate::client::Client;
 use crate::codec::decode_checked;
@@ -552,27 +553,32 @@ impl Engine {
     fn migrate_network_steps(&mut self, w: &mut Work) {
         let me = self.cfg.user.clone();
         let mut subs = vec![];
-        let mut reupload = vec![];
-        for (id, f) in &self.groups {
+        for f in self.groups.values() {
             let role = f.role(&me);
             let member = matches!(role, epb::GroupRole::Owner | epb::GroupRole::Admin | epb::GroupRole::Member) && !f.deleted;
             if member && !f.group.domain.eq_ignore_ascii_case(&self.cfg.domain) {
                 subs.push(f.group.clone());
-            }
-            if matches!(role, epb::GroupRole::Owner | epb::GroupRole::Admin) && !f.deleted {
-                if let Some(s) = self.client.as_ref().and_then(|c| c.group_state(id)) {
-                    if s.public.is_none() && !s.avatar_file_id.is_empty() && s.avatar_key_id.is_empty() {
-                        reupload.push(hex::encode(id));
-                    }
-                }
             }
         }
         for g in subs {
             let r = Self::id_req("group.remote.subscribe", &crate::pb::parvane::group::v2::RemoteSubscribeRequest { group: Some(g) });
             self.push_req(w, r, Purpose::Other);
         }
-        for hex in reupload {
-            w.delta.push(Change::Needs(epb::Need { kind: "group_avatar_reupload".into(), chat: None, detail: hex }));
+        self.avatar_reupload_needs(w);
+    }
+
+    /// Фото частных групп со старым открытым блобом (без отпечатка секрета), где пользователь — владелец или админ:
+    /// нужда `group_avatar_reupload` хосту (перезалить с новым секретом под эпохой, FR-071). Сведения — из журналов
+    /// групп клиента модели.
+    pub(crate) fn avatar_reupload_needs(&self, w: &mut Work) {
+        let Some(c) = &self.client else { return };
+        for id in c.group_ids() {
+            let Some(s) = c.group_state(&id) else { continue };
+            let role = GroupFacts::from_state(s, None).role(&self.cfg.user);
+            let admin = matches!(role, epb::GroupRole::Owner | epb::GroupRole::Admin);
+            if admin && !s.deleted && s.public.is_none() && !s.avatar_file_id.is_empty() && s.avatar_key_id.is_empty() {
+                w.delta.push(Change::Needs(epb::Need { kind: "group_avatar_reupload".into(), chat: None, detail: hex::encode(&id) }));
+            }
         }
     }
 

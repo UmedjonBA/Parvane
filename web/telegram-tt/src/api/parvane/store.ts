@@ -601,6 +601,7 @@ export class ParvaneStore {
     const selfRole = selfMember?.role;
     if (this.isPublicPreview(info)) return this.buildPublicPreviewChat(info);
     const defaults = toBannedRights(info.default_permissions);
+    const caps = ParvaneStore.capabilitiesOf?.(info.group_id);
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
@@ -610,13 +611,15 @@ export class ParvaneStore {
       // tt узнаёт админа только по adminRights: Manage-экраны, постинг в
       // канале, кнопки модерации. Права гранулярные (spec 003); legacy-админ
       // без явного набора от сервера приходит с полным
-      adminRights: selfRole === 'admin' ? toAdminRights(selfMember?.admin_rights, isChannel) : undefined,
+      // Меню сообщений (удалить у всех чужое, закреп) — по решению движка (`capabilities`, T114)
+      adminRights: selfRole === 'admin'
+        ? adminRightsWithCapabilities(toAdminRights(selfMember?.admin_rights, isChannel), caps) : undefined,
       // Права по умолчанию — только у групп: в канале пишут владелец и админы
       defaultBannedRights: !isChannel ? defaults : undefined,
       // Сверх прав по умолчанию (немота участника и т. п.) — тем же решением движка; запрет, совпадающий с правом
       // по умолчанию, второй раз не ставится (tt показывает по нему «запрещено в группе», а не «вас ограничили»)
       currentUserBannedRights: !isChannel
-        ? extraBannedRights(bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id)), defaults)
+        ? extraBannedRights(bannedRightsFromCapabilities(caps), defaults)
         : undefined,
       // Фото группы — открытый объект cloud, как аватар пользователя: tt
       // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
@@ -1073,6 +1076,12 @@ export function bannedRightsFromCapabilities(c?: ChatCapabilities): ApiChatBanne
   if (!c.send_links) out.embedLinks = true;
   if (!c.pin) out.pinMessages = true;
   return out;
+}
+
+/** Права админа для меню сообщений tt: «удалить у всех» чужое и закреп — как решил движок (`Capabilities`). */
+export function adminRightsWithCapabilities(rights: ApiChatAdminRights, c?: ChatCapabilities): ApiChatAdminRights {
+  if (!c) return rights;
+  return { ...rights, deleteMessages: c.delete_everyone || undefined, pinMessages: c.pin || undefined };
 }
 
 /** Запреты решения движка, которых нет среди запретов по умолчанию; нет таких — `undefined`. */

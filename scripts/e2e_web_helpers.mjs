@@ -1114,8 +1114,18 @@ export async function createGroupViaUi(page, title, memberNames, options = {}) {
     await page.locator('#new-chat-public-name').locator('visible=true').first().fill(options.publicName);
   }
   if (options.isJoinRequestNeeded) {
-    // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи
-    await page.getByText('Join by request', { exact: true }).locator('visible=true').first().click();
+    // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи. Только в форме новой группы (левая
+    // колонка): та же подпись есть на экране управления прежней группы справа (ManageJoinMode), и клик туда под
+    // нагрузкой, пока правая колонка ещё закрывается, открывал окно «основная ссылка будет заменена» поверх всего
+    const joinByRequest = page.locator('#LeftColumn .Checkbox').filter({ hasText: 'Join by request' })
+      .locator('visible=true').first();
+    // Отметка проверяется: клик, пришедшийся на перерисовку формы, терялся — группа создавалась без одобрения
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await joinByRequest.locator('input[type="checkbox"]').isChecked().catch(() => false)) break;
+      await joinByRequest.getByText('Join by request', { exact: true }).click();
+      await page.waitForTimeout(300);
+    }
+    assert(await joinByRequest.locator('input[type="checkbox"]').isChecked(), '«Join by request» не отмечен');
   }
   // Форма подставляет название по участникам, пока поле «не тронуто», — введённое может стереться
   for (let attempt = 0; attempt < 5 && await nameInput.inputValue() !== title; attempt++) {
