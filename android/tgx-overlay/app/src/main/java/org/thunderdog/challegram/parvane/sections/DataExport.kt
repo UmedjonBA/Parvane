@@ -1,11 +1,8 @@
 package org.thunderdog.challegram.parvane.sections
 
 import android.app.AlertDialog
-import android.content.ContentValues
 import android.content.Context
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
+import android.net.Uri
 import android.widget.CheckBox
 import org.drinkless.tdlib.Client
 import org.json.JSONObject
@@ -17,24 +14,32 @@ import java.io.File
 
 /**
  * Parvane (spec 031, T039): «Выгрузить мои данные» — ZIP как у web/desktop (переписка JSON+HTML, вложения,
- * «План», заметки, контакты, по желанию — файлы облака). Сборка — ядро (`runDataExport`), архив сохраняется в
- * «Загрузки». Всё берётся с устройства; на сервер ничего не уходит.
+ * «План», заметки, контакты, по желанию — файлы облака). Сборка — ядро (`runDataExport`) во временный файл приложения,
+ * архив — туда, куда пользователь укажет в системном окне выбора места (как Telegram), без общих «Загрузок». Всё
+ * берётся с устройства; на сервер ничего не уходит.
  */
 object DataExport {
     fun start(context: Context) {
         val form = context.vbox(Sx.dp(20f))
         val media = CheckBox(context).apply { text = Sx.t("Вложения (фото, видео, файлы)", "Attachments (photos, videos, files)"); isChecked = true; setTextColor(Sx.color(ColorId.text)) }
         val cloud = CheckBox(context).apply { text = Sx.t("Файлы «Облака»", "Cloud files"); setTextColor(Sx.color(ColorId.text)) }
-        form.addView(context.label(Sx.t("Архив ZIP: переписка, «План», заметки, контакты. Сохранится в «Загрузки».",
-            "ZIP archive: chats, plan, notes, contacts. Saved to Downloads."), 14f, ColorId.textLight))
+        form.addView(context.label(Sx.t("Архив ZIP: переписка, «План», заметки, контакты. Место сохранения выберете сами.",
+            "ZIP archive: chats, plan, notes, contacts. You choose where to save it."), 14f, ColorId.textLight))
         form.addView(media)
         form.addView(cloud)
         AlertDialog.Builder(context, Theme.dialogTheme()).setTitle(Sx.t("Выгрузить мои данные", "Export my data")).setView(form)
-            .setPositiveButton(Sx.t("Выгрузить", "Export")) { _, _ -> run(context, media.isChecked, cloud.isChecked) }
+            .setPositiveButton(Sx.t("Выгрузить", "Export")) { _, _ ->
+                val includeMedia = media.isChecked
+                val includeCloud = cloud.isChecked
+                // Сначала место (как Telegram): отказ — ничего не собирается и не остаётся на устройстве
+                SaveTo.pick(context, defaultName(), "application/zip") { uri -> if (uri != null) run(context, uri, includeMedia, includeCloud) }
+            }
             .setNegativeButton(Sx.t("Отмена", "Cancel"), null).show()
     }
 
-    private fun run(context: Context, includeMedia: Boolean, includeCloud: Boolean) {
+    private fun defaultName() = "parvane-export-" + java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()) + ".zip"
+
+    private fun run(context: Context, target: Uri, includeMedia: Boolean, includeCloud: Boolean) {
         val status = context.label(Sx.t("Подготовка…", "Preparing…"), 15f)
         val progress = AlertDialog.Builder(context, Theme.dialogTheme()).setTitle(Sx.t("Выгрузка данных", "Data export"))
             .setView(context.vbox(Sx.dp(20f)).apply { addView(status) })
@@ -58,21 +63,28 @@ object DataExport {
         Sx.async({
             val meta = Client.exportMeta().put("includeMedia", includeMedia).put("includeCloud", includeCloud)
                 .put("drive", Sx.t("Мой диск", "My drive")).put("labels", labels())
-            val r = ParvaneSections.exportData(meta, tmp.absolutePath)
-            if (r.optBoolean("ok")) {
-                val saved = save(context, tmp, r.optString("fileName").ifEmpty { "parvane-export.zip" })
-                r.put("saved", saved)
+            try {
+                val r = ParvaneSections.exportData(meta, tmp.absolutePath)
+                if (r.optBoolean("ok")) {
+                    val saved = SaveTo.write(context, target, tmp)
+                    r.put("saved", saved)
+                    if (saved) r.put("savedAs", SaveTo.label(context, target))
+                } else SaveTo.discard(context, target)
+                r
+            } catch (e: Throwable) {
+                SaveTo.discard(context, target)
+                throw e
+            } finally {
+                tmp.delete()
             }
-            tmp.delete()
-            r
         }) { r ->
             ParvaneCore.removeListener(listener)
             progress.dismiss()
             val text = when {
                 r == null -> Sx.t("Выгрузка не удалась", "Export failed")
-                r.optBoolean("ok") && r.optBoolean("saved") -> Sx.t("Готово: ${r.optString("fileName")} в «Загрузках». Чатов: ${r.optInt("chats")}, сообщений: ${r.optInt("messages")}",
-                    "Done: ${r.optString("fileName")} in Downloads. Chats: ${r.optInt("chats")}, messages: ${r.optInt("messages")}")
-                r.optBoolean("ok") -> Sx.t("Архив собран, но не сохранён в «Загрузки»", "Archive built but not saved to Downloads")
+                r.optBoolean("ok") && r.optBoolean("saved") -> Sx.t("Готово: сохранено «${r.optString("savedAs")}». Чатов: ${r.optInt("chats")}, сообщений: ${r.optInt("messages")}",
+                    "Done: saved “${r.optString("savedAs")}”. Chats: ${r.optInt("chats")}, messages: ${r.optInt("messages")}")
+                r.optBoolean("ok") -> Sx.t("Архив собран, но не записан в выбранное место", "Archive built but could not be written to the chosen place")
                 r.optString("error") == "canceled" -> Sx.t("Выгрузка отменена", "Export canceled")
                 r.optString("error") == "too-large" -> Sx.t("Слишком большой архив — попробуйте без вложений", "Archive too large — try without attachments")
                 else -> Sx.t("Выгрузка не удалась", "Export failed")
@@ -91,22 +103,4 @@ object DataExport {
         .put("location", Sx.t("Место", "Location")).put("messages", Sx.t("сообщений", "messages"))
         .put("exportedAt", Sx.t("Выгружено", "Exported")).put("privacyOn", Sx.t("включил(а) усиленную приватность", "enabled enhanced privacy"))
         .put("privacyOff", Sx.t("выключил(а) усиленную приватность", "disabled enhanced privacy"))
-
-    private fun save(ctx: Context, f: File, name: String): Boolean = try {
-        if (Build.VERSION.SDK_INT >= 29) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, "application/zip")
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            }
-            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            uri != null && ctx.contentResolver.openOutputStream(uri)?.use { out -> f.inputStream().use { it.copyTo(out) }; true } == true
-        } else {
-            @Suppress("DEPRECATION")
-            f.copyTo(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), name), overwrite = true)
-            true
-        }
-    } catch (e: Throwable) {
-        false
-    }
 }

@@ -71,6 +71,27 @@ class PackJournal(private val dir: File) {
         return had
     }
 
+    /** Ключ записи набора по локальному id (null — набор журнал не ведёт: встроенный или без архива). */
+    @Synchronized fun keyOfLocal(setId: Long): String? = localIds.entries.firstOrNull { it.value == setId }?.key?.takeIf { records.containsKey(it) }
+
+    /**
+     * B8: порядок наборов — `added_ms` переписывается по [keys] (возрастает с наименьшего из них), остальные записи
+     * не трогаются. true — записи изменились.
+     */
+    @Synchronized fun reorder(keys: List<String>): Boolean {
+        val list = keys.distinct().filter { records.containsKey(it) }
+        if (list.size < 2) return false
+        val base = list.mapNotNull { records[it]?.optString("added_ms")?.toLongOrNull() }.minOrNull() ?: 0L
+        var changed = false
+        list.forEachIndexed { i, k ->
+            val o = records[k] ?: return@forEachIndexed
+            val v = (base + i).toString()
+            if (o.optString("added_ms") != v) { o.put("added_ms", v); changed = true }
+        }
+        if (changed) save()
+        return changed
+    }
+
     /** Набор снят на этом устройстве → записи нет (ключ; null — набор журнал не вёл). */
     @Synchronized fun forget(setId: Long): String? {
         val key = localIds.entries.firstOrNull { it.value == setId }?.key ?: return null

@@ -72,6 +72,51 @@ class ClientHonestUiTest {
         assertTrue(src.contains("f.javaClass.simpleName !in NO_OK_STUB"))
     }
 
+    /** Ревью 7 ноя 2026, этап 2: у каждой функции «ежедневного» есть обработчик, и он не заглушка. */
+    @Test
+    fun review1107DailyFunctionsHaveHandlers() {
+        val src = clientSource()
+        for (name in listOf("PreliminaryUploadFile", "CancelPreliminaryUploadFile", "SendMessageAlbum", "GetMessageAvailableReactions",
+                "GetEmojiReaction", "SearchContacts", "SearchChatMembers", "GetChatMessageByDate", "DeleteFile"))
+            assertTrue("нет обработчика $name", src.contains("is TdApi.$name ->"))
+        assertTrue("GetEmojiReaction не 404", !Regex("GetEmojiReaction\\s*->\\s*TdApi.Error").containsMatchIn(src) && !src.contains("is TdApi.GetEmojiReaction -> TdApi.Error"))
+        assertTrue("SearchContacts не пуст", !src.contains("is TdApi.SearchContacts -> TdApi.Users(0"))
+        // A1/A2: своя генерация — FinishFileGeneration доходит до PreliminaryUploads, голосовое/«кружок» — через resolveMedia
+        assertTrue(src.contains("prelim.isOwn(function.generationId)) finishPreliminary("))
+        assertTrue(src.contains("UpdateFileGenerationStart(p.generationId, \"\", p.destinationPath, g.conversion)"))
+        val voice = src.substringAfter("is TdApi.InputMessageVoiceNote ->").substringBefore("is TdApi.InputMessageVideoNote ->")
+        assertTrue("голосовое — resolveMedia (InputFileId записи X)", voice.contains("resolveMedia(c.voiceNote?.voiceNote)") && voice.contains("Waveform.toWire("))
+        assertTrue(src.contains("is TdApi.InputFileId -> fileIdPath(input.id)"))
+        // A3: ответ только у первого сообщения альбома
+        assertTrue(src.substringAfter("private fun sendAlbum(").contains("if (i == 0) f.replyTo else null"))
+        // A4: набор реакций — после Ready
+        val ready = src.substringAfter("setAuth(TdApi.AuthorizationStateReady())").take(400)
+        assertTrue("UpdateActiveEmojiReactions после Ready", ready.contains("UpdateActiveEmojiReactions(Reactions.ACTIVE)"))
+        // B5: поиск по автору
+        assertTrue(src.contains("HistoryQueries.fromSender(m, f.senderId)"))
+        // «без звука»: и отправка, и приём
+        assertTrue(src.contains("SendOptions.applySilent(prepared.content, f.options)"))
+        assertTrue(src.contains("silent = (SendOptions.isSilent(content) || store.notifySilent(chatAddr, scope))"))
+        // пересылка копией — параметры в JNI
+        assertTrue(src.contains("ParvaneCore.forward(to, uuid, opts)"))
+        val jni = listOf(File("../jni/jni_messages.cpp"), File("jni/jni_messages.cpp")).firstOrNull { it.exists() } ?: throw AssertionError("нет jni_messages.cpp")
+        val fwd = jni.readText().substringAfter("ParvaneCore_nativeForward(").substringBefore("JNIEXPORT")
+        assertTrue("без автора — без forwarded_*", fwd.contains("\"hide_author\"") && fwd.contains("content.erase(\"forwarded_name\")"))
+        assertTrue("без подписи", fwd.contains("\"remove_caption\"") && fwd.contains("content.erase(\"caption\")"))
+        assertTrue("без звука", fwd.contains("content[\"silent\"] = true"))
+    }
+
+    /** Патчи X ревью 7 ноя (этап 2): «Все чаты» без Premium (B1), перевода нет (A7), без «Добавить контакт» (C4). */
+    @Test
+    fun review1107TgxPatches() {
+        val sh = listOf(File("../setup-tgx.sh"), File("setup-tgx.sh")).firstOrNull { it.exists() } ?: throw AssertionError("нет setup-tgx.sh")
+        val t = sh.readText().substringAfter("PYREV2").substringBefore("PYREV2")
+        for (m in listOf("«Все чаты» тянется без Premium", "«Все чаты» двигается без Premium", "без замка Premium на «Все чаты»",
+                "перевода нет", "без строки «Перевод»", "телефонных контактов нет", "статичная реакция"))
+            assertTrue("нет патча «$m»", t.contains(m))
+        assertTrue(t.contains("TRANSLATE_MODE_NONE"))
+    }
+
     @Test
     fun receiveFilterAndPendingRequestsWired() {
         val src = clientSource()

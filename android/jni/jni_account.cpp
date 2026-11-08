@@ -49,7 +49,7 @@ std::atomic<int> g_linkGeneration{0};
 
 // Ключ восстановления через Telegram (новое устройство).
 std::mutex g_tgMu;
-std::string g_tgState = "idle"; // idle|waiting|joining|done|failed|expired|unavailable|limit
+std::string g_tgState = "idle"; // idle|waiting|joining|done|failed|expired|unavailable|limit|intercepted
 int g_tgGeneration = 0;
 constexpr std::int64_t kTelegramKeyWaitMs = 30 * 60 * 1000;
 
@@ -449,9 +449,16 @@ void pollTelegramLoop(int generation) {
         if (steadyMs() - started > kTelegramKeyWaitMs) { setTelegramState("expired"); return; }
         const auto reply = s->pollTelegramKey(false);
         if (!reply.is_object()) continue;
+        // S7-1: код запроса сменился — запрос перехвачен другим входом; ответа не ждём
+        if (reply.value("intercepted", false)) { setTelegramState("intercepted"); return; }
         const auto key = reply.value("recovery_key", std::string());
         if (key.empty()) {
-            if (!reply.value("pending", false)) (void)s->requestTelegramKey(false);
+            if (!reply.value("pending", false)) {
+                const auto again = s->requestTelegramKey(false);
+                if (again == "intercepted") { setTelegramState("intercepted"); return; }
+                // Новый запрос — новый код: показываем код из ответа сервера
+                if (again == "sent") setTelegramState("waiting", s->telegramCode());
+            }
             continue;
         }
         setTelegramState("joining");
@@ -686,7 +693,8 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeTelegramRecovery(
         }
         const auto requested = s->requestTelegramKey(again == JNI_TRUE);
         if (requested != "sent") {
-            setTelegramState(requested == "no_telegram" ? "unavailable" : requested == "limit" ? "limit" : "failed");
+            setTelegramState(requested == "no_telegram" ? "unavailable" : requested == "limit" ? "limit"
+                             : requested == "intercepted" ? "intercepted" : "failed");
             return;
         }
         setTelegramState("waiting", s->telegramCode());
@@ -881,6 +889,19 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSetAvatar(JNIE
     } catch (const std::exception &e) {
         LOGE("setAvatar: %s", e.what());
         return jout(env, "");
+    }
+}
+
+// B4 ревью 7 ноя 2026: «Удалить» своё фото профиля — у аккаунта фото одно, аватар снимается (как web deleteProfilePhotos).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeClearAvatar(JNIEnv *, jclass) {
+    const auto c = control();
+    if (!c) return JNI_FALSE;
+    try {
+        parvane::v2::account::setAvatar(*c, "");
+        return JNI_TRUE;
+    } catch (const std::exception &e) {
+        LOGE("clearAvatar: %s", e.what());
+        return JNI_FALSE;
     }
 }
 

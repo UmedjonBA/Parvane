@@ -13,6 +13,12 @@ LOG=${PV_RELEASE_LOG:-/tmp/pv-release}; mkdir -p "$LOG"
 export PARVANE_KEYSTORE_PROPS=/home/ub/AppData/android/keys/keystore-release.properties
 [ -f "$PARVANE_KEYSTORE_PROPS" ] || { echo "нет $PARVANE_KEYSTORE_PROPS"; exit 2; }
 cd "$HERE"
+# C7-7: OpenSSL в prebuilt — версии из build-openssl.sh (prebuilt вне git, пересобирается руками)
+OSSL_ABIS="arm64-v8a"; [ "${PV_RELEASE_X64:-0}" = 1 ] && OSSL_ABIS="$OSSL_ABIS x86_64"
+for A in $OSSL_ABIS; do
+  tools/check_openssl_version.sh "prebuilt/openssl/$A/lib/libcrypto.a" \
+    || { echo "пересобрать: ANDROID_NDK_HOME=$ANDROID_NDK_HOME ./build-openssl.sh $A"; exit 8; }
+done
 echo "== :app:assembleRelease (libparvane_jni.so) =="
 /home/ub/AppData/android/gradle-8.9/bin/gradle :app:assembleRelease --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx3g > "$LOG/app-gradle.log" 2>&1 \
   || { grep -E "error:|What went wrong|FAILED" -A3 "$LOG/app-gradle.log" | head -20; exit 10; }
@@ -43,6 +49,8 @@ if [ -n "$PIN" ]; then
 else
   echo "ВНИМАНИЕ: отпечаток подписи не закреплён (android/release-cert.sha256) — проверен только CN"
 fi
+# C7-7: и в самом APK — OpenSSL, вшитый в libparvane_jni.so, той же версии (не старая .so из кэша сборки)
+tools/check_openssl_version.sh "$REL" ${REL64:+"$REL64"} || exit 8
 aapt=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/aapt | tail -1)
 "$aapt" dump badging "$REL" | grep -q "application-debuggable" && { echo "APK debuggable — не выкладываем"; exit 6; }
 # Методы, которые ядро зовёт из C++ по имени, должны пережить R8 (иначе release без событий ядра и звонков)

@@ -108,7 +108,10 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
     // Все контейнеры, кроме личного диска (поиск по id); свои общие папки — в корне диска, чужие — в «Доступные мне»
     private fun others(): List<JSONObject> = Sx.list(snap?.optJSONArray("containers")).filter { it.optString("kind") != "root" && it.optString("id") != rootId() }
     private fun owned(): List<JSONObject> = others().filter { it.optString("kind") == "owned" }
-    private fun shared(): List<JSONObject> = others().filter { it.optString("kind") != "owned" }
+    // Принятые чужие папки; приглашения (`invite`) — отдельными строками с «Принять» / «Отклонить» (B7)
+    private fun shared(): List<JSONObject> = others().filter { it.optString("kind") == "shared" }
+    private fun invites(): List<JSONObject> = CloudShare.invites(snap)
+    private fun current(): JSONObject? = container?.let { id -> others().firstOrNull { it.optString("id") == id } }
     private fun isService(n: JSONObject) = n.optString("name").startsWith(".parvane-")
     private fun vault(): JSONObject? = nodesOf(rootId()).firstOrNull {
         it.optString("kind") == "folder" && parentOf(it) == null && !it.optBoolean("trashed") && it.optString("name") in listOf("Знания", "Knowledge")
@@ -179,6 +182,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
             chips.addView(chip("upload", Sx.t("Загрузить файл", "Upload file")) { pick() })
             if (place == "drive" && container == null && folder == null)
                 chips.addView(chip("users", Sx.t("Новая общая папка", "New shared folder")) { newShared() })
+            current()?.let { c -> chips.addView(chip("users", Sx.t("Доступ", "Sharing")) { openShare(c) }) }
             body.addView(chips, lp(b = Pv.rem(0.625f)))
         }
         if (place == "trash" && trash().isNotEmpty()) {
@@ -198,6 +202,8 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         body.addView(list, lp(l = -Pv.rem(0.625f), r = -Pv.rem(0.625f)))
         var rows = 0
+        if (query.isEmpty() && container == null && folder == null && (place == "drive" || place == "shared"))
+            invites().forEach { c -> list.addView(CloudShare.inviteRow(context, c) { place = "shared"; container = c.optString("id"); folder = null; rerender() }); rows++ }
         when {
             query.isNotEmpty() -> found().forEach { list.addView(nodeRow(it)); rows++ }
             place == "shared" && container == null -> shared().forEach { c -> list.addView(containerRow(c, isOwn = false)); rows++ }
@@ -288,7 +294,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
 
     private fun found(): List<JSONObject> {
         val q = query.trim()
-        val all = (listOfNotNull(rootId()) + others().map { it.optString("id") }).flatMap { nodesOf(it) }
+        val all = (listOfNotNull(rootId()) + others().filter { it.optString("kind") != "invite" }.map { it.optString("id") }).flatMap { nodesOf(it) }
         return sorted(all.filter { !it.optBoolean("trashed") && !isService(it) && it.optString("name").contains(q, ignoreCase = true) })
     }
 
@@ -473,7 +479,11 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         if (container == null) items += Sx.t("Общий доступ", "Share") to {
             busy = Sx.t("Папка становится общей…", "Sharing folder…")
             rerender()
-            files("shareFolder", JSONObject().put("node", n.optString("id"))) { busy = null; rerender() }
+            // Как web/desktop: папка становится общей и сразу открывается окно «Доступ» — кого позвать и с какими правами
+            files("shareFolder", JSONObject().put("node", n.optString("id"))) { r ->
+                busy = null; rerender()
+                if (r?.optBoolean("ok") == true) r.optString("container").takeIf { it.isNotEmpty() }?.let { id -> openShare(id, n.optString("name")) }
+            }
         }
         items += Sx.t("В корзину", "Move to trash") to { trash(n) }
         Kn.menu(context, n.optString("name"), items, dangerLast = true)
@@ -494,6 +504,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
 
     /** Своя общая папка: удалить её (для всех участников) — не «покинуть». */
     private fun ownContainerMenu(c: JSONObject) = Kn.menu(context, c.optString("name"), listOf(
+        Sx.t("Доступ", "Sharing") to { openShare(c) },
         Sx.t("Удалить общую папку", "Delete shared folder") to {
             PvSheet.confirm(context, Sx.t("Удалить общую папку?", "Delete the shared folder?"),
                 Sx.t("Папка и её файлы удалятся у всех участников.", "The folder and its files are deleted for everyone."), Sx.t("Удалить", "Delete"), danger = true) {
@@ -503,6 +514,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
     ), dangerLast = true)
 
     private fun containerMenu(c: JSONObject) = Kn.menu(context, c.optString("name"), listOf(
+        Sx.t("Доступ", "Sharing") to { openShare(c) },
         Sx.t("Покинуть папку", "Leave folder") to {
             PvSheet.confirm(context, Sx.t("Покинуть совместную папку?", "Leave the shared folder?"), c.optString("name"), Sx.t("Покинуть", "Leave"), danger = true) {
                 Sx.async({ ParvaneSections.cloudCall("parvaneCloudLeave", JSONObject().put("container", c.optString("id")).toString()) }) { container = null; rerender() }
@@ -518,16 +530,25 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         files("createFolder", JSONObject().put("name", name).put("parent", folder ?: ""))
     }
 
-    /** Новая общая папка: папка в личном диске и сразу «Общий доступ». */
+    /** Новая общая папка (web `parvaneCloudCreateShared`) и сразу окно «Доступ». */
     private fun newShared(): Unit = Kn.askText(context, Sx.t("Новая общая папка", "New shared folder"), "", Sx.t("Создать", "Create")) { name ->
-        files("createFolder", JSONObject().put("name", name).put("parent", "")) { r ->
-            val id = r?.optString("id")?.takeIf { it.isNotEmpty() } ?: nodes().firstOrNull { it.optString("name") == name && parentOf(it) == null }?.optString("id")
-            if (id != null) {
-                busy = Sx.t("Папка становится общей…", "Sharing folder…")
-                rerender()
-                files("shareFolder", JSONObject().put("node", id)) { busy = null; rerender() }
-            }
+        busy = Sx.t("Создаётся общая папка…", "Creating shared folder…")
+        rerender()
+        Sx.async({ ParvaneSections.cloudCall("parvaneCloudCreateShared", JSONObject().put("name", name).toString()) }) { r ->
+            busy = null
+            val o = r as? JSONObject
+            val id = o?.optString("container").orEmpty()
+            android.util.Log.i("ParvaneCloud", "облако: доступ create → ${if (o?.optBoolean("ok") == true) "ok" else o?.optString("error").orEmpty().ifEmpty { "failed" }}")
+            if (o?.optBoolean("ok") == true && id.isNotEmpty()) openShare(id, name)
+            else toast(CloudShare.errorText(o?.optString("error").orEmpty().ifEmpty { "failed" }))
+            rerender()
         }
+    }
+
+    private fun openShare(c: JSONObject): Unit = openShare(c.optString("id"), c.optString("name"))
+    private fun openShare(id: String, name: String): Unit = CloudShare.open(context, id, name) {
+        if (container == id) { container = null; folder = null; place = "drive" }
+        rerender()
     }
 
     private fun move(n: JSONObject) {

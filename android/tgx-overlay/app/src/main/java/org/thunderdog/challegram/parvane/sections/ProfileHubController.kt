@@ -99,6 +99,15 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
             row("download", Sx.t("Выгрузить мои данные", "Export my data"), Sx.t("ZIP: переписка, «План», заметки", "ZIP: chats, plan, notes")) {
                 DataExport.start(context())
             }
+            // Копия ключей файлом (как «Конфиденциальность» web/desktop): строки были только в главных настройках X,
+            // которые в Parvane не открываются
+            row("lock", Sx.t("Копия ключей", "Keys backup"), Sx.t("файл под паролем — сохранить или восстановить", "password-protected file — save or restore")) {
+                PvSheet.choose(context(), Sx.t("Копия ключей", "Keys backup"),
+                    listOf(context().getString(R.string.ParvaneKeysExport), context().getString(R.string.ParvaneKeysImport))) { i ->
+                    if (i == 0) org.thunderdog.challegram.ui.ParvaneKeys.export(this@ProfileHubController)
+                    else org.thunderdog.challegram.ui.ParvaneKeys.importFile(this@ProfileHubController)
+                }
+            }
             row("flag", Sx.t("Сообщить об ошибке", "Report a bug"), Sx.t("Описание и журнал приложения", "Description and app log")) {
                 BugReport.show(context())
             }

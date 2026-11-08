@@ -185,6 +185,12 @@ class Stickers(
             if (applyChange(p.setId, true, false) is TdApi.Ok) Log.i(TAG, "стикеры: набор ${p.setId} установлен из журнала состояния")
             else Log.w(TAG, "стикеры: набор ${p.setId} из журнала не установлен (архив недоступен)")
         }
+        // B8: порядок наборов — по added_ms журнала (его переставляет «Упорядочить» на любом своём устройстве)
+        for (emoji in listOf(false, true)) {
+            val ordered = pr.records.filter { it.optBoolean("emoji") == emoji }.sortedBy { it.optString("added_ms").toLongOrNull() ?: 0L }
+                .mapNotNull { journal.localIdOf(it.optString("set_id")) }
+            if (ordered.size > 1 && index.reorder(emoji, ordered)) post(TdApi.UpdateInstalledStickerSets(PackIndex.stickerType(emoji), index.installedIds(emoji)))
+        }
     }
 
     /**
@@ -210,7 +216,45 @@ class Stickers(
         return added > 0
     }
 
+    // ── B8: порядок наборов, поиск по установленным ──────────────────────────
+    /** «Упорядочить наборы» в X: порядок панели и журнала (added_ms по порядку — так его видят другие свои устройства). */
+    @Synchronized fun reorder(type: TdApi.StickerType?, setIds: LongArray?): TdApi.Object {
+        val emoji = isEmoji(type)
+        val ids = (setIds ?: LongArray(0)).toList()
+        index.reorder(emoji, ids)
+        if (journal.reorder(ids.mapNotNull { id -> journal.keyOfLocal(id) })) journalChanged()
+        post(TdApi.UpdateInstalledStickerSets(PackIndex.stickerType(emoji), index.installedIds(emoji)))
+        Log.i(TAG, "стикеры: порядок ${ids.size} наборов сохранён")
+        return TdApi.Ok()
+    }
+    /** Поиск наборов среди установленных (поле поиска экрана наборов) — по названию. */
+    fun searchInstalled(type: TdApi.StickerType?, query: String?, limit: Int): TdApi.StickerSets {
+        val q = (query ?: "").trim().lowercase()
+        val packs = index.installed(isEmoji(type)).filter { it.materialized && (q.isEmpty() || it.name.lowercase().contains(q) || it.rawName.lowercase().contains(q)) }
+            .take(if (limit > 0) limit else 100)
+        return TdApi.StickerSets(packs.size, packs.map { PackIndex.toInfo(it, stickersOf(it)) }.toTypedArray())
+    }
+    /** Стикеры по слову: эмодзи, найденные по слову (EmojiSearch), и явно переданные эмодзи — среди установленных. */
+    fun searchByWords(type: TdApi.StickerType?, emojis: String?, query: String?, limit: Int): TdApi.Stickers {
+        val wanted = LinkedHashSet<String>()
+        (emojis ?: "").let { e -> var i = 0; while (i < e.length) { val cp = e.codePointAt(i); val n = Character.charCount(cp); val ch = e.substring(i, i + n); if (cp > 0x2000) wanted += ch; i += n } }
+        EmojiSearch.search(query).forEach { wanted += it.emoji.replace("\uFE0F", "") }
+        if (wanted.isEmpty()) return TdApi.Stickers(arrayOf())
+        val out = ArrayList<TdApi.Sticker>()
+        for (p in index.installed(isEmoji(type)).filter { it.materialized }) for (f in p.files) {
+            if (wanted.any { w -> f.emoji.contains(w) }) out.add(sticker(p, f))
+            if (limit > 0 && out.size >= limit) return TdApi.Stickers(out.toTypedArray())
+        }
+        return TdApi.Stickers(out.toTypedArray())
+    }
+
     // ── недавние / избранные ───────────────────────────────────────────────
+    /** «Очистить недавние» панели стикеров. */
+    fun clearRecents(): TdApi.Object {
+        recent.clear(); saveState()
+        post(TdApi.UpdateRecentStickers(false, IntArray(0)))
+        return TdApi.Ok()
+    }
     fun favorites(): TdApi.Stickers = TdApi.Stickers(favorite.mapNotNull { byKey(it) }.map { sticker(it.first, it.second) }.toTypedArray())
     fun recents(): TdApi.Stickers = TdApi.Stickers(recent.mapNotNull { byKey(it) }.map { sticker(it.first, it.second) }.toTypedArray())
     fun noteRecent(p: PackIndex.Pack, f: PackIndex.PackFile) {

@@ -58,4 +58,7 @@
   <string name="ParvaneFromCloud">Send from Cloud</string>
   <string name="ParvaneSuggestPlan">Suggest for plan</string>
   <string name="ParvaneArticle">Article</string>
+  <item type="id" name="edit_parvaneContactNote" />
+  <string name="ParvaneContactNote">Note</string>
+  <string name="ParvaneContactNoteInfo">Only you can see the name and note you set for a contact — on all your devices.</string>
 </resources>

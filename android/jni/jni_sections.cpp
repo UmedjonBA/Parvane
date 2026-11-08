@@ -14,6 +14,7 @@
 #include <parvane/sections/markdown.h>
 #include <parvane/sections/cloud_sync.h>
 #include <parvane/sections/notes_canvas_files.h>
+#include <set>
 #include <parvane/sections/notes_embeds.h>
 #include <parvane/sections/notes_canvas_images.h>
 #include <parvane/sections/notes_store.h>
@@ -551,7 +552,7 @@ private:
             const auto status = transport_.needsLinking() ? std::string("needs-linking") : std::string("loading");
             const bool isCached = viewCloud_ && status == "loading";
             const auto key = std::make_tuple(isCached ? std::string("cached") : status, std::string(), std::uint64_t(0),
-                                             std::string(), usage_ ? usage_->dump() : std::string(), std::size_t(0));
+                                             std::string(), usage_ ? usage_->dump() : std::string(), std::string());
             if (key == cloudSent_) return;
             cloudSent_ = key;
             if (!isCached) {
@@ -582,8 +583,12 @@ private:
             viewCloud_ = state;
             markViewDirty();
         }
+        auto list = json::array();
+        for (const auto &c : containers) list.push_back(cloud::toJson(c));
+        // Папки целиком, а не их число: принятое приглашение (invite → shared), роль, участники меняют снимок при том же
+        // числе папок — по числу принятая папка оставалась «приглашением» (final9 tgx_protocol_web_flow)
         const auto key = std::make_tuple(status, rootId.value_or(std::string()), revision, lastError.value_or(std::string()),
-                                         usage_ ? usage_->dump() : std::string(), containers.size());
+                                         usage_ ? usage_->dump() : std::string(), list.dump());
         if (key == cloudSent_) return;
         cloudSent_ = key;
         // Сессия не подключена — сохранённый вид (статус cached: экраны рисуют его, а не «Загрузку»)
@@ -596,8 +601,6 @@ private:
             return;
         }
         if (notesLoaded_) notes_.setCloudData(state);
-        auto list = json::array();
-        for (const auto &c : containers) list.push_back(cloud::toJson(c));
         publishSnapshot("cloud", json{{"state", state}, {"status", status}, {"rootId", rootId ? json(*rootId) : json()},
                                       {"containers", list}, {"lastError", lastError ? json(*lastError) : json()},
                                       {"usage", usage_ ? *usage_ : json()}, {"revision", revision}});
@@ -713,7 +716,7 @@ private:
     std::uint64_t plannerRevision_ = 0;
     std::tuple<std::string, bool, bool, std::string, std::uint64_t> plannerSent_;
     std::tuple<std::uint64_t, int, std::string, std::string, const void *> notesSent_;
-    std::tuple<std::string, std::string, std::uint64_t, std::string, std::string, std::size_t> cloudSent_;
+    std::tuple<std::string, std::string, std::uint64_t, std::string, std::string, std::string> cloudSent_;
     std::optional<json> usage_;
     std::string viewPath_;
     std::optional<json> viewPlanner_;
@@ -1258,6 +1261,14 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudCall(
         const auto r = ask([m, args](Hub &hub) -> json {
             const auto result = hub.drive().handle(m, args.is_discarded() ? json() : args);
             if (m == "parvaneCloudUsage" && result) hub.setUsage(*result);
+            // B7: ответ на приглашение и правки доступа меняют состав контейнеров — снимок облака сразу (без этого
+            // принятая папка оставалась «приглашением» до следующего синка, rev4c 8 ноя 2026)
+            static const std::set<std::string> kAccessChanges{"parvaneCloudAnswerInvite", "parvaneCloudShare", "parvaneCloudUnshare",
+                                                              "parvaneCloudLeave", "parvaneCloudCreateShared", "parvaneCloudRemoveShared"};
+            if (kAccessChanges.count(m) && result && result->value("ok", false)) {
+                hub.drive().handle("parvaneCloudSync", json::object());
+                hub.markAllDirty(); // снимок — в publish() цикла хаба после задачи
+            }
             return result ? *result : json();
         }, 300000);
         return jreply(env, r);

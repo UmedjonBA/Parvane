@@ -1,28 +1,23 @@
 /*
  * Parvane: резервная копия ключей E2E файлом (формат веб-клиента, как
- * Settings → Privacy на десктопе). Экспорт — в Downloads/parvane-keys-<ник>.parvane-keys
- * под паролем; импорт — системный выбор файла + пароль, слияние как при линковке.
- * Зовётся из SettingsController (строки btn_parvaneKeysExport / btn_parvaneKeysImport).
+ * Settings → Privacy на десктопе). Экспорт — под паролем в место, которое пользователь выберет
+ * системным окном (как Telegram; без общих «Загрузок» и разрешения на хранилище); импорт —
+ * системный выбор файла + пароль, слияние как при линковке.
+ * Зовётся из «Профиля» (ProfileHubController, «Копия ключей») и SettingsController X.
  */
 package org.thunderdog.challegram.ui;
 
-import android.content.ContentValues;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
-import android.os.Environment;
-import android.provider.MediaStore;
 import android.widget.Toast;
 
 import org.parvane.core.ParvaneCore;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.parvane.sections.SaveTo;
 import org.thunderdog.challegram.tool.UI;
 
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 public final class ParvaneKeys {
@@ -37,47 +32,29 @@ public final class ParvaneKeys {
           UI.showToast(R.string.ParvaneKeysPasswordShort, Toast.LENGTH_SHORT);
           return false;
         }
-        new Thread(() -> {
-          String file = ParvaneCore.exportKeys(password);
-          String result;
-          if (file.isEmpty()) {
-            result = UI.getAppContext().getString(R.string.ParvaneKeysExportFailed);
-          } else {
-            try {
-              String name = "parvane-keys-" + c.tdlib().myUserUsername() + ".parvane-keys";
-              result = UI.getAppContext().getString(R.string.ParvaneKeysSaved) + " " + saveToDownloads(name, file.getBytes(StandardCharsets.UTF_8));
-            } catch (Throwable t) {
-              result = UI.getAppContext().getString(R.string.ParvaneKeysExportFailed) + ": " + t.getMessage();
-            }
+        String name = "parvane-keys-" + c.tdlib().myUserUsername() + ".parvane-keys";
+        // Место — системным окном выбора (application/octet-stream: иначе поставщик дописывает .json)
+        SaveTo.pick(c.context(), name, "application/octet-stream", uri -> {
+          if (uri == null) {
+            return;
           }
-          final String toast = result;
-          UI.post(() -> UI.showToast(toast, Toast.LENGTH_LONG));
-        }, "parvane-keys-export").start();
+          new Thread(() -> {
+            String file = ParvaneCore.exportKeys(password);
+            String result;
+            if (file.isEmpty()) {
+              SaveTo.discard(UI.getAppContext(), uri);
+              result = UI.getAppContext().getString(R.string.ParvaneKeysExportFailed);
+            } else if (SaveTo.write(UI.getAppContext(), uri, file.getBytes(StandardCharsets.UTF_8))) {
+              result = UI.getAppContext().getString(R.string.ParvaneKeysSaved) + " " + SaveTo.label(UI.getAppContext(), uri);
+            } else {
+              result = UI.getAppContext().getString(R.string.ParvaneKeysExportFailed);
+            }
+            final String toast = result;
+            UI.post(() -> UI.showToast(toast, Toast.LENGTH_LONG));
+          }, "parvane-keys-export").start();
+        });
         return true;
       }, true);
-  }
-
-  private static String saveToDownloads (String name, byte[] bytes) throws Exception {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      ContentValues values = new ContentValues();
-      values.put(MediaStore.Downloads.DISPLAY_NAME, name);
-      values.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream"); // иначе MediaStore дописывает .json
-      values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-      Uri uri = UI.getAppContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-      if (uri == null) throw new IllegalStateException("MediaStore");
-      try (OutputStream os = UI.getAppContext().getContentResolver().openOutputStream(uri)) {
-        os.write(bytes);
-      }
-      return "Download/" + name;
-    }
-    File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-    //noinspection ResultOfMethodCallIgnored
-    dir.mkdirs();
-    File f = new File(dir, name);
-    try (FileOutputStream os = new FileOutputStream(f)) {
-      os.write(bytes);
-    }
-    return f.getAbsolutePath();
   }
 
   public static void importFile (ViewController<?> c) {

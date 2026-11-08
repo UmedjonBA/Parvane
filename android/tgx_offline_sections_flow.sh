@@ -38,11 +38,30 @@ tgx_shot "$OUT/01-day-grid.png"
 XY=$(ui_bounds '^Сверка сетки$')
 if [ -n "$XY" ]; then
   RED=$(python3 - "$OUT/01-day-grid.png" ${XY} <<'EOF'
-import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGB"); x = int(sys.argv[2]); y0 = int(sys.argv[3])
-hits = [y for y in range(max(0, y0 - 40), min(im.height, y0 + 260))
-        if (lambda p: p[0] > 120 and p[0] > 2 * p[1] and p[0] > 2 * p[2])(im.getpixel((x, y)))]
+# Без PIL (на MSI его нет — final9 падал ModuleNotFoundError): PNG screencap — 8 бит RGB/RGBA без чересстрочности
+import struct, sys, zlib
+data = open(sys.argv[1], "rb").read(); pos = 8; idat = b""
+while pos < len(data):
+    n, t = struct.unpack(">I4s", data[pos:pos + 8]); body = data[pos + 8:pos + 8 + n]; pos += 12 + n
+    if t == b"IHDR": w, h, depth, ctype = struct.unpack(">IIBB", body[:10])
+    elif t == b"IDAT": idat += body
+assert depth == 8 and ctype in (2, 6), (depth, ctype)
+x = int(sys.argv[2]); y0 = int(sys.argv[3]); h = min(h, y0 + 260) # строки ниже окна не нужны
+bpp = 4 if ctype == 6 else 3; stride = w * bpp; raw = zlib.decompress(idat); rows = []; prev = bytearray(stride)
+for r in range(h):
+    f = raw[r * (stride + 1)]; line = bytearray(raw[r * (stride + 1) + 1:(r + 1) * (stride + 1)])
+    for i in range(stride):
+        a = line[i - bpp] if i >= bpp else 0; b = prev[i]; c = prev[i - bpp] if i >= bpp else 0
+        if f == 1: line[i] = (line[i] + a) & 255
+        elif f == 2: line[i] = (line[i] + b) & 255
+        elif f == 3: line[i] = (line[i] + (a + b) // 2) & 255
+        elif f == 4:
+            pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+            line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+    rows.append(line); prev = line
+px = lambda y: rows[y][x * bpp:x * bpp + 3]
+hits = [y for y in range(max(0, y0 - 40), min(h, y0 + 260))
+        if (lambda p: p[0] > 120 and p[0] > 2 * p[1] and p[0] > 2 * p[2])(px(y))]
 print(len(hits))
 EOF
 )

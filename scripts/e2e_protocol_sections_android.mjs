@@ -20,8 +20,10 @@ import {
   LOGIN_TIMEOUT_MS,
   dismissRecoveryKeyDialog,
   openPlannerScreen,
+  openPrivateChatStrict,
   openProfile,
   preparePage,
+  sendText,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-sections-android-password-1';
@@ -315,6 +317,70 @@ try {
       await noteRow(X_NOTE).waitFor({ state: 'visible', timeout: WEB_SYNC_BUDGET_MS });
     }));
   } else fail(`X: заметка «${X_NOTE}» не создана`);
+
+  // ── 5. CONTACT-1: своё имя и заметка контакта — web ↔ X одного аккаунта (журнал state.v1, вид contacts) ──
+  const peer = `secp-${S}@local`;
+  const peerNick = peer.split('@')[0];
+  const WEB_FIRST = 'Вереск';
+  const WEB_LAST = `Q${W}`;
+  const WEB_CNOTE = `Сосед по даче ${S}`;
+  const X_FIRST = 'Ольха';
+  const X_LAST = `R${W}`;
+  const X_CNOTE = `Звонить вечером ${S}`;
+  const peerContext = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const peerLog = [];
+  peerContext.on('page', (p) => p.on('console', (m) => { if (m.text().includes('[parvane] v2')) peerLog.push(m.text()); }));
+  await step('собеседник (новый аккаунт web) пишет аккаунту web/X', async () => {
+    const { page: peerPage } = await preparePage(peerContext, peer, PASSWORD);
+    await waitFor(() => Promise.resolve(peerLog.some((l) => l.includes('v2: готов'))), LOGIN_TIMEOUT_MS, 'собеседник: v2 готов');
+    await dismissRecoveryKeyDialog(peerPage);
+    await openPrivateChatStrict(peerPage, user);
+    await sendText(peerPage, `Привет ${S}`);
+    await page.waitForFunction((nick) => Object.values(globalThis.__parvaneGetGlobal?.()?.users?.byId || {})
+      .some((u) => u.usernames?.some(({ username }) => username === nick)), peerNick, { timeout: LINK_TIMEOUT_MS });
+  });
+  const contactNameOnWeb = () => page.evaluate((nick) => {
+    const g = window.__parvaneGetGlobal();
+    const u = Object.values(g.users.byId).find((c) => c.usernames?.some(({ username }) => username === nick));
+    return u ? `${u.firstName}|${u.lastName || ''}` : undefined;
+  }, peerNick);
+  await step('web: своё имя и заметка контакта', async () => {
+    await page.evaluate(async ({ nick, first, last, note }) => {
+      const g = window.__parvaneGetGlobal();
+      const u = Object.values(g.users.byId).find((c) => c.usernames?.some(({ username }) => username === nick));
+      await window.__parvaneDiagCallApi('updateContact', { id: u.id, firstName: first, lastName: last });
+      await window.__parvaneDiagCallApi('updateContactNote', u, { text: note, entities: [] });
+    }, {
+      nick: peerNick, first: WEB_FIRST, last: WEB_LAST, note: WEB_CNOTE,
+    });
+  });
+  await check('X: своё имя и заметка контакта с web (CONTACT-1)', async () => {
+    const until = Date.now() + WEB_SYNC_BUDGET_MS;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      await xCommand({
+        op: 'contact_check', peer, first: WEB_FIRST, last: WEB_LAST, note: WEB_CNOTE,
+      });
+      if (/контакт-проверка: имя=да заметка=да/.test(xLog().slice(xMark))) return;
+      if (Date.now() > until) throw new Error(`X: ${(xLog().slice(xMark).match(/контакт-проверка: [^\n]*/) || ['нет проверки'])[0]}`);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => { setTimeout(r, 3000); });
+    }
+  });
+  await xCommand({
+    op: 'contact_set', peer, first: X_FIRST, last: X_LAST, note: X_CNOTE,
+  });
+  await check('web: своё имя контакта с X ≤ 60 с (CONTACT-1)', () => waitFor(
+    async () => (await contactNameOnWeb()) === `${X_FIRST}|${X_LAST}`,
+    WEB_SYNC_BUDGET_MS, 'имя контакта от X',
+  ));
+  await check('web: заметка контакта с X (CONTACT-1)', () => waitFor(async () => (await page.evaluate(async (nick) => {
+    const g = window.__parvaneGetGlobal();
+    const u = Object.values(g.users.byId).find((c) => c.usernames?.some(({ username }) => username === nick));
+    const full = await window.__parvaneDiagCallApi('fetchFullUser', { id: u.id });
+    return full?.fullInfo?.note?.text;
+  }, peerNick)) === X_CNOTE, WEB_SYNC_BUDGET_MS, 'заметка контакта от X'));
+  await peerContext.close();
 
   // ── инварианты ──────────────────────────────────────────────────────────────
   if (BACKEND_DIR) {

@@ -76,6 +76,8 @@ internal object SeamText {
         "recovery_done" -> if (ru) "Устройство подключено по ключу восстановления." else "Device connected with the recovery key."
         "recovery_failed" -> if (ru) "Не удалось войти по ключу восстановления" else "Could not sign in with the recovery key"
         "recovery_expired" -> if (ru) "Ответ боту не пришёл вовремя — запросите ключ ещё раз" else "No reply to the bot in time — request the key again"
+        // S7-1: запрос ключа этого устройства перехвачен другим входом с тем же устройством
+        "recovery_intercepted" -> if (ru) "Запрос ключа перехвачен: с этим устройством вошёл кто-то ещё. Не отвечайте боту. Если это были не вы — смените пароль" else "The key request was intercepted: someone else signed in as this device. Do not reply to the bot. If it wasn't you, change your password"
         "recovery_unavailable" -> if (ru) "К аккаунту не привязан Telegram — введите ключ восстановления вручную" else "No Telegram linked to this account — enter the recovery key manually"
         "recovery_limit" -> if (ru) "Слишком много запросов ключа. Попробуйте позже" else "Too many key requests. Try again later"
         // служебные сообщения о собеседнике

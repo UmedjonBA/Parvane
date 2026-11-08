@@ -41,4 +41,6 @@
   <string name="ParvaneFromCloud">Отправить из облака</string>
   <string name="ParvaneSuggestPlan">Предложить в план</string>
   <string name="ParvaneArticle">Статья</string>
+  <string name="ParvaneContactNote">Заметка</string>
+  <string name="ParvaneContactNoteInfo">Своё имя и заметку контакта видите только вы — на всех своих устройствах.</string>
 </resources>

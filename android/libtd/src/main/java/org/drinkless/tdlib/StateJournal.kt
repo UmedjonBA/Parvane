@@ -58,8 +58,11 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         var reaction = false
         /** PACK-3: записи наборов стикеров изменились (поставить недостающие, снять убранные). */
         var packs: PackJournal.Projection? = null
+        /** CONTACT-1: адреса, чьё своё имя или заметка изменились. */
+        val contacts = HashSet<String>()
         fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() ||
-            scheduledRemoved.isNotEmpty() || notify != null || pinned.isNotEmpty() || unread.isNotEmpty() || reaction || packs != null
+            scheduledRemoved.isNotEmpty() || notify != null || pinned.isNotEmpty() || unread.isNotEmpty() || reaction || packs != null ||
+            contacts.isNotEmpty()
     }
 
     /**
@@ -74,8 +77,26 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     private fun mutedUntil(s: JSONObject?): Long = if (s == null || s.isNull("mutedUntil")) 0L else s.optLong("mutedUntil")
     private fun stateMutedUntil(st: JSONObject?): Long = (st?.optString("mute_until_ms")?.toLongOrNull() ?: 0L) / 1000
-    private fun notifyToState(local: JSONObject?, journal: JSONObject?): JSONObject =
-        (journal?.let { JSONObject(it.toString()) } ?: JSONObject()).put("mute_until_ms", (mutedUntil(local) * 1000).toString())
+    /** Локальное (блоб веба) → state.v1.NotifySettings: мут, «без звука» и «показывать текст» (B10); звук-файл журнала не трогаем. */
+    private fun notifyToState(local: JSONObject?, journal: JSONObject?): JSONObject {
+        val o = (journal?.let { JSONObject(it.toString()) } ?: JSONObject()).put("mute_until_ms", (mutedUntil(local) * 1000).toString())
+        // Поле, которого шов не знает (не правили на этом устройстве), остаётся как в журнале; JSON null — снять
+        for ((lk, sk) in listOf("silent" to "silent", "showPreviews" to "show_previews")) {
+            if (local == null || !local.has(lk)) continue
+            if (local.isNull(lk)) o.remove(sk) else o.put(sk, local.optBoolean(lk))
+        }
+        return o
+    }
+    /** state.v1.NotifySettings → локальное (блоб веба). */
+    private fun notifyFromState(st: JSONObject): JSONObject {
+        val o = JSONObject().put("mutedUntil", stateMutedUntil(st))
+        if (st.has("silent")) o.put("silent", st.optBoolean("silent"))
+        if (st.has("show_previews")) o.put("showPreviews", st.optBoolean("show_previews"))
+        return o
+    }
+    private fun flag(o: JSONObject?, k: String): Boolean? = if (o != null && o.has(k) && !o.isNull(k)) o.optBoolean(k) else null
+    private fun sameNotify(a: JSONObject?, b: JSONObject): Boolean =
+        a != null && mutedUntil(a) == mutedUntil(b) && flag(a, "silent") == flag(b, "silent") && flag(a, "showPreviews") == flag(b, "showPreviews")
 
     // ── адресация ────────────────────────────────────────────────────────────
     fun peerOf(address: String): JSONObject? {
@@ -154,8 +175,10 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
                 .put("exclude_read", f.excludeRead).put("exclude_archived", f.excludeArchived).put("color", f.colorId))
             order.put(f.id)
         }
-        // «Все чаты» (id 0): место выбирают web/desktop (без Premium) — сохраняем его, чтобы правка папок здесь не сбрасывала
-        if (order.length() >= allFolderAt) {
+        // «Все чаты» (id 0): место выбирают web/desktop (без Premium) — сохраняем его, чтобы правка папок здесь не сбрасывала.
+        // Папок стало меньше, чем место «Все чаты», — они последними (как web withAllFolder), а не выпадают из
+        // folder_order: иначе на всех устройствах «Все чаты» уходили на первое место (B1 ревью 7 ноя 2026)
+        run {
             val ids = (0 until order.length()).map { order.get(it) }.toMutableList()
             ids.add(minOf(allFolderAt, ids.size), 0)
             while (order.length() > 0) order.remove(0)
@@ -196,6 +219,18 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         out.put("quick_reaction", local.quickReaction().takeIf { it.isNotEmpty() }?.let { JSONObject().put("emoji", it) } ?: JSONObject())
         // PACK-3: свои наборы стикеров и эмодзи — рабочая копия записей (без неё вид `packs` в желаемом не меняется)
         if (packs != null) out.put("sticker_packs", packs.records())
+        // CONTACT-1: свои контакты — своё имя и заметка (только своим устройствам; сервер видит шифртекст)
+        out.put("contacts", JSONArray().also { a ->
+            local.contactAddresses().sorted().forEach { address ->
+                if (!address.contains('@')) return@forEach
+                val c = local.contactOf(address) ?: return@forEach
+                val o = JSONObject().put("user", JSONObject().put("address", address))
+                if (c.first.isNotEmpty()) o.put("first_name", c.first.take(256))
+                if (c.last.isNotEmpty()) o.put("last_name", c.last.take(256))
+                if (c.note.isNotEmpty()) o.put("note", c.note)
+                a.put(o)
+            }
+        })
         // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
         if (notify != null) {
             val list = JSONArray()
@@ -233,7 +268,21 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         projectArchived(snap, local, ch)
         projectScheduled(snap, local, queue, ch)
         projectPins(snap, local, ch)
+        projectContacts(snap, local, ch)
         return ch
+    }
+
+    /** CONTACT-1: журнал — главный; запись без имён — контакт с именем, заданным собеседником. */
+    private fun projectContacts(snap: JSONObject, local: ChatLocalState, ch: Changes) {
+        val list = snap.optJSONArray("contacts") ?: JSONArray()
+        val next = LinkedHashMap<String, ChatLocalState.Contact>()
+        for (i in 0 until list.length()) {
+            val o = list.optJSONObject(i) ?: continue
+            val address = o.optJSONObject("user")?.optString("address").orEmpty()
+            if (!address.contains('@') || next.containsKey(address)) continue
+            next[address] = ChatLocalState.Contact(o.optString("first_name"), o.optString("last_name"), o.optString("note"))
+        }
+        ch.contacts += local.replaceContacts(next)
     }
 
     /** В снимке журнала есть настройки уведомлений (вид `notify` уже вёл какой-то клиент). */
@@ -252,20 +301,20 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
                 val address = addressOf(entry.optJSONObject("peer")) ?: continue
                 val settings = entry.optJSONObject("settings") ?: JSONObject()
                 journalNotify[address] = settings
-                val until = stateMutedUntil(settings)
-                if (!notify.exceptions.has(address) || mutedUntil(notify.exceptions.optJSONObject(address)) != until)
-                    exceptions.put(address, JSONObject().put("mutedUntil", until))
+                val want = notifyFromState(settings)
+                if (!sameNotify(notify.exceptions.optJSONObject(address), want)) exceptions.put(address, want)
             }
             notify.exceptions.keys().asSequence().toList().forEach { address ->
-                if (!journalNotify.containsKey(address) && mutedUntil(notify.exceptions.optJSONObject(address)) != 0L)
+                val cur = notify.exceptions.optJSONObject(address)
+                if (!journalNotify.containsKey(address) && (mutedUntil(cur) != 0L || flag(cur, "silent") != null || flag(cur, "showPreviews") != null))
                     exceptions.put(address, JSONObject().put("mutedUntil", 0L))
             }
             val defs = snap.optJSONObject("notify_defaults") ?: JSONObject()
             NOTIFY_SCOPES.forEach { scope ->
                 val st = defs.optJSONObject(scope) ?: return@forEach
                 journalNotifyDefaults[scope] = st
-                val until = stateMutedUntil(st)
-                if (mutedUntil(notify.defaults.optJSONObject(scope)) != until) defaults.put(scope, JSONObject().put("mutedUntil", until))
+                val want = notifyFromState(st)
+                if (!sameNotify(notify.defaults.optJSONObject(scope), want)) defaults.put(scope, want)
             }
         }
         if (exceptions.length() > 0 || defaults.length() > 0) ch.notify = JSONObject().put("defaults", defaults).put("exceptions", exceptions)
@@ -379,7 +428,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     companion object {
         /** Виды, которые ведёт шов (остальные виды журнала не трогаются). */
-        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction", "packs")
+        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction", "packs", "contacts")
         private val NOTIFY_SCOPES = listOf("users", "groups", "channels")
         const val V2_GROUP_PREFIX = "v2g:"
         private val HEX32 = Regex("^[0-9a-f]{32}$")

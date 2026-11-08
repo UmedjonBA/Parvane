@@ -575,6 +575,23 @@ std::shared_ptr<Hist> ensureHist() {
     };
     cfg.dropRow = [raw](const json &state) { return isClearedState(*raw, state); };
     cfg.log = [](const std::string &m) { LOGI("%s", m.c_str()); };
+    // S7-3: журнал пишется пачкой раз в 30–120 с; debug-APK (только сценарии эмулятора, на прод идёт release) —
+    // короткое окно 1–3 с, либо своё из /data/local/tmp/parvane-history-batch-ms («мин,макс»). Признак — флаг сборки
+    // приложения из nativeInit (BuildConfig.DEBUG), а не NDEBUG: libparvane_jni.so и в debug-APK — release-сборка
+    // модуля (setup-tgx.sh берёт её из :app:assembleRelease), и под #ifndef NDEBUG окно оставалось 30–120 с (final9)
+    if (g_debugBuild) {
+        cfg.batchMinMs = 1000;
+        cfg.batchMaxMs = 3000;
+        if (FILE *f = std::fopen("/data/local/tmp/parvane-history-batch-ms", "r")) {
+            long long lo = 0, hi = 0;
+            if (std::fscanf(f, "%lld,%lld", &lo, &hi) == 2 && lo >= 0 && hi >= lo) {
+                cfg.batchMinMs = lo;
+                cfg.batchMaxMs = hi;
+            }
+            std::fclose(f);
+        }
+        LOGI("журнал истории: окно пачки %lld–%lld мс (debug)", (long long)cfg.batchMinMs, (long long)cfg.batchMaxMs);
+    }
     h->sync = std::make_unique<ph::HistorySync>(std::move(cfg));
     convertLegacyJournal(*h, me);
     h->receiptLoop = std::thread(receiptLoop, raw);

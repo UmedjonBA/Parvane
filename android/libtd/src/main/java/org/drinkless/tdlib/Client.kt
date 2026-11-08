@@ -213,6 +213,12 @@ class Client private constructor(
                 is TdApi.GetLanguagePackString -> packString(query.languagePackId, query.key) ?: TdApi.Error(404, "Not Found")
                 // X зовёт и синхронно (clientExecuteT): свойства сообщения — из стора привязанного клиента
                 is TdApi.GetMessageProperties -> boundClient?.messageProperties(query.chatId, query.messageId) ?: TdApi.Error(404, "message not found")
+                // Места X, зовущие execute вне прежнего списка (ревью 7 ноя 2026: не везде ловят ExecutionException)
+                is TdApi.GetCountryFlagEmoji -> TdApi.Text(SeamExec.flagEmoji(query.countryCode))
+                is TdApi.GetSuggestedFileName -> TdApi.Text(boundClient?.store?.fileRef(query.fileId)?.path?.substringAfterLast('/')?.takeIf { it.isNotEmpty() } ?: "file")
+                is TdApi.GetPushReceiverId -> TdApi.PushReceiverId(0) // пуши X (Firebase) не используются — UnifiedPush/служба шва
+                is TdApi.GetLogTags -> TdApi.LogTags(arrayOf())
+                is TdApi.GetLogTagVerbosityLevel -> TdApi.LogVerbosityLevel(0)
                 else -> TdApi.Error(400, "Parvane execute: не поддерживается ${query.javaClass.simpleName}")
             }
             if (result is TdApi.Error) throw ExecutionException(result)
@@ -326,7 +332,9 @@ class Client private constructor(
         // не через пул io (иначе заблокированные отправки заняли бы все потоки и Finish не дошёл бы)
         if (function is TdApi.FinishFileGeneration || function is TdApi.SetFileGenerationProgress || function is TdApi.WriteGeneratedFilePart) {
             when (function) {
-                is TdApi.FinishFileGeneration -> mediaGen.finish(function.generationId, function.error)
+                // голосовое и «кружок» (PreliminaryUploadFile) — свои генерации; правки медиа — MediaGeneration
+                is TdApi.FinishFileGeneration -> if (prelim.isOwn(function.generationId)) finishPreliminary(function.generationId, function.error)
+                    else mediaGen.finish(function.generationId, function.error)
                 is TdApi.SetFileGenerationProgress -> mediaGen.touch(function.generationId)
                 is TdApi.WriteGeneratedFilePart -> mediaGen.touch(function.generationId)
                 else -> {}
@@ -798,6 +806,13 @@ class Client private constructor(
         is TdApi.RemoveNotification -> { notifications.remove(f.notificationGroupId, f.notificationId, single = true)?.let { postUpdate(it) }; TdApi.Ok() }
         is TdApi.RemoveNotificationGroup -> { notifications.remove(f.notificationGroupId, f.maxNotificationId, single = false)?.let { postUpdate(it) }; TdApi.Ok() }
         is TdApi.SendMessage -> sendMessage(f)
+        // A3: альбом (несколько фото/видео, «Поделиться» нескольких медиа) — по одному, ответ только у первого
+        is TdApi.SendMessageAlbum -> sendAlbum(f)
+        // A1/A2: голосовое и «кружок» пишет X сам — запись File, UpdateFileGenerationStart, FinishFileGeneration
+        is TdApi.PreliminaryUploadFile -> preliminaryUpload(f.file, f.fileType, announce = true)
+        is TdApi.CancelPreliminaryUploadFile -> { prelim.cancel(f.fileId); TdApi.Ok() }
+        // «кружок» отменён: файл, который писал X, больше не нужен; прочие файлы (медиа-кэш ядра) не трогаем
+        is TdApi.DeleteFile -> { prelim.forget(f.fileId)?.let { java.io.File(it).delete() }; TdApi.Ok() }
         is TdApi.GetMessage -> messageOf(f.chatId, f.messageId)
         is TdApi.GetMessageLocally -> messageOf(f.chatId, f.messageId)
         is TdApi.GetFile -> store.fileRef(f.fileId)?.let { store.tdFile(it) } ?: TdApi.Error(404, "file not found")
@@ -828,8 +843,7 @@ class Client private constructor(
         is TdApi.SetChatNotificationSettings -> {
             val address = store.addressOf(f.chatId)
             if (address == null) TdApi.Error(404, "chat not found") else {
-                val n = f.notificationSettings
-                store.setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
+                store.setChatNotify(address, f.notificationSettings) // B10: мут, «без звука», показ текста
                 postUpdate(TdApi.UpdateChatNotificationSettings(f.chatId, store.chatNotifySettings(address)))
                 scheduleStateFlush("notify") // журнал личного состояния (STATE-2: notify)
                 TdApi.Ok()
@@ -837,7 +851,7 @@ class Client private constructor(
         }
         is TdApi.GetScopeNotificationSettings -> store.scopeSettings(scopeKey(f.scope))
         is TdApi.SetScopeNotificationSettings -> {
-            store.setScopeMute(scopeKey(f.scope), f.notificationSettings?.muteFor ?: 0)
+            store.setScopeNotify(scopeKey(f.scope), f.notificationSettings) // B10: мут, звук, показ текста области
             postUpdate(TdApi.UpdateScopeNotificationSettings(f.scope, store.scopeSettings(scopeKey(f.scope))))
             scheduleStateFlush("notify") // журнал личного состояния (STATE-2: notify)
             TdApi.Ok()
@@ -862,8 +876,25 @@ class Client private constructor(
         is TdApi.CreatePrivateChat -> store.chatById(f.userId) ?: TdApi.Error(404, "chat not found")
         // Telegram X спрашивает при старте — честные пустые ответы вместо 501,
         // чтобы не плодить ошибки в логе и не ломать экраны
-        is TdApi.GetTopChats -> TdApi.Chats(0, LongArray(0))
-        is TdApi.SearchChats -> { // локальный поиск по названию (как TDLib по кэшу)
+        // B6: «Часто пишете» — личные чаты по последнему сообщению (без убранных); «Недавние» поиска — свой список
+        is TdApi.GetTopChats -> {
+            val l = store.local
+            val ids = if (f.category !is TdApi.TopChatCategoryUsers) emptyList() else store.chatIds().filter { id ->
+                val a = store.addressOf(id)
+                a != null && a.contains('@') && a != store.self && store.group(a) == null && l?.isHiddenTop(id) != true &&
+                    (store.chatById(id)?.lastMessage != null)
+            }.take(if (f.limit > 0) f.limit else 30)
+            TdApi.Chats(ids.size, ids.toLongArray())
+        }
+        is TdApi.RemoveTopChat -> { store.local?.hideTop(f.chatId); TdApi.Ok() }
+        is TdApi.AddRecentlyFoundChat -> { store.local?.addRecentFound(f.chatId); TdApi.Ok() }
+        is TdApi.RemoveRecentlyFoundChat -> { store.local?.removeRecentFound(f.chatId); TdApi.Ok() }
+        is TdApi.ClearRecentlyFoundChats -> { store.local?.clearRecentFound(); TdApi.Ok() }
+        is TdApi.GetRecentlyOpenedChats -> TdApi.Chats(0, LongArray(0))
+        is TdApi.SearchChats -> if ((f.query ?: "").isBlank()) { // как TDLib: пустой запрос — «Недавние» (недавно найденные)
+            val ids = (store.local?.recentFoundChatIds() ?: emptyList()).filter { store.chatById(it) != null }.take(if (f.limit > 0) f.limit else 50)
+            TdApi.Chats(ids.size, ids.toLongArray())
+        } else { // локальный поиск по названию (как TDLib по кэшу)
             val q = (f.query ?: "").trim().removePrefix("@").lowercase()
             val ids = store.chatIds().filter { id ->
                 q.isEmpty() || (store.chatById(id)?.title ?: "").lowercase().contains(q)
@@ -871,17 +902,26 @@ class Client private constructor(
             }.take(if (f.limit > 0) f.limit else 20)
             TdApi.Chats(ids.size, ids.toLongArray())
         }
-        is TdApi.SearchContacts -> TdApi.Users(0, LongArray(0))
+        // A5: «контакты» Parvane — известные собеседники (переписка, общие группы), фильтр по имени и нику
+        is TdApi.SearchContacts -> searchContacts(f.query, f.limit)
         is TdApi.SearchCallMessages -> TdApi.FoundMessages(0, arrayOf(), "")
         is TdApi.GetCountryCode -> TdApi.Text("")
         is TdApi.GetActiveSessions -> TdApi.Sessions(arrayOf(), 0)
-        is TdApi.SearchBackground, is TdApi.GetEmojiReaction -> TdApi.Error(404, "Not Found")
+        is TdApi.SearchBackground -> TdApi.Error(404, "Not Found")
+        // A4: какие реакции бывают — набор, совместимый с web/desktop (Reactions), значок — нарисованный эмодзи
+        is TdApi.GetMessageAvailableReactions -> if (store.uuidOf(f.chatId, f.messageId) == null) TdApi.Error(404, "message not found") else Reactions.available()
+        is TdApi.GetEmojiReaction -> emojiReaction(f.emoji ?: "")
+        // B5: «перейти к дате» — последнее сообщение не позже даты (локальная история, как поиск)
+        is TdApi.GetChatMessageByDate -> HistoryQueries.atOrBefore(store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages, f.date)
+            ?: TdApi.Error(404, "message not found")
+        // A6: участники для @-подсказок и поиска по участникам
+        is TdApi.SearchChatMembers -> searchChatMembers(f)
         // Открытый чат: X спрашивает счётчики/локации/админов/полный профиль
         is TdApi.GetChatMessageCount -> TdApi.Count(store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages.count { matchesFilter(it, f.filter) })
         is TdApi.SearchChatMessages -> { // локальный поиск по истории чата: текст + фильтр (медиа/файлы/ссылки/закреп — вкладки профиля)
             val q = (f.query ?: "").trim().lowercase() // X шлёт null (Java)
             val all = store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages
-                .filter { m -> matchesFilter(m, f.filter) && (q.isEmpty() || messageText(m).lowercase().contains(q)) }
+                .filter { m -> matchesFilter(m, f.filter) && HistoryQueries.fromSender(m, f.senderId) && (q.isEmpty() || messageText(m).lowercase().contains(q)) }
             val from = if (f.fromMessageId == 0L) all else all.filter { it.id < f.fromMessageId } // страницы: от новых к старым
             val found = from.take(if (f.limit > 0) f.limit else 50).toTypedArray()
             TdApi.FoundChatMessages(all.size, found, found.lastOrNull()?.id ?: 0L)
@@ -964,6 +1004,7 @@ class Client private constructor(
             val st = f.schedulingState
             if (st == null) { scheduledQueue.remove(item.id); fireScheduledGated(item) }
             else if (st is TdApi.MessageSchedulingStateSendAtDate) { scheduledQueue.reschedule(item.id, st.sendDate.toLong()); scheduledMsgs[item.id] = scheduledMessage(item) }
+            else if (st is TdApi.MessageSchedulingStateSendWhenOnline) { scheduledQueue.reschedule(item.id, ScheduledQueue.UNTIL_ONLINE); scheduledMsgs[item.id] = scheduledMessage(item) }
             else return@run TdApi.Error(400, "unsupported scheduling state")
             scheduleStateFlush("scheduled")
             TdApi.Ok()
@@ -1077,7 +1118,13 @@ class Client private constructor(
         is TdApi.GetStickerSet -> stickers.stickerSet(f.setId)
         is TdApi.SearchStickerSet -> stickers.searchSet(f.name)
         is TdApi.GetStickers -> stickers.stickersByEmoji(f.stickerType, f.query, f.limit)
-        is TdApi.SearchStickers -> TdApi.Stickers(arrayOf())
+        // Поиск стикеров и эмодзи по слову — без сервера ключевых слов: названия Unicode и словарь (EmojiSearch)
+        is TdApi.SearchStickers -> stickers.searchByWords(f.stickerType, f.emojis, f.query, f.limit)
+        // B8: поиск по установленным наборам — локально; каталога наборов нет (PACK-1) — честно пусто
+        is TdApi.SearchInstalledStickerSets -> stickers.searchInstalled(f.stickerType, f.query, f.limit)
+        is TdApi.SearchStickerSets -> TdApi.StickerSets(0, arrayOf())
+        is TdApi.ReorderInstalledStickerSets -> stickers.reorder(f.stickerType, f.stickerSetIds)
+        is TdApi.ClearRecentStickers -> if (f.isAttached) TdApi.Ok() else stickers.clearRecents()
         is TdApi.GetTrendingStickerSets -> TdApi.TrendingStickerSets(0, arrayOf(), false)
         is TdApi.GetEmojiCategories -> TdApi.EmojiCategories(arrayOf()) // иной источник категории роняет X (Td.unsupported)
         is TdApi.GetCustomEmojiStickers -> stickers.customEmoji(f.customEmojiIds)
@@ -1093,8 +1140,8 @@ class Client private constructor(
         }
         is TdApi.AddSavedAnimation -> stickers.addSavedAnimation(f.animation)
         is TdApi.RemoveSavedAnimation -> stickers.removeSavedAnimation(f.animation)
-        is TdApi.SearchEmojis -> TdApi.EmojiKeywords(arrayOf())
-        is TdApi.GetKeywordEmojis -> TdApi.Emojis(arrayOf())
+        is TdApi.SearchEmojis -> TdApi.EmojiKeywords(EmojiSearch.search(f.text).map { TdApi.EmojiKeyword(it.emoji, it.keyword) }.toTypedArray())
+        is TdApi.GetKeywordEmojis -> TdApi.Emojis(EmojiSearch.search(f.text).map { it.emoji }.toTypedArray())
         is TdApi.CreateNewStickerSet, is TdApi.AddStickerToSet -> TdApi.Error(501, "Parvane: создание паков — из файлов на web/desktop")
         is TdApi.GetInstalledBackgrounds -> TdApi.Backgrounds(arrayOf()) // фоны чата: только встроенные в X
         // Settings → Data and Storage: честные цифры по каталогу медиа/кэша ядра; сетевой статистики ядро не ведёт
@@ -1106,7 +1153,98 @@ class Client private constructor(
         is TdApi.ResetNetworkStatistics, is TdApi.AddNetworkStatistics -> TdApi.Ok()
         is TdApi.GetBotSimilarBotCount, is TdApi.GetChatSimilarChatCount -> TdApi.Count(0) // «похожие боты/каналы» — вне скоупа
         is TdApi.GetRecentEmojiStatuses -> TdApi.EmojiStatuses(arrayOf())
-        is TdApi.GetContacts -> TdApi.Users(store.knownUserIds().size, store.knownUserIds())
+        is TdApi.GetContacts -> searchContacts(null, 0)
+        // ── этап 4 ревью 7 ноя 2026: редкое сломанное (B2–B4, B10, «молчаливый Ok») ──
+        // B2: «Новый канал» (и группа сверх basic_group_size_max) — группа Parvane вида channel/group
+        is TdApi.CreateNewSupergroupChat -> createSupergroup(f)
+        is TdApi.AddChatMembers -> {
+            val g = store.groupByChat(f.chatId) ?: return TdApi.Error(404, "group not found")
+            val failed = (f.userIds ?: LongArray(0)).filter { uid ->
+                val r = store.addressOf(uid)?.let { ParvaneCore.groupAction(g.gid, "add", it) }
+                r == null || !r.optBoolean("ok")
+            }
+            syncGroups()
+            Log.i(TAG, "участники: добавлено ${(f.userIds?.size ?: 0) - failed.size}, не добавлено ${failed.size}")
+            TdApi.FailedToAddMembers(failed.map { TdApi.FailedToAddMember(it, false, false) }.toTypedArray())
+        }
+        // B3: фото профиля на весь экран — у аккаунта фото одно (avatar_file_id)
+        is TdApi.GetUserProfilePhotos -> {
+            val photo = store.userById(f.userId)?.profilePhoto
+            if (photo == null || f.offset > 0) TdApi.ChatPhotos(if (photo == null) 0 else 1, arrayOf())
+            else TdApi.ChatPhotos(1, arrayOf(TdApi.ChatPhoto(photo.id, 0, null,
+                arrayOf(TdApi.PhotoSize("x", photo.big ?: photo.small, 640, 640, IntArray(0))), null, null, null)))
+        }
+        // B4: «Удалить» своё фото — аватар снимается в identity (как web deleteProfilePhotos)
+        is TdApi.DeleteProfilePhoto -> {
+            if (!ParvaneCore.clearAvatar()) TdApi.Error(500, uiText("failed"))
+            else {
+                store.clearUserPhoto(store.self)?.let { (u, c) -> postUpdate(TdApi.UpdateUser(u)); postUpdate(TdApi.UpdateChatPhoto(c.id, null)) }
+                Log.i(TAG, "фото профиля снято")
+                TdApi.Ok()
+            }
+        }
+        // B10: «Сбросить все настройки уведомлений» — исключения чатов и области, журнал state.v1 notify
+        is TdApi.ResetAllNotificationSettings -> {
+            store.resetNotify().forEach { postUpdate(it) }
+            scheduleStateFlush("notify")
+            Log.i(TAG, "уведомления: все настройки сброшены")
+            TdApi.Ok()
+        }
+        // Админ: «Удалить все сообщения от …» — у всех (как Telegram)
+        is TdApi.DeleteChatMessagesBySender -> {
+            val sender = (f.senderId as? TdApi.MessageSenderUser)?.userId ?: return TdApi.Error(400, "bad sender")
+            val uuids = store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages.filter { HistoryQueries.fromSender(it, f.senderId) }
+                .mapNotNull { store.uuidOf(f.chatId, it.id) }
+            uuids.forEach { ParvaneCore.delete(it, true) }
+            store.removeMessages(uuids).forEach { postUpdate(it) }
+            Log.i(TAG, "удалено ${uuids.size} сообщений автора ${if (sender == store.idOf(store.self)) "я" else "участник"}")
+            TdApi.Ok()
+        }
+        // Полоса закреплённых → «Открепить все»
+        is TdApi.UnpinAllChatMessages -> {
+            val pinned = store.history(f.chatId, 0, 0, Int.MAX_VALUE).messages.filter { it.isPinned }.mapNotNull { store.uuidOf(f.chatId, it.id) }
+            pinned.forEach { ParvaneCore.pin(it, false) }
+            Log.i(TAG, "откреплено ${pinned.size}")
+            TdApi.Ok()
+        }
+        // Правка подписи медиа (и «подпись над медиа», MEDIA-2)
+        is TdApi.EditMessageCaption -> editCaption(f)
+        is TdApi.GetMessages -> TdApi.Messages(f.messageIds?.size ?: 0, (f.messageIds ?: LongArray(0)).map { id ->
+            store.uuidOf(f.chatId, id)?.let { store.messageByUuid(it) } }.toTypedArray())
+        is TdApi.GetRepliedMessage -> (store.uuidOf(f.chatId, f.messageId)?.let { store.messageByUuid(it) }?.replyTo as? TdApi.MessageReplyToMessage)
+            ?.let { r -> messageOf(r.chatId, r.messageId) } ?: TdApi.Error(404, "message not found")
+        // «Сообщения от незнакомых» решает сервер при отправке (отказ — честная ошибка отправки)
+        is TdApi.CanSendMessageToUser -> TdApi.CanSendMessageToUserResultOk()
+        // Профиль собеседника → «Общие группы»
+        is TdApi.GetGroupsInCommon -> store.addressOf(f.userId)?.let { a ->
+            val all = store.groupsInCommon(a)
+            val from = if (f.offsetChatId == 0L) all else all.dropWhile { it != f.offsetChatId }.drop(1)
+            val page = from.take(if (f.limit > 0) f.limit else 100)
+            TdApi.Chats(all.size, page.toLongArray())
+        } ?: TdApi.Error(404, "user not found")
+        // Подсказки «#» — хэштеги из своей истории (сервера хэштегов нет)
+        is TdApi.SearchHashtags -> TdApi.Hashtags(Hashtags.search(store.chatIds().flatMap { store.history(it, 0, 0, Int.MAX_VALUE).messages.map(::messageText) },
+            f.prefix ?: "", if (f.limit > 0) f.limit else 50).toTypedArray())
+        // Жалоба на фото профиля/группы — как жалоба на чат (REPORT-1, серверу)
+        is TdApi.ReportChatPhoto -> reportChat(f.chatId, reportCode(f.reason) + REPORT_SUBMIT, LongArray(0), f.text ?: "")
+            .let { if (it is TdApi.Error) it else TdApi.Ok() }
+        // Архив: чаты остаются в архиве и с новыми сообщениями, новые от незнакомых туда не уходят — так ведёт себя Parvane
+        is TdApi.GetArchiveChatListSettings -> ARCHIVE_SETTINGS
+        is TdApi.SetArchiveChatListSettings -> f.settings?.let { st ->
+            if (st.archiveAndMuteNewChatsFromUnknownUsers == ARCHIVE_SETTINGS.archiveAndMuteNewChatsFromUnknownUsers &&
+                st.keepUnmutedChatsArchived == ARCHIVE_SETTINGS.keepUnmutedChatsArchived && st.keepChatsFromFoldersArchived == ARCHIVE_SETTINGS.keepChatsFromFoldersArchived) TdApi.Ok()
+            else TdApi.Error(400, uiText("archive_settings_fixed"))
+        } ?: TdApi.Error(400, "bad settings")
+        // Пригласительные ссылки папок — Telegram (t.me/addlist); папки Parvane личные: ссылок нет
+        is TdApi.GetChatFolderInviteLinks -> TdApi.ChatFolderInviteLinks(arrayOf())
+        is TdApi.GetChatFolderChatsToLeave -> TdApi.Chats(0, LongArray(0))
+        // Экран сеанса: приём звонков и секретных чатов устройства с другого устройства не настраивается
+        is TdApi.ToggleSessionCanAcceptCalls, is TdApi.ToggleSessionCanAcceptSecretChats -> TdApi.Error(400, uiText("session_toggle_unsupported"))
+        // CONTACT-1: своё имя контакта («Изменить» в профиле X) и заметка — журналом своим устройствам
+        is TdApi.AddContact -> addContact(f.userId, f.contact?.firstName ?: "", f.contact?.lastName ?: "")
+            .also { r -> if (r is TdApi.Ok) f.contact?.note?.let { setContactNote(f.userId, it.text ?: "") } }
+        is TdApi.RemoveContacts -> { (f.userIds ?: LongArray(0)).forEach { removeContact(it) }; TdApi.Ok() }
+        is TdApi.SetUserNote -> setContactNote(f.userId, f.note?.text ?: "")
         is TdApi.SetMessageSenderBlockList -> { // локальный чёрный список (как в вебе): входящие от него не показываем
             val uid = (f.senderId as? TdApi.MessageSenderUser)?.userId
             val address = uid?.let { store.addressOf(it) }
@@ -1174,6 +1312,8 @@ class Client private constructor(
         store.local?.quickReaction()?.takeIf { it.isNotEmpty() }?.let { postUpdate(TdApi.UpdateDefaultReactionType(TdApi.ReactionTypeEmoji(it))) }
         postUpdate(TdApi.UpdateOption("authorization_date", TdApi.OptionValueInteger(System.currentTimeMillis() / 1000)))
         setAuth(TdApi.AuthorizationStateReady())
+        // A4: набор реакций меню сообщения и экрана «Быстрая реакция» (X хранит его с Ready)
+        postUpdate(TdApi.UpdateActiveEmojiReactions(Reactions.ACTIVE))
         ensurePeer(self, announce = true)
         // X ждёт updateScopeNotificationSettings, как от TDLib, — иначе в Settings → Notifications
         // у «Личные чаты/Группы/Каналы» вечное «Загрузка…» (11 сен 2026)
@@ -1288,6 +1428,42 @@ class Client private constructor(
         return TdApi.CreatedBasicGroupChat(g.chatId, TdApi.FailedToAddMembers(arrayOf()))
     }
 
+    /** B2: «Новый канал» (isChannel) и группа сверх basic_group_size_max X — группа Parvane; описание — сведениями группы. */
+    private fun createSupergroup(f: TdApi.CreateNewSupergroupChat): TdApi.Object {
+        val kind = if (f.isChannel) "channel" else "group"
+        val gid = ParvaneCore.createGroup(f.title ?: "", kind, emptyList())
+        if (gid.isEmpty()) return TdApi.Error(500, uiText("failed"))
+        syncGroups()
+        val g = store.group(gid) ?: return TdApi.Error(500, "группа не найдена после создания")
+        if (!f.description.isNullOrBlank()) groupResult(ParvaneCore.groupSetInfo(g.gid, null, f.description, false))
+        Log.i(TAG, "создан ${if (f.isChannel) "канал" else "группа"} ${g.chatId}")
+        return store.chatById(g.chatId)?.copyForUi() ?: TdApi.Error(500, "чат не найден")
+    }
+
+    /** Правка подписи медиа: то же содержимое (файл, ключи) с новой подписью; «подпись над медиа» — MEDIA-2. */
+    private fun editCaption(f: TdApi.EditMessageCaption): TdApi.Object {
+        val uuid = store.uuidOf(f.chatId, f.messageId) ?: return TdApi.Error(404, "message not found")
+        val content = store.contentOf(uuid)?.let { JSONObject(it.toString()) } ?: return TdApi.Error(404, "message not found")
+        if (content.optString("kind") in setOf("text", "", "poll", "location", "sticker", "video_note")) return TdApi.Error(400, uiText("caption_edit_unsupported"))
+        content.remove("local_path")
+        content.put("caption", f.caption?.text ?: "")
+        content.remove("entities")
+        Entities.toWire(f.caption?.entities)?.let { content.put("entities", it) }
+        if (f.showCaptionAboveMedia) content.put("invert_media", true) else content.remove("invert_media")
+        if (!ParvaneCore.edit(uuid, content.toString())) return TdApi.Error(500, uiText("failed"))
+        store.contentOf(uuid)?.optString("local_path")?.takeIf { it.isNotEmpty() }?.let { content.put("local_path", it) }
+        store.applyEdit(uuid, content, System.currentTimeMillis() / 1000).forEach { postUpdate(it) }
+        return store.messageByUuid(uuid) ?: TdApi.Error(404, "message not found")
+    }
+
+    private fun reportCode(r: TdApi.ReportReason?): String = when (r) {
+        is TdApi.ReportReasonSpam -> "spam"; is TdApi.ReportReasonViolence -> "violence"; is TdApi.ReportReasonPornography -> "porn"
+        is TdApi.ReportReasonChildAbuse -> "child"; is TdApi.ReportReasonCopyright -> "copyright"; is TdApi.ReportReasonIllegalDrugs -> "illegal"
+        is TdApi.ReportReasonPersonalDetails -> "personal"; is TdApi.ReportReasonFake -> "fake"; else -> "other"
+    }
+    /** Поведение архива Parvane (web/desktop так же): не настраивается. */
+    private val ARCHIVE_SETTINGS = TdApi.ArchiveChatListSettings(false, true, true)
+
     /** null — ошибка (в логе), иначе "" */
     private fun groupAction(chatId: Long, action: String, arg: String): String? {
         val g = store.groupByChat(chatId) ?: return null
@@ -1346,6 +1522,11 @@ class Client private constructor(
                 else "%s is listed in the group by the server, but no admin record confirms it. Encryption keys are not shared with them."
             "v2_new_device" -> if (ru) "К вашему аккаунту добавлено новое устройство. Если это были не вы, удалите его в Настройки > Устройства."
                 else "A new device was added to your account. If it wasn't you, remove it in Settings > Devices."
+            "failed" -> if (ru) "Не удалось — попробуйте позже" else "Failed — try again later"
+            "archive_settings_fixed" -> if (ru) "В Parvane архив ведёт себя так всегда: чаты остаются в архиве, новые чаты от незнакомых туда не уходят"
+                else "In Parvane the archive always works this way: chats stay archived, new chats from strangers are not archived"
+            "session_toggle_unsupported" -> if (ru) "Приём звонков настраивается на самом устройстве" else "Call reception is set on the device itself"
+            "caption_edit_unsupported" -> if (ru) "У этого сообщения нет подписи" else "This message has no caption"
             // spec 007: режим L2, кадры перехода на v2 — SeamText (общий с чистыми классами шва и тестами)
             else -> SeamText.of(code, ru) ?: fallback.ifEmpty { code }
         }
@@ -1477,6 +1658,8 @@ class Client private constructor(
         bio = TdApi.FormattedText(store.profileField(address, "bio"), arrayOf())
         blockList = if (store.blocked.contains(address)) TdApi.BlockListMain() else null
         giftSettings = null
+        // CONTACT-1: заметка о контакте (видна только себе)
+        note = TdApi.FormattedText(store.local?.contactOf(address)?.note.orEmpty(), arrayOf())
         // день рождения YYYY-MM-DD и личный канал (если группа известна) — как web/desktop
         Regex("^(\\d{4})-(\\d{2})-(\\d{2})$").find(store.profileField(address, "birthday"))?.let { m ->
             val (y, mo, d) = m.destructured
@@ -1677,6 +1860,8 @@ class Client private constructor(
 
     private fun localPath(input: TdApi.InputFile?): String? = when (input) {
         is TdApi.InputFileLocal -> input.path
+        // файл, уже известный шву: голосовое/«кружок», записанные X (ждём конца генерации), или скачанное медиа
+        is TdApi.InputFileId -> fileIdPath(input.id)
         // X сжимает фото генерацией — берём оригинал; но правки (обрезка, рисунок, вырезка видео) без генерации
         // не применить, и молча отправлять неотредактированный файл нельзя — отказ
         is TdApi.InputFileGenerated -> if (MediaEdits.needsGeneration(input.conversion)) null else input.originalPath
@@ -1684,6 +1869,168 @@ class Client private constructor(
     }
 
     private val mediaGen = MediaGeneration()
+
+    // ── A1/A2: голосовое и «кружок» — файлы, которые пишет X (PreliminaryUploadFile) ──────────────────
+    private val prelim = PreliminaryUploads()
+    private fun genDir(): java.io.File {
+        val ctx = appContext()
+        return java.io.File(ctx?.cacheDir ?: java.io.File(System.getProperty("java.io.tmpdir") ?: "."), "parvane-gen")
+    }
+
+    /**
+     * PreliminaryUploadFile. Файл, который пишет сам X (ключ без исходного файла: рекордер голоса, камера «кружка»), —
+     * запись File с путём назначения и UpdateFileGenerationStart (как TDLib); [announce] = false — e2e-хук пишет файл
+     * сам, без X. Готовый файл (исходный путь есть) — сразу «загруженный»: предварительной загрузки на сервер у Parvane
+     * нет, файл шифрует и загружает отправка сообщения.
+     */
+    private fun preliminaryUpload(input: TdApi.InputFile?, type: TdApi.FileType?, announce: Boolean): TdApi.Object {
+        if (PreliminaryUploads.isWrittenByApp(input)) {
+            val g = input as TdApi.InputFileGenerated
+            var file: TdApi.File? = null
+            val p = prelim.start(g.conversion, genDir(), type) { path ->
+                val mime = if (path.endsWith(".ogg")) "audio/ogg" else if (path.endsWith(".mp4")) "video/mp4" else "application/octet-stream"
+                store.generatedFile(path, mime).also { file = it }.id
+            }
+            Log.i(TAG, "генерация файла X: ${type?.javaClass?.simpleName ?: "?"} #${p.fileId}")
+            if (announce) postUpdate(TdApi.UpdateFileGenerationStart(p.generationId, "", p.destinationPath, g.conversion))
+            return file ?: TdApi.Error(500, "file not created")
+        }
+        val path = when (val r = resolveMedia(input)) { is String -> r; else -> return r as TdApi.Object }
+        return store.fileFor("local:$path", "", "", java.io.File(path).length(), "", path)
+    }
+
+    /** FinishFileGeneration своей генерации: файл готов — UpdateFile (X ждёт его до отправки «кружка»). */
+    private fun finishPreliminary(generationId: Long, error: TdApi.Error?) {
+        val p = prelim.finish(generationId, error) ?: return
+        val f = store.finishGenerated(p.fileId, !p.failed)
+        Log.i(TAG, "генерация файла X #${p.fileId}: ${if (p.failed) "отказ" else "готово, ${f?.size ?: 0} байт"}")
+        if (!p.failed && f != null) postUpdate(TdApi.UpdateFile(f))
+    }
+
+    /** InputFileId → путь: файл, который пишет X, — после конца генерации (X шлёт голосовое раньше, чем «готово»). */
+    private fun fileIdPath(id: Int): String? {
+        if (prelim.isGenerated(id)) {
+            if (!prelim.await(id, 60_000)) { Log.w(TAG, "файл X #$id не готов — не отправлено"); return null }
+            prelim.forget(id)
+        }
+        return store.fileRef(id)?.path?.takeIf { it.isNotEmpty() && java.io.File(it).isFile }
+    }
+
+    // ── A3: альбом ─────────────────────────────────────────────────────────
+    private fun sendAlbum(f: TdApi.SendMessageAlbum): TdApi.Object {
+        if (SendOptions.isPreviewOnly(f.options)) return TdApi.Messages(0, arrayOf())
+        val contents = f.inputMessageContents ?: arrayOf()
+        // MEDIA-2: одно случайное album_id у всех элементов — получатель соберёт их в альбом
+        val albumId = if (contents.size > 1) MediaFlags.newAlbumId() else null
+        val out = ArrayList<TdApi.Message>()
+        contents.forEachIndexed { i, c ->
+            // ответ — только у первого сообщения альбома (как Telegram)
+            val r = sendMessage(TdApi.SendMessage(f.chatId, f.topicId, if (i == 0) f.replyTo else null, f.options, null, c), albumId)
+            if (r is TdApi.Message) out += r
+            else if (out.isEmpty() && i == contents.size - 1) return r
+            else Log.w(TAG, "альбом: элемент ${i + 1} не отправлен (${(r as? TdApi.Error)?.message})")
+        }
+        Log.i(TAG, "альбом: отправлено ${out.size} из ${contents.size}${if (f.replyTo != null) ", ответ у первого" else ""}")
+        if (out.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
+        return TdApi.Messages(out.size, out.toTypedArray())
+    }
+
+    // ── A4: реакции ────────────────────────────────────────────────────────
+    private fun emojiReaction(emoji: String): TdApi.Object {
+        val icon = Reactions.iconFile(java.io.File(boundDir, "packs/reactions"), emoji) ?: return TdApi.Error(404, "Not Found")
+        val file = store.fileFor("reaction:${icon.name}", "", "", icon.length(), "image/png", icon.absolutePath)
+        return Reactions.emojiReaction(emoji, file)
+    }
+
+    // ── A5/A6: контакты и участники ──────────────────────────────────────────
+    private fun person(id: Long): PeopleSearch.Person? {
+        val u = store.userById(id) ?: return null
+        val a = store.addressOf(id) ?: return null
+        return PeopleSearch.Person(id, u.firstName ?: "", u.lastName ?: "", a)
+    }
+
+    /** Пользователи, которых X ещё не получал (UpdateUser), — до ответа: X берёт их из своего кэша по id. */
+    private fun announceUsers(ids: Collection<Long>) {
+        ids.forEach { id -> if (!announcedChats.contains(id)) store.userById(id)?.let { postUpdate(TdApi.UpdateUser(it)) } }
+    }
+
+    // ── CONTACT-1: свои контакты ──────────────────────────────────────────────
+    private fun addContact(userId: Long, first: String, last: String): TdApi.Object {
+        val address = store.addressOf(userId)?.takeIf { it.contains('@') && it != store.self } ?: return TdApi.Error(404, "user not found")
+        val l = store.local ?: return TdApi.Error(500, "no local state")
+        val name = ContactNames.override(store.publicName(address), first, last)
+        // Правка — под замком синка журнала: идущий синк (например, от заметки, сохранённой мгновенье назад) иначе
+        // спроецировал бы свой снимок поверх и стёр бы имя (rev4c, 8 ноя 2026: имя с X не дошло до web)
+        synchronized(stateLock) {
+            val prev = l.contactOf(address)
+            l.setContact(address, ChatLocalState.Contact(name?.first ?: "", name?.second ?: "", prev?.note ?: ""))
+        }
+        Log.i(TAG, "контакт: своё имя ${if (name == null) "нет" else "задано"}")
+        contactChanged(address)
+        scheduleStateFlush("contacts")
+        return TdApi.Ok()
+    }
+    private fun removeContact(userId: Long) {
+        val address = store.addressOf(userId) ?: return
+        if (synchronized(stateLock) { store.local?.removeContact(address) } != true) return
+        Log.i(TAG, "контакт удалён: имя и заметка стёрты")
+        contactChanged(address)
+        scheduleStateFlush("contacts")
+    }
+    private fun setContactNote(userId: Long, note: String): TdApi.Object {
+        val address = store.addressOf(userId)?.takeIf { it.contains('@') && it != store.self } ?: return TdApi.Error(404, "user not found")
+        val l = store.local ?: return TdApi.Error(500, "no local state")
+        val changed = synchronized(stateLock) { // как в addContact: не под проекцию идущего синка
+            val prev = l.contactOf(address) ?: ChatLocalState.Contact()
+            l.setContact(address, prev.copy(note = ContactNames.clampNote(note)))
+        }
+        if (changed) {
+            Log.i(TAG, "контакт: заметка ${if (note.isBlank()) "снята" else "сохранена"}")
+            contactChanged(address)
+            scheduleStateFlush("contacts")
+        }
+        return TdApi.Ok()
+    }
+    /** Своё имя/заметка изменились — пользователь, заголовок чата и полный профиль в X. */
+    private fun contactChanged(address: String) {
+        if (store.user(address) == null) return
+        val (user, chat, _) = store.ensurePeer(address)
+        postUpdate(TdApi.UpdateUser(user))
+        if (announcedChats.contains(chat.id)) postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
+        postUpdate(TdApi.UpdateUserFullInfo(user.id, userFullInfo(address)))
+    }
+
+    private fun searchContacts(query: String?, limit: Int): TdApi.Users {
+        val all = store.knownUserIds().toList().mapNotNull { person(it) }
+        val found = PeopleSearch.search(query, all, limit).map { it.id }
+        announceUsers(found)
+        Log.i(TAG, "контакты: ${found.size} из ${all.size}${if (query.isNullOrBlank()) "" else " по запросу"}")
+        return TdApi.Users(found.size, found.toLongArray())
+    }
+
+    private fun searchChatMembers(f: TdApi.SearchChatMembers): TdApi.Object {
+        val g = store.groupByChat(f.chatId)
+        val addresses: List<String> = g?.members ?: run {
+            // личный чат (TDLib): собеседник и я
+            val peer = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
+            listOf(peer, store.self).distinct()
+        }
+        val filter = f.filter
+        val people = addresses.mapNotNull { a -> person(store.idOf(a)) }.filter { p ->
+            when (filter) {
+                is TdApi.ChatMembersFilterAdministrators -> g != null && store.roleOf(g, p.address).let { it == "owner" || it == "admin" }
+                is TdApi.ChatMembersFilterBanned, is TdApi.ChatMembersFilterRestricted, is TdApi.ChatMembersFilterBots -> false
+                else -> true
+            }
+        }
+        val found = PeopleSearch.search(f.query, people, f.limit)
+        announceUsers(found.map { it.id })
+        Log.i(TAG, "участники: ${found.size} из ${addresses.size}${if (f.query.isNullOrBlank()) "" else " по запросу"}")
+        val members = found.map { p ->
+            if (g != null) store.chatMember(g, p.address) else TdApi.ChatMember(TdApi.MessageSenderUser(p.id), "", 0, 0, TdApi.ChatMemberStatusMember(0))
+        }
+        return TdApi.ChatMembers(members.size, members.toTypedArray())
+    }
 
     /**
      * Файл для отправки с учётом генерации X: правки (обрезка, рисунок, вырезка видео) X рисует сам по
@@ -1774,10 +2121,18 @@ class Client private constructor(
                 val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
                 Prepared(JSONObject().put("kind", "file").put("mime", mime).put("filename", name).put("caption", cap(c.caption)), path, false)
             }
-            is TdApi.InputMessageVoiceNote -> Prepared(JSONObject().put("kind", "voice").put("mime", "audio/ogg").put("duration_secs", c.voiceNote.duration).put("caption", cap(c.caption)),
-                localPath(c.voiceNote?.voiceNote) ?: return TdApi.Error(400, "нет файла"), false)
-            is TdApi.InputMessageVideoNote -> Prepared(JSONObject().put("kind", "video_note").put("mime", "video/mp4").put("duration_secs", c.videoNote.duration).put("width", c.videoNote.length),
-                localPath(c.videoNote?.videoNote) ?: return TdApi.Error(400, "нет файла"), false)
+            is TdApi.InputMessageVoiceNote -> {
+                val path = when (val r = resolveMedia(c.voiceNote?.voiceNote)) { is String -> r; else -> return r as TdApi.Object }
+                val o = JSONObject().put("kind", "voice").put("mime", "audio/ogg").put("duration_secs", c.voiceNote.duration).put("caption", cap(c.caption))
+                Waveform.toWire(c.voiceNote.waveform)?.let { o.put("waveform", it) } // провод: отсчёт 0..31 на байт (как web)
+                Prepared(o, path, false)
+            }
+            is TdApi.InputMessageVideoNote -> { // «кружок»: обрезанный в X — генерацией (InputFileGenerated), иначе файл записи
+                val path = when (val r = resolveMedia(c.videoNote?.videoNote)) { is String -> r; else -> return r as TdApi.Object }
+                Prepared(JSONObject().put("kind", "video_note").put("mime", "video/mp4").put("duration_secs", c.videoNote.duration)
+                    .put("width", c.videoNote.length).put("height", c.videoNote.length)
+                    .also { o -> MediaThumb.of(path, video = true)?.let { o.put("thumbnail", it) } }, path, false)
+            }
             else -> TdApi.Error(400, "Parvane: тип сообщения не поддерживается ${c?.javaClass?.simpleName}")
         }
     }
@@ -1794,13 +2149,23 @@ class Client private constructor(
         return uuid
     }
 
-    private fun sendMessage(f: TdApi.SendMessage): TdApi.Object {
+    private fun sendMessage(f: TdApi.SendMessage, albumId: String? = null): TdApi.Object {
         val address = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
         val replyUuid = (f.replyTo as? TdApi.InputMessageReplyToMessage)?.let { store.uuidOf(f.chatId, it.messageId) } ?: ""
         val prepared = when (val r = prepareContent(f.inputMessageContent, address)) { is Prepared -> r; else -> return r as TdApi.Object }
+        // MEDIA-2: спойлер, подпись над медиа, альбом; QUOTE-1: цитата — только вместе с ответом
+        MediaFlags.applyInput(prepared.content, f.inputMessageContent)
+        if (albumId != null && !prepared.echo) prepared.content.put("album_id", albumId)
+        if (replyUuid.isNotEmpty()) MediaFlags.quoteOf(f.replyTo)?.let { prepared.content.put("reply_quote", it) }
+        // «Отправить без звука» — Content.silent у получателя (паритет web/desktop)
+        SendOptions.applySilent(prepared.content, f.options)
+        if (SendOptions.isSilent(f.options)) Log.i(TAG, "отправка без звука → чат ${f.chatId}")
         // spec 005: отложенная отправка — локальная очередь (сервер не знает)
         val sendAt = (f.options?.schedulingState as? TdApi.MessageSchedulingStateSendAtDate)?.sendDate ?: 0
         if (sendAt > 0) return scheduleMessage(f.chatId, address, prepared, replyUuid, sendAt.toLong())
+        // «Отправить, когда будет в сети» (паритет desktop/web): срок-метка, уходит по присутствию собеседника
+        if (f.options?.schedulingState is TdApi.MessageSchedulingStateSendWhenOnline)
+            return scheduleMessage(f.chatId, address, prepared, replyUuid, ScheduledQueue.UNTIL_ONLINE)
         val uuid = sendPrepared(address, prepared, replyUuid)
         if (uuid.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
         lastSentUuid = uuid
@@ -1849,7 +2214,8 @@ class Client private constructor(
     private val scheduledTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-scheduled").apply { isDaemon = true } }
     private fun scheduledMessage(it: ScheduledQueue.Item): TdApi.Message = TdApi.Message().apply {
         id = it.id; chatId = it.chatId; senderId = TdApi.MessageSenderUser(store.idOf(store.self)); isOutgoing = true
-        date = it.createdAt.toInt(); schedulingState = TdApi.MessageSchedulingStateSendAtDate(it.due.toInt(), 0); canBeSaved = true
+        date = it.createdAt.toInt(); canBeSaved = true
+        schedulingState = if (it.due == ScheduledQueue.UNTIL_ONLINE) TdApi.MessageSchedulingStateSendWhenOnline() else TdApi.MessageSchedulingStateSendAtDate(it.due.toInt(), 0)
         content = store.contentFrom(JSONObject(it.content.toString()).also { c -> if (it.localPath != null) c.put("local_path", it.localPath) })
     }
     private fun scheduleMessage(chatId: Long, address: String, p: Prepared, replyUuid: String, due: Long): TdApi.Object {
@@ -1884,7 +2250,7 @@ class Client private constructor(
         // «updateChat not received … UpdateChatHasScheduledMessages», после чего уходила в recovery-режим
         // без SetTdlibParameters (27 сен 2026, tgx_ttl_scheduled_flow.sh)
         restored.map { it.chatId }.distinct().forEach { announceScheduled(it) }
-        scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue().forEach { fireScheduledGated(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
+        scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue { a -> store.user(a)?.status is TdApi.UserStatusOnline }.forEach { fireScheduledGated(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
     }
     /** Отложенное отправляет первое устройство, заметившее срок (web canSendScheduled/markScheduledSent). */
     private fun fireScheduledGated(it: ScheduledQueue.Item) {
@@ -2202,6 +2568,7 @@ class Client private constructor(
             store.chatById(id)?.isMarkedAsUnread = on
             postUpdate(TdApi.UpdateChatIsMarkedAsUnread(id, on))
         }
+        ch.contacts.forEach { contactChanged(it) } // CONTACT-1: своё имя/заметка с другого устройства
         if (ch.reaction) l.quickReaction().takeIf { it.isNotEmpty() }?.let { postUpdate(TdApi.UpdateDefaultReactionType(TdApi.ReactionTypeEmoji(it))) }
         ch.scheduledAdded.forEach { scheduledMsgs[it.id] = scheduledMessage(it); announceScheduled(it.chatId) }
         ch.scheduledRemoved.forEach {
@@ -2245,7 +2612,93 @@ class Client private constructor(
                     "l2state" -> { logL2State(chatId, peer); handle(TdApi.GetOption(L2Mode.OPTION_PREFIX + chatId)) }
                     "privacy" -> handle(TdApi.SetNewChatPrivacySettings(TdApi.NewChatPrivacySettings(cmd.optBoolean("strangers", true), 0)))
                     "ttl" -> handle(TdApi.SetChatMessageAutoDeleteTime(chatId, cmd.optInt("secs")))
-                    "send" -> handle(TdApi.SendMessage(chatId, null, null, null, null, TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
+                    // "silent": true — «Отправить без звука» (тот же путь, что пункт меню кнопки отправки X)
+                    "send" -> handle(TdApi.SendMessage(chatId, null, null, TdApi.MessageSendOptions().apply { disableNotification = cmd.optBoolean("silent") }, null,
+                        TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
+                    // A1/A2 (ревью 7 ноя): голосовое / «кружок» путём рекордера X — PreliminaryUploadFile → отправка InputFileId
+                    // раньше «готово» → файл в путь генерации → FinishFileGeneration. Запись микрофона/камеры эмулятора
+                    // подменяет файл устройства (path), остальное — тот же код шва, что у кнопки микрофона
+                    "voice", "video_note" -> e2eRecorded(chatId, cmd)
+                    // A3: альбом из файлов устройства (как «Галерея» → несколько → отправить)
+                    "album" -> {
+                        val paths = cmd.optJSONArray("paths") ?: org.json.JSONArray()
+                        val items = (0 until paths.length()).map { i ->
+                            // MEDIA-2: «spoiler» и «above» — как «Скрыть под спойлер» и «Подпись над медиа» окна отправки X
+                            TdApi.InputMessagePhoto(TdApi.InputPhoto(TdApi.InputFileLocal(paths.getString(i)), null, null, IntArray(0), 320, 240),
+                                TdApi.FormattedText(if (i == 0) cmd.optString("caption") else "", arrayOf()), cmd.optBoolean("above"), null, cmd.optBoolean("spoiler")) as TdApi.InputMessageContent
+                        }
+                        val reply = cmd.optString("reply").takeIf { it.isNotEmpty() }?.let { t -> store.history(chatId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == t } }
+                        handle(TdApi.SendMessageAlbum(chatId, null, reply?.let { TdApi.InputMessageReplyToMessage(it.id, null, 0, "") }, null, items.toTypedArray()))
+                    }
+                    // MEDIA-2: альбом по подписи — сколько сообщений в его группе (media_album_id), спойлер, подпись над медиа
+                    "album_check" -> store.history(chatId, 0, 0, 200).messages.firstOrNull { m ->
+                        ((m.content as? TdApi.MessagePhoto)?.caption?.text ?: (m.content as? TdApi.MessageVideo)?.caption?.text) == cmd.optString("caption")
+                    }?.let { m ->
+                        val group = if (m.mediaAlbumId == 0L) listOf(m) else store.history(chatId, 0, 0, 200).messages.filter { it.mediaAlbumId == m.mediaAlbumId }
+                        val spoiler = group.count { (it.content as? TdApi.MessagePhoto)?.hasSpoiler == true || (it.content as? TdApi.MessageVideo)?.hasSpoiler == true }
+                        val above = (m.content as? TdApi.MessagePhoto)?.showCaptionAboveMedia ?: (m.content as? TdApi.MessageVideo)?.showCaptionAboveMedia ?: false
+                        Log.i(TAG, "альбом-проверка: в группе ${group.size}, спойлер ${spoiler}, над=${above}")
+                        TdApi.Ok()
+                    } ?: TdApi.Error(404, "album not found")
+                    // QUOTE-1: ответ с цитатой (выделенный фрагмент сообщения по тексту) — путь «Цитировать» X
+                    "quote_reply" -> store.history(chatId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("to_text") }?.let { m ->
+                        val src = (m.content as TdApi.MessageText).text.text
+                        val q = cmd.optString("quote")
+                        handle(TdApi.SendMessage(chatId, null, TdApi.InputMessageReplyToMessage(m.id, TdApi.InputTextQuote(TdApi.FormattedText(q, arrayOf()), src.indexOf(q).coerceAtLeast(0)), 0, null),
+                            null, null, TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
+                    } ?: TdApi.Error(404, "message not found")
+                    // QUOTE-1: у входящего ответа (по тексту) — цитата совпала с ожидаемой
+                    "quote_check" -> store.history(chatId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("text") }?.let { m ->
+                        val q = (m.replyTo as? TdApi.MessageReplyToMessage)?.quote?.text?.text
+                        Log.i(TAG, "цитата-проверка: ${if (q == cmd.optString("quote")) "совпала" else if (q == null) "нет" else "другая"}")
+                        TdApi.Ok()
+                    } ?: TdApi.Error(404, "message not found")
+                    // CONTACT-1: своё имя и заметка контакта — путь окна «Изменить контакт» X (SetUserNote, затем AddContact)
+                    "contact_set" -> {
+                        val uid = store.idOf(peer)
+                        handle(TdApi.SetUserNote(uid, TdApi.FormattedText(cmd.optString("note"), arrayOf())))
+                        handle(TdApi.AddContact(uid, TdApi.ImportedContact("", cmd.optString("first"), cmd.optString("last"), null), false))
+                    }
+                    // CONTACT-1: что показывает X (имя пользователя, заметка профиля) — совпадает ли с ожидаемым (имена в журнал не пишутся)
+                    "contact_check" -> {
+                        val u = store.user(peer)
+                        val nameOk = u != null && u.firstName == cmd.optString("first") && (u.lastName ?: "") == cmd.optString("last")
+                        val noteOk = userFullInfo(peer).note?.text.orEmpty() == cmd.optString("note")
+                        Log.i(TAG, "контакт-проверка: имя=${if (nameOk) "да" else "нет"} заметка=${if (noteOk) "да" else "нет"}")
+                        TdApi.Ok()
+                    }
+                    // A4: реакция на сообщение по тексту — что предлагает меню (GetMessageAvailableReactions), значок, отправка
+                    "react" -> store.history(chatId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("text") }?.let { m ->
+                        val av = handle(TdApi.GetMessageAvailableReactions(chatId, m.id, 25))
+                        val icon = handle(TdApi.GetEmojiReaction(cmd.optString("emoji", "👍")))
+                        Log.i(TAG, "реакции: меню ${(av as? TdApi.AvailableReactions)?.topReactions?.size ?: -1}, значок ${if (icon is TdApi.EmojiReaction) "есть" else "нет"}")
+                        handle(TdApi.AddMessageReaction(chatId, m.id, TdApi.ReactionTypeEmoji(cmd.optString("emoji", "👍")), false, true))
+                    } ?: TdApi.Error(404, "message not found")
+                    // A4: реакции на сообщение (от web/desktop) — что знает X и есть ли значок (то, по чему X рисует реакцию)
+                    "reactions" -> store.history(chatId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("text") }?.let { m ->
+                        val rs = m.interactionInfo?.reactions?.reactions ?: arrayOf()
+                        val desc = rs.joinToString(" ") { r ->
+                            val e = (r.type as? TdApi.ReactionTypeEmoji)?.emoji ?: ""
+                            Reactions.iconName(e).removePrefix("r-").removeSuffix(".png") + "=" + r.totalCount +
+                                (if (handle(TdApi.GetEmojiReaction(e)) is TdApi.EmojiReaction) " значок" else " без значка")
+                        }
+                        Log.i(TAG, "реакции сообщения: ${desc.ifEmpty { "нет" }}")
+                        TdApi.Ok()
+                    } ?: TdApi.Error(404, "message not found")
+                    // A5/A6: «Контакты» / «Новое сообщение» и @-подсказки группы — те же функции, что зовёт X
+                    "contacts" -> handle(TdApi.SearchContacts(cmd.optString("query"), 50))
+                    "members" -> handle(TdApi.SearchChatMembers(cmd.optString("group").takeIf { it.isNotEmpty() }?.let { store.groupByName(it)?.chatId } ?: chatId,
+                        cmd.optString("query"), 20, TdApi.ChatMembersFilterMention(null)))
+                    // пересылка копией («Скрыть автора» X): последнее входящее с текстом text из чата from в чат peer
+                    "forward_copy" -> {
+                        val fromId = store.group(cmd.optString("from"))?.chatId ?: store.idOf(cmd.optString("from"))
+                        store.history(fromId, 0, 0, 200).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("text") }
+                            ?.let { m -> handle(TdApi.ForwardMessages(chatId, null, fromId, longArrayOf(m.id), null, true, false)) } ?: TdApi.Error(404, "message not found")
+                    }
+                    // B5: «перейти к дате» и поиск по автору — в лог (без текстов)
+                    "by_date" -> handle(TdApi.GetChatMessageByDate(chatId, cmd.optInt("date"))).also { r ->
+                        Log.i(TAG, "к дате ${cmd.optInt("date")}: ${(r as? TdApi.Message)?.date ?: "нет"}")
+                    }
                     "schedule" -> handle(TdApi.SendMessage(chatId, null, null, TdApi.MessageSendOptions().apply { schedulingState = TdApi.MessageSchedulingStateSendAtDate(cmd.optInt("due"), 0) }, null,
                         TdApi.InputMessageText(TdApi.FormattedText(cmd.optString("text"), arrayOf()), null, false)))
                     "draft" -> handle(TdApi.SetChatDraftMessage(chatId, null, cmd.optString("text").takeIf { it.isNotEmpty() }?.let { t -> TdApi.DraftMessage(null, 0, TdApi.DraftMessageContentText(TdApi.FormattedText(t, arrayOf()), null), 0L, null) })) // пустой текст — снять черновик
@@ -2351,6 +2804,26 @@ class Client private constructor(
                 Log.i(TAG, "e2e-cmd ${cmd.optString("op")} → ${r.javaClass.simpleName}")
             } catch (e: Throwable) { Log.w(TAG, "e2e-cmd: ${e.message}") }
         }, 3, 3, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    /** e2e-хук «voice»/«video_note»: порядок рекордера X — отправка InputFileId раньше FinishFileGeneration. */
+    private fun e2eRecorded(chatId: Long, cmd: JSONObject): TdApi.Object {
+        val round = cmd.optString("op") == "video_note"
+        val type: TdApi.FileType = if (round) TdApi.FileTypeVideoNote() else TdApi.FileTypeVoiceNote()
+        val f = preliminaryUpload(TdApi.InputFileGenerated(null, (if (round) "round" else "voice") + System.nanoTime(), 0), type, announce = false) as? TdApi.File
+            ?: return TdApi.Error(500, "no file")
+        val p = prelim.pendingOf(f.id) ?: return TdApi.Error(500, "no generation")
+        val content: TdApi.InputMessageContent = if (round)
+            TdApi.InputMessageVideoNote(TdApi.InputVideoNote(TdApi.InputFileId(f.id), null, cmd.optInt("duration", 2), 360), null)
+        else TdApi.InputMessageVoiceNote(TdApi.InputVoiceNote(TdApi.InputFileId(f.id), cmd.optInt("duration", 2), Waveform.pack(IntArray(48) { (it * 7) % 32 })), null, null)
+        val sent = java.util.concurrent.FutureTask<TdApi.Object>(java.util.concurrent.Callable { handle(TdApi.SendMessage(chatId, null, null, null, null, content)) })
+        io.execute(sent)
+        Thread.sleep(500)
+        java.io.File(cmd.optString("path")).copyTo(java.io.File(p.destinationPath), overwrite = true)
+        finishPreliminary(p.generationId, null)
+        val r = try { sent.get(90, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { TdApi.Error(500, e.javaClass.simpleName) }
+        Log.i(TAG, "${if (round) "кружок" else "голосовое"} → ${if (r is TdApi.Message) "отправлено ${store.uuidOf(chatId, r.id)}" else "отказ ${(r as? TdApi.Error)?.message}"}")
+        return r
     }
 
     // ── e2e (debug): маркеры снимков разделов в журнале — как «planner: …» у desktop verify_sections ──
@@ -2556,12 +3029,22 @@ class Client private constructor(
 
     private fun forwardMessages(f: TdApi.ForwardMessages): TdApi.Object {
         val to = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
+        if (SendOptions.isPreviewOnly(f.options)) return TdApi.Messages(0, arrayOf()) // X лишь проверяет, можно ли
+        // «Скрыть автора» / «Скрыть подпись» X (sendCopy/removeCaption) и «без звука» — копия без forwarded_*
+        val opts = SendOptions.forwardOptions(f.sendCopy, f.removeCaption, f.options)
+        if (f.sendCopy || f.removeCaption) Log.i(TAG, "пересылка копией: без автора=${f.sendCopy} без подписи=${f.removeCaption}")
         val out = ArrayList<TdApi.Message>()
         for (mid in f.messageIds) {
             val uuid = store.uuidOf(f.fromChatId, mid) ?: continue
-            val nid = ParvaneCore.forward(to, uuid) // событие message придёт синхронно → стор уже знает
-            if (nid.isNotEmpty()) store.messageByUuid(nid)?.let { out += it }
+            val nid = ParvaneCore.forward(to, uuid, opts)
+            // эхо ядра идёт очередью событий JNI (не синхронно) — ждём его, как sendMessage, иначе X получал пустой ответ
+            if (nid.isNotEmpty()) for (i in 0 until 50) {
+                val m = store.messageByUuid(nid)
+                if (m != null) { out += m; break }
+                Thread.sleep(100)
+            }
         }
+        Log.i(TAG, "переслано ${out.size} из ${f.messageIds.size}, с пометкой автора ${out.count { it.forwardInfo != null }}")
         return TdApi.Messages(out.size, out.toTypedArray())
     }
 
@@ -2844,7 +3327,11 @@ class Client private constructor(
                 announceMessage(msg)
                 // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из журнала истории аккаунта (догрузка)
                 if (!out && !event.optBoolean("read") && !event.optBoolean("replay") && !event.optBoolean("history"))
-                    notifications.onIncoming(msg, isMuted(to.takeIf { event.optBoolean("group") } ?: from, event.optBoolean("group")))?.let { postUpdate(it) }
+                    (to.takeIf { event.optBoolean("group") } ?: from).let { chatAddr ->
+                        val scope = if (event.optBoolean("group")) "groups" else "users"
+                        notifications.onIncoming(msg, isMuted(chatAddr, event.optBoolean("group")), showPreview = store.notifyPreview(chatAddr, scope),
+                            silent = (SendOptions.isSilent(content) || store.notifySilent(chatAddr, scope)).also { if (it) Log.i(TAG, "входящее без звука ${event.optString("id")}") })?.let { postUpdate(it) }
+                    }
             }
             // READ-2: счётчик чата от маркера «прочитано до» журнала истории (прочитано здесь, на другом своём
             // устройстве, своё отправленное, перенос истории) — выставляется заново, а не прибавляется

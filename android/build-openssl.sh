@@ -6,10 +6,12 @@ set -Eeuo pipefail
 NDK="${ANDROID_NDK_HOME:?задай ANDROID_NDK_HOME}"
 ABI="${1:-arm64-v8a}"
 API="${ANDROID_API:-24}"
-VER="${OPENSSL_VER:-3.5.1}"
-# SHA-256 архива (совпадает с openssl-3.5.1.tar.gz.sha256 с GitHub Releases); для другой версии — OPENSSL_SHA256
+# Последний выпуск ветки 3.5 LTS (C7-7, ревью 7 ноя 2026; был 3.5.1). Эту строку читает tools/check_openssl_version.sh —
+# выпуск (tgx_build_upload.sh) не пройдёт со старшей/младшей libcrypto.a. Поднимая версию — пересобрать prebuilt.
+VER="${OPENSSL_VER:-3.5.9}"
+# SHA-256 архива (совпадает с openssl-3.5.9.tar.gz.sha256 GitHub Releases и openssl.org); для другой версии — OPENSSL_SHA256
 case "$VER" in
-  3.5.1) OPENSSL_SHA256_DEFAULT=529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f ;;
+  3.5.9) OPENSSL_SHA256_DEFAULT=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a ;;
   *) OPENSSL_SHA256_DEFAULT= ;;
 esac
 OPENSSL_SHA256="${OPENSSL_SHA256:-$OPENSSL_SHA256_DEFAULT}"

@@ -203,6 +203,33 @@ if [ -n "${PV_TGX_THEME:-}" ]; then
   flip "$PV_TGX_THEME" dark theme-live-chats-dark 1060 330
   a shell rm -f /data/local/tmp/parvane-theme
 fi
+# Выгрузка данных и копия ключей (книга кода, ревью 7 ноя): место — системным окном выбора, в общие «Загрузки» ничего не
+# пишется. Debug-хук parvane-save-here подменяет окно выбора файлом files/e2e-saved/<имя> приложения (читаем run-as).
+tgx_put parvane-save-here 1
+a shell 'rm -f /sdcard/Download/parvane-export-* /sdcard/Download/parvane-keys-*' >/dev/null 2>&1
+tab 'Чаты|Chats'; tab 'Профиль|Profile'; sleep 2
+for i in 1 2 3 4; do ui_dump; [ -n "$(ui_bounds '^(Выгрузить мои данные|Export my data)$')" ] && break; swipe_up 700; done
+tgx_mark
+if tab 'Выгрузить мои данные|Export my data' && tab 'ВЫГРУЗИТЬ|Выгрузить|EXPORT|Export'; then
+  if tgx_logwait "parvane-save: parvane-export-[0-9-]+\.zip → [1-9][0-9]* байт" 240; then
+    EXP=$(a shell run-as "$TGX_PKG" ls files/e2e-saved 2>/dev/null | tr -d '\r' | grep '^parvane-export-.*\.zip$' | tail -1)
+    a exec-out run-as "$TGX_PKG" cat "files/e2e-saved/$EXP" > "$OUT/export.zip" 2>/dev/null
+    unzip -l "$OUT/export.zip" 2>/dev/null | grep -q 'chats' && ok "выгрузка: ZIP записан в выбранное место ($EXP), внутри переписка" \
+      || bad "выгрузка: записанный файл не ZIP с перепиской"
+  else bad "выгрузка: архив не записан в выбранное место"; fi
+  ui_tap '^(OK|ОК)$' 10 || a shell input keyevent 4
+else bad "выгрузка: нет пункта «Выгрузить мои данные» или кнопки «Выгрузить»"; fi
+tgx_mark
+if tab 'Копия ключей|Keys backup' && tab 'Сохранить копию ключей…|Save keys backup…'; then
+  sleep 1; ui_tap_nth 'EditText' 0 || true; a shell input text 'Parvane-keys-e2e-1'; sleep 1
+  tab 'СОХРАНИТЬ|Сохранить|SAVE|Save'
+  tgx_logwait "parvane-save: parvane-keys-.*\.parvane-keys → [1-9][0-9]* байт" 60 && ok "копия ключей записана в выбранное место" \
+    || bad "копия ключей не записана в выбранное место"
+else bad "копия ключей: нет пункта в «Профиле»"; fi
+[ -z "$(a shell 'ls /sdcard/Download 2>/dev/null' | tr -d '\r' | grep -E '^parvane-(export|keys)-')" ] && ok "в общие «Загрузки» ничего не записано" \
+  || bad "выгрузка или копия ключей попала в общие «Загрузки»"
+a shell rm -f /data/local/tmp/parvane-save-here
+close
 # «Сообщить об ошибке» (4 ноя 2026): получатель — bugs@<домен своего адреса>; на стенде — desktop-клиент bugs@local
 BG="$SB/bugs"; BGL="$BG/td/log.txt"
 PBG=$(start_client "$BG" bugs@local PARVANE_NO_LINK_OFFER=1)

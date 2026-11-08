@@ -15,15 +15,19 @@ class Notifications {
     private var nextGroupId = 1
     private var nextId = 1
 
-    /** Входящее сообщение → апдейт группы; null — не уведомлять. muted — чат или область заглушены. */
+    /**
+     * Входящее сообщение → апдейт группы; null — не уведомлять. muted — чат или область заглушены; silent — отправитель
+     * выбрал «без звука» (`Content.silent`): уведомление есть, но без звука и вибрации (`Notification.isSilent`).
+     */
     @Synchronized
-    fun onIncoming(msg: TdApi.Message, muted: Boolean, showPreview: Boolean = true): TdApi.UpdateNotificationGroup? {
+    fun onIncoming(msg: TdApi.Message, muted: Boolean, showPreview: Boolean = true, silent: Boolean = false): TdApi.UpdateNotificationGroup? {
         if (msg.isOutgoing || muted) return null
         val g = groups.getOrPut(msg.chatId) { Group(nextGroupId++, msg.chatId) }
         if (g.items.containsKey(msg.id)) return null
-        val n = TdApi.Notification(nextId++, msg.date, false, TdApi.NotificationTypeNewMessage(msg, showPreview))
+        val n = TdApi.Notification(nextId++, msg.date, silent, TdApi.NotificationTypeNewMessage(msg, showPreview))
         g.items[msg.id] = n
-        return TdApi.UpdateNotificationGroup(g.id, TdApi.NotificationGroupTypeMessages(), g.chatId, g.chatId, 0L,
+        // X звенит только при notificationSoundId != 0 (TDLib: 0 — звук выключен); до 7 ноя 2026 шов слал 0 всегда
+        return TdApi.UpdateNotificationGroup(g.id, TdApi.NotificationGroupTypeMessages(), g.chatId, g.chatId, soundId(silent),
             g.items.size, arrayOf(n), IntArray(0))
     }
 
@@ -61,4 +65,10 @@ class Notifications {
 
     @Synchronized
     fun clear() { groups.clear() }
+
+    companion object {
+        /** Звук уведомления о новом сообщении: 0 — без звука (выбор отправителя), иначе звук по умолчанию X. */
+        fun soundId(silent: Boolean): Long = if (silent) 0L else DEFAULT_SOUND
+        const val DEFAULT_SOUND = 1L
+    }
 }

@@ -99,8 +99,10 @@ object ParvaneCore {
     fun sendContent(to: String, contentJson: String, replyTo: String): String = nativeSendContent(to, contentJson, replyTo)
     fun sendMedia(to: String, path: String, contentJson: String, replyTo: String): String = nativeSendMedia(to, path, contentJson, replyTo)
     /** Пересылка в несколько чатов → {адрес: новый id | ""}. */
-    fun forward(targets: List<String>, uuid: String): JSONObject = JSONObject(nativeForward(JSONArray(targets).toString(), uuid))
-    fun forward(to: String, uuid: String): String = forward(listOf(to), uuid).optString(to)
+    /** [opts]: {hide_author, remove_caption, silent} — пересылка копией без автора/подписи, без звука у получателя. */
+    fun forward(targets: List<String>, uuid: String, opts: JSONObject = JSONObject()): JSONObject =
+        JSONObject(nativeForward(JSONArray(targets).toString(), uuid, opts.toString()))
+    fun forward(to: String, uuid: String, opts: JSONObject = JSONObject()): String = forward(listOf(to), uuid, opts).optString(to)
     /** Вложение: кэш устройства или сеть → путь открытой копии ("" — ошибка). Блокирующий. */
     fun downloadFile(fileId: String, key: String, nonce: String, kind: String = "", sizeBytes: Long = 0): String =
         nativeDownloadFile(fileId, key, nonce, kind, sizeBytes)
@@ -169,6 +171,8 @@ object ParvaneCore {
     fun setProfile(fieldsJson: String): Boolean = nativeSetProfile(fieldsJson)
     /** Аватар (открытый блоб) + identity; вернёт file_id или "". */
     fun setAvatar(path: String): String = nativeSetAvatar(path)
+    /** Снять своё фото профиля (B4); false — отказ/нет сессии. */
+    fun clearAvatar(): Boolean = nativeClearAvatar()
     fun fingerprint(user: String): String = nativeFingerprint(user)
 
     // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────
@@ -220,7 +224,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeImportKeys(fileJson: String, password: String): Int
     @JvmStatic private external fun nativeSendContent(to: String, contentJson: String, replyTo: String): String
     @JvmStatic private external fun nativeSendMedia(to: String, path: String, contentJson: String, replyTo: String): String
-    @JvmStatic private external fun nativeForward(toJson: String, uuid: String): String
+    @JvmStatic private external fun nativeForward(toJson: String, uuid: String, optsJson: String): String
     @JvmStatic private external fun nativeDownloadFile(fileId: String, key: String, nonce: String, kind: String, sizeBytes: Long): String
     @JvmStatic private external fun nativeSendTyping(to: String)
     @JvmStatic private external fun nativeWatchPeers(peersJson: String)
@@ -264,6 +268,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSearch(query: String): String
     @JvmStatic private external fun nativeSetProfile(fieldsJson: String): Boolean
     @JvmStatic private external fun nativeSetAvatar(path: String): String
+    @JvmStatic private external fun nativeClearAvatar(): Boolean
     @JvmStatic private external fun nativeFingerprint(user: String): String
     @JvmStatic private external fun nativeStateAttach(localJson: String): String
     @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String

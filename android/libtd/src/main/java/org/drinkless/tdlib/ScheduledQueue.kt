@@ -41,10 +41,13 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     }
     @Synchronized fun remove(id: Long): Item? = items.remove(id)?.also { save() }
     @Synchronized fun reschedule(id: Long, due: Long): Item? = items[id]?.also { it.due = due; save() }
-    /** Просроченные (due ≤ now) — в порядке срока; удаляются из очереди (отправка — у вызывающего). */
-    @Synchronized fun takeDue(): List<Item> {
+    /**
+     * Просроченные (due ≤ now) — в порядке срока; удаляются из очереди (отправка — у вызывающего). «Когда будет в
+     * сети» ([UNTIL_ONLINE]) — когда [isOnline] собеседника истинно (как web/desktop: по присутствию).
+     */
+    @Synchronized fun takeDue(isOnline: (String) -> Boolean = { false }): List<Item> {
         val t = now()
-        val due = items.values.filter { it.due <= t }.sortedBy { it.due }
+        val due = items.values.filter { if (it.due == UNTIL_ONLINE) isOnline(it.to) else it.due <= t }.sortedBy { it.due }
         due.forEach { items.remove(it.id) }
         if (due.isNotEmpty()) save()
         return due
@@ -73,5 +76,7 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     companion object {
         /** Диапазон id отложенных (кратны 2^20 как серверные, но с высоким смещением). */
         const val ID_BASE: Long = 1L shl 40
+        /** «Отправить, когда будет в сети» — срок 0x7FFFFFFE с (как desktop `kScheduledUntilOnlineTimestamp`, web). */
+        const val UNTIL_ONLINE: Long = 2147483646L
     }
 }

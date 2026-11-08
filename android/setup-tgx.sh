@@ -888,6 +888,180 @@ if marker not in s:
 PYFOLD
 grep -q "«Все чаты» на любом месте" "$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsFoldersController.java" || { echo "   SettingsFoldersController не пропатчен"; exit 2; }
 
+echo "== Parvane: ревью 7 ноя 2026 (этап 2) — «Все чаты» тянется без Premium, без перевода, без «Добавить контакт», реакции =="
+python3 - "$TGX/app/src/main/java/org/thunderdog/challegram" <<'PYREV2'
+import sys
+d = sys.argv[1]
+def patch(rel, old, new, marker):
+    p = d + "/" + rel
+    s = open(p).read()
+    if marker in s:
+        return
+    assert s.count(old) == 1, rel + ': якорь ' + old[:60]
+    open(p, "w").write(s.replace(old, new, 1))
+# B1: перетаскивание «Все чаты» — без тоста «Premium required», цель перестановки — любая папка, без замка на строке
+patch("ui/SettingsFoldersController.java",
+  "    if (isMainChatFolder(listItem) && !tdlib.hasPremium()) {\n      UI.forceVibrateError(viewHolder.itemView);",
+  "    if (false && isMainChatFolder(listItem) && !tdlib.hasPremium()) { // Parvane: «Все чаты» тянется без Premium\n      UI.forceVibrateError(viewHolder.itemView);",
+  "// Parvane: «Все чаты» тянется без Premium")
+patch("ui/SettingsFoldersController.java",
+  "    return isChatFolder(item) && (tdlib.hasPremium() || !isMainChatFolder(item));",
+  "    return isChatFolder(item); // Parvane: «Все чаты» двигается без Premium",
+  "// Parvane: «Все чаты» двигается без Premium")
+patch("ui/SettingsFoldersController.java",
+  "    item.setDrawModifier(tdlib.hasPremium() ? null : premiumLockModifier);\n    return item;",
+  "    item.setDrawModifier(null); // Parvane: без замка Premium на «Все чаты»\n    return item;",
+  "// Parvane: без замка Premium на «Все чаты»")
+# A7: сервера перевода у Parvane нет (переводил бы сервер Telegram) — режим перевода всегда «нет», строки настроек убраны
+patch("unsorted/Settings.java",
+  "      _chatTranslateMode = pmc.getInt(KEY_CHAT_TRANSLATE_MODE, TRANSLATE_MODE_POPUP);",
+  "      _chatTranslateMode = TRANSLATE_MODE_NONE; // Parvane: перевода нет",
+  "// Parvane: перевода нет")
+patch("ui/SettingsLanguageController.java",
+  "        items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_chatTranslateStyle, R.drawable.baseline_translate_24, R.string.Translation));\n"
+  "        items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));\n",
+  "        // Parvane: строки «Перевод» нет — перевода нет\n",
+  "// Parvane: строки «Перевод» нет")
+patch("ui/SettingsLanguageController.java",
+  "        headerItemsOffset = 2;",
+  "        headerItemsOffset = 0; // Parvane: без строки «Перевод»",
+  "// Parvane: без строки «Перевод»")
+# C4: «Добавить контакт» по номеру телефона — телефонных контактов нет; ник ищется полем поиска того же экрана
+patch("ui/ContactsController.java",
+  "    return mode == MODE_NEW_CHAT || mode == MODE_CALL;",
+  "    return false; // Parvane: телефонных контактов нет — поиск по нику в поле экрана",
+  "// Parvane: телефонных контактов нет")
+# A4: значок реакции Parvane статичен (анимаций Telegram нет) — окно реакции на весь экран закрывается сразу, а не через 7,5 с
+patch("data/TGMessage.java",
+  "        context().openReactionPreview(tdlib, null, reaction, effectAnimation, startX, startY, Screen.dp(30), -1, true);\n"
+  "        tdlib().ui().postDelayed(finishAnimation, 7500l);",
+  "        context().openReactionPreview(tdlib, null, reaction, effectAnimation, startX, startY, Screen.dp(30), -1, true);\n"
+  "        tdlib().ui().postDelayed(finishAnimation, nextSetReactionAnimation.fullscreenEffectFinished && nextSetReactionAnimation.fullscreenEmojiFinished ? 700l : 7500l); // Parvane: статичная реакция",
+  "// Parvane: статичная реакция")
+PYREV2
+for m in "«Все чаты» тянется без Premium:ui/SettingsFoldersController.java" "перевода нет:unsorted/Settings.java" "телефонных контактов нет:ui/ContactsController.java" "статичная реакция:data/TGMessage.java"; do
+  grep -q "Parvane: ${m%%:*}" "$TGX/app/src/main/java/org/thunderdog/challegram/${m#*:}" || { echo "   ${m#*:} не пропатчен (${m%%:*})"; exit 2; }
+done
+
+# ── Ревью 7 ноя 2026, этап 4 (local-workdirs/fix-20261107/android-phase4.md): редкое сломанное и лишние пункты ──
+python3 - "$TGX/app/src/main/java/org/thunderdog/challegram" <<'PYREV4'
+import sys, re
+d = sys.argv[1]
+def patch(rel, old, new, marker, regex=False):
+    p = d + "/" + rel
+    s = open(p).read()
+    if marker in s:
+        return
+    if regex:
+        n = len(re.findall(old, s, flags=re.S))
+        assert n == 1, rel + ': якорь (re) ' + old[:60] + ' x' + str(n)
+        s = re.sub(old, lambda m: new, s, count=1, flags=re.S)
+    else:
+        assert s.count(old) == 1, rel + ': якорь ' + old[:60]
+        s = s.replace(old, new, 1)
+    open(p, "w").write(s)
+# CONTACT-1: «Изменить контакт» / «Удалить контакт» в меню профиля собеседника (своё имя и заметка; блок снимал патч spec 005)
+patch("ui/ProfileController.java",
+  "    if (mode == Mode.SECRET) {\n      ids.append(R.id.more_btn_cloudChat);",
+  "    if (TD.isContact(user) && !tdlib.isSelfUserId(user.id) && !isBot) { // Parvane: своё имя и заметка контакта (CONTACT-1)\n"
+  "      ids.append(R.id.more_btn_edit);\n      strings.append(R.string.RenameContact);\n"
+  "      ids.append(R.id.more_btn_delete);\n      strings.append(R.string.DeleteContact);\n    }\n\n"
+  "    if (mode == Mode.SECRET) {\n      ids.append(R.id.more_btn_cloudChat);",
+  "// Parvane: своё имя и заметка контакта (CONTACT-1)")
+# CONTACT-1: поле «Заметка» в окне «Изменить контакт» — TdApi.SetUserNote (шов → журнал state.v1, вид contacts)
+EN = "ui/EditNameController.java"
+patch(EN, "  private String knownPhoneNumber;\n",
+  "  private String knownPhoneNumber;\n  private ListItem parvaneNote; // Parvane: заметка контакта (CONTACT-1)\n",
+  "private ListItem parvaneNote; // Parvane")
+patch(EN, "    TdApi.TermsOfService termsOfService = mode == Mode.SIGNUP ?",
+  "    if ((mode == Mode.RENAME_CONTACT || mode == Mode.ADD_CONTACT) && user != null) { // Parvane: поле заметки (CONTACT-1)\n"
+  "      TdApi.UserFullInfo parvaneFull = tdlib.cache().userFull(user.id);\n"
+  "      items.add(parvaneNote = new ListItem(ListItem.TYPE_EDITTEXT_NO_PADDING, R.id.edit_parvaneContactNote, 0, R.string.ParvaneContactNote)\n"
+  "        .setStringValue(parvaneFull != null && parvaneFull.note != null ? parvaneFull.note.text : \"\"));\n"
+  "      items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, Lang.getString(R.string.ParvaneContactNoteInfo), false));\n"
+  "    }\n"
+  "    TdApi.TermsOfService termsOfService = mode == Mode.SIGNUP ?",
+  "// Parvane: поле заметки (CONTACT-1)")
+patch(EN, "    } else if (id == R.id.edit_last_name && lastName != null) {\n      lastName.setStringValue(text);\n      updateDoneState();\n    }",
+  "    } else if (id == R.id.edit_last_name && lastName != null) {\n      lastName.setStringValue(text);\n      updateDoneState();\n"
+  "    } else if (id == R.id.edit_parvaneContactNote && parvaneNote != null) { // Parvane: заметка\n      parvaneNote.setStringValue(text);\n    }",
+  "// Parvane: заметка\n")
+patch(EN, "            boolean sharePhoneNumber = shareMyNumber != null && shareMyNumber.isSelected();\n",
+  "            boolean sharePhoneNumber = shareMyNumber != null && shareMyNumber.isSelected();\n"
+  "            if (parvaneNote != null) { // Parvane: заметка контакта уходит до AddContact (шов сохраняет её при своём имени)\n"
+  "              tdlib.client().send(new TdApi.SetUserNote(user.id, new TdApi.FormattedText(parvaneNote.getStringValue().trim(), new TdApi.TextEntity[0])), r -> {});\n"
+  "            }\n",
+  "// Parvane: заметка контакта уходит до AddContact")
+# C1: «Прокси» (MTProto/SOCKS для серверов Telegram) — у Parvane соединение одно, с своим gateway
+patch("ui/SettingsDataController.java",
+  "        new ListItem(ListItem.TYPE_VALUED_SETTING, R.id.btn_lessDataForCalls, 0, R.string.VoipUseLessData),\n"
+  "        new ListItem(ListItem.TYPE_SEPARATOR_FULL),\n"
+  "        new ListItem(ListItem.TYPE_VALUED_SETTING, R.id.btn_proxy, 0, R.string.Proxy),\n",
+  "        new ListItem(ListItem.TYPE_VALUED_SETTING, R.id.btn_lessDataForCalls, 0, R.string.VoipUseLessData), // Parvane: без «Прокси»\n",
+  "// Parvane: без «Прокси»")
+# C2: «Обновления приложения» (Google Play / канал Telegram X) — выпуски Parvane ставятся APK с сервера, проверки версий нет
+patch("ui/SettingsThemeController.java",
+  r"      if \(AppInstallationUtil\.isAppSideLoaded\(UI\.getAppContext\(\)\)\) \{\n        items\.addAll\(Arrays\.asList\(\n          new ListItem\(ListItem\.TYPE_HEADER, 0, 0, R\.string\.InAppUpdates\),.*?R\.string\.SubscribeToBeta\)\n        \)\);\n      \}\n      items\.add\(new ListItem\(ListItem\.TYPE_SHADOW_BOTTOM\)\);\n      context\(\)\.appUpdater\(\)\.addListener\(this\);",
+  "      // Parvane: без блока «Обновления приложения» (нет Google Play и канала X)\n      context().appUpdater().addListener(this);",
+  "// Parvane: без блока «Обновления приложения»", regex=True)
+# C3: «Пригласительные ссылки» папки (t.me/addlist серверов Telegram) — папки Parvane личные
+patch("ui/EditChatFolderController.java",
+  r"      items\.add\(new ListItem\(ListItem\.TYPE_HEADER_PADDED, 0, 0, R\.string\.InviteLinks\)\);\n.*?R\.string\.ChatFolderInviteLinksInfo\)\);\n",
+  "      // Parvane: без пригласительных ссылок папки\n",
+  "// Parvane: без пригласительных ссылок папки", regex=True)
+# C6: вкладка «Тренды» (каталог наборов Telegram) — каталога у Parvane нет (PACK-1): вкладки «Установленные», «Архив», «Маски»
+SSC = "ui/SettingsStickersController.java"
+patch(SSC, "  private static final int TRENDING_POSITION = 0;\n  private static final int STICKERS_POSITION = 1;\n  private static final int ARCHIVED_POSITION = 2;\n  private static final int MASKS_POSITION = 3;",
+  "  private static final int TRENDING_POSITION = -1; // Parvane: без вкладки «Тренды»\n  private static final int STICKERS_POSITION = 0;\n  private static final int ARCHIVED_POSITION = 1;\n  private static final int MASKS_POSITION = 2;",
+  "// Parvane: без вкладки «Тренды»")
+patch(SSC, "    return type == TYPE_STICKER ? 4 : 3;", "    return type == TYPE_STICKER ? 3 : 2; // Parvane: без «Трендов»", "// Parvane: без «Трендов»")
+patch(SSC, "    return type == TYPE_STICKER ? new String[] {\n      Lang.uppercase(Lang.getString(R.string.Trending)),\n      Lang.uppercase(Lang.getString(R.string.Installed)),",
+  "    return type == TYPE_STICKER ? new String[] { // Parvane: секции без «Трендов»\n      Lang.uppercase(Lang.getString(R.string.Installed)),",
+  "// Parvane: секции без «Трендов»")
+patch(SSC, "    }: new String[] {\n      Lang.uppercase(Lang.getString(R.string.Trending)),\n      Lang.uppercase(Lang.getString(R.string.Installed)),",
+  "    }: new String[] { // Parvane: эмодзи без «Трендов»\n      Lang.uppercase(Lang.getString(R.string.Installed)),",
+  "// Parvane: эмодзи без «Трендов»")
+patch(SSC, "    ViewController<?> c = getCachedControllerForId(R.id.controller_stickersTrending);\n    return c == null || !((StickersTrendingController) c).isTrendingLoaded();",
+  "    return false; // Parvane: «Трендов» нет — ждать нечего",
+  "// Parvane: «Трендов» нет — ждать нечего")
+# B9: ник/ссылка группы через экран X (CheckChatUsername/SetSupergroupUsername — MTProto); у Parvane — «Тип группы» (PUBLIC-1)
+patch("ui/ProfileController.java",
+  "      (supergroup != null && TD.isCreator(supergroup.status)) ||\n      (group != null && TD.isCreator(group.status)) ||\n      (mode == Mode.EDIT_BOT_USER && TD.canEditBot(user));",
+  "      (mode == Mode.EDIT_BOT_USER && TD.canEditBot(user)); // Parvane: ссылка группы — «Тип группы» (PUBLIC-1)",
+  "// Parvane: ссылка группы — «Тип группы» (PUBLIC-1)")
+# B2: «Новый канал» — канал Parvane (группа kind=channel); шаг «публичная ссылка» X (SetSupergroupUsername) пропускаем:
+# публичным канал делает «Тип группы» (PUBLIC-1) — сразу выбор участников
+patch("ui/CreateChannelController.java",
+  "      CreateChannelLinkController c = new CreateChannelLinkController(context, tdlib);\n      c.setArguments(new CreateChannelLinkController.Args(chat, currentImageFile));\n      navigateTo(c);",
+  "      ContactsController c = new ContactsController(context, tdlib); // Parvane: канал без шага ссылки\n      c.initWithMode(ContactsController.MODE_CHANNEL_MEMBERS);\n      c.setChat(chat);\n      navigateTo(c);",
+  "// Parvane: канал без шага ссылки")
+# «Передать владение» в правах админа: в журнале группы v2 передачи владения нет (контракт group.v2 без такой записи)
+patch("ui/EditRightsController.java",
+  "  private boolean canTransferOwnership () {\n    if (",
+  "  private boolean canTransferOwnership () {\n    if (true) return false; // Parvane: передачи владения в группе v2 нет\n    if (",
+  "// Parvane: передачи владения в группе v2 нет")
+PYREV4
+for m in "передачи владения в группе v2 нет:ui/EditRightsController.java" "своё имя и заметка контакта (CONTACT-1):ui/ProfileController.java" "поле заметки (CONTACT-1):ui/EditNameController.java" "без «Прокси»:ui/SettingsDataController.java" \
+         "без блока «Обновления приложения»:ui/SettingsThemeController.java" "без пригласительных ссылок папки:ui/EditChatFolderController.java" \
+         "без вкладки «Тренды»:ui/SettingsStickersController.java" "ссылка группы — «Тип группы» (PUBLIC-1):ui/ProfileController.java" \
+         "канал без шага ссылки:ui/CreateChannelController.java"; do
+  grep -q "Parvane: ${m%%:*}" "$TGX/app/src/main/java/org/thunderdog/challegram/${m#*:}" || { echo "   ${m#*:} не пропатчен (${m%%:*})"; exit 2; }
+done
+echo "   этап 4: контакт и заметка, без прокси/обновлений/ссылок папок/трендов, ссылка группы, канал"
+
+# C7-8 (ревью 7 ноя 2026): декодеры X — исправления безопасности поверх подмодулей клона
+pv_pin_submodule() { # $1 — путь подмодуля, $2 — полный sha
+  local d="$TGX/$1"
+  [ "$(git -C "$d" rev-parse HEAD 2>/dev/null)" = "$2" ] && return 0
+  git -C "$d" fetch -q --depth 1 origin "$2" && git -C "$d" checkout -q "$2" \
+    || { echo "C7-8: не удалось закрепить $1 на $2"; exit 2; }
+  echo "C7-8: $1 → ${2:0:8}"
+}
+# ffmpeg release/6.1: h264_direct heap-buffer-overflow (чтение) при битом поле, oss-fuzz (30e346c7, 4 ноя 2026)
+pv_pin_submodule app/jni/third_party/ffmpeg 30e346c76f01657f16398ddf9a93035c14ddb956
+# rlottie TGX: зависание на dash-шаблоне без длины — отказ в обслуживании чужим .tgs (75614796, 30 окт 2026)
+pv_pin_submodule app/jni/third_party/rlottie 756147967d0eaf4d4f15352dae1e6e912810d0b7
+
 if [ "${1:-}" = "--build" ]; then
   echo "== сборка assembleLatestArm64Debug (долго: ffmpeg/libvpx/webrtc) =="
   cd "$TGX"

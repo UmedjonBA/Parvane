@@ -19,6 +19,11 @@ class ChatLocalState(private val dir: File) {
     private val pinned = ArrayList<Long>()
     private val unreadMarks = HashSet<Long>()
     private var quickReaction = ""
+    // CONTACT-1 (до init: load читает файл сюда)
+    private val contacts = LinkedHashMap<String, Contact>()
+    // B6: «Недавние» общего поиска (как TDLib addRecentlyFoundChat) и убранные из «Часто пишете» — `recent.json`, только это устройство
+    private val recentFound = ArrayList<Long>()
+    private val hiddenTop = HashSet<Long>()
 
     init { load() }
 
@@ -61,6 +66,65 @@ class ChatLocalState(private val dir: File) {
         return true
     }
 
+    // ── CONTACT-1: свои контакты — своё имя и заметка (`contacts.json` = {адрес: {first, last, note}}) ──
+    /** Своя запись контакта: имя и фамилия (пусты — имя, заданное собеседником), заметка. */
+    data class Contact(val first: String = "", val last: String = "", val note: String = "") {
+        val name: String get() = listOf(first, last).filter { it.isNotEmpty() }.joinToString(" ")
+        fun toJson(): JSONObject = JSONObject().put("first", first).put("last", last).put("note", note)
+    }
+    @Synchronized fun contactOf(address: String): Contact? = contacts[address]
+    @Synchronized fun contactAddresses(): List<String> = contacts.keys.toList()
+    /** Записать контакт; false — ничего не изменилось. */
+    @Synchronized fun setContact(address: String, c: Contact): Boolean {
+        if (contacts[address] == c) return false
+        contacts[address] = c; saveContacts(); return true
+    }
+    /** Убрать из контактов (имя и заметка тоже); false — не было. */
+    @Synchronized fun removeContact(address: String): Boolean {
+        if (contacts.remove(address) == null) return false
+        saveContacts(); return true
+    }
+    /** Журнал целиком → контакты; адреса, чья запись изменилась. */
+    @Synchronized fun replaceContacts(next: Map<String, Contact>): Set<String> {
+        val changed = (contacts.keys + next.keys).filter { contacts[it] != next[it] }.toSet()
+        if (changed.isEmpty()) return changed
+        contacts.clear(); contacts.putAll(next); saveContacts()
+        return changed
+    }
+    private fun loadContacts() {
+        try {
+            File(dir, "contacts.json").takeIf { it.exists() }?.let { f ->
+                val o = JSONObject(SeamFiles.read(f))
+                o.keys().forEach { k -> o.optJSONObject(k)?.let { c -> contacts[k] = Contact(c.optString("first"), c.optString("last"), c.optString("note")) } }
+            }
+        } catch (e: Exception) { }
+    }
+    private fun saveContacts() = write("contacts.json", JSONObject().also { o -> contacts.forEach { (k, v) -> o.put(k, v.toJson()) } }.toString())
+
+    // ── B6: недавно найденные чаты и «Часто пишете» ──
+    @Synchronized fun recentFoundChatIds(): List<Long> = recentFound.toList()
+    /** Чат найден и открыт из поиска — первым в «Недавних» (не больше [RECENT_MAX]). */
+    @Synchronized fun addRecentFound(chatId: Long) {
+        recentFound.remove(chatId); recentFound.add(0, chatId)
+        while (recentFound.size > RECENT_MAX) recentFound.removeAt(recentFound.size - 1)
+        saveRecent()
+    }
+    @Synchronized fun removeRecentFound(chatId: Long) { if (recentFound.remove(chatId)) saveRecent() }
+    @Synchronized fun clearRecentFound() { if (recentFound.isNotEmpty()) { recentFound.clear(); saveRecent() } }
+    @Synchronized fun isHiddenTop(chatId: Long) = chatId in hiddenTop
+    @Synchronized fun hideTop(chatId: Long) { if (hiddenTop.add(chatId)) saveRecent() }
+    private fun loadRecent() {
+        try {
+            File(dir, "recent.json").takeIf { it.exists() }?.let { f ->
+                val o = JSONObject(SeamFiles.read(f))
+                o.optJSONArray("found")?.let { a -> for (i in 0 until a.length()) recentFound.add(a.optLong(i)) }
+                o.optJSONArray("hidden_top")?.let { a -> for (i in 0 until a.length()) hiddenTop.add(a.optLong(i)) }
+            }
+        } catch (e: Exception) { }
+    }
+    private fun saveRecent() = write("recent.json", JSONObject().put("found", org.json.JSONArray(recentFound))
+        .put("hidden_top", org.json.JSONArray(hiddenTop.toList())).toString())
+
     /** Порядок закреплённого в списке: выше любого времени сообщения, первый закреплённый — выше всех. */
     fun pinnedOrder(chatId: Long): Long? = synchronized(this) { pinned.indexOf(chatId).takeIf { it >= 0 }?.let { PIN_ORDER_BASE - it } }
 
@@ -100,6 +164,8 @@ class ChatLocalState(private val dir: File) {
         try { File(dir, "drafts.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> k.toLongOrNull()?.let { id -> o.optJSONObject(k)?.let { drafts[id] = it } } } } } catch (e: Exception) { }
         try { File(dir, "chatlists.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> if (o.optString(k) == "archive") k.toLongOrNull()?.let { archived.add(it) } } } } catch (e: Exception) { }
         loadPins()
+        loadContacts()
+        loadRecent()
     }
     private fun loadPins() {
         try {
@@ -121,5 +187,7 @@ class ChatLocalState(private val dir: File) {
     companion object {
         /** Порядок закреплённых (TDLib: выше обычных; время сообщения — секунды, много меньше). */
         const val PIN_ORDER_BASE = 9_000_000_000_000_000_000L
+        /** «Недавние» поиска — как TDLib (до 50). */
+        const val RECENT_MAX = 50
     }
 }

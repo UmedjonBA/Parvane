@@ -20,11 +20,31 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$(dirname "${BASH_SOURCE[0]}")/tgx_ui.sh" # ROOT после verify_lib.sh указывает на desktop/ (verify_paths.sh)
 ad() { timeout 30 adb "$@"; }
 xlog() { timeout "${2:-90}" bash -c "until adb logcat -d 2>/dev/null | grep -qE \"$1\"; do sleep 3; done"; }
-OUT=/tmp/pv-tgx-folders; mkdir -p "$OUT"
+OUT="${1:-/tmp/pv-tgx-folders}"; mkdir -p "$OUT" # каталог от pipeline.sh — его файлы сохраняются в logs/<тег>-…-files
 SB=$(\ls -td /tmp/pv-tgx.* | head -1); STAMP=$(date +%s)
 A="$SB/alice"; B="$SB/bob"
 PKG=org.parvane.tgx; ACT="$PKG/org.thunderdog.challegram.MainActivity"
-x_restart() { ad shell am force-stop $PKG; sleep 2; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; xlog "сессия поднята" 60; }
+# logcat копится в $OUT/logcat.txt (перед очисткой при рестарте — дописываем): в final9 «папки потеряны» без логов не разобрать
+x_savelog() { ad logcat -d -v time >> "$OUT/logcat.txt" 2>/dev/null; }
+: > "$OUT/logcat.txt"
+# Рестарт — до НОВОГО процесса (как tgx_ttl_scheduled_flow): сбой adb посреди прогона (force-stop/logcat -c не дошли)
+# оставлял прежний процесс, и «UpdateChatFolders после рестарта» не появлялся — без рестарта его некому слать
+x_restart() {
+  local old new
+  old="$(ad shell pidof $PKG 2>/dev/null | tr -d '\r')"
+  for _ in 1 2 3; do
+    # буфер чистится ДО остановки: X может подняться службой связи сразу после force-stop, и его маркеры старта
+    # (UpdateChatFolders, «сессия поднята») не должны попасть под `logcat -c`
+    x_savelog; ad shell rm -f /data/local/tmp/parvane-e2e-cmd; ad logcat -c
+    x_force_stop $PKG || { sleep 3; continue; }
+    ad shell am start -n "$ACT" >/dev/null 2>&1
+    xlog "сессия поднята" 60 || echo "    после рестарта нет «сессия поднята» за 60 с"
+    new="$(ad shell pidof $PKG 2>/dev/null | tr -d '\r')"
+    [ -n "$new" ] && [ "$new" != "$old" ] && return 0
+    sleep 3
+  done
+  bad "X не перезапустился (pid $old)"
+}
 x_cmd() { echo "$1" > "$OUT/cmd"; ad push "$OUT/cmd" /data/local/tmp/parvane-e2e-cmd >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-e2e-cmd; }
 [ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX FOLDERS"; }
 [ -x "$SHARD/preview" ] || { bad "нет шарда $SHARD/preview — cd backend && cargo build -p preview"; finish "TGX FOLDERS"; }
@@ -105,7 +125,7 @@ wait_log "$B/td/log.txt" "профиль alice@local: .*1990-03-07|birthday=1990
 x_cmd "{\"op\":\"search\",\"query\":\"page-$STAMP\"}"
 xlog "поиск: [1-9][0-9]* совпадений" 30 && ok "X: глобальный поиск нашёл сообщение" || bad "X: поиск не нашёл"
 
-ad logcat -d -v time > "$OUT/logcat.txt"
+x_savelog
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"
 ui_reset
 stop_pid "$BP"

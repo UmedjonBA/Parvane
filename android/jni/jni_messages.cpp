@@ -217,9 +217,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendMedia(
 
 // Пересылка в несколько чатов (как desktop MirrorForward): текст — тот же content; медиа — блоб из кэша или
 // сети, перезаливается новым секретом для каждого получателя. → JSON {адрес: новый id | ""}.
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeForward(JNIEnv *env, jclass, jstring toJson, jstring uuid) {
+// opts: {hide_author, remove_caption, silent} — «Скрыть автора»/«Скрыть подпись» X (ForwardMessages.sendCopy/removeCaption)
+// и «без звука» (Content.silent), как пересылка web/desktop копией
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeForward(JNIEnv *env, jclass, jstring toJson, jstring uuid, jstring optsJson) {
     const auto id = jstr(env, uuid);
     auto targets = json::parse(jstr(env, toJson), nullptr, false);
+    auto opts = json::parse(jstr(env, optsJson), nullptr, false);
+    if (!opts.is_object()) opts = json::object();
     if (targets.is_string()) targets = json::array({targets});
     json out = json::object();
     const auto row = messageRow(id);
@@ -229,7 +233,17 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeForward(JNIEnv
     }
     auto content = row->content;
     content.erase("local_path");
-    if (!row->from.empty() && row->from != self()) content["forwarded_name"] = row->from.substr(0, row->from.find('@'));
+    if (opts.value("hide_author", false)) {
+        content.erase("forwarded_from"); // копия: ни исходного автора, ни прежней пометки «переслано»
+        content.erase("forwarded_name");
+    } else if (!row->from.empty() && row->from != self()) {
+        content["forwarded_name"] = row->from.substr(0, row->from.find('@'));
+    }
+    if (opts.value("remove_caption", false)) {
+        content.erase("caption");
+        if (content.value("kind", std::string()) != "text") content.erase("entities"); // сущности подписи медиа
+    }
+    if (opts.value("silent", false)) content["silent"] = true; else content.erase("silent");
     std::string plain;
     const auto fid = content.value("file_id", std::string());
     if (!fid.empty()) {

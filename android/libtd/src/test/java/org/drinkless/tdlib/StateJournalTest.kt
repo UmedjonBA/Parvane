@@ -248,4 +248,23 @@ class StateJournalTest {
         assertEquals(listOf(0, 2, 3), (0 until moved.length()).map { moved.getInt(it) })
         assertEquals(2, ChatLocalState(b).folders.mainPosition) // переживает перезапуск (folders.json)
     }
+
+    /** B1 ревью 7 ноя 2026: папок стало меньше места «Все чаты» — id 0 остаётся в folder_order последним, не пропадает. */
+    @Test
+    fun allChatsKeptWhenFoldersShrinkBelowItsPlace() {
+        val b = tmp()
+        val local = ChatLocalState(b)
+        val snap = JSONObject()
+            .put("folders", JSONArray().put(JSONObject().put("id", 2).put("title", "A")).put(JSONObject().put("id", 3).put("title", "B")))
+            .put("folder_order", JSONObject().put("ids", JSONArray().put(2).put(3).put(0)))
+        val j = StateJournal(ParvaneProtocol.stateCodec, resolver())
+        j.project(snap, local, ScheduledQueue(b) { 1000L })
+        assertEquals(2, j.allFolderAt)
+        assertTrue(local.folders.delete(3))
+        val order = j.build(local, ScheduledQueue(b) { 1000L }).getJSONObject("folder_order").getJSONArray("ids")
+        assertEquals(listOf(2, 0), (0 until order.length()).map { order.getInt(it) })
+        assertTrue(local.folders.delete(2))
+        val none = j.build(local, ScheduledQueue(b) { 1000L }).getJSONObject("folder_order").getJSONArray("ids")
+        assertEquals(listOf(0), (0 until none.length()).map { none.getInt(it) })
+    }
 }

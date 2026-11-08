@@ -165,8 +165,13 @@ try {
   ok('web alice1: переписка, группа, канал, «План», «Облако»; копия ключей на сервере');
 
   // ── A. X — ответом боту, alice1 в сети ──
+  const offersPre = offerCount(alice1.address);
   let mark = await xFreshLogin(`${aliceNick}@local`, 'A');
   await pullFor(TG_ALICE, 'ask');
+  // X публикует оффер привязки рядом с запросом боту (final9: «ключ восстановления: waiting» за 0,1 с до оффера) —
+  // «до входа» считаем после того, как его оффер дошёл до identity, иначе он засчитывался как оффер «после входа»
+  await xWait(/привязка: оффер опубликован/, LINK_TIMEOUT_MS, mark);
+  await waitFor(() => offerCount(alice1.address) > offersPre, 15000, 'identity: оффер X до ответа боту');
   const offersBefore = offerCount(alice1.address);
   const accepted = await botReplyV2(gatewayUrl, SECRET, TG_ALICE, alice1.key);
   if (accepted.result !== 'ok') throw new Error(`бот: ${JSON.stringify(accepted)}`);

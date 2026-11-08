@@ -206,7 +206,11 @@ class ParvaneStore {
 
     /** Файл cloud: file_id (uuid) + ключ/nonce blobcrypt + локальный путь после скачивания. */
     class FileRef(val id: Int, val remoteId: String, val key: String, val nonce: String,
-                  val size: Long, val mime: String, @Volatile var path: String)
+                  size: Long, val mime: String, @Volatile var path: String) {
+        @Volatile var size: Long = size
+        /** Файл пишет X (голосовое, «кружок», PreliminaryUploadFile): путь известен, но файл ещё не готов. */
+        @Volatile var generating = false
+    }
     private val filesByRemote = ConcurrentHashMap<String, FileRef>()
     private val filesById = ConcurrentHashMap<Int, FileRef>()
     private var nextFileId = 1
@@ -304,7 +308,11 @@ class ParvaneStore {
     fun profileJson(address: String): JSONObject = profiles[address]?.let { JSONObject(it.toString()) } ?: JSONObject()
     fun setProfile(address: String, info: JSONObject) { profiles[address] = info }
 
-    private fun displayName(address: String): String {
+    /** Имя для показа: своё имя контакта (CONTACT-1), иначе заданное самим собеседником. */
+    private fun displayName(address: String): String =
+        local?.contactOf(address)?.name?.takeIf { it.isNotEmpty() && address != self } ?: publicName(address)
+    /** Имя, заданное самим собеседником (в провод и в форму контакта — оно, не своё). */
+    fun publicName(address: String): String {
         val name = profiles[address]?.optString("display_name").orEmpty()
         return name.ifEmpty { address.substringBefore('@') }
     }
@@ -325,8 +333,22 @@ class ParvaneStore {
         ref.path = path
         return tdFile(ref)
     }
+    /** Запись файла, который пишет X ([PreliminaryUploads]): путь назначения сразу, «загружен» — после генерации. */
+    fun generatedFile(path: String, mime: String): TdApi.File {
+        val ref = filesByRemote.getOrPut("gen:$path") {
+            FileRef(nextFileId++, "gen:$path", "", "", 0, mime, path).also { filesById[it.id] = it }
+        }
+        ref.generating = true
+        return tdFile(ref)
+    }
+    /** Генерация закончилась: файл готов (размер с диска) либо нет — запись остаётся неготовой. */
+    fun finishGenerated(fileId: Int, ok: Boolean): TdApi.File? {
+        val ref = filesById[fileId] ?: return null
+        if (ok) { ref.size = java.io.File(ref.path).length(); ref.generating = false }
+        return tdFile(ref)
+    }
     fun tdFile(ref: FileRef): TdApi.File {
-        val done = ref.path.isNotEmpty()
+        val done = ref.path.isNotEmpty() && !ref.generating
         return TdApi.File(ref.id, ref.size, ref.size,
             TdApi.LocalFile(ref.path, true, false, false, done, 0, if (done) ref.size else 0, if (done) ref.size else 0),
             TdApi.RemoteFile(ref.remoteId, ref.remoteId, false, true, ref.size))
@@ -334,7 +356,9 @@ class ParvaneStore {
 
     // ── содержимое ──────────────────────────────────────────────────────────
     // optString отдаёт строку "null" для JSON null — в списке чатов светилось «null» (10 сен 2026)
-    private fun caption(c: JSONObject) = TdApi.FormattedText(if (c.isNull("caption")) "" else c.optString("caption"), arrayOf())
+    // Подпись медиа с сущностями (Media.caption_entities ядро кладёт в `entities` содержимого)
+    private fun caption(c: JSONObject) = (if (c.isNull("caption")) "" else c.optString("caption"))
+        .let { t -> TdApi.FormattedText(t, if (t.isEmpty()) arrayOf() else Entities.fromWire(c.optJSONArray("entities"), t)) }
 
     /** Опросы (spec 005): агрегат локальный, uuid сообщения = id опроса. */
     val polls = PollStore()
@@ -378,13 +402,13 @@ class ParvaneStore {
             "photo" -> {
                 val w = c.optInt("width", 800); val h = c.optInt("height", 600)
                 val f = file() ?: return textContent(c)
-                TdApi.MessagePhoto(TdApi.Photo(false, null, arrayOf(TdApi.PhotoSize("y", f, w, h, IntArray(0)))), null, caption(c), false, false, false)
+                TdApi.MessagePhoto(TdApi.Photo(false, null, arrayOf(TdApi.PhotoSize("y", f, w, h, IntArray(0)))), null, caption(c), MediaFlags.invert(c), MediaFlags.spoiler(c), false)
             }
             "video" -> {
                 val f = file() ?: return textContent(c)
                 TdApi.MessageVideo(TdApi.Video(c.optInt("duration_secs"), c.optInt("width", 640), c.optInt("height", 480),
                     c.optString("filename", "video.mp4"), mime, false, true, null, null, f),
-                    arrayOf(), arrayOf(), null, 0, caption(c), false, false, false)
+                    arrayOf(), arrayOf(), null, 0, caption(c), MediaFlags.invert(c), MediaFlags.spoiler(c), false)
             }
             "file" -> {
                 val f = file() ?: return textContent(c)
@@ -392,7 +416,7 @@ class ParvaneStore {
             }
             "voice" -> {
                 val f = file() ?: return textContent(c)
-                TdApi.MessageVoiceNote(TdApi.VoiceNote(c.optInt("duration_secs"), ByteArray(0), mime, null, f), caption(c), false)
+                TdApi.MessageVoiceNote(TdApi.VoiceNote(c.optInt("duration_secs"), Waveform.fromWire(c.optJSONArray("waveform")), mime, null, f), caption(c), false)
             }
             "video_note" -> {
                 val f = file() ?: return textContent(c)
@@ -413,7 +437,7 @@ class ParvaneStore {
             "gif" -> {
                 val f = file() ?: return textContent(c)
                 TdApi.MessageAnimation(TdApi.Animation(c.optInt("duration_secs", 1), c.optInt("width", 240), c.optInt("height", 240),
-                    c.optString("filename", "animation.webm"), mime.ifEmpty { "video/webm" }, false, null, null, f), caption(c), false, false, false)
+                    c.optString("filename", "animation.webm"), mime.ifEmpty { "video/webm" }, false, null, null, f), caption(c), MediaFlags.invert(c), MediaFlags.spoiler(c), false)
             }
             // "" — старые события без kind (текст); незнакомый вид (в т.ч. заглушка
             // движка v2 "unsupported", spec 007) — нативная заглушка X «не поддерживается»
@@ -442,7 +466,9 @@ class ParvaneStore {
         run {
             val txt = if (c.isNull("text")) "" else c.optString("text")
             val ents = Entities.fromWire(c.optJSONArray("entities"), txt)
-            TdApi.MessageText(TdApi.FormattedText(txt, ents), LinkPreviews.linkPreviewOf(c.optJSONObject("webpage"), txt, ents), null)
+            // MEDIA-2: карточка ссылки над текстом (`invert_media`)
+            TdApi.MessageText(TdApi.FormattedText(txt, ents), LinkPreviews.linkPreviewOf(c.optJSONObject("webpage"), txt, ents),
+                if (MediaFlags.invert(c)) TdApi.LinkPreviewOptions(false, "", false, false, true) else null)
         }
 
 
@@ -465,8 +491,10 @@ class ParvaneStore {
         val old = users[id]
         val user = TdApi.User().apply {
             this.id = id
-            firstName = displayName(address)
-            lastName = ""
+            // CONTACT-1: своё имя контакта — как у Telegram, имя и фамилия отдельно (форма «Изменить» X их и правит)
+            val own = local?.contactOf(address)?.takeIf { it.name.isNotEmpty() && address != self }
+            firstName = own?.let { it.first.ifEmpty { it.last } } ?: publicName(address)
+            lastName = own?.takeIf { it.first.isNotEmpty() }?.last ?: ""
             usernames = TdApi.Usernames(arrayOf(nick), arrayOf<String>(), nick, arrayOf<String>())
             phoneNumber = profiles[address]?.optString("phone").orEmpty()
             accentColorId = (profiles[address]?.optInt("name_color", -1) ?: -1).let { if (it in 0..6) it else 0 } // цвет имени (web/desktop name_color)
@@ -493,7 +521,7 @@ class ParvaneStore {
             clientData = ""
         }
         if (!existed) applyLocal(chat)
-        chat.title = user.firstName
+        chat.title = listOf(user.firstName, user.lastName).filter { !it.isNullOrEmpty() }.joinToString(" ")
         chat.photo = user.profilePhoto?.let { TdApi.ChatPhotoInfo(it.small, it.big, it.minithumbnail, false, false) }
         chats[id] = chat
         return Triple(user, chat, !existed)
@@ -628,7 +656,17 @@ class ParvaneStore {
             this.content = contentFrom(content, uuid, from, out)
             interactionInfo = reactionsFrom(reactions)
             val replied = replyUuid?.let { msgByUuid[it] }
-            this.replyTo = if (replied != null) TdApi.MessageReplyToMessage(replied.chatId, replied.id, null, 0, null, null, 0, null) else null
+            // QUOTE-1: цитата из исходного сообщения
+            this.replyTo = if (replied != null) TdApi.MessageReplyToMessage(replied.chatId, replied.id, MediaFlags.textQuote(content), 0, null, null, 0, null) else null
+            // MEDIA-2: альбом — подряд идущие сообщения одного автора с одним album_id (≤ 10)
+            val album = MediaFlags.albumOf(content)
+            if (album.isNotEmpty()) {
+                val prev = messages[chat.id]?.lastOrNull()
+                val prevAlbum = prev?.let { p -> uuidByMsg[key(p.chatId, p.id)]?.let { MediaFlags.albumOf(contentByUuid[it]) } }.orEmpty()
+                val prevSender = (prev?.senderId as? TdApi.MessageSenderUser)?.userId ?: 0L
+                val groupSize = prev?.takeIf { it.mediaAlbumId != 0L }?.let { p -> messages[chat.id]?.count { it.mediaAlbumId == p.mediaAlbumId } } ?: 0
+                mediaAlbumId = MediaFlags.mediaAlbumId(album, idOf(from), uuid, prevAlbum, prevSender, prev?.mediaAlbumId ?: 0L, groupSize)
+            }
             // пересланное: forwarded_name (wire как в вебе/десктопе) → «Переслано от …»
             val fwd = if (content.isNull("forwarded_name")) "" else content.optString("forwarded_name")
             if (fwd.isNotEmpty()) forwardInfo = TdApi.MessageForwardInfo(TdApi.MessageOriginHiddenUser(fwd), ts.toInt(), null, "")
@@ -807,11 +845,56 @@ class ParvaneStore {
         val ex = notifyExceptions.optJSONObject(address)
         val muted = muteFor(ex)
         val useDefault = ex == null || !ex.has("mutedUntil")
-        return TdApi.ChatNotificationSettings(useDefault, muted, true, 0, true, true, true, false, true, 0, true, true, true, false, true, false)
+        // B10: «без звука» и «показывать текст» чата (state.v1 NotifySettings.silent/show_previews); нет поля — как в области
+        val silent = notifyFlag(ex, "silent")
+        val preview = notifyFlag(ex, "showPreviews")
+        return TdApi.ChatNotificationSettings(useDefault, muted, silent == null, if (silent == true) 0L else Notifications.DEFAULT_SOUND,
+            preview == null, preview ?: true, true, false, true, 0, true, true, true, false, true, false)
     }
     fun scopeSettings(scope: String): TdApi.ScopeNotificationSettings {
         val d = notifyDefaults.optJSONObject(scope)
-        return TdApi.ScopeNotificationSettings(muteFor(d), 0, true, false, false, 0, true, false, false)
+        val silent = notifyFlag(d, "silent") == true
+        return TdApi.ScopeNotificationSettings(muteFor(d), if (silent) 0L else Notifications.DEFAULT_SOUND, notifyFlag(d, "showPreviews") ?: true,
+            false, false, 0, true, false, false)
+    }
+    /** Показывать ли текст и звук уведомления чата (исключение чата, иначе умолчание области). */
+    fun notifyPreview(address: String, scope: String): Boolean =
+        notifyFlag(notifyExceptions.optJSONObject(address), "showPreviews") ?: notifyFlag(notifyDefaults.optJSONObject(scope), "showPreviews") ?: true
+    fun notifySilent(address: String, scope: String): Boolean =
+        notifyFlag(notifyExceptions.optJSONObject(address), "silent") ?: notifyFlag(notifyDefaults.optJSONObject(scope), "silent") ?: false
+    /** Поле настроек уведомлений: true/false; null — не задано либо «как в области» (JSON null). */
+    private fun notifyFlag(o: JSONObject?, key: String): Boolean? = if (o != null && o.has(key) && !o.isNull(key)) o.optBoolean(key) else null
+    /** B10: настройки чата из экрана «Уведомления» X — мут, звук (выключен → «без звука»), показ текста. */
+    @Synchronized
+    fun setChatNotify(address: String, n: TdApi.ChatNotificationSettings?) {
+        setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
+        val ex = notifyExceptions.optJSONObject(address) ?: JSONObject()
+        // null (JSON) — «как в области»: журнал снимет поле (а не оставит прежнее значение другого устройства)
+        ex.put("silent", if (n == null || n.useDefaultSound) JSONObject.NULL else n.soundId == 0L)
+        ex.put("showPreviews", if (n == null || n.useDefaultShowPreview) JSONObject.NULL else n.showPreview)
+        notifyExceptions.put(address, ex)
+        (groupsByGid[address]?.chatId ?: idByAddress[address])?.let { chats[it]?.notificationSettings = chatNotifySettings(address) }
+    }
+    @Synchronized
+    fun setScopeNotify(scope: String, n: TdApi.ScopeNotificationSettings?) {
+        setScopeMute(scope, n?.muteFor ?: 0)
+        val d = notifyDefaults.optJSONObject(scope) ?: JSONObject()
+        if (n == null) { d.remove("silent"); d.remove("showPreviews") } else { d.put("silent", n.soundId == 0L); d.put("showPreviews", n.showPreview) }
+        notifyDefaults.put(scope, d)
+    }
+    /** B10: «Сбросить все настройки уведомлений» — исключения чатов сняты, области без мута, со звуком и текстом. */
+    @Synchronized
+    fun resetNotify(): List<TdApi.Update> {
+        val out = ArrayList<TdApi.Update>()
+        notifyExceptions.keys().asSequence().toList().forEach { address ->
+            notifyExceptions.put(address, JSONObject().put("mutedUntil", 0L))
+            (groupsByGid[address]?.chatId ?: idByAddress[address])?.let { id ->
+                chats[id]?.let { c -> c.notificationSettings = chatNotifySettings(address); out += TdApi.UpdateChatNotificationSettings(id, c.notificationSettings) }
+            }
+        }
+        listOf("users" to TdApi.NotificationSettingsScopePrivateChats(), "groups" to TdApi.NotificationSettingsScopeGroupChats(), "channels" to TdApi.NotificationSettingsScopeChannelChats())
+            .forEach { (k, scope) -> notifyDefaults.put(k, JSONObject().put("mutedUntil", 0L)); out += TdApi.UpdateScopeNotificationSettings(scope, scopeSettings(k)) }
+        return out
     }
     /** Применить блоб с сервера/другого устройства → апдейты для известных чатов. */
     @Synchronized
@@ -837,7 +920,11 @@ class ParvaneStore {
     @Synchronized
     fun setChatMute(address: String, muteFor: Int): String {
         val until = when { muteFor <= 0 -> 0L; muteFor >= 365 * 24 * 3600 -> 2147483647L; else -> System.currentTimeMillis() / 1000 + muteFor }
-        notifyExceptions.put(address, JSONObject().put("mutedUntil", until))
+        // «без звука»/«показывать текст» чата (B10) правкой мута не теряются
+        val prev = notifyExceptions.optJSONObject(address)
+        notifyExceptions.put(address, JSONObject().put("mutedUntil", until).also { e ->
+            for (k in listOf("silent", "showPreviews")) if (prev != null && prev.has(k)) e.put(k, prev.get(k))
+        })
         (groupsByGid[address]?.chatId ?: idByAddress[address])?.let { chats[it]?.notificationSettings = chatNotifySettings(address) }
         return notifyBlob()
     }
@@ -847,6 +934,21 @@ class ParvaneStore {
         notifyDefaults.put(scope, JSONObject().put("mutedUntil", until))
         return notifyBlob()
     }
+
+    /** B4: своё фото профиля снято — без фото у пользователя и чата. */
+    @Synchronized
+    fun clearUserPhoto(address: String): Pair<TdApi.User, TdApi.Chat>? {
+        val id = idOf(address)
+        val user = users[id] ?: return null
+        val chat = chats[id] ?: return null
+        user.profilePhoto = null
+        chat.photo = null
+        return user to chat
+    }
+    /** Общие группы с собеседником (вкладка «Группы» профиля), по порядку списка чатов. */
+    fun groupsInCommon(address: String): List<Long> =
+        groupsByGid.values.filter { address in it.members && self in it.members }.map { it.chatId }
+            .sortedByDescending { chats[it]?.positions?.firstOrNull()?.order ?: 0L }
 
     /** Статус онлайн пира (presence-хартбит → online до now+90). */
     @Synchronized

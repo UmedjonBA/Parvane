@@ -115,6 +115,27 @@ tgx_cmd() { # tgx_cmd <json> [маркер-regex ожидания]
   tgx_logwait "e2e-cmd $op →" 20
 }
 tgx_shot() { a exec-out screencap -p > "$1"; }
+# tgx_media_files <каталог> — тестовые «записи» на устройство (/data/local/tmp): голосовое pv-voice.ogg (Opus, 2 с, как
+# рекордер X), «кружок» pv-round.mp4 (360×360, 2 с, VP9 — его играет и Chromium Playwright), фото альбома pv-a1/a2.png.
+# Их отправляют e2e-команды voice / video_note / album путём шва, что у кнопок X (ревью 7 ноя 2026, этап 2)
+tgx_media_files() {
+  local d="$1"; mkdir -p "$d"
+  ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=440:duration=2" -c:a libopus -b:a 24k "$d/pv-voice.ogg" &&
+  ffmpeg -loglevel error -y -f lavfi -i "testsrc=size=360x360:rate=25:duration=2" -c:v libvpx-vp9 -b:v 300k -pix_fmt yuv420p "$d/pv-round.mp4" &&
+  python3 - "$d" <<'PY' || return 1
+import struct, sys, zlib
+def png(path, w, h, rgb):
+    raw = b''.join(b'\x00' + bytes(rgb) * w for _ in range(h))
+    def chunk(t, x): return struct.pack('>I', len(x)) + t + x + struct.pack('>I', zlib.crc32(t + x) & 0xffffffff)
+    open(path, 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+png(sys.argv[1] + '/pv-a1.png', 320, 240, (200, 80, 60))
+png(sys.argv[1] + '/pv-a2.png', 320, 240, (60, 120, 200))
+PY
+  local f
+  for f in pv-voice.ogg pv-round.mp4 pv-a1.png pv-a2.png; do
+    a push "$d/$f" "/data/local/tmp/$f" >/dev/null 2>&1 && a shell chmod 644 "/data/local/tmp/$f" || return 1
+  done
+}
 tgx_no_crash() {
   if grep -q "FATAL EXCEPTION" "$TGX_LOG"; then
     bad "краш X: $(grep -A3 'FATAL EXCEPTION' "$TGX_LOG" | tail -2 | tr '\n' ' ' | cut -c1-200)"

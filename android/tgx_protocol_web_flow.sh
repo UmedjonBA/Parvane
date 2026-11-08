@@ -25,6 +25,9 @@ a shell pm grant "$TGX_PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1
 a shell pm grant "$TGX_PKG" android.permission.CAMERA >/dev/null 2>&1
 tgx_stop; tgx_start
 tgx_logwait "v2: готов" 90 && ok "X: сессия поднята" || bad "X: сессии нет"
+# Ревью 7 ноя (этап 2): файлы «записи» голосового (Opus/OGG, как рекордер X) и «кружка» (VP9 — играет и в Chromium
+# Playwright, где нет H.264), фото альбома — на устройство; их отправляет e2e-хук путём рекордера X
+tgx_media_files "$OUT" && ok "тестовые записи голосового, «кружка» и фото — на устройстве" || bad "тестовые записи не подготовлены (ffmpeg/adb)"
 (cd "$REPO/web/telegram-tt" && node_modules/.bin/vite preview --host 127.0.0.1 --port "$WEB_PORT" --strictPort >"$OUT/web.log" 2>&1) &
 WEB_PID=$!
 wait_log "$OUT/web.log" "http://127.0.0.1:$WEB_PORT" 60 && ok "web поднят" || bad "web не поднялся"
@@ -34,6 +37,13 @@ wait_log "$OUT/web.log" "http://127.0.0.1:$WEB_PORT" 60 && ok "web поднят"
 RCW=$?
 while read -r st rest; do [ "$st" = ok ] && ok "$rest" || bad "$rest"; done < <(grep -aE "^(ok|FAIL) " "$OUT/web-e2e.log")
 [ "$RCW" = 0 ] && ok "сценарий web ↔ X пройден" || { bad "сценарий web ↔ X упал (см. $OUT/web-e2e.log)"; tail -15 "$OUT/web-e2e.log"; }
+# Ревью 7 ноя (этап 4, B7): совместные папки «Облака» — окно «Доступ» и приглашение нажатиями по экрану X
+(cd "$REPO" && PARVANE_E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" PARVANE_E2E_GATEWAY_URL="ws://127.0.0.1:9222" \
+  PARVANE_E2E_BACKEND_LOG_DIR="$SB" PARVANE_E2E_SHOT_DIR="$OUT" PV_ANDROID_OUT="$OUT" PV_STAMP="$S" TGX_LOG="$TGX_LOG" \
+  node scripts/e2e_protocol_cloud_share_android.mjs >"$OUT/web-cloud-share.log" 2>&1)
+RCS=$?
+while read -r st rest; do [ "$st" = ok ] && ok "$rest" || bad "$rest"; done < <(grep -aE "^(ok|FAIL) " "$OUT/web-cloud-share.log")
+[ "$RCS" = 0 ] && ok "совместные папки web ↔ X пройдены" || { bad "совместные папки web ↔ X упали (см. $OUT/web-cloud-share.log)"; tgx_shot "$OUT/cloud-share-x.png"; tail -15 "$OUT/web-cloud-share.log"; }
 pkill -P "$WEB_PID" 2>/dev/null; kill "$WEB_PID" 2>/dev/null
 # «печатает» web: показанное X снимает сам (сообщением либо через 6 с без продления)
 if grep -aq "печатает: чат" "$TGX_LOG"; then

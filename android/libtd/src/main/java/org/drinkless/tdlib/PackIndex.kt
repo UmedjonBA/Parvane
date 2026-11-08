@@ -110,6 +110,22 @@ class PackIndex(private val dir: File) {
         save(); return true
     }
 
+    /**
+     * B8: порядок установленных наборов типа [isEmoji] — как в [ids] (остальные наборы на своих местах, перед ними).
+     * true — порядок изменился.
+     */
+    @Synchronized fun reorder(isEmoji: Boolean, ids: List<Long>): Boolean {
+        val listed = ids.distinct().mapNotNull { packs[it] }.filter { it.isEmoji == isEmoji }
+        if (listed.isEmpty()) return false
+        val before = packs.keys.toList()
+        val rest = packs.values.filter { p -> listed.none { it.setId == p.setId } }
+        packs.clear()
+        rest.forEach { packs[it.setId] = it }
+        listed.forEach { packs[it.setId] = it }
+        if (packs.keys.toList() == before) return false
+        save(); return true
+    }
+
     @Synchronized fun installedIds(isEmoji: Boolean): LongArray = installed(isEmoji).map { it.setId }.toLongArray()
 
     private fun load() {
