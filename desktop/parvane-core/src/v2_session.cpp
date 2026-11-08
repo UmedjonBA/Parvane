@@ -3422,7 +3422,7 @@ bool Session::stateAvailable() {
     return client_ && client_->hasStateKey();
 }
 
-json Session::stateAttach(const json &local) {
+json Session::stateAttach(const json &local, const std::vector<std::string> &dirtyKinds) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     state_.reset();
     if (!openStateLocked()) {
@@ -3468,45 +3468,51 @@ json Session::stateAttach(const json &local) {
             log("локальное состояние в журнал state.v2 не записано — повтор при следующем подключении");
         }
     }
+    if (local.is_object() && !dirtyKinds.empty()) {
+        // База — показанное до правки (файл state-base прошлого запуска), не только что сведённое: иначе правка
+        // другого устройства, пришедшая за время без связи, откатилась бы
+        if (!pushDesiredLocked(local, dirtyKinds)) log("несохранённая правка в журнал не дошла — повтор при синке");
+        pullStateLocked();
+    }
     log("журнал состояния подключён");
     mergeSharedInvitesLocked();
     return projectStateLocked();
 }
 
+bool Session::pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds) {
+    // Желаемое = показанное + поля управляемых видов хоста; время блокировки и чужие списки закрепа
+    // сохраняются (как web buildDesired). Разницу считает модель — от того, что хост показывал (base).
+    const auto current = state_->snapshot();
+    json full = current;
+    for (auto it = desired.begin(); it != desired.end(); ++it) full[it.key()] = it.value();
+    if (full.contains("blocked") && full["blocked"].is_array()) {
+        std::map<std::string, json> at;
+        if (current.contains("blocked") && current["blocked"].is_array()) {
+            for (const auto &b : current["blocked"]) {
+                at[peerKey(b.value("peer", json()))] = b.value("blocked_at_ms", json(nullptr));
+            }
+        }
+        for (auto &b : full["blocked"]) {
+            if (b.contains("blocked_at_ms") && !b["blocked_at_ms"].is_null()) continue;
+            const auto hit = at.find(peerKey(b.value("peer", json())));
+            b["blocked_at_ms"] = (hit != at.end() && !hit->second.is_null()) ? hit->second : json(std::to_string(nowMs()));
+        }
+    }
+    if (desired.contains("pinned") && current.contains("pinned") && current["pinned"].is_array()) {
+        for (const auto &p : current["pinned"]) {
+            if (!isMainPinList(p.value("list", json()))) full["pinned"].push_back(p);
+        }
+    }
+    const bool hasBase = stateBase_.is_object() && !stateBase_.empty();
+    return state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json());
+}
+
 json Session::stateSync(const json &desired, const std::vector<std::string> &kinds) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return nullptr;
-    if (desired.is_object() && !kinds.empty()) {
-        // Желаемое = показанное + поля управляемых видов хоста; время блокировки и чужие списки закрепа
-        // сохраняются (как web buildDesired). Разницу считает модель — от того, что хост показывал (base).
-        const auto current = state_->snapshot();
-        json full = current;
-        for (auto it = desired.begin(); it != desired.end(); ++it) full[it.key()] = it.value();
-        if (full.contains("blocked") && full["blocked"].is_array()) {
-            std::map<std::string, json> at;
-            if (current.contains("blocked") && current["blocked"].is_array()) {
-                for (const auto &b : current["blocked"]) {
-                    at[peerKey(b.value("peer", json()))] = b.value("blocked_at_ms", json(nullptr));
-                }
-            }
-            for (auto &b : full["blocked"]) {
-                if (b.contains("blocked_at_ms") && !b["blocked_at_ms"].is_null()) continue;
-                const auto hit = at.find(peerKey(b.value("peer", json())));
-                b["blocked_at_ms"] = (hit != at.end() && !hit->second.is_null()) ? hit->second : json(std::to_string(nowMs()));
-            }
-        }
-        if (desired.contains("pinned") && current.contains("pinned") && current["pinned"].is_array()) {
-            for (const auto &p : current["pinned"]) {
-                if (!isMainPinList(p.value("list", json()))) full["pinned"].push_back(p);
-            }
-        }
-        // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). Не дошла — исключение:
-        // хост держит вид «несохранённым» (T150) и досылает при следующем подключении
-        const bool hasBase = stateBase_.is_object() && !stateBase_.empty();
-        if (!state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json())) {
-            throw V2Error("ERROR_CODE_UNAVAILABLE");
-        }
-    }
+    // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). Не дошла — исключение: хост
+    // держит вид «несохранённым» (T150) и досылает при следующем подключении
+    if (desired.is_object() && !kinds.empty() && !pushDesiredLocked(desired, kinds)) throw V2Error("ERROR_CODE_UNAVAILABLE");
     const bool changed = pullStateLocked();
     if (changed) mergeSharedInvitesLocked();
     return json{{"changed", changed}, {"snapshot", projectStateLocked()}};

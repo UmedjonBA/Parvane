@@ -1919,13 +1919,11 @@ void AttachStateJournal() {
 		}
 		parvane::json snap;
 		try {
-			snap = s->stateAttach(local);
+			// T150: локальная правка этих видов новее журнала — сначала она (разница от того, что было
+			// показано до правки), затем снимок (иначе проекция её откатит)
+			snap = s->stateAttach(local, dirty);
 			if (snap.is_object() && !dirty.empty()) {
-				// T150: локальная правка этих видов новее журнала — сначала она,
-				// затем снимок (иначе проекция её откатит)
-				const auto r = s->stateSync(local, dirty);
-				if (r.is_object() && r.contains("snapshot")) {
-					snap = r["snapshot"];
+				{
 					auto names = QStringList();
 					for (const auto &kind : dirty) {
 						names.push_back(QString::fromStdString(kind));

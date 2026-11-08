@@ -503,7 +503,9 @@ public:
     // Прочитать журнал; при первом запуске (файла state-migrated нет)
     // перенести локальный снимок local (proto3-JSON StateSnapshot).
     // → сведённый снимок; null — журнал недоступен (нет ключа).
-    json stateAttach(const json &local);
+    // dirtyKinds (T150): виды, правленные без журнала, — уходят в журнал разницей от показанного до правки, до
+    // проекции снимка.
+    json stateAttach(const json &local, const std::vector<std::string> &dirtyKinds = {});
     // Своя правка (desired — поля видов kinds в StateSnapshot) → записи
     // журнала, затем чужие записи. → {"changed":bool,"snapshot":{…}};
     // null — журнал недоступен.
@@ -689,6 +691,7 @@ private:
     bool openStateLocked();
     bool pullStateLocked();
     json projectStateLocked();
+    bool pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds);
     void applyStateLocked(const json &desired, const char *what);
     void log(const std::string &m) const;
     std::string readStateFile(const std::string &name) const;
