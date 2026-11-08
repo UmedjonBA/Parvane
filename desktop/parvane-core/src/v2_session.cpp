@@ -2256,6 +2256,16 @@ json Session::withNeedsJsonLocked(const std::function<json()> &f) {
 // ── события наружу ─────────────────────────────────────────────────────────
 
 void Session::absorbLocked(std::vector<json> events) {
+    // PV-005 (GPHOTO-1): секрет фото частной группы приходит отдельным конвертом GroupAvatarKey ПОСЛЕ записи SetInfo
+    // (движок отдаёт его сменой группы без новой записи журнала) — сведения, отданные хосту по журналу, были ещё без
+    // ключа: фото не открывалось. После разбора — сведения заново тем группам, у которых ключ сменился.
+    std::set<std::string> avatarCheck;
+    for (const auto &ev : events) {
+        if (ev.is_object() && ev.value("type", std::string()) == "groupChanged" && ev.contains("group")
+            && ev["group"].is_object()) {
+            avatarCheck.insert(ev["group"].value("id", std::string()));
+        }
+    }
     for (auto &ev : events) {
         const auto type = ev.is_object() ? ev.value("type", std::string()) : std::string();
         if (type == "groupChanged") {
@@ -2337,6 +2347,17 @@ void Session::absorbLocked(std::vector<json> events) {
     noteL2StateLocked();
     // Секреты ссылок от других ведущих приглашения (spec 024) — в своё хранилище
     absorbSharedInvitesLocked();
+    // Секрет фото группы сменился без новой записи журнала (см. начало) — сведения группы хосту заново
+    for (const auto &hex : avatarCheck) {
+        if (hex.empty() || !client_) continue;
+        const auto g = client_->groupInfo(hex);
+        const auto key = g ? g->value("avatarKey", std::string()) : std::string();
+        const auto known = publishedAvatarKeys_.find(hex);
+        if (!key.empty() && (known == publishedAvatarKeys_.end() || known->second != key)) {
+            log("ключ фото группы " + hex + " получен — сведения группы заново");
+            publishGroupLocked(hex);
+        }
+    }
 }
 
 // Публичные методы зовутся с чужих потоков (UI, пул) — события отдаёт рабочий
@@ -2447,6 +2468,7 @@ void Session::publishGroupLocked(const std::string &hex) {
     if (const auto it = pendingRequests_.find(hex); it != pendingRequests_.end()) {
         info["pendingRequests"] = it->second;
     }
+    publishedAvatarKeys_[hex] = g->value("avatarKey", std::string());
     outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", info}});
     // Новая ссылка, новый админ — секреты своих ссылок ведущим приглашения
     shareInvitesLocked(hex);

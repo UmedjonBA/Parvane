@@ -10,6 +10,8 @@
 # остаются на месте (только отметка `engine-migrated`, D2).
 # Нужны: бинарь с -DPARVANE_DEV=ON (как у прочих verify_*), шарды backend/target/debug, профиль T006.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
+# PV_MIGRATION_BIN — другой бинарь (например, прежний — проверка «падает без правки»)
+BIN="${PV_MIGRATION_BIN:-$BIN}"
 SEED="${PV_MIGRATION_SEED:-$ROOT/../local-workdirs/spec035/seed-desktop}"
 BEFORE="${PV_MIGRATION_BEFORE:-$ROOT/../local-workdirs/spec035/audit-before/desktop/desktop-alice1.jsonl}"
 EXPECTED="${PV_MIGRATION_EXPECTED:-$ROOT/../specs/035-protocol-evolution/expected-additions.json}"
@@ -79,7 +81,11 @@ run_case() { # run_case <имя> <шаг, на котором убить про�
   rm -rf "$SB"
 }
 
-run_case clean ""
-run_case kill-m2 2
-run_case kill-m4 4
+for c in ${PV_MIGRATION_CASES:-clean kill-m2 kill-m4}; do
+  case "$c" in
+    clean) run_case clean "" ;;
+    kill-m2) run_case kill-m2 2 ;;
+    kill-m4) run_case kill-m4 4 ;;
+  esac
+done
 finish "verify_migration"

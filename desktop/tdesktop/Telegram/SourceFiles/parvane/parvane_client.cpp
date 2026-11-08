@@ -10,6 +10,7 @@
 #include "boxes/share_box.h" // хук PARVANE_AUTOFORWARD_MULTI: колбэк окна выбора чатов
 #include "data/components/scheduled_messages.h" // раздел «Запланированные» из очереди
 #include "ui/layers/show.h" // тосты звонков из Calls::Instance
+#include "ui/toast/toast.h" // spec 035 T127: ход переноса
 #include "history/history_item_components.h" // HiddenSenderInfo (пересылка)
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
 #include <parvane/migrate_legacy.h> // spec 035 T127: читатель старых мест tdata для разового переноса
@@ -1922,16 +1923,16 @@ void ShowMigrationProgress(int point, int total, bool done, bool failed) {
 	shownPoint = point;
 	LOG(("Parvane: v2: перенос прежнего состояния, шаг %1 из %2").arg(point).arg(total));
 	if (window) {
-		window->showToast(Ui::Toast::Config{
-			.title = tr::lng_parvane_migration_title(tr::now),
-			.text = { tr::lng_parvane_migration_progress(
-				tr::now,
-				lt_step,
-				QString::number(std::max(point, 1)),
-				lt_total,
-				QString::number(total)) },
-			.duration = crl::time(4000),
-		});
+		auto config = Ui::Toast::Config();
+		config.title = tr::lng_parvane_migration_title(tr::now);
+		config.text = { tr::lng_parvane_migration_progress(
+			tr::now,
+			lt_step,
+			QString::number(std::max(point, 1)),
+			lt_total,
+			QString::number(total)) };
+		config.duration = crl::time(4000);
+		window->showToast(std::move(config));
 	}
 }
 
@@ -6770,6 +6771,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				const auto s = V2Ready();
 				auto plain = s ? s->downloadGroupPhoto(fid, groupKey) : std::nullopt;
 				if (!plain) {
+					LOG(("Parvane: аватар %1 не применён: фото группы не скачалось или секрет не подошёл").arg(address));
 					return;
 				}
 				bytes = std::move(*plain);
@@ -6778,17 +6780,25 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 					fid,
 					parvane::chatrules::chatBlobCipherCap("avatar", 0));
 				if (!d.ok) {
+					LOG(("Parvane: аватар %1 не применён: блоб не скачался%2").arg(
+						address,
+						parvane::v2::isGroupAddress(address.toStdString()) ? u" (секрета фото группы ещё нет)"_q : QString()));
 					return;
 				}
 				bytes = std::move(d.bytes);
 			}
-		} catch (const std::exception &) {
+		} catch (const std::exception &e) {
+			LOG(("Parvane: аватар %1 не применён: %2").arg(address, QString::fromUtf8(e.what())));
 			return;
 		}
 		const auto addressCopy = address;
 		// Чужие байты — на воркере и с потолком размера (на главный поток уходит готовая картинка)
 		auto decoded = DecodeImageBounded(QByteArray(bytes.data(), int(bytes.size())), 2048);
 		if (decoded.isNull()) {
+			LOG(("Parvane: аватар %1 не применён: картинка не декодировалась (%2 байт%3)").arg(
+				address,
+				QString::number(bytes.size()),
+				groupKey.empty() && parvane::v2::isGroupAddress(address.toStdString()) ? u", секрета фото группы ещё нет"_q : QString()));
 			return;
 		}
 		crl::on_main([id, bytes, photoId, addressCopy, decoded] {

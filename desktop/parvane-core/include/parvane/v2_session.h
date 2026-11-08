@@ -738,6 +738,7 @@ private:
     std::vector<json> outbox_;       // под engineMu_: события наружу по порядку
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;
+    std::map<std::string, std::string> publishedAvatarKeys_; // hex группы → секрет фото, отданный хосту
     std::map<std::string, int> pendingRequests_; // hex группы → число заявок на вступление
     // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение).
     std::set<std::string> ephChats_;
