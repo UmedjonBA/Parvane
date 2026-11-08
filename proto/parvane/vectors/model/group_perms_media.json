@@ -1,0 +1,269 @@
+{
+ "suite": "model/group_perms_media",
+ "description": "spec 035 T062 (GROUP-2, GROUP-3): права по типу содержимого — в движке: участнику без роли запрещено медиа — capabilities.send_media = false, отправка — Forbidden; полученное медиа от участника без роли не показывается и не считается непрочитанным; от владельца — показывается; от автора с неизвестной ролью (нет в составе) — показывается. Ожидания руками.",
+ "cases": [
+  {
+   "name": "медиа запрещено участникам",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "group": {
+       "id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+       "domain": "local",
+       "kind": "group",
+       "title": "Дача",
+       "owner": "olga@local",
+       "members": {
+        "alice@local": "member",
+        "bob@local": "member"
+       },
+       "perms": {
+        "send_messages": true,
+        "send_media": false,
+        "send_stickers_gifs": true,
+        "send_polls": true,
+        "embed_links": true
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "group_changed": {
+         "group": {
+          "domain": "local",
+          "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+         },
+         "kind": "group",
+         "title": "Дача",
+         "members_count": 3,
+         "my_role": "GROUP_ROLE_MEMBER",
+         "perms": {
+          "send_media": null,
+          "send_stickers": true,
+          "send_polls": true,
+          "send_links": true
+         }
+        }
+       }
+      ],
+      "requests": []
+     }
+    },
+    {
+     "capabilities": {
+      "chat": {
+       "group": {
+        "domain": "local",
+        "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+       }
+      }
+     },
+     "expect": {
+      "result": {
+       "send_text": true,
+       "send_media": null,
+       "send_stickers": true,
+       "send_polls": true,
+       "send_links": true,
+       "delete_everyone": null,
+       "pin": null,
+       "edit": true,
+       "react": true,
+       "forward": true,
+       "reply": true
+      }
+     }
+    },
+    {
+     "submit": {
+      "send": {
+       "chat": {
+        "group": {
+         "domain": "local",
+         "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+        }
+       },
+       "content": {
+        "media": {
+         "kind": "photo",
+         "file_id": "f0"
+        }
+       }
+      }
+     },
+     "expect": {
+      "error": "Forbidden"
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "group": {
+         "domain": "local",
+         "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+        }
+       },
+       "from": "bob@local",
+       "id": "31313131313131313131313131313131",
+       "ts_ms": 1800000000000,
+       "content": {
+        "media": {
+         "kind": "MEDIA_KIND_PHOTO",
+         "file_id": "f1"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "group": {
+         "domain": "local",
+         "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+        }
+       },
+       "from": "olga@local",
+       "id": "32323232323232323232323232323232",
+       "ts_ms": 1800000000000,
+       "content": {
+        "media": {
+         "kind": "MEDIA_KIND_PHOTO",
+         "file_id": "f2"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "MjIyMjIyMjIyMjIyMjIyMg==",
+         "body": {
+          "media": {
+           "kind": "photo",
+           "file_id": "f2"
+          }
+         }
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "group": {
+           "domain": "local",
+           "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+          }
+         },
+         "title": "Дача",
+         "unread": 1
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "group": {
+           "domain": "local",
+           "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+          }
+         },
+         "count": 1
+        }
+       }
+      ]
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "group": {
+         "domain": "local",
+         "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+        }
+       },
+       "from": "carol@local",
+       "id": "33333333333333333333333333333333",
+       "ts_ms": 1800000000000,
+       "content": {
+        "media": {
+         "kind": "MEDIA_KIND_PHOTO",
+         "file_id": "f3"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "MzMzMzMzMzMzMzMzMzMzMw=="
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "group": {
+           "domain": "local",
+           "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+          }
+         },
+         "unread": 2
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "group": {
+           "domain": "local",
+           "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+          }
+         },
+         "count": 2
+        }
+       }
+      ]
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "group": {
+        "domain": "local",
+        "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 50
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "MjIyMjIyMjIyMjIyMjIyMg=="
+        },
+        {
+         "id": "MzMzMzMzMzMzMzMzMzMzMw=="
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

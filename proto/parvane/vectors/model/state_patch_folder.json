@@ -1,0 +1,192 @@
+{
+ "suite": "model/state_patch_folder",
+ "description": "spec 035 T062 (STATE-1, state2): папка чатов — объект FOLDER: создание, правка поля, явная очистка поля (объект остаётся), удаление (stateChanged без view); каждая своя операция уходит `state.ops.append`. Значение поля — байты поля с тегом (title = поле 2). Ожидания руками.",
+ "cases": [
+  {
+   "name": "создать, поправить, очистить, удалить",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "submit": {
+      "state_create": {
+       "object": {
+        "kind": "OBJECT_KIND_FOLDER",
+        "key": "5"
+       },
+       "set": [
+        {
+         "field": 2,
+         "value": "EgzQoNCw0LHQvtGC0LA="
+        }
+       ]
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FOLDER",
+          "key": "5"
+         },
+         "view": {
+          "object": {
+           "kind": "OBJECT_KIND_FOLDER",
+           "key": "5"
+          },
+          "fields": [
+           {
+            "field": 2,
+            "value": "EgzQoNCw0LHQvtGC0LA="
+           }
+          ]
+         }
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ],
+      "puts": [
+       "state-object",
+       "state-raw"
+      ]
+     }
+    },
+    {
+     "submit": {
+      "state_patch": {
+       "object": {
+        "kind": "OBJECT_KIND_FOLDER",
+        "key": "5"
+       },
+       "set": [
+        {
+         "field": 2,
+         "value": "EgbQlNC+0Lw="
+        }
+       ]
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FOLDER",
+          "key": "5"
+         },
+         "view": {
+          "fields": [
+           {
+            "field": 2,
+            "value": "EgbQlNC+0Lw="
+           }
+          ]
+         }
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ]
+     }
+    },
+    {
+     "submit": {
+      "state_patch": {
+       "object": {
+        "kind": "OBJECT_KIND_FOLDER",
+        "key": "5"
+       },
+       "clear": [
+        2
+       ]
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FOLDER",
+          "key": "5"
+         },
+         "view": {
+          "object": {
+           "kind": "OBJECT_KIND_FOLDER",
+           "key": "5"
+          },
+          "fields": null
+         }
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ]
+     }
+    },
+    {
+     "viewState": {
+      "kinds": [
+       "OBJECT_KIND_FOLDER"
+      ]
+     },
+     "expect": {
+      "result": {
+       "objects": [
+        {
+         "object": {
+          "kind": "OBJECT_KIND_FOLDER",
+          "key": "5"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "submit": {
+      "state_delete": {
+       "object": {
+        "kind": "OBJECT_KIND_FOLDER",
+        "key": "5"
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FOLDER",
+          "key": "5"
+         },
+         "view": null
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ]
+     }
+    },
+    {
+     "viewState": {},
+     "expect": {
+      "result": {
+       "objects": null
+      }
+     }
+    }
+   ]
+  }
+ ]
+}
