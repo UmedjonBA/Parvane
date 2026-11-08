@@ -99,11 +99,12 @@ impl Engine {
         out
     }
 
-    /// Строка изменилась: показ целиком (видна) либо снятие (надгробие, сирота) — и когда показ не изменился.
+    /// Строка изменилась: показ целиком (видна; и служебная строка ленты — голос, закрытие опроса: хост ведёт по ним
+    /// опросы) либо снятие (надгробие, сирота) — и когда показ не изменился.
     fn emit_row(&mut self, chat: &str, id: &Id, w: &mut Work) {
         let Some(row) = self.chats.get(chat).and_then(|c| c.get(id)) else { return };
         let peer = row.state.chat.clone().or_else(|| self.peers.get(chat).cloned());
-        let view = self.message_view(chat, row);
+        let view = self.message_view_as(row, true);
         let fp = view.as_ref().map(super::fingerprint);
         match view {
             Some(v) => w.delta.push(Change::MessageUpsert(v)),

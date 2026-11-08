@@ -188,8 +188,9 @@ fn edit_patch_service_rows_and_legacy_import() {
     assert_eq!(w["content"]["text"], "стало", "правка наложена движком");
     assert_eq!(w["content"]["webpage"]["url"], "https://example.org");
     assert!(upserts(&st)[0]["edited_ts_ms"].is_string());
-    // Голос опроса — служебная строка: в ленте и списке её нет, в `rowsAll` — есть
-    ops(&mut host, &mut e, json!([row(ID2, PEER, NOW - 1_000, json!({"kind": "poll_vote", "poll": ID1, "options": [0]}))]), NOW);
+    // Голос опроса — служебная строка: в ленте и списке её нет, в `rowsAll` и изменениях хосту (опросы) — есть
+    let st = ops(&mut host, &mut e, json!([row(ID2, PEER, NOW - 1_000, json!({"kind": "poll_vote", "poll": ID1, "options": [0]}))]), NOW);
+    assert_eq!(wire(&upserts(&st)[0])["content"]["kind"], "poll_vote");
     assert_eq!(page(&mut e).len(), 1);
     let list = call(&mut e, "chatList", &json!({"limit": 10})).unwrap();
     assert_eq!(wire(&list["chats"][0]["last"])["content"]["text"], "стало");

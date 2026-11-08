@@ -23,10 +23,9 @@ describe('history cache and own outgoing journal', () => {
     await SecureE2eStorage.clear(SELF);
   });
 
-  // Сервер не шлёт эхо отправителю, а курсор дельта-синка двигают живые
-  // входящие — своё исходящее обязано попасть в кэш истории уже при отправке,
-  // иначе после reload пропадало (документ с подписью в e2e_web_media_ttl)
-  it('own outgoing message lands in the history cache without a sync round-trip', async () => {
+  // Сервер не шлёт эхо отправителю: своё исходящее сразу уходит строкой модели (spec 035 T114) через слушатель
+  // отправленного; своего кэша строк у localState больше нет
+  it('own outgoing message goes to the sent listener and the outgoing journal, not to a history cache', async () => {
     const state = makeLocalState();
     const sent: WireStoredMessage = {
       id: '01a0da74-38ad-7f01-9d2b-e03eb50f042f',
@@ -35,13 +34,13 @@ describe('history cache and own outgoing journal', () => {
       ts: 1_790_371_444,
       content: { kind: 'file', text: 'file-caption', file_id: 'f-1', file_name: 'payload.bin' } as never,
     };
+    const heard: string[] = [];
+    state.setOwnSentListener((entry) => heard.push(entry.id));
     state.appendOwnJournal(sent);
-    await state.flushHistoryNow();
-
-    const records = await state.loadHistoryRecords();
-    expect(records.map(({ id }) => id)).toEqual([sent.id]);
-    expect(records[0].content).toEqual(sent.content);
+    expect(heard).toEqual([sent.id]);
     expect((await state.readOwnJournal()).map(({ id }) => id)).toEqual([sent.id]);
+    expect(await state.loadHistoryRecords()).toEqual([]);
+    state.setOwnSentListener(undefined);
   });
 
   // perf A6: журнал исходящих — записью на сообщение, прежняя запись `journal`
@@ -71,32 +70,31 @@ describe('history cache and own outgoing journal', () => {
     expect(reloaded[0].content).toEqual({ kind: 'text', text: 'b2' });
   });
 
-  it('writes a burst of history rows as one batch', async () => {
+  // Кэш строк прежних сборок (`m:`, маркеры `rm:`) читается для разового переноса в модель и стирается
+  it('reads the legacy history cache once and drops it after the move to the engine model', async () => {
+    const storage = await SecureE2eStorage.open(SELF);
+    const row: WireStoredMessage = {
+      id: 'uuid-old', from: 'bob@local', to: SELF, ts: 5, content: { kind: 'text', text: 'старое' },
+    };
+    await storage.saveRecord('m:uuid-old', row);
+    await storage.saveRecord('rm:bob@local', {
+      address: 'bob@local',
+      mark: { chat: { user: { address: 'bob@local' } }, up_to_ts_ms: '5000', up_to_id: 'uuid-old' },
+    });
     const state = makeLocalState();
-    for (let i = 0; i < 300; i++) {
-      state.saveHistoryRecord({
-        id: `uuid-${String(i).padStart(4, '0')}`, from: 'bob@local', to: SELF, ts: i,
-        content: { kind: 'text', text: 'x' },
-      });
-    }
-    state.deleteHistoryRecord('uuid-0000');
-    await state.flushHistoryNow();
-    const records = await state.loadHistoryRecords();
-    expect(records.length).toBe(299);
-    expect(records.some(({ id }) => id === 'uuid-0000')).toBe(false);
+    expect((await state.loadHistoryRecords()).map(({ id }) => id)).toEqual(['uuid-old']);
+    expect(Object.keys(await state.loadReadMarks())).toEqual(['bob@local']);
+    await state.dropLegacyHistory(['uuid-old'], ['bob@local']);
+    expect(await state.loadHistoryRecords()).toEqual([]);
+    expect(await state.loadReadMarks()).toEqual({});
   });
 
-  it('forgetting an own message removes it from the cache too', async () => {
+  it('forgetting an own message removes it from the outgoing journal', async () => {
     const state = makeLocalState();
     state.appendOwnJournal({
       id: 'uuid-forget', from: SELF, to: 'bob@local', ts: 1, content: { kind: 'text', text: 'x' },
     });
-    await state.flushHistoryNow();
-    state.deleteHistoryRecord('uuid-forget');
     await state.removeOwnJournalEntries(['uuid-forget']);
-    await state.flushHistoryNow();
-
-    expect(await state.loadHistoryRecords()).toEqual([]);
     expect(await state.readOwnJournal()).toEqual([]);
   });
 });

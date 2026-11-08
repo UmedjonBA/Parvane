@@ -282,7 +282,19 @@ describe('L2: служебное сообщение о смене режима',
     store.self = SELF;
     const updates: ApiUpdate[] = [];
     const saved: WireStoredMessage[] = [];
-    const sync = createSyncController({
+    // Строка вне журнала — строкой модели движка (spec 035 T114), показ — из неё
+    // eslint-disable-next-line prefer-const -- модель строк показывает через синк, созданный ниже
+    let sync: ReturnType<typeof createSyncController>;
+    const rows = {
+      loadStored: () => Promise.resolve({ rows: [], known: new Set<string>(), isReady: true }),
+      persistLocal: async (stored: WireStoredMessage) => {
+        saved.push(stored);
+        await sync.showRow(stored);
+        return stored;
+      },
+      forget: () => Promise.resolve(),
+    };
+    sync = createSyncController({
       getConnection: () => undefined,
       getStore: () => store,
       getToken: () => 'jwt',
@@ -290,12 +302,10 @@ describe('L2: служебное сообщение о смене режима',
       localState: {
         isBlocked: () => false,
         updateOwnJournalEntry: () => undefined,
-        saveHistoryRecord: (stored: WireStoredMessage) => { saved.push(stored); },
-        deleteHistoryRecord: () => undefined,
         scheduleTtlDeletion: () => undefined,
         loadReadUuids: () => [],
-        flushHistoryNow: () => Promise.resolve(),
       } as never,
+      rows,
       media: { rememberKeys: () => undefined },
       polls: {} as never,
       taskOffers: {} as never,
@@ -353,8 +363,8 @@ describe('L2: служебное сообщение о смене режима',
     expect(message.chatId).toBe(store.getIdForAddress(PEER));
     expect(message.content.action).toMatchObject({ type: 'customAction' });
     expect(message.content.text).toBeUndefined();
-    // Переживает перезагрузку: строка с `origin: 'v2'` лежит в кэше истории
-    expect(saved).toEqual([{ ...stored, origin: 'v2', order: stored.ts * 1000 }]);
+    // Переживает перезагрузку: строка с `origin: 'v2'` — строкой модели
+    expect(saved).toEqual([{ ...stored, origin: 'v2' }]);
     // Служебное сообщение не остаётся «непрочитанным» на чате
     expect(updates).toContainEqual(expect.objectContaining({
       '@type': 'updateThreadReadState',

@@ -181,6 +181,39 @@ export class ModelHost {
     return Promise.resolve({});
   }
 
+  /** Вызов строк истории (`rowsApply`, spec 035 T114) с итогом. Из обработчика изменений другого итога — сразу,
+   * вложенным обходом: пачка строк (движок кладёт в неё только строки и маркеры) ложится на диск раньше пачки того
+   * итога (курсор инбокса после строки, SYNC-1), `storeCommitted` — в очередь за ним (иначе прочее изменённое
+   * легло бы раньше его более старой копии). Вне обработчика — в очереди, как `run`. */
+  apply(name: string, args: unknown): Promise<ModelJson> {
+    if (!this.inDelta) return this.run(name, args);
+    return this.driveNested(this.raw(name, args));
+  }
+
+  private async driveNested(out: ModelJson): Promise<ModelJson> {
+    const delta = out.delta as ModelJson | undefined;
+    if (delta && this.deps.onDelta) {
+      this.inDelta++;
+      try {
+        await this.deps.onDelta(delta);
+      } catch (e) {
+        this.deps.log?.(`модель: изменения не применены хостом: ${String(e)}`);
+      } finally {
+        this.inDelta--;
+      }
+    }
+    const batch = out.store_batch as ModelJson | undefined;
+    if (batch) {
+      const typed = storeBatchFromJson(batch);
+      await this.deps.store.commit(typed);
+      void this.run('storeCommitted', { batch_id: typed.batchId || '0' });
+    }
+    for (const r of (out.requests as ModelRequest[] | undefined) ?? []) this.deps.send(r);
+    // Чтения хранилища у `rowsApply` не бывает (профиль модели в памяти целиком)
+    if ((out.store_reads as ModelJson[] | undefined)?.length) this.deps.log?.('модель: чтения во вложенном вызове');
+    return out;
+  }
+
   /** Действие или чтение клиентского ядра модели (`clientCall`), синхронно; изменённое ляжет на диск отложенной
    * записью (`flush`). Ошибка — `EngineCallError` с JSON `{"need": …}` / `{"error": …}`. */
   clientCall(name: string, args: Record<string, unknown> = {}): unknown {

@@ -33,12 +33,6 @@ type SyncDependencies = {
   localState: {
     readOwnJournal: () => Promise<WireStoredMessage[]>;
     updateOwnJournalEntry: (stored: WireStoredMessage) => void;
-    // Кэш истории (расшифрованные строки) — в шифрованном IDB: после входа
-    // история показывается без сервера (инбокс v2 отдаёт только новое)
-    saveHistoryRecord: (stored: WireStoredMessage) => void;
-    deleteHistoryRecord: (uuid: string) => void;
-    loadHistoryRecords: () => Promise<WireStoredMessage[]>;
-    flushHistoryNow: () => Promise<void>;
     markChatDeleted: (address: string) => void;
     loadClearedUntil?: () => Record<string, number>;
     removeOwnJournalEntries: (uuids: string[]) => Promise<void>;
@@ -55,6 +49,12 @@ type SyncDependencies = {
   history?: {
     isUnread: (meta: RowMeta) => boolean;
     ensureMarks: () => Promise<void>;
+  };
+  // Строки истории — в модели движка (spec 035 T114): показ после перезагрузки, строки вне журнала, очистка
+  rows?: {
+    loadStored: () => Promise<{ rows: WireStoredMessage[]; known: Set<string>; isReady: boolean }>;
+    persistLocal: (stored: WireStoredMessage) => Promise<WireStoredMessage>;
+    forget: (uuids: string[]) => Promise<void>;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -84,6 +84,8 @@ const NAMES_CHUNK = 100;
 export function createSyncController(deps: SyncDependencies) {
   let isSynced = false;
   let syncPromise: Promise<void> | undefined;
+  // Показ начался без модели (вход без сети до первого подключения): её строки — когда она откроется
+  let isRestorePending = false;
   const wireFlagsByUuid = new Map<string, WireFlags>();
   const readOutboxMaxByChatId = new Map<string, number>();
   // Автор, время (мс), вид и чат строки по uuid — для подсчёта непрочитанного от маркера (READ-2)
@@ -105,7 +107,7 @@ export function createSyncController(deps: SyncDependencies) {
     const list = rowsAwaitingGroup.get(address);
     if (!list || !deps.getStore().isGroupAddress(address)) return;
     rowsAwaitingGroup.delete(address);
-    for (const stored of list) await applyStoredUpdate(stored, false, false);
+    for (const stored of list) await applyStoredUpdate(stored);
     const chatId = deps.getStore().getIdForAddress(address, 'group');
     pushReadState(chatId);
   }
@@ -140,6 +142,7 @@ export function createSyncController(deps: SyncDependencies) {
     readOutboxMaxByChatId.clear();
     rowMetaByUuid.clear();
     rowsAwaitingGroup.clear();
+    isRestorePending = false;
   }
 
   function rememberRowMeta(stored: WireStoredMessage) {
@@ -446,9 +449,9 @@ export function createSyncController(deps: SyncDependencies) {
   async function forgetMessages(uuids: string[], isReplace?: boolean) {
     const store = deps.getStore();
     const idsByChatId = new Map<string, number[]>();
+    await deps.rows?.forget(uuids);
     uuids.forEach((uuid) => {
       wireFlagsByUuid.delete(uuid);
-      deps.localState.deleteHistoryRecord(uuid);
       const message = store.getMessageByUuid(uuid);
       if (!message) return;
       store.removeMessage(message.chatId, message.id);
@@ -464,10 +467,8 @@ export function createSyncController(deps: SyncDependencies) {
         deps.sendUpdate({ '@type': 'deleteHistory', chatId });
       }
     });
-    // Кэш истории и журнал исходящих — сразу, не по таймеру: reload сразу
-    // после удаления не должен воскресить очищенное из IDB
+    // Строки модели (выше) и журнал исходящих — сразу: reload сразу после удаления не должен воскресить очищенное
     await deps.localState.removeOwnJournalEntries(uuids);
-    await deps.localState.flushHistoryNow();
   }
 
   // Чат очищен «у себя» (T145) позже этого сообщения. Сервер v1 очищенное не
@@ -576,14 +577,12 @@ export function createSyncController(deps: SyncDependencies) {
   // сообщение попадало в ленту дважды
   const inFlightByUuid = new Map<string, Promise<void>>();
 
-  // `isLive` — строка пришла сейчас (инбокс v2, кадр `LegacyV1`), а не из кэша
-  function applyStoredUpdate(
-    rawStored: WireStoredMessage, isLive: boolean, shouldPersist = isLive,
-  ): Promise<void> {
+  // Показ строки (вид модели либо строка вне модели) — по одной на uuid
+  function applyStoredUpdate(rawStored: WireStoredMessage): Promise<void> {
     const previous = inFlightByUuid.get(rawStored.id) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => applyStoredUpdateUnserialized(rawStored, shouldPersist));
+      .then(() => applyStoredUpdateUnserialized(rawStored));
     inFlightByUuid.set(rawStored.id, next);
     void next.finally(() => {
       if (inFlightByUuid.get(rawStored.id) === next) inFlightByUuid.delete(rawStored.id);
@@ -593,9 +592,9 @@ export function createSyncController(deps: SyncDependencies) {
 
   // Строка уже расшифрована (движок v2 либо кэш истории): автора проверил
   // движок (E2E-1 в v2 — сертификат устройства и подпись записи)
-  function applyStoredUpdateUnserialized(stored: WireStoredMessage, shouldPersist: boolean) {
+  function applyStoredUpdateUnserialized(stored: WireStoredMessage) {
     const store = deps.getStore();
-    if (!shouldPersist && holdForGroup(stored)) return;
+    if (holdForGroup(stored)) return;
     // Заблокированный контакт: входящее личное сообщение не показываем и не
     // роутим в его чат (в группах блок участника так не работает — только 1-1)
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
@@ -637,8 +636,7 @@ export function createSyncController(deps: SyncDependencies) {
     // надгробие рисовалось новым сообщением «🗑 Сообщение удалено», а у автора
     // после собственного удаления оно так же воскресало из эха инбокса
     if (stored.deleted) {
-      // Надгробие журнала истории остаётся в кэше (удалённое не воскресает ни из какого источника, HIST-1)
-      if (shouldPersist) persistHistory(stored);
+      // Надгробие хранит модель (удалённое не воскресает ни из какого источника, HIST-1)
       const existing = store.getMessageByUuid(stored.id);
       if (existing) {
         store.removeMessage(existing.chatId, existing.id);
@@ -650,17 +648,6 @@ export function createSyncController(deps: SyncDependencies) {
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
     rememberRowMeta(stored);
-    // Кэш истории: живые строки и строки протокола v2 — восстановление из кэша
-    // (shouldPersist=false) не переписывает само себя
-    if (shouldPersist) {
-      persistHistory(stored.order ? stored : { ...stored, order: message.id });
-    } else if (stored.hs && stored.order === undefined) {
-      // Строка журнала истории уже записана хранилищем строк — без места в ленте (ORDER-1): дописываем его, иначе
-      // после перезагрузки живое сообщение встало бы по часам отправителя
-      const placed = { ...stored, order: message.id };
-      deps.localState.saveHistoryRecord(placed);
-      deps.rememberStored?.(placed);
-    }
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
 
     if (!isKnown) {
@@ -711,30 +698,21 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  // Строка кэша: расшифрованный stored без TTL; надгробие журнала истории (`hs`) хранится, прежнее — стирается
-  function persistHistory(stored: WireStoredMessage) {
-    if (stored.from === deps.getStore().self) deps.localState.updateOwnJournalEntry(stored);
-    if (stored.content.ttl_secs) return;
-    if (stored.deleted && !stored.hs) {
-      deps.localState.deleteHistoryRecord(stored.id);
-      return;
-    }
-    if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') return;
-    deps.localState.saveHistoryRecord(stored);
-  }
-
   // История — из локального кэша (расшифрованные строки) и журнала исходящих;
   // сервер v2 хранит только недоставленное, его отдаёт движок (`applyExternal`).
   // perf A3: строки кладутся прямо в стор, без `newMessage` на каждую — список
   // чатов, последние сообщения и счётчики UI забирает `fetchChats`/`fetchMessages`
   // из стора (как и Telegram); блок-лист и границы очистки читаются раз на проход
   async function restoreFromCache(): Promise<boolean> {
-    const records = await deps.localState.loadHistoryRecords();
+    // Строки — из модели движка (spec 035 T114); надгробия в `known` — своё удалённое не воскресает из журнала
+    const loaded = await deps.rows?.loadStored();
+    if (loaded && !loaded.isReady) isRestorePending = true;
+    const records = loaded?.rows || [];
     if (!records.length) return false;
     // «Избранное» без других устройств живёт ТОЛЬКО в журнале исходящих (на
     // сервер не уходит) — без подмешивания журнала чат пустел после reload
     const store = deps.getStore();
-    const knownIds = new Set(records.map((record) => record.id));
+    const knownIds = new Set([...records.map((record) => record.id), ...(loaded?.known || [])]);
     const savedNotes = (await deps.localState.readOwnJournal())
       .filter((message) => message.to === store.self && !knownIds.has(message.id));
     const ordered = records.concat(savedNotes).sort(compareStoredOrder);
@@ -749,7 +727,7 @@ export function createSyncController(deps: SyncDependencies) {
     // Чат мог быть объявлен раньше восстановления (запись о звонке из журнала
     // состояния) — его счётчик приводим к честному значению по стору, по разу на чат
     restoredChatIds.forEach((chatId) => pushReadState(chatId));
-    deps.log(`история восстановлена из кэша: ${records.length} сообщений`);
+    deps.log(`история восстановлена из модели: ${records.length} сообщений`);
     return true;
   }
 
@@ -771,11 +749,7 @@ export function createSyncController(deps: SyncDependencies) {
     deps.media.rememberKeys(stored.content);
     deps.rememberStored?.(stored);
     wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
-    if (stored.deleted) {
-      // Надгробие и сирота журнала истории хранятся, но не показываются
-      if (!stored.hs) deps.localState.deleteHistoryRecord(stored.id);
-      return undefined;
-    }
+    if (stored.deleted) return undefined;
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
     rememberRowMeta(stored);
@@ -816,17 +790,15 @@ export function createSyncController(deps: SyncDependencies) {
       handleTaskOfferContent(stored);
       if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, stored.origin)) continue;
       if (isClearedForMe(stored)) continue;
-      if (stored.deleted) {
-        deps.localState.deleteHistoryRecord(stored.id);
-        continue;
-      }
+      if (stored.deleted) continue;
       deps.media.rememberKeys(stored.content);
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
       rememberRowMeta(stored);
       rememberWebPage(stored);
-      persistHistory(stored);
+      void deps.rows?.persistLocal(stored)
+        .catch((e: unknown) => deps.log(`строка ${stored.id} не записана: ${String(e)}`));
       if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
         const current = readOutboxMaxByChatId.get(message.chatId) || 0;
         if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
@@ -877,26 +849,36 @@ export function createSyncController(deps: SyncDependencies) {
     });
   }
 
-  // Протокол v2 (spec 007): строка, собранная из события движка, — тот же
-  // конвейер отображения, без v1-подтверждений (у v2 свой ack журнала).
-  // Движок сохраняет свой курсор инбокса сразу после возврата отсюда и запись
-  // повторно не отдаст, поэтому сообщение к этому моменту обязано лежать в кэше
-  // истории на диске: запись в IndexedDB под нагрузкой на диск идёт секундами, и
-  // перезагрузка вкладки в это окно теряла сообщение навсегда (стикер с desktop в
-  // `cross_client` по v2). `isBulk` — пакетный перенос истории: один сброс в конце
-  async function applyExternal(stored: WireStoredMessage, isBulk?: boolean) {
-    await applyStoredUpdate({ ...stored, origin: 'v2' }, false, true);
-    if (!isBulk) await deps.localState.flushHistoryNow();
+  // Протокол v2 (spec 007): строка вне журнала истории (заглушка, служебное о режиме L2, самоуничтожение),
+  // собранная из события движка, — строкой модели (её пачка ложится на диск раньше курсора инбокса, SYNC-1), показ —
+  // из представления модели. Нет модели — только показ
+  async function applyExternal(stored: WireStoredMessage) {
+    const next: WireStoredMessage = { ...stored, origin: 'v2' };
+    if (deps.rows) await deps.rows.persistLocal(next);
+    else await applyStoredUpdate(next);
   }
 
-  // Строка журнала истории (spec 033): её уже записало хранилище строк — только показ
+  // Модель открылась позже начала показа: её строки — на экран обычным путём (с апдейтами UI)
+  async function restoreLate() {
+    if (!isRestorePending || !isSynced || !deps.rows) return;
+    const loaded = await deps.rows.loadStored();
+    if (!loaded.isReady) return;
+    isRestorePending = false;
+    const store = deps.getStore();
+    const fresh = loaded.rows.filter((stored) => !store.hasMessage(stored.id)).sort(compareStoredOrder);
+    for (const stored of fresh) await applyStoredUpdate(stored);
+    deps.log(`история из модели показана после её открытия: ${fresh.length} сообщений`);
+  }
+
+  // Строка модели (spec 033, spec 035 T114): её уже записала модель — только показ
   function showRow(stored: WireStoredMessage) {
-    return applyStoredUpdate(stored, false, false);
+    return applyStoredUpdate(stored);
   }
 
   return {
     applyExternal,
     showRow,
+    restoreLate,
     releaseGroupRows,
     announcePeer,
     collectUnreadMentions,

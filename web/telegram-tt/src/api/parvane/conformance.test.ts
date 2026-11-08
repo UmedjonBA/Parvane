@@ -2198,7 +2198,7 @@ describe('REPORT-1: жалоба админам группы — карточк�
     expect(readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts'))
       .toContain('proof: author !== self ? ev.proof : undefined');
     expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts'))
-      .toContain('(await deps.localState.loadHistoryRecord(uuid))?.proof');
+      .toContain('(await deps.history?.find?.(uuid))?.proof');
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('this.verifyProof?.(');
     // desktop и android: ядро проверяет через validateModReport, сообщения хранят подпись
     expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('verifyProof(op, author,');
@@ -2439,7 +2439,14 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(store).toContain(`const LIVE_ORDER_WINDOW_SECS = ${r.liveWindowSecs};`);
     expect(store).toContain('export function compareStoredOrder(');
     const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
-    expect(sync).toContain(`{ ...stored, ${r.orderField}: message.id }`);
+    // spec 035 T114: место выбирает и хранит модель движка (`ChatRows::place`, окно «живого» то же); показ берёт его
+    // из представления строки (`MessageView.order`)
+    const paging = readRepo('backend/protocol/src/model/paging.rs');
+    const windowMs = String(r.liveWindowSecs * 1000).replace(/\B(?=(\d{3})+(?!\d))/g, '_');
+    expect(paging).toContain(`pub const LIVE_WINDOW_MS: i64 = ${windowMs};`);
+    expect(paging).toContain('ts_ms.max(self.max_order.saturating_add(1))');
+    expect(readRepo('web/telegram-tt/src/api/parvane/historyRows.ts'))
+      .toContain(`${r.orderField}: Number(view.order || 0) || undefined,`);
     expect(sync).toContain('records.concat(savedNotes).sort(compareStoredOrder)');
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).toContain(`${r.orderField}: localMessage.id,`);
@@ -2822,9 +2829,12 @@ describe('HIST-1: удалённое не воскресает; событие �
     expect(messages).not.toMatch(/for_everyone: true/);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toContain('scope: \'GONE_SCOPE_ME\'');
-    // Надгробие остаётся в кэше: удалённое не возвращается из него после перезапуска
+    // Надгробие хранит модель движка (spec 035 T114): удалённое не возвращается после перезапуска, у web своего
+    // кэша строк нет
     const sync = readRepo('web/telegram-tt/src/api/parvane/sync.ts');
-    expect(sync).toContain('if (stored.deleted && !stored.hs) {');
+    expect(sync).not.toMatch(/saveHistoryRecord|deleteHistoryRecord/);
+    expect(rows).toContain('m.apply({');
+    expect(readRepo('backend/protocol/src/model/host_rows.rs')).toContain('pub(crate) fn rows_apply(');
   });
 
   it('web: старый механизм (снимок истории в копии ключей и в экспорте привязки) удалён', () => {
