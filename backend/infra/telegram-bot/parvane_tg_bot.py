@@ -133,7 +133,7 @@ def tg_call(method: str, **params):
 # (proto/parvane/core/v2/frame.proto, identity/v2/identity.proto). Номера полей
 # ниже — из схемы; генерировать pb2 не нужно (на VPS старый runtime protobuf).
 PROTO_MAJOR = 2
-PROTO_MINOR = 0
+PROTO_MINOR = 1  # = PROTO_MINOR движка (backend/protocol/src/limits.rs): gateway отвергает ниже минимума (spec 035)
 CHANNEL_IDENTIFIED = 1
 METHOD_CONFIRM_TELEGRAM = "identity.account.confirm_telegram"
 METHOD_TELEGRAM_PULL = "identity.telegram.pull"

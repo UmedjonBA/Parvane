@@ -4,7 +4,7 @@
 // proto/parvane/core/v2/frame.proto и identity/v2/identity.proto. Зеркало
 // кодека в backend/infra/telegram-bot/parvane_tg_bot.py.
 const PROTO_MAJOR = 2;
-const PROTO_MINOR = 0;
+const PROTO_MINOR = 1; // = PROTO_MINOR движка (backend/protocol/src/limits.rs), иначе UPGRADE_REQUIRED (spec 035)
 const CHANNEL_IDENTIFIED = 1;
 const METHOD = 'identity.account.confirm_telegram';
 const ERROR_TEXT = {

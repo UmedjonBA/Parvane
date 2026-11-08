@@ -3170,3 +3170,20 @@ describe('spec 035 FR-026: ключи localStorage только из разре�
     expect(offenders).toEqual([]);
   });
 });
+
+// spec 035 (FR-047): самописные кодировщики Hello (страница ссылки облака, бот Telegram, роль бота в e2e) шлют тот же
+// минор, что движок, — иначе gateway отвечает UPGRADE_REQUIRED (так страница ссылок и бот потерялись бы при выпуске)
+describe('spec 035 PROTO_MINOR: самописные Hello совпадают с движком', () => {
+  const engineMinor = Number(/pub const PROTO_MINOR_035: u32 = (\d+);/.exec(readRepo('backend/protocol/src/limits.rs'))![1]);
+  const places: [string, RegExp][] = [
+    ['web/telegram-tt/src/publicLink/frames.ts', /export const PROTO_MINOR = (\d+);/],
+    ['backend/infra/telegram-bot/parvane_tg_bot.py', /^PROTO_MINOR = (\d+)/m],
+    ['scripts/e2e_tg_confirm_v2.mjs', /const PROTO_MINOR = (\d+);/],
+  ];
+
+  it.each(places)('%s', (file, pattern) => {
+    const match = pattern.exec(readRepo(file));
+    expect(match, `${file}: константа PROTO_MINOR не найдена`).toBeTruthy();
+    expect(Number(match![1])).toBe(engineMinor);
+  });
+});
