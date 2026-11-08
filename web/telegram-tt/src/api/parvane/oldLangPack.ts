@@ -539,8 +539,12 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneGroupAddToggle: 'Anyone can add me to groups',
   ParvaneGroupAddInfo: 'When off, you can only join groups yourself via an invite link.',
   ParvaneStoragePinTitle: 'Storage PIN',
-  ParvaneStoragePinInfo: 'Optional PIN that protects the local E2E keys and the saved session in this browser. '
-    + 'You will be asked for it on every reload. Your account password is never stored.',
+  // spec 035 T046 (PV-020): перечень того, что лежит под PIN
+  ParvaneStoragePinInfo: 'Optional PIN that encrypts everything this browser keeps for your account: E2E keys, '
+    + 'the saved session, message history and drafts, contacts with your names and notes for them, blocked users, '
+    + 'group invite links and cached group details, folders, pinned and archived chats, notification settings. '
+    + 'You will be asked for it on every reload. Your account password is never stored. Not covered: theme, '
+    + 'language and panel layout.',
   ParvaneStoragePinPlaceholder: 'PIN (at least 8 characters)',
   ParvaneStoragePinRepeat: 'Repeat PIN',
   ParvaneStoragePinSet: 'Set PIN',
@@ -548,6 +552,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneStoragePinEnabled: 'PIN is set',
   ParvaneStoragePinDone: 'Storage PIN updated',
   ParvaneStoragePinFailed: 'Could not update the storage PIN',
+  // spec 035 T044: фоновая смена ключа хранилища после установки PIN
+  ParvaneStorageMigrating: 'Re-encrypting local data with a new key… You can keep using the app.',
+  ParvaneStorageMigrationFailed: 'The storage key was not changed: %1$s. Your data is safe under the previous key.',
   // QUOTE-1: пункт меню выделенного текста чужого сообщения
   lng_context_quote_and_reply: 'Reply with Quote',
   ParvaneContactsNoMatch: 'No contacts matched your search.',
@@ -1962,8 +1969,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneGroupAddToggle: 'Кто угодно может добавить меня в группу',
   ParvaneGroupAddInfo: 'Если выключено, попасть в группу можно только самому по инвайт-ссылке.',
   ParvaneStoragePinTitle: 'PIN хранилища',
-  ParvaneStoragePinInfo: 'Необязательный PIN, защищающий локальные E2E-ключи и сохранённую сессию в этом браузере. '
-    + 'Его спросят при каждой перезагрузке. Пароль аккаунта не сохраняется.',
+  ParvaneStoragePinInfo: 'Необязательный PIN, которым шифруется всё, что этот браузер хранит для аккаунта: E2E-ключи, '
+    + 'сохранённая сессия, история и черновики, контакты с вашими именами и заметками, заблокированные, ссылки-'
+    + 'приглашения и сведения групп, папки, закреплённые и архивные чаты, настройки уведомлений. Его спросят при '
+    + 'каждой перезагрузке. Пароль аккаунта не сохраняется. Не защищены: тема, язык и раскладка панелей.',
   ParvaneStoragePinPlaceholder: 'PIN (не короче 8 символов)',
   ParvaneStoragePinRepeat: 'Повторите PIN',
   ParvaneStoragePinSet: 'Установить PIN',
@@ -1971,6 +1980,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneStoragePinEnabled: 'PIN установлен',
   ParvaneStoragePinDone: 'PIN хранилища обновлён',
   ParvaneStoragePinFailed: 'Не удалось обновить PIN хранилища',
+  ParvaneStorageMigrating: 'Локальные данные перешифровываются новым ключом… Приложением можно пользоваться.',
+  ParvaneStorageMigrationFailed: 'Ключ хранилища не сменён: %1$s. Данные целы под прежним ключом.',
   lng_context_quote_and_reply: 'Ответить с цитатой',
   ParvaneContactsNoMatch: 'Контакты по запросу не найдены.',
   ParvaneContactsEmpty: 'Список контактов пуст.',

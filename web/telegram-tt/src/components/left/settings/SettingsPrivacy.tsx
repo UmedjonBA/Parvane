@@ -24,6 +24,7 @@ import DataExportModal from '../../parvane/export/DataExportModal';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
+import Loading from '../../ui/Loading';
 import SecretForm from '../../ui/SecretForm';
 
 // parvane* — кастомные методы провайдера вне типизированного Methods
@@ -32,6 +33,8 @@ import SecretForm from '../../ui/SecretForm';
 const IS_SERVER_SECURITY_SECTIONS_SUPPORTED = false as boolean;
 
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+const STORAGE_MIGRATION_SCREEN_MS = 2000;
+const STORAGE_MIGRATION_POLL_MS = 500;
 
 // Новый PIN хранилища не короче (WEB-15; та же проверка — в `secureStorage.setStoragePin`)
 const STORAGE_PIN_MIN_LENGTH = 8;
@@ -303,12 +306,35 @@ const SettingsPrivacy = ({
   }, []);
   const canSetPin = storagePin.length >= STORAGE_PIN_MIN_LENGTH && storagePin === storagePinRepeat;
 
+  // spec 035 T044: после установки PIN ключ хранилища меняется поколением фоном; дольше 2 с — экран хода
+  const [isMigrationShown, setIsMigrationShown] = useState(false);
+  const watchStorageMigration = useLastCallback(() => {
+    const startedAt = Date.now();
+    const poll = async () => {
+      const state = await callParvane('parvaneGetStorageMigration', {}) as
+        { active: boolean; errors: string[] } | undefined;
+      if (state?.active) {
+        if (Date.now() - startedAt > STORAGE_MIGRATION_SCREEN_MS) setIsMigrationShown(true);
+        setTimeout(() => {
+          void poll();
+        }, STORAGE_MIGRATION_POLL_MS);
+        return;
+      }
+      setIsMigrationShown(false);
+      if (state?.errors?.length) {
+        showNotification({ message: oldLang('ParvaneStorageMigrationFailed', [state.errors[0]]) });
+      }
+    };
+    void poll();
+  });
+
   const applyStoragePin = useLastCallback(async (pin: string) => {
     setIsPinBusy(true);
     try {
       const ok = await callParvane('parvaneSetStoragePin', { pin });
       if (!ok) throw new Error('rejected');
       setIsPinEnabled(Boolean(pin));
+      if (pin) watchStorageMigration();
       setStoragePin('');
       setStoragePinRepeat('');
       showNotification({ message: oldLang('ParvaneStoragePinDone') });
@@ -534,6 +560,12 @@ const SettingsPrivacy = ({
         <p className="settings-item-description-larger">
           {isPinEnabled ? oldLang('ParvaneStoragePinEnabled') : oldLang('ParvaneStoragePinInfo')}
         </p>
+        {isMigrationShown && (
+          <div className="settings-item">
+            <Loading />
+            <p className="settings-item-description">{oldLang('ParvaneStorageMigrating')}</p>
+          </div>
+        )}
         {isPinEnabled ? (
           <div className="settings-item">
             <Button size="smaller" disabled={isPinBusy} onClick={() => applyStoragePin('')}>

@@ -21,6 +21,9 @@ use prost::Message;
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
 
+// spec 035 T043: хранилище движка (`PvStore`, `storeOpen`) — отдельным модулем.
+mod store;
+
 
 /// Инициализация модуля: часы браузера для движка.
 #[wasm_bindgen(start)]

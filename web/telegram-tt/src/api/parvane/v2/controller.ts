@@ -22,6 +22,7 @@ import type { HistoryHost } from './history';
 import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
+import { loadGroupCache, saveGroupCache as saveGroupCacheFor } from '../personalStore';
 import { SecureE2eStorage } from '../secureStorage';
 import {
   destFor, destForInvite, destForUser, groupDomainFor, knownGroupDomain,
@@ -3829,27 +3830,15 @@ export function createV2Controller(deps: Deps) {
 
   // Сведения v2-групп для UI до подъёма движка (история из кэша кладётся в
   // чат группы, только если группа уже зарегистрирована). Только метаданные
-  function groupCacheKey() {
-    return `parvane:v2groups:${deps.getSelf()}`;
-  }
-
+  // spec 035 T046 (PV-020): кэш — в хранилище движка (`personalStore.ts`), не в localStorage
   function cachedGroups(): WireGroupInfo[] {
-    try {
-      return JSON.parse(localStorage.getItem(groupCacheKey()) || '[]') as WireGroupInfo[];
-    } catch {
-      return [];
-    }
+    return loadGroupCache(deps.getSelf());
   }
 
   function saveGroupCache(info: WireGroupInfo, isListed: boolean) {
-    // SC-009 (spec 035, T009): базис — сколько раз список групп переписан целиком с запуска страницы
+    // SC-009 (spec 035, T009): базис — сколько раз кэш групп записан с запуска страницы
     groupCacheWrites += 1;
-    const rest = cachedGroups().filter(({ group_id: id }) => id !== info.group_id);
-    try {
-      localStorage.setItem(groupCacheKey(), JSON.stringify(isListed ? [...rest, info] : rest));
-    } catch {
-      // квота/приватный режим — группы появятся после подъёма движка
-    }
+    saveGroupCacheFor(deps.getSelf(), info, isListed);
   }
 
   // ── ссылки-приглашения v2 (D-04, T084/T125) ─────────────────────────────────

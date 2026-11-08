@@ -2311,6 +2311,7 @@ dependencies = [
  "base64 0.22.1",
  "cbindgen",
  "parvane-protocol",
+ "prost",
  "serde_json",
 ]
 

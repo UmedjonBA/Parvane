@@ -2,12 +2,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  loadSecureSession, lockStorage, migrateStorageUser, saveSecureSession, SecureE2eStorage, setStoragePin,
+  loadSecureSession, lockStorage, renameStorageUser, saveSecureSession, SecureE2eStorage, setStoragePin,
   unlockStorageWithPin,
 } from './secureStorage';
 import { ParvaneStore } from './store';
 
-describe('смена ника', () => {
+describe('смена ника', () => { // spec 035 T047: указатель «адрес → профиль», без перешифровки
   it('хранилище переходит к новому адресу: записи, двоичные записи, состояние и сессия', async () => {
     const [from, to] = ['rename-old@local', 'rename-new@local'];
     const old = await SecureE2eStorage.open(from);
@@ -15,7 +15,7 @@ describe('смена ника', () => {
     await old.saveRecord('m:1', { text: 'история' });
     await old.saveBytesRecord('v2-engine-bin', new Uint8Array([1, 2, 3]));
     await saveSecureSession(from, 'token-old');
-    await migrateStorageUser(from, to);
+    await renameStorageUser(from, to);
     const moved = await SecureE2eStorage.open(to);
     expect(await moved.load()).toEqual({ state: 1 });
     expect(await moved.loadRecord('m:1')).toEqual({ text: 'история' });
@@ -34,7 +34,7 @@ describe('смена ника', () => {
     const old = await SecureE2eStorage.open(from);
     await old.saveRecord('x', 7);
     await setStoragePin(from, '12345678');
-    await migrateStorageUser(from, to);
+    await renameStorageUser(from, to);
     lockStorage(to);
     expect(await unlockStorageWithPin(to, '00000000')).toBe(false);
     expect(await unlockStorageWithPin(to, '12345678')).toBe(true);

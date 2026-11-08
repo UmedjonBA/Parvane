@@ -2218,8 +2218,12 @@ describe('RENAME-1: смена ника — журнал прежнего адр
       .forEach((f) => expect(controller).toContain(f));
     expect(controller).toMatch(/'renamed'\) await followPeerRename\(user, verdict\)/);
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('registerUserRename(');
-    expect(readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts'))
-      .toContain('export async function migrateStorageUser(');
+    // spec 035 T047: хранилище под `store_id` — при смене ника переносится только указатель «адрес → профиль»
+    const secure = readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts');
+    expect(secure).toContain('async function renameIn(ctx: Ctx, oldUser: string, newUser: string) {');
+    expect(secure).not.toContain('export async function migrateStorageUser(');
+    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
+      .toContain('await renameStorageUser(oldAddress, newAddress);');
     expect(r.clients.web).toContain('e2e_web_rename.mjs');
   });
 
@@ -3112,16 +3116,57 @@ describe('migration-inventory: перечень хранимого сверен 
 
   it('a key missing from the inventory fails the guard', () => {
     const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8')) as { entries: { layer: string; key: string }[] };
-    const dropped = inventory.entries.find((entry) => entry.key === 'localStorage:parvane:folders:*')!;
+    const dropped = inventory.entries.find((entry) => entry.key === 'literal:parvane-store-v3')!;
     inventory.entries = inventory.entries.filter((entry) => entry !== dropped);
     const partial = path.join(mkdtempSync(path.join(tmpdir(), 'pv-inventory-')), 'inventory.json');
     writeFileSync(partial, JSON.stringify(inventory));
     const result = runGuard('--inventory', partial);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('не в перечне: web localStorage:parvane:folders:*');
+    expect(result.stderr).toContain('не в перечне: web literal:parvane-store-v3');
   });
 
   it('no inventory — failure', () => {
     expect(runGuard('--inventory', path.join(tmpdir(), 'pv-no-such-inventory.json')).status).toBe(1);
+  });
+});
+
+// spec 035 T041 (FR-026, data-model.md §2): в localStorage — только служебное без личных данных. Личные данные
+// (`storageKey('contacts')` и прочие из перечня, кэш групп `parvane:v2groups:<адрес>`) — в хранилище движка;
+// прежние значения localStorage читает и удаляет только разовый перенос `personalStore.ts`.
+describe('spec 035 FR-026: ключи localStorage только из разрешённого списка', () => {
+  const PERSONAL = ['blocked', 'contacts', 'contactinfo', 'noncontacts', 'unreadpeers', 'unreadmarks', 'invites',
+    'folders', 'folders_all_index', 'pinned', 'archived', 'notify', 'notifydefaults', 'drafts', 'scheduled',
+    'quickreaction', 'stickerpacks', 'stickersetorder', 'renames', 'ttl', 'cleareduntil', 'deletedchats',
+    'receipts', 'hist', 'v2groups'];
+  const ALLOWED_PARTS = ['statedirty', 'repair'];
+  const dir = path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane');
+  const sources = [
+    ...readdirSync(dir).map((f) => path.join(dir, f)),
+    ...readdirSync(path.join(dir, 'v2')).map((f) => path.join(dir, 'v2', f)),
+  ].filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+
+  it('storageKey(…) в localStorage — только служебные виды', () => {
+    const offenders: string[] = [];
+    for (const file of sources) {
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/localStorage\.(setItem|getItem|removeItem)\(\s*storageKey\('([a-z_]+)'\)/g)) {
+        if (!ALLOWED_PARTS.includes(m[2])) offenders.push(`${path.basename(file)}: ${m[1]} ${m[2]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('личные виды и кэш групп не пишутся в localStorage ни под каким ключом', () => {
+    const offenders: string[] = [];
+    for (const file of sources) {
+      if (path.basename(file) === 'personalStore.ts') continue;
+      const text = readFileSync(file, 'utf8');
+      PERSONAL.forEach((part) => {
+        if (text.includes(`\`parvane:${part}:`) || text.includes(`'parvane:${part}:`)) {
+          offenders.push(`${path.basename(file)}: parvane:${part}:`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
   });
 });

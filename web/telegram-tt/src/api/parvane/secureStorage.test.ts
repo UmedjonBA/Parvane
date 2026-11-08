@@ -1,11 +1,28 @@
 import { del, get } from 'idb-keyval';
-import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  beforeEach, describe, expect, it, vi,
+} from 'vitest';
+
+// PV-002: отказ записи второй пачки прежней перешифровки (`setMany` idb-keyval) — подменой модуля
+const idbFail = vi.hoisted(() => ({ calls: 0, failAt: 0 }));
+vi.mock('idb-keyval', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('idb-keyval')>();
+  return {
+    ...orig,
+    setMany: async (...args: Parameters<typeof orig.setMany>) => {
+      idbFail.calls += 1;
+      if (idbFail.failAt && idbFail.calls === idbFail.failAt) throw new Error('QuotaExceededError (тест)');
+      return orig.setMany(...args);
+    },
+  };
+});
 
 import {
   clearSecureSession, clearTrustSecret, hasStoragePin, isStorageUnlocked, loadSecureSession, loadTrustSecret,
   lockStorage, saveSecureSession, saveTrustSecret, SecureE2eStorage, secureStorageInternals, setStoragePin,
   unlockStorageWithPin,
 } from './secureStorage';
+import { LegacyE2eStorage } from './secureStorageLegacy';
 
 const USER = 'secure-storage@local';
 
@@ -21,17 +38,13 @@ describe('secure E2E storage', () => {
     await expect(storage.load()).resolves.toEqual({
       pickleKey: 'unique-secret', plaintext: 'sensitive state',
     });
-    const key = await get<CryptoKey>(
-      secureStorageInternals.keyId(USER),
-      secureStorageInternals.store,
-    );
-    const record = await get<{ ciphertext: ArrayBuffer }>(
-      secureStorageInternals.stateId(USER),
-      secureStorageInternals.store,
-    );
+    // spec 035: ключ устройства профиля лежит под non-extractable ключом WebCrypto
+    const id = await secureStorageInternals.profileIdOf(USER);
+    const key = await get<CryptoKey>(id!, secureStorageInternals.keysStore);
     expect(key?.extractable).toBe(false);
     await expect(crypto.subtle.exportKey('raw', key!)).rejects.toThrow();
-    expect(new TextDecoder().decode(record?.ciphertext)).not.toContain('sensitive state');
+    const raw = [...(await secureStorageInternals.rawRecords(USER)).values()].join('');
+    expect(raw).not.toContain(Buffer.from('sensitive state').toString('hex'));
   });
 
   it('binds ciphertext to the account identity', async () => {
@@ -46,7 +59,9 @@ describe('secure E2E storage', () => {
   it('fails closed when ciphertext outlives its protection key', async () => {
     const storage = await SecureE2eStorage.open(USER);
     await storage.save({ value: 'must not be reset silently' });
-    await del(secureStorageInternals.keyId(USER), secureStorageInternals.store);
+    const id = await secureStorageInternals.profileIdOf(USER);
+    await del(id!, secureStorageInternals.keysStore);
+    secureStorageInternals.forgetAll();
 
     await expect(SecureE2eStorage.open(USER)).rejects.toThrow('protection key is missing');
   });
@@ -111,6 +126,22 @@ describe('secure E2E storage batches (perf A6)', () => {
 });
 
 describe('secure E2E storage compatibility', () => {
+  it('a profile created before spec 035 is still served by the legacy store (until T115)', async () => {
+    const user = 'legacy-profile@local';
+    await SecureE2eStorage.clear(user);
+    const old = await LegacyE2eStorage.open(user);
+    await old.save({ engine: 'old' });
+    await old.saveRecord('m:1', { id: 1 });
+    secureStorageInternals.forgetAll();
+    const facade = await SecureE2eStorage.open(user);
+    expect(await facade.load()).toEqual({ engine: 'old' });
+    expect(await facade.loadRecord('m:1')).toEqual({ id: 1 });
+    await facade.saveRecord('m:2', { id: 2 });
+    expect(await (await LegacyE2eStorage.open(user)).loadRecord('m:2')).toEqual({ id: 2 });
+    expect(await secureStorageInternals.profileIdOf(user)).toBeUndefined();
+    await SecureE2eStorage.clear(user);
+  });
+
   it('keeps the legacy AAD for the state record so old profiles still decrypt', () => {
     const decoder = new TextDecoder();
     const state = decoder.decode(secureStorageInternals.additionalData('erin@local'));
@@ -132,10 +163,9 @@ describe('secure session secrets', () => {
     await saveSecureSession(USER2, 'jwt-1');
     expect(await loadTrustSecret(USER2)).toBe('trust-1');
     expect(await loadSecureSession(USER2)).toBe('jwt-1');
-    const record = await get<{ ciphertext: ArrayBuffer }>(
-      secureStorageInternals.recordId(USER2, 'trust-secret'), secureStorageInternals.store,
-    );
-    expect(new TextDecoder().decode(record?.ciphertext)).not.toContain('trust-1');
+    const raw = await secureStorageInternals.rawRecords(USER2);
+    expect(raw.has('trust-secret')).toBe(true);
+    expect(raw.get('trust-secret')).not.toContain(Buffer.from('trust-1').toString('hex'));
     await clearTrustSecret(USER2);
     await clearSecureSession(USER2);
     expect(await loadTrustSecret(USER2)).toBeUndefined();
@@ -151,7 +181,7 @@ describe('P-39: optional storage PIN', () => {
     await SecureE2eStorage.clear(USER3);
   });
 
-  it('re-keys state under a PIN-derived key, removes the IndexedDB key and requires unlock', async () => {
+  it('puts the DEK under a PIN-derived key, removes the device key record and requires unlock', async () => {
     const storage = await SecureE2eStorage.open(USER3);
     await storage.save({ pickleKey: 'pin-secret' });
     await saveSecureSession(USER3, 'jwt-pin');
@@ -160,13 +190,15 @@ describe('P-39: optional storage PIN', () => {
     await setStoragePin(USER3, '1234-pin-x');
     expect(await hasStoragePin(USER3)).toBe(true);
     expect(isStorageUnlocked(USER3)).toBe(true);
-    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeUndefined();
+    expect(await secureStorageInternals.hasDeviceRecord(USER3)).toBe(false);
     // Разблокировано в памяти: читается
     await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
     expect(await loadSecureSession(USER3)).toBe('jwt-pin');
 
     // «Перезагрузка»: без PIN хранилище закрыто
+    await secureStorageInternals.settled(USER3);
     lockStorage(USER3);
+    secureStorageInternals.forgetAll();
     expect(isStorageUnlocked(USER3)).toBe(false);
     await expect(SecureE2eStorage.open(USER3)).rejects.toThrow(/locked/);
     expect(await loadSecureSession(USER3)).toBeUndefined();
@@ -179,7 +211,7 @@ describe('P-39: optional storage PIN', () => {
     // Снятие PIN: обратно на IndexedDB-ключ, данные целы
     await setStoragePin(USER3, '');
     expect(await hasStoragePin(USER3)).toBe(false);
-    expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeDefined();
+    expect(await secureStorageInternals.hasDeviceRecord(USER3)).toBe(true);
     await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
   });
 
@@ -190,4 +222,156 @@ describe('P-39: optional storage PIN', () => {
     lockStorage(USER3);
     await expect(setStoragePin(USER3, '1111-pin-x')).rejects.toThrow(/locked/);
   });
+});
+
+// ── spec 035 US3 (T037/T038/T042): DEK под обёрткой, PIN = смена обёртки, AAD по store_id ─────────────
+// Хуки `secureStorageInternals` (forgetAll — «перезагрузка страницы», settled — дождаться фонового переноса
+// поколения, failCommits — отказ записи пачки, rawRecords — значения на носителе) есть только у хранилища
+// движка; на прежнем коде вызовы через `?.` ничего не делают, и тест проверяет то же поведение по сути.
+type Hooks = {
+  forgetAll?: () => void;
+  settled?: (user: string) => Promise<void>;
+  failCommits?: (pred?: (puts: number, deletes: number) => boolean) => void;
+  rawRecords?: (user: string) => Promise<Map<string, string>>;
+};
+const hooks = secureStorageInternals as unknown as Hooks;
+
+// «Перезагрузка»: в памяти ничего не остаётся, хранилище открывается заново с диска
+function restart(user: string) {
+  lockStorage(user);
+  hooks.forgetAll?.();
+}
+
+async function settle(user: string) {
+  await hooks.settled?.(user);
+}
+
+describe('spec 035 PV-001: запись после смены PIN переживает перезапуск', () => {
+  const USER4 = 'pv001@local';
+  beforeEach(async () => {
+    hooks.failCommits?.(undefined);
+    await SecureE2eStorage.clear(USER4);
+  });
+
+  it('установка PIN: запись живого экземпляра читается после перезапуска PIN-ом', async () => {
+    const s = await SecureE2eStorage.open(USER4);
+    await s.saveRecord('before', { v: 0 });
+    await setStoragePin(USER4, 'longpin123');
+    await s.saveRecord('after', { v: 1 });
+    await s.saveBytesRecord('bin-after', new Uint8Array([7, 8, 9]));
+    await settle(USER4);
+    restart(USER4);
+    expect(await unlockStorageWithPin(USER4, 'longpin123')).toBe(true);
+    const reopened = await SecureE2eStorage.open(USER4);
+    expect(await reopened.loadRecord('after')).toEqual({ v: 1 });
+    expect(await reopened.loadRecord('before')).toEqual({ v: 0 });
+    expect(await reopened.loadBytesRecord('bin-after')).toEqual(new Uint8Array([7, 8, 9]));
+  });
+
+  it('снятие PIN: запись живого экземпляра читается после перезапуска без PIN', async () => {
+    const s = await SecureE2eStorage.open(USER4);
+    await setStoragePin(USER4, 'longpin123');
+    await settle(USER4);
+    await s.saveRecord('pinned', { v: 2 });
+    await setStoragePin(USER4, '');
+    await s.saveRecord('after', { v: 3 });
+    await settle(USER4);
+    restart(USER4);
+    expect(await hasStoragePin(USER4)).toBe(false);
+    const reopened = await SecureE2eStorage.open(USER4);
+    expect(await reopened.loadRecord('after')).toEqual({ v: 3 });
+    expect(await reopened.loadRecord('pinned')).toEqual({ v: 2 });
+  });
+});
+
+describe('spec 035 PV-002: отказ записи посреди смены PIN не теряет данных', () => {
+  const USER5 = 'pv002@local';
+  beforeEach(async () => {
+    hooks.failCommits?.(undefined);
+    await SecureE2eStorage.clear(USER5);
+  });
+
+  it('вторая пачка (> 512 записей) не записалась → прежний или новый PIN читает ВСЕ записи', async () => {
+    const s = await SecureE2eStorage.open(USER5);
+    await s.save({ engine: 'state-marker' });
+    const N = 1200;
+    await s.saveRecords(Array.from({ length: N }, (_, i) => [`m:${String(i).padStart(5, '0')}`, { id: i }]));
+
+    // Отказ второй большой пачки: прежний код — второй `setMany` перешифровки, движок — вторая пачка переноса
+    idbFail.calls = 0;
+    idbFail.failAt = 2;
+    let bigBatches = 0;
+    hooks.failCommits?.((puts) => {
+      if (puts < 100) return false;
+      bigBatches += 1;
+      return bigBatches === 2;
+    });
+    try {
+      await setStoragePin(USER5, 'longpin123').catch(() => undefined);
+      await settle(USER5);
+    } finally {
+      idbFail.failAt = 0;
+      hooks.failCommits?.(undefined);
+    }
+
+    restart(USER5);
+    if (await hasStoragePin(USER5)) {
+      expect(await unlockStorageWithPin(USER5, 'longpin123')).toBe(true);
+    }
+    const opened = await SecureE2eStorage.open(USER5);
+    expect(await opened.load()).toEqual({ engine: 'state-marker' });
+    const rows = await opened.loadRecordsByPrefix<{ id: number }>('m:');
+    expect(rows.length).toBe(N);
+  }, 60_000);
+});
+
+describe('spec 035 T042: AAD по store_id, PIN — без перешифровки записей', () => {
+  it('смена ника не перешифровывает записи', async () => {
+    const from = 'nick-old@local';
+    const to = 'nick-new@local';
+    await SecureE2eStorage.clear(from);
+    await SecureE2eStorage.clear(to);
+    const s = await SecureE2eStorage.open(from);
+    await s.save({ engine: 1 });
+    await s.saveRecord('m:1', { id: 1 });
+    await s.saveRecord('drafts', { a: 'b' });
+    const module = await import('./secureStorage') as Record<string, unknown>;
+    const rename = (module.renameStorageUser || module.migrateStorageUser) as (a: string, b: string) => Promise<void>;
+    const raw = async (user: string) => {
+      if (hooks.rawRecords) return hooks.rawRecords(user);
+      // прежний формат: шифртекст именованных записей
+      const out = new Map<string, string>();
+      for (const name of ['m:1', 'drafts']) {
+        const rec = await get<{ ciphertext: ArrayBuffer }>(secureStorageInternals.recordId(user, name),
+          secureStorageInternals.store);
+        if (rec) out.set(name, Buffer.from(rec.ciphertext).toString('hex'));
+      }
+      return out;
+    };
+    const before = await raw(from);
+    expect(before.size).toBeGreaterThanOrEqual(2);
+    await rename(from, to);
+    const after = await raw(to);
+    expect(after).toEqual(before);
+    const moved = await SecureE2eStorage.open(to);
+    expect(await moved.loadRecord('m:1')).toEqual({ id: 1 });
+    expect(await moved.load()).toEqual({ engine: 1 });
+    await SecureE2eStorage.clear(to);
+  });
+
+  it('смена PIN при 20 000 записях ≤ 1 с (SC-004)', async () => {
+    const user = 'sc004@local';
+    await SecureE2eStorage.clear(user);
+    const s = await SecureE2eStorage.open(user);
+    await s.saveRecords(Array.from({ length: 20_000 }, (_, i) => [`m:${i}`, { id: i, text: 'выдуманный текст' }]));
+    const started = performance.now();
+    await setStoragePin(user, 'longpin123');
+    const took = performance.now() - started;
+    await settle(user);
+    expect(took).toBeLessThanOrEqual(1000);
+    restart(user);
+    expect(await unlockStorageWithPin(user, 'longpin123')).toBe(true);
+    expect((await (await SecureE2eStorage.open(user)).loadRecordsByPrefix('m:')).length).toBe(20_000);
+    await SecureE2eStorage.clear(user);
+  }, 120_000);
 });

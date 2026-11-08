@@ -402,6 +402,60 @@ impl Store {
         self.unlock(Kek::Pin { salt: w.salt, iterations: w.iterations, key })
     }
 
+    /// Соль и итерации обёртки `pin` активного поколения; `None` — PIN не установлен.
+    pub fn pin_params(&self) -> Option<(Vec<u8>, u32)> {
+        self.root.wraps.iter().find_map(|w| match &w.kind {
+            Some(wrap::Kind::Pin(p)) if w.generation == self.root.active_generation => Some((p.salt.clone(), p.iterations)),
+            _ => None,
+        })
+    }
+
+    /// `unlock_pin`, когда KEK = PBKDF2(PIN, соль, итерации) вывел хост (web — WebCrypto, тот же результат,
+    /// что `pin_kek`). Неверный KEK — `Crypto`.
+    pub fn unlock_pin_kek(&mut self, kek: &[u8; 32]) -> Result<()> {
+        let (salt, iterations) = self.pin_params().ok_or(ProtoError::Crypto)?;
+        if !(PIN_ITERATIONS_MIN..=PIN_ITERATIONS_MAX).contains(&iterations) || salt.len() != 16 {
+            return Err(ProtoError::Crypto);
+        }
+        self.unlock(Kek::Pin { salt, iterations, key: Zeroizing::new(*kek) })
+    }
+
+    /// `set_pin`, когда KEK из PIN вывел хост: соль (16 байт) — случайная хоста, итерации — те, с которыми
+    /// выводил. Пачка только с корнем.
+    pub fn set_pin_kek(&mut self, salt: &[u8], iterations: u32, kek: &[u8; 32]) -> Result<StoreBatch> {
+        self.writable()?;
+        if salt.len() != 16 || !(PIN_ITERATIONS_MIN..=PIN_ITERATIONS_MAX).contains(&iterations) {
+            return Err(ProtoError::InvalidField("pin"));
+        }
+        self.rewrap(Kek::Pin { salt: salt.to_vec(), iterations, key: Zeroizing::new(*kek) })
+    }
+
+    /// Корень сменила другая вкладка (FR-027): принять новый корень, сохранив DEK тех живых поколений, что в
+    /// нём остались. Ключ защиты (KEK) забывается — перенос поколения эта вкладка не ведёт. Активное или
+    /// переносимое поколение без DEK в памяти — `Locked` (писать в одно поколение из двух нельзя).
+    pub fn refresh_root(&mut self, root_bytes: &[u8]) -> Result<OpenState> {
+        let root: Root = decode_checked(root_bytes, Origin::Server)?;
+        if root.store_id.len() != 16 || root.active_generation == 0 || root.store_id != self.root.store_id {
+            return Err(ProtoError::Malformed);
+        }
+        let live = |g: u32| g == root.active_generation || (root.pending_generation != 0 && g == root.pending_generation);
+        self.deks.retain(|(g, _)| live(*g));
+        self.kek = None;
+        self.rotation = None;
+        let have = |g: u32| self.deks.iter().any(|(x, _)| *x == g);
+        let complete = have(root.active_generation) && (root.pending_generation == 0 || have(root.pending_generation));
+        self.state = if too_new(&root) {
+            OpenState::TooNew
+        } else if complete {
+            OpenState::Ready
+        } else {
+            self.deks.clear();
+            OpenState::Locked
+        };
+        self.root = root;
+        Ok(self.state)
+    }
+
     /// Забыть DEK (блокировка).
     pub fn lock(&mut self) {
         self.deks.clear();

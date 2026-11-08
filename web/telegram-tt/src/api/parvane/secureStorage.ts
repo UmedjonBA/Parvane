@@ -1,523 +1,880 @@
+// spec 035 US3 (contracts/storage.md, FR-020…FR-028): шифрованное хранилище web — фасад над хранилищем движка
+// (`PvStore` WASM, `backend/protocol/src/store.rs`) и адаптером IndexedDB `v2/storeIdb.ts`.
+//
+// - Ключ записи на носителе — `g<поколение>/<вид>/<имя>`, значение — `Stored` под DEK поколения; AAD — по
+//   `store_id` профиля, не по адресу: смена ника — только указатель «адрес → профиль» (FR-022, T047).
+// - DEK живёт в памяти движка. Экземпляр `SecureE2eStorage` ключа не держит (PV-001): каждая операция идёт
+//   через текущее состояние профиля.
+// - PIN: установка/смена/снятие — смена обёртки DEK одной транзакцией корня (PV-002, FR-021); после установки
+//   — фоном перенос поколения (новый DEK, P1–P6) с продолжением после перезапуска (T044).
+// - Ключ устройства (решение T043): 32 случайных байта профиля лежат в IndexedDB под non-extractable ключом
+//   WebCrypto (`parvane-store-v3-keys`). Движку отдаются сырые байты, поэтому он может обернуть ими DEK нового
+//   поколения так же, как ядро desktop/android; неизвлекаемым остаётся ключ, без которого эти байты не открыть.
+//   При установке PIN запись `device` удаляется в той же транзакции, что и обёртка устройства в корне.
+// - KEK обёртки PIN выводит WebCrypto (PBKDF2-SHA256, 310 000 итераций — тот же результат, что `store::pin_kek`).
+// - Вкладки (FR-027): каждая запись сверяет корень с носителем под общим замком (Web Locks); смена обёртки,
+//   блокировка и смена поколения рассылаются `tabSignal` (T045).
+// - Профили, созданные до spec 035 (`parvane-e2e-v2`), ведёт прежний модуль `secureStorageLegacy.ts` без
+//   изменений до переноса T115.
+import { createStore, del, get, set } from 'idb-keyval';
+
+import type { PvStore } from '../../lib/parvane-protocol/parvane_protocol';
+import type { StoreIdb } from './v2/storeIdb';
+import type { StorageSignal } from './v2/tabSignal';
+
+import { storeOpen } from '../../lib/parvane-protocol/parvane_protocol';
+import { loadProtocol } from './v2/engine';
+import { openStoreIdb, STORE_DB } from './v2/storeIdb';
+import { createStorageSignal } from './v2/tabSignal';
 import {
-  createStore, del, delMany, get, promisifyRequest, set, setMany,
-} from 'idb-keyval';
+  legacyClearSecureSession, legacyClearTrustSecret, LegacyE2eStorage, legacyHasStoragePin, legacyIsStorageUnlocked,
+  legacyLoadSecureSession, legacyLoadTrustSecret, legacyLockStorage, legacyMigrateStorageUser, legacyProfileExists,
+  legacySaveSecureSession, legacySaveTrustSecret, legacySetStoragePin, legacyStorageInternals,
+  legacyUnlockStorageWithPin,
+} from './secureStorageLegacy';
 
-const STORAGE_VERSION = 2;
-const STORAGE = createStore('parvane-e2e-v2', 'secure-state');
-
-// Запись в IndexedDB, которая не завершается, молча останавливает всё, что стоит
-// за ней в очередях (состояние E2E, кэш истории, журнал исходящих): после
-// перезагрузки на диске оказывается устаревшее состояние. Долгую запись называем
-// в журнале — вместе с числом записей, идущих одновременно
-const SLOW_WRITE_MS = 3000;
-// Сколько записей шифровать/расшифровывать параллельно при чтении и записи
-// пачкой (perf A3/A6)
-const CRYPTO_BATCH = 64;
-// Сколько записей класть одной транзакцией IndexedDB (perf A6): перенос
-// 20 000 строк истории при привязке шёл 20 000 транзакциями
+// Новый PIN — не короче: копию профиля перебирают офлайн (WEB-15)
+export const STORAGE_PIN_MIN_LENGTH = 8;
+const PIN_ITERATIONS = 310_000;
+// Записей в одной транзакции записи пачкой
 const WRITE_BATCH = 512;
-let writesInFlight = 0;
+const SLOW_WRITE_MS = 3000;
+// Ключ записи устройства в базе профиля (вне пространства ключей движка `root`, `g*/`)
+const DEVICE_KEY = 'device';
+const ROOT_KEY = 'root';
+// Записи по имени: вид хранилища движка (data-model.md §2); прочее — `engine-core`
+const KINDS = ['engine-core', 'history-row', 'outbox', 'draft-local', 'state-object', 'group-view'] as const;
+const STATE_NAME = '__state';
 
-async function timedWrite(name: string, bytes: number, write: () => Promise<void>) {
-  const started = Date.now();
-  writesInFlight += 1;
-  const watchdog = setTimeout(() => {
-    // eslint-disable-next-line no-console
-    console.warn(`[parvane] хранилище: запись «${name}» (${bytes} байт) идёт дольше ${SLOW_WRITE_MS} мс,`
-      + ` одновременно записей: ${writesInFlight}`);
-  }, SLOW_WRITE_MS);
-  try {
-    await write();
-  } finally {
-    clearTimeout(watchdog);
-    writesInFlight -= 1;
-    const took = Date.now() - started;
-    if (took >= SLOW_WRITE_MS) {
-      // eslint-disable-next-line no-console
-      console.warn(`[parvane] хранилище: запись «${name}» заняла ${took} мс`);
-    }
-  }
-}
+const KEYS = createStore('parvane-store-v3-keys', 'keys');
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-type EncryptedRecord = {
-  version: number;
-  iv: ArrayBuffer;
-  ciphertext: ArrayBuffer;
-};
-
-function keyId(user: string) {
-  return `key:${user}`;
+function kindOf(name: string): string {
+  if (name.startsWith('m:')) return 'history-row';
+  if (name.startsWith('j:')) return 'outbox';
+  if (name === 'drafts' || name === 'scheduled') return 'draft-local';
+  if (name.startsWith('ls:')) return 'state-object';
+  if (name.startsWith('gv:')) return 'group-view';
+  return 'engine-core';
 }
 
-function stateId(user: string) {
-  return `state:${user}`;
+function hex(bytes: Uint8Array) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ВАЖНО: для записи состояния AAD остаётся ПРЕЖНИМ (без суффикса) — иначе
-// сохранённое до этого состояние всех пользователей перестаёт расшифровываться
-// (OperationError → «E2E недоступен»). Суффикс — только у именованных записей
-function additionalData(user: string, record = 'state') {
-  const base = `parvane-e2e-storage:${STORAGE_VERSION}:${user}`;
-  return encoder.encode(record === 'state' ? base : `${base}:${record}`).buffer;
-}
-
-function recordId(user: string, name: string) {
-  return `rec:${user}:${name}`;
-}
-
-// Диапазон ключей IndexedDB с данным префиксом (perf A6): вместо перебора всех
-// ключей хранилища — выборка по индексу первичного ключа
-function prefixRange(fullPrefix: string) {
-  return IDBKeyRange.bound(fullPrefix, `${fullPrefix}\uffff`);
-}
-
-async function keysByPrefix(fullPrefix: string): Promise<string[]> {
-  return STORAGE('readonly', (store) => promisifyRequest(
-    store.getAllKeys(prefixRange(fullPrefix)),
-  )) as Promise<string[]>;
-}
-
-async function entriesByPrefix<T>(fullPrefix: string): Promise<{ keys: string[]; values: T[] }> {
-  return STORAGE('readonly', async (store) => {
-    const range = prefixRange(fullPrefix);
-    const [found, values] = await Promise.all([
-      promisifyRequest(store.getAllKeys(range)),
-      promisifyRequest(store.getAll(range)),
-    ]);
-    return { keys: found as string[], values: values as T[] };
-  });
-}
-
-/** Пачками по `size`, каждая — параллельно. */
-async function mapInBatches<T, R>(items: T[], size: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  for (let start = 0; start < items.length; start += size) {
-    const batch = await Promise.all(items.slice(start, start + size).map((item, offset) => fn(item, start + offset)));
-    out.push(...batch);
-  }
+function unhex(text: string) {
+  const out = new Uint8Array(text.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
-async function generateProtectionKey() {
-  return crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
-  );
+function randomBytes(n: number) {
+  return crypto.getRandomValues(new Uint8Array(n));
 }
 
+function buf(bytes: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(out).set(bytes);
+  return out;
+}
+
+// KEK обёртки PIN: PBKDF2-HMAC-SHA256(PIN UTF-8, соль, итерации, 32 байта) — WebCrypto
+async function pinKek(pin: string, salt: Uint8Array, iterations: number) {
+  const material = await crypto.subtle.importKey('raw', buf(encoder.encode(pin)), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: buf(salt), iterations }, material, 256,
+  ));
+}
+
+function deviceAad(profile: string) {
+  return buf(encoder.encode(`parvane/store/device/v1\0${profile}`));
+}
+
+type RootInfo = {
+  activeGeneration: number;
+  pendingGeneration: number;
+  retiringGeneration: number;
+  wraps: string[];
+  pinSalt?: string;
+  pinIterations?: number;
+};
+
+type JsBatch = { batchId: number; puts: { key: string; value: Uint8Array }[]; deletes: string[] };
+type RotationStep =
+  | { type: 'read'; readId: number; prefix: string; after: string; limit: number }
+  | { type: 'write'; batch: JsBatch }
+  | { type: 'continue' } | { type: 'done' } | { type: 'aborted'; errors: string[] };
+
+export type StorageMigration = { active: boolean; point: number; startedAt: number; errors: string[] };
+
+type Profile = {
+  user: string;
+  id: string;
+  idb: StoreIdb;
+  engine: PvStore;
+  chain: Promise<unknown>;
+  rotation?: Promise<void>;
+  migration: StorageMigration;
+  signal: ReturnType<typeof createStorageSignal>;
+};
+
+type Ctx = {
+  tab: string;
+  profiles: Map<string, Promise<Profile | undefined>>;
+  resolved: Map<string, Profile>;
+  legacy: Map<string, boolean>;
+  dir?: Promise<StoreIdb>;
+  failPred?: (puts: number, deletes: number) => boolean;
+};
+
+function newCtx(): Ctx {
+  return {
+    tab: hex(randomBytes(8)), profiles: new Map(), resolved: new Map(), legacy: new Map(),
+  };
+}
+
+const DEFAULT_CTX = newCtx();
+const migrationListeners = new Set<(user: string, state: StorageMigration) => void>();
+const lockedListeners = new Set<(user: string) => void>();
+const clearedListeners = new Set<(user: string) => void>();
+
+function info(p: Profile): RootInfo {
+  return JSON.parse(p.engine.rootInfo()) as RootInfo;
+}
+
+function directory(ctx: Ctx) {
+  ctx.dir ||= openStoreIdb(STORE_DB);
+  return ctx.dir;
+}
+
+async function profileIdOf(ctx: Ctx, user: string): Promise<string | undefined> {
+  const dir = await directory(ctx);
+  const [entry] = await dir.read({
+    readId: '0', keys: [`profile/${user}`], prefix: '', after: '', limit: 0,
+  });
+  return entry ? decoder.decode(entry.value) : undefined;
+}
+
+async function readKey(idb: StoreIdb, key: string) {
+  const [entry] = await idb.read({
+    readId: '0', keys: [key], prefix: '', after: '', limit: 0,
+  });
+  return entry?.value;
+}
+
+async function nxKey(profile: string, create: boolean): Promise<CryptoKey | undefined> {
+  let key = await get<CryptoKey>(profile, KEYS);
+  if (!key && create) {
+    key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await set(profile, key, KEYS);
+  }
+  return key;
+}
+
+async function sealDevice(profile: string, raw: Uint8Array) {
+  const key = (await nxKey(profile, true))!;
+  const iv = randomBytes(12);
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: buf(iv), additionalData: deviceAad(profile) }, key, buf(raw),
+  ));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv);
+  out.set(ct, 12);
+  return out;
+}
+
+async function deviceKeyOf(p: Profile): Promise<Uint8Array> {
+  const sealed = await readKey(p.idb, DEVICE_KEY);
+  const key = await nxKey(p.id, false);
+  if (!sealed || !key) {
+    throw new Error('Encrypted E2E state exists, but its non-extractable protection key is missing.');
+  }
+  return new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: buf(sealed.subarray(0, 12)), additionalData: deviceAad(p.id) }, key,
+    buf(sealed.subarray(12)),
+  ));
+}
+
+// Замок профиля: общий для вкладок (Web Locks), иначе — очередь вкладки
+function exclusive<T>(p: Profile, fn: () => Promise<T>): Promise<T> {
+  const locks = (globalThis.navigator as Navigator | undefined)?.locks;
+  if (locks?.request) {
+    return locks.request(`parvane-store:${p.id}`, () => fn());
+  }
+  const run = p.chain.then(fn, fn);
+  p.chain = run.catch(() => undefined);
+  return run;
+}
+
+async function commit(ctx: Ctx, p: Profile, batch: JsBatch) {
+  const started = Date.now();
+  try {
+    if (ctx.failPred?.(batch.puts.length, batch.deletes.length)) throw new Error('store_batch: отказ записи (тест)');
+    await p.idb.commit({ batchId: String(batch.batchId), puts: batch.puts, deletes: batch.deletes });
+  } catch (e) {
+    p.engine.failed(batch.batchId, String(e));
+    throw e;
+  }
+  p.engine.committed(batch.batchId);
+  const took = Date.now() - started;
+  if (took >= SLOW_WRITE_MS) {
+    // eslint-disable-next-line no-console
+    console.warn(`[parvane] хранилище: пачка из ${batch.puts.length} записей заняла ${took} мс`);
+  }
+}
+
+// Ключ устройства открывает профиль без PIN — после блокировки или смены корня другой вкладкой
+async function ensureReady(p: Profile) {
+  if (p.engine.state() !== 'locked') return;
+  if (!info(p).wraps.includes('device')) return;
+  p.engine.storeUnlock(await deviceKeyOf(p), false);
+}
+
+// Корень на носителе сменила другая вкладка — принять до записи (FR-027)
+async function syncRoot(ctx: Ctx, p: Profile) {
+  const root = await readKey(p.idb, ROOT_KEY);
+  if (!root) return;
+  const mine = p.engine.rootBytes();
+  if (mine.length === root.length && mine.every((b, i) => b === root[i])) return;
+  const state = p.engine.refreshRoot(root);
+  if (state === 'locked') {
+    await ensureReady(p).catch(() => undefined);
+    if (p.engine.state() === 'locked') lockedListeners.forEach((fn) => fn(p.user));
+  }
+}
+
+function emitMigration(p: Profile) {
+  migrationListeners.forEach((fn) => fn(p.user, { ...p.migration }));
+}
+
+function onSignal(ctx: Ctx, p: Profile, kind: StorageSignal) {
+  if (kind === 'storage-locked') {
+    if (info(p).wraps.includes('pin')) {
+      p.engine.storeLock();
+      lockedListeners.forEach((fn) => fn(p.user));
+    }
+    return;
+  }
+  void exclusive(p, () => syncRoot(ctx, p)).catch(() => undefined);
+}
+
+async function openProfile(ctx: Ctx, user: string, create: boolean): Promise<Profile | undefined> {
+  let pending = ctx.profiles.get(user);
+  if (!pending) {
+    pending = loadProfile(ctx, user, create);
+    ctx.profiles.set(user, pending);
+    pending.then((p) => {
+      if (p) ctx.resolved.set(user, p);
+      else if (ctx.profiles.get(user) === pending) ctx.profiles.delete(user);
+    }, () => {
+      if (ctx.profiles.get(user) === pending) ctx.profiles.delete(user);
+    });
+  }
+  const p = await pending;
+  if (p || !create) return p;
+  ctx.profiles.delete(user);
+  return openProfile(ctx, user, create);
+}
+
+async function loadProfile(ctx: Ctx, user: string, create: boolean): Promise<Profile | undefined> {
+  await loadProtocol();
+  let id = await profileIdOf(ctx, user);
+  if (!id && !create) return undefined;
+  const isNew = !id;
+  id ||= hex(randomBytes(16));
+  const idb = await openStoreIdb(`${STORE_DB}-${id}`);
+  const root = await readKey(idb, ROOT_KEY);
+  if (!root && !create) return undefined;
+  const engine = storeOpen(root || new Uint8Array(0));
+  const p: Profile = {
+    user,
+    id,
+    idb,
+    engine,
+    chain: Promise.resolve(),
+    migration: {
+      active: false, point: 0, startedAt: 0, errors: [],
+    },
+    signal: createStorageSignal(id, ctx.tab, (kind) => onSignal(ctx, p, kind)),
+  };
+  if (!root) {
+    // Новый профиль: DEK поколения 1 под ключом устройства; корень и запись устройства — одной транзакцией
+    const raw = randomBytes(32);
+    const batch = engine.storeWrapDevice(raw) as JsBatch;
+    batch.puts.push({ key: DEVICE_KEY, value: await sealDevice(id, raw) });
+    raw.fill(0);
+    await commit(ctx, p, batch);
+  } else {
+    await ensureReady(p);
+  }
+  if (isNew || !root) {
+    const dir = await directory(ctx);
+    await dir.commit({ batchId: '0', puts: [{ key: `profile/${user}`, value: encoder.encode(id) }], deletes: [] });
+  }
+  resumeRotation(ctx, p);
+  return p;
+}
+
+function resumeRotation(ctx: Ctx, p: Profile) {
+  if (p.engine.state() !== 'ready') return;
+  const i = info(p);
+  if (i.pendingGeneration || i.retiringGeneration) runRotation(ctx, p);
+}
+
+// ── перенос поколения (T044): фоном, шаг — под замком профиля; чтение и его пачка — в одном шаге ─────────
+function runRotation(ctx: Ctx, p: Profile) {
+  if (p.rotation) return p.rotation;
+  p.migration = {
+    active: true, point: p.engine.rotationPoint() || 1, startedAt: Date.now(), errors: [],
+  };
+  emitMigration(p);
+  const step = () => exclusive(p, async (): Promise<boolean> => {
+    for (;;) {
+      if (p.engine.state() !== 'ready') return true;
+      let action: RotationStep;
+      try {
+        action = p.engine.rotationNext() as RotationStep;
+      } catch (e) {
+        p.migration.errors = [String(e)];
+        return true;
+      }
+      if (action.type === 'done') return true;
+      if (action.type === 'aborted') {
+        p.migration.errors = action.errors;
+        return true;
+      }
+      if (action.type === 'continue') continue;
+      if (action.type === 'read') {
+        const entries = await p.idb.read({
+          readId: String(action.readId), keys: [], prefix: action.prefix, after: action.after, limit: action.limit,
+        });
+        try {
+          p.engine.rotationLoaded(action.readId, entries.map((e) => e.key), entries.map((e) => e.value));
+        } catch {
+          // ошибка расшифровки — движок уже перевёл перенос в откат; следующий шаг его запишет
+        }
+        continue;
+      }
+      const before = info(p).activeGeneration;
+      const hasRoot = action.batch.puts.some((x) => x.key === ROOT_KEY);
+      try {
+        await commit(ctx, p, action.batch);
+      } catch {
+        // движку сообщено (`failed`): до переключения — откат, после — удаление повторится
+      }
+      if (hasRoot) {
+        p.signal.post(info(p).activeGeneration !== before ? 'storage-generation-switched' : 'storage-wrap-changed');
+      }
+      return false;
+    }
+  });
+  p.rotation = (async () => {
+    for (;;) {
+      const finished = await step();
+      p.migration.point = p.engine.rotationPoint() || p.migration.point;
+      emitMigration(p);
+      if (finished) break;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+  })().catch((e: unknown) => {
+    p.migration.errors = [String(e)];
+  }).finally(() => {
+    p.rotation = undefined;
+    p.migration.active = false;
+    if (p.migration.errors.length) {
+      // eslint-disable-next-line no-console
+      console.warn(`[parvane] хранилище: смена ключа остановлена: ${p.migration.errors.slice(0, 3).join('; ')}`);
+    }
+    emitMigration(p);
+  });
+  return p.rotation;
+}
+
+// ── записи ───────────────────────────────────────────────────────────────────────────────────────────────
+async function writeRecords(
+  ctx: Ctx, p: Profile, puts: [name: string, bytes: Uint8Array][], deletes: string[] = [],
+) {
+  for (let start = 0; start < Math.max(puts.length, deletes.length); start += WRITE_BATCH) {
+    const chunk = puts.slice(start, start + WRITE_BATCH);
+    const dels = deletes.slice(start, start + WRITE_BATCH);
+    await exclusive(p, async () => {
+      await syncRoot(ctx, p);
+      await ensureReady(p);
+      if (p.engine.state() !== 'ready') throw new Error('Storage is locked.');
+      const batch = p.engine.write(
+        chunk.map(([name]) => kindOf(name)), chunk.map(([name]) => name), chunk.map(([, bytes]) => bytes),
+        dels.map(kindOf), dels,
+      ) as JsBatch;
+      await commit(ctx, p, batch);
+    });
+  }
+}
+
+async function readValues(p: Profile, fn: () => Promise<Uint8Array | undefined>) {
+  // Во время переноса поколения чтение — под замком (активное поколение может смениться)
+  return p.rotation ? exclusive(p, fn) : fn();
+}
+
+async function readRecord(p: Profile, name: string): Promise<Uint8Array | undefined> {
+  return readValues(p, async () => {
+    await ensureReady(p);
+    const g = info(p).activeGeneration;
+    const key = `g${g}/${kindOf(name)}/${name}`;
+    const value = await readKey(p.idb, key);
+    if (!value) return undefined;
+    try {
+      return p.engine.open(key, value);
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+async function readPrefix(p: Profile, prefix: string): Promise<{ name: string; bytes: Uint8Array }[]> {
+  const run = async () => {
+    await ensureReady(p);
+    const g = info(p).activeGeneration;
+    const out: { name: string; bytes: Uint8Array }[] = [];
+    for (const kind of KINDS) {
+      const base = `g${g}/${kind}/`;
+      const entries = await p.idb.read({
+        readId: '0', keys: [], prefix: `${base}${prefix}`, after: '', limit: 0,
+      });
+      for (const e of entries) {
+        try {
+          out.push({ name: e.key.slice(base.length), bytes: p.engine.open(e.key, e.value) });
+        } catch {
+          // повреждённая запись — пропускаем (не открылась своим ключом)
+        }
+      }
+    }
+    return out;
+  };
+  return p.rotation ? exclusive(p, run) : run();
+}
+
+function lockedError() {
+  return new Error('E2E storage is protected by a PIN and is locked.');
+}
+
+async function isLegacyUser(ctx: Ctx, user: string) {
+  const known = ctx.legacy.get(user);
+  if (known !== undefined) return known;
+  const legacy = !(await profileIdOf(ctx, user)) && await legacyProfileExists(user);
+  ctx.legacy.set(user, legacy);
+  return legacy;
+}
+
+async function readyProfile(ctx: Ctx, user: string) {
+  const p = (await openProfile(ctx, user, true))!;
+  await ensureReady(p);
+  if (p.engine.state() === 'locked') throw lockedError();
+  return p;
+}
+
+// ── экземпляр ────────────────────────────────────────────────────────────────────────────────────────────
 export class SecureE2eStorage {
-  private constructor(
+  static ctx: Ctx = DEFAULT_CTX;
+
+  protected constructor(
+    private readonly ctx: Ctx,
     private readonly user: string,
-    private readonly protectionKey: CryptoKey,
+    private readonly legacy?: LegacyE2eStorage,
   ) {}
 
   static async open(user: string) {
-    const encrypted = await get<EncryptedRecord>(stateId(user), STORAGE);
-    if (await get<PinRecord>(pinId(user), STORAGE)) {
-      // P-39: хранилище под PIN — ключ только из памяти после unlockStorageWithPin
-      const unlocked = unlockedKeys.get(user);
-      if (!unlocked) throw new Error('E2E storage is protected by a PIN and is locked.');
-      return new SecureE2eStorage(user, unlocked);
-    }
-    let protectionKey = await get<CryptoKey>(keyId(user), STORAGE);
-    if (encrypted && !protectionKey) {
-      throw new Error('Encrypted E2E state exists, but its non-extractable protection key is missing.');
-    }
-    if (!protectionKey) {
-      protectionKey = await generateProtectionKey();
-      await set(keyId(user), protectionKey, STORAGE);
-    }
-    return new SecureE2eStorage(user, protectionKey);
+    const { ctx } = this;
+    if (await isLegacyUser(ctx, user)) return new this(ctx, user, await LegacyE2eStorage.open(user));
+    await readyProfile(ctx, user);
+    return new this(ctx, user);
+  }
+
+  private profile() {
+    return readyProfile(this.ctx, this.user);
   }
 
   async load<T>() {
-    const record = await get<EncryptedRecord>(stateId(this.user), STORAGE);
-    if (!record) return undefined;
-    if (record.version !== STORAGE_VERSION) {
-      throw new Error(`Unsupported E2E storage version: ${record.version}.`);
-    }
-    const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user) },
-      this.protectionKey,
-      record.ciphertext,
-    );
-    return JSON.parse(decoder.decode(plaintext)) as T;
+    if (this.legacy) return this.legacy.load<T>();
+    const bytes = await readRecord(await this.profile(), STATE_NAME);
+    return bytes ? JSON.parse(decoder.decode(bytes)) as T : undefined;
   }
 
   async save(value: unknown) {
-    await this.saveEncrypted(stateId(this.user), 'state', value);
+    if (this.legacy) return this.legacy.save(value);
+    return writeRecords(this.ctx, await this.profile(), [[STATE_NAME, encoder.encode(JSON.stringify(value))]]);
   }
 
-  // Именованные записи под тем же non-extractable ключом (журнал исходящих,
-  // черновики): раньше они лежали в localStorage открытым текстом
   async saveRecord(name: string, value: unknown) {
-    await this.saveEncrypted(recordId(this.user, name), name, value);
+    if (this.legacy) return this.legacy.saveRecord(name, value);
+    return writeRecords(this.ctx, await this.profile(), [[name, encoder.encode(JSON.stringify(value))]]);
   }
 
   async loadRecord<T>(name: string): Promise<T | undefined> {
-    const record = await get<EncryptedRecord>(recordId(this.user, name), STORAGE);
-    if (!record || record.version !== STORAGE_VERSION) return undefined;
+    if (this.legacy) return this.legacy.loadRecord<T>(name);
+    const bytes = await readRecord(await this.profile(), name);
+    if (!bytes) return undefined;
     try {
-      const plaintext = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
-        this.protectionKey,
-        record.ciphertext,
-      );
-      return JSON.parse(decoder.decode(plaintext)) as T;
+      return JSON.parse(decoder.decode(bytes)) as T;
     } catch {
       return undefined;
     }
   }
 
-  private async encryptNamed(name: string, plain: ArrayBuffer): Promise<EncryptedRecord> {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: additionalData(this.user, name) },
-      this.protectionKey,
-      plain,
-    );
-    return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
-  }
-
-  private async saveEncrypted(id: string, name: string, value: unknown) {
-    const record = await this.encryptNamed(name, encoder.encode(JSON.stringify(value)).buffer);
-    await timedWrite(name, record.ciphertext.byteLength, () => set(id, record, STORAGE));
-  }
-
-  // Несколько именованных записей (пачка кэша истории): шифрование —
-  // параллельно по CRYPTO_BATCH, запись — одной транзакцией на WRITE_BATCH
-  // записей вместо транзакции на каждую (perf A6)
   async saveRecords(entries: [name: string, value: unknown][]) {
-    if (!entries.length) return;
-    const encrypted = await mapInBatches(entries, CRYPTO_BATCH, async ([name, value]) => [
-      recordId(this.user, name),
-      await this.encryptNamed(name, encoder.encode(JSON.stringify(value)).buffer),
-    ] as [string, EncryptedRecord]);
-    for (let start = 0; start < encrypted.length; start += WRITE_BATCH) {
-      const batch = encrypted.slice(start, start + WRITE_BATCH);
-      const bytes = batch.reduce((sum, [, record]) => sum + record.ciphertext.byteLength, 0);
-      await timedWrite(`${entries[start][0]} (+${batch.length - 1})`, bytes, () => setMany(batch, STORAGE));
-    }
+    if (this.legacy) return this.legacy.saveRecords(entries);
+    if (!entries.length) return undefined;
+    return writeRecords(this.ctx, await this.profile(),
+      entries.map(([name, value]) => [name, encoder.encode(JSON.stringify(value))]));
   }
 
   async deleteRecords(names: string[]) {
-    if (!names.length) return;
-    await delMany(names.map((name) => recordId(this.user, name)), STORAGE);
+    if (this.legacy) return this.legacy.deleteRecords(names);
+    if (!names.length) return undefined;
+    return writeRecords(this.ctx, await this.profile(), [], names);
   }
 
-  // Все записи с префиксом имени (кэш истории `m:<uuid>`): ключи и значения
-  // диапазоном одной транзакции, расшифровка — параллельно по CRYPTO_BATCH
   async loadRecordsByPrefix<T>(prefix: string): Promise<T[]> {
-    const { keys: allKeys, values: records } = await entriesByPrefix<EncryptedRecord>(recordId(this.user, prefix));
-    if (!allKeys.length) return [];
-    const nameOffset = recordId(this.user, '').length;
-    const decrypted = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
-      if (!record || record.version !== STORAGE_VERSION) return undefined;
-      const name = allKeys[index].slice(nameOffset);
+    if (this.legacy) return this.legacy.loadRecordsByPrefix<T>(prefix);
+    const rows = await readPrefix(await this.profile(), prefix);
+    const out: T[] = [];
+    rows.forEach(({ bytes }) => {
       try {
-        const plaintext = await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
-          this.protectionKey,
-          record.ciphertext,
-        );
-        return JSON.parse(decoder.decode(plaintext)) as T;
+        out.push(JSON.parse(decoder.decode(bytes)) as T);
       } catch {
-        // повреждённая запись — пропускаем
-        return undefined;
+        // двоичная запись под тем же префиксом — не JSON
       }
     });
-    return decrypted.filter((value): value is Awaited<T> => value !== undefined);
+    return out;
   }
 
-  // Двоичная запись (архив пака): шифруем байты как есть, без JSON — иначе
-  // ArrayBuffer не сериализуется, а base64 раздувал бы 20-МБ пак на треть
   async saveBytesRecord(name: string, bytes: Uint8Array) {
-    const plain = new Uint8Array(bytes.length);
-    plain.set(bytes);
-    const record = await this.encryptNamed(name, plain.buffer);
-    await timedWrite(name, record.ciphertext.byteLength, () => set(recordId(this.user, name), record, STORAGE));
+    if (this.legacy) return this.legacy.saveBytesRecord(name, bytes);
+    return writeRecords(this.ctx, await this.profile(), [[name, bytes]]);
   }
 
   async loadBytesRecord(name: string): Promise<Uint8Array | undefined> {
-    const record = await get<EncryptedRecord>(recordId(this.user, name), STORAGE);
-    if (!record || record.version !== STORAGE_VERSION) return undefined;
-    try {
-      return new Uint8Array(await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
-        this.protectionKey,
-        record.ciphertext,
-      ));
-    } catch {
-      return undefined;
-    }
+    if (this.legacy) return this.legacy.loadBytesRecord(name);
+    return readRecord(await this.profile(), name);
   }
 
   async deleteRecord(name: string) {
-    await del(recordId(this.user, name), STORAGE);
+    if (this.legacy) return this.legacy.deleteRecord(name);
+    return writeRecords(this.ctx, await this.profile(), [], [name]);
   }
 
   static async clear(user: string) {
-    unlockedKeys.delete(user);
-    await Promise.all([
-      del(stateId(user), STORAGE),
-      del(keyId(user), STORAGE),
-      del(pinId(user), STORAGE),
-      SecureE2eStorage.clearRecords(user),
-    ]);
+    return clearIn(this.ctx, user);
   }
 
   static async clearRecords(user: string) {
-    const userKeys = await keysByPrefix(recordId(user, ''));
-    if (userKeys.length) await delMany(userKeys, STORAGE);
+    return clearRecordsIn(this.ctx, user);
   }
 }
 
-// ── P-39: опциональный PIN хранилища ────────────────────────────────────────
-// Без PIN защитный ключ — non-extractable AES-GCM в IndexedDB рядом с
-// шифртекстом: от XSS/расширения в этом origin он не спасает. С PIN ключ
-// выводится PBKDF2-SHA256 (310k итераций) из PIN + соль и живёт только в
-// памяти вкладки после разблокировки; в IndexedDB остаётся лишь соль и
-// проверочная запись. Ключ из IndexedDB при этом удаляется.
-const PIN_ITERATIONS = 310_000;
-// Новый PIN — не короче: копию профиля перебирают офлайн, и 4 символа × PBKDF2 — часы на видеокарте (WEB-15).
-// Прежние короткие PIN по-прежнему открывают хранилище; сменить на короткий нельзя
-export const STORAGE_PIN_MIN_LENGTH = 8;
-const PIN_CHECK_PLAINTEXT = 'parvane-pin-check-v1';
-
-type PinRecord = { version: number; salt: ArrayBuffer; check: EncryptedRecord };
-
-function pinId(user: string) {
-  return `pin:${user}`;
+async function clearIn(ctx: Ctx, user: string) {
+  ctx.legacy.delete(user);
+  clearedListeners.forEach((fn) => fn(user));
+  await LegacyE2eStorage.clear(user);
+  const p = await openProfile(ctx, user, false).catch(() => undefined);
+  const id = p?.id || await profileIdOf(ctx, user);
+  if (p) {
+    await p.rotation?.catch(() => undefined);
+    p.engine.storeLock();
+    await exclusive(p, () => p.idb.clearAll());
+  } else if (id) {
+    const idb = await openStoreIdb(`${STORE_DB}-${id}`);
+    await idb.clearAll();
+    idb.close();
+  }
+  forgetProfile(ctx, user);
+  if (id) await del(id, KEYS);
+  const dir = await directory(ctx);
+  await dir.commit({ batchId: '0', puts: [], deletes: [`profile/${user}`] });
 }
 
-// Разблокированные PIN-ключи (на время жизни вкладки)
-const unlockedKeys = new Map<string, CryptoKey>();
-
-async function derivePinKey(pin: string, salt: ArrayBuffer) {
-  const material = await crypto.subtle.importKey('raw', encoder.encode(pin).buffer, 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PIN_ITERATIONS },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
-  );
+async function clearRecordsIn(ctx: Ctx, user: string) {
+  if (await isLegacyUser(ctx, user)) {
+    await LegacyE2eStorage.clearRecords(user);
+    return;
+  }
+  const p = await openProfile(ctx, user, false);
+  if (!p) return;
+  await ensureReady(p);
+  if (p.engine.state() !== 'ready') return;
+  const names = (await readPrefix(p, '')).map((r) => r.name).filter((name) => name !== STATE_NAME);
+  await writeRecords(ctx, p, [], names);
 }
 
-async function encryptWith(key: CryptoKey, aad: ArrayBuffer, value: unknown): Promise<EncryptedRecord> {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: aad }, key, encoder.encode(JSON.stringify(value)).buffer,
-  );
-  return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
+function forgetProfile(ctx: Ctx, user: string) {
+  const p = ctx.resolved.get(user);
+  ctx.resolved.delete(user);
+  ctx.profiles.delete(user);
+  if (p) {
+    p.signal.close();
+    p.idb.close();
+    try {
+      p.engine.free();
+    } catch {
+      // уже освобождён
+    }
+  }
 }
 
-async function decryptWith<T>(
-  key: CryptoKey, aad: ArrayBuffer, record: EncryptedRecord | undefined,
-): Promise<T | undefined> {
-  if (!record || record.version !== STORAGE_VERSION) return undefined;
+// ── PIN (P-39 → spec 035) ────────────────────────────────────────────────────────────────────────────────
+async function hasPinIn(ctx: Ctx, user: string) {
+  if (await isLegacyUser(ctx, user)) return legacyHasStoragePin(user);
+  const p = await openProfile(ctx, user, false);
+  return Boolean(p && info(p).wraps.includes('pin'));
+}
+
+function isUnlockedIn(ctx: Ctx, user: string) {
+  if (ctx.legacy.get(user)) return legacyIsStorageUnlocked(user);
+  const p = ctx.resolved.get(user);
+  return Boolean(p && p.engine.state() === 'ready' && info(p).wraps.includes('pin'));
+}
+
+async function unlockWithPinIn(ctx: Ctx, user: string, pin: string): Promise<boolean> {
+  if (await isLegacyUser(ctx, user)) return legacyUnlockStorageWithPin(user, pin);
+  const p = await openProfile(ctx, user, false);
+  if (!p) return true;
+  const i = info(p);
+  if (!i.wraps.includes('pin') || !i.pinSalt || !i.pinIterations) return true;
+  if (p.engine.state() === 'ready') return true;
+  const kek = await pinKek(pin, unhex(i.pinSalt), i.pinIterations);
   try {
-    const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: record.iv, additionalData: aad }, key, record.ciphertext,
-    );
-    return JSON.parse(decoder.decode(plaintext)) as T;
+    p.engine.storeUnlock(kek, true);
+  } catch {
+    return false;
+  } finally {
+    kek.fill(0);
+  }
+  resumeRotation(ctx, p);
+  return true;
+}
+
+function lockIn(ctx: Ctx, user: string) {
+  if (ctx.legacy.get(user)) {
+    legacyLockStorage(user);
+    return;
+  }
+  const p = ctx.resolved.get(user);
+  if (!p) return;
+  if (!info(p).wraps.includes('pin')) return; // без PIN профиль открывает ключ устройства — блокировать нечего
+  p.engine.storeLock();
+  p.signal.post('storage-locked');
+}
+
+async function setPinIn(ctx: Ctx, user: string, pin: string) {
+  if (await isLegacyUser(ctx, user)) {
+    await legacySetStoragePin(user, pin);
+    return;
+  }
+  if (pin && pin.length < STORAGE_PIN_MIN_LENGTH) throw new Error('Storage PIN is too short.');
+  const p = (await openProfile(ctx, user, true))!;
+  await ensureReady(p);
+  if (p.engine.state() !== 'ready') throw new Error('Storage is locked: unlock with the current PIN first.');
+  if (pin) {
+    const salt = randomBytes(16);
+    const kek = await pinKek(pin, salt, PIN_ITERATIONS);
+    await exclusive(p, async () => {
+      await syncRoot(ctx, p);
+      if (p.engine.state() !== 'ready') throw new Error('Storage is locked: unlock with the current PIN first.');
+      // Одна транзакция: обёртка PIN в корне вместо обёртки устройства и удаление записи устройства
+      const batch = p.engine.storeSetPin(salt, PIN_ITERATIONS, kek) as JsBatch;
+      batch.deletes.push(DEVICE_KEY);
+      await commit(ctx, p, batch);
+      p.signal.post('storage-wrap-changed');
+      // Смена DEK поколением (P1): копия профиля, снятая до PIN, не откроет записи после переноса
+      const i = info(p);
+      if (!i.pendingGeneration && !i.retiringGeneration) {
+        await commit(ctx, p, p.engine.beginRotation() as JsBatch);
+        p.signal.post('storage-wrap-changed');
+      }
+    }).finally(() => kek.fill(0));
+    void runRotation(ctx, p);
+    return;
+  }
+  // Снятие: новый ключ устройства, обёртка устройства вместо PIN — корень и запись устройства одной транзакцией
+  const raw = randomBytes(32);
+  const sealed = await sealDevice(p.id, raw);
+  await exclusive(p, async () => {
+    await syncRoot(ctx, p);
+    if (p.engine.state() !== 'ready') throw new Error('Storage is locked: unlock with the current PIN first.');
+    const batch = p.engine.storeRemovePin(raw) as JsBatch;
+    batch.puts.push({ key: DEVICE_KEY, value: sealed });
+    await commit(ctx, p, batch);
+    p.signal.post('storage-wrap-changed');
+  }).finally(() => raw.fill(0));
+}
+
+// Смена ника (spec 026 → spec 035 T047): AAD записей не зависит от адреса — переносится только указатель
+// «адрес → профиль»; записи не перешифровываются
+async function renameIn(ctx: Ctx, oldUser: string, newUser: string) {
+  if (oldUser === newUser) return;
+  if (await isLegacyUser(ctx, oldUser)) {
+    await legacyMigrateStorageUser(oldUser, newUser);
+    ctx.legacy.delete(oldUser);
+    ctx.legacy.delete(newUser);
+    return;
+  }
+  const id = await profileIdOf(ctx, oldUser);
+  if (!id) return;
+  const dir = await directory(ctx);
+  await dir.commit({
+    batchId: '0', puts: [{ key: `profile/${newUser}`, value: encoder.encode(id) }], deletes: [`profile/${oldUser}`],
+  });
+  const pending = ctx.profiles.get(oldUser);
+  const p = ctx.resolved.get(oldUser);
+  ctx.profiles.delete(oldUser);
+  ctx.resolved.delete(oldUser);
+  ctx.legacy.delete(newUser);
+  if (pending && p) {
+    p.user = newUser;
+    ctx.profiles.set(newUser, pending);
+    ctx.resolved.set(newUser, p);
+  }
+}
+
+// ── секреты сессии (P-14/P-39) ───────────────────────────────────────────────────────────────────────────
+async function saveSecretIn(ctx: Ctx, user: string, name: string, value: string) {
+  const p = await openProfile(ctx, user, true);
+  await ensureReady(p!);
+  if (p!.engine.state() !== 'ready') throw new Error('Storage is locked.');
+  await writeRecords(ctx, p!, [[name, encoder.encode(JSON.stringify(value))]]);
+}
+
+async function loadSecretIn(ctx: Ctx, user: string, name: string) {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return undefined;
+  await ensureReady(p).catch(() => undefined);
+  if (p.engine.state() !== 'ready') return undefined;
+  const bytes = await readRecord(p, name);
+  if (!bytes) return undefined;
+  try {
+    const value = JSON.parse(decoder.decode(bytes)) as unknown;
+    return typeof value === 'string' && value ? value : undefined;
   } catch {
     return undefined;
   }
 }
 
-// Ключ пользователя: разблокированный PIN-ключ, иначе IndexedDB-ключ
-// (создаётся при первом обращении, как в SecureE2eStorage.open)
-async function resolveProtectionKey(user: string): Promise<CryptoKey | undefined> {
-  const unlocked = unlockedKeys.get(user);
-  if (unlocked) return unlocked;
-  if (await get<PinRecord>(pinId(user), STORAGE)) return undefined; // нужен PIN
-  let key = await get<CryptoKey>(keyId(user), STORAGE);
-  if (!key) {
-    key = await generateProtectionKey();
-    await set(keyId(user), key, STORAGE);
-  }
-  return key;
+async function clearSecretIn(ctx: Ctx, user: string, name: string) {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return;
+  await ensureReady(p).catch(() => undefined);
+  if (p.engine.state() !== 'ready') return;
+  await writeRecords(ctx, p, [], [name]);
 }
 
-export async function hasStoragePin(user: string) {
-  return Boolean(await get<PinRecord>(pinId(user), STORAGE));
-}
-
-export function isStorageUnlocked(user: string) {
-  return unlockedKeys.has(user);
-}
-
-// Разблокировать хранилище PIN-ом. false — PIN неверен
-export async function unlockStorageWithPin(user: string, pin: string): Promise<boolean> {
-  const record = await get<PinRecord>(pinId(user), STORAGE);
-  if (!record) return true;
-  const key = await derivePinKey(pin, record.salt);
-  const check = await decryptWith<string>(key, additionalData(user, 'pin-check'), record.check);
-  if (check !== PIN_CHECK_PLAINTEXT) return false;
-  unlockedKeys.set(user, key);
-  return true;
-}
-
-export function lockStorage(user: string) {
-  unlockedKeys.delete(user);
-}
-
-// Перешифровать все записи пользователя с ключа `from` на ключ `to`
-async function rekeyAll(user: string, from: CryptoKey, to: CryptoKey) {
-  const state = await get<EncryptedRecord>(stateId(user), STORAGE);
-  if (state) {
-    const plain = await decryptWith<unknown>(from, additionalData(user), state);
-    if (plain === undefined) throw new Error('E2E state cannot be re-keyed: current key does not open it.');
-    await set(stateId(user), await encryptWith(to, additionalData(user), plain), STORAGE);
-  }
-  // Именованные записи — байтами как есть (среди них двоичные: состояние
-  // движка v2, архивы паков — JSON они не являются), одним чтением диапазона
-  // и записью пачками
-  const prefix = recordId(user, '');
-  const { keys: userKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
-  const rekeyed = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
-    if (!record || record.version !== STORAGE_VERSION) return undefined;
-    const name = userKeys[index].slice(prefix.length);
-    const aad = additionalData(user, name);
-    try {
-      const plain = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: record.iv, additionalData: aad }, from, record.ciphertext,
-      );
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, to, plain);
-      return [userKeys[index], { version: STORAGE_VERSION, iv: iv.buffer, ciphertext }] as [string, EncryptedRecord];
-    } catch {
-      return undefined;
-    }
-  });
-  const entries = rekeyed.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
-  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
-    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
-  }
-}
-
-// Установить PIN (пусто — снять). Требует разблокированного хранилища
-export async function setStoragePin(user: string, pin: string) {
-  const current = await resolveProtectionKey(user);
-  if (!current) throw new Error('Storage is locked: unlock with the current PIN first.');
-  if (pin && pin.length < STORAGE_PIN_MIN_LENGTH) throw new Error('Storage PIN is too short.');
-  if (!pin) {
-    // Снятие PIN: обратно на IndexedDB-ключ
-    const fresh = await generateProtectionKey();
-    await rekeyAll(user, current, fresh);
-    await set(keyId(user), fresh, STORAGE);
-    await del(pinId(user), STORAGE);
-    unlockedKeys.delete(user);
-    return;
-  }
-  const salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
-  const next = await derivePinKey(pin, salt);
-  await rekeyAll(user, current, next);
-  const check = await encryptWith(next, additionalData(user, 'pin-check'), PIN_CHECK_PLAINTEXT);
-  await set(pinId(user), { version: STORAGE_VERSION, salt, check } satisfies PinRecord, STORAGE);
-  await del(keyId(user), STORAGE);
-  unlockedKeys.set(user, next);
-}
-
-// Смена ника (spec 026): всё хранилище пользователя — под новым адресом. Адрес входит в AAD записей, поэтому
-// записи перешифровываются тем же ключом с новым AAD; ключ (либо PIN) переходит к новому адресу. Прежние
-// записи стираются после записи новых. Требует разблокированного хранилища
-export async function migrateStorageUser(oldUser: string, newUser: string) {
-  if (oldUser === newUser) return;
-  const key = await resolveProtectionKey(oldUser);
-  if (!key) throw new Error('Storage is locked: unlock with the PIN first.');
-  const reseal = async (aadFrom: ArrayBuffer, aadTo: ArrayBuffer, record: EncryptedRecord) => {
-    const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: record.iv, additionalData: aadFrom }, key, record.ciphertext,
-    );
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aadTo }, key, plain);
-    return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext } satisfies EncryptedRecord;
+function makeApi(ctx: Ctx) {
+  const legacyOr = <A extends unknown[], R>(
+    legacyFn: (user: string, ...args: A) => Promise<R>, fn: (user: string, ...args: A) => Promise<R>,
+  ) => async (user: string, ...args: A) => (
+    (await isLegacyUser(ctx, user)) ? legacyFn(user, ...args) : fn(user, ...args)
+  );
+  return {
+    hasStoragePin: (user: string) => hasPinIn(ctx, user),
+    isStorageUnlocked: (user: string) => isUnlockedIn(ctx, user),
+    unlockStorageWithPin: (user: string, pin: string) => unlockWithPinIn(ctx, user, pin),
+    lockStorage: (user: string) => lockIn(ctx, user),
+    setStoragePin: (user: string, pin: string) => setPinIn(ctx, user, pin),
+    renameStorageUser: (oldUser: string, newUser: string) => renameIn(ctx, oldUser, newUser),
+    saveTrustSecret: legacyOr(legacySaveTrustSecret,
+      (user: string, secret: string) => saveSecretIn(ctx, user, 'trust-secret', secret)),
+    loadTrustSecret: legacyOr(legacyLoadTrustSecret, (user: string) => loadSecretIn(ctx, user, 'trust-secret')),
+    clearTrustSecret: legacyOr(legacyClearTrustSecret, (user: string) => clearSecretIn(ctx, user, 'trust-secret')),
+    saveSecureSession: legacyOr(legacySaveSecureSession,
+      (user: string, token: string) => saveSecretIn(ctx, user, 'session-token', token)),
+    loadSecureSession: legacyOr(legacyLoadSecureSession, (user: string) => loadSecretIn(ctx, user, 'session-token')),
+    clearSecureSession: legacyOr(legacyClearSecureSession,
+      (user: string) => clearSecretIn(ctx, user, 'session-token')),
+    getStorageMigration: (user: string): StorageMigration | undefined => {
+      const p = ctx.resolved.get(user);
+      return p ? { ...p.migration } : undefined;
+    },
   };
-  const state = await get<EncryptedRecord>(stateId(oldUser), STORAGE);
-  if (state && state.version === STORAGE_VERSION) {
-    await set(stateId(newUser), await reseal(additionalData(oldUser), additionalData(newUser), state), STORAGE);
-  }
-  const prefix = recordId(oldUser, '');
-  const { keys: oldKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
-  const moved = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
-    if (!record || record.version !== STORAGE_VERSION) return undefined;
-    const name = oldKeys[index].slice(prefix.length);
-    try {
-      const sealed = await reseal(additionalData(oldUser, name), additionalData(newUser, name), record);
-      return [recordId(newUser, name), sealed] as [string, EncryptedRecord];
-    } catch {
-      return undefined;
-    }
-  });
-  const entries = moved.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
-  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
-    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
-  }
-  const pin = await get<PinRecord>(pinId(oldUser), STORAGE);
-  if (pin) {
-    const check = await encryptWith(key, additionalData(newUser, 'pin-check'), PIN_CHECK_PLAINTEXT);
-    await set(pinId(newUser), { version: STORAGE_VERSION, salt: pin.salt, check } satisfies PinRecord, STORAGE);
-    unlockedKeys.set(newUser, key);
-  } else {
-    await set(keyId(newUser), key, STORAGE);
-  }
-  await delMany([stateId(oldUser), keyId(oldUser), pinId(oldUser), ...oldKeys], STORAGE);
-  unlockedKeys.delete(oldUser);
 }
 
-// ── Именованные секреты сессии под тем же ключом хранилища ─────────────────
-// P-14: секрет доверия 2FA — раньше лежал в localStorage открытым текстом.
-// P-39: пароль аккаунта НЕ сохраняется вовсе; «keep me signed in» держит
-// JWT (живёт сутки, отзываемый, привязан к устройству) — им сессия
-// возобновляется после reload без ввода пароля.
-async function saveSecret(user: string, name: string, value: string) {
-  const key = await resolveProtectionKey(user);
-  if (!key) throw new Error('Storage is locked.');
-  await set(recordId(user, name), await encryptWith(key, additionalData(user, name), value), STORAGE);
+const api = makeApi(DEFAULT_CTX);
+export const {
+  hasStoragePin, isStorageUnlocked, unlockStorageWithPin, lockStorage, setStoragePin, renameStorageUser,
+  saveTrustSecret, loadTrustSecret, clearTrustSecret, saveSecureSession, loadSecureSession, clearSecureSession,
+  getStorageMigration,
+} = api;
+
+/** Ход фоновой смены ключа хранилища (T044) — для экрана хода. Возвращает отписку. */
+export function onStorageMigration(listener: (user: string, state: StorageMigration) => void) {
+  migrationListeners.add(listener);
+  return () => {
+    migrationListeners.delete(listener);
+  };
 }
 
-async function loadSecret(user: string, name: string): Promise<string | undefined> {
-  const key = await resolveProtectionKey(user);
-  if (!key) return undefined;
-  const record = await get<EncryptedRecord>(recordId(user, name), STORAGE);
-  const value = await decryptWith<string>(key, additionalData(user, name), record);
-  return typeof value === 'string' && value ? value : undefined;
+/** Хранилище заблокировала другая вкладка (смена PIN, перенос поколения): DEK забыт, нужен PIN. */
+export function onStorageLocked(listener: (user: string) => void) {
+  lockedListeners.add(listener);
+  return () => {
+    lockedListeners.delete(listener);
+  };
 }
 
-export async function saveTrustSecret(user: string, secret: string) {
-  await saveSecret(user, 'trust-secret', secret);
-}
-
-export async function loadTrustSecret(user: string) {
-  return loadSecret(user, 'trust-secret');
-}
-
-export async function clearTrustSecret(user: string) {
-  await del(recordId(user, 'trust-secret'), STORAGE);
-}
-
-export async function saveSecureSession(user: string, token: string) {
-  await saveSecret(user, 'session-token', token);
-}
-
-export async function loadSecureSession(user: string) {
-  return loadSecret(user, 'session-token');
-}
-
-export async function clearSecureSession(user: string) {
-  await del(recordId(user, 'session-token'), STORAGE);
+/** Хранилище адреса стёрто (`SecureE2eStorage.clear`) — кэши в памяти поверх него недействительны. */
+export function onStorageCleared(listener: (user: string) => void) {
+  clearedListeners.add(listener);
+  return () => {
+    clearedListeners.delete(listener);
+  };
 }
 
 export const secureStorageInternals = {
-  store: STORAGE,
-  keyId,
-  stateId,
-  pinId,
-  recordId,
-  additionalData,
+  ...legacyStorageInternals,
+  // Тесты: «перезагрузка страницы» — в памяти не остаётся ни DEK, ни профилей
+  forgetAll: () => {
+    [...DEFAULT_CTX.resolved.keys()].forEach((user) => forgetProfile(DEFAULT_CTX, user));
+    DEFAULT_CTX.profiles.clear();
+    DEFAULT_CTX.legacy.clear();
+  },
+  // Тесты: дождаться фонового переноса поколения
+  settled: async (user: string) => {
+    for (;;) {
+      const p = DEFAULT_CTX.resolved.get(user);
+      if (!p?.rotation) return;
+      await p.rotation;
+    }
+  },
+  // Тесты: отказ записи пачки (нет места) — предикат по числу записей и удалений
+  failCommits: (pred?: (puts: number, deletes: number) => boolean) => {
+    DEFAULT_CTX.failPred = pred;
+  },
+  // Тесты: значения записей активного поколения на носителе (имя → hex)
+  rawRecords: async (user: string) => {
+    const out = new Map<string, string>();
+    const p = await openProfile(DEFAULT_CTX, user, false);
+    if (!p) return out;
+    const g = info(p).activeGeneration;
+    const entries = await p.idb.read({
+      readId: '0', keys: [], prefix: `g${g}/`, after: '', limit: 0,
+    });
+    entries.forEach((e) => out.set(e.key.slice(e.key.indexOf('/', e.key.indexOf('/') + 1) + 1), hex(e.value)));
+    return out;
+  },
+  // Тесты: вторая вкладка того же браузера — свой движок и свои DEK в памяти
+  createTab: () => {
+    const ctx = newCtx();
+    class TabStorage extends SecureE2eStorage {
+      static ctx = ctx;
+    }
+    return { ...makeApi(ctx), SecureE2eStorage: TabStorage };
+  },
+  kindOf,
+  keysStore: KEYS,
+  profileIdOf: (user: string) => profileIdOf(DEFAULT_CTX, user),
+  // Тесты: запись устройства (`device`) в базе профиля есть
+  hasDeviceRecord: async (user: string) => {
+    const p = await openProfile(DEFAULT_CTX, user, false);
+    return Boolean(p && await readKey(p.idb, DEVICE_KEY));
+  },
 };
