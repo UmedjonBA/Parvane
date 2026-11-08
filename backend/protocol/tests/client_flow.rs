@@ -1758,6 +1758,39 @@ fn planner_truncated_cursor_takes_snapshot() {
     assert_eq!(planner_tasks(&alice2).len() as u64, n + 1, "ничего не потеряно");
 }
 
+/// spec 035 T054 (FR-032…FR-035): операция «Плана» от движка будущего (неизвестное поле верхнего уровня) — снимок
+/// из разобранного его потерял бы, а сервер по снимку выдаёт новому устройству журнал только после `upto_seq`.
+/// Поэтому заменяющий снимок над таким диапазоном не составляется (исход 2), журнал на сервере цел, отметка
+/// переживает перезапуск. Без отметки движок слал снимок (без `complete`) — новое устройство теряло поле.
+#[test]
+fn planner_unknown_op_refuses_replacement_snapshot() {
+    let mut srv = Server::default();
+    let mut dom = MiniDomains::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let create = alice.planner_create(1).unwrap();
+    dom.handle(&mut srv, "alice@local", "d1", &create);
+    let n = parvane_protocol::domain::planner::SNAPSHOT_EVERY;
+    for i in 0..n {
+        let local = alice.planner_prepare_local(&format!(r#"{{"changes":[{{"task":{{"id":"t{i}","name":"Задача {i}"}}}}]}}"#)).unwrap();
+        let mut op = local.op.clone();
+        if i == 3 {
+            // Поле 9 PlannerOp — из схемы будущего (выдуманное значение)
+            prost::encoding::string::encode(9, &"будущее".to_string(), &mut op);
+        }
+        let req = alice.planner_seal(&op, &local.op_id, 1).unwrap();
+        dom.handle(&mut srv, "alice@local", "d1", &req);
+    }
+    let r = alice.planner_ingest_sync(&dom.sync_response(0)).unwrap();
+    assert_eq!(r.head_seq, n);
+    assert!(alice.planner_snapshot_request(1).unwrap().is_none(), "снимок над непонятым запрещён");
+    assert!(dom.snapshot.is_none());
+    assert_eq!(dom.ops.len() as u64, n, "журнал на сервере цел");
+    // Отметка переживает перезапуск
+    let key = [7u8; 32];
+    let mut restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert!(restored.planner_snapshot_request(1).unwrap().is_none(), "после перезапуска — тоже отказ");
+}
+
 #[test]
 fn planner_key_from_stranger_is_ignored() {
     let mut srv = Server::default();

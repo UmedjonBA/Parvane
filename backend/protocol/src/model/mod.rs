@@ -20,6 +20,7 @@ pub mod delta;
 pub mod features;
 pub mod intent;
 pub mod journal;
+pub mod migration;
 pub mod paging;
 pub mod state_v1;
 pub mod store_kinds;
@@ -62,6 +63,8 @@ pub const HISTORY_BATCH_MIN_MS: i64 = 30_000;
 pub const HISTORY_BATCH_MAX_MS: i64 = 120_000;
 /// Опрос журналов (HIST-1 п. 5): раз в 60 с.
 pub const POLL_MS: i64 = 60_000;
+/// Номеров записей в одном `history.get` (как `GetRequest.seqs` max_items).
+const HISTORY_GET_BATCH: usize = 256;
 /// Сколько прекеев публиковать при создании личности.
 pub const OTK_COUNT: usize = 50;
 
@@ -85,6 +88,20 @@ pub(crate) enum Purpose {
     StateSync,
     HistoryAppend,
     HistorySync,
+    /// spec 035 (T068, HIST-2): вход нового устройства — голова журнала истории и его точка.
+    HistoryHead,
+    /// Сводка точки (`history.get [summary_seq]`).
+    HistorySummary(crate::pb::parvane::history::v1::Checkpoint),
+    /// Сегменты точки пачками (`history.get`): текущая пачка ушла, `rest` — дальше; `expect` — op_id по номерам.
+    HistorySegments {
+        cp: crate::pb::parvane::history::v1::Checkpoint,
+        asked: Vec<u64>,
+        rest: Vec<u64>,
+        expect: BTreeMap<u64, Vec<u8>>,
+    },
+    /// Разовый перенос (spec 035, US1): чтение замороженного журнала `state.v1` и нового `state.v2`.
+    MigrateV1Sync,
+    MigrateV2Sync,
     Other,
 }
 
@@ -130,6 +147,12 @@ struct Meta {
     state_cursor: u64,
     #[serde(default)]
     history_cursor: u64,
+    /// spec 035 (T068): id контрольной точки журнала истории, по которой вошло устройство (0 — не входило).
+    #[serde(default)]
+    history_checkpoint: u64,
+    /// Голова журнала истории спрошена (вход нового устройства пройден: по точке либо журнал без точки).
+    #[serde(default)]
+    history_bootstrapped: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +179,8 @@ pub(crate) struct Dirty {
     pub chats: BTreeSet<String>,
     /// Подтверждение инбокса выпустить после фиксации пачки.
     pub ack: bool,
+    /// Прочие записи (вид, имя, открытый текст): ход переноса, карантин, старое исходящее.
+    pub extra: Vec<(String, String, Vec<u8>)>,
 }
 
 /// Работа одного вызова.
@@ -203,6 +228,12 @@ pub struct Engine {
     pending_root: Option<StoreBatch>,
     /// Свои операции личного состояния, ещё не принятые сервером (вид `state-raw`, имя — hex op_id).
     pub(crate) state_unsent: BTreeMap<String, Vec<u8>>,
+    /// Разовый перенос старых хранилищ (spec 035, US1): идёт — `Some`.
+    pub(crate) migration: Option<Box<migration::MigrationRun>>,
+    /// Ход переноса с диска (`migration-progress/legacy`).
+    pub(crate) migration_progress: Option<migration::Progress>,
+    /// Своё исходящее прежней версии, не ставшее строкой истории (`outbox/legacy`, JSON как лежало).
+    pub(crate) legacy_outbox: Vec<Value>,
 }
 
 fn now_or(ms: i64) -> i64 {
@@ -328,6 +359,9 @@ impl Engine {
             dirty: Dirty::default(),
             pending_root: None,
             state_unsent: BTreeMap::new(),
+            migration: None,
+            migration_progress: None,
+            legacy_outbox: vec![],
         })
     }
 
@@ -356,6 +390,10 @@ impl Engine {
             "engineInfo" => Ok(crate::engine_info_json()),
             "stateViewV1" => Ok(self.state_view_v1().to_string()),
             "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
+            "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
+            "migrateFinish" => self.migrate_finish().map(|o| json_of(&o)),
+            "migrateStatus" => Ok(json_of(&self.migrate_status())),
+            "auditDump" => Ok(json_of(&epb::AuditDump { jsonl: self.audit_dump() })),
             "vectorInput" if self.cfg.vectors => self.vector_input(args).map(|o| json_of(&o)),
             _ => return serde_json::json!({"error": "UnknownCall"}).to_string(),
         };
@@ -454,6 +492,13 @@ impl Engine {
     fn root_loaded(&mut self, l: &StoreLoaded, w: &mut Work) -> Result<()> {
         let root = l.entries.iter().find(|e| e.key == store::ROOT_KEY);
         let Some(root) = root else {
+            if self.cfg.legacy_present {
+                // Старые хранилища есть, нового ещё нет: разовый перенос (`migrateStep`), до него — ничего не пишем.
+                self.open_state = OpenState::MigrationNeeded;
+                self.stage = Stage::Open;
+                w.open = Some(OpenResult { state: OpenState::MigrationNeeded as i32, migration: Some(migration::plan(None)) });
+                return Ok(());
+            }
             // Новый профиль: корень, DEK поколения 1, обёртка ключом устройства.
             let mut st = Store::create();
             let key: [u8; 32] = self.cfg.device_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("device_key"))?;
@@ -535,6 +580,8 @@ impl Engine {
                     }
                     self.marks.insert(chat.to_string(), m);
                 }
+                ("migration-progress", migration::PROGRESS_NAME) => self.migration_progress = migration::Progress::from_bytes(&plain),
+                ("outbox", migration::LEGACY_OUTBOX) => self.legacy_outbox = serde_json::from_slice(&plain).unwrap_or_default(),
                 ("outbox", _) => {
                     if let Ok(item) = serde_json::from_slice::<OutboxItem>(&plain) {
                         if let Some(id) = paging::id16(&item.op_id) {
@@ -572,7 +619,15 @@ impl Engine {
         }
         self.refresh_groups(w, true);
         self.stage = Stage::Open;
-        w.open = Some(OpenResult { state: self.open_state as i32, migration: None });
+        if let Some(plan) = migration::plan_after_open(self.migration_progress.as_ref(), self.cfg.legacy_present) {
+            // Перенос прерван до переключения: начать заново (перенос идемпотентен), до этого не писать
+            if self.open_state == OpenState::Ready && plan.0 {
+                self.open_state = OpenState::MigrationNeeded;
+            }
+            w.open = Some(OpenResult { state: self.open_state as i32, migration: Some(plan.1) });
+        } else {
+            w.open = Some(OpenResult { state: self.open_state as i32, migration: None });
+        }
         // Неотправленное до перезапуска — снова в путь
         let ids: Vec<Id> = self.outbox.keys().copied().collect();
         for id in ids {
@@ -656,7 +711,7 @@ impl Engine {
         let d = std::mem::take(&mut self.dirty);
         let root = self.pending_root.take();
         let Some(st) = &self.store else { return Ok(root) };
-        if self.open_state != OpenState::Ready {
+        if !matches!(self.open_state, OpenState::Ready | OpenState::MigrationNeeded) {
             return Ok(root);
         }
         let mut puts: Vec<(String, String, Vec<u8>)> = vec![];
@@ -703,6 +758,7 @@ impl Engine {
                 deletes.push(("outbox".into(), hex::encode(id)));
             }
         }
+        puts.extend(d.extra);
         let _ = st;
         if puts.is_empty() && deletes.is_empty() {
             return Ok(root);
@@ -1040,12 +1096,121 @@ impl Engine {
             let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
             self.push_req(w, r, Purpose::StateSync);
         }
+        self.history_pull(w);
+    }
+
+    /// Чтение журнала истории (HIST-1, HIST-2): новое устройство (курсор 0, точки не было) сначала спрашивает
+    /// голову — есть точка: сводка, затем сегменты, курсор на точку; иначе — синк от курсора.
+    pub(crate) fn history_pull(&mut self, w: &mut Work) {
         let cursor = self.meta.history_cursor;
+        let fresh = cursor == 0 && !self.meta.history_bootstrapped;
         if let Some(s) = self.history_session() {
-            let body = s.sync_request(cursor, false, 0);
-            let r = crate::client::OutRequest { chan: Chan::Id, method: "history.sync", body, dest: None };
-            self.push_req(w, r, Purpose::HistorySync);
+            let (method, body, purpose) = if fresh {
+                ("history.head", s.head_request(), Purpose::HistoryHead)
+            } else {
+                ("history.sync", s.sync_request(cursor, false, 0), Purpose::HistorySync)
+            };
+            let r = crate::client::OutRequest { chan: Chan::Id, method, body, dest: None };
+            self.push_req(w, r, purpose);
         }
+    }
+
+    /// Точка журнала: запросить её сводку (курсор за точку не двигается, пока сводка и сегменты не применены —
+    /// S7-4: сервер, не отдав сводку, не заставит пропустить записи до неё).
+    fn history_checkpoint_start(&mut self, cp: crate::pb::parvane::history::v1::Checkpoint, w: &mut Work) {
+        let Some(s) = self.history_session() else { return };
+        let Ok(body) = s.get_request(vec![cp.summary_seq]) else { return };
+        let r = crate::client::OutRequest { chan: Chan::Id, method: "history.get", body, dest: None };
+        self.push_req(w, r, Purpose::HistorySummary(cp));
+    }
+
+    /// Пачка сегментов точки (`history.get` ≤ 256 номеров).
+    fn history_segments_next(&mut self, cp: crate::pb::parvane::history::v1::Checkpoint, mut rest: Vec<u64>, expect: BTreeMap<u64, Vec<u8>>, w: &mut Work) {
+        if rest.is_empty() {
+            // Точка применена: курсор — на неё, дальше обычный синк
+            self.meta.history_cursor = self.meta.history_cursor.max(cp.upto_seq);
+            self.meta.history_checkpoint = cp.id;
+            self.meta.history_bootstrapped = true;
+            self.dirty.meta = true;
+            self.history_pull(w);
+            return;
+        }
+        let asked: Vec<u64> = rest.drain(..rest.len().min(HISTORY_GET_BATCH)).collect();
+        let Some(s) = self.history_session() else { return };
+        let Ok(body) = s.get_request(asked.clone()) else { return };
+        let r = crate::client::OutRequest { chan: Chan::Id, method: "history.get", body, dest: None };
+        self.push_req(w, r, Purpose::HistorySegments { cp, asked, rest, expect });
+    }
+
+    /// Ответ `history.head`: точка есть — вход по ней, нет — синк с начала.
+    fn ingest_history_head(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
+        let Some(s) = self.history_session() else { return Ok(()) };
+        let h = s.ingest_head(body)?;
+        match h.checkpoint.filter(|c| c.upto_seq > 0) {
+            Some(cp) => self.history_checkpoint_start(cp, w),
+            None => {
+                // Журнал без точки: дальше — обычный синк с начала
+                self.meta.history_bootstrapped = true;
+                self.dirty.meta = true;
+                self.history_pull(w);
+            }
+        }
+        Ok(())
+    }
+
+    /// Сводка точки: сверить с точкой (S7-4), применить последние строки и маркеры чатов, запросить сегменты.
+    fn ingest_history_summary(&mut self, cp: crate::pb::parvane::history::v1::Checkpoint, body: &[u8], w: &mut Work) -> Result<()> {
+        let Some(s) = self.history_session() else { return Ok(()) };
+        let ing = s.ingest(body)?;
+        let Some(summary) = ing.ops.iter().find_map(|o| match &o.op {
+            Some(HOp::Summary(x)) => Some(x.clone()),
+            _ => None,
+        }) else {
+            // Сводка не прочитана — точка не применяется, повтор при следующем опросе
+            return Ok(());
+        };
+        if history::verify_checkpoint(&cp, &summary).is_err() {
+            // S7-4: точка не сходится со сводкой — журнал не применяется, курсор прежний
+            w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_checkpoint_rejected".into(), detail: cp.id.to_string() }));
+            return Ok(());
+        }
+        for chat in &summary.chats {
+            if let Some(last) = &chat.last {
+                self.apply_history_op(&HistoryOp { op: Some(HOp::State(last.clone())) }, false, &mut w.delta);
+            }
+            if let Some(mark) = &chat.mark {
+                self.apply_history_op(&HistoryOp { op: Some(HOp::Read(mark.clone())) }, false, &mut w.delta);
+            }
+        }
+        let mut refs = summary.segments.clone();
+        // Свежие сегменты первыми (как web orderSegments): последние месяцы видны раньше
+        refs.sort_by(|a, b| b.key.cmp(&a.key));
+        let expect: BTreeMap<u64, Vec<u8>> = refs.iter().filter(|r| !r.op_id.is_empty()).map(|r| (r.seq, r.op_id.clone())).collect();
+        let rest: Vec<u64> = refs.iter().map(|r| r.seq).collect();
+        self.history_segments_next(cp, rest, expect, w);
+        Ok(())
+    }
+
+    /// Пачка сегментов: подменённый сегмент (op_id не тот) — точка не применяется; не поместившиеся в ответ —
+    /// следующим запросом.
+    fn ingest_history_segments(&mut self, cp: crate::pb::parvane::history::v1::Checkpoint, asked: Vec<u64>, mut rest: Vec<u64>, expect: BTreeMap<u64, Vec<u8>>, body: &[u8], w: &mut Work) -> Result<()> {
+        let Some(s) = self.history_session() else { return Ok(()) };
+        let ing = s.ingest_checked(body, &expect, None)?;
+        if ing.mismatched > 0 {
+            // Сервер подменил сегмент точки (S7-4) — точка не применяется, курсор прежний
+            w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_checkpoint_rejected".into(), detail: cp.id.to_string() }));
+            return Ok(());
+        }
+        let got: BTreeSet<u64> = ing.records.iter().map(|r| r.seq).collect();
+        for op in &ing.ops {
+            self.apply_history_op(op, false, &mut w.delta);
+        }
+        if !got.is_empty() {
+            let missing: Vec<u64> = asked.into_iter().filter(|q| !got.contains(q)).collect();
+            rest.splice(0..0, missing);
+        }
+        self.history_segments_next(cp, rest, expect, w);
+        Ok(())
     }
 
     pub fn ingest(&mut self, si: epb::ServerInput) -> Result<Outcome> {
@@ -1054,6 +1219,9 @@ impl Engine {
             ServerInputKind::Response => {
                 let purpose = self.inflight.remove(&si.req_id).unwrap_or(Purpose::Other);
                 self.on_response(purpose, si.error, &si.body, &mut w)?;
+                if self.migration.is_some() {
+                    self.migrate_advance(&mut w)?;
+                }
             }
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
@@ -1214,17 +1382,19 @@ impl Engine {
                     self.push_req(w, req, Purpose::GroupSync { group: g, join: Some(parts) });
                 }
             }
-            // Окончательный отказ (схема, право, повтор с другим шифртекстом) — повтор той же записи бессмыслен
-            Purpose::StateAppend(op_id) if matches!(error, 1 | 2 | 4) => {
-                self.state_unsent.remove(&hex::encode(&op_id));
-                self.dirty.state_raw.insert(hex::encode(&op_id), None);
-            }
-            Purpose::StateAppend(op_id) if error == 0 => {
+            // Записано (DUPLICATE: тот же op_id уже записан другими байтами — перенос с другого устройства) либо
+            // окончательный отказ (схема, право) — повтор той же записи бессмыслен
+            Purpose::StateAppend(op_id) if matches!(error, 0..=2 | 4) => {
                 self.state_unsent.remove(&hex::encode(&op_id));
                 self.dirty.state_raw.insert(hex::encode(&op_id), None);
             }
             Purpose::StateSync if error == 0 => self.ingest_state_sync(body, w)?,
+            Purpose::MigrateV1Sync => self.migrate_response(true, error, body, w)?,
+            Purpose::MigrateV2Sync => self.migrate_response(false, error, body, w)?,
             Purpose::HistorySync if error == 0 => self.ingest_history_sync(body, w)?,
+            Purpose::HistoryHead if error == 0 => self.ingest_history_head(body, w)?,
+            Purpose::HistorySummary(cp) if error == 0 => self.ingest_history_summary(cp, body, w)?,
+            Purpose::HistorySegments { cp, asked, rest, expect } if error == 0 => self.ingest_history_segments(cp, asked, rest, expect, body, w)?,
             _ => {}
         }
         Ok(())
@@ -1245,9 +1415,14 @@ impl Engine {
     }
 
     fn ingest_state_sync(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
+        self.ingest_state_sync_as(body, w, Purpose::StateSync).map(|_| ())
+    }
+
+    /// Ответ `state.ops.sync`: применить записи; есть ещё — следующая страница с целью `next`. Возвращает «есть ещё».
+    pub(crate) fn ingest_state_sync_as(&mut self, body: &[u8], w: &mut Work, next: Purpose) -> Result<bool> {
         let r: s2::SyncResponse = decode_checked(body, Origin::Server)?;
-        let Some(c) = &self.client else { return Ok(()) };
-        let Some((key, _)) = c.state_key() else { return Ok(()) };
+        let Some(c) = &self.client else { return Ok(false) };
+        let Some((key, _)) = c.state_key() else { return Ok(false) };
         let key = key.clone();
         let user = c.user.clone();
         let mut touched = BTreeSet::new();
@@ -1269,16 +1444,22 @@ impl Engine {
         if self.state.write_blocked() {
             w.delta.push(Change::WriteBlocked(epb::WriteBlocked { journal: crate::hold::STATE.into(), reason: epb::JournalWrite::BlockedCriticalUnknown as i32 }));
         }
-        if r.more {
+        let more = r.more && !r.records.is_empty();
+        if more {
             let req = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
-            self.push_req(w, req, Purpose::StateSync);
+            self.push_req(w, req, next);
         }
-        Ok(())
+        Ok(more)
     }
 
     fn ingest_history_sync(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
         let Some(s) = self.history_session() else { return Ok(()) };
         let ing = s.ingest(body)?;
+        // Курсор внутри свёрнутого журнала (HIST-2): сначала точка, страница после неё — повтором синка
+        if let Some(cp) = ing.compacted.clone().filter(|c| self.meta.history_cursor < c.upto_seq) {
+            self.history_checkpoint_start(cp, w);
+            return Ok(());
+        }
         for rec in &ing.records {
             self.meta.history_cursor = self.meta.history_cursor.max(rec.seq);
         }
@@ -1338,12 +1519,7 @@ impl Engine {
             }
             Event::Journal { kind, .. } => {
                 if kind == 2 {
-                    let cursor = self.meta.history_cursor;
-                    if let Some(s) = self.history_session() {
-                        let body = s.sync_request(cursor, false, 0);
-                        let r = crate::client::OutRequest { chan: Chan::Id, method: "history.sync", body, dest: None };
-                        self.push_req(w, r, Purpose::HistorySync);
-                    }
+                    self.history_pull(w);
                 } else {
                     let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
                     self.push_req(w, r, Purpose::StateSync);
@@ -1572,6 +1748,12 @@ impl Engine {
 
 /// Корень профиля нового хранилища ждёт первой пачки (одна транзакция с данными).
 impl Engine {
+    /// Сессия журнала истории движка (тесты собирают «серверные» записи под его ключом).
+    #[doc(hidden)]
+    pub fn debug_history_session(&mut self) -> Option<&HistorySession> {
+        self.history_session()
+    }
+
     #[doc(hidden)]
     pub fn debug_rows(&self, chat: &Peer) -> usize {
         history::history_chat_key(chat).ok().and_then(|k| self.chats.get(&k)).map(ChatRows::len).unwrap_or(0)

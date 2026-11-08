@@ -35,6 +35,13 @@ async fn main() -> Result<()> {
     let nats_url = std::env::var("PARVANE_NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./domains.db".to_string());
 
+    // spec 035 (T104): `--migrate-only` — применить миграции базы и выйти (сверка переноса, без NATS).
+    if std::env::args().nth(1).as_deref() == Some("--migrate-only") {
+        store::open_store(&db_path).await?;
+        info!("domains: миграции применены, выход (--migrate-only)");
+        return Ok(());
+    }
+
     let nc = parvane_types::nats::connect(&nats_url).await.context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
 

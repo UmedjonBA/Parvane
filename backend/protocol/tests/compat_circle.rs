@@ -223,3 +223,48 @@ fn domain_snapshot_refused_over_unknown_ops() {
     assert_eq!(hold::check(&holds, "domain:00", 1, 2), Err(ProtoError::RangeHeld));
     assert_eq!(hold::check(&holds, "domain:00", 1, 1), Ok(()));
 }
+
+// ── T054: заменяющий снимок доменов по отметкам ───────────────────────────────────────────────────────
+
+#[test]
+fn domain_replacement_snapshot_refused_while_held() {
+    use parvane_protocol::domain::{self, cloud, planner};
+    use parvane_protocol::pb::parvane::core::v2::{Container, Ref};
+    let container = Container { r#ref: Some(Ref { domain: "x".into(), id: vec![5; 16] }), ..Default::default() };
+    let journal = domain::hold_journal(&container);
+    let mut fut = parvane_protocol::pb::parvane::planner::v1::PlannerOp { changes: vec![] }.encode_to_vec();
+    prost::encoding::string::encode(9, &"новое".to_string(), &mut fut);
+    let known = parvane_protocol::pb::parvane::planner::v1::PlannerOp { changes: vec![] }.encode_to_vec();
+    let mut holds = vec![];
+    assert!(!hold::note(&mut holds, &journal, hold::PLANNER_TYPE, 1, 1, &known), "понятное отметки не ставит");
+    assert!(hold::note(&mut holds, &journal, hold::PLANNER_TYPE, 3, 3, &fut));
+    assert!(hold::note(&mut holds, &journal, hold::PLANNER_TYPE, 4, 4, &fut));
+    assert_eq!(holds.iter().map(|h| (h.from_seq, h.to_seq)).collect::<Vec<_>>(), vec![(3, 4)], "соседние сливаются");
+    let st = planner::PlannerState::default();
+    assert_eq!(st.replacement_snapshot(&holds, &container, 5).unwrap_err(), ProtoError::RangeHeld);
+    assert!(st.replacement_snapshot(&holds, &container, 2).is_ok(), "до отметки — можно");
+    assert_eq!(st.view(), st.to_snapshot(), "показ доступен");
+    let cs = cloud::CloudState::default();
+    assert_eq!(cs.replacement_snapshot(&holds, &container, 3, 0).unwrap_err(), ProtoError::RangeHeld);
+    // Отметка другого контейнера не мешает
+    let other = Container { r#ref: Some(Ref { domain: "x".into(), id: vec![6; 16] }), ..Default::default() };
+    assert!(cs.replacement_snapshot(&holds, &other, 9, 0).is_ok());
+}
+
+// ── T055: перешифровка записи истории сессией ─────────────────────────────────────────────────────────
+
+#[test]
+fn history_session_reseals_former_key_records_bytewise() {
+    let (old_k, new_k) = (StateKey::generate(), StateKey::generate());
+    let old = history::HistoryKey::derive(&old_k, USER);
+    let pt = future_history_batch();
+    let op_id = new_op_id();
+    let rec = history::seal_raw_with_nonce(&old, USER, &op_id, false, &pt, [4; 12]).unwrap();
+    let s = history::HistorySession::new(USER, &[], "d1", &[(&new_k, 2), (&old_k, 1)]).unwrap();
+    let moved = s.reseal_record(&op_id, false, &rec.aead_ciphertext).unwrap().expect("прежний ключ — перешифровать");
+    let new = history::HistoryKey::derive(&new_k, USER);
+    assert_eq!(history::open_record_raw(&new, USER, &op_id, false, &moved.aead_ciphertext).unwrap(), pt, "те же байты, поле будущего цело");
+    assert!(s.reseal_record(&op_id, false, &moved.aead_ciphertext).unwrap().is_none(), "уже под текущим ключом");
+    let stranger = history::HistorySession::new(USER, &[], "d1", &[(&StateKey::generate(), 3)]).unwrap();
+    assert_eq!(stranger.reseal_record(&op_id, false, &rec.aead_ciphertext).unwrap_err(), ProtoError::Crypto);
+}

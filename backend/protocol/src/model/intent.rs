@@ -639,6 +639,10 @@ pub(crate) fn vector_input(e: &mut Engine, args: &str) -> Result<Outcome> {
     if let Some(n) = v.get("now_ms").and_then(Value::as_i64) {
         e.now_ms = n;
     }
+    // spec 035 (T068): чтение журнала истории сейчас (опрос без ожидания срока)
+    if v.get("history_pull").and_then(Value::as_bool) == Some(true) {
+        e.history_pull(&mut w);
+    }
     e.finish(w)
 }
 

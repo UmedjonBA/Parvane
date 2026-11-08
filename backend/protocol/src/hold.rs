@@ -31,6 +31,9 @@ pub const HISTORY: &str = "history";
 pub const HISTORY_TYPE: &str = "parvane.history.v1.HistoryBatch";
 pub const PLANNER_TYPE: &str = "parvane.planner.v1.PlannerOp";
 pub const CLOUD_TYPE: &str = "parvane.cloud.v1.CloudOp";
+/// Типы открытого текста снимков доменов (снимок, составленный движком будущего, тоже может нести непонятное).
+pub const PLANNER_SNAPSHOT_TYPE: &str = "parvane.planner.v1.PlannerSnapshot";
+pub const CLOUD_SNAPSHOT_TYPE: &str = "parvane.cloud.v1.CloudSnapshot";
 /// Путей на отметку не больше (как `max_items` схемы).
 const MAX_PATHS: usize = 64;
 
@@ -77,6 +80,46 @@ pub fn scan(journal: &str, type_name: &str, records: &[(u64, &[u8])]) -> Result<
         last = Some(*seq);
     }
     Ok(out)
+}
+
+/// Добавить отметки `new` к `holds`: пересекающиеся и соседние диапазоны одного журнала сливаются.
+pub fn merge(holds: &mut Vec<RangeHold>, new: Vec<RangeHold>) {
+    for n in new {
+        let mut n = n;
+        let mut i = 0;
+        while i < holds.len() {
+            let h = &holds[i];
+            if h.journal == n.journal && h.from_seq <= n.to_seq.saturating_add(1) && n.from_seq <= h.to_seq.saturating_add(1) {
+                let h = holds.remove(i);
+                n.from_seq = n.from_seq.min(h.from_seq);
+                n.to_seq = n.to_seq.max(h.to_seq);
+                for p in h.paths {
+                    if n.paths.len() < MAX_PATHS && !n.paths.contains(&p) {
+                        n.paths.push(p);
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+        holds.push(n);
+    }
+    holds.sort_by(|a, b| (a.journal.as_str(), a.from_seq).cmp(&(b.journal.as_str(), b.from_seq)));
+}
+
+/// Отметить непонятое в одной записи журнала `journal`, накрывающей номера `from..=to` (операция — `from == to`,
+/// снимок до `upto` — `1..=upto`). Повреждённая запись отметки не ставит (её не применить и не понять никакой
+/// версии; снимок из разобранного её и не содержал). Возвращает, нашлось ли непонятое.
+pub fn note(holds: &mut Vec<RangeHold>, journal: &str, type_name: &str, from: u64, to: u64, bytes: &[u8]) -> bool {
+    let Ok(mut found) = scan(journal, type_name, &[(to, bytes)]) else { return false };
+    if found.is_empty() {
+        return false;
+    }
+    for h in &mut found {
+        h.from_seq = from.min(to);
+    }
+    merge(holds, found);
+    true
 }
 
 /// Разрешена ли уничтожающая операция над записями `from..=to` журнала `journal`.

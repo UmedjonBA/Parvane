@@ -1168,8 +1168,13 @@ pub const RESEAL_NONCE_LABEL: &[u8] = b"parvane/history/reseal\0";
 /// же байты → новый AEAD (nonce = HMAC-SHA256(новый ключ, метка ‖ op_id ‖ chunk ‖ байты)[..12]: два устройства
 /// дают одни байты) → проверить открытием.
 pub fn reseal_raw(old: &HistoryKey, new: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<AppendRequest> {
+    reseal_raw_to(old, address, new, address, op_id, chunk, aead_ciphertext)
+}
+
+/// То же со сменой адреса (запись прежнего ключа под прежним адресом → текущий ключ под текущим адресом).
+pub fn reseal_raw_to(old: &HistoryKey, old_address: &str, new: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<AppendRequest> {
     use hmac::Mac;
-    let pt = Zeroizing::new(open_record_raw(old, address, op_id, chunk, aead_ciphertext)?);
+    let pt = Zeroizing::new(open_record_raw(old, old_address, op_id, chunk, aead_ciphertext)?);
     let mut mac = <hmac::Hmac<Sha256> as Mac>::new_from_slice(new.as_bytes()).map_err(|_| ProtoError::Crypto)?;
     mac.update(RESEAL_NONCE_LABEL);
     mac.update(op_id);
@@ -1382,6 +1387,22 @@ impl HistorySession {
 
     fn open(&self, op_id: &[u8], chunk: bool, ct: &[u8]) -> Option<(HistoryBatch, u32, bool)> {
         self.keys.iter().enumerate().find_map(|(i, k)| open_record(&k.key, &k.address, op_id, chunk, ct).ok().map(|b| (b, k.version, i != 0)))
+    }
+
+    /// spec 035 (FR-032, T055): перешифровать запись прежнего ключа (или прежнего адреса) текущим ключом без
+    /// разбора — те же байты открытого текста, неизвестное движка будущего не теряется. `None` — запись уже под
+    /// текущим ключом; ни один ключ сессии не открывает — `Crypto`.
+    pub fn reseal_record(&self, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<Option<AppendRequest>> {
+        let cur = self.keys.first().ok_or(ProtoError::NotFound)?;
+        for (i, k) in self.keys.iter().enumerate() {
+            if open_record_raw(&k.key, &k.address, op_id, chunk, aead_ciphertext).is_ok() {
+                if i == 0 {
+                    return Ok(None);
+                }
+                return reseal_raw_to(&k.key, &k.address, &cur.key, &cur.address, op_id, chunk, aead_ciphertext).map(Some);
+            }
+        }
+        Err(ProtoError::Crypto)
     }
 
     /// Ответ `history.sync` или `history.get` (у них общее поле `records = 1`).

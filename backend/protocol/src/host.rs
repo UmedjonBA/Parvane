@@ -354,6 +354,31 @@ pub fn grant_numbers(v: &Value) -> Result<(u64, Option<u32>), ProtoError> {
     Ok((gen, skv))
 }
 
+/// Сведения группы по журналу (тот же JSON, что `groupInfo` WASM; выгрузка сверки spec 035 — `migrate::audit`).
+pub fn group_info_value(c: &Client, gid: &[u8]) -> Result<Value, ProtoError> {
+    let s = c.group_state(gid).ok_or(ProtoError::NotFound)?;
+    let members: Vec<Value> = s
+        .members
+        .iter()
+        .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
+        .collect();
+    Ok(json!({
+        "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&c.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,
+        "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
+        "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
+        "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
+        // Действующие ссылки с метаданными из журнала (секреты хост хранит сам)
+        "invites": s.invites_json(),
+        // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
+        "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
+        "l2": s.l2, "l2By": s.l2_by,
+        // Публичная группа (spec 023): имя и настройки админа; секрет хост не получает
+        "publicName": s.public.as_ref().map(|p| p.name.clone()),
+        "publicPreview": s.public.as_ref().is_some_and(|p| p.preview),
+        "publicHistory": s.public.as_ref().is_some_and(|p| p.history),
+    }))
+}
+
 /// Обёртка клиента для нативных хостов.
 pub struct HostClient {
     pub inner: Client,
@@ -637,28 +662,7 @@ impl HostClient {
 
     /// Сведения группы по журналу (тот же JSON, что `groupInfo` WASM).
     pub fn group_info(&self, group_hex: &str) -> Result<String, String> {
-        let s = self.inner.group_state(&group_id(group_hex)?).ok_or_else(|| err(ProtoError::NotFound))?;
-        let members: Vec<Value> = s
-            .members
-            .iter()
-            .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
-            .collect();
-        Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&self.inner.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,
-            "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
-            "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
-            "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
-            // Действующие ссылки с метаданными из журнала (секреты хост хранит сам)
-            "invites": s.invites_json(),
-            // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
-            "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
-            "l2": s.l2, "l2By": s.l2_by,
-            // Публичная группа (spec 023): имя и настройки админа; секрет хост не получает
-            "publicName": s.public.as_ref().map(|p| p.name.clone()),
-            "publicPreview": s.public.as_ref().is_some_and(|p| p.preview),
-            "publicHistory": s.public.as_ref().is_some_and(|p| p.history),
-        })
-        .to_string())
+        group_info_value(&self.inner, &group_id(group_hex)?).map(|v| v.to_string()).map_err(err)
     }
 
     // ── режим «усиленная приватность» (L2, T079) ──

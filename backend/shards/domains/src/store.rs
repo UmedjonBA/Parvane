@@ -220,6 +220,11 @@ struct Meta {
     genesis_key: Vec<u8>,
 }
 
+/// spec 035 (FR-030, T057): исходные байты подписанного поля-сообщения `field` тела запроса; повтор поля — отказ.
+fn raw_signed(body: &[u8], field: u32) -> Result<Vec<u8>, ErrorCode> {
+    parvane_protocol::codec::raw_field(body, field).map_err(|_| ErrorCode::Invalid)?.ok_or(ErrorCode::Invalid)
+}
+
 impl Domains {
     pub fn new(pool: SqlitePool, nc: Option<Client>, server_domain: String) -> Self {
         Self::with_limits(pool, nc, server_domain, Limits::from_env())
@@ -480,28 +485,32 @@ impl Domains {
             return Err(ErrorCode::RateLimited);
         };
         match method {
-            "domain.container.create" => self.create(user, body(&req)?).await,
+            "domain.container.create" => self.create(user, body(&req)?, raw_signed(&req.body, 1)?).await,
             "domain.container.get" => self.get(user, body(&req)?).await,
             "domain.op.append" => self.append(user, &writer, body(&req)?).await,
             "domain.op.sync" => self.sync(user, body(&req)?).await,
             "domain.grant.set" => {
                 let r: DomainGrantSetRequest = body(&req)?;
-                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, domain::OP_GRANT).await?;
+                r.grant.ok_or(ErrorCode::Invalid)?;
+                let ev = self.grant_write(user, raw_signed(&req.body, 1)?, domain::OP_GRANT).await?;
                 Ok(DomainGrantSetResponse { version: ev.version }.encode_to_vec())
             }
             "domain.grant.revoke" => {
                 let r: DomainGrantRevokeRequest = body(&req)?;
-                let ev = self.grant_write(user, r.grant.ok_or(ErrorCode::Invalid)?, domain::OP_REVOKE).await?;
+                r.grant.ok_or(ErrorCode::Invalid)?;
+                let ev = self.grant_write(user, raw_signed(&req.body, 1)?, domain::OP_REVOKE).await?;
                 Ok(DomainGrantRevokeResponse { version: ev.version, key_epoch: ev.key_epoch }.encode_to_vec())
             }
             "domain.key.rotate" => {
                 let r: DomainKeyRotateRequest = body(&req)?;
-                let ev = self.grant_write(user, r.rotate.ok_or(ErrorCode::Invalid)?, domain::OP_ROTATE).await?;
+                r.rotate.ok_or(ErrorCode::Invalid)?;
+                let ev = self.grant_write(user, raw_signed(&req.body, 1)?, domain::OP_ROTATE).await?;
                 Ok(DomainKeyRotateResponse { version: ev.version, key_epoch: ev.key_epoch }.encode_to_vec())
             }
             "domain.grant.leave" => {
                 let r: DomainGrantLeaveRequest = body(&req)?;
-                let ev = self.grant_write(user, r.leave.ok_or(ErrorCode::Invalid)?, domain::OP_LEAVE).await?;
+                r.leave.ok_or(ErrorCode::Invalid)?;
+                let ev = self.grant_write(user, raw_signed(&req.body, 1)?, domain::OP_LEAVE).await?;
                 Ok(DomainGrantLeaveResponse { version: ev.version }.encode_to_vec())
             }
             "domain.container.list" => self.container_list(user, body(&req)?).await,
@@ -512,7 +521,8 @@ impl Domains {
         }
     }
 
-    async fn create(&self, user: &str, r: DomainContainerCreateRequest) -> Reply {
+    /// `raw_genesis` — исходные байты генезиса из запроса: хранятся и отдаются как пришли (spec 035, FR-030).
+    async fn create(&self, user: &str, r: DomainContainerCreateRequest, raw_genesis: Vec<u8>) -> Reply {
         let genesis = r.genesis.ok_or(ErrorCode::Invalid)?;
         let (c, signer) = domain::verify_genesis(&genesis).map_err(code)?;
         let owner = c.owner.as_ref().map(|u| u.address.as_str()).unwrap_or_default();
@@ -536,7 +546,7 @@ impl Domains {
         .bind(&c.domain)
         .bind(user)
         .bind(domain::FIRST_EPOCH as i64)
-        .bind(genesis.encode_to_vec())
+        .bind(&raw_genesis)
         .bind(signer.to_vec())
         .bind(now_unix())
         .execute(&self.pool)
@@ -561,15 +571,18 @@ impl Domains {
     async fn get(&self, user: &str, r: DomainContainerGetRequest) -> Reply {
         let id = self.container_id(r.container.as_ref())?;
         let (m, level) = self.require(&id, user, GrantLevel::Read).await?;
-        let genesis = SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
-        Ok(DomainContainerGetResponse {
+        SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
+        // Генезис (поле 2) — исходными байтами (spec 035, FR-030)
+        let mut out = DomainContainerGetResponse {
             container: Some(self.container_pb(&id, &m)),
-            genesis: Some(genesis),
+            genesis: None,
             level: level as i32,
             head_seq: m.head_seq,
             grant_version: m.grant_version,
         }
-        .encode_to_vec())
+        .encode_to_vec();
+        parvane_protocol::codec::put_raw(2, &m.genesis, &mut out);
+        Ok(out)
     }
 
     async fn append(&self, user: &str, writer: &str, r: DomainOpAppendRequest) -> Reply {
@@ -702,7 +715,9 @@ impl Domains {
     /// (spec 010: смена эпохи без грантов) или "leave" (spec 016: участник
     /// снимает свой грант сам — ему достаточно уровня чтения; что подписант
     /// и есть получатель гранта, проверяет движок).
-    async fn grant_write(&self, user: &str, op: SignedOp, expected: &str) -> Result<GrantEvent, ErrorCode> {
+    /// `raw` — исходные байты записи (`SignedOp`): в журнал грантов ложатся они (spec 035, FR-030).
+    async fn grant_write(&self, user: &str, raw: Vec<u8>, expected: &str) -> Result<GrantEvent, ErrorCode> {
+        let op: SignedOp = decode_checked(&raw, Origin::Client).map_err(code)?;
         let b: OpBody = decode_checked(&op.body, Origin::Client).map_err(code)?;
         let h = b.header.ok_or(ErrorCode::Invalid)?;
         if h.domain != domain::DOMAIN || h.op_type != expected {
@@ -729,7 +744,7 @@ impl Domains {
         keys.insert(signer, author.clone());
         let ev = {
             let resolve = |k: &[u8; 32]| keys.get(k).cloned();
-            access.apply(&op, &resolve, &no_groups).map_err(code)?
+            access.apply_raw(&raw, &resolve, &no_groups).map_err(code)?.1
         };
 
 
@@ -750,7 +765,7 @@ impl Domains {
         sqlx::query("INSERT INTO container_grant_log (container, version, entry, signer_key, signer_user, at) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&id)
             .bind(ev.version as i64)
-            .bind(op.encode_to_vec())
+            .bind(&raw)
             .bind(signer.to_vec())
             .bind(&author.user)
             .bind(now_unix())
@@ -873,13 +888,16 @@ impl Domains {
             .await
             .map_err(db_err)?;
         let more = rows.len() > PAGE_ITEMS;
-        let entries = rows
-            .into_iter()
-            .take(PAGE_ITEMS)
-            .map(|(e,)| SignedOp::decode(e.as_slice()).map_err(db_err))
-            .collect::<Result<Vec<_>, _>>()?;
-        let genesis = SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
-        Ok(DomainGrantListResponse { genesis: Some(genesis), entries, more }.encode_to_vec())
+        // spec 035 (FR-030, T057): генезис (поле 1) и записи (поле 2) — исходными байтами, как легли в журнал
+        SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
+        let mut out = Vec::new();
+        parvane_protocol::codec::put_raw(1, &m.genesis, &mut out);
+        for (e,) in rows.into_iter().take(PAGE_ITEMS) {
+            SignedOp::decode(e.as_slice()).map_err(db_err)?;
+            parvane_protocol::codec::put_raw(2, &e, &mut out);
+        }
+        out.extend(DomainGrantListResponse { genesis: None, entries: vec![], more }.encode_to_vec());
+        Ok(out)
     }
 
     async fn snapshot_put(&self, user: &str, r: DomainSnapshotPutRequest) -> Reply {

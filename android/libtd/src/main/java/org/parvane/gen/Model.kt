@@ -186,6 +186,24 @@ enum class ServerInputKind(val number: Int) {
     }
 }
 
+data class AuditDump(
+    val jsonl: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(jsonl.isEmpty())) j.put("jsonl", jsonl)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): AuditDump {
+            return AuditDump(
+                jsonl = j.pick("jsonl", "jsonl")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
 data class Capabilities(
     val sendText: Boolean = false,
     val sendMedia: Boolean = false,
@@ -467,7 +485,8 @@ data class EngineConfig(
     val nowMs: Long = 0L,
     val memoryBudgetBytes: Long = 0L,
     val deviceKey: ByteArray = ByteArray(0),
-    val vectors: Boolean = false
+    val vectors: Boolean = false,
+    val legacyPresent: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -479,6 +498,7 @@ data class EngineConfig(
         if (!(memoryBudgetBytes == 0L)) j.put("memory_budget_bytes", memoryBudgetBytes.toString())
         if (!(deviceKey.isEmpty())) j.put("device_key", toBase64(deviceKey))
         if (!(!vectors)) j.put("vectors", vectors)
+        if (!(!legacyPresent)) j.put("legacy_present", legacyPresent)
         return j
     }
 
@@ -492,7 +512,8 @@ data class EngineConfig(
                 nowMs = j.pick("now_ms", "nowMs")?.let { it.toString().toLong() } ?: 0L,
                 memoryBudgetBytes = j.pick("memory_budget_bytes", "memoryBudgetBytes")?.let { it.toString().toLong() } ?: 0L,
                 deviceKey = j.pick("device_key", "deviceKey")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
-                vectors = j.pick("vectors", "vectors")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                vectors = j.pick("vectors", "vectors")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                legacyPresent = j.pick("legacy_present", "legacyPresent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -1275,6 +1296,27 @@ data class KindFormat(
     }
 }
 
+data class LegacyRecord(
+    val key: String = "",
+    val value: ByteArray = ByteArray(0)
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(key.isEmpty())) j.put("key", key)
+        if (!(value.isEmpty())) j.put("value", toBase64(value))
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): LegacyRecord {
+            return LegacyRecord(
+                key = j.pick("key", "key")?.let { it.toString() } ?: "",
+                value = j.pick("value", "value")?.let { fromBase64(it.toString()) } ?: ByteArray(0)
+            )
+        }
+    }
+}
+
 data class MarkValue(
     val field: Long = 0L,
     val value: ByteArray = ByteArray(0)
@@ -1381,6 +1423,57 @@ data class MessageView(
                 replyQuote = j.pick("reply_quote", "replyQuote")?.let { ViewText.fromJson(it as JSONObject) } ?: null,
                 silent = j.pick("silent", "silent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L
+            )
+        }
+    }
+}
+
+data class MigrateStatus(
+    val point: Long = 0L,
+    val done: Boolean = false,
+    val reportJson: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(point == 0L)) j.put("point", point)
+        if (!(!done)) j.put("done", done)
+        if (!(reportJson.isEmpty())) j.put("report_json", reportJson)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): MigrateStatus {
+            return MigrateStatus(
+                point = j.pick("point", "point")?.let { it.toString().toLong() } ?: 0L,
+                done = j.pick("done", "done")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                reportJson = j.pick("report_json", "reportJson")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
+data class MigrateStep(
+    val layer: String = "",
+    val records: List<LegacyRecord> = emptyList(),
+    val last: Boolean = false,
+    val chunk: Long = 0L
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(layer.isEmpty())) j.put("layer", layer)
+        if (records.isNotEmpty()) j.put("records", JSONArray().apply { records.forEach { put(it.toJson()) } })
+        if (!(!last)) j.put("last", last)
+        if (!(chunk == 0L)) j.put("chunk", chunk)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): MigrateStep {
+            return MigrateStep(
+                layer = j.pick("layer", "layer")?.let { it.toString() } ?: "",
+                records = (j.pick("records", "records") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { LegacyRecord.fromJson(it as JSONObject) } } } ?: emptyList(),
+                last = j.pick("last", "last")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                chunk = j.pick("chunk", "chunk")?.let { it.toString().toLong() } ?: 0L
             )
         }
     }
