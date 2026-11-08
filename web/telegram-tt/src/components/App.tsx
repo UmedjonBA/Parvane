@@ -34,6 +34,7 @@ import AppInactive from './main/AppInactive';
 import LockScreen from './main/LockScreen.async';
 import Main from './main/Main.async';
 import ParvaneCallOverlay from './parvane/ParvaneCallOverlay';
+import ParvaneMigrationOverlay from './parvane/ParvaneMigrationOverlay';
 import Transition from './ui/Transition';
 
 import styles from './App.module.scss';
@@ -274,6 +275,7 @@ const App = ({
       {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">Test server</div>}
       <Notifications />
       <ParvaneCallOverlay />
+      <ParvaneMigrationOverlay />
     </UiLoader>
   );
 };

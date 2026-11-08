@@ -54,7 +54,10 @@ describe('картинка превью ссылки', () => {
       text: {
         text: 'x',
         preview: {
-          url: 'https://example.org', image: { kind: 'MEDIA_KIND_VIDEO', file_id: 'f', file_key: 'aw==', file_nonce: 'bg==' },
+          url: 'https://example.org',
+          image: {
+            kind: 'MEDIA_KIND_VIDEO', file_id: 'f', file_key: 'aw==', file_nonce: 'bg==',
+          },
         },
       },
     });

@@ -6,13 +6,13 @@
 // Чтение синхронное — из памяти после `hydratePersonal()`; запись — в память сразу, на диск пачкой с задержкой.
 // До загрузки (ранние вызовы при запуске) читается прежнее значение localStorage профиля, созданного до
 // spec 035: оно же разово переносится при загрузке и удаляется из localStorage после записи в хранилище.
-import type { WireGroupInfo } from './wire';
-
 import { onStorageCleared, SecureE2eStorage } from './secureStorage';
 
 const SAVE_DELAY_MS = 300;
 const LOCAL_PREFIX = 'ls:';
 const GROUP_PREFIX = 'gv:';
+// Прежний кэш сведений групп (до spec 035 T118): своего кэша групп у web больше нет — сведения из журналов
+// групп модели движка. Прежний ключ localStorage ещё переносится в хранилище, чтобы не лежать открытым (PV-020)
 const GROUP_PART = 'v2groups';
 
 // Виды `parvane:<вид>:<адрес>` прежнего localStorage, которые переносит загрузка (data-model.md §2)
@@ -152,7 +152,6 @@ function flushCache(cache: Cache): Promise<void> {
 
 /** Записать накопленное сейчас (все адреса либо один). */
 export async function flushPersonal(user?: string) {
-  (user ? [user] : [...groupPending.keys()]).forEach(flushGroupCache);
   const list = user ? [caches.get(user)].filter(Boolean) : [...caches.values()];
   await Promise.all(list.map((cache) => {
     if (cache.timer) {
@@ -201,9 +200,6 @@ export function hydratePersonal(user: string): Promise<void> {
 
 /** Выход/смена аккаунта: забыть в памяти (записи хранилища стирает `SecureE2eStorage.clearRecords`). */
 export function forgetPersonal(user: string) {
-  const pending = groupPending.get(user);
-  if (pending?.timer) clearTimeout(pending.timer);
-  groupPending.delete(user);
   const cache = caches.get(user);
   if (cache?.timer) clearTimeout(cache.timer);
   caches.delete(user);
@@ -211,13 +207,6 @@ export function forgetPersonal(user: string) {
 
 /** Своя смена ника: записи профиля не зависят от адреса — переезжает только память. */
 export function renamePersonal(oldUser: string, newUser: string) {
-  const pending = groupPending.get(oldUser);
-  if (pending && oldUser !== newUser) {
-    groupPending.delete(oldUser);
-    if (pending.timer) clearTimeout(pending.timer);
-    pending.timer = setTimeout(() => flushGroupCache(newUser), GROUP_CACHE_DELAY_MS);
-    groupPending.set(newUser, pending);
-  }
   const cache = caches.get(oldUser);
   if (!cache || oldUser === newUser) return;
   caches.delete(oldUser);
@@ -225,62 +214,6 @@ export function renamePersonal(oldUser: string, newUser: string) {
   caches.set(newUser, cache);
 }
 
-// ── кэш сведений групп v2 (до подъёма движка; только метаданные) ─────────────────────────────────────────
-// OPT-016 (spec 035, T108): правки кэша копятся и пишутся одной записью списка за окно GROUP_CACHE_DELAY_MS —
-// на старте с G группами одна запись вместо G записей по O(G) байт; список без изменений не пишется вовсе.
-const GROUP_CACHE_DELAY_MS = 100;
-type GroupPending = {
-  infos: Map<string, { info: WireGroupInfo; isListed: boolean }>;
-  timer?: ReturnType<typeof setTimeout>;
-};
-const groupPending = new Map<string, GroupPending>();
-let groupCacheWrites = 0;
-
-function readGroupCache(user: string): WireGroupInfo[] {
-  try {
-    const list = JSON.parse(personalGet(user, GROUP_PART) || '[]') as unknown;
-    return Array.isArray(list) ? list as WireGroupInfo[] : [];
-  } catch {
-    return [];
-  }
-}
-
-function mergeGroupCache(list: WireGroupInfo[], pending?: GroupPending) {
-  if (!pending?.infos.size) return list;
-  const rest = list.filter(({ group_id: id }) => !pending.infos.has(id));
-  const added = [...pending.infos.values()].filter(({ isListed }) => isListed).map(({ info }) => info);
-  return [...rest, ...added];
-}
-
-export function loadGroupCache(user: string): WireGroupInfo[] {
-  return mergeGroupCache(readGroupCache(user), groupPending.get(user));
-}
-
-/** Записать накопленные правки кэша групп сейчас (одна запись списка; без изменений — ни одной). */
-export function flushGroupCache(user: string) {
-  const pending = groupPending.get(user);
-  if (!pending) return;
-  if (pending.timer) clearTimeout(pending.timer);
-  groupPending.delete(user);
-  const before = personalGet(user, GROUP_PART) || '[]';
-  const next = JSON.stringify(mergeGroupCache(readGroupCache(user), pending));
-  if (next === before) return;
-  groupCacheWrites += 1;
-  personalSet(user, GROUP_PART, next);
-}
-
-export function saveGroupCache(user: string, info: WireGroupInfo, isListed: boolean) {
-  if (!user) return;
-  let pending = groupPending.get(user);
-  if (!pending) {
-    pending = { infos: new Map() };
-    groupPending.set(user, pending);
-  }
-  pending.infos.delete(info.group_id);
-  pending.infos.set(info.group_id, { info, isListed });
-  pending.timer ||= setTimeout(() => flushGroupCache(user), GROUP_CACHE_DELAY_MS);
-}
-
 onStorageCleared((user) => forgetPersonal(user));
 
-export const personalStoreInternals = { caches, groupCacheWrites: () => groupCacheWrites };
+export const personalStoreInternals = { caches };

@@ -1,4 +1,4 @@
-import { del, get } from 'idb-keyval';
+import { del, get, set } from 'idb-keyval';
 import {
   beforeEach, describe, expect, it, vi,
 } from 'vitest';
@@ -22,7 +22,7 @@ import {
   loadTrustSecret, lockStorage, peekSecureRecord, saveSecureSession, saveTrustSecret, SecureE2eStorage,
   secureStorageInternals, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
-import { LegacyE2eStorage } from './secureStorageLegacy';
+import { LegacyE2eStorage, legacyMigrationMark, legacyStorageInternals } from './secureStorageLegacy';
 
 const USER = 'secure-storage@local';
 
@@ -140,20 +140,96 @@ describe('secure E2E storage batches (perf A6)', () => {
   });
 });
 
-describe('secure E2E storage compatibility', () => {
-  it('a profile created before spec 035 is still served by the legacy store (until T115)', async () => {
+describe('secure E2E storage: profiles created before spec 035', () => {
+  // spec 035 T115: профиль до spec 035 разово переносится в `parvane-store-v3`; прежняя база не меняется, кроме
+  // отметки «перенесено» (удаление — вручную по D2). Данные выдуманные.
+  it('T115: a pre-035 profile without PIN moves to the new store on open, the old one only gets a mark', async () => {
     const user = 'legacy-profile@local';
     await SecureE2eStorage.clear(user);
     const old = await LegacyE2eStorage.open(user);
     await old.save({ engine: 'old' });
-    await old.saveRecord('m:1', { id: 1 });
+    await old.saveRecord('m:1', { id: 1, text: 'выдуманная строка' });
+    await old.saveBytesRecord('v2-engine-bin', new Uint8Array([1, 2, 3]));
+    await old.saveRecord('trust-secret', 'trust-old');
+    await old.saveRecord('session-token', 'jwt-old');
     secureStorageInternals.forgetAll();
     const facade = await SecureE2eStorage.open(user);
+    const id = await secureStorageInternals.profileIdOf(user);
+    expect(id).toBeTruthy();
     expect(await facade.load()).toEqual({ engine: 'old' });
-    expect(await facade.loadRecord('m:1')).toEqual({ id: 1 });
+    expect(await facade.loadRecord('m:1')).toEqual({ id: 1, text: 'выдуманная строка' });
+    expect(await facade.loadBytesRecord('v2-engine-bin')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await loadTrustSecret(user)).toBe('trust-old');
+    expect(await loadSecureSession(user)).toBe('jwt-old');
+    // Новое — в новом хранилище; прежние записи на месте, в прежнюю базу не пишется
     await facade.saveRecord('m:2', { id: 2 });
-    expect(await (await LegacyE2eStorage.open(user)).loadRecord('m:2')).toEqual({ id: 2 });
+    const legacyAgain = await LegacyE2eStorage.open(user);
+    expect(await legacyAgain.loadRecord('m:2')).toBeUndefined();
+    expect(await legacyAgain.loadRecord('m:1')).toEqual({ id: 1, text: 'выдуманная строка' });
+    expect(await legacyMigrationMark(user)).toMatchObject({ done: id, records: 5 });
+    // Перезапуск — тот же новый профиль, повторного переноса нет
+    secureStorageInternals.forgetAll();
+    expect(await (await SecureE2eStorage.open(user)).loadRecord('m:2')).toEqual({ id: 2 });
+    expect(await secureStorageInternals.profileIdOf(user)).toBe(id);
+    await SecureE2eStorage.clear(user);
+  });
+
+  it('T115: a pre-035 profile under PIN moves after the PIN is entered and stays under the same PIN', async () => {
+    const user = 'legacy-pin@local';
+    const pin = '58204716';
+    await SecureE2eStorage.clear(user);
+    const L = legacyStorageInternals;
+    const salt = crypto.getRandomValues(new Uint8Array(16)).buffer;
+    const key = await L.derivePinKey(pin, salt);
+    await set(L.pinId(user), {
+      version: L.storageVersion,
+      salt,
+      check: await L.encryptWith(key, L.additionalData(user, 'pin-check'), L.pinCheckPlaintext),
+    }, L.store);
+    await set(L.stateId(user), await L.encryptWith(key, L.additionalData(user), { engine: 'pinned' }), L.store);
+    await set(L.recordId(user, 'm:1'), await L.encryptWith(key, L.additionalData(user, 'm:1'), { id: 1 }), L.store);
+    secureStorageInternals.forgetAll();
+    expect(await hasStoragePin(user)).toBe(true);
+    await expect(SecureE2eStorage.open(user)).rejects.toThrow();
     expect(await secureStorageInternals.profileIdOf(user)).toBeUndefined();
+    expect(await unlockStorageWithPin(user, '00000000')).toBe(false);
+    expect(await unlockStorageWithPin(user, pin)).toBe(true);
+    expect(await secureStorageInternals.profileIdOf(user)).toBeTruthy();
+    expect(await (await SecureE2eStorage.open(user)).load()).toEqual({ engine: 'pinned' });
+    await secureStorageInternals.settled(user);
+    expect(await secureStorageInternals.hasDeviceRecord(user)).toBe(false);
+    // Перезапуск: новый профиль заперт тем же PIN
+    secureStorageInternals.forgetAll();
+    expect(await hasStoragePin(user)).toBe(true);
+    await expect(SecureE2eStorage.open(user)).rejects.toThrow();
+    expect(await unlockStorageWithPin(user, pin)).toBe(true);
+    expect(await (await SecureE2eStorage.open(user)).loadRecord('m:1')).toEqual({ id: 1 });
+    await setStoragePin(user, '');
+    await SecureE2eStorage.clear(user);
+  });
+
+  it('T115: an interrupted move keeps the old profile working and the next start moves everything', async () => {
+    const user = 'legacy-cut@local';
+    const COUNT = 1200;
+    await SecureE2eStorage.clear(user);
+    const old = await LegacyE2eStorage.open(user);
+    await old.save({ engine: 'cut' });
+    await old.saveRecords(Array.from({ length: COUNT }, (_, i) => [`m:${i}`, { id: i }] as [string, unknown]));
+    let big = 0;
+    secureStorageInternals.failCommits((puts) => puts >= 500 && ++big === 2);
+    secureStorageInternals.forgetAll();
+    const facade = await SecureE2eStorage.open(user);
+    secureStorageInternals.failCommits(undefined);
+    // Перенос оборвался на второй пачке: указателя на новый профиль нет, прежний профиль читается целиком
+    expect(await secureStorageInternals.profileIdOf(user)).toBeUndefined();
+    expect(await facade.loadRecord(`m:${COUNT - 1}`)).toEqual({ id: COUNT - 1 });
+    const pending = (await legacyMigrationMark(user))?.pending;
+    expect(pending).toBeTruthy();
+    secureStorageInternals.forgetAll();
+    const moved = await SecureE2eStorage.open(user);
+    expect(await secureStorageInternals.profileIdOf(user)).toBe(pending);
+    expect(await moved.loadRecordsByPrefix('m:')).toHaveLength(COUNT);
+    expect(await moved.load()).toEqual({ engine: 'cut' });
     await SecureE2eStorage.clear(user);
   });
 

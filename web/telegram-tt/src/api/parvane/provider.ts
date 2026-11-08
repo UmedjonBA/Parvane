@@ -1196,6 +1196,21 @@ const v2Controller = createV2Controller({
   rememberGroupPhoto: (fileId, avatarKey) => {
     void mediaService.rememberGroupPhoto(fileId, avatarKey);
   },
+  // spec 035 T115: прежняя история — тем же сбором, что выгрузка «до» (`parvaneAuditDump`)
+  legacyHistory: async () => ({
+    states: await historyRows.collectStates(),
+    marks: await localState.loadReadMarks(),
+    ownJournal: await localState.readOwnJournal(),
+    cleared: localState.loadClearedUntil(),
+  }),
+  reuploadGroupPhoto: async (address, fileId) => {
+    const media = await mediaService.downloadBlob(fileId);
+    if (!media) return false;
+    const { fileId: fresh, avatarKey } = await mediaService.uploadGroupPhoto(media.blob, media.mimeType);
+    const isDone = await groupController.setGroupInfo(address, { avatarFileId: fresh, avatarKey });
+    if (!isDone) void getV2Bridge().control.deleteBlob(fresh).catch(() => undefined);
+    return Boolean(isDone);
+  },
   getToken: () => token,
   getSelf: () => store.self,
   gatewayUrl: getGatewayUrl,
@@ -3479,8 +3494,10 @@ const methods = {
   },
 
   /** Выгрузка «ничего не потеряно» (spec 035, T007; только диаг-сборка): JSONL `{kind, key, digest}`. */
-  async parvaneAuditDump() {
+  async parvaneAuditDump({ source }: { source?: 'engine' } = {}) {
     if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return undefined;
+    // spec 035 T109: выгрузка модели движка после разового переноса (`auditDump` модели, contracts/migration.md)
+    if (source === 'engine') return v2Controller.engineAuditDump();
     const sources = v2Controller.auditSources();
     const marks = await localState.loadReadMarks();
     const lines = await buildAuditDump({

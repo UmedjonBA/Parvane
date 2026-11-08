@@ -26,10 +26,13 @@ import type { ContentView, V2Content } from './contentMap';
 import type { ModelJson, Protocol } from './engine';
 import type { EngineClient as PvClient } from './engineClient';
 import type { HistoryHost } from './history';
-import type { EditPatch, HOp } from './historyModel';
+import type {
+  EditPatch, HOp, HReadMark, HRowState,
+} from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
 import { withDetectedLinks } from '../autoEntities';
+import { reportMigration } from '../migrationProgress';
 import { SecureE2eStorage } from '../secureStorage';
 import { newMessageId } from '../wire';
 import {
@@ -156,6 +159,16 @@ type Deps = {
   prefetchMedia?: (content: WireMessageContent) => void;
   /** Фото частной группы из журнала: секрет для вывода ключей скачивания (A0089-5). */
   rememberGroupPhoto?: (fileId: string, avatarKey: string) => void;
+  /** Разовый перенос (spec 035 T115): прежние строки истории (сводимые состояния; строки без `hs` уже переведены),
+   * маркеры «прочитано до», своё исходящее и границы очистки «у себя». */
+  legacyHistory?: () => Promise<{
+    states: HRowState[];
+    marks: Record<string, HReadMark>;
+    ownJournal: WireStoredMessage[];
+    cleared: Record<string, number>;
+  }>;
+  /** Перезалить открытое фото частной группы новым секретом (FR-071, GPHOTO-1): движок попросил после переноса. */
+  reuploadGroupPhoto?: (address: string, fileId: string) => Promise<boolean>;
   onCallSignal?: (
     from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string, device?: string,
   ) => void;
@@ -357,6 +370,9 @@ const DROPPED_STATE_RECORD = 'v2-engine-dropped';
 const MODEL_KEY_RECORD = 'v2-model-device-key';
 // spec 035 (T115): состояние прежнего клиента (`v2-engine-bin`/`v2-engine`) перенесено в модель — старое не читается
 const ENGINE_MIGRATED_RECORD = 'v2-engine-migrated';
+// Разовый перенос (T115): точки M1–M6 (`contracts/migration.md`) — для экрана хода; записей за шаг `migrateStep`
+const MIGRATION_POINTS = 6;
+const MIGRATION_RECORDS_PER_STEP = 2000;
 // Опрос модели (сроки, инбокс раз в минуту — POLL_MS движка)
 const MODEL_TICK_MS = 15000;
 // Повторов добора нужды записи инбокса, после которых запись пропускается (сервер отдаст её снова)
@@ -688,17 +704,24 @@ export function createV2Controller(deps: Deps) {
   async function migrateLegacyEngine(target: SecureE2eStorage, legacy: Uint8Array | undefined) {
     if (!host) return;
     const savedKey = await target.loadRecord<string>(KEY_RECORD);
-    const records: { key: string; value: string }[] = [];
-    if (legacy) records.push({ key: 'record:v2-engine-bin', value: b64(legacy) });
-    if (savedKey) {
-      records.push({ key: 'record:v2-storage-key', value: b64(new TextEncoder().encode(JSON.stringify(savedKey))) });
-    }
+    const records = await legacyRecords(legacy, savedKey);
     deps.log(`v2: перенос состояния клиента в модель (${records.length} записей)`);
-    let out: ModelJson = await host.run('migrateStep', { layer: 'web', records, last: true });
+    const progress = (done: number, active = true) => reportMigration({
+      phase: 'engine', active, done, total: MIGRATION_POINTS,
+    });
+    progress(0);
+    // M1: записи прежнего клиента — частями (строк истории могут быть десятки тысяч), последняя — `last`
+    let out: ModelJson = {};
+    for (let from = 0; from === 0 || from < records.length; from += MIGRATION_RECORDS_PER_STEP) {
+      const part = records.slice(from, from + MIGRATION_RECORDS_PER_STEP);
+      const last = from + MIGRATION_RECORDS_PER_STEP >= records.length;
+      out = await host.run('migrateStep', { layer: 'web', records: part, last });
+    }
     for (let i = 0; i < 400 && modelOpenState !== 'OPEN_STATE_READY'; i++) {
       await sender.idle();
       if (modelOpenState === 'OPEN_STATE_READY') break;
       const status = host.peek<{ point?: number; done?: boolean; report_json?: string }>('migrateStatus');
+      progress(status.point || 0);
       if (status.done && modelOpenState !== 'OPEN_STATE_READY') {
         deps.log(`v2: перенос остановлен: ${status.report_json || ''}`);
         break;
@@ -706,12 +729,57 @@ export function createV2Controller(deps: Deps) {
       out = await host.run('migrateStep', {});
     }
     const steps = ((out.open as ModelJson | undefined)?.migration as { steps?: string[] } | undefined)?.steps;
-    if (modelOpenState !== 'OPEN_STATE_READY') return;
+    if (modelOpenState !== 'OPEN_STATE_READY') {
+      reportMigration({
+        phase: 'engine', active: false, done: 0, total: MIGRATION_POINTS, error: modelOpenState || 'stopped',
+      });
+      return;
+    }
     if (!steps || steps.includes('mark-legacy')) {
       await target.saveRecord(ENGINE_MIGRATED_RECORD, true);
       await host.run('migrateFinish', {});
     }
+    progress(MIGRATION_POINTS, false);
     deps.log('v2: состояние клиента перенесено в модель');
+  }
+
+  /** Записи прежнего клиента для `migrateStep` (слой web, `backend/protocol/src/migrate/web.rs`): экспорт движка и
+   * его ключ, строки истории `m:<uuid>` со сводимым состоянием `hs` (строки кэша без `hs` хост переводит сам —
+   * тем же `historyRowFromWire`, что выгрузка «до»), маркеры `rm:`, своё исходящее `j:`, граница очистки. */
+  async function legacyRecords(legacy: Uint8Array | undefined, savedKey: string | undefined) {
+    const json = (value: unknown) => b64(new TextEncoder().encode(JSON.stringify(value)));
+    const records: { key: string; value: string }[] = [];
+    if (legacy) records.push({ key: 'record:v2-engine-bin', value: b64(legacy) });
+    if (savedKey) records.push({ key: 'record:v2-storage-key', value: json(savedKey) });
+    const history = await deps.legacyHistory?.().catch((e: unknown) => {
+      deps.log(`v2: прежняя история для переноса не прочитана: ${String(e)}`);
+      return undefined;
+    });
+    if (!history) return records;
+    history.states.forEach((hs) => records.push({ key: `record:m:${hs.target}`, value: json({ hs }) }));
+    Object.entries(history.marks).forEach(([address, mark]) => {
+      records.push({ key: `record:rm:${address}`, value: json({ address, mark }) });
+    });
+    history.ownJournal.forEach((stored) => records.push({ key: `record:j:${stored.id}`, value: json(stored) }));
+    if (Object.keys(history.cleared).length) {
+      records.push({ key: `localStorage:parvane:cleareduntil:${deps.getSelf()}`, value: json(history.cleared) });
+    }
+    return records;
+  }
+
+  // FR-071: фото частных групп, где мы админ, лежало открытым блобом — перезалить новым секретом под эпохой
+  const avatarReuploads = new Set<string>();
+
+  function queueAvatarReupload(hex: string) {
+    if (avatarReuploads.has(hex)) return;
+    avatarReuploads.add(hex);
+    void (async () => {
+      for (let i = 0; i < 60 && !ready; i++) await pause(1000);
+      const g = readGroup(hex);
+      if (!ready || !g?.avatarFileId || g.avatarKeyId || !canRotate(hex)) return;
+      const done = await deps.reuploadGroupPhoto?.(groupAddress(hex), g.avatarFileId).catch(() => false);
+      deps.log(`v2: фото группы ${hex} ${done ? 'перезалито с секретом' : 'не перезалито'}`);
+    })().finally(() => avatarReuploads.delete(hex));
   }
 
   /** Изменения модели: события записей инбокса — тем же путём, что прежде; нужды клиента — добрать и повторить. */
@@ -723,6 +791,7 @@ export function createV2Controller(deps: Deps) {
       if (clientEvents?.json) await applyRecordEvents(JSON.parse(clientEvents.json) as EngineEvent[]);
       const need = ch.needs as { kind?: string; detail?: string } | undefined;
       if (need?.kind === 'client' && need.detail) queueNeed(need.detail);
+      if (need?.kind === 'group_avatar_reupload' && need.detail) queueAvatarReupload(need.detail);
     }
   }
 
@@ -5033,6 +5102,7 @@ export function createV2Controller(deps: Deps) {
     settleState: persistNow,
     cachedGroups,
     groupContentHidden,
+    engineAuditDump: () => (host ? host.peek<{ jsonl?: string }>('auditDump').jsonl || '' : undefined),
     chatCapabilities,
     changeGroup,
     setGroupInfo,
