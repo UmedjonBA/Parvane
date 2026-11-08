@@ -22,8 +22,9 @@ import type { HistoryHost } from './history';
 import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
-import { loadGroupCache, saveGroupCache as saveGroupCacheFor } from '../personalStore';
+import { loadGroupCache, personalStoreInternals, saveGroupCache as saveGroupCacheFor } from '../personalStore';
 import { SecureE2eStorage } from '../secureStorage';
+import { newMessageId } from '../wire';
 import {
   destFor, destForInvite, destForUser, groupDomainFor, knownGroupDomain,
 } from './address';
@@ -41,7 +42,7 @@ import {
   BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
 } from './control';
 import { createDeferredWrite } from './deferredWrite';
-import { loadProtocol, parseEngineError } from './engine';
+import { loadProtocol, openStateModel, parseEngineError } from './engine';
 import { pickEscrowKey } from './escrowKey';
 import {
   applyEditPatch, compareMarkPoint, encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
@@ -167,6 +168,8 @@ type EngineGroupInfo = {
   avatarFileId: string;
   /** Секрет фото частной группы (base64, A0089-5); пусто — фото открытое. */
   avatarKey?: string;
+  /** Отпечаток секрета фото в журнале (hex, spec 035 PV-005): сам секрет в журнал не пишется. */
+  avatarKeyId?: string;
   migratedFrom?: string;
   owner: string;
   members: { user: string; role: number; mutedUntilMs: number; rights?: WireAdminRights }[];
@@ -235,6 +238,8 @@ export type V2InviteCheck = {
   address: string;
   about?: string;
   avatar?: string;
+  /** Секрет фото для превью (spec 035, D1: из `InviteAvatarWrap` по секрету ссылки). */
+  avatarKey?: string;
   name: string;
   membersCount: number;
   isRequestNeeded: boolean;
@@ -306,6 +311,8 @@ type EngineEvent = {
   proof?: string;
   content?: V2Content;
   disposition?: string;
+  /** Заглушка критичного вида (spec 035, STUB_CRITICAL). */
+  critical?: boolean;
   group?: { domain: string; id: string };
   json?: string;
   signal?: V2CallSignal;
@@ -462,7 +469,6 @@ const unb64 = base64ToBytes;
 export function createV2Controller(deps: Deps) {
   let pv: Protocol | undefined;
   let client: PvClient | undefined;
-  let groupCacheWrites = 0;
   let storage: SecureE2eStorage | undefined;
   let storageKey: Uint8Array | undefined;
   let idConn: V2Connection | undefined;
@@ -1539,7 +1545,11 @@ export function createV2Controller(deps: Deps) {
       void ensureEphemeral([isGroup ? to : chat]);
       if (ev.disposition === 'stub') {
         const stub: WireStoredMessage = {
-          id: ev.opId, from: author, to, ts: Math.floor((ev.tsMs || 0) / 1000), content: { kind: 'unsupported' },
+          id: ev.opId,
+          from: author,
+          to,
+          ts: Math.floor((ev.tsMs || 0) / 1000),
+          content: { kind: 'unsupported', critical: ev.critical || undefined },
         };
         messages.set(stub);
         await deps.applyExternal(stub);
@@ -3472,22 +3482,26 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  function groupRequestBody(hex: string, after: bigint | number, linkId?: string) {
+  function groupRequestBody(hex: string, after: bigint | number) {
     return pv!.encodeMessage('parvane.group.v2.StateSyncRequest', JSON.stringify({
       group: { domain: groupDomainOf(hex), id: hexToB64(hex) },
       after_version: String(after),
-      invite_link_id: linkId ? hexToB64(linkId) : undefined,
     }));
   }
 
   /** Догнать журнал группы (записи после своей версии) и применить отложенное. */
-  async function syncGroup(hex: string, linkId?: string) {
+  async function syncGroup(hex: string, inviteUrl?: string) {
     if (!client || !pv) return;
     const started = client.groupVersion(hex);
     try {
       for (let page = 0; page < GROUP_SYNC_PAGES; page++) {
         const before = client.groupVersion(hex);
-        const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId), groupDomainOf(hex));
+        // Посторонний читает журнал по ссылке с доказательством ключа ссылки (spec 035, PV-006)
+        const domain = groupDomainOf(hex);
+        const body = inviteUrl
+          ? (client.groupSyncByLinkRequest(domain, hex, Number(before), inviteUrl, Date.now()) as OutReq).body
+          : groupRequestBody(hex, before);
+        const resp = await call('id', 'group.state.sync', body, groupDomainOf(hex));
         await withNeeds(() => client!.groupIngest(groupDomainOf(hex), hex, resp));
         if (client.groupVersion(hex) === before) break;
       }
@@ -3543,7 +3557,9 @@ export function createV2Controller(deps: Deps) {
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
-      avatar: g.avatarFileId || undefined,
+      // Фото частной группы (PV-005) — только когда пришёл его секрет: иначе UI скачал бы файл без ключа и не
+      // повторил бы, когда конверт эпохи с секретом догонит запись SetInfo
+      avatar: g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? g.avatarFileId : undefined,
       about: g.about || undefined,
       default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
@@ -3697,6 +3713,8 @@ export function createV2Controller(deps: Deps) {
     }
     await persistUrgent();
     deps.log(`v2: новая эпоха группы ${hex}: ${readGroup(hex)?.epoch}`);
+    // Новые участники получают секрет фото только конвертом новой эпохи (PV-005)
+    if (readGroup(hex)?.avatarKey) void shareGroupAvatar(hex);
   }
 
   function scheduleRotate(hex: string, delayMs: number, attempt = 0) {
@@ -3780,18 +3798,60 @@ export function createV2Controller(deps: Deps) {
     return serial(async () => {
       const current = readGroup(hex);
       if (!current) return false;
-      const next = {
-        name: patch.name ?? current.name,
-        about: patch.about ?? current.about ?? '',
-        avatar_file_id: patch.avatarFileId ?? current.avatarFileId ?? '',
-        // Ключ идёт вместе со своим файлом: новый файл без ключа (публичная группа) — открытое фото
-        avatar_key: patch.avatarFileId !== undefined ? (patch.avatarKey ?? '') : (current.avatarKey ?? ''),
-      };
-      const isSame = next.name === current.name && next.about === (current.about || '')
-        && next.avatar_file_id === (current.avatarFileId || '') && next.avatar_key === (current.avatarKey || '');
-      // Ничего не меняется — записи в журнале не будет (право всё равно проверил бы движок)
-      return isSame ? true : applyGroupChange(hex, { set_info: next });
+      if (patch.avatarFileId === undefined) {
+        const next = {
+          name: patch.name ?? current.name,
+          about: patch.about ?? current.about ?? '',
+          avatar_file_id: current.avatarFileId ?? '',
+          // Отпечаток секрета фото — прежний: правка названия фото не трогает (spec 035, PV-005)
+          avatar_key_id: current.avatarKeyId ? hexToB64(current.avatarKeyId) : undefined,
+        };
+        const isSame = next.name === current.name && next.about === (current.about || '');
+        // Ничего не меняется — записи в журнале не будет (право всё равно проверил бы движок)
+        return isSame ? true : applyGroupChange(hex, { set_info: next });
+      }
+      // Фото частной группы (PV-005): `SetInfo` с отпечатком секрета; секрет участникам — конвертом эпохи
+      // (`GroupAvatarKey`), держателям ссылок — `InviteAvatarWrap` (после этой записи, своей очередью)
+      const isSamePhoto = patch.avatarFileId === (current.avatarFileId || '')
+        && (patch.avatarKey || '') === (current.avatarKey || '');
+      if (isSamePhoto) return true;
+      let req: OutReq;
+      try {
+        req = client!.groupSetPhoto(hex, patch.avatarFileId, '', patch.avatarKey || '') as OutReq;
+      } catch (e) {
+        deps.log(`v2: фото группы отклонено движком: ${String(e)}`);
+        return false;
+      }
+      const isDone = await runGroupChange(hex, req);
+      if (isDone) void shareGroupAvatar(hex);
+      return isDone;
     });
+  }
+
+  /** Секрет фото группы — участникам (конвертом эпохи) и в обёртки своих ссылок (превью по ссылке, D1). */
+  async function shareGroupAvatar(hex: string) {
+    if (!client) return;
+    try {
+      // Своя запись SetInfo ещё не в журнале движка — догнать журнал группы, иначе секрет не сходится с отпечатком
+      if (!client.groupAvatarKeyContent(hex)) await serial(() => syncGroup(hex));
+      if (client.groupAvatarKeyContent(hex)) {
+        const content = JSON.parse(client.groupAvatarKeyContent(hex)!) as V2Content;
+        await sendContent(groupAddress(hex), content, newMessageId());
+        deps.log(`v2: секрет фото группы ${hex} разослан участникам`);
+      } else {
+        deps.log(`v2: секрет фото группы ${hex} не сошёлся с журналом — участникам не разослан`);
+      }
+      const links = (await listInvites(groupAddress(hex))).map(({ url }) => url);
+      if (!links.length) return;
+      await serial(async () => {
+        for (const r of client!.groupInviteAvatarWraps(hex, JSON.stringify(links)) as OutReq[]) {
+          await call(r.chan, r.method, r.body, r.dest);
+        }
+        await persistUrgent();
+      });
+    } catch (e) {
+      deps.log(`v2: секрет фото группы не разослан: ${String(e)}`);
+    }
   }
 
   async function applyGroupChange(hex: string, change: Record<string, unknown>) {
@@ -3802,6 +3862,10 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: изменение группы отклонено движком: ${String(e)}`);
       return false;
     }
+    return runGroupChange(hex, req);
+  }
+
+  async function runGroupChange(hex: string, req: OutReq) {
     try {
       await call(req.chan, req.method, req.body, req.dest);
     } catch (e) {
@@ -3836,8 +3900,7 @@ export function createV2Controller(deps: Deps) {
   }
 
   function saveGroupCache(info: WireGroupInfo, isListed: boolean) {
-    // SC-009 (spec 035, T009): базис — сколько раз кэш групп записан с запуска страницы
-    groupCacheWrites += 1;
+    // OPT-016: правки копятся и пишутся одной записью (счётчик SC-009 — в personalStore)
     saveGroupCacheFor(deps.getSelf(), info, isListed);
   }
 
@@ -4295,18 +4358,26 @@ export function createV2Controller(deps: Deps) {
       // Описание и фото — из подписанного журнала группы (сервер отдаёт его по
       // ссылке), а не со слов сервера; журнал не-участника после чтения не храним
       let preview: {
-        about?: string; avatar?: string; name?: string; isChannel?: boolean; members?: number;
+        about?: string; avatar?: string; avatarKey?: string; name?: string; isChannel?: boolean; members?: number;
       } | undefined;
       if (hex && !readGroup(hex)?.members.some(({ user }) => user === self)) {
         preview = await serial(async () => {
-          await syncGroup(hex, parsed.linkId);
+          await syncGroup(hex, url);
           const g = readGroup(hex);
+          // Секрет фото для превью — из обёртки по секрету ссылки (D1); журнал группы ещё в движке
+          let avatarKey: string | undefined;
+          try {
+            avatarKey = (g?.avatarFileId && client!.groupInviteAvatarKey(hex, url)) || undefined;
+          } catch {
+            avatarKey = undefined;
+          }
           client!.groupForget(hex);
           // Превью прочитано, вступления нет — домен из ссылки больше не нужен
           inviteGroupDomains.delete(hex);
           return {
             about: g?.about || undefined,
             avatar: g?.avatarFileId || undefined,
+            avatarKey,
             // Название, вид и состав — из подписанного журнала, данные сервера — запасные
             name: g?.name || undefined,
             isChannel: g ? g.kind === GROUP_KIND_CHANNEL : undefined,
@@ -4318,6 +4389,7 @@ export function createV2Controller(deps: Deps) {
         address: groupAddress(hex),
         about: preview?.about,
         avatar: preview?.avatar,
+        avatarKey: preview?.avatarKey,
         name: preview?.name || check.name || '',
         membersCount: preview?.members ?? (check.members || 0),
         isRequestNeeded: Boolean(check.requires_approval),
@@ -4340,7 +4412,7 @@ export function createV2Controller(deps: Deps) {
       // Группа другого сервера (spec 028): журнал и запись вступления — её серверу
       noteInviteDomain(hex, dest, check.group?.domain);
       return await serial(async () => {
-        await syncGroup(hex, parsed.linkId);
+        await syncGroup(hex, url);
         const req = client!.groupJoin(url) as OutReq;
         let resp: Uint8Array;
         try {
@@ -4512,9 +4584,19 @@ export function createV2Controller(deps: Deps) {
     log: deps.log,
   };
 
+  // spec 035 T114: личное состояние — модель движка (`state.ops.*`); ключи — у прежнего клиента (переходят в WASM)
   const stateHost: StateJournalHost = {
-    openSession: () => (ready ? client?.stateSession() : undefined),
-    call: (method, body) => call('id', method, body),
+    openModel: async () => {
+      if (!ready || !client || !client.hasStateKey() || !ownDeviceId) return undefined;
+      return openStateModel({
+        user: deps.getSelf(),
+        deviceId: ownDeviceId,
+        domain: serverDomain,
+        client,
+        call: (method, body) => call('id', method, body),
+        log: deps.log,
+      });
+    },
     encode: (type, json) => pv!.encodeMessage(type, json),
     decode: (type, bytes) => pv!.decodeMessage(type, bytes),
     domain: () => serverDomain,
@@ -4739,7 +4821,9 @@ export function createV2Controller(deps: Deps) {
     /** Планировщик на сервере (spec 010). */
     planner,
     /** Счётчики-базис SC-009 (spec 035, T009): записи кэша групп с запуска страницы. */
-    auditCounters: () => ({ groupCacheWrites, groups: client?.groupList().length ?? 0 }),
+    auditCounters: () => ({
+      groupCacheWrites: personalStoreInternals.groupCacheWrites(), groups: client?.groupList().length ?? 0,
+    }),
     /** Источники выгрузки «ничего не потеряно» (spec 035, T007): JSON движка, только чтение. */
     auditSources: () => {
       if (!client || !ready) return undefined;

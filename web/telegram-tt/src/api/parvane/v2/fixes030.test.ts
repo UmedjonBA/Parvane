@@ -6,8 +6,7 @@ import {
 
 import { cleanParticipants } from './callMap';
 import { V2Control } from './control';
-import { isFinalAppendRejection } from './stateJournal';
-import { V2Connection, V2Error } from './transport';
+import { errorCodeNumber, V2Connection, V2Error } from './transport';
 
 const mocks = vi.hoisted(() => {
   const enc = new TextEncoder();
@@ -172,12 +171,13 @@ describe('мелкие проверки приёма', () => {
     expect(cleanParticipants([`${'a'.repeat(300)}@x`])).toEqual([]);
   });
 
-  it('журнал состояния: окончательный отказ снимает запись, сбой связи — нет', () => {
-    expect(isFinalAppendRejection(new V2Error('ERROR_CODE_INVALID'))).toBe(true);
-    expect(isFinalAppendRejection(new V2Error('ERROR_CODE_FORBIDDEN'))).toBe(true);
-    expect(isFinalAppendRejection(new V2Error('ERROR_CODE_UNAVAILABLE'))).toBe(false);
-    expect(isFinalAppendRejection(new V2Error('ERROR_CODE_RATE_LIMITED'))).toBe(false);
-    expect(isFinalAppendRejection(new Error('network'))).toBe(false);
+  // Окончательный отказ записи журнала (1, 2, 4) снимает её в модели движка; хост лишь передаёт номер отказа
+  it('журнал состояния: номер отказа сервера для модели, сбой связи — UNAVAILABLE', () => {
+    expect(errorCodeNumber(new V2Error('ERROR_CODE_INVALID'))).toBe(1);
+    expect(errorCodeNumber(new V2Error('ERROR_CODE_FORBIDDEN'))).toBe(2);
+    expect(errorCodeNumber(new V2Error('ERROR_CODE_DUPLICATE'))).toBe(4);
+    expect(errorCodeNumber(new V2Error('ERROR_CODE_RATE_LIMITED'))).toBe(5);
+    expect(errorCodeNumber(new Error('network'))).toBe(11);
   });
 });
 

@@ -122,16 +122,24 @@ fn with_proof(mut v: Value, proof: &[u8]) -> Value {
     v
 }
 
+/// spec 035 (T117, STUB_CRITICAL): к заглушке критичного вида — `critical: true` (ответ, правка, пересылка — нет).
+fn with_critical(mut v: Value, d: Disposition) -> Value {
+    if d == Disposition::StubCritical {
+        v["critical"] = json!(true);
+    }
+    v
+}
+
 fn event_json(e: &Event) -> Value {
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(with_critical(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content_json(content), "disposition": disp(*disposition)
-        }), proof),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(json!({
+        }), *disposition), proof),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(with_critical(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content_json(content), "disposition": disp(*disposition)
-        }), proof),
+        }), *disposition), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
@@ -1248,6 +1256,56 @@ impl PvClient {
         self.inner.group_join(&parts).map(|r| req_js(&r)).map_err(err_proto)
     }
 
+    /// spec 035 (PV-005): новое фото частной группы — запись `SetInfo` с `avatar_key_id` (секрета в журнале нет).
+    /// `key_b64` — секрет фото (пусто — открытое фото публичной группы); пустой `file_id` — снять фото.
+    #[wasm_bindgen(js_name = groupSetPhoto)]
+    pub fn group_set_photo(&mut self, group: &str, file_id: &str, avatar_domain: &str, key_b64: &str) -> Result<JsValue, JsValue> {
+        use base64::Engine as _;
+        let key = match key_b64 {
+            "" => None,
+            k => Some(
+                <[u8; 32]>::try_from(base64::engine::general_purpose::STANDARD.decode(k).map_err(|_| err_proto(ProtoError::InvalidField("avatar_key")))?)
+                    .map_err(|_| err_proto(ProtoError::InvalidField("avatar_key")))?,
+            ),
+        };
+        self.inner.group_set_photo(&group_id(group)?, file_id, avatar_domain, key.as_ref()).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Секрет фото группы участникам (spec 035, PV-005): содержимое `GroupAvatarKey` (proto3-JSON) для
+    /// `prepareGroup` — после смены фото и после новой эпохи. undefined — секрета нет либо фото открытое.
+    #[wasm_bindgen(js_name = groupAvatarKeyContent)]
+    pub fn group_avatar_key_content(&self, group: &str) -> Result<Option<String>, JsValue> {
+        Ok(self.inner.group_avatar_key_content(&group_id(group)?).map(|c| content_json(&c).to_string()))
+    }
+
+    /// Превью по ссылке с фото (spec 035, D1): записи `InviteAvatarWrap` для своих ссылок группы (`links_json` —
+    /// массив ссылок целиком).
+    #[wasm_bindgen(js_name = groupInviteAvatarWraps)]
+    pub fn group_invite_avatar_wraps(&mut self, group: &str, links_json: &str) -> Result<Array, JsValue> {
+        let links: Vec<String> = serde_json::from_str(links_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.group_invite_avatar_wraps(&group_id(group)?, &links).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Секрет фото для превью по ссылке (D1, base64): журнал группы принят по ссылке; undefined — обёртки нет.
+    #[wasm_bindgen(js_name = groupInviteAvatarKey)]
+    pub fn group_invite_avatar_key(&self, group: &str, url: &str) -> Result<Option<String>, JsValue> {
+        let parvane_protocol::invite::ParsedInvite::V2(parts) = parvane_protocol::invite::parse(url).map_err(err_proto)? else {
+            return Ok(None);
+        };
+        Ok(self.inner.group_invite_avatar_key(&group_id(group)?, &parts).map(|k| b64_std(&k)))
+    }
+
+    /// spec 035 (PV-006): `group.state.sync` по ссылке-приглашению с `invite_proof` (подпись ключом ссылки над
+    /// группой, адресом и временем) — без неё посторонний журнал группы не получит.
+    #[wasm_bindgen(js_name = groupSyncByLinkRequest)]
+    pub fn group_sync_by_link_request(&self, domain: &str, group: &str, after: f64, url: &str, ts_ms: f64) -> Result<JsValue, JsValue> {
+        let parvane_protocol::invite::ParsedInvite::V2(parts) = parvane_protocol::invite::parse(url).map_err(err_proto)? else {
+            return Err(err_proto(ProtoError::InvalidField("invite")));
+        };
+        let g = Ref { domain: domain.to_string(), id: group_id(group)? };
+        self.inner.group_sync_by_link(&g, after as u64, &parts, ts_ms as i64).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
     /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
     #[wasm_bindgen(js_name = groupSetPublic)]
     pub fn group_set_public(&mut self, group: &str, public: bool, name: &str, preview: bool, history: bool) -> Result<JsValue, JsValue> {
@@ -1428,26 +1486,6 @@ pub fn history_call(name: &str, args_json: &str) -> Result<String, JsValue> {
     }
 }
 
-/// Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
-/// шифрование записей ключом личного состояния из клиента (ключ не выходит
-/// в JS). Курсор — в памяти: при запуске журнал читается с начала.
-#[wasm_bindgen]
-pub struct PvState {
-    user: String,
-    /// Прежние адреса (смена ника, spec 026): записи, запечатанные до смены, открываются под ними.
-    former: Vec<String>,
-    device_id: String,
-    key: parvane_protocol::state::StateKey,
-    state: parvane_protocol::state::PersonalState,
-    clock: parvane_protocol::state::LamportClock,
-    cursor: u64,
-    guard: parvane_protocol::state::SendGuard,
-}
-
-fn snapshot_js(s: &parvane_protocol::pb::parvane::state::v1::StateSnapshot) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "{}".into())
-}
-
 #[wasm_bindgen]
 impl PvClient {
     /// Ключ личного состояния есть (свой или от другого своего устройства).
@@ -1467,7 +1505,7 @@ impl PvClient {
     }
 
     /// Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
-    /// из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+    /// из текущего и прежних ключей состояния и прежние адреса клиента.
     #[wasm_bindgen(js_name = historySession)]
     pub fn history_session(&self) -> Option<PvHistory> {
         let keys = self.inner.state_keys_all();
@@ -1475,175 +1513,6 @@ impl PvClient {
         parvane_protocol::history::HistorySession::new(&self.inner.user, &former, &self.inner.device_id, &keys)
             .ok()
             .map(|s| PvHistory { inner: parvane_protocol::host::HostHistory::new(s) })
-    }
-
-    /// Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
-    #[wasm_bindgen(js_name = stateSession)]
-    pub fn state_session(&self) -> Option<PvState> {
-        let (k, _) = self.inner.state_key()?;
-        Some(PvState {
-            user: self.inner.user.clone(),
-            former: self.inner.state_former_addresses(),
-            device_id: self.inner.device_id.clone(),
-            key: k.clone(),
-            state: parvane_protocol::state::PersonalState::new(),
-            clock: parvane_protocol::state::LamportClock::default(),
-            cursor: 0,
-            guard: parvane_protocol::state::SendGuard::new(),
-        })
-    }
-}
-
-#[wasm_bindgen]
-impl PvState {
-    /// Тело `state.sync` от курсора.
-    #[wasm_bindgen(js_name = syncRequest)]
-    pub fn sync_request(&self) -> Vec<u8> {
-        parvane_protocol::pb::parvane::state::v1::SyncRequest { after_seq: self.cursor, max_bytes: 0 }.encode_to_vec()
-    }
-
-    /// Ответ `state.sync` → JSON `{more, applied, rejected}`. Нерасшифрованные
-    /// (чужой ключ) и отвергнутые записи пропускаются — одинаково везде.
-    pub fn ingest(&mut self, resp: &[u8]) -> Result<String, JsValue> {
-        use parvane_protocol::pb::parvane::state::v1::SyncResponse;
-        let r: SyncResponse = decode_checked(resp, Origin::Server).map_err(err_proto)?;
-        let (mut applied, mut rejected) = (0usize, 0usize);
-        for rec in &r.records {
-            self.cursor = self.cursor.max(rec.seq);
-            let opened = std::iter::once(&self.user)
-                .chain(self.former.iter())
-                .find_map(|u| parvane_protocol::state::open_state_record(&self.key, u, rec).ok());
-            match opened.ok_or(parvane_protocol::error::ProtoError::Crypto) {
-                Ok(op) if self.state.apply(&op).is_ok() => applied += 1,
-                _ => rejected += 1,
-            }
-        }
-        self.clock.observe(self.state.max_lamport());
-        Ok(json!({"more": r.more && !r.records.is_empty(), "applied": applied, "rejected": rejected}).to_string())
-    }
-
-    /// Сведённое состояние: proto3-JSON `state.v1.StateSnapshot`.
-    pub fn snapshot(&self) -> String {
-        snapshot_js(&self.state.snapshot())
-    }
-
-    /// Хост хочет состояние `desired_json` (StateSnapshot) по видам `kinds`:
-    /// операции разницы применяются локально, наружу — тела `state.append`.
-    pub fn diff(&mut self, desired_json: &str, kinds: Vec<String>) -> Result<Array, JsValue> {
-        let desired: parvane_protocol::pb::parvane::state::v1::StateSnapshot = serde_json::from_str(desired_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        let m = parvane_protocol::state::Managed::from_names(kinds.iter().map(String::as_str));
-        let ops = parvane_protocol::state::diff_ops(&self.state.snapshot(), &desired, m);
-        self.seal_ops(ops)
-    }
-
-    /// Первый запуск: локальные данные (StateSnapshot) → начальные операции.
-    pub fn migrate(&mut self, local_json: &str) -> Result<Array, JsValue> {
-        let local: parvane_protocol::pb::parvane::state::v1::StateSnapshot = serde_json::from_str(local_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        let ops = parvane_protocol::state::migrate_snapshot(&local, &self.device_id, &mut self.clock, js_sys::Date::now() as i64).map_err(err_proto)?;
-        let out = Array::new();
-        for op in ops {
-            if self.state.apply(&op).is_ok() {
-                let r = parvane_protocol::state::seal_op(&self.key, &self.user, &op).map_err(err_proto)?;
-                out.push(&Uint8Array::from(r.encode_to_vec().as_slice()).into());
-            }
-        }
-        Ok(out)
-    }
-
-    /// Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
-    /// `ScheduledMessage[]`); отправлять с op_id отложенного, затем `markSent`.
-    #[wasm_bindgen(js_name = claimDue)]
-    pub fn claim_due(&mut self, now_ms: f64) -> String {
-        let due = self.state.claim_due(now_ms as i64, &mut self.guard);
-        serde_json::to_string(&due).unwrap_or_else(|_| "[]".into())
-    }
-
-    /// Отметка «отложенное отправлено» (op_id — base64 из снимка).
-    #[wasm_bindgen(js_name = markSent)]
-    pub fn mark_sent(&mut self, op_id_b64: &str) -> Result<Array, JsValue> {
-        let s: parvane_protocol::pb::parvane::state::v1::ScheduledRef =
-            serde_json::from_value(json!({ "op_id": op_id_b64 })).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::ScheduledSent(s)])
-    }
-
-    /// Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-    /// `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
-    /// Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
-    #[wasm_bindgen(js_name = plannerContainerSet)]
-    pub fn planner_container_set(&mut self, domain: &str, id_hex: &str) -> Result<Array, JsValue> {
-        let id = hex::decode(id_hex).map_err(|_| err_proto(ProtoError::Malformed))?;
-        let c = parvane_protocol::pb::parvane::state::v1::PlannerContainer {
-            r#ref: Some(Ref { domain: domain.into(), id }),
-        };
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::PlannerContainerSet(c)])
-    }
-
-    /// Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer`
-    /// → тела `state.append`. Множество по ссылке, запись целиком по метке.
-    #[wasm_bindgen(js_name = cloudContainerSet)]
-    pub fn cloud_container_set(&mut self, container_json: &str) -> Result<Array, JsValue> {
-        let c: parvane_protocol::pb::parvane::state::v1::CloudContainer =
-            serde_json::from_str(container_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CloudContainerSet(c)])
-    }
-
-    #[wasm_bindgen(js_name = callSet)]
-    pub fn call_set(&mut self, record_json: &str) -> Result<Array, JsValue> {
-        let rec: parvane_protocol::pb::parvane::state::v1::CallRecord =
-            serde_json::from_str(record_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::CallSet(rec)])
-    }
-
-    /// Ссылка-приглашение группы v2 (T160): proto3-JSON `state.v1.GroupInvite`
-    /// → тела `state.append`. LWW по `link_id`.
-    #[wasm_bindgen(js_name = groupInviteSet)]
-    pub fn group_invite_set(&mut self, invite_json: &str) -> Result<Array, JsValue> {
-        let i: parvane_protocol::pb::parvane::state::v1::GroupInvite =
-            serde_json::from_str(invite_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::GroupInviteSet(i)])
-    }
-
-    /// Ссылка снята (отозвана или удалена): `link_id` — base64.
-    #[wasm_bindgen(js_name = groupInviteRemove)]
-    pub fn group_invite_remove(&mut self, link_id_b64: &str) -> Result<Array, JsValue> {
-        let r: parvane_protocol::pb::parvane::state::v1::GroupInviteRef =
-            serde_json::from_value(json!({ "link_id": link_id_b64 })).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::GroupInviteRemove(r)])
-    }
-
-    /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
-    /// → тела `state.append`. Граница по собеседнику только растёт.
-    #[wasm_bindgen(js_name = chatCleared)]
-    pub fn chat_cleared(&mut self, cleared_json: &str) -> Result<Array, JsValue> {
-        let c: parvane_protocol::pb::parvane::state::v1::ChatCleared =
-            serde_json::from_str(cleared_json).map_err(|_| err_proto(ProtoError::Malformed))?;
-        self.seal_ops(vec![parvane_protocol::pb::parvane::state::v1::state_op::Op::ChatCleared(c)])
-    }
-
-    /// Локальный журнал уже отправленных этим устройством (hex; хранит хост).
-    #[wasm_bindgen(js_name = sentGuard)]
-    pub fn sent_guard(&self) -> Vec<String> {
-        self.guard.to_list().iter().map(hex::encode).collect()
-    }
-
-    #[wasm_bindgen(js_name = loadSentGuard)]
-    pub fn load_sent_guard(&mut self, ids: Vec<String>) {
-        let bytes: Vec<Vec<u8>> = ids.iter().filter_map(|h| hex::decode(h).ok()).collect();
-        self.guard = parvane_protocol::state::SendGuard::from_list(bytes.iter().map(Vec::as_slice));
-    }
-
-    fn seal_ops(&mut self, ops: Vec<parvane_protocol::pb::parvane::state::v1::state_op::Op>) -> Result<Array, JsValue> {
-        let out = Array::new();
-        let now = js_sys::Date::now() as i64;
-        for kind in ops {
-            let op = parvane_protocol::state::make_op(&mut self.clock, &self.device_id, now, kind).map_err(err_proto)?;
-            if self.state.apply(&op).is_err() {
-                continue;
-            }
-            let r = parvane_protocol::state::seal_op(&self.key, &self.user, &op).map_err(err_proto)?;
-            out.push(&Uint8Array::from(r.encode_to_vec().as_slice()).into());
-        }
-        Ok(out)
     }
 }
 
@@ -1989,5 +1858,16 @@ impl PvEngine {
     #[wasm_bindgen(js_name = engineInfo)]
     pub fn engine_info(&self) -> String {
         parvane_protocol::engine_info_json()
+    }
+
+    /// Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
+    /// переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
+    #[wasm_bindgen(js_name = adoptStateKeys)]
+    pub fn adopt_state_keys(&mut self, client: &PvClient) -> String {
+        let keys = client.inner.state_keys_all();
+        match self.inner.adopt_state_keys(&keys) {
+            Ok(o) => serde_json::to_string(&o).unwrap_or_else(|_| parvane_protocol::model::err_json(ProtoError::Malformed)),
+            Err(e) => parvane_protocol::model::err_json(e),
+        }
     }
 }

@@ -1,11 +1,10 @@
-// Протокол v2 (spec 007, T098, R10): папки, блок-лист, черновики, отложенные,
-// архив и закреп — из журнала личного состояния (`state.append`/`state.sync`,
-// шифртекст на ключе личного состояния; сведение LWW — STATE-1 в движке).
-// localState остаётся рабочей копией для UI: правка пользователя → разница с
-// сведённым состоянием → записи журнала; записи других устройств → сведённый
-// снимок → localState и нативные апдейты UI. Первый запуск переносит
-// локальные данные в журнал (движок: migrate_snapshot). Без v2-стека
-// журнал не подключается — всё как раньше.
+// Протокол v2 (spec 007, T098, R10; spec 035 T114): папки, блок-лист, черновики, отложенные, архив и закреп —
+// из журнала личного состояния `state.v2` (`state.ops.*`, шифртекст на ключе личного состояния). Журнал, сведение
+// (регистры по полям, метки, множества) и разница «желаемое ↔ сведённое» ведёт модель движка (`StateModel`,
+// `v2/engine.ts`): здесь нет ни лампортов, ни сравнения меток (ENGINE-1). localState остаётся рабочей копией для
+// UI: правка пользователя → желаемое → модель пишет только изменившиеся поля; записи других устройств → показ
+// модели (снимок в форме `state.v1`) → localState и нативные апдейты UI. Первый запуск переносит локальные данные
+// в журнал. Без v2-стека журнал не подключается — всё как раньше.
 
 import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../../types';
 import type { LocalContactInfo, SContact } from '../contactInfo';
@@ -16,7 +15,7 @@ import type { ParvaneStore } from '../store';
 import type { WireCallRecord } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { V2SharedInvite } from './controller';
-import type { PvState } from './engine';
+import type { StateModel, StateModelView } from './engine';
 import { MAIN_THREAD_ID } from '../../types';
 
 import { ARCHIVED_FOLDER_ID } from '../../../config';
@@ -28,12 +27,11 @@ import {
 } from './contentMap';
 import { isV2GroupAddress } from './controller';
 import { isTimerSyncMode, pollDelay } from './l2';
-import { V2Error } from './transport';
 
 /** Что журналу нужно от v2-стека (контроллер). */
 export type StateJournalHost = {
-  openSession: () => PvState | undefined;
-  call: (method: string, body: Uint8Array) => Promise<Uint8Array>;
+  /** Модель личного состояния (undefined — нет ключа личного состояния). */
+  openModel: () => Promise<StateModel | undefined>;
   encode: (type: string, json: string) => Uint8Array;
   decode: (type: string, bytes: Uint8Array) => string;
   domain: () => string;
@@ -41,6 +39,9 @@ export type StateJournalHost = {
 };
 
 type LocalState = ReturnType<typeof createLocalState>;
+
+/** Избранный стикер из журнала. */
+export type FavedSticker = { setId: string; stickerId: string; addedMs: number };
 
 type Deps = {
   localState: LocalState;
@@ -62,6 +63,10 @@ type Deps = {
   applyStickerPacks?: (packs: LocalStickerPack[], removed: string[]) => void;
   /** Контакты из журнала (CONTACT-1): явные контакты, их имена и заметки; `removed` — убранные из контактов. */
   applyContacts?: (addresses: string[], info: Record<string, LocalContactInfo>, removed: string[]) => void;
+  /** Избранные стикеры из журнала (FR-075, `FAVED_STICKER`): новые сначала. */
+  applyFavedStickers?: (faved: FavedSticker[]) => void;
+  /** Журнал закрыт для записи более новой версией (критичный неизвестный вид, T117). */
+  onWriteBlocked?: () => void;
   log: (message: string) => void;
 };
 
@@ -167,7 +172,6 @@ const FLUSH_DELAY_MS = 700;
 // как и в скрытой вкладке); при возврате на вкладку — сразу
 const SYNC_INTERVAL_MS = 60000;
 const SYNC_HIDDEN_MS = 60000;
-const SYNC_PAGES = 1000;
 const V2_GROUP_PREFIX = 'v2g:';
 const UUID_HEX_LENGTH = 32;
 // Контейнеры облака (spec 016): значения перечислений proto3-JSON (имя либо число)
@@ -187,25 +191,22 @@ const CLOUD_STATUSES: Record<string, CloudStateEntry['status']> = {
   [CLOUD_STATUS_NAMES.declined]: 'declined', 2: 'declined',
 };
 
-/** Отказ сервера, после которого повтор той же записи бессмысленен (в отличие от сбоя связи и лимита частоты). */
-export function isFinalAppendRejection(e: unknown) {
-  return e instanceof V2Error && [
-    'ERROR_CODE_INVALID', 'ERROR_CODE_FORBIDDEN', 'ERROR_CODE_DUPLICATE',
-  ].includes(e.code);
-}
-
 export function createStateJournal(deps: Deps) {
   let host: StateJournalHost | undefined;
-  let session: PvState | undefined;
+  let session: StateModel | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
   let isVisibilityListened = false;
-  // Записи, не принятые сервером (обрыв): повтор тем же op_id идемпотентен
-  const pendingAppends: Uint8Array[] = [];
-  // Разобранный снимок сессии: сбрасывается при любом изменении журнала. Его
-  // читают по многу раз за опрос (контейнеры облака — на каждый вызов `rootId`)
+  // Показ модели: сбрасывается при любом изменении журнала. Его читают по многу раз за опрос (контейнеры облака —
+  // на каждый вызов `rootId`)
+  let viewCache: StateModelView | undefined;
   let snapshotCache: SSnapshot | undefined;
+  let writeBlocked = false;
+  let favedShown = '';
+  // Что localState показывал последним (снимок проекции): правки пользователя — разница с ним, а не со сведённым,
+  // иначе устаревшая локальная копия откатила бы правку другого устройства, пришедшую после проекции (US2)
+  let projectedBase: SSnapshot | undefined;
   let cloudEntriesCache: { snapshot: SSnapshot; entries: CloudStateEntry[] } | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -216,12 +217,19 @@ export function createStateJournal(deps: Deps) {
 
   function invalidateSnapshot() {
     snapshotCache = undefined;
+    viewCache = undefined;
   }
 
-  /** Записи, рождённые изменением сессии, — в очередь отправки. */
-  function append(...bodies: Uint8Array[]) {
+  /** Желаемое → модель (в журнал уходят только изменившиеся поля); другие вкладки догоняют сразу. `fromBase` —
+   * правка пользователя в localState: разница с последней проекцией. */
+  async function write(
+    desired: SSnapshot, opts?: { kinds?: LocalStateKind[]; prune?: boolean; rewrite?: boolean }, fromBase = false,
+  ) {
+    if (!session) return;
+    await session.apply(desired, { ...opts, base: fromBase ? projectedBase : undefined });
+    if (fromBase) projectedBase = desired;
     invalidateSnapshot();
-    pendingAppends.push(...bodies);
+    deps.onAppended?.();
   }
 
   function isHidden() {
@@ -252,13 +260,19 @@ export function createStateJournal(deps: Deps) {
     });
   }
 
+  // Отметка переноса: '2' — локальное перенесено в журнал state.v2 (spec 035). Профиль с прежней отметкой '1'
+  // (перенос в замороженный state.v1) переносит локальную копию ещё раз — в новый журнал; одинаковые значения с
+  // других своих устройств сводятся без дублей. Разовый перенос замороженного журнала движком — с переходом web
+  // целиком на модель (T115)
+  const MIGRATED = '2';
+
   function migratedKey() {
     return `parvane:v2state-migrated:${deps.getStore().self}`;
   }
 
   function isMigrated() {
     try {
-      return localStorage.getItem(migratedKey()) === '1';
+      return localStorage.getItem(migratedKey()) === MIGRATED;
     } catch {
       return false;
     }
@@ -273,7 +287,7 @@ export function createStateJournal(deps: Deps) {
 
   function markKindMigrated(kind: LocalStateKind) {
     try {
-      localStorage.setItem(kindMigratedKey(kind), '1');
+      localStorage.setItem(kindMigratedKey(kind), MIGRATED);
     } catch {
       // приватный режим — перенос повторится и сойдётся (LWW)
     }
@@ -291,31 +305,27 @@ export function createStateJournal(deps: Deps) {
     if (!session) return;
     const kinds = LATE_KINDS.filter((kind) => {
       try {
-        return localStorage.getItem(kindMigratedKey(kind)) !== '1';
+        return localStorage.getItem(kindMigratedKey(kind)) !== MIGRATED;
       } catch {
         return true; // приватный режим — переносим
       }
     });
     if (kinds.includes('contacts')) {
-      const bodies = session.migrate(JSON.stringify({ contacts: localContacts() }));
-      append(...bodies);
-      await pushAppends();
-      if (bodies.length) deps.log(`v2: контакты перенесены в журнал (${bodies.length} записей)`);
+      await write({ contacts: localContacts() });
+      deps.log('v2: контакты перенесены в журнал');
     }
     const current = readSnapshot();
     const empty = kinds.filter((kind) => kind !== 'contacts' && isKindEmpty(current, kind));
     if (empty.length) {
-      const bodies = session.diff(JSON.stringify(buildDesired(current, empty)), empty);
-      append(...bodies);
-      await pushAppends();
-      if (bodies.length) deps.log(`v2: ${empty.join(', ')} перенесены в журнал (${bodies.length} записей)`);
+      await write(buildDesired(current, empty), { kinds: empty, prune: true }, true);
+      deps.log(`v2: ${empty.join(', ')} перенесены в журнал`);
     }
     kinds.forEach(markKindMigrated);
   }
 
   function markMigrated() {
     try {
-      localStorage.setItem(migratedKey(), '1');
+      localStorage.setItem(migratedKey(), MIGRATED);
     } catch {
       // приватный режим — повторная миграция сходится (union по LWW)
     }
@@ -326,25 +336,27 @@ export function createStateJournal(deps: Deps) {
   // новым ключом (старые записи новым ключом не читаются); 'peer' — другим
   // своим устройством: ждём его записей, локальное состояние не трогаем
   async function attach(nextHost: StateJournalHost, rekey?: 'self' | 'peer') {
-    const carried = rekey === 'self' && session ? session.snapshot() : undefined;
+    const carried = rekey === 'self' && session ? readSnapshot() : undefined;
     detach();
-    const nextSession = nextHost.openSession();
+    const nextSession = await nextHost.openModel().catch((e: unknown) => {
+      deps.log(`v2: модель личного состояния не открыта: ${String(e)}`);
+      return undefined;
+    });
     if (!nextSession) {
       deps.log('v2: журнал состояния недоступен — нет ключа личного состояния');
       return;
     }
     host = nextHost;
     session = nextSession;
+    session.onChange(invalidateSnapshot);
     await serial(async () => {
       // Ключи наборов стикеров и GIF (C7-3), черновики — в шифрованном хранилище: до загрузки снимок отдал бы
       // в журнал записи без них
       await deps.localState.hydrate().catch(() => undefined);
       const isReadable = await pullRemote();
       if (carried) {
-        const bodies = session!.migrate(carried);
-        append(...bodies);
-        await pushAppends();
-        deps.log(`v2: журнал состояния перенесён под новый ключ (${bodies.length} записей)`);
+        await write(carried, { rewrite: true });
+        deps.log('v2: журнал состояния перенесён под новый ключ');
       } else if (rekey && !isReadable) {
         // Записей под новым ключом ещё нет: пустой снимок стёр бы локальные
         // папки и блок-лист — проекция после первого удачного синка
@@ -353,13 +365,11 @@ export function createStateJournal(deps: Deps) {
       if (!isMigrated()) {
         // Первый запуск на v2: локальные данные — начальными записями журнала
         const revision = deps.localState.getDirtyRevision();
-        const bodies = session!.migrate(JSON.stringify(buildDesired({})));
-        append(...bodies);
-        await pushAppends();
+        await write(buildDesired({}));
         markMigrated();
         LATE_KINDS.forEach(markKindMigrated);
         deps.localState.clearDirtyKinds(revision);
-        deps.log(`v2: локальное состояние перенесено в журнал (${bodies.length} записей)`);
+        deps.log('v2: локальное состояние перенесено в журнал');
       }
       await migrateLateKinds();
       await flushDirty();
@@ -383,10 +393,10 @@ export function createStateJournal(deps: Deps) {
     syncTimer = undefined;
     deps.localState.setChangeListener(undefined);
     deps.localState.setScheduledHooks(undefined);
-    session?.free();
+    session?.onChange(undefined);
+    session?.close();
     session = undefined;
     host = undefined;
-    pendingAppends.length = 0;
     invalidateSnapshot();
   }
 
@@ -403,7 +413,8 @@ export function createStateJournal(deps: Deps) {
     return serial(async () => {
       try {
         await flushLocal();
-        if (await pullRemote()) project();
+        await pullRemote();
+        project();
       } finally {
         scheduleSync();
       }
@@ -414,9 +425,7 @@ export function createStateJournal(deps: Deps) {
     if (!session) return;
     const revision = deps.localState.getDirtyRevision();
     const current = readSnapshot();
-    const bodies = session.diff(JSON.stringify(buildDesired(current)), MANAGED_KINDS);
-    append(...bodies);
-    await pushAppends();
+    await write(buildDesired(current), { kinds: MANAGED_KINDS, prune: true }, true);
     deps.localState.clearDirtyKinds(revision);
   }
 
@@ -433,58 +442,72 @@ export function createStateJournal(deps: Deps) {
     const desired = buildDesired(current);
     // Контакты: свои правки поверх журнала без удалений — там могут быть контакты с других устройств
     if (kinds.includes('contacts')) desired.contacts = mergeContactsLocalWins(current.contacts, desired.contacts || []);
-    const bodies = session.diff(JSON.stringify(desired), kinds);
-    append(...bodies);
-    await pushAppends();
+    await write(desired, { kinds, prune: true }, true);
     deps.localState.clearDirtyKinds(revision);
-    deps.log(`v2: несохранённые правки (${kinds.join(', ')}) дописаны в журнал (${bodies.length} записей)`);
+    deps.log(`v2: несохранённые правки (${kinds.join(', ')}) дописаны в журнал`);
   }
 
-  async function pushAppends() {
-    const had = pendingAppends.length;
-    try {
-      await pushAppendsUnnotified();
-    } finally {
-      if (had && pendingAppends.length < had) deps.onAppended?.();
-    }
-  }
-
-  async function pushAppendsUnnotified() {
-    while (host && pendingAppends.length) {
-      try {
-        await host.call('state.append', pendingAppends[0]);
-      } catch (e) {
-        // Окончательно отвергнутая запись иначе стояла бы в голове очереди и блокировала все следующие
-        if (!isFinalAppendRejection(e)) throw e;
-        deps.log(`v2: запись журнала состояния отвергнута сервером (${(e as V2Error).code}) и снята с очереди`);
-      }
-      pendingAppends.shift();
-    }
-  }
-
-  /** Записи журнала после курсора → сведённое состояние. true — что-то применено. */
+  /** Свои неотправленные — серверу, затем записи журнала после курсора (ведёт модель). true — в журнале под
+   * текущим ключом что-то есть (после смены ключа другим устройством пустой показ не стирает локальное). */
   async function pullRemote() {
-    if (!session || !host) return false;
-    let applied = 0;
-    for (let page = 0; page < SYNC_PAGES; page++) {
-      const resp = await host.call('state.sync', session.syncRequest());
-      const result = JSON.parse(session.ingest(resp)) as { more: boolean; applied: number; rejected: number };
-      if (result.applied) invalidateSnapshot();
-      applied += result.applied;
-      if (!result.more) break;
+    if (!session) return false;
+    await session.sync();
+    invalidateSnapshot();
+    return Object.values(readSnapshot()).some((v) => (Array.isArray(v) ? v.length > 0 : Boolean(v)));
+  }
+
+  function readView(): StateModelView | undefined {
+    if (!session) return undefined;
+    if (!viewCache) {
+      try {
+        viewCache = session.view();
+      } catch (e) {
+        deps.log(`v2: показ личного состояния: ${String(e)}`);
+        return undefined;
+      }
     }
-    return applied > 0;
+    return viewCache;
   }
 
   function readSnapshot(): SSnapshot {
     if (!session) return {};
     if (snapshotCache) return snapshotCache;
-    try {
-      snapshotCache = JSON.parse(session.snapshot()) as SSnapshot;
-    } catch {
-      snapshotCache = {};
-    }
+    snapshotCache = readView()?.snapshot || {};
     return snapshotCache;
+  }
+
+  // ── избранные стикеры (FR-075): объект FAVED_STICKER, правка — намерением модели ──────────────────────
+
+  function favedStickers(): FavedSticker[] {
+    return (readView()?.faved_stickers || [])
+      .map((f) => ({ setId: f.set_id, stickerId: f.sticker_id, addedMs: Number(f.added_ms || 0) }))
+      .sort((a, b) => b.addedMs - a.addedMs);
+  }
+
+  /** «В избранное» / «Убрать из избранного». false — журнал не подключён. */
+  function faveSticker(setId: string, stickerId: string, isFaved: boolean) {
+    return serial(async () => {
+      if (!session) return false;
+      await session.submit({ fave_sticker: { set_id: setId, sticker_id: stickerId, on: isFaved } });
+      invalidateSnapshot();
+      deps.onAppended?.();
+      projectFaved();
+      return true;
+    });
+  }
+
+  function projectFaved() {
+    const list = favedStickers();
+    const key = JSON.stringify(list);
+    if (key === favedShown) return;
+    favedShown = key;
+    deps.applyFavedStickers?.(list);
+  }
+
+  function projectWriteBlocked() {
+    const isBlocked = Boolean(readView()?.write_blocked);
+    if (isBlocked && !writeBlocked) deps.onWriteBlocked?.();
+    writeBlocked = isBlocked;
   }
 
   // ── отложенные: отправляет первое устройство, заметившее срок ─────────────
@@ -497,9 +520,7 @@ export function createStateJournal(deps: Deps) {
 
   function markScheduledSent(opId: string) {
     void serial(async () => {
-      if (!session) return;
-      append(...session.markSent(uuidToB64(opId)));
-      await pushAppends();
+      await write({ scheduled_sent: [uuidToB64(opId)] });
     }).catch((e: unknown) => deps.log(`v2: отметка отправки отложенного: ${String(e)}`));
   }
 
@@ -518,9 +539,7 @@ export function createStateJournal(deps: Deps) {
   /** Объявить свой контейнер планировщика (LWW-регистр, один на пользователя). */
   function recordPlannerContainer(ref: { domain: string; id: string }) {
     void serial(async () => {
-      if (!session) return;
-      append(...session.plannerContainerSet(ref.domain, ref.id));
-      await pushAppends();
+      await write({ planner_container: { ref: { domain: ref.domain, id: hexToB64(ref.id) } } });
     }).catch((e: unknown) => deps.log(`v2: запись контейнера планировщика в журнал состояния: ${String(e)}`));
   }
 
@@ -560,25 +579,23 @@ export function createStateJournal(deps: Deps) {
   /** Записать контейнер облака (множество по ссылке, запись целиком по метке). */
   function recordCloudEntry(entry: CloudStateEntry) {
     void serial(async () => {
-      if (!session) return;
-      append(...session.cloudContainerSet(JSON.stringify({
-        ref: { domain: entry.domain, id: hexToB64(entry.id) },
-        role: CLOUD_ROLE_NAMES[entry.role],
-        status: entry.status ? CLOUD_STATUS_NAMES[entry.status] : undefined,
-        removed: Boolean(entry.isRemoved),
-        owner: entry.owner || '',
-      })));
-      await pushAppends();
+      await write({
+        cloud_containers: [{
+          ref: { domain: entry.domain, id: hexToB64(entry.id) },
+          role: CLOUD_ROLE_NAMES[entry.role],
+          status: entry.status ? CLOUD_STATUS_NAMES[entry.status] : undefined,
+          removed: Boolean(entry.isRemoved),
+          owner: entry.owner || '',
+        }],
+      });
     }).catch((e: unknown) => deps.log(`v2: запись контейнера облака в журнал состояния: ${String(e)}`));
   }
 
   function recordCall(record: WireCallRecord) {
     void serial(async () => {
-      if (!session) return;
       const body = callToState(record);
       if (!body) return;
-      append(...session.callSet(JSON.stringify(body)));
-      await pushAppends();
+      await write({ calls: [body] });
     }).catch((e: unknown) => deps.log(`v2: запись звонка в журнал состояния: ${String(e)}`));
   }
 
@@ -591,8 +608,7 @@ export function createStateJournal(deps: Deps) {
       if (!session) return;
       const peer = peerOf(address);
       if (!peer) return;
-      append(...session.chatCleared(JSON.stringify({ peer, cleared_until_ms: String(untilMs) })));
-      await pushAppends();
+      await write({ cleared: [{ peer, cleared_until_ms: String(untilMs) }] });
     }).catch((e: unknown) => deps.log(`v2: запись очистки чата в журнал состояния: ${String(e)}`));
   }
 
@@ -603,16 +619,16 @@ export function createStateJournal(deps: Deps) {
   function recordGroupInvite({ address, record }: V2SharedInvite) {
     void serial(async () => {
       if (!session || !isV2GroupAddress(address)) return;
-      append(...session.groupInviteSet(JSON.stringify(inviteToState(address, record))));
-      await pushAppends();
+      await write({ invites: [inviteToState(address, record)] });
     }).catch((e: unknown) => deps.log(`v2: запись ссылки-приглашения в журнал состояния: ${String(e)}`));
   }
 
   function removeGroupInvite(linkId: string) {
     void serial(async () => {
       if (!session) return;
-      append(...session.groupInviteRemove(hexToB64(linkId)));
-      await pushAppends();
+      await session.submit({ state_delete: { object: { kind: 'OBJECT_KIND_GROUP_INVITE', key: linkId } } });
+      invalidateSnapshot();
+      deps.onAppended?.();
     }).catch((e: unknown) => deps.log(`v2: снятие ссылки-приглашения в журнале состояния: ${String(e)}`));
   }
 
@@ -793,6 +809,7 @@ export function createStateJournal(deps: Deps) {
   function project() {
     if (!session) return;
     const snap = readSnapshot();
+    projectedBase = snap;
     deps.localState.applyFromJournal(() => {
       projectFolders(snap);
       projectBlocked(snap);
@@ -806,6 +823,8 @@ export function createStateJournal(deps: Deps) {
       projectContacts(snap);
     });
     projectScheduled(snap);
+    projectFaved();
+    projectWriteBlocked();
     projectCalls(snap);
     projectCleared(snap);
     void projectInvites(snap)
@@ -1110,10 +1129,16 @@ export function createStateJournal(deps: Deps) {
     recordPlannerContainer,
     cloudEntries,
     recordCloudEntry,
-    reset: detach,
+    reset: () => {
+      detach();
+      projectedBase = undefined;
+    },
     syncNow,
     /** Снимок личного состояния движка (JSON) — для выгрузки «ничего не потеряно» (spec 035, T007), только чтение. */
-    snapshotJson: () => (session ? session.snapshot() : undefined),
+    snapshotJson: () => (session ? JSON.stringify(readSnapshot()) : undefined),
+    favedStickers,
+    faveSticker,
+    isWriteBlocked: () => writeBlocked,
   };
 }
 

@@ -22,6 +22,7 @@ pub mod intent;
 pub mod journal;
 pub mod migration;
 pub mod paging;
+pub mod state_v1;
 pub mod store_kinds;
 pub mod views;
 
@@ -387,6 +388,8 @@ impl Engine {
             "viewGroup" => parse::<epb::ViewGroupRequest>(args).and_then(|a| self.view_group(a.group.as_ref())).map(|g| json_of(&g)),
             "capabilities" => parse::<epb::CapabilitiesRequest>(args).and_then(|a| self.capabilities(a.chat.as_ref())).map(|c| json_of(&c)),
             "engineInfo" => Ok(crate::engine_info_json()),
+            "stateViewV1" => Ok(self.state_view_v1().to_string()),
+            "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
             "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
             "migrateFinish" => self.migrate_finish().map(|o| json_of(&o)),
             "migrateStatus" => Ok(json_of(&self.migrate_status())),
@@ -1079,11 +1082,15 @@ impl Engine {
     /// Опрос журналов: инбокс, личное состояние, история.
     fn poll(&mut self, w: &mut Work) {
         let Some(c) = &self.client else { return };
+        let has_key = c.state_key().is_some();
         if c.log_version(&self.cfg.user) == 0 {
+            // Личности в модели нет (переходный период web: инбокс ведёт прежний клиент) — только личное состояние
+            if has_key {
+                self.state_sync_now(w);
+            }
             return;
         }
         let r = c.sync_request();
-        let has_key = c.state_key().is_some();
         self.push_req(w, r, Purpose::InboxSync);
         if has_key {
             let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
@@ -1219,6 +1226,8 @@ impl Engine {
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
                 "inbox.record" => self.process_record(si.body, &mut w),
+                // Хост узнал о новых записях журнала личного состояния (`JournalNotice{STATE}` прежнего клиента)
+                "journal.state" => self.state_sync_now(&mut w),
                 m if m.starts_with("ephemeral") => {
                     if let Some(ev) = self.client.as_ref().and_then(|c| c.open_ephemeral(&si.body)) {
                         self.apply_event(ev, &mut w);
@@ -1373,8 +1382,9 @@ impl Engine {
                     self.push_req(w, req, Purpose::GroupSync { group: g, join: Some(parts) });
                 }
             }
-            // DUPLICATE: тот же op_id уже записан другими байтами (перенос с другого устройства) — запись есть
-            Purpose::StateAppend(op_id) if error == 0 || error == crate::pb::parvane::core::v2::ErrorCode::Duplicate as i32 => {
+            // Записано (DUPLICATE: тот же op_id уже записан другими байтами — перенос с другого устройства) либо
+            // окончательный отказ (схема, право) — повтор той же записи бессмыслен
+            Purpose::StateAppend(op_id) if matches!(error, 0..=2 | 4) => {
                 self.state_unsent.remove(&hex::encode(&op_id));
                 self.dirty.state_raw.insert(hex::encode(&op_id), None);
             }
@@ -1696,6 +1706,28 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Догнать журнал личного состояния: неотправленные свои операции (не в пути) и `state.ops.sync` от курсора.
+    pub(crate) fn state_sync_now(&mut self, w: &mut Work) {
+        let inflight: BTreeSet<String> = self
+            .inflight
+            .values()
+            .filter_map(|p| match p {
+                Purpose::StateAppend(id) => Some(hex::encode(id)),
+                _ => None,
+            })
+            .collect();
+        let unsent: Vec<(String, Vec<u8>)> =
+            self.state_unsent.iter().filter(|(k, _)| !inflight.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (op_hex, pt) in unsent {
+            self.send_state_raw(&op_hex, &pt, w);
+        }
+        if self.inflight.values().any(|p| matches!(p, Purpose::StateSync)) {
+            return;
+        }
+        let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
+        self.push_req(w, r, Purpose::StateSync);
     }
 
     pub(crate) fn send_state_raw(&mut self, op_hex: &str, pt: &[u8], w: &mut Work) {

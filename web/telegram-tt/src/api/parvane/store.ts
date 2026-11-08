@@ -58,6 +58,7 @@ const CHAT_MODE_FALLBACK: Record<string, string> = {
 const STUB_FALLBACK = {
   ParvaneMessageDeleted: '🗑 Message deleted',
   ParvaneUndecryptable: '🔒 Could not decrypt this message',
+  ParvaneMessageNeedsUpdate: 'This message was sent from a newer version of Parvane. Update the app to see it',
 };
 
 export class ParvaneStore {
@@ -959,6 +960,8 @@ function buildMessageContent(
           isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
+          // FR-075: id стикера в наборе — «В избранное» из ленты
+          parvaneSetStickerId: content.sticker_id || undefined,
         }),
       };
     }
@@ -979,6 +982,17 @@ function buildMessageContent(
         },
       };
     case 'unsupported':
+      // Критичный вид более новой версии (spec 035, STUB_CRITICAL): нативная служебная строка — на неё нельзя
+      // ответить, её нельзя изменить и переслать, пока приложение не обновлено
+      if (content.critical) {
+        return {
+          action: {
+            mediaType: 'action',
+            type: 'customAction',
+            message: langString('ParvaneMessageNeedsUpdate') || STUB_FALLBACK.ParvaneMessageNeedsUpdate,
+          },
+        };
+      }
       // Вид, который эта версия не знает (протокол v2, spec 007): пустое
       // содержимое — нативная заглушка Web A `MessageUnsupported`
       return {};

@@ -82,6 +82,11 @@ export type WireMessageContent = {
   forwarded_name?: string;
   // «Без звука» (`Content.silent`, A4): получатель показывает уведомление без звука
   silent?: boolean;
+  // spec 035 (T117, STUB_CRITICAL): заглушка критичного вида более новой версии — ответ, правка и пересылка
+  // запрещены до обновления
+  critical?: boolean;
+  // Стикер (spec 035, FR-075): id стикера в его наборе (`Sticker.sticker_id`), не file_id загрузки
+  sticker_id?: string;
   // MEDIA-2: фото/видео/GIF под спойлером (`Media.spoiler`)
   spoiler?: boolean;
   // MEDIA-2: подпись (или текст с карточкой ссылки) над медиа (`Content.invert_media`)
