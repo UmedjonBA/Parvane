@@ -791,69 +791,6 @@ pub unsafe extern "C" fn pv_client_group_join(c: *mut PvClient, url: *const c_ch
     })
 }
 
-/// spec 035 (PV-006): журнал частной группы по ссылке до вступления — запрос `group.state.sync` с доказательством
-/// знания секрета ссылки (JSON запроса, как у прочих `pv_client_group_*`).
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_group_sync_by_link(
-    c: *const PvClient,
-    url: *const c_char,
-    domain: *const c_char,
-    group_hex: *const c_char,
-    after_version: u64,
-    ts_ms: i64,
-    err: *mut *mut c_char,
-) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &c.as_ref().ok_or_else(bad_arg)?.inner;
-        c.group_sync_by_link(
-            str_arg(url).ok_or_else(bad_arg)?,
-            str_arg(domain).ok_or_else(bad_arg)?,
-            str_arg(group_hex).ok_or_else(bad_arg)?,
-            after_version,
-            ts_ms,
-        )
-        .map(cstring)
-    })
-}
-
-/// spec 035 (PV-005, GPHOTO-1): новое фото группы → JSON запроса `SetInfo` с `avatar_key_id`; `key_b64` — секрет фото
-/// частной группы ("" — открытое фото), пустой `file_id` — снять фото.
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_group_set_photo(
-    c: *mut PvClient,
-    group_hex: *const c_char,
-    file_id: *const c_char,
-    avatar_domain: *const c_char,
-    key_b64: *const c_char,
-    err: *mut *mut c_char,
-) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        c.group_set_photo(
-            str_arg(group_hex).ok_or_else(bad_arg)?,
-            str_arg(file_id).ok_or_else(bad_arg)?,
-            str_arg(avatar_domain).unwrap_or(""),
-            str_arg(key_b64).unwrap_or(""),
-        )
-        .map(cstring)
-    })
-}
-
-/// После смены фото и новой эпохи: `{"content": GroupAvatarKey | null, "requests": [InviteAvatarWrap…]}`
-/// (`links_json` — ссылки группы целиком).
-#[no_mangle]
-pub unsafe extern "C" fn pv_client_group_photo_followups(
-    c: *mut PvClient,
-    group_hex: *const c_char,
-    links_json: *const c_char,
-    err: *mut *mut c_char,
-) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let c = &mut c.as_mut().ok_or_else(bad_arg)?.inner;
-        c.group_photo_followups(str_arg(group_hex).ok_or_else(bad_arg)?, str_arg(links_json).unwrap_or("")).map(cstring)
-    })
-}
-
 /// Разобрать ссылку-приглашение → `{"kind":"v2","domain","linkId"}` |
 /// `{"kind":"legacy","token"}`; ошибка (в err) — не ссылка-приглашение.
 #[no_mangle]

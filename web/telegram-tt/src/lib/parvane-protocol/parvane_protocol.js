@@ -969,6 +969,35 @@ export class PvClient {
         }
     }
     /**
+     * Секрет фото группы участникам (spec 035, PV-005): содержимое `GroupAvatarKey` (proto3-JSON) для
+     * `prepareGroup` — после смены фото и после новой эпохи. undefined — секрета нет либо фото открытое.
+     * @param {string} group
+     * @returns {string | undefined}
+     */
+    groupAvatarKeyContent(group) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupAvatarKeyContent(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            let v2;
+            if (r0 !== 0) {
+                v2 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * D-03 (C1-03): версия журнала группы, на которую сослался участник, а у
      * нас её нет (undefined — не отстаём). Пока отстаём, prepareGroup и
      * groupRotateEpoch отказывают need groupLog.
@@ -1155,6 +1184,63 @@ export class PvClient {
                 throw takeObject(r2);
             }
             return BigInt.asUintN(64, r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Секрет фото для превью по ссылке (D1, base64): журнал группы принят по ссылке; undefined — обёртки нет.
+     * @param {string} group
+     * @param {string} url
+     * @returns {string | undefined}
+     */
+    groupInviteAvatarKey(group, url) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(url, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupInviteAvatarKey(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            let v3;
+            if (r0 !== 0) {
+                v3 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v3;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Превью по ссылке с фото (spec 035, D1): записи `InviteAvatarWrap` для своих ссылок группы (`links_json` —
+     * массив ссылок целиком).
+     * @param {string} group
+     * @param {string} links_json
+     * @returns {Array<any>}
+     */
+    groupInviteAvatarWraps(group, links_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(links_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupInviteAvatarWraps(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -1418,6 +1504,38 @@ export class PvClient {
         }
     }
     /**
+     * spec 035 (PV-005): новое фото частной группы — запись `SetInfo` с `avatar_key_id` (секрета в журнале нет).
+     * `key_b64` — секрет фото (пусто — открытое фото публичной группы); пустой `file_id` — снять фото.
+     * @param {string} group
+     * @param {string} file_id
+     * @param {string} avatar_domain
+     * @param {string} key_b64
+     * @returns {any}
+     */
+    groupSetPhoto(group, file_id, avatar_domain, key_b64) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(file_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(avatar_domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(key_b64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupSetPhoto(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
      * @param {string} group
      * @param {boolean} _public
@@ -1533,7 +1651,7 @@ export class PvClient {
     }
     /**
      * Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
-     * из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+     * из текущего и прежних ключей состояния и прежние адреса клиента.
      * @returns {PvHistory | undefined}
      */
     historySession() {
@@ -3052,14 +3170,6 @@ export class PvClient {
         }
     }
     /**
-     * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
-     * @returns {PvState | undefined}
-     */
-    stateSession() {
-        const ret = wasm.pvclient_stateSession(this.__wbg_ptr);
-        return ret === 0 ? undefined : PvState.__wrap(ret);
-    }
-    /**
      * @returns {any}
      */
     syncRequest() {
@@ -3265,6 +3375,29 @@ export class PvEngine {
         wasm.__wbg_pvengine_free(ptr, 0);
     }
     /**
+     * Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
+     * переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
+     * @param {PvClient} client
+     * @returns {string}
+     */
+    adoptStateKeys(client) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            _assertClass(client, PvClient);
+            wasm.pvengine_adoptStateKeys(retptr, this.__wbg_ptr, client.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
      * `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
      * @param {string} name
@@ -3401,356 +3534,6 @@ export class PvHistory {
     }
 }
 if (Symbol.dispose) PvHistory.prototype[Symbol.dispose] = PvHistory.prototype.free;
-
-/**
- * Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
- * шифрование записей ключом личного состояния из клиента (ключ не выходит
- * в JS). Курсор — в памяти: при запуске журнал читается с начала.
- */
-export class PvState {
-    static __wrap(ptr) {
-        const obj = Object.create(PvState.prototype);
-        obj.__wbg_ptr = ptr;
-        PvStateFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        PvStateFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_pvstate_free(ptr, 0);
-    }
-    /**
-     * @param {string} record_json
-     * @returns {Array<any>}
-     */
-    callSet(record_json) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(record_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_callSet(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`
-     * → тела `state.append`. Граница по собеседнику только растёт.
-     * @param {string} cleared_json
-     * @returns {Array<any>}
-     */
-    chatCleared(cleared_json) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(cleared_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_chatCleared(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Отложенные, которые ЭТО устройство отправляет сейчас (proto3-JSON
-     * `ScheduledMessage[]`); отправлять с op_id отложенного, затем `markSent`.
-     * @param {number} now_ms
-     * @returns {string}
-     */
-    claimDue(now_ms) {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.pvstate_claimDue(retptr, this.__wbg_ptr, now_ms);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer`
-     * → тела `state.append`. Множество по ссылке, запись целиком по метке.
-     * @param {string} container_json
-     * @returns {Array<any>}
-     */
-    cloudContainerSet(container_json) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(container_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_cloudContainerSet(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Хост хочет состояние `desired_json` (StateSnapshot) по видам `kinds`:
-     * операции разницы применяются локально, наружу — тела `state.append`.
-     * @param {string} desired_json
-     * @param {string[]} kinds
-     * @returns {Array<any>}
-     */
-    diff(desired_json, kinds) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(desired_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passArrayJsValueToWasm0(kinds, wasm.__wbindgen_export);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.pvstate_diff(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Ссылка снята (отозвана или удалена): `link_id` — base64.
-     * @param {string} link_id_b64
-     * @returns {Array<any>}
-     */
-    groupInviteRemove(link_id_b64) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(link_id_b64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_groupInviteRemove(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Ссылка-приглашение группы v2 (T160): proto3-JSON `state.v1.GroupInvite`
-     * → тела `state.append`. LWW по `link_id`.
-     * @param {string} invite_json
-     * @returns {Array<any>}
-     */
-    groupInviteSet(invite_json) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(invite_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_groupInviteSet(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Ответ `state.sync` → JSON `{more, applied, rejected}`. Нерасшифрованные
-     * (чужой ключ) и отвергнутые записи пропускаются — одинаково везде.
-     * @param {Uint8Array} resp
-     * @returns {string}
-     */
-    ingest(resp) {
-        let deferred3_0;
-        let deferred3_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(resp, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_ingest(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr2 = r0;
-            var len2 = r1;
-            if (r3) {
-                ptr2 = 0; len2 = 0;
-                throw takeObject(r2);
-            }
-            deferred3_0 = ptr2;
-            deferred3_1 = len2;
-            return getStringFromWasm0(ptr2, len2);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
-        }
-    }
-    /**
-     * @param {string[]} ids
-     */
-    loadSentGuard(ids) {
-        const ptr0 = passArrayJsValueToWasm0(ids, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.pvstate_loadSentGuard(this.__wbg_ptr, ptr0, len0);
-    }
-    /**
-     * Отметка «отложенное отправлено» (op_id — base64 из снимка).
-     * @param {string} op_id_b64
-     * @returns {Array<any>}
-     */
-    markSent(op_id_b64) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(op_id_b64, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_markSent(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Первый запуск: локальные данные (StateSnapshot) → начальные операции.
-     * @param {string} local_json
-     * @returns {Array<any>}
-     */
-    migrate(local_json) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(local_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.pvstate_migrate(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Запись истории звонков (D-08: сервер её не ведёт): proto3-JSON
-     * `state.v1.CallRecord` → тела `state.append`. LWW по `call_id`.
-     * Контейнер планировщика (spec 010): домен и hex id → тела `state.append`.
-     * @param {string} domain
-     * @param {string} id_hex
-     * @returns {Array<any>}
-     */
-    plannerContainerSet(domain, id_hex) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(id_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.pvstate_plannerContainerSet(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Локальный журнал уже отправленных этим устройством (hex; хранит хост).
-     * @returns {string[]}
-     */
-    sentGuard() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.pvstate_sentGuard(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var v1 = getArrayJsValueFromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 4, 4);
-            return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Сведённое состояние: proto3-JSON `state.v1.StateSnapshot`.
-     * @returns {string}
-     */
-    snapshot() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.pvstate_snapshot(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            deferred1_0 = r0;
-            deferred1_1 = r1;
-            return getStringFromWasm0(r0, r1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
-     * Тело `state.sync` от курсора.
-     * @returns {Uint8Array}
-     */
-    syncRequest() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.pvstate_syncRequest(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var v1 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-}
-if (Symbol.dispose) PvState.prototype[Symbol.dispose] = PvState.prototype.free;
 
 /**
  * Открытое хранилище профиля (одна вкладка).
@@ -5106,9 +4889,6 @@ const PvEngineFinalization = (typeof FinalizationRegistry === 'undefined')
 const PvHistoryFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvhistory_free(ptr, 1));
-const PvStateFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_pvstate_free(ptr, 1));
 const PvStoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvstore_free(ptr, 1));
@@ -5120,6 +4900,12 @@ function addHeapObject(obj) {
 
     heap[idx] = obj;
     return idx;
+}
+
+function _assertClass(instance, klass) {
+    if (!(instance instanceof klass)) {
+        throw new Error(`expected instance of ${klass.name}`);
+    }
 }
 
 function dropObject(idx) {

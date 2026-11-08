@@ -148,8 +148,8 @@ fn disp(d: Disposition) -> &'static str {
     }
 }
 
-/// spec 035 T128 (US5, FR-041): критичная заглушка — та же `"stub"` (прежние разборы клиентов), плюс
-/// `"critical": true`: клиент показывает «обновите приложение» вместо обычного «не поддерживается».
+/// Критичная заглушка (spec 035, STUB_CRITICAL): к `disposition: "stub"` — `critical: true` (прежние хосты
+/// видят ту же заглушку, новые запрещают ответ, правку и пересылку).
 fn with_critical(mut v: Value, d: Disposition) -> Value {
     if d == Disposition::StubCritical {
         v["critical"] = json!(true);
@@ -168,14 +168,14 @@ fn with_proof(mut v: Value, proof: &[u8]) -> Value {
 fn event_json(e: &Event) -> Value {
     let content = |c: &Content| serde_json::to_value(c).unwrap_or(Value::Null);
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_critical(with_proof(json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof), *disposition),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_critical(with_proof(json!({
+        }), *disposition), proof),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(with_critical(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof), *disposition),
+        }), *disposition), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
@@ -712,39 +712,6 @@ impl HostClient {
             return Err(err(ProtoError::InvalidField("invite")));
         };
         self.inner.group_join(&parts).map(|r| req_json(&r).to_string()).map_err(err)
-    }
-
-    /// spec 035 (PV-006, contracts/group-access.md): журнал частной группы до вступления — `group.state.sync` с
-    /// доказательством знания секрета ссылки (подпись ключом ссылки над группой, своим адресом и временем).
-    pub fn group_sync_by_link(&self, url: &str, domain: &str, group_hex: &str, after_version: u64, ts_ms: i64) -> Result<String, String> {
-        let crate::invite::ParsedInvite::V2(parts) = crate::invite::parse(url).map_err(err)? else {
-            return Err(err(ProtoError::InvalidField("invite")));
-        };
-        let group = Ref { domain: domain.into(), id: group_id(group_hex)? };
-        self.inner.group_sync_by_link(&group, after_version, &parts, ts_ms).map(|r| req_json(&r).to_string()).map_err(err)
-    }
-
-    /// spec 035 (PV-005, GPHOTO-1): новое фото группы → запрос `SetInfo` с `avatar_key_id` (секрета в журнале нет);
-    /// `key_b64` — секрет фото частной группы (пусто — открытое фото), пустой `file_id` — снять фото.
-    pub fn group_set_photo(&mut self, group_hex: &str, file_id: &str, avatar_domain: &str, key_b64: &str) -> Result<String, String> {
-        let key: Option<[u8; 32]> = if key_b64.is_empty() {
-            None
-        } else {
-            let raw = unb64(key_b64)?;
-            Some(<[u8; 32]>::try_from(raw.as_slice()).map_err(|_| err(ProtoError::InvalidField("avatar_key")))?)
-        };
-        self.inner.group_set_photo(&group_id(group_hex)?, file_id, avatar_domain, key.as_ref()).map(|r| req_json(&r).to_string()).map_err(err)
-    }
-
-    /// После смены фото (журнал перечитан) и после новой эпохи: секрет фото участникам — содержимое
-    /// `GroupAvatarKey` (proto3-JSON, хост шлёт его `prepare_group`), держателям ссылок (`links_json` — ссылки
-    /// целиком) — записи `InviteAvatarWrap`. `{"content": … | null, "requests": [...]}`.
-    pub fn group_photo_followups(&mut self, group_hex: &str, links_json: &str) -> Result<String, String> {
-        let gid = group_id(group_hex)?;
-        let links: Vec<String> = if links_json.trim().is_empty() { vec![] } else { serde_json::from_str(links_json).map_err(|_| err(ProtoError::Malformed))? };
-        let content = self.inner.group_avatar_key_content(&gid).map(|c| serde_json::to_value(&c).unwrap_or(Value::Null)).unwrap_or(Value::Null);
-        let wraps = self.inner.group_invite_avatar_wraps(&gid, &links).map_err(err)?;
-        Ok(json!({"content": content, "requests": wraps.iter().map(req_json).collect::<Vec<_>>()}).to_string())
     }
 
     /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.

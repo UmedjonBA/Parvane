@@ -82,6 +82,8 @@ type GroupDependencies = {
   log: (message: string) => void;
   // ApiPhoto из file_id открытого объекта cloud (фото группы в превью ссылки)
   buildAvatarPhoto?: (fileId: string) => ApiPhoto;
+  // Секрет фото частной группы (spec 035, D1 — превью по ссылке): загрузчик медиа открывает файл им
+  rememberGroupPhoto?: (fileId: string, avatarKey: string) => void;
   // Протокол v2 (spec 007): группы с подписанным журналом состояния — других
   // групп нет (v1 отключён, T110); группы v1 в сторе — только история
   getV2?: () => V2Groups | undefined;
@@ -819,6 +821,8 @@ export function createGroupController(deps: GroupDependencies) {
       reportInviteError(check.error.status === 'error' ? check.error.code : 'failed');
       return undefined;
     }
+    // Фото превью частной группы — под секретом из обёртки ссылки (spec 035, D1)
+    if (check.avatar && check.avatarKey) deps.rememberGroupPhoto?.(check.avatar, check.avatarKey);
     const invite: ApiChatInviteInfo = {
       title: check.name,
       about: check.about,

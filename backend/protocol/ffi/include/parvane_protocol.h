@@ -451,38 +451,6 @@ char *pv_client_group_join(struct PvClient *c,
                            char **err);
 
 /**
- * spec 035 (PV-006): журнал частной группы по ссылке до вступления — запрос `group.state.sync` с доказательством
- * знания секрета ссылки (JSON запроса, как у прочих `pv_client_group_*`).
- */
-char *pv_client_group_sync_by_link(const struct PvClient *c,
-                                   const char *url,
-                                   const char *domain,
-                                   const char *group_hex,
-                                   uint64_t after_version,
-                                   int64_t ts_ms,
-                                   char **err);
-
-/**
- * spec 035 (PV-005, GPHOTO-1): новое фото группы → JSON запроса `SetInfo` с `avatar_key_id`; `key_b64` — секрет фото
- * частной группы ("" — открытое фото), пустой `file_id` — снять фото.
- */
-char *pv_client_group_set_photo(struct PvClient *c,
-                                const char *group_hex,
-                                const char *file_id,
-                                const char *avatar_domain,
-                                const char *key_b64,
-                                char **err);
-
-/**
- * После смены фото и новой эпохи: `{"content": GroupAvatarKey | null, "requests": [InviteAvatarWrap…]}`
- * (`links_json` — ссылки группы целиком).
- */
-char *pv_client_group_photo_followups(struct PvClient *c,
-                                      const char *group_hex,
-                                      const char *links_json,
-                                      char **err);
-
-/**
  * Разобрать ссылку-приглашение → `{"kind":"v2","domain","linkId"}` |
  * `{"kind":"legacy","token"}`; ошибка (в err) — не ссылка-приглашение.
  */

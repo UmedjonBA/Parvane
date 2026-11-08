@@ -265,3 +265,17 @@ export class V2Connection {
     }
   }
 }
+
+const ERROR_CODES = [
+  'ERROR_CODE_UNSPECIFIED', 'ERROR_CODE_INVALID', 'ERROR_CODE_FORBIDDEN', 'ERROR_CODE_NOT_FOUND',
+  'ERROR_CODE_DUPLICATE', 'ERROR_CODE_RATE_LIMITED', 'ERROR_CODE_UPGRADE_REQUIRED', 'ERROR_CODE_REVOKED',
+  'ERROR_CODE_REAUTH_REQUIRED', 'ERROR_CODE_LIMIT', 'ERROR_CODE_FEDERATION_UNAVAILABLE', 'ERROR_CODE_UNAVAILABLE',
+];
+const ERROR_UNAVAILABLE = 11;
+
+/** Номер `ErrorCode` отказа транспорта (для `ingest` модели движка) (`V2Error.code`); сбой связи — UNAVAILABLE. */
+export function errorCodeNumber(e: unknown) {
+  const code = (e as { code?: unknown } | undefined)?.code;
+  const n = typeof code === 'string' ? ERROR_CODES.indexOf(code) : -1;
+  return n > 0 ? n : ERROR_UNAVAILABLE;
+}

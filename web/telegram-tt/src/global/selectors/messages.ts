@@ -622,10 +622,14 @@ export function selectAllowedMessageActionsSlow<T extends GlobalState>(
 
   const canEdit = !isLocal && !isAction && isMessageEditable && hasMessageEditRight;
 
-  // Parvane: избранные стикеры не реализованы, t.me-ссылок на сообщения нет —
-  // соответствующие пункты меню скрыты
-  const canFaveSticker = undefined;
-  const canUnfaveSticker = undefined;
+  // Parvane: избранные стикеры — объект FAVED_STICKER личного состояния (spec 035, FR-075; стикер своего набора
+  // с id в наборе), t.me-ссылок на сообщения нет — пункт скрыт
+  const favedSticker = content.sticker?.stickerSetInfo && 'id' in content.sticker.stickerSetInfo
+    ? content.sticker : undefined;
+  const isStickerFaved = Boolean(favedSticker
+    && global.stickers.favorite.stickers.some(({ id }) => id === favedSticker.id));
+  const canFaveSticker = !isAction && Boolean(favedSticker) && !isStickerFaved;
+  const canUnfaveSticker = !isAction && isStickerFaved;
   const canCopy = !isAction;
   const canCopyLink = undefined;
   const canSelect = !isLocal && !isAction;
