@@ -254,8 +254,15 @@ fn response_is_bound_to_request_nonce_and_stream_order() {
         let c = S2sStreamChunk { request_nonce: nonce.clone(), index: i, last: i == 1, data: vec![i as u8; 4], error: None };
         federation::sign_frame(&kb, B, A, NOW, federation::STREAM_CHUNK_TYPE, c.encode_to_vec()).unwrap().encode_to_vec()
     };
-    assert!(federation::verify_stream_chunk(&chunk(0), &b, A, NOW, &nonce, 0).is_ok());
-    assert_eq!(federation::verify_stream_chunk(&chunk(1), &b, A, NOW, &nonce, 0).unwrap_err(), ProtoError::ContextMismatch);
+    assert!(federation::verify_stream_chunk(&chunk(0), &b, A, NOW, &nonce, Some(0)).is_ok());
+    assert_eq!(federation::verify_stream_chunk(&chunk(1), &b, A, NOW, &nonce, Some(0)).unwrap_err(), ProtoError::ContextMismatch);
+    // PV-015: номер — номер куска блоба; окно с куска 16 начинается с 16, дальше — строго +1.
+    let first = federation::verify_stream_chunk(&chunk(16), &b, A, NOW, &nonce, None).unwrap();
+    assert_eq!(first.index, 16);
+    assert!(federation::verify_stream_chunk(&chunk(17), &b, A, NOW, &nonce, Some(17)).is_ok());
+    for bad in [16, 18, 0] {
+        assert_eq!(federation::verify_stream_chunk(&chunk(bad), &b, A, NOW, &nonce, Some(17)).unwrap_err(), ProtoError::ContextMismatch, "{bad}");
+    }
 }
 
 #[test]

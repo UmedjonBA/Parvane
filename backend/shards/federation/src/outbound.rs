@@ -17,7 +17,7 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tracing::{error, warn};
 
-use crate::peers::{err, now_ms, Fed, StreamItem};
+use crate::peers::{err, now_ms, Discover, Fed, StreamItem};
 use crate::store;
 
 /// Повтор доставки из очереди: до суток от постановки.
@@ -75,6 +75,8 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
     if let Some(code) = fed.refusal(&dest).await {
         return publish(fed, &reply, reply_err(err(code, 0))).await;
     }
+    // S7-15: первый контакт с незакреплённым сервером из анонимной сессии — из своего (меньшего) бюджета.
+    let mut class = Discover::Id;
     let req = match kind {
         federation_out::Kind::Forward(sr) => {
             // Только метод с `federated`; транзитной пересылки нет (запрос извне не уходит дальше).
@@ -85,6 +87,9 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
                 return publish(fed, &reply, reply_err(err(ErrorCode::Forbidden, 0))).await;
             }
             let id = m.channel == 2;
+            if !id {
+                class = Discover::Anon;
+            }
             let req = S2sRequest {
                 kind: Some(s2s_request::Kind::Forward(S2sForward {
                     method: sr.method.clone(),
@@ -96,7 +101,7 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
                 })),
             };
             if m.kind == 3 {
-                return forward_stream(fed, &reply, &dest, req, out.timeout_ms).await;
+                return forward_stream(fed, &reply, &dest, req, out.timeout_ms, class).await;
             }
             req
         }
@@ -116,7 +121,7 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
         federation_out::Kind::Ephemeral(e) => S2sRequest { kind: Some(s2s_request::Kind::Ephemeral(e)) },
     };
     let is_key_owner = matches!(req.kind, Some(s2s_request::Kind::KeyOwner(_)));
-    let res = fed.call(&dest, &req, out.timeout_ms, None).await;
+    let res = fed.call_as(&dest, &req, out.timeout_ms, None, class).await;
     if let Err(e) = &res {
         warn!("федерация: запрос на {} не выполнен (код {})", dest, e.code);
     }
@@ -147,10 +152,10 @@ pub(crate) fn scope_key_owner(bytes: &[u8], dest: &str) -> Vec<u8> {
 }
 
 /// Поток ответа (скачивание блоба): заголовок, затем чанки — в reply-inbox.
-async fn forward_stream(fed: &Arc<Fed>, reply: &str, dest: &str, req: S2sRequest, timeout_ms: u32) {
+async fn forward_stream(fed: &Arc<Fed>, reply: &str, dest: &str, req: S2sRequest, timeout_ms: u32, class: Discover) {
     let (tx, mut rx) = mpsc::channel::<StreamItem>(8);
     let (f2, dest2) = (fed.clone(), dest.to_string());
-    let call = tokio::spawn(async move { f2.call(&dest2, &req, timeout_ms, Some(tx)).await });
+    let call = tokio::spawn(async move { f2.call_as(&dest2, &req, timeout_ms, Some(tx), class).await });
     let mut headed = false;
     while let Some(item) = rx.recv().await {
         match item {
@@ -184,7 +189,7 @@ async fn outbox_loop(fed: Arc<Fed>) {
         t.tick().await;
         let now = now_ms();
         let _ = store::prune_nonces(&fed.pool, now).await;
-        let rows = match store::outbox_due(&fed.pool, now, OUTBOX_TICK_ROWS).await {
+        let rows = match store::outbox_due(&fed.pool, now, OUTBOX_TICK_ROWS, OUTBOX_PER_DEST_TICK as i64).await {
             Ok(r) => r,
             Err(e) => {
                 error!("федерация: очередь не прочитана: {}", e);
@@ -232,7 +237,8 @@ async fn deliver_batch(fed: &Fed, now: i64, rows: Vec<store::OutboxRow>) {
                 let backoff = (1000i64 << attempts.clamp(0, 12)).min(OUTBOX_MAX_BACKOFF_MS);
                 let next = now_ms() + backoff.max(i64::from(e.retry_after_ms));
                 let _ = store::outbox_retry(&fed.pool, id, attempts + 1, next).await;
-                // Сервер не отвечает — остальные письма ему подождут до следующей попытки.
+                // Сервер не отвечает — остальные письма ему подождут до следующей попытки (S7-14: весь домен).
+                let _ = store::outbox_defer_dest(&fed.pool, &dest, next).await;
                 break;
             }
         }

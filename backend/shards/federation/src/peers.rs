@@ -32,8 +32,17 @@ const DESCRIPTOR_MAX_BYTES: usize = 64 * 1024;
 /// Неудачное обнаружение домена не повторяется столько (поток кадров с произвольным origin_domain
 /// иначе превращал бы шард в усилитель исходящих HTTPS-запросов).
 const DISCOVERY_FAIL_TTL: Duration = Duration::from_secs(300);
-/// Новых обращений за описателем в минуту на весь шард.
+/// Новых обращений за описателем в минуту на весь шард — отдельно по источнику (S7-15): запросы вошедших
+/// пользователей, анонимные сессии и входящие кадры чужих серверов не выедают бюджет друг друга.
+/// Закреплённые домены бюджет не тратят.
 const DISCOVERY_PER_MINUTE: u32 = 60;
+const DISCOVERY_ANON_PER_MINUTE: u32 = 20;
+const DISCOVERY_INBOUND_PER_MINUTE: u32 = 30;
+/// Обнаружений незакреплённых доменов в минуту с одного IP входящих запросов (S7-15).
+const DISCOVERY_PER_IP_MINUTE: u32 = 6;
+/// Закреплённый домен перечитывает описатель не чаще раза в столько; между попытками и при отказе —
+/// работает по прежнему описателю и закреплённому ключу (S7-15).
+const PINNED_REFRESH_MIN: Duration = Duration::from_secs(60);
 /// Предел таблиц отрицательного кэша и проверенных соседей.
 const PEERS_MAX: usize = 5_000;
 /// Кэш соседа сбрасывается неверной подписью не чаще, чем раз в столько (ключ сменился — перечитаем).
@@ -64,6 +73,27 @@ pub struct Peer {
     fetched: Instant,
 }
 
+/// Кто вызвал обнаружение чужого сервера (S7-15): у каждого источника свой бюджет.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Discover {
+    /// Пользователь вошёл (ID-канал) или действие самого сервера.
+    Id,
+    /// Анонимная сессия gateway.
+    Anon,
+    /// Входящий кадр чужого сервера (до проверки подписи).
+    Inbound,
+}
+
+impl Discover {
+    fn budget(self) -> u32 {
+        match self {
+            Discover::Id => DISCOVERY_PER_MINUTE,
+            Discover::Anon => DISCOVERY_ANON_PER_MINUTE,
+            Discover::Inbound => DISCOVERY_INBOUND_PER_MINUTE,
+        }
+    }
+}
+
 /// Общее состояние шарда.
 pub struct Fed {
     pub cfg: Config,
@@ -73,7 +103,10 @@ pub struct Fed {
     buckets: std::sync::Mutex<HashMap<String, (f64, Instant)>>,
     /// Домены, обнаружение которых не удалось, и общий счётчик обращений за описателем.
     failed: std::sync::Mutex<HashMap<String, Instant>>,
-    discovery: std::sync::Mutex<(Instant, u32)>,
+    discovery: std::sync::Mutex<HashMap<Discover, (Instant, u32)>>,
+    /// Обнаружения по IP входящих запросов (окно минуты) и попытки обновить закреплённых.
+    discovery_ip: std::sync::Mutex<(Instant, HashMap<std::net::IpAddr, u32>)>,
+    refreshed: std::sync::Mutex<HashMap<String, Instant>>,
 }
 
 impl Fed {
@@ -85,7 +118,9 @@ impl Fed {
             peers: Mutex::new(HashMap::new()),
             buckets: std::sync::Mutex::new(HashMap::new()),
             failed: std::sync::Mutex::new(HashMap::new()),
-            discovery: std::sync::Mutex::new((Instant::now(), 0)),
+            discovery: std::sync::Mutex::new(HashMap::new()),
+            discovery_ip: std::sync::Mutex::new((Instant::now(), HashMap::new())),
+            refreshed: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -123,21 +158,45 @@ impl Fed {
     }
 
     /// Можно ли сейчас обратиться за описателем: не в отрицательном кэше и не сверх общего счётчика.
+    #[cfg(test)]
     pub(crate) fn discovery_allowed(&self, domain: &str) -> Result<(), PbError> {
+        self.discovery_allowed_as(domain, Discover::Id)
+    }
+
+    pub(crate) fn discovery_allowed_as(&self, domain: &str, class: Discover) -> Result<(), PbError> {
         if let Ok(f) = self.failed.lock() {
             if f.get(domain).is_some_and(|at| at.elapsed() < DISCOVERY_FAIL_TTL) {
                 return Err(err(ErrorCode::DomainUnreachable, 30_000));
             }
         }
-        let Ok(mut d) = self.discovery.lock() else { return Err(err(ErrorCode::Unavailable, 1000)) };
+        let Ok(mut all) = self.discovery.lock() else { return Err(err(ErrorCode::Unavailable, 1000)) };
+        let d = all.entry(class).or_insert((Instant::now(), 0));
         if d.0.elapsed() >= Duration::from_secs(60) {
             *d = (Instant::now(), 0);
         }
-        if d.1 >= DISCOVERY_PER_MINUTE {
+        if d.1 >= class.budget() {
             return Err(err(ErrorCode::RateLimited, 10_000));
         }
         d.1 += 1;
         Ok(())
+    }
+
+    /// Обнаружение незакреплённого домена по входящему кадру — не больше `DISCOVERY_PER_IP_MINUTE` в минуту
+    /// с одного IP (S7-15): поток кадров с новым `origin_domain` с одного адреса не выедает бюджет.
+    pub(crate) fn discovery_ip_allowed(&self, ip: std::net::IpAddr) -> bool {
+        let Ok(mut g) = self.discovery_ip.lock() else { return false };
+        if g.0.elapsed() >= Duration::from_secs(60) {
+            *g = (Instant::now(), HashMap::new());
+        }
+        if g.1.len() >= PEERS_MAX && !g.1.contains_key(&ip) {
+            return false;
+        }
+        let n = g.1.entry(ip).or_insert(0);
+        if *n >= DISCOVERY_PER_IP_MINUTE {
+            return false;
+        }
+        *n += 1;
+        true
     }
 
     pub(crate) fn discovery_failed(&self, domain: &str) {
@@ -154,23 +213,82 @@ impl Fed {
 
     /// Проверенный сервер домена: из кэша либо по описателю с закреплением ключа.
     pub async fn trust(&self, domain: &str) -> Result<Peer, PbError> {
-        self.trust_with(domain, true).await
+        self.trust_as(domain, true, Discover::Id, None).await
     }
 
     /// То же, но `persist = false` ключ не закрепляет: входящий кадр закрепляет сервер только после
     /// проверки подписи (`confirm_pin`), иначе любой домен с описателем попадал бы в `servers` и рассылки.
+    #[allow(dead_code)]
     pub async fn trust_with(&self, domain: &str, persist: bool) -> Result<Peer, PbError> {
+        self.trust_as(domain, persist, Discover::Id, None).await
+    }
+
+    /// `class` — чей бюджет обнаружения тратится, `ip` — адрес входящего запроса (лимит на IP до поиска).
+    pub async fn trust_as(&self, domain: &str, persist: bool, class: Discover, ip: Option<std::net::IpAddr>) -> Result<Peer, PbError> {
         if !parvane_protocol::address::is_valid_domain(domain) || self.cfg.is_own(domain) {
             return Err(err(ErrorCode::Invalid, 0));
         }
-        if let Some(p) = self.peers.lock().await.get(domain).filter(|p| p.fetched.elapsed() < DESCRIPTOR_TTL).cloned() {
-            return Ok(p);
+        let cached = self.peers.lock().await.get(domain).cloned();
+        if let Some(p) = cached.as_ref().filter(|p| p.fetched.elapsed() < DESCRIPTOR_TTL) {
+            return Ok(p.clone());
         }
         let pinned = store::pinned(&self.pool, domain).await.map_err(|_| err(ErrorCode::Unavailable, 1000))?;
         if pinned.as_ref().is_some_and(|p| p.state == "key_changed") {
             return Err(err(ErrorCode::ServerKeyChanged, 0));
         }
-        self.discovery_allowed(domain)?;
+        // S7-15: закреплённый домен бюджет не тратит; обновление — не чаще раза в минуту, а при отказе —
+        // прежний описатель (или закреплённый ключ и база обнаружения).
+        let pinned_key = pinned.as_ref().filter(|p| p.state == "active").map(|p| p.key);
+        let stale = |cached: Option<Peer>| -> Option<Peer> {
+            let key = pinned_key?;
+            match cached {
+                Some(p) if p.trusted.server_key == key => Some(p),
+                _ => Some(Peer {
+                    trusted: TrustedServer {
+                        domain: domain.to_string(),
+                        server_key: key,
+                        descriptor: parvane_protocol::pb::parvane::core::v2::ServerDescriptor { domain: domain.to_string(), ..Default::default() },
+                    },
+                    endpoint: self.base_of(domain),
+                    fetched: Instant::now().checked_sub(DESCRIPTOR_TTL).unwrap_or_else(Instant::now),
+                }),
+            }
+        };
+        if pinned_key.is_some() {
+            let recent = self.refreshed.lock().map(|r| r.get(domain).is_some_and(|at| at.elapsed() < PINNED_REFRESH_MIN)).unwrap_or(false);
+            if recent {
+                if let Some(p) = stale(cached.clone()) {
+                    return Ok(p);
+                }
+            }
+            if let Ok(mut r) = self.refreshed.lock() {
+                if r.len() >= PEERS_MAX {
+                    r.retain(|_, at| at.elapsed() < PINNED_REFRESH_MIN);
+                }
+                r.insert(domain.to_string(), Instant::now());
+            }
+        } else {
+            if let Some(ip) = ip {
+                if !self.discovery_ip_allowed(ip) {
+                    return Err(err(ErrorCode::RateLimited, 10_000));
+                }
+            }
+            self.discovery_allowed_as(domain, class)?;
+        }
+        match self.discover(domain, pinned.as_ref().map(|p| p.key), persist).await {
+            Ok(p) => Ok(p),
+            Err(e) if e.code != ErrorCode::ServerKeyChanged as i32 => match stale(cached) {
+                Some(p) => {
+                    warn!("федерация: описатель {} не обновлён — работаем по закреплённому ключу", domain);
+                    Ok(p)
+                }
+                None => Err(e),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn discover(&self, domain: &str, pin: Option<[u8; 32]>, persist: bool) -> Result<Peer, PbError> {
         let base = self.base_of(domain);
         let body = match self.http_get(&format!("{base}/.well-known/parvane")).await {
             Ok(b) => b,
@@ -183,7 +301,6 @@ impl Fed {
             self.discovery_failed(domain);
             return Err(err(ErrorCode::DomainUnreachable, 30_000));
         };
-        let pin = pinned.as_ref().map(|p| p.key);
         let trusted = match federation::verify_descriptor(&signed, domain, pin.as_ref()) {
             Ok(t) => t,
             Err(ProtoError::RootMismatch) => {
@@ -206,10 +323,24 @@ impl Fed {
         if peers.len() >= PEERS_MAX {
             peers.retain(|_, p| p.fetched.elapsed() < DESCRIPTOR_TTL);
         }
-        if peers.len() < PEERS_MAX {
+        if peers.len() < PEERS_MAX || peers.contains_key(domain) {
             peers.insert(domain.to_string(), peer.clone());
         }
         Ok(peer)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn insert_stale_peer(&self, domain: &str, key: [u8; 32]) {
+        let peer = Peer {
+            trusted: TrustedServer {
+                domain: domain.into(),
+                server_key: key,
+                descriptor: parvane_protocol::pb::parvane::core::v2::ServerDescriptor { domain: domain.into(), ..Default::default() },
+            },
+            endpoint: format!("https://{domain}"),
+            fetched: Instant::now().checked_sub(DESCRIPTOR_TTL * 2).unwrap_or_else(Instant::now),
+        };
+        self.peers.lock().await.insert(domain.into(), peer);
     }
 
     /// Закрепить ключ сервера, чей кадр прошёл проверку подписи (первый контакт по входящему).
@@ -308,11 +439,23 @@ impl Fed {
         timeout_ms: u32,
         chunks: Option<mpsc::Sender<StreamItem>>,
     ) -> Result<Vec<u8>, PbError> {
+        self.call_as(dest, req, timeout_ms, chunks, Discover::Id).await
+    }
+
+    /// `class` — чей бюджет обнаружения тратит первый контакт с незакреплённым сервером (S7-15).
+    pub async fn call_as(
+        &self,
+        dest: &str,
+        req: &S2sRequest,
+        timeout_ms: u32,
+        chunks: Option<mpsc::Sender<StreamItem>>,
+        class: Discover,
+    ) -> Result<Vec<u8>, PbError> {
         let dest = dest.to_ascii_lowercase();
         if let Some(code) = self.refusal(&dest).await {
             return Err(err(code, 0));
         }
-        let peer = self.trust(&dest).await?;
+        let peer = self.trust_as(&dest, true, class, None).await?;
         let nonce = federation::new_nonce();
         let frame = self.sign(&dest, nonce.clone(), federation::REQUEST_TYPE, req.encode_to_vec()).await.inspect_err(|_| {
             warn!("федерация: identity не подписал кадр для {}", dest);
@@ -348,7 +491,8 @@ impl Fed {
         let mut reader = FrameReader::default();
         let mut stream = resp.bytes_stream();
         let mut first: Option<Vec<u8>> = None;
-        let mut index = 0u32;
+        // Номер следующего куска: первый кадр потока задаёт базу (окно может начинаться не с 0, PV-015).
+        let mut next_index: Option<u32> = None;
         loop {
             // Целые кадры из уже пришедшего.
             loop {
@@ -377,9 +521,9 @@ impl Fed {
                     continue;
                 }
                 let Some(tx) = chunks.as_ref() else { break };
-                let c = federation::verify_stream_chunk(&bytes, &peer.trusted, &self.cfg.domain, now, &nonce, index)
+                let c = federation::verify_stream_chunk(&bytes, &peer.trusted, &self.cfg.domain, now, &nonce, next_index)
                     .map_err(|_| err(ErrorCode::DomainUnreachable, 10_000))?;
-                index += 1;
+                next_index = Some(c.index.checked_add(1).ok_or_else(|| err(ErrorCode::DomainUnreachable, 10_000))?);
                 let last = c.last || c.error.is_some();
                 let _ = tx.send(StreamItem::Chunk(ShardStreamChunk { index: c.index, last: c.last, data: c.data, error: c.error })).await;
                 if last {
@@ -391,7 +535,7 @@ impl Fed {
                 Some(Err(_)) | None => {
                     // Поток оборвался до последнего кадра.
                     if let (Some(tx), Some(_)) = (chunks.as_ref(), first.as_ref()) {
-                        let chunk = ShardStreamChunk { index, last: true, data: vec![], error: Some(err(ErrorCode::DomainUnreachable, 10_000)) };
+                        let chunk = ShardStreamChunk { index: next_index.unwrap_or(0), last: true, data: vec![], error: Some(err(ErrorCode::DomainUnreachable, 10_000)) };
                         let _ = tx.send(StreamItem::Chunk(chunk)).await;
                     }
                     return match first {

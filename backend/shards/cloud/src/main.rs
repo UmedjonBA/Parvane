@@ -188,16 +188,49 @@ pub(crate) fn max_owner_files() -> i64 {
 }
 
 /// Занятое владельцем в bucket'е: готовые файлы и незавершённые загрузки.
+/// Наименьшая стоимость одного куска в квоте (строка SQLite, индекс, страница) — S7-24.
+pub(crate) const CHUNK_CHARGE_MIN: i64 = 4096;
+
+/// Стоимость загрузки (файла) в квоте: байты, но не меньше `CHUNK_CHARGE_MIN` на кусок (как в `charged_bytes`).
+pub(crate) fn charged(bytes: i64, chunks: i64) -> i64 {
+    bytes.max(chunks.saturating_mul(chunk_charge_min()))
+}
+
+/// `CHUNK_CHARGE_MIN`; прежние тесты квот в байтах (квота 10 байт) идут с 1, новый — с настоящим значением.
+pub(crate) fn chunk_charge_min() -> i64 {
+    #[cfg(test)]
+    return tests::CHARGE_MIN_OVERRIDE.with(|c| c.get()).unwrap_or(1);
+    #[cfg(not(test))]
+    CHUNK_CHARGE_MIN
+}
+
 pub(crate) async fn used_bytes<'e, E>(ex: E, owner: &str, bucket: i64) -> sqlx::Result<i64>
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
+    usage_sum(ex, owner, bucket, 0).await
+}
+
+/// Занятое в счёт квоты (S7-24): каждый кусок стоит не меньше `CHUNK_CHARGE_MIN` — иначе куски по 1 байту занимали
+/// в SQLite в 50–60 раз больше учтённого. Пользователю (`cloud.blob.usage`) показываются байты (`used_bytes`).
+pub(crate) async fn charged_bytes<'e, E>(ex: E, owner: &str, bucket: i64) -> sqlx::Result<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    usage_sum(ex, owner, bucket, chunk_charge_min()).await
+}
+
+async fn usage_sum<'e, E>(ex: E, owner: &str, bucket: i64, per_chunk: i64) -> sqlx::Result<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let (used,): (i64,) = sqlx::query_as(
-        "SELECT (SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE owner = ?1 AND bucket = ?2)
-              + (SELECT COALESCE(SUM(bytes), 0) FROM uploads WHERE owner = ?1 AND bucket = ?2)",
+        "SELECT (SELECT COALESCE(SUM(MAX(size_bytes, total_chunks * ?3)), 0) FROM files WHERE owner = ?1 AND bucket = ?2)
+              + (SELECT COALESCE(SUM(MAX(bytes, chunks * ?3)), 0) FROM uploads WHERE owner = ?1 AND bucket = ?2)",
     )
     .bind(owner)
     .bind(bucket)
+    .bind(per_chunk)
     .fetch_one(ex)
     .await?;
     Ok(used)
@@ -301,8 +334,8 @@ pub(crate) async fn store_chunk_raw(
     .bind(now_unix())
     .execute(&mut *tx)
     .await?;
-    let claim: (String, i64, i64, i64) =
-        sqlx::query_as("SELECT owner, total_chunks, bucket, bytes FROM uploads WHERE file_id = ?")
+    let claim: (String, i64, i64, i64, i64) =
+        sqlx::query_as("SELECT owner, total_chunks, bucket, bytes, chunks FROM uploads WHERE file_id = ?")
             .bind(file_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -326,7 +359,8 @@ pub(crate) async fn store_chunk_raw(
     // P-08: незавершённые чанки тоже считаем в квоту владельца — иначе диск
     // забивался начатыми и не завершёнными загрузками в обход квоты файлов.
     let quota = owner_quota_bytes(bucket);
-    if quota > 0 && used_bytes(&mut *tx, owner, bucket).await? + delta > quota {
+    let charge = charged(claim.3 + delta, claim.4 + i64::from(previous.is_none())) - charged(claim.3, claim.4);
+    if quota > 0 && charged_bytes(&mut *tx, owner, bucket).await? + charge > quota {
         return Err(reject(
             RejectKind::Limit,
             format!("превышена квота хранилища владельца ({} байт)", quota),
@@ -446,7 +480,7 @@ pub(crate) async fn finalize_upload(pool: &SqlitePool, owner: &str, p: &Finalize
     // Квота владельца в bucket'е: готовые файлы и незавершённые загрузки
     // (эта уже учтена своими чанками). 0 = без лимита.
     let quota = owner_quota_bytes(bucket);
-    if quota > 0 && used_bytes(&mut *tx, owner, bucket).await? > quota {
+    if quota > 0 && charged_bytes(&mut *tx, owner, bucket).await? > quota {
         return Err(reject(
             RejectKind::Limit,
             format!("превышена квота хранилища владельца ({} байт)", quota),
@@ -763,6 +797,7 @@ mod tests {
         pub(crate) static QUOTA_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
         pub(crate) static FILE_MAX_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
         pub(crate) static FILE_COUNT_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+        pub(crate) static CHARGE_MIN_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
     }
 
     async fn test_pool() -> SqlitePool {
@@ -1116,6 +1151,34 @@ mod tests {
         }
         FILE_COUNT_OVERRIDE.with(|c| c.set(None));
         assert_eq!(results, [true, true, false, true]);
+    }
+
+    /// S7-24: куски по 1 байту стоят в квоте не меньше CHUNK_CHARGE_MIN — 1 МиБ квоты не пускает 1000 таких кусков.
+    #[tokio::test]
+    async fn tiny_chunks_are_charged_minimum() {
+        CHARGE_MIN_OVERRIDE.with(|c| c.set(Some(CHUNK_CHARGE_MIN)));
+        QUOTA_OVERRIDE.with(|c| c.set(Some(1 << 20)));
+        let pool = test_pool().await;
+        let id = Uuid::now_v7();
+        let mut stored = 0u32;
+        for i in 0..1000u32 {
+            if store_chunk(&pool, "tiny@local", &chunk(id, i, 1000, b"x")).await.is_err() {
+                break;
+            }
+            stored += 1;
+        }
+        let used = charged_bytes(&pool, "tiny@local", BUCKET_MEDIA).await.unwrap();
+        let shown = used_bytes(&pool, "tiny@local", BUCKET_MEDIA).await.unwrap();
+        // Обычный файл крупными кусками считается по байтам
+        let big = Uuid::now_v7();
+        store_chunk(&pool, "big@local", &chunk(big, 0, 1, &[7u8; 10_000])).await.unwrap();
+        let big_used = charged_bytes(&pool, "big@local", BUCKET_MEDIA).await.unwrap();
+        CHARGE_MIN_OVERRIDE.with(|c| c.set(None));
+        QUOTA_OVERRIDE.with(|c| c.set(None));
+        assert_eq!(stored, 256, "1 МиБ / 4 КиБ");
+        assert_eq!(used, 256 * CHUNK_CHARGE_MIN);
+        assert_eq!(shown, 256, "пользователю — настоящие байты");
+        assert_eq!(big_used, 10_000);
     }
 
     #[tokio::test]

@@ -80,20 +80,22 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
     // Логин: пользователь ОБЯЗАН существовать. Создание аккаунтов — только через
     // identity.user.register (раньше issue молча создавал юзера с любым паролем —
     // это позволяло занять любой адрес первым запросом).
-    let row: Option<(String, i64)> =
-        sqlx::query_as("SELECT password_hash, email_verified FROM users WHERE username = ?")
+    // PV-018: поколение учётных данных читается ТЕМ ЖЕ запросом, что и хэш пароля: если пароль сменят между
+    // проверкой и выдачей токена, токен получит прежнее поколение и сразу будет недействителен
+    let row: Option<(String, i64, i64)> =
+        sqlx::query_as("SELECT password_hash, email_verified, cred_gen FROM users WHERE username = ?")
             .bind(&req.user)
             .fetch_optional(pool)
             .await?;
     // Анти-энумерация + анти-timing: несуществующий юзер и неверный пароль дают
     // ОДНУ ошибку, а argon2-verify выполняется всегда (по dummy-хэшу постоянного
     // времени, когда юзера нет), чтобы по задержке нельзя было отличить случаи.
-    let Some((hash, email_verified)) = row else {
-        let _ = verify_password(&req.password, dummy_password_hash());
+    let Some((hash, email_verified, cred_gen)) = row else {
+        let _ = verify_password_async(&req.password, dummy_password_hash()).await?;
         login_record_failure(&req.user);
         anyhow::bail!("неверный логин или пароль");
     };
-    if !verify_password(&req.password, &hash) {
+    if !verify_password_async(&req.password, &hash).await? {
         login_record_failure(&req.user);
         anyhow::bail!("неверный логин или пароль");
     }
@@ -119,52 +121,53 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
     // прекеев отдаёт его любому), и раньше второй фактор обходился при
     // известном пароле. Строки без хэша (до миграции 0014) не доверяем.
     let presented_secret = req.trust_secret.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let trusted = if tg_2fa != 0 && telegram_id.is_some() && !device_id.is_empty() {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT secret_hash FROM trusted_devices WHERE username = ? AND device_id = ?")
-                .bind(&req.user)
-                .bind(device_id)
-                .fetch_optional(pool)
-                .await?;
-        match (row, presented_secret) {
-            (Some((hash,)), Some(secret)) if !hash.is_empty() => trust_secret_hash(secret) == hash,
-            _ => false,
-        }
-    } else {
-        false
-    };
     let mut issued_trust_secret: Option<String> = None;
     // P-14: секрет доверия одноразовый — при каждом доверенном входе выдаём
     // новый (украденный из хранилища секрет протухает после первого же входа
     // владельца, а повторное использование старого — сигнал компрометации).
-    if trusted {
-        let (secret, hash) = new_trust_secret();
-        sqlx::query("UPDATE trusted_devices SET secret_hash = ?, confirmed_at = ? WHERE username = ? AND device_id = ?")
-            .bind(&hash)
+    // PV-017: расход атомарный — UPDATE только при прежнем хэше (CAS): два входа с одним секретом дают одну
+    // сессию, второй уходит на подтверждение в Telegram.
+    let trusted = match presented_secret {
+        Some(secret) if tg_2fa != 0 && telegram_id.is_some() && !device_id.is_empty() => {
+            let (fresh, fresh_hash) = new_trust_secret();
+            let spent: Option<(i64,)> = sqlx::query_as(
+                "UPDATE trusted_devices SET secret_hash = ?, confirmed_at = ? \
+                 WHERE username = ? AND device_id = ? AND secret_hash = ? AND secret_hash != '' RETURNING 1",
+            )
+            .bind(&fresh_hash)
             .bind(now_unix())
             .bind(&req.user)
             .bind(device_id)
-            .execute(pool)
+            .bind(trust_secret_hash(secret))
+            .fetch_optional(pool)
             .await?;
-        issued_trust_secret = Some(secret);
-    }
+            if spent.is_some() {
+                issued_trust_secret = Some(fresh);
+            }
+            spent.is_some()
+        }
+        _ => false,
+    };
     if tg_2fa != 0 && telegram_id.is_some() && !trusted {
         let now = now_unix();
         let _ = sqlx::query("DELETE FROM login_links WHERE expires_at < ?").bind(now).execute(pool).await;
         let presented = req.login_token.as_deref().map(str::trim).filter(|t| !t.is_empty());
         let confirmed = match presented {
             Some(token) => {
-                let row: Option<(i64,)> = sqlx::query_as(
-                    "SELECT confirmed FROM login_links WHERE token = ? AND username = ? AND expires_at >= ?",
+                // PV-017: подтверждённый токен входа расходуется атомарно (одна сессия на одно подтверждение) и
+                // только тем устройством, для которого его выдали (подтверждение в Telegram для X не годится Y)
+                let spent: Option<(i64,)> = sqlx::query_as(
+                    "DELETE FROM login_links WHERE token = ? AND username = ? AND device_id = ? AND confirmed = 1 \
+                     AND expires_at >= ? RETURNING 1",
                 )
                 .bind(token)
                 .bind(&req.user)
+                .bind(device_id)
                 .bind(now)
                 .fetch_optional(pool)
                 .await?;
-                match row {
-                    Some((1,)) => {
-                        sqlx::query("DELETE FROM login_links WHERE token = ?").bind(token).execute(pool).await?;
+                match spent {
+                    Some(_) => {
                         if !device_id.is_empty() {
                             let (secret, hash) = new_trust_secret();
                             sqlx::query(
@@ -198,6 +201,8 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
         iat: now,
         exp: now + 86400,
         dev: req.device_id.clone().filter(|d| !d.is_empty()),
+        jti: crate::auth::fresh_jti(),
+        cg: Some(cred_gen),
     };
     let token = jwt_encode(encoding, &claims)?;
     if let (Some(device_id), Some(label)) = (claims.dev.as_deref(), req.client.as_deref()) {
@@ -253,11 +258,12 @@ pub(crate) async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey
     if req.new_password == req.old_password {
         anyhow::bail!("новый пароль совпадает со старым");
     }
-    let hash = hash_password(&req.new_password)?;
+    let hash = hash_password_async(&req.new_password).await?;
     let mut tx = parvane_db::begin_write(pool).await?;
     // ID-06: прежние JWT (iat < now) гаснут, кроме токенов этого устройства —
     // владелец, сменивший пароль после компрометации, выкидывает чужие сессии.
-    sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_changed_dev = ? WHERE username = ?")
+    // PV-018: поколение растёт — гаснут и токены, выданные в ту же секунду или по уже проверенному прежнему паролю.
+    sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_changed_dev = ?, cred_gen = cred_gen + 1 WHERE username = ?")
         .bind(&hash)
         .bind(now_unix())
         .bind(claims.dev.as_deref().unwrap_or(""))
@@ -267,6 +273,8 @@ pub(crate) async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey
     sqlx::query("DELETE FROM trusted_devices WHERE username = ?").bind(&username).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM login_links WHERE username = ?").bind(&username).execute(&mut *tx).await?;
     tx.commit().await?;
+    // S7-10: запросы ключа через Telegram, заведённые знавшим прежний пароль, снимаются вместе с его сессиями
+    crate::recovery_tg::drop_requests(&username);
     Ok(username)
 }
 

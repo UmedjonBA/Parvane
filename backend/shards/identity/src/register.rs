@@ -76,7 +76,7 @@ pub(crate) async fn do_register(
     }
     validate_new_user(&user, &domain)?;
     // Общее пространство имён с публичными группами (spec 023)
-    if crate::v2::public_name_taken(user.split('@').next().unwrap_or_default()).await || crate::v2::alias_held(&user).await {
+    if crate::v2::public_name_taken(user.split('@').next().unwrap_or_default()).await || crate::v2::alias_held(&user).await.unwrap_or(true) {
         anyhow::bail!("логин занят");
     }
     // По источнику (IP от gateway): пер-логин лимит не мешает спаму разными
@@ -110,7 +110,7 @@ pub(crate) async fn do_register(
         if verified != 0 {
             anyhow::bail!("логин занят");
         }
-        if verify_password(&req.password, &hash) {
+        if verify_password_async(&req.password, &hash).await? {
             if mode == ConfirmMode::Telegram {
                 let token = issue_telegram_token(pool, &user).await?;
                 info!("Новый Telegram-токен для pending-аккаунта: {}", user);
@@ -165,7 +165,7 @@ pub(crate) async fn do_register(
         anyhow::bail!("нужен валидный инвайт-код");
     }
 
-    let hash = hash_password(&req.password)?;
+    let hash = hash_password_async(&req.password).await?;
     let id = Uuid::now_v7().to_string();
     let now = now_unix();
     // Отображаемое имя по умолчанию — локальная часть адреса (до '@').
@@ -404,7 +404,7 @@ pub(crate) fn valid_email(email: &str) -> bool {
 pub(crate) async fn issue_email_code(pool: &SqlitePool, user: &str) -> Result<String> {
     use rand::Rng;
     let code = format!("{:06}", rand::thread_rng().gen_range(0..1_000_000u32));
-    let hash = hash_password(&code)?;
+    let hash = hash_password_async(&code).await?;
     let now = now_unix();
     sqlx::query(
         "INSERT INTO email_codes (username, code_hash, expires_at, attempts, sent_at)
@@ -533,7 +533,7 @@ pub(crate) async fn do_email_confirm(pool: &SqlitePool, payload: &[u8]) -> Resul
     if attempts > CODE_MAX_ATTEMPTS {
         anyhow::bail!("слишком много попыток, запросите новый код");
     }
-    if !verify_password(&code, &hash) {
+    if !verify_password_async(&code, &hash).await? {
         anyhow::bail!("неверный код");
     }
 

@@ -33,7 +33,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
     peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
-    CloudContainer, CloudContainerRole, PlannerContainer, QuickReaction, StickerPack, StickerPackKey,
+    CloudContainer, CloudContainerRole, Contact, PlannerContainer, QuickReaction, StickerPack, StickerPackKey,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -305,6 +305,8 @@ pub struct PersonalState {
     quick_reaction: Option<Lww<QuickReaction>>,
     // Свои наборы стикеров и эмодзи (PACK-3) по set_id: запись целиком по метке.
     sticker_packs: BTreeMap<String, Lww<StickerPack>>,
+    // Контакты (CONTACT-1) по собеседнику-пользователю: запись целиком по метке.
+    contacts: BTreeMap<String, Lww<Contact>>,
     max_lamport: u64,
 }
 
@@ -381,6 +383,19 @@ fn check_sticker_pack(p: &StickerPack) -> Result<String> {
     match p.r#ref.as_ref() {
         Some(r) if !r.file_id.is_empty() => Ok(key),
         _ => Err(ProtoError::InvalidField("sticker_pack")),
+    }
+}
+
+// Контакт — только пользователь (группа контактом не бывает)
+fn contact_key(user: &Option<UserRef>) -> Result<String> {
+    let user = user.as_ref().ok_or(ProtoError::InvalidField("contact"))?;
+    peer_key(&Peer { kind: Some(peer::Kind::User(user.clone())) })
+}
+
+fn contact_peer_key(p: &PeerKey) -> Result<String> {
+    match p.peer.as_ref().and_then(|p| p.kind.as_ref()) {
+        Some(peer::Kind::User(u)) => contact_key(&Some(u.clone())),
+        _ => Err(ProtoError::InvalidField("contact")),
     }
 }
 
@@ -550,6 +565,14 @@ impl PersonalState {
                 let k = pack_key(&p.set_id)?;
                 put(&mut self.sticker_packs, k, &stamp, None);
             }
+            Some(Op::ContactSet(c)) => {
+                let k = contact_key(&c.user)?;
+                put(&mut self.contacts, k, &stamp, Some(c.clone()));
+            }
+            Some(Op::ContactRemove(p)) => {
+                let k = contact_peer_key(p)?;
+                put(&mut self.contacts, k, &stamp, None);
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -593,6 +616,7 @@ impl PersonalState {
             unread_marks: live(&self.unread_marks),
             quick_reaction: self.quick_reaction.as_ref().and_then(|e| e.value.clone()),
             sticker_packs: live(&self.sticker_packs),
+            contacts: live(&self.contacts),
         }
     }
 
@@ -719,6 +743,7 @@ pub fn migrate_snapshot_with(
     );
     kinds.extend(snapshot.quick_reaction.clone().map(Op::QuickReaction));
     kinds.extend(snapshot.sticker_packs.iter().cloned().map(Op::StickerPackSet));
+    kinds.extend(snapshot.contacts.iter().cloned().map(Op::ContactSet));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());
@@ -787,6 +812,8 @@ pub fn without_present(local: &StateSnapshot, current: &StateSnapshot) -> StateS
     }
     let packs: HashSet<&str> = current.sticker_packs.iter().map(|p| p.set_id.as_str()).collect();
     out.sticker_packs.retain(|p| !packs.contains(p.set_id.as_str()));
+    let contacts: HashSet<String> = current.contacts.iter().filter_map(|c| contact_key(&c.user).ok()).collect();
+    out.contacts.retain(|c| contact_key(&c.user).map_or(true, |k| !contacts.contains(&k)));
     out
 }
 
@@ -811,11 +838,12 @@ pub struct Managed {
     pub unread: bool,
     pub reaction: bool,
     pub packs: bool,
+    pub contacts: bool,
 }
 
 impl Managed {
     /// Из списка имён (`folders`, `blocked`, `notify`, `drafts`, `scheduled`,
-    /// `archived`, `pinned`, `unread`, `reaction`, `packs`); незнакомые имена пропускаются.
+    /// `archived`, `pinned`, `unread`, `reaction`, `packs`, `contacts`); незнакомые имена пропускаются.
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
         let mut m = Managed::default();
         for n in names {
@@ -830,6 +858,7 @@ impl Managed {
                 "unread" => m.unread = true,
                 "reaction" => m.reaction = true,
                 "packs" => m.packs = true,
+                "contacts" => m.contacts = true,
                 _ => {}
             }
         }
@@ -963,6 +992,21 @@ pub fn diff_ops(current: &StateSnapshot, desired: &StateSnapshot, m: Managed) ->
         for k in cur.keys() {
             if !want.contains_key(k) {
                 out.push(Op::StickerPackRemove(StickerPackKey { set_id: k.clone() }));
+            }
+        }
+    }
+    if m.contacts {
+        let cur = keyed(&current.contacts, |c| contact_key(&c.user).ok());
+        let want = keyed(&desired.contacts, |c| contact_key(&c.user).ok());
+        for (k, c) in &want {
+            if cur.get(k) != Some(c) {
+                out.push(Op::ContactSet(c.clone()));
+            }
+        }
+        for (k, c) in &cur {
+            if !want.contains_key(k) {
+                let user = c.user.clone().map(peer::Kind::User);
+                out.push(Op::ContactRemove(PeerKey { peer: Some(Peer { kind: user }) }));
             }
         }
     }
@@ -1192,6 +1236,53 @@ mod tests {
         assert!(s.apply(&make_op(&mut c, "d1", 0, Op::StickerPackSet(no_ref)).unwrap()).is_err());
         let empty = StickerPackKey { set_id: String::new() };
         assert!(s.apply(&make_op(&mut c, "d1", 0, Op::StickerPackRemove(empty)).unwrap()).is_err());
+    }
+
+    #[test]
+    fn contacts_diff_merge_and_migrate() {
+        let contact = |a: &str, first: &str, note: &str| Contact {
+            user: Some(UserRef { address: a.into() }),
+            first_name: first.into(),
+            last_name: String::new(),
+            note: note.into(),
+        };
+        let mut s = PersonalState::new();
+        let mut c = LamportClock::default();
+        let m = Managed::from_names(["contacts"]);
+        let mut desired = s.snapshot();
+        desired.contacts = vec![contact("bob@x", "Боб", ""), contact("eve@x", "", "соседка")];
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert_eq!(s.snapshot().contacts, desired.contacts);
+        assert!(diff_ops(&s.snapshot(), &desired, m).is_empty());
+        // Новое имя — запись заменяется; убранный из контактов — надгробие
+        desired.contacts = vec![contact("bob@x", "Роберт", "с работы")];
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert_eq!(s.snapshot().contacts, desired.contacts);
+        // Другое устройство: свои контакты переносятся только недостающими — имя из журнала не перебивается
+        let mut local = PersonalState::new().snapshot();
+        local.contacts = vec![contact("bob@x", "Бобби", ""), contact("ann@x", "Аня", "")];
+        let missing = without_present(&local, &s.snapshot());
+        assert_eq!(missing.contacts, vec![contact("ann@x", "Аня", "")]);
+        let mut clock = LamportClock::new(s.max_lamport());
+        for op in migrate_snapshot(&missing, "d2", &mut clock, 0).unwrap() {
+            s.apply(&op).unwrap();
+        }
+        let names: Vec<_> = s.snapshot().contacts.iter().map(|c| c.first_name.clone()).collect();
+        assert_eq!(names, vec!["Аня", "Роберт"]);
+        // Неуправляемый вид разница не трогает; контакт без пользователя и группа — отказ
+        assert!(diff_ops(&s.snapshot(), &PersonalState::new().snapshot(), Managed::from_names(["packs"])).is_empty());
+        let no_user = Contact { user: None, ..contact("x@x", "", "") };
+        assert!(s.apply(&make_op(&mut c, "d1", 0, Op::ContactSet(no_user)).unwrap()).is_err());
+        let group = PeerKey {
+            peer: Some(Peer {
+                kind: Some(peer::Kind::Group(crate::pb::parvane::core::v2::Ref { domain: "x".into(), id: vec![1; 16] })),
+            }),
+        };
+        assert!(s.apply(&make_op(&mut c, "d1", 0, Op::ContactRemove(group)).unwrap()).is_err());
     }
 
     #[test]

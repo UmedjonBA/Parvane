@@ -69,9 +69,15 @@ pub(crate) async fn former_addresses(pool: &SqlitePool, address: &str) -> Vec<St
 }
 
 /// Ник занят переадресацией (прежний ник чужого аккаунта) — регистрация и смена ника его не получают.
-pub(crate) async fn alias_held(address: &str) -> bool {
-    let Some(pool) = V2_POOL.get() else { return false };
-    alias_target(pool, address).await.is_some()
+/// PV-009: ошибка БД — `Err` (проверка токена отказывает, регистрация считает ник занятым).
+pub(crate) async fn alias_held(address: &str) -> Result<bool, sqlx::Error> {
+    let Some(pool) = V2_POOL.get() else { return Ok(false) };
+    let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM account_aliases WHERE old_address = ? AND until_ms > ?")
+        .bind(address)
+        .bind(now_ms())
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
 }
 
 pub(crate) async fn account_rename(ctx: &V2Ctx, req: &ShardRequest, r: pb::AccountRenameRequest) -> Reply {
@@ -133,26 +139,33 @@ pub(crate) async fn account_rename(ctx: &V2Ctx, req: &ShardRequest, r: pb::Accou
     // v1: ник аккаунта и строки по нику. Отзыв токенов прежнего адреса — отметкой смены «пароля»: токены нового
     // адреса выпускаются заново, у устройства, сменившего ник, — сразу
     let now = now_unix();
-    let v1: Result<(), sqlx::Error> = async {
+    let v1: Result<i64, sqlx::Error> = async {
         let mut tx = ctx.pool.begin().await?;
-        sqlx::query("UPDATE users SET username = ?, password_changed_at = ?, password_changed_dev = ? WHERE username = ?")
-            .bind(&new)
-            .bind(now)
-            .bind(&req.device_id)
-            .bind(&old)
-            .execute(&mut *tx)
-            .await?;
+        // PV-018: поколение растёт вместе с отметкой смены — токен нового адреса получает новое поколение
+        let (gen,): (i64,) = sqlx::query_as(
+            "UPDATE users SET username = ?, password_changed_at = ?, password_changed_dev = ?, cred_gen = cred_gen + 1 WHERE username = ? RETURNING cred_gen",
+        )
+        .bind(&new)
+        .bind(now)
+        .bind(&req.device_id)
+        .bind(&old)
+        .fetch_one(&mut *tx)
+        .await?;
         for t in V1_TABLES {
             sqlx::query(&format!("UPDATE OR IGNORE {t} SET username = ? WHERE username = ?")).bind(&new).bind(&old).execute(&mut *tx).await?;
         }
-        tx.commit().await
+        tx.commit().await?;
+        Ok(gen)
     }
     .await;
-    if let Err(e) = v1 {
-        // Гонка за ник (UNIQUE) либо сбой БД — ничего не изменено
-        warn!("identity: смена ника {} → {}: {}", old, new, e);
-        return Err(ErrorCode::Duplicate);
-    }
+    let gen = match v1 {
+        Ok(g) => g,
+        Err(e) => {
+            // Гонка за ник (UNIQUE) либо сбой БД — ничего не изменено
+            warn!("identity: смена ника {} → {}: {}", old, new, e);
+            return Err(ErrorCode::Duplicate);
+        }
+    };
     if let Err(e) = rename_v2(ctx, &old, &new, &rename, &r.new_log, &old_log, &new_log, &r.root_backup, &old_devices).await {
         error!("identity: смена ника {} → {} (v2): {:?} — возврат прежнего ника", old, new, e);
         let back: Result<(), sqlx::Error> = async {
@@ -170,7 +183,7 @@ pub(crate) async fn account_rename(ctx: &V2Ctx, req: &ShardRequest, r: pb::Accou
         return Err(e);
     }
 
-    let claims = Claims { sub: new.clone(), iat: now as usize, exp: now as usize + 86400, dev: Some(req.device_id.clone()) };
+    let claims = Claims { sub: new.clone(), iat: now as usize, exp: now as usize + 86400, dev: Some(req.device_id.clone()), jti: crate::auth::fresh_jti(), cg: Some(gen) };
     let token = jwt_encode(&ctx.encoding, &claims).map_err(db_err)?;
     info!("identity: ник сменён ({} устройств)", old_devices.len());
     // Шарды переносят строки до ответа: клиент нового адреса сразу читает свои журналы инбокса

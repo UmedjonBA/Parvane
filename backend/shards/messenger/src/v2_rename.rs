@@ -45,28 +45,82 @@ pub(crate) async fn rename(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error
     if n.purge {
         return purge(ctx, n).await;
     }
+    rename_db(&ctx.v2, n).await?;
+    ctx.forget_devices(&n.old_address);
+    ctx.forget_devices(&n.new_address);
+    ctx.groups.forget_key_owners();
+    info!("messenger v2: ник перенесён ({} устройств)", n.device_ids.len());
+    Ok(())
+}
+
+/// Перенос в базе (одна транзакция; без кэшей и шины — для тестов).
+pub(crate) async fn rename_db(db: &sqlx::SqlitePool, n: &RenameNotice) -> Result<(), sqlx::Error> {
     let (old, new) = (n.old_address.as_str(), n.new_address.as_str());
-    let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await?;
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
     for d in &n.device_ids {
         let (Ok(from), Ok(to)) = (device_key(old, d), device_key(new, d)) else { continue };
         merge_queue(&mut tx, "inbox_log", "device", "seq", "inbox_device", "device", &from, &to).await?;
     }
+    // Журналы с UNIQUE(user, op_id) (S7-9): запись, повторённая после обрыва во время смены ника, могла лечь и под
+    // прежним, и под новым адресом — копия под новым убирается, иначе перенос нарушал уникальность и откатывался
+    // целиком (identity повторял его без успеха, строки оставались под прежним ником)
+    drop_op_dups(&mut tx, "user_state_log", "user_state_head", old, new).await?;
     merge_queue(&mut tx, "user_state_log", "user", "seq", "user_state_head", "user", old, new).await?;
     // Журнал истории (spec 033): записи прежнего адреса сохраняют seq — контрольная точка переходит вместе с ними
+    drop_op_dups(&mut tx, "user_history_log", "user_history_head", old, new).await?;
+    let old_next: Option<(i64,)> = sqlx::query_as("SELECT next_seq FROM user_history_head WHERE user = ?").bind(old).fetch_optional(&mut *tx).await?;
     merge_queue(&mut tx, "user_history_log", "user", "seq", "user_history_head", "user", old, new).await?;
     if sqlx::query("SELECT 1 FROM user_history_checkpoint WHERE user = ?").bind(old).fetch_optional(&mut *tx).await?.is_some() {
         sqlx::query("DELETE FROM user_history_checkpoint WHERE user = ?").bind(new).execute(&mut *tx).await?;
         sqlx::query("UPDATE user_history_checkpoint SET user = ? WHERE user = ?").bind(new).bind(old).execute(&mut *tx).await?;
+    } else if let Some((shift,)) = old_next {
+        // Точка была только у нового адреса: его записи сдвинулись на `shift` — точка вместе с ними (S7-9)
+        shift_checkpoint(&mut tx, new, shift).await?;
     }
     for (table, column) in [("group_members_v2", "member"), ("group_join_requests_v2", "user"), ("public_join_points", "user")] {
         sqlx::query(&format!("UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?")).bind(new).bind(old).execute(&mut *tx).await?;
         sqlx::query(&format!("DELETE FROM {table} WHERE {column} = ?")).bind(old).execute(&mut *tx).await?;
     }
     tx.commit().await?;
-    ctx.forget_devices(old);
-    ctx.forget_devices(new);
-    ctx.groups.forget_key_owners();
-    info!("messenger v2: ник перенесён ({} устройств)", n.device_ids.len());
+    Ok(())
+}
+
+/// Убрать из журнала `to` записи с op_id, которые есть у `from` (та же операция), и поправить учёт объёма `to`.
+async fn drop_op_dups(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, log: &str, head: &str, from: &str, to: &str) -> Result<(), sqlx::Error> {
+    let (n, bytes): (i64, i64) = sqlx::query_as(&format!(
+        "SELECT COUNT(*), COALESCE(SUM(LENGTH(record)), 0) FROM {log} WHERE user = ? AND op_id IN (SELECT op_id FROM {log} WHERE user = ?)"
+    ))
+    .bind(to)
+    .bind(from)
+    .fetch_one(&mut **tx)
+    .await?;
+    if n == 0 {
+        return Ok(());
+    }
+    sqlx::query(&format!("DELETE FROM {log} WHERE user = ? AND op_id IN (SELECT op_id FROM {log} WHERE user = ?)")).bind(to).bind(from).execute(&mut **tx).await?;
+    sqlx::query(&format!("UPDATE {head} SET records = MAX(records - ?, 0), bytes = MAX(bytes - ?, 0) WHERE user = ?"))
+        .bind(n)
+        .bind(bytes)
+        .bind(to)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Сдвинуть номера контрольной точки `user` на `shift` (записи журнала сдвинуты [`merge_queue`]).
+async fn shift_checkpoint(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user: &str, shift: i64) -> Result<(), sqlx::Error> {
+    let cp: Option<(i64, i64, Vec<u8>)> =
+        sqlx::query_as("SELECT upto_seq, summary_seq, chunk_seqs FROM user_history_checkpoint WHERE user = ?").bind(user).fetch_optional(&mut **tx).await?;
+    let Some((upto, summary, chunks)) = cp else { return Ok(()) };
+    let (parts, _) = chunks.as_chunks::<8>();
+    let shifted: Vec<u8> = parts.iter().flat_map(|c| (u64::from_be_bytes(*c).saturating_add(shift as u64)).to_be_bytes()).collect();
+    sqlx::query("UPDATE user_history_checkpoint SET upto_seq = ?, summary_seq = ?, chunk_seqs = ? WHERE user = ?")
+        .bind(upto + shift)
+        .bind(summary + shift)
+        .bind(shifted)
+        .bind(user)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -126,4 +180,88 @@ async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
     ctx.forget_devices(address);
     info!("messenger v2: аккаунт стёрт ({} устройств)", n.device_ids.len());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations_v2").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn put(db: &sqlx::SqlitePool, user: &str, seq: i64, op: u8, chunk: bool) {
+        sqlx::query("INSERT INTO user_history_log (user, seq, op_id, record, chunk, at) VALUES (?, ?, ?, ?, ?, 0)")
+            .bind(user)
+            .bind(seq)
+            .bind(vec![op; 16])
+            .bind(vec![op; 40])
+            .bind(i64::from(chunk))
+            .execute(db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO user_history_head (user, next_seq, records, bytes) VALUES (?, ?, 1, 40)
+             ON CONFLICT(user) DO UPDATE SET next_seq = MAX(next_seq, excluded.next_seq), records = records + 1, bytes = bytes + 40",
+        )
+        .bind(user)
+        .bind(seq)
+        .execute(db)
+        .await
+        .unwrap();
+    }
+
+    fn notice() -> RenameNotice {
+        RenameNotice { old_address: "al@x".into(), new_address: "alice@x".into(), device_ids: vec!["d1".into()], ..Default::default() }
+    }
+
+    /// S7-9: запись с тем же op_id под обоими адресами (повтор append во время смены ника) — перенос проходит.
+    #[tokio::test]
+    async fn rename_with_same_op_id_under_both_addresses() {
+        let db = pool().await;
+        put(&db, "al@x", 1, 1, false).await;
+        put(&db, "al@x", 2, 2, false).await;
+        put(&db, "alice@x", 1, 2, false).await; // тот же op_id 2 — повтор под новым адресом
+        put(&db, "alice@x", 2, 3, false).await;
+        // То же в журнале личного состояния
+        for user in ["al@x", "alice@x"] {
+            sqlx::query("INSERT INTO user_state_log (user, seq, op_id, record, at) VALUES (?, 1, ?, x'00', 0)").bind(user).bind(vec![7u8; 16]).execute(&db).await.unwrap();
+            sqlx::query("INSERT INTO user_state_head (user, next_seq) VALUES (?, 1)").bind(user).execute(&db).await.unwrap();
+        }
+        rename_db(&db, &notice()).await.expect("перенос не откатывается");
+        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, op_id FROM user_history_log WHERE user = 'alice@x' ORDER BY seq").fetch_all(&db).await.unwrap();
+        assert_eq!(rows.iter().map(|(_, o)| o[0]).collect::<Vec<_>>(), vec![1, 2, 3], "копия op_id 2 убрана, остальное по порядку");
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_history_log WHERE user = 'al@x'").fetch_one(&db).await.unwrap();
+        assert_eq!(n, 0);
+        let (records,): (i64,) = sqlx::query_as("SELECT records FROM user_history_head WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
+        assert_eq!(records, 3);
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_state_log WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
+        assert_eq!(n, 1, "журнал состояния: копия убрана, перенос прошёл");
+    }
+
+    /// S7-9: точка была только у нового адреса — её номера сдвигаются вместе с его записями.
+    #[tokio::test]
+    async fn rename_shifts_checkpoint_of_new_address() {
+        let db = pool().await;
+        put(&db, "al@x", 1, 1, false).await;
+        put(&db, "al@x", 2, 2, false).await;
+        put(&db, "alice@x", 1, 3, true).await;
+        put(&db, "alice@x", 2, 4, true).await;
+        let chunks: Vec<u8> = [1u64].iter().flat_map(|s| s.to_be_bytes()).collect();
+        sqlx::query("INSERT INTO user_history_checkpoint (user, id, upto_seq, summary_seq, chunk_seqs, created_ms) VALUES ('alice@x', 1, 2, 2, ?, 0)")
+            .bind(chunks)
+            .execute(&db)
+            .await
+            .unwrap();
+        rename_db(&db, &notice()).await.unwrap();
+        let (upto, summary, chunks): (i64, i64, Vec<u8>) =
+            sqlx::query_as("SELECT upto_seq, summary_seq, chunk_seqs FROM user_history_checkpoint WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
+        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, op_id FROM user_history_log WHERE user = 'alice@x' ORDER BY seq").fetch_all(&db).await.unwrap();
+        let seq_of = |op: u8| rows.iter().find(|(_, o)| o[0] == op).map(|(s, _)| *s).unwrap();
+        assert_eq!((upto, summary), (seq_of(4), seq_of(4)), "точка указывает на ту же сводку");
+        assert_eq!(u64::from_be_bytes(chunks[..8].try_into().unwrap()) as i64, seq_of(3), "и на тот же сегмент");
+    }
 }

@@ -109,6 +109,11 @@ mod anon_hygiene {
         let p = anon::shard_request(pre, &full(), vec![]);
         assert!(p.user.is_empty() && p.token.is_empty() && p.client_ip == "203.0.113.7");
         assert_eq!(CH_ID, 2);
+        // S7-23: метку источника получают только сигналы звонка; сама shard_request её не ставит
+        let sig: Vec<_> = METHODS.iter().filter(|m| anon::is_call_signal(m)).map(|m| m.name).collect();
+        assert_eq!(sig, vec!["call.ring_sealed", "call.signal_sealed"].into_iter().filter(|n| sig.contains(n)).collect::<Vec<_>>());
+        assert_eq!(sig.len(), 2);
+        assert!(METHODS.iter().filter(|m| m.channel == CH_ANON).all(|m| anon::shard_request(m, &full(), vec![]).source_tag == 0));
     }
 
     #[test]
@@ -325,5 +330,245 @@ mod anon_ip {
         // Через секунду все корзины полны — записи вытесняются, новый источник проходит.
         assert!(l.allow(u64::MAX, "msg.deliver_sealed", t0 + Duration::from_secs(1)).is_ok());
         assert_eq!(l.sources(), 1);
+    }
+}
+
+// ── S7-13: исходящая очередь с бюджетом в байтах и окна потоков ─────────────
+
+mod out_budget {
+    use super::super::outq::out_queue;
+    use super::super::{stream_window, with_stream_window, SESSION_STREAM_CREDITS, STREAM_WINDOW};
+    use parvane_protocol::pb::parvane::cloud::v1 as cl;
+    use parvane_protocol::schema::METHODS;
+    use prost::Message;
+    use std::time::{Duration, Instant};
+
+    const CHUNK: usize = 700 * 1024;
+    const BUDGET: usize = 16 * 1024 * 1024;
+
+    /// 600 кадров по 700 КБ в сессию, клиент не читает: в очереди не больше бюджета (раньше — 512 кадров,
+    /// ≈ 358 МБ), сессия закрыта за 15 с, а ждущие отправители получают отказ.
+    #[tokio::test]
+    async fn unread_session_is_capped_by_bytes_and_closed() {
+        let (q, _rx) = out_queue(512, BUDGET, Duration::from_secs(2));
+        let started = Instant::now();
+        let mut senders = Vec::new();
+        for _ in 0..600 {
+            let q = q.clone();
+            senders.push(tokio::spawn(async move { q.send(vec![0u8; CHUNK]).await }));
+        }
+        let mut peak = 0;
+        while !q.is_closed() && started.elapsed() < Duration::from_secs(15) {
+            peak = peak.max(q.queued_bytes());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(q.is_closed(), "нечитающая сессия закрыта");
+        assert!(started.elapsed() < Duration::from_secs(15));
+        assert!(peak <= BUDGET && q.queued_bytes() <= BUDGET, "в очереди {peak} байт при бюджете {BUDGET}");
+        let mut accepted = 0;
+        for s in senders {
+            accepted += usize::from(s.await.unwrap());
+        }
+        assert!(accepted * CHUNK <= BUDGET, "принято {accepted} кадров");
+        // После закрытия кадры не принимаются
+        assert!(!q.send(vec![1]).await);
+        q.wait_closed().await;
+    }
+
+    /// Читающий клиент: место освобождается по мере записи, очередь живёт.
+    #[tokio::test]
+    async fn reading_session_frees_budget() {
+        let (q, mut rx) = out_queue(512, BUDGET, Duration::from_secs(2));
+        let reader = tokio::spawn(async move {
+            let mut n = 0usize;
+            while let Some(f) = rx.recv().await {
+                n += f.bytes.len();
+                drop(f.permit);
+                if n >= 100 * CHUNK {
+                    break;
+                }
+            }
+            n
+        });
+        for _ in 0..100 {
+            assert!(q.send(vec![0u8; CHUNK]).await);
+        }
+        assert_eq!(reader.await.unwrap(), 100 * CHUNK);
+        assert!(!q.is_closed());
+    }
+
+    /// Каждый потоковый метод реестра скачивается окнами: окно переписывается, остальное тело — прежнее.
+    #[test]
+    fn every_stream_method_is_windowed() {
+        for m in METHODS.iter().filter(|m| m.kind == 3) {
+            let body = match m.name {
+                "cloud.blob.download" => cl::DownloadRequest { file_id: "f".into(), first_chunk: 3, chunk_count: 200 }.encode_to_vec(),
+                "cloud.blob.download_cap" => cl::DownloadCapRequest { file_id: "f".into(), capability: vec![7; 32], first_chunk: 3, chunk_count: 200 }.encode_to_vec(),
+                "cloud.link.download" => cl::LinkDownloadRequest { link_id: "l".into(), file_id: "f".into(), first_chunk: 3, chunk_count: 200 }.encode_to_vec(),
+                other => panic!("потоковый метод {other} без окна (S7-13): добавить в stream_window"),
+            };
+            assert_eq!(stream_window(m.name, &body), Some((3, 200)), "{}", m.name);
+            let w = with_stream_window(m.name, &body, 19, STREAM_WINDOW).unwrap();
+            assert_eq!(stream_window(m.name, &w), Some((19, STREAM_WINDOW)), "{}", m.name);
+        }
+        let cap = cl::DownloadCapRequest::decode(
+            with_stream_window("cloud.blob.download_cap", &cl::DownloadCapRequest { file_id: "f".into(), capability: vec![7; 32], ..Default::default() }.encode_to_vec(), 5, 2).unwrap().as_slice(),
+        )
+        .unwrap();
+        assert_eq!((cap.file_id.as_str(), cap.capability.len(), cap.first_chunk, cap.chunk_count), ("f", 32, 5, 2));
+        assert!(STREAM_WINDOW <= 16 && SESSION_STREAM_CREDITS >= STREAM_WINDOW as usize);
+    }
+}
+
+mod out_writer {
+    use super::super::outq::out_queue;
+    use std::time::Duration;
+
+    /// Писатель держит только закрыватель: когда сессия отпускает очередь, канал закрывается и писатель
+    /// заканчивает сам (раньше копия очереди у писателя держала канал открытым до принудительной отмены).
+    #[tokio::test]
+    async fn writer_ends_when_session_drops_queue() {
+        let (q, mut rx) = out_queue(8, 1 << 20, Duration::from_secs(1));
+        let closer = q.closer();
+        let writer = tokio::spawn(async move {
+            while let Some(f) = rx.recv().await {
+                drop(f.permit);
+            }
+            closer.close();
+        });
+        assert!(q.send(vec![1, 2, 3]).await);
+        drop(q);
+        tokio::time::timeout(Duration::from_secs(2), writer).await.expect("писатель закончил сам").unwrap();
+    }
+}
+
+// ── PV-010: входящий бюджет сессии в байтах ─────────────────────────────────
+
+mod in_budget {
+    use super::super::check_group_typing_signature;
+    use super::super::inq::{global_budget, InBudget, InFrame, PRE_AUTH_MAX_FRAME};
+    use parvane_protocol::pb::parvane::core::v2::Ref;
+    use parvane_protocol::pb::parvane::msg::v2::EphemeralGroupTypingRequest;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    const FRAME: usize = 4 * 1024 * 1024;
+    const SESSION: usize = 8 * 1024 * 1024;
+
+    fn budget(session: usize, global: usize, auth_wait: Duration) -> InBudget {
+        InBudget::new(session, global_budget(global), global, auth_wait)
+    }
+
+    /// Цикл `serve` стоит, клиент шлёт 100 кадров по 4 МиБ: в очереди не больше бюджета сессии, читатель стоит
+    /// (раньше очередь принимала 512 кадров — до 2 ГиБ на соединение).
+    #[tokio::test]
+    async fn stalled_session_holds_at_most_budget() {
+        let b = budget(SESSION, 1 << 30, Duration::from_secs(1));
+        b.open();
+        let (tx, mut rx) = mpsc::channel::<InFrame>(64);
+        let reader_budget = b.clone();
+        let reader = tokio::spawn(async move {
+            let mut sent = 0usize;
+            for _ in 0..100 {
+                let Some(permit) = reader_budget.admit(FRAME).await else { break };
+                if tx.send(InFrame { bytes: vec![0u8; FRAME], permit }).await.is_err() {
+                    break;
+                }
+                sent += 1;
+            }
+            sent
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(b.used() <= SESSION, "занято {} байт при бюджете {SESSION}", b.used());
+        assert!(!reader.is_finished(), "читатель ждёт места, а не принимает дальше");
+        // Цикл ожил: кадры разбираются и отпускаются — читатель продолжает
+        let mut got = 0;
+        while got < 100 {
+            let f = rx.recv().await.expect("кадр");
+            drop(f);
+            got += 1;
+        }
+        assert_eq!(reader.await.unwrap(), 100);
+        assert_eq!(b.used(), 0);
+    }
+
+    /// Запрос в полёте держит своё место до ответа (потолок байтов запросов в полёте на сессию).
+    #[tokio::test]
+    async fn in_flight_requests_count_until_answered() {
+        let b = budget(SESSION, 1 << 30, Duration::from_secs(1));
+        b.open();
+        let p1 = b.admit(FRAME).await.unwrap();
+        let p2 = b.admit(FRAME).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(200), b.admit(1)).await.is_err(), "третий запрос ждёт ответа одного из первых");
+        drop(p1);
+        assert!(tokio::time::timeout(Duration::from_millis(200), b.admit(1024)).await.is_ok());
+        drop(p2);
+    }
+
+    /// До входа: крупный кадр без последующего входа — сессия закрывается; кадр, присланный сразу за Auth,
+    /// дожидается входа; малые кадры — не больше `PRE_AUTH_BUDGET`.
+    #[tokio::test]
+    async fn pre_auth_frames_are_small() {
+        let b = budget(SESSION, 1 << 30, Duration::from_millis(200));
+        assert!(b.admit(1024 * 1024).await.is_none(), "1 МиБ до входа — закрыть");
+        let held: Vec<_> = futures::future::join_all((0..4).map(|_| b.admit(PRE_AUTH_MAX_FRAME))).await;
+        assert!(held.iter().all(Option::is_some));
+        assert!(tokio::time::timeout(Duration::from_millis(200), b.admit(PRE_AUTH_MAX_FRAME)).await.is_err(), "пятый кадр до входа ждёт");
+        drop(held);
+        let b2 = budget(SESSION, 1 << 30, Duration::from_secs(2));
+        let waiter = { let b2 = b2.clone(); tokio::spawn(async move { b2.admit(FRAME).await.is_some() }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        b2.open();
+        assert!(waiter.await.unwrap(), "кадр за Auth принят после входа");
+    }
+
+    /// Общий бюджет процесса делят все сессии.
+    #[tokio::test]
+    async fn global_budget_is_shared() {
+        let g = global_budget(6 * 1024 * 1024);
+        let a = InBudget::new(SESSION, g.clone(), 6 * 1024 * 1024, Duration::from_secs(1));
+        let c = InBudget::new(SESSION, g, 6 * 1024 * 1024, Duration::from_secs(1));
+        a.open();
+        c.open();
+        let pa = a.admit(FRAME).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(200), c.admit(FRAME)).await.is_err(), "процессу места нет");
+        drop(pa);
+        assert!(tokio::time::timeout(Duration::from_millis(200), c.admit(FRAME)).await.is_ok());
+    }
+
+    /// Закрытие сессии будит ждущего читателя отказом.
+    #[tokio::test]
+    async fn close_wakes_reader() {
+        let b = budget(SESSION, 1 << 30, Duration::from_secs(1));
+        b.open();
+        let _p = b.admit(SESSION).await.unwrap();
+        let w = { let b = b.clone(); tokio::spawn(async move { b.admit(1).await.is_none() }) };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        b.close();
+        assert!(w.await.unwrap());
+    }
+
+    /// Решение 8 ноя 2026: подпись «печатает» группы без channel_id больше не принимается.
+    #[test]
+    fn legacy_group_typing_signature_is_refused() {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let g = Ref { domain: "local".into(), id: vec![1; 16] };
+        let mut r = EphemeralGroupTypingRequest { group: Some(g.clone()), epoch: 3, nonce: vec![4; 16], channel_id: vec![5; 16], payload: b"pl".to_vec(), ..Default::default() };
+        r.epoch_signature = parvane_protocol::group::sign_group_typing(&sk, &g, 3, &r.channel_id, &r.nonce, &r.payload);
+        assert!(check_group_typing_signature(&pk, &g, &r).is_ok());
+        // Прежний вид: контекст GROUP_TYPING, без канала
+        let mut aad = g.domain.as_bytes().to_vec();
+        aad.push(0);
+        aad.extend_from_slice(&g.id);
+        aad.extend_from_slice(&3u64.to_be_bytes());
+        aad.extend_from_slice(&r.nonce);
+        aad.extend_from_slice(&r.payload);
+        let mut msg = parvane_protocol::sign::ctx::GROUP_TYPING.to_vec();
+        msg.extend_from_slice(&aad);
+        r.epoch_signature = sk.sign(&msg).to_bytes().to_vec();
+        assert!(parvane_protocol::group::verify_group_typing_legacy(&pk, &g, 3, &r.nonce, &r.payload, &r.epoch_signature).is_ok(), "подпись собрана прежним способом");
+        assert!(check_group_typing_signature(&pk, &g, &r).is_err());
     }
 }

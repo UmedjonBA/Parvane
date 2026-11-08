@@ -559,7 +559,8 @@ async fn us2_calls_live() {
         mixed.envelopes.push(other);
         f.check("mixed-recipients", V2::connect(&addr, Channel::AnonymousDelivery).call("call.signal_sealed", mixed.encode_to_vec()) == Err(ErrorCode::Invalid), "");
         // 7) ≤ 10 одновременных вызовов одному адресату (Кэрол) — даже с разных
-        //    соединений (потолок поднят с 3 до 10 решением пользователя 5 окт 2026).
+        //    соединений (потолок поднят с 3 до 10 решением пользователя 5 окт 2026). S7-23: доля — на пару
+        //    (адресат, источник-сеть), все соединения теста — с одного адреса.
         let carol = c.user.clone();
         let mut codes = vec![];
         for i in 0..=RINGING_MAX {
@@ -572,7 +573,8 @@ async fn us2_calls_live() {
         f.check("signal-in-id-session", a.c.call("call.signal_sealed", req.encode_to_vec()) == Err(ErrorCode::Forbidden), "");
         f.check("ring-in-id-session", a.c.call("call.ring_sealed", req.encode_to_vec()) == Err(ErrorCode::Forbidden), "");
         let ice = call_ok::<cpb::IceConfigResponse>(&mut a.c, "call.ice_config", vec![]);
-        let ok = ice.as_ref().is_ok_and(|r| r.servers.len() == 2 && r.servers[1].username.ends_with(&a.user) && !r.servers[1].credential.is_empty() && r.expires_ms > now_ms());
+        // S7-24: в имени TURN — псевдоним, не адрес
+        let ok = ice.as_ref().is_ok_and(|r| r.servers.len() == 2 && !r.servers[1].username.contains(&a.user) && r.servers[1].username.len() == "0000000000:".len() + 16 && !r.servers[1].credential.is_empty() && r.expires_ms > now_ms());
         f.check("ice-config", ok, &ice);
         f.check("ice-config-anon-forbidden", V2::connect(&addr, Channel::AnonymousDelivery).call("call.ice_config", vec![]) == Err(ErrorCode::Forbidden), "");
         f

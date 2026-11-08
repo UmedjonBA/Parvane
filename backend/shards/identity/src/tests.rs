@@ -13,7 +13,7 @@ fn make_keys() -> (EncodingKey, DecodingKey) {
 fn jwt_roundtrip() {
     let (enc, dec) = make_keys();
     let now = now_unix() as usize;
-    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
+    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None, jti: None, cg: None };
     let token = jwt_encode(&enc, &claims).unwrap();
 
     let req = serde_json::to_vec(&VerifyRequest { token }).unwrap();
@@ -34,7 +34,7 @@ fn window_rate_limits_per_scope_and_key() {
 fn jwt_wrong_secret_rejected() {
     let (enc, _) = make_keys();
     let now = now_unix() as usize;
-    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
+    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None, jti: None, cg: None };
     let token = jwt_encode(&enc, &claims).unwrap();
 
     let (_other_enc, other_dec) = make_keys(); // другой Ed25519-ключ
@@ -46,7 +46,7 @@ fn jwt_wrong_secret_rejected() {
 fn legacy_hs256_accepted_only_inside_migration_window() {
     let (_enc, dec) = make_keys();
     let now = now_unix() as usize;
-    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None };
+    let claims = Claims { sub: "alice@local".to_string(), iat: now, exp: now + 3600, dev: None, jti: None, cg: None };
     let secret = b"legacy-hs256-secret-32-bytes!!!!";
     let hs = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret)).unwrap();
     // Без legacy-ключа HS256 отклоняется (P-11: alg-confusion невозможен).
@@ -89,7 +89,7 @@ async fn jwt_key_file_is_created_0600_and_legacy_secret_moved_out_of_db() {
     // повторная загрузка читает тот же ключ (roundtrip подписи)
     let (enc2, dec2) = load_or_create_jwt_keys(&pool, db_path.to_str().unwrap()).await.unwrap();
     let now = now_unix() as usize;
-    let claims = Claims { sub: "k@local".into(), iat: now, exp: now + 60, dev: None };
+    let claims = Claims { sub: "k@local".into(), iat: now, exp: now + 60, dev: None, jti: None, cg: None };
     let t = jwt_encode(&enc, &claims).unwrap();
     assert!(jwt_decode(&dec2, &t).is_ok());
     let t2 = jwt_encode(&enc2, &claims).unwrap();
@@ -259,8 +259,13 @@ fn nick_rules() {
     for ok in ["ab", "alice", "a1", "1a", "rl_victim", "content-alice-1725000000000-123", "u.v"] {
         assert!(valid_nick(ok), "{ok} должен быть валидным");
     }
-    for bad in ["", "a", "Alice", "al ice", "_alice", "-a", "тест", "a@b", &"x".repeat(65)] {
+    // PV-021: `ab.` и `a..b` — не часть адреса v2
+    for bad in ["", "a", "Alice", "al ice", "_alice", "-a", "тест", "a@b", &"x".repeat(65), "ab.", "a..b", "u.v."] {
         assert!(!valid_nick(bad), "{bad:?} должен быть отклонён");
+    }
+    // Каждый допустимый ник — допустимый адрес протокола v2
+    for ok in ["ab", "u.v", "a-b_c.d9"] {
+        assert!(parvane_protocol::address::is_valid_address(&format!("{ok}@local")));
     }
 }
 
@@ -592,7 +597,7 @@ async fn password_change_requires_old_password_and_resets_trust() {
     sqlx::query("INSERT INTO trusted_devices (username, device_id, confirmed_at, secret_hash) VALUES (?, ?, 0, ?)")
         .bind("chg@local").bind("dev-1").bind("h").execute(&pool).await.unwrap();
     let now = now_unix() as usize;
-    let claims = Claims { sub: "chg@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()) };
+    let claims = Claims { sub: "chg@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()), jti: None, cg: None };
     let token = jwt_encode(&enc, &claims).unwrap();
     let body = |old: &str, new: &str| serde_json::to_vec(&PasswordChangeRequest {
         token: token.clone(), old_password: old.into(), new_password: new.into(),
@@ -621,6 +626,8 @@ async fn verify_active_rejects_revoked_and_binds_device() {
             iat: now,
             exp: now + 3600,
             dev: dev.map(str::to_string),
+            jti: None,
+            cg: None,
         };
         jwt_encode(&enc, &claims).unwrap()
     };
@@ -791,6 +798,32 @@ async fn link_v2_commitment_challenge_reveal() {
     crate::link::forget_link_offer(&pool, "dave@local", "dev-new").await.unwrap();
     let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
     assert!(offers.is_empty(), "оффер вошедшего устройства снят");
+}
+
+/// S7-11: знающий пароль заводит много офферов — оффер настоящего нового устройства всё равно виден старому
+/// (новые — первыми, на аккаунт не больше `LINK_OFFERS_MAX`, вытесняются самые старые без challenge).
+#[tokio::test]
+async fn link_offers_are_capped_newest_first() {
+    let pool = test_pool().await;
+    insert_user(&pool, "olga@local").await;
+    for i in 0..16 {
+        store_link_offer(&pool, "olga@local", &format!("dev-spam-{i}"), "EPH-S==", "", "", false).await.unwrap();
+    }
+    store_link_offer(&pool, "olga@local", "dev-real", "EPH-R==", "", "", false).await.unwrap();
+    let (offers, _, _) = poll_link(&pool, "olga@local", "dev-old").await.unwrap();
+    assert_eq!(offers.len(), crate::link::LINK_OFFERS_MAX, "офферов на аккаунт не больше лимита");
+    assert_eq!(offers[0].device_id, "dev-real", "новый оффер — первым");
+    // Оффер, к которому уже приложен challenge, не вытесняется; если таких — все, новый не принимается
+    let olga2 = "olga2@local";
+    insert_user(&pool, olga2).await;
+    for i in 0..crate::link::LINK_OFFERS_MAX {
+        let dev = format!("dev-c-{i}");
+        store_link_offer(&pool, olga2, &dev, "EPH-C==", "", "", false).await.unwrap();
+        store_link_challenge(&pool, olga2, &dev, "CH==", "").await.unwrap();
+    }
+    assert!(store_link_offer(&pool, olga2, "dev-late", "EPH-L==", "", "", false).await.is_err());
+    let (offers, _, _) = poll_link(&pool, olga2, "dev-old").await.unwrap();
+    assert!(offers.iter().all(|o| o.device_id.starts_with("dev-c-")) && offers.len() == crate::link::LINK_OFFERS_MAX);
 }
 
 #[tokio::test]
@@ -1076,7 +1109,7 @@ async fn password_change_invalidates_tokens_of_other_devices() {
         .bind("epoch@local").bind("epoch@local").bind(&hash).execute(&pool).await.unwrap();
     let before = now_unix() as usize - 10;
     let mk = |dev: Option<&str>, iat: usize| {
-        jwt_encode(&enc, &Claims { sub: "epoch@local".into(), iat, exp: iat + 86400, dev: dev.map(Into::into) }).unwrap()
+        jwt_encode(&enc, &Claims { sub: "epoch@local".into(), iat, exp: iat + 86400, dev: dev.map(Into::into), jti: None, cg: None }).unwrap()
     };
     let owner = mk(Some("dev-owner"), before);
     let thief = mk(Some("dev-thief"), before);
@@ -1103,7 +1136,7 @@ async fn twofa_toggle_requires_password_in_both_directions() {
     sqlx::query("INSERT INTO users (id, username, password_hash, created_at, telegram_id) VALUES (?, ?, ?, 0, 4242)")
         .bind("tfa@local").bind("tfa@local").bind(&hash).execute(&pool).await.unwrap();
     let now = now_unix() as usize;
-    let token = jwt_encode(&enc, &Claims { sub: "tfa@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()) }).unwrap();
+    let token = jwt_encode(&enc, &Claims { sub: "tfa@local".into(), iat: now, exp: now + 3600, dev: Some("dev-1".into()), jti: None, cg: None }).unwrap();
     let body = |enabled: Option<bool>, password: Option<&str>| serde_json::to_vec(&TwoFactorRequest {
         token: token.clone(), enabled, password: password.map(Into::into),
     }).unwrap();
@@ -1128,4 +1161,191 @@ fn session_proof_freshness_window() {
     assert!(!session_proof_fresh(now - 6 * 60 * 1000, now));
     assert!(!session_proof_fresh(now + 6 * 60 * 1000, now));
     assert!(!session_proof_fresh(0, now));
+}
+
+// ── внешнее ревью 7 ноя 2026 (PV-009, 012, 017, 018, 022; OPT-011) ─────────
+
+/// PV-009: ошибка БД при проверке «устройство действует в журнале» — отказ, а не «устройства нет» (иначе вход паролем
+/// шёл без доказательства устройства). То же для проверок «аккаунт удаляется» и «прежний ник» в проверке токена.
+#[tokio::test]
+async fn device_log_check_fails_closed_on_db_error() {
+    let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+    sqlx::migrate!("./migrations_v2").run(&pool).await.unwrap();
+    assert_eq!(crate::v2::log_has_active_device_in(&pool, "a@local", "d1").await, Ok(false));
+    pool.close().await;
+    assert!(crate::v2::log_has_active_device_in(&pool, "a@local", "d1").await.is_err(), "ошибка БД — не «нет устройства»");
+    assert!(crate::v2::deletion_pending_in(&pool, "a@local").await.is_err(), "ошибка БД — не «не удаляется»");
+}
+
+/// PV-012: общий потолок одноразовых ключей устройства — сверх него ключи не сохраняются.
+#[tokio::test]
+async fn one_time_keys_are_capped_per_device() {
+    use parvane_protocol::pb::parvane::identity::v2::OneTimeKey;
+    let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+    sqlx::migrate!("./migrations_v2").run(&pool).await.unwrap();
+    let keys = |from: u32, n: u32| (from..from + n).map(|i| OneTimeKey { key_id: i.to_be_bytes().to_vec(), curve25519: vec![1; 32], signature: vec![2; 64] }).collect::<Vec<_>>();
+    let mut conn = pool.acquire().await.unwrap();
+    assert_eq!(crate::v2::store_otks(&mut conn, "a@local", "d1", &keys(0, 100), 150).await, Ok(100));
+    assert_eq!(crate::v2::store_otks(&mut conn, "a@local", "d1", &keys(100, 100), 150).await, Ok(50), "до потолка");
+    assert_eq!(crate::v2::store_otks(&mut conn, "a@local", "d1", &keys(200, 100), 150).await, Ok(0), "сверх потолка — ничего");
+    assert_eq!(crate::v2::store_otks(&mut conn, "a@local", "d2", &keys(0, 10), 150).await, Ok(10), "у другого устройства свой потолок");
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM one_time_keys WHERE device_id = 'd1'").fetch_one(&mut *conn).await.unwrap();
+    assert_eq!(n, 150);
+    assert!(crate::v2::otk_max_per_device() >= 100, "потолок по умолчанию не задевает запас клиентов (50)");
+}
+
+/// Пользователь с паролем `pw-secret-1` (без `do_register`: общий лимит регистраций процесса — 30 в минуту на все
+/// тесты), по желанию — с привязанным Telegram и 2FA.
+async fn plain_user(pool: &SqlitePool, nick: &str, tg: Option<i64>) {
+    let hash = hash_password("pw-secret-1").unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at, telegram_id, tg_2fa) VALUES (?, ?, ?, 0, ?, ?)")
+        .bind(nick)
+        .bind(format!("{nick}@local"))
+        .bind(&hash)
+        .bind(tg)
+        .bind(i64::from(tg.is_some()))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn twofa_user(pool: &SqlitePool, nick: &str, tg: i64) {
+    plain_user(pool, nick, Some(tg)).await;
+}
+
+fn issue_dev_token(user: &str, device: &str, login_token: &str) -> Vec<u8> {
+    serde_json::to_vec(&IssueRequest {
+        user: user.into(), password: "pw-secret-1".into(), device_id: Some(device.into()), login_token: Some(login_token.into()),
+        trust_secret: None, client: None, client_ip: String::new(),
+    })
+    .unwrap()
+}
+
+/// PV-017: подтверждённый в Telegram токен входа годится только устройству, для которого выдан, и только один раз —
+/// даже при двух одновременных входах.
+#[tokio::test]
+async fn confirmed_login_token_is_bound_to_device_and_spent_once() {
+    let pool = test_pool().await;
+    let (enc, _dec) = make_keys();
+    twofa_user(&pool, "lt", 77).await;
+    let IssueOutcome::TwoFactor { login_token } = do_issue(&pool, &enc, &issue_dev_token("lt", "dev-x", "")).await.unwrap() else { panic!("2FA") };
+    do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token, 77), Some("s3cret")).await.unwrap();
+    // Подтверждение для dev-x не годится dev-y
+    let other = do_issue(&pool, &enc, &issue_dev_token("lt", "dev-y", &login_token)).await.unwrap();
+    assert!(other.token().is_none(), "токен входа другого устройства");
+    // dev-y завёл новый токен входа и погасил прежний — заводим и подтверждаем заново
+    let IssueOutcome::TwoFactor { login_token } = do_issue(&pool, &enc, &issue_dev_token("lt", "dev-x", "")).await.unwrap() else { panic!("2FA") };
+    do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token, 77), Some("s3cret")).await.unwrap();
+    let (r1, r2) = (issue_dev_token("lt", "dev-x", &login_token), issue_dev_token("lt", "dev-x", &login_token));
+    let (a, b) = tokio::join!(do_issue(&pool, &enc, &r1), do_issue(&pool, &enc, &r2));
+    let tokens = [a.unwrap(), b.unwrap()].iter().filter(|o| o.token().is_some()).count();
+    assert_eq!(tokens, 1, "одно подтверждение — одна сессия");
+}
+
+/// PV-017: секрет доверенного устройства расходуется атомарно — повтор того же секрета (в том числе одновременный)
+/// даёт не больше одной сессии.
+#[tokio::test]
+async fn trust_secret_is_spent_once() {
+    let pool = test_pool().await;
+    let (enc, _dec) = make_keys();
+    twofa_user(&pool, "ts", 78).await;
+    let IssueOutcome::TwoFactor { login_token } = do_issue(&pool, &enc, &issue_dev_token("ts", "dev-1", "")).await.unwrap() else { panic!("2FA") };
+    do_telegram_confirm(&pool, &tg_confirm_bytes("s3cret", &login_token, 78), Some("s3cret")).await.unwrap();
+    let secret = do_issue(&pool, &enc, &issue_dev_token("ts", "dev-1", &login_token)).await.unwrap().trust_secret().unwrap().to_string();
+    let r1 = issue_bytes_with_device_secret("ts", "pw-secret-1", "dev-1", &secret);
+    let r2 = r1.clone();
+    let (a, b) = tokio::join!(do_issue(&pool, &enc, &r1), do_issue(&pool, &enc, &r2));
+    let tokens = [a.unwrap(), b.unwrap()].iter().filter(|o| o.token().is_some()).count();
+    assert_eq!(tokens, 1, "один секрет — одна сессия");
+}
+
+/// PV-018: JWT, выданный в ту же секунду, что смена пароля, и JWT по паролю, проверенному ДО смены, гаснут.
+#[tokio::test]
+async fn password_change_kills_same_second_and_racing_tokens() {
+    let pool = test_pool().await;
+    let (enc, dec) = make_keys();
+    plain_user(&pool, "race", None).await;
+    let owner = do_issue(&pool, &enc, &issue_bytes_with_device("race", "pw-secret-1", "dev-a")).await.unwrap().token().unwrap().to_string();
+    let thief = do_issue(&pool, &enc, &issue_bytes_with_device("race", "pw-secret-1", "dev-b")).await.unwrap().token().unwrap().to_string();
+    let body = serde_json::to_vec(&PasswordChangeRequest { token: owner.clone(), old_password: "pw-secret-1".into(), new_password: "pw-secret-2".into() }).unwrap();
+    do_password_change(&pool, &dec, &body).await.unwrap();
+    // В ту же секунду: по секундам (iat == changed_at) токен прежде считался действующим
+    let claims = jwt_decode(&dec, &thief).unwrap().claims;
+    assert_eq!(claims.cg, Some(0));
+    assert!(token_rejection(&pool, &claims).await.unwrap().is_some(), "токен до смены пароля гаснет и в ту же секунду");
+    assert!(verify_active(&pool, &dec, &owner).await.is_ok(), "устройство, сменившее пароль, остаётся");
+    // Гонка: пароль проверен до смены, токен выдан после неё (iat позже смены) — поколение прежнее, токен недействителен
+    let now = now_unix() as usize + 5;
+    let late = jwt_encode(&enc, &Claims { sub: "race@local".into(), iat: now, exp: now + 3600, dev: Some("dev-b".into()), jti: None, cg: Some(0) }).unwrap();
+    assert!(verify_active(&pool, &dec, &late).await.is_err(), "токен с прежним поколением");
+    // Новый вход новым паролем — новое поколение, действует
+    let fresh = do_issue(&pool, &enc, &issue_bytes_with_device("race", "pw-secret-2", "dev-b")).await.unwrap().token().unwrap().to_string();
+    assert_eq!(jwt_decode(&dec, &fresh).unwrap().claims.cg, Some(1));
+    assert!(verify_active(&pool, &dec, &fresh).await.is_ok());
+}
+
+/// PV-018: миграция 0019 — прежние пользователи и их данные на месте, поколение 0.
+#[tokio::test]
+async fn cred_gen_migration_keeps_existing_users() {
+    let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+    let mut m = sqlx::migrate!("./migrations");
+    let all = m.migrations.clone();
+    m.migrations = std::borrow::Cow::Owned(all.iter().filter(|x| x.version < 19).cloned().collect());
+    m.run(&pool).await.unwrap();
+    sqlx::query("INSERT INTO users (id, username, password_hash, created_at, display_name, password_changed_at, password_changed_dev) VALUES ('1', 'old@local', 'h', 5, 'Олд', 77, 'dev-k')")
+        .execute(&pool).await.unwrap();
+    m.migrations = all;
+    m.run(&pool).await.unwrap();
+    let row: (String, String, i64, String, i64) =
+        sqlx::query_as("SELECT password_hash, display_name, password_changed_at, password_changed_dev, cred_gen FROM users WHERE username = 'old@local'")
+            .fetch_one(&pool).await.unwrap();
+    assert_eq!(row, ("h".into(), "Олд".into(), 77, "dev-k".into(), 0));
+}
+
+/// PV-022: ошибка любого UPDATE профиля — ошибка, и ничего не записано (транзакция).
+#[tokio::test]
+async fn profile_update_is_atomic_and_reports_errors() {
+    let pool = test_pool().await;
+    insert_user(&pool, "prof@local").await;
+    sqlx::query("CREATE TRIGGER no_bio BEFORE UPDATE OF bio ON users BEGIN SELECT RAISE(ABORT, 'bio'); END").execute(&pool).await.unwrap();
+    let req = |bio: Option<&str>| SetNameRequest {
+        token: String::new(), display_name: "Новое".into(), bio: bio.map(Into::into), birthday: None, name_color: None, personal_channel: None, phone: None,
+    };
+    assert!(update_profile(&pool, "prof@local", "Новое", &req(Some("о себе"))).await.is_err(), "ошибка UPDATE — не успех");
+    let (name,): (String,) = sqlx::query_as("SELECT display_name FROM users WHERE username = 'prof@local'").fetch_one(&pool).await.unwrap();
+    assert_eq!(name, "", "имя не изменено — транзакция откатилась");
+    update_profile(&pool, "prof@local", "Новое", &req(None)).await.unwrap();
+    let (name,): (String,) = sqlx::query_as("SELECT display_name FROM users WHERE username = 'prof@local'").fetch_one(&pool).await.unwrap();
+    assert_eq!(name, "Новое");
+}
+
+/// OPT-011: Argon2 — не больше N хэшей разом, сверх очереди — быстрый отказ «попробуйте позже».
+#[tokio::test]
+async fn argon2_runs_off_runtime_with_bounded_parallelism() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+    let (now, peak) = (std::sync::Arc::new(AtomicUsize::new(0)), std::sync::Arc::new(AtomicUsize::new(0)));
+    let mut jobs = Vec::new();
+    for _ in 0..6 {
+        let (slots, now, peak) = (slots.clone(), now.clone(), peak.clone());
+        jobs.push(tokio::spawn(async move {
+            argon2_blocking_on(&slots, std::time::Duration::from_secs(10), move || {
+                let n = now.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                now.fetch_sub(1, Ordering::SeqCst);
+            })
+            .await
+        }));
+    }
+    for j in jobs {
+        j.await.unwrap().unwrap();
+    }
+    assert_eq!(peak.load(Ordering::SeqCst), 2, "одновременно не больше места семафора");
+    // Места нет дольше ожидания — отказ, понятный v2 как RATE_LIMITED
+    let _hold = slots.clone().acquire_many_owned(2).await.unwrap();
+    let e = argon2_blocking_on(&slots, std::time::Duration::from_millis(100), || ()).await.unwrap_err().to_string();
+    assert!(e.contains("попробуйте позже"), "{e}");
+    // Обычный путь работает
+    assert!(verify_password_async("pw", &hash_password_async("pw").await.unwrap()).await.unwrap());
 }

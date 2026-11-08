@@ -2,6 +2,9 @@
 // Сервер (шард messenger) хранит только шифртекст записей: AEAD (AES-256-GCM) на ключе истории =
 // HKDF-SHA256(ключ личного состояния, salt "parvane/history/v1", info = адрес), AAD =
 // "parvane/v2/history\0" ‖ адрес ‖ op_id ‖ chunk (1 байт). Открытый текст записи — HistoryBatch.
+// Ревью 7 ноя 2026 (S7-3/S7-4/S7-5): открытый текст выровнен по сетке L2 (`HistoryBatch.padding`), записи событий
+// связаны счётчиком цепочки писателя (`chain`/`chain_seq`), сводка точки называет свою позицию, id точки, op_id
+// сегментов и отметки цепочек. Поля новые — прежние записи читаются, прежние клиенты новые поля пропускают.
 // Сведение строки сообщения (RowState) — чистые функции движка (backend/protocol/src/history.rs).
 syntax = "proto3";
 
@@ -98,6 +101,14 @@ message HistoryBatch {
   string device_id = 1 [(parvane.core.v2.max_len) = 64];
   int64 ts_ms = 2;
   repeated HistoryOp ops = 3 [(parvane.core.v2.max_items) = 4096];
+  // Цепочка писателя (S7-4): случайный id на сессию журнала устройства и номер записи в ней (1, 2, …, без
+  // пропусков; только записи событий, не сегменты). Читатель видит пропуск номера — сервер спрятал запись.
+  // Пусто — запись до появления поля.
+  bytes chain = 4 [(parvane.core.v2.max_len) = 16];
+  uint64 chain_seq = 5;
+  // Выравнивание открытого текста по сетке L2 (`seal::l2_padding_len`, S7-3/S7-5): размер записи не выдаёт ни
+  // число операций, ни длину сообщения.
+  bytes padding = 6 [(parvane.core.v2.max_len) = 65536];
 }
 
 message Stamp {
@@ -189,6 +200,16 @@ message SegmentRef {
   string key = 1 [(parvane.core.v2.max_len) = 400];
   bytes digest = 2 [(parvane.core.v2.max_len) = 32];
   uint64 seq = 3;
+  // op_id записи-сегмента (S7-4): запись под номером seq обязана быть именно ею (op_id — в AAD), иначе сервер
+  // подменил сегмент прежней версией. Пусто — сводка до появления поля.
+  bytes op_id = 4 [(parvane.core.v2.max_len) = 16];
+}
+
+// Отметка цепочки писателя в сводке точки: последний номер, вошедший в точку, и время записи (свёртка по горизонту).
+message ChainMark {
+  bytes chain = 1 [(parvane.core.v2.max_len) = 16];
+  uint64 last_seq = 2;
+  int64 ts_ms = 3;
 }
 
 message ChatSummary {
@@ -203,6 +224,15 @@ message Summary {
   int64 tombstones_since_ms = 1;
   repeated ChatSummary chats = 2 [(parvane.core.v2.max_items) = 100000];
   repeated SegmentRef segments = 3 [(parvane.core.v2.max_items) = 100000];
+  // S7-4: позиция самой сводки (= Checkpoint.upto_seq = Checkpoint.summary_seq) и id точки, которую она
+  // фиксирует (= CommitResponse.checkpoint_id). Сервер не может выдать старую сводку за новую точку. 0 — сводка
+  // до появления полей (принимается как есть).
+  uint64 upto_seq = 4;
+  uint64 checkpoint_id = 5;
+  // Цепочки писателей, вошедшие в точку: записи после неё продолжают номера без пропусков.
+  repeated ChainMark chains = 6 [(parvane.core.v2.max_items) = 4096];
+  // Автор сводки видел все цепочки с их начала (иначе цепочка, впервые встреченная не с номера 1, — не пропуск).
+  bool chains_complete = 7;
 }
 
 message HistoryOp {

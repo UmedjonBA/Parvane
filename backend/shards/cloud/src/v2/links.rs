@@ -174,9 +174,11 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
-    /// PARVANE_CLOUD_LINK_RATE_PER_MIN (120) и PARVANE_CLOUD_LINK_STREAMS (8).
+    /// PARVANE_CLOUD_LINK_RATE_PER_MIN (1920) и PARVANE_CLOUD_LINK_STREAMS (8). Gateway делит скачивание клиента на
+    /// окна по 16 кусков (S7-13): один запрос клиента в 256 кусков — до 16 запросов сюда, поэтому прежний
+    /// предел 120 умножен на 16.
     pub(crate) fn new() -> Self {
-        Self::with_limits(env_usize("PARVANE_CLOUD_LINK_RATE_PER_MIN", 120) as u32, env_usize("PARVANE_CLOUD_LINK_STREAMS", 8))
+        Self::with_limits(env_usize("PARVANE_CLOUD_LINK_RATE_PER_MIN", 1920) as u32, env_usize("PARVANE_CLOUD_LINK_STREAMS", 8))
     }
 
     pub(crate) fn with_limits(rate_limit: u32, streams: usize) -> Self {

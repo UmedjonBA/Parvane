@@ -3,7 +3,8 @@
 # parvane-protocol), ignorefile — backend/infra/deploy/shards.dockerignore.
 # ВАЖНО: target-cpu=x86-64 (baseline) — прод-сервер m60-7 на Xeon 5160 без SSE4.2/AVX.
 
-FROM rust:1-bookworm AS builder
+# S7-7 (7 ноя 2026): базовые образы закреплены по digest (тег — для чтения; обновлять осознанно, см. OPERATIONS.md «Образы»).
+FROM rust:1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS builder
 # protoc — генерация типов протокола v2 из proto/ (build.rs parvane-protocol).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
@@ -20,7 +21,7 @@ WORKDIR /src/backend
 RUN cargo build --release --locked \
     -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway -p federation
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

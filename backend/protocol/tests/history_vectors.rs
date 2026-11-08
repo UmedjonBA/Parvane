@@ -5,7 +5,9 @@
 //!   `RowState` и одинаковый вид (`historyView`); отвергаемые события;
 //! - `unread.json` — непрочитанное от маркера, сведение маркеров, права удаления;
 //! - `segment.json` — ключи и отпечатки сегментов, горизонт надгробий, режим замены, строка формата привязки;
-//! - `aead.json` — ключ истории (HKDF от ключа состояния), запись журнала: чужой адрес/op_id/chunk/ключ.
+//! - `aead.json` — ключ истории (HKDF от ключа состояния), запись журнала: чужой адрес/op_id/chunk/ключ;
+//! - `checkpoint.json` (ревью 7 ноя 2026, S7-3/S7-4) — сверка точки сервера со сводкой, цепочки писателей без
+//!   пропусков, выравнивание записи по сетке L2.
 //!
 //! Векторы проверяются прогоном `conformance::run` (тот же код, что зовут клиенты через WASM и C ABI) и
 //! свойством: случайные перестановки, повторы и разбиения набора событий → побайтно одинаковый итог
@@ -19,8 +21,8 @@ use parvane_protocol::history::{self as h, HistoryKey};
 use parvane_protocol::host::history::to_json;
 use parvane_protocol::pb::parvane::core::v2::{Ref, UserRef};
 use parvane_protocol::pb::parvane::history::v1::{
-    history_op::Op, ChatSummary, Edit, Gone, GoneScope, HistoryBatch, HistoryOp, MessageRow, Pin, React, ReadMark, RowState,
-    SegmentRef, Stamp,
+    history_op::Op, ChainMark, ChatSummary, Checkpoint, Edit, Gone, GoneScope, HistoryBatch, HistoryOp, HistoryRecord, MessageRow, Pin, React,
+    ReadMark, RowState, SegmentRef, Stamp, Summary, SyncResponse,
 };
 use parvane_protocol::pb::parvane::state::v1::{peer, Peer};
 use parvane_protocol::state::StateKey;
@@ -381,7 +383,9 @@ fn gen_segment() -> Value {
     // Ключ группы не зависит от домена (id группы уникален глобально)
     let in_group_other = fold(&[&row_in(&group_on("y.example"), 2, PEER, FEB29_2024 - 1, text("b"))]);
     assert_eq!(h::segment_key(&in_group).unwrap(), h::segment_key(&in_group_other).unwrap());
-    assert!(h::segment_key(&in_group).unwrap().starts_with("g:4242"), "ключ группы без домена");
+    // S7-5: сегмент — месяц всех чатов, чат в ключ не входит
+    assert_eq!(h::segment_key(&in_group).unwrap(), "m|2024-02");
+    assert_eq!(h::segment_key(&in_user).unwrap(), "m|2024-02");
     for (name, s) in [
         ("личный чат", &in_user),
         ("группа, последняя миллисекунда января", &in_group),
@@ -425,7 +429,7 @@ const RECORD_OP_ID: [u8; 16] = [0x01, 0x92, 0x3a, 0x4b, 0x5c, 0x6d, 0x70, 0x01, 
 fn gen_aead() -> Value {
     let skh = "11".repeat(32);
     let sk = StateKey::from_bytes(&[0x11; 32]).unwrap();
-    let batch = HistoryBatch { device_id: "d1".into(), ts_ms: 1_700_000_000_000, ops: vec![row(1, PEER, 1_000, "привет"), gone(2, st(2_000, 1), GoneScope::Me)] };
+    let batch = HistoryBatch { device_id: "d1".into(), ts_ms: 1_700_000_000_000, ops: vec![row(1, PEER, 1_000, "привет"), gone(2, st(2_000, 1), GoneScope::Me)], ..Default::default() };
     let nonce = [7u8; 12];
     let seal = |addr: &str, chunk: bool| h::seal_with_nonce(&HistoryKey::derive(&sk, addr), addr, &RECORD_OP_ID, chunk, &batch, nonce).unwrap().aead_ciphertext;
     let ct = seal(ME, false);
@@ -458,6 +462,68 @@ fn gen_aead() -> Value {
     json!({"suite": "history/aead", "description": "ключ истории = HKDF-SHA256(ключ состояния, \"parvane/history/v1\", адрес); AES-256-GCM, AAD = \"parvane/v2/history\\0\" ‖ адрес ‖ op_id ‖ chunk", "cases": cases})
 }
 
+const CHAIN_A: [u8; 16] = [0xa1; 16];
+const CHAIN_B: [u8; 16] = [0xb2; 16];
+
+fn sref(key: &str, seq: u64, op: u8) -> SegmentRef {
+    SegmentRef { key: key.into(), digest: vec![op; 32], seq, op_id: mid(op) }
+}
+
+fn gen_checkpoint() -> Value {
+    let mut cases = Vec::new();
+    let cp = |id: u64, upto: u64, summary: u64, chunks: Vec<u64>| json!({"id": id, "upto_seq": upto, "summary_seq": summary, "chunk_seqs": chunks});
+    let new_summary = Summary {
+        tombstones_since_ms: 5,
+        segments: vec![sref("m|2026-10", 7, 1), sref("m|2026-11", 9, 2)],
+        upto_seq: 10,
+        checkpoint_id: 3,
+        chains: vec![ChainMark { chain: CHAIN_A.to_vec(), last_seq: 4, ts_ms: 100 }],
+        chains_complete: true,
+        ..Default::default()
+    };
+    let legacy = Summary { tombstones_since_ms: 5, segments: vec![SegmentRef { key: "u:bob@x|2026-10".into(), digest: vec![1; 32], seq: 7, op_id: vec![] }], ..Default::default() };
+    for (name, c, sum, ok) in [
+        ("сводка совпала с точкой", cp(3, 10, 10, vec![7, 9]), &new_summary, None),
+        ("старая сводка при большем upto_seq (сервер пропускает записи между точками)", cp(3, 20, 10, vec![7, 9]), &new_summary, Some("ContextMismatch")),
+        ("старая сводка под номером новой точки", cp(4, 20, 20, vec![7, 9]), &new_summary, Some("ContextMismatch")),
+        ("id точки не тот", cp(4, 10, 10, vec![7, 9]), &new_summary, Some("ContextMismatch")),
+        ("сегменты точки не те, что в сводке", cp(3, 10, 10, vec![7, 8]), &new_summary, Some("ContextMismatch")),
+        ("сводка прежнего вида (журнал до ревью 7 ноя 2026) — как есть", cp(9, 30, 30, vec![7]), &legacy, None),
+    ] {
+        let expect = match ok {
+            None => json!({"ok": true}),
+            Some(k) => err_v(k),
+        };
+        cases.push(json!({"name": format!("точка: {name}"), "input": {"kind": "verify", "checkpoint": c, "summary": to_json(&sum)}, "expect": expect}));
+    }
+    let hexs = |b: &[u8]| hex::encode(b);
+    let rec = |c: &[u8; 16], n: u64, ts: i64| json!({"chain_hex": hexs(c), "chain_seq": n, "ts_ms": ts});
+    let book = |complete: bool, marks: &[(&[u8; 16], u64, i64)]| {
+        let mut b = h::ChainBook { complete, ..Default::default() };
+        for (c, n, ts) in marks {
+            b.marks.insert(c.to_vec(), ChainMark { chain: c.to_vec(), last_seq: *n, ts_ms: *ts });
+        }
+        b.to_value()
+    };
+    for (name, start, records, gaps, replayed, end) in [
+        ("номера подряд", book(true, &[]), vec![rec(&CHAIN_A, 1, 10), rec(&CHAIN_A, 2, 11), rec(&CHAIN_B, 1, 12)], 0, 0, book(true, &[(&CHAIN_A, 2, 11), (&CHAIN_B, 1, 12)])),
+        ("сервер спрятал запись — пропуск", book(true, &[(&CHAIN_A, 2, 11)]), vec![rec(&CHAIN_A, 3, 20), rec(&CHAIN_A, 5, 22)], 1, 0, book(true, &[(&CHAIN_A, 5, 22)])),
+        ("полная книга: цепочка не с начала — пропуск", book(true, &[]), vec![rec(&CHAIN_B, 3, 5)], 2, 0, book(true, &[(&CHAIN_B, 3, 5)])),
+        ("неполная книга: новая цепочка — точка отсчёта", book(false, &[]), vec![rec(&CHAIN_B, 3, 5), rec(&CHAIN_B, 4, 6)], 0, 0, book(false, &[(&CHAIN_B, 4, 6)])),
+        ("повтор старой записи — не пропуск", book(true, &[(&CHAIN_A, 5, 22)]), vec![rec(&CHAIN_A, 2, 11), rec(&CHAIN_A, 6, 30)], 0, 1, book(true, &[(&CHAIN_A, 6, 30)])),
+        ("запись без цепочки (до ревью) — без проверки", book(true, &[]), vec![json!({"chain_hex": "", "chain_seq": 0, "ts_ms": 1})], 0, 0, book(true, &[])),
+    ] {
+        cases.push(json!({"name": format!("цепочки: {name}"), "input": {"kind": "chains", "book": start, "records": records}, "expect": {"gaps": gaps, "replayed": replayed, "book": end}}));
+    }
+    for (name, n) in [("одна операция", 1usize), ("пять операций", 5), ("сорок операций", 40)] {
+        let batch = HistoryBatch { device_id: "d1".into(), ts_ms: 1, ops: (0..n).map(|i| row(i as u8 + 1, PEER, 1_000, "x")).collect(), chain: CHAIN_A.to_vec(), chain_seq: 7, ..Default::default() };
+        let mut padded = batch.clone();
+        h::pad_batch(&mut padded);
+        cases.push(json!({"name": format!("выравнивание: {name}"), "input": {"kind": "pad", "batch": to_json(&batch)}, "expect": {"len": padded.encoded_len()}}));
+    }
+    json!({"suite": "history/checkpoint", "description": "S7-3/S7-4: сводка называет свою позицию, id точки и сегменты; цепочки писателей без пропусков; запись выровнена по сетке L2", "cases": cases})
+}
+
 fn run_suite(suite: &str, file: &str, generate: fn() -> Value) {
     let v = load_or_generate("history", file, generate);
     let n = conformance::run(suite, &v.to_string()).unwrap_or_else(|e| panic!("{e}"));
@@ -486,6 +552,117 @@ fn history_aead_vectors() {
     run_suite("history/aead", "aead.json", gen_aead);
 }
 
+#[test]
+fn history_checkpoint_vectors() {
+    run_suite("history/checkpoint", "checkpoint.json", gen_checkpoint);
+}
+
+fn session(device: &str, key: &StateKey) -> h::HistorySession {
+    h::HistorySession::new(ME, &[], device, &[(key, 1)]).unwrap()
+}
+
+fn record_of(seq: u64, body: &[u8]) -> HistoryRecord {
+    let r = parvane_protocol::pb::parvane::history::v1::AppendRequest::decode(body).unwrap();
+    HistoryRecord { seq, op_id: r.op_id, aead_ciphertext: r.aead_ciphertext, chunk: r.chunk }
+}
+
+fn sync_resp(records: Vec<HistoryRecord>, head: u64, compacted: Option<Checkpoint>) -> Vec<u8> {
+    SyncResponse { records, more: false, head_seq: head, compacted }.encode_to_vec()
+}
+
+/// S7-4 (а): сервер отвечает новому устройству `compacted` со старой сводкой (её он не удалил) и большим
+/// `upto_seq` — устройство пропустило бы записи между точками (воскрешение удалённого). Сводка называет свою
+/// позицию и id точки — `ContextMismatch`.
+#[test]
+fn stale_summary_behind_larger_upto_is_rejected() {
+    let key = StateKey::generate();
+    let a = session("d1", &key);
+    let meta = h::SummaryMeta { upto_seq: 6, checkpoint_id: 1, chains: h::ChainBook { complete: true, ..Default::default() } };
+    let old = h::summary(vec![], vec![sref("m|2026-10", 5, 1)], 0, &meta).unwrap();
+    let sealed = a.seal(vec![old], true, 1).unwrap();
+    // Ответ sync: точка 2 «до 40», сводка — старая запись (номер 6)
+    let cp = Checkpoint { id: 2, upto_seq: 40, summary_seq: 6, chunk_seqs: vec![5], created_ms: 0 };
+    let b = session("d2", &key);
+    let got = b.ingest(&sync_resp(vec![], 41, Some(cp.clone()))).unwrap();
+    let cp = got.compacted.unwrap();
+    let opened = b.ingest(&sync_resp(vec![record_of(cp.summary_seq, &sealed[0].1)], 41, None)).unwrap();
+    let Some(Op::Summary(s)) = opened.ops[0].op.clone() else { panic!("нет сводки") };
+    assert_eq!(h::verify_checkpoint(&cp, &s), Err(parvane_protocol::error::ProtoError::ContextMismatch));
+    // Та же запись, выданная за сводку новой точки (номер 40)
+    let relabeled = Checkpoint { id: 2, upto_seq: 40, summary_seq: 40, chunk_seqs: vec![5], created_ms: 0 };
+    assert_eq!(h::verify_checkpoint(&relabeled, &s), Err(parvane_protocol::error::ProtoError::ContextMismatch));
+    // Своя точка сходится; через JSON хоста — тоже отказ
+    assert!(h::verify_checkpoint(&Checkpoint { id: 1, upto_seq: 6, summary_seq: 6, chunk_seqs: vec![5], created_ms: 0 }, &s).is_ok());
+    let mut host = parvane_protocol::host::history::HostHistory::new(session("d3", &key));
+    let r = host.call("historyVerifyCheckpoint", &json!({"checkpoint": {"id": 2, "uptoSeq": 40, "summarySeq": 6, "chunkSeqs": [5]}, "summary": to_json(&s)}));
+    assert!(r.unwrap_err().contains("ContextMismatch"));
+    let r = host.call("historyVerifyCheckpoint", &json!({"checkpoint": {"id": 1, "uptoSeq": 6, "summarySeq": 6, "chunkSeqs": [5]}, "summary": to_json(&s)})).unwrap();
+    assert_eq!((r["legacy"].as_bool(), r["chains"]["complete"].as_bool()), (Some(false), Some(true)));
+}
+
+/// S7-4 (б): сервер не отдал запись (удаление «у всех») — номер цепочки писателя с пропуском. Записи до
+/// появления цепочек проверке не подлежат; повтор старой записи — не пропуск.
+#[test]
+fn withheld_record_shows_as_chain_gap() {
+    let key = StateKey::generate();
+    let a = session("d1", &key);
+    let bodies: Vec<_> = (1..=3u8).map(|i| a.seal(vec![row(i, PEER, 1_000 + i64::from(i), "x")], false, 5).unwrap().remove(0).1).collect();
+    let b = session("d2", &key);
+    let mut book = h::ChainBook { complete: true, ..Default::default() };
+    let all = b.ingest_chained(&sync_resp(vec![record_of(1, &bodies[0]), record_of(2, &bodies[1]), record_of(3, &bodies[2])], 3, None), &mut book).unwrap();
+    assert_eq!(all.chains, h::ChainCheck::default());
+    assert_eq!(all.records.iter().map(|r| r.chain_seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+    let mut book = h::ChainBook { complete: true, ..Default::default() };
+    let hid = b.ingest_chained(&sync_resp(vec![record_of(1, &bodies[0]), record_of(3, &bodies[2])], 3, None), &mut book).unwrap();
+    assert_eq!(hid.chains.gaps, 1, "спрятанная запись видна");
+    let again = b.ingest_chained(&sync_resp(vec![record_of(9, &bodies[1])], 9, None), &mut book).unwrap();
+    assert_eq!((again.chains.gaps, again.chains.replayed), (0, 1));
+    // Через JSON хоста: книга туда и обратно
+    let mut host = parvane_protocol::host::history::HostHistory::new(session("d3", &key));
+    let b64 = |v: &[u8]| {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(v)
+    };
+    let r1 = host.call("ingest", &json!({"resp": b64(&sync_resp(vec![record_of(1, &bodies[0])], 1, None)), "chainsComplete": true})).unwrap();
+    assert_eq!(r1["gaps"], 0);
+    let r2 = host.call("ingest", &json!({"resp": b64(&sync_resp(vec![record_of(3, &bodies[2])], 3, None)), "chains": r1["chains"]})).unwrap();
+    assert_eq!(r2["gaps"], 1);
+    assert!(host.call("ingest", &json!({"resp": b64(&sync_resp(vec![], 3, None))})).unwrap().get("gaps").is_none(), "без книги — без проверки");
+}
+
+/// S7-4: сегмент точки, подменённый сервером прежней версией под тем же номером, не принимается (op_id из сводки).
+#[test]
+fn substituted_segment_is_mismatched() {
+    let key = StateKey::generate();
+    let a = session("d1", &key);
+    let state = h::apply(None, &row(1, PEER, 1_000, "x")).unwrap();
+    let old = a.seal(vec![HistoryOp { op: Some(Op::State(state.clone())) }], true, 1).unwrap().remove(0);
+    let new = a.seal(vec![HistoryOp { op: Some(Op::State(state)) }], true, 2).unwrap().remove(0);
+    let expect = std::collections::BTreeMap::from([(7u64, new.0.to_vec())]);
+    let got = a.ingest_checked(&sync_resp(vec![record_of(7, &old.1)], 9, None), &expect, None).unwrap();
+    assert_eq!((got.mismatched, got.records.len()), (1, 0));
+    let got = a.ingest_checked(&sync_resp(vec![record_of(7, &new.1)], 9, None), &expect, None).unwrap();
+    assert_eq!((got.mismatched, got.records.len()), (0, 1));
+}
+
+/// S7-3: записи выровнены по сетке L2 — одна операция и двадцать дают одну длину шифртекста; сегменты — тоже.
+#[test]
+fn sealed_records_are_padded_to_l2_grid() {
+    let key = StateKey::generate();
+    let a = session("d1", &key);
+    let len = |ops: Vec<HistoryOp>, chunk: bool| parvane_protocol::pb::parvane::history::v1::AppendRequest::decode(a.seal(ops, chunk, 1).unwrap()[0].1.as_slice()).unwrap().aead_ciphertext.len();
+    let one = len(vec![row(1, PEER, 1_000, "да")], false);
+    let many = len((1..=3u8).map(|i| row(i, PEER, 1_000, "сообщение подлиннее")).collect(), false);
+    assert_eq!(one, many, "одна операция и три — одна корзина");
+    assert_eq!(one - h::NONCE_LEN - h::TAG_LEN, 512);
+    let big = len((1..=20u8).map(|i| row(i, PEER, 1_000, "сообщение подлиннее")).collect(), false);
+    assert!(big > one && parvane_protocol::seal::L2_BUCKETS.contains(&(big - h::NONCE_LEN - h::TAG_LEN)), "дальше — следующая корзина сетки");
+    assert_eq!(len(vec![row(1, PEER, 1_000, "да")], true) - h::NONCE_LEN - h::TAG_LEN, 512);
+    // Цепочка: записи событий нумеруются по порядку, сегменты — вне цепочки
+    let (_, next) = a.chain();
+    assert_eq!(next, 4);
+}
+
 /// Сводка: самые старые чаты теряют `last`, если сводка не помещается в запись.
 #[test]
 fn summary_trims_oldest_last() {
@@ -497,8 +674,8 @@ fn summary_trims_oldest_last() {
         rows: 1,
     };
     let chats: Vec<ChatSummary> = (0..8).map(|i| big(i, 1_000 + i64::from(i))).collect();
-    let seg = SegmentRef { key: "u:bob@x|2024-02".into(), digest: vec![1; 32], seq: 3 };
-    let Some(Op::Summary(s)) = h::summary(chats, vec![seg], 5).unwrap().op else { panic!() };
+    let seg = SegmentRef { key: "m|2024-02".into(), digest: vec![1; 32], seq: 3, op_id: vec![] };
+    let Some(Op::Summary(s)) = h::summary(chats, vec![seg], 5, &h::SummaryMeta::default()).unwrap().op else { panic!() };
     assert!(s.chats[0].last.is_none() && s.chats[7].last.is_some(), "выброшены старые");
     assert!(HistoryOp { op: Some(Op::Summary(s)) }.encoded_len() <= h::BATCH_BUDGET);
 }

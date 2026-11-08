@@ -314,7 +314,13 @@ async fn v2_history_live() {
         f.check("append-segment", append(&mut d1.id, &seg[0]) == Ok(3), "");
         let digest = h::segment_digest(std::slice::from_ref(&seg_state)).unwrap();
         let key_s = h::segment_key(&seg_state).unwrap();
-        let sum = h::summary(vec![], vec![parvane_protocol::pb::parvane::history::v1::SegmentRef { key: key_s, digest: digest.to_vec(), seq: 3 }], 0).unwrap();
+        let sum = h::summary(
+            vec![],
+            vec![parvane_protocol::pb::parvane::history::v1::SegmentRef { key: key_s, digest: digest.to_vec(), seq: 3, op_id: vec![] }],
+            0,
+            &h::SummaryMeta { upto_seq: 4, checkpoint_id: 1, chains: h::ChainBook::default() },
+        )
+        .unwrap();
         let sm = seal(&s1, vec![sum], true);
         f.check("append-summary", append(&mut d1.id, &sm[0]) == Ok(4), "");
         let m2 = msg(2, &alice, &bob, "после точки");

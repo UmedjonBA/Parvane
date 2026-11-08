@@ -13,6 +13,9 @@
 //! Контрольная точка (`history.checkpoint.commit`, CAS по id прежней точки): записи `seq ≤ upto_seq`, кроме
 //! сегментов и сводки новой точки, удаляются в той же транзакции (сегменты прежней точки, не вошедшие в
 //! новую, — тоже). `sync` с курсором до точки отдаёт точку (`compacted`) и записи только после неё.
+//!
+//! Время записи (`at`) хранится с точностью до суток (ревью 7 ноя 2026, S7-3): точное время записи истории рядом с
+//! временем доставки в инбоксы выдавало бы, кто автор сообщения. Поле ни для чего не используется.
 
 use crate::*;
 use parvane_protocol::history::{NONCE_LEN, TAG_LEN};
@@ -28,6 +31,13 @@ const PAGE_ITEMS: usize = 1024;
 const GET_ITEMS: usize = 256;
 /// Сегментов точки (`max_items` у `CommitRequest.chunk_seqs`).
 const MAX_CHUNKS: usize = 100_000;
+/// Секунд в сутках: точность `user_history_log.at`.
+const DAY_SECS: i64 = 86_400;
+
+/// Время записи для `user_history_log.at` — начало суток (UTC), S7-3.
+fn record_day(unix_secs: i64) -> i64 {
+    unix_secs.div_euclid(DAY_SECS) * DAY_SECS
+}
 
 /// Лимиты журнала истории на пользователя.
 #[derive(Debug, Clone, Copy)]
@@ -119,7 +129,7 @@ pub(crate) async fn append_new(db: &SqlitePool, user: &str, r: &hpb::AppendReque
         .bind(&r.op_id)
         .bind(&r.aead_ciphertext)
         .bind(i64::from(r.chunk))
-        .bind(now_unix())
+        .bind(record_day(now_unix()))
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -264,20 +274,19 @@ pub(crate) async fn commit(db: &SqlitePool, user: &str, r: &hpb::CommitRequest) 
         let _ = tx.rollback().await;
         return Err(ErrorCode::Invalid);
     }
-    // Удалить всё ≤ upto, кроме сохраняемых: диапазонами между ними.
-    let mut prev = 0u64;
-    for &k in keep.iter().chain(std::iter::once(&(r.upto_seq + 1))) {
-        if k > prev + 1 {
-            sqlx::query("DELETE FROM user_history_log WHERE user = ? AND seq > ? AND seq < ?")
-                .bind(user)
-                .bind(to_i64(prev)?)
-                .bind(to_i64(k)?)
-                .execute(&mut *tx)
-                .await
-                .map_err(db_err)?;
-        }
-        prev = k;
-    }
+    // S7-8: удалить всё ≤ upto, кроме сохраняемых, одним запросом по существующим строкам (раньше — до 100 000
+    // DELETE диапазонами под BEGIN IMMEDIATE на общей базе); объём уменьшается на удалённое, без пересчёта журнала.
+    let keep_json = format!("[{}]", keep.iter().map(u64::to_string).collect::<Vec<_>>().join(","));
+    let gone: Vec<(i64,)> = sqlx::query_as(
+        "DELETE FROM user_history_log WHERE user = ? AND seq <= ? AND seq NOT IN (SELECT value FROM json_each(?)) RETURNING LENGTH(record)",
+    )
+    .bind(user)
+    .bind(upto)
+    .bind(&keep_json)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    let (gone_records, gone_bytes) = (gone.len() as i64, gone.iter().map(|(l,)| *l).sum::<i64>());
     let id = cur_id + 1;
     let chunk_seqs: Vec<u64> = keep.iter().copied().filter(|s| *s != r.summary_seq || r.chunk_seqs.contains(s)).collect();
     sqlx::query(
@@ -294,15 +303,10 @@ pub(crate) async fn commit(db: &SqlitePool, user: &str, r: &hpb::CommitRequest) 
     .execute(&mut *tx)
     .await
     .map_err(db_err)?;
-    // Учёт объёма — по оставшимся записям.
-    let (records, bytes): (i64, i64) = sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(LENGTH(record)), 0) FROM user_history_log WHERE user = ?")
-        .bind(user)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db_err)?;
-    sqlx::query("UPDATE user_history_head SET records = ?, bytes = ? WHERE user = ?")
-        .bind(records)
-        .bind(bytes)
+    // Учёт объёма — минус удалённое (S7-8: без COUNT/SUM по всему журналу пользователя).
+    sqlx::query("UPDATE user_history_head SET records = MAX(records - ?, 0), bytes = MAX(bytes - ?, 0) WHERE user = ?")
+        .bind(gone_records)
+        .bind(gone_bytes)
         .bind(user)
         .execute(&mut *tx)
         .await
@@ -363,6 +367,29 @@ mod tests {
         assert_eq!(seqs(&s(&db, "b@x", 0, false).await), vec![1]);
         let h = head(&db, "nobody@x").await.unwrap();
         assert_eq!((h.head_seq, h.checkpoint), (0, None));
+    }
+
+    /// S7-3: время записи — только сутки (и у строк, записанных до миграции 0006).
+    #[tokio::test]
+    async fn record_time_is_rounded_to_day() {
+        let db = pool().await;
+        append(&db, "a@x", &req(40, 1, false), BIG).await.unwrap();
+        let (at,): (i64,) = sqlx::query_as("SELECT at FROM user_history_log WHERE user = 'a@x'").fetch_one(&db).await.unwrap();
+        assert_eq!(at % DAY_SECS, 0, "время записи с точностью до суток");
+        assert!((now_unix() - at) < DAY_SECS + 5);
+        assert_eq!(record_day(1_700_000_123), 1_699_920_000);
+        assert_eq!(record_day(-1), -DAY_SECS);
+        // Миграция существующих строк: точное время → сутки
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        let migrator = sqlx::migrate!("./migrations_v2");
+        for m in migrator.iter().filter(|m| m.version < 6) {
+            sqlx::raw_sql(&m.sql).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO user_history_log (user, seq, op_id, record, chunk, at) VALUES ('a@x', 1, x'01', x'02', 0, 1700000123)").execute(&pool).await.unwrap();
+        let m6 = migrator.iter().find(|m| m.version == 6).expect("миграция 0006");
+        sqlx::raw_sql(&m6.sql).execute(&pool).await.unwrap();
+        let (at,): (i64,) = sqlx::query_as("SELECT at FROM user_history_log").fetch_one(&pool).await.unwrap();
+        assert_eq!(at, 1_699_920_000);
     }
 
     #[tokio::test]
@@ -432,5 +459,52 @@ mod tests {
         assert_eq!(records, 3);
         assert_eq!(append(&db, u, &req(40, 1, false), BIG).await.unwrap(), 10);
         assert_eq!(unpack_seqs(&pack_seqs(&[1, u64::MAX])), vec![1, u64::MAX]);
+    }
+
+    /// S7-8: точка с десятками тысяч сегментов вперемешку с событиями — одна выборка и одно удаление под
+    /// транзакцией (раньше — DELETE на каждый промежуток между сегментами и COUNT/SUM по всему журналу), а повтор
+    /// с тем же набором ничего не перебирает. Объём после точки — верный.
+    #[tokio::test]
+    async fn checkpoint_with_many_segments_is_one_pass() {
+        let db = pool().await;
+        let u = "big@x";
+        const N: i64 = 60_000;
+        let mut tx = db.begin().await.unwrap();
+        for seq in 1..=N {
+            sqlx::query("INSERT INTO user_history_log (user, seq, op_id, record, chunk, at) VALUES (?, ?, ?, ?, ?, 0)")
+                .bind(u)
+                .bind(seq)
+                .bind(seq.to_be_bytes().to_vec())
+                .bind(vec![7u8; 40])
+                .bind(seq % 2 == 0)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO user_history_head (user, next_seq, records, bytes) VALUES (?, ?, ?, ?)")
+            .bind(u)
+            .bind(N)
+            .bind(N)
+            .bind(N * 40)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let chunks: Vec<u64> = (1..N as u64).filter(|s| s % 2 == 0).collect();
+        let req = hpb::CommitRequest { expected_checkpoint_id: 0, upto_seq: N as u64, summary_seq: N as u64, chunk_seqs: chunks.clone() };
+        let t = std::time::Instant::now();
+        assert_eq!(commit(&db, u, &req).await.unwrap().checkpoint_id, 1);
+        let took = t.elapsed();
+        assert!(took < std::time::Duration::from_millis(1500), "точка на {} сегментов заняла {took:?}", chunks.len());
+        let (records, bytes): (i64, i64) = sqlx::query_as("SELECT records, bytes FROM user_history_head WHERE user = ?").bind(u).fetch_one(&db).await.unwrap();
+        let left = chunks.len() as i64 + 1;
+        assert_eq!((records, bytes), (left, left * 40), "объём — по оставшимся записям");
+        let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_history_log WHERE user = ?").bind(u).fetch_one(&db).await.unwrap();
+        assert_eq!(rows, left);
+        // Следующая точка с тем же набором (новый id) — удалять нечего, объём не меняется
+        let again = hpb::CommitRequest { expected_checkpoint_id: 1, ..req };
+        assert_eq!(commit(&db, u, &again).await.unwrap().checkpoint_id, 2);
+        let (records2,): (i64,) = sqlx::query_as("SELECT records FROM user_history_head WHERE user = ?").bind(u).fetch_one(&db).await.unwrap();
+        assert_eq!(records2, left);
     }
 }

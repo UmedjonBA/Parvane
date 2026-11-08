@@ -1,9 +1,10 @@
 # TURN/STUN сервер Parvane (pion, userspace). Контекст сборки — backend/infra/turn.
-FROM golang:1-alpine AS builder
+# S7-7 (7 ноя 2026): базовые образы закреплены по digest (тег — для чтения; обновлять осознанно, см. OPERATIONS.md «Образы»).
+FROM golang:1-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS builder
 WORKDIR /src
 COPY go.mod go.sum main.go ./
 RUN CGO_ENABLED=0 GOAMD64=v1 go build -o /parvane-turn .
 
-FROM alpine:3
+FROM alpine:3@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a
 COPY --from=builder /parvane-turn /usr/local/bin/parvane-turn
 ENTRYPOINT ["/usr/local/bin/parvane-turn"]

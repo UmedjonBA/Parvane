@@ -11,6 +11,42 @@ pub(crate) struct Limits {
     /// GW-01: соединения на адрес КЛИЕНТА (X-Forwarded-For за Caddy): адрес пира там один — адрес прокси.
     pub(crate) per_client: Arc<Mutex<HashMap<IpAddr, usize>>>,
     pub(crate) max_per_client: usize,
+    /// S7-18: соединения всех клиентов Tor вместе (у них один адрес — прокси).
+    pub(crate) max_onion: usize,
+}
+
+/// S7-18: ключ лимитов по адресу. IPv6 — сеть /64 (провайдер выдаёт клиенту целую /64, иначе каждый адрес из
+/// неё — новый «клиент»), IPv4 внутри IPv6 — как IPv4.
+pub(crate) fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+        v4 => v4,
+    }
+}
+
+/// S7-18: метка клиентов скрытого сервиса Tor (Caddy ставит `X-Parvane-Onion` на сайте :8081). Их адрес для
+/// gateway — 127.0.0.1 прокси; лимиты считаются по этой метке отдельно (`PARVANE_GATEWAY_MAX_CONNS_ONION`).
+pub(crate) const ONION_CLIENT: &str = "onion";
+
+/// Ключ корзины Tor в карте клиентов (у настоящего клиента такого адреса не бывает).
+const ONION_KEY: IpAddr = IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+
+/// Метка адреса для лимитов identity (`ShardRequest.client_ip`): IPv6 — сеть /64, Tor — `onion`.
+pub(crate) fn limit_label(client_ip: &str) -> String {
+    match client_ip.parse::<IpAddr>().map(limit_key) {
+        Ok(IpAddr::V6(v6)) => {
+            let s = v6.segments();
+            format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+        }
+        Ok(v4) => v4.to_string(),
+        Err(_) => client_ip.to_string(),
+    }
 }
 
 /// RAII-учёт соединения по адресу клиента за прокси.
@@ -34,13 +70,18 @@ impl Drop for ClientGuard {
 /// GW-01: квота на адрес клиента, заявленный прокси (после рукопожатия WS). Адрес пира уже учтён
 /// в `admit`, поэтому совпадающий с ним (прямое подключение) повторно не считается.
 pub(crate) fn admit_client(limits: &Limits, peer: Option<IpAddr>, client_ip: &str) -> Result<Option<ClientGuard>, ()> {
-    let Ok(ip) = client_ip.parse::<IpAddr>() else { return Ok(None) };
-    if Some(ip) == peer {
-        return Ok(None);
-    }
+    let (ip, cap) = if client_ip == ONION_CLIENT {
+        (ONION_KEY, limits.max_onion)
+    } else {
+        let Ok(ip) = client_ip.parse::<IpAddr>() else { return Ok(None) };
+        if Some(ip) == peer {
+            return Ok(None);
+        }
+        (limit_key(ip), limits.max_per_client)
+    };
     let mut map = limits.per_client.lock().unwrap_or_else(|e| e.into_inner());
     let count = map.entry(ip).or_insert(0);
-    if *count >= limits.max_per_client {
+    if *count >= cap {
         return Err(());
     }
     *count += 1;
@@ -80,6 +121,7 @@ impl Drop for ConnGuard {
 pub(crate) fn admit(limits: &Limits, ip: IpAddr, behind_proxy: bool) -> Option<ConnGuard> {
     // Пир-прокси ограничен только общим лимитом; квота клиента применяется в `admit_client`.
     let cap = if behind_proxy && is_proxy_ip(ip) { usize::MAX } else { limits.max_per_ip };
+    let ip = limit_key(ip);
     let permit = limits.conns.clone().try_acquire_owned().ok()?;
     {
         let mut map = limits.per_ip.lock().unwrap_or_else(|e| e.into_inner());

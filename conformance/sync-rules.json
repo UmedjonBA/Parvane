@@ -1418,12 +1418,11 @@
       "title": "Удалённое не воскресает ни из какого источника; событие раньше сообщения применяется; «только у меня» — только журнал",
       "vectors": "proto/parvane/vectors/history/merge.json",
       "engineSuite": "history/merge",
-      "ownDelayMs": 300,
-      "markDelayMs": 1000,
-      "incomingDelayMs": [
-        1000,
-        5000
+      "batchDelayMs": [
+        30000,
+        120000
       ],
+      "batchNote": "S7-3 (ревью 7 ноя 2026): своё отправленное и действия, маркеры и входящее — одной пачкой через случайные 30–120 с после первого события в очереди; запись выровнена по сетке L2; сервер хранит время записи с точностью до суток. Раздельных задержек «своё ≤ 300 мс / входящее 1–5 с» нет — по ним сервер отличал автора от получателей",
       "pollMs": 60000,
       "goneScopes": [
         "GONE_SCOPE_EVERYONE",
@@ -1455,16 +1454,19 @@
         "readuuids"
       ],
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/historyModel.ts (строка ↔ JSON движка), historyRows.ts (m:<uuid>.hs, надгробия, сироты, historyCanDelete), v2/history.ts (очередь 300 мс / 1–5 с с проверкой «уже в журнале», JournalNotice, опрос 60 с, перенос один раз), v2/controller.ts applyEvent (Delete/Edit/Reaction/Pin → операции), messages.ts deleteMessages (область по выбору); тесты historyRows.test.ts, v2/history.test.ts, protocol.vectors.test.ts (history/*); сценарий scripts/run_web_history_sync_e2e.sh",
-        "desktop": "desktop/parvane-core/src/history_sync.cpp (HistorySync: очередь 300 мс / 1 с / 1–5 с, «уже в журнале», JournalNotice, опрос 60 с, перенос один раз, мутация до строки ждёт автора; FileRowStore), tdesktop parvane_client_history.cpp (хранилище RowState, перенос прежнего журнала), parvane_client.cpp ApplyIncomingMutation / MirrorDelete («у всех» по historyCanDelete, «только у меня» — только журнал); тесты parvane_history_sync_tests, parvane_protocol_vectors_tests (history/*); сценарий desktop/verify_history_sync.sh",
+        "web": "web/telegram-tt/src/api/parvane/v2/historyModel.ts (строка ↔ JSON движка), historyRows.ts (m:<uuid>.hs, надгробия, сироты, historyCanDelete), v2/history.ts (очередь — одна пачка 30–120 с (S7-3) с проверкой «уже в журнале», книга цепочек писателей (S7-4), JournalNotice, опрос 60 с, перенос один раз), v2/controller.ts applyEvent (Delete/Edit/Reaction/Pin → операции), messages.ts deleteMessages (область по выбору); тесты historyRows.test.ts, v2/history.test.ts, protocol.vectors.test.ts (history/*); сценарий scripts/run_web_history_sync_e2e.sh",
+        "desktop": "desktop/parvane-core/src/history_sync.cpp (HistorySync: очередь — одна пачка 30–120 с (S7-3), запечатанные тела повторяются без перезапечатывания, «уже в журнале», книга цепочек (S7-4), JournalNotice, опрос 60 с, перенос один раз, мутация до строки ждёт автора; FileRowStore), tdesktop parvane_client_history.cpp (хранилище RowState, перенос прежнего журнала), parvane_client.cpp ApplyIncomingMutation / MirrorDelete («у всех» по historyCanDelete, «только у меня» — только журнал); тесты parvane_history_sync_tests, parvane_protocol_vectors_tests (history/*); сценарий desktop/verify_history_sync.sh",
         "android": "spec 033: то же ядро, что desktop (desktop/parvane-core/src/history_sync.cpp, в android/jni/CMakeLists.txt): android/jni/jni_history.cpp — хранилище строк RowState (FileRowStore ядра: history-<адрес>.jsonl, надгробия и сироты не теряются при свёртке), перенос прежнего journal.jsonl один раз (convertLegacyJournal), события шва из строк (showStates: message/edited/meta/deleted, удалённое не показывается), historyApplyIncomingMutation (Delete/Edit/Reaction/Pin операциями с by/by_admin, права — движок, неизвестная цель — сирота); android/jni/jni_messages.cpp nativeDelete («у всех» по historyCanDelete — мутация v2 + надгробие EVERYONE, «только у меня» — только надгробие ME), свои правка/реакция/закреп — операции журнала с op_id мутации; Kotlin Client.kt messageProperties (canDeleteForEveryone: личный чат — и чужое); тест libtd ParvaneStoreHistoryTest; сценарий android/tgx_history_sync_flow.sh"
       }
     },
     {
       "id": "HIST-2",
-      "title": "Контрольная точка журнала истории (сегменты по чату и месяцу, сводка, CAS), горизонт надгробий 180 дней, откат сервера не принимается",
+      "title": "Контрольная точка журнала истории (сегменты по месяцу, сводка, сверенная с точкой, CAS), горизонт надгробий 180 дней, откат и подмена точки сервером не принимаются",
       "vectors": "proto/parvane/vectors/history/segment.json",
       "engineSuite": "history/segment",
+      "checkpointVectors": "proto/parvane/vectors/history/checkpoint.json",
+      "checkpointSuite": "history/checkpoint",
+      "checkpointNote": "S7-4/S7-5 (ревью 7 ноя 2026): сводка называет свою позицию (upto_seq = summary_seq точки), id точки, op_id сегментов и отметки цепочек писателей; клиент сверяет их с точкой сервера (historyVerifyCheckpoint) и сегменты — по op_id (ingest expect), иначе журнал не применяется и курсор не двигается; номера цепочки писателя без пропусков (ingest chains → gaps — предупреждение в журнал диагностики); сегмент — месяц всех чатов (ключ m|ГГГГ-ММ). Сводки и записи до ревью читаются как раньше",
       "checkpointRecords": 5000,
       "checkpointAgeMs": 86400000,
       "checkpointJitterMs": 60000,
@@ -1494,7 +1496,10 @@
         "own READ receipt copy",
         "journal read op"
       ],
-      "markWriteDelayMs": 1000,
+      "markWriteDelayMs": [
+        30000,
+        120000
+      ],
       "otherDeviceBadgeMs": 2000,
       "historyImportAddsUnread": false,
       "clients": {
@@ -1682,6 +1687,45 @@
         "web": "web/telegram-tt/src/components/parvane/markdown/markdown.ts (разбор), MarkdownBlocks.tsx (показ); тест markdown.test.ts пишет all-constructs.expected.json",
         "desktop": "desktop/parvane-core/src/sections/markdown.cpp (порт web); тест tests/sections/markdown_tests.cpp сверяет образец; показ tdesktop/Telegram/SourceFiles/parvane/parvane_note_markdown.cpp",
         "android": "android/jni/jni_sections.cpp nativeMarkdown (разбор ядра) → tgx-overlay/.../parvane/sections/NoteMarkdown.kt (только показ)"
+      }
+    },
+    {
+      "id": "CONTACT-1",
+      "title": "Свои контакты: явный список, своё имя и заметка — на всех своих устройствах (журнал личного состояния, вид contacts)",
+      "kind": "contacts",
+      "record": "state.v1 contact_set/contact_remove (поле 38/39 StateOp); снимок contacts: {user, first_name, last_name, note} — карта по собеседнику-пользователю, запись целиком по метке; удаление из контактов — надгробие (contact_remove с PeerKey пользователя)",
+      "behaviour": "«Новый контакт» и «Изменить» — запись с именем и фамилией (пустые — показывается имя, заданное самим собеседником; имя, совпадающее с ним, не записывается) и заметкой; своё имя подставляется вместо имени собеседника в шапках, списке чатов, звонках и уведомлениях, но не уходит в провод (заголовок пересылки — имя собеседника); удаление контакта стирает имя и заметку; явные контакты, добавленные до правила, переносятся один раз на устройство только недостающими (контакты устройств складываются)",
+      "status": "7 ноя 2026: движок (state.rs, тест contacts_diff_merge_and_migrate, вектор state/merge «контакты (CONTACT-1)» — его проходят все клиенты с общим движком), web (contactInfo.test.ts, сторож conformance), android (этап 4: Review1107Phase4Test; пара sections-android rev4c 8 ноя: web → X имя и заметка, X → web заметка — проверено; имя X → web в rev4c не дошло — гонка правки контакта с синком журнала исправлена (Client.kt addContact под stateLock), повторного прогона не было) и desktop (этап 4: verify_contacts.sh) — сделано",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/contactInfo.ts (contactNameOverride, contactsToState/contactsFromState, mergeContactsLocalWins), v2/stateJournal.ts (вид contacts, projectContacts, перенос session.migrate), localState.ts (loadContactInfo/saveContactInfo, saveContacts будит журнал), store.ts (setContactName/getContactName/getPublicDisplayName, buildApiUser), provider.ts (updateContact, importContact, updateContactNote, deleteContact, fetchFullUser note, applyJournalContacts); тест contactInfo.test.ts",
+        "desktop": "desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_state.cpp (вид contacts: BuildLocalState/ProjectContacts, SetContact/SetContactNote/RemoveContact, файл tdata/parvane-contacts-<адрес>.json), parvane_client.cpp ensurePeerUser (флаг контакта, своё имя/фамилия, заметка; MirrorForward — имя из каталога), boxes/peers/edit_contact_box.cpp и window/window_peer_menu.cpp, info/profile/info_profile_actions.cpp (родные «Добавить в контакты»/«Изменить»/«Удалить», заметка); перенос явных контактов не нужен — до правила desktop их не хранил; сценарий desktop/verify_contacts.sh",
+        "android": "libtd StateJournal.kt (вид contacts: build/projectContacts, KINDS), ChatLocalState.kt (contacts.json), ContactNames.kt (порт contactNameOverride), ParvaneStore.kt (displayName/publicName — своё имя только в показе), Client.kt (AddContact/RemoveContacts/SetUserNote, UserFullInfo.note); X: «Изменить контакт»/«Удалить контакт» в меню профиля и поле «Заметка» окна правки (setup-tgx.sh PYREV4); тест Review1107Phase4Test, сценарий tgx_protocol_sections_web_flow (e2e_protocol_sections_android.mjs, шаги CONTACT-1 web ↔ X; rev4c: web → X ok, заметка X → web ok, имя X → web FAIL — исправлено, не перепрогнано)"
+      }
+    },
+    {
+      "id": "MEDIA-2",
+      "title": "Спойлер медиа, подпись над медиа и альбомы доходят до получателя",
+      "kind": "content",
+      "record": "msg.v2 Content: Media.spoiler (15), Content.invert_media (104), Media.album_id (16, 16 случайных байт)",
+      "behaviour": "«Скрыть под спойлер» окна отправки — Media.spoiler у каждого фото/видео/GIF, получатель размывает медиа до нажатия; «Переместить текст вверх» — Content.invert_media у сообщения с подписью (в альбоме — у каждого элемента), получатель показывает подпись над медиа; альбом — одно album_id у всех элементов, элементы уходят подряд, получатель группирует подряд идущие сообщения одного автора в одном чате с одним album_id, не больше 10 в группе (фото/видео — альбом, файлы — группа документов)",
+      "status": "7 ноя 2026: web и android — сделано; desktop (этап 4: parvane_v2_tests, parvane_client_safety_tests, verify_rare_ui.sh) — сделано",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/messageExtras.ts (sendExtras, createAlbumIds, createAlbumSendQueue, createAlbumIndex, albumFields, withMediaSpoiler), messages.ts (sendMessage → sendRegularMessage: очередь альбома, поля провода, локальное эхо), store.ts buildApiMessage (isSpoiler, isInvertedMedia, groupedId/isInAlbum), v2/contentMap.ts (spoiler, album_id, invert_media); тест messageExtras.test.ts, сторож conformance.test.ts (MEDIA-2), e2e scripts/e2e_web_album_spoiler.mjs",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (Media.spoiler только фото/видео/GIF, album_id ровно 16 байт, Content.invert_media), include/parvane/client_safety.h (albumGroups — правило группировки, тест client_safety_tests); tdesktop parvane_client.cpp: MirrorOutgoingFile (spoiler, invertCaption, album_id одного альбома tdesktop, отправка элементов подряд в порядке альбома), NoteMessageDecor/buildMessage (grouped_id от album_id+чат+автор+серия ≤ 10, f_invert_media, f_spoiler в MTP_messageMedia*), запланированный альбом уходит одним альбомом; сценарий verify_rare_ui.sh",
+        "android": "libtd MediaFlags.kt (applyInput: spoiler/invert_media/сущности подписи; newAlbumId; mediaAlbumId — подряд одного автора с одним album_id, ≤ 10), Client.kt (sendMessage/sendAlbum: одно album_id на альбом, editCaption с подписью над медиа), ParvaneStore.kt (contentFrom: hasSpoiler/showCaptionAboveMedia/LinkPreviewOptions.showAboveText, putMessage: media_album_id); ядро parvane-core v2_content.cpp (spoiler, album_id, invert_media); тест Review1107Phase4Test, сценарий tgx_protocol_web_flow (e2e_protocol_mixed_android.mjs: альбом X → web одной группой под спойлером с подписью над медиа, альбом web → X одной группой; rev4c ok)"
+      }
+    },
+    {
+      "id": "QUOTE-1",
+      "title": "«Цитировать и ответить» — цитата доходит до получателя",
+      "kind": "content",
+      "record": "msg.v2 Content.reply_quote (105): ReplyQuote{text ≤ 1024, entities ≤ 64 (смещения от начала цитаты), offset — смещение цитаты в исходном тексте}",
+      "behaviour": "Ответ с выделенным фрагментом исходного сообщения несёт reply_quote вместе с reply_to; получатель показывает цитату в плашке ответа (как quote_text Telegram); без reply_to цитата не действует (страж движка), клиент без цитат показывает обычный ответ",
+      "status": "7 ноя 2026: web и android — сделано; desktop (этап 4: parvane_v2_tests, verify_rare_ui.sh) — сделано",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/messageExtras.ts (quoteFromReplyInfo, replyInfoWithQuote), v2/contentMap.ts (reply_quote при reply_to), messages.ts sendMessageLocal, store.ts buildApiMessage; страж backend/protocol/src/content_guard.rs (reply_quote_sanitized); тест messageExtras.test.ts, сторож conformance.test.ts (QUOTE-1)",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (reply_quote только при reply_to, ≤ 1024 байт по границе UTF-8, сущности внутри фрагмента); tdesktop apiwrap.cpp sendMessage → Parvane::MirrorOutgoing(quote, quoteOffset), parvane_client.cpp buildMessage (quote_text/quote_entities/quote_offset в MTP_messageReplyHeader — родная плашка цитаты); сценарий verify_rare_ui.sh",
+        "android": "libtd MediaFlags.kt (quoteOf: InputTextQuote X → reply_quote; textQuote: reply_quote → TextQuote плашки ответа), Client.kt sendMessage (цитата — только при ответе), ParvaneStore.putMessage (MessageReplyToMessage.quote); ядро v2_content.cpp (reply_quote при reply_to); тест Review1107Phase4Test, сценарий tgx_protocol_web_flow (ответ X с цитатой → web, rev4c ok; приём цитаты web → X — только JVM-тест)"
       }
     }
   ]

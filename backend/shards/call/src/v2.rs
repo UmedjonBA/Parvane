@@ -55,7 +55,8 @@ use crate::IceConfig;
 pub(crate) const RINGING_WINDOW: Duration = Duration::from_secs(60);
 /// Одновременно звонящих одному адресату.
 pub(crate) const MAX_RINGING_PER_RECIPIENT: usize = 10;
-const DK_CACHE_TTL: Duration = Duration::from_secs(60);
+/// S7-24: после смены ключа доставки (блокировка контакта) прежний ключ звонит не дольше этого срока (было 60 с).
+const DK_CACHE_TTL: Duration = Duration::from_secs(10);
 const DEVICES_TTL: Duration = Duration::from_secs(30);
 const MAX_CACHE: usize = 50_000;
 
@@ -63,7 +64,12 @@ fn env_f64(key: &str, default: f64) -> f64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
-/// Лимиты на адресата (память).
+/// S7-23: во сколько раз общий потолок адресата выше доли одного источника. Источник — непрозрачная метка от
+/// gateway (`ShardRequest.source_tag`: ключевой хэш сети клиента) или домен чужого сервера; один звонящий
+/// (контакт, участник публичной группы с ключом доставки) больше не выбирает бюджет адресата за всех.
+pub(crate) const TOTAL_FACTOR: f64 = 4.0;
+
+/// Лимиты на адресата (память): доля пары (адресат, источник) и общий потолок адресата.
 pub(crate) struct RecipientLimits {
     burst: f64,
     per_sec: f64,
@@ -75,6 +81,28 @@ struct RecipientState {
     tokens: f64,
     at: Instant,
     rings: VecDeque<Instant>,
+}
+
+impl RecipientState {
+    fn refill(&mut self, burst: f64, per_sec: f64, now: Instant) {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.tokens = (self.tokens + dt * per_sec).min(burst);
+        self.at = now;
+        while self.rings.front().is_some_and(|t| now.saturating_duration_since(*t) >= RINGING_WINDOW) {
+            self.rings.pop_front();
+        }
+    }
+
+    fn ok(&self, ring: bool, max_ringing: usize) -> bool {
+        !(ring && self.rings.len() >= max_ringing) && self.tokens >= 1.0
+    }
+
+    fn take(&mut self, ring: bool, now: Instant) {
+        self.tokens -= 1.0;
+        if ring {
+            self.rings.push_back(now);
+        }
+    }
 }
 
 impl RecipientLimits {
@@ -90,34 +118,61 @@ impl RecipientLimits {
         l
     }
 
-    /// Допустить сигнал адресату `user`; `ring` — первый сигнал звонка.
+    /// Допустить сигнал адресату `user` без метки источника (как раньше: весь бюджет адресата общий).
+    #[cfg(test)]
     pub(crate) fn allow(&mut self, user: &str, ring: bool, now: Instant) -> Result<(), ErrorCode> {
+        self.allow_from(user, "", ring, now)
+    }
+
+    /// Допустить сигнал адресату `user` от источника `source`; `ring` — первый сигнал звонка. С меткой источника —
+    /// доля пары (прежние лимиты) и общий потолок адресата (`TOTAL_FACTOR` × лимиты).
+    pub(crate) fn allow_from(&mut self, user: &str, source: &str, ring: bool, now: Instant) -> Result<(), ErrorCode> {
         if self.map.len() > MAX_CACHE {
             // Запись нужна, пока бюджет не пополнился до полного (с учётом прошедшего времени) или есть вызов в окне.
-            let (burst, per_sec, window) = (self.burst, self.per_sec, RINGING_WINDOW);
+            let (burst, per_sec, window) = (self.burst * TOTAL_FACTOR, self.per_sec, RINGING_WINDOW);
             self.map.retain(|_, s| {
                 let refilled = s.tokens + now.saturating_duration_since(s.at).as_secs_f64() * per_sec;
-                refilled < burst || s.rings.back().is_some_and(|t| now.saturating_duration_since(*t) < window)
+                refilled < burst.min(s.tokens.max(self.burst)) || s.rings.back().is_some_and(|t| now.saturating_duration_since(*t) < window)
             });
         }
-        let s = self.map.entry(user.to_string()).or_insert(RecipientState { tokens: self.burst, at: now, rings: VecDeque::new() });
-        let dt = now.saturating_duration_since(s.at).as_secs_f64();
-        s.tokens = (s.tokens + dt * self.per_sec).min(self.burst);
-        s.at = now;
-        while s.rings.front().is_some_and(|t| now.saturating_duration_since(*t) >= RINGING_WINDOW) {
-            s.rings.pop_front();
+        let (burst, per_sec, max_ringing) = (self.burst, self.per_sec, self.max_ringing);
+        if source.is_empty() {
+            let s = self.map.entry(user.to_string()).or_insert(RecipientState { tokens: burst, at: now, rings: VecDeque::new() });
+            s.refill(burst, per_sec, now);
+            if !s.ok(ring, max_ringing) {
+                return Err(ErrorCode::RateLimited);
+            }
+            s.take(ring, now);
+            return Ok(());
         }
-        if ring && s.rings.len() >= self.max_ringing {
-            return Err(ErrorCode::RateLimited);
+        let (tb, tp, tr) = (burst * TOTAL_FACTOR, per_sec * TOTAL_FACTOR, (max_ringing as f64 * TOTAL_FACTOR) as usize);
+        let pair_key = format!("{user}\u{0}{source}");
+        let mut total = self.map.remove(user).unwrap_or(RecipientState { tokens: tb, at: now, rings: VecDeque::new() });
+        total.refill(tb, tp, now);
+        let pair = self.map.entry(pair_key).or_insert(RecipientState { tokens: burst, at: now, rings: VecDeque::new() });
+        pair.refill(burst, per_sec, now);
+        let allowed = pair.ok(ring, max_ringing) && total.ok(ring, tr);
+        if allowed {
+            pair.take(ring, now);
+            total.take(ring, now);
         }
-        if s.tokens < 1.0 {
-            return Err(ErrorCode::RateLimited);
+        self.map.insert(user.to_string(), total);
+        if allowed {
+            Ok(())
+        } else {
+            Err(ErrorCode::RateLimited)
         }
-        s.tokens -= 1.0;
-        if ring {
-            s.rings.push_back(now);
-        }
-        Ok(())
+    }
+}
+
+/// S7-23: метка источника сигнала — от gateway (`source_tag`) или домен чужого сервера (запрос из федерации).
+pub(crate) fn source_of(req: &ShardRequest) -> String {
+    if !req.origin_domain.is_empty() {
+        format!("@{}", req.origin_domain.to_ascii_lowercase())
+    } else if req.source_tag != 0 {
+        format!("{:016x}", req.source_tag)
+    } else {
+        String::new()
     }
 }
 
@@ -156,11 +211,11 @@ async fn dispatch(ctx: &CallV2, m: &'static MethodInfo, req: ShardRequest) -> Re
             }
             if m.name == "call.ring_sealed" {
                 let r: cpb::RingSealedRequest = body(&req)?;
-                let delivered = ctx.signal_sealed(r.envelopes, true).await?;
+                let delivered = ctx.signal_sealed(r.envelopes, true, &source_of(&req)).await?;
                 Ok(cpb::RingSealedResponse { delivered }.encode_to_vec())
             } else {
                 let r: cpb::SignalSealedRequest = body(&req)?;
-                let delivered = ctx.signal_sealed(r.envelopes, false).await?;
+                let delivered = ctx.signal_sealed(r.envelopes, false, &source_of(&req)).await?;
                 Ok(cpb::SignalSealedResponse { delivered }.encode_to_vec())
             }
         }
@@ -222,7 +277,7 @@ fn now_ms() -> i64 {
 
 impl CallV2 {
     /// Опубликовать сигнал устройствам адресата; `ring` — первый сигнал звонка.
-    async fn signal_sealed(&self, envelopes: Vec<SealedEnvelope>, ring: bool) -> Result<u32, ErrorCode> {
+    async fn signal_sealed(&self, envelopes: Vec<SealedEnvelope>, ring: bool, source: &str) -> Result<u32, ErrorCode> {
         let (user, access) = check_envelopes(&envelopes)?;
         let domain = parvane_protocol::address::address_domain(&user).ok_or(ErrorCode::Invalid)?;
         if domain != server_domain() {
@@ -233,7 +288,7 @@ impl CallV2 {
             Access::DeliveryKey(k) => self.check_delivery_key(&user, &k).await?,
             Access::AnonToken(_) => return Err(ErrorCode::Forbidden),
         }
-        self.limits.lock().map_err(|_| ErrorCode::Unavailable)?.allow(&user, ring, Instant::now())?;
+        self.limits.lock().map_err(|_| ErrorCode::Unavailable)?.allow_from(&user, source, ring, Instant::now())?;
         let devs = self.devices_of(&user).await?;
         let mut delivered = 0u32;
         for mut e in envelopes {
@@ -374,6 +429,34 @@ mod tests {
         assert_eq!(l.allow("bob@local", true, t0 + RINGING_WINDOW), Ok(()));
     }
 
+    /// S7-23: один источник, исчерпавший свою долю вызовов адресату, не делает адресата недозвонимым для других
+    /// источников; общий потолок адресата всё же есть.
+    #[test]
+    fn ring_budget_is_per_source_under_a_total_cap() {
+        let mut l = RecipientLimits::new(200.0, 20.0);
+        let t0 = Instant::now();
+        for _ in 0..MAX_RINGING_PER_RECIPIENT {
+            assert_eq!(l.allow_from("bob@local", "a", true, t0), Ok(()));
+        }
+        assert_eq!(l.allow_from("bob@local", "a", true, t0), Err(ErrorCode::RateLimited), "доля источника A исчерпана");
+        assert_eq!(l.allow_from("bob@local", "b", true, t0), Ok(()), "источник B дозванивается");
+        assert_eq!(l.allow_from("bob@local", "@other.example", true, t0), Ok(()), "чужой сервер — свой источник");
+        // Общий потолок: много источников вместе упираются в него
+        let total = (MAX_RINGING_PER_RECIPIENT as f64 * TOTAL_FACTOR) as usize;
+        let mut ok = MAX_RINGING_PER_RECIPIENT + 2;
+        for i in 0..total {
+            if l.allow_from("bob@local", &format!("s{i}"), true, t0).is_ok() {
+                ok += 1;
+            }
+        }
+        assert_eq!(ok, total, "не больше общего потолка вызовов адресату");
+        assert_eq!(l.allow_from("carol@local", "a", true, t0), Ok(()), "другой адресат независим");
+        let tagged = ShardRequest { source_tag: 0xab, ..Default::default() };
+        assert_eq!(source_of(&tagged), "00000000000000ab");
+        assert_eq!(source_of(&ShardRequest { origin_domain: "X.example".into(), source_tag: 1, ..Default::default() }), "@x.example");
+        assert_eq!(source_of(&ShardRequest::default()), "");
+    }
+
     #[test]
     fn signal_flood_per_recipient() {
         let mut l = RecipientLimits::new(10.0, 1.0);
@@ -386,12 +469,18 @@ mod tests {
     }
 
     #[test]
+    fn revoked_delivery_key_stops_ringing_soon() {
+        assert!(DK_CACHE_TTL <= Duration::from_secs(10), "кэш проверки ключа доставки держит прежний ключ {DK_CACHE_TTL:?}");
+    }
+
+    #[test]
     fn ice_v2_matches_v1() {
         let ice = IceConfig { stun_urls: vec!["stun:s:3478".into()], turn_urls: vec!["turn:t:3478".into()], turn_secret: Some("north".into()), ttl_secs: 600 };
         let r = ice_response(&ice, "alice@local", 1_700_000_000);
         assert_eq!(r.servers.len(), 2);
-        assert_eq!(r.servers[1].username, "1700000600:alice@local");
-        assert_eq!(r.servers[1].credential, crate::turn_rest_credential("north", "1700000600:alice@local"));
+        let name = format!("1700000600:{}", crate::turn_pseudonym("north", "alice@local"));
+        assert_eq!(r.servers[1].username, name);
+        assert_eq!(r.servers[1].credential, crate::turn_rest_credential("north", &name));
         assert_eq!(r.expires_ms, 1_700_000_600_000);
         assert!(r.servers[0].username.is_empty());
     }

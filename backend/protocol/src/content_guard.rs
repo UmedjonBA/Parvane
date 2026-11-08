@@ -177,6 +177,17 @@ pub fn sanitize_content(c: &mut Content) {
         Some(content::Kind::Article(a)) => a.media.iter_mut().for_each(sanitize_media),
         _ => {}
     }
+    // QUOTE-1: сущности цитаты — по её тексту; цитата без ответа не действует.
+    if c.reply_to.is_none() {
+        c.reply_quote = None;
+    }
+    if let Some(q) = &mut c.reply_quote {
+        let text = q.text.clone();
+        sanitize_entities(&text, &mut q.entities);
+        if q.text.is_empty() {
+            c.reply_quote = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +235,31 @@ mod tests {
         sanitize_entities("héllo😀", &mut es);
         assert_eq!(es.len(), 1);
         assert_eq!(es[0].length, 7);
+    }
+
+    #[test]
+    fn reply_quote_sanitized() {
+        use crate::pb::parvane::msg::v2::{MessageRef, ReplyQuote};
+        let quote = ReplyQuote {
+            text: "abc".into(),
+            entities: vec![
+                Entity { r#type: EntityType::Bold as i32, offset: 0, length: 50, ..Default::default() },
+                Entity { r#type: EntityType::TextUrl as i32, offset: 0, length: 1, url: "javascript:x".into(), ..Default::default() },
+            ],
+            offset: 4,
+        };
+        let mut c = Content { reply_quote: Some(quote.clone()), ..Default::default() };
+        sanitize_content(&mut c);
+        assert!(c.reply_quote.is_none(), "цитата без reply_to не действует");
+        let mut c = Content {
+            reply_to: Some(MessageRef { op_id: vec![1; 16] }),
+            reply_quote: Some(quote),
+            ..Default::default()
+        };
+        sanitize_content(&mut c);
+        let q = c.reply_quote.expect("цитата при ответе остаётся");
+        assert_eq!(q.entities.len(), 1);
+        assert_eq!(q.entities[0].length, 3);
     }
 
     #[test]

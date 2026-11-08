@@ -531,8 +531,9 @@ pub(crate) async fn append_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user
         _ => now_unix() * 1000,
     };
     let bytes = InboxRecord { seq: 0, received_ms: 0, item: Some(item.clone()) }.encode_to_vec();
-    // C1-07 (D-17): квота на записи, которые задают отправители.
-    if matches!(item, inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_)) {
+    // C1-07 (D-17): квота на записи, которые задают отправители. S7-16: и уведомления журнала группы — их шлёт и
+    // чужой сервер (inbox_push), без квоты офлайн-устройство копило их без предела.
+    if matches!(item, inbox_record::Item::Sealed(_) | inbox_record::Item::Group(_) | inbox_record::Item::GroupState(_)) {
         let (max_records, max_bytes) = inbox_quota();
         let used: Option<(i64, i64)> = sqlx::query_as("SELECT records, bytes FROM inbox_device WHERE device = ?").bind(&dev).fetch_optional(&mut **tx).await.map_err(db_err)?;
         if let Some((n, b)) = used {
@@ -702,6 +703,22 @@ mod spent_tests {
         sqlx::query("UPDATE inbox_device SET acked_seq = 3 WHERE device = ?").bind(&dev).execute(&mut *tx).await.unwrap();
         append_in(&mut tx, "carol@local", "d1", &big_group_item(10)).await.unwrap();
         std::env::remove_var("PARVANE_V2_INBOX_MAX_RECORDS");
+    }
+
+    /// S7-16: уведомления журнала группы входят в квоту.
+    #[tokio::test]
+    async fn inbox_quota_counts_group_state_notices() {
+        let _env = QUOTA_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let p = pool().await;
+        std::env::set_var("PARVANE_V2_INBOX_MAX_RECORDS", "3");
+        let notice = |v: u64| inbox_record::Item::GroupState(mpb::GroupStateNotice { group: None, version: v });
+        let mut tx = p.begin().await.unwrap();
+        for v in 0..3 {
+            append_in(&mut tx, "gina@local", "d1", &notice(v)).await.unwrap();
+        }
+        let over = append_in(&mut tx, "gina@local", "d1", &notice(4)).await;
+        std::env::remove_var("PARVANE_V2_INBOX_MAX_RECORDS");
+        assert_eq!(over.err(), Some(ErrorCode::Limit));
     }
 
     #[tokio::test]

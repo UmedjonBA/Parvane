@@ -125,12 +125,27 @@ pub async fn outbox_put(pool: &SqlitePool, dest: &str, payload: &[u8], now_ms: i
 
 pub type OutboxRow = (i64, String, Vec<u8>, i64, i64);
 
-pub async fn outbox_due(pool: &SqlitePool, now_ms: i64, limit: i64) -> sqlx::Result<Vec<OutboxRow>> {
-    sqlx::query_as("SELECT id, dest_domain, payload, attempts, created_ms FROM outbox WHERE next_ms <= ? ORDER BY next_ms LIMIT ?")
-        .bind(now_ms)
-        .bind(limit)
-        .fetch_all(pool)
-        .await
+/// Готовые письма: не больше `per_dest` на домен (S7-14). Иначе одна мёртвая сторона с сотнями готовых писем
+/// занимала всю выборку тика, и здоровые домены не получали ничего.
+pub async fn outbox_due(pool: &SqlitePool, now_ms: i64, limit: i64, per_dest: i64) -> sqlx::Result<Vec<OutboxRow>> {
+    sqlx::query_as(
+        "SELECT id, dest_domain, payload, attempts, created_ms FROM (
+           SELECT id, dest_domain, payload, attempts, created_ms, next_ms,
+                  ROW_NUMBER() OVER (PARTITION BY dest_domain ORDER BY next_ms, id) AS rn
+           FROM outbox WHERE next_ms <= ?)
+         WHERE rn <= ? ORDER BY next_ms, id LIMIT ?",
+    )
+    .bind(now_ms)
+    .bind(per_dest)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Сервер не ответил: отложить все готовые письма домена до `next_ms` (S7-14), счётчик попыток не трогая.
+pub async fn outbox_defer_dest(pool: &SqlitePool, dest: &str, next_ms: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE outbox SET next_ms = ? WHERE dest_domain = ? AND next_ms < ?").bind(next_ms).bind(dest).bind(next_ms).execute(pool).await?;
+    Ok(())
 }
 
 pub async fn outbox_done(pool: &SqlitePool, id: i64) -> sqlx::Result<()> {

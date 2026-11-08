@@ -10,6 +10,23 @@ pub(crate) struct Claims {
     /// device_id устройства (если клиент его сообщил при issue)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dev: Option<String>,
+    /// Случайный номер входа: два входа одного устройства в одну секунду дают разные токены, и сессия
+    /// (SHA-256 токена, `recovery_tg::session_key`) у каждого входа своя (S7-1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) jti: Option<String>,
+    /// PV-018: поколение учётных данных (`users.cred_gen`), прочитанное вместе с хэшем пароля при входе. Токен с
+    /// поколением меньше текущего недействителен — даже выданный в ту же секунду, что смена пароля.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cg: Option<i64>,
+}
+
+/// Случайный `jti` нового входа (16 байт, base64url).
+pub(crate) fn fresh_jti() -> Option<String> {
+    use base64::Engine as _;
+    use rand::RngCore as _;
+    let mut b = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut b);
+    Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b))
 }
 
 // ── JWT-ключи (P-11) ──────────────────────────────────────────────────────────
@@ -207,6 +224,66 @@ pub(crate) fn verify_password(password: &str, stored: &str) -> bool {
     }
 }
 
+// ── OPT-011: Argon2 вне рабочих потоков Tokio, с ограничением параллелизма ───────────────────────────────────
+// Argon2id (19 МиБ, t=2) на рабочем потоке задерживал всё остальное на нём — в том числе `identity.token.verify`,
+// которым gateway проверяет каждую сессию. Просто `spawn_blocking` (пул до 512 потоков) поднял бы пик памяти до
+// ≈ 1,2 ГиБ при 64 одновременных входах — OOM при `mem_limit 768m`. Поэтому: семафор на N хэшей разом
+// (`PARVANE_ARGON2_CONCURRENCY`, по умолчанию число ядер − 1, от 1 до 8) и короткое ожидание места
+// (`argon2_queue_wait`); сверх — «слишком много попыток, попробуйте позже» (`RATE_LIMITED` в v2).
+
+/// Сколько ждать места для хэша (`PARVANE_ARGON2_QUEUE_WAIT_MS`): меньше таймаута gateway по умолчанию (3 с), чтобы
+/// отказ дошёл до клиента. В отладочной сборке (тесты, e2e-стенды) Argon2 без оптимизаций в десятки раз медленнее —
+/// там ожидание 30 с.
+pub(crate) fn argon2_queue_wait() -> std::time::Duration {
+    let default_ms = if cfg!(debug_assertions) { 30_000 } else { 2_000 };
+    std::time::Duration::from_millis(env_u64("PARVANE_ARGON2_QUEUE_WAIT_MS", default_ms))
+}
+
+pub(crate) fn argon2_concurrency() -> usize {
+    std::env::var("PARVANE_ARGON2_CONCURRENCY").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or_else(|| {
+        std::thread::available_parallelism().map(|n| n.get().saturating_sub(1)).unwrap_or(1).clamp(1, 8)
+    })
+}
+
+static ARGON2_SLOTS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(argon2_concurrency())));
+
+/// Выполнить работу Argon2 в пуле блокирующих потоков под общим семафором.
+pub(crate) async fn argon2_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    argon2_blocking_on(&ARGON2_SLOTS, argon2_queue_wait(), f).await
+}
+
+pub(crate) async fn argon2_blocking_on<T: Send + 'static>(
+    slots: &std::sync::Arc<tokio::sync::Semaphore>,
+    wait: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
+    let permit = match tokio::time::timeout(wait, slots.clone().acquire_owned()).await {
+        Ok(Ok(p)) => p,
+        _ => anyhow::bail!("слишком много попыток, попробуйте позже"),
+    };
+    let out = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("argon2: задача не завершилась: {e}"))?;
+    Ok(out)
+}
+
+/// `hash_password` вне рабочего потока (OPT-011).
+pub(crate) async fn hash_password_async(password: &str) -> Result<String> {
+    let p = zeroize::Zeroizing::new(password.to_string());
+    argon2_blocking(move || hash_password(&p)).await?
+}
+
+/// `verify_password` вне рабочего потока (OPT-011). `Err` — нет места (перегрузка), это не «неверный пароль».
+pub(crate) async fn verify_password_async(password: &str, stored: &str) -> Result<bool> {
+    let p = zeroize::Zeroizing::new(password.to_string());
+    let h = stored.to_string();
+    argon2_blocking(move || verify_password(&p, &h)).await
+}
+
 /// P-43: политика пароля — не короче 8 и не длиннее 1024 символов.
 pub(crate) fn password_policy_ok(password: &str) -> Result<()> {
     let n = password.chars().count();
@@ -235,11 +312,11 @@ pub(crate) async fn require_password(pool: &SqlitePool, username: &str, password
             .fetch_optional(pool)
             .await?;
     let Some((hash,)) = row else {
-        let _ = verify_password(password, dummy_password_hash());
+        let _ = verify_password_async(password, dummy_password_hash()).await?;
         login_record_failure(username);
         anyhow::bail!("неверный пароль");
     };
-    if !verify_password(password, &hash) {
+    if !verify_password_async(password, &hash).await? {
         login_record_failure(username);
         anyhow::bail!("неверный пароль");
     }
@@ -364,22 +441,26 @@ pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Resul
     if is_device_revoked(pool, &claims.sub, claims.dev.as_deref()).await? {
         return Ok(Some("устройство отозвано"));
     }
-    let row: Option<(i64, String)> =
-        sqlx::query_as("SELECT password_changed_at, password_changed_dev FROM users WHERE username = ?")
+    let row: Option<(i64, String, i64)> =
+        sqlx::query_as("SELECT password_changed_at, password_changed_dev, cred_gen FROM users WHERE username = ?")
             .bind(&claims.sub)
             .fetch_optional(pool)
             .await
             .context("проверка смены пароля")?;
     // Аккаунт ждёт удаления (spec 027): ни один токен не действует
-    if crate::v2::deletion_pending(&claims.sub).await {
+    if crate::v2::deletion_pending(&claims.sub).await.context("проверка удаления аккаунта")? {
         return Ok(Some("аккаунт удаляется"));
     }
     // Ник сменён (spec 026): токены прежнего адреса недействительны
-    if row.is_none() && crate::v2::alias_held(&claims.sub).await {
+    if row.is_none() && crate::v2::alias_held(&claims.sub).await.context("проверка прежнего ника")? {
         return Ok(Some("ник сменён — войдите заново"));
     }
-    if let Some((changed_at, keep_dev)) = row {
-        let issued_before = (claims.iat as i64) < changed_at;
+    if let Some((changed_at, keep_dev, cred_gen)) = row {
+        // PV-018: токен с поколением сравнивается точно; без поколения (выдан до обновления) — по секундам
+        let issued_before = match claims.cg {
+            Some(cg) => cg < cred_gen,
+            None => (claims.iat as i64) < changed_at,
+        };
         let is_keeper = !keep_dev.is_empty() && claims.dev.as_deref() == Some(keep_dev.as_str());
         if issued_before && !is_keeper {
             return Ok(Some("пароль сменён — войдите заново"));

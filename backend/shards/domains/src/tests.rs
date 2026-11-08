@@ -23,12 +23,16 @@ use crate::store::{self, Domains};
 static N: AtomicU32 = AtomicU32::new(0);
 
 async fn setup() -> Domains {
+    setup_with(store::Limits::from_env()).await
+}
+
+async fn setup_with(limits: store::Limits) -> Domains {
     let dir = std::env::temp_dir().join(format!("parvane-domains-test-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = store::open_store(dir.join("domains.db").to_str().unwrap()).await.unwrap();
     assert!(dir.join("domains.db-v2.db").exists());
-    Domains::new(pool, None, "local".into())
+    Domains::with_limits(pool, None, "local".into(), limits)
 }
 
 fn device(d: &Domains, user: &str, id: &str) -> SigningKey {
@@ -334,4 +338,138 @@ async fn op_log_has_quota() {
     sqlx::query("UPDATE containers SET head_seq = 100000").execute(&d.pool).await.unwrap();
     assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 2, "a1", "v2")).await, Err(ErrorCode::Limit));
     let _ = cref;
+}
+
+fn big_op(key: &SigningKey, c: &Container, k: &[u8; 32], lamport: u64, dev: &str, size: usize) -> ContainerOp {
+    op(key, c, 1, k, lamport, dev, &"x".repeat(size))
+}
+
+async fn new_container(d: &Domains, key: &SigningKey, owner: &str) -> (Container, Ref) {
+    let (c, genesis) = domain::new_container(key, "local", sample::DOMAIN_NAME, owner, 1).unwrap();
+    call(d, owner, "domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }).await.unwrap();
+    let r = c.r#ref.clone().unwrap();
+    (c, r)
+}
+
+/// S7-21: страница журнала читает из базы тела только тех операций, что в неё вошли (раньше — все 1025 строк).
+#[tokio::test]
+async fn sync_materialises_at_most_budget_rows() {
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let (c, cref) = new_container(&d, &alice, "alice@local").await;
+    let k1 = domain::new_epoch_key();
+    for i in 1..=40u64 {
+        append(&d, "alice@local", &big_op(&alice, &c, &k1, i, "a1", 100_000)).await.unwrap();
+    }
+    let id = cref.id.clone();
+    let p = d.sync_page(&id, 0, domain::SYNC_MAX_BYTES as usize).await.unwrap();
+    assert!(p.more);
+    assert!(!p.ops.is_empty() && p.ops.len() < 10, "страница по бюджету: {}", p.ops.len());
+    assert_eq!(p.materialized, p.ops.len(), "тела сверх страницы не читаются");
+    // Догон страницами без пропусков
+    let mut after = 0u64;
+    let mut seen = Vec::new();
+    loop {
+        let r = sync(&d, "alice@local", &cref, after, 0).await.unwrap();
+        seen.extend(r.ops.iter().map(|o| o.seq));
+        after = r.ops.last().unwrap().seq;
+        if !r.more {
+            break;
+        }
+    }
+    assert_eq!(seen, (1..=40).collect::<Vec<_>>());
+}
+
+/// S7-22: квота журнала в байтах; операции редактора — в его долю, другие контейнеры владельца пишутся дальше.
+#[tokio::test]
+async fn op_log_has_byte_quota() {
+    let lim = store::Limits { ops_per_container: 1000, ops_per_writer: 1000, bytes_per_container: 1 << 20, bytes_per_writer: 1 << 20 };
+    let d = setup_with(lim).await;
+    let alice = device(&d, "alice@local", "a1");
+    let bob = device(&d, "bob@local", "b1");
+    let (c, _cref) = new_container(&d, &alice, "alice@local").await;
+    let k1 = domain::new_epoch_key();
+    for i in 1..=3u64 {
+        assert_eq!(append(&d, "alice@local", &big_op(&alice, &c, &k1, i, "a1", 250_000)).await, Ok(i));
+    }
+    // Четвёртая полная операция ещё помещается только если влезает в 1 МиБ с оболочкой — пятая точно нет
+    let fourth = append(&d, "alice@local", &big_op(&alice, &c, &k1, 4, "a1", 250_000)).await;
+    let fifth = append(&d, "alice@local", &big_op(&alice, &c, &k1, 5, "a1", 250_000)).await;
+    assert!(fourth == Err(ErrorCode::Limit) || fifth == Err(ErrorCode::Limit), "{fourth:?} {fifth:?}");
+    assert_eq!(append(&d, "alice@local", &big_op(&alice, &c, &k1, 6, "a1", 250_000)).await, Err(ErrorCode::Limit));
+
+    // Совместная папка Алисы: редактор Боб забивает её до предела контейнера
+    let d = setup_with(store::Limits { bytes_per_writer: 4 << 20, ..lim }).await;
+    let alice = device(&d, "alice@local", "a1");
+    let bob2 = device(&d, "bob@local", "b1");
+    let _ = bob;
+    let (shared, sref) = new_container(&d, &alice, "alice@local").await;
+    let (plan, _) = new_container(&d, &alice, "alice@local").await;
+    let acc = access_of(&d, "alice@local", &sref, &[(&alice, "alice@local")]).await;
+    let g = domain::sign_grant(&alice, &acc, &Grantee::User("bob@local".into()), GrantLevel::Write, 2).unwrap();
+    call(&d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(g) }).await.unwrap();
+    let mut n = 0;
+    let mut l = 1u64;
+    while append(&d, "bob@local", &big_op(&bob2, &shared, &k1, l, "b1", 250_000)).await.is_ok() {
+        n += 1;
+        l += 1;
+        assert!(n < 10);
+    }
+    assert!(n >= 3);
+    // Доля Алисы не тронута: её «План» пишется
+    assert_eq!(append(&d, "alice@local", &big_op(&alice, &plan, &k1, 1, "a1", 250_000)).await, Ok(1));
+    let (bob_ops,): (i64,) = sqlx::query_as("SELECT ops FROM log_usage WHERE user = 'bob@local'").fetch_one(&d.pool).await.unwrap();
+    assert_eq!(bob_ops, n);
+    let (alice_ops,): (i64,) = sqlx::query_as("SELECT ops FROM log_usage WHERE user = 'alice@local'").fetch_one(&d.pool).await.unwrap();
+    assert_eq!(alice_ops, 1);
+    // Стирание Алисы снимает долю Боба в её журналах
+    d.purge("alice@local").await.unwrap();
+    let (bob_ops,): (i64,) = sqlx::query_as("SELECT ops FROM log_usage WHERE user = 'bob@local'").fetch_one(&d.pool).await.unwrap();
+    assert_eq!(bob_ops, 0);
+}
+
+/// S7-24: запись гранта не перепроверяет весь журнал грантов, если проверенная версия уже в памяти.
+#[tokio::test]
+async fn grant_writes_reuse_checked_access() {
+    use std::sync::atomic::Ordering as O;
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let (_c, cref) = new_container(&d, &alice, "alice@local").await;
+    for (i, u) in ["b1@local", "b2@local", "b3@local", "b4@local", "b5@local", "b6@local"].iter().enumerate() {
+        let acc = access_of(&d, "alice@local", &cref, &[(&alice, "alice@local")]).await;
+        let g = domain::sign_grant(&alice, &acc, &Grantee::User((*u).into()), GrantLevel::Read, i as i64 + 2).unwrap();
+        call(&d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(g) }).await.unwrap();
+    }
+    assert_eq!(d.replays.load(O::Relaxed), 1, "журнал перепроверен целиком только при первой записи");
+    // После смены ника кэш сбрасывается
+    d.rename("zed@local", "zed2@local").await.unwrap();
+    d.remember_key(alice.verifying_key().to_bytes(), Author { user: "alice@local".into(), device_id: "a1".into(), aliases: vec![] });
+    let acc = access_of(&d, "alice@local", &cref, &[(&alice, "alice@local")]).await;
+    let g = domain::sign_grant(&alice, &acc, &Grantee::User("b7@local".into()), GrantLevel::Read, 9).unwrap();
+    call(&d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(g) }).await.unwrap();
+    assert_eq!(d.replays.load(O::Relaxed), 2);
+}
+
+/// S7-21: доля обработчиков — на пользователя; у пользователей чужого сервера — одна на домен-источник.
+#[tokio::test]
+async fn handler_share_per_user_and_origin_domain() {
+    let d = setup().await;
+    assert_eq!(store::usage_key("x@evil.example", "evil.example"), "@evil.example");
+    assert_eq!(store::usage_key("alice@local", ""), "alice@local");
+    let held: Vec<_> = (0..8).map(|_| d.slots.try_acquire("@evil.example").unwrap()).collect();
+    for u in ["x@evil.example", "y@evil.example"] {
+        let req = ShardRequest {
+            method: "domain.op.sync".into(),
+            user: u.into(),
+            device_id: "d".into(),
+            origin_domain: "evil.example".into(),
+            body: DomainOpSyncRequest::default().encode_to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::RateLimited), "{u}");
+    }
+    // Свой пользователь не задет
+    let req = ShardRequest { method: "domain.op.sync".into(), user: "alice@local".into(), device_id: "d".into(), body: DomainOpSyncRequest::default().encode_to_vec(), ..Default::default() };
+    assert_ne!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::RateLimited));
+    drop(held);
 }

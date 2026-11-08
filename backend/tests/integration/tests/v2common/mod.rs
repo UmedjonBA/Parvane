@@ -87,6 +87,30 @@ impl Conn {
             }
         }
     }
+    /// STREAM-метод объекту сервера `dest`: Ok((метаданные, куски `(номер, last, данные)`)) | Err(код).
+    /// Ошибка куска — Err с его кодом; поток без `last` до таймаута чтения — `UNAVAILABLE`.
+    pub fn stream_to(&mut self, method: &str, body: Vec<u8>, dest: &str) -> Result<(Vec<u8>, Vec<(u32, bool, Vec<u8>)>), ErrorCode> {
+        let meta = self.call_to(method, body, dest)?;
+        let id = self.next_id;
+        let mut chunks = vec![];
+        loop {
+            let f = self.recv().ok_or(ErrorCode::Unavailable)?;
+            match f.kind {
+                Some(frame::Kind::StreamChunk(c)) if c.id == id => {
+                    if let Some(e) = c.error {
+                        return Err(ErrorCode::try_from(e.code).unwrap_or(ErrorCode::Unspecified));
+                    }
+                    chunks.push((c.index, c.last, c.data));
+                    if c.last {
+                        return Ok((meta, chunks));
+                    }
+                }
+                Some(k @ frame::Kind::Event(_)) => self.events.push(k),
+                _ => {}
+            }
+        }
+    }
+
     /// Следующее событие (из накопленных или из сокета).
     pub fn next_event(&mut self) -> Option<parvane_protocol::pb::parvane::core::v2::Event> {
         loop {

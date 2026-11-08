@@ -513,18 +513,20 @@ pub fn verify_response(
     Ok(r)
 }
 
-/// Проверить очередной кадр потока ответа (номер — строго по порядку).
+/// Проверить очередной кадр потока ответа. `index` — номер куска блоба (PV-015: окно запроса может
+/// начинаться не с 0), поэтому первый кадр (`expected_index = None`) задаёт базу, а каждый следующий
+/// обязан идти строго за предыдущим (`Some(предыдущий + 1)`): ни пропуска, ни перестановки, ни повтора.
 pub fn verify_stream_chunk(
     bytes: &[u8],
     sender: &TrustedServer,
     local_domain: &str,
     now_ms: i64,
     request_nonce: &[u8],
-    expected_index: u32,
+    expected_index: Option<u32>,
 ) -> Result<S2sStreamChunk> {
     let v = verify_frame(bytes, sender, local_domain, now_ms, None)?;
     let c: S2sStreamChunk = v.payload_as()?;
-    if c.request_nonce != request_nonce || c.index != expected_index {
+    if c.request_nonce != request_nonce || expected_index.is_some_and(|i| c.index != i) {
         return Err(ProtoError::ContextMismatch);
     }
     Ok(c)

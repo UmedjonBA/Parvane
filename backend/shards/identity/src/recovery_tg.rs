@@ -48,15 +48,35 @@ struct OutMessage {
 struct Pending {
     request_id: u64,
     device_id: String,
+    /// S7-1: сессия (SHA-256 JWT), заведшая запрос. Опрашивать его и менять ключ может только она:
+    /// вошедший паролем «как» это устройство (тот же `device_id`) запрос не перехватит.
+    session: SessionKey,
     created: i64,
-    /// Эфемерный открытый ключ X25519 устройства; пусто — прежний клиент (ответ открытым текстом).
+    /// Эфемерный открытый ключ X25519 устройства (32 байта; запрос без него не принимается, S7-1).
     eph_public: Vec<u8>,
     /// Код сверки: назначает сервер, показывают бот и экран устройства.
     code: String,
     /// Ответ владельца, запечатанный на `eph_public`.
     sealed: Option<Vec<u8>>,
-    /// Открытый ключ: прежние клиенты без `eph_public` и аккаунты без копии ключей (см. `peek_reply`).
+    /// Открытый ключ: только для аккаунтов без копии ключей (см. `peek_reply`); запросившему не отдаётся.
     recovery_key: Option<Zeroizing<String>>,
+}
+
+/// Ключ сессии: SHA-256 предъявленного JWT (у каждого входа свой `jti`, см. `auth::Claims`).
+pub(crate) type SessionKey = [u8; 32];
+
+pub(crate) fn session_key(token: &str) -> SessionKey {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes()).into()
+}
+
+/// Почему запрос ключа не принят.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RequestRefusal {
+    /// Очередь бота полна либо у аккаунта уже `PENDING_MAX` живых запросов.
+    Unavailable,
+    /// S7-1: у устройства живой запрос другой сессии с другим ключом — замены нет.
+    Forbidden,
 }
 
 #[derive(Default)]
@@ -135,23 +155,29 @@ fn fresh_code(taken: &[Pending]) -> String {
     }
 }
 
-/// Новое устройство просит ключ: бот спросит владельца. Возвращает код сверки (`None` — очередь
-/// бота полна либо у аккаунта уже `PENDING_MAX` живых запросов других устройств).
-/// Запрос привязан к устройству: чужой запрос ни замещает, ни гасит его (A0023-1).
-/// Повтор того же устройства с тем же ключом сообщение не дублирует (клиент повторяет запрос
-/// при каждом переподключении); `again` — владелец сам попросил прислать сообщение ещё раз.
-/// Другой эфемерный ключ у того же устройства — клиент перезапущен: запрос начинается заново.
-pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client: &str, eph_public: &[u8], again: bool, now: i64) -> Option<String> {
+/// Новое устройство просит ключ: бот спросит владельца. Возвращает код сверки.
+/// Запрос привязан к устройству и к сессии, которая его завела (S7-1): чужой запрос ни замещает, ни гасит
+/// его (A0023-1), а другая сессия с тем же `device_id` и другим ключом получает `Forbidden` — иначе знающий
+/// пароль входил «как» новое устройство, подменял его ключ, и ответ владельца уходил ему.
+/// Повтор с тем же ключом сообщение не дублирует (клиент повторяет запрос при каждом переподключении) и
+/// переносит запрос на предъявившую его сессию (тот же процесс вошёл заново: ответ запечатан на его ключ,
+/// чужому он бесполезен); `again` — владелец сам попросил прислать сообщение ещё раз.
+/// Другой эфемерный ключ в той же сессии — клиент перезапущен: запрос начинается заново.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, session: &SessionKey, client: &str, eph_public: &[u8], again: bool, now: i64) -> Result<String, RequestRefusal> {
     let mut st = state();
     purge(&mut st, now);
     let list = st.pending.entry(user.to_string()).or_default();
     let mut resend: Option<(u64, String)> = None;
     if let Some(i) = list.iter().position(|p| p.device_id == device_id) {
         if list[i].eph_public == eph_public {
+            list[i].session = *session;
             if !again {
-                return Some(list[i].code.clone());
+                return Ok(list[i].code.clone());
             }
             resend = Some((list[i].request_id, list[i].code.clone()));
+        } else if list[i].session != *session {
+            return Err(RequestRefusal::Forbidden);
         } else {
             let old = list.remove(i).request_id;
             st.out.retain(|m| !(m.kind == KIND_ASK && m.request_id == old));
@@ -165,7 +191,7 @@ pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client:
                 if list.is_empty() {
                     st.pending.remove(user);
                 }
-                return None;
+                return Err(RequestRefusal::Unavailable);
             }
             let code = fresh_code(list);
             st.next_request += 1;
@@ -173,6 +199,7 @@ pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client:
             st.pending.entry(user.to_string()).or_default().push(Pending {
                 request_id,
                 device_id: device_id.to_string(),
+                session: *session,
                 created: now,
                 eph_public: eph_public.to_vec(),
                 code: code.clone(),
@@ -186,7 +213,18 @@ pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client:
     let queued = enqueue(&mut st, telegram_id, KIND_ASK, user, "", client, (request_id, &code), now);
     drop(st);
     wake().notify_waiters();
-    queued.then_some(code)
+    if queued { Ok(code) } else { Err(RequestRefusal::Unavailable) }
+}
+
+/// S7-10: владелец сменил пароль — все запросы ключа аккаунта и вопросы бота о них снимаются: их могла
+/// завести сессия знающего прежний пароль (её JWT после смены не действует), и места для запроса
+/// владельца снова есть.
+pub(crate) fn drop_requests(user: &str) {
+    let mut st = state();
+    if let Some(list) = st.pending.remove(user) {
+        let gone: Vec<u64> = list.iter().map(|p| p.request_id).collect();
+        st.out.retain(|m| !(m.kind == KIND_ASK && gone.contains(&m.request_id)));
+    }
 }
 
 /// Аккаунт ждёт ответа владельца (есть запрос нового устройства).
@@ -221,8 +259,8 @@ pub(crate) fn target(user: &str, request_id: u64, now: i64) -> Option<Target> {
     Some(Target { request_id: p.request_id, device_id: p.device_id.clone(), eph_public: p.eph_public.clone() })
 }
 
-/// Проверенный ключ из ответа владельца — запросившему устройству: запечатанный на его ключ либо
-/// (прежний клиент, аккаунт без копии ключей) открытым текстом.
+/// Проверенный ключ из ответа владельца — запросившему устройству, запечатанный на его ключ; открытый
+/// `plain` хранится только для `peek_reply` (аккаунт без копии ключей) и запросившему не отдаётся.
 pub(crate) fn store_reply(user: &str, request_id: u64, sealed: Option<Vec<u8>>, plain: Option<&str>, now: i64) -> bool {
     let mut st = state();
     purge(&mut st, now);
@@ -295,32 +333,25 @@ pub(crate) fn key_candidates(text: &str) -> Vec<String> {
 /// Ответ на опрос нового устройства.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct PollView {
-    /// Открытый ключ (только запрос без эфемерного ключа).
-    pub recovery_key: String,
     pub sealed: Vec<u8>,
     pub pending: bool,
     pub code: String,
 }
 
-/// Опрос нового устройства. `done` — ключ применён, стереть.
-pub(crate) fn poll(user: &str, device_id: &str, done: bool, now: i64) -> PollView {
+/// Опрос нового устройства. `done` — ключ применён, стереть. Запрос видит и гасит только заведшая его
+/// сессия (S7-1): другой сессии с тем же `device_id` — пусто, как будто запроса нет.
+pub(crate) fn poll(user: &str, device_id: &str, session: &SessionKey, done: bool, now: i64) -> PollView {
     let mut st = state();
     purge(&mut st, now);
     let Some(list) = st.pending.get_mut(user) else { return PollView::default() };
-    let Some(i) = list.iter().position(|p| p.device_id == device_id) else { return PollView::default() };
+    let Some(i) = list.iter().position(|p| p.device_id == device_id && p.session == *session) else { return PollView::default() };
     if done {
         let gone = list.remove(i).request_id;
         st.out.retain(|m| !(m.kind == KIND_ASK && m.request_id == gone));
         return PollView::default();
     }
     let p = &list[i];
-    PollView {
-        // Запрос с эфемерным ключом открытым текстом не отдаётся никогда
-        recovery_key: if p.eph_public.is_empty() { p.recovery_key.as_ref().map(|k| k.to_string()).unwrap_or_default() } else { String::new() },
-        sealed: p.sealed.clone().unwrap_or_default(),
-        pending: true,
-        code: p.code.clone(),
-    }
+    PollView { sealed: p.sealed.clone().unwrap_or_default(), pending: true, code: p.code.clone() }
 }
 
 fn take_out(acks: &[u64], now: i64) -> Vec<pb::TelegramOutMessage> {
@@ -427,18 +458,20 @@ mod tests {
         // Запрос нового устройства: один вопрос, повтор не дублирует
         let k1 = [1u8; 32];
         let k2 = [2u8; 32];
+        let s1 = session_key("jwt-dev-1");
+        let s_evil = session_key("jwt-evil");
         assert!(!has_request("b@x", now));
-        let code = request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, false, now).expect("код");
+        let code = request_key(22, "b@x", "dev-1", &s1, "Chrome, Android", &k1, false, now).expect("код");
         assert_eq!(code.len(), 6);
         let asks = pull(&[], 0, now + 1).await;
         assert_eq!(asks.len(), 1);
         assert_eq!((asks[0].code.as_str(), asks[0].request_id > 0), (code.as_str(), true));
         // Бот доставил вопрос; переподключение клиента новый вопрос не шлёт и код не меняет
         assert!(pull(&[asks[0].id], 0, now + 1).await.is_empty());
-        assert_eq!(request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, false, now + 2), Some(code.clone()));
+        assert_eq!(request_key(22, "b@x", "dev-1", &s1, "Chrome, Android", &k1, false, now + 2), Ok(code.clone()));
         assert!(pull(&[], 0, now + 2).await.is_empty());
         // «Прислать ещё раз» — шлёт тот же запрос
-        assert_eq!(request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, true, now + 2), Some(code.clone()));
+        assert_eq!(request_key(22, "b@x", "dev-1", &s1, "Chrome, Android", &k1, true, now + 2), Ok(code.clone()));
         let again = pull(&[], 0, now + 2).await;
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].request_id, asks[0].request_id);
@@ -448,9 +481,19 @@ mod tests {
         assert!(has_request("b@x", now + 1));
         let rid_b = asks[0].request_id;
 
+        // S7-1: другая сессия (вошедший паролем с тем же `device_id`) со своим ключом запрос не заменяет —
+        // `Forbidden`, без нового вопроса боту; запрос, его код и номер у владельца прежние
+        assert_eq!(request_key(22, "b@x", "dev-1", &s_evil, "Chrome, Android", &k2, false, now + 2), Err(RequestRefusal::Forbidden));
+        assert_eq!(request_key(22, "b@x", "dev-1", &s_evil, "Chrome, Android", &k2, true, now + 2), Err(RequestRefusal::Forbidden));
+        assert!(pull(&[], 0, now + 2).await.is_empty(), "нового вопроса боту нет");
+        assert_eq!(target("b@x", rid_b, now + 2).map(|t| t.eph_public), Some(k1.to_vec()));
+        // …и опросом чужой сессии запрос не виден (ни кода, ни ответа), а у своей — прежний код
+        assert_eq!(poll("b@x", "dev-1", &s_evil, false, now + 2), PollView::default());
+        assert_eq!(poll("b@x", "dev-1", &s1, false, now + 2).code, code);
+
         // A0023-1: запрос другого устройства не замещает и не гасит первый, у него свой код и номер;
         // ответ владельца достаётся тому, на чей запрос он отвечает
-        let code2 = request_key(22, "b@x", "dev-evil", "Chrome, Android", &k2, false, now + 2).expect("второй запрос");
+        let code2 = request_key(22, "b@x", "dev-evil", &s_evil, "Chrome, Android", &k2, false, now + 2).expect("второй запрос");
         assert_ne!(code2, code);
         let evil_ask = pull(&[], 0, now + 2).await;
         assert_eq!(evil_ask.len(), 1);
@@ -462,46 +505,56 @@ mod tests {
         let t = target("b@x", rid_b, now + 3).expect("цель");
         assert_eq!((t.device_id.as_str(), t.eph_public.as_slice()), ("dev-1", &k1[..]));
         assert!(target("b@x", rid_b + 1000, now + 3).is_none());
-        assert!(store_reply("b@x", rid_b, Some(vec![9; 40]), None, now + 3));
-        // Чужое устройство ничего не получает; тому, чей запрос, — запечатанный ответ, но не открытый
-        assert!(poll("b@x", "dev-evil", false, now + 3).sealed.is_empty());
-        let mine = poll("b@x", "dev-1", false, now + 3);
-        assert_eq!((mine.sealed.as_slice(), mine.recovery_key.as_str(), mine.pending, mine.code.as_str()), (&[9u8; 40][..], "", true, code.as_str()));
-        assert_eq!(peek_reply("b@x", now + 3), "", "открытого ключа сервер не держит");
-        // Повторный опрос (обрыв связи у клиента) отдаёт ответ снова — до `done`
-        assert_eq!(poll("b@x", "dev-1", false, now + 4).sealed.len(), 40);
-        assert_eq!(poll("b@x", "dev-1", true, now + 5), PollView::default());
+        assert!(store_reply("b@x", rid_b, Some(vec![9; 40]), Some("KEY-B"), now + 3));
+        // Чужое устройство и чужая сессия того же устройства ничего не получают; тому, чей запрос, —
+        // запечатанный ответ (открытого ключа в опросе нет вовсе)
+        assert!(poll("b@x", "dev-evil", &s_evil, false, now + 3).sealed.is_empty());
+        assert!(poll("b@x", "dev-1", &s_evil, false, now + 3).sealed.is_empty());
+        let mine = poll("b@x", "dev-1", &s1, false, now + 3);
+        assert_eq!((mine.sealed.as_slice(), mine.pending, mine.code.as_str()), (&[9u8; 40][..], true, code.as_str()));
+        // Повторный опрос (обрыв связи у клиента) отдаёт ответ снова — до `done`; `done` чужой сессии не гасит
+        assert_eq!(poll("b@x", "dev-1", &s1, false, now + 4).sealed.len(), 40);
+        assert_eq!(poll("b@x", "dev-1", &s_evil, true, now + 4), PollView::default());
+        assert!(poll("b@x", "dev-1", &s1, false, now + 4).pending);
+        assert_eq!(poll("b@x", "dev-1", &s1, true, now + 5), PollView::default());
         // Чужой запрос остался жив
-        assert!(poll("b@x", "dev-evil", false, now + 5).pending);
+        assert!(poll("b@x", "dev-evil", &s_evil, false, now + 5).pending);
         assert!(has_request("b@x", now + 5));
-        // Новый эфемерный ключ того же устройства начинает запрос заново
-        assert!(request_key(22, "b@x", "dev-evil", "x", &k1, false, now + 6).is_some());
+        // Новый эфемерный ключ в той же сессии (клиент перезапущен) начинает запрос заново
+        assert!(request_key(22, "b@x", "dev-evil", &s_evil, "x", &k1, false, now + 6).is_ok());
         assert_eq!(target("b@x", rid_evil, now + 6).map(|t| t.request_id), None, "прежний номер сгорел");
+        // Тот же ключ из новой сессии (процесс вошёл заново) — запрос переезжает на неё, код прежний
+        let s_relogin = session_key("jwt-evil-2");
+        let kept = poll("b@x", "dev-evil", &s_evil, false, now + 6).code;
+        assert_eq!(request_key(22, "b@x", "dev-evil", &s_relogin, "x", &k1, false, now + 7), Ok(kept.clone()));
+        assert_eq!(poll("b@x", "dev-evil", &s_relogin, false, now + 7).code, kept);
+        assert!(!poll("b@x", "dev-evil", &s_evil, false, now + 7).pending);
 
         // Лимит одновременных запросов аккаунта: больше — отказ, прежние не вытесняются
-        assert!(request_key(22, "l@x", "d1", "", &k1, false, now).is_some());
-        assert!(request_key(22, "l@x", "d2", "", &k1, false, now).is_some());
-        assert!(request_key(22, "l@x", "d3", "", &k1, false, now).is_some());
-        assert!(request_key(22, "l@x", "d4", "", &k1, false, now).is_none());
-        assert!(poll("l@x", "d1", false, now).pending);
+        let sl = session_key("jwt-l");
+        assert!(request_key(22, "l@x", "d1", &sl, "", &k1, false, now).is_ok());
+        assert!(request_key(22, "l@x", "d2", &sl, "", &k1, false, now).is_ok());
+        assert!(request_key(22, "l@x", "d3", &sl, "", &k1, false, now).is_ok());
+        assert_eq!(request_key(22, "l@x", "d4", &sl, "", &k1, false, now), Err(RequestRefusal::Unavailable));
+        assert!(poll("l@x", "d1", &sl, false, now).pending);
+        // S7-10: смена пароля снимает все запросы аккаунта и вопросы бота о них — место снова есть
+        let _ = pull(&[], 0, now).await;
+        drop_requests("l@x");
+        assert!(!has_request("l@x", now));
+        assert!(pull(&[], 0, now + REDELIVER_SECS).await.iter().all(|m| m.user != "l@x"), "вопросы бота сняты");
+        assert!(request_key(22, "l@x", "d4", &sl, "", &k1, false, now).is_ok());
 
-        // Прежний клиент без эфемерного ключа: ответ открытым текстом, единственный запрос — без номера
-        assert!(request_key(66, "o@x", "dev-old", "", &[], false, now).is_some());
-        let old = target("o@x", 0, now).expect("единственный запрос");
-        assert!(store_reply("o@x", old.request_id, None, Some("KEY-O"), now));
-        assert_eq!(poll("o@x", "dev-old", false, now).recovery_key, "KEY-O");
-        assert_eq!(poll("o@x", "dev-x", false, now), PollView::default());
-        // Запрос с эфемерным ключом открытым текстом не отдаётся, даже если он сохранён для копии ключей
-        assert!(request_key(67, "p@x", "dev-p", "", &k1, false, now).is_some());
+        // Открытый ключ (аккаунт без копии ключей) хранится только для `peek_reply`, в опрос не попадает
+        let sp = session_key("jwt-p");
+        assert!(request_key(67, "p@x", "dev-p", &sp, "", &k1, false, now).is_ok());
         let tp = target("p@x", 0, now).expect("цель");
         assert!(store_reply("p@x", tp.request_id, Some(vec![1; 40]), Some("KEY-P"), now));
-        let pv = poll("p@x", "dev-p", false, now);
-        assert_eq!((pv.recovery_key.as_str(), pv.sealed.len()), ("", 40));
+        assert_eq!(poll("p@x", "dev-p", &sp, false, now).sealed.len(), 40);
         assert_eq!(peek_reply("p@x", now), "KEY-P");
 
         // Ответ без запроса не принимается; запрос истекает
         assert!(!store_reply("c@x", 1, None, Some("KEY-C"), now));
-        assert!(request_key(33, "c@x", "dev-9", "", &[], false, now).is_some());
+        assert!(request_key(33, "c@x", "dev-9", &sp, "", &k1, false, now).is_ok());
         assert!(!has_request("c@x", now + REQUEST_TTL_SECS));
         assert!(target("c@x", 0, now + REQUEST_TTL_SECS).is_none());
 

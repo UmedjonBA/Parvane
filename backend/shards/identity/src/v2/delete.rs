@@ -32,10 +32,16 @@ pub(crate) async fn pending_until(pool: &SqlitePool, address: &str) -> Option<i6
         .map(|(t,)| t)
 }
 
-/// Аккаунт ждёт удаления — для проверки токенов из v1-кода.
-pub(crate) async fn deletion_pending(address: &str) -> bool {
-    let Some(pool) = V2_POOL.get() else { return false };
-    pending_until(pool, address).await.is_some()
+/// Аккаунт ждёт удаления — для проверки токенов из v1-кода. PV-009: ошибка БД — `Err` (токен не принимается),
+/// а не «не ждёт».
+pub(crate) async fn deletion_pending(address: &str) -> Result<bool, sqlx::Error> {
+    let Some(pool) = V2_POOL.get() else { return Ok(false) };
+    deletion_pending_in(pool, address).await
+}
+
+pub(crate) async fn deletion_pending_in(pool: &SqlitePool, address: &str) -> Result<bool, sqlx::Error> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM account_deletions WHERE address = ?").bind(address).fetch_optional(pool).await?;
+    Ok(row.is_some())
 }
 
 /// Для собеседников аккаунта нет: ждёт удаления либо стёрт, а ник ещё никто не занял.

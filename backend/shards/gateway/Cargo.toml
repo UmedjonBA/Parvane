@@ -17,3 +17,6 @@ parvane-types = { path = "../../shared/parvane-types" }
 parvane-protocol = { path = "../../protocol" }
 prost = "0.14"
 tokio-tungstenite = "0.24"
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }

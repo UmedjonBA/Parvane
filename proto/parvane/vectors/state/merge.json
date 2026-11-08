@@ -6651,6 +6651,194 @@
         ]
       },
       "name": "чат очищен «у себя»: граница по собеседнику только растёт, поздняя метка с меньшей границей её не откатывает"
+    },
+    {
+      "expect": {
+        "max_lamport": 4,
+        "ok": true,
+        "rejected": [
+          4,
+          5
+        ],
+        "snapshot": {
+          "contacts": [
+            {
+              "first_name": "Роберт",
+              "note": "сосед",
+              "user": {
+                "address": "bob@x"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "contact_set": {
+              "first_name": "Боб",
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "contact_set": {
+              "first_name": "Роберт",
+              "note": "сосед",
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "3",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "contact_set": {
+              "user": {
+                "address": "carol@x"
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "2",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "contact_remove": {
+              "peer": {
+                "user": {
+                  "address": "carol@x"
+                }
+              }
+            },
+            "device_id": "dev-a",
+            "lamport": "4",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "contact_remove": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+                }
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "ts_ms": "1700000000000"
+          },
+          {
+            "contact_set": {
+              "user": {
+                "address": "not an address"
+              }
+            },
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "ts_ms": "1700000000000"
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc31b202110a070a05626f6240781206d091d0bed0b1",
+          "0a100202020202020202020202020202020210031a056465762d622080d095ffbc31b202230a070a05626f624078120cd0a0d0bed0b1d0b5d180d182220ad181d0bed181d0b5d0b4",
+          "0a100303030303030303030303030303030310021a056465762d612080d095ffbc31b2020b0a090a076361726f6c4078",
+          "0a100404040404040404040404040404040410041a056465762d612080d095ffbc31ba020d0a0b0a090a076361726f6c4078",
+          "0a100505050505050505050505050505050510011a056465762d622080d095ffbc31ba02190a1712150a0178121006060606060606060606060606060606",
+          "0a100606060606060606060606060606060610021a056465762d622080d095ffbc31b202120a100a0e6e6f7420616e2061646472657373"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            1,
+            3,
+            5,
+            0,
+            2,
+            4
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "контакты (CONTACT-1): своё имя и заметка LWW, удаление — надгробие, группа контактом не бывает"
     }
   ],
   "description": "STATE-1: сведение личного состояния LWW (lamport, device_id, op_id, sha256(операции)); каждый порядок из orders (индексы в ops_hex, возможны повторы) даёт тот же snapshot и тот же набор отвергнутых индексов",

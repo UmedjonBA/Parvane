@@ -11,6 +11,7 @@
 //! (`ContainerAccess`): цепочка, позиция, право админа, эпоха отзыва.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -44,20 +45,78 @@ pub const PAGE_ITEMS: usize = 1024;
 const OWNER_TTL: Duration = Duration::from_secs(15);
 /// Предел кэша владельцев ключей (память шарда не растёт от потока чужих ключей).
 const OWNERS_MAX: usize = 10_000;
-/// Операций в журнале одного контейнера и всех контейнеров владельца (диск шарда не безграничен).
+/// Операций в журнале одного контейнера и одного писателя во всех журналах (диск шарда не безграничен).
 const MAX_OPS_PER_CONTAINER: u64 = 100_000;
-const MAX_OPS_PER_OWNER: i64 = 500_000;
+const MAX_OPS_PER_WRITER: u64 = 500_000;
+/// S7-22: байты журнала операций — на контейнер и на писателя (операция до 256 КиБ: счёт по числу операций
+/// пускал до 128 ГиБ на аккаунт).
+const MAX_BYTES_PER_CONTAINER: u64 = 1 << 30;
+const MAX_BYTES_PER_WRITER: u64 = 2 << 30;
+/// Кэш проверенного журнала грантов (S7-24): контейнеров в памяти.
+const ACCESS_CACHE_MAX: usize = 512;
+/// Доля одного пользователя (или одного чужого сервера) в обработчиках шарда (S7-21).
+const PER_USER_HANDLERS: usize = 8;
 
 fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 const KEY_OWNER_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Пределы журнала операций (из env при старте; тесты задают свои).
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub ops_per_container: u64,
+    pub ops_per_writer: u64,
+    pub bytes_per_container: u64,
+    pub bytes_per_writer: u64,
+}
+
+impl Limits {
+    pub fn from_env() -> Self {
+        Self {
+            ops_per_container: env_u64("PARVANE_DOMAINS_MAX_OPS_PER_CONTAINER", MAX_OPS_PER_CONTAINER),
+            // прежнее имя переменной: теперь доля писателя, а не сумма журналов владельца
+            ops_per_writer: env_u64("PARVANE_DOMAINS_MAX_OPS_PER_OWNER", MAX_OPS_PER_WRITER),
+            bytes_per_container: env_u64("PARVANE_DOMAINS_MAX_BYTES_PER_CONTAINER", MAX_BYTES_PER_CONTAINER),
+            bytes_per_writer: env_u64("PARVANE_DOMAINS_MAX_BYTES_PER_USER", MAX_BYTES_PER_WRITER),
+        }
+    }
+}
+
+/// Проверенный журнал грантов контейнера на версии `version` и подписанты его записей.
+struct CachedAccess {
+    version: u64,
+    access: ContainerAccess,
+    keys: HashMap<[u8; 32], Author>,
+}
+
 pub struct Domains {
     pub pool: SqlitePool,
     nc: Option<Client>,
     pub server_domain: String,
     owners: Mutex<HashMap<[u8; 32], (Instant, Author)>>,
+    pub(crate) limits: Limits,
+    access_cache: Mutex<HashMap<Vec<u8>, CachedAccess>>,
+    /// Сколько раз журнал грантов перепроверялся целиком (наблюдаемо в тестах).
+    pub(crate) replays: AtomicUsize,
+    pub(crate) slots: Arc<parvane_v2rt::OwnerSlots>,
+}
+
+/// Чей это запрос для доли обработчиков и квоты журнала: свой пользователь — по адресу; пользователь другого
+/// сервера — по домену-источнику (`ShardRequest.origin_domain`): адреса `x@<домен>` чужой сервер придумывает сам.
+pub fn usage_key(user: &str, origin_domain: &str) -> String {
+    if origin_domain.is_empty() {
+        user.to_string()
+    } else {
+        format!("@{}", origin_domain.to_ascii_lowercase())
+    }
+}
+
+/// Страница журнала операций: операции, есть ли ещё, сколько тел операций прочитано из базы.
+pub(crate) struct SyncPage {
+    pub ops: Vec<ContainerOp>,
+    pub more: bool,
+    pub materialized: usize,
 }
 
 /// Домен сервера (как у messenger v2).
@@ -163,7 +222,27 @@ struct Meta {
 
 impl Domains {
     pub fn new(pool: SqlitePool, nc: Option<Client>, server_domain: String) -> Self {
-        Self { pool, nc, server_domain, owners: Mutex::new(HashMap::new()) }
+        Self::with_limits(pool, nc, server_domain, Limits::from_env())
+    }
+
+    pub fn with_limits(pool: SqlitePool, nc: Option<Client>, server_domain: String, limits: Limits) -> Self {
+        let per_user = std::env::var("PARVANE_HANDLER_PER_USER").ok().and_then(|v| v.parse().ok()).unwrap_or(PER_USER_HANDLERS);
+        Self {
+            pool,
+            nc,
+            server_domain,
+            owners: Mutex::new(HashMap::new()),
+            limits,
+            access_cache: Mutex::new(HashMap::new()),
+            replays: AtomicUsize::new(0),
+            slots: parvane_v2rt::OwnerSlots::new(per_user),
+        }
+    }
+
+    fn forget_access(&self) {
+        if let Ok(mut g) = self.access_cache.lock() {
+            g.clear();
+        }
     }
 
     /// Запомнить владельца ключа (кэш identity; в тестах — вместо identity).
@@ -272,10 +351,23 @@ impl Domains {
             .await
             .map_err(db_err)?;
         sqlx::query("DELETE FROM container_grants WHERE kind = 0 AND grantee = ?").bind(old).execute(&mut *tx).await.map_err(db_err)?;
+        // Доля писателя переезжает на новый адрес (S7-22)
+        sqlx::query("UPDATE container_log SET author = ? WHERE author = ?").bind(new).bind(old).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query(
+            "INSERT INTO log_usage (user, ops, bytes) SELECT ?, ops, bytes FROM log_usage WHERE user = ? \
+             ON CONFLICT(user) DO UPDATE SET ops = log_usage.ops + excluded.ops, bytes = log_usage.bytes + excluded.bytes",
+        )
+        .bind(new)
+        .bind(old)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        sqlx::query("DELETE FROM log_usage WHERE user = ?").bind(old).execute(&mut *tx).await.map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
         if let Ok(mut g) = self.owners.lock() {
             g.clear();
         }
+        self.forget_access();
         Ok(())
     }
 
@@ -283,6 +375,25 @@ impl Domains {
     /// грантов чужих контейнеров.
     pub async fn purge(&self, address: &str) -> Result<(), ErrorCode> {
         let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
+        // Доли писателей в стираемых журналах (S7-22)
+        let shares: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT author, COUNT(*), COALESCE(SUM(LENGTH(op)), 0) FROM container_log \
+             WHERE container IN (SELECT id FROM containers WHERE owner = ?) GROUP BY author",
+        )
+        .bind(address)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        for (author, ops, bytes) in shares {
+            sqlx::query("UPDATE log_usage SET ops = MAX(ops - ?, 0), bytes = MAX(bytes - ?, 0) WHERE user = ?")
+                .bind(ops)
+                .bind(bytes)
+                .bind(&author)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        }
+        sqlx::query("DELETE FROM log_usage WHERE user = ?").bind(address).execute(&mut *tx).await.map_err(db_err)?;
         for t in ["container_log", "container_grant_log", "container_grants", "container_snapshots"] {
             sqlx::query(&format!("DELETE FROM {t} WHERE container IN (SELECT id FROM containers WHERE owner = ?)"))
                 .bind(address)
@@ -297,6 +408,7 @@ impl Domains {
         if let Ok(mut g) = self.owners.lock() {
             g.clear();
         }
+        self.forget_access();
         info!("domains: аккаунт стёрт");
         Ok(())
     }
@@ -362,10 +474,15 @@ impl Domains {
             return Err(ErrorCode::Forbidden);
         }
         let user = req.user.as_str();
+        // S7-21: один пользователь (или один чужой сервер) не занимает все обработчики шарда
+        let writer = usage_key(user, &req.origin_domain);
+        let Some(_slot) = self.slots.try_acquire(&writer) else {
+            return Err(ErrorCode::RateLimited);
+        };
         match method {
             "domain.container.create" => self.create(user, body(&req)?).await,
             "domain.container.get" => self.get(user, body(&req)?).await,
-            "domain.op.append" => self.append(user, body(&req)?).await,
+            "domain.op.append" => self.append(user, &writer, body(&req)?).await,
             "domain.op.sync" => self.sync(user, body(&req)?).await,
             "domain.grant.set" => {
                 let r: DomainGrantSetRequest = body(&req)?;
@@ -455,7 +572,7 @@ impl Domains {
         .encode_to_vec())
     }
 
-    async fn append(&self, user: &str, r: DomainOpAppendRequest) -> Reply {
+    async fn append(&self, user: &str, writer: &str, r: DomainOpAppendRequest) -> Reply {
         let op = r.op.ok_or(ErrorCode::Invalid)?;
         let id = self.container_id(op.container.as_ref())?;
         let (m, _) = self.require(&id, user, GrantLevel::Write).await?;
@@ -464,33 +581,45 @@ impl Domains {
         }
         let seal = domain::verify_op_seal(&op).map_err(code)?;
         self.author_is_caller(&seal.signer, user).await?;
-        // Квота журнала: на контейнер и на владельца (иначе писатель, в т.ч. с чужого сервера, растит диск без предела).
-        if m.head_seq >= env_u64("PARVANE_DOMAINS_MAX_OPS_PER_CONTAINER", MAX_OPS_PER_CONTAINER) {
-            return Err(ErrorCode::Limit);
-        }
-        let (owner_ops,): (i64,) = sqlx::query_as("SELECT COALESCE(SUM(head_seq), 0) FROM containers WHERE owner = ?")
-            .bind(&m.owner)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(db_err)?;
-        if owner_ops >= env_u64("PARVANE_DOMAINS_MAX_OPS_PER_OWNER", MAX_OPS_PER_OWNER as u64) as i64 {
-            return Err(ErrorCode::Limit);
-        }
         let stored = ContainerOp { seq: 0, ..op }.encode_to_vec();
+        let size = stored.len() as i64;
+        let lim = self.limits;
         let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
-        // UPDATE первым — берёт блокировку записи, seq без гонок.
-        let (seq,): (i64,) = sqlx::query_as("UPDATE containers SET head_seq = head_seq + 1 WHERE id = ? RETURNING head_seq")
+        // S7-22: квота журнала — в байтах и операциях на контейнер и на писателя (получатель гранта пишет в свою
+        // долю, а не в долю владельца; иначе редактор совместной папки переводил весь «План» владельца в LIMIT).
+        let (head, bytes): (i64, i64) = sqlx::query_as("SELECT head_seq, log_bytes FROM containers WHERE id = ?")
             .bind(&id)
             .fetch_one(&mut *tx)
             .await
             .map_err(db_err)?;
-        let ins = sqlx::query("INSERT INTO container_log (container, seq, op_id, key_epoch, op, at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(container, op_id) DO NOTHING")
+        let (w_ops, w_bytes): (i64, i64) = sqlx::query_as("SELECT ops, bytes FROM log_usage WHERE user = ?")
+            .bind(writer)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?
+            .unwrap_or((0, 0));
+        if head as u64 >= lim.ops_per_container
+            || (bytes + size) as u64 > lim.bytes_per_container
+            || w_ops as u64 >= lim.ops_per_writer
+            || (w_bytes + size) as u64 > lim.bytes_per_writer
+        {
+            return Err(ErrorCode::Limit);
+        }
+        // UPDATE первым — берёт блокировку записи, seq без гонок.
+        let (seq,): (i64,) = sqlx::query_as("UPDATE containers SET head_seq = head_seq + 1, log_bytes = log_bytes + ? WHERE id = ? RETURNING head_seq")
+            .bind(size)
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        let ins = sqlx::query("INSERT INTO container_log (container, seq, op_id, key_epoch, op, at, author) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(container, op_id) DO NOTHING")
             .bind(&id)
             .bind(seq)
             .bind(&seal.op_id)
             .bind(m.key_epoch as i64)
             .bind(&stored)
             .bind(now_unix())
+            .bind(writer)
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -498,6 +627,12 @@ impl Domains {
             // Повтор op_id: откат (seq не расходуется).
             return Err(ErrorCode::Duplicate);
         }
+        sqlx::query("INSERT INTO log_usage (user, ops, bytes) VALUES (?, 1, ?) ON CONFLICT(user) DO UPDATE SET ops = ops + 1, bytes = bytes + excluded.bytes")
+            .bind(writer)
+            .bind(size)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
         Ok(DomainOpAppendResponse { seq: seq as u64 }.encode_to_vec())
     }
@@ -507,28 +642,53 @@ impl Domains {
         self.require(&id, user, GrantLevel::Read).await?;
         let budget = if r.max_bytes == 0 || r.max_bytes > domain::SYNC_MAX_BYTES { domain::SYNC_MAX_BYTES } else { r.max_bytes } as usize;
         let after = i64::try_from(r.after_seq).map_err(|_| ErrorCode::Invalid)?;
-        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, op FROM container_log WHERE container = ? AND seq > ? ORDER BY seq LIMIT ?")
-            .bind(&id)
+        let p = self.sync_page(&id, after, budget).await?;
+        Ok(DomainOpSyncResponse { ops: p.ops, more: p.more }.encode_to_vec())
+    }
+
+    /// S7-21: страница журнала — сначала только номера и размеры, затем тела ровно тех операций, что входят в
+    /// бюджет. Раньше в память читались до 1025 операций по 256 КиБ, чтобы отдать ~700 КиБ.
+    pub(crate) async fn sync_page(&self, id: &[u8], after: i64, budget: usize) -> Result<SyncPage, ErrorCode> {
+        let sizes: Vec<(i64, i64)> = sqlx::query_as("SELECT seq, LENGTH(op) FROM container_log WHERE container = ? AND seq > ? ORDER BY seq LIMIT ?")
+            .bind(id)
             .bind(after)
             .bind(PAGE_ITEMS as i64 + 1)
             .fetch_all(&self.pool)
             .await
             .map_err(db_err)?;
-        let mut ops = Vec::new();
+        let mut take = 0usize;
         let mut used = 0usize;
+        let mut last = after;
         let mut more = false;
-        for (seq, bytes) in rows {
+        for (seq, len) in &sizes {
+            let len = usize::try_from(*len).unwrap_or(usize::MAX);
             // Хотя бы одна запись на страницу, иначе клиент не продвинется.
-            if ops.len() >= PAGE_ITEMS || (!ops.is_empty() && used + bytes.len() > budget) {
+            if take >= PAGE_ITEMS || (take > 0 && used.saturating_add(len) > budget) {
                 more = true;
                 break;
             }
-            used += bytes.len();
+            used = used.saturating_add(len);
+            take += 1;
+            last = *seq;
+        }
+        if take == 0 {
+            return Ok(SyncPage { ops: vec![], more: false, materialized: 0 });
+        }
+        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, op FROM container_log WHERE container = ? AND seq > ? AND seq <= ? ORDER BY seq")
+            .bind(id)
+            .bind(after)
+            .bind(last)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        let materialized = rows.len();
+        let mut ops = Vec::with_capacity(rows.len());
+        for (seq, bytes) in rows {
             let mut op = ContainerOp::decode(bytes.as_slice()).map_err(db_err)?;
             op.seq = seq as u64;
             ops.push(op);
         }
-        Ok(DomainOpSyncResponse { ops, more }.encode_to_vec())
+        Ok(SyncPage { ops, more, materialized })
     }
 
     /// grant.set / grant.revoke: проверка движком по всему журналу грантов.
@@ -551,43 +711,21 @@ impl Domains {
         let signer: [u8; 32] = op.signer_key.as_slice().try_into().map_err(|_| ErrorCode::Invalid)?;
         let author = self.author_is_caller(&signer, user).await?;
 
-        // Повторная проверка сохранённой цепочки движком; подписанты истории —
-        // из таблицы (определены при приёме).
-        let genesis = SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
-        let rows: Vec<(Vec<u8>, Vec<u8>, String)> =
-            sqlx::query_as("SELECT entry, signer_key, signer_user FROM container_grant_log WHERE container = ? ORDER BY version")
-                .bind(&id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(db_err)?;
-        let mut keys: HashMap<[u8; 32], Author> = HashMap::new();
-        let gk: [u8; 32] = m.genesis_key.as_slice().try_into().map_err(db_err_str)?;
-        // Прежние адреса (смена ника): владелец и подписанты истории — под тем адресом, что в подписи
-        let mut formers: HashMap<String, Vec<String>> = HashMap::new();
-        let owner_aliases = self.former(&m.owner).await?;
-        formers.insert(m.owner.clone(), owner_aliases.clone());
-        keys.insert(gk, Author { user: m.owner.clone(), device_id: String::new(), aliases: owner_aliases });
-        let mut entries = Vec::with_capacity(rows.len());
-        for (entry, key, signer_user) in rows {
-            let k: [u8; 32] = key.as_slice().try_into().map_err(db_err_str)?;
-            let aliases = match formers.get(&signer_user) {
-                Some(a) => a.clone(),
-                None => {
-                    let a = self.former(&signer_user).await?;
-                    formers.insert(signer_user.clone(), a.clone());
-                    a
-                }
-            };
-            keys.insert(k, Author { user: signer_user, device_id: String::new(), aliases });
-            entries.push(SignedOp::decode(entry.as_slice()).map_err(db_err)?);
-        }
+        // S7-24: проверенный журнал грантов той же версии — из кэша; иначе перепроверка всей цепочки движком
+        // (до 4096 подписей на каждую запись гранта — CPU рос квадратично).
+        let cached = self.access_cache.lock().ok().and_then(|g| {
+            g.get(&id).filter(|c| c.version == m.grant_version).map(|c| (c.access.clone(), c.keys.clone()))
+        });
+        let (mut access, mut keys) = match cached {
+            Some(c) => c,
+            None => self.replay_access(&id, &m).await?,
+        };
         keys.insert(signer, author.clone());
-        let resolve = |k: &[u8; 32]| keys.get(k).cloned();
-        let mut access = ContainerAccess::replay(&genesis, &entries, &resolve, &no_groups).map_err(|e| {
-            error!("domains: сохранённый журнал грантов {} не сходится: {}", hex(&id), e);
-            ErrorCode::Unavailable
-        })?;
-        let ev = access.apply(&op, &resolve, &no_groups).map_err(code)?;
+        let ev = {
+            let resolve = |k: &[u8; 32]| keys.get(k).cloned();
+            access.apply(&op, &resolve, &no_groups).map_err(code)?
+        };
+
 
         let (kind, grantee) = grantee_row(&ev.grantee);
         let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
@@ -637,8 +775,57 @@ impl Domains {
             }
         }
         tx.commit().await.map_err(db_err)?;
+        if let Ok(mut g) = self.access_cache.lock() {
+            if g.len() >= ACCESS_CACHE_MAX && !g.contains_key(&id) {
+                g.clear();
+            }
+            if g.get(&id).map_or(true, |c| c.version < ev.version) {
+                g.insert(id.clone(), CachedAccess { version: ev.version, access, keys });
+            }
+        }
         debug!("domains: журнал грантов {} → v{}, эпоха {}", hex(&id), ev.version, ev.key_epoch);
         Ok(ev)
+    }
+
+    /// Повторная проверка сохранённой цепочки движком; подписанты истории — из таблицы (определены при приёме).
+    async fn replay_access(&self, id: &[u8], m: &Meta) -> Result<(ContainerAccess, HashMap<[u8; 32], Author>), ErrorCode> {
+        self.replays.fetch_add(1, Ordering::Relaxed);
+        let genesis = SignedOp::decode(m.genesis.as_slice()).map_err(db_err)?;
+        let rows: Vec<(Vec<u8>, Vec<u8>, String)> =
+            sqlx::query_as("SELECT entry, signer_key, signer_user FROM container_grant_log WHERE container = ? ORDER BY version")
+                .bind(id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(db_err)?;
+        let mut keys: HashMap<[u8; 32], Author> = HashMap::new();
+        let gk: [u8; 32] = m.genesis_key.as_slice().try_into().map_err(db_err_str)?;
+        // Прежние адреса (смена ника): владелец и подписанты истории — под тем адресом, что в подписи
+        let mut formers: HashMap<String, Vec<String>> = HashMap::new();
+        let owner_aliases = self.former(&m.owner).await?;
+        formers.insert(m.owner.clone(), owner_aliases.clone());
+        keys.insert(gk, Author { user: m.owner.clone(), device_id: String::new(), aliases: owner_aliases });
+        let mut entries = Vec::with_capacity(rows.len());
+        for (entry, key, signer_user) in rows {
+            let k: [u8; 32] = key.as_slice().try_into().map_err(db_err_str)?;
+            let aliases = match formers.get(&signer_user) {
+                Some(a) => a.clone(),
+                None => {
+                    let a = self.former(&signer_user).await?;
+                    formers.insert(signer_user.clone(), a.clone());
+                    a
+                }
+            };
+            keys.insert(k, Author { user: signer_user, device_id: String::new(), aliases });
+            entries.push(SignedOp::decode(entry.as_slice()).map_err(db_err)?);
+        }
+        let access = {
+            let resolve = |k: &[u8; 32]| keys.get(k).cloned();
+            ContainerAccess::replay(&genesis, &entries, &resolve, &no_groups).map_err(|e| {
+                error!("domains: сохранённый журнал грантов {} не сходится: {}", hex(id), e);
+                ErrorCode::Unavailable
+            })?
+        };
+        Ok((access, keys))
     }
 
     /// Контейнеры домена, доступные пользователю: свои и по прямым грантам

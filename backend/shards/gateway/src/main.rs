@@ -63,18 +63,25 @@ async fn main() -> Result<()> {
     // первичное подключение вместо немедленного выхода.
     // GW-01: очередь подписки NATS по умолчанию — 65 536 сообщений на подписку;
     // у нечитающего клиента это неограниченная память. Хватает и малой.
-    let mut opts = async_nats::ConnectOptions::new()
-        .retry_on_initial_connect()
-        .subscription_capacity(env("PARVANE_GATEWAY_SUB_CAPACITY", "1024").parse().unwrap_or(1024));
-    if !pass.is_empty() {
-        // GW-05: ответы gateway — в свой почтовый ящик `_INBOX.gateway` (ACL роли подписан только на него)
-        opts = opts.custom_inbox_prefix(parvane_types::topic_contract::reply_inbox_prefix(&user));
-        opts = opts.user_and_password(user, pass);
-    }
-    let nats = Arc::new(opts.connect(&nats_url).await.context("подключение к NATS")?);
+    let connect_opts = |capacity: usize| {
+        let mut opts = async_nats::ConnectOptions::new().retry_on_initial_connect().subscription_capacity(capacity);
+        if !pass.is_empty() {
+            // GW-05: ответы gateway — в свой почтовый ящик `_INBOX.gateway` (ACL роли подписан только на него)
+            opts = opts.custom_inbox_prefix(parvane_types::topic_contract::reply_inbox_prefix(&user));
+            opts = opts.user_and_password(user.clone(), pass.clone());
+        }
+        opts
+    };
+    let nats = Arc::new(
+        connect_opts(env("PARVANE_GATEWAY_SUB_CAPACITY", "1024").parse().unwrap_or(1024)).connect(&nats_url).await.context("подключение к NATS")?,
+    );
+    // S7-13: ящики потоков скачивания — на отдельном соединении с малой ёмкостью подписки: окно потока —
+    // 16 кусков, больше в ящике не бывает, а прежние 1024 места по ~700 КБ — до 700 МБ на поток.
+    let stream_cap = env("PARVANE_GATEWAY_STREAM_SUB_CAPACITY", "64").parse().unwrap_or(64usize).max(v2::STREAM_WINDOW as usize + 8);
+    let stream_nats = Arc::new(connect_opts(stream_cap).connect(&nats_url).await.context("подключение к NATS (потоки)")?);
     info!("NATS подключён: {}", nats_url);
     // Протокол v2 (spec 007): общее состояние (описатель сервера, отзывы).
-    let v2 = v2::Shared::start(nats.clone()).await.context("v2: подписка на отзывы")?;
+    let v2 = v2::Shared::start(nats.clone(), stream_nats).await.context("v2: подписка на отзывы")?;
 
     let max_conns = std::env::var("PARVANE_GATEWAY_MAX_CONNS")
         .ok()
@@ -88,12 +95,14 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(64usize);
+    let max_onion = std::env::var("PARVANE_GATEWAY_MAX_CONNS_ONION").ok().and_then(|s| s.parse().ok()).unwrap_or(256usize);
     let limits = Arc::new(Limits {
         conns: Arc::new(Semaphore::new(max_conns)),
         per_ip: Arc::new(Mutex::new(HashMap::new())),
         max_per_ip,
         per_client: Arc::new(Mutex::new(HashMap::new())),
         max_per_client,
+        max_onion,
     });
     info!("Лимиты соединений: всего {}, на IP {}, на клиента за прокси {}", max_conns, max_per_ip, max_per_client);
 

@@ -241,6 +241,22 @@ impl GroupState {
         self.is_owner(u) || matches!(self.member(u), Some(m) if m.role == Role::Admin)
     }
 
+    /// A0007-2 / S7-2: вправе ли `signer` поднять порог отзыва `target`. Свой порог — всегда; чужой — только тот,
+    /// кто старше цели: владелец — любому другому, админ с правом банить — только участнику без админских прав.
+    /// Владельцу чужой порог не ставит никто (иначе младший админ «замораживал» владельца и захватывал группу).
+    pub fn may_floor(&self, signer: &str, target: &str) -> bool {
+        if signer == target {
+            return true;
+        }
+        if self.is_owner(target) {
+            return false;
+        }
+        if self.is_owner(signer) {
+            return true;
+        }
+        self.admin_can(signer, |r| r.ban_users) && !self.is_admin(target)
+    }
+
     /// Участник вправе писать сейчас (держит ключ отправки эпохи).
     pub fn can_write(&self, u: &str, now_ms: i64) -> bool {
         let Some(m) = self.member(u) else { return false };
@@ -369,8 +385,8 @@ pub fn apply_with(
     }
     let change = sc.change.as_ref().and_then(|c| c.change.as_ref()).ok_or(ProtoError::InvalidField("change"))?;
     let now = v.header.ts_ms;
-    // A0007-2: отметки отзыва принимаются от самого пользователя либо админа
-    let floors_by_admin = state.is_some_and(|st| st.is_owner(&signer.user) || st.admin_can(&signer.user, |r| r.ban_users));
+    // A0007-2: отметки отзыва принимаются от самого пользователя либо от того, кто старше цели (S7-2);
+    // ранги — по состоянию ДО записи (повышение в той же записи прав не даёт)
 
     let mut s = match state {
         None => {
@@ -762,7 +778,8 @@ pub fn apply_with(
     s.version = entry.version;
     s.hashes.push(entry_hash(op));
     for f in &sc.floors {
-        if f.min_log_version > 0 && (f.user == signer.user || floors_by_admin) && s.members.contains_key(&f.user) {
+        let allowed = f.user == signer.user || state.is_some_and(|st| st.may_floor(&signer.user, &f.user));
+        if f.min_log_version > 0 && allowed && s.members.contains_key(&f.user) {
             let max = s.signer_versions.entry(f.user.clone()).or_default();
             *max = (*max).max(f.min_log_version);
         }
@@ -1102,6 +1119,50 @@ mod tests {
         .unwrap();
         let s4 = apply(Some(&s3), &evil, &resolve);
         assert!(s4.map(|s| s.signer_versions.get("alice@x").is_none()).unwrap_or(true));
+    }
+
+    /// S7-2: админ с правом банить не ставит порог владельцу (и другому админу) — владелец и после такой записи
+    /// пишет своей настоящей версией и снимает админа. Владелец порог админу ставит, админ — участнику.
+    #[test]
+    fn admin_cannot_freeze_owner_with_floor() {
+        let w = World::new(&["alice@x", "bob@x", "carol@x", "dave@x"]);
+        let resolve = |k: &[u8; 32], _v: u64| {
+            let (u, _) = w.keys.iter().find(|(_, sk)| &sk.verifying_key().to_bytes() == k)?;
+            Some(SignerInfo { user: u.clone(), root_key: w.roots[u] })
+        };
+        let members = vec![UserRef { address: "bob@x".into() }, UserRef { address: "carol@x".into() }, UserRef { address: "dave@x".into() }];
+        let g = build_entry_at(w.k("alice@x"), None, "x", Change::Create(Create { kind: GroupKind::Group as i32, members, ..Default::default() }), 1, 1).unwrap();
+        let mut s = apply(None, &g, &resolve).unwrap();
+        let mod_rights = AdminRights { ban_users: true, change_info: true, ..Default::default() };
+        for who in ["bob@x", "carol@x"] {
+            let e = build_entry_at(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur(who), role: Role::Admin as i32, rights: Some(mod_rights.clone()) }), 2, 1).unwrap();
+            s = apply(Some(&s), &e, &resolve).unwrap();
+        }
+        let floor = |u: &str, v: u64| RevokedFloor { user: u.into(), min_log_version: v };
+        // Боб (админ с ban_users) ставит порог владельцу, другому админу и участнику
+        let evil = build_entry_full(
+            w.k("bob@x"),
+            Some(&s),
+            "x",
+            Change::SetInfo(SetInfo { name: "e".into(), ..Default::default() }),
+            3,
+            1,
+            "",
+            vec![floor("alice@x", u64::MAX), floor("carol@x", u64::MAX), floor("dave@x", 7)],
+        )
+        .unwrap();
+        let s2 = apply(Some(&s), &evil, &resolve).unwrap();
+        assert_eq!(s2.signer_versions.get("alice@x"), Some(&1), "порог владельцу от админа не принят");
+        assert_eq!(s2.signer_versions.get("carol@x"), None, "порог другому админу от админа не принят");
+        assert_eq!(s2.signer_versions.get("dave@x"), Some(&7), "участнику — принят");
+        // Владелец своей настоящей версией снимает Боба
+        let demote = build_entry_at(w.k("alice@x"), Some(&s2), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None }), 4, 1).unwrap();
+        let s3 = apply(Some(&s2), &demote, &resolve).expect("владелец не заморожен");
+        // Владелец ставит порог админу Кэрол
+        let mark = build_entry_full(w.k("alice@x"), Some(&s3), "x", Change::SetInfo(SetInfo { name: "m".into(), ..Default::default() }), 5, 1, "", vec![floor("carol@x", 9)]).unwrap();
+        let s4 = apply(Some(&s3), &mark, &resolve).unwrap();
+        assert_eq!(s4.signer_versions.get("carol@x"), Some(&9));
+        assert!(s4.may_floor("alice@x", "carol@x") && !s4.may_floor("carol@x", "alice@x") && s4.may_floor("dave@x", "dave@x"));
     }
 
     #[test]

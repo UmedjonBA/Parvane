@@ -115,6 +115,28 @@ fn err_reply(code: ErrorCode) -> Vec<u8> {
 /// заведомо меньше.
 const PUSH_PER_MIN: u32 = 240;
 
+/// S7-16: общий потолок поддоменов одного регистрируемого домена одному получателю (wildcard-DNS иначе
+/// умножал лимит на число поддоменов). Во столько раз больше лимита одного домена.
+const PUSH_SITE_FACTOR: u32 = 4;
+
+/// Регистрируемый домен по простой эвристике (последние две метки): списка публичных суффиксов в сборке нет.
+/// Для `*.co.uk`, `*.duckdns.org` это общий потолок всех серверов такого суффикса одному получателю —
+/// с запасом `PUSH_SITE_FACTOR` настоящих групп не задевает.
+pub(crate) fn site_of(domain: &str) -> String {
+    let d = domain.trim_end_matches('.').to_ascii_lowercase();
+    if d.parse::<std::net::IpAddr>().is_ok() {
+        return d;
+    }
+    let labels: Vec<&str> = d.rsplit('.').take(2).collect();
+    labels.into_iter().rev().collect::<Vec<_>>().join(".")
+}
+
+/// Лимит записи по домену и по регистрируемому домену (S7-16).
+fn push_allowed(origin: &str, recipient: &str, per_min: u32) -> bool {
+    let site = format!("~{}", site_of(origin));
+    push_rate_ok(origin, recipient, per_min) && push_rate_ok(&site, recipient, per_min.saturating_mul(PUSH_SITE_FACTOR))
+}
+
 fn push_rate_ok(origin: &str, recipient: &str, per_min: u32) -> bool {
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -151,7 +173,7 @@ async fn inbox_push(ctx: &V2, req: ShardRequest) -> Result<(), ErrorCode> {
         if foreign_domain(&r.address).is_some() {
             return Err(ErrorCode::Forbidden);
         }
-        if !push_rate_ok(&origin, &r.address, PUSH_PER_MIN) {
+        if !push_allowed(&origin, &r.address, PUSH_PER_MIN) {
             warn!("messenger: чужой домен {} превысил частоту записей получателю", origin);
             continue;
         }
@@ -224,5 +246,20 @@ mod tests {
         assert!(!push_rate_ok("far.example", "ann@near.example", 3), "сверх потолка — отказ");
         assert!(push_rate_ok("far.example", "bob@near.example", 3), "другой получатель не затронут");
         assert!(push_rate_ok("other.example", "ann@near.example", 3), "другой домен не затронут");
+    }
+
+    /// S7-16: поддомены одного домена делят общий потолок получателю.
+    #[test]
+    fn push_rate_is_shared_by_subdomains() {
+        assert_eq!(site_of("a.b.Evil.Example."), "evil.example");
+        assert_eq!(site_of("evil.example"), "evil.example");
+        let mut ok = 0;
+        for i in 0..20 {
+            if push_allowed(&format!("s{i}.wild.example"), "zoe@near.example", 2) {
+                ok += 1;
+            }
+        }
+        assert_eq!(ok, 2 * PUSH_SITE_FACTOR, "20 поддоменов — не больше общего потолка сайта");
+        assert!(push_allowed("calm.example", "zoe@near.example", 2), "другой сайт не затронут");
     }
 }

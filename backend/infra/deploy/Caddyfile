@@ -130,6 +130,9 @@
 	# адресу из тома tor-data; без Tor — пустой
 	import onion-location.caddy
 
+	# S7-18: метку Tor ставит только сайт :8081 — пришедшую снаружи срезаем
+	request_header -X-Parvane-Onion
+
 	import app
 }
 
@@ -150,6 +153,10 @@ http://:8081 {
 		Cross-Origin-Opener-Policy "same-origin"
 		-Server
 	}
+
+	# S7-18: все клиенты Tor приходят к gateway с адреса прокси; метка даёт им свою корзину лимитов
+	# (`PARVANE_GATEWAY_MAX_CONNS_ONION`) вместо общей квоты адреса 127.0.0.1
+	request_header X-Parvane-Onion 1
 
 	import app
 }

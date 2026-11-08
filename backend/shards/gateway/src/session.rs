@@ -15,11 +15,19 @@ fn upgrade_required_frame() -> String {
 /// IP клиента для лимитов identity: X-Forwarded-For (первый адрес) доверяем
 /// только если сам пир — loopback/приватная сеть (reverse-proxy), иначе — пир.
 pub(crate) fn client_ip_from(peer: Option<IpAddr>, forwarded: Option<&str>) -> String {
+    client_ip_from_hdr(peer, forwarded, false)
+}
+
+/// То же с меткой Tor (S7-18): заголовок `X-Parvane-Onion` от прокси — клиент скрытого сервиса.
+pub(crate) fn client_ip_from_hdr(peer: Option<IpAddr>, forwarded: Option<&str>, onion: bool) -> String {
     let peer_trusted = match peer {
         Some(IpAddr::V4(v4)) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         Some(IpAddr::V6(v6)) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
         None => false,
     };
+    if peer_trusted && onion {
+        return crate::limits::ONION_CLIENT.to_string();
+    }
     if peer_trusted {
         if let Some(first) = forwarded
             .and_then(|f| f.split(',').next())
@@ -72,6 +80,7 @@ pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>, lim
     };
     let peer_ip = stream.peer_addr().map(|a| a.ip()).ok();
     let mut forwarded: Option<String> = None;
+    let mut onion = false;
     // GW-01: рукопожатие не бессрочное — иначе сокет без запроса держит слот.
     let handshake = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
@@ -82,6 +91,7 @@ pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>, lim
                 .get("x-forwarded-for")
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.to_string());
+            onion = req.headers().contains_key("x-parvane-onion");
             Ok(resp)
         },
         Some(config),
@@ -90,7 +100,7 @@ pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>, lim
         .await
         .context("WS handshake: таймаут")?
         .context("WS handshake")?;
-    let client_ip = client_ip_from(peer_ip, forwarded.as_deref());
+    let client_ip = client_ip_from_hdr(peer_ip, forwarded.as_deref(), onion);
     // GW-01: за Caddy адрес пира — прокси, лимит на адрес клиента считаем по X-Forwarded-For.
     let Ok(_client_guard) = crate::limits::admit_client(&limits, peer_ip, &client_ip) else {
         warn!("ws {}: лимит соединений на адрес клиента", client_ip);

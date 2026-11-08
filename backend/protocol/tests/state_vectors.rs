@@ -22,7 +22,7 @@ use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::call::v2::HangupReason;
 use parvane_protocol::pb::parvane::core::v2::{Ref, UserRef};
 use parvane_protocol::pb::parvane::state::v1::{
-    peer, state_op::Op, BlockEntry, CallRecord, CallRef, ChatCleared, Draft, Folder, FolderOrder, FolderRef, NotifyDefaults,
+    peer, state_op::Op, BlockEntry, CallRecord, CallRef, ChatCleared, Contact, Draft, Folder, FolderOrder, FolderRef, NotifyDefaults,
     NotifySettings, Peer, PeerKey, PeerNotify, PinList, PinnedOrder, QuickReaction, ScheduledMessage, ScheduledRef, StateKeyShare,
     StateOp, StateSnapshot,
 };
@@ -263,6 +263,24 @@ fn gen_merge() -> Value {
             op(5, 4, "dev-b", Op::ChatCleared(ChatCleared { peer: None, cleared_until_ms: 9 })),
         ],
     ));
+    // CONTACT-1 (7 ноя 2026): контакт по собеседнику-пользователю, запись целиком по метке; группа — отказ
+    let contact = |a: &str, first: &str, note: &str| Contact {
+        user: Some(UserRef { address: a.into() }),
+        first_name: first.into(),
+        last_name: String::new(),
+        note: note.into(),
+    };
+    cases.push(merge_case(
+        "контакты (CONTACT-1): своё имя и заметка LWW, удаление — надгробие, группа контактом не бывает",
+        vec![
+            op(1, 1, "dev-a", Op::ContactSet(contact("bob@x", "Боб", ""))),
+            op(2, 3, "dev-b", Op::ContactSet(contact("bob@x", "Роберт", "сосед"))),
+            op(3, 2, "dev-a", Op::ContactSet(contact("carol@x", "", ""))),
+            op(4, 4, "dev-a", Op::ContactRemove(pk(user("carol@x")))),
+            op(5, 1, "dev-b", Op::ContactRemove(pk(group(6)))),
+            op(6, 2, "dev-b", Op::ContactSet(Contact { user: Some(UserRef { address: "not an address".into() }), ..contact("x@x", "", "") })),
+        ],
+    ));
     json!({
         "suite": "state",
         "description": "STATE-1: сведение личного состояния LWW (lamport, device_id, op_id, sha256(операции)); каждый порядок из orders (индексы в ops_hex, возможны повторы) даёт тот же snapshot и тот же набор отвергнутых индексов",
@@ -488,6 +506,8 @@ fn gen_migration() -> Value {
         quick_reaction: Some(QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() }),
         // Свои наборы (PACK-3) — тест движка `sticker_packs_diff_and_merge`; вектор переноса прежний
         sticker_packs: vec![],
+        // Контакты (CONTACT-1) — тест движка `contacts_diff_merge_and_migrate`; вектор переноса прежний
+        contacts: vec![],
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();
@@ -572,6 +592,12 @@ fn arb_kind() -> impl Strategy<Value = Op> {
         arb_peer().prop_map(|p| Op::UnreadMarkSet(pk(p))),
         arb_peer().prop_map(|p| Op::UnreadMarkRemove(pk(p))),
         prop::sample::select(vec!["", "🔥", "❤"]).prop_map(|e| Op::QuickReaction(QuickReaction { emoji: e.into(), custom_emoji_id: String::new() })),
+        (prop::sample::select(vec!["bob@x", "carol@x"]), "[a-c]{0,2}").prop_map(|(a, n)| Op::ContactSet(Contact {
+            user: Some(UserRef { address: a.into() }),
+            first_name: n,
+            ..Default::default()
+        })),
+        arb_peer().prop_map(|p| Op::ContactRemove(pk(p))),
     ]
 }
 

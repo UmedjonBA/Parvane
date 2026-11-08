@@ -1,10 +1,19 @@
-# P-51: конфигурация `cargo audit`.
+# P-51 / S7-7 (7 ноя 2026): конфигурация `cargo audit` (запуск: `cd backend && cargo audit`).
 [advisories]
 ignore = [
-    # RUSTSEC-2023-0071 (rsa, Marvin). Крейт `rsa` попадает в Cargo.lock только через
-    # опциональную зависимость sqlx → sqlx-mysql, которая у нас не включена
-    # (sqlx собирается с features = ["sqlite", ...]); в бинарники шардов `rsa` не
-    # компилируется — проверка: `cargo tree -i rsa` → «nothing to print».
-    # web-push (jwt-simple → rsa) заменён на web-push-native без фичи `vapid`.
+    # RUSTSEC-2023-0071 (rsa, Marvin; исправленного выпуска нет ни у 0.9, ни у 0.10-rc).
+    # - rsa 0.9.10 — только в Cargo.lock: sqlx-macros-core перечисляет sqlx-mysql как необязательную зависимость
+    #   (слабые фичи `sqlx-mysql?/…` держат её в lock-файле), но с `default-features = false` и features
+    #   ["sqlite", …] она не компилируется — проверка: `cargo tree -i rsa@0.9.10` → «nothing to print».
+    # - rsa 0.10.0-rc.18 КОМПИЛИРУЕТСЯ: blind-rsa-signatures 0.18 → parvane-protocol (слепые жетоны, `tokens.rs`,
+    #   `blind_sign` на входе клиента). Смягчение: подпись идёт через `rsa_decrypt_and_check` со случайным
+    #   ослеплением основания (время не связано с выбранным клиентом значением) и проверкой результата; ветка 0.10
+    #   на crypto-bigint (≥ 0.7.10 — RUSTSEC-2026-0387 закрыт); квота 50 жетонов в сутки на аккаунт.
+    #   Перейти на выпуск rsa, как только advisory отметит исправление (`patched` не пуст).
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0387 (crypto-bigint, неравномерное время): 0.7.x обновлён до 0.7.10 (исправлено). Остаётся 0.5.5 —
+    # только у p256 0.13 → web-push-native 0.5 в шарде push (подпись VAPID JWT ключом сервера над постоянными
+    # полями; ввода от атакующего в подписи нет). Исправления в ветке 0.5 нет; убрать после перехода
+    # web-push-native на p256 0.14.
+    "RUSTSEC-2026-0387",
 ]

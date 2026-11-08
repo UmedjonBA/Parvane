@@ -375,3 +375,69 @@ async fn v2_review_device_key_claims_live() {
     .unwrap();
     drop(stack);
 }
+
+/// S7-18: простой анонимного канала продлевает только допущенный запрос. Раньше `last_request` обновлялся до
+/// проверок, и аноним держал соединение (и слот) открытым бессрочно запросами, которые gateway всё равно
+/// отвергает (здесь — метод канала ID в анонимном канале). Отдельный gateway того же стека с простоем 2 с.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_review_rejected_requests_do_not_keep_anon_alive_live() {
+    let Some((mut stack, _nc)) = start().await else { return };
+    let tcp = format!("127.0.0.1:{}", free_port());
+    let ws = format!("127.0.0.1:{}", free_port());
+    let g = spawn(
+        "gateway",
+        &[("PARVANE_NATS_URL", &stack.nats_url), ("PARVANE_GATEWAY_TCP_BIND", &tcp), ("PARVANE_GATEWAY_BIND", &ws), ("PARVANE_GATEWAY_ANON_IDLE_SECS", "2")],
+        &stack.dir.join("gateway-idle.log"),
+    );
+    stack.children.push(g);
+    let t = Instant::now();
+    while TcpStream::connect(&tcp).is_err() {
+        assert!(t.elapsed() < Duration::from_secs(30), "gateway не слушает");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let closed_after = tokio::task::spawn_blocking(move || {
+        let (mut anon, _) = Conn::connect(&tcp, Channel::AnonymousDelivery);
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(8) {
+            // Метод канала ID — в анонимном канале отвергается до допуска
+            match anon.call("domain.container.list", vec![]) {
+                Err(ErrorCode::Unavailable) => return Some(started.elapsed()),
+                Ok(_) => panic!("метод канала ID принят в анонимном канале"),
+                Err(_) => {}
+            }
+            std::thread::sleep(Duration::from_millis(700));
+        }
+        None
+    })
+    .await
+    .unwrap();
+    let closed_after = closed_after.expect("анонимное соединение живёт на отвергнутых запросах дольше простоя");
+    assert!(closed_after < Duration::from_secs(6), "закрыто через {closed_after:?}");
+    drop(stack);
+}
+
+/// PV-010: до входа кадр больше 64 КиБ не копится в памяти gateway — соединение закрывается (раньше кадр до 4 МиБ
+/// принимался, разбирался и получал ответ, а входящая очередь держала до 512 таких кадров). Вход и обычная работа
+/// после этого не задеты.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_review_pre_auth_big_frame_closes_live() {
+    let Some((stack, _nc)) = start().await else { return };
+    let addr = stack.gateway_tcp.clone();
+    tokio::task::spawn_blocking(move || {
+        use parvane_protocol::pb::parvane::core::v2::{Ping, Request};
+        let (mut c, _) = Conn::connect(&addr, Channel::Identified);
+        c.s.set_read_timeout(Some(Duration::from_secs(25))).unwrap();
+        let started = Instant::now();
+        c.send(frame::Kind::Request(Request { id: 1, method: "identity.session.issue".into(), body: vec![0u8; 1 << 20], ..Default::default() }));
+        c.send(frame::Kind::Ping(Ping { nonce: 7 }));
+        let got = c.recv();
+        assert!(got.is_none(), "соединение до входа с кадром 1 МиБ должно закрыться, а пришло {got:?}");
+        assert!(started.elapsed() < Duration::from_secs(20), "закрыто через {:?}", started.elapsed());
+        // Обычная сессия на том же gateway работает
+        let mut d = Device::register(&addr, "pv010@local", "d1");
+        assert!(d.id.call("identity.device.list", ipb::DeviceListRequest::default().encode_to_vec()).is_ok());
+    })
+    .await
+    .unwrap();
+    drop(stack);
+}

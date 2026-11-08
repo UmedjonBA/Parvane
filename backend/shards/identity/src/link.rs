@@ -7,6 +7,10 @@ pub(crate) const LINK_TTL_SECS: i64 = 900;
 /// Кап полей против злоупотребления хранилищем (base64-строки).
 pub(crate) const LINK_EPH_PUB_MAX: usize = 512;
 pub(crate) const LINK_BOX_MAX: usize = 8192;
+/// S7-11: живых офферов на аккаунт не больше этого. Новый оффер вытесняет самые старые из тех, к которым
+/// старое устройство ещё не приложило challenge (привязку, которую уже подтверждают, не сорвать); если
+/// таких нет — оффер не принимается.
+pub(crate) const LINK_OFFERS_MAX: usize = 4;
 
 pub(crate) async fn purge_stale_links(pool: &SqlitePool) -> Result<()> {
     let cutoff = now_unix() - LINK_TTL_SECS;
@@ -91,6 +95,29 @@ pub(crate) async fn store_link_offer(
             anyhow::bail!("оффер линковки не найден или истёк");
         }
     }
+    // S7-11: место под оффер нового устройства — вытеснением самых старых офферов без challenge
+    let (others,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM link_offers WHERE username = ? AND device_id != ?")
+        .bind(username)
+        .bind(device_id)
+        .fetch_one(pool)
+        .await?;
+    let excess = others + 1 - LINK_OFFERS_MAX as i64;
+    if excess > 0 {
+        let evicted = sqlx::query(
+            "DELETE FROM link_offers WHERE rowid IN (
+               SELECT rowid FROM link_offers WHERE username = ? AND device_id != ? AND challenge_pub = ''
+                ORDER BY created_at, rowid LIMIT ?)",
+        )
+        .bind(username)
+        .bind(device_id)
+        .bind(excess)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if (evicted as i64) < excess {
+            anyhow::bail!("слишком много запросов привязки");
+        }
+    }
     // Новый оффер устройства заменяет прежний (и гасит старый грант — он
     // зашифрован на уже потерянный эфемерный ключ).
     sqlx::query(
@@ -171,7 +198,7 @@ pub(crate) async fn poll_link(
     purge_stale_links(pool).await?;
     let offers: Vec<(String, String, i64, String, String, String, String)> = sqlx::query_as(
         "SELECT device_id, eph_pub, created_at, commitment, signing_key, challenge_pub, challenge_wrap FROM link_offers
-          WHERE username = ? AND device_id != ? ORDER BY created_at",
+          WHERE username = ? AND device_id != ? ORDER BY created_at DESC, rowid DESC",
     )
     .bind(username)
     .bind(device_id)

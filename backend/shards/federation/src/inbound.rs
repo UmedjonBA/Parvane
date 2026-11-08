@@ -25,7 +25,7 @@ use prost::Message;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::peers::{err, now_ms, Fed};
+use crate::peers::{err, now_ms, Discover, Fed};
 use crate::store;
 
 type Body = http_body_util::combinators::BoxBody<Bytes, Infallible>;
@@ -41,38 +41,71 @@ fn full(status: StatusCode, refusal: Option<&str>, retry_after: Option<u32>) -> 
     b.body(Full::new(Bytes::new()).boxed()).unwrap_or_else(|_| Response::new(Full::new(Bytes::new()).boxed()))
 }
 
+/// S7-17: одновременно проверяемых (ещё не подтверждённых подписью) входящих запросов.
+const UNVERIFIED_MAX: usize = 32;
+/// Срок чтения тела запроса целиком и заголовков (S7-17): медленный POST не держит память и слот.
+#[cfg(not(test))]
+const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const BODY_TIMEOUT: Duration = Duration::from_secs(2);
+const HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+
+static UNVERIFIED: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(UNVERIFIED_MAX);
+
 pub async fn run(fed: Arc<Fed>) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&fed.cfg.bind).await?;
     info!("федерация: входящие запросы на {}", fed.cfg.bind);
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("федерация: accept: {}", e);
-                    continue;
-                }
-            };
-            let fed = fed.clone();
-            tokio::spawn(async move {
-                let io = hyper_util::rt::TokioIo::new(stream);
-                let svc = hyper::service::service_fn(move |req| {
-                    let fed = fed.clone();
-                    async move { Ok::<_, Infallible>(serve(&fed, req).await) }
-                });
-                if let Err(e) = hyper::server::conn::http1::Builder::new().serve_connection(io, svc).await {
-                    tracing::debug!("федерация: соединение: {}", e);
-                }
-            });
-        }
-    });
+    tokio::spawn(serve_listener(fed, listener));
     Ok(())
 }
 
-async fn serve(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
+pub(crate) async fn serve_listener(fed: Arc<Fed>, listener: tokio::net::TcpListener) {
+    loop {
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("федерация: accept: {}", e);
+                continue;
+            }
+        };
+        let fed = fed.clone();
+        tokio::spawn(async move {
+            let io = hyper_util::rt::TokioIo::new(stream);
+            let svc = hyper::service::service_fn(move |req| {
+                let fed = fed.clone();
+                async move { Ok::<_, Infallible>(serve(&fed, req, peer_addr.ip()).await) }
+            });
+            let conn = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(HEADER_TIMEOUT)
+                .serve_connection(io, svc);
+            if let Err(e) = conn.await {
+                tracing::debug!("федерация: соединение: {}", e);
+            }
+        });
+    }
+}
+
+/// Адрес клиента для лимита на IP: за Caddy (сокет из частной сети или loopback) — последний адрес
+/// `X-Forwarded-For` (его ставит сам Caddy), иначе адрес сокета.
+pub(crate) fn client_ip(socket: std::net::IpAddr, xff: Option<&str>) -> std::net::IpAddr {
+    let proxied = match socket {
+        std::net::IpAddr::V4(v) => v.is_loopback() || v.is_private(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || (v.segments()[0] & 0xfe00) == 0xfc00,
+    };
+    if !proxied {
+        return socket;
+    }
+    xff.and_then(|h| h.rsplit(',').next()).and_then(|v| v.trim().parse().ok()).unwrap_or(socket)
+}
+
+async fn serve(fed: &Arc<Fed>, req: Request<Incoming>, socket_ip: std::net::IpAddr) -> Response<Body> {
     match (req.method().as_str(), req.uri().path()) {
         ("GET", "/.well-known/parvane") => well_known(fed).await,
-        ("POST", "/_parvane/s2s") => s2s(fed, req).await,
+        ("POST", "/_parvane/s2s") => {
+            let ip = client_ip(socket_ip, req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()));
+            s2s(fed, req, ip).await
+        }
         _ => full(StatusCode::NOT_FOUND, None, None),
     }
 }
@@ -89,11 +122,15 @@ async fn well_known(fed: &Fed) -> Response<Body> {
     }
 }
 
-async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
+async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>, ip: std::net::IpAddr) -> Response<Body> {
     if !fed.cfg.enabled {
         return full(StatusCode::FORBIDDEN, Some("disabled"), None);
     }
-    let Ok(collected) = Limited::new(req.into_body(), MAX_FRAME_BYTES).collect().await else {
+    // S7-17: слот на чтение и проверку; без слота — отказ сразу (тело не читается).
+    let Ok(_slot) = UNVERIFIED.try_acquire() else {
+        return full(StatusCode::SERVICE_UNAVAILABLE, None, Some(1));
+    };
+    let Ok(Ok(collected)) = tokio::time::timeout(BODY_TIMEOUT, Limited::new(req.into_body(), MAX_FRAME_BYTES).collect()).await else {
         return full(StatusCode::BAD_REQUEST, None, None);
     };
     let bytes = collected.to_bytes();
@@ -103,7 +140,7 @@ async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
         return full(StatusCode::FORBIDDEN, Some("blocked"), None);
     }
     // Описатель отправителя — его ключ проверяет подпись кадра (закрепление при первом контакте).
-    let peer = match fed.trust_with(&origin, false).await {
+    let peer = match fed.trust_as(&origin, false, Discover::Inbound, Some(ip)).await {
         Ok(p) => p,
         Err(e) => {
             warn!("федерация: входящий от {}: сервер не проверен (код {})", origin, e.code);
@@ -119,6 +156,7 @@ async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
             return full(StatusCode::BAD_REQUEST, None, None);
         }
     };
+    drop(_slot);
     // Подпись сошлась — теперь сервер можно закрепить (при первом контакте).
     fed.confirm_pin(&origin, &peer).await;
     // Повтор — по базе (переживает перезапуск в окне свежести).
@@ -271,19 +309,41 @@ async fn stream(fed: &Fed, subject: &str, sr: ShardRequest, per: Duration, out: 
             return;
         }
     }
-    let mut index = 0u32;
+    let mut relay = ChunkRelay::default();
     loop {
-        let c = match tokio::time::timeout(per, sub.next()).await {
-            Ok(Some(m)) => decode_checked::<ShardStreamChunk>(&m.payload, Origin::Server)
-                .unwrap_or(ShardStreamChunk { index, last: true, data: vec![], error: Some(err(ErrorCode::Unavailable, 1000)) }),
-            _ => ShardStreamChunk { index, last: true, data: vec![], error: Some(err(ErrorCode::Unavailable, 1000)) },
+        let got = match tokio::time::timeout(per, sub.next()).await {
+            Ok(Some(m)) => decode_checked::<ShardStreamChunk>(&m.payload, Origin::Server).ok(),
+            _ => None,
         };
-        // Номера — по порядку отправки (так их сверяет получатель).
-        let c = ShardStreamChunk { index, ..c };
+        let c = relay.next(got);
         let last = c.last || c.error.is_some();
         if !out.chunk(c).await || last {
             return;
         }
-        index += 1;
+    }
+}
+
+/// Номера кусков потока к соседу (PV-015). Номер — номер куска блоба от шарда как есть: окно gateway
+/// (S7-13) может начинаться не с 0, и прежняя перенумерация с 0 отдавала второму окну куски 0..15 вместо
+/// 16..31. Получатель сверяет, что номера идут подряд от первого (`verify_stream_chunk`); кусок не по
+/// порядку (шард ошибся) и сбой шины становятся ошибкой со следующим номером, поток кончается.
+#[derive(Default)]
+pub(crate) struct ChunkRelay {
+    next: Option<u32>,
+}
+
+impl ChunkRelay {
+    pub(crate) fn next(&mut self, got: Option<ShardStreamChunk>) -> ShardStreamChunk {
+        let fail = |index: u32| ShardStreamChunk { index, last: true, data: vec![], error: Some(err(ErrorCode::Unavailable, 1000)) };
+        let c = match got {
+            Some(c) if self.next.is_none_or(|n| c.index == n) => c,
+            Some(c) => {
+                warn!("федерация: шард отдал кусок {} вместо {:?}", c.index, self.next);
+                fail(self.next.unwrap_or(0))
+            }
+            None => fail(self.next.unwrap_or(0)),
+        };
+        self.next = Some(c.index.saturating_add(1));
+        c
     }
 }

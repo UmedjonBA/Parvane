@@ -78,6 +78,8 @@ async fn main() -> Result<()> {
     info!("SQLite готов: {}", db_path);
 
     let (encoding, decoding) = load_or_create_jwt_keys(&pool, &db_path).await?;
+    // OPT-011: хэш выравнивания времени считается один раз и не на рабочем потоке
+    let _ = tokio::task::spawn_blocking(|| dummy_password_hash().len()).await;
 
     let nc = parvane_types::nats::connect(&nats_url)
         .await

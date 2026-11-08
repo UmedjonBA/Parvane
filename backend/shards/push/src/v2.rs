@@ -35,6 +35,36 @@ use crate::{handler_concurrency, pinned_push_client};
 struct Ctx {
     pool: SqlitePool,
     vapid: Arc<VapidKeys>,
+    /// S7-24: пробуждений одного пользователя и одного хоста endpoint разом — медленные endpoint немногих
+    /// аккаунтов не занимают все места (семафор 32), и пробуждения остальных не отбрасываются.
+    users: Arc<parvane_v2rt::OwnerSlots>,
+    hosts: Arc<parvane_v2rt::OwnerSlots>,
+}
+
+/// Весь путь одного пробуждения — DNS, соединение, отправка (DNS раньше шёл вне тайм-аута 6 с).
+const WAKE_DEADLINE: Duration = Duration::from_secs(6);
+const PER_USER_WAKES: usize = 2;
+const PER_HOST_WAKES: usize = 4;
+
+impl Ctx {
+    fn new(pool: SqlitePool, vapid: Arc<VapidKeys>) -> Self {
+        Self { pool, vapid, users: parvane_v2rt::OwnerSlots::new(PER_USER_WAKES), hosts: parvane_v2rt::OwnerSlots::new(PER_HOST_WAKES) }
+    }
+
+    /// Места для пробуждения устройства пользователя `user` по каналам `endpoints`: `None` — у пользователя уже
+    /// идут `PER_USER_WAKES` пробуждений; каналы, чей хост занят, пропускаются.
+    fn admit_wake(&self, user: &str, endpoints: Vec<String>) -> Option<(parvane_v2rt::OwnerSlot, Vec<(String, Option<parvane_v2rt::OwnerSlot>)>)> {
+        let slot = self.users.try_acquire(user)??;
+        let mut out = Vec::new();
+        for e in endpoints {
+            let host = url::Url::parse(&e).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default();
+            match self.hosts.try_acquire(&host) {
+                Some(slot) => out.push((e, slot)),
+                None => debug!("v2 push: хост канала занят — пробуждение по каналу отброшено"),
+            }
+        }
+        Some((slot, out))
+    }
 }
 
 pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
@@ -46,7 +76,7 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
 }
 
 pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool, vapid: Arc<VapidKeys>) -> Result<()> {
-    let ctx = Arc::new(Ctx { pool, vapid });
+    let ctx = Arc::new(Ctx::new(pool, vapid));
     let c2 = ctx.clone();
     let handler: parvane_v2rt::Handler = Arc::new(move |m: &'static MethodInfo, req: ShardRequest| -> BoxFut {
         let ctx = c2.clone();
@@ -277,9 +307,10 @@ fn spawn_alarm_loop(ctx: Arc<Ctx>, collapser: Arc<Mutex<Collapser>>, sem: Arc<to
     });
 }
 
-/// Разбудить все каналы устройства `token` (схлопывание уже пройдено).
+/// Разбудить все каналы устройства `token` (схлопывание уже пройдено). Каналы — параллельно, каждый не дольше
+/// `WAKE_DEADLINE` вместе с DNS.
 async fn wake_device(ctx: &Ctx, token: &str) {
-    let rows = match sqlx::query("SELECT endpoint, kind, p256dh, auth FROM wake_registrations WHERE inbox_token = ?")
+    let rows = match sqlx::query("SELECT endpoint, user, kind, p256dh, auth FROM wake_registrations WHERE inbox_token = ?")
         .bind(token)
         .fetch_all(&ctx.pool)
         .await
@@ -290,9 +321,16 @@ async fn wake_device(ctx: &Ctx, token: &str) {
             return;
         }
     };
+    let Some(user) = rows.first().map(|r| r.get::<String, _>("user")) else { return };
+    let endpoints: Vec<String> = rows.iter().map(|r| r.get("endpoint")).collect();
+    let Some((_user_slot, admitted)) = ctx.admit_wake(&user, endpoints) else {
+        debug!("v2 push: у пользователя уже идут пробуждения — отброшено");
+        return;
+    };
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    for row in rows {
-        let endpoint: String = row.get("endpoint");
+    let mut sends = Vec::new();
+    for (endpoint, host_slot) in admitted {
+        let Some(row) = rows.iter().find(|r| r.get::<String, _>("endpoint") == endpoint) else { continue };
         let Ok(kind) = WakeKind::try_from(row.get::<i64, _>("kind") as i32) else { continue };
         let reg = StoredWake { kind, endpoint: endpoint.clone(), p256dh: row.get("p256dh"), auth: row.get("auth") };
         let request = match wake::build_wake_request(&ctx.vapid, &reg, now).and_then(|r| Ok(reqwest::Request::try_from(r)?)) {
@@ -302,24 +340,29 @@ async fn wake_device(ctx: &Ctx, token: &str) {
                 continue;
             }
         };
-        let client = match pinned_push_client(&endpoint).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("v2 push: endpoint отклонён фильтром: {e}");
-                continue;
-            }
-        };
-        match tokio::time::timeout(Duration::from_secs(6), client.execute(request)).await {
-            Ok(Ok(resp)) if resp.status().is_success() => debug!("v2 push: пробуждение отправлено"),
-            Ok(Ok(resp)) if resp.status() == reqwest::StatusCode::NOT_FOUND || resp.status() == reqwest::StatusCode::GONE => {
-                // Канал мёртв (подписка отозвана) — вычищаем.
-                let _ = sqlx::query("DELETE FROM wake_registrations WHERE endpoint = ?").bind(&endpoint).execute(&ctx.pool).await;
-                info!("v2 push: мёртвый канал пробуждения удалён");
-            }
-            Ok(Ok(resp)) => warn!("v2 push: пробуждение не доставлено: HTTP {}", resp.status()),
-            Ok(Err(e)) => warn!("v2 push: пробуждение не доставлено: {e}"),
-            Err(_) => warn!("v2 push: пробуждение не доставлено: таймаут"),
+        sends.push(async move {
+            let _host = host_slot;
+            send_wake(ctx, &endpoint, request).await;
+        });
+    }
+    futures::future::join_all(sends).await;
+}
+
+async fn send_wake(ctx: &Ctx, endpoint: &str, request: reqwest::Request) {
+    let attempt = async {
+        let client = pinned_push_client(endpoint).await.map_err(|e| format!("endpoint отклонён фильтром: {e}"))?;
+        client.execute(request).await.map_err(|e| e.to_string())
+    };
+    match tokio::time::timeout(WAKE_DEADLINE, attempt).await {
+        Ok(Ok(resp)) if resp.status().is_success() => debug!("v2 push: пробуждение отправлено"),
+        Ok(Ok(resp)) if resp.status() == reqwest::StatusCode::NOT_FOUND || resp.status() == reqwest::StatusCode::GONE => {
+            // Канал мёртв (подписка отозвана) — вычищаем.
+            let _ = sqlx::query("DELETE FROM wake_registrations WHERE endpoint = ?").bind(endpoint).execute(&ctx.pool).await;
+            info!("v2 push: мёртвый канал пробуждения удалён");
         }
+        Ok(Ok(resp)) => warn!("v2 push: пробуждение не доставлено: HTTP {}", resp.status()),
+        Ok(Err(e)) => warn!("v2 push: пробуждение не доставлено: {e}"),
+        Err(_) => warn!("v2 push: пробуждение не доставлено: таймаут"),
     }
 }
 
@@ -333,7 +376,7 @@ mod tests {
         sqlx::migrate!("./migrations_v2").run(&pool).await.unwrap();
         let secret = p256::SecretKey::random(&mut rand::rngs::OsRng);
         let pem = p256::pkcs8::EncodePrivateKey::to_pkcs8_pem(&secret, p256::pkcs8::LineEnding::LF).unwrap();
-        Ctx { pool, vapid: Arc::new(push::vapid::vapid_from_pem(&pem).unwrap()) }
+        Ctx::new(pool, Arc::new(push::vapid::vapid_from_pem(&pem).unwrap()))
     }
 
     fn req(user: &str, device: &str, method: &str, body: Vec<u8>) -> ShardRequest {
@@ -351,6 +394,30 @@ mod tests {
             }),
         }
         .encode_to_vec()
+    }
+
+    /// S7-24: медленные каналы одного хоста и пробуждения одного пользователя не занимают все места.
+    #[tokio::test]
+    async fn wakes_are_capped_per_user_and_host() {
+        let ctx = test_ctx().await;
+        let slow: Vec<String> = (0..PER_HOST_WAKES).map(|i| format!("https://slow.example/{i}")).collect();
+        let mut held = Vec::new();
+        for (i, e) in slow.iter().enumerate() {
+            let (u, chans) = ctx.admit_wake(&format!("evil{i}@local"), vec![e.clone()]).expect("место есть");
+            assert_eq!(chans.len(), 1);
+            held.push((u, chans));
+        }
+        // Хост slow.example занят — его канал пропускается, канал другого хоста идёт
+        let (_u, chans) = ctx.admit_wake("alice@local", vec!["https://SLOW.example/x".into(), "https://push.example/a".into()]).unwrap();
+        assert_eq!(chans.iter().map(|(e, _)| e.as_str()).collect::<Vec<_>>(), vec!["https://push.example/a"]);
+        // Пользователь не держит больше PER_USER_WAKES пробуждений разом
+        let a = ctx.admit_wake("bob@local", vec![]).unwrap();
+        let b = ctx.admit_wake("bob@local", vec![]).unwrap();
+        assert!(ctx.admit_wake("bob@local", vec![]).is_none());
+        drop((a, b));
+        assert!(ctx.admit_wake("bob@local", vec![]).is_some());
+        drop(held);
+        assert_eq!(ctx.admit_wake("carol@local", vec!["https://slow.example/0".into()]).unwrap().1.len(), 1);
     }
 
     #[tokio::test]

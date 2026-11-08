@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use super::err;
 use crate::error::ProtoError;
 use crate::history::{self, ChatKind, HistorySession};
-use crate::pb::parvane::history::v1::{AppendResponse, ChatSummary, Checkpoint, CommitResponse, HistoryOp, ReadMark, RowState, SegmentRef};
+use crate::pb::parvane::history::v1::{AppendResponse, ChatSummary, Checkpoint, CommitResponse, HistoryOp, ReadMark, RowState, SegmentRef, Summary};
 use crate::pb::parvane::state::v1::Peer;
 
 type R = Result<Value, String>;
@@ -193,6 +193,20 @@ fn checkpoint_json(c: &Checkpoint) -> Value {
     json!({"id": c.id, "uptoSeq": c.upto_seq, "summarySeq": c.summary_seq, "chunkSeqs": c.chunk_seqs, "createdMs": c.created_ms})
 }
 
+/// Точка из JSON границы (`checkpoint_json`).
+fn checkpoint_from(v: &Value) -> Result<Checkpoint, String> {
+    let a = Args(v);
+    Ok(Checkpoint { id: a.uo("id")?, upto_seq: a.uo("uptoSeq")?, summary_seq: a.uo("summarySeq")?, chunk_seqs: a.u64s("chunkSeqs")?, created_ms: a.io("createdMs", 0)? })
+}
+
+/// Книга цепочек из JSON границы (`chains`; нет — пустая с полнотой `chainsComplete`).
+fn chain_book(a: &Args<'_>) -> Result<history::ChainBook, String> {
+    match a.get("chains") {
+        Some(v) => history::ChainBook::from_value(v).map_err(err),
+        None => Ok(history::ChainBook { complete: a.flag("chainsComplete"), ..Default::default() }),
+    }
+}
+
 fn now_ms() -> i64 {
     crate::time::now_ms()
 }
@@ -251,10 +265,23 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
                 let out = history::compact(&a.list::<RowState>("states")?, a.i("nowMs")?).map_err(err)?;
                 Value::Array(out.iter().map(to_json).collect())
             }
+            // uptoSeq/checkpointId/chains (S7-4) — позиция сводки, id точки и книга цепочек автора; без них — сводка
+            // прежнего вида
             "historySummary" => {
                 let chats: Vec<ChatSummary> = a.list("chats")?;
                 let segments: Vec<SegmentRef> = a.list("segments")?;
-                to_json(&history::summary(chats, segments, a.io("tombstonesSinceMs", 0)?).map_err(err)?)
+                let meta = history::SummaryMeta { upto_seq: a.uo("uptoSeq")?, checkpoint_id: a.uo("checkpointId")?, chains: chain_book(&a)? };
+                to_json(&history::summary(chats, segments, a.io("tombstonesSinceMs", 0)?, &meta).map_err(err)?)
+            }
+            // S7-4: точка сервера и сводка под её номером сходятся; результат — книга цепочек после входа по точке
+            // (`chains` — своя книга, отметки сводки поверх)
+            "historyVerifyCheckpoint" => {
+                let cp = checkpoint_from(a.get("checkpoint").ok_or_else(|| missing("checkpoint"))?)?;
+                let summary: Summary = a.msg("summary")?;
+                history::verify_checkpoint(&cp, &summary).map_err(err)?;
+                let mut book = chain_book(&a)?;
+                book.adopt_summary(&summary);
+                json!({"ok": true, "legacy": summary.upto_seq == 0, "chains": book.to_value()})
             }
             "historyNewStamp" => to_json(&history::new_stamp(a.io("tsMs", now_ms())?)),
             "historyUnreadKinds" => json!(history::NON_COUNTED_KINDS),
@@ -299,19 +326,38 @@ impl HostHistory {
                 let out = s.seal(ops, a.flag("chunk"), a.io("tsMs", now_ms())?).map_err(err)?;
                 Value::Array(out.iter().map(|(id, body)| json!({"opId": history::uuid_string(id), "body": b64(body)})).collect())
             }
+            // Необязательно: `chains`/`chainsComplete` — книга цепочек (S7-4; в ответе — обновлённая `chains` и
+            // `gaps` — сколько записей сервер не отдал); `expect` — {номер: op_id} (сегменты точки по сводке;
+            // несовпавшие — `mismatched`).
             "ingest" => {
-                let r = s.ingest(&a.bytes("resp")?).map_err(err)?;
+                let mut expect = std::collections::BTreeMap::new();
+                if let Some(Value::Object(m)) = a.get("expect") {
+                    for (k, v) in m {
+                        let seq: u64 = k.parse().map_err(|_| missing("expect"))?;
+                        let id = v.as_str().map(history::parse_id).transpose().map_err(err)?.ok_or_else(|| missing("expect"))?;
+                        expect.insert(seq, id);
+                    }
+                }
+                let chained = a.get("chains").is_some() || a.get("chainsComplete").is_some();
+                let mut book = chain_book(&a)?;
+                let r = s.ingest_checked(&a.bytes("resp")?, &expect, chained.then_some(&mut book)).map_err(err)?;
                 let mut v = json!({
                     "ops": r.ops.iter().map(to_json).collect::<Vec<_>>(),
                     "records": r.records.iter().map(|x| json!({
                         "seq": x.seq, "chunk": x.chunk, "opId": history::uuid_string(&x.op_id), "first": x.first, "count": x.count,
-                        "keyVersion": x.key_version, "stale": x.stale, "deviceId": x.device_id,
+                        "keyVersion": x.key_version, "stale": x.stale, "deviceId": x.device_id, "chainSeq": x.chain_seq,
                     })).collect::<Vec<_>>(),
                     "more": r.more,
                     "headSeq": r.head_seq,
                     "rejected": r.rejected,
                     "rejectedOps": r.rejected_ops,
+                    "mismatched": r.mismatched,
                 });
+                if chained {
+                    v["chains"] = book.to_value();
+                    v["gaps"] = json!(r.chains.gaps);
+                    v["replayed"] = json!(r.chains.replayed);
+                }
                 if let Some(c) = &r.compacted {
                     v["compacted"] = checkpoint_json(c);
                 }

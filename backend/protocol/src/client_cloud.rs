@@ -39,6 +39,8 @@ struct CloudLocal {
     last_op_epoch: u64,
     /// JSON дерева для хоста по ревизии состояния — C1/A8.
     json_cache: JsonCache,
+    /// Граница эпохи по подписанным данным (S7-6).
+    cut: dom::EpochCut,
 }
 
 /// Итог приёма страницы журнала контейнера облака (`domain.op.sync`).
@@ -84,6 +86,11 @@ struct PersistedCloud {
     snapshot_seq: u64,
     guard_max: u64,
     pending_ops: Vec<String>,
+    /// S7-6: операции прежних эпох до неподтверждённой границы и op_id на курсоре (нет поля — прежняя запись).
+    #[serde(default)]
+    held_ops: Vec<String>,
+    #[serde(default)]
+    head_op_id: String,
 }
 
 fn cloud_role_of(access: &ContainerAccess, user: &str) -> Option<CloudRole> {
@@ -270,6 +277,7 @@ impl Client {
                 pending_ops: vec![],
                 last_op_epoch: 0,
             json_cache: JsonCache::default(),
+                cut: dom::EpochCut::default(),
             },
         );
         Ok((id, OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) })))
@@ -306,6 +314,7 @@ impl Client {
             state: existing.as_ref().map(|c| c.state.clone()).unwrap_or_default(),
             head_seq: existing.as_ref().map_or(0, |c| c.head_seq),
             snapshot_seq: existing.as_ref().map_or(0, |c| c.snapshot_seq),
+            cut: existing.as_ref().map(|c| c.cut.clone()).unwrap_or_default(),
             pending_ops: existing.map(|c| c.pending_ops).unwrap_or_default(),
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
@@ -379,6 +388,20 @@ impl Client {
         Ok(version)
     }
 
+    /// Принятая операция: ждёт ключа своей эпохи либо применяется.
+    fn cloud_take(c: &mut CloudLocal, op: ContainerOp, a: &DomainAuthor, out: &mut CloudIngest, last_error: &mut Option<ProtoError>) {
+        c.last_op_epoch = c.last_op_epoch.max(op.key_epoch);
+        if c.keys.get(op.key_epoch).is_none() {
+            out.missing_epoch = Some(op.key_epoch);
+            c.pending_ops.push(op);
+            return;
+        }
+        match Self::cloud_open_one(c, &op, a) {
+            Ok(n) => out.applied += n,
+            Err(e) => *last_error = Some(e),
+        }
+    }
+
     fn cloud_open_one(c: &mut CloudLocal, op: &ContainerOp, author: &DomainAuthor) -> Result<usize> {
         let key = c.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &c.access.container, key)?;
@@ -427,24 +450,42 @@ impl Client {
                 out.more = true;
                 break;
             }
+            // S7-6: граница эпохи по подписанному op_id — сдвиг журнала сервером виден и новому читателю
+            let verdict = c.access.op_boundary_verdict(&op);
+            match verdict {
+                dom::BoundaryVerdict::Tampered => {
+                    c.cut.held.clear();
+                    self.last_error = Some(ProtoError::ContextMismatch);
+                    c.head_seq = op.seq;
+                    c.cut.note_head(&op, false);
+                    continue;
+                }
+                dom::BoundaryVerdict::Confirms(_) => {
+                    for h in std::mem::take(&mut c.cut.held) {
+                        if let Ok(a) = c.access.check_op_author(&h, &resolve, &no_groups) {
+                            Self::cloud_take(c, h, &a, &mut out, &mut self.last_error);
+                        }
+                    }
+                }
+                _ => {}
+            }
             match c.access.check_op_author(&op, &resolve, &no_groups) {
                 Ok(_) if op.key_epoch < c.last_op_epoch => {
                     // Эпоха убывает вдоль журнала: операция вставлена ключом, уже сменённым ротацией
                     self.last_error = Some(ProtoError::Forbidden);
                     c.head_seq = op.seq;
+                    c.cut.note_head(&op, true);
+                }
+                Ok(_) if matches!(verdict, dom::BoundaryVerdict::Hold(_)) => {
+                    c.head_seq = op.seq;
+                    c.cut.note_head(&op, true);
+                    c.last_op_epoch = c.last_op_epoch.max(op.key_epoch);
+                    c.cut.held.push(op);
                 }
                 Ok(a) => {
                     c.head_seq = op.seq;
-                    c.last_op_epoch = op.key_epoch;
-                    if c.keys.get(op.key_epoch).is_none() {
-                        out.missing_epoch = Some(op.key_epoch);
-                        c.pending_ops.push(op);
-                        continue;
-                    }
-                    match Self::cloud_open_one(c, &op, &a) {
-                        Ok(n) => out.applied += n,
-                        Err(e) => self.last_error = Some(e),
-                    }
+                    c.cut.note_head(&op, true);
+                    Self::cloud_take(c, op, &a, &mut out, &mut self.last_error);
                 }
                 Err(ProtoError::Expired) => {
                     // Эпоха новее журнала грантов — догнать гранты и повторить страницу.
@@ -453,6 +494,7 @@ impl Client {
                     break;
                 }
                 Err(e) => {
+                    c.cut.note_head(&op, e == ProtoError::Forbidden);
                     self.last_error = Some(e);
                     c.head_seq = op.seq;
                 }
@@ -477,6 +519,7 @@ impl Client {
         let snap_max = cloud::guard_snapshot(&c.guard, &decoded, s.upto_seq)?;
         c.state.merge_snapshot(&decoded)?;
         c.guard.raise(snap_max);
+        c.cut.note_snapshot(s.upto_seq, c.head_seq);
         c.head_seq = c.head_seq.max(s.upto_seq);
         c.snapshot_seq = c.snapshot_seq.max(s.upto_seq);
         // Метки снимка — в часы (иначе свои следующие метки могут оказаться ниже).
@@ -531,7 +574,7 @@ impl Client {
     pub fn cloud_snapshot_request(&mut self, id: &[u8], ts_ms: i64) -> CResult<Option<OutRequest>> {
         let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
-        if c.head_seq < c.snapshot_seq.saturating_add(cloud::SNAPSHOT_EVERY) || !c.access.can_write(&me, &no_groups) || !c.pending_ops.is_empty() {
+        if c.head_seq < c.snapshot_seq.saturating_add(cloud::SNAPSHOT_EVERY) || !c.access.can_write(&me, &no_groups) || !c.pending_ops.is_empty() || !c.cut.held.is_empty() {
             return Ok(None);
         }
         let epoch = c.access.epoch;
@@ -676,7 +719,7 @@ impl Client {
         if !c.access.can_admin(&me, &no_groups) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
-        let revoke = dom::sign_revoke_at(&self.acc, &c.access, &dom::Grantee::User(user.to_string()), ts_ms, Some(c.head_seq))?;
+        let revoke = dom::sign_revoke_cut(&self.acc, &c.access, &dom::Grantee::User(user.to_string()), ts_ms, Some(&c.cut.boundary(c.head_seq)))?;
         c.access.apply(&revoke, &resolve, &no_groups)?;
         c.grants.push(revoke.clone());
         c.keys.insert(c.access.epoch, dom::new_epoch_key());
@@ -695,7 +738,7 @@ impl Client {
         if !c.access.can_admin(&me, &no_groups) || c.keys.get(c.access.epoch).is_none() {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
-        let rotate = dom::sign_rotate_at(&self.acc, &c.access, ts_ms, Some(c.head_seq))?;
+        let rotate = dom::sign_rotate_cut(&self.acc, &c.access, ts_ms, Some(&c.cut.boundary(c.head_seq)))?;
         c.access.apply(&rotate, &resolve, &no_groups)?;
         c.grants.push(rotate.clone());
         c.keys.insert(c.access.epoch, dom::new_epoch_key());
@@ -830,6 +873,8 @@ impl Client {
                 snapshot_seq: c.snapshot_seq,
                 guard_max: c.guard.max_seen(),
                 pending_ops: c.pending_ops.iter().map(|o| b64(&o.encode_to_vec())).collect(),
+                held_ops: c.cut.held.iter().map(|o| b64(&o.encode_to_vec())).collect(),
+                head_op_id: b64(&c.cut.head_op_id),
             })
             .collect()
     }
@@ -847,10 +892,12 @@ impl Client {
         }
         let state = cloud::CloudState::from_snapshot(&cloud::decode_snapshot(&unb64(&pc.snapshot)?)?)?;
         let pending_ops = pc.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
+        let held = pc.held_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
+        let cut = dom::EpochCut { held, head_op_id: unb64(&pc.head_op_id)? };
         let id = access.container_ref()?.id.clone();
         self.cloud.insert(
             id,
-            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default() },
+            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut },
         );
         Ok(())
     }

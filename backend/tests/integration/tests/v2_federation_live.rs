@@ -819,3 +819,68 @@ async fn federation_switched_off_refuses_both_ways() {
         panic!("{e:?}{}", fail_logs(&a, &b));
     }
 }
+
+/// PV-015: файл больше окна gateway (S7-13, 16 кусков) с чужого сервера. Gateway A режет запрос на окна по
+/// 16 кусков, каждое окно — отдельный межсерверный запрос с `first_chunk` = 0, 16, 32; federation B обязан
+/// отдавать номера кусков блоба как есть. Раньше он нумеровал каждое окно с 0: второе окно приходило как
+/// 0..15 и поток кончался на 32-м куске из 40, а диапазон с ненулевого куска не работал совсем.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn federation_download_larger_than_stream_window() {
+    use parvane_protocol::pb::parvane::cloud::v1 as clpb;
+    use sha2::{Digest, Sha256};
+    let Some((a, b)) = tokio::task::spawn_blocking(|| two_stacks(&[], &[])).await.unwrap() else { return };
+    let (addr_a, addr_b) = (a.gateway_tcp.clone(), b.gateway_tcp.clone());
+    let tag = free_port();
+    let r = tokio::task::spawn_blocking(move || {
+        const CHUNKS: u32 = 40;
+        // Владелец на B кладёт блоб из 40 кусков по секрету доступа (CAP-1).
+        let boris_u = format!("boris{tag}@{B}");
+        let token = v2common::register_token(&addr_b, &boris_u, "d1");
+        let (mut up, _) = Conn::connect(&addr_b, Channel::Identified);
+        up.send(frame::Kind::Auth(Auth { token }));
+        assert!(matches!(up.recv().and_then(|f| f.kind), Some(frame::Kind::AuthOk(_))), "auth");
+        let parts: Vec<Vec<u8>> = (0..CHUNKS).map(|i| (0..2048u32).map(|j| (i * 7 + j) as u8).collect()).collect();
+        let cap = [0x5au8; 32];
+        let mut upload_id = String::new();
+        for (i, p) in parts.iter().enumerate() {
+            let body = clpb::UploadChunkRequest { upload_id: upload_id.clone(), index: i as u32, bucket: 0, data: p.clone() }.encode_to_vec();
+            let r = up.call("cloud.blob.upload_chunk", body).expect("upload_chunk");
+            upload_id = clpb::UploadChunkResponse::decode(r.as_slice()).unwrap().upload_id;
+        }
+        let done = clpb::UploadCompleteRequest {
+            upload_id,
+            chunks: CHUNKS,
+            size: parts.iter().map(|p| p.len() as u64).sum(),
+            visibility: clpb::Visibility::Private as i32,
+            capability_hash: Sha256::digest(cap).to_vec(),
+        };
+        let r = up.call("cloud.blob.upload_complete", done.encode_to_vec()).expect("upload_complete");
+        let file_id = clpb::UploadCompleteResponse::decode(r.as_slice()).unwrap().file_id;
+
+        // Получатель на A качает его анонимно через свой gateway.
+        let fetch = |first: u32, count: u32| {
+            let (mut an, _) = Conn::connect(&addr_a, Channel::AnonymousDelivery);
+            let body = clpb::DownloadCapRequest { file_id: file_id.clone(), capability: cap.to_vec(), first_chunk: first, chunk_count: count }.encode_to_vec();
+            an.stream_to("cloud.blob.download_cap", body, B)
+        };
+        let check = |what: &str, got: Result<(Vec<u8>, Vec<(u32, bool, Vec<u8>)>), ErrorCode>, want: std::ops::Range<u32>| {
+            let (meta, chunks) = got.unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            assert_eq!(clpb::DownloadCapResponse::decode(meta.as_slice()).unwrap().chunks, CHUNKS, "{what}: метаданные");
+            let idx: Vec<u32> = chunks.iter().map(|c| c.0).collect();
+            assert_eq!(idx, want.clone().collect::<Vec<_>>(), "{what}: номера кусков");
+            assert_eq!(chunks.iter().filter(|c| c.1).count(), 1, "{what}: один last");
+            assert!(chunks.last().is_some_and(|c| c.1), "{what}: last у последнего");
+            for (i, _, data) in &chunks {
+                assert_eq!(data, &parts[*i as usize], "{what}: содержимое куска {i}");
+            }
+        };
+        check("весь файл", fetch(0, 0), 0..CHUNKS);
+        check("окно с 20 на 15", fetch(20, 15), 20..35);
+        check("хвост с 16", fetch(16, 0), 16..CHUNKS);
+        check("с 33 до конца", fetch(33, 100), 33..CHUNKS);
+    })
+    .await;
+    if let Err(e) = r {
+        panic!("{e:?}{}", fail_logs(&a, &b));
+    }
+}

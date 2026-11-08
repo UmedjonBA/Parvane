@@ -69,6 +69,12 @@ fn spawn(bin: &str, envs: &[(&str, &str)], log: &Path) -> Child {
 }
 
 async fn start() -> Option<(Stack, async_nats::Client)> {
+    start_with(&[]).await
+}
+
+const TG_SECRET: &str = "parvane-e2e-telegram-secret";
+
+async fn start_with(identity_env: &[(&str, &str)]) -> Option<(Stack, async_nats::Client)> {
     let nats_bin = find_nats_server().or_else(|| {
         eprintln!("SKIP: nats-server не найден");
         None
@@ -94,11 +100,9 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
         .unwrap()];
     let id_db = dir.join("identity.db").to_string_lossy().to_string();
     let wk = dir.join("parvane.json").to_string_lossy().to_string();
-    children.push(spawn(
-        "identity",
-        &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &id_db), ("PARVANE_DEV", "1"), ("PARVANE_WELL_KNOWN_FILE", &wk)],
-        &dir.join("identity.log"),
-    ));
+    let mut id_env = vec![("PARVANE_NATS_URL", nats_url.as_str()), ("PARVANE_DB_PATH", &id_db), ("PARVANE_DEV", "1"), ("PARVANE_WELL_KNOWN_FILE", &wk)];
+    id_env.extend_from_slice(identity_env);
+    children.push(spawn("identity", &id_env, &dir.join("identity.log")));
     let m_db = dir.join("messenger.db").to_string_lossy().to_string();
     children.push(spawn("messenger", &[("PARVANE_NATS_URL", &nats_url), ("PARVANE_DB_PATH", &m_db), ("PARVANE_GROUP_ENTRY_TS_WINDOW_MS", "0")], &dir.join("messenger.log")));
     children.push(spawn(
@@ -209,6 +213,124 @@ async fn link_request_reaches_every_old_device_and_any_grants_live() {
         assert!(poll(&mut d2).offers.is_empty(), "у d2 запрос исчез");
         let g = poll(&mut d3).grant.expect("грант новому устройству");
         assert_eq!(g.eph_pub, c_pub);
+    })
+    .await;
+    if result.is_err() {
+        eprintln!("журналы стека: {}", dir.display());
+    }
+    drop(stack);
+    result.unwrap();
+}
+
+fn login_token(addr: &str, user: &str, device_id: &str) -> String {
+    let (mut id, _) = Conn::connect(addr, Channel::Identified);
+    id.call("identity.session.issue", ipb::SessionIssueRequest { login: user.into(), password: PASSWORD.into(), device_id: device_id.into(), ..Default::default() }.encode_to_vec())
+        .map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap_or_default().token)
+        .expect("session.issue")
+}
+
+fn authed(addr: &str, token: &str) -> Conn {
+    let (mut id, _) = Conn::connect(addr, Channel::Identified);
+    id.send(frame::Kind::Auth(Auth { token: token.into() }));
+    assert!(matches!(id.recv().and_then(|f| f.kind), Some(frame::Kind::AuthOk(_))), "auth");
+    id
+}
+
+fn tg_request(c: &mut Conn, eph: &[u8]) -> Result<String, parvane_protocol::pb::parvane::core::v2::ErrorCode> {
+    c.call("identity.recovery.tg_request", ipb::RecoveryTgRequestRequest { client: "Test".into(), again: false, eph_public: eph.to_vec() }.encode_to_vec())
+        .map(|b| ipb::RecoveryTgRequestResponse::decode(b.as_slice()).unwrap().code)
+}
+
+fn tg_poll(c: &mut Conn) -> ipb::RecoveryTgPollResponse {
+    let b = c.call("identity.recovery.tg_poll", ipb::RecoveryTgPollRequest { done: false }.encode_to_vec()).expect("tg_poll");
+    ipb::RecoveryTgPollResponse::decode(b.as_slice()).unwrap()
+}
+
+/// S7-1: вошедший паролем «как» новое устройство (тот же `device_id`, другая сессия) не перехватывает его
+/// запрос ключа через Telegram: ни своим ключом, ни запросом без ключа; опрос ему пуст, бот получает один
+/// вопрос, и ответ владельца открывается только ключом настоящего устройства. Офферы привязки (откуда
+/// берётся `device_id` нового устройства) сессии вне журнала не видны.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn telegram_recovery_request_is_bound_to_session_live() {
+    let Some((stack, _nc)) = start_with(&[("PARVANE_TELEGRAM_BOT", "parvane_e2e_bot"), ("PARVANE_TELEGRAM_SECRET", TG_SECRET)]).await else { return };
+    let addr = stack.gateway_tcp.clone();
+    let user = format!("tgrec{}@local", free_port());
+    let dir = stack.dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let telegram_id = 700_000 + i64::from(free_port());
+        // Регистрация с подтверждением через Telegram (бот — этот тест)
+        let (mut pre, w) = Conn::connect(&addr, Channel::Identified);
+        let Some(frame::Kind::Welcome(w)) = w.kind else { panic!("нет Welcome") };
+        let (domain, server_key) = parvane_protocol::client::verify_server_descriptor(&w.server_descriptor).unwrap();
+        let reg = pre
+            .call("identity.account.register", ipb::AccountRegisterRequest { user: user.clone(), password: PASSWORD.into(), ..Default::default() }.encode_to_vec())
+            .map(|b| ipb::AccountRegisterResponse::decode(b.as_slice()).unwrap())
+            .expect("регистрация");
+        assert!(!reg.telegram_token.is_empty(), "регистрация через Telegram");
+        pre.call(
+            "identity.account.confirm_telegram",
+            ipb::AccountConfirmTelegramRequest { secret: TG_SECRET.into(), token: reg.telegram_token, telegram_id, telegram_name: "Test".into() }.encode_to_vec(),
+        )
+        .expect("подтверждение Telegram");
+        // Старое устройство: личность и копия корня под ключом восстановления
+        let tok1 = login_token(&addr, &user, "d1");
+        let id1 = authed(&addr, &tok1);
+        let (anon, _) = Conn::connect(&addr, Channel::AnonymousDelivery);
+        let client = Client::new(&user, "d1", &domain).unwrap();
+        let mut d1 = Device { client, id: id1, anon, server_key, domain };
+        let (reqs, root) = d1.client.create_identity(5).unwrap();
+        d1.run(&reqs).expect("личность");
+        let key = parvane_protocol::recovery::RecoveryKey::generate();
+        let backup = d1.client.export_root_backup(&root.root.to_bytes(), &key).unwrap();
+        d1.id.call("identity.root.backup_set", ipb::RootBackupSetRequest { backup, ..Default::default() }.encode_to_vec()).expect("копия корня");
+
+        // Новое устройство dN: оффер привязки и запрос ключа через Telegram
+        let mut real = authed(&addr, &login_token(&addr, &user, "dN"));
+        real.call("identity.link.offer", ipb::LinkOfferRequest { commitment: b64.encode([3u8; 32]), signing_key: "S".into(), ..Default::default() }.encode_to_vec()).expect("offer");
+        // Сессия вне журнала (знает только пароль) чужих офферов не видит; устройство журнала — видит
+        let mut spy = authed(&addr, &login_token(&addr, &user, "dSpy"));
+        let p = ipb::LinkPollResponse::decode(spy.call("identity.link.poll", ipb::LinkPollRequest {}.encode_to_vec()).expect("poll").as_slice()).unwrap();
+        assert!(p.offers.is_empty(), "сессия вне журнала не узнаёт device_id нового устройства");
+        assert_eq!(poll(&mut d1).offers.iter().map(|o| o.device_id.as_str()).collect::<Vec<_>>(), vec!["dN"]);
+
+        let (eph_secret, eph_public) = parvane_protocol::recovery_tg::generate();
+        let code = tg_request(&mut real, &eph_public).expect("запрос ключа");
+        // Атакующий: вход паролем с тем же device_id, свой эфемерный ключ — отказ; без ключа — отказ
+        let mut evil = authed(&addr, &login_token(&addr, &user, "dN"));
+        let (_evil_secret, evil_public) = parvane_protocol::recovery_tg::generate();
+        assert_eq!(tg_request(&mut evil, &evil_public), Err(parvane_protocol::pb::parvane::core::v2::ErrorCode::Forbidden), "запрос другой сессии не заменяет");
+        assert_eq!(tg_request(&mut evil, &[]), Err(parvane_protocol::pb::parvane::core::v2::ErrorCode::Invalid), "запроса без ключа нет");
+        let ep = tg_poll(&mut evil);
+        assert!(!ep.pending && ep.code.is_empty() && ep.sealed_key.is_empty() && ep.recovery_key.is_empty(), "чужой сессии опрос пуст");
+        assert_eq!(tg_poll(&mut real).code, code, "код у настоящего устройства прежний");
+
+        // Бот: один вопрос — от настоящего устройства, с его кодом
+        let (mut bot, _) = Conn::connect(&addr, Channel::Identified);
+        let pulled = ipb::TelegramPullResponse::decode(
+            bot.call("identity.telegram.pull", ipb::TelegramPullRequest { secret: TG_SECRET.into(), ack: vec![], wait_ms: 0 }.encode_to_vec()).expect("pull").as_slice(),
+        )
+        .unwrap();
+        let asks: Vec<_> = pulled.messages.iter().filter(|m| m.kind == "ask" && m.user == user).collect();
+        assert_eq!(asks.len(), 1, "у бота один вопрос: {:?}", pulled.messages);
+        assert_eq!(asks[0].code, code);
+        let reply = ipb::TelegramReplyResponse::decode(
+            bot.call(
+                "identity.telegram.reply",
+                ipb::TelegramReplyRequest { secret: TG_SECRET.into(), telegram_id, text: key.to_display().to_string(), request_id: asks[0].request_id }.encode_to_vec(),
+            )
+            .expect("reply")
+            .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(reply.result, "ok");
+        // Ответ — только настоящему устройству и только запечатанным на его ключ
+        let ep = tg_poll(&mut evil);
+        assert!(ep.sealed_key.is_empty() && ep.recovery_key.is_empty(), "атакующему ответ не достаётся");
+        let rp = tg_poll(&mut real);
+        assert!(rp.recovery_key.is_empty(), "открытым текстом ключ не отдаётся");
+        let opened = parvane_protocol::recovery_tg::open(&eph_secret[..], &user, "dN", &rp.sealed_key).expect("ответ открывается ключом устройства");
+        assert_eq!(opened.as_slice(), key.to_display().as_bytes());
     })
     .await;
     if result.is_err() {

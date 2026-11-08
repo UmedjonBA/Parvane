@@ -29,6 +29,9 @@ pub(crate) fn valid_nick(nick: &str) -> bool {
         && nick
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
+        // PV-021: то же правило части адреса, что у протокола v2 (без `.` в конце и `..`) — иначе аккаунт с
+        // таким ником регистрировался, но журнал устройств v2 для него не создавался (`DeviceLog::new` → Invalid)
+        && parvane_protocol::address::is_valid_domain(nick)
 }
 
 /// Адрес нового аккаунта: ник проверен, домен — только свой (чужие домены
@@ -151,34 +154,16 @@ pub(crate) async fn handle_setname(
                 if name.is_empty() || name.len() > 64 {
                     SetNameResponse { ok: false, error: Some("имя пустое/длинное".into()) }
                 } else {
-                    let _ = sqlx::query("UPDATE users SET display_name = ? WHERE username = ?")
-                        .bind(name)
-                        .bind(&username)
-                        .execute(pool)
-                        .await;
-                    // Профильные поля (опциональны): задаём только присланные.
-                    if let Some(v) = req.bio.as_ref() {
-                        let _ = sqlx::query("UPDATE users SET bio = ? WHERE username = ?")
-                            .bind(v.trim()).bind(&username).execute(pool).await;
+                    match update_profile(pool, &username, name, &req).await {
+                        Ok(()) => {
+                            info!("{} обновил профиль (имя '{}')", username, name);
+                            SetNameResponse { ok: true, error: None }
+                        }
+                        Err(e) => {
+                            error!("профиль {}: {:#}", username, e);
+                            SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) }
+                        }
                     }
-                    if let Some(v) = req.birthday.as_ref() {
-                        let _ = sqlx::query("UPDATE users SET birthday = ? WHERE username = ?")
-                            .bind(v.trim()).bind(&username).execute(pool).await;
-                    }
-                    if let Some(v) = req.name_color {
-                        let _ = sqlx::query("UPDATE users SET name_color = ? WHERE username = ?")
-                            .bind(v).bind(&username).execute(pool).await;
-                    }
-                    if let Some(v) = req.personal_channel.as_ref() {
-                        let _ = sqlx::query("UPDATE users SET personal_channel = ? WHERE username = ?")
-                            .bind(v.trim()).bind(&username).execute(pool).await;
-                    }
-                    if let Some(v) = req.phone.as_ref() {
-                        let _ = sqlx::query("UPDATE users SET phone = ? WHERE username = ?")
-                            .bind(v.trim()).bind(&username).execute(pool).await;
-                    }
-                    info!("{} обновил профиль (имя '{}')", username, name);
-                    SetNameResponse { ok: true, error: None }
                 }
             }
             Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
@@ -186,6 +171,31 @@ pub(crate) async fn handle_setname(
         Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
     };
     let _ = nc.publish(reply, serde_json::to_vec(&resp).unwrap_or_default().into()).await;
+}
+
+/// PV-022: имя и присланные поля профиля — одной транзакцией; ошибка любого UPDATE откатывает всё и
+/// возвращается вызывающему (раньше шесть `let _ = UPDATE` без транзакции, и ответ всегда был `ok: true`).
+pub(crate) async fn update_profile(pool: &SqlitePool, username: &str, name: &str, req: &SetNameRequest) -> Result<()> {
+    let mut tx = parvane_db::begin_write(pool).await?;
+    sqlx::query("UPDATE users SET display_name = ? WHERE username = ?").bind(name).bind(username).execute(&mut *tx).await?;
+    // Профильные поля (опциональны): задаём только присланные.
+    if let Some(v) = req.bio.as_ref() {
+        sqlx::query("UPDATE users SET bio = ? WHERE username = ?").bind(v.trim()).bind(username).execute(&mut *tx).await?;
+    }
+    if let Some(v) = req.birthday.as_ref() {
+        sqlx::query("UPDATE users SET birthday = ? WHERE username = ?").bind(v.trim()).bind(username).execute(&mut *tx).await?;
+    }
+    if let Some(v) = req.name_color {
+        sqlx::query("UPDATE users SET name_color = ? WHERE username = ?").bind(v).bind(username).execute(&mut *tx).await?;
+    }
+    if let Some(v) = req.personal_channel.as_ref() {
+        sqlx::query("UPDATE users SET personal_channel = ? WHERE username = ?").bind(v.trim()).bind(username).execute(&mut *tx).await?;
+    }
+    if let Some(v) = req.phone.as_ref() {
+        sqlx::query("UPDATE users SET phone = ? WHERE username = ?").bind(v.trim()).bind(username).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 // Установка своего avatar_file_id (username из проверенного токена).
@@ -199,13 +209,17 @@ pub(crate) async fn handle_setavatar(
     let resp = match serde_json::from_slice::<SetAvatarRequest>(&msg.payload) {
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
             Ok(username) => {
-                let _ = sqlx::query("UPDATE users SET avatar_file_id = ? WHERE username = ?")
-                    .bind(&req.file_id)
-                    .bind(&username)
-                    .execute(pool)
-                    .await;
-                info!("{} обновил аватар ({})", username, req.file_id);
-                SetNameResponse { ok: true, error: None }
+                // PV-022: ошибка записи — отказ, а не «успех»
+                match sqlx::query("UPDATE users SET avatar_file_id = ? WHERE username = ?").bind(&req.file_id).bind(&username).execute(pool).await {
+                    Ok(_) => {
+                        info!("{} обновил аватар ({})", username, req.file_id);
+                        SetNameResponse { ok: true, error: None }
+                    }
+                    Err(e) => {
+                        error!("аватар {}: {}", username, e);
+                        SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) }
+                    }
+                }
             }
             Err(e) => SetNameResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
         },

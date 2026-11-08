@@ -324,6 +324,26 @@ fn download_cap(addr: &str, file_id: &str, capability: &[u8], chunks: u32) -> Re
     }
 }
 
+/// Скачать окно блоба по секрету: метаданные и куски (номер, данные, last).
+fn download_cap_chunks(addr: &str, file_id: &str, capability: &[u8], first: u32, count: u32) -> Result<(clpb::DownloadCapResponse, Vec<(u32, Vec<u8>, bool)>), ErrorCode> {
+    let (mut c, _) = Conn::connect(addr, Channel::AnonymousDelivery);
+    let r = clpb::DownloadCapRequest { file_id: file_id.into(), capability: capability.to_vec(), first_chunk: first, chunk_count: count };
+    let meta = clpb::DownloadCapResponse::decode(c.call("cloud.blob.download_cap", r.encode_to_vec())?.as_slice()).map_err(|_| ErrorCode::Invalid)?;
+    let mut out = vec![];
+    loop {
+        let f = c.recv().ok_or(ErrorCode::Unavailable)?;
+        if let Some(frame::Kind::StreamChunk(ch)) = f.kind {
+            if let Some(e) = ch.error {
+                return Err(ErrorCode::try_from(e.code).unwrap_or(ErrorCode::Unspecified));
+            }
+            out.push((ch.index, ch.data, ch.last));
+            if ch.last {
+                return Ok((meta, out));
+            }
+        }
+    }
+}
+
 fn drive_used(d: &mut Device) -> (u64, u64) {
     let u: clpb::UsageResponse = call(&mut d.id, "cloud.blob.usage", clpb::UsageRequest {}).unwrap();
     let get = |b: clpb::BlobBucket| u.buckets.iter().find(|x| x.bucket == b as i32).map(|x| x.used).unwrap_or(0);
@@ -370,6 +390,18 @@ async fn v2_cloud_drive_devices_snapshot_copy_and_sharing_live() {
         // Скачивание по секрету — анонимно; чужой секрет не подходит.
         assert_eq!(download_cap(&addr, &file_id, &cap, 3).expect("download_cap"), whole);
         assert_eq!(download_cap(&addr, &file_id, &random::<32>(), 3), Err(ErrorCode::NotFound));
+
+        // ── S7-13: gateway делит запрос клиента на окна по 16 кусков — клиент видит один поток ─────
+        let many: Vec<Vec<u8>> = (0..40u8).map(|i| vec![i; 300 + usize::from(i)]).collect();
+        let many_cap = random::<32>();
+        let many_id = upload_drive(&mut bob.id, &many, &many_cap).expect("40 кусков");
+        for (first, count) in [(0u32, 0u32), (0, 40), (5, 30), (30, 100), (39, 1)] {
+            let (meta, chunks) = download_cap_chunks(&addr, &many_id, &many_cap, first, count).expect("скачивание окнами");
+            assert_eq!(meta.chunks, 40, "метаданные — один раз и про весь блоб");
+            let end = if count == 0 { 40 } else { (first + count).min(40) };
+            assert_eq!(chunks.iter().map(|c| c.0).collect::<Vec<_>>(), (first..end).collect::<Vec<_>>(), "окно {first}+{count}: куски по порядку");
+            assert!(chunks.iter().enumerate().all(|(i, c)| c.1 == many[c.0 as usize] && c.2 == (i + 1 == chunks.len())), "окно {first}+{count}: last — один, у последнего");
+        }
 
         // ── Копия под новым секретом (перенос между контейнерами в web) ───────
         let cap2 = random::<32>();

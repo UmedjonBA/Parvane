@@ -2603,7 +2603,7 @@ impl Client {
     /// их имени, сколько бы ни ссылалось на версию «до отзыва».
     fn revocation_floors(&self, state: &GroupState) -> Vec<gpb::RevokedFloor> {
         let mut out = Vec::new();
-        for user in state.members.keys().filter(|u| **u != self.user) {
+        for user in state.members.keys().filter(|u| **u != self.user && state.may_floor(&self.user, u)) {
             let floor = self.peer_log(user).map(|l| l.revocation_floor()).unwrap_or(0);
             if floor > state.signer_versions.get(user).copied().unwrap_or(0) {
                 out.push(gpb::RevokedFloor { user: user.clone(), min_log_version: floor });

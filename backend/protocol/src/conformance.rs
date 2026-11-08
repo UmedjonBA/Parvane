@@ -18,7 +18,7 @@
 //! `history/unread` (READ-2: непрочитанное, маркеры, права удаления), `history/segment` (HIST-2: ключи и
 //! отпечатки сегментов, горизонт, строка формата привязки) и `history/aead` (ключ истории и записи журнала).
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use prost::Message;
 
@@ -63,7 +63,7 @@ pub fn run(suite: &str, json: &str) -> Result<usize, String> {
             "legacy_v1/messages" => legacy_case(case),
             "call/signals" => call_case(case),
             "link/sas" => link_case(case),
-            "history/merge" | "history/unread" | "history/segment" | "history/aead" => history_case(suite, case),
+            "history/merge" | "history/unread" | "history/segment" | "history/aead" | "history/checkpoint" => history_case(suite, case),
             _ => return Err(format!("неизвестный набор {suite}")),
         };
         r.map_err(|e| format!("{suite}/{name}: {e}"))?;
@@ -699,6 +699,37 @@ fn history_case(suite: &str, case: &Value) -> Result<(), String> {
                 Err(_) => Ok(()),
             }
         }
+        // S7-4: точка сервера против сводки под её номером
+        ("history/checkpoint", "verify") => {
+            let c = &input["checkpoint"];
+            let n = |k: &str| c[k].as_u64().ok_or_else(|| format!("нет checkpoint.{k}"));
+            let cp = crate::pb::parvane::history::v1::Checkpoint {
+                id: n("id")?,
+                upto_seq: n("upto_seq")?,
+                summary_seq: n("summary_seq")?,
+                chunk_seqs: c["chunk_seqs"].as_array().ok_or("нет chunk_seqs")?.iter().filter_map(Value::as_u64).collect(),
+                created_ms: 0,
+            };
+            expect_outcome(&h::verify_checkpoint(&cp, &hjson(input, "summary")?), expect)
+        }
+        // S7-4: номера цепочек писателей без пропусков
+        ("history/checkpoint", "chains") => {
+            let mut book = h::ChainBook::from_value(&input["book"]).map_err(|e| e.kind().to_string())?;
+            let mut check = h::ChainCheck::default();
+            for r in input["records"].as_array().ok_or("нет records")? {
+                let chain = hex_field(r, "chain_hex")?;
+                book.observe(&chain, r["chain_seq"].as_u64().unwrap_or(0), r["ts_ms"].as_i64().unwrap_or(0), &mut check);
+            }
+            same(&json!(check.gaps), &expect["gaps"], "пропуски")?;
+            same(&json!(check.replayed), &expect["replayed"], "повторы")?;
+            same(&book.to_value(), &expect["book"], "книга")
+        }
+        // S7-3: открытый текст записи выровнен по сетке L2
+        ("history/checkpoint", "pad") => {
+            let mut b: HistoryBatch = hjson(input, "batch")?;
+            h::pad_batch(&mut b);
+            same(&json!(prost::Message::encoded_len(&b)), &expect["len"], "длина пачки")
+        }
         _ => Err(format!("неизвестный вид случая {kind:?}")),
     }
 }
@@ -739,6 +770,7 @@ mod tests {
             ("history/unread", "history/unread.json", 8),
             ("history/segment", "history/segment.json", 8),
             ("history/aead", "history/aead.json", 6),
+            ("history/checkpoint", "history/checkpoint.json", 6),
         ] {
             let n = run(suite, &read(file)).unwrap();
             assert!(n >= least, "{suite}: {n}");

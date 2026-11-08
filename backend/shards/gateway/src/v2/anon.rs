@@ -49,12 +49,17 @@ pub(crate) fn shard_request(m: &MethodInfo, s: &SessionIdentity<'_>, body: Vec<u
         device_id: if id { s.device.to_string() } else { String::new() },
         // Токен сессии читает только identity — другим шардам он не уходит (A0022-5)
         token: if id && m.shard == "identity" { s.token.to_string() } else { String::new() },
-        client_ip: if m.channel == CH_PRE { s.client_ip.to_string() } else { String::new() },
+        // S7-18: identity считает лимиты по метке адреса (IPv6 — /64, Tor — `onion`)
+        client_ip: if m.channel == CH_PRE { crate::limits::limit_label(s.client_ip) } else { String::new() },
         body,
         reauth_fresh: id && s.reauth_fresh,
         operator: id && s.operator,
         // Межсерверный домен-источник ставит только шард federation (spec 028).
         origin_domain: String::new(),
+        // Метку источника сигналам звонка ставит сессия (S7-23).
+        source_tag: 0,
+        // Срок ответа ставит сессия по таймауту запроса (OPT-003).
+        deadline_ms: 0,
     }
 }
 
@@ -102,6 +107,11 @@ pub(crate) fn check_single_recipient(m: &MethodInfo, body: &[u8]) -> Result<(), 
 /// Первый сигнал звонка (для cooldown на соединение).
 pub(crate) fn is_ring(m: &MethodInfo) -> bool {
     m.name == "call.ring_sealed"
+}
+
+/// Сигналы звонка в анонимном канале (S7-23: им — метка источника `ShardRequest.source_tag`).
+pub(crate) fn is_call_signal(m: &MethodInfo) -> bool {
+    matches!(m.name, "call.ring_sealed" | "call.signal_sealed")
 }
 
 /// События (подписки) — только в идентифицированной сессии.

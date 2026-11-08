@@ -35,6 +35,8 @@ struct PlannerLocal {
     last_op_epoch: u64,
     /// JSON состояния для хоста по (ревизия, head_seq) — C1.
     json_cache: JsonCache,
+    /// Граница эпохи по подписанным данным (S7-6).
+    cut: dom::EpochCut,
 }
 
 /// Итог приёма страницы журнала планировщика (`domain.op.sync`).
@@ -78,6 +80,11 @@ struct PersistedPlanner {
     snapshot_seq: u64,
     guard_max: u64,
     pending_ops: Vec<String>,
+    /// S7-6: операции прежних эпох до неподтверждённой границы и op_id на курсоре (нет поля — прежняя запись).
+    #[serde(default)]
+    held_ops: Vec<String>,
+    #[serde(default)]
+    head_op_id: String,
 }
 
 fn b64(x: &[u8]) -> String {
@@ -157,6 +164,7 @@ impl Client {
             pending_ops: vec![],
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
+            cut: dom::EpochCut::default(),
         });
         Ok(OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }))
     }
@@ -189,6 +197,7 @@ impl Client {
             state: existing.as_ref().map(|p| p.state.clone()).unwrap_or_default(),
             head_seq: existing.as_ref().map(|p| p.head_seq).unwrap_or(0),
             snapshot_seq: existing.as_ref().map(|p| p.snapshot_seq).unwrap_or(0),
+            cut: existing.as_ref().map(|p| p.cut.clone()).unwrap_or_default(),
             pending_ops: existing.map(|p| p.pending_ops).unwrap_or_default(),
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
@@ -242,6 +251,20 @@ impl Client {
         Ok(version)
     }
 
+    /// Принятая операция: ждёт ключа своей эпохи либо применяется.
+    fn planner_take(p: &mut PlannerLocal, op: ContainerOp, author_device: &str, out: &mut PlannerIngest, last_error: &mut Option<ProtoError>) {
+        p.last_op_epoch = p.last_op_epoch.max(op.key_epoch);
+        if p.keys.get(op.key_epoch).is_none() {
+            out.missing_epoch = Some(op.key_epoch);
+            p.pending_ops.push(op);
+            return;
+        }
+        match Self::planner_open_one(p, &op, author_device) {
+            Ok(n) => out.applied += n,
+            Err(e) => *last_error = Some(e),
+        }
+    }
+
     fn planner_open_one(p: &mut PlannerLocal, op: &ContainerOp, author_device: &str) -> Result<usize> {
         let key = p.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &p.access.container, key)?;
@@ -282,25 +305,42 @@ impl Client {
             if op.seq <= p.head_seq {
                 continue;
             }
+            // S7-6: граница эпохи по подписанному op_id — сдвиг журнала сервером виден и новому читателю
+            let verdict = p.access.op_boundary_verdict(&op);
+            match verdict {
+                dom::BoundaryVerdict::Tampered => {
+                    p.cut.held.clear();
+                    self.last_error = Some(ProtoError::ContextMismatch);
+                    p.head_seq = op.seq;
+                    p.cut.note_head(&op, false);
+                    continue;
+                }
+                dom::BoundaryVerdict::Confirms(_) => {
+                    for h in std::mem::take(&mut p.cut.held) {
+                        if let Ok(a) = p.access.check_op_author(&h, &resolve, &no_groups) {
+                            Self::planner_take(p, h, &a.device_id, &mut out, &mut self.last_error);
+                        }
+                    }
+                }
+                _ => {}
+            }
             match p.access.check_op_author(&op, &resolve, &no_groups) {
                 Ok(_) if op.key_epoch < p.last_op_epoch => {
                     // Эпоха убывает вдоль журнала: операция вставлена ключом, уже сменённым ротацией
                     self.last_error = Some(ProtoError::Forbidden);
                     p.head_seq = op.seq;
+                    p.cut.note_head(&op, true);
+                }
+                Ok(_) if matches!(verdict, dom::BoundaryVerdict::Hold(_)) => {
+                    p.head_seq = op.seq;
+                    p.cut.note_head(&op, true);
+                    p.last_op_epoch = p.last_op_epoch.max(op.key_epoch);
+                    p.cut.held.push(op);
                 }
                 Ok(a) => {
-                    p.last_op_epoch = op.key_epoch;
-                    if p.keys.get(op.key_epoch).is_none() {
-                        out.missing_epoch = Some(op.key_epoch);
-                        p.head_seq = op.seq;
-                        p.pending_ops.push(op);
-                        continue;
-                    }
                     p.head_seq = op.seq;
-                    match Self::planner_open_one(p, &op, &a.device_id) {
-                        Ok(n) => out.applied += n,
-                        Err(e) => self.last_error = Some(e),
-                    }
+                    p.cut.note_head(&op, true);
+                    Self::planner_take(p, op, &a.device_id, &mut out, &mut self.last_error);
                 }
                 Err(ProtoError::Expired) => {
                     // Эпоха новее журнала грантов — догнать гранты и повторить страницу.
@@ -309,6 +349,7 @@ impl Client {
                     break;
                 }
                 Err(e) => {
+                    p.cut.note_head(&op, e == ProtoError::Forbidden);
                     self.last_error = Some(e);
                     p.head_seq = op.seq;
                 }
@@ -333,6 +374,7 @@ impl Client {
         // u64::MAX навсегда победила бы); негодная метка — отказ всему снимку.
         planner::guard_snapshot(&mut p.guard, &decoded, s.upto_seq)?;
         p.state.merge_snapshot(&decoded)?;
+        p.cut.note_snapshot(s.upto_seq, p.head_seq);
         if s.upto_seq > p.head_seq {
             p.head_seq = s.upto_seq;
         }
@@ -376,7 +418,7 @@ impl Client {
     pub fn planner_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
         let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         // Операции, ждущие ключа эпохи, в снимок не входят, а курсор их уже прошёл — снимок их потерял бы.
-        if p.head_seq < p.snapshot_seq.saturating_add(planner::SNAPSHOT_EVERY) || !p.pending_ops.is_empty() {
+        if p.head_seq < p.snapshot_seq.saturating_add(planner::SNAPSHOT_EVERY) || !p.pending_ops.is_empty() || !p.cut.held.is_empty() {
             return Ok(None);
         }
         let epoch = p.access.epoch;
@@ -450,7 +492,7 @@ impl Client {
         if p.keys.get(p.access.epoch).is_none() {
             return Ok(vec![]);
         }
-        let rotate = dom::sign_rotate_at(&self.acc, &p.access, ts_ms, Some(p.head_seq))?;
+        let rotate = dom::sign_rotate_cut(&self.acc, &p.access, ts_ms, Some(&p.cut.boundary(p.head_seq)))?;
         p.access.apply(&rotate, &resolve, &no_groups)?;
         p.grants.push(rotate.clone());
         p.keys.insert(p.access.epoch, dom::new_epoch_key());
@@ -500,6 +542,8 @@ impl Client {
             snapshot_seq: p.snapshot_seq,
             guard_max: p.guard.max_seen(),
             pending_ops: p.pending_ops.iter().map(|o| b64(&o.encode_to_vec())).collect(),
+            held_ops: p.cut.held.iter().map(|o| b64(&o.encode_to_vec())).collect(),
+            head_op_id: b64(&p.cut.head_op_id),
         })
     }
 
@@ -526,7 +570,9 @@ impl Client {
             }
         }
         let pending_ops = pp.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
-        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default() });
+        let held = pp.held_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
+        let cut = dom::EpochCut { held, head_op_id: unb64(&pp.head_op_id)? };
+        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut });
         Ok(())
     }
 }

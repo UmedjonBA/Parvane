@@ -1,7 +1,8 @@
 # Caddy с плагином caddy-dns/duckdns — для ACME DNS-01 (Let's Encrypt по домену
 # DuckDNS, когда HTTP-01 недоступен: наружу проброшен не 80, а 20080).
-FROM docker.io/library/caddy:2-builder AS builder
-RUN xcaddy build --with github.com/caddy-dns/duckdns
+# S7-7 (7 ноя 2026): базовые образы закреплены по digest (тег — для чтения; обновлять осознанно, см. OPERATIONS.md «Образы»).
+FROM docker.io/library/caddy:2-builder@sha256:3db11aead97f1fdff9c563d0dd8e7fba2e4c7031bef40f3e44fd1982f3e8366b AS builder
+RUN xcaddy build --with github.com/caddy-dns/duckdns@v0.5.0
 
-FROM docker.io/library/caddy:2-alpine
+FROM docker.io/library/caddy:2-alpine@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy

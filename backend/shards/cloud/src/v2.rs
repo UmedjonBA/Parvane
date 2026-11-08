@@ -55,7 +55,7 @@ pub(crate) mod links;
 use super::{
     delete_blob_any, delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency, handler_per_user,
     max_chunk_bytes, max_download_chunks, max_file_bytes, max_total_chunks, now_unix,
-    owner_quota_bytes, release_free_pages, store_chunk_raw, used_bytes, FileMeta, Finalize, RejectKind,
+    charged_bytes, owner_quota_bytes, release_free_pages, store_chunk_raw, used_bytes, FileMeta, Finalize, RejectKind,
     Rejected, BUCKETS, BUCKET_DRIVE, BUCKET_MEDIA,
 };
 
@@ -213,6 +213,14 @@ async fn purge(ctx: &V2Ctx, address: &str) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Сколько запрос ждёт свободного обработчика.
+const PERMIT_WAIT: Duration = Duration::from_secs(10);
+
+/// Место обработчика не дольше `wait`; `None` — шард занят.
+async fn admit(sem: &Arc<tokio::sync::Semaphore>, wait: Duration) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    tokio::time::timeout(wait, sem.clone().acquire_owned()).await.ok()?.ok()
+}
+
 pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     tokio::spawn(serve_rename(nc.clone(), ctx.clone()));
     let methods = parvane_v2rt::methods_of("cloud");
@@ -232,10 +240,17 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                 warn!("v2 {}: запрос без reply", m.name);
                 continue;
             };
-            let Ok(permit) = sem.clone().acquire_owned().await else { break };
-            let (nc, ctx, owner_slots) = (nc.clone(), ctx.clone(), owner_slots.clone());
+            let (nc, ctx, owner_slots, sem) = (nc.clone(), ctx.clone(), owner_slots.clone(), sem.clone());
             tokio::spawn(async move {
-                let _permit = permit;
+                // S7-24 (как A0022-1 в parvane-v2rt): место ждём в задаче запроса, а не в цикле подписки — пока
+                // заняты все обработчики, subject читается дальше (NATS не отбрасывает сообщения медленного
+                // потребителя); ожидание ограничено, потом RATE_LIMITED.
+                let Some(_permit) = admit(&sem, PERMIT_WAIT).await else {
+                    if let Err(e) = nc.publish(reply, parvane_v2rt::rate_limited_reply(parvane_v2rt::OWNER_BUSY_RETRY_MS).into()).await {
+                        error!("v2 {}: ответ не отправлен: {e}", m.name);
+                    }
+                    return;
+                };
                 let emit = |bytes: Vec<u8>| {
                     let (nc, reply) = (nc.clone(), reply.clone());
                     async move {
@@ -260,7 +275,13 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                         return;
                     }
                 };
-                let Some(_owner_slot) = owner_slots.try_acquire(&req.user) else {
+                // S7-20: пересланный чужим сервером — только от пользователей домена-источника
+                if parvane_v2rt::check_origin(m, &req, parvane_v2rt::own_domain()).is_err() {
+                    warn!("v2 {}: пересланный запрос не от пользователя домена-источника", m.name);
+                    emit(error_reply(ErrorCode::Forbidden)).await;
+                    return;
+                }
+                let Some(_owner_slot) = owner_slots.try_acquire(&parvane_v2rt::slot_owner(&req)) else {
                     emit(parvane_v2rt::rate_limited_reply(parvane_v2rt::OWNER_BUSY_RETRY_MS)).await;
                     return;
                 };
@@ -651,7 +672,7 @@ async fn begin_copy(ctx: &V2Ctx, what: &'static str, owner: &str, bucket: i64, s
     let quota = owner_quota_bytes(bucket);
     let file_id = uuid::Uuid::now_v7().to_string();
     let mut tx = parvane_db::begin_write(&ctx.pool).await.map_err(db_code(what))?;
-    if quota > 0 && used_bytes(&mut *tx, owner, bucket).await.map_err(db_code(what))? + size > quota {
+    if quota > 0 && charged_bytes(&mut *tx, owner, bucket).await.map_err(db_code(what))? + super::charged(size, total) > quota {
         return Err(ErrorCode::Limit);
     }
     sqlx::query(
@@ -846,6 +867,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S7-24: занятый шард отвечает отказом через ограниченное время, а не держит цикл подписки.
+    #[tokio::test]
+    async fn busy_shard_refuses_after_wait() {
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = admit(&sem, Duration::from_millis(10)).await.expect("свободное место");
+        let t = Instant::now();
+        assert!(admit(&sem, Duration::from_millis(50)).await.is_none());
+        assert!(t.elapsed() < Duration::from_secs(2));
+        drop(held);
+        assert!(admit(&sem, Duration::from_millis(50)).await.is_some());
+    }
+
     use parvane_protocol::pb::parvane::core::v2::MethodChannel;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::Mutex;

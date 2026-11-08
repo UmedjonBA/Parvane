@@ -2018,6 +2018,71 @@ fn cloud_drive_of_signed_out_creator_attaches_on_new_device() {
     assert_eq!(cloud_names(&alice3, &id), vec!["Знания", "заметка.md"]);
 }
 
+/// S7-6: граница эпохи по подписанному op_id. Бывший редактор заранее подписал операцию прежней эпохи; после
+/// понижения сервер вставляет её до границы, сдвинув журнал. Новое устройство владельца, читающее журнал с нуля,
+/// видит на месте границы чужую операцию и операции прежней эпохи до неё не применяет (раньше — применяло: граница
+/// была только по seq, который ставит сервер). Без сдвига всё применяется как раньше.
+#[test]
+fn cloud_epoch_boundary_detects_shifted_log() {
+    use parvane_protocol::pb::parvane::core::v2 as c2;
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    bob_learn(&mut alice, "bob@local", bob_dk);
+    let (id, create) = alice.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_folder(1, None, "Общее")]));
+    run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", true, "", 2));
+    drain(&mut srv, &mut bob);
+    let (get, grants) = (cloud.get(&id).get_response(), cloud.get(&id).grants_response(0));
+    run_cloud(&mut cloud, &mut srv, &mut bob, &mut |c| c.cloud_attach(&get, &grants).map(|_| vec![]));
+    cloud_pull(&cloud, &mut srv, &mut bob, &id);
+    cloud_edit(&mut cloud, &mut srv, &mut bob, &id, serde_json::json!([cloud_folder(2, None, "от Боба")]));
+    // Боб, пока редактор, подписывает операцию эпохи 1 и придерживает её
+    let secret = serde_json::json!({ "ops": [cloud_folder(3, None, "тайная")] }).to_string();
+    let local = bob.cloud_prepare_local(&id, &secret).unwrap();
+    let held = bob.cloud_seal(&id, &local.op, &local.op_id, 3).unwrap();
+    let forged = decode_checked::<c2::DomainOpAppendRequest>(&held.body, Origin::Client).unwrap().op.unwrap();
+    // Алиса видит журнал до seq 2 и понижает Боба: смена эпохи с границей (2, op_id операции Боба)
+    cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", false, "", 4));
+    assert_eq!(cloud.get(&id).container.as_ref().unwrap().key_epoch, 2);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([cloud_folder(4, None, "эпоха 2")]));
+    let fresh = |srv: &mut Server, cloud: &MiniCloud, dev: &str, alice: &mut Client| {
+        let mut d = Client::new("alice@local", dev, "local").unwrap();
+        let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+        for r in d.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+            srv.handle("alice@local", dev, &r);
+        }
+        alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+        d.cloud_keys_import(&alice.cloud_keys_export()).unwrap();
+        satisfy(srv, &mut d, Need::PeerLog { user: "bob@local".into(), after: 0 });
+        d.cloud_attach(&cloud.get(&id).get_response(), &cloud.get(&id).grants_response(0)).unwrap();
+        d
+    };
+    // Честный журнал: новое устройство применяет всё (операции эпохи 1 ждут границы и проходят на ней)
+    let mut alice3 = fresh(&mut srv, &cloud, "d3", &mut alice);
+    cloud_pull(&cloud, &mut srv, &mut alice3, &id);
+    assert_eq!(cloud_names(&alice3, &id), vec!["Общее", "от Боба", "эпоха 2"], "{:?}", alice3.last_error);
+    // Сервер вставляет придержанную операцию Боба на seq 2 и сдвигает остальные
+    {
+        let ops = &mut cloud.containers.get_mut(&id).unwrap().ops;
+        ops.insert(1, forged);
+        for (i, o) in ops.iter_mut().enumerate() {
+            o.seq = i as u64 + 1;
+        }
+    }
+    let mut alice4 = fresh(&mut srv, &cloud, "d4", &mut alice);
+    cloud_pull(&cloud, &mut srv, &mut alice4, &id);
+    let names = cloud_names(&alice4, &id);
+    assert!(!names.contains(&"тайная".to_string()), "операция бывшего редактора вставлена сервером до границы: {names:?}");
+    assert!(names.contains(&"эпоха 2".to_string()), "{names:?}");
+    assert_eq!(alice4.last_error, Some(parvane_protocol::ProtoError::ContextMismatch), "сдвиг журнала замечен");
+}
+
 /// Грант незнакомцу: первое сообщение требует жетон (`Need::Token`). Хост
 /// добирает и повторяет — повтор обязан выдать грант, ключ и приглашение, а не
 /// пустой список (раньше грант оставался применённым локально после `Need`).

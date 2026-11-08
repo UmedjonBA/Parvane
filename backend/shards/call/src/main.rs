@@ -106,7 +106,8 @@ impl IceConfig {
             });
         }
         if let Some(secret) = self.turn_secret.as_ref().filter(|_| !self.turn_urls.is_empty()) {
-            let username = format!("{}:{}", now + self.ttl_secs as i64, user);
+            // S7-24: в имени TURN — псевдоним пользователя, не адрес (журналы TURN/coturn пишут имя рядом с IP)
+            let username = format!("{}:{}", now + self.ttl_secs as i64, turn_pseudonym(secret, user));
             let credential = turn_rest_credential(secret, &username);
             ice_servers.push(IceServer {
                 urls: self.turn_urls.clone(),
@@ -116,6 +117,16 @@ impl IceConfig {
         }
         IceServersResponse { ice_servers, ttl_secs: self.ttl_secs }
     }
+}
+
+/// Псевдоним пользователя для имени TURN (S7-24): HMAC-SHA1 секрета TURN над меткой и адресом, 16 hex-знаков.
+/// Постоянен для пользователя (TURN может считать квоты), адреса из него не получить без секрета.
+pub(crate) fn turn_pseudonym(secret: &str, user: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(secret.as_bytes()).expect("HMAC принимает ключ любой длины");
+    mac.update(b"parvane/turn-user/v1:");
+    mac.update(user.as_bytes());
+    mac.finalize().into_bytes()[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn turn_rest_credential(secret: &str, username: &str) -> String {
@@ -159,10 +170,15 @@ mod tests {
         assert_eq!(resp.ttl_secs, 600);
         assert_eq!(resp.ice_servers.len(), 2);
         let turn = &resp.ice_servers[1];
-        assert_eq!(turn.username.as_deref(), Some("1700000600:bob@local"));
+        // S7-24: адреса в имени TURN нет — только срок и псевдоним
+        let name = format!("1700000600:{}", turn_pseudonym("secret", "bob@local"));
+        assert_eq!(turn.username.as_deref(), Some(name.as_str()));
+        assert!(!name.contains("bob") && !name.contains('@'));
+        assert_eq!(name.len(), "1700000600:".len() + 16);
+        assert_ne!(turn_pseudonym("secret", "bob@local"), turn_pseudonym("secret", "carol@local"));
         assert_eq!(
             turn.credential.as_deref().unwrap(),
-            turn_rest_credential("secret", "1700000600:bob@local"),
+            turn_rest_credential("secret", &name),
         );
     }
 

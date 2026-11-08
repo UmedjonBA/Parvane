@@ -26,6 +26,15 @@
 //!    перенесённая в чужой журнал, под другой op_id или с другим флагом `chunk`, не открывается.
 //!    Прежние адреса (смена ника) и прежние версии ключа состояния — как в журнале состояния:
 //!    [`HistorySession`] пробует их все.
+//!
+//! 3. **Ревью 7 ноя 2026** (S7-3, S7-4, S7-5): открытый текст каждой записи выровнен по сетке L2
+//!    (`HistoryBatch.padding`, [`crate::seal::l2_padding_len`]) — размер записи не выдаёт ни сообщение, ни число
+//!    операций; сегменты точки — по месяцу без деления по чату ([`segment_key`]). Запись события несёт номер в
+//!    цепочке писателя (`chain`/`chain_seq`, одна цепочка на сессию) — читатель с книгой цепочек
+//!    ([`ChainBook`], [`HistorySession::ingest_chained`]) видит пропуск номера, то есть спрятанную сервером
+//!    запись. Сводка точки называет свою позицию, id точки, op_id сегментов и отметки цепочек —
+//!    [`verify_checkpoint`] не даёт выдать старую сводку или сегмент за новую точку. Поля новые: записи до них
+//!    читаются как раньше (проверки, которым не на что опереться, пропускаются).
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -44,7 +53,7 @@ use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::history::v1::{
-    history_op::Op, AppendRequest, ChatSummary, Checkpoint, CommitRequest, Edit, GetRequest, Gone, GoneScope, HeadRequest,
+    history_op::Op, AppendRequest, ChainMark, ChatSummary, Checkpoint, CommitRequest, Edit, GetRequest, Gone, GoneScope, HeadRequest,
     HeadResponse, HistoryBatch, HistoryOp, MessageRow, Pin, React, ReadMark, Reaction, RowState, SegmentRef, Stamp, Summary,
     SyncRequest, SyncResponse,
 };
@@ -71,6 +80,10 @@ pub const BATCH_BUDGET: usize = 200 * 1024;
 pub const MAX_BATCH_OPS: usize = 4096;
 /// Префикс отпечатка сегмента.
 const DIGEST_PREFIX: &[u8] = b"parvane/history/v1/segment\0";
+/// Префикс ключа сегмента (S7-5: сегмент — месяц всех чатов, сервер не видит число чатов).
+pub const SEGMENT_KEY_PREFIX: &str = "m";
+/// Отметок цепочек в сводке не больше (самые свежие по времени записи); остальные — сводка неполна.
+pub const MAX_CHAIN_MARKS: usize = 1024;
 
 /// Виды содержимого (`content.kind` тела строки, формат экспорта привязки), которые НЕ считаются
 /// непрочитанными: служебные строки чата (режим L2 `chat_mode` — у web это `action`-сообщение), голоса и
@@ -765,14 +778,17 @@ fn stamps(s: &RowState) -> impl Iterator<Item = &Stamp> {
         .chain(s.reacts.iter().filter_map(|r| r.stamp.as_ref()))
 }
 
-/// Ключ сегмента: ключ чата истории ([`history_chat_key`]) + `|` + `YYYY-MM` (UTC) от времени строки (сирота — от самой ранней метки).
+/// Ключ сегмента: `m|YYYY-MM` (UTC) от времени строки (сирота — от самой ранней метки). Сегмент — месяц всех
+/// чатов сразу (S7-5): по числу и размерам сегментов сервер не узнаёт, сколько чатов было в месяце. До ревью
+/// 7 ноя 2026 ключом был ключ чата + месяц — такие сегменты прежних точек читаются как обычно (ключ для читателя
+/// непрозрачен, порядок — по месяцу после `|`).
 pub fn segment_key(s: &RowState) -> Result<String> {
-    let (s, key) = canonical(s.clone())?;
+    let (s, _) = canonical(s.clone())?;
     let ts = match &s.row {
         Some(r) => r.ts_ms,
         None => stamps(&s).map(|st| st.ts_ms).min().ok_or(ProtoError::InvalidField("state"))?,
     };
-    Ok(format!("{key}|{}", year_month(ts)))
+    Ok(format!("{SEGMENT_KEY_PREFIX}|{}", year_month(ts)))
 }
 
 /// Отпечаток сегмента: SHA-256 канонической сериализации состояний, отсортированных по `target`
@@ -838,17 +854,162 @@ fn check_summary(s: &Summary) -> Result<()> {
         }
     }
     for g in &s.segments {
-        if g.key.is_empty() || g.digest.len() != 32 {
+        if g.key.is_empty() || g.digest.len() != 32 || !(g.op_id.is_empty() || g.op_id.len() == ID_LEN) {
             return Err(ProtoError::InvalidField("segment"));
+        }
+    }
+    for c in &s.chains {
+        if c.chain.len() != CHAIN_LEN || c.last_seq == 0 {
+            return Err(ProtoError::InvalidField("chain"));
         }
     }
     Ok(())
 }
 
-/// Запись-сводка контрольной точки. Если не помещается в одну запись, у самых старых чатов (по времени
-/// последней строки) выбрасывается `last`; не помогло — `FieldLimit`.
-pub fn summary(chats: Vec<ChatSummary>, segments: Vec<SegmentRef>, tombstones_since_ms: i64) -> Result<HistoryOp> {
-    let mut s = Summary { tombstones_since_ms, chats, segments };
+/// Сверить точку сервера (`Checkpoint` из `history.head`/`compacted`) со сводкой, которую под её `summary_seq`
+/// отдал сервер (S7-4). Сводка нового вида (`upto_seq ≠ 0`) называет свою позицию и id точки: они обязаны
+/// совпасть с точкой, `summary_seq = upto_seq`, а номера сегментов — с `chunk_seqs`. Иначе сервер выдаёт старую
+/// сводку за новую точку (и пропускает записи между ними) — `ContextMismatch`. Сводка прежнего вида
+/// (`upto_seq = 0`) принимается как есть: ей нечего сверять (журналы до ревью 7 ноя 2026).
+pub fn verify_checkpoint(cp: &Checkpoint, s: &Summary) -> Result<()> {
+    check_summary(s)?;
+    if s.upto_seq == 0 {
+        return Ok(());
+    }
+    if s.upto_seq != cp.upto_seq || cp.summary_seq != cp.upto_seq || s.checkpoint_id != cp.id {
+        return Err(ProtoError::ContextMismatch);
+    }
+    let mut refs: Vec<u64> = s.segments.iter().map(|g| g.seq).collect();
+    let mut chunks: Vec<u64> = cp.chunk_seqs.iter().copied().filter(|q| *q != cp.summary_seq).collect();
+    refs.sort_unstable();
+    refs.dedup();
+    chunks.sort_unstable();
+    chunks.dedup();
+    if refs != chunks {
+        return Err(ProtoError::ContextMismatch);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Цепочки писателей (S7-4).
+
+/// Длина id цепочки.
+pub const CHAIN_LEN: usize = 16;
+
+/// Книга цепочек читателя: для каждой цепочки писателя — последний виденный номер. Хост хранит её
+/// непрозрачно (JSON границы) рядом с курсором и передаёт в [`HistorySession::ingest_chained`].
+/// `complete` — читатель видел журнал с начала (или вошёл по полной сводке): цепочка, впервые встреченная не с
+/// номера 1, — пропуск. Иначе (устройство обновилось с курсором в середине журнала) — точка отсчёта.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChainBook {
+    pub marks: BTreeMap<Vec<u8>, ChainMark>,
+    pub complete: bool,
+}
+
+/// Итог проверки цепочек одной страницы.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChainCheck {
+    /// Пропущенных номеров (записей, спрятанных сервером).
+    pub gaps: u64,
+    /// Записей с уже виденным номером (повтор сервером старой записи — операции сводимы, вреда нет).
+    pub replayed: usize,
+}
+
+impl ChainBook {
+    /// Книга по сводке точки (вход нового устройства, догон через `compacted`): отметки сводки поверх своих
+    /// (максимум); полнота — сводки (прежняя сводка без цепочек — неполная).
+    pub fn adopt_summary(&mut self, s: &Summary) {
+        for c in &s.chains {
+            self.note(&c.chain, c.last_seq, c.ts_ms);
+        }
+        self.complete = s.chains_complete;
+    }
+
+    fn note(&mut self, chain: &[u8], seq: u64, ts_ms: i64) {
+        let e = self.marks.entry(chain.to_vec()).or_insert_with(|| ChainMark { chain: chain.to_vec(), last_seq: 0, ts_ms });
+        if seq > e.last_seq {
+            e.last_seq = seq;
+        }
+        e.ts_ms = e.ts_ms.max(ts_ms);
+    }
+
+    /// Учесть запись цепочки: пропуск — сколько номеров не хватает перед ней.
+    pub fn observe(&mut self, chain: &[u8], seq: u64, ts_ms: i64, out: &mut ChainCheck) {
+        if chain.len() != CHAIN_LEN || seq == 0 {
+            return; // запись до появления цепочек
+        }
+        let last = self.marks.get(chain).map(|m| m.last_seq);
+        match last {
+            Some(l) if seq <= l => out.replayed += 1,
+            Some(l) => out.gaps += seq - l - 1,
+            None if self.complete => out.gaps += seq - 1,
+            None => {}
+        }
+        self.note(chain, seq, ts_ms);
+    }
+
+    /// Отметки для сводки: не старше горизонта (`since_ms`), не больше [`MAX_CHAIN_MARKS`] самых свежих; по
+    /// возрастанию времени. Второе — сводка полна (книга полна и ничего не отброшено, кроме устаревших).
+    pub fn marks_for_summary(&self, since_ms: i64) -> (Vec<ChainMark>, bool) {
+        let mut v: Vec<ChainMark> = self.marks.values().filter(|m| m.ts_ms >= since_ms).cloned().collect();
+        v.sort_by(|a, b| a.ts_ms.cmp(&b.ts_ms).then_with(|| a.chain.cmp(&b.chain)));
+        let mut complete = self.complete;
+        if v.len() > MAX_CHAIN_MARKS {
+            v.drain(..v.len() - MAX_CHAIN_MARKS);
+            complete = false;
+        }
+        (v, complete)
+    }
+
+    /// JSON границы: `{"complete": bool, "marks": [ChainMark…]}`.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "complete": self.complete,
+            "marks": self.marks.values().map(|m| serde_json::to_value(m).unwrap_or(Value::Null)).collect::<Vec<_>>(),
+        })
+    }
+
+    pub fn from_value(v: &Value) -> Result<Self> {
+        let mut b = ChainBook { complete: v.get("complete").and_then(Value::as_bool).unwrap_or(false), ..Default::default() };
+        if let Some(a) = v.get("marks").and_then(Value::as_array) {
+            for m in a {
+                let m: ChainMark = serde_json::from_value(m.clone()).map_err(|_| ProtoError::Malformed)?;
+                if m.chain.len() != CHAIN_LEN {
+                    return Err(ProtoError::InvalidField("chain"));
+                }
+                b.note(&m.chain, m.last_seq, m.ts_ms);
+            }
+        }
+        Ok(b)
+    }
+}
+
+/// Позиция и цепочки сводки (S7-4): [`summary`] кладёт их в шифрованную сводку.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SummaryMeta {
+    /// Номер, под которым ляжет сама сводка (= `upto_seq` и `summary_seq` точки). 0 — не указывать (старый вид).
+    pub upto_seq: u64,
+    /// id точки, которую фиксирует сводка (= ожидаемый id + 1).
+    pub checkpoint_id: u64,
+    /// Книга цепочек автора на момент сборки.
+    pub chains: ChainBook,
+}
+
+/// Запись-сводка контрольной точки. Если не помещается в одну запись, сначала выбрасываются самые старые отметки
+/// цепочек (сводка становится неполной), затем у самых старых чатов (по времени последней строки) — `last`; не
+/// помогло — `FieldLimit`. Отметки цепочек старше горизонта и сверх [`MAX_CHAIN_MARKS`] не кладутся.
+pub fn summary(chats: Vec<ChatSummary>, segments: Vec<SegmentRef>, tombstones_since_ms: i64, meta: &SummaryMeta) -> Result<HistoryOp> {
+    let (chains, chains_complete) = meta.chains.marks_for_summary(tombstones_since_ms);
+    let mut s = Summary {
+        tombstones_since_ms,
+        chats,
+        segments,
+        upto_seq: meta.upto_seq,
+        checkpoint_id: meta.checkpoint_id,
+        chains,
+        chains_complete,
+    };
     for c in s.chats.iter_mut() {
         if let Some(l) = c.last.take() {
             c.last = Some(canonical(l)?.0);
@@ -856,6 +1017,12 @@ pub fn summary(chats: Vec<ChatSummary>, segments: Vec<SegmentRef>, tombstones_si
     }
     check_summary(&s)?;
     let fits = |s: &Summary| HistoryOp { op: Some(Op::Summary(s.clone())) }.encoded_len() + 64 <= BATCH_BUDGET;
+    while !fits(&s) && !s.chains.is_empty() {
+        // самые старые — в начале (marks_for_summary сортирует по времени)
+        let drop = s.chains.len().div_ceil(4);
+        s.chains.drain(..drop);
+        s.chains_complete = false;
+    }
     if !fits(&s) {
         let mut order: Vec<usize> = (0..s.chats.len()).filter(|&i| s.chats[i].last.is_some()).collect();
         let ts = |c: &ChatSummary| c.last.as_ref().and_then(|l| l.row.as_ref()).map_or(i64::MIN, |r| r.ts_ms);
@@ -969,15 +1136,23 @@ pub fn open_record(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, a
     Ok(batch)
 }
 
+/// Выровнять открытый текст пачки по сетке L2 (S7-3/S7-5): `padding` доводит сериализацию ровно до корзины
+/// [`crate::seal::l2_target`] — размер записи у сервера не выдаёт ни длину сообщения, ни число операций.
+pub fn pad_batch(batch: &mut HistoryBatch) {
+    batch.padding.clear();
+    batch.padding = vec![0u8; crate::seal::l2_padding_len(batch.encoded_len())];
+}
+
 /// Разложить операции по пачкам: открытый текст пачки ≤ [`BATCH_BUDGET`], ≤ [`MAX_BATCH_OPS`] операций.
 /// Операция больше бюджета — `FieldLimit`.
 pub fn pack(ops: Vec<HistoryOp>, device_id: &str, ts_ms: i64) -> Result<Vec<HistoryBatch>> {
     if !address::is_valid_device_id(device_id) {
         return Err(ProtoError::InvalidField("device_id"));
     }
-    let head = HistoryBatch { device_id: device_id.to_string(), ts_ms, ops: vec![] }.encoded_len();
+    // Поля цепочки (16 + номер) дописывает сессия после разбиения — место под них в заголовке
+    let head = HistoryBatch { device_id: device_id.to_string(), ts_ms, chain: vec![0; CHAIN_LEN], chain_seq: u64::MAX, ..Default::default() }.encoded_len();
     let mut out = Vec::new();
-    let mut cur = HistoryBatch { device_id: device_id.to_string(), ts_ms, ops: vec![] };
+    let mut cur = HistoryBatch { device_id: device_id.to_string(), ts_ms, ..Default::default() };
     let mut used = head;
     for op in ops {
         let len = op.encoded_len();
@@ -987,7 +1162,7 @@ pub fn pack(ops: Vec<HistoryOp>, device_id: &str, ts_ms: i64) -> Result<Vec<Hist
             return Err(ProtoError::FieldLimit("op"));
         }
         if !cur.ops.is_empty() && (used + cost > BATCH_BUDGET || cur.ops.len() >= MAX_BATCH_OPS) {
-            out.push(std::mem::replace(&mut cur, HistoryBatch { device_id: device_id.to_string(), ts_ms, ops: vec![] }));
+            out.push(std::mem::replace(&mut cur, HistoryBatch { device_id: device_id.to_string(), ts_ms, ..Default::default() }));
             used = head;
         }
         used += cost;
@@ -1017,6 +1192,11 @@ pub struct OpenedRecord {
     pub stale: bool,
     /// Устройство-автор записи.
     pub device_id: String,
+    /// Цепочка писателя и номер в ней (пусто/0 — запись до появления цепочек или сегмент).
+    pub chain: Vec<u8>,
+    pub chain_seq: u64,
+    /// Время пачки (часы автора).
+    pub ts_ms: i64,
 }
 
 /// Итог разбора ответа `history.sync`/`history.get`.
@@ -1031,6 +1211,10 @@ pub struct Ingested {
     pub rejected: usize,
     /// Отвергнутые операции внутри открытых записей.
     pub rejected_ops: usize,
+    /// Записи, чей op_id не совпал с ожидаемым для их номера (`expect`, сегменты точки): сервер подменил запись.
+    pub mismatched: usize,
+    /// Проверка цепочек ([`HistorySession::ingest_chained`]).
+    pub chains: ChainCheck,
 }
 
 struct SessionKey {
@@ -1046,6 +1230,9 @@ pub struct HistorySession {
     device_id: String,
     /// Первый — текущий ключ под текущим адресом (им запечатываются новые записи).
     keys: Vec<SessionKey>,
+    /// Цепочка записей этой сессии (S7-4) и номер следующей записи события.
+    chain: [u8; CHAIN_LEN],
+    chain_next: std::sync::atomic::AtomicU64,
 }
 
 impl fmt::Debug for HistorySession {
@@ -1072,7 +1259,14 @@ impl HistorySession {
                 keys.push(SessionKey { version: *v, address: a.to_string(), key: HistoryKey::derive(k, a) });
             }
         }
-        Ok(HistorySession { user: user.to_string(), device_id: device_id.to_string(), keys })
+        let mut chain = [0u8; CHAIN_LEN];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut chain);
+        Ok(HistorySession { user: user.to_string(), device_id: device_id.to_string(), keys, chain, chain_next: std::sync::atomic::AtomicU64::new(1) })
+    }
+
+    /// Цепочка этой сессии и номер, который получит следующая запись события.
+    pub fn chain(&self) -> ([u8; CHAIN_LEN], u64) {
+        (self.chain, self.chain_next.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     pub fn user(&self) -> &str {
@@ -1115,12 +1309,21 @@ impl HistorySession {
     }
 
     /// Запечатать операции в тела `history.append` (`(op_id записи, байты AppendRequest)`), пачки
-    /// ≤ 200 КиБ. Каждая операция проверяется до шифрования.
+    /// ≤ 200 КиБ. Каждая операция проверяется до шифрования. Запись события получает следующий номер цепочки
+    /// сессии (хост обязан отправить тела в этом порядке и повторять те же тела, а не запечатывать заново —
+    /// иначе у читателей пропуск); каждая запись выровнена по сетке L2.
     pub fn seal(&self, ops: Vec<HistoryOp>, chunk: bool, ts_ms: i64) -> Result<Vec<([u8; ID_LEN], Vec<u8>)>> {
         ops.iter().try_for_each(validate_op)?;
         let cur = self.keys.first().ok_or(ProtoError::NotFound)?;
+        let batches = pack(ops, &self.device_id, ts_ms)?;
+        let first = if chunk { 0 } else { self.chain_next.fetch_add(batches.len() as u64, std::sync::atomic::Ordering::SeqCst) };
         let mut out = Vec::new();
-        for batch in pack(ops, &self.device_id, ts_ms)? {
+        for (i, mut batch) in batches.into_iter().enumerate() {
+            if !chunk {
+                batch.chain = self.chain.to_vec();
+                batch.chain_seq = first + i as u64;
+            }
+            pad_batch(&mut batch);
             let op_id = crate::state::new_op_id();
             let r = seal_batch(&cur.key, &self.user, &op_id, chunk, &batch)?;
             out.push((op_id, r.encode_to_vec()));
@@ -1134,13 +1337,34 @@ impl HistorySession {
 
     /// Ответ `history.sync` или `history.get` (у них общее поле `records = 1`).
     pub fn ingest(&self, resp: &[u8]) -> Result<Ingested> {
+        self.ingest_checked(resp, &BTreeMap::new(), None)
+    }
+
+    /// То же с книгой цепочек (S7-4): номера записей событий каждой цепочки обязаны идти без пропусков
+    /// (`Ingested.chains.gaps` — сколько записей сервер не отдал). Книга обновляется.
+    pub fn ingest_chained(&self, resp: &[u8], book: &mut ChainBook) -> Result<Ingested> {
+        self.ingest_checked(resp, &BTreeMap::new(), Some(book))
+    }
+
+    /// Разбор с ожидаемыми op_id по номерам (`expect`: сегменты точки по сводке) и, если задана, книгой цепочек.
+    /// Запись с номером из `expect` и другим op_id не принимается (`mismatched`).
+    pub fn ingest_checked(&self, resp: &[u8], expect: &BTreeMap<u64, Vec<u8>>, mut book: Option<&mut ChainBook>) -> Result<Ingested> {
         let r: SyncResponse = decode_checked(resp, Origin::Server)?;
         let mut out = Ingested { more: r.more && !r.records.is_empty(), head_seq: r.head_seq, compacted: r.compacted, ..Default::default() };
         for rec in &r.records {
+            if expect.get(&rec.seq).is_some_and(|want| *want != rec.op_id) {
+                out.mismatched += 1;
+                continue;
+            }
             let Some((batch, key_version, stale)) = self.open(&rec.op_id, rec.chunk, &rec.aead_ciphertext) else {
                 out.rejected += 1;
                 continue;
             };
+            if !rec.chunk {
+                if let Some(b) = book.as_deref_mut() {
+                    b.observe(&batch.chain, batch.chain_seq, batch.ts_ms, &mut out.chains);
+                }
+            }
             let first = out.ops.len();
             for op in batch.ops {
                 if validate_op(&op).is_ok() {
@@ -1158,6 +1382,9 @@ impl HistorySession {
                 key_version,
                 stale,
                 device_id: batch.device_id,
+                chain: batch.chain,
+                chain_seq: batch.chain_seq,
+                ts_ms: batch.ts_ms,
             });
         }
         Ok(out)
@@ -1308,7 +1535,9 @@ mod tests {
         assert_eq!(r.ts_ms, 1_700_000_000_500);
         assert_eq!(std::str::from_utf8(&r.body).unwrap(), r#"{"content":{"kind":"text","text":"hi"},"reply_to":"x"}"#);
         let s = apply(None, &op).unwrap();
-        assert_eq!(segment_key(&s).unwrap(), "u:bob@x|2023-11");
+        assert_eq!(segment_key(&s).unwrap(), "m|2023-11", "сегмент — месяц всех чатов (S7-5)");
+        let g = apply(None, &row_op(MessageRow { id: vec![9; 16], chat: Some(group()), from: "bob@x".into(), ts_ms: 1_700_000_000_500, body: br#"{"content":{"kind":"text"}}"#.to_vec() })).unwrap();
+        assert_eq!(segment_key(&g).unwrap(), segment_key(&s).unwrap(), "чат в ключ не входит");
         assert_eq!(year_month(0), "1970-01");
         assert_eq!(year_month(-1), "1969-12");
         assert_eq!(year_month(951_782_400_000), "2000-02"); // 29 фев 2000
@@ -1341,7 +1570,7 @@ mod tests {
         assert_eq!(bodies.len(), 1);
         let req = AppendRequest::decode(bodies[0].1.as_slice()).unwrap();
         // Ответ sync с этой записью + записью прежнего ключа под прежним адресом + чужой
-        let b = HistoryBatch { device_id: "d0".into(), ts_ms: 1, ops: vec![row(2, "bob@x", 2, "b")] };
+        let b = HistoryBatch { device_id: "d0".into(), ts_ms: 1, ops: vec![row(2, "bob@x", 2, "b")], ..Default::default() };
         let oid = crate::state::new_op_id();
         let old_rec = seal_batch(&HistoryKey::derive(&old, "al@x"), "al@x", &oid, true, &b).unwrap();
         let foreign = seal_batch(&HistoryKey::derive(&StateKey::generate(), "alice@x"), "alice@x", &crate::state::new_op_id(), false, &b).unwrap();

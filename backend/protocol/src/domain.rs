@@ -468,8 +468,21 @@ pub fn sign_revoke(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Gr
 /// Отзыв с границей эпохи (A0006-1): `boundary_seq` — голова журнала операций,
 /// принятая автором; позже неё операции прежней эпохи клиенты отвергают.
 pub fn sign_revoke_at(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Grantee, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
+    sign_revoke_cut(signer, access, grantee, ts_ms, boundary_seq.map(|seq| EpochBoundary { seq, op_id: Vec::new() }).as_ref())
+}
+
+/// Граница эпохи по подписанным данным (S7-6): `seq` и `op_id` операции, стоявшей на этом месте у автора записи.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EpochBoundary {
+    pub seq: u64,
+    /// Пусто — на месте границы у автора был снимок (op_id неизвестен): граница только по seq.
+    pub op_id: Vec<u8>,
+}
+
+/// Отзыв с границей по подписанным данным (S7-6).
+pub fn sign_revoke_cut(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Grantee, ts_ms: i64, boundary: Option<&EpochBoundary>) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
-    sign_grant_entry(signer, access, OP_REVOKE, Some(grantee), GrantLevel::Unspecified, next, ts_ms, boundary_seq)
+    sign_grant_entry(signer, access, OP_REVOKE, Some(grantee), GrantLevel::Unspecified, next, ts_ms, boundary)
 }
 
 /// Подписать смену эпохи (spec 010): `epoch + 1`, гранты прежние; новый ключ
@@ -481,8 +494,13 @@ pub fn sign_rotate(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64) 
 
 /// Смена эпохи с границей (см. `sign_revoke_at`).
 pub fn sign_rotate_at(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
+    sign_rotate_cut(signer, access, ts_ms, boundary_seq.map(|seq| EpochBoundary { seq, op_id: Vec::new() }).as_ref())
+}
+
+/// Смена эпохи с границей по подписанным данным (S7-6).
+pub fn sign_rotate_cut(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64, boundary: Option<&EpochBoundary>) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
-    sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms, boundary_seq)
+    sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms, boundary)
 }
 
 /// Подписать выход участника (spec 016): сам получатель гранта снимает свой
@@ -491,7 +509,11 @@ pub fn sign_leave(signer: &dyn OpSigner, access: &ContainerAccess, me: &Grantee,
     sign_grant_entry(signer, access, OP_LEAVE, Some(me), GrantLevel::Unspecified, access.epoch, ts_ms, None)
 }
 
-fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
+#[allow(clippy::too_many_arguments)]
+fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64, boundary: Option<&EpochBoundary>) -> Result<SignedOp> {
+    if boundary.is_some_and(|b| !b.op_id.is_empty() && !sign::is_valid_op_id(&b.op_id)) {
+        return Err(ProtoError::InvalidField("epoch_boundary_op_id"));
+    }
     let r = access.container_ref()?.clone();
     let g = Grant {
         container: Some(r.clone()),
@@ -500,7 +522,8 @@ fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &s
         key_epoch,
         version: access.version + 1,
         prev_hash: access.head_hash().to_vec(),
-        epoch_boundary_seq: boundary_seq,
+        epoch_boundary_seq: boundary.map(|b| b.seq),
+        epoch_boundary_op_id: boundary.map(|b| b.op_id.clone()).unwrap_or_default(),
     };
     sign::sign_op(signer, header(op_type, &r, ts_ms), g.encode_to_vec())
 }
@@ -523,8 +546,57 @@ pub struct ContainerAccess {
     /// Кто вправе писать в каждой эпохе (для проверки автора истории).
     writers: BTreeMap<u64, BTreeSet<Grantee>>,
     /// Границы эпох (A0006-1): новая эпоха -> seq, позже которого операции
-    /// прежних эпох не принимаются. Нет записи — граница не заявлена.
-    boundaries: BTreeMap<u64, u64>,
+    /// прежних эпох не принимаются, и op_id операции на этом месте (S7-6; пусто — не заявлен).
+    /// Нет записи — граница не заявлена.
+    boundaries: BTreeMap<u64, EpochBoundary>,
+}
+
+/// Состояние клиента для границ эпох по подписанным данным (S7-6): op_id операции на месте своего курсора (его
+/// подписывает запись отзыва/смены эпохи) и операции прежних эпох, удержанные до подтверждения границы.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EpochCut {
+    pub held: Vec<ContainerOp>,
+    pub head_op_id: Vec<u8>,
+}
+
+impl EpochCut {
+    /// Курсор встал на операцию `op`. `signed` — подпись операции проверена (иначе op_id не ручаемся).
+    pub fn note_head(&mut self, op: &ContainerOp, signed: bool) {
+        self.head_op_id = if signed { op_id_unverified(op) } else { Vec::new() };
+    }
+
+    /// Принят снимок до `upto` (курсор был `head_before`): удержанное под снимком больше не нужно.
+    pub fn note_snapshot(&mut self, upto: u64, head_before: u64) {
+        if upto >= head_before {
+            self.head_op_id.clear();
+        }
+        self.held.retain(|o| o.seq > upto);
+    }
+
+    /// Граница для записи отзыва/смены эпохи на курсоре `head_seq`.
+    pub fn boundary(&self, head_seq: u64) -> EpochBoundary {
+        EpochBoundary { seq: head_seq, op_id: if sign::is_valid_op_id(&self.head_op_id) { self.head_op_id.clone() } else { Vec::new() } }
+    }
+}
+
+/// op_id из заголовка автора без проверки подписи (подпись проверяет вызывающий).
+fn op_id_unverified(op: &ContainerOp) -> Vec<u8> {
+    op.author.as_ref().and_then(|a| OpBody::decode(a.body.as_slice()).ok()).and_then(|b| b.header).map(|h| h.op_id).unwrap_or_default()
+}
+
+/// Решение по операции прежней эпохи относительно границ с op_id (S7-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryVerdict {
+    /// Граница операцию не касается (операция текущей эпохи, граница без op_id или уже пройдена).
+    Free,
+    /// Операция прежней эпохи до границы `seq`: применять только после того, как на месте границы окажется
+    /// подписанная операция (журнал не сдвинут).
+    Hold(u64),
+    /// Операция и есть граница `seq`: удержанные до неё операции можно применять.
+    Confirms(u64),
+    /// На месте границы другая операция либо операция границы на другом месте — сервер сдвинул журнал:
+    /// удержанные операции прежних эпох не применять.
+    Tampered,
 }
 
 impl ContainerAccess {
@@ -650,8 +722,11 @@ impl ContainerAccess {
             self.epoch = next;
             let w: BTreeSet<Grantee> = self.grants.iter().filter(|(_, l)| **l >= GrantLevel::Write).map(|(g, _)| g.clone()).collect();
             self.writers.insert(next, w);
-            if let Some(b) = g.epoch_boundary_seq {
-                self.boundaries.insert(next, b);
+            if let Some(seq) = g.epoch_boundary_seq {
+                if !g.epoch_boundary_op_id.is_empty() && !sign::is_valid_op_id(&g.epoch_boundary_op_id) {
+                    return Err(ProtoError::InvalidField("epoch_boundary_op_id"));
+                }
+                self.boundaries.insert(next, EpochBoundary { seq, op_id: g.epoch_boundary_op_id.clone() });
             }
             self.version += 1;
             self.hashes.push(entry_hash(op));
@@ -674,8 +749,11 @@ impl ContainerAccess {
             self.epoch = next;
             let w: BTreeSet<Grantee> = self.grants.iter().filter(|(_, l)| **l >= GrantLevel::Write).map(|(g, _)| g.clone()).collect();
             self.writers.insert(next, w);
-            if let Some(b) = g.epoch_boundary_seq {
-                self.boundaries.insert(next, b);
+            if let Some(seq) = g.epoch_boundary_seq {
+                if !g.epoch_boundary_op_id.is_empty() && !sign::is_valid_op_id(&g.epoch_boundary_op_id) {
+                    return Err(ProtoError::InvalidField("epoch_boundary_op_id"));
+                }
+                self.boundaries.insert(next, EpochBoundary { seq, op_id: g.epoch_boundary_op_id.clone() });
             }
             None
         } else {
@@ -718,7 +796,35 @@ impl ContainerAccess {
     /// Граница эпохи (A0006-1): `seq` (у снимка — `upto_seq`) не выше границы
     /// каждой смены эпохи после `epoch`, у которой граница заявлена.
     fn within_epoch_boundary(&self, epoch: u64, seq: u64) -> bool {
-        self.boundaries.range(epoch.saturating_add(1)..).all(|(_, b)| seq <= *b)
+        self.boundaries.range(epoch.saturating_add(1)..).all(|(_, b)| seq <= b.seq)
+    }
+
+    /// S7-6: операция эпохи `epoch` на месте `seq` с подписанным `op_id` относительно границ с op_id.
+    /// Ближайшая граница не ниже `seq` решает: до неё — удержать, на ней — сверить op_id; op_id границы на
+    /// чужом месте — сдвиг журнала.
+    pub fn boundary_verdict(&self, epoch: u64, seq: u64, op_id: &[u8]) -> BoundaryVerdict {
+        let cuts = || self.boundaries.range(epoch.saturating_add(1)..).map(|(_, b)| b).filter(|b| !b.op_id.is_empty());
+        if cuts().any(|b| (b.op_id == op_id) != (b.seq == seq)) {
+            return BoundaryVerdict::Tampered;
+        }
+        match cuts().filter(|b| b.seq >= seq).map(|b| b.seq).min() {
+            Some(b) if b == seq => BoundaryVerdict::Confirms(b),
+            Some(b) => BoundaryVerdict::Hold(b),
+            None => BoundaryVerdict::Free,
+        }
+    }
+
+    /// То же для операции журнала, в том числе отвергнутой проверкой автора: op_id — из подписанного заголовка
+    /// (подпись проверяется только когда граница с op_id касается операции). Неподписанная операция на месте
+    /// границы — сдвиг.
+    pub fn op_boundary_verdict(&self, op: &ContainerOp) -> BoundaryVerdict {
+        if !self.boundaries.range(op.key_epoch.saturating_add(1)..).any(|(_, b)| !b.op_id.is_empty()) {
+            return BoundaryVerdict::Free;
+        }
+        match verify_op_seal(op) {
+            Ok(seal) => self.boundary_verdict(op.key_epoch, op.seq, &seal.op_id),
+            Err(_) => self.boundary_verdict(op.key_epoch, op.seq, &[]),
+        }
     }
 
     fn author_at(&self, seal: &VerifiedSeal, epoch: u64, seq: u64, resolve: KeyResolver, groups: Membership) -> Result<Author> {

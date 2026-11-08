@@ -43,6 +43,8 @@ fn bundle_rate() -> usize {
 mod delete;
 mod rename;
 pub(crate) use delete::deletion_pending;
+#[cfg(test)]
+pub(crate) use delete::deletion_pending_in;
 pub(crate) use rename::alias_held;
 
 pub(crate) struct V2Ctx {
@@ -61,10 +63,16 @@ static V2_POOL: std::sync::OnceLock<SqlitePool> = std::sync::OnceLock::new();
 
 /// Открыть v2-хранилище рядом с v1-БД и применить его миграции.
 pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
+    let pool = open_store_at(db_path).await?;
+    let _ = V2_POOL.set(pool.clone());
+    Ok(pool)
+}
+
+/// То же без записи в общий пул проверок (тесты: закрытый тестом пул не должен стать общим).
+pub(crate) async fn open_store_at(db_path: &str) -> Result<SqlitePool> {
     let path = format!("{db_path}-v2.db");
     let pool = parvane_db::connect(&path).await?;
     sqlx::migrate!("./migrations_v2").run(&pool).await.context("миграции v2")?;
-    let _ = V2_POOL.set(pool.clone());
     info!("SQLite v2 готов: {}", path);
     Ok(pool)
 }
@@ -73,15 +81,21 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
 
 /// Устройство действует в журнале устройств v2 пользователя (есть сертификат,
 /// не отозвано) — ему разрешён и v1-бандл в каталоге устройств (T146).
-pub(crate) async fn log_has_active_device(user: &str, device_id: &str) -> bool {
-    let Some(pool) = V2_POOL.get() else { return false };
+/// PV-009: ошибка БД — `Err(Unavailable)`, а не «устройства нет»: иначе сбой пула отключал требование
+/// доказательства устройства при входе (ID-01) и вход паролем шёл «как» устройство журнала.
+pub(crate) async fn log_has_active_device(user: &str, device_id: &str) -> Result<bool, ErrorCode> {
+    let Some(pool) = V2_POOL.get() else { return Err(ErrorCode::Unavailable) };
+    log_has_active_device_in(pool, user, device_id).await
+}
+
+pub(crate) async fn log_has_active_device_in(pool: &SqlitePool, user: &str, device_id: &str) -> Result<bool, ErrorCode> {
     sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM device_state WHERE user = ? AND device_id = ? AND revoked = 0")
         .bind(user)
         .bind(device_id)
         .fetch_one(pool)
         .await
         .map(|(n,)| n > 0)
-        .unwrap_or(false)
+        .map_err(db_err)
 }
 
 pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
@@ -326,10 +340,8 @@ pub(crate) async fn public_name_taken(nick: &str) -> bool {
         return true;
     }
     let Some(pool) = V2_POOL.get() else { return false };
-    matches!(
-        sqlx::query_as::<_, (i64,)>("SELECT 1 FROM public_names WHERE name = ?").bind(&nick).fetch_optional(pool).await,
-        Ok(Some(_))
-    )
+    // PV-009: ошибка БД — «занято» (регистрация и смена ника откажут, а не займут имя группы)
+    !matches!(sqlx::query_as::<_, (i64,)>("SELECT 1 FROM public_names WHERE name = ?").bind(&nick).fetch_optional(pool).await, Ok(None))
 }
 
 /// Настройки приватности, выставленные через `identity.privacy.set`
@@ -432,6 +444,9 @@ fn v1_code(err: &str) -> ErrorCode {
     let e = err.to_lowercase();
     if e.contains("слишком много") || e.contains("попробуйте позже") || e.contains("часто") {
         ErrorCode::RateLimited
+    } else if e == "internal_error" {
+        // Сбой БД/ввода-вывода (`parvane_db::public_error`) — временная недоступность, а не отказ в праве
+        ErrorCode::Unavailable
     } else if e.contains("отозван") {
         ErrorCode::Revoked
     } else if e.contains("не найден") || e.contains("нет такого") {
@@ -487,6 +502,19 @@ fn s(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or("").to_string()
 }
 
+/// S7-1: сессия запроса ключа через Telegram — SHA-256 её JWT. Токен перепроверяется (отозванное устройство,
+/// сменённый пароль — `Forbidden`) и обязан принадлежать тому же пользователю и устройству, что и запрос.
+async fn tg_session(ctx: &V2Ctx, req: &ShardRequest) -> Result<recovery_tg::SessionKey, ErrorCode> {
+    if req.token.is_empty() {
+        return Err(ErrorCode::Forbidden);
+    }
+    let claims = crate::auth::verify_active(&ctx.pool, &ctx.decoding, &req.token).await.map_err(|_| ErrorCode::Forbidden)?;
+    if claims.sub != req.user || claims.dev.as_deref() != Some(req.device_id.as_str()) {
+        return Err(ErrorCode::Forbidden);
+    }
+    Ok(recovery_tg::session_key(&req.token))
+}
+
 fn require_user(req: &ShardRequest) -> Result<(), ErrorCode> {
     if req.user.is_empty() || req.device_id.is_empty() {
         Err(ErrorCode::Forbidden)
@@ -525,7 +553,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let typed = canonical_user(&r.login, &server_domain());
             // Прежний ник 30 дней ведёт на новый адрес (spec 026)
             let login = rename::canonical_address(&ctx.v2, &typed).await;
-            if device_proof_required() && log_has_active_device(&login, &r.device_id).await {
+            if device_proof_required() && log_has_active_device(&login, &r.device_id).await? {
                 let log = load_log(&ctx, &login).await?;
                 let dev = log.active(&r.device_id).ok_or(ErrorCode::Forbidden)?;
                 let ed = dev.olm_ed25519().map_err(|_| ErrorCode::Invalid)?;
@@ -725,12 +753,17 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             require_user(&req)?;
             let v = v1_call(nc, json!({"token": req.token, "device_id": req.device_id}), |msg| handle_link_poll(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
+            // S7-1: офферы других устройств (их `device_id`) видят только устройства журнала — подтверждать
+            // привязку может только оно. Вошедший одним паролем видит лишь свой challenge и грант: иначе он
+            // узнавал `device_id` нового устройства и входил «как» оно.
+            let sees_offers = log_has_active_device(&req.user, &req.device_id).await.unwrap_or(false);
             let offers = v["offers"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default()
                 .iter()
-                .take(16)
+                .filter(|_| sees_offers)
+                .take(LINK_OFFERS_MAX)
                 .map(|o| pb::LinkOffer {
                     device_id: s(o, "device_id"),
                     eph_pub: s(o, "eph_pub"),
@@ -753,7 +786,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let r: pb::LinkChallengeRequest = body(&req)?;
             // Привязку подтверждает только устройство из журнала: сессия, вошедшая одним паролем, не
             // может занять чужой оффер своим challenge или грантом (срыв привязки нового устройства).
-            if !log_has_active_device(&req.user, &req.device_id).await {
+            if !log_has_active_device(&req.user, &req.device_id).await? {
                 return Err(ErrorCode::Forbidden);
             }
             let v = v1_call(nc, json!({"token": req.token, "device_id": r.device_id, "eph_pub": r.eph_pub, "wrap": r.wrap}), |msg| handle_link_challenge(nc, pool, dec, msg)).await?;
@@ -765,7 +798,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let r: pb::LinkGrantRequest = body(&req)?;
             // Привязку подтверждает только устройство из журнала: сессия, вошедшая одним паролем, не
             // может занять чужой оффер своим challenge или грантом (срыв привязки нового устройства).
-            if !log_has_active_device(&req.user, &req.device_id).await {
+            if !log_has_active_device(&req.user, &req.device_id).await? {
                 return Err(ErrorCode::Forbidden);
             }
             let p = json!({"token": req.token, "device_id": r.device_id, "box_payload": r.box_payload, "eph_pub": r.eph_pub});
@@ -990,24 +1023,32 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !ratelimit::window_rate_ok("tg-key-ask", &req.user, 6) {
                 return Err(ErrorCode::RateLimited);
             }
-            // A0023-1: эфемерный ключ — 32 байта X25519 либо пусто (прежний клиент)
-            if !r.eph_public.is_empty() && r.eph_public.len() != 32 {
+            // A0023-1, S7-1: эфемерный ключ — ровно 32 байта X25519. Запроса без него (ответ открытым текстом
+            // любому, кто опросит с этим `device_id`) больше нет
+            if r.eph_public.len() != 32 {
                 return Err(ErrorCode::Invalid);
             }
-            let Some(code) = recovery_tg::request_key(telegram_id, &req.user, &req.device_id, r.client.trim(), &r.eph_public, r.again, now_unix()) else {
-                return Err(ErrorCode::Unavailable);
-            };
+            let session = tg_session(ctx, &req).await?;
+            let code = recovery_tg::request_key(telegram_id, &req.user, &req.device_id, &session, r.client.trim(), &r.eph_public, r.again, now_unix())
+                .map_err(|e| match e {
+                    recovery_tg::RequestRefusal::Forbidden => {
+                        warn!("Запрос ключа через Telegram устройства '{}' пользователя {} от другой сессии отвергнут (S7-1)", req.device_id, req.user);
+                        ErrorCode::Forbidden
+                    }
+                    recovery_tg::RequestRefusal::Unavailable => ErrorCode::Unavailable,
+                })?;
             info!("Устройство '{}' пользователя {} просит ключ восстановления через Telegram", req.device_id, req.user);
             Ok(pb::RecoveryTgRequestResponse { code }.encode_to_vec())
         }
         "identity.recovery.tg_poll" => {
             require_user(&req)?;
             let r: pb::RecoveryTgPollRequest = body(&req)?;
-            let view = recovery_tg::poll(&req.user, &req.device_id, r.done, now_unix());
-            let mut recovery_key = view.recovery_key;
+            let session = tg_session(ctx, &req).await?;
+            let view = recovery_tg::poll(&req.user, &req.device_id, &session, r.done, now_unix());
             // Действующее устройство без копии ключей аккаунта забирает ответ
-            // владельца, чтобы завести копию (см. `peek_reply`)
-            if recovery_key.is_empty() && !view.pending && !r.done && load_log(ctx, &req.user).await?.active(&req.device_id).is_some() {
+            // владельца, чтобы завести копию (см. `peek_reply`); запросившему открытый ключ не отдаётся
+            let mut recovery_key = String::new();
+            if !view.pending && !r.done && load_log(ctx, &req.user).await?.active(&req.device_id).is_some() {
                 recovery_key = recovery_tg::peek_reply(&req.user, now_unix());
             }
             Ok(pb::RecoveryTgPollResponse { recovery_key, pending: view.pending, sealed_key: view.sealed, code: view.code }.encode_to_vec())
@@ -1037,20 +1078,16 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             }
             let log = load_log(ctx, &user).await?;
             let Some(key) = verified_recovery_key(ctx, &user, &r.text, &log).await? else { return reply("bad_key", &user) };
-            let stored = if target.eph_public.is_empty() {
-                // Прежний клиент без эфемерного ключа: открытый текст
-                recovery_tg::store_reply(&user, target.request_id, None, Some(&key), now_unix())
-            } else {
-                let sealed = parvane_protocol::recovery_tg::seal(&target.eph_public, &user, &target.device_id, key.as_bytes()).map_err(|_| ErrorCode::Invalid)?;
-                // Открытый ключ нужен серверу, только если у аккаунта нет копии ключей: действующее
-                // устройство заведёт её из ответа (`peek_reply`)
-                let has_bundle: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_backup WHERE user = ? AND key_bundle IS NOT NULL")
-                    .bind(&user)
-                    .fetch_optional(&ctx.v2)
-                    .await
-                    .map_err(db_err)?;
-                recovery_tg::store_reply(&user, target.request_id, Some(sealed), has_bundle.is_none().then_some(key.as_str()), now_unix())
-            };
+            // S7-1: ответ — только запечатанным на ключ запроса (запросов без ключа сервер не заводит)
+            let sealed = parvane_protocol::recovery_tg::seal(&target.eph_public, &user, &target.device_id, key.as_bytes()).map_err(|_| ErrorCode::Invalid)?;
+            // Открытый ключ нужен серверу, только если у аккаунта нет копии ключей: действующее
+            // устройство заведёт её из ответа (`peek_reply`)
+            let has_bundle: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_backup WHERE user = ? AND key_bundle IS NOT NULL")
+                .bind(&user)
+                .fetch_optional(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            let stored = recovery_tg::store_reply(&user, target.request_id, Some(sealed), has_bundle.is_none().then_some(key.as_str()), now_unix());
             if !stored {
                 return reply("no_request", &user);
             }
@@ -1081,7 +1118,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let r: pb::TokensIssueBlindedRequest = body(&req)?;
             // spec 028 (R8): пользователю другого сервера — ещё и общий потолок на его домен, иначе
             // сервер выдумывал бы адреса и получал неограниченную квоту
-            if !req.origin_domain.is_empty() && !domain_token_quota(&req.origin_domain, r.blinded.len() as i64) {
+            if !req.origin_domain.is_empty() && !domain_token_quota(&ctx.v2, &req.origin_domain, r.blinded.len() as i64).await {
                 return Err(ErrorCode::Limit);
             }
             issue_tokens(ctx, &req.user, r).await
@@ -1157,10 +1194,11 @@ async fn reauth(ctx: &V2Ctx, req: &ShardRequest) -> Reply {
         .fetch_optional(&ctx.pool)
         .await
         .map_err(db_err)?;
+    // OPT-011: Argon2 вне рабочего потока; нет места — RATE_LIMITED (не попытка с неверным паролем)
     let ok = match row {
-        Some((hash,)) => verify_password(&r.password, &hash),
+        Some((hash,)) => verify_password_async(&r.password, &hash).await.map_err(|_| ErrorCode::RateLimited)?,
         None => {
-            let _ = verify_password(&r.password, dummy_password_hash());
+            let _ = verify_password_async(&r.password, dummy_password_hash()).await.map_err(|_| ErrorCode::RateLimited)?;
             false
         }
     };
@@ -1346,6 +1384,41 @@ async fn log_genesis_hash(ctx: &V2Ctx, user: &str) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+/// PV-012: потолок одноразовых ключей на устройство (`PARVANE_OTK_MAX_PER_DEVICE`, по умолчанию 200).
+pub(crate) fn otk_max_per_device() -> i64 {
+    env_u64("PARVANE_OTK_MAX_PER_DEVICE", 200).max(1) as i64
+}
+
+/// PV-012: сохранить одноразовые ключи устройства, не больше `cap` на устройство всего. Сверх потолка ключи не
+/// сохраняются (ответ честно говорит, сколько принято) — иначе повторные публикации растили базу identity без
+/// предела. Клиенты держат запас 50.
+pub(crate) async fn store_otks(conn: &mut sqlx::SqliteConnection, user: &str, device_id: &str, keys: &[pb::OneTimeKey], cap: i64) -> Result<u32, ErrorCode> {
+    let (mut held,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM one_time_keys WHERE user = ? AND device_id = ?")
+        .bind(user)
+        .bind(device_id)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(db_err)?;
+    let mut stored = 0u32;
+    for k in keys {
+        if held >= cap {
+            break;
+        }
+        let res = sqlx::query("INSERT OR IGNORE INTO one_time_keys (user, device_id, key_id, curve, signature) VALUES (?, ?, ?, ?, ?)")
+            .bind(user)
+            .bind(device_id)
+            .bind(&k.key_id)
+            .bind(&k.curve25519)
+            .bind(&k.signature)
+            .execute(&mut *conn)
+            .await
+            .map_err(db_err)?;
+        stored += res.rows_affected() as u32;
+        held += res.rows_affected() as i64;
+    }
+    Ok(stored)
+}
+
 async fn publish_certificate(ctx: &V2Ctx, req: &ShardRequest, r: pb::DevicePublishCertificateRequest) -> Reply {
     if let Some(entry) = r.log_entry.filter(|e| !e.body.is_empty()) {
         log_append(ctx, &req.user, &entry).await?;
@@ -1357,23 +1430,11 @@ async fn publish_certificate(ctx: &V2Ctx, req: &ShardRequest, r: pb::DevicePubli
         k.curve25519.len() == 32
             && parvane_protocol::sign::verify_ctx(&ed, &k.signature, parvane_protocol::sign::ctx::OTK, &[&k.key_id, &k.curve25519]).is_ok()
     };
-    let mut stored = 0u32;
-    let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
-    for k in r.one_time_keys.iter() {
-        if !check(k) {
-            return Err(ErrorCode::Invalid);
-        }
-        let res = sqlx::query("INSERT OR IGNORE INTO one_time_keys (user, device_id, key_id, curve, signature) VALUES (?, ?, ?, ?, ?)")
-            .bind(&req.user)
-            .bind(&req.device_id)
-            .bind(&k.key_id)
-            .bind(&k.curve25519)
-            .bind(&k.signature)
-            .execute(&mut *tx)
-            .await
-            .map_err(db_err)?;
-        stored += res.rows_affected() as u32;
+    if !r.one_time_keys.iter().all(&check) {
+        return Err(ErrorCode::Invalid);
     }
+    let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
+    let stored = store_otks(&mut tx, &req.user, &req.device_id, &r.one_time_keys, otk_max_per_device()).await?;
     if let Some(f) = r.fallback_key.as_ref() {
         if !check(f) {
             return Err(ErrorCode::Invalid);
@@ -1724,22 +1785,55 @@ impl V2Ctx {
     }
 }
 
-/// Суточный потолок жетонов на домен-отправитель (`PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY`, 2000).
-/// В памяти: перезапуск сбрасывает счётчик, это защита от злоупотребления, а не учёт.
-fn domain_token_quota(domain: &str, n: i64) -> bool {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    static USED: OnceLock<Mutex<HashMap<(String, i64), i64>>> = OnceLock::new();
-    let cap = std::env::var("PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY").ok().and_then(|v| v.parse().ok()).unwrap_or(2000i64);
-    let day = day_now();
-    let Ok(mut used) = USED.get_or_init(|| Mutex::new(HashMap::new())).lock() else { return false };
-    used.retain(|(_, d), _| *d == day);
-    let e = used.entry((domain.to_ascii_lowercase(), day)).or_insert(0);
-    if *e + n > cap {
-        return false;
+/// Регистрируемый домен по простой эвристике (последние две метки; списка публичных суффиксов в сборке нет):
+/// поддомены одного домена делят квоту (S7-19).
+pub(crate) fn token_site_of(domain: &str) -> String {
+    let d = domain.trim_end_matches('.').to_ascii_lowercase();
+    if d.parse::<std::net::IpAddr>().is_ok() {
+        return d;
     }
-    *e += n;
-    true
+    let labels: Vec<&str> = d.rsplit('.').take(2).collect();
+    labels.into_iter().rev().collect::<Vec<_>>().join(".")
+}
+
+/// Суточный потолок жетонов на домен-отправитель (`PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY`, 2000) — по
+/// регистрируемому домену, и общий на всех чужих (`PARVANE_FEDERATION_TOKENS_FOREIGN_DAY`, 20000). В SQLite
+/// (S7-19): перезапуск identity счётчик не обнуляет.
+pub(crate) async fn domain_token_quota(pool: &SqlitePool, domain: &str, n: i64) -> bool {
+    let env = |k: &str, d: i64| std::env::var(k).ok().and_then(|v| v.parse().ok()).filter(|&v: &i64| v > 0).unwrap_or(d);
+    let cap = env("PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY", 2000);
+    let total_cap = env("PARVANE_FEDERATION_TOKENS_FOREIGN_DAY", 20_000);
+    let day = day_now();
+    let site = token_site_of(domain);
+    let run = async {
+        let mut tx = parvane_db::begin_write(pool).await?;
+        sqlx::query("DELETE FROM foreign_token_quota WHERE day < ?").bind(day).execute(&mut *tx).await?;
+        let used = |s: String| {
+            sqlx::query_as::<_, (i64,)>("SELECT used FROM foreign_token_quota WHERE site = ? AND day = ?").bind(s).bind(day)
+        };
+        let (mine,) = used(site.clone()).fetch_optional(&mut *tx).await?.unwrap_or((0,));
+        let (all,) = used("*".into()).fetch_optional(&mut *tx).await?.unwrap_or((0,));
+        if mine + n > cap || all + n > total_cap {
+            return Ok::<bool, sqlx::Error>(false);
+        }
+        for s in [site.as_str(), "*"] {
+            sqlx::query("INSERT INTO foreign_token_quota (site, day, used) VALUES (?, ?, ?) ON CONFLICT(site, day) DO UPDATE SET used = used + excluded.used")
+                .bind(s)
+                .bind(day)
+                .bind(n)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    };
+    match run.await {
+        Ok(v) => v,
+        Err(e) => {
+            error!("identity: квота жетонов чужого домена: {}", e);
+            false
+        }
+    }
 }
 
 async fn issue_tokens(ctx: &V2Ctx, user: &str, r: pb::TokensIssueBlindedRequest) -> Reply {
@@ -1818,4 +1912,25 @@ pub(crate) fn device_proof_required() -> bool {
 pub(crate) const SESSION_PROOF_WINDOW_MS: i64 = 5 * 60 * 1000;
 pub(crate) fn session_proof_fresh(ts_ms: i64, now_ms: i64) -> bool {
     ts_ms != 0 && (ts_ms - now_ms).abs() <= SESSION_PROOF_WINDOW_MS
+}
+
+#[cfg(test)]
+mod token_quota_tests {
+    use super::*;
+
+    /// S7-19: поддомены одного домена делят суточную квоту жетонов, и счётчик переживает перезапуск.
+    #[tokio::test]
+    async fn foreign_token_quota_is_per_site_and_persistent() {
+        let base = std::env::temp_dir().join(format!("pv-id-quota-{}-{}", std::process::id(), now_unix()));
+        let path = base.to_str().unwrap().to_string();
+        let pool = open_store_at(&path).await.unwrap();
+        assert!(domain_token_quota(&pool, "a.evil.example", 2000).await);
+        assert!(!domain_token_quota(&pool, "b.evil.example", 1).await, "поддомен — та же квота");
+        assert!(domain_token_quota(&pool, "calm.example", 1).await, "другой домен — своя квота");
+        pool.close().await;
+        // «Перезапуск»: новый пул на той же базе
+        let pool = open_store_at(&path).await.unwrap();
+        assert!(!domain_token_quota(&pool, "c.evil.example", 1).await, "счётчик сохранён в базе");
+        assert_eq!(token_site_of("X.Y.Evil.Example."), "evil.example");
+    }
 }

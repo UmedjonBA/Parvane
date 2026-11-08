@@ -1,0 +1,1129 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7,
+            9
+          ],
+          "id": 3,
+          "summary_seq": 10,
+          "upto_seq": 10
+        },
+        "kind": "verify",
+        "summary": {
+          "chains": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "4",
+              "ts_ms": "100"
+            }
+          ],
+          "chains_complete": true,
+          "checkpoint_id": "3",
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "m|2026-10",
+              "op_id": "01923a4b-5c6d-7001-8000-000000000001",
+              "seq": "7"
+            },
+            {
+              "digest": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+              "key": "m|2026-11",
+              "op_id": "01923a4b-5c6d-7002-8000-000000000002",
+              "seq": "9"
+            }
+          ],
+          "tombstones_since_ms": "5",
+          "upto_seq": "10"
+        }
+      },
+      "name": "точка: сводка совпала с точкой"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7,
+            9
+          ],
+          "id": 3,
+          "summary_seq": 10,
+          "upto_seq": 20
+        },
+        "kind": "verify",
+        "summary": {
+          "chains": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "4",
+              "ts_ms": "100"
+            }
+          ],
+          "chains_complete": true,
+          "checkpoint_id": "3",
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "m|2026-10",
+              "op_id": "01923a4b-5c6d-7001-8000-000000000001",
+              "seq": "7"
+            },
+            {
+              "digest": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+              "key": "m|2026-11",
+              "op_id": "01923a4b-5c6d-7002-8000-000000000002",
+              "seq": "9"
+            }
+          ],
+          "tombstones_since_ms": "5",
+          "upto_seq": "10"
+        }
+      },
+      "name": "точка: старая сводка при большем upto_seq (сервер пропускает записи между точками)"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7,
+            9
+          ],
+          "id": 4,
+          "summary_seq": 20,
+          "upto_seq": 20
+        },
+        "kind": "verify",
+        "summary": {
+          "chains": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "4",
+              "ts_ms": "100"
+            }
+          ],
+          "chains_complete": true,
+          "checkpoint_id": "3",
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "m|2026-10",
+              "op_id": "01923a4b-5c6d-7001-8000-000000000001",
+              "seq": "7"
+            },
+            {
+              "digest": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+              "key": "m|2026-11",
+              "op_id": "01923a4b-5c6d-7002-8000-000000000002",
+              "seq": "9"
+            }
+          ],
+          "tombstones_since_ms": "5",
+          "upto_seq": "10"
+        }
+      },
+      "name": "точка: старая сводка под номером новой точки"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7,
+            9
+          ],
+          "id": 4,
+          "summary_seq": 10,
+          "upto_seq": 10
+        },
+        "kind": "verify",
+        "summary": {
+          "chains": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "4",
+              "ts_ms": "100"
+            }
+          ],
+          "chains_complete": true,
+          "checkpoint_id": "3",
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "m|2026-10",
+              "op_id": "01923a4b-5c6d-7001-8000-000000000001",
+              "seq": "7"
+            },
+            {
+              "digest": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+              "key": "m|2026-11",
+              "op_id": "01923a4b-5c6d-7002-8000-000000000002",
+              "seq": "9"
+            }
+          ],
+          "tombstones_since_ms": "5",
+          "upto_seq": "10"
+        }
+      },
+      "name": "точка: id точки не тот"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7,
+            8
+          ],
+          "id": 3,
+          "summary_seq": 10,
+          "upto_seq": 10
+        },
+        "kind": "verify",
+        "summary": {
+          "chains": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "4",
+              "ts_ms": "100"
+            }
+          ],
+          "chains_complete": true,
+          "checkpoint_id": "3",
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "m|2026-10",
+              "op_id": "01923a4b-5c6d-7001-8000-000000000001",
+              "seq": "7"
+            },
+            {
+              "digest": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+              "key": "m|2026-11",
+              "op_id": "01923a4b-5c6d-7002-8000-000000000002",
+              "seq": "9"
+            }
+          ],
+          "tombstones_since_ms": "5",
+          "upto_seq": "10"
+        }
+      },
+      "name": "точка: сегменты точки не те, что в сводке"
+    },
+    {
+      "expect": {
+        "ok": true
+      },
+      "input": {
+        "checkpoint": {
+          "chunk_seqs": [
+            7
+          ],
+          "id": 9,
+          "summary_seq": 30,
+          "upto_seq": 30
+        },
+        "kind": "verify",
+        "summary": {
+          "segments": [
+            {
+              "digest": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+              "key": "u:bob@x|2026-10",
+              "seq": "7"
+            }
+          ],
+          "tombstones_since_ms": "5"
+        }
+      },
+      "name": "точка: сводка прежнего вида (журнал до ревью 7 ноя 2026) — как есть"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "2",
+              "ts_ms": "11"
+            },
+            {
+              "chain": "srKysrKysrKysrKysrKysg==",
+              "last_seq": "1",
+              "ts_ms": "12"
+            }
+          ]
+        },
+        "gaps": 0,
+        "replayed": 0
+      },
+      "input": {
+        "book": {
+          "complete": true,
+          "marks": []
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 1,
+            "ts_ms": 10
+          },
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 2,
+            "ts_ms": 11
+          },
+          {
+            "chain_hex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "chain_seq": 1,
+            "ts_ms": 12
+          }
+        ]
+      },
+      "name": "цепочки: номера подряд"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "5",
+              "ts_ms": "22"
+            }
+          ]
+        },
+        "gaps": 1,
+        "replayed": 0
+      },
+      "input": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "2",
+              "ts_ms": "11"
+            }
+          ]
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 3,
+            "ts_ms": 20
+          },
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 5,
+            "ts_ms": 22
+          }
+        ]
+      },
+      "name": "цепочки: сервер спрятал запись — пропуск"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "srKysrKysrKysrKysrKysg==",
+              "last_seq": "3",
+              "ts_ms": "5"
+            }
+          ]
+        },
+        "gaps": 2,
+        "replayed": 0
+      },
+      "input": {
+        "book": {
+          "complete": true,
+          "marks": []
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "chain_seq": 3,
+            "ts_ms": 5
+          }
+        ]
+      },
+      "name": "цепочки: полная книга: цепочка не с начала — пропуск"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": false,
+          "marks": [
+            {
+              "chain": "srKysrKysrKysrKysrKysg==",
+              "last_seq": "4",
+              "ts_ms": "6"
+            }
+          ]
+        },
+        "gaps": 0,
+        "replayed": 0
+      },
+      "input": {
+        "book": {
+          "complete": false,
+          "marks": []
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "chain_seq": 3,
+            "ts_ms": 5
+          },
+          {
+            "chain_hex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "chain_seq": 4,
+            "ts_ms": 6
+          }
+        ]
+      },
+      "name": "цепочки: неполная книга: новая цепочка — точка отсчёта"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "6",
+              "ts_ms": "30"
+            }
+          ]
+        },
+        "gaps": 0,
+        "replayed": 1
+      },
+      "input": {
+        "book": {
+          "complete": true,
+          "marks": [
+            {
+              "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+              "last_seq": "5",
+              "ts_ms": "22"
+            }
+          ]
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 2,
+            "ts_ms": 11
+          },
+          {
+            "chain_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "chain_seq": 6,
+            "ts_ms": 30
+          }
+        ]
+      },
+      "name": "цепочки: повтор старой записи — не пропуск"
+    },
+    {
+      "expect": {
+        "book": {
+          "complete": true,
+          "marks": []
+        },
+        "gaps": 0,
+        "replayed": 0
+      },
+      "input": {
+        "book": {
+          "complete": true,
+          "marks": []
+        },
+        "kind": "chains",
+        "records": [
+          {
+            "chain_hex": "",
+            "chain_seq": 0,
+            "ts_ms": 1
+          }
+        ]
+      },
+      "name": "цепочки: запись без цепочки (до ревью) — без проверки"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "batch": {
+          "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+          "chain_seq": "7",
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            }
+          ],
+          "ts_ms": "1"
+        },
+        "kind": "pad"
+      },
+      "name": "выравнивание: одна операция"
+    },
+    {
+      "expect": {
+        "len": 512
+      },
+      "input": {
+        "batch": {
+          "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+          "chain_seq": "7",
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7002-8000-000000000002",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7003-8000-000000000003",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7004-8000-000000000004",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7005-8000-000000000005",
+                "ts_ms": "1000"
+              }
+            }
+          ],
+          "ts_ms": "1"
+        },
+        "kind": "pad"
+      },
+      "name": "выравнивание: пять операций"
+    },
+    {
+      "expect": {
+        "len": 8192
+      },
+      "input": {
+        "batch": {
+          "chain": "oaGhoaGhoaGhoaGhoaGhoQ==",
+          "chain_seq": "7",
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7002-8000-000000000002",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7003-8000-000000000003",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7004-8000-000000000004",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7005-8000-000000000005",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7006-8000-000000000006",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7007-8000-000000000007",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7008-8000-000000000008",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7009-8000-000000000009",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700a-8000-00000000000a",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700b-8000-00000000000b",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700c-8000-00000000000c",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700d-8000-00000000000d",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700e-8000-00000000000e",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700f-8000-00000000000f",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7010-8000-000000000010",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7011-8000-000000000011",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7012-8000-000000000012",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7013-8000-000000000013",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7014-8000-000000000014",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7015-8000-000000000015",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7016-8000-000000000016",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7017-8000-000000000017",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7018-8000-000000000018",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7019-8000-000000000019",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701a-8000-00000000001a",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701b-8000-00000000001b",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701c-8000-00000000001c",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701d-8000-00000000001d",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701e-8000-00000000001e",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-701f-8000-00000000001f",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7020-8000-000000000020",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7021-8000-000000000021",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7022-8000-000000000022",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7023-8000-000000000023",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7024-8000-000000000024",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7025-8000-000000000025",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7026-8000-000000000026",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7027-8000-000000000027",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7028-8000-000000000028",
+                "ts_ms": "1000"
+              }
+            }
+          ],
+          "ts_ms": "1"
+        },
+        "kind": "pad"
+      },
+      "name": "выравнивание: сорок операций"
+    }
+  ],
+  "description": "S7-3/S7-4: сводка называет свою позицию, id точки и сегменты; цепочки писателей без пропусков; запись выровнена по сетке L2",
+  "suite": "history/checkpoint"
+}

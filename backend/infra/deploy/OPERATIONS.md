@@ -193,7 +193,7 @@ docker compose restart cloud        # чистка при старте; без �
 Ссылки одного аккаунта — то же с `WHERE owner = "<адрес>"`. Удаление аккаунта (`scripts/admin_purge_test_accounts.sh`)
 убирает и его ссылки.
 
-**Нагрузка.** На одну ссылку — `PARVANE_CLOUD_LINK_RATE_PER_MIN` (120) обращений в минуту (`RATE_LIMITED` с
+**Нагрузка.** На одну ссылку — `PARVANE_CLOUD_LINK_RATE_PER_MIN` (1920; gateway делит скачивание на окна по 16 кусков, S7-13) обращений в минуту (`RATE_LIMITED` с
 `retry_after_ms`), на адрес посетителя — общий лимит анонимного канала gateway (`GATEWAY_RATE_ANON_IP_*`), разом не
 больше `PARVANE_CLOUD_LINK_STREAMS` (8) скачиваний по ссылкам на весь шард — остальные обработчики остаются
 пользователям.
@@ -203,6 +203,20 @@ docker compose restart cloud        # чистка при старте; без �
 заливает, поднимает. Флаги: `PARVANE_DEPLOY_SKIP_WEB_BUILD=1`,
 `PARVANE_DEPLOY_SKIP_IMAGES=1`. После заливки dist Caddy перезапускается
 автоматически (иначе bind-mount отдаёт 404).
+
+## Образы и зависимости: закрепление и проверка (S7-7, 7 ноя 2026)
+- Базовые образы закреплены по digest (`FROM <образ>:<тег>@sha256:…` в `Dockerfile.shards`, `Dockerfile.caddy`,
+  `Dockerfile.turn`, `Dockerfile.tor`; `nats` в `docker-compose.yml`). Тег оставлен для чтения — тянется ровно digest.
+  Плагин Caddy — `github.com/caddy-dns/duckdns@v0.5.0`. Digest-ы сняты с Docker Hub 7 ноя 2026; образы на проде,
+  собранные раньше, могли быть другими — первый деплой после правки пересоберёт caddy/turn/tor с закреплёнными.
+- Обновить образ: снять digest нового тега (`skopeo inspect docker://docker.io/library/<образ>:<тег>` либо
+  `curl` к registry-1.docker.io с `Accept: application/vnd.oci.image.index.v1+json`, заголовок
+  `Docker-Content-Digest`), заменить, пересобрать, проверить дымом.
+- Зависимости Rust: `cd backend && cargo audit` (конфиг — `backend/.cargo/audit.toml`, у каждого исключения —
+  причина). 7 ноя 2026: обновлены rustls 0.23.46, rustls-webpki 0.103.16, webpki-roots 1.0.11, vodozemac 0.11.2,
+  crypto-bigint 0.7.10, ctutils 0.4.8, tokio 1.54.1; у `sqlx` выключены `default-features`. Остаются (исключены с
+  причиной): RUSTSEC-2023-0071 (`rsa` 0.10-rc в слепых жетонах — исправленного выпуска нет) и RUSTSEC-2026-0387
+  для crypto-bigint 0.5.5 (p256 у web-push-native в push).
 
 ## TURN на VPS (звонки с мобильных сетей)
 Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи недостижим: звонок с
@@ -291,6 +305,15 @@ identity отказывает после `PARVANE_REGISTER_RATE_IP=30` реги�
 по логину). При прямом NATS (dev без gateway) поле пусто — лимит по IP не
 применяется.
 
+S7-18 (7 ноя 2026): адрес IPv6 считается сетью /64 — и в квоте соединений (`PARVANE_GATEWAY_MAX_CONNS_PER_IP`,
+`…_PER_CLIENT`), и в метке `client_ip` для identity (`2001:db8:1:2::/64`). Клиенты Tor (сайт Caddy `:8081` ставит
+`X-Parvane-Onion: 1`, на публичном сайте заголовок срезается) — своя корзина `onion` с потолком
+`PARVANE_GATEWAY_MAX_CONNS_ONION` (256) вместо общих 64 соединений адреса прокси; лимиты identity по источнику у всех
+Tor-клиентов по-прежнему общие (метка `onion`) — их защищает доказательство работы Tor:
+`HiddenServicePoWDefensesEnabled 1` в `torrc` включать только после `tor --list-modules` → `pow: yes` в образе
+(alpine-пакет может быть собран без него — тогда tor не стартует). Простой анонимного соединения
+(`PARVANE_GATEWAY_ANON_IDLE_SECS`) продлевает только запрос, прошедший лимиты.
+
 ## Отключение v1 (E6) — история; с T110 протокола v1 на сервере нет
 
 **T110 (7 окт 2026, вечер; коммиты `29288485`, `723bece1`, `31df2bc2`, деплой — по
@@ -363,19 +386,28 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
 | `PARVANE_PREKEY_REUSE_SECS` (600) | identity | окно, в котором повторный фетч той же пары отдаёт тот же one-time prekey (P-21) |
 | `PARVANE_REGISTER_RATE_IP` (30) / `PARVANE_LOGIN_RATE_IP` (120) | identity | лимиты по IP за минуту (P-43) |
 | `PARVANE_CLOUD_MAX_FILES` (200000) | cloud | готовых файлов на владельца во всех bucket'ах, копии тоже (CLD-02, 15 окт 2026) |
-| `PARVANE_HANDLER_PER_USER` (cloud 12, preview 4) | cloud, preview | сколько обработчиков одновременно занимает один пользователь; сверх — `RATE_LIMITED` (CLD-05) |
+| `PARVANE_HANDLER_PER_USER` (cloud 12, preview 4, domains 8) | cloud, preview, domains | сколько обработчиков одновременно занимает один пользователь; сверх — `RATE_LIMITED` (CLD-05) |
+| `PARVANE_DOMAINS_MAX_BYTES_PER_CONTAINER` (1 ГиБ), `PARVANE_DOMAINS_MAX_BYTES_PER_USER` (2 ГиБ) | domains | S7-22: байты журнала операций на контейнер и на писателя (получатель гранта пишет в свою долю; пользователи другого сервера — одна доля `@<домен>`); сверх — `LIMIT` |
+| `PARVANE_DOMAINS_MAX_OPS_PER_CONTAINER` (100 000), `PARVANE_DOMAINS_MAX_OPS_PER_OWNER` (500 000) | domains | число операций на контейнер и (с 7 ноя 2026) на писателя, а не сумма журналов владельца |
 | `PARVANE_RESERVED_NAMES` (пусто) | identity | дополнительные запрещённые публичные имена групп и ники, через запятую (spec 023; встроенный список — `admin`, `parvane`, `support`…) |
 | `PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS` (256) | cloud | верхняя граница чанков одного download-запроса (P-28) |
 | `PARVANE_CLOUD_LINKS_ENABLED` (1) | cloud | `0` — новые ссылки облака не создаются (spec 022); прежние живут до срока либо отзыва |
 | `PARVANE_CLOUD_LINK_MAX_FILES` (500) / `PARVANE_CLOUD_LINKS_PER_OWNER` (100, не больше 256) | cloud | файлов в одной ссылке / ссылок на аккаунт (готовящиеся, действующие, истёкшие) |
 | `PARVANE_CLOUD_LINK_GRACE_DAYS` (30) | cloud | сколько дней истёкшую ссылку можно продлить; потом копии удаляются |
-| `PARVANE_CLOUD_LINK_RATE_PER_MIN` (120) / `PARVANE_CLOUD_LINK_STREAMS` (8) | cloud | обращений к одной ссылке в минуту / одновременных скачиваний по ссылкам |
+| `PARVANE_CLOUD_LINK_RATE_PER_MIN` (1920) / `PARVANE_CLOUD_LINK_STREAMS` (8) | cloud | обращений к одной ссылке в минуту / одновременных скачиваний по ссылкам |
 | `PARVANE_PREVIEW_RATE` (60) | preview | запросов превью и тайлов на пользователя за минуту (P-30, P-23) |
 | `PARVANE_PREVIEW_TILE_CACHE_MAX` (20000) | preview | кап кэша тайлов карты, старые выселяются (P-23) |
 | `PARVANE_PUSH_MAX_SUBSCRIPTIONS` (8) | push | web-push подписок на пользователя (P-17) |
 | `PARVANE_GROUP_MAX_MEMBERS` (200) | messenger | участников в группе (P-34) |
 | `PARVANE_GATEWAY_REVERIFY_SECS` (300) | gateway | период переверификации JWT открытой сессии (P-06) |
 | `PARVANE_GATEWAY_MAX_CONNS` / `PARVANE_GATEWAY_MAX_CONNS_PER_IP` | gateway | лимиты соединений (P-37) |
+| `PARVANE_GATEWAY_OUT_BUDGET_BYTES` (16 МиБ) | gateway | исходящая очередь сессии в байтах; не освободилась за 10 с — сессия закрывается; запись кадра в сокет дольше 15 с — тоже (S7-13) |
+| `PARVANE_GATEWAY_IN_BUDGET_BYTES` (8 МиБ) | gateway | входящий бюджет сессии в байтах: кадры в очереди + тела запросов, ещё не получивших ответа; пока места нет, сокет не читается. До входа — 4 кадра по 64 КиБ, кадр крупнее ждёт `AuthOk` до 4 с, иначе соединение закрывается (PV-010) |
+| `PARVANE_GATEWAY_IN_GLOBAL_BYTES` (256 МиБ) | gateway | тот же бюджет на все сессии процесса (PV-010) |
+| `PARVANE_SHARD_QUEUE_TASKS` (4 × обработчиков) / `PARVANE_SHARD_QUEUE_BYTES` (64 МиБ) | шарды на `parvane-v2rt` | запросов (и их байтов) в работе и в ожидании места; сверх — сразу `RATE_LIMITED`. Запрос с истёкшим `ShardRequest.deadline_ms` не выполняется (OPT-003) |
+| `PARVANE_ARGON2_CONCURRENCY` (ядер − 1, 1…8) / `PARVANE_ARGON2_QUEUE_WAIT_MS` (2000; отладочная сборка — 30000) | identity | Argon2 в пуле блокирующих потоков, не больше N хэшей разом (≈ 19 МиБ каждый); места нет дольше ожидания — `RATE_LIMITED` (OPT-011) |
+| `PARVANE_OTK_MAX_PER_DEVICE` (200) | identity | одноразовых ключей на устройство; сверх — не сохраняются (PV-012) |
+| `PARVANE_GATEWAY_STREAM_SUB_CAPACITY` (64) | gateway | ёмкость подписки ящиков потоков скачивания (отдельное соединение NATS); поток идёт окнами по 16 кусков, на сессию — 32 куска в полёте (S7-13) |
 | `PARVANE_GATEWAY_ORIGIN` | web build | origin gateway для `connect-src` в CSP (P-32); по умолчанию `'self'` |
 | `PARVANE_DEV=1` | identity | dev-режим: код подтверждения в лог, `identity.server.info` без ограничений — только в тестах |
 
@@ -459,7 +491,16 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
 | `PARVANE_S2S_ENDPOINT` | — | адрес входа для описателя, напр. `https://parvane.duckdns.org:20443` (хост = домен, только https) |
 | `PARVANE_FEDERATION_ENDPOINTS` | — | `домен=https://хост:порт,…` — точки входа серверов на нестандартном порту (иначе — `https://<домен>/.well-known/parvane`) |
 | `PARVANE_FEDERATION_RATE_PER_SEC` / `_BURST` | 50 / 300 | лимит входящих запросов на домен |
-| `PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY` | 2000 | потолок слепых жетонов, выдаваемых пользователям одного чужого домена в сутки (identity) |
+| `PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY` | 2000 | потолок слепых жетонов, выдаваемых пользователям одного чужого домена в сутки (identity); с S7-19 — по регистрируемому домену (последние две метки: поддомены делят квоту), счётчик в SQLite (`foreign_token_quota`, миграция identity v2 0010), перезапуск его не сбрасывает |
+| `PARVANE_FEDERATION_TOKENS_FOREIGN_DAY` | 20000 | общий суточный потолок жетонов пользователям всех чужих серверов вместе (identity, S7-19) |
+
+Защита федерации без переменных (S7-14…17, 7 ноя 2026): очередь доставки берёт не больше 8 готовых писем на домен за
+тик и при отказе откладывает весь домен; бюджеты обнаружения описателей раздельные (вошедшие 60/мин, анонимные сессии
+20/мин, входящие кадры 30/мин и не больше 6/мин с одного IP — адрес из `X-Forwarded-For` Caddy), закреплённые серверы
+бюджет не тратят и при отказе обновления работают по прежнему описателю и закреплённому ключу; входящий
+`/_parvane/s2s` — не больше 32 одновременно читаемых и проверяемых запросов (сверх — 503 `Retry-After: 1`), тело
+целиком за 10 с, заголовки за 5 с. Таймауты в Caddy (`servers { timeouts }`) не включены: настройка глобальная и
+задела бы WSS `/ws`.
 
 Наш прод слушает на 20443: чтобы другой сервер нас нашёл, его администратор задаёт
 `PARVANE_FEDERATION_ENDPOINTS=parvane.duckdns.org=https://parvane.duckdns.org:20443`.
