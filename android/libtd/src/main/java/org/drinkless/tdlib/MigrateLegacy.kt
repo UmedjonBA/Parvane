@@ -30,14 +30,14 @@ object MigrateLegacy {
         "pins.json", "privacy.json", "renames.json", "scheduled.json", "stickers-state.json", "ttl.json",
     )
 
-    /** Файлы ядра без адреса в имени, судьба migrate. */
-    val CORE_FILES = listOf("domain-keys.json", "sections-records.json")
+    /** Файлы ядра без адреса в имени, судьба migrate (`/` — каталог хранилища ядра, как ключ перечня `file:/…`). */
+    val CORE_FILES = listOf("/domain-keys.json", "/sections-records.json")
 
     /** Каталог состояния v2 `v2-<адрес>/` (тот же набор, что у ядра desktop). */
     val V2_FILES = listOf(
         "bundle-key", "bundle-seq", "device", "device-id", "groups-reshared-v1", "invites", "invites-shared", "key",
-        "root", "root-backup", "root-backup-received", "root-backup-sent", "root-escrow", "state", "sections-records.json",
-    )
+        "root", "root-backup", "root-backup-received", "root-backup-sent", "root-escrow", "state",
+    ) // + записи разделов устройства — тот же файл, что [CORE_FILES]
 
     /** Безопасная часть адреса в именах файлов (как `accountfiles::safePart` ядра). */
     fun safePart(address: String): String = address.map { c ->
@@ -51,10 +51,11 @@ object MigrateLegacy {
         val slash = rel.indexOf('/')
         if (slash >= 0) {
             if (rel.substring(0, slash) != "v2-$safe") return ""
-            return if (rel.substring(slash + 1) in V2_FILES) "file:/$rel" else ""
+            val name = rel.substring(slash + 1)
+            return if (name in V2_FILES || "/$name" in CORE_FILES) "file:/$rel" else ""
         }
         if (rel in SEAM_FILES) return "file:$rel"
-        if (rel in CORE_FILES) return "file:/$rel"
+        if ("/$rel" in CORE_FILES) return "file:/$rel"
         // журнал истории ядра: служебные документы и отметки — раньше строк (общий префикс `history-`)
         if (rel.startsWith("history-sync-$safe-")) return "file:/$rel"
         if (rel == "history-marks-$safe.json" || rel == "history-local-$safe.json" || rel == "history-$safe.jsonl") return "file:/$rel"
