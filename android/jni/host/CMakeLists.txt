@@ -6,7 +6,7 @@
 # android/build-host-jni.sh; Gradle (:libtd:test*) зовёт её сам.
 cmake_minimum_required(VERSION 3.20)
 project(parvane_protocol_jni_host LANGUAGES C CXX)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -30,6 +30,7 @@ find_package(OpenSSL REQUIRED)
 
 add_library(parvane_protocol_jni SHARED
     ${JNI_DIR}/protocol_jni.cpp
+    ${JNI_DIR}/event_probe_jni.cpp
     ${CORE}/src/v2_engine.cpp
     ${CORE}/src/v2_content.cpp
     ${CORE}/src/pack_archive.cpp

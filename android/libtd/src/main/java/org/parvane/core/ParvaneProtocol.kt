@@ -14,7 +14,7 @@ object ParvaneProtocol {
     @Volatile private var loaded = false
 
     @Synchronized
-    private fun ensureLoaded() {
+    internal fun ensureLoaded() {
         if (loaded) return
         val host = System.getProperty("parvane.protocol.jni")
         if (!host.isNullOrEmpty()) System.load(host) else System.loadLibrary("parvane_jni")
@@ -79,6 +79,26 @@ object ParvaneProtocol {
         override fun fromV2(v2Json: String) = ParvaneProtocol.fromV2(v2Json)?.toString() ?: ""
     }
 
+    // ── проба очереди событий ядра (spec 035 T131): та же jni/event_queue.h, что у событий ядра на устройстве ──
+    @Volatile private var probeSink: ((String) -> Unit)? = null
+
+    /** Пачка пробы — JSON-массив событий по порядку (поток очереди JNI). */
+    @JvmStatic
+    fun onProbeBatch(batch: String) { probeSink?.invoke(batch) }
+
+    /**
+     * [count] событий с потока ядра, не присоединённого к JVM → очередь с потолком [maxEvents] → пачки в [sink].
+     * Ответ — счётчики очереди: attach/detach (присоединений потока очереди), batches, waits (паузы производителя),
+     * overflow (потолок обойдён по таймауту), max_queued.
+     */
+    @Synchronized
+    fun eventQueueProbe(count: Int, maxEvents: Int, slowMs: Int, sink: (String) -> Unit): JSONObject {
+        ensureLoaded()
+        probeSink = sink
+        try { return JSONObject(nativeEventQueueProbe(count, maxEvents, slowMs)) } finally { probeSink = null }
+    }
+
+    @JvmStatic private external fun nativeEventQueueProbe(count: Int, maxEvents: Int, slowMs: Int): String
     @JvmStatic private external fun nativeSessionEvent(eventJson: String, self: String): String
     @JvmStatic private external fun nativeOwnChatMode(self: String, peer: String, enabled: Boolean, opId: String, nowSec: Long): String
     @JvmStatic private external fun nativeFromV2(v2Json: String): String

@@ -2705,6 +2705,19 @@ class Client private constructor(
                     "archive" -> handle(TdApi.AddChatToList(chatId, if (cmd.optBoolean("on")) TdApi.ChatListArchive() else TdApi.ChatListMain()))
                     "folder" -> handle(TdApi.CreateChatFolder(TdApi.ChatFolder(TdApi.ChatFolderName(TdApi.FormattedText(cmd.optString("title", "Work"), arrayOf()), false),
                         TdApi.ChatFolderIcon("💼"), 3, false, LongArray(0), longArrayOf(chatId), LongArray(0), false, false, false, false, false, false, false, false)))
+                    // spec 035 T134 (STATE-1 v2): правка ОДНОГО поля папки (значок) путём окна папки X — EditChatFolder с
+                    // прежними остальными полями; заметка контакта без имени (SetUserNote); что показывает X — в журнал
+                    "folder_icon" -> store.local?.folders?.all()?.firstOrNull { it.title == cmd.optString("title") }?.let { fo ->
+                        val cur = handle(TdApi.GetChatFolder(fo.id))
+                        if (cur is TdApi.ChatFolder) { cur.icon = TdApi.ChatFolderIcon(cmd.optString("icon")); handle(TdApi.EditChatFolder(fo.id, cur)) } else cur
+                    } ?: TdApi.Error(404, "folder not found")
+                    "contact_note" -> handle(TdApi.SetUserNote(store.idOf(peer), TdApi.FormattedText(cmd.optString("note"), arrayOf())))
+                    "state_check" -> {
+                        val folders = store.local?.folders?.all().orEmpty().joinToString(", ") { "«${it.title}» ${it.icon}" }
+                        val u = store.user(peer)
+                        Log.i(TAG, "состояние-проверка: папки [$folders]; контакт имя «${u?.firstName.orEmpty()}» заметка «${userFullInfo(peer).note?.text.orEmpty()}»")
+                        TdApi.Ok()
+                    }
                     "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
                     "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
                     "dump" -> { Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok() }
