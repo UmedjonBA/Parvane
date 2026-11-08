@@ -14,6 +14,7 @@ mod v2;
 mod v2_fed;
 mod v2_groups;
 mod v2_history;
+mod v2_migration;
 mod v2_public;
 mod v2_rename;
 mod v2_state;
@@ -40,10 +41,35 @@ async fn main() -> Result<()> {
 
     let v2_pool = v2::open_store(&db_path).await?;
 
+    // spec 035 (T104, T150): служебные режимы разового переноса — без приёма запросов.
+    let flag = std::env::args().nth(1).unwrap_or_default();
+    match flag.as_str() {
+        "--migrate-only" => {
+            let order: Vec<String> = v2_migration::ORDER.iter().map(|(s, f)| format!("{s}/{f}")).collect();
+            info!("messenger: миграции применены (spec 035: {}), выход (--migrate-only)", order.join(", "));
+            return Ok(());
+        }
+        "--migration-status" => {
+            println!("{}", v2_migration::status(&v2_pool).await?.json());
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let nc = parvane_types::nats::connect(&nats_url)
         .await
         .context("подключение к NATS")?;
     info!("NATS подключён: {}", nats_url);
+
+    if flag == "--migration-check" {
+        let ctx = v2::context(nc, v2_pool);
+        let (groups, bad) = v2_migration::windows_check(&ctx).await?;
+        println!("{{\"groups\":{groups},\"windows_mismatch\":{bad}}}");
+        if bad > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     v2::run(nc, v2_pool).await?;
     info!("Messenger шард запущен (протокол v2)");

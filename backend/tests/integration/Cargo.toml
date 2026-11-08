@@ -25,3 +25,5 @@ parvane-protocol = { path = "../../protocol", features = ["test-inject"] }
 prost = "0.14"
 sha2 = "0.10"
 base64 = "0.22"
+# spec 035 T100: записи замороженного журнала state.v1 — прямо в базу messenger (state.append отвергается)
+sqlx = { workspace = true }

@@ -76,9 +76,18 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
+/// Контекст без приёма запросов (`--migration-check`).
+pub(crate) fn context(nc: Client, v2: SqlitePool) -> Arc<V2> {
+    Arc::new(V2 { nc, v2, devices: Mutex::new(HashMap::new()), groups: Default::default() })
+}
+
 pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
-    let ctx = Arc::new(V2 { nc: nc.clone(), v2, devices: Mutex::new(HashMap::new()), groups: Default::default() });
+    let ctx = context(nc.clone(), v2);
     let _ = CTX.set(ctx.clone());
+    // spec 035 (T104, принцип VII): данные, которые сервер пересчитывает после миграций (окна членства 0008), —
+    // до приёма запросов: матрица доступа к журналу группы с первого же запроса видит окна всех групп. Окна читают
+    // журналы устройств у identity (стартует раньше messenger), поэтому — после подключения к NATS.
+    crate::v2_groups::rebuild_windows(&ctx).await;
     let c2 = ctx.clone();
     let handler: parvane_v2rt::Handler = Arc::new(move |m: &'static MethodInfo, req: ShardRequest| -> BoxFut {
         let ctx = c2.clone();
@@ -93,8 +102,6 @@ pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
     let c4 = ctx.clone();
     tokio::spawn(async move {
         crate::v2_groups::rebuild_link_index(&c4).await;
-        // spec 035 (миграция 0008): окна членства журналов, принятых до неё
-        crate::v2_groups::rebuild_windows(&c4).await;
     });
     let c3 = ctx.clone();
     tokio::spawn(async move {
@@ -115,6 +122,12 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
         "msg.inbox.sync" => {
             let (user, device) = me(&req)?;
             let r: mpb::InboxSyncRequest = body(&req)?;
+            // spec 035 (T150): устройство подключалось с новым выпуском (минор из Hello — от gateway)
+            if req.client_minor > 0 {
+                if let Ok(dev) = device_key(&user, &device) {
+                    crate::v2_migration::mark_minor(&ctx.v2, &dev, req.client_minor).await;
+                }
+            }
             ctx.sync(&user, &device, r.after_seq, r.max_bytes).await
         }
         "msg.inbox.ack" => {

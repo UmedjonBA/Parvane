@@ -10,8 +10,14 @@
       сравнение двух выгрузок: потеряно / изменено / добавлено по таблицам (только счётчики и имена, без содержимого);
       код 1, если таблица пропала или в ней стало меньше строк.
 
+  migration_audit_server.py --strict <до> <после>
+      то же + инварианты переноса (T101, contracts/migration.md): ни одна запись журналов (`group_state_log`,
+      `user_state_log`, `user_history_log`, `inbox_log`, журналы domains, блобы cloud) не потеряна и не добавлена —
+      число строк и дайджест первичных ключей те же (меняться могут только колонки, которые добавили миграции);
+      прочие таблицы — не меньше строк. Окна членства против журналов групп сверяет `messenger --migration-check`
+      (нужны NATS и identity: подписанты записей), прогон целиком — `scripts/migration_server_check.sh`.
+
 Содержимое строк в выгрузку не попадает — только дайджесты и числа (копия баз прода, D3, не должна утечь в отчёт).
-Инварианты переноса (окна членства, журналы) — задача T1xx; здесь — базовая сверка.
 """
 import argparse
 import hashlib
@@ -81,6 +87,33 @@ def load(source):
         return [json.loads(line) for line in f if line.strip()]
 
 
+# Журналы и блобы: записи не теряются и не появляются при переносе (миграции добавляют только колонки/таблицы)
+LOG_TABLES = {
+    "group_state_log", "user_state_log", "user_history_log", "inbox_log", "user_state_log_v2",
+    "container_log", "container_grant_log", "container_snapshots", "files", "chunks", "blob_caps", "link_blobs",
+}
+
+
+def strict_check(before, after):
+    """Инварианты переноса: журналы — те же первичные ключи; иначе — список нарушений."""
+    b = {(l["kind"], l["key"]): l for l in before}
+    a = {(l["kind"], l["key"]): l for l in after}
+    bad = []
+    for key, lb in sorted(b.items()):
+        la = a.get(key)
+        if la is None:
+            bad.append(f"таблица пропала: {key[0]} {key[1]}")
+            continue
+        if key[1] in LOG_TABLES and (la["rows"] != lb["rows"] or la.get("pk_digest") != lb.get("pk_digest")):
+            bad.append(f"журнал изменил состав записей: {key[0]} {key[1]} ({lb['rows']} → {la['rows']})")
+        elif la["rows"] < lb["rows"]:
+            bad.append(f"меньше строк: {key[0]} {key[1]} ({lb['rows']} → {la['rows']})")
+    for line in bad:
+        print(f"НАРУШЕНИЕ {line}")
+    print(f"инварианты: нарушений {len(bad)}")
+    return bad
+
+
 def compare(before, after):
     b = {(l["kind"], l["key"]): l for l in before}
     a = {(l["kind"], l["key"]): l for l in after}
@@ -108,6 +141,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dump", metavar="DIR", help="каталог с базами *.db")
     parser.add_argument("-o", "--out", help="файл выгрузки (по умолчанию stdout)")
+    parser.add_argument("--strict", action="store_true", help="плюс инварианты журналов (T101)")
     parser.add_argument("sources", nargs="*", help="две выгрузки (или каталога) для сравнения")
     args = parser.parse_args()
     if args.dump:
@@ -121,7 +155,11 @@ def main():
         return 0
     if len(args.sources) != 2:
         parser.error("нужны --dump DIR или две выгрузки для сравнения")
-    return compare(load(args.sources[0]), load(args.sources[1]))
+    before, after = load(args.sources[0]), load(args.sources[1])
+    rc = compare(before, after)
+    if args.strict and strict_check(before, after):
+        rc = 1
+    return rc
 
 
 if __name__ == "__main__":
