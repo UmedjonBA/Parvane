@@ -16,6 +16,7 @@
 //! истории строят прежние клиентские пути; голоса опросов не сводятся в `ViewPoll.votes`.
 
 pub mod capabilities;
+pub mod client_core;
 pub mod delta;
 pub mod features;
 pub mod intent;
@@ -234,6 +235,12 @@ pub struct Engine {
     pub(crate) migration_progress: Option<migration::Progress>,
     /// Своё исходящее прежней версии, не ставшее строкой истории (`outbox/legacy`, JSON как лежало).
     pub(crate) legacy_outbox: Vec<Value>,
+    /// Корень личности после createIdentity/importRootBackup — только в памяти (C1-06), `clientCall`.
+    pub(crate) root: Option<zeroize::Zeroizing<[u8; 32]>>,
+    /// Подготовленная смена ника (spec 026) до ответа сервера, `clientCall`.
+    pub(crate) rename_plan: Option<crate::client::RenamePlan>,
+    /// Режим хоста: страница журнала инбокса кончилась на ждущих записях — следующая после `retry`.
+    pub(crate) inbox_more: bool,
 }
 
 fn now_or(ms: i64) -> i64 {
@@ -362,6 +369,9 @@ impl Engine {
             migration: None,
             migration_progress: None,
             legacy_outbox: vec![],
+            root: None,
+            rename_plan: None,
+            inbox_more: false,
         })
     }
 
@@ -388,6 +398,19 @@ impl Engine {
             "viewGroup" => parse::<epb::ViewGroupRequest>(args).and_then(|a| self.view_group(a.group.as_ref())).map(|g| json_of(&g)),
             "capabilities" => parse::<epb::CapabilitiesRequest>(args).and_then(|a| self.capabilities(a.chat.as_ref())).map(|c| json_of(&c)),
             "engineInfo" => Ok(crate::engine_info_json()),
+            "clientCall" | "historyCall" => {
+                let a: epb::ClientCall = match parse(args) {
+                    Ok(a) => a,
+                    Err(e) => return err_json(e),
+                };
+                let r = if name == "clientCall" { self.client_call(a) } else { self.history_call(a) };
+                return match r {
+                    Ok(result_json) => json_of(&epb::CallResult { result_json }),
+                    Err(e) => e,
+                };
+            }
+            "clientReplace" => parse(args).and_then(|a| self.client_replace(a)).map(|_| "{}".to_string()),
+            "flush" => self.flush().map(|o| json_of(&o)),
             "stateViewV1" => Ok(self.state_view_v1().to_string()),
             "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
             "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
@@ -1090,13 +1113,23 @@ impl Engine {
             }
             return;
         }
-        let r = c.sync_request();
-        self.push_req(w, r, Purpose::InboxSync);
+        if self.cfg.host_driven {
+            // Страница журнала инбокса уже в пути либо ждущие записи — не вторую
+            if self.pending_inbox.is_empty() {
+                self.inbox_sync(w);
+            }
+        } else {
+            let r = c.sync_request();
+            self.push_req(w, r, Purpose::InboxSync);
+        }
         if has_key {
             let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
             self.push_req(w, r, Purpose::StateSync);
         }
-        self.history_pull(w);
+        // Режим хоста: журнал истории ведёт хост
+        if !self.cfg.host_driven {
+            self.history_pull(w);
+        }
     }
 
     /// Чтение журнала истории (HIST-1, HIST-2): новое устройство (курсор 0, точки не было) сначала спрашивает
@@ -1226,6 +1259,11 @@ impl Engine {
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
                 "inbox.record" => self.process_record(si.body, &mut w),
+                // Хост добрал нужду клиента (режим хоста) либо данные пришли — повторить ждущее
+                "retry" if self.cfg.host_driven => self.host_retry(&mut w),
+                "retry" => self.retry_waiting(&mut w),
+                // Живое уведомление/переподключение: страница журнала инбокса сейчас
+                "inbox.poll" => self.inbox_sync(&mut w),
                 // Хост узнал о новых записях журнала личного состояния (`JournalNotice{STATE}` прежнего клиента)
                 "journal.state" => self.state_sync_now(&mut w),
                 m if m.starts_with("ephemeral") => {
@@ -1345,7 +1383,15 @@ impl Engine {
                 for rec in &r.records {
                     self.process_record(rec.encode_to_vec(), w);
                 }
-                if r.more {
+                if self.cfg.host_driven {
+                    if r.more && !r.records.is_empty() {
+                        if self.pending_inbox.is_empty() {
+                            self.inbox_sync(w);
+                        } else {
+                            self.inbox_more = true;
+                        }
+                    }
+                } else if r.more {
                     if let Some(c) = &self.client {
                         let req = c.sync_request();
                         self.push_req(w, req, Purpose::InboxSync);
@@ -1480,6 +1526,10 @@ impl Engine {
 
     /// Запись инбокса: открыть клиентом, применить события; курсор — на диск, подтверждение — после фиксации.
     pub(crate) fn process_record(&mut self, rec: Vec<u8>, w: &mut Work) {
+        if self.cfg.host_driven {
+            self.host_record(rec, w);
+            return;
+        }
         let Some(c) = &mut self.client else { return };
         let before = c.cursor().disk_value();
         match c.open_record(&rec) {

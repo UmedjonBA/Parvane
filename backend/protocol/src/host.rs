@@ -30,7 +30,7 @@ pub fn err(e: ProtoError) -> String {
     json!({"error": e.kind()}).to_string()
 }
 
-fn need_json(n: &Need) -> Value {
+pub(crate) fn need_json(n: &Need) -> Value {
     match n {
         Need::PeerLog { user, after } => json!({"kind": "peerLog", "user": user, "after": after}),
         Need::Bundle { user } => json!({"kind": "bundle", "user": user}),
@@ -279,7 +279,7 @@ pub fn eph_open_json(c: &Client, body: &[u8]) -> String {
     Value::Array(c.open_ephemeral(body).iter().map(eph_event_json).collect()).to_string()
 }
 
-fn events(ev: &[Event]) -> String {
+pub(crate) fn events(ev: &[Event]) -> String {
     Value::Array(ev.iter().map(event_json).collect()).to_string()
 }
 
@@ -399,6 +399,15 @@ impl HostClient {
 
     fn wrap(inner: Client) -> Self {
         Self { inner, root: None, rename_plan: None }
+    }
+
+    /// Обёртка над клиентом модели движка (spec 035, `clientCall`): корень и смена ника живут в модели.
+    pub(crate) fn from_parts(inner: Client, root: Option<zeroize::Zeroizing<[u8; 32]>>, rename_plan: Option<crate::client::RenamePlan>) -> Self {
+        Self { inner, root, rename_plan }
+    }
+
+    pub(crate) fn into_parts(self) -> (Client, Option<zeroize::Zeroizing<[u8; 32]>>, Option<crate::client::RenamePlan>) {
+        (self.inner, self.root, self.rename_plan)
     }
 
     pub fn export(&self, key: &[u8]) -> Result<Vec<u8>, String> {

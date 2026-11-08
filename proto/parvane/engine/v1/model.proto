@@ -65,6 +65,11 @@ message EngineConfig {
   // Старые хранилища прежней версии есть и не помечены «перенесено» (хост проверил свои места по перечню):
   // нет корня нового хранилища либо перенос прерван — `open` → `MIGRATION_NEEDED` (spec 035, US1).
   bool legacy_present = 9;
+  // Переходный период (T113 web, T125 desktop, T135 android): историю и показ ведёт хост. Модель владеет
+  // клиентом (`clientCall`), личным состоянием и журналом инбокса, но строк истории не держит и журнал истории не
+  // пишет: события записей инбокса отдаёт хосту (`client_events`), нужды клиента — тоже хосту (`needs{kind:
+  // client}`), запись, ждущая нужду, и все следующие ждут вызова `ingest{EVENT, method: "retry"}` (ORDER-1).
+  bool host_driven = 10;
 }
 
 enum OpenState {
@@ -646,6 +651,12 @@ message Need {
   string detail = 3 [(parvane.core.v2.max_len) = 1024];
 }
 
+// События клиентского ядра (JSON-массив событий `openRecord`/`drainReady` единой точки входа `host::call`) —
+// хосту в режиме `host_driven`, по порядку записей инбокса.
+message ClientEvents {
+  string json = 1 [(parvane.core.v2.max_len) = 4194304];
+}
+
 message ModelChange {
   oneof change {
     ChatView chat_upsert = 1;
@@ -658,6 +669,7 @@ message ModelChange {
     UnreadChanged unread_changed = 8;
     WriteBlocked write_blocked = 9;
     Need needs = 10;
+    ClientEvents client_events = 11;
   }
 }
 
@@ -724,6 +736,28 @@ message ViewGroupRequest {
 
 message CapabilitiesRequest {
   parvane.state.v1.Peer chat = 1;
+}
+
+// Действие или чтение клиентского ядра модели (`clientCall`): имя и аргументы — те же, что у единой точки входа
+// нативных хостов (`backend/protocol/src/host/call.rs`, имена WASM-обвязки, аргументы camelCase, байты base64).
+// Состояние клиента меняется в памяти модели и уходит в хранилище следующим итогом (`flush`, `tick`, `ingest`).
+// Ошибка — `{"need": …}` (добрать данные) либо `{"error": …}`.
+message ClientCall {
+  string name = 1 [(parvane.core.v2.max_len) = 64];
+  string args_json = 2 [(parvane.core.v2.max_len) = 4194304];
+}
+
+// Результат `clientCall` / `historyCall`: значение JSON текстом (`null` — нет значения).
+message CallResult {
+  string result_json = 1 [(parvane.core.v2.max_len) = 4194304];
+}
+
+// Сменить клиентское ядро модели (`clientReplace`): `new` — новое устройство (сброс личности, привязка заново),
+// `import` — из экспорта (`blob` под `key`, 32 байта). Корень и подготовленная смена ника забываются.
+message ClientReplace {
+  string mode = 1 [(parvane.core.v2.max_len) = 16];
+  bytes blob = 2 [(parvane.core.v2.max_len) = 4194304];
+  bytes key = 3 [(parvane.core.v2.max_len) = 32];
 }
 
 message EngineError {

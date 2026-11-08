@@ -204,6 +204,24 @@ data class AuditDump(
     }
 }
 
+data class CallResult(
+    val resultJson: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(resultJson.isEmpty())) j.put("result_json", resultJson)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): CallResult {
+            return CallResult(
+                resultJson = j.pick("result_json", "resultJson")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
 data class Capabilities(
     val sendText: Boolean = false,
     val sendMedia: Boolean = false,
@@ -384,6 +402,69 @@ data class ChatView(
     }
 }
 
+data class ClientCall(
+    val name: String = "",
+    val argsJson: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(name.isEmpty())) j.put("name", name)
+        if (!(argsJson.isEmpty())) j.put("args_json", argsJson)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): ClientCall {
+            return ClientCall(
+                name = j.pick("name", "name")?.let { it.toString() } ?: "",
+                argsJson = j.pick("args_json", "argsJson")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
+data class ClientEvents(
+    val json: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(json.isEmpty())) j.put("json", json)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): ClientEvents {
+            return ClientEvents(
+                json = j.pick("json", "json")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
+data class ClientReplace(
+    val mode: String = "",
+    val blob: ByteArray = ByteArray(0),
+    val key: ByteArray = ByteArray(0)
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(mode.isEmpty())) j.put("mode", mode)
+        if (!(blob.isEmpty())) j.put("blob", toBase64(blob))
+        if (!(key.isEmpty())) j.put("key", toBase64(key))
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): ClientReplace {
+            return ClientReplace(
+                mode = j.pick("mode", "mode")?.let { it.toString() } ?: "",
+                blob = j.pick("blob", "blob")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
+                key = j.pick("key", "key")?.let { fromBase64(it.toString()) } ?: ByteArray(0)
+            )
+        }
+    }
+}
+
 sealed interface ComposeContentKind {
     data class Text(val value: org.parvane.gen.ViewText) : ComposeContentKind
     data class Media(val value: org.parvane.gen.ViewMedia) : ComposeContentKind
@@ -486,7 +567,8 @@ data class EngineConfig(
     val memoryBudgetBytes: Long = 0L,
     val deviceKey: ByteArray = ByteArray(0),
     val vectors: Boolean = false,
-    val legacyPresent: Boolean = false
+    val legacyPresent: Boolean = false,
+    val hostDriven: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -499,6 +581,7 @@ data class EngineConfig(
         if (!(deviceKey.isEmpty())) j.put("device_key", toBase64(deviceKey))
         if (!(!vectors)) j.put("vectors", vectors)
         if (!(!legacyPresent)) j.put("legacy_present", legacyPresent)
+        if (!(!hostDriven)) j.put("host_driven", hostDriven)
         return j
     }
 
@@ -513,7 +596,8 @@ data class EngineConfig(
                 memoryBudgetBytes = j.pick("memory_budget_bytes", "memoryBudgetBytes")?.let { it.toString().toLong() } ?: 0L,
                 deviceKey = j.pick("device_key", "deviceKey")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
                 vectors = j.pick("vectors", "vectors")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                legacyPresent = j.pick("legacy_present", "legacyPresent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                legacyPresent = j.pick("legacy_present", "legacyPresent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                hostDriven = j.pick("host_driven", "hostDriven")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -1538,6 +1622,7 @@ sealed interface ModelChangeChange {
     data class UnreadChanged(val value: org.parvane.gen.UnreadChanged) : ModelChangeChange
     data class WriteBlocked(val value: org.parvane.gen.WriteBlocked) : ModelChangeChange
     data class Needs(val value: org.parvane.gen.Need) : ModelChangeChange
+    data class ClientEvents(val value: org.parvane.gen.ClientEvents) : ModelChangeChange
 }
 
 data class ModelChange(
@@ -1556,6 +1641,7 @@ data class ModelChange(
             is ModelChangeChange.UnreadChanged -> j.put("unread_changed", o.value.toJson())
             is ModelChangeChange.WriteBlocked -> j.put("write_blocked", o.value.toJson())
             is ModelChangeChange.Needs -> j.put("needs", o.value.toJson())
+            is ModelChangeChange.ClientEvents -> j.put("client_events", o.value.toJson())
             null -> {}
         }
         return j
@@ -1574,6 +1660,7 @@ data class ModelChange(
             j.pick("unread_changed", "unreadChanged")?.let { change = ModelChangeChange.UnreadChanged(UnreadChanged.fromJson(it as JSONObject)) }
             j.pick("write_blocked", "writeBlocked")?.let { change = ModelChangeChange.WriteBlocked(WriteBlocked.fromJson(it as JSONObject)) }
             j.pick("needs", "needs")?.let { change = ModelChangeChange.Needs(Need.fromJson(it as JSONObject)) }
+            j.pick("client_events", "clientEvents")?.let { change = ModelChangeChange.ClientEvents(ClientEvents.fromJson(it as JSONObject)) }
             return ModelChange(
                 change = change
             )
