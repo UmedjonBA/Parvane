@@ -54,18 +54,6 @@ object ParvaneCore {
         }
     }
 
-    /** Одно событие ядра (JSON-объект) — подписчикам. */
-    @JvmStatic
-    fun onEvent(json: String) {
-        val event = try {
-            JSONObject(json)
-        } catch (e: Exception) {
-            Log.w(TAG, "битое событие ядра")
-            return
-        }
-        dispatch(event)
-    }
-
     private fun dispatch(event: JSONObject) {
         listeners.forEach { l ->
             try {

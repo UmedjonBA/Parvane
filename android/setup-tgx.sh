@@ -180,11 +180,11 @@ echo "   profile L2 row: $(grep -c 'parvaneCheckL2();\|parvaneBindL2(view, isUpd
 grep -q 'PARVANE_UPGRADE_REQUIRED' "$TDL" || perl -0pi -e 's/(        )(if \(!StringUtils\.isEmpty\(update\.type\) && \(update\.type\.startsWith\("AUTH_KEY_DROP"\))/$1if (!StringUtils.isEmpty(update.type) && update.type.startsWith("PARVANE_UPGRADE_REQUIRED")) { \/\/ Parvane: сервер отключил v1 — «обновите приложение»\n$1  c.openAlert(R.string.AppUpdateRequiredTitle, msg, Lang.getString(R.string.AppUpdateOk), (dialog, which) -> org.thunderdog.challegram.tool.Intents.openLink(BuildConfig.DOWNLOAD_URL), 0);\n$1} else $2/' "$TDL"
 echo "   upgrade dialog: $(grep -c 'PARVANE_UPGRADE_REQUIRED' "$TDL") (ожидается 1)"
 
-echo "== spec 031: R8 не трогает шов и оверлей (ядро зовёт их из C++ по имени: onEvent, media*) =="
+echo "== spec 031: R8 не трогает шов и оверлей (ядро зовёт их из C++ по имени: onEvents, media*) =="
 PG="$TGX/app/proguard-rules.pro"
 grep -q "parvane: шов и оверлей" "$PG" || cat >> "$PG" <<'PRO'
 
-# parvane: шов и оверлей — методы, которые ядро зовёт из C++ по имени (ParvaneCore.onEvent, ParvaneCalls.media*),
+# parvane: шов и оверлей — методы, которые ядро зовёт из C++ по имени (ParvaneCore.onEvents, ParvaneCalls.media*),
 # R8 иначе выбрасывает как неиспользуемые: release без событий ядра и звонков
 -keep class org.parvane.core.** { *; }
 -keep class org.thunderdog.challegram.parvane.** { *; }
