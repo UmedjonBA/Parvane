@@ -303,6 +303,16 @@ export function createStateJournal(deps: Deps) {
     return !snap.quick_reaction;
   }
 
+  function isCoreKindEmpty(snap: SSnapshot, kind: LocalStateKind) {
+    if (kind === 'folders') return !snap.folders?.length;
+    if (kind === 'blocked') return !snap.blocked?.length;
+    if (kind === 'drafts') return !snap.drafts?.length;
+    if (kind === 'scheduled') return !snap.scheduled?.length;
+    if (kind === 'archived') return !snap.archived?.length;
+    if (kind === 'pinned') return !(snap.pinned || []).some((p) => p.peers?.length);
+    return false;
+  }
+
   async function migrateLateKinds() {
     if (!session) return;
     const kinds = LATE_KINDS.filter((kind) => {
@@ -368,13 +378,18 @@ export function createStateJournal(deps: Deps) {
       if (!isMigrated()) {
         // Первый запуск на v2: локальные данные — начальными записями журнала. Основа — уже сведённое моделью
         // (журнал сервера): время блокировки и прочие поля, которых нет в локальном виде, не перезаписываются
-        // «сейчас» (spec 035 T109: после разового переноса блок-лист менял `blocked_at_ms`)
-        const revision = deps.localState.getDirtyRevision();
-        await write(buildDesired(readSnapshot()));
+        // «сейчас» (spec 035 T109: после разового переноса блок-лист менял `blocked_at_ms`). Только виды, пустые в
+        // журнале: другое своё устройство могло перенести раньше и править после — локальная копия этого
+        // устройства старше (оно было выключено), и свежие метки переноса откатили бы те правки (spec 035 T142,
+        // вариант month). Несохранённые правки этого устройства дописывает `flushDirty`; так же переносит движок
+        // (`state::without_present`)
+        const current = readSnapshot();
+        const empty = MANAGED_KINDS.filter((kind) => !LATE_KINDS.includes(kind) && isCoreKindEmpty(current, kind));
+        if (empty.length) await write(buildDesired(current), { kinds: empty, prune: true });
         markMigrated();
-        LATE_KINDS.forEach(markKindMigrated);
-        deps.localState.clearDirtyKinds(revision);
-        deps.log('v2: локальное состояние перенесено в журнал');
+        deps.log(empty.length
+          ? `v2: локальное состояние перенесено в журнал (${empty.join(', ')})`
+          : 'v2: журнал уже несёт личное состояние — локальная копия не переносится');
       }
       await migrateLateKinds();
       await flushDirty();
