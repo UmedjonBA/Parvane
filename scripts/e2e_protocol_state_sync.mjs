@@ -27,6 +27,7 @@ import {
   openGroupChatByTitle,
   openPrivateChatStrict,
   preparePage,
+  relogin,
   sendText,
   openProfile,
 } from './e2e_web_helpers.mjs';
@@ -437,11 +438,15 @@ try {
     return user && !Object.keys(g.messages.byChatId[user.id]?.byId || {}).length;
   }, aliceNick, { timeout: STATE_SYNC_BUDGET_MS, polling: 500 });
   console.log(`очистка чата на втором устройстве через ${Date.now() - clearStarted} мс`);
-  await bob2Page.waitForFunction(({ self, peer }) => {
-    const map = JSON.parse(localStorage.getItem(`parvane:cleareduntil:${self}`) || '{}');
-    return map[peer] > 0;
-  }, { self: bob, peer: alice }, { timeout: STATE_SYNC_BUDGET_MS * 2, polling: 500 });
-  console.log(`граница очистки на втором устройстве через ${Date.now() - clearStarted} мс`);
+  // Граница очистки сохранена (spec 035: личное состояние — в хранилище модели, не в localStorage): после
+  // перезагрузки второго устройства история чата из журнала истории и кэша не возвращается
+  await relogin(bob2Page, PASSWORD);
+  await bob2Page.waitForFunction(() => Boolean(window.__parvaneGetGlobal?.()?.chats?.listIds?.active), undefined,
+    { timeout: LOGIN_TIMEOUT_MS, polling: 500 });
+  await bob2Page.waitForTimeout(STATE_SYNC_BUDGET_MS / 2);
+  assert.equal(await chatMessageCount(bob2Page, aliceNick) > 0, false,
+    'bob2: после перезагрузки очищенный чат с alice снова с сообщениями');
+  console.log(`граница очистки на втором устройстве переживает перезагрузку (${Date.now() - clearStarted} мс)`);
   assert.equal(await chatMessageCount(alicePage, bob.split('@')[0]), aliceBefore, 'у alice пропали сообщения после очистки у bob');
 
   // ── T160: ссылка-приглашение группы одна на всех своих устройствах ─────────
