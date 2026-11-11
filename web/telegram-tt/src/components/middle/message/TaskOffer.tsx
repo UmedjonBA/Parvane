@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import { memo, useEffect, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
 import type { ApiMessage, ApiTaskOffer, ApiUser } from '../../../api/types';
@@ -7,7 +7,7 @@ import { getUserFullName } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
 import { getTaskOfferKind } from '../../../api/parvane/taskOffers';
-import { getPlannerState } from '../../parvane/planner/plannerStore';
+import { getPlannerState, loadPlanner } from '../../parvane/planner/plannerStore';
 import { formatOfferWhen } from '../../parvane/taskOffer/taskOfferFormat';
 import { openOfferInPlan } from '../../parvane/taskOffer/taskOfferOpen';
 import { offerInPlanKey, parseOfferInPlanKey } from '../../parvane/taskOffer/taskOfferPlan';
@@ -27,6 +27,7 @@ type OwnProps = {
 };
 
 type StateProps = {
+  currentUserId?: string;
   usersById: Record<string, ApiUser>;
 };
 
@@ -39,7 +40,9 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 // «В календарь» — прежнее «Принять»: запись в плане и ответ-статус автору; после
 // неё — «В плане · открыть». «Отклонить» и решения участников — как раньше.
 // У Telegram такого сообщения нет (обоснование — план спеки, принцип VI)
-const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => {
+const TaskOffer = ({
+  message, taskOffer, currentUserId, usersById,
+}: OwnProps & StateProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
 
@@ -55,6 +58,12 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
     [getPlannerState, taskOffer.id],
   );
   const planned = useMemo(() => parseOfferInPlanKey(plannedKey), [plannedKey]);
+
+  // Состояние «Плана» поднимают его экраны; на устройстве, где «План» не открывали, карточка иначе не узнала бы,
+  // что задание уже в плане (второе устройство после привязки — e2e task_offer плавал)
+  useEffect(() => {
+    if (currentUserId) void loadPlanner(currentUserId);
+  }, [currentUserId]);
 
   const kind = getTaskOfferKind(taskOffer);
   const isEvent = kind === 'event';
@@ -165,5 +174,6 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
 };
 
 export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => ({
+  currentUserId: global.currentUserId,
   usersById: global.users.byId,
 }))(TaskOffer));
