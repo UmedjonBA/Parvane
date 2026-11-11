@@ -58,6 +58,22 @@ CP=$(start_client "$C" carol@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUPSEND
 wait_log "$CL" "AUTOGROUPSENDFILE → отправлено" 60 && ok "carol отправила файл" || bad "carol не отправила файл"
 tgx_logwait "v2 ← входящее msg [0-9a-f-]{36} \((file|photo)\)" 90 && ok "GROUP-2 (X): файл с правом показан" || bad "GROUP-2 (X): файл не пришёл"
 sleep 3; tgx_shot "$OUT/01-group.png"
+# 6) spec 035 T138 (GPHOTO-1, PV-005): фото частной группы ставит владелец (desktop) — X скачивает его по секрету из
+# журнала группы (секрет приходит после записи SetInfo теми же сведениями заново — скачать ещё раз, с ним)
+PNG="$OUT/group-photo.png"
+python3 - "$PNG" <<'PY'
+import struct, sys, zlib
+w = h = 96
+raw = b"".join(b"\x00" + b"".join(bytes(((40 + x) % 256, 120, (200 - y) % 256)) for x in range(w)) for y in range(h))
+def chunk(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+PY
+tgx_mark; stop_pid "$BP"
+BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOGROUPINFO=$G:avatar=$PNG")
+wait_log "$BL" "AUTOGROUPINFO '$G' avatar → ok" 60 && ok "bob (desktop) поставил фото группы" || bad "bob: фото группы не поставлено"
+tgx_logwait "фото группы [^ ]+ применено \(секрет: есть\)" 90 && ok "GPHOTO-1 (X): фото частной группы от desktop показано (по секрету)" \
+  || { bad "GPHOTO-1 (X): фото частной группы не применено"; grep -a "фото группы" "$TGX_LOG" | tail -5; }
+sleep 2; tgx_shot "$OUT/02-group-photo.png"
 stop_pid "$BP"; stop_pid "$CP"; stop_pid "$DP"
 tgx_no_crash
 kill "$TGX_LCP" 2>/dev/null

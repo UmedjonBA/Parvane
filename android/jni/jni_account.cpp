@@ -933,7 +933,8 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateAttach(JN
     }
 }
 
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSync(JNIEnv *env, jclass, jstring desiredJson, jstring kindsJson) {
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSync(JNIEnv *env, jclass, jstring desiredJson, jstring kindsJson,
+                                                                          jstring shownJson) {
     const auto s = v2Ready();
     if (!s) return jout(env, "");
     try {
@@ -941,7 +942,10 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSync(JNIE
         const auto kindsJ = json::parse(jstr(env, kindsJson), nullptr, false);
         std::vector<std::string> kinds;
         if (kindsJ.is_array()) for (const auto &k : kindsJ) if (k.is_string()) kinds.push_back(k.get<std::string>());
-        const auto r = s->stateSync(desired.is_object() ? desired : json(), kinds);
+        // База разницы — снимок, который шов показывал, строя desired (T124, как desktop): выданный ядром, но ещё не
+        // спроецированный снимок откатил бы правку другого устройства
+        const auto shown = json::parse(jstr(env, shownJson), nullptr, false);
+        const auto r = s->stateSync(desired.is_object() ? desired : json(), kinds, shown.is_object() ? shown : json());
         return jout(env, r.is_object() ? r.dump() : std::string());
     } catch (const std::exception &e) {
         LOGE("синк журнала состояния: %s", e.what());

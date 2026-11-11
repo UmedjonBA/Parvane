@@ -548,7 +548,7 @@
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы — contentHidden; пересылка в группу — canSendContent; composer — defaultRestrictions)",
           "тест desktop/verify_conformance_perms.sh"
         ],
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember — своя формула шва; перевод на contentHidden / capabilities модели — T136, в работе, android-ветка не слита) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"
+        "android": "решение — движок (groupContentHidden; spec 035 T136): android/libtd/src/main/java/org/parvane/core/ParvaneProtocol.kt (groupContentHidden) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"
       }
     },
     {
@@ -1364,7 +1364,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (task_offer/task_response), taskOffers.ts (TaskOfferStore), sync.ts (handleTaskOfferContent), messages.ts (parvaneSendTaskOffer, parvaneRespondTaskOffer, addTaskOfferToPlan); тесты taskOffers.test.ts, protocol.vectors.test.ts; сценарий scripts/e2e_web_task_offer.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: task_offer/task_response → карточка, как web), include/parvane/messenger.h (contentText: карточка показывается полем text); тест tests/v2_tests.cpp (task_offer туда и обратно; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: task_offer, task_response → MessageText — текст из поля text); spec 031: карточка с кнопками «В план»/«В календарь»/«Отклонить» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt), нажатие — GetCallbackQueryAnswer → onCardPress в Client.kt → «План» ядра (offerAccept/offerResponse) — тесты ProtocolV2SeamTest.kt taskOfferShowsAsText, CardsTest.offerButtonsDependOnKindAndDecision (JVM)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/MessageContents.kt (contentFrom: вид без экрана X → MessageText — текст из поля text, spec 035 T136); spec 031: карточка с кнопками «В план»/«В календарь»/«Отклонить» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt), нажатие — GetCallbackQueryAnswer → onCardPress в Client.kt → «План» ядра (offerAccept/offerResponse) — тесты ProtocolV2SeamTest.kt taskOfferShowsAsText, CardsTest.offerButtonsDependOnKindAndDecision (JVM)"
       }
     },
     {
@@ -1406,7 +1406,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (cloud_invite), store.ts (текст сообщения), v2/cloud.ts (answerInvite); тест protocol.vectors.test.ts; сценарий scripts/e2e_web_cloud_share.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: cloud_invite → карточка), include/parvane/messenger.h (contentText: показ полем text); тест tests/v2_tests.cpp (cloud_invite туда и обратно; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: cloud_invite → MessageText); тест ProtocolV2SeamTest.kt cloudInviteShowsAsText (приглашение — текстом; кнопки «Принять» у android нет); spec 031: раздел «Облако» (android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/CloudController.kt над android/jni/jni_sections.cpp) показывает совместные папки, где аккаунт уже участник, и выход из них; сценарий android/tgx_sections_flow.sh"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/MessageContents.kt (contentFrom: вид без экрана X → MessageText, spec 035 T136); тест ProtocolV2SeamTest.kt cloudInviteShowsAsText (приглашение — текстом; кнопки «Принять» у android нет); spec 031: раздел «Облако» (android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/CloudController.kt над android/jni/jni_sections.cpp) показывает совместные папки, где аккаунт уже участник, и выход из них; сценарий android/tgx_sections_flow.sh"
       }
     },
     {
@@ -1456,7 +1456,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (article), store.ts (карточка), components/middle/message/ArticleCard.tsx, components/parvane/article/*, components/parvane/markdown/* (разбор и показ, общие с заметками; встроенные файлы — `article.media`); тест protocol.vectors.test.ts, markdown.test.ts; сценарий scripts/e2e_web_article.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: article → карточка с медиа), include/parvane/messenger.h (contentText: показ полем text); тест tests/v2_tests.cpp (article → v2 с картинкой; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: article → MessageText); тест ProtocolV2SeamTest.kt articleShowsAsText; spec 031: кнопки «Читать» и «В заметки» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt, Client.kt onCardPress → «Знания» ядра)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/MessageContents.kt (contentFrom: вид без экрана X → MessageText, spec 035 T136); тест ProtocolV2SeamTest.kt articleShowsAsText; spec 031: кнопки «Читать» и «В заметки» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt, Client.kt onCardPress → «Знания» ядра)"
       }
     },
     {
@@ -1475,7 +1475,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (mod_report), store.ts (buildModReportContent), messages.ts (reportMessages: причина → комментарий → админам группы либо администратору сервера; подпись автора из истории — `proof`), v2/engine.ts (verifyMessageProof), components/middle/message/ModReportCard.tsx (A0008-2: «Автор подтверждён подписью»); тест store.test.ts (mod report proofs); сценарий scripts/e2e_web_reports.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (toV2/fromV2: mod_report ↔ v2, как web), include/parvane/messenger.h (contentText: показ полем text), src/v2_session_account.cpp (submitReport — жалоба администратору сервера: sealReport движка ключом report_public_key, identity.report.submit); tdesktop parvane_client.cpp (ReportMessages из штатного окна api_report.cpp; CardMarkup — карточка у админа «Удалить сообщения»/«Заблокировать в группе», HandleCardButton pv:moddel/pv:modban); тест tests/v2_tests.cpp (mod_report туда и обратно; карточка mod_report показывается текстом); A0008-2: StoredMessage.proof, validateModReport(…, verifyProof), v2::verifyMessageProof, parvane_client.cpp (CheckModReport, ReportMessages прикладывает подпись) — тест v2_tests.cpp («жалоба: нет в истории — только с верной подписью автора-участника»)",
-        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt reportChat (штатное окно жалобы X: причина → комментарий → карточкой mod_report админам группы с правом удалять/банить, иначе — администратору сервера ParvaneCore.submitReport → android/jni/jni_groups.cpp nativeSubmitReport → Session::submitReport, identity.report.submit); у админа — карточка с кнопками «Удалить сообщения»/«Заблокировать» после проверки своими данными (nativeCheckModReport → validateModReport ядра; android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt); без проверки — поле text (ParvaneStore.kt contentFrom) — тест CardsTest.modReportOnlyWhenCheckedAndArticleAlways (JVM); A0008-2: подпись автора — jni MsgRow.proof/nativeMessageProof, Client.kt reportChat прикладывает, nativeCheckModReport принимает не из истории только с верной подписью; сценарий android/tgx_account_flow.sh шаг 1 (жалоба X на чат через штатный путь ReportChat → администратору сервера, «жалоба (spam) → sent»)"
+        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt reportChat (штатное окно жалобы X: причина → комментарий → карточкой mod_report админам группы с правом удалять/банить, иначе — администратору сервера ParvaneCore.submitReport → android/jni/jni_groups.cpp nativeSubmitReport → Session::submitReport, identity.report.submit); у админа — карточка с кнопками «Удалить сообщения»/«Заблокировать» после проверки своими данными (nativeCheckModReport → validateModReport ядра; android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt); без проверки — поле text (MessageContents.kt contentFrom) — тест CardsTest.modReportOnlyWhenCheckedAndArticleAlways (JVM); A0008-2: подпись автора — jni MsgRow.proof/nativeMessageProof, Client.kt reportChat прикладывает, nativeCheckModReport принимает не из истории только с верной подписью; сценарий android/tgx_account_flow.sh шаг 1 (жалоба X на чат через штатный путь ReportChat → администратору сервера, «жалоба (spam) → sent»)"
       }
     },
     {

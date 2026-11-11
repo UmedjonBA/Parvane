@@ -120,7 +120,7 @@ class ClientHonestUiTest {
     @Test
     fun receiveFilterAndPendingRequestsWired() {
         val src = clientSource()
-        assertTrue(src.contains("ParvaneStore.isContentAllowedForMember("))
+        assertTrue(src.contains("ParvaneProtocol.groupContentHidden("))
         assertTrue(src.contains("скрыто правами группы"))
         assertTrue(src.contains("UpdateChatPendingJoinRequests"))
     }

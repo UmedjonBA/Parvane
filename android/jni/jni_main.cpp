@@ -141,6 +141,39 @@ void emitNow(const json &event) {
     callOnEvents(env, {event.dump()});
 }
 
+// spec 035 T137: записи старых мест профиля — Kotlin `ParvaneCore.legacyRecords(dir, self)` (MigrateLegacy.kt).
+// Зовёт ядро на потоке сессии (не поток JVM — присоединяется на время вызова). Не вышло — json() (ядро соберёт своё).
+json legacyRecordsFromKotlin(const std::string &dir, const std::string &self) {
+    if (!g_vm || !g_coreClass) return json();
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return json();
+        attached = true;
+    }
+    json out;
+    const jmethodID m = env->GetStaticMethodID(g_coreClass, "legacyRecords", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if (m) {
+        jstring d = jout(env, dir);
+        jstring u = jout(env, self);
+        auto r = static_cast<jstring>(env->CallStaticObjectMethod(g_coreClass, m, d, u));
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        else if (r) {
+            const auto text = jstr(env, r);
+            if (!text.empty()) out = json::parse(text, nullptr, false);
+            env->DeleteLocalRef(r);
+        }
+        env->DeleteLocalRef(d);
+        env->DeleteLocalRef(u);
+    } else if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (attached) { // разовый вызов на потоке сессии (перенос) — поток отсоединяется сразу
+        g_vm->DetachCurrentThread();
+    }
+    return out.is_object() ? out : json();
+}
+
 void noteFederationFailure(const std::string &error) {
     static const std::pair<const char *, const char *> kReasons[] = {
         {"FEDERATION_UNAVAILABLE", "disabled"}, {"DOMAIN_BLOCKED", "blocked"}, {"DOMAIN_REFUSED", "refused"},
@@ -643,6 +676,52 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JN
 }
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { historyReplay(); }
+
+// spec 035 T137: открытый текст файла хранилища байтами как есть (разовый перенос: экспорт движка — двоичный).
+// JSONL — построчно (каждая строка шифруется отдельно), остальное — целиком; null — файла нет либо не открылся.
+JNIEXPORT jbyteArray JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreReadPlain(JNIEnv *env, jclass, jstring pathJ) {
+    const auto path = jstr(env, pathJ);
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return nullptr;
+    const std::string raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::optional<std::string> plain;
+    if (path.size() > 6 && path.compare(path.size() - 6, 6, ".jsonl") == 0) {
+        std::string out;
+        std::size_t pos = 0;
+        bool okAll = true;
+        while (pos < raw.size()) {
+            auto nl = raw.find('\n', pos);
+            if (nl == std::string::npos) nl = raw.size();
+            const auto line = raw.substr(pos, nl - pos);
+            pos = nl + 1;
+            if (line.empty()) continue;
+            const auto p = parvane::storecrypt::openLine(line);
+            if (!p) { okAll = false; break; }
+            out += *p;
+            out += '\n';
+        }
+        if (okAll) plain = std::move(out);
+    } else {
+        plain = parvane::storecrypt::open(raw);
+    }
+    if (!plain) return nullptr;
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(plain->size()));
+    if (arr && !plain->empty())
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(plain->size()), reinterpret_cast<const jbyte *>(plain->data()));
+    return arr;
+}
+
+// spec 035 T133 (debug): выгрузка модели движка после переноса — сверка с выгрузкой прежнего кода
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeModelAuditDump(JNIEnv *env, jclass) {
+    try {
+        if (!g_debugBuild) return jout(env, std::string());
+        const auto s = v2Any();
+        return jout(env, s ? s->modelAuditDump() : std::string());
+    } catch (const std::exception &e) {
+        LOGE("выгрузка модели не снята: %s", e.what());
+        return jout(env, std::string());
+    }
+}
 
 // spec 035, T007: выгрузка «ничего не потеряно» (debug) — e2e-команда audit_dump
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeAuditDump(JNIEnv *env, jclass) {

@@ -77,21 +77,19 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativeOwnChatMod
                                                            jstr(env, opId), static_cast<std::int64_t>(nowSec)));
 }
 
-// v1-содержимое → Content v2 ("" — вид не поддержан v2, идёт по v1).
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativeToV2(
-        JNIEnv *env, jclass, jstring v1Json, jstring replyTo) {
-    const auto v1 = json::parse(jstr(env, v1Json), nullptr, false);
-    if (v1.is_discarded()) return parvane::jniutf::toJava(env, "");
-    const auto m = parvane::v2::toV2(v1, jstr(env, replyTo));
-    return parvane::jniutf::toJava(env, m ? m->dump() : std::string());
-}
-
-// Content v2 → v1-содержимое ("" — не сообщение: мутация/служебное/незнакомое).
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativeFromV2(JNIEnv *env, jclass, jstring v2Json) {
-    const auto v2 = json::parse(jstr(env, v2Json), nullptr, false);
-    if (v2.is_discarded()) return parvane::jniutf::toJava(env, "");
-    const auto m = parvane::v2::fromV2(v2);
-    return parvane::jniutf::toJava(env, m ? m->dump() : std::string());
+// spec 035 T136 (ENGINE-1): статические вызовы движка без клиента по имени (`contentOfWire`, `contentView`, …) —
+// виды содержимого разбирает движок, не шов. "" — ошибка движка либо неизвестное имя.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativeEngineStatic(
+        JNIEnv *env, jclass, jstring name, jstring argsJson) {
+    try {
+        const auto args = json::parse(jstr(env, argsJson), nullptr, false);
+        if (!args.is_object()) return parvane::jniutf::toJava(env, "");
+        const auto out = parvane::v2::engineCall(jstr(env, name), args);
+        if (out.is_null() || (out.is_object() && out.contains("error") && out.size() == 1)) return parvane::jniutf::toJava(env, "");
+        return parvane::jniutf::toJava(env, out.dump());
+    } catch (const std::exception &) {
+        return parvane::jniutf::toJava(env, "");
+    }
 }
 
 // proto3-JSON ↔ base64 байтов сообщения протокола (журнал состояния T098:

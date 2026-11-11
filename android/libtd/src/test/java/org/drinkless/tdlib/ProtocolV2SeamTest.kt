@@ -105,7 +105,7 @@ class ProtocolV2SeamTest {
 
     @Test
     fun mutationsAndServiceKindsAreNotMessages() {
-        val ref = ParvaneProtocol.toV2("""{"kind":"text","text":"t"}""", op)!!.getJSONObject("reply_to")
+        val ref = ParvaneProtocol.contentOfWire("""{"kind":"text","text":"t"}""", op)!!.getJSONObject("reply_to")
         val cases = mapOf(
             """{"edit":{"target":$ref,"text":{"text":"new"}}}""" to "edit",
             """{"delete":{"targets":[$ref],"for_everyone":true}}""" to "delete",
@@ -124,15 +124,15 @@ class ProtocolV2SeamTest {
     }
 
     @Test
-    fun v1ContentMapsToV2AndUnknownStaysOnV1() {
-        val t = ParvaneProtocol.toV2("""{"kind":"text","text":"hi"}""")
+    fun wireContentMapsToV2ByEngineAndUnknownIsRejected() {
+        val t = ParvaneProtocol.contentOfWire("""{"kind":"text","text":"hi"}""")
         assertNotNull(t)
         assertEquals("hi", t!!.getJSONObject("text").getString("text"))
-        val photo = ParvaneProtocol.toV2("""{"kind":"photo","file_id":"f1","mime":"image/jpeg","file_key":"k","file_nonce":"n"}""")
+        val photo = ParvaneProtocol.contentOfWire("""{"kind":"photo","file_id":"f1","mime":"image/jpeg","file_key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","file_nonce":"AAECAwQFBgcICQoL"}""")
         assertNotNull(photo)
         assertEquals("f1", photo!!.getJSONObject("media").getString("file_id"))
         // служебные ключи групп v1 — не содержимое v2 (идут по v1)
-        assertNull(ParvaneProtocol.toV2("""{"kind":"skdm","group":"g"}"""))
+        assertNull(ParvaneProtocol.contentOfWire("""{"kind":"skdm","group":"g"}"""))
     }
 
     @Test

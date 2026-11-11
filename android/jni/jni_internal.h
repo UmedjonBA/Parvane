@@ -97,10 +97,16 @@ void emitNow(const json &event); // синхронно (реплей журна�
 // FED-1: отказ федерации (код в тексте ошибки) → событие federation_error{reason} (disabled|blocked|refused|unreachable|
 // key_changed); остальные ошибки — ничего. Как desktop NoteFederationFailure / web federationReason.
 void noteFederationFailure(const std::string &error);
+// spec 035 T137: записи старых мест профиля для разового переноса — Kotlin MigrateLegacy.kt (json() — не вышло)
+[[nodiscard]] json legacyRecordsFromKotlin(const std::string &dir, const std::string &self);
 
 // ── журнал истории аккаунта (spec 033, jni_history.cpp; ядро parvane::history::HistorySync) ─────────────
 // Строки RowState (FileRowStore ядра), маркеры «прочитано до», события шва message/edited/meta/deleted/read_state.
 void historyStart();   // рабочий поток журнала (после старта сессии v2)
+// spec 035 T137: пока не закончен разовый перенос прежнего состояния в модель, рабочий поток журнала истории не
+// стартует (он применяет свои отложенные операции к старым файлам истории — перенос читал бы их уже другими);
+// снятие удержания запускает отложенный historyStart.
+void historyHold(bool hold);
 void historyReset();   // выход, смена аккаунта, смена ника: остановить и забыть
 void historySessionEvent(const json &ev); // {"type":"journal","journal":"history"} | stateReady
 // Домен группы для Peer строк журнала; authoritative = false (из строк журнала) — только если ещё не известен.

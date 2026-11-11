@@ -20,14 +20,15 @@ import org.json.JSONObject
  * адресация — через [Codec]/[Resolver].
  */
 class StateJournal(private val codec: Codec, private val resolver: Resolver) {
-    /** proto3-JSON ↔ байты сообщений протокола (base64) и v1 ↔ v2 содержимое. */
+    /** proto3-JSON ↔ байты сообщений протокола (base64); содержимое — разбор движка (spec 035 T136, ENGINE-1:
+     *  шов не переводит виды сам — статические вызовы движка `contentOfWire`/`contentView`, как web contentMap.ts). */
     interface Codec {
         fun encode(type: String, json: String): String
         fun decode(type: String, b64: String): String
-        /** v1-содержимое → Content v2 ("" — вид не поддержан). */
-        fun toV2(v1Json: String, replyTo: String): String
-        /** Content v2 → v1-содержимое ("" — не сообщение). */
-        fun fromV2(v2Json: String): String
+        /** Содержимое формата экспорта (`{kind, text, …}`) → Content (proto3-JSON) движком; "" — не собрано. */
+        fun contentOfWire(wireJson: String, replyTo: String): String
+        /** Content (proto3-JSON) → содержимое формата экспорта (`contentView.wire` движка); "" — не сообщение. */
+        fun wireOf(contentJson: String): String
     }
 
     /** Адрес собеседника/группы ↔ chatId шва; домен сервера (группы в журнале). */
@@ -191,7 +192,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
             val text = d.optString("text"); if (text.isEmpty()) return@forEach
             val v1 = JSONObject().put("kind", "text").put("text", text)
             d.optJSONArray("entities")?.let { v1.put("entities", it) }
-            val v2Text = codec.toV2(v1.toString(), "").takeIf { it.isNotEmpty() }?.let { JSONObject(it).optJSONObject("text") } ?: return@forEach
+            val v2Text = codec.contentOfWire(v1.toString(), "").takeIf { it.isNotEmpty() }?.let { JSONObject(it).optJSONObject("text") } ?: return@forEach
             val bytes = codec.encode("parvane.msg.v2.Text", v2Text.toString()).takeIf { it.isNotEmpty() } ?: return@forEach
             drafts.put(JSONObject().put("peer", peer).put("text", bytes).put("date_ms", (d.optLong("date") * 1000).toString()))
         }
@@ -203,7 +204,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         queue.all().forEach { item ->
             if (item.localPath != null) return@forEach // медиа отложенного — локальная копия, в журнал не переносится
             val peer = peerOf(item.to) ?: return@forEach
-            val content = codec.toV2(item.content.toString(), item.replyTo ?: "").takeIf { it.isNotEmpty() } ?: return@forEach
+            val content = codec.contentOfWire(item.content.toString(), item.replyTo ?: "").takeIf { it.isNotEmpty() } ?: return@forEach
             val bytes = codec.encode("parvane.msg.v2.Content", content).takeIf { it.isNotEmpty() } ?: return@forEach
             val op = uuidToB64(item.uuid) ?: return@forEach
             scheduled.put(JSONObject().put("op_id", op).put("peer", peer).put("send_at_ms", (item.due * 1000).toString()).put("content", bytes))
@@ -354,7 +355,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
             val chatId = addressOf(d.optJSONObject("peer"))?.let(resolver::chatIdOf) ?: continue
             val t = d.optString("text").takeIf { it.isNotEmpty() } ?: continue
             val v2Text = codec.decode("parvane.msg.v2.Text", t).takeIf { it.isNotEmpty() } ?: continue
-            val v1 = codec.fromV2(JSONObject().put("text", JSONObject(v2Text)).toString()).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
+            val v1 = codec.wireOf(JSONObject().put("text", JSONObject(v2Text)).toString()).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
             val text = v1.optString("text"); if (text.isEmpty()) continue
             val o = JSONObject().put("text", text).put("date", (d.optString("date_ms").toLongOrNull() ?: 0L) / 1000)
             v1.optJSONArray("entities")?.let { o.put("entities", it) }
@@ -419,7 +420,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
             val address = addressOf(s.optJSONObject("peer")) ?: continue
             val chatId = resolver.chatIdOf(address) ?: continue
             val v2 = codec.decode("parvane.msg.v2.Content", s.optString("content")).takeIf { it.isNotEmpty() } ?: continue
-            val v1 = codec.fromV2(v2).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
+            val v1 = codec.wireOf(v2).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
             val replyTo = JSONObject(v2).optJSONObject("reply_to")?.optString("op_id")?.let(::b64ToUuid)
             val due = (s.optString("send_at_ms").toLongOrNull() ?: 0L) / 1000
             ch.scheduledAdded += queue.add(uuid, chatId, address, v1, null, replyTo, due)

@@ -1025,11 +1025,15 @@ describe('GROUP-2: права по типу содержимого соблюд�
     expect(String(rule2.clients!.desktop)).toContain('verify_conformance_perms.sh');
   });
 
-  it('android: та же формула в ParvaneStore и фильтр при приёме', () => {
+  // spec 035 T136 (ENGINE-1): android передаёт решение движку (`groupContentHidden`), своей формулы нет
+  it('android: фильтр при приёме — решение движка, своей таблицы видов нет', () => {
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
-    expect(store).toMatch(/fun isContentAllowedForMember\(/);
+    expect(store).not.toMatch(/fun isContentAllowedForMember\(|MEDIA_KINDS|STICKER_KINDS/);
     const client = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt');
-    expect(client).toMatch(/isContentAllowedForMember\(/);
+    expect(client).toMatch(/ParvaneProtocol\.groupContentHidden\(/);
+    expect(client).toMatch(/скрыто правами группы/);
+    expect(readRepo('android/libtd/src/main/java/org/parvane/core/ParvaneProtocol.kt'))
+      .toContain('nativeEngineStatic("groupContentHidden"');
     expect(String(rule2.clients!.android)).toContain('ParvaneStorePermsTest');
   });
 });
@@ -2034,8 +2038,8 @@ describe('TASK-1: задание в чат — видимые сообщения
     expect(tests).toContain('" показывается текстом"');
     expect(tests).toContain('task_offer туда и обратно без потерь');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
-    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
-    expect(store).toContain('"task_offer", "task_response" -> textContent(c)');
+    expect(readAndroidKt('MessageContents.kt'))
+      .toContain('else -> if (org.parvane.core.ParvaneProtocol.contentOfWire(c.toString()) != null) textContent(c)');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
       .toContain('taskOfferShowsAsText');
     expect(r.clients.android).toContain('taskOfferShowsAsText');
@@ -2149,8 +2153,8 @@ describe('CLOUD-1: приглашение в папку облака — вид�
       .toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite туда и обратно');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
-    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
-    expect(store).toContain('"cloud_invite" -> textContent(c)');
+    expect(readAndroidKt('MessageContents.kt'))
+      .toContain('else -> if (org.parvane.core.ParvaneProtocol.contentOfWire(c.toString()) != null) textContent(c)');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
       .toContain('cloudInviteShowsAsText');
     expect(r.clients.android).toContain('cloudInviteShowsAsText');
@@ -2182,8 +2186,8 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
       .toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article → v2 с картинкой');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
-    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
-    expect(store).toContain('"article" -> textContent(c)');
+    expect(readAndroidKt('MessageContents.kt'))
+      .toContain('else -> if (org.parvane.core.ParvaneProtocol.contentOfWire(c.toString()) != null) textContent(c)');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
       .toContain('articleShowsAsText');
     expect(r.clients.android).toContain('articleShowsAsText');
@@ -2246,7 +2250,8 @@ describe('REPORT-1: жалоба админам группы — карточк�
 
   // spec 031: android шлёт жалобы из штатного окна X, админу — карточка с кнопками после проверки своими данными
   it('android: жалоба разбирается, показывается и отправляется', () => {
-    expect(readAndroidKt('ParvaneStore.kt')).toContain('"mod_report" -> textContent(c)');
+    expect(readAndroidKt('MessageContents.kt'))
+      .toContain('else -> if (org.parvane.core.ParvaneProtocol.contentOfWire(c.toString()) != null) textContent(c)');
     const client = readAndroidKt('Client.kt');
     expect(client)
       .toContain('private fun reportChat(chatId: Long, optionId: String, messageIds: LongArray, comment: String)');
@@ -3515,12 +3520,29 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(queue).not.toMatch(/deliver_\(\{s\}\)/);
   });
 
-  // Остаток T136 (модель движка целиком — у другой работы): входящие пока разбирает прежний путь ядра (v2_content.cpp
-  // → событие ядра → ParvaneStore.kt), показ личного состояния — из снимка формы state.v1 (stateViewV1)
-  it.fails('ParvaneStore.kt — содержимое из MessageView модели, своего разбора видов нет (T136)', () => {
+  // T136: в ParvaneStore.kt нет перевода содержимого; MessageContents.kt только раскладывает готовое содержимое движка
+  // (формат экспорта, `MessageView.wire`) в TdApi — видов, которых у X нет своим экраном, он не знает (CONTENT-1: текст)
+  it('ParvaneStore.kt — без разбора видов; MessageContents.kt без списка видов вне X (T136)', () => {
     expect(strip(readAndroidKt('ParvaneStore.kt'))).not.toMatch(/when \(kind\)|"task_offer"|"cloud_invite"/);
+    const contents = strip(readAndroidKt('MessageContents.kt'));
+    expect(contents).not.toMatch(/"task_offer"|"task_response"|"cloud_invite"|"article"|"mod_report"/);
+    expect(contents)
+      .toContain('else -> if (org.parvane.core.ParvaneProtocol.contentOfWire(c.toString()) != null) textContent(c)');
   });
-  it.fails('StateJournal.kt — показ из StateView модели, без перекладки v1 ↔ v2 содержимого (T136)', () => {
-    expect(strip(readAndroidKt('StateJournal.kt'))).not.toMatch(/fun toV2\(|fun fromV2\(/);
+  // Перекладку содержимого журнала состояния (черновики, отложенные) делает движок (`contentOfWire`, `contentView`)
+  it('StateJournal.kt — содержимое журнала переводит движок, без перекладки v1 ↔ v2 в шве (T136)', () => {
+    const journal = strip(readAndroidKt('StateJournal.kt'));
+    expect(journal).not.toMatch(/fun toV2\(|fun fromV2\(/);
+    expect(journal).toContain('codec.contentOfWire(');
+    expect(journal).toContain('codec.wireOf(');
+    const protocol = readRepo('android/libtd/src/main/java/org/parvane/core/ParvaneProtocol.kt');
+    expect(protocol).toContain('nativeEngineStatic("contentOfWire"');
+    expect(protocol).toContain('nativeEngineStatic("contentView"');
+    expect(readAndroidJni('protocol_jni.cpp')).not.toMatch(/parvane::v2::(toV2|fromV2)\(/);
+  });
+  // Остаток T136: показ личного состояния — из снимка формы state.v1 (stateViewV1 модели), не из StateView объектов;
+  // строки истории — у журнала ядра (jni_history.cpp), не rowsApply модели (как desktop T125 — модель строк не ведёт)
+  it.fails('StateJournal.kt — показ из StateView модели (объекты), не из снимка формы state.v1 (T136)', () => {
+    expect(strip(readAndroidKt('StateJournal.kt'))).not.toMatch(/fun project\(snap: JSONObject/);
   });
 });
