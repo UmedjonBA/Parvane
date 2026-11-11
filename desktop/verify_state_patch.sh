@@ -5,7 +5,8 @@
 # сведение по полям (регистр на поле, патч `set`/`clear`), а не «последняя запись объекта целиком» (LWW по объекту
 # теряет одно из двух). Падает без правки: прежний журнал state.v1 сводит объект целиком, а с spec 035 сервер
 # прежнюю запись state.append и вовсе отвергает (UPGRADE_REQUIRED).
-# Пара с web (тот же сценарий web ↔ desktop) — после T114 web: scripts/run_protocol_mixed_e2e.sh state-patch-desktop.
+# Пара с web (тот же сценарий web ↔ desktop): scripts/run_protocol_mixed_e2e.sh state-patch-desktop.
+# Заодно «В избранное» у стикера между устройствами (spec 035 T126, FR-075).
 # Бинарь tdesktop — с -DPARVANE_DEV=ON (хуки PARVANE_AUTO*). Данные — выдуманные.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 S=$(date +%s)
@@ -52,11 +53,19 @@ wait_log "$L2" "autopatch folder-add «Работа» → carol@local" 40 && wai
 sleep 2; stop_pid "$P2"
 
 # ── обе в сети: правки дошли друг до друга, ни одна не потеряна ──────────────
+# И «В избранное» у стикера (spec 035 T126, FR-075): alice1 отмечает стикер своего набора, alice2 (тот же набор на
+# устройстве) видит его в «Избранном» — объект FAVED_STICKER журнала state.v2, ссылка как у web (sticker-ref.json)
+SD="$SB/stickers"; mkdir -p "$SD/Котики"
+python3 -c "import struct,zlib,sys
+def ch(t,d): return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+raw=b''.join(b'\x00'+b'\xff\x80\x00\xff'*8 for _ in range(8))
+sys.stdout.buffer.write(b'\x89PNG\r\n\x1a\n'+ch(b'IHDR',struct.pack('>IIBBBBB',8,8,8,6,0,0,0))+ch(b'IDAT',zlib.compress(raw))+ch(b'IEND',b''))" \
+  > "$SD/Котики/01-1f602.png"
 DUMP="PARVANE_AUTOPATCH=dump|Работа|bob@local@40,dump|Работа|bob@local@70"
-P1=$(start_client "$A1" alice@local "$DUMP")
+P1=$(start_client "$A1" alice@local "$DUMP,fave|Котики|01-1f602.png@50,faved|-|-@90" "PARVANE_STICKERS_DIR=$SD")
 wait_log "$L1" "журнал личного состояния подключён" 90 || bad "alice1: журнал не подключён"
 sleep 5
-P2=$(start_client "$A2" alice@local "$DUMP")
+P2=$(start_client "$A2" alice@local "$DUMP,faved|-|-@100,faved|-|-@130,faved|-|-@160" "PARVANE_STICKERS_DIR=$SD")
 wait_log "$L2" "журнал личного состояния подключён" 90 || bad "alice2: журнал не подключён"
 want="autopatch dump папка «Работа\+дом» чаты \[bob@local carol@local\]; контакт bob@local имя «Бобби» заметка «сосед по даче»"
 wait_log "$L2" "$want" 90 && ok "alice2: название папки alice1 и свой чат, своё имя alice1 и своя заметка — всё на месте" \
@@ -64,6 +73,10 @@ wait_log "$L2" "$want" 90 && ok "alice2: название папки alice1 и �
 wait_log "$L1" "$want" 90 && ok "alice1: чат и заметка alice2 пришли, свои правки на месте" \
   || bad "alice1: потеряна правка ($(grep -a 'autopatch dump' "$L1" | tail -1 | sed 's/.*autopatch dump //'))"
 
+wait_log "$L1" "autopatch fave pvpk-[0-9]+:[0-9]+ → в избранном" 90 && wait_log "$L1" "стикер pvpk-[0-9]+:[0-9]+ в избранного — записано в журнал" 60 \
+  && ok "alice1: стикер своего набора — в избранном, записано в журнал" || bad "alice1: стикер не добавлен в избранное"
+wait_log "$L2" "autopatch faved \[pvpk-[0-9]+:[0-9]+\]" 180 && ok "alice2: стикер alice1 в «Избранном» (FAVED_STICKER)" \
+  || bad "alice2: избранное не пришло ($(grep -a 'autopatch faved' "$L2" | tail -1 | sed 's/.*autopatch faved //'))"
 grep -qiE "Fatal|Unexpected in " "$L1" "$L2" && bad "фатальная ошибка" || ok "без фатальных ошибок"
 stop_pid "$P1"; stop_pid "$P2"
 stack_stop

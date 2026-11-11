@@ -15,6 +15,10 @@
 #include <string_view>
 #include <vector>
 
+namespace parvane::store_fs {
+struct FsOps;
+}
+
 namespace parvane::storecrypt {
 
 inline constexpr char kMagic[] = "PVSE1";
@@ -43,7 +47,9 @@ void setRequired(bool required);
 [[nodiscard]] std::optional<std::string> openLine(const std::string &line);
 
 // Файловые хелперы: чтение с расшифровкой ("" — нет файла/не открылся),
-// атомарная запись (tmp + rename, права 0600) с шифрованием.
+// атомарная запись с шифрованием, долговечно, как хранилище движка store_fs (spec 035 T129, FR-028): временный
+// файл (права 0600) → fsync файла → rename → fsync каталога; дозапись строки — fsync файла (новый файл — и каталога).
+// Запись вернула true — данные на диске (раньше подтверждения серверу, SYNC-1).
 [[nodiscard]] std::string readFile(const std::string &path);
 bool writeFile(const std::string &path, const std::string &data);
 // Строки JSONL-файла (пустые пропущены; нечитаемые — пропущены).
@@ -69,6 +75,8 @@ int removePrefixed(const std::string &dir, const std::string &prefix, const std:
 // разделов, журнал истории, кэш) не пересоздаёт стёртый файл: запись либо закончилась до ограды (и стирается
 // вслед за ней), либо отклонена. Desktop ставит ограду при выходе со стиранием и снимает при следующем входе.
 void blockWrites();
+// Слой ФС записей хелперов (тесты: порядок fsync/rename и отказ на шаге); nullptr — настоящая ФС (POSIX).
+void setFsForTests(store_fs::FsOps *fs);
 void allowWrites();
 [[nodiscard]] bool writesBlocked();
 

@@ -1,0 +1,9 @@
+{
+  "comment": "FR-075 (spec 035 T116/T126): ссылка на стикер в избранном (FAVED_STICKER: set_id, sticker_id) — одна для web и desktop: set_id = \"pvpk-\" + (FNV-1a-32 по кодовым единицам UTF-16 строки \"pack:<имя набора>\") >>> 1, sticker_id = set_id + \":\" + (FNV-1a-32 UTF-16 имени файла в архиве набора) >>> 1 — как web stickerPacks.ts getSetIdForPackName/buildStickerId. Читают web clientVectors.test.ts и desktop webcompat_tests.cpp; данные выдуманные",
+  "cases": [
+    { "name": "Котики", "file": "01-1f602.webp", "set_id": "pvpk-453434671", "sticker_id": "pvpk-453434671:1293613505" },
+    { "name": "Pack", "file": "sticker.png", "set_id": "pvpk-400503131", "sticker_id": "pvpk-400503131:341077412" },
+    { "name": "My Pack_2-x", "file": "😀 смайл.tgs", "set_id": "pvpk-186742930", "sticker_id": "pvpk-186742930:1787176209" },
+    { "name": "Stickers", "file": "a.webm", "set_id": "pvpk-1407537099", "sticker_id": "pvpk-1407537099:113231491" }
+  ]
+}

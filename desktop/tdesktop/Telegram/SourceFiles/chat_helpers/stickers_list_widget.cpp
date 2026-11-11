@@ -52,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/clip/media_clip_reader.h"
 #include "apiwrap.h"
 #include "api/api_toggling_media.h" // Api::ToggleFavedSticker
+#include "parvane/parvane_client.h" // CanFaveSticker (FR-075)
 #include "api/api_premium.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_window.h"
@@ -2594,10 +2595,10 @@ base::unique_qptr<Ui::PopupMenu> StickersListWidget::fillContextMenu(
 			document,
 			Data::FileOriginStickerSet(Data::Stickers::FavedSetId, 0));
 	};
-	// Parvane: «Избранное» стикеров (messages.faveSticker) и окно набора (messages.getStickerSet) — MTProto.
+	// Parvane: окно набора (messages.getStickerSet) — MTProto; «Избранное» — журнал личного состояния (FR-075)
 	constexpr auto kParvaneStickerCloud = false;
 	const auto isFaved = document->owner().stickers().isFaved(document);
-	if (kParvaneStickerCloud) {
+	if (isFaved || Parvane::CanFaveSticker(document)) {
 		menu->addAction(
 			(isFaved
 				? tr::lng_faved_stickers_remove

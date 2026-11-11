@@ -1,5 +1,6 @@
 // Parvane fork: тесты шифрования локального хранилища (P-13).
 #include "parvane/storecrypt.h"
+#include "parvane/store_fs.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -19,11 +20,63 @@ static std::string raw(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
+// spec 035 T129: запись хелперов долговечна, как store_fs — журнал шагов слоя ФС поверх настоящей ФС
+struct RecordingFs final : parvane::store_fs::FsOps {
+    parvane::store_fs::FsOps &real = parvane::store_fs::posixFs();
+    std::vector<std::string> steps;
+    int openWrite(const std::string &p) override { steps.push_back("open"); return real.openWrite(p); }
+    int openAppend(const std::string &p) override { steps.push_back("append"); return real.openAppend(p); }
+    bool writeAll(int fd, const void *d, size_t n) override { steps.push_back("write"); return real.writeAll(fd, d, n); }
+    bool fsyncFd(int fd) override { steps.push_back("fsync"); return real.fsyncFd(fd); }
+    bool closeFd(int fd) override { steps.push_back("close"); return real.closeFd(fd); }
+    bool fsyncDir(const std::string &d) override { steps.push_back("fsyncdir"); return real.fsyncDir(d); }
+    bool rename(const std::string &a, const std::string &b) override { steps.push_back("rename"); return real.rename(a, b); }
+    bool remove(const std::string &p) override { steps.push_back("remove"); return real.remove(p); }
+    std::optional<std::string> readFile(const std::string &p) override { return real.readFile(p); }
+    std::vector<std::string> list(const std::string &d) override { return real.list(d); }
+    bool mkdirs(const std::string &d) override { return real.mkdirs(d); }
+};
+
+static std::string joined(const std::vector<std::string> &v) {
+    std::string out;
+    for (const auto &s : v) out += (out.empty() ? "" : ",") + s;
+    return out;
+}
+
+static void durableWrites(const std::filesystem::path &dir) {
+    namespace sc = parvane::storecrypt;
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    RecordingFs fs;
+    sc::setFsForTests(&fs);
+    const auto file = (dir / "durable.json").string();
+    check(sc::writeFile(file, "{\"a\":1}"), "T129: writeFile через слой ФС");
+    std::printf("  шаги writeFile: %s\n", joined(fs.steps).c_str());
+    check(joined(fs.steps) == "open,write,fsync,close,rename,fsyncdir",
+          "T129: writeFile — fsync файла до rename, затем fsync каталога");
+    check(sc::readFile(file) == "{\"a\":1}", "T129: writeFile — содержимое на месте");
+    fs.steps.clear();
+    const auto journal = (dir / "durable.jsonl").string();
+    check(sc::appendLine(journal, "{\"id\":1}"), "T129: appendLine (новый файл)");
+    std::printf("  шаги appendLine (новый): %s\n", joined(fs.steps).c_str());
+    check(joined(fs.steps) == "append,write,fsync,close,fsyncdir", "T129: новый журнал — fsync файла и каталога");
+    fs.steps.clear();
+    check(sc::appendLine(journal, "{\"id\":2}"), "T129: appendLine (дозапись)");
+    check(joined(fs.steps) == "append,write,fsync,close", "T129: дозапись — fsync файла");
+    check(sc::readLines(journal).size() == 2, "T129: обе строки на месте");
+    fs.steps.clear();
+    check(sc::writeLines(journal, {"{\"id\":3}"}), "T129: writeLines");
+    check(joined(fs.steps) == "open,write,fsync,close,rename,fsyncdir", "T129: writeLines — та же замена с fsync");
+    sc::setFsForTests(nullptr);
+    std::filesystem::remove_all(dir);
+}
+
 int main() {
     namespace sc = parvane::storecrypt;
     const auto dir = std::filesystem::temp_directory_path() / "parvane-storecrypt-test";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
+    durableWrites(dir.parent_path() / "parvane-storecrypt-test-durable");
 
     // Без ключа — plain как раньше (legacy/тесты)
     sc::setKey("");

@@ -55,22 +55,35 @@ inline constexpr const char *kGroupPrefix = "v2g:";
 // Новый UUIDv7 (id служебных операций: мутации, квитанции).
 [[nodiscard]] std::string newUuidV7();
 
-// v1-содержимое → Content движка. nullopt — вид не поддержан v2
-// (вызывающий решает: v1-путь или отказ).
-[[nodiscard]] std::optional<json> toV2(const json &v1, const std::string &replyTo = std::string());
+// Содержимое: смысл решает движок (spec 035 T125, ENGINE-1) — `contentView`/`contentOfWire` модели (`views.rs`),
+// те же правила, что у web и android; ядро только перекладывает JSON. «Содержимое формата экспорта» (wire) —
+// внутреннее содержимое клиента (`{"kind":"text",…}`, поля журнала истории HIST-1).
+//
+// Что содержимое значит: {"class": "message"|"mutation"|"service"|"stub", "wire"?, "replyTo"?, "mutation"?}
+// (`content_view` движка); не разобралось схемой — {}.
+[[nodiscard]] json contentView(const json &content);
+// Содержимое формата экспорта → Content движка (proto3-JSON); nullopt — вид не выражается (неизвестный, неверные поля).
+[[nodiscard]] std::optional<json> contentOfWire(const json &wire, const std::string &replyTo = std::string());
+// Content движка → содержимое формата экспорта; nullopt — не «сообщение» (мутация/служебное) или вид, которого
+// модель не показывает (вызывающий показывает заглушку).
+[[nodiscard]] std::optional<json> wireOfContent(const json &content);
+// Содержимое из готового `contentView` (поле wire; опрос — с парными именами полей `poll::normalize`).
+[[nodiscard]] std::optional<json> wireOfView(const json &view);
+// Имя вида Content ("text", "media", "edit", …; "" — пусто) — только для журнала.
+[[nodiscard]] std::string contentKindName(const json &content);
 
-// Content движка → v1-содержимое; nullopt — не «сообщение» (мутация/служебное)
-// или вид, которого клиент не знает (вызывающий показывает заглушку).
-[[nodiscard]] std::optional<json> fromV2(const json &v2);
+// Прежние имена (android jni до перевода на новые) — те же функции движка.
+[[nodiscard]] inline std::optional<json> toV2(const json &wire, const std::string &replyTo = std::string()) {
+    return contentOfWire(wire, replyTo);
+}
+[[nodiscard]] inline std::optional<json> fromV2(const json &content) { return wireOfContent(content); }
+[[nodiscard]] inline std::string v2Kind(const json &content) { return contentKindName(content); }
 
 // Режим «усиленная приватность» (L2, T079) в конвейере клиента — содержимое
 // {"kind":"chat_mode","l2":bool}: клиент рисует его нативным служебным
 // сообщением чата («… включил(а)/выключил(а) усиленную приватность»), не пузырём.
 inline constexpr const char *kChatModeKind = "chat_mode";
 [[nodiscard]] inline json chatModeContent(bool l2) { return json{{"kind", kChatModeKind}, {"l2", l2}}; }
-
-// Вид содержимого движка ("text", "media", "edit", "reaction", …, "" — пусто).
-[[nodiscard]] std::string v2Kind(const json &v2);
 
 // Содержимое заглушки «сообщение не поддерживается» (нативный путь клиента).
 // critical (spec 035 T128, US5): вид из диапазона критичных номеров — «обновите приложение», а не просто

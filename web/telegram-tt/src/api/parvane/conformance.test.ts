@@ -1011,17 +1011,17 @@ describe('GROUP-2: права по типу содержимого соблюд�
     expect(sync).toMatch(/group-perm-hidden/);
   });
 
-  it('десктоп: та же формула в parvane-core и фильтр при инъекции', () => {
+  it('десктоп: решение — движок (contentHidden модели при инъекции, canSendContent при пересылке)', () => {
     const header = readRepo('desktop/parvane-core/include/parvane/group.h');
-    expect(header).toMatch(/inline bool isContentAllowedForMember\(/);
-    expect(header).toMatch(/inline bool contentHasLink\(/);
-    for (const kind of rule2.contentKinds!.send_media) {
-      expect(header, kind).toContain(`kind == "${kind}"`);
-    }
+    expect(header).not.toMatch(/isContentAllowedForMember|contentHasLink/);
+    const session = readDesktopSession();
+    expect(session).toContain('host_->raw("contentHidden", json{{"chat", peer}, {"from", from}, {"wire", wire}})');
+    expect(session).toContain('host_->read("capabilities", json{{"chat", peer}})');
     const client = readDesktopSource();
     expect(client).toMatch(/скрыто правами группы/);
-    expect(client).toMatch(/GroupRoleOf\(toStr, authorAddr\) == u"member"_q/);
-    expect(client).toMatch(/parvane::isContentAllowedForMember\(/);
+    expect(client).toMatch(/v2s->contentHidden\(sm\.to, sm\.from, sm\.content\)/);
+    expect(client).toMatch(/s->canSendContent\(address\.toStdString\(\), content\)/);
+    expect(client).not.toMatch(/isContentAllowedForMember|canForwardToGroup/);
     expect(String(rule2.clients!.desktop)).toContain('verify_conformance_perms.sh');
   });
 
@@ -1553,8 +1553,10 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     // 21 окт 2026: пакетная загрузка с потолком размера вынесена в v2_link (downloadBlobChunks)
     const link = readRepo('desktop/parvane-core/include/parvane/v2_link.h');
     expect(link).toContain(`inline constexpr std::uint32_t kBlobDownloadBatch = ${r.maxChunksPerRequest};`);
-    const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(content).toContain(`if (has(c, "${r.contentField}")) m["${r.contentField}"] = str(c, "${r.contentField}");`);
+    // spec 035 T125 (ENGINE-1): содержимое desktop переводит движок (views.rs), ядро только вызывает его
+    expect(readRepo('backend/protocol/src/model/views.rs'))
+      .toContain(`set(&mut o, "${r.contentField}", c.get("${r.contentField}"));`);
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentOfWire", args)');
     const desktop = readDesktopSource();
     // spec 029: v1-устройств нет — вложение чата всегда по capability, без грантов получателям
     expect(desktop).not.toContain('legacyDevices');
@@ -1987,11 +1989,11 @@ describe('TASK-1: задание в чат — видимые сообщения
   });
 
   it('desktop и android: оба вида показываются текстом из поля text', () => {
-    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    r.kinds.forEach((kind) => expect(core).toContain(`"${kind}"`));
-    // spec 029: ядро разбирает оба вида в карточку (как web), клиент без карточки показывает `text`
-    expect(core).toContain('} else if (c.contains("task_offer") && c["task_offer"].is_object()) {');
-    expect(core).toContain('} else if (c.contains("task_response") && c["task_response"].is_object()) {');
+    // spec 035 T125 (ENGINE-1): оба вида в карточку разбирает движок (views.rs), ядро desktop — contentView;
+    // клиент без карточки показывает `text`
+    const map = readRepo('backend/protocol/src/model/views.rs');
+    r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/include/parvane/messenger.h'))
       .toContain('const bool card = kind == "task_offer" || kind == "task_response" || kind == "cloud_invite"');
     const tests = readRepo('desktop/parvane-core/tests/v2_tests.cpp');
@@ -2112,8 +2114,7 @@ describe('CLOUD-1: приглашение в папку облака — вид�
     const map = readRepo('backend/protocol/src/model/views.rs');
     r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'cloud_invite\':');
-    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(core).toContain('} else if (c.contains("cloud_invite") && c["cloud_invite"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite туда и обратно');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
@@ -2145,8 +2146,7 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
     const map = readRepo('backend/protocol/src/model/views.rs');
     r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'article\':');
-    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(core).toContain('} else if (c.contains("article") && c["article"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article → v2 с картинкой');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
@@ -2232,8 +2232,9 @@ describe('REPORT-1: жалоба админам группы — карточк�
 
   // spec 029: desktop разбирает жалобу, показывает карточку админу и шлёт жалобы
   it('desktop: жалоба разбирается, показывается и отправляется', () => {
-    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(core).toContain('} else if (c.contains("mod_report") && c["mod_report"].is_object()) {');
+    // spec 035 T125 (ENGINE-1): жалобу разбирает движок (views.rs), ядро desktop — contentView/contentOfWire
+    expect(readRepo('backend/protocol/src/model/views.rs')).toContain('"mod_report" => {');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentOfWire", args)');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('mod_report туда и обратно');
     expect(readDesktopSession()).toContain('std::string Session::submitReport(const json &report) {');
     const desktop = readDesktopSource();
@@ -2704,9 +2705,10 @@ describe('PACK-2: один набор стикеров от разных отп�
     expect(readRepo('proto/parvane/vectors/clients/pack-hash.json')).toContain('"content_hash"');
     const core = readRepo('desktop/parvane-core/src/pack_archive.cpp');
     ['std::string contentHash(', 'bool archiveMatchesContentHash('].forEach((f) => expect(core).toContain(f));
-    const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(content).toContain('o["content_hash"] = str(p, "content_hash")');
-    expect(content).toContain('out["content_hash"] = contentHash');
+    // spec 035 T125 (ENGINE-1): ссылку на набор с отпечатком переводит движок (views.rs) — и для desktop
+    const views = readRepo('backend/protocol/src/model/views.rs');
+    expect(views).toContain('"content_hash", "blob_domain"]');
+    expect(views).toContain('o.insert("content_hash".into(), json!(b64(&p.content_hash)));');
     const client = readDesktopSource();
     ['AttachPackContentHash(ref, archive)', 'FindInstalledPackByHash(root, contentHash)',
       'parvane::pack::archiveMatchesContentHash(bytes, contentHash)',
@@ -3291,7 +3293,7 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     expect(committed).toBeGreaterThan(requests);
   });
 
-  it.fails('v2_content.cpp не разбирает виды содержимого (перевод MessageView, T125)', () => {
+  it('v2_content.cpp не разбирает виды содержимого: класс, содержимое и мутации — contentView движка (T125)', () => {
     expect(readRepo(`${coreSrc}/v2_content.cpp`)).not.toMatch(/\bv2Kind\(|\bfromV2\(|"parvane\.msg\.v2\.Content"/);
   });
 
@@ -3333,7 +3335,7 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
       .not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
   });
 
-  it.fails('права групп по типу содержимого — из Capabilities движка, не из chat_rules (GROUP-2, T126)', () => {
+  it('права групп по типу содержимого — из модели движка, не из chat_rules (GROUP-2, T126)', () => {
     expect(readRepo('desktop/parvane-core/include/parvane/chat_rules.h')).not.toMatch(/GROUP-2/);
   });
 });

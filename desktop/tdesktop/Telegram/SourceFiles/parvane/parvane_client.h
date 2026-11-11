@@ -279,6 +279,11 @@ void ReportMessages(
 
 // «Сохранить/удалить гифку» в панели: список живёт на устройстве. true — обработано (Parvane активен).
 bool ToggleSavedGif(not_null<DocumentData*> document, bool saved);
+// «В избранное» у стикера (spec 035 T126, FR-075): объект FAVED_STICKER журнала личного состояния — избранное одно на
+// всех своих устройствах (web, desktop). CanFaveSticker — у стикера есть ссылка набора (свой набор или sticker_id
+// отправителя). ToggleFavedSticker: true — обработано (Parvane активен), MTProto не нужен.
+[[nodiscard]] bool CanFaveSticker(not_null<DocumentData*> document);
+bool ToggleFavedSticker(not_null<DocumentData*> document, bool faved);
 
 // «Сообщить об ошибке»: описание + журнал клиента JSON-вложением на bugs@<свой сервер>
 // (PARVANE_BUG_REPORT_TO — другой адрес); done("sent" | "not_found" | "failed"). Только main.

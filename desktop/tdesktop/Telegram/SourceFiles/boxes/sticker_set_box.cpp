@@ -1799,8 +1799,8 @@ void StickerSetBox::Inner::contextMenuEvent(QContextMenuEvent *e) {
 				Data::FileOriginStickerSet(Data::Stickers::FavedSetId, 0));
 		};
 		const auto isFaved = document->owner().stickers().isFaved(document);
-		// Parvane: «Избранное» стикеров и «добавить в набор» — MTProto.
-		if (!_parvaneLocal)
+		// Parvane: «добавить в набор» — MTProto; «Избранное» — журнал личного состояния (FR-075)
+		if (!_parvaneLocal || isFaved || Parvane::CanFaveSticker(document))
 		_menu->addAction(
 			(isFaved
 				? tr::lng_faved_stickers_remove

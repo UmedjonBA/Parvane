@@ -68,6 +68,10 @@ void ToggleFavedSticker(
 	if (faved && !document->sticker()) {
 		return;
 	}
+	// Parvane (spec 035 T126, FR-075): избранное — объект журнала личного состояния (FAVED_STICKER), без MTProto
+	if (Parvane::ToggleFavedSticker(document, faved)) {
+		return;
+	}
 	auto done = [=] {
 		document->owner().stickers().setFaved(show, document, faved);
 	};

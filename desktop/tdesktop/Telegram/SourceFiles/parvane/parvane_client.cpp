@@ -213,6 +213,8 @@ struct PackDirInfo {
 };
 QHash<quint64, PackDirInfo> g_stickerPackDirs; // setId → пак (main)
 QHash<qint64, QString> g_packRefByDocId;       // docId → pack_ref JSON (main)
+QHash<DocumentId, std::pair<QString, QString>> g_stickerRefByDoc; // docId → (set_id, sticker_id) избранного (main)
+QHash<QString, DocumentId> g_stickerDocByRef;  // sticker_id → docId (main)
 // conformance PACK-1: ссылка на архив пака выдаётся ПОД НАБОР ПОЛУЧАТЕЛЕЙ
 // (в cloud доступ к файлу получают только они) — переиспользуем ссылку, только
 // если новый набор входит в тот, под который архив загружен.
@@ -1453,7 +1455,7 @@ std::string TrySendV2(
 	if (!isGroup && !isSelf) {
 		V2NoteRoot(s, to);
 	}
-	const auto mapped = parvane::v2::toV2(content, replyTo.value_or(std::string()));
+	const auto mapped = parvane::v2::contentOfWire(content, replyTo.value_or(std::string()));
 	if (!mapped) {
 		throw std::runtime_error("вид " + kind + " не выражается в v2");
 	}
@@ -1484,7 +1486,7 @@ void SendMutationWithRetry(
 		if (!AccountGenerationIs(generation)) {
 			return;
 		}
-		const auto kind = QString::fromStdString(parvane::v2::v2Kind(content));
+		const auto kind = QString::fromStdString(parvane::v2::contentKindName(content));
 		try {
 			const auto s = V2Ready();
 			if (!s) {
@@ -3788,27 +3790,22 @@ void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item, bool dropNames
 	}
 	const auto found = g_mediaContentByMsgId.constFind(item->id.bare);
 	// GROUP-2 на стороне отправителя: композер (GetErrorForSending) уже
-	// проверил права tdesktop; здесь — по сведениям группы, для каждого
-	// получателя пересылки в несколько чатов.
+	// проверил права tdesktop; здесь — модель движка (писать вправе и приёмный
+	// фильтр группы не скрыл бы), для каждого получателя пересылки в несколько чатов.
 	if (toPeer->isChat()) {
-		const auto info = g_groupInfo.constFind(address);
-		if (info != g_groupInfo.constEnd()) {
-			auto content = nlohmann::json{{"kind", "text"}};
-			if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
-				content = nlohmann::json::parse(
-					found.value().toStdString(), nullptr, false);
-			} else if (!firstUrlInText(item->originalText().text).isEmpty()) {
-				content["webpage"] = nlohmann::json{{"url", "link"}};
-			}
-			if (!parvane::chatrules::canForwardToGroup(
-					GroupRoleOf(address, SelfAddress()).toStdString(),
-					info.value().kind == "channel",
-					info.value().default_permissions,
-					content)) {
-				LOG(("Parvane: пересылка в %1 (%2) не отправлена — права группы")
-					.arg(address, QString::fromStdString(parvane::contentKind(content))));
-				return;
-			}
+		auto content = nlohmann::json{{"kind", "text"}};
+		if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
+			content = nlohmann::json::parse(
+				found.value().toStdString(), nullptr, false);
+		} else if (const auto url = firstUrlInText(item->originalText().text); !url.isEmpty()) {
+			content["webpage"] = nlohmann::json{{"url", url.toStdString()}};
+		}
+		const auto s = V2Ready();
+		const auto allowed = s ? s->canSendContent(address.toStdString(), content) : std::nullopt;
+		if (allowed.has_value() && !*allowed) {
+			LOG(("Parvane: пересылка в %1 (%2) не отправлена — права группы")
+				.arg(address, QString::fromStdString(parvane::contentKind(content))));
+			return;
 		}
 	}
 	const auto withForward = [&](const QString &contentJson) {
@@ -4151,14 +4148,14 @@ void publishEditAsync(
 		auto edit = parvane::json{{"target", parvane::v2::ref(uuid)}};
 		const auto kind = parvane::contentKind(content);
 		if (kind == "location") {
-			if (const auto m = parvane::v2::toV2(content)) {
+			if (const auto m = parvane::v2::contentOfWire(content)) {
 				edit["location"] = (*m)["location"];
 			}
 		} else {
 			const auto text = (kind == "text")
 				? content.value("text", std::string())
 				: content.value("caption", std::string());
-			if (const auto m = parvane::v2::toV2(parvane::textContent(
+			if (const auto m = parvane::v2::contentOfWire(parvane::textContent(
 					text, parvane::contentEntities(content)))) {
 				edit["text"] = (*m)["text"];
 			}
@@ -4858,6 +4855,9 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			packInfo = it.value();
 		}
 	}
+	// FR-075: id стикера в наборе — получатель может добавить его в избранное (как web `sticker_id`)
+	const auto stickerRef = g_stickerRefByDoc.value(document->id);
+	const auto stickerRefId = (sticker && packSetId) ? stickerRef.second.toStdString() : std::string();
 	const auto silent = SendingSilent();
 	const auto due = SchedulingDue(); // «Запланировать»: содержимое — в очередь отложенных, блоб уже в облаке
 	crl::async([=] {
@@ -4882,6 +4882,9 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 				{"mime", mimeStd}, {"size_bytes", bytesStd.size()},
 				{"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
 			AttachBlobCap(content, fileId);
+			if (!stickerRefId.empty()) {
+				content["sticker_id"] = stickerRefId;
+			}
 			if (kind == "gif") {
 				content["duration_secs"] = durationSecs;
 				// Подписи у GIF нет — поле не пишется: `"caption": null` ронял Android при реплее истории (5 ноя 2026)
@@ -8374,12 +8377,11 @@ void injectOnMain(
 			{
 				const auto pollTo = QString::fromStdString(sm.to);
 				const auto authorAddr = QString::fromStdString(sm.from);
-				const auto info = g_groupInfo.constFind(pollTo);
+				const auto v2s = V2Ready();
 				if (g_knownGroups.contains(pollTo)
 					&& authorAddr != SelfAddress()
-					&& info != g_groupInfo.constEnd()
-					&& GroupRoleOf(pollTo, authorAddr) == u"member"_q
-					&& !parvane::isContentAllowedForMember(info.value().default_permissions, sm.content)) {
+					&& v2s
+					&& v2s->contentHidden(sm.to, sm.from, sm.content)) {
 					LOG(("Parvane: опрос %1 от %2 скрыт правами группы").arg(uuid, authorAddr));
 					g_uuidToMsgId.insert(uuid, 0);
 					continue;
@@ -8399,11 +8401,10 @@ void injectOnMain(
 			// считается обработанным (курсор двигается).
 			{
 				const auto authorAddr = QString::fromStdString(sm.from);
-				const auto info = g_groupInfo.constFind(toStr);
+				const auto v2s = V2Ready();
 				if (authorAddr != SelfAddress()
-					&& info != g_groupInfo.constEnd()
-					&& GroupRoleOf(toStr, authorAddr) == u"member"_q
-					&& !parvane::isContentAllowedForMember(info.value().default_permissions, sm.content)) {
+					&& v2s
+					&& v2s->contentHidden(sm.to, sm.from, sm.content)) {
 					LOG(("Parvane: групповое %1 (%2) от %3 скрыто правами группы")
 						.arg(uuid, QString::fromStdString(parvane::contentKind(sm.content)), authorAddr));
 					g_uuidToMsgId.insert(uuid, 0);
@@ -8467,6 +8468,13 @@ void injectOnMain(
 				g_msgIdToUuid.insert(gMsgId.bare, uuid);
 				g_mediaContentByMsgId.insert(gMsgId.bare,
 					QString::fromStdString(c.dump()));
+				if (kind == u"sticker"_q && c.contains("sticker_id") && c["sticker_id"].is_string()) {
+					const auto sid = c["sticker_id"].get<std::string>();
+					if (const auto set = parvane::pack::favedSetIdOf(sid); !set.empty()) {
+						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(set),
+							QString::fromStdString(sid));
+					}
+				}
 				if (kind == u"sticker"_q && c.contains("pack_ref")) {
 					g_packRefByDocId.insert(docIdFromFileId(fileId),
 						QString::fromStdString(c["pack_ref"].dump()));
@@ -8621,7 +8629,14 @@ void injectOnMain(
 			g_msgIdToUuid.insert(msgId.bare, uuid);
 			g_mediaContentByMsgId.insert(msgId.bare,
 				QString::fromStdString(c.dump())); // для пересылки
-			if (kind == u"sticker"_q && c.contains("pack_ref")) {
+			if (kind == u"sticker"_q && c.contains("sticker_id") && c["sticker_id"].is_string()) {
+					const auto sid = c["sticker_id"].get<std::string>();
+					if (const auto set = parvane::pack::favedSetIdOf(sid); !set.empty()) {
+						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(set),
+							QString::fromStdString(sid));
+					}
+				}
+				if (kind == u"sticker"_q && c.contains("pack_ref")) {
 				g_packRefByDocId.insert(docIdFromFileId(fileId),
 					QString::fromStdString(c["pack_ref"].dump()));
 			}
@@ -12292,6 +12307,10 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 				MTP_int(session->mainDcId()),
 				MTP_vector<MTPDocumentAttribute>(attrs)));
 			paths.push_back({ docId, path });
+			// FR-075: ссылка стикера в избранном — как у web (имя набора и имя файла в архиве)
+			const auto favSet = QString::fromStdString(parvane::pack::favedSetId(packName.toStdString()));
+			NoteStickerRef(DocumentId(docId), favSet,
+				QString::fromStdString(parvane::pack::favedStickerId(favSet.toStdString(), name.toStdString())));
 		}
 		if (docs.isEmpty()) {
 			continue;
@@ -12337,6 +12356,7 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			.arg(docs.size()));
 	}
 	if (loaded > 0) {
+		ReapplyFavedStickers(session); // избранное из журнала, пришедшее раньше наборов
 		// Порядок своих наборов, выставленный в «Стикерах» (п. 23 ревью UI 7 ноя): по сохранённым именам каталогов
 		const auto saved = LocalStickerOrder();
 		if (!saved.isEmpty()) {
@@ -12606,6 +12626,27 @@ void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> 
 		session->data().stickers().addSavedGif(nullptr, doc);
 	}
 }
+
+namespace Internal {
+
+void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId) { // main
+	if (!docId || setId.isEmpty() || stickerId.isEmpty()) {
+		return;
+	}
+	g_stickerRefByDoc.insert(docId, { setId, stickerId });
+	g_stickerDocByRef.insert(stickerId, docId);
+}
+
+std::optional<std::pair<QString, QString>> StickerRefOf(DocumentId docId) { // main
+	const auto it = g_stickerRefByDoc.constFind(docId);
+	return (it == g_stickerRefByDoc.constEnd()) ? std::nullopt : std::make_optional(it.value());
+}
+
+DocumentId StickerDocByRef(const QString &stickerId) { // main
+	return g_stickerDocByRef.value(stickerId);
+}
+
+} // namespace Internal
 
 bool ToggleSavedGif(not_null<DocumentData*> document, bool saved) {
 	if (!document->isAnimation() && !document->isGifv()) {
@@ -13802,7 +13843,9 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		//   folder-title|<название>|<новое>  — переименовать папку;
 		//   folder-add|<название>|<адрес>    — добавить чат в папку;
 		//   contact-name|<адрес>|<имя>       — своё имя контакта (заметка — прежняя своя);
-		//   contact-note|<адрес>|<заметка>   — заметка контакта (имя — прежнее своё).
+		//   contact-note|<адрес>|<заметка>   — заметка контакта (имя — прежнее своё);
+		//   fave|<набор>|<файл>              — стикер своего набора «В избранное» (FR-075, spec 035 T126);
+		//   faved|-|-                        — строка журнала: какие стикеры в «Избранном» сейчас.
 		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPATCH"); pv && *pv) {
 			for (const auto &part : QString::fromUtf8(pv).split(QChar(','), Qt::SkipEmptyParts)) {
 				const auto at = part.lastIndexOf(u'@');
@@ -13835,6 +13878,32 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						const auto c = ContactRecordFor(b);
 						LOG(("Parvane: autopatch dump папка «%1» чаты [%2]; контакт %3 имя «%4» заметка «%5»")
 							.arg(title, chats.join(u" "_q), b, c ? c->first : QString(), c ? c->note : QString()));
+						return;
+					}
+					if (op == u"fave"_q) {
+						const auto set = parvane::pack::favedSetId(a.toStdString());
+						const auto id = QString::fromStdString(parvane::pack::favedStickerId(set, b.toStdString()));
+						const auto docId = StickerDocByRef(id);
+						if (!docId) {
+							LOG(("Parvane: autopatch fave %1/%2: стикера нет").arg(a, b));
+							return;
+						}
+						ToggleFavedSticker(s->data().document(docId), true);
+						LOG(("Parvane: autopatch fave %1 → в избранном").arg(id));
+						return;
+					}
+					if (op == u"faved"_q) {
+						auto ids = QStringList();
+						const auto &sets = s->data().stickers().sets();
+						if (const auto it = sets.find(Data::Stickers::FavedSetId); it != sets.end()) {
+							for (const auto document : it->second->stickers) {
+								if (const auto ref = StickerRefOf(document->id)) {
+									ids.push_back(ref->second);
+								}
+							}
+						}
+						ids.sort();
+						LOG(("Parvane: autopatch faved [%1]").arg(ids.join(u" "_q)));
 						return;
 					}
 					if (op == u"folder-title"_q || op == u"folder-add"_q) {

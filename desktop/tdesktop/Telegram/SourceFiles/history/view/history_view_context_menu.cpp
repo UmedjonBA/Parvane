@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_context_menu.h"
 
 #include "parvane/parvane_cloud.h"
+#include "parvane/parvane_client.h" // CanFaveSticker (FR-075)
 
 #include "api/api_attached_stickers.h"
 #include "api/api_editing.h"
@@ -316,7 +317,8 @@ void AddDocumentActions(
 			controller->uiShow(),
 			document);
 	}
-	if (kParvaneStickerCloud && document->sticker()) {
+	if (document->sticker()
+		&& (document->owner().stickers().isFaved(document) || Parvane::CanFaveSticker(document))) {
 		const auto isFaved = document->owner().stickers().isFaved(document);
 		menu->addAction(
 			(isFaved

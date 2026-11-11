@@ -8,7 +8,6 @@ use std::ptr;
 use base64::Engine as _;
 use parvane_protocol::pb::parvane::engine::v1::{wrap, StoreBatch, StoreLoaded};
 use parvane_protocol::store::{OpenState, RotationAction, Store};
-use prost::Message;
 use serde_json::{json, Value};
 
 use super::{bad_arg, bytes_arg, cstring, guard, str_arg, PvBytes};
@@ -89,14 +88,6 @@ pub unsafe extern "C" fn pv_store_info(h: *mut PvStoreHandle) -> *mut c_char {
     )
 }
 
-/// Байты корня (сверка корня на носителе).
-#[no_mangle]
-pub unsafe extern "C" fn pv_store_root(h: *mut PvStoreHandle) -> PvBytes {
-    match h.as_ref() {
-        Some(x) => PvBytes::from_vec(x.inner.root().encode_to_vec()),
-        None => PvBytes::empty(),
-    }
-}
 
 /// Разблокировать ключом устройства (32 байта: desktop — производная локального ключа tdata, android —
 /// ключ под Android Keystore; тот же, что у `storecrypt::setKey`).
@@ -109,15 +100,6 @@ pub unsafe extern "C" fn pv_store_unlock_device(h: *mut PvStoreHandle, key: *con
     })
 }
 
-/// Разблокировать PIN (обёртка `pin`). Неверный PIN — ошибка `Crypto`.
-#[no_mangle]
-pub unsafe extern "C" fn pv_store_unlock_pin(h: *mut PvStoreHandle, pin: *const c_char, err: *mut *mut c_char) -> bool {
-    guard(err, false, || {
-        let pin = str_arg(pin).ok_or_else(bad_arg)?;
-        handle(h)?.unlock_pin(pin).map_err(perr)?;
-        Ok(true)
-    })
-}
 
 /// Обернуть DEK ключом устройства (новый профиль, снятие PIN) — пачка только с корнем (JSON `StoreBatch`).
 #[no_mangle]
@@ -128,31 +110,8 @@ pub unsafe extern "C" fn pv_store_wrap_device(h: *mut PvStoreHandle, key: *const
     })
 }
 
-/// Установить/сменить PIN — пачка только с корнем; записи данных не трогаются (FR-021).
-#[no_mangle]
-pub unsafe extern "C" fn pv_store_set_pin(h: *mut PvStoreHandle, pin: *const c_char, err: *mut *mut c_char) -> *mut c_char {
-    guard(err, ptr::null_mut(), || {
-        let pin = str_arg(pin).ok_or_else(bad_arg)?;
-        batch_json(&handle(h)?.set_pin(pin).map_err(perr)?)
-    })
-}
 
-/// Забыть DEK.
-#[no_mangle]
-pub unsafe extern "C" fn pv_store_lock(h: *mut PvStoreHandle) {
-    if let Some(x) = h.as_mut() {
-        x.inner.lock();
-    }
-}
 
-/// Корень сменил другой процесс того же профиля: принять (JSON состояния как `pv_store_info`).
-#[no_mangle]
-pub unsafe extern "C" fn pv_store_refresh_root(h: *mut PvStoreHandle, root: *const u8, len: usize, err: *mut *mut c_char) -> bool {
-    guard(err, false, || {
-        handle(h)?.refresh_root(bytes_arg(root, len)).map_err(perr)?;
-        Ok(true)
-    })
-}
 
 /// Пачка записей и удалений: `{"puts": [{"kind", "name", "value"(base64)}], "deletes": [{"kind", "name"}]}` →
 /// JSON `StoreBatch` (во время переноса — в оба поколения).

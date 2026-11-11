@@ -152,45 +152,4 @@ struct GroupInfo {
     }
 };
 
-// ── conformance GROUP-2: права по типу содержимого на клиенте ────────────────
-// Единая формула для web/desktop/android: участник БЕЗ роли и БЕЗ права не
-// может ни отправить, ни показать получателям содержимое запрещённого вида.
-// Владелец, админ и сам отправитель под фильтр не подпадают — это решает
-// вызывающий (роль автора известна из GroupInfo). Оценка — при приёме.
-inline bool isContentAllowedForMember(const DefaultPermissions &p, const std::string &kind,
-                                      bool hasLink) {
-    if (!p.send_messages) return false;
-    if (!p.send_media && (kind == "photo" || kind == "video" || kind == "file"
-                          || kind == "voice" || kind == "video_note" || kind == "audio")) {
-        return false;
-    }
-    if (!p.send_stickers_gifs && (kind == "sticker" || kind == "gif")) return false;
-    if (!p.send_polls && kind == "poll") return false;
-    if (!p.embed_links && kind == "text" && hasLink) return false;
-    return true;
-}
-
-// Есть ли в текстовом содержимом ссылка: превью `webpage` или сущность
-// url/text_url (имена tt `MessageEntityUrl`/`MessageEntityTextUrl` и короткие).
-inline bool contentHasLink(const json &content) {
-    if (!content.is_object()) return false;
-    if (auto it = content.find("webpage"); it != content.end() && it->is_object() && !it->empty()) {
-        return true;
-    }
-    if (auto it = content.find("entities"); it != content.end() && it->is_array()) {
-        for (const auto &e : *it) {
-            const auto t = e.is_object() ? e.value("type", std::string()) : std::string();
-            if (t == "MessageEntityUrl" || t == "MessageEntityTextUrl" || t == "url" || t == "text_url") {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-inline bool isContentAllowedForMember(const DefaultPermissions &p, const json &content) {
-    return isContentAllowedForMember(p, content.is_object() ? content.value("kind", std::string("text")) : "text",
-                                     contentHasLink(content));
-}
-
 } // namespace parvane

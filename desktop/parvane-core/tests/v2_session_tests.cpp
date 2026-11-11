@@ -212,14 +212,14 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
     check(seen(bob) && seen(dave), "bob и dave увидели группу из журнала (groupUpdated)");
 
     try {
-        alice.s->sendContent(group, *v2::toV2(parvane::textContent("g-hello-" + suffix)), v2::newUuidV7());
+        alice.s->sendContent(group, *v2::contentOfWire(parvane::textContent("g-hello-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "alice → группа: отправлено", e.what());
     }
     check(groupTextArrived(bob.inbox, group, "g-hello-" + suffix, alice.user), "bob получил групповое alice");
     check(groupTextArrived(dave.inbox, group, "g-hello-" + suffix, alice.user), "dave получил групповое alice");
     try {
-        bob.s->sendContent(group, *v2::toV2(parvane::textContent("g-bob-" + suffix)), v2::newUuidV7());
+        bob.s->sendContent(group, *v2::contentOfWire(parvane::textContent("g-bob-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "bob → группа: отправлено", e.what());
     }
@@ -251,7 +251,7 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
     check(after.is_object() && after.value("epoch", 0ull) > epochBefore && !after.value("epochStale", true),
           "после бана — новая эпоха", after.is_object() ? std::to_string(after.value("epoch", 0ull)) : "?");
     try {
-        alice.s->sendContent(group, *v2::toV2(parvane::textContent("g-after-ban-" + suffix)), v2::newUuidV7());
+        alice.s->sendContent(group, *v2::contentOfWire(parvane::textContent("g-after-ban-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "alice → группа после бана", e.what());
     }
@@ -277,7 +277,7 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
     bool delivered = false;
     for (int i = 0; i < 3 && !delivered; ++i) {
         try {
-            alice.s->sendContent(group, *v2::toV2(parvane::textContent("g-erin-" + suffix + std::to_string(i))), v2::newUuidV7());
+            alice.s->sendContent(group, *v2::contentOfWire(parvane::textContent("g-erin-" + suffix + std::to_string(i))), v2::newUuidV7());
         } catch (const std::exception &e) {
             std::printf("    отправка после вступления: %s\n", e.what());
         }
@@ -345,7 +345,7 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
     check(alice.s->checkPublicName("free" + pubName).value("available", false), "spec 023: свободное имя — доступно");
     // История публичной группы хранит сообщения с момента публичности
     try {
-        alice.s->sendContent(group, *v2::toV2(parvane::textContent("pub-hello-" + suffix)), v2::newUuidV7());
+        alice.s->sendContent(group, *v2::contentOfWire(parvane::textContent("pub-hello-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "alice → публичная группа", e.what());
     }
@@ -518,9 +518,9 @@ static void contentAndCallScenario(const std::string &tcp, const std::string &di
     std::printf("-- содержимое, мутации, личный звонок (M15/M16/M18/M20/M28)\n");
     const auto pollId = v2::newUuidV7();
     try {
-        alice.s->sendContent(bob.user, *v2::toV2(json{{"kind", "poll"}, {"question", "Чай или кофе?"},
+        alice.s->sendContent(bob.user, *v2::contentOfWire(json{{"kind", "poll"}, {"question", "Чай или кофе?"},
                                                       {"answers", json::array({"чай", "кофе"})}, {"multiple", true}}), pollId);
-        alice.s->sendContent(bob.user, *v2::toV2(json{{"kind", "location"}, {"lat", 55.75}, {"long", 37.61}}), "");
+        alice.s->sendContent(bob.user, *v2::contentOfWire(json{{"kind", "location"}, {"lat", 55.75}, {"long", 37.61}}), "");
     } catch (const std::exception &e) {
         check(false, "M18/M20: опрос и геопозиция отправлены", e.what());
     }
@@ -880,13 +880,13 @@ static void federationScenario(const std::string &tcpA, const std::string &tcpB,
           fa.s->serverDomain() + " / " + fb.s->serverDomain());
     check(fa.s->isV2Peer(fb.user), "M31: журнал устройств собеседника с чужого сервера прочитан (dest_domain)");
     try {
-        fa.s->sendContent(fb.user, *v2::toV2(parvane::textContent("fed-a-" + suffix)), v2::newUuidV7());
+        fa.s->sendContent(fb.user, *v2::contentOfWire(parvane::textContent("fed-a-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "M31: письмо на чужой сервер отправлено", e.what());
     }
     check(textArrived(fb.inbox, "fed-a-" + suffix, fa.user, nullptr, 40000), "M31: письмо дошло через федерацию (незнакомцу, по жетону его сервера)");
     try {
-        fb.s->sendContent(fa.user, *v2::toV2(parvane::textContent("fed-b-" + suffix)), v2::newUuidV7());
+        fb.s->sendContent(fa.user, *v2::contentOfWire(parvane::textContent("fed-b-" + suffix)), v2::newUuidV7());
     } catch (const std::exception &e) {
         check(false, "M31: ответ отправлен", e.what());
     }
@@ -935,7 +935,7 @@ int main() {
     // Текст в обе стороны.
     const auto u1 = v2::newUuidV7();
     try {
-        alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("v2-hello-" + suffix)), u1);
+        alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("v2-hello-" + suffix)), u1);
         check(true, "alice → bob: отправлено (sealed через ANON)");
     } catch (const std::exception &e) {
         check(false, "alice → bob: отправлено", e.what());
@@ -946,7 +946,7 @@ int main() {
 
     const auto u2 = v2::newUuidV7();
     try {
-        bob.s->sendContent(alice.user, *v2::toV2(parvane::textContent("v2-answer-" + suffix), u1), u2);
+        bob.s->sendContent(alice.user, *v2::contentOfWire(parvane::textContent("v2-answer-" + suffix), u1), u2);
     } catch (const std::exception &e) {
         check(false, "bob → alice: отправлено", e.what());
     }
@@ -982,7 +982,7 @@ int main() {
         constexpr int kBurst = 50;
         for (int i = 0; i < kBurst; ++i) {
             try {
-                alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("opt024-" + std::to_string(i) + "-" + suffix)),
+                alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("opt024-" + std::to_string(i) + "-" + suffix)),
                                      v2::newUuidV7());
             } catch (const std::exception &e) {
                 check(false, "OPT-024: alice → bob отправлено", e.what());
@@ -1043,7 +1043,7 @@ int main() {
             refused = true;
         }
         check(refused, "T131: чужой секрет — отказ");
-        const auto mapped = v2::toV2(json{{"kind", "photo"}, {"file_id", fileId}, {"mime", "image/png"},
+        const auto mapped = v2::contentOfWire(json{{"kind", "photo"}, {"file_id", fileId}, {"mime", "image/png"},
                                           {"file_key", "a2V5"}, {"file_nonce", "bm9uY2U="}, {"capability", "Y2Fw"}});
         check(mapped && mapped->dump().find("\"capability\":\"Y2Fw\"") != std::string::npos,
               "T131: capability едет в содержимом v2 (Media.capability)");
@@ -1070,7 +1070,7 @@ int main() {
     {
         const auto started = std::chrono::steady_clock::now();
         try {
-            alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("l2-tick-" + suffix)), v2::newUuidV7());
+            alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("l2-tick-" + suffix)), v2::newUuidV7());
         } catch (const std::exception &e) {
             check(false, "L2: отправка тактом", e.what());
         }
@@ -1109,7 +1109,7 @@ int main() {
     }
     const auto u3 = v2::newUuidV7();
     try {
-        alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("v2-offline-" + suffix)), u3);
+        alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("v2-offline-" + suffix)), u3);
     } catch (const std::exception &e) {
         check(false, "alice → офлайн bob: отправлено", e.what());
     }
@@ -1168,13 +1168,13 @@ int main() {
         check(carol.s->waitReady(30000), "carol: v2-сессия по WebSocket готова");
         const auto u4 = v2::newUuidV7();
         try {
-            carol.s->sendContent(alice.user, *v2::toV2(parvane::textContent("v2-ws-" + suffix)), u4);
+            carol.s->sendContent(alice.user, *v2::contentOfWire(parvane::textContent("v2-ws-" + suffix)), u4);
         } catch (const std::exception &e) {
             check(false, "carol (WS) → alice (TCP): отправлено", e.what());
         }
         check(textArrived(alice.inbox, "v2-ws-" + suffix, carol.user), "alice (TCP) получила от carol (WS)");
         try {
-            alice.s->sendContent(carol.user, *v2::toV2(parvane::textContent("v2-tcp-" + suffix)), "");
+            alice.s->sendContent(carol.user, *v2::contentOfWire(parvane::textContent("v2-tcp-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "alice → carol: отправлено", e.what());
         }
@@ -1211,7 +1211,7 @@ int main() {
         alice2.s->joinWithGrant(alice.s->linkGrantMaterial());
         check(alice2.s->waitReady(30000), "T128: второе устройство привязано грантом");
         try {
-            bob.s->sendContent(alice.user, *v2::toV2(parvane::textContent("v2-two-" + suffix)), "");
+            bob.s->sendContent(alice.user, *v2::contentOfWire(parvane::textContent("v2-two-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "bob → alice (два устройства): отправлено", e.what());
         }
@@ -1240,7 +1240,7 @@ int main() {
         // bob перечитывает журнал alice (TTL 15 с): отзыв, новый SSK, сертификаты.
         std::this_thread::sleep_for(std::chrono::seconds(16));
         try {
-            bob.s->sendContent(alice.user, *v2::toV2(parvane::textContent("v2-after-revoke-" + suffix)), "");
+            bob.s->sendContent(alice.user, *v2::contentOfWire(parvane::textContent("v2-after-revoke-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "bob → alice после отзыва: отправлено", e.what());
         }
@@ -1248,7 +1248,7 @@ int main() {
         check(!textArrived(alice2.inbox, "v2-after-revoke-" + suffix, bob.user, nullptr, 4000),
               "T128: отозванное устройство новое сообщение не получило");
         try {
-            alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("v2-new-ssk-" + suffix)), "");
+            alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("v2-new-ssk-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "alice → bob после смены SSK: отправлено", e.what());
         }
@@ -1271,7 +1271,7 @@ int main() {
         r1.start(tcp, dir + "/r1");
         check(r1.s->waitReady(30000) && !r1.recoveryKey.empty(), "T130: первое устройство — ключ восстановления выдан");
         try {
-            bob.s->sendContent(r1.user, *v2::toV2(parvane::textContent("rc-hello-" + suffix)), "");
+            bob.s->sendContent(r1.user, *v2::contentOfWire(parvane::textContent("rc-hello-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "bob → r1: отправлено", e.what());
         }
@@ -1302,7 +1302,7 @@ int main() {
         // Хост перед отправкой спрашивает isV2Peer — он и перечитывает журнал.
         check(bob.s->isV2Peer(r2.user), "T130: bob перечитал журнал собеседника");
         try {
-            bob.s->sendContent(r2.user, *v2::toV2(parvane::textContent("rc-recovered-" + suffix)), "");
+            bob.s->sendContent(r2.user, *v2::contentOfWire(parvane::textContent("rc-recovered-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "bob → r2 после восстановления: отправлено", e.what());
         }
@@ -1331,7 +1331,7 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(16));
         check(bob.s->isV2Peer(r3.user), "T129: bob перечитал журнал собеседника после сброса");
         try {
-            bob.s->sendContent(r3.user, *v2::toV2(parvane::textContent("rc-reset-" + suffix)), "");
+            bob.s->sendContent(r3.user, *v2::contentOfWire(parvane::textContent("rc-reset-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "bob → r3 после сброса: отправлено", e.what());
         }
@@ -1356,7 +1356,7 @@ int main() {
         check(alice.s->isV2Peer(bob.user), "T133: alice по-прежнему видит bob на v2");
         bool refused = false;
         try {
-            alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("t133-blocked-" + suffix)), "");
+            alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("t133-blocked-" + suffix)), "");
         } catch (const std::exception &) {
             refused = true;
         }
@@ -1365,7 +1365,7 @@ int main() {
               "T133: сообщение заблокированной до bob не дошло");
         check(bob.s->setPrivacy(false, true), "T133: bob снова принимает незнакомых");
         try {
-            alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("t133-stranger-" + suffix)), "");
+            alice.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("t133-stranger-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "T133: alice → bob как незнакомая", e.what());
         }
@@ -1458,7 +1458,7 @@ int main() {
 
         // Смена ника: bob знает k1 по переписке, после смены видит переезд чата
         try {
-            k1.s->sendContent(bob.user, *v2::toV2(parvane::textContent("pre-rename-" + suffix)), "");
+            k1.s->sendContent(bob.user, *v2::contentOfWire(parvane::textContent("pre-rename-" + suffix)), "");
         } catch (const std::exception &e) {
             check(false, "k1 → bob до смены ника", e.what());
         }
