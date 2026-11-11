@@ -2344,7 +2344,8 @@ class Client private constructor(
         synchronized(stateLock) {
             if (!stateAttached || detached) return
             val l = store.local ?: return
-            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), StateJournal.KINDS) ?: return
+            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(),
+                StateJournal.KINDS, lastStateSnap?.toString() ?: "") ?: return // база разницы — показанный снимок (T124)
             clearStateDirty()
             if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
         }

@@ -213,8 +213,10 @@ object ParvaneCore {
     fun stateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean = nativeStateFaveSticker(setId, stickerId, on)
     /** spec 035 (US5): журнал закрыт для записи более новой версией — «обновите приложение». */
     fun stateWriteBlocked(): Boolean = nativeStateWriteBlocked()
-    fun stateSync(desiredJson: String, kinds: List<String>): JSONObject? =
-        nativeStateSync(desiredJson, JSONArray(kinds).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** [shownJson] — снимок, который шов показывал, когда строил желаемое (база разницы, T124): без него ядро берёт
+     *  последний выданный, а выданный, но ещё не показанный откатил бы чужую правку. "" — нет. */
+    fun stateSync(desiredJson: String, kinds: List<String>, shownJson: String = ""): JSONObject? =
+        nativeStateSync(desiredJson, JSONArray(kinds).toString(), shownJson).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     fun stateScheduledSent(opIdB64: String): Boolean = nativeStateScheduledSent(opIdB64)
     fun stateMarkSent(opIdB64: String) = nativeStateMarkSent(opIdB64)
     /** Запись журнала по имени (`callSet` — история звонков и т.п.). */
@@ -316,7 +318,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeStateFavedStickers(): String
     @JvmStatic private external fun nativeStateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean
     @JvmStatic private external fun nativeStateWriteBlocked(): Boolean
-    @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String
+    @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String, shownJson: String): String
     @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
     @JvmStatic private external fun nativeStateMarkSent(opIdB64: String)
     @JvmStatic private external fun nativeStateCall(name: String, argsJson: String): Boolean

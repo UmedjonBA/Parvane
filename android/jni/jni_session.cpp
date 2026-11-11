@@ -301,8 +301,8 @@ bool handleSessionEvent(const json &ev) {
         return true;
     }
     if (type == "stateReady") {
-        historyHold(false); // модель открыта (перенос, если был, закончен) — журнал истории больше не ждёт
         historySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
+        historyHold(false); // модель открыта (перенос, если был, закончен) — журнал истории больше не ждёт
         sectionsSessionChanged(); // «План», «Облако»: журнал состояния подключён
         emit(json{{"type", "state_ready"}});
         runDetached([] {
