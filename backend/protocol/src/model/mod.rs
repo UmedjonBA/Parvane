@@ -1099,7 +1099,9 @@ impl Engine {
 
     pub fn view_group(&self, group: Option<&Ref>) -> Result<epb::GroupView> {
         let g = group.ok_or(ProtoError::InvalidField("group"))?;
-        let f = self.groups.get(&g.id).ok_or(ProtoError::NotFound)?;
+        // Как права композера: из журнала группы клиента модели сразу (секрет фото частной группы приходит
+        // конвертом эпохи после записи `SetInfo` — показ не ждёт отложенной записи сведённого, spec 035 T116)
+        let f = self.live_group_facts(&g.id).ok_or(ProtoError::NotFound)?;
         Ok(f.view(&self.cfg.user))
     }
 

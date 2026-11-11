@@ -378,3 +378,29 @@ fn accumulated_records_are_one_batch_and_one_ack() {
     let ack = hb.log.iter().position(|l| l == "req:msg.inbox.ack").unwrap();
     assert!(commit < ack, "на диске раньше ack: {:?}", hb.log);
 }
+
+/// spec 035 T116 (PV-005): показ группы моделью (`viewGroup`) — из журнала группы клиента сразу, как права
+/// композера: фото частной группы с секретом видно, не дожидаясь отложенной записи сведённого (`flush`). Web берёт
+/// фото группы из `GroupView.photo`.
+#[test]
+fn group_view_photo_is_live_in_host_mode() {
+    let mut srv = Server::default();
+    let mut host = Host::default();
+    let mut e = identity(&mut host, &mut srv, "alice@local", 4);
+    let created = cc(&mut e, "groupCreate", json!({
+        "kind": 1, "name": "Группа-тест", "members": [], "permsJson": "{}",
+    }))
+    .unwrap();
+    run_on(&mut srv, "alice@local", &created["request"]);
+    let hex_id = created["group"]["id"].as_str().unwrap().to_string();
+    let id_b64 = b64e(&hex::decode(&hex_id).unwrap());
+    let key = b64e(&[7u8; 32]);
+    act(&mut e, &mut srv, "alice@local", "groupSetPhoto", json!({
+        "group": hex_id, "fileId": "photo-test", "avatarDomain": "", "keyB64": key,
+    }));
+    let view = raw(&mut e, "viewGroup", &json!({"group": {"domain": "local", "id": id_b64}}));
+    assert!(view.get("error").is_none(), "группа в показе модели: {view}");
+    assert_eq!(view["title"], "Группа-тест", "{view}");
+    assert_eq!(view["photo"]["file_id"], "photo-test", "фото частной группы с секретом: {view}");
+    assert_eq!(view["photo"]["key"], key.as_str(), "{view}");
+}

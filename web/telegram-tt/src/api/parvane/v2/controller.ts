@@ -3843,8 +3843,26 @@ export function createV2Controller(deps: Deps) {
     return readGroup(hex)?.members.map(({ user }) => user) || [];
   }
 
+  /** Фото группы — из показа группы моделью (`GroupView.photo`, spec 035 T116, PV-005): у частной группы — только
+   * когда пришёл его секрет (иначе UI скачал бы файл без ключа и не повторил бы, когда конверт эпохи с секретом
+   * догонит запись `SetInfo`). Модели нет — по сведениям группы клиента, тем же правилом. */
+  function groupPhotoOf(hex: string, g: EngineGroupInfo): { fileId: string; key?: string } | undefined {
+    if (host) {
+      try {
+        const view = host.peek<{ photo?: { file_id?: string; key?: string } }>('viewGroup', {
+          group: { domain: groupDomainOf(hex), id: hexToB64(hex) },
+        });
+        return view.photo?.file_id ? { fileId: view.photo.file_id, key: view.photo.key || undefined } : undefined;
+      } catch {
+        // группы ещё нет в модели — по сведениям клиента
+      }
+    }
+    return g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? { fileId: g.avatarFileId, key: g.avatarKey } : undefined;
+  }
+
   function toWireGroupInfo(hex: string, g: EngineGroupInfo): WireGroupInfo {
-    if (g.avatarFileId && g.avatarKey) deps.rememberGroupPhoto?.(g.avatarFileId, g.avatarKey);
+    const photo = groupPhotoOf(hex, g);
+    if (photo?.key) deps.rememberGroupPhoto?.(photo.fileId, photo.key);
     return {
       group_id: groupAddress(hex),
       name: g.name,
@@ -3858,9 +3876,7 @@ export function createV2Controller(deps: Deps) {
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
-      // Фото частной группы (PV-005) — только когда пришёл его секрет: иначе UI скачал бы файл без ключа и не
-      // повторил бы, когда конверт эпохи с секретом догонит запись SetInfo
-      avatar: g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? g.avatarFileId : undefined,
+      avatar: photo?.fileId,
       about: g.about || undefined,
       default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
