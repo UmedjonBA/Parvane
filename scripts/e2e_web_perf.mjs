@@ -266,12 +266,12 @@ try {
       await title.fill(noteTitle(i));
       await title.blur();
       await visible(knowledge.locator(`[data-note-row="${noteTitle(i)}"]`), 'строка заметки');
-      await note.getByRole('button', { name: 'Edit' }).click();
+      await note.locator('[data-note-bar-edit]').click();
       const links = [1, 2, 3].map((d) => `[[${noteTitle(((i + d - 1) % NOTES) + 1)}]]`).join(', ');
       await page.locator('#knowledge-note-editor').fill(
         `# ${noteTitle(i)}\n\nТекст заметки номер ${i} про сервер и кабель.\n\nСвязи: ${links}\n\n- [ ] пункт ${i}\n#тег${i % 5}`,
       );
-      await note.getByRole('button', { name: 'Save' }).click();
+      await note.locator('[data-note-bar-edit]').click();
       await visible(note.locator('[data-note-body]').getByText(`номер ${i} `), 'текст заметки');
     }
   });
@@ -353,7 +353,7 @@ try {
   await openTab('Notes');
   await knowledge.locator(`[data-note-row="${noteTitle(3)}"]`).click();
   await visible(note.locator('[data-note-body]'), 'заметка');
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.locator('[data-note-bar-edit]').click();
   const editor = page.locator('#knowledge-note-editor');
   await visible(editor, 'редактор');
   await editor.press('End');
@@ -361,7 +361,7 @@ try {
     await editor.pressSequentially(` ${'слово '.repeat(33)}`, { delay: 15 });
   });
   await timed('редактор заметки: сохранить', async () => {
-    await note.getByRole('button', { name: 'Save' }).click();
+    await note.locator('[data-note-bar-edit]').click();
     await visible(note.locator('[data-note-body]').getByText('слово слово'), 'сохранённый текст');
   });
 

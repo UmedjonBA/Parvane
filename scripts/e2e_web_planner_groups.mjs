@@ -142,6 +142,9 @@ try {
     await groupBar.locator(`[data-group="${name}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   await page.setViewportSize({ width: 390, height: 844 });
+  // Боковая панель уходит перерисовкой после смены размера: пока она видна, openPlannerScreen идёт путём
+  // широкого экрана и ждёт уже снятую вкладку
+  await page.locator('#FoldersSidebar').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await openList();
   const chipTops = await groupBar.locator('[data-group]').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
   assert.equal(new Set(chipTops.map(Math.round)).size, 1, `группы на телефоне одной строкой: ${chipTops}`);

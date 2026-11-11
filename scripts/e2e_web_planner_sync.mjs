@@ -170,8 +170,10 @@ async function seedOps(page, count, prefix) {
 function domainsCounts() {
   const db = new DatabaseSync(`${BACKEND_DIR}/domains.db-v2.db`, { readOnly: true });
   try {
+    // Операций записано — по голове журналов (`head_seq`): после снимка шард обрезает журнал до него (spec 035, S7-22),
+    // число строк журнала падает
     return {
-      ops: db.prepare('SELECT count(*) AS n FROM container_log').get().n,
+      ops: db.prepare('SELECT coalesce(sum(head_seq), 0) AS n FROM containers').get().n,
       snapshots: db.prepare('SELECT count(*) AS n FROM container_snapshots').get().n,
     };
   } finally {
