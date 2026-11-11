@@ -1,8 +1,9 @@
-// Parvane fork: журнал истории аккаунта на клиенте (spec 033, HIST-1, HIST-2, READ-2) без стека: хранилище строк в
-// файлах, очередь записи, sync, маркеры, сирота, «только у меня», вход нового устройства по контрольной точке,
-// повторное использование сегментов, отказ CAS, откат сервера, горизонт (замена), перенос локальной истории, фоновый
-// поток. Сервер — поддельный в памяти с той же семантикой, что messenger `v2_history.rs` (тела — protobuf схемы
-// `history/v1`, кодек ниже). Шифрование и сведение — настоящий движок через C ABI.
+// Parvane fork: журнал истории аккаунта на клиенте (spec 033, HIST-1, HIST-2, READ-2) без стека: строки в модели
+// движка (spec 035 T125, `ModelRows` над моделью в памяти — та же, что у клиента устройства), разовый перенос прежних
+// файлов строк в модель, очередь записи, sync, маркеры, сирота, «только у меня», вход нового устройства по
+// контрольной точке, повторное использование сегментов, отказ CAS, откат сервера, горизонт (замена), перенос
+// локальной истории, фоновый поток. Сервер — поддельный в памяти с той же семантикой, что messenger `v2_history.rs`
+// (тела — protobuf схемы `history/v1`, кодек ниже). Шифрование и сведение — настоящий движок через C ABI.
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -17,6 +18,7 @@
 
 #include <unistd.h>
 
+#include "parvane/engine_host.h"
 #include "parvane/history_sync.h"
 #include "parvane/storecrypt.h"
 #include "parvane/v2_content.h"
@@ -275,10 +277,21 @@ static std::string g_deviceSelf;
 // Окно пачки записи для новых устройств теста (S7-3)
 static std::int64_t g_batchMin = 100, g_batchMax = 200;
 
+// Модель профиля в памяти (режим хоста, как у сессии): пользователь — kSelf (свои строки не входящие).
+static std::shared_ptr<parvane::engine::Host> memoryModel(const std::string &device) {
+    const json cfg{{"user", kSelf}, {"device_id", device}, {"domain", "local"}, {"now_ms", "1700000000000"},
+                   {"device_key", v2::toBase64(std::string(32, '\x05'))}, {"host_driven", true}};
+    std::string err;
+    auto h = parvane::engine::Host::openMemory(cfg, &err);
+    if (!h) std::printf("  FAIL  модель в памяти не открылась: %s\n", err.c_str());
+    return std::shared_ptr<parvane::engine::Host>(std::move(h));
+}
+
 struct Device {
     std::string dir;
+    std::shared_ptr<parvane::engine::Host> host;
     std::unique_ptr<v2::Client> client;
-    std::unique_ptr<hs::FileRowStore> store;
+    std::unique_ptr<hs::ModelRows> store;
     std::unique_ptr<hs::HistorySync> sync;
     std::vector<json> rows;
     std::map<std::string, json> marks;
@@ -294,14 +307,17 @@ struct Device {
         dir = (std::filesystem::temp_directory_path() / ("pv-history-test-" + std::to_string(::getpid()) + "-" + name)).string();
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
-        client = v2::Client::import(clientBlob, key);
+        host = memoryModel(name);
+        client = std::make_unique<v2::Client>(host);
+        client->replaceImport(clientBlob, key);
         open(server, thread);
     }
     void open(FakeServer &server, bool thread) {
-        store = std::make_unique<hs::FileRowStore>(dir + "/rows.jsonl", dir + "/marks.json", dir + "/aux-");
+        // Строки — модель устройства (переживает перезапуск HistorySync, как хранилище модели на диске)
+        store = std::make_unique<hs::ModelRows>([h = host] { return h; }, dir + "/aux-");
         hs::HistorySyncConfig cfg;
         cfg.self = g_deviceSelf.empty() ? kSelf : g_deviceSelf;
-        cfg.store = store.get();
+        cfg.rows = store.get();
         cfg.request = [&server](const std::string &m, const std::string &b) { return server.handle(m, b); };
         cfg.openEngine = [this] { return v2::HistorySession::open(*client); };
         cfg.onRows = [this](const std::vector<json> &r) {
@@ -389,49 +405,64 @@ int main() {
         check(canPeer && !canGroup, "права удаления — движком: чужое в личном чате можно, в группе без права нельзя");
     }
 
-    // ── хранилище строк в файлах ─────────────────────────────────────────────────────────────────────────────────
+    // ── прежние файлы строк хоста → модель движка (разовый перенос, spec 035 T125) ───────────────────────────────
     {
         const auto dir = (std::filesystem::temp_directory_path() / ("pv-history-store-" + std::to_string(::getpid()))).string();
         std::filesystem::remove_all(dir);
         std::filesystem::create_directories(dir);
         const auto rows = dir + "/rows.jsonl";
-        {
-            // Журнал прежнего формата (StoredMessage) + новая строка
-            parvane::storecrypt::appendLine(rows, wire(uid(5), kBob, kSelf, 10, "старое").dump());
-        }
+        const auto marks = dir + "/marks.json";
+        // Файл прежнего хранилища (бывший FileRowStore): журнал до spec 033 (StoredMessage), RowState дозаписью —
+        // надгробие поверх строки (последнее состояние побеждает), строка очищенного «у себя» чата, маркер
+        parvane::storecrypt::appendLine(rows, wire(uid(5), kBob, kSelf, 10, "старое").dump());
         auto st = hs::call("historyApply", json{{"op", hs::rowOpFromWire(wire(uid(6), kSelf, kBob, 11, "a"), bobChat())}});
-        {
-            hs::FileRowStore store(rows, dir + "/marks.json", dir + "/aux-");
-            check(store.size() == 0, "строка прежнего формата не принята за RowState");
-            store.put(st);
-            st = hs::call("historyApply", json{{"state", st}, {"op", hs::goneOp(uid(6), bobChat(), hs::stampOf(12000, uid(60)), false)}});
-            store.put(st);
-            store.setMark("u:" + kBob, hs::markAt(*store.get(uid(6))));
-            store.setAux("meta", json{{"cursor", 7}});
-            check(store.appendedSinceCompact() == 2, "новое состояние дописывается строкой");
-        }
-        {
-            hs::FileRowStore store(rows, dir + "/marks.json", dir + "/aux-");
-            const auto got = store.get(uid(6));
-            check(got && got->contains("gone"), "после перезапуска — последнее состояние (надгробие сохранено)");
-            check(store.mark("u:" + kBob).has_value(), "маркер пережил перезапуск");
-            check(store.aux("meta").value("cursor", 0) == 7, "служебный документ пережил перезапуск");
-            int n = 0;
-            store.forEachInChat("u:" + kBob, [&](const json &) { ++n; });
-            check(n == 1, "перебор по чату");
-            const auto legacy = store.takeLegacyRows();
-            check(legacy.size() == 1 && legacy[0].value("id", std::string()) == uid(5), "строки прежнего формата отданы на перенос");
-            store.compact();
-        }
-        {
-            hs::FileRowStore store(rows, dir + "/marks.json", dir + "/aux-");
-            check(store.takeLegacyRows().empty() && store.size() == 1, "после переноса и свёртки прежних строк нет");
-            store.clear();
-        }
-        {
-            hs::FileRowStore store(rows, dir + "/marks.json", dir + "/aux-");
-            check(store.size() == 0 && !store.mark("u:" + kBob), "замена: строки и маркеры стёрты");
-        }
+        parvane::storecrypt::appendLine(rows, st.dump());
+        st = hs::call("historyApply", json{{"state", st}, {"op", hs::goneOp(uid(6), bobChat(), hs::stampOf(12000, uid(60)), false)}});
+        parvane::storecrypt::appendLine(rows, st.dump());
+        const auto st8 = hs::call("historyApply", json{{"op", hs::rowOpFromWire(wire(uid(8), kBob, kSelf, 13, "b"), bobChat())}});
+        parvane::storecrypt::appendLine(rows, st8.dump());
+        const auto st9 = hs::call("historyApply", json{{"op", hs::rowOpFromWire(wire(uid(9), kBob, kSelf, 14, "очищено"), bobChat())}});
+        parvane::storecrypt::appendLine(rows, st9.dump());
+        parvane::storecrypt::writeFile(marks, json{{"u:" + kBob, hs::markAt(st8)}}.dump());
+        const auto files = hs::readLegacyRowFiles(rows, marks);
+        check(files.states.size() == 3 && files.storedMessages.size() == 1 && files.marks.size() == 1,
+              "прежние файлы: RowState (последнее состояние строки), StoredMessage, маркеры");
+        hs::ModelRows closed([] { return std::shared_ptr<parvane::engine::Host>(); }, dir + "/closed-");
+        check(!closed.ready() && !hs::importLegacyRows(closed, rows, marks, nullptr, nullptr, nullptr),
+              "модель не открыта — перенос позже (отметки нет)");
+        const auto host = memoryModel("import");
+        hs::ModelRows model([host] { return host; }, dir + "/aux-");
+        int converted = 0;
+        const auto convert = [&](const std::vector<json> &stored) {
+            std::vector<json> ops;
+            for (const auto &s : stored) {
+                ++converted;
+                ops.push_back(hs::rowOpFromWire(s, bobChat()));
+            }
+            return ops;
+        };
+        const auto dropped = [](const json &s) { return s.value("target", std::string()) == uid(9); };
+        check(hs::importLegacyRows(model, rows, marks, convert, dropped, nullptr), "перенос в модель");
+        const auto gone = model.get(uid(6));
+        check(gone && gone->contains("gone"), "в модели — последнее состояние (надгробие сохранено)");
+        check(model.get(uid(5)).has_value() && converted == 1, "журнал до spec 033 — строкой модели (операциями хоста)");
+        check(!model.get(uid(9)).has_value(), "строка очищенного «у себя» не перенесена");
+        const auto read = model.read("u:" + kBob);
+        check(model.mark("u:" + kBob).has_value() && read.unread == 0 && read.lastReadId == uid(8),
+              "маркер — в модели, счётчик от него (rowsRead)", std::to_string(read.unread) + " " + read.lastReadId);
+        check(model.chat("u:" + kBob).size() == 3 && model.all().size() == 3, "строки чата и все строки — из модели");
+        check(hs::importLegacyRows(model, rows, marks, convert, dropped, nullptr) && converted == 1,
+              "повторного переноса нет (отметка imported)");
+        check(model.aux("imported").value("rows", false), "отметка переноса — служебный документ");
+        model.setAux("meta", json{{"cursor", 7}});
+        hs::ModelRows again([host] { return host; }, dir + "/aux-");
+        check(again.aux("meta").value("cursor", 0) == 7, "служебный документ пережил перезапуск");
+        const auto applied = model.apply(json::array({hs::rowOpFromWire(wire(uid(10), kBob, kSelf, 15, "новое"), bobChat())}));
+        check(applied.ok && applied.changed == std::vector<std::string>{uid(10)}, "rowsApply: изменённая строка — по id");
+        model.forget({uid(5)});
+        check(!model.get(uid(5)).has_value(), "убрать у себя (forget_json) — строки нет");
+        model.apply(json::array(), json::array(), json::array(), true);
+        check(model.all().empty() && model.marks().empty(), "замена: строки и маркеры модели стёрты");
         std::filesystem::remove_all(dir);
     }
 
@@ -514,19 +545,19 @@ int main() {
         check(!a.visible(uid(7)), "удаление-сирота дошло и до устройства, где сообщение было");
     }
 
-    // Правка до сообщения: применяется, только если автор совпал (права — до прихода строки)
+    // Права чужой правки — модель (поле by): известная строка не автора не правится; правка автора, пришедшая раньше
+    // сообщения, применяется, когда строка придёт (своего «ожидания» у ядра нет)
     {
-        const auto fake = hs::editOp(uid(30), bobChat(), hs::stampOf(7000, uid(31)), json{{"content", {{"kind", "text"}, {"text", "подмена"}}}});
-        check(b.sync->record(fake, false, kBob).is_null() && !b.store->get(uid(30)), "правка неизвестного сообщения ждёт его строку");
         b.sync->record(hs::rowOpFromWire(wire(uid(30), kSelf, kBob, 6900, "моё"), bobChat()), false);
-        check(!b.sync->view(*b.store->get(uid(30))).value("edited", true), "правка чужого (не автора) отброшена, когда строка пришла");
-        const auto real = hs::editOp(uid(32), bobChat(), hs::stampOf(7100, uid(33)), json{{"content", {{"kind", "text"}, {"text", "исправлено"}}}});
-        b.sync->record(real, false, kBob);
+        const auto fake = hs::editOp(uid(30), bobChat(), hs::stampOf(7000, uid(31)),
+                                     json{{"content", {{"kind", "text"}, {"text", "подмена"}}}}, kBob);
+        b.sync->record(fake, false);
+        check(!b.sync->view(*b.store->get(uid(30))).value("edited", true), "правка известного чужого сообщения не применена");
+        const auto real = hs::editOp(uid(32), bobChat(), hs::stampOf(7100, uid(33)),
+                                     json{{"content", {{"kind", "text"}, {"text", "исправлено"}}}}, kBob);
+        b.sync->record(real, false);
         const auto st = b.sync->record(hs::rowOpFromWire(wire(uid(32), kBob, kSelf, 7050, "опечатка"), bobChat()), false);
         check(b.sync->view(st).value("edited", false), "правка автора применена, когда строка пришла");
-        check(b.sync->record(fake, false, kBob).is_null() || true, "повтор правки — без падения");
-        const auto denied = hs::editOp(uid(32), bobChat(), hs::stampOf(7200, uid(34)), json{{"content", {{"kind", "text"}, {"text", "чужая"}}}});
-        check(b.sync->record(denied, false, kSelf).is_null(), "правка известного чужого сообщения отвергнута");
     }
 
     // То же в движке (поле by): чужая правка/удаление сироты — кандидат, автор сверяется, когда строка придёт
@@ -646,7 +677,7 @@ int main() {
         x.sync->flushNow();
         y.sync->syncNow();
         // Только у y и не в журнале (так бывает со строкой, воскрешённой прежним механизмом)
-        y.store->put(hs::call("historyApply", json{{"op", hs::rowOpFromWire(wire(uid(12), kBob, kSelf, 1200, "лишнее"), bobChat())}}));
+        y.store->apply(json::array({hs::rowOpFromWire(wire(uid(12), kBob, kSelf, 1200, "лишнее"), bobChat())}));
         clock += 200LL * 24 * 3600 * 1000;
         s4.clock = clock.load();
         x.sync->record(hs::goneOp(uid(1), bobChat(), hs::stampOf(clock.load(), uid(13)), true), true);
@@ -706,8 +737,7 @@ int main() {
         const auto key = hs::chatKeyOf(gx);
         g1.sync->record(hs::rowOpFromWire(wire(uid(80), kBob, "", 100, "раз"), gx), false);
         g1.sync->record(hs::rowOpFromWire(wire(uid(81), kBob, "", 200, "два"), gy), false);
-        int n = 0;
-        g1.store->forEachInChat(key, [&](const json &) { ++n; });
+        const auto n = int(g1.store->chat(key).size());
         check(n == 2 && g1.sync->unreadCount(key) == 2, "строки группы под двумя доменами — в одном чате", std::to_string(n));
         // Маркер под другим доменом сводится в тот же чат
         g1.sync->advanceMark(hs::markAt(*g1.store->get(uid(81))), true);

@@ -101,7 +101,8 @@ void noteFederationFailure(const std::string &error);
 [[nodiscard]] json legacyRecordsFromKotlin(const std::string &dir, const std::string &self);
 
 // ── журнал истории аккаунта (spec 033, jni_history.cpp; ядро parvane::history::HistorySync) ─────────────
-// Строки RowState (FileRowStore ядра), маркеры «прочитано до», события шва message/edited/meta/deleted/read_state.
+// Строки RowState и маркеры «прочитано до» — модель движка (ModelRows ядра, spec 035 T125); события шва
+// message/edited/meta/deleted/read_state.
 void historyStart();   // рабочий поток журнала (после старта сессии v2)
 // spec 035 T137: пока не закончен разовый перенос прежнего состояния в модель, рабочий поток журнала истории не
 // стартует (он применяет свои отложенные операции к старым файлам истории — перенос читал бы их уже другими);

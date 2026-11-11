@@ -13,7 +13,7 @@
 #include <nlohmann/json.hpp>
 
 namespace parvane::history {
-class RowStore;
+class ModelRows;
 }
 
 namespace parvane::audit {
@@ -50,8 +50,8 @@ struct Sources {
     std::function<std::string(const json &peer)> chatKey;
 };
 
-// Строки и маркеры из хранилища строк истории хоста (desktop FileRowStore, Android — свой).
-void addRowStore(Sources &sources, history::RowStore &store);
+// Строки и маркеры истории из модели движка профиля (spec 035 T125: строки desktop и android — в модели).
+void addModelRows(Sources &sources, const history::ModelRows &rows);
 
 [[nodiscard]] std::vector<Line> build(const Sources &sources);
 [[nodiscard]] std::string jsonl(const std::vector<Line> &lines);

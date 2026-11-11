@@ -181,7 +181,7 @@ describe('SYNC-1: дисковый курсор двигается только 
       .toContain('for (const auto *name : {"cursors.json", "dec-cache.jsonl", "pending.json", "v2-ids.txt"})');
     // spec 033: строка — в журнал истории аккаунта до показа (без TTL), реплей — из хранилища строк RowState
     const history = readAndroidJni('jni_history.cpp');
-    expect(history).toMatch(/void historyReplay\(\) \{[\s\S]{0,200}const auto msgs = historyRows\(\);/);
+    expect(history).toMatch(/void historyReplay\(\) \{[\s\S]{0,600}const auto msgs = historyRows\(\);/);
     expect(history).toContain('if (!journaledContent(content)) return true;');
     expect(main).not.toMatch(/journalAppend|journalFold|journaledType/);
     // Входящее v2 разбирает движок; повтор (тот же uuid) не показывается дважды
@@ -2889,10 +2889,11 @@ describe('HIST-1: удалённое не воскресает; событие �
     expect(header).not.toMatch(/ownDelayMs|incomingMinMs/);
     expect(header).toContain(`std::int64_t pollMs = ${r.pollMs};`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    // Сведение — движком; входящее пишется, только если журнал его ещё не знает; мутация до строки ждёт автора
-    expect(core).toContain('auto next = call("historyApply", args);');
+    // Сведение — модель движка (spec 035 T125: rowsApply); входящее пишется, только если журнал его ещё не знает;
+    // права чужой мутации до строки — модель (поле by), своего ожидания автора у ядра нет
+    expect(core).toContain('const auto r = cfg_.rows->apply(json::array({op}));');
     expect(core).toContain('} else if (!key.empty() && !seen_.count(key)) {');
-    expect(core).toContain('if (p.author != author) {');
+    expect(core).not.toMatch(/parked_|releaseParked|requiredAuthor/);
     const desktop = readDesktopSource();
     // Получатель: права удаления — движком, неизвестная цель — сирота/ожидание автора
     // Автор чужой мутации — в операции (by/by_admin): движок сверяет его с автором строки, и у сироты — когда
@@ -2924,8 +2925,8 @@ describe('HIST-1: удалённое не воскресает; событие �
   it('android: то же ядро, строки RowState в хранилище, удаление «у всех»/«только у меня» (spec 033 T026–T028)', () => {
     expect(readRepo('android/jni/CMakeLists.txt')).toContain('/src/history_sync.cpp)');
     const history = readAndroidJni('jni_history.cpp');
-    // Хранилище строк — FileRowStore ядра (надгробия и сироты — строки, свёртка их не теряет)
-    expect(history).toContain('std::make_unique<ph::FileRowStore>(historyRowsPath(me), historyMarksPath(me)');
+    // Строки — модель движка через ModelRows ядра (надгробия и сироты — строки модели, spec 035 T125)
+    expect(history).toContain('h->store = std::make_unique<ph::ModelRows>(');
     expect(history).toContain('h->sync = std::make_unique<ph::HistorySync>(std::move(cfg));');
     // Входящие мутации — операции журнала с автором (by/by_admin), права — движок; неизвестная цель — сирота
     expect(history).toContain('op = ph::goneOp(target, peer, stamp, in.forEveryone, in.from, isAdmin);');
@@ -2941,8 +2942,8 @@ describe('HIST-1: удалённое не воскресает; событие �
     // Окно X «удалить у всех» — в личном чате и чужое
     expect(readAndroidKt('Client.kt')).toContain('store.canDeleteForEveryone(chatId, own)');
     expect(readAndroidKt('ParvaneStore.kt')).toContain('val g = groupsByChatId[chatId] ?: return true');
-    // Прежний журнал событий (journal.jsonl) переносится в строки один раз; снимка истории нет
-    expect(history).toContain('convertLegacyJournal(*h, me);');
+    // Прежний журнал событий (journal.jsonl) переносится в строки модели один раз; снимка истории нет
+    expect(history).toContain('convertLegacyJournal(*raw, me);');
     expect(readAndroidJni()).not.toMatch(/applyBundleHistory|journalTransform|journalRemoveIds/);
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ParvaneStoreHistoryTest.kt'))
       .toContain('fun deletingUnreadIncomingLowersBadge()');
@@ -3086,12 +3087,12 @@ describe('READ-2: прочитанное на одном своём устрой
     expect(readRepo('desktop/parvane-core/include/parvane/history_sync.h'))
       .toContain(`std::int64_t batchMaxMs = ${r.markWriteDelayMs[1]};`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    // Своё сообщение с любого своего устройства сдвигает маркер; счётчик — historyIsUnread движка
+    // Своё сообщение с любого своего устройства сдвигает маркер; счётчик — модель движка (rowsRead, spec 035 T125)
     expect(core).toContain('if (const auto m = markAt(st); m.is_object()) advanceMark(m, own);');
-    expect(core).toContain('if (call("historyIsUnread", args).get<bool>()) ++out.unread;');
+    expect(core).toContain('const auto r = cfg_.rows->read(chatKey);');
     const desktop = readDesktopSource();
-    // Копия своей квитанции READ — маркер (раньше выбрасывалась)
-    expect(desktop).toContain('sync->advanceMark(best, /*own=*/false); // пишет в журнал устройство, где прочитали');
+    // Копия своей квитанции READ — маркер (раньше выбрасывалась); сводит модель, в журнал пишет устройство прочтения
+    expect(desktop).toContain('sync->advanceMark(m, /*own=*/false);');
     // Счётчик tdesktop — от маркера, не от потока вставок
     expect(desktop).toContain('history->inboxRead(MsgId(readId), rs.unread);');
     expect(desktop).toMatch(new RegExp('void ShowHistoryStates\\([\\s\\S]{0,2500}'
@@ -3104,7 +3105,7 @@ describe('READ-2: прочитанное на одном своём устрой
   it('android: маркер, своя квитанция и своё сообщение, unreadCount от маркера (spec 033 T027)', () => {
     const history = readAndroidJni('jni_history.cpp');
     // Копия своей квитанции READ с другого устройства — маркер (быстрая дорога)
-    expect(history).toContain('(void)h->sync->advanceMark(best, /*own=*/false);');
+    expect(history).toContain('(void)h->sync->advanceMark(m, /*own=*/false);');
     // Своё сообщение с любого своего устройства сдвигает маркер — счётчик заново
     expect(history)
       .toContain('if (h->sync->isSelf(from)) emit(readStateEvent(*h, chat, strOf(view, "chatKey")));');
@@ -3368,6 +3369,28 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     expect(session).toContain('{"host_driven", true}');
   });
 
+  // T125: строки истории desktop (и android — то же ядро) — в модели движка (`rowsApply`, `rowsAll` с выборкой,
+  // `rowsRead` через engine::Host, как web historyRows.ts); своего хранилища строк и сведения строк и маркеров у ядра
+  // и tdesktop нет. Прежние файлы строк (spec 033, журнал до spec 033) переносятся в модель один раз
+  it('строки истории — модель движка: ни хранилища, ни сведения строк и маркеров в ядре и tdesktop (T125)', () => {
+    const core = readRepo(`${coreSrc}/history_sync.cpp`);
+    expect(core).not.toMatch(/FileRowStore::|"historyApply"|"historyMerge"|"historyMarkMerge"|"historyIsUnread"/);
+    expect(core).toContain('const auto st = h->step("rowsApply", args);');
+    expect(core).toContain('return resultOf(h->raw("rowsAll", what));');
+    expect(core).toContain('h->raw("rowsRead", json{{"chat_key", chatKey}');
+    expect(readRepo('desktop/parvane-core/include/parvane/history_sync.h'))
+      .not.toMatch(/class (RowStore|FileRowStore)\b/);
+    const history = readRepo(`${tdesktopDir}/parvane_client_history.cpp`);
+    expect(history).not.toMatch(/FileRowStore|"historyApply"|"historyMerge"|"historyMarkMerge"/);
+    expect(history)
+      .toContain('std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString());');
+    expect(history).toContain('parvane::history::importLegacyRows(');
+    expect(history).toContain('return ConvertLegacyOps(stored, self);');
+    expect(readDesktopSource()).not.toMatch(/"historyMarkMerge"|"historyApply"/);
+    // Модель — та же, что у сессии; без сети — по прошлому открытию (показ истории до подключения, как web)
+    expect(readDesktopSession()).toContain('bool Session::openModelOffline() {');
+  });
+
   // Показ состояния в tdesktop — пока из снимка формы state.v1 (stateViewV1), не из StateView модели (T126)
   it.fails('parvane_client_state.cpp — показ из StateView модели (T126)', () => {
     expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`))
@@ -3539,8 +3562,17 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(protocol).toContain('nativeEngineStatic("contentView"');
     expect(readAndroidJni('protocol_jni.cpp')).not.toMatch(/parvane::v2::(toV2|fromV2)\(/);
   });
-  // Остаток T136: показ личного состояния — из снимка формы state.v1 (stateViewV1 модели), не из StateView объектов;
-  // строки истории — у журнала ядра (jni_history.cpp), не rowsApply модели (как desktop T125 — модель строк не ведёт)
+  // T125: строки истории android — модель движка через ModelRows общего ядра (desktop history_sync.cpp); в шве нет
+  // своего хранилища строк и сведения строк и маркеров; прежние файлы и журнал шва до spec 033 — в модель один раз
+  it('jni_history.cpp — строки в модели движка (ModelRows ядра), без своего хранилища и сведения (T125)', () => {
+    const history = strip(readAndroidJni('jni_history.cpp'));
+    expect(history).not.toMatch(/FileRowStore|"historyApply"|"historyMerge"|"historyMarkMerge"/);
+    expect(history).toContain('h->store = std::make_unique<ph::ModelRows>(');
+    expect(history).toContain('return s ? s->rowsModel() : nullptr;');
+    expect(history).toContain('const auto rowsDone = ph::importLegacyRows(');
+    expect(history).toContain('convertLegacyJournal(*raw, me);');
+  });
+  // Остаток T136: показ личного состояния — из снимка формы state.v1 (stateViewV1 модели), не из StateView объектов
   it.fails('StateJournal.kt — показ из StateView модели (объекты), не из снимка формы state.v1 (T136)', () => {
     expect(strip(readAndroidKt('StateJournal.kt'))).not.toMatch(/fun project\(snap: JSONObject/);
   });

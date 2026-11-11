@@ -682,13 +682,15 @@ void HistoryAppend(const parvane::StoredMessage &sm) {
 // Точное время входящих v2 (мс) — для строки журнала (StoredMessage хранит секунды). Под g_v2Mutex.
 QHash<QString, qint64> g_inboundTsMs;
 
-// Воспроизвести локальную историю в UI при старте (до первого sync) — из хранилища строк журнала истории:
-// удалённое (надгробия) и сироты не показываются. Дедуп по uuid делает injectOnMain; live=false → без ack и без
-// повторной записи в журнал. Счётчики — от маркера «прочитано до» (READ-2), не от потока вставок.
-// Не главный поток: открытие хранилища и перенос прежнего журнала ждутся здесь; then — на главном после вставки.
+// Воспроизвести локальную историю в UI при старте (до первого sync) — из строк модели (spec 035 T125; без сети —
+// модель по прошлому открытию): удалённое (надгробия) и сироты не показываются. Дедуп по uuid делает injectOnMain;
+// live=false → без ack и без повторной записи в журнал. Счётчики — от маркера «прочитано до» (READ-2), не от потока
+// вставок. Не главный поток; модель ещё не открыта — воспроизведение по её готовности; then — на главном после вставки.
 void ReplayHistory(std::function<void()> then = nullptr) {
 	EnsureHistory(SelfAddress());
-	WaitHistoryReady();
+	if (DeferHistoryUntilReady([then] { crl::async([then] { ReplayHistory(then); }); })) {
+		return;
+	}
 	std::vector<parvane::StoredMessage> msgs;
 	for (const auto &state : HistoryAllStates()) {
 		if (auto sm = StoredFromHistory(state); sm && !sm->deleted) {
@@ -1615,21 +1617,17 @@ void ApplyIncomingMutation(const parvane::v2::Incoming &in) {
 			NoteOutboxRead(chatAddress, in.targets);
 			return;
 		}
-		// Копия своей квитанции с другого своего устройства — маркер «прочитано до» (READ-2, быстрая дорога)
-		auto best = parvane::json();
-		for (const auto &target : in.targets) {
-			const auto state = HistoryState(QString::fromStdString(target));
-			if (!state || !sameChat(*state)) {
-				continue;
+		// Копия своей квитанции с другого своего устройства — маркер «прочитано до» (READ-2, быстрая дорога); маркеры
+		// сводит модель (максимум), в журнал пишет устройство, где прочитали
+		if (const auto sync = HistorySyncNow()) {
+			for (const auto &state : HistoryStatesOf(in.targets)) {
+				if (!sameChat(state)) {
+					continue;
+				}
+				if (const auto m = parvane::history::markAt(state); m.is_object()) {
+					sync->advanceMark(m, /*own=*/false);
+				}
 			}
-			if (const auto m = parvane::history::markAt(*state); m.is_object()) {
-				best = best.is_null()
-					? m
-					: parvane::history::call("historyMarkMerge", { { "a", best }, { "b", m } });
-			}
-		}
-		if (const auto sync = HistorySyncNow(); sync && best.is_object()) {
-			sync->advanceMark(best, /*own=*/false); // пишет в журнал устройство, где прочитали
 			ApplyReadState(chatAddress);
 		}
 		return;

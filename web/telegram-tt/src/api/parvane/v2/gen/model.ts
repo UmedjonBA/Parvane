@@ -2250,6 +2250,8 @@ export interface RowsAllRequest {
   views: boolean;
   states: boolean;
   marks: boolean;
+  chatKey: string;
+  ids: string[];
 }
 
 export function rowsAllRequestFromJson(v: unknown): RowsAllRequest {
@@ -2257,10 +2259,14 @@ export function rowsAllRequestFromJson(v: unknown): RowsAllRequest {
   const views = pick(j, 'views', 'views');
   const states = pick(j, 'states', 'states');
   const marks = pick(j, 'marks', 'marks');
+  const chatKey = pick(j, 'chat_key', 'chatKey');
+  const ids = pick(j, 'ids', 'ids');
   const out: RowsAllRequest = {
     views: views === undefined || views === null ? false : Boolean(views),
     states: states === undefined || states === null ? false : Boolean(states),
     marks: marks === undefined || marks === null ? false : Boolean(marks),
+    chatKey: chatKey === undefined || chatKey === null ? '' : String(chatKey),
+    ids: Array.isArray(ids) ? ids.map((x) => String(x)) : [],
   };
   return out;
 }
@@ -2270,6 +2276,8 @@ export function rowsAllRequestToJson(m: RowsAllRequest): Record<string, unknown>
   if (!(!m.views)) j.views = m.views;
   if (!(!m.states)) j.states = m.states;
   if (!(!m.marks)) j.marks = m.marks;
+  if (!(m.chatKey === '')) j.chat_key = m.chatKey;
+  if (m.ids.length) j.ids = m.ids.map((x) => x);
   return j;
 }
 
@@ -2309,6 +2317,29 @@ export function rowsApplyToJson(m: RowsApply): Record<string, unknown> {
   if (!(!m.wipe)) j.wipe = m.wipe;
   if (!((m.nowMs === '' || m.nowMs === '0'))) j.now_ms = m.nowMs;
   if (!(m.rowsJson === '')) j.rows_json = m.rowsJson;
+  return j;
+}
+
+export interface RowsReadRequest {
+  chatKey: string;
+  sinceJson: string;
+}
+
+export function rowsReadRequestFromJson(v: unknown): RowsReadRequest {
+  const j = (v ?? {}) as Record<string, unknown>;
+  const chatKey = pick(j, 'chat_key', 'chatKey');
+  const sinceJson = pick(j, 'since_json', 'sinceJson');
+  const out: RowsReadRequest = {
+    chatKey: chatKey === undefined || chatKey === null ? '' : String(chatKey),
+    sinceJson: sinceJson === undefined || sinceJson === null ? '' : String(sinceJson),
+  };
+  return out;
+}
+
+export function rowsReadRequestToJson(m: RowsReadRequest): Record<string, unknown> {
+  const j: Record<string, unknown> = {};
+  if (!(m.chatKey === '')) j.chat_key = m.chatKey;
+  if (!(m.sinceJson === '')) j.since_json = m.sinceJson;
   return j;
 }
 

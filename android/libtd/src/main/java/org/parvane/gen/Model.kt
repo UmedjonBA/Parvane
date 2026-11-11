@@ -2025,13 +2025,17 @@ data class Root(
 data class RowsAllRequest(
     val views: Boolean = false,
     val states: Boolean = false,
-    val marks: Boolean = false
+    val marks: Boolean = false,
+    val chatKey: String = "",
+    val ids: List<String> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
         if (!(!views)) j.put("views", views)
         if (!(!states)) j.put("states", states)
         if (!(!marks)) j.put("marks", marks)
+        if (!(chatKey.isEmpty())) j.put("chat_key", chatKey)
+        if (ids.isNotEmpty()) j.put("ids", JSONArray().apply { ids.forEach { put(it) } })
         return j
     }
 
@@ -2040,7 +2044,9 @@ data class RowsAllRequest(
             return RowsAllRequest(
                 views = j.pick("views", "views")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 states = j.pick("states", "states")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                marks = j.pick("marks", "marks")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                marks = j.pick("marks", "marks")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                chatKey = j.pick("chat_key", "chatKey")?.let { it.toString() } ?: "",
+                ids = (j.pick("ids", "ids") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString() } } } ?: emptyList()
             )
         }
     }
@@ -2074,6 +2080,27 @@ data class RowsApply(
                 wipe = j.pick("wipe", "wipe")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 nowMs = j.pick("now_ms", "nowMs")?.let { it.toString().toLong() } ?: 0L,
                 rowsJson = j.pick("rows_json", "rowsJson")?.let { it.toString() } ?: ""
+            )
+        }
+    }
+}
+
+data class RowsReadRequest(
+    val chatKey: String = "",
+    val sinceJson: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(chatKey.isEmpty())) j.put("chat_key", chatKey)
+        if (!(sinceJson.isEmpty())) j.put("since_json", sinceJson)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): RowsReadRequest {
+            return RowsReadRequest(
+                chatKey = j.pick("chat_key", "chatKey")?.let { it.toString() } ?: "",
+                sinceJson = j.pick("since_json", "sinceJson")?.let { it.toString() } ?: ""
             )
         }
     }

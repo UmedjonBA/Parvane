@@ -418,6 +418,9 @@ impl Engine {
             "rowsApply" => parse::<epb::RowsApply>(args).and_then(|a| self.rows_apply(a)).map(|o| json_of(&o)),
             "rowsAll" => parse::<epb::RowsAllRequest>(args)
                 .map(|a| json_of(&epb::CallResult { result_json: self.rows_all(&a).to_string() })),
+            "rowsRead" => parse::<epb::RowsReadRequest>(args)
+                .and_then(|a| self.rows_read(&a))
+                .map(|v| json_of(&epb::CallResult { result_json: v.to_string() })),
             "stateViewV1" => Ok(self.state_view_v1().to_string()),
             "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
             "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),

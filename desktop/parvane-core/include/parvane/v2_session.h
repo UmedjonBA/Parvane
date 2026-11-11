@@ -266,6 +266,12 @@ public:
     // ── журнал истории аккаунта (spec 033, history_sync.h) ──
     // Сессия журнала истории движка (ключ — из ключей личного состояния); nullptr — сессия не готова или ключа нет.
     std::unique_ptr<HistorySession> openHistorySession();
+    // Модель профиля для строк истории (spec 035 T125, history_sync.h `ModelRows`): открыта и готова — она, иначе
+    // nullptr. Не берёт мьютекс сессии (зовётся и с главного потока).
+    [[nodiscard]] std::shared_ptr<engine::Host> rowsModel() const;
+    // Открыть модель без сети по прошлому открытию (`model-open` в каталоге состояния: устройство и домен) — показ
+    // истории до подключения, как web. Перенос прежнего (нужен сервер) без сети не начинается. true — модель открыта.
+    bool openModelOffline();
     // Собеседник журнала истории (proto3-JSON state.v1.Peer) по адресу чата клиента: адрес пользователя или
     // "v2g:<hex>" (домен группы — из её журнала, иначе свой сервер). null — не адрес.
     json historyPeer(const std::string &address);
@@ -586,7 +592,12 @@ private:
     json modelOpenSteps_ = json::array();
     int needAttempts_ = 0;
     std::uint64_t lastDriveBatches_ = 0; // пачек хранилища за последний driveLocked (OPT-024)
-    bool openHostLocked(const std::string &deviceId, std::string *error);
+    // Готовая модель для строк истории (копия host_ под своим мьютексом: host_ меняется под engineMu_)
+    mutable std::mutex rowsHostMu_;
+    std::shared_ptr<engine::Host> rowsHost_;
+    void publishRowsHost(std::shared_ptr<engine::Host> h);
+    // offline — без сети (openModelOffline): нужен перенос — модель не открывается.
+    bool openHostLocked(const std::string &deviceId, std::string *error, bool offline = false);
     bool migrateLegacyLocked(std::string *error);
     bool driveLocked(const engine::Step &first, std::vector<json> *events = nullptr);
     void noteOpenLocked(const engine::Step &st);
