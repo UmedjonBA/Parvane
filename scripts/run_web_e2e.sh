@@ -77,8 +77,8 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
 
-  # Перезапущенные посреди сценария gateway и identity (см. gateway_restart_watch)
-  for restarted in gateway identity; do
+  # Перезапущенные посреди сценария gateway, identity и messenger (см. gateway_restart_watch)
+  for restarted in gateway identity messenger; do
     if [[ -s "$TEMP_ROOT/$restarted.pid" ]]; then
       kill "$(cat "$TEMP_ROOT/$restarted.pid")" 2>/dev/null || true
     fi
@@ -280,9 +280,44 @@ identity_restart_if_asked() {
   : >"$TEMP_ROOT/identity.restarted"
 }
 
+# Перезапуск messenger (spec 035 T142, «устройство отсутствовало»): сценарий пишет в файл `messenger.restart`
+# аргументы разового запуска шарда при остановленном messenger (например `--gc-as-of <unix-секунды>` — плановая
+# чистка «как через месяц»; пусто — просто перезапуск) и ждёт `messenger.restarted`. Вывод разового запуска —
+# `messenger.once.out` (stdout) и `messenger.log`, отметка — строка «== messenger restart»
+messenger_restart_if_asked() {
+  [[ -f "$TEMP_ROOT/messenger.restart" ]] || return 0
+  local once
+  once="$(cat "$TEMP_ROOT/messenger.restart")"
+  rm -f "$TEMP_ROOT/messenger.restart"
+  kill "$(cat "$TEMP_ROOT/messenger.pid")" 2>/dev/null || true
+  while kill -0 "$(cat "$TEMP_ROOT/messenger.pid")" 2>/dev/null; do sleep 0.1; done
+  printf '== messenger restart: %s\n' "$once" >>"$TEMP_ROOT/messenger.log"
+  : >"$TEMP_ROOT/messenger.once.out"
+  if [[ -n "$once" ]]; then
+    # shellcheck disable=SC2086 # аргументы разового запуска — словами
+    env \
+      PARVANE_NATS_URL="nats://127.0.0.1:$NATS_PORT" \
+      PARVANE_NATS_USER=messenger \
+      PARVANE_NATS_PASS="$MESSENGER_PASS" \
+      PARVANE_DB_PATH="$TEMP_ROOT/messenger.db" \
+      PARVANE_LOG_LEVEL=info \
+      "$ROOT/backend/target/debug/messenger" $once >"$TEMP_ROOT/messenger.once.out" 2>>"$TEMP_ROOT/messenger.log" \
+      || printf 'rc=%s\n' "$?" >>"$TEMP_ROOT/messenger.once.out"
+  fi
+  local lines
+  lines="$(wc -l <"$TEMP_ROOT/messenger.log")"
+  start_shard messenger "$MESSENGER_PASS"
+  for _attempt in {1..300}; do
+    tail -n +"$((lines + 1))" "$TEMP_ROOT/messenger.log" | rg -q 'Messenger шард запущен' && break
+    sleep 0.1
+  done
+  : >"$TEMP_ROOT/messenger.restarted"
+}
+
 gateway_restart_watch() {
   while sleep 0.3; do
     identity_restart_if_asked
+    messenger_restart_if_asked
     [[ -f "$TEMP_ROOT/gateway.restart" ]] || continue
     local extra
     extra="$(cat "$TEMP_ROOT/gateway.restart")"

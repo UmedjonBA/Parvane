@@ -141,6 +141,13 @@ async fn upsert(ctx: &V2, s: &GroupState, p: &group::PublicInfo, joined: Option<
     Ok(())
 }
 
+/// Плановая чистка истории публичных групп по сроку (`KEEP_DAYS`) — так, будто сейчас `now` (`v2::gc_store`):
+/// обрезка при приёме конверта затрагивает только группу, в которую пишут, а замолчавшая группа хранила бы
+/// просроченное бессрочно.
+pub(crate) async fn gc_expired(pool: &sqlx::SqlitePool, now: i64) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query("DELETE FROM public_group_messages WHERE at < ?").bind(now - KEEP_DAYS * 86_400).execute(pool).await?.rows_affected())
+}
+
 /// Принятый конверт публичной группы — в историю (обрезка по числу и сроку).
 pub(crate) async fn keep_envelope(ctx: &V2, s: &GroupState, env: &GroupEnvelope) {
     if s.public.is_none() {

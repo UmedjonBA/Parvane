@@ -462,23 +462,7 @@ impl V2 {
     }
 
     async fn gc(&self) -> Result<()> {
-        let now = now_unix();
-        sqlx::query("DELETE FROM inbox_log WHERE received_at < ?").bind(now - INBOX_TTL_SECS).execute(&self.v2).await?;
-        sqlx::query(
-            "DELETE FROM inbox_log WHERE received_at < ? AND seq <= (SELECT acked_seq FROM inbox_device d WHERE d.device = inbox_log.device)",
-        )
-        .bind(now - ACKED_KEEP_SECS)
-        .execute(&self.v2)
-        .await?;
-        sqlx::query("DELETE FROM group_envelope_nonce WHERE at < ?").bind(now - INBOX_TTL_SECS).execute(&self.v2).await?;
-        // C1-07: учёт объёма после очистки.
-        sqlx::query(
-            "UPDATE inbox_device SET records = (SELECT COUNT(*) FROM inbox_log l WHERE l.device = inbox_device.device), bytes = (SELECT COALESCE(SUM(LENGTH(item)), 0) FROM inbox_log l WHERE l.device = inbox_device.device)",
-        )
-        .execute(&self.v2)
-        .await?;
-        gc_spent(&self.v2, now).await?;
-        Ok(())
+        gc_store(&self.v2, now_unix()).await.map(|_| ())
     }
 }
 
@@ -647,10 +631,55 @@ pub(crate) async fn spend_token(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sp
     Ok(())
 }
 
+/// Сколько строк удалила плановая чистка (`--gc-as-of` печатает это JSON).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GcCounts {
+    pub inbox: u64,
+    pub envelope_nonces: u64,
+    pub spent_tokens: u64,
+    pub public_messages: u64,
+}
+
+impl GcCounts {
+    pub(crate) fn json(&self) -> String {
+        format!(
+            "{{\"inbox\":{},\"envelope_nonces\":{},\"spent_tokens\":{},\"public_messages\":{}}}",
+            self.inbox, self.envelope_nonces, self.spent_tokens, self.public_messages
+        )
+    }
+}
+
+/// ВСЕ плановые чистки шарда по срокам — так, будто сейчас `now` (unix-секунды). Раз в час — с текущим временем
+/// (`V2::gc`); spec 035 T142 (`messenger --gc-as-of <секунды>`) — с моментом «через месяц» на копии базы стенда:
+/// сценарий «устройство отсутствовало» без перевода часов. Что чистится: журналы инбоксов старше `INBOX_TTL_SECS`
+/// (подтверждённое — старше `ACKED_KEEP_SECS`), одноразовые нонсы конвертов групп, потраченные жетоны
+/// (`SPENT_KEEP_SECS`), история публичных групп старше `v2_public::KEEP_DAYS`. Журналы личного состояния, истории
+/// аккаунта и групп по времени не чистятся (история — только контрольной точкой устройств).
+pub(crate) async fn gc_store(pool: &SqlitePool, now: i64) -> Result<GcCounts> {
+    let mut n = GcCounts::default();
+    n.inbox += sqlx::query("DELETE FROM inbox_log WHERE received_at < ?").bind(now - INBOX_TTL_SECS).execute(pool).await?.rows_affected();
+    n.inbox += sqlx::query(
+        "DELETE FROM inbox_log WHERE received_at < ? AND seq <= (SELECT acked_seq FROM inbox_device d WHERE d.device = inbox_log.device)",
+    )
+    .bind(now - ACKED_KEEP_SECS)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    n.envelope_nonces = sqlx::query("DELETE FROM group_envelope_nonce WHERE at < ?").bind(now - INBOX_TTL_SECS).execute(pool).await?.rows_affected();
+    // C1-07: учёт объёма после очистки.
+    sqlx::query(
+        "UPDATE inbox_device SET records = (SELECT COUNT(*) FROM inbox_log l WHERE l.device = inbox_device.device), bytes = (SELECT COALESCE(SUM(LENGTH(item)), 0) FROM inbox_log l WHERE l.device = inbox_device.device)",
+    )
+    .execute(pool)
+    .await?;
+    n.spent_tokens = gc_spent(pool, now).await?;
+    n.public_messages = crate::v2_public::gc_expired(pool, now).await?;
+    Ok(n)
+}
+
 /// Очистка трат старше срока приёма ключа (+ запас).
-pub(crate) async fn gc_spent(pool: &SqlitePool, now: i64) -> Result<()> {
-    sqlx::query("DELETE FROM spent_tokens WHERE at < ?").bind(now - SPENT_KEEP_SECS).execute(pool).await?;
-    Ok(())
+pub(crate) async fn gc_spent(pool: &SqlitePool, now: i64) -> Result<u64> {
+    Ok(sqlx::query("DELETE FROM spent_tokens WHERE at < ?").bind(now - SPENT_KEEP_SECS).execute(pool).await?.rows_affected())
 }
 
 
@@ -697,6 +726,45 @@ mod spent_tests {
         // После вывода ключа из приёма множество трат можно чистить.
         gc_spent(&p, t0 + SPENT_KEEP_SECS + 1).await.unwrap();
         spend(&p, [1; 32], t0 + SPENT_KEEP_SECS + 1, true).await.unwrap();
+    }
+
+    /// spec 035 T142 (`--gc-as-of`): плановая чистка «как через месяц» стирает инбокс, нонсы и жетоны старше
+    /// своих сроков и пересчитывает учёт объёма; журналы личного состояния и истории аккаунта по времени не
+    /// трогает (из них устройство, отсутствовавшее месяц, и догоняет), историю публичной группы — после 90 суток.
+    #[tokio::test]
+    async fn gc_as_of_month_keeps_journals() {
+        let p = pool().await;
+        let t0 = 20_000 * 86_400 + 3600;
+        let exec = |q: &'static str| {
+            let p = p.clone();
+            async move { sqlx::query(q).bind(t0).execute(&p).await.unwrap() }
+        };
+        exec("INSERT INTO inbox_device (device, next_seq, acked_seq, records, bytes) VALUES ('d', 2, 0, 2, 6)").await;
+        exec("INSERT INTO inbox_log (device, seq, item, received_at) VALUES ('d', 1, x'010203', ?)").await;
+        exec("INSERT INTO inbox_log (device, seq, item, received_at) VALUES ('d', 2, x'040506', ?)").await;
+        exec("INSERT INTO group_envelope_nonce (group_id, epoch, nonce, at) VALUES (x'01', 1, x'02', ?)").await;
+        exec("INSERT INTO spent_tokens (spent_id, key_id, at) VALUES (x'01', x'02', ?)").await;
+        exec("INSERT INTO user_state_log_v2 (user, seq, op_id, record, at) VALUES ('u', 1, x'01', x'02', ?)").await;
+        exec("INSERT INTO user_history_log (user, seq, op_id, record, chunk, at) VALUES ('u', 1, x'01', x'02', 0, ?)").await;
+        exec("INSERT INTO public_group_messages (group_id, envelope, at) VALUES (x'01', x'02', ?)").await;
+        let count = |t: &'static str| {
+            let p = p.clone();
+            async move { sqlx::query_as::<_, (i64,)>(&format!("SELECT COUNT(*) FROM {t}")).fetch_one(&p).await.unwrap().0 }
+        };
+
+        // Сутки спустя неподтверждённое живо, жетон ещё в сроке приёма ключа
+        assert_eq!(gc_store(&p, t0 + 86_400).await.unwrap(), GcCounts::default());
+        // «Месяц» (31 сутки): всё по срокам — стёрто, журналы — целы
+        let n = gc_store(&p, t0 + 31 * 86_400).await.unwrap();
+        assert_eq!(n, GcCounts { inbox: 2, envelope_nonces: 1, spent_tokens: 1, public_messages: 0 });
+        assert_eq!(count("inbox_log").await, 0);
+        let used: (i64, i64) = sqlx::query_as("SELECT records, bytes FROM inbox_device WHERE device = 'd'").fetch_one(&p).await.unwrap();
+        assert_eq!(used, (0, 0), "учёт объёма пересчитан");
+        assert_eq!(count("user_state_log_v2").await, 1);
+        assert_eq!(count("user_history_log").await, 1);
+        assert_eq!(count("public_group_messages").await, 1);
+        assert_eq!(gc_store(&p, t0 + 91 * 86_400).await.unwrap().public_messages, 1);
+        assert_eq!(n.json(), r#"{"inbox":2,"envelope_nonces":1,"spent_tokens":1,"public_messages":0}"#);
     }
 
     /// Отказ записи (транзакция не зафиксирована) — жетон не списан.

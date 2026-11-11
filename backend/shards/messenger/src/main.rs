@@ -53,6 +53,15 @@ async fn main() -> Result<()> {
             println!("{}", v2_migration::status(&v2_pool).await?.json());
             return Ok(());
         }
+        // spec 035 (T142): все плановые чистки шарда один раз — так, будто сейчас указанный момент (unix-секунды);
+        // сценарий «устройство отсутствовало» («месяц спустя») без перевода часов стенда. Только на копии базы стенда.
+        "--gc-as-of" => {
+            let at = gc_as_of_arg(std::env::args().nth(2).as_deref())?;
+            let n = v2::gc_store(&v2_pool, at).await?;
+            info!("messenger: плановая чистка как на {at} выполнена, выход (--gc-as-of)");
+            println!("{}", n.json());
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -78,9 +87,33 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Аргумент `--gc-as-of`: момент в unix-секундах, не раньше «сейчас» (чистка в прошлое ничего не значит, а опечатка
+/// в единицах — миллисекунды — стёрла бы всё).
+fn gc_as_of_arg(arg: Option<&str>) -> Result<i64> {
+    let at: i64 = arg.context("--gc-as-of <unix-секунды>")?.trim().parse().context("--gc-as-of: не число")?;
+    anyhow::ensure!(at >= now_unix() - 60, "--gc-as-of: момент в прошлом");
+    anyhow::ensure!(at < 100_000_000_000, "--gc-as-of: ждём секунды, не миллисекунды");
+    Ok(at)
+}
+
 pub(crate) fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+#[cfg(test)]
+mod gc_as_of_tests {
+    use super::*;
+
+    #[test]
+    fn gc_as_of_arg_checks_units_and_direction() {
+        let month = now_unix() + 31 * 86_400;
+        assert_eq!(gc_as_of_arg(Some(&month.to_string())).unwrap(), month);
+        assert!(gc_as_of_arg(None).is_err());
+        assert!(gc_as_of_arg(Some("завтра")).is_err());
+        assert!(gc_as_of_arg(Some("1000")).is_err(), "момент в прошлом");
+        assert!(gc_as_of_arg(Some(&(month * 1000).to_string())).is_err(), "миллисекунды");
+    }
 }
