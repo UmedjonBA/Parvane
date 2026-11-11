@@ -45,7 +45,8 @@ const CAROL = `spd-carol-${SUFFIX}@local`;
 const FOLDER_ID = 2;
 const SYNC_TIMEOUT_MS = 120000;
 const LINK_TIMEOUT_MS = 150000;
-const NOTE = 'Соседка, любит вымышленные головоломки';
+// Без запятой: хук PARVANE_AUTOPATCH делит список правок по ','
+const NOTE = 'Соседка и любит вымышленные головоломки';
 const OFFLINE_GATEWAY = '127.0.0.1:9';
 
 requireGatewayTcpUrl();
