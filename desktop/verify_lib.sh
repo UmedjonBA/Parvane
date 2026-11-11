@@ -246,6 +246,12 @@ clients_kill() { # clients_kill <каталог>...
   for d in "$@"; do [ -n "$d" ] && pkill -9 -f -- "-workdir $d/" 2>/dev/null; done
   return 0
 }
+model_store_sealed() { # model_store_sealed <tdata> <аккаунт> <образец>... — с spec 035 T125 строки истории в модели движка
+  local td="$1" st="$1/parvane-v2-$2/store" pat; shift 2
+  ls "$st"/batch-*.bin >/dev/null 2>&1 || return 1
+  for pat in "$@"; do grep -rqa -e "$pat" "$st" "$td"/parvane-dec-cache* 2>/dev/null && return 1; done
+  return 0
+}
 stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; PIDS=(); }
 finish() { # finish <имя>
   # Продовый ACL: шард, полезший мимо своих прав, — дефект конфигурации или кода

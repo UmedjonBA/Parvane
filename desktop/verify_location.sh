@@ -17,14 +17,10 @@ wait_log "$B/td/log.txt" "инъецировано" 60
 # читать его напрямую больше нельзя — заодно проверяем и это.
 wait_log "$B/td/log.txt" "карта локации (не )?собрана 55\.7512,37\.6184" 40 \
   && ok "bob расшифровал location (пузырь карты с lat=55.7512 lon=37.6184)" || bad "bob не получил location"
-# расшифрованное лежит в журнале истории (построчно запечатан PVSE1)
-DC="$B/td/tdata/parvane-history-bob@local.jsonl"
-if [ -s "$DC" ]; then
-  head -c 5 "$DC" | grep -q '^PVSE1' && ! grep -qa -e '"kind":"location"' -e '55\.7512' "$DC" \
-    && ok "расшифрованное на диске зашифровано (PVSE1)" || bad "расшифрованное лежит на диске открытым текстом"
-else
-  bad "нет расшифрованного на диске у bob ($DC)"
-fi
+# расшифрованное лежит в модели движка (spec 035 T125) — хранилище зашифровано
+model_store_sealed "$B/td/tdata" "bob@local" '"kind":"location"' '55\.7512' \
+  && ok "расшифрованное на диске у bob — в модели, открытым текстом не лежит" \
+  || bad "нет хранилища модели у bob либо координаты лежат открыто"
 grep -qa -e '"location"' -e '55\.7512' "$SB"/messenger.db* && bad "location на сервере открыт" \
   || ok "на сервере location скрыт (только шифртекст)"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальная ошибка" || ok "без фатальных ошибок"
