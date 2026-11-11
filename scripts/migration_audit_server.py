@@ -92,6 +92,11 @@ LOG_TABLES = {
     "group_state_log", "user_state_log", "user_history_log", "inbox_log", "user_state_log_v2",
     "container_log", "container_grant_log", "container_snapshots", "files", "chunks", "blob_caps", "link_blobs",
 }
+# Кэши со сроком, которые шард сам чистит на старте и по таймеру (не данные пользователя): уменьшение числа строк —
+# плановая чистка, не потеря. spent_tokens — потраченные слепые жетоны (`gc_spent`, 3 сут); link_offers/link_grants —
+# незавершённые привязки устройств (identity `link.rs`, срок предложения); public_group_messages — окно ленты публичной
+# группы. Найдено T143 на копии прода: 2 жетона старше 3 сут удалены при старте (11 ноя 2026)
+TTL_TABLES = {"spent_tokens", "link_offers", "link_grants", "public_group_messages"}
 
 
 def strict_check(before, after):
@@ -106,7 +111,7 @@ def strict_check(before, after):
             continue
         if key[1] in LOG_TABLES and (la["rows"] != lb["rows"] or la.get("pk_digest") != lb.get("pk_digest")):
             bad.append(f"журнал изменил состав записей: {key[0]} {key[1]} ({lb['rows']} → {la['rows']})")
-        elif la["rows"] < lb["rows"]:
+        elif la["rows"] < lb["rows"] and key[1] not in TTL_TABLES:
             bad.append(f"меньше строк: {key[0]} {key[1]} ({lb['rows']} → {la['rows']})")
     for line in bad:
         print(f"НАРУШЕНИЕ {line}")
@@ -123,7 +128,7 @@ def compare(before, after):
     for key in sorted(set(a) & set(b)):
         if a[key]["digest"] != b[key]["digest"]:
             changed.append((key, b[key]["rows"], a[key]["rows"]))
-            if a[key]["rows"] < b[key]["rows"]:
+            if a[key]["rows"] < b[key]["rows"] and key[1] not in TTL_TABLES:
                 shrunk.append(key)
     print(f"таблиц до: {len(b)}, после: {len(a)}")
     for kind, table in lost:
@@ -131,7 +136,8 @@ def compare(before, after):
     for kind, table in added:
         print(f"добавлена таблица {kind} {table} ({a[(kind, table)]['rows']} строк)")
     for (kind, table), rb, ra in changed:
-        print(f"{'МЕНЬШЕ СТРОК' if ra < rb else 'изменена'} {kind} {table}: {rb} → {ra}")
+        mark = "изменена" if ra >= rb else ("меньше строк (кэш со сроком)" if table in TTL_TABLES else "МЕНЬШЕ СТРОК")
+        print(f"{mark} {kind} {table}: {rb} → {ra}")
     print(f"итог: потеряно таблиц {len(lost)}, изменено {len(changed)} (из них меньше строк {len(shrunk)}), "
           f"добавлено {len(added)}")
     return 1 if lost or shrunk else 0
