@@ -4,7 +4,8 @@
 #   scripts/make_release_manifest.sh <тег> <каталог артефактов> [файл манифеста]
 #
 # Каталог артефактов (что есть — то и попадает в манифест):
-#   web-dist/                 собранный web (в нём ровно один *.wasm движка);
+#   web-dist/                 собранный web (в нём ровно один WASM движка parvane_protocol_bg*.wasm; прочие
+#                             .wasm — fasttext, rlottie, декодер голосовых — не движок);
 #   shards/messenger          бинарь шарда (engineInfo — `messenger --engine-info`); либо SHARDS_IMAGE=<образ>
 #                             (digest — `docker image inspect`, engineInfo — `docker run --rm <образ> messenger --engine-info`);
 #   desktop/parvane-desktop   выпуск desktop (engineInfo — `parvane-desktop --engine-info`);
@@ -33,8 +34,8 @@ note_hashes() {
 }
 
 if [ -d "$DIR/web-dist" ]; then
-    mapfile -t W < <(find "$DIR/web-dist" -name '*.wasm' -type f)
-    [ "${#W[@]}" -eq 1 ] || { echo "web-dist: ожидался ровно один .wasm, найдено ${#W[@]}" >&2; exit 1; }
+    mapfile -t W < <(find "$DIR/web-dist" -name 'parvane_protocol_bg*.wasm' -type f)
+    [ "${#W[@]}" -eq 1 ] || { echo "web-dist: ожидался ровно один WASM движка, найдено ${#W[@]}" >&2; exit 1; }
     INFO="$(node "$ROOT/scripts/engine_info_wasm.mjs" "${W[0]}")"
     note_hashes "$INFO"
     ARTS="$(jq --arg sha "$(dir_sha "$DIR/web-dist")" --arg w "$(sha "${W[0]}")" --arg p "${W[0]#"$DIR/"}" --argjson info "$INFO" \
