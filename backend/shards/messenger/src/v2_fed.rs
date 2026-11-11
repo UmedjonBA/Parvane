@@ -245,7 +245,94 @@ pub(crate) async fn unsubscribe(pool: &sqlx::SqlitePool, user: &str, group: &Ref
         .execute(pool)
         .await
         .map_err(sub_err)?;
+    sqlx::query("DELETE FROM remote_group_pending WHERE user = ? AND group_domain = ? AND group_id = ?")
+        .bind(user)
+        .bind(group.domain.to_ascii_lowercase())
+        .bind(&group.id)
+        .execute(pool)
+        .await
+        .map_err(sub_err)?;
     Ok(())
+}
+
+/// Отложенных записей групп других серверов на одного получателя (до его подписки).
+pub(crate) const MAX_PENDING_PER_USER: i64 = 2000;
+/// … и на пару (получатель, домен группы): один чужой сервер не вытеснит записи групп остальных.
+pub(crate) const MAX_PENDING_PER_DOMAIN: i64 = 500;
+/// Срок жизни отложенной записи: устройство, не подписавшееся за неделю, группу уже не ждёт.
+pub(crate) const PENDING_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+
+/// Запись группы другого сервера до подписки получателя — в отложенные (PV-014). Подписку устройство шлёт, только
+/// разобрав приглашение и журнал группы, а сервер группы шлёт уведомление журнала и первое сообщение сразу: без
+/// отложенных они терялись навсегда (e2e federation: участник с другого сервера не видел первого сообщения группы).
+/// Сверх потолков запись отбрасывается молча — ответ выдал бы чужому серверу, состоит ли получатель в группе.
+async fn stash_pending(pool: &sqlx::SqlitePool, recipient: &str, group: &Ref, item: &inbox_record::Item) -> Result<(), ErrorCode> {
+    let now = crate::now_unix() * 1000;
+    let domain = group.domain.to_ascii_lowercase();
+    let bytes = InboxRecord { seq: 0, received_ms: 0, item: Some(item.clone()) }.encode_to_vec();
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(sub_err)?;
+    sqlx::query("DELETE FROM remote_group_pending WHERE created_ms < ?").bind(now - PENDING_TTL_MS).execute(&mut *tx).await.map_err(sub_err)?;
+    let (all, same): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(group_domain = ?), 0) FROM remote_group_pending WHERE user = ?",
+    )
+    .bind(&domain)
+    .bind(recipient)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(sub_err)?;
+    if all >= MAX_PENDING_PER_USER || same >= MAX_PENDING_PER_DOMAIN {
+        return Ok(());
+    }
+    sqlx::query("INSERT INTO remote_group_pending (user, group_domain, group_id, item, created_ms) VALUES (?, ?, ?, ?, ?)")
+        .bind(recipient)
+        .bind(&domain)
+        .bind(&group.id)
+        .bind(bytes)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(sub_err)?;
+    tx.commit().await.map_err(sub_err)?;
+    Ok(())
+}
+
+/// Подписка получена: отложенные записи группы — в журналы устройств получателя (по порядку прихода) и из
+/// отложенных вон. Возвращает добавленное для живых событий.
+pub(crate) async fn release_pending(
+    pool: &sqlx::SqlitePool,
+    recipient: &str,
+    owner: &str,
+    devices: &[String],
+    group: &Ref,
+) -> Result<Vec<(crate::v2::Appended, inbox_record::Item)>, ErrorCode> {
+    let now = crate::now_unix() * 1000;
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, item FROM remote_group_pending WHERE user = ? AND group_domain = ? AND group_id = ? AND created_ms >= ? ORDER BY id",
+    )
+    .bind(recipient)
+    .bind(group.domain.to_ascii_lowercase())
+    .bind(&group.id)
+    .bind(now - PENDING_TTL_MS)
+    .fetch_all(pool)
+    .await
+    .map_err(sub_err)?;
+    let mut out = vec![];
+    for (id, bytes) in rows {
+        let item = InboxRecord::decode(bytes.as_slice()).ok().and_then(|r| r.item);
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(sub_err)?;
+        if let Some(item) = item {
+            for d in devices {
+                match crate::v2::append_in(&mut tx, owner, d, &item).await {
+                    Ok(a) => out.push((a, item.clone())),
+                    Err(ErrorCode::Limit) => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        sqlx::query("DELETE FROM remote_group_pending WHERE id = ?").bind(id).execute(&mut *tx).await.map_err(sub_err)?;
+        tx.commit().await.map_err(sub_err)?;
+    }
+    Ok(out)
 }
 
 async fn subscribed(pool: &sqlx::SqlitePool, user: &str, group: &Ref) -> Result<bool, ErrorCode> {
@@ -268,9 +355,10 @@ pub(crate) async fn store_pushed(
     group: &Ref,
     item: &inbox_record::Item,
 ) -> Result<Vec<(crate::v2::Appended, inbox_record::Item)>, ErrorCode> {
-    // PV-014: только группы, на которые получатель подписан; иначе запись отбрасывается молча — ответ об
-    // ошибке выдал бы чужому серверу, состоит ли наш пользователь в группе
+    // PV-014: в инбокс — только группы, на которые получатель подписан; до подписки запись ждёт в отложенных
+    // (`stash_pending`). Ответа об ошибке нет — он выдал бы чужому серверу, состоит ли наш пользователь в группе
     if !subscribed(pool, recipient, group).await? {
+        stash_pending(pool, recipient, group, item).await?;
         return Ok(vec![]);
     }
     let mut out = vec![];
@@ -405,5 +493,38 @@ mod tests {
         unsubscribe(&p, "alice@local", &group(9)).await.unwrap();
         assert!(store_pushed(&p, "alice@local", "alice@local", &devs, &group(9), &rows(64)).await.unwrap().is_empty());
         assert_eq!(count(p, dev).await, 2);
+    }
+
+    /// PV-014: запись группы, пришедшая ДО подписки получателя (уведомление журнала и первое сообщение сервер группы
+    /// шлёт сразу, подписка — когда устройство разобрало приглашение), не теряется: в инбокс она попадает при
+    /// подписке, по порядку прихода. Отложенные ограничены на домен; отписка их стирает (e2e federation).
+    #[tokio::test]
+    async fn push_before_subscribe_is_released_on_subscribe() {
+        let p = pool().await;
+        let devs = vec!["d1".to_string(), "d2".to_string()];
+        let dev = crate::v2::device_key("bob@local", "d1").unwrap();
+        let inbox = |p: sqlx::SqlitePool, dev: String| async move {
+            let rows: Vec<(Vec<u8>,)> = sqlx::query_as("SELECT item FROM inbox_log WHERE device = ? ORDER BY seq").bind(&dev).fetch_all(&p).await.unwrap();
+            rows.into_iter().map(|(b,)| InboxRecord::decode(b.as_slice()).unwrap().item.unwrap()).collect::<Vec<_>>()
+        };
+        store_pushed(&p, "bob@local", "bob@local", &devs, &group(9), &rows(10)).await.unwrap();
+        store_pushed(&p, "bob@local", "bob@local", &devs, &group(9), &rows(20)).await.unwrap();
+        assert!(inbox(p.clone(), dev.clone()).await.is_empty(), "до подписки — не в инбоксе");
+        subscribe(&p, "bob@local", &group(9)).await.unwrap();
+        let done = release_pending(&p, "bob@local", "bob@local", &devs, &group(9)).await.unwrap();
+        assert_eq!(done.len(), 4, "две записи — на оба устройства");
+        assert_eq!(inbox(p.clone(), dev.clone()).await, vec![rows(10), rows(20)], "по порядку прихода");
+        assert!(release_pending(&p, "bob@local", "bob@local", &devs, &group(9)).await.unwrap().is_empty(), "выдаются один раз");
+        // Отписка стирает отложенные чужой группы
+        store_pushed(&p, "bob@local", "bob@local", &devs, &group(7), &rows(30)).await.unwrap();
+        unsubscribe(&p, "bob@local", &group(7)).await.unwrap();
+        subscribe(&p, "bob@local", &group(7)).await.unwrap();
+        assert!(release_pending(&p, "bob@local", "bob@local", &devs, &group(7)).await.unwrap().is_empty());
+        // Потолок на домен: лишнее отбрасывается
+        for _ in 0..(MAX_PENDING_PER_DOMAIN + 10) {
+            store_pushed(&p, "carol@local", "carol@local", &devs, &group(5), &rows(8)).await.unwrap();
+        }
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM remote_group_pending WHERE user = 'carol@local'").fetch_one(&p).await.unwrap();
+        assert_eq!(n, MAX_PENDING_PER_DOMAIN);
     }
 }

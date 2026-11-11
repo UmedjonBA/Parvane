@@ -756,7 +756,20 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
         // Подписки на группы других серверов (spec 035, PV-014)
         "group.remote.subscribe" => {
             let r: gpb::RemoteSubscribeRequest = body(&req)?;
-            crate::v2_fed::subscribe(&ctx.v2, &user, &r.group.ok_or(ErrorCode::Invalid)?).await?;
+            let group = r.group.ok_or(ErrorCode::Invalid)?;
+            crate::v2_fed::subscribe(&ctx.v2, &user, &group).await?;
+            // Записи группы, пришедшие до подписки, — в журналы устройств (PV-014, отложенные)
+            if let Ok(devs) = ctx.devices_of(&user).await {
+                let owner = crate::v2::inbox_owner(&user, &devs).to_string();
+                match crate::v2_fed::release_pending(&ctx.v2, &user, &owner, &devs.v2_device_ids, &group).await {
+                    Ok(done) => {
+                        for (a, it) in done {
+                            ctx.publish_live(a, it).await;
+                        }
+                    }
+                    Err(e) => warn!("messenger: отложенные записи группы не выданы: {:?}", e),
+                }
+            }
             Ok(gpb::RemoteSubscribeResponse {}.encode_to_vec())
         }
         "group.remote.unsubscribe" => {

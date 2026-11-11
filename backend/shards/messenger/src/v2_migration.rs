@@ -11,6 +11,7 @@
 //! | messenger | `0010_inbox_group_key` | `inbox_log.group_key` (одно неподтверждённое уведомление журнала на группу) | колонка, у прежних записей — NULL |
 //! | messenger | `0011_device_minor_seen` | статистика «устройства перенесли» (T150) | новая таблица |
 //! | messenger | `0012_drop_legacy_origin` | удаление таблицы `legacy_origin` (легаси-копии v1, T096) | на проде строк 0 |
+//! | messenger | `0013_remote_group_pending` | записи групп чужих серверов до подписки получателя (PV-014) | новая таблица |
 //! | domains | `0005_log_truncation` | `containers.truncated_upto` (обрезка журнала снимком с `complete`) | колонка, 0 |
 //! | identity | — | новые виды записей журнала устройств (ротация SSK) | без переноса |
 //!
@@ -37,6 +38,7 @@ pub(crate) const ORDER: &[(&str, &str)] = &[
     ("messenger", "0010_inbox_group_key.sql"),
     ("messenger", "0011_device_minor_seen.sql"),
     ("messenger", "0012_drop_legacy_origin.sql"),
+    ("messenger", "0013_remote_group_pending.sql"),
     ("domains", "0005_log_truncation.sql"),
 ];
 

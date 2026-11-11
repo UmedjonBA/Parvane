@@ -932,8 +932,8 @@ fn group_notices(d: &mut Dev, group: &parvane_protocol::pb::parvane::core::v2::R
 }
 
 /// spec 035 T074 (PV-014, US7): сервер B шлёт `S2sInboxPush` своей группы для `anya@a`, которая на неё не
-/// подписана (не вступала) — запись в инбокс не кладётся. После `group.remote.subscribe` тот же пуш доходит
-/// (путь доставки исправен — отказ именно из-за подписки). Без правки PV-014 запись клалась сразу.
+/// подписана (не вступала) — запись в инбокс не кладётся, а ждёт подписки в отложенных: `group.remote.subscribe`
+/// выдаёт её, следующий пуш доходит тем же путём. Без правки PV-014 запись клалась сразу.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn federation_push_of_unsubscribed_group_is_dropped() {
     use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut, Ref, S2sInboxPush};
@@ -970,10 +970,12 @@ async fn federation_push_of_unsubscribed_group_is_dropped() {
         std::thread::sleep(Duration::from_secs(4));
         assert_eq!(group_notices(&mut anya, &group), Vec::<u64>::new(), "запись чужой группы без подписки не кладётся");
 
-        // Подписка на группу B — тот же путь доставляет
+        // Подписка на группу B: пришедшее до неё выдаётся (отложенные, e2e federation — первое сообщение группы
+        // приходило участнику с другого сервера раньше его подписки и терялось), дальше тот же путь доставляет
         anya.id
             .call("group.remote.subscribe", gpb::RemoteSubscribeRequest { group: Some(group.clone()) }.encode_to_vec())
             .expect("group.remote.subscribe");
+        eventually("запись, пришедшая до подписки", || (group_notices(&mut anya, &group) == vec![1]).then_some(()));
         push(2);
         eventually("запись подписанной группы", || (group_notices(&mut anya, &group) == vec![2]).then_some(()));
 
