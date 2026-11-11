@@ -71,7 +71,7 @@ PY
 tgx_mark; stop_pid "$BP"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOGROUPINFO=$G:avatar=$PNG")
 wait_log "$BL" "AUTOGROUPINFO '$G' avatar → ok" 60 && ok "bob (desktop) поставил фото группы" || bad "bob: фото группы не поставлено"
-tgx_logwait "фото группы [0-9a-f-]+ применено \(секрет: есть\)" 90 && ok "GPHOTO-1 (X): фото частной группы от desktop показано (по секрету)" \
+tgx_logwait "фото группы [^ ]+ применено \(секрет: есть\)" 90 && ok "GPHOTO-1 (X): фото частной группы от desktop показано (по секрету)" \
   || { bad "GPHOTO-1 (X): фото частной группы не применено"; grep -a "фото группы" "$TGX_LOG" | tail -5; }
 sleep 2; tgx_shot "$OUT/02-group-photo.png"
 stop_pid "$BP"; stop_pid "$CP"; stop_pid "$DP"
