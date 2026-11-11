@@ -433,14 +433,6 @@ export class EngineClient {
     return reqs(this.c('leftSskHolders', {}));
   }
 
-  legacyDeliverRequest(messageId: string, sendPayloadJson: string): any {
-    return reqs(this.c('legacyDeliverRequest', { messageId, sendPayloadJson }));
-  }
-
-  legacyDevicesRequest(devicesJson: string): any {
-    return reqs(this.c('legacyDevicesRequest', { devicesJson }));
-  }
-
   linkChallengeUnwrap(deviceId: string, commitment: string, challengePub: string, wrap: Uint8Array): Uint8Array {
     return u(this.c('linkChallengeUnwrap', { deviceId, commitment, challengePub, wrap: b(wrap) }));
   }

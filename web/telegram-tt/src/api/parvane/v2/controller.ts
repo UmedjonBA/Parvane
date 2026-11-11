@@ -320,9 +320,6 @@ const TYPING_ACTION_TYPING = 1;
 const TYPING_ACTION_CANCEL = 2;
 type LogDevices = {
   v2: string[];
-  legacy: string[];
-  legacySet: boolean;
-  legacyKeys: { deviceId: string; identity: string; signing: string }[];
   // Корневой ключ личности (base64 без дополнения) — из него «ключ безопасности»
   root?: string;
 };
@@ -1797,10 +1794,6 @@ export function createV2Controller(deps: Deps) {
   }
 
   async function applyEvent(ev: EngineEvent) {
-    if (ev.type === 'legacyV1') {
-      // Кадр прежнего инбокса v1, оставшийся на сервере: читать его нечем (T110)
-      return;
-    }
     if (ev.type === 'call') {
       if (!ev.from || !ev.signal) return;
       const invite = groupInviteFromV2(ev.signal);

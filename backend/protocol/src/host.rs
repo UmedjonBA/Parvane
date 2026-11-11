@@ -62,51 +62,18 @@ fn reqs_json(rs: &[OutRequest]) -> String {
     Value::Array(rs.iter().map(req_json).collect()).to_string()
 }
 
-/// Устройства пользователя по проверенному журналу: `v2` — id устройств v2,
-/// `legacy` — id подписанного списка v1-устройств, `legacySet` — список
-/// публиковался, `legacyKeys` — его ключи (base64 без дополнения, как в Olm):
-/// легаси-копию шлют только устройству с ТЕМ ЖЕ identity-ключом (FR-058).
+/// Устройства пользователя по проверенному журналу: `v2` — id устройств v2;
 /// `root` — корневой ключ личности (base64 без дополнения; нет журнала — поля
 /// нет): клиенты выводят из этой строки «ключ безопасности» собеседника на v2.
+/// Списка v1-устройств нет с T096 (spec 035).
 pub fn log_devices_json(c: &Client, user: &str) -> String {
     use base64::engine::general_purpose::STANDARD_NO_PAD;
     use base64::Engine as _;
-    let (v2, legacy) = c.log_devices(user);
-    let set = c.legacy_devices(user);
-    let keys: Vec<Value> = set
-        .iter()
-        .flatten()
-        .map(|d| json!({"deviceId": d.device_id, "identity": STANDARD_NO_PAD.encode(&d.olm_curve25519), "signing": STANDARD_NO_PAD.encode(&d.olm_ed25519)}))
-        .collect();
-    let mut out = json!({ "v2": v2, "legacy": legacy, "legacySet": set.is_some(), "legacyKeys": keys });
+    let mut out = json!({ "v2": c.log_devices(user) });
     if let Some(root) = c.log_root_key(user) {
         out["root"] = json!(STANDARD_NO_PAD.encode(root));
     }
     out.to_string()
-}
-
-/// JSON `[{"deviceId","identity","signing"}]` (ключи — base64, с дополнением или
-/// без) → список v1-устройств для записи журнала.
-pub fn parse_legacy_devices(devices_json: &str) -> Result<Vec<crate::pb::parvane::core::v2::LegacyDevice>, ProtoError> {
-    use base64::engine::general_purpose::STANDARD_NO_PAD;
-    use base64::Engine as _;
-    let list: Vec<Value> = serde_json::from_str(devices_json).map_err(|_| ProtoError::Malformed)?;
-    let key = |v: &Value, k: &str| -> Result<Vec<u8>, ProtoError> {
-        let raw = STANDARD_NO_PAD.decode(v[k].as_str().unwrap_or("").trim_end_matches('=')).map_err(|_| ProtoError::InvalidField("legacy_key"))?;
-        if raw.len() != 32 {
-            return Err(ProtoError::InvalidField("legacy_key"));
-        }
-        Ok(raw)
-    };
-    list.iter()
-        .map(|v| {
-            let device_id = v["deviceId"].as_str().unwrap_or("").to_string();
-            if !crate::address::is_valid_device_id(&device_id) {
-                return Err(ProtoError::InvalidField("device_id"));
-            }
-            Ok(crate::pb::parvane::core::v2::LegacyDevice { device_id, olm_curve25519: key(v, "identity")?, olm_ed25519: key(v, "signing")? })
-        })
-        .collect()
 }
 
 /// Итог создания/сброса личности (OPT-015): запросы — типами, корень — только в `Zeroizing` (ни одной
@@ -176,7 +143,6 @@ fn event_json(e: &Event) -> Value {
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "view": crate::model::views::content_view(c), "disposition": disp(*disposition)
         }), *disposition), proof),
-        Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
         Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
@@ -412,13 +378,6 @@ impl HostClient {
 
     pub fn export(&self, key: &[u8]) -> Result<Vec<u8>, String> {
         self.inner.export(&key32(key)?).map_err(err)
-    }
-
-    /// Импорт Olm-аккаунта v1 (JSON-pickle parvane-e2e) — то же устройство.
-    pub fn import_v1_account_json(&mut self, pickle_json: &str) -> Result<(), String> {
-        let acc = crate::olm::OlmAccount::from_parvane_e2e_json(pickle_json).map_err(err)?;
-        self.inner.import_v1_account(acc);
-        Ok(())
     }
 
     /// Первое устройство: запросы и корень (OPT-015: без круга serialize→parse, корень — в `Zeroizing`).
@@ -738,21 +697,9 @@ impl HostClient {
         self.inner.group_join_public(&group_id(group_hex)?, &secret).map(|r| req_json(&r).to_string()).map_err(err)
     }
 
-    /// Устройства пользователя по журналу → `{"v2": [...], "legacy": [...]}`.
+    /// Устройства пользователя по журналу → `{"v2": [...], "root"?}`.
     pub fn log_devices(&self, user: &str) -> String {
         log_devices_json(&self.inner, user)
-    }
-
-    /// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
-    /// `[{"deviceId","identity","signing"}]` → запрос `identity.device.log_append`.
-    pub fn legacy_devices_request(&mut self, devices_json: &str) -> Result<String, String> {
-        let devices = parse_legacy_devices(devices_json).map_err(err)?;
-        self.inner.legacy_devices_request(devices).map(|r| req_json(&r).to_string()).map_err(err)
-    }
-
-    /// Запрос `msg.deliver_legacy`: v1 `SendPayload` (JSON) для v1-устройств.
-    pub fn legacy_deliver_request(&self, message_id: &str, send_payload_json: &str) -> Result<String, String> {
-        self.inner.legacy_deliver_request(message_id, send_payload_json.as_bytes()).map(|r| req_json(&r).to_string()).map_err(err)
     }
 
     /// Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил

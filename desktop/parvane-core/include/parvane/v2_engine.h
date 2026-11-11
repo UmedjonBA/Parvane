@@ -257,9 +257,7 @@ public:
                                      const std::string &avatarDomain, const std::string &keyB64);
     // После смены фото (журнал перечитан) и новой эпохи → {"content": GroupAvatarKey | null, "requests": [...]}.
     [[nodiscard]] json groupPhotoFollowups(const std::string &groupHex, const std::vector<std::string> &links);
-    // Устройства пользователя по журналу → {"v2":[…],"legacy":[…]}.
-    // + "legacySet" (список v1-устройств публиковался) и "legacyKeys"
-    // ([{deviceId, identity, signing}] — подписанный список, FR-058).
+    // Устройства пользователя по журналу → {"v2":[…], "root"?} (списка v1-устройств нет с T096).
     [[nodiscard]] json logDevices(const std::string &user) const;
     // Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): дальше —
     // слепым жетоном. true — ключ был и сброшен (отправку стоит повторить).

@@ -350,7 +350,6 @@ bool handleSessionEvent(const json &ev) {
         sectionsEngineEvent(type == "plannerChanged" ? "planner" : "cloud", ev.value("id", std::string()));
         return true;
     }
-    if (type == "legacyV1") return true; // v1 удалён
     return false;
 }
 

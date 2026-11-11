@@ -10,7 +10,7 @@
 //! только движок: `codec/frames` (кадры и тела запросов: размер, лимиты,
 //! акторы, направление, реестр), `sign/ops` (OP-SIG), `device_log/alice` и
 //! `group_log/group` (журналы устройств и группы по шагам), `content_guard/content`
-//! (чистка содержимого), `legacy_v1/messages` (разбор v1-диалектов клиентов),
+//! (чистка содержимого; набор `legacy_v1/messages` удалён в T096),
 //! `call/signals` (сигнал звонка v1 ↔ v2: перекладку делают клиенты, движок
 //! сверяет, что их proto3-JSON — допустимый `CallSignal`), `link/sas` (LINK-1:
 //! обязательство и код сверки считают клиенты, движок сверяет формулу), с spec 033 — `history/merge`
@@ -27,7 +27,6 @@ use crate::content_guard;
 use crate::error::ProtoError;
 use crate::group::{self, SignerInfo};
 use crate::identity::DeviceLog;
-use crate::legacy_v1::{self, LegacyBody, LegacyInner};
 use crate::invite::{self, ParsedInvite};
 use crate::limits::Origin;
 use crate::l2::{self, ChatKind, L2Pref, L2State};
@@ -60,7 +59,6 @@ pub fn run(suite: &str, json: &str) -> Result<usize, String> {
             "device_log/alice" => device_log_case(&v, case),
             "group_log/group" => group_log_case(&v, case),
             "content_guard/content" => content_guard_case(case),
-            "legacy_v1/messages" => legacy_case(case),
             "call/signals" => call_case(case),
             "link/sas" => link_case(case),
             "history/merge" | "history/unread" | "history/segment" | "history/aead" | "history/checkpoint" => history_case(suite, case),
@@ -398,9 +396,6 @@ fn device_log_case(v: &Value, case: &Value) -> Result<(), String> {
     if !log.revoked.contains("d1") || log.active("d1").is_some() {
         return Err("устройство d1 не отозвано".into());
     }
-    if log.legacy.as_ref().map(Vec::len) != Some(1) {
-        return Err("список v1-устройств не из одной записи".into());
-    }
     Ok(())
 }
 
@@ -441,63 +436,6 @@ fn content_guard_case(case: &Value) -> Result<(), String> {
     let got = serde_json::to_value(&content).map_err(|e| e.to_string())?;
     if got != case["expect"]["content"] {
         return Err(format!("после чистки {got}"));
-    }
-    Ok(())
-}
-
-fn legacy_inner_json(inner: &LegacyInner) -> Result<Value, String> {
-    Ok(match inner {
-        LegacyInner::Content(c) => serde_json::json!({"content": serde_json::to_value(c.as_ref()).map_err(|e| e.to_string())?}),
-        LegacyInner::Skdm { group, session_key, sender_identity, epoch } => serde_json::json!({"skdm": {
-            "group": group, "session_key": session_key, "sender_identity": sender_identity, "epoch": epoch}}),
-        LegacyInner::Unknown(_) => serde_json::json!({"unknown": true}),
-    })
-}
-
-fn legacy_result(layer: &str, input: &str) -> Result<Result<Value, ProtoError>, String> {
-    let json = |v: Result<Value, String>| v.map(Ok);
-    Ok(match layer {
-        "stored" => match legacy_v1::parse_stored(input.as_bytes()) {
-            Err(e) => Err(e),
-            Ok(s) => {
-                let body = match &s.body {
-                    LegacyBody::Tombstone => serde_json::json!({"tombstone": true}),
-                    LegacyBody::Plain(c) => {
-                        serde_json::json!({"plain": serde_json::to_value(c.as_ref()).map_err(|e| e.to_string())?})
-                    }
-                    LegacyBody::Olm { ciphertext, ctype, sender_identity, sender_signing_key } => serde_json::json!({"olm": {
-                        "ciphertext_hex": hex::encode(ciphertext), "ctype_candidates": legacy_v1::ctype_candidates(*ctype),
-                        "sender_identity": sender_identity, "sender_signing_key": sender_signing_key}}),
-                    LegacyBody::Megolm { ciphertext, group, sender_identity, .. } => serde_json::json!({"megolm": {
-                        "ciphertext_hex": hex::encode(ciphertext), "group": group, "sender_identity": sender_identity}}),
-                };
-                Ok(serde_json::json!({"id": s.id, "from": s.from, "to": s.to, "ts": s.ts, "reply_to": s.reply_to,
-                    "edited": s.edited, "deleted": s.deleted, "pinned": s.pinned, "body": body}))
-            }
-        },
-        "olm" => match legacy_v1::parse_olm_plaintext(input.as_bytes()) {
-            Err(e) => Err(e),
-            Ok((from, inner)) => return json(legacy_inner_json(&inner).map(|i| serde_json::json!({"author": from, "inner": i}))),
-        },
-        "megolm" => match legacy_v1::parse_megolm_plaintext(input.as_bytes()) {
-            Err(e) => Err(e),
-            Ok(inner) => return json(legacy_inner_json(&inner).map(|i| serde_json::json!({"inner": i}))),
-        },
-        "ice" => match legacy_v1::normalize_ice(input) {
-            Err(e) => Err(e),
-            Ok(ice) => Ok(serde_json::to_value(ice).map_err(|e| e.to_string())?),
-        },
-        l => return Err(format!("неизвестный слой {l}")),
-    })
-}
-
-fn legacy_case(case: &Value) -> Result<(), String> {
-    let got = legacy_result(str_field(&case["input"], "layer")?, str_field(&case["input"], "json")?)?;
-    expect_outcome(&got, &case["expect"])?;
-    if let (Ok(result), Some(expect)) = (&got, case["expect"].get("result")) {
-        if result != expect {
-            return Err(format!("результат {result}"));
-        }
     }
     Ok(())
 }
@@ -770,7 +708,6 @@ mod tests {
             ("device_log/alice", "device_log/alice.json", 1),
             ("group_log/group", "group_log/group.json", 1),
             ("content_guard/content", "content_guard/content.json", 10),
-            ("legacy_v1/messages", "legacy_v1/messages.json", 40),
             ("call/signals", "call/signals.json", 30),
             ("link/sas", "link/sas.json", 5),
             ("history/merge", "history/merge.json", 8),

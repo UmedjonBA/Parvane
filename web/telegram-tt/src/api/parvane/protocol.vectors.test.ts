@@ -33,7 +33,6 @@ const SUITES: [string, string, number][] = [
   ['device_log/alice', 'device_log/alice.json', 1],
   ['group_log/group', 'group_log/group.json', 1],
   ['content_guard/content', 'content_guard/content.json', 10],
-  ['legacy_v1/messages', 'legacy_v1/messages.json', 40],
   ['call/signals', 'call/signals.json', 30],
   ['link/sas', 'link/sas.json', 5],
   // spec 033: журнал истории аккаунта — сведение строки, непрочитанное и маркеры, сегменты и горизонт, AEAD записи

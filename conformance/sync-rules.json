@@ -42,8 +42,8 @@
       "maxRepairAttempts": 3,
       "clients": {
         "web": "web — не применимо с T110 (курсора нет): нерасшифрованное показывается заглушкой (undecryptableUuids) до удачной расшифровки",
-        "desktop": "desktop — не применимо со spec 029 (курсора и очереди починки нет): строки приходят расшифрованными движком v2, запись LegacyV1 не разбирается (parvane_client.cpp HandleV2SessionEvent)",
-        "android": "spec 031: курсора и очереди починки нет (v1 удалён) — строки приходят расшифрованными движком v2, запись LegacyV1 пропускается (android/jni/jni_session.cpp handleSessionEvent); сценарий android/tgx_conformance_flow.sh шаг 1"
+        "desktop": "desktop — не применимо со spec 029 (курсора и очереди починки нет): строки приходят расшифрованными движком v2, записи LegacyV1 у движка нет с T096",
+        "android": "spec 031: курсора и очереди починки нет (v1 удалён) — строки приходят расшифрованными движком v2, записи LegacyV1 у движка нет с T096; сценарий android/tgx_conformance_flow.sh шаг 1"
       }
     },
     {
@@ -565,8 +565,8 @@
       },
       "clients": {
         "web": "web — с T110 Olm/Megolm-пути нет: автора и ключи проверяет движок v2 (сертификат устройства, подпись записи), строка приходит расшифрованной; шифртекст v1 (LegacyV1) пропускается (sync.ts)",
-        "desktop": "desktop — со spec 029 (18 окт 2026) Olm/Megolm-пути нет (e2e.cpp, messenger_client.cpp удалены): автора и ключи проверяет движок v2, строка приходит расшифрованной; запись LegacyV1 и раздача SKDM из прежней истории не показываются (parvane_client.cpp)",
-        "android": "spec 031: Olm/Megolm-пути нет (parvane-e2e и монолит parvane_jni.cpp удалены) — автора и ключи проверяет движок v2: android/jni/jni_session.cpp handleV2Event (interpretDirect; править и удалять у всех — только своё), кадры LegacyV1 пропускаются"
+        "desktop": "desktop — со spec 029 (18 окт 2026) Olm/Megolm-пути нет (e2e.cpp, messenger_client.cpp удалены): автора и ключи проверяет движок v2, строка приходит расшифрованной; раздача SKDM из прежней истории не показывается (parvane_client.cpp), записи LegacyV1 у движка нет с T096",
+        "android": "spec 031: Olm/Megolm-пути нет (parvane-e2e и монолит parvane_jni.cpp удалены) — автора и ключи проверяет движок v2: android/jni/jni_session.cpp handleV2Event (interpretDirect; править и удалять у всех — только своё), кадров LegacyV1 у движка нет с T096"
       }
     },
     {
@@ -997,11 +997,11 @@
         }
       ],
       "clients": {
-        "web": "web — с T110 легаси-копий не шлёт (сервер без v1); чужая копия из записи LegacyV1 пропускается (sync.ts unsealStored)",
-        "desktop": "desktop — со spec 029 легаси-копий не шлёт (v2_legacy.cpp, e2e.cpp удалены, сервер без v1); запись LegacyV1 пропускается целиком (parvane_client.cpp HandleV2SessionEvent)",
-        "android": "закрыто удалением (spec 031, 22 окт 2026): v1-устройств у android нет — легаси-копий, подписанного списка и пропуска чужой копии нет; запись LegacyV1 пропускается (android/jni/jni_session.cpp)"
+        "web": "web — с T110 легаси-копий не шлёт (сервер без v1); с T096 записи и события LegacyV1 нет (ветка контроллера удалена)",
+        "desktop": "desktop — со spec 029 легаси-копий не шлёт (v2_legacy.cpp, e2e.cpp удалены, сервер без v1); с T096 записи и события LegacyV1 нет (ветка parvane_client_state.cpp удалена)",
+        "android": "закрыто удалением (spec 031, 22 окт 2026): v1-устройств у android нет — легаси-копий, подписанного списка и пропуска чужой копии нет; с T096 записи и события LegacyV1 нет (ветка android/jni/jni_session.cpp удалена)"
       },
-      "status": "закрыто (spec 035, 11 ноя 2026): протокол v1 удалён везде — web (T110, 7 окт 2026), desktop (spec 029, 18 окт 2026), android (spec 031, 22 окт 2026); v1-устройств нет. Остатки в движке и сервере (legacy_v1.rs, LegacyDeviceSet и msg.deliver_legacy в client.rs, InboxRecord.legacy_v1, vectors/legacy_v1, таблица legacy_origin) — T096 spec 035, удаляются после проверки копии баз прода (T143)"
+      "status": "закрыто (spec 035, 11 ноя 2026): протокол v1 удалён везде — web (T110, 7 окт 2026), desktop (spec 029, 18 окт 2026), android (spec 031, 22 окт 2026); v1-устройств нет. Движок и сервер очищены (T096 spec 035, 11 ноя 2026): legacy_v1.rs, событие legacyV1, InboxRecord.legacy_v1 (reserved 12), LegacyDeviceSet (reserved 7), msg.deliver_legacy, import_v1_account и таблица legacy_origin (миграция messenger 0012) удалены; deliverMethod и listEntry — имена удалённого, сторож проверяет, что их нет"
     },
     {
       "id": "TYPING-1",

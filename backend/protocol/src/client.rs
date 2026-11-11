@@ -131,8 +131,6 @@ pub enum Event {
     Direct { seq: u64, chat: String, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition, proof: Vec<u8> },
     /// Сообщение группы.
     Group { seq: u64, group: Ref, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition, proof: Vec<u8> },
-    /// Запись истории/сообщение v1 (разбор — legacy_v1).
-    LegacyV1 { seq: u64, json: Vec<u8> },
     /// Изменился журнал группы — синхронизировать.
     GroupChanged { seq: u64, group: Ref, version: u64 },
     /// Отозвано одно из своих устройств.
@@ -523,12 +521,6 @@ impl Client {
         })
     }
 
-    /// Импорт Olm-аккаунта v1 (libolm pickle web или JSON parvane-e2e) — то же
-    /// устройство продолжает жить на v2 с теми же identity-ключами.
-    pub fn import_v1_account(&mut self, account: OlmAccount) {
-        self.acc = account;
-    }
-
     pub fn my_device(&self) -> DeviceRef {
         DeviceRef { address: self.user.clone(), device_id: self.device_id.clone() }
     }
@@ -857,14 +849,10 @@ impl Client {
         self.peers.get(user).and_then(|p| p.log.as_ref()).map(|l| l.version).unwrap_or(0)
     }
 
-    /// Устройства пользователя по проверенному журналу: `(v2, legacy_v1)`.
-    /// Пустые списки — журнала нет (пользователь целиком на v1).
-    pub fn log_devices(&self, user: &str) -> (Vec<String>, Vec<String>) {
+    /// Устройства пользователя по проверенному журналу (id устройств v2). Пусто — журнала нет.
+    pub fn log_devices(&self, user: &str) -> Vec<String> {
         let log = if user == self.user { Some(&self.own_log) } else { self.peers.get(user).and_then(|p| p.log.as_ref()) };
-        let Some(log) = log else { return (Vec::new(), Vec::new()) };
-        let v2 = log.devices.keys().cloned().collect();
-        let legacy = log.legacy.as_ref().map(|l| l.iter().map(|d| d.device_id.clone()).collect()).unwrap_or_default();
-        (v2, legacy)
+        log.map(|l| l.devices.keys().cloned().collect()).unwrap_or_default()
     }
 
     /// Корневой ключ личности пользователя по проверенному журналу устройств
@@ -875,47 +863,6 @@ impl Client {
             return (self.own_log.version > 0).then_some(self.own_log.root_key);
         }
         self.peers.get(user).and_then(|p| p.log.as_ref()).map(|l| l.root_key)
-    }
-
-    /// Подписанный список v1-устройств пользователя (D-01, FR-058): `None` —
-    /// список не публиковался. Только им можно слать легаси-копии.
-    pub fn legacy_devices(&self, user: &str) -> Option<Vec<crate::pb::parvane::core::v2::LegacyDevice>> {
-        let log = if user == self.user { Some(&self.own_log) } else { self.peers.get(user).and_then(|p| p.log.as_ref()) };
-        log.and_then(|l| l.legacy.clone())
-    }
-
-    /// Опубликовать/сократить свой список v1-устройств (запись журнала, подпись
-    /// SSK). Первая публикация задаёт список, дальше он только сокращается —
-    /// v1-устройство, появившееся позже, легаси-копий не получит (FR-058).
-    pub fn legacy_devices_request(&mut self, devices: Vec<crate::pb::parvane::core::v2::LegacyDevice>) -> Result<OutRequest> {
-        use crate::pb::parvane::core::v2::LegacyDeviceSet;
-        let ssk = self.ssk.as_ref().ok_or(ProtoError::Forbidden)?;
-        let entry = identity::device_log_entry(
-            &self.user,
-            self.own_log.version + 1,
-            self.own_log.head_hash,
-            DevChange::LegacyDevices(LegacyDeviceSet { devices }),
-            None,
-        );
-        let op = identity::sign_device_log_entry(ssk, &entry)?;
-        // Проверяем на копии журнала (список только сокращается); сам журнал
-        // запись получит синком после подтверждения сервера — при отказе
-        // (гонка версий с другим устройством) локальное состояние не расходится.
-        self.own_log.clone().apply(&op)?;
-        Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
-    }
-
-    /// Легаси-копии v1-устройствам (FR-054): готовый v1 `SendPayload` (JSON) с
-    /// тем же id, что у v2-сообщения, — запрос `msg.deliver_legacy`. Сервер
-    /// проводит его как v1-отправку и не мостит обратно в журналы v2-устройств.
-    pub fn legacy_deliver_request(&self, message_id: &str, send_payload_json: &[u8]) -> Result<OutRequest> {
-        if message_id.len() != 36 || send_payload_json.is_empty() {
-            return Err(ProtoError::InvalidField("legacy"));
-        }
-        Ok(OutRequest::id(
-            "msg.deliver_legacy",
-            &mpb::DeliverLegacyRequest { message_id: message_id.into(), send_payload_json: send_payload_json.to_vec() },
-        ))
     }
 
     /// Принять записи журнала устройств (после `log_sync(_anon)` с after = log_version).
@@ -1385,7 +1332,7 @@ impl Client {
         let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
         let devices: Vec<String> = log.devices.keys().cloned().collect();
         for d in &devices {
-            if policy::choose(&mut self.sticky, peer, Some(&log), d, None, &[]) != SendFormat::SealedV2 {
+            if policy::choose(&mut self.sticky, peer, Some(&log), d, &[]) != SendFormat::SealedV2 {
                 return Err(ClientError::Need(Need::Forbidden));
             }
         }
@@ -1522,7 +1469,7 @@ impl Client {
         // D-13: формат по подписанным данным и памяти «видел v2».
         let plog = self.peer_log(peer).cloned();
         for d in &peer_devices {
-            if policy::choose(&mut self.sticky, peer, plog.as_ref(), d, None, &[]) != SendFormat::SealedV2 {
+            if policy::choose(&mut self.sticky, peer, plog.as_ref(), d, &[]) != SendFormat::SealedV2 {
                 return Err(ClientError::Need(Need::Forbidden));
             }
         }
@@ -2269,7 +2216,6 @@ impl Client {
         }
         let out = match rec.item {
             None => vec![Event::Skipped { seq }],
-            Some(inbox_record::Item::LegacyV1(l)) => vec![Event::LegacyV1 { seq, json: l.json }],
             Some(inbox_record::Item::GroupState(n)) => match n.group {
                 Some(g) => vec![Event::GroupChanged { seq, group: g, version: n.version }],
                 None => vec![Event::Skipped { seq }],

@@ -780,7 +780,7 @@ fn exposed_ssk_cannot_add_device_after_revocation() {
     let mut server_view = srv.log("alice@local");
     assert_eq!(server_view.apply(&op), Err(parvane_protocol::ProtoError::Forbidden));
     // Боб по-прежнему пишет только d1.
-    let (v2, _) = bob.log_devices("alice@local");
+    let v2 = bob.log_devices("alice@local");
     assert_eq!(v2, vec!["d1".to_string()]);
 }
 
@@ -808,7 +808,7 @@ fn recovery_with_root_replaces_devices() {
     assert_eq!(reqs[0].method, "identity.device.log_append", "первой — смена SSK корнем");
     assert!(reqs.iter().any(|r| r.method == "identity.delivery_key.set"), "новый ключ доступа к доставке");
     exec(&mut srv, &alice9, &reqs);
-    let (v2, _) = alice9.log_devices("alice@local");
+    let v2 = alice9.log_devices("alice@local");
     assert_eq!(v2, vec!["d9".to_string()], "в журнале осталось только новое устройство");
     assert!(!alice9.own_ssk_exposed());
 
@@ -1200,12 +1200,12 @@ fn owner_sign_out_keeps_keys_and_allows_stolen_later() {
     sync_peer_log(&srv, &mut bob, "alice@local");
     assert!(!bob.ssk_pending("alice@local"));
     assert!(!srv.log("alice@local").ssk_exposed, "сервер тоже не считает SSK раскрытым");
-    let (v2, _) = bob.log_devices("alice@local");
+    let v2 = bob.log_devices("alice@local");
     assert_eq!(v2, vec!["d1".to_string()]);
     // Новое устройство после обычного выхода привязывается без ключа восстановления
     let _alice3 = link(&mut srv, &mut alice, "d3");
     sync_peer_log(&srv, &mut bob, "alice@local");
-    let (v2, _) = bob.log_devices("alice@local");
+    let v2 = bob.log_devices("alice@local");
     assert_eq!(v2, vec!["d1".to_string(), "d3".to_string()]);
     // Потом владелец понял, что d2 украден
     let mut o = None;

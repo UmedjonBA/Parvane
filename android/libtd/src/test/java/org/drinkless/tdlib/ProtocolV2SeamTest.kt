@@ -48,7 +48,7 @@ class ProtocolV2SeamTest {
         }
         // T136: наборы, которые раньше гонял только движок (журналы — один случай из нескольких шагов)
         for ((suite, least) in listOf("codec/frames" to 20, "sign/ops" to 10, "device_log/alice" to 1, "group_log/group" to 1,
-                "content_guard/content" to 10, "legacy_v1/messages" to 40,
+                "content_guard/content" to 10,
                 // spec 035: личное состояние v2
                 "state2/patch" to 6, "state2/sets" to 4, "state2/ordered" to 3, "state2/delete_vs_edit" to 5,
                 "state2/marks" to 3, "state2/unknown_fields" to 6, "state2/rejected" to 2)) {

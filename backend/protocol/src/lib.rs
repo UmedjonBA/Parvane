@@ -25,7 +25,6 @@ pub mod host;
 pub mod identity;
 pub mod invite;
 pub mod l2;
-pub mod legacy_v1;
 pub mod limits;
 pub mod link;
 pub mod msg;
