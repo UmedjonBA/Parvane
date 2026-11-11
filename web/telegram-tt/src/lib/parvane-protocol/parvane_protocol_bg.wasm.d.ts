@@ -21,7 +21,6 @@ export const grantRootBackup: (a: number, b: number, c: number) => void;
 export const grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
 export const historyCall: (a: number, b: number, c: number, d: number, e: number) => void;
 export const parseInvite: (a: number, b: number, c: number) => void;
-export const parseLegacyStored: (a: number, b: number, c: number) => void;
 export const protoMajor: () => number;
 export const pvanonplanner_assign: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const pvanonplanner_closed: (a: number, b: number) => void;
@@ -54,9 +53,7 @@ export const pvstore_write: (a: number, b: number, c: number, d: number, e: numb
 export const recoveryTgKeypair: (a: number) => void;
 export const recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
-export const schemaMessageNames: (a: number) => void;
 export const sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
-export const splitSyncResponse: (a: number, b: number, c: number) => void;
 export const start: () => void;
 export const storeOpen: (a: number, b: number, c: number) => void;
 export const verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;

@@ -228,11 +228,6 @@ export function historyCall(name: string, args_json: string): string;
 export function parseInvite(url: string): string;
 
 /**
- * Разбор записи истории/кадра v1 (legacy_v1) → JSON.
- */
-export function parseLegacyStored(json_bytes: Uint8Array): string;
-
-/**
  * Мажорная версия протокола.
  */
 export function protoMajor(): number;
@@ -253,21 +248,11 @@ export function recoveryTgOpen(secret: Uint8Array, user: string, device_id: stri
 export function runConformanceVectors(suite: string, json: string): number;
 
 /**
- * Полные имена всех сообщений схемы (тесты кодеков во всех обвязках, spec 035 T012).
- */
-export function schemaMessageNames(): string;
-
-/**
  * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
  * Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
  * (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
  */
 export function sealReport(admin_public: Uint8Array, reporter: string, plaintext: Uint8Array): Uint8Array;
-
-/**
- * Страница `msg.inbox.sync` → {records: Uint8Array[] (каждая — InboxRecord), more}.
- */
-export function splitSyncResponse(bytes: Uint8Array): any;
 
 /**
  * Инициализация модуля: часы браузера для движка.
@@ -320,7 +305,6 @@ export interface InitOutput {
     readonly grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly historyCall: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly parseInvite: (a: number, b: number, c: number) => void;
-    readonly parseLegacyStored: (a: number, b: number, c: number) => void;
     readonly protoMajor: () => number;
     readonly pvanonplanner_assign: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvanonplanner_closed: (a: number, b: number) => void;
@@ -353,9 +337,7 @@ export interface InitOutput {
     readonly recoveryTgKeypair: (a: number) => void;
     readonly recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly schemaMessageNames: (a: number) => void;
     readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
-    readonly splitSyncResponse: (a: number, b: number, c: number) => void;
     readonly start: () => void;
     readonly storeOpen: (a: number, b: number, c: number) => void;
     readonly verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;

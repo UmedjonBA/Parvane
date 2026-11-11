@@ -48,7 +48,7 @@ import { processDeepLink } from '../../util/deeplink';
 import * as mediaLoader from '../../util/mediaLoader';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
 import { oldTranslate } from '../../util/oldLangProvider';
-import { STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
+import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
@@ -455,6 +455,19 @@ const Main = ({
     };
     window.addEventListener(STATE_WRITE_BLOCKED_EVENT, handleStateBlocked);
     return () => window.removeEventListener(STATE_WRITE_BLOCKED_EVENT, handleStateBlocked);
+  }, [showDialog]);
+
+  // Parvane (spec 035, T117): данные на устройстве записаны более новой версией — переписка здесь не откроется
+  useEffect(() => {
+    const handleDataTooNew = () => {
+      showDialog({ data: { type: 'localized', text: { key: 'ParvaneDataNeedsUpdate' } } });
+    };
+    void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsDataTooNew')
+      .then((isTooNew) => {
+        if (isTooNew) handleDataTooNew();
+      });
+    window.addEventListener(DATA_TOO_NEW_EVENT, handleDataTooNew);
+    return () => window.removeEventListener(DATA_TOO_NEW_EVENT, handleDataTooNew);
   }, [showDialog]);
 
   // Parvane: ключ восстановления корня (spec 007, D-12) — показать один раз
