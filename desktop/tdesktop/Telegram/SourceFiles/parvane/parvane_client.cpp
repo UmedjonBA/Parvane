@@ -6766,9 +6766,32 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 	const auto photoId = docIdFromFileId(fileId);
 	// Фото частной группы шифровано секретом из журнала группы (GPHOTO-1)
 	const auto groupKey = g_groupAvatarKeys.value(address).toStdString();
+	// Ключ «уже скачивали» (NoteAvatar): при неудаче снимается — следующие сведения пира скачают снова
+	const auto downloadedKey = address + '|' + fileId + '|' + QString::fromStdString(groupKey);
+	const auto generation = AccountGeneration();
+	const auto forget = [=] {
+		crl::on_main([=] {
+			if (AccountGenerationIs(generation)) {
+				g_avatarDownloaded.remove(downloadedKey);
+			}
+		});
+	};
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		if (!t) {
+			// Соединения ещё нет (сведения группы пришли раньше подъёма сессии) — повтор позже, а не молча никогда
+			LOG(("Parvane: аватар %1 отложен: соединения ещё нет — повтор через 3 с").arg(address));
+			crl::on_main([=] {
+				if (!AccountGenerationIs(generation)) {
+					return;
+				}
+				g_avatarDownloaded.remove(downloadedKey);
+				base::call_delayed(crl::time(3000), [=] {
+					if (AccountGenerationIs(generation) && g_avatarFileIds.value(address) == fileId) {
+						NoteAvatar(address, fileId);
+					}
+				});
+			});
 			return;
 		}
 		std::string bytes;
@@ -6777,7 +6800,10 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				const auto s = V2Ready();
 				auto plain = s ? s->downloadGroupPhoto(fid, groupKey) : std::nullopt;
 				if (!plain) {
-					LOG(("Parvane: аватар %1 не применён: фото группы не скачалось или секрет не подошёл").arg(address));
+					LOG(("Parvane: аватар %1 не применён: фото группы не скачалось или секрет не подошёл%2").arg(
+						address,
+						s ? QString() : u" (сессии v2 ещё нет)"_q));
+					forget();
 					return;
 				}
 				bytes = std::move(*plain);
@@ -6789,12 +6815,14 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 					LOG(("Parvane: аватар %1 не применён: блоб не скачался%2").arg(
 						address,
 						parvane::v2::isGroupAddress(address.toStdString()) ? u" (секрета фото группы ещё нет)"_q : QString()));
+					forget();
 					return;
 				}
 				bytes = std::move(d.bytes);
 			}
 		} catch (const std::exception &e) {
 			LOG(("Parvane: аватар %1 не применён: %2").arg(address, QString::fromUtf8(e.what())));
+			forget();
 			return;
 		}
 		const auto addressCopy = address;
@@ -6807,9 +6835,11 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				groupKey.empty() && parvane::v2::isGroupAddress(address.toStdString()) ? u", секрета фото группы ещё нет"_q : QString()));
 			return;
 		}
-		crl::on_main([id, bytes, photoId, addressCopy, decoded] {
+		crl::on_main([id, bytes, photoId, addressCopy, decoded, forget] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
+				LOG(("Parvane: аватар %1 не применён: сессии нет").arg(addressCopy));
+				forget();
 				return;
 			}
 			// Пользователь или группа (spec 003: фото группы — тот же путь)
@@ -6818,6 +6848,8 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				peer = session->data().chatLoaded(ChatId(BareId(id)));
 			}
 			if (!peer) {
+				LOG(("Parvane: аватар %1 не применён: пир ещё не загружен").arg(addressCopy));
+				forget();
 				return;
 			}
 			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
