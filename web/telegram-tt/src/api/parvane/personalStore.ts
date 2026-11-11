@@ -23,6 +23,16 @@ export const PERSONAL_PARTS = [
   GROUP_PART,
 ] as const;
 
+// spec 035 T118: виды, которые ведёт журнал личного состояния модели движка (`state.v2`). После первого переноса
+// журнала (`MODEL_BACKED_MARK`) их значение — проекция показа модели (`stateViewV1`) в памяти; на диске вид лежит,
+// только пока несёт правку пользователя, ещё не принятую журналом (переживает перезагрузку до подключения), —
+// принятую стирает `personalDropFromDisk`. Своей копии журнала у web нет
+export const MODEL_BACKED_PARTS = [
+  'folders', 'folders_all_index', 'blocked', 'archived', 'pinned', 'notify', 'notifydefaults', 'unreadpeers',
+  'quickreaction', 'stickerpacks', 'contacts', 'contactinfo',
+] as const;
+const MODEL_BACKED_MARK = 'modelbacked';
+
 type Entry = { part: string; v: string };
 
 type Cache = {
@@ -36,6 +46,8 @@ type Cache = {
   chain: Promise<void>;
   // Прежние ключи localStorage, которые удалить после записи
   legacyKeys: Set<string>;
+  // Виды, чья запись на диске больше не нужна (значение — в памяти, его ведёт модель): стереть запись
+  diskDrop: Set<string>;
 };
 
 const caches = new Map<string, Cache>();
@@ -68,7 +80,13 @@ function cacheOf(user: string): Cache {
   let cache = caches.get(user);
   if (!cache) {
     cache = {
-      user, values: new Map(), dirty: new Set(), hydrated: false, chain: Promise.resolve(), legacyKeys: new Set(),
+      user,
+      values: new Map(),
+      dirty: new Set(),
+      hydrated: false,
+      chain: Promise.resolve(),
+      legacyKeys: new Set(),
+      diskDrop: new Set(),
     };
     caches.set(user, cache);
   }
@@ -98,6 +116,7 @@ export function personalSet(user: string, part: string, value: string) {
   const cache = cacheOf(user);
   cache.values.set(part, value);
   cache.dirty.add(part);
+  cache.diskDrop.delete(part);
   cache.legacyKeys.add(legacyKey(user, part));
   schedule(cache);
 }
@@ -107,8 +126,43 @@ export function personalRemove(user: string, part: string) {
   const cache = cacheOf(user);
   cache.values.delete(part);
   cache.dirty.add(part);
+  cache.diskDrop.delete(part);
   cache.legacyKeys.add(legacyKey(user, part));
   schedule(cache);
+}
+
+/** Значение вида только в памяти (проекция модели, T118): запись вида на диске стирается. `undefined` — нет. */
+export function personalSetMemory(user: string, part: string, value: string | undefined) {
+  if (!user) return;
+  const cache = cacheOf(user);
+  if (value === undefined) cache.values.delete(part);
+  else cache.values.set(part, value);
+  cache.dirty.delete(part);
+  cache.diskDrop.add(part);
+  cache.legacyKeys.add(legacyKey(user, part));
+  schedule(cache);
+}
+
+/** Виды приняты журналом (T118; вызывающий отбирает виды без несохранённых правок): значение остаётся в памяти,
+ * запись на диске стирается, ещё не записанная — не пишется. */
+export function personalDropFromDisk(user: string, parts: readonly string[]) {
+  if (!user || !parts.length) return;
+  const cache = cacheOf(user);
+  parts.forEach((part) => {
+    cache.dirty.delete(part);
+    cache.diskDrop.add(part);
+  });
+  schedule(cache);
+}
+
+/** Журнал личного состояния уже ведёт виды `MODEL_BACKED_PARTS` (первый перенос сделан). */
+export function personalIsModelBacked(user: string) {
+  return personalGet(user, MODEL_BACKED_MARK) === '1';
+}
+
+export function personalSetModelBacked(user: string) {
+  if (personalIsModelBacked(user)) return;
+  personalSet(user, MODEL_BACKED_MARK, '1');
 }
 
 /** Прежнее значение localStorage вида — прочитать и удалить (разовый перенос старых записей). */
@@ -121,8 +175,9 @@ export function takeLegacyLocal(user: string, part: string): string | null {
 
 function flushCache(cache: Cache): Promise<void> {
   cache.chain = cache.chain.then(async () => {
-    if (!cache.dirty.size) return;
+    if (!cache.dirty.size && !cache.diskDrop.size) return;
     const parts = [...cache.dirty];
+    const dropped = [...cache.diskDrop].filter((part) => !cache.dirty.has(part));
     const storage = await SecureE2eStorage.open(cache.user).catch(() => undefined);
     if (!storage) return; // заблокировано (PIN) — останется в памяти до разблокировки
     const snapshot = new Map(parts.map((part) => [part, cache.values.get(part)]));
@@ -132,6 +187,7 @@ function flushCache(cache: Cache): Promise<void> {
       if (v === undefined) deletes.push(recordName(part));
       else puts.push([recordName(part), { part, v }]);
     });
+    dropped.forEach((part) => deletes.push(recordName(part)));
     try {
       if (puts.length) await storage.saveRecords(puts);
       if (deletes.length) await storage.deleteRecords(deletes);
@@ -144,6 +200,7 @@ function flushCache(cache: Cache): Promise<void> {
     snapshot.forEach((v, part) => {
       if (cache.values.get(part) === v) cache.dirty.delete(part);
     });
+    dropped.forEach((part) => cache.diskDrop.delete(part));
     cache.legacyKeys.forEach(removeLegacy);
     cache.legacyKeys.clear();
   });
@@ -177,7 +234,7 @@ export function hydratePersonal(user: string): Promise<void> {
     rows.forEach((row) => {
       if (!row || typeof row.part !== 'string' || typeof row.v !== 'string') return;
       // Записанное до загрузки свежее диска
-      if (!cache.dirty.has(row.part)) cache.values.set(row.part, row.v);
+      if (!cache.dirty.has(row.part) && !cache.diskDrop.has(row.part)) cache.values.set(row.part, row.v);
     });
     // Разовый перенос прежнего localStorage: значения, которых в хранилище нет, — в хранилище; ключи — удалить
     PERSONAL_PARTS.forEach((part) => {
@@ -191,7 +248,7 @@ export function hydratePersonal(user: string): Promise<void> {
       cache.legacyKeys.add(key);
     });
     cache.hydrated = true;
-    if (cache.dirty.size || cache.legacyKeys.size) await flushCache(cache);
+    if (cache.dirty.size || cache.legacyKeys.size || cache.diskDrop.size) await flushCache(cache);
   })().finally(() => {
     cache.hydrating = undefined;
   });

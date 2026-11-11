@@ -546,6 +546,8 @@ const localState = createLocalState({
   isPeerOnline: (chatId) => connectionController.isPeerOnline(store.getAddressForId(chatId)),
   // Отложенная пересылка (A3): messageController собран ниже, срок наступает позже
   forwardMessages: (params) => messageController.methods.forwardMessages(params),
+  // spec 035 T118: виды журнала личного состояния — показом модели без сети (журнал и контроллер собраны ниже)
+  projectOffline: async () => stateJournal.projectOffline(await v2Controller.stateViewOffline()),
 });
 
 // Журнал личного состояния v2 (T098): подключается, когда поднят v2-стек

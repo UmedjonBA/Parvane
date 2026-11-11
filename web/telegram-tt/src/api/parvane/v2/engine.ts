@@ -582,6 +582,11 @@ export type StateModel = {
   close: () => void;
 };
 
+/** Показ личного состояния модели (то, что уже в её памяти; без сети — сведённое в прошлый раз, T118). */
+export function stateViewOf(host: ModelHost): StateModelView {
+  return host.peek<StateModelView>('stateViewV1');
+}
+
 function unb64(text?: string) {
   if (!text) return new Uint8Array(0);
   return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
@@ -599,7 +604,7 @@ export function openStateModel(deps: StateModelDeps): StateModel {
   const { host, sender } = deps;
   let closed = false;
   return {
-    view: () => host.peek<StateModelView>('stateViewV1'),
+    view: () => stateViewOf(host),
     apply: async (desired, opts = {}) => {
       const before = sender.failures();
       await host.run('stateApplyV1', {

@@ -25,7 +25,7 @@ import type {
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { ContentView, V2Content } from './contentMap';
-import type { ModelJson, Protocol } from './engine';
+import type { ModelJson, Protocol, StateModelView } from './engine';
 import type { EngineClient as PvClient } from './engineClient';
 import type { HistoryHost } from './history';
 import type {
@@ -53,6 +53,7 @@ import {
 } from './control';
 import {
   createModelSender, loadProtocol, MemoryModelStore, ModelHost, openStateModel, parseEngineError, secureModelStore,
+  stateViewOf,
 } from './engine';
 import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
@@ -722,6 +723,22 @@ export function createV2Controller(deps: Deps) {
     if (!serverDomain) serverDomain = saved.domain;
     pv = pv || await loadProtocol();
     await openModel(target, self, saved.deviceId, saved.domain, true);
+  }
+
+  /** Показ личного состояния модели без сети (spec 035 T118): сведённое в прошлый раз — из хранилища модели.
+   * Модели нет (не открывалась на этом устройстве, нужен перенос) — `undefined`. */
+  async function stateViewOffline(): Promise<StateModelView | undefined> {
+    const isOpen = () => host && hostUser === deps.getSelf() && modelOpenState === 'OPEN_STATE_READY';
+    if (!isOpen()) {
+      await openModelOffline().catch((e: unknown) => deps.log(`v2: модель без сети не открыта: ${String(e)}`));
+    }
+    if (!isOpen()) return undefined;
+    try {
+      return stateViewOf(host!);
+    } catch (e) {
+      deps.log(`v2: показ личного состояния без сети: ${String(e)}`);
+      return undefined;
+    }
   }
 
   /** Строки истории модели (`rowsApply`, `rowsAll`, `historyPage`, `chatList`). */
@@ -5210,6 +5227,7 @@ export function createV2Controller(deps: Deps) {
     cachedGroups,
     groupContentHidden,
     migrationState: () => ({ open: modelOpenState }),
+    stateViewOffline,
     engineAuditDump: () => (host ? host.peek<{ jsonl?: string }>('auditDump').jsonl || '' : undefined),
     chatCapabilities,
     changeGroup,

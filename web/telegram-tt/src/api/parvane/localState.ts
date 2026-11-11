@@ -10,7 +10,8 @@ import type { WireStoredMessage } from './wire';
 
 import { hasMediaContent, isAuthorHidden } from './forwardOptions';
 import {
-  forgetPersonal, hydratePersonal, personalGet, personalRemove, personalSet, renamePersonal, takeLegacyLocal,
+  forgetPersonal, hydratePersonal, MODEL_BACKED_PARTS, personalDropFromDisk, personalGet, personalIsModelBacked,
+  personalRemove, personalSet, personalSetMemory, personalSetModelBacked, renamePersonal, takeLegacyLocal,
 } from './personalStore';
 import { SecureE2eStorage } from './secureStorage';
 import { parseStickerRefs } from './stickerLists';
@@ -109,6 +110,29 @@ export function selectDueScheduled<T extends { chatId: string; scheduledAt: numb
     : entry.scheduledAt <= nowSecs));
 }
 
+// Вид журнала личного состояния, которому принадлежит запись `personalStore` (T118)
+const PART_KIND: Record<(typeof MODEL_BACKED_PARTS)[number], LocalStateKind> = {
+  folders: 'folders',
+  folders_all_index: 'folders',
+  blocked: 'blocked',
+  archived: 'archived',
+  pinned: 'pinned',
+  notify: 'notify',
+  notifydefaults: 'notify',
+  unreadpeers: 'unread',
+  quickreaction: 'reaction',
+  stickerpacks: 'packs',
+  contacts: 'contacts',
+  contactinfo: 'contacts',
+};
+// Виды, правленные до первой проекции модели в этой вкладке (запись `personalStore`, T118): их значение могло
+// не нести того, что уже в журнале, — дописываются в журнал без удаления пропавшего
+const PARTIAL_PART = 'statepartial';
+
+function kindOfPart(part: string): LocalStateKind | undefined {
+  return (PART_KIND as Record<string, LocalStateKind>)[part];
+}
+
 type LocalStateDependencies = {
   getStore: () => ParvaneStore;
   isAuthorized: () => boolean;
@@ -118,12 +142,16 @@ type LocalStateDependencies = {
   sendMessage: (params: SendMessageParams, uuid?: string) => Promise<unknown>;
   // Собеседник чата сейчас в сети (присутствие v2) — для «Отправить, когда будет в сети»
   isPeerOnline?: (chatId: string) => boolean;
+  /** T118: показ личного состояния модели без сети (журнал ещё не подключён) — в localState. */
+  projectOffline?: () => Promise<void>;
   forwardMessages?: (params: {
     fromChat: ApiChat; toChat: ApiChat; messages: ApiMessage[];
   } & ForwardOptions) => Promise<unknown>;
 };
 
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
+// Показ личного состояния модели без сети при запуске (T118): дольше не ждём — виды придут проекцией позже
+const OFFLINE_PROJECTION_WAIT_MS = 4000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
 // Маркеры «прочитано до» прежних сборок (с spec 035 T114 — в модели движка)
@@ -147,11 +175,34 @@ export function createLocalState(deps: LocalStateDependencies) {
   const storageKey = (part: string) => `parvane:${part}:${deps.getStore().self}`;
   // spec 035 T046 (PV-020): личные данные — в хранилище движка (`personalStore.ts`), чтение — из памяти после
   // `hydrate()`; в localStorage остаются только служебные флаги (`statedirty`, `repair`)
+  // spec 035 T118: виды, которые ведёт журнал модели (`MODEL_BACKED_PARTS`), после первого переноса — проекция
+  // показа модели в памяти: запись из журнала (`applyFromJournal`) на диск не пишется, на диске вид лежит, только
+  // пока несёт правку пользователя, ещё не принятую журналом
   const personal = {
     getItem: (part: string) => personalGet(deps.getStore().self, part),
-    setItem: (part: string, value: string) => personalSet(deps.getStore().self, part, value),
-    removeItem: (part: string) => personalRemove(deps.getStore().self, part),
+    setItem: (part: string, value: string) => {
+      if (isProjectionWrite(part)) personalSetMemory(deps.getStore().self, part, value);
+      else personalSet(deps.getStore().self, part, value);
+    },
+    removeItem: (part: string) => {
+      if (isProjectionWrite(part)) personalSetMemory(deps.getStore().self, part, undefined);
+      else personalRemove(deps.getStore().self, part);
+    },
   };
+  // Проекция модели уже была в этой вкладке (показ модели — в памяти целиком)
+  let isProjected = false;
+  // Показ модели без сети при запуске — одна попытка на вход
+  let offlineProjection: Promise<void> | undefined;
+
+  function isModelBacked() {
+    return personalIsModelBacked(deps.getStore().self);
+  }
+
+  function isProjectionWrite(part: string) {
+    if (!applyingJournal || !isModelBacked()) return false;
+    const kind = kindOfPart(part);
+    return Boolean(kind) && !loadDirtyKinds().includes(kind);
+  }
 
   // Журнал личного состояния (T098) слушает правки пользователя; запись
   // пришедшего из журнала (applyingJournal) слушателя не будит
@@ -178,6 +229,7 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   function markDirty(kind: LocalStateKind) {
     dirtyRevision += 1;
+    if (isModelBacked() && !isProjected) markPartial(kind);
     const kinds = loadDirtyKinds();
     if (kinds.includes(kind)) return;
     try {
@@ -195,6 +247,44 @@ export function createLocalState(deps: LocalStateDependencies) {
     } catch {
       // См. markDirty
     }
+    if (loadPartialKinds().length) personal.removeItem(PARTIAL_PART);
+    if (isModelBacked()) dropSyncedFromDisk();
+  }
+
+  function loadPartialKinds(): LocalStateKind[] {
+    try {
+      const kinds = JSON.parse(personal.getItem(PARTIAL_PART) || '[]') as LocalStateKind[];
+      return Array.isArray(kinds) ? kinds : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function markPartial(kind: LocalStateKind) {
+    const kinds = loadPartialKinds();
+    if (!kinds.includes(kind)) personal.setItem(PARTIAL_PART, JSON.stringify([...kinds, kind]));
+  }
+
+  // Принятое журналом — только в памяти: записи видов без несохранённых правок стираются с диска
+  function dropSyncedFromDisk() {
+    const dirty = loadDirtyKinds();
+    personalDropFromDisk(
+      deps.getStore().self, MODEL_BACKED_PARTS.filter((part) => !dirty.includes(PART_KIND[part])),
+    );
+  }
+
+  /** Показ модели спроецирован (T118). `attached` — журнал подключён и сведён: виды переходят к модели, их
+   * прежние записи на диске стираются (кроме несущих несохранённую правку). */
+  function markProjected(attached: boolean) {
+    isProjected = true;
+    if (!attached) return;
+    personalSetModelBacked(deps.getStore().self);
+    dropSyncedFromDisk();
+  }
+
+  /** Значения видов `MODEL_BACKED_PARTS` уже целиком в памяти (проекция была либо журнал их ещё не ведёт). */
+  function isPersonalComplete() {
+    return isProjected || !isModelBacked();
   }
 
   function notifyChange(kind: LocalStateKind) {
@@ -277,6 +367,16 @@ export function createLocalState(deps: LocalStateDependencies) {
   // localStorage. Зовётся перед первым чтением (sync/fetchChats).
   async function hydrate() {
     await hydratePersonal(deps.getStore().self);
+    // T118: виды журнала после первого переноса на диске не лежат — показ модели без сети, до подключения
+    if (isModelBacked() && !isProjected && deps.projectOffline) {
+      offlineProjection ||= Promise.race([
+        deps.projectOffline().catch(() => undefined),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, OFFLINE_PROJECTION_WAIT_MS);
+        }),
+      ]);
+      await offlineProjection;
+    }
     if (isJournalLoaded && draftsCache && packSecrets) return;
     const storage = await secureStorage();
     if (!storage) {
@@ -1322,6 +1422,8 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Смена аккаунта: очереди/кэши прежнего пользователя не должны утечь в
   // ключи нового (persist считается от текущего self)
   function reset() {
+    isProjected = false;
+    offlineProjection = undefined;
     scheduledQueue.length = 0;
     isScheduledLoaded = false;
     scheduledNextId = SCHEDULED_ID_BASE;
@@ -1365,6 +1467,9 @@ export function createLocalState(deps: LocalStateDependencies) {
   return {
     applyFromJournal,
     loadDirtyKinds,
+    loadPartialKinds,
+    markProjected,
+    isPersonalComplete,
     getDirtyRevision: () => dirtyRevision,
     clearDirtyKinds,
     applyJournalScheduled,
