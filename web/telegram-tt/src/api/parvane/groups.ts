@@ -368,7 +368,11 @@ export function createGroupController(deps: GroupDependencies) {
     const members = buildMembers(info.members.filter(({ role }) => role !== 'banned'));
     const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
     const selfMember = info.members.find(({ address: member }) => member === store.self);
-    const inviteLink = v2 && isInviteManager(selfMember) ? (await ensureV2Primary(v2, address))?.url : undefined;
+    // Только уже существующая основная ссылка: просмотр сведений группы не пишет в её журнал (создание — по действию
+    // пользователя, экран «Ссылки-приглашения»; раньше каждая подгрузка сведений создавала ссылку во всех группах)
+    const inviteLink = v2 && isInviteManager(selfMember)
+      ? pickPrimaryInvite(await v2.listInvites(address))?.url
+      : undefined;
     return {
       fullInfo: {
         members,
