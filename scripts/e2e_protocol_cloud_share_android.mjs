@@ -123,16 +123,24 @@ async function hideKeyboard() {
   adb('shell', 'input', 'keyevent', '4');
   await sleep(1200);
 }
-// Кнопка листа под полем ввода: перед нажатием убрать клавиатуру; нажимать, пока в logcat нет ответа и кнопка
-// видна (до трёх раз)
+// Кнопка листа под полем ввода: перед нажатием убрать клавиатуру; нажимать, пока в logcat нет ответа (до трёх раз).
+// Лист бывает ужат вставкой IME, которой на эмуляторе без экрана не видно: кнопки в дереве нулевого размера
+// (m14, 11 ноя: «Create» [0,0][0,0], нажатия мимо) — со второй попытки форма отправляется действием редактора
+// (фокус в поле и Enter)
 async function uiTapUntilLog(re, label, logRe) {
   for (let i = 0; i < 3; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    if (i > 0 && !uiFind(re)) break;
-    // eslint-disable-next-line no-await-in-loop
     await hideKeyboard();
-    // eslint-disable-next-line no-await-in-loop
-    await uiTap(re, label);
+    if (i === 0 && uiFind(re)) {
+      // eslint-disable-next-line no-await-in-loop
+      await uiTap(re, label);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await uiTapField(label);
+      adb('shell', 'input', 'keyevent', '66');
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(1200);
+    }
     const start = Date.now();
     while (Date.now() - start < 8000) {
       if (xLog().slice(mark).split('\n').some((l) => logRe.test(l))) return;
