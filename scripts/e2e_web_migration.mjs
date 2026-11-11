@@ -17,6 +17,8 @@ import { join, resolve } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
+import { readDiagJournal } from './e2e_web_helpers.mjs';
+
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
 const SEED = process.env.PARVANE_MIGRATION_SEED;
 const OUT = process.env.PARVANE_MIGRATION_OUT;
@@ -65,10 +67,20 @@ async function launch(dir, { halt, chunk, pin } = {}) {
 }
 
 async function waitReady(page) {
+  await loginIfAsked(page);
   await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
     timeout: READY_TIMEOUT_MS,
   });
-  // Сессия не возобновилась (профиль без «не выходить») — вход паролем сида тем же устройством
+  await page.waitForFunction(async () => {
+    const state = await window.__parvaneDiagCallApi('parvaneDiagMigration').catch(() => undefined);
+    return state?.open === 'OPEN_STATE_READY';
+  }, undefined, { timeout: READY_TIMEOUT_MS, polling: 1000 });
+}
+
+// Сессия не возобновилась (профиль без «не выходить» либо сид старше суток без активности — SESSION_IDLE_LIMIT_MS)
+// — вход паролем сида тем же устройством. Хук диагностики есть только в главном экране, после входа: ждать его
+// раньше экрана пароля нельзя
+async function loginIfAsked(page, { waitMain = true } = {}) {
   const password = page.locator('.Transition_slide-active > #auth-password-form');
   const left = page.locator('#LeftColumn');
   await Promise.race([
@@ -78,12 +90,8 @@ async function waitReady(page) {
   if (await password.isVisible().catch(() => false)) {
     await password.locator('#sign-in-password').fill(summary.password);
     await password.getByRole('button', { name: 'Next' }).click();
-    await left.waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS });
+    if (waitMain) await left.waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS });
   }
-  await page.waitForFunction(async () => {
-    const state = await window.__parvaneDiagCallApi('parvaneDiagMigration').catch(() => undefined);
-    return state?.open === 'OPEN_STATE_READY';
-  }, undefined, { timeout: READY_TIMEOUT_MS, polling: 1000 });
 }
 
 function diff(before, after, name) {
@@ -119,6 +127,8 @@ async function migrateProfile(who) {
   const halt = HALT[VARIANT];
   let session = await launch(dir, { halt, pin });
   if (halt) {
+    // Перенос может встать раньше главного экрана — после пароля главный экран не ждём
+    await loginIfAsked(session.page, { waitMain: false });
     // Перенос встал в точке (шаг этой точки уже на диске) — вкладка закрывается, как при обрыве
     await session.page.waitForFunction((n) => (window.__parvaneMigrationHalted || 0) >= n, halt, {
       timeout: READY_TIMEOUT_MS, polling: 200,
@@ -164,7 +174,10 @@ async function migrateProfile(who) {
     console.log(`${ok ? 'OK' : 'СБОЙ'}: ${who} — модель ${JSON.stringify(fromEngine.report).slice(0, 300)}`);
   } catch (e) {
     results.push({ step: `${who}: перенос`, ok: false, error: String(e?.message || e).slice(0, 600) });
-    writeFileSync(join(OUT, `log-${who}.txt`), session.logs.join('\n'));
+    // Журнал диагностики клиента (вход, перенос): в консоль провайдер почти не пишет
+    const diag = await readDiagJournal(session.page).catch((err) => [{ k: `diag: ${String(err)}` }]);
+    const diagLines = diag.slice(-300).map((d) => `${d.t ? new Date(d.t).toISOString().slice(11, 23) : ''} ${d.k} ${(d.d || '').slice(0, 300)}`);
+    writeFileSync(join(OUT, `log-${who}.txt`), [...session.logs, '--- diag ---', ...diagLines].join('\n'));
     await session.page.screenshot({ path: join(OUT, `fail-${who}.png`) }).catch(() => undefined);
     console.log(`СБОЙ: ${who}: ${String(e?.message || e).slice(0, 300)}`);
   } finally {
