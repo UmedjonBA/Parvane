@@ -3366,6 +3366,14 @@ describe('ENGINE-1 (web): модель движка — единственный
     expect(drive.indexOf('await this.deps.store.commit(typed);')).toBeLessThan(drive.indexOf('this.deps.send(r)'));
   });
 
+  // T118: экспорты WASM, которыми web больше не пользуется (разбор прежних записей v1, страница инбокса и перечень
+  // схемы до модели), из обвязки убраны; те же вызовы единой точки входа (`host/call.rs`) остаются у desktop/android
+  it('WASM без неиспользуемых экспортов прежнего пути (T118)', () => {
+    const dts = readRepo('web/telegram-tt/src/lib/parvane-protocol/parvane_protocol.d.ts');
+    ['parseLegacyStored', 'splitSyncResponse', 'schemaMessageNames', 'PvClient', 'PvHistory', 'adoptStateKeys']
+      .forEach((name) => expect(dts).not.toMatch(new RegExp(`\\b${name}\\b`)));
+  });
+
   it('клиентское ядро — в модели: контроллер без клиента WASM, записи инбокса — через ingest модели (T113)', () => {
     const controller = strip(readRepo(`${V2}/controller.ts`));
     // Нет своего экземпляра прежнего клиента, его снимков и ручного открытия записей
