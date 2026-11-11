@@ -44,6 +44,17 @@ std::string kindOfKey(const std::string &key) {
 
 std::unique_ptr<Host> Host::open(const json &config, const std::string &storeDir, std::string *error, store_fs::FsOps &fs,
                                  Step *opened) {
+    return openOn(config, storeDir, fs, nullptr, error, opened);
+}
+
+std::unique_ptr<Host> Host::openMemory(const json &config, std::string *error, Step *opened) {
+    auto mem = store_fs::memoryFs();
+    auto &fs = *mem;
+    return openOn(config, "/memory/store", fs, std::move(mem), error, opened);
+}
+
+std::unique_ptr<Host> Host::openOn(const json &config, const std::string &storeDir, store_fs::FsOps &fs,
+                                   std::unique_ptr<store_fs::FsOps> owned, std::string *error, Step *opened) {
     std::string err;
     auto st = store_fs::Store::open(storeDir, fs, &err);
     if (!st) {
@@ -57,7 +68,7 @@ std::unique_ptr<Host> Host::open(const json &config, const std::string &storeDir
         if (perr) pv_free_string(perr);
         return nullptr;
     }
-    std::unique_ptr<Host> h(new Host(e, std::move(st)));
+    std::unique_ptr<Host> h(new Host(e, std::move(st), std::move(owned)));
     auto s = h->step("start", json::object());
     if (!s.ok()) {
         if (error) *error = s.error;
@@ -137,18 +148,6 @@ Step Host::step(const std::string &name, const json &args) {
     std::lock_guard<std::mutex> lk(mu_);
     Step st;
     auto out = callLocked(name, args);
-    if (isError(out)) {
-        st.error = out["error"].get<std::string>();
-        return st;
-    }
-    driveLocked(std::move(out), st);
-    return st;
-}
-
-Step Host::adoptStateKeys(const PvClient *client) {
-    std::lock_guard<std::mutex> lk(mu_);
-    Step st;
-    auto out = parseOut(pv_engine_adopt_state_keys(e_, client));
     if (isError(out)) {
         st.error = out["error"].get<std::string>();
         return st;

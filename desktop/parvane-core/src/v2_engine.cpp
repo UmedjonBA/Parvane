@@ -1,7 +1,14 @@
 // Parvane fork: обёртка C ABI движка v2 (см. v2_engine.h).
 #include "parvane/v2_engine.h"
 
+#include "parvane/crypto.h"
+#include "parvane/engine_host.h"
+
+#include <openssl/rand.h>
 #include <parvane_protocol.h>
+
+#include <algorithm>
+#include <chrono>
 
 namespace parvane::v2 {
 
@@ -158,152 +165,6 @@ OutRequest parseRequest(const json &r) {
     return out;
 }
 
-// ── клиент ──────────────────────────────────────────────────────────────────
-
-Client::~Client() {
-    if (c_) pv_client_free(c_);
-}
-
-std::unique_ptr<Client> Client::create(const std::string &user, const std::string &deviceId,
-                                       const std::string &domain) {
-    char *err = nullptr;
-    auto *c = pv_client_new(user.c_str(), deviceId.c_str(), domain.c_str(), &err);
-    check(err);
-    if (!c) throw EngineError(R"({"error":"InvalidField"})");
-    return std::unique_ptr<Client>(new Client(c));
-}
-
-std::unique_ptr<Client> Client::import(const std::string &blob, const std::string &key32) {
-    char *err = nullptr;
-    auto *c = pv_client_import(u8(blob), blob.size(), u8(key32), key32.size(), &err);
-    check(err);
-    if (!c) throw EngineError(R"({"error":"Malformed"})");
-    return std::unique_ptr<Client>(new Client(c));
-}
-
-std::string Client::exportState(const std::string &key32) const {
-    char *err = nullptr;
-    auto b = pv_client_export(c_, u8(key32), key32.size(), &err);
-    if (err) {
-        parvane_protocol_bytes_free(b);
-        check(err);
-    }
-    return takeBytes(b);
-}
-
-json Client::call(const std::string &name, const json &args) {
-    char *err = nullptr;
-    const auto a = args.dump();
-    char *out = pv_client_call(c_, name.c_str(), a.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::createIdentity(std::size_t otk) {
-    char *err = nullptr;
-    char *out = pv_client_create_identity(c_, otk, &err);
-    return parseOrThrow(result(out, err));
-}
-
-std::string Client::linkGrantMaterial() {
-    char *err = nullptr;
-    char *out = pv_client_link_grant_material(c_, &err);
-    return result(out, err);
-}
-
-json Client::joinWithGrant(const std::string &material, std::size_t otk) {
-    char *err = nullptr;
-    char *out = pv_client_join_with_grant(c_, material.c_str(), otk, &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::syncRequest() {
-    char *err = nullptr;
-    char *out = pv_client_sync_request(c_, &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::ackRequest() {
-    char *err = nullptr;
-    char *out = pv_client_ack_request(c_, &err);
-    return parseOrThrow(result(out, err));
-}
-
-std::string Client::ingestLog(const std::string &user, const std::string &resp) {
-    char *err = nullptr;
-    char *out = pv_client_ingest_log(c_, user.c_str(), u8(resp), resp.size(), &err);
-    return result(out, err);
-}
-
-std::size_t Client::ingestBundle(const std::string &user, const std::string &resp) {
-    char *err = nullptr;
-    char *out = pv_client_ingest_bundle(c_, user.c_str(), u8(resp), resp.size(), &err);
-    return static_cast<std::size_t>(std::stoull(result(out, err)));
-}
-
-json Client::tokenRequest(const std::string &keyList, const std::string &serverKey, std::size_t count) {
-    char *err = nullptr;
-    char *out = pv_client_token_request(c_, u8(keyList), keyList.size(), u8(serverKey),
-                                        serverKey.size(), count, &err);
-    return parseOrThrow(result(out, err));
-}
-
-std::size_t Client::tokenResponse(const std::string &resp) {
-    char *err = nullptr;
-    char *out = pv_client_token_response(c_, u8(resp), resp.size(), &err);
-    return static_cast<std::size_t>(std::stoull(result(out, err)));
-}
-
-json Client::prepareCall(const std::string &peer, const json &signal) {
-    char *err = nullptr;
-    char *out = pv_client_prepare_call(c_, peer.c_str(), signal.dump().c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::prepareDirect(const std::string &peer, const json &content, const std::string &opId) {
-    char *err = nullptr;
-    const auto text = content.dump();
-    char *out = pv_client_prepare_direct(c_, peer.c_str(), text.c_str(),
-                                         opId.empty() ? nullptr : opId.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::openRecord(const std::string &record) {
-    char *err = nullptr;
-    char *out = pv_client_open_record(c_, u8(record), record.size(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-std::string Client::lastError() {
-    char *err = nullptr;
-    char *out = pv_client_last_error(c_, &err);
-    if (err) parvane_protocol_string_free(err);
-    return take(out);
-}
-
-std::uint64_t Client::logVersion(const std::string &user) const {
-    return pv_client_log_version(c_, user.c_str());
-}
-
-std::string Client::exportRootBackup(const std::string &root32, const std::string &recoveryKey) const {
-    char *err = nullptr;
-    auto b = pv_client_export_root_backup(c_, u8(root32), root32.size(), recoveryKey.c_str(), &err);
-    if (err) {
-        parvane_protocol_bytes_free(b);
-        check(err);
-    }
-    return takeBytes(b);
-}
-
-std::string Client::importRootBackup(const std::string &blob, const std::string &recoveryKey) const {
-    char *err = nullptr;
-    auto b = pv_client_import_root_backup(c_, u8(blob), blob.size(), recoveryKey.c_str(), &err);
-    if (err) {
-        parvane_protocol_bytes_free(b);
-        check(err);
-    }
-    return takeBytes(b);
-}
-
 std::string generateRecoveryKey() { return take(pv_generate_recovery_key()); }
 
 std::string grantWithRootBackup(const std::string &material, const std::string &backup) {
@@ -361,9 +222,38 @@ std::optional<json> parseInvite(const std::string &url) {
     return v;
 }
 
+// ── клиент: ядро в модели движка (spec 035 T125) ───────────────────────────────
+
 namespace {
 
-std::vector<std::string> stringList(const json &j) {
+std::int64_t wallMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+std::string randomKey32() {
+    std::string key(32, '\0');
+    if (RAND_bytes(reinterpret_cast<unsigned char *>(key.data()), 32) != 1) throw EngineError(R"({"error":"Internal"})");
+    return key;
+}
+
+// Ответ `clientCall`/`historyCall` модели: `CallResult{result_json}` либо `{need}`/`{error}` (как прежняя обвязка).
+json callResult(const json &out) {
+    if (!out.is_object()) throw EngineError(R"({"error":"Malformed"})");
+    if (out.contains("need") || out.contains("error")) throw EngineError(out.dump());
+    const auto text = out.value("result_json", std::string("null"));
+    return parseOrThrow(text.empty() ? std::string("null") : text);
+}
+
+std::string b64(const std::string &raw) { return crypto::b64encode(raw); }
+
+// Байты результата (base64-строка); null — пусто.
+std::string bytesOf(const json &v) {
+    if (!v.is_string()) return {};
+    return fromBase64(v.get<std::string>());
+}
+
+std::vector<std::string> stringsOf(const json &j) {
     std::vector<std::string> out;
     if (j.is_array()) {
         for (const auto &v : j) {
@@ -373,121 +263,235 @@ std::vector<std::string> stringList(const json &j) {
     return out;
 }
 
-// JSON-массив base64 → байты тел.
-std::vector<std::string> bodies(const std::string &text) {
-    std::vector<std::string> out;
-    for (const auto &b : stringList(parseOrThrow(text))) out.push_back(fromBase64(b));
-    return out;
+std::uint64_t u64Of(const json &v) {
+    if (v.is_number_unsigned()) return v.get<std::uint64_t>();
+    if (v.is_number_integer()) return static_cast<std::uint64_t>(std::max<std::int64_t>(0, v.get<std::int64_t>()));
+    if (v.is_string()) {
+        try {
+            return std::stoull(v.get<std::string>());
+        } catch (...) {
+        }
+    }
+    return 0;
+}
+
+json l2Idle() {
+    return json{{"active", false}, {"mine", false}, {"enabledBy", json::array()}, {"pad", false},
+                {"ephemeralAllowed", true}};
+}
+
+// Модель без профиля (хранилище в памяти) с клиентом пользователя `user` на устройстве `deviceId`.
+std::shared_ptr<engine::Host> memoryHost(const std::string &user, const std::string &deviceId, const std::string &domain) {
+    const json cfg{{"user", user},
+                   {"device_id", deviceId},
+                   {"domain", domain},
+                   {"now_ms", std::to_string(wallMs())},
+                   {"device_key", b64(randomKey32())},
+                   {"host_driven", true}};
+    std::string error;
+    auto h = engine::Host::openMemory(cfg, &error);
+    if (!h) throw EngineError(json{{"error", error.empty() ? std::string("Internal") : error}}.dump());
+    return std::shared_ptr<engine::Host>(std::move(h));
 }
 
 } // namespace
 
-// ── группы ──────────────────────────────────────────────────────────────────
+Client::Client(std::shared_ptr<engine::Host> host) : host_(std::move(host)) {}
+
+Client::~Client() = default;
+
+std::unique_ptr<Client> Client::create(const std::string &user, const std::string &deviceId,
+                                       const std::string &domain) {
+    return std::make_unique<Client>(memoryHost(user, deviceId, domain));
+}
+
+std::unique_ptr<Client> Client::import(const std::string &blob, const std::string &key32) {
+    auto c = std::make_unique<Client>(memoryHost("import@local", "import", "local"));
+    c->replaceImport(blob, key32);
+    return c;
+}
+
+void Client::replaceNew() {
+    const auto out = host_->raw("clientReplace", json{{"mode", "new"}});
+    if (out.is_object() && out.contains("error")) throw EngineError(out.dump());
+}
+
+void Client::replaceImport(const std::string &blob, const std::string &key32) {
+    const auto out = host_->raw("clientReplace", json{{"mode", "import"}, {"blob", b64(blob)}, {"key", b64(key32)}});
+    if (out.is_object() && out.contains("error")) throw EngineError(out.dump());
+}
+
+std::string Client::exportState(const std::string &key32) const {
+    return bytesOf(call("export", json{{"key", b64(key32)}}));
+}
+
+json Client::call(const std::string &name, const json &args) const {
+    const json a{{"name", name}, {"args_json", (args.is_null() ? json::object() : args).dump()}};
+    return callResult(host_->raw("clientCall", a));
+}
+
+json Client::createIdentity(std::size_t otk) { return call("createIdentity", json{{"otkCount", otk}}); }
+
+std::string Client::linkGrantMaterial() { return bytesOf(call("linkGrantMaterial")); }
+
+json Client::joinWithGrant(const std::string &material, std::size_t otk) {
+    return call("joinWithGrant", json{{"material", b64(material)}, {"otkCount", otk}});
+}
+
+json Client::syncRequest() { return call("syncRequest"); }
+
+json Client::ackRequest() { return call("ackRequest"); }
+
+std::string Client::ingestLog(const std::string &user, const std::string &resp) {
+    const auto v = call("ingestLog", json{{"user", user}, {"syncResponse", b64(resp)}});
+    return v.is_string() ? v.get<std::string>() : std::string();
+}
+
+std::size_t Client::ingestBundle(const std::string &user, const std::string &resp) {
+    return static_cast<std::size_t>(u64Of(call("ingestBundle", json{{"user", user}, {"bundleResponse", b64(resp)}})));
+}
+
+json Client::tokenRequest(const std::string &keyList, const std::string &serverKey, std::size_t count) {
+    return call("tokenRequest", json{{"keyListResponse", b64(keyList)}, {"serverKey", b64(serverKey)}, {"count", count}});
+}
+
+std::size_t Client::tokenResponse(const std::string &resp) {
+    return static_cast<std::size_t>(u64Of(call("tokenResponse", json{{"resp", b64(resp)}})));
+}
+
+json Client::prepareCall(const std::string &peer, const json &signal) {
+    return call("prepareCall", json{{"peer", peer}, {"signalJson", signal.dump()}});
+}
+
+json Client::prepareDirect(const std::string &peer, const json &content, const std::string &opId) {
+    return call("prepareDirect", json{{"peer", peer}, {"contentJson", content.dump()}, {"opId", opId}});
+}
+
+json Client::openRecord(const std::string &record) {
+    auto v = call("openRecord", json{{"record", b64(record)}});
+    return v.is_array() ? v : json::array();
+}
+
+std::string Client::lastError() {
+    try {
+        const auto v = call("lastError");
+        return v.is_string() ? v.get<std::string>() : std::string();
+    } catch (const EngineError &) {
+        return {};
+    }
+}
+
+std::uint64_t Client::logVersion(const std::string &user) const {
+    try {
+        return u64Of(call("logVersion", json{{"user", user}}));
+    } catch (const EngineError &) {
+        return 0;
+    }
+}
+
+std::string Client::exportRootBackup(const std::string &root32, const std::string &recoveryKey) const {
+    json args{{"recoveryKey", recoveryKey}};
+    if (!root32.empty()) args["rootSecret"] = b64(root32);
+    return bytesOf(call("exportRootBackup", args));
+}
+
+std::string Client::importRootBackup(const std::string &blob, const std::string &recoveryKey) const {
+    return bytesOf(call("importRootBackup", json{{"blob", b64(blob)}, {"recoveryKey", recoveryKey}}));
+}
 
 json Client::groupCreate(int kind, const std::string &name, const std::vector<std::string> &members,
                          const json &perms, const std::string &migratedFrom) {
-    char *err = nullptr;
-    const auto m = json(members).dump();
-    const auto p = perms.dump();
-    char *out = migratedFrom.empty()
-        ? pv_client_group_create(c_, kind, name.c_str(), m.c_str(), p.c_str(), &err)
-        : pv_client_group_create_from(c_, kind, name.c_str(), m.c_str(), p.c_str(), migratedFrom.c_str(), &err);
-    return parseOrThrow(result(out, err));
+    return call("groupCreate", json{{"kind", kind},
+                                    {"name", name},
+                                    {"members", members},
+                                    {"permsJson", (perms.is_null() ? json::object() : perms).dump()},
+                                    {"migratedFrom", migratedFrom}});
 }
 
-std::uint64_t Client::groupIngest(const std::string &domain, const std::string &groupHex,
-                                  const std::string &resp) {
-    char *err = nullptr;
-    char *out = pv_client_group_ingest(c_, domain.c_str(), groupHex.c_str(), u8(resp), resp.size(), &err);
-    return static_cast<std::uint64_t>(std::stoull(result(out, err)));
+std::uint64_t Client::groupIngest(const std::string &domain, const std::string &groupHex, const std::string &resp) {
+    return u64Of(call("groupIngest", json{{"domain", domain}, {"group", groupHex}, {"syncResponse", b64(resp)}}));
 }
 
 json Client::groupChange(const std::string &groupHex, const json &change) {
-    char *err = nullptr;
-    const auto c = change.dump();
-    char *out = pv_client_group_change(c_, groupHex.c_str(), c.c_str(), &err);
-    return parseOrThrow(result(out, err));
+    return call("groupChange", json{{"group", groupHex}, {"changeJson", change.dump()}});
 }
 
 json Client::groupRequestDecide(const std::string &groupHex, const std::string &user, bool approve) {
-    char *err = nullptr;
-    char *out = pv_client_group_request_decide(c_, groupHex.c_str(), user.c_str(), approve, &err);
-    return parseOrThrow(result(out, err));
+    return call("groupRequestDecide", json{{"group", groupHex}, {"user", user}, {"approve", approve}});
 }
 
-json Client::groupRotateEpoch(const std::string &groupHex) {
-    char *err = nullptr;
-    char *out = pv_client_group_rotate_epoch(c_, groupHex.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::groupRotateEpoch(const std::string &groupHex) { return call("groupRotateEpoch", json{{"group", groupHex}}); }
 
 json Client::prepareGroup(const std::string &groupHex, const json &content, const std::string &opId) {
-    char *err = nullptr;
-    const auto text = content.dump();
-    char *out = pv_client_prepare_group(c_, groupHex.c_str(), text.c_str(),
-                                        opId.empty() ? nullptr : opId.c_str(), &err);
-    return parseOrThrow(result(out, err));
+    return call("prepareGroup", json{{"group", groupHex}, {"contentJson", content.dump()}, {"opId", opId}});
 }
 
 json Client::drainReady() {
-    char *err = nullptr;
-    char *out = pv_client_drain_ready(c_, &err);
-    return parseOrThrow(result(out, err));
+    auto v = call("drainReady");
+    return v.is_array() ? v : json::array();
 }
 
 std::uint64_t Client::groupVersion(const std::string &groupHex) const {
-    return pv_client_group_version(c_, groupHex.c_str());
+    try {
+        return u64Of(call("groupVersion", json{{"group", groupHex}}));
+    } catch (const EngineError &) {
+        return 0;
+    }
 }
 
 std::int64_t Client::groupBehind(const std::string &groupHex) const {
-    return pv_client_group_behind(c_, groupHex.c_str());
+    try {
+        const auto v = call("groupBehind", json{{"group", groupHex}});
+        if (v.is_null()) return -1;
+        return static_cast<std::int64_t>(u64Of(v));
+    } catch (const EngineError &) {
+        return -1;
+    }
 }
 
-void Client::groupForget(const std::string &groupHex) { pv_client_group_forget(c_, groupHex.c_str()); }
+void Client::groupForget(const std::string &groupHex) {
+    try {
+        (void)call("groupForget", json{{"group", groupHex}});
+    } catch (const EngineError &) {
+    }
+}
 
 std::vector<std::string> Client::groupList() const {
-    return stringList(json::parse(take(pv_client_group_list(c_)), nullptr, false));
+    try {
+        return stringsOf(call("groupList"));
+    } catch (const EngineError &) {
+        return {};
+    }
 }
 
 std::optional<json> Client::groupInfo(const std::string &groupHex) const {
-    char *err = nullptr;
-    char *out = pv_client_group_info(c_, groupHex.c_str(), &err);
-    if (err) {
-        parvane_protocol_string_free(err);
-        if (out) parvane_protocol_string_free(out);
+    try {
+        auto v = call("groupInfo", json{{"group", groupHex}});
+        if (!v.is_object()) return std::nullopt;
+        return v;
+    } catch (const EngineError &) {
         return std::nullopt;
     }
-    auto v = json::parse(take(out), nullptr, false);
-    if (v.is_discarded() || !v.is_object()) return std::nullopt;
-    return v;
 }
 
-std::vector<std::string> Client::groupUnconfirmed(const std::string &groupHex,
-                                                  const std::vector<std::string> &claimed) const {
-    char *err = nullptr;
-    const auto c = json(claimed).dump();
-    char *out = pv_client_group_unconfirmed(c_, groupHex.c_str(), c.c_str(), &err);
-    if (err) {
-        parvane_protocol_string_free(err);
-        if (out) parvane_protocol_string_free(out);
+std::vector<std::string> Client::groupUnconfirmed(const std::string &groupHex, const std::vector<std::string> &claimed) const {
+    try {
+        return stringsOf(call("groupUnconfirmed", json{{"group", groupHex}, {"claimed", claimed}}));
+    } catch (const EngineError &) {
         return {};
     }
-    return stringList(json::parse(take(out), nullptr, false));
 }
 
 json Client::groupInviteCreate(const std::string &groupHex, const std::string &title, std::int64_t expiresMs,
                                std::uint32_t usageLimit, bool requiresApproval) {
-    char *err = nullptr;
-    char *out = pv_client_group_invite_create(c_, groupHex.c_str(), title.c_str(), expiresMs, usageLimit,
-                                              requiresApproval, &err);
-    return parseOrThrow(result(out, err));
+    return call("groupInviteCreate", json{{"group", groupHex},
+                                          {"title", title},
+                                          {"expiresMs", expiresMs},
+                                          {"usageLimit", usageLimit},
+                                          {"requiresApproval", requiresApproval}});
 }
 
-json Client::groupJoin(const std::string &url) {
-    char *err = nullptr;
-    char *out = pv_client_group_join(c_, url.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::groupJoin(const std::string &url) { return call("groupJoin", json{{"url", url}}); }
 
 json Client::groupSyncByLink(const std::string &url, const std::string &domain, const std::string &groupHex,
                              std::uint64_t afterVersion, std::int64_t tsMs) {
@@ -508,253 +512,195 @@ json Client::groupPhotoFollowups(const std::string &groupHex, const std::vector<
 }
 
 json Client::logDevices(const std::string &user) const {
-    auto v = json::parse(take(pv_client_log_devices(c_, user.c_str())), nullptr, false);
-    return v.is_object() ? v : json{{"v2", json::array()}, {"legacy", json::array()}};
+    try {
+        auto v = call("logDevices", json{{"user", user}});
+        if (v.is_object()) return v;
+    } catch (const EngineError &) {
+    }
+    return json{{"v2", json::array()}, {"legacy", json::array()}};
 }
 
 json Client::readers(const std::string &opId) const {
-    char *err = nullptr;
-    char *out = pv_client_readers(c_, opId.c_str(), &err);
-    auto v = json::parse(result(out, err), nullptr, false);
+    auto v = call("readers", json{{"id", opId}});
     return v.is_array() ? v : json::array();
 }
 
 bool Client::hasPeerDeliveryKey(const std::string &peer) const {
-    return pv_client_has_peer_delivery_key(c_, peer.c_str());
+    try {
+        return call("hasPeerDeliveryKey", json{{"peer", peer}}).get<bool>();
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 bool Client::deliveryKeyRejected(const std::string &peer) {
-    return pv_client_delivery_key_rejected(c_, peer.c_str());
+    try {
+        return call("deliveryKeyRejected", json{{"peer", peer}}).get<bool>();
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 bool Client::acceptRootChange(const std::string &user) {
-    char *err = nullptr;
-    const bool ok = pv_client_accept_root_change(c_, user.c_str(), &err);
-    check(err);
-    return ok;
+    const auto v = call("acceptRootChange", json{{"user", user}});
+    return v.is_boolean() && v.get<bool>();
 }
 
 json Client::recoverWithRoot(const std::string &root32, const std::string &logResp, std::size_t otk) {
-    char *err = nullptr;
-    char *out = pv_client_recover_with_root(c_, u8(root32), root32.size(), u8(logResp), logResp.size(), otk, &err);
-    return parseOrThrow(result(out, err));
+    return call("recoverWithRoot", json{{"rootSecret", b64(root32)}, {"logResponse", b64(logResp)}, {"otkCount", otk}});
 }
 
-json Client::resetIdentity(std::size_t otk) {
-    char *err = nullptr;
-    char *out = pv_client_reset_identity(c_, otk, &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::resetIdentity(std::size_t otk) { return call("resetIdentity", json{{"otkCount", otk}}); }
 
-json Client::revokeDevice(const std::string &deviceId) {
-    char *err = nullptr;
-    char *out = pv_client_revoke_device(c_, deviceId.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::revokeDevice(const std::string &deviceId) { return call("revokeDevice", json{{"deviceId", deviceId}}); }
 
-json Client::revokeContactAccess(const std::string &peer) {
-    char *err = nullptr;
-    char *out = pv_client_revoke_contact_access(c_, peer.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::revokeContactAccess(const std::string &peer) { return call("revokeContactAccess", json{{"peer", peer}}); }
 
-json Client::shareDeliveryKey(const std::string &peer) {
-    char *err = nullptr;
-    char *out = pv_client_share_delivery_key(c_, peer.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
+json Client::shareDeliveryKey(const std::string &peer) { return call("shareDeliveryKey", json{{"peer", peer}}); }
 
 json Client::shareGroupsWithOwnDevices(const json &devices) {
-    char *err = nullptr;
-    char *out = pv_client_share_groups_with_own_devices(c_, devices.dump().c_str(), &err);
-    return parseOrThrow(result(out, err));
+    return call("shareGroupsWithOwnDevices", json{{"devicesJson", devices.is_array() ? devices : json::array()}});
 }
 
 json Client::rotateSsk(const std::string &root32) {
-    char *err = nullptr;
-    char *out = pv_client_rotate_ssk(c_, u8(root32), root32.size(), &err);
-    return parseOrThrow(result(out, err));
+    json args = json::object();
+    if (!root32.empty()) args["rootSecret"] = b64(root32);
+    return call("rotateSsk", args);
 }
 
-bool Client::ownSskExposed() const { return pv_client_own_ssk_exposed(c_); }
-
-json Client::ephSubscribe(const json &chats) {
-    char *err = nullptr;
-    char *out = pv_client_eph_subscribe(c_, chats.dump().c_str(), &err);
-    return parseOrThrow(result(out, err));
+bool Client::ownSskExposed() const {
+    try {
+        return call("ownSskExposed").get<bool>();
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
-void Client::ephReset() { pv_client_eph_reset(c_); }
+json Client::ephSubscribe(const json &chats) { return call("ephSubscribe", json{{"chatsJson", chats.dump()}}); }
+
+void Client::ephReset() {
+    try {
+        (void)call("ephReset");
+    } catch (const EngineError &) {
+    }
+}
 
 json Client::ephTyping(const std::string &chat, int action) const {
-    char *err = nullptr;
-    char *out = pv_client_eph_typing(c_, chat.c_str(), action, &err);
-    return parseOrThrow(result(out, err));
+    return call("ephTyping", json{{"chat", chat}, {"action", action}});
 }
 
 json Client::ephPresence(bool online, std::int64_t lastSeenMs) const {
-    char *err = nullptr;
-    char *out = pv_client_eph_presence(c_, online, lastSeenMs, &err);
-    return parseOrThrow(result(out, err));
+    return call("ephPresence", json{{"online", online}, {"lastSeenMs", lastSeenMs}});
 }
 
 json Client::ephOpen(const std::string &body) const {
-    auto v = json::parse(take(pv_client_eph_open(c_, reinterpret_cast<const std::uint8_t *>(body.data()), body.size())),
-                         nullptr, false);
-    return v.is_array() ? v : json::array();
+    try {
+        auto v = call("ephOpen", json{{"body", b64(body)}});
+        return v.is_array() ? v : json::array();
+    } catch (const EngineError &) {
+        return json::array();
+    }
 }
 
-std::size_t Client::tokenCount() const { return pv_client_token_count(c_); }
-bool Client::tokenRefillDue() const { return pv_client_token_refill_due(c_); }
-std::size_t Client::tokenBatchSize() const { return pv_client_token_batch_size(c_); }
+std::size_t Client::tokenCount() const {
+    try {
+        return static_cast<std::size_t>(u64Of(call("tokenCount")));
+    } catch (const EngineError &) {
+        return 0;
+    }
+}
+
+bool Client::tokenRefillDue() const {
+    try {
+        return call("tokenRefillDue").get<bool>();
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+std::size_t Client::tokenBatchSize() const {
+    try {
+        return static_cast<std::size_t>(u64Of(call("tokenBatchSize")));
+    } catch (const EngineError &) {
+        return 0;
+    }
+}
 
 // ── режим «усиленная приватность» (L2) ──────────────────────────────────────
 
-namespace {
-
-json l2Idle() {
-    return json{{"active", false}, {"mine", false}, {"enabledBy", json::array()}, {"pad", false},
-                {"ephemeralAllowed", true}};
-}
-
-} // namespace
-
 json Client::l2SetDirect(const std::string &peer, bool enabled, const std::string &opId) {
-    char *err = nullptr;
-    char *out = pv_client_l2_set_direct(c_, peer.c_str(), enabled, opId.empty() ? nullptr : opId.c_str(), &err);
-    return parseOrThrow(result(out, err));
+    return call("l2SetDirect", json{{"peer", peer}, {"enabled", enabled}, {"opId", opId}});
 }
 
 json Client::l2Direct(const std::string &peer) const {
-    char *out = pv_client_l2_direct(c_, peer.c_str());
-    if (!out) return l2Idle();
-    auto v = json::parse(take(out), nullptr, false);
-    return v.is_object() ? v : l2Idle();
+    try {
+        auto v = call("l2Direct", json{{"peer", peer}});
+        return v.is_object() ? v : l2Idle();
+    } catch (const EngineError &) {
+        return l2Idle();
+    }
 }
 
 json Client::l2Group(const std::string &groupHex) const {
-    char *err = nullptr;
-    char *out = pv_client_l2_group(c_, groupHex.c_str(), &err);
-    if (err) {
-        parvane_protocol_string_free(err);
-        if (out) parvane_protocol_string_free(out);
+    try {
+        auto v = call("l2Group", json{{"group", groupHex}});
+        return v.is_object() ? v : l2Idle();
+    } catch (const EngineError &) {
         return l2Idle();
     }
-    if (!out) return l2Idle();
-    auto v = json::parse(take(out), nullptr, false);
-    return v.is_object() ? v : l2Idle();
 }
 
 void Client::l2SetGroupPref(const std::string &groupHex, bool enabled) {
-    pv_client_l2_set_group_pref(c_, groupHex.c_str(), enabled);
+    try {
+        (void)call("l2SetGroupPref", json{{"group", groupHex}, {"enabled", enabled}});
+    } catch (const EngineError &) {
+    }
 }
 
 json Client::l2ActiveChats() const {
-    auto v = json::parse(take(pv_client_l2_active_chats(c_)), nullptr, false);
-    if (!v.is_object()) v = json{{"direct", json::array()}, {"groups", json::array()}};
-    return v;
+    try {
+        auto v = call("l2ActiveChats");
+        if (v.is_object()) return v;
+    } catch (const EngineError &) {
+    }
+    return json{{"direct", json::array()}, {"groups", json::array()}};
 }
 
-bool Client::presenceAllowed() const { return pv_client_presence_allowed(c_); }
+bool Client::presenceAllowed() const {
+    try {
+        return call("presenceAllowed").get<bool>();
+    } catch (const std::exception &) {
+        return true;
+    }
+}
 
-bool Client::hasStateKey() const { return pv_client_has_state_key(c_); }
+bool Client::hasStateKey() const {
+    try {
+        return call("hasStateKey").get<bool>();
+    } catch (const std::exception &) {
+        return false;
+    }
+}
 
-bool Client::ensureStateKey() { return pv_client_ensure_state_key(c_); }
+bool Client::ensureStateKey() {
+    const auto v = call("ensureStateKey");
+    return v.is_boolean() && v.get<bool>();
+}
 
-// ── журнал истории аккаунта (spec 033) ─────────────────────────────────────
+// ── журнал истории аккаунта (spec 033) — сессия модели ─────────────────────
 
 std::unique_ptr<HistorySession> HistorySession::open(const Client &client) {
-    auto *s = pv_client_history_session(client.raw());
-    if (!s) return nullptr;
-    return std::unique_ptr<HistorySession>(new HistorySession(s));
+    if (!client.hasStateKey()) return nullptr;
+    return std::unique_ptr<HistorySession>(new HistorySession(client.host()));
 }
 
-HistorySession::~HistorySession() {
-    if (s_) pv_history_free(s_);
-}
+HistorySession::~HistorySession() = default;
 
 json HistorySession::call(const std::string &name, const json &args) {
-    char *err = nullptr;
-    const auto a = args.dump();
-    char *out = pv_history_call(s_, name.c_str(), a.c_str(), &err);
-    return parseOrThrow(result(out, err));
+    const json a{{"name", name}, {"args_json", (args.is_null() ? json::object() : args).dump()}};
+    return callResult(host_->raw("historyCall", a));
 }
 
-// ── журнал личного состояния ────────────────────────────────────────────────
-
-std::unique_ptr<StateSession> StateSession::open(const Client &client) {
-    auto *s = pv_client_state_session(client.raw());
-    if (!s) return nullptr;
-    return std::unique_ptr<StateSession>(new StateSession(s));
-}
-
-StateSession::~StateSession() {
-    if (s_) pv_state_free(s_);
-}
-
-std::string StateSession::syncRequest() const { return takeBytes(pv_state_sync_request(s_)); }
-
-json StateSession::call(const std::string &name, const json &args) {
-    char *err = nullptr;
-    const auto a = args.dump();
-    char *out = pv_state_call(s_, name.c_str(), a.c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json StateSession::ingest(const std::string &resp) {
-    char *err = nullptr;
-    char *out = pv_state_ingest(s_, u8(resp), resp.size(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json StateSession::snapshot() const {
-    auto v = json::parse(take(pv_state_snapshot(s_)), nullptr, false);
-    return v.is_object() ? v : json::object();
-}
-
-std::vector<std::string> StateSession::diff(const json &desired, const std::vector<std::string> &kinds) {
-    char *err = nullptr;
-    const auto d = desired.dump();
-    const auto k = json(kinds).dump();
-    char *out = pv_state_diff(s_, d.c_str(), k.c_str(), &err);
-    return bodies(result(out, err));
-}
-
-std::vector<std::string> StateSession::migrate(const json &local) {
-    char *err = nullptr;
-    const auto l = local.dump();
-    char *out = pv_state_migrate(s_, l.c_str(), &err);
-    return bodies(result(out, err));
-}
-
-json StateSession::claimDue(std::int64_t nowMs) {
-    auto v = json::parse(take(pv_state_claim_due(s_, nowMs)), nullptr, false);
-    return v.is_array() ? v : json::array();
-}
-
-std::vector<std::string> StateSession::markSent(const std::string &opIdB64) {
-    char *err = nullptr;
-    char *out = pv_state_mark_sent(s_, opIdB64.c_str(), &err);
-    return bodies(result(out, err));
-}
-
-std::vector<std::string> StateSession::chatCleared(const json &cleared) {
-    char *err = nullptr;
-    char *out = pv_state_chat_cleared(s_, cleared.dump().c_str(), &err);
-    return bodies(result(out, err));
-}
-
-std::vector<std::string> StateSession::groupInviteSet(const json &invite) {
-    char *err = nullptr;
-    char *out = pv_state_group_invite_set(s_, invite.dump().c_str(), &err);
-    return bodies(result(out, err));
-}
-
-std::vector<std::string> StateSession::groupInviteRemove(const std::string &linkIdB64) {
-    char *err = nullptr;
-    char *out = pv_state_group_invite_remove(s_, linkIdB64.c_str(), &err);
-    return bodies(result(out, err));
-}
 
 AnonPlanner::AnonPlanner() : p_(pv_anon_planner_new()) {}
 

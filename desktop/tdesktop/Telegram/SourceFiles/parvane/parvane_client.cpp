@@ -10,8 +10,10 @@
 #include "boxes/share_box.h" // хук PARVANE_AUTOFORWARD_MULTI: колбэк окна выбора чатов
 #include "data/components/scheduled_messages.h" // раздел «Запланированные» из очереди
 #include "ui/layers/show.h" // тосты звонков из Calls::Instance
+#include "ui/toast/toast.h" // spec 035 T127: ход переноса
 #include "history/history_item_components.h" // HiddenSenderInfo (пересылка)
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
+#include <parvane/migrate_legacy.h> // spec 035 T127: читатель старых мест tdata для разового переноса
 #include <condition_variable>
 #include <thread>
 #include <deque>
@@ -1895,6 +1897,45 @@ void HandleRecoveryKey(const std::string &key) {
 		: QString();
 }
 
+// spec 035 T127: ход разового переноса прежнего состояния в хранилище модели — нативным тостом окна (EN+RU):
+// шаги переноса, итог; прерванный перенос повторится при следующем подключении (старое не тронуто).
+void ShowMigrationProgress(int point, int total, bool done, bool failed) {
+	static auto shownPoint = -1;
+	const auto window = Core::App().activeWindow();
+	if (failed) {
+		shownPoint = -1;
+		LOG(("Parvane: v2: перенос прежнего состояния не закончен — повтор при следующем подключении"));
+		if (window) {
+			window->showToast(tr::lng_parvane_migration_failed(tr::now));
+		}
+		return;
+	}
+	if (done) {
+		if (shownPoint >= 0 && window) {
+			window->showToast(tr::lng_parvane_migration_done(tr::now));
+		}
+		shownPoint = -1;
+		return;
+	}
+	if (point == shownPoint) {
+		return;
+	}
+	shownPoint = point;
+	LOG(("Parvane: v2: перенос прежнего состояния, шаг %1 из %2").arg(point).arg(total));
+	if (window) {
+		auto config = Ui::Toast::Config();
+		config.title = tr::lng_parvane_migration_title(tr::now);
+		config.text = { tr::lng_parvane_migration_progress(
+			tr::now,
+			lt_step,
+			QString::number(std::max(point, 1)),
+			lt_total,
+			QString::number(total)) };
+		config.duration = crl::time(4000);
+		window->showToast(std::move(config));
+	}
+}
+
 // Поднять v2-сессию (под g_sessionMutex из StartSession: адрес и JWT уже есть).
 void StartV2Locked() {
 	if (!V2Enabled()) {
@@ -1935,6 +1976,39 @@ void StartV2Locked() {
 		}
 	};
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
+	// spec 035 T127: старые места tdata по перечню (слой desktop) — разовым переносом в хранилище модели
+	cfg.migrationLayer = "desktop";
+	cfg.legacyRecords = [tdata = TdataDir().toStdString(), self] {
+		// Файлы аккаунта, которые пишет сам клиент (слой desktop перечня): маркеры, служебное журнала истории,
+		// наборы стикеров, контакты, фоны чатов, очистка «у себя», ключи разделов
+		static const std::vector<parvane::migrate_legacy::AccountFile> files = {
+			{ "parvane-readmarks-", ".json", false },
+			{ "parvane-history-sync-", "-", true },
+			{ "parvane-sticker-packs-", ".json", false },
+			{ "parvane-contacts-", ".json", false },
+			{ "parvane-chat-wallpapers-", ".json", false },
+			{ "parvane-cleared-", ".txt", false },
+			{ "parvane-domain-keys-", ".json", false },
+		};
+		const auto collected = parvane::migrate_legacy::collect(tdata, self, files);
+		for (const auto &key : collected.unreadable) {
+			LOG(("Parvane: v2: перенос — файл не открылся: %1").arg(QString::fromStdString(key)));
+		}
+		auto out = parvane::migrate_legacy::toJson(collected);
+		out["layer"] = "desktop";
+		return out;
+	};
+	cfg.onMigration = [generation = AccountGeneration()](const parvane::json &p) {
+		const auto point = p.value("point", 0);
+		const auto total = p.value("total", 7);
+		const auto done = p.value("done", false);
+		const auto failed = p.value("failed", false);
+		crl::on_main([=] {
+			if (AccountGenerationIs(generation)) {
+				ShowMigrationProgress(point, total, done, failed);
+			}
+		});
+	};
 	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
 		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
 	}
@@ -6697,6 +6771,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				const auto s = V2Ready();
 				auto plain = s ? s->downloadGroupPhoto(fid, groupKey) : std::nullopt;
 				if (!plain) {
+					LOG(("Parvane: аватар %1 не применён: фото группы не скачалось или секрет не подошёл").arg(address));
 					return;
 				}
 				bytes = std::move(*plain);
@@ -6705,17 +6780,25 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 					fid,
 					parvane::chatrules::chatBlobCipherCap("avatar", 0));
 				if (!d.ok) {
+					LOG(("Parvane: аватар %1 не применён: блоб не скачался%2").arg(
+						address,
+						parvane::v2::isGroupAddress(address.toStdString()) ? u" (секрета фото группы ещё нет)"_q : QString()));
 					return;
 				}
 				bytes = std::move(d.bytes);
 			}
-		} catch (const std::exception &) {
+		} catch (const std::exception &e) {
+			LOG(("Parvane: аватар %1 не применён: %2").arg(address, QString::fromUtf8(e.what())));
 			return;
 		}
 		const auto addressCopy = address;
 		// Чужие байты — на воркере и с потолком размера (на главный поток уходит готовая картинка)
 		auto decoded = DecodeImageBounded(QByteArray(bytes.data(), int(bytes.size())), 2048);
 		if (decoded.isNull()) {
+			LOG(("Parvane: аватар %1 не применён: картинка не декодировалась (%2 байт%3)").arg(
+				address,
+				QString::number(bytes.size()),
+				groupKey.empty() && parvane::v2::isGroupAddress(address.toStdString()) ? u", секрета фото группы ещё нет"_q : QString()));
 			return;
 		}
 		crl::on_main([id, bytes, photoId, addressCopy, decoded] {

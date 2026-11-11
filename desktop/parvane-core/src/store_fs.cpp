@@ -201,12 +201,65 @@ struct PosixFs final : FsOps {
     }
 };
 
+// В памяти: файлы — словарь «путь → байты», каталоги не нужны (модель в памяти — тесты и разовые проверки).
+struct MemoryFs final : FsOps {
+    std::map<std::string, std::string> files;
+    std::map<int, std::pair<std::string, std::string>> open; // fd → (путь, накопленное)
+    int next = 3;
+    int openWrite(const std::string &path) override {
+        open[next] = {path, std::string()};
+        return next++;
+    }
+    bool writeAll(int fd, const void *data, size_t n) override {
+        auto it = open.find(fd);
+        if (it == open.end()) return false;
+        it->second.second.append(static_cast<const char *>(data), n);
+        return true;
+    }
+    bool fsyncFd(int fd) override { return open.count(fd) != 0; }
+    bool closeFd(int fd) override {
+        auto it = open.find(fd);
+        if (it == open.end()) return false;
+        files[it->second.first] = std::move(it->second.second);
+        open.erase(it);
+        return true;
+    }
+    bool fsyncDir(const std::string &) override { return true; }
+    bool rename(const std::string &from, const std::string &to) override {
+        auto it = files.find(from);
+        if (it == files.end()) return false;
+        files[to] = std::move(it->second);
+        files.erase(from);
+        return true;
+    }
+    bool remove(const std::string &path) override {
+        files.erase(path);
+        return true;
+    }
+    std::optional<std::string> readFile(const std::string &path) override {
+        auto it = files.find(path);
+        if (it == files.end()) return std::nullopt;
+        return it->second;
+    }
+    std::vector<std::string> list(const std::string &dir) override {
+        std::vector<std::string> out;
+        const auto prefix = dir + "/";
+        for (const auto &[p, _] : files) {
+            if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos) out.push_back(p.substr(prefix.size()));
+        }
+        return out;
+    }
+    bool mkdirs(const std::string &) override { return true; }
+};
+
 }  // namespace
 
 FsOps &posixFs() {
     static PosixFs fs;
     return fs;
 }
+
+std::unique_ptr<FsOps> memoryFs() { return std::make_unique<MemoryFs>(); }
 
 std::unique_ptr<Store> Store::open(const std::string &dir, FsOps &fs, std::string *error) {
     std::unique_ptr<Store> s(new Store(dir, fs));

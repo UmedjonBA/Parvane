@@ -2,6 +2,7 @@
 // слинкован и отвечает, владение памятью, ошибки need/error, отображение
 // содержимого v2 ↔ v1 и разбор событий "direct" для конвейера клиента.
 #include "parvane/linking.h"
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -10,6 +11,8 @@
 #include "parvane/messenger.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_engine.h"
+#include "parvane/engine_host.h"
+#include "parvane/state_model.h"
 
 using nlohmann::json;
 namespace v2 = parvane::v2;
@@ -564,15 +567,18 @@ int main() {
                   "событие direct с chat_mode → Message для конвейера клиента");
         }
         check(!c->hasStateKey() && c->ensureStateKey() && c->hasStateKey(), "ключ личного состояния создан");
-        auto st = v2::StateSession::open(*c);
-        check(st != nullptr, "сессия журнала состояния открыта");
-        if (st) {
-            const auto bodies = st->migrate(json{{"folders", json::array({json{{"id", 3}, {"title", "Семья"}}})}});
-            check(bodies.size() == 1 && st->snapshot().dump().find("Семья") != std::string::npos,
-                  "миграция локальных папок в журнал");
-            const auto none = st->diff(json{{"folders", json::array({json{{"id", 3}, {"title", "Семья"}}})}}, {"folders"});
-            check(none.empty(), "diff без изменений — нет записей");
-        }
+        // spec 035 T125: журнал личного состояния — модель того же клиента (ключи не выходят из движка)
+        std::vector<std::string> sent;
+        v2::StateModel st(c->host(), [&](const parvane::engine::Step &step) {
+            for (const auto &r : step.requests) sent.push_back(r.value("method", std::string()));
+            return step.ok();
+        });
+        const json folders{{"folders", json::array({json{{"id", 3}, {"title", "Семья"}}})}};
+        check(st.apply(folders) && st.snapshot().dump().find("Семья") != std::string::npos,
+              "папка — объектом журнала state.v2 модели", st.snapshot().dump());
+        check(std::count(sent.begin(), sent.end(), "state.ops.append") >= 1, "правка — запросом state.ops.append");
+        sent.clear();
+        check(st.apply(folders, {"folders"}, true, false, st.snapshot()) && sent.empty(), "без изменений — нет записей");
     }
 
     {
@@ -820,30 +826,14 @@ int main() {
         }
         check(unknownFree, "свободная функция с неизвестным именем → UnknownCall");
 
-        // Журнал личного состояния: записи по имени (T025 — stateCall)
-        (void)c->ensureStateKey();
-        auto st = v2::StateSession::open(*c);
-        const auto rec = st->call("callSet", json{{"recordJson", json{{"call_id", "AAAAAAAAAAAAAAAAAAAAAA=="}, {"peer", {{"user", {{"address", "bob@local"}}}}},
-                                                                     {"outgoing", true}, {"started_ms", "1"}, {"duration_s", 5}}}});
-        check(rec.is_array() && !rec.empty(), "state callSet — тела записей журнала");
-        const auto cleared = st->call("chatCleared", json{{"clearedJson", json{{"peer", {{"user", {{"address", "bob@local"}}}}}, {"cleared_until_ms", "7"}}}});
-        check(cleared.is_array() && !cleared.empty(), "state chatCleared — тела записей");
-        const auto pc = st->call("plannerContainerSet", json{{"domain", "local"}, {"idHex", "00112233445566778899aabbccddeeff"}});
-        check(pc.is_array() && !pc.empty(), "state plannerContainerSet — тела записей");
-        bool badState = false;
+        // Неизвестное действие клиента модели — UnknownCall
+        bool unknownClient = false;
         try {
-            (void)st->call("callSet", json{{"recordJson", "не json"}});
-        } catch (const v2::EngineError &) {
-            badState = true;
-        }
-        check(badState, "state callSet с мусором — ошибка");
-        bool unknownState = false;
-        try {
-            (void)st->call("noSuchState", json::object());
+            (void)c->call("noSuchClientCall", json::object());
         } catch (const v2::EngineError &e) {
-            unknownState = e.kind() == "UnknownCall";
+            unknownClient = e.kind() == "UnknownCall";
         }
-        check(unknownState, "state: неизвестное имя → UnknownCall");
+        check(unknownClient, "клиент модели: неизвестное имя → UnknownCall");
     }
 
     // ── жалоба админу (mod_report): верить только своим данным (ревью 21 окт 2026, вечер) ──

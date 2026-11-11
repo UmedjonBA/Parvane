@@ -22,7 +22,6 @@
 #include "parvane/store_fs.h"
 
 struct PvEngine;
-struct PvClient;
 
 namespace parvane::engine {
 
@@ -46,6 +45,8 @@ public:
     // хранилищем в каталоге `storeDir` (создаётся) и выполнить `start` до открытия профиля. nullptr — ошибка.
     static std::unique_ptr<Host> open(const json &config, const std::string &storeDir, std::string *error = nullptr,
                                       store_fs::FsOps &fs = store_fs::posixFs(), Step *opened = nullptr);
+    // Модель без профиля: хранилище в памяти (тесты, разовые проверки, доказательство устройства до входа).
+    static std::unique_ptr<Host> openMemory(const json &config, std::string *error = nullptr, Step *opened = nullptr);
     ~Host();
     Host(const Host &) = delete;
     Host &operator=(const Host &) = delete;
@@ -56,14 +57,13 @@ public:
     Step ingest(const json &input) { return step("ingest", input); }
     Step tick(std::int64_t nowMs) { return step("tick", json{{"now_ms", std::to_string(nowMs)}}); }
 
-    // Переходный период (T125): ключи личного состояния прежнего клиента — в модель (ключи не выходят из движка).
-    Step adoptStateKeys(const PvClient *client);
-
     // Чтение (`historyPage`, `chatList`, `viewState`, `viewGroup`, `capabilities`, `engineInfo`). Ответ
     // `{pending: store_reads}` хост дочитывает сам и повторяет вызов. Ошибка — `{"error": вид}`.
     json read(const std::string &name, const json &args);
 
-    // Сырой вызов без исполнения итога (тесты): разобранный JSON ответа.
+    // Вызов без исполнения итога: чтения и действия клиентского ядра (`clientCall`, `historyCall` — ответ
+    // `CallResult` либо `{need}`/`{error}`; изменённое ляжет на диск следующим шагом), `clientReplace`,
+    // `migrateStatus`, `auditDump`; тесты. Разобранный JSON ответа.
     json raw(const std::string &name, const json &args);
 
     [[nodiscard]] std::uint64_t revision() const;
@@ -71,11 +71,15 @@ public:
     [[nodiscard]] std::uint64_t commits() const;  // зафиксировано пачек за жизнь хоста
 
 private:
-    Host(PvEngine *e, std::unique_ptr<store_fs::Store> s) : e_(e), store_(std::move(s)) {}
+    Host(PvEngine *e, std::unique_ptr<store_fs::Store> s, std::unique_ptr<store_fs::FsOps> fs = nullptr)
+    : e_(e), ownedFs_(std::move(fs)), store_(std::move(s)) {}
+    static std::unique_ptr<Host> openOn(const json &config, const std::string &storeDir, store_fs::FsOps &fs,
+                                        std::unique_ptr<store_fs::FsOps> owned, std::string *error, Step *opened);
     json callLocked(const std::string &name, const json &args);
     void driveLocked(json outcome, Step &st);
 
     PvEngine *e_ = nullptr;
+    std::unique_ptr<store_fs::FsOps> ownedFs_; // ФС в памяти (openMemory); живёт дольше store_
     std::unique_ptr<store_fs::Store> store_;
     mutable std::mutex mu_;
     std::uint64_t revision_ = 0;

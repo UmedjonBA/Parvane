@@ -20,7 +20,9 @@ void NoteAvatar(const QString &address, const QString &fileId) {
 		return;
 	}
 	g_avatarFileIds.insert(address, fileId);
-	const auto key = address + '|' + fileId;
+	// Фото частной группы — вместе с секретом (GPHOTO-1, PV-005): секрет приходит после записи SetInfo, и то же
+	// фото с секретом надо скачать заново
+	const auto key = address + '|' + fileId + '|' + g_groupAvatarKeys.value(address);
 	if (!g_avatarDownloaded.contains(key)) {
 		g_avatarDownloaded.insert(key);
 		DownloadAvatar(address, fileId);

@@ -1290,6 +1290,14 @@ impl Engine {
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
                 "inbox.record" => self.process_record(si.body, &mut w),
+                // Записи живых уведомлений, накопленные хостом к началу разбора (OPT-024), — одним итогом: одна пачка
+                // хранилища и одно подтверждение после неё. Тело — `msg.v2.InboxSyncResponse` (поле `more` не читается).
+                "inbox.records" => {
+                    let r: crate::pb::parvane::msg::v2::InboxSyncResponse = decode_checked(&si.body, Origin::Server)?;
+                    for rec in &r.records {
+                        self.process_record(rec.encode_to_vec(), &mut w);
+                    }
+                }
                 // Хост добрал нужду клиента (режим хоста) либо данные пришли — повторить ждущее
                 "retry" if self.cfg.host_driven => self.host_retry(&mut w),
                 "retry" => self.retry_waiting(&mut w),

@@ -71,6 +71,11 @@
 #include "parvane/reconnect_backoff.h"
 #include "parvane/state_model.h"
 
+namespace parvane::engine {
+class Host;
+struct Step;
+} // namespace parvane::engine
+
 namespace parvane::v2 {
 
 using nlohmann::json;
@@ -114,6 +119,14 @@ struct SessionConfig {
     std::string pinnedEscrowKey;
     // Описание этого устройства для бота (запрос ключа восстановления: «Parvane Desktop, Linux»).
     std::string deviceDescription = "Parvane Desktop";
+    // spec 035 T127 (contracts/migration.md): разовый перенос прежнего состояния в хранилище модели. Слой перечня
+    // (`desktop`, `core`, `android`) и записи старых мест — `{"key", "value": base64}` (migrate_legacy.h). Не задано —
+    // ядро берёт сам: каталог состояния v2 (`state`, `key`) и файлы ядра рядом с ним (журнал истории).
+    std::string migrationLayer = "core";
+    std::function<json()> legacyRecords;
+    // Ход переноса для экрана (на рабочем потоке, под мьютексом движка — сессию не звать):
+    // {"point": 0..7, "total": 7, "done": bool, "failed": bool}.
+    std::function<void(const json &progress)> onMigration;
 };
 
 // S7-1 (как web `isTelegramCodeIntercepted`): опрос запроса ключа через Telegram вернул код, отличный от
@@ -242,6 +255,8 @@ public:
     void persistEngine();
     // Сведённый снимок журнала личного состояния (planner_container, cloud_containers); null — журнала нет.
     json stateSnapshot();
+    // spec 035 (T123): выгрузка «ничего не потеряно» моделью профиля (`auditDump`, JSONL); "" — модели нет.
+    std::string modelAuditDump();
     [[nodiscard]] std::string serverDomain() const { return domainNow(); }
     // ── журнал истории аккаунта (spec 033, history_sync.h) ──
     // Сессия журнала истории движка (ключ — из ключей личного состояния); nullptr — сессия не готова или ключа нет.
@@ -543,17 +558,20 @@ private:
     void openPendingRecords();
     std::atomic<bool> inboxHeld_{false};
     std::atomic<std::uint64_t> statRecords_{0}, statPersists_{0}, statAcks_{0}, statPersistBeforeAck_{0};
-    // OPT-024: снимок состояния снимается под engineMu_, пишется на диск вне его (persistMu_). Номер снимка — под
-    // engineMu_; более старый снимок поверх более нового не пишется.
-    struct Exported {
-        std::uint64_t seq = 0;
-        std::string blob;
-    };
-    std::optional<Exported> exportLocked();
-    bool writeExported(const Exported &e);
-    std::uint64_t exportSeq_ = 0;
-    std::mutex persistMu_;
-    std::uint64_t writtenSeq_ = 0;
+    // spec 035 T125: модель движка профиля (клиентское ядро, личное состояние, журнал инбокса — режим хоста). Шаг
+    // модели сначала фиксирует свою пачку `store_fs` (fsync), запросы этого шага исполняет driveLocked: отправка,
+    // ответ — `ingest`, события записей (`client_events`) — наружу, нужды клиента — добор и `retry` (ORDER-1).
+    std::shared_ptr<engine::Host> host_;
+    std::string hostDevice_;   // устройство, под которым открыта модель
+    bool hostHadProfile_ = false; // хранилище модели уже было (или перенесено) — устройство не новое
+    std::string modelOpenState_;  // последнее OpenResult.state
+    json modelOpenSteps_ = json::array();
+    int needAttempts_ = 0;
+    std::uint64_t lastDriveBatches_ = 0; // пачек хранилища за последний driveLocked (OPT-024)
+    bool openHostLocked(const std::string &deviceId, std::string *error);
+    bool migrateLegacyLocked(std::string *error);
+    bool driveLocked(const engine::Step &first, std::vector<json> *events = nullptr);
+    void noteOpenLocked(const engine::Step &st);
     void workerLoop();
     void connectOnce();
     bool connectLocked(std::string *error);
@@ -578,7 +596,6 @@ private:
     bool satisfyLocked(const std::exception &e);
     void runRequestsLocked(const json &reqs);
     void persistLocked();
-    void openRecordLocked(const std::string &bytes, std::vector<json> &events);
     void syncAllLocked(std::vector<json> &events);
     void deliver(const std::vector<json> &events);
     // Разобрать события движка (группы, свои устройства, ключ состояния) и
@@ -721,6 +738,7 @@ private:
     std::vector<json> outbox_;       // под engineMu_: события наружу по порядку
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;
+    std::map<std::string, std::string> publishedAvatarKeys_; // hex группы → секрет фото, отданный хосту
     std::map<std::string, int> pendingRequests_; // hex группы → число заявок на вступление
     // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение).
     std::set<std::string> ephChats_;

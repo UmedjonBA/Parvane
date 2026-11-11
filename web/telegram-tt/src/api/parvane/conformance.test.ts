@@ -1744,7 +1744,7 @@ describe('GROUP-4: группа v1 переводится в v2, чат оста
     (client.match(/ApplyGroupInfo\(session, [^\n]*/g) || []).forEach((call) => expect(call).toContain('u"v2'));
     const session = readDesktopSession();
     expect(session).not.toContain('legacyDevices(member)');
-    expect(readRepo('desktop/parvane-core/src/v2_engine.cpp')).toContain('pv_client_group_create_from(');
+    expect(readRepo('desktop/parvane-core/src/v2_engine.cpp')).toContain('{"migratedFrom", migratedFrom}');
   });
 
   it('android: групп v1 нет (spec 031) — каталог v1 стирается при первом запуске, перевод не запускается', () => {
@@ -3295,7 +3295,26 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     const model = readRepo(`${coreSrc}/state_model.cpp`);
     expect(model).toContain('host_->step("stateApplyV1", args)');
     expect(model).toContain('host_->read("stateViewV1", json::object())');
-    expect(model).toContain('{"kind", "SERVER_INPUT_KIND_RESPONSE"}');
+    // Ответы сервера на запросы модели — через ingest (исполняет сессия, общий путь всех шагов модели)
+    expect(session).toContain('absorb(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_RESPONSE"},');
+    // Той же моделью, что держит клиентское ядро (без переноса ключей прежнего клиента и временного хранилища)
+    expect(model).not.toMatch(/adoptStateKeys|remove_all/);
+  });
+
+  // T125: клиентское ядро — в модели движка (clientCall), состояние — в её хранилище, полного экспорта хостом нет;
+  // инбокс — ingest модели в режиме хоста (пачка накопленного — inbox.records, OPT-024), нужды — retry/skip
+  it('сессия desktop — на модели движка: clientCall, хранилище модели, инбокс через ingest (T125)', () => {
+    const engine = readRepo(`${coreSrc}/v2_engine.cpp`);
+    expect(engine).not.toMatch(/\bpv_client_|\bpv_state_|\bpv_history_/);
+    expect(engine).toContain('callResult(host_->raw("clientCall", a))');
+    expect(engine).toContain('callResult(host_->raw("historyCall", a))');
+    const session = readDesktopSession();
+    expect(session).not.toMatch(/exportState\(storageKey_\)\s*\}|writeStateFile\("state",|Client::create\(cfg_\.self/);
+    expect(session).toContain('driveLocked(host_->step("flush", json::object()));');
+    expect(session).toContain('{"method", "inbox.records"}');
+    expect(session).toContain('{"method", "inbox.poll"}');
+    expect(session).toMatch(/method = "skip";/);
+    expect(session).toContain('{"host_driven", true}');
   });
 
   // Показ состояния в tdesktop — пока из снимка формы state.v1 (stateViewV1), не из StateView модели (T126)

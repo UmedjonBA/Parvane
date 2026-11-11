@@ -296,7 +296,11 @@ try {
   await openPrivateChatStrict(alicePage, bob);
   await sendCustomEmojiFromSet(alicePage, 'Parvane');
   await waitDesktopLog(bobWorkdir, /эмодзи-пак «ParvaneEmoji» материализован \(\d+ шт\)/, 90000, desktop, { since: logOffset });
-  assert(readdirSync(emojiDir).some((name) => name === 'ParvaneEmoji'), 'desktop did not unpack ParvaneEmoji');
+  // A0085-2 (ревью 7 ноя): принятый пак — в кэш устройства `tdata/parvane-emoji-received`, не в свои наборы
+  // (PARVANE_EMOJI_DIR); своих наборов чужой пак не трогает
+  const receivedDir = join(bobWorkdir, 'td', 'tdata', 'parvane-emoji-received');
+  assert(readdirSync(receivedDir).some((name) => name === 'ParvaneEmoji'), 'desktop did not unpack ParvaneEmoji');
+  assert(!readdirSync(emojiDir).some((name) => name === 'ParvaneEmoji'), 'received pack must not land among own sets');
 
   // ── Нормализуемое имя: docId стабилен до и после перезагрузки веба ─────────
   // Нормализуется в PvRaw77 — без коллизии с установленным PvEmoji123 (коллизия
