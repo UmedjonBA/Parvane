@@ -63,6 +63,7 @@ import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { isUserId } from '../../util/entities/ids';
 import { getParvaneSection } from '../../util/parvaneSection';
 import { resolveTransitionName } from '../../util/resolveTransitionName';
+import { getIsPaletteOpen } from '../parvane/palette/paletteOpen';
 import calculateMiddleFooterTransforms from './helpers/calculateMiddleFooterTransforms';
 import getHasMiddleFooter from './helpers/getHasMiddleFooter';
 import { measureFooterContentHeight, syncMessageListBottomReserve } from './helpers/messageListReserves';
@@ -356,6 +357,9 @@ function MiddleColumn({
       ? captureEscKeyListener(() => {
         // Let the Right Column (profile, management, etc.) handle Esc first while it is open
         if (isRightColumnShown || getParvaneSection() !== 'messenger') return false;
+        // Палитра поверх чата закрывается своим Esc: этот слушатель перерегистрируется при смене зависимостей и
+        // мог оказаться над слушателем окна палитры — Esc закрывал чат, а палитра оставалась (e2e palette, плавал)
+        if (getIsPaletteOpen()) return false;
         openChat({ id: undefined });
         return undefined;
       })
