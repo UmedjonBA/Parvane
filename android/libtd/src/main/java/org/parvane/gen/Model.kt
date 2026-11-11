@@ -1461,7 +1461,8 @@ data class MessageView(
     val forwardName: String = "",
     val replyQuote: ViewText? = null,
     val silent: Boolean = false,
-    val order: Long = 0L
+    val order: Long = 0L,
+    val wire: String = ""
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -1483,6 +1484,7 @@ data class MessageView(
         if (!(replyQuote == null)) j.put("reply_quote", replyQuote!!.toJson())
         if (!(!silent)) j.put("silent", silent)
         if (!(order == 0L)) j.put("order", order.toString())
+        if (!(wire.isEmpty())) j.put("wire", wire)
         return j
     }
 
@@ -1506,7 +1508,8 @@ data class MessageView(
                 forwardName = j.pick("forward_name", "forwardName")?.let { it.toString() } ?: "",
                 replyQuote = j.pick("reply_quote", "replyQuote")?.let { ViewText.fromJson(it as JSONObject) } ?: null,
                 silent = j.pick("silent", "silent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L
+                order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L,
+                wire = j.pick("wire", "wire")?.let { it.toString() } ?: ""
             )
         }
     }
@@ -2014,6 +2017,63 @@ data class Root(
                 wraps = (j.pick("wraps", "wraps") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { Wrap.fromJson(it as JSONObject) } } } ?: emptyList(),
                 kindsMaxFormat = (j.pick("kinds_max_format", "kindsMaxFormat") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { KindFormat.fromJson(it as JSONObject) } } } ?: emptyList(),
                 retiringGeneration = j.pick("retiring_generation", "retiringGeneration")?.let { it.toString().toLong() } ?: 0L
+            )
+        }
+    }
+}
+
+data class RowsAllRequest(
+    val views: Boolean = false,
+    val states: Boolean = false,
+    val marks: Boolean = false
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(!views)) j.put("views", views)
+        if (!(!states)) j.put("states", states)
+        if (!(!marks)) j.put("marks", marks)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): RowsAllRequest {
+            return RowsAllRequest(
+                views = j.pick("views", "views")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                states = j.pick("states", "states")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                marks = j.pick("marks", "marks")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+            )
+        }
+    }
+}
+
+data class RowsApply(
+    val opsJson: String = "",
+    val receiptsJson: String = "",
+    val forgetJson: String = "",
+    val wipe: Boolean = false,
+    val nowMs: Long = 0L,
+    val rowsJson: String = ""
+) {
+    fun toJson(): JSONObject {
+        val j = JSONObject()
+        if (!(opsJson.isEmpty())) j.put("ops_json", opsJson)
+        if (!(receiptsJson.isEmpty())) j.put("receipts_json", receiptsJson)
+        if (!(forgetJson.isEmpty())) j.put("forget_json", forgetJson)
+        if (!(!wipe)) j.put("wipe", wipe)
+        if (!(nowMs == 0L)) j.put("now_ms", nowMs.toString())
+        if (!(rowsJson.isEmpty())) j.put("rows_json", rowsJson)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: JSONObject): RowsApply {
+            return RowsApply(
+                opsJson = j.pick("ops_json", "opsJson")?.let { it.toString() } ?: "",
+                receiptsJson = j.pick("receipts_json", "receiptsJson")?.let { it.toString() } ?: "",
+                forgetJson = j.pick("forget_json", "forgetJson")?.let { it.toString() } ?: "",
+                wipe = j.pick("wipe", "wipe")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                nowMs = j.pick("now_ms", "nowMs")?.let { it.toString().toLong() } ?: 0L,
+                rowsJson = j.pick("rows_json", "rowsJson")?.let { it.toString() } ?: ""
             )
         }
     }

@@ -2,11 +2,13 @@ import {
   afterEach, describe, expect, it, vi,
 } from 'vitest';
 
+import type { RowsAll } from '../historyRows';
 import type { WireStoredMessage } from '../wire';
 import type { PvClient } from './engine';
 import type { HistoryHost, HistorySyncState } from './history';
 
-import { createHistoryRows } from '../historyRows';
+import { createHistoryRows, storedOfView } from '../historyRows';
+import { openRowsModel } from '../rowsModel.testkit';
 import { openMemoryClient } from './engine';
 import { createHistoryJournal } from './history';
 import { newStamp, rowOpFromStored } from './historyModel';
@@ -192,39 +194,41 @@ function createServer() {
 
 // ── устройство: хранилище строк + журнал ─────────────────────────────────────────────────────────────
 
-function createDevice(client: PvClient, server: ReturnType<typeof createServer>, opts: {
+async function createDevice(client: PvClient, server: ReturnType<typeof createServer>, opts: {
   clock?: { now: number }; initial?: WireStoredMessage[]; state?: HistorySyncState; readUuids?: string[];
   batchMs?: [number, number];
 } = {}) {
-  const records = new Map<string, WireStoredMessage>((opts.initial || []).map((m) => [m.id, m]));
-  const marks = new Map<string, unknown>();
+  // Строки — в модели движка (spec 035 T114); прежний кэш (`initial`) переносится в неё при первом обращении
+  const model = await openRowsModel(SELF);
+  let legacy = opts.initial || [];
   const logs: string[] = [];
   const wiped: string[][] = [];
   let saved: HistorySyncState | undefined = opts.state;
   let outbox: unknown;
-  const index = createMessageIndex({
-    loadAll: () => Promise.resolve(Array.from(records.values())),
-    loadOne: (uuid) => Promise.resolve(records.get(uuid)),
-  });
+  // eslint-disable-next-line prefer-const -- хранилище строк обращается к нему лениво
+  let rows: ReturnType<typeof createHistoryRows>;
+  const index = createMessageIndex({ loadAll: async () => (await rows.loadStored()).rows });
   const clock = opts.clock;
   // Журнал создаётся ниже: хранилище строк обращается к нему лениво
   // eslint-disable-next-line prefer-const
   let journal: ReturnType<typeof createHistoryJournal>;
-  const rows = createHistoryRows({
+  rows = createHistoryRows({
     self: () => SELF,
     domain: () => 'local',
     index,
-    loadAll: () => Promise.resolve(Array.from(records.values())),
-    saveRecord: (stored) => records.set(stored.id, stored),
-    deleteRecord: (uuid) => records.delete(uuid),
-    updateOwnJournal: () => undefined,
-    flush: () => Promise.resolve(),
+    model: () => Promise.resolve(model.rows),
     show: () => Promise.resolve(),
     onChatsTouched: () => undefined,
-    loadMarks: () => Promise.resolve(Object.fromEntries(marks) as never),
-    saveMark: (address, mark) => marks.set(address, mark),
     loadClearedUntil: () => ({}),
     journal: () => journal,
+    legacy: {
+      load: () => Promise.resolve(legacy),
+      loadMarks: () => Promise.resolve({}),
+      drop: () => {
+        legacy = [];
+        return Promise.resolve();
+      },
+    },
     log: (message) => logs.push(message),
   });
   journal = createHistoryJournal({
@@ -251,6 +255,26 @@ function createDevice(client: PvClient, server: ReturnType<typeof createServer>,
     call: (method, body) => server.call(method, body),
     log: (message) => logs.push(message),
   };
+  // Строки модели сейчас (чтение модели синхронно): видимые — видом показа, надгробия и сироты — `deleted`
+  const records = {
+    all(): WireStoredMessage[] {
+      const out = JSON.parse(model.host.peek<{ result_json?: string }>('rowsAll', { views: true, states: true })
+        .result_json || '{}') as RowsAll;
+      const shown = (out.views || []).map((v) => storedOfView(v, SELF, (a) => a === SELF))
+        .filter((m): m is WireStoredMessage => Boolean(m));
+      const ids = new Set(shown.map((m) => m.id));
+      const tombs = (out.states || []).filter((st) => !ids.has(st.target)).map((st): WireStoredMessage => ({
+        id: st.target, from: st.row?.from || '', to: SELF, ts: 0, content: { kind: 'unsupported' }, deleted: true,
+      }));
+      return [...shown, ...tombs, ...legacy];
+    },
+    get(id: string) {
+      return this.all().find((m) => m.id === id);
+    },
+    values() {
+      return this.all();
+    },
+  };
   return {
     rows, journal, records, logs, wiped, host, state: () => saved,
   };
@@ -270,7 +294,7 @@ function text(id: string, from: string, to: string, tsMs: number, body: string):
   };
 }
 
-const visible = (device: ReturnType<typeof createDevice>) => Array.from(device.records.values())
+const visible = (device: Awaited<ReturnType<typeof createDevice>>) => Array.from(device.records.values())
   .filter((m) => !m.deleted).map((m) => m.id).sort();
 
 async function waitFor(check: () => boolean, ms = 3000) {
@@ -287,7 +311,7 @@ describe('журнал истории: два своих устройства и
   it('удаление «только у меня», прочтение и сообщение доходят до нового устройства; повтор не пишется', async () => {
     const server = createServer();
     const { first, clone } = account();
-    const a = createDevice(first, server);
+    const a = await createDevice(first, server);
     await a.journal.attach(a.host);
     await a.rows.ingest(rowOpFromStored(text(ID1, PEER, SELF, JAN_2026_MS, 'первое'), DIRECT, JAN_2026_MS), {
       source: 'inbox', author: PEER,
@@ -306,7 +330,7 @@ describe('журнал истории: два своих устройства и
     await a.journal.flushNow();
     expect(server.records().length).toBeGreaterThan(0);
 
-    const b = createDevice(clone(), server);
+    const b = await createDevice(clone(), server);
     await b.journal.attach(b.host);
     expect(visible(b)).toEqual([ID2]);
     expect(b.records.get(ID1)?.deleted).toBe(true);
@@ -330,7 +354,7 @@ describe('журнал истории: два своих устройства и
   it('перенос локальной истории (один раз) с маркерами прежнего учёта прочитанного', async () => {
     const server = createServer();
     const { first, clone } = account();
-    const a = createDevice(first, server, {
+    const a = await createDevice(first, server, {
       initial: [text(ID1, PEER, SELF, JAN_2026_MS, 'старое'), text(ID2, PEER, SELF, OCT_2026_MS, 'новое')],
       readUuids: [ID1],
     });
@@ -341,7 +365,7 @@ describe('журнал истории: два своих устройства и
       setTimeout(resolve, 1100);
     });
     await a.journal.flushNow();
-    const b = createDevice(clone(), server);
+    const b = await createDevice(clone(), server);
     await b.journal.attach(b.host);
     expect(visible(b)).toEqual([ID1, ID2]);
     expect(b.rows.getMark(PEER)?.up_to_id).toBe(ID1);
@@ -354,7 +378,7 @@ describe('журнал истории: два своих устройства и
     const server = createServer();
     const clock = { now: OCT_2026_MS + DAY_MS };
     const { first, clone } = account();
-    const a = createDevice(first, server, { clock });
+    const a = await createDevice(first, server, { clock });
     await a.journal.attach(a.host);
     await a.rows.ingest(rowOpFromStored(text(ID1, PEER, SELF, JAN_2026_MS, 'январь'), DIRECT, JAN_2026_MS), {
       source: 'own',
@@ -376,7 +400,7 @@ describe('журнал истории: два своих устройства и
     // Записи до точки свёрнуты: остались сегменты и сводка
     expect(server.records().every((r) => r.chunk)).toBe(true);
 
-    const c = createDevice(clone(), server);
+    const c = await createDevice(clone(), server);
     await c.journal.attach(c.host);
     expect(visible(c)).toEqual([ID1]);
     expect(c.records.get(ID2)?.deleted).toBe(true);
@@ -401,7 +425,7 @@ describe('журнал истории: два своих устройства и
   it('откат сервера: журнал с меньшей головой не применяется', async () => {
     const server = createServer();
     const { first, clone } = account();
-    const a = createDevice(first, server);
+    const a = await createDevice(first, server);
     await a.journal.attach(a.host);
     await a.rows.ingest(rowOpFromStored(text(ID1, PEER, SELF, JAN_2026_MS, 'раз'), DIRECT, JAN_2026_MS), {
       source: 'own',
@@ -413,7 +437,7 @@ describe('журнал истории: два своих устройства и
       setTimeout(resolve, 400);
     });
     await a.journal.flushNow();
-    const b = createDevice(clone(), server);
+    const b = await createDevice(clone(), server);
     await b.journal.attach(b.host);
     const head = b.state()!.headSeq;
     server.rollback(1);
@@ -428,7 +452,7 @@ describe('журнал истории: два своих устройства и
     const server = createServer();
     const clock = { now: OCT_2026_MS };
     const { first, clone } = account();
-    const a = createDevice(first, server, { clock });
+    const a = await createDevice(first, server, { clock });
     await a.journal.attach(a.host);
     await a.rows.ingest(rowOpFromStored(text(ID1, PEER, SELF, JAN_2026_MS, 'раз'), DIRECT, JAN_2026_MS), {
       source: 'own',
@@ -438,7 +462,7 @@ describe('журнал истории: два своих устройства и
     await a.journal.attach(a.host, 'self');
     await waitFor(() => server.commits.length === 1);
     // Устройство B последний раз синхронизировалось год назад и с курсором до точки
-    const b = createDevice(clone(), server, {
+    const b = await createDevice(clone(), server, {
       initial: [text(ID3, PEER, SELF, JAN_2026_MS, 'устаревшее')],
       state: {
         cursor: 0, headSeq: 0, lastFullSyncMs: OCT_2026_MS - 365 * DAY_MS, migrated: true, checkpointId: -1,
@@ -461,7 +485,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const server = createServer();
     const { first, clone } = account();
-    const a = createDevice(first, server, { batchMs: [30000, 120000] });
+    const a = await createDevice(first, server, { batchMs: [30000, 120000] });
     await a.journal.attach(a.host);
     const before = server.records().length;
     await a.rows.ingest(rowOpFromStored(text(ID1, SELF, PEER, JAN_2026_MS, 'моё'), DIRECT, JAN_2026_MS), {
@@ -481,7 +505,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
     expect([512, 2048, 8192, 32768]).toContain(written[0].ct.length - 28);
     vi.useRealTimers();
     // Новое устройство получает и своё, и входящее
-    const b = createDevice(clone(), server);
+    const b = await createDevice(clone(), server);
     await b.journal.attach(b.host);
     expect(visible(b)).toEqual([ID1, ID2]);
     a.journal.reset();
@@ -491,7 +515,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
   it('S7-4: запись, спрятанная сервером, видна как пропуск в цепочке писателя', async () => {
     const server = createServer();
     const { first, clone } = account();
-    const a = createDevice(first, server);
+    const a = await createDevice(first, server);
     await a.journal.attach(a.host);
     for (const [id, body] of [[ID1, 'раз'], [ID2, 'два'], [ID3, 'три']] as const) {
       await a.rows.ingest(rowOpFromStored(text(id, SELF, PEER, JAN_2026_MS, body), DIRECT, JAN_2026_MS), {
@@ -501,7 +525,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
     }
     const middle = server.records().find((r) => !r.chunk && r.seq > 1)!;
     server.hide(middle.seq);
-    const b = createDevice(clone(), server);
+    const b = await createDevice(clone(), server);
     await b.journal.attach(b.host);
     expect(b.logs.some((line) => line.includes('сервер не отдал 1 записей'))).toBe(true);
     a.journal.reset();
@@ -512,7 +536,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
     const server = createServer();
     const clock = { now: OCT_2026_MS };
     const { first, clone } = account();
-    const a = createDevice(first, server, { clock });
+    const a = await createDevice(first, server, { clock });
     await a.journal.attach(a.host);
     await a.rows.ingest(rowOpFromStored(text(ID1, SELF, PEER, JAN_2026_MS, 'раз'), DIRECT, JAN_2026_MS), {
       source: 'own',
@@ -529,7 +553,7 @@ describe('журнал истории: ревью 7 ноя 2026 (S7-3, S7-4)', (
     await a.journal.flushNow();
     const head = server.records().at(-1)!.seq;
     server.tamperPoint({ upto: head });
-    const c = createDevice(clone(), server);
+    const c = await createDevice(clone(), server);
     await c.journal.attach(c.host);
     expect(c.logs.some((line) => line.includes('не сходится со своей сводкой'))).toBe(true);
     expect(c.state()?.cursor || 0).toBe(0);

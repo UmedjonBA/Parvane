@@ -108,6 +108,11 @@ impl ChatRows {
         Some(r)
     }
 
+    /// Строки от новых к старым.
+    pub fn rows_rev(&self) -> impl Iterator<Item = &Row> {
+        self.index.keys().rev().filter_map(|(_, id)| self.rows.get(id))
+    }
+
     /// Последняя видимая строка.
     pub fn last_visible(&self) -> Option<&Row> {
         self.index.keys().rev().filter_map(|(_, id)| self.rows.get(id)).find(|r| r.visible())

@@ -47,7 +47,7 @@ import {
   buildOfferEvent, findOfferInPlan, getTaskOfferKind, taskOfferText, taskResponseText,
 } from './taskOffers';
 import {
-  newMessageId, type WireMessageContent, type WirePackRef, type WireReportedMessage,
+  newMessageId, type WireMessageContent, type WirePackRef, type WireReportedMessage, type WireStoredMessage,
 } from './wire';
 
 type MessageDependencies = {
@@ -81,6 +81,8 @@ type MessageDependencies = {
   history?: {
     deleteForMe: (address: string, uuids: string[]) => Promise<void>;
     advanceMark: (address: string, tsMs: number, id: string) => Promise<boolean>;
+    /** Строка показа по uuid (модель движка): подпись автора для жалобы. */
+    find?: (uuid: string) => Promise<WireStoredMessage | undefined>;
   };
 };
 
@@ -1817,7 +1819,7 @@ export function createMessageController(deps: MessageDependencies) {
         if (!message || !uuid || !author) return undefined;
         // Без текста (фото, видео, стикер) — пометка: само вложение жалоба не несёт
         const text = message.content.text?.text || REPORT_MEDIA_PLACEHOLDER;
-        const proof = author === currentStore.self ? undefined : (await deps.localState.loadHistoryRecord(uuid))?.proof;
+        const proof = author === currentStore.self ? undefined : (await deps.history?.find?.(uuid))?.proof;
         return {
           op_id: uuid, author, text: text.slice(0, REPORT_TEXT_MAX), ts: message.date, proof,
         };

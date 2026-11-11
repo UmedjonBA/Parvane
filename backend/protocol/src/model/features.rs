@@ -2,7 +2,14 @@
 //! устройство объявляет их по своему интерфейсу (`DeviceCertificate.features`, `Hello.features`);
 //! строки `[a-z0-9_.]{1,64}`. Список отдаёт `engineInfo().features`.
 
-pub const KNOWN: &[&str] = &["article", "cloud", "cloud_invite", "planner", "sealed", "task_offer"];
+pub const KNOWN: &[&str] = &["article", "cloud", "cloud_invite", "planner", "sealed", "task_offer", "wire_rows"];
+
+/// Хост рисует строки сам по содержимому в своём виде (`MessageView.wire`, web, spec 035 T114): показ отдаёт все
+/// виды, кроме служебных строк ленты.
+pub const WIRE_ROWS: &str = "wire_rows";
+
+/// Служебные строки ленты: в страницы и последнее сообщение чата не входят, их видят только `rowsAll` хоста.
+pub const WIRE_SERVICE_KINDS: &[&str] = &["poll_close", "poll_vote"];
 
 /// Допустимое имя возможности.
 pub fn is_valid(name: &str) -> bool {

@@ -26,10 +26,11 @@ describe('C7-2: мутации v2 — только по сообщениям с�
     expect(check).toBeLessThan(body.indexOf('history.ingest('));
   });
 
-  it('проверка пропускает сироту и сообщение своего чата', () => {
+  // Сирота (мутация раньше сообщения) в индекс показа не входит (spec 035 T114: строки — в модели, индекс — из её
+  // показа): неизвестная цель — не «из другого чата», её чат сверит модель
+  it('проверка пропускает неизвестную цель и сообщение своего чата', () => {
     const start = source.indexOf('async function isOtherChatTarget');
     const body = source.slice(start, source.indexOf('\n  }\n', start));
-    expect(body).toContain('known.hs && !known.hs.row');
-    expect(body).toContain('inThisChat(known)');
+    expect(body).toContain('if (!known || inThisChat(known)) return false;');
   });
 });

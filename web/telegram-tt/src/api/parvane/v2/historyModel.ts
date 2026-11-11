@@ -1,9 +1,9 @@
-// Журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): модель строки сообщения на стороне web.
-// Сведение (`RowState`), вид строки, маркер прочтения и права удаления считает движок (статические функции
-// `history*`, `specs/033-history-sync/contracts/engine-api.md`); здесь — перекладка между строкой кэша web
-// (`WireStoredMessage`) и JSON движка. Своего сведения клиент не делает.
+// Журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): типы JSON движка для строк истории web. Сведение
+// (`RowState`), вид строки, маркер прочтения и права удаления считает движок (статические функции `history*`,
+// `specs/033-history-sync/contracts/engine-api.md`); строки хранит модель (spec 035 T114, `historyRows.ts`); здесь —
+// операции из строки показа и перекладка JSON. Своего сведения клиент не делает.
 
-import type { WireMessageContent, WireReactor, WireStoredMessage } from '../wire';
+import type { WireMessageContent, WireStoredMessage } from '../wire';
 
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { historyStatic } from './engine';
@@ -142,10 +142,6 @@ export function applyOp(state: HRowState | undefined, op: HOp): HRowState {
   return historyStatic<HRowState>('historyApply', state ? { state, op } : { op });
 }
 
-export function mergeStates(a: HRowState, b: HRowState): HRowState {
-  return historyStatic<HRowState>('historyMerge', { a, b });
-}
-
 export function viewOf(state: HRowState): HView {
   return historyStatic<HView>('historyView', { state });
 }
@@ -240,62 +236,9 @@ export function applyEditPatch(content: WireMessageContent, patch: EditPatch): W
   return next;
 }
 
-/** Строка кэша web по сведённому состоянию. Невидимая (удалённая, сирота) — `deleted`, без содержимого; локальное
- * (место в ленте, ✓✓ своего исходящего, время показа) — из прежней записи. */
-export function storedFromState(
-  state: HRowState, prev: WireStoredMessage | undefined, self: string,
-  isOwn: (address: string) => boolean = (address) => address === self,
-): WireStoredMessage | undefined {
-  const view = viewOf(state);
-  const chatAddress = addressForPeer(view.chat);
-  if (!chatAddress) return undefined;
-  const from = view.from || prev?.from || '';
-  const isGroup = isGroupPeer(view.chat);
-  const to = isGroup ? chatAddress : (isOwn(from) ? chatAddress : self);
-  const anyStamp = state.gone?.stamp || state.edit_stamp || state.pin_stamp || state.reacts?.[0]?.stamp
-    || state.pending_gones?.[0]?.stamp || state.pending_edits?.[0]?.stamp;
-  const tsMs = view.tsMs ?? Number(anyStamp?.ts_ms || 0);
-  const ts = prev?.ts ?? Math.floor(tsMs / MS_IN_SECOND);
-  if (!view.visible) {
-    return {
-      id: view.id, from, to, ts, content: { kind: 'unsupported' }, deleted: true, origin: 'v2', hs: state,
-      order: prev?.order,
-    };
-  }
-  const {
-    content: rawContent, edit_patch: editPatch, reply_to: replyTo, proof, ...rest
-  } = view.body || {};
-  let content = (rawContent && typeof rawContent === 'object' ? rawContent : { kind: 'unsupported' }) as
-    WireMessageContent;
-  if (editPatch && typeof editPatch === 'object') content = applyEditPatch(content, editPatch);
-  const reactors: WireReactor[] = (state.reacts || []).filter((r) => r.emoji).map((r) => ({
-    user: r.user, emoji: r.emoji!, ts: Math.floor(Number(r.stamp.ts_ms) / MS_IN_SECOND),
-  }));
-  const stored: WireStoredMessage = {
-    ...(rest as Partial<WireStoredMessage>),
-    id: view.id,
-    from,
-    to,
-    ts,
-    content,
-    reply_to: typeof replyTo === 'string' ? replyTo : undefined,
-    proof: typeof proof === 'string' ? proof : undefined,
-    edited: view.edited || undefined,
-    reactions: view.reactions.length ? view.reactions.map((r) => ({
-      emoji: r.emoji, count: r.count, mine: r.users.some(isOwn) || undefined,
-    })) : undefined,
-    reactors: reactors.length ? reactors : undefined,
-    pinned: view.pinned || undefined,
-    read: prev?.read,
-    order: prev?.order,
-    origin: 'v2',
-    hs: state,
-  };
-  return stored;
-}
-
 /** Время строки в мс для маркера: из сведённого состояния, иначе секунды строки. */
 export function rowTsMs(stored: WireStoredMessage) {
+  if (stored.tsMs) return stored.tsMs;
   const ts = stored.hs?.row?.ts_ms;
   return ts !== undefined ? Number(ts) : stored.ts * MS_IN_SECOND;
 }

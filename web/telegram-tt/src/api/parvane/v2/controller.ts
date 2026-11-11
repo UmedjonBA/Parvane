@@ -17,7 +17,9 @@
 import type { WireCallSignal } from '../callengine';
 import type { BlobSession } from '../cloudBlobs';
 import type { WireGroupInvite } from '../groupcall';
-import type { HistoryIngestContext, HistorySource } from '../historyRows';
+import type {
+  HistoryIngestContext, HistorySource, RowsAll, RowsModel,
+} from '../historyRows';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
@@ -98,7 +100,10 @@ type Deps = {
   history?: {
     ingest: (op: HOp, ctx: HistoryIngestContext) => Promise<WireStoredMessage | undefined>;
     advanceMark: (address: string, tsMs: number, id: string, source?: HistorySource) => Promise<boolean>;
+    receipt?: (address: string, uuid: string) => Promise<WireStoredMessage | undefined>;
   };
+  /** Модель профиля открыта (spec 035 T114): строки истории, которых не дождался показ, — показать. */
+  onModelReady?: () => void;
   /** Журнал истории аккаунта можно подключать (ключ личного состояния есть); `rekey` — как у `onStateReady`. */
   onHistoryReady?: (host: HistoryHost, rekey?: 'self' | 'peer') => void;
   /** Живое уведомление `JournalNotice`: другое своё устройство дописало журнал состояния или истории. */
@@ -162,7 +167,7 @@ type Deps = {
   /** Разовый перенос (spec 035 T115): прежние строки истории (сводимые состояния; строки без `hs` уже переведены),
    * маркеры «прочитано до», своё исходящее и границы очистки «у себя». */
   legacyHistory?: () => Promise<{
-    states: HRowState[];
+    states: { hs: HRowState; order?: number }[];
     marks: Record<string, HReadMark>;
     ownJournal: WireStoredMessage[];
     cleared: Record<string, number>;
@@ -370,6 +375,11 @@ const DROPPED_STATE_RECORD = 'v2-engine-dropped';
 const MODEL_KEY_RECORD = 'v2-model-device-key';
 // spec 035 (T115): состояние прежнего клиента (`v2-engine-bin`/`v2-engine`) перенесено в модель — старое не читается
 const ENGINE_MIGRATED_RECORD = 'v2-engine-migrated';
+// Чем открывалась модель профиля в последний раз (spec 035 T114): по нему модель открывается и без сети — показ
+// истории из её строк до подключения
+const MODEL_OPEN_RECORD = 'v2-model-open';
+// Сколько показ истории ждёт открытия модели (вход без сети до первого подключения на устройстве)
+const MODEL_WAIT_MS = 15000;
 // Разовый перенос (T115): точки M1–M6 (`contracts/migration.md`) — для экрана хода; записей за шаг `migrateStep`
 const MIGRATION_POINTS = 6;
 const MIGRATION_RECORDS_PER_STEP = 2000;
@@ -665,9 +675,72 @@ export function createV2Controller(deps: Deps) {
     return new EngineClient(host);
   }
 
-  /** Открыть модель профиля над защищённым хранилищем (тот же профиль и пользователь — прежняя модель). */
-  async function openModel(target: SecureE2eStorage, self: string, deviceId: string, domain: string) {
-    if (host && hostUser === self) return host;
+  let modelOpening: Promise<ModelHost> | undefined;
+  let modelOpeningUser = '';
+  let modelWaiters: ((h: ModelHost | undefined) => void)[] = [];
+
+  /** Открыть модель профиля над защищённым хранилищем (тот же профиль и пользователь — прежняя модель; открытие
+   * уже идёт — то же). `offline` — без сети: перенос прежнего (нужен сервер) не начинается. */
+  function openModel(target: SecureE2eStorage, self: string, deviceId: string, domain: string, offline = false) {
+    if (host && hostUser === self) return Promise.resolve(host);
+    if (modelOpening && modelOpeningUser === self) return modelOpening;
+    modelOpeningUser = self;
+    const opening = openModelNow(target, self, deviceId, domain, offline);
+    modelOpening = opening;
+    void opening.finally(() => {
+      if (modelOpening === opening) modelOpening = undefined;
+    }).catch(() => undefined);
+    return opening;
+  }
+
+  /** Модель открыта и готова: строки истории (spec 035 T114) ждут её здесь. */
+  function notifyModelReady() {
+    const list = modelWaiters;
+    modelWaiters = [];
+    list.forEach((w) => w(host));
+    deps.onModelReady?.();
+  }
+
+  /** Модель профиля для строк истории: открыта — сразу; нет — открыть по прошлому открытию (без сети), иначе
+   * дождаться подключения (не дольше `MODEL_WAIT_MS`). */
+  async function modelReady(): Promise<ModelHost | undefined> {
+    if (host && hostUser === deps.getSelf() && modelOpenState === 'OPEN_STATE_READY') return host;
+    await openModelOffline().catch((e: unknown) => deps.log(`v2: модель без сети не открыта: ${String(e)}`));
+    if (host && hostUser === deps.getSelf() && modelOpenState === 'OPEN_STATE_READY') return host;
+    return new Promise((resolve) => {
+      modelWaiters.push(resolve);
+      setTimeout(() => resolve(undefined), MODEL_WAIT_MS);
+    });
+  }
+
+  async function openModelOffline() {
+    const self = deps.getSelf();
+    if (!self || isHalted || (host && hostUser === self)) return;
+    const target = storage || await SecureE2eStorage.open(self);
+    const saved = await target.loadRecord<{ deviceId?: string; domain?: string }>(MODEL_OPEN_RECORD);
+    if (!saved?.deviceId || !saved.domain) return;
+    if (!serverDomain) serverDomain = saved.domain;
+    pv = pv || await loadProtocol();
+    await openModel(target, self, saved.deviceId, saved.domain, true);
+  }
+
+  /** Строки истории модели (`rowsApply`, `rowsAll`, `historyPage`, `chatList`). */
+  async function rowsModel(): Promise<RowsModel | undefined> {
+    const h = await modelReady();
+    if (!h) return undefined;
+    return {
+      apply: (args) => h.apply('rowsApply', args),
+      all: (what) => {
+        const out = h.peek<{ result_json?: string }>('rowsAll', what);
+        return Promise.resolve(JSON.parse(out.result_json || '{}') as RowsAll);
+      },
+      view: (name, args) => Promise.resolve(h.peek(name, args)),
+    };
+  }
+
+  async function openModelNow(
+    target: SecureE2eStorage, self: string, deviceId: string, domain: string, offline: boolean,
+  ) {
     host?.close();
     host = undefined;
     let deviceKey = await target.loadRecord<string>(MODEL_KEY_RECORD);
@@ -677,6 +750,7 @@ export function createV2Controller(deps: Deps) {
     }
     const migrated = Boolean(await target.loadRecord<boolean>(ENGINE_MIGRATED_RECORD).catch(() => undefined));
     const legacy = migrated ? undefined : await loadLegacyEngineState(target);
+    if (offline && legacy) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     modelOpenState = '';
     const opened = await ModelHost.open({
       user: self,
@@ -685,6 +759,8 @@ export function createV2Controller(deps: Deps) {
       now_ms: String(Date.now()),
       device_key: deviceKey,
       host_driven: true,
+      // Строки истории web рисует сам по содержимому в своём виде (spec 035 T114, `MessageView.wire`)
+      features: ['wire_rows'],
       legacy_present: Boolean(legacy),
     }, {
       store: secureModelStore(target),
@@ -704,6 +780,8 @@ export function createV2Controller(deps: Deps) {
       const code = modelOpenState === 'OPEN_STATE_TOO_NEW' ? 'ERROR_CODE_UPGRADE_REQUIRED' : 'ERROR_CODE_UNAVAILABLE';
       throw new V2Error(code);
     }
+    if (!offline) await target.saveRecord(MODEL_OPEN_RECORD, { deviceId, domain }).catch(() => undefined);
+    notifyModelReady();
     return host;
   }
 
@@ -777,7 +855,10 @@ export function createV2Controller(deps: Deps) {
       return undefined;
     });
     if (!history) return records;
-    history.states.forEach((hs) => records.push({ key: `record:m:${hs.target}`, value: json({ hs }) }));
+    // Место в ленте (ORDER-1) — вместе со строкой: перенос его сохраняет
+    history.states.forEach(({ hs, order }) => {
+      records.push({ key: `record:m:${hs.target}`, value: json({ hs, order }) });
+    });
     Object.entries(history.marks).forEach(([address, mark]) => {
       records.push({ key: `record:rm:${address}`, value: json({ address, mark }) });
     });
@@ -1485,7 +1566,7 @@ export function createV2Controller(deps: Deps) {
   // её чат сверит движок, когда придёт само сообщение
   async function isOtherChatTarget(uuid: string, inThisChat: (m: WireStoredMessage) => boolean) {
     const known = await knownMessage(uuid);
-    if (!known || (known.hs && !known.hs.row) || inThisChat(known)) return false;
+    if (!known || inThisChat(known)) return false;
     deps.log(`v2: мутация для ${uuid} пришла из другого чата — пропуск`);
     return true;
   }
@@ -1826,8 +1907,11 @@ export function createV2Controller(deps: Deps) {
           return;
         }
         for (const target of mutation.targets) {
-          // Квитанция — только на своё исходящее в этом чате (✓✓, локальная пометка строки)
-          await update(target, (m) => (inThisChat(m) && m.from === self && !m.read ? { ...m, read: true } : m));
+          // Квитанция — только на своё исходящее в этом чате (✓✓): доставка строки модели; строка вне модели — в памяти
+          const known = await knownMessage(target);
+          if (!known || !inThisChat(known) || known.from !== self || known.read) continue;
+          if (known.inModel && history?.receipt) await history.receipt(chatAddress, target);
+          else await update(target, (m) => ({ ...m, read: true }));
         }
         return;
       }
@@ -5048,6 +5132,8 @@ export function createV2Controller(deps: Deps) {
     deviceId: () => ownDeviceId,
     /** Домен своего сервера (группы v2 живут на нём). */
     serverDomain: () => serverDomain,
+    /** Строки истории модели профиля (spec 035 T114). */
+    rowsModel,
     /** Ключ из ответа боту — до окончания входа (переживает перезагрузку). */
     saveJoinKey: async (recoveryKey: string) => {
       await storage?.saveRecord(JOIN_KEY_RECORD, recoveryKey).catch(() => undefined);

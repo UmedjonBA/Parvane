@@ -126,7 +126,8 @@ type LocalStateDependencies = {
 const SCHEDULED_CHECK_INTERVAL_MS = 5000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
-const HISTORY_FLUSH_DELAY_MS = 500;
+// Маркеры «прочитано до» прежних сборок (с spec 035 T114 — в модели движка)
+const READ_MARK_PREFIX = 'rm:';
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
 // Запись журнала исходящих на одно сообщение (perf A6)
@@ -347,57 +348,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     }, RECORD_SAVE_DELAY_MS);
   }
 
-  // ── кэш истории (шифрованные записи m:<uuid>) ───────────────────────────
-  // Курсора синка v1 здесь больше нет (T110): новое приходит инбоксом v2,
-  // история — из кэша и журнала
-  const historyWriteQueue = new Map<string, WireStoredMessage | undefined>();
-  let historyFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  // ── кэш строк прежних сборок (шифрованные записи m:<uuid>, маркеры rm:) ───────────────
+  // С spec 035 T114 строки истории и маркеры хранит модель движка; прежний кэш читается один раз — для разового
+  // переноса в модель (`historyRows`, T115) — и стирается
 
-  // Записи идут строго одна пачка за другой: сброс очереди может быть вызван,
-  // пока предыдущая пачка ещё пишется (своё исходящее сбрасывается сразу), —
-  // иначе удаление обогнало бы незавершённое сохранение той же записи
-  let historyFlushChain: Promise<void> = Promise.resolve();
-
-  function flushHistoryQueue(): Promise<void> {
-    if (historyFlushTimer) clearTimeout(historyFlushTimer);
-    historyFlushTimer = undefined;
-    const batch = Array.from(historyWriteQueue.entries());
-    historyWriteQueue.clear();
-    if (!batch.length) return historyFlushChain;
-    const pending = secureStorage();
-    if (!pending) return historyFlushChain;
-    historyFlushChain = historyFlushChain.then(() => pending).then(async (storage) => {
-      // Пачка — одной транзакцией на запись и одной на удаление (perf A6)
-      const saves = batch.filter((entry): entry is [string, WireStoredMessage] => Boolean(entry[1]))
-        .map(([uuid, stored]) => [`m:${uuid}`, stored] as [string, WireStoredMessage]);
-      const deletes = batch.filter(([, stored]) => !stored).map(([uuid]) => `m:${uuid}`);
-      try {
-        await storage.saveRecords(saves);
-      } catch (err) {
-        // Сбой пачки не должен быть немым (сообщение без записи в кэше пропадает
-        // после перезагрузки) и не должен ронять остаток: дописываем по одной
-        // eslint-disable-next-line no-console
-        console.warn(`[parvane] кэш истории: пачка из ${saves.length} записей не сохранена: ${String(err)}`);
-        for (const [name, stored] of saves) {
-          await storage.saveRecord(name, stored).catch((e: unknown) => {
-            // eslint-disable-next-line no-console
-            console.warn(`[parvane] кэш истории: запись ${name} не сохранена: ${String(e)}`);
-          });
-        }
-      }
-      await storage.deleteRecords(deletes).catch((err: unknown) => {
-        // eslint-disable-next-line no-console
-        console.warn(`[parvane] кэш истории: ${deletes.length} записей не удалено: ${String(err)}`);
-      });
-    }).catch(() => undefined);
-    return historyFlushChain;
-  }
-
-  // Уход со страницы: дописать очередь кэша сразу (иначе удаление/очистка,
-  // сделанные за <500 мс до reload, терялись — курсор уже записан, а сервер
-  // скрытое повторно не отдаст → в кэше навсегда оставались старые строки)
-  // Черновики тоже; журнал исходящих пишется записью на сообщение сразу при
-  // отправке (perf A6) — сбрасывать нечего
+  // Уход со страницы: черновики — сразу; журнал исходящих пишется записью на сообщение сразу при отправке (perf A6),
+  // строки истории — пачками модели
   function flushRecordSaves() {
     if (draftsSaveTimer) {
       clearTimeout(draftsSaveTimer);
@@ -408,12 +364,10 @@ export function createLocalState(deps: LocalStateDependencies) {
 
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', () => {
-      void flushHistoryQueue();
       flushRecordSaves();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
-        void flushHistoryQueue();
         flushRecordSaves();
       }
     });
@@ -467,40 +421,21 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
-  function scheduleHistoryFlush() {
-    if (historyFlushTimer) return;
-    historyFlushTimer = setTimeout(flushHistoryQueue, HISTORY_FLUSH_DELAY_MS);
-  }
-
-  function saveHistoryRecord(stored: WireStoredMessage) {
-    historyWriteQueue.set(stored.id, stored);
-    scheduleHistoryFlush();
-  }
-
-  function deleteHistoryRecord(uuid: string) {
-    historyWriteQueue.set(uuid, undefined);
-    scheduleHistoryFlush();
-  }
-
+  /** Кэш строк прежних сборок (только для разового переноса в модель). */
   async function loadHistoryRecords(): Promise<WireStoredMessage[]> {
     const storage = await secureStorage();
     if (!storage) return [];
     return storage.loadRecordsByPrefix<WireStoredMessage>('m:');
   }
 
-  // Одна строка кэша по uuid (perf A2): промах индекса мутаций стоит одного
-  // чтения, а не всей истории. Ещё не записанная — из очереди
-  async function loadHistoryRecord(uuid: string): Promise<WireStoredMessage | undefined> {
-    if (historyWriteQueue.has(uuid)) return historyWriteQueue.get(uuid);
+  /** Прежний кэш строк перенесён в модель — стереть. */
+  async function dropLegacyHistory(uuids: string[], addresses: string[]) {
     const storage = await secureStorage();
-    if (!storage) return undefined;
-    return storage.loadRecord<WireStoredMessage>(`m:${uuid}`);
+    if (!storage) return;
+    await storage.deleteRecords([...uuids.map((id) => `m:${id}`), ...addresses.map((a) => `${READ_MARK_PREFIX}${a}`)]);
   }
 
   function resetSecureCaches() {
-    historyWriteQueue.clear();
-    if (historyFlushTimer) clearTimeout(historyFlushTimer);
-    historyFlushTimer = undefined;
     journalCache = undefined;
     isJournalLoaded = false;
     journalChain = Promise.resolve();
@@ -769,16 +704,8 @@ export function createLocalState(deps: LocalStateDependencies) {
       await storage.saveRecord(`${JOURNAL_PREFIX}${entry.id}`, entry);
       if (trimmed.length) await storage.deleteRecords(trimmed.map((id) => `${JOURNAL_PREFIX}${id}`));
     });
-    // Своё исходящее — сразу и в кэш истории. Сервер не шлёт эхо отправителю:
-    // копия для своего устройства приходит только дельта-синком, а живые
-    // входящие двигают курсор `last_seen_id` дальше неё — тогда синк своё
-    // сообщение уже не вернёт, и после reload из кэша восстанавливалось
-    // только то, что успел захватить случайный синк (пропадал документ с
-    // подписью, `scripts/e2e_web_media_ttl.mjs`). Правки/удаление своих
-    // сообщений догоняются по `updated_at` и перезаписывают запись
-    saveHistoryRecord(entry);
-    void flushHistoryQueue();
-    // Журнал истории (spec 033): своё отправленное — строкой журнала и сдвигом маркера чата
+    // Своё исходящее — сразу строкой модели (spec 035 T114) и журнала истории (spec 033), со сдвигом маркера чата:
+    // сервер не шлёт эхо отправителю
     ownSentListener?.(entry);
   }
 
@@ -1118,19 +1045,13 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
-  // ── журнал истории (spec 033): маркеры «прочитано до», курсор, очередь записи ─────────────
-  const READ_MARK_PREFIX = 'rm:';
+  // ── журнал истории (spec 033): курсор, очередь записи; маркеры прежних сборок (`rm:`) — для переноса ─────────
 
   async function loadReadMarks(): Promise<Record<string, HReadMark>> {
     const storage = await secureStorage();
     if (!storage) return {};
     const rows = await storage.loadRecordsByPrefix<{ address: string; mark: HReadMark }>(READ_MARK_PREFIX);
     return Object.fromEntries(rows.filter((row) => row?.address && row.mark).map((row) => [row.address, row.mark]));
-  }
-
-  function saveReadMark(address: string, mark: HReadMark) {
-    void secureStorage()?.then((storage) => storage.saveRecord(`${READ_MARK_PREFIX}${address}`, { address, mark }))
-      .catch(() => undefined);
   }
 
   async function loadHistorySync(): Promise<HistorySyncState | undefined> {
@@ -1463,10 +1384,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     },
     hydrate,
     reset,
-    saveHistoryRecord,
-    deleteHistoryRecord,
     loadHistoryRecords,
-    loadHistoryRecord,
+    dropLegacyHistory,
     appendOwnJournal,
     updateOwnJournalEntry,
     clearUserData,
@@ -1489,7 +1408,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     savePendingReceipts,
     dropLegacyReadUuids,
     loadReadMarks,
-    saveReadMark,
     loadHistorySync,
     saveHistorySync,
     loadHistoryOutbox,
@@ -1500,7 +1418,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadClearedUntil,
     saveClearedUntil,
     removeOwnJournalEntries,
-    flushHistoryNow: flushHistoryQueue,
     loadDrafts,
     loadFolders,
     loadAllFolderIndex,
