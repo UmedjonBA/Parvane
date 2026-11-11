@@ -1731,10 +1731,12 @@ vitest требует снять `.fails`).
   раскладка, что `StateView`).
 - **desktop** — содержимое (`v2_content.cpp` без разбора видов), личное состояние (`state_model.cpp`), права групп
   (`Session::contentHidden`/`capabilities`) и клиентское ядро (`v2_engine.cpp`: `clientCall`/`historyCall`) — через
-  модель. ОТКРЫТО: `it.fails` «`parvane_client_state.cpp` — показ из StateView модели» (T126); журнал истории
-  `history_sync.cpp` ещё не на `historyPage` (T125, общий с android).
+  модель; строки истории — тоже модель (T125, общий с android `history_sync.cpp`: `ModelRows` — `rowsApply`, `rowsAll`
+  с выборкой, `rowsRead`; проверка «строки истории — модель движка»). ОТКРЫТО: `it.fails` «`parvane_client_state.cpp` —
+  показ из StateView модели» (T126); показ строк tdesktop — из RowState модели (`historyView`), не из `MessageView`.
 - **android** — модель только через хост ядра (`model_jni.cpp`), личное состояние сводит модель, избранные стикеры —
-  объекты модели, события ядра — пачками одной очередью (`event_queue.h`). В РАБОТЕ (T136, android-ветка не слита):
+  объекты модели, события ядра — пачками одной очередью (`event_queue.h`), строки истории — модель через `ModelRows`
+  ядра (`jni_history.cpp`, T125). В РАБОТЕ (T136, android-ветка не слита):
   `it.fails` «`ParvaneStore.kt` — содержимое из MessageView» и «`StateJournal.kt` — показ из StateView»; права групп
   шов пока считает сам (`ParvaneStore.isContentAllowedForMember`, GROUP-2).
 
@@ -2222,19 +2224,19 @@ Web: `v2/historyModel.ts` (перекладка строки ↔ JSON движк
 `history/*` в `protocol.vectors.test.ts`; сценарий `scripts/run_web_history_sync_e2e.sh`.
 
 Desktop (общее с android ядро): `desktop/parvane-core/src/history_sync.cpp` (`parvane::history::HistorySync` — очередь
-одной пачкой 30–120 с с проверкой «уже в журнале», запечатанные тела на диске, `JournalNotice`, опрос 60 с, перенос один раз, мутации чужих
-сообщений до прихода строки ждут её и применяются только при совпадении автора; `FileRowStore` — строки RowState
-дозаписью со свёрткой); клиент — `parvane_client_history.cpp` (хранилище `tdata/parvane-history-<адрес>.jsonl`,
-перенос прежнего журнала StoredMessage и `parvane-read.txt`), `parvane_client.cpp` (`ApplyIncomingMutation` —
+одной пачкой 30–120 с с проверкой «уже в журнале», запечатанные тела на диске, `JournalNotice`, опрос 60 с, перенос один раз;
+строки — модель движка через `ModelRows`, с spec 035 T125, см. абзац ниже); клиент — `parvane_client_history.cpp`
+(разовый перенос прежнего `tdata/parvane-history-<адрес>.jsonl`, журнала StoredMessage и `parvane-read.txt` в
+модель), `parvane_client.cpp` (`ApplyIncomingMutation` —
 Delete/Edit/Reaction/Pin операциями журнала, права `historyCanDelete`; `MirrorDelete` — «у всех» по праву движка,
 «только у меня» — только журнал; `ReplayHistory` — из строк, надгробия не показываются); `history_item.cpp`
 `canDeleteForEveryone` — в личном чате и сообщение собеседника, без срока. Тесты — `parvane_history_sync_tests`
 (поддельный сервер журнала), векторы `history/*` в `parvane_protocol_vectors_tests`; сценарий
 `desktop/verify_history_sync.sh`.
 
-Android (то же ядро, `history_sync.cpp` в `android/jni/CMakeLists.txt`): `android/jni/jni_history.cpp` — хранилище строк
-— `FileRowStore` ядра (`history-<адрес>.jsonl` в каталоге аккаунта, надгробия и сироты — строки, свёртка их не
-теряет), прежний журнал событий `journal.jsonl` переносится в строки один раз (`convertLegacyJournal`); события шва
+Android (то же ядро, `history_sync.cpp` в `android/jni/CMakeLists.txt`): `android/jni/jni_history.cpp` — строки в модели
+движка (`ModelRows` ядра, spec 035 T125; прежние `history-<адрес>.jsonl` — в модель один раз), прежний журнал событий
+`journal.jsonl` переносится в строки модели один раз (`convertLegacyJournal`); события шва
 строятся из строк (`showStates`: новое — `message`, правка — `edited`, реакции и закреп — `meta`, надгробие —
 `deleted`; удалённое раньше прихода не показывается); `historyApplyIncomingMutation` — Delete/Edit/Reaction/Pin
 операциями с автором (`by`/`by_admin`, права — движок), неизвестная цель — сирота; `jni_messages.cpp nativeDelete` —
@@ -2252,9 +2254,14 @@ Android (то же ядро, `history_sync.cpp` в `android/jni/CMakeLists.txt`)
 `tests/model_rows.rs`, вектор `proto/parvane/vectors/model/history_paging.json`, `edit_before_row.json`,
 `delete_everyone_direct.json`, `delete_me.json`. Web перешёл (T114): `historyRows.ts` своей копии строк не держит
 (в памяти — индекс показанного), `fetchMessages` — страницами модели (`provider.ts`), чаты со строками — `chatList`;
-журнал истории аккаунта (очередь, синк, перенос) по-прежнему ведёт `v2/history.ts`. ОТКРЫТО: desktop и android
-(общее ядро) хранят строки сами (`FileRowStore` ядра, `history_sync.cpp`; сессия журнала — `historyCall` модели), на
-`historyPage` не переведены (T125).
+журнал истории аккаунта (очередь, синк, перенос) по-прежнему ведёт `v2/history.ts`. Desktop и android (общее ядро,
+T125): строки — модель через `ModelRows` (`history_sync.cpp`: `rowsApply`, `rowsAll` с выборкой по чату и id, счётчик
+чата — `rowsRead`; модель — та же, что у сессии v2, без сети — по прошлому открытию `Session::openModelOffline`);
+своего хранилища строк и сведения строк и маркеров у ядра нет, права чужой мутации до строки — модель (поле `by`).
+Прежние файлы строк (spec 033) и журналы до spec 033 (desktop StoredMessage, android `journal.jsonl`) переносятся в
+модель один раз (`importLegacyRows`, `ConvertLegacyOps`, `convertLegacyJournal`; отметка — служебный документ
+`imported`, сами файлы не удаляются). Сессия журнала — `historyCall` модели; показ tdesktop — из RowState модели
+(`historyView`), не из `MessageView`.
 
 ## HIST-2. Контрольная точка, горизонт надгробий, откат сервера (spec 033)
 
@@ -2299,7 +2306,7 @@ Web: `v2/history.ts` (`bootstrap`, `loadCheckpoint` — сверка `historyVer
 запись → пропуск цепочки, старая сводка при большем `upto_seq` → точка не применяется).
 
 Desktop (ядро, общее с android): `HistorySync::joinLocked`/`loadCheckpointLocked` (вход по точке, сегменты свежими
-первыми, `historyNeedsReplace` → `FileRowStore::clear` и `onReplaced`), `buildCheckpointLocked` (условия по голове,
+первыми, `historyNeedsReplace` → `rowsApply{wipe}` модели и `onReplaced`), `buildCheckpointLocked` (условия по голове,
 повторное использование сегментов по отпечатку, сверка «журнал не дописан», CAS — `casFailedFor`; сводка с позицией,
 id точки и цепочками — S7-4), сверка точки и сегментов в `loadCheckpointLocked` (`historyVerifyCheckpoint`, `expect`),
 книга цепочек `ingestChained` (`meta.chains`), откат головы в `pullLocked`/`joinLocked`; событие сессии `stateReady` с
