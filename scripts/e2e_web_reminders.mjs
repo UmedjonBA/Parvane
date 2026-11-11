@@ -78,7 +78,9 @@ try {
   const page = sessions.bob1.page;
   await openPlannerScreen(page, 'calendar');
   const planner = page.locator('#ParvanePlanner');
-  const start = new Date(Date.now() + (new Date().getSeconds() > 40 ? 3 : 2) * 60 * 1000);
+  // Напоминание — не раньше чем через ~80 с: второе устройство в фоне опрашивает «План» раз в 60 с (SYNC_IDLE_MS),
+  // и будильник у него появляется только после опроса (при 20–60 с запаса он не успевал)
+  const start = new Date(Date.now() + (new Date().getSeconds() > 40 ? 4 : 3) * 60 * 1000);
   start.setSeconds(0, 0);
   const remindAt = start.getTime() - 60 * 1000;
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
