@@ -327,6 +327,7 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 [[nodiscard]] QString StateSyncedPath();
 void NoteStateEdited(const char *kind);
 void ApplyDialogState(not_null<Main::Session*> session);
+void NoteStartupReplayDone(); // история при старте воспроизведена — журнал состояния может подключаться
 void ApplyQuickReaction(not_null<Main::Session*> session);
 // «В избранное» у стикера (spec 035 T126, FR-075): ссылка стикера (set_id, sticker_id — как web, вектор
 // clients/sticker-ref.json) по документу tdesktop: свой набор (LoadLocalStickerPacks) либо sticker_id отправителя.

@@ -1907,9 +1907,38 @@ void ScheduleStateFlush(const char *kind) {
 
 // Подключить журнал (событие stateReady v2-сессии): первый запуск переносит
 // локальные папки/отложенные в журнал, дальше — синк раз в 8 с и по правке.
+// Журнал состояния подключается после воспроизведения истории при старте: адреса чатов (реестр id → адрес) узнаются
+// из её строк, а папки, закреп, архив хранятся по id чата. С spec 035 T125 строки — из модели, и воспроизведение
+// идёт по готовности модели, позже stateReady: без ожидания чат, известный только по истории, выпадал из «желаемого»
+// (HistoryAddress пуст) и его правка стиралась из журнала (verify_state_patch, пара state-patch-desktop).
+bool g_startupReplayDone = false; // main
+bool g_attachWaiting = false;     // main
+void AttachStateJournal();
+
+void NoteStartupReplayDone() {
+	g_startupReplayDone = true;
+	if (g_attachWaiting) {
+		g_attachWaiting = false;
+		AttachStateJournal();
+	}
+}
+
 void AttachStateJournal() {
 	const auto session = g_sessionWeak.get();
 	if (!session || !V2Ready()) {
+		return;
+	}
+	if (!g_startupReplayDone) {
+		if (!g_attachWaiting) {
+			g_attachWaiting = true;
+			LOG(("Parvane: v2: журнал состояния ждёт воспроизведения истории"));
+			base::call_delayed(crl::time(15000), [generation = AccountGeneration()] {
+				if (AccountGenerationIs(generation) && g_attachWaiting) {
+					LOG(("Parvane: v2: история не воспроизведена за 15 с — журнал состояния подключается без неё"));
+					NoteStartupReplayDone();
+				}
+			});
+		}
 		return;
 	}
 	const auto local = BuildLocalState(session);
@@ -2439,6 +2468,8 @@ void ResetStateAccountData() {
 	g_drafts.clear();
 	g_draftsLoaded = false;
 	g_stateAttached = false;
+	g_startupReplayDone = false;
+	g_attachWaiting = false;
 	g_stateShown = parvane::json();
 	g_stateApplying = false;
 	g_stateFlushQueued = false;

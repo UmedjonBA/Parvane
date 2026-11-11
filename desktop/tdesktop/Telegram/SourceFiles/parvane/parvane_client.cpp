@@ -13169,6 +13169,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				if (const auto s = weak.get()) {
 					ApplyDialogState(s);
 				}
+				NoteStartupReplayDone();
 			});
 		});
 		RestoreScheduled(); // запланированные сообщения: восстановить очередь+таймеры
