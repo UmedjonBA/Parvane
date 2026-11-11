@@ -988,9 +988,10 @@ void Session::persistLocked() {
 // Модель профиля (spec 035): каталог `store/` в каталоге состояния, ключ устройства — ключ состояния `key` (тот же
 // 32-байтовый ключ, что прежде шифровал экспорт). Состояние другого устройства — в сторону (`store-<устройство>-<мс>`),
 // прежнее состояние этого устройства (`state` без отметки «перенесено») — разовым переносом.
-bool Session::openHostLocked(const std::string &deviceId, std::string *error) {
+bool Session::openHostLocked(const std::string &deviceId, std::string *error, bool offline) {
     if (host_ && hostDevice_ == deviceId) return true;
     host_.reset();
+    publishRowsHost(nullptr);
     hostHadProfile_ = false;
     const auto storeDir = cfg_.stateDir + "/store";
     const auto savedDevice = readStateFile("device");
@@ -1034,6 +1035,13 @@ bool Session::openHostLocked(const std::string &deviceId, std::string *error) {
     hostDevice_ = deviceId;
     modelOpenState_.clear();
     noteOpenLocked(opened);
+    if (offline && modelOpenState_ != "OPEN_STATE_READY") {
+        // Без сети — только готовая модель: перенос (сеть) и прочее — при подключении
+        host_.reset();
+        hostDevice_.clear();
+        if (error) *error = "модель без сети не открыта (" + modelOpenState_ + ")";
+        return false;
+    }
     if (modelOpenState_ == "OPEN_STATE_MIGRATION_NEEDED" && !migrateLegacyLocked(error)) {
         host_.reset();
         hostDevice_.clear();
@@ -1054,6 +1062,45 @@ bool Session::openHostLocked(const std::string &deviceId, std::string *error) {
         return false;
     }
     hostHadProfile_ = existed || legacy;
+    // Чем открыта модель — для открытия без сети при следующем запуске (показ истории до подключения)
+    if (!offline && !domain_.empty()) writeStateFile("model-open", json{{"device", deviceId}, {"domain", domain_}}.dump());
+    publishRowsHost(host_);
+    return true;
+}
+
+void Session::publishRowsHost(std::shared_ptr<engine::Host> h) {
+    std::lock_guard<std::mutex> lk(rowsHostMu_);
+    rowsHost_ = std::move(h);
+}
+
+std::shared_ptr<engine::Host> Session::rowsModel() const {
+    std::lock_guard<std::mutex> lk(rowsHostMu_);
+    return rowsHost_;
+}
+
+bool Session::openModelOffline() {
+    if (rowsModel()) return true;
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (host_) return rowsModel() != nullptr;
+    const auto saved = json::parse(readStateFile("model-open"), nullptr, false);
+    const auto device = saved.is_object() ? saved.value("device", std::string()) : std::string();
+    const auto domain = saved.is_object() ? saved.value("domain", std::string()) : std::string();
+    if (device.empty() || domain.empty() || device != readStateFile("device")) return false;
+    if (storageKey_.size() != 32) {
+        const auto key = readStateFile("key");
+        if (key.size() != 32) return false;
+        storageKey_ = key;
+    }
+    {
+        std::lock_guard<std::mutex> idLock(idMu_);
+        if (domain_.empty()) domain_ = domain;
+    }
+    std::string err;
+    if (!openHostLocked(device, &err, /*offline=*/true)) {
+        log("модель без сети: " + err);
+        return false;
+    }
+    log("модель профиля открыта без сети (строки истории до подключения)");
     return true;
 }
 
@@ -1821,6 +1868,8 @@ void Session::dropIdentityLocked() {
     client_.reset();
     state_.reset();
     host_.reset(); // модель закрыта: её хранилище уходит в карантин целиком, следующее подключение — новое
+    publishRowsHost(nullptr);
+    writeStateFile("model-open", ""); // без сети прежняя модель больше не открывается
     hostDevice_.clear();
     hostHadProfile_ = false;
     // Вердикт «replaced» приходит голым ответом сервера без доказательства сброса (A0072-1): файлы личности не

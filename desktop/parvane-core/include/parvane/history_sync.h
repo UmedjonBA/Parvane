@@ -3,14 +3,17 @@
 //
 // Сведение строк (RowState), маркер прочтения, подсчёт непрочитанного, права удаления, ключ/AEAD записей — ТОЛЬКО
 // в движке (`parvane-protocol`, модуль `history`, C ABI `pv_history_call`/`pv_call`; контракт —
-// `specs/033-history-sync/contracts/engine-api.md`). Здесь — ввод-вывод вокруг движка:
-//   - хранилище строк хоста (`RowStore`: RowState по id, перебор по чату, маркеры, служебные документы);
+// `specs/033-history-sync/contracts/engine-api.md`). Строки, маркеры и их хранение — в модели движка профиля
+// (spec 035 T125, ENGINE-1: `rowsApply`/`rowsAll`/`rowsRead` через `engine::Host`, как web `historyRows.ts`);
+// своей копии строк и своего сведения у ядра нет. Здесь — ввод-вывод вокруг движка:
+//   - доступ к строкам модели (`ModelRows`) и служебные документы журнала (курсор, очередь) в файлах;
+//   - разовый перенос прежних файлов строк хоста в модель (`importLegacyRows`, spec 033 FileRowStore);
 //   - очередь записи в журнал (ревью 7 ноя 2026, S7-3): свои действия, маркеры и входящее — одной пачкой через
 //     случайные 30–120 с после первого события в очереди (по времени записи сервер не отличит автора сообщения от
 //     получателя), входящее — только то, чего устройство ещё не видело в журнале; запечатанные тела хранятся и
 //     повторяются как есть (номера цепочки писателя без пропусков, S7-4);
 //   - sync по событию `{"type":"journal","journal":"history"}` и раз в 60 с; курсор, наибольшая виденная голова
-//     (откат сервера — журнал не применяется), время полной синхронизации, флаг миграции — на диске (RowStore);
+//     (откат сервера — журнал не применяется), время полной синхронизации, флаг миграции — на диске (aux);
 //   - вход нового устройства: history.head → сводка (сверена с точкой, historyVerifyCheckpoint) → сегменты свежими
 //     первыми (op_id — из сводки) → history.sync(after = upto, skip_chunks) с книгой цепочек писателей (пропуск
 //     номера — предупреждение); `compacted` в ответе sync → точка (замена при `historyNeedsReplace`); точка, не
@@ -44,6 +47,9 @@
 
 namespace parvane::v2 {
 class HistorySession;
+}
+namespace parvane::engine {
+class Host;
 }
 
 namespace parvane::history {
@@ -86,80 +92,83 @@ struct RowPos {
 [[nodiscard]] std::string opTarget(const json &op);
 [[nodiscard]] json opChat(const json &op);
 
-// ── хранилище строк хоста ──────────────────────────────────────────────────────────────────────────────────────
-// Desktop — файл (`FileRowStore`), Android — свой журнал. Реализация обязана быть потокобезопасной.
-class RowStore {
+// ── строки истории в модели движка (spec 035 T125, ENGINE-1) ──────────────────────────────────────────────────
+// Строки (RowState с надгробиями и сиротами), место в ленте (ORDER-1), маркеры «прочитано до» (READ-2) и их
+// хранение — модель профиля (режим `host_driven`, `history-row`/`history-mark` хранилища модели). Хост подаёт ей
+// операции журнала истории (`rowsApply`) и читает готовое (`rowsAll` с выборкой по чату и id, `rowsRead` — счётчик
+// чата). Модель — та же, что держит клиентское ядро сессии (`v2::Session::rowsModel`); пока она не открыта, чтения
+// пусты и запись не идёт (`ready()` — false), хост откладывает события до открытия.
+// Служебные документы журнала (курсор, очередь записи) — файлы `<auxPrefix><имя>.json` (storecrypt).
+class ModelRows {
 public:
-    virtual ~RowStore() = default;
-    // RowState (канонический proto3-JSON движка) по id сообщения.
-    virtual std::optional<json> get(const std::string &id) = 0;
-    virtual void put(const json &state) = 0;
-    // Убрать строки локально (очистка чата, горизонт); в журнале они остаются.
-    virtual void erase(const std::vector<std::string> &ids) = 0;
-    virtual void forEachInChat(const std::string &chatKey, const std::function<void(const json &)> &f) = 0;
-    virtual void forEach(const std::function<void(const json &)> &f) = 0;
-    virtual std::size_t size() = 0;
-    // Маркер прочтения чата (ReadMark).
-    virtual std::optional<json> mark(const std::string &chatKey) = 0;
-    virtual void setMark(const std::string &chatKey, const json &mark) = 0;
-    virtual void forEachMark(const std::function<void(const std::string &chatKey, const json &mark)> &f) = 0;
-    // Режим замены (HIST-2): строки и маркеры стираются (служебные документы — нет).
-    virtual void clear() = 0;
-    // Служебные документы журнала ("meta" — курсор и пр., "pending" — несданные свои операции).
-    virtual json aux(const std::string &name) = 0;
-    virtual void setAux(const std::string &name, const json &value) = 0;
-    // Сбросить отложенные записи на диск.
-    virtual void flush() {}
-};
+    using HostFn = std::function<std::shared_ptr<engine::Host>()>;
+    ModelRows(HostFn host, std::string auxPrefix);
 
-// Хранилище в файлах (desktop; шифрование — storecrypt, если ключ задан):
-//   <rowsPath>  — JSONL, строка = RowState; новые состояния дописываются, при открытии и по накоплению файл
-//                 перезаписывается свёрткой (атомарно, tmp + rename);
-//   <marksPath> — {chatKey: ReadMark};  <auxPrefix><имя>.json — служебные документы.
-// Строки прежнего формата (StoredMessage журнала `parvane-history-*.jsonl` до spec 033) при открытии
-// откладываются — их забирает `takeLegacyRows()` (перенос в журнал один раз).
-class FileRowStore final : public RowStore {
-public:
-    FileRowStore(std::string rowsPath, std::string marksPath, std::string auxPrefix);
-    ~FileRowStore() override;
-    std::optional<json> get(const std::string &id) override;
-    void put(const json &state) override;
-    void erase(const std::vector<std::string> &ids) override;
-    void forEachInChat(const std::string &chatKey, const std::function<void(const json &)> &f) override;
-    void forEach(const std::function<void(const json &)> &f) override;
-    std::size_t size() override;
-    std::optional<json> mark(const std::string &chatKey) override;
-    void setMark(const std::string &chatKey, const json &mark) override;
-    void forEachMark(const std::function<void(const std::string &, const json &)> &f) override;
-    void clear() override;
-    json aux(const std::string &name) override;
-    void setAux(const std::string &name, const json &value) override;
-    void flush() override;
-    // Строки прежнего формата (JSON объектов StoredMessage); после вызова список пуст.
-    std::vector<json> takeLegacyRows();
-    // Перезаписать файл строк свёрткой сейчас.
-    void compact();
-    // Число дописанных строк сверх свёртки (для тестов).
-    [[nodiscard]] std::size_t appendedSinceCompact();
+    // Модель открыта (запись и чтение строк возможны).
+    [[nodiscard]] bool ready() const;
+    // RowState по id сообщения; строки нескольких id; строки чата; все строки (и надгробия, и сироты).
+    [[nodiscard]] std::optional<json> get(const std::string &id) const;
+    [[nodiscard]] std::vector<json> states(const std::vector<std::string> &ids) const;
+    [[nodiscard]] std::vector<json> chat(const std::string &chatKey) const;
+    [[nodiscard]] std::vector<json> all() const;
+    // Маркер чата (ReadMark) и все маркеры.
+    [[nodiscard]] std::optional<json> mark(const std::string &chatKey) const;
+    [[nodiscard]] std::vector<json> marks() const;
+    // Счётчик чата (`rowsRead`): непрочитанные от маркера, последняя прочитанная видимая строка, входящие, ставшие
+    // прочитанными после `since` (прежний маркер; null — с начала).
+    struct Read {
+        int unread = 0;
+        std::string lastReadId;
+        json mark;
+        std::vector<std::string> newlyRead;
+    };
+    [[nodiscard]] Read read(const std::string &chatKey, const json &since = nullptr) const;
+    // `rowsApply`: операции журнала истории (HistoryOp), строки прежнего кэша ({hs, order?}), убрать у себя без
+    // надгробия ({chat, target}), стереть всё (HIST-2). changed — id строк, чьё состояние изменилось, по порядку.
+    struct Applied {
+        bool ok = false;
+        std::vector<std::string> changed;
+        std::string error;
+    };
+    Applied apply(const json &ops, const json &legacyRows = json::array(), const json &forget = json::array(),
+                  bool wipe = false);
+    // Убрать строки у себя по id (очистка чата «у себя», самоуничтожение); в журнале аккаунта они остаются.
+    void forget(const std::vector<std::string> &ids);
+    // Служебные документы ("meta" — курсор и пр., "pending" — очередь записи, "imported" — отметка переноса).
+    [[nodiscard]] json aux(const std::string &name);
+    void setAux(const std::string &name, const json &value);
 
 private:
-    void loadLocked();
-    void compactLocked();
-    void saveMarksLocked();
-    std::mutex mu_;
-    std::string rowsPath_, marksPath_, auxPrefix_;
-    std::map<std::string, json> rows_;                         // id → RowState
-    std::map<std::string, std::set<std::string>> byChat_;      // chatKey → ids
-    std::map<std::string, json> marks_;
+    [[nodiscard]] json rowsAll(const json &what) const;
+    HostFn host_;
+    std::string auxPrefix_;
+    std::mutex auxMu_;
     std::map<std::string, json> aux_;
-    std::vector<json> legacy_;
-    std::size_t appended_ = 0;
 };
+
+// Прежние файлы строк хоста (spec 033, бывший FileRowStore: JSONL `RowState` — последнее состояние строки побеждает,
+// строки до spec 033 — StoredMessage, маркеры `{chatKey: ReadMark}`) — только чтение для разового переноса в модель.
+struct LegacyRowFiles {
+    std::vector<json> states;         // RowState
+    std::vector<json> storedMessages; // StoredMessage журнала до spec 033 (последняя строка по id)
+    std::vector<json> marks;          // ReadMark
+};
+[[nodiscard]] LegacyRowFiles readLegacyRowFiles(const std::string &rowsPath, const std::string &marksPath);
+
+// Разовый перенос прежних файлов строк хоста в модель (отметка — служебный документ "imported"; сам файл не
+// трогается — удаляет прежнее пользователь, D2): RowState — строками прежнего кэша (сведение с известным — модель),
+// маркеры — операциями read, StoredMessage до spec 033 — операциями, которые строит хост (`convertStored`: row,
+// read), строки очищенного «у себя» (`dropRow`) — прочь из модели. Модель могла получить те же строки разовым
+// переносом spec 035 (M2) — повтор сводится без следа. false — модель не открыта (повторить при открытии).
+bool importLegacyRows(ModelRows &rows, const std::string &rowsPath, const std::string &marksPath,
+                      const std::function<std::vector<json>(const std::vector<json> &stored)> &convertStored,
+                      const std::function<bool(const json &state)> &dropRow,
+                      const std::function<void(const std::string &)> &log);
 
 // ── журнал истории ─────────────────────────────────────────────────────────────────────────────────────────────
 struct HistorySyncConfig {
     std::string self;           // свой адрес (user@domain); прежние (смена ника) — из сессии движка (selfAddresses)
-    RowStore *store = nullptr;  // принадлежит хосту, живёт дольше HistorySync
+    ModelRows *rows = nullptr;  // принадлежит хосту, живёт дольше HistorySync
     // Запрос канала ID (метод реестра, тело — байты) → байты ответа. Бросает при отказе (v2::V2Error с кодом —
     // ERROR_CODE_DUPLICATE, ERROR_CODE_LIMIT, ERROR_CODE_UNAVAILABLE, …).
     std::function<std::string(const std::string &method, const std::string &body)> request;
@@ -193,7 +202,7 @@ struct HistorySyncConfig {
     bool thread = true;
 };
 
-// Счётчик чата для UI: непрочитанные (historyIsUnread) и последняя прочитанная видимая строка.
+// Счётчик чата для UI (`rowsRead` модели): непрочитанные от маркера и последняя прочитанная видимая строка.
 struct ReadState {
     int unread = 0;
     std::string lastReadId; // "" — нет прочитанных
@@ -218,20 +227,18 @@ public:
     // — открыть сессию движка заново (после смены ключа состояния — принудительная точка с перезаливкой сегментов).
     void onSessionEvent(const json &ev);
 
-    // Событие истории на этом устройстве → historyApply к строке хранилища → сохранить → в очередь журнала.
+    // Событие истории на этом устройстве → строке модели (`rowsApply`, сведение — модель) → в очередь журнала.
     // own — действие пользователя этого устройства, иначе входящее (пишется, если журнал его ещё не знает); то и другое —
     // общей пачкой (S7-3).
-    // Неизвестная цель — сирота. Результат — новый RowState (null — операция отвергнута движком, причина в логе).
-    // Своя строка (from == self) сдвигает маркер чата до неё (READ-2, FR-011).
-    // requiredAuthor — мутация допустима только для сообщения этого автора (правка; удаление в группе не админом):
-    // строка известна — проверка сразу (чужая — отказ, null); неизвестна — мутация ждёт в памяти, пока строка не
-    // придёт (из инбокса или журнала), и применяется только при совпадении автора.
-    json record(const json &op, bool own, const std::string &requiredAuthor = std::string());
-    // Маркер «прочитано до» (ReadMark). Сводится максимумом; own — в журнал общей пачкой. Результат — строки
+    // Неизвестная цель — сирота. Результат — RowState строки после операции (null — модель не открыта или у операции
+    // нет строки). Права чужой мутации (поле `by` операции: правка — только автор, удаление — по праву) сверяет
+    // модель, и у сироты — когда строка придёт. Своя строка (from == self) сдвигает маркер чата до неё (READ-2, FR-011).
+    json record(const json &op, bool own);
+    // Маркер «прочитано до» (ReadMark). Сводит модель (максимум); own — в журнал общей пачкой. Результат — строки
     // входящих, которые стали прочитанными (для квитанций собеседникам); пусто — маркер не сдвинулся.
     std::vector<json> advanceMark(const json &mark, bool own);
 
-    // Чтение хранилища (без сети).
+    // Чтение строк модели (без сети).
     [[nodiscard]] std::optional<json> state(const std::string &id);
     [[nodiscard]] json view(const json &state); // historyView; {} — сбой
     [[nodiscard]] ReadState readState(const std::string &chatKey);
@@ -263,12 +270,11 @@ private:
     bool ensureEngineLocked();                       // под engMu_
     json engine(const std::string &name, const json &args); // сессия движка (под engMu_); бросает
     std::string req(const std::string &method, const std::string &body);
-    // Применить операцию к хранилищу; changed — состояние изменилось. Бросает (движок отверг).
-    json applyToStore(const json &op, bool *changed);
-    // Операции из журнала (records — опорные записи ingest) → хранилище, колбэки.
+    // Операции → строкам модели (пачками); результат — изменившиеся строки (RowState). false в *ok — модель не открыта.
+    std::vector<json> applyOps(const std::vector<json> &ops, bool *ok = nullptr);
+    // Операции из журнала (records — опорные записи ingest) → строкам модели, колбэки.
     void absorbOps(const json &ops, std::vector<json> &rows, std::map<std::string, json> &marks);
     void deliver(std::vector<json> &rows, std::map<std::string, json> &marks);
-    bool mergeMark(const json &mark, std::string *chatKey);
     void noteSeen(const json &op);
     [[nodiscard]] bool seen(const std::string &key);
     static std::string opKey(const json &op);
@@ -306,15 +312,6 @@ private:
     std::vector<Incoming> incoming_;
     std::unordered_set<std::string> seen_;
     std::deque<std::string> seenOrder_;
-    struct Parked {
-        json op;
-        bool own = false;
-        std::string author;
-    };
-    std::map<std::string, std::vector<Parked>> parked_; // id сообщения → мутации, ждущие строку (под mu_)
-    std::size_t parkedCount_ = 0;
-    // Строка цели появилась — применить дождавшиеся её мутации (автор совпал); новые состояния — в rows.
-    void releaseParked(const json &state, std::vector<json> *rows);
     bool syncRequested_ = false;
     bool reopenRequested_ = false;
     bool rotated_ = false;

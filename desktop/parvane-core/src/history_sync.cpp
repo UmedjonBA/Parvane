@@ -6,6 +6,7 @@
 #include <limits>
 #include <random>
 
+#include "parvane/engine_host.h"
 #include "parvane/storecrypt.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_engine.h"
@@ -71,13 +72,6 @@ std::pair<std::string, const json *> opKind(const json &op) {
 // (ts, id) > (mts, mid): id — UUID в нижнем регистре (порядок строк = порядок байтов).
 bool posAfter(std::int64_t ts, const std::string &id, std::int64_t mts, const std::string &mid) {
     return ts > mts || (ts == mts && id > mid);
-}
-
-bool markPos(const json &mark, std::int64_t *ts, std::string *id) {
-    if (!mark.is_object()) return false;
-    *ts = i64(field(mark, "up_to_ts_ms"));
-    *id = str(mark, "up_to_id");
-    return true;
 }
 
 bool visibleState(const json &s) {
@@ -201,159 +195,150 @@ json opChat(const json &op) {
     return field(*body, "chat");
 }
 
-// ── FileRowStore ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ── строки в модели движка (spec 035 T125) ──────────────────────────────────────────────────────────────────────
 
-FileRowStore::FileRowStore(std::string rowsPath, std::string marksPath, std::string auxPrefix)
-: rowsPath_(std::move(rowsPath)), marksPath_(std::move(marksPath)), auxPrefix_(std::move(auxPrefix)) {
-    std::lock_guard<std::mutex> lk(mu_);
-    loadLocked();
+namespace {
+
+// Операций в одном вызове модели (граница поля — 4 МиБ JSON), id в одной выборке (`rowsAll.ids` ≤ 10000)
+constexpr std::size_t kApplyChunk = 200;
+constexpr std::size_t kIdsChunk = 5000;
+
+// UUID-строка по 16 байтам (base64 id строки в изменениях модели).
+std::string uuidOfB64(const std::string &b64) {
+    const auto raw = v2::fromBase64Safe(b64);
+    if (!raw || raw->size() != 16) return {};
+    const auto h = hexOf(*raw);
+    return h.substr(0, 8) + "-" + h.substr(8, 4) + "-" + h.substr(12, 4) + "-" + h.substr(16, 4) + "-" + h.substr(20);
 }
 
-FileRowStore::~FileRowStore() = default;
+json resultOf(const json &out) {
+    if (!out.is_object() || out.contains("error")) return json();
+    const auto text = str(out, "result_json");
+    auto v = json::parse(text.empty() ? std::string("null") : text, nullptr, false);
+    return v.is_discarded() ? json() : v;
+}
 
-void FileRowStore::loadLocked() {
-    std::size_t lines = 0;
-    for (const auto &line : storecrypt::readLines(rowsPath_)) {
-        auto v = json::parse(line, nullptr, false);
-        if (!v.is_object()) continue;
-        ++lines;
-        const auto target = str(v, "target");
-        if (!target.empty()) {
-            const auto key = chatKeyOfState(v);
-            if (const auto it = rows_.find(target); it != rows_.end()) {
-                const auto old = chatKeyOfState(it->second);
-                if (old != key) byChat_[old].erase(target);
-            }
-            rows_[target] = std::move(v);
-            byChat_[key].insert(target);
-        } else if (!str(v, "id").empty() && v.contains("content")) {
-            legacy_.push_back(std::move(v)); // журнал до spec 033 (StoredMessage)
+} // namespace
+
+ModelRows::ModelRows(HostFn host, std::string auxPrefix) : host_(std::move(host)), auxPrefix_(std::move(auxPrefix)) {}
+
+bool ModelRows::ready() const {
+    return host_ && host_() != nullptr;
+}
+
+json ModelRows::rowsAll(const json &what) const {
+    const auto h = host_ ? host_() : nullptr;
+    if (!h) return json();
+    return resultOf(h->raw("rowsAll", what));
+}
+
+std::optional<json> ModelRows::get(const std::string &id) const {
+    if (id.empty()) return std::nullopt;
+    const auto r = rowsAll(json{{"states", true}, {"ids", json::array({id})}});
+    const auto &s = field(r, "states");
+    if (!s.is_array() || s.empty()) return std::nullopt;
+    return s[0];
+}
+
+std::vector<json> ModelRows::states(const std::vector<std::string> &ids) const {
+    std::vector<json> out;
+    for (std::size_t i = 0; i < ids.size(); i += kIdsChunk) {
+        json batch = json::array();
+        for (std::size_t j = i; j < std::min(ids.size(), i + kIdsChunk); ++j) {
+            if (!ids[j].empty()) batch.push_back(ids[j]);
         }
+        if (batch.empty()) continue;
+        const auto r = rowsAll(json{{"states", true}, {"ids", batch}});
+        for (const auto &s : field(r, "states")) out.push_back(s);
     }
-    appended_ = lines > rows_.size() + legacy_.size() ? lines - rows_.size() - legacy_.size() : 0;
-    const auto marks = json::parse(storecrypt::readFile(marksPath_), nullptr, false);
-    if (marks.is_object()) {
-        for (auto it = marks.begin(); it != marks.end(); ++it) {
-            if (it.value().is_object()) marks_[it.key()] = it.value();
-        }
+    return out;
+}
+
+std::vector<json> ModelRows::chat(const std::string &chatKey) const {
+    if (chatKey.empty()) return {};
+    const auto r = rowsAll(json{{"states", true}, {"chat_key", chatKey}});
+    const auto &s = field(r, "states");
+    return s.is_array() ? std::vector<json>(s.begin(), s.end()) : std::vector<json>();
+}
+
+std::vector<json> ModelRows::all() const {
+    const auto r = rowsAll(json{{"states", true}});
+    const auto &s = field(r, "states");
+    return s.is_array() ? std::vector<json>(s.begin(), s.end()) : std::vector<json>();
+}
+
+std::optional<json> ModelRows::mark(const std::string &chatKey) const {
+    if (chatKey.empty()) return std::nullopt;
+    const auto r = rowsAll(json{{"marks", true}, {"chat_key", chatKey}});
+    const auto &m = field(r, "marks");
+    if (!m.is_array() || m.empty()) return std::nullopt;
+    return m[0];
+}
+
+std::vector<json> ModelRows::marks() const {
+    const auto r = rowsAll(json{{"marks", true}});
+    const auto &m = field(r, "marks");
+    return m.is_array() ? std::vector<json>(m.begin(), m.end()) : std::vector<json>();
+}
+
+ModelRows::Read ModelRows::read(const std::string &chatKey, const json &since) const {
+    Read out;
+    const auto h = host_ ? host_() : nullptr;
+    if (!h || chatKey.empty()) return out;
+    const auto r = resultOf(h->raw("rowsRead", json{{"chat_key", chatKey}, {"since_json", since.is_object() ? since.dump() : ""}}));
+    if (!r.is_object()) return out;
+    out.unread = r.value("unread", 0);
+    out.lastReadId = str(r, "last_read_id");
+    out.mark = r.contains("mark") && r["mark"].is_object() ? r["mark"] : json(nullptr);
+    for (const auto &id : field(r, "newly_read")) {
+        if (id.is_string()) out.newlyRead.push_back(id.get<std::string>());
     }
-    if (appended_ > 0 && appended_ >= rows_.size()) compactLocked();
+    return out;
 }
 
-void FileRowStore::compactLocked() {
-    std::vector<std::string> lines;
-    lines.reserve(rows_.size() + legacy_.size());
-    for (const auto &l : legacy_) lines.push_back(l.dump()); // ещё не перенесённое остаётся на диске
-    for (const auto &[id, s] : rows_) lines.push_back(s.dump());
-    storecrypt::writeLines(rowsPath_, lines);
-    appended_ = 0;
-}
-
-void FileRowStore::saveMarksLocked() {
-    json out = json::object();
-    for (const auto &[k, m] : marks_) out[k] = m;
-    storecrypt::writeFile(marksPath_, out.dump());
-}
-
-std::optional<json> FileRowStore::get(const std::string &id) {
-    std::lock_guard<std::mutex> lk(mu_);
-    const auto it = rows_.find(id);
-    if (it == rows_.end()) return std::nullopt;
-    return it->second;
-}
-
-void FileRowStore::put(const json &state) {
-    const auto target = str(state, "target");
-    if (target.empty()) return;
-    const auto key = chatKeyOfState(state);
-    std::lock_guard<std::mutex> lk(mu_);
-    if (const auto it = rows_.find(target); it != rows_.end()) {
-        if (it->second == state) return;
-        const auto old = chatKeyOfState(it->second);
-        if (old != key) byChat_[old].erase(target);
+ModelRows::Applied ModelRows::apply(const json &ops, const json &legacyRows, const json &forget, bool wipe) {
+    Applied out;
+    const auto h = host_ ? host_() : nullptr;
+    if (!h) {
+        out.error = "модель не открыта";
+        return out;
     }
-    rows_[target] = state;
-    byChat_[key].insert(target);
-    storecrypt::appendLine(rowsPath_, state.dump());
-    if (++appended_ > std::max<std::size_t>(2000, rows_.size())) compactLocked();
-}
-
-void FileRowStore::erase(const std::vector<std::string> &ids) {
-    std::lock_guard<std::mutex> lk(mu_);
-    bool any = false;
-    for (const auto &id : ids) {
-        const auto it = rows_.find(id);
-        if (it == rows_.end()) continue;
-        byChat_[chatKeyOfState(it->second)].erase(id);
-        rows_.erase(it);
-        any = true;
+    json args{{"now_ms", std::to_string(systemNowMs())}};
+    if (ops.is_array() && !ops.empty()) args["ops_json"] = ops.dump();
+    if (legacyRows.is_array() && !legacyRows.empty()) args["rows_json"] = legacyRows.dump();
+    if (forget.is_array() && !forget.empty()) args["forget_json"] = forget.dump();
+    if (wipe) args["wipe"] = true;
+    const auto st = h->step("rowsApply", args);
+    if (!st.ok()) {
+        out.error = st.error;
+        return out;
     }
-    if (any) compactLocked();
-}
-
-void FileRowStore::forEachInChat(const std::string &chatKey, const std::function<void(const json &)> &f) {
-    std::vector<json> copy;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        const auto it = byChat_.find(chatKey);
-        if (it == byChat_.end()) return;
-        copy.reserve(it->second.size());
-        for (const auto &id : it->second) {
-            if (const auto r = rows_.find(id); r != rows_.end()) copy.push_back(r->second);
-        }
+    out.ok = true;
+    std::set<std::string> seen;
+    for (const auto &c : st.changes) {
+        const json *ch = nullptr;
+        if (c.contains("message_upsert") && c["message_upsert"].is_object()) ch = &c["message_upsert"];
+        else if (c.contains("message_remove") && c["message_remove"].is_object()) ch = &c["message_remove"];
+        if (!ch) continue;
+        const auto id = uuidOfB64(str(*ch, "id"));
+        if (!id.empty() && seen.insert(id).second) out.changed.push_back(id);
     }
-    for (const auto &s : copy) f(s);
+    return out;
 }
 
-void FileRowStore::forEach(const std::function<void(const json &)> &f) {
-    std::vector<json> copy;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        copy.reserve(rows_.size());
-        for (const auto &[id, s] : rows_) copy.push_back(s);
+void ModelRows::forget(const std::vector<std::string> &ids) {
+    json targets = json::array();
+    for (const auto &s : states(ids)) {
+        if (s.contains("chat") && s["chat"].is_object()) targets.push_back(json{{"chat", s["chat"]}, {"target", str(s, "target")}});
     }
-    for (const auto &s : copy) f(s);
-}
-
-std::size_t FileRowStore::size() {
-    std::lock_guard<std::mutex> lk(mu_);
-    return rows_.size();
-}
-
-std::optional<json> FileRowStore::mark(const std::string &chatKey) {
-    std::lock_guard<std::mutex> lk(mu_);
-    const auto it = marks_.find(chatKey);
-    if (it == marks_.end()) return std::nullopt;
-    return it->second;
-}
-
-void FileRowStore::setMark(const std::string &chatKey, const json &mark) {
-    std::lock_guard<std::mutex> lk(mu_);
-    marks_[chatKey] = mark;
-    saveMarksLocked();
-}
-
-void FileRowStore::forEachMark(const std::function<void(const std::string &, const json &)> &f) {
-    std::map<std::string, json> copy;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        copy = marks_;
+    for (std::size_t i = 0; i < targets.size(); i += kApplyChunk) {
+        apply(json::array(), json::array(),
+              json(std::vector<json>(targets.begin() + i, targets.begin() + std::min(targets.size(), i + kApplyChunk))));
     }
-    for (const auto &[k, m] : copy) f(k, m);
 }
 
-void FileRowStore::clear() {
-    std::lock_guard<std::mutex> lk(mu_);
-    rows_.clear();
-    byChat_.clear();
-    marks_.clear();
-    legacy_.clear();
-    compactLocked();
-    saveMarksLocked();
-}
-
-json FileRowStore::aux(const std::string &name) {
-    std::lock_guard<std::mutex> lk(mu_);
+json ModelRows::aux(const std::string &name) {
+    std::lock_guard<std::mutex> lk(auxMu_);
     if (const auto it = aux_.find(name); it != aux_.end()) return it->second;
     auto v = json::parse(storecrypt::readFile(auxPrefix_ + name + ".json"), nullptr, false);
     if (v.is_discarded()) v = nullptr;
@@ -361,38 +346,88 @@ json FileRowStore::aux(const std::string &name) {
     return v;
 }
 
-void FileRowStore::setAux(const std::string &name, const json &value) {
-    std::lock_guard<std::mutex> lk(mu_);
+void ModelRows::setAux(const std::string &name, const json &value) {
+    std::lock_guard<std::mutex> lk(auxMu_);
     aux_[name] = value;
     storecrypt::writeFile(auxPrefix_ + name + ".json", value.dump());
 }
 
-void FileRowStore::flush() {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (appended_ > 0) compactLocked();
+LegacyRowFiles readLegacyRowFiles(const std::string &rowsPath, const std::string &marksPath) {
+    LegacyRowFiles out;
+    std::map<std::string, json> states, stored;
+    for (const auto &line : storecrypt::readLines(rowsPath)) {
+        auto v = json::parse(line, nullptr, false);
+        if (!v.is_object()) continue;
+        if (const auto target = str(v, "target"); !target.empty()) {
+            states[target] = std::move(v); // дописывалось целым состоянием: последнее — сведённое
+        } else if (const auto id = str(v, "id"); !id.empty() && v.contains("content")) {
+            stored[id] = std::move(v); // журнал до spec 033 (StoredMessage)
+        }
+    }
+    for (auto &[id, s] : states) out.states.push_back(std::move(s));
+    for (auto &[id, s] : stored) out.storedMessages.push_back(std::move(s));
+    const auto marks = json::parse(storecrypt::readFile(marksPath), nullptr, false);
+    if (marks.is_object()) {
+        for (auto it = marks.begin(); it != marks.end(); ++it) {
+            if (it.value().is_object()) out.marks.push_back(it.value());
+        }
+    }
+    return out;
 }
 
-std::vector<json> FileRowStore::takeLegacyRows() {
-    std::lock_guard<std::mutex> lk(mu_);
-    return std::exchange(legacy_, {});
-}
-
-void FileRowStore::compact() {
-    std::lock_guard<std::mutex> lk(mu_);
-    compactLocked();
-}
-
-std::size_t FileRowStore::appendedSinceCompact() {
-    std::lock_guard<std::mutex> lk(mu_);
-    return appended_;
+bool importLegacyRows(ModelRows &rows, const std::string &rowsPath, const std::string &marksPath,
+                      const std::function<std::vector<json>(const std::vector<json> &stored)> &convertStored,
+                      const std::function<bool(const json &state)> &dropRow,
+                      const std::function<void(const std::string &)> &log) {
+    if (!rows.ready()) return false;
+    if (const auto done = rows.aux("imported"); done.is_object() && done.value("rows", false)) return true;
+    const auto files = readLegacyRowFiles(rowsPath, marksPath);
+    json legacy = json::array();
+    for (const auto &s : files.states) {
+        if (!dropRow || !dropRow(s)) legacy.push_back(json{{"hs", s}});
+    }
+    std::vector<json> ops = convertStored && !files.storedMessages.empty() ? convertStored(files.storedMessages)
+                                                                           : std::vector<json>();
+    for (const auto &m : files.marks) ops.push_back(json{{"read", m}});
+    for (std::size_t i = 0; i < legacy.size(); i += kApplyChunk) {
+        const auto r = rows.apply(json::array(),
+                                  json(std::vector<json>(legacy.begin() + i, legacy.begin() + std::min(legacy.size(), i + kApplyChunk))));
+        if (!r.ok) {
+            if (log) log("журнал истории: прежние строки не перенесены в модель: " + r.error);
+            return false;
+        }
+    }
+    for (std::size_t i = 0; i < ops.size(); i += kApplyChunk) {
+        const auto r = rows.apply(json(std::vector<json>(ops.begin() + i, ops.begin() + std::min(ops.size(), i + kApplyChunk))));
+        if (!r.ok) {
+            if (log) log("журнал истории: прежние операции не перенесены в модель: " + r.error);
+            return false;
+        }
+    }
+    // Строки, очищенные «у себя» после переноса spec 035 (модель их получила раньше, файл — уже без них)
+    std::size_t dropped = 0;
+    if (dropRow) {
+        std::vector<std::string> drop;
+        for (const auto &s : rows.all()) {
+            if (dropRow(s)) drop.push_back(str(s, "target"));
+        }
+        dropped = drop.size();
+        rows.forget(drop);
+    }
+    rows.setAux("imported", json{{"rows", true}, {"atMs", systemNowMs()}});
+    if (log) {
+        log("журнал истории: прежние строки устройства — в модели (строк " + std::to_string(legacy.size()) + ", операций "
+            + std::to_string(ops.size()) + ", убрано очищенных " + std::to_string(dropped) + ")");
+    }
+    return true;
 }
 
 // ── HistorySync ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 HistorySync::HistorySync(HistorySyncConfig cfg) : cfg_(std::move(cfg)) {
-    meta_ = cfg_.store ? cfg_.store->aux("meta") : json();
+    meta_ = cfg_.rows ? cfg_.rows->aux("meta") : json();
     if (!meta_.is_object()) meta_ = json::object();
-    const auto pending = cfg_.store ? cfg_.store->aux("pending") : json();
+    const auto pending = cfg_.rows ? cfg_.rows->aux("pending") : json();
     if (pending.is_object()) {
         if (pending.contains("ops") && pending["ops"].is_array()) {
             for (const auto &op : pending["ops"]) pendingOwn_.push_back(op);
@@ -456,7 +491,6 @@ void HistorySync::stop() {
     wake();
     if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) worker_.join();
     started_ = false;
-    if (cfg_.store) cfg_.store->flush();
 }
 
 void HistorySync::wake() {
@@ -572,108 +606,53 @@ bool HistorySync::seen(const std::string &key) {
 }
 
 void HistorySync::saveMetaLocked() {
-    if (cfg_.store) cfg_.store->setAux("meta", meta_);
+    if (cfg_.rows) cfg_.rows->setAux("meta", meta_);
 }
 
 void HistorySync::savePendingLocked() {
-    if (!cfg_.store) return;
+    if (!cfg_.rows) return;
     json marks = json::object();
     for (const auto &[k, m] : pendingMarks_) marks[k] = m;
     // Входящее ждёт пачки: на диске, чтобы остановка или падение процесса в этом окне его не теряли
     json incoming = json::array();
     for (const auto &x : incoming_) incoming.push_back(json{{"op", x.op}, {"key", x.key}});
-    cfg_.store->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}, {"incoming", incoming}, {"bodies", bodies_}});
+    cfg_.rows->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}, {"incoming", incoming}, {"bodies", bodies_}});
 }
 
-json HistorySync::applyToStore(const json &op, bool *changed) {
-    *changed = false;
-    const auto target = opTarget(op);
-    if (target.empty() || !cfg_.store) throw v2::EngineError(R"({"error":"InvalidField"})");
-    const auto prev = cfg_.store->get(target);
-    json args{{"op", op}};
-    if (prev) args["state"] = *prev;
-    auto next = call("historyApply", args);
-    if (prev && *prev == next) return next;
-    *changed = true;
-    cfg_.store->put(next);
-    return next;
-}
-
-bool HistorySync::mergeMark(const json &mark, std::string *chatKey) {
-    if (!mark.is_object() || !cfg_.store) return false;
-    const auto key = chatKeyOf(field(mark, "chat"));
-    if (key.empty()) return false;
-    if (chatKey) *chatKey = key;
-    const auto prev = cfg_.store->mark(key);
-    json args{{"b", mark}};
-    if (prev) args["a"] = *prev;
-    json merged;
-    try {
-        merged = call("historyMarkMerge", args);
-    } catch (const std::exception &e) {
-        log(std::string("маркер не сведён: ") + e.what());
-        return false;
+std::vector<json> HistorySync::applyOps(const std::vector<json> &ops, bool *ok) {
+    std::vector<json> out;
+    if (ok) *ok = true;
+    if (!cfg_.rows) {
+        if (ok) *ok = false;
+        return out;
     }
-    if (!merged.is_object() || (prev && *prev == merged)) return false;
-    cfg_.store->setMark(key, merged);
-    return true;
-}
-
-void HistorySync::releaseParked(const json &state, std::vector<json> *rows) {
-    const auto row = field(state, "row");
-    if (!row.is_object()) return;
-    std::vector<Parked> ready;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        const auto it = parked_.find(str(state, "target"));
-        if (it == parked_.end()) return;
-        ready = std::move(it->second);
-        parked_.erase(it);
-        parkedCount_ -= std::min(parkedCount_, ready.size());
-    }
-    const auto author = str(row, "from");
-    for (const auto &p : ready) {
-        if (p.author != author) {
-            log("мутация чужого сообщения отброшена (автор не совпал)");
+    for (std::size_t i = 0; i < ops.size(); i += kApplyChunk) {
+        const json batch(std::vector<json>(ops.begin() + i, ops.begin() + std::min(ops.size(), i + kApplyChunk)));
+        const auto r = cfg_.rows->apply(batch);
+        if (!r.ok) {
+            log("строки модели не приняли операции: " + r.error);
+            if (ok) *ok = false;
             continue;
         }
-        const auto st = record(p.op, p.own);
-        if (rows && st.is_object()) rows->push_back(st);
+        for (auto &s : cfg_.rows->states(r.changed)) out.push_back(std::move(s));
     }
+    return out;
 }
 
-json HistorySync::record(const json &op, bool own, const std::string &requiredAuthor) {
-    if (!requiredAuthor.empty()) {
-        const auto target = opTarget(op);
-        const auto prev = target.empty() || !cfg_.store ? std::nullopt : cfg_.store->get(target);
-        const auto &row = prev ? field(*prev, "row") : field(json(), "row");
-        if (prev && row.is_object()) {
-            if (str(row, "from") != requiredAuthor) {
-                log("мутация чужого сообщения отвергнута");
-                return nullptr;
-            }
-        } else {
-            std::lock_guard<std::mutex> lk(mu_);
-            if (parkedCount_ < kSeenCap) {
-                parked_[target].push_back(Parked{op, own, requiredAuthor});
-                ++parkedCount_;
-            }
-            return nullptr;
-        }
-    }
-    bool changed = false;
-    json st;
-    try {
-        st = applyToStore(op, &changed);
-    } catch (const std::exception &e) {
-        log(std::string("событие отвергнуто: ") + e.what());
+json HistorySync::record(const json &op, bool own) {
+    const auto target = opTarget(op);
+    if (target.empty() || !cfg_.rows) return nullptr;
+    const auto r = cfg_.rows->apply(json::array({op}));
+    if (!r.ok) {
+        log("событие не применено: " + r.error);
         return nullptr;
     }
-    if (op.contains("row")) {
-        std::vector<json> released;
-        releaseParked(st, &released);
-        if (!released.empty()) st = released.back();
+    const auto got = cfg_.rows->get(target);
+    if (!got) {
+        log("событие отвергнуто моделью (" + target + ")");
+        return nullptr;
     }
+    const auto st = *got;
     const auto key = opKey(op);
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -697,42 +676,31 @@ json HistorySync::record(const json &op, bool own, const std::string &requiredAu
 
 std::vector<json> HistorySync::advanceMark(const json &mark, bool own) {
     std::vector<json> out;
-    if (!mark.is_object() || !cfg_.store) return out;
+    if (!mark.is_object() || !cfg_.rows) return out;
     const auto key = chatKeyOf(field(mark, "chat"));
     if (key.empty()) return out;
-    const auto prev = cfg_.store->mark(key);
-    if (!mergeMark(mark, nullptr)) return out;
-    const auto merged = cfg_.store->mark(key);
-    if (own && merged) {
+    const auto prev = cfg_.rows->mark(key);
+    const auto r = cfg_.rows->apply(json::array({json{{"read", mark}}}));
+    if (!r.ok) {
+        log("маркер не принят моделью: " + r.error);
+        return out;
+    }
+    const auto read = cfg_.rows->read(key, prev ? *prev : json(nullptr));
+    if (!read.mark.is_object() || (prev && *prev == read.mark)) return out; // не сдвинулся
+    if (own) {
         std::lock_guard<std::mutex> lk(mu_);
-        pendingMarks_[key] = *merged;
+        pendingMarks_[key] = read.mark;
         batchDueLocked();
         savePendingLocked();
     }
-    // Входящие, которые этот сдвиг сделал прочитанными (квитанции собеседникам)
-    std::int64_t lo = std::numeric_limits<std::int64_t>::min(), hi = 0;
-    std::string loId, hiId;
-    const bool hasPrev = prev && markPos(*prev, &lo, &loId);
-    if (!merged || !markPos(*merged, &hi, &hiId)) return out;
-    const auto selves = selvesJson();
-    cfg_.store->forEachInChat(key, [&](const json &s) {
-        if (!visibleState(s)) return;
-        const auto p = rowPos(s);
-        if (!p || posAfter(p->tsMs, p->id, hi, hiId)) return;
-        if (hasPrev && !posAfter(p->tsMs, p->id, lo, loId)) return;
-        try {
-            json args{{"state", s}, {"self", selves}};
-            if (prev) args["mark"] = *prev;
-            if (call("historyIsUnread", args).get<bool>()) out.push_back(s);
-        } catch (const std::exception &) {
-        }
-    });
+    // Входящие, которые этот сдвиг сделал прочитанными (квитанции собеседникам) — решение модели
+    out = cfg_.rows->states(read.newlyRead);
     if (own) wake();
     return out;
 }
 
 std::optional<json> HistorySync::state(const std::string &id) {
-    return cfg_.store ? cfg_.store->get(id) : std::nullopt;
+    return cfg_.rows ? cfg_.rows->get(id) : std::nullopt;
 }
 
 json HistorySync::view(const json &state) {
@@ -745,39 +713,18 @@ json HistorySync::view(const json &state) {
 }
 
 json HistorySync::mark(const std::string &chatKey) {
-    if (!cfg_.store) return nullptr;
-    const auto m = cfg_.store->mark(chatKey);
+    if (!cfg_.rows) return nullptr;
+    const auto m = cfg_.rows->mark(chatKey);
     return m ? *m : json(nullptr);
 }
 
 ReadState HistorySync::readState(const std::string &chatKey) {
     ReadState out;
-    if (!cfg_.store) return out;
-    const auto m = cfg_.store->mark(chatKey);
-    out.mark = m ? *m : json(nullptr);
-    std::int64_t mts = 0, bestTs = std::numeric_limits<std::int64_t>::min();
-    std::string mid, bestId;
-    const bool hasMark = m && markPos(*m, &mts, &mid);
-    const auto selves = selvesJson();
-    cfg_.store->forEachInChat(chatKey, [&](const json &s) {
-        if (!visibleState(s)) return;
-        const auto p = rowPos(s);
-        if (!p) return;
-        if (hasMark && !posAfter(p->tsMs, p->id, mts, mid)) {
-            if (posAfter(p->tsMs, p->id, bestTs, bestId)) {
-                bestTs = p->tsMs;
-                bestId = p->id;
-            }
-            return;
-        }
-        try {
-            json args{{"state", s}, {"self", selves}};
-            if (hasMark) args["mark"] = *m;
-            if (call("historyIsUnread", args).get<bool>()) ++out.unread;
-        } catch (const std::exception &) {
-        }
-    });
-    out.lastReadId = bestId;
+    if (!cfg_.rows) return out;
+    const auto r = cfg_.rows->read(chatKey);
+    out.unread = r.unread;
+    out.lastReadId = r.lastReadId;
+    out.mark = r.mark;
     return out;
 }
 
@@ -786,39 +733,61 @@ int HistorySync::unreadCount(const std::string &chatKey) {
 }
 
 void HistorySync::absorbOps(const json &ops, std::vector<json> &rows, std::map<std::string, json> &marks) {
-    if (!ops.is_array()) return;
+    if (!ops.is_array() || !cfg_.rows) return;
+    // Прежние состояния целей (для границы очистки «у себя») — одной выборкой
+    std::map<std::string, json> known;
+    if (cfg_.dropRow) {
+        std::vector<std::string> targets;
+        for (const auto &op : ops) {
+            if (const auto t = opTarget(op); !t.empty()) targets.push_back(t);
+        }
+        for (auto &s : cfg_.rows->states(targets)) {
+            auto id = str(s, "target"); // ключ — до переноса (правая часть «a = b» вычисляется первой)
+            known[std::move(id)] = std::move(s);
+        }
+    }
+    std::vector<json> list;
+    std::set<std::string> markChats;
     for (const auto &op : ops) {
         const auto [kind, body] = opKind(op);
         if (!body || kind == "summary") continue;
         if (kind == "read") {
-            std::string key;
-            if (mergeMark(*body, &key)) marks[key] = *cfg_.store->mark(key);
+            markChats.insert(chatKeyOf(field(*body, "chat")));
+            list.push_back(op);
             continue;
         }
         noteSeen(op);
         // Строка очищенного «у себя» чата (граница ChatCleared) — не храним
         if (cfg_.dropRow) {
             const auto target = opTarget(op);
-            const auto prev = target.empty() ? std::nullopt : cfg_.store->get(target);
-            if (prev && cfg_.dropRow(*prev)) continue;
+            if (const auto it = known.find(target); it != known.end() && cfg_.dropRow(it->second)) continue;
             if (kind == "row" || kind == "state") {
                 const auto probe = kind == "state" ? *body : json{{"target", target}, {"chat", field(*body, "chat")}, {"row", *body}};
                 if (cfg_.dropRow(probe)) continue;
             }
         }
-        bool changed = false;
-        json st;
-        try {
-            st = applyToStore(op, &changed);
-        } catch (const std::exception &e) {
-            log(std::string("операция журнала отвергнута: ") + e.what());
-            continue;
-        }
-        if (changed) rows.push_back(st);
-        if (kind == "row" || kind == "state") releaseParked(st, &rows);
+        list.push_back(op);
+        // Своё сообщение (с любого своего устройства) сдвигает маркер чата до себя (FR-011)
         if (kind == "row" && isSelf(str(*body, "from"))) {
-            std::string key;
-            if (const auto m = markAt(st); m.is_object() && mergeMark(m, &key)) marks[key] = *cfg_.store->mark(key);
+            const auto chat = field(*body, "chat");
+            const auto id = str(*body, "id");
+            if (chat.is_object() && !id.empty()) {
+                list.push_back(json{{"read", {{"chat", chat}, {"up_to_ts_ms", std::to_string(i64(field(*body, "ts_ms")))}, {"up_to_id", id}}}});
+                markChats.insert(chatKeyOf(chat));
+            }
+        }
+    }
+    if (list.empty()) return;
+    std::map<std::string, json> before;
+    if (!markChats.empty()) {
+        for (const auto &m : cfg_.rows->marks()) before[chatKeyOf(field(m, "chat"))] = m;
+    }
+    for (auto &s : applyOps(list)) rows.push_back(std::move(s));
+    if (!markChats.empty()) {
+        for (const auto &m : cfg_.rows->marks()) {
+            const auto key = chatKeyOf(field(m, "chat"));
+            if (!markChats.count(key)) continue;
+            if (const auto it = before.find(key); it == before.end() || it->second != m) marks[key] = m;
         }
     }
 }
@@ -903,25 +872,28 @@ bool HistorySync::migrateLocked() {
         std::lock_guard<std::mutex> lk(mu_);
         if (meta_.value("migrated", false)) return true;
     }
+    // Строки — в модели: пока она не открыта, переносить нечего (и отметку не ставить)
+    if (!cfg_.rows || !cfg_.rows->ready()) return false;
     auto ops = cfg_.legacyOps ? cfg_.legacyOps() : std::vector<json>();
-    std::map<std::string, json> states;
-    std::map<std::string, json> marks;
+    // В модель (сведение с известным — модель), в журнал — сведённые состояния и маркеры модели
+    bool applied = true;
+    (void)applyOps(ops, &applied);
+    if (!applied) return false;
+    std::vector<std::string> targets;
+    std::set<std::string> markChats;
     for (const auto &op : ops) {
-        if (op.contains("read") && op["read"].is_object()) {
-            std::string key;
-            mergeMark(op["read"], &key);
-            if (!key.empty()) {
-                if (const auto m = cfg_.store->mark(key)) marks[key] = *m;
-            }
-            continue;
-        }
-        bool changed = false;
-        try {
-            const auto st = applyToStore(op, &changed);
-            states[str(st, "target")] = st;
-        } catch (const std::exception &e) {
-            log(std::string("перенос: строка пропущена: ") + e.what());
-        }
+        if (op.contains("read") && op["read"].is_object()) markChats.insert(chatKeyOf(field(op["read"], "chat")));
+        else if (const auto t = opTarget(op); !t.empty()) targets.push_back(t);
+    }
+    std::map<std::string, json> states;
+    for (auto &st : cfg_.rows->states(targets)) {
+        auto id = str(st, "target"); // ключ — до переноса
+        states[std::move(id)] = std::move(st);
+    }
+    std::map<std::string, json> marks;
+    for (const auto &m : cfg_.rows->marks()) {
+        const auto key = chatKeyOf(field(m, "chat"));
+        if (markChats.count(key)) marks[key] = m;
     }
     std::lock_guard<std::mutex> lk(mu_);
     for (const auto &[k, m] : marks) pendingMarks_[k] = m;
@@ -981,7 +953,11 @@ bool HistorySync::loadCheckpointLocked(const json &cp, bool isJoin) {
     }
     if (replace) {
         log("устройство не синхронизировалось дольше горизонта — история заменяется контрольной точкой");
-        cfg_.store->clear();
+        const auto wiped = cfg_.rows ? cfg_.rows->apply(json::array(), json::array(), json::array(), true) : ModelRows::Applied();
+        if (!wiped.ok) {
+            log("замена не выполнена — строки модели не стёрты: " + wiped.error);
+            return false;
+        }
     }
     std::vector<json> rows;
     std::map<std::string, json> marks;
@@ -1367,11 +1343,12 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
         }
     }
     if (forced || !known.is_object()) known = json::object();
-    // Все строки хранилища (без очищенных «у себя»), за горизонтом — без надгробий и сирот
+    // Все строки модели (без очищенных «у себя»), за горизонтом — без надгробий и сирот
+    if (!cfg_.rows || !cfg_.rows->ready()) return false;
     json states = json::array();
-    cfg_.store->forEach([&](const json &s) {
-        if (!cfg_.dropRow || !cfg_.dropRow(s)) states.push_back(s);
-    });
+    for (auto &s : cfg_.rows->all()) {
+        if (!cfg_.dropRow || !cfg_.dropRow(s)) states.push_back(std::move(s));
+    }
     states = call("historyCompact", json{{"states", states}, {"nowMs", t}});
     std::map<std::string, std::vector<json>> bySegment;
     std::map<std::string, std::vector<json>> byChat;
@@ -1455,15 +1432,18 @@ bool HistorySync::buildCheckpointLocked(const json &head) {
                 last = &s;
             }
         }
-        json c{{"chat", field(list.front(), "chat")}, {"unread", unreadCount(chatKey)}, {"rows", list.size()}};
+        const auto read = cfg_.rows->read(chatKey);
+        json c{{"chat", field(list.front(), "chat")}, {"unread", read.unread}, {"rows", list.size()}};
         if (last) c["last"] = *last;
-        if (const auto m = cfg_.store->mark(chatKey)) c["mark"] = *m;
+        if (read.mark.is_object()) c["mark"] = read.mark;
         chats.push_back(std::move(c));
     }
     // Маркеры чатов без строк (всё за горизонтом) — тоже в сводку
-    cfg_.store->forEachMark([&](const std::string &chatKey, const json &m) {
-        if (!byChat.count(chatKey)) chats.push_back(json{{"chat", field(m, "chat")}, {"mark", m}, {"unread", 0}, {"rows", 0}});
-    });
+    for (const auto &m : cfg_.rows->marks()) {
+        if (!byChat.count(chatKeyOf(field(m, "chat")))) {
+            chats.push_back(json{{"chat", field(m, "chat")}, {"mark", m}, {"unread", 0}, {"rows", 0}});
+        }
+    }
     // S7-4: сводка называет свой будущий номер (голова + 1), id точки и цепочки писателей; другой номер — журнал
     // дописан во время сборки, точка откладывается
     const auto headResp = req("history.head", v2::fromBase64(engine("headRequest", json::object()).get<std::string>()));

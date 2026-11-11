@@ -210,9 +210,9 @@ std::string elementKey(const json &element) {
     return "h:" + sha256Hex(canonicalJson(element)).substr(0, 16);
 }
 
-void addRowStore(Sources &sources, history::RowStore &store) {
-    store.forEach([&](const json &state) { sources.rows.push_back(state); });
-    store.forEachMark([&](const std::string &, const json &mark) { sources.marks.push_back(mark); });
+void addModelRows(Sources &sources, const history::ModelRows &rows) {
+    for (auto &state : rows.all()) sources.rows.push_back(std::move(state));
+    for (auto &mark : rows.marks()) sources.marks.push_back(std::move(mark));
 }
 
 std::vector<Line> build(const Sources &src) {

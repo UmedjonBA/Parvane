@@ -355,11 +355,13 @@ ChatData *AnnouncePublicCard(not_null<Main::Session*> session, const parvane::js
 [[nodiscard]] bool HeadlessUi();
 
 // ── журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2; parvane_client_history.cpp) ──
-// Хранилище строк RowState и журнал ядра (parvane::history::HistorySync) текущего аккаунта; прежний журнал
-// (StoredMessage построчно) и parvane-read.txt переводятся один раз. Без сети; не под g_sessionMutex.
+// Строки — модель движка профиля (spec 035 T125: ModelRows ядра над моделью сессии v2), журнал ядра
+// (parvane::history::HistorySync) текущего аккаунта; прежние файлы строк (RowState spec 033, StoredMessage до него)
+// и parvane-read.txt переносятся в модель один раз. Модель ждётся своим потоком; не под g_sessionMutex.
 void EnsureHistory(const QString &self);
-void StartHistorySync(const QString &self); // рабочий поток журнала (после подъёма v2-сессии)
-void WaitHistoryReady();                    // хранилище открыто и прежний журнал перенесён (не главный поток)
+void StartHistorySync(const QString &self); // рабочий поток журнала (после подъёма v2-сессии; по готовности модели)
+// Модель ещё не открыта (или прежнее переносится): task — по готовности, true. false — готово (или журнала нет).
+bool DeferHistoryUntilReady(std::function<void()> task);
 void StopHistorySync();                     // выход, сброс, смена адреса: не ждёт (поток журнала дорабатывает фоном)
 [[nodiscard]] std::shared_ptr<parvane::history::HistorySync> HistorySyncNow();
 void OnHistorySessionEvent(const parvane::json &ev); // journal:history, stateReady
@@ -381,15 +383,15 @@ void NoteHistoryGroupDomain(const QString &address, const std::string &domain, b
 // Сообщение → строка журнала (own — отправлено этим устройством, иначе входящее). tsMs — точное время (0 — sm.ts).
 // Исчезающее и нерасшифрованное не пишется. Результат — RowState или null.
 parvane::json HistoryRecordMessage(const parvane::StoredMessage &sm, bool own, std::int64_t tsMs = 0);
-// Мутация (gone/edit/react/pin) → строка. Автор чужой мутации — в самой операции (by): сверяет движок.
-// requiredAuthor — запасная проверка ядра в памяти (desktop не использует).
-parvane::json HistoryRecordOp(const parvane::json &op, bool own, const std::string &requiredAuthor = std::string());
+// Мутация (gone/edit/react/pin) → строка модели. Автор чужой мутации — в самой операции (by): сверяет модель.
+parvane::json HistoryRecordOp(const parvane::json &op, bool own);
 [[nodiscard]] std::optional<parvane::json> HistoryState(const QString &uuid);
 // RowState → строка клиента по historyView (удалённое — deleted = true; сирота — nullopt).
 [[nodiscard]] std::optional<parvane::StoredMessage> StoredFromHistory(
 	const parvane::json &state,
 	parvane::json *viewOut = nullptr);
 [[nodiscard]] std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress);
+[[nodiscard]] std::vector<parvane::json> HistoryStatesOf(const std::vector<std::string> &uuids); // строки по id (модель)
 [[nodiscard]] std::vector<parvane::json> HistoryAllStates();
 [[nodiscard]] std::vector<QString> HistoryMarkedChats();
 void HistoryEraseLocal(const QSet<QString> &uuids); // очистка чата «у себя»: строки — только с устройства

@@ -1,13 +1,16 @@
-// Parvane fork: журнал истории аккаунта (spec 033; правила HIST-1, HIST-2, READ-2) — хранилище строк tdesktop и
-// жизненный цикл `parvane::history::HistorySync` ядра. Сведение строк, маркер прочтения, подсчёт непрочитанного и
-// права удаления — в движке; здесь — пути файлов, собеседник журнала по адресу чата, перенос прежнего журнала
-// (`parvane-history-*.jsonl` до spec 033 и `parvane-read.txt`) и мост к UI (parvane_client.cpp: ShowHistoryStates,
-// ApplyReadState, ReplaceHistoryOnMain).
+// Parvane fork: журнал истории аккаунта (spec 033; правила HIST-1, HIST-2, READ-2) — строки истории tdesktop и
+// жизненный цикл `parvane::history::HistorySync` ядра. Строки, их сведение, маркеры «прочитано до», непрочитанное и
+// хранение — модель движка профиля (spec 035 T125, ENGINE-1: `ModelRows` ядра над моделью сессии v2 — та же, что
+// держит клиентское ядро; без сети — по прошлому открытию); права удаления — движок. Здесь — собеседник журнала по
+// адресу чата, разовый перенос прежних файлов строк в модель (spec 033 RowState, журнал до spec 033 и
+// `parvane-read.txt`) и мост к UI (parvane_client.cpp: ShowHistoryStates, ApplyReadState, ReplaceHistoryOnMain).
 //
 // Файлы аккаунта (шифрует storecrypt):
-//   tdata/parvane-history-<адрес>.jsonl        — строки RowState (дозапись + свёртка, ядро FileRowStore);
-//   tdata/parvane-readmarks-<адрес>.json       — маркеры «прочитано до» по чатам;
-//   tdata/parvane-history-sync-<адрес>-meta.json / -pending.json — курсор, голова, точка, флаг переноса, очередь своих.
+//   tdata/parvane-history-<адрес>.jsonl        — прежние строки (RowState, до spec 033 — StoredMessage): только
+//                                                 читаются один раз при переносе в модель, не удаляются (D2);
+//   tdata/parvane-readmarks-<адрес>.json       — прежние маркеры «прочитано до» (так же);
+//   tdata/parvane-history-sync-<адрес>-meta.json / -pending.json / -imported.json — курсор, голова, точка, флаг
+//                                                 переноса, очередь своих, отметка переноса строк в модель.
 #include "parvane/parvane_client_internal.h"
 
 #include <cstdio>
@@ -17,25 +20,29 @@
 #include <parvane/history_sync.h>
 #include <parvane/test_counters.h>
 #include <parvane/v2_engine.h>
+#include <parvane/v2_session.h>
+
+#include <thread>
 
 namespace Parvane {
 namespace Internal {
 namespace {
 
-// Под g_historyMutex держатся только короткие операции (файлы читаются и переносятся вне его): главный поток
+// Под g_historyMutex держатся только короткие операции (модель ждётся и прежнее переносится вне его): главный поток
 // берёт его на каждом событии.
 std::mutex g_historyMutex; // всё ниже до g_historyCv
-std::shared_ptr<parvane::history::FileRowStore> g_historyStore;
+std::shared_ptr<parvane::history::ModelRows> g_historyStore;
 std::shared_ptr<parvane::history::HistorySync> g_historySync;
 QString g_historyOwner;     // аккаунт хранилища (или создаваемого прямо сейчас)
 bool g_historyCreating = false;
-bool g_historyReady = false; // хранилище открыто и прежний журнал перенесён
+bool g_historyReady = false; // модель открыта и прежние строки перенесены в неё
 bool g_historyStarted = false;
 std::vector<std::function<void()>> g_historyDeferred; // записи, пришедшие до готовности (по порядку)
 std::condition_variable g_historyCv;
 constexpr std::size_t kHistoryDeferredMax = 20000;
+constexpr auto kModelPoll = std::chrono::milliseconds(300);
 
-[[nodiscard]] std::shared_ptr<parvane::history::FileRowStore> StoreNow() {
+[[nodiscard]] std::shared_ptr<parvane::history::ModelRows> StoreNow() {
 	std::lock_guard<std::mutex> lk(g_historyMutex);
 	return g_historyStore;
 }
@@ -116,28 +123,18 @@ QString g_ownDomain; // домен своего адреса — группе б
 	return pos && until > 0 && pos->tsMs <= until;
 }
 
-// Прежний журнал (StoredMessage построчно, до spec 033) и журнал прочитанного READ-1 → строки и маркеры хранилища.
-// Один раз: строки берутся из файла и после свёртки там уже RowState; журнал прочитанного удаляется.
-void ConvertLegacyLocked(parvane::history::FileRowStore &store, const QString &self) {
-	auto legacy = store.takeLegacyRows();
+// Прежний журнал (StoredMessage построчно, до spec 033; последняя строка по id) и журнал прочитанного READ-1 →
+// операции для модели: строка (row) и маркер «прочитано до» прочитанного (read). Сведение строк и маркеров (максимум)
+// — модель. Журнал прочитанного после переноса удаляется; файл строк остаётся как был (переносится один раз).
+[[nodiscard]] std::vector<parvane::json> ConvertLegacyOps(const std::vector<parvane::json> &stored, const QString &self) {
 	auto readIds = QSet<QString>();
 	for (const auto &line : StoreReadLines(LegacyReadPath())) {
 		readIds.insert(line.trimmed());
 	}
-	if (legacy.empty() && readIds.isEmpty()) {
-		return;
-	}
 	const auto selfStd = self.toStdString();
-	auto last = std::map<std::string, parvane::json>(); // id → последняя строка (журнал дописывался)
-	for (auto &row : legacy) {
-		// Ключ — до переноса: в `a = b` (C++17) правая часть вычисляется первой, и operator= по значению
-		// опустошил бы `row` раньше `row.value("id")` (4 ноя 2026: падение при первом запуске на прежнем журнале)
-		auto id = row.value("id", std::string());
-		last[std::move(id)] = std::move(row);
-	}
+	auto ops = std::vector<parvane::json>();
 	auto converted = 0;
-	auto marks = std::map<std::string, parvane::json>();
-	for (const auto &[id, row] : last) {
+	for (const auto &row : stored) {
 		try {
 			const auto sm = parvane::StoredMessage::fromJson(row);
 			if (sm.deleted || !JournaledContent(sm.content) || sm.from.empty() || sm.to.empty()) {
@@ -154,38 +151,39 @@ void ConvertLegacyLocked(parvane::history::FileRowStore &store, const QString &s
 				continue;
 			}
 			const auto op = parvane::history::rowOpFromWire(WireRow(sm, 0), peer);
-			auto state = parvane::history::call("historyApply", { { "op", op } });
-			if (const auto prev = store.get(sm.id)) {
-				state = parvane::history::call("historyMerge", { { "a", *prev }, { "b", state } });
-			}
-			store.put(state);
+			ops.push_back(op);
 			++converted;
 			// Прочитано: своё, отмеченное прочитанным в журнале или в журнале прочитанного этого устройства
 			if (sm.from == selfStd || sm.read || readIds.contains(QString::fromStdString(sm.id))) {
-				const auto mark = parvane::history::markAt(state);
-				const auto key = parvane::history::chatKeyOfState(state);
-				auto &cur = marks[key];
-				cur = parvane::history::call("historyMarkMerge", cur.is_null()
-					? parvane::json{ { "b", mark } }
-					: parvane::json{ { "a", cur }, { "b", mark } });
+				const auto &r = op["row"];
+				ops.push_back({ { "read", {
+					{ "chat", peer },
+					{ "up_to_ts_ms", r.value("ts_ms", std::string("0")) },
+					{ "up_to_id", r.value("id", std::string()) },
+				} } });
 			}
 		} catch (const std::exception &e) {
 			LOG(("Parvane: журнал истории: строка прежнего журнала не перенесена: %1").arg(QString::fromUtf8(e.what())));
 		}
 	}
-	for (const auto &[key, mark] : marks) {
-		if (!mark.is_object()) {
-			continue;
-		}
-		const auto prev = store.mark(key);
-		store.setMark(key, prev
-			? parvane::history::call("historyMarkMerge", { { "a", *prev }, { "b", mark } })
-			: mark);
-	}
-	store.compact();
 	QFile::remove(LegacyReadPath());
-	LOG(("Parvane: журнал истории: прежний журнал переведён в строки RowState (%1 строк, маркеров %2)")
-		.arg(converted).arg(int(marks.size())));
+	LOG(("Parvane: журнал истории: прежний журнал (до spec 033) — в модель (%1 строк)").arg(converted));
+	return ops;
+}
+
+// Модель профиля для строк истории (сессия v2 этого поколения аккаунта; без сети — по прошлому открытию).
+[[nodiscard]] parvane::history::ModelRows::HostFn RowsHostFor(std::uint64_t generation) {
+	return [generation]() -> std::shared_ptr<parvane::engine::Host> {
+		if (!AccountGenerationIs(generation)) {
+			return nullptr;
+		}
+		auto s = std::shared_ptr<parvane::v2::Session>();
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			s = g_v2;
+		}
+		return s ? s->rowsModel() : nullptr;
+	};
 }
 
 } // namespace
@@ -298,14 +296,13 @@ void EnsureHistory(const QString &self) {
 		return;
 	}
 	EnsureStoreKey();
-	// Открытие файла и перенос прежнего журнала — вне замка (не главный поток: ReplayHistory, StartHistorySync)
-	auto store = std::make_shared<parvane::history::FileRowStore>(
-		rows.toStdString(), marks.toStdString(), aux.toStdString());
+	const auto generation = AccountGeneration();
+	// Строки — в модели профиля сессии v2 (её открывает сессия; без сети — по прошлому открытию)
+	auto store = std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString());
 
 	auto cfg = parvane::history::HistorySyncConfig();
 	cfg.self = self.toStdString();
-	cfg.store = store.get();
-	const auto generation = AccountGeneration();
+	cfg.rows = store.get();
 	// Запросы прежнего аккаунта после выхода не уходят: поток журнала дорабатывает без сети
 	cfg.request = [generation](const std::string &method, const std::string &body) {
 		const auto s = AccountGenerationIs(generation) ? V2Ready() : nullptr;
@@ -350,17 +347,17 @@ void EnsureHistory(const QString &self) {
 		});
 	};
 	// Перенос (FR-024): всё, что устройство знает, — в журнал один раз (повторы с других устройств сводятся).
-	// Хранилище своё (не глобальное): живёт, пока поток этого журнала не остановлен.
+	// Строки — модели (не глобальные): живут, пока поток этого журнала не остановлен.
 	cfg.legacyOps = [raw = store.get()] {
 		auto ops = std::vector<parvane::json>();
-		raw->forEach([&](const parvane::json &s) {
+		for (auto &s : raw->all()) {
 			if (!IsClearedRow(s)) {
-				ops.push_back({ { "state", s } });
+				ops.push_back({ { "state", std::move(s) } });
 			}
-		});
-		raw->forEachMark([&](const std::string &, const parvane::json &m) {
-			ops.push_back({ { "read", m } });
-		});
+		}
+		for (auto &m : raw->marks()) {
+			ops.push_back({ { "read", std::move(m) } });
+		}
 		return ops;
 	};
 	cfg.dropRow = [](const parvane::json &state) { return IsClearedRow(state); };
@@ -388,35 +385,74 @@ void EnsureHistory(const QString &self) {
 		g_historyStore = store;
 		g_historySync = sync;
 	}
-	// Записи, пришедшие во время переноса, ложатся сразу в хранилище (сведение коммутативно); перенос — тоже
-	ConvertLegacyLocked(*store, self);
-	// Снимок истории прежнего механизма (spec 015) больше не применяется — его отметка не нужна
-	QFile::remove(AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q));
-	auto deferred = std::vector<std::function<void()>>();
-	{
-		std::lock_guard<std::mutex> lk(g_historyMutex);
-		if (g_historyStore != store) {
+	// Модель открывает сессия v2 (подключение) либо открытие без сети по прошлому разу — ждём её своим потоком (не
+	// пулом crl: без сети ожидание длится до подключения); события до готовности откладываются (DeferUntilReady)
+	std::thread([self, generation, store, rows, marks] {
+		const auto owned = [&] {
+			std::lock_guard<std::mutex> lk(g_historyMutex);
+			return g_historyStore == store && AccountGenerationIs(generation);
+		};
+		auto tried = false;
+		while (owned() && !store->ready()) {
+			if (!tried) {
+				auto s = std::shared_ptr<parvane::v2::Session>();
+				{
+					std::lock_guard<std::mutex> lk(g_v2Mutex);
+					s = g_v2;
+				}
+				tried = s && s->openModelOffline();
+			}
+			std::this_thread::sleep_for(kModelPoll);
+		}
+		if (!owned()) {
 			return;
 		}
-		g_historyCreating = false;
-		g_historyReady = true;
-		deferred = std::move(g_historyDeferred);
-		g_historyDeferred.clear();
-		g_historyCv.notify_all();
-	}
-	for (const auto &task : deferred) {
-		task();
-	}
+		// Прежние файлы строк (spec 033) и журнал до spec 033 — в модель один раз (сведение — модель)
+		const auto log = [](const std::string &m) { LOG(("Parvane: %1").arg(QString::fromStdString(m))); };
+		if (!parvane::history::importLegacyRows(
+				*store,
+				rows.toStdString(),
+				marks.toStdString(),
+				[self](const std::vector<parvane::json> &stored) { return ConvertLegacyOps(stored, self); },
+				[](const parvane::json &state) { return IsClearedRow(state); },
+				log)) {
+			LOG(("Parvane: журнал истории: прежние строки не перенесены в модель — повтор при следующем запуске"));
+		}
+		// Снимок истории прежнего механизма (spec 015) больше не применяется — его отметка не нужна
+		QFile::remove(AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q));
+		auto deferred = std::vector<std::function<void()>>();
+		{
+			std::lock_guard<std::mutex> lk(g_historyMutex);
+			if (g_historyStore != store) {
+				return;
+			}
+			g_historyCreating = false;
+			g_historyReady = true;
+			deferred = std::move(g_historyDeferred);
+			g_historyDeferred.clear();
+			g_historyCv.notify_all();
+		}
+		for (const auto &task : deferred) {
+			task();
+		}
+	}).detach();
 }
 
-void WaitHistoryReady() {
-	std::unique_lock<std::mutex> lk(g_historyMutex);
-	g_historyCv.wait_for(lk, std::chrono::minutes(5), [] { return g_historyReady || !g_historyCreating; });
+bool DeferHistoryUntilReady(std::function<void()> task) {
+	{
+		std::lock_guard<std::mutex> lk(g_historyMutex);
+		if (!g_historyReady && !g_historyCreating) {
+			return false; // журнала нет (нет аккаунта) — ждать нечего
+		}
+	}
+	return DeferUntilReady(std::move(task));
 }
 
 void StartHistorySync(const QString &self) {
 	EnsureHistory(self);
-	WaitHistoryReady();
+	if (DeferUntilReady([self] { StartHistorySync(self); })) {
+		return; // модель ещё не открыта — запуск по готовности
+	}
 	std::shared_ptr<parvane::history::HistorySync> sync;
 	{
 		std::lock_guard<std::mutex> lk(g_historyMutex);
@@ -434,7 +470,7 @@ void StartHistorySync(const QString &self) {
 // сменилось), хранилище разрушается после остановки потока. Главный поток (выход) не блокируется.
 void StopHistorySync() {
 	std::shared_ptr<parvane::history::HistorySync> sync;
-	std::shared_ptr<parvane::history::FileRowStore> store;
+	std::shared_ptr<parvane::history::ModelRows> store;
 	{
 		std::lock_guard<std::mutex> lk(g_historyMutex);
 		sync = std::move(g_historySync);
@@ -497,16 +533,16 @@ parvane::json HistoryRecordMessage(const parvane::StoredMessage &sm, bool own, s
 	}
 }
 
-parvane::json HistoryRecordOp(const parvane::json &op, bool own, const std::string &requiredAuthor) {
-	if (DeferUntilReady([op, own, requiredAuthor] {
-			if (const auto next = HistoryRecordOp(op, own, requiredAuthor); next.is_object()) {
+parvane::json HistoryRecordOp(const parvane::json &op, bool own) {
+	if (DeferUntilReady([op, own] {
+			if (const auto next = HistoryRecordOp(op, own); next.is_object()) {
 				crl::on_main([next] { ShowHistoryStates({ next }); });
 			}
 		})) {
 		return nullptr;
 	}
 	const auto sync = HistorySyncNow();
-	return sync ? sync->record(op, own, requiredAuthor) : parvane::json(nullptr);
+	return sync ? sync->record(op, own) : parvane::json(nullptr);
 }
 
 std::optional<parvane::json> HistoryState(const QString &uuid) {
@@ -566,30 +602,26 @@ std::optional<parvane::StoredMessage> StoredFromHistory(const parvane::json &sta
 }
 
 std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress) {
-	auto out = std::vector<parvane::json>();
-	if (const auto store = StoreNow()) {
-		store->forEachInChat(HistoryChatKey(chatAddress).toStdString(), [&](const parvane::json &s) {
-			out.push_back(s);
-		});
-	}
-	return out;
+	const auto store = StoreNow();
+	return store ? store->chat(HistoryChatKey(chatAddress).toStdString()) : std::vector<parvane::json>();
+}
+
+std::vector<parvane::json> HistoryStatesOf(const std::vector<std::string> &uuids) {
+	const auto store = StoreNow();
+	return store ? store->states(uuids) : std::vector<parvane::json>();
 }
 
 std::vector<parvane::json> HistoryAllStates() {
-	auto out = std::vector<parvane::json>();
-	if (const auto store = StoreNow()) {
-		out.reserve(store->size());
-		store->forEach([&](const parvane::json &s) { out.push_back(s); });
-	}
-	return out;
+	const auto store = StoreNow();
+	return store ? store->all() : std::vector<parvane::json>();
 }
 
 std::vector<QString> HistoryMarkedChats() {
 	auto out = std::vector<QString>();
 	if (const auto store = StoreNow()) {
-		store->forEachMark([&](const std::string &, const parvane::json &m) {
+		for (const auto &m : store->marks()) {
 			out.push_back(HistoryChatAddress(m.value("chat", parvane::json())));
-		});
+		}
 	}
 	return out;
 }
@@ -604,7 +636,7 @@ void HistoryEraseLocal(const QSet<QString> &uuids) {
 		ids.push_back(u.toStdString());
 	}
 	if (const auto store = StoreNow()) {
-		store->erase(ids);
+		store->forget(ids); // у себя без надгробия (модель); в журнале аккаунта строки остаются
 	}
 }
 
@@ -618,7 +650,7 @@ void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress) {
 		}
 	};
 	move(ReadMarksPath(oldAddress), ReadMarksPath(newAddress));
-	for (const auto &name : { u"meta.json"_q, u"pending.json"_q }) {
+	for (const auto &name : { u"meta.json"_q, u"pending.json"_q, u"imported.json"_q }) {
 		const auto from = SyncAuxPrefix(oldAddress);
 		const auto to = SyncAuxPrefix(newAddress);
 		if (!from.isEmpty() && !to.isEmpty()) {
@@ -635,7 +667,7 @@ std::atomic<bool> g_auditDumpStarted = false;
 [[nodiscard]] std::string WriteAuditDump(const std::string &path) {
 	parvane::audit::Sources src;
 	if (const auto store = StoreNow()) {
-		parvane::audit::addRowStore(src, *store);
+		parvane::audit::addModelRows(src, *store);
 	}
 	const auto self = SelfAddress().toStdString();
 	if (const auto s = V2Ready()) {
