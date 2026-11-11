@@ -194,6 +194,7 @@ struct Ref;
 struct Root;
 struct RowsAllRequest;
 struct RowsApply;
+struct RowsReadRequest;
 struct ServerInput;
 struct StateChanged;
 struct StateObjectView;
@@ -511,6 +512,8 @@ struct RowsAllRequest {
     bool views = false;
     bool states = false;
     bool marks = false;
+    std::string chat_key;
+    std::vector<std::string> ids;
 };
 void to_json(nlohmann::json &j, const RowsAllRequest &m);
 void from_json(const nlohmann::json &j, RowsAllRequest &m);
@@ -525,6 +528,13 @@ struct RowsApply {
 };
 void to_json(nlohmann::json &j, const RowsApply &m);
 void from_json(const nlohmann::json &j, RowsApply &m);
+
+struct RowsReadRequest {
+    std::string chat_key;
+    std::string since_json;
+};
+void to_json(nlohmann::json &j, const RowsReadRequest &m);
+void from_json(const nlohmann::json &j, RowsReadRequest &m);
 
 struct ServerInput {
     ServerInputKind kind = {};

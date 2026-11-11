@@ -230,3 +230,40 @@ fn rows_batch_does_not_carry_client_and_needs_host_mode() {
     let (mut e2, _) = h2.open(&c);
     assert!(call(&mut e2, "rowsApply", &json!({"ops_json": "[]"})).is_err());
 }
+
+// spec 035 T125: desktop и android держат строки в модели — строка по id и строки одного чата (`rowsAll` с выборкой),
+// счётчик чата от маркера и ставшие прочитанными входящие (`rowsRead`) — без копии строк у хоста
+#[test]
+fn rows_by_chat_and_id_and_read_state_from_model() {
+    let (mut host, mut e) = open();
+    let other = json!({"user": {"address": "carol@local"}});
+    let mut far = row(ID3, "carol@local", NOW - 500, text("другой чат"));
+    far["row"]["chat"] = other;
+    ops(&mut host, &mut e, json!([row(ID1, PEER, NOW - 3_000, text("1")), row(ID2, PEER, NOW - 2_000, text("2")), far]), NOW);
+    let one = all(&mut e, json!({"states": true, "ids": [ID2]}));
+    let states = one["states"].as_array().cloned().unwrap();
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0]["target"], ID2);
+    let chat = all(&mut e, json!({"states": true, "marks": true, "chat_key": format!("u:{PEER}")}));
+    assert_eq!(chat["states"].as_array().unwrap().len(), 2, "только строки чата");
+    let none = all(&mut e, json!({"states": true, "ids": ["01923a4b-5c6d-7001-8000-0000000000ff"]}));
+    assert!(none["states"].as_array().unwrap().is_empty());
+    let read = |e: &mut Engine, since: Value| -> Value {
+        let out = call(e, "rowsRead", &json!({"chat_key": format!("u:{PEER}"), "since_json": since.to_string()})).unwrap();
+        serde_json::from_str(out["result_json"].as_str().unwrap()).unwrap()
+    };
+    let r = read(&mut e, Value::Null);
+    assert_eq!((r["unread"].as_u64(), r["last_read_id"].as_str()), (Some(2), Some("")), "без маркера: {r}");
+    let mark = json!({"chat": direct(), "up_to_ts_ms": (NOW - 3_000).to_string(), "up_to_id": ID1});
+    ops(&mut host, &mut e, json!([{ "read": mark.clone() }]), NOW);
+    let r = read(&mut e, Value::Null);
+    assert_eq!(r["unread"], 1);
+    assert_eq!(r["last_read_id"], ID1);
+    assert_eq!(r["newly_read"], json!([ID1]));
+    // Сдвиг до второго: ставшее прочитанным после прежнего маркера — только второе
+    let mark2 = json!({"chat": direct(), "up_to_ts_ms": (NOW - 2_000).to_string(), "up_to_id": ID2});
+    ops(&mut host, &mut e, json!([{ "read": mark2 }]), NOW);
+    let r = read(&mut e, mark);
+    assert_eq!((r["unread"].as_u64(), r["newly_read"].clone()), (Some(0), json!([ID2])), "{r}");
+    assert_eq!(r["mark"]["up_to_id"], ID2);
+}

@@ -784,11 +784,23 @@ message RowsApply {
 
 // `rowsAll` (режим `host_driven`): все строки модели. Результат — `CallResult`, JSON `{views?: [MessageView
 // proto3-JSON — и служебные строки ленты: голос, закрытие опроса], states?: [RowState в JSON журнала истории — и
-// надгробия], marks?: [ReadMark в JSON журнала истории]}`.
+// надгробия], marks?: [ReadMark в JSON журнала истории]}`. `chat_key` и `ids` сужают выборку (desktop/android, T125):
+// строки и маркер одного чата (`history_chat_key`: `u:<адрес>`, `g:<hex>`), строки с этими id (UUID).
 message RowsAllRequest {
   bool views = 1;
   bool states = 2;
   bool marks = 3;
+  string chat_key = 4 [(parvane.core.v2.max_len) = 512];
+  repeated string ids = 5 [(parvane.core.v2.max_items) = 10000, (parvane.core.v2.max_len) = 64];
+}
+
+// `rowsRead` (режим `host_driven`, spec 035 T125): счётчик чата от маркера «прочитано до» (READ-2) — модель.
+// Результат — `CallResult`, JSON `{unread, last_read_id: uuid | "", mark?: ReadMark, newly_read: [uuid]}`:
+// `last_read_id` — последняя видимая строка не позже маркера, `newly_read` — входящие, которые считаются
+// непрочитанными без маркера и лежат после `since` (прежний маркер; пусто — с начала) и не позже текущего.
+message RowsReadRequest {
+  string chat_key = 1 [(parvane.core.v2.max_len) = 512];
+  string since_json = 2 [(parvane.core.v2.max_len) = 65536];
 }
 
 message EngineError {

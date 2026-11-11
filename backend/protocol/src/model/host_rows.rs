@@ -16,7 +16,7 @@ use crate::error::{ProtoError, Result};
 use crate::history;
 use crate::host::history::{from_json, to_json};
 use crate::pb::parvane::engine::v1::{self as epb, model_change::Change, MessageRemove, Outcome};
-use crate::pb::parvane::history::v1::{HistoryOp, RowState};
+use crate::pb::parvane::history::v1::{HistoryOp, ReadMark, RowState};
 use crate::pb::parvane::state::v1::Peer;
 
 fn json_list(text: &str) -> Result<Vec<Value>> {
@@ -166,26 +166,75 @@ impl Engine {
         }
     }
 
-    /// `rowsAll`: все строки (показ — и служебные строки ленты; состояния — и надгробия) и маркеры.
+    /// `rowsAll`: все строки (показ — и служебные строки ленты; состояния — и надгробия) и маркеры; `chat_key` —
+    /// только этого чата, `ids` — только строки с этими id (desktop/android, T125: строка по id без копии у хоста).
     pub(crate) fn rows_all(&self, a: &epb::RowsAllRequest) -> Value {
+        let ids: Option<Vec<Id>> = (!a.ids.is_empty())
+            .then(|| a.ids.iter().filter_map(|s| history::parse_id(s).ok().and_then(|b| paging::id16(&b))).collect());
+        let mut picked: Vec<&Row> = vec![];
+        for (key, rows) in &self.chats {
+            if !a.chat_key.is_empty() && *key != a.chat_key {
+                continue;
+            }
+            match &ids {
+                Some(ids) => picked.extend(ids.iter().filter_map(|id| rows.get(id))),
+                None => picked.extend(rows.rows()),
+            }
+        }
         let mut out = serde_json::Map::new();
         if a.views {
-            let views: Vec<Value> = self
-                .chats
-                .values()
-                .flat_map(|c| c.rows())
+            let views: Vec<Value> = picked
+                .iter()
                 .filter_map(|r| self.message_view_as(r, true))
                 .map(|v| serde_json::to_value(&v).unwrap_or(Value::Null))
                 .collect();
             out.insert("views".into(), Value::Array(views));
         }
         if a.states {
-            let states: Vec<Value> = self.chats.values().flat_map(|c| c.rows()).map(|r| to_json(&r.state)).collect();
-            out.insert("states".into(), Value::Array(states));
+            out.insert("states".into(), Value::Array(picked.iter().map(|r| to_json(&r.state)).collect()));
         }
         if a.marks {
-            out.insert("marks".into(), Value::Array(self.marks.values().map(to_json).collect()));
+            let marks = self.marks.iter().filter(|(k, _)| a.chat_key.is_empty() || **k == a.chat_key).map(|(_, m)| to_json(m));
+            out.insert("marks".into(), Value::Array(marks.collect()));
         }
         json!(out)
+    }
+
+    /// `rowsRead`: непрочитанное чата от маркера (READ-2; то же решение «считается», что у списка чатов), последняя
+    /// прочитанная видимая строка и входящие, которые маркер после `since` сделал прочитанными (квитанции собеседнику).
+    pub(crate) fn rows_read(&self, a: &epb::RowsReadRequest) -> Result<Value> {
+        let since: Option<ReadMark> = match a.since_json.trim() {
+            "" | "null" => None,
+            text => {
+                let v: Value = serde_json::from_str(text).map_err(|_| ProtoError::Malformed)?;
+                Some(from_json(&v).map_err(|_| ProtoError::InvalidField("since_json"))?)
+            }
+        };
+        let mark = self.marks.get(&a.chat_key);
+        let not_after = |ts: i64, id: &[u8], m: &ReadMark| (ts, id) <= (m.up_to_ts_ms, m.up_to_id.as_slice());
+        let mut last: Option<(i64, Vec<u8>, String)> = None;
+        let mut newly = vec![];
+        if let (Some(rows), Some(m)) = (self.chats.get(&a.chat_key), mark) {
+            for r in rows.rows().filter(|r| r.visible()) {
+                let Some(x) = r.state.row.as_ref() else { continue };
+                if !not_after(x.ts_ms, &x.id, m) {
+                    continue;
+                }
+                if last.as_ref().is_none_or(|l| (x.ts_ms, x.id.as_slice()) > (l.0, l.1.as_slice())) {
+                    last = Some((x.ts_ms, x.id.clone(), history::uuid_string(&r.state.target)));
+                }
+                if r.counted && since.as_ref().is_none_or(|s| !not_after(x.ts_ms, &x.id, s)) {
+                    newly.push(Value::String(history::uuid_string(&r.state.target)));
+                }
+            }
+        }
+        let mut out = serde_json::Map::new();
+        out.insert("unread".into(), json!(self.unread_of(&a.chat_key)));
+        out.insert("last_read_id".into(), json!(last.map(|l| l.2).unwrap_or_default()));
+        if let Some(m) = mark {
+            out.insert("mark".into(), to_json(m));
+        }
+        out.insert("newly_read".into(), Value::Array(newly));
+        Ok(Value::Object(out))
     }
 }

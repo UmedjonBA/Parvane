@@ -857,6 +857,12 @@ void to_json(nlohmann::json &j, const RowsAllRequest &m) {
     if (m.views) j["views"] = m.views;
     if (m.states) j["states"] = m.states;
     if (m.marks) j["marks"] = m.marks;
+    if (!m.chat_key.empty()) j["chat_key"] = m.chat_key;
+    if (!m.ids.empty()) {
+        auto a = nlohmann::json::array();
+        for (const auto &x : m.ids) a.push_back(x);
+        j["ids"] = a;
+    }
 }
 
 void from_json(const nlohmann::json &j, RowsAllRequest &m) {
@@ -864,6 +870,9 @@ void from_json(const nlohmann::json &j, RowsAllRequest &m) {
     if (const auto *v = pick(j, "views", "views")) m.views = (*v).get<bool>();
     if (const auto *v = pick(j, "states", "states")) m.states = (*v).get<bool>();
     if (const auto *v = pick(j, "marks", "marks")) m.marks = (*v).get<bool>();
+    if (const auto *v = pick(j, "chat_key", "chatKey")) m.chat_key = (*v).get<std::string>();
+    if (const auto *v = pick(j, "ids", "ids"); v && v->is_array())
+        for (const auto &x : *v) m.ids.push_back(x.get<std::string>());
 }
 
 void to_json(nlohmann::json &j, const RowsApply &m) {
@@ -884,6 +893,18 @@ void from_json(const nlohmann::json &j, RowsApply &m) {
     if (const auto *v = pick(j, "wipe", "wipe")) m.wipe = (*v).get<bool>();
     if (const auto *v = pick(j, "now_ms", "nowMs")) m.now_ms = numFrom<int64_t>((*v));
     if (const auto *v = pick(j, "rows_json", "rowsJson")) m.rows_json = (*v).get<std::string>();
+}
+
+void to_json(nlohmann::json &j, const RowsReadRequest &m) {
+    j = nlohmann::json::object();
+    if (!m.chat_key.empty()) j["chat_key"] = m.chat_key;
+    if (!m.since_json.empty()) j["since_json"] = m.since_json;
+}
+
+void from_json(const nlohmann::json &j, RowsReadRequest &m) {
+    m = RowsReadRequest{};
+    if (const auto *v = pick(j, "chat_key", "chatKey")) m.chat_key = (*v).get<std::string>();
+    if (const auto *v = pick(j, "since_json", "sinceJson")) m.since_json = (*v).get<std::string>();
 }
 
 void to_json(nlohmann::json &j, const ServerInput &m) {
