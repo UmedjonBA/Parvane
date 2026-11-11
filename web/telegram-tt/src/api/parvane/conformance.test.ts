@@ -3437,7 +3437,7 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(readRepo(`${jniDir}/CMakeLists.txt`)).toMatch(/engine_host\.cpp[\s\S]*model_jni\.cpp/);
   });
 
-  it('StateJournal.kt и ParvaneStore.kt не сводят личное состояние: ни лампортов, ни меток, ни state.v1-журнала', () => {
+  it('StateJournal.kt и ParvaneStore.kt не сводят личное состояние: ни лампортов, ни меток, ни state.v1', () => {
     for (const name of ['StateJournal.kt', 'ParvaneStore.kt', 'Client.kt']) {
       expect(strip(readAndroidKt(name)), name)
         .not.toMatch(/lamport|\bstamp\b|"state\.(append|sync)"|\.diff\(|mergeLww|lwwMerge/i);
@@ -3447,7 +3447,8 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     const client = readAndroidKt('Client.kt');
     expect(client).toContain('ParvaneCore.stateAttach(stateJournal.build(');
     expect(client).toMatch(/ParvaneCore\.stateAttach\([^\n]*loadStateDirty\(\)/);
-    expect(readAndroidJni('jni_account.cpp')).toContain('s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds)');
+    expect(readAndroidJni('jni_account.cpp'))
+      .toContain('s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds)');
   });
 
   it('избранные стикеры — объекты модели (FAVED_STICKER, намерение fave_sticker), не локальный список шва', () => {
