@@ -87,7 +87,7 @@ try {
   await sendText(page, `cc-answer-${suffix}`);
 
   // ── web → desktop ───────────────────────────────────────────────────────────
-  const callFrom = readDesktopLog(bobWorkdir).length;
+  const callFrom = readDesktopLog(bobWorkdir);
   await page.getByRole('button', { name: 'Call', exact: true }).click();
   await waitDesktopLog(bobWorkdir, /ВХОДЯЩИЙ звонок от/, CALL_TIMEOUT_MS, desktop, { since: callFrom });
   await waitDesktopLog(bobWorkdir, /звонок → Active/, CALL_TIMEOUT_MS, desktop, { since: callFrom });
@@ -105,7 +105,7 @@ try {
   // tdesktop при перезапуске начинает лог заново — журнал первого звонка берём сейчас
   const firstCallLog = readDesktopLog(bobWorkdir);
   await stopDesktop(desktop);
-  const restartFrom = readDesktopLog(bobWorkdir).length;
+  const restartFrom = readDesktopLog(bobWorkdir);
   desktop = spawnDesktop(bobWorkdir, libraryShim, {
     PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}`,
     PARVANE_REAL_MEDIA: '1',

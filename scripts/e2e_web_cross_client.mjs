@@ -435,7 +435,7 @@ try {
     return { chatId: result?.chat?.id };
   }, { title: groupTitle, name: bob.split('@')[0] });
   assert(groupCreated.chatId, `group not created: ${JSON.stringify(groupCreated)}`);
-  const beforeGroup = readDesktopLog(bobWorkdir).length;
+  const beforeGroup = readDesktopLog(bobWorkdir);
   await waitDesktopLog(bobWorkdir, new RegExp(`группа ${GID} обновлена \\(v\\d+, v2 (новая|журнал)\\)`),
     90000, desktop, { since: beforeGroup });
   const aboutText = `about-${suffix.slice(-6)}`;
@@ -471,7 +471,7 @@ try {
   });
   assert.equal(promote.result, true, `updateChatAdmin failed: ${JSON.stringify(promote)}`);
   await stopDesktop(desktop);
-  const beforeManage = readDesktopLog(bobWorkdir).length;
+  const beforeManage = readDesktopLog(bobWorkdir);
   desktop = spawnDesktop(bobWorkdir, libraryShim, {
     PARVANE_AUTOLOGIN: `${bob}:${PASSWORD}`,
     PARVANE_AUTOGROUPINFO: `${groupTitle}:about=from-desktop`,

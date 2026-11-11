@@ -56,6 +56,8 @@ async function launch(dir, { halt, chunk, pin } = {}) {
     if (text.includes('[parvane]')) logs.push(text.slice(0, 300));
     if (logs.length > 300) logs.shift();
   });
+  // Исключение страницы на старте журнал провайдера не видит — без этого сбой выглядел как одна строка «initApi»
+  page.on('pageerror', (e) => logs.push(`pageerror: ${String(e?.stack || e).slice(0, 600)}`));
   // Хранилище под PIN: прежний код спрашивал PIN окном — новый тоже (перенос — после верного PIN)
   page.on('dialog', (d) => { void (pin ? d.accept(pin) : d.dismiss()); });
   await page.goto(BASE_URL);
@@ -163,6 +165,7 @@ async function migrateProfile(who) {
   } catch (e) {
     results.push({ step: `${who}: перенос`, ok: false, error: String(e?.message || e).slice(0, 600) });
     writeFileSync(join(OUT, `log-${who}.txt`), session.logs.join('\n'));
+    await session.page.screenshot({ path: join(OUT, `fail-${who}.png`) }).catch(() => undefined);
     console.log(`СБОЙ: ${who}: ${String(e?.message || e).slice(0, 300)}`);
   } finally {
     await session.context.close().catch(() => undefined);
