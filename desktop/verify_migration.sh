@@ -84,11 +84,132 @@ run_case() { # run_case <имя> <шаг, на котором убить про�
   rm -rf "$SB"
 }
 
-for c in ${PV_MIGRATION_CASES:-clean kill-m2 kill-m4}; do
+# T142 «устройство отсутствовало» (US1 п. 3; conformance README): в профиле T006 у alice два устройства (alice2
+# привязана грантом). alice1 переносится новым бинарём, затем вторым запуском — новая папка (личное состояние,
+# PARVANE_AUTOFOLDER) и сообщение bob (журнал истории; копия своим устройствам — в инбокс alice2); messenger
+# останавливается, на его базе один раз — `messenger --gc-as-of <сейчас + 31 сутки>` (плановые чистки «как через
+# месяц», часы стенда не трогаются; инбоксы вычищены), messenger снова поднят; alice2 — выключенная всё это время —
+# переносится: `scripts/migration_month_check.py` — у неё потеряно 0 из выгрузки «до», сообщение alice1 есть (из
+# журнала истории), строки личного состояния, изменённые alice1, — с тем же дайджестом.
+# Проверка «ловит потерю»: PV_MONTH_BREAK=history|state — перед чисткой из базы messenger стираются записи alice1
+# после переноса (журнал истории / state.v2) — случай обязан упасть; PV_MONTH_GC=0 — перезапуск без чистки (контроль:
+# сообщение тогда доезжает инбоксом).
+BEFORE2="${PV_MIGRATION_BEFORE2:-$(dirname "$BEFORE")/desktop-alice2.jsonl}"
+MONTH_CHECK="$ROOT/../scripts/migration_month_check.py"
+mdb() { # mdb <sql> [параметр…] — запрос к базе messenger стенда
+  python3 -c 'import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1], timeout=30)
+r = c.execute(sys.argv[2], sys.argv[3:]).fetchall()
+c.commit()
+print(len(r) if sys.argv[2].lstrip().upper().startswith("DELETE") else r[0][0])' "$SB/messenger.db-v2.db" "$@"
+}
+wait_model() { # wait_model <файл .model> — свежая выгрузка модели (прежнюю — стереть и дождаться следующей)
+  rm -f "$1"
+  local n
+  for n in $(seq 1 90); do [ -s "$1" ] && return 0; sleep 1; done
+  return 1
+}
+run_month() {
+  local p S A1 A2 hist0 st0 out
+  SB="$(mktemp -d "/tmp/pv-migration-month-XXXXXX")"
+  cp -a "$SEED"/. "$SB"/
+  rm -f "$SB"/*.log
+  [ -f "$BEFORE2" ] || { bad "month: нет выгрузки «до» alice2: $BEFORE2"; rm -rf "$SB"; return; }
+  stack_up "$SB" PARVANE_DEV=1 PARVANE_WELL_KNOWN_FILE="$SB/parvane.json"
+  wait_log "$SB/messenger.log" "Messenger шард запущен" 60 || bad "month: messenger не поднялся"
+  sleep 1
+  A1="$SB/alice1"; A2="$SB/alice2"; S="$(date +%s)"
+  # 1. alice1 переносится (как clean)
+  p=$(start_client "$A1" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1 \
+    "PARVANE_AUDIT_DUMP=$SB/a1.jsonl" PARVANE_AUDIT_DUMP_EVERY=15)
+  wait_log "$A1/td/log.txt" "прежнее состояние перенесено в модель" 240 && ok "month: alice1 перенесена" \
+    || bad "month: перенос alice1 не закончился"
+  wait_model "$SB/a1.jsonl.model" || bad "month: выгрузки alice1 нет"
+  stop_pid "$p"
+  cp "$SB/a1.jsonl.model" "$OUT/desktop-alice1.month.base.jsonl" 2>/dev/null
+  if python3 "$DIFF" "$BEFORE" "$SB/a1.jsonl.model" --expected "$EXPECTED" >"$OUT/month-alice1.diff.txt" 2>&1; then
+    ok "month: сверка alice1 — 0 потеряно, 0 изменено"
+  else
+    bad "month: сверка alice1 — расхождения (см. $OUT/month-alice1.diff.txt)"; head -20 "$OUT/month-alice1.diff.txt"
+  fi
+  hist0=$(mdb "SELECT COALESCE(MAX(seq), 0) FROM user_history_log WHERE user = 'alice@local'")
+  st0=$(mdb "SELECT COALESCE(MAX(seq), 0) FROM user_state_log_v2 WHERE user = 'alice@local'")
+  [ "${st0:-0}" -gt 0 ] && ok "month: журнал личного состояния alice перенесён на сервер (state.v2, seq $st0)" \
+    || bad "month: state.v2 alice на сервере пуст"
+  # 2. alice1: папка и сообщение — уже после переноса
+  rm -f "$SB/a1.jsonl.model"
+  p=$(start_client "$A1" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1 \
+    "PARVANE_AUTOFOLDER=Месяц спустя $S:bob@local" \
+    "PARVANE_AUTOSEND_V2=bob@local:Выдуманное сообщение после переноса $S" \
+    "PARVANE_AUDIT_DUMP=$SB/a1.jsonl" PARVANE_AUDIT_DUMP_EVERY=10)
+  wait_log "$A1/td/log.txt" "AUTOFOLDER создал папку" 90 || bad "month: папка alice1 не создана"
+  wait_log "$A1/td/log.txt" "autosend-v2 → bob@local: " 150 || bad "month: сообщение alice1 не отправлено"
+  local n
+  for n in $(seq 1 60); do
+    [ "$(mdb "SELECT COALESCE(MAX(seq), 0) FROM user_history_log WHERE user = 'alice@local'")" -gt "$hist0" ] \
+      && [ "$(mdb "SELECT COALESCE(MAX(seq), 0) FROM user_state_log_v2 WHERE user = 'alice@local'")" -gt "$st0" ] && break
+    sleep 1
+  done
+  [ "$n" -lt 60 ] && ok "month: правка alice1 — в журналах истории и личного состояния на сервере" \
+    || bad "month: записи alice1 не дошли до журналов сервера"
+  sleep 12
+  wait_model "$SB/a1.jsonl.model"
+  stop_pid "$p"
+  cp "$SB/a1.jsonl.model" "$OUT/desktop-alice1.month.changed.jsonl" 2>/dev/null || bad "month: выгрузки alice1 после правки нет"
+  if [ -n "${PV_MONTH_BREAK:-}" ]; then
+    local t=user_history_log from=$hist0
+    [ "$PV_MONTH_BREAK" = state ] && t=user_state_log_v2 from=$st0
+    echo "  ПРОВЕРКА НА ПОТЕРЮ: из $t стёрто записей alice после переноса: $(mdb "DELETE FROM $t WHERE user = 'alice@local' AND seq > ? RETURNING seq" "$from")"
+  fi
+  # 3. «Месяц спустя»: messenger — стоп, плановые чистки как через 31 сутки, старт (часы стенда не трогаются)
+  local inbox0 inbox1 mp
+  inbox0=$(mdb "SELECT COUNT(*) FROM inbox_log")
+  for mp in $(stack_pids messenger); do kill "$mp" 2>/dev/null; done
+  for n in $(seq 1 50); do [ -z "$(stack_pids messenger)" ] && break; sleep 0.2; done
+  if [ "${PV_MONTH_GC:-1}" != 0 ]; then
+    out=$(env PARVANE_DB_PATH="$SB/messenger.db" PARVANE_LOG_LEVEL=warn "$SHARD/messenger" --gc-as-of "$(( $(date +%s) + 31 * 86400 ))" 2>>"$SB/messenger.log")
+    inbox1=$(mdb "SELECT COUNT(*) FROM inbox_log")
+    echo "  messenger --gc-as-of +31 сутки: $out; инбоксы: было $inbox0, стало $inbox1"
+    [ "$inbox1" = 0 ] && [ "$inbox0" -gt 0 ] && ok "month: плановые чистки «как через месяц» вычистили инбоксы" \
+      || bad "month: --gc-as-of не вычистил инбоксы ($out)"
+  else
+    echo "  КОНТРОЛЬ: messenger перезапущен без чистки (инбоксы: $inbox0)"
+  fi
+  local starts; starts=$(grep -ac "Messenger шард запущен" "$SB/messenger.log")
+  shard_start messenger
+  for n in $(seq 1 60); do [ "$(grep -ac "Messenger шард запущен" "$SB/messenger.log")" -gt "$starts" ] && break; sleep 1; done
+  # 4. alice2 — выключенная всё это время — переносится и видит правку alice1
+  p=$(start_client "$A2" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1 \
+    "PARVANE_AUDIT_DUMP=$SB/a2.jsonl" PARVANE_AUDIT_DUMP_EVERY=20)
+  wait_log "$A2/td/log.txt" "прежнее состояние перенесено в модель" 240 && ok "month: alice2 перенесена" \
+    || bad "month: перенос alice2 не закончился"
+  wait_log "$A2/td/log.txt" "v2: готов" 120 || bad "month: сессия alice2 не поднялась"
+  sleep 15
+  wait_model "$SB/a2.jsonl.model"
+  stop_pid "$p"
+  cp "$SB/a2.jsonl.model" "$OUT/desktop-alice2.month.after.jsonl" 2>/dev/null
+  # Строки `message` выгрузки desktop — из перенесённой истории (отправленное после переноса в них не попадает):
+  # сообщение alice1 — по журналу клиента alice2 (своё, из журнала истории: инбокс вычищен)
+  if [ -s "$SB/a2.jsonl.model" ] && python3 "$MONTH_CHECK" --messages-elsewhere "$OUT/desktop-alice1.month.base.jsonl" \
+      "$OUT/desktop-alice1.month.changed.jsonl" "$BEFORE2" "$SB/a2.jsonl.model" >"$OUT/month.check.txt" 2>&1; then
+    ok "month: alice2 — 0 потеряно, правка личного состояния alice1 на месте ($(tail -1 "$OUT/month.check.txt"))"
+  else
+    bad "month: alice2 — расхождения (см. $OUT/month.check.txt)"; head -20 "$OUT/month.check.txt"
+  fi
+  grep -qaE "своё msg .* \(bob@local\): Выдуманное сообщение после переноса $S" "$A2"/td/log*.txt \
+    && ok "month: alice2 видит сообщение alice1, отправленное после переноса ($([ "${PV_MONTH_GC:-1}" != 0 ] && echo "журнал истории, инбокс вычищен" || echo "контроль: инбоксом"))" \
+    || bad "ПОТЕРЯ: сообщения alice1 после переноса у alice2 нет"
+  cp "$A2/td/log.txt" "$OUT/month.alice2.log.txt" 2>/dev/null
+  stack_stop
+  rm -rf "$SB"
+}
+
+for c in ${PV_MIGRATION_CASES:-clean kill-m2 kill-m4 month}; do
   case "$c" in
     clean) run_case clean "" ;;
     kill-m2) run_case kill-m2 2 ;;
     kill-m4) run_case kill-m4 4 ;;
+    month) run_month ;;
   esac
 done
 finish "verify_migration"

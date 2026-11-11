@@ -7,7 +7,11 @@
 #                                             копия баз шардов с ключом подписи JWT, выгрузки «до» (auditDump)
 #   scripts/run_web_migration_e2e.sh        — три прогона нового кода на копии баз сида: plain (все профили),
 #                                             M2 и M4 (вкладка alice1 закрыта посреди переноса → повторный запуск);
-#                                             после каждого — выгрузка модели и migration_audit_diff.py = 0/0
+#                                             после каждого — выгрузка модели и migration_audit_diff.py = 0/0;
+#                                             month (T142, «устройство отсутствовало») — alice1 переносится и правит,
+#                                             messenger `--gc-as-of <+31 сутки>` (перезапуск шарда раннером,
+#                                             файл messenger.restart), затем переносится alice2 и видит правку
+#   PARVANE_MIGRATION_VARIANTS="month"        — только выбранные варианты
 #
 # Профиль браузера привязан к origin (`http://127.0.0.1:<порт web>`), сессия — к ключу JWT identity: оба прогона
 # идут на одних и тех же фиксированных портах, а шарды нового прогона поднимаются на копии баз сида (вместе с
@@ -112,7 +116,7 @@ NEW_DIST="${PARVANE_MIGRATION_DIST:-$ROOT/web/telegram-tt/dist}"
 make_shadow "$WORK/shadow-new" "$ROOT/backend/target/debug" "$NEW_DIST" \
   "$ROOT/backend/infra/nats/server.prod.conf"
 rc=0
-for variant in ${PARVANE_MIGRATION_VARIANTS:-plain M2 M4}; do
+for variant in ${PARVANE_MIGRATION_VARIANTS:-plain M2 M4 month}; do
   echo "== перенос: $variant"
   PARVANE_MIGRATION_DB_SEED="$SEED/profiles/server" PARVANE_MIGRATION_VARIANT="$variant" \
     PARVANE_MIGRATION_SEED="$SEED" PARVANE_MIGRATION_OUT="$WORK/after/$variant" \
