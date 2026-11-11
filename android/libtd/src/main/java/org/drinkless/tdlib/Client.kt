@@ -786,19 +786,24 @@ class Client private constructor(
             store.history(f.chatId, f.fromMessageId, f.offset, f.limit)
         }
         is TdApi.ViewMessages -> {
-            // прочтение снимает отметку «непрочитано» (как TDLib)
-            store.local?.takeIf { it.isMarkedUnread(f.chatId) && f.messageIds.isNotEmpty() }?.let { l ->
-                l.setMarkedUnread(f.chatId, false)
-                store.chatById(f.chatId)?.isMarkedAsUnread = false
-                postUpdate(TdApi.UpdateChatIsMarkedAsUnread(f.chatId, false))
-                scheduleStateFlush("unread")
+            // Как TDLib: прочтение — только показ в ленте чата либо forceRead. Список чатов зовёт ViewMessages для
+            // последнего сообщения каждой строки (source ChatList) — это не прочтение: иначе первый показ списка
+            // отмечал прочитанным всё, что пришло без связи (spec 035, перенос android: маркер u:bob уходил на конец)
+            if (viewCountsAsRead(f.source, f.forceRead)) {
+                // прочтение снимает отметку «непрочитано» (как TDLib)
+                store.local?.takeIf { it.isMarkedUnread(f.chatId) && f.messageIds.isNotEmpty() }?.let { l ->
+                    l.setMarkedUnread(f.chatId, false)
+                    store.chatById(f.chatId)?.isMarkedAsUnread = false
+                    postUpdate(TdApi.UpdateChatIsMarkedAsUnread(f.chatId, false))
+                    scheduleStateFlush("unread")
+                }
+                // READ-2: маркер «прочитано до» чата (журнал истории, другие свои устройства) и квитанции — в ядре; счётчик
+                // сразу локально, затем точное число от маркера событием read_state
+                val viewed: List<String> = f.messageIds.toList().mapNotNull { id -> store.uuidOf(f.chatId, id) }
+                if (viewed.isNotEmpty()) ParvaneCore.markRead(viewed)
+                store.markInboxRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
+                notifications.onRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
             }
-            // READ-2: маркер «прочитано до» чата (журнал истории, другие свои устройства) и квитанции — в ядре; счётчик
-            // сразу локально, затем точное число от маркера событием read_state
-            val viewed: List<String> = f.messageIds.toList().mapNotNull { id -> store.uuidOf(f.chatId, id) }
-            if (viewed.isNotEmpty()) ParvaneCore.markRead(viewed)
-            store.markInboxRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
-            notifications.onRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
             TdApi.Ok()
         }
         is TdApi.OpenChat, is TdApi.CloseChat -> TdApi.Ok()
