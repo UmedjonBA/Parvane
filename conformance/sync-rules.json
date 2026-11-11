@@ -157,10 +157,14 @@
           "reuse": true
         }
       ],
+      "spec035": {
+        "stickerId": "Sticker.sticker_id — id элемента манифеста архива набора (имя файла записи индекса PVPK), заполняет движок (contentOfWire); векторы proto/parvane/vectors/content/sticker_id.json",
+        "faved": "OBJECT_KIND_FAVED_STICKER = 20 журнала state.v2 (ключ set_id | \"/\" | sticker_id, до 200), намерение модели fave_sticker; вектор proto/parvane/vectors/model/fave_sticker.json, общий вектор id набора proto/parvane/vectors/clients/sticker-ref.json"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/messages.ts",
-        "desktop": "parvane_client.cpp (FindUploadedPackRef/RememberUploadedPackRef — кэш по набору получателей, 16 сен 2026); тест desktop/verify_conformance_packs.sh",
-        "android": "spec 031: android/jni/jni_messages.cpp nativePackRefFor — архив пака блобом по секрету (CAP-1), грантов получателям нет, поэтому одна ссылка годится любому набору получателей; кэш packrefs.json по отпечатку содержимого (≤ 32) + android/libtd/src/main/java/org/drinkless/tdlib/Stickers.kt (packRefForSend, emojiPacksFor) — тесты libtd StickersTest.sendResolvesInputFileIdAndAttachesPackRefByRecipients и PackIndexTest (JVM), сценарий android/tgx_stickers_flow.sh"
+        "web": "web/telegram-tt/src/api/parvane/messages.ts; «В избранное» и избранные из журнала — provider.ts, v2/stateJournal.ts (favedStickers); сценарий scripts/run_web_fave_sticker_e2e.sh",
+        "desktop": "parvane_client.cpp (FindUploadedPackRef/RememberUploadedPackRef — кэш по набору получателей, 16 сен 2026); тест desktop/verify_conformance_packs.sh; «В избранное» — Session::stateFaveSticker (parvane-core v2_session.h), tdesktop parvane_client_state.cpp, id — pack_archive.h favedSetId / favedStickerId",
+        "android": "spec 031: android/jni/jni_messages.cpp nativePackRefFor — архив пака блобом по секрету (CAP-1), грантов получателям нет, поэтому одна ссылка годится любому набору получателей; кэш packrefs.json по отпечатку содержимого (≤ 32) + android/libtd/src/main/java/org/drinkless/tdlib/Stickers.kt (packRefForSend, emojiPacksFor) — тесты libtd StickersTest.sendResolvesInputFileIdAndAttachesPackRefByRecipients и PackIndexTest (JVM), сценарий android/tgx_stickers_flow.sh; избранные — объекты модели (android/jni/jni_account.cpp stateFaveSticker / stateFavedStickers, Stickers.kt; сторож ENGINE-1 android)"
       }
     },
     {
@@ -532,6 +536,11 @@
           "allowed": true
         }
       ],
+      "spec035": {
+        "engine": "backend/protocol/src/model/capabilities.rs (GroupFacts::hides — приёмный фильтр, capabilities — композер и меню: медиа, стикеры, опросы, ссылки, удалить у всех, закреп)",
+        "calls": "contentHidden{chat, from, wire}, capabilities{chat}",
+        "vector": "proto/parvane/vectors/model/group_perms_media.json"
+      },
       "clients": {
         "web": "решение — движок (backend/protocol/src/model/capabilities.rs GroupFacts::hides/capabilities; spec 035 T114): web sync.ts (isHiddenByGroupPermissions → contentHidden модели, разметка ссылок autoEntities.ts withDetectedLinks), store.ts (currentUserBannedRights из capabilities модели; toBannedRights — показ прав по умолчанию)",
         "desktop": [
@@ -539,7 +548,7 @@
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы — contentHidden; пересылка в группу — canSendContent; composer — defaultRestrictions)",
           "тест desktop/verify_conformance_perms.sh"
         ],
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember — своя формула шва; перевод на contentHidden / capabilities модели — T136, в работе, android-ветка не слита) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"
       }
     },
     {
@@ -750,14 +759,29 @@
         "liveTest": "backend/tests/integration/tests/v2_state_live.rs"
       },
       "status": "open: движок, сервер и web готовы; правило закрывается, когда векторы merge.json проходят и в desktop, и в android через обвязку движка (T098/T099)",
+      "spec035": {
+        "note": "с 11 ноя 2026 журнал state.v1 заморожен (state.append → UPGRADE_REQUIRED, state.sync — только чтение для разового переноса); всё выше — прежний журнал",
+        "journal": "state.ops.append / state.ops.sync (messenger v2_state.rs, таблица user_state_log_v2, миграция 0007_user_state_log_v2.sql)",
+        "schema": "proto/parvane/state/v2/state.proto (ObjectKey{kind, key}; StateOp: Create, Patch{set, clear}, Delete, SetAdd, SetRemove, Mark, Migrated)",
+        "merge": "регистр на каждое поле с меткой (lamport, device_id, op_id), ничья — байтами значения (очистка меньше любого значения); элемент множества — регистр есть/нет; отметки только растут и сильнее надгробия (SCHEDULED 1, CHAT_CLEARED 2); объект виден, если самая свежая метка новее надгробия",
+        "aad": "\"parvane/v2/state2\\0\" | user | op_id(16)",
+        "lamportCeiling": 1099511627776,
+        "unknown": "неизвестное поле и вид объекта хранятся байтами и сводятся, в показ не идут; заменяющий снимок при непонятом — RangeHeld; критичный вид операции (1000–1999) → writeBlocked{journal, CRITICAL_UNKNOWN}",
+        "migrationNonce": "HMAC-SHA256(ключ, \"parvane/migrate/nonce\\0\" | op_id | открытый текст)[..12] — одинаковые байты переноса с двух устройств",
+        "engine": "backend/protocol/src/state2.rs; мост формы state.v1 — backend/protocol/src/model/state_v1.rs (stateApplyV1 / stateViewV1); перенос — backend/protocol/src/migrate/state_v1.rs",
+        "vectors": "proto/parvane/vectors/state2/ (patch, sets, ordered, delete_vs_edit, marks, unknown_fields, rejected), proto/parvane/vectors/model/state_patch_folder.json",
+        "engineTests": "backend/protocol/tests/state2_vectors.rs, state2_props.rs, migrate_state_v1.rs; живой parvane-integration --test v2_state2_live",
+        "status": "сведение по полям — во всех трёх клиентах через модель движка (сценарии двух правок без связи зелёные: web, web↔desktop, android); показ — из снимка формы state.v1 (stateViewV1), а не StateView: web осознанно, desktop it.fails T126, android T136 (в работе)"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/stateVectors.test.ts — merge.json через WASM-движок (набор state/merge в backend/protocol/src/conformance.rs, runConformanceVectors); журнал state в клиенте — src/api/parvane/v2/stateJournal.ts (папки, блок-лист, черновики, отложенные, архив/закреп; миграция localState при первом запуске v2)",
+        "web": "web/telegram-tt/src/api/parvane/v2/stateJournal.ts — желаемое модели (stateApplyV1), показ из модели (stateViewV1), своего сведения нет (сторож ENGINE-1 web); localState.ts — виды после первой проекции в памяти, на диске только неподтверждённая правка (тест localState.modelBacked.test.ts); векторы state/merge и state2/* — stateVectors.test.ts, protocol.vectors.test.ts; сценарий scripts/run_web_state_patch_e2e.sh",
         "desktop": [
-          "desktop/parvane-core/tests/protocol_vectors_tests.cpp — ctest protocol_vectors, набор state/merge (merge.json через C ABI pv_run_conformance_vectors)",
-          "desktop/parvane-core/tests/v2_session_tests.cpp — живой: миграция локальных папок, своя правка, чтение журнала после рестарта (tests/run_v2_session_live.sh)",
-          "desktop/verify_protocol_v2_groups.sh — папка из журнала после потери локального файла; журнал в клиенте — parvane_client.cpp (папки Data::ChatFilters, отложенные g_scheduled)"
+          "desktop/parvane-core/src/state_model.cpp — StateModel поверх хоста модели engine_host.cpp (stateApplyV1 / stateViewV1, state.ops.*); v2_session.cpp Session::stateSync — база разницы — показанный снимок (T124)",
+          "desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_state.cpp — показ (пока из снимка формы state.v1, it.fails ENGINE-1 T126)",
+          "desktop/parvane-core/tests/protocol_vectors_tests.cpp — ctest protocol_vectors, наборы state/merge и state2/* через C ABI",
+          "desktop/verify_state_patch.sh, scripts/run_protocol_mixed_e2e.sh state-patch-desktop (пара с web) — две правки разных полей без связи"
         ],
-        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt (state/merge через JNI → C ABI движка) + StateJournalTest.kt (папки/блок-лист/черновики/архив/отложенные/закреп/«непрочитано»/быстрая реакция ↔ StateSnapshot); журнал в шве — StateJournal.kt + Client.kt, JNI — android/jni/jni_account.cpp nativeStateAttach/nativeStateSync"
+        "android": "общее ядро desktop/parvane-core/src/state_model.cpp через android/jni/jni_account.cpp (stateAttach — своя правка без связи разницей от показанного до неё); шов android/libtd/src/main/java/org/drinkless/tdlib/StateJournal.kt + Client.kt без сведения (сторож ENGINE-1 android); тесты ProtocolV2SeamTest.kt (state/merge, state2/*), StateJournalTest.kt; сценарий android/tgx_state_patch_flow.sh (пара с web); показ из StateView — T136, в работе"
       }
     },
     {
@@ -811,10 +835,29 @@
       "vectors": "proto/parvane/vectors/content/kinds.json",
       "engineSuite": "content/kinds",
       "engineTest": "backend/protocol/tests/vectors_content.rs",
+      "spec035": {
+        "view": "MessageView{disposition: SHOW | STUB | STUB_CRITICAL, body: ViewBody} — backend/protocol/src/model/views.rs (content_view, contentOfWire); вид вне features — текстом поля text (backend/protocol/src/model/features.rs)",
+        "kindRanges": {
+          "normal": [
+            1,
+            999
+          ],
+          "critical": [
+            1000,
+            1999
+          ]
+        },
+        "kindRangesScope": "msg.v2.Content.kind, state.v2.StateOp.op, history.v1, planner.v1/cloud.v1, group.v2.GroupStateChange.change, InboxRecord.item",
+        "criticalKnownKinds": 0,
+        "unknownNormal": "STUB — ответ и пересылка разрешены",
+        "unknownCritical": "STUB_CRITICAL — заглушка «обновите приложение», ответ, правка и пересылка запрещены; в журнале — writeBlocked",
+        "vectors": "proto/parvane/vectors/content/critical.json, proto/parvane/vectors/model/critical_journal.json, unknown_content_stub.json, features_text_fallback.json, proto/parvane/vectors/unknown/",
+        "engineTests": "backend/protocol/tests/kind_ranges.rs, critical_vectors.rs, unknown_scan.rs, model_vectors.rs"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
-        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
-        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts (content/kinds, content/critical); разбор — движок: v2/contentMap.ts без разбора видов (contentView / contentOfWire), v2/controller.ts (ev.view); критичная заглушка — store.ts (content.critical), EN+RU",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp; разбор — движок: desktop/parvane-core/src/v2_content.cpp (contentView, contentOfWire — своего разбора видов нет, сторож ENGINE-1 desktop); критичная заглушка — tdesktop parvane_client.cpp (isCriticalStub → lng_parvane_stub_critical), EN+RU",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt; критичная заглушка — ParvaneStore.kt (critical → stub_critical), SeamText.kt (EN+RU), тест CriticalStubTest.kt; разбор события ядра в ParvaneStore.kt — свой (it.fails ENGINE-1 android, T136 — в работе)"
       }
     },
     {
@@ -958,7 +1001,7 @@
         "desktop": "desktop — со spec 029 легаси-копий не шлёт (v2_legacy.cpp, e2e.cpp удалены, сервер без v1); запись LegacyV1 пропускается целиком (parvane_client.cpp HandleV2SessionEvent)",
         "android": "закрыто удалением (spec 031, 22 окт 2026): v1-устройств у android нет — легаси-копий, подписанного списка и пропуска чужой копии нет; запись LegacyV1 пропускается (android/jni/jni_session.cpp)"
       },
-      "status": "web закрыто удалением (T110, 7 окт 2026); desktop закрыто удалением (spec 029, 18 окт 2026); android закрыто удалением (spec 031, 22 окт 2026)"
+      "status": "закрыто (spec 035, 11 ноя 2026): протокол v1 удалён везде — web (T110, 7 окт 2026), desktop (spec 029, 18 окт 2026), android (spec 031, 22 окт 2026); v1-устройств нет. Остатки в движке и сервере (legacy_v1.rs, LegacyDeviceSet и msg.deliver_legacy в client.rs, InboxRecord.legacy_v1, vectors/legacy_v1, таблица legacy_origin) — T096 spec 035, удаляются после проверки копии баз прода (T143)"
     },
     {
       "id": "TYPING-1",
@@ -971,10 +1014,14 @@
       "v1Topic": "msg.typing.",
       "maxAgeMs": 30000,
       "noDowngrade": true,
+      "spec035": {
+        "groupSignature": "только контекст parvane/v2/group-typing2 с channel_id; прежняя подпись без канала удалена из движка и gateway (тесты group::tests::typing_legacy_signature_rejected, gateway v2::tests::typing_legacy_signature_rejected)",
+        "signedBy": "движок (group::sign_group_typing в client.rs) — своей подписи у клиентов нет"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (trySendTyping), messages.ts (sendMessageAction — только канал v2, v1-кадра нет с T110)",
-        "desktop": "desktop/parvane-core/src/v2_session.cpp (sendTyping); tdesktop parvane_client.cpp (MirrorTyping)",
-        "android": "spec 031: android/jni/jni_messages.cpp nativeSendTyping → Session::sendTyping (эфемерный канал v2, кадра v1 нет; в L2-чате не уходит), событие сессии typing → шов (android/jni/jni_session.cpp)"
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (trySendTyping — действие клиентского ядра модели через clientCall), messages.ts (sendMessageAction — только канал v2, v1-кадра нет с T110)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (sendTyping → клиентское ядро модели, v2_engine.cpp clientCall); tdesktop parvane_client.cpp (MirrorTyping)",
+        "android": "spec 031: android/jni/jni_messages.cpp nativeSendTyping → Session::sendTyping общего ядра (эфемерный канал v2, подпись — движок; кадра v1 нет; в L2-чате не уходит), событие сессии typing → шов (android/jni/jni_session.cpp)"
       }
     },
     {
@@ -994,6 +1041,10 @@
         "no_backup",
         "failed"
       ],
+      "spec035": {
+        "sskRotation": "одна запись RotateSelfSigning с resigned — сертификатами оставшихся устройств, переподписанными новым SSK; после версии смены запись прежним SSK — BadSignature (векторы proto/parvane/vectors/device_log/ssk_rotate.json, тесты revocation_flow::ssk_rotation_is_one_entry_and_old_ssk_refused_after, terminate_all_sessions_twice_with_root)",
+        "clientsNote": "запись смены SSK собирает только движок (rotateSsk через clientCall); одна операция «отзыв + смена SSK» revoke_device_with_root в единую точку входа не выведена — клиенты зовут два вызова"
+      },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeDevice, rotateSsk), provider.ts (fetchAuthorizations, revokeOwnDevice: identity.device.revoke мостом v2, затем запись журнала), v2/stateJournal.ts (attach rekey)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp, v2_session_account.cpp (revokeDevice, signOutDevice, rotateSsk, ownDevices); tdesktop parvane_client.cpp (ListDevices, RevokeDevice: «Просто выйти» / «Выйти и сменить ключи»); identity.device.revoke — только мостом v2",
@@ -1112,10 +1163,16 @@
       "aboutMaxChars": 255,
       "requestDecideMethod": "group.request.decide",
       "approveEntry": "AddMember",
+      "spec035": {
+        "accessMatrix": "specs/035-protocol-evolution/contracts/group-access.md; векторы proto/parvane/vectors/group_access/matrix.json; сервер messenger v2_groups.rs (group_membership_windows, invite_proof)",
+        "inviteProof": "\"parvane/group-invite-sync/v1\\0\" | domain | \"\\0\" | group_id | user | \"\\0\" | i64be(ts_ms), подпись ключом ссылки, свежесть ±5 мин; строит движок (invite::sync_proof, groupSyncByLink)",
+        "tests": "messenger v2_groups::tests::access_matrix_*, membership_windows_follow_rejoin; живой parvane-integration --test v2_group_access_live",
+        "groupView": "сведения группы — GroupView модели (viewGroup, groupChanged) из журнала; web без своего кэша групп (personalStore.groupCache.test.ts)"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupInfo, listJoinRequests, decideJoinRequest), groups.ts (register: isVerified)",
-        "desktop": "desktop/parvane-core/src/v2_session.cpp (changeGroup: set_info_patch, listJoinRequests, decideJoinRequest — запрос движка groupRequestDecide с viaLinkHex); tdesktop parvane_client.cpp (ApplyGroupInfo, V2SetInfo); desktop/verify_conformance_group.sh, verify_protocol_v2_invites.sh",
-        "android": "spec 031: v1-сведений нет — android/jni/jni_groups.cpp nativeGroupSetInfo (Session::setGroupInfo — set_info_patch под мьютексом движка, описание ≤ 255 символов), переименование — запись set_info_patch, nativeGroupRequests / nativeGroupRequestDecide (decideJoinRequest со ссылкой заявки) — сценарий android/tgx_group_manage_flow.sh"
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupInfo, listJoinRequests, decideJoinRequest; journal по ссылке — groupSyncByLink с invite_proof; сведения и фото — viewGroup модели), groups.ts (register: isVerified); своего кэша групп нет (personalStore.groupCache.test.ts)",
+        "desktop": "desktop/parvane-core/src/v2_session.cpp (changeGroup: set_info_patch, listJoinRequests, decideJoinRequest — запрос движка groupRequestDecide с viaLinkHex; журнал по ссылке — Client::groupSyncByLink с invite_proof, v2_engine.cpp); tdesktop parvane_client.cpp (ApplyGroupInfo, V2SetInfo); desktop/verify_conformance_group.sh, verify_protocol_v2_invites.sh",
+        "android": "spec 031: v1-сведений нет — android/jni/jni_groups.cpp nativeGroupSetInfo (Session::setGroupInfo — set_info_patch под мьютексом движка, описание ≤ 255 символов), переименование — запись set_info_patch, nativeGroupRequests / nativeGroupRequestDecide (decideJoinRequest со ссылкой заявки); журнал по ссылке — общее ядро (Client::groupSyncByLink с invite_proof) — сценарий android/tgx_group_manage_flow.sh"
       }
     },
     {
@@ -1149,10 +1206,42 @@
       "id": "PROTO-1",
       "title": "Протокол v2 разбирает только движок; неизвестное — нативная заглушка",
       "vectors": "proto/parvane/vectors/codec/frames.json",
+      "spec035": {
+        "codec": "сгенерированный type_codec по всем сообщениям proto/parvane/** вместо ручных таблиц host.rs / wasm/src/lib.rs (backend/protocol/tests/type_codec.rs)",
+        "bindings": "cargo run -p parvane-protocol --bin gen_bindings (--check; backend/protocol/tests/bindings_fresh.rs) → web/telegram-tt/src/api/parvane/v2/gen/model.ts, desktop/parvane-core/include/parvane/gen/model.h + src/gen/model.cpp, android/libtd/src/main/java/org/parvane/gen/Model.kt",
+        "minMinor": "PROTO_MINOR_035 (backend/protocol/src/limits.rs); ниже — UPGRADE_REQUIRED и закрытие (gateway, federation; PARVANE_V2_MIN_MINOR; живой v2_min_minor_live)",
+        "engineInfo": "engineInfo() / pv_engine_info / <шард> --engine-info (backend/protocol/tests/engine_info.rs)",
+        "signedRaw": "подписанное хранится и отдаётся исходными байтами (backend/protocol/tests/signed_raw.rs)"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/conformance.test.ts (PROTO-1)",
-        "desktop": "desktop/parvane-core: разбор только через parvane_protocol.h",
-        "android": "android/jni: разбор только через C ABI движка (общее ядро v2_session/v2_content; protocol_jni.cpp — обвязка для JVM-тестов)"
+        "web": "web/telegram-tt/src/api/parvane/conformance.test.ts (PROTO-1; с spec 035 — ENGINE-1 web: модель только в v2/engine.ts); UPGRADE_REQUIRED — экран пароля, MODEL_TOO_NEW — диалог «данные от более новой версии» (тест modelOpen.test.ts)",
+        "desktop": "desktop/parvane-core: разбор только через parvane_protocol.h; модель — только хост ядра engine_host.cpp (pv_engine_*; сторож ENGINE-1 desktop); строки lng_parvane_upgrade_required, lng_parvane_write_blocked",
+        "android": "android/jni: разбор только через C ABI движка (общее ядро v2_session/v2_content; protocol_jni.cpp — обвязка для JVM-тестов); модель — через хост ядра (model_jni.cpp, сторож ENGINE-1 android); строки SeamText.kt upgrade_required, too_new"
+      }
+    },
+    {
+      "id": "ENGINE-1",
+      "title": "Смысл решает движок: в клиентах нет своего разбора содержимого, сведения личного состояния и истории, проверок прав групп — всё из модели движка",
+      "spec": "specs/035-protocol-evolution (FR-095, FR-096, SC-005; контракт contracts/engine-api.md)",
+      "model": "backend/protocol/src/model/ (схема proto/parvane/engine/v1/model.proto)",
+      "views": {
+        "MessageView": "backend/protocol/src/model/views.rs (content_view, contentOfWire), features.rs",
+        "StateView": "backend/protocol/src/state2.rs + model/state_v1.rs (stateApplyV1 / stateViewV1), вызов viewState",
+        "GroupView": "backend/protocol/src/model/capabilities.rs (GroupFacts::from_state, view), вызов viewGroup",
+        "Capabilities": "backend/protocol/src/model/capabilities.rs (GroupFacts::hides, capabilities), вызовы capabilities и contentHidden",
+        "HistoryPage": "backend/protocol/src/model/host_rows.rs (rowsApply, rowsAll), paging.rs (historyPage, chatList)",
+        "JournalState": "backend/protocol/src/model/journal.rs (writeBlocked)"
+      },
+      "hostMode": "EngineConfig.host_driven: клиентское ядро в модели (model/client_core.rs), вызовы clientCall / historyCall единой точки входа backend/protocol/src/host/call.rs, записи инбокса — ingest, нужды — needs + retry/skip",
+      "storeOrder": "store_batch фиксируется хостом ДО отправки requests того же Outcome, затем storeCommitted (SYNC-1)",
+      "vectors": "proto/parvane/vectors/model/*.json (send_direct, delete_everyone_direct, delete_me, edit_before_row, state_patch_folder, group_perms_media, unknown_content_stub, critical_journal, features_text_fallback, history_paging, fave_sticker)",
+      "engineTests": "backend/protocol/tests/model_vectors.rs, model_client.rs, model_rows.rs, model_paging.rs, model_delta.rs, model_store_order.rs",
+      "guard": "web/telegram-tt/src/api/parvane/conformance.test.ts — describe('ENGINE-1 (web): …'), describe('ENGINE-1: desktop — …'), describe('ENGINE-1: android — …'); it.fails — ещё не переведённое",
+      "status": "web — закрыто (it.fails нет); desktop — открыт один it.fails (показ из StateView, T126), журнал истории не на historyPage (T125); android — в работе (T136, android-ветка не слита): it.fails содержимое из MessageView и показ из StateView, права групп — своя формула шва",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/engine.ts (ModelHost: модель вызывается только здесь, пачка хранилища v2/storeIdb.ts до запросов, ответы — ingest), v2/controller.ts (clientCall, host_driven, contentHidden / capabilities / viewGroup), v2/contentMap.ts (без разбора видов), v2/stateJournal.ts (без сведения), historyRows.ts (строки — rowsApply / historyPage / chatList), store.ts (права композера и меню из capabilities); тесты conformance.test.ts (ENGINE-1 web — все пункты проверки), modelVectors.test.ts (векторы model/* через WASM PvEngine)",
+        "desktop": "desktop/parvane-core/src/engine_host.cpp (единственная точка pv_engine_*, хранилище store_fs.cpp), v2_engine.cpp (clientCall / historyCall), state_model.cpp (личное состояние), v2_content.cpp (contentView / contentOfWire — без разбора видов), v2_session.cpp (contentHidden, capabilities, canSendContent); тесты desktop/parvane-core/tests/model_vectors_tests.cpp, conformance.test.ts (ENGINE-1 desktop; it.fails: tdesktop parvane_client_state.cpp — показ из StateView, T126)",
+        "android": "android/jni/model_jni.cpp поверх хоста ядра engine_host.cpp (pv_engine_* из JNI не вызывается), android/jni/event_queue.h + jni_main.cpp (события пачками одной очередью с потолком, присоединение к JVM один раз), jni_account.cpp (stateAttach, stateFaveSticker); тесты android/libtd/src/test/java/org/drinkless/tdlib/ModelVectorsTest.kt (векторы модели через JNI), EventQueueJniTest.kt, ctest model_vectors_tests.cpp, conformance.test.ts (ENGINE-1 android); в работе (T136, android-ветка не слита): it.fails ParvaneStore.kt — содержимое из MessageView, StateJournal.kt — показ из StateView"
       }
     },
     {
@@ -1286,6 +1375,10 @@
       "snapshotMaxBytes": 3145728,
       "driveBucket": 1,
       "ignoreUnknownDomain": true,
+      "spec035": {
+        "truncation": "Snapshot.complete (под подписью автора) → шард domains удаляет операции seq ≤ upto_seq, синк отвечает truncated_upto; complete только без range-hold (hold::note, domain::hold_journal); тесты domains::tests::truncate_after_complete_snapshot, client_flow::planner_truncated_cursor_takes_snapshot, backend/protocol/tests/range_hold.rs",
+        "open": "хосты web (v2/planner.ts, v2/cloud.ts) и ядра (sections/planner_sync.cpp, sections/cloud_sync.cpp) берут снимок только при пустом курсоре, по need_snapshot — нет; намерение IntentDomainOp модели клиенты не используют"
+      },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/cloud.ts (жизненный цикл контейнеров, очереди, доступ), cloudBlobs.ts (потоковые блобы), cloudDrive.ts (методы провайдера), controller.ts (событие cloudChanged, копия ключей), provider.ts (экспорт/импорт ключей в линковке); тесты cloudBlobs.test.ts, cloudModel.test.ts; сценарии scripts/e2e_web_cloud.mjs, e2e_web_cloud_sync.mjs, e2e_web_cloud_chat.mjs, e2e_web_cloud_share.mjs",
         "desktop": "движок общий (backend/protocol/src/client_cloud.rs): ключи контейнеров принимаются и хранятся, раздела «Облако» нет; тесты client_flow.rs cloud_drive_on_own_devices_and_rotated_on_revoke, cloud_shared_folder_roles_revoke_and_leave",
@@ -1453,10 +1546,14 @@
         "reportedReadUuids",
         "readuuids"
       ],
+      "spec035": {
+        "model": "строки, место в ленте, маркеры и хранение (history-row, history-mark) — модель: backend/protocol/src/model/host_rows.rs (rowsApply, rowsAll), paging.rs (historyPage, chatList); тесты backend/protocol/tests/model_rows.rs, model_paging.rs; векторы proto/parvane/vectors/model/history_paging.json, edit_before_row.json, delete_everyone_direct.json, delete_me.json",
+        "status": "web — строки в модели (T114); desktop и android (общее ядро) — строки в FileRowStore ядра, перевод на historyPage — T125 (в работе)"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/historyModel.ts (строка ↔ JSON движка), historyRows.ts (m:<uuid>.hs, надгробия, сироты, historyCanDelete), v2/history.ts (очередь — одна пачка 30–120 с (S7-3) с проверкой «уже в журнале», книга цепочек писателей (S7-4), JournalNotice, опрос 60 с, перенос один раз), v2/controller.ts applyEvent (Delete/Edit/Reaction/Pin → операции), messages.ts deleteMessages (область по выбору); тесты historyRows.test.ts, v2/history.test.ts, protocol.vectors.test.ts (history/*); сценарий scripts/run_web_history_sync_e2e.sh",
-        "desktop": "desktop/parvane-core/src/history_sync.cpp (HistorySync: очередь — одна пачка 30–120 с (S7-3), запечатанные тела повторяются без перезапечатывания, «уже в журнале», книга цепочек (S7-4), JournalNotice, опрос 60 с, перенос один раз, мутация до строки ждёт автора; FileRowStore), tdesktop parvane_client_history.cpp (хранилище RowState, перенос прежнего журнала), parvane_client.cpp ApplyIncomingMutation / MirrorDelete («у всех» по historyCanDelete, «только у меня» — только журнал); тесты parvane_history_sync_tests, parvane_protocol_vectors_tests (history/*); сценарий desktop/verify_history_sync.sh",
-        "android": "spec 033: то же ядро, что desktop (desktop/parvane-core/src/history_sync.cpp, в android/jni/CMakeLists.txt): android/jni/jni_history.cpp — хранилище строк RowState (FileRowStore ядра: history-<адрес>.jsonl, надгробия и сироты не теряются при свёртке), перенос прежнего journal.jsonl один раз (convertLegacyJournal), события шва из строк (showStates: message/edited/meta/deleted, удалённое не показывается), historyApplyIncomingMutation (Delete/Edit/Reaction/Pin операциями с by/by_admin, права — движок, неизвестная цель — сирота); android/jni/jni_messages.cpp nativeDelete («у всех» по historyCanDelete — мутация v2 + надгробие EVERYONE, «только у меня» — только надгробие ME), свои правка/реакция/закреп — операции журнала с op_id мутации; Kotlin Client.kt messageProperties (canDeleteForEveryone: личный чат — и чужое); тест libtd ParvaneStoreHistoryTest; сценарий android/tgx_history_sync_flow.sh"
+        "web": "web/telegram-tt/src/api/parvane/historyRows.ts (spec 035 T114: строками владеет модель — rowsApply / rowsAll, страницы historyPage / chatList, своей копии строк нет), v2/historyModel.ts (операции ↔ JSON движка), v2/history.ts (журнал аккаунта: очередь — одна пачка 30–120 с (S7-3) с проверкой «уже в журнале», книга цепочек писателей (S7-4), JournalNotice, опрос 60 с, перенос один раз), v2/controller.ts applyEvent (Delete/Edit/Reaction/Pin → операции), messages.ts deleteMessages (область по выбору), provider.ts (fetchMessages — страницами модели); тесты historyRows.test.ts, v2/history.test.ts, protocol.vectors.test.ts (history/*), modelVectors.test.ts (model/history_paging); сценарий scripts/run_web_history_sync_e2e.sh",
+        "desktop": "desktop/parvane-core/src/history_sync.cpp (HistorySync: очередь — одна пачка 30–120 с (S7-3), запечатанные тела повторяются без перезапечатывания, «уже в журнале», книга цепочек (S7-4), JournalNotice, опрос 60 с, перенос один раз, мутация до строки ждёт автора; FileRowStore), tdesktop parvane_client_history.cpp (хранилище RowState, перенос прежнего журнала), parvane_client.cpp ApplyIncomingMutation / MirrorDelete («у всех» по historyCanDelete, «только у меня» — только журнал); тесты parvane_history_sync_tests, parvane_protocol_vectors_tests (history/*); сценарий desktop/verify_history_sync.sh; spec 035: сессия журнала — historyCall модели (v2_engine.cpp), строки — пока FileRowStore ядра (перевод на historyPage — T125)",
+        "android": "spec 033: то же ядро, что desktop (desktop/parvane-core/src/history_sync.cpp, в android/jni/CMakeLists.txt): android/jni/jni_history.cpp — хранилище строк RowState (FileRowStore ядра: history-<адрес>.jsonl, надгробия и сироты не теряются при свёртке), перенос прежнего journal.jsonl один раз (convertLegacyJournal), события шва из строк (showStates: message/edited/meta/deleted, удалённое не показывается), historyApplyIncomingMutation (Delete/Edit/Reaction/Pin операциями с by/by_admin, права — движок, неизвестная цель — сирота); android/jni/jni_messages.cpp nativeDelete («у всех» по historyCanDelete — мутация v2 + надгробие EVERYONE, «только у меня» — только надгробие ME), свои правка/реакция/закреп — операции журнала с op_id мутации; Kotlin Client.kt messageProperties (canDeleteForEveryone: личный чат — и чужое); тест libtd ParvaneStoreHistoryTest; сценарий android/tgx_history_sync_flow.sh; spec 035: то же — сессия журнала через historyCall модели общего ядра, строки — FileRowStore ядра (T125 вместе с desktop)"
       }
     },
     {
@@ -1479,6 +1576,10 @@
         "segments newest first",
         "history.sync(after=upto, skip_chunks)"
       ],
+      "spec035": {
+        "model": "вход нового устройства по контрольной точке умеет модель (backend/protocol/tests/model_history_checkpoint.rs); заменяющая точка не собирается поверх непонятого (range-hold, backend/protocol/tests/compat_circle.rs)",
+        "status": "точки строят и читают прежние пути клиентов (web v2/history.ts, ядро history_sync.cpp); historyPage.pending модель пока не выдаёт (профиль читается целиком)"
+      },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/history.ts (bootstrap, loadCheckpoint, buildCheckpoint, orderSegments, historyNeedsReplace, откат головы); тест v2/history.test.ts (фальшивый сервер журнала)",
         "desktop": "desktop/parvane-core/src/history_sync.cpp (joinLocked, loadCheckpointLocked, buildCheckpointLocked, откат головы, stateReady rotated → перезалив); тест parvane_history_sync_tests (вход по точке, сегменты, CAS, откат, горизонт → замена)",
@@ -1630,15 +1731,20 @@
         "ERROR_CODE_DOMAIN_UNREACHABLE",
         "ERROR_CODE_SERVER_KEY_CHANGED"
       ],
+      "spec035": {
+        "remoteGroups": "group.remote.subscribe / group.remote.unsubscribe (таблица remote_group_subscriptions, ≤ 5000 на пользователя); пуш группы без подписки отбрасывается молча; подписку ставит модель движка (model/mod.rs refresh_groups, перенос — model/migration.rs); членство в чужой группе — маршрутный метаданный своего сервера",
+        "tests": "messenger v2_fed::tests::push_of_unsubscribed_group_is_dropped; живой parvane-integration --test v2_federation_live (federation_push_of_unsubscribed_group_is_dropped)",
+        "minMinor": "кадры федерации — только от партнёров с proto_minor ≥ PROTO_MINOR_035 (backend/shards/federation/src/inbound.rs)"
+      },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live",
-        "desktop": "parvane-core include/parvane/v2_engine.h (OutRequest.dest), v2_link.h (Connection::request с dest), v2_control.h (Control::call с dest), src/v2_session.cpp (groupDomainLocked, requestForeignTokensLocked), src/v2_content.cpp (Media.blob_domain); tdesktop parvane_client.cpp (NoteFederationFailure — причины отказа строками EN+RU). Сценарий desktop/verify_federation.sh (зелёный 19 окт 2026) (два локальных сервера a.parvane.test/b.parvane.test с шардом federation на тестовом транспорте, по клиенту на сервер, личное письмо в обе стороны; verify_lib.sh — порты стека PV_NATS_PORT/PV_GW_WS_PORT/PV_GW_TCP_PORT, PV_FEDERATION_PEERS). tests/v2_tests.cpp проверяет только перенос blob_domain",
-        "android": "spec 031: адресат запросов (dest_domain), жетоны сервера адресата, домены групп и блобов — общее ядро (те же исходники parvane_core, что desktop: v2_session, v2_account, v2_control, v2_content; сторож android/tools/check_core_sources.sh); профиль адреса чужого сервера — android/jni/jni_account.cpp nativeResolve (resolveProfiles по доменам, federation_error); причины отказа (FEDERATION_UNAVAILABLE, DOMAIN_BLOCKED/REFUSED/UNREACHABLE, SERVER_KEY_CHANGED) — событие federation_error JNI (noteFederationFailure в jni_main.cpp: отправка и профиль адреса) → понятный тост на языке UI (tgx-overlay .../parvane/sections/AccountController.kt AccountUi.federationToast, не чаще раза в 10 с на причину); сценарий android/tgx_federation_flow.sh — два стека (a/b.parvane.test), переписка X ↔ desktop через федерацию в обе стороны, недоступный сервер → отказ «unreachable»"
+        "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live; подписка на группы чужого сервера — модель движка (v2/engine.ts исполняет запросы итога); в прогонах фазы 11 spec 035 сценарий красный на стенде MSI (как и до правок фазы, не разобран)",
+        "desktop": "parvane-core include/parvane/v2_engine.h (OutRequest.dest), v2_link.h (Connection::request с dest), v2_control.h (Control::call с dest), src/v2_session.cpp (groupDomainLocked, requestForeignTokensLocked), src/v2_content.cpp (Media.blob_domain); tdesktop parvane_client.cpp (NoteFederationFailure — причины отказа строками EN+RU). Сценарий desktop/verify_federation.sh (зелёный 19 окт 2026) (два локальных сервера a.parvane.test/b.parvane.test с шардом federation на тестовом транспорте, по клиенту на сервер, личное письмо в обе стороны; verify_lib.sh — порты стека PV_NATS_PORT/PV_GW_WS_PORT/PV_GW_TCP_PORT, PV_FEDERATION_PEERS). tests/v2_tests.cpp проверяет только перенос blob_domain; подписка на группы чужого сервера — модель движка через хост ядра engine_host.cpp (spec 035, verify_federation.sh зелёный в прогоне фазы 12)",
+        "android": "spec 031: адресат запросов (dest_domain), жетоны сервера адресата, домены групп и блобов — общее ядро (те же исходники parvane_core, что desktop: v2_session, v2_account, v2_control, v2_content; сторож android/tools/check_core_sources.sh); профиль адреса чужого сервера — android/jni/jni_account.cpp nativeResolve (resolveProfiles по доменам, federation_error); причины отказа (FEDERATION_UNAVAILABLE, DOMAIN_BLOCKED/REFUSED/UNREACHABLE, SERVER_KEY_CHANGED) — событие federation_error JNI (noteFederationFailure в jni_main.cpp: отправка и профиль адреса) → понятный тост на языке UI (tgx-overlay .../parvane/sections/AccountController.kt AccountUi.federationToast, не чаще раза в 10 с на причину); сценарий android/tgx_federation_flow.sh — два стека (a/b.parvane.test), переписка X ↔ desktop через федерацию в обе стороны, недоступный сервер → отказ «unreachable»; подписка на группы чужого сервера — модель движка общего ядра (spec 035)"
       }
     },
     {
       "id": "GPHOTO-1",
-      "title": "Фото частной группы v2 шифруется (PVB2 + capability); секрет — в записи журнала SetInfo.avatar_key",
+      "title": "Фото частной группы v2 шифруется (PVB2 + capability); с spec 035 секрета в журнале нет — SetInfo.avatar_key_id, секрет участникам — конвертом эпохи GroupAvatarKey, держателю ссылки — InviteAvatarWrap (до spec 035 — SetInfo.avatar_key)",
       "recordField": "SetInfo.avatar_key",
       "secretBytes": 32,
       "derive": {
@@ -1674,9 +1780,9 @@
         "tests": "group::tests::set_info_has_no_avatar_key_bytes, group::tests::invite_avatar_wrap_opens_only_with_link_secret"
       },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/groupPhoto.ts (deriveGroupPhotoKeys), media.ts (uploadGroupPhoto, rememberGroupPhoto), provider.ts (editChatPhoto), v2/controller.ts (setGroupInfo, toWireGroupInfo)",
-        "desktop": "desktop/parvane-core/src/blobcrypt.cpp (deriveGroupPhotoKeys, sealGroupPhoto, openGroupPhoto), v2_session.cpp (uploadGroupPhoto, downloadGroupPhoto, changeGroup set_info_patch), v2_session_groups.cpp (setGroupInfo); tdesktop parvane_client_groups.cpp (SetGroupPhoto, ClearGroupPhoto, FetchPublicImage), parvane_client.cpp (DownloadAvatar, g_groupAvatarKeys)",
-        "android": "android/jni/jni_groups.cpp (nativeGroupSetPhoto, nativeGroupSetInfo), jni_messages.cpp (nativeDownloadFile, kind group_photo), jni_main.cpp (avatar_key в сведениях группы); Client.kt (syncGroups — загрузка по avatar_key)"
+        "web": "web/telegram-tt/src/api/parvane/groupPhoto.ts (deriveGroupPhotoKeys), media.ts (uploadGroupPhoto, rememberGroupPhoto), provider.ts (editChatPhoto), v2/controller.ts (setGroupInfo; запись SetInfo с фото и рассылка GroupAvatarKey — движок, groupSetPhoto; фото — GroupView.photo из viewGroup; перезалив при переносе — needs group_avatar_reupload)",
+        "desktop": "desktop/parvane-core/src/blobcrypt.cpp (deriveGroupPhotoKeys, sealGroupPhoto, openGroupPhoto), v2_session.cpp (uploadGroupPhoto, downloadGroupPhoto), v2_session_groups.cpp (setGroupInfo, setGroupPhotoLocked → Client::groupSetPhoto движка, v2_engine.cpp); tdesktop parvane_client_groups.cpp (SetGroupPhoto, ClearGroupPhoto, FetchPublicImage), parvane_client.cpp (DownloadAvatar, g_groupAvatarKeys); фото из GroupView — T126",
+        "android": "android/jni/jni_groups.cpp (nativeGroupSetPhoto → Session::uploadGroupPhoto / setGroupInfo общего ядра, запись — движок), jni_messages.cpp (nativeDownloadFile, kind group_photo), jni_main.cpp (avatar_key в сведениях группы — секрет, сошедшийся с журналом); Client.kt (syncGroups — загрузка по avatar_key); фото из GroupView — T136, в работе"
       }
     },
     {

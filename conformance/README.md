@@ -50,6 +50,21 @@ v1-кода в `android/jni` нет, остальные android-пункты с�
 `android/libtd`. Поле `clients.android` описывает состояние после spec 031; там, где
 android сделан не полностью, — пометка «ОТКРЫТО».
 
+**spec 035 (11 ноя 2026): смысл решает движок (ENGINE-1).** Поверх движка `parvane-protocol` появилась модель
+(`backend/protocol/src/model/`, схема `proto/parvane/engine/v1/model.proto`, типы клиентов генерируются —
+`web/telegram-tt/src/api/parvane/v2/gen/model.ts`, `desktop/parvane-core/include/parvane/gen/model.h`,
+`android/libtd/src/main/java/org/parvane/gen/Model.kt`): клиент подаёт намерения и ввод сервера, модель сама
+разбирает содержимое (`MessageView`), сводит личное состояние (журнал `state.v2`, `StateView`), ведёт сведения и права
+групп (`GroupView`, `Capabilities`) и отдаёт готовые представления; хранилище — пачками `store_batch`, которые хост
+фиксирует до запросов того же итога (SYNC-1). Клиенты перешли на модель режимом хоста (`host_driven`, единая точка
+входа `clientCall`/`historyCall`, `backend/protocol/src/host/call.rs`): web — фаза 11, desktop — фаза 12, android —
+общее с desktop ядро и JNI-очередь событий (фаза 13; перевод шва `libtd` — T136, в работе). Имена прежних поштучных
+экспортов обвязок в правилах ниже (`PvClient`, `PvState`, `PvHistory`, `pv_client_*`, `pv_state_*`, `pv_history_*`) —
+исторические: эти экспорты удалены (T118 web, T129 desktop), те же действия идут через `clientCall`. Правила, смысл
+которых теперь решает модель, — STATE-1, HIST-1, HIST-2, GROUP-2, GROUP-3, GPHOTO-1, TYPING-1, REVOKE-1, PACK-1,
+PROTO-1, CONTENT-1, FED-1, DOMAIN-2 — дополнены абзацами «с spec 035»; LEGACY-1 закрыт. Сводка — ENGINE-1 (после
+PROTO-1).
+
 ## SYNC-1. Дисковый курсор двигается только по применённому
 
 Курсор, переживающий рестарт, продвигается ТОЛЬКО за сообщения, которые
@@ -200,9 +215,19 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 `v2/contentMap.ts`). Стикер без набора — пусто. Проверка — движок `msg::is_pack_sticker_id`, векторы
 `proto/parvane/vectors/content/sticker_id.json` (тест `vectors_sticker_id`). Избранные стикеры — объект личного
 состояния state.v2 `FAVED_STICKER` (ключ `set_id ‖ "/" ‖ sticker_id`, значение — `media` и время, до 200, как Telegram),
-синхронизируются между своими устройствами; «В избранное» в ленте — во всех клиентах. ОТКРЫТО: объект `FAVED_STICKER`
-и намерение `faveSticker` — с фазой state.v2 (`contracts/state-v2.proto`); клиенты заполняют `sticker_id` по-новому
-при переходе на модель движка.
+синхронизируются между своими устройствами; «В избранное» в ленте — во всех клиентах.
+
+**С spec 035 (11 ноя 2026) — по модели движка.** Объект `OBJECT_KIND_FAVED_STICKER = 20` журнала `state.v2` и
+намерение модели `fave_sticker` (`IntentFaveSticker`, вектор `proto/parvane/vectors/model/fave_sticker.json`) есть;
+`sticker_id` при отправке и в ленте заполняет движок (`contentOfWire`/`contentView`,
+`backend/protocol/src/model/views.rs`), а не клиент. Клиенты: web — «В избранное» в ленте и избранные из журнала
+(`provider.ts`, `v2/stateJournal.ts favedStickers`; e2e `scripts/run_web_fave_sticker_e2e.sh` — синхронизация на
+второе web-устройство); desktop — через журнал состояния ядра (`Session::stateFaveSticker`, tdesktop
+`parvane_client_state.cpp`; id набора и элемента — `pack_archive.h` `favedSetId`/`favedStickerId`, общий вектор
+`proto/parvane/vectors/clients/sticker-ref.json`); android — объекты модели
+(`jni_account.cpp` `stateFaveSticker`/`stateFavedStickers`, `Stickers.kt`; сторож ENGINE-1 android). ОТКРЫТО: web даёт
+одноимённому набору второго отправителя свой id набора, desktop — нет (возможна коллизия избранного между такими
+наборами; отчёт фазы 12).
 
 ## PACK-2. Один набор от разных отправителей — один набор
 
@@ -357,8 +382,16 @@ tdesktop `NoteFederationFailure` — причины строками EN+RU; сц
    пользователь: это **маршрутный метаданный**, без которого доставка невозможна (принцип III), — содержимое и
    состав группы ему по-прежнему не видны. Подписку ставит клиент (модель движка — при вступлении и в разовом
    переносе на все свои удалённые группы). Тест: messenger `v2_fed::tests::push_of_unsubscribed_group_is_dropped`.
-   ОТКРЫТО: живой `v2_federation_live` (B шлёт пуш группы B неподписанной `alice@a` → записи нет); клиенты
-   подписку ещё не ставят — до их перехода записи групп чужого сервера им не доставляются.
+   Живой — `parvane-integration --test v2_federation_live` (`federation_push_of_unsubscribed_group_is_dropped`;
+   законные сценарии федерации подписываются при догоне журнала группы, как модель).
+   **С spec 035 (11 ноя 2026) подписку ставит модель движка**, не клиент: при каждом изменении сведений группы
+   чужого домена (`refresh_groups`, в режиме хоста — на шаге `flush`) модель выпускает `group.remote.subscribe`
+   (стал участником) или `group.remote.unsubscribe` (вышел, исключён, группа удалена), хост лишь отправляет запросы
+   итога; разовый перенос подписывает на все уже известные удалённые группы (`model/migration.rs`). Web, desktop и
+   android (общее ядро) свою подписку не собирают. Сервер федерации принимает кадры партнёров только с
+   `proto_minor ≥ PROTO_MINOR_035`, ниже — `UPGRADE_REQUIRED` (PROTO-1). ОТКРЫТО: web `run_web_federation_e2e.sh` в
+   прогонах фазы 11 на стенде MSI красный (был красным и до правок фазы, не разобран); desktop
+   `verify_federation.sh` зелёный (прогон фазы 12).
 
 ## EMOJI-1. docId кастом-эмодзи — от имени из ссылки
 
@@ -471,6 +504,15 @@ desktop `desktop/verify_conformance_perms.sh` (файл в обход скрыт
 на эмуляторе `android/tgx_group_manage_flow.sh` (файл участника без права
 скрыт и в чат не попал, после возврата права показан; зелёный 27 сен 2026).
 Правило закрыто на всех клиентах.
+
+**С spec 035 (11 ноя 2026) — права решает модель (ENGINE-1).** Формула одна — в движке
+(`backend/protocol/src/model/capabilities.rs`: `GroupFacts::hides` для приёмного фильтра, `capabilities` для композера
+и меню — медиа, стикеры, опросы, ссылки, а также «удалить у всех» и закреп для админа), сведения группы — из её
+журнала (GROUP-3). Вызовы модели: `contentHidden{chat, from, wire}` (скрыть ли входящее) и `capabilities{chat}`;
+вектор `proto/parvane/vectors/model/group_perms_media.json`. Web и desktop своей формулы не держат (сторожа ENGINE-1 web
+и desktop: в `groups.ts` нет `isContentAllowedForMember`, в ядре — `group.h`/`chat_rules.h` без формулы GROUP-2).
+ОТКРЫТО: android пока считает права своей формулой `ParvaneStore.isContentAllowedForMember` (шов `libtd`, T136 — в
+работе, android-ветка не слита); таблица `cases` по-прежнему сверяет её с движком.
 
 ## E2E-1. Автор берётся из провода, SKDM — из identity конверта, неподтверждённое не показывается
 
@@ -842,6 +884,54 @@ Android: JVM `ProtocolV2SeamTest` (`state/merge` через JNI) и `StateJourna
 (папки, блок-лист, черновики, архив, отложенные — `StateJournal.kt`). Тесты во
 всех трёх клиентах есть — правило закрыто.
 
+**С spec 035 (11 ноя 2026) — журнал `state.v2`: сведение по полям, сводит только модель.** Всё выше описывает журнал
+`state.v1`: LWW по объекту целиком терял одно из двух одновременных правок разных полей одной папки или контакта
+(тест движка `state::tests::concurrent_field_edits_lost_v1` фиксирует прежнее поведение). С этого выпуска сервер
+отвечает на `state.append` `UPGRADE_REQUIRED`, прежний журнал (`user_state_log`) заморожен и `state.sync` только
+читает его — для разового переноса.
+
+1. **Журнал.** `state.ops.append` / `state.ops.sync` (шард messenger `v2_state.rs`, таблица `user_state_log_v2`,
+   миграция `0007_user_state_log_v2.sql`); повтор `op_id` с теми же байтами — прежний `seq`, с другими — `DUPLICATE`;
+   лимиты и страница синка — те же, что у `state.v1` выше. Живой тест — `parvane-integration --test v2_state2_live`.
+2. **Объект** — `(вид, ключ)` (`proto/parvane/state/v2/state.proto`, `ObjectKind`: папка, порядок папок, блок-лист,
+   уведомления и умолчания, черновик, отложенное, архив, список закрепа, звонок, ссылка-приглашение, контейнеры
+   «Плана» и «Облака», «непрочитано», быстрая реакция, свои наборы, свои GIF, контакт, очистка чата, избранный стикер).
+   Операции — `Create`, `Patch{set, clear}`, `Delete`, `SetAdd`/`SetRemove`, `Mark`, `Migrated`.
+3. **Сведение** (`backend/protocol/src/state2.rs`): у каждого поля свой регистр с меткой `(lamport, device_id,
+   op_id)`, ничья — байтами значения (очистка меньше любого значения); элемент множества — регистр «есть/нет»;
+   отметки только растут и сильнее надгробия (`SCHEDULED` 1 — «отправлено», `CHAT_CLEARED` 2 — граница очистки).
+   Объект виден, если самая свежая метка среди `created`, полей и элементов новее надгробия; в показ идут только
+   поля новее надгробия. Итог побайтно один при любом порядке, повторах и разбиении. Отказы зависят только от самой
+   операции (плохой ключ, `lamport` 0 или больше потолка приёма `ACCEPT_LAMPORT_CEILING` = 2^40, поле сразу в `set`
+   и `clear`, зарезервированные папки, значение сверх лимита схемы).
+4. **Непонятое** (CONTENT-1, «критичность»): неизвестное поле значения и неизвестный вид объекта хранятся исходными
+   байтами и сводятся как известные, в показ не попадают; при непонятой записи заменяющий снимок запрещён
+   (`RangeHeld`); критичный вид операции (1000–1999) закрывает журнал для записи — модель отдаёт
+   `writeBlocked{journal, CRITICAL_UNKNOWN}`, клиент показывает «обновите приложение», чтение известного работает.
+5. **Шифрование**: `nonce(12) ‖ ChaCha20-Poly1305(StateOp)`, AAD = `"parvane/v2/state2\0" ‖ user ‖ op_id`; записи
+   разового переноса — с детерминированным nonce (`HMAC-SHA256(ключ, "parvane/migrate/nonce\0" ‖ op_id ‖ текст)`):
+   два устройства, перенёсшие одно и то же, пишут одинаковые байты, сервер отдаёт прежний `seq`. Перенос
+   `state.v1` → `state.v2` — `backend/protocol/src/migrate/state_v1.rs`, последней — `Migrated{from_seq}`.
+6. **Клиенты не сводят** (ENGINE-1): хост отдаёт модели желаемое в форме снимка `state.v1` (`stateApplyV1`),
+   модель сама выпускает изменившиеся поля (`Patch`), новые и пропавшие объекты и отметки
+   (`backend/protocol/src/model/state_v1.rs`; списки, в том числе `Folder.include_peers`, — регистром целиком), показ
+   обратно — `stateViewV1`. Своя правка без связи уходит при подключении разницей от показанного ДО правки, а не от
+   только что сведённого (иначе откатывала правку другого устройства).
+
+Векторы — `proto/parvane/vectors/state2/` (`patch`, `sets`, `ordered`, `delete_vs_edit`, `marks`, `unknown_fields`,
+`rejected`; набор `state2/*` в `conformance::run`) и `proto/parvane/vectors/model/state_patch_folder.json`; тесты
+движка `tests/state2_vectors.rs`, `tests/state2_props.rs` (≥ 2000 перестановок и разбиений → один снимок),
+`tests/migrate_state_v1.rs`. Клиенты прогоняют наборы `state2/*` той же обвязкой, что `state/merge`: web
+`protocol.vectors.test.ts`, ядро `protocol_vectors_tests.cpp`, android `ProtocolV2SeamTest.kt`. Реализации: web
+`v2/stateJournal.ts` (виды личного состояния после первой проекции живут в памяти, на диске — только ещё не принятая
+журналом правка; `localState.ts`, тест `localState.modelBacked.test.ts`); desktop — ядро `state_model.cpp`
+(`Session::stateSync` с показанным снимком как базой разницы) и tdesktop `parvane_client_state.cpp`; android — то же
+ядро (`jni_account.cpp` `stateAttach`), шов `StateJournal.kt`. Сценарии «две правки разных полей без связи»: web
+`scripts/run_web_state_patch_e2e.sh`, web↔desktop `scripts/run_protocol_mixed_e2e.sh state-patch-desktop` и
+`desktop/verify_state_patch.sh`, android `android/tgx_state_patch_flow.sh`. ОТКРЫТО: показ во всех трёх клиентах —
+из снимка формы `state.v1` (`stateViewV1`), а не из `StateView` (`viewState`) напрямую: в web — осознанно (раскладка
+полей та же), в desktop — `it.fails` сторожа ENGINE-1 (T126), в android — T136.
+
 ## SEAL-1. Скрытый отправитель: конверт вскрывает только адресат
 
 **Spec 007, R6, D-05, класс 11.** Личное сообщение v2 — `SealedEnvelope`:
@@ -911,6 +1001,29 @@ proto3-JSON собирается обратно в те же байты.
 если у нового вида нет вектора или файл не перегенерирован). Сверка — набор
 движка `content/kinds` плюс поле `client` вектора (класс и поля содержимого
 UI) тестом каждого клиента — теми же файлами, что у SEAL-1.
+
+**С spec 035 (11 ноя 2026) — показ решает модель, у вида есть критичность.**
+1. **Разбор — только движок** (ENGINE-1): класс, поля показа, мутации и ответ входящего — `content_view` движка
+   (`backend/protocol/src/model/views.rs`; событие записи несёт готовый `view`), исходящее — `contentOfWire`. Модель
+   отдаёт строку `MessageView` с `disposition: SHOW | STUB | STUB_CRITICAL` и телом `ViewBody` уже в виде показа; вид,
+   которого клиент не объявил в `features` (`backend/protocol/src/model/features.rs`), отдаётся текстом его поля
+   `text` (вектор `proto/parvane/vectors/model/features_text_fallback.json`; TASK-1, CLOUD-1, ARTICLE-1). Своего
+   разбора видов нет в web `v2/contentMap.ts` и в ядре `v2_content.cpp` (сторожа ENGINE-1); android-шов
+   `ParvaneStore.kt` пока разбирает событие ядра сам (T136, в работе).
+2. **Диапазоны номеров** видов во всех oneof журналов и содержимого (`msg.v2.Content.kind`, `state.v2.StateOp.op`,
+   виды `history.v1`, изменения `planner.v1`/`cloud.v1`, `GroupStateChange.change`, `InboxRecord.item`):
+   **1–999 — обычные, 1000–1999 — критичные** (`specs/035-protocol-evolution/contracts/versioning.md`). Сборка
+   движка проверяет, что каждый известный вид лежит в диапазоне; критичных известных видов в выпуске нет (диапазон
+   зарезервирован, вид ≥ 1000 есть только в тестовой схеме `proto/parvane/sample/`). Тест — `tests/kind_ranges.rs`.
+3. **Неизвестный вид содержимого**: обычный — `STUB` («не поддерживается вашей версией»), ответ и пересылка
+   разрешены; критичный (или критичное неизвестное поле) — `STUB_CRITICAL`: та же заглушка с текстом «обновите
+   приложение», ответ, правка и пересылка запрещены (`unknown.rs`, `Disposition::StubCritical`). Неизвестное
+   обнаруживается по исходным байтам до разбора (`unknown::scan`, векторы `proto/parvane/vectors/unknown/`).
+   Векторы — `proto/parvane/vectors/content/critical.json`, `proto/parvane/vectors/model/critical_journal.json`,
+   `unknown_content_stub.json` (наборы движка `content/critical`, `model/critical_journal`). В событии прежнего вида критичная заглушка — `disposition:
+   "stub"` с `critical: true`. Клиенты (EN+RU): web — `store.ts` (заглушка `critical`), desktop — tdesktop
+   `parvane_client.cpp` (`isCriticalStub` → `lng_parvane_stub_critical`), android — `ParvaneStore.kt` (`stub_critical`,
+   `SeamText.kt`), тест `CriticalStubTest.kt`.
 
 ## L2-1. Режим «усиленная приватность»: сетка размеров, согласование, без typing/presence
 
@@ -1027,6 +1140,14 @@ desktop не соединялся (ICE оставался в `new`), а авто
 `v2_tests.cpp`, `e2e_tests.cpp`, сторож `conformance.test.ts`, сценарий
 `scripts/run_protocol_mixed_e2e.sh mixed-devices` (пара удалена с T110: web легаси-копий не шлёт).
 
+**Правило закрыто (spec 035, 11 ноя 2026): протокол v1 удалён везде, v1-устройств нет.** Сервер без v1 с T110
+(7 окт 2026, `msg.deliver_legacy` отвечает `UNAVAILABLE`), клиенты легаси-копий не шлют и запись `LegacyV1` целиком
+пропускают — web (T110), desktop (spec 029), android (spec 031); сторож `conformance.test.ts` (LEGACY-1) проверяет,
+что v1-путь в клиенты не вернулся. Всё выше — история. Остатки в движке и сервере — задача T096 spec 035 (не сделана):
+`backend/protocol/src/legacy_v1.rs`, запись `LegacyDeviceSet` и вызов `msg.deliver_legacy` в `client.rs`,
+`InboxRecord.legacy_v1`, векторы `proto/parvane/vectors/legacy_v1/`, таблица `legacy_origin` messenger; удаляются
+после проверки на копии баз прода, что неподтверждённых записей `legacy_v1` в `inbox_log` нет (T143).
+
 ## TYPING-1. «Печатает» в чате v2 — только эфемерным каналом v2
 
 **Spec 007, FR-013/FR-064, D-07 (2 окт 2026).** Кадр v1 `msg.typing.<chatId>`
@@ -1060,6 +1181,15 @@ ephemeral_typing_and_presence`, ядро `v2_session_tests.cpp` (живой), we
 `l2.test.ts`, сторож `conformance.test.ts`, сценарии
 `scripts/run_protocol_mixed_e2e.sh web2-web2` и `web2-groups` (нет кадров
 `msg.typing.*`).
+
+**С spec 035 (11 ноя 2026; FR-076).** Прежняя подпись «печатает» группы без `channel_id` (контекст
+`parvane/v2/group-typing\0`) удалена из движка и gateway: принимается только `group-typing2` с каналом, запрос со
+старой подписью отвергается (тесты `group::tests::typing_legacy_signature_rejected`, gateway
+`v2::tests::typing_legacy_signature_rejected`). Утверждение выше «сервер ещё принимает прежнюю подпись от старых
+сборок» больше неверно. Подпись строит только движок (`group::sign_group_typing` в `client.rs`), у клиентов своей
+подписи нет — сторож `conformance.test.ts` (TYPING-1, spec 035). Экспорты `ephSubscribe/ephTyping/ephOpen` и
+`pv_client_eph_*` выше — исторические: клиенты зовут те же действия через `clientCall` модели. Абзац о присутствии
+«на v1» устарел с T110 (v1 нет); канал присутствия — движок v2.
 
 ## REVOKE-1. Отзыв своего устройства на v2
 
@@ -1102,6 +1232,11 @@ ephemeral_typing_and_presence`, ядро `v2_session_tests.cpp` (живой), we
    нужен). Без корня — отзыв как прежде и `ssk_rotation_required`. identity (`log_append`) проверяет тем же движком.
    Тесты: `revocation_flow::ssk_rotation_is_one_entry_and_old_ssk_refused_after`,
    `terminate_all_sessions_twice_with_root`, векторы `proto/parvane/vectors/device_log/ssk_rotate.json`.
+   **С переходом клиентов на модель (spec 035, 11 ноя 2026)** запись смены SSK собирает только движок (вызов
+   `rotateSsk` единой точки входа модели, `clientCall`) — у web, desktop и android (общее ядро) своей сборки записи
+   нет, поэтому одна запись с `resigned` у всех. ОТКРЫТО: одна операция «отзыв + смена SSK»
+   (`revoke_device_with_root`) есть только в движке — в единую точку входа не выведена, клиенты по-прежнему зовут
+   отзыв и смену SSK двумя вызовами (каждый — одна запись журнала).
 
 N. **Выход устройства (6 окт 2026, T197).** При полном выходе устройство само
    убирает себя из журнала: запись `RevokeDeviceId(свой id)`, подписанная КЛЮЧОМ
@@ -1418,13 +1553,20 @@ desktop применял к группе v2 нотис и список v1-шар
    забаненных. Доказательство строит движок (`invite::sync_proof`, `Client::group_sync_by_link`), клиенты сами
    подпись не собирают. Тесты: messenger `v2_groups::tests::access_matrix_*` (каждая клетка по векторам),
    `membership_windows_follow_rejoin`; движок `invite::tests::sync_proof_binds_link_group_user_and_time`.
-   ОТКРЫТО: живой `parvane-integration --test v2_group_access_live`; web/desktop/android шлют `invite_link_id` без
-   доказательства — до перехода на модель движка (spec 035, фазы клиентов) вступление по ссылке в частную группу
-   у них получает `FORBIDDEN` на синке журнала.
+   Живой — `parvane-integration --test v2_group_access_live` (роли `matrix.json` через gateway).
+   Клиенты (spec 035, 11 ноя 2026): `invite_proof` подписывает движок — web (`groupSyncByLink` единой точки входа,
+   `v2/controller.ts`), desktop и android (общее ядро: `v2_engine.cpp` `Client::groupSyncByLink`, `v2_session.cpp`);
+   своей подписи у клиентов нет.
 5. **Одно уведомление на группу (spec 035, остаток S7-16).** Неподтверждённое уведомление журнала группы
    (`GroupStateNotice`) в инбоксе устройства замещается следующим той же группы (`inbox_log.group_key`, одна
    транзакция): клиент по уведомлению синкает журнал от своего курсора, номер версии в уведомлении — подсказка.
    Тест: messenger `v2::spent_tests::group_state_notices_replace_unacked_of_same_group`.
+6. **Сведения и права — из модели (spec 035, ENGINE-1).** Название, описание, фото, состав, роли, права и ссылки
+   группы модель берёт из журнала группы (`GroupFacts::from_state`) и отдаёт `GroupView` (`viewGroup`) и изменением
+   `groupChanged`; права композера и меню — `capabilities` (GROUP-2). Своего кэша сведений групп у web больше нет
+   (`saveGroupCache` удалён, OPT-016: тест `personalStore.groupCache.test.ts`), фото группы web берёт из
+   `GroupView.photo`; desktop и android — сведения движка через ядро (`Client::groupInfo`). ОТКРЫТО: tdesktop и шов
+   android не читают `GroupView` напрямую (T126, T136).
 
 ## E6-1. Клиент работоспособен без соединения v1
 
@@ -1521,6 +1663,73 @@ Android — закрыто удалением (spec 031): групп v1 у andro
 только в `v2/engine.ts`, в `v2/*.ts` нет varint/DataView и `JSON.parse` не
 движковых ответов). Векторы кадров — `proto/parvane/vectors/codec/frames.json`.
 
+**С spec 035 (11 ноя 2026).**
+1. **Кодеки из схемы.** Ручные таблицы `encode_message`/`decode_message` (`host.rs`, `wasm/src/lib.rs`) заменены
+   сгенерированным `type_codec` по всем сообщениям `proto/parvane/**` (тест `tests/type_codec.rs`); «новое поле —
+   во всех обвязках» без ручной правки. Типы модели для клиентов порождает `cargo run -p parvane-protocol --bin
+   gen_bindings` (`--check`, тест `tests/bindings_fresh.rs`) — правка сгенерированных файлов руками запрещена.
+2. **Версии.** `PROTO_MINOR_035` (`backend/protocol/src/limits.rs`); gateway и federation отказывают ниже минимума
+   (`UPGRADE_REQUIRED` и закрытие; `PARVANE_V2_MIN_MINOR` в compose, `scripts/run_web_e2e.sh`, `desktop/verify_lib.sh`,
+   `android/tgx_lib.sh`; живой `v2_min_minor_live`). Клиент показывает «обновите приложение» сам: web — экран пароля и
+   диалог «данные от более новой версии» (`MODEL_TOO_NEW`, тест `modelOpen.test.ts`), desktop — строки tdesktop
+   `lng_parvane_upgrade_required`, `lng_parvane_write_blocked`, `lng_parvane_stub_critical` (T128), android —
+   `SeamText.kt` (`upgrade_required`, `too_new`, `stub_critical`). `engineInfo()` (`pv_engine_info`,
+   `<шард> --engine-info`, тест `tests/engine_info.rs`) отдаёт версию API модели, минор, форматы хранения и хеши
+   исходников и схемы — по ним манифест выпуска сверяет артефакты (`scripts/make_release_manifest.sh`,
+   `scripts/verify_release_manifest.sh`; прогон по всем артефактам — T144).
+3. **Неизвестное** — заглушка `STUB`/`STUB_CRITICAL` и `writeBlocked` журнала (CONTENT-1, STATE-1); подписанное
+   (журнал устройств, журнал группы, `SignedOp` доменов) хранится и отдаётся исходными байтами
+   (`tests/signed_raw.rs`), без пересборки.
+4. **Смысл — тоже движок** (ENGINE-1 ниже): правило PROTO-1 запрещало клиентам разбор байтов, ENGINE-1 — ещё и
+   собственное толкование разобранного.
+
+## ENGINE-1. Смысл решает движок (spec 035, 11 ноя 2026)
+
+**Spec 035, FR-095, FR-096, SC-005; принцип V.** Разбор содержимого, сведение личного состояния и истории, права
+групп каждый из трёх клиентов делал по-своему, и точечные правки в трёх местах не раз расходились (история этого
+файла, spec 033). С spec 035 смысл живёт в одном месте — модели движка `backend/protocol/src/model/` (схема `proto/parvane/engine/v1/model.proto`,
+контракт `specs/035-protocol-evolution/contracts/engine-api.md`):
+
+- **содержимое** — `MessageView` (`model/views.rs`: `content_view` / `contentOfWire`, выбор показа по `features`
+  — `model/features.rs`); в клиенте нет `switch` по видам содержимого и своих перекладок;
+- **личное состояние** — журнал `state.v2`, сведение по полям только в движке (`state2.rs`, мост формы `state.v1` —
+  `model/state_v1.rs`; STATE-1); в клиенте нет лампортов, меток, сравнения меток, прежнего `state.append`;
+- **строки истории** — модель (`model/host_rows.rs`: `rowsApply`/`rowsAll`, страницы `historyPage`/`chatList`,
+  `model/paging.rs`; HIST-1);
+- **группы** — `GroupView` и `Capabilities` (`model/capabilities.rs`: `GroupFacts`, `hides`, `capabilities`;
+  GROUP-2, GROUP-3); в клиенте нет формулы прав по типу содержимого;
+- **журналы** — состояние записи и `writeBlocked` (`model/journal.rs`, CONTENT-1);
+- **клиентское ядро** — в модели (`model/client_core.rs`): режим хоста `host_driven`, вызовы `clientCall`/`historyCall`
+  единой точки входа (`backend/protocol/src/host/call.rs`), записи инбокса — `ingest`, нужды — `needs` + `retry`/`skip`.
+
+Хост вызывает модель из одного места и исполняет её итог (`Outcome`): пачку хранилища фиксирует ДО запросов того же
+итога, затем `storeCommitted`; ответы сервера на запросы модели подаёт `ingest`. Web — `v2/engine.ts` (`ModelHost`,
+хранилище `v2/storeIdb.ts`), desktop и android — хост ядра `desktop/parvane-core/src/engine_host.cpp` (хранилище
+`store_fs.cpp`; android — `android/jni/model_jni.cpp` поверх него). Векторы модели `proto/parvane/vectors/model/*.json`
+(ожидания руками) прогоняют движок `tests/model_vectors.rs`, web `modelVectors.test.ts` (WASM), ядро
+`model_vectors_tests.cpp` (desktop и android), android `ModelVectorsTest.kt` (JNI).
+
+Сторож — `web/telegram-tt/src/api/parvane/conformance.test.ts`, блоки `describe('ENGINE-1 …')` для web, desktop и
+android: grep по исходникам клиента, что разбора, сведения и прав вне модели нет и модель зовётся только из хоста.
+Пункты `it.fails` — то, что в клиенте ещё не переведено (пока старый путь на месте, они «проходят»; после перевода
+vitest требует снять `.fails`).
+
+Состояние на 11 ноя 2026:
+- **web** — закрыто: все пункты ENGINE-1 (web) — проверки, `it.fails` нет. Вне модели осознанно оставлены черновики,
+  очередь отложенных с параметрами медиа, секреты наборов (C7-3), ссылки-приглашения и служебные виды без журнала;
+  журнал истории аккаунта и контрольные точки пишет `v2/history.ts`; показ личного состояния — `stateViewV1` (та же
+  раскладка, что `StateView`).
+- **desktop** — содержимое (`v2_content.cpp` без разбора видов), личное состояние (`state_model.cpp`), права групп
+  (`Session::contentHidden`/`capabilities`) и клиентское ядро (`v2_engine.cpp`: `clientCall`/`historyCall`) — через
+  модель. ОТКРЫТО: `it.fails` «`parvane_client_state.cpp` — показ из StateView модели» (T126); журнал истории
+  `history_sync.cpp` ещё не на `historyPage` (T125, общий с android).
+- **android** — модель только через хост ядра (`model_jni.cpp`), личное состояние сводит модель, избранные стикеры —
+  объекты модели, события ядра — пачками одной очередью (`event_queue.h`). В РАБОТЕ (T136, android-ветка не слита):
+  `it.fails` «`ParvaneStore.kt` — содержимое из MessageView» и «`StateJournal.kt` — показ из StateView»; права групп
+  шов пока считает сам (`ParvaneStore.isContentAllowedForMember`, GROUP-2).
+
+Правило будет закрыто, когда во всех трёх блоках не останется `it.fails` и смешанные пары (T141) пройдут на модели.
+
 ## Векторы v2 — указатель (T088)
 
 Все правила, которые переносятся на протокол v2, проверяются по векторам
@@ -1530,7 +1739,9 @@ LINK-1) — `device_log/`; журнал группы (GROUP-1, GROUP-2 прав�
 `group_log/`; конверты (SEAL-1, GSEAL-1) — `seal/`; личное состояние
 (STATE-1) — `state/`; ссылки-приглашения — `invite/`; v1-история — `legacy_v1/`;
 права по типу содержимого — `content_guard/`; виды содержимого (CONTENT-1) —
-`content/`; режим «усиленная приватность» (L2-1) — `l2/`.
+`content/`; режим «усиленная приватность» (L2-1) — `l2/`. С spec 035: личное состояние v2 (STATE-1) — `state2/`,
+модель движка (ENGINE-1) — `model/`, матрица доступа к журналу группы (GROUP-3) — `group_access/`, непонятое —
+`unknown/`, хранилище движка — `storage/`.
 
 ## Обязательный сценарий: устройство отсутствовало
 
@@ -1670,8 +1881,13 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
    Снимок без `complete` журнал не трогает; потолок операций контейнера считает живые операции. Код общий (движок
    `domain.rs` `seal_snapshot_complete`, `client_planner.rs`, `client_cloud.rs`); тесты — шард
    `domains::tests::truncate_after_complete_snapshot`, движок `client_flow::planner_truncated_cursor_takes_snapshot`.
-   ОТКРЫТО: хосты web/ядра ещё не зовут `domain.snapshot.get` по `need_snapshot` (до перехода на модель движка
-   курсор такого устройства стоит); отметка `range-hold` хранилища движка в условии `complete` — с фазами 5–6.
+   С spec 035 (11 ноя 2026) условие `complete` учитывает отметки `range-hold` журнала контейнера (`hold::note`,
+   `domain::hold_journal`): снимок не заменяет и не обрезает то, чего составитель не понял (тесты
+   `tests/compat_circle.rs`, `tests/range_hold.rs`). ОТКРЫТО: хосты web (`v2/planner.ts`, `v2/cloud.ts`) и ядра
+   (`sections/planner_sync.cpp`, `sections/cloud_sync.cpp`) берут снимок только при пустом курсоре, а по
+   `need_snapshot` (курсор внутри обрезанного) — нет: курсор такого устройства стоит. Домены в модель движка ещё не
+   переведены: намерение `IntentDomainOp` в `model.proto` есть, но клиенты зовут вызовы `planner*`/`cloud*`
+   клиентского ядра (через `clientCall`) и сами ведут синк контейнеров.
 
 Пределы: 8 000 узлов на контейнер, снимок ≤ 3 МиБ, порог снимка 200 операций.
 
@@ -2017,6 +2233,19 @@ Android (то же ядро, `history_sync.cpp` в `android/jni/CMakeLists.txt`)
 `ParvaneStore.canDeleteForEveryone` (личный чат — и чужое). Тест — `libtd ParvaneStoreHistoryTest`; сценарий —
 `android/tgx_history_sync_flow.sh`.
 
+**С spec 035 (11 ноя 2026) — строки истории в модели движка.** Сведение строки (`history::apply`, пп. 1–4), место в
+ленте (ORDER-1), маркеры «прочитано до» (READ-2) и хранение строк (виды хранилища `history-row`, `history-mark`) —
+модель (`backend/protocol/src/model/host_rows.rs`); показ — `MessageView`, страницы `historyPage`/`chatList`
+(`model/paging.rs`: 20 000 строк страницами по 50 в обе стороны без пропусков и повторов — `tests/model_paging.rs`),
+удалённое — изменение `messageRemove`, надгробие хранит модель. Хост в режиме `host_driven` отдаёт модели все операции
+над строками (своё, входящее, записи журнала, квитанции, удаление у себя) вызовом `rowsApply`; тесты
+`tests/model_rows.rs`, вектор `proto/parvane/vectors/model/history_paging.json`, `edit_before_row.json`,
+`delete_everyone_direct.json`, `delete_me.json`. Web перешёл (T114): `historyRows.ts` своей копии строк не держит
+(в памяти — индекс показанного), `fetchMessages` — страницами модели (`provider.ts`), чаты со строками — `chatList`;
+журнал истории аккаунта (очередь, синк, перенос) по-прежнему ведёт `v2/history.ts`. ОТКРЫТО: desktop и android
+(общее ядро) хранят строки сами (`FileRowStore` ядра, `history_sync.cpp`; сессия журнала — `historyCall` модели), на
+`historyPage` не переведены (T125).
+
 ## HIST-2. Контрольная точка, горизонт надгробий, откат сервера (spec 033)
 
 1. **Точка** — записи самого журнала с `chunk = true`: сегменты (`RowState` всех чатов за месяц, ключ
@@ -2073,6 +2302,13 @@ Android: то же ядро; `jni_history.cpp` — сессия движка `Se
 события сессии `journal`/`stateReady` → `HistorySync::onSessionEvent` (`jni_session.cpp`); режим замены — событие шва
 `history_replaced` (`Client.kt` убирает показанное, чего нет в точке, и показывает строки заново). Сценарий —
 `android/tgx_history_sync_flow.sh` (новое устройство получает историю журналом).
+
+**С spec 035 (11 ноя 2026).** Модель движка умеет вход нового устройства по контрольной точке сама (курсор 0 →
+`history.head` → сводка точки со сверкой S7-4 → сегменты пачками; тест `tests/model_history_checkpoint.rs`), а
+перешифровка при смене ключа истории сохраняет исходные байты записей (`range-hold`: заменяющая точка не собирается
+поверх непонятого, `tests/compat_circle.rs`). ОТКРЫТО: точки строят и читают прежние клиентские пути — web
+`v2/history.ts`, ядро `history_sync.cpp` (у модели это упрощение помечено `T066+`, `model/mod.rs`); `historyPage.pending`
+(страница не в памяти) модель пока не выдаёт — профиль читается целиком при открытии.
 
 ## READ-2. Прочитанное на одном своём устройстве прочитано на всех, включая новое (spec 033)
 
@@ -2176,8 +2412,17 @@ Android (spec 031): `android/jni/jni_groups.cpp` (`nativePublic*` — метод
 10. **Перенос.** Существующие частные группы с фото: первое устройство администратора с новой версией перезаливает
    фото с новым секретом (разовый перенос spec 035, T103) и удаляет прежний блоб; до этого фото у новых клиентов пустое.
 Тесты: движок `group::tests::set_info_has_no_avatar_key_bytes`, `invite_avatar_wrap_opens_only_with_link_secret`,
-`client_flow::group_photo_key_rides_epoch_envelope`. ОТКРЫТО: web/desktop/android ещё пишут `avatar_key` (поле 4) — до
-их перехода на модель движка смена фото частной группы у них отвергается разбором схемы.
+`client_flow::group_photo_key_rides_epoch_envelope`.
+
+**Клиенты (spec 035, 11 ноя 2026).** Поле 4 никто больше не пишет: запись `SetInfo` с фото и рассылку
+`GroupAvatarKey` собирает движок (`groupSetPhoto` единой точки входа). Web — фото из показа группы моделью
+(`GroupView.photo`, `viewGroup` в `v2/controller.ts`; у частной группы — только с сошедшимся секретом), превью по
+ссылке из `InviteAvatarWrap`; перезалив открытого фото частной группы при разовом переносе — нужда модели
+`needs{group_avatar_reupload}` (T115). Desktop и android (общее ядро) — `Session::uploadGroupPhoto` и
+`setGroupPhotoLocked` → `Client::groupSetPhoto` (`v2_session_groups.cpp`, `v2_engine.cpp`); секрет, пришедший
+конвертом эпохи после записи `SetInfo`, перечитывает сведения группы и докачивает фото (T126). Тест движка
+`model_client.rs group_view_photo_is_live_in_host_mode`. ОТКРЫТО: tdesktop и шов android берут фото из сведений
+ядра (`avatarKey`), а не из `GroupView.photo` (T126, T136).
 
 ## POLL-1. Анонимный опрос группы: голос не раскрывает автора участникам (A0031-2, 30 окт 2026)
 
