@@ -489,7 +489,8 @@ export function getPackSetIdOfStickerId(stickerId: string) {
   return separator > 0 ? stickerId.slice(0, separator) : undefined;
 }
 
-function buildStickerId(setId: string, fileName: string) {
+// FR-075: id стикера в наборе — ссылка избранного (FAVED_STICKER), общая с desktop (вектор clients/sticker-ref.json)
+export function buildStickerId(setId: string, fileName: string) {
   return `${setId}${STICKER_ID_SEPARATOR}${buildHashedId(fileName)}`;
 }
 

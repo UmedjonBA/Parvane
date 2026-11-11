@@ -36,29 +36,6 @@ int main() {
     check(cr::stickerSetOpenAction(false, true) == O::ShowLocal, "свой набор — показать локально");
     check(cr::stickerSetOpenAction(false, false) == O::Unavailable, "набор неизвестен — ничего не открывать");
 
-    // ── пересылка в группу ──
-    parvane::DefaultPermissions all;
-    parvane::DefaultPermissions noMedia;
-    noMedia.send_media = false;
-    parvane::DefaultPermissions noStickers;
-    noStickers.send_stickers_gifs = false;
-    parvane::DefaultPermissions readOnly;
-    readOnly.send_messages = false;
-    const auto photo = parvane::json{{"kind", "photo"}, {"file_id", "f"}};
-    const auto sticker = parvane::json{{"kind", "sticker"}, {"file_id", "s"}};
-    const auto text = parvane::json{{"kind", "text"}, {"text", "привет"}};
-    check(cr::canForwardToGroup("member", false, all, photo), "участник, всё разрешено — фото");
-    check(!cr::canForwardToGroup("member", false, noMedia, photo), "участник без медиа — фото нельзя");
-    check(cr::canForwardToGroup("member", false, noMedia, text), "участник без медиа — текст можно");
-    check(!cr::canForwardToGroup("member", false, noStickers, sticker), "участник без стикеров — стикер нельзя");
-    check(!cr::canForwardToGroup("member", false, readOnly, text), "только чтение — ничего");
-    check(cr::canForwardToGroup("admin", false, readOnly, photo), "админ не подпадает под права");
-    check(cr::canForwardToGroup("owner", true, readOnly, photo), "владелец канала публикует");
-    check(!cr::canForwardToGroup("member", true, all, text), "подписчик канала не публикует");
-    check(!cr::canForwardToGroup("banned", false, all, text), "исключённый — ничего");
-    check(!cr::canForwardToGroup("", false, noMedia, photo) && cr::canForwardToGroup("", false, noMedia, text),
-          "роль неизвестна — как участник (закрыто по умолчанию)");
-
     std::printf("%s (%d)\n", g_fail ? "FAIL" : "OK", g_fail);
     return g_fail ? 1 : 0;
 }

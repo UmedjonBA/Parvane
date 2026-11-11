@@ -529,7 +529,10 @@ public:
     // Своя правка (desired — поля видов kinds в StateSnapshot) → записи
     // журнала, затем чужие записи. → {"changed":bool,"snapshot":{…}};
     // null — журнал недоступен.
-    json stateSync(const json &desired, const std::vector<std::string> &kinds);
+    // shown — снимок, который хост показывал, когда строил desired (база разницы): без него — последний выданный
+    // хосту (state-base); снимок, выданный, но ещё не показанный, откатил бы чужую правку разницей от устаревшего
+    // desired (verify_state_patch: «правка другого устройства теряется»).
+    json stateSync(const json &desired, const std::vector<std::string> &kinds, const json &shown = json());
     // Отложенное (op_id base64) уже отправлено каким-то устройством? (синк журнала)
     bool stateScheduledSent(const std::string &opIdB64);
     void stateMarkSent(const std::string &opIdB64);
@@ -539,6 +542,16 @@ public:
     bool stateFaveSticker(const std::string &setId, const std::string &stickerId, bool on);
     // spec 035 (US5): журнал закрыт для записи более новой версией (критичный вид) — «обновите приложение».
     bool stateWriteBlocked();
+    // spec 035 (GROUP-2, ENGINE-1): права по типу содержимого и роли — модель движка, клиент только показывает.
+    // Приёмный фильтр: скрыть ли сообщение автора from с содержимым wire (формат экспорта) в чате chat (группа
+    // "v2g:<hex>"; личный чат и группа, которой модель не знает, — нет).
+    bool contentHidden(const std::string &chat, const std::string &from, const json &wire);
+    // Что разрешено своему композеру и меню в чате (Capabilities модели: send_text, send_media, send_stickers,
+    // send_polls, send_links, delete_everyone, pin, edit, react, forward, reply); null — модели нет.
+    json capabilities(const std::string &chat);
+    // Можно ли отправить своё содержимое wire в чат chat (пересылка в группу): писать вправе и приёмный фильтр
+    // группы его не скрыл бы. Модели нет — nullopt (решать нечем).
+    std::optional<bool> canSendContent(const std::string &chat, const json &wire);
     // «Удалить чат у себя» (T145): граница очистки чата с собеседником/группой —
     // запись журнала состояния; остальные свои устройства скрывают сообщения
     // не позже untilMs (поле снимка "cleared": [{"peer","cleared_until_ms"}]).
@@ -713,7 +726,7 @@ private:
     bool openStateLocked();
     bool pullStateLocked();
     json projectStateLocked();
-    bool pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds);
+    bool pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds, const json &shown = json());
     void applyStateLocked(const json &desired, const char *what);
     void log(const std::string &m) const;
     std::string readStateFile(const std::string &name) const;

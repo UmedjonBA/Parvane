@@ -23,6 +23,8 @@
 #   unknown-kinds — Rust-инжектор v2 (tests/v2_inject.rs, фича test-inject)
 #                 шлёт web v2 10 записей неизвестного вида + текст (T041);
 #   state-sync-desktop — личное состояние web → desktop одного аккаунта (T139)
+#   state-patch-desktop — web и desktop одного аккаунта без связи правят разные поля одной папки и контакта, обе
+#                 правки на обоих (spec 035 T124, STATE-1 на state.v2; пара desktop/verify_state_patch.sh)
 #   sections-desktop — «План», «Знания», «Облако» web ↔ desktop одного аккаунта
 #                 (spec 029; маркеры и хуки PARVANE_AUTO{PLANNER,NOTES,CLOUD}
 #                 desktop, бинарь desktop/build-probe/bin/Telegram с -DPARVANE_DEV=ON);
@@ -73,6 +75,7 @@ case "$PAIR" in
     ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
   state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;
+  state-patch-desktop) SCRIPT="$ROOT/scripts/e2e_state_patch_desktop.mjs" ;;
   sections-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_sections_desktop.mjs" ;;
   web2-desktop2) SCRIPT="$ROOT/scripts/e2e_protocol_mixed_desktop.mjs" ;;
   unknown-kinds)

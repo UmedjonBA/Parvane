@@ -535,8 +535,8 @@
       "clients": {
         "web": "решение — движок (backend/protocol/src/model/capabilities.rs GroupFacts::hides/capabilities; spec 035 T114): web sync.ts (isHiddenByGroupPermissions → contentHidden модели, разметка ссылок autoEntities.ts withDetectedLinks), store.ts (currentUserBannedRights из capabilities модели; toBannedRights — показ прав по умолчанию)",
         "desktop": [
-          "parvane-core/include/parvane/group.h (isContentAllowedForMember, contentHasLink)",
-          "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы; composer — defaultRestrictions)",
+          "решение — движок (spec 035 T126): parvane-core v2_session.cpp (Session::contentHidden → contentHidden модели, Session::capabilities/canSendContent → capabilities модели)",
+          "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы — contentHidden; пересылка в группу — canSendContent; composer — defaultRestrictions)",
           "тест desktop/verify_conformance_perms.sh"
         ],
         "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"

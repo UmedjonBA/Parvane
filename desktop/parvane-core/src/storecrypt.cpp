@@ -2,11 +2,13 @@
 #include "parvane/storecrypt.h"
 
 #include "parvane/linking.h" // b64encode/b64decode/randomBytes
+#include "parvane/store_fs.h"
 
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -119,28 +121,41 @@ std::string rawRead(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-bool rawWriteUnfenced(const std::string &path, std::string_view data) {
-    const auto tmp = path + ".tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            return false;
-        }
-        f.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!f) {
-            return false;
-        }
-    }
+std::atomic<store_fs::FsOps *> g_fs{nullptr};
+
+store_fs::FsOps &fsOps() {
+    const auto p = g_fs.load();
+    return p ? *p : store_fs::posixFs();
+}
+
+std::string parentDir(const std::string &path) {
+    const auto dir = std::filesystem::path(path).parent_path().string();
+    return dir.empty() ? std::string(".") : dir;
+}
+
+void ownerOnly(const std::string &path) {
     std::error_code ec;
-    std::filesystem::permissions(tmp,
+    std::filesystem::permissions(path,
         std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
         std::filesystem::perm_options::replace, ec);
-    std::filesystem::rename(tmp, path, ec);
-    if (ec) {
-        std::filesystem::remove(tmp, ec);
+}
+
+// Долговечная замена файла (spec 035 T129, как store_fs): tmp → fsync → rename → fsync каталога.
+bool rawWriteUnfenced(const std::string &path, std::string_view data) {
+    auto &fs = fsOps();
+    const auto tmp = path + ".tmp";
+    const int fd = fs.openWrite(tmp);
+    if (fd < 0) {
         return false;
     }
-    return true;
+    const bool written = fs.writeAll(fd, data.data(), data.size()) && fs.fsyncFd(fd);
+    const bool closed = fs.closeFd(fd);
+    ownerOnly(tmp); // прежний tmp другого владельца прав: O_TRUNC их не меняет
+    if (!written || !closed || !fs.rename(tmp, path)) {
+        fs.remove(tmp);
+        return false;
+    }
+    return fs.fsyncDir(parentDir(path));
 }
 
 bool rawWrite(const std::string &path, std::string_view data) {
@@ -343,16 +358,19 @@ bool appendLine(const std::string &path, const std::string &line) {
     if (g_blocked) {
         return false;
     }
-    std::ofstream f(path, std::ios::binary | std::ios::app);
-    if (!f) {
+    auto &fs = fsOps();
+    std::error_code ec;
+    const bool existed = std::filesystem::exists(path, ec);
+    const int fd = fs.openAppend(path);
+    if (fd < 0) {
         return false;
     }
-    f << *sealed << '\n';
-    std::error_code ec;
-    std::filesystem::permissions(path,
-        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::replace, ec);
-    return static_cast<bool>(f);
+    const auto data = *sealed + '\n';
+    const bool written = fs.writeAll(fd, data.data(), data.size()) && fs.fsyncFd(fd);
+    const bool closed = fs.closeFd(fd);
+    ownerOnly(path);
+    // Новый файл: запись каталога о нём — тоже на диск
+    return written && closed && (existed || fs.fsyncDir(parentDir(path)));
 }
 
 bool writeLines(const std::string &path, const std::vector<std::string> &lines) {
@@ -479,6 +497,10 @@ int removePrefixed(const std::string &dir, const std::string &prefix, const std:
         }
     }
     return n;
+}
+
+void setFsForTests(store_fs::FsOps *fs) {
+    g_fs.store(fs);
 }
 
 void blockWrites() {

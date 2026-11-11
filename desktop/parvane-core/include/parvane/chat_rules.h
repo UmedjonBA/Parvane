@@ -1,11 +1,11 @@
 #pragma once
 // Parvane fork: правила окна чата desktop, вынесенные из tdesktop ради тестов (spec 030, «тупики UI» 21 окт 2026).
 //  * потолок скачивания вложения чата по заявленному размеру и виду (ревью 21 окт 2026, 2.2);
-//  * что делает клик по стикеру в чате (окно набора без MTProto, как web: свой набор / pack_ref / ничего);
-//  * можно ли переслать содержимое в группу (GROUP-2 на стороне отправителя — для каждого получателя).
+//  * что делает клик по стикеру в чате (окно набора без MTProto, как web: свой набор / pack_ref / ничего).
+// Права групп по типу содержимого решает модель движка (spec 035 T126: Session::contentHidden/canSendContent).
 
 #include "parvane/blobcrypt.h"
-#include "parvane/group.h"
+#include "parvane/group.h" // прежние включающие (android jni) берут отсюда типы групп
 
 #include <cstddef>
 #include <cstdint>
@@ -60,21 +60,6 @@ enum class StickerSetOpen {
         return StickerSetOpen::ShowLocal;
     }
     return StickerSetOpen::Unavailable;
-}
-
-// ── пересылка в группу (GROUP-2, сторона отправителя) ────────────────────────
-// Своя роль в группе-получателе: владелец и админ шлют всё; участник канала не публикует; участник группы —
-// только разрешённые правами по умолчанию виды; исключённый — ничего. Роль неизвестна (сведения группы ещё
-// не пришли, иное значение) — как у участника: запрет закрыт по умолчанию (B0174-3).
-[[nodiscard]] inline bool canForwardToGroup(const std::string &ownRole, bool channel,
-                                            const DefaultPermissions &perms, const json &content) {
-    if (ownRole == "owner" || ownRole == "admin") {
-        return true;
-    }
-    if (ownRole == "banned") {
-        return false;
-    }
-    return !channel && isContentAllowedForMember(perms, content);
 }
 
 } // namespace parvane::chatrules

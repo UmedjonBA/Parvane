@@ -328,6 +328,15 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 void NoteStateEdited(const char *kind);
 void ApplyDialogState(not_null<Main::Session*> session);
 void ApplyQuickReaction(not_null<Main::Session*> session);
+// «В избранное» у стикера (spec 035 T126, FR-075): ссылка стикера (set_id, sticker_id — как web, вектор
+// clients/sticker-ref.json) по документу tdesktop: свой набор (LoadLocalStickerPacks) либо sticker_id отправителя.
+void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId); // main
+[[nodiscard]] std::optional<std::pair<QString, QString>> StickerRefOf(DocumentId docId); // main: (set_id, sticker_id)
+[[nodiscard]] DocumentId StickerDocByRef(const QString &stickerId); // main; 0 — нет документа
+// Избранное из журнала state.v2 ([{set_id, sticker_id, added_ms}]) → набор «Избранное» tdesktop. main
+void ProjectFavedStickers(not_null<Main::Session*> session, const parvane::json &faved);
+// Наборы стикеров загружены заново — применить отложенное избранное (ссылки без документа). main
+void ReapplyFavedStickers(not_null<Main::Session*> session);
 void NoteArchive(not_null<History*> history, bool archived);
 void NoteDialogPins(not_null<Main::Session*> session);
 void NoteUnreadMark(not_null<History*> history, bool unread);
