@@ -280,7 +280,15 @@ pub fn values_of(src: &Sources<'_>) -> ValueSources {
         for gid in c.group_ids() {
             v.groups.push((hex::encode(&gid), crate::host::group_info_value(c, &gid).unwrap_or(Value::Null)));
         }
-        let devices: Value = serde_json::from_str(&crate::host::log_devices_json(c, src.user)).unwrap_or(Value::Null);
+        let mut devices: Value = serde_json::from_str(&crate::host::log_devices_json(c, src.user)).unwrap_or(Value::Null);
+        // Формат выгрузки не меняется между выпусками: выгрузки «до» сняты кодом с полями списка v1-устройств
+        // (`legacy`, `legacySet`, `legacyKeys`), убранными из `log_devices_json` в T096. Списков v1 с 7 окт 2026 нет —
+        // поля всегда пустые, без них дайджест `device-log-head` расходился у каждого профиля
+        if let Value::Object(m) = &mut devices {
+            m.entry("legacy").or_insert_with(|| json!([]));
+            m.entry("legacySet").or_insert(Value::Bool(false));
+            m.entry("legacyKeys").or_insert_with(|| json!([]));
+        }
         v.device_logs.push((src.user.to_string(), json!(c.log_version(src.user)), devices));
         account.insert("state".into(), Value::Bool(c.state_key().is_some()));
         account.insert("planner".into(), Value::Bool(c.planner_has_key()));
