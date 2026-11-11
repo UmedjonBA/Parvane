@@ -25,7 +25,7 @@ import type {
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { ContentView, V2Content } from './contentMap';
-import type { ModelJson, Protocol } from './engine';
+import type { ModelJson, Protocol, StateModelView } from './engine';
 import type { EngineClient as PvClient } from './engineClient';
 import type { HistoryHost } from './history';
 import type {
@@ -52,7 +52,8 @@ import {
   BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
 } from './control';
 import {
-  createModelSender, loadProtocol, MemoryModelStore, ModelHost, openStateModel, parseEngineError, secureModelStore,
+  createModelSender, loadProtocol, MemoryModelStore, MODEL_TOO_NEW, ModelHost, modelOpenFailure, openStateModel,
+  parseEngineError, secureModelStore, stateViewOf,
 } from './engine';
 import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
@@ -118,6 +119,8 @@ type Deps = {
   describeDevice?: () => string;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
   onUpgradeRequired: () => void;
+  /** Модель не открылась: данные устройства записаны более новой версией приложения (T117). */
+  onDataTooNew?: () => void;
   /** JWT не принят на соединении v2 — нужен повторный вход. */
   onAuthRejected?: () => void;
   /** Группа v2 появилась/изменилась (сведения — из проверенного журнала). */
@@ -724,6 +727,22 @@ export function createV2Controller(deps: Deps) {
     await openModel(target, self, saved.deviceId, saved.domain, true);
   }
 
+  /** Показ личного состояния модели без сети (spec 035 T118): сведённое в прошлый раз — из хранилища модели.
+   * Модели нет (не открывалась на этом устройстве, нужен перенос) — `undefined`. */
+  async function stateViewOffline(): Promise<StateModelView | undefined> {
+    const isOpen = () => host && hostUser === deps.getSelf() && modelOpenState === 'OPEN_STATE_READY';
+    if (!isOpen()) {
+      await openModelOffline().catch((e: unknown) => deps.log(`v2: модель без сети не открыта: ${String(e)}`));
+    }
+    if (!isOpen()) return undefined;
+    try {
+      return stateViewOf(host!);
+    } catch (e) {
+      deps.log(`v2: показ личного состояния без сети: ${String(e)}`);
+      return undefined;
+    }
+  }
+
   /** Строки истории модели (`rowsApply`, `rowsAll`, `historyPage`, `chatList`). */
   async function rowsModel(): Promise<RowsModel | undefined> {
     const h = await modelReady();
@@ -777,8 +796,7 @@ export function createV2Controller(deps: Deps) {
     if (modelOpenState === 'OPEN_STATE_MIGRATION_NEEDED') await migrateLegacyEngine(target, legacy);
     if (modelOpenState !== 'OPEN_STATE_READY') {
       deps.log(`v2: модель не открылась (${modelOpenState || 'нет итога'})`);
-      const code = modelOpenState === 'OPEN_STATE_TOO_NEW' ? 'ERROR_CODE_UPGRADE_REQUIRED' : 'ERROR_CODE_UNAVAILABLE';
-      throw new V2Error(code);
+      throw new V2Error(modelOpenFailure(modelOpenState));
     }
     if (!offline) await target.saveRecord(MODEL_OPEN_RECORD, { deviceId, domain }).catch(() => undefined);
     notifyModelReady();
@@ -1384,7 +1402,7 @@ export function createV2Controller(deps: Deps) {
       // после вступления) — тоже повтор: иначе оно оставалось «вошедшим, но не готовым» до закрытия сокета
       const isConnectionLoss = !idConn?.isOpen && !(e instanceof V2Error);
       const isFatal = e instanceof V2Error
-        && (e.code === 'ERROR_CODE_REVOKED' || e.code === 'ERROR_CODE_UPGRADE_REQUIRED');
+        && (e.code === 'ERROR_CODE_REVOKED' || e.code === 'ERROR_CODE_UPGRADE_REQUIRED' || e.code === MODEL_TOO_NEW);
       const isJoinedNotReady = !needsLinking && !ready && Boolean(client) && !isFatal;
       if (joinRetry || isConnectionLoss || isJoinedNotReady) {
         joinRetry = false;
@@ -1392,6 +1410,8 @@ export function createV2Controller(deps: Deps) {
       }
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
+      // Данные на устройстве записаны более новой версией (T117): обновить приложение, иначе модель не откроется
+      if (e instanceof V2Error && e.code === MODEL_TOO_NEW) deps.onDataTooNew?.();
       // Сервер не принял JWT (истёк, отозван). Без соединения v1 отказ виден только
       // здесь (E6-1): повторять тем же токеном бессмысленно — нужен повторный вход
       if (e instanceof V2Error && e.code === 'ERROR_CODE_REVOKED') deps.onAuthRejected?.();
@@ -3823,8 +3843,26 @@ export function createV2Controller(deps: Deps) {
     return readGroup(hex)?.members.map(({ user }) => user) || [];
   }
 
+  /** Фото группы — из показа группы моделью (`GroupView.photo`, spec 035 T116, PV-005): у частной группы — только
+   * когда пришёл его секрет (иначе UI скачал бы файл без ключа и не повторил бы, когда конверт эпохи с секретом
+   * догонит запись `SetInfo`). Модели нет — по сведениям группы клиента, тем же правилом. */
+  function groupPhotoOf(hex: string, g: EngineGroupInfo): { fileId: string; key?: string } | undefined {
+    if (host) {
+      try {
+        const view = host.peek<{ photo?: { file_id?: string; key?: string } }>('viewGroup', {
+          group: { domain: groupDomainOf(hex), id: hexToB64(hex) },
+        });
+        return view.photo?.file_id ? { fileId: view.photo.file_id, key: view.photo.key || undefined } : undefined;
+      } catch {
+        // группы ещё нет в модели — по сведениям клиента
+      }
+    }
+    return g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? { fileId: g.avatarFileId, key: g.avatarKey } : undefined;
+  }
+
   function toWireGroupInfo(hex: string, g: EngineGroupInfo): WireGroupInfo {
-    if (g.avatarFileId && g.avatarKey) deps.rememberGroupPhoto?.(g.avatarFileId, g.avatarKey);
+    const photo = groupPhotoOf(hex, g);
+    if (photo?.key) deps.rememberGroupPhoto?.(photo.fileId, photo.key);
     return {
       group_id: groupAddress(hex),
       name: g.name,
@@ -3838,9 +3876,7 @@ export function createV2Controller(deps: Deps) {
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
-      // Фото частной группы (PV-005) — только когда пришёл его секрет: иначе UI скачал бы файл без ключа и не
-      // повторил бы, когда конверт эпохи с секретом догонит запись SetInfo
-      avatar: g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? g.avatarFileId : undefined,
+      avatar: photo?.fileId,
       about: g.about || undefined,
       default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
@@ -5210,6 +5246,7 @@ export function createV2Controller(deps: Deps) {
     cachedGroups,
     groupContentHidden,
     migrationState: () => ({ open: modelOpenState }),
+    stateViewOffline,
     engineAuditDump: () => (host ? host.peek<{ jsonl?: string }>('auditDump').jsonl || '' : undefined),
     chatCapabilities,
     changeGroup,

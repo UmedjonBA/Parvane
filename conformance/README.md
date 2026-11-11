@@ -458,9 +458,10 @@ android — JVM-юнит `libtd/src/test/.../ParvaneStoreGroupTest.kt` и сце
 `api/parvane/sync.ts` (`isHiddenByGroupPermissions` → `contentHidden` модели, live + full sync, журнал
 `group-perm-hidden`; ссылки, которые приёмник разметит при показе, — `autoEntities.ts withDetectedLinks`),
 композер — `currentUserBannedRights` из `capabilities` модели (`defaultBannedRights` — показ прав по умолчанию);
-desktop `parvane-core/include/parvane/group.h` (`isContentAllowedForMember`,
-`contentHasLink`) + `parvane/parvane_client.cpp` (`injectOnMain`, маркер
-«скрыто правами группы»; композер — нативные `defaultRestrictions` через
+desktop своей формулы тоже не держит (spec 035 T126): `parvane-core` `v2_session.cpp`
+(`Session::contentHidden` → `contentHidden` модели, `Session::canSendContent` → `capabilities` модели и тот же
+фильтр для своего содержимого) + `parvane/parvane_client.cpp` (`injectOnMain`, маркер
+«скрыто правами группы»; пересылка в группу — `canSendContent`; композер — нативные `defaultRestrictions` через
 `amRestricted`); android `libtd/.../ParvaneStore.kt` (`isContentAllowedForMember`)
 + `Client.kt` (приём), композер — `Chat.permissions`. Тесты: web
 `conformance.test.ts` (GROUP-2: таблица кейсов + grep desktop/android);

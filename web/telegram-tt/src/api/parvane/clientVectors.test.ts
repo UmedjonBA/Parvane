@@ -7,7 +7,9 @@ import {
   deriveBundleKey, type KeyBundlePayload, openKeyBundle, pickRecoveryKey, sealKeyBundle,
 } from './v2/keyBundle';
 import { exportEncryptedBackup, importEncryptedBackup, type KeyBackupPayload } from './keyBackup';
-import { buildPvpkArchive, packContentHash, parsePvpkArchive } from './stickerPacks';
+import {
+  buildPvpkArchive, buildStickerId, getSetIdForPackName, packContentHash, parsePvpkArchive,
+} from './stickerPacks';
 
 // Общие векторы форматов клиентов (spec 029, FR-006): файл, который пишет web, обязан читать desktop
 // (`parvane-core/tests/webcompat_tests.cpp`), и наоборот. Вектор web создаётся, если его нет (или
@@ -191,6 +193,21 @@ describe('Векторы форматов клиентов: отпечаток �
       expect(b64(await packContentHash(files)), entry.name).toBe(entry.content_hash);
       const unpacked = parsePvpkArchive(buildPvpkArchive(files)!)!;
       expect(b64(await packContentHash(unpacked)), entry.name).toBe(entry.content_hash);
+    }
+  });
+});
+
+// FR-075 (spec 035 T116/T126): ссылка на стикер в избранном (FAVED_STICKER) — та же у desktop (webcompat_tests.cpp)
+describe('sticker-ref: избранное стикеров одно на web и desktop', () => {
+  it('set_id и sticker_id по вектору', () => {
+    const table = JSON.parse(readFileSync(vectorPath('sticker-ref.json'), 'utf8')) as {
+      cases: { name: string; file: string; set_id: string; sticker_id: string }[];
+    };
+    expect(table.cases.length).toBeGreaterThan(0);
+    for (const entry of table.cases) {
+      const setId = getSetIdForPackName(entry.name);
+      expect(setId, entry.name).toBe(entry.set_id);
+      expect(buildStickerId(setId, entry.file), entry.name).toBe(entry.sticker_id);
     }
   });
 });

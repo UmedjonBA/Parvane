@@ -54,8 +54,9 @@ ARCHIVES=$(archives)
   && ok "PACK-1: один архив по capability на три отправки — повторно не грузится" \
   || bad "PACK-1: архивов $ARCHIVES вместо 1 — архив грузится на каждую отправку"
 
-# EMOJI-1: каталог нормализован, сырое имя сохранено рядом
-DEST="$SB/bob-emoji/$NORM"
+# EMOJI-1: каталог нормализован, сырое имя сохранено рядом. Принятый пак — в кэше устройства
+# tdata/parvane-emoji-received, не в своих наборах (A0085-2, ревью 7 ноя: паки эмодзи только с согласия)
+DEST="$B/td/tdata/parvane-emoji-received/$NORM"
 [ -d "$DEST" ] && ok "пак распакован в нормализованный каталог «$NORM»" || bad "нет каталога «$NORM» у bob"
 [ "$(cat "$DEST/.pvname" 2>/dev/null)" = "$RAW" ] \
   && ok "EMOJI-1: сырое имя пака сохранено рядом с каталогом" \
@@ -64,7 +65,7 @@ DEST="$SB/bob-emoji/$NORM"
 # EMOJI-1: после рестарта bob грузит пак под сырым именем
 stop_pid "$PB"
 PB=$(start_client "$B" bob@local PARVANE_EMOJI_DIR="$SB/bob-emoji" PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "эмодзи-пак «$RAW» загружен \(каталог «$NORM»\)" 60 \
+wait_log "$B/td/log.txt" "эмодзи-пак «$RAW» из кэша принятых \(каталог «$NORM»\)" 90 \
   && ok "EMOJI-1: после рестарта пак загружен под именем из ссылки" \
   || bad "EMOJI-1: после рестарта пак загружен под именем каталога"
 
@@ -81,13 +82,13 @@ PA=$(start_client "$A" alice@local PARVANE_EMOJI_DIR="$SB/alice-emoji" PARVANE_N
 wait_log "$B/td/log.txt" "эмодзи-пак «$CYR» материализован" 90 \
   && ok "EMOJI-1/кириллица: bob материализовал пак «$CYR»" \
   || bad "EMOJI-1/кириллица: bob не материализовал пак «$CYR»"
-CYRDEST="$SB/bob-emoji/$CYR"
+CYRDEST="$B/td/tdata/parvane-emoji-received/$CYR"
 [ "$(cat "$CYRDEST/.pvname" 2>/dev/null)" = "$CYR" ] \
   && ok "EMOJI-1/кириллица: сырое имя сохранено без порчи кодировки" \
   || bad "EMOJI-1/кириллица: .pvname не совпадает с «$CYR» (порча UTF-8)"
 stop_pid "$PB"
 PB=$(start_client "$B" bob@local PARVANE_EMOJI_DIR="$SB/bob-emoji" PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "эмодзи-пак «$CYR» загружен" 60 \
+wait_log "$B/td/log.txt" "эмодзи-пак «$CYR» из кэша принятых" 90 \
   && ok "EMOJI-1/кириллица: после рестарта пак загружен под сырым именем" \
   || bad "EMOJI-1/кириллица: после рестарта имя пака разъехалось"
 

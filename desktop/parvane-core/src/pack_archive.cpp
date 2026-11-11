@@ -183,6 +183,47 @@ std::int64_t fnv1a64Signed(const std::string &utf8) {
     return static_cast<std::int64_t>(h);
 }
 
+namespace {
+
+// web `buildHashedId`: FNV-1a-32 по кодовым единицам UTF-16, затем `>>> 1` десятичной строкой.
+std::string hashedId(const std::string &utf8) {
+    std::uint32_t h = 0x811c9dc5u;
+    const auto mix = [&](std::uint32_t unit) {
+        h ^= unit;
+        h *= 0x01000193u;
+    };
+    std::size_t i = 0;
+    std::uint32_t cp = 0;
+    while (nextCodePoint(utf8, i, cp)) {
+        if (cp >= 0x10000) {
+            const auto v = cp - 0x10000;
+            mix(0xD800 + (v >> 10));
+            mix(0xDC00 + (v & 0x3FF));
+        } else {
+            mix(cp);
+        }
+    }
+    return std::to_string(h >> 1);
+}
+
+constexpr const char *kFavedSetPrefix = "pvpk-";
+
+} // namespace
+
+std::string favedSetId(const std::string &packName) {
+    return kFavedSetPrefix + hashedId("pack:" + packName);
+}
+
+std::string favedStickerId(const std::string &setId, const std::string &fileName) {
+    return setId + ":" + hashedId(fileName);
+}
+
+std::string favedSetIdOf(const std::string &stickerId) {
+    if (stickerId.rfind(kFavedSetPrefix, 0) != 0) return {};
+    const auto sep = stickerId.find(':');
+    return (sep != std::string::npos && sep > 0) ? stickerId.substr(0, sep) : std::string();
+}
+
 std::int64_t emojiDocId(const std::string &rawName, const std::string &file) {
     return fnv1a64Signed("pvemoji:" + rawName + "|" + file);
 }

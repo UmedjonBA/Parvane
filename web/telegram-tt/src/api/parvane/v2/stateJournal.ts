@@ -204,6 +204,8 @@ export function createStateJournal(deps: Deps) {
   let snapshotCache: SSnapshot | undefined;
   let writeBlocked = false;
   let favedShown = '';
+  // Показ модели без сети (T118): до подключения журнала — то, что модель свела в прошлый раз
+  let offlineView: StateModelView | undefined;
   // Что localState показывал последним (снимок проекции): правки пользователя — разница с ним, а не со сведённым,
   // иначе устаревшая локальная копия откатила бы правку другого устройства, пришедшую после проекции (US2)
   let projectedBase: SSnapshot | undefined;
@@ -348,6 +350,7 @@ export function createStateJournal(deps: Deps) {
     }
     host = nextHost;
     session = nextSession;
+    offlineView = undefined;
     session.onChange(invalidateSnapshot);
     await serial(async () => {
       // Ключи наборов стикеров и GIF (C7-3), черновики — в шифрованном хранилище: до загрузки снимок отдал бы
@@ -386,6 +389,15 @@ export function createStateJournal(deps: Deps) {
 
   function isAttached() {
     return Boolean(session);
+  }
+
+  /** Показ модели без сети (T118): журнал ещё не подключён — виды localState из сведённого в прошлый раз. */
+  function projectOffline(view: StateModelView | undefined) {
+    if (session || !view?.snapshot) return;
+    offlineView = view;
+    invalidateSnapshot();
+    project(true);
+    deps.log('v2: личное состояние показано из модели без сети');
   }
 
   function detach() {
@@ -427,7 +439,9 @@ export function createStateJournal(deps: Deps) {
     if (!session) return;
     const revision = deps.localState.getDirtyRevision();
     const current = readSnapshot();
-    await write(buildDesired(current), { kinds: MANAGED_KINDS, prune: true }, true);
+    // Виды журнала ещё не спроецированы (T118: на диске их нет) — пропавшее из localState не удалять
+    const prune = deps.localState.isPersonalComplete();
+    await write(buildDesired(current), { kinds: MANAGED_KINDS, prune }, true);
     deps.localState.clearDirtyKinds(revision);
   }
 
@@ -444,7 +458,10 @@ export function createStateJournal(deps: Deps) {
     const desired = buildDesired(current);
     // Контакты: свои правки поверх журнала без удалений — там могут быть контакты с других устройств
     if (kinds.includes('contacts')) desired.contacts = mergeContactsLocalWins(current.contacts, desired.contacts || []);
-    await write(desired, { kinds, prune: true }, true);
+    // Правлено до проекции модели (T118): значение вида могло не нести того, что уже в журнале, — без удалений
+    const partial = deps.localState.loadPartialKinds();
+    const prune = !kinds.some((kind) => partial.includes(kind));
+    await write(desired, { kinds, prune }, true);
     deps.localState.clearDirtyKinds(revision);
     deps.log(`v2: несохранённые правки (${kinds.join(', ')}) дописаны в журнал`);
   }
@@ -459,7 +476,7 @@ export function createStateJournal(deps: Deps) {
   }
 
   function readView(): StateModelView | undefined {
-    if (!session) return undefined;
+    if (!session) return offlineView;
     if (!viewCache) {
       try {
         viewCache = session.view();
@@ -472,7 +489,7 @@ export function createStateJournal(deps: Deps) {
   }
 
   function readSnapshot(): SSnapshot {
-    if (!session) return {};
+    if (!session) return (offlineView?.snapshot) || {};
     if (snapshotCache) return snapshotCache;
     snapshotCache = readView()?.snapshot || {};
     return snapshotCache;
@@ -808,24 +825,30 @@ export function createStateJournal(deps: Deps) {
 
   // ── сведённый снимок → localState + нативные апдейты ─────────────────────
 
-  function project() {
-    if (!session) return;
+  // `offline` (T118): показ модели без сети до подключения журнала — виды с несохранёнными правками этого
+  // устройства не трогаются (их значение главнее: оно уйдёт в журнал при подключении)
+  function project(offline = false) {
+    if (!session && !(offline && offlineView)) return;
     const snap = readSnapshot();
     projectedBase = snap;
+    const dirty = offline ? deps.localState.loadDirtyKinds() : [];
+    const runs = (kind: LocalStateKind) => !dirty.includes(kind);
     deps.localState.applyFromJournal(() => {
-      projectFolders(snap);
-      projectBlocked(snap);
-      projectNotify(snap);
-      projectArchived(snap);
-      projectPinned(snap);
-      projectDrafts(snap);
-      projectUnreadMarks(snap);
-      projectQuickReaction(snap);
-      projectStickerPacks(snap);
-      projectContacts(snap);
+      if (runs('folders')) projectFolders(snap);
+      if (runs('blocked')) projectBlocked(snap);
+      if (runs('notify')) projectNotify(snap);
+      if (runs('archived')) projectArchived(snap);
+      if (runs('pinned')) projectPinned(snap);
+      if (runs('drafts')) projectDrafts(snap);
+      if (runs('unread')) projectUnreadMarks(snap);
+      if (runs('reaction')) projectQuickReaction(snap);
+      if (runs('packs')) projectStickerPacks(snap);
+      if (runs('contacts')) projectContacts(snap);
     });
-    projectScheduled(snap);
+    if (runs('scheduled')) projectScheduled(snap);
     projectFaved();
+    deps.localState.markProjected(!offline);
+    if (offline) return;
     projectWriteBlocked();
     projectCalls(snap);
     projectCleared(snap);
@@ -1123,6 +1146,7 @@ export function createStateJournal(deps: Deps) {
   return {
     attach,
     isAttached,
+    projectOffline,
     recordCall,
     recordChatCleared,
     recordGroupInvite,
@@ -1134,6 +1158,7 @@ export function createStateJournal(deps: Deps) {
     reset: () => {
       detach();
       projectedBase = undefined;
+      offlineView = undefined;
     },
     syncNow,
     /** Снимок личного состояния движка (JSON) — для выгрузки «ничего не потеряно» (spec 035, T007), только чтение. */

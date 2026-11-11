@@ -1037,38 +1037,6 @@ export function parseInvite(url) {
 }
 
 /**
- * Разбор записи истории/кадра v1 (legacy_v1) → JSON.
- * @param {Uint8Array} json_bytes
- * @returns {string}
- */
-export function parseLegacyStored(json_bytes) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(json_bytes, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.parseLegacyStored(retptr, ptr0, len0);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        var ptr2 = r0;
-        var len2 = r1;
-        if (r3) {
-            ptr2 = 0; len2 = 0;
-            throw takeObject(r2);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
  * Мажорная версия протокола.
  * @returns {number}
  */
@@ -1163,27 +1131,6 @@ export function runConformanceVectors(suite, json) {
 }
 
 /**
- * Полные имена всех сообщений схемы (тесты кодеков во всех обвязках, spec 035 T012).
- * @returns {string}
- */
-export function schemaMessageNames() {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.schemaMessageNames(retptr);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        deferred1_0 = r0;
-        deferred1_1 = r1;
-        return getStringFromWasm0(r0, r1);
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
-    }
-}
-
-/**
  * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
  * Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
  * (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
@@ -1212,29 +1159,6 @@ export function sealReport(admin_public, reporter, plaintext) {
         var v4 = getArrayU8FromWasm0(r0, r1).slice();
         wasm.__wbindgen_export4(r0, r1 * 1, 1);
         return v4;
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
- * Страница `msg.inbox.sync` → {records: Uint8Array[] (каждая — InboxRecord), more}.
- * @param {Uint8Array} bytes
- * @returns {any}
- */
-export function splitSyncResponse(bytes) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.splitSyncResponse(retptr, ptr0, len0);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-        if (r2) {
-            throw takeObject(r1);
-        }
-        return takeObject(r0);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }

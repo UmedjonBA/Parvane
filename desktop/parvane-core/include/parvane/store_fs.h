@@ -24,6 +24,8 @@ struct FsOps {
     virtual ~FsOps() = default;
     // O_WRONLY|O_CREAT|O_TRUNC, права 0600; -1 — ошибка.
     virtual int openWrite(const std::string &path) = 0;
+    // O_WRONLY|O_CREAT|O_APPEND, права 0600 (дозапись журналов storecrypt); -1 — ошибка либо не поддержано.
+    virtual int openAppend(const std::string &) { return -1; }
     virtual bool writeAll(int fd, const void *data, size_t n) = 0;
     virtual bool fsyncFd(int fd) = 0;
     virtual bool closeFd(int fd) = 0;

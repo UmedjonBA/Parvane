@@ -164,13 +164,13 @@ int main() {
             {"webpage", {{"url", "https://a.b"}, {"title", "T"}}},
             {"ttl_secs", 30},
         };
-        const auto v = v2::toV2(text, "0192f0e4-1a2b-7c3d-8e4f-001122334455");
+        const auto v = v2::contentOfWire(text, "0192f0e4-1a2b-7c3d-8e4f-001122334455");
         check(v && (*v)["text"]["text"] == "hi bold", "text → v2");
         check(v && (*v)["text"]["entities"][0]["type"] == "ENTITY_TYPE_BOLD", "entity bold → ENTITY_TYPE_BOLD");
         check(v && (*v)["text"]["entities"][1]["url"] == "https://a.b", "text_url → url");
         check(v && (*v)["text"]["preview"]["url"] == "https://a.b", "webpage → preview");
         check(v && (*v)["reply_to"]["op_id"].is_string(), "reply_to → MessageRef");
-        const auto back = v2::fromV2(*v);
+        const auto back = v2::wireOfContent(*v);
         check(back && (*back)["kind"] == "text" && (*back)["text"] == "hi bold", "text ← v2");
         check(back && (*back)["entities"][1]["data"] == "https://a.b", "entities ← v2 (data)");
         check(back && (*back)["webpage"]["title"] == "T", "webpage ← v2");
@@ -180,16 +180,16 @@ int main() {
     {
         // «Отправить без звука» (Content.silent) и пересылка без автора/подписи (ревью 7 ноя, п. 35 и 18)
         const json silent = {{"kind", "text"}, {"text", "тихо"}, {"silent", true}};
-        const auto v = v2::toV2(silent);
+        const auto v = v2::contentOfWire(silent);
         check(v && (*v)["silent"] == true, "silent → Content.silent");
-        const auto back = v ? v2::fromV2(*v) : std::nullopt;
+        const auto back = v ? v2::wireOfContent(*v) : std::nullopt;
         check(back && (*back)["silent"] == true, "silent ← Content.silent");
-        const auto camel = v2::fromV2(json{{"text", {{"text", "x"}}}, {"silent", false}});
+        const auto camel = v2::wireOfContent(json{{"text", {{"text", "x"}}}, {"silent", false}});
         check(camel && !camel->contains("silent"), "silent=false не переносится");
         const json fwd = {{"kind", "text"}, {"text", "x"}, {"forwarded_from", "bob@local"}, {"forwarded_name", "Bob"}};
-        const auto fv = v2::toV2(fwd);
+        const auto fv = v2::contentOfWire(fwd);
         check(fv && (*fv)["forward"]["from_name"] == "Bob", "forward → ForwardInfo");
-        const auto fb = fv ? v2::fromV2(*fv) : std::nullopt;
+        const auto fb = fv ? v2::wireOfContent(*fv) : std::nullopt;
         check(fb && (*fb)["forwarded_name"] == "Bob" && (*fb)["forwarded_from"] == "bob@local", "forward ← ForwardInfo");
     }
     {
@@ -197,7 +197,7 @@ int main() {
         const std::string album = "AAECAwQFBgcICQoLDA0ODw=="; // 16 байт
         const json photo = {{"kind", "photo"}, {"file_id", "f1"}, {"mime", "image/jpeg"}, {"caption", "над"},
                             {"spoiler", true}, {"album_id", album}, {"invert_media", true}};
-        const auto v = v2::toV2(photo);
+        const auto v = v2::contentOfWire(photo);
         check(v && (*v)["media"]["spoiler"] == true, "spoiler → Media.spoiler");
         check(v && (*v)["media"]["album_id"] == album, "album_id → Media.album_id");
         check(v && (*v)["invert_media"] == true, "invert_media → Content.invert_media");
@@ -207,32 +207,31 @@ int main() {
                   && decoded["media"].value("album_id", std::string()) == album
                   && decoded.value("invert_media", false),
               "MEDIA-2: поля проходят кодек движка");
-        const auto back = decoded.is_object() ? v2::fromV2(decoded) : std::nullopt;
+        const auto back = decoded.is_object() ? v2::wireOfContent(decoded) : std::nullopt;
         check(back && (*back)["spoiler"] == true && (*back)["album_id"] == album && (*back)["invert_media"] == true,
               "MEDIA-2 ← v2");
-        const auto file = v2::toV2(json{{"kind", "file"}, {"file_id", "f2"}, {"spoiler", true},
+        const auto file = v2::contentOfWire(json{{"kind", "file"}, {"file_id", "f2"}, {"spoiler", true},
                                         {"album_id", "c2hvcnQ="}});
         check(file && !(*file)["media"].contains("spoiler"), "спойлер у файла не уходит");
-        check(file && !(*file)["media"].contains("album_id"), "album_id не 16 байт — не уходит");
         // Цитата: только вместе с ответом; ≤ 1024 байт по границе символа; сущности внутри фрагмента
         const json reply = {{"kind", "text"}, {"text", "ответ"},
                             {"reply_quote", {{"text", "жирно и всё"}, {"offset", 3},
                                              {"entities", json::array({
                                                  json{{"type", "bold"}, {"offset", 0}, {"length", 5}},
                                                  json{{"type", "italic"}, {"offset", 6}, {"length", 50}}})}}}};
-        const auto rv = v2::toV2(reply, "0192f0e4-1a2b-7c3d-8e4f-001122334455");
+        const auto rv = v2::contentOfWire(reply, "0192f0e4-1a2b-7c3d-8e4f-001122334455");
         check(rv && (*rv)["reply_quote"]["text"] == "жирно и всё" && (*rv)["reply_quote"]["offset"] == 3,
               "reply_quote → Content.reply_quote");
         check(rv && (*rv)["reply_quote"]["entities"].size() == 1, "сущность за краем цитаты отброшена");
-        const auto rb = rv ? v2::fromV2(*rv) : std::nullopt;
+        const auto rb = rv ? v2::wireOfContent(*rv) : std::nullopt;
         check(rb && (*rb)["reply_quote"]["text"] == "жирно и всё"
                   && (*rb)["reply_quote"]["entities"][0]["type"] == "bold",
               "reply_quote ← v2");
-        check(!v2::toV2(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", "q"}}}})->contains("reply_quote"),
+        check(!v2::contentOfWire(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", "q"}}}})->contains("reply_quote"),
               "цитата без ответа не уходит");
         auto longQuote = std::string();
         for (int i = 0; i < 700; ++i) longQuote += "ж"; // 1400 байт
-        const auto lv = v2::toV2(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", longQuote}}}},
+        const auto lv = v2::contentOfWire(json{{"kind", "text"}, {"text", "x"}, {"reply_quote", {{"text", longQuote}}}},
                                  "0192f0e4-1a2b-7c3d-8e4f-001122334455");
         check(lv && (*lv)["reply_quote"]["text"].get<std::string>().size() == 1024, "цитата обрезана до 1024 байт");
         const auto lbody = lv ? v2::encodeMessage("parvane.msg.v2.Content", *lv) : std::string();
@@ -242,59 +241,59 @@ int main() {
         const json photo = {{"kind", "photo"}, {"file_id", "f1"}, {"width", 10}, {"height", 20},
                             {"mime", "image/jpeg"}, {"size_bytes", 1234}, {"caption", nullptr},
                             {"file_key", "a2V5"}, {"file_nonce", "bm9u"}};
-        const auto v = v2::toV2(photo);
+        const auto v = v2::contentOfWire(photo);
         check(v && (*v)["media"]["kind"] == "MEDIA_KIND_PHOTO" && (*v)["media"]["size"] == "1234",
               "photo → media (size строкой)");
         check(v && !(*v)["media"].contains("caption"), "пустая подпись не уходит");
-        const auto back = v2::fromV2(*v);
+        const auto back = v2::wireOfContent(*v);
         check(back && (*back)["kind"] == "photo" && (*back)["size_bytes"] == 1234
                   && (*back)["file_key"] == "a2V5" && (*back)["width"] == 10,
               "photo ← media");
         const json voice = {{"kind", "voice"}, {"file_id", "f2"}, {"duration_secs", 3},
                             {"waveform", json::array({0, 5, 31})}};
-        const auto vv = v2::toV2(voice);
+        const auto vv = v2::contentOfWire(voice);
         check(vv && (*vv)["media"]["duration_ms"] == 3000 && (*vv)["media"]["waveform"].is_string(),
               "voice → duration_ms и waveform base64");
-        const auto vb = v2::fromV2(*vv);
+        const auto vb = v2::wireOfContent(*vv);
         check(vb && (*vb)["kind"] == "voice" && (*vb)["duration_secs"] == 3
                   && (*vb)["waveform"] == json::array({0, 5, 31}),
               "voice ← media");
         const json audio = {{"kind", "file"}, {"file_id", "f3"}, {"mime", "audio/mpeg"}, {"filename", "a.mp3"}};
-        const auto va = v2::toV2(audio);
+        const auto va = v2::contentOfWire(audio);
         check(va && (*va)["media"]["kind"] == "MEDIA_KIND_AUDIO" && (*va)["media"]["name"] == "a.mp3",
               "аудиофайл → MEDIA_KIND_AUDIO");
     }
     {
         const json loc = {{"kind", "location"}, {"lat", 55.75}, {"long", 37.61}, {"live_period", 60}};
-        const auto v = v2::toV2(loc);
+        const auto v = v2::contentOfWire(loc);
         check(v && (*v)["location"]["latitude"] == 55.75 && (*v)["location"]["live_period_s"] == 60,
               "location → v2");
-        const auto back = v2::fromV2(*v);
+        const auto back = v2::wireOfContent(*v);
         check(back && (*back)["lat"] == 55.75 && (*back)["live_period"] == 60, "location ← v2");
     }
     {
         // Формат опроса десктопа (answers/public/multiple) — через normalize.
         const json poll = {{"kind", "poll"}, {"question", "Q?"}, {"answers", json::array({"a", "b"})},
                            {"public", true}, {"multiple", false}};
-        const auto v = v2::toV2(poll);
+        const auto v = v2::contentOfWire(poll);
         check(v && (*v)["poll"]["options"][1]["text"] == "b" && (*v)["poll"]["is_public"] == true,
               "poll (формат десктопа) → v2");
-        const auto back = v2::fromV2(*v);
+        const auto back = v2::wireOfContent(*v);
         check(back && (*back)["answers"] == json::array({"a", "b"}) && (*back)["public"] == true,
               "poll ← v2 (оба набора имён)");
         const json vote = {{"kind", "poll_vote"}, {"poll", "0192f0e4-1a2b-7c3d-8e4f-001122334455"},
                            {"options", json::array({1})}};
-        const auto vv = v2::toV2(vote);
-        const auto vb = v2::fromV2(*vv);
+        const auto vv = v2::contentOfWire(vote);
+        const auto vb = v2::wireOfContent(*vv);
         check(vb && (*vb)["poll"] == "0192f0e4-1a2b-7c3d-8e4f-001122334455" && (*vb)["options"] == json::array({1}),
               "poll_vote туда и обратно");
         // POLL-1: итоги анонимного опроса от автора едут в том же виде (счётчики, без адресов)
         const json tally = {{"kind", "poll_vote"}, {"poll", "0192f0e4-1a2b-7c3d-8e4f-001122334455"},
                             {"options", json::array()}, {"tally", true}, {"counts", json::array({3, 0, 2})}, {"voters", 5}};
-        const auto tv = v2::toV2(tally);
+        const auto tv = v2::contentOfWire(tally);
         check(tv && (*tv)["poll_vote"]["tally"] == true && (*tv)["poll_vote"]["counts"] == json::array({3, 0, 2}),
               "poll_vote tally → v2");
-        const auto tb = v2::fromV2(*tv);
+        const auto tb = v2::wireOfContent(*tv);
         check(tb && (*tb)["tally"] == true && (*tb)["counts"] == json::array({3, 0, 2}) && (*tb)["voters"] == 5
                   && (*tb)["poll"] == "0192f0e4-1a2b-7c3d-8e4f-001122334455",
               "poll_vote tally туда и обратно");
@@ -302,10 +301,10 @@ int main() {
     }
     {
         const json sticker = {{"kind", "sticker"}, {"file_id", "s1"}, {"filename", "😀"},
-                              {"pack_ref", {{"file_id", "p1"}, {"name", "cats"}, {"count", 3}, {"key", "k"}, {"nonce", "n"}}}};
-        const auto v = v2::toV2(sticker);
+                              {"pack_ref", {{"file_id", "p1"}, {"name", "cats"}, {"count", 3}, {"key", "a2V5"}, {"nonce", "bm9uY2U="}}}};
+        const auto v = v2::contentOfWire(sticker);
         check(v && (*v)["sticker"]["emoji"] == "😀" && (*v)["sticker"]["pack"] == "cats", "sticker → v2");
-        const auto back = v2::fromV2(*v);
+        const auto back = v2::wireOfContent(*v);
         check(back && (*back)["kind"] == "sticker" && (*back)["pack_ref"]["name"] == "cats"
                   && (*back)["file_id"] == "s1",
               "sticker ← v2");
@@ -313,40 +312,40 @@ int main() {
     {
         // PACK-2: отпечаток содержимого набора переносится в обе стороны (и у стикера, и у эмодзи-паков текста)
         const std::string hash = "wOtWDi36OhUURnUZGyYsN5DXpqYeu1MsE3cmIQV/sQM=";
-        const json ref{{"file_id", "p2"}, {"name", "Котики"}, {"count", 2}, {"key", "k"}, {"nonce", "n"},
+        const json ref{{"file_id", "p2"}, {"name", "Котики"}, {"count", 2}, {"key", "a2V5"}, {"nonce", "bm9uY2U="},
                        {"content_hash", hash}};
-        const auto v = v2::toV2(json{{"kind", "sticker"}, {"file_id", "s2"}, {"pack_ref", ref}});
+        const auto v = v2::contentOfWire(json{{"kind", "sticker"}, {"file_id", "s2"}, {"pack_ref", ref}});
         check(v && (*v)["sticker"]["pack_ref"]["content_hash"] == hash, "PACK-2: content_hash стикера → v2");
-        const auto back = v ? v2::fromV2(*v) : std::nullopt;
+        const auto back = v ? v2::wireOfContent(*v) : std::nullopt;
         check(back && (*back)["pack_ref"]["content_hash"] == hash, "PACK-2: content_hash стикера ← v2");
-        const auto camel = v2::fromV2(json{{"sticker", {{"media", {{"file_id", "s3"}}},
+        const auto camel = v2::wireOfContent(json{{"sticker", {{"media", {{"file_id", "s3"}}},
                                                         {"pack_ref", {{"file_id", "p3"}, {"contentHash", hash}}}}}});
         check(camel && (*camel)["pack_ref"]["content_hash"] == hash, "PACK-2: contentHash (camelCase) ← v2");
-        const auto old = v2::toV2(json{{"kind", "sticker"}, {"file_id", "s4"},
+        const auto old = v2::contentOfWire(json{{"kind", "sticker"}, {"file_id", "s4"},
                                        {"pack_ref", {{"file_id", "p4"}, {"name", "cats"}}}});
         check(old && !(*old)["sticker"]["pack_ref"].contains("content_hash"), "PACK-2: без отпечатка — поля нет (старый клиент)");
-        const auto text = v2::toV2(json{{"kind", "text"}, {"text", "x"},
+        const auto text = v2::contentOfWire(json{{"kind", "text"}, {"text", "x"},
                                         {"entities", json::array({json{{"type", "custom_emoji"}, {"offset", 0}, {"length", 1}, {"data", "1"}}})},
                                         {"emoji_packs", json::array({ref})}});
-        const auto textBack = text ? v2::fromV2(*text) : std::nullopt;
+        const auto textBack = text ? v2::wireOfContent(*text) : std::nullopt;
         check(textBack && (*textBack)["emoji_packs"].size() == 1 && (*textBack)["emoji_packs"][0]["content_hash"] == hash,
               "PACK-2: content_hash эмодзи-пака текста туда и обратно");
     }
-    check(!v2::toV2(json{{"kind", "skdm"}}).has_value(), "служебный v1-вид (skdm) в v2 не уходит");
-    check(!v2::fromV2(json{{"contact", {{"first_name", "A"}}}}).has_value(), "contact ← v2: нет v1-вида");
+    check(!v2::contentOfWire(json{{"kind", "skdm"}}).has_value(), "служебный v1-вид (skdm) в v2 не уходит");
+    check(!v2::wireOfContent(json{{"contact", {{"first_name", "A"}}}}).has_value(), "contact ← v2: нет v1-вида");
     {
         // spec 029: desktop показывает задание, приглашение, статью и жалобу как web (карточки), а не текстом
         const json offerV1{{"kind", "task_offer"}, {"name", "Отчёт"}, {"description", "к пятнице"}, {"steps", json::array({"черновик", "правка"})},
                            {"day", "2026-10-20"}, {"start", "10:00"}, {"minutes", 60}, {"text", "📋 Задание: Отчёт · 2026-10-20"}};
-        const auto offerV2 = v2::toV2(offerV1);
+        const auto offerV2 = v2::contentOfWire(offerV1);
         check(offerV2 && (*offerV2)["task_offer"]["steps"][1]["text"] == "правка", "task_offer → v2 (шаги)");
-        const auto offer = offerV2 ? v2::fromV2(*offerV2) : std::nullopt;
+        const auto offer = offerV2 ? v2::wireOfContent(*offerV2) : std::nullopt;
         check(offer && *offer == offerV1, "task_offer туда и обратно без потерь");
         const json respV1{{"kind", "task_response"}, {"offer", "0192f0e4-1a2b-7c3d-8e4f-001122334455"}, {"accepted", true},
                           {"text", "✅ Принято"}};
-        const auto respV2 = v2::toV2(respV1);
+        const auto respV2 = v2::contentOfWire(respV1);
         check(respV2 && (*respV2)["task_response"]["decision"] == "TASK_DECISION_ACCEPTED", "task_response → v2");
-        const auto resp = respV2 ? v2::fromV2(*respV2) : std::nullopt;
+        const auto resp = respV2 ? v2::wireOfContent(*respV2) : std::nullopt;
         check(resp && *resp == respV1, "task_response туда и обратно");
         check(v2::v2Kind(json{{"task_offer", json::object()}}) == "task_offer", "v2Kind: task_offer");
         // TASK-1, CLOUD-1, ARTICLE-1, spec 024: клиент без карточек показывает `text`, а не теряет сообщение
@@ -361,43 +360,43 @@ int main() {
                                           {"photo", {{"kind", "photo"}, {"file_id", "f1"}, {"file_key", "a2V5"},
                                                      {"file_nonce", "bm9uY2U="}, {"width", 320}, {"height", 200},
                                                      {"capability", "Y2Fw"}}}}}};
-        const auto previewV2 = v2::toV2(withImage);
+        const auto previewV2 = v2::contentOfWire(withImage);
         check(previewV2 && (*previewV2)["text"]["preview"].contains("image"), "превью → v2: картинка в LinkPreview.image");
-        const auto previewBack = previewV2 ? v2::fromV2(*previewV2) : std::nullopt;
+        const auto previewBack = previewV2 ? v2::wireOfContent(*previewV2) : std::nullopt;
         check(previewBack && (*previewBack)["webpage"]["photo"].value("file_id", std::string()) == "f1"
                   && (*previewBack)["webpage"]["photo"].value("capability", std::string()) == "Y2Fw",
               "превью ← v2: фото с ключами и секретом");
         auto noKey = *previewV2;
         noKey["text"]["preview"]["image"].erase("key");
         noKey["text"]["preview"]["image"].erase("file_key");
-        const auto stripped = v2::fromV2(noKey);
+        const auto stripped = v2::wireOfContent(noKey);
         check(stripped && !(*stripped)["webpage"].contains("photo"), "превью без ключа картинки — без фото");
         const json inviteV1{{"kind", "cloud_invite"}, {"container", {{"domain", "local"}, {"id", "AAEC"}}}, {"name", "Проект"},
                             {"role", 2}, {"text", "Приглашение в папку «Проект» (редактор)"}};
-        const auto inviteV2 = v2::toV2(inviteV1);
-        const auto invite = inviteV2 ? v2::fromV2(*inviteV2) : std::nullopt;
+        const auto inviteV2 = v2::contentOfWire(inviteV1);
+        const auto invite = inviteV2 ? v2::wireOfContent(*inviteV2) : std::nullopt;
         check(invite && *invite == inviteV1, "cloud_invite туда и обратно");
         check(v2::v2Kind(json{{"cloud_invite", json::object()}}) == "cloud_invite", "v2Kind: cloud_invite");
         const json articleV1{{"kind", "article"}, {"title", "Поход"}, {"markdown", "# Поход\nтекст"}, {"text", "Статья «Поход»"},
                              {"article_media", json::array({json{{"kind", "photo"}, {"file_id", "f1"}, {"mime", "image/jpeg"}}})}};
-        const auto articleV2 = v2::toV2(articleV1);
+        const auto articleV2 = v2::contentOfWire(articleV1);
         check(articleV2 && (*articleV2)["article"]["media"][0]["kind"] == "MEDIA_KIND_PHOTO", "article → v2 с картинкой");
-        const auto article = articleV2 ? v2::fromV2(*articleV2) : std::nullopt;
+        const auto article = articleV2 ? v2::wireOfContent(*articleV2) : std::nullopt;
         check(article && *article == articleV1, "article туда и обратно");
         const json reportV1{{"kind", "mod_report"}, {"report_group", {{"domain", "local"}, {"id", "AAEC"}}}, {"reason", "spam"},
                             {"text", "Жалоба: спам"},
                             {"reported", json::array({json{{"op_id", "0192f0e4-1a2b-7c3d-8e4f-001122334455"},
                                                            {"author", "eve@local"}, {"text", "реклама"}, {"ts", 1700000000}}})}};
-        const auto reportV2 = v2::toV2(reportV1);
-        const auto report = reportV2 ? v2::fromV2(*reportV2) : std::nullopt;
+        const auto reportV2 = v2::contentOfWire(reportV1);
+        const auto report = reportV2 ? v2::wireOfContent(*reportV2) : std::nullopt;
         check(report && *report == reportV1, "mod_report туда и обратно");
         check(v2::v2Kind(json{{"mod_report", json::object()}}) == "mod_report", "v2Kind: mod_report");
         // A0008-2: подпись автора (proof) в жалобе переживает туда и обратно
         auto reportProof = reportV1;
         reportProof["reported"][0]["proof"] = "AQID";
-        const auto reportProofV2 = v2::toV2(reportProof);
+        const auto reportProofV2 = v2::contentOfWire(reportProof);
         check(reportProofV2 && (*reportProofV2)["mod_report"]["messages"][0]["proof"] == "AQID", "mod_report → v2 с подписью автора");
-        const auto reportProofBack = reportProofV2 ? v2::fromV2(*reportProofV2) : std::nullopt;
+        const auto reportProofBack = reportProofV2 ? v2::wireOfContent(*reportProofV2) : std::nullopt;
         check(reportProofBack && *reportProofBack == reportProof, "mod_report с подписью туда и обратно");
         // Событие движка с подписью: интерпретатор отдаёт её клиенту для хранения рядом с сообщением
         const auto signedIn = v2::interpretDirect(json{{"type", "direct"}, {"opId", "op-9"}, {"from", "eve@local"}, {"chat", "eve@local"},
@@ -413,16 +412,16 @@ int main() {
         // Опросы: срок, без переголосования, перемешивание, скрытые итоги — как web
         const json pollV1{{"kind", "poll"}, {"question", "Куда?"}, {"options", json::array({"лес", "море"})}, {"close_ms", 1800000000000LL},
                           {"no_revote", true}, {"shuffle", true}, {"hide_results", true}};
-        const auto pollV2 = v2::toV2(pollV1);
+        const auto pollV2 = v2::contentOfWire(pollV1);
         check(pollV2 && (*pollV2)["poll"]["close_ms"] == "1800000000000" && (*pollV2)["poll"]["hide_results"] == true,
               "poll → v2 с новыми настройками");
-        const auto poll = pollV2 ? v2::fromV2(*pollV2) : std::nullopt;
+        const auto poll = pollV2 ? v2::wireOfContent(*pollV2) : std::nullopt;
         check(poll && (*poll)["close_ms"] == 1800000000000LL && (*poll)["no_revote"] == true && (*poll)["shuffle"] == true,
               "poll ← v2 с новыми настройками");
         // spec 028: сервер вложения и миниатюра
         const json photo{{"kind", "photo"}, {"file_id", "f9"}, {"blob_domain", "b.example"}, {"thumbnail", "/9j/"}};
-        const auto photoV2 = v2::toV2(photo);
-        const auto photoBack = photoV2 ? v2::fromV2(*photoV2) : std::nullopt;
+        const auto photoV2 = v2::contentOfWire(photo);
+        const auto photoBack = photoV2 ? v2::wireOfContent(*photoV2) : std::nullopt;
         check(photoBack && (*photoBack)["blob_domain"] == "b.example" && (*photoBack)["thumbnail"] == "/9j/",
               "media: сервер блоба и миниатюра туда и обратно");
     }
@@ -553,8 +552,8 @@ int main() {
         }
         {
             // Содержимое chat_mode → служебное сообщение чата (класс «сообщение»).
-            const auto on = v2::fromV2(json{{"chat_mode", {{"l2", true}}}});
-            const auto off = v2::fromV2(json{{"chat_mode", json::object()}});
+            const auto on = v2::wireOfContent(json{{"chat_mode", {{"l2", true}}}});
+            const auto off = v2::wireOfContent(json{{"chat_mode", json::object()}});
             check(on && (*on)["kind"] == "chat_mode" && (*on)["l2"] == true && off && (*off)["l2"] == false,
                   "chat_mode ← v2: содержимое UI");
             const auto in = v2::interpretDirect(

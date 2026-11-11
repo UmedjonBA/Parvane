@@ -3429,7 +3429,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 								_controller->uiShow(),
 								document);
 						}
-						if (kParvaneStickerCloud) {
+						if (session->data().stickers().isFaved(document) || Parvane::CanFaveSticker(document)) {
 							const auto isFaved = session->data().stickers().isFaved(document);
 							_menu->addAction(isFaved ? tr::lng_faved_stickers_remove(tr::now) : tr::lng_faved_stickers_add(tr::now), [=] {
 								Api::ToggleFavedSticker(controller->uiShow(), document, itemId);

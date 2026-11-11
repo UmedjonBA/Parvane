@@ -300,6 +300,7 @@ QHash<QString, DraftEntry> g_drafts;
 bool g_draftsLoaded = false;
 void LoadDraftsLocal();
 bool g_stateAttached = false;    // main
+parvane::json g_stateShown;      // main: снимок журнала, показанный последним (база разницы своей правки)
 bool g_stateApplying = false;    // main: применяем снимок — не зеркалить назад
 bool g_stateFlushQueued = false; // main
 std::unique_ptr<base::Timer> g_stateTimer;
@@ -452,7 +453,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		if (it.silent) {
 			plain["silent"] = true; // «без звука» — и у отложенного (Content.silent)
 		}
-		const auto content = parvane::v2::toV2(plain, it.replyTo.value_or(std::string()));
+		const auto content = parvane::v2::contentOfWire(plain, it.replyTo.value_or(std::string()));
 		if (peer.is_null() || !content) {
 			continue;
 		}
@@ -542,7 +543,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	LoadDraftsLocal();
 	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
 		auto peer = StatePeerOf(it.key());
-		const auto content = parvane::v2::toV2(parvane::textContent(it->text.toStdString(), it->entities));
+		const auto content = parvane::v2::contentOfWire(parvane::textContent(it->text.toStdString(), it->entities));
 		if (peer.is_null() || !content || !content->contains("text")) {
 			continue;
 		}
@@ -845,7 +846,7 @@ void ProjectScheduled(const parvane::json &snap) {
 				const auto content = raw
 					? parvane::v2::decodeMessage("parvane.msg.v2.Content", *raw)
 					: parvane::json();
-				const auto v1 = parvane::v2::fromV2(content);
+				const auto v1 = parvane::v2::wireOfContent(content);
 				if (!v1 || parvane::contentKind(*v1) != "text") {
 					continue;
 				}
@@ -1500,7 +1501,7 @@ void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) 
 		try {
 			const auto textJson = parvane::v2::decodeMessage("parvane.msg.v2.Text",
 				parvane::v2::fromBase64(d["text"].get<std::string>()));
-			const auto wire = parvane::v2::fromV2(parvane::json{ { "text", textJson } });
+			const auto wire = parvane::v2::wireOfContent(parvane::json{ { "text", textJson } });
 			if (!wire || wire->value("text", std::string()).empty()) {
 				continue;
 			}
@@ -1672,6 +1673,7 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.is_object()) {
 		return;
 	}
+	g_stateShown = snap;
 	g_stateApplying = true;
 	ProjectCleared(session, snap);
 	ProjectFolders(session, snap);
@@ -1697,8 +1699,9 @@ void StateSyncNow() {
 		return;
 	}
 	const auto desired = BuildLocalState(session);
+	const auto shown = g_stateShown;
 	const auto generation = AccountGeneration();
-	crl::async([desired, generation] {
+	crl::async([desired, shown, generation] {
 		if (!AccountGenerationIs(generation)) {
 			return;
 		}
@@ -1708,7 +1711,7 @@ void StateSyncNow() {
 		}
 		parvane::json r;
 		try {
-			r = s->stateSync(desired, kV2StateKinds);
+			r = s->stateSync(desired, kV2StateKinds, shown);
 		} catch (const std::exception &e) {
 			LOG(("Parvane: v2: синк журнала состояния: %1").arg(QString::fromUtf8(e.what())));
 			return;
@@ -1716,6 +1719,13 @@ void StateSyncNow() {
 		if (!r.is_object()) {
 			return;
 		}
+		// FR-075: избранное другого устройства — в снимке формы state.v1 его нет, сверяется отдельно
+		crl::on_main([faved = s->stateFavedStickers(), generation] {
+			const auto session = g_sessionWeak.get();
+			if (session && AccountGenerationIs(generation)) {
+				ProjectFavedStickers(session, faved);
+			}
+		});
 		if (!r.value("changed", false)) {
 			// Журнал принял ровно `desired` — это и есть сведённое состояние (T150)
 			crl::on_main([desired, generation] {
@@ -1939,7 +1949,8 @@ void AttachStateJournal() {
 		if (!snap.is_object()) {
 			return;
 		}
-		crl::on_main([snap, generation] {
+		const auto faved = s->stateFavedStickers(); // FR-075: избранные стикеры — объекты FAVED_STICKER модели
+		crl::on_main([snap, faved, generation] {
 			const auto session = g_sessionWeak.get();
 			if (!session || !AccountGenerationIs(generation)) {
 				return;
@@ -1947,6 +1958,7 @@ void AttachStateJournal() {
 			g_stateAttached = true;
 			MigrateStickerPacksOnce(snap); // PACK-3: до проекции — установки из журнала ждут переноса
 			ProjectState(session, snap);
+			ProjectFavedStickers(session, faved);
 			SaveStateSynced(BuildLocalState(session));
 			if (!g_stateTimer) {
 				g_stateTimer = std::make_unique<base::Timer>([] { StateSyncNow(); });
@@ -2430,6 +2442,7 @@ void ResetStateAccountData() {
 	g_drafts.clear();
 	g_draftsLoaded = false;
 	g_stateAttached = false;
+	g_stateShown = parvane::json();
 	g_stateApplying = false;
 	g_stateFlushQueued = false;
 	g_stateTimer = nullptr;
@@ -2522,6 +2535,139 @@ std::vector<not_null<PeerData*>> BlockedPeers(not_null<Main::Session*> session) 
 		result.push_back(ensurePeerUser(session, IdForAddress(address), address));
 	}
 	return result;
+}
+
+// ── избранные стикеры (spec 035 T126, FR-075): объекты FAVED_STICKER журнала state.v2 ──────────────────────────
+// Журнал — источник правды: проекция ставит в набор «Избранное» tdesktop ровно стикеры из журнала (свежие первыми,
+// как web), «В избранное»/«Убрать» — намерение модели fave_sticker. Ссылка без документа на этом устройстве (набор
+// ещё не стоит) ждёт загрузки наборов (ReapplyFavedStickers).
+namespace Internal {
+namespace {
+
+parvane::json g_favedApplied;  // последний применённый список журнала (main)
+parvane::json g_favedPending;  // список с ссылками без документа (main)
+
+[[nodiscard]] std::optional<std::pair<QString, QString>> StickerRefOfDoc(not_null<const DocumentData*> document) {
+	return StickerRefOf(document->id);
+}
+
+[[nodiscard]] std::vector<not_null<DocumentData*>> FavedDocuments(not_null<Main::Session*> session) {
+	auto out = std::vector<not_null<DocumentData*>>();
+	const auto &sets = session->data().stickers().sets();
+	if (const auto it = sets.find(Data::Stickers::FavedSetId); it != sets.end()) {
+		for (const auto document : it->second->stickers) {
+			out.push_back(document);
+		}
+	}
+	return out;
+}
+
+// Своё избранное ушло в журнал — то, что модель теперь показывает, считать применённым (проекция не откатит)
+void RememberFavedFromJournal(std::uint64_t generation) {
+	crl::async([generation] {
+		const auto s = V2Ready();
+		if (!s || !AccountGenerationIs(generation)) {
+			return;
+		}
+		const auto faved = s->stateFavedStickers();
+		crl::on_main([faved, generation] {
+			if (AccountGenerationIs(generation)) {
+				g_favedApplied = faved;
+			}
+		});
+	});
+}
+
+} // namespace
+
+void ProjectFavedStickers(not_null<Main::Session*> session, const parvane::json &faved) { // main
+	if (!faved.is_array() || faved == g_favedApplied) {
+		return;
+	}
+	auto list = std::vector<parvane::json>(faved.begin(), faved.end());
+	const auto addedMs = [](const parvane::json &f) {
+		const auto &v = f.contains("added_ms") ? f["added_ms"] : parvane::json();
+		return v.is_string() ? std::atoll(v.get<std::string>().c_str()) : v.is_number() ? v.get<long long>() : 0LL;
+	};
+	// Старые первыми: setFaved ставит наверх — свежие окажутся первыми
+	std::stable_sort(list.begin(), list.end(), [&](const auto &a, const auto &b) { return addedMs(a) < addedMs(b); });
+	auto want = std::vector<not_null<DocumentData*>>();
+	auto missing = 0;
+	for (const auto &f : list) {
+		const auto stickerId = QString::fromStdString(f.value("sticker_id", std::string()));
+		const auto docId = StickerDocByRef(stickerId);
+		const auto document = docId ? session->data().document(docId).get() : nullptr;
+		if (document && document->sticker()) {
+			want.push_back(not_null<DocumentData*>(document));
+		} else {
+			++missing;
+		}
+	}
+	auto &stickers = session->data().stickers();
+	for (const auto document : FavedDocuments(session)) {
+		if (std::find(want.begin(), want.end(), document) == want.end()) {
+			stickers.setFaved(nullptr, document, false);
+		}
+	}
+	for (const auto document : want) {
+		stickers.setFaved(nullptr, document, true);
+	}
+	g_favedApplied = faved;
+	g_favedPending = missing ? faved : parvane::json();
+	LOG(("Parvane: v2: журнал состояния → избранные стикеры (%1, без набора на устройстве %2)")
+		.arg(want.size())
+		.arg(missing));
+}
+
+void ReapplyFavedStickers(not_null<Main::Session*> session) { // main
+	if (!g_favedPending.is_array()) {
+		return;
+	}
+	const auto pending = g_favedPending;
+	g_favedApplied = parvane::json();
+	ProjectFavedStickers(session, pending);
+}
+
+} // namespace Internal
+
+bool CanFaveSticker(not_null<DocumentData*> document) { // main
+	return document->sticker() && Internal::StickerRefOfDoc(document).has_value() && V2Ready() != nullptr;
+}
+
+bool ToggleFavedSticker(not_null<DocumentData*> document, bool faved) { // main
+	using namespace Internal;
+	const auto ref = StickerRefOfDoc(document);
+	if (!ref) {
+		LOG(("Parvane: стикер %1 не в избранном — нет ссылки набора").arg(document->id));
+		return true;
+	}
+	const auto session = &document->session();
+	const auto before = FavedDocuments(session);
+	session->data().stickers().setFaved(nullptr, document, faved);
+	// Сверх предела tdesktop вытесняет самые старые — и из журнала (как web)
+	auto changes = std::vector<std::tuple<QString, QString, bool>>{ { ref->first, ref->second, faved } };
+	const auto after = FavedDocuments(session);
+	for (const auto old : before) {
+		if (old != document && std::find(after.begin(), after.end(), old) == after.end()) {
+			if (const auto r = StickerRefOfDoc(old)) {
+				changes.emplace_back(r->first, r->second, false);
+			}
+		}
+	}
+	const auto generation = AccountGeneration();
+	crl::async([changes, generation] {
+		const auto s = V2Ready();
+		if (!s || !AccountGenerationIs(generation)) {
+			return;
+		}
+		for (const auto &[setId, stickerId, on] : changes) {
+			const auto ok = s->stateFaveSticker(setId.toStdString(), stickerId.toStdString(), on);
+			LOG(("Parvane: v2: стикер %1 %2 избранного — %3")
+				.arg(stickerId, on ? u"в"_q : u"из"_q, ok ? u"записано в журнал"_q : u"журнал недоступен"_q));
+		}
+		RememberFavedFromJournal(generation);
+	});
+	return true;
 }
 
 } // namespace Parvane

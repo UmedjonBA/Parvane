@@ -240,12 +240,31 @@ static void packHash() {
     }
 }
 
+// FR-075 (spec 035 T126): ссылка на стикер в избранном — по вектору web (`sticker-ref.json`, его же проверяет web
+// clientVectors.test.ts): одно избранное на всех своих устройствах
+static void stickerRef() {
+    const auto table = json::parse(readText(vectorPath("sticker-ref.json")), nullptr, false);
+    check(table.is_object() && table["cases"].is_array() && !table["cases"].empty(), "sticker-ref: вектор есть");
+    if (!table.is_object() || !table["cases"].is_array()) return;
+    for (const auto &c : table["cases"]) {
+        const auto name = c.value("name", std::string());
+        const auto setId = parvane::pack::favedSetId(name);
+        const auto stickerId = parvane::pack::favedStickerId(setId, c.value("file", std::string()));
+        check(setId == c.value("set_id", std::string()), "sticker-ref: set_id набора «" + name + "»", setId);
+        check(stickerId == c.value("sticker_id", std::string()), "sticker-ref: sticker_id «" + name + "»", stickerId);
+        check(parvane::pack::favedSetIdOf(stickerId) == setId, "sticker-ref: набор из sticker_id «" + name + "»");
+    }
+    check(parvane::pack::favedSetIdOf("12345").empty() && parvane::pack::favedSetIdOf("pvpk-1").empty(),
+          "sticker-ref: чужой id — не стикер своего набора");
+}
+
 int main() {
     std::printf("=== parvane-core: векторы форматов web ↔ desktop (%s) ===\n", PARVANE_VECTORS_DIR);
     keyBackup();
     keyBundle();
     calls();
     packHash();
+    stickerRef();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

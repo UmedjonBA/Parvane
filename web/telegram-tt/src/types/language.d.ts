@@ -265,6 +265,7 @@ export interface LangPair {
   'ParvaneInviteDeclined': undefined;
   'ParvaneUpgradeRequired': undefined;
   'ParvaneStateNeedsUpdate': undefined;
+  'ParvaneDataNeedsUpdate': undefined;
   'ParvaneMessageNeedsUpdate': undefined;
   'ParvaneDeviceLegacy': undefined;
   'ParvaneInviteEditUnsupported': undefined;

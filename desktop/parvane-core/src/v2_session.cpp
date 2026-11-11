@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -3720,7 +3721,7 @@ json Session::stateAttach(const json &local, const std::vector<std::string> &dir
     return projectStateLocked();
 }
 
-bool Session::pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds) {
+bool Session::pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds, const json &shown) {
     // Желаемое = показанное + поля управляемых видов хоста; время блокировки и чужие списки закрепа
     // сохраняются (как web buildDesired). Разницу считает модель — от того, что хост показывал (base).
     const auto current = state_->snapshot();
@@ -3744,16 +3745,17 @@ bool Session::pushDesiredLocked(const json &desired, const std::vector<std::stri
             if (!isMainPinList(p.value("list", json()))) full["pinned"].push_back(p);
         }
     }
-    const bool hasBase = stateBase_.is_object() && !stateBase_.empty();
-    return state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json());
+    const auto &base = (shown.is_object() && !shown.empty()) ? shown : stateBase_;
+    const bool hasBase = base.is_object() && !base.empty();
+    return state_->apply(full, kinds, true, false, hasBase ? base : json());
 }
 
-json Session::stateSync(const json &desired, const std::vector<std::string> &kinds) {
+json Session::stateSync(const json &desired, const std::vector<std::string> &kinds, const json &shown) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return nullptr;
     // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). Не дошла — исключение: хост
     // держит вид «несохранённым» (T150) и досылает при следующем подключении
-    if (desired.is_object() && !kinds.empty() && !pushDesiredLocked(desired, kinds)) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    if (desired.is_object() && !kinds.empty() && !pushDesiredLocked(desired, kinds, shown)) throw V2Error("ERROR_CODE_UNAVAILABLE");
     pullStateLocked();
     // «Изменилось» — относительно того, что хост показывал последним (state-base), а не относительно этого синка:
     // запись другого устройства модель применяет уже при разборе записи инбокса (уведомление журнала в режиме
@@ -3830,6 +3832,42 @@ bool Session::stateWriteBlocked() {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!openStateLocked()) return false;
     return state_->view().value("write_blocked", false);
+}
+
+json Session::capabilities(const std::string &chat) {
+    const auto peer = historyPeer(chat);
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!host_ || peer.is_null()) return nullptr;
+    auto c = host_->read("capabilities", json{{"chat", peer}});
+    if (!c.is_object() || c.contains("error")) return nullptr;
+    // proto3-JSON: ложные поля опущены; имена — как в схеме (snake_case), принимаем и camelCase
+    json out = json::object();
+    for (const char *k : {"send_text", "send_media", "send_stickers", "send_polls", "send_links", "delete_everyone", "pin",
+                          "edit", "react", "forward", "reply"}) {
+        std::string camel;
+        for (std::size_t i = 0; k[i]; ++i) {
+            if (k[i] == '_' && k[i + 1]) camel.push_back(char(std::toupper(static_cast<unsigned char>(k[++i]))));
+            else camel.push_back(k[i]);
+        }
+        out[k] = c.value(k, c.value(camel, false));
+    }
+    return out;
+}
+
+bool Session::contentHidden(const std::string &chat, const std::string &from, const json &wire) {
+    if (!isGroupAddress(chat) || !wire.is_object()) return false;
+    const auto peer = historyPeer(chat);
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!host_ || peer.is_null()) return false;
+    const auto r = host_->raw("contentHidden", json{{"chat", peer}, {"from", from}, {"wire", wire}});
+    return r.is_object() && r.value("hidden", false);
+}
+
+std::optional<bool> Session::canSendContent(const std::string &chat, const json &wire) {
+    const auto caps = capabilities(chat);
+    if (!caps.is_object()) return std::nullopt;
+    if (!caps.value("send_text", false)) return false;
+    return !contentHidden(chat, cfg_.self, wire);
 }
 
 } // namespace parvane::v2

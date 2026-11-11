@@ -63,6 +63,15 @@ std::int64_t packSetId(const std::string &sanitizedName);
 // id набора эмодзи: FNV("pvemoji-set:<rawName>") — как desktop.
 std::int64_t emojiSetId(const std::string &rawName);
 
+// FR-075 (spec 035 T126): ссылка на стикер в избранном (объект FAVED_STICKER журнала state.v2) — одна для web и
+// desktop (вектор `clients/sticker-ref.json`, web `stickerPacks.ts` getSetIdForPackName/buildStickerId):
+//   set_id = "pvpk-" + (FNV-1a-32 по кодовым единицам UTF-16 строки "pack:<имя набора>") >>> 1;
+//   sticker_id = set_id + ":" + (FNV-1a-32 UTF-16 имени файла в архиве набора) >>> 1.
+std::string favedSetId(const std::string &packName);
+std::string favedStickerId(const std::string &setId, const std::string &fileName);
+// set_id из sticker_id ("" — не стикер своего набора).
+std::string favedSetIdOf(const std::string &stickerId);
+
 // PACK-1: загруженную под набор получателей ссылку можно переиспользовать,
 // только если новый набор ⊆ старого.
 bool canReuseRef(const std::vector<std::string> &uploadedFor,

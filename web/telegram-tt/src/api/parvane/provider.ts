@@ -41,7 +41,7 @@ import {
 import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
-import { STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
+import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
@@ -546,6 +546,8 @@ const localState = createLocalState({
   isPeerOnline: (chatId) => connectionController.isPeerOnline(store.getAddressForId(chatId)),
   // Отложенная пересылка (A3): messageController собран ниже, срок наступает позже
   forwardMessages: (params) => messageController.methods.forwardMessages(params),
+  // spec 035 T118: виды журнала личного состояния — показом модели без сети (журнал и контроллер собраны ниже)
+  projectOffline: async () => stateJournal.projectOffline(await v2Controller.stateViewOffline()),
 });
 
 // Журнал личного состояния v2 (T098): подключается, когда поднят v2-стек
@@ -1207,6 +1209,8 @@ ParvaneStore.capabilitiesOf = (address) => v2Controller.chatCapabilities(address
 let pendingRecoveryKey: string | undefined;
 // Сервер ответил UPGRADE_REQUIRED (v2) — UI показывает диалог при монтировании
 let isUpgradeRequired = false;
+// Данные устройства записаны более новой версией (модель движка `TOO_NEW`, T117) — то же
+let isDataTooNew = false;
 
 window.addEventListener('parvane-upgrade-required', () => {
   isUpgradeRequired = true;
@@ -1289,6 +1293,10 @@ const v2Controller = createV2Controller({
     // Как и ключ восстановления — Main мог ещё не смонтироваться
     isUpgradeRequired = true;
     window.dispatchEvent(new CustomEvent('parvane-upgrade-required'));
+  },
+  onDataTooNew: () => {
+    isDataTooNew = true;
+    window.dispatchEvent(new CustomEvent(DATA_TOO_NEW_EVENT));
   },
   onOwnDevicesChanged: () => {
     window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
@@ -4524,6 +4532,11 @@ const methods = {
   // v2-стека — экран показывает её, когда он поднят
   parvaneIsUpgradeRequired() {
     return Promise.resolve(isUpgradeRequired);
+  },
+
+  // spec 035 T117: данные этого устройства записаны более новой версией приложения
+  parvaneIsDataTooNew() {
+    return Promise.resolve(isDataTooNew);
   },
 
   async parvaneTakeRecoveryKey() {

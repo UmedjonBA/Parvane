@@ -7,14 +7,12 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use js_sys::{Array, Object, Reflect, Uint8Array};
+use js_sys::{Object, Reflect, Uint8Array};
 use parvane_protocol::codec::{self, decode_checked};
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{frame, Auth, Channel, ClientInfo, Frame, Hello, Ping, Request};
 use parvane_protocol::pb::parvane::identity::v2 as ipb;
-use parvane_protocol::pb::parvane::msg::v2::Content;
 use parvane_protocol::ProtoError;
-use prost::Message;
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
 
@@ -48,9 +46,6 @@ pub(crate) fn set(o: &Object, k: &str, v: &JsValue) {
     let _ = Reflect::set(o, &JsValue::from_str(k), v);
 }
 
-fn content_json(c: &Content) -> Value {
-    serde_json::to_value(c).unwrap_or(Value::Null)
-}
 
 
 
@@ -357,41 +352,11 @@ pub fn engine_info() -> String {
     parvane_protocol::engine_info_json()
 }
 
-/// Полные имена всех сообщений схемы (тесты кодеков во всех обвязках, spec 035 T012).
-#[wasm_bindgen(js_name = schemaMessageNames)]
-pub fn schema_message_names() -> String {
-    serde_json::to_string(&parvane_protocol::schema::MESSAGES.iter().map(|m| m.name).collect::<Vec<_>>()).unwrap_or_default()
-}
-
-/// Страница `msg.inbox.sync` → {records: Uint8Array[] (каждая — InboxRecord), more}.
-#[wasm_bindgen(js_name = splitSyncResponse)]
-pub fn split_sync_response(bytes: &[u8]) -> Result<JsValue, JsValue> {
-    let r: parvane_protocol::pb::parvane::msg::v2::InboxSyncResponse = decode_checked(bytes, Origin::Server).map_err(err_proto)?;
-    let o = Object::new();
-    let recs: Array = r.records.iter().map(|x| JsValue::from(Uint8Array::from(x.encode_to_vec().as_slice()))).collect();
-    set(&o, "records", &recs.into());
-    set(&o, "more", &r.more.into());
-    Ok(o.into())
-}
-
 /// Число записей в ответе журнала устройств (0 — у пользователя нет v2).
 #[wasm_bindgen(js_name = deviceLogEntries)]
 pub fn device_log_entries(bytes: &[u8]) -> Result<usize, JsValue> {
     let r: ipb::DeviceLogSyncAnonResponse = decode_checked(bytes, Origin::Server).map_err(err_proto)?;
     Ok(r.entries.len())
-}
-
-/// Разбор записи истории/кадра v1 (legacy_v1) → JSON.
-#[wasm_bindgen(js_name = parseLegacyStored)]
-pub fn parse_legacy_stored(json_bytes: &[u8]) -> Result<String, JsValue> {
-    let s = parvane_protocol::legacy_v1::parse_stored(json_bytes).map_err(err_proto)?;
-    let body = match &s.body {
-        parvane_protocol::legacy_v1::LegacyBody::Tombstone => json!({"tombstone": true}),
-        parvane_protocol::legacy_v1::LegacyBody::Plain(c) => json!({"plain": content_json(c)}),
-        parvane_protocol::legacy_v1::LegacyBody::Olm { ctype, sender_identity, .. } => json!({"olm": {"ctype": ctype, "senderIdentity": sender_identity}}),
-        parvane_protocol::legacy_v1::LegacyBody::Megolm { group, sender_identity, .. } => json!({"megolm": {"group": group, "senderIdentity": sender_identity}}),
-    };
-    Ok(json!({"id": s.id, "from": s.from, "to": s.to, "ts": s.ts, "replyTo": s.reply_to, "edited": s.edited, "deleted": s.deleted, "pinned": s.pinned, "body": body}).to_string())
 }
 
 #[cfg(test)]

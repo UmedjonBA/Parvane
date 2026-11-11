@@ -142,6 +142,7 @@ void setErr(std::string *error, const std::string &e) {
 
 struct PosixFs final : FsOps {
     int openWrite(const std::string &path) override { return ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); }
+    int openAppend(const std::string &path) override { return ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600); }
     bool writeAll(int fd, const void *data, size_t n) override {
         const char *p = static_cast<const char *>(data);
         while (n > 0) {

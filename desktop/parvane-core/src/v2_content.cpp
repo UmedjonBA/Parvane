@@ -1,4 +1,4 @@
-// Parvane fork: отображение содержимого v2 ↔ v1 (см. v2_content.h).
+// Parvane fork: содержимое v2 для конвейера клиента (см. v2_content.h) — смысл решает движок.
 #include "parvane/v2_content.h"
 
 #include "parvane/call.h"
@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -47,237 +46,6 @@ std::optional<std::string> b64decode(const std::string &s) {
 
 std::string str(const json &o, const char *k) {
     return (o.is_object() && o.contains(k) && o[k].is_string()) ? o[k].get<std::string>() : std::string();
-}
-
-bool has(const json &o, const char *k) {
-    return o.is_object() && o.contains(k) && !o[k].is_null();
-}
-
-// ── entities ────────────────────────────────────────────────────────────────
-
-const std::vector<std::pair<const char *, const char *>> &entityNames() {
-    static const std::vector<std::pair<const char *, const char *>> names = {
-        {"bold", "ENTITY_TYPE_BOLD"},
-        {"italic", "ENTITY_TYPE_ITALIC"},
-        {"underline", "ENTITY_TYPE_UNDERLINE"},
-        {"strike", "ENTITY_TYPE_STRIKE"},
-        {"spoiler", "ENTITY_TYPE_SPOILER"},
-        {"code", "ENTITY_TYPE_CODE"},
-        {"pre", "ENTITY_TYPE_PRE"},
-        {"text_url", "ENTITY_TYPE_TEXT_URL"},
-        {"url", "ENTITY_TYPE_URL"},
-        {"mention", "ENTITY_TYPE_MENTION"},
-        {"blockquote", "ENTITY_TYPE_BLOCKQUOTE"},
-        {"custom_emoji", "ENTITY_TYPE_CUSTOM_EMOJI"},
-    };
-    return names;
-}
-
-json entitiesToV2(const json &list) {
-    auto out = json::array();
-    if (!list.is_array()) return out;
-    for (const auto &e : list) {
-        if (!e.is_object()) continue;
-        const auto type = str(e, "type");
-        const char *v2 = nullptr;
-        for (const auto &[a, b] : entityNames()) {
-            if (type == a) v2 = b;
-        }
-        if (!v2) continue;
-        json o{{"type", v2}, {"offset", e.value("offset", 0)}, {"length", e.value("length", 0)}};
-        const auto data = str(e, "data");
-        if (type == "text_url" && !data.empty()) o["url"] = data;
-        if (type == "pre" && !data.empty()) o["language"] = data;
-        if (type == "custom_emoji" && !data.empty()) o["custom_emoji_id"] = data;
-        out.push_back(std::move(o));
-    }
-    return out;
-}
-
-json entitiesFromV2(const json &list) {
-    auto out = json::array();
-    if (!list.is_array()) return out;
-    for (const auto &e : list) {
-        if (!e.is_object()) continue;
-        const auto type = str(e, "type");
-        const char *v1 = nullptr;
-        for (const auto &[a, b] : entityNames()) {
-            if (type == b) v1 = a;
-        }
-        if (!v1) continue;
-        json o{{"type", v1}, {"offset", e.value("offset", 0)}, {"length", e.value("length", 0)}};
-        auto data = str(e, "url");
-        if (data.empty()) data = str(e, "language");
-        if (data.empty()) data = str(e, "custom_emoji_id");
-        if (!data.empty()) o["data"] = data;
-        out.push_back(std::move(o));
-    }
-    return out;
-}
-
-json packToV2(const json &p) {
-    json o = json::object();
-    if (!p.is_object()) return o;
-    if (has(p, "file_id")) o["file_id"] = str(p, "file_id");
-    if (has(p, "name")) o["name"] = str(p, "name");
-    if (p.contains("count") && p["count"].is_number()) o["count"] = p["count"];
-    if (has(p, "key")) o["key"] = str(p, "key");
-    if (has(p, "nonce")) o["nonce"] = str(p, "nonce");
-    if (has(p, "capability")) o["capability"] = str(p, "capability");
-    // PACK-2: отпечаток содержимого набора (base64, 32 байта)
-    if (has(p, "content_hash")) o["content_hash"] = str(p, "content_hash");
-    return o;
-}
-
-std::optional<json> packFromV2(const json &p) {
-    if (str(p, "file_id").empty()) return std::nullopt;
-    json out{{"file_id", str(p, "file_id")}, {"name", str(p, "name")},
-             {"count", p.value("count", 0)}, {"key", str(p, "key")}, {"nonce", str(p, "nonce")}};
-    if (!str(p, "capability").empty()) out["capability"] = str(p, "capability");
-    const auto contentHash = !str(p, "content_hash").empty() ? str(p, "content_hash") : str(p, "contentHash");
-    if (!contentHash.empty()) out["content_hash"] = contentHash;
-    return out;
-}
-
-// ── медиа ───────────────────────────────────────────────────────────────────
-
-const char *mediaKindToV2(const std::string &kind, const std::string &mime) {
-    if (kind == "file" && mime.rfind("audio/", 0) == 0) return "MEDIA_KIND_AUDIO";
-    if (kind == "photo") return "MEDIA_KIND_PHOTO";
-    if (kind == "video") return "MEDIA_KIND_VIDEO";
-    if (kind == "voice") return "MEDIA_KIND_VOICE";
-    if (kind == "video_note") return "MEDIA_KIND_VIDEO_NOTE";
-    if (kind == "gif") return "MEDIA_KIND_ANIMATION";
-    return "MEDIA_KIND_FILE";
-}
-
-std::string mediaKindFromV2(const std::string &kind) {
-    if (kind == "MEDIA_KIND_PHOTO") return "photo";
-    if (kind == "MEDIA_KIND_VIDEO") return "video";
-    if (kind == "MEDIA_KIND_VOICE") return "voice";
-    if (kind == "MEDIA_KIND_VIDEO_NOTE") return "video_note";
-    if (kind == "MEDIA_KIND_ANIMATION") return "gif";
-    return "file";
-}
-
-json mediaToV2(const json &c, const std::string &kind) {
-    const auto mime = str(c, "mime");
-    json m{{"kind", mediaKindToV2(kind, mime)}};
-    if (has(c, "file_id")) m["file_id"] = str(c, "file_id");
-    if (!mime.empty()) m["mime"] = mime;
-    if (c.contains("size_bytes") && c["size_bytes"].is_number()) {
-        m["size"] = std::to_string(c["size_bytes"].get<std::uint64_t>());
-    }
-    if (c.contains("duration_secs") && c["duration_secs"].is_number()) {
-        m["duration_ms"] = static_cast<std::uint32_t>(std::llround(c["duration_secs"].get<double>() * 1000));
-    }
-    if (c.contains("width") && c["width"].is_number()) m["width"] = c["width"];
-    if (c.contains("height") && c["height"].is_number()) m["height"] = c["height"];
-    if (c.contains("waveform") && c["waveform"].is_array() && !c["waveform"].empty()) {
-        std::string bytes;
-        for (const auto &x : c["waveform"]) {
-            const int v = x.is_number() ? x.get<int>() : 0;
-            bytes.push_back(static_cast<char>(v < 0 ? 0 : (v > 255 ? 255 : v)));
-        }
-        m["waveform"] = b64encode(bytes);
-    }
-    if (has(c, "file_key")) m["file_key"] = str(c, "file_key");
-    if (has(c, "file_nonce")) m["file_nonce"] = str(c, "file_nonce");
-    // Секрет скачивания блоба (T131, D-08): только в E2E-содержимом v2-чата.
-    if (has(c, "capability")) m["capability"] = str(c, "capability");
-    if (has(c, "filename")) m["name"] = str(c, "filename");
-    if (!str(c, "caption").empty()) m["caption"] = str(c, "caption");
-    if (c.contains("entities") && c["entities"].is_array() && !c["entities"].empty()) {
-        auto e = entitiesToV2(c["entities"]);
-        if (!e.empty()) m["caption_entities"] = e;
-    }
-    if (!str(c, "audio_title").empty()) m["title"] = str(c, "audio_title");
-    if (!str(c, "audio_performer").empty()) m["performer"] = str(c, "audio_performer");
-    // spec 028: сервер блоба (пусто — домен отправителя); миниатюра (JPEG ≤ 320 px, base64)
-    if (!str(c, "blob_domain").empty()) m["blob_domain"] = str(c, "blob_domain");
-    if (!str(c, "thumbnail").empty()) m["thumbnail"] = str(c, "thumbnail");
-    // MEDIA-2: спойлер — только фото/видео/GIF (как web MEDIA_SPOILER_KINDS); альбом — 16 байт base64
-    if (c.contains("spoiler") && c["spoiler"].is_boolean() && c["spoiler"].get<bool>()
-        && (kind == "photo" || kind == "video" || kind == "gif")) {
-        m["spoiler"] = true;
-    }
-    if (const auto a = str(c, "album_id"); !a.empty()) {
-        if (const auto raw = b64decode(a); raw && raw->size() == 16) m["album_id"] = a;
-    }
-    return m;
-}
-
-json mediaFromV2(const json &m) {
-    json c{{"kind", mediaKindFromV2(str(m, "kind"))}};
-    if (!str(m, "file_id").empty()) c["file_id"] = str(m, "file_id");
-    if (!str(m, "mime").empty()) c["mime"] = str(m, "mime");
-    if (m.contains("size")) {
-        const auto &s = m["size"];
-        if (s.is_string()) {
-            try {
-                c["size_bytes"] = std::stoull(s.get<std::string>());
-            } catch (const std::exception &) {
-            }
-        } else if (s.is_number()) {
-            c["size_bytes"] = s.get<std::uint64_t>();
-        }
-    }
-    if (m.contains("duration_ms") && m["duration_ms"].is_number()) {
-        const auto ms = m["duration_ms"].get<std::uint64_t>();
-        if (ms > 0) c["duration_secs"] = std::max<std::uint64_t>(1, (ms + 500) / 1000);
-    }
-    if (m.contains("width") && m["width"].is_number()) c["width"] = m["width"];
-    if (m.contains("height") && m["height"].is_number()) c["height"] = m["height"];
-    if (const auto w = str(m, "waveform"); !w.empty()) {
-        if (const auto bytes = b64decode(w)) {
-            auto arr = json::array();
-            for (const unsigned char b : *bytes) arr.push_back(int(b));
-            c["waveform"] = arr;
-        }
-    }
-    if (!str(m, "file_key").empty()) c["file_key"] = str(m, "file_key");
-    if (!str(m, "file_nonce").empty()) c["file_nonce"] = str(m, "file_nonce");
-    if (!str(m, "capability").empty()) c["capability"] = str(m, "capability");
-    if (!str(m, "name").empty()) c["filename"] = str(m, "name");
-    if (!str(m, "caption").empty()) c["caption"] = str(m, "caption");
-    if (m.contains("caption_entities")) {
-        auto e = entitiesFromV2(m["caption_entities"]);
-        if (!e.empty()) c["entities"] = e;
-    }
-    if (!str(m, "title").empty()) c["audio_title"] = str(m, "title");
-    if (!str(m, "performer").empty()) c["audio_performer"] = str(m, "performer");
-    if (!str(m, "thumbnail").empty()) c["thumbnail"] = str(m, "thumbnail");
-    if (const auto d = !str(m, "blob_domain").empty() ? str(m, "blob_domain") : str(m, "blobDomain"); !d.empty()) {
-        c["blob_domain"] = d;
-    }
-    const auto kind = str(c, "kind");
-    if (m.contains("spoiler") && m["spoiler"].is_boolean() && m["spoiler"].get<bool>()
-        && (kind == "photo" || kind == "video" || kind == "gif")) {
-        c["spoiler"] = true;
-    }
-    if (const auto a = str(m, "album_id"); !a.empty()) {
-        if (const auto raw = b64decode(a); raw && raw->size() == 16) c["album_id"] = a;
-    }
-    return c;
-}
-
-// QUOTE-1: цитата ≤ 1024 байт (max_len схемы — байты UTF-8), обрезка по границе символа; сущности — только
-// целиком внутри обрезанного фрагмента (смещения UTF-16).
-std::string clipUtf8(const std::string &s, std::size_t limit) {
-    if (s.size() <= limit) return s;
-    auto n = limit;
-    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
-    return s.substr(0, n);
-}
-
-std::size_t utf16Length(const std::string &s) {
-    std::size_t n = 0;
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        const auto b = static_cast<unsigned char>(s[i]);
-        if ((b & 0xC0) == 0x80) continue;
-        n += (b >= 0xF0) ? 2 : 1;
-    }
-    return n;
 }
 
 } // namespace
@@ -586,396 +354,67 @@ std::string newUuidV7() {
     return std::string(buf);
 }
 
-std::string v2Kind(const json &v2) {
-    static const char *kinds[] = {"text", "media", "sticker", "location", "poll", "poll_vote",
-                                  "poll_close", "receipt", "edit", "delete", "reaction", "pin",
-                                  "call", "group_key", "delivery_key", "contact", "container_key",
-                                  "state_key", "chat_mode", "task_offer", "task_response",
-                                  "cloud_invite", "article", "mod_report", "group_avatar_key"};
-    if (!v2.is_object()) return {};
-    for (const char *k : kinds) {
-        if (v2.contains(k) && !v2[k].is_null()) return k;
+// ── содержимое: смысл решает движок (spec 035 T125, ENGINE-1) ─────────────────
+// Класс, содержимое формата экспорта, ответ и разобранная мутация — `contentView` движка (`views.rs`), обратный
+// перевод — `contentOfWire`; правила те же, что у web и android. Здесь — только перекладка JSON для конвейера
+// клиента: имена полей опроса (`poll::normalize`) и срок опроса строкой у прежних черновиков.
+
+namespace {
+
+// Поля конверта Content (не вид содержимого).
+bool isEnvelopeField(const std::string &k) {
+    return k == "reply_to" || k == "replyTo" || k == "ttl_secs" || k == "ttlSecs" || k == "silent"
+        || k == "invert_media" || k == "invertMedia" || k == "reply_quote" || k == "replyQuote" || k == "forward";
+}
+
+json pollForEngine(json w) {
+    w = parvane::poll::normalize(std::move(w));
+    if (auto it = w.find("close_ms"); it != w.end() && it->is_string()) {
+        const auto v = std::atoll(it->get<std::string>().c_str());
+        if (v > 0) *it = v;
+        else w.erase(it);
+    }
+    return w;
+}
+
+} // namespace
+
+json contentView(const json &content) {
+    if (!content.is_object()) return json::object();
+    try {
+        auto v = engineCall("contentView", json{{"content", content}});
+        return v.is_object() ? v : json::object();
+    } catch (const std::exception &) {
+        return json::object(); // схеме не соответствует — у вызывающего заглушка
+    }
+}
+
+std::optional<json> contentOfWire(const json &wire, const std::string &replyTo) {
+    if (!wire.is_object()) return std::nullopt;
+    json args{{"wire", str(wire, "kind") == "poll" ? pollForEngine(wire) : wire}};
+    if (!replyTo.empty()) args["replyTo"] = replyTo;
+    try {
+        auto c = engineCall("contentOfWire", args);
+        if (c.is_object() && !c.empty()) return c;
+    } catch (const std::exception &) {
+    }
+    return std::nullopt;
+}
+
+std::optional<json> wireOfView(const json &view) {
+    const auto it = view.find("wire");
+    if (it == view.end() || !it->is_object()) return std::nullopt;
+    return str(*it, "kind") == "poll" ? parvane::poll::normalize(*it) : *it;
+}
+
+std::optional<json> wireOfContent(const json &content) { return wireOfView(contentView(content)); }
+
+std::string contentKindName(const json &content) {
+    if (!content.is_object()) return {};
+    for (auto it = content.begin(); it != content.end(); ++it) {
+        if (!it->is_null() && it->is_object() && !isEnvelopeField(it.key())) return it.key();
     }
     return {};
-}
-
-// ── содержимое ─────────────────────────────────────────────────────────────
-
-std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
-    if (!v1In.is_object()) return std::nullopt;
-    const auto kind = str(v1In, "kind");
-    const auto c = (kind == "poll") ? parvane::poll::normalize(v1In) : v1In;
-    json out = json::object();
-    if (kind == "text") {
-        json t{{"text", str(c, "text")}};
-        if (c.contains("entities")) {
-            auto e = entitiesToV2(c["entities"]);
-            if (!e.empty()) t["entities"] = e;
-        }
-        if (c.contains("webpage") && c["webpage"].is_object() && has(c["webpage"], "url")) {
-            const auto &w = c["webpage"];
-            json p{{"url", str(w, "url")}};
-            if (!str(w, "site_name").empty()) p["site_name"] = str(w, "site_name");
-            if (!str(w, "title").empty()) p["title"] = str(w, "title");
-            if (!str(w, "description").empty()) p["description"] = str(w, "description");
-            // Картинка превью — вложение-фото с секретом (как web: отправитель уменьшает её до загрузки)
-            if (w.contains("photo") && w["photo"].is_object() && !str(w["photo"], "file_id").empty()) {
-                p["image"] = mediaToV2(w["photo"], "photo");
-            }
-            t["preview"] = p;
-        }
-        if (c.contains("emoji_packs") && c["emoji_packs"].is_array() && !c["emoji_packs"].empty()) {
-            auto packs = json::array();
-            for (const auto &p : c["emoji_packs"]) packs.push_back(packToV2(p));
-            t["emoji_packs"] = packs;
-        }
-        out["text"] = t;
-    } else if (kind == "photo" || kind == "video" || kind == "voice" || kind == "video_note"
-               || kind == "gif" || kind == "file") {
-        out["media"] = mediaToV2(c, kind);
-    } else if (kind == "sticker") {
-        auto media = mediaToV2(c, "photo");
-        media.erase("caption");
-        json s{{"media", media}};
-        if (c.contains("pack_ref") && c["pack_ref"].is_object()) {
-            s["pack_ref"] = packToV2(c["pack_ref"]);
-            if (!str(c["pack_ref"], "name").empty()) s["pack"] = str(c["pack_ref"], "name");
-        }
-        if (has(c, "file_id")) s["sticker_id"] = str(c, "file_id");
-        if (!str(c, "filename").empty()) s["emoji"] = str(c, "filename");
-        out["sticker"] = s;
-    } else if (kind == "location") {
-        json l = json::object();
-        if (c.contains("lat") && c["lat"].is_number()) l["latitude"] = c["lat"];
-        if (c.contains("long") && c["long"].is_number()) l["longitude"] = c["long"];
-        if (c.contains("live_period") && c["live_period"].is_number()) l["live_period_s"] = c["live_period"];
-        if (c.contains("heading") && c["heading"].is_number()) l["heading"] = c["heading"];
-        if (c.contains("accuracy") && c["accuracy"].is_number()) l["accuracy_m"] = c["accuracy"];
-        out["location"] = l;
-    } else if (kind == "poll") {
-        json p{{"question", str(c, "question")}};
-        auto options = json::array();
-        if (c.contains("options") && c["options"].is_array()) {
-            for (const auto &o : c["options"]) {
-                if (o.is_string()) options.push_back(json{{"text", o.get<std::string>()}});
-                else if (o.is_object()) options.push_back(json{{"text", str(o, "text")}});
-            }
-        }
-        p["options"] = options;
-        if (c.value("is_public", false)) p["is_public"] = true;
-        if (c.value("is_multiple", false)) p["is_multiple"] = true;
-        if (c.value("is_quiz", false)) p["is_quiz"] = true;
-        if (c.contains("correct") && c["correct"].is_array()) p["correct"] = c["correct"];
-        if (!str(c, "solution").empty()) p["solution"] = str(c, "solution");
-        // Срок, запрет переголосования, перемешивание и скрытые до срока итоги (как web)
-        if (const auto *ms = c.contains("close_ms") ? &c["close_ms"] : nullptr; ms && (ms->is_number() || ms->is_string())) {
-            const auto v = ms->is_number() ? ms->get<long long>() : std::atoll(ms->get<std::string>().c_str());
-            if (v > 0) p["close_ms"] = std::to_string(v);
-        }
-        if (c.value("no_revote", false)) p["no_revote"] = true;
-        if (c.value("shuffle", false)) p["shuffle"] = true;
-        if (c.value("hide_results", false)) p["hide_results"] = true;
-        out["poll"] = p;
-    } else if (kind == "poll_vote") {
-        json v{{"option_indexes", c.contains("options") && c["options"].is_array() ? c["options"] : json::array()}};
-        if (!str(c, "poll").empty()) v["poll"] = ::parvane::v2::ref(str(c, "poll"));
-        // POLL-1: итоги анонимного опроса от автора (счётчики без адресов)
-        if (c.value("tally", false)) {
-            v["tally"] = true;
-            v["counts"] = c.contains("counts") && c["counts"].is_array() ? c["counts"] : json::array();
-            if (c.contains("voters")) v["voters"] = c["voters"];
-        }
-        out["poll_vote"] = v;
-    } else if (kind == "poll_close") {
-        json v = json::object();
-        if (!str(c, "poll").empty()) v["poll"] = ::parvane::v2::ref(str(c, "poll"));
-        out["poll_close"] = v;
-    } else if (kind == "task_offer") {
-        json t{{"name", str(c, "name")}};
-        if (!str(c, "description").empty()) t["description"] = str(c, "description");
-        if (c.contains("steps") && c["steps"].is_array() && !c["steps"].empty()) {
-            auto steps = json::array();
-            for (const auto &x : c["steps"]) {
-                if (x.is_string()) steps.push_back(json{{"text", x.get<std::string>()}});
-            }
-            t["steps"] = steps;
-        }
-        for (const char *k : {"day", "start", "due", "text"}) {
-            if (!str(c, k).empty()) t[k] = str(c, k);
-        }
-        if (c.value("minutes", 0) > 0) t["minutes"] = c["minutes"];
-        out["task_offer"] = t;
-    } else if (kind == "task_response") {
-        json t{{"decision", c.value("accepted", false) ? "TASK_DECISION_ACCEPTED" : "TASK_DECISION_DECLINED"}};
-        if (!str(c, "offer").empty()) t["offer"] = ::parvane::v2::ref(str(c, "offer"));
-        if (!str(c, "text").empty()) t["text"] = str(c, "text");
-        out["task_response"] = t;
-    } else if (kind == "cloud_invite") {
-        json t{{"name", str(c, "name")}};
-        if (c.contains("container") && c["container"].is_object()) t["container"] = c["container"];
-        if (c.value("role", 0) > 0) t["role"] = c["role"];
-        if (!str(c, "text").empty()) t["text"] = str(c, "text");
-        out["cloud_invite"] = t;
-    } else if (kind == "article") {
-        json t{{"title", str(c, "title")}, {"markdown", str(c, "markdown")}};
-        if (!str(c, "text").empty()) t["text"] = str(c, "text");
-        if (c.contains("article_media") && c["article_media"].is_array() && !c["article_media"].empty()) {
-            auto media = json::array();
-            for (const auto &m : c["article_media"]) media.push_back(mediaToV2(m, str(m, "kind")));
-            t["media"] = media;
-        }
-        out["article"] = t;
-    } else if (kind == "mod_report") {
-        json t = json::object();
-        if (c.contains("report_group") && c["report_group"].is_object()) t["group"] = c["report_group"];
-        for (const char *k : {"reason", "comment", "text"}) {
-            if (!str(c, k).empty()) t[k] = str(c, k);
-        }
-        if (c.contains("reported") && c["reported"].is_array()) {
-            auto messages = json::array();
-            for (const auto &m : c["reported"]) {
-                messages.push_back(json{{"op_id", uuidToB64(str(m, "op_id"))}, {"author", {{"address", str(m, "author")}}},
-                                        {"text", str(m, "text")},
-                                        {"ts_ms", std::to_string(m.value("ts", 0LL) * 1000)}});
-                if (!str(m, "proof").empty()) messages.back()["proof"] = str(m, "proof");
-            }
-            t["messages"] = messages;
-        }
-        out["mod_report"] = t;
-    } else {
-        return std::nullopt;
-    }
-    if (c.contains("ttl_secs") && c["ttl_secs"].is_number() && c["ttl_secs"].get<int>() > 0) {
-        out["ttl_secs"] = c["ttl_secs"];
-    }
-    // «Отправить без звука» (`Content.silent`): у получателя уведомление без звука
-    if (c.contains("silent") && c["silent"].is_boolean() && c["silent"].get<bool>()) out["silent"] = true;
-    // MEDIA-2: подпись над медиа
-    if (c.contains("invert_media") && c["invert_media"].is_boolean() && c["invert_media"].get<bool>()) {
-        out["invert_media"] = true;
-    }
-    if (!replyTo.empty()) {
-        out["reply_to"] = ref(replyTo);
-        // QUOTE-1: цитата — только вместе с ответом
-        if (c.contains("reply_quote") && c["reply_quote"].is_object()) {
-            const auto &q = c["reply_quote"];
-            const auto text = clipUtf8(str(q, "text"), 1024);
-            if (!text.empty()) {
-                json rq{{"text", text}};
-                if (q.contains("entities") && q["entities"].is_array()) {
-                    const auto len = utf16Length(text);
-                    auto inside = json::array();
-                    for (const auto &e : q["entities"]) {
-                        if (!e.is_object()) continue;
-                        const auto off = e.value("offset", 0), l = e.value("length", 0);
-                        if (off >= 0 && l > 0 && std::size_t(off + l) <= len) inside.push_back(e);
-                    }
-                    auto e = entitiesToV2(inside);
-                    if (!e.empty()) rq["entities"] = e;
-                }
-                if (q.contains("offset") && q["offset"].is_number_integer() && q["offset"].get<int>() > 0) {
-                    rq["offset"] = q["offset"];
-                }
-                out["reply_quote"] = rq;
-            }
-        }
-    }
-    if (!str(c, "forwarded_from").empty() || !str(c, "forwarded_name").empty()) {
-        json f = json::object();
-        if (!str(c, "forwarded_from").empty()) f["from_user"] = json{{"address", str(c, "forwarded_from")}};
-        if (!str(c, "forwarded_name").empty()) f["from_name"] = str(c, "forwarded_name");
-        out["forward"] = f;
-    }
-    return out;
-}
-
-std::optional<json> fromV2(const json &c) {
-    if (!c.is_object()) return std::nullopt;
-    json out;
-    if (c.contains("text") && c["text"].is_object()) {
-        const auto &t = c["text"];
-        out = json{{"kind", "text"}, {"text", str(t, "text")}};
-        if (t.contains("entities")) {
-            auto e = entitiesFromV2(t["entities"]);
-            if (!e.empty()) out["entities"] = e;
-        }
-        if (t.contains("preview") && t["preview"].is_object() && !str(t["preview"], "url").empty()) {
-            const auto &p = t["preview"];
-            json w{{"url", str(p, "url")}};
-            for (const char *k : {"site_name", "title", "description"}) {
-                if (!str(p, k).empty()) w[k] = str(p, k);
-            }
-            // Только фото с ключами (как web contentMap): иное из чужого клиента не показываем
-            if (p.contains("image") && p["image"].is_object()) {
-                auto photo = mediaFromV2(p["image"]);
-                if (photo.value("kind", std::string()) == "photo" && !str(photo, "file_id").empty()
-                    && !str(photo, "file_key").empty()) {
-                    w["photo"] = photo;
-                }
-            }
-            out["webpage"] = w;
-        }
-        if (t.contains("emoji_packs") && t["emoji_packs"].is_array()) {
-            auto packs = json::array();
-            for (const auto &p : t["emoji_packs"]) {
-                if (auto v = packFromV2(p)) packs.push_back(*v);
-            }
-            if (!packs.empty()) out["emoji_packs"] = packs;
-        }
-    } else if (c.contains("media") && c["media"].is_object()) {
-        out = mediaFromV2(c["media"]);
-    } else if (c.contains("sticker") && c["sticker"].is_object()) {
-        const auto &s = c["sticker"];
-        out = s.contains("media") && s["media"].is_object() ? mediaFromV2(s["media"]) : json{{"kind", "photo"}};
-        out["kind"] = "sticker";
-        if (!str(s, "emoji").empty()) out["filename"] = str(s, "emoji");
-        if (s.contains("pack_ref")) {
-            if (auto p = packFromV2(s["pack_ref"])) out["pack_ref"] = *p;
-        }
-    } else if (c.contains("location") && c["location"].is_object()) {
-        const auto &l = c["location"];
-        out = json{{"kind", "location"}, {"lat", l.value("latitude", 0.0)}, {"long", l.value("longitude", 0.0)}};
-        if (l.value("live_period_s", 0) > 0) out["live_period"] = l["live_period_s"];
-        if (l.value("heading", 0) > 0) out["heading"] = l["heading"];
-        if (l.value("accuracy_m", 0) > 0) out["accuracy"] = l["accuracy_m"];
-    } else if (c.contains("poll") && c["poll"].is_object()) {
-        const auto &p = c["poll"];
-        auto options = json::array();
-        if (p.contains("options") && p["options"].is_array()) {
-            for (const auto &o : p["options"]) options.push_back(str(o, "text"));
-        }
-        out = json{{"kind", "poll"}, {"question", str(p, "question")}, {"options", options}};
-        if (p.value("is_public", false)) out["is_public"] = true;
-        if (p.value("is_multiple", false)) out["is_multiple"] = true;
-        if (p.value("is_quiz", false)) out["is_quiz"] = true;
-        if (p.contains("correct") && p["correct"].is_array()) out["correct"] = p["correct"];
-        if (!str(p, "solution").empty()) out["solution"] = str(p, "solution");
-        if (p.contains("close_ms")) {
-            const auto &ms = p["close_ms"];
-            const auto v = ms.is_number() ? ms.get<long long>() : ms.is_string() ? std::atoll(ms.get<std::string>().c_str()) : 0LL;
-            if (v > 0) out["close_ms"] = v;
-        }
-        if (p.value("no_revote", false)) out["no_revote"] = true;
-        if (p.value("shuffle", false)) out["shuffle"] = true;
-        if (p.value("hide_results", false)) out["hide_results"] = true;
-        out = parvane::poll::normalize(out);
-    } else if (c.contains("poll_vote") && c["poll_vote"].is_object()) {
-        const auto &v = c["poll_vote"];
-        out = json{{"kind", "poll_vote"},
-                   {"options", v.contains("option_indexes") && v["option_indexes"].is_array()
-                                   ? v["option_indexes"] : json::array()}};
-        if (v.contains("poll")) {
-            if (auto u = b64ToUuid(str(v["poll"], "op_id"))) out["poll"] = *u;
-        }
-        if (v.value("tally", false)) {
-            out["tally"] = true;
-            out["counts"] = v.contains("counts") && v["counts"].is_array() ? v["counts"] : json::array();
-            out["voters"] = v.contains("voters") ? v["voters"] : json(0);
-        }
-    } else if (c.contains("poll_close") && c["poll_close"].is_object()) {
-        out = json{{"kind", "poll_close"}};
-        if (c["poll_close"].contains("poll")) {
-            if (auto u = b64ToUuid(str(c["poll_close"]["poll"], "op_id"))) out["poll"] = *u;
-        }
-    } else if (c.contains("chat_mode") && c["chat_mode"].is_object()) {
-        // Режим L2 личного чата: видимое служебное сообщение (без ttl/пересылки).
-        return chatModeContent(c["chat_mode"].value("l2", false));
-    } else if (c.contains("task_offer") && c["task_offer"].is_object()) {
-        // Задание в чат (spec 011, TASK-1) — как web: карточка с «Принять/Отклонить»
-        const auto &t = c["task_offer"];
-        out = json{{"kind", "task_offer"}, {"name", str(t, "name")}};
-        if (!str(t, "description").empty()) out["description"] = str(t, "description");
-        if (t.contains("steps") && t["steps"].is_array()) {
-            auto steps = json::array();
-            for (const auto &x : t["steps"]) {
-                if (!str(x, "text").empty()) steps.push_back(str(x, "text"));
-            }
-            if (!steps.empty()) out["steps"] = steps;
-        }
-        for (const char *k : {"day", "start", "due", "text"}) {
-            if (!str(t, k).empty()) out[k] = str(t, k);
-        }
-        if (t.value("minutes", 0) > 0) out["minutes"] = t["minutes"];
-    } else if (c.contains("task_response") && c["task_response"].is_object()) {
-        const auto &t = c["task_response"];
-        out = json{{"kind", "task_response"}, {"accepted", str(t, "decision") == "TASK_DECISION_ACCEPTED"}};
-        if (t.contains("offer")) {
-            if (auto u = b64ToUuid(str(t["offer"], "op_id"))) out["offer"] = *u;
-        }
-        if (!str(t, "text").empty()) out["text"] = str(t, "text");
-    } else if (c.contains("cloud_invite") && c["cloud_invite"].is_object()) {
-        // Приглашение в совместную папку облака (spec 016, CLOUD-1)
-        const auto &t = c["cloud_invite"];
-        out = json{{"kind", "cloud_invite"}, {"name", str(t, "name")}};
-        if (t.contains("container") && t["container"].is_object() && !str(t["container"], "id").empty()) {
-            out["container"] = json{{"domain", str(t["container"], "domain")}, {"id", str(t["container"], "id")}};
-        }
-        if (t.value("role", 0) > 0) out["role"] = t["role"];
-        if (!str(t, "text").empty()) out["text"] = str(t, "text");
-    } else if (c.contains("article") && c["article"].is_object()) {
-        // Статья (ARTICLE-1): окно чтения и «Сохранить в заметки»
-        const auto &t = c["article"];
-        out = json{{"kind", "article"}, {"title", str(t, "title")}, {"markdown", str(t, "markdown")}};
-        if (!str(t, "text").empty()) out["text"] = str(t, "text");
-        if (t.contains("media") && t["media"].is_array() && !t["media"].empty()) {
-            auto media = json::array();
-            for (const auto &m : t["media"]) media.push_back(mediaFromV2(m));
-            out["article_media"] = media;
-        }
-    } else if (c.contains("mod_report") && c["mod_report"].is_object()) {
-        // Жалоба админам группы (REPORT-1, spec 024): карточка у админов
-        const auto &t = c["mod_report"];
-        out = json{{"kind", "mod_report"}};
-        if (t.contains("group") && t["group"].is_object() && !str(t["group"], "id").empty()) {
-            out["report_group"] = json{{"domain", str(t["group"], "domain")}, {"id", str(t["group"], "id")}};
-        }
-        for (const char *k : {"reason", "comment", "text"}) {
-            if (!str(t, k).empty()) out[k] = str(t, k);
-        }
-        auto reported = json::array();
-        if (t.contains("messages") && t["messages"].is_array()) {
-            for (const auto &m : t["messages"]) {
-                const auto id = b64ToUuid(str(m, "op_id"));
-                const auto author = m.contains("author") ? str(m["author"], "address") : std::string();
-                if (!id || author.empty()) continue;
-                const auto &ts = m.contains("ts_ms") ? m["ts_ms"] : json(0);
-                const auto ms = ts.is_number() ? ts.get<long long>() : ts.is_string() ? std::atoll(ts.get<std::string>().c_str()) : 0LL;
-                reported.push_back(json{{"op_id", *id}, {"author", author}, {"text", str(m, "text")}, {"ts", ms / 1000}});
-                if (!str(m, "proof").empty()) reported.back()["proof"] = str(m, "proof");
-            }
-        }
-        out["reported"] = reported;
-    } else {
-        return std::nullopt;
-    }
-    if (c.contains("ttl_secs") && c["ttl_secs"].is_number() && c["ttl_secs"].get<int>() > 0) {
-        out["ttl_secs"] = c["ttl_secs"];
-    }
-    if (c.contains("silent") && c["silent"].is_boolean() && c["silent"].get<bool>()) out["silent"] = true;
-    if (c.contains("invert_media") && c["invert_media"].is_boolean() && c["invert_media"].get<bool>()) {
-        out["invert_media"] = true;
-    }
-    if (c.contains("reply_to") && c.contains("reply_quote") && c["reply_quote"].is_object()
-        && !str(c["reply_quote"], "text").empty()) {
-        const auto &q = c["reply_quote"];
-        json rq{{"text", clipUtf8(str(q, "text"), 1024)}};
-        if (q.contains("entities")) {
-            auto e = entitiesFromV2(q["entities"]);
-            if (!e.empty()) rq["entities"] = e;
-        }
-        if (q.contains("offset") && q["offset"].is_number_integer() && q["offset"].get<int>() > 0) {
-            rq["offset"] = q["offset"];
-        }
-        out["reply_quote"] = rq;
-    }
-    if (c.contains("forward") && c["forward"].is_object()) {
-        const auto &f = c["forward"];
-        if (f.contains("from_user") && !str(f["from_user"], "address").empty()) {
-            out["forwarded_from"] = str(f["from_user"], "address");
-        }
-        if (!str(f, "from_name").empty()) out["forwarded_name"] = str(f, "from_name");
-    }
-    return out;
 }
 
 Incoming interpretDirect(const json &ev, const std::string &self) {
@@ -1007,75 +446,65 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
         return in;
     }
     if (str(ev, "disposition") == "skip") return in;
-    const auto &c = ev.contains("content") ? ev["content"] : json();
-    const auto kind = v2Kind(c);
-    const auto target = [&](const json &r) -> std::string {
-        return r.is_object() ? b64ToUuid(str(r, "op_id")).value_or(std::string()) : std::string();
-    };
-    if (kind == "edit") {
-        const auto &e = c["edit"];
-        const auto t = target(e.contains("target") ? e["target"] : json());
-        if (t.empty()) return in;
-        in.kind = Incoming::Kind::Edit;
-        in.targets.push_back(t);
-        if (e.contains("location") && e["location"].is_object()) {
-            in.content = fromV2(json{{"location", e["location"]}}).value_or(json());
-        } else if (e.contains("text") && e["text"].is_object()) {
-            in.content = fromV2(json{{"text", e["text"]}}).value_or(json());
-        }
-        return in;
-    }
-    if (kind == "delete") {
-        in.kind = Incoming::Kind::Delete;
-        in.forEveryone = c["delete"].value("for_everyone", false);
-        if (c["delete"].contains("targets") && c["delete"]["targets"].is_array()) {
-            for (const auto &r : c["delete"]["targets"]) {
-                if (auto t = target(r); !t.empty()) in.targets.push_back(t);
+    // Что содержимое значит — движок: событие несёт `view` (contentView), иначе спросить его
+    const auto view = ev.contains("view") && ev["view"].is_object()
+        ? ev["view"]
+        : contentView(ev.contains("content") ? ev["content"] : json());
+    const auto cls = str(view, "class");
+    if (cls == "mutation") {
+        const auto m = view.value("mutation", json::object());
+        const auto kind = str(m, "kind");
+        const auto targets = [&](const char *k) {
+            if (m.contains(k) && m[k].is_array()) {
+                for (const auto &t : m[k]) {
+                    if (t.is_string() && !t.get<std::string>().empty()) in.targets.push_back(t.get<std::string>());
+                }
             }
-        }
-        return in;
-    }
-    if (kind == "reaction") {
-        const auto &r = c["reaction"];
-        const auto t = target(r.contains("target") ? r["target"] : json());
-        if (t.empty()) return in;
-        in.kind = Incoming::Kind::Reaction;
-        in.targets.push_back(t);
-        in.emoji = str(r, "emoji");
-        in.remove = r.value("remove", false) || in.emoji.empty();
-        return in;
-    }
-    if (kind == "pin") {
-        const auto &r = c["pin"];
-        const auto t = target(r.contains("target") ? r["target"] : json());
-        if (t.empty()) return in;
-        in.kind = Incoming::Kind::Pin;
-        in.targets.push_back(t);
-        in.unpin = r.value("unpin", false);
-        return in;
-    }
-    if (kind == "receipt") {
-        const auto &r = c["receipt"];
-        if (str(r, "kind") != "RECEIPT_KIND_READ") return in; // доставлено — не показываем
-        in.kind = Incoming::Kind::Read;
-        if (r.contains("messages") && r["messages"].is_array()) {
-            for (const auto &m : r["messages"]) {
-                if (auto t = target(m); !t.empty()) in.targets.push_back(t);
+        };
+        if (kind == "edit") {
+            if (str(m, "target").empty()) return in;
+            in.kind = Incoming::Kind::Edit;
+            in.targets.push_back(str(m, "target"));
+            const auto patch = m.value("patch", json::object());
+            if (patch.contains("fields") && patch["fields"].is_object()) {
+                in.content = patch["fields"];
+            } else if (patch.contains("text")) {
+                in.content = json{{"kind", "text"}};
+                for (const char *k : {"text", "entities", "webpage"}) {
+                    if (patch.contains(k)) in.content[k] = patch[k];
+                }
             }
+        } else if (kind == "delete") {
+            in.kind = Incoming::Kind::Delete;
+            in.forEveryone = m.value("forEveryone", false);
+            targets("targets");
+        } else if (kind == "reaction") {
+            if (str(m, "target").empty()) return in;
+            in.kind = Incoming::Kind::Reaction;
+            in.targets.push_back(str(m, "target"));
+            in.emoji = str(m, "emoji");
+            in.remove = in.emoji.empty();
+        } else if (kind == "pin") {
+            if (str(m, "target").empty()) return in;
+            in.kind = Incoming::Kind::Pin;
+            in.targets.push_back(str(m, "target"));
+            in.unpin = !m.value("pinned", true);
+        } else if (kind == "receipt") {
+            if (!m.value("read", false)) return in; // доставлено — не показываем
+            in.kind = Incoming::Kind::Read;
+            targets("targets");
         }
         return in;
     }
-    // Служебные виды движка (ключи групп/доставки/состояния, звонки) — не
-    // сообщения чата.
-    if (kind == "group_key" || kind == "delivery_key" || kind == "container_key"
-        || kind == "state_key" || kind == "call" || kind == "group_avatar_key") {
-        return in;
-    }
-    if (auto v1 = fromV2(c)) {
-        in.kind = Incoming::Kind::Message;
-        in.content = std::move(*v1);
-        if (c.contains("reply_to")) in.replyTo = target(c["reply_to"]);
-        return in;
+    // Служебные виды движка (ключи групп/доставки/состояния, звонки) — не сообщения чата.
+    if (cls == "service") return in;
+    if (cls == "message") {
+        if (auto wire = wireOfView(view)) {
+            in.kind = Incoming::Kind::Message;
+            in.content = std::move(*wire);
+            in.replyTo = str(view, "replyTo");
+            return in;
+        }
     }
     // Вид, которого клиент не знает (или пустое содержимое) — нативная заглушка.
     in.kind = Incoming::Kind::Stub;

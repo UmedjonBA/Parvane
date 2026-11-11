@@ -40,8 +40,9 @@ wait_log "$B/td/log.txt" "входящее msg .* \(alice@local\): $T2" 60 \
 
 # 4. Позицию инбокса держит движок v2; его состояние сохраняется ДО подтверждения
 #    записи серверу (msg.inbox.ack) — иначе после рестарта прочитанное потерялось бы.
+#    С spec 035 (T125) состояние — хранилище модели store/ (store_fs: pack-*.bin, batch-*.bin), файла state нет.
 sleep 3
-[ -s "$B/td/tdata/parvane-v2-bob@local/state" ] \
+ls "$B/td/tdata/parvane-v2-bob@local/store/" 2>/dev/null | grep -qE '^(pack|batch)-[0-9]+\.bin$' \
 	&& ok "состояние движка v2 сохранено (позиция инбокса)" \
 	|| bad "состояние движка v2 не сохранено"
 grep -qE "запись не открыта|ошибка записи" "$B/td/log.txt" && bad "были неоткрытые записи инбокса v2" \
