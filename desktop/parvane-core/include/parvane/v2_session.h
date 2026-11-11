@@ -127,6 +127,11 @@ struct SessionConfig {
     // Ход переноса для экрана (на рабочем потоке, под мьютексом движка — сессию не звать):
     // {"point": 0..7, "total": 7, "done": bool, "failed": bool}.
     std::function<void(const json &progress)> onMigration;
+    // Только для сценариев (dev-хуки PARVANE_MIGRATION_HALT / PARVANE_MIGRATION_CHUNK, как web
+    // `parvane:e2e:migrationHalt/Chunk`): перенос встаёт после фиксации шага точки ≥ migrationHaltAt (сценарий
+    // убивает процесс ровно там), migrationChunk — размер части строк истории (мелкий — M2 посреди строк). 0 — выкл.
+    int migrationHaltAt = 0;
+    int migrationChunk = 0;
 };
 
 // S7-1 (как web `isTelegramCodeIntercepted`): опрос запроса ключа через Telegram вернул код, отличный от

@@ -1978,6 +1978,12 @@ void StartV2Locked() {
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
 	// spec 035 T127: старые места tdata по перечню (слой desktop) — разовым переносом в хранилище модели
 	cfg.migrationLayer = "desktop";
+	if (const auto halt = ParvaneDevEnv("PARVANE_MIGRATION_HALT")) {
+		cfg.migrationHaltAt = std::atoi(halt);
+	}
+	if (const auto chunk = ParvaneDevEnv("PARVANE_MIGRATION_CHUNK")) {
+		cfg.migrationChunk = std::atoi(chunk);
+	}
 	cfg.legacyRecords = [tdata = TdataDir().toStdString(), self] {
 		// Файлы аккаунта, которые пишет сам клиент (слой desktop перечня): маркеры, служебное журнала истории,
 		// наборы стикеров, контакты, фоны чатов, очистка «у себя», ключи разделов

@@ -40,9 +40,11 @@ run_case() { # run_case <имя> <шаг, на котором убить про�
     || bad "$name: в профиле T006 нет прежнего состояния"
   [ ! -e "$v2/engine-migrated" ] || bad "$name: профиль уже помечен перенесённым"
   if [ -n "$killAt" ]; then
-    p=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1)
-    # Точка хода может проскочить за один шаг движка — убиваем на ней или на следующей
-    if wait_log "$log" "перенос прежнего состояния, шаг ($killAt|$((killAt + 1))) " 180; then
+    # Перенос встаёт сам после фиксации шага точки M$killAt (dev-хук, как web migrationHalt); строки истории —
+    # частями по одной, чтобы M2 пришлась посреди строк, а не проскочила за один шаг движка
+    p=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1 \
+      PARVANE_MIGRATION_HALT=$killAt PARVANE_MIGRATION_CHUNK=1)
+    if wait_log "$log" "перенос остановлен сценарием в точке M$killAt\b" 180; then
       kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null
       ok "$name: процесс убит на шаге M$killAt"
     else

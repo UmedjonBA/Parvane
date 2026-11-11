@@ -1090,10 +1090,19 @@ bool Session::migrateLegacyLocked(std::string *error) {
         cfg_.onMigration(json{{"point", status.value("point", 0)}, {"total", 7}, {"done", done}, {"failed", failed}});
     };
     progress(json{{"point", 0}}, false, false);
-    driveLocked(host_->step("migrateStep", json{{"layer", layer}, {"records", records}, {"last", true}}));
+    json first{{"layer", layer}, {"records", records}, {"last", true}};
+    if (cfg_.migrationChunk > 0) first["chunk"] = cfg_.migrationChunk;
+    driveLocked(host_->step("migrateStep", first));
     for (int i = 0; i < kMigrateSteps && modelOpenState_ != "OPEN_STATE_READY" && !stopping_; ++i) {
         const auto status = host_->raw("migrateStatus", json::object());
         progress(status, false, false);
+        const int point = status.value("point", 0);
+        if (cfg_.migrationHaltAt > 0 && point >= cfg_.migrationHaltAt && !status.value("done", false)) {
+            // Шаг этой точки уже зафиксирован в хранилище модели — сценарий убивает процесс здесь
+            log("перенос остановлен сценарием в точке M" + std::to_string(point));
+            while (!stopping_) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            break;
+        }
         if (status.value("done", false) && modelOpenState_ != "OPEN_STATE_READY") {
             log("перенос остановлен: " + status.value("report_json", std::string()));
             progress(status, true, true);
