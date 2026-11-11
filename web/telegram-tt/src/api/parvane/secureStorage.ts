@@ -139,6 +139,8 @@ type Ctx = {
   legacy: Map<string, boolean>;
   // Идёт разовый перенос прежнего профиля (один на адрес)
   migrating: Map<string, Promise<boolean>>;
+  // Сколько раз хранилище адреса стёрто (`clear`): экземпляр, открытый до стирания, профиль заново не создаёт
+  cleared: Map<string, number>;
   dir?: Promise<StoreIdb>;
   failPred?: (puts: number, deletes: number) => boolean;
 };
@@ -146,6 +148,7 @@ type Ctx = {
 function newCtx(): Ctx {
   return {
     tab: hex(randomBytes(8)), profiles: new Map(), resolved: new Map(), legacy: new Map(), migrating: new Map(),
+    cleared: new Map(),
   };
 }
 
@@ -609,11 +612,16 @@ async function readyProfile(ctx: Ctx, user: string) {
 export class SecureE2eStorage {
   static ctx: Ctx = DEFAULT_CTX;
 
+  // Поколение стирания адреса на момент открытия (`Ctx.cleared`)
+  private readonly generation: number;
+
   protected constructor(
     private readonly ctx: Ctx,
     private readonly user: string,
     private readonly legacy?: LegacyE2eStorage,
-  ) {}
+  ) {
+    this.generation = ctx.cleared.get(user) || 0;
+  }
 
   static async open(user: string) {
     const { ctx } = this;
@@ -623,6 +631,11 @@ export class SecureE2eStorage {
   }
 
   private profile() {
+    // Хранилище стёрто полным выходом: отложенная запись прежнего сеанса не должна заново создать профиль
+    // (с данными аккаунта, пережившими выход) — открывать заново через `open`
+    if ((this.ctx.cleared.get(this.user) || 0) !== this.generation) {
+      return Promise.reject(new Error('E2E storage was cleared.'));
+    }
     return readyProfile(this.ctx, this.user);
   }
 
@@ -736,6 +749,7 @@ export class SecureE2eStorage {
 }
 
 async function clearIn(ctx: Ctx, user: string) {
+  ctx.cleared.set(user, (ctx.cleared.get(user) || 0) + 1);
   ctx.legacy.delete(user);
   clearedListeners.forEach((fn) => fn(user));
   await LegacyE2eStorage.clear(user);

@@ -62,6 +62,22 @@ describe('secure E2E storage', () => {
     await expect(hasSecureProfile(USER)).resolves.toBe(false);
   });
 
+  it('does not recreate a wiped profile from an instance opened before the wipe (full sign-out)', async () => {
+    // Отложенная запись прежнего сеанса после полного выхода создавала профиль заново — хранилище «переживало»
+    // выход (e2e telegram_2fa)
+    const stale = await SecureE2eStorage.open(USER);
+    await stale.save({ value: 1 });
+    await saveTrustSecret(USER, 'trust-1');
+    await SecureE2eStorage.clear(USER);
+    await expect(stale.save({ value: 2 })).rejects.toThrow(/cleared/);
+    await expect(stale.load()).rejects.toThrow(/cleared/);
+    await expect(hasSecureProfile(USER)).resolves.toBe(false);
+    // Новый сеанс открывает хранилище заново — оно пустое
+    const fresh = await SecureE2eStorage.open(USER);
+    await expect(fresh.load()).resolves.toBeUndefined();
+    await expect(loadTrustSecret(USER)).resolves.toBeUndefined();
+  });
+
   it('binds ciphertext to the account identity', async () => {
     const storage = await SecureE2eStorage.open(USER);
     await storage.save({ value: 1 });
