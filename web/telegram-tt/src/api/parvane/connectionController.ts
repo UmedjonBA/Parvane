@@ -25,6 +25,8 @@ type ConnectionDependencies = {
   setStore: (store: ParvaneStore) => void;
   // P-39: шифрованное хранилище под PIN — разблокировать до чтения истории
   unlockStorage?: (user: string) => Promise<void>;
+  // ID-01: доказательство устройства строится из хранилища — под PIN его надо открыть до выпуска токена
+  unlockForProof?: (user: string) => Promise<void>;
   /** Как устройство называет себя на экране «Устройства» («Firefox, Linux»). */
   describeDevice?: () => string;
   /** Стереть локальные данные устройства (ключи, историю): оно отозвано. */
@@ -405,6 +407,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
       lastServerInfo = info;
       let user = canonicalAddress(input, info.domain);
 
+      // Вход паролем на устройстве с хранилищем под PIN: без PIN доказательство устройства не строится, сервер с
+      // ID-01 отказывает, и это выглядело как «неверный пароль» (найдено e2e переноса, 11 ноя 2026)
+      if (!savedToken) {
+        await deps.unlockForProof?.(user).catch((error: unknown) => {
+          deps.log(`хранилище до входа не разблокировано: ${String(error)}`);
+        });
+      }
       const nextToken = savedToken
         || await issueToken(
           activeConnection, user, password, info.confirm === 'none' && !isServerInfoFallback, loginToken,

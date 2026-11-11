@@ -1425,6 +1425,7 @@ const connectionController = createConnectionController({
     for (const [from, to] of localState.loadRenames()) store.registerUserRename(from, to);
   },
   unlockStorage: (user) => ensureStorageUnlocked(user),
+  unlockForProof: (user) => promptStorageUnlock(user),
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     // Отзыв устройства сообщает сам сервер и подтвердить его по журналу здесь нельзя, поэтому
