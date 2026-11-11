@@ -5,7 +5,7 @@
 //!   байтовым бюджетом ≤ 716800 и подтверждение без отправителя (T044).
 //! - Мост v1 → v2 (`LegacyV1`: догон истории v1 и живые v1-кадры, T045/T046) и
 //!   `msg.deliver_legacy` удалены вместе с v1 (T110, 7 окт 2026); вид записи
-//!   `LegacyV1` остаётся в схеме, сервер его больше не пишет.
+//!   `LegacyV1`, метод и таблица `legacy_origin` убраны из схемы и базы (spec 035, T096).
 //! - Sealed-доставка без отправителя: право — ключ доступа (сверка хэша в
 //!   identity) или слепой жетон (одноразовость — здесь), один получатель на
 //!   запрос (D-05), только v2-устройства получателя (T072).
@@ -170,8 +170,6 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let r: mpb::DeliverSealedRequest = body(&req)?;
             ctx.deliver_sealed(r).await
         }
-        // T110: легаси-копий v1 больше нет (v1-устройств у аккаунтов не бывает).
-        "msg.deliver_legacy" => Err(ErrorCode::Unavailable),
         "msg.deliver_group" => {
             let r: mpb::DeliverGroupRequest = body(&req)?;
             crate::v2_groups::deliver_group(ctx, r).await
@@ -472,7 +470,6 @@ impl V2 {
         .bind(now - ACKED_KEEP_SECS)
         .execute(&self.v2)
         .await?;
-        sqlx::query("DELETE FROM legacy_origin WHERE created_at < ?").bind(now - INBOX_TTL_SECS).execute(&self.v2).await?;
         sqlx::query("DELETE FROM group_envelope_nonce WHERE at < ?").bind(now - INBOX_TTL_SECS).execute(&self.v2).await?;
         // C1-07: учёт объёма после очистки.
         sqlx::query(

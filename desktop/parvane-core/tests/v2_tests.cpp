@@ -469,8 +469,8 @@ int main() {
         own["chat"] = "alice@local";
         in = v2::interpretDirect(own, self);
         check(in.kind == v2::Incoming::Kind::Message && in.to == "alice@local", "своё с другого устройства → to=собеседник");
-        in = v2::interpretDirect(json{{"type", "legacyV1"}, {"seq", 2}, {"json", "{}"}}, self);
-        check(in.kind == v2::Incoming::Kind::None, "legacyV1 → None (история v1 идёт v1-стеком)");
+        in = v2::interpretDirect(json{{"type", "noSuchEvent"}, {"seq", 2}, {"json", "{}"}}, self);
+        check(in.kind == v2::Incoming::Kind::None, "неизвестное событие → None");
 
         // Группа v2: сообщение — в чат "v2g:<hex>", автор — из подписи.
         auto gev = json{{"type", "group"}, {"seq", 5}, {"group", {{"domain", "local"}, {"id", "00ff"}}},

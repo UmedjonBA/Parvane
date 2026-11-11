@@ -1143,10 +1143,20 @@ desktop не соединялся (ICE оставался в `new`), а авто
 **Правило закрыто (spec 035, 11 ноя 2026): протокол v1 удалён везде, v1-устройств нет.** Сервер без v1 с T110
 (7 окт 2026, `msg.deliver_legacy` отвечает `UNAVAILABLE`), клиенты легаси-копий не шлют и запись `LegacyV1` целиком
 пропускают — web (T110), desktop (spec 029), android (spec 031); сторож `conformance.test.ts` (LEGACY-1) проверяет,
-что v1-путь в клиенты не вернулся. Всё выше — история. Остатки в движке и сервере — задача T096 spec 035 (не сделана):
-`backend/protocol/src/legacy_v1.rs`, запись `LegacyDeviceSet` и вызов `msg.deliver_legacy` в `client.rs`,
-`InboxRecord.legacy_v1`, векторы `proto/parvane/vectors/legacy_v1/`, таблица `legacy_origin` messenger; удаляются
-после проверки на копии баз прода, что неподтверждённых записей `legacy_v1` в `inbox_log` нет (T143).
+что v1-путь в клиенты не вернулся. Всё выше — история.
+
+**Движок и сервер тоже очищены (T096 spec 035, 11 ноя 2026; на проде записей `legacy_v1` в `inbox_log` и строк
+`legacy_origin` — 0).** Удалены: модуль `backend/protocol/src/legacy_v1.rs` (и его fuzz-цель, векторы
+`proto/parvane/vectors/legacy_v1/`, набор conformance `legacy_v1/messages`), событие движка `legacyV1` и ветки клиентов
+для него, `InboxRecord.legacy_v1` и `LegacyV1Record` (`msg.proto`: `reserved 12; reserved "legacy_v1";`),
+`LegacyDeviceSet`/`LegacyDevice` (`envelope.proto`: `UserDeviceLogEntry` — `reserved 7; reserved "legacy_devices";`),
+метод `msg.deliver_legacy` (схема, реестр, ACL NATS, обработчик messenger), `legacy_devices_request`/
+`legacy_deliver_request`/`import_v1_account(_json)` движка, `SendFormat::LegacyV1` политики, поля
+`legacy`/`legacySet`/`legacyKeys` у `logDevices`; таблица `legacy_origin` — новой миграцией messenger
+`migrations_v2/0012_drop_legacy_origin.sql`. Прежняя запись журнала устройств с полем 7 остаётся звеном цепочки:
+движок принимает её как пустую при подписи текущим SSK и нераскрытом SSK (иначе `BadSignature`/`Forbidden`), чтобы
+журналы, созданные до удаления, не ломались (вектор `device_log/alice`). Сторож `conformance.test.ts` (LEGACY-1,
+«движок и сервер: остатков v1 нет») проверяет, что ничего из этого не вернулось.
 
 ## TYPING-1. «Печатает» в чате v2 — только эфемерным каналом v2
 
@@ -1587,9 +1597,9 @@ desktop применял к группе v2 нотис и список v1-шар
   (устройство журнала v2 отзывается записью журнала после проверки пароля);
 - свой либо открытый блоб (аватар, фото группы, блоб линковки) грузится и
   скачивается методами `cloud.blob.*`; вложения чатов — по секрету capability (CAP-1);
-- кадры инбокса v1, которые сервер перекладывает в инбокс v2 (записи `LegacyV1`:
-  история при первом синке и живые кадры), клиент без соединения v1 подаёт тем же
-  обработчикам инбокса — история v1 остаётся читаемой (FR-053);
+- кадры инбокса v1, которые сервер перекладывал в инбокс v2 (записи `LegacyV1`:
+  история при первом синке и живые кадры), клиент без соединения v1 подавал тем же
+  обработчикам инбокса (FR-053) — с T110 сервер их не пишет, с T096 записи и события нет;
 - присутствие («в сети») публикуется и эфемерным каналом v2;
 - отсутствие v1 — не ошибка: диалога «обновите приложение» нет, цикла
   переподключений v1 нет, запросы переписки v1 (`msg.sync.request`, `group.list`,
@@ -1737,7 +1747,7 @@ vitest требует снять `.fails`).
 кадры и лимиты — `codec/`; подписи — `sign/`; журналы устройств (KEY-1 v2,
 LINK-1) — `device_log/`; журнал группы (GROUP-1, GROUP-2 права) —
 `group_log/`; конверты (SEAL-1, GSEAL-1) — `seal/`; личное состояние
-(STATE-1) — `state/`; ссылки-приглашения — `invite/`; v1-история — `legacy_v1/`;
+(STATE-1) — `state/`; ссылки-приглашения — `invite/` (v1-история `legacy_v1/` удалена, T096);
 права по типу содержимого — `content_guard/`; виды содержимого (CONTENT-1) —
 `content/`; режим «усиленная приватность» (L2-1) — `l2/`. С spec 035: личное состояние v2 (STATE-1) — `state2/`,
 модель движка (ENGINE-1) — `model/`, матрица доступа к журналу группы (GROUP-3) — `group_access/`, непонятое —

@@ -1,5 +1,5 @@
-//! Fuzz-регрессия на стабильном тулчейне (spec 007, T108): те же четыре цели,
-//! что в `fuzz/` (`frame_decode`, `envelope_open`, `group_state`, `legacy_v1`),
+//! Fuzz-регрессия на стабильном тулчейне (spec 007, T108): те же три цели,
+//! что в `fuzz/` (`frame_decode`, `envelope_open`, `group_state`; `legacy_v1` удалён в T096),
 //! на детерминированных мутациях байтов из векторов `proto/parvane/vectors/`.
 //! Инвариант один: никаких паник на недоверенном вводе. Бюджет времени на
 //! цель — `PARVANE_FUZZ_SECS` (по умолчанию 3 с); настоящий libFuzzer
@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use parvane_protocol::codec::{self, decode_checked};
 use parvane_protocol::group::{self, SignerInfo};
-use parvane_protocol::legacy_v1;
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::frame::Kind;
 use parvane_protocol::pb::parvane::core::v2::{DeviceRef, GroupEnvelope, GroupStateEntry, SealedEnvelope};
@@ -47,15 +46,6 @@ fn group_state(data: &[u8]) {
     if let Ok(e) = decode_checked::<GroupStateEntry>(data, Origin::Client) {
         let resolve = |_: &[u8; 32], _: u64| Some(SignerInfo { user: "alice@x".into(), root_key: [1; 32] });
         let _ = group::apply(None, &e, &resolve);
-    }
-}
-
-fn legacy(data: &[u8]) {
-    let _ = legacy_v1::parse_stored(data);
-    let _ = legacy_v1::parse_olm_plaintext(data);
-    let _ = legacy_v1::parse_megolm_plaintext(data);
-    if let Ok(s) = std::str::from_utf8(data) {
-        let _ = legacy_v1::normalize_ice(s);
     }
 }
 
@@ -192,7 +182,3 @@ fn fuzz_group_state() {
     run(group_state, 3);
 }
 
-#[test]
-fn fuzz_legacy_v1() {
-    run(legacy, 4);
-}

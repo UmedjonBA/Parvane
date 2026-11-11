@@ -12,10 +12,7 @@ use crate::identity::DeviceLog;
 pub enum SendFormat {
     /// v2: sealed-конверт (HPKE поверх Olm).
     SealedV2,
-    /// Легаси-копия v1 — только устройствам из LegacyDeviceSet владельца или
-    /// пользователю, у которого v2 никогда не было.
-    LegacyV1,
-    /// Не слать: устройство не подтверждено владельцем (предупреждение).
+    /// Не слать: устройство не подтверждено владельцем либо журнала нет (легаси-копий v1 нет с T096).
     Refuse,
 }
 
@@ -42,32 +39,24 @@ impl StickyV2 {
 /// Решить формат для устройства `device_id` пользователя `user`.
 /// `log` — проверенный журнал устройств (None — сервер журнала не отдал).
 /// `server_features` намеренно не участвует в решении.
-pub fn choose(sticky: &mut StickyV2, user: &str, log: Option<&DeviceLog>, device_id: &str, legacy_curve: Option<&[u8]>, _server_features: &[String]) -> SendFormat {
+pub fn choose(sticky: &mut StickyV2, user: &str, log: Option<&DeviceLog>, device_id: &str, _server_features: &[String]) -> SendFormat {
     if let Some(l) = log.filter(|l| l.version > 0) {
         sticky.mark(user);
         if l.active(device_id).is_some() {
             return SendFormat::SealedV2;
         }
-        let in_set = l
-            .legacy
-            .as_ref()
-            .is_some_and(|set| set.iter().any(|d| d.device_id == device_id && legacy_curve.is_some_and(|c| c == d.olm_curve25519.as_slice())));
-        return if in_set && !l.revoked.contains(device_id) { SendFormat::LegacyV1 } else { SendFormat::Refuse };
     }
-    if sticky.seen(user) {
-        // Был v2, а журнал «пропал» — откат сервером: не понижаем.
-        return SendFormat::Refuse;
-    }
-    SendFormat::LegacyV1
+    // Не из журнала (подсунуто сервером) или журнал «пропал» (откат сервером) — не шлём.
+    SendFormat::Refuse
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{device_log_entry, sign_device_log_entry, RootIdentity};
-    use crate::pb::parvane::core::v2::{user_device_log_entry::Change, DeviceCertificate, LegacyDevice, LegacyDeviceSet, UserRef};
+    use crate::identity::RootIdentity;
+    use crate::pb::parvane::core::v2::{DeviceCertificate, UserRef};
 
-    fn log_with_device() -> (DeviceLog, LegacyDevice) {
+    fn log_with_device() -> DeviceLog {
         let a = RootIdentity::generate("alice@x").unwrap();
         let mut log = DeviceLog::new("alice@x").unwrap();
         log.apply(&a.genesis_entry().unwrap()).unwrap();
@@ -83,31 +72,28 @@ mod tests {
         };
         crate::identity::prove_possession(&dk, &mut cert, &a.root_pub()).unwrap();
         log.apply(&a.add_device_entry(2, log.head_hash, &cert).unwrap()).unwrap();
-        let old = LegacyDevice { device_id: "v1dev".into(), olm_curve25519: vec![5; 32], olm_ed25519: vec![6; 32] };
-        let e = device_log_entry("alice@x", 3, log.head_hash, Change::LegacyDevices(LegacyDeviceSet { devices: vec![old.clone()] }), None);
-        log.apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()).unwrap();
-        (log, old)
+        log
     }
 
     #[test]
     fn formats() {
-        let (log, old) = log_with_device();
+        let log = log_with_device();
         let mut st = StickyV2::default();
-        assert_eq!(choose(&mut st, "alice@x", Some(&log), "v2dev", None, &[]), SendFormat::SealedV2);
-        assert_eq!(choose(&mut st, "alice@x", Some(&log), "v1dev", Some(&old.olm_curve25519), &[]), SendFormat::LegacyV1);
-        // Подсунутое сервером v1-устройство.
-        assert_eq!(choose(&mut st, "alice@x", Some(&log), "evil", Some(&[9; 32]), &[]), SendFormat::Refuse);
+        assert_eq!(choose(&mut st, "alice@x", Some(&log), "v2dev", &[]), SendFormat::SealedV2);
+        // Подсунутое сервером устройство.
+        assert_eq!(choose(&mut st, "alice@x", Some(&log), "evil", &[]), SendFormat::Refuse);
     }
 
     #[test]
     fn server_cannot_downgrade() {
-        let (log, _) = log_with_device();
+        let log = log_with_device();
         let mut st = StickyV2::default();
         let features = vec!["sealed".to_string()];
-        assert_eq!(choose(&mut st, "alice@x", Some(&log), "v2dev", None, &features), SendFormat::SealedV2);
+        assert_eq!(choose(&mut st, "alice@x", Some(&log), "v2dev", &features), SendFormat::SealedV2);
         // Сервер убрал feature и перестал отдавать журнал — формат не понижается.
-        assert_eq!(choose(&mut st, "alice@x", None, "v2dev", None, &[]), SendFormat::Refuse);
-        // Пользователь, у которого v2 никогда не было, — v1.
-        assert_eq!(choose(&mut st, "bob@x", None, "d", None, &[]), SendFormat::LegacyV1);
+        assert_eq!(choose(&mut st, "alice@x", None, "v2dev", &[]), SendFormat::Refuse);
+        assert!(st.seen("alice@x"));
+        // Пользователь без журнала — v1 больше нет, слать нечем.
+        assert_eq!(choose(&mut st, "bob@x", None, "d", &[]), SendFormat::Refuse);
     }
 }

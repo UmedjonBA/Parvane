@@ -13,15 +13,15 @@ use parvane_protocol::limits::{self, Origin};
 use parvane_protocol::msg;
 use parvane_protocol::olm::{MegolmInbound, MegolmOutbound, OlmAccount};
 use parvane_protocol::pb::parvane::core::v2::{
-    frame, sealed_envelope::Access, user_device_log_entry::Change as DevChange, AuthOk, DeviceCertificate, DeviceRef,
-    GroupEnvelopeInner, LegacyDevice, LegacyDeviceSet, Request, SealedInner, UserRef,
+    frame, sealed_envelope::Access, AuthOk, DeviceCertificate, DeviceRef,
+    GroupEnvelopeInner, Request, SealedInner, UserRef,
 };
 use parvane_protocol::pb::parvane::group::v2::{group_change::Change, AddMember, Ban, Create, GroupKind, NewEpoch, Permissions};
 use parvane_protocol::pb::parvane::msg::v2::{content, Content, Media, Text};
 use parvane_protocol::policy::{self, SendFormat, StickyV2};
 use parvane_protocol::schema::{self, METHODS};
 use parvane_protocol::sign::{self, ReplayGuard};
-use parvane_protocol::{legacy_v1, seal, sync, tokens, ProtoError};
+use parvane_protocol::{seal, sync, tokens, ProtoError};
 use prost::Message;
 
 // ── общие помощники ─────────────────────────────────────────────────────────
@@ -198,11 +198,11 @@ fn c09_any_modified_byte_rejected_before_output() {
 }
 
 // ── 10. Расхождение клиентов ────────────────────────────────────────────────
+// Диалекты v1 разбирал модуль legacy_v1 — удалён в T096 (spec 035): у v2 один формат на поле (схема).
 #[test]
 fn c10_single_format_for_dialects() {
-    let web = legacy_v1::parse_megolm_plaintext(br#"{"kind":"poll","question":"Q","options":["a"],"is_public":true}"#).unwrap();
-    let desk = legacy_v1::parse_megolm_plaintext(br#"{"kind":"poll","question":"Q","answers":["a"],"public":true,"quiz":false}"#).unwrap();
-    assert_eq!(web, desk);
+    assert!(schema::message("parvane.msg.v2.LegacyV1Record").is_none());
+    assert!(schema::message("parvane.msg.v2.InboxRecord").unwrap().field(12).is_none());
 }
 
 // ── 11. Метаданные серверу ──────────────────────────────────────────────────
@@ -336,20 +336,22 @@ fn c19_member_injected_by_server_rejected() {
     assert!(group::apply(Some(&s), &e, &resolve).is_err());
 }
 
-// ── 20. Легаси-копии только по LegacyDeviceSet ──────────────────────────────
+// ── 20. Легаси-копий нет (T096): прежняя запись списка v1-устройств — звено без действия ──
 #[test]
-fn c20_legacy_copies_only_to_owner_listed() {
+fn c20_no_legacy_copies() {
+    assert!(schema::message("parvane.core.v2.LegacyDeviceSet").is_none());
+    assert!(schema::message("parvane.core.v2.UserDeviceLogEntry").unwrap().field(7).is_none());
+    assert!(METHODS.iter().all(|m| m.name != "msg.deliver_legacy"));
     let a = RootIdentity::generate("alice@x").unwrap();
     let mut log = DeviceLog::new("alice@x").unwrap();
     log.apply(&a.genesis_entry().unwrap()).unwrap();
-    let mine = LegacyDevice { device_id: "old".into(), olm_curve25519: vec![1; 32], olm_ed25519: vec![2; 32] };
-    let e = identity::device_log_entry("alice@x", 2, log.head_hash, DevChange::LegacyDevices(LegacyDeviceSet { devices: vec![mine.clone()] }), None);
-    log.apply(&identity::sign_device_log_entry(&a.self_signing, &e).unwrap()).unwrap();
-    let fake = LegacyDevice { device_id: "srv".into(), olm_curve25519: vec![3; 32], olm_ed25519: vec![4; 32] };
-    let listed = [mine.clone(), fake];
-    let (ok, warn) = log.legacy_recipients(&listed);
-    assert_eq!(ok.len(), 1);
-    assert_eq!(warn.len(), 1);
+    // Сервер не подделает прежнюю запись: подпись чужим ключом — отказ
+    let srv = sign::generate_signing_key();
+    let forged = identity::sign_former_legacy_entry(&srv, "alice@x", 2, log.head_hash, &[]).unwrap();
+    assert_eq!(log.apply(&forged).err(), Some(ProtoError::BadSignature));
+    let e = identity::sign_former_legacy_entry(&a.self_signing, "alice@x", 2, log.head_hash, &[]).unwrap();
+    log.apply(&e).unwrap();
+    assert!(log.devices.is_empty());
 }
 
 // ── 21. Липкая политика ─────────────────────────────────────────────────────
@@ -359,8 +361,8 @@ fn c21_no_downgrade_by_features() {
     let mut log = DeviceLog::new("alice@x").unwrap();
     log.apply(&a.genesis_entry().unwrap()).unwrap();
     let mut st = StickyV2::default();
-    assert_eq!(policy::choose(&mut st, "alice@x", Some(&log), "x", None, &[]), SendFormat::Refuse);
-    assert_eq!(policy::choose(&mut st, "alice@x", None, "x", None, &[]), SendFormat::Refuse);
+    assert_eq!(policy::choose(&mut st, "alice@x", Some(&log), "x", &[]), SendFormat::Refuse);
+    assert_eq!(policy::choose(&mut st, "alice@x", None, "x", &[]), SendFormat::Refuse);
 }
 
 // ── 22–24. Журнал группы: позиция, форк, ссылки ─────────────────────────────
@@ -442,7 +444,7 @@ fn c29_forwarded_signed_message_rejected() {
     let mut carol = device("carol@x", "c1");
     let inner = direct(&alice, &mut carol, "bob@x", &text("для Боба"));
     assert_eq!(receive(&mut carol, &inner, true, &mut ReplayGuard::new(10)).err(), Some(ProtoError::ContextMismatch));
-    // LegacyV1 не бывает содержимым v2.
+    // v1 не бывает содержимым v2.
     assert!(schema::message("parvane.msg.v2.Content").unwrap().field(99).is_none());
 }
 

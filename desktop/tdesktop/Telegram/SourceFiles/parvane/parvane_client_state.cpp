@@ -2226,9 +2226,6 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		OnAuthRejected(u"отказ авторизации (v2)"_q);
 		return true;
 	}
-	if (type == "legacyV1") {
-		return true; // кадры v1 больше не разбираются (spec 029): v1 удалён
-	}
 	if (type == "upgradeRequired") {
 		// spec 035 (US5, FR-026): хранилище модели записано более новой версией — «обновите приложение»
 		LOG(("Parvane: v2: хранилище устройства новее приложения (%1)")

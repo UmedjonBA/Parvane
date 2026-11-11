@@ -273,7 +273,6 @@ int main() {
     run("device_log/alice", "device_log/alice.json", 1);
     run("group_log/group", "group_log/group.json", 1);
     run("content_guard/content", "content_guard/content.json", 10);
-    run("legacy_v1/messages", "legacy_v1/messages.json", 40);
     run("call/signals", "call/signals.json", 30);
     runCallClient();
     run("link/sas", "link/sas.json", 5);

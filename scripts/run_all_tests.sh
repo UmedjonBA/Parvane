@@ -91,10 +91,10 @@ else
     fail "buf не найден (см. backend/CLAUDE.md, раздел про схему v2)"
 fi
 
-log "1c. fuzz-регрессия движка (frame_decode, envelope_open, group_state, legacy_v1)"
+log "1c. fuzz-регрессия движка (frame_decode, envelope_open, group_state)"
 FUZZ_SECS="${PARVANE_FUZZ_SECS:-30}"
 if command -v cargo-fuzz >/dev/null && rustup toolchain list | grep -q nightly; then
-    for t in frame_decode envelope_open group_state legacy_v1; do
+    for t in frame_decode envelope_open group_state; do
         (cd "$BACKEND/protocol/fuzz" && cargo +nightly fuzz run "$t" -- -max_total_time="$FUZZ_SECS") \
             >"$TMP/fuzz-$t.log" 2>&1 || fail "fuzz $t (лог: fuzz-$t.log)"
     done

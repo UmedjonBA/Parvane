@@ -209,11 +209,6 @@ impl HostClient {
                 json!(c.ingest_bundle(a.s("user")?, r.devices).map_err(err)?)
             }
             "logsBehind" => json!(c.logs_behind().into_iter().map(|(u, _)| u).collect::<Vec<_>>()),
-            "legacyDevicesRequest" => {
-                let devices = super::parse_legacy_devices(&a.text("devicesJson")?).map_err(err)?;
-                req(&c.legacy_devices_request(devices).map_err(err)?)
-            }
-            "legacyDeliverRequest" => req(&c.legacy_deliver_request(a.s("messageId")?, a.text("sendPayloadJson")?.as_bytes()).map_err(err)?),
 
             // ── смена ника (spec 026) ──
             "renamePrepare" => {
@@ -648,16 +643,6 @@ pub fn call_static(name: &str, args: &Value) -> R {
             json!({"records": r.records.iter().map(|x| b64(&x.encode_to_vec())).collect::<Vec<_>>(), "more": r.more})
         }
         "deviceLogEntries" => json!(super::device_log_entries(&a.b("bytes")?)?),
-        "parseLegacyStored" => {
-            let s = crate::legacy_v1::parse_stored(&a.b("jsonBytes")?).map_err(err)?;
-            let body = match &s.body {
-                crate::legacy_v1::LegacyBody::Tombstone => json!({"tombstone": true}),
-                crate::legacy_v1::LegacyBody::Plain(c) => json!({"plain": serde_json::to_value(c).unwrap_or(Value::Null)}),
-                crate::legacy_v1::LegacyBody::Olm { ctype, sender_identity, .. } => json!({"olm": {"ctype": ctype, "senderIdentity": sender_identity}}),
-                crate::legacy_v1::LegacyBody::Megolm { group, sender_identity, .. } => json!({"megolm": {"group": group, "senderIdentity": sender_identity}}),
-            };
-            json!({"id": s.id, "from": s.from, "to": s.to, "ts": s.ts, "replyTo": s.reply_to, "edited": s.edited, "deleted": s.deleted, "pinned": s.pinned, "body": body})
-        }
         _ => return Err(UNKNOWN.to_string()),
     })
 }

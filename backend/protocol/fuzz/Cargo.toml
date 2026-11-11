@@ -36,9 +36,3 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "legacy_v1"
-path = "fuzz_targets/legacy_v1.rs"
-test = false
-doc = false
-bench = false

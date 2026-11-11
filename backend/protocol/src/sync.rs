@@ -179,7 +179,8 @@ impl ReceiptQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::parvane::msg::v2::{inbox_record, LegacyV1Record};
+    use crate::pb::parvane::core::v2::SealedEnvelope;
+    use crate::pb::parvane::msg::v2::inbox_record;
 
     #[test]
     fn sync1_cursor_only_contiguous() {
@@ -216,7 +217,7 @@ mod tests {
         let rec = |n: u64| InboxRecord {
             seq: n,
             received_ms: 0,
-            item: Some(inbox_record::Item::LegacyV1(LegacyV1Record { json: vec![b'x'; 200_000] })),
+            item: Some(inbox_record::Item::Sealed(SealedEnvelope { ciphertext: vec![b'x'; 200_000], ..Default::default() })),
         };
         let (page, more) = paginate((1..=10).map(rec), 0);
         assert_eq!(page.len(), 3);

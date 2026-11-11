@@ -10,6 +10,7 @@
 //! | messenger | `0009_remote_group_subscriptions` | подписки на группы чужих серверов (PV-014) | новая таблица; клиенты подписываются при переносе (T103) |
 //! | messenger | `0010_inbox_group_key` | `inbox_log.group_key` (одно неподтверждённое уведомление журнала на группу) | колонка, у прежних записей — NULL |
 //! | messenger | `0011_device_minor_seen` | статистика «устройства перенесли» (T150) | новая таблица |
+//! | messenger | `0012_drop_legacy_origin` | удаление таблицы `legacy_origin` (легаси-копии v1, T096) | на проде строк 0 |
 //! | domains | `0005_log_truncation` | `containers.truncated_upto` (обрезка журнала снимком с `complete`) | колонка, 0 |
 //! | identity | — | новые виды записей журнала устройств (ротация SSK) | без переноса |
 //!
@@ -35,6 +36,7 @@ pub(crate) const ORDER: &[(&str, &str)] = &[
     ("messenger", "0009_remote_group_subscriptions.sql"),
     ("messenger", "0010_inbox_group_key.sql"),
     ("messenger", "0011_device_minor_seen.sql"),
+    ("messenger", "0012_drop_legacy_origin.sql"),
     ("domains", "0005_log_truncation.sql"),
 ];
 
@@ -175,6 +177,16 @@ mod tests {
         assert_eq!(s, MigrationStatus { devices: 3, devices_new: 1, accounts: 4, accounts_migrated: 2 });
         assert_eq!(s.json(), r#"{"devices":3,"devices_new_minor":1,"devices_left":2,"accounts":4,"accounts_migrated":2,"accounts_left":2}"#);
         assert!(!s.json().contains('@'), "без адресов");
+    }
+
+    /// T096: после миграций таблицы легаси-копий v1 нет (`0012_drop_legacy_origin`), прочие таблицы целы.
+    #[tokio::test]
+    async fn legacy_origin_dropped() {
+        let p = pool().await;
+        let n: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'legacy_origin'").fetch_one(&p).await.unwrap();
+        assert_eq!(n.0, 0, "таблица legacy_origin осталась");
+        let n: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'inbox_log'").fetch_one(&p).await.unwrap();
+        assert_eq!(n.0, 1);
     }
 
     /// T104: сводный порядок перечисляет все миграции spec 035 этого шарда, и они есть в каталоге.

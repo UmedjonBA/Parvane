@@ -22,7 +22,6 @@ desktop — C ABI `pv_run_conformance_vectors`
 | CONTENT-1 (все виды содержимого, показ/заглушка, содержимое UI) | `content/kinds.json` | `content/kinds`, `tests/vectors_content.rs` |
 | L2-1 (режим «усиленная приватность»: сетка, согласование, эфемерные) | `l2/mode.json`, случаи `chat-mode-*` в `content/kinds.json` | `l2/mode`, `tests/vectors_l2.rs`, `tests/client_flow.rs` |
 | Ссылки-приглашения (один формат) | `invite/links.json` | `invite/links`, `tests/vectors_invite.rs` |
-| v1-история в v2 (переходный период) | `legacy_v1/messages.json` | `tests/vectors_legacy.rs` |
 
 Правила без собственных векторов в v2 — поведение клиента, а не формат:
 SYNC-1/SYNC-2 (курсор журнала = `seq` последней применённой записи, движок

@@ -139,9 +139,6 @@ message UserDeviceLogEntry {
     // Новый SSK и подпись корня над ним (SELF_SIGNING); сертификаты старого SSK
     // недействительны.
     RotateSelfSigning rotate_self_signing_key = 6;
-    // D-01: v1-устройства, признанные владельцем (публикуется первым
-    // v2-устройством; список может только сокращаться).
-    LegacyDeviceSet legacy_devices = 7;
     // Смена ника (spec 026): журнал этого адреса закрыт, личность (тот же корень) продолжается журналом
     // `new_address`, чья первая запись — `new_genesis_hash`. Подписано корнем; после записи журнал не растёт.
     Rename rename = 10;
@@ -155,6 +152,10 @@ message UserDeviceLogEntry {
   // Первая запись журнала нового адреса после смены ника (spec 026): прежний адрес; корень — тот же, что у
   // прежнего журнала, и запись `Rename` в нём указывает на этот генезис.
   string renamed_from = 11 [(max_len) = 128];
+  // T096 (spec 035): поле 7 (список v1-устройств) удалено вместе с протоколом v1. Прежняя запись с полем 7
+  // в журнале остаётся проверяемой: принимается как пустая (подпись SSK), см. identity.rs.
+  reserved 7;
+  reserved "legacy_devices";
 }
 
 message Rename {
@@ -170,16 +171,6 @@ message RotateSelfSigning {
   // до смены, с теми же ключами. После версии смены записи, подписанные прежним SSK, отвергаются (BadSignature).
   // В генезисе пусто.
   repeated SignedDeviceCertificate resigned = 3 [(max_items) = 64];
-}
-
-message LegacyDeviceSet {
-  repeated LegacyDevice devices = 1 [(max_items) = 64];
-}
-
-message LegacyDevice {
-  string device_id = 1 [(max_len) = 64];
-  bytes olm_curve25519 = 2 [(max_len) = 32];
-  bytes olm_ed25519 = 3 [(max_len) = 32];
 }
 
 // ── личные сообщения: скрытый отправитель ───────────────────────────────────

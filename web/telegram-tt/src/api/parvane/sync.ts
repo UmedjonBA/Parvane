@@ -610,8 +610,8 @@ export function createSyncController(deps: SyncDependencies) {
     if (isClearedForMe(stored)) {
       return;
     }
-    // Шифртекст v1 (Olm/Megolm) читать нечем с T110: такая строка (кадр
-    // прежнего инбокса `LegacyV1`) пропускается, в историю не пишется
+    // Шифртекст v1 (Olm/Megolm) читать нечем с T110: такая строка (прежняя
+    // локальная история) пропускается, в историю не пишется
     if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') {
       deps.log(`сообщение ${stored.id} в формате v1 — пропущено`);
       return;

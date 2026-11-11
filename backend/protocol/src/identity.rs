@@ -9,8 +9,8 @@
 //! domain "identity", op_type "device_log"), подписанная SSK (смена SSK —
 //! корнем). Сервер хранит его, но не может скрыть отзыв или подсунуть
 //! устройство: клиенты проверяют цепочку и отвергают откат (меньший `version`
-//! или другой hash на тот же `version`). Легаси-копии v1 создаются только
-//! устройствам из `LegacyDeviceSet`, который публикует владелец (D-01).
+//! или другой hash на тот же `version`). Списка v1-устройств (`LegacyDeviceSet`, D-01) нет с T096: прежняя запись
+//! с полем 7 остаётся звеном цепочки и принимается как пустая (подпись текущим SSK).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -23,7 +23,7 @@ use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::{
-    user_device_log_entry::Change, DeviceCertificate, LegacyDevice, OpHeader, RotateSelfSigning, SignedDeviceCertificate,
+    user_device_log_entry::Change, DeviceCertificate, OpHeader, RotateSelfSigning, SignedDeviceCertificate,
     SignedOp, UserDeviceLogEntry, UserRef,
 };
 use crate::sign::{self, ctx, OpSigner};
@@ -249,8 +249,6 @@ pub struct DeviceLog {
     /// Максимальный serial по device_id (D-11: откат отвергается).
     pub max_serial: HashMap<String, u64>,
     pub revoked: BTreeSet<String>,
-    /// D-01: признанные владельцем v1-устройства (None — список не публиковался).
-    pub legacy: Option<Vec<LegacyDevice>>,
     /// D-12: отозвано устройство, державшее SSK, а SSK с тех пор не сменён —
     /// собеседники показывают предупреждение KEY-1 до смены.
     pub ssk_exposed: bool,
@@ -289,6 +287,20 @@ pub struct KeyEra {
 }
 
 /// Подписать запись журнала устройств.
+/// Номер поля прежнего `UserDeviceLogEntry.legacy_devices` (T096: `reserved 7`).
+pub const FORMER_LEGACY_DEVICES_FIELD: u32 = 7;
+
+/// Запись прежнего списка v1-устройств (поле 7 с байтами `list`, без `change`) — только для векторов и тестов
+/// совместимости: так выглядит такая запись в журналах, созданных до T096.
+#[doc(hidden)]
+pub fn sign_former_legacy_entry(key: &dyn sign::OpSigner, user: &str, version: u64, prev_hash: [u8; 32], list: &[u8]) -> Result<SignedOp> {
+    let entry = UserDeviceLogEntry { user: Some(UserRef { address: user.to_string() }), version, prev_hash: prev_hash.to_vec(), ..Default::default() };
+    let mut payload = entry.encode_to_vec();
+    crate::codec::put_raw(FORMER_LEGACY_DEVICES_FIELD, list, &mut payload);
+    let header = OpHeader { domain: DEVICE_LOG_DOMAIN.into(), op_type: DEVICE_LOG_OP.into(), op_id: sign::new_op_id(), ts_ms: now_ms(), ..Default::default() };
+    sign::sign_op(key, header, payload)
+}
+
 pub fn sign_device_log_entry(key: &dyn sign::OpSigner, entry: &UserDeviceLogEntry) -> Result<SignedOp> {
     let header = OpHeader {
         domain: DEVICE_LOG_DOMAIN.into(),
@@ -342,7 +354,25 @@ impl DeviceLog {
         if entry.prev_hash.as_slice() != self.head_hash {
             return Err(ProtoError::BrokenChain);
         }
-        let change = entry.change.as_ref().ok_or(ProtoError::InvalidField("change"))?;
+        let Some(change) = entry.change.as_ref() else {
+            // T096 (spec 035): запись прежнего списка v1-устройств (поле 7, `LegacyDeviceSet` удалён из схемы) —
+            // звено цепочки без действия. Проверки те же, что были у списка: подпись текущим SSK, SSK не раскрыт.
+            if genesis || crate::codec::raw_field(&v.payload, FORMER_LEGACY_DEVICES_FIELD)?.is_none() {
+                return Err(ProtoError::InvalidField("change"));
+            }
+            if !entry.root_key.is_empty() && entry.root_key.as_slice() != self.root_key {
+                return Err(ProtoError::RootMismatch);
+            }
+            if v.signer != self.ssk {
+                return Err(ProtoError::BadSignature);
+            }
+            if self.ssk_exposed {
+                return Err(ProtoError::Forbidden);
+            }
+            self.version = entry.version;
+            self.head_hash = device_log_hash(op);
+            return Ok(());
+        };
         if genesis {
             // Генезис: корень + первый SSK, подписано корнем.
             let root = key32(&entry.root_key)?;
@@ -470,9 +500,6 @@ impl DeviceLog {
                     }
                     self.close_eras(Some(id), entry.version, !left);
                     self.revoked.insert(id.clone());
-                    if let Some(l) = &mut self.legacy {
-                        l.retain(|d| &d.device_id != id);
-                    }
                 }
                 Change::Rename(r) => {
                     // Только корень: смена ника — решение владельца личности, не устройства
@@ -491,25 +518,6 @@ impl DeviceLog {
                     // Ключи устройств под прежним адресом больше не действуют (прошлые подписи — проверяемы)
                     self.close_eras(None, entry.version, false);
                     self.devices.clear();
-                }
-                Change::LegacyDevices(set) => {
-                    if v.signer != self.ssk {
-                        return Err(ProtoError::BadSignature);
-                    }
-                    // C1-02: скомпрометированный SSK не меняет список легаси-получателей.
-                    if self.ssk_exposed {
-                        return Err(ProtoError::Forbidden);
-                    }
-                    match &self.legacy {
-                        None => self.legacy = Some(set.devices.clone()),
-                        // Список может только сокращаться.
-                        Some(cur) => {
-                            if !set.devices.iter().all(|d| cur.contains(d)) {
-                                return Err(ProtoError::Forbidden);
-                            }
-                            self.legacy = Some(set.devices.clone());
-                        }
-                    }
                 }
             }
         }
@@ -553,13 +561,6 @@ impl DeviceLog {
             return None;
         }
         self.devices.get(device_id)
-    }
-
-    /// D-01: кому из v1-устройств, которые назвал сервер, можно слать
-    /// легаси-копию. Остальные — в список предупреждений.
-    pub fn legacy_recipients<'a>(&self, server_listed: &'a [LegacyDevice]) -> (Vec<&'a LegacyDevice>, Vec<&'a LegacyDevice>) {
-        let allowed = self.legacy.as_deref().unwrap_or(&[]);
-        server_listed.iter().partition(|d| allowed.contains(d) && !self.revoked.contains(&d.device_id))
     }
 }
 
@@ -703,7 +704,6 @@ impl RootIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pb::parvane::core::v2::LegacyDeviceSet;
 
     /// Ключ устройства теста — детерминированно по id (тот же id → тот же ключ).
     fn dev_key(id: &str) -> SigningKey {
@@ -786,24 +786,30 @@ mod tests {
     }
 
     #[test]
-    fn legacy_set_only_shrinks() {
+    fn former_legacy_entry_is_a_noop_link() {
+        // T096: запись прежнего списка v1-устройств (поле 7) из журнала до удаления — звено без действия
         let a = RootIdentity::generate("alice@x").unwrap();
         let mut log = DeviceLog::new("alice@x").unwrap();
         log.apply(&a.genesis_entry().unwrap()).unwrap();
-        let l1 = LegacyDevice { device_id: "old1".into(), olm_curve25519: vec![5; 32], olm_ed25519: vec![6; 32] };
-        let l2 = LegacyDevice { device_id: "old2".into(), olm_curve25519: vec![7; 32], olm_ed25519: vec![8; 32] };
-        let set = |d: Vec<LegacyDevice>| Change::LegacyDevices(LegacyDeviceSet { devices: d });
-        let e = device_log_entry("alice@x", 2, log.head_hash, set(vec![l1.clone()]), None);
-        log.apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()).unwrap();
-        // Подсунутое сервером v1-устройство вне списка — не получатель.
-        let fake = LegacyDevice { device_id: "srv".into(), olm_curve25519: vec![9; 32], olm_ed25519: vec![9; 32] };
-        let listed = vec![l1.clone(), fake.clone()];
-        let (ok, warn) = log.legacy_recipients(&listed);
-        assert_eq!(ok, vec![&l1]);
-        assert_eq!(warn, vec![&fake]);
-        // Расширить список нельзя.
-        let e = device_log_entry("alice@x", 3, log.head_hash, set(vec![l1, l2]), None);
-        assert_eq!(log.apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()), Err(ProtoError::Forbidden));
+        // Генезисом она не бывает
+        let mut fresh = DeviceLog::new("alice@x").unwrap();
+        let g = sign_former_legacy_entry(&a.root, "alice@x", 1, [0; 32], &[0x0a, 0x00]).unwrap();
+        assert_eq!(fresh.apply(&g), Err(ProtoError::InvalidField("change")));
+        // Чужой ключ — отказ, как у прежнего списка
+        let evil = sign::generate_signing_key();
+        let e = sign_former_legacy_entry(&evil, "alice@x", 2, log.head_hash, &[0x0a, 0x00]).unwrap();
+        assert_eq!(log.apply(&e), Err(ProtoError::BadSignature));
+        // Подпись SSK — принимается, журнал идёт дальше, устройств не прибавляется
+        let e = sign_former_legacy_entry(&a.self_signing, "alice@x", 2, log.head_hash, &[0x0a, 0x00]).unwrap();
+        log.apply(&e).unwrap();
+        assert_eq!(log.version, 2);
+        assert!(log.devices.is_empty());
+        log.apply(&a.add_device_entry(3, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d1", 1)).unwrap()).unwrap();
+        assert!(log.active("d1").is_some());
+        // Запись совсем без изменения (и без поля 7) — по-прежнему отказ
+        let empty = device_log_entry("alice@x", 4, log.head_hash, Change::RevokeDeviceId("x".into()), None);
+        let empty = UserDeviceLogEntry { change: None, ..empty };
+        assert_eq!(log.apply(&sign_device_log_entry(&a.self_signing, &empty).unwrap()), Err(ProtoError::InvalidField("change")));
     }
 
     #[test]
@@ -902,9 +908,9 @@ mod tests {
         let evil = a.add_device_entry(4, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "evil", 1)).unwrap();
         assert_eq!(log.apply(&evil), Err(ProtoError::Forbidden));
         assert!(log.active("evil").is_none());
-        let l = LegacyDevice { device_id: "old".into(), olm_curve25519: vec![5; 32], olm_ed25519: vec![6; 32] };
-        let e = device_log_entry("alice@x", 4, log.head_hash, Change::LegacyDevices(LegacyDeviceSet { devices: vec![l] }), None);
-        assert_eq!(log.apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()), Err(ProtoError::Forbidden));
+        // Прежняя запись списка v1-устройств раскрытым SSK — тоже отказ (T096: звено без действия, проверки прежние)
+        let e = sign_former_legacy_entry(&a.self_signing, "alice@x", 4, log.head_hash, &[]).unwrap();
+        assert_eq!(log.apply(&e), Err(ProtoError::Forbidden));
         // Смена SSK корнем — новые сертификаты под новым SSK принимаются.
         let new_ssk = sign::generate_signing_key();
         let (rot, sig) = rotate_ssk_entry(&a.root, "alice@x", 4, log.head_hash, &new_ssk).unwrap();

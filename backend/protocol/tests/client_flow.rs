@@ -1182,45 +1182,6 @@ fn call_ring_shares_delivery_key_first() {
     assert_eq!(back.iter().map(|r| r.method).collect::<Vec<_>>(), ["call.signal_sealed"]);
 }
 
-// ── переходный период (FR-058): подписанный список v1-устройств ──────────────
-
-#[test]
-fn legacy_device_set_is_signed_and_only_shrinks() {
-    use parvane_protocol::pb::parvane::core::v2::LegacyDevice;
-    let mut srv = Server::default();
-    let mut alice = setup(&mut srv, "alice@local");
-    let mut bob = setup(&mut srv, "bob@local");
-    let old = |id: &str, b: u8| LegacyDevice { device_id: id.into(), olm_curve25519: vec![b; 32], olm_ed25519: vec![b + 1; 32] };
-    assert!(alice.legacy_devices("alice@local").is_none(), "список до публикации");
-
-    // Алиса публикует свои v1-устройства; Боб видит их по её журналу.
-    let req = alice.legacy_devices_request(vec![old("desk", 5), old("phone", 7)]).unwrap();
-    assert_eq!(req.method, "identity.device.log_append");
-    srv.handle("alice@local", "d1", &req);
-    // Свой журнал запись получает синком, а не при подготовке запроса.
-    assert!(alice.legacy_devices("alice@local").is_none(), "журнал изменён до подтверждения сервера");
-    let sync_own = |c: &mut Client, srv: &Server| {
-        let known = c.log_version("alice@local") as usize;
-        c.ingest_log("alice@local", srv.logs["alice@local"][known..].to_vec()).unwrap();
-    };
-    sync_own(&mut alice, &srv);
-    let alice_log = srv.logs["alice@local"].clone();
-    bob.ingest_log("alice@local", alice_log).unwrap();
-    let seen = bob.legacy_devices("alice@local").unwrap();
-    assert_eq!(seen.iter().map(|d| d.device_id.as_str()).collect::<Vec<_>>(), vec!["desk", "phone"]);
-    assert_eq!(bob.log_devices("alice@local").1, vec!["desk".to_string(), "phone".to_string()]);
-
-    // Сократить можно (устройство перешло на v2 или отозвано), расширить — нет.
-    let req = alice.legacy_devices_request(vec![old("desk", 5)]).unwrap();
-    srv.handle("alice@local", "d1", &req);
-    sync_own(&mut alice, &srv);
-    assert!(alice.legacy_devices_request(vec![old("desk", 5), old("late", 9)]).is_err(), "список расширен");
-    assert_eq!(alice.legacy_devices("alice@local").unwrap().len(), 1);
-    // Чужое устройство без SSK этого пользователя список не публикует.
-    let mut stranger = Client::new("alice@local", "d9", "local").unwrap();
-    assert!(stranger.legacy_devices_request(vec![]).is_err());
-}
-
 /// T127 (FR-013/FR-064): «печатает» и присутствие v2-собеседнику идут
 /// эфемерными каналами — секретный id, payload под ключом канала, без `{from, to}`.
 #[test]

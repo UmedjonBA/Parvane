@@ -32,17 +32,6 @@ service MsgService {
       federated: true
     };
   }
-  // Легаси-копия формата v1 — только устройствам получателя из его
-  // LegacyDeviceSet (D-01); сервер хранит её как v1-сообщение для v1-клиентов.
-  rpc DeliverLegacy(DeliverLegacyRequest) returns (DeliverLegacyResponse) {
-    option (parvane.core.v2.method) = {
-      name: "msg.deliver_legacy"
-      channel: METHOD_CHANNEL_ID
-      rate: RATE_CLASS_MSG
-      kind: METHOD_KIND_CALL
-      shard: "messenger"
-    };
-  }
   rpc InboxSync(InboxSyncRequest) returns (InboxSyncResponse) {
     option (parvane.core.v2.method) = {
       name: "msg.inbox.sync"
@@ -137,13 +126,6 @@ message DeliverGroupRequest {
 }
 message DeliverGroupResponse {}
 
-message DeliverLegacyRequest {
-  // id v1-сообщения (UUID).
-  string message_id = 1 [(parvane.core.v2.max_len) = 36];
-  // JSON v1 SendPayload (только виды encrypted/group_encrypted).
-  bytes send_payload_json = 2 [(parvane.core.v2.max_len) = 1048576];
-}
-message DeliverLegacyResponse {}
 
 // Запись журнала инбокса устройства. Сервер не хранит отправителя.
 message InboxRecord {
@@ -153,8 +135,6 @@ message InboxRecord {
   oneof item {
     parvane.core.v2.SealedEnvelope sealed = 10;
     parvane.core.v2.GroupEnvelope group = 11;
-    // v1-строка (история до перехода и сообщения v1-клиентов).
-    LegacyV1Record legacy_v1 = 12;
     // Новая запись журнала состояния группы (уведомление, без тела).
     GroupStateNotice group_state = 13;
     // Отзыв одного из устройств пользователя.
@@ -168,10 +148,9 @@ message InboxRecord {
     // history.append. Без содержимого — устройство само тянет журнал от курсора.
     JournalNotice journal = 16;
   }
-}
-
-message LegacyV1Record {
-  bytes json = 1 [(parvane.core.v2.max_len) = 1048576];
+  // T096 (spec 035): поле 12 (v1-строка) удалено вместе с протоколом v1.
+  reserved 12;
+  reserved "legacy_v1";
 }
 
 message GroupStateNotice {

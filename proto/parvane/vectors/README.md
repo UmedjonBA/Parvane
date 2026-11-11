@@ -42,7 +42,6 @@
 |---|---|---|
 | `codec/` | кадры: размер, лимиты полей, акторы, направление, версия | `origin` (`client`/`server`), `frame_hex` |
 | `sign/` | каноничные подписи операций (D-10), перекрёстные операции, адресат SDP | `op` (`body_hex`, `signature_hex`, `signer_hex`), `expect_domain`, `expect_op_type`, `audience`? |
-| `legacy_v1/` | разбор v1-сообщений всех трёх клиентов (диалекты D-1…D-26) | `layer` (`stored`/`olm`/`megolm`/`ice`), `json` |
 | `content_guard/` | страж содержимого у получателя (класс 16) | `content` (proto3-JSON) → ожидаемый обезвреженный |
 | `device_log/` | журнал устройств, откат, подсунутые устройства (D-01, D-11) | последовательность записей |
 | `group_log/` | журнал группы: перестановка, перенос, форк (D-02, D-03) | последовательность записей |
@@ -63,7 +62,7 @@
 что работает в клиенте. Имена наборов: `seal/sealed`, `seal/group`,
 `invite/links`, `state/merge`, `content/kinds`, `l2/mode`, `codec/frames`,
 `sign/ops`, `device_log/alice`, `group_log/group`, `content_guard/content`,
-`legacy_v1/messages`, `call/signals`, `link/sas`, `history/merge`, `history/unread`,
+`call/signals`, `link/sas`, `history/merge`, `history/unread`,
 `history/segment`, `history/aead`, `history/checkpoint`, `state2/patch`, `state2/sets`, `state2/ordered`,
 `state2/delete_vs_edit`, `state2/marks`, `state2/unknown_fields`, `state2/rejected`, `content/critical`,
 `model/critical_journal`. Там, где работу делает сам

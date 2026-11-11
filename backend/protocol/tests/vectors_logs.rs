@@ -13,7 +13,7 @@ use parvane_protocol::group::{self, SignerInfo};
 use parvane_protocol::identity::{self, DeviceLog, RootIdentity};
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{
-    user_device_log_entry::Change as DevChange, DeviceCertificate, GroupStateEntry, LegacyDevice, LegacyDeviceSet, Ref,
+    user_device_log_entry::Change as DevChange, DeviceCertificate, GroupStateEntry, Ref,
     SignedOp, UserRef,
 };
 use parvane_protocol::pb::parvane::group::v2::{group_change::Change, AddMember, Ban, Create, GroupKind, Permissions};
@@ -64,16 +64,14 @@ fn gen_device_log() -> Value {
     // Откат serial того же устройства.
     let rollback = a.add_device_entry(3, log.head_hash, &cert(&a, "alice@x", "d1", 1)).unwrap();
     steps.push(step(&rollback, err("BrokenChain")));
-    // LegacyDeviceSet.
-    let old = LegacyDevice { device_id: "old".into(), olm_curve25519: vec![5; 32], olm_ed25519: vec![6; 32] };
-    let e = identity::device_log_entry("alice@x", 3, log.head_hash, DevChange::LegacyDevices(LegacyDeviceSet { devices: vec![old.clone()] }), None);
-    let legacy = identity::sign_device_log_entry(&a.self_signing, &e).unwrap();
+    // T096: прежняя запись списка v1-устройств (поле 7, LegacyDeviceSet удалён) — звено без действия;
+    // подделка её чужим SSK — отказ.
+    let list = [0x0a, 0x03, 0x0a, 0x01, b'o'];
+    let forged_legacy = identity::sign_former_legacy_entry(&evil.self_signing, "alice@x", 3, log.head_hash, &list).unwrap();
+    steps.push(step(&forged_legacy, err("BadSignature")));
+    let legacy = identity::sign_former_legacy_entry(&a.self_signing, "alice@x", 3, log.head_hash, &list).unwrap();
     log.apply(&legacy).unwrap();
     steps.push(step(&legacy, ok()));
-    // Расширение списка легаси-устройств запрещено.
-    let more = LegacyDevice { device_id: "srv".into(), olm_curve25519: vec![7; 32], olm_ed25519: vec![8; 32] };
-    let e = identity::device_log_entry("alice@x", 4, log.head_hash, DevChange::LegacyDevices(LegacyDeviceSet { devices: vec![old, more] }), None);
-    steps.push(step(&identity::sign_device_log_entry(&a.self_signing, &e).unwrap(), err("Forbidden")));
     // Отзыв и попытка вернуть.
     let e = identity::device_log_entry("alice@x", 4, log.head_hash, DevChange::RevokeDeviceId("d1".into()), None);
     let revoke = identity::sign_device_log_entry(&a.self_signing, &e).unwrap();
@@ -83,9 +81,9 @@ fn gen_device_log() -> Value {
     steps.push(step(&back, err("Forbidden")));
     json!({
         "suite": "device_log",
-        "description": "журнал устройств alice@x: генезис, добавление, повтор, подделка сервером, откат serial, LegacyDeviceSet только сокращается, отзыв",
+        "description": "журнал устройств alice@x: генезис, добавление, повтор, подделка сервером, откат serial, прежняя запись списка v1-устройств — звено без действия, отзыв",
         "user": "alice@x",
-        "final": {"version": log.version, "active": ["—"], "revoked": ["d1"], "legacy": ["old"]},
+        "final": {"version": log.version, "active": ["—"], "revoked": ["d1"]},
         "cases": [{"name": "sequence", "input": {"steps": steps}, "expect": ok()}]
     })
 }
@@ -102,7 +100,6 @@ fn device_log_vectors() {
         }
         assert_eq!(log.version, v["final"]["version"].as_u64().unwrap());
         assert!(log.revoked.contains("d1") && log.active("d1").is_none());
-        assert_eq!(log.legacy.as_ref().unwrap().len(), 1);
     }
 }
 

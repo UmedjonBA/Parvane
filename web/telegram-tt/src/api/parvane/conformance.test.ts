@@ -204,13 +204,13 @@ describe('SYNC-2: непрочитанное не держит курсор ве
   it('desktop: курсора и очереди починки нет (spec 029: v1 удалён из desktop) — шифртекст v1 не показывается', () => {
     const source = readDesktopSource();
     expect(source).not.toMatch(/kRepairAttempts|parvane-pending\.txt|g_repair/);
-    // Строки приходят расшифрованными движком v2; запись LegacyV1 не разбирается
-    expect(source).toMatch(/if \(type == "legacyV1"\) \{\s+return true; \/\/ кадры v1 больше не разбираются/);
+    // Строки приходят расшифрованными движком v2; события LegacyV1 у движка нет с T096 — и ветки для него нет
+    expect(source).not.toContain('legacyV1');
   });
 
-  it('android: курсора и очереди починки нет (spec 031) — запись LegacyV1 пропускается', () => {
+  it('android: курсора и очереди починки нет (spec 031) — события LegacyV1 нет (T096)', () => {
     expectAndroidV1Gone();
-    expect(readAndroidJni('jni_session.cpp')).toContain('if (type == "legacyV1") return true; // v1 удалён');
+    expect(readAndroidJni()).not.toContain('legacyV1');
   });
 });
 
@@ -346,7 +346,7 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
 
   it('web: Olm/Megolm-пути нет (T110) — автора и ключи проверяет движок v2, строка приходит расшифрованной', () => {
     expect(webSync).not.toMatch(/groupDecrypt|decryptFrom|unwrapMegolmContent|skdm|verifySenderIdentity/);
-    // Шифртекст v1 из записи LegacyV1 не показывается и не подтверждается
+    // Шифртекст v1 (прежняя локальная история) не показывается и не подтверждается
     expect(webSync).toMatch(/kind === 'encrypted' \|\| stored\.content\.kind === 'group_encrypted'\) \{/);
     expect(existsSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'))).toBe(false);
   });
@@ -355,9 +355,9 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     expectDesktopV1FilesGone();
     const client = readDesktopSource();
     expect(client).not.toMatch(/parvane::e2e::|groupSeal|claimedFrom|Verdict::Unknown/);
-    // Раздача Megolm-ключа из прежней истории ничего не показывает; кадры v1 не разбираются
+    // Раздача Megolm-ключа из прежней истории ничего не показывает; кадров v1 движок не отдаёт (T096)
     expect(client).toMatch(/contentKind\(sm\.content\) == "skdm"\) \{\s+continue;/);
-    expect(client).toMatch(/if \(type == "legacyV1"\) \{\s+return true;/);
+    expect(client).not.toContain('legacyV1');
   });
 
   it('android: Olm/Megolm-пути нет (spec 031: v1 удалён из android) — автора и ключи проверяет движок v2', () => {
@@ -369,8 +369,8 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     expect(session).toContain('const auto in = parvane::v2::interpretDirect(ev, me);');
     expect(session).toContain('historyApplyIncomingMutation(in);');
     expect(session).not.toMatch(/удалить у всех можно только своё/);
-    // Кадры v1 не разбираются
-    expect(session).toContain('if (type == "legacyV1") return true; // v1 удалён');
+    // Кадров v1 движок не отдаёт (T096)
+    expect(session).not.toContain('legacyV1');
   });
 });
 
@@ -1196,21 +1196,51 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     expect(isForeign(testCase)).toBe(testCase.skip);
   });
 
-  it('web: легаси-копий нет (T110) — доставить v1-устройствам нечем; запись LegacyV1 пропускается', () => {
+  it('web: легаси-копий нет (T110) — доставить v1-устройствам нечем; события LegacyV1 нет (T096)', () => {
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).not.toMatch(/sealLegacy|deliverLegacy|legacyDevices/);
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).not.toContain('listOwnV1Devices');
-    // Запись LegacyV1 (кадр v1) целиком пропускается: читать её нечем
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toMatch(/if \(ev\.type === 'legacyV1'\) \{\s+\/\/[^\n]*\n\s+return;/);
+    expect(controller).not.toMatch(/legacyV1|legacySet|legacyKeys/);
+    const engineClient = readRepo('web/telegram-tt/src/api/parvane/v2/engineClient.ts');
+    expect(engineClient).not.toMatch(/legacyDeliverRequest|legacyDevicesRequest/);
   });
 
-  it('движок: метод доставки и запись списка из правила; журнал не меняется до подтверждения', () => {
-    const client = readRepo('backend/protocol/src/client.rs');
-    expect(client).toContain(`"${r.deliverMethod}"`);
-    expect(client).toContain(`DevChange::LegacyDevices(${r.listEntry} { devices })`);
-    expect(client).toContain('self.own_log.clone().apply(&op)?;');
+  // T096 (spec 035): остатков v1 в движке, схеме, реестре и сервере нет — метод доставки и запись списка из правила
+  // остались только как имена удалённого
+  it('движок и сервер: остатков v1 нет (T096)', () => {
+    [
+      'backend/protocol/src/legacy_v1.rs',
+      'backend/protocol/fuzz/fuzz_targets/legacy_v1.rs',
+      'backend/protocol/tests/vectors_legacy.rs',
+      'proto/parvane/vectors/legacy_v1/messages.json',
+    ].forEach((file) => expect(existsSync(path.join(REPO_ROOT, file)), file).toBe(false));
+    const engine = [
+      'backend/protocol/src/lib.rs', 'backend/protocol/src/client.rs', 'backend/protocol/src/host.rs',
+      'backend/protocol/src/host/call.rs', 'backend/protocol/src/conformance.rs', 'backend/protocol/src/policy.rs',
+      'backend/protocol/src/unknown.rs', 'backend/protocol/wasm/src/lib.rs',
+    ].map(readRepo).join('\n');
+    expect(engine).not.toContain(`"${r.deliverMethod}"`);
+    expect(engine).not.toContain(r.listEntry);
+    expect(engine).not.toMatch(
+      /mod legacy_v1|legacy_v1::|Event::LegacyV1|Item::LegacyV1|LegacyV1Record|import_v1_account|LegacyDevices|legacy_devices/,
+    );
+    // Схема: поле инбокса 12 и поле журнала устройств 7 — reserved, сообщений и метода нет
+    const msgProto = readRepo('proto/parvane/msg/v2/msg.proto');
+    expect(msgProto).toMatch(/reserved 12;\s+reserved "legacy_v1";/);
+    expect(msgProto).not.toMatch(/LegacyV1Record|DeliverLegacy|deliver_legacy/);
+    const envelope = readRepo('proto/parvane/core/v2/envelope.proto');
+    expect(envelope).toMatch(/reserved 7;\s+reserved "legacy_devices";/);
+    expect(envelope).not.toMatch(/LegacyDeviceSet|message LegacyDevice\b/);
+    // ACL NATS (блоки генерирует gen_registry из реестра схемы) — без метода
+    ['backend/infra/nats/server.conf', 'backend/infra/nats/server.prod.conf']
+      .forEach((file) => expect(readRepo(file), file).not.toContain(r.deliverMethod));
+    // Сервер: ни обработчика, ни таблицы (удалена новой миграцией, прежние не трогаются)
+    const messenger = readRepo('backend/shards/messenger/src/v2.rs');
+    expect(messenger).not.toMatch(/"msg\.deliver_legacy"|FROM legacy_origin/);
+    expect(readRepo('backend/shards/messenger/migrations_v2/0012_drop_legacy_origin.sql'))
+      .toContain('DROP TABLE IF EXISTS legacy_origin;');
   });
 
   it('desktop: легаси-копий нет (spec 029: v1 удалён из desktop) — доставить v1-устройствам нечем', () => {
@@ -1219,15 +1249,15 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     expect(desktop).not.toMatch(/sendLegacyCopies|publishLegacySet|isForeignLegacyCopy|legacyDevices/);
     const session = readDesktopSession();
     expect(session).not.toMatch(/legacyDevices|syncLegacySet|deliver_legacy/);
-    // Запись LegacyV1 (кадр v1) целиком пропускается: читать её нечем
-    expect(desktop).toMatch(/if \(type == "legacyV1"\) \{\s+return true;/);
+    // События LegacyV1 движок не отдаёт (T096) — и ветки для него нет
+    expect(desktop).not.toContain('legacyV1');
   });
 
   it('android: легаси-копий нет (spec 031: v1 удалён из android) — доставить v1-устройствам нечем', () => {
     expectAndroidV1Gone();
     expect(readAndroidJni()).not.toMatch(/deliver_legacy|LegacyDevices|legacySet/);
-    // Запись LegacyV1 (кадр v1) целиком пропускается: читать её нечем
-    expect(readAndroidJni('jni_session.cpp')).toContain('if (type == "legacyV1") return true; // v1 удалён');
+    // События LegacyV1 движок не отдаёт (T096) — и ветки для него нет
+    expect(readAndroidJni()).not.toContain('legacyV1');
   });
 });
 
@@ -1860,7 +1890,7 @@ describe('E6-1: клиент работоспособен без соедине�
     });
   });
 
-  it('web: соединения v1 нет вовсе (T110) — все запросы мостом, записи LegacyV1 пропускаются', () => {
+  it('web: соединения v1 нет вовсе (T110) — все запросы мостом, события LegacyV1 нет (T096)', () => {
     const gateway = readRepo('web/telegram-tt/src/api/parvane/gateway.ts');
     expect(gateway).not.toMatch(/new WebSocket|hasV1|isVirtual|upgrade_required/);
     expect(gateway).toContain('viaV2 = await getV2Bridge().request(subject, payload);');
@@ -1869,10 +1899,10 @@ describe('E6-1: клиент работоспособен без соедине�
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).not.toMatch(/onLegacyFrame|handleInboxFrame/);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
+    expect(controller).not.toContain(`'${r.legacyEvent}'`);
   });
 
-  it('desktop: соединения v1 и моста нет (spec 029, T038) — соединение управления v2, LegacyV1 пропускаются', () => {
+  it('desktop: соединения v1 и моста нет (spec 029, T038) — соединение управления v2, события LegacyV1 нет', () => {
     expectDesktopV1FilesGone();
     const desktop = readDesktopSource();
     // Соединение управления v2 вместо моста; ни транспорта v1, ни его топиков в клиенте
@@ -1883,7 +1913,7 @@ describe('E6-1: клиент работоспособен без соедине�
     // «Печатает» и присутствие — только эфемерными каналами v2-сессии (TYPING-1)
     expect(desktop).not.toMatch(/msgTyping\(|presence\(std::to_string/);
     expect(desktop).toContain('(void)s->sendTyping(to);');
-    expect(desktop).toMatch(new RegExp(`if \\(type == "${r.legacyEvent}"\\) \\{\\s+return true;`));
+    expect(desktop).not.toContain(`"${r.legacyEvent}"`);
     expect(desktop).not.toContain('bridge->deliver(std::string("msg.user.") + self, frame);');
   });
 
@@ -1898,7 +1928,7 @@ describe('E6-1: клиент работоспособен без соедине�
     const session = readAndroidJni('jni_session.cpp');
     expect(session).toContain('g_control = makeControl();');
     expect(session).toContain('return std::make_shared<parvane::v2::Control>(std::move(cfg));');
-    expect(session).toContain(`if (type == "${r.legacyEvent}") return true; // v1 удалён`);
+    expect(session).not.toContain(`"${r.legacyEvent}"`);
     ['tgx_lib.sh', 'tgx_session_flow.sh', 'tgx_conformance_flow.sh'].forEach((file) => {
       expect(readRepo(`android/${file}`), file).not.toMatch(/PARVANE_V1_MODE|TGX_PROTO_V1|PARVANE_PROTO_V2/);
     });

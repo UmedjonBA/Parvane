@@ -73,9 +73,7 @@ pub fn content_disposition_bytes(bytes: &[u8], critical_fields: &[u32]) -> crate
 pub fn record_disposition(rec: &InboxRecord) -> Disposition {
     match rec.item {
         None => Disposition::Skip,
-        Some(inbox_record::Item::Sealed(_))
-        | Some(inbox_record::Item::Group(_))
-        | Some(inbox_record::Item::LegacyV1(_)) => Disposition::Show,
+        Some(inbox_record::Item::Sealed(_)) | Some(inbox_record::Item::Group(_)) => Disposition::Show,
         Some(inbox_record::Item::GroupState(_))
         | Some(inbox_record::Item::DeviceRevoked(_))
         | Some(inbox_record::Item::DeviceAdded(_))
