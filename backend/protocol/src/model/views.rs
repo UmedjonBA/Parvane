@@ -1023,7 +1023,7 @@ pub fn wire_to_body(c: &Map<String, Value>, has: &dyn Fn(&str) -> bool) -> Optio
         "photo" | "video" | "voice" | "video_note" | "gif" | "file" => V::Media(view_media(c)),
         "sticker" => {
             let pack = c.get("pack_ref").and_then(Value::as_object).map(|p| str_of(p, "name")).unwrap_or_default();
-            V::Sticker(ViewSticker { pack, sticker_id: str_of(c, "file_id"), emoji: str_of(c, "filename"), media: Some(view_media(c)) })
+            V::Sticker(ViewSticker { pack, sticker_id: str_of(c, "sticker_id"), emoji: str_of(c, "filename"), media: Some(view_media(c)) })
         }
         "location" => V::Location(ViewLocation {
             lat: c.get("lat").and_then(Value::as_f64).unwrap_or(0.0),

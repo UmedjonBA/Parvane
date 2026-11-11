@@ -200,3 +200,23 @@ fn content_view_mutations() {
     assert!(c.reply_quote.is_none() && c.reply_to.is_none());
     assert!(views::wire_to_content(serde_json::json!({"kind": "нет такого"}).as_object().unwrap(), None).is_err());
 }
+
+/// FR-075 (T089): избранное — не больше 200 стикеров; повтор уже избранного и снятие при полном списке разрешены.
+#[test]
+fn faved_stickers_are_capped_at_200() {
+    let cfg = json!({"user": "alice@local", "device_id": "d1", "domain": "local", "features": [], "now_ms": "1800000000000", "vectors": true});
+    let mut host = Host::default();
+    let (mut e, _) = host.open(&cfg);
+    let fave = |id: usize, on: bool| json!({"fave_sticker": {"set_id": "cats", "sticker_id": format!("s{id}"), "on": on}});
+    for i in 0..parvane_protocol::model::intent::MAX_FAVED_STICKERS {
+        let out = call(&mut e, "submit", &fave(i, true)).unwrap_or_else(|k| panic!("стикер {i}: {k}"));
+        host.drive(&mut e, out, true);
+    }
+    assert_eq!(call(&mut e, "submit", &fave(999, true)).err().as_deref(), Some("FieldLimit"), "201-й отвергнут");
+    let again = call(&mut e, "submit", &fave(0, true)).expect("повтор уже избранного");
+    host.drive(&mut e, again, true);
+    let off = call(&mut e, "submit", &fave(1, false)).expect("снятие при полном списке");
+    host.drive(&mut e, off, true);
+    let out = call(&mut e, "submit", &fave(999, true)).expect("после снятия место есть");
+    host.drive(&mut e, out, true);
+}

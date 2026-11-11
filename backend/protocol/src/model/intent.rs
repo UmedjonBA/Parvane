@@ -46,6 +46,9 @@ fn field_bytes(m: &impl Message, field: u32) -> Option<s2::FieldValue> {
     super::split_fields(&m.encode_to_vec()).into_iter().find(|f| f.field == field)
 }
 
+/// Потолок избранных стикеров (FR-075, T089).
+pub const MAX_FAVED_STICKERS: usize = 200;
+
 impl Engine {
     /// Намерение хоста.
     pub fn submit(&mut self, i: epb::Intent) -> Result<Outcome> {
@@ -367,6 +370,13 @@ impl Engine {
             return Err(ProtoError::InvalidField("sticker"));
         }
         let key = ObjectKey { kind: ObjectKind::FavedSticker as i32, key: format!("{}/{}", f.set_id, f.sticker_id) };
+        if f.on && self.state.view_object(key.kind, &key.key).is_none() {
+            // Потолок избранного (FR-075, как в Telegram): 200 стикеров; сверх — отказ, клиент предлагает убрать старые
+            let faved = self.state.view().iter().filter(|o| o.kind == key.kind).count();
+            if faved >= MAX_FAVED_STICKERS {
+                return Err(ProtoError::FieldLimit("faved_stickers"));
+            }
+        }
         if f.on {
             let v = s2::FavedSticker { set_id: f.set_id, sticker_id: f.sticker_id, media: None, added_ms: self.now_ms };
             let set: Vec<s2::FieldValue> = [1, 2, 4].iter().filter_map(|n| field_bytes(&v, *n)).collect();
