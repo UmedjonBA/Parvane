@@ -120,7 +120,12 @@ try {
     execFileSync('cargo', ['build', '-q', '--manifest-path', path.join(ROOT, 'backend/Cargo.toml'),
       '-p', 'parvane-protocol', '--bin', 'escrow_admin'], { stdio: 'inherit' });
   }
-  const opened = JSON.parse(execFileSync(ESCROW_ADMIN, ['open-report', ADMIN_KEY, row.reporter, row.sealed]).toString());
+  // Вывод open-report: первая строка — JSON жалобы, далее — проверка подписи каждого приложенного сообщения (A0008-2)
+  const [reportJson, ...verdicts] = execFileSync(ESCROW_ADMIN, ['open-report', ADMIN_KEY, row.reporter, row.sealed])
+    .toString().trim().split('\n');
+  const opened = JSON.parse(reportJson);
+  assert(verdicts.length > 0 && verdicts.every((line) => line.includes('подтверждено подписью устройства')),
+    `подписи приложенных сообщений не подтверждены: ${verdicts.join(' | ')}`);
   assert.equal(opened.reason, 'fake');
   assert(opened.comment.includes(suffix), 'комментарий в жалобе');
   assert.equal(opened.target, address('mallory'), 'на кого жалоба');

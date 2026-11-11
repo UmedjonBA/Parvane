@@ -6,6 +6,11 @@ export VITE_PARVANE_DIAG_HOOKS=1
 # CSP (P-32): диагностическая сборка e2e ходит в локальный gateway на
 # динамическом порту — разрешаем только loopback
 export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://localhost:*}"
+# Chromium без UTF-8-локали (ssh без LANG на сборочной машине) отдаёт скачанному файлу с не-ASCII именем
+# («данные.bin», атрибут download) имя `download` — сценарии облака сверяют имя файла
+if [[ -z "${LC_ALL:-}${LC_CTYPE:-}" && "${LANG:-}" != *[Uu][Tt][Ff]* ]]; then
+  export LANG=C.UTF-8
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках

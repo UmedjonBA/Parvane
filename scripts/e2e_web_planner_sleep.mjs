@@ -52,7 +52,7 @@ try {
   // Значок сна → «Здоровье» на вчерашнем дне
   await tag.click();
   await sleepCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sleepCard.getByText('05:00 → 15:00').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sleepCard.getByText('05:00 → 15:00', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // «Изменить» — записанное в поле; поправить
   await sleepCard.locator('[data-sleep-edit]').click();
   await page.waitForFunction(() => document.querySelector('#planner-health-sleep')?.value === '05:00–15:00', undefined, {
@@ -60,7 +60,7 @@ try {
   });
   await page.locator('#planner-health-sleep').fill('23:30-07:00');
   await sleepCard.getByRole('button', { name: 'Save', exact: true }).click();
-  await sleepCard.getByText('23:30 → 07:00').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sleepCard.getByText('23:30 → 07:00', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: значок сна открывает «Здоровье», сон исправлен');
   // «Удалить»
   await sleepCard.locator('[data-sleep-delete]').click();
