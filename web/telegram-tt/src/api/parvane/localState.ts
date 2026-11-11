@@ -287,9 +287,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     return isProjected || !isModelBacked();
   }
 
-  function notifyChange(kind: LocalStateKind) {
+  function notifyChange(kind: LocalStateKind, isDirtyDeferred?: boolean) {
     if (applyingJournal) return;
-    markDirty(kind);
+    if (!isDirtyDeferred) markDirty(kind);
     changeListener?.(kind);
   }
 
@@ -324,6 +324,8 @@ export function createLocalState(deps: LocalStateDependencies) {
   let packSetsBeforeLoad: Set<string> | undefined;
   let packSecretsChain: Promise<void> = Promise.resolve();
   let draftsSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Правка черновиков пользователем ждёт записи на диск, чтобы стать отметкой «не в журнале»
+  let areDraftsDirty = false;
 
   function compareJournal(a: WireStoredMessage, b: WireStoredMessage) {
     return (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -444,8 +446,21 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (draftsSaveTimer) return;
     draftsSaveTimer = setTimeout(() => {
       draftsSaveTimer = undefined;
-      void secureStorage()?.then((storage) => storage.saveRecord(name, draftsCache || {})).catch(() => undefined);
+      saveDraftsRecord();
     }, RECORD_SAVE_DELAY_MS);
+  }
+
+  // Отметка «правка черновиков не в журнале» ставится только после записи черновиков на диск: синхронная отметка
+  // при отложенной записи переживала перезагрузку без самих черновиков, и подключение журнала досылало пустой список —
+  // стирало черновик и на сервере (e2e content_ux)
+  function saveDraftsRecord() {
+    const isDirty = areDraftsDirty;
+    areDraftsDirty = false;
+    void secureStorage()?.then((storage) => storage.saveRecord('drafts', draftsCache || {}))
+      .then(() => {
+        if (isDirty) markDirty('drafts');
+      })
+      .catch(() => undefined);
   }
 
   // ── кэш строк прежних сборок (шифрованные записи m:<uuid>, маркеры rm:) ───────────────
@@ -458,7 +473,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (draftsSaveTimer) {
       clearTimeout(draftsSaveTimer);
       draftsSaveTimer = undefined;
-      void secureStorage()?.then((storage) => storage.saveRecord('drafts', draftsCache || {})).catch(() => undefined);
+      saveDraftsRecord();
     }
   }
 
@@ -1260,8 +1275,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (draft) drafts[chatId] = { ...draft, date: nextDate };
     else delete drafts[chatId];
     draftsCache = drafts;
+    if (!applyingJournal) areDraftsDirty = true;
     scheduleRecordSave('drafts');
-    notifyChange('drafts');
+    notifyChange('drafts', true);
   }
 
   // Черновики, сведённые журналом (T098): заменяют локальные целиком

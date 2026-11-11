@@ -152,7 +152,9 @@ export const FOLDERS_POSITION_DEFAULT = FOLDERS_POSITION_TOP;
 
 export const PREVIEW_AVATAR_COUNT = 3;
 
-export const DRAFT_DEBOUNCE = 10000; // 10s
+// Parvane: черновик хранится на устройстве и в журнале личного состояния (не запрос к серверу на каждую паузу, как у
+// Telegram) — 10 с терялись при перезагрузке или закрытии вкладки, пока шёл ввод
+export const DRAFT_DEBOUNCE = 2000;
 export const SEND_MESSAGE_ACTION_INTERVAL = 3000; // 3s
 // 10000s from https://corefork.telegram.org/api/url-authorization#automatic-authorization
 export const APP_CONFIG_REFETCH_INTERVAL = 10000 * 1000;

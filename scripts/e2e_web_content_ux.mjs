@@ -12,6 +12,7 @@ import {
   preparePage,
   sendText,
   autoDismissRecoveryKeyDialog,
+  dumpDiagJournal,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-content-ux-e2e-password';
@@ -42,10 +43,24 @@ try {
   await aliceSession.page.waitForTimeout(1500);
 
   // ── Черновик переживает reload ─────────────────────────────────────────────
+  if (process.env.PARVANE_E2E_DEBUG) await dumpDiagJournal(aliceSession.page, 'alice до reload', 40);
   await relogin(aliceSession.page, PASSWORD);
   // Чат с черновиком появляется в списке после fetchChats
   await aliceSession.page.locator('#LeftColumn .ListItem').filter({ hasText: bob.split('@')[0] })
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+    .catch(async (err) => {
+      // Чат с одним черновиком не в списке — журнал клиента и то, что знает о черновике глобальное состояние
+      await dumpDiagJournal(aliceSession.page, 'alice после reload', 80);
+      const drafts = await aliceSession.page.evaluate(() => {
+        const g = window.__parvaneGetGlobal?.();
+        return g ? JSON.stringify({
+          listed: g.chats?.listIds?.active?.length,
+          drafts: Object.keys(g.messages?.byChatId || {}).filter((id) => g.messages.byChatId[id].threadsById?.['-1']?.localState?.draft),
+        }) : 'нет __parvaneGetGlobal';
+      }).catch((e) => `eval: ${e.message}`);
+      console.error(`--- черновики в tt: ${drafts}`);
+      throw err;
+    });
   await openPrivateChat(aliceSession.page, bob);
   await aliceSession.page.waitForTimeout(1000);
   const restoredDraft = await aliceSession.page.locator('#editable-message-text').innerText();

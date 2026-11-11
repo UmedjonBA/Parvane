@@ -1062,7 +1062,16 @@ export function createStateJournal(deps: Deps) {
       if (!changed.includes(address) && before[address]) merged[address] = before[address];
     });
     localState.replaceDrafts(merged);
+    const store = deps.getStore();
     changed.forEach((address) => {
+      // Черновик из журнала у собеседника без истории: чат объявляется до черновика — tt отбрасывает черновик
+      // неизвестного чата, а `updateChat` нелистингового чата перечитывает верх списка (черновик уже в кэше).
+      // Иначе чат с одним черновиком, не успевшим на диск до перезагрузки, в список не попадал (e2e content_ux)
+      if (merged[address] && !before[address] && !store.isGroupAddress(address)) {
+        const user = store.buildApiUser(address);
+        deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+        deps.sendUpdate({ '@type': 'updateChat', id: user.id, chat: store.buildApiChatForUser(address) });
+      }
       deps.sendUpdate({
         '@type': 'draftMessage',
         chatId: chatIdOf(address),
