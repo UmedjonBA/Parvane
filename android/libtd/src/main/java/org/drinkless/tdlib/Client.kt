@@ -1383,6 +1383,7 @@ class Client private constructor(
             val ref = store.group(gid)
             val previousVersion = ref?.version ?: -1L
             val previousAvatar = ref?.avatarFileId ?: ""
+            val previousAvatarKey = ref?.avatarKey ?: ""
             val previousPending = ref?.pendingRequests ?: 0
             // GROUP-1: сведения с ревизией ниже известной пропускаются
             val ensured = store.ensureGroup(gid, g.optString("name"), members, g.optString("created_by"), roles, g)
@@ -1409,12 +1410,23 @@ class Client private constructor(
             val avatar = if (g.isNull("avatar")) "" else g.optString("avatar", "")
             if (avatar.isEmpty()) {
                 if (previousAvatar.isNotEmpty()) store.clearGroupPhoto(gid)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
-            } else if (avatar != previousAvatar) {
-                // Фото частной группы шифровано секретом из журнала группы (GPHOTO-1): ядро выводит ключи само
+            } else {
+                // Фото частной группы шифровано секретом из журнала группы (GPHOTO-1): ядро выводит ключи само.
+                // spec 035 T138 (PV-005, как desktop T126): секрет приходит ПОСЛЕ записи SetInfo — те же сведения
+                // заново, уже с ним; файл скачивается снова, когда сменился файл ИЛИ секрет (по одному файлу фото
+                // без секрета не скачивалось, а с секретом больше не пробовали)
                 val avatarKey = g.optString("avatar_key", "")
-                val path = if (avatarKey.isNotEmpty()) ParvaneCore.downloadFile(avatar, avatarKey, "", "group_photo")
-                           else ParvaneCore.downloadFile(avatar, "", "")
-                if (path.isNotEmpty()) store.setGroupPhoto(gid, avatar, path)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
+                if (GroupPhoto.needsDownload(avatar, avatarKey, previousAvatar, previousAvatarKey)) {
+                    val path = if (avatarKey.isNotEmpty()) ParvaneCore.downloadFile(avatar, avatarKey, "", "group_photo")
+                               else ParvaneCore.downloadFile(avatar, "", "")
+                    if (path.isNotEmpty()) {
+                        store.setGroupPhoto(gid, avatar, path)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
+                        store.group(gid)?.avatarKey = avatarKey
+                        Log.i(TAG, "фото группы $gid применено (секрет: ${if (avatarKey.isEmpty()) "нет" else "есть"})")
+                    } else {
+                        Log.i(TAG, "фото группы $gid не скачано (секрет: ${if (avatarKey.isEmpty()) "нет" else "есть"}) — повтор со следующими сведениями")
+                    }
+                }
             }
         }
     }
@@ -1552,6 +1564,8 @@ class Client private constructor(
     /** Сервисное уведомление X (чат «Parvane»): привязка, ключ восстановления, предупреждения. */
     // Служебные сообщения Parvane (вход, привязка, ключ восстановления) — полоской оверлея в стиле приложения, а не
     // модальным окном X; без оверлея (тесты шва) — как раньше
+    /** Идёт разовый перенос данных (spec 035 T137): «соединение» X не перебивает «Обновление…». */
+    @Volatile private var migrating = false
     private fun serviceNotice(key: String, text: String) {
         if (key.startsWith("parvane_") && noticeSink?.invoke(text) == true) return
         postUpdate(TdApi.UpdateServiceNotification(key, TdApi.MessageText(TdApi.FormattedText(text, arrayOf()), null, null)))
@@ -2773,6 +2787,12 @@ class Client private constructor(
                         Log.i(TAG, "audit dump: ${AuditDump.write(java.io.File(boundDir))} строк → ${java.io.File(boundDir, AuditDump.FILE_NAME).absolutePath}")
                         TdApi.Ok()
                     }
+                    // spec 035 T133: выгрузка модели движка (после разового переноса) — сверка с выгрузкой прежнего кода
+                    "model_audit_dump" -> {
+                        val n = AuditDump.write(java.io.File(boundDir), AuditDump.MODEL_FILE_NAME) { org.parvane.core.ParvaneCore.modelAuditDump() }
+                        Log.i(TAG, "model audit dump: $n строк → ${java.io.File(boundDir, AuditDump.MODEL_FILE_NAME).absolutePath}")
+                        TdApi.Ok()
+                    }
                     "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     "cloud_folder" -> {
@@ -3337,8 +3357,9 @@ class Client private constructor(
                 // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
                 if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника
                     val g = store.group(to)
+                    // GROUP-2: вид содержимого и права решает движок (ENGINE-1), шов только передаёт роль автора
                     if (store.roleOf(g, from) == "member"
-                        && !ParvaneStore.isContentAllowedForMember(g?.permissions, content.optString("kind", "text"), ParvaneStore.contentHasLink(content))) {
+                        && org.parvane.core.ParvaneProtocol.groupContentHidden(g?.permissions, "member", content)) {
                         Log.i(TAG, "групповое ${event.optString("id")} (${content.optString("kind")}) от $from скрыто правами группы")
                         return
                     }
@@ -3556,8 +3577,18 @@ class Client private constructor(
                 val msg = if (uuid.isEmpty()) null else store.messageByUuid(uuid)
                 if (msg != null) postUpdate(TdApi.UpdateMessageSendFailed(msg, msg.id, TdApi.Error(429, uiText("rate_limited"))))
             } else Log.w(TAG, "ядро: ${event.optString("text")}")
+            // spec 035 T137 (US1): разовый перенос прежнего состояния в модель — пока идёт, X показывает своё «Обновление…»
+            // (ConnectionStateUpdating, штатная строка шапки X); тост хода и итога — оверлей (строки ParvaneMigrate*)
+            "migration" -> {
+                val done = event.optBoolean("done")
+                migrating = !done
+                Log.i(TAG, "перенос данных: шаг ${event.optInt("point")} из ${event.optInt("total", 7)}" +
+                    if (done) (if (event.optBoolean("failed")) " — не закончен" else " — готово") else "")
+                postUpdate(TdApi.UpdateConnectionState(if (done) TdApi.ConnectionStateConnecting() else TdApi.ConnectionStateUpdating()))
+            }
             "connection" -> {
                 if (event.optString("state") == "ready") upgrade.onConnected() // v1 снова принимает
+                if (migrating && event.optString("state") != "ready") return
                 postUpdate(TdApi.UpdateConnectionState(if (event.optString("state") == "ready") TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
             }
         }

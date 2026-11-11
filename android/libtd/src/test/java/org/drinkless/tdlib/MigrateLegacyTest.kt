@@ -16,6 +16,25 @@ class MigrateLegacyTest {
     private val self = "alice@local"
     private val safe = MigrateLegacy.safePart(self)
 
+    /** Экспорт движка (`v2-<адрес>/state`) — двоичный: байты уходят в движок как есть, не через строку UTF-8
+     *  (прежнее `String → toByteArray` портило не-UTF-8 и перенос экспорта отвергался движком). */
+    @Test
+    fun binaryEngineExportIsPassedByteForByte() {
+        val dir = Files.createTempDirectory("pv-migrate-bin").toFile()
+        try {
+            val blob = byteArrayOf(0x50, 0x56, 0xff.toByte(), 0x00, 0x80.toByte(), 0xc3.toByte(), 0x28, 0xfe.toByte())
+            File(dir, "v2-$safe").mkdirs()
+            File(dir, "v2-$safe/state").writeBytes(blob)
+            val c = MigrateLegacy.collect(dir, self) { f -> f.readBytes() }
+            val rec = c.records.single { it.key == "file:/v2-$safe/state" }
+            assertTrue(rec.value.contentEquals(blob))
+            val j = MigrateLegacy.toJson(c).getJSONArray("records").getJSONObject(0)
+            assertTrue(java.util.Base64.getDecoder().decode(j.getString("value")).contentEquals(blob))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test
     fun collectsOnlyMigrateRecordsWithInventoryKeys() {
         val dir = Files.createTempDirectory("pv-migrate").toFile()
@@ -39,7 +58,7 @@ class MigrateLegacyTest {
             val before = dir.walkTopDown().filter { it.isFile }.associate { it.path to it.readText() }
             val c = MigrateLegacy.collect(dir, self) { f ->
                 val t = f.readText()
-                if (f.name == "pins.json") null else t.removePrefix("enc:")
+                if (f.name == "pins.json") null else t.removePrefix("enc:").toByteArray()
             }
             assertEquals(
                 listOf("file:contacts.json", "file:/domain-keys.json", "file:folders.json", "file:/history-marks-$safe.json",

@@ -64,8 +64,8 @@ class PackJournalTest {
     private val codec = object : StateJournal.Codec {
         override fun encode(type: String, json: String) = ""
         override fun decode(type: String, b64: String) = ""
-        override fun toV2(v1Json: String, replyTo: String) = ""
-        override fun fromV2(v2Json: String) = ""
+        override fun contentOfWire(wireJson: String, replyTo: String) = ""
+        override fun wireOf(contentJson: String) = ""
     }
     private val resolver = object : StateJournal.Resolver {
         override fun addressOf(chatId: Long): String? = null

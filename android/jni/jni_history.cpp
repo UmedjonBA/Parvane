@@ -687,7 +687,22 @@ json historyPeerOf(const std::string &chatAddress) {
     return json{{"user", {{"address", chatAddress}}}};
 }
 
+namespace {
+std::atomic<bool> g_histHold{false};
+std::atomic<bool> g_histWanted{false};
+} // namespace
+
+void historyHold(bool hold) {
+    g_histHold = hold;
+    if (!hold && g_histWanted.exchange(false)) historyStart();
+}
+
 void historyStart() {
+    if (g_histHold) {
+        g_histWanted = true;
+        LOGI("журнал истории — после разового переноса данных");
+        return;
+    }
     runDetached([] {
         const auto h = ensureHist();
         if (!h) return;

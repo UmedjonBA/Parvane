@@ -23,6 +23,13 @@ class ParvaneStorePermsTest {
         throw AssertionError("нет правила GROUP-2")
     }
 
+    // spec 035 T136 (ENGINE-1): роль автора, права и вид содержимого решает движок (`groupContentHidden`), своей
+    // формулы у шва нет — кейсы правила сверяются с движком, как web conformance.test.ts
+    private fun wireOf(kind: String): JSONObject =
+        if (kind == "audio") JSONObject().put("kind", "file").put("mime", "audio/mpeg") else JSONObject().put("kind", kind).put("text", "x")
+    private fun hidden(perms: JSONObject, wire: JSONObject) = org.parvane.core.ParvaneProtocol.groupContentHidden(perms, "member", wire)
+    private val allPerms = JSONObject("""{"send_messages":true,"send_media":true,"send_stickers_gifs":true,"send_polls":true,"embed_links":true}""")
+
     @Test
     fun conformanceCasesGroup2() {
         val cases = rules().getJSONArray("cases")
@@ -36,30 +43,44 @@ class ParvaneStorePermsTest {
                 assertTrue(c.getString("name"), allowed)
                 continue
             }
-            val got = ParvaneStore.isContentAllowedForMember(c.getJSONObject("perms"), c.getString("kind"), c.getBoolean("hasLink"))
-            assertEquals(c.getString("name"), allowed, got)
+            val wire = wireOf(c.getString("kind"))
+            if (c.getBoolean("hasLink")) wire.put("webpage", JSONObject().put("url", "https://x"))
+            assertEquals(c.getString("name"), allowed, !hidden(c.getJSONObject("perms"), wire))
         }
     }
 
     @Test
-    fun contentKindsMatchRule() {
+    fun contentKindsAreDecidedByEngine() {
         val kinds = rules().getJSONObject("contentKinds")
         val media = kinds.getJSONArray("send_media")
-        val noMedia = JSONObject("""{"send_media":false}""")
-        for (i in 0 until media.length()) assertFalse(media.getString(i), ParvaneStore.isContentAllowedForMember(noMedia, media.getString(i), false))
+        val noMedia = JSONObject(allPerms.toString()).put("send_media", false)
+        for (i in 0 until media.length()) {
+            assertTrue(media.getString(i), hidden(noMedia, wireOf(media.getString(i))))
+            assertFalse(media.getString(i), hidden(allPerms, wireOf(media.getString(i))))
+        }
         val st = kinds.getJSONArray("send_stickers_gifs")
-        val noSt = JSONObject("""{"send_stickers_gifs":false}""")
-        for (i in 0 until st.length()) assertFalse(ParvaneStore.isContentAllowedForMember(noSt, st.getString(i), false))
-        assertTrue(ParvaneStore.isContentAllowedForMember(noSt, "photo", false))
+        val noSt = JSONObject(allPerms.toString()).put("send_stickers_gifs", false)
+        for (i in 0 until st.length()) assertTrue(st.getString(i), hidden(noSt, wireOf(st.getString(i))))
+        assertFalse(hidden(noSt, wireOf("photo")))
+        // поле прав, которого нет в сведениях группы, — «разрешено»; без сведений о правах не скрывается ничего
+        assertFalse(hidden(JSONObject("""{"send_media":true}"""), wireOf("photo")))
+        assertFalse(org.parvane.core.ParvaneProtocol.groupContentHidden(null, "member", wireOf("photo")))
     }
 
     @Test
-    fun contentHasLinkDetectsWebpageAndEntities() {
-        assertTrue(ParvaneStore.contentHasLink(JSONObject("""{"kind":"text","text":"x","webpage":{"url":"https://x"}}""")))
-        assertTrue(ParvaneStore.contentHasLink(JSONObject("""{"kind":"text","entities":[{"type":"MessageEntityUrl","offset":0,"length":3}]}""")))
-        assertTrue(ParvaneStore.contentHasLink(JSONObject("""{"kind":"text","entities":[{"type":"text_url"}]}""")))
-        assertFalse(ParvaneStore.contentHasLink(JSONObject("""{"kind":"text","text":"plain","entities":[{"type":"MessageEntityBold"}]}""")))
-        assertFalse(ParvaneStore.contentHasLink(null))
+    fun linksInTextAreDecidedByEngine() {
+        val noLinks = JSONObject(allPerms.toString()).put("embed_links", false)
+        assertTrue(hidden(noLinks, JSONObject("""{"kind":"text","text":"x","webpage":{"url":"https://x"}}""")))
+        assertFalse(hidden(noLinks, JSONObject("""{"kind":"text","text":"plain"}""")))
+        assertFalse(hidden(allPerms, JSONObject("""{"kind":"text","text":"x","webpage":{"url":"https://x"}}""")))
+    }
+
+    @Test
+    fun noOwnContentKindTables() {
+        val src = listOf(File("src/main/java/org/drinkless/tdlib/ParvaneStore.kt"), File("libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt"))
+            .first { it.exists() }.readText()
+        assertFalse(src.contains("MEDIA_KINDS"))
+        assertFalse(src.contains("isContentAllowedForMember"))
     }
 
     @Test

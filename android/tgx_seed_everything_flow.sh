@@ -18,6 +18,11 @@ OUT="$(cd "$OUT" && pwd)"
 . "$HERE/../desktop/verify_lib.sh"
 . "$HERE/tgx_lib.sh"
 tgx_env
+# spec 035 T133 (tgx_migration_flow.sh): наполнение ПРЕЖНИМ выпуском (T008) — APK, шарды, desktop и конфиг NATS
+# исходной точки; PV_SEED_SAVE_X=1 — в конце ещё одна выгрузка X и копия каталога приложения (x-data.tar)
+[ -n "${PV_SEED_SHARD:-}" ] && SHARD="$PV_SEED_SHARD"
+[ -n "${PV_SEED_BIN:-}" ] && BIN="$PV_SEED_BIN"
+[ -n "${PV_SEED_APK:-}" ] && tgx_apk() { echo "$PV_SEED_APK"; }
 TGX_LOG="$OUT/logcat.txt"
 AUD="$OUT/audit"; SUMMARY="$OUT/seed-summary.txt"
 SB="$OUT/stack"; stack_start "$SB"; echo "STACK_SB=$SB"
@@ -129,6 +134,22 @@ dump_profile() { # dump_profile <имя> <workdir> <user>
 stop_pid "$BP"; dump_profile bob "$B" bob@local
 stop_pid "$CP"; dump_profile carol "$C" carol@local
 dump_profile alice2 "$A2" alice@local
+if [ "${PV_SEED_SAVE_X:-0}" = 1 ]; then
+  # Выгрузка «до» — последней, когда X принял всё от alice2; затем копия каталога приложения (ключ хранилища —
+  # в Keystore эмулятора: копия читается только тем же установленным приложением, без pm clear)
+  sleep 20
+  tgx_mark
+  tgx_cmd '{"op":"audit_dump"}' >/dev/null
+  LINE=$(tail -n "+$TGX_MARK" "$TGX_LOG" | grep -aoE "audit dump: -?[0-9]+ строк → [^ ]+" | tail -1)
+  DUMP_PATH=$(printf '%s' "$LINE" | sed 's/.*→ //')
+  [ -n "$DUMP_PATH" ] && a exec-out run-as "$TGX_PKG" cat "$DUMP_PATH" > "$AUD/android-alice-x.final.jsonl" 2>/dev/null
+  [ -s "$AUD/android-alice-x.final.jsonl" ] && ok "итоговая выгрузка X ($(wc -l <"$AUD/android-alice-x.final.jsonl") строк)" \
+    || bad "итоговой выгрузки X нет"
+  tgx_stop
+  timeout 120 adb exec-out run-as "$TGX_PKG" sh -c 'tar -cf - $(ls -A | grep -vxE "lib|cache|code_cache")' > "$OUT/x-data.tar" 2>/dev/null
+  [ "$(tar -tf "$OUT/x-data.tar" 2>/dev/null | grep -c 'v2-alice')" -gt 0 ] && ok "каталог X сохранён ($(du -h "$OUT/x-data.tar" | cut -f1))" \
+    || bad "каталог X не сохранён"
+fi
 tgx_stop
 python3 "$HERE/../scripts/migration_audit_server.py" --dump "$SB" -o "$AUD/server-android.jsonl" \
   && ok "выгрузка баз шардов ($(wc -l <"$AUD/server-android.jsonl") таблиц)" || bad "выгрузка баз не снята"

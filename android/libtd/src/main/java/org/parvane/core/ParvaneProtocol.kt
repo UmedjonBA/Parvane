@@ -50,16 +50,35 @@ object ParvaneProtocol {
         return JSONObject(nativeOwnChatMode(self, peer, enabled, opId, nowSec))
     }
 
-    /** v1-содержимое → Content v2 (null — вид не поддержан v2, идёт по v1). */
-    fun toV2(v1Json: String, replyTo: String = ""): JSONObject? {
+    /** spec 035 T136 (ENGINE-1): содержимое формата экспорта → Content (proto3-JSON) — разбор движка
+     *  (`contentOfWire`); null — не собрано. [replyTo] — uuid ответа. */
+    fun contentOfWire(wireJson: String, replyTo: String = ""): JSONObject? {
         ensureLoaded()
-        return nativeToV2(v1Json, replyTo).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+        val args = JSONObject().put("wire", wireJson)
+        if (replyTo.isNotEmpty()) args.put("replyTo", replyTo)
+        return nativeEngineStatic("contentOfWire", args.toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     }
 
-    /** Content v2 → v1-содержимое (null — не сообщение). */
-    fun fromV2(v2Json: String): JSONObject? {
+    /**
+     * GROUP-2 (spec 035 T136, ENGINE-1): скрыл бы приёмный фильтр содержимое [wire] автора с ролью [role] при правах
+     * группы по умолчанию [perms] — решает движок (`GroupFacts::hidden_for_role`), своей формулы у шва нет. Поле прав,
+     * которого нет в [perms], — «разрешено» (как сведения группы без полей прав по умолчанию); [perms] null — не скрыто.
+     */
+    fun groupContentHidden(perms: JSONObject?, role: String, wire: JSONObject): Boolean {
+        if (perms == null) return false
         ensureLoaded()
-        return nativeFromV2(v2Json).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+        val full = JSONObject()
+        for (k in listOf("send_messages", "send_media", "send_stickers_gifs", "send_polls", "embed_links", "invite_users", "pin_messages", "change_info"))
+            full.put(k, perms.optBoolean(k, true))
+        val out = nativeEngineStatic("groupContentHidden", JSONObject().put("perms", full).put("role", role).put("wire", wire).toString())
+        return out.trim() == "true"
+    }
+
+    /** Что содержимое значит (`contentView` движка: class, wire, replyTo, mutation); null — не разобрано. */
+    fun contentView(contentJson: String): JSONObject? {
+        ensureLoaded()
+        return nativeEngineStatic("contentView", JSONObject().put("content", contentJson).toString())
+            .takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     }
 
     /** proto3-JSON → base64 байтов сообщения протокола по полному имени типа ("" — не собрано). */
@@ -75,8 +94,8 @@ object ParvaneProtocol {
     val stateCodec = object : org.drinkless.tdlib.StateJournal.Codec {
         override fun encode(type: String, json: String) = ParvaneProtocol.encode(type, json)
         override fun decode(type: String, b64: String) = ParvaneProtocol.decode(type, b64)
-        override fun toV2(v1Json: String, replyTo: String) = ParvaneProtocol.toV2(v1Json, replyTo)?.toString() ?: ""
-        override fun fromV2(v2Json: String) = ParvaneProtocol.fromV2(v2Json)?.toString() ?: ""
+        override fun contentOfWire(wireJson: String, replyTo: String) = ParvaneProtocol.contentOfWire(wireJson, replyTo)?.toString() ?: ""
+        override fun wireOf(contentJson: String) = ParvaneProtocol.contentView(contentJson)?.optJSONObject("wire")?.toString() ?: ""
     }
 
     // ── проба очереди событий ядра (spec 035 T131): та же jni/event_queue.h, что у событий ядра на устройстве ──
@@ -101,12 +120,11 @@ object ParvaneProtocol {
     @JvmStatic private external fun nativeEventQueueProbe(count: Int, maxEvents: Int, slowMs: Int): String
     @JvmStatic private external fun nativeSessionEvent(eventJson: String, self: String): String
     @JvmStatic private external fun nativeOwnChatMode(self: String, peer: String, enabled: Boolean, opId: String, nowSec: Long): String
-    @JvmStatic private external fun nativeFromV2(v2Json: String): String
     @JvmStatic private external fun nativeEncode(type: String, json: String): String
     @JvmStatic private external fun nativeDecode(type: String, b64: String): String
     @JvmStatic private external fun nativeEngineVersion(): String
     @JvmStatic private external fun nativePackHash(filesJson: String): String
     @JvmStatic private external fun nativeRunConformanceVectors(suite: String, vectorsJson: String): String
     @JvmStatic private external fun nativeInterpretDirect(eventJson: String, self: String): String
-    @JvmStatic private external fun nativeToV2(v1Json: String, replyTo: String): String
+    @JvmStatic private external fun nativeEngineStatic(name: String, argsJson: String): String
 }

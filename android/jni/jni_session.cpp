@@ -10,6 +10,8 @@
 #include <parvane/v2_engine.h>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace pvjni {
@@ -299,6 +301,7 @@ bool handleSessionEvent(const json &ev) {
         return true;
     }
     if (type == "stateReady") {
+        historyHold(false); // модель открыта (перенос, если был, закончен) — журнал истории больше не ждёт
         historySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
         sectionsSessionChanged(); // «План», «Облако»: журнал состояния подключён
         emit(json{{"type", "state_ready"}});
@@ -412,6 +415,34 @@ void startSession() {
         LOGI("v2: ключ восстановления выдан — показ пользователю");
         emit(json{{"type", "recovery_key"}, {"key", key}});
     };
+    // spec 035 T137 (US1, contracts/migration.md): разовый перенос прежнего состояния в модель движка — слой android
+    // перечня, записи старых мест читает MigrateLegacy.kt; ход — событие `migration` (Kotlin: «Обновление…» X и тост)
+    cfg.migrationLayer = "android";
+    cfg.legacyRecords = [owner = me] { return legacyRecordsFromKotlin(storeDir(), owner); };
+    // Перенос ещё не сделан (каталог состояния прежнего вида без отметки) — журнал истории ждёт его конца
+    const auto stateDir = v2StateDir(me);
+    std::error_code fsec;
+    const bool migrationPending = std::filesystem::exists(stateDir + "/state", fsec)
+        && !std::filesystem::exists(stateDir + "/engine-migrated", fsec);
+    historyHold(migrationPending);
+    cfg.onMigration = [](const json &p) {
+        if (p.value("done", false)) historyHold(false); // и при неудаче: журнал истории не блокируется навсегда
+        LOGI("перенос: шаг %d из %d%s", p.value("point", 0), p.value("total", 7),
+             p.value("done", false) ? (p.value("failed", false) ? " — не закончен" : " — готово") : "");
+        json ev = p;
+        ev["type"] = "migration";
+        emit(ev);
+    };
+    if (g_debugBuild) {
+        // dev-хуки сценария переноса (как desktop PARVANE_MIGRATION_HALT/CHUNK): встать после точки M<n>, строки частями
+        const auto num = [](const char *path) {
+            std::ifstream f(path);
+            int v = 0;
+            return (f >> v) ? v : 0;
+        };
+        cfg.migrationHaltAt = num("/data/local/tmp/parvane-migration-halt");
+        cfg.migrationChunk = num("/data/local/tmp/parvane-migration-chunk");
+    }
     auto s = std::make_shared<parvane::v2::Session>(std::move(cfg));
     {
         std::lock_guard<std::mutex> lk(g_v2Mu);

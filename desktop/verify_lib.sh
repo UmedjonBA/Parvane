@@ -129,7 +129,7 @@ stack_up() {
   stack_reap   # хвост прошлого прогона на тех же портах
   local penv=() r
   for r in $PV_NATS_ROLES; do penv+=("PARVANE_$(echo "$r" | tr a-z A-Z)_PASS=$(nats_pass "$r")"); done
-  env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$PV_NATS_PORT" \
+  env "${penv[@]}" nats-server -c "${PV_NATS_CONF:-$ROOT/../backend/infra/nats/server.prod.conf}" -a 127.0.0.1 -p "$PV_NATS_PORT" \
     >"$SB/nats.log" 2>&1 & PIDS+=($!)
   wait_port "$PV_NATS_PORT" || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
   # headless-клиенты перелогиниваются ~1-2 раза/с с 127.0.0.1 — лимиты по IP

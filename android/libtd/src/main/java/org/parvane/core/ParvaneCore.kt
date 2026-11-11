@@ -54,6 +54,23 @@ object ParvaneCore {
         }
     }
 
+    /**
+     * spec 035 T137 (US1, contracts/migration.md): записи старых мест профиля для разового переноса в модель движка —
+     * ядро зовёт это само (`SessionConfig.legacyRecords`, поток сессии) при открытии модели с `legacy_present`.
+     * Читатель — [org.drinkless.tdlib.MigrateLegacy] (слой `android` перечня), открытый текст файлов — `storecrypt`
+     * ядра ([nativeStoreReadPlain], байты как есть: экспорт движка — не UTF-8). Пусто — ядро соберёт своё.
+     */
+    @JvmStatic
+    fun legacyRecords(dir: String, self: String): String = try {
+        val c = org.drinkless.tdlib.MigrateLegacy.collect(java.io.File(dir), self) { f -> nativeStoreReadPlain(f.path) }
+        c.unreadable.forEach { Log.w(TAG, "перенос: файл не открылся — $it") }
+        Log.i(TAG, "перенос: записей старых мест ${c.records.size}")
+        org.drinkless.tdlib.MigrateLegacy.toJson(c).put("layer", "android").toString()
+    } catch (e: Exception) {
+        Log.w(TAG, "перенос: старые места не прочитаны — ${e.message}")
+        ""
+    }
+
     private fun dispatch(event: JSONObject) {
         listeners.forEach { l ->
             try {
@@ -219,6 +236,10 @@ object ParvaneCore {
     fun previewFetch(url: String, timeoutMs: Int): JSONObject = JSONObject(nativePreviewFetch(url, timeoutMs))
     fun mapTile(z: Int, x: Int, y: Int): ByteArray = nativeMapTile(z, x, y) ?: ByteArray(0)
 
+    @JvmStatic private external fun nativeStoreReadPlain(path: String): ByteArray?
+    /** spec 035 T133: выгрузка модели движка после переноса (`auditDump` модели; пусто — модели нет или не debug). */
+    fun modelAuditDump(): String = nativeModelAuditDump()
+    @JvmStatic private external fun nativeModelAuditDump(): String
     @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray, debug: Boolean)
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String, cancelDeletion: Boolean): String
     @JvmStatic private external fun nativeServerInfo(): String

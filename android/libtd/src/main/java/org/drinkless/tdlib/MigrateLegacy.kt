@@ -62,8 +62,9 @@ object MigrateLegacy {
         return ""
     }
 
-    /** Собрать записи аккаунта [self] из каталога хранилища [dir]. [read] — открытый текст файла либо null (не открылся). */
-    fun collect(dir: File, self: String, read: (File) -> String?): Collected {
+    /** Собрать записи аккаунта [self] из каталога хранилища [dir]. [read] — открытый текст файла байтами как есть
+     *  (экспорт движка `state` — двоичный, не UTF-8) либо null (не открылся). */
+    fun collect(dir: File, self: String, read: (File) -> ByteArray?): Collected {
         if (self.isEmpty() || !dir.isDirectory) return Collected(emptyList(), emptyList())
         val rel = ArrayList<String>()
         dir.listFiles()?.forEach { f ->
@@ -76,8 +77,8 @@ object MigrateLegacy {
         for (r in rel) {
             val key = keyFor(r, self)
             if (key.isEmpty()) continue
-            val text = try { read(File(dir, r)) } catch (e: Exception) { null }
-            if (text == null) unreadable += key else records += Record(key, text.toByteArray(Charsets.UTF_8))
+            val bytes = try { read(File(dir, r)) } catch (e: Exception) { null }
+            if (bytes == null) unreadable += key else records += Record(key, bytes)
         }
         return Collected(records, unreadable)
     }
