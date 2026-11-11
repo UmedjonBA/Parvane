@@ -852,12 +852,17 @@
         "unknownNormal": "STUB — ответ и пересылка разрешены",
         "unknownCritical": "STUB_CRITICAL — заглушка «обновите приложение», ответ, правка и пересылка запрещены; в журнале — writeBlocked",
         "vectors": "proto/parvane/vectors/content/critical.json, proto/parvane/vectors/model/critical_journal.json, unknown_content_stub.json, features_text_fallback.json, proto/parvane/vectors/unknown/",
-        "engineTests": "backend/protocol/tests/kind_ranges.rs, critical_vectors.rs, unknown_scan.rs, model_vectors.rs"
+        "engineTests": "backend/protocol/tests/kind_ranges.rs, critical_vectors.rs, unknown_scan.rs, model_vectors.rs",
+        "clientNotes": {
+          "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts (content/kinds, content/critical); разбор — движок: v2/contentMap.ts без разбора видов (contentView / contentOfWire), v2/controller.ts (ev.view); критичная заглушка — store.ts (content.critical), EN+RU",
+          "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp; разбор — движок: desktop/parvane-core/src/v2_content.cpp (contentView, contentOfWire — своего разбора видов нет, сторож ENGINE-1 desktop); критичная заглушка — tdesktop parvane_client.cpp (isCriticalStub → lng_parvane_stub_critical), EN+RU",
+          "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt; критичная заглушка — ParvaneStore.kt (critical → stub_critical), SeamText.kt (EN+RU), тест CriticalStubTest.kt; разбор события ядра в ParvaneStore.kt — свой (it.fails ENGINE-1 android, T136 — в работе)"
+        }
       },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts (content/kinds, content/critical); разбор — движок: v2/contentMap.ts без разбора видов (contentView / contentOfWire), v2/controller.ts (ev.view); критичная заглушка — store.ts (content.critical), EN+RU",
-        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp; разбор — движок: desktop/parvane-core/src/v2_content.cpp (contentView, contentOfWire — своего разбора видов нет, сторож ENGINE-1 desktop); критичная заглушка — tdesktop parvane_client.cpp (isCriticalStub → lng_parvane_stub_critical), EN+RU",
-        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt; критичная заглушка — ParvaneStore.kt (critical → stub_critical), SeamText.kt (EN+RU), тест CriticalStubTest.kt; разбор события ядра в ParvaneStore.kt — свой (it.fails ENGINE-1 android, T136 — в работе)"
+        "web": "web/telegram-tt/src/api/parvane/protocol.vectors.test.ts",
+        "desktop": "desktop/parvane-core/tests/protocol_vectors_tests.cpp",
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolVectorsTest.kt"
       }
     },
     {
