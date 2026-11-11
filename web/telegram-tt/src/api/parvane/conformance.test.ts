@@ -1993,7 +1993,8 @@ describe('TASK-1: задание в чат — видимые сообщения
     // клиент без карточки показывает `text`
     const map = readRepo('backend/protocol/src/model/views.rs');
     r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
-    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp'))
+      .toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/include/parvane/messenger.h'))
       .toContain('const bool card = kind == "task_offer" || kind == "task_response" || kind == "cloud_invite"');
     const tests = readRepo('desktop/parvane-core/tests/v2_tests.cpp');
@@ -2114,7 +2115,8 @@ describe('CLOUD-1: приглашение в папку облака — вид�
     const map = readRepo('backend/protocol/src/model/views.rs');
     r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'cloud_invite\':');
-    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp'))
+      .toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite туда и обратно');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
@@ -2146,7 +2148,8 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
     const map = readRepo('backend/protocol/src/model/views.rs');
     r.kinds.forEach((kind) => expect(map).toContain(`"${kind}" => {`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'article\':');
-    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('engineCall("contentView", json{{"content", content}})');
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp'))
+      .toContain('engineCall("contentView", json{{"content", content}})');
     expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article → v2 с картинкой');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
@@ -3302,8 +3305,10 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     expect(client).not.toMatch(/lamport|stamp|"state\.(append|sync)"|->diff\(|->migrate\(/i);
     const session = readDesktopSession();
     expect(session).not.toMatch(/"state\.(append|sync)"|StateSession::open|state_->diff\(|state_->migrate\(/);
-    // Желаемое — модели (разница от показанного хостом), показ — из модели
-    expect(session).toContain('state_->apply(full, kinds, true, false, hasBase ? stateBase_ : json())');
+    // Желаемое — модели (разница от показанного хостом: снимок, от которого хост строил желаемое, иначе последний
+    // выданный), показ — из модели
+    expect(session).toContain('state_->apply(full, kinds, true, false, hasBase ? base : json())');
+    expect(session).toContain('(shown.is_object() && !shown.empty()) ? shown : stateBase_');
     const model = readRepo(`${coreSrc}/state_model.cpp`);
     expect(model).toContain('host_->step("stateApplyV1", args)');
     expect(model).toContain('host_->read("stateViewV1", json::object())');

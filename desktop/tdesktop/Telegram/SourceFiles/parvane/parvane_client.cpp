@@ -5202,6 +5202,9 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 			QFile(dest + u"/.used"_q).open(QIODevice::WriteOnly); // отметка использования для вытеснения
 			if (FeedCustomEmojiSet(session, rawName, dest, false)) {
 				session->data().stickers().notifyUpdated(Data::StickersType::Emoji);
+				// EMOJI-1: набор — от имени из ссылки, не от имени каталога (маркер verify_conformance_packs.sh)
+				LOG(("Parvane: эмодзи-пак «%1» из кэша принятых (каталог «%2»)")
+					.arg(rawName, QFileInfo(dest).fileName()));
 			}
 			g_emojiPackMaterialized.insert(rawName);
 			continue;
