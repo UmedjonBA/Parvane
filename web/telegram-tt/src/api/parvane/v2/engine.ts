@@ -105,6 +105,15 @@ export interface ModelHostDeps {
   log?: (message: string) => void;
 }
 
+/** Отказ открытия модели: данные на устройстве записаны более новой версией движка (`OPEN_STATE_TOO_NEW`, T117). Не
+ * `ErrorCode` сервера: обновить нужно приложение, а не из-за отказа сервера. */
+export const MODEL_TOO_NEW = 'MODEL_TOO_NEW';
+
+/** Код ошибки неудачного открытия модели по итогу (`OpenResult.state`). */
+export function modelOpenFailure(state: string) {
+  return state === 'OPEN_STATE_TOO_NEW' ? MODEL_TOO_NEW : 'ERROR_CODE_UNAVAILABLE';
+}
+
 /** Ошибка вызова модели: вид `ProtoError` (`{"error": …}`). */
 export class ModelError extends Error {
   constructor(readonly kind: string) {

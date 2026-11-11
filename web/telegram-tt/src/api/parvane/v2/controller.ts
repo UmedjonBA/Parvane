@@ -52,8 +52,8 @@ import {
   BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
 } from './control';
 import {
-  createModelSender, loadProtocol, MemoryModelStore, ModelHost, openStateModel, parseEngineError, secureModelStore,
-  stateViewOf,
+  createModelSender, loadProtocol, MemoryModelStore, MODEL_TOO_NEW, ModelHost, modelOpenFailure, openStateModel,
+  parseEngineError, secureModelStore, stateViewOf,
 } from './engine';
 import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
@@ -119,6 +119,8 @@ type Deps = {
   describeDevice?: () => string;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
   onUpgradeRequired: () => void;
+  /** Модель не открылась: данные устройства записаны более новой версией приложения (T117). */
+  onDataTooNew?: () => void;
   /** JWT не принят на соединении v2 — нужен повторный вход. */
   onAuthRejected?: () => void;
   /** Группа v2 появилась/изменилась (сведения — из проверенного журнала). */
@@ -794,8 +796,7 @@ export function createV2Controller(deps: Deps) {
     if (modelOpenState === 'OPEN_STATE_MIGRATION_NEEDED') await migrateLegacyEngine(target, legacy);
     if (modelOpenState !== 'OPEN_STATE_READY') {
       deps.log(`v2: модель не открылась (${modelOpenState || 'нет итога'})`);
-      const code = modelOpenState === 'OPEN_STATE_TOO_NEW' ? 'ERROR_CODE_UPGRADE_REQUIRED' : 'ERROR_CODE_UNAVAILABLE';
-      throw new V2Error(code);
+      throw new V2Error(modelOpenFailure(modelOpenState));
     }
     if (!offline) await target.saveRecord(MODEL_OPEN_RECORD, { deviceId, domain }).catch(() => undefined);
     notifyModelReady();
@@ -1401,7 +1402,7 @@ export function createV2Controller(deps: Deps) {
       // после вступления) — тоже повтор: иначе оно оставалось «вошедшим, но не готовым» до закрытия сокета
       const isConnectionLoss = !idConn?.isOpen && !(e instanceof V2Error);
       const isFatal = e instanceof V2Error
-        && (e.code === 'ERROR_CODE_REVOKED' || e.code === 'ERROR_CODE_UPGRADE_REQUIRED');
+        && (e.code === 'ERROR_CODE_REVOKED' || e.code === 'ERROR_CODE_UPGRADE_REQUIRED' || e.code === MODEL_TOO_NEW);
       const isJoinedNotReady = !needsLinking && !ready && Boolean(client) && !isFatal;
       if (joinRetry || isConnectionLoss || isJoinedNotReady) {
         joinRetry = false;
@@ -1409,6 +1410,8 @@ export function createV2Controller(deps: Deps) {
       }
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
+      // Данные на устройстве записаны более новой версией (T117): обновить приложение, иначе модель не откроется
+      if (e instanceof V2Error && e.code === MODEL_TOO_NEW) deps.onDataTooNew?.();
       // Сервер не принял JWT (истёк, отозван). Без соединения v1 отказ виден только
       // здесь (E6-1): повторять тем же токеном бессмысленно — нужен повторный вход
       if (e instanceof V2Error && e.code === 'ERROR_CODE_REVOKED') deps.onAuthRejected?.();
