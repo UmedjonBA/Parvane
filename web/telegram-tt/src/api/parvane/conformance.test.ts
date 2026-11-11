@@ -1227,9 +1227,8 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     ].map(readRepo).join('\n');
     expect(engine).not.toContain(`"${r.deliverMethod}"`);
     expect(engine).not.toContain(r.listEntry);
-    expect(engine).not.toMatch(
-      /mod legacy_v1|legacy_v1::|Event::LegacyV1|Item::LegacyV1|LegacyV1Record|import_v1_account|LegacyDevices|legacy_devices/,
-    );
+    expect(engine).not.toMatch(/mod legacy_v1|legacy_v1::|Event::LegacyV1|Item::LegacyV1|LegacyV1Record/);
+    expect(engine).not.toMatch(/import_v1_account|LegacyDevices|legacy_devices/);
     // Схема: поле инбокса 12 и поле журнала устройств 7 — reserved, сообщений и метода нет
     const msgProto = readRepo('proto/parvane/msg/v2/msg.proto');
     expect(msgProto).toMatch(/reserved 12;\s+reserved "legacy_v1";/);
