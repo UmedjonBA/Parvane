@@ -79,10 +79,12 @@ const CATCH_UP_MS = 48 * 60 * 60 * 1000;
 const MAX_UPCOMING = 64;
 
 /** Для провайдера (кусок грузится лениво): из JSON движка — ближайшие и наступившие неотмеченные. */
-export function readReminders(json: string, nowMs: number) {
+export function readReminders(json: string, nowMs: number, freshMs: number) {
   const state = fromEngineState(JSON.parse(json) as EngineState);
   return {
     upcoming: getReminders(state, nowMs, nowMs + HORIZON_MS).slice(0, MAX_UPCOMING),
     due: getDueReminders(state, nowMs, nowMs - CATCH_UP_MS),
+    // Наступившие недавно — и отмеченные другим устройством: звенят на каждом открытом
+    fresh: getReminders(state, nowMs - freshMs, nowMs),
   };
 }

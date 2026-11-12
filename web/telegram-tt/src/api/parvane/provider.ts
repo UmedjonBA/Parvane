@@ -42,7 +42,9 @@ import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
-import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
+import {
+  clearWorkerReminders, isWorkerReminderShown, markWorkerReminderShown, saveWorkerReminders,
+} from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
 import {
@@ -1863,6 +1865,7 @@ const reminderScheduler = createReminderScheduler({
   setAlarms: (atMs) => v2Controller.pushSetAlarms(atMs),
   saveForWorker: (items) => saveWorkerReminders(items),
   markShown: (key) => markWorkerReminderShown(key),
+  isShown: (key) => isWorkerReminderShown(key),
   canKeepText: async () => !store.self || !(await hasStoragePin(store.self).catch(() => true)),
   formatMessage: formatReminderMessage,
   log: logDebug,

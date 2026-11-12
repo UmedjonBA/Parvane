@@ -2,7 +2,8 @@
 // (1) отдаёт серверу моменты ближайших напоминаний (`push.alarm.set`) и кладёт их тексты для service worker — так
 // закрытое приложение будит сервер, а показывает service worker; (2) наступившее показывает само и пишет одним
 // сообщением в «Избранное». Два открытых устройства не пишут дважды: перед записью — случайная пауза и свежий
-// синк «Плана», затем отметка «напомнено» (`reminded`) в его данных; отмеченное другим устройством только звенит.
+// синк «Плана», затем отметка «напомнено» (`reminded`) в его данных; отмеченное другим устройством только звенит
+// (свежее — в пределах `FRESH_MS`, если на этом устройстве ещё не показано).
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { WorkerReminder } from '../../util/reminderStore';
 
@@ -17,6 +18,8 @@ type Deps = {
   setAlarms: (atMs: number[]) => Promise<unknown>;
   saveForWorker: (items: WorkerReminder[]) => Promise<void>;
   markShown: (key: string) => Promise<void>;
+  // Уже показано на этом устройстве, в том числе до перезагрузки вкладки
+  isShown: (key: string) => Promise<boolean>;
   // Текст напоминания можно хранить для service worker (нет PIN хранилища)
   canKeepText: () => Promise<boolean>;
   formatMessage: (reminder: PlannerReminder) => string;
@@ -39,7 +42,8 @@ export function createReminderScheduler(deps: Deps) {
   let module: Promise<ReminderModule> | undefined;
   let lastAlarms = '';
   let isTicking = false;
-  // Наступившие, которые это устройство уже обработало (позвонило и, может быть, записало)
+  // Наступившие, которые это устройство уже обработало: позвонило / взялось записать в «Избранное»
+  const rung = new Set<string>();
   const handled = new Set<string>();
 
   function loadModule() {
@@ -51,7 +55,7 @@ export function createReminderScheduler(deps: Deps) {
     const json = deps.stateJson();
     if (!json || !deps.isReady()) return undefined;
     const { readReminders } = await loadModule();
-    return readReminders(json, Date.now());
+    return readReminders(json, Date.now(), FRESH_MS);
   }
 
   async function publishUpcoming(upcoming: PlannerReminder[]) {
@@ -91,14 +95,17 @@ export function createReminderScheduler(deps: Deps) {
       const result = await read();
       if (!result) return;
       await publishUpcoming(result.upcoming);
-      const now = Date.now();
+      // Звенит свежее, даже если другое устройство уже отметило его «напомнено» (его такт мог прийти раньше)
+      for (const reminder of result.fresh) {
+        if (rung.has(reminder.key)) continue;
+        rung.add(reminder.key);
+        if (await deps.isShown(reminder.key).catch(() => false)) continue;
+        deps.ring(reminder);
+        void deps.markShown(reminder.key).catch(() => undefined);
+      }
       for (const reminder of result.due) {
         if (handled.has(reminder.key)) continue;
         handled.add(reminder.key);
-        if (now - reminder.at <= FRESH_MS) {
-          deps.ring(reminder);
-          void deps.markShown(reminder.key).catch(() => undefined);
-        }
         void writeDue(reminder).catch((e: unknown) => {
           handled.delete(reminder.key);
           deps.log(`напоминания: в «Избранное» не записано: ${String(e)}`);
@@ -131,6 +138,7 @@ export function createReminderScheduler(deps: Deps) {
     timer = undefined;
     changeTimer = undefined;
     lastAlarms = '';
+    rung.clear();
     handled.clear();
   }
 

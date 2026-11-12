@@ -10,9 +10,10 @@ import { createReminderScheduler } from './reminders';
 const shared = { reminded: new Set<string>(), due: [] as PlannerReminder[], upcoming: [] as PlannerReminder[] };
 
 vi.mock('../../components/parvane/planner/plannerReminders', () => ({
-  readReminders: () => ({
+  readReminders: (json: string, now: number, freshMs: number) => ({
     upcoming: shared.upcoming,
     due: shared.due.filter(({ key }) => !shared.reminded.has(key)),
+    fresh: shared.due.filter(({ at }) => at <= now && now - at <= freshMs),
   }),
 }));
 
@@ -28,6 +29,7 @@ function device() {
   const rung: string[] = [];
   const alarms: number[][] = [];
   const saved: unknown[] = [];
+  const shown = new Set<string>();
   const scheduler = createReminderScheduler({
     stateJson: () => '{}',
     isReady: () => true,
@@ -49,7 +51,11 @@ function device() {
       saved.push(items);
       return Promise.resolve();
     },
-    markShown: () => Promise.resolve(),
+    markShown: (key) => {
+      shown.add(key);
+      return Promise.resolve();
+    },
+    isShown: (key) => Promise.resolve(shown.has(key)),
     canKeepText: () => Promise.resolve(true),
     formatMessage: ({ title }) => `⏰ ${title}`,
     log: () => undefined,
@@ -100,6 +106,29 @@ describe('планировщик напоминаний', () => {
     expect(shared.reminded.has('t1@2026-10-20@15')).toBe(true);
     a.scheduler.stop();
     b.scheduler.stop();
+  });
+
+  it('отмеченное другим устройством до такта этого — всё равно звенит, но не пишется второй раз', async () => {
+    shared.due = [reminder({})];
+    shared.reminded.add('t1@2026-10-20@15');
+    const a = device();
+    a.scheduler.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(a.rung).toEqual(['t1@2026-10-20@15']);
+    expect(a.sent).toEqual([]);
+    a.scheduler.stop();
+  });
+
+  it('показанное на устройстве после перезапуска не звенит снова', async () => {
+    shared.due = [reminder({})];
+    const a = device();
+    a.scheduler.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+    a.scheduler.stop();
+    a.scheduler.start();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(a.rung).toEqual(['t1@2026-10-20@15']);
+    a.scheduler.stop();
   });
 
   it('пропущенное без приложения не звенит, но дописывается в «Избранное»', async () => {

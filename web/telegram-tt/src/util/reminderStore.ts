@@ -99,6 +99,16 @@ export async function takeDueWorkerReminders(now: number): Promise<WorkerReminde
   }
 }
 
+/** Страница: показано ли напоминание на этом устройстве (открытым приложением или service worker). */
+export async function isWorkerReminderShown(key: string) {
+  const db = await openDb();
+  try {
+    return (await read<string[]>(db, SHOWN_RECORD) || []).includes(key);
+  } finally {
+    db.close();
+  }
+}
+
 /** Страница: напоминание уже показано (открытым приложением) — service worker его не повторит. */
 export async function markWorkerReminderShown(key: string) {
   const db = await openDb();
