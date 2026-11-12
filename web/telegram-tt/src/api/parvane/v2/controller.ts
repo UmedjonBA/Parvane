@@ -982,6 +982,8 @@ export function createV2Controller(deps: Deps) {
   /** `dest` — сервер объекта запроса (spec 028, FED-1): свой сервер перешлёт запрос чужому. */
   async function call(chan: Chan, method: string, body: Uint8Array, dest?: string): Promise<Uint8Array> {
     const to = destFor(dest, serverDomain);
+    // На диске раньше отправки: запрос мог подготовить `clientCall`, чьё состояние ещё ждёт отложенной записи
+    await host?.flushBeforeSend().catch(() => undefined);
     if (chan === 'anon') return l2Ticker.submit(method, body, to);
     if (!idConn) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     return idConn.request(method, body, undefined, undefined, to);

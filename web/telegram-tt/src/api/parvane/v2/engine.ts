@@ -263,6 +263,18 @@ export class ModelHost {
     return this.run('flush', {});
   }
 
+  /** Перед запросом серверу: отложенное изменённое — на диск (подготовка отправки двигает цепочки ключей Olm, и
+   * перезагрузка вкладки после ушедшего запроса, но до отложенной записи, шифровала бы следующее сообщение уже
+   * израсходованным звеном — получатель его отвергает). Из обработчика изменений ждать нельзя — только в очередь. */
+  flushBeforeSend(): Promise<unknown> {
+    if (this.closed || !this.flushTimer) return Promise.resolve();
+    if (this.inDelta) {
+      void this.flush().catch(() => undefined);
+      return Promise.resolve();
+    }
+    return this.flush();
+  }
+
   /** Записать изменённое отложенно (debounce 400 мс, не дольше 2 с от первого изменения). */
   scheduleFlush() {
     if (this.closed) return;
