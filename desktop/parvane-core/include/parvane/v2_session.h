@@ -768,6 +768,8 @@ private:
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;
     std::map<std::string, std::string> publishedAvatarKeys_; // hex группы → секрет фото, отданный хосту
+    std::set<std::string> lastDriveChangeKinds_; // виды изменений модели последнего шага (журнал «событий 0»)
+    std::set<std::string> awaitingAvatarKey_; // hex групп: отданы хосту с частным фото, секрета ещё нет (GPHOTO-1)
     std::map<std::string, int> pendingRequests_; // hex группы → число заявок на вступление
     // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение).
     std::set<std::string> ephChats_;

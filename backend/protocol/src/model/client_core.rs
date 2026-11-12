@@ -196,6 +196,16 @@ impl Engine {
             Ok(events) => {
                 self.dirty.client = true;
                 self.dirty.ack = true;
+                // Пустой итог: повтор, конверт ждёт ключей эпохи либо отвергнут (`last_error`) — причину хосту
+                if events.is_empty() {
+                    let detail = c
+                        .last_error
+                        .take()
+                        .map(|e| format!("{e:?}"))
+                        .or_else(|| (c.pending_group_len() > 0).then(|| format!("ждут ключей эпохи: {}", c.pending_group_len())))
+                        .unwrap_or_default();
+                    w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "record_quiet".into(), detail }));
+                }
                 self.host_events(events, w);
                 true
             }
@@ -205,8 +215,11 @@ impl Engine {
                 self.pending_inbox.push(rec);
                 false
             }
-            Err(ClientError::Proto(_)) => {
+            // Запись отвергнута (повтор, подделка, сломанное) — хосту уведомлением с причиной: молча пропавшая
+            // запись (секрет фото группы под нагрузкой, 12 ноя 2026) иначе не разобрать
+            Err(ClientError::Proto(e)) => {
                 self.dirty.client = true;
+                w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "record_dropped".into(), detail: format!("{e:?}") }));
                 true
             }
         }

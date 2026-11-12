@@ -1206,6 +1206,7 @@ void Session::noteOpenLocked(const engine::Step &st) {
 // подтверждение инбокса уходит только после них (SYNC-1, OPT-024).
 bool Session::driveLocked(const engine::Step &first, std::vector<json> *events) {
     bool ok = true;
+    lastDriveChangeKinds_.clear();
     std::vector<json> local;
     auto &out = events ? *events : local;
     std::deque<json> queue;
@@ -1220,6 +1221,16 @@ bool Session::driveLocked(const engine::Step &first, std::vector<json> *events) 
         batches += st.batches;
         counters::get().persist += st.batches;
         for (const auto &ch : st.changes) {
+            if (ch.is_object() && !ch.empty()) lastDriveChangeKinds_.insert(ch.begin().key());
+            if (ch.contains("notice") && ch["notice"].is_object()
+                && ch["notice"].value("kind", std::string()) == "record_dropped") {
+                log("запись инбокса отвергнута движком: " + ch["notice"].value("detail", std::string()));
+            }
+            if (ch.contains("notice") && ch["notice"].is_object()
+                && ch["notice"].value("kind", std::string()) == "record_quiet"
+                && !ch["notice"].value("detail", std::string()).empty()) {
+                log("запись инбокса без событий: " + ch["notice"].value("detail", std::string()));
+            }
             if (ch.contains("client_events") && ch["client_events"].is_object()) {
                 const auto list = json::parse(ch["client_events"].value("json", std::string("[]")), nullptr, false);
                 if (list.is_array()) {
@@ -1228,7 +1239,10 @@ bool Session::driveLocked(const engine::Step &first, std::vector<json> *events) 
             }
             if (ch.contains("needs") && ch["needs"].is_object() && ch["needs"].value("kind", std::string()) == "client") {
                 const auto d = ch["needs"].value("detail", std::string());
-                if (!d.empty() && std::find(needs.begin(), needs.end(), d) == needs.end()) needs.push_back(d);
+                if (!d.empty() && std::find(needs.begin(), needs.end(), d) == needs.end()) {
+                    needs.push_back(d);
+                    log("модель ждёт: " + d);
+                }
             }
         }
         for (const auto &r : st.requests) queue.push_back(r);
@@ -1654,7 +1668,12 @@ void Session::openPendingRecords() {
         counters::get().inboxPersist += lastDriveBatches_;
         statRecords_ += batch.size();
         statPersists_ += lastDriveBatches_;
-        log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total));
+        std::string kinds;
+        if (total == 0) {
+            for (const auto &k : lastDriveChangeKinds_) kinds += (kinds.empty() ? " (изменения: " : ", ") + k;
+            if (!kinds.empty()) kinds += ")";
+        }
+        log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total) + kinds);
         reciprocateKeysLocked(); // T185: записи могли принести ключ участника группы
     }
 }
@@ -2318,7 +2337,8 @@ void Session::absorbLocked(std::vector<json> events) {
     // PV-005 (GPHOTO-1): секрет фото частной группы приходит отдельным конвертом GroupAvatarKey ПОСЛЕ записи SetInfo
     // (движок отдаёт его сменой группы без новой записи журнала) — сведения, отданные хосту по журналу, были ещё без
     // ключа: фото не открывалось. После разбора — сведения заново тем группам, у которых ключ сменился.
-    std::set<std::string> avatarCheck;
+    // и группы, отданные хосту с частным фото без секрета, — секрет мог прийти путём без события группы
+    std::set<std::string> avatarCheck(awaitingAvatarKey_.begin(), awaitingAvatarKey_.end());
     for (const auto &ev : events) {
         if (ev.is_object() && ev.value("type", std::string()) == "groupChanged" && ev.contains("group")
             && ev["group"].is_object()) {
@@ -2457,6 +2477,7 @@ std::vector<std::string> Session::groupMembersLocked(const std::string &hex) {
 void Session::syncGroupLocked(const std::string &hex, const std::string &inviteUrl) {
     if (!client_) return;
     syncingGroups_.insert(hex);
+    const auto startVersion = client_->groupVersion(hex);
     try {
         for (int page = 0; page < kGroupSyncPages; ++page) {
             const auto before = client_->groupVersion(hex);
@@ -2490,6 +2511,19 @@ void Session::syncGroupLocked(const std::string &hex, const std::string &inviteU
     }
     absorbLocked(std::move(pending));
     persistLocked();
+    // Журнал догнан: записи инбокса, отложенные моделью до этой версии (конверт эпохи впереди журнала — секрет фото
+    // группы после своей SetInfo), — заново. Без этого запись ждала до следующего добора, а записи за ней — в очереди
+    // за ней (12 ноя 2026, e2e cross_client под нагрузкой: «секрета фото группы ещё нет» навсегда)
+    if (host_ && client_->groupVersion(hex) != startVersion) {
+        post([this] {
+            {
+                std::lock_guard<std::recursive_mutex> lk(engineMu_);
+                if (!client_ || !host_) return;
+                driveLocked(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_EVENT"}, {"method", "retry"}}), nullptr);
+            }
+            flush();
+        });
+    }
 }
 
 void Session::resyncGroupLocked(const std::string &hex) {
@@ -2528,6 +2562,11 @@ void Session::publishGroupLocked(const std::string &hex) {
         info["pendingRequests"] = it->second;
     }
     publishedAvatarKeys_[hex] = g->value("avatarKey", std::string());
+    if (!g->value("avatarKeyId", std::string()).empty() && g->value("avatarKey", std::string()).empty()) {
+        awaitingAvatarKey_.insert(hex);
+    } else {
+        awaitingAvatarKey_.erase(hex);
+    }
     outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", info}});
     // Новая ссылка, новый админ — секреты своих ссылок ведущим приглашения
     shareInvitesLocked(hex);
