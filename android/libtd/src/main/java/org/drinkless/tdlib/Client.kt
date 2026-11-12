@@ -1571,6 +1571,8 @@ class Client private constructor(
     // модальным окном X; без оверлея (тесты шва) — как раньше
     /** Идёт разовый перенос данных (spec 035 T137): «соединение» X не перебивает «Обновление…». */
     @Volatile private var migrating = false
+    /** Последнее состояние связи от ядра: после переноса шапка возвращается к нему (событие «ready» могло прийти во время переноса). */
+    @Volatile private var connectionReady = false
     private fun serviceNotice(key: String, text: String) {
         if (key.startsWith("parvane_") && noticeSink?.invoke(text) == true) return
         postUpdate(TdApi.UpdateServiceNotification(key, TdApi.MessageText(TdApi.FormattedText(text, arrayOf()), null, null)))
@@ -3590,12 +3592,13 @@ class Client private constructor(
                 migrating = !done
                 Log.i(TAG, "перенос данных: шаг ${event.optInt("point")} из ${event.optInt("total", 7)}" +
                     if (done) (if (event.optBoolean("failed")) " — не закончен" else " — готово") else "")
-                postUpdate(TdApi.UpdateConnectionState(if (done) TdApi.ConnectionStateConnecting() else TdApi.ConnectionStateUpdating()))
+                postUpdate(TdApi.UpdateConnectionState(ConnectionHeader.afterMigrationStep(done, connectionReady)))
             }
             "connection" -> {
-                if (event.optString("state") == "ready") upgrade.onConnected() // v1 снова принимает
-                if (migrating && event.optString("state") != "ready") return
-                postUpdate(TdApi.UpdateConnectionState(if (event.optString("state") == "ready") TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
+                connectionReady = event.optString("state") == "ready"
+                if (connectionReady) upgrade.onConnected() // v1 снова принимает
+                val state = ConnectionHeader.onConnection(connectionReady, migrating) ?: return
+                postUpdate(TdApi.UpdateConnectionState(state))
             }
         }
     }
