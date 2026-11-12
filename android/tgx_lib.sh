@@ -93,6 +93,15 @@ tgx_start() {
   local alive; alive="$(a shell pidof "$TGX_PKG" 2>/dev/null | tr -d '\r')"
   if [ -n "$alive" ]; then echo "tgx_start: X уже запущен (pid $alive) — останавливаю" >&2; tgx_stop; fi
   a logcat -c
+  # Процесс, поднятый заново между остановкой и очисткой (служба связи, приём push), начинал сессию до logcat -c —
+  # её строк («v2: готов») в журнале сценария не было (12 ноя 2026, m15 tgx_perf_flow: «сессия не поднялась»)
+  local n
+  for n in 1 2 3; do
+    alive="$(a shell pidof "$TGX_PKG" 2>/dev/null | tr -d '\r')"
+    [ -z "$alive" ] && break
+    echo "tgx_start: X поднялся снова (pid $alive) до запуска сценария — останавливаю ($n)" >&2
+    tgx_stop; a logcat -c
+  done
   adb logcat -v time >> "$TGX_LOG" 2>&1 & TGX_LCP=$!
   a shell am start -n "$TGX_PKG/org.thunderdog.challegram.MainActivity" >/dev/null 2>&1
 }

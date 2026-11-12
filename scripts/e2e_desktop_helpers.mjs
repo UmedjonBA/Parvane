@@ -3,8 +3,10 @@
 // Используют e2e_web_cross_client.mjs, e2e_web_cross_emoji.mjs и другие.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, symlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync, readFileSync, symlinkSync, writeFileSync,
+} from 'node:fs';
+import { basename, join } from 'node:path';
 
 export const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
   || new URL('../desktop/build-probe/bin/Telegram', import.meta.url).pathname;
@@ -91,6 +93,15 @@ export async function waitDesktopLog(workdir, pattern, timeoutMs, child, { since
       throw new Error(`desktop exited with code ${child.exitCode} while waiting for ${pattern}`);
     }
     await new Promise((resolve) => { setTimeout(resolve, 1000); });
+  }
+  // Полный журнал — в каталог логов стека (workdir во /tmp раннер стирает)
+  const dir = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+  if (dir) {
+    try {
+      writeFileSync(join(dir, `desktop-${basename(workdir)}-log.txt`), readDesktopLog(workdir));
+    } catch {
+      // Журнал — для разбора, сценарий падает и без него
+    }
   }
   throw new Error(`Timed out waiting desktop log ${pattern}; tail:\n${readDesktopLog(workdir).slice(-2000)}`);
 }

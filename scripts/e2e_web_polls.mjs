@@ -49,8 +49,20 @@ async function openGroupChat(page, title) {
 
 
 async function openPollModal(page) {
-  await page.getByRole('button', { name: 'Add an attachment' }).click();
-  await page.getByRole('menuitem', { name: 'Poll' }).click();
+  // Под нагрузкой меню вложений (открытие по наведению и по клику) могло закрыться и открыться снова — пункт
+  // «не стабилен» все 30 с; повтор с Escape (12 ноя 2026, m15: polls красный 1 из 2 при 4 параллельных)
+  for (let attempt = 1; ; attempt += 1) {
+    await page.getByRole('button', { name: 'Add an attachment' }).click();
+    try {
+      await page.getByRole('menuitem', { name: 'Poll' }).click({ timeout: 8000 });
+      break;
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      // Escape — только при открытом меню: без него Escape закрыл бы чат
+      if (await page.getByRole('menuitem', { name: 'Poll' }).isVisible()) await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+    }
+  }
   const questionInput = page.getByLabel('Ask a Question');
   await questionInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return questionInput;

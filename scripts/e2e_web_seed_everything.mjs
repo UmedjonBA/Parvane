@@ -267,8 +267,10 @@ try {
   await step('черновик', () => api(a, 'saveDraft', {
     chat: `$chat:${NICK.carol}`, draft: { text: { text: 'Черновик про вымышленный пикник', entities: [] } },
   }));
+  // Срок — через год: сид живёт неделями, и отложенное «через 3 дня» к прогону переноса уже уходило (сверка видела
+  // «потеряно отложенное, добавлено отправленное»)
   await step('отложенное', () => api(a, 'sendMessage', {
-    chat: `$chat:${NICK.bob}`, text: 'Отложенное выдуманное напоминание', scheduledAt: Math.floor(Date.now() / 1000) + 3 * 86400,
+    chat: `$chat:${NICK.bob}`, text: 'Отложенное выдуманное напоминание', scheduledAt: Math.floor(Date.now() / 1000) + 365 * 86400,
   }));
   await step('закреп чата', () => api(a, 'toggleChatPinned', { chat: `$chat:${NICK.bob}`, shouldBePinned: true }));
   await step('отметка «непрочитано» и мьют', async () => {
