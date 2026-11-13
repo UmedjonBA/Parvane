@@ -33,6 +33,11 @@ stop_pid "$PA"
 grep -qa "перенесён в хранилище движка" "$AL" && bad "прежняя версия переносила файлы" || ok "прежняя версия — без переноса"
 [ -e "$STATE/device" ] && [ -e "$STATE/key" ] && [ ! -e "$STATE/host" ] \
   && ok "профиль прежней версии: файлы storecrypt, хранилища файлов нет" || bad "профиль не похож на прежнюю версию"
+# spec 036 T031: файлы tdata/parvane-* вне каталога состояния — тоже прежние файлы storecrypt
+TD="$A/td/tdata"
+[ -e "$TD/parvane-session.txt" ] && [ -e "$TD/parvane-v2-ids.txt" ] && [ ! -e "$TD/parvane-host" ] \
+  && ok "tdata прежней версии: файлы storecrypt (учётные данные, журнал id), хранилища tdata нет" \
+  || bad "tdata не похож на прежнюю версию"
 
 # ── новая версия: перенос при первом запуске ──────────────────────────────────
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOSEND_V2=bob@local:после-переноса-$S")
@@ -49,7 +54,14 @@ wait_log "$AL" "история: воспроизведено [1-9][0-9]* соо�
   && ok "история до переноса на месте" || bad "истории до переноса нет"
 wait_log "$AL" "папки восстановлены: [1-9]|(журнал состояния|личное состояние при запуске) → папки" 30 \
   && ok "папка на месте" || bad "папки нет"
-grep -qa "не перенесён\|в карантине хранилища" "$AL" && bad "есть непереносимые файлы" || ok "все файлы перенесены без карантина"
+wait_log "$AL" "хранилище tdata: файл перенесён в хранилище движка: parvane-session.txt" 30 \
+  && ok "учётные данные tdata перенесены" || bad "учётные данные tdata не перенесены"
+wait_log "$AL" "хранилище tdata: файл перенесён в хранилище движка: parvane-v2-ids.txt" 60 \
+  && ok "журнал id (дозапись строками) перенесён" || bad "журнал id не перенесён"
+grep -qa "не перенесён\|в карантине хранилища\|испорчен — в карантине" "$AL" && bad "есть непереносимые файлы" || ok "все файлы перенесены без карантина"
+[ -e "$TD/parvane-session.txt.migrated" ] && [ ! -e "$TD/parvane-session.txt" ] && [ -d "$TD/parvane-host" ] \
+  && [ -e "$TD/parvane-v2-ids.txt.migrated" ] && [ -d "$TD/parvane-host-account" ] \
+  && ok "tdata: прежние файлы — .migrated, записи — в хранилищах parvane-host*" || bad "раскладка tdata после переноса не та"
 [ -e "$STATE/device.migrated" ] && [ ! -e "$STATE/device" ] && [ -d "$STATE/host" ] \
   && ok "прежние файлы — .migrated, данные — в хранилище движка" || bad "раскладка после переноса не та"
 grep -rqa --exclude='log*.txt' --exclude-dir=DebugLogs "после-переноса-$S" "$A/td/tdata" \

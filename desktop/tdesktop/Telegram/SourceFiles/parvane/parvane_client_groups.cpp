@@ -53,40 +53,6 @@ void applyAvatar(not_null<PeerData*> peer, const QString &address) {
 		Images::FromImageInMemory(it.value(), "JPG", QByteArray()));
 }
 
-// Время первого появления группы на этом устройстве (main): строке списка чатов нужна дата, а у группы без
-// сообщений её нет — tdesktop такой чат не показывает (web показывает сразу, spec 030). Дата хранится, чтобы
-// пустая группа не всплывала наверх при каждом запуске; первое же сообщение её перезапишет.
-[[nodiscard]] TimeId GroupFirstSeen(const QString &gid) {
-	static auto loadedFrom = QString();
-	static auto seen = QHash<QString, TimeId>();
-	const auto path = cWorkingDir() + u"tdata/parvane-groups-seen.json"_q;
-	// Файл — аккаунта (ревью 21 окт, вечер): другой аккаунт — перечитать, память прежнего не переносить
-	const auto key = path + u'\n' + SelfAddress();
-	if (loadedFrom != key) {
-		loadedFrom = key;
-		seen.clear();
-		const auto j = nlohmann::json::parse(StoreRead(path).toStdString(), nullptr, false);
-		if (j.is_object()) {
-			for (const auto &[key, value] : j.items()) {
-				if (value.is_number_integer()) {
-					seen.insert(QString::fromStdString(key), TimeId(value.get<std::int64_t>()));
-				}
-			}
-		}
-	}
-	if (const auto i = seen.constFind(gid); i != seen.constEnd()) {
-		return *i;
-	}
-	const auto now = base::unixtime::now();
-	seen.insert(gid, now);
-	auto j = nlohmann::json::object();
-	for (auto i = seen.cbegin(); i != seen.cend(); ++i) {
-		j[i.key().toStdString()] = std::int64_t(i.value());
-	}
-	StoreWrite(path, QByteArray::fromStdString(j.dump()));
-	return now;
-}
-
 // Синтезирует (идемпотентно) базовую группу как ChatData, чтобы она появилась в
 // списке диалогов. gid — group_id (адрес переписки), name — заголовок,
 // memberCount — число участников (для «N members»). Регистрирует chatId↔gid.
@@ -135,9 +101,9 @@ ChatData *ensureGroupChat(
 		if (!history->unreadCountKnown()) {
 			history->setUnreadCount(0);
 		}
-		if (!history->chatListTimeId()) {
-			history->setChatListTimeId(GroupFirstSeen(gid)); // группа без сообщений — тоже в списке (spec 030)
-		}
+		// Место в списке — модели (spec 036 T030): группа без сообщений стоит временем появления в списке модели
+		// (`ChatView.order`); вид списка мог прийти раньше сведений группы — применить его сейчас
+		crl::on_main(session, [gid] { ApplyModelChatFor(gid); });
 		LOG(("Parvane: группа синтезирована %1 (%2)").arg(gid, title));
 		// Личный канал контактов, указывающий на эту группу, теперь можно
 		// показать — перерисовать секцию профиля.

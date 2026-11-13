@@ -129,7 +129,7 @@ void mkdirs(const std::string &dir) {
 // ── spec 036 T031: файлы каталога состояния — в хранилище движка (`HostFiles`, вид host-file) ─────────────────
 // Каталог `<stateDir>/host`, ключ устройства — ключ storecrypt (тот же секрет ОС). Прежний файл storecrypt
 // переносится при первом обращении к нему (отметка, сверка, `.migrated`); не перенёсся — работа с прежним файлом,
-// как раньше (данные не теряются). Включает хост (`Session::useHostFiles`): android пока на прежних файлах.
+// как раньше (данные не теряются). Включает хост (`Session::useHostFiles`): desktop и android (spec 036 T036).
 std::atomic<bool> g_hostFilesOn{false};
 std::mutex g_hostFilesMu;
 struct HostFilesDir {
@@ -208,6 +208,19 @@ void Session::useHostFiles(bool on, std::function<void(const std::string &)> log
     std::lock_guard<std::mutex> lk(g_hostFilesMu);
     g_hostFilesOn = on;
     g_hostFilesLog = std::move(log);
+}
+
+std::string Session::readStateFileIn(const std::string &stateDir, const std::string &name) {
+    return readStateFileAt(stateDir, name);
+}
+
+bool Session::writeStateFileIn(const std::string &stateDir, const std::string &name, const std::string &data) {
+    mkdirs(stateDir);
+    return writeStateFileAt(stateDir, name, data);
+}
+
+void Session::removeStateFileIn(const std::string &stateDir, const std::string &name) {
+    removeStateFileAt(stateDir, name);
 }
 
 std::string Session::deviceIdFor(const std::string &stateDir) {

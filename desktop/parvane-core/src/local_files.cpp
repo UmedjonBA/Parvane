@@ -394,6 +394,8 @@ const std::vector<std::string> &accountFileNames() {
         "parvane-dec-cache.jsonl",  "parvane-renames.json",   "parvane-hidden-gifs.json",
         "parvane-privacy.json",     "parvane-l2.json",        "parvane-state-synced.json",
         "parvane-backup-done",      "parvane-media-cache",
+        // spec 036 T031: хранилище движка с файлами выше (desktop) — каталогом к прежнему владельцу и обратно
+        "parvane-host-account",
     };
     return names;
 }

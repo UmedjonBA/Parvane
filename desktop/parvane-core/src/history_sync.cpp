@@ -281,6 +281,38 @@ json removedOfModel(const json &rm) {
     return json{{"id", id}, {"chat", chat}, {"chatKey", chat.is_object() ? chatKeyOf(chat) : std::string()}};
 }
 
+json chatViewOfModel(const json &cv) {
+    if (!cv.is_object() || !field(cv, "chat").is_object()) return nullptr;
+    const auto &chat = cv["chat"];
+    const auto key = chatKeyOf(chat);
+    if (key.empty()) return nullptr;
+    auto folders = json::array();
+    for (const auto &f : field(cv, "folder_ids")) {
+        if (f.is_number_integer()) folders.push_back(f.get<std::int64_t>());
+    }
+    const auto flag = [&](const char *k) { return field(cv, k).is_boolean() && cv[k].get<bool>(); };
+    const auto &last = field(cv, "last");
+    return json{{"chat", chat},
+                {"chatKey", key},
+                {"order", numOf(cv, "order")},
+                {"pinnedRank", numOf(cv, "pinned_rank")},
+                {"archived", flag("archived")},
+                {"unreadMark", flag("unread_mark")},
+                {"mutedUntilMs", numOf(cv, "muted_until_ms")},
+                {"draft", str(cv, "draft")},
+                {"folderIds", folders},
+                {"unread", numOf(cv, "unread")},
+                {"mention", flag("mention")},
+                {"last", last.is_object() ? viewOfModel(last) : json(nullptr)}};
+}
+
+json removedChatOfModel(const json &peer) {
+    if (!peer.is_object()) return nullptr;
+    const auto key = chatKeyOf(peer);
+    if (key.empty()) return nullptr;
+    return json{{"chat", peer}, {"chatKey", key}};
+}
+
 json unreadOfModel(const json &u) {
     if (!u.is_object() || !field(u, "chat").is_object()) return nullptr;
     auto mentions = json::array();
@@ -309,7 +341,8 @@ json resultOf(const json &out) {
 
 } // namespace
 
-ModelRows::ModelRows(HostFn host, std::string auxPrefix) : host_(std::move(host)), auxPrefix_(std::move(auxPrefix)) {}
+ModelRows::ModelRows(HostFn host, std::string auxPrefix, AuxIo io)
+: host_(std::move(host)), auxPrefix_(std::move(auxPrefix)), io_(std::move(io)) {}
 
 bool ModelRows::ready() const {
     return host_ && host_() != nullptr;
@@ -412,6 +445,53 @@ std::vector<json> ModelRows::allViews() const {
     return v.is_array() ? std::vector<json>(v.begin(), v.end()) : std::vector<json>();
 }
 
+std::vector<json> ModelRows::chatList() const {
+    std::vector<json> out;
+    const auto h = host_ ? host_() : nullptr;
+    if (!h) return out;
+    json after = nullptr;
+    for (int i = 0; i < 1000; ++i) {
+        json args{{"limit", 200}};
+        if (after.is_object()) args["after"] = after;
+        const auto p = h->read("chatList", args);
+        if (!p.is_object() || p.contains("error")) break;
+        for (const auto &c : field(p, "chats")) {
+            if (auto v = chatViewOfModel(c); v.is_object()) out.push_back(std::move(v));
+        }
+        const auto &next = field(p, "next");
+        if (!next.is_object() || next.empty()) break;
+        after = next;
+    }
+    return out;
+}
+
+ModelRows::Page ModelRows::page(const json &peer, const std::string &anchorId, const std::string &direction,
+                                int limit) const {
+    Page out;
+    const auto h = host_ ? host_() : nullptr;
+    if (!h || !peer.is_object()) return out;
+    json args{{"chat", peer},
+              {"limit", std::clamp(limit, 1, 200)},
+              {"direction", direction == "newer"    ? "PAGE_DIRECTION_NEWER"
+                            : direction == "around" ? "PAGE_DIRECTION_AROUND"
+                                                    : "PAGE_DIRECTION_OLDER"}};
+    if (!anchorId.empty()) {
+        // Якорь — место строки в ленте (order, id): берётся из её показа
+        const auto vs = views({anchorId});
+        if (vs.empty()) return out;
+        args["anchor"] = json{{"ts_ms", std::to_string(numOf(vs.front(), "order"))}, {"id", b64OfUuid(anchorId)}};
+    }
+    const auto p = h->read("historyPage", args);
+    if (!p.is_object() || p.contains("error")) return out;
+    out.ok = true;
+    for (const auto &r : field(p, "rows")) {
+        if (auto v = viewOfModel(r); v.is_object()) out.rows.push_back(std::move(v));
+    }
+    out.hasOlder = field(p, "has_older").is_boolean() && p["has_older"].get<bool>();
+    out.hasNewer = field(p, "has_newer").is_boolean() && p["has_newer"].get<bool>();
+    return out;
+}
+
 ModelRows::Applied ModelRows::apply(const json &ops, const json &legacyRows, const json &forget, bool wipe,
                                     bool journal) {
     Applied out;
@@ -458,7 +538,8 @@ void ModelRows::forget(const std::vector<std::string> &ids) {
 json ModelRows::aux(const std::string &name) {
     std::lock_guard<std::mutex> lk(auxMu_);
     if (const auto it = aux_.find(name); it != aux_.end()) return it->second;
-    auto v = json::parse(storecrypt::readFile(auxPrefix_ + name + ".json"), nullptr, false);
+    const auto path = auxPrefix_ + name + ".json";
+    auto v = json::parse(io_.read ? io_.read(path) : storecrypt::readFile(path), nullptr, false);
     if (v.is_discarded()) v = nullptr;
     aux_[name] = v;
     return v;
@@ -467,7 +548,11 @@ json ModelRows::aux(const std::string &name) {
 void ModelRows::setAux(const std::string &name, const json &value) {
     std::lock_guard<std::mutex> lk(auxMu_);
     aux_[name] = value;
-    storecrypt::writeFile(auxPrefix_ + name + ".json", value.dump());
+    if (io_.write) {
+        (void)io_.write(auxPrefix_ + name + ".json", value.dump());
+    } else {
+        storecrypt::writeFile(auxPrefix_ + name + ".json", value.dump());
+    }
 }
 
 LegacyRowFiles readLegacyRowFiles(const std::string &rowsPath, const std::string &marksPath) {

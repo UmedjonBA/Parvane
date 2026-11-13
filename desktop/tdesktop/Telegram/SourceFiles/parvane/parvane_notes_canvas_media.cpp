@@ -2,6 +2,7 @@
 #include "parvane/parvane_notes_canvas_media.h"
 
 #include "parvane/parvane_safe_open.h"
+#include "parvane/parvane_client.h"
 #include "parvane/parvane_sections_data.h"
 
 #include <parvane/sections/cloud_files.h>
@@ -349,7 +350,8 @@ notes::CanvasImageQuality ImageQuality() {
 	auto &s = S();
 	if (!s.quality) {
 		// Ревью 21 окт 2026 (L9): хелперы хранилища — под оградой стирания при выходе
-		const auto raw = parvane::storecrypt::readFile(QFile::encodeName(QualityPath()).toStdString());
+		// spec 036 T031: запись хранилища движка (прежний файл storecrypt переносится при первом чтении)
+		const auto raw = Parvane::SectionsRead(QualityPath()).toStdString();
 		auto stored = std::optional<std::string>();
 		if (!raw.empty()) {
 			stored = QString::fromUtf8(QByteArray::fromStdString(raw)).trimmed().toStdString();
@@ -362,9 +364,7 @@ notes::CanvasImageQuality ImageQuality() {
 void SetImageQuality(notes::CanvasImageQuality quality) {
 	auto &s = S();
 	s.quality = quality;
-	(void)parvane::storecrypt::writeFile(
-		QFile::encodeName(QualityPath()).toStdString(),
-		notes::canvasImageQualityValue(quality));
+	(void)Parvane::SectionsWrite(QualityPath(), QByteArray::fromStdString(notes::canvasImageQualityValue(quality)));
 	s.updated.fire({});
 }
 

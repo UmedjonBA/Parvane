@@ -156,6 +156,11 @@ public:
     // переносом прежних файлов storecrypt при первом обращении. Включает хост до первого чтения (desktop);
     // выключено — прежние файлы (android до своей фазы).
     static void useHostFiles(bool on, std::function<void(const std::string &)> log = {});
+    // Файл каталога состояния по имени (тот же путь, что у сессии: хранилище движка либо прежний файл) — данные
+    // разделов и прочее, что хост держит в каталоге состояния аккаунта (spec 036 T031/T036).
+    [[nodiscard]] static std::string readStateFileIn(const std::string &stateDir, const std::string &name);
+    static bool writeStateFileIn(const std::string &stateDir, const std::string &name, const std::string &data);
+    static void removeStateFileIn(const std::string &stateDir, const std::string &name);
     [[nodiscard]] static std::string deviceIdFor(const std::string &stateDir);
     // ID-01: доказательство ключа устройства по сохранённому состоянию движка — {"proof": base64,
     // "tsMs": n}; null — состояния нет (первый вход этого устройства).

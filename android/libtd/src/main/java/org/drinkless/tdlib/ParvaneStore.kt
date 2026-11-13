@@ -162,7 +162,22 @@ class ParvaneStore {
     private val msgByUuid = ConcurrentHashMap<String, TdApi.Message>()
     private val uuidByMsg = ConcurrentHashMap<Pair<Long, Long>, String>() // (chatId, msgId) → uuid
     private val contentByUuid = ConcurrentHashMap<String, JSONObject>() // исходный content (для правок/пересылки)
-    private var nextMessageId = 1L
+    // spec 036 T035 (ENGINE-1): лента X — страницами модели (GetChatHistory → historyPage), в памяти шва — только
+    // показанное. Id сообщения X — из места строки в ленте модели (ORDER-1, `order`): страница старых строк, пришедшая
+    // позже, встаёт ниже показанного; id известен и до загрузки строки (граница «прочитано до»).
+    private val reservedIds = ConcurrentHashMap<String, Long>() // uuid → id, выданный до загрузки строки
+    private val orderByUuid = ConcurrentHashMap<String, Long>()  // место строки в ленте (мс)
+    private val maxOrder = ConcurrentHashMap<Long, Long>()       // чат → наибольшее место показанного
+    /** Строка списка чатов модели (`ChatView`, spec 036 T035): закреп, архив, отметка, мут, место. */
+    data class ModelChat(val order: Long, val pinnedRank: Int, val archived: Boolean, val unreadMark: Boolean,
+                         val mutedUntilMs: Long, val unread: Int)
+    private val modelChats = ConcurrentHashMap<Long, ModelChat>()
+    /** Страница модели: строки событиями "message" (старые первыми). */
+    class Page(val rows: List<JSONObject>, val hasOlder: Boolean, val hasNewer: Boolean)
+    /** Страница модели для чата (адрес, якорь-uuid или "", older|newer|around, limit); null — модели нет (ставит Client). */
+    @Volatile var pager: ((String, String, String, Int) -> Page?)? = null
+    /** Строка страницы → сообщение X в памяти шва (та же сборка, что у живого события; ставит Client); null — не показывается. */
+    @Volatile var materialize: ((JSONObject) -> TdApi.Message?)? = null
 
     /** Сценарии (dev): названия чатов и тексты сообщений, известные шву, — проверить, что всё пришло сразу. */
     fun e2eDump(): JSONObject {
@@ -195,6 +210,7 @@ class ParvaneStore {
 
     fun clear() {
         users.clear(); chats.clear(); messages.clear(); msgByUuid.clear(); uuidByMsg.clear()
+        reservedIds.clear(); orderByUuid.clear(); maxOrder.clear(); modelChats.clear()
         contentByUuid.clear(); filesByRemote.clear(); filesById.clear()
         self = ""
     }
@@ -339,8 +355,81 @@ class ParvaneStore {
     val groupKind = HashMap<String, String>()
     /** Локальное состояние чатов (spec 005): TTL/черновики/архив; ставится Client'ом, когда известен каталог ядра. */
     @Volatile var local: ChatLocalState? = null
-    fun positionsFor(chatId: Long, order: Long): Array<TdApi.ChatPosition> =
-        local?.positionsFor(chatId, order, chatFacts(chatId)) ?: arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), order, false, null))
+    fun positionsFor(chatId: Long, order: Long): Array<TdApi.ChatPosition> {
+        // spec 036 T035: архив и закреп — из списка чатов модели (`ChatView.archived/pinned_rank`); чата в нём нет —
+        // по объектам личного состояния
+        val mc = modelChats[chatId]
+        val l = local
+        if (mc == null || l == null) {
+            return l?.positionsFor(chatId, order, chatFacts(chatId)) ?: arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), order, false, null))
+        }
+        val pinned = mc.pinnedRank > 0
+        val out = ArrayList<TdApi.ChatPosition>()
+        out.add(TdApi.ChatPosition(if (mc.archived) TdApi.ChatListArchive() else TdApi.ChatListMain(),
+            if (pinned) ChatLocalState.PIN_ORDER_BASE - (mc.pinnedRank - 1) else order, pinned, null))
+        out.addAll(l.folderPositions(chatId, order, chatFacts(chatId)))
+        return out.toTypedArray()
+    }
+    /** Место чата в списке (с): модели, иначе последнее показанное сообщение. */
+    fun orderOf(chatId: Long): Long = modelChats[chatId]?.order?.takeIf { it > 0 }?.let { it / 1000 } ?: lastDateOfChat(chatId)
+    fun modelChat(chatId: Long): ModelChat? = modelChats[chatId]
+    /**
+     * Строка списка чатов модели (`chat_upsert`, `chatList`): закреп, архив, отметка, мут, место — в чат X. Возвращает
+     * апдейты (позиции — со снятием из прежнего списка, отметка, уведомления); чата нет — пусто.
+     */
+    @Synchronized
+    fun applyModelChat(chatId: Long, mc: ModelChat): List<TdApi.Update> {
+        val chat = chats[chatId] ?: return emptyList()
+        val prev = modelChats.put(chatId, mc)
+        val out = ArrayList<TdApi.Update>()
+        val oldMain = chat.positions.firstOrNull()?.list
+        val order = maxOf(mc.order / 1000, if (mc.order > 0) 0L else lastDateOfChat(chatId))
+        chat.positions = positionsFor(chatId, order)
+        val newMain = chat.positions.firstOrNull()?.list
+        if (oldMain != null && newMain != null && oldMain.constructor != newMain.constructor)
+            out += TdApi.UpdateChatPosition(chatId, TdApi.ChatPosition(oldMain, 0L, false, null))
+        if (prev == null || prev.order != mc.order || prev.pinnedRank != mc.pinnedRank || prev.archived != mc.archived || oldMain?.constructor != newMain?.constructor)
+            chat.positions.forEach { out += TdApi.UpdateChatPosition(chatId, it) }
+        if (chat.isMarkedAsUnread != mc.unreadMark) {
+            chat.isMarkedAsUnread = mc.unreadMark
+            out += TdApi.UpdateChatIsMarkedAsUnread(chatId, mc.unreadMark)
+        }
+        // Мут — признак модели; звук и показ текста — объекты уведомлений (notifyExceptions)
+        val address = addressOf(chatId)
+        if (address != null) {
+            val s = chatNotifySettings(address)
+            val now = System.currentTimeMillis() / 1000
+            val until = mc.mutedUntilMs / 1000
+            if (until > now) { s.useDefaultMuteFor = false; s.muteFor = if (until >= 2147483647L) Int.MAX_VALUE else (until - now).toInt() }
+            else if (!s.useDefaultMuteFor && s.muteFor > 0) s.muteFor = 0
+            val was = chat.notificationSettings
+            if (was == null || was.muteFor != s.muteFor || was.useDefaultMuteFor != s.useDefaultMuteFor) {
+                chat.notificationSettings = s
+                out += TdApi.UpdateChatNotificationSettings(chatId, s)
+            }
+        }
+        return out
+    }
+    /** Своя правка закрепа/архива (до ответа модели): вид модели чатов — с ней, чтобы позиции не откатывались. */
+    @Synchronized
+    fun overlayLocal(chatIds: Collection<Long>) {
+        val l = local ?: return
+        val pins = l.pinnedChatIds()
+        for (id in chatIds) {
+            val mc = modelChats[id] ?: continue
+            modelChats[id] = mc.copy(archived = l.isArchived(id), pinnedRank = pins.indexOf(id) + 1)
+        }
+    }
+    /** Чат снят моделью (`chat_remove`): пустая строка уходит из списка (с сообщениями — остаётся: своё отправляемое). */
+    @Synchronized
+    fun removeModelChat(chatId: Long): List<TdApi.Update> {
+        modelChats.remove(chatId) ?: return emptyList()
+        val chat = chats[chatId] ?: return emptyList()
+        if (chat.lastMessage != null) return emptyList()
+        val list = chat.positions.firstOrNull()?.list ?: TdApi.ChatListMain()
+        chat.positions = arrayOf(TdApi.ChatPosition(list, 0L, false, null))
+        return listOf(TdApi.UpdateChatPosition(chatId, chat.positions[0]))
+    }
     /** Признаки чата для членства в папках (группа/канал/контакт/мут/прочитан/архив). */
     fun chatFacts(chatId: Long): Folders.ChatFacts {
         val chat = chats[chatId]
@@ -528,7 +617,14 @@ class ParvaneStore {
         if (uuid.isEmpty() || msgByUuid.containsKey(uuid)) return null
         val group = groupsByGid[to]
         val chat = if (group != null) chats[group.chatId] ?: return null else ensurePeer(if (out) to else from).second
-        val msgId = nextMessageId++ shl 20 // как серверные id TDLib (кратны 2^20)
+        // Место в ленте — модели (ORDER-1); своё, которого модель ещё не показала, — после всего показанного
+        val place = if (order > 0L) order else maxOf(System.currentTimeMillis(), (maxOrder[chat.id] ?: 0L) + 1)
+        val msgId = msgIdFor(chat.id, uuid, place)
+        orderByUuid[uuid] = place
+        maxOrder.merge(chat.id, place) { a, b -> maxOf(a, b) }
+        val list = messages.getOrPut(chat.id) { ArrayList() }
+        val at = list.binarySearch { it.id.compareTo(msgId) }.let { if (it < 0) -it - 1 else it }
+        val newest = at == list.size
         if (content.optString("kind") == "poll") {
             polls.isMember = { gid, address -> roleOf(groupsByGid[gid], address) != null } // POLL-1: голос в личку принимает автор от участника
             // чат опроса — адрес группы либо собеседника (не получатель: у входящего в личном чате это свой адрес)
@@ -551,7 +647,7 @@ class ParvaneStore {
             // MEDIA-2: альбом — подряд идущие сообщения одного автора с одним album_id (≤ 10)
             val album = MediaFlags.albumOf(content)
             if (album.isNotEmpty()) {
-                val prev = messages[chat.id]?.lastOrNull()
+                val prev = list.getOrNull(at - 1)
                 val prevAlbum = prev?.let { p -> uuidByMsg[key(p.chatId, p.id)]?.let { MediaFlags.albumOf(contentByUuid[it]) } }.orEmpty()
                 val prevSender = (prev?.senderId as? TdApi.MessageSenderUser)?.userId ?: 0L
                 val groupSize = prev?.takeIf { it.mediaAlbumId != 0L }?.let { p -> messages[chat.id]?.count { it.mediaAlbumId == p.mediaAlbumId } } ?: 0
@@ -561,21 +657,50 @@ class ParvaneStore {
             val fwd = if (content.isNull("forwarded_name")) "" else content.optString("forwarded_name")
             if (fwd.isNotEmpty()) forwardInfo = TdApi.MessageForwardInfo(TdApi.MessageOriginHiddenUser(fwd), ts.toInt(), null, "")
         }
-        messages.getOrPut(chat.id) { ArrayList() }.add(msg)
+        list.add(at, msg)
         msgByUuid[uuid] = msg
+        reservedIds.remove(uuid)
         uuidByMsg[key(chat.id, msgId)] = uuid
         contentByUuid[uuid] = content
+        // Страница старых строк (лента X листает назад) чат не трогает: последнее сообщение, место и счётчики — только
+        // от новой строки (счётчик, кроме того, выставляет модель — read_state)
+        if (!newest) return msg
         chat.lastMessage = msg
-        // spec 036 (ENGINE-1): место чата в списке — модели (`ChatView.order` = место последней строки, ORDER-1):
-        // строка модели несёт своё место (мс), догрузка более старой строки чат вниз не сдвигает
-        chat.positions = if (order > 0L) {
-            positionsFor(chat.id, maxOf(order / 1000, chat.positions.firstOrNull()?.order ?: 0L))
-        } else positionsFor(chat.id, ts)
+        // spec 036 (ENGINE-1): место чата в списке — модели (`ChatView.order` = место последней строки, ORDER-1)
+        chat.positions = positionsFor(chat.id, maxOf(place / 1000, chat.positions.firstOrNull()?.order ?: 0L))
         if (!out && !read) chat.unreadCount += 1
         // Прочитанное, пришедшее позже непрочитанного (догрузка истории), границу прочтения не двигает (READ-2)
         if (!out && read && chat.unreadCount == 0 && msgId > chat.lastReadInboxMessageId) chat.lastReadInboxMessageId = msgId
         if (out && read) chat.lastReadOutboxMessageId = msgId
         return msg
+    }
+
+    /** Строка модели старше последнего показанного сообщения чата (догрузка истории): в память шва не нужна — лента
+     *  возьмёт её страницей модели. */
+    fun behindLast(chatId: Long, order: Long): Boolean {
+        if (order <= 0L) return false
+        val last = chats[chatId]?.lastMessage ?: return false
+        val lastOrder = uuidByMsg[key(chatId, last.id)]?.let { orderByUuid[it] } ?: return false
+        return order < lastOrder
+    }
+
+    /** Id сообщения X по месту строки модели (кратен 2^20, как серверные id TDLib): тот же для страницы и для
+     *  границы прочтения, выданной раньше загрузки строки. */
+    @Synchronized
+    fun msgIdFor(chatId: Long, uuid: String, order: Long): Long {
+        msgByUuid[uuid]?.let { return it.id }
+        reservedIds[uuid]?.let { return it }
+        var slot = 0
+        var id: Long
+        while (true) {
+            id = MessageIds.of(order, uuid, slot)
+            val other = uuidByMsg[key(chatId, id)]
+            if (other == null || other == uuid) break
+            slot++
+        }
+        reservedIds[uuid] = id
+        uuidByMsg[key(chatId, id)] = uuid
+        return id
     }
 
     private fun key(chatId: Long, msgId: Long) = chatId to msgId
@@ -647,11 +772,13 @@ class ParvaneStore {
     /** Счётчик чата от маркера «прочитано до» журнала истории (READ-2): число непрочитанных считает движок, граница
      *  прочтения — последняя прочитанная строка (не назад). null — чата нет или ничего не изменилось. */
     @Synchronized
-    fun applyReadState(address: String, unread: Int, lastReadUuid: String): TdApi.UpdateChatReadInbox? {
+    fun applyReadState(address: String, unread: Int, lastReadUuid: String, lastReadOrder: Long = 0L): TdApi.UpdateChatReadInbox? {
         val chatId = groupsByGid[address]?.chatId ?: idByAddress[address] ?: return null
         val chat = chats[chatId] ?: return null
         val list = messages[chatId] ?: emptyList<TdApi.Message>()
-        val lastRead = msgByUuid[lastReadUuid]?.takeIf { it.chatId == chatId }?.id ?: 0L
+        // Строка границы может быть ещё не загружена (лента — страницами): id — по её месту в модели
+        val lastRead = msgByUuid[lastReadUuid]?.takeIf { it.chatId == chatId }?.id
+            ?: if (lastReadUuid.isNotEmpty() && lastReadOrder > 0L) msgIdFor(chatId, lastReadUuid, lastReadOrder) else 0L
         // Всё прочитано — граница у последнего входящего; иначе у последней прочитанной строки
         val target = if (unread <= 0) list.lastOrNull { !it.isOutgoing }?.id ?: lastRead else lastRead
         val readTill = maxOf(chat.lastReadInboxMessageId, target)
@@ -679,8 +806,53 @@ class ParvaneStore {
      * отрицательный offset добавляет -offset более новых (X открывает чат от
      * lastReadInboxMessageId с offset=-limit/2 — без этого чат был пуст).
      */
-    @Synchronized
     fun history(chatId: Long, fromMessageId: Long, offset: Int, limit: Int): TdApi.Messages {
+        val address = addressOf(chatId)
+        val p = pager
+        val m = materialize
+        if (address == null || p == null || m == null) return memoryHistory(chatId, fromMessageId, offset, limit)
+        // spec 036 T035: страницами модели. Смысл аргументов — прежний (как memoryHistory): без смещения — строго старше
+        // fromMessageId; отрицательное смещение — ещё -offset строк, начиная с самой fromMessageId, новее
+        val want = limit.coerceAtLeast(1)
+        val newerWanted = if (offset < 0 && fromMessageId != 0L) minOf(-offset, want) else 0
+        val anchor = if (fromMessageId == 0L) "" else uuidOf(chatId, fromMessageId) ?: return memoryHistory(chatId, fromMessageId, offset, limit)
+        val older = ArrayList<TdApi.Message>()
+        var a = anchor
+        var need = want - newerWanted
+        var moreOlder = false
+        while (need > 0) {
+            val page = p(address, a, "older", minOf(need, 200)) ?: return memoryHistory(chatId, fromMessageId, offset, limit)
+            older.addAll(0, page.rows.mapNotNull { m(it) })
+            need -= page.rows.size
+            moreOlder = page.hasOlder
+            if (!page.hasOlder || page.rows.isEmpty()) break
+            a = page.rows.first().optString("id")
+        }
+        val newer = ArrayList<TdApi.Message>()
+        var moreNewer = false
+        if (newerWanted > 0) {
+            // сама строка-якорь и новее
+            val self = msgByUuid[anchor] ?: p(address, anchor, "around", 1)?.rows?.firstOrNull { it.optString("id") == anchor }?.let { m(it) }
+            if (self != null) newer += self
+            if (newerWanted > 1) p(address, anchor, "newer", newerWanted - 1)?.let { pg -> pg.rows.mapNotNullTo(newer) { m(it) }; moreNewer = pg.hasNewer }
+        }
+        // Строки вне модели (самоуничтожение собеседника, своё отправляемое до строки модели, записи звонков, превью
+        // публичной группы) — из памяти шва, в том же окне ленты: id из места ленты, порядок общий
+        val anchorId = if (fromMessageId == 0L) Long.MAX_VALUE else fromMessageId
+        val lowO = if (moreOlder) older.minOfOrNull { it.id } ?: Long.MIN_VALUE else Long.MIN_VALUE
+        val highN = if (moreNewer) newer.maxOfOrNull { it.id } ?: anchorId else Long.MAX_VALUE
+        val mem = synchronized(this) { ArrayList(messages[chatId] ?: emptyList<TdApi.Message>()) }
+        val olderAll = (older + mem.filter { it.id >= lowO && it.id < anchorId }).distinctBy { it.id }.sortedBy { it.id }
+            .takeLast(want - newerWanted)
+        val newerAll = if (newerWanted > 0) (newer + mem.filter { it.id >= anchorId && it.id <= highN }).distinctBy { it.id }
+            .sortedBy { it.id }.take(newerWanted) else emptyList()
+        val page = (olderAll + newerAll).distinctBy { it.id }.sortedBy { it.id }.reversed()
+        return TdApi.Messages(maxOf(page.size, messages[chatId]?.size ?: 0), page.toTypedArray())
+    }
+
+    /** Лента из памяти шва (модели нет: JVM-тесты, до открытия модели). */
+    @Synchronized
+    fun memoryHistory(chatId: Long, fromMessageId: Long, offset: Int, limit: Int): TdApi.Messages {
         val all = messages[chatId] ?: return TdApi.Messages(0, arrayOf())
         if (all.isEmpty()) return TdApi.Messages(0, arrayOf())
         val endIdx = if (fromMessageId == 0L) all.size else all.indexOfFirst { it.id >= fromMessageId }.let { if (it < 0) all.size else it }
@@ -859,5 +1031,19 @@ class ParvaneStore {
         if (user.status !is TdApi.UserStatusOnline) return null
         user.status = TdApi.UserStatusOffline(0)
         return TdApi.UpdateUserStatus(user.id, user.status)
+    }
+}
+
+/**
+ * spec 036 T035 (ENGINE-1): id сообщения X из места строки в ленте модели (ORDER-1, `order`, мс). Порядок id = порядок
+ * ленты, поэтому страница старых строк, загруженная позже, встаёт ниже уже показанного, а граница «прочитано до»
+ * известна до загрузки своей строки. Кратен 2^20 (как серверные id TDLib); 3 бита — от uuid (строки одной миллисекунды),
+ * [slot] — сдвиг при совпадении. Запас — до 2036 г.
+ */
+object MessageIds {
+    const val EPOCH_MS = 1_000_000_000_000L
+    fun of(order: Long, uuid: String, slot: Int = 0): Long {
+        val o = (order - EPOCH_MS).coerceIn(1L, (1L shl 40) - 1)
+        return ((o shl 3) + (uuid.hashCode() and 7) + slot) shl 20
     }
 }

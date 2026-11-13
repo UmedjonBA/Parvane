@@ -100,6 +100,7 @@ inline const char *ParvaneDevEnv(const char *name) {
 #include <parvane/sections/planner_engine.h>
 #include <parvane/sections/task_offer.h>
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
+#include <parvane/engine_store.h>    // parvane-core: файлы tdata — записи хранилища движка (spec 036 T031)
 #include <parvane/local_files.h>     // parvane-core (временный каталог, стирание при выходе, строки журнала)
 #include "parvane/parvane_local_files.h" // временный каталог экземпляра, LogSecret
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -221,6 +222,7 @@ struct PrivacyLocal {
 
 // ── глобальное состояние (определено в parvane_client.cpp) ──
 extern std::mutex g_sessionMutex;
+extern bool g_stateApplying; // main: показ личного состояния/модели — не правка пользователя (parvane_client_state.cpp)
 extern QString g_token;
 extern QString g_selfAddress;
 extern std::shared_ptr<parvane::v2::Control> g_control;
@@ -269,6 +271,20 @@ void FlushPendingGroupMessages(const QString &gid);
 void EnsureStoreKey();
 [[nodiscard]] QByteArray StoreRead(const QString &path);
 bool StoreWrite(const QString &path, const QByteArray &data);
+// spec 036 T031: файлы tdata/parvane-* — записи хранилища движка (`PathFiles`): существование, удаление и
+// переименование — тоже через хранилище (прежний файл на диске после переноса — `.migrated`)
+[[nodiscard]] bool StoreExists(const QString &path);
+void StoreRemove(const QString &path);
+bool StoreRename(const QString &from, const QString &to);
+void ResetTdataFiles(); // каталог хранилища уехал (adopt) либо стёрт (выход) — открыть заново
+// Каталоги хранилищ tdata (store_fs, не файлы storecrypt): общий, аккаунта (переносится adopt), устройства (выход не стирает)
+inline const char kTdataHostCommon[] = "parvane-host";
+inline const char kTdataHostAccount[] = "parvane-host-account";
+inline const char kTdataHostDevice[] = "parvane-host-device";
+[[nodiscard]] inline bool IsTdataHostDir(const std::string &name) {
+	return name == kTdataHostCommon || name == kTdataHostAccount || name == kTdataHostDevice;
+}
+extern const std::vector<std::string> kDeviceSettings; // tdata/parvane-*, которые выход не трогает
 [[nodiscard]] QStringList StoreReadLines(const QString &path);
 // Кэш расшифрованных вложений (tdata/parvane-media-cache, зашифрован ключом хранилища)
 [[nodiscard]] std::optional<std::string> ReadMediaCache(const QString &fileId);
@@ -397,6 +413,9 @@ parvane::json HistoryRecordOp(const parvane::json &op, bool own);
 // Все строки показа модели по порядку ленты (место — модель, ORDER-1).
 [[nodiscard]] std::vector<parvane::json> HistoryAllViews();
 [[nodiscard]] std::vector<parvane::json> HistoryChatViews(const QString &chatAddress);
+// spec 036 T030: список чатов модели (`chatList` → `chatViewOfModel`) — порядок, закреп, архив, отметка, мут, счётчик,
+// последняя строка; модели нет — пусто. Не главный поток (чтение модели).
+[[nodiscard]] std::vector<parvane::json> HistoryChatList();
 [[nodiscard]] bool HistoryViewVisible(const QString &uuid); // строка сейчас в показе модели
 [[nodiscard]] std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress);
 [[nodiscard]] std::vector<parvane::json> HistoryStatesOf(const std::vector<std::string> &uuids); // строки по id (модель)
@@ -409,6 +428,17 @@ void ShowHistoryStates(const std::vector<parvane::json> &states);
 // spec 036: изменения строк и счётчиков модели (`message_upsert/remove`, `unread_changed` события `model`).
 void ShowModelRows(const parvane::json &changes);
 void ApplyReadState(const QString &chatAddress);
+// spec 036 T030: список диалогов tdesktop — из списка чатов модели (`chatList` при запуске, `chat_upsert`/`chat_remove`
+// событий `model`): место (`order`), закреп, архив, отметка «непрочитано», мут, последняя строка, снятие. Главный поток.
+void ShowModelChats(const std::vector<parvane::json> &chats, bool full);
+// Чат модели, ещё не показанный tdesktop (группа появилась позже вида списка) — применить, когда чат синтезирован.
+void ApplyModelChatFor(const QString &address);
+[[nodiscard]] bool ModelChatsShown(); // список модели уже показан
+void ApplyModelDialogState(not_null<Main::Session*> session); // архив, закреп, отметка — заново из модели
+void ResetModelChats(); // выход из аккаунта
+// Своя правка вида личного состояния (OBJECT_KIND без префикса: ARCHIVE, PIN_LIST, …) ещё не отдана модели — показ
+// модели этот вид не откатывает (правка уйдёт через ~0,7 с и вернётся `chat_upsert`).
+[[nodiscard]] bool StateEditPending(const std::string &objectKind);
 void NoteOutboxRead(const QString &address, const std::vector<std::string> &targets); // квитанции собеседника → ✓✓
 // Мутация сообщения v2-чата собеседнику/группе с повтором до успеха (parvane_client.cpp).
 bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId = std::string());

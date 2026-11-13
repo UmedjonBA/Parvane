@@ -553,6 +553,9 @@ void EnsureStoreKey() {
 			if (name.rfind("parvane-", 0) != 0) {
 				continue;
 			}
+			if (IsTdataHostDir(name)) {
+				continue; // хранилище движка (store_fs) — не файлы storecrypt
+			}
 			if (entry.is_regular_file(ec)) {
 				migrated += parvane::storecrypt::migrateFile(entry.path().string());
 			} else if (entry.is_directory(ec)) {
@@ -565,20 +568,138 @@ void EnsureStoreKey() {
 	});
 }
 
+// ── spec 036 T031 (desktop): файлы tdata/parvane-* — записями хранилища движка ─────────────────────────────────
+// Вне каталога состояния v2 (его файлы — `Session::*StateFileIn`, `<каталог>/host`) файлы tdata/parvane-* — записи
+// трёх хранилищ `PathFiles` в tdata (вид host-file хранилища движка, DEK под ключом устройства = ключ storecrypt):
+//   parvane-host-device  — настройки устройства (kDeviceSettings): выход их не стирает;
+//   parvane-host-account — файлы аккаунта без адреса в имени (`accountfiles::accountFileNames`): каталог целиком
+//                          уходит в каталог прежнего владельца при входе другим аккаунтом (adopt) и возвращается;
+//   parvane-host         — остальное (файлы с адресом в имени, учётные данные): выход стирает, как и прежде.
+// Прежний файл storecrypt переносится при первом обращении (сверка чтением, затем `.migrated`); журналы с дозаписью —
+// построчно (`PathFiles::readLines/appendLine`). storecrypt остаётся читателем переноса и для кэша медиа
+// (`parvane-media-cache` — блобы: в хранилище, держащем карту в памяти, им не место). Dev-хук сценария
+// verify_store_migration.sh — PARVANE_STORE_LEGACY=1 (прежние файлы, как до переноса).
+std::mutex g_tdataFilesMutex;
+std::string g_tdataFilesKey; // ключ, с которым открыты хранилища (выход сбрасывает ключ — открыть заново)
+std::unique_ptr<parvane::engine_store::PathFiles> g_tdataCommon;
+std::unique_ptr<parvane::engine_store::PathFiles> g_tdataAccount;
+std::unique_ptr<parvane::engine_store::PathFiles> g_tdataDevice;
+
+[[nodiscard]] parvane::engine_store::PathFiles *TdataFilesFor(const QString &path) {
+	const auto tdata = cWorkingDir() + u"tdata/"_q;
+	if (!path.startsWith(tdata)) {
+		return nullptr;
+	}
+	const auto name = path.mid(tdata.size());
+	if (!name.startsWith(u"parvane-"_q) || name.contains(u'/') || IsTdataHostDir(name.toStdString())) {
+		return nullptr;
+	}
+	std::lock_guard<std::mutex> lk(g_tdataFilesMutex);
+	const auto key = ParvaneDevEnv("PARVANE_STORE_LEGACY") ? std::string() : parvane::storecrypt::currentKey();
+	if (key != g_tdataFilesKey || !g_tdataCommon) {
+		g_tdataFilesKey = key;
+		const auto dir = (cWorkingDir() + u"tdata"_q).toStdString();
+		const auto log = [](const std::string &m) { LOG(("Parvane: хранилище tdata: %1").arg(QString::fromStdString(m))); };
+		g_tdataCommon = std::make_unique<parvane::engine_store::PathFiles>(dir, key, log, kTdataHostCommon);
+		g_tdataAccount = std::make_unique<parvane::engine_store::PathFiles>(dir, key, log, kTdataHostAccount);
+		g_tdataDevice = std::make_unique<parvane::engine_store::PathFiles>(dir, key, log, kTdataHostDevice);
+	}
+	const auto n = name.toStdString();
+	for (const auto &d : kDeviceSettings) {
+		if (d == n) {
+			return g_tdataDevice.get();
+		}
+	}
+	for (const auto &a : parvane::accountfiles::accountFileNames()) {
+		if (a == n) {
+			return g_tdataAccount.get();
+		}
+	}
+	return g_tdataCommon.get();
+}
+
+// Файл каталога состояния v2 (tdata/parvane-v2-<адрес>/<имя>): каталог и имя; иначе пусто.
+[[nodiscard]] std::pair<QString, QString> StateDirFileOf(const QString &path) {
+	const auto tdata = cWorkingDir() + u"tdata/"_q;
+	if (!path.startsWith(tdata + u"parvane-v2-"_q)) {
+		return {};
+	}
+	const auto rest = path.mid(tdata.size());
+	const auto slash = rest.indexOf(u'/');
+	if (slash < 0 || rest.indexOf(u'/', slash + 1) >= 0) {
+		return {};
+	}
+	return { tdata + rest.left(slash), rest.mid(slash + 1) };
+}
+
 [[nodiscard]] QByteArray StoreRead(const QString &path) {
 	EnsureStoreKey();
+	if (const auto f = TdataFilesFor(path)) {
+		return QByteArray::fromStdString(f->read(path.toStdString()));
+	}
+	if (const auto [dir, name] = StateDirFileOf(path); !dir.isEmpty()) {
+		return QByteArray::fromStdString(parvane::v2::Session::readStateFileIn(dir.toStdString(), name.toStdString()));
+	}
 	return QByteArray::fromStdString(parvane::storecrypt::readFile(path.toStdString()));
 }
 
 bool StoreWrite(const QString &path, const QByteArray &data) {
 	EnsureStoreKey();
+	if (const auto f = TdataFilesFor(path)) {
+		return f->write(path.toStdString(), data.toStdString());
+	}
+	if (const auto [dir, name] = StateDirFileOf(path); !dir.isEmpty()) {
+		return parvane::v2::Session::writeStateFileIn(dir.toStdString(), name.toStdString(), data.toStdString());
+	}
 	return parvane::storecrypt::writeFile(path.toStdString(), data.toStdString());
+}
+
+bool StoreExists(const QString &path) {
+	EnsureStoreKey();
+	if (const auto f = TdataFilesFor(path)) {
+		return f->exists(path.toStdString());
+	}
+	return QFile::exists(path);
+}
+
+void StoreRemove(const QString &path) {
+	EnsureStoreKey();
+	if (const auto f = TdataFilesFor(path)) {
+		f->remove(path.toStdString());
+		return;
+	}
+	if (const auto [dir, name] = StateDirFileOf(path); !dir.isEmpty()) {
+		parvane::v2::Session::removeStateFileIn(dir.toStdString(), name.toStdString());
+		return;
+	}
+	QFile::remove(path);
+}
+
+bool StoreRename(const QString &from, const QString &to) {
+	EnsureStoreKey();
+	const auto f = TdataFilesFor(from);
+	if (f && f == TdataFilesFor(to)) {
+		return f->rename(from.toStdString(), to.toStdString());
+	}
+	if (!QFile::exists(from) || QFile::exists(to)) {
+		return false;
+	}
+	return QFile::rename(from, to);
+}
+
+void ResetTdataFiles() {
+	std::lock_guard<std::mutex> lk(g_tdataFilesMutex);
+	g_tdataCommon.reset();
+	g_tdataAccount.reset();
+	g_tdataDevice.reset();
+	g_tdataFilesKey.clear();
 }
 
 [[nodiscard]] QStringList StoreReadLines(const QString &path) {
 	EnsureStoreKey();
 	auto out = QStringList();
-	for (const auto &line : parvane::storecrypt::readLines(path.toStdString())) {
+	const auto f = TdataFilesFor(path);
+	for (const auto &line : f ? f->readLines(path.toStdString()) : parvane::storecrypt::readLines(path.toStdString())) {
 		const auto trimmed = QString::fromStdString(line).trimmed();
 		if (!trimmed.isEmpty()) {
 			out.push_back(trimmed);
@@ -589,6 +710,9 @@ bool StoreWrite(const QString &path, const QByteArray &data) {
 
 bool StoreAppendLine(const QString &path, const QString &line) {
 	EnsureStoreKey();
+	if (const auto f = TdataFilesFor(path)) {
+		return f->appendLine(path.toStdString(), line.toStdString());
+	}
 	return parvane::storecrypt::appendLine(path.toStdString(), line.toStdString());
 }
 
@@ -598,6 +722,9 @@ bool StoreWriteLines(const QString &path, const QStringList &lines) {
 	raw.reserve(lines.size());
 	for (const auto &line : lines) {
 		raw.push_back(line.toStdString());
+	}
+	if (const auto f = TdataFilesFor(path)) {
+		return f->writeLines(path.toStdString(), raw);
 	}
 	return parvane::storecrypt::writeLines(path.toStdString(), raw);
 }
@@ -704,10 +831,15 @@ void ReplayHistory(std::function<void()> then = nullptr) {
 			msgs.push_back(std::move(*sm));
 		}
 	}
+	// spec 036 T030: список диалогов — списком чатов модели (место, закреп, архив, отметка, мут, снятие)
+	auto chatList = HistoryChatList();
 	if (msgs.empty()) {
-		if (then) {
-			crl::on_main(std::move(then));
-		}
+		crl::on_main([chatList = std::move(chatList), then = std::move(then)]() mutable {
+			ShowModelChats(chatList, /*full=*/true);
+			if (then) {
+				then();
+			}
+		});
 		return;
 	}
 	LoadV2Ids();
@@ -718,12 +850,13 @@ void ReplayHistory(std::function<void()> then = nullptr) {
 		V2NoteMessage(sm, QString::fromStdString(chat));
 	}
 	const auto n = int(msgs.size());
-	crl::on_main([msgs = std::move(msgs), then = std::move(then)]() mutable {
+	crl::on_main([msgs = std::move(msgs), chatList = std::move(chatList), then = std::move(then)]() mutable {
 		if (const auto session = g_sessionWeak.get()) {
 			injectOnMain(session, msgs, /*live=*/false);
 			for (const auto &address : HistoryMarkedChats()) {
 				ApplyReadState(address);
 			}
+			ShowModelChats(chatList, /*full=*/true);
 		}
 		if (then) {
 			then();
@@ -824,6 +957,7 @@ void ApplyReadState(const QString &address) {
 void ShowModelRows(const parvane::json &changes) {
 	auto out = std::vector<parvane::StoredMessage>();
 	auto chats = QSet<QString>();
+	auto chatViews = std::vector<parvane::json>(); // spec 036 T030: `chat_upsert`/`chat_remove` — после строк
 	// Новые строки пачки (догрузка журналом на новом устройстве) встают местом модели (ORDER-1, `order` показа),
 	// а не порядком прихода изменений
 	auto ordered = std::vector<std::pair<std::int64_t, parvane::json>>();
@@ -882,6 +1016,15 @@ void ShowModelRows(const parvane::json &changes) {
 			}
 			chats.insert(chat);
 			out.push_back(RemovedStored(QString::fromStdString(rm.value("id", std::string())), chat));
+		} else if (ch.contains("chat_upsert")) {
+			if (auto v = parvane::history::chatViewOfModel(ch["chat_upsert"]); v.is_object()) {
+				chatViews.push_back(std::move(v));
+			}
+		} else if (ch.contains("chat_remove")) {
+			if (auto v = parvane::history::removedChatOfModel(ch["chat_remove"]); v.is_object()) {
+				v["removed"] = true;
+				chatViews.push_back(std::move(v));
+			}
 		} else if (ch.contains("unread_changed")) {
 			const auto u = parvane::history::unreadOfModel(ch["unread_changed"]);
 			const auto chat = u.is_object() ? HistoryChatAddress(u.value("chat", parvane::json())) : QString();
@@ -906,6 +1049,247 @@ void ShowModelRows(const parvane::json &changes) {
 	for (const auto &chat : chats) {
 		ApplyReadState(chat);
 	}
+	if (!chatViews.empty()) {
+		ShowModelChats(chatViews, /*full=*/false);
+	}
+}
+
+// ── spec 036 T030 (ENGINE-1): список диалогов — из списка чатов модели ───────────
+// Своего списка у tdesktop нет: строку списка даёт история (`History`) с местом (`chatListTimeId`), папкой (архив),
+// закрепом, отметкой «непрочитано» и последним сообщением. Всё это — готовым из `ChatView` модели (`chatList` при
+// запуске, `chat_upsert` дальше); `chat_remove` снимает пустую строку (очистка «у себя», блокировка без строк).
+// Порядок закреплённых — место в закрепе модели (`pinned_rank`), место остальных — `order` (ORDER-1; у группы без
+// сообщений — время её появления в списке модели, своего «впервые увиденного» у desktop больше нет). Черновик (с
+// разметкой) и папки — объекты личного состояния того же вида модели (`parvane_client_state.cpp`). Главный поток.
+struct ModelChat {
+	qint64 order = 0;
+	int pinnedRank = 0;
+	bool archived = false;
+	bool unreadMark = false;
+	qint64 mutedUntilMs = 0;
+	int unread = 0;
+	parvane::json last; // показ последней строки (`viewOfModel`) либо null
+};
+QHash<QString, ModelChat> g_modelChats; // main: адрес чата → вид модели
+bool g_modelChatsShown = false;          // main: список модели показан (сброс — выход из аккаунта)
+bool g_modelChatApplying = false;        // main: ensureGroupChat внутри применения — без повтора
+
+[[nodiscard]] ModelChat ModelChatOf(const parvane::json &v) {
+	auto c = ModelChat();
+	c.order = v.value("order", std::int64_t(0));
+	c.pinnedRank = int(v.value("pinnedRank", std::int64_t(0)));
+	c.archived = v.value("archived", false);
+	c.unreadMark = v.value("unreadMark", false);
+	c.mutedUntilMs = v.value("mutedUntilMs", std::int64_t(0));
+	c.unread = int(v.value("unread", std::int64_t(0)));
+	c.last = v.contains("last") ? v["last"] : parvane::json();
+	return c;
+}
+
+// История строки списка (группа — только известная: сведения ещё не пришли — применится при синтезе чата).
+[[nodiscard]] History *ModelChatHistory(not_null<Main::Session*> session, const QString &address) {
+	if (address.isEmpty()) {
+		return nullptr;
+	}
+	if (address != SelfAddress() && !address.contains('@')) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		if (!g_knownGroups.contains(address)) {
+			return nullptr;
+		}
+	}
+	return HistoryForAddress(session, address);
+}
+
+void ApplyModelChat(not_null<Main::Session*> session, const QString &address, const ModelChat &c) {
+	const auto was = g_modelChatApplying;
+	g_modelChatApplying = true;
+	const auto history = ModelChatHistory(session, address);
+	g_modelChatApplying = was;
+	if (!history) {
+		return;
+	}
+	// Последняя строка — показ модели (строка, которой tdesktop ещё не видел: догрузка без события строки)
+	if (c.last.is_object()) {
+		const auto id = QString::fromStdString(c.last.value("id", std::string()));
+		if (!id.isEmpty() && !g_uuidToMsgId.contains(id)) {
+			if (auto sm = StoredFromView(c.last); sm && !sm->deleted) {
+				V2NoteMessage(*sm, address);
+				injectOnMain(session, { *sm }, /*live=*/false);
+			}
+		}
+	}
+	const auto wasApplying = g_stateApplying;
+	const auto wasNotify = g_applyingNotify;
+	g_stateApplying = true;   // показ модели — не правка пользователя (без записи назад)
+	g_applyingNotify = true;
+	if (!history->folderKnown()) {
+		history->clearFolder();
+	}
+	const auto inArchive = history->folder() && (history->folder()->id() == Data::Folder::kId);
+	if (StateEditPending("ARCHIVE")) {
+		// своя правка архива ещё в пути — не откатывать
+	} else if (c.archived && !inArchive) {
+		history->setFolder(session->data().folder(Data::Folder::kId));
+		LOG(("Parvane: список чатов модели: %1 в архиве").arg(address));
+	} else if (!c.archived && inArchive) {
+		history->clearFolder();
+		LOG(("Parvane: список чатов модели: %1 из архива").arg(address));
+	}
+	if (c.order > 0) {
+		const auto t = TimeId(c.order / 1000);
+		if (history->chatListTimeId() != t) {
+			history->setChatListTimeId(t);
+		}
+	}
+	if (history->unreadMark() != c.unreadMark && !StateEditPending("UNREAD_MARK")) {
+		history->setUnreadMark(c.unreadMark);
+		LOG(("Parvane: список чатов модели: %1 %2").arg(address, c.unreadMark ? u"отмечен непрочитанным"_q : u"без отметки"_q));
+	}
+	// Мут — признак модели; звук, «без звука», показ текста — объекты уведомлений (ProjectNotify)
+	const auto now = base::unixtime::now();
+	const auto until = history->peer->notify().muteUntil();
+	const auto mutedHere = until && (*until > now);
+	const auto mutedModel = (c.mutedUntilMs / 1000) > now;
+	if (mutedHere != mutedModel && !StateEditPending("PEER_NOTIFY")) {
+		LOG(("Parvane: список чатов модели: %1 %2").arg(address, mutedModel ? u"заглушён"_q : u"без мута"_q));
+		const auto forever = c.mutedUntilMs >= 2147483647000LL;
+		session->data().notifySettings().update(
+			history->peer,
+			!mutedModel ? Data::MuteValue{ .unmute = true }
+			: forever ? Data::MuteValue{ .forever = true }
+			: Data::MuteValue{ .period = int(c.mutedUntilMs / 1000 - now) });
+	}
+	g_applyingNotify = wasNotify;
+	g_stateApplying = wasApplying;
+}
+
+// Снятие строки моделью: только пустая строка (без сообщений; черновик стёрт, всё очищено «у себя»). Строку с
+// последним сообщением не снимаем: это своё отправляемое, которое модель ещё не получила (мимолётное снятие чата с
+// черновиком при отправке), либо служебное вне модели. Группу снимает выход из неё (DropGroupLocally).
+void RemoveModelChat(not_null<Main::Session*> session, const QString &address) {
+	if (!g_modelChats.remove(address)) {
+		return;
+	}
+	LOG(("Parvane: список чатов модели: чат %1 снят моделью").arg(address));
+	if (!address.contains('@')) {
+		return;
+	}
+	const auto history = LoadedHistoryFor(session, address);
+	if (!history || history->lastMessage() || !history->inChatList()) {
+		return;
+	}
+	history->clear(History::ClearType::DeleteChat);
+}
+
+// Закреп основного списка — порядком модели (`pinned_rank`), архивные не закрепляются в основном.
+void ApplyModelPins(not_null<Main::Session*> session) {
+	if (!g_modelChatsShown || StateEditPending("PIN_LIST")) {
+		return; // список модели ещё не показан либо своя перестановка в пути
+	}
+	auto pinned = std::vector<std::pair<int, QString>>();
+	for (auto i = g_modelChats.cbegin(); i != g_modelChats.cend(); ++i) {
+		if (i->pinnedRank > 0 && !i->archived) {
+			pinned.emplace_back(i->pinnedRank, i.key());
+		}
+	}
+	std::sort(pinned.begin(), pinned.end());
+	auto want = std::vector<Dialogs::Key>();
+	for (const auto &[rank, address] : pinned) {
+		if (const auto history = ModelChatHistory(session, address)) {
+			want.push_back(Dialogs::Key(history));
+		}
+	}
+	auto &owner = session->data();
+	if (owner.pinnedChatsOrder(static_cast<Data::Folder*>(nullptr)) == want) {
+		return;
+	}
+	const auto wasApplying = g_stateApplying;
+	g_stateApplying = true;
+	owner.clearPinnedChats(nullptr);
+	for (const auto &key : want) {
+		owner.setPinnedFromEntryList(key, true);
+	}
+	owner.notifyPinnedDialogsOrderUpdated();
+	g_stateApplying = wasApplying;
+	LOG(("Parvane: список чатов модели: закреплено %1").arg(int(want.size())));
+}
+
+void ShowModelChats(const std::vector<parvane::json> &chats, bool full) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	auto seen = QSet<QString>();
+	auto removed = 0;
+	for (const auto &v : chats) {
+		const auto address = HistoryChatAddress(v.value("chat", parvane::json()));
+		if (address.isEmpty()) {
+			continue;
+		}
+		if (v.value("removed", false)) {
+			RemoveModelChat(session, address);
+			++removed;
+			continue;
+		}
+		seen.insert(address);
+		const auto c = ModelChatOf(v);
+		g_modelChats.insert(address, c);
+		ApplyModelChat(session, address, c);
+	}
+	if (full) {
+		// Полный список: чего в нём нет — снято моделью
+		for (const auto &address : g_modelChats.keys()) {
+			if (!seen.contains(address)) {
+				RemoveModelChat(session, address);
+				++removed;
+			}
+		}
+		g_modelChatsShown = true;
+	}
+	ApplyModelPins(session);
+	for (const auto &address : seen) {
+		ApplyReadState(address);
+	}
+	LOG(("Parvane: список чатов модели: %1 %2, снято %3")
+		.arg(full ? u"показан"_q : u"изменено"_q)
+		.arg(seen.size())
+		.arg(removed));
+}
+
+void ApplyModelChatFor(const QString &address) {
+	const auto session = g_sessionWeak.get();
+	if (!session || g_modelChatApplying) {
+		return;
+	}
+	const auto i = g_modelChats.constFind(address);
+	if (i == g_modelChats.cend()) {
+		return;
+	}
+	const auto c = *i;
+	ApplyModelChat(session, address, c);
+	if (c.pinnedRank > 0) {
+		ApplyModelPins(session);
+	}
+	ApplyReadState(address);
+}
+
+bool ModelChatsShown() {
+	return g_modelChatsShown;
+}
+
+void ApplyModelDialogState(not_null<Main::Session*> session) {
+	if (!g_modelChatsShown) {
+		return;
+	}
+	for (auto i = g_modelChats.cbegin(); i != g_modelChats.cend(); ++i) {
+		ApplyModelChat(session, i.key(), i.value());
+	}
+	ApplyModelPins(session);
+}
+
+void ResetModelChats() {
+	g_modelChats.clear();
+	g_modelChatsShown = false;
 }
 
 // Строки, изменённые журналом истории или мутацией (главный поток): показать новые, обновить правленые/реакции/
@@ -2702,7 +3086,10 @@ bool StartSession() {
 		// рабочий поток (NAT-07), хранит указатель на него — не пересоздавать.
 		if (!g_callKey) {
 			g_callKey = std::make_unique<parvane::crypto::SigningKey>(
-				parvane::crypto::SigningKey::loadOrCreate(CallKeyPath().toStdString()));
+				// spec 036 T031: ключ — запись хранилища устройства (прежний файл storecrypt переносится при первом чтении)
+				parvane::crypto::SigningKey::loadOrCreate(
+					[] { return StoreRead(CallKeyPath()).toStdString(); },
+					[](const std::string &d) { return StoreWrite(CallKeyPath(), QByteArray::fromStdString(d)); }));
 		}
 		parvane::CallManager::Callbacks ccb;
 		// Протокол v2 (D-08): сигнал личного звонка уходит запечатанным конвертом
@@ -3117,7 +3504,8 @@ void ClearLocalState() {
 	// Только учётные данные. Ключи E2E, журнал истории, кэш расшифровки,
 	// курсоры и папки остаются — иначе повторный вход показал бы пустоту.
 	const auto creds = cWorkingDir() + u"tdata/parvane-session.txt"_q;
-	const auto removed = QFile::remove(creds);
+	const auto removed = StoreExists(creds);
+	StoreRemove(creds);
 	LOG(("Parvane: выход — учётные данные %1; ключи и история СОХРАНЕНЫ "
 		"(повторный вход на этом устройстве вернёт переписку)")
 		.arg(removed ? u"удалены"_q : u"не найдены"_q));
@@ -3125,20 +3513,24 @@ void ClearLocalState() {
 	ResetAccountState("выход без стирания");
 }
 
-namespace {
-
-// Как web LEAVE_TIMEOUT_MS (WEB-11): дольше выход из журнала не ждём — стирание идёт в любом случае.
-constexpr auto kLeaveTimeoutMs = 5000;
-
 // tdata/parvane-*, которые выход не трогает: настройки устройства, а не данные аккаунта
 // (как web: стираются ключи `parvane:…:<адрес>`, настройки без адреса остаются).
+namespace Internal {
 const std::vector<std::string> kDeviceSettings = {
 	"parvane-background",   // фон чатов
 	"parvane-scheme",       // схема оформления
 	"parvane-lang-applied", // язык по умолчанию уже применён
 	"parvane-calls-relay",  // «звонки только через сервер»
 	"parvane-callkey.txt",  // ключ подписи звонков процесса (g_callKey держит его в памяти)
+	"parvane-host-device",  // spec 036 T031: хранилище движка с настройками устройства (записи файлов выше)
 };
+} // namespace Internal
+
+namespace {
+
+// Как web LEAVE_TIMEOUT_MS (WEB-11): дольше выход из журнала не ждём — стирание идёт в любом случае.
+constexpr auto kLeaveTimeoutMs = 5000;
+
 
 // Выход со стиранием идёт в своём потоке (сеть — до 5 с), UI не ждёт. Новый вход ждёт его конца
 // (PrepareForLogin), выход из приложения — тоже (aboutToQuit); процесс, убитый посреди выхода, дотирает при
@@ -3207,7 +3599,7 @@ void LogOutAndWipe() {
 		g_selfAddress.clear();
 		g_ownSentUuids.clear();
 	}
-	QFile::remove(cWorkingDir() + u"tdata/parvane-session.txt"_q);
+	StoreRemove(cWorkingDir() + u"tdata/parvane-session.txt"_q);
 	LOG(("Parvane: выход — учётные данные удалены, устройство выходит из журнала устройств"));
 	// Память аккаунта — прочь до стирания файлов: следующий вход в этом окне не получит ничего прежнего
 	ResetAccountState("выход со стиранием");
@@ -3235,6 +3627,7 @@ void LogOutAndWipe() {
 		// Ограда записи — ДО стирания: фоновые писатели прежней сессии (поток разделов, журнал истории, кэш,
 		// сама сессия до stop) после неё не пересоздают стёртое; снимается при следующем входе (PrepareForLogin)
 		const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+		ResetTdataFiles(); // каталоги хранилищ аккаунта стёрты
 		if (s) {
 			s->stop();
 		}
@@ -3266,6 +3659,7 @@ void StartupHousekeeping() {
 	// Выход, прерванный закрытием или падением процесса, — дотереть до любого входа
 	if (parvane::localfiles::logoutPending(tdata)) {
 		const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+		ResetTdataFiles();
 		parvane::storecrypt::allowWrites(); // процесс только стартовал: прежних писателей нет
 		// log.txt tdesktop при старте начинается заново; старые части отладочного журнала — прочь
 		WipeClientLogs();
@@ -3310,6 +3704,7 @@ void WipeAfterForgottenPasscode() {
 	parvane::localfiles::setLogoutPending(tdata);
 	ResetAccountState("сброс забытого код-пароля");
 	const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+	ResetTdataFiles();
 	WipeClientLogs();
 	LogWipeResult(result, "сброс забытого код-пароля");
 }
@@ -3402,8 +3797,8 @@ void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
 			{ u"parvane-domain-keys-"_q, u".json"_q } }) {
 		const auto from = tdata + prefix + SafeAddressPart(oldAddress) + suffix;
 		const auto to = tdata + prefix + SafeAddressPart(newAddress) + suffix;
-		if (QFile::exists(from) && !QFile::exists(to)) {
-			QFile::rename(from, to);
+		if (StoreExists(from) && !StoreExists(to)) {
+			StoreRename(from, to);
 		}
 	}
 	MoveSelfField(PrivacyPath(), oldAddress, newAddress);
@@ -9087,7 +9482,9 @@ void SaveScheduledLocked() {
 		}
 		arr.push_back(std::move(j));
 	}
-	StoreWrite(ScheduledPath(), QString::fromStdString(arr.dump()).toUtf8());
+	const auto saved = StoreWrite(ScheduledPath(), QString::fromStdString(arr.dump()).toUtf8());
+	// Очередь — запись хранилища движка (spec 036 T031): размер на диске сценарию не виден — число в журнале
+	LOG(("Parvane: очередь отложенных записана (%1 шт.)%2").arg(int(arr.size())).arg(saved ? QString() : u" — НЕ ЗАПИСАНА"_q));
 }
 
 namespace {
@@ -12743,6 +13140,7 @@ void ResetAccountState(const char *why) {
 	g_blockedAddrs.clear();
 	g_archivedAddrs.clear();
 	g_pinnedAddrs.clear();
+	ResetModelChats();
 	g_unreadMarkAddrs.clear();
 	g_quickEmoji.clear();
 	g_quickCustom.clear();
@@ -12824,7 +13222,11 @@ void AdoptAccountFiles(const QString &address) {
 		return;
 	}
 	EnsureStoreKey();
+	// Хранилище файлов аккаунта (tdata/parvane-host-account) — каталогом уходит к прежнему владельцу и возвращается
+	// своё: открытое хранилище не должно пережить перенос каталога (spec 036 T031)
+	ResetTdataFiles();
 	const auto result = parvane::accountfiles::adopt(TdataDir().toStdString(), addressStd);
+	ResetTdataFiles();
 	for (const auto &name : result.failed) {
 		LOG(("Parvane: файлы аккаунта — %1 не перенесён (стёрт)").arg(QString::fromStdString(name)));
 	}

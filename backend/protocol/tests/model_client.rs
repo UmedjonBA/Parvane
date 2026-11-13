@@ -516,3 +516,29 @@ fn engine_rows_in_host_mode_puts_incoming_into_model_rows() {
         }
     }
 }
+
+/// spec 036 (T030/T035, ENGINE-1): группа без сообщений стоит в списке чатов модели местом своего появления
+/// (`ChatView.order` — время, когда чат без строк впервые встал в список), а не нулём в самом низу; место переживает
+/// перезапуск. Desktop и android ставят чат по `order` (своего «впервые увиденного» у хостов больше нет).
+#[test]
+fn group_without_rows_is_listed_at_time_it_appeared() {
+    let mut srv = Server::default();
+    let mut host = Host::default();
+    let mut e = identity(&mut host, &mut srv, "alice@local", 4);
+    let created = cc(&mut e, "groupCreate", json!({"kind": 1, "name": "Пустая группа", "members": [], "permsJson": "{}"})).unwrap();
+    run_on(&mut srv, "alice@local", &created["request"]);
+    flush(&mut host, &mut e);
+    let order_of = |e: &mut Engine| -> Option<i64> {
+        let list = raw(e, "chatList", &json!({"limit": 50}));
+        list["chats"].as_array()?.iter().find(|c| c["chat"].get("group").is_some())
+            .and_then(|c| c["order"].as_str().and_then(|s| s.parse().ok()).or_else(|| c["order"].as_i64()))
+    };
+    let first = order_of(&mut e).expect("группа в списке");
+    assert_eq!(first, NOW, "место — время появления, не 0");
+    // Перезапуск позже: место прежнее
+    let mut c = cfg("alice@local", 4);
+    c["now_ms"] = json!((NOW + 3_600_000).to_string());
+    let (mut e2, _) = host.open(&c);
+    flush(&mut host, &mut e2);
+    assert_eq!(order_of(&mut e2), Some(NOW), "место пережило перезапуск");
+}

@@ -30,7 +30,7 @@ A_SEES=$(grep -oE "ключ безопасности с bob@local в профи�
 # аккаунта нет, поэтому сначала сброс личности (новое устройство и новый корень в
 # журнале), затем отправка: до привязки устройство v2-аккаунта ничего не шлёт.
 stop_pid "$BP"
-rm -rf "$B"/td/tdata/parvane-v2-* "$B"/td/tdata/parvane-e2e-* "$B"/td/tdata/parvane-session.txt
+rm -rf "$B"/td/tdata/parvane-v2-* "$B"/td/tdata/parvane-e2e-* "$B"/td/tdata/parvane-session.txt "$B"/td/tdata/parvane-host*
 BP=$(start_client "$B" bob@local PARVANE_AUTORESET=1)
 wait_log "$B/td/log.txt" "v2: autoreset → ok" 60 && ok "bob: личность сброшена, новое устройство в журнале" || bad "bob: сброс личности не прошёл"
 wait_log "$B/td/log.txt" "v2: готов" 60 || bad "bob: v2 после сброса не поднялся"

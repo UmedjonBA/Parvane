@@ -166,7 +166,7 @@ QString g_ownDomain; // домен своего адреса — группе б
 			LOG(("Parvane: журнал истории: строка прежнего журнала не перенесена: %1").arg(QString::fromUtf8(e.what())));
 		}
 	}
-	QFile::remove(LegacyReadPath());
+	StoreRemove(LegacyReadPath());
 	LOG(("Parvane: журнал истории: прежний журнал (до spec 033) — в модель (%1 строк)").arg(converted));
 	return ops;
 }
@@ -298,7 +298,11 @@ void EnsureHistory(const QString &self) {
 	EnsureStoreKey();
 	const auto generation = AccountGeneration();
 	// Строки — в модели профиля сессии v2 (её открывает сессия; без сети — по прошлому открытию)
-	auto store = std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString());
+	// Служебные документы журнала (отметка переноса, очередь прежнего журнала) — файлы tdata через хранилище движка
+	auto store = std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString(),
+		parvane::history::ModelRows::AuxIo{
+			[](const std::string &p) { return StoreRead(QString::fromStdString(p)).toStdString(); },
+			[](const std::string &p, const std::string &d) { return StoreWrite(QString::fromStdString(p), QByteArray::fromStdString(d)); } });
 
 	auto cfg = parvane::history::HistorySyncConfig();
 	cfg.self = self.toStdString();
@@ -368,9 +372,9 @@ void EnsureHistory(const QString &self) {
 			LOG(("Parvane: журнал истории: прежние строки не перенесены в модель — повтор при следующем запуске"));
 		}
 		// Снимок истории прежнего механизма (spec 015) больше не применяется — его отметка не нужна
-		QFile::remove(AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q));
+		StoreRemove(AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q));
 		// ✓✓ своих — доставка строки в модели (spec 036): прежний файл отметок не нужен
-		QFile::remove(AccountFilePath(u"parvane-outbox-read-"_q, self, u".json"_q));
+		StoreRemove(AccountFilePath(u"parvane-outbox-read-"_q, self, u".json"_q));
 		auto deferred = std::vector<std::function<void()>>();
 		{
 			std::lock_guard<std::mutex> lk(g_historyMutex);
@@ -610,6 +614,11 @@ std::vector<parvane::json> HistoryAllViews() {
 	return out;
 }
 
+std::vector<parvane::json> HistoryChatList() {
+	const auto store = StoreNow();
+	return store ? store->chatList() : std::vector<parvane::json>();
+}
+
 std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress) {
 	const auto store = StoreNow();
 	return store ? store->chat(HistoryChatKey(chatAddress).toStdString()) : std::vector<parvane::json>();
@@ -662,8 +671,8 @@ void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress) {
 	for (const auto &name : { u"meta.json"_q, u"pending.json"_q, u"imported.json"_q }) {
 		const auto from = SyncAuxPrefix(oldAddress);
 		const auto to = SyncAuxPrefix(newAddress);
-		if (!from.isEmpty() && !to.isEmpty()) {
-			move(from + name, to + name);
+		if (!from.isEmpty() && !to.isEmpty() && StoreExists(from + name) && !StoreExists(to + name)) {
+			StoreRename(from + name, to + name); // записи хранилища движка (spec 036 T031)
 		}
 	}
 }

@@ -5,6 +5,8 @@
 // Приватный ключ (seed) НИКОГДА не уходит с устройства. См. CALLS-parvane.md.
 #pragma once
 
+#include <functional>
+
 #include <optional>
 #include <string>
 
@@ -21,6 +23,9 @@ public:
     // Загрузить ключ из файла (в файле — seedB64); если файла нет/битый —
     // сгенерировать новый и сохранить (права 0600). Пустой path → generate().
     static SigningKey loadOrCreate(const std::string &path);
+    // spec 036 T031/T036: то же через файлы хоста (`PathFiles`): seed — запись хранилища движка (прежний файл
+    // storecrypt переносится при первом чтении).
+    static SigningKey loadOrCreate(const std::function<std::string()> &read, const std::function<bool(const std::string &)> &write);
 
     // Секрет для персиста (base64 32-байтового seed). Не раздавать!
     [[nodiscard]] std::string seedB64() const { return seedB64_; }

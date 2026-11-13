@@ -328,6 +328,10 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	return {};
 }
 
+bool StateEditPending(const std::string &objectKind) {
+	return g_statePending.count(objectKind) > 0;
+}
+
 [[nodiscard]] QString StateDomain() {
 	const auto self = SelfAddress();
 	const auto at = self.indexOf('@');
@@ -951,52 +955,12 @@ void ProjectBlocked(not_null<Main::Session*> session, const parvane::json &snap)
 	LOG((StateNote(u"Parvane: v2: журнал состояния → блок-лист (%1 изменений)"_q)).arg(changed));
 }
 
-// Сохранённые архив и закреп → нативные списки чатов. Чат, которого ещё нет в
-// списке, закрепится при следующем вызове (после синка / проекции журнала).
+// Архив, закреп и отметка «непрочитано» в нативном списке чатов — из списка чатов модели (spec 036 T030, ENGINE-1:
+// `ChatView.archived/pinned_rank/unread_mark`, parvane_client.cpp ShowModelChats); наборы g_archivedAddrs/
+// g_pinnedAddrs/g_unreadMarkAddrs — только правка пользователя (объекты вида для `stateSet`), показа по ним нет.
 void ApplyDialogState(not_null<Main::Session*> session) { // main
-	const auto wasApplying = g_stateApplying;
-	g_stateApplying = true;
-	auto &owner = session->data();
-	const auto archive = [&](const QString &address, bool archived) {
-		const auto history = HistoryForAddress(session, address);
-		if (!history) {
-			return;
-		}
-		const auto isArchived = history->folder() && (history->folder()->id() == Data::Folder::kId);
-		if (archived && !isArchived) {
-			history->setFolder(owner.folder(Data::Folder::kId));
-		} else if (!archived && (isArchived || !history->folderKnown())) {
-			history->clearFolder();
-		}
-	};
-	for (const auto &address : g_archivedAddrs) {
-		archive(address, true);
-	}
-	auto want = std::vector<Dialogs::Key>();
-	for (const auto &address : g_pinnedAddrs) {
-		const auto history = HistoryForAddress(session, address);
-		if (!history || g_archivedAddrs.contains(address)) {
-			continue;
-		}
-		if (!history->folderKnown()) {
-			history->clearFolder();
-		}
-		want.push_back(Dialogs::Key(history));
-	}
-	if (owner.pinnedChatsOrder(static_cast<Data::Folder*>(nullptr)) != want) {
-		owner.clearPinnedChats(nullptr);
-		for (const auto &key : want) {
-			owner.setPinnedFromEntryList(key, true);
-		}
-		owner.notifyPinnedDialogsOrderUpdated();
-	}
-	for (const auto &address : g_unreadMarkAddrs) {
-		if (const auto history = HistoryForAddress(session, address)) {
-			history->setUnreadMark(true);
-		}
-	}
+	ApplyModelDialogState(session);
 	ApplyQuickReaction(session);
-	g_stateApplying = wasApplying;
 }
 
 // Быстрая реакция → нативный «избранный» (`Data::Reactions::favoriteId`). Без выбора — 👍,
@@ -1035,16 +999,11 @@ void ProjectUnreadAndReaction(not_null<Main::Session*> session, const parvane::j
 	if (marks == g_unreadMarkAddrs && emoji == g_quickEmoji && custom == g_quickCustom) {
 		return;
 	}
-	const auto unmarked = g_unreadMarkAddrs - marks;
+	// Отметка в списке чатов — из модели (`chat_upsert`); здесь — набор правки и быстрая реакция
 	g_unreadMarkAddrs = marks;
 	g_quickEmoji = emoji;
 	g_quickCustom = custom;
-	for (const auto &address : unmarked) {
-		if (const auto history = HistoryForAddress(session, address)) {
-			history->setUnreadMark(false);
-		}
-	}
-	ApplyDialogState(session);
+	ApplyQuickReaction(session);
 	LOG((StateNote(u"Parvane: v2: журнал состояния → отмечено непрочитанными %1, быстрая реакция %2"_q))
 		.arg(g_unreadMarkAddrs.size())
 		.arg(!custom.isEmpty() ? (u"custom:"_q + custom) : emoji.isEmpty() ? u"по умолчанию"_q : emoji));
@@ -1305,15 +1264,9 @@ void ProjectDialogs(not_null<Main::Session*> session, const parvane::json &snap)
 	if (archived == g_archivedAddrs && pinned == g_pinnedAddrs) {
 		return;
 	}
-	const auto unarchived = g_archivedAddrs - archived;
+	// Архив и закреп в списке чатов — из модели (`chat_upsert`, ShowModelChats); здесь — наборы правки
 	g_archivedAddrs = archived;
 	g_pinnedAddrs = pinned;
-	for (const auto &address : unarchived) {
-		if (const auto history = HistoryForAddress(session, address)) {
-			history->clearFolder();
-		}
-	}
-	ApplyDialogState(session);
 	LOG((StateNote(u"Parvane: v2: журнал состояния → архив %1, закреплено %2"_q))
 		.arg(g_archivedAddrs.size()).arg(g_pinnedAddrs.size()));
 }
@@ -1813,7 +1766,8 @@ void OnModelChanges(const parvane::json &changes) {
 	auto rows = parvane::json::array();
 	for (const auto &ch : changes) {
 		state = state || (ch.is_object() && ch.contains("state_changed"));
-		if (ch.is_object() && (ch.contains("message_upsert") || ch.contains("message_remove") || ch.contains("unread_changed"))) {
+		if (ch.is_object() && (ch.contains("message_upsert") || ch.contains("message_remove") || ch.contains("unread_changed")
+				|| ch.contains("chat_upsert") || ch.contains("chat_remove"))) {
 			rows.push_back(ch);
 		}
 	}

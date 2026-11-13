@@ -1034,6 +1034,7 @@ class Client private constructor(
             store.chatById(f.chatId) ?: return@run TdApi.Error(404, "chat not found")
             val before = l.pinnedChatIds()
             if (l.setPinned(f.chatId, f.isPinned)) {
+                store.overlayLocal((before + f.chatId).toSet()) // до ответа модели (`chat_upsert`) — своей правкой
                 repositionChats((before + f.chatId).toSet())
                 scheduleStateFlush("pinned")
             }
@@ -1044,6 +1045,7 @@ class Client private constructor(
             if (f.chatList is TdApi.ChatListFolder) return@run TdApi.Error(400, "folder pins are set in the folder editor")
             val before = l.pinnedChatIds()
             l.setPinnedOrder(f.chatIds.toList())
+            store.overlayLocal((before + f.chatIds.toList()).toSet())
             repositionChats((before + f.chatIds.toList()).toSet())
             scheduleStateFlush("pinned")
             TdApi.Ok()
@@ -1091,6 +1093,7 @@ class Client private constructor(
             val order = chat.positions.firstOrNull()?.order ?: 0L
             val oldList: TdApi.ChatList = if (l.isArchived(f.chatId)) TdApi.ChatListArchive() else TdApi.ChatListMain()
             l.setArchived(f.chatId, toArchive)
+            store.overlayLocal(listOf(f.chatId) + l.pinnedChatIds()) // архив снимает закреп
             chat.positions = store.positionsFor(f.chatId, order)
             Log.i(TAG, "чат ${f.chatId} → ${if (toArchive) "архив" else "главный список"}")
             postUpdate(TdApi.UpdateChatPosition(f.chatId, TdApi.ChatPosition(oldList, 0L, false, null)))
@@ -1305,6 +1308,9 @@ class Client private constructor(
             store.local = ChatLocalState(java.io.File(boundDir))
             store.applyLocalToExisting()
         }
+        // spec 036 T035 (ENGINE-1): лента X — страницами модели, а не из памяти шва
+        store.pager = ::modelPage
+        store.materialize = ::pageMessage
         // Порядок как у TDLib: my_id → Ready → и только потом updateNewChat/
         // updateUser. Telegram X на переходе в Ready сбрасывает состояние, и
         // объявленный раньше чат терялся: следующий updateChatTitle падал с
@@ -1408,6 +1414,8 @@ class Client private constructor(
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
             // Группа вернулась после `removed` (временное снятие, пока новое устройство догоняло журнал) — снова в списке
             if (hiddenGroupChats.remove(chat.id)) chat.positions.forEach { p -> postUpdate(TdApi.UpdateChatPosition(chat.id, p)) }
+            // spec 036 T035: вид списка чатов модели пришёл раньше сведений группы — применить сейчас
+            pendingChatEntries.remove(gid)?.let { applyChatEntry(it) }
             val version = g.optLong("version", -1L)
             if (!created && !announced && version >= 0 && version == previousVersion) continue
             // spec 003: права по умолчанию, описание, фото — открытые экраны X обновляются апдейтами
@@ -2592,7 +2600,7 @@ class Client private constructor(
     private fun repositionChats(ids: Collection<Long>) {
         ids.forEach { id ->
             val chat = store.chatById(id) ?: return@forEach
-            chat.positions = store.positionsFor(id, store.lastDateOfChat(id))
+            chat.positions = store.positionsFor(id, store.orderOf(id))
             postUpdate(TdApi.UpdateChatPosition(id, chat.positions[0]))
         }
     }
@@ -2791,7 +2799,11 @@ class Client private constructor(
                     }
                     "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
                     "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
-                    "dump" -> { Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok() }
+                    "dump" -> {
+                        // лента — страницами модели: в дамп — все строки чатов (не только показанное)
+                        store.chatIds().forEach { store.history(it, 0, 0, Int.MAX_VALUE) }
+                        Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok()
+                    }
                     // PACK-1: {"op":"fave","set":"h:…","file":"01.png","on":true} и {"op":"faved"} — избранные стикеры
                     "fave" -> if (stickers.e2eFave(cmd.optString("set"), cmd.optString("file"), cmd.optBoolean("on", true))) TdApi.Ok() else TdApi.Error(404, "sticker not found")
                     "faved" -> { stickers.refreshFavorites(); Log.i(TAG, "e2e-faved: ${stickers.e2eFavedDump()}"); TdApi.Ok() }
@@ -3356,62 +3368,135 @@ class Client private constructor(
         if (!msg.isOutgoing) postUpdate(TdApi.UpdateChatReadInbox(chat.id, chat.lastReadInboxMessageId, chat.unreadCount))
     }
 
+    // spec 036 T035: строки списка чатов групп, которых шов ещё не знает (сведения придут syncGroups)
+    private val pendingChatEntries = ConcurrentHashMap<String, JSONObject>()
+    /** Строка списка чатов модели → чат X: последняя строка (если её ещё нет в памяти), место, закреп, архив, отметка, мут. */
+    private fun applyChatEntry(e: JSONObject) {
+        val address = e.optString("address").ifEmpty { return }
+        val group = e.optBoolean("group")
+        if (e.optBoolean("removed")) {
+            pendingChatEntries.remove(address)
+            val chatId = if (group) store.group(address)?.chatId ?: return else store.idOf(address)
+            store.removeModelChat(chatId).forEach { postUpdate(it) }
+            Log.i(TAG, "список чатов модели: чат $chatId снят")
+            return
+        }
+        val chatId = if (group) {
+            store.group(address)?.chatId ?: run { pendingChatEntries[address] = e; syncGroups(); return }
+        } else {
+            ensurePeer(address, announce = true)
+            store.idOf(address)
+        }
+        e.optJSONObject("last")?.let { last ->
+            if (store.messageByUuid(last.optString("id")) == null) buildMessage(last, lazyHistory = false)?.let { announceMessage(it) }
+        }
+        val mc = ParvaneStore.ModelChat(e.optLong("order"), e.optInt("pinned_rank"), e.optBoolean("archived"),
+            e.optBoolean("unread_mark"), e.optLong("muted_until_ms"), e.optInt("unread"))
+        val before = store.modelChat(chatId)
+        store.applyModelChat(chatId, mc).forEach { postUpdate(it) }
+        if (before?.archived != mc.archived && mc.archived) Log.i(TAG, "список чатов модели: чат $chatId в архиве")
+        if (before?.pinnedRank != mc.pinnedRank && mc.pinnedRank > 0) Log.i(TAG, "список чатов модели: чат $chatId закреплён (${mc.pinnedRank})")
+    }
+
+    /** spec 036 T035: страница ленты из модели (GetChatHistory) — ядро отдаёт строки событиями "message". */
+    private fun modelPage(address: String, anchor: String, direction: String, limit: Int): ParvaneStore.Page? {
+        if (detached) return null
+        val r = try { ParvaneCore.historyPage(address, anchor, direction, limit) } catch (e: Throwable) { Log.w(TAG, "страница истории: ${e.message}"); null } ?: return null
+        if (!r.optBoolean("ok")) return null
+        val arr = r.optJSONArray("rows") ?: org.json.JSONArray()
+        return ParvaneStore.Page((0 until arr.length()).mapNotNull { arr.optJSONObject(it) }, r.optBoolean("has_older"), r.optBoolean("has_newer"))
+    }
+    /** Строка страницы → сообщение X (уже в памяти — оно же). */
+    private fun pageMessage(ev: JSONObject): TdApi.Message? {
+        val id = ev.optString("id")
+        store.messageByUuid(id)?.let { return it }
+        // Голос и закрытие опроса применены при запуске (по порядку ленты) и вживую; страница идёт в любом порядке —
+        // старый голос затёр бы новый
+        if (PollStore.isService(ev.optJSONObject("content")?.optString("kind") ?: "")) return null
+        ev.optJSONObject("by")?.takeIf { it.length() > 0 }?.let { reactionBy[id] = it }
+        return buildMessage(ev, lazyHistory = false)
+    }
+
+    /**
+     * Событие "message" ядра (живое, догрузка журнала, строка страницы модели, последняя строка вида списка) → сообщение
+     * X в памяти шва, без объявления и уведомления. null — не показывается (служебное, скрытое правами, заблокированный)
+     * либо [lazyHistory] и строка догрузки старше последнего показанного (лента возьмёт её страницей модели, spec 036).
+     */
+    private fun buildMessage(event: JSONObject, lazyHistory: Boolean): TdApi.Message? {
+        event.optJSONObject("by")?.takeIf { it.length() > 0 }?.let { reactionBy[event.optString("id")] = it }
+        val out = event.optBoolean("out")
+        val from = event.optString("from")
+        val to = event.optString("to")
+        val peer = if (out) to else from
+        val content = event.optJSONObject("content")
+            ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
+        // L2-1: смена режима «усиленная приватность» — служебное сообщение чата (не пузырь)
+        val chatMode = L2Mode.isChatMode(content)
+        if (peer.isEmpty() && !(chatMode && event.optBoolean("group"))) return null
+        if (!out && store.blocked.contains(from)) return null // заблокирован — не показываем
+        // POLL-1: голос анонимного опроса группы — личное сообщение автору; чата с участником он не заводит
+        if (PollStore.isService(content.optString("kind")) && !event.optBoolean("group")) {
+            onPollService(content, if (out) store.self else from, to, peer, false); return null
+        }
+        var sender = from
+        if (event.optBoolean("group")) {
+            if (store.group(to) == null) syncGroups() // группа завелась на другом устройстве
+            if (chatMode && sender.isEmpty()) { // автор записи журнала неизвестен — сообщение без имени, от владельца группы
+                sender = store.group(to)?.createdBy ?: return null
+                content.put("anon", true)
+            }
+            ensurePeer(sender, announce = true) // отправитель — пользователь для UI
+        } else {
+            ensurePeer(peer, announce = true)
+        }
+        if (PollStore.isService(content.optString("kind"))) { onPollService(content, if (out) store.self else from, to, if (event.optBoolean("group")) to else peer, event.optBoolean("group")); return null }
+        // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
+        // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
+        if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника
+            val g = store.group(to)
+            // GROUP-2: вид содержимого и права решает движок (ENGINE-1), шов только передаёт роль автора
+            if (store.roleOf(g, from) == "member"
+                && org.parvane.core.ParvaneProtocol.groupContentHidden(g?.permissions, "member", content)) {
+                Log.i(TAG, "групповое ${event.optString("id")} (${content.optString("kind")}) от $from скрыто правами группы")
+                return null
+            }
+        }
+        // Догрузка истории старше последнего показанного — только побочное (индекс паков), строка — страницей
+        if (lazyHistory && (event.optBoolean("history") || event.optBoolean("replay"))) {
+            val chatId = if (event.optBoolean("group")) store.group(to)?.chatId ?: 0L else store.idOf(peer)
+            if (store.behindLast(chatId, event.optLong("order"))) { stickers.onReceived(content); return null }
+        }
+        val msg = store.putMessage(
+            event.optString("id"), sender, to, event.optLong("ts"), content, out,
+            read = event.optBoolean("read"), replyUuid = if (event.isNull("reply_to")) null else event.optString("reply_to").ifEmpty { null },
+            edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
+            reactions = event.optJSONArray("reactions"), order = event.optLong("order"),
+        ) ?: return null
+        cardMarkup(event.optString("id"), content, out, from)?.let { msg.replyMarkup = it }
+        stickers.onReceived(content) // spec 005: pack_ref/emoji_packs → индекс паков, gif → сохранённые
+        if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
+        armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
+        Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
+        if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
+        return msg
+    }
+
     // ── события ядра ────────────────────────────────────────────────────────
     private fun onCoreEvent(event: JSONObject) {
         if (detached) return
         when (event.optString("type")) {
             "message" -> {
-                event.optJSONObject("by")?.takeIf { it.length() > 0 }?.let { reactionBy[event.optString("id")] = it }
+                // Строка уже в памяти шва (показана страницей или видом списка) — только реакции и закреп
+                if (store.messageByUuid(event.optString("id")) != null) {
+                    store.applyMeta(event.optString("id"), event.optJSONArray("reactions"), event.optBoolean("pinned")).forEach { postUpdate(it) }
+                    return
+                }
+                val msg = buildMessage(event, lazyHistory = true) ?: return
                 val out = event.optBoolean("out")
                 val from = event.optString("from")
                 val to = event.optString("to")
-                val peer = if (out) to else from
-                val content = event.optJSONObject("content")
-                    ?: JSONObject().put("kind", "text").put("text", event.optString("text"))
-                // L2-1: смена режима «усиленная приватность» — служебное сообщение чата (не пузырь)
-                val chatMode = L2Mode.isChatMode(content)
-                if (peer.isEmpty() && !(chatMode && event.optBoolean("group"))) return
-                if (!out && store.blocked.contains(from)) return // заблокирован — не показываем
-                // POLL-1: голос анонимного опроса группы — личное сообщение автору; чата с участником он не заводит
-                if (PollStore.isService(content.optString("kind")) && !event.optBoolean("group")) {
-                    onPollService(content, if (out) store.self else from, to, peer, false); return
-                }
-                var sender = from
-                if (event.optBoolean("group")) {
-                    if (store.group(to) == null) syncGroups() // группа завелась на другом устройстве
-                    if (chatMode && sender.isEmpty()) { // автор записи журнала неизвестен — сообщение без имени, от владельца группы
-                        sender = store.group(to)?.createdBy ?: return
-                        content.put("anon", true)
-                    }
-                    ensurePeer(sender, announce = true) // отправитель — пользователь для UI
-                } else {
-                    ensurePeer(peer, announce = true)
-                }
-                if (PollStore.isService(content.optString("kind"))) { onPollService(content, if (out) store.self else from, to, if (event.optBoolean("group")) to else peer, event.optBoolean("group")); return }
-                // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
-                // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
-                if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника
-                    val g = store.group(to)
-                    // GROUP-2: вид содержимого и права решает движок (ENGINE-1), шов только передаёт роль автора
-                    if (store.roleOf(g, from) == "member"
-                        && org.parvane.core.ParvaneProtocol.groupContentHidden(g?.permissions, "member", content)) {
-                        Log.i(TAG, "групповое ${event.optString("id")} (${content.optString("kind")}) от $from скрыто правами группы")
-                        return
-                    }
-                }
-                val msg = store.putMessage(
-                    event.optString("id"), sender, to, event.optLong("ts"), content, out,
-                    read = event.optBoolean("read"), replyUuid = if (event.isNull("reply_to")) null else event.optString("reply_to").ifEmpty { null },
-                    edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
-                    reactions = event.optJSONArray("reactions"), order = event.optLong("order"),
-                ) ?: return
-                cardMarkup(event.optString("id"), content, out, from)?.let { msg.replyMarkup = it }
-                stickers.onReceived(content) // spec 005: pack_ref/emoji_packs → индекс паков, gif → сохранённые
-                if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
-                armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
-                Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
+                val content = store.contentOf(event.optString("id")) ?: JSONObject()
                 if (!out && from.isNotEmpty()) cancelTyping(msg.chatId, store.idOf(from)) // как TDLib: сообщение снимает «печатает»
-                if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
                 announceMessage(msg)
                 // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из журнала истории аккаунта (догрузка)
                 if (!out && !event.optBoolean("read") && !event.optBoolean("replay") && !event.optBoolean("history"))
@@ -3421,11 +3506,17 @@ class Client private constructor(
                             silent = (SendOptions.isSilent(content) || store.notifySilent(chatAddr, scope)).also { if (it) Log.i(TAG, "входящее без звука ${event.optString("id")}") })?.let { postUpdate(it) }
                     }
             }
+            // spec 036 T035 (ENGINE-1): список чатов — готовым видом модели (`chatList` при первом LoadChats, дальше
+            // `chat_upsert`/`chat_remove`): место, закреп, архив, отметка «непрочитано», мут, последняя строка
+            "chat_list", "chat_views" -> event.optJSONArray("chats")?.let { arr ->
+                for (k in 0 until arr.length()) arr.optJSONObject(k)?.let { applyChatEntry(it) }
+                Log.i(TAG, "список чатов модели: ${if (event.optString("type") == "chat_list") "показан" else "изменено"} ${arr.length()}")
+            }
             // READ-2: счётчик чата от маркера «прочитано до» журнала истории (прочитано здесь, на другом своём
             // устройстве, своё отправленное, перенос истории) — выставляется заново, а не прибавляется
             "read_state" -> {
                 val chat = event.optString("chat")
-                store.applyReadState(chat, event.optInt("unread"), event.optString("last_read_id"))?.let { u ->
+                store.applyReadState(chat, event.optInt("unread"), event.optString("last_read_id"), event.optLong("last_read_order"))?.let { u ->
                     postUpdate(u)
                     notifications.onRead(u.chatId, u.lastReadInboxMessageId)?.let { postUpdate(it) }
                 }

@@ -179,7 +179,8 @@ describe('SYNC-1: дисковый курсор двигается только 
       .toContain('for (const auto *name : {"cursors.json", "dec-cache.jsonl", "pending.json", "v2-ids.txt"})');
     // spec 033: строка — в журнал истории аккаунта до показа (без TTL), реплей — из хранилища строк RowState
     const history = readAndroidJni('jni_history.cpp');
-    expect(history).toMatch(/void historyReplay\(\) \{[\s\S]{0,600}const auto msgs = historyRows\(\);/);
+    // spec 036 T035: при запуске — список чатов модели (последняя строка чата), лента — страницами модели
+    expect(history).toMatch(/void historyReplay\(\) \{[\s\S]{0,800}auto list = historyChatList\(\);/);
     expect(history).toContain('if (!journaledContent(content)) return true;');
     expect(main).not.toMatch(/journalAppend|journalFold|journaledType/);
     // Входящее v2 разбирает движок; повтор (тот же uuid) не показывается дважды
@@ -255,7 +256,7 @@ describe('READ-1: прочитанное журналируется локаль
     expect(source)
       .not.toMatch(/void RetryUnconfirmedReads\(|AppendReadJournal|IsReportedRead|g_reportedRead|g_unreadIncoming/);
     expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_history.cpp'))
-      .toMatch(/StoreReadLines\(LegacyReadPath\(\)\)[\s\S]{0,4000}QFile::remove\(LegacyReadPath\(\)\);/);
+      .toMatch(/StoreReadLines\(LegacyReadPath\(\)\)[\s\S]{0,4000}StoreRemove\(LegacyReadPath\(\)\);/);
     // Прочтение (личные чаты и группы): маркер — журналу, квитанции — только о ставших прочитанными
     expect(source).toMatch(/void MirrorReadTill\([\s\S]{0,2500}sync->advanceMark\(mark, \/\*own=\*\/true\);/);
     expect(source).toMatch(/TryMutateV2\(first, parvane::json\{\{"receipt", \{\s+\{"kind", "RECEIPT_KIND_READ"\}/);
@@ -2558,12 +2559,13 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(r.clients.desktop).toContain('g_nextMsgId');
   });
 
-  // spec 031: android, как desktop, — id по порядку прихода (шов), журнал истории в порядке записи;
-  // только строка старше показанных больше чем на окно «живого» встаёт по времени
-  it('android: id по порядку прихода, место — порядком строк журнала истории', () => {
+  // spec 036 T035: android — id сообщения X из места строки в ленте модели (ORDER-1, `order`): страница старых строк,
+  // загруженная позже, встаёт ниже показанного; своё, которого модель ещё не показала, — после всего показанного
+  it('android: id — по месту строки модели, место — порядком ленты модели', () => {
     const store = readAndroidKt('ParvaneStore.kt');
-    expect(store).toContain('val msgId = nextMessageId++ shl 20');
-    expect(store.match(/nextMessageId\s*=[^=]/g) || []).toHaveLength(1);
+    expect(store).toContain('val msgId = msgIdFor(chat.id, uuid, place)');
+    expect(store).toContain('maxOf(System.currentTimeMillis(), (maxOrder[chat.id] ?: 0L) + 1)');
+    expect(store).not.toMatch(/nextMessageId/);
     const main = readAndroidJni('jni_history.cpp');
     // spec 036: место — модели (показ `allViews` в порядке ленты, новые строки — по `order` показа); своей
     // расстановки (окно «живого», placeByTime) у шва нет
@@ -2573,7 +2575,7 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(foldBody).toContain('for (const auto &mv : h->store->allViews()) {');
     expect(foldBody).not.toMatch(/sort\(/);
     expect(main).toContain('return a.value("order", std::int64_t(0)) < b.value("order", std::int64_t(0)); });');
-    expect(store).toContain('positionsFor(chat.id, maxOf(order / 1000, chat.positions.firstOrNull()?.order ?: 0L))');
+    expect(store).toContain('positionsFor(chat.id, maxOf(place / 1000, chat.positions.firstOrNull()?.order ?: 0L))');
     expect(r.clients.android).not.toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('allViews');
   });
@@ -3224,7 +3226,8 @@ describe('READ-2: прочитанное на одном своём устрой
     // Счётчик — readState ядра (historyIsUnread), шов выставляет его заново, а не прибавляет
     expect(history).toContain('const auto rs = h.sync->readState(');
     const client = readAndroidKt('Client.kt');
-    expect(client).toContain('store.applyReadState(chat, event.optInt("unread"), event.optString("last_read_id"))');
+    expect(client).toContain('event.optString("last_read_id"), event.optLong("last_read_order"))');
+    expect(client).toContain('store.applyReadState(chat, event.optInt("unread"),');
     const store = readAndroidKt('ParvaneStore.kt');
     expect(store).toContain('if (!out && read && chat.unreadCount == 0 && msgId > chat.lastReadInboxMessageId)');
     expect(store).toMatch(/fun removeMessages[\s\S]{0,1500}chat\.unreadCount = maxOf\(0, chat\.unreadCount - gone\)/);
@@ -3468,7 +3471,7 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     const history = readRepo(`${tdesktopDir}/parvane_client_history.cpp`);
     expect(history).not.toMatch(/FileRowStore|"historyApply"|"historyMerge"|"historyMarkMerge"/);
     expect(history)
-      .toContain('std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString());');
+      .toContain('std::make_shared<parvane::history::ModelRows>(RowsHostFor(generation), aux.toStdString(),');
     expect(history).toContain('parvane::history::importLegacyRows(');
     expect(history).toContain('return ConvertLegacyOps(stored, self);');
     expect(readDesktopSource()).not.toMatch(/"historyMarkMerge"|"historyApply"/);
@@ -3501,6 +3504,37 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
 
   it('права групп по типу содержимого — из модели движка, не из chat_rules (GROUP-2, T126)', () => {
     expect(readRepo('desktop/parvane-core/include/parvane/chat_rules.h')).not.toMatch(/GROUP-2/);
+  });
+
+  // spec 036 T030: список диалогов tdesktop — из списка чатов модели (`chatList` при запуске, `chat_upsert` /
+  // `chat_remove` событий `model`): место, закреп, архив, отметка, мут, последняя строка, снятие; своих наборов показа
+  // и своего «впервые увиденного» у группы без сообщений нет
+  it('список диалогов tdesktop — из списка чатов модели (spec 036 T030)', () => {
+    const client = readRepo(`${tdesktopDir}/parvane_client.cpp`);
+    expect(client).toContain('auto chatList = HistoryChatList();');
+    expect(client).toContain('ShowModelChats(chatList, /*full=*/true);');
+    expect(client).toContain('if (auto v = parvane::history::chatViewOfModel(ch["chat_upsert"]); v.is_object()) {');
+    expect(client).toContain('history->setChatListTimeId(t);');
+    const state = readRepo(`${tdesktopDir}/parvane_client_state.cpp`);
+    expect(state).toContain('ApplyModelDialogState(session);');
+    expect(state).not.toMatch(/setPinnedFromEntryList|history->setUnreadMark\(false\)/);
+    expect(readRepo(`${tdesktopDir}/parvane_client_groups.cpp`)).not.toMatch(/GroupFirstSeen|parvane-groups-seen/);
+    expect(readRepo('desktop/parvane-core/src/history_sync.cpp'))
+      .toContain('const auto p = h->read("chatList", args);');
+    // Место группы без сообщений — модели (время появления в списке, Meta.chats_since)
+    expect(readRepo('backend/protocol/src/model/mod.rs')).toContain('chats_since: BTreeMap<String, i64>,');
+  });
+
+  // spec 036 T031: файлы tdata/parvane-* — записи хранилища движка (`PathFiles` в tdata, файлы каталога состояния —
+  // `Session::*StateFileIn`); storecrypt — только читатель переноса и кэш медиа
+  it('файлы tdata desktop — хранилище движка, storecrypt только перенос и медиа (spec 036 T031)', () => {
+    const client = readRepo(`${tdesktopDir}/parvane_client.cpp`);
+    expect(client).toContain('if (const auto f = TdataFilesFor(path)) {');
+    expect(client).toContain('return QByteArray::fromStdString(parvane::v2::Session::readStateFileIn(');
+    const direct = tdesktopFiles.filter((f) => /storecrypt::(readFile|writeFile|appendLine|writeLines|readLines)\(/
+      .test(readRepo(`${tdesktopDir}/${f}`)));
+    expect(direct).toEqual(['parvane_client.cpp']); // воронка (прежний путь вне tdata) и кэш медиа
+    expect(readRepo('desktop/parvane-core/src/local_files.cpp')).toContain('"parvane-host-account",');
   });
 });
 
@@ -3757,6 +3791,31 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(history).toContain('return s ? s->rowsModel() : nullptr;');
     expect(history).toContain('const auto rowsDone = ph::importLegacyRows(');
     expect(history).toContain('convertLegacyJournal(*raw, me);');
+  });
+  // spec 036 T035: лента X — страницами модели (GetChatHistory → historyPage), список чатов — видом модели (ChatView:
+  // место, закреп, архив, отметка, мут, последняя строка); при запуске шов получает только список чатов
+  it('лента X — страницами модели, список чатов — видом модели (spec 036 T035)', () => {
+    const history = strip(readAndroidJni('jni_history.cpp'));
+    expect(history).toContain('emitNow(json{{"type", "chat_list"}, {"chats", list["chats"]}});');
+    expect(history).toContain('const auto p = h->store->page(peer,');
+    const store = strip(readAndroidKt('ParvaneStore.kt'));
+    expect(store).toContain('val page = p(address, a, "older", minOf(need, 200))');
+    expect(store).toContain('object MessageIds {');
+    expect(store).not.toMatch(/nextMessageId/);
+    const client = strip(readAndroidKt('Client.kt'));
+    expect(client).toContain('store.pager = ::modelPage');
+    expect(client).toContain('"chat_list", "chat_views" ->');
+  });
+  // spec 036 T036: служебные файлы — записи хранилища движка (PathFiles / каталог состояния); storecrypt в JNI — только
+  // читатель переноса прежнего журнала шва и кэш медиа
+  it('служебные файлы android — хранилище движка, storecrypt только перенос и медиа (spec 036 T036)', () => {
+    const offenders = jniFiles.filter((f) => /storecrypt::(readFile|writeFile|appendLine|writeLines)\(/
+      .test(strip(readRepo(`${jniDir}/${f}`))) && f !== 'jni_main.cpp');
+    expect(offenders).toEqual([]);
+    const main = strip(readAndroidJni('jni_main.cpp'));
+    expect((main.match(/storecrypt::(readFile|writeFile)\(/g) || []).length).toBe(2); // кэш медиа: чтение и запись
+    expect(main).toContain('parvane::v2::Session::useHostFiles(!storeLegacyHook()');
+    expect(readAndroidJni('jni_history.cpp')).toContain('ph::ModelRows::AuxIo{');
   });
   // spec 036 T034 (остаток T136): показ личного состояния — объекты модели по видам (`viewStateJson`), не снимок формы
   // state.v1; правка — объекты вида ([objects]) через настоящую модель (JVM-тест editsGoThroughEngineModelWithShownBase)

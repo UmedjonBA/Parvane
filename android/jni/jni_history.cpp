@@ -10,7 +10,8 @@
 //                                      не удаляются (D2);
 //   history-marks-<адрес>.json       — прежние маркеры «прочитано до» (так же);
 //   history-sync-<адрес>-meta.json / -pending.json / -imported.json — курсор, голова, точка, флаг переноса, очередь
-//                                      своих, отметка переноса строк в модель;
+//                                      своих, отметка переноса строк в модель — записями хранилища движка
+//                                      (PathFiles, spec 036 T036; прежний файл переносится один раз);
 //   history-local-<адрес>.json       — границы очистки чатов «у себя», ✓✓ своих (время по чату), неотправленные
 //                                      квитанции READ собеседникам (повтор до успеха, READ-1 п. 3) — записью хранилища
 //                                      движка (PathFiles, spec 036 T036; прежний файл переносится один раз).
@@ -274,7 +275,44 @@ json readStateEvent(Hist &h, const std::string &chat, const std::string &chatKey
             if (last.empty()) last = it->second.second;
         }
     }
-    return json{{"type", "read_state"}, {"chat", chat}, {"unread", unread}, {"last_read_id", last}};
+    // Место прочитанной строки (ORDER-1): шов строит id сообщения X из места, не загружая строку (лента — страницами)
+    std::int64_t lastOrder = 0;
+    if (!last.empty()) {
+        const auto vs = h.store->views({last});
+        if (!vs.empty()) lastOrder = ph::viewOfModel(vs.front()).value("order", std::int64_t(0));
+    }
+    return json{{"type", "read_state"}, {"chat", chat}, {"unread", unread}, {"last_read_id", last}, {"last_read_order", lastOrder}};
+}
+
+// spec 036 T035: вид чата модели (`chatViewOfModel`) → строка списка шва: адрес, место (мс), закреп, архив, отметка,
+// мут, черновик, папки, счётчик и последняя строка событием "message" (показ модели; очищенное «у себя» — без неё).
+json chatEntryOf(Hist &h, const json &cv, const std::string &me) {
+    const auto address = parvane::v2::Session::historyAddress(cv.value("chat", json()));
+    if (address.empty()) return nullptr;
+    auto out = json{{"address", address}, {"group", isGroupAddress(address)},
+                    {"order", cv.value("order", std::int64_t(0))}, {"pinned_rank", cv.value("pinnedRank", std::int64_t(0))},
+                    {"archived", cv.value("archived", false)}, {"unread_mark", cv.value("unreadMark", false)},
+                    {"muted_until_ms", cv.value("mutedUntilMs", std::int64_t(0))}, {"draft", cv.value("draft", std::string())},
+                    {"folder_ids", cv.value("folderIds", json::array())}, {"unread", cv.value("unread", std::int64_t(0))},
+                    {"mention", cv.value("mention", false)}};
+    const auto &last = cv.contains("last") ? cv["last"] : json();
+    if (last.is_object() && !isClearedView(h, last)) {
+        auto ev = messageEventOf(h, last, me);
+        ev["order"] = last.value("order", std::int64_t(0));
+        out["last"] = std::move(ev);
+    }
+    return out;
+}
+
+// Строки страницы стали показанными: правка, реакции и снятие дальше идут событиями этих строк (не "message")
+void notePaged(const json &ev) {
+    const auto id = ev.value("id", std::string());
+    (void)markSeen(id);
+    const auto from = ev.value("from", std::string());
+    const auto to = ev.value("to", std::string());
+    const auto chat = ev.value("group", false) ? to : (from == self() ? to : from);
+    noteMessage(id, from, chat, ev.value("content", json::object()), ev.value("proof", std::string()));
+    replaceMeta(id, ev.value("by", json::object()), ev.value("pinned", false));
 }
 
 // Строки, изменившиеся в модели (входящее, журнал истории, мутации, квитанции — `message_upsert/remove`), → события
@@ -530,7 +568,10 @@ std::shared_ptr<Hist> ensureHist() {
             const auto s = v2Any();
             return s ? s->rowsModel() : nullptr;
         },
-        historyAuxPrefix(me));
+        historyAuxPrefix(me),
+        // Служебные документы журнала (отметка переноса, очередь прежнего журнала) — файлы хоста (spec 036 T036)
+        ph::ModelRows::AuxIo{[](const std::string &p) { return hostRead(p); },
+                             [](const std::string &p, const std::string &d) { return hostWrite(p, d); }});
     h->loadLocal();
     Hist *raw = h.get();
     ph::HistorySyncConfig cfg;
@@ -908,6 +949,7 @@ void historyModelChanges(const json &changes) {
     const auto h = hist();
     if (!h || !h->ready) return;
     std::vector<json> views;
+    std::vector<json> chatEntries;
     for (const auto &ch : changes) {
         if (!ch.is_object()) continue;
         if (ch.contains("message_upsert")) {
@@ -927,8 +969,28 @@ void historyModelChanges(const json &changes) {
             if (chat.empty()) continue;
             std::lock_guard<std::mutex> lk(g_unreadMu);
             g_modelUnread[chat] = {u.value("unread", 0), u.value("lastReadId", std::string())};
+        } else if (ch.contains("chat_upsert")) {
+            // spec 036 T035: строка списка чатов — готовым видом модели (место, закреп, архив, отметка, мут)
+            if (auto e = chatEntryOf(*h, ph::chatViewOfModel(ch["chat_upsert"]), self()); e.is_object()) {
+                chatEntries.push_back(std::move(e));
+            }
+        } else if (ch.contains("chat_remove")) {
+            const auto r = ph::removedChatOfModel(ch["chat_remove"]);
+            const auto address = r.is_object() ? parvane::v2::Session::historyAddress(r.value("chat", json())) : std::string();
+            if (!address.empty()) chatEntries.push_back(json{{"address", address}, {"removed", true}});
         }
     }
+    // Строки — раньше строк списка (последняя строка чата уже показана, когда приходит его вид)
+    struct EmitChats {
+        std::vector<json> &list;
+        ~EmitChats() {
+            if (list.empty()) return;
+            for (const auto &e : list) {
+                if (e.contains("last")) notePaged(e["last"]); // последняя строка показана видом списка
+            }
+            emit(json{{"type", "chat_views"}, {"chats", list}});
+        }
+    } emitChats{chatEntries};
     if (views.empty()) return;
     const auto removed = std::count_if(views.begin(), views.end(), [](const json &v) { return !v.value("visible", false); });
     LOGI("журнал истории: применено строк %zu моделью, снято %zu", views.size() - std::size_t(removed), std::size_t(removed));
@@ -960,6 +1022,49 @@ std::vector<json> historyRows() {
     return out;
 }
 
+json historyChatList() {
+    const auto h = ensureHist();
+    if (!h || !h->ready) return json{{"chats", json::array()}, {"ready", false}};
+    const auto me = self();
+    auto chats = json::array();
+    for (const auto &cv : h->store->chatList()) {
+        try {
+            if (auto e = chatEntryOf(*h, cv, me); e.is_object()) {
+                if (e.contains("last")) notePaged(e["last"]);
+                chats.push_back(std::move(e));
+            }
+        } catch (const std::exception &e) {
+            LOGI("список чатов: чат пропущен (%s)", e.what());
+        }
+    }
+    return json{{"chats", chats}, {"ready", true}};
+}
+
+json historyPageEvents(const json &args) {
+    const auto h = ensureHist();
+    const auto address = args.value("chat", std::string());
+    const auto peer = historyPeerOf(address);
+    if (!h || !h->ready || peer.is_null()) return json{{"ok", false}};
+    const auto me = self();
+    const auto p = h->store->page(peer, args.value("anchor", std::string()), args.value("direction", std::string("older")),
+                                  args.value("limit", 50));
+    if (!p.ok) return json{{"ok", false}};
+    auto rows = json::array();
+    for (const auto &view : p.rows) {
+        try {
+            if (isClearedView(*h, view)) continue;
+            auto ev = messageEventOf(*h, view, me);
+            ev["order"] = view.value("order", std::int64_t(0));
+            ev["replay"] = true; // показ страницы: без уведомления
+            notePaged(ev);
+            rows.push_back(std::move(ev));
+        } catch (const std::exception &e) {
+            LOGI("страница истории: строка пропущена (%s)", e.what());
+        }
+    }
+    return json{{"ok", true}, {"rows", rows}, {"has_older", p.hasOlder}, {"has_newer", p.hasNewer}};
+}
+
 void historyReplay() {
     const auto h = ensureHist();
     if (!h) return;
@@ -968,27 +1073,38 @@ void historyReplay() {
         h->replayWanted = true;
         if (!h->ready || !h->replayWanted.exchange(false)) return;
     }
-    const auto msgs = historyRows();
-    std::map<std::string, std::string> chats; // адрес → ключ чата
-    for (const auto &m : msgs) {
-        const auto id = m.value("id", "");
-        (void)markSeen(id);
-        const auto from = m.value("from", "");
-        const auto to = m.value("to", "");
-        const auto chat = m.value("group", false) ? to : chatOfRow(from, to, self());
-        chats[chat] = m.value("chat_key", std::string());
-        noteMessage(id, from, chat, m.value("content", json::object()), m.value("proof", std::string()));
-        replaceMeta(id, m.value("by", json::object()), m.value("pinned", false));
-        auto ev = m;
-        ev["replay"] = true; // история с диска: шов не уведомляет
-        emitNow(ev);
+    // spec 036 T035 (ENGINE-1): при запуске — только список чатов модели (последняя строка каждого чата); ленту X
+    // берёт страницами модели (GetChatHistory → historyPage), а не из памяти шва
+    auto list = historyChatList();
+    const auto n = list["chats"].size();
+    // Голоса и закрытия опросов — служебные строки ленты, сводятся швом (PollStore в памяти): по порядку ленты, раньше
+    // списка; ленту листают страницами в любом порядке — старый голос не должен затирать новый
+    const auto me = self();
+    std::size_t polls = 0;
+    for (const auto &mv : h->store->allViews()) {
+        const auto view = ph::viewOfModel(mv);
+        if (!view.is_object() || isClearedView(*h, view)) continue;
+        const auto kind = parvane::contentKind(contentOfView(view));
+        if (kind != "poll_vote" && kind != "poll_close") continue;
+        try {
+            auto ev = messageEventOf(*h, view, me);
+            ev["replay"] = true;
+            (void)markSeen(ev.value("id", std::string()));
+            emitNow(ev);
+            ++polls;
+        } catch (const std::exception &e) {
+            LOGI("журнал: служебная строка опроса пропущена (%s)", e.what());
+        }
     }
+    emitNow(json{{"type", "chat_list"}, {"chats", list["chats"]}});
+    std::map<std::string, std::string> chats; // адрес → ключ чата
+    for (const auto &c : list["chats"]) chats[c.value("address", std::string())] = std::string();
     // Счётчики — от маркера (READ-2), не от потока вставок
     for (const auto &mark : h->store->marks()) {
         chats[parvane::v2::Session::historyAddress(mark.value("chat", json()))] = ph::chatKeyOf(mark.value("chat", json()));
     }
     for (const auto &[chat, key] : chats) if (!chat.empty()) emitNow(readStateEvent(*h, chat, key));
-    LOGI("журнал: восстановлено %zu сообщений", msgs.size());
+    LOGI("журнал: список чатов модели — %zu чатов, служебных строк опросов %zu", n, polls);
 }
 
 void historyClearChat(const std::string &chat, std::int64_t untilMs, const std::set<std::string> &ids) {
@@ -1029,8 +1145,12 @@ void historyMoveFiles(const std::string &oldAddress, const std::string &newAddre
     if (hostExists(historyLocalPath(oldAddress)) && !hostExists(historyLocalPath(newAddress))) {
         if (hostWrite(historyLocalPath(newAddress), hostRead(historyLocalPath(oldAddress)))) hostRemove(historyLocalPath(oldAddress));
     }
-    for (const auto *name : {"meta.json", "pending.json", "imported.json"})
-        move(historyAuxPrefix(oldAddress) + name, historyAuxPrefix(newAddress) + name);
+    // Служебные документы — файлы хоста (PathFiles): запись под новым именем, прежняя снимается
+    for (const auto *name : {"meta.json", "pending.json", "imported.json"}) {
+        const auto from = historyAuxPrefix(oldAddress) + name;
+        const auto to = historyAuxPrefix(newAddress) + name;
+        if (hostExists(from) && !hostExists(to) && hostWrite(to, hostRead(from))) hostRemove(from);
+    }
 }
 
 } // namespace pvjni

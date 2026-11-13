@@ -124,7 +124,12 @@ void historyRecordDelete(const std::string &id, const std::string &chat, bool ev
 void historyMarkRead(const std::vector<std::string> &ids); // маркер + квитанции о ставших прочитанными, с повтором
 void historyEmitReadState(const std::string &chat);
 [[nodiscard]] std::vector<json> historyRows(); // видимые строки событиями "message", порядок ORDER-1
-void historyReplay(); // в Kotlin по первому LoadChats: строки + счётчики от маркера
+void historyReplay(); // в Kotlin по первому LoadChats: список чатов модели (событие chat_list) + счётчики от маркера
+// spec 036 T035: список чатов модели строками шва ({chats: [{address, order, pinned_rank, archived, unread_mark,
+// muted_until_ms, draft, folder_ids, unread, mention, last: событие "message"}]}) и страница истории чата событиями
+// "message" (args: {chat: адрес, anchor: uuid|"", direction: older|newer|around, limit}) → {ok, rows, has_older, has_newer}.
+[[nodiscard]] json historyChatList();
+[[nodiscard]] json historyPageEvents(const json &args);
 void historyClearChat(const std::string &chat, std::int64_t untilMs, const std::set<std::string> &ids);
 void historyForget(const std::string &id);
 void historyMoveFiles(const std::string &oldAddress, const std::string &newAddress);

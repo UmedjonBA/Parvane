@@ -2,6 +2,7 @@
 // снимка CloudView, место в списке, сортировка (настройка устройства), переносы с ходом и отменой, уведомление,
 // свои ссылки, миниатюры. Сеть и крипто — задания в рабочий поток разделов (`Sections::Ask`, CloudFiles ядра).
 #include "parvane/parvane_cloud_internal.h"
+#include "parvane/parvane_client.h"
 #include "parvane/parvane_local_files.h"
 #include "parvane/parvane_safe_open.h"
 
@@ -98,7 +99,8 @@ void ReadSort() {
 	}
 	st.sortRead = true;
 	// Хелперы хранилища (ревью 21 окт 2026, L9): под оградой стирания при выходе; прежний открытый файл читается
-	const auto raw = parvane::storecrypt::readFile(QFile::encodeName(PrefsPath()).toStdString());
+	// spec 036 T031: файл tdata — записью хранилища движка (прежний файл storecrypt переносится при первом чтении)
+	const auto raw = Parvane::SectionsRead(PrefsPath()).toStdString();
 	if (raw.empty()) {
 		return;
 	}
@@ -115,9 +117,8 @@ void ReadSort() {
 void WriteSort() {
 	const auto &sort = St().sort;
 	const auto key = sort.key == cloud::SortKey::Date ? "date" : sort.key == cloud::SortKey::Size ? "size" : "name";
-	(void)parvane::storecrypt::writeFile(
-		QFile::encodeName(PrefsPath()).toStdString(),
-		json{ { "sort", { { "key", key }, { "isDescending", sort.isDescending } } } }.dump());
+	(void)Parvane::SectionsWrite(PrefsPath(),
+		QByteArray::fromStdString(json{ { "sort", { { "key", key }, { "isDescending", sort.isDescending } } } }.dump()));
 }
 
 // Открытая папка или контейнер исчезли (удалены, доступ отозван) — подняться выше (web `fixPlace`)

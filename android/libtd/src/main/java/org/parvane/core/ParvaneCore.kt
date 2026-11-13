@@ -201,9 +201,14 @@ object ParvaneCore {
     fun stateConnect(): Boolean = nativeStateConnect()
     /** Журнал до головы: правка другого устройства — событие `model` (state=true). */
     fun stateRefresh(): Boolean = nativeStateRefresh()
-    /** Список чатов модели (`chatList`, ChatList) и страница истории (`historyPage`, HistoryPage); null — модели нет. */
-    fun chatList(args: JSONObject = JSONObject()): JSONObject? = nativeChatList(args.toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
-    fun historyPage(args: JSONObject): JSONObject? = nativeHistoryPage(args.toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** spec 036 T035: список чатов модели строками шва — {chats: [{address, order, pinned_rank, archived, unread_mark,
+     *  muted_until_ms, draft, folder_ids, unread, mention, last: событие "message"}], ready}; null — ошибка. */
+    fun chatList(): JSONObject? = nativeChatList("{}").takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** Страница истории чата из модели событиями "message" (с `order`): args {chat: адрес, anchor: uuid|"",
+     *  direction: older|newer|around, limit} → {ok, rows, has_older, has_newer}; null — ошибка. */
+    fun historyPage(chat: String, anchor: String, direction: String, limit: Int): JSONObject? =
+        nativeHistoryPage(JSONObject().put("chat", chat).put("anchor", anchor).put("direction", direction).put("limit", limit).toString())
+            .takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     /** spec 035 (FR-075): избранные стикеры из модели — [{set_id, sticker_id, added_ms}]; null — журнал недоступен. */
     fun stateFavedStickers(): JSONArray? = nativeStateFavedStickers().takeIf { it.isNotEmpty() }?.let { JSONArray(it) }
     fun stateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean = nativeStateFaveSticker(setId, stickerId, on)

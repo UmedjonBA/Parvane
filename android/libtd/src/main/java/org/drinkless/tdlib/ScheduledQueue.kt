@@ -32,7 +32,9 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     @Synchronized fun all(): List<Item> = items.values.sortedBy { it.due }
     @Synchronized fun forChat(chatId: Long): List<Item> = all().filter { it.chatId == chatId }
     @Synchronized fun get(id: Long): Item? = items[id]
-    fun isScheduledId(id: Long) = id >= ID_BASE
+    // spec 036 T035: id сообщений ленты — по месту строки в ленте модели (MessageIds, ~2^62), т. е. тоже выше ID_BASE;
+    // диапазон отложенных — [ID_BASE, ID_BASE + 2^30): ни одно id ленты в него не попадает
+    fun isScheduledId(id: Long) = id >= ID_BASE && id < ID_BASE + (1L shl 30)
 
     @Synchronized
     fun add(uuid: String, chatId: Long, to: String, content: JSONObject, localPath: String?, replyTo: String?, due: Long): Item {

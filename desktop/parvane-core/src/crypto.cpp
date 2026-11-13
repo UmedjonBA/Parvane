@@ -120,6 +120,17 @@ std::optional<SigningKey> SigningKey::fromSeedB64(const std::string &seedB64) {
 
 // P-13: seed — через storecrypt (шифртекст под ключом ОС; plain прежних
 // версий читается и перешифровывается).
+SigningKey SigningKey::loadOrCreate(const std::function<std::string()> &read, const std::function<bool(const std::string &)> &write) {
+    auto seed = read ? read() : std::string();
+    if (const auto nl = seed.find('\n'); nl != std::string::npos) seed.resize(nl);
+    if (!seed.empty()) {
+        if (auto k = fromSeedB64(seed)) return *k;
+    }
+    SigningKey key = generate();
+    if (write && !key.seedB64_.empty()) (void)write(key.seedB64_ + "\n");
+    return key;
+}
+
 SigningKey SigningKey::loadOrCreate(const std::string &path) {
     if (!path.empty()) {
         auto seed = storecrypt::readFile(path);

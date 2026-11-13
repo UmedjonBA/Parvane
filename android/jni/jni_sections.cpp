@@ -93,6 +93,20 @@ private:
     SessionPtr session_;
 };
 
+// spec 036 T036: файлы разделов — в каталоге состояния аккаунта, записями хранилища движка этого каталога
+// (`Session::*StateFileIn`, как файлы сессии; прежний файл storecrypt переносится при первом чтении)
+std::string readSectionsFile(const std::string &path) {
+    const auto slash = path.rfind('/');
+    return slash == std::string::npos ? std::string()
+                                      : parvane::v2::Session::readStateFileIn(path.substr(0, slash), path.substr(slash + 1));
+}
+
+bool writeSectionsFile(const std::string &path, const std::string &data) {
+    const auto slash = path.rfind('/');
+    return slash != std::string::npos
+        && parvane::v2::Session::writeStateFileIn(path.substr(0, slash), path.substr(slash + 1), data);
+}
+
 // ── записи устройства: зашифрованный файл, пишется, когда что-то изменилось ────
 
 class FileRecords final : public domain::RecordStore {
@@ -102,7 +116,7 @@ public:
         memory_ = domain::MemoryRecords();
         dirty_ = false;
         if (path.empty()) return;
-        const auto raw = parvane::storecrypt::readFile(path);
+        const auto raw = readSectionsFile(path);
         if (raw.empty()) return;
         const auto j = json::parse(raw, nullptr, false);
         if (j.is_object()) memory_ = domain::MemoryRecords(j);
@@ -119,7 +133,7 @@ public:
     void flush() {
         if (!dirty_ || path_.empty()) return;
         dirty_ = false;
-        if (!parvane::storecrypt::writeFile(path_, memory_.toJson().dump())) LOGE("разделы — записи не сохранены");
+        if (!writeSectionsFile(path_, memory_.toJson().dump())) LOGE("разделы — записи не сохранены");
     }
 
 private:
@@ -297,7 +311,7 @@ public:
     void importDomainKeys() {
         // До готовности сессии движок не поднят (вызов ждал бы конца подключения) — `stateReady` позовёт снова
         if (self_.empty() || !transport_.isReady()) return;
-        const auto saved = json::parse(parvane::storecrypt::readFile(storeDir() + "/domain-keys.json"), nullptr, false);
+        const auto saved = json::parse(hostRead(storeDir() + "/domain-keys.json"), nullptr, false);
         if (!saved.is_object() || saved.value("owner", std::string()) != self_) return;
         const auto planner = saved.value("planner", std::string());
         const auto cloud = saved.value("cloud", std::string());
@@ -656,7 +670,7 @@ private:
         viewCloud_.reset();
         viewDirty_ = false;
         if (path.empty()) return;
-        const auto saved = json::parse(parvane::storecrypt::readFile(path), nullptr, false);
+        const auto saved = json::parse(readSectionsFile(path), nullptr, false);
         if (!saved.is_object()) return;
         if (const auto it = saved.find("planner"); it != saved.end() && it->is_object()) {
             viewPlanner_ = *it;
@@ -678,7 +692,7 @@ private:
         json out = json::object();
         if (viewPlanner_) out["planner"] = *viewPlanner_;
         if (viewCloud_) out["cloud"] = *viewCloud_;
-        if (!parvane::storecrypt::writeFile(viewPath_, out.dump())) LOGE("разделы — сохранённый вид не записан");
+        if (!writeSectionsFile(viewPath_, out.dump())) LOGE("разделы — сохранённый вид не записан");
     }
 
 public:

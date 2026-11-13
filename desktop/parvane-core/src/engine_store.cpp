@@ -336,6 +336,17 @@ HostFiles::Moved HostFiles::migrateFrom(const std::string &name, const std::stri
             at = nl + 1;
         }
         plain = std::move(joined);
+    } else if (old->rfind("PVSE1:", 0) == 0 || old->find("\nPVSE1:") != std::string::npos) {
+        // Журнал `appendLine` с именем не `.jsonl` (v2-ids.txt, read.txt, cleared-*.txt): голова целиком (после
+        // прежнего `migrateFile`) и дописанные строки `PVSE1:` — тем же разбором, что storecrypt::readLines. Целиком
+        // такой файл не открывается, а «открытым текстом» строки легли бы как есть
+        std::string joined;
+        for (const auto &line : storecrypt::readLines(path)) {
+            joined += line;
+            joined.push_back('\n');
+        }
+        damaged = joined.empty();
+        plain = std::move(joined);
     } else {
         plain = storecrypt::open(*old);
         damaged = !plain.has_value();
@@ -358,14 +369,14 @@ HostFiles::Moved HostFiles::migrateFrom(const std::string &name, const std::stri
 
 // ── PathFiles ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-PathFiles::PathFiles(std::string dir, std::string deviceKey32, Log log)
-: dir_(std::move(dir)), key_(std::move(deviceKey32)), log_(std::move(log)) {}
+PathFiles::PathFiles(std::string dir, std::string deviceKey32, Log log, std::string sub)
+: dir_(std::move(dir)), key_(std::move(deviceKey32)), log_(std::move(log)), sub_(std::move(sub)) {}
 
 std::optional<std::string> PathFiles::nameOf(const std::string &path) const {
     if (dir_.empty() || path.size() <= dir_.size() + 1 || path.compare(0, dir_.size(), dir_) != 0 || path[dir_.size()] != '/')
         return std::nullopt;
     auto name = path.substr(dir_.size() + 1);
-    if (name.find("..") != std::string::npos || name.rfind("host-files/", 0) == 0 || name == "host-files")
+    if (name.find("..") != std::string::npos || name.rfind(sub_ + "/", 0) == 0 || name == sub_)
         return std::nullopt;
     return name;
 }
@@ -375,7 +386,7 @@ HostFiles *PathFiles::openLocked() {
     tried_ = true;
     if (key_.size() != 32 || dir_.empty()) return nullptr;
     std::string err;
-    hf_ = HostFiles::open(dir_ + "/host-files", key_, &err);
+    hf_ = HostFiles::open(dir_ + "/" + sub_, key_, &err);
     if (!hf_ && log_) log_("хранилище файлов хоста не открылось: " + err + " — прежний путь");
     return hf_.get();
 }
@@ -446,6 +457,94 @@ void PathFiles::remove(const std::string &path) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
     std::filesystem::remove(path + ".migrated", ec); // перенесённая копия прежнего файла (сессия, доверие) — тоже
+}
+
+std::vector<std::string> PathFiles::readLines(const std::string &path) {
+    std::vector<std::string> out;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto *hf = openLocked();
+        const auto name = nameOf(path);
+        if (hf && name && migratedLocked(*hf, *name, path)) {
+            const auto text = hf->read(*name).value_or(std::string());
+            std::size_t at = 0;
+            while (at < text.size()) {
+                const auto nl = text.find('\n', at);
+                auto line = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+                if (!line.empty()) out.push_back(std::move(line));
+                if (nl == std::string::npos) break;
+                at = nl + 1;
+            }
+            return out;
+        }
+    }
+    return storecrypt::readLines(path);
+}
+
+bool PathFiles::appendLine(const std::string &path, const std::string &line) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto *hf = openLocked();
+        const auto name = nameOf(path);
+        if (hf && name && migratedLocked(*hf, *name, path)) {
+            if (storecrypt::writesBlocked()) return false;
+            auto text = hf->read(*name).value_or(std::string());
+            if (!text.empty() && text.back() != '\n') text.push_back('\n');
+            text += line;
+            text.push_back('\n');
+            std::string err;
+            if (hf->write(*name, text, &err)) return true;
+            if (log_) log_("журнал " + *name + " не дописан в хранилище движка: " + err);
+            return false;
+        }
+    }
+    return storecrypt::appendLine(path, line);
+}
+
+bool PathFiles::writeLines(const std::string &path, const std::vector<std::string> &lines) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto *hf = openLocked();
+        const auto name = nameOf(path);
+        if (hf && name && migratedLocked(*hf, *name, path)) {
+            if (storecrypt::writesBlocked()) return false;
+            std::string text;
+            for (const auto &l : lines) {
+                text += l;
+                text.push_back('\n');
+            }
+            std::string err;
+            if (hf->write(*name, text, &err)) return true;
+            if (log_) log_("журнал " + *name + " не записан в хранилище движка: " + err);
+            return false;
+        }
+    }
+    return storecrypt::writeLines(path, lines);
+}
+
+bool PathFiles::rename(const std::string &from, const std::string &to) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto *hf = openLocked();
+        const auto a = nameOf(from);
+        const auto b = nameOf(to);
+        if (hf && a && b && migratedLocked(*hf, *a, from) && migratedLocked(*hf, *b, to)) {
+            if (storecrypt::writesBlocked()) return false;
+            const auto data = hf->read(*a);
+            if (!data || hf->read(*b)) return false;
+            std::string err;
+            if (!hf->write(*b, *data, &err)) {
+                if (log_) log_("файл " + *b + " не записан при переименовании: " + err);
+                return false;
+            }
+            hf->remove(*a);
+            return true;
+        }
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(from, ec) || std::filesystem::exists(to, ec)) return false;
+    std::filesystem::rename(from, to, ec);
+    return !ec;
 }
 
 void PathFiles::reset() {

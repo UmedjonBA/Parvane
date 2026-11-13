@@ -1747,16 +1747,21 @@ vitest требует снять `.fails`).
   список чатов (`chatList`/`chat_upsert`), личное состояние по видам (`viewStateJson`/`stateSet`/`stateMark`,
   `v2/stateObjects.ts`), группы (`viewGroup`, права себя `GroupView.can_*`) — из модели (`engine_rows: true`).
   Вне модели осознанно: самоуничтожение собеседника (память показа), шифртекст v1, черновики/очередь отложенных с
-  параметрами медиа, секреты наборов (C7-3); `toWireGroupInfo` — перекладка `info_json` модели в форму tt.
+  параметрами медиа, секреты наборов (C7-3); `toWireGroupInfo` — раскладка готового `GroupView.info_json` в форму слоя
+  групп tt (своего сведения, версии и прав в ней нет; T020 — оставлено осознанно).
 - **desktop** — то же ядро, что android: `SessionConfig.engineRows` + `modelEvents`, строки — `ModelRows` (`viewOfModel`,
   `allViews`), прочтение — намерение `read` (`Session::readTo`), личное состояние — `StateModel` поверх `viewStateJson`/
   `stateSet`/`stateMark` (мост `state.v1` удалён, T038), группы — `viewGroup`; tdesktop показывает `MessageView`
-  (`StoredFromView`, `ShowModelRows`). Осталось (не смысл, а показ): список диалогов tdesktop строится из вставленных
-  строк (своего списка у tdesktop нет), файлы `tdata/parvane-*` вне каталога состояния — storecrypt.
+  (`StoredFromView`, `ShowModelRows`). С 13 ноя (вечер, T030/T031): список диалогов — из `chatList` модели
+  (`ShowModelChats`: место `ChatView.order`, закреп, архив, отметка, мут, последняя строка, `chat_remove`); файлы
+  `tdata/parvane-*` — записи хранилища движка (`PathFiles` в tdata: `parvane-host`, `-account`, `-device`; каталог
+  состояния — `Session::*StateFileIn`), storecrypt — читатель переноса и кэш медиа.
 - **android** — то же ядро (`jni_session.cpp`: `cfg.engineRows`, `cfg.modelEvents`), `jni_history.cpp` показывает
-  строки модели в её порядке, прочтение — намерение `read`, `StateJournal.kt` — объекты модели по видам. Осталось: лента
-  X — память шва, наполняемая готовым показом модели (страницы `historyPage` для `GetChatHistory` не используются),
-  storecrypt для медиа-кэша, служебных `history-sync-*`, кэшей групп/L2 и `domain-keys.json`.
+  строки модели в её порядке, прочтение — намерение `read`, `StateJournal.kt` — объекты модели по видам. С 13 ноя
+  (вечер, T035/T036): лента X — страницами модели (`GetChatHistory` → `historyPage`, id сообщения по месту ленты —
+  `MessageIds`), список чатов — видом модели (`chat_list`/`chat_views`); служебные файлы — хранилище движка (PathFiles,
+  каталог состояния); storecrypt — читатель переноса и кэш медиа. Группа без сообщений стоит в `chatList` временем
+  появления в списке (движок, `Meta.chats_since`).
 
 Серии 13 ноя 2026 (MSI): движок `cargo test -p parvane-protocol` 449/449, ctest ядра 75/75, живой
 `run_v2_session_live.sh` 220/220, desktop `verify_*` 68/68 (`d036f` 67/68 + повтор `d036g`), web vitest 2898/2898 и

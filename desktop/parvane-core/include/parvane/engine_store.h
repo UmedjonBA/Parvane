@@ -111,11 +111,21 @@ class PathFiles {
 public:
     using Log = std::function<void(const std::string &)>;
     // deviceKey32 — ключ устройства (тот же, что у storecrypt); пустой — хранилище не открывается (прежний путь).
-    PathFiles(std::string dir, std::string deviceKey32, Log log = nullptr);
+    // sub — каталог хранилища внутри dir (android — `host-files`; desktop — `parvane-host*` в tdata, чтобы стирание
+    // при выходе и перенос файлов аккаунта видели его как свой файл).
+    PathFiles(std::string dir, std::string deviceKey32, Log log = nullptr, std::string sub = "host-files");
     [[nodiscard]] std::string read(const std::string &path);
     [[nodiscard]] bool exists(const std::string &path);
     bool write(const std::string &path, const std::string &data);
     void remove(const std::string &path);
+    // Журнал построчно (spec 036 T031/T036: прежние журналы storecrypt `appendLine` — строка `PVSE1:` на запись, в
+    // т.ч. с именем не `.jsonl`): строки записи — через '\n'; пустые строки не отдаются.
+    [[nodiscard]] std::vector<std::string> readLines(const std::string &path);
+    bool appendLine(const std::string &path, const std::string &line);
+    bool writeLines(const std::string &path, const std::vector<std::string> &lines);
+    // Переименовать (смена ника: файлы с адресом в имени): запись — под новым именем, прежняя снимается; прежний файл
+    // storecrypt по старому пути переносится раньше. false — нечего переносить либо новое имя занято.
+    bool rename(const std::string &from, const std::string &to);
     // Закрыть хранилище (каталог стирается — открытое не должно его пережить); следующее обращение откроет заново.
     void reset();
     // Имя записи для пути (относительно каталога); вне каталога и внутри `host-files/` — nullopt.
@@ -127,6 +137,7 @@ private:
     std::string dir_;
     std::string key_;
     Log log_;
+    std::string sub_;
     std::mutex mu_;
     std::unique_ptr<HostFiles> hf_;
     bool tried_ = false;

@@ -89,7 +89,14 @@ struct RowPos {
 class ModelRows {
 public:
     using HostFn = std::function<std::shared_ptr<engine::Host>()>;
-    ModelRows(HostFn host, std::string auxPrefix);
+    // Файлы служебных документов (spec 036 T036): чтение и запись по пути; не заданы — storecrypt (прежний путь).
+    // Хосты отдают файлы хоста (`PathFiles`: android — каталог хранилища, desktop — tdata), прежний файл storecrypt
+    // переносится при первом обращении.
+    struct AuxIo {
+        std::function<std::string(const std::string &path)> read;
+        std::function<bool(const std::string &path, const std::string &data)> write;
+    };
+    ModelRows(HostFn host, std::string auxPrefix, AuxIo io = {});
 
     // Модель открыта (запись и чтение строк возможны).
     [[nodiscard]] bool ready() const;
@@ -127,6 +134,18 @@ public:
     [[nodiscard]] std::vector<json> views(const std::vector<std::string> &ids) const;
     [[nodiscard]] std::vector<json> chatViews(const std::string &chatKey) const;
     [[nodiscard]] std::vector<json> allViews() const;
+    // spec 036 (T030/T035): список чатов модели целиком (`chatList` по страницам) — `chatViewOfModel` по порядку модели
+    // (закреплённые первыми, дальше по `order`); модели нет — пусто.
+    [[nodiscard]] std::vector<json> chatList() const;
+    // Страница истории чата (`historyPage`): строки — `viewOfModel` по порядку ленты (старые первыми). anchor — id
+    // строки-якоря (UUID; "" — с конца); direction — "older" (строго старше якоря), "newer" (строго новее), "around".
+    struct Page {
+        std::vector<json> rows;
+        bool hasOlder = false;
+        bool hasNewer = false;
+        bool ok = false; // модель ответила
+    };
+    [[nodiscard]] Page page(const json &peer, const std::string &anchorId, const std::string &direction, int limit) const;
     // Убрать строки у себя по id (очистка чата «у себя», самоуничтожение); в журнале аккаунта они остаются.
     void forget(const std::vector<std::string> &ids);
     // Служебные документы ("meta" — курсор и пр., "pending" — очередь записи, "imported" — отметка переноса).
@@ -137,6 +156,7 @@ private:
     [[nodiscard]] json rowsAll(const json &what) const;
     HostFn host_;
     std::string auxPrefix_;
+    AuxIo io_;
     std::mutex auxMu_;
     std::map<std::string, json> aux_;
 };
@@ -152,6 +172,13 @@ private:
 // `unread_changed` модели → {chat (Peer), chatKey, unread, lastReadId (UUID; "" — нет), lastReadTsMs, mention,
 // mentions [UUID]}; null — не изменение счётчика.
 [[nodiscard]] json unreadOfModel(const json &unreadChanged);
+// spec 036 (T030/T035, ENGINE-1): ChatView модели (`chatList`, `chat_upsert`) → показ хоста: {chat (Peer), chatKey,
+// order (мс — место в списке, ORDER-1; у чата без строк — черновик либо время появления), pinnedRank (0 — не закреплён;
+// закреп основного списка либо архива — по `archived`), archived, unreadMark, mutedUntilMs, draft (текст),
+// folderIds [id], unread, mention, last (viewOfModel последней строки либо null)}. Не ChatView — null.
+[[nodiscard]] json chatViewOfModel(const json &chatView);
+// `chat_remove` модели (Peer) → {chat, chatKey}; null — не снятие.
+[[nodiscard]] json removedChatOfModel(const json &peer);
 // UUID-строка по base64 16 байт ("" — не id).
 [[nodiscard]] std::string uuidOfB64(const std::string &b64);
 // base64 16 байт по UUID-строке ("" — не UUID).

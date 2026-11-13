@@ -24,16 +24,13 @@ wait_log "$A/td/log.txt" "v2: готов" 90 && ok "alice: устройство 
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:hi-$STAMP")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*hi-$STAMP" 60 && ok "alice получила сообщение bob (журнал есть)" || bad "alice не получила сообщение bob"
 sleep 2; stop_pid "$BP"; stop_pid "$P"
-[ -s "$CREDS" ] && ok "учётные данные на диске" || bad "нет $CREDS"
+# spec 036 T031: учётные данные — запись хранилища движка tdata/parvane-host (файла на диске нет); испортить и
+# снять их сценарий просит dev-хуком PARVANE_AUTOCREDS=expire|remove
+[ -d "$A/td/tdata/parvane-host" ] && [ ! -e "$CREDS" ] && ok "учётные данные — в хранилище движка" || bad "учётных данных в хранилище нет"
+grep -rqa "eyJ" "$A/td/tdata/parvane-host" && bad "учётные данные лежат открыто" || ok "учётные данные на диске зашифрованы"
 
 # 2) битый JWT → отказ авторизации без падения, экран входа, повторный вход
-# После P-13 файл зашифрован (PVSE1) — адрес берём из лога, а битый токен
-# кладём plain: чтение storecrypt принимает plain (миграция старых профилей),
-# так что это тот же «подменённый/просроченный JWT на диске».
-ADDR=$(grep -aoE "сессия поднята для [^ ]+" "$A/td/log.txt" | tail -1 | awk '{print $NF}')
-grep -aq "^PVSE1" "$CREDS" && ok "учётные данные на диске зашифрованы (P-13)" || bad "учётные данные лежат открыто"
-printf '%s\nexpired.jwt.token\n' "${ADDR:-alice@local}" > "$CREDS"
-P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
+P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOCREDS=expire)
 wait_log "$A/td/log.txt" "логин-состояние восстановлено с диска" 40 || bad "сессия не восстановилась с диска"
 wait_log "$A/td/log.txt" "авторизация отклонена .*на экран входа" 40 && ok "отказ JWT распознан" || bad "отказ JWT не распознан"
 wait_log "$A/td/log.txt" "выход — учётные данные удалены" 20 && ok "учётные данные сняты" || bad "учётные данные не сняты"
@@ -45,8 +42,7 @@ wait_log "$A/td/log.txt" "профиль alice@local: bio=" 30 && ok "свой �
 sleep 2; stop_pid "$P"
 
 # 3) «зомби»: mtp-данные с userId есть, учётных данных Parvane нет
-rm -f "$CREDS"
-P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
+P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOCREDS=remove)
 wait_log "$A/td/log.txt" "сессия без адреса — учётных данных нет, на экран входа" 40 \
   && ok "сессия без адреса → экран входа" || bad "сессия без адреса не распознана"
 grep -aqE "сессия поднята для $" "$A/td/log.txt" && bad "поднята сессия с ПУСТЫМ адресом" || ok "сессии с пустым адресом нет"

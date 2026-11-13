@@ -177,7 +177,9 @@ void ensureManagers() {
     const auto me = self();
     if (me.empty()) return;
     if (!g_callKey) g_callKey = std::make_unique<parvane::crypto::SigningKey>(
-        parvane::crypto::SigningKey::loadOrCreate(storeDir() + "/callkey.txt"));
+        parvane::crypto::SigningKey::loadOrCreate(
+            [] { return hostRead(storeDir() + "/callkey.txt"); },
+            [](const std::string &d) { return hostWrite(storeDir() + "/callkey.txt", d); }));
     const auto makeBackend = [] { return std::unique_ptr<parvane::MediaBackend>(std::make_unique<JniMediaBackend>()); };
     parvane::CallManager::Callbacks ccb;
     ccb.sendV2 = [](const std::string &peer, const json &signal) {

@@ -219,6 +219,30 @@ int main() {
         const auto un = hs::unreadOfModel(json{{"chat", bobChat()}, {"count", 2}, {"last_read_id", hs::b64OfUuid(uid(301))}});
         check(un.value("unread", 0) == 2 && un.value("lastReadId", std::string()) == uid(301), "unread_changed → счётчик");
         check(hs::uuidOfB64(hs::b64OfUuid(uid(7))) == uid(7) && hs::b64OfUuid("nope").empty(), "UUID ↔ base64");
+        // spec 036 T030/T035: список чатов и страницы истории — готовыми из модели (desktop: список диалогов tdesktop,
+        // android: TdApi.Chat и GetChatHistory страницами)
+        for (int i = 0; i < 5; ++i) {
+            sync.record(hs::rowOpFromWire(wire(uid(400 + i), kBob, kSelf, 1010 + i, "строка " + std::to_string(i)), bobChat()), false);
+        }
+        const auto chats = rows.chatList();
+        const auto bob = std::find_if(chats.begin(), chats.end(), [](const json &c) { return c.value("chatKey", std::string()) == "u:" + kBob; });
+        check(bob != chats.end() && bob->value("order", std::int64_t(0)) > 0 && (*bob)["last"].is_object()
+                  && (*bob)["last"].value("id", std::string()) == uid(404) && bob->value("unread", 0) > 0,
+              "chatList → чат с местом, последней строкой и непрочитанным", bob != chats.end() ? bob->dump() : "нет чата");
+        const auto newest = rows.page(bobChat(), "", "older", 3);
+        std::vector<std::string> ids;
+        for (const auto &r : newest.rows) ids.push_back(r.value("id", std::string()));
+        check(newest.ok && ids == std::vector<std::string>{uid(402), uid(403), uid(404)} && newest.hasOlder && !newest.hasNewer,
+              "страница с конца: три последние строки, старше — есть");
+        const auto older = rows.page(bobChat(), uid(402), "older", 2);
+        check(older.ok && older.rows.size() == 2 && older.rows.back().value("id", std::string()) == uid(401),
+              "страница старше якоря (строго)", older.rows.empty() ? "" : older.rows.back().dump());
+        const auto newer = rows.page(bobChat(), uid(402), "newer", 10);
+        check(newer.ok && newer.rows.size() == 2 && newer.rows.front().value("id", std::string()) == uid(403) && !newer.hasNewer,
+              "страница новее якоря (строго)");
+        const auto rc = hs::removedChatOfModel(bobChat());
+        check(rc.value("chatKey", std::string()) == "u:" + kBob && hs::chatViewOfModel(json::object()).is_null(),
+              "chat_remove → ключ чата; не ChatView → null");
         sync.stop();
         std::filesystem::remove_all(dir);
     }

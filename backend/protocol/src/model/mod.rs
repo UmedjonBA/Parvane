@@ -169,6 +169,11 @@ struct Meta {
     /// других устройств аккаунта).
     #[serde(default)]
     history_pending: Vec<Value>,
+    /// spec 036 (T030/T035): когда чат без строк и черновика впервые встал в список (мс; ключ — ключ чата истории) —
+    /// его `ChatView.order`: группа без сообщений встаёт местом своего появления, а не в самый низ, и не прыгает при
+    /// перезапуске. Снимается, когда чат уходит из списка.
+    #[serde(default)]
+    chats_since: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1035,7 +1040,11 @@ impl Engine {
             .and_then(|n| n.settings)
             .and_then(|s| s.mute_until_ms)
             .unwrap_or(0);
-        let order = last.as_ref().map(|m| m.order).unwrap_or(0).max(draft.as_ref().map(|d| d.1).unwrap_or(0));
+        let mut order = last.as_ref().map(|m| m.order).unwrap_or(0).max(draft.as_ref().map(|d| d.1).unwrap_or(0));
+        if order == 0 {
+            // Чат без строк и черновика (группа без сообщений, всё удалено) — место его появления в списке
+            order = self.meta.chats_since.get(chat).copied().unwrap_or(0);
+        }
         Some(ChatView {
             pinned_rank: self.pinned_rank(&peer, archived),
             folder_ids: self.folders_of(&peer),
@@ -1079,6 +1088,9 @@ impl Engine {
         for chat in chats {
             let Some(v) = self.chat_view(&chat) else { continue };
             if !self.chat_listed(&chat, &v) {
+                if self.meta.chats_since.remove(&chat).is_some() {
+                    self.dirty.meta = true;
+                }
                 // Был в списке и больше не показывается (очистка «у себя», удаление, выход) — снять
                 if self.chat_shown.remove(&chat).is_some() {
                     self.unread_shown.remove(&chat);
@@ -1087,6 +1099,14 @@ impl Engine {
                     }
                 }
                 continue;
+            }
+            let mut v = v;
+            if v.order == 0 {
+                // Первое появление в списке без строк — запомнить время (место чата, ORDER-1 списка)
+                let since = self.now_ms.max(1);
+                self.meta.chats_since.insert(chat.clone(), since);
+                self.dirty.meta = true;
+                v.order = since;
             }
             let (unread, mentions) = self.unread_of(&chat);
             let peer = v.chat.clone();

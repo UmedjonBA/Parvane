@@ -268,10 +268,10 @@ bool groupKnown(const std::string &address) {
 
 void cacheGroupInfo(const std::string &address, const json *info) {
     std::lock_guard<std::mutex> lk(g_groupMu);
-    auto all = json::parse(parvane::storecrypt::readFile(groupsCachePath()), nullptr, false);
+    auto all = json::parse(hostRead(groupsCachePath()), nullptr, false);
     if (!all.is_object()) all = json::object();
     if (info) all[address] = *info; else all.erase(address);
-    parvane::storecrypt::writeFile(groupsCachePath(), all.dump());
+    hostWrite(groupsCachePath(), all.dump());
 }
 
 namespace {
@@ -342,10 +342,10 @@ json groupListJson() {
         }
         LOGI("список групп: %zu", source.size());
         std::lock_guard<std::mutex> lk(g_groupMu);
-        parvane::storecrypt::writeFile(groupsCachePath(), source.dump());
+        hostWrite(groupsCachePath(), source.dump());
     } else {
         std::lock_guard<std::mutex> lk(g_groupMu);
-        source = json::parse(parvane::storecrypt::readFile(groupsCachePath()), nullptr, false);
+        source = json::parse(hostRead(groupsCachePath()), nullptr, false);
         if (!source.is_object()) source = json::object();
     }
     auto out = json::array();
@@ -409,11 +409,11 @@ void l2Store(const json &state, bool save) {
         for (const auto &c : state.value("mine", json::array())) if (c.is_string()) g_l2Mine.insert(c.get<std::string>());
         g_l2PresenceAllowed = state.value("presence_allowed", true);
     }
-    if (save) parvane::storecrypt::writeFile(l2CachePath(), state.dump());
+    if (save) hostWrite(l2CachePath(), state.dump());
 }
 
 void l2Load() {
-    const auto raw = parvane::storecrypt::readFile(l2CachePath());
+    const auto raw = hostRead(l2CachePath());
     const auto j = raw.empty() ? json() : json::parse(raw, nullptr, false);
     l2Store(j.is_object() ? j : json::object(), /*save=*/false);
 }
@@ -516,6 +516,16 @@ namespace {
 std::mutex g_hostFilesMu;
 std::unique_ptr<parvane::engine_store::PathFiles> g_pathFiles;
 
+bool storeLegacyHook() {
+    bool debug = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        debug = g_debugBuild;
+    }
+    std::error_code ec;
+    return debug && std::filesystem::exists("/data/local/tmp/parvane-store-legacy", ec);
+}
+
 parvane::engine_store::PathFiles &pathFiles() {
     std::lock_guard<std::mutex> lk(g_hostFilesMu);
     if (!g_pathFiles) {
@@ -524,6 +534,9 @@ parvane::engine_store::PathFiles &pathFiles() {
             std::lock_guard<std::mutex> klk(g_mu);
             key = g_storeKey;
         }
+        // Debug-хук сценария переноса (tgx_store_migration_flow.sh): /data/local/tmp/parvane-store-legacy — писать
+        // прежние файлы storecrypt, как версия до переноса (пустой ключ — хранилище не открывается)
+        if (storeLegacyHook()) key.clear();
         g_pathFiles = std::make_unique<parvane::engine_store::PathFiles>(
             storeDir(), key, [](const std::string &m) { LOGI("%s", m.c_str()); });
     }
@@ -617,6 +630,10 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
     parvane::logpriv::setDevBuild(g_debugBuild);
     parvane::storecrypt::setKey(key);
     parvane::storecrypt::setRequired(!g_debugBuild);
+    // spec 036 T036: файлы каталога состояния v2 (ключ, устройство, разделы, …) — в хранилище движка, прежний файл
+    // storecrypt переносится при первом обращении (как desktop T031)
+    resetHostFiles();
+    parvane::v2::Session::useHostFiles(!storeLegacyHook(), [](const std::string &m) { LOGI("хранилище: %s", m.c_str()); });
     if (!parvane::storecrypt::enabled())
         LOGE("хранилище: ключа нет — %s", g_debugBuild ? "debug-сборка пишет открыто" : "запись запрещена (NAT-13)");
     std::error_code ec;

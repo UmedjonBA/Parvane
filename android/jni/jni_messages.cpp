@@ -541,7 +541,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackRefFor(JNI
         if (archive.empty()) throw std::runtime_error("пак пуст");
         const auto hash = parvane::pack::archiveContentHashB64(archive);
         const auto cachePath = storeDir() + "/packrefs.json";
-        auto cache = json::parse(parvane::storecrypt::readFile(cachePath), nullptr, false);
+        auto cache = json::parse(hostRead(cachePath), nullptr, false);
         if (!cache.is_object()) cache = json::object();
         if (cache.contains(hash) && cache[hash].is_object()) {
             out = cache[hash];
@@ -556,7 +556,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackRefFor(JNI
             out["count"] = count;
             cache[hash] = out;
             while (cache.size() > 32) cache.erase(cache.begin());
-            parvane::storecrypt::writeFile(cachePath, cache.dump());
+            hostWrite(cachePath, cache.dump());
             LOGI("пак загружен (%s)", out.value("file_id", std::string()).c_str());
         }
     } catch (const std::exception &e) {

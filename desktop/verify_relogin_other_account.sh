@@ -52,8 +52,8 @@ grep -aq "отложенное-прежнего-аккаунта" "$C/td/log.txt
   || ok "carol отложенное alice не получила"
 [ ! -e "$W/td/tdata/parvane-v2-alice@local" ] && [ ! -e "$W/td/tdata/parvane-history-alice@local.jsonl" ] \
   && ok "в tdata нет каталога состояния и журнала истории alice" || bad "данные alice остались в tdata"
-[ ! -e "$W/td/tdata/parvane-scheduled.json" ] && ok "очереди отложенных в tdata нет (bob ничего не планировал)" \
-  || bad "в tdata очередь отложенных"
+[ ! -e "$W/td/tdata/parvane-scheduled.json" ] && ! grep -rqa "отложенное-прежнего-аккаунта" "$W/td/tdata" --exclude='log*.txt' \
+  && ok "очереди отложенных alice в tdata нет (стёрто вместе с хранилищами parvane-host*)" || bad "в tdata очередь отложенных"
 echo "$JB" | grep -aq "прежнего-аккаунта" && bad "в журнале bob строки с данными alice" || ok "в журнале bob данных alice нет"
 
 stop_pid "$P"
@@ -74,10 +74,13 @@ wait_log "$W2/td/log.txt" "сессия поднята для erin@local" 120 &&
 kill -0 "$P" 2>/dev/null && ok "процесс тот же (не перезапускался)" || bad "процесс завершился"
 wait_log "$W2/td/log.txt" "файлы аккаунта: прежнего \(dave@local\) унесено [1-9]" 10 \
   && ok "файлы dave унесены в его каталог" || bad "файлы dave не унесены"
-F="$W2/td/tdata/parvane-v2-dave@local/account-files/parvane-scheduled.json"
-[ -s "$F" ] && ok "очередь отложенных dave — в его каталоге" || bad "нет $F"
-grep -aq "^PVSE1" "$F" 2>/dev/null && ok "файл dave зашифрован" || bad "файл dave не зашифрован"
+# spec 036 T031: файлы аккаунта без адреса в имени — записи хранилища движка tdata/parvane-host-account; каталог
+# хранилища уходит в каталог прежнего владельца целиком
+F="$W2/td/tdata/parvane-v2-dave@local/account-files/parvane-host-account"
+[ -d "$F" ] && ok "хранилище файлов аккаунта dave (очередь отложенных) — в его каталоге" || bad "нет $F"
+grep -rqa "отложенное-прежнего-аккаунта" "$F" 2>/dev/null && bad "файлы dave не зашифрованы" || ok "файлы dave зашифрованы"
 [ ! -e "$W2/td/tdata/parvane-scheduled.json" ] && [ ! -e "$W2/td/tdata/parvane-drafts.json" ] \
+  && ! grep -rqa "отложенное-прежнего-аккаунта" "$W2/td/tdata/parvane-host-account" 2>/dev/null \
   && ok "в tdata нет отложенных и черновиков dave" || bad "erin видит файлы dave в tdata"
 wait_log "$W2/td/log.txt" "v2: готов" 90 || bad "erin: устройство v2 не готово"
 sleep 5

@@ -162,7 +162,8 @@ int ArchiveUnarchiveMode() {
 }
 
 void SetArchiveUnarchiveMode(int mode) {
-	StoreWrite(ArchiveSettingsPath(), QByteArray::fromStdString(parvane::json{ { "unarchive", mode } }.dump()));
+	const auto saved = StoreWrite(ArchiveSettingsPath(), QByteArray::fromStdString(parvane::json{ { "unarchive", mode } }.dump()));
+	LOG(("Parvane: настройка архива %1 (режим %2)").arg(saved ? u"сохранена"_q : u"НЕ сохранена"_q).arg(mode));
 	LOG(("Parvane: настройки архива — режим %1").arg(mode));
 }
 

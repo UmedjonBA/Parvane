@@ -68,14 +68,14 @@ namespace {
 // настройки не всплывают (сбрасывать при Sections::OnAccountReset нечего — каждое чтение из файла текущего
 // аккаунта). Открытый файл аккаунта читается (миграция), следующая запись — уже шифром.
 [[nodiscard]] QJsonObject Prefs() {
-	if (QFile::exists(LegacyPrefsPath())) {
-		QFile::remove(LegacyPrefsPath());
+	if (StoreExists(LegacyPrefsPath())) {
+		StoreRemove(LegacyPrefsPath());
 	}
 	const auto path = PrefsPath();
 	if (path.isEmpty()) {
 		return QJsonObject();
 	}
-	const auto raw = parvane::storecrypt::readFile(QFile::encodeName(path).toStdString());
+	const auto raw = StoreRead(path).toStdString(); // spec 036 T031: запись хранилища движка
 	if (raw.empty()) {
 		return QJsonObject();
 	}
@@ -88,9 +88,7 @@ void WritePrefs(const QJsonObject &prefs) {
 	if (path.isEmpty()) {
 		return;
 	}
-	(void)parvane::storecrypt::writeFile(
-		QFile::encodeName(path).toStdString(),
-		QJsonDocument(prefs).toJson(QJsonDocument::Compact).toStdString());
+	(void)StoreWrite(path, QJsonDocument(prefs).toJson(QJsonDocument::Compact));
 }
 
 [[nodiscard]] QLocale UiLocale() {

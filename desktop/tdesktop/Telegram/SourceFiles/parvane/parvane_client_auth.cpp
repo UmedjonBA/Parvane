@@ -135,6 +135,22 @@ void SaveSessionCreds(const QString &address, const QString &token) {
 
 // Восстановить self+token с диска (для рестарта). true — восстановлено.
 bool RestoreSessionCreds() {
+	// Dev-хук verify_auth_reject.sh: учётные данные — запись хранилища движка (spec 036 T031), файла на диске,
+	// который сценарий мог бы испортить или удалить, нет. expire — подменить JWT битым, remove — снять запись
+	const auto rawHook = ParvaneDevEnv("PARVANE_AUTOCREDS");
+	if (const auto hook = rawHook ? QString::fromUtf8(rawHook) : QString(); !hook.isEmpty()) {
+		static auto applied = false;
+		if (!applied) {
+			applied = true;
+			if (hook == u"remove"_q) {
+				StoreRemove(SessionCredsPath());
+			} else if (hook == u"expire"_q) {
+				const auto lines = QString::fromUtf8(StoreRead(SessionCredsPath())).split('\n');
+				StoreWrite(SessionCredsPath(), lines.value(0).toUtf8() + "\nexpired.jwt.token\n");
+			}
+			LOG(("Parvane: AUTOCREDS %1 — учётные данные изменены сценарием").arg(hook));
+		}
+	}
 	const auto raw = StoreRead(SessionCredsPath());
 	if (raw.isEmpty()) {
 		return false;

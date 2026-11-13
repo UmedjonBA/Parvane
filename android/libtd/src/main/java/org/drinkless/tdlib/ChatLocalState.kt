@@ -131,6 +131,10 @@ class ChatLocalState(private val dir: File) {
     /** Папки (spec 005 / история 4) — тот же каталог, `folders.json`. */
     val folders = Folders(dir)
 
+    /** Позиции чата в папках (spec 036 T035: главный список и архив — из списка чатов модели). */
+    fun folderPositions(chatId: Long, order: Long, facts: Folders.ChatFacts): List<TdApi.ChatPosition> =
+        folders.foldersOf(chatId, facts).map { TdApi.ChatPosition(TdApi.ChatListFolder(it.id), order, chatId in it.pinned, null) }
+
     /** Позиции чата для X: главный список или архив + все папки, куда чат входит; order — время последнего сообщения. */
     fun positionsFor(chatId: Long, order: Long, facts: Folders.ChatFacts? = null): Array<TdApi.ChatPosition> {
         val out = ArrayList<TdApi.ChatPosition>()

@@ -85,12 +85,12 @@ void noteDomainKeys(const std::string &plannerIn, const std::string &cloudIn) {
     // Непустое не заменяем пустым: копия без «Плана» (записанная до исправления) не стирает ключ, уже полученный
     auto planner = plannerIn;
     auto cloud = cloudIn;
-    const auto saved = json::parse(parvane::storecrypt::readFile(storeDir() + "/domain-keys.json"), nullptr, false);
+    const auto saved = json::parse(hostRead(storeDir() + "/domain-keys.json"), nullptr, false);
     if (saved.is_object() && saved.value("owner", std::string()) == self()) {
         if (isEmpty(planner)) planner = saved.value("planner", std::string());
         if (isEmpty(cloud)) cloud = saved.value("cloud", std::string());
     }
-    parvane::storecrypt::writeFile(storeDir() + "/domain-keys.json",
+    hostWrite(storeDir() + "/domain-keys.json",
                                    json{{"owner", self()}, {"planner", planner}, {"cloud", cloud}}.dump());
     sectionsDomainKeys();
     emit(json{{"type", "sections"}, {"domain", "keys"}});
@@ -985,24 +985,24 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateRefresh(
     try { return s && s->stateRefresh() ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &e) { LOGE("синк журнала состояния: %s", e.what()); return JNI_FALSE; }
 }
 
-// Список чатов (`chatList`: ChatList модели — закреп, мут, черновик, папки, непрочитанное) и страница истории
-// (`historyPage`: MessageView по ORDER-1, с `unread`) — готовыми из модели; "" — модели нет.
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeChatList(JNIEnv *env, jclass, jstring argsJson) {
-    const auto s = v2Model();
-    if (!s) return jout(env, "");
+// spec 036 T035 (ENGINE-1): список чатов модели (`chatList`) и страница истории (`historyPage`) — строками шва
+// (события "message" той же формы, что живые; место ORDER-1 — `order`); "" — ошибка разбора.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeChatList(JNIEnv *env, jclass, jstring) {
     try {
-        const auto r = s->chatList(json::parse(jstr(env, argsJson), nullptr, false));
-        return jout(env, r.is_object() ? r.dump() : std::string());
-    } catch (const std::exception &) { return jout(env, ""); }
+        return jout(env, historyChatList().dump());
+    } catch (const std::exception &e) {
+        LOGE("список чатов модели: %s", e.what());
+        return jout(env, "");
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeHistoryPage(JNIEnv *env, jclass, jstring argsJson) {
-    const auto s = v2Model();
-    if (!s) return jout(env, "");
     try {
-        const auto r = s->historyPage(json::parse(jstr(env, argsJson), nullptr, false));
-        return jout(env, r.is_object() ? r.dump() : std::string());
-    } catch (const std::exception &) { return jout(env, ""); }
+        return jout(env, historyPageEvents(json::parse(jstr(env, argsJson), nullptr, false)).dump());
+    } catch (const std::exception &e) {
+        LOGE("страница истории: %s", e.what());
+        return jout(env, "");
+    }
 }
 
 // spec 035 (US8, FR-075): избранные стикеры — объекты FAVED_STICKER модели: [{set_id, sticker_id, added_ms}]

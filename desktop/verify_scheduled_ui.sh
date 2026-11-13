@@ -44,8 +44,9 @@ wait_log "$AL" "autoui запланированные bob@local: 2 " 20 && ok "�
 grep -aq "alice@local): далёкое-$STAMP" "$BL" && bad "далёкое ушло раньше срока" || ok "далёкое (35 дней) ждёт"
 stop_pid "$AP"
 # переживает перезапуск: файловая и далёкая — на диске (зашифрованы)
-QF="$A/td/tdata/parvane-scheduled.json"
-head -c 5 "$QF" | grep -q '^PVSE1' && ! grep -qa "далёкое-$STAMP" "$QF" && ok "очередь на диске зашифрована" || bad "очередь открытым текстом"
+# spec 036 T031: очередь — запись хранилища движка (tdata/parvane-host-account)
+[ -d "$A/td/tdata/parvane-host-account" ] && ! grep -rqa "далёкое-$STAMP" "$A/td/tdata" --exclude='log*.txt' \
+  && ok "очередь на диске зашифрована (хранилище движка)" || bad "очередь открытым текстом"
 AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOUI=schedlist:bob@local@5,schedonline:bob@local|в-сети-$STAMP@7")
 wait_log "$AL" "autoui запланированные bob@local: 2 " 40 && ok "после перезапуска — 2" || bad "очередь потерялась при перезапуске"
 # п. 13 — «Отправить, когда будет в сети»: bob в сети — уходит сразу, а не через 23 дня

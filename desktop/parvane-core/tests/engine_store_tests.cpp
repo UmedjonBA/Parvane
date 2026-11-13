@@ -8,7 +8,9 @@
 //    отметка и данные одной пачкой, сверка, прежний файл → `.migrated`; отказ носителя на любом шаге — прежний
 //    файл на месте и читается, повтор доходит до конца; испорченный — в карантин, остальное переносится.
 // Данные выдуманные.
+#include "parvane/crypto.h"
 #include "parvane/engine_store.h"
+#include "parvane/history_sync.h"
 #include "parvane/storecrypt.h"
 #include "parvane/v2_session.h"
 
@@ -21,6 +23,7 @@
 #include <unistd.h>
 
 namespace es = parvane::engine_store;
+using nlohmann::json;
 namespace sf = parvane::store_fs;
 
 static int g_fail = 0;
@@ -347,6 +350,67 @@ static void sessionFunnel(const std::filesystem::path &base) {
     sc::setKey(std::string());
 }
 
+// spec 036 T031/T036: прежние журналы storecrypt с именем не `.jsonl` (дозапись `appendLine`, голова после
+// `migrateFile` + строки `PVSE1:`), каталог хранилища tdata (`parvane-host`), переименование при смене ника,
+// служебные документы журнала истории (`ModelRows::AuxIo`) и ключ звонков — переносятся из СУЩЕСТВУЮЩЕГО файла.
+static void tdataFiles(const std::filesystem::path &base) {
+    namespace sc = parvane::storecrypt;
+    const auto key = std::string(32, '\x33');
+    sc::setKey(key);
+    const auto tdata = (base / "tdata").string();
+    std::filesystem::create_directories(tdata);
+    // Прежний журнал v2-ids: голова целиком (прежний migrateFile запечатал файл) + дописанные строки
+    const auto ids = tdata + "/parvane-v2-ids.txt";
+    sc::writeFile(ids, "u1 alice@local\nu2 bob@local\n");
+    sc::appendLine(ids, "u3 carol@local");
+    sc::appendLine(ids, "u4 dave@local");
+    const auto read = tdata + "/parvane-read.txt";
+    sc::appendLine(read, "m1");
+    sc::appendLine(read, "m2");
+    const auto trust = tdata + "/parvane-trust-alice@local.txt";
+    sc::writeFile(trust, "секрет-доверия");
+    const auto aux = tdata + "/parvane-history-sync-alice@local-pending.json";
+    sc::writeFile(aux, R"({"ops":[{"row":{"id":"x"}}]})");
+    const auto callkey = tdata + "/parvane-callkey.txt";
+    const auto oldKey = parvane::crypto::SigningKey::loadOrCreate(callkey); // прежняя версия: файл storecrypt
+    {
+        es::PathFiles pf(tdata, key, nullptr, "parvane-host");
+        const auto l = pf.readLines(ids);
+        check(l == std::vector<std::string>{"u1 alice@local", "u2 bob@local", "u3 carol@local", "u4 dave@local"},
+              "журнал .txt (голова + строки PVSE1:) — перенос построчно без потерь (" + std::to_string(l.size()) + ")");
+        check(std::filesystem::exists(tdata + "/parvane-host") && std::filesystem::exists(ids + ".migrated"),
+              "журнал — в хранилище tdata/parvane-host, прежний — .migrated");
+        check(pf.appendLine(ids, "u5 erin@local") && pf.readLines(ids).size() == 5 && !std::filesystem::exists(ids),
+              "дозапись после переноса — записью хранилища");
+        check(pf.readLines(read) == std::vector<std::string>{"m1", "m2"}, "журнал из одних строк PVSE1: — перенос");
+        check(pf.writeLines(read, {"m3"}) && pf.readLines(read) == std::vector<std::string>{"m3"}, "перезапись журнала");
+        check(pf.read(trust) == "секрет-доверия", "файл с адресом в имени — перенос");
+        const auto renamed = tdata + "/parvane-trust-alice2@local.txt";
+        check(pf.rename(trust, renamed) && pf.read(renamed) == "секрет-доверия" && !pf.exists(trust),
+              "переименование (смена ника) — запись под новым именем, прежней нет");
+        check(!pf.rename(trust, renamed), "повторное переименование — нечего переносить");
+        check(!pf.nameOf(tdata + "/parvane-host/x").has_value(), "внутри каталога хранилища — не запись");
+        parvane::history::ModelRows rows([] { return std::shared_ptr<parvane::engine::Host>(); },
+                                         tdata + "/parvane-history-sync-alice@local-",
+                                         { [&pf](const std::string &p) { return pf.read(p); },
+                                           [&pf](const std::string &p, const std::string &d) { return pf.write(p, d); } });
+        check(rows.aux("pending").value("ops", json::array()).size() == 1 && !std::filesystem::exists(aux),
+              "служебный документ журнала истории — из прежнего файла, через файлы хоста");
+        rows.setAux("pending", json::object());
+        check(pf.read(aux) == "{}" && !std::filesystem::exists(aux), "запись служебного документа — записью хранилища");
+        const auto k = parvane::crypto::SigningKey::loadOrCreate([&] { return pf.read(callkey); },
+                                                                [&](const std::string &d) { return pf.write(callkey, d); });
+        check(k.publicB64() == oldKey.publicB64() && !std::filesystem::exists(callkey),
+              "ключ звонков — прежний (перенос существующего файла)");
+    }
+    {
+        es::PathFiles pf(tdata, key, nullptr, "parvane-host");
+        check(pf.readLines(ids).size() == 5 && pf.read(tdata + "/parvane-trust-alice2@local.txt") == "секрет-доверия",
+              "после перезапуска — перенесённое и дописанное на месте");
+    }
+    sc::setKey(std::string());
+}
+
 int main() {
     const auto base = std::filesystem::temp_directory_path() / ("parvane-engine-store-test-" + std::to_string(::getpid()));
     std::filesystem::remove_all(base);
@@ -359,6 +423,7 @@ int main() {
     hostFiles(base);
     sessionFunnel(base);
     pathFiles(base);
+    tdataFiles(base);
     std::filesystem::remove_all(base);
     std::printf(g_fail ? "engine_store: %d FAIL\n" : "engine_store: OK\n", g_fail);
     return g_fail ? 1 : 0;
