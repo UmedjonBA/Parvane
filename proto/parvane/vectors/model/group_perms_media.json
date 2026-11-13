@@ -52,6 +52,17 @@
           "send_links": true
          }
         }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "group": {
+           "domain": "local",
+           "id": "CgoKCgoKCgoKCgoKCgoKCg=="
+          }
+         },
+         "title": "Дача"
+        }
        }
       ],
       "requests": []

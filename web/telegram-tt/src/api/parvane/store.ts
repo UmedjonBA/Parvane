@@ -16,7 +16,9 @@ import { thumbnailFromWire } from './mediaThumb';
 import {
   albumFields, createAlbumIndex, replyInfoWithQuote, withMediaSpoiler,
 } from './messageExtras';
-import { buildParvaneSticker, registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
+import {
+  buildParvaneSticker, buildStickerId, registerReceivedEmojiPackRef, registerReceivedPackRef,
+} from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
 
@@ -36,6 +38,11 @@ function buildHashedId(value: string): string {
 const LIVE_ORDER_WINDOW_SECS = 300;
 // Жалоба: сколько сообщений принимаем (как kMaxMessages в validateModReport)
 const REPORT_MAX_MESSAGES = 50;
+
+// PACK-1: имя файла манифеста набора (basename с расширением стикера), не прежний id web
+function isPackFileName(stickerId: string) {
+  return /^[^/\\:]+\.(webp|png|tgs|webm)$/i.test(stickerId);
+}
 
 // Порядок восстановления: сохранённое место в ленте (ORDER-1), у строк без него — время
 export function compareStoredOrder(left: WireStoredMessage, right: WireStoredMessage) {
@@ -100,7 +107,6 @@ export class ParvaneStore {
   private publicMembers = new Map<string, number>();
 
   // Ревизия сведений группы (GROUP-1): применять только не старее известной
-  private groupVersionByAddress = new Map<string, number>();
 
   private messagesByChatId = new Map<string, ApiMessage[]>();
 
@@ -217,28 +223,21 @@ export class ParvaneStore {
   registerGroup(info: WireGroupInfo): boolean {
     // Сведения v1 о группе, уже переведённой в v2, не применяются: её ведёт журнал v2
     if (this.migratedTo.has(info.group_id)) return false;
-    if (!shouldApplyGroupInfo(this.groupVersionByAddress.get(info.group_id), info.version)) {
-      return false;
-    }
+    // Ревизию сведений (GROUP-1) ведёт модель: сведения группы — её показ из журнала (`GroupView`), всегда
+    // последний (spec 036 T020); своей проверки версии у web нет
     const kind = info.kind === 'channel' ? 'channel' : 'group';
     if (info.migrated_from && !this.migratedFrom.has(info.group_id)) {
       this.migratedTo.set(info.migrated_from, info.group_id);
       this.migratedFrom.set(info.group_id, info.migrated_from);
       this.groupInfoByAddress.delete(info.migrated_from);
-      this.groupVersionByAddress.delete(info.migrated_from);
       this.kindByAddress.set(info.group_id, kind);
       // id чата теперь ведёт на адрес v2 (отправка, typing, сведения)
       this.getIdForAddress(info.group_id, kind);
     }
     this.kindByAddress.set(info.group_id, kind);
     this.groupInfoByAddress.set(info.group_id, info);
-    this.groupVersionByAddress.set(info.group_id, info.version ?? 0);
     this.displayNameByAddress.set(info.group_id, info.name);
     return true;
-  }
-
-  getGroupVersion(address: string) {
-    return this.groupVersionByAddress.get(address);
   }
 
   // Жалоба на сообщения группы (spec 024): карточка у админа; без сообщений — текстом
@@ -663,7 +662,6 @@ export class ParvaneStore {
 
   unregisterGroup(address: string) {
     this.groupInfoByAddress.delete(address);
-    this.groupVersionByAddress.delete(address);
   }
 
   buildApiMessage(stored: WireStoredMessage): ApiMessage {
@@ -974,8 +972,10 @@ function buildMessageContent(
           isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
-          // FR-075: id стикера в наборе — «В избранное» из ленты
-          parvaneSetStickerId: content.sticker_id || undefined,
+          // FR-075: id стикера в наборе — «В избранное» из ленты. PACK-1: на проводе — имя файла манифеста,
+          // в web — свой id стикера набора (`buildStickerId`)
+          parvaneSetStickerId: content.sticker_id && packSetId && isPackFileName(content.sticker_id)
+            ? buildStickerId(packSetId, content.sticker_id) : content.sticker_id || undefined,
         }),
       };
     }
@@ -1027,13 +1027,6 @@ function extForMime(mime?: string) {
 }
 
 // ── права групп (spec 003): провод ↔ нативные типы Telegram Web A ────────────
-
-// Применять ли сведения группы с ревизией `incoming` при известной `local`
-// (conformance GROUP-1): равная — идемпотентно, старее — игнор
-export function shouldApplyGroupInfo(local: number | undefined, incoming: number | undefined): boolean {
-  if (local === undefined) return true;
-  return (incoming ?? 0) >= local;
-}
 
 export const DEFAULT_GROUP_PERMISSIONS: Required<WireDefaultPermissions> = {
   send_messages: true,

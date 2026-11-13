@@ -45,6 +45,44 @@ class PackIndexTest {
 
     private fun assertSame(a: Any, b: Any) = assertTrue(a === b)
 
+    /** PACK-1 (spec 036): два разных набора с одним именем (разный отпечаток) — два набора; тот же отпечаток — один. */
+    @Test
+    fun sameNameDifferentContentStaysTwoPacks() {
+        val dir = tmp()
+        val idx = PackIndex(dir)
+        val a = idx.registerReceived(ref("Котики").put("content_hash", "AAAA"), false)
+        val b = idx.registerReceived(ref("Котики", "01a0f000-0000-7000-8000-000000000002").put("content_hash", "BBBB"), false)
+        assertTrue(a !== b)
+        assertTrue(a.setId != b.setId)
+        assertEquals("h:AAAA", PackIndex.sharedIdOf(a))
+        assertEquals("h:BBBB", PackIndex.sharedIdOf(b))
+        assertSame(b, idx.registerReceived(ref("Котики другое имя", "01a0f000-0000-7000-8000-000000000003").put("content_hash", "BBBB"), false))
+        assertSame(a, idx.bySharedId("h:AAAA")!!)
+        assertSame(b, idx.bySharedId("h:BBBB", false)!!)
+        // набор без отпечатка — по имени, общий id — `n:<имя>`
+        val c = idx.registerReceived(ref("Собачки"), false)
+        assertEquals("n:Собачки", PackIndex.sharedIdOf(c))
+        assertSame(c, idx.bySharedId("n:Собачки")!!)
+        // переживает перезапуск
+        val again = PackIndex(dir)
+        assertEquals(a.setId, again.bySharedId("h:AAAA")!!.setId)
+        assertEquals(b.setId, again.bySharedId("h:BBBB")!!.setId)
+    }
+
+    /** PACK-1: общий вектор id набора и ключа избранного (`proto/parvane/vectors/clients/pack-set-id.json`). */
+    @Test
+    fun sharedSetIdMatchesVectors() {
+        val vectors = File(System.getProperty("parvane.vectors.dir") ?: "../../proto/parvane/vectors")
+        val cases = JSONObject(File(vectors, "clients/pack-set-id.json").readText()).getJSONArray("cases")
+        assertTrue(cases.length() >= 5)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val setId = PackIndex.sharedSetId(c.getString("content_hash"), c.getString("pack_name"))
+            assertEquals(c.getString("name"), c.getString("set_id"), setId)
+            assertEquals(c.getString("name"), c.getString("faved_key"), PackIndex.favedKey(setId, c.getString("sticker")))
+        }
+    }
+
     @Test
     fun emojiPackDocIdsAndLookup() {
         val idx = PackIndex(tmp())

@@ -372,13 +372,14 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
         fred.s->stop();
     }
 
-    // Журнал личного состояния: миграция, правка, перечитывание после рестарта.
-    const auto snap = alice.s->stateAttach(json{{"folders", json::array({json{{"id", 2}, {"title", "Работа"}}})}});
-    check(snap.is_object() && snap.dump().find("Работа") != std::string::npos, "T098: локальные папки перенесены в журнал");
-    const auto synced = alice.s->stateSync(
-        json{{"folders", json::array({json{{"id", 2}, {"title", "Работа"}}, json{{"id", 3}, {"title", "Дом"}}})}},
-        {"folders"});
-    check(synced.is_object() && synced["snapshot"].dump().find("Дом") != std::string::npos, "T098: своя правка — в журнал");
+    // Журнал личного состояния: подключение, правка по видам (spec 036, `stateSet`), перечитывание после рестарта.
+    check(alice.s->stateConnect(), "T098: журнал состояния подключён");
+    const json work{{"key", "2"}, {"value", {{"id", 2}, {"title", "Работа"}}}};
+    check(alice.s->stateSubmit("FOLDER", json::array({work}), json::array()), "T098: папка — в журнал");
+    check(alice.s->stateSubmit("FOLDER", json::array({work, json{{"key", "3"}, {"value", {{"id", 3}, {"title", "Дом"}}}}}),
+                               json::array({work})),
+          "T098: своя правка — в журнал");
+    check(alice.s->stateSnapshot().dump().find("Дом") != std::string::npos, "T098: правка в показе модели");
 
     dave.s->stop();
     erin.s->stop();
@@ -709,7 +710,7 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
     }
     d1.start(tcp, dir + "/dm1");
     check(d1.s->waitReady(30000), "domains: первое устройство готово");
-    (void)d1.s->stateAttach(json::object());
+    (void)d1.s->stateConnect();
     try {
         d2.token = issue(tcp, d2.user, "dm2-" + suffix);
     } catch (const std::exception &e) {
@@ -719,28 +720,32 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
     check(!d2.s->waitReady(8000) && d2.s->needsLinking(), "domains: второе устройство ждёт привязку");
     d2.s->joinWithGrant(d1.s->linkGrantMaterial());
     check(d2.s->waitReady(30000), "domains: второе устройство привязано грантом");
-    (void)d2.s->stateAttach(json::object());
+    (void)d2.s->stateConnect();
 
     // M21/M22: виды журнала состояния — блок-лист, архив, уведомления, черновик, закреп
     const auto textB64 = d::toBase64(v2::encodeMessage("parvane.msg.v2.Text", json{{"text", "черновик " + suffix}}));
-    const json desired{
-        {"blocked", json::array({json{{"peer", {{"user", {{"address", "spam" + suffix + "@local"}}}}}, {"blocked_at_ms", "1700000000000"}}})},
-        {"archived", json::array({json{{"user", {{"address", bob.user}}}}})},
-        {"notify", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"settings", {{"mute_until_ms", "4102444800000"}}}}})},
-        {"drafts", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"text", textB64}, {"date_ms", nowMsStr()}}})},
-        {"pinned", json::array({json{{"list", "PIN_LIST_MAIN"}, {"peers", json::array({json{{"user", {{"address", bob.user}}}}})}}})},
-        {"unread_marks", json::array({json{{"user", {{"address", bob.user}}}}})},
-        {"quick_reaction", json{{"emoji", "\xF0\x9F\x94\xA5"}}},
+    const json bobPeer{{"user", {{"address", bob.user}}}};
+    const auto one = [](const std::string &key, const json &value) { return json::array({json{{"key", key}, {"value", value}}}); };
+    bool submitted = true;
+    submitted = d1.s->stateSubmit("BLOCK", one("u:spam" + suffix + "@local", json{{"peer", {{"user", {{"address", "spam" + suffix + "@local"}}}}}, {"blocked_at_ms", "1700000000000"}}), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("ARCHIVE", one("u:" + bob.user, json::object()), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("PEER_NOTIFY", one("u:" + bob.user, json{{"peer", bobPeer}, {"settings", {{"mute_until_ms", "4102444800000"}}}}), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("DRAFT", one("u:" + bob.user, json{{"peer", bobPeer}, {"text", textB64}, {"date_ms", nowMsStr()}}), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("PIN_LIST", one("1", json{{"list", "PIN_LIST_MAIN"}, {"peers", json::array({bobPeer})}}), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("UNREAD_MARK", one("u:" + bob.user, json::object()), json::array()) && submitted;
+    submitted = d1.s->stateSubmit("QUICK_REACTION", one("", json{{"emoji", "\xF0\x9F\x94\xA5"}}), json::array()) && submitted;
+    check(submitted, "M21/M22: правки видов приняты моделью (stateSet)");
+    const auto refreshed = [](Peer &p) {
+        (void)p.s->stateRefresh();
+        return p.s->stateSnapshot();
     };
-    const auto synced = d1.s->stateSync(desired, {"blocked", "archived", "notify", "drafts", "pinned", "unread", "reaction"});
-    const auto snap1 = synced.is_object() ? synced.value("snapshot", json::object()) : json::object();
+    const auto snap1 = d1.s->stateSnapshot();
     check(snap1.contains("blocked") && snap1.dump().find("spam" + suffix) != std::string::npos
               && snap1.contains("archived") && snap1.contains("notify") && snap1.contains("drafts") && snap1.contains("pinned"),
           "M21/M22: блок-лист, архив, уведомления, черновик, закреп — в журнале", snap1.dump().substr(0, 200));
     json snap2;
     for (int i = 0; i < 20; ++i) {
-        const auto r = d2.s->stateSync(json(), {});
-        snap2 = r.is_object() ? r.value("snapshot", json::object()) : json::object();
+        snap2 = refreshed(d2);
         if (snap2.dump().find("spam" + suffix) != std::string::npos && snap2.dump().find(textB64) != std::string::npos) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -754,8 +759,7 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
     d1.s->stateChatCleared(bob.user, 1700000001000);
     bool cleared = false;
     for (int i = 0; i < 20 && !cleared; ++i) {
-        const auto r = d2.s->stateSync(json(), {});
-        cleared = r.is_object() && r.value("snapshot", json::object()).dump().find("1700000001000") != std::string::npos;
+        cleared = refreshed(d2).dump().find("1700000001000") != std::string::npos;
         if (!cleared) std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
     check(cleared, "T145: граница очистки чата дошла до второго устройства (cleared)");
@@ -767,8 +771,7 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
           "M30: запись истории звонка — в журнал состояния (callSet)");
     bool calls = false;
     for (int i = 0; i < 20 && !calls; ++i) {
-        const auto r = d2.s->stateSync(json(), {});
-        const auto s = r.is_object() ? r.value("snapshot", json::object()) : json::object();
+        const auto s = refreshed(d2);
         calls = s.contains("calls") && s["calls"].dump().find("1700000002000") != std::string::npos;
         if (!calls) std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -831,7 +834,7 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
     bool treeSeen = false;
     std::string c2status;
     for (int i = 0; i < 60 && !treeSeen; ++i) {
-        (void)d2.s->stateSync(json(), {}); // запись о диске — в журнале личного состояния
+        (void)d2.s->stateRefresh(); // запись о диске — в журнале личного состояния
         c2.onEngineEvent(root);
         c2.ensure(true);
         c2.syncNow(true);
@@ -1188,8 +1191,8 @@ int main() {
     alice.start(tcp, dir + "/alice");
     check(alice.s->waitReady(30000), "alice: сессия поднята заново");
     {
-        const auto snap = alice.s->stateAttach(json::object());
-        check(snap.is_object() && snap.dump().find("Дом") != std::string::npos,
+        check(alice.s->stateConnect(), "T098: журнал состояния подключён после рестарта");
+        check(alice.s->stateSnapshot().dump().find("Дом") != std::string::npos,
               "T098: журнал состояния прочитан с сервера после рестарта");
     }
 
@@ -1233,7 +1236,8 @@ int main() {
         check(alice.inbox.waitSession([](const json &e) { return e.value("type", std::string()) == "stateReady"; }, 3000),
               "T128: ключ личного состояния сменён — хосту stateReady");
         {
-            const auto snap = alice.s->stateAttach(json::object());
+            check(alice.s->stateConnect(), "T128: журнал состояния подключён под новым ключом");
+            const auto snap = alice.s->stateSnapshot();
             check(snap.is_object() && snap.dump().find("Дом") != std::string::npos,
                   "T128: журнал состояния перенесён под новый ключ (папка на месте)");
         }

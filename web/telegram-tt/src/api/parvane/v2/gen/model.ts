@@ -98,13 +98,13 @@ export function objectKindFromJson(v: unknown): ObjectKind {
   return byNum[n] ?? ObjectKindValues[0];
 }
 
-export const OpenStateValues = ['OPEN_STATE_UNSPECIFIED', 'OPEN_STATE_READY', 'OPEN_STATE_MIGRATION_NEEDED', 'OPEN_STATE_TOO_NEW', 'OPEN_STATE_LOCKED'] as const;
+export const OpenStateValues = ['OPEN_STATE_UNSPECIFIED', 'OPEN_STATE_READY', 'OPEN_STATE_TOO_NEW', 'OPEN_STATE_LOCKED'] as const;
 export type OpenState = typeof OpenStateValues[number];
 export function openStateFromJson(v: unknown): OpenState {
   const all = OpenStateValues as readonly string[];
   if (typeof v === 'string' && all.includes(v)) return v as OpenState;
   const n = Number(v);
-  const byNum: Record<number, OpenState> = { 0: 'OPEN_STATE_UNSPECIFIED', 1: 'OPEN_STATE_READY', 2: 'OPEN_STATE_MIGRATION_NEEDED', 3: 'OPEN_STATE_TOO_NEW', 4: 'OPEN_STATE_LOCKED' };
+  const byNum: Record<number, OpenState> = { 0: 'OPEN_STATE_UNSPECIFIED', 1: 'OPEN_STATE_READY', 3: 'OPEN_STATE_TOO_NEW', 4: 'OPEN_STATE_LOCKED' };
   return byNum[n] ?? OpenStateValues[0];
 }
 
@@ -136,25 +136,6 @@ export function serverInputKindFromJson(v: unknown): ServerInputKind {
   const n = Number(v);
   const byNum: Record<number, ServerInputKind> = { 0: 'SERVER_INPUT_KIND_UNSPECIFIED', 1: 'SERVER_INPUT_KIND_RESPONSE', 2: 'SERVER_INPUT_KIND_EVENT', 3: 'SERVER_INPUT_KIND_INBOX_RECORD', 4: 'SERVER_INPUT_KIND_STREAM_CHUNK' };
   return byNum[n] ?? ServerInputKindValues[0];
-}
-
-export interface AuditDump {
-  jsonl: string;
-}
-
-export function auditDumpFromJson(v: unknown): AuditDump {
-  const j = (v ?? {}) as Record<string, unknown>;
-  const jsonl = pick(j, 'jsonl', 'jsonl');
-  const out: AuditDump = {
-    jsonl: jsonl === undefined || jsonl === null ? '' : String(jsonl),
-  };
-  return out;
-}
-
-export function auditDumpToJson(m: AuditDump): Record<string, unknown> {
-  const j: Record<string, unknown> = {};
-  if (!(m.jsonl === '')) j.jsonl = m.jsonl;
-  return j;
 }
 
 export interface CallResult {
@@ -339,6 +320,8 @@ export interface ChatView {
   mutedUntilMs: string;
   draft: string;
   folderIds: number[];
+  unreadMark: boolean;
+  order: string;
 }
 
 export function chatViewFromJson(v: unknown): ChatView {
@@ -354,6 +337,8 @@ export function chatViewFromJson(v: unknown): ChatView {
   const mutedUntilMs = pick(j, 'muted_until_ms', 'mutedUntilMs');
   const draft = pick(j, 'draft', 'draft');
   const folderIds = pick(j, 'folder_ids', 'folderIds');
+  const unreadMark = pick(j, 'unread_mark', 'unreadMark');
+  const order = pick(j, 'order', 'order');
   const out: ChatView = {
     chat: chat === undefined || chat === null ? undefined : peerFromJson(chat),
     title: title === undefined || title === null ? '' : String(title),
@@ -366,6 +351,8 @@ export function chatViewFromJson(v: unknown): ChatView {
     mutedUntilMs: mutedUntilMs === undefined || mutedUntilMs === null ? '' : String(mutedUntilMs),
     draft: draft === undefined || draft === null ? '' : String(draft),
     folderIds: Array.isArray(folderIds) ? folderIds.map((x) => Number(x)) : [],
+    unreadMark: unreadMark === undefined || unreadMark === null ? false : Boolean(unreadMark),
+    order: order === undefined || order === null ? '' : String(order),
   };
   return out;
 }
@@ -383,6 +370,8 @@ export function chatViewToJson(m: ChatView): Record<string, unknown> {
   if (!((m.mutedUntilMs === '' || m.mutedUntilMs === '0'))) j.muted_until_ms = m.mutedUntilMs;
   if (!(m.draft === '')) j.draft = m.draft;
   if (m.folderIds.length) j.folder_ids = m.folderIds.map((x) => x);
+  if (!(!m.unreadMark)) j.unread_mark = m.unreadMark;
+  if (!((m.order === '' || m.order === '0'))) j.order = m.order;
   return j;
 }
 
@@ -569,8 +558,13 @@ export interface EngineConfig {
   memoryBudgetBytes: string;
   deviceKey: Uint8Array;
   vectors: boolean;
-  legacyPresent: boolean;
   hostDriven: boolean;
+  engineRows: boolean;
+  historyBatchMinMs: number;
+  historyBatchMaxMs: number;
+  historyCheckpointAgeMs: string;
+  historyCheckpointRecords: number;
+  historyCheckpointJitterMs: number;
 }
 
 export function engineConfigFromJson(v: unknown): EngineConfig {
@@ -583,8 +577,13 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
   const memoryBudgetBytes = pick(j, 'memory_budget_bytes', 'memoryBudgetBytes');
   const deviceKey = pick(j, 'device_key', 'deviceKey');
   const vectors = pick(j, 'vectors', 'vectors');
-  const legacyPresent = pick(j, 'legacy_present', 'legacyPresent');
   const hostDriven = pick(j, 'host_driven', 'hostDriven');
+  const engineRows = pick(j, 'engine_rows', 'engineRows');
+  const historyBatchMinMs = pick(j, 'history_batch_min_ms', 'historyBatchMinMs');
+  const historyBatchMaxMs = pick(j, 'history_batch_max_ms', 'historyBatchMaxMs');
+  const historyCheckpointAgeMs = pick(j, 'history_checkpoint_age_ms', 'historyCheckpointAgeMs');
+  const historyCheckpointRecords = pick(j, 'history_checkpoint_records', 'historyCheckpointRecords');
+  const historyCheckpointJitterMs = pick(j, 'history_checkpoint_jitter_ms', 'historyCheckpointJitterMs');
   const out: EngineConfig = {
     user: user === undefined || user === null ? '' : String(user),
     deviceId: deviceId === undefined || deviceId === null ? '' : String(deviceId),
@@ -594,8 +593,13 @@ export function engineConfigFromJson(v: unknown): EngineConfig {
     memoryBudgetBytes: memoryBudgetBytes === undefined || memoryBudgetBytes === null ? '' : String(memoryBudgetBytes),
     deviceKey: deviceKey === undefined || deviceKey === null ? new Uint8Array(0) : fromBase64(String(deviceKey)),
     vectors: vectors === undefined || vectors === null ? false : Boolean(vectors),
-    legacyPresent: legacyPresent === undefined || legacyPresent === null ? false : Boolean(legacyPresent),
     hostDriven: hostDriven === undefined || hostDriven === null ? false : Boolean(hostDriven),
+    engineRows: engineRows === undefined || engineRows === null ? false : Boolean(engineRows),
+    historyBatchMinMs: historyBatchMinMs === undefined || historyBatchMinMs === null ? 0 : Number(historyBatchMinMs),
+    historyBatchMaxMs: historyBatchMaxMs === undefined || historyBatchMaxMs === null ? 0 : Number(historyBatchMaxMs),
+    historyCheckpointAgeMs: historyCheckpointAgeMs === undefined || historyCheckpointAgeMs === null ? '' : String(historyCheckpointAgeMs),
+    historyCheckpointRecords: historyCheckpointRecords === undefined || historyCheckpointRecords === null ? 0 : Number(historyCheckpointRecords),
+    historyCheckpointJitterMs: historyCheckpointJitterMs === undefined || historyCheckpointJitterMs === null ? 0 : Number(historyCheckpointJitterMs),
   };
   return out;
 }
@@ -610,8 +614,13 @@ export function engineConfigToJson(m: EngineConfig): Record<string, unknown> {
   if (!((m.memoryBudgetBytes === '' || m.memoryBudgetBytes === '0'))) j.memory_budget_bytes = m.memoryBudgetBytes;
   if (!(m.deviceKey.length === 0)) j.device_key = toBase64(m.deviceKey);
   if (!(!m.vectors)) j.vectors = m.vectors;
-  if (!(!m.legacyPresent)) j.legacy_present = m.legacyPresent;
   if (!(!m.hostDriven)) j.host_driven = m.hostDriven;
+  if (!(!m.engineRows)) j.engine_rows = m.engineRows;
+  if (!(m.historyBatchMinMs === 0)) j.history_batch_min_ms = m.historyBatchMinMs;
+  if (!(m.historyBatchMaxMs === 0)) j.history_batch_max_ms = m.historyBatchMaxMs;
+  if (!((m.historyCheckpointAgeMs === '' || m.historyCheckpointAgeMs === '0'))) j.history_checkpoint_age_ms = m.historyCheckpointAgeMs;
+  if (!(m.historyCheckpointRecords === 0)) j.history_checkpoint_records = m.historyCheckpointRecords;
+  if (!(m.historyCheckpointJitterMs === 0)) j.history_checkpoint_jitter_ms = m.historyCheckpointJitterMs;
   return j;
 }
 
@@ -770,6 +779,15 @@ export interface GroupView {
   perms?: GroupPerms;
   isPublic: boolean;
   inviteLinks: string[];
+  infoJson: string;
+  version: string;
+  deleted: boolean;
+  canManageInvites: boolean;
+  canDecideRequests: boolean;
+  canRotate: boolean;
+  canBan: boolean;
+  canAddAdmins: boolean;
+  canDeleteMessages: boolean;
 }
 
 export function groupViewFromJson(v: unknown): GroupView {
@@ -784,6 +802,15 @@ export function groupViewFromJson(v: unknown): GroupView {
   const perms = pick(j, 'perms', 'perms');
   const isPublic = pick(j, 'is_public', 'isPublic');
   const inviteLinks = pick(j, 'invite_links', 'inviteLinks');
+  const infoJson = pick(j, 'info_json', 'infoJson');
+  const version = pick(j, 'version', 'version');
+  const deleted = pick(j, 'deleted', 'deleted');
+  const canManageInvites = pick(j, 'can_manage_invites', 'canManageInvites');
+  const canDecideRequests = pick(j, 'can_decide_requests', 'canDecideRequests');
+  const canRotate = pick(j, 'can_rotate', 'canRotate');
+  const canBan = pick(j, 'can_ban', 'canBan');
+  const canAddAdmins = pick(j, 'can_add_admins', 'canAddAdmins');
+  const canDeleteMessages = pick(j, 'can_delete_messages', 'canDeleteMessages');
   const out: GroupView = {
     group: group === undefined || group === null ? undefined : refFromJson(group),
     kind: kind === undefined || kind === null ? '' : String(kind),
@@ -795,6 +822,15 @@ export function groupViewFromJson(v: unknown): GroupView {
     perms: perms === undefined || perms === null ? undefined : groupPermsFromJson(perms),
     isPublic: isPublic === undefined || isPublic === null ? false : Boolean(isPublic),
     inviteLinks: Array.isArray(inviteLinks) ? inviteLinks.map((x) => String(x)) : [],
+    infoJson: infoJson === undefined || infoJson === null ? '' : String(infoJson),
+    version: version === undefined || version === null ? '' : String(version),
+    deleted: deleted === undefined || deleted === null ? false : Boolean(deleted),
+    canManageInvites: canManageInvites === undefined || canManageInvites === null ? false : Boolean(canManageInvites),
+    canDecideRequests: canDecideRequests === undefined || canDecideRequests === null ? false : Boolean(canDecideRequests),
+    canRotate: canRotate === undefined || canRotate === null ? false : Boolean(canRotate),
+    canBan: canBan === undefined || canBan === null ? false : Boolean(canBan),
+    canAddAdmins: canAddAdmins === undefined || canAddAdmins === null ? false : Boolean(canAddAdmins),
+    canDeleteMessages: canDeleteMessages === undefined || canDeleteMessages === null ? false : Boolean(canDeleteMessages),
   };
   return out;
 }
@@ -811,6 +847,15 @@ export function groupViewToJson(m: GroupView): Record<string, unknown> {
   if (!(m.perms === undefined)) j.perms = groupPermsToJson(m.perms!);
   if (!(!m.isPublic)) j.is_public = m.isPublic;
   if (m.inviteLinks.length) j.invite_links = m.inviteLinks.map((x) => x);
+  if (!(m.infoJson === '')) j.info_json = m.infoJson;
+  if (!((m.version === '' || m.version === '0'))) j.version = m.version;
+  if (!(!m.deleted)) j.deleted = m.deleted;
+  if (!(!m.canManageInvites)) j.can_manage_invites = m.canManageInvites;
+  if (!(!m.canDecideRequests)) j.can_decide_requests = m.canDecideRequests;
+  if (!(!m.canRotate)) j.can_rotate = m.canRotate;
+  if (!(!m.canBan)) j.can_ban = m.canBan;
+  if (!(!m.canAddAdmins)) j.can_add_admins = m.canAddAdmins;
+  if (!(!m.canDeleteMessages)) j.can_delete_messages = m.canDeleteMessages;
   return j;
 }
 
@@ -1514,29 +1559,6 @@ export function kindFormatToJson(m: KindFormat): Record<string, unknown> {
   return j;
 }
 
-export interface LegacyRecord {
-  key: string;
-  value: Uint8Array;
-}
-
-export function legacyRecordFromJson(v: unknown): LegacyRecord {
-  const j = (v ?? {}) as Record<string, unknown>;
-  const key = pick(j, 'key', 'key');
-  const value = pick(j, 'value', 'value');
-  const out: LegacyRecord = {
-    key: key === undefined || key === null ? '' : String(key),
-    value: value === undefined || value === null ? new Uint8Array(0) : fromBase64(String(value)),
-  };
-  return out;
-}
-
-export function legacyRecordToJson(m: LegacyRecord): Record<string, unknown> {
-  const j: Record<string, unknown> = {};
-  if (!(m.key === '')) j.key = m.key;
-  if (!(m.value.length === 0)) j.value = toBase64(m.value);
-  return j;
-}
-
 export interface MarkValue {
   field: number;
   value: Uint8Array;
@@ -1603,6 +1625,7 @@ export interface MessageView {
   silent: boolean;
   order: string;
   wire: string;
+  unread: boolean;
 }
 
 export function messageViewFromJson(v: unknown): MessageView {
@@ -1626,6 +1649,7 @@ export function messageViewFromJson(v: unknown): MessageView {
   const silent = pick(j, 'silent', 'silent');
   const order = pick(j, 'order', 'order');
   const wire = pick(j, 'wire', 'wire');
+  const unread = pick(j, 'unread', 'unread');
   const out: MessageView = {
     id: id === undefined || id === null ? new Uint8Array(0) : fromBase64(String(id)),
     chat: chat === undefined || chat === null ? undefined : peerFromJson(chat),
@@ -1646,6 +1670,7 @@ export function messageViewFromJson(v: unknown): MessageView {
     silent: silent === undefined || silent === null ? false : Boolean(silent),
     order: order === undefined || order === null ? '' : String(order),
     wire: wire === undefined || wire === null ? '' : String(wire),
+    unread: unread === undefined || unread === null ? false : Boolean(unread),
   };
   return out;
 }
@@ -1671,87 +1696,7 @@ export function messageViewToJson(m: MessageView): Record<string, unknown> {
   if (!(!m.silent)) j.silent = m.silent;
   if (!((m.order === '' || m.order === '0'))) j.order = m.order;
   if (!(m.wire === '')) j.wire = m.wire;
-  return j;
-}
-
-export interface MigrateStatus {
-  point: number;
-  done: boolean;
-  reportJson: string;
-}
-
-export function migrateStatusFromJson(v: unknown): MigrateStatus {
-  const j = (v ?? {}) as Record<string, unknown>;
-  const point = pick(j, 'point', 'point');
-  const done = pick(j, 'done', 'done');
-  const reportJson = pick(j, 'report_json', 'reportJson');
-  const out: MigrateStatus = {
-    point: point === undefined || point === null ? 0 : Number(point),
-    done: done === undefined || done === null ? false : Boolean(done),
-    reportJson: reportJson === undefined || reportJson === null ? '' : String(reportJson),
-  };
-  return out;
-}
-
-export function migrateStatusToJson(m: MigrateStatus): Record<string, unknown> {
-  const j: Record<string, unknown> = {};
-  if (!(m.point === 0)) j.point = m.point;
-  if (!(!m.done)) j.done = m.done;
-  if (!(m.reportJson === '')) j.report_json = m.reportJson;
-  return j;
-}
-
-export interface MigrateStep {
-  layer: string;
-  records: LegacyRecord[];
-  last: boolean;
-  chunk: number;
-}
-
-export function migrateStepFromJson(v: unknown): MigrateStep {
-  const j = (v ?? {}) as Record<string, unknown>;
-  const layer = pick(j, 'layer', 'layer');
-  const records = pick(j, 'records', 'records');
-  const last = pick(j, 'last', 'last');
-  const chunk = pick(j, 'chunk', 'chunk');
-  const out: MigrateStep = {
-    layer: layer === undefined || layer === null ? '' : String(layer),
-    records: Array.isArray(records) ? records.map((x) => legacyRecordFromJson(x)) : [],
-    last: last === undefined || last === null ? false : Boolean(last),
-    chunk: chunk === undefined || chunk === null ? 0 : Number(chunk),
-  };
-  return out;
-}
-
-export function migrateStepToJson(m: MigrateStep): Record<string, unknown> {
-  const j: Record<string, unknown> = {};
-  if (!(m.layer === '')) j.layer = m.layer;
-  if (m.records.length) j.records = m.records.map((x) => legacyRecordToJson(x));
-  if (!(!m.last)) j.last = m.last;
-  if (!(m.chunk === 0)) j.chunk = m.chunk;
-  return j;
-}
-
-export interface MigrationPlan {
-  steps: string[];
-  legacyRecords: string;
-}
-
-export function migrationPlanFromJson(v: unknown): MigrationPlan {
-  const j = (v ?? {}) as Record<string, unknown>;
-  const steps = pick(j, 'steps', 'steps');
-  const legacyRecords = pick(j, 'legacy_records', 'legacyRecords');
-  const out: MigrationPlan = {
-    steps: Array.isArray(steps) ? steps.map((x) => String(x)) : [],
-    legacyRecords: legacyRecords === undefined || legacyRecords === null ? '' : String(legacyRecords),
-  };
-  return out;
-}
-
-export function migrationPlanToJson(m: MigrationPlan): Record<string, unknown> {
-  const j: Record<string, unknown> = {};
-  if (m.steps.length) j.steps = m.steps.map((x) => x);
-  if (!((m.legacyRecords === '' || m.legacyRecords === '0'))) j.legacy_records = m.legacyRecords;
+  if (!(!m.unread)) j.unread = m.unread;
   return j;
 }
 
@@ -1982,16 +1927,13 @@ export function objectKeyToJson(m: ObjectKey): Record<string, unknown> {
 
 export interface OpenResult {
   state: OpenState;
-  migration?: MigrationPlan;
 }
 
 export function openResultFromJson(v: unknown): OpenResult {
   const j = (v ?? {}) as Record<string, unknown>;
   const state = pick(j, 'state', 'state');
-  const migration = pick(j, 'migration', 'migration');
   const out: OpenResult = {
     state: state === undefined || state === null ? OpenStateValues[0] : openStateFromJson(state),
-    migration: migration === undefined || migration === null ? undefined : migrationPlanFromJson(migration),
   };
   return out;
 }
@@ -1999,7 +1941,6 @@ export function openResultFromJson(v: unknown): OpenResult {
 export function openResultToJson(m: OpenResult): Record<string, unknown> {
   const j: Record<string, unknown> = {};
   if (!(m.state === OpenStateValues[0])) j.state = m.state;
-  if (!(m.migration === undefined)) j.migration = migrationPlanToJson(m.migration!);
   return j;
 }
 
@@ -2288,6 +2229,7 @@ export interface RowsApply {
   wipe: boolean;
   nowMs: string;
   rowsJson: string;
+  journal: boolean;
 }
 
 export function rowsApplyFromJson(v: unknown): RowsApply {
@@ -2298,6 +2240,7 @@ export function rowsApplyFromJson(v: unknown): RowsApply {
   const wipe = pick(j, 'wipe', 'wipe');
   const nowMs = pick(j, 'now_ms', 'nowMs');
   const rowsJson = pick(j, 'rows_json', 'rowsJson');
+  const journal = pick(j, 'journal', 'journal');
   const out: RowsApply = {
     opsJson: opsJson === undefined || opsJson === null ? '' : String(opsJson),
     receiptsJson: receiptsJson === undefined || receiptsJson === null ? '' : String(receiptsJson),
@@ -2305,6 +2248,7 @@ export function rowsApplyFromJson(v: unknown): RowsApply {
     wipe: wipe === undefined || wipe === null ? false : Boolean(wipe),
     nowMs: nowMs === undefined || nowMs === null ? '' : String(nowMs),
     rowsJson: rowsJson === undefined || rowsJson === null ? '' : String(rowsJson),
+    journal: journal === undefined || journal === null ? false : Boolean(journal),
   };
   return out;
 }
@@ -2317,6 +2261,7 @@ export function rowsApplyToJson(m: RowsApply): Record<string, unknown> {
   if (!(!m.wipe)) j.wipe = m.wipe;
   if (!((m.nowMs === '' || m.nowMs === '0'))) j.now_ms = m.nowMs;
   if (!(m.rowsJson === '')) j.rows_json = m.rowsJson;
+  if (!(!m.journal)) j.journal = m.journal;
   return j;
 }
 
@@ -2670,6 +2615,9 @@ export interface UnreadChanged {
   chat?: Peer;
   count: number;
   mention: boolean;
+  lastReadId: Uint8Array;
+  lastReadTsMs: string;
+  mentions: Uint8Array[];
 }
 
 export function unreadChangedFromJson(v: unknown): UnreadChanged {
@@ -2677,10 +2625,16 @@ export function unreadChangedFromJson(v: unknown): UnreadChanged {
   const chat = pick(j, 'chat', 'chat');
   const count = pick(j, 'count', 'count');
   const mention = pick(j, 'mention', 'mention');
+  const lastReadId = pick(j, 'last_read_id', 'lastReadId');
+  const lastReadTsMs = pick(j, 'last_read_ts_ms', 'lastReadTsMs');
+  const mentions = pick(j, 'mentions', 'mentions');
   const out: UnreadChanged = {
     chat: chat === undefined || chat === null ? undefined : peerFromJson(chat),
     count: count === undefined || count === null ? 0 : Number(count),
     mention: mention === undefined || mention === null ? false : Boolean(mention),
+    lastReadId: lastReadId === undefined || lastReadId === null ? new Uint8Array(0) : fromBase64(String(lastReadId)),
+    lastReadTsMs: lastReadTsMs === undefined || lastReadTsMs === null ? '' : String(lastReadTsMs),
+    mentions: Array.isArray(mentions) ? mentions.map((x) => fromBase64(String(x))) : [],
   };
   return out;
 }
@@ -2690,6 +2644,9 @@ export function unreadChangedToJson(m: UnreadChanged): Record<string, unknown> {
   if (!(m.chat === undefined)) j.chat = peerToJson(m.chat!);
   if (!(m.count === 0)) j.count = m.count;
   if (!(!m.mention)) j.mention = m.mention;
+  if (!(m.lastReadId.length === 0)) j.last_read_id = toBase64(m.lastReadId);
+  if (!((m.lastReadTsMs === '' || m.lastReadTsMs === '0'))) j.last_read_ts_ms = m.lastReadTsMs;
+  if (m.mentions.length) j.mentions = m.mentions.map((x) => toBase64(x));
   return j;
 }
 

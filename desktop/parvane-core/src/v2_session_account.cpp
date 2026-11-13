@@ -213,8 +213,8 @@ json Session::renameAccount(const std::string &nick, const std::string &password
             writeStateFile("root-backup-sent", rb);
         }
         if (const auto key = keybundle::deriveBundleKey(recoveryKey, newAddress)) writeStateFile("bundle-key", *key);
-        std::remove((cfg_.stateDir + "/bundle-sent").c_str());
-        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
+        removeStateFile("bundle-sent");
+        removeStateFile("bundle-seq");
         persistLocked();
         log("ник сменён");
         out = json{{"result", "ok"}, {"address", r.value("address", newAddress)}, {"token", r.value("token", std::string())}};
@@ -246,8 +246,8 @@ bool Session::followOwnRename(const std::string &engineSelf) {
         const auto fresh = call(false, "identity.device.log_sync",
             encodeMessage("parvane.identity.v2.DeviceLogSyncRequest", json{{"user", {{"address", cfg_.self}}}, {"after_version", "0"}}));
         runRequestsLocked(client_->call("renameFollow", json{{"logResponse", toBase64(fresh)}}));
-        std::remove((cfg_.stateDir + "/bundle-sent").c_str());
-        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
+        removeStateFile("bundle-sent");
+        removeStateFile("bundle-seq");
         persistLocked();
         log("ник сменён на другом устройстве — устройство перешло на новый адрес");
         return true;
@@ -617,7 +617,7 @@ void Session::refreshKeyBundleLocked(bool force) {
              encodeMessage("parvane.identity.v2.RootBackupSetRequest", json{{"key_bundle", toBase64(sealed)}}));
         writeStateFile("bundle-sent", mark);
         writeStateFile("bundle-seq", std::to_string(nextSeq));
-        std::remove((cfg_.stateDir + "/bundle-history").c_str()); // указатель на снимок истории до spec 033
+        removeStateFile("bundle-history"); // указатель на снимок истории до spec 033
         log("копия ключей аккаунта обновлена на сервере");
     } catch (const std::exception &e) {
         log(std::string("копия ключей аккаунта не обновлена: ") + e.what());
@@ -719,7 +719,7 @@ void Session::flushTelegramKeyLocked() {
     const auto result = sendKeyToTelegram(key);
     if (result == "ok") {
         telegramKey_.clear();
-        std::remove((cfg_.stateDir + "/pending-recovery-key").c_str());
+        removeStateFile("pending-recovery-key");
         log("ключ восстановления отправлен владельцу в Telegram");
         return;
     }
@@ -730,7 +730,7 @@ void Session::flushTelegramKeyLocked() {
     }
     if (result != "failed") {
         telegramKey_.clear();
-        std::remove((cfg_.stateDir + "/pending-recovery-key").c_str());
+        removeStateFile("pending-recovery-key");
     }
 }
 
@@ -935,7 +935,7 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
 // по таймеру (как web startRecoveryUpkeep).
 void Session::ackJoined() {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
-    std::remove((cfg_.stateDir + "/joined-unacked").c_str());
+    removeStateFile("joined-unacked");
 }
 
 void Session::startRecoveryUpkeepLocked() {

@@ -44,7 +44,6 @@ add_library(parvane_core STATIC
     ${CORE}/src/store_fs.cpp
     ${CORE}/src/engine_store.cpp
     ${CORE}/src/engine_host.cpp
-    ${CORE}/src/migrate_legacy.cpp
     ${CORE}/src/state_model.cpp
     ${CORE}/src/gen/model.cpp
     ${CORE}/src/local_files.cpp
@@ -66,7 +65,6 @@ add_library(parvane_core STATIC
     ${CORE}/src/v2_session.cpp
     ${CORE}/src/v2_session_account.cpp
     ${CORE}/src/v2_session_groups.cpp
-    ${CORE}/src/audit_dump.cpp
     ${CORE}/src/history_sync.cpp)
 target_include_directories(parvane_core PUBLIC
     ${CORE}/include

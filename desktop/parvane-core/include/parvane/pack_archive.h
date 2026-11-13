@@ -72,6 +72,11 @@ std::string favedStickerId(const std::string &setId, const std::string &fileName
 // set_id из sticker_id ("" — не стикер своего набора).
 std::string favedSetIdOf(const std::string &stickerId);
 
+// PACK-1 (spec 036 T024): id набора стикеров у всех клиентов — ключ объекта STICKER_PACK: "h:" + отпечаток содержимого
+// (PACK-2, base64 как на проводе) либо, без отпечатка, "n:" + нормализованное имя; id стикера — имя файла манифеста
+// (вектор `clients/pack-set-id.json`, движок `packSetId`). Прежний вид (`favedSetId`) — только для перекладки избранного.
+std::string sharedSetId(const std::string &contentHashB64, const std::string &packName);
+
 // PACK-1: загруженную под набор получателей ссылку можно переиспользовать,
 // только если новый набор ⊆ старого.
 bool canReuseRef(const std::vector<std::string> &uploadedFor,

@@ -70,16 +70,24 @@ impl Engine {
                 w.delta.push(Change::MessageRemove(MessageRemove { chat: Some(peer), id: id.to_vec() }));
             }
         }
+        // Строки прежнего вида этого вызова (`rows_json`): своё сообщение, ставшее строкой модели вместе с операцией
+        let legacy_targets: std::collections::BTreeSet<Vec<u8>> = legacy.iter().map(|(hs, _)| hs.target.clone()).collect();
         for (hs, order) in legacy {
             self.row_put_legacy(hs, order, &mut w);
         }
         for op in &ops {
             let at = history::op_target(op).and_then(|(t, c)| Some((history::history_chat_key(c.as_ref()?).ok()?, paging::id16(t)?)));
             let before = at.as_ref().and_then(|(c, id)| self.chats.get(c).and_then(|r| r.get(id)).map(|r| r.state.clone()));
-            self.apply_history_op(op, false, &mut w.delta);
+            let journal = a.journal && self.cfg.engine_rows;
+            self.apply_history_op(op, journal, &mut w.delta);
             if let Some((chat, id)) = at {
-                let after = self.chats.get(&chat).and_then(|r| r.get(&id)).map(|r| &r.state);
-                if after.is_some() && after != before.as_ref() {
+                let after = self.chats.get(&chat).and_then(|r| r.get(&id)).map(|r| r.state.clone());
+                // Строка пришла здесь же прежним видом — операция ничего не меняет, но в журнал истории ей нужно
+                // (иначе своё первое сообщение не доезжало до других устройств аккаунта)
+                if journal && after == before && legacy_targets.contains(&id.to_vec()) {
+                    self.queue_history(op.clone());
+                }
+                if after.is_some() && after != before {
                     self.emit_row(&chat, &id, &mut w);
                 }
             }
@@ -229,7 +237,7 @@ impl Engine {
             }
         }
         let mut out = serde_json::Map::new();
-        out.insert("unread".into(), json!(self.unread_of(&a.chat_key)));
+        out.insert("unread".into(), json!(self.unread_of(&a.chat_key).0));
         out.insert("last_read_id".into(), json!(last.map(|l| l.2).unwrap_or_default()));
         if let Some(m) = mark {
             out.insert("mark".into(), to_json(m));

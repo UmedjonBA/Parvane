@@ -4,8 +4,6 @@ import type { LocalContactInfo } from './contactInfo';
 import type { ForwardOptions } from './forwardOptions';
 import type { StickerRef } from './stickerLists';
 import type { ParvaneStore } from './store';
-import type { HistorySyncState } from './v2/history';
-import type { HReadMark } from './v2/historyModel';
 import type { WireStoredMessage } from './wire';
 
 import { hasMediaContent, isAuthorHidden } from './forwardOptions';
@@ -155,7 +153,6 @@ const OFFLINE_PROJECTION_WAIT_MS = 4000;
 const SCHEDULED_ID_BASE = 1_000_001;
 const RECORD_SAVE_DELAY_MS = 300;
 // Маркеры «прочитано до» прежних сборок (с spec 035 T114 — в модели движка)
-const READ_MARK_PREFIX = 'rm:';
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
 // Запись журнала исходящих на одно сообщение (perf A6)
@@ -534,20 +531,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (list.includes(address)) {
       personal.setItem('deletedchats', JSON.stringify(list.filter((item) => item !== address)));
     }
-  }
-
-  /** Кэш строк прежних сборок (только для разового переноса в модель). */
-  async function loadHistoryRecords(): Promise<WireStoredMessage[]> {
-    const storage = await secureStorage();
-    if (!storage) return [];
-    return storage.loadRecordsByPrefix<WireStoredMessage>('m:');
-  }
-
-  /** Прежний кэш строк перенесён в модель — стереть. */
-  async function dropLegacyHistory(uuids: string[], addresses: string[]) {
-    const storage = await secureStorage();
-    if (!storage) return;
-    await storage.deleteRecords([...uuids.map((id) => `m:${id}`), ...addresses.map((a) => `${READ_MARK_PREFIX}${a}`)]);
   }
 
   function resetSecureCaches() {
@@ -1119,27 +1102,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (Object.keys(inline).length) writeStickerPackMirror(mirror);
   }
 
-  // Прежний учёт прочитанного (список uuid в localStorage, до spec 033) — только для разового переноса в маркеры
-  // «прочитано до» (журнал истории, FR-024); после переноса стирается
-  const LEGACY_READ_PART = 'readuuids';
-
-  function takeLegacyReadUuids(): string[] {
-    try {
-      const list = JSON.parse(localStorage.getItem(storageKey(LEGACY_READ_PART)) || '[]') as unknown;
-      return Array.isArray(list) ? list.filter((uuid): uuid is string => typeof uuid === 'string') : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function dropLegacyReadUuids() {
-    try {
-      localStorage.removeItem(storageKey(LEGACY_READ_PART));
-    } catch {
-      // приватный режим — останется до выхода
-    }
-  }
-
   // Квитанции прочтения собеседникам, ещё не принятые сервером (READ-1 п. 3): адрес → uuid; повтор до успеха
   // переживает перезагрузку
   function loadPendingReceipts(): Record<string, string[]> {
@@ -1158,31 +1120,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     } catch {
       // квота — повтор живёт до перезагрузки
     }
-  }
-
-  // ── журнал истории (spec 033): курсор, очередь записи; маркеры прежних сборок (`rm:`) — для переноса ─────────
-
-  async function loadReadMarks(): Promise<Record<string, HReadMark>> {
-    const storage = await secureStorage();
-    if (!storage) return {};
-    const rows = await storage.loadRecordsByPrefix<{ address: string; mark: HReadMark }>(READ_MARK_PREFIX);
-    return Object.fromEntries(rows.filter((row) => row?.address && row.mark).map((row) => [row.address, row.mark]));
-  }
-
-  async function loadHistorySync(): Promise<HistorySyncState | undefined> {
-    return (await secureStorage())?.loadRecord<HistorySyncState>('hsync');
-  }
-
-  async function saveHistorySync(value: HistorySyncState) {
-    await (await secureStorage())?.saveRecord('hsync', value);
-  }
-
-  async function loadHistoryOutbox<T>(): Promise<T | undefined> {
-    return (await secureStorage())?.loadRecord<T>('hsync-outbox');
-  }
-
-  async function saveHistoryOutbox(value: unknown) {
-    await (await secureStorage())?.saveRecord('hsync-outbox', value);
   }
 
   // Постоянные инвайт-ссылки групп, полученные на этом устройстве:
@@ -1505,8 +1442,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     },
     hydrate,
     reset,
-    loadHistoryRecords,
-    dropLegacyHistory,
     appendOwnJournal,
     updateOwnJournalEntry,
     clearUserData,
@@ -1524,15 +1459,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadNonContacts,
     loadDeletedChats,
     loadUnreadMarks,
-    takeLegacyReadUuids,
     loadPendingReceipts,
     savePendingReceipts,
-    dropLegacyReadUuids,
-    loadReadMarks,
-    loadHistorySync,
-    saveHistorySync,
-    loadHistoryOutbox,
-    saveHistoryOutbox,
     loadRepairAttempts,
     markChatDeleted,
     unmarkChatDeleted,

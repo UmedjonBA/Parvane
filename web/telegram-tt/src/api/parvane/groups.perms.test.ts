@@ -8,37 +8,24 @@ import { historyCall, initSync } from '../../lib/parvane-protocol/parvane_protoc
 import { withDetectedLinks } from './autoEntities';
 import { pickPrimaryInvite } from './groups';
 import {
-  DEFAULT_GROUP_PERMISSIONS, fromBannedRights, ParvaneStore, shouldApplyGroupInfo, toAdminRights, toBannedRights,
-  toWireAdminRights,
+  DEFAULT_GROUP_PERMISSIONS, fromBannedRights, ParvaneStore, toAdminRights, toBannedRights, toWireAdminRights,
 } from './store';
 
-// Права групп (spec 003): провод ↔ нативные типы Telegram Web A и правило
-// применения сведений по ревизии (conformance GROUP-1)
+// Права групп (spec 003): провод ↔ нативные типы Telegram Web A
 
-describe('shouldApplyGroupInfo (GROUP-1)', () => {
-  it('применяет новее и равное, игнорирует старее, без локальной — всегда', () => {
-    expect(shouldApplyGroupInfo(undefined, 1)).toBe(true);
-    expect(shouldApplyGroupInfo(undefined, undefined)).toBe(true);
-    expect(shouldApplyGroupInfo(3, 4)).toBe(true);
-    expect(shouldApplyGroupInfo(4, 4)).toBe(true);
-    expect(shouldApplyGroupInfo(5, 4)).toBe(false);
-    expect(shouldApplyGroupInfo(5, undefined)).toBe(false);
-  });
-
-  it('стор не откатывает сведения группы устаревшим нотисом', () => {
+// GROUP-1 (spec 036 T020): ревизию сведений ведёт модель — стор принимает её показ как есть
+describe('сведения группы — показ модели (GROUP-1)', () => {
+  it('стор принимает сведения модели без своей проверки ревизии, группу v1, переведённую в v2, — нет', () => {
     const store = new ParvaneStore();
     store.self = 'alice@local';
     const base: WireGroupInfo = {
       group_id: 'g', name: 'v2', kind: 'group', created_by: 'alice@local', members: [], version: 2,
     };
     expect(store.registerGroup(base)).toBe(true);
-    expect(store.registerGroup({ ...base, name: 'v1', version: 1 })).toBe(false);
-    expect(store.getGroupInfo('g')?.name).toBe('v2');
-    expect(store.registerGroup({ ...base, name: 'v2-again' })).toBe(true);
     expect(store.registerGroup({ ...base, name: 'v3', version: 3 })).toBe(true);
-    expect(store.getGroupVersion('g')).toBe(3);
-    store.unregisterGroup('g');
-    expect(store.getGroupVersion('g')).toBeUndefined();
+    expect(store.getGroupInfo('g')?.name).toBe('v3');
+    expect(store.registerGroup({ ...base, group_id: 'h', migrated_from: 'g' })).toBe(true);
+    expect(store.registerGroup(base)).toBe(false);
   });
 });
 

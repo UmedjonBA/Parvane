@@ -14,28 +14,9 @@ package parvane.state.v1;
 import "parvane/call/v2/call.proto";
 import "parvane/core/v2/envelope.proto";
 import "parvane/core/v2/options.proto";
-import "parvane/core/v2/registry.proto";
 
-service StateService {
-  rpc Append(AppendRequest) returns (AppendResponse) {
-    option (parvane.core.v2.method) = {
-      name: "state.append"
-      channel: METHOD_CHANNEL_ID
-      rate: RATE_CLASS_MSG
-      kind: METHOD_KIND_CALL
-      shard: "messenger"
-    };
-  }
-  rpc Sync(SyncRequest) returns (SyncResponse) {
-    option (parvane.core.v2.method) = {
-      name: "state.sync"
-      channel: METHOD_CHANNEL_ID
-      rate: RATE_CLASS_REQ
-      kind: METHOD_KIND_CALL
-      shard: "messenger"
-    };
-  }
-}
+// Методы прежнего журнала (`state.append`, `state.sync`) удалены вместе с разовым переносом (spec 035 T149);
+// сообщения остаются значениями объектов `state.v2` (личное состояние — `viewStateJson`/`stateSet` модели движка).
 
 // Запись журнала: AEAD на ключе личного состояния.
 message StateRecord {

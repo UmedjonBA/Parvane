@@ -1,9 +1,8 @@
 //! spec 035 T032 (US2): журнал личного состояния v2 против живого стека — `state.ops.append` (seq на
 //! пользователя, повтор с теми же байтами → прежний seq, другие байты при том же op_id → `DUPLICATE`,
-//! детерминированный шифртекст переноса с двух устройств → один seq), живое `JournalNotice{STATE}` прочим
+//! детерминированный шифртекст повтора с двух устройств → один seq), живое `JournalNotice{STATE}` прочим
 //! устройствам, `state.ops.sync` (курсор, бюджет), сведение правок разных полей с двух устройств (`state2`),
-//! изоляция чужого пользователя; прежний журнал заморожен: `state.append` → `UPGRADE_REQUIRED`, `state.sync`
-//! — только чтение.
+//! изоляция чужого пользователя. Прежний журнал `state.v1` удалён (T149).
 //!
 //! Помощники стека скопированы из `v2_history_live.rs`. Без `nats-server` тест печатает SKIP и проходит.
 
@@ -13,10 +12,10 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use parvane_protocol::client::Client;
-use parvane_protocol::pb::parvane::core::v2::{frame, Auth, Channel, ErrorCode, UserRef};
+use parvane_protocol::pb::parvane::core::v2::{frame, Auth, Channel, ErrorCode};
 use parvane_protocol::pb::parvane::identity::v2 as ipb;
 use parvane_protocol::pb::parvane::msg::v2 as mpb;
-use parvane_protocol::pb::parvane::state::v1::{self as v1pb, peer, Folder, Peer};
+use parvane_protocol::pb::parvane::state::v1::Folder;
 use parvane_protocol::pb::parvane::state::v2::{
     state_op::Op, AppendRequest, AppendResponse, FieldValue, ObjectKey, ObjectKind, Patch, StateOp, SyncRequest, SyncResponse,
 };
@@ -184,11 +183,6 @@ fn login(addr: &str, user: &str, device_id: &str) -> Device {
     Device { client, id, anon, server_key, domain }
 }
 
-fn chat(a: &str) -> Peer {
-    Peer { kind: Some(peer::Kind::User(UserRef { address: a.into() })) }
-}
-
-
 fn append(c: &mut Conn, method: &str, r: &AppendRequest) -> Result<u64, ErrorCode> {
     c.call(method, r.encode_to_vec()).map(|b| AppendResponse::decode(b.as_slice()).unwrap_or_default().seq)
 }
@@ -259,13 +253,14 @@ async fn v2_state2_live() {
         f.check("notice-state-to-other-device", j.as_ref().is_some_and(|j| j.kind == mpb::JournalKind::State as i32 && j.seq == 1), &j);
         f.check("append-2", append(&mut d2.id, "state.ops.append", &r2) == Ok(2), "");
         f.check("append-retry-same-bytes", append(&mut d2.id, "state.ops.append", &r1) == Ok(1), "");
-        // Перенос из state.v1 двумя устройствами: детерминированный шифртекст — те же байты, тот же seq.
-        let mig = patch(state2::migration_op_id(&alice, ObjectKind::Folder as i32, "6", 2), 3, "d1", "6", 2, "перенос");
-        let m1 = state2::seal_op_deterministic(&key, &alice, &mig).unwrap();
-        let m2 = state2::seal_op_deterministic(&key, &alice, &mig).unwrap();
-        f.check("migration-bytes-equal", m1 == m2, "");
-        f.check("migration-d1", append(&mut d1.id, "state.ops.append", &m1) == Ok(3), "");
-        f.check("migration-d2-same-seq", append(&mut d2.id, "state.ops.append", &m2) == Ok(3), "");
+        // Повтор неотправленной записи с двух устройств (детерминированный шифртекст) — те же байты, тот же seq
+        let rep = patch(st::new_op_id(), 3, "d1", "6", 2, "повтор");
+        let rep_pt = rep.encode_to_vec();
+        let m1 = state2::seal_raw_deterministic(&key, &alice, &rep.op_id, &rep_pt).unwrap();
+        let m2 = state2::seal_raw_deterministic(&key, &alice, &rep.op_id, &rep_pt).unwrap();
+        f.check("retry-bytes-equal", m1 == m2, "");
+        f.check("retry-d1", append(&mut d1.id, "state.ops.append", &m1) == Ok(3), "");
+        f.check("retry-d2-same-seq", append(&mut d2.id, "state.ops.append", &m2) == Ok(3), "");
         let mut forged = r1.clone();
         forged.aead_ciphertext[20] ^= 1;
         f.check("same-opid-other-bytes-duplicate", append(&mut d1.id, "state.ops.append", &forged) == Err(ErrorCode::Duplicate), "");
@@ -296,19 +291,6 @@ async fn v2_state2_live() {
         f.check("other-user-empty", s.as_ref().is_ok_and(|s| s.records.is_empty()), &s);
         f.check("record-bound-to-user", state2::open(&key, &bob, &r1.op_id, &r1.aead_ciphertext).is_err(), "");
 
-        // ── прежний журнал заморожен: state.append — UPGRADE_REQUIRED, state.sync — только чтение ──
-        let v1 = st::make_op(
-            &mut st::LamportClock::default(),
-            "d1",
-            1,
-            v1pb::state_op::Op::ArchiveSet(v1pb::PeerKey { peer: Some(chat(&bob)) }),
-        )
-        .unwrap();
-        let v1r = st::seal_op(&key, &alice, &v1).unwrap();
-        let old = d1.id.call("state.append", v1r.encode_to_vec());
-        f.check("state-append-upgrade-required", old == Err(ErrorCode::UpgradeRequired), &old);
-        let old = d1.id.call("state.sync", v1pb::SyncRequest { after_seq: 0, max_bytes: 0 }.encode_to_vec());
-        f.check("state-sync-read-only", old.as_ref().is_ok_and(|b| v1pb::SyncResponse::decode(b.as_slice()).is_ok_and(|s| s.records.is_empty())), &old);
         f.0
     })
     .await

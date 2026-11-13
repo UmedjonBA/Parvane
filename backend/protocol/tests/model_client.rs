@@ -403,4 +403,116 @@ fn group_view_photo_is_live_in_host_mode() {
     assert_eq!(view["title"], "Группа-тест", "{view}");
     assert_eq!(view["photo"]["file_id"], "photo-test", "фото частной группы с секретом: {view}");
     assert_eq!(view["photo"]["key"], key.as_str(), "{view}");
+    // spec 036 E6: полные сведения журнала и производные права — из модели
+    let info: Value = serde_json::from_str(view["info_json"].as_str().expect("info_json")).unwrap();
+    assert_eq!(info["owner"], "alice@local", "{info}");
+    assert_eq!(info["name"], "Группа-тест");
+    assert!(info["defaultPermissions"].is_object(), "{info}");
+    assert_eq!(view["can_manage_invites"], true, "{view}");
+    assert_eq!(view["can_rotate"], true);
+    assert!(view["version"].as_str().is_some_and(|v| v != "0"), "{view}");
+}
+
+/// spec 036 (ENGINE-1): режим хоста с `engine_rows` — входящее сообщение применяет к строкам модель (строка в том же
+/// итоге, что событие хосту), журнал истории читает модель; без флага строк нет (прежний режим хоста).
+#[test]
+fn engine_rows_in_host_mode_puts_incoming_into_model_rows() {
+    for engine_rows in [false, true] {
+        let mut srv = Server::default();
+        let (mut ha, mut hb) = (Host::default(), Host::default());
+        let mut alice = identity(&mut ha, &mut srv, "alice@local", 3);
+        let (mut bob, _) = {
+            let mut c = cfg("bob@local", 4);
+            c["engine_rows"] = json!(engine_rows);
+            hb.open(&c)
+        };
+        let created = act(&mut bob, &mut srv, "bob@local", "createIdentity", json!({"otkCount": 5}));
+        assert!(created["rootSecret"].as_str().is_some());
+        cc(&mut bob, "ensureStateKey", json!({})).unwrap();
+        flush(&mut hb, &mut bob);
+        share_key(&mut bob, "bob@local", &mut alice);
+        send_text(&mut alice, &mut srv, "alice@local", "bob@local", "строка модели", "");
+        let count = srv.inbox[&("bob@local".to_string(), "d1".to_string())].len();
+        let mut changes = vec![];
+        for i in 0..count {
+            let out = ingest_record(&mut bob, &record_bytes(&srv, "bob@local", i));
+            let st = hb.drive(&mut bob, out, true);
+            let needs = client_needs(&st.changes);
+            changes.extend(st.changes);
+            if !needs.is_empty() {
+                satisfy(&mut bob, &mut srv, &needs[0]);
+                let out = raw(&mut bob, "ingest", &json!({"kind": "SERVER_INPUT_KIND_EVENT", "method": "retry"}));
+                changes.extend(hb.drive(&mut bob, out, true).changes);
+            }
+        }
+        struct St { changes: Vec<Value> }
+        let st = St { changes };
+        assert_eq!(event_texts(&st.changes), vec!["строка модели".to_string()], "событие хосту остаётся (engine_rows={engine_rows}): {:?}", st.changes);
+        let upserts = st.changes.iter().filter(|c| c.get("message_upsert").is_some()).count();
+        let all = raw(&mut bob, "rowsAll", &json!({"views": true}));
+        let rows: Value = serde_json::from_str(all["result_json"].as_str().unwrap_or("{}")).unwrap();
+        let n = rows["views"].as_array().map(Vec::len).unwrap_or(0);
+        if engine_rows {
+            assert_eq!(upserts, 1, "строка — в том же итоге: {:?}", st.changes);
+            assert_eq!(n, 1, "строка в модели: {rows}");
+            // Строка на диске: модель, открытая заново, её видит
+            let mut c = cfg("bob@local", 4);
+            c["engine_rows"] = json!(true);
+            let (mut bob2, _) = hb.open(&c);
+            let all2 = raw(&mut bob2, "rowsAll", &json!({"views": true}));
+            let rows2: Value = serde_json::from_str(all2["result_json"].as_str().unwrap_or("{}")).unwrap();
+            assert_eq!(rows2["views"].as_array().map(Vec::len).unwrap_or(0), 1, "после перезапуска: {rows2}");
+            let out = raw(&mut bob, "tick", &json!({"now_ms": (NOW + 120_000).to_string()}));
+            assert!(methods(&out).iter().any(|m| m.starts_with("history.")), "журнал истории читает модель: {:?}", methods(&out));
+            let head = out["requests"].as_array().unwrap().iter().find(|r| r["method"] == "history.head").cloned().expect("history.head");
+            hb.drive(&mut bob, out, true);
+            // Своё действие хоста с `journal` — в журнал истории ставит модель (пачка по сроку)
+            let own = json!([{"row": {"id": "01923a4b-5c6d-7001-8000-0000000000b1", "chat": {"user": {"address": "alice@local"}},
+                "from": "bob@local", "ts_ms": (NOW + 130_000).to_string(),
+                "body": b64e(json!({"content": {"kind": "text", "text": "своё"}}).to_string().as_bytes())}}]);
+            // Строка пришла прежним видом (`rows_json`) в том же вызове: операция строки ничего не меняет, но в журнал
+            // уходит — иначе своё первое сообщение не доезжало до других устройств
+            let row = own[0]["row"].clone();
+            let base = json!([{"hs": {"target": row["id"], "chat": row["chat"], "row": row}}]);
+            let out = raw(&mut bob, "rowsApply", &json!({"ops_json": own.to_string(), "rows_json": base.to_string(),
+                "now_ms": (NOW + 130_000).to_string(), "journal": true}));
+            assert!(out.get("error").is_none(), "{out}");
+            hb.drive(&mut bob, out, true);
+            // Очередь пачки — на диске: модель, открытая заново (остановка процесса в окне пачки), отправляет её сама
+            {
+                let mut c3 = cfg("bob@local", 4);
+                c3["engine_rows"] = json!(true);
+                let (mut bob3, _) = hb.open(&c3);
+                let out = raw(&mut bob3, "tick", &json!({"now_ms": (NOW + 400_000).to_string()}));
+                assert!(!methods(&out).iter().any(|m| m == "history.append"), "до чтения журнала — ждёт: {:?}", methods(&out));
+                let head3 = out["requests"].as_array().unwrap().iter().find(|r| r["method"] == "history.head").cloned()
+                    .expect("history.head после перезапуска");
+                hb.drive(&mut bob3, out, true);
+                let body = parvane_protocol::pb::parvane::history::v1::HeadResponse::default().encode_to_vec();
+                let resp = raw(&mut bob3, "ingest", &json!({"kind": "SERVER_INPUT_KIND_RESPONSE", "req_id": head3["req_id"], "body": b64e(&body)}));
+                hb.drive(&mut bob3, resp, true);
+                let out = raw(&mut bob3, "tick", &json!({"now_ms": (NOW + 410_000).to_string()}));
+                assert!(methods(&out).iter().any(|m| m == "history.append"), "очередь пачки пережила перезапуск: {:?}", methods(&out));
+            }
+            // До первого чтения журнала своя пачка ждёт: цепочка продолжает прочитанное (S7-4)
+            let out = raw(&mut bob, "tick", &json!({"now_ms": (NOW + 400_000).to_string()}));
+            assert!(!methods(&out).iter().any(|m| m == "history.append"), "пачка — после чтения журнала: {:?}", methods(&out));
+            hb.drive(&mut bob, out, true);
+            let body = parvane_protocol::pb::parvane::history::v1::HeadResponse::default().encode_to_vec();
+            let resp = raw(&mut bob, "ingest", &json!({"kind": "SERVER_INPUT_KIND_RESPONSE", "req_id": head["req_id"], "body": b64e(&body)}));
+            hb.drive(&mut bob, resp, true);
+            let out = raw(&mut bob, "tick", &json!({"now_ms": (NOW + 410_000).to_string()}));
+            assert!(methods(&out).iter().any(|m| m == "history.append"), "своё — в журнал моделью: {:?}", methods(&out));
+            hb.drive(&mut bob, out, true);
+            // Ключ состояния появился у хоста (`stateReady`: привязка нового устройства) — журнал истории сейчас, без
+            // ожидания опроса (spec 036, desktop/android)
+            let out = raw(&mut bob, "ingest", &json!({"kind": "SERVER_INPUT_KIND_EVENT", "method": "journal.history"}));
+            assert!(methods(&out).iter().any(|m| m == "history.sync"), "journal.history → синк журнала: {:?}", methods(&out));
+        } else {
+            assert_eq!(upserts, 0, "без флага строки ведёт хост");
+            assert_eq!(n, 0);
+            let out = raw(&mut bob, "ingest", &json!({"kind": "SERVER_INPUT_KIND_EVENT", "method": "journal.history"}));
+            assert!(!methods(&out).iter().any(|m| m.starts_with("history.")), "без engine_rows журнал ведёт хост: {:?}", methods(&out));
+        }
+    }
 }

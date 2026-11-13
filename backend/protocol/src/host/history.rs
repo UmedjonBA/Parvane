@@ -328,6 +328,12 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
                 let c = views::wire_to_content(&wire, a.get("replyTo").and_then(Value::as_str)).map_err(err)?;
                 serde_json::to_value(&c).map_err(|_| err(ProtoError::Malformed))?
             }
+            // PACK-1 (spec 036): id набора стикеров для всех клиентов — ключ STICKER_PACK `h:<content_hash>` либо
+            // `n:<нормализованное имя>`; id стикера в наборе — имя файла манифеста
+            "packSetId" => json!(crate::model::views::pack_set_id(
+                a.get("contentHash").or_else(|| a.get("content_hash")).and_then(Value::as_str).unwrap_or(""),
+                a.get("name").and_then(Value::as_str).unwrap_or(""),
+            )),
             // GROUP-2 (сверка conformance): скрыл бы приёмный фильтр содержимое автора с ролью `role` при правах
             // группы по умолчанию `perms`
             "groupContentHidden" => {

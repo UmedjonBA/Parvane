@@ -1,6 +1,6 @@
 {
  "suite": "model/fave_sticker",
- "description": "spec 035 T062 (FR-075): избранный стикер — объект личного состояния FAVED_STICKER с ключом `set_id/sticker_id` (поля set_id, sticker_id, added_ms); снятие — удаление объекта. Ожидания руками.",
+ "description": "spec 035 T062 (FR-075): избранный стикер — объект личного состояния FAVED_STICKER с ключом `set_id/sticker_id` (поля set_id, sticker_id, added_ms); снятие — удаление объекта; «/» в id стикера (имя файла манифеста) — отказ, в id набора допустим (PACK-1 spec 036: `h:` + base64 отпечатка, ключ делится последним «/»). Ожидания руками.",
  "cases": [
   {
    "name": "в избранное и обратно",
@@ -114,8 +114,8 @@
     {
      "submit": {
       "fave_sticker": {
-       "set_id": "a/b",
-       "sticker_id": "s1",
+       "set_id": "cats",
+       "sticker_id": "s/1",
        "on": true
       }
      },

@@ -22,7 +22,6 @@ use parvane_protocol::pb::parvane::core::v2::{
 };
 use parvane_protocol::pb::parvane::history::v1 as hpb;
 use parvane_protocol::pb::parvane::msg::v2::{self as mpb, inbox_record, InboxRecord, JournalKind};
-use parvane_protocol::pb::parvane::state::v1 as spb;
 use parvane_protocol::registry_gen::{inbox_subject, INBOX_PREFIX, INTERNAL_DELIVERY_KEY_CHECK, INTERNAL_DEVICES_OF, INTERNAL_TOKEN_CHECK};
 use parvane_protocol::schema::MethodInfo;
 use parvane_v2rt::{body, BoxFut, Reply};
@@ -76,13 +75,8 @@ pub(crate) async fn open_store(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-/// Контекст без приёма запросов (`--migration-check`).
-pub(crate) fn context(nc: Client, v2: SqlitePool) -> Arc<V2> {
-    Arc::new(V2 { nc, v2, devices: Mutex::new(HashMap::new()), groups: Default::default() })
-}
-
 pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
-    let ctx = context(nc.clone(), v2);
+    let ctx = Arc::new(V2 { nc: nc.clone(), v2, devices: Mutex::new(HashMap::new()), groups: Default::default() });
     let _ = CTX.set(ctx.clone());
     // spec 035 (T104, принцип VII): данные, которые сервер пересчитывает после миграций (окна членства 0008), —
     // до приёма запросов: матрица доступа к журналу группы с первого же запроса видит окна всех групп. Окна читают
@@ -122,12 +116,6 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
         "msg.inbox.sync" => {
             let (user, device) = me(&req)?;
             let r: mpb::InboxSyncRequest = body(&req)?;
-            // spec 035 (T150): устройство подключалось с новым выпуском (минор из Hello — от gateway)
-            if req.client_minor > 0 {
-                if let Ok(dev) = device_key(&user, &device) {
-                    crate::v2_migration::mark_minor(&ctx.v2, &dev, req.client_minor).await;
-                }
-            }
             ctx.sync(&user, &device, r.after_seq, r.max_bytes).await
         }
         "msg.inbox.ack" => {
@@ -174,8 +162,6 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let r: mpb::DeliverGroupRequest = body(&req)?;
             crate::v2_groups::deliver_group(ctx, r).await
         }
-        // spec 035 (FR-063): прежний журнал заморожен — запись только в state.v2 (`state.ops.append`).
-        "state.append" => Err(ErrorCode::UpgradeRequired),
         "state.ops.append" => {
             let (user, device) = me(&req)?;
             let r: parvane_protocol::pb::parvane::state::v2::AppendRequest = body(&req)?;
@@ -187,11 +173,6 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let (user, _) = me(&req)?;
             let r: parvane_protocol::pb::parvane::state::v2::SyncRequest = body(&req)?;
             Ok(crate::v2_state::sync_v2(&ctx.v2, &user, &r).await?.encode_to_vec())
-        }
-        "state.sync" => {
-            let (user, _) = me(&req)?;
-            let r: spb::SyncRequest = body(&req)?;
-            Ok(crate::v2_state::sync(&ctx.v2, &user, &r).await?.encode_to_vec())
         }
         // Журнал истории аккаунта (spec 033)
         "history.append" => {

@@ -12,19 +12,20 @@
 //! хранилище и `engineInfo()`: `store_kinds`, `features`.
 //!
 //! Упрощения этой фазы (помечены `T066+`): весь профиль читается при открытии (потолок памяти
-//! `memory_budget_bytes` пока не соблюдается, `historyPage.pending` не выдаётся); контрольные точки журнала
-//! истории строят прежние клиентские пути; голоса опросов не сводятся в `ViewPoll.votes`.
+//! `memory_budget_bytes` пока не соблюдается, `historyPage.pending` не выдаётся); голоса опросов не сводятся в
+//! `ViewPoll.votes`. Контрольные точки журнала истории строит модель (`checkpoint.rs`, spec 036 T006), когда строки у
+//! неё (`model_rows()`); у хоста без `engine_rows` — по-прежнему клиентские пути.
 
 pub mod capabilities;
+pub mod checkpoint;
 pub mod client_core;
 pub mod delta;
 pub mod features;
 pub mod host_rows;
 pub mod intent;
 pub mod journal;
-pub mod migration;
 pub mod paging;
-pub mod state_v1;
+pub mod state_json;
 pub mod store_kinds;
 pub mod views;
 
@@ -101,9 +102,8 @@ pub(crate) enum Purpose {
         rest: Vec<u64>,
         expect: BTreeMap<u64, Vec<u8>>,
     },
-    /// Разовый перенос (spec 035, US1): чтение замороженного журнала `state.v1` и нового `state.v2`.
-    MigrateV1Sync,
-    MigrateV2Sync,
+    /// spec 036 (T006, E2): шаг сборки контрольной точки журнала истории (`checkpoint.rs`).
+    HistoryCp(checkpoint::CpStep),
     Other,
 }
 
@@ -155,6 +155,20 @@ struct Meta {
     /// Голова журнала истории спрошена (вход нового устройства пройден: по точке либо журнал без точки).
     #[serde(default)]
     history_bootstrapped: bool,
+    /// spec 036 (T006): учёт контрольной точки для сборки следующей (голова, сегменты, срок, CAS).
+    #[serde(default)]
+    history_cp: checkpoint::CpMeta,
+    /// Книга цепочек писателей журнала истории (S7-4, `history::ChainBook::to_value`); нет — журнал не читался.
+    #[serde(default)]
+    history_chains: Value,
+    /// Время последней полной синхронизации журнала истории (страница без `more`) — режим замены (HIST-2 п. 3).
+    #[serde(default)]
+    history_last_full_ms: i64,
+    /// spec 036: операции, ждущие пачки журнала истории (S7-3, HistoryOp в proto3-JSON) — на диске, чтобы остановка
+    /// или падение процесса в окне пачки их не теряли (входящее, полученное перед выходом, иначе не доезжало до
+    /// других устройств аккаунта).
+    #[serde(default)]
+    history_pending: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +223,7 @@ pub struct Engine {
     pub(crate) peers: BTreeMap<String, Peer>,
     pub(crate) marks: BTreeMap<String, ReadMark>,
     chat_shown: BTreeMap<String, u64>,
-    unread_shown: BTreeMap<String, u32>,
+    unread_shown: BTreeMap<String, u64>,
     pub(crate) state: State2,
     meta: Meta,
     pub(crate) groups: BTreeMap<Vec<u8>, GroupFacts>,
@@ -223,6 +237,8 @@ pub struct Engine {
     pub(crate) history_queue: Vec<HistoryOp>,
     history_due_ms: Option<i64>,
     history_session: Option<HistorySession>,
+    /// Сборка контрольной точки журнала истории (в памяти, `checkpoint.rs`).
+    cp: checkpoint::CpRuntime,
     next_poll_ms: i64,
     revision: u64,
     next_req: u64,
@@ -232,12 +248,6 @@ pub struct Engine {
     pending_root: Option<StoreBatch>,
     /// Свои операции личного состояния, ещё не принятые сервером (вид `state-raw`, имя — hex op_id).
     pub(crate) state_unsent: BTreeMap<String, Vec<u8>>,
-    /// Разовый перенос старых хранилищ (spec 035, US1): идёт — `Some`.
-    pub(crate) migration: Option<Box<migration::MigrationRun>>,
-    /// Ход переноса с диска (`migration-progress/legacy`).
-    pub(crate) migration_progress: Option<migration::Progress>,
-    /// Своё исходящее прежней версии, не ставшее строкой истории (`outbox/legacy`, JSON как лежало).
-    pub(crate) legacy_outbox: Vec<Value>,
     /// Корень личности после createIdentity/importRootBackup — только в памяти (C1-06), `clientCall`.
     pub(crate) root: Option<zeroize::Zeroizing<[u8; 32]>>,
     /// Подготовленная смена ника (spec 026) до ответа сервера, `clientCall`.
@@ -255,6 +265,29 @@ fn fingerprint<M: Message>(m: &M) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     m.encode_to_vec().hash(&mut h);
     h.finish()
+}
+
+/// Упоминание своего имени в тексте (как web `isMentionOfSelf`): `@адрес` целиком либо `@ник` до границы слова.
+pub(crate) fn mentions_me(content: &serde_json::Map<String, Value>, me: &str) -> bool {
+    let text = content.get("text").or_else(|| content.get("caption")).and_then(Value::as_str).unwrap_or("");
+    if me.is_empty() || text.is_empty() {
+        return false;
+    }
+    if text.contains(&format!("@{me}")) {
+        return true;
+    }
+    let local = me.split('@').next().unwrap_or("");
+    let needle = format!("@{local}");
+    let mut from = 0;
+    while let Some(i) = text[from..].find(&needle) {
+        let end = from + i + needle.len();
+        let next = text[end..].chars().next();
+        if !next.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 pub(crate) fn user_peer(address: &str) -> Peer {
@@ -362,6 +395,7 @@ impl Engine {
             history_queue: vec![],
             history_due_ms: None,
             history_session: None,
+            cp: Default::default(),
             next_poll_ms: 0,
             revision: 0,
             next_req: 1,
@@ -369,9 +403,6 @@ impl Engine {
             dirty: Dirty::default(),
             pending_root: None,
             state_unsent: BTreeMap::new(),
-            migration: None,
-            migration_progress: None,
-            legacy_outbox: vec![],
             root: None,
             rename_plan: None,
             inbox_more: false,
@@ -421,12 +452,9 @@ impl Engine {
             "rowsRead" => parse::<epb::RowsReadRequest>(args)
                 .and_then(|a| self.rows_read(&a))
                 .map(|v| json_of(&epb::CallResult { result_json: v.to_string() })),
-            "stateViewV1" => Ok(self.state_view_v1().to_string()),
-            "stateApplyV1" => parse::<state_v1::ApplyV1>(args).and_then(|a| self.state_apply_v1(a)).map(|o| json_of(&o)),
-            "migrateStep" => parse(args).and_then(|a| self.migrate_step(a)).map(|o| json_of(&o)),
-            "migrateFinish" => self.migrate_finish().map(|o| json_of(&o)),
-            "migrateStatus" => Ok(json_of(&self.migrate_status())),
-            "auditDump" => Ok(json_of(&epb::AuditDump { jsonl: self.audit_dump() })),
+            "viewStateJson" => parse::<state_json::ViewArgs>(args).and_then(|a| self.view_state_json(&a)).map(|v| v.to_string()),
+            "stateSet" => parse::<state_json::SetArgs>(args).and_then(|a| self.state_set(a)).map(|o| json_of(&o)),
+            "stateMark" => parse::<state_json::MarkArgs>(args).and_then(|a| self.state_mark(a)).map(|o| json_of(&o)),
             "vectorInput" if self.cfg.vectors => self.vector_input(args).map(|o| json_of(&o)),
             _ => return serde_json::json!({"error": "UnknownCall"}).to_string(),
         };
@@ -525,13 +553,6 @@ impl Engine {
     fn root_loaded(&mut self, l: &StoreLoaded, w: &mut Work) -> Result<()> {
         let root = l.entries.iter().find(|e| e.key == store::ROOT_KEY);
         let Some(root) = root else {
-            if self.cfg.legacy_present {
-                // Старые хранилища есть, нового ещё нет: разовый перенос (`migrateStep`), до него — ничего не пишем.
-                self.open_state = OpenState::MigrationNeeded;
-                self.stage = Stage::Open;
-                w.open = Some(OpenResult { state: OpenState::MigrationNeeded as i32, migration: Some(migration::plan(None)) });
-                return Ok(());
-            }
             // Новый профиль: корень, DEK поколения 1, обёртка ключом устройства.
             let mut st = Store::create();
             let key: [u8; 32] = self.cfg.device_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("device_key"))?;
@@ -546,7 +567,7 @@ impl Engine {
             self.dirty.client = true;
             self.dirty.meta = true;
             self.pending_root = Some(batch);
-            w.open = Some(OpenResult { state: OpenState::Ready as i32, migration: None });
+            w.open = Some(OpenResult { state: OpenState::Ready as i32 });
             return Ok(());
         };
         let mut st = Store::load(&root.value)?;
@@ -560,7 +581,7 @@ impl Engine {
         if !unlocked {
             self.open_state = OpenState::Locked;
             self.stage = Stage::Open;
-            w.open = Some(OpenResult { state: OpenState::Locked as i32, migration: None });
+            w.open = Some(OpenResult { state: OpenState::Locked as i32 });
             return Ok(());
         }
         self.open_state = if too_new { OpenState::TooNew } else { OpenState::Ready };
@@ -599,7 +620,15 @@ impl Engine {
             };
             match (kind, name) {
                 ("engine-core", CORE_CLIENT) => client_blob = Some(plain),
-                ("engine-core", CORE_META) => self.meta = serde_json::from_slice(&plain).unwrap_or_default(),
+                ("engine-core", CORE_META) => {
+                    self.meta = serde_json::from_slice(&plain).unwrap_or_default();
+                    // Не отправленное до остановки — снова в очередь (пачка — с первым тактом после чтения журнала)
+                    self.history_queue =
+                        self.meta.history_pending.iter().filter_map(|v| crate::host::history::from_json(v).ok()).collect();
+                    if !self.history_queue.is_empty() {
+                        self.history_due_ms = Some(0);
+                    }
+                }
                 ("state-object", STATE_SNAPSHOT) => self.state = State2::from_snapshot_bytes(&plain)?,
                 ("history-row", n) => {
                     if let Some((chat, _)) = n.split_once('|') {
@@ -613,8 +642,6 @@ impl Engine {
                     }
                     self.marks.insert(chat.to_string(), m);
                 }
-                ("migration-progress", migration::PROGRESS_NAME) => self.migration_progress = migration::Progress::from_bytes(&plain),
-                ("outbox", migration::LEGACY_OUTBOX) => self.legacy_outbox = serde_json::from_slice(&plain).unwrap_or_default(),
                 ("outbox", _) => {
                     if let Ok(item) = serde_json::from_slice::<OutboxItem>(&plain) {
                         if let Some(id) = paging::id16(&item.op_id) {
@@ -650,17 +677,23 @@ impl Engine {
             self.chats.entry(chat.clone()).or_default().put(id, row);
             self.dirty.chats.insert(chat);
         }
+        // Строки с диска хост показывает при запуске (восстановление из модели): отпечаток показа — сразу, иначе их
+        // последующее удаление (надгробие из журнала истории) не давало хосту `message_remove`
+        let wire = self.has_feature(features::WIRE_ROWS);
+        let shown: Vec<(String, Id, Option<u64>)> = self
+            .chats
+            .iter()
+            .flat_map(|(chat, rows)| rows.iter_ids().map(move |(id, r)| (chat.clone(), *id, r)))
+            .map(|(chat, id, r)| (chat, id, self.message_view_as(r, wire).as_ref().map(fingerprint)))
+            .collect();
+        for (chat, id, fp) in shown {
+            if let Some(r) = self.chats.get_mut(&chat).and_then(|c| c.get_mut(&id)) {
+                r.shown = fp;
+            }
+        }
         self.refresh_groups(w, true);
         self.stage = Stage::Open;
-        if let Some(plan) = migration::plan_after_open(self.migration_progress.as_ref(), self.cfg.legacy_present) {
-            // Перенос прерван до переключения: начать заново (перенос идемпотентен), до этого не писать
-            if self.open_state == OpenState::Ready && plan.0 {
-                self.open_state = OpenState::MigrationNeeded;
-            }
-            w.open = Some(OpenResult { state: self.open_state as i32, migration: Some(plan.1) });
-        } else {
-            w.open = Some(OpenResult { state: self.open_state as i32, migration: None });
-        }
+        w.open = Some(OpenResult { state: self.open_state as i32 });
         // Неотправленное до перезапуска — снова в путь
         let ids: Vec<Id> = self.outbox.keys().copied().collect();
         for id in ids {
@@ -669,11 +702,6 @@ impl Engine {
         let unsent: Vec<(String, Vec<u8>)> = self.state_unsent.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         for (op_hex, pt) in unsent {
             self.send_state_raw(&op_hex, &pt, w);
-        }
-        // FR-071: открытое фото частной группы, которое ещё не перезалито (перенос прерван после нужды, хост закрыт
-        // до перезалива), — нужда снова при каждом открытии; хост сверяет журнал группы перед перезаливом
-        if self.open_state == OpenState::Ready {
-            self.avatar_reupload_needs(w);
         }
         Ok(())
     }
@@ -749,7 +777,7 @@ impl Engine {
         let d = std::mem::take(&mut self.dirty);
         let root = self.pending_root.take();
         let Some(st) = &self.store else { return Ok(root) };
-        if !matches!(self.open_state, OpenState::Ready | OpenState::MigrationNeeded) {
+        if !matches!(self.open_state, OpenState::Ready) {
             return Ok(root);
         }
         let mut puts: Vec<(String, String, Vec<u8>)> = vec![];
@@ -891,14 +919,34 @@ impl Engine {
             silent: content.get("silent").and_then(Value::as_bool).unwrap_or(false),
             order: row.order,
             wire,
+            unread: !outgoing && self.row_unread(row),
         })
+    }
+
+    /// Строка после маркера «прочитано до» чата, которая считается непрочитанной (READ-2).
+    fn row_unread(&self, row: &Row) -> bool {
+        if !row.visible() || !row.counted {
+            return false;
+        }
+        let Some(chat) = row.state.chat.as_ref().and_then(|p| history::history_chat_key(p).ok()) else { return false };
+        Self::after_mark(self.marks.get(&chat), row)
+    }
+
+    pub(crate) fn after_mark(mark: Option<&ReadMark>, r: &Row) -> bool {
+        match (mark, &r.state.row) {
+            (None, _) => true,
+            (Some(m), Some(x)) => (x.ts_ms, x.id.as_slice()) > (m.up_to_ts_ms, m.up_to_id.as_slice()),
+            (Some(_), None) => false,
+        }
     }
 
     /// Пересчитать показ строки: `messageUpsert`, если представление изменилось; `messageRemove`, если строка
     /// была показана и больше не видна.
     pub(crate) fn refresh_row(&mut self, chat: &str, id: &Id, d: &mut DeltaBuilder) {
         let Some(row) = self.chats.get(chat).and_then(|c| c.get(id)) else { return };
-        let view = self.message_view(chat, row);
+        // Хосту со строками в его виде (`wire_rows`) — и служебные строки ленты (голос, закрытие опроса): по ним он
+        // ведёт опросы, как в `rowsApply`
+        let view = self.message_view_as(row, self.has_feature(features::WIRE_ROWS));
         let fp = view.as_ref().map(fingerprint);
         let prev = row.shown;
         let peer = row.state.chat.clone().or_else(|| self.peers.get(chat).cloned());
@@ -919,16 +967,54 @@ impl Engine {
         self.dirty.chats.insert(chat.to_string());
     }
 
-    fn unread_of(&self, chat: &str) -> u32 {
-        let Some(rows) = self.chats.get(chat) else { return 0 };
+    /// Непрочитанное чата: число строк после маркера и id тех из них, что упоминают своё имя.
+    fn unread_of(&self, chat: &str) -> (u32, Vec<Vec<u8>>) {
+        let Some(rows) = self.chats.get(chat) else { return (0, vec![]) };
         let mark = self.marks.get(chat);
-        let after = |r: &Row| match (mark, &r.state.row) {
-            (None, _) => true,
-            (Some(m), Some(x)) => (x.ts_ms, x.id.as_slice()) > (m.up_to_ts_ms, m.up_to_id.as_slice()),
-            (Some(_), None) => false,
-        };
+        let me = self.cfg.user.clone();
+        let mut n = 0;
+        let mut mentions = vec![];
         // Решение «считается» — `history::is_unread` без маркера, кэш строки; маркер — сравнение (ts, id)
-        rows.rows().filter(|r| r.visible() && r.counted && after(r)).count() as u32
+        for r in rows.rows().filter(|r| r.visible() && r.counted && Self::after_mark(mark, r)) {
+            n += 1;
+            if history::view(&r.state).ok().as_ref().and_then(|v| v.get("body")).and_then(Value::as_object).and_then(views::effective_content).is_some_and(|c| mentions_me(&c, &me)) {
+                mentions.push(r.state.target.clone());
+            }
+        }
+        (n, mentions)
+    }
+
+    /// Значение объекта личного состояния, разобранное сообщением его вида.
+    fn state_value<M: Message + Default>(&self, kind: ObjectKind, key: &str) -> Option<M> {
+        let v = self.state.view_object(kind as i32, key)?;
+        M::decode(v.value.as_slice()).ok()
+    }
+
+    /// Место в списке закрепа (1 — первый); 0 — не закреплён.
+    fn pinned_rank(&self, peer: &Peer, archived: bool) -> u32 {
+        let list = if archived { "2" } else { "1" };
+        let Some(o) = self.state_value::<crate::pb::parvane::state::v1::PinnedOrder>(ObjectKind::PinList, list) else { return 0 };
+        o.peers.iter().position(|p| p == peer).map(|i| i as u32 + 1).unwrap_or(0)
+    }
+
+    fn draft_of(&self, pk: &str) -> Option<(String, i64)> {
+        let d = self.state_value::<crate::pb::parvane::state::v1::Draft>(ObjectKind::Draft, pk)?;
+        let t = crate::pb::parvane::msg::v2::Text::decode(d.text.as_slice()).ok()?;
+        (!t.text.is_empty()).then_some((t.text, d.date_ms))
+    }
+
+    /// Папки (кроме «все» и архива), куда чат включён явно.
+    fn folders_of(&self, peer: &Peer) -> Vec<u32> {
+        let mut out = vec![];
+        for v in self.state.view().into_iter().filter(|v| v.kind == ObjectKind::Folder as i32) {
+            if let Ok(f) = crate::pb::parvane::state::v1::Folder::decode(v.value.as_slice()) {
+                if f.include_peers.iter().any(|p| p == peer) || f.pinned_peers.iter().any(|p| p == peer) {
+                    out.push(v.key.parse().unwrap_or(f.id));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     pub(crate) fn chat_view(&self, chat: &str) -> Option<ChatView> {
@@ -942,38 +1028,88 @@ impl Engine {
         };
         let pk = crate::state::peer_key(&peer).unwrap_or_default();
         let archived = self.state.view_object(ObjectKind::Archive as i32, &pk).is_some();
+        let (unread, mentions) = self.unread_of(chat);
+        let draft = self.draft_of(&pk);
+        let muted_until_ms = self
+            .state_value::<crate::pb::parvane::state::v1::PeerNotify>(ObjectKind::PeerNotify, &pk)
+            .and_then(|n| n.settings)
+            .and_then(|s| s.mute_until_ms)
+            .unwrap_or(0);
+        let order = last.as_ref().map(|m| m.order).unwrap_or(0).max(draft.as_ref().map(|d| d.1).unwrap_or(0));
         Some(ChatView {
+            pinned_rank: self.pinned_rank(&peer, archived),
+            folder_ids: self.folders_of(&peer),
+            unread_mark: self.state.view_object(ObjectKind::UnreadMark as i32, &pk).is_some(),
             chat: Some(peer),
             title,
             photo: None,
             last,
-            unread: self.unread_of(chat),
-            mention: false,
-            pinned_rank: 0,
+            unread,
+            mention: !mentions.is_empty(),
             archived,
-            muted_until_ms: 0,
-            draft: String::new(),
-            folder_ids: vec![],
+            muted_until_ms,
+            draft: draft.map(|d| d.0).unwrap_or_default(),
+            order,
         })
+    }
+
+    /// Чат в списке: есть показываемая строка, черновик, группа, где мы участник, либо «Избранное».
+    fn chat_listed(&self, chat: &str, v: &ChatView) -> bool {
+        if v.last.is_some() || !v.draft.is_empty() {
+            return true;
+        }
+        let pk = v.chat.as_ref().and_then(|p| crate::state::peer_key(p).ok()).unwrap_or_default();
+        let gone = self.state.view_object(ObjectKind::ChatCleared as i32, &pk).is_some() || self.state.view_object(ObjectKind::Block as i32, &pk).is_some();
+        // Уже показанный чат без строк (всё удалено у всех) остаётся в списке, как в Telegram; снимают его очистка
+        // «у себя» и блокировка
+        if self.chat_shown.contains_key(chat) && !gone {
+            return true;
+        }
+        match v.chat.as_ref().and_then(|p| p.kind.as_ref()) {
+            Some(peer::Kind::User(u)) => u.address == self.cfg.user && self.chats.contains_key(chat),
+            Some(peer::Kind::Group(g)) => self.groups.get(&g.id).is_some_and(|f| {
+                !f.deleted && matches!(f.role(&self.cfg.user), epb::GroupRole::Owner | epb::GroupRole::Admin | epb::GroupRole::Member)
+            }),
+            None => false,
+        }
     }
 
     fn refresh_chats(&mut self, d: &mut DeltaBuilder) {
         let chats = std::mem::take(&mut self.dirty.chats);
         for chat in chats {
             let Some(v) = self.chat_view(&chat) else { continue };
-            if v.last.is_none() && !self.chat_shown.contains_key(&chat) {
+            if !self.chat_listed(&chat, &v) {
+                // Был в списке и больше не показывается (очистка «у себя», удаление, выход) — снять
+                if self.chat_shown.remove(&chat).is_some() {
+                    self.unread_shown.remove(&chat);
+                    if let Some(p) = v.chat.clone() {
+                        d.push(Change::ChatRemove(p));
+                    }
+                }
                 continue;
             }
-            let unread = v.unread;
+            let (unread, mentions) = self.unread_of(&chat);
             let peer = v.chat.clone();
             let fp = fingerprint(&v);
             if self.chat_shown.get(&chat) != Some(&fp) {
                 self.chat_shown.insert(chat.clone(), fp);
                 d.push(Change::ChatUpsert(v));
             }
-            if self.unread_shown.get(&chat).copied().unwrap_or(0) != unread {
-                self.unread_shown.insert(chat.clone(), unread);
-                d.push(Change::UnreadChanged(UnreadChanged { chat: peer, count: unread, mention: false }));
+            let mark = self.marks.get(&chat);
+            let u = UnreadChanged {
+                chat: peer,
+                count: unread,
+                mention: !mentions.is_empty(),
+                last_read_id: mark.map(|m| m.up_to_id.clone()).unwrap_or_default(),
+                last_read_ts_ms: mark.map(|m| m.up_to_ts_ms).unwrap_or(0),
+                mentions,
+            };
+            // Изменение — при смене счётчика или упоминаний (маркер едет в нём же; свой ответ двигает маркер без
+            // изменения счётчика — без лишнего изменения хосту)
+            let ufp = fingerprint(&UnreadChanged { chat: None, count: u.count, mention: u.mention, mentions: u.mentions.clone(), ..Default::default() });
+            if self.unread_shown.get(&chat).copied().unwrap_or_else(|| fingerprint(&UnreadChanged::default())) != ufp {
+                self.unread_shown.insert(chat.clone(), ufp);
+                d.push(Change::UnreadChanged(u));
             }
         }
     }
@@ -1008,7 +1144,8 @@ impl Engine {
                 }
             }
             if !initial {
-                w.delta.push(Change::GroupChanged(f.view(&me)));
+                let v = self.group_view_full(&id, &f);
+                w.delta.push(Change::GroupChanged(v));
             }
             let key = format!("g:{}", hex::encode(&id));
             self.peers.entry(key.clone()).or_insert_with(|| group_peer(&f.group));
@@ -1028,34 +1165,38 @@ impl Engine {
         c.rows_rev().find(|r| self.message_view_as(r, false).is_some())
     }
 
+    /// Список чатов (E3): закреплённые — первыми по месту в списке закрепа, затем по `order` (новые выше).
     pub fn chat_list(&self, req: &ChatListRequest) -> ChatPage {
         let limit = (req.limit as usize).clamp(1, 200);
-        let mut all: Vec<(i64, String)> = self
-            .chats
-            .iter()
-            .filter_map(|(k, c)| self.last_shown(c).map(|r| (r.order, k.clone())))
+        let mut all: Vec<ChatView> = self
+            .peers
+            .keys()
+            .filter_map(|k| self.chat_view(k).filter(|v| self.chat_listed(k, v)))
+            .filter(|v| if req.folder == 1 { v.archived } else { true })
             .collect();
-        all.sort_by(|a, b| b.cmp(a));
+        let key_of = |v: &ChatView| v.chat.as_ref().and_then(|p| history::history_chat_key(p).ok()).unwrap_or_default();
+        // Ключ сортировки: (закреплён, −место, order, ключ) по убыванию; якорь страницы — (order, ключ) незакреплённых
+        let sort_key = |v: &ChatView| (v.pinned_rank > 0, std::cmp::Reverse(v.pinned_rank), v.order, key_of(v));
+        all.sort_by_key(|v| std::cmp::Reverse(sort_key(v)));
         let after = req.after.as_ref().map(|a| (a.ts_ms, a.chat_key.clone()));
         let mut chats = vec![];
         let mut next = None;
-        for (order, key) in all.into_iter().filter(|x| after.as_ref().is_none_or(|a| x < a)) {
-            if chats.len() == limit {
-                next = Some(ChatAnchor { ts_ms: order, chat_key: key });
-                break;
-            }
-            if let Some(v) = self.chat_view(&key) {
-                if req.folder == 1 && !v.archived {
+        for v in all {
+            let k = (v.order, key_of(&v));
+            if let Some(a) = &after {
+                // Страница после якоря: закреплённые были на первой странице
+                if v.pinned_rank > 0 || k >= *a {
                     continue;
                 }
-                chats.push(v);
             }
-        }
-        if next.is_some() {
-            if let Some(last) = chats.last() {
-                let key = last.chat.as_ref().and_then(|p| history::history_chat_key(p).ok()).unwrap_or_default();
-                next = Some(ChatAnchor { ts_ms: last.last.as_ref().map(|m| m.order).unwrap_or(0), chat_key: key });
+            if chats.len() == limit {
+                if let Some(last) = chats.last() {
+                    let last: &ChatView = last;
+                    next = Some(ChatAnchor { ts_ms: last.order, chat_key: key_of(last) });
+                }
+                break;
             }
+            chats.push(v);
         }
         ChatPage { chats, next }
     }
@@ -1105,7 +1246,18 @@ impl Engine {
         // Как права композера: из журнала группы клиента модели сразу (секрет фото частной группы приходит
         // конвертом эпохи после записи `SetInfo` — показ не ждёт отложенной записи сведённого, spec 035 T116)
         let f = self.live_group_facts(&g.id).ok_or(ProtoError::NotFound)?;
-        Ok(f.view(&self.cfg.user))
+        Ok(self.group_view_full(&g.id, &f))
+    }
+
+    /// Показ группы с полными сведениями журнала (`info_json`, E6).
+    pub(crate) fn group_view_full(&self, id: &[u8], f: &GroupFacts) -> epb::GroupView {
+        let mut v = f.view(&self.cfg.user);
+        if let Some(c) = &self.client {
+            if let Ok(info) = crate::host::group_info_value(c, id) {
+                v.info_json = info.to_string();
+            }
+        }
+        v
     }
 
     /// Сведения группы для решений «прямо сейчас»: из журнала группы клиента модели (режим хоста — без ожидания
@@ -1157,6 +1309,7 @@ impl Engine {
         let mut w = Work::default();
         if self.stage == Stage::Open && self.open_state == OpenState::Ready {
             self.flush_history(false, &mut w);
+            self.checkpoint_tick(&mut w);
             if self.now_ms >= self.next_poll_ms {
                 self.next_poll_ms = self.now_ms + POLL_MS;
                 self.poll(&mut w);
@@ -1194,10 +1347,16 @@ impl Engine {
             let r = Self::id_req("state.ops.sync", &s2::SyncRequest { after_seq: self.meta.state_cursor, max_bytes: 0 });
             self.push_req(w, r, Purpose::StateSync);
         }
-        // Режим хоста: журнал истории ведёт хост
-        if !self.cfg.host_driven {
+        // Режим хоста: журнал истории ведёт хост, если строки не у модели (`engine_rows`, spec 036)
+        if self.model_rows() {
             self.history_pull(w);
         }
+    }
+
+    /// Строки истории, маркеры и журнал истории ведёт модель: без хоста всегда, в режиме хоста — с `engine_rows`
+    /// (spec 036, ENGINE-1).
+    pub(crate) fn model_rows(&self) -> bool {
+        !self.cfg.host_driven || self.cfg.engine_rows
     }
 
     /// Чтение журнала истории (HIST-1, HIST-2): новое устройство (курсор 0, точки не было) сначала спрашивает
@@ -1232,6 +1391,8 @@ impl Engine {
             self.meta.history_cursor = self.meta.history_cursor.max(cp.upto_seq);
             self.meta.history_checkpoint = cp.id;
             self.meta.history_bootstrapped = true;
+            self.cp_adopt_entered(&cp);
+            self.cp_entry_done(w);
             self.dirty.meta = true;
             self.history_pull(w);
             return;
@@ -1247,6 +1408,11 @@ impl Engine {
     fn ingest_history_head(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
         let Some(s) = self.history_session() else { return Ok(()) };
         let h = s.ingest_head(body)?;
+        // Откат журнала сервером (HIST-2 п. 4, S7-4) — не применять молча
+        if !self.history_head_ok(h.head_seq, w) {
+            return Ok(());
+        }
+        self.cp_note_head(h.head_seq);
         match h.checkpoint.filter(|c| c.upto_seq > 0) {
             Some(cp) => self.history_checkpoint_start(cp, w),
             None => {
@@ -1283,6 +1449,9 @@ impl Engine {
                 self.apply_history_op(&HistoryOp { op: Some(HOp::Read(mark.clone())) }, false, &mut w.delta);
             }
         }
+        // Вход по точке (`checkpoint.rs`): сегменты — основа следующей точки, книга цепочек — от сводки, цели точки —
+        // для замены истории
+        self.cp_entry_begin(&cp, &summary);
         let mut refs = summary.segments.clone();
         // Свежие сегменты первыми (как web orderSegments): последние месяцы видны раньше
         refs.sort_by(|a, b| b.key.cmp(&a.key));
@@ -1303,6 +1472,9 @@ impl Engine {
             return Ok(());
         }
         let got: BTreeSet<u64> = ing.records.iter().map(|r| r.seq).collect();
+        self.cp_entry_note(&ing.ops);
+        // Сегменты под прежним ключом/адресом — следующая точка их перезальёт
+        self.cp.seen_stale.extend(ing.records.iter().filter(|r| r.stale).map(|r| r.seq));
         for op in &ing.ops {
             self.apply_history_op(op, false, &mut w.delta);
         }
@@ -1320,9 +1492,6 @@ impl Engine {
             ServerInputKind::Response => {
                 let purpose = self.inflight.remove(&si.req_id).unwrap_or(Purpose::Other);
                 self.on_response(purpose, si.error, &si.body, &mut w)?;
-                if self.migration.is_some() {
-                    self.migrate_advance(&mut w)?;
-                }
             }
             ServerInputKind::InboxRecord => self.process_record(si.body, &mut w),
             ServerInputKind::Event => match si.method.as_str() {
@@ -1343,6 +1512,9 @@ impl Engine {
                 "inbox.poll" => self.inbox_sync(&mut w),
                 // Хост узнал о новых записях журнала личного состояния (`JournalNotice{STATE}` прежнего клиента)
                 "journal.state" => self.state_sync_now(&mut w),
+                // Хост получил ключ состояния (привязка нового устройства, смена ключа — `stateReady` сессии): журнал
+                // истории — сейчас (spec 036, desktop/android: иначе история нового устройства ждала опроса 60 с)
+                "journal.history" if self.model_rows() => self.history_pull(&mut w),
                 m if m.starts_with("ephemeral") => {
                     if let Some(ev) = self.client.as_ref().and_then(|c| c.open_ephemeral(&si.body)) {
                         self.apply_event(ev, &mut w);
@@ -1512,12 +1684,11 @@ impl Engine {
                 self.dirty.state_raw.insert(hex::encode(&op_id), None);
             }
             Purpose::StateSync if error == 0 => self.ingest_state_sync(body, w)?,
-            Purpose::MigrateV1Sync => self.migrate_response(true, error, body, w)?,
-            Purpose::MigrateV2Sync => self.migrate_response(false, error, body, w)?,
             Purpose::HistorySync if error == 0 => self.ingest_history_sync(body, w)?,
             Purpose::HistoryHead if error == 0 => self.ingest_history_head(body, w)?,
             Purpose::HistorySummary(cp) if error == 0 => self.ingest_history_summary(cp, body, w)?,
             Purpose::HistorySegments { cp, asked, rest, expect } if error == 0 => self.ingest_history_segments(cp, asked, rest, expect, body, w)?,
+            Purpose::HistoryCp(step) => self.checkpoint_response(step, error, body, w)?,
             _ => {}
         }
         Ok(())
@@ -1576,15 +1747,30 @@ impl Engine {
     }
 
     fn ingest_history_sync(&mut self, body: &[u8], w: &mut Work) -> Result<()> {
+        // Книга цепочек писателей (S7-4): пропуск номера — запись, спрятанная сервером
+        let mut book = self.chain_book();
         let Some(s) = self.history_session() else { return Ok(()) };
-        let ing = s.ingest(body)?;
-        // Курсор внутри свёрнутого журнала (HIST-2): сначала точка, страница после неё — повтором синка
+        let ing = s.ingest_chained(body, &mut book)?;
+        // Откат журнала сервером (HIST-2 п. 4, S7-4) — страница не применяется
+        if !self.history_head_ok(ing.head_seq, w) {
+            return Ok(());
+        }
+        self.cp_note_head(ing.head_seq);
+        // Курсор внутри свёрнутого журнала (HIST-2): сначала точка, страница после неё — повтором синка (книгу — по
+        // сводке точки, эту страницу не учитываем)
         if let Some(cp) = ing.compacted.clone().filter(|c| self.meta.history_cursor < c.upto_seq) {
             self.history_checkpoint_start(cp, w);
             return Ok(());
         }
+        if ing.chains.gaps > 0 {
+            w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_gap".into(), detail: ing.chains.gaps.to_string() }));
+        }
+        self.meta.history_chains = book.to_value();
         for rec in &ing.records {
             self.meta.history_cursor = self.meta.history_cursor.max(rec.seq);
+        }
+        if !ing.more {
+            self.meta.history_last_full_ms = self.now_ms;
         }
         self.dirty.meta = true;
         for op in ing.ops {
@@ -1632,13 +1818,13 @@ impl Engine {
 
     pub(crate) fn apply_event(&mut self, ev: Event, w: &mut Work) {
         match ev {
-            Event::Direct { chat, from, op_id, ts_ms, content, disposition, .. } => {
+            Event::Direct { chat, from, op_id, ts_ms, content, disposition, proof, .. } => {
                 let peer = user_peer(&chat);
-                self.incoming(peer, &from, &op_id, ts_ms, content, disposition, w);
+                self.incoming(peer, &from, &op_id, ts_ms, content, disposition, &proof, w);
             }
-            Event::Group { group, from, op_id, ts_ms, content, disposition, .. } => {
+            Event::Group { group, from, op_id, ts_ms, content, disposition, proof, .. } => {
                 let peer = group_peer(&group);
-                self.incoming(peer, &from, &op_id, ts_ms, content, disposition, w);
+                self.incoming(peer, &from, &op_id, ts_ms, content, disposition, &proof, w);
             }
             Event::GroupChanged { group, .. } => {
                 let after = self.client.as_ref().map(|c| c.group_version(&group.id)).unwrap_or(0);
@@ -1721,11 +1907,17 @@ impl Engine {
     }
 
     pub(crate) fn queue_history(&mut self, op: HistoryOp) {
+        self.meta.history_pending.push(crate::host::history::to_json(&op));
+        self.dirty.meta = true;
         self.history_queue.push(op);
         if self.history_due_ms.is_none() {
-            let span = (HISTORY_BATCH_MAX_MS - HISTORY_BATCH_MIN_MS) as u64;
+            let (min, max) = match (self.cfg.history_batch_min_ms, self.cfg.history_batch_max_ms) {
+                (0, _) => (HISTORY_BATCH_MIN_MS, HISTORY_BATCH_MAX_MS),
+                (a, b) => (a as i64, (b as i64).max(a as i64)),
+            };
+            let span = (max - min) as u64;
             let jitter = (rand::random::<u64>() % (span + 1)) as i64;
-            self.history_due_ms = Some(self.now_ms + HISTORY_BATCH_MIN_MS + jitter);
+            self.history_due_ms = Some(self.now_ms + min + jitter);
         }
     }
 
@@ -1735,10 +1927,22 @@ impl Engine {
         if !due || self.history_queue.is_empty() {
             return;
         }
+        // Своя цепочка журнала продолжает прочитанное (S7-4): до первого чтения журнала (голова/синк) пачка ждёт —
+        // иначе запись начинала бы цепочку заново, и другие устройства её не принимали
+        if !force && self.meta.history_cursor == 0 && !self.meta.history_bootstrapped {
+            return;
+        }
+        // Строится контрольная точка: своя запись между снимком и сводкой отложила бы её — пачка ждёт
+        if !force && self.cp_building() {
+            return;
+        }
         let ops = std::mem::take(&mut self.history_queue);
         self.history_due_ms = None;
+        self.meta.history_pending.clear();
+        self.dirty.meta = true;
         let now = self.now_ms;
         let Some(s) = self.history_session() else {
+            self.meta.history_pending = ops.iter().map(crate::host::history::to_json).collect();
             self.history_queue = ops;
             return;
         };
@@ -1752,16 +1956,29 @@ impl Engine {
 
     /// Входящее сообщение или мутация (инбокс, векторы).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn incoming(&mut self, peer: Peer, from: &str, op_id: &[u8], ts_ms: i64, content: Content, disposition: crate::unknown::Disposition, w: &mut Work) {
-        intent::apply_incoming(self, peer, from, op_id, ts_ms, content, disposition, w);
+    pub(crate) fn incoming(&mut self, peer: Peer, from: &str, op_id: &[u8], ts_ms: i64, content: Content, disposition: crate::unknown::Disposition, proof: &[u8], w: &mut Work) {
+        intent::apply_incoming(self, peer, from, op_id, ts_ms, content, disposition, proof, w);
     }
 
     pub(crate) fn emit_state(&mut self, kind: i32, key: &str, d: &mut DeltaBuilder) {
         let view = self.state_object_view(kind, key);
         d.push(Change::StateChanged(StateChanged { object: Some(ObjectKey { kind, key: key.to_string() }), view }));
-        // Признак архива/отметки меняет представление чата
-        if let Some(chat) = self.peers.iter().find(|(_, p)| crate::state::peer_key(p).ok().as_deref() == Some(key)).map(|(k, _)| k.clone()) {
+        // Признак архива/отметки, черновик, мут меняют представление чата; закреп и папки — всех чатов
+        if kind == ObjectKind::PinList as i32 || kind == ObjectKind::Folder as i32 {
+            let all: Vec<String> = self.peers.keys().cloned().collect();
+            self.dirty.chats.extend(all);
+        } else if let Some(chat) = self.peers.iter().find(|(_, p)| crate::state::peer_key(p).ok().as_deref() == Some(key)).map(|(k, _)| k.clone()) {
             self.dirty.chats.insert(chat);
+        } else if kind == ObjectKind::Draft as i32 {
+            // Черновик чата без строк: чат появляется в списке
+            if let Some(d) = self.state_value::<crate::pb::parvane::state::v1::Draft>(ObjectKind::Draft, key) {
+                if let Some(p) = d.peer {
+                    if let Ok(chat) = history::history_chat_key(&p) {
+                        self.peers.entry(chat.clone()).or_insert(p);
+                        self.dirty.chats.insert(chat);
+                    }
+                }
+            }
         }
     }
 

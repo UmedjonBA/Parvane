@@ -6,7 +6,7 @@
 //  - чтение — по ключам (только существующие, в порядке запроса) и/или по префиксу (строго после `after`,
 //    по возрастанию ключа, не больше `limit`; 0 — без предела).
 // Ключи сравниваются как строки JS (UTF-16); у ключей движка (ASCII и адреса) порядок совпадает с порядком
-// байтов UTF-8 ядра. Прежняя база `parvane-e2e-v2` здесь не открывается — её читает только перенос.
+// байтов UTF-8 ядра. Прежняя база `parvane-e2e-v2` стирается фасадом `secureStorage.ts` (T149).
 import type { StoreBatch, StorePut, StoreReads } from './gen/model';
 
 import { storeBatchFromJson, storeLoadedToJson, storeReadsFromJson } from './gen/model';

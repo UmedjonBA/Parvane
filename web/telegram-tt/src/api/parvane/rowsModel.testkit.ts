@@ -13,6 +13,7 @@ function b64(bytes: Uint8Array) {
 export async function openRowsModel(user: string, opts: { store?: MemoryModelStore; deviceKey?: Uint8Array } = {}) {
   const store = opts.store || new MemoryModelStore();
   const deviceKey = opts.deviceKey || crypto.getRandomValues(new Uint8Array(32));
+  let onDelta: ((delta: Record<string, unknown>) => Promise<void>) | undefined;
   const { host } = await ModelHost.open({
     user,
     device_id: 'd1',
@@ -21,7 +22,7 @@ export async function openRowsModel(user: string, opts: { store?: MemoryModelSto
     device_key: b64(deviceKey),
     host_driven: true,
     features: ['wire_rows'],
-  }, { store, send: () => undefined }, (cfg) => PvEngine.open(cfg));
+  }, { store, send: () => undefined, onDelta: (delta) => onDelta?.(delta) }, (cfg) => PvEngine.open(cfg));
   const rows: RowsModel = {
     apply: (args) => host.apply('rowsApply', args),
     all: (what) => Promise.resolve(
@@ -30,6 +31,13 @@ export async function openRowsModel(user: string, opts: { store?: MemoryModelSto
     view: (name, args) => Promise.resolve(host.peek(name, args)),
   };
   return {
-    rows, host, store, deviceKey,
+    rows,
+    host,
+    store,
+    deviceKey,
+    /** Изменения модели — хосту (у профиля web — `onModelDelta` контроллера). */
+    setOnDelta: (fn: (delta: Record<string, unknown>) => Promise<void>) => {
+      onDelta = fn;
+    },
   };
 }

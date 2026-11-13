@@ -12,10 +12,12 @@
 //   history-sync-<адрес>-meta.json / -pending.json / -imported.json — курсор, голова, точка, флаг переноса, очередь
 //                                      своих, отметка переноса строк в модель;
 //   history-local-<адрес>.json       — границы очистки чатов «у себя», ✓✓ своих (время по чату), неотправленные
-//                                      квитанции READ собеседникам (повтор до успеха, READ-1 п. 3).
+//                                      квитанции READ собеседникам (повтор до успеха, READ-1 п. 3) — записью хранилища
+//                                      движка (PathFiles, spec 036 T036; прежний файл переносится один раз).
+// spec 036 (ENGINE-1, `engine_rows`): журнал истории аккаунта ведёт модель сессии; файлы history-sync-* остаются
+// только чтением прежней очереди (передаётся модели один раз, HistorySync::start).
 #include "jni_internal.h"
 
-#include <parvane/audit_dump.h>
 #include <parvane/history_sync.h>
 #include <parvane/local_files.h>
 #include <parvane/messenger.h>
@@ -37,7 +39,6 @@ namespace ph = parvane::history;
 
 namespace {
 
-constexpr std::int64_t kLiveWindowSecs = 300; // ORDER-1: окно «живого» сообщения
 constexpr int kReceiptRetryMax = 40;          // попыток квитанции (≈ 10 мин при паузе 15 с)
 constexpr std::int64_t kReceiptRetryMs = 15000;
 
@@ -87,7 +88,7 @@ struct Hist {
     std::map<std::string, std::int64_t> clearedUntil; // адрес чата → граница очистки «у себя» (мс)
     std::set<std::string> clearedIds;
     std::map<std::string, std::int64_t> outboxRead; // адрес чата → время последнего своего, прочитанного собеседником
-    json receipts = json::array();                  // [{chat, ids, attempts}]
+    json receipts = json::array();                  // [{chat, ids, attempts}] — неотправленные до spec 036 (дослать)
 
     std::mutex loopMu;
     std::condition_variable loopCv;
@@ -115,12 +116,12 @@ struct Hist {
         for (const auto &[a, t] : clearedUntil) cleared[a] = t;
         json outbox = json::object();
         for (const auto &[a, t] : outboxRead) outbox[a] = t;
-        parvane::storecrypt::writeFile(historyLocalPath(owner),
+        hostWrite(historyLocalPath(owner),
             json{{"cleared", cleared}, {"cleared_ids", clearedIds}, {"outbox_read", outbox}, {"receipts", receipts}}.dump());
     }
 
     void loadLocal() {
-        const auto j = json::parse(parvane::storecrypt::readFile(historyLocalPath(owner)), nullptr, false);
+        const auto j = json::parse(hostRead(historyLocalPath(owner)), nullptr, false);
         if (!j.is_object()) return;
         std::lock_guard<std::mutex> lk(localMu);
         if (j.contains("cleared") && j["cleared"].is_object())
@@ -168,12 +169,20 @@ bool isClearedState(Hist &h, const json &state) {
     return pos && it != h.clearedUntil.end() && it->second > 0 && pos->tsMs <= it->second;
 }
 
-// Время своего сообщения, прочитанного собеседником (✓✓ переживает перезапуск).
-bool ownRowRead(Hist &h, const std::string &chat, std::int64_t tsMs) {
+// Строка показа очищенного «у себя» чата (граница ChatCleared или id из очистки).
+bool isClearedView(Hist &h, const json &view) {
+    const auto address = parvane::v2::Session::historyAddress(view.value("chat", json()));
+    const auto id = view.value("id", std::string());
+    const auto tsMs = view.value("tsMs", std::int64_t(0));
     std::lock_guard<std::mutex> lk(h.localMu);
-    const auto it = h.outboxRead.find(chat);
-    return it != h.outboxRead.end() && tsMs <= it->second;
+    if (h.clearedIds.count(id)) return true;
+    const auto it = h.clearedUntil.find(address);
+    return it != h.clearedUntil.end() && it->second > 0 && tsMs > 0 && tsMs <= it->second;
 }
+
+// Счётчики чатов модели (`unread_changed`, spec 036 E4) — готовыми; до первого изменения чата — `rowsRead` модели.
+std::mutex g_unreadMu;
+std::map<std::string, std::pair<int, std::string>> g_modelUnread; // адрес → (непрочитано, последняя прочитанная)
 
 json reactionsOfView(const json &view, const std::string &me, json *by) {
     auto arr = json::array();
@@ -191,13 +200,18 @@ json reactionsOfView(const json &view, const std::string &me, json *by) {
     return arr;
 }
 
-json viewOf(const json &state) {
-    try {
-        return ph::call("historyView", json{{"state", state}});
-    } catch (const std::exception &e) {
-        LOGE("журнал истории: строка не показана: %s", e.what());
-        return json::object();
+// Показ строки — готовый вид модели (MessageView `wire_rows` в прежней форме ядра, `viewOfModel`, spec 036 ENGINE-1):
+// надгробие — {visible: false}, сирота — {orphan: true}. Своего сведения и `historyView` у шва нет.
+json viewOf(Hist &h, const json &state) {
+    const auto target = state.value("target", std::string());
+    if (target.empty() || !state.contains("row")) return json{{"orphan", true}, {"id", target}};
+    const auto views = h.store->views({target});
+    if (!views.empty()) {
+        auto v = ph::viewOfModel(views.front());
+        if (v.is_object()) return v;
     }
+    const auto chat = state.value("chat", json());
+    return json{{"id", target}, {"chat", chat}, {"chatKey", ph::chatKeyOf(chat)}, {"visible", false}, {"orphan", false}};
 }
 
 json contentOfView(const json &view) {
@@ -207,24 +221,16 @@ json contentOfView(const json &view) {
     return (c != it->end() && c->is_object()) ? *c : json::object();
 }
 
-// Прочитано ли входящее (маркер чата и historyIsUnread движка) либо своё (✓✓).
-bool rowRead(Hist &h, const json &state, const json &view, const std::string &me) {
-    const auto chat = parvane::v2::Session::historyAddress(view.value("chat", json()));
-    const auto tsMs = view.value("tsMs", std::int64_t(0));
+// Прочитано ли (показ модели): входящее — не после маркера (`MessageView.unread`, READ-2), своё — доставка
+// «прочитано» (квитанция собеседника, ✓✓).
+bool rowRead(Hist &h, const json &view) {
     // Своё — и под прежним адресом (смена ника): свои адреса из сессии журнала движка
-    if (h.sync->isSelf(strOf(view, "from"))) return ownRowRead(h, chat, tsMs);
-    try {
-        json args{{"state", state}, {"self", selvesOf(h)}};
-        const auto mark = h.sync->mark(strOf(view, "chatKey"));
-        if (mark.is_object()) args["mark"] = mark;
-        return !ph::call("historyIsUnread", args).get<bool>();
-    } catch (const std::exception &) {
-        return false;
-    }
+    if (view.value("outgoing", false) || h.sync->isSelf(strOf(view, "from"))) return view.value("read", false);
+    return !view.value("unread", false);
 }
 
 // Видимая строка → событие "message" шва (тот же вид, что живое).
-json messageEventOf(Hist &h, const json &state, const json &view, const std::string &me) {
+json messageEventOf(Hist &h, const json &view, const std::string &me) {
     const auto from = strOf(view, "from");
     const auto chat = parvane::v2::Session::historyAddress(view.value("chat", json()));
     const bool group = isGroupAddress(chat);
@@ -237,7 +243,7 @@ json messageEventOf(Hist &h, const json &state, const json &view, const std::str
     auto ev = json{{"type", "message"}, {"id", strOf(view, "id")}, {"from", from},
                    {"to", group ? chat : (out ? chat : me)}, {"ts", view.value("tsMs", std::int64_t(0)) / 1000},
                    {"text", textOrCaption(content)}, {"out", out},
-                   {"kind", parvane::contentKind(content)}, {"read", rowRead(h, state, view, me)}, {"content", content},
+                   {"kind", parvane::contentKind(content)}, {"read", rowRead(h, view)}, {"content", content},
                    {"reply_to", body.contains("reply_to") && body["reply_to"].is_string() ? body["reply_to"] : json()},
                    {"edited", view.value("edited", false)}, {"pinned", view.value("pinned", false)},
                    {"reactions", reactions}, {"by", by}, {"group", group}, {"proto", 2},
@@ -254,32 +260,36 @@ json metaEventOf(const json &view, const std::string &me) {
     return json{{"type", "meta"}, {"id", id}, {"reactions", reactions}, {"by", by}, {"pinned", view.value("pinned", false)}};
 }
 
-// Счётчик чата для шва (READ-2): непрочитанные от маркера (historyIsUnread) и последняя прочитанная строка.
+// Счётчик чата для шва (READ-2): непрочитанные от маркера и последняя прочитанная строка — модель (`unread_changed`;
+// до первого изменения чата — её `rowsRead`).
 json readStateEvent(Hist &h, const std::string &chat, const std::string &chatKey = std::string()) {
+    // «Прочитано до» — последняя ВИДИМАЯ прочитанная строка (`rowsRead`): маркер модели может стоять на снятой строке
     const auto rs = h.sync->readState(chatKey.empty() ? ph::chatKeyOf(historyPeerOf(chat)) : chatKey);
-    return json{{"type", "read_state"}, {"chat", chat}, {"unread", rs.unread}, {"last_read_id", rs.lastReadId}};
+    auto unread = rs.unread;
+    auto last = rs.lastReadId;
+    {
+        std::lock_guard<std::mutex> lk(g_unreadMu);
+        if (const auto it = g_modelUnread.find(chat); it != g_modelUnread.end()) {
+            unread = it->second.first;
+            if (last.empty()) last = it->second.second;
+        }
+    }
+    return json{{"type", "read_state"}, {"chat", chat}, {"unread", unread}, {"last_read_id", last}};
 }
 
-// Строки, изменившиеся от журнала или чужой мутации, → события шва: новые — "message", правка — "edited", реакции и
-// закреп — "meta", надгробие — "deleted"; затем счётчики затронутых чатов (READ-2: пачка счётчик не раздувает —
-// он выставляется заново от маркера).
-void placeByTime(std::vector<json> &msgs);
-
-void showStates(Hist &h, const std::vector<json> &states) {
+// Строки, изменившиеся в модели (входящее, журнал истории, мутации, квитанции — `message_upsert/remove`), → события
+// шва: новые — "message", правка — "edited", реакции и закреп — "meta", снятие — "deleted"; затем счётчики
+// затронутых чатов (READ-2: пачка счётчик не раздувает — он выставляется заново от маркера). Место новых строк —
+// модели (ORDER-1, `order` показа): своей расстановки у шва нет.
+void showViews(Hist &h, const std::vector<json> &views) {
     const auto me = self();
     std::map<std::string, std::string> chats; // адрес → ключ чата
-    // Строка, менявшаяся в пачке несколько раз, показывается последним состоянием
+    // Строка, менявшаяся в пачке несколько раз, показывается последним видом
     std::map<std::string, std::size_t> lastAt;
-    for (std::size_t i = 0; i < states.size(); ++i) {
-        const auto view = viewOf(states[i]);
-        if (!view.empty()) lastAt[strOf(view, "id")] = i;
-    }
-    // Новые строки догрузки встают как при реплее с диска (по id — UUIDv7, затем placeByTime), а не порядком операций
-    // журнала: на новом устройстве близкие по времени сообщения иначе шли вперемешку (ORDER-1)
+    for (std::size_t i = 0; i < views.size(); ++i) lastAt[strOf(views[i], "id")] = i;
     std::vector<json> fresh;
-    for (std::size_t i = 0; i < states.size(); ++i) try {
-        const auto &st = states[i];
-        const auto view = viewOf(st);
+    for (std::size_t i = 0; i < views.size(); ++i) try {
+        const auto &view = views[i];
         if (view.empty() || view.value("orphan", true)) continue; // сирота ждёт сообщение
         const auto id = strOf(view, "id");
         const auto chat = parvane::v2::Session::historyAddress(view.value("chat", json()));
@@ -288,13 +298,15 @@ void showStates(Hist &h, const std::vector<json> &states) {
         chats[chat] = strOf(view, "chatKey");
         if (!view.value("visible", false)) {
             forgetMessage(id);
+            unmarkSeen(id); // замена точкой (HIST-2): та же строка может вернуться — показать её заново
             emit(json{{"type", "deleted"}, {"id", id}});
             continue;
         }
-        if (isClearedState(h, st)) continue;
+        if (isClearedView(h, view)) continue;
         if (markSeen(id)) {
-            auto ev = messageEventOf(h, st, view, me);
+            auto ev = messageEventOf(h, view, me);
             ev["history"] = true; // догрузка журналом — без уведомления
+            ev["order"] = view.value("order", std::int64_t(0));
             noteMessage(id, ev.value("from", std::string()), chat, ev["content"], ev.value("proof", std::string()));
             replaceMeta(id, ev["by"], ev.value("pinned", false));
             if (isGroupAddress(chat) && !groupKnown(chat)) {
@@ -315,37 +327,25 @@ void showStates(Hist &h, const std::vector<json> &states) {
                       {"edit_date", view.value("editTsMs", std::int64_t(0)) / 1000}});
         }
         emit(metaEventOf(view, me));
+        // ✓✓ своего — доставка строки в модели (квитанция собеседника)
+        if (view.value("read", false) && h.sync->isSelf(strOf(view, "from"))) {
+            emit(json{{"type", "outbox_read"}, {"id", id}, {"at", nowSec()}});
+        }
     } catch (const std::exception &e) {
         // Одна непонятная строка не обрывает пачку: остальные чаты догрузки показываются
         LOGI("журнал истории: строка пропущена (%s)", e.what());
     }
     std::stable_sort(fresh.begin(), fresh.end(),
-                     [](const json &a, const json &b) { return a.value("id", std::string()) < b.value("id", std::string()); });
-    placeByTime(fresh);
+                     [](const json &a, const json &b) { return a.value("order", std::int64_t(0)) < b.value("order", std::int64_t(0)); });
     for (auto &ev : fresh) emit(ev);
     for (const auto &[chat, key] : chats) emit(readStateEvent(h, chat, key));
 }
 
-// Порядок показа (ORDER-1): строка, которая старше уже показанных больше чем на окно «живого», встаёт по времени;
-// близкие по времени — порядком прихода. Сортировки нет и быть не должно (как desktop ReplayHistory).
-void placeByTime(std::vector<json> &msgs) {
-    bool misplaced = false;
-    auto latest = std::numeric_limits<std::int64_t>::min();
-    for (const auto &m : msgs) {
-        const auto ts = m.value("ts", std::int64_t(0));
-        misplaced = misplaced || (ts + kLiveWindowSecs < latest);
-        latest = std::max(latest, ts);
-    }
-    if (!misplaced) return;
-    std::vector<json> ordered;
-    ordered.reserve(msgs.size());
-    for (auto &m : msgs) {
-        const auto ts = m.value("ts", std::int64_t(0));
-        auto at = ordered.size();
-        while (at > 0 && ordered[at - 1].value("ts", std::int64_t(0)) > ts + kLiveWindowSecs) --at;
-        ordered.insert(ordered.begin() + std::ptrdiff_t(at), std::move(m));
-    }
-    msgs = std::move(ordered);
+void showStates(Hist &h, const std::vector<json> &states) {
+    std::vector<json> views;
+    views.reserve(states.size());
+    for (const auto &st : states) views.push_back(viewOf(h, st));
+    showViews(h, views);
 }
 
 // ── перенос прежнего журнала (journal.jsonl: события шва до spec 033) ─────────
@@ -507,17 +507,6 @@ void receiptLoop(Hist *h) {
     }
 }
 
-void queueReceipts(Hist &h, const std::map<std::string, json> &byChat) {
-    if (byChat.empty()) return;
-    {
-        std::lock_guard<std::mutex> lk(h.localMu);
-        for (const auto &[chat, ids] : byChat) h.receipts.push_back(json{{"chat", chat}, {"ids", ids}, {"attempts", 0}});
-        h.saveLocalLocked();
-    }
-    std::lock_guard<std::mutex> lk(h.loopMu);
-    h.loopCv.notify_all();
-}
-
 // Открыть журнал текущего аккаунта (перенос прежнего — один раз); nullptr — аккаунта нет.
 std::shared_ptr<Hist> ensureHist() {
     const auto me = self();
@@ -547,67 +536,22 @@ std::shared_ptr<Hist> ensureHist() {
     ph::HistorySyncConfig cfg;
     cfg.self = me;
     cfg.rows = h->store.get();
-    cfg.request = [owner = me](const std::string &method, const std::string &body) {
-        const auto s = self() == owner ? v2Ready() : nullptr;
-        if (!s) throw parvane::v2::V2Error("ERROR_CODE_UNAVAILABLE");
-        return s->busRequest(false, method, body, std::string());
-    };
     cfg.openEngine = [owner = me]() -> std::unique_ptr<parvane::v2::HistorySession> {
         const auto s = self() == owner ? v2Ready() : nullptr;
         return s ? s->openHistorySession() : nullptr;
     };
-    cfg.onRows = [raw](const std::vector<json> &states) {
-        for (const auto &s : states) {
-            const auto &chat = s.value("chat", json());
-            if (chat.contains("group") && chat["group"].is_object())
-                historyNoteGroupDomain(parvane::v2::Session::historyAddress(chat), chat["group"].value("domain", std::string()),
-                                       /*authoritative=*/false);
-        }
-        showStates(*raw, states);
-    };
-    cfg.onMark = [raw](const std::string &chatKey, const json &mark) {
-        emit(readStateEvent(*raw, parvane::v2::Session::historyAddress(mark.value("chat", json())), chatKey));
-    };
-    cfg.onReplaced = [raw] {
-        // HIST-2: строки модели заменены точкой — шов убирает показанное, чего в ней нет; остальное показывается заново
-        auto states = raw->store->all();
-        auto keep = json::array();
-        for (const auto &s : states) {
-            const auto view = viewOf(s);
-            if (view.value("visible", false)) keep.push_back(strOf(view, "id"));
-        }
-        LOGI("журнал истории: история заменена контрольной точкой (%zu строк)", states.size());
-        emit(json{{"type", "history_replaced"}, {"keep", keep}});
-        resetMessages();
-        showStates(*raw, states);
-    };
-    cfg.legacyOps = [raw] {
-        std::vector<json> ops;
-        for (auto &s : raw->store->all()) {
-            if (!isClearedState(*raw, s)) ops.push_back(json{{"state", std::move(s)}});
-        }
-        for (auto &m : raw->store->marks()) ops.push_back(json{{"read", std::move(m)}});
-        return ops;
-    };
-    cfg.dropRow = [raw](const json &state) { return isClearedState(*raw, state); };
     cfg.log = [](const std::string &m) { LOGI("%s", m.c_str()); };
-    // S7-3: журнал пишется пачкой раз в 30–120 с; debug-APK (только сценарии эмулятора, на прод идёт release) —
-    // короткое окно 1–3 с, либо своё из /data/local/tmp/parvane-history-batch-ms («мин,макс»). Признак — флаг сборки
-    // приложения из nativeInit (BuildConfig.DEBUG), а не NDEBUG: libparvane_jni.so и в debug-APK — release-сборка
-    // модуля (setup-tgx.sh берёт её из :app:assembleRelease), и под #ifndef NDEBUG окно оставалось 30–120 с (final9)
-    if (g_debugBuild) {
-        cfg.batchMinMs = 1000;
-        cfg.batchMaxMs = 3000;
-        if (FILE *f = std::fopen("/data/local/tmp/parvane-history-batch-ms", "r")) {
-            long long lo = 0, hi = 0;
-            if (std::fscanf(f, "%lld,%lld", &lo, &hi) == 2 && lo >= 0 && hi >= lo) {
-                cfg.batchMinMs = lo;
-                cfg.batchMaxMs = hi;
-            }
-            std::fclose(f);
-        }
-        LOGI("журнал истории: окно пачки %lld–%lld мс (debug)", (long long)cfg.batchMinMs, (long long)cfg.batchMaxMs);
-    }
+    // spec 036 (ENGINE-1, `engine_rows`): журнал истории аккаунта (пачка S7-3, догон, вход по точке, контрольные
+    // точки, замена дальше горизонта) ведёт модель сессии (окно пачки — jni_session.cpp); здесь — строки модели и
+    // прочтение её намерением (квитанции о ставших прочитанными шлёт модель)
+    cfg.readIntent = [owner = me](const json &mark) {
+        // Намерение ходит в сеть (квитанции) — не на потоке вызова; без сессии — маркер операцией журнала
+        if (self() != owner || !v2Ready()) return false;
+        runDetached([owner, mark] {
+            if (const auto s = self() == owner ? v2Ready() : nullptr) s->readTo(mark);
+        });
+        return true;
+    };
     h->sync = std::make_unique<ph::HistorySync>(std::move(cfg));
     h->receiptLoop = std::thread(receiptLoop, raw);
     // Модель открывает сессия v2 (подключение) либо открытие без сети по прошлому разу; дождаться и перенести в неё
@@ -649,37 +593,6 @@ std::shared_ptr<Hist> ensureHist() {
 } // namespace
 
 // ── публичные ────────────────────────────────────────────────────────────────
-
-// Выгрузка «ничего не потеряно» (spec 035, T007; только debug-сборка): строки parvane::audit — журнал истории
-// устройства и JSON движка (личное состояние, «План», «Облако», группы, журнал своих устройств). Только читает.
-std::string auditDumpJsonl() {
-    if (!g_debugBuild) return std::string();
-    parvane::audit::Sources src;
-    if (const auto h = hist(); h && h->store) parvane::audit::addModelRows(src, *h->store);
-    const auto me = self();
-    if (const auto s = v2Ready()) {
-        const auto snapshot = s->stateSnapshot();
-        if (!snapshot.is_null()) src.stateSnapshot = snapshot.dump();
-        const auto planner = s->engineCall("plannerStateJson", json::object());
-        if (!planner.is_null()) src.plannerState = planner.dump();
-        const auto containers = s->engineCall("cloudContainers", json::object());
-        for (const auto &c : containers.is_array() ? containers : json::array()) {
-            const auto state = s->engineCall("cloudStateJson", json{{"id", c.value("id", std::string())}});
-            src.cloud.emplace_back(c, state.is_null() ? std::string() : state.dump());
-        }
-        const auto groups = s->engineCall("groupList", json::object());
-        for (const auto &g : groups.is_array() ? groups : json::array()) {
-            const auto hex = g.get<std::string>();
-            src.groups.emplace_back(hex, s->engineCall("groupInfo", json{{"group", hex}}));
-        }
-        src.deviceLogs.push_back(json{{"user", me},
-                                      {"version", s->engineCall("logVersion", json{{"user", me}})},
-                                      {"devices", s->engineCall("logDevices", json{{"user", me}})}});
-        src.accountKeys = json{{"state", s->engineCall("hasStateKey", json::object())},
-                               {"planner", s->engineCall("plannerHasKey", json::object())}};
-    }
-    return parvane::audit::jsonl(parvane::audit::build(src));
-}
 
 void historyNoteGroupDomain(const std::string &address, const std::string &domain, bool authoritative) {
     if (address.empty() || domain.empty()) return;
@@ -729,22 +642,7 @@ json historyPeerOf(const std::string &chatAddress) {
     return json{{"user", {{"address", chatAddress}}}};
 }
 
-namespace {
-std::atomic<bool> g_histHold{false};
-std::atomic<bool> g_histWanted{false};
-} // namespace
-
-void historyHold(bool hold) {
-    g_histHold = hold;
-    if (!hold && g_histWanted.exchange(false)) historyStart();
-}
-
 void historyStart() {
-    if (g_histHold) {
-        g_histWanted = true;
-        LOGI("журнал истории — после разового переноса данных");
-        return;
-    }
     runDetached([] {
         const auto h = ensureHist();
         if (!h) return;
@@ -765,16 +663,16 @@ void historyReset() {
         h = std::move(g_hist);
     }
     h.reset(); // последний держатель останавливает поток журнала
+    {
+        std::lock_guard<std::mutex> ulk(g_unreadMu);
+        g_modelUnread.clear();
+    }
     std::lock_guard<std::mutex> lk(g_domainMu);
     g_groupDomains.clear();
     g_groupDeleters.clear();
 }
 
-void historySessionEvent(const json &ev) {
-    if (const auto h = hist()) h->sync->onSessionEvent(ev);
-}
-
-bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs) {
+bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs, bool inModel) {
     const auto content = event.value("content", json::object());
     if (!journaledContent(content)) return true; // не хранится (TTL, шифртекст, незнакомый вид) — показать как есть
     const auto h = ensureHist();
@@ -793,14 +691,21 @@ bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs) {
         wire["reply_to"] = event["reply_to"];
     if (event.contains("proof") && event["proof"].is_string()) wire["proof"] = event["proof"];
     json st;
-    try {
-        st = h->sync->record(ph::rowOpFromWire(wire, peer), own);
-    } catch (const std::exception &e) {
-        LOGE("журнал истории: сообщение %s не записано: %s", id.c_str(), e.what());
-        return true;
+    if (inModel) {
+        // spec 036 (`engine_rows`): строку события итога модели уже применила и поставила в журнал модель
+        const auto got = h->store->get(id);
+        if (!got) return true;
+        st = *got;
+    } else {
+        try {
+            st = h->sync->record(ph::rowOpFromWire(wire, peer), own);
+        } catch (const std::exception &e) {
+            LOGE("журнал истории: сообщение %s не записано: %s", id.c_str(), e.what());
+            return true;
+        }
     }
     if (!st.is_object()) return true;
-    const auto view = viewOf(st);
+    const auto view = viewOf(*h, st);
     if (view.empty()) return true;
     if (!view.value("visible", false)) {
         LOGI("журнал истории: %s удалено раньше прихода — не показывается", id.c_str());
@@ -816,7 +721,8 @@ bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs) {
     event["pinned"] = view.value("pinned", false);
     event["reactions"] = reactionsOfView(view, me, &by);
     event["by"] = by;
-    event["read"] = rowRead(*h, st, view, me);
+    event["read"] = rowRead(*h, view);
+    event["order"] = view.value("order", std::int64_t(0));
     replaceMeta(id, by, view.value("pinned", false));
     // Своё сообщение (с любого своего устройства) сдвинуло маркер чата — счётчик заново (READ-2, FR-011)
     if (h->sync->isSelf(from)) emit(readStateEvent(*h, chat, strOf(view, "chatKey")));
@@ -894,7 +800,7 @@ void historyApplyIncomingMutation(const parvane::v2::Incoming &in) {
             // Новое содержимое целиком: текст, подпись медиа, геопозиция поверх прежнего содержимого
             auto content = in.content;
             if (st) {
-                const auto view = viewOf(*st);
+                const auto view = viewOf(*h, *st);
                 if (view.value("visible", false)) {
                     content = contentOfView(view);
                     if (parvane::contentKind(in.content) == "location") {
@@ -989,21 +895,44 @@ void historyMarkRead(const std::vector<std::string> &ids) {
             best[key] = m;
         }
     }
-    std::map<std::string, json> receipts;
     for (const auto &[key, mark] : best) {
         const auto chat = parvane::v2::Session::historyAddress(mark.value("chat", json()));
-        const auto read = h->sync->advanceMark(mark, /*own=*/true); // маркер в журнал ≤ 1 с (READ-2)
+        // Прочтение — намерением модели (spec 036 E4): маркер в журнал пачкой модели, квитанции о ставших
+        // прочитанными шлёт она (READ-1 п. 3); счётчик придёт `unread_changed`
+        (void)h->sync->advanceMark(mark, /*own=*/true);
         emit(readStateEvent(*h, chat, key));
-        // Квитанции — только о сообщениях, которые этот сдвиг сделал прочитанными
-        for (const auto &s : read) {
-            const auto target = s.value("target", std::string());
-            if (target.empty()) continue;
-            auto &list = receipts[chat];
-            if (list.is_null()) list = json::array();
-            list.push_back(target);
+    }
+}
+
+void historyModelChanges(const json &changes) {
+    const auto h = hist();
+    if (!h || !h->ready) return;
+    std::vector<json> views;
+    for (const auto &ch : changes) {
+        if (!ch.is_object()) continue;
+        if (ch.contains("message_upsert")) {
+            if (auto v = ph::viewOfModel(ch["message_upsert"]); v.is_object()) views.push_back(std::move(v));
+        } else if (ch.contains("message_remove")) {
+            if (auto r = ph::removedOfModel(ch["message_remove"]); r.is_object()) {
+                // Замена истории точкой (HIST-2): модель снимает все строки и тут же кладёт строки точки — строка,
+                // которая к показу снова видна, не снимается
+                if (!h->store->views({strOf(r, "id")}).empty()) continue;
+                r["visible"] = false;
+                r["orphan"] = false;
+                views.push_back(std::move(r));
+            }
+        } else if (ch.contains("unread_changed")) {
+            const auto u = ph::unreadOfModel(ch["unread_changed"]);
+            const auto chat = u.is_object() ? parvane::v2::Session::historyAddress(u.value("chat", json())) : std::string();
+            if (chat.empty()) continue;
+            std::lock_guard<std::mutex> lk(g_unreadMu);
+            g_modelUnread[chat] = {u.value("unread", 0), u.value("lastReadId", std::string())};
         }
     }
-    queueReceipts(*h, receipts);
+    if (views.empty()) return;
+    const auto removed = std::count_if(views.begin(), views.end(), [](const json &v) { return !v.value("visible", false); });
+    LOGI("журнал истории: применено строк %zu моделью, снято %zu", views.size() - std::size_t(removed), std::size_t(removed));
+    showViews(*h, views);
 }
 
 void historyEmitReadState(const std::string &chat) {
@@ -1015,19 +944,19 @@ std::vector<json> historyRows() {
     const auto h = ensureHist();
     if (!h) return out;
     const auto me = self();
-    for (const auto &st : h->store->all()) {
-        if (isClearedState(*h, st)) continue;
-        const auto view = viewOf(st);
-        if (view.empty() || !view.value("visible", false)) continue;
+    // Готовый показ модели по порядку ленты (ORDER-1 — место модели): надгробий и сирот в нём нет
+    for (const auto &mv : h->store->allViews()) {
+        const auto view = ph::viewOfModel(mv);
+        if (!view.is_object() || isClearedView(*h, view)) continue;
         try {
-            out.push_back(messageEventOf(*h, st, view, me));
+            auto ev = messageEventOf(*h, view, me);
+            ev["order"] = view.value("order", std::int64_t(0));
+            out.push_back(std::move(ev));
         } catch (const std::exception &e) {
             // Реплей с диска при запуске: сбойная строка не роняет приложение
             LOGI("журнал истории: строка с диска пропущена (%s)", e.what());
         }
     }
-    // Хранилище отдаёт строки по id (UUIDv7 — по времени отправителя); далеко отставшие — на своё место по времени
-    placeByTime(out);
     return out;
 }
 
@@ -1096,7 +1025,10 @@ void historyMoveFiles(const std::string &oldAddress, const std::string &newAddre
     // Строки не переписываются (автор своих — прежний адрес, как у остальных устройств)
     move(historyRowsPath(oldAddress), historyRowsPath(newAddress));
     move(historyMarksPath(oldAddress), historyMarksPath(newAddress));
-    move(historyLocalPath(oldAddress), historyLocalPath(newAddress));
+    // Границы очистки и ✓✓ — запись хранилища движка (PathFiles): под новым именем, прежняя снимается
+    if (hostExists(historyLocalPath(oldAddress)) && !hostExists(historyLocalPath(newAddress))) {
+        if (hostWrite(historyLocalPath(newAddress), hostRead(historyLocalPath(oldAddress)))) hostRemove(historyLocalPath(oldAddress));
+    }
     for (const auto *name : {"meta.json", "pending.json", "imported.json"})
         move(historyAuxPrefix(oldAddress) + name, historyAuxPrefix(newAddress) + name);
 }

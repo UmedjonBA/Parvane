@@ -7,7 +7,7 @@ import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
-import { rowTsMs } from './v2/historyModel';
+import { nonCountedKinds, rowTsMs } from './v2/historyModel';
 import { createBatchedResolver } from './batchedResolver';
 import { readPollFields } from './polls';
 import { buildWebPage, compareStoredOrder, type ParvaneStore } from './store';
@@ -47,12 +47,17 @@ type SyncDependencies = {
   };
   // Журнал истории (spec 033, READ-2): непрочитанное — от маркера «прочитано до» чата (движок)
   history?: {
-    isUnread: (meta: RowMeta) => boolean;
     ensureMarks: () => Promise<void>;
+    /** Непрочитанное по модели (spec 036 E4, `unread_changed`): число, маркер, упоминания. */
+    unreadOf?: (address: string) => { count: number; lastReadId?: string; mentions: string[] } | undefined;
   };
   // Строки истории — в модели движка (spec 035 T114): показ после перезагрузки, строки вне журнала, очистка
   rows?: {
     loadStored: () => Promise<{ rows: WireStoredMessage[]; known: Set<string>; isReady: boolean }>;
+    /** Строки одного чата (ленивый показ, spec 036 T015); нет — модель не открыта. */
+    loadChat: (address: string) => Promise<{ rows: WireStoredMessage[]; known: Set<string> } | undefined>;
+    /** Последние строки чатов списка модели (`chatList`); нет — модель не открыта. */
+    lastRows: () => Promise<WireStoredMessage[] | undefined>;
     persistLocal: (stored: WireStoredMessage) => Promise<WireStoredMessage>;
     forget: (uuids: string[]) => Promise<void>;
   };
@@ -86,6 +91,15 @@ export function createSyncController(deps: SyncDependencies) {
   let syncPromise: Promise<void> | undefined;
   // Показ начался без модели (вход без сети до первого подключения): её строки — когда она откроется
   let isRestorePending = false;
+  // spec 036 T015: история показывается лениво — при запуске в сторе только последние строки чатов (и «Избранное»),
+  // чат целиком — при первом обращении (`ensureChatLoaded`: открытие, поиск, закреплённые, очистка)
+  const loadedChatIds = new Set<string>();
+  const chatLoads = new Map<string, Promise<void>>();
+  // Чтение чата из модели асинхронно: изменения модели, пришедшие между чтением и показом, не должны теряться —
+  // снятое (надгробие, «удалить у себя» из журнала) не возвращается, изменённое строкой старше показанного в ещё не
+  // прочитанном чате (правка, реакция) показывается последней версией
+  const tombstonedUuids = new Set<string>();
+  const heldBehind = new Map<string, WireStoredMessage>();
   const wireFlagsByUuid = new Map<string, WireFlags>();
   const readOutboxMaxByChatId = new Map<string, number>();
   // Автор, время (мс), вид и чат строки по uuid — для подсчёта непрочитанного от маркера (READ-2)
@@ -143,6 +157,10 @@ export function createSyncController(deps: SyncDependencies) {
     rowMetaByUuid.clear();
     rowsAwaitingGroup.clear();
     isRestorePending = false;
+    loadedChatIds.clear();
+    chatLoads.clear();
+    tombstonedUuids.clear();
+    heldBehind.clear();
   }
 
   function rememberRowMeta(stored: WireStoredMessage) {
@@ -504,15 +522,37 @@ export function createSyncController(deps: SyncDependencies) {
   // ЕДИНЫЙ предикат «входящее не прочитано» — для стартового состояния
   // (provider), пересчёта после прочтения и упоминаний. Записи о звонках и служебные
   // сообщения (без uuid) прочитаны всегда (бейдж «1» на чате, где последним был звонок, 10 сен 2026).
-  // С spec 033 (READ-2) — только от маркера «прочитано до» чата: строка после маркера, и движок считает её
-  // непрочитанной (`historyIsUnread`); прочитанное на любом своём устройстве сдвигает маркер журналом истории
+  // С spec 033 (READ-2) — от маркера «прочитано до» чата; с spec 036 (T014) маркер и счётчик ведёт модель
+  // (`unread_changed`): непрочитанные — последние по ленте `count` считаемых входящих (строки после маркера —
+  // всегда самые новые), своей копии маркеров и своего сравнения с ними у web нет
   function isUnreadIncoming(chatId: string, message: ApiMessage) {
-    if (message.isOutgoing || !message.senderId) return false;
-    if (message.content.action) return false;
+    return unreadIdsOf(chatId).has(message.id);
+  }
+
+  /** Непрочитанные входящие чата в сторе (id) — по счётчику модели. */
+  function unreadIdsOf(chatId: string): Set<number> {
+    const store = deps.getStore();
+    const address = store.getAddressForId(chatId);
+    const fromModel = address && !isSelfChat(chatId) ? deps.history?.unreadOf?.(address) : undefined;
+    const ids = new Set<number>();
+    let left = fromModel?.count ?? 0;
+    const list = store.getMessages(chatId);
+    for (let i = list.length - 1; i >= 0 && left > 0; i--) {
+      if (isCountedIncoming(chatId, list[i])) {
+        ids.add(list[i].id);
+        left -= 1;
+      }
+    }
+    return ids;
+  }
+
+  // Входящее, которое движок считает непрочитанным после маркера: не своё, с автором, не служебное и не вида,
+  // который движок не считает (`historyUnreadKinds`)
+  function isCountedIncoming(chatId: string, message: ApiMessage) {
+    if (message.isOutgoing || !message.senderId || message.content.action) return false;
     const uuid = store_().getUuidForMessage(chatId, message.id);
     const meta = uuid ? rowMetaByUuid.get(uuid) : undefined;
-    if (!meta || !deps.history) return false;
-    return deps.history.isUnread(meta);
+    return Boolean(meta && !nonCountedKinds().has(meta.kind));
   }
 
   function store_() {
@@ -533,14 +573,22 @@ export function createSyncController(deps: SyncDependencies) {
     if (store.getMessages(chatId).length) ensureMainThread(chatId);
     let lastReadInbox = 0;
     let unreadCount = 0;
+    const unread = unreadIdsOf(chatId);
     store.getMessages(chatId).forEach((message) => {
       if (message.isOutgoing || !message.senderId) return;
-      if (isUnreadIncoming(chatId, message)) {
+      if (unread.has(message.id)) {
         unreadCount += 1;
       } else if (message.id > lastReadInbox) {
         lastReadInbox = message.id;
       }
     });
+    const address = store.getAddressForId(chatId);
+    const fromModel = address && !isSelfChat(chatId) ? deps.history?.unreadOf?.(address) : undefined;
+    if (fromModel) {
+      unreadCount = fromModel.count;
+      const readMsg = fromModel.lastReadId ? store.getMessageByUuid(fromModel.lastReadId) : undefined;
+      if (readMsg) lastReadInbox = Math.max(lastReadInbox, readMsg.id);
+    }
     deps.sendUpdate({
       '@type': 'updateThreadReadState',
       chatId,
@@ -594,6 +642,11 @@ export function createSyncController(deps: SyncDependencies) {
   // движок (E2E-1 в v2 — сертификат устройства и подпись записи)
   function applyStoredUpdateUnserialized(stored: WireStoredMessage) {
     const store = deps.getStore();
+    // Снятое моделью идущее чтение чата из модели не вернёт (`freshOf`) — до любых отсевов ниже
+    if (stored.deleted) {
+      tombstonedUuids.add(stored.id);
+      heldBehind.delete(stored.id);
+    }
     if (holdForGroup(stored)) return;
     // Заблокированный контакт: входящее личное сообщение не показываем и не
     // роутим в его чат (в группах блок участника так не работает — только 1-1)
@@ -646,6 +699,12 @@ export function createSyncController(deps: SyncDependencies) {
     }
 
     const message = store.buildApiMessage(stored);
+    // spec 036 T015: строка модели старше показанного в чате, который ещё не прочитан целиком (история с другого
+    // устройства, правка или реакция старого сообщения), — не «новое сообщение»: её покажет чтение чата
+    if (!isKnown && isBehindLazyChat(stored, message)) {
+      heldBehind.set(stored.id, stored);
+      return;
+    }
     store.putMessage(message);
     rememberRowMeta(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
@@ -698,36 +757,108 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  // История — из локального кэша (расшифрованные строки) и журнала исходящих;
-  // сервер v2 хранит только недоставленное, его отдаёт движок (`applyExternal`).
-  // perf A3: строки кладутся прямо в стор, без `newMessage` на каждую — список
-  // чатов, последние сообщения и счётчики UI забирает `fetchChats`/`fetchMessages`
-  // из стора (как и Telegram); блок-лист и границы очистки читаются раз на проход
+  // История — из модели движка (расшифрованные строки) и журнала исходящих; сервер v2 хранит только недоставленное,
+  // его отдаёт движок (`applyExternal`). perf A3: строки кладутся прямо в стор, без `newMessage` на каждую — список
+  // чатов, последние сообщения и счётчики UI забирает `fetchChats`/`fetchMessages` из стора (как и Telegram).
+  // spec 036 T015: при запуске — только последняя строка каждого чата (`chatList`) и «Избранное» целиком; остальное —
+  // чатом при первом обращении (`ensureChatLoaded`), поэтому запуск не зависит от длины истории
   async function restoreFromCache(): Promise<boolean> {
-    // Строки — из модели движка (spec 035 T114); надгробия в `known` — своё удалённое не воскресает из журнала
-    const loaded = await deps.rows?.loadStored();
-    if (loaded && !loaded.isReady) isRestorePending = true;
-    const records = loaded?.rows || [];
-    if (!records.length) return false;
-    // «Избранное» без других устройств живёт ТОЛЬКО в журнале исходящих (на
-    // сервер не уходит) — без подмешивания журнала чат пустел после reload
+    const last = await deps.rows?.lastRows();
+    if (deps.rows && !last) isRestorePending = true;
     const store = deps.getStore();
-    const knownIds = new Set([...records.map((record) => record.id), ...(loaded?.known || [])]);
-    const savedNotes = (await deps.localState.readOwnJournal())
-      .filter((message) => message.to === store.self && !knownIds.has(message.id));
-    const ordered = records.concat(savedNotes).sort(compareStoredOrder);
+    const nowSecs = Math.floor(Date.now() / 1000);
+    // «Избранное» без других устройств живёт и в журнале исходящих: чат с собой — целиком, с подмешанными заметками
+    const selfChatId = store.self ? store.getIdForAddress(store.self, 'user') : undefined;
+    const isSelfLoaded = Boolean(last && selfChatId) && await loadChatRows(selfChatId!, true);
+    const records = freshOf(last || []);
+    if (!records.length && !isSelfLoaded) return false;
     const blocked = new Set(deps.localState.loadBlocked?.() || []);
     const clearedUntil = deps.localState.loadClearedUntil?.();
-    const nowSecs = Math.floor(Date.now() / 1000);
     const restoredChatIds = new Set<string>();
-    ordered.forEach((stored) => {
+    records.forEach((stored) => {
       const message = restoreStored(stored, blocked, clearedUntil, nowSecs);
       if (message && !message.isOutgoing) restoredChatIds.add(message.chatId);
     });
     // Чат мог быть объявлен раньше восстановления (запись о звонке из журнала
-    // состояния) — его счётчик приводим к честному значению по стору, по разу на чат
+    // состояния) — его счётчик приводим к честному значению, по разу на чат
     restoredChatIds.forEach((chatId) => pushReadState(chatId));
-    deps.log(`история восстановлена из модели: ${records.length} сообщений`);
+    deps.log(`история восстановлена из модели: последних строк ${records.length}`);
+    return true;
+  }
+
+  /** Прочитанные из модели строки к показу: без уже показанных и снятых после чтения; изменённые после чтения — их
+   * последней версией. По месту в ленте (ORDER-1). */
+  function freshOf(records: WireStoredMessage[]) {
+    const store = deps.getStore();
+    return records
+      .filter((stored) => !tombstonedUuids.has(stored.id) && !store.hasMessage(stored.id))
+      .map((stored) => {
+        const newer = heldBehind.get(stored.id);
+        heldBehind.delete(stored.id);
+        return newer || stored;
+      })
+      .sort(compareStoredOrder);
+  }
+
+  function isBehindLazyChat(stored: WireStoredMessage, message: ApiMessage) {
+    if (!stored.inModel || !deps.rows || loadedChatIds.has(message.chatId)) return false;
+    const shown = deps.getStore().getMessages(message.chatId);
+    const newest = shown[shown.length - 1];
+    return Boolean(newest && message.id < newest.id);
+  }
+
+  /** Чат целиком в стор (ленивый показ истории, spec 036 T015): строки модели, которых в сторе нет, — без апдейтов
+   * UI (их забирает `fetchMessages`); у «Избранного» — и заметки журнала исходящих, которых модель не знает. */
+  function ensureChatLoaded(chatId: string): Promise<void> {
+    if (loadedChatIds.has(chatId) || !deps.rows) return Promise.resolve();
+    let pending = chatLoads.get(chatId);
+    if (!pending) {
+      pending = loadChatRows(chatId).then(() => undefined).finally(() => chatLoads.delete(chatId));
+      chatLoads.set(chatId, pending);
+    }
+    return pending;
+  }
+
+  /** Все чаты целиком (глобальный поиск по сообщениям). */
+  async function ensureAllLoaded() {
+    for (const chatId of deps.getStore().getChatIds()) await ensureChatLoaded(chatId);
+  }
+
+  async function loadChatRows(chatId: string, isStartup?: boolean): Promise<boolean> {
+    const store = deps.getStore();
+    const address = store.getAddressForId(chatId);
+    const loaded = address ? await deps.rows?.loadChat(address).catch((e: unknown) => {
+      deps.log(`история: чат не прочитан из модели: ${String(e)}`);
+      return undefined;
+    }) : undefined;
+    if (!loaded) return false;
+    loadedChatIds.add(chatId);
+    let records = loaded.rows;
+    if (address === store.self) {
+      const knownIds = new Set([...records.map((record) => record.id), ...loaded.known]);
+      const savedNotes = (await deps.localState.readOwnJournal())
+        .filter((message) => message.to === store.self && !knownIds.has(message.id));
+      records = records.concat(savedNotes);
+    }
+    const fresh = freshOf(records);
+    if (!fresh.length) return isStartup ? records.length > 0 : true;
+    const blocked = new Set(deps.localState.loadBlocked?.() || []);
+    const clearedUntil = deps.localState.loadClearedUntil?.();
+    const nowSecs = Math.floor(Date.now() / 1000);
+    fresh.forEach((stored) => restoreStored(stored, blocked, clearedUntil, nowSecs));
+    if (!isStartup) {
+      // Закреплённые и упоминания прочитанной сейчас части чата — в UI (при запуске их отдаёт fetchChats)
+      const pinned = fresh.filter((stored) => stored.pinned && !stored.deleted)
+        .map((stored) => store.getMessageByUuid(stored.id)?.id)
+        .filter((id): id is number => id !== undefined);
+      if (pinned.length) {
+        deps.sendUpdate({ '@type': 'updatePinnedIds', chatId, isPinned: true, messageIds: pinned });
+      }
+      pushMentionState(chatId);
+      // Граница прочитанного — по сообщению маркера, которое теперь в сторе
+      pushReadState(chatId);
+    }
+    deps.log(`история: чат прочитан из модели (${fresh.length} строк)`);
     return true;
   }
 
@@ -834,18 +965,32 @@ export function createSyncController(deps: SyncDependencies) {
   // Непрочитанные упоминания чата: id входящих без read-флага с '@self'
   function collectUnreadMentions(chatId: string) {
     const store = deps.getStore();
+    const address = store.getAddressForId(chatId);
+    const fromModel = address ? deps.history?.unreadOf?.(address) : undefined;
+    if (fromModel) {
+      return fromModel.mentions
+        .map((uuid) => store.getMessageByUuid(uuid)?.id)
+        .filter((id): id is number => id !== undefined);
+    }
+    const unread = unreadIdsOf(chatId);
     return store.getMessages(chatId)
-      .filter((message) => store.isMentionOfSelf(message) && isUnreadIncoming(chatId, message))
+      .filter((message) => store.isMentionOfSelf(message) && unread.has(message.id))
       .map((message) => message.id);
   }
 
   function pushMentionState(chatId: string) {
     const unreadMentions = collectUnreadMentions(chatId);
+    // Число — модели (spec 036 T015: в сторе может быть ещё не весь чат), id — прочитанных в стор
+    const address = deps.getStore().getAddressForId(chatId);
+    const fromModel = address ? deps.history?.unreadOf?.(address) : undefined;
     deps.sendUpdate({
       '@type': 'updateThreadReadState',
       chatId,
       threadId: MAIN_THREAD_ID,
-      readState: { unreadMentionsCount: unreadMentions.length, unreadMentions },
+      readState: {
+        unreadMentionsCount: Math.max(unreadMentions.length, fromModel?.mentions.length ?? 0),
+        unreadMentions,
+      },
     });
   }
 
@@ -859,15 +1004,17 @@ export function createSyncController(deps: SyncDependencies) {
   }
 
   // Модель открылась позже начала показа: её строки — на экран обычным путём (с апдейтами UI)
+  // (spec 036 T015: последние строки чатов; чат целиком — при обращении, как после обычного запуска)
   async function restoreLate() {
     if (!isRestorePending || !isSynced || !deps.rows) return;
-    const loaded = await deps.rows.loadStored();
-    if (!loaded.isReady) return;
+    const last = await deps.rows.lastRows();
+    if (!last) return;
     isRestorePending = false;
-    const store = deps.getStore();
-    const fresh = loaded.rows.filter((stored) => !store.hasMessage(stored.id)).sort(compareStoredOrder);
+    // Чаты, уже прочитанные без модели (журнал исходящих), — заново целиком при обращении
+    loadedChatIds.clear();
+    const fresh = freshOf(last);
     for (const stored of fresh) await applyStoredUpdate(stored);
-    deps.log(`история из модели показана после её открытия: ${fresh.length} сообщений`);
+    deps.log(`история из модели показана после её открытия: последних строк ${fresh.length}`);
   }
 
   // Строка модели (spec 033, spec 035 T114): её уже записала модель — только показ
@@ -879,6 +1026,8 @@ export function createSyncController(deps: SyncDependencies) {
     applyExternal,
     showRow,
     restoreLate,
+    ensureChatLoaded,
+    ensureAllLoaded,
     releaseGroupRows,
     announcePeer,
     collectUnreadMentions,
@@ -891,6 +1040,7 @@ export function createSyncController(deps: SyncDependencies) {
     rowMeta: (uuid: string) => rowMetaByUuid.get(uuid),
     isSynced: () => isSynced,
     isUnreadIncoming,
+    unreadIdsOf,
     pushReadState,
     markDeleted: (uuid: string) => {
       const flags = wireFlagsByUuid.get(uuid);

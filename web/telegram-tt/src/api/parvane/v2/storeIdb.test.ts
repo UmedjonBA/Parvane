@@ -122,7 +122,7 @@ describe('storeIdb — граница движка', () => {
     st.close();
   });
 
-  it('база — отдельная parvane-store-v3, прежняя parvane-e2e-v2 не трогается', async () => {
+  it('база — отдельная parvane-store-v3', async () => {
     const st = await openStoreIdb();
     expect(st.name).toBe('parvane-store-v3');
     st.close();

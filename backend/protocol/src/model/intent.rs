@@ -366,7 +366,9 @@ impl Engine {
 
     /// Избранный стикер (FR-075): объект `FAVED_STICKER` с ключом `set_id/sticker_id`.
     fn intent_fave(&mut self, f: epb::IntentFaveSticker, w: &mut Work) -> Result<()> {
-        if f.set_id.is_empty() || f.sticker_id.is_empty() || f.set_id.contains('/') {
+        // PACK-1 (spec 036): id набора — ключ STICKER_PACK (`h:` + отпечаток base64 может содержать «/»), id стикера —
+        // имя файла манифеста без «/»: ключ объекта `set_id/sticker_id` делится последним «/» однозначно
+        if f.set_id.is_empty() || f.sticker_id.is_empty() || f.sticker_id.contains('/') {
             return Err(ProtoError::InvalidField("sticker"));
         }
         let key = ObjectKey { kind: ObjectKind::FavedSticker as i32, key: format!("{}/{}", f.set_id, f.sticker_id) };
@@ -461,8 +463,10 @@ impl Engine {
 /// Входящее содержимое → строки истории (HIST-1): сообщение — строка, мутация — операция над строкой
 /// (сирота, если строки ещё нет), квитанция — доставка/маркер, служебное — ничего.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn apply_incoming(e: &mut Engine, p: Peer, from: &str, op_id: &[u8], ts_ms: i64, c: Content, disposition: Disposition, w: &mut Work) {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_incoming(e: &mut Engine, p: Peer, from: &str, op_id: &[u8], ts_ms: i64, mut c: Content, disposition: Disposition, proof: &[u8], w: &mut Work) {
     let Ok(chat) = chat_key(&p) else { return };
+    note_blob_domain(&mut c, from, &e.cfg.domain);
     let own = e.selves().iter().any(|s| s == from);
     let by = if own { String::new() } else { from.to_string() };
     let st = crate::pb::parvane::history::v1::Stamp { ts_ms, op_id: op_id.to_vec() };
@@ -483,8 +487,13 @@ pub(crate) fn apply_incoming(e: &mut Engine, p: Peer, from: &str, op_id: &[u8], 
             views::Class::Service => return,
             views::Class::Stub => ops.push(history::row_op(MessageRow { id: op_id.to_vec(), chat: Some(p.clone()), from: from.to_string(), ts_ms, body: views::stub_body(false) })),
             views::Class::Message => {
+                // Самоуничтожающееся — не строка модели и не журнал (показ в памяти хоста, HIST-1 п. 6)
+                if c.ttl_secs > 0 && e.cfg.host_driven {
+                    return;
+                }
                 let Some(wire) = views::content_to_wire(&c) else { return };
-                let body = views::row_body(wire, c.reply_to.as_ref().map(|r| r.op_id.as_slice()));
+                // Доказательство автора (A0008-2, REPORT-1) — в теле строки: жалоба прикладывает его к сообщению
+                let body = views::row_body_proof(wire, c.reply_to.as_ref().map(|r| r.op_id.as_slice()), proof);
                 ops.push(history::row_op(MessageRow { id: op_id.to_vec(), chat: Some(p.clone()), from: from.to_string(), ts_ms, body }));
             }
             views::Class::Mutation => match &c.kind {
@@ -609,7 +618,7 @@ pub(crate) fn vector_input(e: &mut Engine, args: &str) -> Result<Outcome> {
                 (c, d)
             }
         };
-        e.incoming(peer, &from, &id, ts, content, disposition, &mut w);
+        e.incoming(peer, &from, &id, ts, content, disposition, &[], &mut w);
     }
     if let Some(Value::Array(ops)) = v.get("history") {
         for op in ops {
@@ -697,4 +706,56 @@ fn history_op_from_short(v: &Value) -> Result<HistoryOp> {
         });
     }
     serde_json::from_value(v.clone()).map_err(|_| ProtoError::Malformed)
+}
+
+/// Вложение автора с другого сервера лежит на его сервере (spec 028): прежние клиенты не ставили домен блоба —
+/// строка модели несёт его сама (скачивание и пересылка знают сервер блоба; раньше это делал хост web).
+pub(crate) fn note_blob_domain(c: &mut Content, from: &str, own_domain: &str) {
+    let Some((_, domain)) = from.rsplit_once('@') else { return };
+    let domain = domain.to_ascii_lowercase();
+    if domain.is_empty() || domain == own_domain.to_ascii_lowercase() {
+        return;
+    }
+    let fill = |d: &mut String| {
+        if d.is_empty() {
+            *d = domain.clone();
+        }
+    };
+    match c.kind.as_mut() {
+        Some(content::Kind::Media(m)) => fill(&mut m.blob_domain),
+        Some(content::Kind::Sticker(st)) => {
+            if let Some(m) = st.media.as_mut() {
+                fill(&mut m.blob_domain);
+            }
+            if let Some(pr) = st.pack_ref.as_mut() {
+                fill(&mut pr.blob_domain);
+            }
+        }
+        Some(content::Kind::Text(t)) => t.emoji_packs.iter_mut().for_each(|pr| fill(&mut pr.blob_domain)),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod blob_domain_tests {
+    use super::*;
+    use crate::pb::parvane::msg::v2::{Media, Text};
+
+    #[test]
+    fn foreign_author_media_gets_author_domain() {
+        let mut c = Content { kind: Some(content::Kind::Media(Media::default())), ..Default::default() };
+        note_blob_domain(&mut c, "bob@b.example", "a.example");
+        let Some(content::Kind::Media(m)) = &c.kind else { panic!() };
+        assert_eq!(m.blob_domain, "b.example");
+        let mut own = Content { kind: Some(content::Kind::Media(Media::default())), ..Default::default() };
+        note_blob_domain(&mut own, "alice@a.example", "a.example");
+        let Some(content::Kind::Media(m)) = &own.kind else { panic!() };
+        assert!(m.blob_domain.is_empty(), "свой сервер — без домена");
+        let mut set = Content { kind: Some(content::Kind::Media(Media { blob_domain: "c.example".into(), ..Default::default() })), ..Default::default() };
+        note_blob_domain(&mut set, "bob@b.example", "a.example");
+        let Some(content::Kind::Media(m)) = &set.kind else { panic!() };
+        assert_eq!(m.blob_domain, "c.example", "заданный не меняется");
+        let mut t = Content { kind: Some(content::Kind::Text(Text::default())), ..Default::default() };
+        note_blob_domain(&mut t, "bob", "a.example");
+    }
 }

@@ -7,7 +7,6 @@
 /** Ядро, в которое идут вызовы: модель профиля (`ModelHost`) либо модель в памяти (`openMemoryClient`). */
 export interface ClientCore {
   clientCall(name: string, args: Record<string, unknown>): unknown;
-  historyCall(name: string, argsJson: string): string;
   close?(): void;
 }
 
@@ -63,9 +62,6 @@ function bytesIn(value: any, fields: string[]) {
   return out;
 }
 
-/** Сессия журнала истории модели (прежний `PvHistory`). */
-export type EngineHistory = { call: (name: string, argsJson: string) => string; free: () => void };
-
 export class EngineClient {
   constructor(private readonly host: ClientCore) {}
 
@@ -80,15 +76,6 @@ export class EngineClient {
 
   /** Клиент владеет моделью в памяти (тесты, доказательство устройства по снимку). */
   ownsCore = false;
-
-  historySession(): EngineHistory | undefined {
-    if (!this.hasStateKey()) return undefined;
-    const { host } = this;
-    return {
-      call: (name: string, argsJson: string) => host.historyCall(name, argsJson),
-      free: () => undefined,
-    };
-  }
 
   acceptRootChange(user: string): boolean {
     return this.c('acceptRootChange', { user }) as boolean;

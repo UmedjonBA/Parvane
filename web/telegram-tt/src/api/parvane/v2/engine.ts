@@ -2,6 +2,7 @@
 // Модуль собирается `backend/protocol/wasm/build.sh` в src/lib/parvane-protocol.
 
 import type { StoreBatch, StorePut, StoreReads } from './gen/model';
+import type { StateObject, StateViewJson, StateWrites } from './stateObjects';
 
 import init, * as pv from '../../../lib/parvane-protocol/parvane_protocol';
 import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url';
@@ -12,7 +13,7 @@ import { errorCodeNumber } from './transport';
 
 export type Protocol = typeof pv;
 // spec 035 (T113): клиент — в модели движка; прежние имена типов — у её интерфейса (`engineClient.ts`)
-export type { EngineClient as PvClient, EngineHistory as PvHistory } from './engineClient';
+export type { EngineClient as PvClient } from './engineClient';
 
 let loading: Promise<Protocol> | undefined;
 let loaded: Protocol | undefined;
@@ -236,15 +237,6 @@ export class ModelHost {
     return JSON.parse(out.result_json ?? 'null');
   }
 
-  /** Функция сессии журнала истории модели (`historyCall`): результат — JSON-текст, ошибка — исключение. */
-  historyCall(name: string, argsJson: string): string {
-    const out = JSON.parse(this.engine.call('historyCall', JSON.stringify({ name, args_json: argsJson || '{}' }))) as {
-      result_json?: string; need?: unknown; error?: unknown;
-    };
-    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
-    return out.result_json ?? 'null';
-  }
-
   /** Сменить клиент модели: новое устройство либо импорт экспорта (`blob` под `key`). */
   clientReplace(mode: 'new' | 'import', blob?: Uint8Array, key?: Uint8Array) {
     const out = this.raw('clientReplace', {
@@ -285,6 +277,11 @@ export class ModelHost {
     this.flushTimer = setTimeout(() => {
       void this.flush().catch((e: unknown) => this.deps.log?.(`модель: отложенная запись: ${String(e)}`));
     }, delay);
+  }
+
+  /** Журнал хоста (если задан). */
+  log(message: string) {
+    this.deps.log?.(message);
   }
 
   /** Намерение (`Intent` proto3-JSON, например `{state_patch: {...}}`). */
@@ -437,14 +434,6 @@ class MemoryCore {
     return JSON.parse(out.result_json ?? 'null');
   }
 
-  historyCall(name: string, argsJson: string): string {
-    const out = JSON.parse(this.engine.call('historyCall', JSON.stringify({ name, args_json: argsJson || '{}' }))) as {
-      result_json?: string; need?: unknown; error?: unknown;
-    };
-    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
-    return out.result_json ?? 'null';
-  }
-
   close() {
     if (this.closed) return;
     this.closed = true;
@@ -539,6 +528,7 @@ export function createModelSender(
 ) {
   let inflight = 0;
   let failed = 0;
+  let historyAttached = false;
   let waiters: (() => void)[] = [];
   let host: ModelHost | undefined;
   const settle = () => {
@@ -554,7 +544,15 @@ export function createModelSender(
     send(req: ModelRequest) {
       inflight++;
       void call(req, unb64(req.body))
-        .then((resp) => host?.ingestResponse(req.req_id, resp, 0), (e: unknown) => {
+        .then((resp) => {
+          // Журнал истории ведёт модель (spec 036 `engine_rows`): те же строки журнала, что у прежнего v2/history.ts
+          if (req.method === 'history.append') log('история: в журнал записано (модель)');
+          else if (!historyAttached && (req.method === 'history.head' || req.method === 'history.sync')) {
+            historyAttached = true;
+            log('история: журнал подключён');
+          }
+          return host?.ingestResponse(req.req_id, resp, 0);
+        }, (e: unknown) => {
           log(`модель: ${req.method}: ${String((e as Error)?.message ?? e)}`);
           failed++;
           return host?.ingestResponse(req.req_id, new Uint8Array(0), errorCodeNumber(e));
@@ -579,22 +577,18 @@ export type ModelSender = ReturnType<typeof createModelSender>;
 //
 // Личное состояние (`state.v2`, `state.ops.*`) ведёт модель того же профиля, что и клиентское ядро: сведение,
 // метки и разница «желаемое ↔ сведённое» только в движке; сведённое и неотправленное лежат в хранилище модели и
-// переживают перезапуск.
+// переживают перезапуск. spec 036 T019: показ — объекты по видам (`viewStateJson`), правка — `stateSet` объекта с
+// показанным хостом (`base`) и `stateMark`; какие объекты писать, выбирает `stateObjects.ts planStateWrites`.
 
-/** Показ личного состояния моделью: снимок в форме `state.v1`, избранные стикеры, журнал закрыт для записи. */
-export type StateModelView = {
-  snapshot: Record<string, unknown>;
-  faved_stickers: { set_id: string; sticker_id: string; added_ms: string }[];
-  write_blocked: boolean;
-};
+/** Показ личного состояния моделью: объекты по видам и «журнал закрыт для записи» (`viewStateJson`). */
+export type StateModelView = StateViewJson;
 
 export type StateModel = {
   view: () => StateModelView;
-  /** Желаемое (`state.v1.StateSnapshot`): `kinds` — управляемые виды, `prune` — удалить пропавшие из них,
-   * `rewrite` — переписать объекты целиком (новый ключ). Ждёт ответов сервера. */
-  apply: (
-    desired: unknown, opts?: { kinds?: string[]; prune?: boolean; rewrite?: boolean; base?: unknown },
-  ) => Promise<void>;
+  /** Объекты модели сейчас (что сравнивать с желаемым). */
+  objects: () => StateObject[];
+  /** Записи объектов (`stateSet`/`stateMark`) — по порядку; ждёт ответов сервера. */
+  write: (writes: StateWrites) => Promise<void>;
   submit: (intent: ModelJson) => Promise<void>;
   /** Свои неотправленные — серверу, затем догон журнала до головы. */
   sync: () => Promise<void>;
@@ -603,9 +597,22 @@ export type StateModel = {
   close: () => void;
 };
 
-/** Показ личного состояния модели (то, что уже в её памяти; без сети — сведённое в прошлый раз, T118). */
+/** Показ личного состояния модели (то, что уже в её памяти; без сети — сведённое в прошлый раз, T118): объекты по
+ * видам (`viewStateJson`, spec 036 T019). */
 export function stateViewOf(host: ModelHost): StateModelView {
-  return host.peek<StateModelView>('stateViewV1');
+  const view = host.peek<StateViewJson>('viewStateJson', { kinds: [] });
+  return { objects: view.objects || [], write_blocked: Boolean(view.write_blocked) };
+}
+
+/** Запись объекта личного состояния: негодный объект пропускается (как прежний мост), закрытый для записи журнал —
+ * отказ целиком. */
+async function runStateWrite(host: ModelHost, name: 'stateSet' | 'stateMark', args: unknown) {
+  try {
+    await host.run(name, args);
+  } catch (e) {
+    if (e instanceof ModelError && e.kind === 'WriteBlocked') throw e;
+    host.log(`модель: ${name} пропущен: ${String((e as Error)?.message ?? e)}`);
+  }
 }
 
 function unb64(text?: string) {
@@ -626,15 +633,17 @@ export function openStateModel(deps: StateModelDeps): StateModel {
   let closed = false;
   return {
     view: () => stateViewOf(host),
-    apply: async (desired, opts = {}) => {
+    objects: () => stateViewOf(host).objects || [],
+    write: async ({ sets, marks }) => {
       const before = sender.failures();
-      await host.run('stateApplyV1', {
-        snapshot: desired,
-        kinds: opts.kinds ?? [],
-        prune: Boolean(opts.prune),
-        rewrite: Boolean(opts.rewrite),
-        base: opts.base,
-      });
+      if (sets.length || marks.length) {
+        // Что уходит в журнал (виды и ключи без значений): разбор «правка не дошла / вернулась» по журналу вкладки
+        const brief = (a: { kind: string; key: string; delete?: boolean }) => (
+          `${a.delete ? '-' : ''}${a.kind.replace('OBJECT_KIND_', '')}:${a.key.slice(0, 24)}`);
+        host.log(`модель: личное состояние — ${[...sets.map(brief), ...marks.map((m) => `*${brief(m)}`)].join(', ')}`);
+      }
+      for (const args of sets) await runStateWrite(host, 'stateSet', args);
+      for (const args of marks) await runStateWrite(host, 'stateMark', args);
       await sender.idle();
       if (sender.failures() > before) throw new ModelError('Unavailable');
     },

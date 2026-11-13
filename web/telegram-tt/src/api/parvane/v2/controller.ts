@@ -18,23 +18,21 @@ import type { WireCallSignal } from '../callengine';
 import type { BlobSession } from '../cloudBlobs';
 import type { WireGroupInvite } from '../groupcall';
 import type {
-  HistoryIngestContext, HistorySource, RowsAll, RowsModel,
+  HistoryIngestContext, RowsAll, RowsModel,
 } from '../historyRows';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
-import type { ContentView, V2Content } from './contentMap';
+import type { ContentMutation, ContentView, V2Content } from './contentMap';
 import type { ModelJson, Protocol, StateModelView } from './engine';
 import type { EngineClient as PvClient } from './engineClient';
-import type { HistoryHost } from './history';
 import type {
-  EditPatch, HOp, HReadMark, HRowState,
+  EditPatch, HOp,
 } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
 import { withDetectedLinks } from '../autoEntities';
-import { reportMigration } from '../migrationProgress';
 import { SecureE2eStorage } from '../secureStorage';
 import { newMessageId } from '../wire';
 import {
@@ -57,8 +55,9 @@ import {
 } from './engine';
 import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
+import { historyBatchWindow } from './historyBatch';
 import {
-  applyEditPatch, compareMarkPoint, encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
+  encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
 } from './historyModel';
 import {
   buildBundleMark, deriveBundleKey, isBundleRolledBack, type KeyBundlePayload,
@@ -100,13 +99,13 @@ type Deps = {
   /** Хранилище строк журнала истории (spec 033): события переписки — операциями над строкой. */
   history?: {
     ingest: (op: HOp, ctx: HistoryIngestContext) => Promise<WireStoredMessage | undefined>;
-    advanceMark: (address: string, tsMs: number, id: string, source?: HistorySource) => Promise<boolean>;
+    advanceMark: (address: string, tsMs: number, id: string) => Promise<boolean>;
     receipt?: (address: string, uuid: string) => Promise<WireStoredMessage | undefined>;
+    /** spec 036 (`engine_rows`): строки и маркеры, изменённые моделью (входящее, журнал истории), — на показ. */
+    applyModelDelta?: (delta: ModelJson) => Promise<void>;
   };
   /** Модель профиля открыта (spec 035 T114): строки истории, которых не дождался показ, — показать. */
   onModelReady?: () => void;
-  /** Журнал истории аккаунта можно подключать (ключ личного состояния есть); `rekey` — как у `onStateReady`. */
-  onHistoryReady?: (host: HistoryHost, rekey?: 'self' | 'peer') => void;
   /** Живое уведомление `JournalNotice`: другое своё устройство дописало журнал состояния или истории. */
   onJournal?: (journal: 'state' | 'history') => void;
   /** Стек поднят на устройстве с ключом копии ключей аккаунта: можно свериться с копией. */
@@ -167,16 +166,6 @@ type Deps = {
   prefetchMedia?: (content: WireMessageContent) => void;
   /** Фото частной группы из журнала: секрет для вывода ключей скачивания (A0089-5). */
   rememberGroupPhoto?: (fileId: string, avatarKey: string) => void;
-  /** Разовый перенос (spec 035 T115): прежние строки истории (сводимые состояния; строки без `hs` уже переведены),
-   * маркеры «прочитано до», своё исходящее и границы очистки «у себя». */
-  legacyHistory?: () => Promise<{
-    states: { hs: HRowState; order?: number }[];
-    marks: Record<string, HReadMark>;
-    ownJournal: WireStoredMessage[];
-    cleared: Record<string, number>;
-  }>;
-  /** Перезалить открытое фото частной группы новым секретом (FR-071, GPHOTO-1): движок попросил после переноса. */
-  reuploadGroupPhoto?: (address: string, fileId: string) => Promise<boolean>;
   onCallSignal?: (
     from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string, device?: string,
   ) => void;
@@ -364,27 +353,37 @@ type EngineEvent = {
   journal?: 'state' | 'history';
 };
 
-const STATE_RECORD = 'v2-engine';
-// Состояние движка байтами (perf A1): прежняя запись `v2-engine` хранила base64
-// в JSON — читается как запасной вариант и удаляется после первой записи байтами
-const STATE_BYTES_RECORD = 'v2-engine-bin';
+// Копия ключей, положенная `importBackup`: импортируется в модель при следующем открытии
+const IMPORT_BACKUP_RECORD = 'v2-import-backup';
+// Записи прежнего клиента (до модели spec 035) — стираются при открытии модели (T149); с ними — курсор и очередь
+// прежнего журнала истории web (`hsync`, `hsync-outbox`: журнал ведёт модель, spec 036 T017)
+const LEGACY_ENGINE_RECORDS = ['v2-engine', 'v2-engine-bin', 'v2-engine-migrated', 'hsync', 'hsync-outbox'];
 // Состояние движка, снятое при «личность сброшена» (со слов сервера, подпись корня не проверена): не стирается
 // безвозвратно, живёт до успешной привязки/восстановления этого устройства
 const DROPPED_STATE_RECORD = 'v2-engine-dropped';
 // spec 035 (T113): ключ обёртки хранилища модели (32 байта, base64) — запись защищённого хранилища профиля
 const MODEL_KEY_RECORD = 'v2-model-device-key';
-// spec 035 (T115): состояние прежнего клиента (`v2-engine-bin`/`v2-engine`) перенесено в модель — старое не читается
-const ENGINE_MIGRATED_RECORD = 'v2-engine-migrated';
 // Чем открывалась модель профиля в последний раз (spec 035 T114): по нему модель открывается и без сети — показ
 // истории из её строк до подключения
 const MODEL_OPEN_RECORD = 'v2-model-open';
 // Сколько показ истории ждёт открытия модели (вход без сети до первого подключения на устройстве)
 const MODEL_WAIT_MS = 15000;
-// Разовый перенос (T115): точки M1–M6 (`contracts/migration.md`) — для экрана хода; записей за шаг `migrateStep`
-const MIGRATION_POINTS = 6;
-const MIGRATION_RECORDS_PER_STEP = 2000;
 // Опрос модели (сроки, инбокс раз в минуту — POLL_MS движка)
 const MODEL_TICK_MS = 15000;
+const MIN_MODEL_TICK_MS = 1000;
+
+/** Показ группы моделью (`GroupView`, spec 036 E6): только то, что web читает. */
+type ModelGroupView = {
+  info_json?: string; deleted?: boolean; can_rotate?: boolean; can_decide_requests?: boolean;
+  can_manage_invites?: boolean; can_ban?: boolean; can_add_admins?: boolean; can_delete_messages?: boolean;
+  version?: string | number;
+};
+
+/** Права себя в группе — решение модели (`GroupView`, spec 036 E6/T020). */
+export type GroupRights = {
+  canManageInvites: boolean; canDecideRequests: boolean; canRotate: boolean; canBan: boolean; canAddAdmins: boolean;
+  canDeleteMessages: boolean; version: number; isDeleted: boolean;
+};
 // Повторов добора нужды записи инбокса, после которых запись пропускается (сервер отдаст её снова)
 const NEED_ATTEMPTS = 6;
 const GROUP_RESYNC_MS = 3000;
@@ -498,13 +497,6 @@ const JOIN_KEY_RECORD = 'v2-join-recovery-key';
 const RELOAD_AFTER_CREATE_KEY = 'parvane:e2e:reloadAfterCreate';
 const ARE_DIAG_HOOKS_ENABLED = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1';
 
-function readE2e(key: string) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return undefined;
-  }
-}
 // Отказы, после которых повтор того же запроса имеет смысл (связь, частота)
 const TRANSIENT_CODES = new Set([
   'ERROR_CODE_UNAVAILABLE', 'ERROR_CODE_RATE_LIMITED', 'ERROR_CODE_UNSPECIFIED', 'ERROR_CODE_EXPIRED',
@@ -621,14 +613,6 @@ export function createV2Controller(deps: Deps) {
 
   function persistUrgent(): Promise<void> {
     return persistNow();
-  }
-
-  /** Прежнее состояние клиента (до переноса в модель, T115): байтами либо прежней записью base64. */
-  async function loadLegacyEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
-    const bytes = await target.loadBytesRecord(STATE_BYTES_RECORD);
-    if (bytes) return bytes;
-    const legacy = await target.loadRecord<string>(STATE_RECORD);
-    return legacy ? unb64(legacy) : undefined;
   }
 
   /** Клиент модели — с чистого листа (новое устройство); прежний снимок — по `archive` в DROPPED_STATE_RECORD. */
@@ -751,6 +735,7 @@ export function createV2Controller(deps: Deps) {
         return Promise.resolve(JSON.parse(out.result_json || '{}') as RowsAll);
       },
       view: (name, args) => Promise.resolve(h.peek(name, args)),
+      submit: (intent) => h.apply('submit', intent),
     };
   }
 
@@ -764,9 +749,6 @@ export function createV2Controller(deps: Deps) {
       deviceKey = b64(crypto.getRandomValues(new Uint8Array(32)));
       await target.saveRecord(MODEL_KEY_RECORD, deviceKey);
     }
-    const migrated = Boolean(await target.loadRecord<boolean>(ENGINE_MIGRATED_RECORD).catch(() => undefined));
-    const legacy = migrated ? undefined : await loadLegacyEngineState(target);
-    if (offline && legacy) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     modelOpenState = '';
     const opened = await ModelHost.open({
       user: self,
@@ -777,7 +759,14 @@ export function createV2Controller(deps: Deps) {
       host_driven: true,
       // Строки истории web рисует сам по содержимому в своём виде (spec 035 T114, `MessageView.wire`)
       features: ['wire_rows'],
-      legacy_present: Boolean(legacy),
+      // spec 036 (ENGINE-1): входящее к строкам применяет модель; журнал истории аккаунта (очередь, догон,
+      // контрольные точки, замена дальше горизонта) и маркеры «прочитано до» — тоже она, у web своего журнала нет
+      engine_rows: true,
+      // Окно пачки журнала истории: в обычной сборке — по умолчанию модели, в сборке сценариев — своё (e2e)
+      ...(() => {
+        const window = historyBatchWindow();
+        return window ? { history_batch_min_ms: window[0], history_batch_max_ms: window[1] } : {};
+      })(),
     }, {
       store: secureModelStore(target),
       send: (r) => sender.send(r),
@@ -790,125 +779,38 @@ export function createV2Controller(deps: Deps) {
     host = opened.host;
     hostUser = self;
     sender.bind(host);
-    if (modelOpenState === 'OPEN_STATE_MIGRATION_NEEDED') await migrateLegacyEngine(target, legacy);
     if (modelOpenState !== 'OPEN_STATE_READY') {
       deps.log(`v2: модель не открылась (${modelOpenState || 'нет итога'})`);
       throw new V2Error(modelOpenFailure(modelOpenState));
     }
+    await applyImportedBackup(target, host);
+    await Promise.all(LEGACY_ENGINE_RECORDS.map((name) => target.deleteRecord(name).catch(() => undefined)));
     if (!offline) await target.saveRecord(MODEL_OPEN_RECORD, { deviceId, domain }).catch(() => undefined);
     notifyModelReady();
     return host;
   }
 
-  /** Разовый перенос (T115, contracts/migration.md): состояние прежнего клиента — в модель шагами `migrateStep`
-   * (слой web); старые записи только помечаются «перенесено» после `READY` с шагом `mark-legacy`. */
-  async function migrateLegacyEngine(target: SecureE2eStorage, legacy: Uint8Array | undefined) {
-    if (!host) return;
-    const savedKey = await target.loadRecord<string>(KEY_RECORD);
-    const records = await legacyRecords(legacy, savedKey);
-    deps.log(`v2: перенос состояния клиента в модель (${records.length} записей)`);
-    const progress = (done: number, active = true) => reportMigration({
-      phase: 'engine', active, done, total: MIGRATION_POINTS,
-    });
-    progress(0);
-    // e2e (только диаг-сборка, T109): «вкладка закрыта» в точке M2/M4 — перенос встаёт после фиксации шага этой
-    // точки, сценарий закрывает страницу; размер части строк — мелкий, чтобы M2 пришлась на середину строк
-    const haltAt = ARE_DIAG_HOOKS_ENABLED ? Number(readE2e('parvane:e2e:migrationHalt') || 0) : 0;
-    const chunk = ARE_DIAG_HOOKS_ENABLED ? Number(readE2e('parvane:e2e:migrationChunk') || 0) : 0;
-    const haltIfAsked = async (point: number) => {
-      if (!haltAt || point < haltAt) return;
-      (window as { __parvaneMigrationHalted?: number }).__parvaneMigrationHalted = point;
-      deps.log(`v2: перенос остановлен сценарием в точке M${point}`);
-      await new Promise(() => undefined);
-    };
-    // M1: записи прежнего клиента — частями (строк истории могут быть десятки тысяч), последняя — `last`
-    let out: ModelJson = {};
-    for (let from = 0; from === 0 || from < records.length; from += MIGRATION_RECORDS_PER_STEP) {
-      const part = records.slice(from, from + MIGRATION_RECORDS_PER_STEP);
-      const last = from + MIGRATION_RECORDS_PER_STEP >= records.length;
-      out = await host.run('migrateStep', {
-        layer: 'web', records: part, last, chunk: chunk || undefined,
-      });
-    }
-    for (let i = 0; i < 400 && modelOpenState !== 'OPEN_STATE_READY'; i++) {
-      await sender.idle();
-      if (modelOpenState === 'OPEN_STATE_READY') break;
-      const status = host.peek<{ point?: number; done?: boolean; report_json?: string }>('migrateStatus');
-      progress(status.point || 0);
-      await haltIfAsked(status.point || 0);
-      if (status.done && modelOpenState !== 'OPEN_STATE_READY') {
-        deps.log(`v2: перенос остановлен: ${status.report_json || ''}`);
-        break;
-      }
-      out = await host.run('migrateStep', {});
-    }
-    const steps = ((out.open as ModelJson | undefined)?.migration as { steps?: string[] } | undefined)?.steps;
-    if (modelOpenState !== 'OPEN_STATE_READY') {
-      reportMigration({
-        phase: 'engine', active: false, done: 0, total: MIGRATION_POINTS, error: modelOpenState || 'stopped',
-      });
-      return;
-    }
-    if (!steps || steps.includes('mark-legacy')) {
-      await target.saveRecord(ENGINE_MIGRATED_RECORD, true);
-      await host.run('migrateFinish', {});
-    }
-    progress(MIGRATION_POINTS, false);
-    deps.log('v2: состояние клиента перенесено в модель');
-  }
-
-  /** Записи прежнего клиента для `migrateStep` (слой web, `backend/protocol/src/migrate/web.rs`): экспорт движка и
-   * его ключ, строки истории `m:<uuid>` со сводимым состоянием `hs` (строки кэша без `hs` хост переводит сам —
-   * тем же `historyRowFromWire`, что выгрузка «до»), маркеры `rm:`, своё исходящее `j:`, граница очистки. */
-  async function legacyRecords(legacy: Uint8Array | undefined, savedKey: string | undefined) {
-    const json = (value: unknown) => b64(new TextEncoder().encode(JSON.stringify(value)));
-    const records: { key: string; value: string }[] = [];
-    if (legacy) records.push({ key: 'record:v2-engine-bin', value: b64(legacy) });
-    if (savedKey) records.push({ key: 'record:v2-storage-key', value: json(savedKey) });
-    const history = await deps.legacyHistory?.().catch((e: unknown) => {
-      deps.log(`v2: прежняя история для переноса не прочитана: ${String(e)}`);
-      return undefined;
-    });
-    if (!history) return records;
-    // Место в ленте (ORDER-1) — вместе со строкой: перенос его сохраняет
-    history.states.forEach(({ hs, order }) => {
-      records.push({ key: `record:m:${hs.target}`, value: json({ hs, order }) });
-    });
-    Object.entries(history.marks).forEach(([address, mark]) => {
-      records.push({ key: `record:rm:${address}`, value: json({ address, mark }) });
-    });
-    history.ownJournal.forEach((stored) => records.push({ key: `record:j:${stored.id}`, value: json(stored) }));
-    if (Object.keys(history.cleared).length) {
-      records.push({ key: `localStorage:parvane:cleareduntil:${deps.getSelf()}`, value: json(history.cleared) });
-    }
-    return records;
-  }
-
-  // FR-071: фото частных групп, где мы админ, лежало открытым блобом — перезалить новым секретом под эпохой
-  const avatarReuploads = new Set<string>();
-
-  function queueAvatarReupload(hex: string) {
-    if (avatarReuploads.has(hex)) return;
-    avatarReuploads.add(hex);
-    void (async () => {
-      for (let i = 0; i < 60 && !ready; i++) await pause(1000);
-      const g = readGroup(hex);
-      if (!ready || !g?.avatarFileId || g.avatarKeyId || !canRotate(hex)) return;
-      const done = await deps.reuploadGroupPhoto?.(groupAddress(hex), g.avatarFileId).catch(() => false);
-      deps.log(`v2: фото группы ${hex} ${done ? 'перезалито с секретом' : 'не перезалито'}`);
-    })().finally(() => avatarReuploads.delete(hex));
+  /** Копия ключей (`importBackup`) — клиент модели из её экспорта; запись копии снимается после записи на диск. */
+  async function applyImportedBackup(target: SecureE2eStorage, model: ModelHost) {
+    const backup = await target.loadRecord<{ key: string; state: string }>(IMPORT_BACKUP_RECORD).catch(() => undefined);
+    if (!backup) return;
+    model.clientReplace('import', unb64(backup.state), unb64(backup.key));
+    await model.flush();
+    await target.deleteRecord(IMPORT_BACKUP_RECORD);
+    deps.log('v2: копия ключей импортирована в модель');
   }
 
   /** Изменения модели: события записей инбокса — тем же путём, что прежде; нужды клиента — добрать и повторить. */
   async function onModelDelta(delta: ModelJson) {
     const changes = (delta.changes as ModelJson[] | undefined) ?? [];
+    // Строки сперва: событие хосту (ниже) может искать только что показанное сообщение
+    await deps.history?.applyModelDelta?.(delta);
     for (const ch of changes) {
       if (ch.state_changed || ch.write_blocked) stateListener?.();
       const clientEvents = ch.client_events as { json?: string } | undefined;
-      if (clientEvents?.json) await applyRecordEvents(JSON.parse(clientEvents.json) as EngineEvent[]);
+      if (clientEvents?.json) await applyRecordEvents(JSON.parse(clientEvents.json) as EngineEvent[], true);
       const need = ch.needs as { kind?: string; detail?: string } | undefined;
       if (need?.kind === 'client' && need.detail) queueNeed(need.detail);
-      if (need?.kind === 'group_avatar_reupload' && need.detail) queueAvatarReupload(need.detail);
     }
   }
 
@@ -946,9 +848,12 @@ export function createV2Controller(deps: Deps) {
   /** Опрос модели (сроки, страховочный синк инбокса и личного состояния). */
   function startModelTicks() {
     if (modelTimer) return;
+    // Окно пачки журнала истории короче такта (сборка сценариев e2e) — такт под окно, иначе пачка опаздывает на такт
+    const batchMinMs = historyBatchWindow()?.[0] ?? MODEL_TICK_MS;
+    const tickMs = Math.max(MIN_MODEL_TICK_MS, Math.min(MODEL_TICK_MS, batchMinMs));
     modelTimer = setInterval(() => {
       if (ready && host) void host.tick().catch(() => undefined);
-    }, MODEL_TICK_MS);
+    }, tickMs);
   }
 
   /** Повтор подключения через задержку ряда повторов (или заданную). */
@@ -1237,7 +1142,6 @@ export function createV2Controller(deps: Deps) {
     // живут на соединении — после обрыва оформляются заново)
     void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
     deps.onStateReady?.(stateHost);
-    deps.onHistoryReady?.(historyHost);
     void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
     void startRecoveryUpkeep();
   }
@@ -1525,12 +1429,45 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** События записи инбокса (из изменений модели) — в конвейер показа. */
-  async function applyRecordEvents(events: EngineEvent[]) {
+  /** spec 036 (`engine_rows`): строку сообщения ведёт модель; хосту — то, чего в строке нет: самоуничтожение (вне
+   * журнала, только показ), режим L2 личного чата, домен папки облака, предзагрузка вложения в режиме L2. */
+  async function afterEngineRow(ev: EngineEvent, view: ContentView, author: string, to: string, isGroup: boolean) {
+    const self = deps.getSelf();
+    const chat = ev.chat || ev.from || '';
+    if (ev.disposition === 'stub' || view.mutation) return;
+    const wire = view.wire;
+    if (!wire) return;
+    const authorDomain = destForUser(author, serverDomain);
+    if (authorDomain && wire.kind === 'cloud_invite' && wire.container?.domain?.toLowerCase() === authorDomain) {
+      void cloud.noteRemoteDomain(authorDomain);
+    }
+    if (wire.ttl_secs) {
+      if (authorDomain && wire.file_id && !wire.blob_domain) wire.blob_domain = authorDomain;
+      const stored: WireStoredMessage = {
+        id: ev.opId!,
+        from: author,
+        to,
+        ts: Math.floor((ev.tsMs || Date.now()) / 1000),
+        content: wire,
+        reply_to: view.replyTo,
+        proof: author !== self ? ev.proof : undefined,
+      };
+      messages.set(stored);
+      await deps.applyExternal(stored);
+    }
+    if (wire.kind === 'chat_mode' && !isGroup) announceL2(author === self ? chat : author);
+    if (author !== self && wire.file_id && readL2(to === self ? author : to)?.active) {
+      deps.prefetchMedia?.(wire);
+    }
+  }
+
+  /** События записей; `isModelApplied` — строки и мутации уже применила модель (`engine_rows`, события её итога). */
+  async function applyRecordEvents(events: EngineEvent[], isModelApplied?: boolean) {
     if (!client) return;
     scheduleReciprocate(); // T185: запись могла принести ключ доступа участника группы
     for (const ev of events) {
       try {
-        await applyEvent(ev);
+        await applyEvent(ev, isModelApplied);
       } catch (e) {
         // Сбой одного события (например, журнал группы не дочитался) не должен
         // молча терять остальные и само событие: пишем причину; журнал группы
@@ -1578,6 +1515,15 @@ export function createV2Controller(deps: Deps) {
 
   function knownMessage(uuid: string): Promise<WireStoredMessage | undefined> {
     return messages.find(uuid);
+  }
+
+  /** Цель мутации — показанная строка вне модели (самоуничтожение собеседника, только память показа). */
+  function targetsMemoryRow(mutation: ContentMutation) {
+    const targets = 'targets' in mutation ? mutation.targets : [mutation.target];
+    return targets.some((uuid) => {
+      const known = messages.get(uuid);
+      return Boolean(known && !known.inModel && !known.deleted);
+    });
   }
 
   // C7-2 (ревью 7 ноя 2026): цель мутации — известное сообщение ДРУГОГО чата (участник общей группы личным
@@ -1795,7 +1741,7 @@ export function createV2Controller(deps: Deps) {
     return reply;
   }
 
-  async function applyEvent(ev: EngineEvent) {
+  async function applyEvent(ev: EngineEvent, isModelApplied?: boolean) {
     if (ev.type === 'call') {
       if (!ev.from || !ev.signal) return;
       const invite = groupInviteFromV2(ev.signal);
@@ -1840,6 +1786,16 @@ export function createV2Controller(deps: Deps) {
         : ((m.from === peer && m.to === self) || (m.from === self && m.to === peer)));
       // Ключ доставки собеседника мог прийти только что — канал «печатает» чата
       void ensureEphemeral([isGroup ? to : chat]);
+      // spec 036: строку (и заглушку), мутации и квитанции применила модель; хосту — только своё (L2, домен блоба
+      // облака, предзагрузка) и строки вне журнала (самоуничтожение)
+      // События не из итога модели (своя мутация, отложенные записи группы, история публичной группы) — прежним путём:
+      // строка уходит в модель `rowsApply` (журнал ведёт она)
+      // Исключение — мутация строки самоуничтожения собеседника: такая строка живёт только в памяти показа (вне
+      // модели и журнала), модель её цели не знает — мутация идёт прежним путём (`patchOutsideJournal` строк)
+      if (isModelApplied && !(mutation && targetsMemoryRow(mutation))) {
+        await afterEngineRow(ev, view, author, to, isGroup);
+        return;
+      }
       if (ev.disposition === 'stub') {
         const stub: WireStoredMessage = {
           id: ev.opId,
@@ -1866,10 +1822,10 @@ export function createV2Controller(deps: Deps) {
       if (mutation?.kind === 'edit') {
         const { target } = mutation;
         if (!hpeer || !history) return;
+        // Заплатку на содержимое строки накладывает модель (`views::effective_content`) — и у известной строки, и у
+        // сироты (правка раньше сообщения)
         const patch: EditPatch = mutation.patch;
-        const known = await knownMessage(target);
-        const isVisible = known && !known.deleted && inThisChat(known);
-        const body = isVisible ? { content: applyEditPatch(known.content, patch) } : { edit_patch: patch };
+        const body = { edit_patch: patch };
         await history.ingest({ edit: { target, chat: hpeer, stamp, body: encodeBody(body), by: author } }, {
           source, author,
         });
@@ -1916,9 +1872,9 @@ export function createV2Controller(deps: Deps) {
             const known = await knownMessage(target);
             if (!known || !inThisChat(known)) continue;
             const tsMs = rowTsMs(known);
-            if (!best || compareMarkPoint(tsMs, known.id, best.tsMs, best.id) > 0) best = { tsMs, id: known.id };
+            if (!best || tsMs > best.tsMs || (tsMs === best.tsMs && known.id > best.id)) best = { tsMs, id: known.id };
           }
-          if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id, 'inbox');
+          if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id);
           return;
         }
         for (const target of mutation.targets) {
@@ -1995,7 +1951,6 @@ export function createV2Controller(deps: Deps) {
     // Своё устройство передало (новый) ключ личного состояния — журнал заново
     if (ev.type === 'stateKeyRotated') {
       deps.onStateReady?.(stateHost, 'peer');
-      deps.onHistoryReady?.(historyHost, 'peer');
     }
     // Своё другое устройство дописало журнал (spec 033): забрать сразу, без ожидания опроса
     if (ev.type === 'journal' && ev.journal) deps.onJournal?.(ev.journal);
@@ -2116,16 +2071,14 @@ export function createV2Controller(deps: Deps) {
     isHalted = true;
     const target = storage || await SecureE2eStorage.open(self);
     await target.saveRecord(KEY_RECORD, backup.key);
-    // Модель профиля — заново: следующий запуск перенесёт состояние из копии (как прежнюю запись, T115)
+    // Модель профиля — заново: следующий запуск импортирует клиента из копии (`applyImportedBackup`)
     host?.close();
     host = undefined;
     hostUser = '';
     client = undefined;
     const modelRecords = (await target.loadModelRecords('model:')).map((r) => r.name);
     await target.writeModelRecords([], modelRecords);
-    await target.deleteRecord(ENGINE_MIGRATED_RECORD).catch(() => undefined);
-    await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
-    await target.saveRecord(STATE_RECORD, backup.state);
+    await target.saveRecord(IMPORT_BACKUP_RECORD, { key: backup.key, state: backup.state });
     if (backup.rootBackup) await target.saveRecord(ROOT_BACKUP_RECORD, backup.rootBackup);
     if (backup.invites) await target.saveRecord(INVITES_RECORD, backup.invites);
     deps.log('v2: устройство восстановлено из копии ключей');
@@ -2873,7 +2826,6 @@ export function createV2Controller(deps: Deps) {
       // Ключ личного состояния сменён — журнал состояния заново под новым ключом
       if (outcome.stateKeyVersion !== undefined) {
         deps.onStateReady?.(stateHost, 'self');
-        deps.onHistoryReady?.(historyHost, 'self');
       }
     });
     if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
@@ -3825,7 +3777,26 @@ export function createV2Controller(deps: Deps) {
     await syncGroup(hex).catch((e: unknown) => deps.log(`v2: журнал группы ${hex} не перечитан: ${String(e)}`));
   }
 
+  /** Вид группы моделью (spec 036 E6): сведения журнала и производные права; группы в модели ещё нет — `undefined`. */
+  function modelGroupView(hex: string): ModelGroupView | undefined {
+    if (!host) return undefined;
+    try {
+      return host.peek<ModelGroupView>('viewGroup', { group: { domain: groupDomainOf(hex), id: hexToB64(hex) } });
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Сведения группы из её журнала: показ модели (`GroupView.info_json`, ENGINE-1), без модели — клиент движка. */
   function readGroup(hex: string): EngineGroupInfo | undefined {
+    const view = modelGroupView(hex);
+    if (view?.info_json) {
+      try {
+        return JSON.parse(view.info_json) as EngineGroupInfo;
+      } catch {
+        // ниже — сведения клиента
+      }
+    }
     if (!client) return undefined;
     try {
       return JSON.parse(client.groupInfo(hex)) as EngineGroupInfo;
@@ -3883,11 +3854,9 @@ export function createV2Controller(deps: Deps) {
     };
   }
 
+  // Кто начинает новую эпоху — решение модели (`GroupView.can_rotate`)
   function canRotate(hex: string) {
-    const g = readGroup(hex);
-    const self = deps.getSelf();
-    const me = g?.members.find(({ user }) => user === self);
-    return Boolean(g && !g.deleted && me && (me.role === 2 || me.role === 3));
+    return Boolean(groupRights(groupAddress(hex))?.canRotate);
   }
 
   /** Показать группу UI; админ начинает новую эпоху после смены состава/прав. */
@@ -4228,6 +4197,23 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  /** Права себя в группе из показа модели; нет — модель не открыта либо группы в ней нет. */
+  function groupRights(address: string): GroupRights | undefined {
+    const view = isV2GroupAddress(address) ? modelGroupView(groupHex(address)) : undefined;
+    if (!view) return undefined;
+    const isDeleted = Boolean(view.deleted);
+    return {
+      canManageInvites: Boolean(view.can_manage_invites) && !isDeleted,
+      canDecideRequests: Boolean(view.can_decide_requests) && !isDeleted,
+      canRotate: Boolean(view.can_rotate) && !isDeleted,
+      canBan: Boolean(view.can_ban) && !isDeleted,
+      canAddAdmins: Boolean(view.can_add_admins) && !isDeleted,
+      canDeleteMessages: Boolean(view.can_delete_messages) && !isDeleted,
+      version: Number(view.version || 0),
+      isDeleted,
+    };
+  }
+
   function chatCapabilities(address: string): ChatCapabilities | undefined {
     const chat = host && ready ? peerForAddress(address, serverDomain) : undefined;
     if (!chat) return undefined;
@@ -4551,10 +4537,7 @@ export function createV2Controller(deps: Deps) {
   }
 
   function canDecideRequests(hex: string) {
-    const g = readGroup(hex);
-    const self = deps.getSelf();
-    const me = g?.members.find(({ user }) => user === self);
-    return Boolean(g && !g.deleted && me && (g.owner === self || (me.role === 2 && me.rights?.invite_users)));
+    return Boolean(groupRights(groupAddress(hex))?.canDecideRequests);
   }
 
   function notePendingRequests(hex: string, count: number) {
@@ -4909,13 +4892,6 @@ export function createV2Controller(deps: Deps) {
 
   // ── журнал личного состояния (T098): хост — stateJournal.ts ─────────────────
 
-  // Журнал истории аккаунта (spec 033): сессия — ключ из ключа личного состояния
-  const historyHost: HistoryHost = {
-    openSession: () => (ready ? client?.historySession() : undefined),
-    call: (method, body) => call('id', method, body),
-    log: deps.log,
-  };
-
   // spec 035 T114: личное состояние — модель движка (`state.ops.*`); ключи — у прежнего клиента (переходят в WASM)
   const stateHost: StateJournalHost = {
     openModel: () => {
@@ -5114,9 +5090,8 @@ export function createV2Controller(deps: Deps) {
       const pending = await st.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
       const deviceKey = await st.loadRecord<string>(MODEL_KEY_RECORD);
       const hasModel = Boolean(deviceKey && await st.loadModelRecord('model:root'));
-      const migrated = Boolean(await st.loadRecord<boolean>(ENGINE_MIGRATED_RECORD).catch(() => undefined));
-      const legacy = pending || (hasModel && migrated) ? undefined : await loadLegacyEngineState(st);
-      const snapshot = pending ? unb64(pending.state) : legacy;
+      const imported = pending ? undefined : await st.loadRecord<{ key: string; state: string }>(IMPORT_BACKUP_RECORD);
+      const snapshot = pending ? unb64(pending.state) : imported ? unb64(imported.state) : undefined;
       const config = {
         user,
         device_id: deviceId || 'proof',
@@ -5181,24 +5156,6 @@ export function createV2Controller(deps: Deps) {
     auditCounters: () => ({
       groupCacheWrites: 0, groups: client?.groupList().length ?? 0,
     }),
-    /** Источники выгрузки «ничего не потеряно» (spec 035, T007): JSON движка, только чтение. */
-    auditSources: () => {
-      if (!client || !ready) return undefined;
-      const engine = client;
-      const self = deps.getSelf();
-      const containers = JSON.parse(client.cloudContainers()) as { id: string }[];
-      return {
-        plannerState: engine.plannerStateJson() || undefined,
-        cloud: containers.map((container) => ({ container, state: engine.cloudStateJson(container.id) || undefined })),
-        groups: engine.groupList().map((hex) => ({ hex, info: readGroup(hex) })),
-        deviceLogs: [{
-          user: self, version: Number(engine.logVersion(self)), devices: JSON.parse(client.logDevices(self)) as unknown,
-        }],
-        accountKeys: {
-          state: engine.hasStateKey(), planner: engine.plannerHasKey(),
-        },
-      };
-    },
     cloud,
     blobCall,
     linkGrantMaterial,
@@ -5240,10 +5197,9 @@ export function createV2Controller(deps: Deps) {
     settleState: persistNow,
     cachedGroups,
     groupContentHidden,
-    migrationState: () => ({ open: modelOpenState }),
     stateViewOffline,
-    engineAuditDump: () => (host ? host.peek<{ jsonl?: string }>('auditDump').jsonl || '' : undefined),
     chatCapabilities,
+    groupRights,
     changeGroup,
     setGroupInfo,
     checkInvite,

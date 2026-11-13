@@ -170,6 +170,10 @@ void setKey(const std::string &key32) {
     g_key = (key32.size() == 32) ? key32 : std::string();
 }
 
+std::string currentKey() {
+    return keyCopy();
+}
+
 bool enabled() {
     std::lock_guard<std::mutex> lk(g_mu);
     return !g_key.empty();

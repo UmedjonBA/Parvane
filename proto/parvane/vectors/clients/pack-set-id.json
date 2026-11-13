@@ -1,0 +1,10 @@
+{
+ "comment": "PACK-1 (spec 036): id набора стикеров у всех клиентов — ключ объекта STICKER_PACK: `h:` + отпечаток содержимого (PACK-2, base64 как на проводе, в том числе с «/») либо `n:` + нормализованное имя; id стикера — имя файла манифеста. Избранный стикер (FAVED_STICKER) — set_id ‖ «/» ‖ sticker_id: последний «/» разделяет однозначно (имя файла «/» не содержит). Данные выдуманные",
+ "cases": [
+  {"name": "отпечаток с «/» и «+»", "content_hash": "ab/cd+ef/gh==", "pack_name": "Котики", "set_id": "h:ab/cd+ef/gh==", "sticker": "01.webp", "faved_key": "h:ab/cd+ef/gh==/01.webp"},
+  {"name": "без отпечатка — имя", "content_hash": "", "pack_name": "Мои стикеры", "set_id": "n:Мои стикеры", "sticker": "a.tgs", "faved_key": "n:Мои стикеры/a.tgs"},
+  {"name": "имя чистится: знаки и края", "content_hash": "", "pack_name": "  Котики!!! (2026) ", "set_id": "n:Котики 2026", "sticker": "x.png", "faved_key": "n:Котики 2026/x.png"},
+  {"name": "имя длиннее 32 знаков обрезается", "content_hash": "", "pack_name": "абвгдеёжзийклмнопрстуфхцчшщъыьэюя", "set_id": "n:абвгдеёжзийклмнопрстуфхцчшщъыьэю", "sticker": "1.webp", "faved_key": "n:абвгдеёжзийклмнопрстуфхцчшщъыьэю/1.webp"},
+  {"name": "пустое имя", "content_hash": "", "pack_name": "!!!", "set_id": "n:Pack", "sticker": "1.webp", "faved_key": "n:Pack/1.webp"}
+ ]
+}

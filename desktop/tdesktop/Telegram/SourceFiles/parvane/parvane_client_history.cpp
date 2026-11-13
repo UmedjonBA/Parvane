@@ -3,22 +3,22 @@
 // хранение — модель движка профиля (spec 035 T125, ENGINE-1: `ModelRows` ядра над моделью сессии v2 — та же, что
 // держит клиентское ядро; без сети — по прошлому открытию); права удаления — движок. Здесь — собеседник журнала по
 // адресу чата, разовый перенос прежних файлов строк в модель (spec 033 RowState, журнал до spec 033 и
-// `parvane-read.txt`) и мост к UI (parvane_client.cpp: ShowHistoryStates, ApplyReadState, ReplaceHistoryOnMain).
+// `parvane-read.txt`) и мост к UI (parvane_client.cpp: ShowHistoryStates, ShowModelRows, ApplyReadState).
 //
 // Файлы аккаунта (шифрует storecrypt):
 //   tdata/parvane-history-<адрес>.jsonl        — прежние строки (RowState, до spec 033 — StoredMessage): только
 //                                                 читаются один раз при переносе в модель, не удаляются (D2);
 //   tdata/parvane-readmarks-<адрес>.json       — прежние маркеры «прочитано до» (так же);
-//   tdata/parvane-history-sync-<адрес>-meta.json / -pending.json / -imported.json — курсор, голова, точка, флаг
-//                                                 переноса, очередь своих, отметка переноса строк в модель.
+//   tdata/parvane-history-sync-<адрес>-pending.json / -imported.json — очередь прежнего журнала устройства (до
+//                                                 spec 036; передаётся модели один раз), отметка переноса строк в модель.
+// spec 036 (ENGINE-1, `engine_rows`): журнал истории аккаунта ведёт модель сессии; показ строк — её готовые
+// MessageView (`message_upsert/remove`), счётчики — `unread_changed`, прочтение — намерение `read`.
 #include "parvane/parvane_client_internal.h"
 
 #include <cstdio>
 #include <fstream>
 
-#include <parvane/audit_dump.h>
 #include <parvane/history_sync.h>
-#include <parvane/test_counters.h>
 #include <parvane/v2_engine.h>
 #include <parvane/v2_session.h>
 
@@ -303,79 +303,28 @@ void EnsureHistory(const QString &self) {
 	auto cfg = parvane::history::HistorySyncConfig();
 	cfg.self = self.toStdString();
 	cfg.rows = store.get();
-	// Запросы прежнего аккаунта после выхода не уходят: поток журнала дорабатывает без сети
-	cfg.request = [generation](const std::string &method, const std::string &body) {
-		const auto s = AccountGenerationIs(generation) ? V2Ready() : nullptr;
-		if (!s) {
-			throw parvane::v2::V2Error("ERROR_CODE_UNAVAILABLE");
-		}
-		return s->busRequest(false, method, body, std::string());
-	};
 	cfg.openEngine = [generation]() -> std::unique_ptr<parvane::v2::HistorySession> {
 		const auto s = AccountGenerationIs(generation) ? V2Ready() : nullptr;
 		return s ? s->openHistorySession() : nullptr;
 	};
-	cfg.onRows = [generation](const std::vector<parvane::json> &states) {
-		for (const auto &s : states) {
-			const auto &chat = s.value("chat", parvane::json());
-			if (chat.contains("group") && chat["group"].is_object()) {
-				NoteHistoryGroupDomain(
-					HistoryChatAddress(chat),
-					chat["group"].value("domain", std::string()),
-					/*authoritative=*/false);
-			}
+	// spec 036 (ENGINE-1, `engine_rows`): журнал истории аккаунта (пачка S7-3, догон, вход по точке, контрольные точки)
+	// ведёт модель сессии; здесь — строки модели и прочтение её намерением (квитанции шлёт модель)
+	cfg.readIntent = [generation](const parvane::json &mark) {
+		// Намерение ходит в сеть (квитанции) — не на главном потоке; счётчик чата придёт `unread_changed`. Без сессии
+		// (нет связи) — маркер операцией журнала (модель сведёт, квитанции уйдут при следующем прочтении)
+		if (!AccountGenerationIs(generation) || !V2Ready()) {
+			return false;
 		}
-		crl::on_main([generation, states] {
-			if (AccountGenerationIs(generation)) {
-				ShowHistoryStates(states);
+		crl::async([generation, mark] {
+			if (const auto s = AccountGenerationIs(generation) ? V2Ready() : nullptr) {
+				s->readTo(mark);
 			}
 		});
+		return true;
 	};
-	cfg.onMark = [generation](const std::string &, const parvane::json &mark) {
-		const auto address = HistoryChatAddress(mark.value("chat", parvane::json()));
-		crl::on_main([generation, address] {
-			if (AccountGenerationIs(generation)) {
-				ApplyReadState(address);
-			}
-		});
-	};
-	cfg.onReplaced = [generation] {
-		crl::on_main([generation] {
-			if (AccountGenerationIs(generation)) {
-				ReplaceHistoryOnMain();
-			}
-		});
-	};
-	// Перенос (FR-024): всё, что устройство знает, — в журнал один раз (повторы с других устройств сводятся).
-	// Строки — модели (не глобальные): живут, пока поток этого журнала не остановлен.
-	cfg.legacyOps = [raw = store.get()] {
-		auto ops = std::vector<parvane::json>();
-		for (auto &s : raw->all()) {
-			if (!IsClearedRow(s)) {
-				ops.push_back({ { "state", std::move(s) } });
-			}
-		}
-		for (auto &m : raw->marks()) {
-			ops.push_back({ { "read", std::move(m) } });
-		}
-		return ops;
-	};
-	cfg.dropRow = [](const parvane::json &state) { return IsClearedRow(state); };
 	cfg.log = [](const std::string &m) {
 		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
 	};
-	// S7-3: журнал пишется пачкой раз в 30–120 с; сценарии стенда (dev-сборка, PARVANE_DEV_HOOKS=1 и gateway на
-	// loopback — ParvaneDevEnv) сужают окно: PARVANE_HISTORY_BATCH_MS=<мин>,<макс> (verify_lib.sh — 1000,3000)
-	if (const char *bv = ParvaneDevEnv("PARVANE_HISTORY_BATCH_MS"); bv && *bv) {
-		const auto parts = QString::fromUtf8(bv).split(',');
-		auto okLo = false, okHi = false;
-		const auto lo = parts.value(0).toLongLong(&okLo);
-		const auto hi = parts.value(1, parts.value(0)).toLongLong(&okHi);
-		if (okLo && okHi && lo >= 0 && hi >= lo) {
-			cfg.batchMinMs = lo;
-			cfg.batchMaxMs = hi;
-		}
-	}
 	auto sync = std::make_shared<parvane::history::HistorySync>(std::move(cfg));
 	{
 		std::lock_guard<std::mutex> lk(g_historyMutex);
@@ -420,6 +369,8 @@ void EnsureHistory(const QString &self) {
 		}
 		// Снимок истории прежнего механизма (spec 015) больше не применяется — его отметка не нужна
 		QFile::remove(AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q));
+		// ✓✓ своих — доставка строки в модели (spec 036): прежний файл отметок не нужен
+		QFile::remove(AccountFilePath(u"parvane-outbox-read-"_q, self, u".json"_q));
 		auto deferred = std::vector<std::function<void()>>();
 		{
 			std::lock_guard<std::mutex> lk(g_historyMutex);
@@ -502,12 +453,6 @@ std::shared_ptr<parvane::history::HistorySync> HistorySyncNow() {
 	return g_historySync;
 }
 
-void OnHistorySessionEvent(const parvane::json &ev) {
-	if (const auto sync = HistorySyncNow()) {
-		sync->onSessionEvent(ev);
-	}
-}
-
 parvane::json HistoryRecordMessage(const parvane::StoredMessage &sm, bool own, std::int64_t tsMs) {
 	if (sm.id.empty() || !JournaledContent(sm.content)) {
 		return nullptr;
@@ -550,17 +495,10 @@ std::optional<parvane::json> HistoryState(const QString &uuid) {
 	return sync ? sync->state(uuid.toStdString()) : std::nullopt;
 }
 
-std::optional<parvane::StoredMessage> StoredFromHistory(const parvane::json &state, parvane::json *viewOut) {
-	parvane::json view;
-	try {
-		view = parvane::history::call("historyView", { { "state", state } });
-	} catch (const std::exception &) {
-		return std::nullopt;
-	}
-	if (viewOut) {
-		*viewOut = view;
-	}
-	if (view.value("orphan", true)) {
+// Показ строки — готовый вид модели (MessageView, `wire_rows`; ядро переводит его в прежнюю форму показа,
+// `parvane::history::viewOfModel`) → StoredMessage конвейера UI. Своя расстановки и сведения у хоста нет (ENGINE-1).
+std::optional<parvane::StoredMessage> StoredFromView(const parvane::json &view) {
+	if (!view.is_object() || view.value("orphan", true)) {
 		return std::nullopt;
 	}
 	const auto self = SelfAddress().toStdString();
@@ -569,6 +507,7 @@ std::optional<parvane::StoredMessage> StoredFromHistory(const parvane::json &sta
 		return std::nullopt;
 	}
 	auto sm = parvane::StoredMessage();
+	sm.inModel = true;
 	sm.id = view.value("id", std::string());
 	sm.from = view.value("from", std::string());
 	// Своё под прежним адресом (смена ника) — своё: показывается исходящим
@@ -589,16 +528,86 @@ std::optional<parvane::StoredMessage> StoredFromHistory(const parvane::json &sta
 	sm.proof = body.value("proof", std::string());
 	sm.edited = view.value("edited", false);
 	sm.pinned = view.value("pinned", false);
+	sm.read = view.value("read", false);
 	for (const auto &r : view.value("reactions", parvane::json::array())) {
 		auto rs = parvane::ReactionSummary();
 		rs.emoji = r.value("emoji", std::string());
 		rs.count = r.value("count", std::int64_t(0));
+		rs.mine = r.value("mine", false);
 		for (const auto &u : r.value("users", parvane::json::array())) {
 			rs.mine = rs.mine || (u.is_string() && IsHistorySelf(u.get<std::string>()));
 		}
 		sm.reactions.push_back(std::move(rs));
 	}
 	return sm;
+}
+
+// Снятая моделью строка (надгробие, очистка, замена точкой) → томбстоун конвейера UI (чат — по собеседнику).
+parvane::StoredMessage RemovedStored(const QString &uuid, const QString &chat) {
+	auto sm = parvane::StoredMessage();
+	sm.inModel = true;
+	sm.id = uuid.toStdString();
+	sm.deleted = true;
+	const auto self = SelfAddress().toStdString();
+	if (parvane::v2::isGroupAddress(chat.toStdString())) {
+		sm.from = self;
+		sm.to = chat.toStdString();
+	} else {
+		sm.from = chat.toStdString();
+		sm.to = self;
+	}
+	return sm;
+}
+
+std::optional<parvane::StoredMessage> StoredFromHistory(const parvane::json &state, parvane::json *viewOut) {
+	const auto store = StoreNow();
+	const auto target = state.value("target", std::string());
+	if (!store || target.empty() || !state.contains("row")) {
+		return std::nullopt; // сирота — ждёт сообщение
+	}
+	const auto views = store->views({ target });
+	if (views.empty()) {
+		// Строки нет в показе модели (надгробие) — томбстоун
+		const auto chat = HistoryChatAddress(state.value("chat", parvane::json()));
+		if (viewOut) {
+			*viewOut = parvane::json{ { "id", target }, { "chat", state.value("chat", parvane::json()) }, { "visible", false } };
+		}
+		return chat.isEmpty() ? std::nullopt : std::make_optional(RemovedStored(QString::fromStdString(target), chat));
+	}
+	const auto view = parvane::history::viewOfModel(views.front());
+	if (viewOut) {
+		*viewOut = view;
+	}
+	return StoredFromView(view);
+}
+
+bool HistoryViewVisible(const QString &uuid) {
+	const auto store = StoreNow();
+	return store && !uuid.isEmpty() && !store->views({ uuid.toStdString() }).empty();
+}
+
+std::vector<parvane::json> HistoryChatViews(const QString &chatAddress) {
+	auto out = std::vector<parvane::json>();
+	if (const auto store = StoreNow()) {
+		for (const auto &v : store->chatViews(HistoryChatKey(chatAddress).toStdString())) {
+			if (auto view = parvane::history::viewOfModel(v); view.is_object()) {
+				out.push_back(std::move(view));
+			}
+		}
+	}
+	return out;
+}
+
+std::vector<parvane::json> HistoryAllViews() {
+	auto out = std::vector<parvane::json>();
+	if (const auto store = StoreNow()) {
+		for (const auto &v : store->allViews()) {
+			if (auto view = parvane::history::viewOfModel(v); view.is_object()) {
+				out.push_back(std::move(view));
+			}
+		}
+	}
+	return out;
 }
 
 std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress) {
@@ -657,90 +666,6 @@ void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress) {
 			move(from + name, to + name);
 		}
 	}
-}
-
-// ── выгрузка «ничего не потеряно» (spec 035, T007) ──
-namespace {
-
-std::atomic<bool> g_auditDumpStarted = false;
-
-[[nodiscard]] std::string WriteAuditDump(const std::string &path) {
-	parvane::audit::Sources src;
-	if (const auto store = StoreNow()) {
-		parvane::audit::addModelRows(src, *store);
-	}
-	const auto self = SelfAddress().toStdString();
-	if (const auto s = V2Ready()) {
-		const auto snapshot = s->stateSnapshot();
-		if (!snapshot.is_null()) src.stateSnapshot = snapshot.dump();
-		const auto planner = s->engineCall("plannerStateJson", parvane::json::object());
-		if (!planner.is_null()) src.plannerState = planner.dump();
-		const auto containers = s->engineCall("cloudContainers", parvane::json::object());
-		for (const auto &c : containers.is_array() ? containers : parvane::json::array()) {
-			const auto id = c.value("id", std::string());
-			const auto state = s->engineCall("cloudStateJson", parvane::json{ { "id", id } });
-			src.cloud.emplace_back(c, state.is_null() ? std::string() : state.dump());
-		}
-		const auto groups = s->engineCall("groupList", parvane::json::object());
-		for (const auto &g : groups.is_array() ? groups : parvane::json::array()) {
-			const auto hex = g.get<std::string>();
-			src.groups.emplace_back(hex, s->engineCall("groupInfo", parvane::json{ { "group", hex } }));
-		}
-		src.deviceLogs.push_back(parvane::json{
-			{ "user", self },
-			{ "version", s->engineCall("logVersion", parvane::json{ { "user", self } }) },
-			{ "devices", s->engineCall("logDevices", parvane::json{ { "user", self } }) },
-		});
-		src.accountKeys = parvane::json{
-			{ "state", s->engineCall("hasStateKey", parvane::json::object()) },
-			{ "planner", s->engineCall("plannerHasKey", parvane::json::object()) },
-		};
-	}
-	const auto lines = parvane::audit::build(src);
-	const auto tmp = path + ".tmp";
-	{
-		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-		out << parvane::audit::jsonl(lines);
-	}
-	std::rename(tmp.c_str(), path.c_str());
-	// spec 035 (T123, contracts/migration.md): выгрузка «после» — новым движком (`auditDump` модели профиля)
-	if (const auto s = V2Ready()) {
-		const auto model = s->modelAuditDump();
-		if (!model.empty()) {
-			const auto modelPath = path + ".model";
-			{
-				std::ofstream out(modelPath + ".tmp", std::ios::binary | std::ios::trunc);
-				out << model;
-			}
-			std::rename((modelPath + ".tmp").c_str(), modelPath.c_str());
-		}
-	}
-	return std::to_string(lines.size());
-}
-
-} // namespace
-
-void StartAuditDumpIfRequested() {
-	const char *path = ParvaneDevEnv("PARVANE_AUDIT_DUMP");
-	if (!path || !*path || g_auditDumpStarted.exchange(true)) {
-		return;
-	}
-	const char *every = ParvaneDevEnv("PARVANE_AUDIT_DUMP_EVERY");
-	const int seconds = std::max(1, every && *every ? std::atoi(every) : 15);
-	std::thread([target = std::string(path), seconds] {
-		for (;;) {
-			std::this_thread::sleep_for(std::chrono::seconds(seconds));
-			try {
-				const auto count = WriteAuditDump(target);
-				LOG(("Parvane: audit dump → %1 (%2 строк); счётчики SC-009: %3").arg(
-					QString::fromStdString(target),
-					QString::fromStdString(count),
-					QString::fromStdString(parvane::counters::summary())));
-			} catch (const std::exception &e) {
-				LOG(("Parvane: audit dump не снят: %1").arg(QString::fromUtf8(e.what())));
-			}
-		}
-	}).detach();
 }
 
 } // namespace Internal

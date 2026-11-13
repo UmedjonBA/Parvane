@@ -91,7 +91,6 @@ void from_json(const nlohmann::json &j, ObjectKind &v);
 enum class OpenState : int32_t {
     OPEN_STATE_UNSPECIFIED = 0,
     OPEN_STATE_READY = 1,
-    OPEN_STATE_MIGRATION_NEEDED = 2,
     OPEN_STATE_TOO_NEW = 3,
     OPEN_STATE_LOCKED = 4,
 };
@@ -125,7 +124,6 @@ enum class ServerInputKind : int32_t {
 void to_json(nlohmann::json &j, const ServerInputKind &v);
 void from_json(const nlohmann::json &j, ServerInputKind &v);
 
-struct AuditDump;
 struct CallResult;
 struct Capabilities;
 struct CapabilitiesRequest;
@@ -169,13 +167,9 @@ struct IntentStateSetRemove;
 struct IntentTyping;
 struct JournalState;
 struct KindFormat;
-struct LegacyRecord;
 struct MarkValue;
 struct MessageRemove;
 struct MessageView;
-struct MigrateStatus;
-struct MigrateStep;
-struct MigrationPlan;
 struct MigrationProgress;
 struct ModelChange;
 struct ModelDelta;
@@ -228,12 +222,6 @@ struct ViewTaskOffer;
 struct ViewText;
 struct Wrap;
 struct WriteBlocked;
-
-struct AuditDump {
-    std::string jsonl;
-};
-void to_json(nlohmann::json &j, const AuditDump &m);
-void from_json(const nlohmann::json &j, AuditDump &m);
 
 struct CallResult {
     std::string result_json;
@@ -316,8 +304,13 @@ struct EngineConfig {
     uint64_t memory_budget_bytes = 0;
     std::string device_key;
     bool vectors = false;
-    bool legacy_present = false;
     bool host_driven = false;
+    bool engine_rows = false;
+    uint32_t history_batch_min_ms = 0;
+    uint32_t history_batch_max_ms = 0;
+    uint64_t history_checkpoint_age_ms = 0;
+    uint32_t history_checkpoint_records = 0;
+    uint32_t history_checkpoint_jitter_ms = 0;
 };
 void to_json(nlohmann::json &j, const EngineConfig &m);
 void from_json(const nlohmann::json &j, EngineConfig &m);
@@ -398,43 +391,12 @@ struct KindFormat {
 void to_json(nlohmann::json &j, const KindFormat &m);
 void from_json(const nlohmann::json &j, KindFormat &m);
 
-struct LegacyRecord {
-    std::string key;
-    std::string value;
-};
-void to_json(nlohmann::json &j, const LegacyRecord &m);
-void from_json(const nlohmann::json &j, LegacyRecord &m);
-
 struct MarkValue {
     uint32_t field = 0;
     std::string value;
 };
 void to_json(nlohmann::json &j, const MarkValue &m);
 void from_json(const nlohmann::json &j, MarkValue &m);
-
-struct MigrateStatus {
-    uint32_t point = 0;
-    bool done = false;
-    std::string report_json;
-};
-void to_json(nlohmann::json &j, const MigrateStatus &m);
-void from_json(const nlohmann::json &j, MigrateStatus &m);
-
-struct MigrateStep {
-    std::string layer;
-    std::vector<LegacyRecord> records;
-    bool last = false;
-    uint32_t chunk = 0;
-};
-void to_json(nlohmann::json &j, const MigrateStep &m);
-void from_json(const nlohmann::json &j, MigrateStep &m);
-
-struct MigrationPlan {
-    std::vector<std::string> steps;
-    uint64_t legacy_records = 0;
-};
-void to_json(nlohmann::json &j, const MigrationPlan &m);
-void from_json(const nlohmann::json &j, MigrationPlan &m);
 
 struct MigrationProgress {
     uint32_t from_generation = 0;
@@ -461,7 +423,6 @@ void from_json(const nlohmann::json &j, ObjectKey &m);
 
 struct OpenResult {
     OpenState state = {};
-    std::optional<MigrationPlan> migration;
 };
 void to_json(nlohmann::json &j, const OpenResult &m);
 void from_json(const nlohmann::json &j, OpenResult &m);
@@ -525,6 +486,7 @@ struct RowsApply {
     bool wipe = false;
     int64_t now_ms = 0;
     std::string rows_json;
+    bool journal = false;
 };
 void to_json(nlohmann::json &j, const RowsApply &m);
 void from_json(const nlohmann::json &j, RowsApply &m);
@@ -850,6 +812,9 @@ struct UnreadChanged {
     std::optional<Peer> chat;
     uint32_t count = 0;
     bool mention = false;
+    std::string last_read_id;
+    int64_t last_read_ts_ms = 0;
+    std::vector<std::string> mentions;
 };
 void to_json(nlohmann::json &j, const UnreadChanged &m);
 void from_json(const nlohmann::json &j, UnreadChanged &m);
@@ -914,6 +879,15 @@ struct GroupView {
     std::optional<GroupPerms> perms;
     bool is_public = false;
     std::vector<std::string> invite_links;
+    std::string info_json;
+    uint64_t version = 0;
+    bool deleted = false;
+    bool can_manage_invites = false;
+    bool can_decide_requests = false;
+    bool can_rotate = false;
+    bool can_ban = false;
+    bool can_add_admins = false;
+    bool can_delete_messages = false;
 };
 void to_json(nlohmann::json &j, const GroupView &m);
 void from_json(const nlohmann::json &j, GroupView &m);
@@ -1038,6 +1012,7 @@ struct MessageView {
     bool silent = false;
     int64_t order = 0;
     std::string wire;
+    bool unread = false;
 };
 void to_json(nlohmann::json &j, const MessageView &m);
 void from_json(const nlohmann::json &j, MessageView &m);
@@ -1054,6 +1029,8 @@ struct ChatView {
     int64_t muted_until_ms = 0;
     std::string draft;
     std::vector<uint32_t> folder_ids;
+    bool unread_mark = false;
+    int64_t order = 0;
 };
 void to_json(nlohmann::json &j, const ChatView &m);
 void from_json(const nlohmann::json &j, ChatView &m);

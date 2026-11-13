@@ -34,17 +34,6 @@ export type HRowState = {
   pending_edits?: HEdit[];
   pending_gones?: HGone[];
 };
-export type HSegmentRef = { key: string; digest?: string; seq: string | number; op_id?: string };
-export type HChatSummary = { chat: HPeer; last?: HRowState; mark?: HReadMark; unread?: number; rows?: number };
-export type HSummary = {
-  tombstones_since_ms?: string | number;
-  chats?: HChatSummary[];
-  segments?: HSegmentRef[];
-  // S7-4: позиция сводки, id точки, цепочки писателей (сводки до ревью 7 ноя 2026 — без них)
-  upto_seq?: string | number;
-  checkpoint_id?: string | number;
-  chains_complete?: boolean;
-};
 export type HOp = {
   row?: HMessageRow;
   gone?: HGone;
@@ -53,23 +42,6 @@ export type HOp = {
   pin?: HPin;
   read?: HReadMark;
   state?: HRowState;
-  summary?: HSummary;
-};
-export type HView = {
-  visible: boolean;
-  deleted: boolean;
-  deletedScope?: 'everyone' | 'me';
-  orphan: boolean;
-  id: string;
-  chat: HPeer;
-  chatKey: string;
-  from?: string;
-  tsMs?: number;
-  body?: Record<string, unknown>;
-  edited: boolean;
-  editTsMs?: number;
-  reactions: { emoji: string; count: number; users: string[] }[];
-  pinned: boolean;
 };
 
 // Строка web, которую нельзя сводить журналом: самоуничтожение не пишется (как и раньше в экспорт), шифртекст
@@ -106,10 +78,6 @@ export function addressForPeer(peer: HPeer | undefined): string | undefined {
   return undefined;
 }
 
-export function isGroupPeer(peer: HPeer | undefined) {
-  return Boolean(peer?.group);
-}
-
 /** Тело правки/строки: base64 JSON-объекта. */
 export function encodeBody(value: Record<string, unknown>) {
   return bytesToBase64(encoder.encode(JSON.stringify(value)));
@@ -142,16 +110,8 @@ export function applyOp(state: HRowState | undefined, op: HOp): HRowState {
   return historyStatic<HRowState>('historyApply', state ? { state, op } : { op });
 }
 
-export function viewOf(state: HRowState): HView {
-  return historyStatic<HView>('historyView', { state });
-}
-
 export function newStamp(tsMs?: number): HStamp {
   return historyStatic<HStamp>('historyNewStamp', tsMs === undefined ? {} : { tsMs });
-}
-
-export function markMerge(a: HReadMark | undefined, b: HReadMark | undefined): HReadMark | undefined {
-  return historyStatic<HReadMark | null>('historyMarkMerge', { a, b }) || undefined;
 }
 
 /** `deleter` — адрес удаляющего либо набор его адресов (текущий и прежние). */
@@ -176,65 +136,11 @@ export function opTarget(op: HOp): string | undefined {
   return op.row?.id || op.gone?.target || op.edit?.target || op.react?.target || op.pin?.target || op.state?.target;
 }
 
-/** Ключ «эта операция уже есть в журнале»: id сообщения у строки, метка у мутаций. */
-export function opKey(op: HOp): string | undefined {
-  if (op.row) return `r:${op.row.id}`;
-  const stamp = op.gone?.stamp || op.edit?.stamp || op.react?.stamp || op.pin?.stamp;
-  return stamp ? `m:${stamp.op_id}` : undefined;
-}
-
-/** Порядок (время, id) — как в движке: сначала время, затем байты id (строки UUID в нижнем регистре сравниваются
- * так же). */
-export function compareMarkPoint(tsA: number, idA: string, tsB: number, idB: string) {
-  if (tsA !== tsB) return tsA < tsB ? -1 : 1;
-  if (idA === idB) return 0;
-  return idA < idB ? -1 : 1;
-}
-
-/** Строка (время, id) строго после маркера. */
-export function isAfterMark(mark: HReadMark | undefined, tsMs: number, id: string) {
-  if (!mark) return true;
-  return compareMarkPoint(tsMs, id.toLowerCase(), Number(mark.up_to_ts_ms), mark.up_to_id.toLowerCase()) > 0;
-}
-
-/** Решение движка «непрочитано» по минимальной строке (движок читает только автора, время, id и вид). `self` —
- * свой адрес либо набор своих адресов (текущий и прежние после смены ника). */
-export function isUnreadRow(
-  meta: { id: string; chat: HPeer; from: string; tsMs: number; kind: string }, mark: HReadMark | undefined,
-  self: string | string[],
-) {
-  const state: HRowState = {
-    target: meta.id,
-    chat: meta.chat,
-    row: {
-      id: meta.id,
-      chat: meta.chat,
-      from: meta.from,
-      ts_ms: String(meta.tsMs),
-      body: encodeBody({ content: { kind: meta.kind } }),
-    },
-  };
-  return historyStatic<boolean>('historyIsUnread', { state, mark, self });
-}
-
-/** Правка содержимого (поля из события): для известной строки — содержимое целиком, для неизвестной — заплатка
- * `edit_patch` (вид строки ещё не известен; web накладывает её при показе). */
+/** Правка содержимого (поля из события) — заплатка `edit_patch`: накладывает её модель (`views::effective_content`). */
 export type EditPatch = Partial<Pick<WireMessageContent, 'text' | 'entities' | 'webpage'>> & {
   // Поля содержимого целиком (правка геопозиции — координаты и параметры трансляции)
   fields?: Partial<WireMessageContent>;
 };
-
-export function applyEditPatch(content: WireMessageContent, patch: EditPatch): WireMessageContent {
-  const next = { ...content };
-  if (patch.text !== undefined) {
-    const isText = next.kind === 'text';
-    Object.assign(next, isText
-      ? { text: patch.text, entities: patch.entities, webpage: patch.webpage }
-      : { caption: patch.text, entities: patch.entities });
-  }
-  if (patch.fields) Object.assign(next, patch.fields);
-  return next;
-}
 
 /** Время строки в мс для маркера: из сведённого состояния, иначе секунды строки. */
 export function rowTsMs(stored: WireStoredMessage) {
@@ -274,10 +180,6 @@ function buildLegacyState(stored: WireStoredMessage, chat: HPeer): HRowState {
     state = applyOp(state, { pin: { target: stored.id, chat, stamp: newStamp(fallbackMs), pinned: true } });
   }
   return state;
-}
-
-export function stateTsMs(state: HRowState) {
-  return Number(state.row?.ts_ms || 0);
 }
 
 function hexToB64(hex: string) {

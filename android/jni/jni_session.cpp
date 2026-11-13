@@ -1,6 +1,8 @@
 // Parvane Android (spec 031): вход (ID-01: доказательство ключа устройства), регистрация, 2FA, сессия v2 и
 // разбор её событий в события шва — только протокол v2, как desktop parvane_client_auth.cpp / HandleV2Event.
 #include "jni_internal.h"
+
+#include <cstdio>
 #include "v2_bridge.h"
 
 #include <parvane/gateway_ws_transport.h>
@@ -65,18 +67,18 @@ std::string gatewayUrl() {
 }
 
 void saveSession(const std::string &address, const std::string &token) {
-    parvane::storecrypt::writeFile(storeDir() + "/session.json", json{{"self", address}, {"token", token}}.dump());
+    hostWrite(storeDir() + "/session.json", json{{"self", address}, {"token", token}}.dump());
 }
 
 // Секрет доверия 2FA: устройство, однажды подтверждённое в Telegram, входит без подтверждения.
 std::string trustPath(const std::string &address) { return storeDir() + "/trust-" + safePart(address) + ".txt"; }
 std::string readTrust(const std::string &address) {
-    auto s = parvane::storecrypt::readFile(trustPath(address));
+    auto s = hostRead(trustPath(address));
     if (const auto nl = s.find('\n'); nl != std::string::npos) s.resize(nl);
     return s;
 }
 void writeTrust(const std::string &address, const std::string &secret) {
-    if (!address.empty() && !secret.empty()) parvane::storecrypt::writeFile(trustPath(address), secret);
+    if (!address.empty() && !secret.empty()) hostWrite(trustPath(address), secret);
 }
 
 // Владелец каталога: вход другим адресом не получает данных прежнего (один аккаунт на процесс; ревью 21 окт).
@@ -85,10 +87,10 @@ void resetAccountMemory();
 
 void adoptAccount(const std::string &address) {
     resetAccountMemory(); // вход: ничего из памяти прежнего аккаунта (события, прошедшие проверку до выхода)
-    const auto owner = parvane::storecrypt::readFile(ownerPath());
+    const auto owner = hostRead(ownerPath());
     if (!owner.empty() && owner != address) wipeAccountData("вход другим аккаунтом");
     parvane::storecrypt::allowWrites();
-    parvane::storecrypt::writeFile(ownerPath(), address);
+    hostWrite(ownerPath(), address);
 }
 
 std::string canonicalAddress(std::string input, const std::string &domain) {
@@ -194,6 +196,9 @@ void handleV2Event(const json &ev) {
     // Домен сервера группы — ключ чата журнала истории (HIST-1)
     if (in.group && ev.contains("group") && ev["group"].is_object())
         historyNoteGroupDomain(in.chat, ev["group"].value("domain", std::string()));
+    // spec 036 (`engine_rows`): событие итога модели — строку и мутацию она уже применила (и поставит в журнал);
+    // показ — её `message_upsert/remove` (historyModelChanges)
+    const bool inModel = ev.value("modelApplied", false);
     if (in.kind == Kind::Message || in.kind == Kind::Stub) {
         if (!markSeen(in.id)) return; // повтор
         // P-46: в logcat — только id и вид
@@ -202,13 +207,15 @@ void handleV2Event(const json &ev) {
         auto msg = parvane::android_v2::messageEvent(in, me, nowSec());
         // Журнал истории (spec 033): строка сводится с мутациями, пришедшими раньше; удалённое раньше прихода —
         // не показывается; своё с другого устройства сдвигает маркер
-        if (!historyRecordMessageEvent(msg, /*own=*/false, in.tsMs)) return;
+        if (!historyRecordMessageEvent(msg, /*own=*/false, in.tsMs, inModel)) return;
         noteMessage(in.id, in.from, in.chat, msg.value("content", in.content), in.from == me ? std::string() : in.proof);
         emit(msg);
         return;
     }
     // Правка, удаление, реакция, закреп, квитанция — операции журнала истории (HIST-1, READ-2): сведение и права —
-    // движком, неизвестная цель — сирота (применится, когда сообщение придёт)
+    // движком, неизвестная цель — сирота (применится, когда сообщение придёт). Событие итога модели она уже
+    // применила — кроме квитанции собеседника (✓✓ шва и его отметка на устройстве)
+    if (inModel && !(in.kind == Kind::Read && in.from != me)) return;
     historyApplyIncomingMutation(in);
 }
 
@@ -296,13 +303,26 @@ bool handleSessionEvent(const json &ev) {
     }
     if (type == "journal") {
         // Живое уведомление журнала (JournalNotice, spec 033): история — журналу истории; личное состояние — шву
-        if (ev.value("journal", std::string()) == "history") historySessionEvent(ev);
-        else emit(json{{"type", "state_journal"}});
+        // (журнал истории догоняет модель сессии сама, spec 036)
+        if (ev.value("journal", std::string()) != "history") emit(json{{"type", "state_journal"}});
+        return true;
+    }
+    if (type == "model") {
+        // spec 036: шву — то, что он показывает из модели: личное состояние изменилось (перечитать вид) и
+        // прочитанность чатов (`unread_changed`: счётчик, упоминание, маркер «прочитано до»)
+        bool state = false;
+        auto unread = json::array();
+        for (const auto &ch : ev.value("changes", json::array())) {
+            if (!ch.is_object()) continue;
+            if (ch.contains("state_changed")) state = true;
+            else if (ch.contains("unread_changed")) unread.push_back(ch["unread_changed"]);
+        }
+        // Строки и счётчики — журналу истории шва (показ готового: message/edited/meta/deleted/read_state)
+        historyModelChanges(ev.value("changes", json::array()));
+        if (state || !unread.empty()) emit(json{{"type", "model"}, {"state", state}, {"unread", std::move(unread)}});
         return true;
     }
     if (type == "stateReady") {
-        historySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
-        historyHold(false); // модель открыта (перенос, если был, закончен) — журнал истории больше не ждёт
         sectionsSessionChanged(); // «План», «Облако»: журнал состояния подключён
         emit(json{{"type", "state_ready"}});
         runDetached([] {
@@ -404,6 +424,27 @@ void startSession() {
     cfg.clientVersion = "android";
     cfg.deviceDescription = "Parvane Android";
     cfg.log = [](const std::string &m) { LOGI("%s", m.c_str()); };
+    // spec 036 (ENGINE-1): изменения модели (личное состояние, прочитанность, …) — событием `model` (handleV2Event)
+    cfg.modelEvents = true;
+    // spec 036 (ENGINE-1, `engine_rows`): входящее к строкам, журнал истории аккаунта и маркеры — модель. S7-3: журнал
+    // пишется пачкой раз в 30–120 с; debug-APK (только сценарии эмулятора, на прод идёт release) — короткое окно 1–3 с,
+    // либо своё из /data/local/tmp/parvane-history-batch-ms («мин,макс»). Признак — флаг сборки приложения из
+    // nativeInit (BuildConfig.DEBUG), а не NDEBUG (libparvane_jni.so и в debug-APK — release-сборка модуля)
+    cfg.engineRows = true;
+    if (g_debugBuild) {
+        cfg.historyBatchMinMs = 1000;
+        cfg.historyBatchMaxMs = 3000;
+        if (FILE *f = std::fopen("/data/local/tmp/parvane-history-batch-ms", "r")) {
+            long long lo = 0, hi = 0;
+            if (std::fscanf(f, "%lld,%lld", &lo, &hi) == 2 && lo > 0 && hi >= lo) {
+                cfg.historyBatchMinMs = lo;
+                cfg.historyBatchMaxMs = hi;
+            }
+            std::fclose(f);
+        }
+        LOGI("журнал истории: окно пачки %lld–%lld мс (debug)", (long long)cfg.historyBatchMinMs,
+             (long long)cfg.historyBatchMaxMs);
+    }
     const auto gen = ++g_sessionGen;
     cfg.onEvent = [owner = me, gen](const json &ev) {
         // событие прежней сессии (выход, перезапуск под новым ником) — мимо
@@ -414,34 +455,6 @@ void startSession() {
         LOGI("v2: ключ восстановления выдан — показ пользователю");
         emit(json{{"type", "recovery_key"}, {"key", key}});
     };
-    // spec 035 T137 (US1, contracts/migration.md): разовый перенос прежнего состояния в модель движка — слой android
-    // перечня, записи старых мест читает MigrateLegacy.kt; ход — событие `migration` (Kotlin: «Обновление…» X и тост)
-    cfg.migrationLayer = "android";
-    cfg.legacyRecords = [owner = me] { return legacyRecordsFromKotlin(storeDir(), owner); };
-    // Перенос ещё не сделан (каталог состояния прежнего вида без отметки) — журнал истории ждёт его конца
-    const auto stateDir = v2StateDir(me);
-    std::error_code fsec;
-    const bool migrationPending = std::filesystem::exists(stateDir + "/state", fsec)
-        && !std::filesystem::exists(stateDir + "/engine-migrated", fsec);
-    historyHold(migrationPending);
-    cfg.onMigration = [](const json &p) {
-        if (p.value("done", false)) historyHold(false); // и при неудаче: журнал истории не блокируется навсегда
-        LOGI("перенос: шаг %d из %d%s", p.value("point", 0), p.value("total", 7),
-             p.value("done", false) ? (p.value("failed", false) ? " — не закончен" : " — готово") : "");
-        json ev = p;
-        ev["type"] = "migration";
-        emit(ev);
-    };
-    if (g_debugBuild) {
-        // dev-хуки сценария переноса (как desktop PARVANE_MIGRATION_HALT/CHUNK): встать после точки M<n>, строки частями
-        const auto num = [](const char *path) {
-            std::ifstream f(path);
-            int v = 0;
-            return (f >> v) ? v : 0;
-        };
-        cfg.migrationHaltAt = num("/data/local/tmp/parvane-migration-halt");
-        cfg.migrationChunk = num("/data/local/tmp/parvane-migration-chunk");
-    }
     auto s = std::make_shared<parvane::v2::Session>(std::move(cfg));
     {
         std::lock_guard<std::mutex> lk(g_v2Mu);
@@ -667,7 +680,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSessionExpired(JN
     stopSession();
     std::lock_guard<std::mutex> lk(g_mu);
     g_token.clear();
-    std::remove((storeDir() + "/session.json").c_str());
+    hostRemove(storeDir() + "/session.json");
     LOGI("сессия истекла — учётные данные сняты, данные сохранены");
 }
 
@@ -692,7 +705,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, 
         g_self.clear();
         g_token.clear();
     }
-    std::remove((dir + "/session.json").c_str());
+    hostRemove(dir + "/session.json");
     resetAccountMemory();
     if (s && s->isReady()) {
         const bool left = s->leave(5000);

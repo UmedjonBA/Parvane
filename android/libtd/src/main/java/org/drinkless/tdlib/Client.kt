@@ -535,6 +535,7 @@ class Client private constructor(
                 SeamFiles.codec = object : SeamFiles.Codec {
                     override fun read(path: String) = ParvaneCore.storeRead(path)
                     override fun write(path: String, text: String) = ParvaneCore.storeWrite(path, text)
+                    override fun exists(path: String) = ParvaneCore.storeExists(path)
                 }
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())
@@ -1339,6 +1340,8 @@ class Client private constructor(
         store.loadRenames()
         store.local?.folders?.let { if (it.all().isNotEmpty()) postUpdate(TdApi.UpdateChatFolders(it.infos(), it.mainPosition, false)) }
         startScheduled()
+        // spec 036: личное состояние из модели ещё до подключения журнала (модель открывается без сети)
+        io.execute { try { showStateOffline() } catch (e: Throwable) { Log.w(TAG, "личное состояние при запуске: ${e.message}") } }
         // NAT-12: хук команд из /data/local/tmp — только в отладочной сборке (как
         // подмена gateway и флаг v1): в релизе его мог дёргать любой с adb-shell
         if (org.parvane.libtd.BuildConfig.DEBUG) startE2eHook()
@@ -1367,8 +1370,8 @@ class Client private constructor(
      */
     private fun reprojectUnresolved() {
         if (!stateJournal.hasUnresolved || !stateAttached || detached) return
-        val snap = lastStateSnap ?: return
-        synchronized(stateLock) { applyState(snap) }
+        val view = lastStateView ?: return
+        synchronized(stateLock) { showViewLocked(view) }
     }
 
     private fun syncGroupsLocked() {
@@ -1570,9 +1573,6 @@ class Client private constructor(
     // Служебные сообщения Parvane (вход, привязка, ключ восстановления) — полоской оверлея в стиле приложения, а не
     // модальным окном X; без оверлея (тесты шва) — как раньше
     /** Идёт разовый перенос данных (spec 035 T137): «соединение» X не перебивает «Обновление…». */
-    @Volatile private var migrating = false
-    /** Последнее состояние связи от ядра: после переноса шапка возвращается к нему (событие «ready» могло прийти во время переноса). */
-    @Volatile private var connectionReady = false
     private fun serviceNotice(key: String, text: String) {
         if (key.startsWith("parvane_") && noticeSink?.invoke(text) == true) return
         postUpdate(TdApi.UpdateServiceNotification(key, TdApi.MessageText(TdApi.FormattedText(text, arrayOf()), null, null)))
@@ -2273,17 +2273,26 @@ class Client private constructor(
         restored.map { it.chatId }.distinct().forEach { announceScheduled(it) }
         scheduledTick.scheduleWithFixedDelay({ try { scheduledQueue.takeDue { a -> store.user(a)?.status is TdApi.UserStatusOnline }.forEach { fireScheduledGated(it) } } catch (e: Throwable) { Log.w(TAG, "scheduled tick: ${e.message}") } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS)
     }
+    /** Отложенное отправлено другим своим устройством (отметка модели после догона журнала). */
+    private fun scheduledSentByModel(key: String): Boolean {
+        ParvaneCore.stateRefresh()
+        val objs = StateJournal.objectsOf(ParvaneCore.stateView(listOf("SCHEDULED")), "SCHEDULED")
+        return (0 until objs.length()).map { objs.getJSONObject(it) }
+            .any { it.optString("key") == key && StateJournal.markValue(it, StateJournal.MARK_SCHEDULED_SENT) != 0L }
+    }
     /** Отложенное отправляет первое устройство, заметившее срок (web canSendScheduled/markScheduledSent). */
     private fun fireScheduledGated(it: ScheduledQueue.Item) {
-        val op = if (stateAttached && it.localPath == null) StateJournal.uuidToB64(it.uuid) else null
-        if (op != null && ParvaneCore.stateScheduledSent(op)) {
+        // spec 036: «отправлено» — отметка 1 объекта SCHEDULED модели (ключ — hex op_id); перед решением — журнал до головы
+        val key = if (stateAttached && it.localPath == null) StateJournal.uuidToB64(it.uuid)?.let(StateJournal::b64ToHex) else null
+        if (key != null && scheduledSentByModel(key)) {
             Log.i(TAG, "отложенное ${it.uuid} уже отправлено другим устройством")
             scheduledMsgs.remove(it.id)
             postUpdate(TdApi.UpdateDeleteMessages(it.chatId, longArrayOf(it.id), true, false))
             if (scheduledQueue.forChat(it.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(it.chatId, false))
         } else {
             fireScheduled(it)
-            if (op != null) ParvaneCore.stateMarkSent(op)
+            if (key != null && !ParvaneCore.stateMark("SCHEDULED", key, StateJournal.MARK_SCHEDULED_SENT, 1L))
+                Log.w(TAG, "отложенное ${it.uuid}: отметка «отправлено» не записана")
         }
         scheduleStateFlush("scheduled")
     }
@@ -2300,38 +2309,38 @@ class Client private constructor(
     }
     @Volatile private var stateAttached = false
     @Volatile private var stateTimerStarted = false
+    /**
+     * spec 036 (ENGINE-1): личное состояние — объекты модели движка по видам. Журнал подключён (stateReady) →
+     * `stateConnect` (смена ключа, свои неотправленные — серверу, журнал до головы) → правки, ещё не отданные модели,
+     * → показ объектов модели. Своего сведения и желаемого снимка у шва нет.
+     */
     private fun attachStateJournal() {
-        val l = store.local ?: return
-        // T150: несохранённая правка (до подключения или перед остановкой процесса) — в журнал раньше проекции, разницей
-        // от показанного ДО правки (база ядра — state-base прошлого запуска). Отдельный синк после подключения считал
-        // разницу от только что сведённого и откатывал правки другого устройства (spec 035 T134)
-        val dirty = loadStateDirty()
-        val snap = synchronized(stateLock) {
-            try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), loadStateDirty()) }
-            catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
-        }
-        if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
-        val effective: JSONObject = snap
-        if (dirty.isNotEmpty()) {
-            clearStateDirty() // не дошедшее ядро досылает при синке (вид остаётся в желаемом)
-            Log.i(TAG, "несохранённая правка личного состояния дослана в журнал (${dirty.sorted().joinToString()})")
-        }
+        if (store.local == null) return
+        if (!ParvaneCore.stateConnect()) { Log.i(TAG, "журнал состояния недоступен"); return }
         stateAttached = true
-        // Вид `notify` появился позже первого переноса состояния (T132): пока журнал его не содержит,
-        // пустая проекция не должна снять локальные муты — они уйдут в журнал следующим синком
-        val marker = java.io.File(boundDir, "notify-journaled")
-        val keepLocalNotify = !marker.exists() && !stateJournal.hasNotify(effective)
-        if (!marker.exists()) try { marker.writeText("1") } catch (e: Exception) { }
-        applyState(effective, projectNotify = !keepLocalNotify)
-        if (keepLocalNotify) scheduleStateFlush("notify")
-        // PACK-3: наборы, установленные до журнала, — записями один раз на устройство (после проекции: журнал главнее)
+        synchronized(stateLock) {
+            submitPendingStateLocked()
+            showStateLocked(force = true)
+        }
+        // PACK-3: наборы, установленные до журнала, — записями один раз на устройство (после показа: модель главнее)
         io.execute { try { if (stickers.migrateToJournal()) scheduleStateFlush("packs") } catch (e: Throwable) { Log.w(TAG, "стикеры: перенос в журнал: ${e.message}") } }
         // spec 035 (FR-075): избранные стикеры — объекты модели; прежний локальный список — в модель один раз
         io.execute { try { stickers.migrateFavorites(); stickers.refreshFavorites() } catch (e: Throwable) { Log.w(TAG, "стикеры: избранные: ${e.message}") } }
         Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
         if (!stateTimerStarted) {
             stateTimerStarted = true
-            scheduledTick.scheduleWithFixedDelay({ try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
+            scheduledTick.scheduleWithFixedDelay({ try { stateRefreshNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
+        }
+    }
+    /** Показ модели до подключения журнала (модель открывается без сети): правки получают верную базу. */
+    private fun showStateOffline() {
+        if (stateAttached || store.local == null) return
+        synchronized(stateLock) {
+            val view = ParvaneCore.stateView() ?: return
+            // Пустая модель (журнал ещё ни разу не подключался) локальные данные не снимает
+            if ((view.optJSONArray("objects")?.length() ?: 0) == 0 || lastStateView != null) return
+            showViewLocked(view)
+            Log.i(TAG, "личное состояние при запуске → из модели")
         }
     }
     /**
@@ -2339,45 +2348,63 @@ class Client private constructor(
      * этого устройства в него не уходят; один раз за запуск — штатное уведомление X «обновите приложение».
      */
     @Volatile private var stateBlockedShown = false
-    private fun noteStateWriteBlocked() {
-        if (stateBlockedShown || !ParvaneCore.stateWriteBlocked()) return
+    private fun noteStateWriteBlocked(view: JSONObject) {
+        if (stateBlockedShown || !view.optBoolean("write_blocked")) return
         stateBlockedShown = true
         Log.w(TAG, "журнал личного состояния закрыт для записи более новой версией — нужно обновить приложение")
         postUpdate(TdApi.UpdateServiceNotification(UpgradeNotices.TYPE_REQUIRED, TdApi.MessageText(TdApi.FormattedText(uiText("upgrade_state_blocked"), arrayOf()), null, null)))
     }
-    /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
     private val stateLock = Any()
-    private fun stateSyncNow() {
-        synchronized(stateLock) {
-            if (!stateAttached || detached) return
-            val l = store.local ?: return
-            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(),
-                StateJournal.KINDS, lastStateSnap?.toString() ?: "") ?: return // база разницы — показанный снимок (T124)
-            clearStateDirty()
-            if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
-        }
+    /** Виды правок шва, ещё не отданные модели (модель не открыта либо запись отвергнута). Только под [stateLock]. */
+    private val statePending = LinkedHashSet<String>()
+    /** Журнал до головы (опрос, живое уведомление), затем показ, если модель изменилась. */
+    private fun stateRefreshNow() {
+        if (!stateAttached || detached) return
+        ParvaneCore.stateRefresh()
+        synchronized(stateLock) { submitPendingStateLocked(); showStateLocked() }
+    }
+    /** Модель изменилась (событие `model`): показать. */
+    private fun stateChangedByModel() {
+        if (detached || store.local == null) return
+        synchronized(stateLock) { showStateLocked() }
     }
     /**
-     * Своя правка вида [kind]: вид помечается «не дослан» (файл state-dirty, переживает перезапуск) до успешного
-     * синка. Правка, сделанная до подключения журнала или не успевшая в него до остановки процесса, при следующем
-     * подключении досылается раньше проекции журнала — иначе снимок журнала её откатил бы (T150, как desktop).
+     * Своя правка вида [kind]: объекты вида — модели с показанными (разницу по полям считает модель; без связи правка
+     * остаётся в модели и уходит при подключении). Модель ещё не открыта — вид ждёт в [statePending].
      */
     private fun scheduleStateFlush(kind: String) {
-        markStateDirty(kind)
-        if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } }
-    }
-    private val stateDirtyFile get() = java.io.File(boundDir, "state-dirty")
-    private fun loadStateDirty(): Set<String> = try {
-        stateDirtyFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it in StateJournal.KINDS }?.toSet() ?: emptySet()
-    } catch (e: Exception) { emptySet() }
-    private fun markStateDirty(kind: String) {
-        synchronized(stateLock) {
-            val cur = loadStateDirty()
-            if (kind in cur) return
-            try { stateDirtyFile.writeText((cur + kind).joinToString("\n")) } catch (e: Exception) { Log.w(TAG, "state-dirty: ${e.message}") }
+        io.execute {
+            try {
+                synchronized(stateLock) {
+                    statePending += kind
+                    if (submitPendingStateLocked()) showStateLocked()
+                }
+            } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") }
         }
     }
-    private fun clearStateDirty() { try { stateDirtyFile.delete() } catch (e: Exception) { } }
+    /** Отдать модели правки видов [statePending]; true — что-то отдано. */
+    private fun submitPendingStateLocked(): Boolean {
+        if (statePending.isEmpty() || detached) return false
+        val l = store.local ?: return false
+        var any = false
+        for (edited in statePending.toList()) {
+            var ok = true
+            for (kind in StateJournal.kindsOf(edited)) {
+                val shown = StateJournal.objectsOf(lastStateView, kind)
+                val desired = stateJournal.objects(kind, shown, l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal) ?: continue
+                ok = ParvaneCore.stateSubmit(kind, desired, shown) && ok
+            }
+            if (ok) { statePending.remove(edited); any = true }
+            else Log.w(TAG, "личное состояние: правка «$edited» модели не отдана — повтор при подключении")
+        }
+        return any
+    }
+    /** Показ объектов модели (если изменились с прошлого показа либо [force]). */
+    private fun showStateLocked(force: Boolean = false) {
+        val view = ParvaneCore.stateView() ?: return
+        if (!force && lastStateView?.toString() == view.toString()) return
+        showViewLocked(view)
+    }
     // «Удалить чат у себя» в v2 (T145): сообщений v2 сервер v1 не знает, нотис
     // `cleared` до остальных своих устройств не дойдёт — граница очистки (мс) едет
     // журналом личного состояния. Применённые границы: адрес → мс.
@@ -2389,12 +2416,20 @@ class Client private constructor(
         clearedUntilMs.merge(address, until) { a, b -> maxOf(a, b) }
         io.execute { ParvaneCore.clearChat(address, until, uuids) }
     }
-    private fun projectCleared(snap: JSONObject) {
-        val list = snap.optJSONArray("cleared") ?: return
+    /** spec 036 (READ-2, ENGINE-1): прочитанность чата из модели (`unread_changed`: счётчик, маркер «прочитано до»). */
+    private fun applyModelUnread(list: org.json.JSONArray) {
         for (i in 0 until list.length()) {
-            val entry = list.optJSONObject(i) ?: continue
-            val address = stateJournal.addressOf(entry.optJSONObject("peer")) ?: continue
-            val until = entry.optString("cleared_until_ms").toLongOrNull() ?: entry.optLong("cleared_until_ms")
+            val u = list.optJSONObject(i) ?: continue
+            val address = stateJournal.addressOf(u.optJSONObject("chat")) ?: continue
+            val lastRead = u.optString("last_read_id").takeIf { it.isNotEmpty() }?.let(StateJournal::b64ToUuid) ?: ""
+            store.applyReadState(address, u.optInt("count"), lastRead)?.let { r ->
+                postUpdate(r)
+                notifications.onRead(r.chatId, r.lastReadInboxMessageId)?.let { postUpdate(it) }
+            }
+        }
+    }
+    private fun projectCleared(view: JSONObject) {
+        for ((address, until) in stateJournal.clearedOf(view)) {
             if (until <= 0 || (clearedUntilMs[address] ?: 0L) >= until) continue
             clearedUntilMs[address] = until
             val chatId = store.group(address)?.chatId ?: store.idOf(address)
@@ -2402,7 +2437,7 @@ class Client private constructor(
             val uuids = store.uuidsOfChatUntil(chatId, until / 1000)
             if (uuids.isEmpty()) continue
             store.removeMessages(uuids).forEach { postUpdate(it) }
-            Log.i(TAG, "журнал состояния → очистка чата, скрыто ${uuids.size} сообщений")
+            Log.i(TAG, "личное состояние → очистка чата, скрыто ${uuids.size} сообщений")
         }
     }
     // ── жалобы (REPORT-1, как desktop api_report / web) ──────────────────────
@@ -2562,16 +2597,16 @@ class Client private constructor(
         }
     }
 
-    /** Сведённый снимок → локальные файлы шва и апдейты X. */
-    /** Последний снимок журнала — для повторной проекции, когда шов узнаёт новые группы. */
-    @Volatile private var lastStateSnap: JSONObject? = null
-    private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
-        lastStateSnap = snap
-        noteStateWriteBlocked()
+    /** Последний показ модели (объекты личного состояния) — база правок и повторный показ, когда шов узнаёт новые группы. */
+    @Volatile private var lastStateView: JSONObject? = null
+    /** Объекты модели → локальные файлы шва и апдейты X. Под [stateLock]. */
+    private fun showViewLocked(view: JSONObject) {
+        lastStateView = view
+        noteStateWriteBlocked(view)
         try { stickers.refreshFavorites() } catch (e: Throwable) { Log.w(TAG, "стикеры: избранные: ${e.message}") }
-        projectCleared(snap)
+        projectCleared(view)
         val l = store.local ?: return
-        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null, stickers.journal)
+        val ch = stateJournal.show(view, l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal)
         if (!ch.any()) return
         // PACK-3: архивы наборов скачиваются — не под замком журнала
         ch.packs?.let { pr -> io.execute { try { stickers.applyJournal(pr) } catch (e: Throwable) { Log.w(TAG, "стикеры: журнал состояния: ${e.message}") } } }
@@ -2757,6 +2792,9 @@ class Client private constructor(
                     "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
                     "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
                     "dump" -> { Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok() }
+                    // PACK-1: {"op":"fave","set":"h:…","file":"01.png","on":true} и {"op":"faved"} — избранные стикеры
+                    "fave" -> if (stickers.e2eFave(cmd.optString("set"), cmd.optString("file"), cmd.optBoolean("on", true))) TdApi.Ok() else TdApi.Error(404, "sticker not found")
+                    "faved" -> { stickers.refreshFavorites(); Log.i(TAG, "e2e-faved: ${stickers.e2eFavedDump()}"); TdApi.Ok() }
                     "search" -> handle(TdApi.SearchMessages(null, cmd.optString("query"), "", 50, null, null, 0, 0))
                     // голос в опросе по uuid сообщения — тот же путь, что тап по варианту в X (варианты рисуются на canvas, uiautomator их не видит)
                     "vote" -> store.messageByUuid(cmd.optString("uuid"))?.let { m -> handle(TdApi.SetPollAnswer(m.chatId, m.id, intArrayOf(cmd.optInt("option")))) } ?: TdApi.Error(404, "poll not found")
@@ -2790,17 +2828,6 @@ class Client private constructor(
                     // «Сообщить об ошибке» тем же путём, что окно «Профиля» (журнал — строки команды)
                     "bug_report" -> TdApi.Text(bugReport(cmd.optString("text"), listOf("e2e: строка журнала с адресом bob@local"),
                         "e2e", java.io.File(System.getProperty("java.io.tmpdir") ?: "/data/local/tmp")))
-                    // spec 035, T007: выгрузка «ничего не потеряно» в каталог профиля (число строк — в лог)
-                    "audit_dump" -> {
-                        Log.i(TAG, "audit dump: ${AuditDump.write(java.io.File(boundDir))} строк → ${java.io.File(boundDir, AuditDump.FILE_NAME).absolutePath}")
-                        TdApi.Ok()
-                    }
-                    // spec 035 T133: выгрузка модели движка (после разового переноса) — сверка с выгрузкой прежнего кода
-                    "model_audit_dump" -> {
-                        val n = AuditDump.write(java.io.File(boundDir), AuditDump.MODEL_FILE_NAME) { org.parvane.core.ParvaneCore.modelAuditDump() }
-                        Log.i(TAG, "model audit dump: $n строк → ${java.io.File(boundDir, AuditDump.MODEL_FILE_NAME).absolutePath}")
-                        TdApi.Ok()
-                    }
                     "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     "cloud_folder" -> {
@@ -3376,7 +3403,7 @@ class Client private constructor(
                     event.optString("id"), sender, to, event.optLong("ts"), content, out,
                     read = event.optBoolean("read"), replyUuid = if (event.isNull("reply_to")) null else event.optString("reply_to").ifEmpty { null },
                     edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
-                    reactions = event.optJSONArray("reactions"),
+                    reactions = event.optJSONArray("reactions"), order = event.optLong("order"),
                 ) ?: return
                 cardMarkup(event.optString("id"), content, out, from)?.let { msg.replyMarkup = it }
                 stickers.onReceived(content) // spec 005: pack_ref/emoji_packs → индекс паков, gif → сохранённые
@@ -3403,13 +3430,14 @@ class Client private constructor(
                     notifications.onRead(u.chatId, u.lastReadInboxMessageId)?.let { postUpdate(it) }
                 }
             }
-            // HIST-2: история заменена контрольной точкой — показанного, чего в ней нет, больше нет
-            "history_replaced" -> {
-                val keep = event.optJSONArray("keep")?.let { a -> (0 until a.length()).map { a.optString(it) }.toHashSet() } ?: hashSetOf()
-                store.removeMessages(store.allUuids().filter { it !in keep }).forEach { postUpdate(it) }
-            }
+            // HIST-2: замену истории точкой ведёт модель — снятые строки приходят событиями "deleted" (spec 036)
             // Живое уведомление журнала личного состояния (JournalNotice{STATE}) — синк сейчас, опрос — страховка
-            "state_journal" -> if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } }
+            "state_journal" -> if (stateAttached) io.execute { try { stateRefreshNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } }
+            // spec 036 (ENGINE-1): изменения модели — личное состояние (перечитать вид), прочитанность чатов
+            "model" -> {
+                if (event.optBoolean("state")) io.execute { try { stateChangedByModel() } catch (e: Throwable) { Log.w(TAG, "личное состояние: ${e.message}") } }
+                event.optJSONArray("unread")?.let { list -> if (list.length() > 0) io.execute { applyModelUnread(list) } }
+            }
             "outbox_read" -> store.markOutboxRead(event.optString("id"))?.let { postUpdate(it) }
             "edited" -> event.optJSONObject("content")?.let { c ->
                 store.applyEdit(event.optString("id"), c, event.optLong("edit_date")).forEach { postUpdate(it) }
@@ -3585,20 +3613,10 @@ class Client private constructor(
                 val msg = if (uuid.isEmpty()) null else store.messageByUuid(uuid)
                 if (msg != null) postUpdate(TdApi.UpdateMessageSendFailed(msg, msg.id, TdApi.Error(429, uiText("rate_limited"))))
             } else Log.w(TAG, "ядро: ${event.optString("text")}")
-            // spec 035 T137 (US1): разовый перенос прежнего состояния в модель — пока идёт, X показывает своё «Обновление…»
-            // (ConnectionStateUpdating, штатная строка шапки X); тост хода и итога — оверлей (строки ParvaneMigrate*)
-            "migration" -> {
-                val done = event.optBoolean("done")
-                migrating = !done
-                Log.i(TAG, "перенос данных: шаг ${event.optInt("point")} из ${event.optInt("total", 7)}" +
-                    if (done) (if (event.optBoolean("failed")) " — не закончен" else " — готово") else "")
-                postUpdate(TdApi.UpdateConnectionState(ConnectionHeader.afterMigrationStep(done, connectionReady)))
-            }
             "connection" -> {
-                connectionReady = event.optString("state") == "ready"
-                if (connectionReady) upgrade.onConnected() // v1 снова принимает
-                val state = ConnectionHeader.onConnection(connectionReady, migrating) ?: return
-                postUpdate(TdApi.UpdateConnectionState(state))
+                val ready = event.optString("state") == "ready"
+                if (ready) upgrade.onConnected() // v1 снова принимает
+                postUpdate(TdApi.UpdateConnectionState(if (ready) TdApi.ConnectionStateReady() else TdApi.ConnectionStateConnecting()))
             }
         }
     }

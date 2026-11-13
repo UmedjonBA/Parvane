@@ -12,14 +12,23 @@ import java.io.File
  * после каждого перезапуска (найдено `tgx_ttl_scheduled_flow.sh`, 2 окт 2026).
  * Теперь чтение и запись идут через кодек ядра ([codec] ставит `Client` после
  * `ParvaneCore.init`); в JVM-тестах кодека нет — обычные файлы.
+ *
+ * spec 036 (T036, T048 spec 035): ядро держит эти файлы записями `host-file` зашифрованного хранилища движка
+ * (`HostFiles`: DEK под ключом устройства, пачки с fsync); прежний файл storecrypt переносится один раз при первом
+ * обращении и переименовывается в `<имя>.migrated` — поэтому «есть ли файл» спрашивается у кодека ([exists]), а не
+ * у файловой системы.
  */
 object SeamFiles {
     interface Codec {
         fun read(path: String): String
         fun write(path: String, text: String): Boolean
+        /** Файл есть (в хранилище ядра либо прежним файлом, который ещё не перенесён). */
+        fun exists(path: String): Boolean
     }
 
     @Volatile var codec: Codec? = null
+
+    fun exists(file: File): Boolean = codec?.exists(file.path) ?: file.exists()
 
     fun read(file: File): String = codec?.read(file.path) ?: file.readText()
 

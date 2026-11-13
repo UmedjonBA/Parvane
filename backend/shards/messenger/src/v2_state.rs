@@ -1,31 +1,22 @@
-//! Журнал личного состояния пользователя (spec 007, US5: T096, R10; spec 035: журнал v2, T035).
+//! Журнал личного состояния пользователя (spec 007, US5: T096, R10; spec 035: журнал `state.v2`, T035).
 //!
-//! spec 035 (FR-063): `state.ops.append` / `state.ops.sync` — журнал `state.v2` (`user_state_log_v2`, миграция
-//! 0007), те же правила, что у прежнего журнала; прежний `state.append` отвергается (`UPGRADE_REQUIRED`,
-//! `v2.rs`), `state.sync` прежнего журнала — только чтение для разового переноса.
+//! `state.ops.append` / `state.ops.sync`: журнал `user_state_log_v2` (миграция 0007) хранит ТОЛЬКО шифртекст записи и
+//! её `op_id` — содержимое (папки, блок-лист, черновики, отложенные, …) зашифровано ключом личного состояния,
+//! сведение делают устройства (`parvane_protocol::state2`). Журнал — на пользователя (общий для его устройств), `seq`
+//! монотонный и не переиспользуется. Лимиты: размер записи (схема, ≤ 256 КиБ), число записей и суммарный объём на
+//! пользователя (`PARVANE_STATE_MAX_RECORDS`, `PARVANE_STATE_MAX_BYTES`). Повтор `op_id` с тем же шифртекстом —
+//! идемпотентен (тот же seq, повтор после обрыва связи), с другим — `DUPLICATE`. Страница синхронизации — байтовый
+//! бюджет ≤ 716800, как `msg.inbox.sync`. Прежний журнал `state.v1` (`user_state_log`) и его методы удалены вместе с
+//! разовым переносом (T149, миграция 0014).
 //!
-//! `state.append` / `state.sync`: журнал `user_state_log` (миграции v2) хранит
-//! ТОЛЬКО шифртекст записи и её `op_id` — содержимое (папки, блок-лист,
-//! черновики, отложенные, …) зашифровано ключом личного состояния, сведение
-//! LWW (STATE-1) делают устройства (`parvane_protocol::state`). Журнал — на
-//! пользователя (общий для его устройств), `seq` монотонный и не
-//! переиспользуется. Лимиты: размер записи (схема, ≤ 256 КиБ), число записей и
-//! суммарный объём на пользователя (`PARVANE_STATE_MAX_RECORDS`,
-//! `PARVANE_STATE_MAX_BYTES`). Повтор `op_id` с тем же шифртекстом — идемпотентен
-//! (тот же seq, повтор после обрыва связи), с другим — `DUPLICATE`. Страница
-//! синхронизации — байтовый бюджет ≤ 716800, как `msg.inbox.sync`.
-//!
-//! Здесь же — согласие на добавление в группы для v1-кода (T096, FR-040):
-//! явная настройка `identity.privacy.set` (запрос `v2.internal.identity.privacy_of`),
-//! если выставлена; иначе — поле `group_add` блоба v1 `msg.chat.setnotify`
-//! (v1-клиенты пишут его до E6).
+//! Здесь же — согласие на добавление в группы: настройка `identity.privacy.set` (запрос
+//! `v2.internal.identity.privacy_of`).
 
 use crate::*;
 use parvane_protocol::codec::decode_checked;
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{ErrorCode, PrivacyOfRequest, PrivacyOfResponse};
 use parvane_protocol::pb::parvane::identity::v2::Audience;
-use parvane_protocol::pb::parvane::state::v1 as spb;
 use parvane_protocol::pb::parvane::state::v2 as s2pb;
 use parvane_protocol::registry_gen::INTERNAL_PRIVACY_OF;
 use parvane_protocol::state::{NONCE_LEN, TAG_LEN};
@@ -58,15 +49,13 @@ fn db_err<E: std::fmt::Display>(e: E) -> ErrorCode {
     ErrorCode::Unavailable
 }
 
-/// Таблицы журнала: прежний `state.v1` (только чтение с spec 035) и `state.v2` (`state.ops.*`).
+/// Таблицы журнала `state.v2`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Journal {
     log: &'static str,
     head: &'static str,
 }
 
-/// Журнал `state.v1` — с spec 035 заморожен: `state.append` → `UPGRADE_REQUIRED`, `state.sync` читает.
-pub(crate) const V1: Journal = Journal { log: "user_state_log", head: "user_state_head" };
 /// Журнал `state.v2` (spec 035, FR-063): `state.ops.append` / `state.ops.sync`.
 pub(crate) const V2: Journal = Journal { log: "user_state_log_v2", head: "user_state_head_v2" };
 
@@ -84,12 +73,6 @@ async fn existing(db: &SqlitePool, j: Journal, user: &str, op_id: &[u8], ct: &[u
         Some(_) => Err(ErrorCode::Duplicate),
         None => Ok(None),
     }
-}
-
-/// Запись в прежний журнал (только тесты: с spec 035 `state.append` отвергается).
-#[cfg(test)]
-pub(crate) async fn append(db: &SqlitePool, user: &str, r: &spb::AppendRequest, limits: StateLimits) -> Result<u64, ErrorCode> {
-    append_in(db, V1, user, &r.op_id, &r.aead_ciphertext, limits).await
 }
 
 /// `state.ops.append`: дописать запись в журнал v2 пользователя, вернуть её seq.
@@ -159,8 +142,8 @@ async fn page(db: &SqlitePool, j: Journal, user: &str, after_seq: u64, max_bytes
     let mut out = Vec::new();
     let mut used = 0usize;
     for (seq, op_id, rec) in rows {
-        // Размер записи страницы в кодировке StateRecord (одинаков у v1 и v2).
-        let len = spb::StateRecord { seq: seq as u64, op_id: op_id.clone(), aead_ciphertext: rec.clone() }.encoded_len() + 4;
+        // Размер записи страницы в кодировке StateRecord.
+        let len = s2pb::StateRecord { seq: seq as u64, op_id: op_id.clone(), aead_ciphertext: rec.clone() }.encoded_len() + 4;
         if out.len() >= PAGE_ITEMS || (!out.is_empty() && used + len > budget) {
             return Ok((out, true));
         }
@@ -168,13 +151,6 @@ async fn page(db: &SqlitePool, j: Journal, user: &str, after_seq: u64, max_bytes
         out.push((seq as u64, op_id, rec));
     }
     Ok((out, false))
-}
-
-/// `state.sync`: прежний журнал — только чтение (разовый перенос, FR-063).
-pub(crate) async fn sync(db: &SqlitePool, user: &str, r: &spb::SyncRequest) -> Result<spb::SyncResponse, ErrorCode> {
-    let (rows, more) = page(db, V1, user, r.after_seq, r.max_bytes).await?;
-    let records = rows.into_iter().map(|(seq, op_id, aead_ciphertext)| spb::StateRecord { seq, op_id, aead_ciphertext }).collect();
-    Ok(spb::SyncResponse { records, more })
 }
 
 /// `state.ops.sync`: журнал v2.
@@ -185,7 +161,7 @@ pub(crate) async fn sync_v2(db: &SqlitePool, user: &str, r: &s2pb::SyncRequest) 
 }
 
 // ---------------------------------------------------------------------------
-// Согласие на добавление в группы (v1-код, до E6).
+// Согласие на добавление в группы.
 
 /// Разрешает ли настройка v2 добавлять пользователя в группы. «Контакты» —
 /// как «никто»: сервер не знает контактов (они внутри E2E), в группу такой
@@ -227,8 +203,8 @@ mod tests {
         pool
     }
 
-    fn req(ct_len: usize, fill: u8) -> spb::AppendRequest {
-        spb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![fill; ct_len] }
+    fn req(ct_len: usize, fill: u8) -> s2pb::AppendRequest {
+        s2pb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![fill; ct_len] }
     }
 
     const BIG: StateLimits = StateLimits { max_records: 1000, max_bytes: 1 << 30 };
@@ -237,19 +213,19 @@ mod tests {
     async fn append_sync_per_user_and_idempotent() {
         let db = pool().await;
         let a1 = req(40, 1);
-        assert_eq!(append(&db, "a@local", &a1, BIG).await.unwrap(), 1);
-        assert_eq!(append(&db, "a@local", &req(40, 2), BIG).await.unwrap(), 2);
-        assert_eq!(append(&db, "b@local", &req(40, 3), BIG).await.unwrap(), 1, "seq — на пользователя");
+        assert_eq!(append_v2(&db, "a@local", &a1, BIG).await.unwrap(), 1);
+        assert_eq!(append_v2(&db, "a@local", &req(40, 2), BIG).await.unwrap(), 2);
+        assert_eq!(append_v2(&db, "b@local", &req(40, 3), BIG).await.unwrap(), 1, "seq — на пользователя");
         // повтор той же записи — тот же seq; тот же op_id с другим шифртекстом — DUPLICATE
-        assert_eq!(append(&db, "a@local", &a1, BIG).await.unwrap(), 1);
+        assert_eq!(append_v2(&db, "a@local", &a1, BIG).await.unwrap(), 1);
         let mut forged = a1.clone();
         forged.aead_ciphertext = vec![9; 40];
-        assert_eq!(append(&db, "a@local", &forged, BIG).await, Err(ErrorCode::Duplicate));
-        assert_eq!(append(&db, "a@local", &req(40, 4), BIG).await.unwrap(), 3, "seq не расходуется на отказы");
-        let s = sync(&db, "a@local", &spb::SyncRequest { after_seq: 1, max_bytes: 0 }).await.unwrap();
+        assert_eq!(append_v2(&db, "a@local", &forged, BIG).await, Err(ErrorCode::Duplicate));
+        assert_eq!(append_v2(&db, "a@local", &req(40, 4), BIG).await.unwrap(), 3, "seq не расходуется на отказы");
+        let s = sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: 1, max_bytes: 0 }).await.unwrap();
         assert_eq!(s.records.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![2, 3]);
         assert!(!s.more);
-        let b = sync(&db, "b@local", &spb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
+        let b = sync_v2(&db, "b@local", &s2pb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
         assert_eq!(b.records.len(), 1);
         assert_eq!(b.records[0].aead_ciphertext, vec![3; 40]);
     }
@@ -259,28 +235,28 @@ mod tests {
         let db = pool().await;
         let mut bad = req(40, 1);
         bad.op_id = vec![1; 16];
-        assert_eq!(append(&db, "a@local", &bad, BIG).await, Err(ErrorCode::Invalid), "op_id не UUIDv7");
-        assert_eq!(append(&db, "a@local", &req(10, 1), BIG).await, Err(ErrorCode::Invalid), "короче nonce+тег");
+        assert_eq!(append_v2(&db, "a@local", &bad, BIG).await, Err(ErrorCode::Invalid), "op_id не UUIDv7");
+        assert_eq!(append_v2(&db, "a@local", &req(10, 1), BIG).await, Err(ErrorCode::Invalid), "короче nonce+тег");
         let lim = StateLimits { max_records: 2, max_bytes: 1 << 20 };
-        append(&db, "a@local", &req(40, 1), lim).await.unwrap();
-        append(&db, "a@local", &req(40, 1), lim).await.unwrap();
-        assert_eq!(append(&db, "a@local", &req(40, 1), lim).await, Err(ErrorCode::Limit));
+        append_v2(&db, "a@local", &req(40, 1), lim).await.unwrap();
+        append_v2(&db, "a@local", &req(40, 1), lim).await.unwrap();
+        assert_eq!(append_v2(&db, "a@local", &req(40, 1), lim).await, Err(ErrorCode::Limit));
         let lim = StateLimits { max_records: 100, max_bytes: 100 };
-        append(&db, "c@local", &req(60, 1), lim).await.unwrap();
-        assert_eq!(append(&db, "c@local", &req(60, 1), lim).await, Err(ErrorCode::Limit), "объём");
-        assert_eq!(append(&db, "c@local", &req(40, 1), lim).await.unwrap(), 2, "откат не сдвинул счётчики");
+        append_v2(&db, "c@local", &req(60, 1), lim).await.unwrap();
+        assert_eq!(append_v2(&db, "c@local", &req(60, 1), lim).await, Err(ErrorCode::Limit), "объём");
+        assert_eq!(append_v2(&db, "c@local", &req(40, 1), lim).await.unwrap(), 2, "откат не сдвинул счётчики");
     }
 
     #[tokio::test]
     async fn sync_pages_by_budget() {
         let db = pool().await;
         for _ in 0..5 {
-            append(&db, "a@local", &req(1000, 7), BIG).await.unwrap();
+            append_v2(&db, "a@local", &req(1000, 7), BIG).await.unwrap();
         }
         let mut after = 0;
         let mut seen = vec![];
         loop {
-            let s = sync(&db, "a@local", &spb::SyncRequest { after_seq: after, max_bytes: 2100 }).await.unwrap();
+            let s = sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: after, max_bytes: 2100 }).await.unwrap();
             assert!(!s.records.is_empty());
             assert!(s.records.len() <= 2);
             after = s.records.last().unwrap().seq;
@@ -291,33 +267,10 @@ mod tests {
         }
         assert_eq!(seen, vec![1, 2, 3, 4, 5]);
         // Бюджет меньше записи — всё равно одна запись (клиент продвигается).
-        let s = sync(&db, "a@local", &spb::SyncRequest { after_seq: 0, max_bytes: 10 }).await.unwrap();
+        let s = sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: 0, max_bytes: 10 }).await.unwrap();
         assert_eq!(s.records.len(), 1);
         assert!(s.more);
-        assert_eq!(sync(&db, "a@local", &spb::SyncRequest { after_seq: u64::MAX, max_bytes: 0 }).await.err(), Some(ErrorCode::Invalid));
-    }
-
-    /// spec 035 T035: журнал v2 — отдельные seq и таблица, те же правила идемпотентности и лимитов.
-    #[tokio::test]
-    async fn journal_v2_separate_from_v1() {
-        let db = pool().await;
-        let r = req(40, 1);
-        assert_eq!(append(&db, "a@local", &r, BIG).await.unwrap(), 1);
-        let r2 = s2pb::AppendRequest { op_id: r.op_id.clone(), aead_ciphertext: vec![2; 40] };
-        assert_eq!(append_v2(&db, "a@local", &r2, BIG).await.unwrap(), 1, "свой seq, тот же op_id в другом журнале — не дубль");
-        assert_eq!(append_v2(&db, "a@local", &r2, BIG).await.unwrap(), 1, "повтор — прежний seq");
-        let forged = s2pb::AppendRequest { op_id: r.op_id.clone(), aead_ciphertext: vec![3; 40] };
-        assert_eq!(append_v2(&db, "a@local", &forged, BIG).await, Err(ErrorCode::Duplicate));
-        let r3 = s2pb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![4; 40] };
-        assert_eq!(append_v2(&db, "a@local", &r3, BIG).await.unwrap(), 2);
-        let s = sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
-        assert_eq!(s.records.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2]);
-        assert_eq!(s.records[0].aead_ciphertext, vec![2; 40]);
-        let old = sync(&db, "a@local", &spb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
-        assert_eq!(old.records.len(), 1, "прежний журнал не тронут");
-        let lim = StateLimits { max_records: 2, max_bytes: 1 << 20 };
-        let r4 = s2pb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![5; 40] };
-        assert_eq!(append_v2(&db, "a@local", &r4, lim).await, Err(ErrorCode::Limit));
+        assert_eq!(sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: u64::MAX, max_bytes: 0 }).await.err(), Some(ErrorCode::Invalid));
     }
 
     #[test]

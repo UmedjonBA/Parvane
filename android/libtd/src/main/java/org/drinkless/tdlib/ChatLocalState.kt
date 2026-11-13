@@ -93,7 +93,7 @@ class ChatLocalState(private val dir: File) {
     }
     private fun loadContacts() {
         try {
-            File(dir, "contacts.json").takeIf { it.exists() }?.let { f ->
+            File(dir, "contacts.json").takeIf { SeamFiles.exists(it) }?.let { f ->
                 val o = JSONObject(SeamFiles.read(f))
                 o.keys().forEach { k -> o.optJSONObject(k)?.let { c -> contacts[k] = Contact(c.optString("first"), c.optString("last"), c.optString("note")) } }
             }
@@ -115,7 +115,7 @@ class ChatLocalState(private val dir: File) {
     @Synchronized fun hideTop(chatId: Long) { if (hiddenTop.add(chatId)) saveRecent() }
     private fun loadRecent() {
         try {
-            File(dir, "recent.json").takeIf { it.exists() }?.let { f ->
+            File(dir, "recent.json").takeIf { SeamFiles.exists(it) }?.let { f ->
                 val o = JSONObject(SeamFiles.read(f))
                 o.optJSONArray("found")?.let { a -> for (i in 0 until a.length()) recentFound.add(a.optLong(i)) }
                 o.optJSONArray("hidden_top")?.let { a -> for (i in 0 until a.length()) hiddenTop.add(a.optLong(i)) }
@@ -160,16 +160,16 @@ class ChatLocalState(private val dir: File) {
     }
 
     private fun load() {
-        try { File(dir, "ttl.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> ttl[k] = o.optInt(k) } } } catch (e: Exception) { }
-        try { File(dir, "drafts.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> k.toLongOrNull()?.let { id -> o.optJSONObject(k)?.let { drafts[id] = it } } } } } catch (e: Exception) { }
-        try { File(dir, "chatlists.json").takeIf { it.exists() }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> if (o.optString(k) == "archive") k.toLongOrNull()?.let { archived.add(it) } } } } catch (e: Exception) { }
+        try { File(dir, "ttl.json").takeIf { SeamFiles.exists(it) }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> ttl[k] = o.optInt(k) } } } catch (e: Exception) { }
+        try { File(dir, "drafts.json").takeIf { SeamFiles.exists(it) }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> k.toLongOrNull()?.let { id -> o.optJSONObject(k)?.let { drafts[id] = it } } } } } catch (e: Exception) { }
+        try { File(dir, "chatlists.json").takeIf { SeamFiles.exists(it) }?.let { f -> val o = JSONObject(SeamFiles.read(f)); o.keys().forEach { k -> if (o.optString(k) == "archive") k.toLongOrNull()?.let { archived.add(it) } } } } catch (e: Exception) { }
         loadPins()
         loadContacts()
         loadRecent()
     }
     private fun loadPins() {
         try {
-            File(dir, "pins.json").takeIf { it.exists() }?.let { f ->
+            File(dir, "pins.json").takeIf { SeamFiles.exists(it) }?.let { f ->
                 val o = JSONObject(SeamFiles.read(f))
                 o.optJSONArray("main")?.let { a -> for (i in 0 until a.length()) pinned.add(a.optLong(i)) }
                 o.optJSONArray("unread")?.let { a -> for (i in 0 until a.length()) unreadMarks.add(a.optLong(i)) }

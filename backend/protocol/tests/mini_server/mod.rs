@@ -192,3 +192,77 @@ impl Server {
             .collect()
     }
 }
+
+/// Журнал истории аккаунта в памяти (как `messenger/src/v2_history.rs`): `history.append/sync/head/get` и
+/// `history.checkpoint.commit` с CAS по id точки; точка удаляет записи до `upto_seq`, кроме сегментов и сводки.
+/// Ответ — `Ok(тело)` либо `Err(код ErrorCode)`.
+#[derive(Default, Clone)]
+pub struct HistoryJournal {
+    pub records: Vec<parvane_protocol::pb::parvane::history::v1::HistoryRecord>,
+    pub checkpoint: Option<parvane_protocol::pb::parvane::history::v1::Checkpoint>,
+    pub head: u64,
+    /// Время, которое сервер ставит точке (`created_ms`).
+    pub now_ms: i64,
+}
+
+impl HistoryJournal {
+    pub fn append(&mut self, a: &parvane_protocol::pb::parvane::history::v1::AppendRequest) -> u64 {
+        if let Some(r) = self.records.iter().find(|r| r.op_id == a.op_id) {
+            return r.seq;
+        }
+        self.head += 1;
+        self.records.push(parvane_protocol::pb::parvane::history::v1::HistoryRecord {
+            seq: self.head,
+            op_id: a.op_id.clone(),
+            aead_ciphertext: a.aead_ciphertext.clone(),
+            chunk: a.chunk,
+        });
+        self.head
+    }
+
+    pub fn commit(&mut self, r: &parvane_protocol::pb::parvane::history::v1::CommitRequest) -> Result<u64, i32> {
+        use parvane_protocol::pb::parvane::core::v2::ErrorCode;
+        let cur = self.checkpoint.as_ref().map_or(0, |c| c.id);
+        if cur != r.expected_checkpoint_id {
+            return Err(ErrorCode::Duplicate as i32);
+        }
+        let mut keep: std::collections::BTreeSet<u64> = r.chunk_seqs.iter().copied().collect();
+        keep.insert(r.summary_seq);
+        let chunks: std::collections::BTreeSet<u64> = self.records.iter().filter(|x| x.chunk).map(|x| x.seq).collect();
+        if r.upto_seq > self.head || !keep.iter().all(|s| chunks.contains(s) && *s <= r.upto_seq) {
+            return Err(ErrorCode::Invalid as i32);
+        }
+        self.records.retain(|x| x.seq > r.upto_seq || keep.contains(&x.seq));
+        let id = cur + 1;
+        self.checkpoint = Some(parvane_protocol::pb::parvane::history::v1::Checkpoint {
+            id,
+            upto_seq: r.upto_seq,
+            summary_seq: r.summary_seq,
+            chunk_seqs: r.chunk_seqs.clone(),
+            created_ms: self.now_ms,
+        });
+        Ok(id)
+    }
+
+    pub fn handle(&mut self, method: &str, body: &[u8]) -> Result<Vec<u8>, i32> {
+        use parvane_protocol::pb::parvane::history::v1 as h;
+        Ok(match method {
+            "history.append" => h::AppendResponse { seq: self.append(&h::AppendRequest::decode(body).unwrap()) }.encode_to_vec(),
+            "history.head" => h::HeadResponse { head_seq: self.head, checkpoint: self.checkpoint.clone() }.encode_to_vec(),
+            "history.get" => {
+                let q = h::GetRequest::decode(body).unwrap();
+                h::GetResponse { records: self.records.iter().filter(|r| q.seqs.contains(&r.seq)).cloned().collect() }.encode_to_vec()
+            }
+            "history.sync" => {
+                let q = h::SyncRequest::decode(body).unwrap();
+                let upto = self.checkpoint.as_ref().map_or(0, |c| c.upto_seq);
+                let compacted = self.checkpoint.clone().filter(|_| q.after_seq < upto);
+                let after = if compacted.is_some() { upto } else { q.after_seq };
+                let records = self.records.iter().filter(|r| r.seq > after && !(q.skip_chunks && r.chunk)).cloned().collect();
+                h::SyncResponse { records, more: false, head_seq: self.head, compacted }.encode_to_vec()
+            }
+            "history.checkpoint.commit" => h::CommitResponse { checkpoint_id: self.commit(&h::CommitRequest::decode(body).unwrap())? }.encode_to_vec(),
+            m => panic!("журнал истории: {m}"),
+        })
+    }
+}

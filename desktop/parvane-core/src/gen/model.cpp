@@ -239,7 +239,6 @@ void to_json(nlohmann::json &j, const OpenState &v) {
     switch (v) {
     case OpenState::OPEN_STATE_UNSPECIFIED: j = "OPEN_STATE_UNSPECIFIED"; return;
     case OpenState::OPEN_STATE_READY: j = "OPEN_STATE_READY"; return;
-    case OpenState::OPEN_STATE_MIGRATION_NEEDED: j = "OPEN_STATE_MIGRATION_NEEDED"; return;
     case OpenState::OPEN_STATE_TOO_NEW: j = "OPEN_STATE_TOO_NEW"; return;
     case OpenState::OPEN_STATE_LOCKED: j = "OPEN_STATE_LOCKED"; return;
     }
@@ -251,7 +250,6 @@ void from_json(const nlohmann::json &j, OpenState &v) {
         const auto &s = j.get_ref<const std::string &>();
         if (s == "OPEN_STATE_UNSPECIFIED") { v = OpenState::OPEN_STATE_UNSPECIFIED; return; }
         if (s == "OPEN_STATE_READY") { v = OpenState::OPEN_STATE_READY; return; }
-        if (s == "OPEN_STATE_MIGRATION_NEEDED") { v = OpenState::OPEN_STATE_MIGRATION_NEEDED; return; }
         if (s == "OPEN_STATE_TOO_NEW") { v = OpenState::OPEN_STATE_TOO_NEW; return; }
         if (s == "OPEN_STATE_LOCKED") { v = OpenState::OPEN_STATE_LOCKED; return; }
         v = {};
@@ -327,16 +325,6 @@ void from_json(const nlohmann::json &j, ServerInputKind &v) {
         return;
     }
     v = static_cast<ServerInputKind>(j.get<int32_t>());
-}
-
-void to_json(nlohmann::json &j, const AuditDump &m) {
-    j = nlohmann::json::object();
-    if (!m.jsonl.empty()) j["jsonl"] = m.jsonl;
-}
-
-void from_json(const nlohmann::json &j, AuditDump &m) {
-    m = AuditDump{};
-    if (const auto *v = pick(j, "jsonl", "jsonl")) m.jsonl = (*v).get<std::string>();
 }
 
 void to_json(nlohmann::json &j, const CallResult &m) {
@@ -479,8 +467,13 @@ void to_json(nlohmann::json &j, const EngineConfig &m) {
     if (m.memory_budget_bytes != 0) j["memory_budget_bytes"] = std::to_string(m.memory_budget_bytes);
     if (!m.device_key.empty()) j["device_key"] = toBase64(m.device_key);
     if (m.vectors) j["vectors"] = m.vectors;
-    if (m.legacy_present) j["legacy_present"] = m.legacy_present;
     if (m.host_driven) j["host_driven"] = m.host_driven;
+    if (m.engine_rows) j["engine_rows"] = m.engine_rows;
+    if (m.history_batch_min_ms != 0) j["history_batch_min_ms"] = m.history_batch_min_ms;
+    if (m.history_batch_max_ms != 0) j["history_batch_max_ms"] = m.history_batch_max_ms;
+    if (m.history_checkpoint_age_ms != 0) j["history_checkpoint_age_ms"] = std::to_string(m.history_checkpoint_age_ms);
+    if (m.history_checkpoint_records != 0) j["history_checkpoint_records"] = m.history_checkpoint_records;
+    if (m.history_checkpoint_jitter_ms != 0) j["history_checkpoint_jitter_ms"] = m.history_checkpoint_jitter_ms;
 }
 
 void from_json(const nlohmann::json &j, EngineConfig &m) {
@@ -494,8 +487,13 @@ void from_json(const nlohmann::json &j, EngineConfig &m) {
     if (const auto *v = pick(j, "memory_budget_bytes", "memoryBudgetBytes")) m.memory_budget_bytes = numFrom<uint64_t>((*v));
     if (const auto *v = pick(j, "device_key", "deviceKey")) m.device_key = fromBase64((*v).get<std::string>());
     if (const auto *v = pick(j, "vectors", "vectors")) m.vectors = (*v).get<bool>();
-    if (const auto *v = pick(j, "legacy_present", "legacyPresent")) m.legacy_present = (*v).get<bool>();
     if (const auto *v = pick(j, "host_driven", "hostDriven")) m.host_driven = (*v).get<bool>();
+    if (const auto *v = pick(j, "engine_rows", "engineRows")) m.engine_rows = (*v).get<bool>();
+    if (const auto *v = pick(j, "history_batch_min_ms", "historyBatchMinMs")) m.history_batch_min_ms = numFrom<uint32_t>((*v));
+    if (const auto *v = pick(j, "history_batch_max_ms", "historyBatchMaxMs")) m.history_batch_max_ms = numFrom<uint32_t>((*v));
+    if (const auto *v = pick(j, "history_checkpoint_age_ms", "historyCheckpointAgeMs")) m.history_checkpoint_age_ms = numFrom<uint64_t>((*v));
+    if (const auto *v = pick(j, "history_checkpoint_records", "historyCheckpointRecords")) m.history_checkpoint_records = numFrom<uint32_t>((*v));
+    if (const auto *v = pick(j, "history_checkpoint_jitter_ms", "historyCheckpointJitterMs")) m.history_checkpoint_jitter_ms = numFrom<uint32_t>((*v));
 }
 
 void to_json(nlohmann::json &j, const EngineError &m) {
@@ -635,18 +633,6 @@ void from_json(const nlohmann::json &j, KindFormat &m) {
     if (const auto *v = pick(j, "format", "format")) m.format = numFrom<uint32_t>((*v));
 }
 
-void to_json(nlohmann::json &j, const LegacyRecord &m) {
-    j = nlohmann::json::object();
-    if (!m.key.empty()) j["key"] = m.key;
-    if (!m.value.empty()) j["value"] = toBase64(m.value);
-}
-
-void from_json(const nlohmann::json &j, LegacyRecord &m) {
-    m = LegacyRecord{};
-    if (const auto *v = pick(j, "key", "key")) m.key = (*v).get<std::string>();
-    if (const auto *v = pick(j, "value", "value")) m.value = fromBase64((*v).get<std::string>());
-}
-
 void to_json(nlohmann::json &j, const MarkValue &m) {
     j = nlohmann::json::object();
     if (m.field != 0) j["field"] = m.field;
@@ -657,58 +643,6 @@ void from_json(const nlohmann::json &j, MarkValue &m) {
     m = MarkValue{};
     if (const auto *v = pick(j, "field", "field")) m.field = numFrom<uint32_t>((*v));
     if (const auto *v = pick(j, "value", "value")) m.value = fromBase64((*v).get<std::string>());
-}
-
-void to_json(nlohmann::json &j, const MigrateStatus &m) {
-    j = nlohmann::json::object();
-    if (m.point != 0) j["point"] = m.point;
-    if (m.done) j["done"] = m.done;
-    if (!m.report_json.empty()) j["report_json"] = m.report_json;
-}
-
-void from_json(const nlohmann::json &j, MigrateStatus &m) {
-    m = MigrateStatus{};
-    if (const auto *v = pick(j, "point", "point")) m.point = numFrom<uint32_t>((*v));
-    if (const auto *v = pick(j, "done", "done")) m.done = (*v).get<bool>();
-    if (const auto *v = pick(j, "report_json", "reportJson")) m.report_json = (*v).get<std::string>();
-}
-
-void to_json(nlohmann::json &j, const MigrateStep &m) {
-    j = nlohmann::json::object();
-    if (!m.layer.empty()) j["layer"] = m.layer;
-    if (!m.records.empty()) {
-        auto a = nlohmann::json::array();
-        for (const auto &x : m.records) a.push_back(x);
-        j["records"] = a;
-    }
-    if (m.last) j["last"] = m.last;
-    if (m.chunk != 0) j["chunk"] = m.chunk;
-}
-
-void from_json(const nlohmann::json &j, MigrateStep &m) {
-    m = MigrateStep{};
-    if (const auto *v = pick(j, "layer", "layer")) m.layer = (*v).get<std::string>();
-    if (const auto *v = pick(j, "records", "records"); v && v->is_array())
-        for (const auto &x : *v) m.records.push_back(x.get<LegacyRecord>());
-    if (const auto *v = pick(j, "last", "last")) m.last = (*v).get<bool>();
-    if (const auto *v = pick(j, "chunk", "chunk")) m.chunk = numFrom<uint32_t>((*v));
-}
-
-void to_json(nlohmann::json &j, const MigrationPlan &m) {
-    j = nlohmann::json::object();
-    if (!m.steps.empty()) {
-        auto a = nlohmann::json::array();
-        for (const auto &x : m.steps) a.push_back(x);
-        j["steps"] = a;
-    }
-    if (m.legacy_records != 0) j["legacy_records"] = std::to_string(m.legacy_records);
-}
-
-void from_json(const nlohmann::json &j, MigrationPlan &m) {
-    m = MigrationPlan{};
-    if (const auto *v = pick(j, "steps", "steps"); v && v->is_array())
-        for (const auto &x : *v) m.steps.push_back(x.get<std::string>());
-    if (const auto *v = pick(j, "legacy_records", "legacyRecords")) m.legacy_records = numFrom<uint64_t>((*v));
 }
 
 void to_json(nlohmann::json &j, const MigrationProgress &m) {
@@ -759,13 +693,11 @@ void from_json(const nlohmann::json &j, ObjectKey &m) {
 void to_json(nlohmann::json &j, const OpenResult &m) {
     j = nlohmann::json::object();
     if (m.state != OpenState{}) j["state"] = m.state;
-    if (m.migration.has_value()) j["migration"] = *m.migration;
 }
 
 void from_json(const nlohmann::json &j, OpenResult &m) {
     m = OpenResult{};
     if (const auto *v = pick(j, "state", "state")) m.state = (*v).get<OpenState>();
-    if (const auto *v = pick(j, "migration", "migration")) m.migration = (*v).get<MigrationPlan>();
 }
 
 void to_json(nlohmann::json &j, const OutRequest &m) {
@@ -883,6 +815,7 @@ void to_json(nlohmann::json &j, const RowsApply &m) {
     if (m.wipe) j["wipe"] = m.wipe;
     if (m.now_ms != 0) j["now_ms"] = std::to_string(m.now_ms);
     if (!m.rows_json.empty()) j["rows_json"] = m.rows_json;
+    if (m.journal) j["journal"] = m.journal;
 }
 
 void from_json(const nlohmann::json &j, RowsApply &m) {
@@ -893,6 +826,7 @@ void from_json(const nlohmann::json &j, RowsApply &m) {
     if (const auto *v = pick(j, "wipe", "wipe")) m.wipe = (*v).get<bool>();
     if (const auto *v = pick(j, "now_ms", "nowMs")) m.now_ms = numFrom<int64_t>((*v));
     if (const auto *v = pick(j, "rows_json", "rowsJson")) m.rows_json = (*v).get<std::string>();
+    if (const auto *v = pick(j, "journal", "journal")) m.journal = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const RowsReadRequest &m) {
@@ -1559,6 +1493,13 @@ void to_json(nlohmann::json &j, const UnreadChanged &m) {
     if (m.chat.has_value()) j["chat"] = *m.chat;
     if (m.count != 0) j["count"] = m.count;
     if (m.mention) j["mention"] = m.mention;
+    if (!m.last_read_id.empty()) j["last_read_id"] = toBase64(m.last_read_id);
+    if (m.last_read_ts_ms != 0) j["last_read_ts_ms"] = std::to_string(m.last_read_ts_ms);
+    if (!m.mentions.empty()) {
+        auto a = nlohmann::json::array();
+        for (const auto &x : m.mentions) a.push_back(toBase64(x));
+        j["mentions"] = a;
+    }
 }
 
 void from_json(const nlohmann::json &j, UnreadChanged &m) {
@@ -1566,6 +1507,10 @@ void from_json(const nlohmann::json &j, UnreadChanged &m) {
     if (const auto *v = pick(j, "chat", "chat")) m.chat = (*v).get<Peer>();
     if (const auto *v = pick(j, "count", "count")) m.count = numFrom<uint32_t>((*v));
     if (const auto *v = pick(j, "mention", "mention")) m.mention = (*v).get<bool>();
+    if (const auto *v = pick(j, "last_read_id", "lastReadId")) m.last_read_id = fromBase64((*v).get<std::string>());
+    if (const auto *v = pick(j, "last_read_ts_ms", "lastReadTsMs")) m.last_read_ts_ms = numFrom<int64_t>((*v));
+    if (const auto *v = pick(j, "mentions", "mentions"); v && v->is_array())
+        for (const auto &x : *v) m.mentions.push_back(fromBase64(x.get<std::string>()));
 }
 
 void to_json(nlohmann::json &j, const ViewMedia &m) {
@@ -1684,6 +1629,15 @@ void to_json(nlohmann::json &j, const GroupView &m) {
         for (const auto &x : m.invite_links) a.push_back(x);
         j["invite_links"] = a;
     }
+    if (!m.info_json.empty()) j["info_json"] = m.info_json;
+    if (m.version != 0) j["version"] = std::to_string(m.version);
+    if (m.deleted) j["deleted"] = m.deleted;
+    if (m.can_manage_invites) j["can_manage_invites"] = m.can_manage_invites;
+    if (m.can_decide_requests) j["can_decide_requests"] = m.can_decide_requests;
+    if (m.can_rotate) j["can_rotate"] = m.can_rotate;
+    if (m.can_ban) j["can_ban"] = m.can_ban;
+    if (m.can_add_admins) j["can_add_admins"] = m.can_add_admins;
+    if (m.can_delete_messages) j["can_delete_messages"] = m.can_delete_messages;
 }
 
 void from_json(const nlohmann::json &j, GroupView &m) {
@@ -1699,6 +1653,15 @@ void from_json(const nlohmann::json &j, GroupView &m) {
     if (const auto *v = pick(j, "is_public", "isPublic")) m.is_public = (*v).get<bool>();
     if (const auto *v = pick(j, "invite_links", "inviteLinks"); v && v->is_array())
         for (const auto &x : *v) m.invite_links.push_back(x.get<std::string>());
+    if (const auto *v = pick(j, "info_json", "infoJson")) m.info_json = (*v).get<std::string>();
+    if (const auto *v = pick(j, "version", "version")) m.version = numFrom<uint64_t>((*v));
+    if (const auto *v = pick(j, "deleted", "deleted")) m.deleted = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_manage_invites", "canManageInvites")) m.can_manage_invites = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_decide_requests", "canDecideRequests")) m.can_decide_requests = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_rotate", "canRotate")) m.can_rotate = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_ban", "canBan")) m.can_ban = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_add_admins", "canAddAdmins")) m.can_add_admins = (*v).get<bool>();
+    if (const auto *v = pick(j, "can_delete_messages", "canDeleteMessages")) m.can_delete_messages = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const HistoryPageRequest &m) {
@@ -1957,6 +1920,7 @@ void to_json(nlohmann::json &j, const MessageView &m) {
     if (m.silent) j["silent"] = m.silent;
     if (m.order != 0) j["order"] = std::to_string(m.order);
     if (!m.wire.empty()) j["wire"] = m.wire;
+    if (m.unread) j["unread"] = m.unread;
 }
 
 void from_json(const nlohmann::json &j, MessageView &m) {
@@ -1981,6 +1945,7 @@ void from_json(const nlohmann::json &j, MessageView &m) {
     if (const auto *v = pick(j, "silent", "silent")) m.silent = (*v).get<bool>();
     if (const auto *v = pick(j, "order", "order")) m.order = numFrom<int64_t>((*v));
     if (const auto *v = pick(j, "wire", "wire")) m.wire = (*v).get<std::string>();
+    if (const auto *v = pick(j, "unread", "unread")) m.unread = (*v).get<bool>();
 }
 
 void to_json(nlohmann::json &j, const ChatView &m) {
@@ -2000,6 +1965,8 @@ void to_json(nlohmann::json &j, const ChatView &m) {
         for (const auto &x : m.folder_ids) a.push_back(x);
         j["folder_ids"] = a;
     }
+    if (m.unread_mark) j["unread_mark"] = m.unread_mark;
+    if (m.order != 0) j["order"] = std::to_string(m.order);
 }
 
 void from_json(const nlohmann::json &j, ChatView &m) {
@@ -2016,6 +1983,8 @@ void from_json(const nlohmann::json &j, ChatView &m) {
     if (const auto *v = pick(j, "draft", "draft")) m.draft = (*v).get<std::string>();
     if (const auto *v = pick(j, "folder_ids", "folderIds"); v && v->is_array())
         for (const auto &x : *v) m.folder_ids.push_back(numFrom<uint32_t>(x));
+    if (const auto *v = pick(j, "unread_mark", "unreadMark")) m.unread_mark = (*v).get<bool>();
+    if (const auto *v = pick(j, "order", "order")) m.order = numFrom<int64_t>((*v));
 }
 
 void to_json(nlohmann::json &j, const HistoryPage &m) {

@@ -201,8 +201,6 @@ object AccountUi {
                     Sx.main.post { confirmLink(device, code) }
                 }
                 "federation_error" -> federationToast(event.optString("reason"))
-                // spec 035 T137 (US1): ход разового переноса данных в новое хранилище — полоска приложения (EN+RU)
-                "migration" -> migrationToast(event.optInt("point"), event.optInt("total", 7), event.optBoolean("done"), event.optBoolean("failed"))
                 "link_granted", "link_request_gone" -> event.optString("device_id").let { dev -> Sx.main.post { linkDialogs.remove(dev)?.dismiss() } }
                 "recovery" -> if (event.optString("state") == "unavailable" || event.optString("state") == "expired")
                     Sx.main.post { UI.getUiContext()?.let { askRecoveryKey(it, rotate = false) {} } }
@@ -252,24 +250,6 @@ object AccountUi {
     }
 
     /** FED-1: понятная причина отказа другого сервера (как desktop/web); одна причина — не чаще раза в 10 с. */
-    private var migrationShownAt = 0L
-    private fun migrationToast(point: Int, total: Int, done: Boolean, failed: Boolean) {
-        val res = UI.getAppContext().resources
-        val text = when {
-            failed -> res.getString(org.thunderdog.challegram.R.string.ParvaneMigrateFailed)
-            done -> res.getString(org.thunderdog.challegram.R.string.ParvaneMigrateDone)
-            else -> {
-                // не чаще раза в 2 с: шаги переноса идут быстрее, чем полоска успевает прочитаться
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now - migrationShownAt < 2000) return
-                migrationShownAt = now
-                res.getString(org.thunderdog.challegram.R.string.ParvaneMigrateTitle) + "\n" +
-                    res.getString(org.thunderdog.challegram.R.string.ParvaneMigrateProgress, point, total)
-            }
-        }
-        Sx.main.post { (UI.getUiContext() as? android.app.Activity)?.let { PvToast.showInWindow(it, text) } }
-    }
-
     private fun federationToast(reason: String) {
         val text = when (reason) {
             "disabled" -> Sx.t("На вашем сервере переписка с другими серверами выключена", "Messaging with other servers is turned off on your server")

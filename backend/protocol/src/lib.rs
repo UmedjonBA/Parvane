@@ -46,7 +46,6 @@ pub mod tokens;
 pub mod unknown;
 pub mod model;
 pub mod store;
-pub mod migrate;
 #[cfg(feature = "future-schema")]
 pub mod sample_future;
 

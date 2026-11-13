@@ -1,7 +1,7 @@
-import { createStore, get, keys, set } from 'idb-keyval';
+import { createStore, get, set } from 'idb-keyval';
 import { describe, expect, it } from 'vitest';
 
-import { SecureE2eStorage } from './secureStorage';
+import { SecureE2eStorage, secureStorageInternals } from './secureStorage';
 import {
   buildPvpkArchive,
   findInstalledPackBySetId,
@@ -107,15 +107,9 @@ describe('installed packs at rest', () => {
     expect(packs).toHaveLength(1);
     expect(packs[0]).toMatchObject({ name: 'PvEmoji123', rawName: 'Pv.Emoji!123', isEmoji: true });
     expect(new Uint8Array(packs[0].files[0].data)).toEqual(new Uint8Array(pngBytes()));
-    // В общем хранилище E2E нет открытых байтов PNG
-    const store = createStore('parvane-e2e-v2', 'secure-state');
-    for (const key of await keys(store)) {
-      const value = await get(key, store);
-      if (!value?.ciphertext) continue;
-      const bytes = new Uint8Array(value.ciphertext);
-      const index = bytes.findIndex((byte, i) => byte === 0x89 && bytes[i + 1] === 0x50 && bytes[i + 2] === 0x4e);
-      expect(index).toBe(-1);
-    }
+    // В хранилище профиля (значения на носителе) нет открытых байтов PNG
+    const raw = await secureStorageInternals.rawRecords(user);
+    expect([...raw.values()].some((value) => value.includes('89504e4701020304'))).toBe(false);
     await removeInstalledPack(user, getSetIdForPackName('PvEmoji123'));
     resetPackRegistries();
     expect(await loadInstalledPacks(user)).toEqual([]);
@@ -272,5 +266,23 @@ describe('pack content hash (PACK-2)', () => {
     expect(registerReceivedPackRef(ref('f5'), 'erin@local')).not.toBe(first);
     expect(getReceivedPackRef(first)?.file_id).toBe('f1');
     resetPackRegistries();
+  });
+
+  // PACK-1 (spec 036, найдено сценарием tgx_pack_set_flow): свой набор «Котики» и принятый одноимённый с другим
+  // содержимым — два набора; принятый с тем же содержимым — свой
+  it('keeps a received pack apart from an own installed pack with the same name', async () => {
+    const user = `packs-own-${Date.now()}@local`;
+    await SecureE2eStorage.clear(user);
+    resetPackRegistries();
+    await saveInstalledPack(user, { name: 'Котики', files: [a, b] });
+    const own = getSetIdForPackName('Котики');
+    const ref = (file: string, contentHash: string) => ({
+      file_id: file, name: 'Котики', count: 2, content_hash: contentHash,
+    });
+    const other = registerReceivedPackRef(ref('f1', b64(await packContentHash([a]))), 'bob@local');
+    expect(other).not.toBe(own);
+    expect(registerReceivedPackRef(ref('f2', b64(await packContentHash([a, b]))), 'dave@local')).toBe(own);
+    resetPackRegistries();
+    await SecureE2eStorage.clear(user);
   });
 });

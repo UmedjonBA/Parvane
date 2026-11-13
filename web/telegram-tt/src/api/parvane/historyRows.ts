@@ -3,18 +3,21 @@
 // журнала, квитанция, очистка — уходит модели операцией; сведение (`RowState`, надгробия, сироты), место в ленте
 // (ORDER-1), маркеры «прочитано до» и хранение — в модели, показ — из её представлений (`MessageView` с содержимым
 // в виде web, `wire`). Своей копии строк у web нет; в памяти — только индекс показанного (`MessageIndex`) и копия
-// маркеров для подсчёта непрочитанного. Журнал истории аккаунта по-прежнему пишет web (`v2/history.ts`).
+// маркеров для подсчёта непрочитанного. Журнал истории аккаунта (очередь пачкой, догон, контрольные точки, замена
+// дальше горизонта) ведёт модель (spec 036, `engine_rows`): свои операции уходят ей с `journal: true`, входящее она
+// применяет сама; своего журнала у web нет.
 //
-// Вне модели — только строки самоуничтожения собеседника (в памяти сессии, как раньше вне кэша) и шифртекст v1.
+// Вне модели — только строки самоуничтожения собеседника (в памяти показа, в журнал не попадают и не переживают
+// перезагрузку — так задумано: самоуничтожение не должно оставлять следов на диске) и шифртекст v1.
 
 import type { MessageIndex } from './v2/messageIndex';
 import type { WireMessageContent, WireReactor, WireStoredMessage } from './wire';
 
 import { b64ToUuid, uuidToB64 } from './v2/contentMap';
 import {
-  addressForPeer, applyEditPatch, canDelete, compareMarkPoint, decodeBody, type HOp, type HPeer, type HReadMark,
-  type HRowState, isAfterMark, isJournalable, isUnreadRow, legacyState, nonCountedKinds, opTarget, peerForAddress,
-  rowOpFromStored, rowTsMs,
+  addressForPeer, canDelete, decodeBody, type EditPatch, historyChatKey, type HOp, type HPeer, type HReadMark,
+  type HRowState, isJournalable, legacyState, opTarget, peerForAddress,
+  rowOpFromStored,
 } from './v2/historyModel';
 
 const V2_GROUP_ADDRESS_PREFIX = 'v2g:';
@@ -23,19 +26,13 @@ const MS_IN_SECOND = 1000;
 const APPLY_CHUNK = 200;
 const PAGE_MAX = 200;
 
-export type HistorySource = 'own' | 'inbox' | 'journal';
+export type HistorySource = 'own' | 'inbox';
 
 export type HistoryIngestContext = {
   source: HistorySource;
   // Автор мутации (для проверки прав по известной строке) и его право удалять чужое в группе
   author?: string;
   isAdmin?: boolean;
-  // Пакетный перенос (журнал, точка)
-  isBulk?: boolean;
-};
-
-export type HistoryJournalSink = {
-  enqueue: (op: HOp, opts: { isOwn: boolean }) => void;
 };
 
 type ModelOutcome = Record<string, unknown>;
@@ -59,13 +56,33 @@ export type RawMessageView = {
 
 export type RowsAll = { views?: RawMessageView[]; states?: HRowState[]; marks?: HReadMark[] };
 
+/** Вид чата модели (`chatList`, spec 036 E3). */
+type RawChatView = {
+  chat?: HPeer; last?: RawMessageView; unread?: number; mention?: boolean; pinned_rank?: number;
+  archived?: boolean; unread_mark?: boolean;
+};
+
+/** Чат списка модели для показа. */
+export type ModelChat = {
+  address: string; last?: string; unread: number; mention: boolean; pinnedRank: number; archived: boolean;
+  unreadMark: boolean;
+  /** Последняя показываемая строка чата в виде показа (ленивый показ истории, spec 036 T015). */
+  lastStored?: WireStoredMessage;
+};
+
+/** Счётчик непрочитанного модели (`unread_changed`): маркер и упоминания. */
+export type ModelUnread = { count: number; lastReadId?: string; mentions: string[] };
+
 /** Строки модели профиля (хост модели `ModelHost`). */
 export type RowsModel = {
   /** `rowsApply` — итог (`Outcome`) с изменениями показа. */
   apply: (args: Record<string, unknown>) => Promise<ModelOutcome>;
-  all: (what: { views?: boolean; states?: boolean; marks?: boolean }) => Promise<RowsAll>;
+  /** `rowsAll`; `chat_key` — только строки этого чата (ключ `historyChatKey`). */
+  all: (what: { views?: boolean; states?: boolean; marks?: boolean; chat_key?: string }) => Promise<RowsAll>;
   /** `historyPage` / `chatList` модели. */
   view: (name: 'historyPage' | 'chatList', args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  /** Намерение модели (`submit`, spec 036): прочтение и прочее. */
+  submit?: (intent: Record<string, unknown>) => Promise<ModelOutcome>;
 };
 
 type Deps = {
@@ -81,16 +98,11 @@ type Deps = {
   show: (stored: WireStoredMessage) => Promise<void>;
   /** Счётчики этих чатов пересчитать от маркера (пачка журнала, сдвиг маркера). */
   onChatsTouched: (addresses: string[]) => void;
-  loadClearedUntil: () => Record<string, number>;
+  /** Строки списка чатов, изменённые моделью (`chat_upsert`), и снятые из списка (`chat_remove`, адреса). Зовётся
+   * вне обработчика изменений модели. */
+  onChatViews?: (upserts: ModelChat[], removed: string[]) => void;
   /** Своё сообщение изменилось (правка, удаление): запись журнала исходящих — следом. */
   updateOwnJournal?: (stored: WireStoredMessage) => void;
-  journal: () => HistoryJournalSink | undefined;
-  /** Кэш строк прежних сборок (`m:<uuid>`, маркеры `rm:`): разово переносится в модель и стирается. */
-  legacy?: {
-    load: () => Promise<WireStoredMessage[]>;
-    loadMarks: () => Promise<Record<string, HReadMark>>;
-    drop: (uuids: string[], addresses: string[]) => Promise<void>;
-  };
   log: (message: string) => void;
 };
 
@@ -104,6 +116,24 @@ function parseWire(text: string | undefined): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Строка списка чатов модели (`ChatView`) для показа. */
+function modelChatOf(
+  c: RawChatView, self: string, isOwn: (address: string | undefined) => boolean,
+): ModelChat | undefined {
+  const address = addressForPeer(c.chat);
+  if (!address) return undefined;
+  return {
+    address,
+    last: b64ToUuid(c.last?.id),
+    unread: Number(c.unread || 0),
+    mention: Boolean(c.mention),
+    pinnedRank: Number(c.pinned_rank || 0),
+    archived: Boolean(c.archived),
+    unreadMark: Boolean(c.unread_mark),
+    lastStored: c.last ? storedOfView(c.last, self, isOwn) : undefined,
+  };
 }
 
 /** Строка показа web по представлению модели: содержимое — в виде web (`wire`, правка наложена движком), доставка,
@@ -149,7 +179,8 @@ export function storedOfView(
 
 export function createHistoryRows(deps: Deps) {
   const chains = new Map<string, Promise<unknown>>();
-  let marks = new Map<string, HReadMark>();
+  // Счётчики непрочитанного модели (`unread_changed`, spec 036): маркер, число, упоминания — готовыми
+  const modelUnread = new Map<string, ModelUnread>();
   let readyOwner = '';
   let ready: Promise<RowsModel | undefined> | undefined;
 
@@ -175,22 +206,15 @@ export function createHistoryRows(deps: Deps) {
     return next;
   }
 
-  /** Модель открыта: копия маркеров загружена, кэш прежних сборок перенесён (один раз на профиль). */
+  /** Модель профиля открыта (один раз на профиль). */
   function model(): Promise<RowsModel | undefined> {
     const self = deps.self();
     if (readyOwner !== self) {
       readyOwner = self;
-      marks = new Map();
       ready = undefined;
     }
     if (!ready) {
-      ready = (async () => {
-        const m = await deps.model();
-        if (!m) return undefined;
-        await importLegacy(m).catch((e: unknown) => deps.log(`история: прежний кэш строк не перенесён: ${String(e)}`));
-        await reloadMarks(m);
-        return m;
-      })().catch((e: unknown) => {
+      ready = deps.model().catch((e: unknown) => {
         deps.log(`история: модель строк недоступна: ${String(e)}`);
         return undefined;
       });
@@ -200,47 +224,6 @@ export function createHistoryRows(deps: Deps) {
       });
     }
     return ready;
-  }
-
-  async function reloadMarks(m: RowsModel) {
-    const all = await m.all({ marks: true });
-    const next = new Map<string, HReadMark>();
-    (all.marks || []).forEach((mark) => {
-      const address = addressForPeer(mark.chat);
-      if (address) next.set(address, mark);
-    });
-    marks = next;
-  }
-
-  /** Разовый перенос кэша строк прежних сборок web (`m:`, `rm:`) в модель: сведение с известным, место прежнее. */
-  async function importLegacy(m: RowsModel) {
-    if (!deps.legacy) return;
-    const records = await deps.legacy.load();
-    const oldMarks = await deps.legacy.loadMarks();
-    if (!records.length && !Object.keys(oldMarks).length) return;
-    const rows = legacyRows(records);
-    for (let i = 0; i < rows.length; i += APPLY_CHUNK) {
-      await m.apply({ rows_json: JSON.stringify(rows.slice(i, i + APPLY_CHUNK)), now_ms: String(Date.now()) });
-    }
-    const markOps = Object.values(oldMarks).map((mark) => ({ read: mark }));
-    if (markOps.length) await m.apply({ ops_json: JSON.stringify(markOps), now_ms: String(Date.now()) });
-    await deps.legacy.drop(records.map((r) => r.id), Object.keys(oldMarks));
-    deps.log(`история: прежний кэш строк перенесён в модель (строк ${rows.length}, маркеров ${markOps.length})`);
-  }
-
-  /** Строки прежнего кэша сводимым состоянием с местом в ленте (перенос T115 и разовый перенос кэша). */
-  function legacyRows(records: WireStoredMessage[]) {
-    const domain = deps.domain();
-    const out = new Map<string, { hs: HRowState; order?: number }>();
-    records.forEach((stored) => {
-      if (out.has(stored.id)) return;
-      const address = stored.hs ? addressForPeer(stored.hs.chat) : chatAddressOf(stored);
-      const chat = address ? peerForAddress(address, domain) : undefined;
-      if (!chat) return;
-      const hs = stored.hs || legacyState(stored, chat);
-      if (hs) out.set(stored.id, { hs, order: stored.order });
-    });
-    return Array.from(out.values());
   }
 
   /** Применить итог `rowsApply`: изменившиеся строки — на показ (снятые — надгробием). */
@@ -281,8 +264,12 @@ export function createHistoryRows(deps: Deps) {
           inModel: true,
         };
         changed.set(uuid, tomb);
-        // Сирота (мутация раньше сообщения) не показывалась и в индекс не входит: её чат сверит модель
-        if (!prev) continue;
+        // Строка не показана (сирота — мутация раньше сообщения; строка ещё не прочитанного целиком чата, spec 036
+        // T015): в индекс не входит, но показ узнаёт о снятии — идущее чтение чата из модели её не вернёт
+        if (!prev) {
+          await deps.show(tomb);
+          continue;
+        }
         if (isOwn(prev.from)) deps.updateOwnJournal?.(tomb);
         deps.index.set(tomb);
         await deps.show(tomb);
@@ -317,8 +304,8 @@ export function createHistoryRows(deps: Deps) {
     }
     if (prev && prevAddress && !prev.inModel) {
       if (!prev.deleted && !isJournalable(prev)) {
-        // Самоуничтожение: мутация — прямо по строке в памяти, как раньше
-        if (ctx.source === 'journal' || !isAllowedOutsideJournal(op, prev, prevAddress, ctx)) return undefined;
+        // Самоуничтожение собеседника: мутация — прямо по строке в памяти, мимо модели и журнала
+        if (!isAllowedOutsideJournal(op, prev, prevAddress, ctx)) return undefined;
         const patched = patchOutsideJournal(prev, op, isOwn);
         if (!patched) return undefined;
         deps.index.set(patched);
@@ -335,18 +322,16 @@ export function createHistoryRows(deps: Deps) {
       deps.log(`история: модель не открыта — операция над ${target} не применена`);
       return undefined;
     }
+    // Журнал истории — у модели (`journal: true`): она ставит операцию в свою пачку, если та изменила строку
     const out = await m.apply({
       ops_json: JSON.stringify([op]),
       rows_json: base ? JSON.stringify([base]) : undefined,
       now_ms: String(Date.now()),
+      journal: true,
     });
     const changed = await applyOutcome(out);
     const stored = changed.get(target);
     if (!stored) return prev?.inModel ? prev : undefined;
-    const isJournaled = op.row ? !stored.deleted && isJournalable(stored) : true;
-    if (ctx.source !== 'journal' && isJournaled) {
-      deps.journal()?.enqueue(op, { isOwn: ctx.source === 'own' });
-    }
     return stored;
   }
 
@@ -418,84 +403,50 @@ export function createHistoryRows(deps: Deps) {
     }
   }
 
-  /** Пачка операций журнала (или точки): строки — в модель и на экран, маркеры — сведением; счётчики чатов пачки
-   * пересчитываются от маркеров один раз в конце (перенос не прибавляет к непрочитанному, FR-013). */
-  async function applyJournalOps(ops: HOp[]) {
-    const m = await model();
-    if (!m) return 0;
-    const touched = new Set<string>();
-    const list = ops.filter((op) => !op.summary);
-    const readChats = list.map((op) => addressForPeer(op.read?.chat)).filter((a): a is string => Boolean(a));
-    const before = new Map(readChats.map((a) => [a, JSON.stringify(marks.get(a))]));
-    for (let i = 0; i < list.length; i += APPLY_CHUNK) {
-      const changed = await applyOutcome(await m.apply({
-        ops_json: JSON.stringify(list.slice(i, i + APPLY_CHUNK)), now_ms: String(Date.now()),
-      }));
-      changed.forEach((stored) => {
-        const address = stored.inModel ? chatAddressOf(stored) : undefined;
-        if (address) touched.add(address);
-      });
-    }
-    if (readChats.length) {
-      await reloadMarks(m);
-      before.forEach((was, address) => {
-        if (JSON.stringify(marks.get(address)) !== was) touched.add(address);
-      });
-    }
-    if (touched.size) deps.onChatsTouched(Array.from(touched));
-    return touched.size;
-  }
-
   // ── маркеры «прочитано до» ────────────────────────────────────────────────
+  // Маркеры, их сведение и счётчик непрочитанного — у модели (spec 036 T014): web шлёт сдвиг маркера (`read` либо
+  // намерение) и получает готовое `unread_changed` (число, маркер, упоминания); своей копии маркеров у web нет
 
+  /** Модель открыта: непрочитанное придёт её изменениями. */
   async function ensureMarks() {
     await model();
   }
 
-  function getMark(address: string) {
-    return marks.get(address);
-  }
-
-  async function applyMark(mark: HReadMark, source: HistorySource) {
+  async function applyMark(mark: HReadMark) {
     const address = addressForPeer(mark.chat);
     if (!address) return false;
     const m = await model();
     if (!m) return false;
-    const old = JSON.stringify(marks.get(address));
     try {
-      await m.apply({ ops_json: JSON.stringify([{ read: mark }]), now_ms: String(Date.now()) });
+      // Маркер — в журнал истории моделью (той же пачкой, что всё остальное, S7-3)
+      await m.apply({ ops_json: JSON.stringify([{ read: mark }]), now_ms: String(Date.now()), journal: true });
     } catch (e) {
       deps.log(`история: маркер ${address} не принят: ${String(e)}`);
       return false;
     }
-    await reloadMarks(m);
-    const merged = marks.get(address);
-    if (!merged || JSON.stringify(merged) === old) return false;
-    if (source !== 'journal') deps.journal()?.enqueue({ read: merged }, { isOwn: true });
-    deps.onChatsTouched([address]);
     return true;
   }
 
   /** Сдвинуть маркер чата до строки (прочтение, своё отправленное, копия своей квитанции). */
-  async function advanceMark(address: string, tsMs: number, id: string, source: HistorySource = 'own') {
+  async function advanceMark(address: string, tsMs: number, id: string) {
     const chat = peerForAddress(address, deps.domain());
     if (!chat || !id) return false;
-    return applyMark({ chat, up_to_ts_ms: String(Math.floor(tsMs)), up_to_id: id.toLowerCase() }, source);
+    return applyMark({ chat, up_to_ts_ms: String(Math.floor(tsMs)), up_to_id: id.toLowerCase() });
   }
 
-  /** Входящее непрочитано: строго после маркера чата и движок считает его непрочитанным. */
-  function isUnread(meta: RowMeta) {
-    const selves = ownAddresses();
-    if (!meta.from || selves.includes(meta.from) || nonCountedKinds().has(meta.kind)) return false;
-    const mark = marks.get(meta.chat);
-    if (!isAfterMark(mark, meta.tsMs, meta.id)) return false;
-    const chat = peerForAddress(meta.chat, deps.domain());
-    if (!chat) return false;
+  /** Прочтение намерением модели (spec 036 E4, `engine_rows`): маркер, квитанции собеседнику о ставших прочитанными
+   * входящих и счётчик чата — у модели. `false` — модель недоступна или строки в ней нет (прежний путь). */
+  async function readTo(address: string, tsMs: number, id: string) {
+    const chat = peerForAddress(address, deps.domain());
+    const m = await model();
+    if (!chat || !m?.submit) return false;
     try {
-      return isUnreadRow({ ...meta, chat }, mark, selves);
-    } catch {
+      await m.submit({ read: { chat, up_to: { ts_ms: String(Math.floor(tsMs)), id: uuidToB64(id) } } });
+    } catch (e) {
+      deps.log(`история: прочтение ${address} моделью не принято: ${String(e)}`);
       return false;
     }
+    return true;
   }
 
   // ── чтение модели ─────────────────────────────────────────────────────────
@@ -511,6 +462,20 @@ export function createHistoryRows(deps: Deps) {
     const rows = (all.views || []).map((v) => storedOfView(v, self, isOwn))
       .filter((s): s is WireStoredMessage => Boolean(s));
     return { rows, known: new Set((all.states || []).map((st) => st.target)), isReady: true };
+  }
+
+  /** Строки одного чата модели (ленивый показ, spec 036 T015) — и служебные строки ленты (голоса опросов); `known` —
+   * id всех строк чата, и надгробий. */
+  async function loadChat(address: string) {
+    const chat = peerForAddress(address, deps.domain());
+    const m = chat ? await model() : undefined;
+    if (!m || !chat) return undefined;
+    const self = deps.self();
+    const isOwn = ownChecker();
+    const all = await m.all({ views: true, states: true, chat_key: historyChatKey(chat) });
+    const rows = (all.views || []).map((v) => storedOfView(v, self, isOwn))
+      .filter((s): s is WireStoredMessage => Boolean(s));
+    return { rows, known: new Set((all.states || []).map((st) => st.target)) };
   }
 
   /** Страница ленты чата модели (`historyPage`): строки по возрастанию места. */
@@ -538,58 +503,34 @@ export function createHistoryRows(deps: Deps) {
     };
   }
 
-  /** Чаты, у которых в модели есть показываемые строки (`chatList`): адрес и последняя строка. */
+  /** Непрочитанное чата по модели (spec 036 E4); нет — изменения ещё не приходило. */
+  function unreadOf(address: string) {
+    return modelUnread.get(address);
+  }
+
+  /** Чаты списка модели (`chatList`): адрес, последняя строка (и в виде показа), счётчики, архив, закреп. */
   async function chatsWithRows() {
     const m = await model();
     if (!m) return undefined;
-    const out: { address: string; last?: string }[] = [];
+    const self = deps.self();
+    const isOwn = ownChecker();
+    const out: ModelChat[] = [];
     let after: unknown;
     for (let i = 0; i < 1000; i++) {
       const p = await m.view('chatList', { after, limit: PAGE_MAX }) as {
-        chats?: { chat?: HPeer; last?: RawMessageView }[]; next?: unknown;
+        chats?: RawChatView[]; next?: unknown;
       };
       (p.chats || []).forEach((c) => {
-        const address = addressForPeer(c.chat);
-        if (address) out.push({ address, last: b64ToUuid(c.last?.id) });
+        const chat = modelChatOf(c, self, isOwn);
+        if (!chat) return;
+        out.push(chat);
+        // Счётчик до первого `unread_changed` этого чата — из вида списка
+        if (!modelUnread.has(chat.address)) modelUnread.set(chat.address, { count: chat.unread, mentions: [] });
       });
       if (!p.next) break;
       after = p.next;
     }
     return out;
-  }
-
-  // ── состояния для контрольной точки и переноса ────────────────────────────
-
-  /** Все строки журнала как `RowState` (и надгробия, сироты); без очищенных чатов и строк вне журнала. */
-  async function collectStates(): Promise<HRowState[]> {
-    const m = await model();
-    if (!m) return [];
-    const all = await m.all({ states: true });
-    const cleared = deps.loadClearedUntil();
-    return (all.states || []).filter((state) => {
-      const address = addressForPeer(state.chat);
-      if (!address) return false;
-      const body = decodeBody(state.row?.body);
-      const content = body?.content as { kind?: string; ttl_secs?: number } | undefined;
-      // Надгробия и сироты — всегда (удалённое не воскресает на других устройствах); живая строка — если журналу
-      if (state.row && !state.gone && (!content?.kind || content.ttl_secs || UNJOURNALED_KINDS.has(content.kind))) {
-        return false;
-      }
-      const tsMs = Number(state.row?.ts_ms || 0);
-      return !(tsMs && tsMs <= (cleared[address] || 0));
-    });
-  }
-
-  /** Строки прежнего кэша web (`m:`) сводимым состоянием — для разового переноса (T115), до него модель их не знает. */
-  async function legacyStates(): Promise<{ hs: HRowState; order?: number }[]> {
-    const records = await deps.legacy?.load() || [];
-    const cleared = deps.loadClearedUntil();
-    return legacyRows(records).filter(({ hs }) => {
-      const address = addressForPeer(hs.chat);
-      const tsMs = Number(hs.row?.ts_ms || 0);
-      if (!address) return false;
-      return !(tsMs && tsMs <= (cleared[address] || 0));
-    });
   }
 
   function chatAddressOf(stored: WireStoredMessage) {
@@ -599,111 +540,83 @@ export function createHistoryRows(deps: Deps) {
     return stored.to;
   }
 
-  /** Сводка по чатам для точки: последняя видимая строка, маркер, число непрочитанных и строк. */
-  function summarizeChats(states: HRowState[]) {
-    const byChat = new Map<string, { last?: HRowState; unread: number; rows: number }>();
-    const kinds = nonCountedKinds();
-    const selves = ownAddresses();
-    states.forEach((state) => {
-      const address = addressForPeer(state.chat);
-      if (!address) return;
-      const entry = byChat.get(address) || { unread: 0, rows: 0 };
-      entry.rows += 1;
-      const row = state.row;
-      if (row && !state.gone && row.body) {
-        const tsMs = Number(row.ts_ms);
-        const lastRow = entry.last?.row;
-        if (!lastRow || compareMarkPoint(tsMs, row.id, Number(lastRow.ts_ms), lastRow.id) > 0) entry.last = state;
-        const kind = kindOfBody(row.body);
-        if (!selves.includes(row.from) && kind && !kinds.has(kind) && isAfterMark(marks.get(address), tsMs, row.id)
-          && isUnreadRow({ id: row.id, chat: state.chat, from: row.from, tsMs, kind }, marks.get(address), selves)) {
-          entry.unread += 1;
-        }
-      }
-      byChat.set(address, entry);
+  /** spec 036 (`engine_rows`): изменения строк, которые модель сделала сама (входящее, журнал истории), — на
+   * показ; маркеры перечитываются, когда модель сменила счётчик чата. */
+  async function applyModelDelta(delta: Record<string, unknown>) {
+    const changes = (delta.changes as Record<string, unknown>[] | undefined) || [];
+    const rows = changes.some((ch) => ch.message_upsert || ch.message_remove);
+    // spec 036 T018: строки списка чатов — готовыми видами модели; показ — вне обработчика (ниже)
+    const self = deps.self();
+    const isOwn = ownChecker();
+    const chatUpserts = changes.flatMap((ch) => {
+      const chat = ch.chat_upsert ? modelChatOf(ch.chat_upsert, self, isOwn) : undefined;
+      return chat ? [chat] : [];
     });
-    return Array.from(byChat.entries()).map(([address, entry]) => ({
-      chat: entry.last?.chat || peerForAddress(address, deps.domain())!,
-      last: entry.last,
-      mark: marks.get(address),
-      unread: entry.unread,
-      rows: entry.rows,
-    })).filter((chat) => Boolean(chat.chat));
-  }
-
-  /** Маркеры по прежнему учёту прочитанного (перенос spec 033, FR-024): по чату — самая поздняя прочитанная входящая
-   * и самое позднее своё сообщение. */
-  async function legacyMarks(readUuids: Set<string>) {
-    const records = (await loadStored()).rows;
-    const isOwnAddress = ownChecker();
-    const best = new Map<string, { tsMs: number; id: string }>();
-    records.forEach((stored) => {
-      if (stored.deleted || !stored.from || !isJournalable(stored)) return;
-      const isOwn = isOwnAddress(stored.from);
-      if (!isOwn && !readUuids.has(stored.id)) return;
-      const address = chatAddressOf(stored);
-      const tsMs = rowTsMs(stored);
-      const current = best.get(address);
-      if (!current || compareMarkPoint(tsMs, stored.id, current.tsMs, current.id) > 0) {
-        best.set(address, { tsMs, id: stored.id });
-      }
-    });
-    for (const [address, point] of best) {
-      await advanceMark(address, point.tsMs, point.id, 'own');
+    const chatRemoves = changes.map((ch) => addressForPeer(ch.chat_remove as HPeer | undefined))
+      .filter((a): a is string => Boolean(a));
+    if ((chatUpserts.length || chatRemoves.length) && deps.onChatViews) {
+      setTimeout(() => deps.onChatViews?.(chatUpserts, chatRemoves), 0);
     }
-    return best.size;
-  }
-
-  /** Замена истории точкой (устройство дольше горизонта надгробий без синхронизации): строки и маркеры модели
-   * стираются, показ — заново из точки. */
-  async function wipe() {
-    const m = await model();
-    if (!m) return [];
-    const all = await m.all({ states: true });
-    const uuids = (all.states || []).map((s) => s.target);
-    await applyOutcome(await m.apply({ wipe: true }));
-    uuids.forEach((uuid) => deps.index.remove(uuid));
-    marks = new Map();
-    return uuids;
+    const unread = changes.filter((ch) => ch.unread_changed);
+    unread.forEach((ch) => {
+      const u = ch.unread_changed as { chat?: HPeer; count?: number; last_read_id?: string; mentions?: string[] };
+      const address = addressForPeer(u.chat);
+      if (!address) return;
+      modelUnread.set(address, {
+        count: Number(u.count || 0),
+        lastReadId: b64ToUuid(u.last_read_id),
+        mentions: (u.mentions || []).map((x) => b64ToUuid(x)).filter((x): x is string => Boolean(x)),
+      });
+    });
+    if (!rows && !unread.length) return;
+    const touched = new Set(unread.map((ch) => addressForPeer((ch.unread_changed as { chat?: HPeer }).chat))
+      .filter((a): a is string => Boolean(a)));
+    if (rows) {
+      const upserts = changes.filter((ch) => ch.message_upsert).length;
+      const removes = changes.filter((ch) => ch.message_remove).length;
+      deps.log(`история: модель — строк ${upserts}, снято ${removes}`);
+      // Строки, применённые моделью (входящее, журнал истории): чат объявляется и пересчитывается, как у
+      // `applyJournalOps` — иначе история нового устройства лежала в модели, а чата в списке не было
+      (await applyOutcome({ delta })).forEach((stored) => {
+        const address = stored.inModel ? chatAddressOf(stored) : undefined;
+        if (address) touched.add(address);
+      });
+    }
+    if (!touched.size) return;
+    // Вне обработчика изменений: изменение приходит и при открытии модели, а `model()` ждёт конца открытия —
+    // ожидание здесь замыкало открытие само на себя (вкладка после перезагрузки висела без списка чатов)
+    setTimeout(() => deps.onChatsTouched(Array.from(touched)), 0);
   }
 
   function reset() {
     chains.clear();
-    marks = new Map();
+    modelUnread.clear();
     ready = undefined;
     readyOwner = '';
   }
 
   return {
     ingest,
+    applyModelDelta,
     persistLocal,
     receipt,
     forget,
-    applyJournalOps,
-    applyMark,
     advanceMark,
     ensureMarks,
-    getMark,
-    marksList: () => Array.from(marks.values()),
     persistMany,
-    isUnread,
+    readTo,
     ownAddresses,
     loadStored,
+    loadChat,
     page,
     chatsWithRows,
-    collectStates,
-    legacyStates,
-    summarizeChats,
-    legacyMarks,
-    wipe,
+    unreadOf,
     reset,
   };
 }
 
 export type HistoryRows = ReturnType<typeof createHistoryRows>;
 
-// Виды вне журнала истории: шифртекст прежних версий и заглушки нечитаемых видов
-const UNJOURNALED_KINDS = new Set(['encrypted', 'group_encrypted', 'unsupported']);
 // Якорь страницы по одному месту (id строки не известен): меньше любого id того же места
 const MIN_ID_B64 = btoa(String.fromCharCode(...new Array<number>(16).fill(0)));
 
@@ -730,7 +643,7 @@ function patchOutsideJournal(
     if (!body) return undefined;
     const content = body.content && typeof body.content === 'object'
       ? body.content as WireStoredMessage['content']
-      : applyEditPatch(prev.content, (body.edit_patch || {}));
+      : patchMemoryContent(prev.content, body.edit_patch || {});
     return { ...prev, content, edited: true };
   }
   if (op.react) {
@@ -750,11 +663,15 @@ function patchOutsideJournal(
   return undefined;
 }
 
-function kindOfBody(body: string) {
-  try {
-    const parsed = JSON.parse(atob(body)) as { content?: { kind?: unknown } };
-    return typeof parsed.content?.kind === 'string' ? parsed.content.kind : undefined;
-  } catch {
-    return undefined;
+// Правка строки в памяти показа: модель таких строк не знает (самоуничтожение собеседника — память хоста, HIST-1
+// п. 6), поэтому заплатку накладывает хост — по тому же правилу, что модель (`views::effective_content`)
+function patchMemoryContent(content: WireMessageContent, patch: EditPatch): WireMessageContent {
+  const next = { ...content };
+  if (patch.text !== undefined) {
+    Object.assign(next, next.kind === 'text'
+      ? { text: patch.text, entities: patch.entities, webpage: patch.webpage }
+      : { caption: patch.text, entities: patch.entities });
   }
+  if (patch.fields) Object.assign(next, patch.fields);
+  return next;
 }

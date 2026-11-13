@@ -63,7 +63,7 @@ public:
 
     // Вызов без исполнения итога: чтения и действия клиентского ядра (`clientCall`, `historyCall` — ответ
     // `CallResult` либо `{need}`/`{error}`; изменённое ляжет на диск следующим шагом), `clientReplace`,
-    // `migrateStatus`, `auditDump`; тесты. Разобранный JSON ответа.
+    // тесты. Разобранный JSON ответа.
     json raw(const std::string &name, const json &args);
 
     [[nodiscard]] std::uint64_t revision() const;

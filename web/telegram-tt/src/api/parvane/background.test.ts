@@ -5,7 +5,6 @@
 //  2) в хранилище не остаётся открытых байтов картинки;
 //  3) «пользователь ещё не известен» и «обоев нет» — РАЗНЫЕ ответы: на первом
 //     вызывающий обязан повторить, иначе настройка темы сбрасывается впустую.
-import { entries } from 'idb-keyval';
 import {
   beforeEach, describe, expect, it,
 } from 'vitest';
@@ -46,14 +45,10 @@ describe('chat background storage', () => {
   it('keeps no plaintext picture bytes in storage', async () => {
     await saveBackground(USER, PIXELS, 'image/png');
 
-    // Ни одна запись хранилища не должна содержать сигнатуру картинки
-    const all = await entries(secureStorageInternals.store);
-    const hasPlaintext = all.some(([, value]) => {
-      const record = value as { ciphertext?: ArrayBuffer };
-      if (!record?.ciphertext) return false;
-      const stored = new Uint8Array(record.ciphertext);
-      return stored.some((_, index) => PIXELS.every((byte, offset) => stored[index + offset] === byte));
-    });
+    // Ни одна запись хранилища (значения на носителе, hex) не должна содержать сигнатуру картинки
+    const all = await secureStorageInternals.rawRecords(USER);
+    const needle = Buffer.from(PIXELS).toString('hex');
+    const hasPlaintext = [...all.values()].some((value) => value.includes(needle));
     expect(hasPlaintext).toBe(false);
   });
 

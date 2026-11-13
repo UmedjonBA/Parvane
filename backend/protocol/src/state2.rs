@@ -109,37 +109,10 @@ pub fn seal_op(key: &StateKey, user: &str, op: &StateOp) -> Result<AppendRequest
     seal_with_nonce(key, user, &op.op_id, &pt, nonce)
 }
 
-/// То же с детерминированным nonce (записи разового переноса, research.md R9).
-pub fn seal_op_deterministic(key: &StateKey, user: &str, op: &StateOp) -> Result<AppendRequest> {
-    check_header(op)?;
-    let pt = Zeroizing::new(op.encode_to_vec());
-    seal_raw_deterministic(key, user, &op.op_id, &pt)
-}
-
 /// Зашифровать ИСХОДНЫЕ байты операции (в том числе с непонятным этой версии) детерминированно.
 pub fn seal_raw_deterministic(key: &StateKey, user: &str, op_id: &[u8], pt: &[u8]) -> Result<AppendRequest> {
     let nonce = deterministic_nonce(key, op_id, pt)?;
     seal_with_nonce(key, user, op_id, pt, nonce)
-}
-
-/// Детерминированный op_id записи разового переноса из `state.v1` (research.md R9):
-/// `SHA-256("parvane/migrate/state\0" ‖ user ‖ "\0" ‖ kind ‖ "\0" ‖ key ‖ "\0" ‖ field)[..16]` с битами версии 7 и
-/// варианта UUID — сервер принимает только UUIDv7 (`sign::is_valid_op_id`), а два устройства, переносящие одно и
-/// то же, получают один op_id.
-pub fn migration_op_id(user: &str, kind: i32, key: &str, field: u32) -> OpId {
-    use sha2::Digest;
-    let mut h = Sha256::new();
-    h.update(b"parvane/migrate/state\0");
-    for part in [user.as_bytes(), &kind.to_be_bytes(), key.as_bytes(), &field.to_be_bytes()] {
-        h.update(part);
-        h.update([0u8]);
-    }
-    let d = h.finalize();
-    let mut id = [0u8; OP_ID_LEN];
-    id.copy_from_slice(&d[..OP_ID_LEN]);
-    id[6] = (id[6] & 0x0f) | 0x70;
-    id[8] = (id[8] & 0x3f) | 0x80;
-    id
 }
 
 /// Расшифровать запись журнала: тег сходится (ключ, user, op_id в AAD), op_id внутри совпадает с op_id записи,
@@ -832,10 +805,6 @@ mod tests {
         // Запись state.v1 под тем же ключом не открывается как state.v2 (другой префикс AAD).
         let v1 = crate::state::record_aad("alice@x", &rec.op_id);
         assert_ne!(v1, record_aad("alice@x", &rec.op_id));
-        let d1 = seal_op_deterministic(&key, "alice@x", &op).unwrap();
-        assert_eq!(d1, seal_op_deterministic(&key, "alice@x", &op).unwrap(), "перенос — одинаковые байты");
-        let other = patch(1, 1, "d1", 2, "Другое");
-        assert_ne!(d1.aead_ciphertext[..NONCE_LEN], seal_op_deterministic(&key, "alice@x", &other).unwrap().aead_ciphertext[..NONCE_LEN]);
         let new = StateKey::generate();
         let moved = reseal(&key, &new, "alice@x", &rec.op_id, &rec.aead_ciphertext).unwrap();
         assert_eq!(open(&new, "alice@x", &moved.op_id, &moved.aead_ciphertext).unwrap(), op.encode_to_vec());

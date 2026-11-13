@@ -32,6 +32,7 @@ import {
 } from './messageExtras';
 import {
   buildPvpkArchive,
+  buildStickerId,
   findInstalledPackBySetId,
   getEmojiPackRawName,
   getEmojiSetIdForDocId,
@@ -81,6 +82,7 @@ type MessageDependencies = {
   history?: {
     deleteForMe: (address: string, uuids: string[]) => Promise<void>;
     advanceMark: (address: string, tsMs: number, id: string) => Promise<boolean>;
+    readTo?: (address: string, tsMs: number, id: string) => Promise<boolean>;
     /** Строка показа по uuid (модель движка): подпись автора для жалобы. */
     find?: (uuid: string) => Promise<WireStoredMessage | undefined>;
   };
@@ -284,9 +286,8 @@ export function createMessageController(deps: MessageDependencies) {
     const currentStore = store();
     if (!currentStore.isGroupAddress(address)) return true;
     if (currentStore.getMessageByUuid(uuid)?.isOutgoing) return true;
-    const me = deps.v2?.groupInfo(address)?.members.find((member) => member.address === currentStore.self);
-    return Boolean(me && (me.role === 'owner' || (me.role === 'admin'
-      && (!me.admin_rights || me.admin_rights.delete_messages))));
+    // Право удалять чужое — решение модели (`GroupView.can_delete_messages`, spec 036 T020)
+    return Boolean(deps.v2?.groupRights(address)?.canDeleteMessages);
   }
 
   /** Сдвинуть маркер чата до прочитанных строк; входящим, бывшим непрочитанными, — квитанция собеседнику. */
@@ -296,15 +297,18 @@ export function createMessageController(deps: MessageDependencies) {
     if (!address) return;
     const newlyRead: string[] = [];
     let best: { tsMs: number; id: string } | undefined;
+    const unread = deps.sync.unreadIdsOf(chat.id);
     messages.forEach((message) => {
       const uuid = currentStore.getUuidForMessage(chat.id, message.id);
       const meta = uuid ? deps.sync.rowMeta(uuid) : undefined;
       if (!uuid || !meta) return;
-      if (deps.sync.isUnreadIncoming(chat.id, message)) newlyRead.push(uuid);
+      if (unread.has(message.id)) newlyRead.push(uuid);
       if (!best || meta.tsMs > best.tsMs || (meta.tsMs === best.tsMs && meta.id > best.id)) {
         best = { tsMs: meta.tsMs, id: meta.id };
       }
     });
+    // spec 036 (`engine_rows`): прочтение — намерением модели, квитанции шлёт она
+    if (best && await deps.history?.readTo?.(address, best.tsMs, best.id)) return;
     if (best) await deps.history?.advanceMark(address, best.tsMs, best.id);
     // Протокол v2: квитанция прочтения — E2E-содержимое собеседнику (FR-035)
     if (newlyRead.length && isV2Routable(address) && address !== currentStore.self) queueReceipts(address, newlyRead);
@@ -670,6 +674,12 @@ export function createMessageController(deps: MessageDependencies) {
     const packRef = setId && isCustomPackSetId(setId)
       ? await buildPackRefForSet(setId, toAddress)
       : undefined;
+    // PACK-1 (spec 036): id стикера в своём наборе на проводе — имя файла манифеста (как desktop и android);
+    // встроенный набор и стикер, файла которого не нашлось, — прежний id web
+    const packFile = setId && isCustomPackSetId(setId)
+      ? (await findInstalledPackBySetId(currentStore.self, setId))?.files
+        .find((f) => buildStickerId(setId, f.name) === sticker.id)
+      : undefined;
     const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
     const wireContent: Record<string, unknown> = {
       kind: 'sticker',
@@ -680,7 +690,7 @@ export function createMessageController(deps: MessageDependencies) {
       height: sticker.height || 256,
       pack_ref: packRef,
       // FR-075: id стикера в наборе — получатель может добавить его в избранное
-      sticker_id: setId ? sticker.id : undefined,
+      sticker_id: packFile?.name || (setId ? sticker.id : undefined),
       ttl_secs: ttlSecs || undefined,
       silent: isSilent || undefined,
       ...mediaCrypto,
@@ -1325,9 +1335,11 @@ export function createMessageController(deps: MessageDependencies) {
   }
 
   const methods = {
-    fetchMessagesById({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
+    async fetchMessagesById({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
+      // spec 036 T015: история в сторе ленивая — чат целиком, если нужного в сторе нет
+      if (messageIds.some((id) => !store().getMessage(chat.id, id))) await deps.sync.ensureChatLoaded(chat.id);
       const byId = new Map(store().getMessages(chat.id).map((message) => [message.id, message]));
-      return Promise.resolve(messageIds.map((id) => byId.get(id)).filter(Boolean));
+      return messageIds.map((id) => byId.get(id)).filter(Boolean);
     },
 
     async editMessage({
@@ -1414,6 +1426,8 @@ export function createMessageController(deps: MessageDependencies) {
     // удаляются у всех мутацией v2 — чужие у собеседника остаются (Parvane не
     // даёт удалять чужое). Пустой чат tt снимает из списка по update deleteHistory
     async deleteHistory({ chat, shouldDeleteForAll }: { chat: ApiChat; shouldDeleteForAll?: boolean }) {
+      // Весь чат, а не только прочитанное в стор (spec 036 T015)
+      await deps.sync.ensureChatLoaded(chat.id);
       const currentStore = store();
       const uuids: string[] = [];
       const ownUuids: string[] = [];
@@ -1529,11 +1543,12 @@ export function createMessageController(deps: MessageDependencies) {
       return other ? { date: other.ts } : undefined;
     },
 
-    fetchPinnedMessages({ chat }: { chat: ApiChat }) {
+    async fetchPinnedMessages({ chat }: { chat: ApiChat }) {
+      await deps.sync.ensureChatLoaded(chat.id);
       const messages = store().getMessages(chat.id).filter((message) => message.isPinned);
-      return Promise.resolve({
+      return {
         messages, users: deps.collectUsersFor(messages), chats: [chat], count: messages.length, topics: [],
-      });
+      };
     },
 
     sendMessageAction({ peer, action }: { peer: { id: string }; action: { type: string } }) {

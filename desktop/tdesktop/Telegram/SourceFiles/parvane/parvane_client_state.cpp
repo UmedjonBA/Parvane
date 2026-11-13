@@ -1,6 +1,11 @@
 // Parvane fork: группы v2 и журнал личного состояния (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
 #include "data/data_message_reactions.h" // быстрая реакция (вид журнала `reaction`)
+#include "data/data_drafts.h"           // черновики tdesktop (сверка с моделью после запуска)
+#include "dialogs/dialogs_indexed_list.h"
+#include "dialogs/dialogs_row.h"
+
+#include <parvane/state_model.h> // stateview: объекты модели → показ, правка → stateSet
 
 namespace Parvane {
 
@@ -267,43 +272,61 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 		.arg(int(info.value("members", parvane::json::array()).size())));
 }
 
-// ── журнал личного состояния (T098): папки и отложенные ─────────────────────
-// Рабочая копия — нативные данные tdesktop (фильтры Data::ChatFilters,
-// очередь g_scheduled); правка пользователя → разница со сведённым снимком →
-// записи журнала; записи других устройств → снимок → нативные объекты.
-// Черновики tdesktop хранит в своём локальном хранилище, блок-лист и архив у
-// десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
-const std::vector<std::string> kV2StateKinds{
-	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts", "unread", "reaction", "packs",
-	"contacts",
-};
-// CONTACT-1: свои контакты (адрес → своё имя/фамилия и заметка) — зеркало вида `contacts` журнала, файл аккаунта
-// `tdata/parvane-contacts-<адрес>.json` {self, contacts:[{address, first, last, note}]}. Только main.
+// ── личное состояние (T098; spec 036 — показ и правка через модель движка, ENGINE-1) ─────────────────────────
+// Показ — объекты модели по видам (`Session::stateView` → `viewStateJson`), переложенные ядром в снимок формы
+// state.v1 (`stateview::snapshotOf`), → нативные объекты tdesktop (Project*). Правка пользователя — нативные данные
+// вида → объекты [{key, value}] → `Session::stateSubmit` (разницу по полям от показанного считает модель, без связи
+// правка остаётся в модели и уходит при подключении). Своего сведения, желаемого снимка и отпечатков нет.
+// Нативные списки (блок-лист, архив, закреп, «непрочитано», черновики, контакты, наборы) — только в памяти: после
+// запуска их заполняет проекция модели (модель открывается и без сети).
+// CONTACT-1: свои контакты (адрес → своё имя/фамилия и заметка) — вид CONTACT. Только main.
 QHash<QString, ContactRecord> g_contacts;
-bool g_contactsLoaded = false;
-void LoadContactsLocal();
-// PACK-3: записи вида `packs` (state.v1.StickerPack) — зеркало журнала на этом устройстве, файл аккаунта
-// `tdata/parvane-sticker-packs-<адрес>.json` {self, packs, migrated}. Только main.
+// PACK-3: записи наборов (state.v1.StickerPack, виды STICKER_PACK и SAVED_GIF). Только main.
 parvane::json g_stickerPackRecords = parvane::json::array();
-bool g_stickerPacksLoaded = false;
-bool g_stickerPacksMigrated = false;   // наборы, стоявшие до PACK-3, перенесены в журнал
+bool g_stickerPacksMigrated = false;   // наборы, стоявшие до PACK-3, перенесены в журнал (файл-отметка)
+bool g_stickerPacksMigratedLoaded = false;
 bool g_stickerPacksMigrating = false;
 QSet<QString> g_stickerPacksTried;     // ключи, установка которых из журнала уже запускалась в этом запуске
-void LoadStickerPacksLocal();
-// T024: черновики (как web stateJournal drafts) — адрес → {text, entities, dateMs}. Только main; файл в tdata.
+// T024: черновики (как web stateJournal drafts) — адрес → {text, entities, dateMs}. Только main.
 struct DraftEntry {
 	QString text;
 	nlohmann::json entities = nlohmann::json::array();
 	std::int64_t dateMs = 0;
 };
 QHash<QString, DraftEntry> g_drafts;
-bool g_draftsLoaded = false;
-void LoadDraftsLocal();
-bool g_stateAttached = false;    // main
-parvane::json g_stateShown;      // main: снимок журнала, показанный последним (база разницы своей правки)
-bool g_stateApplying = false;    // main: применяем снимок — не зеркалить назад
+bool g_draftsProjected = false;  // main: черновики tdesktop сверены с моделью после запуска
+bool g_stateAttached = false;    // main: журнал состояния подключён (stateReady)
+parvane::json g_stateView;       // main: объекты модели, показанные последними (база правки — `stateSubmit`)
+bool g_stateApplying = false;    // main: применяем показ — не отправлять назад
 bool g_stateFlushQueued = false; // main
+bool g_stateRefreshQueued = false; // main: показ изменений модели (событие `model`) уже запланирован
+std::set<std::string> g_statePending; // main: виды с правкой, ещё не отданной модели (модель не открыта)
 std::unique_ptr<base::Timer> g_stateTimer;
+
+// Строка показа личного состояния: до подключения журнала (показ модели при запуске) — «при запуске», чтобы её не
+// принимали за пришедшее с сервера (прежде при запуске показ совпадал с файлами-зеркалами и молчал).
+[[nodiscard]] QString StateNote(QString text) {
+	if (!g_stateAttached) {
+		text.replace(u"журнал состояния →"_q, u"личное состояние при запуске →"_q);
+	}
+	return text;
+}
+
+// Вид правки (прежние имена видов журнала) → виды state.v2.
+[[nodiscard]] std::vector<std::string> StateKindsOf(const std::string &edited) {
+	if (edited == "folders") return { "FOLDER", "FOLDER_ORDER" };
+	if (edited == "scheduled") return { "SCHEDULED" };
+	if (edited == "notify") return { "PEER_NOTIFY", "NOTIFY_DEFAULTS" };
+	if (edited == "blocked") return { "BLOCK" };
+	if (edited == "archived") return { "ARCHIVE", "PIN_LIST" }; // архив снимает закреп
+	if (edited == "pinned") return { "PIN_LIST" };
+	if (edited == "drafts") return { "DRAFT" };
+	if (edited == "unread") return { "UNREAD_MARK" };
+	if (edited == "reaction") return { "QUICK_REACTION" };
+	if (edited == "packs") return { "STICKER_PACK", "SAVED_GIF" };
+	if (edited == "contacts") return { "CONTACT" };
+	return {};
+}
 
 [[nodiscard]] QString StateDomain() {
 	const auto self = SelfAddress();
@@ -325,6 +348,11 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	return { { "group", {
 		{ "domain", StateDomain().toStdString() },
 		{ "id", parvane::v2::hexToB64(hex.toStdString()) } } } };
+}
+
+// Ключ объекта собеседника (как у модели); "" — не собеседник.
+[[nodiscard]] std::string StateKeyOf(const QString &address) {
+	return parvane::v2::stateview::peerKeyOf(StatePeerOf(address));
 }
 
 // Группа v2 — зарегистрированная `v2g:<hex>`; иначе UUIDv7 группы v1.
@@ -396,8 +424,8 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	return session->data().history(peerFromChat(ChatId(BareId(IdForAddress(address)))));
 }
 
-// Нативные данные → proto3-JSON StateSnapshot по видам kV2StateKinds.
-[[nodiscard]] parvane::json BuildLocalState(not_null<Main::Session*> session) {
+// Нативные папки → значения вида FOLDER (state.v1.Folder) и порядок (FolderOrder.ids).
+[[nodiscard]] parvane::json LocalFolderList(not_null<Main::Session*> session, parvane::json *order = nullptr) {
 	using Flag = Data::ChatFilter::Flag;
 	const auto peers = [](const auto &histories) {
 		auto a = parvane::json::array();
@@ -409,10 +437,10 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		return a;
 	};
 	auto folders = parvane::json::array();
-	auto order = parvane::json::array();
+	auto ids = parvane::json::array();
 	for (const auto &f : session->data().chatsFilters().list()) {
 		if (!f.id()) {
-			order.push_back(0); // «все чаты» — только место в порядке (двигается без Premium)
+			ids.push_back(0); // «все чаты» — только место в порядке (двигается без Premium)
 			continue;
 		}
 		if (f.id() <= 1) {
@@ -436,264 +464,191 @@ std::unique_ptr<base::Timer> g_stateTimer;
 			{ "exclude_archived", bool(flags & Flag::NoArchived) },
 			{ "color", f.colorIndex() ? int(*f.colorIndex()) : -1 },
 		});
-		order.push_back(f.id());
+		ids.push_back(f.id());
 	}
-	auto scheduled = parvane::json::array();
-	auto items = std::vector<ScheduledItem>();
-	{
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		items = g_scheduled;
+	if (order) {
+		*order = std::move(ids);
 	}
-	for (const auto &it : items) {
-		if (!it.kind.isEmpty()) {
-			continue; // файлы, опросы, геопозиция, пересылка — только на этом устройстве (как web)
+	return folders;
+}
+
+// Показанные объекты вида (последний показ модели).
+[[nodiscard]] parvane::json ShownObjects(const std::string &kind) {
+	auto shown = parvane::v2::stateview::objectsOf(g_stateView, kind);
+	if (kind == "PIN_LIST") {
+		// Хост ведёт только основной список закрепа (1); архивный (2) — не его
+		auto main = parvane::json::array();
+		for (const auto &o : shown) {
+			if (o.value("key", std::string()) == "1") main.push_back(o);
 		}
-		auto peer = StatePeerOf(it.address);
-		auto plain = parvane::textContent(it.text.toStdString(), it.entities);
-		if (it.silent) {
-			plain["silent"] = true; // «без звука» — и у отложенного (Content.silent)
-		}
-		const auto content = parvane::v2::contentOfWire(plain, it.replyTo.value_or(std::string()));
-		if (peer.is_null() || !content) {
-			continue;
-		}
-		try {
-			scheduled.push_back({
-				{ "op_id", parvane::v2::uuidToB64(it.id.toStdString()) },
-				{ "peer", std::move(peer) },
-				{ "send_at_ms", std::to_string(it.dueAt * 1000) },
-				{ "content", parvane::v2::toBase64(
-					parvane::v2::encodeMessage("parvane.msg.v2.Content", *content)) },
-			});
-		} catch (const std::exception &e) {
-			LOG(("Parvane: v2: отложенное %1 не в журнал: %2").arg(it.id, QString::fromUtf8(e.what())));
-		}
+		return main;
 	}
-	// Настройки уведомлений (FR-039): блоб веба → state.v1.NotifySettings.
-	const auto notifyOf = [](const QString &webJson) {
-		const auto w = parvane::json::parse(webJson.toStdString(), nullptr, false);
-		auto out = parvane::json::object();
-		const auto until = (w.is_object() && w.contains("mutedUntil") && w["mutedUntil"].is_number())
-			? w["mutedUntil"].get<std::int64_t>() : 0;
-		out["mute_until_ms"] = std::to_string(std::max<std::int64_t>(until, 0) * 1000);
-		if (w.is_object() && w.contains("shouldShowPreviews") && w["shouldShowPreviews"].is_boolean()) {
-			out["show_previews"] = w["shouldShowPreviews"];
-		}
-		if (w.is_object() && w.contains("isSilentPosting") && w["isSilentPosting"].is_boolean()) {
-			out["silent"] = w["isSilentPosting"];
-		}
-		return out;
+	return shown;
+}
+
+[[nodiscard]] parvane::json ShownValue(const std::string &kind, const std::string &key) {
+	for (const auto &o : ShownObjects(kind)) {
+		if (o.value("key", std::string()) == key) return o.value("value", parvane::json::object());
+	}
+	return nullptr;
+}
+
+void LoadStickerPacksMigrated();
+
+// Нативные данные вида state.v2 → объекты [{key, value}] (value — proto3-JSON сообщения вида).
+[[nodiscard]] parvane::json LocalObjects(not_null<Main::Session*> session, const std::string &kind) {
+	auto out = parvane::json::array();
+	const auto put = [&](std::string key, parvane::json value) {
+		out.push_back({ { "key", std::move(key) }, { "value", std::move(value) } });
 	};
-	auto notify = parvane::json::array();
-	for (auto it = g_notifyExceptions.constBegin(); it != g_notifyExceptions.constEnd(); ++it) {
-		if (auto peer = StatePeerOf(it.key()); !peer.is_null()) {
-			notify.push_back({ { "peer", std::move(peer) }, { "settings", notifyOf(it.value()) } });
-		}
-	}
-	auto notifyDefaults = parvane::json::object();
-	for (auto it = g_notifyDefaults.constBegin(); it != g_notifyDefaults.constEnd(); ++it) {
-		notifyDefaults[it.key().toStdString()] = notifyOf(it.value());
-	}
-	auto blocked = parvane::json::array();
-	for (const auto &address : g_blockedAddrs) {
-		if (auto peer = StatePeerOf(address); !peer.is_null()) {
-			blocked.push_back({ { "peer", std::move(peer) } });
-		}
-	}
-	auto archived = parvane::json::array();
-	for (const auto &address : g_archivedAddrs) {
-		if (auto peer = StatePeerOf(address); !peer.is_null()) {
-			archived.push_back(std::move(peer));
-		}
-	}
-	auto pinnedPeers = parvane::json::array();
-	for (const auto &address : g_pinnedAddrs) {
-		if (auto peer = StatePeerOf(address); !peer.is_null()) {
-			pinnedPeers.push_back(std::move(peer));
-		}
-	}
-	auto unreadMarks = parvane::json::array();
-	for (const auto &address : g_unreadMarkAddrs) {
-		if (auto peer = StatePeerOf(address); !peer.is_null()) {
-			unreadMarks.push_back(std::move(peer));
-		}
-	}
-	auto quickReaction = parvane::json::object();
-	if (!g_quickCustom.isEmpty()) {
-		quickReaction["custom_emoji_id"] = g_quickCustom.toStdString();
-	} else if (!g_quickEmoji.isEmpty()) {
-		quickReaction["emoji"] = g_quickEmoji.toStdString();
-	}
-	LoadStickerPacksLocal();
-	LoadContactsLocal();
-	auto contacts = parvane::json::array();
-	{
-		auto addresses = g_contacts.keys();
-		std::sort(addresses.begin(), addresses.end()); // отпечаток вида не зависит от порядка QHash
+	const auto peerSet = [&](const auto &addresses) {
 		for (const auto &address : addresses) {
-			const auto &c = g_contacts[address];
-			auto entry = parvane::json{ { "user", { { "address", address.toStdString() } } } };
-			if (!c.first.isEmpty()) entry["first_name"] = c.first.toStdString();
-			if (!c.last.isEmpty()) entry["last_name"] = c.last.toStdString();
-			if (!c.note.isEmpty()) entry["note"] = c.note.toStdString();
-			contacts.push_back(std::move(entry));
+			if (auto key = StateKeyOf(address); !key.empty()) put(key, parvane::json::object());
 		}
-	}
-	auto drafts = parvane::json::array();
-	LoadDraftsLocal();
-	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
-		auto peer = StatePeerOf(it.key());
-		const auto content = parvane::v2::contentOfWire(parvane::textContent(it->text.toStdString(), it->entities));
-		if (peer.is_null() || !content || !content->contains("text")) {
-			continue;
-		}
-		try {
-			drafts.push_back({
-				{ "peer", std::move(peer) },
-				{ "text", parvane::v2::toBase64(parvane::v2::encodeMessage("parvane.msg.v2.Text", (*content)["text"])) },
-				{ "date_ms", std::to_string(it->dateMs) },
-			});
-		} catch (const std::exception &e) {
-			LOG(("Parvane: v2: черновик %1 не в журнал: %2").arg(it.key(), QString::fromUtf8(e.what())));
-		}
-	}
-	return {
-		{ "drafts", std::move(drafts) },
-		{ "folders", std::move(folders) },
-		{ "folder_order", { { "ids", std::move(order) } } },
-		{ "scheduled", std::move(scheduled) },
-		{ "notify", std::move(notify) },
-		{ "notify_defaults", std::move(notifyDefaults) },
-		{ "blocked", std::move(blocked) },
-		{ "archived", std::move(archived) },
-		{ "pinned", parvane::json::array({
-			parvane::json{ { "list", "PIN_LIST_MAIN" }, { "peers", std::move(pinnedPeers) } } }) },
-		{ "unread_marks", std::move(unreadMarks) },
-		{ "quick_reaction", std::move(quickReaction) },
-		{ "sticker_packs", g_stickerPackRecords },
-		{ "contacts", std::move(contacts) },
 	};
-}
-
-// T150 (STATE-2): правка, не успевшая в журнал (сделана до подключения журнала
-// либо перед самым выходом), не должна затираться снимком при подключении.
-// После каждого сведения с журналом запоминаем отпечаток локального состояния
-// по видам; вид, чей отпечаток при следующем подключении другой, правился на
-// этом устройстве — он досылается в журнал до проекции снимка (web: `statedirty`).
-[[nodiscard]] QString StateSyncedPath() {
-	return cWorkingDir() + u"tdata/parvane-state-synced.json"_q;
-}
-
-[[nodiscard]] std::map<std::string, std::string> StateKindDigests(const parvane::json &local) {
-	// Списки-множества (блок-лист, архив, исключения уведомлений) собираются из
-	// QSet/QHash — порядок от запуска к запуску разный, в отпечаток идут сортированными.
-	const auto canon = [&](const char *field, bool ordered) {
-		if (!local.is_object() || !local.contains(field)) {
-			return std::string();
+	if (kind == "FOLDER") {
+		for (auto &f : LocalFolderList(session)) {
+			put(std::to_string(f.value("id", 0)), f);
 		}
-		const auto &value = local[field];
-		if (ordered || !value.is_array()) {
-			return value.dump();
+	} else if (kind == "FOLDER_ORDER") {
+		auto order = parvane::json::array();
+		LocalFolderList(session, &order);
+		put(std::string(), { { "ids", order } });
+	} else if (kind == "SCHEDULED") {
+		auto items = std::vector<ScheduledItem>();
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			items = g_scheduled;
 		}
-		auto items = std::vector<std::string>();
-		for (const auto &item : value) {
-			items.push_back(item.dump());
-		}
-		std::sort(items.begin(), items.end());
-		auto out = std::string();
-		for (const auto &item : items) {
-			out += item;
-			out += '\n';
-		}
-		return out;
-	};
-	const auto digest = [](const std::string &text) {
-		return QCryptographicHash::hash(
-			QByteArray::fromStdString(text),
-			QCryptographicHash::Sha256).toHex().toStdString();
-	};
-	return {
-		{ "folders", digest(canon("folders", true) + canon("folder_order", true)) },
-		{ "scheduled", digest(canon("scheduled", false)) },
-		{ "notify", digest(canon("notify", false) + canon("notify_defaults", true)) },
-		{ "blocked", digest(canon("blocked", false)) },
-		{ "archived", digest(canon("archived", false)) },
-		{ "pinned", digest(canon("pinned", true)) },
-		{ "drafts", digest(canon("drafts", false)) },
-		{ "unread", digest(canon("unread_marks", false)) },
-		{ "reaction", digest(canon("quick_reaction", true)) },
-		{ "packs", digest(canon("sticker_packs", false)) },
-		{ "contacts", digest(canon("contacts", false)) },
-	};
-}
-
-std::string g_stateSyncedSaved; // main: последнее записанное — не писать файл каждые 8 с
-
-[[nodiscard]] parvane::json LoadStateSynced() { // main
-	auto saved = parvane::json::parse(StoreRead(StateSyncedPath()).toStdString(), nullptr, false);
-	if (!saved.is_object() || saved.value("self", std::string()) != SelfAddress().toStdString()) {
-		return parvane::json::object(); // файла нет либо он другого аккаунта
-	}
-	return saved;
-}
-
-// Пользователь правил вид на этом устройстве. Одного отличия отпечатка мало:
-// пропавший или нечитаемый локальный файл тоже меняет отпечаток, и «досылка»
-// стёрла бы состояние в журнале у всех устройств (так упал verify_protocol_v2_groups).
-void NoteStateEdited(const char *kind) { // main
-	auto saved = LoadStateSynced();
-	auto edited = saved.value("edited", parvane::json::array());
-	for (const auto &k : edited) {
-		if (k.is_string() && k.get<std::string>() == kind) {
-			return;
-		}
-	}
-	edited.push_back(kind);
-	saved["self"] = SelfAddress().toStdString();
-	saved["edited"] = std::move(edited);
-	g_stateSyncedSaved.clear();
-	StoreWrite(StateSyncedPath(), QByteArray::fromStdString(saved.dump()));
-}
-
-void SaveStateSynced(const parvane::json &local) { // main
-	auto j = parvane::json::object();
-	j["self"] = SelfAddress().toStdString();
-	for (const auto &[kind, digest] : StateKindDigests(local)) {
-		j[kind] = digest;
-	}
-	// Правка, сделанная, пока шёл синк, ещё ждёт своей отправки — отметки не снимаем
-	j["edited"] = g_stateFlushQueued
-		? LoadStateSynced().value("edited", parvane::json::array())
-		: parvane::json::array();
-	auto text = j.dump();
-	if (text == g_stateSyncedSaved) {
-		return;
-	}
-	if (StoreWrite(StateSyncedPath(), QByteArray::fromStdString(text))) {
-		g_stateSyncedSaved = std::move(text);
-	}
-}
-
-// Виды, которые правились на этом устройстве после последнего сведения с журналом.
-[[nodiscard]] std::vector<std::string> StateDirtyKinds(const parvane::json &local) { // main
-	auto out = std::vector<std::string>();
-	const auto saved = LoadStateSynced();
-	const auto edited = saved.value("edited", parvane::json::array());
-	const auto wasEdited = [&](const std::string &kind) {
-		for (const auto &k : edited) {
-			if (k.is_string() && k.get<std::string>() == kind) {
-				return true;
+		for (const auto &it : items) {
+			if (!it.kind.isEmpty()) {
+				continue; // файлы, опросы, геопозиция, пересылка — только на этом устройстве (как web)
+			}
+			auto peer = StatePeerOf(it.address);
+			auto plain = parvane::textContent(it.text.toStdString(), it.entities);
+			if (it.silent) {
+				plain["silent"] = true; // «без звука» — и у отложенного (Content.silent)
+			}
+			const auto content = parvane::v2::contentOfWire(plain, it.replyTo.value_or(std::string()));
+			if (peer.is_null() || !content) {
+				continue;
+			}
+			try {
+				const auto opId = parvane::v2::uuidToB64(it.id.toStdString());
+				put(parvane::v2::b64ToHex(opId), {
+					{ "op_id", opId },
+					{ "peer", std::move(peer) },
+					{ "send_at_ms", std::to_string(it.dueAt * 1000) },
+					{ "content", parvane::v2::toBase64(
+						parvane::v2::encodeMessage("parvane.msg.v2.Content", *content)) },
+				});
+			} catch (const std::exception &e) {
+				LOG(("Parvane: v2: отложенное %1 не в журнал: %2").arg(it.id, QString::fromUtf8(e.what())));
 			}
 		}
-		return false;
-	};
-	for (const auto &[kind, digest] : StateKindDigests(local)) {
-		// Вид правил пользователь И локальное состояние отличается от сведённого.
-		// Отпечатка ещё нет (журнал подключается впервые) — главнее журнал.
-		const auto differs = saved.contains(kind) && saved[kind].is_string()
-			&& saved[kind].get<std::string>() != digest;
-		if (wasEdited(kind) && differs) {
-			out.push_back(kind);
+	} else if (kind == "PEER_NOTIFY" || kind == "NOTIFY_DEFAULTS") {
+		// Настройки уведомлений (FR-039): блоб веба → state.v1.NotifySettings.
+		const auto notifyOf = [](const QString &webJson) {
+			const auto w = parvane::json::parse(webJson.toStdString(), nullptr, false);
+			auto o = parvane::json::object();
+			const auto until = (w.is_object() && w.contains("mutedUntil") && w["mutedUntil"].is_number())
+				? w["mutedUntil"].get<std::int64_t>() : 0;
+			o["mute_until_ms"] = std::to_string(std::max<std::int64_t>(until, 0) * 1000);
+			if (w.is_object() && w.contains("shouldShowPreviews") && w["shouldShowPreviews"].is_boolean()) {
+				o["show_previews"] = w["shouldShowPreviews"];
+			}
+			if (w.is_object() && w.contains("isSilentPosting") && w["isSilentPosting"].is_boolean()) {
+				o["silent"] = w["isSilentPosting"];
+			}
+			return o;
+		};
+		if (kind == "PEER_NOTIFY") {
+			for (auto it = g_notifyExceptions.constBegin(); it != g_notifyExceptions.constEnd(); ++it) {
+				if (auto peer = StatePeerOf(it.key()); !peer.is_null()) {
+					auto key = parvane::v2::stateview::peerKeyOf(peer);
+					put(key, { { "peer", std::move(peer) }, { "settings", notifyOf(it.value()) } });
+				}
+			}
+		} else {
+			auto defaults = parvane::json::object();
+			for (auto it = g_notifyDefaults.constBegin(); it != g_notifyDefaults.constEnd(); ++it) {
+				defaults[it.key().toStdString()] = notifyOf(it.value());
+			}
+			if (!defaults.empty() || !ShownValue(kind, std::string()).is_null()) {
+				put(std::string(), std::move(defaults));
+			}
+		}
+	} else if (kind == "BLOCK") {
+		for (const auto &address : g_blockedAddrs) {
+			auto peer = StatePeerOf(address);
+			const auto key = parvane::v2::stateview::peerKeyOf(peer);
+			if (key.empty()) {
+				continue;
+			}
+			// Время блокировки — показанное (не меняется правкой), новое — сейчас
+			const auto was = ShownValue(kind, key);
+			put(key, (was.is_object() && was.contains("blocked_at_ms"))
+				? was
+				: parvane::json{ { "peer", std::move(peer) },
+					{ "blocked_at_ms", std::to_string(QDateTime::currentMSecsSinceEpoch()) } });
+		}
+	} else if (kind == "ARCHIVE") {
+		peerSet(g_archivedAddrs);
+	} else if (kind == "UNREAD_MARK") {
+		peerSet(g_unreadMarkAddrs);
+	} else if (kind == "PIN_LIST") {
+		auto peers = parvane::json::array();
+		for (const auto &address : g_pinnedAddrs) {
+			if (auto peer = StatePeerOf(address); !peer.is_null()) {
+				peers.push_back(std::move(peer));
+			}
+		}
+		if (!peers.empty() || !ShownValue(kind, "1").is_null()) {
+			put("1", { { "list", "PIN_LIST_MAIN" }, { "peers", std::move(peers) } });
+		}
+	} else if (kind == "QUICK_REACTION") {
+		auto reaction = parvane::json::object();
+		if (!g_quickCustom.isEmpty()) {
+			reaction["custom_emoji_id"] = g_quickCustom.toStdString();
+		} else if (!g_quickEmoji.isEmpty()) {
+			reaction["emoji"] = g_quickEmoji.toStdString();
+		}
+		if (!reaction.empty() || !ShownValue(kind, std::string()).is_null()) {
+			put(std::string(), std::move(reaction));
+		}
+	} else if (kind == "STICKER_PACK" || kind == "SAVED_GIF") {
+		const auto gif = (kind == "SAVED_GIF");
+		for (const auto &record : g_stickerPackRecords) {
+			const auto key = record.value("set_id", std::string());
+			if (!key.empty() && (key.rfind("g:", 0) == 0) == gif) {
+				put(key, record);
+			}
+		}
+	} else if (kind == "CONTACT") {
+		for (auto i = g_contacts.constBegin(); i != g_contacts.constEnd(); ++i) {
+			auto entry = parvane::json{ { "user", { { "address", i.key().toStdString() } } } };
+			if (!i->first.isEmpty()) entry["first_name"] = i->first.toStdString();
+			if (!i->last.isEmpty()) entry["last_name"] = i->last.toStdString();
+			if (!i->note.isEmpty()) entry["note"] = i->note.toStdString();
+			put(i.key().toStdString(), std::move(entry));
+		}
+	} else if (kind == "DRAFT") {
+		for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
+			auto peer = StatePeerOf(it.key());
+			const auto content = parvane::v2::contentOfWire(parvane::textContent(it->text.toStdString(), it->entities));
+			if (peer.is_null() || !content || !content->contains("text")) {
+				continue;
+			}
+			try {
+				auto key = parvane::v2::stateview::peerKeyOf(peer);
+				put(key, {
+					{ "peer", std::move(peer) },
+					{ "text", parvane::v2::toBase64(parvane::v2::encodeMessage("parvane.msg.v2.Text", (*content)["text"])) },
+					{ "date_ms", std::to_string(it->dateMs) },
+				});
+			} catch (const std::exception &e) {
+				LOG(("Parvane: v2: черновик %1 не в журнал: %2").arg(it.key(), QString::fromUtf8(e.what())));
+			}
 		}
 	}
 	return out;
@@ -702,7 +657,7 @@ void SaveStateSynced(const parvane::json &local) { // main
 void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap) {
 	using Flag = Data::ChatFilter::Flag;
 	auto &filters = session->data().chatsFilters();
-	const auto current = BuildLocalState(session)["folders"];
+	const auto current = LocalFolderList(session);
 	auto currentById = std::map<int, parvane::json>();
 	for (const auto &f : current) {
 		currentById[f.value("id", 0)] = f;
@@ -717,7 +672,7 @@ void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap)
 			continue;
 		}
 		wanted.insert(id);
-		// Сравнение в нормализованном виде (как BuildLocalState).
+		// Сравнение в нормализованном виде (как LocalFolderList).
 		auto norm = parvane::json{
 			{ "id", id },
 			{ "title", f.value("title", std::string()) },
@@ -817,7 +772,7 @@ void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap)
 		}
 	}
 	if (changed) {
-		LOG(("Parvane: v2: журнал состояния → папки (%1 изменений)").arg(changed));
+		LOG((StateNote(u"Parvane: v2: журнал состояния → папки (%1 изменений)"_q)).arg(changed));
 	}
 }
 
@@ -893,7 +848,7 @@ void ProjectScheduled(const parvane::json &snap) {
 		}
 	}
 	if (changed) {
-		LOG(("Parvane: v2: журнал состояния → отложенные"));
+		LOG((StateNote(u"Parvane: v2: журнал состояния → отложенные"_q)));
 		RefreshScheduledViewsFor(touched);
 		ArmScheduledTimers();
 	}
@@ -902,19 +857,6 @@ void ProjectScheduled(const parvane::json &snap) {
 // Настройки уведомлений из журнала → блоб веба → нативные настройки
 // (ApplyNotifyBlob). Исключение, которого в журнале больше нет, снимается.
 void ProjectNotify(const parvane::json &snap) {
-	const auto has = (snap.contains("notify") && snap["notify"].is_array() && !snap["notify"].empty())
-		|| (snap.contains("notify_defaults") && snap["notify_defaults"].is_object()
-			&& !snap["notify_defaults"].empty());
-	if (!QFile::exists(NotifyJournaledPath())) {
-		// Вид `notify` появился позже первого переноса состояния: в журнале его
-		// ещё нет — локальные настройки уходят в журнал, а не стираются.
-		// Под оградой хранилища: событие прежней сессии после выхода со стиранием маркер не пересоздаёт
-		parvane::storecrypt::writeRawFile(NotifyJournaledPath().toStdString(), std::string_view());
-		if (!has) {
-			ScheduleStateFlush("notify");
-			return;
-		}
-	}
 	const auto webOf = [](const parvane::json &st) {
 		auto w = parvane::json::object();
 		try {
@@ -970,7 +912,7 @@ void ProjectNotify(const parvane::json &snap) {
 	if (blob["exceptions"].empty() && blob["defaults"].empty()) {
 		return;
 	}
-	LOG(("Parvane: v2: журнал состояния → уведомления (%1 изменений)")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → уведомления (%1 изменений)"_q))
 		.arg(int(blob["exceptions"].size() + blob["defaults"].size())));
 	ApplyNotifyBlob(QString::fromStdString(blob.dump()));
 }
@@ -991,7 +933,6 @@ void ProjectBlocked(not_null<Main::Session*> session, const parvane::json &snap)
 	}
 	const auto before = g_blockedAddrs;
 	g_blockedAddrs = next;
-	SaveBlockedState();
 	auto changed = 0;
 	for (const auto &address : (before + next)) {
 		const auto isBlocked = next.contains(address);
@@ -1007,7 +948,7 @@ void ProjectBlocked(not_null<Main::Session*> session, const parvane::json &snap)
 		}
 		++changed;
 	}
-	LOG(("Parvane: v2: журнал состояния → блок-лист (%1 изменений)").arg(changed));
+	LOG((StateNote(u"Parvane: v2: журнал состояния → блок-лист (%1 изменений)"_q)).arg(changed));
 }
 
 // Сохранённые архив и закреп → нативные списки чатов. Чат, которого ещё нет в
@@ -1098,14 +1039,13 @@ void ProjectUnreadAndReaction(not_null<Main::Session*> session, const parvane::j
 	g_unreadMarkAddrs = marks;
 	g_quickEmoji = emoji;
 	g_quickCustom = custom;
-	SaveDialogState();
 	for (const auto &address : unmarked) {
 		if (const auto history = HistoryForAddress(session, address)) {
 			history->setUnreadMark(false);
 		}
 	}
 	ApplyDialogState(session);
-	LOG(("Parvane: v2: журнал состояния → отмечено непрочитанными %1, быстрая реакция %2")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → отмечено непрочитанными %1, быстрая реакция %2"_q))
 		.arg(g_unreadMarkAddrs.size())
 		.arg(!custom.isEmpty() ? (u"custom:"_q + custom) : emoji.isEmpty() ? u"по умолчанию"_q : emoji));
 }
@@ -1115,35 +1055,32 @@ void ProjectUnreadAndReaction(not_null<Main::Session*> session, const parvane::j
 	return AccountFilePath(u"parvane-sticker-packs-"_q, SelfAddress(), u".json"_q);
 }
 
-void LoadStickerPacksLocal() { // main
-	if (g_stickerPacksLoaded) {
+// Записи наборов — только в модели (вид STICKER_PACK); в файле аккаунта — лишь отметка разового переноса
+// стоявших до PACK-3 наборов (прежнее зеркало записей «packs» больше не читается: записи — в журнале).
+void LoadStickerPacksMigrated() { // main
+	if (g_stickerPacksMigratedLoaded) {
 		return;
 	}
 	const auto path = StickerPacksPath();
 	if (path.isEmpty()) {
 		return; // адрес ещё неизвестен — прочитаем позже
 	}
-	g_stickerPacksLoaded = true;
+	g_stickerPacksMigratedLoaded = true;
 	const auto j = parvane::json::parse(StoreRead(path).toStdString(), nullptr, false);
-	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
-		return;
+	if (j.is_object() && j.value("self", std::string()) == SelfAddress().toStdString()) {
+		g_stickerPacksMigrated = j.value("migrated", false);
 	}
-	const auto packs = j.value("packs", parvane::json::array());
-	g_stickerPackRecords = packs.is_array() ? packs : parvane::json::array();
-	g_stickerPacksMigrated = j.value("migrated", false);
 }
 
-void SaveStickerPacksLocal() { // main
+void SaveStickerPacksMigrated() { // main
 	const auto path = StickerPacksPath();
 	if (path.isEmpty()) {
 		return;
 	}
-	const auto j = parvane::json{
+	StoreWrite(path, QByteArray::fromStdString(parvane::json{
 		{ "self", SelfAddress().toStdString() },
-		{ "packs", g_stickerPackRecords },
 		{ "migrated", g_stickerPacksMigrated },
-	};
-	StoreWrite(path, QByteArray::fromStdString(j.dump()));
+	}.dump()));
 }
 
 [[nodiscard]] QString StickerPackRecordKey(const parvane::json &record) {
@@ -1177,7 +1114,6 @@ void InstallMissingStickerPacks() { // main
 // Наборы из журнала → установить недостающие. Снятия набора на desktop нет (локальный набор tdesktop
 // убрать нечем — «Удалить набор» уходит в MTProto), поэтому пропавшая из журнала запись набор не трогает.
 void ProjectStickerPacks(const parvane::json &snap) { // main
-	LoadStickerPacksLocal();
 	auto next = parvane::json::array();
 	if (snap.contains("sticker_packs") && snap["sticker_packs"].is_array()) {
 		for (const auto &record : snap["sticker_packs"]) {
@@ -1203,13 +1139,11 @@ void ProjectStickerPacks(const parvane::json &snap) { // main
 			}
 		}
 		g_stickerPackRecords = std::move(next);
-		SaveStickerPacksLocal();
 	}
 	InstallMissingStickerPacks();
 }
 
 void RecordStickerPack(const parvane::json &ref, bool emoji) { // main
-	LoadStickerPacksLocal();
 	const auto archive = PackArchiveRef(ref);
 	const auto key = PackJournalKey(archive);
 	if (key.empty() || archive.value("file_id", std::string()).empty()) {
@@ -1233,14 +1167,12 @@ void RecordStickerPack(const parvane::json &ref, bool emoji) { // main
 	next.push_back(std::move(record));
 	g_stickerPackRecords = std::move(next);
 	g_stickerPacksTried.insert(QString::fromStdString(key)); // набор стоит здесь
-	SaveStickerPacksLocal();
 	LOG(("Parvane: стикеры: набор %1 записан в журнал состояния").arg(QString::fromStdString(key)));
 	ScheduleStateFlush("packs");
 }
 
 // Свой набор удалён на этом устройстве — его запись (по имени или отпечатку) прочь из журнала (п. 23)
 void ForgetStickerPackRecord(const QString &byName, const QString &byHash) { // main
-	LoadStickerPacksLocal();
 	auto next = parvane::json::array();
 	for (const auto &item : g_stickerPackRecords) {
 		const auto key = StickerPackRecordKey(item);
@@ -1254,14 +1186,12 @@ void ForgetStickerPackRecord(const QString &byName, const QString &byHash) { // 
 		return;
 	}
 	g_stickerPackRecords = std::move(next);
-	SaveStickerPacksLocal();
 	LOG(("Parvane: стикеры: запись набора убрана из журнала состояния"));
 	ScheduleStateFlush("packs");
 }
 
 // GIF-1: сохранённый GIF — запись `g:<sha256>`, ссылка на сам файл (count 1, content_hash — sha256 в base64)
 void RecordSavedGif(const parvane::json &fileRef, const std::string &sha256Hex) { // main
-	LoadStickerPacksLocal();
 	const auto key = "g:" + sha256Hex;
 	auto ref = PackArchiveRef(fileRef);
 	ref["count"] = 1;
@@ -1279,13 +1209,11 @@ void RecordSavedGif(const parvane::json &fileRef, const std::string &sha256Hex) 
 	});
 	g_stickerPackRecords = std::move(next);
 	g_stickerPacksTried.insert(QString::fromStdString(key));
-	SaveStickerPacksLocal();
 	LOG(("Parvane: GIF-1: GIF %1 сохранён в журнал состояния").arg(QString::fromStdString(sha256Hex).left(12)));
 	ScheduleStateFlush("packs");
 }
 
 void ForgetSavedGif(const std::string &sha256Hex) { // main
-	LoadStickerPacksLocal();
 	const auto key = "g:" + sha256Hex;
 	auto next = parvane::json::array();
 	for (const auto &item : g_stickerPackRecords) {
@@ -1298,14 +1226,12 @@ void ForgetSavedGif(const std::string &sha256Hex) { // main
 	}
 	g_stickerPackRecords = std::move(next);
 	g_stickerPacksTried.remove(QString::fromStdString(key));
-	SaveStickerPacksLocal();
 	LOG(("Parvane: GIF-1: GIF %1 убран из журнала состояния").arg(QString::fromStdString(sha256Hex).left(12)));
 	ScheduleStateFlush("packs");
 }
 
 // Новые локальные наборы (созданные из файлов) — архив в облако и запись в журнал состояния (PACK-3)
 void RecordNewLocalStickerPacks() { // main
-	LoadStickerPacksLocal();
 	auto recorded = QSet<QString>();
 	for (const auto &record : g_stickerPackRecords) {
 		recorded.insert(StickerPackRecordKey(record));
@@ -1320,7 +1246,7 @@ void RecordNewLocalStickerPacks() { // main
 // Наборы, стоявшие на устройстве до PACK-3, — в журнал один раз (дальше журнал главнее). Звать при подключении
 // журнала ДО проекции снимка: установки из журнала ждут конца переноса.
 void MigrateStickerPacksOnce(const parvane::json &snap) { // main
-	LoadStickerPacksLocal();
+	LoadStickerPacksMigrated();
 	if (g_stickerPacksMigrated || g_stickerPacksMigrating) {
 		return;
 	}
@@ -1341,7 +1267,7 @@ void MigrateStickerPacksOnce(const parvane::json &snap) { // main
 		}
 		if (complete) {
 			g_stickerPacksMigrated = true;
-			SaveStickerPacksLocal();
+			SaveStickerPacksMigrated();
 		}
 		LOG(("Parvane: стикеры: перенос установленных наборов в журнал состояния — %1 записано%2")
 			.arg(int(refs.size()))
@@ -1382,14 +1308,13 @@ void ProjectDialogs(not_null<Main::Session*> session, const parvane::json &snap)
 	const auto unarchived = g_archivedAddrs - archived;
 	g_archivedAddrs = archived;
 	g_pinnedAddrs = pinned;
-	SaveDialogState();
 	for (const auto &address : unarchived) {
 		if (const auto history = HistoryForAddress(session, address)) {
 			history->clearFolder();
 		}
 	}
 	ApplyDialogState(session);
-	LOG(("Parvane: v2: журнал состояния → архив %1, закреплено %2")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → архив %1, закреплено %2"_q))
 		.arg(g_archivedAddrs.size()).arg(g_pinnedAddrs.size()));
 }
 
@@ -1438,7 +1363,7 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 	// Нотис `cleared` v1-шарда обычно приходит раньше журнала (сервер записывает
 	// скрытие и для неизвестных ему id сообщений v2) — тогда скрывать уже нечего,
 	// но граница применена, и запись о ней нужна сценарию и разбору.
-	LOG(("Parvane: v2: журнал состояния → очистка чатов (%1), скрыто %2 сообщений")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → очистка чатов (%1), скрыто %2 сообщений"_q))
 		.arg(fresh.size()).arg(uuids.size()));
 	if (uuids.isEmpty()) {
 		return;
@@ -1447,51 +1372,11 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 	ForgetClearedOnMain(session, uuids);
 }
 
-[[nodiscard]] QString DraftsPath() {
-	return cWorkingDir() + u"tdata/parvane-drafts.json"_q;
-}
-
-void LoadDraftsLocal() {
-	if (g_draftsLoaded) {
-		return;
-	}
-	g_draftsLoaded = true;
-	const auto j = parvane::json::parse(StoreRead(DraftsPath()).toStdString(), nullptr, false);
-	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
-		return;
-	}
-	// items() временного объекта ссылается на уже разрушенный json (-Wdangling-reference) — держим копию
-	const auto drafts = j.value("drafts", parvane::json::object());
-	for (const auto &[address, d] : drafts.items()) {
-		g_drafts.insert(QString::fromStdString(address), DraftEntry{
-			QString::fromStdString(d.value("text", std::string())),
-			d.value("entities", parvane::json::array()),
-			d.value("date_ms", std::int64_t(0)),
-		});
-	}
-}
-
-void SaveDraftsLocal() {
-	auto drafts = parvane::json::object();
-	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
-		drafts[it.key().toStdString()] = {
-			{ "text", it->text.toStdString() },
-			{ "entities", it->entities },
-			{ "date_ms", it->dateMs },
-		};
-	}
-	StoreWrite(DraftsPath(), QByteArray::fromStdString(parvane::json{
-		{ "self", SelfAddress().toStdString() },
-		{ "drafts", drafts },
-	}.dump()));
-}
-
 // Снимок журнала → черновики (штатный путь облачного черновика tdesktop: поле ввода обновится само)
 void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.contains("drafts") || !snap["drafts"].is_array()) {
 		return;
 	}
-	LoadDraftsLocal();
 	auto next = QHash<QString, DraftEntry>();
 	for (const auto &d : snap["drafts"]) {
 		const auto address = StateAddressOf(d.value("peer", parvane::json()));
@@ -1518,6 +1403,27 @@ void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) 
 	}
 	auto addresses = QSet<QString>();
 	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) addresses.insert(it.key());
+	if (!g_draftsProjected) {
+		// Первый показ после запуска: черновик, который tdesktop хранит у себя, а модель уже нет (снят на другом
+		// устройстве, пока это было выключено), — снять (своего файла черновиков больше нет, spec 036)
+		g_draftsProjected = true;
+		const auto addList = [&](not_null<Dialogs::IndexedList*> list) {
+			for (const auto &row : list->all()) {
+				const auto history = row->history();
+				const auto draft = history ? history->cloudDraft(MsgId(), PeerId()) : nullptr;
+				if (draft && !draft->textWithTags.text.isEmpty()) {
+					if (const auto address = HistoryAddress(history); !address.isEmpty()) {
+						addresses.insert(address);
+						g_drafts.insert(address, DraftEntry{ draft->textWithTags.text });
+					}
+				}
+			}
+		};
+		addList(session->data().chatsList()->indexed());
+		if (const auto folder = session->data().folderLoaded(Data::Folder::kId)) {
+			addList(folder->chatsList()->indexed());
+		}
+	}
 	for (auto it = next.constBegin(); it != next.constEnd(); ++it) addresses.insert(it.key());
 	auto changed = 0;
 	for (const auto &address : addresses) {
@@ -1553,65 +1459,13 @@ void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) 
 		++changed;
 	}
 	g_drafts = next;
-	SaveDraftsLocal();
 	if (changed) {
-		LOG(("Parvane: журнал состояния → черновики (%1 изменений)").arg(changed));
+		LOG((StateNote(u"Parvane: журнал состояния → черновики (%1 изменений)"_q)).arg(changed));
 	}
 }
 
 // ── CONTACT-1: свои контакты, своё имя контакта и заметка (вид `contacts`) ──
-[[nodiscard]] QString ContactsPath() {
-	return AccountFilePath(u"parvane-contacts-"_q, SelfAddress(), u".json"_q);
-}
-
-void LoadContactsLocal() { // main
-	if (g_contactsLoaded) {
-		return;
-	}
-	const auto path = ContactsPath();
-	if (path.isEmpty()) {
-		return; // адрес ещё неизвестен — прочитаем позже
-	}
-	g_contactsLoaded = true;
-	const auto j = parvane::json::parse(StoreRead(path).toStdString(), nullptr, false);
-	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()
-		|| !j.contains("contacts") || !j["contacts"].is_array()) {
-		return;
-	}
-	for (const auto &c : j["contacts"]) {
-		const auto address = QString::fromStdString(c.value("address", std::string()));
-		if (address.contains('@')) {
-			g_contacts.insert(address, ContactRecord{
-				QString::fromStdString(c.value("first", std::string())),
-				QString::fromStdString(c.value("last", std::string())),
-				QString::fromStdString(c.value("note", std::string())),
-			});
-		}
-	}
-}
-
-void SaveContactsLocal() { // main
-	const auto path = ContactsPath();
-	if (path.isEmpty()) {
-		return;
-	}
-	auto list = parvane::json::array();
-	for (auto i = g_contacts.constBegin(); i != g_contacts.constEnd(); ++i) {
-		list.push_back({
-			{ "address", i.key().toStdString() },
-			{ "first", i->first.toStdString() },
-			{ "last", i->last.toStdString() },
-			{ "note", i->note.toStdString() },
-		});
-	}
-	StoreWrite(path, QByteArray::fromStdString(parvane::json{
-		{ "self", SelfAddress().toStdString() },
-		{ "contacts", std::move(list) },
-	}.dump()));
-}
-
 const ContactRecord *ContactRecordFor(const QString &address) { // main
-	LoadContactsLocal();
 	const auto i = g_contacts.constFind(address);
 	return (i != g_contacts.constEnd()) ? &i.value() : nullptr;
 }
@@ -1626,7 +1480,6 @@ void RefreshContactUser(not_null<Main::Session*> session, const QString &address
 }
 
 void ProjectContacts(not_null<Main::Session*> session, const parvane::json &snap) { // main
-	LoadContactsLocal();
 	auto next = QHash<QString, ContactRecord>();
 	if (snap.contains("contacts") && snap["contacts"].is_array()) {
 		for (const auto &c : snap["contacts"]) {
@@ -1660,11 +1513,10 @@ void ProjectContacts(not_null<Main::Session*> session, const parvane::json &snap
 		return;
 	}
 	g_contacts = std::move(next);
-	SaveContactsLocal();
 	for (const auto &address : touched) {
 		RefreshContactUser(session, address);
 	}
-	LOG(("Parvane: v2: журнал состояния → контакты (%1 изменений, всего %2)")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → контакты (%1 изменений, всего %2)"_q))
 		.arg(touched.size())
 		.arg(g_contacts.size()));
 }
@@ -1673,7 +1525,6 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.is_object()) {
 		return;
 	}
-	g_stateShown = snap;
 	g_stateApplying = true;
 	ProjectCleared(session, snap);
 	ProjectFolders(session, snap);
@@ -1689,58 +1540,63 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	SaveFolders(session);
 }
 
-// Своя правка — сначала в журнал, затем чужие записи (web syncNow).
-void StateSyncNow() {
-	const auto session = g_sessionWeak.get();
-	if (!g_stateAttached || !session) {
+// Сессия v2 с моделью профиля (и без сети — модель открывается по прошлому разу); готовность не нужна.
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> V2Model() {
+	std::lock_guard<std::mutex> lk(g_v2Mutex);
+	return g_v2;
+}
+
+// Показ модели (объекты по видам) → нативные объекты. Пока ждёт своя правка — не показывать: её отправка покажет
+// модель после себя (иначе показ откатил бы правку, ещё не отданную модели).
+void ProjectView(not_null<Main::Session*> session, const parvane::json &view) { // main
+	if (!view.is_object() || g_stateFlushQueued) {
 		return;
 	}
-	if (!V2Ready()) {
+	g_stateView = view;
+	ProjectState(session, parvane::v2::stateview::snapshotOf(view));
+	// FR-075: избранные стикеры — объекты FAVED_STICKER той же модели
+	auto faved = parvane::json::array();
+	for (const auto &o : parvane::v2::stateview::objectsOf(view, "FAVED_STICKER")) {
+		faved.push_back(o.value("value", parvane::json::object()));
+	}
+	ProjectFavedStickers(session, faved);
+}
+
+void StateSubmitNow();
+
+// Показ модели заново: sync — сначала журнал до головы (уведомление журнала, опрос раз в 60 с). Правки, не отданные
+// модели (модель не была открыта), — сначала они.
+void StateShowNow(bool sync) { // main
+	if (!g_statePending.empty()) {
+		StateSubmitNow();
 		return;
 	}
-	const auto desired = BuildLocalState(session);
-	const auto shown = g_stateShown;
 	const auto generation = AccountGeneration();
-	crl::async([desired, shown, generation] {
-		if (!AccountGenerationIs(generation)) {
+	crl::async([sync, generation] {
+		const auto s = V2Model();
+		if (!s || !AccountGenerationIs(generation)) {
 			return;
 		}
-		const auto s = V2Ready();
-		if (!s) {
-			return;
-		}
-		parvane::json r;
+		parvane::json view;
+		auto blocked = false;
 		try {
-			r = s->stateSync(desired, kV2StateKinds, shown);
-		} catch (const std::exception &e) {
-			LOG(("Parvane: v2: синк журнала состояния: %1").arg(QString::fromUtf8(e.what())));
-			return;
-		}
-		if (!r.is_object()) {
-			return;
-		}
-		// FR-075: избранное другого устройства — в снимке формы state.v1 его нет, сверяется отдельно
-		crl::on_main([faved = s->stateFavedStickers(), generation] {
-			const auto session = g_sessionWeak.get();
-			if (session && AccountGenerationIs(generation)) {
-				ProjectFavedStickers(session, faved);
+			if (sync) {
+				s->stateRefresh();
 			}
-		});
-		if (!r.value("changed", false)) {
-			// Журнал принял ровно `desired` — это и есть сведённое состояние (T150)
-			crl::on_main([desired, generation] {
-				if (AccountGenerationIs(generation)) {
-					SaveStateSynced(desired);
-				}
-			});
+			view = s->stateView({});
+			blocked = s->stateWriteBlocked();
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: показ личного состояния: %1").arg(QString::fromUtf8(e.what())));
 			return;
 		}
-		// spec 035 (US5): журнал закрыт для записи более новой версией — правки отсюда не уходят, сказать один раз
-		const auto blocked = s->stateWriteBlocked();
-		crl::on_main([snap = r["snapshot"], generation, blocked] {
+		if (!view.is_object()) {
+			return;
+		}
+		crl::on_main([view, blocked, generation] {
 			if (!AccountGenerationIs(generation)) {
 				return;
 			}
+			// spec 035 (US5): журнал закрыт для записи более новой версией — правки отсюда не уходят, сказать один раз
 			static auto told = false;
 			if (blocked && !told) {
 				told = true;
@@ -1749,11 +1605,60 @@ void StateSyncNow() {
 					window->showToast(tr::lng_parvane_write_blocked(tr::now));
 				}
 			}
+			if (view == g_stateView) {
+				return;
+			}
 			if (const auto session = g_sessionWeak.get()) {
-				ProjectState(session, snap);
-				if (!g_stateFlushQueued) {
-					SaveStateSynced(BuildLocalState(session));
-				}
+				ProjectView(session, view);
+			}
+		});
+	});
+}
+
+// Своя правка видов g_statePending → объекты модели (`stateSubmit`: разница от показанного — у модели), затем показ.
+void StateSubmitNow() { // main
+	const auto session = g_sessionWeak.get();
+	if (!session || g_statePending.empty()) {
+		return;
+	}
+	auto edits = std::vector<std::tuple<std::string, parvane::json, parvane::json>>();
+	for (const auto &kind : g_statePending) {
+		edits.emplace_back(kind, LocalObjects(session, kind), ShownObjects(kind));
+	}
+	auto kinds = g_statePending;
+	g_statePending.clear();
+	const auto generation = AccountGeneration();
+	crl::async([edits = std::move(edits), kinds, generation] {
+		if (!AccountGenerationIs(generation)) {
+			return; // правка прежнего аккаунта — не в модель следующего
+		}
+		const auto s = V2Model();
+		auto applied = s != nullptr;
+		for (const auto &[kind, desired, shown] : edits) {
+			try {
+				applied = applied && s->stateSubmit(kind, desired, shown);
+			} catch (const std::exception &e) {
+				LOG(("Parvane: v2: правка личного состояния %1: %2")
+					.arg(QString::fromStdString(kind), QString::fromUtf8(e.what())));
+				applied = false;
+			}
+		}
+		auto names = QStringList();
+		for (const auto &kind : kinds) {
+			names.push_back(QString::fromStdString(kind));
+		}
+		LOG(("Parvane: v2: личное состояние → модель (%1)%2")
+			.arg(names.join(u", "_q), applied ? QString() : u" — модель не открыта, повтор при подключении"_q));
+		crl::on_main([kinds, applied, generation] {
+			if (!AccountGenerationIs(generation)) {
+				return;
+			}
+			if (!applied) {
+				g_statePending.insert(kinds.begin(), kinds.end());
+				return;
+			}
+			if (!g_stateFlushQueued) {
+				StateShowNow(false);
 			}
 		});
 	});
@@ -1774,7 +1679,6 @@ void NoteBlock(not_null<PeerData*> peer, bool blocked) {
 	} else {
 		g_blockedAddrs.remove(address);
 	}
-	SaveBlockedState();
 	LOG(("Parvane: %1 %2").arg(blocked ? u"заблокирован"_q : u"разблокирован"_q, address));
 	ScheduleStateFlush("blocked");
 	if (blocked) {
@@ -1811,10 +1715,8 @@ void NoteArchive(not_null<History*> history, bool archived) {
 	} else {
 		g_archivedAddrs.remove(address);
 	}
-	SaveDialogState();
 	LOG(("Parvane: чат %1 %2").arg(address, archived ? u"в архиве"_q : u"возвращён из архива"_q));
-	NoteStateEdited("pinned"); // архив снимает закреп
-	ScheduleStateFlush("archived");
+	ScheduleStateFlush("archived"); // и закреп: архив его снимает
 }
 
 // Пользователь отметил чат «непрочитанным» либо снял отметку (в т.ч. открытием чата,
@@ -1832,7 +1734,6 @@ void NoteUnreadMark(not_null<History*> history, bool unread) {
 	} else {
 		g_unreadMarkAddrs.remove(address);
 	}
-	SaveDialogState();
 	LOG(("Parvane: чат %1 %2").arg(address, unread ? u"отмечен непрочитанным"_q : u"без отметки «непрочитано»"_q));
 	ScheduleStateFlush("unread");
 }
@@ -1849,7 +1750,6 @@ void NoteQuickReaction(const QString &emoji, std::uint64_t customId) {
 	}
 	g_quickEmoji = plain;
 	g_quickCustom = custom;
-	SaveDialogState();
 	LOG(("Parvane: быстрая реакция %1").arg(custom.isEmpty() ? plain : (u"custom:"_q + custom)));
 	ScheduleStateFlush("reaction");
 }
@@ -1882,7 +1782,6 @@ void NoteDialogPins(not_null<Main::Session*> session) {
 		return;
 	}
 	g_pinnedAddrs = next;
-	SaveDialogState();
 	LOG(("Parvane: закреплено чатов: %1").arg(g_pinnedAddrs.size()));
 	ScheduleStateFlush("pinned");
 }
@@ -1891,38 +1790,79 @@ void ScheduleStateFlush(const char *kind) {
 	if (g_stateApplying) {
 		return;
 	}
-	NoteStateEdited(kind); // T150: правка пользователя — до журнала может не дойти
-	if (!g_stateAttached || g_stateFlushQueued) {
+	for (const auto &k : StateKindsOf(kind)) {
+		g_statePending.insert(k);
+	}
+	if (g_stateFlushQueued) {
 		return;
 	}
 	g_stateFlushQueued = true;
 	base::call_delayed(crl::time(700), [generation = AccountGeneration()] {
 		if (!AccountGenerationIs(generation)) {
-			return; // правка прежнего аккаунта — не в журнал следующего
+			return; // правка прежнего аккаунта — не в модель следующего
 		}
 		g_stateFlushQueued = false;
-		StateSyncNow();
+		StateSubmitNow();
 	});
 }
 
-// Подключить журнал (событие stateReady v2-сессии): первый запуск переносит
-// локальные папки/отложенные в журнал, дальше — синк раз в 8 с и по правке.
-// Журнал состояния подключается после воспроизведения истории при старте: адреса чатов (реестр id → адрес) узнаются
-// из её строк, а папки, закреп, архив хранятся по id чата. С spec 035 T125 строки — из модели, и воспроизведение
-// идёт по готовности модели, позже stateReady: без ожидания чат, известный только по истории, выпадал из «желаемого»
-// (HistoryAddress пуст) и его правка стиралась из журнала (verify_state_patch, пара state-patch-desktop).
+// Изменения модели (событие сессии `model`): личное состояние сменилось (своя правка, другое устройство) —
+// показать заново, не чаще раза в 300 мс.
+void OnModelChanges(const parvane::json &changes) {
+	auto state = false;
+	auto rows = parvane::json::array();
+	for (const auto &ch : changes) {
+		state = state || (ch.is_object() && ch.contains("state_changed"));
+		if (ch.is_object() && (ch.contains("message_upsert") || ch.contains("message_remove") || ch.contains("unread_changed"))) {
+			rows.push_back(ch);
+		}
+	}
+	if (!rows.empty()) {
+		// spec 036 (ENGINE-1): строки и счётчики — готовым показом модели
+		crl::on_main([rows = std::move(rows), generation = AccountGeneration()] {
+			if (AccountGenerationIs(generation)) {
+				ShowModelRows(rows);
+			}
+		});
+	}
+	if (!state) {
+		return;
+	}
+	crl::on_main([generation = AccountGeneration()] {
+		if (!AccountGenerationIs(generation) || g_stateRefreshQueued) {
+			return;
+		}
+		g_stateRefreshQueued = true;
+		base::call_delayed(crl::time(300), [generation] {
+			g_stateRefreshQueued = false;
+			if (AccountGenerationIs(generation)) {
+				StateShowNow(false);
+			}
+		});
+	});
+}
+
+// Показ личного состояния из модели при старте (модель профиля открыта, история воспроизведена): архив, закреп,
+// контакты, черновики и прочее — до подключения к серверу.
 bool g_startupReplayDone = false; // main
 bool g_attachWaiting = false;     // main
 void AttachStateJournal();
 
 void NoteStartupReplayDone() {
 	g_startupReplayDone = true;
+	if (g_sessionWeak.get()) {
+		StateShowNow(false);
+	}
 	if (g_attachWaiting) {
 		g_attachWaiting = false;
 		AttachStateJournal();
 	}
 }
 
+// Подключить журнал (событие stateReady v2-сессии): журнал до головы (свои правки без связи — серверу, чужие — в
+// модель), затем показ; дальше — по уведомлениям журнала и раз в 60 с. Журнал подключается после воспроизведения
+// истории при старте: адреса чатов (реестр id → адрес) узнаются из её строк, а папки, закреп, архив хранятся по id
+// чата — без ожидания чат, известный только по истории, выпадал бы из показа.
 void AttachStateJournal() {
 	const auto session = g_sessionWeak.get();
 	if (!session || !V2Ready()) {
@@ -1941,59 +1881,48 @@ void AttachStateJournal() {
 		}
 		return;
 	}
-	const auto local = BuildLocalState(session);
-	const auto dirty = StateDirtyKinds(local);
 	const auto generation = AccountGeneration();
-	// Маркер сценария verify_relogin_other_account.sh: что этот аккаунт несёт в журнал при подключении
-	LOG(("Parvane: v2: журнал состояния — подключение (черновиков %1, отложенных %2)")
-		.arg(int(local.value("drafts", parvane::json::array()).size()))
-		.arg(int(local.value("scheduled", parvane::json::array()).size())));
-	crl::async([local, dirty, generation] {
+	crl::async([generation] {
 		if (!AccountGenerationIs(generation)) {
-			return; // состояние прежнего аккаунта — не в журнал следующего
+			return;
 		}
 		const auto s = V2Ready();
 		if (!s) {
 			return;
 		}
-		parvane::json snap;
+		parvane::json view;
 		try {
-			// T150: локальная правка этих видов новее журнала — сначала она (разница от того, что было
-			// показано до правки), затем снимок (иначе проекция её откатит)
-			snap = s->stateAttach(local, dirty);
-			if (snap.is_object() && !dirty.empty()) {
-				{
-					auto names = QStringList();
-					for (const auto &kind : dirty) {
-						names.push_back(QString::fromStdString(kind));
-					}
-					LOG(("Parvane: v2: несохранённая правка личного состояния дослана в журнал (%1)")
-						.arg(names.join(u", "_q)));
-				}
+			if (!s->stateConnect()) {
+				return; // ключа личного состояния ещё нет либо ждём записей под новым ключом (повтор — stateReady)
 			}
+			view = s->stateView({});
 		} catch (const std::exception &e) {
 			LOG(("Parvane: v2: журнал состояния не прочитан: %1").arg(QString::fromUtf8(e.what())));
 			return;
 		}
-		if (!snap.is_object()) {
+		if (!view.is_object()) {
 			return;
 		}
-		const auto faved = s->stateFavedStickers(); // FR-075: избранные стикеры — объекты FAVED_STICKER модели
-		crl::on_main([snap, faved, generation] {
+		// Маркер сценария verify_relogin_other_account.sh: что лежит в личном состоянии аккаунта при подключении
+		LOG(("Parvane: v2: журнал состояния — подключение (черновиков %1, отложенных %2)")
+			.arg(int(parvane::v2::stateview::objectsOf(view, "DRAFT").size()))
+			.arg(int(parvane::v2::stateview::snapshotOf(view).value("scheduled", parvane::json::array()).size())));
+		crl::on_main([view, generation] {
 			const auto session = g_sessionWeak.get();
 			if (!session || !AccountGenerationIs(generation)) {
 				return;
 			}
 			g_stateAttached = true;
-			MigrateStickerPacksOnce(snap); // PACK-3: до проекции — установки из журнала ждут переноса
-			ProjectState(session, snap);
-			ProjectFavedStickers(session, faved);
-			SaveStateSynced(BuildLocalState(session));
-			if (!g_stateTimer) {
-				g_stateTimer = std::make_unique<base::Timer>([] { StateSyncNow(); });
+			MigrateStickerPacksOnce(parvane::v2::stateview::snapshotOf(view)); // PACK-3: до показа
+			ProjectView(session, view);
+			if (!g_statePending.empty()) {
+				StateSubmitNow(); // правки, сделанные до открытия модели
 			}
-			// Правка с другого устройства приходит живым уведомлением журнала (JournalNotice, spec 033) — опрос
-			// раз в 60 с только страховка
+			if (!g_stateTimer) {
+				g_stateTimer = std::make_unique<base::Timer>([] { StateShowNow(true); });
+			}
+			// Правка с другого устройства приходит живым уведомлением журнала (JournalNotice, spec 033) и изменением
+			// модели (`model`) — опрос раз в 60 с только страховка
 			g_stateTimer->callEach(60 * crl::time(1000));
 			LOG(("Parvane: v2: журнал личного состояния подключён (папки, отложенные)"));
 		});
@@ -2069,21 +1998,23 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		return true;
 	}
 	if (type == "stateReady") {
-		Sections::OnSessionChanged();
-		OnHistorySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
+		Sections::OnSessionChanged(); // журнал истории (и после смены ключа — точка, HIST-2) ведёт модель сессии
 	}
 	if (type == "journal") {
-		// Живое уведомление журнала (JournalNotice, spec 033): история — журналу истории, личное состояние — синк
-		// журнала состояния сейчас (опрос — страховка)
+		// Живое уведомление журнала (JournalNotice, spec 033): личное состояние — синк журнала состояния сейчас (опрос —
+		// страховка); журнал истории догоняет модель сессии сама (spec 036)
 		if (ev.value("journal", std::string()) == "state") {
-			OnMainForAccount([] { StateSyncNow(); });
-		} else {
-			OnHistorySessionEvent(ev);
+			OnMainForAccount([] { StateShowNow(true); });
 		}
 		return true;
 	}
 	if (type == "joined") {
 		crl::async([] { CompleteJoin(); });
+		return true;
+	}
+	if (type == "model") {
+		// spec 036 (ENGINE-1): изменения модели для показа (личное состояние — Project*)
+		OnModelChanges(ev.value("changes", parvane::json::array()));
 		return true;
 	}
 	const auto address = QString::fromStdString(ev.value("address", std::string()));
@@ -2245,7 +2176,6 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		});
 		PublishLinkingStatus();
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
-		StartAuditDumpIfRequested();
 		return true;
 	}
 	if (type == "authRejected") {
@@ -2440,7 +2370,6 @@ bool MirrorDraft(not_null<History*> history, const TextWithTags &text) {
 	if (address.isEmpty()) {
 		return true;
 	}
-	LoadDraftsLocal();
 	const auto clean = text.text.trimmed();
 	if (g_drafts.value(address).text == text.text && (clean.isEmpty() == !g_drafts.contains(address))) {
 		return true;
@@ -2456,34 +2385,33 @@ bool MirrorDraft(not_null<History*> history, const TextWithTags &text) {
 			QDateTime::currentMSecsSinceEpoch(),
 		});
 	}
-	SaveDraftsLocal();
 	ScheduleStateFlush("drafts");
 	return true;
 }
 
 // Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер): черновики, журнал состояния, сведения групп v2
-// прежнего — прочь из памяти. Иначе первое подключение журнала следующего аккаунта (BuildLocalState →
-// stateAttach) переносило в его журнал черновики и отложенные прежнего.
+// прежнего — прочь из памяти. Иначе первая правка следующего аккаунта унесла бы в его журнал черновики и отложенные
+// прежнего.
 void ResetStateAccountData() {
 	g_drafts.clear();
-	g_draftsLoaded = false;
+	g_draftsProjected = false;
 	g_stateAttached = false;
 	g_startupReplayDone = false;
 	g_attachWaiting = false;
-	g_stateShown = parvane::json();
+	g_stateView = parvane::json();
 	g_stateApplying = false;
 	g_stateFlushQueued = false;
+	g_stateRefreshQueued = false;
+	g_statePending.clear();
 	g_stateTimer = nullptr;
-	g_stateSyncedSaved.clear();
 	g_migrationTriedAt.clear();
 	g_groupPublic.clear();
 	g_stickerPackRecords = parvane::json::array();
-	g_stickerPacksLoaded = false;
 	g_stickerPacksMigrated = false;
+	g_stickerPacksMigratedLoaded = false;
 	g_stickerPacksMigrating = false;
 	g_stickerPacksTried.clear();
 	g_contacts.clear();
-	g_contactsLoaded = false;
 }
 
 // CONTACT-1: «Новый контакт» / «Изменить» / «Удалить контакт» и заметка из родного бокса правки контакта
@@ -2501,7 +2429,6 @@ bool SetContact(not_null<UserData*> user, const QString &first, const QString &l
 	if (address.isEmpty() || user->isSelf()) {
 		return false;
 	}
-	LoadContactsLocal();
 	auto record = ContactRecord{ first.trimmed(), last.trimmed(), note.trimmed() };
 	// Форма, предзаполненная именем самого собеседника и сохранённая без правки, своего имени не задаёт (п. 2)
 	if (record.last.isEmpty() && record.first == DisplayNameFor(address)) {
@@ -2521,7 +2448,6 @@ bool SetContact(not_null<UserData*> user, const QString &first, const QString &l
 		return true;
 	}
 	g_contacts.insert(address, record);
-	SaveContactsLocal();
 	RefreshContactUser(&user->session(), address);
 	LOG(("Parvane: контакт %1 сохранён (своё имя «%2», заметка %3 симв.)")
 		.arg(address, (record.first + ' ' + record.last).trimmed())
@@ -2541,11 +2467,9 @@ bool SetContactNote(not_null<UserData*> user, const QString &note) { // main
 
 bool RemoveContact(not_null<UserData*> user) { // main
 	const auto address = AddressForUser(user);
-	LoadContactsLocal();
 	if (address.isEmpty() || !g_contacts.remove(address)) {
 		return false;
 	}
-	SaveContactsLocal();
 	RefreshContactUser(&user->session(), address);
 	LOG(("Parvane: контакт %1 удалён (имя и заметка стёрты)").arg(address));
 	ScheduleStateFlush("contacts");
@@ -2574,6 +2498,7 @@ namespace {
 
 parvane::json g_favedApplied;  // последний применённый список журнала (main)
 parvane::json g_favedPending;  // список с ссылками без документа (main)
+QSet<QString> g_favedRekeyed;  // прежние id избранного, уже переложенные на общий id набора (main)
 
 [[nodiscard]] std::optional<std::pair<QString, QString>> StickerRefOfDoc(not_null<const DocumentData*> document) {
 	return StickerRefOf(document->id);
@@ -2621,15 +2546,42 @@ void ProjectFavedStickers(not_null<Main::Session*> session, const parvane::json 
 	std::stable_sort(list.begin(), list.end(), [&](const auto &a, const auto &b) { return addedMs(a) < addedMs(b); });
 	auto want = std::vector<not_null<DocumentData*>>();
 	auto missing = 0;
+	// PACK-1 (spec 036 T024): запись прежнего вида (`pvpk-…`, свой id набора desktop/web) — документ по прежнему id,
+	// а в журнале — разовая перекладка на общий ключ набора (новая запись, прежняя снимается)
+	auto rekey = std::vector<std::tuple<QString, QString, QString, QString>>(); // прежние set/sticker → новые
 	for (const auto &f : list) {
+		const auto setId = QString::fromStdString(f.value("set_id", std::string()));
 		const auto stickerId = QString::fromStdString(f.value("sticker_id", std::string()));
-		const auto docId = StickerDocByRef(stickerId);
+		const auto legacy = setId.startsWith(u"pvpk-"_q);
+		const auto docId = legacy ? LegacyStickerDoc(stickerId) : StickerDocByRef(setId, stickerId);
 		const auto document = docId ? session->data().document(docId).get() : nullptr;
 		if (document && document->sticker()) {
 			want.push_back(not_null<DocumentData*>(document));
+			if (legacy) {
+				if (const auto ref = StickerRefOf(document->id); ref && !g_favedRekeyed.contains(stickerId)) {
+					g_favedRekeyed.insert(stickerId);
+					rekey.emplace_back(setId, stickerId, ref->first, ref->second);
+				}
+			}
 		} else {
 			++missing;
 		}
+	}
+	if (!rekey.empty()) {
+		const auto generation = AccountGeneration();
+		crl::async([rekey, generation] {
+			const auto s = V2Ready();
+			if (!s || !AccountGenerationIs(generation)) {
+				return;
+			}
+			for (const auto &[oldSet, oldSticker, newSet, newSticker] : rekey) {
+				const auto ok = s->stateFaveSticker(newSet.toStdString(), newSticker.toStdString(), true)
+					&& s->stateFaveSticker(oldSet.toStdString(), oldSticker.toStdString(), false);
+				LOG(("Parvane: v2: избранный стикер %1 переложен на общий id набора %2/%3 — %4")
+					.arg(oldSticker, newSet, newSticker, ok ? u"записано в журнал"_q : u"журнал недоступен"_q));
+			}
+			RememberFavedFromJournal(generation);
+		});
 	}
 	auto &stickers = session->data().stickers();
 	for (const auto document : FavedDocuments(session)) {
@@ -2642,7 +2594,7 @@ void ProjectFavedStickers(not_null<Main::Session*> session, const parvane::json 
 	}
 	g_favedApplied = faved;
 	g_favedPending = missing ? faved : parvane::json();
-	LOG(("Parvane: v2: журнал состояния → избранные стикеры (%1, без набора на устройстве %2)")
+	LOG((StateNote(u"Parvane: v2: журнал состояния → избранные стикеры (%1, без набора на устройстве %2)"_q))
 		.arg(want.size())
 		.arg(missing));
 }

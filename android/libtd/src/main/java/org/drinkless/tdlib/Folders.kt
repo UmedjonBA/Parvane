@@ -86,7 +86,7 @@ class Folders(private val dir: File) {
     }
 
     private fun load() {
-        if (!file.exists()) return
+        if (!SeamFiles.exists(file)) return
         try {
             val root = JSONObject(SeamFiles.read(file))
             nextId = root.optInt("next", 1); mainPosition = root.optInt("main", 0)

@@ -62,68 +62,46 @@ message EngineConfig {
   // Режим векторов `vectors/model/*` (FR-053): разрешён вызов `vectorInput` — ввод без шифрования (входящее
   // содержимое, операции журнала истории, сведения группы). В выпуске хост его не включает.
   bool vectors = 8;
-  // Старые хранилища прежней версии есть и не помечены «перенесено» (хост проверил свои места по перечню):
-  // нет корня нового хранилища либо перенос прерван — `open` → `MIGRATION_NEEDED` (spec 035, US1).
-  bool legacy_present = 9;
+  // 9 — `legacy_present` разового переноса spec 035 (удалён в T149).
+  reserved 9;
+  reserved "legacy_present";
   // Переходный период (T113 web, T125 desktop, T135 android): историю и показ ведёт хост. Модель владеет
   // клиентом (`clientCall`), личным состоянием и журналом инбокса, но строк истории не держит и журнал истории не
   // пишет: события записей инбокса отдаёт хосту (`client_events`), нужды клиента — тоже хосту (`needs{kind:
   // client}`), запись, ждущая нужду, и все следующие ждут вызова `ingest{EVENT, method: "retry"}` (ORDER-1).
   bool host_driven = 10;
+  // spec 036 (ENGINE-1): в режиме хоста строки истории ведёт модель — входящие сообщения и мутации применяются к
+  // строкам моделью (`message_upsert`/`unread_changed` в том же итоге, что `client_events`), журнал истории аккаунта
+  // (чтение, пачки, точка) и маркеры «прочитано до» — тоже модель. Хост строки не собирает и `rowsApply` не зовёт
+  // для событий инбокса. Включается клиентом, когда его показ переведён (web → desktop → android).
+  bool engine_rows = 11;
+  // Окно пачки журнала истории (HIST-1 п. 5), мс; 0 — по умолчанию 30…120 с. Меньше — только для сценариев e2e.
+  uint32 history_batch_min_ms = 12;
+  uint32 history_batch_max_ms = 13;
+  // spec 036 (T006, HIST-2): контрольная точка журнала истории, которую строит модель (`model_rows`). 0 — по
+  // умолчанию: следующая точка — через 24 ч после прежней, первая — когда после неё больше 5000 записей; сборка —
+  // со случайной задержкой 0…60 с. Другие значения — только для тестов и сценариев e2e.
+  uint64 history_checkpoint_age_ms = 14;
+  uint32 history_checkpoint_records = 15;
+  uint32 history_checkpoint_jitter_ms = 16;
 }
 
 enum OpenState {
   OPEN_STATE_UNSPECIFIED = 0;
   OPEN_STATE_READY = 1;
-  OPEN_STATE_MIGRATION_NEEDED = 2;
+  // 2 — `MIGRATION_NEEDED` разового переноса spec 035 (удалён в T149).
+  reserved 2;
+  reserved "OPEN_STATE_MIGRATION_NEEDED";
   // Формат хранилища новее движка: только показ известного, запись — `WriteBlocked`.
   OPEN_STATE_TOO_NEW = 3;
   OPEN_STATE_LOCKED = 4;
 }
 
-message MigrationPlan {
-  repeated string steps = 1 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 128];
-  uint64 legacy_records = 2;
-}
-
 message OpenResult {
   OpenState state = 1;
-  MigrationPlan migration = 2;
-}
-
-// ── Разовый перенос (spec 035, US1, contracts/migration.md) ──────────────────────────────────────────────
-
-// Старая запись, как её отдал хост: ключ по перечню `migration-inventory.json` (`record:m:<uuid>`,
-// `localStorage:parvane:cleareduntil:<адрес>`, `file:parvane-history-<адрес>.jsonl`, `file:/state`,
-// `migrate:<класс>` …) и открытый текст (своё шифрование хранилища хост снимает сам).
-message LegacyRecord {
-  string key = 1 [(parvane.core.v2.max_len) = 1024];
-  bytes value = 2 [(parvane.core.v2.max_len) = 4194304];
-}
-
-// Шаг переноса `migrateStep`: записи старых хранилищ частями; `last` — отдано всё (точка M1). Дальше хост
-// вызывает `migrateStep{}` (без записей), пока `Outcome.open` не придёт `READY`: каждый вызов — следующая
-// часть поколения 1 и/или запросы серверу (ответы — `ingest`, как обычно).
-message MigrateStep {
-  // web | core | android — читатель старых форматов (первый вызов).
-  string layer = 1 [(parvane.core.v2.max_len) = 16];
-  repeated LegacyRecord records = 2 [(parvane.core.v2.max_items) = 100000];
-  bool last = 3;
-  // Строк истории в пачке поколения 1 (0 — 1000).
-  uint32 chunk = 4;
-}
-
-// Ход переноса (`migrateStatus`): точка M1–M6 (7 — старое помечено «перенесено»), отчёт — JSON
-// `migrate::Report` (счётчики по видам, карантин — ключ и причина, сверка, ошибки; без содержимого).
-message MigrateStatus {
-  uint32 point = 1;
-  bool done = 2;
-  string report_json = 3 [(parvane.core.v2.max_len) = 4194304];
-}
-
-// Выгрузка сверки новым движком (`auditDump`): JSONL `{"kind","key","digest"}`.
-message AuditDump {
-  string jsonl = 1 [(parvane.core.v2.max_len) = 4194304];
+  // 2 — план разового переноса spec 035 (удалён в T149).
+  reserved 2;
+  reserved "migration";
 }
 
 // ── Журналы: запись и диапазоны, которые нельзя заменять (data-model.md §2–3) ────────────────────────────
@@ -338,6 +316,8 @@ message MessageView {
   // Возможность `wire_rows` (web, spec 035 T114): строка в виде содержимого хоста — JSON-объект `{content, reply_to?,
   // proof?, reactors?: [{user, emoji, ts}], …}` (правка уже наложена движком). Без возможности — пусто.
   string wire = 19 [(parvane.core.v2.max_len) = 4194304];
+  // Входящее после маркера «прочитано до», которое считается непрочитанным (READ-2; spec 036 E4).
+  bool unread = 20;
 }
 
 message ChatView {
@@ -352,6 +332,10 @@ message ChatView {
   int64 muted_until_ms = 9;
   string draft = 10 [(parvane.core.v2.max_len) = 65536];
   repeated uint32 folder_ids = 11 [(parvane.core.v2.max_items) = 256];
+  // Отметка «непрочитано» (STATE-2, вид UNREAD_MARK).
+  bool unread_mark = 12;
+  // Порядок списка (ORDER-1): `last.order`, а у чата без строк — время черновика.
+  int64 order = 13;
 }
 
 message ChatPage {
@@ -411,6 +395,18 @@ message GroupView {
   GroupPerms perms = 8;
   bool is_public = 9;
   repeated string invite_links = 10 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 512];
+  // Сведения группы целиком из её журнала (GROUP-3; spec 036 E6): JSON движка — участники с ролями, правами и
+  // мутом, баны, права по умолчанию, версия, ссылки с метаданными и счётчиком, публичность, L2, migrated_from.
+  string info_json = 11 [(parvane.core.v2.max_len) = 4194304];
+  uint64 version = 12;
+  bool deleted = 13;
+  // Производные права управления (для экранов ссылок, заявок, смены эпохи).
+  bool can_manage_invites = 14;
+  bool can_decide_requests = 15;
+  bool can_rotate = 16;
+  bool can_ban = 17;
+  bool can_add_admins = 18;
+  bool can_delete_messages = 19;
 }
 
 // Что разрешено композеру и меню чата (GROUP-2, роль, критичные виды).
@@ -640,6 +636,11 @@ message UnreadChanged {
   parvane.state.v1.Peer chat = 1;
   uint32 count = 2;
   bool mention = 3;
+  // Маркер «прочитано до» (READ-2): id и время последней прочитанной строки; пусто — маркера нет.
+  bytes last_read_id = 4 [(parvane.core.v2.max_len) = 16];
+  int64 last_read_ts_ms = 5;
+  // Непрочитанные упоминания своего имени (id строк, по порядку ленты).
+  repeated bytes mentions = 6 [(parvane.core.v2.max_items) = 1000, (parvane.core.v2.max_len) = 16];
 }
 
 message WriteBlocked {
@@ -780,6 +781,10 @@ message RowsApply {
   int64 now_ms = 5;
   // JSON-массив `{hs: RowState, order?}`: строки прежнего кэша хоста — сведение с известным, место прежнее.
   string rows_json = 6 [(parvane.core.v2.max_len) = 4194304];
+  // spec 036 (`engine_rows`): операции — свои действия этого устройства (отправка, прочтение, удаление у себя),
+  // модель ставит их в журнал истории аккаунта сама. Без флага (и без `engine_rows`) — только строки, журнал ведёт
+  // хост. Строки вне журнала (самоуничтожение собеседника) идут без флага.
+  bool journal = 7;
 }
 
 // `rowsAll` (режим `host_driven`): все строки модели. Результат — `CallResult`, JSON `{views?: [MessageView

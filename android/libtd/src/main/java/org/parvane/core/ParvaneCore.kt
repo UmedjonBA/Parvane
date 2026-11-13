@@ -54,23 +54,6 @@ object ParvaneCore {
         }
     }
 
-    /**
-     * spec 035 T137 (US1, contracts/migration.md): записи старых мест профиля для разового переноса в модель движка —
-     * ядро зовёт это само (`SessionConfig.legacyRecords`, поток сессии) при открытии модели с `legacy_present`.
-     * Читатель — [org.drinkless.tdlib.MigrateLegacy] (слой `android` перечня), открытый текст файлов — `storecrypt`
-     * ядра ([nativeStoreReadPlain], байты как есть: экспорт движка — не UTF-8). Пусто — ядро соберёт своё.
-     */
-    @JvmStatic
-    fun legacyRecords(dir: String, self: String): String = try {
-        val c = org.drinkless.tdlib.MigrateLegacy.collect(java.io.File(dir), self) { f -> nativeStoreReadPlain(f.path) }
-        c.unreadable.forEach { Log.w(TAG, "перенос: файл не открылся — $it") }
-        Log.i(TAG, "перенос: записей старых мест ${c.records.size}")
-        org.drinkless.tdlib.MigrateLegacy.toJson(c).put("layer", "android").toString()
-    } catch (e: Exception) {
-        Log.w(TAG, "перенос: старые места не прочитаны — ${e.message}")
-        ""
-    }
-
     private fun dispatch(event: JSONObject) {
         listeners.forEach { l ->
             try {
@@ -205,20 +188,27 @@ object ParvaneCore {
     fun fingerprint(user: String): String = nativeFingerprint(user)
 
     // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────
-    /** [dirty] — виды, правленные без журнала (T150): в журнал при подключении разницей от показанного до правки (spec 035 T134). */
-    fun stateAttach(localJson: String, dirty: Collection<String> = emptyList()): JSONObject? =
-        nativeStateAttach(localJson, JSONArray(dirty.toList()).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** spec 036 (ENGINE-1): объекты личного состояния модели видов [kinds] (пусто — все; `FOLDER` либо
+     *  `OBJECT_KIND_FOLDER`) — {objects: [{kind, key, value, marks}], write_blocked}; null — модели нет. */
+    fun stateView(kinds: List<String> = emptyList()): JSONObject? =
+        nativeStateView(JSONArray(kinds).toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    /** Правка вида [kind]: [desired]/[shown] — [{key, value}] (что шов хочет и что показывал); разницу по полям от
+     *  показанного считает модель, без связи правка уходит при подключении. false — модели нет либо отказ. */
+    fun stateSubmit(kind: String, desired: JSONArray, shown: JSONArray): Boolean = nativeStateSubmit(kind, desired.toString(), shown.toString())
+    /** Отметка объекта (только растёт): `SCHEDULED` 1 — «отправлено», `CHAT_CLEARED` 2 — граница очистки. */
+    fun stateMark(kind: String, key: String, field: Int, value: Long): Boolean = nativeStateMark(kind, key, field, value)
+    /** Журнал состояния подключён (stateReady): перенос под новый ключ, свои неотправленные — серверу, журнал до головы. */
+    fun stateConnect(): Boolean = nativeStateConnect()
+    /** Журнал до головы: правка другого устройства — событие `model` (state=true). */
+    fun stateRefresh(): Boolean = nativeStateRefresh()
+    /** Список чатов модели (`chatList`, ChatList) и страница истории (`historyPage`, HistoryPage); null — модели нет. */
+    fun chatList(args: JSONObject = JSONObject()): JSONObject? = nativeChatList(args.toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
+    fun historyPage(args: JSONObject): JSONObject? = nativeHistoryPage(args.toString()).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     /** spec 035 (FR-075): избранные стикеры из модели — [{set_id, sticker_id, added_ms}]; null — журнал недоступен. */
     fun stateFavedStickers(): JSONArray? = nativeStateFavedStickers().takeIf { it.isNotEmpty() }?.let { JSONArray(it) }
     fun stateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean = nativeStateFaveSticker(setId, stickerId, on)
     /** spec 035 (US5): журнал закрыт для записи более новой версией — «обновите приложение». */
     fun stateWriteBlocked(): Boolean = nativeStateWriteBlocked()
-    /** [shownJson] — снимок, который шов показывал, когда строил желаемое (база разницы, T124): без него ядро берёт
-     *  последний выданный, а выданный, но ещё не показанный откатил бы чужую правку. "" — нет. */
-    fun stateSync(desiredJson: String, kinds: List<String>, shownJson: String = ""): JSONObject? =
-        nativeStateSync(desiredJson, JSONArray(kinds).toString(), shownJson).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
-    fun stateScheduledSent(opIdB64: String): Boolean = nativeStateScheduledSent(opIdB64)
-    fun stateMarkSent(opIdB64: String) = nativeStateMarkSent(opIdB64)
     /** Запись журнала по имени (`callSet` — история звонков и т.п.). */
     fun stateCall(name: String, argsJson: String): Boolean = nativeStateCall(name, argsJson)
     /** Блокировка → отзыв доступа к доставке у собеседника (ACCESS-1). Блокирующий. */
@@ -230,18 +220,14 @@ object ParvaneCore {
 
     // ── хранилище, паки, превью, карта ───────────────────────────────────────
     fun storeRead(path: String): String = nativeStoreRead(path)
-    /** spec 035, T007: выгрузка «ничего не потеряно» (JSONL `{kind,key,digest}`); пусто вне debug-сборки. */
-    fun auditDump(): String = nativeAuditDump()
     fun storeWrite(path: String, text: String): Boolean = nativeStoreWrite(path, text)
+    /** spec 036 (T036): файл шва есть — запись host-file хранилища движка либо ещё не перенесённый прежний файл. */
+    fun storeExists(path: String): Boolean = nativeStoreExists(path)
     fun packFetch(refJson: String): JSONObject = JSONObject(nativePackFetch(refJson))
     fun packRefFor(dir: String, rawName: String): JSONObject = JSONObject(nativePackRefFor(dir, rawName))
     fun previewFetch(url: String, timeoutMs: Int): JSONObject = JSONObject(nativePreviewFetch(url, timeoutMs))
     fun mapTile(z: Int, x: Int, y: Int): ByteArray = nativeMapTile(z, x, y) ?: ByteArray(0)
 
-    @JvmStatic private external fun nativeStoreReadPlain(path: String): ByteArray?
-    /** spec 035 T133: выгрузка модели движка после переноса (`auditDump` модели; пусто — модели нет или не debug). */
-    fun modelAuditDump(): String = nativeModelAuditDump()
-    @JvmStatic private external fun nativeModelAuditDump(): String
     @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray, debug: Boolean)
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String, cancelDeletion: Boolean): String
     @JvmStatic private external fun nativeServerInfo(): String
@@ -314,20 +300,23 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSetAvatar(path: String): String
     @JvmStatic private external fun nativeClearAvatar(): Boolean
     @JvmStatic private external fun nativeFingerprint(user: String): String
-    @JvmStatic private external fun nativeStateAttach(localJson: String, dirtyJson: String): String
+    @JvmStatic private external fun nativeStateView(kindsJson: String): String
+    @JvmStatic private external fun nativeStateSubmit(kind: String, desiredJson: String, shownJson: String): Boolean
+    @JvmStatic private external fun nativeStateMark(kind: String, key: String, field: Int, value: Long): Boolean
+    @JvmStatic private external fun nativeStateConnect(): Boolean
+    @JvmStatic private external fun nativeStateRefresh(): Boolean
+    @JvmStatic private external fun nativeChatList(argsJson: String): String
+    @JvmStatic private external fun nativeHistoryPage(argsJson: String): String
     @JvmStatic private external fun nativeStateFavedStickers(): String
     @JvmStatic private external fun nativeStateFaveSticker(setId: String, stickerId: String, on: Boolean): Boolean
     @JvmStatic private external fun nativeStateWriteBlocked(): Boolean
-    @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String, shownJson: String): String
-    @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
-    @JvmStatic private external fun nativeStateMarkSent(opIdB64: String)
     @JvmStatic private external fun nativeStateCall(name: String, argsJson: String): Boolean
     @JvmStatic private external fun nativeRevokeContactAccess(peer: String): Boolean
     @JvmStatic private external fun nativeSetPrivacy(groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean
     @JvmStatic private external fun nativeL2Available(chat: String): Boolean
     @JvmStatic private external fun nativeSetL2(chat: String, enabled: Boolean): String
     @JvmStatic private external fun nativeStoreRead(path: String): String
-    @JvmStatic private external fun nativeAuditDump(): String
+    @JvmStatic private external fun nativeStoreExists(path: String): Boolean
     @JvmStatic private external fun nativeStoreWrite(path: String, text: String): Boolean
     @JvmStatic private external fun nativePackFetch(refJson: String): String
     @JvmStatic private external fun nativeSetCallsPresencePrivacy(callsNobody: Boolean, presenceNobody: Boolean): Boolean

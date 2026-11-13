@@ -598,6 +598,20 @@ void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
 
 using namespace pvjni;
 
+// spec 036: модель сессии (открыта и без сети — показ личного состояния и правки до подключения)
+namespace {
+std::shared_ptr<parvane::v2::Session> v2Model() {
+    const auto s = v2Any();
+    if (s && !s->rowsModel()) s->openModelOffline();
+    return (s && s->rowsModel()) ? s : nullptr;
+}
+std::vector<std::string> stringList(const json &a) {
+    std::vector<std::string> out;
+    if (a.is_array()) for (const auto &k : a) if (k.is_string()) out.push_back(k.get<std::string>());
+    return out;
+}
+} // namespace
+
 extern "C" {
 
 // ── устройства (REVOKE-1) ────────────────────────────────────────────────────
@@ -789,13 +803,16 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRenameAccount(
         std::error_code ec;
         std::filesystem::rename(v2StateDir(oldAddress), v2StateDir(newAddress), ec);
         historyMoveFiles(oldAddress, newAddress);
+        std::string sessionJson;
         {
             std::lock_guard<std::mutex> lk(g_mu);
             g_self = newAddress;
             if (!token.empty()) g_token = token;
-            parvane::storecrypt::writeFile(storeDir() + "/session.json", json{{"self", g_self}, {"token", g_token}}.dump());
-            parvane::storecrypt::writeFile(storeDir() + "/account-owner", g_self);
+            sessionJson = json{{"self", g_self}, {"token", g_token}}.dump();
         }
+        // Записи хранилища движка (PathFiles) — вне g_mu: открытие хранилища само берёт g_mu (ключ)
+        hostWrite(storeDir() + "/session.json", sessionJson);
+        hostWrite(storeDir() + "/account-owner", newAddress);
         startSession();
         emit(json{{"type", "renamed"}, {"from", oldAddress}, {"to", newAddress}});
         out.erase("token");
@@ -914,52 +931,78 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeFingerprint(JN
 
 // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────────
 
-// dirtyJson — виды, правленные без журнала (T150, файл state-dirty шва): уходят в журнал при подключении разницей от
-// показанного ДО правки (база — state-base прошлого запуска), раньше проекции снимка (spec 035 T134). Отдельный синк
-// после подключения считал разницу от только что сведённого и откатывал правки другого устройства.
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateAttach(JNIEnv *env, jclass, jstring localJson, jstring dirtyJson) {
-    const auto s = v2Ready();
+// spec 036 (ENGINE-1): личное состояние по видам — объекты модели (`viewStateJson`), правка — `stateSet` объекта с
+// показанным (разницу по полям считает модель), без связи правка остаётся в модели и уходит при подключении. Модель
+// открыта и без сети (`openModelOffline`): показ до подключения и правки с правильной базой.
+// kindsJson — ["FOLDER", …] (пусто — все) → {objects: [{kind, key, value, marks}], write_blocked}; "" — модели нет.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateView(JNIEnv *env, jclass, jstring kindsJson) {
+    const auto s = v2Model();
     if (!s) return jout(env, "");
     try {
-        const auto local = json::parse(jstr(env, localJson), nullptr, false);
-        const auto dirtyJ = json::parse(jstr(env, dirtyJson), nullptr, false);
-        std::vector<std::string> dirtyKinds;
-        if (dirtyJ.is_array()) for (const auto &k : dirtyJ) if (k.is_string()) dirtyKinds.push_back(k.get<std::string>());
-        const auto snap = s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds);
-        return jout(env, snap.is_object() ? snap.dump() : std::string());
+        const auto v = s->stateView(stringList(json::parse(jstr(env, kindsJson), nullptr, false)));
+        return jout(env, v.is_object() ? v.dump() : std::string());
     } catch (const std::exception &e) {
-        LOGE("журнал состояния: %s", e.what());
+        LOGE("показ личного состояния: %s", e.what());
         return jout(env, "");
     }
 }
 
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSync(JNIEnv *env, jclass, jstring desiredJson, jstring kindsJson,
-                                                                          jstring shownJson) {
-    const auto s = v2Ready();
-    if (!s) return jout(env, "");
+// Правка вида: desired/shown — [{key, value}] (что шов хочет и что показывал последним). false — модели нет либо
+// запись отвергнута (шов держит вид «не отданным модели»).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateSubmit(JNIEnv *env, jclass, jstring kind, jstring desiredJson,
+                                                                             jstring shownJson) {
+    const auto s = v2Model();
+    if (!s) return JNI_FALSE;
     try {
         const auto desired = json::parse(jstr(env, desiredJson), nullptr, false);
-        const auto kindsJ = json::parse(jstr(env, kindsJson), nullptr, false);
-        std::vector<std::string> kinds;
-        if (kindsJ.is_array()) for (const auto &k : kindsJ) if (k.is_string()) kinds.push_back(k.get<std::string>());
-        // База разницы — снимок, который шов показывал, строя desired (T124, как desktop): выданный ядром, но ещё не
-        // спроецированный снимок откатил бы правку другого устройства
         const auto shown = json::parse(jstr(env, shownJson), nullptr, false);
-        const auto r = s->stateSync(desired.is_object() ? desired : json(), kinds, shown.is_object() ? shown : json());
-        return jout(env, r.is_object() ? r.dump() : std::string());
+        return s->stateSubmit(jstr(env, kind), desired.is_array() ? desired : json::array(),
+                              shown.is_array() ? shown : json::array()) ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception &e) {
-        LOGE("синк журнала состояния: %s", e.what());
-        return jout(env, "");
+        LOGE("правка личного состояния: %s", e.what());
+        return JNI_FALSE;
     }
 }
 
-JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateScheduledSent(JNIEnv *env, jclass, jstring opIdB64) {
-    const auto s = v2Ready();
-    try { return s && s->stateScheduledSent(jstr(env, opIdB64)) ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &) { return JNI_FALSE; }
+// Отметка объекта (только растёт): `SCHEDULED` 1 — «отправлено», `CHAT_CLEARED` 2 — граница очистки.
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateMark(JNIEnv *env, jclass, jstring kind, jstring key, jint field,
+                                                                           jlong value) {
+    const auto s = v2Model();
+    try { return s && s->stateMark(jstr(env, kind), jstr(env, key), std::uint32_t(field), std::uint64_t(value)) ? JNI_TRUE : JNI_FALSE; }
+    catch (const std::exception &) { return JNI_FALSE; }
 }
 
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeStateMarkSent(JNIEnv *env, jclass, jstring opIdB64) {
-    if (const auto s = v2Ready()) s->stateMarkSent(jstr(env, opIdB64));
+// Журнал подключён (stateReady): смена ключа — перенос сведённого под новый ключ, свои неотправленные — серверу,
+// журнал до головы. false — ключа личного состояния ещё нет.
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateConnect(JNIEnv *, jclass) {
+    const auto s = v2Ready();
+    try { return s && s->stateConnect() ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &e) { LOGE("журнал состояния: %s", e.what()); return JNI_FALSE; }
+}
+
+// Журнал до головы (живое уведомление, опрос): правка другого устройства — изменение модели (событие `model`).
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStateRefresh(JNIEnv *, jclass) {
+    const auto s = v2Ready();
+    try { return s && s->stateRefresh() ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &e) { LOGE("синк журнала состояния: %s", e.what()); return JNI_FALSE; }
+}
+
+// Список чатов (`chatList`: ChatList модели — закреп, мут, черновик, папки, непрочитанное) и страница истории
+// (`historyPage`: MessageView по ORDER-1, с `unread`) — готовыми из модели; "" — модели нет.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeChatList(JNIEnv *env, jclass, jstring argsJson) {
+    const auto s = v2Model();
+    if (!s) return jout(env, "");
+    try {
+        const auto r = s->chatList(json::parse(jstr(env, argsJson), nullptr, false));
+        return jout(env, r.is_object() ? r.dump() : std::string());
+    } catch (const std::exception &) { return jout(env, ""); }
+}
+
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeHistoryPage(JNIEnv *env, jclass, jstring argsJson) {
+    const auto s = v2Model();
+    if (!s) return jout(env, "");
+    try {
+        const auto r = s->historyPage(json::parse(jstr(env, argsJson), nullptr, false));
+        return jout(env, r.is_object() ? r.dump() : std::string());
+    } catch (const std::exception &) { return jout(env, ""); }
 }
 
 // spec 035 (US8, FR-075): избранные стикеры — объекты FAVED_STICKER модели: [{set_id, sticker_id, added_ms}]

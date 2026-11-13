@@ -3,6 +3,7 @@
 #include "jni_internal.h"
 #include "event_queue.h"
 
+#include <parvane/engine_store.h>
 #include <parvane/gateway_ws_transport.h>
 #include <parvane/local_files.h>
 #include <parvane/messenger.h>
@@ -141,39 +142,6 @@ void emitNow(const json &event) {
     callOnEvents(env, {event.dump()});
 }
 
-// spec 035 T137: записи старых мест профиля — Kotlin `ParvaneCore.legacyRecords(dir, self)` (MigrateLegacy.kt).
-// Зовёт ядро на потоке сессии (не поток JVM — присоединяется на время вызова). Не вышло — json() (ядро соберёт своё).
-json legacyRecordsFromKotlin(const std::string &dir, const std::string &self) {
-    if (!g_vm || !g_coreClass) return json();
-    JNIEnv *env = nullptr;
-    bool attached = false;
-    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return json();
-        attached = true;
-    }
-    json out;
-    const jmethodID m = env->GetStaticMethodID(g_coreClass, "legacyRecords", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
-    if (m) {
-        jstring d = jout(env, dir);
-        jstring u = jout(env, self);
-        auto r = static_cast<jstring>(env->CallStaticObjectMethod(g_coreClass, m, d, u));
-        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
-        else if (r) {
-            const auto text = jstr(env, r);
-            if (!text.empty()) out = json::parse(text, nullptr, false);
-            env->DeleteLocalRef(r);
-        }
-        env->DeleteLocalRef(d);
-        env->DeleteLocalRef(u);
-    } else if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-    }
-    if (attached) { // разовый вызов на потоке сессии (перенос) — поток отсоединяется сразу
-        g_vm->DetachCurrentThread();
-    }
-    return out.is_object() ? out : json();
-}
-
 void noteFederationFailure(const std::string &error) {
     static const std::pair<const char *, const char *> kReasons[] = {
         {"FEDERATION_UNAVAILABLE", "disabled"}, {"DOMAIN_BLOCKED", "blocked"}, {"DOMAIN_REFUSED", "refused"},
@@ -220,6 +188,11 @@ void updateMessageContent(const std::string &id, const json &content) {
 void forgetMessage(const std::string &id) {
     std::lock_guard<std::mutex> lk(g_msgMu);
     g_msgs.erase(id);
+}
+
+void unmarkSeen(const std::string &id) {
+    std::lock_guard<std::mutex> lk(g_msgMu);
+    g_seen.erase(id);
 }
 
 bool markSeen(const std::string &id) {
@@ -532,11 +505,48 @@ namespace {
 std::mutex g_wipeMu;
 } // namespace
 
+// ── файлы шва в хранилище движка (spec 036 T036, T048 spec 035) ─────────────────────────────────────────────────
+// Файлы локального состояния шва (SeamFiles: папки, черновики, архив, отложенные, индекс наборов, …) — записями
+// `host-file` зашифрованного хранилища движка (`HostFiles` ядра: DEK под ключом устройства из Keystore, AAD по
+// профилю, пачки с fsync) в `<storeDir>/host-files`. Прежний файл storecrypt переносится один раз при первом
+// обращении (`migrateFrom`: данные и отметка одной пачкой, сверка чтением, затем `<путь>.migrated`; испорченный —
+// в карантин, остальное переносится; сбой — прежний файл на месте и путь storecrypt, повтор при следующем обращении).
+// Debug-сборка без ключа Keystore — прежний путь (storecrypt пишет открыто только в debug).
+namespace {
+std::mutex g_hostFilesMu;
+std::unique_ptr<parvane::engine_store::PathFiles> g_pathFiles;
+
+parvane::engine_store::PathFiles &pathFiles() {
+    std::lock_guard<std::mutex> lk(g_hostFilesMu);
+    if (!g_pathFiles) {
+        std::string key;
+        {
+            std::lock_guard<std::mutex> klk(g_mu);
+            key = g_storeKey;
+        }
+        g_pathFiles = std::make_unique<parvane::engine_store::PathFiles>(
+            storeDir(), key, [](const std::string &m) { LOGI("%s", m.c_str()); });
+    }
+    return *g_pathFiles;
+}
+} // namespace
+
+std::string hostRead(const std::string &path) { return pathFiles().read(path); }
+bool hostExists(const std::string &path) { return pathFiles().exists(path); }
+bool hostWrite(const std::string &path, const std::string &data) { return pathFiles().write(path, data); }
+void hostRemove(const std::string &path) { pathFiles().remove(path); }
+
+void resetHostFiles() {
+    std::lock_guard<std::mutex> lk(g_hostFilesMu);
+    g_pathFiles.reset();
+}
+
 void wipeAccountData(const char *why) {
     std::lock_guard<std::mutex> wl(g_wipeMu);
     const auto dir = storeDir();
     if (dir.size() < 2) return;
     parvane::storecrypt::blockWrites();
+    resetHostFiles(); // каталог host-files стирается вместе с остальным — открытое хранилище не должно его пережить
     int removed = 0, failed = 0;
     std::error_code ec;
     // Сначала список, потом стирание; шаг итератора — с ec (range-for бросал бы filesystem_error мимо JNI)
@@ -634,7 +644,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeInit(
     // Расшифрованные копии прошлого запуска
     (void)parvane::localfiles::wipeTempRoot(dir);
     // Сессия с диска
-    const auto raw = parvane::storecrypt::readFile(dir + "/session.json");
+    const auto raw = hostRead(dir + "/session.json");
     const auto j = raw.empty() ? json() : json::parse(raw, nullptr, false);
     if (j.is_object() && parvane::accountfiles::isValidAddress(j.value("self", std::string()))) {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -666,72 +676,21 @@ JNIEXPORT jstring JNICALL Java_org_drinkless_tdlib_TdApi_00024Function_toString(
     return classSimpleName(env, obj);
 }
 
-// Файлы шва (черновики, отложенные, папки, …) — тем же storecrypt, что файлы ядра (P-13).
+// Файлы шва (черновики, отложенные, папки, …) — записями хранилища движка (PathFiles ядра, P-13; прежний файл
+// storecrypt переносится при первом обращении).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreRead(JNIEnv *env, jclass, jstring pathJ) {
-    return jout(env, parvane::storecrypt::readFile(jstr(env, pathJ)));
+    return jout(env, hostRead(jstr(env, pathJ)));
+}
+
+JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreExists(JNIEnv *env, jclass, jstring pathJ) {
+    return hostExists(jstr(env, pathJ)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JNIEnv *env, jclass, jstring pathJ, jstring textJ) {
-    return parvane::storecrypt::writeFile(jstr(env, pathJ), jstr(env, textJ)) ? JNI_TRUE : JNI_FALSE;
+    // Сначала перенос прежнего (внутри PathFiles): иначе более поздний перенос затёр бы новую запись старым файлом
+    return hostWrite(jstr(env, pathJ), jstr(env, textJ)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { historyReplay(); }
-
-// spec 035 T137: открытый текст файла хранилища байтами как есть (разовый перенос: экспорт движка — двоичный).
-// JSONL — построчно (каждая строка шифруется отдельно), остальное — целиком; null — файла нет либо не открылся.
-JNIEXPORT jbyteArray JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreReadPlain(JNIEnv *env, jclass, jstring pathJ) {
-    const auto path = jstr(env, pathJ);
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return nullptr;
-    const std::string raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    std::optional<std::string> plain;
-    if (path.size() > 6 && path.compare(path.size() - 6, 6, ".jsonl") == 0) {
-        std::string out;
-        std::size_t pos = 0;
-        bool okAll = true;
-        while (pos < raw.size()) {
-            auto nl = raw.find('\n', pos);
-            if (nl == std::string::npos) nl = raw.size();
-            const auto line = raw.substr(pos, nl - pos);
-            pos = nl + 1;
-            if (line.empty()) continue;
-            const auto p = parvane::storecrypt::openLine(line);
-            if (!p) { okAll = false; break; }
-            out += *p;
-            out += '\n';
-        }
-        if (okAll) plain = std::move(out);
-    } else {
-        plain = parvane::storecrypt::open(raw);
-    }
-    if (!plain) return nullptr;
-    jbyteArray arr = env->NewByteArray(static_cast<jsize>(plain->size()));
-    if (arr && !plain->empty())
-        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(plain->size()), reinterpret_cast<const jbyte *>(plain->data()));
-    return arr;
-}
-
-// spec 035 T133 (debug): выгрузка модели движка после переноса — сверка с выгрузкой прежнего кода
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeModelAuditDump(JNIEnv *env, jclass) {
-    try {
-        if (!g_debugBuild) return jout(env, std::string());
-        const auto s = v2Any();
-        return jout(env, s ? s->modelAuditDump() : std::string());
-    } catch (const std::exception &e) {
-        LOGE("выгрузка модели не снята: %s", e.what());
-        return jout(env, std::string());
-    }
-}
-
-// spec 035, T007: выгрузка «ничего не потеряно» (debug) — e2e-команда audit_dump
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeAuditDump(JNIEnv *env, jclass) {
-    try {
-        if (g_debugBuild) LOGI("счётчики SC-009: %s", parvane::counters::summary().c_str());
-        return jout(env, auditDumpJsonl());
-    } catch (const std::exception &e) {
-        LOGE("audit dump не снят: %s", e.what());
-        return jout(env, std::string());
-    }
-}
 
 } // extern "C"

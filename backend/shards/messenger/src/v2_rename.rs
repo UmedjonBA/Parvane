@@ -64,9 +64,6 @@ pub(crate) async fn rename_db(db: &sqlx::SqlitePool, n: &RenameNotice) -> Result
     // Журналы с UNIQUE(user, op_id) (S7-9): запись, повторённая после обрыва во время смены ника, могла лечь и под
     // прежним, и под новым адресом — копия под новым убирается, иначе перенос нарушал уникальность и откатывался
     // целиком (identity повторял его без успеха, строки оставались под прежним ником)
-    drop_op_dups(&mut tx, "user_state_log", "user_state_head", old, new).await?;
-    merge_queue(&mut tx, "user_state_log", "user", "seq", "user_state_head", "user", old, new).await?;
-    // spec 035: журнал state.v2 — так же
     drop_op_dups(&mut tx, "user_state_log_v2", "user_state_head_v2", old, new).await?;
     merge_queue(&mut tx, "user_state_log_v2", "user", "seq", "user_state_head_v2", "user", old, new).await?;
     // Журнал истории (spec 033): записи прежнего адреса сохраняют seq — контрольная точка переходит вместе с ними
@@ -172,8 +169,6 @@ async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM inbox_log WHERE device = ?").bind(&key).execute(&mut *tx).await?;
         sqlx::query("DELETE FROM inbox_device WHERE device = ?").bind(&key).execute(&mut *tx).await?;
     }
-    sqlx::query("DELETE FROM user_state_log WHERE user = ?").bind(address).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM user_state_head WHERE user = ?").bind(address).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM user_state_log_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM user_state_head_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
     for table in ["user_history_log", "user_history_head", "user_history_checkpoint"] {
@@ -233,8 +228,8 @@ mod tests {
         put(&db, "alice@x", 2, 3, false).await;
         // То же в журнале личного состояния
         for user in ["al@x", "alice@x"] {
-            sqlx::query("INSERT INTO user_state_log (user, seq, op_id, record, at) VALUES (?, 1, ?, x'00', 0)").bind(user).bind(vec![7u8; 16]).execute(&db).await.unwrap();
-            sqlx::query("INSERT INTO user_state_head (user, next_seq) VALUES (?, 1)").bind(user).execute(&db).await.unwrap();
+            sqlx::query("INSERT INTO user_state_log_v2 (user, seq, op_id, record, at) VALUES (?, 1, ?, x'00', 0)").bind(user).bind(vec![7u8; 16]).execute(&db).await.unwrap();
+            sqlx::query("INSERT INTO user_state_head_v2 (user, next_seq) VALUES (?, 1)").bind(user).execute(&db).await.unwrap();
         }
         rename_db(&db, &notice()).await.expect("перенос не откатывается");
         let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, op_id FROM user_history_log WHERE user = 'alice@x' ORDER BY seq").fetch_all(&db).await.unwrap();
@@ -243,7 +238,7 @@ mod tests {
         assert_eq!(n, 0);
         let (records,): (i64,) = sqlx::query_as("SELECT records FROM user_history_head WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
         assert_eq!(records, 3);
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_state_log WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user_state_log_v2 WHERE user = 'alice@x'").fetch_one(&db).await.unwrap();
         assert_eq!(n, 1, "журнал состояния: копия убрана, перенос прошёл");
     }
 

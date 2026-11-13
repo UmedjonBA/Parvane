@@ -34,7 +34,7 @@ class StickersTest {
         val faved = LinkedHashMap<String, Long>()
         var clock = 1_800_000_000_000L
         override fun favedStickers(): org.json.JSONArray? = if (!journal) null else org.json.JSONArray().also { a ->
-            faved.forEach { (k, t) -> a.put(JSONObject().put("set_id", k.substringBefore('/')).put("sticker_id", k.substringAfter('/')).put("added_ms", t.toString())) }
+            faved.forEach { (k, t) -> a.put(JSONObject().put("set_id", k.substringBeforeLast('/')).put("sticker_id", k.substringAfterLast('/')).put("added_ms", t.toString())) }
         }
         override fun faveSticker(setId: String, stickerId: String, on: Boolean): Boolean {
             if (!journal) return false
@@ -107,11 +107,12 @@ class StickersTest {
         val set = st.stickerSet(p.setId) as TdApi.StickerSet
         assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[0].sticker.id)) is TdApi.Ok)
         assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[1].sticker.id)) is TdApi.Ok)
-        assertEquals(setOf("${p.setId}/00-1f600.webp", "${p.setId}/01-1f602.png"), core.faved.keys)
+        // PACK-1: id набора — общий ключ STICKER_PACK (ссылка без отпечатка — `n:<имя>`), id стикера — имя файла
+        assertEquals(setOf("n:Cats/00-1f600.webp", "n:Cats/01-1f602.png"), core.faved.keys)
         assertEquals(listOf("01-1f602.png", "00-1f600.webp"), st.favorites().stickers.map { s -> st.resolveInput(TdApi.InputFileId(s.sticker.id))!!.file.name })
         assertTrue(updates.any { it is TdApi.UpdateFavoriteStickers && it.stickerIds.size == 2 })
         // правка другого устройства: модель сняла стикер — показ следует модели
-        core.faved.remove("${p.setId}/00-1f600.webp")
+        core.faved.remove("n:Cats/00-1f600.webp")
         assertTrue(st.refreshFavorites()); assertEquals(1, st.favorites().stickers.size)
         core.journal = false
         assertTrue(st.addFavorite(TdApi.InputFileId(set.stickers[0].sticker.id)) is TdApi.Error)
@@ -133,10 +134,29 @@ class StickersTest {
         assertEquals(false, st.migrateFavorites())
         core.journal = true
         assertTrue(st.migrateFavorites())
-        assertEquals(listOf("${p.setId}/00-1f600.webp", "${p.setId}/01-1f602.png"), core.faved.keys.toList())
+        assertEquals(listOf("n:Cats/00-1f600.webp", "n:Cats/01-1f602.png"), core.faved.keys.toList())
         assertEquals(2, st.favorites().stickers.size)
         assertEquals(0, JSONObject(File(root, "stickers-state.json").readText()).optJSONArray("favorite")?.length() ?: 0)
         assertEquals(false, Stickers(store, root, { }, core).migrateFavorites())
+    }
+
+    /** PACK-1 (spec 036): избранные прежнего вида (числовой id набора шва) переводятся на общий id один раз, порядок прежний. */
+    @Test
+    fun legacyFavedIdsRekeyedToSharedSetIdOnce() {
+        val (st, core, _) = setup()
+        val p = st.index.registerReceived(ref("Cats").put("content_hash", "ab/cd+ef=="), false)
+        st.stickerSet(p.setId)
+        core.faved["${p.setId}/01-1f602.png"] = 1L
+        core.faved["${p.setId}/00-1f600.webp"] = 2L
+        core.faved["999/zz.webp"] = 3L // набора на этом устройстве нет — запись не трогается
+        assertTrue(st.refreshFavorites())
+        assertEquals(setOf("h:ab/cd+ef==/01-1f602.png", "h:ab/cd+ef==/00-1f600.webp", "999/zz.webp"), core.faved.keys)
+        assertTrue("новые сначала, как до перекладки",
+            core.faved["h:ab/cd+ef==/00-1f600.webp"]!! > core.faved["h:ab/cd+ef==/01-1f602.png"]!!)
+        assertEquals(listOf("00-1f600.webp", "01-1f602.png"), st.favorites().stickers.map { s -> st.resolveInput(TdApi.InputFileId(s.sticker.id))!!.file.name })
+        val before = core.faved.toMap()
+        assertTrue(st.refreshFavorites())
+        assertEquals("второй раз ничего не перекладывается", before, core.faved.toMap())
     }
 
     @Test

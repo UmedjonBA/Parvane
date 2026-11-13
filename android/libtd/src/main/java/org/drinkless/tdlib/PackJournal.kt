@@ -124,7 +124,7 @@ class PackJournal(private val dir: File) {
     }
 
     private fun load() {
-        if (!file.exists()) return
+        if (!SeamFiles.exists(file)) return
         try {
             val o = JSONObject(SeamFiles.read(file))
             o.optJSONArray("records")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { r -> r.optString("set_id").takeIf { it.isNotEmpty() }?.let { records[it] = r } } }

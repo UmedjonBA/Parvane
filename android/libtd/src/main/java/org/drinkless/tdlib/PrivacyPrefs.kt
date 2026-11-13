@@ -26,7 +26,7 @@ class PrivacyPrefs(private val dir: File) {
     private var root = JSONObject()
 
     init {
-        try { if (file.exists()) root = JSONObject(SeamFiles.read(file)) } catch (e: Exception) { root = JSONObject() }
+        try { if (SeamFiles.exists(file)) root = JSONObject(SeamFiles.read(file)) } catch (e: Exception) { root = JSONObject() }
     }
 
     private fun entry(self: String): JSONObject? = if (self.isEmpty()) null else root.optJSONObject(self)

@@ -39,7 +39,6 @@ describe('history cache and own outgoing journal', () => {
     state.appendOwnJournal(sent);
     expect(heard).toEqual([sent.id]);
     expect((await state.readOwnJournal()).map(({ id }) => id)).toEqual([sent.id]);
-    expect(await state.loadHistoryRecords()).toEqual([]);
     state.setOwnSentListener(undefined);
   });
 
@@ -68,25 +67,6 @@ describe('history cache and own outgoing journal', () => {
     const reloaded = await fresh.readOwnJournal();
     expect(reloaded.map(({ id }) => id)).toEqual(['uuid-b', 'uuid-c']);
     expect(reloaded[0].content).toEqual({ kind: 'text', text: 'b2' });
-  });
-
-  // Кэш строк прежних сборок (`m:`, маркеры `rm:`) читается для разового переноса в модель и стирается
-  it('reads the legacy history cache once and drops it after the move to the engine model', async () => {
-    const storage = await SecureE2eStorage.open(SELF);
-    const row: WireStoredMessage = {
-      id: 'uuid-old', from: 'bob@local', to: SELF, ts: 5, content: { kind: 'text', text: 'старое' },
-    };
-    await storage.saveRecord('m:uuid-old', row);
-    await storage.saveRecord('rm:bob@local', {
-      address: 'bob@local',
-      mark: { chat: { user: { address: 'bob@local' } }, up_to_ts_ms: '5000', up_to_id: 'uuid-old' },
-    });
-    const state = makeLocalState();
-    expect((await state.loadHistoryRecords()).map(({ id }) => id)).toEqual(['uuid-old']);
-    expect(Object.keys(await state.loadReadMarks())).toEqual(['bob@local']);
-    await state.dropLegacyHistory(['uuid-old'], ['bob@local']);
-    expect(await state.loadHistoryRecords()).toEqual([]);
-    expect(await state.loadReadMarks()).toEqual({});
   });
 
   it('forgetting an own message removes it from the outgoing journal', async () => {

@@ -14,6 +14,9 @@ pub const KINDS: &[(&str, u32)] = &[
     ("history-mark", 1),
     ("history-raw", 1),
     ("history-row", 1),
+    // spec 036 T031: файл хоста (desktop/android `HostFiles` поверх `EngineStore`): имя — путь файла в области,
+    // значение — байты файла как есть; `migrated:<имя>` — отметка разового переноса из storecrypt
+    ("host-file", 1),
     ("media-key", 1),
     ("migration-progress", 1),
     ("note", 1),

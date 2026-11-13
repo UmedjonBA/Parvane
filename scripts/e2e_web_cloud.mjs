@@ -248,7 +248,14 @@ try {
   // ── Переименование; совпавшее имя получает номер ──────────────────────────
   const rename = async (from, to) => {
     await menuAction(from, 'Rename');
-    await page.locator('#parvane-cloud-name').fill(to);
+    // Окно ставит прежнее имя при открытии; ввод, попавший до этого кадра, дописывался к нему
+    // («дневник (2).txtотчёт.pdf») — поле сперва должно показать прежнее имя, после ввода — новое
+    const nameInput = page.locator('#parvane-cloud-name');
+    await page.waitForFunction((value) => document.querySelector('#parvane-cloud-name')?.value === value, from, {
+      timeout: STEP_TIMEOUT_MS,
+    });
+    for (let attempt = 0; attempt < 3 && (await nameInput.inputValue()) !== to; attempt++) await nameInput.fill(to);
+    assert.equal(await nameInput.inputValue(), to, `имя в окне переименования: ${await nameInput.inputValue()}`);
     await page.getByRole('button', { name: 'Save', exact: true }).click();
   };
   await rename('заметка.txt', 'дневник.txt');

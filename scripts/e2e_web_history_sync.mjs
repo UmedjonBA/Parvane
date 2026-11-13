@@ -82,8 +82,11 @@ async function expectChat(session, peerAddress, { present, absent }, timeout = C
   for (const text of present) {
     await findMessage(session.page, text).first().waitFor({ state: 'visible', timeout });
   }
+  // Удалённое «только у меня» на другом своём устройстве приходит журналом истории — после строк чата (модель читает
+  // журнал после подключения, spec 036): ждём схождения, а не снимок в момент, когда оставшееся уже видно
   for (const text of absent) {
-    assert.equal(await findMessage(session.page, text).count(), 0, `${session.label}: удалённое «${text}» видно`);
+    await findMessage(session.page, text).first().waitFor({ state: 'detached', timeout })
+      .catch(() => assert.fail(`${session.label}: удалённое «${text}» видно\n${session.logs.slice(-15).join('\n')}`));
   }
 }
 

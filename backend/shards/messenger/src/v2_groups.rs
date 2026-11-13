@@ -304,27 +304,6 @@ pub(crate) async fn rebuild_windows(ctx: &V2) {
     }
 }
 
-/// spec 035 (T101, `messenger --migration-check`): окна членства, какими их даёт журнал группы. `None` — журнал не
-/// перестраивается.
-pub(crate) async fn expected_windows(ctx: &V2, group_id: &[u8]) -> Option<std::collections::BTreeMap<(String, i64), Option<i64>>> {
-    let (_, steps) = replay(ctx, group_id).await.ok()??;
-    let mut m: std::collections::BTreeMap<(String, i64), Option<i64>> = std::collections::BTreeMap::new();
-    for st in &steps {
-        let v = st.version as i64;
-        for u in &st.left {
-            for ((who, _), exit) in m.iter_mut() {
-                if who == u && exit.is_none() {
-                    *exit = Some(v);
-                }
-            }
-        }
-        for u in &st.joined {
-            m.entry((u.clone(), v)).or_insert(None);
-        }
-    }
-    Some(m)
-}
-
 /// Версия закрытия последнего окна членства `user` (None — окна нет либо оно открыто).
 pub(crate) async fn last_exit(pool: &SqlitePool, group_id: &[u8], user: &str) -> Result<Option<u64>, ErrorCode> {
     let r: Option<(Option<i64>,)> = sqlx::query_as("SELECT exit_v FROM group_membership_windows WHERE group_id = ? AND user = ? ORDER BY join_v DESC LIMIT 1")

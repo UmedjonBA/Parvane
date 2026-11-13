@@ -109,7 +109,7 @@ impl Engine {
         let read = READS.contains(&a.name.as_str());
         if !read {
             match self.open_state {
-                OpenState::Ready | OpenState::MigrationNeeded => {}
+                OpenState::Ready => {}
                 OpenState::TooNew => return Err(err_json(ProtoError::WriteBlocked)),
                 OpenState::Locked => return Err(err_json(ProtoError::Locked)),
                 OpenState::Unspecified => return Err(err_json(ProtoError::NotFound)),
@@ -225,15 +225,29 @@ impl Engine {
         }
     }
 
-    /// События записи — хосту; журнал личного состояния ведёт модель.
+    /// События записи — хосту; журнал личного состояния ведёт модель. С `engine_rows` (spec 036) сообщения и
+    /// мутации ещё и применяются к строкам моделью, журнал истории читает модель — хост их строк не собирает.
     fn host_events(&mut self, events: Vec<Event>, w: &mut Work) {
         if events.is_empty() {
             return;
         }
         let state = events.iter().any(|e| matches!(e, Event::Journal { kind, .. } if *kind != 2));
+        let history = events.iter().any(|e| matches!(e, Event::Journal { kind: 2, .. }));
         w.delta.push(Change::ClientEvents(epb::ClientEvents { json: crate::host::events(&events) }));
         if state && self.client.as_ref().is_some_and(|c| c.state_key().is_some()) {
             self.state_sync_now(w);
+        }
+        if !self.cfg.engine_rows {
+            return;
+        }
+        for ev in events {
+            match ev {
+                Event::Direct { .. } | Event::Group { .. } => self.apply_event(ev, w),
+                _ => {}
+            }
+        }
+        if history {
+            self.history_pull(w);
         }
     }
 

@@ -8,6 +8,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  dumpDiagJournal,
   findMessageContainers,
   forwardMessage,
   openPrivateChat,
@@ -95,6 +96,7 @@ try {
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR;
   if (shotDir) await Promise.all(sessions.map((s, i) => s?.page.screenshot({ path: `${shotDir}/forward-photo-${i}.png` }).catch(() => {})));
+  for (const [i, s] of sessions.entries()) if (s?.page) await dumpDiagJournal(s.page, `сессия ${i}`);
   throw error;
 } finally {
   await browser.close();

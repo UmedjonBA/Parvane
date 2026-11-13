@@ -54,7 +54,6 @@ add_library(parvane_core STATIC
     src/store_fs.cpp
     src/engine_store.cpp
     src/engine_host.cpp
-    src/migrate_legacy.cpp
     src/state_model.cpp
     src/gen/model.cpp
     src/local_files.cpp
@@ -76,7 +75,6 @@ add_library(parvane_core STATIC
     src/v2_session.cpp
     src/v2_session_account.cpp
     src/v2_session_groups.cpp
-    src/audit_dump.cpp
     src/history_sync.cpp)
 add_dependencies(parvane_core parvane_protocol_build)
 target_include_directories(parvane_core
@@ -112,7 +110,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     set(PARVANE_VECTORS ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 v2_session
               l2_ticker reconnect_backoff queue_watchdog transport local_files blob_download dev_hooks chat_rules
-              history_sync client_safety store_fs migrate_legacy)
+              history_sync client_safety store_fs state_view)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
     endforeach()
@@ -129,17 +127,11 @@ if (PARVANE_CORE_BUILD_PROBE)
         target_include_directories(parvane_${t}_tests PRIVATE ${PARVANE_BACKEND_DIR}/protocol/ffi/include)
         target_compile_definitions(parvane_${t}_tests PRIVATE PARVANE_VECTORS_DIR="${PARVANE_VECTORS}")
     endforeach()
-    # Выгрузка «ничего не потеряно» (spec 035, T007): общий вход и ожидаемые строки с web — conformance/audit
-    add_executable(parvane_audit_dump_tests tests/audit_dump_tests.cpp)
-    target_link_libraries(parvane_audit_dump_tests PRIVATE parvane_core)
-    target_compile_definitions(parvane_audit_dump_tests PRIVATE
-        PARVANE_CONFORMANCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../conformance")
 
     enable_testing()
-    add_test(NAME audit_dump COMMAND parvane_audit_dump_tests)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
               reconnect_backoff queue_watchdog protocol_vectors webcompat engine_abi transport local_files blob_download dev_hooks chat_rules
-              history_sync client_safety store_fs engine_store model_vectors migrate_legacy)
+              history_sync client_safety store_fs engine_store model_vectors state_view)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

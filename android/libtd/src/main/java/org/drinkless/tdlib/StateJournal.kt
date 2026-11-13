@@ -4,20 +4,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Протокол v2 (spec 007, T098, R10): папки, черновики, архив и отложенные — из
- * журнала личного состояния (`state.append`/`state.sync`, шифртекст на ключе
- * личного состояния; сведение LWW — STATE-1 в движке, ядро parvane-core).
- * Локальные файлы (`folders.json`, `drafts.json`, `chatlists.json`,
- * `scheduled.json`) остаются рабочей копией для X: правка пользователя →
- * желаемый снимок → разница с журналом (движок) → записи; записи других
- * устройств → сведённый снимок → [project] в локальные файлы и апдейты X.
- * Первый запуск переносит локальные данные в журнал (движок migrate_snapshot).
- * Блок-лист шва раньше жил только в памяти — теперь переживает рестарт через журнал.
- * Настройки уведомлений (T132, FR-039) — тоже вид журнала: открытый v1-блоб
- * `msg.chat.setnotify` списка заглушённых больше не несёт (правило STATE-2).
- * Свои наборы стикеров и эмодзи (PACK-3) — вид `packs`, рабочая копия записей — [PackJournal].
- * Порт web `src/api/parvane/v2/stateJournal.ts`. Чистый JVM-класс: движок и
- * адресация — через [Codec]/[Resolver].
+ * Личное состояние в шве (spec 007 T098; spec 036 ENGINE-1): папки, черновики, архив, отложенные, блок-лист,
+ * уведомления, закреп, «непрочитано», быстрая реакция, наборы (PACK-3), контакты (CONTACT-1) — объекты `state.v2`
+ * модели движка. Показ — объекты модели по видам (`viewStateJson`: {objects: [{kind, key, value, marks}]}, value —
+ * proto3-JSON сообщения вида) → [show] в локальные файлы X (рабочая копия: `folders.json`, `drafts.json`, …) и
+ * апдейты X. Правка пользователя — локальные данные вида → объекты [{key, value}] ([objects]) → `stateSubmit` ядра
+ * с показанными объектами: разницу по полям от показанного, сведение и метки считает только модель. Своего сведения,
+ * желаемого снимка, лампортов и меток в шве нет. Чистый JVM-класс: движок и адресация — через [Codec]/[Resolver].
  */
 class StateJournal(private val codec: Codec, private val resolver: Resolver) {
     /** proto3-JSON ↔ байты сообщений протокола (base64); содержимое — разбор движка (spec 035 T136, ENGINE-1:
@@ -40,7 +33,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         fun isKnownV2Group(hex: String): Boolean
     }
 
-    /** Что изменилось после [project] — для апдейтов X. */
+    /** Что изменилось после [show] — для апдейтов X. */
     class Changes {
         var folders = false
         val drafts = HashSet<Long>()
@@ -72,13 +65,9 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
      */
     class NotifyView(val defaults: JSONObject, val exceptions: JSONObject)
 
-    /** Поля `state.v1.NotifySettings` из последнего снимка журнала: звук/превью/тихий режим шов не ведёт, но и не стирает. */
-    private val journalNotify = HashMap<String, JSONObject>()
-    private val journalNotifyDefaults = HashMap<String, JSONObject>()
-
     private fun mutedUntil(s: JSONObject?): Long = if (s == null || s.isNull("mutedUntil")) 0L else s.optLong("mutedUntil")
     private fun stateMutedUntil(st: JSONObject?): Long = (st?.optString("mute_until_ms")?.toLongOrNull() ?: 0L) / 1000
-    /** Локальное (блоб веба) → state.v1.NotifySettings: мут, «без звука» и «показывать текст» (B10); звук-файл журнала не трогаем. */
+    /** Локальное (блоб веба) → NotifySettings: мут, «без звука» и «показывать текст» (B10); прочие поля показанного (звук) — как есть. */
     private fun notifyToState(local: JSONObject?, journal: JSONObject?): JSONObject {
         val o = (journal?.let { JSONObject(it.toString()) } ?: JSONObject()).put("mute_until_ms", (mutedUntil(local) * 1000).toString())
         // Поле, которого шов не знает (не правили на этом устройстве), остаётся как в журнале; JSON null — снять
@@ -126,7 +115,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         key?.let { k -> synchronized(unresolved) { unresolved[k]?.toList() } }
             ?.filter { addressOf(it)?.let(resolver::chatIdOf)?.let(chatIds::contains) != true }?.forEach { a.put(it) }
     }
-    /** Чаты записей журнала; не известные шву (группа ещё не подключена) с [key] запоминаются для [build]. */
+    /** Чаты записей журнала; не известные шву (группа ещё не подключена) с [key] запоминаются для [objects]. */
     private fun chatIds(peers: JSONArray?, key: String? = null): List<Long> {
         val ids = ArrayList<Long>()
         val missing = ArrayList<JSONObject>()
@@ -144,7 +133,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     /**
      * Чаты из журнала, которых шов ещё не знает (группа не подключена — устройство только вошло): ключ — место в
-     * снимке (папка, закреп, архив, «непрочитано»). Проекция их пропускает, а [build] возвращает на место: иначе
+     * модели (папка, закреп, архив, «непрочитано»). Проекция их пропускает, а [objects] возвращает на место: иначе
      * синк этого устройства стёр бы их из папок на всех устройствах. Шов заново проецирует снимок, когда узнаёт
      * новые группы ([hasUnresolved]).
      */
@@ -153,7 +142,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         private set
 
     /**
-     * Место «Все чаты» среди папок по журналу (0 — первыми). Проекция кладёт его в `Folders.mainPosition` — X ставит
+     * Место «Все чаты» среди папок по модели (0 — первыми). Проекция кладёт его в `Folders.mainPosition` — X ставит
      * страницу «Все чаты» (и чип полосы папок) на это место; своя перестановка в X — [noteAllFolderAt].
      */
     @Volatile var allFolderAt = 0
@@ -162,120 +151,223 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
     /** Перестановка папок на этом устройстве (ReorderChatFolders): место «Все чаты» — в следующий снимок. */
     fun noteAllFolderAt(pos: Int) { allFolderAt = pos.coerceAtLeast(0) }
 
-    // ── локальные данные → желаемый снимок (виды [KINDS]) ───────────────────
-    fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null,
-              packs: PackJournal? = null): JSONObject {
-        val folders = JSONArray()
-        val order = JSONArray()
-        local.folders.all().forEach { f ->
-            folders.put(JSONObject().put("id", f.id).put("title", f.title).put("emoticon", f.icon)
-                .put("include_peers", peers(f.included, "folder:${f.id}:in")).put("exclude_peers", peers(f.excluded, "folder:${f.id}:ex"))
-                .put("pinned_peers", peers(f.pinned, "folder:${f.id}:pin"))
-                .put("contacts", f.includeContacts).put("non_contacts", f.includeNonContacts).put("groups", f.includeGroups)
-                .put("channels", f.includeChannels).put("bots", f.includeBots).put("exclude_muted", f.excludeMuted)
-                .put("exclude_read", f.excludeRead).put("exclude_archived", f.excludeArchived).put("color", f.colorId))
-            order.put(f.id)
+    // ── объекты модели ───────────────────────────────────────────────────────
+    /** Ключ объекта собеседника, как у модели (`state::peer_key`): `u:<адрес>` | `g:<домен>:<hex id>`; null — не собеседник. */
+    fun peerKeyOf(peer: JSONObject?): String? {
+        if (peer == null) return null
+        peer.optJSONObject("user")?.optString("address")?.takeIf { it.isNotEmpty() }?.let { return "u:$it" }
+        val g = peer.optJSONObject("group") ?: return null
+        val hex = b64ToHex(g.optString("id"))?.takeIf { it.isNotEmpty() } ?: return null
+        return "g:${g.optString("domain")}:$hex"
+    }
+    /** Собеседник из ключа объекта; null — не ключ собеседника. */
+    fun peerOfKey(key: String): JSONObject? {
+        if (key.startsWith("u:") && key.length > 2) return JSONObject().put("user", JSONObject().put("address", key.substring(2)))
+        if (!key.startsWith("g:")) return null
+        val colon = key.lastIndexOf(':')
+        if (colon <= 1) return null
+        val hex = key.substring(colon + 1).takeIf { HEX32.matches(it) } ?: return null
+        return JSONObject().put("group", JSONObject().put("domain", key.substring(2, colon)).put("id", hexToB64(hex)))
+    }
+    private fun keyOfAddress(address: String): String? = peerKeyOf(peerOf(address))
+
+    /** Объект показан шву, но собеседник ему не известен (группа ещё не подключена) — правка его не трогает. */
+    private fun unknownPeer(peer: JSONObject?): Boolean = addressOf(peer)?.let(resolver::chatIdOf) == null
+
+    // ── локальные данные → объекты вида (правка) ─────────────────────────────
+    /**
+     * Объекты вида [kind] (имя state.v2 без префикса: `FOLDER`, `DRAFT`, …) из локальных данных шва: [{key, value}]
+     * (value — proto3-JSON сообщения вида). [shown] — объекты вида из последнего показа модели: поля, которых шов не
+     * ведёт (звук уведомления, время блокировки), берутся оттуда; показанное, чего шов не знает (группа ещё не
+     * подключена, отложенное уже отправлено, служебные папки), остаётся как показано — иначе правка этого устройства
+     * стёрла бы его у всех. null — вид шов не ведёт (нет данных уведомлений/наборов) — не отдавать модели.
+     */
+    fun objects(kind: String, shown: JSONArray, local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(),
+                notify: NotifyView? = null, packs: PackJournal? = null, nowMs: Long = System.currentTimeMillis()): JSONArray? {
+        val out = JSONArray()
+        val keys = HashSet<String>()
+        val put = { key: String, value: JSONObject -> if (keys.add(key)) out.put(JSONObject().put("key", key).put("value", value)) }
+        val shownByKey = LinkedHashMap<String, JSONObject>()
+        for (i in 0 until shown.length()) shown.optJSONObject(i)?.let { o -> shownByKey[o.optString("key")] = o.optJSONObject("value") ?: JSONObject() }
+        val keep = { pred: (String, JSONObject) -> Boolean -> shownByKey.forEach { (k, v) -> if (k !in keys && pred(k, v)) put(k, v) } }
+        val peerSet = { chatIds: List<Long>, unresolvedKey: String ->
+            peers(chatIds, unresolvedKey).let { a -> for (i in 0 until a.length()) peerKeyOf(a.optJSONObject(i))?.let { put(it, JSONObject()) } }
         }
-        // «Все чаты» (id 0): место выбирают web/desktop (без Premium) — сохраняем его, чтобы правка папок здесь не сбрасывала.
-        // Папок стало меньше, чем место «Все чаты», — они последними (как web withAllFolder), а не выпадают из
-        // folder_order: иначе на всех устройствах «Все чаты» уходили на первое место (B1 ревью 7 ноя 2026)
-        run {
-            val ids = (0 until order.length()).map { order.get(it) }.toMutableList()
-            ids.add(minOf(allFolderAt, ids.size), 0)
-            while (order.length() > 0) order.remove(0)
-            ids.forEach { order.put(it) }
-        }
-        val drafts = JSONArray()
-        local.draftChatIds().forEach { chatId ->
-            val d = local.draftOf(chatId) ?: return@forEach
-            val peer = resolver.addressOf(chatId)?.let(::peerOf) ?: return@forEach
-            val text = d.optString("text"); if (text.isEmpty()) return@forEach
-            val v1 = JSONObject().put("kind", "text").put("text", text)
-            d.optJSONArray("entities")?.let { v1.put("entities", it) }
-            val v2Text = codec.contentOfWire(v1.toString(), "").takeIf { it.isNotEmpty() }?.let { JSONObject(it).optJSONObject("text") } ?: return@forEach
-            val bytes = codec.encode("parvane.msg.v2.Text", v2Text.toString()).takeIf { it.isNotEmpty() } ?: return@forEach
-            drafts.put(JSONObject().put("peer", peer).put("text", bytes).put("date_ms", (d.optLong("date") * 1000).toString()))
-        }
-        val archived = JSONArray()
-        local.archivedChatIds().forEach { id -> resolver.addressOf(id)?.let(::peerOf)?.let { archived.put(it) } }
-        synchronized(unresolved) { unresolved["archived"]?.toList() }
-            ?.filter { addressOf(it)?.let(resolver::chatIdOf)?.let(local::isArchived) != true }?.forEach { archived.put(it) }
-        val scheduled = JSONArray()
-        queue.all().forEach { item ->
-            if (item.localPath != null) return@forEach // медиа отложенного — локальная копия, в журнал не переносится
-            val peer = peerOf(item.to) ?: return@forEach
-            val content = codec.contentOfWire(item.content.toString(), item.replyTo ?: "").takeIf { it.isNotEmpty() } ?: return@forEach
-            val bytes = codec.encode("parvane.msg.v2.Content", content).takeIf { it.isNotEmpty() } ?: return@forEach
-            val op = uuidToB64(item.uuid) ?: return@forEach
-            scheduled.put(JSONObject().put("op_id", op).put("peer", peer).put("send_at_ms", (item.due * 1000).toString()).put("content", bytes))
-        }
-        // Блок-лист: время блокировки подставляет ядро (из журнала или «сейчас»)
-        val blocked = JSONArray()
-        synchronized(blockedSet) { blockedSet.toList() }.sorted().forEach { a -> peerOf(a)?.let { blocked.put(JSONObject().put("peer", it)) } }
-        val out = JSONObject().put("folders", folders).put("folder_order", JSONObject().put("ids", order)).put("blocked", blocked)
-            .put("drafts", drafts).put("archived", archived).put("scheduled", scheduled)
-        // STATE-2: закреп главного списка, отметки «непрочитано», быстрая реакция (как web/desktop)
-        out.put("pinned", JSONArray().put(JSONObject().put("list", "PIN_LIST_MAIN").put("peers", peers(local.pinnedChatIds(), "pins"))))
-        out.put("unread_marks", peers(local.unreadMarkedChatIds(), "unread"))
-        out.put("quick_reaction", local.quickReaction().takeIf { it.isNotEmpty() }?.let { JSONObject().put("emoji", it) } ?: JSONObject())
-        // PACK-3: свои наборы стикеров и эмодзи — рабочая копия записей (без неё вид `packs` в желаемом не меняется)
-        if (packs != null) out.put("sticker_packs", packs.records())
-        // CONTACT-1: свои контакты — своё имя и заметка (только своим устройствам; сервер видит шифртекст)
-        out.put("contacts", JSONArray().also { a ->
-            local.contactAddresses().sorted().forEach { address ->
-                if (!address.contains('@')) return@forEach
-                val c = local.contactOf(address) ?: return@forEach
-                val o = JSONObject().put("user", JSONObject().put("address", address))
-                if (c.first.isNotEmpty()) o.put("first_name", c.first.take(256))
-                if (c.last.isNotEmpty()) o.put("last_name", c.last.take(256))
-                if (c.note.isNotEmpty()) o.put("note", c.note)
-                a.put(o)
-            }
-        })
-        // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
-        if (notify != null) {
-            val list = JSONArray()
-            val defaults = JSONObject()
-            synchronized(this) {
-                notify.exceptions.keys().asSequence().toList().sorted().forEach { address ->
-                    val peer = peerOf(address) ?: return@forEach
-                    list.put(JSONObject().put("peer", peer).put("settings", notifyToState(notify.exceptions.optJSONObject(address), journalNotify[address])))
+        when (kind) {
+            "FOLDER" -> {
+                local.folders.all().forEach { f ->
+                    put(f.id.toString(), JSONObject().put("id", f.id).put("title", f.title).put("emoticon", f.icon)
+                        .put("include_peers", peers(f.included, "folder:${f.id}:in")).put("exclude_peers", peers(f.excluded, "folder:${f.id}:ex"))
+                        .put("pinned_peers", peers(f.pinned, "folder:${f.id}:pin"))
+                        .put("contacts", f.includeContacts).put("non_contacts", f.includeNonContacts).put("groups", f.includeGroups)
+                        .put("channels", f.includeChannels).put("bots", f.includeBots).put("exclude_muted", f.excludeMuted)
+                        .put("exclude_read", f.excludeRead).put("exclude_archived", f.excludeArchived).put("color", f.colorId))
                 }
+                keep { k, _ -> k == "0" || k == "1" } // «все чаты» и архив — зарезервированы, шов их не ведёт
+            }
+            "FOLDER_ORDER" -> {
+                // «Все чаты» (id 0): место выбирают web/desktop (без Premium) — сохраняем его, чтобы правка папок здесь
+                // не сбрасывала. Папок стало меньше, чем место «Все чаты», — они последними (B1 ревью 7 ноя 2026)
+                val ids = local.folders.all().map { it.id }.toMutableList<Int>()
+                ids.add(minOf(allFolderAt, ids.size), 0)
+                put("", JSONObject().put("ids", JSONArray(ids)))
+            }
+            "BLOCK" -> {
+                synchronized(blockedSet) { blockedSet.toList() }.sorted().forEach { a ->
+                    val peer = peerOf(a) ?: return@forEach
+                    val key = peerKeyOf(peer) ?: return@forEach
+                    // Время блокировки — показанное (правкой не меняется), новое — сейчас
+                    put(key, shownByKey[key]?.takeIf { it.has("blocked_at_ms") }
+                        ?: JSONObject().put("peer", peer).put("blocked_at_ms", nowMs.toString()))
+                }
+            }
+            "PEER_NOTIFY" -> {
+                if (notify == null) return null
+                synchronized(notify) { notify.exceptions.keys().asSequence().toList() }.sorted().forEach { address ->
+                    val peer = peerOf(address) ?: return@forEach
+                    val key = peerKeyOf(peer) ?: return@forEach
+                    put(key, JSONObject().put("peer", peer)
+                        .put("settings", notifyToState(notify.exceptions.optJSONObject(address), shownByKey[key]?.optJSONObject("settings"))))
+                }
+                keep { _, v -> unknownPeer(v.optJSONObject("peer")) }
+            }
+            "NOTIFY_DEFAULTS" -> {
+                if (notify == null) return null
+                val was = shownByKey[""]
+                val defaults = JSONObject()
                 NOTIFY_SCOPES.forEach { scope ->
                     val d = notify.defaults.optJSONObject(scope)
-                    if (d != null || journalNotifyDefaults.containsKey(scope)) defaults.put(scope, notifyToState(d, journalNotifyDefaults[scope]))
+                    val journal = was?.optJSONObject(scope)
+                    if (d != null || journal != null) defaults.put(scope, notifyToState(d, journal))
+                }
+                if (defaults.length() > 0 || was != null) put("", defaults)
+            }
+            "DRAFT" -> {
+                local.draftChatIds().forEach { chatId ->
+                    val d = local.draftOf(chatId) ?: return@forEach
+                    val peer = resolver.addressOf(chatId)?.let(::peerOf) ?: return@forEach
+                    val key = peerKeyOf(peer) ?: return@forEach
+                    val text = d.optString("text"); if (text.isEmpty()) return@forEach
+                    val wire = JSONObject().put("kind", "text").put("text", text)
+                    d.optJSONArray("entities")?.let { wire.put("entities", it) }
+                    val v2Text = codec.contentOfWire(wire.toString(), "").takeIf { it.isNotEmpty() }?.let { JSONObject(it).optJSONObject("text") } ?: return@forEach
+                    val bytes = codec.encode("parvane.msg.v2.Text", v2Text.toString()).takeIf { it.isNotEmpty() } ?: return@forEach
+                    put(key, JSONObject().put("peer", peer).put("text", bytes).put("date_ms", (d.optLong("date") * 1000).toString()))
+                }
+                keep { _, v -> unknownPeer(v.optJSONObject("peer")) }
+            }
+            "SCHEDULED" -> {
+                queue.all().forEach { item ->
+                    if (item.localPath != null) return@forEach // медиа отложенного — локальная копия, в журнал не переносится
+                    val peer = peerOf(item.to) ?: return@forEach
+                    val content = codec.contentOfWire(item.content.toString(), item.replyTo ?: "").takeIf { it.isNotEmpty() } ?: return@forEach
+                    val bytes = codec.encode("parvane.msg.v2.Content", content).takeIf { it.isNotEmpty() } ?: return@forEach
+                    val op = uuidToB64(item.uuid) ?: return@forEach
+                    val key = b64ToHex(op) ?: return@forEach
+                    // Отметка «отправлено» — у объекта модели; значение отправленного шов не переписывает
+                    if (sentKeys.contains(key)) return@forEach
+                    put(key, JSONObject().put("op_id", op).put("peer", peer).put("send_at_ms", (item.due * 1000).toString()).put("content", bytes))
+                }
+                // Отправленные (отметка) и отложенные в чаты, которых шов ещё не знает, — как показаны
+                keep { k, v -> sentKeys.contains(k) || v.length() == 0 || unknownPeer(v.optJSONObject("peer")) }
+            }
+            "ARCHIVE" -> {
+                peerSet(local.archivedChatIds(), "archived")
+                keep { k, _ -> unknownPeer(peerOfKey(k)) }
+            }
+            "UNREAD_MARK" -> {
+                peerSet(local.unreadMarkedChatIds(), "unread")
+                keep { k, _ -> unknownPeer(peerOfKey(k)) }
+            }
+            "PIN_LIST" -> {
+                // Шов ведёт только основной список закрепа (ключ 1); архивный — не его
+                val pinned = peers(local.pinnedChatIds(), "pins")
+                if (pinned.length() > 0 || shownByKey.containsKey("1")) put("1", JSONObject().put("list", "PIN_LIST_MAIN").put("peers", pinned))
+            }
+            "QUICK_REACTION" -> {
+                val emoji = local.quickReaction()
+                if (emoji.isNotEmpty() || shownByKey.containsKey("")) put("", if (emoji.isEmpty()) JSONObject() else JSONObject().put("emoji", emoji))
+            }
+            "STICKER_PACK", "SAVED_GIF" -> {
+                // PACK-3: свои наборы стикеров и эмодзи — рабочая копия записей; GIF (`g:`) — свой вид
+                if (packs == null) return null
+                val gif = kind == "SAVED_GIF"
+                val records = packs.records()
+                for (i in 0 until records.length()) {
+                    val r = records.optJSONObject(i) ?: continue
+                    val key = r.optString("set_id")
+                    if (key.isNotEmpty() && key.startsWith("g:") == gif) put(key, r)
                 }
             }
-            out.put("notify", list).put("notify_defaults", defaults)
+            "CONTACT" -> {
+                // CONTACT-1: своё имя и заметка (только своим устройствам; сервер видит шифртекст); ключ — адрес
+                local.contactAddresses().sorted().forEach { address ->
+                    if (!address.contains('@')) return@forEach
+                    val c = local.contactOf(address) ?: return@forEach
+                    val o = JSONObject().put("user", JSONObject().put("address", address))
+                    if (c.first.isNotEmpty()) o.put("first_name", c.first.take(256))
+                    if (c.last.isNotEmpty()) o.put("last_name", c.last.take(256))
+                    if (c.note.isNotEmpty()) o.put("note", c.note)
+                    put(address, o)
+                }
+            }
+            else -> return null
         }
         return out
     }
 
-    // ── сведённый снимок → локальные данные ───────────────────────────────────
-    fun project(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet(), notify: NotifyView? = null,
-                packs: PackJournal? = null): Changes {
+    /** Ключи отложенных с отметкой «отправлено» по последнему показу ([show]). */
+    private val sentKeys: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+
+    // ── объекты модели → локальные данные (показ) ────────────────────────────
+    /**
+     * Показ объектов модели (`viewStateJson`) в локальные файлы шва. [notify] null — настройки уведомлений не
+     * трогать; [packs] null — наборы не трогать. Пустой вид — «в модели нет»: показ снимает пропавшее.
+     */
+    fun show(view: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet(), notify: NotifyView? = null,
+             packs: PackJournal? = null): Changes {
         val ch = Changes()
-        if (packs != null) ch.packs = packs.project(snap.optJSONArray("sticker_packs"))
-        if (notify != null) projectNotify(snap, notify, ch)
-        val bl = snap.optJSONArray("blocked") ?: JSONArray()
+        val values = { kind: String -> JSONArray().also { a -> objectsOf(view, kind).let { o -> for (i in 0 until o.length()) a.put(o.getJSONObject(i).optJSONObject("value") ?: JSONObject()) } } }
+        val keys = { kind: String -> objectsOf(view, kind).let { o -> (0 until o.length()).map { o.getJSONObject(it).optString("key") } } }
+        if (packs != null) ch.packs = packs.project(JSONArray().also { a ->
+            listOf("STICKER_PACK", "SAVED_GIF").forEach { k -> values(k).let { v -> for (i in 0 until v.length()) a.put(v.get(i)) } }
+        })
+        if (notify != null) projectNotify(values("PEER_NOTIFY"), values("NOTIFY_DEFAULTS").optJSONObject(0), notify, ch)
+        val bl = values("BLOCK")
         val want = (0 until bl.length()).mapNotNull { addressOf(bl.optJSONObject(it)?.optJSONObject("peer")) }.filter { it.contains('@') }.toSet()
         synchronized(blockedSet) {
             val cur = blockedSet.toSet()
             (want - cur).forEach { blockedSet.add(it); ch.blocked += it }
             (cur - want).forEach { blockedSet.remove(it); ch.blocked += it }
         }
-        projectFolders(snap, local, ch)
-        projectDrafts(snap, local, ch)
-        projectArchived(snap, local, ch)
-        projectScheduled(snap, local, queue, ch)
-        projectPins(snap, local, ch)
-        projectContacts(snap, local, ch)
+        projectFolders(values("FOLDER"), values("FOLDER_ORDER").optJSONObject(0), local, ch)
+        projectDrafts(values("DRAFT"), local, ch)
+        projectArchived(JSONArray(keys("ARCHIVE").mapNotNull(::peerOfKey)), local, ch)
+        val scheduled = objectsOf(view, "SCHEDULED")
+        val sent = (0 until scheduled.length()).map { scheduled.getJSONObject(it) }.filter { markValue(it, MARK_SCHEDULED_SENT) != 0L }.map { it.optString("key") }.toSet()
+        synchronized(sentKeys) { sentKeys.clear(); sentKeys.addAll(sent) }
+        projectScheduled(values("SCHEDULED"), sent, local, queue, ch)
+        val pins = objectsOf(view, "PIN_LIST").let { o -> (0 until o.length()).map { o.getJSONObject(it) }.firstOrNull { it.optString("key") == "1" } }
+        projectPins(pins?.optJSONObject("value"), JSONArray(keys("UNREAD_MARK").mapNotNull(::peerOfKey)), values("QUICK_REACTION").optJSONObject(0), local, ch)
+        projectContacts(values("CONTACT"), local, ch)
         return ch
     }
 
+    /** Граница очистки «удалить у себя» (T145): адрес → мс (отметка 2 объекта CHAT_CLEARED). */
+    fun clearedOf(view: JSONObject): Map<String, Long> {
+        val out = HashMap<String, Long>()
+        val list = objectsOf(view, "CHAT_CLEARED")
+        for (i in 0 until list.length()) {
+            val o = list.getJSONObject(i)
+            val until = markValue(o, MARK_CHAT_CLEARED)
+            val address = addressOf(peerOfKey(o.optString("key"))) ?: continue
+            if (until > 0) out[address] = until
+        }
+        return out
+    }
+
     /** CONTACT-1: журнал — главный; запись без имён — контакт с именем, заданным собеседником. */
-    private fun projectContacts(snap: JSONObject, local: ChatLocalState, ch: Changes) {
-        val list = snap.optJSONArray("contacts") ?: JSONArray()
+    private fun projectContacts(list: JSONArray, local: ChatLocalState, ch: Changes) {
         val next = LinkedHashMap<String, ChatLocalState.Contact>()
         for (i in 0 until list.length()) {
             val o = list.optJSONObject(i) ?: continue
@@ -286,34 +378,26 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         ch.contacts += local.replaceContacts(next)
     }
 
-    /** В снимке журнала есть настройки уведомлений (вид `notify` уже вёл какой-то клиент). */
-    fun hasNotify(snap: JSONObject): Boolean =
-        (snap.optJSONArray("notify")?.length() ?: 0) > 0 || (snap.optJSONObject("notify_defaults")?.length() ?: 0) > 0
-
-    /** Журнал → изменившиеся настройки блобом веба; исключение, которого в журнале больше нет, снимается (мут = 0). */
-    private fun projectNotify(snap: JSONObject, notify: NotifyView, ch: Changes) {
+    /** Модель → изменившиеся настройки блобом веба; исключение, которого в модели больше нет, снимается (мут = 0). */
+    private fun projectNotify(list: JSONArray, defs: JSONObject?, notify: NotifyView, ch: Changes) {
         val exceptions = JSONObject()
         val defaults = JSONObject()
-        synchronized(this) {
-            journalNotify.clear(); journalNotifyDefaults.clear()
-            val list = snap.optJSONArray("notify") ?: JSONArray()
+        synchronized(notify) {
+            val seen = HashSet<String>()
             for (i in 0 until list.length()) {
                 val entry = list.optJSONObject(i) ?: continue
                 val address = addressOf(entry.optJSONObject("peer")) ?: continue
-                val settings = entry.optJSONObject("settings") ?: JSONObject()
-                journalNotify[address] = settings
-                val want = notifyFromState(settings)
+                seen += address
+                val want = notifyFromState(entry.optJSONObject("settings") ?: JSONObject())
                 if (!sameNotify(notify.exceptions.optJSONObject(address), want)) exceptions.put(address, want)
             }
             notify.exceptions.keys().asSequence().toList().forEach { address ->
                 val cur = notify.exceptions.optJSONObject(address)
-                if (!journalNotify.containsKey(address) && (mutedUntil(cur) != 0L || flag(cur, "silent") != null || flag(cur, "showPreviews") != null))
+                if (address !in seen && (mutedUntil(cur) != 0L || flag(cur, "silent") != null || flag(cur, "showPreviews") != null))
                     exceptions.put(address, JSONObject().put("mutedUntil", 0L))
             }
-            val defs = snap.optJSONObject("notify_defaults") ?: JSONObject()
             NOTIFY_SCOPES.forEach { scope ->
-                val st = defs.optJSONObject(scope) ?: return@forEach
-                journalNotifyDefaults[scope] = st
+                val st = defs?.optJSONObject(scope) ?: return@forEach
                 val want = notifyFromState(st)
                 if (!sameNotify(notify.defaults.optJSONObject(scope), want)) defaults.put(scope, want)
             }
@@ -321,9 +405,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         if (exceptions.length() > 0 || defaults.length() > 0) ch.notify = JSONObject().put("defaults", defaults).put("exceptions", exceptions)
     }
 
-    private fun projectFolders(snap: JSONObject, local: ChatLocalState, ch: Changes) {
-        val list = snap.optJSONArray("folders") ?: JSONArray()
-        val order = snap.optJSONObject("folder_order")?.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
+    private fun projectFolders(list: JSONArray, orderObj: JSONObject?, local: ChatLocalState, ch: Changes) {
+        val order = orderObj?.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
         // Место «Все чаты»: сколько папок перед id 0 (нет 0 — первыми)
         allFolderAt = order.indexOf(0).let { at -> if (at < 0) 0 else order.take(at).count { it > 1 } }
         val next = LinkedHashMap<Int, Folders.Folder>()
@@ -347,18 +430,17 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         ch.folders = true
     }
 
-    private fun projectDrafts(snap: JSONObject, local: ChatLocalState, ch: Changes) {
-        val list = snap.optJSONArray("drafts") ?: JSONArray()
+    private fun projectDrafts(list: JSONArray, local: ChatLocalState, ch: Changes) {
         val next = HashMap<Long, JSONObject>()
         for (i in 0 until list.length()) {
             val d = list.optJSONObject(i) ?: continue
             val chatId = addressOf(d.optJSONObject("peer"))?.let(resolver::chatIdOf) ?: continue
             val t = d.optString("text").takeIf { it.isNotEmpty() } ?: continue
             val v2Text = codec.decode("parvane.msg.v2.Text", t).takeIf { it.isNotEmpty() } ?: continue
-            val v1 = codec.wireOf(JSONObject().put("text", JSONObject(v2Text)).toString()).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
-            val text = v1.optString("text"); if (text.isEmpty()) continue
+            val wire = codec.wireOf(JSONObject().put("text", JSONObject(v2Text)).toString()).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
+            val text = wire.optString("text"); if (text.isEmpty()) continue
             val o = JSONObject().put("text", text).put("date", (d.optString("date_ms").toLongOrNull() ?: 0L) / 1000)
-            v1.optJSONArray("entities")?.let { o.put("entities", it) }
+            wire.optJSONArray("entities")?.let { o.put("entities", it) }
             next[chatId] = o
         }
         val ids = HashSet(local.draftChatIds()).apply { addAll(next.keys) }
@@ -372,47 +454,38 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         }
     }
 
-    private fun projectArchived(snap: JSONObject, local: ChatLocalState, ch: Changes) {
-        val list = snap.optJSONArray("archived") ?: JSONArray()
-        val next = chatIds(list, "archived").toSet()
+    private fun projectArchived(peers: JSONArray, local: ChatLocalState, ch: Changes) {
+        val next = chatIds(peers, "archived").toSet()
         val cur = local.archivedChatIds().toSet()
         (next - cur).forEach { local.setArchived(it, true); ch.archived += it }
         (cur - next).forEach { local.setArchived(it, false); ch.archived += it }
     }
 
-    private fun projectPins(snap: JSONObject, local: ChatLocalState, ch: Changes) {
-        snap.optJSONArray("pinned")?.let { lists ->
-            val main = (0 until lists.length()).mapNotNull { lists.optJSONObject(it) }
-                .firstOrNull { it.optString("list", "PIN_LIST_MAIN") == "PIN_LIST_MAIN" }
-            val next = chatIds(main?.optJSONArray("peers"), "pins")
-            val cur = local.pinnedChatIds()
-            if (next != cur) {
-                ch.pinned += (next + cur).toSet()
-                local.setPinnedOrder(next)
-            }
+    /** STATE-2: закреп основного списка (объект PIN_LIST «1»), отметки «непрочитано», быстрая реакция. */
+    private fun projectPins(main: JSONObject?, unreadPeers: JSONArray, reaction: JSONObject?, local: ChatLocalState, ch: Changes) {
+        val next = chatIds(main?.optJSONArray("peers"), "pins")
+        val cur = local.pinnedChatIds()
+        if (next != cur) {
+            ch.pinned += (next + cur).toSet()
+            local.setPinnedOrder(next)
         }
-        snap.optJSONArray("unread_marks")?.let { a ->
-            val next = chatIds(a, "unread").toSet()
-            val cur = local.unreadMarkedChatIds().toSet()
-            (next - cur).forEach { local.setMarkedUnread(it, true); ch.unread += it }
-            (cur - next).forEach { local.setMarkedUnread(it, false); ch.unread += it }
-        }
-        snap.optJSONObject("quick_reaction")?.let { r ->
-            if (local.setQuickReaction(r.optString("emoji"))) ch.reaction = true
-        }
+        val marked = chatIds(unreadPeers, "unread").toSet()
+        val was = local.unreadMarkedChatIds().toSet()
+        (marked - was).forEach { local.setMarkedUnread(it, true); ch.unread += it }
+        (was - marked).forEach { local.setMarkedUnread(it, false); ch.unread += it }
+        if (local.setQuickReaction(reaction?.optString("emoji").orEmpty())) ch.reaction = true
     }
 
-    private fun projectScheduled(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, ch: Changes) {
-        val sent = snap.optJSONArray("scheduled_sent")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() } ?: emptySet()
-        val list = snap.optJSONArray("scheduled") ?: JSONArray()
+    private fun projectScheduled(list: JSONArray, sent: Set<String>, local: ChatLocalState, queue: ScheduledQueue, ch: Changes) {
         val want = LinkedHashMap<String, JSONObject>()
         for (i in 0 until list.length()) {
             val s = list.optJSONObject(i) ?: continue
-            val op = s.optString("op_id"); if (op in sent) continue
+            val op = s.optString("op_id").takeIf { it.isNotEmpty() } ?: continue
+            if (b64ToHex(op) in sent) continue
             val uuid = b64ToUuid(op) ?: continue
             want[uuid] = s
         }
-        // Снятые журналом (удалены/отправлены другим устройством) — из очереди; медиа не трогаем
+        // Снятые моделью (удалены/отправлены другим устройством) — из очереди; медиа не трогаем
         queue.all().filter { it.localPath == null && it.uuid !in want }.forEach { queue.remove(it.id)?.let { r -> ch.scheduledRemoved += r } }
         val have = queue.all().map { it.uuid }.toSet()
         for ((uuid, s) in want) {
@@ -420,19 +493,61 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
             val address = addressOf(s.optJSONObject("peer")) ?: continue
             val chatId = resolver.chatIdOf(address) ?: continue
             val v2 = codec.decode("parvane.msg.v2.Content", s.optString("content")).takeIf { it.isNotEmpty() } ?: continue
-            val v1 = codec.wireOf(v2).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
+            val wire = codec.wireOf(v2).takeIf { it.isNotEmpty() }?.let(::JSONObject) ?: continue
             val replyTo = JSONObject(v2).optJSONObject("reply_to")?.optString("op_id")?.let(::b64ToUuid)
             val due = (s.optString("send_at_ms").toLongOrNull() ?: 0L) / 1000
-            ch.scheduledAdded += queue.add(uuid, chatId, address, v1, null, replyTo, due)
+            ch.scheduledAdded += queue.add(uuid, chatId, address, wire, null, replyTo, due)
         }
     }
 
     companion object {
-        /** Виды, которые ведёт шов (остальные виды журнала не трогаются). */
+        /** Виды правок шва (имена прежних видов журнала) — по ним шов помечает «правка не отдана модели». */
         val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction", "packs", "contacts")
+        /** Вид правки шва → виды state.v2 (как desktop `StateKindsOf`). */
+        fun kindsOf(edited: String): List<String> = when (edited) {
+            "folders" -> listOf("FOLDER", "FOLDER_ORDER")
+            "blocked" -> listOf("BLOCK")
+            "drafts" -> listOf("DRAFT")
+            "archived" -> listOf("ARCHIVE", "PIN_LIST") // архив снимает закреп
+            "scheduled" -> listOf("SCHEDULED")
+            "notify" -> listOf("PEER_NOTIFY", "NOTIFY_DEFAULTS")
+            "pinned" -> listOf("PIN_LIST")
+            "unread" -> listOf("UNREAD_MARK")
+            "reaction" -> listOf("QUICK_REACTION")
+            "packs" -> listOf("STICKER_PACK", "SAVED_GIF")
+            "contacts" -> listOf("CONTACT")
+            else -> emptyList()
+        }
+        /** Отметки объектов модели: отложенное отправлено (SCHEDULED), граница очистки чата (CHAT_CLEARED). */
+        const val MARK_SCHEDULED_SENT = 1
+        const val MARK_CHAT_CLEARED = 2
+        private const val KIND_PREFIX = "OBJECT_KIND_"
         private val NOTIFY_SCOPES = listOf("users", "groups", "channels")
         const val V2_GROUP_PREFIX = "v2g:"
         private val HEX32 = Regex("^[0-9a-f]{32}$")
+
+        /** Объекты вида [kind] (`FOLDER` либо `OBJECT_KIND_FOLDER`) из ответа `viewStateJson`: [{key, value, marks}]. */
+        fun objectsOf(view: JSONObject?, kind: String): JSONArray {
+            val want = if (kind.startsWith(KIND_PREFIX)) kind else KIND_PREFIX + kind
+            val out = JSONArray()
+            val list = view?.optJSONArray("objects") ?: return out
+            for (i in 0 until list.length()) {
+                val o = list.optJSONObject(i) ?: continue
+                if (o.optString("kind") == want) out.put(o)
+            }
+            return out
+        }
+        /** Значение отметки поля [field] объекта (base64 big-endian) числом; нет — 0. */
+        fun markValue(obj: JSONObject, field: Int): Long {
+            val marks = obj.optJSONArray("marks") ?: return 0L
+            for (i in 0 until marks.length()) {
+                val m = marks.optJSONObject(i) ?: continue
+                if (m.optInt("field") != field) continue
+                val bytes = try { java.util.Base64.getDecoder().decode(m.optString("value")) } catch (e: IllegalArgumentException) { return 0L }
+                return bytes.fold(0L) { acc, b -> (acc shl 8) or (b.toLong() and 0xff) }
+            }
+            return 0L
+        }
 
         fun hexToB64(hex: String): String =
             java.util.Base64.getEncoder().encodeToString(ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() })

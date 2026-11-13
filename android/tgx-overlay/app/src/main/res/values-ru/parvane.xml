@@ -48,8 +48,4 @@
   <string name="ParvaneUpgradeStateBlocked">Настройки чатов изменены более новой версией Parvane. Обновите приложение — до этого правки папок, черновиков и контактов на этом устройстве не сохраняются.</string>
   <string name="ParvaneTooNew">Сервер работает на более новой версии протокола. Обновите приложение.</string>
   <!-- spec 035 (US1, T137): разовый перенос данных в новое хранилище -->
-  <string name="ParvaneMigrateTitle">Обновление данных на устройстве</string>
-  <string name="ParvaneMigrateProgress">Переносим чаты и настройки в новое хранилище: шаг %1$d из %2$d</string>
-  <string name="ParvaneMigrateDone">Данные на устройстве обновлены</string>
-  <string name="ParvaneMigrateFailed">Не удалось обновить данные на устройстве. Прежние данные сохранены — приложение попробует снова при следующем запуске.</string>
 </resources>

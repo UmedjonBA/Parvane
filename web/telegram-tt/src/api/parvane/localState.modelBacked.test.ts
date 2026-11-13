@@ -1,7 +1,7 @@
 // spec 035 T118: виды журнала личного состояния (папки, блок-лист, контакты, …) после первого переноса журнала —
 // проекция показа модели движка в памяти, своей копии на диске у web нет. На диске вид лежит, только пока несёт
 // правку пользователя, ещё не принятую журналом (переживает перезагрузку до подключения); запуск без сети
-// показывает сведённое моделью в прошлый раз (`stateViewV1`). Данные выдуманные.
+// показывает сведённое моделью в прошлый раз (`viewStateJson`). Данные выдуманные.
 import {
   beforeEach, describe, expect, it, vi,
 } from 'vitest';
@@ -44,7 +44,7 @@ function makeState(view?: () => StateModelView | undefined) {
     sendUpdate: () => undefined,
     buildLocalContent: () => ({}),
     sendMessage: () => Promise.resolve(undefined),
-    projectOffline: view ? () => Promise.resolve(ref.journal!.projectOffline(view())) : undefined,
+    projectOffline: view ? () => Promise.resolve(ref.journal!.showOffline(view())) : undefined,
   });
   ref.journal = createStateJournal({
     localState: state,
@@ -56,7 +56,12 @@ function makeState(view?: () => StateModelView | undefined) {
 }
 
 function viewOf(folders: { id: number; title: string }[]): StateModelView {
-  return { snapshot: { folders }, faved_stickers: [], write_blocked: false };
+  return {
+    objects: folders.map((f) => ({
+      kind: 'OBJECT_KIND_FOLDER', key: String(f.id), value: f, marks: [],
+    })),
+    write_blocked: false,
+  };
 }
 
 async function restart() {

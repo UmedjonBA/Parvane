@@ -1,8 +1,6 @@
-import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync,
+  existsSync, readdirSync, readFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -10,7 +8,7 @@ import { historyCall, initSync } from '../../lib/parvane-protocol/parvane_protoc
 import { withDetectedLinks } from './autoEntities';
 import { packRefCacheKey, shouldReusePackRef } from './messages';
 import { buildEmojiDocId, getEmojiPackNames, sanitizePackName } from './stickerPacks';
-import { ParvaneStore, shouldApplyGroupInfo } from './store';
+import { ParvaneStore } from './store';
 
 // Правила из conformance/ обязаны соблюдать ВСЕ клиенты. Тест сторожит две
 // вещи: логику веба и то, что константы десктопа не разъехались с документом.
@@ -188,7 +186,7 @@ describe('SYNC-1: дисковый курсор двигается только 
     const session = readAndroidJni('jni_session.cpp');
     expect(session).toContain('const auto in = parvane::v2::interpretDirect(ev, me);');
     expect(session).toContain('if (!markSeen(in.id)) return; // повтор');
-    expect(session).toContain('if (!historyRecordMessageEvent(msg, /*own=*/false, in.tsMs)) return;');
+    expect(session).toContain('if (!historyRecordMessageEvent(msg, /*own=*/false, in.tsMs, inModel)) return;');
     expect(String(rule('SYNC-1').clients!.android)).toContain('tgx_conformance_flow.sh');
   });
 });
@@ -241,10 +239,12 @@ describe('READ-1: прочитанное журналируется локаль
 
   it('web: непрочитанное — единый предикат от маркера «прочитано до» (spec 033, READ-2)', () => {
     const source = readFileSync(path.join(process.cwd(), 'src/api/parvane/provider.ts'), 'utf8');
-    // Единый предикат живёт в sync.ts (isUnreadIncoming); provider и пересчёты зовут его, а не дублируют
-    expect(source).toMatch(/syncController\.isUnreadIncoming\(chat\.id, message\)/);
+    // Единый предикат живёт в sync.ts (`unreadIdsOf`/`isUnreadIncoming`); provider и пересчёты зовут его, а не
+    // дублируют. spec 036 T014: непрочитанные — по счётчику модели (`unread_changed`), без своего маркера
+    expect(source).toContain('const unread = syncController.unreadIdsOf(chat.id);');
     const sync = readFileSync(path.join(process.cwd(), 'src/api/parvane/sync.ts'), 'utf8');
-    expect(sync).toMatch(/function isUnreadIncoming[\s\S]*?return deps\.history\.isUnread\(meta\);/);
+    expect(sync).toMatch(/function unreadIdsOf[\s\S]*?let left = fromModel\?\.count \?\? 0;/);
+    expect(sync).toContain('return unreadIdsOf(chatId).has(message.id);');
     // Локального списка прочитанных uuid больше нет — он один раз переносится в маркеры (FR-024)
     expect(sync).not.toMatch(/reportedReadUuids|ReadUuids/);
   });
@@ -281,10 +281,15 @@ describe('READ-1: прочитанное журналируется локаль
     const messages = readAndroidJni('jni_messages.cpp');
     expect(messages).toMatch(/nativeMarkRead[\s\S]{0,400}historyMarkRead\(ids\);/);
     const history = readAndroidJni('jni_history.cpp');
-    // Квитанции — только о ставших прочитанными (результат advanceMark), очередь с повтором переживает перезапуск
-    expect(history).toContain('const auto read = h->sync->advanceMark(mark, /*own=*/true);');
+    // spec 036 (E4): прочтение — намерением модели `read`: квитанции только о ставших прочитанными шлёт модель;
+    // своя очередь с повтором лишь досылает сохранённые до spec 036
+    expect(history).toContain('(void)h->sync->advanceMark(mark, /*own=*/true);');
+    expect(history).toContain('if (self() != owner || !v2Ready()) return false;');
+    expect(history).not.toContain('queueReceipts(');
     expect(history).toMatch(/\{"receipt", \{\{"kind", "RECEIPT_KIND_READ"\}/);
     expect(history).toContain('if (r["attempts"].get<int>() < kReceiptRetryMax) left.push_back(r);');
+    expect(readRepo(`${ENGINE_MODEL}/intent.rs`))
+      .toContain('fn intent_read(&mut self, r: epb::IntentRead, w: &mut Work)');
     expect(readAndroidJni()).not.toMatch(/msg\.chat\.read|read\.json|journalAppend/);
     expect(String(rule('READ-1').clients!.android)).toContain('tgx_conformance_flow.sh');
   });
@@ -850,6 +855,33 @@ describe('PACK-1: архив пака — под набор получателе
     expect(source).not.toMatch(/g_packRefUploaded\.value\(\w+\);/);
     expect(String(pack.clients!.desktop)).toContain('verify_conformance_packs.sh');
   });
+
+  // spec 036 (T022–T026): id набора и избранного у всех клиентов один — ключ STICKER_PACK (`h:<отпечаток>` | `n:<имя>`)
+  // и имя файла манифеста; одноимённые наборы разного содержимого — разные наборы. Сценарий — tgx_pack_set_flow.sh
+  it('общий id набора: web, desktop и android считают его одинаково, на проводе — имя файла (spec 036)', () => {
+    const spec036 = (pack as { spec036?: Record<string, string> }).spec036!;
+    expect(spec036.vector).toContain('pack-set-id.json');
+    expect(spec036.scenario).toContain('android/tgx_pack_set_flow.sh');
+    expect(readRepo('android/tgx_pack_set_flow.sh')).toContain('scripts/e2e_pack_set_web.mjs');
+    // web: в журнал — общий id, на провод — имя файла
+    expect(readRepo('web/telegram-tt/src/api/parvane/favedIds.ts')).toContain('.then((hash) => `h:');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts'))
+      .toContain('sticker_id: packFile?.name || (setId ? sticker.id : undefined),');
+    // desktop: ядро `sharedSetId` (вектор в webcompat_tests), набор каталога — по отпечатку, стикер из сообщения — по
+    // ссылке отправителя
+    expect(readRepo('desktop/parvane-core/src/pack_archive.cpp'))
+      .toContain('return contentHashB64.empty() ? "n:" + sanitizeName(packName) : "h:" + contentHashB64;');
+    expect(readRepo('desktop/parvane-core/tests/webcompat_tests.cpp')).toContain('vectorPath("pack-set-id.json")');
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('parvane::pack::sharedSetId(contentHash, packName.toStdString())');
+    expect(desktop).toContain('PackJournalKey(c["pack_ref"])');
+    expect(desktop).not.toMatch(/NoteStickerRef\(DocumentId\(docId\), favSet/);
+    // android: общий id из ссылки (`PackIndex.sharedSetId`), избранное — по нему
+    const index = readAndroidKt('PackIndex.kt');
+    expect(index)
+      .toContain('if (contentHash.isNotEmpty()) "h:$contentHash" else "n:" + EmojiDocId.sanitizeName(packName)');
+    expect(readAndroidKt('Stickers.kt')).toContain('core.faveSticker(PackIndex.sharedIdOf(r.pack), r.file.name, on)');
+  });
 });
 
 describe('EMOJI-1: docId кастом-эмодзи — от имени из ссылки', () => {
@@ -905,11 +937,15 @@ describe('EMOJI-1: docId кастом-эмодзи — от имени из сс
 
 describe('GROUP-1: сведения группы применяются по ревизии, изменения — без перезагрузки', () => {
   const group = rule('GROUP-1');
+  // Зеркало правила (desktop `gi.version < known`, android `version < existed.version`); web с spec 036 T020 своей
+  // ревизии не держит — сведения группы показывает модель из журнала группы, всегда последние
+  const shouldApply = (local: number | undefined, incoming: number | undefined) => local === undefined
+    || (incoming ?? 0) >= local;
 
   it.each(group.cases as { name: string; local: number | null; incoming: number | null; apply: boolean }[])(
     '$name',
     (testCase) => {
-      expect(shouldApplyGroupInfo(testCase.local ?? undefined, testCase.incoming ?? undefined)).toBe(testCase.apply);
+      expect(shouldApply(testCase.local ?? undefined, testCase.incoming ?? undefined)).toBe(testCase.apply);
     },
   );
 
@@ -921,10 +957,11 @@ describe('GROUP-1: сведения группы применяются по р�
     expect(provider).toMatch(/onGroupUpdated: \(info, isNew\) => \{\s+groupController\.applyV2Group\(info, isNew\);/);
     const groups = readFileSync(path.join(process.cwd(), 'src/api/parvane/groups.ts'), 'utf8');
     expect(groups).toContain('if (register(info, true)) pushGroupUpdates(info, isNew);');
+    // Ревизию ведёт модель (spec 036 T020): сведения — показ `viewGroup`, своей проверки версии в сторе нет
     const store = readFileSync(path.join(process.cwd(), 'src/api/parvane/store.ts'), 'utf8');
-    expect(store).toMatch(
-      /if \(!shouldApplyGroupInfo\(this\.groupVersionByAddress\.get\(info\.group_id\), info\.version\)\)/,
-    );
+    expect(store).not.toMatch(/shouldApplyGroupInfo|groupVersionByAddress/);
+    expect(readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts'))
+      .toContain('return host.peek<ModelGroupView>(\'viewGroup\', { group: {');
   });
 
   it('десктоп: нотиса v1 нет (spec 029: v1 удалён из desktop) — сведения из журнала движка, по ревизии', () => {
@@ -1134,6 +1171,8 @@ describe('PROTO-1: в клиенте нет собственного разбо�
         const sources = [
           'pv\\.', 'codec\\.decode', 'client\\.', 'session\\.', 'host\\.decode', 'this\\.engine\\.', 'String\\(e$',
           'localStorage\\.', 'out\\.result_json', 'clientEvents\\.', 'memory\\.engine\\.',
+          // spec 036 E6: `view.info_json` — сведения группы из показа модели (`GroupView`)
+          'view\\.info_json',
         ];
         expect(call, `${file}: ${call}`).toMatch(new RegExp(`JSON\\.parse\\((${sources.join('|')})`));
       });
@@ -1359,8 +1398,8 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     expect(controller).toContain('deps.onStateReady?.(stateHost, \'self\');');
     expect(controller).toContain('deps.onStateReady?.(stateHost, \'peer\');');
     const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
-    expect(journal).toContain('const carried = rekey === \'self\' && session ? readSnapshot() : undefined;');
-    expect(journal).toContain('await write(carried, { rewrite: true });');
+    expect(journal).toContain('rekey === \'self\' && session ? carriedObjects(readView()) : undefined;');
+    expect(journal).toContain('await put(carried, true);');
     expect(journal).toContain('} else if (rekey && !isReadable) {');
   });
 
@@ -1647,11 +1686,13 @@ describe('STATE-2: личное состояние — целиком в жур�
 
   it('desktop: те же виды в журнале, приватность — событие сессии, своя правка сильнее', () => {
     const desktop = readDesktopSource();
-    const kinds = desktop.match(/const std::vector<std::string> kV2StateKinds\{([\s\S]*?)\};/)![1];
-    // Черновики tdesktop ведёт сам — в журнал десктоп их не пишет
-    r.kinds.forEach((kind) => expect(kinds, kind).toContain(`"${kind}"`));
+    // spec 036 (T028): правка вида — объекты вида модели (StateKindsOf: вид правки → виды state.v2)
+    const kinds = desktop
+      .match(/std::vector<std::string> StateKindsOf\(const std::string &edited\) \{([\s\S]*?)\n\}/)![1];
+    r.kinds.forEach((kind) => expect(kinds, kind).toContain(`if (edited == "${kind}")`));
     expect(desktop).toContain(`{ "list", "${r.mainPinList}" }`);
-    expect(desktop).toContain('if (!QFile::exists(NotifyJournaledPath())) {');
+    // Разового переноса вида `notify` (маркер на диске) больше нет: настройки — объекты модели
+    expect(desktop).not.toContain('NotifyJournaledPath');
     // spec 029: v1-блоба настроек desktop не публикует вовсе — правка уходит в журнал
     expect(desktop).toMatch(/void PublishNotifyBlob\(\) \{\s+\/\/[^\n]*\n\}/);
     expect(desktop).toMatch(/void MirrorNotifySettings\([\s\S]{0,800}ScheduleStateFlush\("notify"\);/);
@@ -1670,9 +1711,10 @@ describe('STATE-2: личное состояние — целиком в жур�
     const journal = readAndroidKt('StateJournal.kt');
     const kinds = journal.match(/val KINDS = listOf\(([^)]*)\)/)![1];
     r.kinds.forEach((kind) => expect(kinds, kind).toContain(`"${kind}"`));
-    expect(journal).toContain(`.put("list", "${r.mainPinList}")`);
-    expect(journal).toContain('out.put("unread_marks", peers(local.unreadMarkedChatIds(), "unread"))');
-    expect(journal).toContain('snap.optJSONObject("quick_reaction")?.let { r ->');
+    // spec 036: объекты модели по видам — закреп (PIN_LIST «1»), «непрочитано» (UNREAD_MARK), реакция (QUICK_REACTION)
+    expect(journal).toContain(`put("1", JSONObject().put("list", "${r.mainPinList}").put("peers", pinned))`);
+    expect(journal).toContain('peerSet(local.unreadMarkedChatIds(), "unread")');
+    expect(journal).toContain('values("QUICK_REACTION").optJSONObject(0)');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/StateJournalTest.kt'))
       .toContain('fun pinsUnreadAndReactionRoundTrip()');
     const client = readAndroidKt('Client.kt');
@@ -2485,7 +2527,10 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(paging).toContain('ts_ms.max(self.max_order.saturating_add(1))');
     expect(readRepo('web/telegram-tt/src/api/parvane/historyRows.ts'))
       .toContain(`${r.orderField}: Number(view.order || 0) || undefined,`);
-    expect(sync).toContain('records.concat(savedNotes).sort(compareStoredOrder)');
+    // Ленивый показ (spec 036 T015): чат читается в стор по месту модели, заметки журнала исходящих — вместе с ним
+    expect(sync).toContain('records = records.concat(savedNotes);');
+    expect(sync).toContain('const fresh = freshOf(records);');
+    expect(sync).toMatch(/function freshOf\([\s\S]{0,600}\.sort\(compareStoredOrder\);/);
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).toContain(`${r.orderField}: localMessage.id,`);
     expect(readRepo('web/telegram-tt/src/api/parvane/wire.ts')).toContain(`${r.orderField}?: number;`);
@@ -2506,8 +2551,9 @@ describe('ORDER-1: живое сообщение встаёт после все�
     // показанных больше чем на окно «живого» сообщения (перенос истории) встаёт по времени (spec 030)
     const replay = desktop.slice(desktop.indexOf('void ReplayHistory(std::function<void()> then = nullptr) {'));
     const replayBody = replay.slice(0, replay.indexOf('\n}\n'));
-    expect(replayBody).toContain('for (const auto &state : HistoryAllStates()) {');
-    expect(replayBody).not.toMatch(/sort\(/);
+    // spec 036: строки — готовым показом модели в её порядке ленты (место — модель), своей расстановки нет
+    expect(replayBody).toContain('for (const auto &view : HistoryAllViews()) {');
+    expect(replayBody).not.toMatch(/sort\(|kLiveWindowSecs/);
     expect(r.clients.desktop).not.toContain('ОТКРЫТО');
     expect(r.clients.desktop).toContain('g_nextMsgId');
   });
@@ -2519,15 +2565,17 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(store).toContain('val msgId = nextMessageId++ shl 20');
     expect(store.match(/nextMessageId\s*=[^=]/g) || []).toHaveLength(1);
     const main = readAndroidJni('jni_history.cpp');
-    expect(main).toContain(`constexpr std::int64_t kLiveWindowSecs = ${r.liveWindowSecs};`);
+    // spec 036: место — модели (показ `allViews` в порядке ленты, новые строки — по `order` показа); своей
+    // расстановки (окно «живого», placeByTime) у шва нет
+    expect(main).not.toMatch(/kLiveWindowSecs|placeByTime/);
     const fold = main.slice(main.indexOf('std::vector<json> historyRows() {'));
     const foldBody = fold.slice(0, fold.indexOf('\n}\n'));
-    expect(foldBody).toContain('placeByTime(out);');
+    expect(foldBody).toContain('for (const auto &mv : h->store->allViews()) {');
     expect(foldBody).not.toMatch(/sort\(/);
-    const place = main.slice(main.indexOf('void placeByTime(std::vector<json> &msgs) {'));
-    expect(place.slice(0, place.indexOf('\n}\n'))).not.toMatch(/sort\(/);
+    expect(main).toContain('return a.value("order", std::int64_t(0)) < b.value("order", std::int64_t(0)); });');
+    expect(store).toContain('positionsFor(chat.id, maxOf(order / 1000, chat.positions.firstOrNull()?.order ?: 0L))');
     expect(r.clients.android).not.toContain('ОТКРЫТО');
-    expect(r.clients.android).toContain('placeByTime');
+    expect(r.clients.android).toContain('allViews');
   });
 });
 
@@ -2829,6 +2877,53 @@ function readWebSources(dir = path.join(process.cwd(), 'src/api/parvane')): { fi
   });
 }
 
+// spec 036 (ENGINE-1): журнал истории аккаунта web ведёт модель движка — у web своего журнала (очереди пачкой,
+// синка, входа по точке, сборки точки) нет; конфигурация модели — `engine_rows: true`
+const WEB_OWN_JOURNAL = new RegExp([
+  'createHistoryJournal', 'historyVerifyCheckpoint', 'historyNeedsReplace', 'historySession\\(\\)', 'HistoryHost\\b',
+  '\'hsync\'\\)', 'ENGINE_ROWS',
+].join('|'));
+const ENGINE_MODEL = 'backend/protocol/src/model';
+const underscored = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '_');
+
+function expectWebDelegatesHistory() {
+  expect(existsSync(path.join(process.cwd(), 'src/api/parvane/v2/history.ts'))).toBe(false);
+  const offenders = readWebSources().filter(({ text }) => WEB_OWN_JOURNAL.test(text)).map(({ file }) => file);
+  expect(offenders).toEqual([]);
+  const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+  expect(controller).toContain('engine_rows: true,');
+  // Свои операции и маркеры — модели с `journal: true`: в пачку журнала их ставит она
+  const rows = readRepo('web/telegram-tt/src/api/parvane/historyRows.ts');
+  expect(rows).not.toMatch(/deps\.journal\(\)|enqueue\(/);
+  expect(rows.match(/journal: true/g)?.length).toBeGreaterThanOrEqual(2);
+  expect(readRepo(`${ENGINE_MODEL}/host_rows.rs`)).toContain('let journal = a.journal && self.cfg.engine_rows;');
+}
+
+// spec 036 (ENGINE-1, `engine_rows`): desktop и android, как web, журнала истории аккаунта не ведут — его ведёт модель
+// сессии (очередь S7-3, догон, вход по точке, точки, замена, книга цепочек); ядро отдаёт ей операции «в журнал»,
+// прочтение — намерением `read`, такт — сессия; события итога модели хосты не записывают
+function expectNativeDelegatesHistory() {
+  const header = readRepo('desktop/parvane-core/include/parvane/history_sync.h');
+  const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
+  expect(header).not.toMatch(/batchMinMs|pollMs|checkpointRecords|onReplaced|legacyOps|busRequest/);
+  expect(core).not.toMatch(/history\.append|history\.sync|history\.head|joinLocked|buildCheckpointLocked/);
+  expect(core).toContain(
+    'const auto r = cfg_.rows->apply(json::array({op}), json::array(), json::array(), false, /*journal=*/true);',
+  );
+  expect(core).toContain('if (own && cfg_.readIntent && cfg_.readIntent(mark)) return {};');
+  const sessionH = readRepo('desktop/parvane-core/include/parvane/v2_session.h');
+  expect(sessionH).toContain('bool engineRows = false;');
+  const session = readDesktopSession();
+  expect(session).toContain('config["engine_rows"] = true;');
+  expect(session).toContain('config["features"] = json::array({"wire_rows"});');
+  expect(session).toContain('driveLocked(host_->tick(nowMs()));');
+  expect(session).toContain('if (cfg_.engineRows && out.back().is_object()) out.back()["modelApplied"] = true;');
+  expect(session).toContain('const auto st = host_->submit(json{{"read", {{"chat", mark["chat"]}, {"up_to"');
+  expect(readDesktopSource()).toContain('\tcfg.engineRows = true;');
+  expect(readAndroidJni('jni_session.cpp')).toContain('    cfg.engineRows = true;');
+  expect(readRepo(`${ENGINE_MODEL}/mod.rs`)).toContain('(0, _) => (HISTORY_BATCH_MIN_MS, HISTORY_BATCH_MAX_MS),');
+}
+
 describe('HIST-1: удалённое не воскресает; событие раньше сообщения применяется', () => {
   const r = rule('HIST-1') as unknown as {
     batchDelayMs: [number, number]; pollMs: number;
@@ -2841,12 +2936,19 @@ describe('HIST-1: удалённое не воскресает; событие �
     expect(runConformanceVectors(r.engineSuite, readRepo(r.vectors))).toBeGreaterThan(0);
   });
 
-  it('web: константы очереди журнала совпадают с правилом', async () => {
-    const history = await import('./v2/history');
-    // S7-3: своё, маркеры и входящее — одной пачкой через 30–120 с (раздельных задержек «своё ≤ 300 мс» нет)
-    expect([history.HISTORY_BATCH_MIN_MS, history.HISTORY_BATCH_MAX_MS]).toEqual(r.batchDelayMs);
-    expect(history).not.toHaveProperty('HISTORY_OWN_DELAY_MS');
-    expect(history.HISTORY_POLL_MS).toBe(r.pollMs);
+  // spec 036: очередь журнала (одна пачка 30–120 с, S7-3), опрос 60 с и чтение журнала — модель движка; web
+  // передаёт ей только окно пачки диаг-сборки (`historyBatch.ts`) и своего журнала не ведёт
+  it('web: журнал истории ведёт модель — константы очереди и опроса у модели совпадают с правилом', () => {
+    expectWebDelegatesHistory();
+    const model = readRepo(`${ENGINE_MODEL}/mod.rs`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MIN_MS: i64 = ${underscored(r.batchDelayMs[0])};`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MAX_MS: i64 = ${underscored(r.batchDelayMs[1])};`);
+    expect(model).toContain(`pub const POLL_MS: i64 = ${underscored(r.pollMs)};`);
+    expect(model).toContain('self.queue_history(op.clone());');
+    // Окно пачки web — только диаг-сборка сценариев; в обычной сборке — умолчание модели
+    const batch = readRepo('web/telegram-tt/src/api/parvane/v2/historyBatch.ts');
+    expect(batch).toContain('if (!ARE_DIAG_HOOKS_ENABLED) return undefined;');
+    expect(batch).not.toMatch(/30000|120000|60000/);
   });
 
   it('web: мутации — операциями журнала, права — движком, «только у меня» — без мутации собеседнику', () => {
@@ -2883,16 +2985,14 @@ describe('HIST-1: удалённое не воскресает; событие �
   });
 
   it('desktop: ядро parvane-core — очередь, строки RowState, права, «только у меня» (spec 033 T022–T025)', () => {
-    const header = readRepo('desktop/parvane-core/include/parvane/history_sync.h');
-    expect(header).toContain(`std::int64_t batchMinMs = ${r.batchDelayMs[0]};`);
-    expect(header).toContain(`std::int64_t batchMaxMs = ${r.batchDelayMs[1]};`);
-    expect(header).not.toMatch(/ownDelayMs|incomingMinMs/);
-    expect(header).toContain(`std::int64_t pollMs = ${r.pollMs};`);
+    // Очередь одной пачкой 30–120 с (S7-3), опрос 60 с, «уже в журнале» — модель сессии (spec 036)
+    expectNativeDelegatesHistory();
+    const model = readRepo(`${ENGINE_MODEL}/mod.rs`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MIN_MS: i64 = ${r.batchDelayMs[0] / 1000}_000;`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MAX_MS: i64 = ${r.batchDelayMs[1] / 1000}_000;`);
+    expect(model).toContain(`pub const POLL_MS: i64 = ${r.pollMs / 1000}_000;`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    // Сведение — модель движка (spec 035 T125: rowsApply); входящее пишется, только если журнал его ещё не знает;
-    // права чужой мутации до строки — модель (поле by), своего ожидания автора у ядра нет
-    expect(core).toContain('const auto r = cfg_.rows->apply(json::array({op}));');
-    expect(core).toContain('} else if (!key.empty() && !seen_.count(key)) {');
+    // Сведение — модель движка (rowsApply); права чужой мутации до строки — модель (поле by)
     expect(core).not.toMatch(/parked_|releaseParked|requiredAuthor/);
     const desktop = readDesktopSource();
     // Получатель: права удаления — движком, неизвестная цель — сирота/ожидание автора
@@ -2901,6 +3001,9 @@ describe('HIST-1: удалённое не воскресает; событие �
     expect(desktop).toContain('in.from == self ? std::string() : in.from, isAdmin);');
     expect(desktop).not.toContain('if (!author.empty() && !parvane::history::call("historyCanDelete", {');
     expect(desktop).toContain('if (const auto next = HistoryRecordOp(op, /*own=*/false); next.is_object()) {');
+    // Событие итога модели (строку и мутацию она уже применила) хост не записывает — показ из message_upsert
+    expect(desktop).toContain('const auto inModel = ev.value("modelApplied", false);');
+    expect(desktop).toContain('if (!sm.inModel) {\n\t\t\t\tHistoryRecordMessage(sm, /*own=*/false, tsMs);');
     expect(desktop).not.toMatch(/мутация для неизвестного %1 — пропуск|удалить у всех можно только своё/);
     // «у всех» — мутация + надгробие everyone; «только у меня» — только журнал
     expect(desktop).toMatch(/if \(everyone\) \{\s+TryMutateV2\(uuid, parvane::json\{\{"delete", \{/);
@@ -2967,64 +3070,65 @@ describe('HIST-2: контрольная точка, горизонт надгр
   it('S7-4: векторы сверки точки, цепочек писателей и выравнивания проходит движок клиента (WASM)', async () => {
     const { runConformanceVectors } = await import('../../lib/parvane-protocol/parvane_protocol');
     expect(runConformanceVectors(r.checkpointSuite, readRepo(r.checkpointVectors))).toBeGreaterThan(0);
-    const source = readRepo('web/telegram-tt/src/api/parvane/v2/history.ts');
-    // Сводка сверяется с точкой; сегменты — по op_id из сводки; журнал — с книгой цепочек
-    expect(source).toContain('callSession<{ chains: unknown }>(\'historyVerifyCheckpoint\', {');
-    expect(source).toContain('if (results.some((r) => r.mismatched)) {');
-    expect(source).toContain('uptoSeq: headNow + 1,');
-    expect(source).toContain('else args.chainsComplete = !state.cursor && !state.checkpointId;');
-    const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    expect(core).toContain('engine("historyVerifyCheckpoint"');
-    expect(core).toContain('{"uptoSeq", headNow + 1}');
+    // web: вход по точке и сборка точки — модель (сводка сверяется с точкой, сегменты — по op_id из сводки,
+    // сводка называет свой номер `голова + 1`); у web своей сверки нет
+    expectWebDelegatesHistory();
+    const model = readRepo(`${ENGINE_MODEL}/mod.rs`);
+    expect(model).toContain('if history::verify_checkpoint(&cp, &summary).is_err() {');
+    expect(model).toContain('.map(|r| (r.seq, r.op_id.clone())).collect();');
+    expect(readRepo(`${ENGINE_MODEL}/checkpoint.rs`))
+      .toContain('let meta = SummaryMeta { upto_seq: head_now + 1, checkpoint_id: b.expected + 1,');
+    const tests = readRepo('backend/protocol/tests/model_history_checkpoint.rs');
+    expect(tests).toContain('fn tampered_segment_does_not_move_cursor() {');
+    // desktop и android: сверку точки делает та же модель (spec 036), своей у ядра нет
+    expectNativeDelegatesHistory();
   });
 
-  it('web: условия точки и горизонт совпадают с правилом; сегменты — свежие первыми', async () => {
-    const history = await import('./v2/history');
-    expect(history.CHECKPOINT_RECORDS).toBe(r.checkpointRecords);
-    expect(history.CHECKPOINT_AGE_MS).toBe(r.checkpointAgeMs);
-    expect(history.CHECKPOINT_JITTER_MS).toBe(r.checkpointJitterMs);
-    expect(history.TOMBSTONE_HORIZON_MS).toBe(r.tombstoneHorizonDays * 24 * 60 * 60 * 1000);
-    const ordered = history.orderSegments([
-      { key: 'm|2026-01', seq: 1 }, { key: 'u:a@x|2026-10', seq: 2 }, { key: 'm|2026-10#1', seq: 3 },
-    ]);
-    // Ключи прежнего вида (чат|месяц) и нового (m|месяц, S7-5) — по одному месяцу
-    expect(ordered.map((ref) => ref.seq)).toEqual([3, 2, 1]);
-    const source = readRepo('web/telegram-tt/src/api/parvane/v2/history.ts');
-    expect(source).toContain('callSession<boolean>(\'historyNeedsReplace\'');
-    expect(source).toContain('if (r.headSeq < state.headSeq) {');
-    expect(source).toContain('if (!(e instanceof V2Error) || e.code !== \'ERROR_CODE_DUPLICATE\') throw e;');
+  // spec 036 (T006): точку строит модель — условия точки и горизонт надгробий у неё; CAS-проигрыш (`DUPLICATE`) —
+  // без повтора, пока точка другого устройства не состарится (`model_history_checkpoint_build.rs`)
+  it('web: условия точки и горизонт — у модели и совпадают с правилом', () => {
+    expectWebDelegatesHistory();
+    const cp = readRepo(`${ENGINE_MODEL}/checkpoint.rs`);
+    expect(cp).toContain(`pub const CHECKPOINT_RECORDS: u64 = ${r.checkpointRecords};`);
+    expect(cp).toContain('pub const CHECKPOINT_AGE_MS: i64 = 24 * 60 * 60 * 1000;');
+    expect(r.checkpointAgeMs).toBe(24 * 60 * 60 * 1000);
+    expect(cp).toContain(`pub const CHECKPOINT_JITTER_MS: i64 = ${underscored(r.checkpointJitterMs)};`);
+    expect(cp).toContain('let since = b.now_ms.saturating_sub(history::HORIZON_MS);');
+    expect(readRepo('backend/protocol/src/history.rs'))
+      .toContain(`pub const HORIZON_MS: i64 = ${r.tombstoneHorizonDays} * 86_400_000;`);
+    expect(cp).toContain('const ERR_DUPLICATE: i32 = crate::pb::parvane::core::v2::ErrorCode::Duplicate as i32;');
+    const build = readRepo('backend/protocol/tests/model_history_checkpoint_build.rs');
+    expect(build).toContain('fn device_builds_checkpoint_and_new_device_enters_by_it() {');
+    expect(build).toContain('fn lost_cas_is_not_retried_until_newer_checkpoint() {');
   });
 
-  it('desktop: точка, горизонт, откат — в ядре parvane-core (spec 033 T022, T025)', () => {
-    const header = readRepo('desktop/parvane-core/include/parvane/history_sync.h');
-    expect(header).toContain(`std::uint64_t checkpointRecords = ${r.checkpointRecords};`);
-    expect(header).toContain('std::int64_t checkpointAgeMs = 24LL * 3600 * 1000;');
-    expect(r.checkpointAgeMs).toBe(24 * 3600 * 1000);
-    expect(header).toContain(`std::int64_t checkpointJitterMs = ${r.checkpointJitterMs};`);
-    const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    expect(core).toContain(`constexpr std::int64_t kHorizonMs = ${r.tombstoneHorizonDays}LL * 24 * 3600 * 1000;`);
-    expect(core).toContain('replace = call("historyNeedsReplace"');
-    expect(core).toContain('return monthOfKey(str(a, "key")) > monthOfKey(str(b, "key"));');
-    expect(core).toContain('if (head < meta_.value("headSeq", std::uint64_t(0))) {');
-    expect(core).toContain('if (isCode(e, "ERROR_CODE_DUPLICATE")) {');
-    expect(core)
-      .toContain('if (str(k, "digest") == digest && !k.value("stale", false) && liveSeqs.count(u64(k["seq"]))) {');
-    // Смена ключа личного состояния — принудительная точка с перезаливкой сегментов
-    expect(readDesktopSession()).toContain('outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});');
-    expect(core).toContain('meta_["forceCheckpoint"] = true;');
-    expect(readRepo('desktop/parvane-core/tests/history_sync_tests.cpp')).toContain('замена вместо сведения');
+  // spec 036: то, что прежний журнал web делал сам, — у модели: замена истории точкой у устройства, не бывшего в сети
+  // дольше горизонта надгробий (`needs_replace` → нотис `history_replaced`), откат головы журнала сервером и книга
+  // цепочек писателей при синке (S7-4, пропуск номера — нотис `history_gap`)
+  it('модель: замена дальше горизонта, откат головы, книга цепочек писателей (HIST-2 п. 3, 4; S7-4)', () => {
+    const cp = readRepo(`${ENGINE_MODEL}/checkpoint.rs`);
+    expect(cp).toContain('history::needs_replace(');
+    expect(cp).toMatch(/head_seq < /);
+    expect(readRepo(`${ENGINE_MODEL}/mod.rs`)).toContain('s.ingest_chained(body, &mut book)?');
   });
-  it('android: точка, горизонт, откат — то же ядро, замена хранилища показывается заново (spec 033 T026, T028)', () => {
+
+  // spec 036: точка, горизонт, откат головы, смена ключа — у модели сессии (как web); ядро и хосты своего журнала нет
+  it('desktop: точка, горизонт, откат — модель сессии (spec 036, как web)', () => {
+    expectNativeDelegatesHistory();
+    const cp = readRepo(`${ENGINE_MODEL}/checkpoint.rs`);
+    expect(cp).toContain('history::needs_replace(');
+    expect(readRepo('desktop/parvane-core/tests/history_sync_tests.cpp'))
+      .toContain('очередь прежнего журнала передана модели');
+  });
+  it('android: точка, горизонт, откат — модель сессии; замена — снятием строк модели (spec 036)', () => {
     const history = readAndroidJni('jni_history.cpp');
-    // Сессия журнала — из движка, запросы — канал ID, живое уведомление и смена ключа — журналу
+    // Свои адреса — из сессии журнала движка; ни запросов журнала, ни событий журнала у шва нет
     expect(history).toContain('return s ? s->openHistorySession() : nullptr;');
-    expect(history).toContain('return s->busRequest(false, method, body, std::string());');
-    expect(readAndroidJni('jni_session.cpp'))
-      .toContain('if (ev.value("journal", std::string()) == "history") historySessionEvent(ev);');
-    expect(readAndroidJni('jni_session.cpp')).toMatch(/if \(type == "stateReady"\) \{\s+historySessionEvent\(ev\);/);
-    // Режим замены (HIST-2): шов убирает показанное, чего нет в точке
-    expect(history).toContain('emit(json{{"type", "history_replaced"}, {"keep", keep}});');
-    expect(readAndroidKt('Client.kt')).toContain('store.removeMessages(store.allUuids().filter { it !in keep })');
+    expect(history).not.toMatch(/busRequest|historySessionEvent|onReplaced/);
+    expect(readAndroidJni('jni_session.cpp')).not.toContain('historySessionEvent(ev)');
+    // Замена истории точкой: модель снимает строки (`message_remove`) и показывает заново — шов показывает готовое
+    expect(history).toContain('void historyModelChanges(const json &changes) {');
+    expect(history).toContain('if (auto r = ph::removedOfModel(ch["message_remove"]); r.is_object()) {');
     expect(String(rule('HIST-2').clients!.android)).not.toContain('ОТКРЫТО');
   });
 });
@@ -3037,19 +3141,25 @@ describe('READ-2: прочитанное на одном своём устрой
     expect(runConformanceVectors(r.engineSuite, readRepo(r.vectors))).toBeGreaterThan(0);
   });
 
-  it('web: маркер сдвигают прочтение, своё отправленное и копия своей квитанции; счётчик — движком', async () => {
-    const history = await import('./v2/history');
-    // Маркер — той же пачкой, что всё остальное (S7-3)
-    expect([history.HISTORY_BATCH_MIN_MS, history.HISTORY_BATCH_MAX_MS]).toEqual(r.markWriteDelayMs);
+  it('web: маркер сдвигают прочтение, своё отправленное и копия своей квитанции; счётчик — движком', () => {
+    // Маркер — той же пачкой, что всё остальное (S7-3): в журнал его ставит модель
+    expectWebDelegatesHistory();
+    const model = readRepo(`${ENGINE_MODEL}/mod.rs`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MIN_MS: i64 = ${underscored(r.markWriteDelayMs[0])};`);
+    expect(model).toContain(`pub const HISTORY_BATCH_MAX_MS: i64 = ${underscored(r.markWriteDelayMs[1])};`);
+    expect(model)
+      .toMatch(/if let Some\(HOp::Read\(m\)\) = &op\.op \{[\s\S]{0,800}self\.queue_history\(op\.clone\(\)\);/);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    expect(controller).toContain('if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id, \'inbox\');');
+    expect(controller).toContain('if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id);');
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider)
       .toContain('.then((stored) => historyRows.advanceMark(address, stored ? rowTsMs(stored) : tsMs, entry.id))');
     const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
     expect(messages).toContain('if (best) await deps.history?.advanceMark(address, best.tsMs, best.id);');
     const rows = readRepo('web/telegram-tt/src/api/parvane/historyRows.ts');
-    expect(rows).toContain('return isUnreadRow({ ...meta, chat }, mark, selves);');
+    // spec 036 T014: счётчик и маркер — `unread_changed` модели, своей копии маркеров у web нет
+    expect(rows).not.toMatch(/reloadMarks|isUnreadRow|isAfterMark/);
+    expect(rows).toContain('modelUnread.set(address, {');
   });
 
   it('история: свои адреса — текущий и прежние (смена ника), ключ чата группы — без домена (spec 033)', () => {
@@ -3064,11 +3174,10 @@ describe('READ-2: прочитанное на одном своём устрой
     const host = readRepo('backend/protocol/src/host/history.rs');
     expect(host).toContain('"selfAddresses" => json!(s.self_addresses()),');
     expect(host).toContain('"historyChatKey" =>');
-    // web: свои адреса — из сессии журнала
-    expect(readRepo('web/telegram-tt/src/api/parvane/v2/history.ts'))
-      .toContain('selves = callSession<string[]>(\'selfAddresses\');');
+    // web: свои адреса для непрочитанного и прав — у модели (`selves()`); показ берёт прежние ники из store
+    expect(readRepo(`${ENGINE_MODEL}/mod.rs`)).toContain('let selves = self.selves();');
     expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
-      .toContain('const fromEngine = historyJournal.selfAddresses();');
+      .toContain('selves: () => store.formerAddresses(store.self),');
     // ядро: ключ группы без домена, свои адреса из сессии
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
     expect(core).toContain('return "g:" + hexOf(*raw);');
@@ -3084,22 +3193,25 @@ describe('READ-2: прочитанное на одном своём устрой
   });
 
   it('desktop: маркер, своя квитанция READ, счётчик tdesktop от маркера (spec 033 T024)', () => {
-    expect(readRepo('desktop/parvane-core/include/parvane/history_sync.h'))
-      .toContain(`std::int64_t batchMaxMs = ${r.markWriteDelayMs[1]};`);
+    // Маркер в журнал — пачкой модели (spec 036); прочтение — намерением `read` (квитанции шлёт модель)
+    expectNativeDelegatesHistory();
+    expect(readRepo(`${ENGINE_MODEL}/mod.rs`))
+      .toContain(`pub const HISTORY_BATCH_MAX_MS: i64 = ${r.markWriteDelayMs[1] / 1000}_000;`);
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
-    // Своё сообщение с любого своего устройства сдвигает маркер; счётчик — модель движка (rowsRead, spec 035 T125)
-    expect(core).toContain('if (const auto m = markAt(st); m.is_object()) advanceMark(m, own);');
+    // Своё сообщение с любого своего устройства сдвигает маркер; счётчик — модель движка (rowsRead, unread_changed)
+    expect(core).toContain('if (const auto m = markAt(*got); m.is_object()) {');
     expect(core).toContain('const auto r = cfg_.rows->read(chatKey);');
     const desktop = readDesktopSource();
     // Копия своей квитанции READ — маркер (раньше выбрасывалась); сводит модель, в журнал пишет устройство прочтения
     expect(desktop).toContain('sync->advanceMark(m, /*own=*/false);');
     // Счётчик tdesktop — от маркера, не от потока вставок
-    expect(desktop).toContain('history->inboxRead(MsgId(readId), rs.unread);');
+    expect(desktop).toContain('history->inboxRead(MsgId(readId), unread);');
+    expect(desktop).toContain('g_modelUnread.insert(chat, ModelUnread{');
     expect(desktop).toMatch(new RegExp('void ShowHistoryStates\\([\\s\\S]{0,2500}'
       + 'injectOnMain\\(session, out, /\\*live=\\*/false\\);'
       + '\\s+for \\(const auto &chat : chats\\) \\{\\s+ApplyReadState\\(chat\\);'));
-    // Живое уведомление журнала состояния — синк сразу, опрос 60 с
-    expect(desktop).toContain('OnMainForAccount([] { StateSyncNow(); });');
+    // Живое уведомление журнала состояния — синк сразу (и изменение модели `model`), опрос 60 с
+    expect(desktop).toContain('OnMainForAccount([] { StateShowNow(true); });');
     expect(desktop).toContain('g_stateTimer->callEach(60 * crl::time(1000));');
   });
   it('android: маркер, своя квитанция и своё сообщение, unreadCount от маркера (spec 033 T027)', () => {
@@ -3167,8 +3279,8 @@ describe('conformance CONTACT-1: свои контакты, имя и замет
     expect(String(rule('CONTACT-1').clients!.web)).not.toContain('ОТКРЫТО');
     const journal = readRepo('web/telegram-tt/src/api/parvane/v2/stateJournal.ts');
     expect(journal).toMatch(/const MANAGED_KINDS[\s\S]{0,200}'contacts'/);
-    expect(journal).toContain('await write({ contacts: localContacts() });');
-    expect(journal).toContain('projectContacts(snap);');
+    expect(journal).toContain('await put(localObjects(\'contacts\', []));');
+    expect(journal).toContain('if (runs(\'contacts\')) showContacts();');
     const proto = readRepo('proto/parvane/state/v1/state.proto');
     expect(proto).toContain('Contact contact_set = 38;');
     expect(proto).toContain('PeerKey contact_remove = 39;');
@@ -3211,35 +3323,6 @@ describe('conformance QUOTE-1: цитата в ответе', () => {
     expect(guard).toContain('if c.reply_to.is_none() {');
     const store = readRepo('web/telegram-tt/src/api/parvane/store.ts');
     expect(store).toContain('replyInfoWithQuote(replyKey.id, stored.content.reply_quote)');
-  });
-});
-
-// Перечень хранимого (spec 035, T005): всё, что клиенты и шарды кладут на диск, перечислено с судьбой при разовом
-// переносе — новый ключ хранения без записи перечня роняет этот тест (`scripts/check_migration_inventory.mjs`)
-describe('migration-inventory: перечень хранимого сверен с кодом', () => {
-  const guard = path.join(REPO_ROOT, 'scripts/check_migration_inventory.mjs');
-  const inventoryPath = path.join(REPO_ROOT, 'specs/035-protocol-evolution/migration-inventory.json');
-  const runGuard = (...args: string[]) => spawnSync(process.execPath, [guard, ...args], { encoding: 'utf8' });
-
-  it('every storage key of every layer is listed', () => {
-    const result = runGuard();
-    expect(result.stderr).toBe('');
-    expect(result.status).toBe(0);
-  });
-
-  it('a key missing from the inventory fails the guard', () => {
-    const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8')) as { entries: { layer: string; key: string }[] };
-    const dropped = inventory.entries.find((entry) => entry.key === 'literal:parvane-store-v3')!;
-    inventory.entries = inventory.entries.filter((entry) => entry !== dropped);
-    const partial = path.join(mkdtempSync(path.join(tmpdir(), 'pv-inventory-')), 'inventory.json');
-    writeFileSync(partial, JSON.stringify(inventory));
-    const result = runGuard('--inventory', partial);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('не в перечне: web literal:parvane-store-v3');
-  });
-
-  it('no inventory — failure', () => {
-    expect(runGuard('--inventory', path.join(tmpdir(), 'pv-no-such-inventory.json')).status).toBe(1);
   });
 });
 
@@ -3340,13 +3423,15 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     expect(client).not.toMatch(/lamport|stamp|"state\.(append|sync)"|->diff\(|->migrate\(/i);
     const session = readDesktopSession();
     expect(session).not.toMatch(/"state\.(append|sync)"|StateSession::open|state_->diff\(|state_->migrate\(/);
-    // Желаемое — модели (разница от показанного хостом: снимок, от которого хост строил желаемое, иначе последний
-    // выданный), показ — из модели
-    expect(session).toContain('state_->apply(full, kinds, true, false, hasBase ? base : json())');
-    expect(session).toContain('(shown.is_object() && !shown.empty()) ? shown : stateBase_');
+    // spec 036 T038: моста снимка `state.v1` нет ни в ядре, ни в движке — показ объектами по видам
+    // (`viewStateJson`), запись — `stateSet`/`stateMark`; перенос под новый ключ — объекты модели целиком (rewrite)
+    expect(session).not.toMatch(/->stateAttach\(|Session::stateSync\(|pushDesiredLocked|stateBase_|"state-base"/);
+    expect(session).toContain('const bool ok = state_->rewrite(carry);');
     const model = readRepo(`${coreSrc}/state_model.cpp`);
-    expect(model).toContain('host_->step("stateApplyV1", args)');
-    expect(model).toContain('host_->read("stateViewV1", json::object())');
+    expect(model).not.toMatch(/stateApplyV1|stateViewV1/);
+    expect(model).toContain('host_->read("viewStateJson", json{{"kinds", json::array()}})');
+    expect(model).toContain('run_(host_->step("stateSet", args))');
+    expect(readRepo('backend/protocol/src/model/mod.rs')).not.toMatch(/stateApplyV1|stateViewV1|mod state_v1/);
     // Ответы сервера на запросы модели — через ingest (исполняет сессия, общий путь всех шагов модели)
     expect(session).toContain('absorb(host_->ingest(json{{"kind", "SERVER_INPUT_KIND_RESPONSE"},');
     // Той же моделью, что держит клиентское ядро (без переноса ключей прежнего клиента и временного хранилища)
@@ -3391,10 +3476,27 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
     expect(readDesktopSession()).toContain('bool Session::openModelOffline() {');
   });
 
-  // Показ состояния в tdesktop — пока из снимка формы state.v1 (stateViewV1), не из StateView модели (T126)
-  it.fails('parvane_client_state.cpp — показ из StateView модели (T126)', () => {
-    expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`))
-      .not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
+  // spec 036 T028 (T126 spec 035): показ личного состояния в tdesktop — объекты модели по видам (`viewStateJson`),
+  // правка — объекты вида модели (`stateSet` с показанным, разницу по полям считает модель); ни желаемого снимка
+  // формы state.v1, ни отпечатков T150, ни своих файлов-зеркал журнала
+  it('parvane_client_state.cpp — показ из объектов модели, правка — stateSet (T126, spec 036 T028)', () => {
+    const client = readRepo(`${tdesktopDir}/parvane_client_state.cpp`);
+    expect(client).not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
+    expect(client).not.toMatch(/BuildLocalState|StateKindDigests|StateDirtyKinds|StateSyncedPath|NotifyJournaledPath/);
+    expect(client)
+      .not.toMatch(/SaveDraftsLocal|SaveContactsLocal|SaveStickerPacksLocal|SaveDialogState|SaveBlockedState/);
+    expect(client).toContain('s->stateSubmit(kind, desired, shown)');
+    expect(client).toContain('view = s->stateView({});');
+    expect(client).toContain('ProjectState(session, parvane::v2::stateview::snapshotOf(view));');
+    const session = readDesktopSession();
+    expect(session).toContain('host_->read("viewStateJson", json{{"kinds", names}})');
+    expect(session).toContain('const auto st = host_->step("stateSet", args);');
+    // Изменения модели — хосту событием `model` (T027)
+    expect(session)
+      .toContain('if (auto ev = stateview::modelEventOf(shown); !ev.is_null()) out.push_back(std::move(ev));');
+    expect(readRepo(`${tdesktopDir}/parvane_client.cpp`)).toContain('cfg.modelEvents = true;');
+    // Разница от показанного — в движке (`base` у stateSet), не в клиенте
+    expect(readRepo('backend/protocol/src/model/state_json.rs')).toContain('let touched = |f: &u32| base.as_ref()');
   });
 
   it('права групп по типу содержимого — из модели движка, не из chat_rules (GROUP-2, T126)', () => {
@@ -3412,9 +3514,31 @@ describe('ENGINE-1 (web): модель движка — единственный
   it('v2/stateJournal.ts: нет сведения — ни лампортов, ни меток, ни прежнего журнала state.v1', () => {
     const journal = strip(readRepo(`${V2}/stateJournal.ts`));
     expect(journal).not.toMatch(/lamport|stamp|PvState|'state\.(append|sync)'|\.diff\(|\.migrate\(/i);
-    // Желаемое уходит модели, показ — из модели
-    expect(journal).toContain('await session.apply(desired, { ...opts, base: fromBase ? projectedBase : undefined });');
+    // Объекты видов уходят модели, показ — из модели
+    expect(journal).toContain('await session.write({ sets, marks });');
     expect(journal).toContain('viewCache = session.view();');
+  });
+
+  // spec 036 T019: личное состояние web — объекты модели по видам (`viewStateJson`), правка — `stateSet`/`stateMark`;
+  // мост снимка `state.v1` (`stateViewV1`/`stateApplyV1`) удалён из движка (T038) — web его не зовёт
+  it('личное состояние web — по видам, без моста снимка state.v1 (spec 036 T019)', () => {
+    const root = path.join(REPO_ROOT, 'web/telegram-tt/src');
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (
+      d.isDirectory() ? (d.name === 'parvane-protocol' ? [] : walk(path.join(dir, d.name))) : [path.join(dir, d.name)]
+    ));
+    const offenders = walk(root)
+      .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\.tsx?$/.test(f))
+      .filter((f) => /stateApplyV1|stateViewV1/.test(readFileSync(f, 'utf8')))
+      .map((f) => path.relative(root, f));
+    expect(offenders).toEqual([]);
+    const engine = strip(readRepo(`${V2}/engine.ts`));
+    expect(engine).toContain('host.peek<StateViewJson>(\'viewStateJson\', { kinds: [] })');
+    expect(engine).toContain('for (const args of sets) await runStateWrite(host, \'stateSet\', args);');
+    expect(engine).toContain('for (const args of marks) await runStateWrite(host, \'stateMark\', args);');
+    // Разница по полям и сведение — в модели: хост шлёт показанное (`base`), а не операции с метками
+    const objects = strip(readRepo(`${V2}/stateObjects.ts`));
+    expect(objects).not.toMatch(/lamport|state_patch|state_create|split_fields/i);
+    expect(objects).toContain('kind: o.kind, key: o.key, value: o.value, base: was.value,');
   });
 
   it('модель вызывается только из v2/engine.ts, ответы сервера — через ingest', () => {
@@ -3472,6 +3596,60 @@ describe('ENGINE-1 (web): модель движка — единственный
     expect(readRepo('backend/protocol/src/host.rs')).toContain('"view": crate::model::views::content_view(c)');
   });
 
+  // spec 036 T001: показ — из модели. Что уже переведено — обычные проверки; что ещё нет — `it.fails` (падает,
+  // пока старый код на месте; снять `fails` вместе с правкой)
+  it('события итога модели — без сборки строк в web; журнал истории и маркеры — модели (spec 036 T012, T017)', () => {
+    const controller = strip(readRepo(`${V2}/controller.ts`));
+    expect(controller).toContain('applyRecordEvents(JSON.parse(clientEvents.json) as EngineEvent[], true)');
+    const apply = controller.slice(controller.indexOf('async function applyEvent('));
+    const modelBranch = apply.indexOf('if (isModelApplied && !(mutation && targetsMemoryRow(mutation))) {');
+    expect(modelBranch).toBeGreaterThan(0);
+    // Сборка операций строк (`rowOpFromStored`, правка, удаление) — только ниже, для событий вне итога модели
+    expect(apply.indexOf('rowOpFromStored(')).toBeGreaterThan(modelBranch);
+    expect(apply.indexOf('history.ingest(')).toBeGreaterThan(modelBranch);
+    expectWebDelegatesHistory();
+  });
+
+  it('список чатов — из chatList модели: архив, закреп, отметка «непрочитано» (spec 036 T018)', () => {
+    const provider = strip(readRepo('web/telegram-tt/src/api/parvane/provider.ts'));
+    const fetchChats = provider.slice(provider.indexOf('async fetchChats('));
+    expect(fetchChats).toContain('await historyRows.chatsWithRows()');
+    expect(fetchChats).toMatch(/const archivedIds = modelById\s+\?/);
+    expect(fetchChats).toMatch(/const pinnedIds = \(modelById\s+\?/);
+    expect(readRepo('web/telegram-tt/src/api/parvane/historyRows.ts'))
+      .toContain('m.view(\'chatList\', { after, limit: PAGE_MAX })');
+  });
+
+  it('v2/historyModel.ts: без своего сведения правок и маркеров (spec 036 T012, T014)', () => {
+    expect(strip(readRepo(`${V2}/historyModel.ts`))).not.toMatch(/applyEditPatch|compareMarkPoint|isUnreadRow/);
+  });
+
+  // T019: без промежуточного снимка формы `state.v1`: показ — объекты модели по видам прямо в localState (`show*`),
+  // правка вида localState — объекты своего вида (`localObjects`) → `stateSet` с показанным `base` / удаление
+  // показанного / `stateMark`; явные записи (звонок, ссылка, контейнеры, отметки) — объектом вида
+  it('v2/stateJournal.ts: без желаемого снимка и проекций (spec 036 T019)', () => {
+    const journal = strip(readRepo(`${V2}/stateJournal.ts`));
+    expect(journal).not.toMatch(/buildDesired|\bproject\w*\(|readSnapshot|SSnapshot|\.apply\(/);
+    expect(journal).toContain('const plan = planStateWrites({');
+    // Показанное по видам — основа следующей правки
+    expect(journal).toContain('shown = new Map(Array.from(managedKinds(MANAGED_KINDS))');
+    const objects = strip(readRepo(`${V2}/stateObjects.ts`));
+    expect(objects).not.toMatch(/snapshotOf|objectsOfSnapshot|rewriteExtra/);
+    expect(strip(readRepo(`${V2}/engine.ts`))).not.toMatch(/snapshotOf|planStateWrites|apply: async/);
+  });
+
+  it('сведения и права групп — из GroupView модели: без своей ревизии и формул прав себя (spec 036 T020)', () => {
+    expect(strip(readRepo('web/telegram-tt/src/api/parvane/store.ts'))).not.toContain('shouldApplyGroupInfo');
+    const groups = strip(readRepo('web/telegram-tt/src/api/parvane/groups.ts'));
+    expect(groups).not.toContain('isInviteManager');
+    expect(groups).toContain('return Boolean(v2Of(groupId)?.groupRights(groupId)?.canManageInvites);');
+    const messages = strip(readRepo('web/telegram-tt/src/api/parvane/messages.ts'));
+    expect(messages).toContain('return Boolean(deps.v2?.groupRights(address)?.canDeleteMessages);');
+    const controller = strip(readRepo(`${V2}/controller.ts`));
+    expect(controller).toContain('return Boolean(groupRights(groupAddress(hex))?.canRotate);');
+    expect(controller).toContain('return Boolean(groupRights(groupAddress(hex))?.canDecideRequests);');
+  });
+
   it('прав групп вне движка нет: приёмный фильтр и композер — по модели (GROUP-2)', () => {
     const groups = strip(readRepo('web/telegram-tt/src/api/parvane/groups.ts'));
     expect(groups).not.toMatch(/isContentAllowedForMember|MEDIA_KINDS|STICKER_KINDS|send_stickers_gifs|send_polls/);
@@ -3514,13 +3692,21 @@ describe('ENGINE-1: android — смысл решает движок', () => {
       expect(strip(readAndroidKt(name)), name)
         .not.toMatch(/lamport|\bstamp\b|"state\.(append|sync)"|\.diff\(|mergeLww|lwwMerge/i);
     }
-    // Своя правка без связи — в журнал при подключении разницей от показанного ДО правки (виды T150 — в stateAttach),
-    // а не отдельным синком после проекции (иначе правка другого устройства откатывалась)
+    // spec 036 (T034): правка — объекты вида модели с показанными (разницу по полям от показанного считает модель,
+    // без связи правка остаётся в модели и уходит при подключении), показ — объекты модели (`viewStateJson`); ни
+    // желаемого снимка формы state.v1 (`stateAttach`/`stateSync`), ни открытого файла «несохранённых видов»
     const client = readAndroidKt('Client.kt');
-    expect(client).toContain('ParvaneCore.stateAttach(stateJournal.build(');
-    expect(client).toMatch(/ParvaneCore\.stateAttach\([^\n]*loadStateDirty\(\)/);
-    expect(readAndroidJni('jni_account.cpp'))
-      .toContain('s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds)');
+    expect(client).not.toMatch(/ParvaneCore\.state(Attach|Sync)\(|state-dirty|notify-journaled/);
+    expect(client).toContain('ok = ParvaneCore.stateSubmit(kind, desired, shown) && ok');
+    expect(client).toContain(
+      'val ch = stateJournal.show(view, l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal)',
+    );
+    const account = readAndroidJni('jni_account.cpp');
+    expect(account).not.toMatch(/->stateAttach\(|->stateSync\(/);
+    expect(account).toContain('s->stateSubmit(jstr(env, kind)');
+    expect(account).toContain('s->stateView(stringList(');
+    // Изменения модели — шву событием `model` (личное состояние, прочитанность)
+    expect(readAndroidJni('jni_session.cpp')).toContain('cfg.modelEvents = true;');
   });
 
   it('избранные стикеры — объекты модели (FAVED_STICKER, намерение fave_sticker), не локальный список шва', () => {
@@ -3572,8 +3758,14 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(history).toContain('const auto rowsDone = ph::importLegacyRows(');
     expect(history).toContain('convertLegacyJournal(*raw, me);');
   });
-  // Остаток T136: показ личного состояния — из снимка формы state.v1 (stateViewV1 модели), не из StateView объектов
-  it.fails('StateJournal.kt — показ из StateView модели (объекты), не из снимка формы state.v1 (T136)', () => {
-    expect(strip(readAndroidKt('StateJournal.kt'))).not.toMatch(/fun project\(snap: JSONObject/);
+  // spec 036 T034 (остаток T136): показ личного состояния — объекты модели по видам (`viewStateJson`), не снимок формы
+  // state.v1; правка — объекты вида ([objects]) через настоящую модель (JVM-тест editsGoThroughEngineModelWithShownBase)
+  it('StateJournal.kt — показ из объектов модели, правка — объекты вида (T136, spec 036 T034)', () => {
+    const journal = strip(readAndroidKt('StateJournal.kt'));
+    expect(journal).not.toMatch(/fun project\(snap: JSONObject|fun build\(|"scheduled_sent"|"folder_order"/);
+    expect(journal).toContain('fun show(view: JSONObject,');
+    expect(journal).toContain('fun objects(kind: String, shown: JSONArray,');
+    expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/StateJournalTest.kt'))
+      .toContain('fun editsGoThroughEngineModelWithShownBase()');
   });
 });

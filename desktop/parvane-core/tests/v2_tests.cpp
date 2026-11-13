@@ -572,12 +572,15 @@ int main() {
             for (const auto &r : step.requests) sent.push_back(r.value("method", std::string()));
             return step.ok();
         });
-        const json folders{{"folders", json::array({json{{"id", 3}, {"title", "Семья"}}})}};
-        check(st.apply(folders) && st.snapshot().dump().find("Семья") != std::string::npos,
-              "папка — объектом журнала state.v2 модели", st.snapshot().dump());
+        const json folder{{"id", 3}, {"title", "Семья"}};
+        check(st.set("FOLDER", "3", folder) && st.snapshot().dump().find("Семья") != std::string::npos,
+              "папка — объектом журнала state.v2 модели (stateSet)", st.snapshot().dump());
         check(std::count(sent.begin(), sent.end(), "state.ops.append") >= 1, "правка — запросом state.ops.append");
         sent.clear();
-        check(st.apply(folders, {"folders"}, true, false, st.snapshot()) && sent.empty(), "без изменений — нет записей");
+        check(st.set("FOLDER", "3", folder) && sent.empty(), "без изменений — нет записей");
+        check(st.mark("CHAT_CLEARED", "u:bob@local", 2, 1700000001000ULL)
+                  && st.snapshot().dump().find("1700000001000") != std::string::npos,
+              "отметка (stateMark) — граница очистки в показе");
     }
 
     {

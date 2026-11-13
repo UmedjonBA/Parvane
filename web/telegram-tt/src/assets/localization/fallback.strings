@@ -4224,8 +4224,3 @@
 "KnowledgePreviewShow" = "Show preview";
 "KnowledgePreviewHide" = "Back to editor";
 "KnowledgePreviewTitle" = "Preview";
-"ParvaneMigrationTitle" = "Updating data on this device";
-"ParvaneMigrationStorage" = "Moving encrypted storage to the new format";
-"ParvaneMigrationEngine" = "Moving chats, keys and settings to the new format";
-"ParvaneMigrationKeepOpen" = "Please keep this tab open. Nothing is deleted: the old data stays until you remove it.";
-"ParvaneMigrationFailed" = "Could not finish updating. Your data is safe, and the update will continue on the next start.";

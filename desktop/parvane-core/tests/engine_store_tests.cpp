@@ -3,9 +3,14 @@
 //  - на диске нет открытого текста; запись другого профиля не открывается (AAD по store_id);
 //  - смена ключа устройства — пачка корня, записи не перешифровываются (файлы записей те же);
 //  - смена DEK поколением: после переноса всё читается, прежнего поколения на диске нет, перезапуск;
-//  - отказ записи посреди переноса: откат, прежнее поколение активно, все записи читаются.
+//  - отказ записи посреди переноса: откат, прежнее поколение активно, все записи читаются;
+//  - spec 036 T031: файлы хоста (`HostFiles`, вид host-file): разовый перенос файла storecrypt (целиком и JSONL),
+//    отметка и данные одной пачкой, сверка, прежний файл → `.migrated`; отказ носителя на любом шаге — прежний
+//    файл на месте и читается, повтор доходит до конца; испорченный — в карантин, остальное переносится.
 // Данные выдуманные.
 #include "parvane/engine_store.h"
+#include "parvane/storecrypt.h"
+#include "parvane/v2_session.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -191,6 +196,157 @@ static void rotationFailure(const std::filesystem::path &base) {
           "повторный перенос доходит до конца: " + err);
 }
 
+static void writeOld(const std::string &path, const std::string &bytes) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << bytes;
+}
+
+static void hostFiles(const std::filesystem::path &base) {
+    namespace sc = parvane::storecrypt;
+    const auto store = (base / "host" / "parvane-store").string();
+    const auto tdata = base / "host";
+    std::filesystem::create_directories(tdata);
+    sc::setKey(std::string(32, '\x11'));
+    const auto oldJson = (tdata / "parvane-folders.json").string();
+    const auto oldLines = (tdata / "parvane-cleared.jsonl").string();
+    const auto oldBad = (tdata / "parvane-broken.json").string();
+    writeOld(oldJson, sc::seal(R"({"folders":["Работа-выдуманная"]})"));
+    writeOld(oldLines, sc::sealLine("uuid-1") + "\n" + sc::sealLine("uuid-2") + "\n");
+    writeOld(oldBad, std::string("PVSE1") + std::string(40, '\x7f'));
+    std::string err;
+    using M = es::HostFiles::Moved;
+    // Отказ носителя на каждом шаге фиксации пачки: прежний файл на месте и читается, отметки нет
+    for (int failAt = 0; failAt < 3; ++failAt) {
+        FailingFs fs;
+        auto h = es::HostFiles::open(store, kDevice, &err, fs);
+        if (!h) return check(false, "host-file: открыт: " + err);
+        fs.renames = 0;
+        fs.failAt = failAt;
+        const auto r = h->migrateFrom("parvane-folders.json", oldJson, &err);
+        if (r == M::Failed) {
+            check(std::filesystem::exists(oldJson) && sc::readFile(oldJson).find("Работа-выдуманная") != std::string::npos,
+                  "отказ на шаге " + std::to_string(failAt) + ": прежний файл цел");
+            check(!h->migrated("parvane-folders.json"), "отказ на шаге " + std::to_string(failAt) + ": отметки нет");
+        } else {
+            // Пачка дошла, отказал только rename прежнего файла: перенос состоялся, прежний — на месте до повтора
+            check(r == M::Moved && h->read("parvane-folders.json").has_value(),
+                  "шаг " + std::to_string(failAt) + ": перенос состоялся");
+            break;
+        }
+    }
+    {
+        auto h = es::HostFiles::open(store, kDevice, &err);
+        if (!h) return check(false, "host-file: повторное открытие: " + err);
+        const auto r = h->migrateFrom("parvane-folders.json", oldJson, &err);
+        check(r == M::Moved || r == M::Already, "повтор переноса доходит до конца");
+        check(h->read("parvane-folders.json") == std::optional<std::string>(R"({"folders":["Работа-выдуманная"]})"),
+              "данные перенесены без потерь");
+        check(!std::filesystem::exists(oldJson) && std::filesystem::exists(oldJson + ".migrated"),
+              "прежний файл — .migrated");
+        check(h->migrateFrom("parvane-folders.json", oldJson, &err) == M::Already, "второй перенос — уже");
+        check(h->migrateFrom("parvane-none.json", (tdata / "parvane-none.json").string(), &err) == M::Missing,
+              "нет прежнего файла — нечего переносить");
+        check(h->migrateFrom("parvane-cleared.jsonl", oldLines, &err) == M::Moved
+                  && h->read("parvane-cleared.jsonl") == std::optional<std::string>("uuid-1\nuuid-2\n"),
+              "JSONL — построчно");
+        check(h->migrateFrom("parvane-broken.json", oldBad, &err) == M::Quarantined && h->migrated("parvane-broken.json")
+                  && !h->read("parvane-broken.json") && std::filesystem::exists(oldBad + ".quarantined"),
+              "испорченный — в карантин, не данными");
+        check(h->write("parvane-new.json", "новое", &err) && h->read("parvane-new.json") == std::optional<std::string>("новое"),
+              "запись и чтение");
+        const auto names = h->names("parvane-");
+        check(names.size() == 3, "имена без отметок переноса: " + std::to_string(names.size()));
+        check(!h->write("migrated:x", "1", &err), "имя отметки записью не подделать");
+    }
+    check(dirBytes(store).find("Работа-выдуманная") == std::string::npos, "в хранилище нет открытого текста");
+    auto h = es::HostFiles::open(store, kDevice, &err);
+    check(h && h->read("parvane-new.json") == std::optional<std::string>("новое"), "перезапуск — данные на месте");
+    sc::setKey(std::string());
+}
+
+// Воронка каталога состояния сессии (spec 036 T031): id устройства прежней версии (файл storecrypt `device`) после
+// включения файлов хоста читается тем же — перенесён в хранилище движка, прежний файл → `.migrated`; новое
+// устройство не заводится (иначе — новое устройство и привязка заново).
+// spec 036 T036 (android): файлы каталога хоста по пути — разовый перенос СУЩЕСТВУЮЩЕГО прежнего файла (сессия,
+// владелец, доверие, служебное журнала истории — файлы storecrypt установки прежней версии), затем чтение и запись
+// записями хранилища движка; переживает перезапуск; удаление снимает и перенесённую копию; без ключа и вне каталога —
+// прежний путь.
+static void pathFiles(const std::filesystem::path &base) {
+    namespace sc = parvane::storecrypt;
+    const auto dir = (base / "seam").string();
+    std::filesystem::create_directories(dir);
+    sc::setKey(std::string(32, '\x22'));
+    const auto key = std::string(32, '\x22');
+    const auto session = dir + "/session.json";
+    const auto owner = dir + "/account-owner";
+    const auto lines = dir + "/history-sync-a-pending.jsonl";
+    // Прежняя версия: файлы storecrypt (целиком и построчно)
+    check(sc::writeFile(session, R"({"self":"alice@local","token":"t-old"})"), "прежний session.json записан");
+    check(sc::writeFile(owner, "alice@local"), "прежний account-owner записан");
+    check(sc::appendLine(lines, "{\"a\":1}") && sc::appendLine(lines, "{\"b\":2}"), "прежний JSONL записан");
+    {
+        es::PathFiles pf(dir, key);
+        check(pf.exists(session), "перенос: файл есть (через хранилище)");
+        check(pf.read(session) == R"({"self":"alice@local","token":"t-old"})", "перенос: содержимое прежнего файла");
+        check(!std::filesystem::exists(session) && std::filesystem::exists(session + ".migrated"),
+              "перенос: прежний файл переименован в .migrated");
+        check(pf.read(owner) == "alice@local", "перенос второго файла");
+        check(pf.read(lines) == "{\"a\":1}\n{\"b\":2}\n", "перенос JSONL построчно");
+        check(pf.write(session, R"({"self":"alice@local","token":"t-new"})"), "запись после переноса");
+        check(!std::filesystem::exists(session), "запись не возвращает прежний файл на диск");
+        check(pf.write(dir + "/trust-bob.txt", "секрет"), "новый файл — сразу записью");
+        check(!std::filesystem::exists(dir + "/trust-bob.txt"), "новый файл на диске не появляется");
+    }
+    {
+        es::PathFiles pf(dir, key);
+        check(pf.read(session) == R"({"self":"alice@local","token":"t-new"})", "после перезапуска — новое значение");
+        check(pf.read(dir + "/trust-bob.txt") == "секрет" && pf.exists(dir + "/trust-bob.txt"), "после перезапуска — новый файл");
+        pf.remove(session);
+        check(!pf.exists(session) && pf.read(session).empty(), "удаление: файла нет");
+        check(!std::filesystem::exists(session + ".migrated"), "удаление снимает и перенесённую копию (токен сессии)");
+        check(!pf.nameOf(dir + "/host-files/x").has_value() && !pf.nameOf("/elsewhere/x").has_value()
+                  && !pf.nameOf(dir + "/../x").has_value(),
+              "пути вне каталога и внутри host-files — не записи");
+        const auto outside = (base / "outside.txt").string();
+        check(pf.write(outside, "вне") && sc::readFile(outside) == "вне", "вне каталога — прежний путь storecrypt");
+    }
+    {
+        es::PathFiles pf(dir, key);
+        check(!pf.exists(session), "удаление пережило перезапуск");
+    }
+    {
+        // Без ключа устройства хранилище не открывается — прежний путь (ничего не теряется)
+        const auto dir2 = (base / "seam-nokey").string();
+        std::filesystem::create_directories(dir2);
+        check(sc::writeFile(dir2 + "/session.json", "x"), "прежний файл без ключа");
+        es::PathFiles pf(dir2, "");
+        check(pf.read(dir2 + "/session.json") == "x" && std::filesystem::exists(dir2 + "/session.json")
+                  && !std::filesystem::exists(dir2 + "/host-files"),
+              "без ключа — прежний путь, файл на месте");
+    }
+}
+
+static void sessionFunnel(const std::filesystem::path &base) {
+    namespace sc = parvane::storecrypt;
+    const auto dir = (base / "parvane-v2-alice@local").string();
+    std::filesystem::create_directories(dir);
+    sc::setKey(std::string(32, '\x22'));
+    writeOld(dir + "/device", sc::seal("dev-0190-выдуманное"));
+    parvane::v2::Session::useHostFiles(true);
+    check(parvane::v2::Session::deviceIdFor(dir) == "dev-0190-выдуманное", "id устройства прежней версии — тот же");
+    check(!std::filesystem::exists(dir + "/device") && std::filesystem::exists(dir + "/device.migrated"),
+          "прежний файл — .migrated");
+    check(std::filesystem::exists(dir + "/host"), "файлы — в хранилище движка");
+    check(parvane::v2::Session::deviceIdFor(dir) == "dev-0190-выдуманное", "повторное чтение — то же");
+    // Каталог стёрт (выход) — новое устройство, хранилище открыто заново
+    std::filesystem::remove_all(dir);
+    const auto fresh = parvane::v2::Session::deviceIdFor(dir);
+    check(!fresh.empty() && fresh != "dev-0190-выдуманное" && parvane::v2::Session::deviceIdFor(dir) == fresh,
+          "после стирания — новое устройство, стабильно");
+    parvane::v2::Session::useHostFiles(false);
+    sc::setKey(std::string());
+}
+
 int main() {
     const auto base = std::filesystem::temp_directory_path() / ("parvane-engine-store-test-" + std::to_string(::getpid()));
     std::filesystem::remove_all(base);
@@ -200,6 +356,9 @@ int main() {
     rewrap(base);
     rotation(base);
     rotationFailure(base);
+    hostFiles(base);
+    sessionFunnel(base);
+    pathFiles(base);
     std::filesystem::remove_all(base);
     std::printf(g_fail ? "engine_store: %d FAIL\n" : "engine_store: OK\n", g_fail);
     return g_fail ? 1 : 0;

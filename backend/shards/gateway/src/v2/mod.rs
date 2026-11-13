@@ -240,8 +240,6 @@ struct Session {
     sub_count: usize,
     next_sub: u64,
     inbox_sub: Option<u64>,
-    /// spec 035 (T150, D2): минорная версия протокола из Hello — шардам для статистики «устройства перенесли».
-    client_minor: u32,
 }
 
 impl Session {
@@ -271,10 +269,6 @@ impl Session {
         // S7-23: метка источника — только сигналам звонка, шард call делит по ней бюджет адресата
         if let Some(src) = self.anon_source.filter(|_| anon::is_call_signal(m)) {
             sr.source_tag = src;
-        }
-        // Минор клиента — только с личностью (анонимный канал не связывается с устройством)
-        if !sr.user.is_empty() {
-            sr.client_minor = self.client_minor;
         }
         sr
     }
@@ -840,7 +834,6 @@ async fn serve_session(mut in_rx: mpsc::Receiver<inq::InFrame>, budget: &inq::In
         sub_count: 0,
         next_sub: 0,
         inbox_sub: None,
-        client_minor: hello.proto_minor,
     };
     let mut revoked = sh.revoked.subscribe();
     let mut reverify = tokio::time::interval(Duration::from_secs(crate::reverify_secs()));

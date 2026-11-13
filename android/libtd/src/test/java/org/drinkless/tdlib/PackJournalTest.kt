@@ -58,7 +58,8 @@ class PackJournalTest {
         val store = ParvaneStore().apply { self = "alice@local" }
         val st = Stickers(store, root, { updates.add(it) }, core) { flushes++ }
         /** Снимок журнала — так, как его отдаст движок (записи вида `packs`). */
-        fun snapshot(): JSONObject = JSONObject().put("sticker_packs", st.journal.records())
+        fun snapshot(): JSONObject = packsView(st.journal.records())
+        fun records(): JSONArray = st.journal.records()
     }
 
     private val codec = object : StateJournal.Codec {
@@ -106,7 +107,7 @@ class PackJournalTest {
         // B: снимок журнала → проекция → набор скачан по ссылке и установлен без подтверждения
         val j = StateJournal(codec, resolver)
         val lb = ChatLocalState(b.root)
-        val ch = j.project(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)
+        val ch = j.show(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)
         val pr = ch.packs!!
         assertTrue(ch.any())
         b.st.applyJournal(pr)
@@ -116,16 +117,16 @@ class PackJournalTest {
         assertTrue(b.updates.any { it is TdApi.UpdateInstalledStickerSets && it.stickerSetIds.contains(pb.setId) })
         assertEquals(0, b.flushes) // установка из журнала обратно в журнал не пишется
         // желаемое B несёт ту же запись — синк B ничего не снимет
-        val desired = j.build(lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)
-        assertEquals("n:Cats", desired.getJSONArray("sticker_packs").getJSONObject(0).optString("set_id"))
+        val desired = j.objects("STICKER_PACK", JSONArray(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)!!
+        assertEquals("n:Cats", desired.getJSONObject(0).getString("key"))
         // тот же снимок ещё раз — без изменений
-        assertNull(j.project(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal).packs)
+        assertNull(j.show(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal).packs)
 
         // A удаляет набор → записи нет → B снимает его
         assertTrue(a.st.change(pa.setId, false, false) is TdApi.Ok)
         assertEquals(2, a.flushes)
         assertEquals(0, a.st.journal.records().length())
-        val ch2 = j.project(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)
+        val ch2 = j.show(a.snapshot(), lb, ScheduledQueue(b.root) { 1000L }, packs = b.st.journal)
         assertEquals(listOf(pb.setId), ch2.packs!!.removed)
         b.st.applyJournal(ch2.packs!!)
         assertFalse(b.st.index.bySetId(pb.setId)!!.installed)
@@ -141,7 +142,7 @@ class PackJournalTest {
         val pb = b.st.index.registerReceived(ref("Dogs", "SEFTSA=="), false)
         assertTrue(b.st.change(pb.setId, true, false) is TdApi.Ok)
         val fetched = b.core.fetches
-        b.st.applyJournal(b.st.journal.project(a.snapshot().getJSONArray("sticker_packs"))!!)
+        b.st.applyJournal(b.st.journal.project(a.records())!!)
         assertEquals(fetched, b.core.fetches)
         assertEquals(pb.setId, b.st.journal.localIdOf("h:SEFTSA=="))
     }
@@ -207,7 +208,7 @@ class PackJournalTest {
         assertEquals(1, a.flushes)
 
         // B: проекция — запись не набор (наборов нет), GIF скачан и сверен
-        val pr = b.st.journal.project(a.snapshot().getJSONArray("sticker_packs"))!!
+        val pr = b.st.journal.project(a.records())!!
         assertTrue(pr.records.isEmpty()); assertEquals(1, pr.gifs.size)
         b.st.applyJournal(pr)
         assertEquals(0, b.st.index.all().count { !it.builtin })
@@ -220,7 +221,7 @@ class PackJournalTest {
         assertTrue(a.st.removeSavedAnimation(TdApi.InputFileId(tdFile.id)) is TdApi.Ok)
         assertEquals(2, a.flushes)
         assertEquals(0, a.st.journal.records().length())
-        val pr2 = b.st.journal.project(a.snapshot().getJSONArray("sticker_packs"))!!
+        val pr2 = b.st.journal.project(a.records())!!
         assertEquals(listOf(hex), pr2.gifsRemoved); assertTrue(pr2.removed.isEmpty())
         b.st.applyJournal(pr2)
         assertEquals(0, b.st.savedAnimations().animations.size)

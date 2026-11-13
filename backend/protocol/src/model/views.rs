@@ -890,6 +890,20 @@ pub fn row_body(wire: Value, reply_to: Option<&[u8]>) -> Vec<u8> {
     serde_json::to_vec(&crate::history::sorted_json(Value::Object(m))).unwrap_or_default()
 }
 
+/// Тело строки с доказательством автора (`proof`, base64) — как строка хоста web.
+pub fn row_body_proof(wire: Value, reply_to: Option<&[u8]>, proof: &[u8]) -> Vec<u8> {
+    if proof.is_empty() {
+        return row_body(wire, reply_to);
+    }
+    let mut m = Map::new();
+    m.insert("content".into(), wire);
+    if let Some(r) = reply_to.filter(|r| r.len() == 16) {
+        m.insert("reply_to".into(), json!(uuid_of(r)));
+    }
+    m.insert("proof".into(), json!(b64(proof)));
+    serde_json::to_vec(&crate::history::sorted_json(Value::Object(m))).unwrap_or_default()
+}
+
 /// Тело заглушки (неизвестный вид): web хранит `{"kind":"unsupported"}`; критичность — отдельным признаком.
 pub fn stub_body(critical: bool) -> Vec<u8> {
     let mut c = json!({"kind": "unsupported"});
@@ -1183,6 +1197,28 @@ pub fn has_link(c: &Content) -> bool {
 /// id сообщения из UUID-строки тела (`reply_to`).
 pub fn body_reply_to(body: &Map<String, Value>) -> Vec<u8> {
     body.get("reply_to").and_then(Value::as_str).map(id_of_uuid).unwrap_or_default()
+}
+
+/// Нормализованное имя набора (PACK-1): буквы, цифры, пробел, `-`, `_`; без пробелов по краям; не длиннее 32 знаков;
+/// пусто — `Pack`. Совпадает с прежними web `sanitizePackName`, ядром `pack::sanitizeName`, android `EmojiDocId`.
+pub fn sanitize_pack_name(name: &str) -> String {
+    let kept: String = name.chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_')).collect();
+    let trimmed: String = kept.trim().chars().take(32).collect();
+    let out = trimmed.trim_end().to_string();
+    if out.is_empty() {
+        "Pack".to_string()
+    } else {
+        out
+    }
+}
+
+/// Id набора стикеров (PACK-1): ключ объекта STICKER_PACK — `h:<content_hash как на проводе>` либо `n:<имя>`.
+pub fn pack_set_id(content_hash: &str, name: &str) -> String {
+    if content_hash.is_empty() {
+        format!("n:{}", sanitize_pack_name(if name.is_empty() { "Pack" } else { name }))
+    } else {
+        format!("h:{content_hash}")
+    }
 }
 
 #[cfg(test)]

@@ -244,7 +244,7 @@ class ParvaneStore {
     }
 
     fun loadRenames() {
-        val f = renamesFile?.takeIf { it.exists() } ?: return
+        val f = renamesFile?.takeIf { SeamFiles.exists(it) } ?: return
         val j = try { JSONObject(SeamFiles.read(f)) } catch (e: Exception) { return }
         for (k in j.keys()) noteRename(k, j.optString(k))
     }
@@ -524,7 +524,7 @@ class ParvaneStore {
     @Synchronized
     fun putMessage(uuid: String, from: String, to: String, ts: Long, content: JSONObject, out: Boolean,
                    read: Boolean = false, replyUuid: String? = null, edited: Boolean = false,
-                   pinned: Boolean = false, reactions: JSONArray? = null): TdApi.Message? {
+                   pinned: Boolean = false, reactions: JSONArray? = null, order: Long = 0L): TdApi.Message? {
         if (uuid.isEmpty() || msgByUuid.containsKey(uuid)) return null
         val group = groupsByGid[to]
         val chat = if (group != null) chats[group.chatId] ?: return null else ensurePeer(if (out) to else from).second
@@ -566,7 +566,11 @@ class ParvaneStore {
         uuidByMsg[key(chat.id, msgId)] = uuid
         contentByUuid[uuid] = content
         chat.lastMessage = msg
-        chat.positions = positionsFor(chat.id, ts)
+        // spec 036 (ENGINE-1): место чата в списке — модели (`ChatView.order` = место последней строки, ORDER-1):
+        // строка модели несёт своё место (мс), догрузка более старой строки чат вниз не сдвигает
+        chat.positions = if (order > 0L) {
+            positionsFor(chat.id, maxOf(order / 1000, chat.positions.firstOrNull()?.order ?: 0L))
+        } else positionsFor(chat.id, ts)
         if (!out && !read) chat.unreadCount += 1
         // Прочитанное, пришедшее позже непрочитанного (догрузка истории), границу прочтения не двигает (READ-2)
         if (!out && read && chat.unreadCount == 0 && msgId > chat.lastReadInboxMessageId) chat.lastReadInboxMessageId = msgId

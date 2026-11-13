@@ -54,7 +54,7 @@ sleep 2; stop_pid "$P2"
 
 # ── обе в сети: правки дошли друг до друга, ни одна не потеряна ──────────────
 # И «В избранное» у стикера (spec 035 T126, FR-075): alice1 отмечает стикер своего набора, alice2 (тот же набор на
-# устройстве) видит его в «Избранном» — объект FAVED_STICKER журнала state.v2, ссылка как у web (sticker-ref.json)
+# устройстве) видит его в «Избранном» — объект FAVED_STICKER журнала state.v2, общий id набора PACK-1 (pack-set-id.json)
 SD="$SB/stickers"; mkdir -p "$SD/Котики"
 python3 -c "import struct,zlib,sys
 def ch(t,d): return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
@@ -73,9 +73,11 @@ wait_log "$L2" "$want" 90 && ok "alice2: название папки alice1 и �
 wait_log "$L1" "$want" 90 && ok "alice1: чат и заметка alice2 пришли, свои правки на месте" \
   || bad "alice1: потеряна правка ($(grep -a 'autopatch dump' "$L1" | tail -1 | sed 's/.*autopatch dump //'))"
 
-wait_log "$L1" "autopatch fave pvpk-[0-9]+:[0-9]+ → в избранном" 90 && wait_log "$L1" "стикер pvpk-[0-9]+:[0-9]+ в избранного — записано в журнал" 60 \
-  && ok "alice1: стикер своего набора — в избранном, записано в журнал" || bad "alice1: стикер не добавлен в избранное"
-wait_log "$L2" "autopatch faved \[pvpk-[0-9]+:[0-9]+\]" 180 && ok "alice2: стикер alice1 в «Избранном» (FAVED_STICKER)" \
+# PACK-1 (spec 036): ключ избранного — общий id набора (`h:<отпечаток содержимого>`) и имя файла манифеста
+K='h:[A-Za-z0-9+/=]+/01-1f602\.png'
+wait_log "$L1" "autopatch fave $K → в избранном" 90 && wait_log "$L1" "стикер 01-1f602\.png в избранного — записано в журнал" 60 \
+  && ok "alice1: стикер своего набора — в избранном общим id набора, записано в журнал" || bad "alice1: стикер не добавлен в избранное"
+wait_log "$L2" "autopatch faved \[$K\]" 180 && ok "alice2: стикер alice1 в «Избранном» (FAVED_STICKER, тот же общий id)" \
   || bad "alice2: избранное не пришло ($(grep -a 'autopatch faved' "$L2" | tail -1 | sed 's/.*autopatch faved //'))"
 grep -qiE "Fatal|Unexpected in " "$L1" "$L2" && bad "фатальная ошибка" || ok "без фатальных ошибок"
 stop_pid "$P1"; stop_pid "$P2"

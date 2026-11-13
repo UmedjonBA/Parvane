@@ -258,6 +258,23 @@ static void stickerRef() {
           "sticker-ref: чужой id — не стикер своего набора");
 }
 
+// PACK-1 (spec 036 T024): общий id набора и избранного стикера — вектор `pack-set-id.json` (его же читают движок,
+// web и android)
+static void packSetIdShared() {
+    const auto table = json::parse(readText(vectorPath("pack-set-id.json")), nullptr, false);
+    check(table.is_object() && table["cases"].is_array() && !table["cases"].empty(), "pack-set-id: вектор есть");
+    if (!table.is_object() || !table["cases"].is_array()) return;
+    for (const auto &c : table["cases"]) {
+        const auto name = c.value("name", std::string());
+        const auto setId = parvane::pack::sharedSetId(c.value("content_hash", std::string()), c.value("pack_name", std::string()));
+        check(setId == c.value("set_id", std::string()), "pack-set-id: set_id «" + name + "»", setId);
+        check(setId + "/" + c.value("sticker", std::string()) == c.value("faved_key", std::string()),
+              "pack-set-id: ключ избранного «" + name + "»");
+    }
+    check(parvane::pack::sharedSetId("aa==", "Котики") != parvane::pack::sharedSetId("bb==", "Котики"),
+          "pack-set-id: одноимённые наборы разного содержимого — разные id");
+}
+
 int main() {
     std::printf("=== parvane-core: векторы форматов web ↔ desktop (%s) ===\n", PARVANE_VECTORS_DIR);
     keyBackup();
@@ -265,6 +282,7 @@ int main() {
     calls();
     packHash();
     stickerRef();
+    packSetIdShared();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

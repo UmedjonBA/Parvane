@@ -71,16 +71,34 @@ class PackIndex(private val dir: File) {
     /** Пак эмодзи, содержащий docId, для `emoji_packs` при отправке. */
     @Synchronized fun emojiPackOf(docId: Long): Pack? = emojiByDocId(docId)?.first
 
-    /** Зарегистрировать пак из ссылки провода (получен, файлов ещё нет). Возвращает пак. */
+    /**
+     * Зарегистрировать пак из ссылки провода (получен, файлов ещё нет). Возвращает пак. PACK-1 (spec 036): набор
+     * стикеров опознаётся по отпечатку содержимого (`content_hash`, PACK-2) — два разных набора с одним именем остаются
+     * двумя наборами (раньше второй сливался с первым по имени); ссылка без отпечатка — по имени, как раньше. Наборы
+     * эмодзи — по сырому имени (на нём держатся docId провода, EMOJI-1).
+     */
     @Synchronized fun registerReceived(ref: JSONObject, isEmoji: Boolean): Pack {
         val raw = ref.optString("name").ifEmpty { "Pack" }
-        val existing = byRawName(raw, isEmoji)
-        if (existing != null) { if (existing.ref == null) existing.ref = ref; save(); return existing }
+        val hash = if (isEmoji) "" else ref.optString("content_hash")
+        if (hash.isNotEmpty()) packs.values.firstOrNull { !it.isEmoji && it.ref?.optString("content_hash") == hash }?.let { return it }
+        // По имени — только набор без отпечатка (прежняя ссылка) либо входящая ссылка без отпечатка
+        val existing = byRawName(raw, isEmoji)?.takeIf { hash.isEmpty() || it.ref?.optString("content_hash").isNullOrEmpty() }
+        if (existing != null) {
+            if (existing.ref == null || (hash.isNotEmpty() && !existing.builtin)) existing.ref = ref
+            save(); return existing
+        }
         val sanitized = EmojiDocId.sanitizeName(raw)
-        val setId = if (isEmoji) EmojiDocId.emojiSetId(raw) else EmojiDocId.packSetId(sanitized)
+        var setId = if (isEmoji) EmojiDocId.emojiSetId(raw) else EmojiDocId.packSetId(sanitized)
+        // Одноимённый набор с другим содержимым — свой локальный id (от отпечатка)
+        if (packs.containsKey(setId) && hash.isNotEmpty()) setId = EmojiDocId.packSetId("h:$hash")
         val p = Pack(setId, sanitized, raw, isEmoji, ref = ref)
         packs[setId] = p; save(); return p
     }
+
+    /** PACK-1: набор по общему id (ключ STICKER_PACK: `h:<отпечаток>` | `n:<имя>`); нет такого — null. */
+    @Synchronized fun bySharedId(sharedId: String, isEmoji: Boolean? = null): Pack? =
+        packs.values.firstOrNull { (isEmoji == null || it.isEmoji == isEmoji) && sharedIdOf(it) == sharedId }
+            ?: if (sharedId.startsWith("n:")) packs.values.firstOrNull { (isEmoji == null || it.isEmoji == isEmoji) && "n:" + EmojiDocId.sanitizeName(it.rawName) == sharedId } else null
 
     /** Файлы распакованы (или нарисованы) в каталог: заполнить список, посчитать docId, при install — установить. */
     @Synchronized fun materialize(p: Pack, dirPath: String, names: List<String>, sizes: Map<String, Pair<Int, Int>> = emptyMap(), install: Boolean): Pack {
@@ -130,7 +148,7 @@ class PackIndex(private val dir: File) {
 
     private fun load() {
         val f = indexFile
-        if (!f.exists()) return
+        if (!SeamFiles.exists(f)) return
         val arr = try { JSONArray(SeamFiles.read(f)) } catch (e: Exception) { return }
         for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { val p = Pack.fromJson(it); packs[p.setId] = p }
     }
@@ -142,6 +160,16 @@ class PackIndex(private val dir: File) {
     }
 
     companion object {
+        /**
+         * PACK-1 (spec 036, вектор `proto/parvane/vectors/clients/pack-set-id.json`): общий id набора у всех клиентов —
+         * ключ объекта STICKER_PACK: `h:` + отпечаток содержимого (как на проводе) либо `n:` + нормализованное имя.
+         */
+        fun sharedSetId(contentHash: String, packName: String): String =
+            if (contentHash.isNotEmpty()) "h:$contentHash" else "n:" + EmojiDocId.sanitizeName(packName)
+        fun sharedIdOf(p: Pack): String = sharedSetId(p.ref?.optString("content_hash").orEmpty(), p.rawName)
+        /** Ключ избранного стикера (FAVED_STICKER): set_id ‖ «/» ‖ sticker_id (имя файла «/» не содержит). */
+        fun favedKey(setId: String, stickerId: String): String = "$setId/$stickerId"
+
         /** TdApi.StickerFormat по mime — X роняет `Td.unsupported` на null. */
         fun formatFor(mime: String): TdApi.StickerFormat = when (mime) {
             "application/x-tgsticker" -> TdApi.StickerFormatTgs()

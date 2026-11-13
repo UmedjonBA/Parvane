@@ -140,7 +140,6 @@ enum class ObjectKind(val number: Int) {
 enum class OpenState(val number: Int) {
     OPEN_STATE_UNSPECIFIED(0),
     OPEN_STATE_READY(1),
-    OPEN_STATE_MIGRATION_NEEDED(2),
     OPEN_STATE_TOO_NEW(3),
     OPEN_STATE_LOCKED(4);
 
@@ -183,24 +182,6 @@ enum class ServerInputKind(val number: Int) {
     companion object {
         fun fromJson(v: Any?): ServerInputKind = values().firstOrNull { it.name == v?.toString() }
             ?: values().firstOrNull { it.number == v?.toString()?.toIntOrNull() } ?: values()[0]
-    }
-}
-
-data class AuditDump(
-    val jsonl: String = ""
-) {
-    fun toJson(): JSONObject {
-        val j = JSONObject()
-        if (!(jsonl.isEmpty())) j.put("jsonl", jsonl)
-        return j
-    }
-
-    companion object {
-        fun fromJson(j: JSONObject): AuditDump {
-            return AuditDump(
-                jsonl = j.pick("jsonl", "jsonl")?.let { it.toString() } ?: ""
-            )
-        }
     }
 }
 
@@ -365,7 +346,9 @@ data class ChatView(
     val archived: Boolean = false,
     val mutedUntilMs: Long = 0L,
     val draft: String = "",
-    val folderIds: List<Long> = emptyList()
+    val folderIds: List<Long> = emptyList(),
+    val unreadMark: Boolean = false,
+    val order: Long = 0L
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -380,6 +363,8 @@ data class ChatView(
         if (!(mutedUntilMs == 0L)) j.put("muted_until_ms", mutedUntilMs.toString())
         if (!(draft.isEmpty())) j.put("draft", draft)
         if (folderIds.isNotEmpty()) j.put("folder_ids", JSONArray().apply { folderIds.forEach { put(it) } })
+        if (!(!unreadMark)) j.put("unread_mark", unreadMark)
+        if (!(order == 0L)) j.put("order", order.toString())
         return j
     }
 
@@ -396,7 +381,9 @@ data class ChatView(
                 archived = j.pick("archived", "archived")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 mutedUntilMs = j.pick("muted_until_ms", "mutedUntilMs")?.let { it.toString().toLong() } ?: 0L,
                 draft = j.pick("draft", "draft")?.let { it.toString() } ?: "",
-                folderIds = (j.pick("folder_ids", "folderIds") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString().toLong() } } } ?: emptyList()
+                folderIds = (j.pick("folder_ids", "folderIds") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString().toLong() } } } ?: emptyList(),
+                unreadMark = j.pick("unread_mark", "unreadMark")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L
             )
         }
     }
@@ -567,8 +554,13 @@ data class EngineConfig(
     val memoryBudgetBytes: Long = 0L,
     val deviceKey: ByteArray = ByteArray(0),
     val vectors: Boolean = false,
-    val legacyPresent: Boolean = false,
-    val hostDriven: Boolean = false
+    val hostDriven: Boolean = false,
+    val engineRows: Boolean = false,
+    val historyBatchMinMs: Long = 0L,
+    val historyBatchMaxMs: Long = 0L,
+    val historyCheckpointAgeMs: Long = 0L,
+    val historyCheckpointRecords: Long = 0L,
+    val historyCheckpointJitterMs: Long = 0L
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -580,8 +572,13 @@ data class EngineConfig(
         if (!(memoryBudgetBytes == 0L)) j.put("memory_budget_bytes", memoryBudgetBytes.toString())
         if (!(deviceKey.isEmpty())) j.put("device_key", toBase64(deviceKey))
         if (!(!vectors)) j.put("vectors", vectors)
-        if (!(!legacyPresent)) j.put("legacy_present", legacyPresent)
         if (!(!hostDriven)) j.put("host_driven", hostDriven)
+        if (!(!engineRows)) j.put("engine_rows", engineRows)
+        if (!(historyBatchMinMs == 0L)) j.put("history_batch_min_ms", historyBatchMinMs)
+        if (!(historyBatchMaxMs == 0L)) j.put("history_batch_max_ms", historyBatchMaxMs)
+        if (!(historyCheckpointAgeMs == 0L)) j.put("history_checkpoint_age_ms", historyCheckpointAgeMs.toString())
+        if (!(historyCheckpointRecords == 0L)) j.put("history_checkpoint_records", historyCheckpointRecords)
+        if (!(historyCheckpointJitterMs == 0L)) j.put("history_checkpoint_jitter_ms", historyCheckpointJitterMs)
         return j
     }
 
@@ -596,8 +593,13 @@ data class EngineConfig(
                 memoryBudgetBytes = j.pick("memory_budget_bytes", "memoryBudgetBytes")?.let { it.toString().toLong() } ?: 0L,
                 deviceKey = j.pick("device_key", "deviceKey")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
                 vectors = j.pick("vectors", "vectors")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                legacyPresent = j.pick("legacy_present", "legacyPresent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                hostDriven = j.pick("host_driven", "hostDriven")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                hostDriven = j.pick("host_driven", "hostDriven")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                engineRows = j.pick("engine_rows", "engineRows")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                historyBatchMinMs = j.pick("history_batch_min_ms", "historyBatchMinMs")?.let { it.toString().toLong() } ?: 0L,
+                historyBatchMaxMs = j.pick("history_batch_max_ms", "historyBatchMaxMs")?.let { it.toString().toLong() } ?: 0L,
+                historyCheckpointAgeMs = j.pick("history_checkpoint_age_ms", "historyCheckpointAgeMs")?.let { it.toString().toLong() } ?: 0L,
+                historyCheckpointRecords = j.pick("history_checkpoint_records", "historyCheckpointRecords")?.let { it.toString().toLong() } ?: 0L,
+                historyCheckpointJitterMs = j.pick("history_checkpoint_jitter_ms", "historyCheckpointJitterMs")?.let { it.toString().toLong() } ?: 0L
             )
         }
     }
@@ -736,7 +738,16 @@ data class GroupView(
     val myRole: GroupRole = GroupRole.values()[0],
     val perms: GroupPerms? = null,
     val isPublic: Boolean = false,
-    val inviteLinks: List<String> = emptyList()
+    val inviteLinks: List<String> = emptyList(),
+    val infoJson: String = "",
+    val version: Long = 0L,
+    val deleted: Boolean = false,
+    val canManageInvites: Boolean = false,
+    val canDecideRequests: Boolean = false,
+    val canRotate: Boolean = false,
+    val canBan: Boolean = false,
+    val canAddAdmins: Boolean = false,
+    val canDeleteMessages: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -750,6 +761,15 @@ data class GroupView(
         if (!(perms == null)) j.put("perms", perms!!.toJson())
         if (!(!isPublic)) j.put("is_public", isPublic)
         if (inviteLinks.isNotEmpty()) j.put("invite_links", JSONArray().apply { inviteLinks.forEach { put(it) } })
+        if (!(infoJson.isEmpty())) j.put("info_json", infoJson)
+        if (!(version == 0L)) j.put("version", version.toString())
+        if (!(!deleted)) j.put("deleted", deleted)
+        if (!(!canManageInvites)) j.put("can_manage_invites", canManageInvites)
+        if (!(!canDecideRequests)) j.put("can_decide_requests", canDecideRequests)
+        if (!(!canRotate)) j.put("can_rotate", canRotate)
+        if (!(!canBan)) j.put("can_ban", canBan)
+        if (!(!canAddAdmins)) j.put("can_add_admins", canAddAdmins)
+        if (!(!canDeleteMessages)) j.put("can_delete_messages", canDeleteMessages)
         return j
     }
 
@@ -765,7 +785,16 @@ data class GroupView(
                 myRole = j.pick("my_role", "myRole")?.let { GroupRole.fromJson(it) } ?: GroupRole.values()[0],
                 perms = j.pick("perms", "perms")?.let { GroupPerms.fromJson(it as JSONObject) } ?: null,
                 isPublic = j.pick("is_public", "isPublic")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                inviteLinks = (j.pick("invite_links", "inviteLinks") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString() } } } ?: emptyList()
+                inviteLinks = (j.pick("invite_links", "inviteLinks") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString() } } } ?: emptyList(),
+                infoJson = j.pick("info_json", "infoJson")?.let { it.toString() } ?: "",
+                version = j.pick("version", "version")?.let { it.toString().toLong() } ?: 0L,
+                deleted = j.pick("deleted", "deleted")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canManageInvites = j.pick("can_manage_invites", "canManageInvites")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canDecideRequests = j.pick("can_decide_requests", "canDecideRequests")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canRotate = j.pick("can_rotate", "canRotate")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canBan = j.pick("can_ban", "canBan")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canAddAdmins = j.pick("can_add_admins", "canAddAdmins")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                canDeleteMessages = j.pick("can_delete_messages", "canDeleteMessages")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -1380,27 +1409,6 @@ data class KindFormat(
     }
 }
 
-data class LegacyRecord(
-    val key: String = "",
-    val value: ByteArray = ByteArray(0)
-) {
-    fun toJson(): JSONObject {
-        val j = JSONObject()
-        if (!(key.isEmpty())) j.put("key", key)
-        if (!(value.isEmpty())) j.put("value", toBase64(value))
-        return j
-    }
-
-    companion object {
-        fun fromJson(j: JSONObject): LegacyRecord {
-            return LegacyRecord(
-                key = j.pick("key", "key")?.let { it.toString() } ?: "",
-                value = j.pick("value", "value")?.let { fromBase64(it.toString()) } ?: ByteArray(0)
-            )
-        }
-    }
-}
-
 data class MarkValue(
     val field: Long = 0L,
     val value: ByteArray = ByteArray(0)
@@ -1462,7 +1470,8 @@ data class MessageView(
     val replyQuote: ViewText? = null,
     val silent: Boolean = false,
     val order: Long = 0L,
-    val wire: String = ""
+    val wire: String = "",
+    val unread: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -1485,6 +1494,7 @@ data class MessageView(
         if (!(!silent)) j.put("silent", silent)
         if (!(order == 0L)) j.put("order", order.toString())
         if (!(wire.isEmpty())) j.put("wire", wire)
+        if (!(!unread)) j.put("unread", unread)
         return j
     }
 
@@ -1509,79 +1519,8 @@ data class MessageView(
                 replyQuote = j.pick("reply_quote", "replyQuote")?.let { ViewText.fromJson(it as JSONObject) } ?: null,
                 silent = j.pick("silent", "silent")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 order = j.pick("order", "order")?.let { it.toString().toLong() } ?: 0L,
-                wire = j.pick("wire", "wire")?.let { it.toString() } ?: ""
-            )
-        }
-    }
-}
-
-data class MigrateStatus(
-    val point: Long = 0L,
-    val done: Boolean = false,
-    val reportJson: String = ""
-) {
-    fun toJson(): JSONObject {
-        val j = JSONObject()
-        if (!(point == 0L)) j.put("point", point)
-        if (!(!done)) j.put("done", done)
-        if (!(reportJson.isEmpty())) j.put("report_json", reportJson)
-        return j
-    }
-
-    companion object {
-        fun fromJson(j: JSONObject): MigrateStatus {
-            return MigrateStatus(
-                point = j.pick("point", "point")?.let { it.toString().toLong() } ?: 0L,
-                done = j.pick("done", "done")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                reportJson = j.pick("report_json", "reportJson")?.let { it.toString() } ?: ""
-            )
-        }
-    }
-}
-
-data class MigrateStep(
-    val layer: String = "",
-    val records: List<LegacyRecord> = emptyList(),
-    val last: Boolean = false,
-    val chunk: Long = 0L
-) {
-    fun toJson(): JSONObject {
-        val j = JSONObject()
-        if (!(layer.isEmpty())) j.put("layer", layer)
-        if (records.isNotEmpty()) j.put("records", JSONArray().apply { records.forEach { put(it.toJson()) } })
-        if (!(!last)) j.put("last", last)
-        if (!(chunk == 0L)) j.put("chunk", chunk)
-        return j
-    }
-
-    companion object {
-        fun fromJson(j: JSONObject): MigrateStep {
-            return MigrateStep(
-                layer = j.pick("layer", "layer")?.let { it.toString() } ?: "",
-                records = (j.pick("records", "records") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { LegacyRecord.fromJson(it as JSONObject) } } } ?: emptyList(),
-                last = j.pick("last", "last")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
-                chunk = j.pick("chunk", "chunk")?.let { it.toString().toLong() } ?: 0L
-            )
-        }
-    }
-}
-
-data class MigrationPlan(
-    val steps: List<String> = emptyList(),
-    val legacyRecords: Long = 0L
-) {
-    fun toJson(): JSONObject {
-        val j = JSONObject()
-        if (steps.isNotEmpty()) j.put("steps", JSONArray().apply { steps.forEach { put(it) } })
-        if (!(legacyRecords == 0L)) j.put("legacy_records", legacyRecords.toString())
-        return j
-    }
-
-    companion object {
-        fun fromJson(j: JSONObject): MigrationPlan {
-            return MigrationPlan(
-                steps = (j.pick("steps", "steps") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { it.toString() } } } ?: emptyList(),
-                legacyRecords = j.pick("legacy_records", "legacyRecords")?.let { it.toString().toLong() } ?: 0L
+                wire = j.pick("wire", "wire")?.let { it.toString() } ?: "",
+                unread = j.pick("unread", "unread")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -1783,21 +1722,18 @@ data class ObjectKey(
 }
 
 data class OpenResult(
-    val state: OpenState = OpenState.values()[0],
-    val migration: MigrationPlan? = null
+    val state: OpenState = OpenState.values()[0]
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
         if (!(state == OpenState.values()[0])) j.put("state", state.name)
-        if (!(migration == null)) j.put("migration", migration!!.toJson())
         return j
     }
 
     companion object {
         fun fromJson(j: JSONObject): OpenResult {
             return OpenResult(
-                state = j.pick("state", "state")?.let { OpenState.fromJson(it) } ?: OpenState.values()[0],
-                migration = j.pick("migration", "migration")?.let { MigrationPlan.fromJson(it as JSONObject) } ?: null
+                state = j.pick("state", "state")?.let { OpenState.fromJson(it) } ?: OpenState.values()[0]
             )
         }
     }
@@ -2058,7 +1994,8 @@ data class RowsApply(
     val forgetJson: String = "",
     val wipe: Boolean = false,
     val nowMs: Long = 0L,
-    val rowsJson: String = ""
+    val rowsJson: String = "",
+    val journal: Boolean = false
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -2068,6 +2005,7 @@ data class RowsApply(
         if (!(!wipe)) j.put("wipe", wipe)
         if (!(nowMs == 0L)) j.put("now_ms", nowMs.toString())
         if (!(rowsJson.isEmpty())) j.put("rows_json", rowsJson)
+        if (!(!journal)) j.put("journal", journal)
         return j
     }
 
@@ -2079,7 +2017,8 @@ data class RowsApply(
                 forgetJson = j.pick("forget_json", "forgetJson")?.let { it.toString() } ?: "",
                 wipe = j.pick("wipe", "wipe")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
                 nowMs = j.pick("now_ms", "nowMs")?.let { it.toString().toLong() } ?: 0L,
-                rowsJson = j.pick("rows_json", "rowsJson")?.let { it.toString() } ?: ""
+                rowsJson = j.pick("rows_json", "rowsJson")?.let { it.toString() } ?: "",
+                journal = j.pick("journal", "journal")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
             )
         }
     }
@@ -2400,13 +2339,19 @@ data class UnlockPin(
 data class UnreadChanged(
     val chat: Peer? = null,
     val count: Long = 0L,
-    val mention: Boolean = false
+    val mention: Boolean = false,
+    val lastReadId: ByteArray = ByteArray(0),
+    val lastReadTsMs: Long = 0L,
+    val mentions: List<ByteArray> = emptyList()
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
         if (!(chat == null)) j.put("chat", chat!!.toJson())
         if (!(count == 0L)) j.put("count", count)
         if (!(!mention)) j.put("mention", mention)
+        if (!(lastReadId.isEmpty())) j.put("last_read_id", toBase64(lastReadId))
+        if (!(lastReadTsMs == 0L)) j.put("last_read_ts_ms", lastReadTsMs.toString())
+        if (mentions.isNotEmpty()) j.put("mentions", JSONArray().apply { mentions.forEach { put(toBase64(it)) } })
         return j
     }
 
@@ -2415,7 +2360,10 @@ data class UnreadChanged(
             return UnreadChanged(
                 chat = j.pick("chat", "chat")?.let { Peer.fromJson(it as JSONObject) } ?: null,
                 count = j.pick("count", "count")?.let { it.toString().toLong() } ?: 0L,
-                mention = j.pick("mention", "mention")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false
+                mention = j.pick("mention", "mention")?.let { (it as? Boolean ?: it.toString().toBoolean()) } ?: false,
+                lastReadId = j.pick("last_read_id", "lastReadId")?.let { fromBase64(it.toString()) } ?: ByteArray(0),
+                lastReadTsMs = j.pick("last_read_ts_ms", "lastReadTsMs")?.let { it.toString().toLong() } ?: 0L,
+                mentions = (j.pick("mentions", "mentions") as? JSONArray)?.let { a -> (0 until a.length()).map { i -> a.get(i).let { fromBase64(it.toString()) } } } ?: emptyList()
             )
         }
     }

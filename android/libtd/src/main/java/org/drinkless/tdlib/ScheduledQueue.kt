@@ -58,7 +58,7 @@ class ScheduledQueue(private val dir: File, private val now: () -> Long = { Syst
     // Файл: {"next": <следующий id>, "items": [...]} — id не переиспользуются после
     // удаления (X может ещё держать удалённый отложенный по id).
     private fun load() {
-        if (!file.exists()) return
+        if (!SeamFiles.exists(file)) return
         try {
             val root = JSONObject(SeamFiles.read(file))
             nextId = maxOf(ID_BASE, root.optLong("next", ID_BASE))

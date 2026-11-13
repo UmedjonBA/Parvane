@@ -103,6 +103,8 @@ struct StoredMessage {
     bool pinned = false;
     std::string proof; // core.v2.MessageProof (base64): подпись автора полученного сообщения для жалобы (A0008-2)
     json copies = json::array(); // per-device копии (InboxPush; в sync — пусто)
+    // spec 036 (`engine_rows`): строку уже применила модель (событие итога её записи) — хост её в журнал не пишет
+    bool inModel = false;
 
     static StoredMessage fromJson(const json &j) {
         StoredMessage m;

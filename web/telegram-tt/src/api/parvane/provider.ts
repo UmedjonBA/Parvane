@@ -51,16 +51,14 @@ import {
   createV2Controller, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
 import { loadProtocol, verifyMessageProof } from './v2/engine';
-import { createHistoryJournal } from './v2/history';
 import {
-  historyChatKey, type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs, viewOf,
+  type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
 } from './v2/historyModel';
 import { pickRecoveryKey } from './v2/keyBundle';
 import { parseLinkCloudKeys, parseLinkPlannerKeys } from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import { createTabSignal } from './v2/tabSignal';
-import { auditJsonl, buildAuditDump } from './auditDump';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
@@ -78,13 +76,14 @@ import {
   AccountDeletionPendingError, canonicalAddress, createConnectionController, TwoFactorRequiredError,
 } from './connectionController';
 import { contactNameOverride, withContactName, withContactNote } from './contactInfo';
+import { isSharedSetId, localStickerRef, sharedFavedId } from './favedIds';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
 import {
   buildApiVideoFromSavedRecord, buildBuiltinGifs, BUILTIN_GIF_TAGS, canConvertGif, convertGifToWebm,
 } from './gifs';
 import { createGroupController } from './groups';
-import { createHistoryRows } from './historyRows';
+import { createHistoryRows, type ModelChat } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
 import {
@@ -549,7 +548,7 @@ const localState = createLocalState({
   // Отложенная пересылка (A3): messageController собран ниже, срок наступает позже
   forwardMessages: (params) => messageController.methods.forwardMessages(params),
   // spec 035 T118: виды журнала личного состояния — показом модели без сети (журнал и контроллер собраны ниже)
-  projectOffline: async () => stateJournal.projectOffline(await v2Controller.stateViewOffline()),
+  projectOffline: async () => stateJournal.showOffline(await v2Controller.stateViewOffline()),
 });
 
 // Журнал личного состояния v2 (T098): подключается, когда поднят v2-стек
@@ -559,7 +558,9 @@ const stateJournal = createStateJournal({
   sendUpdate,
   // callController создаётся ниже; вызывается только после подключения журнала
   applyCallRecords: (records) => callController.applyCallRecords(records),
-  applyChatCleared: (address, untilMs) => applyChatCleared(address, untilMs),
+  applyChatCleared: (address, untilMs) => {
+    void applyChatCleared(address, untilMs).catch((e: unknown) => logDebug(`v2: очистка чата: ${String(e)}`));
+  },
   // v2Controller создаётся ниже; вызывается только после подключения журнала
   sharedInvites: {
     list: () => v2Controller.allInvites(),
@@ -684,6 +685,32 @@ function savePackLocalId(key: string, setId: string | undefined) {
     localStorage.setItem(`parvane:pack-local-ids:${store.self}`, JSON.stringify(ids));
   } catch {
     // Квота: сопоставление восстановится при следующей установке
+  }
+}
+
+/** Избранные стикеры журнала (PACK-1, общий id) → свои id web для показа; ненайденные наборы пропускаются. */
+async function localFavedRefs(list: { setId: string; stickerId: string }[]) {
+  const packs = await loadInstalledPacks(store.self);
+  const out: { setId: string; stickerId: string }[] = [];
+  for (const faved of list) {
+    const ref = await localStickerRef(packs, faved);
+    if (ref) out.push(ref);
+  }
+  return out;
+}
+
+let isFavedRekeyed = false;
+
+/** Разовая перекладка избранного прежнего вида (свои id web) на общий id PACK-1. */
+async function rekeyFavedStickers() {
+  if (isFavedRekeyed || !stateJournal.isAttached()) return;
+  isFavedRekeyed = true;
+  const packs = await loadInstalledPacks(store.self);
+  for (const old of stateJournal.favedStickers().filter((f) => !isSharedSetId(f.setId))) {
+    const shared = await sharedFavedId(packs, old);
+    if (!shared) continue;
+    await stateJournal.faveSticker(shared.setId, shared.stickerId, true);
+    await stateJournal.faveSticker(old.setId, old.stickerId, false);
   }
 }
 
@@ -976,8 +1003,10 @@ async function uploadSavedGif(file: File): Promise<GifUploadResult> {
 
 // «Удалить чат у себя» на другом своём устройстве (T145): граница очистки
 // пришла журналом личного состояния — скрываем сообщения чата не позже неё
-function applyChatCleared(address: string, untilMs: number) {
+async function applyChatCleared(address: string, untilMs: number) {
   const chatId = store.getIdForAddress(address, address.includes('@') ? 'user' : 'group');
+  // Весь чат (spec 036 T015): строки, ещё не прочитанные в стор, снимаются и из модели
+  await syncController.ensureChatLoaded(chatId);
   const uuids = store.getMessages(chatId)
     .filter((message) => message.date * MS_IN_SECOND <= untilMs)
     .map((message) => store.getUuidForMessage(chatId, message.id))
@@ -1083,15 +1112,12 @@ const messageIndex = createMessageIndex({
   ],
 });
 
-// Журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): строки — в модели движка (spec 035 T114), журнал на
-// сервере — для остальных своих устройств (уже подключённых, долго бывших офлайн и новых)
+// Строки истории (spec 033 HIST-1/HIST-2/READ-2, spec 036): строки, маркеры и журнал истории аккаунта на сервере
+// (для остальных своих устройств — подключённых, долго бывших офлайн и новых) ведёт модель движка
 const historyRows = createHistoryRows({
   self: () => store.self,
-  // Прежние адреса (смена ника) — из сессии журнала движка; до её подключения — прежние ники из store
-  selves: () => {
-    const fromEngine = historyJournal.selfAddresses();
-    return fromEngine.length ? fromEngine : store.formerAddresses(store.self);
-  },
+  // Прежние адреса (смена ника) — прежние ники из store
+  selves: () => store.formerAddresses(store.self),
   domain: () => v2Controller.serverDomain(),
   index: messageIndex,
   model: () => v2Controller.rowsModel(),
@@ -1104,40 +1130,67 @@ const historyRows = createHistoryRows({
       syncController.pushMentionState(chatId);
     });
   },
-  loadClearedUntil: () => localState.loadClearedUntil(),
-  // Кэш строк прежних сборок: разово — в модель, затем стирается
-  legacy: {
-    load: () => localState.loadHistoryRecords(),
-    loadMarks: () => localState.loadReadMarks(),
-    drop: (uuids, addresses) => localState.dropLegacyHistory(uuids, addresses),
-  },
-  // Очередь журнала живёт и до его подключения (сохраняется на диск, уходит после подъёма стека)
-  journal: () => historyJournal,
+  onChatViews: (upserts, removed) => applyChatViews(upserts, removed),
   log: logDebug,
 });
 
-const historyJournal = createHistoryJournal({
-  rows: historyRows,
-  loadState: () => localState.loadHistorySync(),
-  saveState: (value) => localState.saveHistorySync(value),
-  loadOutbox: () => localState.loadHistoryOutbox(),
-  saveOutbox: (value) => localState.saveHistoryOutbox(value),
-  onWiped: (uuids) => {
-    void syncController.forgetMessages(uuids, true);
-  },
-  takeLegacyReadUuids: () => localState.takeLegacyReadUuids(),
-  onMigrated: () => localState.dropLegacyReadUuids(),
-  onWritten: () => journalTabs.post('history'),
-  log: logDebug,
-});
+// spec 036 T018 (ENGINE-1, E3): строки списка чатов — из модели (`chatList` в `fetchChats`, дальше `chat_upsert` /
+// `chat_remove`). Показанное помнится по чату: в tt уходит только изменившееся — архив, закреп (порядок закреплённых —
+// по рангу модели), отметка «непрочитано». Мут, черновик (с разметкой) и папки tt получает из объектов личного
+// состояния (`stateJournal.ts`): в `ChatView` их только часть (черновик — без сущностей, папка — без определения)
+const shownChatViews = new Map<string, ModelChat>();
+let areChatViewsSeeded = false;
 
-// Вкладки одного браузера — одно устройство: сервер их друг о друге не будит (`JournalNotice` — прочим устройствам)
+function seedChatViews(chats: ModelChat[]) {
+  chats.forEach((chat) => shownChatViews.set(chat.address, chat));
+  areChatViewsSeeded = true;
+}
+
+function applyChatViews(upserts: ModelChat[], removed: string[]) {
+  let isPinsChanged = false;
+  upserts.forEach((next) => {
+    const prev = shownChatViews.get(next.address);
+    shownChatViews.set(next.address, next);
+    if (!prev || !areChatViewsSeeded) return;
+    const chatId = store.getIdForAddress(next.address, next.address.includes('@') ? 'user' : 'group');
+    if (prev.archived !== next.archived) {
+      sendUpdate({ '@type': 'updateChatListType', id: chatId, folderId: next.archived ? ARCHIVED_FOLDER_ID : 0 });
+      isPinsChanged = true;
+    }
+    if (prev.pinnedRank !== next.pinnedRank) isPinsChanged = true;
+    if (prev.unreadMark !== next.unreadMark) {
+      sendUpdate({
+        '@type': 'updateThreadReadState',
+        chatId,
+        threadId: MAIN_THREAD_ID,
+        readState: { hasUnreadMark: next.unreadMark || undefined },
+      });
+    }
+  });
+  if (isPinsChanged) {
+    const ids = Array.from(shownChatViews.values()).filter((c) => c.pinnedRank > 0 && !c.archived)
+      .sort((a, b) => a.pinnedRank - b.pinnedRank)
+      .map((c) => store.getIdForAddress(c.address, c.address.includes('@') ? 'user' : 'group'));
+    sendUpdate({ '@type': 'updatePinnedChatIds', ids });
+  }
+  // `chat_remove` — только из памяти показанного: строку списка tt снимает путь, который снял строки чата (очистка и
+  // удаление — `forgetMessages` → `deleteHistory`, выход из группы — `updateChatLeave`). Само по себе оно приходит и
+  // мимолётно: чат только с черновиком снимается, когда черновик стёрт отправкой, раньше, чем строка своего сообщения
+  // попала в модель, — снятие чата из tt здесь обрывало отправку (content_ux, sync)
+  removed.forEach((address) => shownChatViews.delete(address));
+}
+
+// Вкладки одного браузера — одно устройство: сервер их друг о друге не будит (`JournalNotice` — прочим устройствам).
+// Журнал истории ведёт модель — по вкладкам расходится только журнал личного состояния
 const journalTabs = createTabSignal(() => store.self, (kind) => {
-  if (kind === 'history') historyJournal.onNotice();
-  else void stateJournal.syncNow().catch(() => undefined);
+  if (kind === 'state') void stateJournal.syncNow().catch(() => undefined);
 });
 
-// Своё отправленное (любым путём отправки): строка журнала истории и сдвиг маркера чата (ответил — прочитал)
+// Своё отправленное (любым путём отправки): строка журнала истории и сдвиг маркера чата (ответил — прочитал).
+// spec 036 T013: строку и маркер сводит модель (`rowsApply` с `journal: true` — в журнал истории их ставит она), web
+// только собирает операцию строки из записи журнала исходящих. Намерение модели `send` сюда не подходит: отправку
+// (вложения, отложенные, повторы, журнал исходящих с местом ORDER-1) ведёт `messages.ts`, а `send` модели сам ставит
+// сообщение в очередь сети — отправка ушла бы дважды. Место в ленте (ORDER-1) выбирает модель по времени строки
 localState.setOwnSentListener((entry) => {
   const address = store.resolveChatAddress(entry);
   const chat = peerForAddress(address, v2Controller.serverDomain());
@@ -1198,8 +1251,14 @@ const syncController = createSyncController({
   rememberSavedGif: rememberSavedGifFromSync,
   rememberStored: messageIndex.set,
   groupContentHidden: (group, author, content) => v2Controller.groupContentHidden(group, author, content),
-  history: { isUnread: historyRows.isUnread, ensureMarks: historyRows.ensureMarks },
-  rows: { loadStored: historyRows.loadStored, persistLocal: historyRows.persistLocal, forget: historyRows.forget },
+  history: { ensureMarks: historyRows.ensureMarks, unreadOf: historyRows.unreadOf },
+  rows: {
+    loadStored: historyRows.loadStored,
+    loadChat: historyRows.loadChat,
+    lastRows: async () => (await historyRows.chatsWithRows())?.flatMap((c) => (c.lastStored ? [c.lastStored] : [])),
+    persistLocal: historyRows.persistLocal,
+    forget: historyRows.forget,
+  },
   sendUpdate,
   log: logDebug,
 });
@@ -1241,21 +1300,6 @@ const v2Controller = createV2Controller({
   rememberGroupPhoto: (fileId, avatarKey) => {
     void mediaService.rememberGroupPhoto(fileId, avatarKey);
   },
-  // spec 035 T115: прежняя история — тем же сбором, что выгрузка «до» (`parvaneAuditDump`)
-  legacyHistory: async () => ({
-    states: await historyRows.legacyStates(),
-    marks: await localState.loadReadMarks(),
-    ownJournal: await localState.readOwnJournal(),
-    cleared: localState.loadClearedUntil(),
-  }),
-  reuploadGroupPhoto: async (address, fileId) => {
-    const media = await mediaService.downloadBlob(fileId);
-    if (!media) return false;
-    const { fileId: fresh, avatarKey } = await mediaService.uploadGroupPhoto(media.blob, media.mimeType);
-    const isDone = await groupController.setGroupInfo(address, { avatarFileId: fresh, avatarKey });
-    if (!isDone) void getV2Bridge().control.deleteBlob(fresh).catch(() => undefined);
-    return Boolean(isDone);
-  },
   getToken: () => token,
   getSelf: () => store.self,
   gatewayUrl: getGatewayUrl,
@@ -1268,17 +1312,18 @@ const v2Controller = createV2Controller({
     window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
   },
   describeDevice: describeThisDevice,
-  history: { ingest: historyRows.ingest, advanceMark: historyRows.advanceMark, receipt: historyRows.receipt },
+  history: {
+    ingest: historyRows.ingest,
+    advanceMark: historyRows.advanceMark,
+    receipt: historyRows.receipt,
+    applyModelDelta: historyRows.applyModelDelta,
+  },
   onModelReady: () => {
     void syncController.restoreLate().catch((e: unknown) => logDebug(`история: показ из модели: ${String(e)}`));
   },
-  onHistoryReady: (host, rekey) => {
-    journalTabs.listen();
-    void historyJournal.attach(host, rekey);
-  },
+  // Живое уведомление журнала истории модель обрабатывает сама (spec 036) — web догоняет только личное состояние
   onJournal: (journal) => {
-    if (journal === 'history') historyJournal.onNotice();
-    else void stateJournal.syncNow();
+    if (journal === 'state') void stateJournal.syncNow();
   },
   onBundleReady: () => {
     void syncFromKeyBundle();
@@ -1345,6 +1390,7 @@ const v2Controller = createV2Controller({
     // Устройство, привязанное после входа, готово только теперь — напоминания запускаются и здесь
     startReminders();
     messageController.resumeReceipts();
+    journalTabs.listen();
     const attached = stateJournal.attach(host, rekey);
     // PACK-3: наборы, установленные до синхронизации, — в журнал (после подключения, чтобы не затереть журнал)
     void Promise.resolve(attached).then(() => syncInstalledPacksOnce())
@@ -1386,6 +1432,7 @@ messageController = createMessageController({
   history: {
     deleteForMe,
     advanceMark: (address, tsMs, id) => historyRows.advanceMark(address, tsMs, id),
+    readTo: (address, tsMs, id) => historyRows.readTo(address, tsMs, id),
     find: (uuid) => messageIndex.find(uuid),
   },
   recordChatCleared: (address, untilMs) => stateJournal.recordChatCleared(address, untilMs),
@@ -1454,8 +1501,9 @@ const connectionController = createConnectionController({
   taskOffers,
   onNewSession: () => {
     stateJournal.reset();
-    historyJournal.reset();
     historyRows.reset();
+    shownChatViews.clear();
+    areChatViewsSeeded = false;
     v2Controller.reset();
     stopHistoryLink();
     stopTelegramRecovery('idle');
@@ -2670,17 +2718,25 @@ const methods = {
     // всплывал в списке до reload
     const chatIdsWithHistory = new Set(store.getChatIds().filter((id) => store.getMessages(id).length > 0));
     // Чаты со строками модели (spec 035 T114, `chatList`): последняя строка показана — чат с историей
-    (await historyRows.chatsWithRows().catch(() => undefined))?.forEach(({ last }) => {
+    const modelChats = await historyRows.chatsWithRows().catch(() => undefined);
+    if (modelChats) seedChatViews(modelChats);
+    modelChats?.forEach(({ last }) => {
       const message = last ? store.getMessageByUuid(last) : undefined;
       if (message) chatIdsWithHistory.add(message.chatId);
     });
+    // spec 036 (ENGINE-1, E3): архив, закреп и отметка «непрочитано» — из списка модели
+    const modelById = modelChats?.length
+      ? new Map(modelChats.map((c) => [store.getIdForAddress(c.address), c]))
+      : undefined;
     const legacyMarks = localState.takeLegacyUnreadMarks()
       .map((id) => store.getAddressForId(id))
       .filter((address): address is string => Boolean(address));
     if (legacyMarks.length) {
       localState.saveUnreadMarks(Array.from(new Set([...localState.loadUnreadMarks(), ...legacyMarks])));
     }
-    const unreadMarks = new Set(localState.loadUnreadMarks().map((address) => store.getIdForAddress(address)));
+    const unreadMarks = modelById
+      ? new Set(Array.from(modelById.entries()).filter(([, c]) => c.unreadMark).map(([id]) => id))
+      : new Set(localState.loadUnreadMarks().map((address) => store.getIdForAddress(address)));
     const isVisibleChat = (chat: ApiChat) => chatIdsWithHistory.has(chat.id)
       || chatIdsWithDrafts.has(chat.id)
       || chat.type !== 'chatTypePrivate';
@@ -2698,17 +2754,19 @@ const methods = {
     const allVisibleChats = listedChats.filter(isVisibleChat);
 
     // Архив и пины (локальный persist по адресу пира/группы)
-    const archivedIds = new Set(
-      localState.loadArchived().map((address) => store.getIdForAddress(address)),
-    );
+    const archivedIds = modelById
+      ? new Set(Array.from(modelById.entries()).filter(([, c]) => c.archived).map(([id]) => id))
+      : new Set(localState.loadArchived().map((address) => store.getIdForAddress(address)));
     allVisibleChats.forEach((chat) => {
       chat.folderId = archivedIds.has(chat.id) ? ARCHIVED_FOLDER_ID : undefined;
     });
     const visibleChats = allVisibleChats.filter(
       (chat) => (archived ? archivedIds.has(chat.id) : !archivedIds.has(chat.id)),
     );
-    const pinnedIds = localState.loadPinned()
-      .map((address) => store.getIdForAddress(address))
+    const pinnedIds = (modelById
+      ? Array.from(modelById.entries()).filter(([, c]) => c.pinnedRank > 0 && !c.archived)
+        .sort((x, y) => x[1].pinnedRank - y[1].pinnedRank).map(([id]) => id)
+      : localState.loadPinned().map((address) => store.getIdForAddress(address)))
       .filter((id) => visibleChats.some((chat) => chat.id === id));
     const orderedPinnedIds = archived || !pinnedIds.length ? undefined : pinnedIds;
 
@@ -2729,6 +2787,7 @@ const methods = {
         let unreadCount = 0;
         const isSelfChat = chat.id === selfId();
         const hasUnreadMark = unreadMarks.has(chat.id) || undefined;
+        const unread = syncController.unreadIdsOf(chat.id);
         history.forEach((message) => {
           // Sealed-сообщения без senderId и «Избранное» непрочитанными не считаем.
           // Единый предикат (sync.isUnreadIncoming): записи о звонках и служебные
@@ -2736,14 +2795,29 @@ const methods = {
           // считается и то, что пометило ЭТО устройство (READ-1): серверный
           // флаг мог не успеть вернуться, и после перезагрузки бейдж возвращался.
           if (message.isOutgoing || isSelfChat || !message.senderId) return;
-          if (syncController.isUnreadIncoming(chat.id, message)) {
+          if (unread.has(message.id)) {
             unreadCount += 1;
           } else if (message.id > lastReadInbox) {
             lastReadInbox = message.id;
           }
         });
         if (isSelfChat) lastReadInbox = last.id;
-        const unreadMentions = isSelfChat ? [] : syncController.collectUnreadMentions(chat.id);
+        let unreadMentions = isSelfChat ? [] : syncController.collectUnreadMentions(chat.id);
+        // spec 036 (E4): счётчик, маркер и упоминания — готовыми из модели
+        const address = store.getAddressForId(chat.id);
+        // Счётчик модели: последнее `unread_changed`, а если его не было (счётчик с начала 0) — вид чата `chatList`
+        const modelChat = modelById?.get(chat.id);
+        const fromModel = modelById && address && !isSelfChat
+          ? historyRows.unreadOf(address) || (modelChat ? { count: modelChat.unread, mentions: [] } : undefined)
+          : undefined;
+        if (fromModel) {
+          unreadCount = fromModel.count;
+          const readMsg = fromModel.lastReadId ? store.getMessageByUuid(fromModel.lastReadId) : undefined;
+          if (readMsg) lastReadInbox = Math.max(lastReadInbox, readMsg.id);
+          unreadMentions = fromModel.mentions
+            .map((uuid) => store.getMessageByUuid(uuid)?.id)
+            .filter((id): id is number => id !== undefined);
+        }
         threadReadStatesById[chat.id] = {
           lastReadInboxMessageId: lastReadInbox,
           unreadCount,
@@ -2815,6 +2889,8 @@ const methods = {
     chat, limit, offsetId, addOffset,
   }: { chat: ApiChat; limit: number; offsetId?: number; addOffset?: number }) {
     await syncController.ensureSynced();
+    // spec 036 T015: чат целиком — из модели при первом открытии (при запуске в сторе только последние строки)
+    await syncController.ensureChatLoaded(chat.id);
     // Превью публичной группы (spec 023): лента приходит событиями после загрузки
     if (groupController.isPublicPreview(chat.id)) void groupController.loadPublicPreview(chat.id);
     const history = store.getMessages(chat.id);
@@ -3052,10 +3128,11 @@ const methods = {
 
   // ── упоминания ──────────────────────────────────────────────────────────────
 
-  fetchUnreadMentions({ chat }: { chat: ApiChat }) {
+  async fetchUnreadMentions({ chat }: { chat: ApiChat }) {
+    await syncController.ensureChatLoaded(chat.id);
     const ids = new Set(syncController.collectUnreadMentions(chat.id));
     const messages = store.getMessages(chat.id).filter((message) => ids.has(message.id));
-    return Promise.resolve({ messages, totalCount: messages.length });
+    return { messages, totalCount: messages.length };
   },
 
   migrateChat: (chat: ApiChat) => Promise.resolve(groupController.migrateChat(chat)),
@@ -3128,13 +3205,14 @@ const methods = {
   },
 
   // «Открепить все»: по одному штатным msg.chat.pin (у сервера нет пакетного)
-  unpinAllMessages({ chat }: { chat: ApiChat; threadId?: unknown }) {
+  async unpinAllMessages({ chat }: { chat: ApiChat; threadId?: unknown }) {
+    await syncController.ensureChatLoaded(chat.id);
     store.getMessages(chat.id)
       .filter((message) => message.isPinned)
       .forEach((message) => {
         void methods.pinMessage({ chat, messageId: message.id, isUnpin: true });
       });
-    return Promise.resolve(undefined);
+    return undefined;
   },
 
   // «Общие группы» в профиле: группы из реестра, где состоим оба
@@ -3164,9 +3242,10 @@ const methods = {
     return Promise.resolve({ users: apiUsers, userStatusesById });
   },
 
-  fetchMessage({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+  async fetchMessage({ chat, messageId }: { chat: ApiChat; messageId: number }) {
+    if (!store.getMessage(chat.id, messageId)) await syncController.ensureChatLoaded(chat.id);
     const message = store.getMessage(chat.id, messageId);
-    return Promise.resolve(message ? { message } : undefined);
+    return message ? { message } : undefined;
   },
 
   // «Кто голосовал» в опросе (публичные): список проголосовавших за вариант
@@ -3327,31 +3406,37 @@ const methods = {
 
   // Вкладки типа без запроса — последние по типу со всех чатов; с запросом — подпись, имя файла, название (A7);
   // отбор по дате (B1) и «Сообщения из: личные / группы / каналы» (B2)
-  searchMessagesGlobal({
+  async searchMessagesGlobal({
     query, type, context, minDate, maxDate,
   }: {
     query?: string; type?: string; context?: SearchFilters['context']; minDate?: number; maxDate?: number;
   }) {
+    // spec 036 T015: история в сторе ленивая — поиск по всем сообщениям сперва читает все чаты. Пустой текстовый запрос
+    // (tt зовёт его при каждом открытии поиска) отвечает сразу: ожидание чтения всех чатов сдвигало показ
+    // результатов поиска чатов, и поиск собеседника перехватывал композер (content_ux)
+    if (query || (type && type !== 'text')) await syncController.ensureAllLoaded();
     const all = store.getChatIds().flatMap((id) => store.getMessages(id));
-    return Promise.resolve(buildSearchResults(searchMessages(all, query, type, {
+    return buildSearchResults(searchMessages(all, query, type, {
       minDate, maxDate, context, chatKindOf,
-    })));
+    }));
   },
 
-  searchMessagesInChat({
+  async searchMessagesInChat({
     peer, query, type, fromPeer, minDate, maxDate,
   }: {
     peer: { id: string }; query?: string; type?: string; fromPeer?: { id: string }; minDate?: number; maxDate?: number;
   }) {
     // Вкладки профиля (Media/Files/Links/Voice/Music) зовут без query, но с type; «От пользователя» (B3)
-    return Promise.resolve(buildSearchResults(searchMessages(store.getMessages(peer.id), query, type, {
+    await syncController.ensureChatLoaded(peer.id);
+    return buildSearchResults(searchMessages(store.getMessages(peer.id), query, type, {
       fromId: fromPeer?.id, minDate, maxDate,
-    })));
+    }));
   },
 
   // «Перейти к дате» (A5): история чата — на устройстве
   async findFirstMessageIdAfterDate({ chat, timestamp }: { chat: ApiChat; timestamp: number }) {
     await syncController.ensureSynced().catch(() => undefined);
+    await syncController.ensureChatLoaded(chat.id);
     return findFirstMessageIdAfterDate(store.getMessages(chat.id), timestamp);
   },
 
@@ -3555,41 +3640,12 @@ const methods = {
     return v2Controller.auditCounters();
   },
 
-  /** e2e (только диаг-сборка, spec 035 T109): состояние модели после разового переноса. */
-  parvaneDiagMigration() {
-    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return Promise.resolve(undefined);
-    return Promise.resolve(v2Controller.migrationState());
-  },
-
-  /** Выгрузка «ничего не потеряно» (spec 035, T007; только диаг-сборка): JSONL `{kind, key, digest}`. */
-  async parvaneAuditDump({ source }: { source?: 'engine' } = {}) {
-    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return undefined;
-    // spec 035 T109: выгрузка модели движка после разового переноса (`auditDump` модели, contracts/migration.md)
-    if (source === 'engine') return v2Controller.engineAuditDump();
-    const sources = v2Controller.auditSources();
-    const rows = await historyRows.collectStates();
-    const lines = await buildAuditDump({
-      rows,
-      marks: historyRows.marksList(),
-      ownJournal: await localState.readOwnJournal(),
-      stateSnapshot: stateJournal.snapshotJson(),
-      plannerState: sources?.plannerState,
-      cloud: sources?.cloud || [],
-      groups: sources?.groups || [],
-      deviceLogs: sources?.deviceLogs || [],
-      accountKeys: sources?.accountKeys || {},
-      view: viewOf,
-      chatKey: historyChatKey,
-    });
-    return auditJsonl(lines);
-  },
-
   /** e2e (только диаг-сборка, spec 035 T110/T111): показ личного состояния модели и избранные стикеры. */
   parvaneDiagStateView() {
     if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return Promise.resolve(undefined);
-    const json = stateJournal.snapshotJson();
+    const json = stateJournal.stateJson();
     return Promise.resolve({
-      snapshot: json ? JSON.parse(json) as unknown : undefined,
+      state: json ? JSON.parse(json) as unknown : undefined,
       faved: stateJournal.favedStickers(),
       isAttached: stateJournal.isAttached(),
     });
@@ -4221,8 +4277,9 @@ const methods = {
   // Избранные — объект FAVED_STICKER журнала личного состояния (spec 035, FR-075): видны на всех своих
   // устройствах; без журнала (вход ещё не завершён) — список устройства
   async fetchFavoriteStickers() {
+    void rekeyFavedStickers();
     const refs = stateJournal.isAttached()
-      ? stateJournal.favedStickers().slice(0, FAVORITE_STICKERS_LIMIT)
+      ? await localFavedRefs(stateJournal.favedStickers().slice(0, FAVORITE_STICKERS_LIMIT))
       : localState.loadStickerRefs('favestickers') || [];
     return { hash: String(Date.now()), stickers: await resolveStickerRefs(refs, loadStickerSetContent) };
   },
@@ -4231,7 +4288,13 @@ const methods = {
     const ref = stickerRefOf(sticker);
     if (!ref) return undefined;
     if (stateJournal.isAttached()) {
-      await stateJournal.faveSticker(ref.setId, ref.stickerId, !unfave);
+      // PACK-1: в журнал — общий id (ключ набора и имя файла); прежние записи своего вида снимаются тоже
+      const shared = await sharedFavedId(await loadInstalledPacks(store.self), ref);
+      if (shared) {
+        await stateJournal.faveSticker(shared.setId, shared.stickerId, !unfave);
+        logDebug(`избранное (PACK-1): ${shared.setId}/${shared.stickerId} ${unfave ? 'снят' : 'добавлен'}`);
+      }
+      if (!shared || unfave) await stateJournal.faveSticker(ref.setId, ref.stickerId, !unfave && !shared);
       // Сверх предела — самые старые уходят из избранного (как у Telegram)
       const extra = unfave ? [] : stateJournal.favedStickers().slice(FAVORITE_STICKERS_LIMIT);
       for (const old of extra) await stateJournal.faveSticker(old.setId, old.stickerId, false);
@@ -5094,8 +5157,9 @@ const methods = {
     // Стор прежнего аккаунта не должен отвечать на запросы между logout и
     // следующим входом
     store = new ParvaneStore();
-    historyJournal.reset();
     historyRows.reset();
+    shownChatViews.clear();
+    areChatViewsSeeded = false;
     messageController.reset();
     localState.reset();
     polls.reset();

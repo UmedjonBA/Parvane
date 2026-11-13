@@ -97,29 +97,24 @@ void emitNow(const json &event); // синхронно (реплей журна�
 // FED-1: отказ федерации (код в тексте ошибки) → событие federation_error{reason} (disabled|blocked|refused|unreachable|
 // key_changed); остальные ошибки — ничего. Как desktop NoteFederationFailure / web federationReason.
 void noteFederationFailure(const std::string &error);
-// spec 035 T137: записи старых мест профиля для разового переноса — Kotlin MigrateLegacy.kt (json() — не вышло)
-[[nodiscard]] json legacyRecordsFromKotlin(const std::string &dir, const std::string &self);
 
 // ── журнал истории аккаунта (spec 033, jni_history.cpp; ядро parvane::history::HistorySync) ─────────────
 // Строки RowState и маркеры «прочитано до» — модель движка (ModelRows ядра, spec 035 T125); события шва
 // message/edited/meta/deleted/read_state.
 void historyStart();   // рабочий поток журнала (после старта сессии v2)
-// spec 035 T137: пока не закончен разовый перенос прежнего состояния в модель, рабочий поток журнала истории не
-// стартует (он применяет свои отложенные операции к старым файлам истории — перенос читал бы их уже другими);
-// снятие удержания запускает отложенный historyStart.
-void historyHold(bool hold);
 void historyReset();   // выход, смена аккаунта, смена ника: остановить и забыть
-void historySessionEvent(const json &ev); // {"type":"journal","journal":"history"} | stateReady
 // Домен группы для Peer строк журнала; authoritative = false (из строк журнала) — только если ещё не известен.
 void historyNoteGroupDomain(const std::string &address, const std::string &domain, bool authoritative = true);
-// Выгрузка «ничего не потеряно» (spec 035, T007): JSONL строк parvane::audit; пусто вне debug-сборки.
-[[nodiscard]] std::string auditDumpJsonl();
 void historyNoteGroupInfo(const std::string &address, const json &info); // кто в группе удаляет чужое
 [[nodiscard]] bool historyGroupCanDelete(const std::string &group, const std::string &user);
 [[nodiscard]] json historyPeerOf(const std::string &chatAddress); // state.v1.Peer; null — не чат
 // Событие "message" (своё — own, иначе входящее) → строка журнала; событие дополняется по сведённой строке (правки,
 // реакции, закреп, пришедшие раньше, прочитано). false — сообщение удалено раньше прихода: не показывать.
-bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs = 0);
+// inModel — строку уже применила модель (событие итога её записи, spec 036 `engine_rows`): не записывать, только
+// показ из модели.
+bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs = 0, bool inModel = false);
+// spec 036 (ENGINE-1): изменения модели — строки (`message_upsert/remove`) и счётчики (`unread_changed`) — в шов.
+void historyModelChanges(const json &changes);
 json historyRecordOwnOp(const json &op); // своя правка/реакция/закреп → журнал ≤ 300 мс
 [[nodiscard]] std::optional<json> historyState(const std::string &id);
 void historyApplyIncomingMutation(const parvane::v2::Incoming &in); // Edit/Delete/Reaction/Pin/Read
@@ -147,6 +142,8 @@ void noteMessage(const std::string &id, const std::string &from, const std::stri
 void updateMessageContent(const std::string &id, const json &content);
 void forgetMessage(const std::string &id);
 [[nodiscard]] bool markSeen(const std::string &id); // false — уже было
+// Снять отметку «показано» (строку сняла модель: показ заново — новой строкой, spec 036 HIST-2 замена).
+void unmarkSeen(const std::string &id);
 void resetMessages();
 
 // Блобы вложений по секрету (CAP-1): file_id → секрет base64 из содержимого.
@@ -230,6 +227,13 @@ void sectionsAccountReset();
 
 // ── выход и стирание (NAT-16) ────────────────────────────────────────────────
 void wipeAccountData(const char *why);
+// spec 036 T036: файлы каталога хранилища по пути — записями хранилища движка (PathFiles ядра; прежний файл storecrypt
+// переносится при первом обращении; без ключа — прежний путь): файлы шва, сессия, владелец, доверие 2FA, служебное
+// журнала истории (history-local).
+[[nodiscard]] std::string hostRead(const std::string &path);
+[[nodiscard]] bool hostExists(const std::string &path);
+bool hostWrite(const std::string &path, const std::string &data);
+void hostRemove(const std::string &path);
 [[nodiscard]] bool prepareForLogin();
 
 } // namespace pvjni

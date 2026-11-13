@@ -14,10 +14,8 @@
 // - KEK обёртки PIN выводит WebCrypto (PBKDF2-SHA256, 310 000 итераций — тот же результат, что `store::pin_kek`).
 // - Вкладки (FR-027): каждая запись сверяет корень с носителем под общим замком (Web Locks); смена обёртки,
 //   блокировка и смена поколения рассылаются `tabSignal` (T045).
-// - Профиль, созданный до spec 035 (`parvane-e2e-v2`), разово переносится сюда при первом открытии (под PIN —
-//   после ввода PIN, тем же PIN): записи копируются, сверяются побайтно, затем указатель «адрес → профиль»;
-//   прежняя база только получает отметку «перенесено» (T115, удаление — вручную по D2). Прерывание на любом шаге
-//   — следующий запуск переносит заново в тот же профиль.
+// - Профили до spec 035 (`parvane-e2e-v2`) перенесены и больше не читаются (T149): прежняя база стирается при
+//   первом открытии хранилища на этой версии.
 import { createStore, del, get, set } from 'idb-keyval';
 
 import type { PvStore } from '../../lib/parvane-protocol/parvane_protocol';
@@ -28,14 +26,6 @@ import { storeOpen } from '../../lib/parvane-protocol/parvane_protocol';
 import { loadProtocol } from './v2/engine';
 import { openStoreIdb, STORE_DB } from './v2/storeIdb';
 import { createStorageSignal } from './v2/tabSignal';
-import { reportMigration } from './migrationProgress';
-import {
-  legacyClearSecureSession, legacyClearTrustSecret, LegacyE2eStorage, legacyExportAll, legacyHasStoragePin,
-  legacyIsStorageUnlocked, legacyLoadSecureSession, legacyLoadTrustSecret, legacyLockStorage, legacyMigrationMark,
-  legacyProfileExists, legacySaveSecureSession, legacySaveTrustSecret, legacySetMigrationMark,
-  legacyStorageInternals, legacyUnlockStorageWithPin,
-} from './secureStorageLegacy';
-
 // Новый PIN — не короче: копию профиля перебирают офлайн (WEB-15)
 export const STORAGE_PIN_MIN_LENGTH = 8;
 const PIN_ITERATIONS = 310_000;
@@ -52,16 +42,6 @@ const STATE_NAME = '__state';
 const KEYS = createStore('parvane-store-v3-keys', 'keys');
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-
-function toB64(bytes: Uint8Array) {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(out);
-}
-
-function fromB64(text: string) {
-  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
-}
 
 function kindOf(name: string): string {
   if (name.startsWith('m:')) return 'history-row';
@@ -136,9 +116,6 @@ type Ctx = {
   tab: string;
   profiles: Map<string, Promise<Profile | undefined>>;
   resolved: Map<string, Profile>;
-  legacy: Map<string, boolean>;
-  // Идёт разовый перенос прежнего профиля (один на адрес)
-  migrating: Map<string, Promise<boolean>>;
   // Сколько раз хранилище адреса стёрто (`clear`): экземпляр, открытый до стирания, профиль заново не создаёт
   cleared: Map<string, number>;
   dir?: Promise<StoreIdb>;
@@ -147,7 +124,7 @@ type Ctx = {
 
 function newCtx(): Ctx {
   return {
-    tab: hex(randomBytes(8)), profiles: new Map(), resolved: new Map(), legacy: new Map(), migrating: new Map(),
+    tab: hex(randomBytes(8)), profiles: new Map(), resolved: new Map(),
     cleared: new Map(),
   };
 }
@@ -478,127 +455,18 @@ function lockedError() {
   return new Error('E2E storage is protected by a PIN and is locked.');
 }
 
-/** Профиль адреса — прежний, ещё не перенесённый. Прежний профиль без PIN переносится здесь же (до первого
- * открытия); под PIN — после ввода PIN (`unlockWithPinIn`). Перенос не удался — профиль ведёт прежний модуль. */
-async function isLegacyUser(ctx: Ctx, user: string) {
-  const known = ctx.legacy.get(user);
-  if (known !== undefined) return known;
-  if (await profileIdOf(ctx, user) || !(await legacyProfileExists(user))) {
-    ctx.legacy.set(user, false);
-    return false;
-  }
-  const moved = await migrateLegacyIn(ctx, user);
-  ctx.legacy.set(user, !moved);
-  return !moved;
-}
+// Прежняя база профилей до spec 035 — одна на браузер, стирается один раз за страницу (T149)
+const LEGACY_DB = 'parvane-e2e-v2';
+let isLegacyDbDropped = false;
 
-// ── разовый перенос прежнего профиля `parvane-e2e-v2` → `parvane-store-v3` (T115) ────────────────────────────
-function migrateLegacyIn(ctx: Ctx, user: string, pin?: string): Promise<boolean> {
-  let run = ctx.migrating.get(user);
-  if (!run) {
-    run = moveLegacyProfile(ctx, user, pin).catch((e: unknown) => {
-      // eslint-disable-next-line no-console
-      console.warn(`[parvane] хранилище: перенос прежнего профиля не удался: ${String(e)}`);
-      return false;
-    }).finally(() => ctx.migrating.delete(user));
-    ctx.migrating.set(user, run);
-  }
-  return run;
-}
-
-function sameBytes(a: Uint8Array, b: Uint8Array) {
-  return a.length === b.length && a.every((x, i) => x === b[i]);
-}
-
-async function moveLegacyProfile(ctx: Ctx, user: string, pin?: string): Promise<boolean> {
-  if (await profileIdOf(ctx, user)) return true;
-  const hasPin = await legacyHasStoragePin(user);
-  // Под PIN: ключ прежнего профиля — из PIN; перенос — после его ввода, новый профиль — под тем же PIN
-  if (hasPin && !pin) return false;
-  const data = await legacyExportAll(user);
-  if (!data) return false;
-  const puts: [string, Uint8Array][] = [...(data.state ? [[STATE_NAME, data.state] as [string, Uint8Array]] : []),
-    ...data.records.filter(([name]) => name !== STATE_NAME)];
-  const total = puts.length;
-  reportMigration({
-    phase: 'storage', active: true, done: 0, total,
-  });
-  // Тот же профиль при повторе: частичная копия прошлой попытки стирается и пишется заново
-  const mark = await legacyMigrationMark(user);
-  const id = mark?.pending || mark?.done || hex(randomBytes(16));
-  if (!mark?.pending) await legacySetMigrationMark(user, { pending: id, at: Date.now() });
-  await loadProtocol();
-  const idb = await openStoreIdb(`${STORE_DB}-${id}`);
-  await idb.clearAll();
-  await del(id, KEYS);
-  const engine = storeOpen(new Uint8Array(0));
-  const p: Profile = {
-    user,
-    id,
-    idb,
-    engine,
-    chain: Promise.resolve(),
-    migration: {
-      active: false, point: 0, startedAt: 0, errors: [],
-    },
-    signal: createStorageSignal(id, ctx.tab, (kind) => onSignal(ctx, p, kind)),
-  };
+function dropLegacyDb() {
+  if (isLegacyDbDropped || typeof indexedDB === 'undefined') return;
+  isLegacyDbDropped = true;
   try {
-    const raw = randomBytes(32);
-    const batch = engine.storeWrapDevice(raw) as JsBatch;
-    batch.puts.push({ key: DEVICE_KEY, value: await sealDevice(id, raw) });
-    raw.fill(0);
-    await commit(ctx, p, batch);
-    for (let start = 0; start < puts.length; start += WRITE_BATCH) {
-      await writeRecords(ctx, p, puts.slice(start, start + WRITE_BATCH));
-      reportMigration({
-        phase: 'storage', active: true, done: Math.min(start + WRITE_BATCH, total), total,
-      });
-    }
-    // Сверка до переключения: каждая запись новым профилем открывается и побайтно та же
-    const stored = new Map((await readPrefix(p, '')).map(({ name, bytes }) => [name, bytes]));
-    const lost = puts.filter(([name, bytes]) => {
-      const back = stored.get(name);
-      return !back || !sameBytes(back, bytes);
-    });
-    if (lost.length) throw new Error(`не сошлись записи: ${lost.slice(0, 3).map(([name]) => name).join(', ')}`);
-    if (hasPin) {
-      const salt = randomBytes(16);
-      const kek = await pinKek(pin!, salt, PIN_ITERATIONS);
-      try {
-        await exclusive(p, async () => {
-          const pinBatch = p.engine.storeSetPin(salt, PIN_ITERATIONS, kek) as JsBatch;
-          pinBatch.deletes.push(DEVICE_KEY);
-          await commit(ctx, p, pinBatch);
-          // Ключ устройства жил минуты переноса: DEK — новым поколением (как при установке PIN)
-          await commit(ctx, p, p.engine.beginRotation() as JsBatch);
-        });
-      } finally {
-        kek.fill(0);
-      }
-    }
-  } catch (e) {
-    p.signal.close();
-    idb.close();
-    engine.free();
-    reportMigration({
-      phase: 'storage', active: false, done: 0, total, error: String(e),
-    });
-    throw e;
+    indexedDB.deleteDatabase(LEGACY_DB);
+  } catch {
+    // нет доступа к IndexedDB — нечего стирать
   }
-  // Отметка «перенесено» в прежней базе — до переключения указателя: повтор после сбоя между ними просто
-  // перенесёт заново; прежние записи остаются (D2)
-  await legacySetMigrationMark(user, { done: id, at: Date.now(), records: total });
-  const dir = await directory(ctx);
-  await dir.commit({ batchId: '0', puts: [{ key: `profile/${user}`, value: encoder.encode(id) }], deletes: [] });
-  ctx.legacy.set(user, false);
-  ctx.profiles.set(user, Promise.resolve(p));
-  ctx.resolved.set(user, p);
-  resumeRotation(ctx, p);
-  reportMigration({
-    phase: 'storage', active: false, done: total, total,
-  });
-  return true;
 }
 
 async function readyProfile(ctx: Ctx, user: string) {
@@ -618,14 +486,13 @@ export class SecureE2eStorage {
   protected constructor(
     private readonly ctx: Ctx,
     private readonly user: string,
-    private readonly legacy?: LegacyE2eStorage,
   ) {
     this.generation = ctx.cleared.get(user) || 0;
   }
 
   static async open(user: string) {
     const { ctx } = this;
-    if (await isLegacyUser(ctx, user)) return new this(ctx, user, await LegacyE2eStorage.open(user));
+    dropLegacyDb();
     await readyProfile(ctx, user);
     return new this(ctx, user);
   }
@@ -640,23 +507,19 @@ export class SecureE2eStorage {
   }
 
   async load<T>() {
-    if (this.legacy) return this.legacy.load<T>();
     const bytes = await readRecord(await this.profile(), STATE_NAME);
     return bytes ? JSON.parse(decoder.decode(bytes)) as T : undefined;
   }
 
   async save(value: unknown) {
-    if (this.legacy) return this.legacy.save(value);
     return writeRecords(this.ctx, await this.profile(), [[STATE_NAME, encoder.encode(JSON.stringify(value))]]);
   }
 
   async saveRecord(name: string, value: unknown) {
-    if (this.legacy) return this.legacy.saveRecord(name, value);
     return writeRecords(this.ctx, await this.profile(), [[name, encoder.encode(JSON.stringify(value))]]);
   }
 
   async loadRecord<T>(name: string): Promise<T | undefined> {
-    if (this.legacy) return this.legacy.loadRecord<T>(name);
     const bytes = await readRecord(await this.profile(), name);
     if (!bytes) return undefined;
     try {
@@ -667,20 +530,17 @@ export class SecureE2eStorage {
   }
 
   async saveRecords(entries: [name: string, value: unknown][]) {
-    if (this.legacy) return this.legacy.saveRecords(entries);
     if (!entries.length) return undefined;
     return writeRecords(this.ctx, await this.profile(),
       entries.map(([name, value]) => [name, encoder.encode(JSON.stringify(value))]));
   }
 
   async deleteRecords(names: string[]) {
-    if (this.legacy) return this.legacy.deleteRecords(names);
     if (!names.length) return undefined;
     return writeRecords(this.ctx, await this.profile(), [], names);
   }
 
   async loadRecordsByPrefix<T>(prefix: string): Promise<T[]> {
-    if (this.legacy) return this.legacy.loadRecordsByPrefix<T>(prefix);
     const rows = await readPrefix(await this.profile(), prefix);
     const out: T[] = [];
     rows.forEach(({ bytes }) => {
@@ -694,17 +554,14 @@ export class SecureE2eStorage {
   }
 
   async saveBytesRecord(name: string, bytes: Uint8Array) {
-    if (this.legacy) return this.legacy.saveBytesRecord(name, bytes);
     return writeRecords(this.ctx, await this.profile(), [[name, bytes]]);
   }
 
   async loadBytesRecord(name: string): Promise<Uint8Array | undefined> {
-    if (this.legacy) return this.legacy.loadBytesRecord(name);
     return readRecord(await this.profile(), name);
   }
 
   async deleteRecord(name: string) {
-    if (this.legacy) return this.legacy.deleteRecord(name);
     return writeRecords(this.ctx, await this.profile(), [], [name]);
   }
 
@@ -713,29 +570,15 @@ export class SecureE2eStorage {
   // поколения — как у остальных записей). Пачка модели — одна запись хранилища: записи и удаления вместе.
 
   async writeModelRecords(puts: [name: string, bytes: Uint8Array][], deletes: string[]) {
-    if (this.legacy) {
-      // Прежний профиль (до T115): значение — JSON с именем, иначе префиксное чтение не вернёт имён
-      if (puts.length) await this.legacy.saveRecords(puts.map(([name, bytes]) => [name, { k: name, v: toB64(bytes) }]));
-      if (deletes.length) await this.legacy.deleteRecords(deletes);
-      return undefined;
-    }
     if (!puts.length && !deletes.length) return undefined;
     return writeRecords(this.ctx, await this.profile(), puts, deletes);
   }
 
   async loadModelRecord(name: string): Promise<Uint8Array | undefined> {
-    if (this.legacy) {
-      const r = await this.legacy.loadRecord<{ k: string; v: string }>(name);
-      return r?.v !== undefined ? fromB64(r.v) : undefined;
-    }
     return readRecord(await this.profile(), name);
   }
 
   async loadModelRecords(prefix: string): Promise<{ name: string; bytes: Uint8Array }[]> {
-    if (this.legacy) {
-      const rows = await this.legacy.loadRecordsByPrefix<{ k: string; v: string }>(prefix);
-      return rows.filter((r) => r && typeof r.k === 'string').map((r) => ({ name: r.k, bytes: fromB64(r.v) }));
-    }
     return (await readPrefix(await this.profile(), prefix)).filter((r) => r.name.startsWith(prefix));
   }
 
@@ -750,9 +593,7 @@ export class SecureE2eStorage {
 
 async function clearIn(ctx: Ctx, user: string) {
   ctx.cleared.set(user, (ctx.cleared.get(user) || 0) + 1);
-  ctx.legacy.delete(user);
   clearedListeners.forEach((fn) => fn(user));
-  await LegacyE2eStorage.clear(user);
   const p = await openProfile(ctx, user, false).catch(() => undefined);
   const id = p?.id || await profileIdOf(ctx, user);
   if (p) {
@@ -771,10 +612,6 @@ async function clearIn(ctx: Ctx, user: string) {
 }
 
 async function clearRecordsIn(ctx: Ctx, user: string) {
-  if (await isLegacyUser(ctx, user)) {
-    await LegacyE2eStorage.clearRecords(user);
-    return;
-  }
   const p = await openProfile(ctx, user, false);
   if (!p) return;
   await ensureReady(p);
@@ -800,26 +637,16 @@ function forgetProfile(ctx: Ctx, user: string) {
 
 // ── PIN (P-39 → spec 035) ────────────────────────────────────────────────────────────────────────────────
 async function hasPinIn(ctx: Ctx, user: string) {
-  if (await isLegacyUser(ctx, user)) return legacyHasStoragePin(user);
   const p = await openProfile(ctx, user, false);
   return Boolean(p && info(p).wraps.includes('pin'));
 }
 
 function isUnlockedIn(ctx: Ctx, user: string) {
-  if (ctx.legacy.get(user)) return legacyIsStorageUnlocked(user);
   const p = ctx.resolved.get(user);
   return Boolean(p && p.engine.state() === 'ready' && info(p).wraps.includes('pin'));
 }
 
 async function unlockWithPinIn(ctx: Ctx, user: string, pin: string): Promise<boolean> {
-  if (await isLegacyUser(ctx, user)) {
-    if (!(await legacyUnlockStorageWithPin(user, pin))) return false;
-    // PIN верен: прежний профиль — в новое хранилище под тем же PIN (не вышло — работает прежний модуль)
-    const moved = await migrateLegacyIn(ctx, user, pin);
-    ctx.legacy.set(user, !moved);
-    if (moved) legacyLockStorage(user);
-    return true;
-  }
   const p = await openProfile(ctx, user, false);
   if (!p) return true;
   const i = info(p);
@@ -838,10 +665,6 @@ async function unlockWithPinIn(ctx: Ctx, user: string, pin: string): Promise<boo
 }
 
 function lockIn(ctx: Ctx, user: string) {
-  if (ctx.legacy.get(user)) {
-    legacyLockStorage(user);
-    return;
-  }
   const p = ctx.resolved.get(user);
   if (!p) return;
   if (!info(p).wraps.includes('pin')) return; // без PIN профиль открывает ключ устройства — блокировать нечего
@@ -850,9 +673,6 @@ function lockIn(ctx: Ctx, user: string) {
 }
 
 async function setPinIn(ctx: Ctx, user: string, pin: string) {
-  // Прежний профиль, не перенесённый (под PIN и заблокирован, либо перенос не удался): прежний модуль больше не
-  // перешифровывает записи — сначала перенос (разблокировка PIN переносит)
-  if (await isLegacyUser(ctx, user)) throw new Error('Storage is locked: unlock with the current PIN first.');
   if (pin && pin.length < STORAGE_PIN_MIN_LENGTH) throw new Error('Storage PIN is too short.');
   const p = (await openProfile(ctx, user, true))!;
   await ensureReady(p);
@@ -895,7 +715,6 @@ async function setPinIn(ctx: Ctx, user: string, pin: string) {
 // «адрес → профиль»; записи не перешифровываются
 async function renameIn(ctx: Ctx, oldUser: string, newUser: string) {
   if (oldUser === newUser) return;
-  if (await isLegacyUser(ctx, oldUser)) throw new Error('Storage is locked: unlock with the PIN first.');
   const id = await profileIdOf(ctx, oldUser);
   if (!id) return;
   const dir = await directory(ctx);
@@ -906,7 +725,6 @@ async function renameIn(ctx: Ctx, oldUser: string, newUser: string) {
   const p = ctx.resolved.get(oldUser);
   ctx.profiles.delete(oldUser);
   ctx.resolved.delete(oldUser);
-  ctx.legacy.delete(newUser);
   if (pending && p) {
     p.user = newUser;
     ctx.profiles.set(newUser, pending);
@@ -946,11 +764,6 @@ async function clearSecretIn(ctx: Ctx, user: string, name: string) {
 }
 
 function makeApi(ctx: Ctx) {
-  const legacyOr = <A extends unknown[], R>(
-    legacyFn: (user: string, ...args: A) => Promise<R>, fn: (user: string, ...args: A) => Promise<R>,
-  ) => async (user: string, ...args: A) => (
-    (await isLegacyUser(ctx, user)) ? legacyFn(user, ...args) : fn(user, ...args)
-  );
   return {
     hasStoragePin: (user: string) => hasPinIn(ctx, user),
     isStorageUnlocked: (user: string) => isUnlockedIn(ctx, user),
@@ -958,15 +771,12 @@ function makeApi(ctx: Ctx) {
     lockStorage: (user: string) => lockIn(ctx, user),
     setStoragePin: (user: string, pin: string) => setPinIn(ctx, user, pin),
     renameStorageUser: (oldUser: string, newUser: string) => renameIn(ctx, oldUser, newUser),
-    saveTrustSecret: legacyOr(legacySaveTrustSecret,
-      (user: string, secret: string) => saveSecretIn(ctx, user, 'trust-secret', secret)),
-    loadTrustSecret: legacyOr(legacyLoadTrustSecret, (user: string) => loadSecretIn(ctx, user, 'trust-secret')),
-    clearTrustSecret: legacyOr(legacyClearTrustSecret, (user: string) => clearSecretIn(ctx, user, 'trust-secret')),
-    saveSecureSession: legacyOr(legacySaveSecureSession,
-      (user: string, token: string) => saveSecretIn(ctx, user, 'session-token', token)),
-    loadSecureSession: legacyOr(legacyLoadSecureSession, (user: string) => loadSecretIn(ctx, user, 'session-token')),
-    clearSecureSession: legacyOr(legacyClearSecureSession,
-      (user: string) => clearSecretIn(ctx, user, 'session-token')),
+    saveTrustSecret: (user: string, secret: string) => saveSecretIn(ctx, user, 'trust-secret', secret),
+    loadTrustSecret: (user: string) => loadSecretIn(ctx, user, 'trust-secret'),
+    clearTrustSecret: (user: string) => clearSecretIn(ctx, user, 'trust-secret'),
+    saveSecureSession: (user: string, token: string) => saveSecretIn(ctx, user, 'session-token', token),
+    loadSecureSession: (user: string) => loadSecretIn(ctx, user, 'session-token'),
+    clearSecureSession: (user: string) => clearSecretIn(ctx, user, 'session-token'),
     getStorageMigration: (user: string): StorageMigration | undefined => {
       const p = ctx.resolved.get(user);
       return p ? { ...p.migration } : undefined;
@@ -987,9 +797,6 @@ export const {
  */
 export async function peekSecureRecord(user: string, name: string): Promise<boolean | undefined> {
   const ctx = DEFAULT_CTX;
-  if (await isLegacyUser(ctx, user)) {
-    return (await (await LegacyE2eStorage.open(user)).loadBytesRecord(name)) !== undefined;
-  }
   const p = await openProfile(ctx, user, false);
   if (!p) return false;
   await ensureReady(p).catch(() => undefined);
@@ -997,9 +804,9 @@ export async function peekSecureRecord(user: string, name: string): Promise<bool
   return (await readRecord(p, name)) !== undefined;
 }
 
-/** Профиль хранилища адреса есть (новый или прежний `parvane-e2e-v2`) — без создания. */
+/** Профиль хранилища адреса есть — без создания. */
 export async function hasSecureProfile(user: string) {
-  return Boolean(await profileIdOf(DEFAULT_CTX, user)) || isLegacyUser(DEFAULT_CTX, user);
+  return Boolean(await profileIdOf(DEFAULT_CTX, user));
 }
 
 /** Ход фоновой смены ключа хранилища (T044) — для экрана хода. Возвращает отписку. */
@@ -1027,12 +834,10 @@ export function onStorageCleared(listener: (user: string) => void) {
 }
 
 export const secureStorageInternals = {
-  ...legacyStorageInternals,
   // Тесты: «перезагрузка страницы» — в памяти не остаётся ни DEK, ни профилей
   forgetAll: () => {
     [...DEFAULT_CTX.resolved.keys()].forEach((user) => forgetProfile(DEFAULT_CTX, user));
     DEFAULT_CTX.profiles.clear();
-    DEFAULT_CTX.legacy.clear();
   },
   // Тесты: дождаться фонового переноса поколения
   settled: async (user: string) => {

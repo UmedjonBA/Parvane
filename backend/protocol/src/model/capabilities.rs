@@ -192,6 +192,15 @@ impl GroupFacts {
             }),
             is_public: self.public,
             invite_links: if admin { self.invite_links.clone() } else { vec![] },
+            info_json: String::new(),
+            version: self.version,
+            deleted: self.deleted,
+            can_manage_invites: admin && r.invite_users,
+            can_decide_requests: admin && r.invite_users,
+            can_rotate: admin,
+            can_ban: admin && r.ban_users,
+            can_add_admins: admin && r.add_admins,
+            can_delete_messages: admin && r.delete_messages,
         }
     }
 

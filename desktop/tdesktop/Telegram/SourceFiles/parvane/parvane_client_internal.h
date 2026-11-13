@@ -324,16 +324,20 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 [[nodiscard]] History *HistoryForAddress(not_null<Main::Session*> session, const QString &address);
 // Адрес пира для отправки через шину (группа → group_id, юзер → адрес)
 [[nodiscard]] QString BusAddressForPeer(PeerData *peer);
-[[nodiscard]] QString StateSyncedPath();
-void NoteStateEdited(const char *kind);
 void ApplyDialogState(not_null<Main::Session*> session);
 void NoteStartupReplayDone(); // история при старте воспроизведена — журнал состояния может подключаться
 void ApplyQuickReaction(not_null<Main::Session*> session);
-// «В избранное» у стикера (spec 035 T126, FR-075): ссылка стикера (set_id, sticker_id — как web, вектор
-// clients/sticker-ref.json) по документу tdesktop: свой набор (LoadLocalStickerPacks) либо sticker_id отправителя.
-void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId); // main
+// «В избранное» у стикера (spec 035 T126, FR-075; PACK-1 spec 036 T024): ссылка стикера по документу tdesktop —
+// set_id = ключ набора STICKER_PACK (`h:<отпечаток>` либо `n:<имя>`, вектор clients/pack-set-id.json), sticker_id —
+// имя файла манифеста; свой набор (LoadLocalStickerPacks, primary — его документ отвечает за ссылку) либо стикер
+// из сообщения (pack_ref отправителя). Прежний id desktop/web (`pvpk-…`, clients/sticker-ref.json) — только для
+// разовой перекладки избранного (NoteLegacyStickerRef).
+void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId, bool primary = false); // main
+void NoteLegacyStickerRef(DocumentId docId, const QString &legacyStickerId); // main
 [[nodiscard]] std::optional<std::pair<QString, QString>> StickerRefOf(DocumentId docId); // main: (set_id, sticker_id)
-[[nodiscard]] DocumentId StickerDocByRef(const QString &stickerId); // main; 0 — нет документа
+[[nodiscard]] DocumentId StickerDocByRef(const QString &setId, const QString &stickerId); // main; 0 — нет документа
+[[nodiscard]] DocumentId LegacyStickerDoc(const QString &legacyStickerId); // main; 0 — нет
+[[nodiscard]] QString LocalStickerSetKey(const QString &packName); // main: ключ набора своего каталога; "" — нет
 // Избранное из журнала state.v2 ([{set_id, sticker_id, added_ms}]) → набор «Избранное» tdesktop. main
 void ProjectFavedStickers(not_null<Main::Session*> session, const parvane::json &faved);
 // Наборы стикеров загружены заново — применить отложенное избранное (ссылки без документа). main
@@ -365,10 +369,6 @@ void StartHistorySync(const QString &self); // рабочий поток жур�
 bool DeferHistoryUntilReady(std::function<void()> task);
 void StopHistorySync();                     // выход, сброс, смена адреса: не ждёт (поток журнала дорабатывает фоном)
 [[nodiscard]] std::shared_ptr<parvane::history::HistorySync> HistorySyncNow();
-void OnHistorySessionEvent(const parvane::json &ev); // journal:history, stateReady
-// Выгрузка «ничего не потеряно» (spec 035, T007; только dev-хук PARVANE_AUDIT_DUMP=<файл>): после подъёма журнала
-// состояния раз в PARVANE_AUDIT_DUMP_EVERY с (по умолчанию 15) переписывает файл строками parvane::audit. Только читает.
-void StartAuditDumpIfRequested();
 // Собеседник журнала (state.v1.Peer) по адресу чата клиента ("v2g:<hex>" — группа) и обратно; ключ чата движка.
 [[nodiscard]] parvane::json HistoryPeerFor(const QString &chatAddress);
 [[nodiscard]] QString HistoryChatAddress(const parvane::json &peer);
@@ -387,10 +387,17 @@ parvane::json HistoryRecordMessage(const parvane::StoredMessage &sm, bool own, s
 // Мутация (gone/edit/react/pin) → строка модели. Автор чужой мутации — в самой операции (by): сверяет модель.
 parvane::json HistoryRecordOp(const parvane::json &op, bool own);
 [[nodiscard]] std::optional<parvane::json> HistoryState(const QString &uuid);
-// RowState → строка клиента по historyView (удалённое — deleted = true; сирота — nullopt).
+// RowState → строка клиента по показу модели (MessageView строки; удалённое — deleted = true; сирота — nullopt).
 [[nodiscard]] std::optional<parvane::StoredMessage> StoredFromHistory(
 	const parvane::json &state,
 	parvane::json *viewOut = nullptr);
+// spec 036 (ENGINE-1): показ модели (`parvane::history::viewOfModel`) → строка клиента; снятая строка → томбстоун.
+[[nodiscard]] std::optional<parvane::StoredMessage> StoredFromView(const parvane::json &view);
+[[nodiscard]] parvane::StoredMessage RemovedStored(const QString &uuid, const QString &chat);
+// Все строки показа модели по порядку ленты (место — модель, ORDER-1).
+[[nodiscard]] std::vector<parvane::json> HistoryAllViews();
+[[nodiscard]] std::vector<parvane::json> HistoryChatViews(const QString &chatAddress);
+[[nodiscard]] bool HistoryViewVisible(const QString &uuid); // строка сейчас в показе модели
 [[nodiscard]] std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress);
 [[nodiscard]] std::vector<parvane::json> HistoryStatesOf(const std::vector<std::string> &uuids); // строки по id (модель)
 [[nodiscard]] std::vector<parvane::json> HistoryAllStates();
@@ -399,11 +406,10 @@ void HistoryEraseLocal(const QSet<QString> &uuids); // очистка чата �
 void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress);
 // Мост к UI (parvane_client.cpp, главный поток): строки от журнала, счётчик чата от маркера, замена истории.
 void ShowHistoryStates(const std::vector<parvane::json> &states);
+// spec 036: изменения строк и счётчиков модели (`message_upsert/remove`, `unread_changed` события `model`).
+void ShowModelRows(const parvane::json &changes);
 void ApplyReadState(const QString &chatAddress);
-void ReplaceHistoryOnMain();
 void NoteOutboxRead(const QString &address, const std::vector<std::string> &targets); // квитанции собеседника → ✓✓
-extern QHash<QString, qint64> g_outboxReadTs;
-extern QString g_outboxReadOwner;
 // Мутация сообщения v2-чата собеседнику/группе с повтором до успеха (parvane_client.cpp).
 bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId = std::string());
 
@@ -457,9 +463,6 @@ extern QString g_quickCustom; // либо id собственного эмодз
 extern std::vector<ScheduledItem> g_scheduled;
 QString GatewayUrl();
 [[nodiscard]] std::shared_ptr<parvane::v2::Control> MakeControl(const QString &token = QString());
-void SaveBlockedState();
-void SaveDialogState();
-[[nodiscard]] QString NotifyJournaledPath();
 void SaveSessionCreds(const QString &address, const QString &token);
 bool RestoreSessionCreds();
 void EnsurePresenceSubscription(const QString &address);

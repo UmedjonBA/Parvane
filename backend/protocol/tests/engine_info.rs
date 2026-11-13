@@ -70,7 +70,8 @@ fn engine_info_fields() {
         assert_eq!(formats.get(*kind).and_then(Value::as_u64), Some(u64::from(*fmt)), "storageFormats.{kind}");
     }
     assert_eq!(formats.len(), parvane_protocol::model::store_kinds::KINDS.len());
-    for k in ["engine-core", "state-object", "history-row", "range-hold", "migration-progress"] {
+    // host-file — файлы хоста desktop/android в хранилище движка (spec 036 T031)
+    for k in ["engine-core", "state-object", "history-row", "range-hold", "migration-progress", "host-file"] {
         assert!(formats.contains_key(k), "storageFormats без {k}");
     }
     assert_eq!(i["criticalRanges"]["default"], serde_json::json!([1000, 1999]));

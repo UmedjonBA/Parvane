@@ -13,7 +13,6 @@
 #include "ui/toast/toast.h" // spec 035 T127: ход переноса
 #include "history/history_item_components.h" // HiddenSenderInfo (пересылка)
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
-#include <parvane/migrate_legacy.h> // spec 035 T127: читатель старых мест tdata для разового переноса
 #include <condition_variable>
 #include <thread>
 #include <deque>
@@ -68,7 +67,6 @@ void SyncFromKeyBundle();
 [[nodiscard]] QString DisplayNameFor(const QString &address);
 // Время звонка приглашения в групповой звонок (как web getRingTimeoutMs)
 constexpr auto kGroupRingTimeout = crl::time(45000);
-[[nodiscard]] QString StateSyncedPath();
 
 // Протокол v2 (определены ниже, раздел «Протокол v2»).
 void LoadV2Ids();
@@ -214,7 +212,9 @@ struct PackDirInfo {
 QHash<quint64, PackDirInfo> g_stickerPackDirs; // setId → пак (main)
 QHash<qint64, QString> g_packRefByDocId;       // docId → pack_ref JSON (main)
 QHash<DocumentId, std::pair<QString, QString>> g_stickerRefByDoc; // docId → (set_id, sticker_id) избранного (main)
-QHash<QString, DocumentId> g_stickerDocByRef;  // sticker_id → docId (main)
+QHash<QString, DocumentId> g_stickerDocByRef;  // set_id ‖ "/" ‖ sticker_id → docId (main)
+QHash<QString, DocumentId> g_legacyStickerDoc; // прежний sticker_id (`pvpk-…`) → docId своего набора (main)
+QHash<QString, QString> g_localSetKeyByName;   // каталог своего набора → ключ набора PACK-1 (main)
 // conformance PACK-1: ссылка на архив пака выдаётся ПОД НАБОР ПОЛУЧАТЕЛЕЙ
 // (в cloud доступ к файлу получают только они) — переиспользуем ссылку, только
 // если новый набор входит в тот, под который архив загружен.
@@ -539,6 +539,11 @@ void EnsureStoreKey() {
 	const auto &data = key->data();
 	parvane::storecrypt::setKey(parvane::storecrypt::deriveKey(
 		std::string(reinterpret_cast<const char *>(data.data()), data.size())));
+	// spec 036 T031: файлы каталога состояния v2 — в хранилище движка (перенос прежних — при первом обращении).
+	// PARVANE_STORE_LEGACY=1 (dev-хук сценария verify_store_migration.sh) — прежние файлы, как предыдущая версия.
+	parvane::v2::Session::useHostFiles(!ParvaneDevEnv("PARVANE_STORE_LEGACY"), [](const std::string &m) {
+		LOG(("Parvane: хранилище: %1").arg(QString::fromStdString(m)));
+	});
 	std::call_once(g_storeMigrated, [] {
 		const auto dir = (cWorkingDir() + u"tdata"_q).toStdString();
 		auto migrated = 0;
@@ -691,9 +696,11 @@ void ReplayHistory(std::function<void()> then = nullptr) {
 	if (DeferHistoryUntilReady([then] { crl::async([then] { ReplayHistory(then); }); })) {
 		return;
 	}
+	// Строки — готовым показом модели в её порядке ленты (ORDER-1 — место модели, своей расстановки нет): надгробий
+	// и сирот в показе нет
 	std::vector<parvane::StoredMessage> msgs;
-	for (const auto &state : HistoryAllStates()) {
-		if (auto sm = StoredFromHistory(state); sm && !sm->deleted) {
+	for (const auto &view : HistoryAllViews()) {
+		if (auto sm = StoredFromView(view); sm && !sm->deleted) {
 			msgs.push_back(std::move(*sm));
 		}
 	}
@@ -702,31 +709,6 @@ void ReplayHistory(std::function<void()> then = nullptr) {
 			crl::on_main(std::move(then));
 		}
 		return;
-	}
-	// Хранилище отдаёт строки по id (UUIDv7 — по времени отправителя). Строка, которая старше уже показанных
-	// больше чем на окно «живого» сообщения (ORDER-1, 300 с), встаёт на своё место по времени; мелкий разнобой
-	// часов порядок сохраняет. Почти упорядоченный список — за линейное время.
-	{
-		constexpr auto kLiveWindowSecs = std::int64_t(300);
-		// Сортировки здесь нет и быть не должно (ORDER-1: близкие по времени сообщения — порядком id)
-		auto misplaced = false;
-		auto latest = std::numeric_limits<std::int64_t>::min();
-		for (const auto &sm : msgs) {
-			misplaced = misplaced || (sm.ts + kLiveWindowSecs < latest);
-			latest = std::max(latest, std::int64_t(sm.ts));
-		}
-		if (misplaced) {
-			auto ordered = std::vector<parvane::StoredMessage>();
-			ordered.reserve(msgs.size());
-			for (auto &sm : msgs) {
-				auto at = ordered.size();
-				while (at > 0 && ordered[at - 1].ts > sm.ts + kLiveWindowSecs) {
-					--at;
-				}
-				ordered.insert(ordered.begin() + std::ptrdiff_t(at), std::move(sm));
-			}
-			msgs = std::move(ordered);
-		}
 	}
 	LoadV2Ids();
 	const auto self = SelfAddress().toStdString();
@@ -764,84 +746,44 @@ void ReplayHistory(std::function<void()> then = nullptr) {
 	return session->data().historyLoaded(peerFromChat(ChatId(BareId(IdForAddress(address)))));
 }
 
-// ✓✓ своих сообщений (квитанции собеседников): по чату — время последнего прочитанного своего (мс),
-// tdata/parvane-outbox-read-<адрес>.json. Главный поток.
-QHash<QString, qint64> g_outboxReadTs;
-QString g_outboxReadOwner;
-
-[[nodiscard]] QString OutboxReadPath(const QString &self) {
-	return AccountFilePath(u"parvane-outbox-read-"_q, self, u".json"_q);
-}
-
-void LoadOutboxRead() {
-	const auto self = SelfAddress();
-	if (self.isEmpty() || g_outboxReadOwner == self) {
-		return;
-	}
-	g_outboxReadOwner = self;
-	g_outboxReadTs.clear();
-	const auto j = parvane::json::parse(StoreRead(OutboxReadPath(self)).toStdString(), nullptr, false);
-	if (j.is_object()) {
-		for (auto it = j.begin(); it != j.end(); ++it) {
-			if (it.value().is_number()) {
-				g_outboxReadTs.insert(QString::fromStdString(it.key()), it.value().get<qint64>());
-			}
-		}
-	}
-}
-
+// ✓✓ своих сообщений (квитанции собеседников): доставку «прочитано» своей строки ведёт модель (квитанция
+// собеседника → `MessageView.delivery`, spec 036) — tdesktop получает «прочитано до» последней такой своей строки чата.
+// Прежний файл `parvane-outbox-read-<адрес>.json` больше не нужен (стирается при входе). Главный поток.
 void ApplyOutboxRead(not_null<History*> history, const QString &address) {
-	LoadOutboxRead();
-	const auto until = g_outboxReadTs.value(address, 0);
-	if (!until) {
-		return;
-	}
 	auto best = qint64(0);
-	for (const auto &state : HistoryStatesOfChat(address)) {
-		const auto pos = parvane::history::rowPos(state);
-		if (!pos || pos->tsMs > until || !IsHistorySelf(state["row"].value("from", std::string()))) {
+	for (const auto &view : HistoryChatViews(address)) {
+		if (!view.value("read", false) || !IsHistorySelf(view.value("from", std::string()))) {
 			continue;
 		}
-		best = std::max(best, g_uuidToMsgId.value(QString::fromStdString(pos->id), 0));
+		best = std::max(best, g_uuidToMsgId.value(QString::fromStdString(view.value("id", std::string())), 0));
 	}
 	if (best > 0 && history->outboxReadTillId() < MsgId(best)) {
 		history->outboxRead(MsgId(best));
+		LOG(("Parvane: своё прочитано ✓✓ в %1").arg(address));
 	}
 }
 
-void NoteOutboxRead(const QString &address, const std::vector<std::string> &targets) {
-	LoadOutboxRead();
-	auto until = g_outboxReadTs.value(address, 0);
-	const auto before = until;
-	for (const auto &target : targets) {
-		const auto state = HistoryState(QString::fromStdString(target));
-		const auto pos = state ? parvane::history::rowPos(*state) : std::nullopt;
-		if (pos && IsHistorySelf((*state)["row"].value("from", std::string()))) {
-			until = std::max(until, qint64(pos->tsMs));
-		}
-	}
-	if (until == before) {
-		return;
-	}
-	g_outboxReadTs.insert(address, until);
-	auto j = parvane::json::object();
-	for (auto it = g_outboxReadTs.cbegin(); it != g_outboxReadTs.cend(); ++it) {
-		j[it.key().toStdString()] = it.value();
-	}
-	if (const auto path = OutboxReadPath(SelfAddress()); !path.isEmpty()) {
-		StoreWrite(path, QByteArray::fromStdString(j.dump()));
-	}
+// Квитанция собеседника о моих сообщениях: доставку строки отметила модель — ✓✓ по её показу.
+void NoteOutboxRead(const QString &address, const std::vector<std::string> &) {
 	if (const auto session = g_sessionWeak.get()) {
 		if (const auto history = LoadedHistoryFor(session, address)) {
 			ApplyOutboxRead(history, address);
-			LOG(("Parvane: своё прочитано ✓✓ в %1").arg(address));
 		}
 	}
 }
 
-// Счётчик непрочитанного чата tdesktop — от маркера «прочитано до» (READ-2): число непрочитанных считает движок
-// (historyIsUnread), tdesktop получает «прочитано до последней прочитанной строки» и это число. Перенос и догрузка
-// истории счётчик не раздувают: он не прибавляется на вставку, а выставляется заново.
+// Счётчики чатов модели (`unread_changed`, spec 036 E4): непрочитанные от маркера и последняя прочитанная строка —
+// готовыми. Главный поток.
+struct ModelUnread {
+	int unread = 0;
+	QString lastReadId;
+};
+QHash<QString, ModelUnread> g_modelUnread;
+
+// Счётчик непрочитанного чата tdesktop — от маркера «прочитано до» (READ-2): число непрочитанных и последнюю
+// прочитанную строку считает модель (`unread_changed`; до первого изменения — её `rowsRead`), tdesktop получает
+// «прочитано до последней прочитанной строки» и это число. Перенос и догрузка истории счётчик не раздувают: он не
+// прибавляется на вставку, а выставляется заново.
 void ApplyReadState(const QString &address) {
 	const auto session = g_sessionWeak.get();
 	const auto sync = HistorySyncNow();
@@ -852,18 +794,118 @@ void ApplyReadState(const QString &address) {
 	if (!history) {
 		return;
 	}
+	// Число — `unread_changed` модели (до первого изменения — `rowsRead`); «прочитано до» — последняя ВИДИМАЯ
+	// прочитанная строка (`rowsRead`): маркер модели может стоять на снятой строке, которой в ленте нет
 	const auto rs = sync->readState(HistoryChatKey(address).toStdString());
-	const auto readId = g_uuidToMsgId.value(QString::fromStdString(rs.lastReadId), 0);
+	auto unread = rs.unread;
+	auto lastReadId = QString::fromStdString(rs.lastReadId);
+	if (const auto it = g_modelUnread.constFind(address); it != g_modelUnread.cend()) {
+		unread = it->unread;
+		if (lastReadId.isEmpty()) {
+			lastReadId = it->lastReadId;
+		}
+	}
+	const auto readId = g_uuidToMsgId.value(lastReadId, 0);
 	if (!history->folderKnown()) {
 		history->clearFolder();
 	}
 	if (readId > 0) {
-		history->inboxRead(MsgId(readId), rs.unread);
-	} else if (history->unreadCountKnown() || rs.unread > 0) {
-		history->setUnreadCount(rs.unread);
+		history->inboxRead(MsgId(readId), unread);
+	} else if (history->unreadCountKnown() || unread > 0) {
+		history->setUnreadCount(unread);
 		history->updateChatListEntry();
 	}
 	ApplyOutboxRead(history, address);
+}
+
+// spec 036 (ENGINE-1): изменения строк и счётчиков, которые сделала модель (входящее, журнал истории, квитанции,
+// прочтение) — показ готового: строка → вставка/правка/реакции/закреп, снятие → томбстоун, счётчик → чат. Главный
+// поток.
+void ShowModelRows(const parvane::json &changes) {
+	auto out = std::vector<parvane::StoredMessage>();
+	auto chats = QSet<QString>();
+	// Новые строки пачки (догрузка журналом на новом устройстве) встают местом модели (ORDER-1, `order` показа),
+	// а не порядком прихода изменений
+	auto ordered = std::vector<std::pair<std::int64_t, parvane::json>>();
+	for (const auto &ch : changes) {
+		if (ch.is_object() && ch.contains("message_upsert")) {
+			ordered.emplace_back(parvane::history::viewOfModel(ch["message_upsert"]).value("order", std::int64_t(0)), ch);
+		}
+	}
+	std::stable_sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+	auto sorted = parvane::json::array();
+	for (auto &[order, ch] : ordered) {
+		sorted.push_back(std::move(ch));
+	}
+	for (const auto &ch : changes) {
+		if (ch.is_object() && !ch.contains("message_upsert")) {
+			sorted.push_back(ch);
+		}
+	}
+	for (const auto &ch : sorted) {
+		if (!ch.is_object()) {
+			continue;
+		}
+		if (ch.contains("message_upsert")) {
+			const auto view = parvane::history::viewOfModel(ch["message_upsert"]);
+			auto sm = StoredFromView(view);
+			if (!sm) {
+				continue;
+			}
+			const auto chat = HistoryChatAddress(view.value("chat", parvane::json()));
+			chats.insert(chat);
+			const auto uuid = QString::fromStdString(sm->id);
+			{
+				std::lock_guard<std::mutex> lk(g_v2Mutex);
+				auto users = QHash<QString, QString>();
+				for (const auto &r : view.value("reactions", parvane::json::array())) {
+					for (const auto &u : r.value("users", parvane::json::array())) {
+						if (u.is_string()) {
+							users.insert(QString::fromStdString(u.get<std::string>()), QString::fromStdString(r.value("emoji", std::string())));
+						}
+					}
+				}
+				g_v2Reactions.insert(uuid, users);
+			}
+			V2NoteMessage(*sm, chat);
+			out.push_back(std::move(*sm));
+		} else if (ch.contains("message_remove")) {
+			const auto rm = parvane::history::removedOfModel(ch["message_remove"]);
+			const auto chat = rm.is_object() ? HistoryChatAddress(rm.value("chat", parvane::json())) : QString();
+			if (chat.isEmpty()) {
+				continue;
+			}
+			// Замена истории точкой (HIST-2): модель снимает все строки и тут же кладёт строки точки — строка, которая к
+			// показу снова видна, не снимается (иначе лента пустела до перезапуска)
+			if (HistoryViewVisible(QString::fromStdString(rm.value("id", std::string())))) {
+				continue;
+			}
+			chats.insert(chat);
+			out.push_back(RemovedStored(QString::fromStdString(rm.value("id", std::string())), chat));
+		} else if (ch.contains("unread_changed")) {
+			const auto u = parvane::history::unreadOfModel(ch["unread_changed"]);
+			const auto chat = u.is_object() ? HistoryChatAddress(u.value("chat", parvane::json())) : QString();
+			if (chat.isEmpty()) {
+				continue;
+			}
+			g_modelUnread.insert(chat, ModelUnread{
+				u.value("unread", 0),
+				QString::fromStdString(u.value("lastReadId", std::string())) });
+			chats.insert(chat);
+		}
+	}
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	if (!out.empty()) {
+		const auto removed = int(std::count_if(out.begin(), out.end(), [](const auto &sm) { return sm.deleted; }));
+		LOG(("Parvane: журнал истории: применено строк %1 моделью, снято %2").arg(int(out.size()) - removed).arg(removed));
+		injectOnMain(session, out, /*live=*/false);
+	}
+	for (const auto &chat : chats) {
+		ApplyReadState(chat);
+	}
 }
 
 // Строки, изменённые журналом истории или мутацией (главный поток): показать новые, обновить правленые/реакции/
@@ -910,33 +952,6 @@ void ShowHistoryStates(const std::vector<parvane::json> &states) {
 	}
 }
 
-// Режим замены (HIST-2: устройство не синхронизировалось дольше горизонта) — хранилище заменено контрольной
-// точкой: убрать показанное, чего в ней нет, и воспроизвести историю заново.
-void ReplaceHistoryOnMain() {
-	const auto session = g_sessionWeak.get();
-	if (!session) {
-		return;
-	}
-	auto drop = std::vector<std::pair<QString, qint64>>();
-	for (auto it = g_uuidToMsgId.cbegin(); it != g_uuidToMsgId.cend(); ++it) {
-		if (it.value() == 0) {
-			continue;
-		}
-		const auto state = HistoryState(it.key());
-		if (!state || !state->contains("row") || state->contains("gone")) {
-			drop.emplace_back(it.key(), it.value());
-		}
-	}
-	for (const auto &[uuid, msgId] : drop) {
-		if (const auto item = session->data().nonChannelMessage(MsgId(msgId))) {
-			item->destroy();
-		}
-		g_msgIdToUuid.remove(msgId);
-		g_uuidToMsgId.insert(uuid, 0);
-	}
-	LOG(("Parvane: журнал истории: история заменена контрольной точкой (убрано %1)").arg(int(drop.size())));
-	crl::async([] { ReplayHistory(); });
-}
 
 // ── Очищенные/удалённые чаты (msg.chat.clear, «для меня») ────────────────────
 // uuid скрытых сообщений: строки убираются из хранилища журнала истории (с устройства; в журнале аккаунта они
@@ -1532,7 +1547,6 @@ bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::s
 // файлу, раздел «Протокол v2: группы и журнал состояния».
 [[nodiscard]] bool HandleV2SessionEvent(const parvane::json &ev);
 void ScheduleStateFlush(const char *kind);
-void NoteStateEdited(const char *kind); // T150                                  // журнал состояния: своя правка
 void LoadV2GroupCache(not_null<Main::Session*> session);    // группы v2 до подъёма сессии
 void NoteGroupPublic(const QString &address, const parvane::json &info); // публичность группы (spec 023)
 
@@ -1718,7 +1732,21 @@ void HandleV2Event(const parvane::json &ev) {
 	if (in.group && ev.contains("group") && ev["group"].is_object()) {
 		NoteHistoryGroupDomain(QString::fromStdString(in.chat), ev["group"].value("domain", std::string()));
 	}
+	// spec 036 (`engine_rows`): событие итога модели — строку и мутацию она уже применила (и поставит в журнал);
+	// показ — её `message_upsert/remove`, счётчик — `unread_changed`
+	const auto inModel = ev.value("modelApplied", false);
 	if (in.kind != Kind::Message && in.kind != Kind::Stub) {
+		if (inModel) {
+			if (in.kind == Kind::Read && in.from != self) {
+				// Квитанция собеседника: доставку отметила модель — ✓✓ по её показу
+				crl::on_main([chat = QString::fromStdString(in.chat), generation = AccountGeneration()] {
+					if (AccountGenerationIs(generation)) {
+						NoteOutboxRead(chat, {});
+					}
+				});
+			}
+			return;
+		}
 		crl::on_main([in, generation = AccountGeneration()] {
 			if (AccountGenerationIs(generation) && g_sessionWeak.get()) {
 				ApplyIncomingMutation(in);
@@ -1727,6 +1755,7 @@ void HandleV2Event(const parvane::json &ev) {
 		return;
 	}
 	parvane::StoredMessage sm;
+	sm.inModel = inModel;
 	sm.id = in.id;
 	sm.from = in.from;
 	sm.to = in.to;
@@ -1897,45 +1926,6 @@ void HandleRecoveryKey(const std::string &key) {
 		: QString();
 }
 
-// spec 035 T127: ход разового переноса прежнего состояния в хранилище модели — нативным тостом окна (EN+RU):
-// шаги переноса, итог; прерванный перенос повторится при следующем подключении (старое не тронуто).
-void ShowMigrationProgress(int point, int total, bool done, bool failed) {
-	static auto shownPoint = -1;
-	const auto window = Core::App().activeWindow();
-	if (failed) {
-		shownPoint = -1;
-		LOG(("Parvane: v2: перенос прежнего состояния не закончен — повтор при следующем подключении"));
-		if (window) {
-			window->showToast(tr::lng_parvane_migration_failed(tr::now));
-		}
-		return;
-	}
-	if (done) {
-		if (shownPoint >= 0 && window) {
-			window->showToast(tr::lng_parvane_migration_done(tr::now));
-		}
-		shownPoint = -1;
-		return;
-	}
-	if (point == shownPoint) {
-		return;
-	}
-	shownPoint = point;
-	LOG(("Parvane: v2: перенос прежнего состояния, шаг %1 из %2").arg(point).arg(total));
-	if (window) {
-		auto config = Ui::Toast::Config();
-		config.title = tr::lng_parvane_migration_title(tr::now);
-		config.text = { tr::lng_parvane_migration_progress(
-			tr::now,
-			lt_step,
-			QString::number(std::max(point, 1)),
-			lt_total,
-			QString::number(total)) };
-		config.duration = crl::time(4000);
-		window->showToast(std::move(config));
-	}
-}
-
 // Поднять v2-сессию (под g_sessionMutex из StartSession: адрес и JWT уже есть).
 void StartV2Locked() {
 	if (!V2Enabled()) {
@@ -1976,45 +1966,22 @@ void StartV2Locked() {
 		}
 	};
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
-	// spec 035 T127: старые места tdata по перечню (слой desktop) — разовым переносом в хранилище модели
-	cfg.migrationLayer = "desktop";
-	if (const auto halt = ParvaneDevEnv("PARVANE_MIGRATION_HALT")) {
-		cfg.migrationHaltAt = std::atoi(halt);
-	}
-	if (const auto chunk = ParvaneDevEnv("PARVANE_MIGRATION_CHUNK")) {
-		cfg.migrationChunk = std::atoi(chunk);
-	}
-	cfg.legacyRecords = [tdata = TdataDir().toStdString(), self] {
-		// Файлы аккаунта, которые пишет сам клиент (слой desktop перечня): маркеры, служебное журнала истории,
-		// наборы стикеров, контакты, фоны чатов, очистка «у себя», ключи разделов
-		static const std::vector<parvane::migrate_legacy::AccountFile> files = {
-			{ "parvane-readmarks-", ".json", false },
-			{ "parvane-history-sync-", "-", true },
-			{ "parvane-sticker-packs-", ".json", false },
-			{ "parvane-contacts-", ".json", false },
-			{ "parvane-chat-wallpapers-", ".json", false },
-			{ "parvane-cleared-", ".txt", false },
-			{ "parvane-domain-keys-", ".json", false },
-		};
-		const auto collected = parvane::migrate_legacy::collect(tdata, self, files);
-		for (const auto &key : collected.unreadable) {
-			LOG(("Parvane: v2: перенос — файл не открылся: %1").arg(QString::fromStdString(key)));
+	cfg.modelEvents = true; // spec 036 (ENGINE-1): изменения модели — событием `model` (показ личного состояния)
+	// spec 036 (ENGINE-1, `engine_rows`): входящее к строкам, журнал истории аккаунта и маркеры — модель; показ строк —
+	// её `message_upsert/remove`. S7-3: журнал пишется пачкой раз в 30–120 с; сценарии стенда (dev-сборка,
+	// PARVANE_DEV_HOOKS=1 и gateway на loopback — ParvaneDevEnv) сужают окно: PARVANE_HISTORY_BATCH_MS=<мин>,<макс>
+	// (verify_lib.sh — 1000,3000)
+	cfg.engineRows = true;
+	if (const char *bv = ParvaneDevEnv("PARVANE_HISTORY_BATCH_MS"); bv && *bv) {
+		const auto parts = QString::fromUtf8(bv).split(',');
+		auto okLo = false, okHi = false;
+		const auto lo = parts.value(0).toLongLong(&okLo);
+		const auto hi = parts.value(1, parts.value(0)).toLongLong(&okHi);
+		if (okLo && okHi && lo > 0 && hi >= lo) {
+			cfg.historyBatchMinMs = lo;
+			cfg.historyBatchMaxMs = hi;
 		}
-		auto out = parvane::migrate_legacy::toJson(collected);
-		out["layer"] = "desktop";
-		return out;
-	};
-	cfg.onMigration = [generation = AccountGeneration()](const parvane::json &p) {
-		const auto point = p.value("point", 0);
-		const auto total = p.value("total", 7);
-		const auto done = p.value("done", false);
-		const auto failed = p.value("failed", false);
-		crl::on_main([=] {
-			if (AccountGenerationIs(generation)) {
-				ShowMigrationProgress(point, total, done, failed);
-			}
-		});
-	};
+	}
 	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
 		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
 	}
@@ -2347,116 +2314,19 @@ void LoadNotifyState() { // main
 	}
 }
 
-// ── блок-лист: локальный персист (T132) ─────────────────────────────────────
-// Блокировка в форке локальная (MTProto contacts.block заглушён) и раньше жила
-// только в памяти; теперь список адресов хранится на диске и синхронизируется
-// журналом личного состояния (вид `blocked`).
+// ── блок-лист (T132): блокировка в форке локальная (MTProto contacts.block заглушён); список — показ вида BLOCK
+// модели (spec 036: своего файла нет, после запуска его заполняет проекция модели).
 QSet<QString> g_blockedAddrs; // main
 
-[[nodiscard]] QString BlockedStatePath() {
-	return cWorkingDir() + u"tdata/parvane-blocked.json"_q;
-}
-
-void SaveBlockedState() { // main
-	auto a = nlohmann::json::array();
-	for (const auto &address : g_blockedAddrs) {
-		a.push_back(address.toStdString());
-	}
-	StoreWrite(BlockedStatePath(), QByteArray::fromStdString(a.dump()));
-}
-
-void LoadBlockedState() { // main
-	g_blockedAddrs.clear();
-	const auto j = nlohmann::json::parse(StoreRead(BlockedStatePath()).toStdString(), nullptr, false);
-	if (!j.is_array()) {
-		return;
-	}
-	for (const auto &v : j) {
-		if (v.is_string()) {
-			g_blockedAddrs.insert(QString::fromStdString(v.get<std::string>()));
-		}
-	}
-}
-
-// ── архив и закреплённые чаты: локальный персист (T132) ────────────────────
-// MTProto folders.editPeerFolders / messages.toggleDialogPin заглушены: архив и
-// закреп ведём локально (адреса чатов на диске) и синхронизируем журналом
-// личного состояния (виды `archived`, `pinned`).
+// ── архив и закреплённые чаты (T132): MTProto folders.editPeerFolders / messages.toggleDialogPin заглушены — архив,
+// закреп, «непрочитано» и быстрая реакция — показ видов ARCHIVE, PIN_LIST, UNREAD_MARK, QUICK_REACTION модели
+// (spec 036: своего файла нет).
 QSet<QString> g_archivedAddrs; // main
 QStringList g_pinnedAddrs;     // main: основной список, сверху вниз
 // Отметка «непрочитано» и быстрая реакция (22 окт 2026): тот же файл, виды журнала `unread`, `reaction`
 QSet<QString> g_unreadMarkAddrs; // main
 QString g_quickEmoji;            // main
 QString g_quickCustom;           // main
-
-[[nodiscard]] QString DialogStatePath() {
-	return cWorkingDir() + u"tdata/parvane-dialogs.json"_q;
-}
-
-void SaveDialogState() { // main
-	auto archived = nlohmann::json::array();
-	for (const auto &address : g_archivedAddrs) {
-		archived.push_back(address.toStdString());
-	}
-	auto pinned = nlohmann::json::array();
-	for (const auto &address : g_pinnedAddrs) {
-		pinned.push_back(address.toStdString());
-	}
-	auto unread = nlohmann::json::array();
-	for (const auto &address : g_unreadMarkAddrs) {
-		unread.push_back(address.toStdString());
-	}
-	const nlohmann::json j{
-		{ "archived", std::move(archived) },
-		{ "pinned", std::move(pinned) },
-		{ "unread", std::move(unread) },
-		{ "quick_emoji", g_quickEmoji.toStdString() },
-		{ "quick_custom", g_quickCustom.toStdString() },
-	};
-	StoreWrite(DialogStatePath(), QByteArray::fromStdString(j.dump()));
-}
-
-void LoadDialogState() { // main
-	g_archivedAddrs.clear();
-	g_pinnedAddrs.clear();
-	g_unreadMarkAddrs.clear();
-	g_quickEmoji.clear();
-	g_quickCustom.clear();
-	const auto j = nlohmann::json::parse(StoreRead(DialogStatePath()).toStdString(), nullptr, false);
-	if (!j.is_object()) {
-		return;
-	}
-	if (j.contains("unread") && j["unread"].is_array()) {
-		for (const auto &v : j["unread"]) {
-			if (v.is_string()) {
-				g_unreadMarkAddrs.insert(QString::fromStdString(v.get<std::string>()));
-			}
-		}
-	}
-	g_quickEmoji = QString::fromStdString(j.value("quick_emoji", std::string()));
-	g_quickCustom = QString::fromStdString(j.value("quick_custom", std::string()));
-	if (j.contains("archived") && j["archived"].is_array()) {
-		for (const auto &v : j["archived"]) {
-			if (v.is_string()) {
-				g_archivedAddrs.insert(QString::fromStdString(v.get<std::string>()));
-			}
-		}
-	}
-	if (j.contains("pinned") && j["pinned"].is_array()) {
-		for (const auto &v : j["pinned"]) {
-			if (v.is_string()) {
-				g_pinnedAddrs.push_back(QString::fromStdString(v.get<std::string>()));
-			}
-		}
-	}
-}
-
-// Настройки уведомлений уже в журнале личного состояния (маркер на диске):
-// до первого переноса проекция журнала не должна стирать локальные настройки.
-[[nodiscard]] QString NotifyJournaledPath() {
-	return cWorkingDir() + u"tdata/parvane-notify-journaled"_q;
-}
-
 
 // ── кэш расшифрованного E2E (uuid → inner JSON) ──────────────────────────────
 [[nodiscard]] QString DecCachePath() {
@@ -3538,8 +3408,6 @@ void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
 	}
 	MoveSelfField(PrivacyPath(), oldAddress, newAddress);
 	MoveSelfField(L2CachePath(), oldAddress, newAddress);
-	MoveSelfField(StateSyncedPath(), oldAddress, newAddress);
-	MoveSelfField(cWorkingDir() + u"tdata/parvane-drafts.json"_q, oldAddress, newAddress);
 	// Файлы аккаунта без адреса в имени — за новым адресом (их каталог переехал вместе с parvane-v2-*)
 	parvane::accountfiles::renameOwner(TdataDir().toStdString(), oldAddress.toStdString(), newAddress.toStdString());
 	LOG(("Parvane: локальные данные перенесены: %1 → %2").arg(oldAddress, newAddress));
@@ -4742,6 +4610,22 @@ void AttachPackContentHash(nlohmann::json &ref, const std::string &archive) {
 // своём наборе меняет отпечаток).
 std::mutex g_packHashMutex;
 QHash<QString, QPair<qint64, std::string>> g_packHashByDir;
+
+// Отпечаток каталога набора (base64, PACK-2) с кэшем по времени изменения каталога; "" — набор не собирается.
+[[nodiscard]] std::string PackDirContentHash(const QString &dir) {
+	const auto stamp = QFileInfo(dir).lastModified().toMSecsSinceEpoch();
+	{
+		std::lock_guard<std::mutex> lk(g_packHashMutex);
+		const auto it = g_packHashByDir.constFind(dir);
+		if (it != g_packHashByDir.constEnd() && it->first == stamp) {
+			return it->second;
+		}
+	}
+	const auto hash = parvane::pack::archiveContentHashB64(BuildPackArchive(dir));
+	std::lock_guard<std::mutex> lk(g_packHashMutex);
+	g_packHashByDir.insert(dir, { stamp, hash });
+	return hash;
+}
 
 // Установленный набор с тем же отпечатком: тот же набор от другого
 // отправителя (или свой) — один набор. Пусто — такого нет. Только воркер.
@@ -8319,13 +8203,16 @@ void injectOnMain(
 		// При воспроизведении журнала (live=false) НЕ пишем повторно. TTL-сообщения
 		// эфемерны — НЕ журналируем (иначе воскреснут при рестарте).
 		if (live && TtlFromContent(sm.content) == 0) {
-			// Журнал истории аккаунта (spec 033): входящее — с задержкой, если другое своё устройство не записало
+			// Журнал истории аккаунта (spec 033): строку события итога модели уже применила и поставила в журнал
+			// модель (spec 036 `engine_rows`); иное входящее — строкой модели с отметкой «в журнал»
 			auto tsMs = qint64(0);
 			{
 				std::lock_guard<std::mutex> lk(g_v2Mutex);
 				tsMs = g_inboundTsMs.take(uuid);
 			}
-			HistoryRecordMessage(sm, /*own=*/false, tsMs);
+			if (!sm.inModel) {
+				HistoryRecordMessage(sm, /*own=*/false, tsMs);
+			}
 			if (sm.from == selfStd) {
 				// Своё с другого своего устройства: всё входящее до него прочитано (READ-2) — счётчик от маркера
 				const auto chat = QString::fromStdString(sm.to); // своё: чат — адресат (собеседник или группа)
@@ -8472,8 +8359,13 @@ void injectOnMain(
 				if (kind == u"sticker"_q && c.contains("sticker_id") && c["sticker_id"].is_string()) {
 					const auto sid = c["sticker_id"].get<std::string>();
 					if (const auto set = parvane::pack::favedSetIdOf(sid); !set.empty()) {
-						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(set),
+						NoteLegacyStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(sid));
+					} else if (const auto key = c.contains("pack_ref") ? PackJournalKey(c["pack_ref"]) : std::string(); !key.empty()) {
+						// PACK-1: набор — ключ ссылки отправителя (отпечаток либо имя), стикер — имя файла
+						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(key),
 							QString::fromStdString(sid));
+						LOG(("Parvane: стикер из сообщения: набор %1, файл %2")
+							.arg(QString::fromStdString(key), QString::fromStdString(sid)));
 					}
 				}
 				if (kind == u"sticker"_q && c.contains("pack_ref")) {
@@ -8633,8 +8525,13 @@ void injectOnMain(
 			if (kind == u"sticker"_q && c.contains("sticker_id") && c["sticker_id"].is_string()) {
 					const auto sid = c["sticker_id"].get<std::string>();
 					if (const auto set = parvane::pack::favedSetIdOf(sid); !set.empty()) {
-						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(set),
+						NoteLegacyStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(sid));
+					} else if (const auto key = c.contains("pack_ref") ? PackJournalKey(c["pack_ref"]) : std::string(); !key.empty()) {
+						// PACK-1: набор — ключ ссылки отправителя (отпечаток либо имя), стикер — имя файла
+						NoteStickerRef(DocumentId(docIdFromFileId(fileId)), QString::fromStdString(key),
 							QString::fromStdString(sid));
+						LOG(("Parvane: стикер из сообщения: набор %1, файл %2")
+							.arg(QString::fromStdString(key), QString::fromStdString(sid)));
 					}
 				}
 				if (kind == u"sticker"_q && c.contains("pack_ref")) {
@@ -12251,6 +12148,12 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 		}
 		const auto setId = std::uint64_t(
 			docIdFromFileId(u"pack:"_q + packName));
+		// PACK-1: ключ набора — отпечаток содержимого (PACK-2), как у отправителя и других клиентов; одноимённые
+		// наборы разного содержимого — разные ключи
+		const auto contentHash = PackDirContentHash(packDir.absolutePath());
+		const auto setKey = QString::fromStdString(
+			parvane::pack::sharedSetId(contentHash, packName.toStdString()));
+		g_localSetKeyByName.insert(packName, setKey);
 		auto docs = QVector<MTPDocument>();
 		auto paths = QVector<QPair<qint64, QString>>();
 		for (const auto &name : files) {
@@ -12308,10 +12211,12 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 				MTP_int(session->mainDcId()),
 				MTP_vector<MTPDocumentAttribute>(attrs)));
 			paths.push_back({ docId, path });
-			// FR-075: ссылка стикера в избранном — как у web (имя набора и имя файла в архиве)
-			const auto favSet = QString::fromStdString(parvane::pack::favedSetId(packName.toStdString()));
-			NoteStickerRef(DocumentId(docId), favSet,
-				QString::fromStdString(parvane::pack::favedStickerId(favSet.toStdString(), name.toStdString())));
+			// FR-075, PACK-1: ссылка стикера в избранном — ключ набора и имя файла в архиве (как web и android);
+			// прежний id (`pvpk-…`) — для разовой перекладки избранного
+			NoteStickerRef(DocumentId(docId), setKey, name, true);
+			const auto legacySet = parvane::pack::favedSetId(packName.toStdString());
+			NoteLegacyStickerRef(DocumentId(docId),
+				QString::fromStdString(parvane::pack::favedStickerId(legacySet, name.toStdString())));
 		}
 		if (docs.isEmpty()) {
 			continue;
@@ -12352,9 +12257,10 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 		g_stickerPackDirs.insert(setId, PackDirInfo{
 			packDir.absolutePath(), packName, int(docs.size()) });
 		++loaded;
-		LOG(("Parvane: стикер-пак «%1» загружен (%2 шт)")
+		LOG(("Parvane: стикер-пак «%1» загружен (%2 шт), набор %3")
 			.arg(packName)
-			.arg(docs.size()));
+			.arg(docs.size())
+			.arg(setKey));
 	}
 	if (loaded > 0) {
 		ReapplyFavedStickers(session); // избранное из журнала, пришедшее раньше наборов
@@ -12630,12 +12536,30 @@ void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> 
 
 namespace Internal {
 
-void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId) { // main
+void NoteStickerRef(DocumentId docId, const QString &setId, const QString &stickerId, bool primary) { // main
 	if (!docId || setId.isEmpty() || stickerId.isEmpty()) {
 		return;
 	}
 	g_stickerRefByDoc.insert(docId, { setId, stickerId });
-	g_stickerDocByRef.insert(stickerId, docId);
+	// Документ своего набора важнее документа из сообщения: избранное показывается из набора
+	const auto key = setId + u"/"_q + stickerId;
+	if (primary || !g_stickerDocByRef.contains(key)) {
+		g_stickerDocByRef.insert(key, docId);
+	}
+}
+
+void NoteLegacyStickerRef(DocumentId docId, const QString &legacyStickerId) { // main
+	if (docId && !legacyStickerId.isEmpty() && !g_legacyStickerDoc.contains(legacyStickerId)) {
+		g_legacyStickerDoc.insert(legacyStickerId, docId);
+	}
+}
+
+DocumentId LegacyStickerDoc(const QString &legacyStickerId) { // main
+	return g_legacyStickerDoc.value(legacyStickerId);
+}
+
+QString LocalStickerSetKey(const QString &packName) { // main
+	return g_localSetKeyByName.value(packName);
 }
 
 std::optional<std::pair<QString, QString>> StickerRefOf(DocumentId docId) { // main
@@ -12643,8 +12567,8 @@ std::optional<std::pair<QString, QString>> StickerRefOf(DocumentId docId) { // m
 	return (it == g_stickerRefByDoc.constEnd()) ? std::nullopt : std::make_optional(it.value());
 }
 
-DocumentId StickerDocByRef(const QString &stickerId) { // main
-	return g_stickerDocByRef.value(stickerId);
+DocumentId StickerDocByRef(const QString &setId, const QString &stickerId) { // main
+	return g_stickerDocByRef.value(setId + u"/"_q + stickerId);
 }
 
 } // namespace Internal
@@ -12777,8 +12701,7 @@ void ResetAccountState(const char *why) {
 	++g_accountGeneration; // отложенные задачи прежнего аккаунта больше ничего не сделают
 	ResetSessionBoundState();
 	StopHistorySync(); // журнал истории прежнего аккаунта (spec 033)
-	g_outboxReadTs.clear();
-	g_outboxReadOwner.clear();
+	g_modelUnread.clear();
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_scheduled.clear();
@@ -13014,8 +12937,6 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		LoadNotifyState();  // снимок настроек уведомлений
 		ApplySavedNotify(session); // и сразу в tdesktop: иначе всё «заглушено» (MTProto умолчаний нет)
 		session->data().reactions().refreshDefault(); // встроенный набор реакций (BuiltinReactions)
-		LoadBlockedState(); // блок-лист (применяется к пользователям по мере появления)
-		LoadDialogState();  // архив и закреп (применяются после воспроизведения истории)
 		if (SelfAddress().isEmpty()) {
 			// tdesktop восстановил сессию по userId из mtp-данных, а
 			// учётных данных Parvane на диске нет (выход/отказ JWT не дошёл до
@@ -13846,8 +13767,9 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		//   folder-add|<название>|<адрес>    — добавить чат в папку;
 		//   contact-name|<адрес>|<имя>       — своё имя контакта (заметка — прежняя своя);
 		//   contact-note|<адрес>|<заметка>   — заметка контакта (имя — прежнее своё);
-		//   fave|<набор>|<файл>              — стикер своего набора «В избранное» (FR-075, spec 035 T126);
-		//   faved|-|-                        — строка журнала: какие стикеры в «Избранном» сейчас.
+		//   fave|<набор>|<файл>              — стикер «В избранное» (FR-075); набор — общий ключ PACK-1 (`h:…`/`n:…`,
+		//                                      и стикер из сообщения) либо каталог своего набора;
+		//   faved|-|-                        — строка журнала: «Избранное» сейчас (`ключ набора/файл`).
 		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPATCH"); pv && *pv) {
 			for (const auto &part : QString::fromUtf8(pv).split(QChar(','), Qt::SkipEmptyParts)) {
 				const auto at = part.lastIndexOf(u'@');
@@ -13883,9 +13805,10 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						return;
 					}
 					if (op == u"fave"_q) {
-						const auto set = parvane::pack::favedSetId(a.toStdString());
-						const auto id = QString::fromStdString(parvane::pack::favedStickerId(set, b.toStdString()));
-						const auto docId = StickerDocByRef(id);
+						// a — ключ набора (`h:`/`n:`) либо каталог своего набора, b — имя файла
+						const auto set = (a.startsWith(u"h:"_q) || a.startsWith(u"n:"_q)) ? a : LocalStickerSetKey(a);
+						const auto id = set + u"/"_q + b;
+						const auto docId = StickerDocByRef(set, b);
 						if (!docId) {
 							LOG(("Parvane: autopatch fave %1/%2: стикера нет").arg(a, b));
 							return;
@@ -13900,7 +13823,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						if (const auto it = sets.find(Data::Stickers::FavedSetId); it != sets.end()) {
 							for (const auto document : it->second->stickers) {
 								if (const auto ref = StickerRefOf(document->id)) {
-									ids.push_back(ref->second);
+									ids.push_back(ref->first + u"/"_q + ref->second);
 								}
 							}
 						}
@@ -14628,22 +14551,18 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			}
 		}
 
-		// Debug-autosticker для e2e стикеров: PARVANE_AUTOSTICKER=peer@server —
-		// шлёт первый стикер первого локального пака нативным путём
+		// Debug-autosticker для e2e стикеров: PARVANE_AUTOSTICKER=peer@server[,peer2…] —
+		// шлёт первый стикер первого локального пака нативным путём каждому
 		// (SendExistingDocument → врезка MirrorOutgoingSticker). Отложен за
 		// LoadLocalStickerPacks (t+3с) и E2E-инициализацию.
 		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSTICKER"); sv && *sv) {
-			const auto peerAddr = QString::fromUtf8(sv);
-			base::call_delayed(6 * crl::time(1000), [weak, peerAddr] {
+			const auto peers = QString::fromUtf8(sv).split(u',', Qt::SkipEmptyParts);
+			base::call_delayed(6 * crl::time(1000), [weak, peers] {
 				const auto s = weak.get();
 				if (!s) {
 					return;
 				}
 				LoadLocalStickerPacks(s); // идемпотентно (вдруг стёрло)
-				RegisterPeer(peerAddr);
-				const auto user = s->data().user(
-					UserId(BareId(IdForAddress(peerAddr))));
-				const auto history = s->data().history(user);
 				// Только локальные стикер-паки (g_stickerPackDirs): sets() — flat_map по id, и первым
 				// непустым набором оказывался эмодзи-набор (pvemoji-set:…), у которого нет каталога пака —
 				// в cloud уходил один файл без pack_ref (tgx_stickers_flow.sh, 27 сен 2026)
@@ -14658,12 +14577,18 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						}
 					}
 				}
-				if (sticker) {
+				if (!sticker) {
+					LOG(("Parvane: autosticker — локальных паков нет"));
+					return;
+				}
+				for (const auto &peerAddr : peers) {
+					RegisterPeer(peerAddr);
+					const auto user = s->data().user(
+						UserId(BareId(IdForAddress(peerAddr))));
+					const auto history = s->data().history(user);
 					Api::SendExistingDocument(
 						Api::MessageToSend(Api::SendAction(history)), sticker);
 					LOG(("Parvane: autosticker → %1").arg(peerAddr));
-				} else {
-					LOG(("Parvane: autosticker — локальных паков нет"));
 				}
 			});
 		}

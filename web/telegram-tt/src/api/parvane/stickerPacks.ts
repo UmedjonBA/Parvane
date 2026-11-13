@@ -9,6 +9,7 @@ import { createStore, del, get } from 'idb-keyval';
 import type { ApiSticker, ApiStickerSet } from '../types';
 import type { WirePackRef } from './wire';
 
+import { bytesToBase64 } from './v2/base64';
 import { SecureE2eStorage } from './secureStorage';
 
 const PACK_MAGIC = 'PVPK1';
@@ -57,6 +58,9 @@ const setIdByContentHash = new Map<string, string>();
 // содержимому нельзя: по PACK-1 один и тот же пак получает новый file_id под
 // каждый набор получателей, а отпечаток содержимого — это поле провода
 const ownerBySetId = new Map<string, string>();
+// PACK-1 (spec 036): отпечатки своих установленных наборов (setId → base64). Принятый набор с тем же именем, но
+// другим содержимым не должен лечь под id своего («Котики» bob и свои «Котики» carol — два набора)
+const localHashBySetId = new Map<string, string>();
 // Распакованные файлы набора, показанного в модалке, но ещё не установленного
 const pendingFilesBySetId = new Map<string, StoredPack>();
 const setIdByShortName = new Map<string, string>();
@@ -305,7 +309,10 @@ async function readInstalledPacks(user: string): Promise<StoredPack[]> {
 export function loadInstalledPacks(user: string): Promise<StoredPack[]> {
   let cached = installedCache.get(user);
   if (!cached) {
-    cached = readInstalledPacks(user).catch(() => []);
+    cached = readInstalledPacks(user).then(async (packs) => {
+      await Promise.all(packs.map((pack) => noteLocalPackHash(pack)));
+      return packs;
+    }).catch(() => []);
     installedCache.set(user, cached);
   }
   return cached;
@@ -315,6 +322,7 @@ export async function saveInstalledPack(user: string, pack: StoredPack) {
   const storage = await SecureE2eStorage.open(user);
   const stored: StoredPack = { ...pack, setId: getPackSetId(pack) };
   if (!await writePack(storage, stored)) return;
+  await noteLocalPackHash(stored);
   const index = (await storage.loadRecord<StoredPackMeta[]>(PACK_INDEX_RECORD) || [])
     .filter((meta) => getPackSetId(meta) !== stored.setId)
     .concat(toMeta(stored));
@@ -347,6 +355,16 @@ export function resetInstalledPacksCache() {
 // Набор второго отправителя с тем же именем получает собственный setId: имя
 // пака дополняется адресом отправителя. Разделитель —  , он невозможен в
 // адресе и в имени пака, поэтому коллизию «имя+отправитель» не породит
+// Отпечаток своего набора — в реестр: тот же набор, пришедший в сообщении, остаётся своим (PACK-2), одноимённый
+// другого содержимого получает свой id (PACK-1)
+async function noteLocalPackHash(pack: StoredPack) {
+  if (pack.isEmoji || !pack.files?.length) return;
+  const setId = getPackSetId(pack);
+  const hash = bytesToBase64(await packContentHash(pack.files));
+  localHashBySetId.set(setId, hash);
+  if (!setIdByContentHash.has(hash)) setIdByContentHash.set(hash, setId);
+}
+
 function setIdForSender(name: string, from: string) {
   return getSetIdForPackName(`${name} ${from}`);
 }
@@ -358,10 +376,13 @@ export function registerReceivedPackRef(ref: WirePackRef, from?: string): string
   const baseSetId = getSetIdForPackName(name);
   const owner = from || '';
   const knownOwner = ownerBySetId.get(baseSetId);
-  // Имя занято другим отправителем — заводим отдельный набор под этого
-  const setId = receivedRefBySetId.has(baseSetId) && knownOwner !== undefined
-    && owner && knownOwner && knownOwner !== owner
-    ? setIdForSender(name, owner)
+  // Имя занято своим набором другого содержимого (PACK-1) либо другим отправителем — отдельный набор
+  const localHash = localHashBySetId.get(baseSetId);
+  const isLocalOther = Boolean(ref.content_hash && localHash && localHash !== ref.content_hash);
+  const isOtherSender = receivedRefBySetId.has(baseSetId) && knownOwner !== undefined
+    && Boolean(owner && knownOwner && knownOwner !== owner);
+  const setId = isLocalOther || isOtherSender
+    ? setIdForSender(name, owner || ref.content_hash || '')
     : baseSetId;
   if (!receivedRefBySetId.has(setId)) {
     receivedRefBySetId.set(setId, { ...ref, name });
@@ -456,6 +477,7 @@ export function resetPackRegistries() {
   installedCache.clear();
   receivedRefBySetId.clear();
   setIdByContentHash.clear();
+  localHashBySetId.clear();
   ownerBySetId.clear();
   pendingFilesBySetId.clear();
   setIdByShortName.clear();

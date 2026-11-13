@@ -224,6 +224,10 @@ std::string favedSetIdOf(const std::string &stickerId) {
     return (sep != std::string::npos && sep > 0) ? stickerId.substr(0, sep) : std::string();
 }
 
+std::string sharedSetId(const std::string &contentHashB64, const std::string &packName) {
+    return contentHashB64.empty() ? "n:" + sanitizeName(packName) : "h:" + contentHashB64;
+}
+
 std::int64_t emojiDocId(const std::string &rawName, const std::string &file) {
     return fnv1a64Signed("pvemoji:" + rawName + "|" + file);
 }

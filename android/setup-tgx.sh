@@ -27,6 +27,16 @@ echo "== оверлей tdlib: наш шов вместо TDLib =="
 TDLIB="$TGX/tdlib/src/main/java/org/drinkless/tdlib"
 mkdir -p "$TDLIB" "$TGX/tdlib/src/main/java/org/parvane/core"
 rm -f "$TDLIB/Client.java"
+# файлы шва, удалённые из libtd (T149: AuditDump/MigrateLegacy/ConnectionHeader), убираем и из клона —
+# иначе старая копия не компилируется
+for f in "$TDLIB/"*.kt "$TGX/tdlib/src/main/java/org/parvane/core/"*.kt; do
+  [ -e "$f" ] || continue
+  case "$f" in
+    "$TDLIB/"*) src="$ROOT/libtd/src/main/java/org/drinkless/tdlib/$(basename "$f")" ;;
+    *) src="$ROOT/libtd/src/main/java/org/parvane/core/$(basename "$f")" ;;
+  esac
+  [ -e "$src" ] || rm -f "$f"
+done
 # все Kotlin-файлы шва (spec 005 добавил Stickers/PackIndex/PollStore/… — раньше копировались два)
 cp "$ROOT/libtd/src/main/java/org/drinkless/tdlib/"*.kt "$TDLIB/"
 # ParvaneCore + StoreKey (P-13) + ParvaneProtocol (движок v2, spec 007) — весь пакет

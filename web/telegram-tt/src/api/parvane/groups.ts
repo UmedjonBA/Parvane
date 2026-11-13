@@ -33,12 +33,6 @@ export type InviteErrorCode =
   | 'invalid' | 'banned' | 'revoked' | 'expired' | 'exhausted' | 'declined' | 'requested'
   | 'rateLimited' | 'failed';
 
-function isInviteManager(member?: WireGroupMember) {
-  if (!member) return false;
-  if (member.role === 'owner') return true;
-  return member.role === 'admin' && toAdminRights(member.admin_rights).inviteUsers === true;
-}
-
 type GroupDependencies = {
   getConnection: () => GatewayConnection | undefined;
   getStore: () => ParvaneStore;
@@ -83,6 +77,11 @@ export function createGroupController(deps: GroupDependencies) {
   // успевший спросить основную ссылку, создал бы ОТКРЫТУЮ — запрос основной ждёт конца таких созданий
   const requestGroupCreations = new Set<Promise<unknown>>();
 
+  /** Ведёт ли себя приглашения группы — решение модели (`GroupView.can_manage_invites`, spec 036 T020). */
+  function canManageInvites(groupId: string) {
+    return Boolean(v2Of(groupId)?.groupRights(groupId)?.canManageInvites);
+  }
+
   function v2Of(address: string) {
     const v2 = deps.getV2?.();
     return v2?.isV2GroupAddress(address) ? v2 : undefined;
@@ -101,12 +100,8 @@ export function createGroupController(deps: GroupDependencies) {
       const verified = v2.groupInfo(info.group_id);
       return verified ? register(verified, true) : false;
     }
-    if (!store.registerGroup(info)) {
-      const known = store.getGroupVersion(info.group_id);
-      deps.log(`сведения группы ${info.group_id} v${info.version ?? 0} устарели (известна v${known}), пропущены`);
-      return false;
-    }
-    return true;
+    // Группа v1, переведённая в v2, — сведений не принимает; ревизию сведений ведёт модель (GROUP-1)
+    return store.registerGroup(info);
   }
 
   // Сведения группы — только из её проверенного журнала (GROUP-3)
@@ -367,10 +362,10 @@ export function createGroupController(deps: GroupDependencies) {
     if (v2) register(info, true);
     const members = buildMembers(info.members.filter(({ role }) => role !== 'banned'));
     const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
-    const selfMember = info.members.find(({ address: member }) => member === store.self);
     // Только уже существующая основная ссылка: просмотр сведений группы не пишет в её журнал (создание — по действию
     // пользователя, экран «Ссылки-приглашения»; раньше каждая подгрузка сведений создавала ссылку во всех группах)
-    const inviteLink = v2 && isInviteManager(selfMember)
+    // Ведёт ли себя приглашения — решение модели (`GroupView.can_manage_invites`, spec 036 T020)
+    const inviteLink = v2?.groupRights(address)?.canManageInvites
       ? pickPrimaryInvite(await v2.listInvites(address))?.url
       : undefined;
     return {
@@ -521,12 +516,6 @@ export function createGroupController(deps: GroupDependencies) {
 
   // ── инвайт-ссылки ──────────────────────────────────────────────────────────
 
-  async function getSelfMember(groupId: string) {
-    const store = deps.getStore();
-    const info = store.getGroupInfo(groupId) || await refresh(groupId).catch(() => undefined);
-    return info?.members.find(({ address }) => address === store.self);
-  }
-
   async function addChatMembers(chat: ApiChat, users: ApiUser[]) {
     const store = deps.getStore();
     const groupId = store.getAddressForId(chat.id);
@@ -602,8 +591,7 @@ export function createGroupController(deps: GroupDependencies) {
   }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
     if (!groupId) return undefined;
-    const selfMember = await getSelfMember(groupId);
-    if (!isInviteManager(selfMember)) return undefined;
+    if (!canManageInvites(groupId)) return undefined;
     const hasParams = Boolean(title || expireDate || usageLimit || isRequestNeeded);
     const v2 = v2Of(groupId);
     if (!v2) return undefined;
@@ -625,8 +613,7 @@ export function createGroupController(deps: GroupDependencies) {
   }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
     if (!groupId) return { invites: [] };
-    const selfMember = await getSelfMember(groupId);
-    if (!isInviteManager(selfMember)) return { invites: [] };
+    if (!canManageInvites(groupId)) return { invites: [] };
     const v2 = v2Of(groupId);
     if (!v2) return { invites: [] };
     // Отозванные ссылки v2 помнит сервер, пока админ их не удалит
@@ -654,7 +641,7 @@ export function createGroupController(deps: GroupDependencies) {
   async function setJoinByRequest({ chatId, isEnabled }: { chatId: string; isEnabled: boolean }) {
     const groupId = deps.getStore().getAddressForId(chatId);
     const v2 = groupId ? v2Of(groupId) : undefined;
-    if (!v2 || !groupId || !isInviteManager(await getSelfMember(groupId))) return false;
+    if (!v2 || !groupId || !canManageInvites(groupId)) return false;
     const primary = await ensureV2Primary(v2, groupId);
     if (!primary) return false;
     if (Boolean(primary.isRequestNeeded) === isEnabled) return true;

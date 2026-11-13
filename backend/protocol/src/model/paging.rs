@@ -78,6 +78,11 @@ impl ChatRows {
         self.rows.is_empty()
     }
 
+    /// Строки с их id (без порядка).
+    pub fn iter_ids(&self) -> impl Iterator<Item = (&Id, &Row)> {
+        self.rows.iter()
+    }
+
     pub fn rows(&self) -> impl Iterator<Item = &Row> {
         self.index.keys().filter_map(|(_, id)| self.rows.get(id))
     }

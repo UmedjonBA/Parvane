@@ -2757,10 +2757,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
 "lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
 "lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
-"lng_parvane_migration_title" = "Updating data";
-"lng_parvane_migration_progress" = "Parvane is moving data on this device to the new storage: step {step} of {total}. Please keep the app open.";
-"lng_parvane_migration_done" = "Data on this device has been moved to the new storage.";
-"lng_parvane_migration_failed" = "Data could not be moved yet — Parvane will try again on the next connection. Nothing has been lost.";
 "lng_parvane_stub_critical" = "This message needs a newer version of Parvane. Update the app to see it.";
 "lng_parvane_write_blocked" = "These settings were changed in a newer version of Parvane. Update the app to change them on this device.";
 "lng_parvane_store_too_new" = "Data on this device was saved by a newer version of Parvane. Update the app — until then you can only view it.";

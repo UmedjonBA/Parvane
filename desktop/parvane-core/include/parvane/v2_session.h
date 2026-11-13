@@ -32,7 +32,7 @@
 //       (после запуска и после смены ключа состояния — тогда rotated: журнал истории открывает сессию движка
 //       заново и пишет контрольную точку под новым ключом, HIST-2);
 //   {"type":"journal","journal":"state"|"history","seq"} — живое уведомление журнала (JournalNotice, spec 033):
-//       state — хосту синхронизировать журнал личного состояния сейчас (stateSync), history — журналу истории
+//       state — хосту синхронизировать журнал личного состояния сейчас (stateRefresh), history — журналу истории
 //       (parvane::history::HistorySync::onSessionEvent). Опрос журналов — только страховка.
 //   {"type":"groupL2","address","enabled":bool,"by":адрес,"id":uuid,"tsMs"}
 //       — политика «усиленная приватность» (L2) группы изменилась по журналу
@@ -119,19 +119,17 @@ struct SessionConfig {
     std::string pinnedEscrowKey;
     // Описание этого устройства для бота (запрос ключа восстановления: «Parvane Desktop, Linux»).
     std::string deviceDescription = "Parvane Desktop";
-    // spec 035 T127 (contracts/migration.md): разовый перенос прежнего состояния в хранилище модели. Слой перечня
-    // (`desktop`, `core`, `android`) и записи старых мест — `{"key", "value": base64}` (migrate_legacy.h). Не задано —
-    // ядро берёт сам: каталог состояния v2 (`state`, `key`) и файлы ядра рядом с ним (журнал истории).
-    std::string migrationLayer = "core";
-    std::function<json()> legacyRecords;
-    // Ход переноса для экрана (на рабочем потоке, под мьютексом движка — сессию не звать):
-    // {"point": 0..7, "total": 7, "done": bool, "failed": bool}.
-    std::function<void(const json &progress)> onMigration;
-    // Только для сценариев (dev-хуки PARVANE_MIGRATION_HALT / PARVANE_MIGRATION_CHUNK, как web
-    // `parvane:e2e:migrationHalt/Chunk`): перенос встаёт после фиксации шага точки ≥ migrationHaltAt (сценарий
-    // убивает процесс ровно там), migrationChunk — размер части строк истории (мелкий — M2 посреди строк). 0 — выкл.
-    int migrationHaltAt = 0;
-    int migrationChunk = 0;
+    // spec 036 (ENGINE-1): изменения модели, которые хост показывает (строки, чаты, прочитанность, личное состояние,
+    // группы), — событием {"type":"model","changes":[…]} (desktop). Хост, ещё не переведённый на показ из модели
+    // (android до spec 036 фазы 5), их не получает.
+    bool modelEvents = false;
+    // spec 036 (ENGINE-1, `engine_rows` + возможность `wire_rows`): входящее к строкам применяет модель, журнал
+    // истории аккаунта (очередь, догон, вход по точке, контрольные точки) и маркеры ведёт она же — по такту сессии
+    // (`tick`); события записей её итога помечены `"modelApplied": true` (хост их строк не записывает), показ строк —
+    // `message_upsert/remove` события `model`. Окно пачки журнала (S7-3): 0 — по умолчанию модели (30–120 с).
+    bool engineRows = false;
+    std::int64_t historyBatchMinMs = 0;
+    std::int64_t historyBatchMaxMs = 0;
 };
 
 // S7-1 (как web `isTelegramCodeIntercepted`): опрос запроса ключа через Telegram вернул код, отличный от
@@ -154,6 +152,10 @@ public:
     // id этого устройства для входа (`identity.session.issue`): тот, под которым живёт сохранённое
     // состояние движка, иначе созданный один раз и записанный в каталог (`device-id`). Без v1-файла
     // устройства (spec 029). Бросает при сбое записи.
+    // spec 036 T031: файлы каталога состояния — в хранилище движка (`<stateDir>/host`, вид host-file) с разовым
+    // переносом прежних файлов storecrypt при первом обращении. Включает хост до первого чтения (desktop);
+    // выключено — прежние файлы (android до своей фазы).
+    static void useHostFiles(bool on, std::function<void(const std::string &)> log = {});
     [[nodiscard]] static std::string deviceIdFor(const std::string &stateDir);
     // ID-01: доказательство ключа устройства по сохранённому состоянию движка — {"proof": base64,
     // "tsMs": n}; null — состояния нет (первый вход этого устройства).
@@ -260,8 +262,6 @@ public:
     void persistEngine();
     // Сведённый снимок журнала личного состояния (planner_container, cloud_containers); null — журнала нет.
     json stateSnapshot();
-    // spec 035 (T123): выгрузка «ничего не потеряно» моделью профиля (`auditDump`, JSONL); "" — модели нет.
-    std::string modelAuditDump();
     [[nodiscard]] std::string serverDomain() const { return domainNow(); }
     // ── журнал истории аккаунта (spec 033, history_sync.h) ──
     // Сессия журнала истории движка (ключ — из ключей личного состояния); nullptr — сессия не готова или ключа нет.
@@ -526,19 +526,6 @@ public:
 
     // ── журнал личного состояния (R10, T098; сведение STATE-1 — в движке) ──
     [[nodiscard]] bool stateAvailable();
-    // Прочитать журнал; при первом запуске (файла state-migrated нет)
-    // перенести локальный снимок local (proto3-JSON StateSnapshot).
-    // → сведённый снимок; null — журнал недоступен (нет ключа).
-    // dirtyKinds (T150): виды, правленные без журнала, — уходят в журнал разницей от показанного до правки, до
-    // проекции снимка.
-    json stateAttach(const json &local, const std::vector<std::string> &dirtyKinds = {});
-    // Своя правка (desired — поля видов kinds в StateSnapshot) → записи
-    // журнала, затем чужие записи. → {"changed":bool,"snapshot":{…}};
-    // null — журнал недоступен.
-    // shown — снимок, который хост показывал, когда строил desired (база разницы): без него — последний выданный
-    // хосту (state-base); снимок, выданный, но ещё не показанный, откатил бы чужую правку разницей от устаревшего
-    // desired (verify_state_patch: «правка другого устройства теряется»).
-    json stateSync(const json &desired, const std::vector<std::string> &kinds, const json &shown = json());
     // Отложенное (op_id base64) уже отправлено каким-то устройством? (синк журнала)
     bool stateScheduledSent(const std::string &opIdB64);
     void stateMarkSent(const std::string &opIdB64);
@@ -566,6 +553,33 @@ public:
     // `cloudContainerSet`, `plannerContainerSet`, …): записи уходят на сервер. false — журнал недоступен.
     bool stateCall(const std::string &name, const json &args);
 
+    // ── spec 036 (ENGINE-1): личное состояние по видам, список чатов и страницы истории — готовыми из модели ──
+    // Объекты видов kinds (пусто — все; `FOLDER` либо `OBJECT_KIND_FOLDER`): {objects: [{kind, key, value, marks}]}
+    // (`viewStateJson`; модель открыта и без сети). null — модели нет.
+    json stateView(const std::vector<std::string> &kinds = {});
+    // Правка вида: desired/shown — [{key, value}] (что хост хочет и что показывал последним); разницу по полям от
+    // показанного считает модель (`stateSet` с base), показанный объект, которого хост больше не хочет, удаляется.
+    // Без связи правка остаётся в модели и уходит при подключении. false — модели нет либо запись отвергнута.
+    bool stateSubmit(const std::string &kind, const json &desired, const json &shown);
+    // Отметка объекта (только растёт): `SCHEDULED` 1 — «отправлено», `CHAT_CLEARED` 2 — граница очистки.
+    bool stateMark(const std::string &kind, const std::string &key, std::uint32_t field, std::uint64_t value);
+    // Журнал состояния подключён (stateReady): смена ключа — перенос сведённого модели под новый ключ, затем журнал
+    // до головы (свои неотправленные — серверу). false — ключа личного состояния ещё нет.
+    bool stateConnect();
+    // Журнал до головы (живое уведомление журнала, опрос): правка другого устройства — `state_changed` модели.
+    bool stateRefresh();
+    // Список чатов (`chatList`, ChatList) и страница истории (`historyPage`, HistoryPage); null — модели нет.
+    json chatList(const json &args);
+    json historyPage(const json &args);
+    // spec 036 (E4): прочтение намерением модели `read` до строки маркера (ReadMark: chat, up_to_ts_ms, up_to_id —
+    // UUID): маркер, квитанции собеседнику о ставших прочитанными входящих (их шлёт модель) и `unread_changed`.
+    // Строки маркера в модели нет — маркер операцией журнала (без квитанций). false — модели нет. Ходит в сеть
+    // (квитанции) — не с главного потока.
+    bool readTo(const json &mark);
+    // Группа из модели (`viewGroup`: GroupView — сведения `info_json`, участники, роли, права себя `can_*`); null —
+    // модели нет или группа ей не известна.
+    json groupView(const std::string &address);
+
 private:
     using Task = std::function<void()>;
     void post(Task t);
@@ -587,9 +601,10 @@ private:
     // ответ — `ingest`, события записей (`client_events`) — наружу, нужды клиента — добор и `retry` (ORDER-1).
     std::shared_ptr<engine::Host> host_;
     std::string hostDevice_;   // устройство, под которым открыта модель
+    std::atomic<bool> modelTickScheduled_{false}; // такт модели (engineRows) запланирован
+    void scheduleModelTick();
     bool hostHadProfile_ = false; // хранилище модели уже было (или перенесено) — устройство не новое
     std::string modelOpenState_;  // последнее OpenResult.state
-    json modelOpenSteps_ = json::array();
     int needAttempts_ = 0;
     std::uint64_t lastDriveBatches_ = 0; // пачек хранилища за последний driveLocked (OPT-024)
     // Готовая модель для строк истории (копия host_ под своим мьютексом: host_ меняется под engineMu_)
@@ -598,7 +613,6 @@ private:
     void publishRowsHost(std::shared_ptr<engine::Host> h);
     // offline — без сети (openModelOffline): нужен перенос — модель не открывается.
     bool openHostLocked(const std::string &deviceId, std::string *error, bool offline = false);
-    bool migrateLegacyLocked(std::string *error);
     bool driveLocked(const engine::Step &first, std::vector<json> *events = nullptr);
     void noteOpenLocked(const engine::Step &st);
     void workerLoop();
@@ -645,6 +659,9 @@ private:
     bool setGroupPhotoLocked(const std::string &hex, const std::string &fileId, const std::string &keyB64);
     void sendGroupPhotoKeyLocked(const std::string &hex);
     void publishGroupLocked(const std::string &hex);
+    // spec 036 (E6, GROUP-3): сведения группы для показа — из модели (`viewGroup`: `info_json` журнала группы и права
+    // себя `can_*` → поле "can"); модели нет — клиент движка (те же сведения журнала).
+    std::optional<json> shownGroupInfoLocked(const std::string &hex);
     void noteGroupL2Locked(const std::string &hex, const json &info);
     void noteL2StateLocked(bool force = false);
     void pushPrivacyLocked();
@@ -736,12 +753,12 @@ private:
     // Журнал состояния.
     bool openStateLocked();
     bool pullStateLocked();
-    json projectStateLocked();
-    bool pushDesiredLocked(const json &desired, const std::vector<std::string> &kinds, const json &shown = json());
-    void applyStateLocked(const json &desired, const char *what);
+    // Подключить журнал (stateReady): смена ключа — перенос показа модели под новый ключ, затем журнал до головы.
+    bool attachStateLocked();
     void log(const std::string &m) const;
     std::string readStateFile(const std::string &name) const;
     bool writeStateFile(const std::string &name, const std::string &data) const;
+    void removeStateFile(const std::string &name) const;
 
     SessionConfig cfg_;
     std::recursive_mutex engineMu_;
@@ -788,9 +805,9 @@ private:
     unsigned privacyDirty_ = 0;
     std::unique_ptr<StateModel> state_;
     // Ключ личного состояния сменён (D-16): старые записи новым ключом не
-    // читаются. stateRekeyed_ — следующий stateAttach не отдаёт хосту пустой
-    // снимок, а переносит состояние под новый ключ: stateCarry_ (сведённое до
-    // смены, если ключ менял это устройство) либо локальное состояние хоста.
+    // читаются. stateRekeyed_ — следующее подключение журнала переносит
+    // состояние под новый ключ: stateCarry_ (объекты модели до смены, если
+    // ключ менял это устройство) либо сведённое модели.
     bool stateRekeyed_ = false;
     std::optional<json> stateCarry_;
     // Ключ сменило другое своё устройство (`stateKeyRotated`): его записей под новым ключом может ещё не быть —
@@ -798,7 +815,6 @@ private:
     // позже (как web `attach(…, 'peer')`)
     bool stateRekeyPeer_ = false;
     int stateRekeyPeerTries_ = 0; // повторов без записей; после потолка — перенос своего (журнал под ключом пуст)
-    json stateBase_; // что хост показывал последним (база разницы правок, файл state-base)
     std::atomic<bool> ready_{false};
     std::atomic<bool> needsLinking_{false};
     std::string linkMaterial_; // под engineMu_: грант линковки до вступления
