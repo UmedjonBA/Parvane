@@ -119,10 +119,21 @@ try {
   await expectValue(health, 'steps', '3,000');
   console.log('OK: запись удалена, сумма дня пересчитана');
 
+  // ── Строка ввода «Плана»: показатель тела уходит в «Здоровье», а не в «План» ─
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Planner', exact: true }).click();
+  await page.locator('#FoldersSidebar').getByRole('button', { name: 'New entry' }).click();
+  const plannerInput = page.locator('#planner-quick-input');
+  await plannerInput.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await plannerInput.fill('вес 73,5');
+  await plannerInput.press('Enter');
+  await plannerInput.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await expectValue(await openHealthModule(page), 'weight', '73.5');
+  console.log('OK: вес из строки ввода «Плана» записан в «Здоровье»');
+
   // ── Перезагрузка: данные на сервере, а не во вкладке ──────────────────────
   await reloadPage(page);
   const reloaded = await openHealthModule(page);
-  await expectValue(reloaded, 'weight', '72.0');
+  await expectValue(reloaded, 'weight', '73.5');
   await expectValue(reloaded, 'steps', '3,000');
   await card(reloaded, 'sleep').locator('[data-health-sleep-total]').filter({ hasText: '7 h 30 min' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -133,7 +144,7 @@ try {
   sessions.second = await preparePage(secondContext, user, PASSWORD);
   await linkSecondDevice(page, sessions.second.page);
   const other = await openHealthModule(sessions.second.page);
-  await expectValue(other, 'weight', '72.0');
+  await expectValue(other, 'weight', '73.5');
   await expectValue(other, 'pressure', '125/82');
   // Запись со второго устройства доезжает до первого
   await addLine(other, 'вес 71,6', 'weight');

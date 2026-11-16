@@ -15,6 +15,8 @@ import type { QuickCandidate, QuickHistory } from './plannerQuickSuggest';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
+import { getIsModuleOn } from '../../../util/parvaneModules';
+import { addHealthEntries, parseHealthInput } from '../health/healthStore';
 import {
   formatDay, formatDayLabel, formatDuration, formatRemind, formatRepeat, formatSpan,
 } from './plannerFormat';
@@ -141,6 +143,14 @@ const MEAL_LABELS = {
   other: 'PlannerMealOther',
 } as const;
 const NAME_MAX_LENGTH = 160;
+// Виды строки, которые ведёт модуль «Здоровье»: сон, показатели тела, вода
+const HEALTH_MODULE_KINDS: QuickKind[] = ['sleep', 'metric', 'water'];
+
+/** Записать строку в «Здоровье» его разбором; `false` — разбор ничего не понял либо модуль не готов. */
+async function forwardToHealth(text: string) {
+  const parsed = await parseHealthInput(text);
+  return parsed?.entries.length ? addHealthEntries(parsed.entries) : false;
+}
 const INPUT_MAX_LENGTH = 300;
 const FOCUS_DELAY_MS = 200;
 const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
@@ -305,6 +315,19 @@ const PlannerQuickInput = ({
     const value = inputRef.current?.value ?? text;
     const entry = parse(value);
     if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
+    // «Здоровье» — отдельный модуль (spec 041): сон, показатели тела и вода из строки «Плана» пишутся в его
+    // контейнер. Чего разбор «Здоровья» не понял (еда, тренировка) — остаётся записью «Плана», как раньше
+    if (HEALTH_MODULE_KINDS.includes(entry.kind) && getIsModuleOn('health')) {
+      void forwardToHealth(value).then((isAdded) => {
+        if (isAdded) onCreated(entry.day);
+        else savePlannerEntry(value, entry);
+      });
+      return;
+    }
+    savePlannerEntry(value, entry);
+  });
+
+  const savePlannerEntry = useLastCallback((value: string, entry: QuickDraft) => {
     // Правка угаданного типа либо длительности запоминается за первым словом названия
     const auto = parseQuickInput(value, baseContext());
     const local = readLearned(userId);
