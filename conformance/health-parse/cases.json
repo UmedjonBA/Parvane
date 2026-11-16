@@ -1,89 +1,1995 @@
 {
-  "rule": "HEALTH-2",
-  "about": "Разбор свободного ввода «Здоровья»: один образец на все клиенты. Момент ввода — nowLocal по смещению tzMin; в ожидании — местные день и время записи. Запись без времени сегодня стоит на момент ввода, в прошлый день — на 12:00.",
-  "nowLocal": "2026-11-16T10:00",
-  "tzMin": 180,
-  "cases": [
-    {"text": "72 кг", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72, "unit": "kg"}]},
-    {"text": "вес 72,4", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72.4, "unit": "kg"}]},
-    {"text": "Вес: 72.4кг", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72.4, "unit": "kg"}]},
-    {"text": "вчера вес 73", "entries": [{"kind": "weight", "day": "2026-11-15", "time": "12:00", "value": 73, "unit": "kg"}]},
-    {"text": "вес 73 вчера", "entries": [{"kind": "weight", "day": "2026-11-15", "time": "12:00", "value": 73, "unit": "kg"}]},
-    {"text": "вес 72 в 8:30", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "08:30", "value": 72, "unit": "kg"}]},
-    {"text": "в 8:30 вес 72", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "08:30", "value": 72, "unit": "kg"}]},
-    {"text": "утром вес 72", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "08:00", "value": 72, "unit": "kg"}]},
-    {"text": "позавчера в 7 утра вес 71,9", "entries": [{"kind": "weight", "day": "2026-11-14", "time": "07:00", "value": 71.9, "unit": "kg"}]},
-    {"text": "weight 160 lb", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72.6, "unit": "kg"}]},
-    {"text": "160 lbs", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72.6, "unit": "kg"}]},
-
-    {"text": "лёг в полночь встал в 7", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 420, "unit": "min"}]},
-    {"text": "лег в 23:30, встал в 7:10", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:30", "endDay": "2026-11-16", "endTime": "07:10", "value": 460, "unit": "min"}]},
-    {"text": "лег в 11 встал в 7", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 480, "unit": "min"}]},
-    {"text": "Легла спать в 12, проснулась в 8 утра", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "endDay": "2026-11-16", "endTime": "08:00", "value": 480, "unit": "min"}]},
-    {"text": "уснул в 1:30 проснулся в 9", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "01:30", "endDay": "2026-11-16", "endTime": "09:00", "value": 450, "unit": "min"}]},
-    {"text": "встал в 7, лёг в 23", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 480, "unit": "min"}]},
-    {"text": "спал с 23 до 7", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 480, "unit": "min"}]},
-    {"text": "сон 23:30-7:10", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:30", "endDay": "2026-11-16", "endTime": "07:10", "value": 460, "unit": "min"}]},
-    {"text": "вчера спал с 0:30 до 8", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "00:30", "endDay": "2026-11-15", "endTime": "08:00", "value": 450, "unit": "min"}]},
-    {"text": "спал 7ч 30м", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "value": 450, "unit": "min"}]},
-    {"text": "сон 7.5 часов", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "value": 450, "unit": "min"}]},
-    {"text": "спал 8", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "value": 480, "unit": "min"}]},
-    {"text": "поспал 40 минут", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "value": 40, "unit": "min"}]},
-    {"text": "встал в 6:45", "entries": [{"kind": "sleep_end", "day": "2026-11-16", "time": "06:45", "value": 0, "unit": ""}]},
-    {"text": "лег в 23:40", "entries": [{"kind": "sleep_start", "day": "2026-11-15", "time": "23:40", "value": 0, "unit": ""}]},
-    {"text": "лег в 23, спал 8 часов", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 480, "unit": "min"}]},
-    {"text": "went to bed at 11pm, woke up at 7", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:00", "endDay": "2026-11-16", "endTime": "07:00", "value": 480, "unit": "min"}]},
-    {"text": "slept from 11:30 pm to 6:45 am", "entries": [{"kind": "sleep", "day": "2026-11-15", "time": "23:30", "endDay": "2026-11-16", "endTime": "06:45", "value": 435, "unit": "min"}]},
-    {"text": "slept 7h 20m", "entries": [{"kind": "sleep", "day": "2026-11-16", "time": "00:00", "value": 440, "unit": "min"}]},
-    {"text": "got up at 6", "entries": [{"kind": "sleep_end", "day": "2026-11-16", "time": "06:00", "value": 0, "unit": ""}]},
-
-    {"text": "120/80", "entries": [{"kind": "pressure", "day": "2026-11-16", "time": "10:00", "value": 120, "value2": 80, "unit": "mmhg"}]},
-    {"text": "давление 130 на 85", "entries": [{"kind": "pressure", "day": "2026-11-16", "time": "10:00", "value": 130, "value2": 85, "unit": "mmhg"}]},
-    {"text": "АД 118/76 пульс 64", "entries": [
-      {"kind": "pressure", "day": "2026-11-16", "time": "10:00", "value": 118, "value2": 76, "unit": "mmhg"},
-      {"kind": "pulse", "day": "2026-11-16", "time": "10:00", "value": 64, "unit": "bpm"}]},
-    {"text": "bp 125/82 at 9:15", "entries": [{"kind": "pressure", "day": "2026-11-16", "time": "09:15", "value": 125, "value2": 82, "unit": "mmhg"}]},
-    {"text": "пульс 58", "entries": [{"kind": "pulse", "day": "2026-11-16", "time": "10:00", "value": 58, "unit": "bpm"}]},
-    {"text": "72 уд/мин", "entries": [{"kind": "pulse", "day": "2026-11-16", "time": "10:00", "value": 72, "unit": "bpm"}]},
-
-    {"text": "8000 шагов", "entries": [{"kind": "steps", "day": "2026-11-16", "time": "10:00", "value": 8000, "unit": "steps"}]},
-    {"text": "вчера 12к шагов", "entries": [{"kind": "steps", "day": "2026-11-15", "time": "12:00", "value": 12000, "unit": "steps"}]},
-    {"text": "шаги 9500", "entries": [{"kind": "steps", "day": "2026-11-16", "time": "10:00", "value": 9500, "unit": "steps"}]},
-    {"text": "10k steps", "entries": [{"kind": "steps", "day": "2026-11-16", "time": "10:00", "value": 10000, "unit": "steps"}]},
-
-    {"text": "вода 250", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 250, "unit": "ml"}]},
-    {"text": "выпил 2 стакана воды", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 500, "unit": "ml"}]},
-    {"text": "стакан воды", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 250, "unit": "ml"}]},
-    {"text": "0,5 л воды", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 500, "unit": "ml"}]},
-    {"text": "вода 1.5", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 1500, "unit": "ml"}]},
-    {"text": "выпила воды 300 мл", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 300, "unit": "ml"}]},
-    {"text": "water 500ml", "entries": [{"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 500, "unit": "ml"}]},
-
-    {"text": "настроение 4", "entries": [{"kind": "mood", "day": "2026-11-16", "time": "10:00", "value": 4, "unit": "score"}]},
-    {"text": "настроение отличное", "entries": [{"kind": "mood", "day": "2026-11-16", "time": "10:00", "value": 5, "unit": "score"}]},
-    {"text": "mood bad", "entries": [{"kind": "mood", "day": "2026-11-16", "time": "10:00", "value": 2, "unit": "score"}]},
-    {"text": "температура 36,6", "entries": [{"kind": "temperature", "day": "2026-11-16", "time": "10:00", "value": 36.6, "unit": "c"}]},
-    {"text": "37.2°C вечером", "entries": [{"kind": "temperature", "day": "2026-11-16", "time": "20:00", "value": 37.2, "unit": "c"}]},
-    {"text": "сахар 5.4", "entries": [{"kind": "glucose", "day": "2026-11-16", "time": "10:00", "value": 5.4, "unit": "mmol_l"}]},
-    {"text": "рост 180 см, талия 82", "entries": [
-      {"kind": "height", "day": "2026-11-16", "time": "10:00", "value": 180, "unit": "cm"},
-      {"kind": "waist", "day": "2026-11-16", "time": "10:00", "value": 82, "unit": "cm"}]},
-    {"text": "жир 18%", "entries": [{"kind": "body_fat", "day": "2026-11-16", "time": "10:00", "value": 18, "unit": "pct"}]},
-
-    {"text": "лёг в 23:15 встал в 6:50, вес 72.1, 118/78, выпил стакан воды", "entries": [
-      {"kind": "sleep", "day": "2026-11-15", "time": "23:15", "endDay": "2026-11-16", "endTime": "06:50", "value": 455, "unit": "min"},
-      {"kind": "pressure", "day": "2026-11-16", "time": "10:00", "value": 118, "value2": 78, "unit": "mmhg"},
-      {"kind": "water", "day": "2026-11-16", "time": "10:00", "value": 250, "unit": "ml"},
-      {"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72.1, "unit": "kg"}]},
-
-    {"text": "вес 720", "entries": [], "problems": ["вес 720"]},
-    {"text": "80/120", "entries": [], "problems": ["80/120"]},
-    {"text": "настроение 9", "entries": [], "problems": ["настроение 9"]},
-    {"text": "спал 30 часов", "entries": [], "problems": ["спал 30 часов"]},
-    {"text": "72", "entries": [], "unparsed": ["72"]},
-    {"text": "купить хлеб", "entries": [], "unparsed": ["купить хлеб"]},
-    {"text": "вес 72, позвонить маме", "entries": [{"kind": "weight", "day": "2026-11-16", "time": "10:00", "value": 72, "unit": "kg"}], "unparsed": ["позвонить маме"]},
-    {"text": "сон", "entries": [], "unparsed": ["сон"]},
-    {"text": "", "entries": []}
-  ]
+ "rule": "HEALTH-2",
+ "about": "Разбор свободного ввода «Здоровья»: один образец на все клиенты. Момент ввода — nowLocal по смещению tzMin; в ожидании — местные день и время записи. Запись без времени сегодня стоит на момент ввода, в прошлый день — на 12:00.",
+ "nowLocal": "2026-11-16T10:00",
+ "tzMin": 180,
+ "cases": [
+  {
+   "text": "72 кг",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 72,4",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.4,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "Вес: 72.4кг",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.4,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вчера вес 73",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-15",
+     "time": "12:00",
+     "value": 73,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 73 вчера",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-15",
+     "time": "12:00",
+     "value": 73,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 72 в 8:30",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "08:30",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "в 8:30 вес 72",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "08:30",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "утром вес 72",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "08:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "позавчера в 7 утра вес 71,9",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-14",
+     "time": "07:00",
+     "value": 71.9,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "weight 160 lb",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.6,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "160 lbs",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.6,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "лёг в полночь встал в 7",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 420,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег в 23:30, встал в 7:10",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "07:10",
+     "value": 460,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег в 11 встал в 7",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "Легла спать в 12, проснулась в 8 утра",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "endDay": "2026-11-16",
+     "endTime": "08:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "уснул в 1:30 проснулся в 9",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "01:30",
+     "endDay": "2026-11-16",
+     "endTime": "09:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "встал в 7, лёг в 23",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал с 23 до 7",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "сон 23:30-7:10",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "07:10",
+     "value": 460,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "вчера спал с 0:30 до 8",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "00:30",
+     "endDay": "2026-11-15",
+     "endTime": "08:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал 7ч 30м",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "сон 7.5 часов",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал 8",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "поспал 40 минут",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 40,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "встал в 6:45",
+   "entries": [
+    {
+     "kind": "sleep_end",
+     "day": "2026-11-16",
+     "time": "06:45",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "лег в 23:40",
+   "entries": [
+    {
+     "kind": "sleep_start",
+     "day": "2026-11-15",
+     "time": "23:40",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "лег в 23, спал 8 часов",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "went to bed at 11pm, woke up at 7",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "slept from 11:30 pm to 6:45 am",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "06:45",
+     "value": 435,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "slept 7h 20m",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 440,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "got up at 6",
+   "entries": [
+    {
+     "kind": "sleep_end",
+     "day": "2026-11-16",
+     "time": "06:00",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "120/80",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 120,
+     "value2": 80,
+     "unit": "mmhg"
+    }
+   ]
+  },
+  {
+   "text": "давление 130 на 85",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 130,
+     "value2": 85,
+     "unit": "mmhg"
+    }
+   ]
+  },
+  {
+   "text": "АД 118/76 пульс 64",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 118,
+     "value2": 76,
+     "unit": "mmhg"
+    },
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 64,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "bp 125/82 at 9:15",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "09:15",
+     "value": 125,
+     "value2": 82,
+     "unit": "mmhg"
+    }
+   ]
+  },
+  {
+   "text": "пульс 58",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 58,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "72 уд/мин",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "8000 шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 8000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "вчера 12к шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-15",
+     "time": "12:00",
+     "value": 12000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "шаги 9500",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 9500,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "10k steps",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 10000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "вода 250",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 250,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "выпил 2 стакана воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "стакан воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 250,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "0,5 л воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "вода 1.5",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 1500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "выпила воды 300 мл",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 300,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "water 500ml",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "настроение 4",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 4,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "настроение отличное",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 5,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "mood bad",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 2,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "температура 36,6",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 36.6,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "37.2°C вечером",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 37.2,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "сахар 5.4",
+   "entries": [
+    {
+     "kind": "glucose",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 5.4,
+     "unit": "mmol_l"
+    }
+   ]
+  },
+  {
+   "text": "рост 180 см, талия 82",
+   "entries": [
+    {
+     "kind": "height",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 180,
+     "unit": "cm"
+    },
+    {
+     "kind": "waist",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 82,
+     "unit": "cm"
+    }
+   ]
+  },
+  {
+   "text": "жир 18%",
+   "entries": [
+    {
+     "kind": "body_fat",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 18,
+     "unit": "pct"
+    }
+   ]
+  },
+  {
+   "text": "лёг в 23:15 встал в 6:50, вес 72.1, 118/78, выпил стакан воды",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:15",
+     "endDay": "2026-11-16",
+     "endTime": "06:50",
+     "value": 455,
+     "unit": "min"
+    },
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 118,
+     "value2": 78,
+     "unit": "mmhg"
+    },
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 250,
+     "unit": "ml"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.1,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 720",
+   "entries": [],
+   "problems": [
+    "вес 720"
+   ]
+  },
+  {
+   "text": "80/120",
+   "entries": [],
+   "problems": [
+    "80/120"
+   ]
+  },
+  {
+   "text": "настроение 9",
+   "entries": [],
+   "problems": [
+    "настроение 9"
+   ]
+  },
+  {
+   "text": "спал 30 часов",
+   "entries": [],
+   "problems": [
+    "спал 30 часов"
+   ]
+  },
+  {
+   "text": "72",
+   "entries": [],
+   "unparsed": [
+    "72"
+   ]
+  },
+  {
+   "text": "купить хлеб",
+   "entries": [],
+   "unparsed": [
+    "купить хлеб"
+   ]
+  },
+  {
+   "text": "вес 72, позвонить маме",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ],
+   "unparsed": [
+    "позвонить маме"
+   ]
+  },
+  {
+   "text": "сон",
+   "entries": [],
+   "unparsed": [
+    "сон"
+   ]
+  },
+  {
+   "text": "",
+   "entries": []
+  },
+  {
+   "text": "взвесился 72 и 4",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72.4,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "на весах 71,8 кг",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 71.8,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 72 после обеда",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-15",
+     "time": "13:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "вес 72,1 перед сном",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "value": 72.1,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "утром 72 кг, вечером 73 кг",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 73,
+     "unit": "kg"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "08:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "weighed 72.4 kg this morning",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "08:00",
+     "value": 72.4,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "в понедельник вес 73",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 73,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "12 ноября вес 73,5",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-12",
+     "time": "12:00",
+     "value": 73.5,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "20 декабря вес 75",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2025-12-20",
+     "time": "12:00",
+     "value": 75,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "nov 10 weight 74",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-10",
+     "time": "12:00",
+     "value": 74,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "2 days ago weight 73",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-14",
+     "time": "12:00",
+     "value": 73,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "лег в одиннадцать встал в семь",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "пошел спать в 23:30, проснулся в 7 утра",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег в час ночи встал в девять",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "01:00",
+     "endDay": "2026-11-16",
+     "endTime": "09:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег в полвторого, встал в полдесятого",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "01:30",
+     "endDay": "2026-11-16",
+     "endTime": "09:30",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "уснул около часа ночи, проснулся в 9",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "01:00",
+     "endDay": "2026-11-16",
+     "endTime": "09:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег в 12 ночи встал в 8",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "endDay": "2026-11-16",
+     "endTime": "08:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "лег вчера в 23:30, встал в 7",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "вчера лег в 23, сегодня встал в 6:30",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "06:30",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "вздремнул полчаса",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 30,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал полтора часа",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 90,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал часик",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 60,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "проспал 7 с половиной часов",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "выспался, спал 9 часов",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 540,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "спал прошлой ночью 6 часов",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 360,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "last night slept 7h",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 420,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "slept 7 and a half hours",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "went to sleep at 11, woke up at 6:30",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "06:30",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "bedtime half past eleven, woke at quarter to seven",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:30",
+     "endDay": "2026-11-16",
+     "endTime": "06:45",
+     "value": 435,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "sleep 11pm-7am",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "23:00",
+     "endDay": "2026-11-16",
+     "endTime": "07:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "got out of bed at 7",
+   "entries": [
+    {
+     "kind": "sleep_end",
+     "day": "2026-11-16",
+     "time": "07:00",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "woke at 6:30am",
+   "entries": [
+    {
+     "kind": "sleep_end",
+     "day": "2026-11-16",
+     "time": "06:30",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "bedtime 22:45",
+   "entries": [
+    {
+     "kind": "sleep_start",
+     "day": "2026-11-15",
+     "time": "22:45",
+     "value": 0,
+     "unit": ""
+    }
+   ]
+  },
+  {
+   "text": "давление 120-80",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 120,
+     "unit": "mmhg",
+     "value2": 80
+    }
+   ]
+  },
+  {
+   "text": "120/80/65",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 120,
+     "unit": "mmhg",
+     "value2": 80
+    },
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 65,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "верхнее 125, нижнее 82",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 125,
+     "unit": "mmhg",
+     "value2": 82
+    }
+   ]
+  },
+  {
+   "text": "давление утром 118 на 76",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "08:00",
+     "value": 118,
+     "unit": "mmhg",
+     "value2": 76
+    }
+   ]
+  },
+  {
+   "text": "3 дня назад давление 125 на 85",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-13",
+     "time": "12:00",
+     "value": 125,
+     "unit": "mmhg",
+     "value2": 85
+    }
+   ]
+  },
+  {
+   "text": "bp 118 over 76",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 118,
+     "unit": "mmhg",
+     "value2": 76
+    }
+   ]
+  },
+  {
+   "text": "пульс 64 удара в минуту",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 64,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "сердцебиение 70",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 70,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "heart rate 62",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 62,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "pulse 58 bpm",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 58,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "прошел 8 000 шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 8000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "walked 8,000 steps",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 8000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "12 тыс шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 12000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "шагов 7500 за день",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 7500,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "в субботу 9000 шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-14",
+     "time": "12:00",
+     "value": 9000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "on friday 10k steps",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-13",
+     "time": "12:00",
+     "value": 10000,
+     "unit": "steps"
+    }
+   ]
+  },
+  {
+   "text": "выпил бутылку воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "выпила кружку",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 300,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "выпил воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 250,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "пол литра воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "поллитра воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "полтора литра",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 1500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "две чашки воды",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "had a glass of water",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 250,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "drank a bottle of water",
+   "entries": [
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 500,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "чувствую себя отлично",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 5,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "настроение так себе",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 3,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "настроение 8/10",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 4,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "настроение 4 из 5",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 4,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "самочувствие неважное",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 2,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "feeling pretty good",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 4,
+     "unit": "score"
+    }
+   ]
+  },
+  {
+   "text": "температура 36 и 6",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 36.6,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "temp 98.6 F",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 37,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "100.4°F",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 38,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "сахар 100",
+   "entries": [
+    {
+     "kind": "glucose",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 5.6,
+     "unit": "mmol_l"
+    }
+   ]
+  },
+  {
+   "text": "рост 1,82 м",
+   "entries": [
+    {
+     "kind": "height",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 182,
+     "unit": "cm"
+    }
+   ]
+  },
+  {
+   "text": "обхват бедер 98 см",
+   "entries": [
+    {
+     "kind": "hips",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 98,
+     "unit": "cm"
+    }
+   ]
+  },
+  {
+   "text": "грудь 102",
+   "entries": [
+    {
+     "kind": "chest",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 102,
+     "unit": "cm"
+    }
+   ]
+  },
+  {
+   "text": "18% жира",
+   "entries": [
+    {
+     "kind": "body_fat",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 18,
+     "unit": "pct"
+    }
+   ]
+  },
+  {
+   "text": "сатурация 98",
+   "entries": [
+    {
+     "kind": "spo2",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 98,
+     "unit": "pct"
+    }
+   ]
+  },
+  {
+   "text": "spo2 97%",
+   "entries": [
+    {
+     "kind": "spo2",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 97,
+     "unit": "pct"
+    }
+   ]
+  },
+  {
+   "text": "вес 72 кг настроение хорошее пульс 60",
+   "entries": [
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 4,
+     "unit": "score"
+    },
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 60,
+     "unit": "bpm"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "давление 130/85, пульс 72, температура 36,7, вес 80",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 130,
+     "unit": "mmhg",
+     "value2": 85
+    },
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "bpm"
+    },
+    {
+     "kind": "temperature",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 36.7,
+     "unit": "c"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 80,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "купить хлеб на завтра",
+   "entries": [],
+   "unparsed": [
+    "купить хлеб на завтра"
+   ]
+  },
+  {
+   "text": "хочу спать",
+   "entries": [],
+   "unparsed": [
+    "хочу спать"
+   ]
+  },
+  {
+   "text": "Сегодня лёг в 00:40, проснулся в 8:15. Вес 71,6. Настроение бодрое",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-16",
+     "time": "00:40",
+     "endDay": "2026-11-16",
+     "endTime": "08:15",
+     "value": 455,
+     "unit": "min"
+    },
+    {
+     "kind": "mood",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 5,
+     "unit": "score"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 71.6,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "Давление было 135 на 90, потом 125 на 82",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 135,
+     "unit": "mmhg",
+     "value2": 90
+    },
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 125,
+     "unit": "mmhg",
+     "value2": 82
+    }
+   ]
+  },
+  {
+   "text": "за день выпил литр воды и прошел 6к шагов",
+   "entries": [
+    {
+     "kind": "steps",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 6000,
+     "unit": "steps"
+    },
+    {
+     "kind": "water",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 1000,
+     "unit": "ml"
+    }
+   ]
+  },
+  {
+   "text": "померил температуру вечером 37 и 4",
+   "entries": [
+    {
+     "kind": "temperature",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 37.4,
+     "unit": "c"
+    }
+   ]
+  },
+  {
+   "text": "после ужина сахар 6,1",
+   "entries": [
+    {
+     "kind": "glucose",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 6.1,
+     "unit": "mmol_l"
+    }
+   ]
+  },
+  {
+   "text": "вчера вечером давление 140/95 пульс 88",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 140,
+     "unit": "mmhg",
+     "value2": 95
+    },
+    {
+     "kind": "pulse",
+     "day": "2026-11-15",
+     "time": "20:00",
+     "value": 88,
+     "unit": "bpm"
+    }
+   ]
+  },
+  {
+   "text": "тонометр показал 122 на 78",
+   "entries": [
+    {
+     "kind": "pressure",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 122,
+     "unit": "mmhg",
+     "value2": 78
+    }
+   ]
+  },
+  {
+   "text": "I weigh 158 pounds",
+   "entries": [
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 71.7,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "yesterday slept from 1 to 9",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "01:00",
+     "endDay": "2026-11-15",
+     "endTime": "09:00",
+     "value": 480,
+     "unit": "min"
+    }
+   ]
+  },
+  {
+   "text": "подъем в 6, отбой в 22:30",
+   "entries": [
+    {
+     "kind": "sleep",
+     "day": "2026-11-15",
+     "time": "22:30",
+     "endDay": "2026-11-16",
+     "endTime": "06:00",
+     "value": 450,
+     "unit": "min"
+    }
+   ]
+  }
+ ]
 }

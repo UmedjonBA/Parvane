@@ -20,7 +20,7 @@ fn free_text_matches_shared_cases() {
     let now = local_to_ms(file["nowLocal"].as_str().unwrap(), tz);
     let mut failed = Vec::new();
     let cases = file["cases"].as_array().unwrap();
-    assert!(cases.len() >= 60);
+    assert!(cases.len() >= 150);
     for c in cases {
         let text = c["text"].as_str().unwrap();
         let got: Value = serde_json::from_str(&parse_json(text, now, tz as i32)).unwrap();

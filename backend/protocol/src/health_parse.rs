@@ -1,18 +1,20 @@
 //! Разбор свободного ввода «Здоровья» (spec 038, правило HEALTH-2): строка текста → записи домена
 //! `parvane.health.v1`. Один разбор на все клиенты: общий образец — `conformance/health-parse/cases.json`.
 //!
-//! Устройство: строка режется на лексемы (числа, время `ЧЧ:ММ`, слова, знаки), затем проход слева направо
-//! пробует распознаватели в текущей позиции. Порядок слов свободный: «72 кг», «вес 72», «вчера вес 72,4 в 8:30»,
-//! «лёг в полночь встал в 7», «спал 7ч 30м», «120/80 пульс 64», «выпил 2 стакана воды». Русский и английский
+//! Устройство: строка режется на лексемы (числа, время `ЧЧ:ММ`, слова, знаки), числа словами становятся числами
+//! («семь», «полтора», «полвосьмого»), затем проход слева направо пробует распознаватели в текущей позиции.
+//! Порядок слов свободный, формулировка — разговорная: «72 кг», «взвесился 72 и 4», «вчера вес 72,4 в 8:30»,
+//! «лёг в полночь встал в семь», «пошёл спать в 23, проснулся в 7 утра», «вздремнул полчаса», «120 на 80 пульс 64»,
+//! «выпил бутылку воды», «чувствую себя отлично», «в понедельник прошёл 8 000 шагов». Русский и английский
 //! понимаются одновременно. Что не разобрано — возвращается в `unparsed` дословно, значение вне разумного
-//! диапазона — в `problems`; молча ничего не выбрасывается, кроме служебных слов («я», «и», «в»).
+//! диапазона — в `problems`; молча ничего не теряется.
 //!
 //! Без регулярных выражений и без ИИ; времени системы и часовых поясов разбор не читает — момент «сейчас» и
-//! смещение местного времени передаёт хост.
+//! смещение местного времени передаёт хост. Новая формулировка — слово в таблице и случай в образце.
 
 use serde_json::{json, Value};
 
-use crate::domain::health::{civil_from_days, minute_of_day};
+use crate::domain::health::{civil_from_days, days_from_civil, minute_of_day};
 
 const DAY_MS: i64 = 86_400_000;
 const MIN_MS: i64 = 60_000;
@@ -117,7 +119,7 @@ fn lex(text: &str) -> Vec<Lex> {
         } else {
             let tok = match c {
                 '/' => Some(Tok::Slash),
-                '-' | '–' | '—' => Some(Tok::Dash),
+                '-' | '–' | '—' | '→' => Some(Tok::Dash),
                 '°' => Some(Tok::Deg),
                 '%' => Some(Tok::Pct),
                 ',' | ';' | '\n' | '.' | '!' | '?' => Some(Tok::Sep),
@@ -132,6 +134,73 @@ fn lex(text: &str) -> Vec<Lex> {
     out
 }
 
+/// Число словом: «семь», «одиннадцать», «полтора», «seven».
+fn numeral(word: &str) -> Option<f64> {
+    const RU: &[(&str, f64)] = &[
+        ("ноль", 0.0), ("один", 1.0), ("одна", 1.0), ("одну", 1.0), ("два", 2.0), ("две", 2.0), ("три", 3.0), ("четыре", 4.0), ("пять", 5.0),
+        ("шесть", 6.0), ("семь", 7.0), ("восемь", 8.0), ("девять", 9.0), ("десять", 10.0), ("одиннадцать", 11.0), ("двенадцать", 12.0),
+        ("тринадцать", 13.0), ("четырнадцать", 14.0), ("пятнадцать", 15.0), ("шестнадцать", 16.0), ("семнадцать", 17.0),
+        ("восемнадцать", 18.0), ("девятнадцать", 19.0), ("двадцать", 20.0), ("тридцать", 30.0), ("сорок", 40.0), ("пятьдесят", 50.0),
+        ("полтора", 1.5), ("полторы", 1.5),
+        ("zero", 0.0), ("one", 1.0), ("two", 2.0), ("three", 3.0), ("four", 4.0), ("five", 5.0), ("six", 6.0), ("seven", 7.0), ("eight", 8.0),
+        ("nine", 9.0), ("ten", 10.0), ("eleven", 11.0), ("twelve", 12.0),
+    ];
+    RU.iter().find(|(w, _)| *w == word).map(|(_, v)| *v)
+}
+
+/// «полвосьмого» — 7:30 (час без части суток: утро или вечер решает контекст).
+fn half_hour_word(word: &str) -> Option<u32> {
+    const W: &[(&str, u32)] = &[
+        ("полпервого", 0), ("полвторого", 1), ("полтретьего", 2), ("полчетвертого", 3), ("полпятого", 4), ("полшестого", 5),
+        ("полседьмого", 6), ("полвосьмого", 7), ("полдевятого", 8), ("полдесятого", 9), ("кполодиннадцатого", 10), ("полодиннадцатого", 10),
+        ("полдвенадцатого", 11),
+    ];
+    W.iter().find(|(w, _)| *w == word).map(|(_, h)| if *h == 0 { 12 * 60 + 30 } else { h * 60 + 30 })
+}
+
+/// Числа словами → числовые лексемы; «двадцать три» → 23; «полчаса» → 0,5 часа; «поллитра» → 0,5 литра.
+fn fold_numerals(toks: Vec<Lex>) -> Vec<Lex> {
+    let mut out: Vec<Lex> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        let Some(l) = toks.get(i) else { break };
+        let Tok::Word(w) = &l.tok else {
+            out.push(l.clone());
+            i += 1;
+            continue;
+        };
+        let num = |v: f64, start: usize, end: usize| Lex { tok: Tok::Num { v, raw: if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") } }, start, end };
+        if let Some(m) = half_hour_word(w) {
+            out.push(Lex { tok: Tok::Time(m), start: l.start, end: l.end });
+        } else if let Some(rest) = w.strip_prefix("пол").filter(|r| r.starts_with("час") || r.starts_with("литр")) {
+            out.push(num(0.5, l.start, l.end));
+            out.push(Lex { tok: Tok::Word(rest.to_string()), start: l.start, end: l.end });
+        } else if w == "пол" || w == "half" {
+            // «пол литра», «half an hour»; «half past ten» — время, его читает `clock`
+            let next = toks.get(i + 1).and_then(|n| if let Tok::Word(x) = &n.tok { Some(x.as_str()) } else { None });
+            if next == Some("past") {
+                out.push(l.clone());
+            } else {
+                out.push(num(0.5, l.start, l.end));
+            }
+        } else if let Some(v) = numeral(w) {
+            // Составное: «двадцать три»
+            let unit = toks.get(i + 1).and_then(|n| if let Tok::Word(x) = &n.tok { numeral(x) } else { None }).filter(|u| v >= 20.0 && v.fract() == 0.0 && (1.0..=9.0).contains(u));
+            match (unit, toks.get(i + 1)) {
+                (Some(u), Some(n)) => {
+                    out.push(num(v + u, l.start, n.end));
+                    i += 1;
+                }
+                _ => out.push(num(v, l.start, l.end)),
+            }
+        } else {
+            out.push(l.clone());
+        }
+        i += 1;
+    }
+    out
+}
+
 fn any(word: &str, exact: &[&str]) -> bool {
     exact.contains(&word)
 }
@@ -140,35 +209,57 @@ fn stem(word: &str, stems: &[&str]) -> bool {
     stems.iter().any(|s| word.starts_with(s))
 }
 
-/// Служебные слова: в `unparsed` не попадают.
+/// Служебные слова: сами по себе в `unparsed` не попадают (внутри неразобранного куска сохраняются).
 const NOISE: &[&str] = &[
-    "я", "и", "а", "в", "во", "на", "за", "к", "с", "со", "у", "это", "было", "был", "была", "уже", "еще", "потом", "затем", "около", "примерно", "где", "то",
-    "спать", "мой", "моя", "мое", "i", "and", "at", "to", "the", "a", "of", "my", "was", "is", "then", "about", "around", "went", "fell", "got", "in",
+    "я", "и", "а", "в", "во", "на", "за", "к", "с", "со", "у", "о", "это", "было", "был", "была", "были", "стало", "стал", "уже", "еще", "потом", "затем",
+    "около", "примерно", "где", "то", "почти", "ровно", "всего", "только", "целых", "итого", "мне", "меня", "мой", "моя", "мое", "мои", "себя", "сейчас",
+    "очень", "довольно", "вполне", "пошел", "пошла", "ушел", "ушла", "отправился", "отправилась", "завалился", "завалилась", "прошел", "прошла",
+    "прошагал", "прошагала", "сделал", "сделала", "нашагал", "нашагала", "намерил", "намерила", "измерил", "измерила", "померил", "померила",
+    "замерил", "замерила", "показал", "показала", "показало", "показали", "составил", "составила", "составило", "составляет", "равно", "результат",
+    "перед", "после", "день", "сутки", "прошлой", "этой", "крови", "обхват", "процент", "уровень",
+    "i", "and", "at", "to", "the", "a", "an", "of", "my", "was", "is", "then", "about", "around", "went", "fell", "got", "in", "by", "for", "had", "have",
+    "did", "took", "walked", "now", "just", "roughly", "approximately", "almost", "exactly", "total", "this", "last", "out", "me", "it", "blood", "body",
+    "heart", "per", "day", "pretty", "very", "on",
 ];
-const LEAD_IN: &[&str] = &["в", "во", "at", "около", "примерно", "about", "around", "где", "то", "к", "by"];
-const BED: &[&str] = &["лег", "легла", "уснул", "уснула", "заснул", "заснула", "отбой", "bed", "asleep", "bedtime"];
-const WAKE: &[&str] = &["встал", "встала", "проснулся", "проснулась", "подъем", "woke", "wake", "awoke", "up"];
-const SLEEP: &[&str] = &["сон", "спал", "спала", "проспал", "проспала", "поспал", "поспала", "sleep", "slept"];
-const HOUR_UNIT: &[&str] = &["ч", "час", "часа", "часов", "h", "hr", "hrs", "hour", "hours"];
-const MIN_UNIT: &[&str] = &["м", "мин", "минут", "минуты", "минуту", "m", "min", "mins", "minute", "minutes"];
-const THOUSAND: &[&str] = &["к", "k", "тыс", "тысяч", "тысячи"];
+const LEAD_IN: &[&str] = &["в", "во", "at", "около", "примерно", "about", "around", "где", "то", "к", "by", "this", "in", "the", "с", "после", "перед"];
+const BED: &[&str] = &[
+    "лег", "легла", "легли", "лягу", "ложусь", "уснул", "уснула", "заснул", "заснула", "отбой", "отрубился", "отрубилась", "вырубился", "вырубилась",
+    "задремал", "задремала", "прилег", "прилегла", "спать", "bed", "asleep", "bedtime",
+];
+const WAKE: &[&str] = &[
+    "встал", "встала", "проснулся", "проснулась", "подъем", "пробудился", "пробудилась", "очнулся", "очнулась", "поднялся", "поднялась", "вскочил",
+    "вскочила", "разбудили", "woke", "wake", "awoke", "awake", "wakeup", "up",
+];
+const SLEEP: &[&str] = &[
+    "сон", "сна", "спал", "спала", "проспал", "проспала", "поспал", "поспала", "выспался", "выспалась", "дремал", "дремала", "вздремнул", "вздремнула",
+    "подремал", "подремала", "sleep", "slept", "nap", "napped",
+];
+const HOUR_UNIT: &[&str] = &["ч", "час", "часа", "часов", "часик", "часика", "часиков", "h", "hr", "hrs", "hour", "hours"];
+const MIN_UNIT: &[&str] = &["м", "мин", "минут", "минуты", "минуту", "минута", "минуток", "минутки", "m", "min", "mins", "minute", "minutes"];
+const THOUSAND: &[&str] = &["к", "k", "тыс", "тысяч", "тысячи", "тысяча"];
+const WATER_NOUN: &[&str] = &["воды", "вода", "воду", "водички", "water", "of"];
+const WEEKDAYS: &[(&str, i64)] = &[
+    ("воскресень", 0), ("понедельник", 1), ("вторник", 2), ("сред", 3), ("четверг", 4), ("пятниц", 5), ("суббот", 6),
+    ("sunday", 0), ("monday", 1), ("tuesday", 2), ("wednesday", 3), ("thursday", 4), ("friday", 5), ("saturday", 6),
+];
+const MONTHS: &[(&str, u32)] = &[
+    ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4), ("мая", 5), ("май", 5), ("июн", 6), ("июл", 7), ("август", 8), ("сентябр", 9), ("октябр", 10),
+    ("ноябр", 11), ("декабр", 12), ("january", 1), ("february", 2), ("march", 3), ("april", 4), ("june", 6), ("july", 7), ("august", 8), ("september", 9),
+    ("october", 10), ("november", 11), ("december", 12),
+];
+const MONTHS_SHORT: &[(&str, u32)] = &[("jan", 1), ("feb", 2), ("mar", 3), ("apr", 4), ("may", 5), ("jun", 6), ("jul", 7), ("aug", 8), ("sep", 9), ("sept", 9), ("oct", 10), ("nov", 11), ("dec", 12)];
 
-fn day_ref(word: &str) -> Option<i64> {
-    match word {
-        "сегодня" | "today" => Some(0),
-        "вчера" | "yesterday" => Some(-1),
-        "позавчера" => Some(-2),
-        _ => None,
-    }
+fn month_of(word: &str) -> Option<u32> {
+    MONTHS.iter().find(|(s, _)| word.starts_with(s)).or_else(|| MONTHS_SHORT.iter().find(|(s, _)| *s == word)).map(|(_, m)| *m)
 }
 
-/// Слово части суток после часа: (нужно прибавить 12, если час меньше 12; час 12 = полночь).
+/// Слово части суток после часа.
 fn part_of_day(word: &str) -> Option<&'static str> {
     match word {
-        "утра" | "am" => Some("am"),
-        "дня" => Some("day"),
-        "вечера" | "pm" => Some("pm"),
-        "ночи" => Some("night"),
+        "утра" | "утром" | "am" => Some("am"),
+        "дня" | "днем" => Some("day"),
+        "вечера" | "вечером" | "pm" => Some("pm"),
+        "ночи" | "ночью" => Some("night"),
         _ => None,
     }
 }
@@ -183,12 +274,15 @@ fn apply_part(h: u32, part: &str) -> u32 {
     }
 }
 
+/// Время суток словом: «утром», «в обед», «перед сном», «after dinner».
 fn fuzzy_time(word: &str) -> Option<u32> {
     match word {
-        "утром" | "morning" => Some(8 * 60),
+        "утром" | "утречком" | "утра" | "morning" => Some(8 * 60),
+        "завтрака" | "завтраком" | "breakfast" => Some(9 * 60),
+        "обед" | "обеда" | "обедом" | "lunch" => Some(13 * 60),
         "днем" | "afternoon" => Some(14 * 60),
-        "вечером" | "evening" => Some(20 * 60),
-        "ночью" | "night" => Some(23 * 60),
+        "вечером" | "вечерком" | "evening" | "ужина" | "ужином" | "dinner" => Some(20 * 60),
+        "ночью" | "ночь" | "night" | "tonight" | "сном" => Some(23 * 60),
         _ => None,
     }
 }
@@ -197,7 +291,7 @@ fn fuzzy_time(word: &str) -> Option<u32> {
 #[derive(Debug, Clone, Copy)]
 struct Clock {
     minute: u32,
-    /// Часть суток названа явно («утра», «pm») либо время однозначно («полночь»).
+    /// Часть суток названа явно («утра», «pm») либо время однозначно («полночь», «23:30»).
     exact: bool,
     next: usize,
 }
@@ -206,6 +300,8 @@ struct Parser<'a> {
     text: &'a str,
     toks: Vec<Lex>,
     used: Vec<bool>,
+    /// Служебное слово: само в `unparsed` не идёт, но внутри неразобранного куска остаётся.
+    noise: Vec<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +311,8 @@ struct Item {
     value2: f64,
     unit: &'static str,
     minute: Option<u32>,
+    /// Время, сказанное в начале фразы до разделителя: «вчера вечером давление 140/95 пульс 88».
+    lead: Option<u32>,
     day: Option<i64>,
     from: usize,
     to: usize,
@@ -239,6 +337,10 @@ impl<'a> Parser<'a> {
         self.toks.get(i).map(|l| &l.tok) == Some(tok)
     }
 
+    fn is_word(&self, i: usize, set: &[&str]) -> bool {
+        self.word(i).is_some_and(|w| any(w, set))
+    }
+
     fn mark(&mut self, from: usize, to: usize) {
         for u in self.used.iter_mut().take(to).skip(from) {
             *u = true;
@@ -252,21 +354,63 @@ impl<'a> Parser<'a> {
 
     fn skip_words(&self, mut i: usize, set: &[&str], max: usize) -> usize {
         let mut n = 0;
-        while n < max && self.word(i).is_some_and(|w| any(w, set)) {
+        while n < max && self.is_word(i, set) {
             i += 1;
             n += 1;
         }
         i
     }
 
-    /// Время суток с позиции `i`. `bare_hour` — принимать ли голый час без минут и части суток («в 7»).
+    /// Число показателя: «72,4», «72 и 4» (десятые голосом), «7 с половиной», «seven and a half».
+    fn number(&self, i: usize) -> Option<(f64, usize)> {
+        let (v, raw) = self.num(i)?;
+        let whole = !raw.contains('.');
+        if whole && self.is_word(i + 1, &["и", "and"]) {
+            // «seven and a half»: «half» уже стало числом 0,5
+            if self.is_word(i + 2, &["a"]) && self.num(i + 3).is_some_and(|(h, _)| h == 0.5) {
+                return Some((v + 0.5, i + 4));
+            }
+            if let Some((d, draw)) = self.num(i + 2) {
+                // Десятые: одна цифра и дальше не единица измерения другого показателя
+                if draw.len() == 1 && self.word(i + 3).and_then(unit_after_number).is_none() && !self.is(i + 3, &Tok::Slash) {
+                    return Some((v + d / 10.0, i + 3));
+                }
+            }
+        }
+        if whole && self.is_word(i + 1, &["с", "со"]) && self.is_word(i + 2, &["половиной"]) {
+            return Some((v + 0.5, i + 3));
+        }
+        Some((v, i + 1))
+    }
+
+    /// Время суток с позиции `i`. `bare_hour` — принимать ли голый час без минут и части суток («в 7», «в час»).
     fn clock(&self, i: usize, bare_hour: bool) -> Option<Clock> {
         if let Some(w) = self.word(i) {
-            return match w {
-                "полночь" | "полуночи" | "midnight" => Some(Clock { minute: 0, exact: true, next: i + 1 }),
-                "полдень" | "полудня" | "noon" => Some(Clock { minute: 720, exact: true, next: i + 1 }),
+            let fixed = match w {
+                "полночь" | "полуночи" | "midnight" => Some(0),
+                "полдень" | "полудня" | "noon" => Some(720),
                 _ => None,
             };
+            if let Some(minute) = fixed {
+                return Some(Clock { minute, exact: true, next: i + 1 });
+            }
+            // «half past ten», «quarter past seven», «quarter to eight»
+            if matches!(w, "half" | "quarter") {
+                let (h, _) = self.num(i + 2).filter(|(h, raw)| !raw.contains('.') && (1.0..=12.0).contains(h))?;
+                let h = h as u32;
+                let (h, m) = match (w, self.word(i + 1)?) {
+                    ("half", "past") => (h, 30),
+                    ("quarter", "past") => (h, 15),
+                    ("quarter", "to") => ((h + 11) % 12, 45),
+                    _ => return None,
+                };
+                return Some(self.with_part(h, m, i + 3, true));
+            }
+            // «в час», «в час ночи»
+            if matches!(w, "час" | "часа") && bare_hour {
+                return Some(self.with_part(1, 0, i + 1, true));
+            }
+            return None;
         }
         let (h, m, mut next, has_minutes) = match self.toks.get(i).map(|l| &l.tok) {
             Some(Tok::Time(t)) => (t / 60, t % 60, i + 1, true),
@@ -287,41 +431,51 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         };
-        if !has_minutes && self.word(next).is_some_and(|w| any(w, HOUR_UNIT)) {
+        if !has_minutes && self.is_word(next, HOUR_UNIT) {
             next += 1;
         }
-        if let Some(part) = self.word(next).and_then(part_of_day) {
-            if h > 12 && part != "pm" && part != "night" {
-                return None;
-            }
-            return Some(Clock { minute: apply_part(h, part) % 24 * 60 + m, exact: true, next: next + 1 });
-        }
-        if !has_minutes && !bare_hour {
+        let has_part = self.word(next).and_then(part_of_day).is_some();
+        if !has_minutes && !bare_hour && !has_part {
             return None;
         }
-        Some(Clock { minute: h * 60 + m, exact: h >= 13 || h == 0, next })
+        if has_part && h > 12 && !matches!(self.word(next).and_then(part_of_day), Some("pm") | Some("night")) {
+            return None;
+        }
+        Some(self.with_part(h, m, next, false))
     }
 
-    /// Время записи-момента: «в 8:30», «at 7 pm», «8:30», «утром».
-    fn point_time(&self, i: usize) -> Option<(u32, usize)> {
-        if let Some(m) = self.word(i).and_then(fuzzy_time) {
-            return Some((m, i + 1));
+    /// Час и минуты с необязательной частью суток за ними.
+    fn with_part(&self, h: u32, m: u32, next: usize, _spoken: bool) -> Clock {
+        match self.word(next).and_then(part_of_day) {
+            Some(part) => Clock { minute: apply_part(h, part) % 24 * 60 + m, exact: true, next: next + 1 },
+            None => Clock { minute: (h % 24) * 60 + m, exact: h >= 13 || h == 0, next },
         }
-        let j = self.skip_words(i, LEAD_IN, 2);
+    }
+
+    /// Время записи-момента: «в 8:30», «at 7 pm», «8:30», «утром», «после обеда», «this morning».
+    fn point_time(&self, i: usize) -> Option<(u32, usize)> {
+        let j = self.skip_words(i, LEAD_IN, 3);
+        if let Some(m) = self.word(j).and_then(fuzzy_time) {
+            return Some((m, j + 1));
+        }
         let c = self.clock(j, j > i)?;
         Some((c.minute, c.next))
     }
 
-    /// Длительность: «7ч 30м», «7.5 ч», «45 мин», «7:30», «8».
+    /// Длительность: «7ч 30м», «7.5 ч», «45 мин», «7:30», «8», «полтора часа», «7 с половиной часов».
     fn duration(&self, i: usize) -> Option<(f64, usize)> {
         if let Some(Tok::Time(t)) = self.toks.get(i).map(|l| &l.tok) {
             return Some((f64::from(*t), i + 1));
         }
-        let (v, _) = self.num(i)?;
-        match self.word(i + 1) {
+        if self.is_word(i, &["час", "часа", "часик", "hour"]) {
+            return Some((60.0, i + 1));
+        }
+        let (v, after) = self.number(i)?;
+        let unit_at = self.skip_words(after, &["a", "an"], 1);
+        match self.word(unit_at) {
             Some(w) if any(w, HOUR_UNIT) => {
                 let mut total = v * 60.0;
-                let mut next = i + 2;
+                let mut next = unit_at + 1;
                 if let (Some((m, raw)), Some(u)) = (self.num(next), self.word(next + 1)) {
                     if any(u, MIN_UNIT) && !raw.contains('.') {
                         total += m;
@@ -336,11 +490,81 @@ impl<'a> Parser<'a> {
                 }
                 Some((total.round(), next))
             }
-            Some(w) if any(w, MIN_UNIT) => Some((v.round(), i + 2)),
-            _ if v <= 24.0 => Some(((v * 60.0).round(), i + 1)),
+            Some(w) if any(w, MIN_UNIT) => Some((v.round(), unit_at + 1)),
+            _ if v <= 24.0 => Some(((v * 60.0).round(), after)),
             _ => None,
         }
     }
+
+    /// День словами с позиции `i`: «вчера», «3 дня назад», «в понедельник», «12 ноября», «nov 12».
+    fn day_at(&self, i: usize, today: i64) -> Option<(i64, usize)> {
+        if let Some(w) = self.word(i) {
+            let off = match w {
+                "сегодня" | "today" => Some(0),
+                "вчера" | "yesterday" => Some(-1),
+                "позавчера" => Some(-2),
+                _ => None,
+            };
+            if let Some(o) = off {
+                return Some((today + o, i + 1));
+            }
+            if let Some((_, wd)) = WEEKDAYS.iter().find(|(s, _)| w.starts_with(s)) {
+                // Ближайший такой день не позже сегодня (1970-01-01 — четверг)
+                let today_wd = (today + 4).rem_euclid(7);
+                return Some((today - (today_wd - wd).rem_euclid(7), i + 1));
+            }
+            if let (Some(m), Some((d, raw))) = (month_of(w), self.num(i + 1)) {
+                if !raw.contains('.') && (1.0..=31.0).contains(&d) {
+                    return Some((date_near(today, m, d as u32), i + 2));
+                }
+            }
+            return None;
+        }
+        let (n, raw) = self.num(i)?;
+        if raw.contains('.') {
+            return None;
+        }
+        if (1.0..=60.0).contains(&n) && self.is_word(i + 1, &["день", "дня", "дней", "day", "days"]) && self.is_word(i + 2, &["назад", "ago"]) {
+            return Some((today - n as i64, i + 3));
+        }
+        if (1.0..=31.0).contains(&n) {
+            if let Some(m) = self.word(i + 1).and_then(month_of) {
+                return Some((date_near(today, m, n as u32), i + 2));
+            }
+        }
+        None
+    }
+
+    /// Количество с тысячами: «8к», «8 тыс», «8 000», «8,000» — когда дальше единица шагов (`steps`).
+    fn count(&self, i: usize, steps: bool) -> Option<(f64, usize)> {
+        let (mut v, raw) = self.num(i)?;
+        let mut next = i + 1;
+        if steps {
+            // «8,000» / «8.000» — разделитель тысяч
+            if raw.split_once('.').is_some_and(|(_, f)| f.len() == 3) {
+                v = (v * 1000.0).round();
+            }
+            // «8 000»
+            if let Some((g, graw)) = self.num(next) {
+                if graw.len() == 3 && !graw.contains('.') && !raw.contains('.') && v < 1000.0 {
+                    v = v * 1000.0 + g;
+                    next += 1;
+                }
+            }
+        }
+        if self.is_word(next, THOUSAND) {
+            v *= 1000.0;
+            next += 1;
+        }
+        Some((v, next))
+    }
+}
+
+/// День месяца ближайшего прошлого: дата в этом году, а если она ещё не наступила — в прошлом.
+fn date_near(today: i64, month: u32, day: u32) -> i64 {
+    let (y, ..) = civil_from_days(today);
+    let d = days_from_civil(y, month, day);
+    if d > today { days_from_civil(y - 1, month, day) } else { d }
 }
 
 /// Спальное время без части суток: 6–11 — вечер, 12 — полночь («лёг в 11» — это 23:00).
@@ -364,17 +588,20 @@ struct Kind {
 
 /// Показатели по ключевому слову. Диапазоны — «разумные для человека»: защита от опечаток, не медицина.
 const KINDS: &[Kind] = &[
-    Kind { kind: "weight", unit: "kg", exact: &["вес", "weight", "вешу", "весил", "весила"], stems: &[], min: 2.0, max: 500.0 },
-    Kind { kind: "pressure", unit: "mmhg", exact: &["ад", "bp", "pressure"], stems: &["давлени"], min: 50.0, max: 300.0 },
-    Kind { kind: "pulse", unit: "bpm", exact: &["чсс", "hr", "pulse"], stems: &["пульс"], min: 20.0, max: 250.0 },
+    Kind { kind: "weight", unit: "kg", exact: &["вес", "weight", "вешу", "весил", "весила", "весы", "весах", "масса", "weigh", "weighed", "weighing", "weighs"], stems: &["взвесил"], min: 2.0, max: 500.0 },
+    Kind { kind: "pressure", unit: "mmhg", exact: &["ад", "bp", "pressure", "давл", "тонометр"], stems: &["давлени"], min: 50.0, max: 300.0 },
+    Kind { kind: "pulse", unit: "bpm", exact: &["чсс", "hr", "pulse", "rate", "bpm"], stems: &["пульс", "сердцебиени"], min: 20.0, max: 250.0 },
     Kind { kind: "steps", unit: "steps", exact: &["steps"], stems: &["шаг"], min: 0.0, max: 200_000.0 },
-    Kind { kind: "water", unit: "ml", exact: &["water", "drank", "drink", "выпил", "выпила"], stems: &["вод"], min: 1.0, max: 10_000.0 },
-    Kind { kind: "mood", unit: "score", exact: &["mood"], stems: &["настроени"], min: 1.0, max: 5.0 },
-    Kind { kind: "temperature", unit: "c", exact: &["temp", "temperature"], stems: &["температур"], min: 30.0, max: 45.0 },
+    Kind { kind: "water", unit: "ml", exact: &["water", "drank", "drink", "выпил", "выпила", "попил", "попила"], stems: &["вод"], min: 1.0, max: 10_000.0 },
+    Kind { kind: "mood", unit: "score", exact: &["mood", "настр", "чувствую", "feeling", "feel"], stems: &["настроени", "самочувстви"], min: 1.0, max: 5.0 },
+    Kind { kind: "temperature", unit: "c", exact: &["temp", "temperature", "темп"], stems: &["температур"], min: 30.0, max: 45.0 },
     Kind { kind: "glucose", unit: "mmol_l", exact: &["сахар", "glucose", "sugar"], stems: &["глюкоз"], min: 1.0, max: 40.0 },
     Kind { kind: "height", unit: "cm", exact: &["рост", "height"], stems: &[], min: 30.0, max: 260.0 },
-    Kind { kind: "waist", unit: "cm", exact: &["талия", "талии", "waist"], stems: &[], min: 20.0, max: 300.0 },
+    Kind { kind: "waist", unit: "cm", exact: &["талия", "талии", "талию", "waist"], stems: &[], min: 20.0, max: 300.0 },
+    Kind { kind: "hips", unit: "cm", exact: &["бедра", "бедер", "hips"], stems: &[], min: 20.0, max: 300.0 },
+    Kind { kind: "chest", unit: "cm", exact: &["грудь", "груди", "chest"], stems: &[], min: 20.0, max: 300.0 },
     Kind { kind: "body_fat", unit: "pct", exact: &["жир", "жира", "fat"], stems: &[], min: 1.0, max: 75.0 },
+    Kind { kind: "spo2", unit: "pct", exact: &["spo", "кислород", "oxygen"], stems: &["сатураци"], min: 50.0, max: 100.0 },
 ];
 
 fn kind_of(kind: &str) -> Option<&'static Kind> {
@@ -387,16 +614,20 @@ fn keyword(word: &str) -> Option<&'static Kind> {
 
 /// Единица после числа → (вид, множитель к единице хранения).
 fn unit_after_number(word: &str) -> Option<(&'static str, f64)> {
-    if any(word, &["кг", "kg", "кило"]) || stem(word, &["килограмм"]) {
+    if any(word, &["кг", "kg", "kgs", "кило", "kilo", "kilos"]) || stem(word, &["килограмм"]) {
         Some(("weight", 1.0))
-    } else if any(word, &["lb", "lbs"]) || stem(word, &["фунт"]) {
+    } else if any(word, &["lb", "lbs", "pound", "pounds"]) || stem(word, &["фунт"]) {
         Some(("weight", 0.453_592_37))
-    } else if any(word, &["мл", "ml"]) {
+    } else if any(word, &["мл", "ml"]) || stem(word, &["миллилитр"]) {
         Some(("water", 1.0))
-    } else if any(word, &["л", "l"]) || stem(word, &["литр"]) {
+    } else if any(word, &["л", "l", "liter", "liters", "litre", "litres"]) || stem(word, &["литр"]) {
         Some(("water", 1000.0))
-    } else if stem(word, &["стакан"]) || any(word, &["glass", "glasses", "cup", "cups"]) {
+    } else if stem(word, &["стакан", "чашк", "чашеч"]) || any(word, &["glass", "glasses", "cup", "cups"]) {
         Some(("water", GLASS_ML))
+    } else if stem(word, &["кружк", "кружеч"]) || any(word, &["mug", "mugs"]) {
+        Some(("water", 300.0))
+    } else if stem(word, &["бутыл"]) || any(word, &["bottle", "bottles"]) {
+        Some(("water", 500.0))
     } else if stem(word, &["шаг"]) || any(word, &["steps", "step"]) {
         Some(("steps", 1.0))
     } else if any(word, &["уд", "bpm"]) || stem(word, &["удар"]) {
@@ -410,16 +641,27 @@ fn unit_after_number(word: &str) -> Option<(&'static str, f64)> {
     }
 }
 
+/// Слова, на которых фраза показателя кончается: дальше начинается другой факт («выпил воды и прошёл 6к шагов»).
+const FACT_BREAK: &[&str] = &[
+    "и", "and", "а", "потом", "затем", "then", "прошел", "прошла", "прошагал", "прошагала", "сделал", "сделала", "нашагал", "нашагала", "walked", "did",
+    "took", "had", "пошел", "пошла", "ушел", "ушла", "went",
+];
+
+/// Ёмкость без числа — одна штука: «стакан воды», «выпил бутылку», «выпил литр».
+fn container(word: &str) -> Option<f64> {
+    unit_after_number(word).filter(|(k, mul)| *k == "water" && *mul >= GLASS_ML).map(|(_, mul)| mul)
+}
+
 fn mood_word(word: &str) -> Option<f64> {
-    if stem(word, &["отличн", "прекрасн", "супер"]) || any(word, &["great", "excellent", "awesome"]) {
+    if stem(word, &["отличн", "прекрасн", "супер", "замечательн", "великолепн", "шикарн", "огонь", "бодр"]) || any(word, &["great", "excellent", "awesome", "amazing", "fantastic"]) {
         Some(5.0)
-    } else if stem(word, &["хорош"]) || word == "good" {
+    } else if stem(word, &["хорош", "неплох"]) || any(word, &["good", "nice", "well"]) {
         Some(4.0)
-    } else if stem(word, &["норм", "средн"]) || any(word, &["ok", "okay", "fine", "ок"]) {
+    } else if stem(word, &["норм", "средн", "обычн", "терпим"]) || any(word, &["ok", "okay", "fine", "ок", "meh", "average"]) {
         Some(3.0)
-    } else if stem(word, &["плох"]) || word == "bad" {
+    } else if stem(word, &["плох", "неважн", "грустн", "устал", "вял", "разбит"]) || any(word, &["bad", "tired", "sad", "low"]) {
         Some(2.0)
-    } else if stem(word, &["ужасн", "отвратительн"]) || any(word, &["terrible", "awful"]) {
+    } else if stem(word, &["ужасн", "отвратительн", "кошмар", "паршив"]) || any(word, &["terrible", "awful", "horrible"]) {
         Some(1.0)
     } else {
         None
@@ -434,6 +676,19 @@ fn local_ms(day: i64, minute: u32, tz_min: i32) -> i64 {
     day * DAY_MS + i64::from(minute) * MIN_MS - i64::from(tz_min) * MIN_MS
 }
 
+/// Привести значение к единице хранения: градусы Фаренгейта, мг/дл, метры, шкала настроения.
+fn normalize(kind: &str, v: f64) -> f64 {
+    match kind {
+        "weight" => round1(v),
+        // 86–113 — это Фаренгейт
+        "temperature" if (86.0..=113.0).contains(&v) => round1((v - 32.0) * 5.0 / 9.0),
+        // Больше 40 — мг/дл
+        "glucose" if v > 40.0 && v <= 720.0 => round1(v / 18.016),
+        "height" if v < 3.0 => (v * 100.0).round(),
+        _ => v,
+    }
+}
+
 /// Разобрать строку. `now_ms` — момент ввода, `tz_min` — смещение местного времени от UTC в минутах.
 pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
     let mut res = ParseResult::default();
@@ -441,9 +696,11 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
         res.unparsed.push(text.chars().take(80).collect());
         return res;
     }
-    let toks = lex(text);
+    // «a.m.» / «p.m.» — одним словом (длина сохраняется: срезы неразобранного берутся из этой строки)
+    let text = &text.replace("a.m.", "am  ").replace("p.m.", "pm  ").replace("A.M.", "am  ").replace("P.M.", "pm  ");
+    let toks = fold_numerals(lex(text));
     let n = toks.len();
-    let mut p = Parser { text, used: vec![false; n], toks };
+    let mut p = Parser { text, used: vec![false; n], noise: vec![false; n], toks };
     let today = (now_ms + i64::from(tz_min) * MIN_MS).div_euclid(DAY_MS);
 
     let mut items: Vec<Item> = Vec::new();
@@ -451,8 +708,29 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
     let mut pending_time: Option<(u32, usize, usize)> = None;
     let (mut bed, mut wake): (Option<u32>, Option<u32>) = (None, None);
     let mut sleep_dur: Option<f64> = None;
-    let mut sleep_marks: Vec<(usize, usize)> = Vec::new();
+    let mut sleep_marks: Vec<usize> = Vec::new();
+    // День, названный к моменту «лёг» и «встал», и что из них сказано первым
+    let (mut bed_ref, mut wake_ref, mut bed_first): (Option<i64>, Option<i64>, bool) = (None, None, false);
     let mut sleep_span: Option<(usize, usize)> = None;
+    // «верхнее 120, нижнее 80»
+    let (mut sys, mut dia): (Option<(f64, usize, usize)>, Option<(f64, usize, usize)>) = (None, None);
+
+    // Запись-момент готова: пометить лексемы и прочитать время сразу за ней
+    macro_rules! push_item {
+        ($kind:expr, $v:expr, $v2:expr, $from:expr, $next:expr) => {{
+            let kind: &'static str = $kind;
+            let unit = kind_of(kind).map_or("", |k| k.unit);
+            let mut to = $next;
+            let mut minute = None;
+            if let Some((m, after)) = p.point_time(to) {
+                minute = Some(m);
+                to = after;
+            }
+            items.push(Item { kind, value: normalize(kind, $v), value2: $v2, unit, minute, lead: pending_time.map(|(m, ..)| m), day: cur_day, from: $from, to });
+            p.mark($from, to);
+            to
+        }};
+    }
 
     let mut i = 0;
     while i < n {
@@ -463,57 +741,98 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             i += 1;
             continue;
         }
+        // ── день: «вчера», «в понедельник», «12 ноября», «3 дня назад» ──
+        if let Some((day, next)) = p.day_at(i, today) {
+            cur_day = Some(day);
+            // «вес 72 вчера» — день относится и к уже сказанному без дня
+            for it in items.iter_mut().filter(|it| it.day.is_none()) {
+                it.day = Some(day);
+            }
+            p.mark(i, next);
+            i = next;
+            continue;
+        }
         let word = p.word(i).map(str::to_string);
         if let Some(w) = word.as_deref() {
-            if let Some(off) = day_ref(w) {
-                let day = today + off;
-                cur_day = Some(day);
-                // «вес 72 вчера» — день относится и к уже сказанному без дня
-                for it in items.iter_mut().filter(|it| it.day.is_none()) {
-                    it.day = Some(day);
-                }
+            // «прошлой ночью», «last night» — это не время записи
+            if matches!(w, "ночью" | "night") && i > 0 && p.is_word(i - 1, &["прошлой", "этой", "last", "сегодня", "today"]) {
+                p.noise[i] = true;
                 p.used[i] = true;
                 i += 1;
                 continue;
             }
-            // ── сон ──
+            // ── сон: лёг / встал ──
+            let out_of_bed = w == "bed" && i >= 2 && p.is_word(i - 1, &["of"]) && p.is_word(i - 2, &["out"]);
             if any(w, BED) || any(w, WAKE) {
-                let is_bed = any(w, BED);
-                let j = p.skip_words(i + 1, NOISE, 3);
-                let j = if p.word(j).and_then(fuzzy_time).is_some() { j + 1 } else { j };
-                let j = p.skip_words(j, NOISE, 2);
+                let is_bed = any(w, BED) && !out_of_bed;
+                // «лёг вчера вечером где-то в 11»
+                let mut j = i + 1;
+                for _ in 0..5 {
+                    if let Some((day, next)) = p.day_at(j, today).filter(|_| p.num(j).is_none()) {
+                        cur_day = Some(day);
+                        j = next;
+                        continue;
+                    }
+                    match p.word(j) {
+                        Some(x) if any(x, NOISE) || fuzzy_time(x).is_some() => j += 1,
+                        _ if p.is(j, &Tok::Dash) => j += 1,
+                        _ => break,
+                    }
+                }
                 if let Some(c) = p.clock(j, true) {
                     if is_bed {
                         bed = Some(bed_minute(c));
+                        bed_ref = cur_day;
+                        bed_first = wake.is_none();
                     } else {
                         wake = Some(c.minute);
+                        wake_ref = cur_day;
                     }
                     p.mark(i, c.next);
                     widen(&mut sleep_span, i, c.next);
                     i = c.next;
                     continue;
                 }
-                sleep_marks.push((i, i + 1));
+                sleep_marks.push(i);
                 p.used[i] = true;
                 i += 1;
                 continue;
             }
+            // ── сон: длительность и «с … до …» ──
             if any(w, SLEEP) {
-                let j = p.skip_words(i + 1, NOISE, 2);
+                let at_word = p.is_word(i + 1, &["в", "во", "at"]);
+                // «спал прошлой ночью 6 часов», «поспал днём часик»
+                let mut j = i + 1;
+                for _ in 0..4 {
+                    match p.word(j) {
+                        Some(x) if (any(x, NOISE) && !any(x, &["с", "со"])) || fuzzy_time(x).is_some() => j += 1,
+                        _ => break,
+                    }
+                }
                 // «спал с 23 до 7», «сон 23:30–7:10», «slept from 11pm to 7am»
-                let from_j = if p.word(j).is_some_and(|x| any(x, &["с", "со", "from"])) { j + 1 } else { j };
+                let from_j = if p.is_word(j, &["с", "со", "от", "from", "c"]) { j + 1 } else { j };
                 if let Some(a) = p.clock(from_j, true) {
                     let sep = a.next;
-                    let is_sep = p.is(sep, &Tok::Dash) || p.word(sep).is_some_and(|x| any(x, &["до", "по", "to", "until", "till"]));
-                    if is_sep {
+                    if p.is(sep, &Tok::Dash) || p.is_word(sep, &["до", "по", "to", "until", "till"]) {
                         if let Some(b) = p.clock(sep + 1, true) {
                             bed = Some(bed_minute(a));
                             wake = Some(b.minute);
+                            (bed_ref, wake_ref, bed_first) = (cur_day, cur_day, true);
                             p.mark(i, b.next);
                             widen(&mut sleep_span, i, b.next);
                             i = b.next;
                             continue;
                         }
+                    }
+                    // «went to sleep at 11» — это время отбоя, не длительность
+                    if at_word {
+                        bed = Some(bed_minute(a));
+                        bed_ref = cur_day;
+                        bed_first = wake.is_none();
+                        p.mark(i, a.next);
+                        widen(&mut sleep_span, i, a.next);
+                        i = a.next;
+                        continue;
                     }
                 }
                 if let Some((d, next)) = p.duration(j) {
@@ -523,53 +842,82 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                     i = next;
                     continue;
                 }
-                sleep_marks.push((i, i + 1));
+                sleep_marks.push(i);
                 p.used[i] = true;
                 i += 1;
+                continue;
+            }
+            // ── давление по частям: «верхнее 120 нижнее 80» ──
+            let part = if stem(w, &["верхн", "систолич"]) || any(w, &["sys", "systolic"]) { Some(true) } else if stem(w, &["нижн", "диастолич"]) || any(w, &["dia", "diastolic"]) { Some(false) } else { None };
+            if let (Some(upper), Some((v, _))) = (part, p.num(i + 1)) {
+                if upper {
+                    sys = Some((v, i, i + 2));
+                } else {
+                    dia = Some((v, i, i + 2));
+                }
+                p.mark(i, i + 2);
+                i += 2;
                 continue;
             }
             // ── показатель по ключевому слову ──
             if let Some(k) = keyword(w) {
                 let mut j = i + 1;
-                // «вес сегодня 72», «давление утром 120/80»
-                for _ in 0..3 {
-                    match p.word(j) {
-                        Some(x) if day_ref(x).is_some() => {
-                            cur_day = day_ref(x).map(|o| today + o);
-                            j += 1;
-                        }
-                        Some(x) if any(x, NOISE) => j += 1,
-                        _ => break,
+                let mut kw_minute: Option<u32> = None;
+                // «spo2» режется на слово и цифру
+                if k.kind == "spo2" && p.toks.get(i).map(|l| l.end) == p.toks.get(j).map(|l| l.start) && p.num(j).is_some_and(|(v, _)| v == 2.0) {
+                    j += 1;
+                }
+                // «вес сегодня утром 72», «давление было 120/80»
+                for _ in 0..4 {
+                    if let Some((day, next)) = p.day_at(j, today).filter(|_| p.num(j).is_none()) {
+                        cur_day = Some(day);
+                        j = next;
+                    } else if p.word(j).is_some_and(|x| any(x, NOISE) && !any(x, FACT_BREAK)) || p.is(j, &Tok::Dash) {
+                        j += 1;
+                    } else if p.word(j).and_then(fuzzy_time).is_some() && p.num(j + 1).is_some() {
+                        kw_minute = p.word(j).and_then(fuzzy_time);
+                        j += 1;
+                    } else {
+                        break;
                     }
                 }
                 let got: Option<(f64, f64, usize)> = match k.kind {
                     "pressure" => p.num(j).and_then(|(a, _)| {
-                        let k2 = if p.is(j + 1, &Tok::Slash) || p.word(j + 1).is_some_and(|x| any(x, &["на", "over", "x", "х"])) { j + 2 } else { j + 1 };
+                        let k2 = if p.is(j + 1, &Tok::Slash) || p.is(j + 1, &Tok::Dash) || p.is_word(j + 1, &["на", "over", "x", "х", "и"]) { j + 2 } else { j + 1 };
                         p.num(k2).map(|(b, _)| (a, b, k2 + 1))
                     }),
-                    "mood" => match (p.num(j), p.word(j).and_then(mood_word)) {
-                        (Some((v, _)), _) => Some((v, 0.0, j + 1)),
-                        (None, Some(v)) => Some((v, 0.0, j + 1)),
-                        _ => None,
-                    },
-                    "water" => match p.num(j) {
-                        Some((v, _)) => match p.word(j + 1).and_then(unit_after_number) {
-                            Some(("water", mul)) => Some((v * mul, 0.0, j + 2)),
-                            // Без единицы: до 10 — литры, больше — миллилитры
-                            _ => Some((if v <= 10.0 { v * 1000.0 } else { v }, 0.0, j + 1)),
-                        },
-                        None => match p.word(j).and_then(unit_after_number) {
-                            Some(("water", mul)) if mul == GLASS_ML => Some((GLASS_ML, 0.0, j + 1)),
-                            _ => None,
-                        },
-                    },
-                    _ => p.num(j).map(|(v, _)| {
-                        let mut v = v;
-                        let mut next = j + 1;
-                        if k.kind == "steps" && p.word(next).is_some_and(|x| any(x, THOUSAND)) {
-                            v *= 1000.0;
-                            next += 1;
+                    "mood" => {
+                        // «настроение 4», «4 из 5», «8/10», «чувствую себя хорошо», «так себе»
+                        if let Some((v, _)) = p.num(j) {
+                            let scale = if p.is(j + 1, &Tok::Slash) || p.is_word(j + 1, &["из", "of"]) { p.num(j + 2).map(|(s, _)| s) } else { None };
+                            match scale {
+                                Some(s) if s == 10.0 => Some(((v / 2.0).round().max(1.0), 0.0, j + 3)),
+                                Some(s) if s == 5.0 => Some((v, 0.0, j + 3)),
+                                _ => Some((v, 0.0, j + 1)),
+                            }
+                        } else if p.is_word(j, &["так"]) && p.is_word(j + 1, &["себе"]) {
+                            Some((3.0, 0.0, j + 2))
+                        } else {
+                            p.word(j).and_then(mood_word).map(|v| (v, 0.0, j + 1))
                         }
+                    }
+                    "water" => match p.number(j) {
+                        Some((v, after)) => match p.word(after).and_then(unit_after_number) {
+                            Some(("water", mul)) => Some((v * mul, 0.0, after + 1)),
+                            // Без единицы: до 10 — литры, больше — миллилитры
+                            _ => Some((if v <= 10.0 { v * 1000.0 } else { v }, 0.0, after)),
+                        },
+                        None => match p.word(j).and_then(container) {
+                            Some(ml) => Some((ml, 0.0, j + 1)),
+                            // «выпил воды», «попила водички» — стакан
+                            None if !stem(w, &["вод"]) && w != "water" && p.is_word(j, WATER_NOUN) && p.num(j + 1).is_none() => Some((GLASS_ML, 0.0, j + 1)),
+                            None => None,
+                        },
+                    },
+                    "steps" => p.count(j, true).map(|(v, next)| (v, 0.0, if p.word(next).and_then(unit_after_number).is_some_and(|(k, _)| k == "steps") { next + 1 } else { next })),
+                    _ => p.number(j).map(|(v, after)| {
+                        let mut v = v;
+                        let mut next = after;
                         match p.word(next).and_then(unit_after_number) {
                             Some((kind, mul)) if kind == k.kind => {
                                 v *= mul;
@@ -577,15 +925,32 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                             }
                             _ => {}
                         }
-                        if p.word(next).is_some_and(|x| any(x, &["см", "cm"])) && matches!(k.kind, "height" | "waist") {
+                        if matches!(k.kind, "height" | "waist" | "hips" | "chest") {
+                            if p.is_word(next, &["см", "cm", "сантиметров", "сантиметра"]) {
+                                next += 1;
+                            } else if p.is_word(next, &["м", "m", "метр", "метра"]) {
+                                v *= 100.0;
+                                next += 1;
+                            }
+                        }
+                        if p.is(next, &Tok::Pct) && matches!(k.kind, "body_fat" | "spo2") {
                             next += 1;
                         }
-                        if p.is(next, &Tok::Pct) && k.kind == "body_fat" {
-                            next += 1;
+                        if k.kind == "pulse" {
+                            if p.is(next, &Tok::Slash) && p.is_word(next + 1, &["мин", "min"]) {
+                                next += 2;
+                            } else if p.is_word(next, &["в", "per", "a"]) && p.is_word(next + 1, &["минуту", "minute"]) {
+                                next += 2;
+                            }
                         }
-                        if p.is(next, &Tok::Deg) && k.kind == "temperature" {
-                            next += 1;
-                            if p.word(next).is_some_and(|x| any(x, &["c", "с"])) {
+                        if k.kind == "temperature" {
+                            if p.is(next, &Tok::Deg) {
+                                next += 1;
+                            }
+                            if p.is_word(next, &["c", "с", "цельсия", "celsius"]) {
+                                next += 1;
+                            } else if p.is_word(next, &["f", "fahrenheit", "фаренгейта"]) {
+                                v = (v - 32.0) * 5.0 / 9.0;
                                 next += 1;
                             }
                         }
@@ -594,38 +959,45 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                 };
                 if let Some((v, v2, mut next)) = got {
                     if k.kind == "water" {
-                        next = p.skip_words(next, &["воды", "вода", "воду", "water", "of"], 2);
+                        next = p.skip_words(next, WATER_NOUN, 2);
                     }
-                    let v = if k.kind == "weight" { round1(v) } else { v };
-                    items.push(Item { kind: k.kind, value: v, value2: v2, unit: k.unit, minute: None, day: cur_day, from: i, to: next });
-                    p.mark(i, next);
-                    i = next;
-                    if let Some((m, after)) = p.point_time(i) {
-                        if let Some(it) = items.last_mut() {
+                    let end = push_item!(k.kind, v, v2, i, next);
+                    if let (Some(m), Some(it)) = (kw_minute, items.last_mut()) {
+                        if it.minute.is_none() {
                             it.minute = Some(m);
-                            it.to = after;
                         }
-                        p.mark(i, after);
-                        i = after;
                     }
+                    // «120/80/65», «120 на 80, пульс не назван»: третье число через косую — пульс
+                    if k.kind == "pressure" && end == next && p.is(next, &Tok::Slash) {
+                        if let Some((pulse, _)) = p.num(next + 1) {
+                            let _ = push_item!("pulse", pulse, 0.0, next, next + 2);
+                            i = next + 2;
+                            continue;
+                        }
+                    }
+                    i = end;
                     continue;
                 }
-                // «выпила воды 300 мл»: глагол без числа — не мусор, число возьмёт следующее слово
-                if k.kind == "water" && !any(w, &["water"]) && !stem(w, &["вод"]) {
-                    p.used[i] = true;
+                // «выпила воды 300 мл», «чувствую…» без оценки: слово-глагол не мусор, значение возьмёт следующее
+                if any(w, &["выпил", "выпила", "попил", "попила", "drank", "drink", "чувствую", "feeling", "feel", "rate", "bpm"]) {
+                    p.noise[i] = true;
                 }
                 i += 1;
                 continue;
             }
-            // «стакан воды» без числа
-            if unit_after_number(w) == Some(("water", GLASS_ML)) {
-                let next = p.skip_words(i + 1, &["воды", "вода", "воду", "water", "of"], 2);
+            // «стакан воды», «бутылку воды» без числа и глагола
+            if let Some(ml) = container(w) {
+                let next = p.skip_words(i + 1, WATER_NOUN, 2);
                 if next > i + 1 {
-                    items.push(Item { kind: "water", value: GLASS_ML, value2: 0.0, unit: "ml", minute: None, day: cur_day, from: i, to: next });
-                    p.mark(i, next);
-                    i = next;
+                    i = push_item!("water", ml, 0.0, i, next);
                     continue;
                 }
+            }
+            // Время словом перед записью: «утром вес 72», «после обеда 120/80»
+            if let Some(m) = fuzzy_time(w) {
+                pending_time = Some((m, i, i + 1));
+                i += 1;
+                continue;
             }
             if any(w, NOISE) {
                 // Вводное слово перед временем: «в 8:30 вес 72»
@@ -636,12 +1008,7 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                         continue;
                     }
                 }
-                p.used[i] = true;
-                i += 1;
-                continue;
-            }
-            if let Some(m) = fuzzy_time(w) {
-                pending_time = Some((m, i, i + 1));
+                p.noise[i] = true;
                 i += 1;
                 continue;
             }
@@ -656,90 +1023,105 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             i = after;
             continue;
         }
-        // ── число ──
+        // ── число без ключевого слова ──
         if let Some(a) = p.num(i).map(|(v, _)| v) {
-            // давление «120/80»
+            // давление «120/80» и «120/80/65»
             if p.is(i + 1, &Tok::Slash) {
                 if let Some((b, _)) = p.num(i + 2) {
-                    items.push(Item { kind: "pressure", value: a, value2: b, unit: "mmhg", minute: None, day: cur_day, from: i, to: i + 3 });
-                    p.mark(i, i + 3);
-                    i += 3;
-                    if let Some((m, after)) = p.point_time(i) {
-                        if let Some(it) = items.last_mut() {
-                            it.minute = Some(m);
-                            it.to = after;
-                        }
-                        p.mark(i, after);
-                        i = after;
+                    let third = if p.is(i + 3, &Tok::Slash) { p.num(i + 4).map(|(v, _)| v) } else { None };
+                    let end = push_item!("pressure", a, b, i, i + 3);
+                    if let (Some(pulse), true) = (third, end == i + 3) {
+                        i = push_item!("pulse", pulse, 0.0, i + 3, i + 5);
+                    } else {
+                        i = end;
                     }
                     continue;
                 }
             }
-            let mut v = a;
-            let mut j = i + 1;
-            if p.word(j).is_some_and(|x| any(x, THOUSAND)) && p.word(j + 1).and_then(unit_after_number).is_some_and(|(k, _)| k == "steps") {
-                v *= 1000.0;
-                j += 1;
+            // «125 на 82», «120 over 80» — давление без ключевого слова, если числа на него похожи
+            if p.is_word(i + 1, &["на", "over"]) {
+                if let Some((b, _)) = p.num(i + 2).filter(|(b, _)| (70.0..=260.0).contains(&a) && (40.0..=150.0).contains(b) && a > *b) {
+                    i = push_item!("pressure", a, b, i, i + 3);
+                    continue;
+                }
             }
-            let by_unit = if p.is(j, &Tok::Deg) {
-                let after = if p.word(j + 1).is_some_and(|x| any(x, &["c", "с"])) { j + 2 } else { j + 1 };
-                Some(("temperature", 1.0, after))
-            } else {
-                p.word(j).and_then(unit_after_number).map(|(k, mul)| (k, mul, j + 1))
+            // «18% жира», «97% кислорода»
+            if p.is(i + 1, &Tok::Pct) {
+                if let Some(k) = p.word(i + 2).and_then(keyword).filter(|k| k.unit == "pct") {
+                    i = push_item!(k.kind, a, 0.0, i, i + 3);
+                    continue;
+                }
+            }
+            // «36,6°», «98.6°F»
+            if p.is(i + 1, &Tok::Deg) {
+                let (v, next) = if p.is_word(i + 2, &["f"]) { ((a - 32.0) * 5.0 / 9.0, i + 3) } else if p.is_word(i + 2, &["c", "с"]) { (a, i + 3) } else { (a, i + 2) };
+                i = push_item!("temperature", v, 0.0, i, next);
+                continue;
+            }
+            // «8 000 шагов», «8к шагов», «72 кг», «2 стакана воды», «72 и 4 кг»
+            let steps_ahead = |from: usize| p.word(from).and_then(unit_after_number).is_some_and(|(k, _)| k == "steps");
+            let (v, j) = match p.count(i, true).filter(|(_, next)| steps_ahead(*next)) {
+                Some(c) => c,
+                None => p.number(i).unwrap_or((a, i + 1)),
             };
-            if let Some((kind, mul, mut next)) = by_unit {
-                // «2 часа» и прочее сюда не попадает: единиц времени в таблице нет
-                let unit = kind_of(kind).map_or("", |k| k.unit);
+            if let Some((kind, mul)) = p.word(j).and_then(unit_after_number) {
+                let mut next = j + 1;
                 if kind == "water" {
-                    next = p.skip_words(next, &["воды", "вода", "воду", "water", "of"], 2);
+                    next = p.skip_words(next, WATER_NOUN, 2);
                 }
-                if kind == "pulse" && p.is(next, &Tok::Slash) && p.word(next + 1).is_some_and(|x| any(x, &["мин", "min"])) {
-                    next += 2;
-                }
-                let value = if kind == "weight" { round1(v * mul) } else { (v * mul * 10.0).round() / 10.0 };
-                items.push(Item { kind, value, value2: 0.0, unit, minute: None, day: cur_day, from: i, to: next });
-                p.mark(i, next);
-                i = next;
-                if let Some((m, after)) = p.point_time(i) {
-                    if let Some(it) = items.last_mut() {
-                        it.minute = Some(m);
-                        it.to = after;
+                if kind == "pulse" {
+                    if p.is(next, &Tok::Slash) && p.is_word(next + 1, &["мин", "min"]) {
+                        next += 2;
+                    } else if p.is_word(next, &["в", "per", "a"]) && p.is_word(next + 1, &["минуту", "minute"]) {
+                        next += 2;
                     }
-                    p.mark(i, after);
-                    i = after;
                 }
+                let value = if kind == "weight" { v * mul } else { (v * mul * 10.0).round() / 10.0 };
+                i = push_item!(kind, value, 0.0, i, next);
                 continue;
             }
         }
         i += 1;
     }
 
-    // Время, сказанное перед записью, — первой записи без времени после него; иначе остаётся неразобранным
+    // «верхнее 120, нижнее 80» — одна запись давления
+    match (sys, dia) {
+        (Some((a, from, _)), Some((b, _, to))) => items.push(Item { kind: "pressure", value: a, value2: b, unit: "mmhg", minute: None, lead: None, day: cur_day, from: from.min(to), to: to.max(from + 2) }),
+        (Some((_, from, to)), None) | (None, Some((_, from, to))) => {
+            for u in p.used.iter_mut().take(to).skip(from) {
+                *u = false;
+            }
+        }
+        (None, None) => {}
+    }
+
+    // Время, сказанное перед записью, — первой записи без времени после него
     if let Some((m, from, to)) = pending_time {
-        if let Some(it) = items.iter_mut().find(|it| it.minute.is_none() && it.from >= to) {
+        if let Some(it) = items.iter_mut().find(|it| it.minute.is_none() && it.from >= from) {
             it.minute = Some(m);
             p.mark(from, to);
         }
     }
-    // Время перед записью внутри строки («в 8:30 вес 72, пульс 60»): привязка по соседству
+    // Время прямо перед записью («в 8:30 вес 72, утром пульс 60»): привязка по соседству
     for idx in 0..items.len() {
         let Some(it) = items.get(idx) else { continue };
         if it.minute.is_some() {
             continue;
         }
         let from = it.from;
-        // Ищем неиспользованное время прямо перед записью
         let mut k = from;
         while k > 0 && p.toks.get(k - 1).is_some_and(|l| !matches!(l.tok, Tok::Sep)) && !p.used.get(k - 1).copied().unwrap_or(true) {
             k -= 1;
         }
-        if k < from {
-            if let Some((m, after)) = p.point_time(k).or_else(|| p.clock(k, false).map(|c| (c.minute, c.next))) {
+        // Самое близкое к записи время: пробуем от ближайшей лексемы к дальней
+        for start in (k..from).rev() {
+            if let Some((m, after)) = p.point_time(start).or_else(|| p.clock(start, false).map(|c| (c.minute, c.next))) {
                 if after == from {
                     if let Some(it) = items.get_mut(idx) {
                         it.minute = Some(m);
                     }
-                    p.mark(k, from);
+                    p.mark(start, from);
+                    break;
                 }
             }
         }
@@ -754,7 +1136,9 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             continue;
         }
         let day = it.day.unwrap_or(today);
-        let at_ms = match it.minute {
+        let at_ms = match it.minute.or(it.lead) {
+            // «вес 72 в 23:00», сказанное утром, — это вчерашний вечер
+            Some(m) if it.day.is_none() && local_ms(day, m, tz_min) > now_ms + FUTURE_SLACK_MS => local_ms(day - 1, m, tz_min),
             Some(m) => local_ms(day, m, tz_min),
             None if day == today => now_ms,
             None => local_ms(day, 720, tz_min),
@@ -769,6 +1153,13 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
     let late = |t: i64| sleep_day.is_none() && t > now_ms + FUTURE_SLACK_MS;
     match (bed, wake, sleep_dur) {
         (Some(b), Some(w), _) => {
+            // «лёг вчера в 23, встал в 7»: день назван для «лёг», а встал — на следующий
+            let day = match (bed_ref, wake_ref) {
+                (Some(x), Some(y)) if x == y && bed_first && b >= w => x + 1,
+                (_, Some(y)) => y,
+                (Some(x), None) => if b >= w { x + 1 } else { x },
+                (None, None) => today,
+            };
             let mut end = local_ms(day, w, tz_min);
             let mut start = if b >= w { local_ms(day - 1, b, tz_min) } else { local_ms(day, b, tz_min) };
             if late(end) {
@@ -823,8 +1214,8 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
         }
         (None, None, None) => {
             // Слово о сне без времени — неразобранное
-            for (a, b) in &sleep_marks {
-                for u in p.used.iter_mut().take(*b).skip(*a) {
+            for a in &sleep_marks {
+                if let Some(u) = p.used.get_mut(*a) {
                     *u = false;
                 }
             }
@@ -832,18 +1223,25 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
     }
     res.entries.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then(a.kind.cmp(b.kind)));
 
-    // ── неразобранное: подряд идущие неиспользованные лексемы одним куском ──
+    // ── неразобранное: подряд идущие неиспользованные лексемы одним куском; служебные слова внутри куска
+    //    сохраняются, по краям — отбрасываются ──
+    let free = |k: usize| !p.used.get(k).copied().unwrap_or(true) && !p.is(k, &Tok::Sep);
+    let solid = |k: usize| free(k) && !p.noise.get(k).copied().unwrap_or(false);
     let mut k = 0;
     while k < n {
-        if p.used.get(k).copied().unwrap_or(true) || p.is(k, &Tok::Sep) {
+        if !solid(k) {
             k += 1;
             continue;
         }
         let from = k;
-        while k < n && !p.used.get(k).copied().unwrap_or(true) && !p.is(k, &Tok::Sep) {
+        let mut last = k;
+        while k < n && free(k) {
+            if solid(k) {
+                last = k;
+            }
             k += 1;
         }
-        let piece = p.slice(from, k);
+        let piece = p.slice(from, last + 1);
         if !piece.is_empty() {
             res.unparsed.push(piece);
         }
