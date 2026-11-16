@@ -1070,6 +1070,11 @@ pub mod planner;
 /// JSON планировщика для хостов (web): сведённое состояние и изменения.
 pub mod planner_json;
 
+/// Домен «Здоровье» `parvane.health.v1` (spec 038).
+pub mod health;
+/// JSON «Здоровья» для хостов: сведённое состояние и изменения.
+pub mod health_json;
+
 /// Тестовый домен `sample.v1` (SC-005): LWW-карта.
 pub mod sample {
     use super::*;

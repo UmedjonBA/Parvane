@@ -98,6 +98,7 @@ fn generate() -> Value {
         access: Some(sealed_envelope::Access::DeliveryKey(vec![1; 32])),
         hpke_enc: vec![2; 32],
         ciphertext: vec![3; 16],
+        suite: 0,
     };
     c.push(request_case(
         "deliver-64-copies",

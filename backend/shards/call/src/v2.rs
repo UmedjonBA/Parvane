@@ -380,6 +380,7 @@ mod tests {
             access: Some(Access::DeliveryKey(vec![key; 32])),
             hpke_enc: vec![1; 32],
             ciphertext: vec![2; 10],
+            suite: 0,
         }
     }
 

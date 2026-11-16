@@ -208,6 +208,26 @@ fn report_public_key() -> Option<[u8; 32]> {
     x25519_env("PARVANE_REPORT_PUBLIC_KEY", "жалобы администратору выключены")
 }
 
+/// Модули, выключенные администратором для всех (`PARVANE_DISABLED_MODULES`, через запятую; правило MODULES-1).
+/// Клиенты прячут такие модули. Идентификатор — строчные латинские буквы, цифры, `_`, `-`, до 32 знаков; прочее
+/// отбрасывается с записью в журнал.
+fn disabled_modules() -> Vec<String> {
+    parse_disabled_modules(&env_nonempty("PARVANE_DISABLED_MODULES").unwrap_or_default())
+}
+
+fn parse_disabled_modules(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let ok = id.len() <= 32 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+        if !ok {
+            tracing::error!(module = id, "PARVANE_DISABLED_MODULES: недопустимый идентификатор модуля, пропущен");
+        } else if out.len() < 32 && !out.iter().any(|m| m == id) {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
 fn x25519_env(name: &str, off: &str) -> Option<[u8; 32]> {
     use base64::Engine as _;
     let raw = env_nonempty(name)?;

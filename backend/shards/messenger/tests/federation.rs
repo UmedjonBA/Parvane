@@ -126,6 +126,7 @@ fn sealed_to(addr: &str) -> Vec<u8> {
             access: Some(sealed_envelope::Access::DeliveryKey(vec![5; 32])),
             hpke_enc: vec![7; 32],
             ciphertext: vec![1, 2, 3],
+            suite: 0,
         }],
     }
     .encode_to_vec()

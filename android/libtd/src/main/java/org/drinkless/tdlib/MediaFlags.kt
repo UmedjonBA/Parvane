@@ -32,10 +32,26 @@ object MediaFlags {
             is TdApi.InputMessageVideo -> c.caption
             is TdApi.InputMessageAnimation -> c.caption
             is TdApi.InputMessageDocument -> c.caption
+            is TdApi.InputMessageAudio -> c.caption
             is TdApi.InputMessageVoiceNote -> c.caption
             else -> null
         }
         if (caption != null && !content.has("entities")) Entities.toWire(caption.entities)?.let { content.put("entities", it) }
+    }
+
+    private val AUDIO_MIME = mapOf("mp3" to "audio/mpeg", "m4a" to "audio/mp4", "aac" to "audio/aac", "flac" to "audio/flac",
+        "ogg" to "audio/ogg", "oga" to "audio/ogg", "opus" to "audio/ogg", "wav" to "audio/wav", "wma" to "audio/x-ms-wma")
+
+    /**
+     * Музыкальный файл X (`InputMessageAudio`) → содержимое провода: вид `file` с аудио-MIME — так его шлёт web, и
+     * получатель показывает плеер. [knownMime] — что система знает о расширении; не аудио или пусто — по таблице.
+     */
+    fun audioContent(filename: String, knownMime: String?, durationSecs: Int, caption: String): JSONObject {
+        val ext = filename.substringAfterLast('.', "").lowercase()
+        val mime = knownMime?.takeIf { it.startsWith("audio/") } ?: AUDIO_MIME[ext] ?: "audio/mpeg"
+        val o = JSONObject().put("kind", "file").put("mime", mime).put("filename", filename).put("caption", caption)
+        if (durationSecs > 0) o.put("duration_secs", durationSecs)
+        return o
     }
 
     fun spoiler(c: JSONObject): Boolean = c.optBoolean("spoiler", false) && c.optString("kind") in SPOILER_KINDS

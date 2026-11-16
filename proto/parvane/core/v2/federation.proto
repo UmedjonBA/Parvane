@@ -123,6 +123,8 @@ message S2SEphemeral {
 message S2SAccountGone {
   UserRef user = 1;
 }
+// spec 037 (план, номера не занимать другим): в обоих oneof кадров номер 16 — S2SAccountMoved (аккаунт переехал на
+// другой сервер; доказательство — запись `Rename`).
 
 // payload_type = "parvane.core.v2.S2SResponse" — первый кадр тела ответа.
 message S2SResponse {

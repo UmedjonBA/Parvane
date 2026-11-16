@@ -1861,6 +1861,72 @@
         "desktop": "desktop/parvane-core/src/v2_content.cpp (reply_quote только при reply_to, ≤ 1024 байт по границе UTF-8, сущности внутри фрагмента); tdesktop apiwrap.cpp sendMessage → Parvane::MirrorOutgoing(quote, quoteOffset), parvane_client.cpp buildMessage (quote_text/quote_entities/quote_offset в MTP_messageReplyHeader — родная плашка цитаты); сценарий verify_rare_ui.sh",
         "android": "libtd MediaFlags.kt (quoteOf: InputTextQuote X → reply_quote; textQuote: reply_quote → TextQuote плашки ответа), Client.kt sendMessage (цитата — только при ответе), ParvaneStore.putMessage (MessageReplyToMessage.quote); ядро v2_content.cpp (reply_quote при reply_to); тест Review1107Phase4Test, сценарий tgx_protocol_web_flow (ответ X с цитатой → web, rev4c ok; приём цитаты web → X — только JVM-тест)"
       }
+    },
+    {
+      "id": "SUITE-1",
+      "title": "Набор шифров внешнего конверта: незнакомый — отказ, без отката на прежний",
+      "kind": "crypto",
+      "record": "core.v2 SealedEnvelope.suite (6): 0 — DHKEM X25519, HKDF-SHA256, ChaCha20-Poly1305",
+      "behaviour": "Получатель с незнакомым номером набора отвергает конверт (TooNew → «обновите приложение») и не пробует нынешний набор; отправитель выбирает набор по строке features сертификата устройства получателя (словарь: kem.xwing)",
+      "status": "16 ноя 2026: движок — сделано (тест указан); клиенты — открыто",
+      "clients": {
+        "web": "движок: backend/protocol/src/seal.rs (open, SUITE_X25519), тест unknown_suite_is_refused_without_fallback; клиент получает правило с пересборкой WASM",
+        "desktop": "то же ядро (C ABI) — со следующей сборкой",
+        "android": "то же ядро — со следующей сборкой"
+      }
+    },
+    {
+      "id": "DEVLOG-1",
+      "title": "Журнал устройств расширяем: неизвестный вид записи — звено или «обновите» по номеру",
+      "kind": "identity",
+      "record": "core.v2 UserDeviceLogEntry.change: виды 1–999 обычные, 1000–1999 критичные; Rename.new_address может быть на другом домене",
+      "behaviour": "Неизвестный вид 1–999 — звено цепочки без действия (подпись текущим нераскрытым SSK либо корнем, не генезис); 1000–1999 — журнал не продвигается (TooNew). Запись Rename с адресом другого домена принимается проверяющим (переезд между серверами); подготовка смены и сервер — пока только свой домен",
+      "status": "16 ноя 2026: движок — сделано (тест указан); клиенты — открыто",
+      "clients": {
+        "web": "движок: backend/protocol/src/identity.rs (DeviceLog::apply), тесты unknown_kind_is_a_link_or_upgrade_by_number, rename_closes_log_and_needs_root",
+        "desktop": "то же ядро — со следующей сборкой",
+        "android": "то же ядро — со следующей сборкой"
+      }
+    },
+    {
+      "id": "MODULES-1",
+      "title": "Модули, выключенные администратором сервера, клиент прячет",
+      "kind": "ui",
+      "record": "identity.v2 ServerDescribeResponse.disabled_modules (7); словарь: planner, health, notes, files, music",
+      "behaviour": "Клиент читает список при входе и прячет выключенные модули во всех местах, где модуль всплывает; неизвестный идентификатор пропускает; пустой список — выключенных нет. Это подсказка интерфейсу: шарды запросы пока обслуживают",
+      "status": "16 ноя 2026: сервер — сделано (identity PARVANE_DISABLED_MODULES, тест disabled_modules_are_parsed_strictly); клиенты — открыто (вместе с реестром модулей)",
+      "clients": {
+        "web": "открыто",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "HEALTH-1",
+      "title": "«Здоровье»: записи со временем в своём домене, вода — прибавками, цели — по показателям",
+      "kind": "domain",
+      "record": "health.v1 Entry{id, kind, at_ms, end_ms, tz_min, value, value2, unit, source, note}, Goal{id, target}; контейнер parvane.health.v1",
+      "behaviour": "Каждое измерение — отдельная запись со случайным id; день записи считает движок по tz_min (сон — день пробуждения); сумму воды считает показ; клиент не сводит записи сам и не хранит здоровье в домене планировщика",
+      "status": "16 ноя 2026: движок — сделано (тест указан); клиенты — открыто",
+      "clients": {
+        "web": "движок: backend/protocol/src/domain/health.rs, health_json.rs, тесты tests/health_domain.rs",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "HEALTH-2",
+      "title": "Разбор свободного ввода «Здоровья» — один на всех клиентах",
+      "kind": "domain",
+      "record": "backend/protocol/src/health_parse.rs: parse_json(text, now_ms, tz_min) → {entries, unparsed, problems}",
+      "vectors": "conformance/health-parse/cases.json",
+      "behaviour": "Клиент не разбирает ввод сам: отдаёт строку движку и показывает итог; неразобранное и значения вне диапазона показываются пользователю, молча ничего не теряется",
+      "status": "16 ноя 2026: движок — сделано (тест указан); клиенты — открыто",
+      "clients": {
+        "web": "движок: тест backend/protocol/tests/health_parse_vectors.rs",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
     }
   ]
 }

@@ -69,6 +69,7 @@ services:
       PARVANE_REQUIRE_DEVICE_PROOF: ${PARVANE_REQUIRE_DEVICE_PROOF:-1}
       # Жалобы администратору (spec 024): открытый ключ `escrow_admin keygen`; пусто — жалобы серверу выключены
       PARVANE_REPORT_PUBLIC_KEY: ${PARVANE_REPORT_PUBLIC_KEY:-}
+      PARVANE_DISABLED_MODULES: ${PARVANE_DISABLED_MODULES:-}
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}

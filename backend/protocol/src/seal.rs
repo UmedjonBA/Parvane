@@ -94,6 +94,9 @@ pub fn pad_l2(inner: &mut SealedInner) {
     inner.padding = vec![0u8; l2_padding_len(inner.encoded_len())];
 }
 
+/// Набор шифров внешнего слоя: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305 (`SealedEnvelope.suite`).
+pub const SUITE_X25519: u32 = 0;
+
 /// Запечатать внутренний слой для устройства-адресата.
 pub fn seal(recipient: &DeviceRef, recipient_hpke: &[u8; 32], access: Access, mut inner: SealedInner, l2: bool) -> Result<SealedEnvelope> {
     if l2 {
@@ -109,6 +112,7 @@ pub fn seal(recipient: &DeviceRef, recipient_hpke: &[u8; 32], access: Access, mu
         access: Some(access),
         hpke_enc: enc.to_bytes().to_vec(),
         ciphertext: ct,
+        suite: SUITE_X25519,
     })
 }
 
@@ -116,6 +120,11 @@ pub fn seal(recipient: &DeviceRef, recipient_hpke: &[u8; 32], access: Access, mu
 pub fn open(env: &SealedEnvelope, me: &DeviceRef, my_hpke_sk: &[u8; 32]) -> Result<SealedInner> {
     if env.recipient.as_ref() != Some(me) {
         return Err(ProtoError::ContextMismatch);
+    }
+    // SUITE-1 (spec 037): незнакомый набор шифров — отказ; пробовать нынешний нельзя (иначе сервер или сеть
+    // могли бы понизить защиту, подменив номер набора).
+    if env.suite != SUITE_X25519 {
+        return Err(ProtoError::TooNew);
     }
     let sk = <Kem as hpke::Kem>::PrivateKey::from_bytes(my_hpke_sk).map_err(|_| ProtoError::Crypto)?;
     let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&env.hpke_enc).map_err(|_| ProtoError::Crypto)?;
@@ -189,4 +198,17 @@ mod tests {
         let b = seal(&me, &pk, Access::DeliveryKey(vec![1; 32]), SealedInner { olm_message: vec![1; 300], ..Default::default() }, true).unwrap();
         assert_eq!(a.ciphertext.len(), b.ciphertext.len());
     }
+
+    #[test]
+    fn unknown_suite_is_refused_without_fallback() {
+        // SUITE-1 (spec 037): конверт с незнакомым набором шифров не открывается нынешним
+        let me = dev("bob@x", "d1");
+        let (sk, pk) = generate_keypair();
+        let mut env = seal(&me, &pk, Access::DeliveryKey(vec![1; 32]), SealedInner::default(), false).unwrap();
+        assert_eq!(env.suite, SUITE_X25519);
+        open(&env, &me, &sk).unwrap();
+        env.suite = 2;
+        assert_eq!(open(&env, &me, &sk).unwrap_err(), ProtoError::TooNew);
+    }
+
 }

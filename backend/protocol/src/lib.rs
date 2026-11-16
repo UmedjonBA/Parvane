@@ -20,6 +20,8 @@ pub mod error;
 pub mod federation;
 pub mod group;
 pub mod history;
+/// Разбор свободного ввода «Здоровья» (spec 038).
+pub mod health_parse;
 pub mod hold;
 pub mod host;
 pub mod identity;

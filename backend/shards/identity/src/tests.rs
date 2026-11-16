@@ -1349,3 +1349,12 @@ async fn argon2_runs_off_runtime_with_bounded_parallelism() {
     // Обычный путь работает
     assert!(verify_password_async("pw", &hash_password_async("pw").await.unwrap()).await.unwrap());
 }
+
+#[test]
+fn disabled_modules_are_parsed_strictly() {
+    // MODULES-1 (spec 037): список через запятую, без повторов; недопустимое отбрасывается
+    assert!(parse_disabled_modules("").is_empty());
+    assert_eq!(parse_disabled_modules(" music , health,music,"), vec!["music".to_string(), "health".to_string()]);
+    assert_eq!(parse_disabled_modules("Music,ок,notes,a b"), vec!["notes".to_string()]);
+    assert!(parse_disabled_modules(&"x".repeat(33)).is_empty());
+}

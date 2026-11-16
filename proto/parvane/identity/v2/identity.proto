@@ -546,6 +546,13 @@ message ServerDescribeResponse {
   bytes escrow_public_key = 5 [(parvane.core.v2.max_len) = 32];
   // Открытый ключ администратора для жалоб (X25519, HPKE; spec 024). Пусто — жалобы серверу не принимаются.
   bytes report_public_key = 6 [(parvane.core.v2.max_len) = 32];
+  // Модули, выключенные администратором для всех (spec 037, правило MODULES-1): идентификаторы из словаря
+  // conformance (`planner`, `health`, `notes`, `files`, `music`). Клиент прячет такой модуль; неизвестный
+  // идентификатор пропускает. Пусто — выключенных нет.
+  repeated string disabled_modules = 7 [
+    (parvane.core.v2.max_items) = 32,
+    (parvane.core.v2.max_len) = 32
+  ];
 }
 
 // Жалоба: `PVRP` ‖ версия ‖ enc(32) ‖ ct — JSON жалобы, запечатанный ключом администратора
@@ -573,6 +580,7 @@ message OneTimeKey {
   bytes curve25519 = 2 [(parvane.core.v2.max_len) = 32];
   // Ed25519 устройства над "parvane/v2/otk\0" ‖ key_id ‖ curve25519.
   bytes signature = 3 [(parvane.core.v2.max_len) = 64];
+  // spec 037 (план, номера не занимать другим): 4 — pq_kem (постквантовый предключ).
 }
 
 // Сертификат публикуется записью журнала устройств (add_device), подписанной
@@ -591,6 +599,7 @@ message DeviceFetchBundleRequest {
   parvane.core.v2.UserRef user = 1;
 }
 message DeviceBundle {
+  // spec 037 (план, номера не занимать другим): 4 — pq_last_resort.
   parvane.core.v2.SignedDeviceCertificate certificate = 1;
   // Выдаётся и расходуется атомарно; пусто → fallback_key.
   OneTimeKey one_time_key = 2;
@@ -859,6 +868,7 @@ message LinkOfferRequest {
   string signing_key = 3 [(parvane.core.v2.max_len) = 512];
   // Отозвать своё предложение.
   bool revoke = 4;
+  // spec 037 (план, номера не занимать другим): 5 — kem_pub (гибридная привязка устройства).
 }
 message LinkOfferResponse {}
 

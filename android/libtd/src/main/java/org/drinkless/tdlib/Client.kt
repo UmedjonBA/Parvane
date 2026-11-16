@@ -2150,6 +2150,12 @@ class Client private constructor(
                 val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
                 Prepared(JSONObject().put("kind", "file").put("mime", mime).put("filename", name).put("caption", cap(c.caption)), path, false)
             }
+            is TdApi.InputMessageAudio -> { // музыка из «Файл»/«Музыка» X: на проводе — файл с аудио-MIME (как web)
+                val path = localPath(c.audio?.audio) ?: return TdApi.Error(400, "нет файла")
+                val name = path.substringAfterLast('/')
+                val known = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+                Prepared(MediaFlags.audioContent(name, known, c.audio.duration, cap(c.caption)), path, false)
+            }
             is TdApi.InputMessageVoiceNote -> {
                 val path = when (val r = resolveMedia(c.voiceNote?.voiceNote)) { is String -> r; else -> return r as TdApi.Object }
                 val o = JSONObject().put("kind", "voice").put("mime", "audio/ogg").put("duration_secs", c.voiceNote.duration).put("caption", cap(c.caption))

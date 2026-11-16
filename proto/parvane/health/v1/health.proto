@@ -1,0 +1,66 @@
+// Домен «Здоровье» (spec 038): контейнер `parvane.health.v1` — один на пользователя, содержимое — открытый
+// текст операций и снимков каркаса доменов (core/v2/domain.proto) под ключом эпохи; сервер видит шифртекст.
+//
+// Запись — одно измерение либо отрезок времени со своим id: два измерения одного показателя в один день не
+// затирают друг друга, а вода — отдельные записи-прибавки (сумму считает показ, одновременные прибавки двух
+// устройств не теряются). Запись сводится целиком по `stamp`, удаление — надгробие `deleted` (как запись
+// питания планировщика). Цель — регистр на показатель: цели не лежат одним куском.
+syntax = "proto3";
+
+package parvane.health.v1;
+
+import "parvane/core/v2/domain.proto";
+import "parvane/core/v2/options.proto";
+
+// Измерение (вес, давление, пульс, шаги, настроение, вода, температура …) либо отрезок (сон).
+// Вид — строка `[a-z][a-z0-9_]*`: новый показатель не требует смены схемы; незнакомый вид хранится и
+// сводится, показывать его клиент не обязан. Словарь видов и единиц — conformance HEALTH-1.
+message Entry {
+  // Случайный id записи (не «вид + день»).
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string kind = 3 [(parvane.core.v2.max_len) = 24];
+  // Момент измерения либо начало отрезка, мс UTC.
+  int64 at_ms = 4;
+  // Конец отрезка, мс UTC; 0 — запись-момент.
+  int64 end_ms = 5;
+  // Смещение местного времени от UTC в минутах в момент записи: день записи считается по нему
+  // (у отрезка — по концу: сон относится к дню пробуждения).
+  sint32 tz_min = 6;
+  double value = 7;
+  // Второе число показателя (давление: нижнее).
+  double value2 = 8;
+  // Единица из словаря (kg, mmhg, bpm, steps, ml, c, min, score …); пусто — у вида одна единица.
+  string unit = 9 [(parvane.core.v2.max_len) = 12];
+  // Откуда запись: `manual` (форма), `text` (ввод текстом), `import.<имя>` (устройство или файл).
+  string source = 10 [(parvane.core.v2.max_len) = 32];
+  string note = 11 [(parvane.core.v2.max_len) = 500];
+  parvane.core.v2.LwwStamp deleted = 12;
+}
+
+// Цель показателя — регистр целиком по `stamp`, надгробие. Идентификатор — имя цели из словаря
+// (`sleep_min`, `bedtime`, `wake`, `water_ml`, `steps`, `weight` …); время суток — минутами от полуночи.
+message Goal {
+  string id = 1 [(parvane.core.v2.max_len) = 24];
+  parvane.core.v2.LwwStamp stamp = 2;
+  double target = 3;
+  parvane.core.v2.LwwStamp deleted = 4;
+}
+
+message Change {
+  oneof change {
+    Entry entry = 1;
+    Goal goal = 2;
+  }
+}
+
+// Открытый текст ContainerOp: пакет изменений одного устройства.
+message HealthOp {
+  repeated Change changes = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Открытый текст снимка: все записи и цели с надгробиями.
+message HealthSnapshot {
+  repeated Entry entries = 1 [(parvane.core.v2.max_items) = 60000];
+  repeated Goal goals = 2 [(parvane.core.v2.max_items) = 200];
+}

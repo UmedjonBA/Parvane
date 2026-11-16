@@ -539,6 +539,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 telegram_bot: if mode == ConfirmMode::Telegram { telegram_bot().unwrap_or_default() } else { String::new() },
                 escrow_public_key: escrow_public_key().map(|k| k.to_vec()).unwrap_or_default(),
                 report_public_key: report_public_key().map(|k| k.to_vec()).unwrap_or_default(),
+                disabled_modules: disabled_modules(),
             }
             .encode_to_vec())
         }

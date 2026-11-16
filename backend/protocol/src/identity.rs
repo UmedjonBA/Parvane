@@ -294,9 +294,16 @@ pub const FORMER_LEGACY_DEVICES_FIELD: u32 = 7;
 /// совместимости: так выглядит такая запись в журналах, созданных до T096.
 #[doc(hidden)]
 pub fn sign_former_legacy_entry(key: &dyn sign::OpSigner, user: &str, version: u64, prev_hash: [u8; 32], list: &[u8]) -> Result<SignedOp> {
+    sign_unknown_kind_entry(key, user, version, prev_hash, FORMER_LEGACY_DEVICES_FIELD, list)
+}
+
+/// Запись журнала с видом, которого нет в схеме (поле `field` с байтами `value`, без `change`) — для векторов и
+/// тестов правила DEVLOG-1: так запись будущего движка выглядит для нынешнего.
+#[doc(hidden)]
+pub fn sign_unknown_kind_entry(key: &dyn sign::OpSigner, user: &str, version: u64, prev_hash: [u8; 32], field: u32, value: &[u8]) -> Result<SignedOp> {
     let entry = UserDeviceLogEntry { user: Some(UserRef { address: user.to_string() }), version, prev_hash: prev_hash.to_vec(), ..Default::default() };
     let mut payload = entry.encode_to_vec();
-    crate::codec::put_raw(FORMER_LEGACY_DEVICES_FIELD, list, &mut payload);
+    crate::codec::put_raw(field, value, &mut payload);
     let header = OpHeader { domain: DEVICE_LOG_DOMAIN.into(), op_type: DEVICE_LOG_OP.into(), op_id: sign::new_op_id(), ts_ms: now_ms(), ..Default::default() };
     sign::sign_op(key, header, payload)
 }
@@ -355,19 +362,28 @@ impl DeviceLog {
             return Err(ProtoError::BrokenChain);
         }
         let Some(change) = entry.change.as_ref() else {
-            // T096 (spec 035): запись прежнего списка v1-устройств (поле 7, `LegacyDeviceSet` удалён из схемы) —
-            // звено цепочки без действия. Проверки те же, что были у списка: подпись текущим SSK, SSK не раскрыт.
-            if genesis || crate::codec::raw_field(&v.payload, FORMER_LEGACY_DEVICES_FIELD)?.is_none() {
+            // DEVLOG-1 (spec 037): вид записи, которого этот движок не знает. Номер 1000–1999 — критичный: журнал
+            // не продвигается («обновите приложение»). Номер 1–999 — звено цепочки без действия; подписать его
+            // может текущий SSK (пока он не раскрыт) либо корень. Так же читается запись прежнего списка
+            // v1-устройств (поле 7, T096). Запись совсем без вида — ошибка.
+            let report = crate::unknown::scan("parvane.core.v2.UserDeviceLogEntry", &v.payload)?;
+            if report.has_critical() {
+                return Err(ProtoError::TooNew);
+            }
+            let unknown_kind = report.items.iter().any(|i| i.kind == crate::unknown::UnknownKind::Oneof && i.path.is_empty());
+            if genesis || !unknown_kind {
                 return Err(ProtoError::InvalidField("change"));
             }
             if !entry.root_key.is_empty() && entry.root_key.as_slice() != self.root_key {
                 return Err(ProtoError::RootMismatch);
             }
-            if v.signer != self.ssk {
-                return Err(ProtoError::BadSignature);
-            }
-            if self.ssk_exposed {
-                return Err(ProtoError::Forbidden);
+            if v.signer != self.root_key {
+                if v.signer != self.ssk {
+                    return Err(ProtoError::BadSignature);
+                }
+                if self.ssk_exposed {
+                    return Err(ProtoError::Forbidden);
+                }
             }
             self.version = entry.version;
             self.head_hash = device_log_hash(op);
@@ -506,10 +522,8 @@ impl DeviceLog {
                     if v.signer != self.root_key {
                         return Err(ProtoError::BadSignature);
                     }
-                    if !address::is_valid_address(&r.new_address)
-                        || r.new_address == self.user
-                        || address::address_domain(&r.new_address) != address::address_domain(&self.user)
-                    {
+                    // Домен нового адреса может быть другим (spec 037): личность — корень, адрес — её имя
+                    if !address::is_valid_address(&r.new_address) || r.new_address == self.user {
                         return Err(ProtoError::InvalidField("new_address"));
                     }
                     self.renamed_to = Some(r.new_address.clone());
@@ -786,6 +800,30 @@ mod tests {
     }
 
     #[test]
+    fn unknown_kind_is_a_link_or_upgrade_by_number() {
+        // DEVLOG-1 (spec 037): вид будущего движка. Обычный номер — звено без действия, критичный — «обновите».
+        let a = RootIdentity::generate("alice@x").unwrap();
+        let mut log = DeviceLog::new("alice@x").unwrap();
+        log.apply(&a.genesis_entry().unwrap()).unwrap();
+        log.apply(&a.add_device_entry(2, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d1", 1)).unwrap()).unwrap();
+        let evil = sign::generate_signing_key();
+        let e = sign_unknown_kind_entry(&evil, "alice@x", 3, log.head_hash, 500, &[1]).unwrap();
+        assert_eq!(log.clone().apply(&e), Err(ProtoError::BadSignature));
+        // Критичный номер — журнал не продвигается, кто бы ни подписал
+        for key in [&a.self_signing, &a.root] {
+            let e = sign_unknown_kind_entry(key, "alice@x", 3, log.head_hash, 1000, &[1]).unwrap();
+            assert_eq!(log.clone().apply(&e), Err(ProtoError::TooNew));
+        }
+        // Обычный номер: подпись SSK, затем корня — журнал идёт дальше, устройства не меняются
+        log.apply(&sign_unknown_kind_entry(&a.self_signing, "alice@x", 3, log.head_hash, 500, &[1]).unwrap()).unwrap();
+        log.apply(&sign_unknown_kind_entry(&a.root, "alice@x", 4, log.head_hash, 501, &[]).unwrap()).unwrap();
+        assert_eq!(log.version, 4);
+        assert!(log.active("d1").is_some());
+        log.apply(&a.add_device_entry(5, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d2", 1)).unwrap()).unwrap();
+        assert!(log.active("d2").is_some());
+    }
+
+    #[test]
     fn former_legacy_entry_is_a_noop_link() {
         // T096: запись прежнего списка v1-устройств (поле 7) из журнала до удаления — звено без действия
         let a = RootIdentity::generate("alice@x").unwrap();
@@ -936,7 +974,12 @@ mod tests {
         // SSK и ключ устройства ник не меняют; чужой домен и тот же адрес — отказ
         assert_eq!(log.clone().apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()), Err(ProtoError::BadSignature));
         assert_eq!(log.clone().apply(&sign_device_log_entry(&dev_key("d1"), &e).unwrap()), Err(ProtoError::BadSignature));
-        for bad in ["alicia@y", "alice@x", "не адрес"] {
+        // spec 037: другой домен допустим (переезд на другой сервер) — проверяющий принимает
+        let moved = device_log_entry("alice@x", 3, log.head_hash, rename("alicia@y"), None);
+        let mut other = log.clone();
+        other.apply(&sign_device_log_entry(&a.root, &moved).unwrap()).unwrap();
+        assert_eq!(other.renamed_to.as_deref(), Some("alicia@y"));
+        for bad in ["alice@x", "не адрес"] {
             let e = device_log_entry("alice@x", 3, log.head_hash, rename(bad), None);
             assert_eq!(log.clone().apply(&sign_device_log_entry(&a.root, &e).unwrap()), Err(ProtoError::InvalidField("new_address")), "{bad}");
         }
