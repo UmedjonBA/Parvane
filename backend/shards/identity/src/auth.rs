@@ -200,6 +200,27 @@ pub(crate) fn jwt_decode(decoding: &DecodingKey, token: &str) -> Result<jsonwebt
     }
 }
 
+/// Срок жизни токена сессии. По умолчанию 30 суток (`PARVANE_SESSION_TTL_SECS` переопределяет): gateway каждые
+/// несколько минут сверяет токен с отзывом устройства и сменой пароля, поэтому короткий срок защиты не добавлял,
+/// а раз в сутки возвращал человека на экран пароля.
+pub(crate) fn session_ttl_secs() -> usize {
+    env_u64("PARVANE_SESSION_TTL_SECS", 30 * 86_400).max(60) as usize
+}
+
+/// Сколько после истечения токен ещё годится для продления (`identity.session.renew`) — 180 суток по умолчанию
+/// (`PARVANE_SESSION_RENEW_SECS`): устройство, молчавшее дольше, входит паролем.
+pub(crate) fn session_renew_window_secs() -> usize {
+    env_u64("PARVANE_SESSION_RENEW_SECS", 180 * 86_400) as usize
+}
+
+/// Токен для продления: подпись сервера обязательна, срок не проверяется (его сверяет вызывающий с окном
+/// продления). Только EdDSA — токены прежнего HS256 не продлеваются.
+pub(crate) fn jwt_decode_expired_ok(decoding: &DecodingKey, token: &str) -> Result<Claims> {
+    let mut v = Validation::new(Algorithm::EdDSA);
+    v.validate_exp = false;
+    Ok(decode::<Claims>(token, decoding, &v).context("неверный JWT")?.claims)
+}
+
 // ── password hashing (argon2id, соль на пароль) ───────────────────────────────
 
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, SaltString};

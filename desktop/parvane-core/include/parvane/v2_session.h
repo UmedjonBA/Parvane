@@ -624,6 +624,9 @@ private:
     void connectOnce();
     bool connectLocked(std::string *error);
     void onIdClosed();
+    // Сервер не принял токен: продлить его подписью ключа устройства (`identity.session.renew`). true — новый
+    // токен получен, хост извещён событием `tokenRenewed`, можно переподключаться.
+    bool renewTokenAfterReject();
 
     // `dest` — домен сервера объекта (spec 028, FED-1): пусто или свой — свой сервер.
     std::string call(bool anon, const std::string &method, const std::string &body,
@@ -683,6 +686,10 @@ private:
     void requestTokensLocked(std::size_t limit);
     void scheduleTokenCheck();
     bool tokenCheckScheduled_ = false;
+    // Продлённый токен: действует, пока хост отдаёт прежний (`renewedFrom_`); под idMu_
+    std::string renewedFrom_;
+    std::string renewedTo_;
+    std::int64_t renewedAtMs_ = 0;
     void rotateEpochLocked(const std::string &hex);
     void rotateEpochOnceLocked(const std::string &hex);
     void scheduleRotate(const std::string &hex, std::int64_t delayMs, int attempt = 0);

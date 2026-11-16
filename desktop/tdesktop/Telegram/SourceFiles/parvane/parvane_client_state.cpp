@@ -2132,10 +2132,21 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
 		return true;
 	}
+	if (type == "tokenRenewed") {
+		// Ядро продлило истёкший токен подписью ключа устройства: дальше живём с новым, он же переживает рестарт
+		const auto renewed = QString::fromStdString(ev.value("token", std::string()));
+		const auto address = SelfAddress();
+		if (!renewed.isEmpty() && !address.isEmpty()) {
+			SetToken(renewed);
+			SaveSessionCreds(address, renewed);
+		}
+		return true;
+	}
 	if (type == "authRejected") {
 		// JWT не принят на соединении v2. При живом v1 тот же отказ приходит и по
 		// нему; без v1 (E6-1) — только отсюда: иначе клиент молча оставался не в
-		// сети, переподключаясь тем же токеном (JWT живёт 24 ч).
+		// сети, переподключаясь тем же токеном. Истёкший срок ядро продлевает само (`tokenRenewed`) — сюда доходит
+		// только настоящий отказ: устройство отозвано, пароль сменён.
 		OnAuthRejected(u"отказ авторизации (v2)"_q);
 		return true;
 	}

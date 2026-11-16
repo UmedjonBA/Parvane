@@ -21,6 +21,18 @@ service IdentityService {
       shard: "identity"
     };
   }
+  // Продление сессии без пароля: прежний токен (срок может уже выйти) и подпись
+  // ключом устройства. Пароль при этом не нужен, отзыв устройства и смена пароля
+  // действуют как для обычного токена.
+  rpc SessionRenew(SessionRenewRequest) returns (SessionRenewResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.session.renew"
+      channel: METHOD_CHANNEL_PRE
+      rate: RATE_CLASS_PRE
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
   rpc AccountRegister(AccountRegisterRequest) returns (AccountRegisterResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.account.register"
@@ -488,6 +500,18 @@ message SessionIssueResponse {
   string address = 7 [(parvane.core.v2.max_len) = 128];
   // Аккаунт ждёт удаления (spec 027): когда всё будет стёрто; токена нет — повторить с `cancel_deletion`.
   int64 deletion_at_ms = 8;
+}
+
+// Продление: токен этого же устройства (подпись сервера обязательна, срок — нет,
+// но не старше окна продления) и доказательство ключа устройства того же вида,
+// что в `SessionIssueRequest` (адрес и device_id берутся из токена).
+message SessionRenewRequest {
+  string token = 1 [(parvane.core.v2.max_len) = 4096];
+  bytes device_proof = 2 [(parvane.core.v2.max_len) = 64];
+  int64 proof_ts_ms = 3;
+}
+message SessionRenewResponse {
+  string token = 1 [(parvane.core.v2.max_len) = 4096];
 }
 
 message AccountRegisterRequest {

@@ -57,6 +57,12 @@ struct IssueResult {
 [[nodiscard]] IssueResult issueSession(const std::string &gatewayUrl, const IssueRequest &req,
                                        const std::string &clientVersion = "desktop");
 
+// identity.session.renew: новый токен вместо прежнего (срок мог выйти) по подписи ключа устройства
+// (`deviceProof` — {"proof","tsMs"} из Session::sessionProofFor либо живого движка). Пусто — сервер отказал
+// (устройство отозвано, пароль сменён, токен слишком старый); сбой транспорта — бросает.
+[[nodiscard]] std::string renewSession(const std::string &gatewayUrl, const std::string &token,
+                                       const json &deviceProof, const std::string &clientVersion = "desktop");
+
 struct RegisterResult {
     bool ok = false;
     bool confirmRequired = false;

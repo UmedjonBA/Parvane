@@ -183,7 +183,7 @@ pub(crate) async fn account_rename(ctx: &V2Ctx, req: &ShardRequest, r: pb::Accou
         return Err(e);
     }
 
-    let claims = Claims { sub: new.clone(), iat: now as usize, exp: now as usize + 86400, dev: Some(req.device_id.clone()), jti: crate::auth::fresh_jti(), cg: Some(gen) };
+    let claims = Claims { sub: new.clone(), iat: now as usize, exp: now as usize + crate::auth::session_ttl_secs(), dev: Some(req.device_id.clone()), jti: crate::auth::fresh_jti(), cg: Some(gen) };
     let token = jwt_encode(&ctx.encoding, &claims).map_err(db_err)?;
     info!("identity: ник сменён ({} устройств)", old_devices.len());
     // Шарды переносят строки до ответа: клиент нового адреса сразу читает свои журналы инбокса

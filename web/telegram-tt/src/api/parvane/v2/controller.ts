@@ -5130,9 +5130,20 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  /** Доказательство устройства для продления сессии: работающий движок подписывает сам, до запуска — по
+   * сохранённому состоянию (как при входе паролем). */
+  async function renewProof(user: string, deviceId: string) {
+    if (client && ready && client.selfAddress() === user) {
+      const tsMs = Date.now();
+      return { proof: b64(client.sessionProof(tsMs)), tsMs };
+    }
+    return sessionProof(user, deviceId);
+  }
+
   return {
     start,
     sessionProof,
+    renewProof,
     isReady: () => ready,
     needsLinking: () => needsLinking,
     deviceId: () => ownDeviceId,

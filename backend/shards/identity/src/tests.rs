@@ -1358,3 +1358,20 @@ fn disabled_modules_are_parsed_strictly() {
     assert_eq!(parse_disabled_modules("Music,ок,notes,a b"), vec!["notes".to_string()]);
     assert!(parse_disabled_modules(&"x".repeat(33)).is_empty());
 }
+
+/// Продление: токен с истёкшим сроком обычная проверка отвергает, проверка для продления принимает — но только
+/// с целой подписью сервера.
+#[test]
+fn expired_token_decodes_only_for_renewal() {
+    let (enc, dec) = make_keys();
+    let now = now_unix() as usize;
+    let claims = Claims { sub: "renew@local".into(), iat: now - 90_000, exp: now - 3_600, dev: Some("dev-1".into()), jti: None, cg: Some(3) };
+    let token = jwt_encode(&enc, &claims).unwrap();
+    assert!(jwt_decode(&dec, &token).is_err(), "истёкший токен не действует");
+    let got = crate::auth::jwt_decode_expired_ok(&dec, &token).unwrap();
+    assert_eq!((got.sub.as_str(), got.dev.as_deref(), got.cg, got.exp), ("renew@local", Some("dev-1"), Some(3), now - 3_600));
+    let (enc2, _) = make_keys();
+    let forged = jwt_encode(&enc2, &claims).unwrap();
+    assert!(crate::auth::jwt_decode_expired_ok(&dec, &forged).is_err(), "чужая подпись");
+    assert!(crate::auth::session_ttl_secs() >= 86_400);
+}

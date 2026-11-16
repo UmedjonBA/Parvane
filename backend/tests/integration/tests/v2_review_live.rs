@@ -441,3 +441,53 @@ async fn v2_review_pre_auth_big_frame_closes_live() {
     .unwrap();
     drop(stack);
 }
+
+/// Продление сессии без пароля (`identity.session.renew`): прежний токен + подпись ключом устройства дают новый
+/// токен, которым можно войти; чужая подпись, несвежее время, испорченный токен и устройство вне журнала — отказ.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_session_renew_live() {
+    let Some((stack, _nc)) = start().await else { return };
+    let addr = stack.gateway_tcp.clone();
+    let p = free_port();
+    tokio::task::spawn_blocking(move || {
+        let (ua, ub, um) = (format!("sa{p}@local"), format!("sb{p}@local"), format!("sm{p}@local"));
+        let alice = Device::register(&addr, &ua, "d1");
+        let bob = Device::register(&addr, &ub, "d1");
+        let now_ms = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+        let (mut pre, _) = Conn::connect(&addr, Channel::Identified);
+        let ts = now_ms();
+        let old = pre
+            .call("identity.session.issue", ipb::SessionIssueRequest {
+                login: ua.clone(), password: PASSWORD.into(), device_id: "d1".into(),
+                device_proof: alice.client.session_proof(ts), proof_ts_ms: ts, ..Default::default()
+            }.encode_to_vec())
+            .map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap().token)
+            .expect("session.issue");
+        let mut renew = |token: &str, proof: Vec<u8>, ts: i64| {
+            let (mut c, _) = Conn::connect(&addr, Channel::Identified);
+            c.call("identity.session.renew", ipb::SessionRenewRequest { token: token.into(), device_proof: proof, proof_ts_ms: ts }.encode_to_vec())
+                .map(|b| ipb::SessionRenewResponse::decode(b.as_slice()).unwrap().token)
+        };
+        let ts = now_ms();
+        let fresh = renew(&old, alice.client.session_proof(ts), ts).expect("продление");
+        assert!(!fresh.is_empty() && fresh != old, "новый токен");
+        let (mut id, _) = Conn::connect(&addr, Channel::Identified);
+        id.send(frame::Kind::Auth(Auth { token: fresh.clone() }));
+        assert!(matches!(id.recv().and_then(|f| f.kind), Some(frame::Kind::AuthOk(_))), "вход продлённым токеном");
+
+        assert_eq!(renew(&old, bob.client.session_proof(ts), ts).err(), Some(ErrorCode::Forbidden), "чужая подпись");
+        let stale = ts - 10 * 60 * 1000;
+        assert_eq!(renew(&old, alice.client.session_proof(stale), stale).err(), Some(ErrorCode::Forbidden), "несвежее время");
+        let mut broken = old.clone();
+        broken.pop();
+        broken.push(if old.ends_with('A') { 'B' } else { 'A' });
+        assert_eq!(renew(&broken, alice.client.session_proof(ts), ts).err(), Some(ErrorCode::Forbidden), "испорченный токен");
+        assert_eq!(renew("", alice.client.session_proof(ts), ts).err(), Some(ErrorCode::Forbidden), "пустой токен");
+        // Устройство без записи в журнале устройств продлить нечем
+        let loose = v2common::register_token(&addr, &um, "d1");
+        assert_eq!(renew(&loose, alice.client.session_proof(ts), ts).err(), Some(ErrorCode::Forbidden), "устройство вне журнала");
+    })
+    .await
+    .unwrap();
+    drop(stack);
+}

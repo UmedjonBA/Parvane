@@ -9,6 +9,7 @@
 #include "parvane/keybundle.h"
 #include "parvane/l2_ticker.h"
 #include "parvane/storecrypt.h"
+#include "parvane/v2_account.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_control.h"
 #include "parvane/v2_engine.h"
@@ -576,8 +577,14 @@ void Session::connectOnce() {
     if (stopping_) return;
     log("запуск не удался: " + error);
     if (error.find("ERROR_CODE_REVOKED") != std::string::npos) {
-        // Сервер не принял JWT (истёк, отозван, подменён). Без соединения v1 это
-        // единственное место, где отказ виден (E6-1): повторять тем же токеном
+        // Сервер не принял JWT (истёк, отозван, подменён). Чаще всего у токена просто вышел срок, а ключ
+        // устройства на месте — сначала продление без пароля; не вышло — отказ настоящий.
+        if (renewTokenAfterReject()) {
+            flush();
+            onIdClosed();
+            return;
+        }
+        // Без соединения v1 это единственное место, где отказ виден (E6-1): повторять тем же токеном
         // бессмысленно — хост снимает учётные данные и показывает экран входа.
         {
             std::lock_guard<std::recursive_mutex> lk(engineMu_);
@@ -587,6 +594,47 @@ void Session::connectOnce() {
         return;
     }
     onIdClosed();
+}
+
+bool Session::renewTokenAfterReject() {
+    // Отказ сразу после продления — уже не истёкший срок, а отзыв: второй раз подряд не продлеваем
+    constexpr std::int64_t kGuardMs = 2 * 60 * 1000;
+    const auto now = nowMs();
+    std::string token = cfg_.token ? cfg_.token() : std::string();
+    {
+        std::lock_guard<std::mutex> idLock(idMu_);
+        if (renewedAtMs_ != 0 && now - renewedAtMs_ < kGuardMs) return false;
+        if (!renewedTo_.empty() && token == renewedFrom_) token = renewedTo_;
+    }
+    if (token.empty()) return false;
+    try {
+        json proof;
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (client_) {
+                const auto sig = client_->call("sessionProof", json{{"tsMs", now}});
+                if (sig.is_string()) proof = json{{"proof", sig}, {"tsMs", now}};
+            }
+        }
+        if (!proof.is_object()) proof = sessionProofFor(cfg_.stateDir, now);
+        if (!proof.is_object()) return false;
+        const auto renewed = account::renewSession(cfg_.gatewayUrl, token, proof, cfg_.clientVersion);
+        if (renewed.empty()) return false;
+        {
+            std::lock_guard<std::mutex> idLock(idMu_);
+            renewedFrom_ = cfg_.token ? cfg_.token() : token;
+            renewedTo_ = renewed;
+            renewedAtMs_ = now;
+        }
+        log("сессия продлена без пароля");
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        outbox_.push_back(json{{"type", "tokenRenewed"}, {"token", renewed}});
+        return true;
+    } catch (const std::exception &e) {
+        // Нет связи посреди продления — это не отказ: обычное переподключение повторит попытку
+        log(std::string("продление сессии: ") + e.what());
+        return false;
+    }
 }
 
 std::string Session::linkChallengeWrap(const std::string &deviceId, const std::string &commitment,
@@ -665,7 +713,12 @@ bool Session::connectLocked(std::string *error) {
             domain_ = desc.value("domain", std::string());
         }
         serverKey_ = hexToBytes(desc.value("serverKey", std::string()));
-        const auto token = cfg_.token ? cfg_.token() : std::string();
+        auto token = cfg_.token ? cfg_.token() : std::string();
+        {
+            // Хост ещё отдаёт прежний токен, а он уже продлён — входим продлённым
+            std::lock_guard<std::mutex> idLock(idMu_);
+            if (!renewedTo_.empty() && token == renewedFrom_) token = renewedTo_;
+        }
         if (token.empty()) throw std::runtime_error("нет JWT");
         const auto auth = id_->auth(token);
         deviceId_ = auth.deviceId;

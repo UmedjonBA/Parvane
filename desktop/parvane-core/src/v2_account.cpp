@@ -175,6 +175,20 @@ IssueResult issueSession(const std::string &gatewayUrl, const IssueRequest &req,
     return out;
 }
 
+std::string renewSession(const std::string &gatewayUrl, const std::string &token, const json &deviceProof,
+                         const std::string &clientVersion) {
+    if (token.empty() || !deviceProof.is_object()) return {};
+    const json body{{"token", token},
+                    {"device_proof", deviceProof.value("proof", std::string())},
+                    {"proof_ts_ms", std::to_string(deviceProof.value("tsMs", std::int64_t(0)))}};
+    try {
+        return str(preauth(gatewayUrl, "identity.session.renew", body, clientVersion), "token");
+    } catch (const V2Error &e) {
+        if (e.code() == "ERROR_CODE_UNAVAILABLE" || e.code() == "ERROR_CODE_UPGRADE_REQUIRED") throw;
+        return {};
+    }
+}
+
 RegisterResult registerAccount(const std::string &gatewayUrl, const std::string &user, const std::string &password,
                                const std::string &email, const std::string &invite,
                                const std::string &clientVersion) {

@@ -632,6 +632,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let v = v1_call(nc, json!({"user": r.user, "token": r.token}), |msg| handle_register_status(nc, pool, msg)).await?;
             Ok(pb::AccountRegisterStatusResponse { confirmed: v["confirmed"].as_bool().unwrap_or(false) }.encode_to_vec())
         }
+        "identity.session.renew" => renew(ctx, &req).await,
         "identity.session.reauth" => reauth(ctx, &req).await,
 
         // ── аккаунт ──
@@ -1184,6 +1185,38 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
 }
 
 // ── reauth ──────────────────────────────────────────────────────────────────
+
+/// Продление сессии без пароля: прежний токен этого устройства (подпись сервера цела, срок мог выйти не более
+/// окна продления) и доказательство ключа устройства. Всё, что гасит обычный токен, — отзыв устройства, смена
+/// пароля, смена ника, удаление аккаунта — гасит и продление: новый токен несёт то же поколение учётных данных.
+async fn renew(ctx: &V2Ctx, req: &ShardRequest) -> Reply {
+    let r: pb::SessionRenewRequest = body(req)?;
+    if !req.client_ip.is_empty() && !window_rate_ok("renew-ip", &req.client_ip, env_u64("PARVANE_RENEW_RATE_IP", 120) as usize) {
+        return Err(ErrorCode::RateLimited);
+    }
+    let old = crate::auth::jwt_decode_expired_ok(&ctx.decoding, &r.token).map_err(|_| ErrorCode::Forbidden)?;
+    let dev_id = old.dev.clone().filter(|d| !d.is_empty()).ok_or(ErrorCode::Forbidden)?;
+    let now = now_unix() as usize;
+    if old.exp.saturating_add(crate::auth::session_renew_window_secs()) < now {
+        return Err(ErrorCode::Forbidden);
+    }
+    if token_rejection(&ctx.pool, &old).await.map_err(db_err)?.is_some() {
+        return Err(ErrorCode::Forbidden);
+    }
+    // Ключ берётся из журнала устройств: устройство вне журнала (ещё не привязано) продлить нечем — оно входит паролем
+    let log = load_log(ctx, &old.sub).await?;
+    let dev = log.active(&dev_id).ok_or(ErrorCode::Forbidden)?;
+    let ed = dev.olm_ed25519().map_err(|_| ErrorCode::Invalid)?;
+    if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000)
+        || !parvane_protocol::client::verify_session_proof(&ed, &old.sub, &dev_id, r.proof_ts_ms, &r.device_proof)
+    {
+        warn!("identity v2: продление сессии отвергнуто — доказательство устройства не сошлось");
+        return Err(ErrorCode::Forbidden);
+    }
+    let claims = Claims { sub: old.sub, iat: now, exp: now + crate::auth::session_ttl_secs(), dev: Some(dev_id), jti: crate::auth::fresh_jti(), cg: old.cg };
+    let token = jwt_encode(&ctx.encoding, &claims).map_err(db_err)?;
+    Ok(pb::SessionRenewResponse { token }.encode_to_vec())
+}
 
 /// Свежее подтверждение паролем: сессия (user из gateway) + пароль.
 async fn reauth(ctx: &V2Ctx, req: &ShardRequest) -> Reply {

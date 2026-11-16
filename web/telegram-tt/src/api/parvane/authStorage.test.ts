@@ -7,9 +7,11 @@ import {
   clearLoginStorage,
   consumeLegacyCredentials,
   isSessionExpired,
+  isTokenDueForRenewal,
   parseLoginCredentials,
   readLoginAddress,
   readSessionActivity,
+  readTokenClaims,
   saveLoginAddress,
   SESSION_IDLE_LIMIT_MS,
   touchSessionActivity,
@@ -58,7 +60,7 @@ describe('Parvane login storage', () => {
 });
 
 describe('Срок сессии «оставаться в системе»', () => {
-  it('без отметки активности сессия свежая, после суток тишины — просрочена', () => {
+  it('без отметки активности сессия свежая, после долгой тишины — просрочена', () => {
     localStorage.removeItem('parvane:last-active');
     expect(isSessionExpired()).toBe(false);
     const now = 1_800_000_000_000;
@@ -68,5 +70,30 @@ describe('Срок сессии «оставаться в системе»', () 
     expect(isSessionExpired(now + SESSION_IDLE_LIMIT_MS + 1)).toBe(true);
     clearLoginStorage();
     expect(readSessionActivity()).toBeUndefined();
+  });
+});
+
+describe('Продление токена сессии', () => {
+  const jwt = (claims: object) => `h.${btoa(JSON.stringify(claims)).replace(/\+/g, '-').replace(/\//g, '_')}.s`;
+
+  it('читает срок и устройство токена, мусор не роняет', () => {
+    expect(readTokenClaims(jwt({ iat: 100, exp: 200, dev: 'dev-1' }))).toEqual({ iat: 100, exp: 200, dev: 'dev-1' });
+    expect(readTokenClaims(jwt({ exp: 'x', dev: '' }))).toEqual({ iat: undefined, exp: undefined, dev: undefined });
+    expect(readTokenClaims('не токен')).toBeUndefined();
+  });
+
+  it('продлевать пора с половины срока и после его конца', () => {
+    const token = jwt({ iat: 1000, exp: 3000, dev: 'dev-1' });
+    expect(isTokenDueForRenewal(token, 1999_000)).toBe(false);
+    expect(isTokenDueForRenewal(token, 2000_000)).toBe(true);
+    expect(isTokenDueForRenewal(token, 9000_000)).toBe(true);
+    expect(isTokenDueForRenewal('не токен', 9000_000)).toBe(false);
+  });
+
+  it('сутки без активности сессию больше не гасят', () => {
+    const now = 1_800_000_000_000;
+    touchSessionActivity(now);
+    expect(isSessionExpired(now + 3 * 24 * 60 * 60 * 1000)).toBe(false);
+    clearLoginStorage();
   });
 });

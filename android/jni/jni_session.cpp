@@ -335,6 +335,18 @@ bool handleSessionEvent(const json &ev) {
         runDetached([] { completeJoin(); });
         return true;
     }
+    if (type == "tokenRenewed") {
+        // Ядро продлило истёкший токен подписью ключа устройства: дальше живём с новым, он же переживает перезапуск
+        const auto renewed = ev.value("token", std::string());
+        std::string self;
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            if (!renewed.empty()) g_token = renewed;
+            self = g_self;
+        }
+        if (!renewed.empty() && !self.empty()) saveSession(self, renewed);
+        return true;
+    }
     if (type == "authRejected") {
         // JWT не принят: экран входа (учётные данные сняты, данные — нет; повторный вход продолжит историю)
         LOGE("v2: отказ авторизации");

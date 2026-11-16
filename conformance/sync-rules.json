@@ -1902,6 +1902,19 @@
       }
     },
     {
+      "id": "SESSION-1",
+      "title": "Истёкший токен сессии продлевается подписью ключа устройства, без пароля",
+      "kind": "auth",
+      "record": "identity.v2 identity.session.renew (канал PRE): SessionRenewRequest{token, device_proof, proof_ts_ms} → SessionRenewResponse{token}; подпись — та же, что device_proof входа (ID-01)",
+      "behaviour": "Сервер отверг токен (REVOKED) — клиент сначала продлевает его: прежний токен + подпись ключа устройства из журнала устройств; получил новый — сохраняет и подключается им, экран пароля не показывает. Отказ продления (устройство отозвано, пароль сменён, ник сменён, токен старше окна продления, устройства нет в журнале) — экран пароля, ключи и история остаются. Повторный отказ в течение 2 минут после продления клиент второй раз не продлевает",
+      "status": "16 ноя 2026: сервер — сделано (срок токена 30 суток PARVANE_SESSION_TTL_SECS, окно продления 180 суток PARVANE_SESSION_RENEW_SECS; тесты identity expired_token_decodes_only_for_renewal, parvane-integration v2_session_renew_live); web — сделано; desktop и android — ядро сделано, клиенты не собирались",
+      "clients": {
+        "web": "provider.ts renewSessionToken (запуск, отказ сервера, заранее с половины срока); authStorage.ts isTokenDueForRenewal, тест authStorage.test.ts",
+        "desktop": "parvane-core v2_session.cpp renewTokenAfterReject, v2_account.cpp renewSession; tdesktop parvane_client_state.cpp событие tokenRenewed — без сборки",
+        "android": "то же ядро; jni_session.cpp событие tokenRenewed — без сборки"
+      }
+    },
+    {
       "id": "HEALTH-1",
       "title": "«Здоровье»: записи со временем в своём домене, вода — прибавками, цели — по показателям",
       "kind": "domain",

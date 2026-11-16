@@ -199,7 +199,7 @@ pub(crate) async fn do_issue(pool: &SqlitePool, encoding: &EncodingKey, payload:
     let claims = Claims {
         sub: req.user.clone(),
         iat: now,
-        exp: now + 86400,
+        exp: now + crate::auth::session_ttl_secs(),
         dev: req.device_id.clone().filter(|d| !d.is_empty()),
         jti: crate::auth::fresh_jti(),
         cg: Some(cred_gen),
