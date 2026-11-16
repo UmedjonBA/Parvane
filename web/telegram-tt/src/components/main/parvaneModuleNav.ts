@@ -35,6 +35,7 @@ export function getActiveModule(
   section: ParvaneSection, knowledgeView: KnowledgeView, isSettingsOpen: boolean,
 ): ParvaneModuleId {
   if (section === 'health') return 'health';
+  if (section === 'music') return 'music';
   if (section === 'planner') return 'plan';
   if (section === 'cloud') return knowledgeView === 'files' ? 'files' : 'notes';
   return isSettingsOpen ? 'profile' : 'chats';
@@ -52,6 +53,9 @@ export function openModule(id: ParvaneModuleId, isSettingsOpen: boolean) {
       break;
     case 'health':
       openHealth();
+      break;
+    case 'music':
+      setParvaneSection('music');
       break;
     case 'notes':
       openKnowledgeView('notes');

@@ -5,11 +5,11 @@ import { createSignal } from './signals';
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
 // панели. Мессенджер остаётся смонтированным (звонки, синхронизация) — раздел
 // только решает, что показано справа от панели
-export type ParvaneSection = 'messenger' | 'planner' | 'health' | 'cloud';
+export type ParvaneSection = 'messenger' | 'planner' | 'health' | 'music' | 'cloud';
 
 // Раздел переживает обновление страницы в этой вкладке; новая вкладка открывается на чатах
 const SECTION_KEY = 'parvane:section';
-const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'health', 'cloud'];
+const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'health', 'music', 'cloud'];
 
 function readSection(): ParvaneSection {
   try {

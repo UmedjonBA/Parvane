@@ -218,6 +218,11 @@ export default defineConfig(({ mode }): UserConfig => {
         generateScopedName: isProductionApp ? '[hash:base64:8]' : '[name]__[local]',
       },
     },
+    // Parvane: поток и обложки «Музыки» (`/_parvane/music/*`) в проде отдаёт Caddy с того же адреса; локальному
+    // предпросмотру (браузерные сценарии) адрес шарда music задаёт PARVANE_MUSIC_ORIGIN
+    preview: process.env.PARVANE_MUSIC_ORIGIN ? {
+      proxy: { '/_parvane/music': { target: process.env.PARVANE_MUSIC_ORIGIN, changeOrigin: true } },
+    } : undefined,
     server: {
       host: '0.0.0.0',
       port: 1234,

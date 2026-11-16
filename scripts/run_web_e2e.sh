@@ -167,6 +167,10 @@ log "Build backend binaries"
 # PARVANE_E2E_SKIP_BACKEND_BUILD=1 — шарды уже собраны (серия сценариев: сборка один раз, перед первым)
 if [[ "${PARVANE_E2E_SKIP_BACKEND_BUILD:-0}" != "1" ]]; then
   cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
+  # «Музыка» (spec 039): шард music — только для сценариев с PARVANE_E2E_MUSIC=1
+  if [[ "${PARVANE_E2E_MUSIC:-0}" == "1" ]]; then
+    cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p music
+  fi
   # Федерация (spec 028): шард с тестовым транспортом — только для сценариев двух серверов
   if [[ -n "${PARVANE_E2E_FEDERATION_PORT:-}" ]]; then
     cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p federation --features insecure-test-transport
@@ -241,6 +245,23 @@ if [[ -n "${PARVANE_E2E_FEDERATION_PORT:-}" ]]; then
   PARVANE_FEDERATION_BIND="127.0.0.1:$PARVANE_E2E_FEDERATION_PORT" PARVANE_FEDERATION_INSECURE_HTTP=1 \
     start_shard federation "$FEDERATION_PASS"
   wait_for_log federation 'Federation шард запущен' "${PIDS[-1]}"
+fi
+
+# «Музыка» (spec 039): поддельный сервер библиотеки (`scripts/fake_subsonic.mjs` — Subsonic с внешней
+# аутентификацией, как Navidrome) и шард music перед ним. Ссылки потока и обложек относительные: их отдаёт
+# предпросмотр web через PARVANE_MUSIC_ORIGIN (в проде — Caddy)
+if [[ "${PARVANE_E2E_MUSIC:-0}" == "1" ]]; then
+  MUSIC_LIBRARY_PORT="${PARVANE_E2E_MUSIC_LIBRARY_PORT:-19431}"
+  MUSIC_HTTP_PORT="${PARVANE_E2E_MUSIC_HTTP_PORT:-19432}"
+  node "$ROOT/scripts/fake_subsonic.mjs" "$MUSIC_LIBRARY_PORT" >"$TEMP_ROOT/fake-subsonic.log" 2>&1 &
+  PIDS+=("$!")
+  wait_for_log fake-subsonic 'fake subsonic' "${PIDS[-1]}"
+  PARVANE_MUSIC_NAVIDROME_URL="http://127.0.0.1:$MUSIC_LIBRARY_PORT" \
+  PARVANE_MUSIC_HTTP_BIND="127.0.0.1:$MUSIC_HTTP_PORT" \
+  PARVANE_MUSIC_URL_KEY_FILE="$TEMP_ROOT/music-url.key" \
+    start_shard music "$MUSIC_PASS"
+  wait_for_log music 'Music шард запущен' "${PIDS[-1]}"
+  export PARVANE_MUSIC_ORIGIN="http://127.0.0.1:$MUSIC_HTTP_PORT"
 fi
 
 if rg -n 'Permissions Violation|authorization violation' "$TEMP_ROOT"/*.log; then

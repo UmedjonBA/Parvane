@@ -611,6 +611,33 @@ impl HostState {
     }
 }
 
+/// Действия очереди плеера: вход — сохранённая очередь (`queue`), выход — очередь для показа (`Queue::view`).
+fn music_queue_call(name: &str, a: &Args<'_>) -> R {
+    use crate::music_queue::{Queue, Repeat};
+    let strings = |k: &str| -> Vec<String> { a.raw(k).as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect() };
+    let seed = || a.raw("seed").as_u64().unwrap_or(0);
+    let mut q = Queue::normalize(a.raw("queue"));
+    match name {
+        "musicQueueView" => {}
+        "musicQueueStart" => {
+            let repeat: Repeat = serde_json::from_value(a.raw("repeat").clone()).unwrap_or(q.repeat);
+            let shuffle = a.raw("shuffle").as_bool().unwrap_or(q.shuffle);
+            q = Queue::start(strings("tracks"), a.n("start")?, shuffle, repeat, seed());
+        }
+        "musicQueueNext" => q.next(a.flag("auto")?),
+        "musicQueuePrev" => q.prev(),
+        "musicQueueJump" => q.jump(a.n("position")?),
+        "musicQueueShuffle" => q.set_shuffle(a.flag("on")?, seed()),
+        "musicQueueRepeat" => q.cycle_repeat(),
+        "musicQueueAdd" => q.add(strings("tracks"), a.flag("next")?),
+        "musicQueueRemove" => q.remove(a.n("position")?),
+        "musicQueueMove" => q.move_to(a.n("from")?, a.n("to")?),
+        "musicQueueClear" => q.clear_rest(),
+        _ => return Err(UNKNOWN.to_string()),
+    }
+    Ok(q.view())
+}
+
 /// Функции без клиента (имена свободных функций WASM).
 pub fn call_static(name: &str, args: &Value) -> R {
     // Журнал истории (spec 033): `historyApply`, `historyView`, …
@@ -620,6 +647,8 @@ pub fn call_static(name: &str, args: &Value) -> R {
     let a = Args(args);
     Ok(match name {
         "version" => json!(crate::version()),
+        // Очередь плеера «Музыки» (MUSIC-1): порядок воспроизведения — один на все клиенты
+        name if name.starts_with("musicQueue") => music_queue_call(name, &a)?,
         // Модули приложения (MODULES-1): правила списка — одни на все клиенты, клиент хранит настройки как JSON
         "modulesView" => serde_json::to_value(crate::modules::view(a.raw("prefs"), a.raw("serverOff"), a.raw("available"))).map_err(|_| err(ProtoError::Malformed))?,
         "modulesSetOn" => serde_json::to_value(crate::modules::set_on(a.raw("prefs"), a.s("id")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,

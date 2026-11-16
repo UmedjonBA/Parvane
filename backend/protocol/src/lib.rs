@@ -23,6 +23,7 @@ pub mod history;
 /// Разбор свободного ввода «Здоровья» (spec 038).
 pub mod health_parse;
 pub mod modules;
+pub mod music_queue;
 pub mod hold;
 pub mod host;
 pub mod identity;

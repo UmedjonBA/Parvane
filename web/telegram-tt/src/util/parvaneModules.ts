@@ -10,8 +10,8 @@ export type ParvaneModuleId = 'chats' | 'plan' | 'health' | 'notes' | 'files' | 
 export type HealthBlockId = 'sleep' | 'body' | 'food' | 'water' | 'workouts';
 
 export const HEALTH_BLOCK_IDS: HealthBlockId[] = ['sleep', 'body', 'food', 'water', 'workouts'];
-// Модули, экраны которых есть в web: «Музыка» появится со своими экранами
-const AVAILABLE_MODULES: ParvaneModuleId[] = ['chats', 'plan', 'health', 'notes', 'files', 'profile'];
+// Модули, экраны которых есть в web
+const AVAILABLE_MODULES: ParvaneModuleId[] = ['chats', 'plan', 'health', 'notes', 'files', 'music', 'profile'];
 
 const PREFS_KEY = 'parvane:modules';
 const SERVER_KEY = 'parvane:modules-server-off';

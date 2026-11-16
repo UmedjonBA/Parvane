@@ -60,7 +60,7 @@ try {
   // ── Панель: видна без папок, в ней только разделы; меню «☰» нет ни в ней, ни в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 6, 'в панели шесть модулей: чаты, план, здоровье, заметки, файлы, профиль');
+  assert.equal(await sidebar.getByRole('tab').count(), 7, 'в панели семь модулей: чаты, план, здоровье, заметки, файлы, музыка, профиль');
   assert.equal(await sidebar.getByRole('button', { name: 'Search' }).count(), 1, 'внизу панели — «Поиск»');
   assert.equal(await sidebar.getByRole('button', { name: 'New entry' }).count(), 1, 'внизу панели — «+»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
@@ -77,7 +77,7 @@ try {
   // Над разделами — знак и надпись «parvane»
   assert.ok(geometry.firstTop - geometry.barTop < 110, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
-    geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.75,
+    geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.8,
     `модули должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
   );
   assert.ok(geometry.barBottom - geometry.profileBottom < 24, `«+» не у нижнего края: ${JSON.stringify(geometry)}`);
@@ -98,7 +98,7 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('#parvane-palette-search').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await waitForChatList(page, STEP_TIMEOUT_MS);
-  console.log('OK: панель — знак, шесть модулей сверху, «Поиск» и «+» внизу');
+  console.log('OK: панель — знак, семь модулей сверху, «Поиск» и «+» внизу');
 
   // ── Раздел «План» вместо колонок мессенджера ──────────────────────────────
   await openPlannerScreen(page, 'calendar');

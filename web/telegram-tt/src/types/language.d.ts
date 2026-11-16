@@ -2329,6 +2329,42 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'MusicHome': undefined;
+  'MusicStarred': undefined;
+  'MusicArtists': undefined;
+  'MusicAlbums': undefined;
+  'MusicPlayer': undefined;
+  'MusicServerLibrary': undefined;
+  'MusicSearchPlaceholder': undefined;
+  'MusicLoading': undefined;
+  'MusicLoadFailed': undefined;
+  'MusicNotConnected': undefined;
+  'MusicMixTitle': undefined;
+  'MusicMixSoon': undefined;
+  'MusicRecentlyPlayed': undefined;
+  'MusicNewOnServer': undefined;
+  'MusicNothingFound': undefined;
+  'MusicStarredEmpty': undefined;
+  'MusicEmpty': undefined;
+  'MusicPlayAll': undefined;
+  'MusicNowPlaying': undefined;
+  'MusicStar': undefined;
+  'MusicUnstar': undefined;
+  'MusicPlayNext': undefined;
+  'MusicQueueEmpty': undefined;
+  'MusicQueueClear': undefined;
+  'MusicPlayError': undefined;
+  'MusicPosition': undefined;
+  'MusicPlay': undefined;
+  'MusicPause': undefined;
+  'MusicNext': undefined;
+  'MusicPrevious': undefined;
+  'MusicShuffleOn': undefined;
+  'MusicShuffleOff': undefined;
+  'MusicRepeatOff': undefined;
+  'MusicRepeatAll': undefined;
+  'MusicRepeatOne': undefined;
+  'MusicOpenPlayer': undefined;
   'HealthQuickPlaceholder': undefined;
   'HealthQuickLabel': undefined;
   'HealthQuickEnter': undefined;
@@ -5000,6 +5036,20 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneModuleMoveDown': {
     'name': V;
   };
+  'MusicListTime': {
+    'hours': V;
+    'minutes': V;
+  };
+  'MusicQueueRemove': {
+    'name': V;
+  };
+  'MusicQueueTitle': {
+    'count': V;
+  };
+  'MusicWidgetOpen': {
+    'title': V;
+    'artist': V;
+  };
   'HealthQuickUnparsed': {
     'text': V;
   };
@@ -6259,6 +6309,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PollModalAddMoreText': {
+    'count': V;
+  };
+  'MusicAlbumsCount': {
     'count': V;
   };
   'ParvaneCloudTrashDaysLeft': {

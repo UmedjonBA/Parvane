@@ -105,6 +105,7 @@ import { findFirstMessageIdAfterDate, searchMessages } from './localSearch';
 import { createLocalState } from './localState';
 import { createMediaService } from './media';
 import { createMessageController } from './messages';
+import { createMusicApi } from './musicApi';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { buildOldLangPack } from './oldLangPack';
 import { hydratePersonal } from './personalStore';
@@ -2678,10 +2679,17 @@ const healthMethods = createHealthApi({
   log: logDebug,
 });
 
+// «Музыка» (spec 039): методы раздела — `musicApi.ts`
+const musicMethods = createMusicApi({
+  call: (method, request) => getV2Bridge().control.call(method, request),
+  log: logDebug,
+});
+
 const methods = {
   // Языковые пакеты из сборки (fallback.strings / ru.strings)
   ...langPackMethods,
   ...healthMethods,
+  ...musicMethods,
 
   fetchAppConfig({ hash }: { hash?: number }) {
     return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);

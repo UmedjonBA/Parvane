@@ -1,4 +1,4 @@
-// Модули (spec 041, этап A; MODULES-1). Стек сценария объявляет «Заметки» выключенными администратором.
+// Модули (spec 041, этап A; MODULES-1). Стек сценария объявляет «Заметки» и «Музыку» выключенными администратором.
 // Компьютер: панель строится из списка модулей, экран «Профиль → Модули» выключает модуль — он пропадает из
 // панели и общего поиска и не возвращается после перезагрузки; модуль, выключенный сервером, включить нельзя;
 // порядок меняется. Телефон: лента до пяти модулей делит ширину, «+» над лентой, в «Профиле» кнопки нет.
@@ -30,6 +30,17 @@ async function expectModules(page, root, expected, message) {
   });
 }
 
+// Закрыть меню «+». Пункты закрытого меню остаются в разметке, поэтому признак закрытия — подложка меню: она
+// есть, только пока меню открыто, и перехватывает нажатия. Escape, а если фокус ушёл — нажатие мимо меню
+async function closeAddMenu(page) {
+  const backdrop = page.locator('.Menu .backdrop');
+  const isClosed = () => backdrop.count().then((count) => count === 0);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  if (!(await isClosed())) await page.mouse.click(20, 120);
+  await page.waitForFunction(() => !document.querySelector('.Menu .backdrop'), undefined, { timeout: WAIT_MS });
+}
+
 async function openModulesScreen(page, root) {
   await page.locator(`${root} [data-module="profile"]`).click();
   await page.getByText('Modules', { exact: true }).first().click();
@@ -45,7 +56,7 @@ try {
   const { page } = sessions.desktop;
   const SIDE = '#FoldersSidebar';
 
-  // «Заметки» выключены сервером, «Музыки» в web ещё нет
+  // «Заметки» и «Музыка» выключены сервером
   await expectModules(page, SIDE, ['chats', 'plan', 'health', 'files', 'profile'], 'состав панели при входе');
   console.log('OK: панель — модули устройства без выключенного сервером');
 
@@ -53,7 +64,9 @@ try {
   const notesSwitch = page.locator('[role="switch"][data-module="notes"]');
   assert.equal(await notesSwitch.isDisabled(), true, 'модуль, выключенный сервером, включается');
   assert.equal(await notesSwitch.getAttribute('aria-checked'), 'false');
-  await page.getByText('Turned off by the server administrator').waitFor({ state: 'visible', timeout: WAIT_MS });
+  // Сервер выключил два модуля — подпись стоит у обоих
+  await page.getByText('Turned off by the server administrator').first().waitFor({ state: 'visible', timeout: WAIT_MS });
+  assert.equal(await page.locator('[role="switch"][data-module="music"]').isDisabled(), true, '«Музыка», выключенная сервером, включается');
   assert.equal(await page.locator('[role="switch"][data-module="chats"]').isDisabled(), true, '«Чаты» выключаются');
   assert.equal(await page.locator('[role="switch"][data-module="profile"]').isDisabled(), true);
   console.log('OK: «Чаты» и «Профиль» заперты, модуль сервера не включить');
@@ -141,13 +154,13 @@ try {
   assert(addBox.y + addBox.height <= ribbonBox.y, '«+» перекрывает ленту');
   await add.click();
   await mobile.getByRole('menuitem', { name: 'New Group' }).waitFor({ state: 'visible', timeout: WAIT_MS });
-  await mobile.keyboard.press('Escape');
+  await closeAddMenu(mobile);
   console.log('OK: «+» над лентой, в «Чатах» — меню');
 
   await ribbon.locator('[data-module="files"]').click();
   await mobile.locator('[data-add-for="files"]').click();
   await mobile.getByRole('menuitem', { name: 'New folder' }).waitFor({ state: 'visible', timeout: WAIT_MS });
-  await mobile.keyboard.press('Escape');
+  await closeAddMenu(mobile);
   await ribbon.locator('[data-module="profile"]').click();
   await mobile.locator('[data-add-for]').waitFor({ state: 'detached', timeout: WAIT_MS });
   console.log('OK: в «Файлах» своё меню, в «Профиле» кнопки нет');

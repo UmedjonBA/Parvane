@@ -67,6 +67,7 @@ import {
 } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
 import { callApi } from '../../api/gramjs';
+import { getCurrentTrack, getMusicPlayer } from '../parvane/music/musicPlayer';
 import { getActiveModule } from './parvaneModuleNav';
 
 import useInterval from '../../hooks/schedulers/useInterval';
@@ -101,6 +102,7 @@ import Cloud from '../parvane/Cloud.async';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
 import Health from '../parvane/Health.async';
 import Knowledge from '../parvane/Knowledge.async';
+import Music from '../parvane/Music.async';
 import ParvanePalette from '../parvane/palette/ParvanePalette.async';
 import Planner from '../parvane/Planner.async';
 import RightColumn from '../right/RightColumn';
@@ -806,6 +808,7 @@ const Main = ({
   const chatBackgroundColor = backgroundColor || schemeChatColors?.background;
   const isPlannerOpen = parvaneSection === 'planner';
   const isHealthOpen = parvaneSection === 'health';
+  const isMusicOpen = parvaneSection === 'music';
   const isCloudOpen = parvaneSection === 'cloud';
   const knowledgeView = useDerivedState(getKnowledgeView);
   // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
@@ -826,6 +829,11 @@ const Main = ({
   const isPlannerMountedRef = useRef(false);
   const shouldMountPlanner = isPlannerOpen || isPlannerMountedRef.current;
   isPlannerMountedRef.current = shouldMountPlanner;
+  // Мини-плеер над лентой телефона: есть что играть и открыта не сама «Музыка»
+  const isMiniPlayerShown = Boolean(getCurrentTrack(useDerivedState(getMusicPlayer))) && !isMusicOpen;
+  const isMusicMountedRef = useRef(false);
+  const shouldMountMusic = isMusicOpen || isMusicMountedRef.current;
+  isMusicMountedRef.current = shouldMountMusic;
   const isHealthMountedRef = useRef(false);
   const shouldMountHealth = isHealthOpen || isHealthMountedRef.current;
   isHealthMountedRef.current = shouldMountHealth;
@@ -856,10 +864,12 @@ const Main = ({
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
     isHealthOpen && 'section-health',
+    isMusicOpen && 'section-music',
     isCloudOpen && 'section-cloud',
     isCloudFilesOpen && 'section-cloud-files',
     isKnowledgeOpen && 'section-knowledge',
     isTabBarShown && 'parvane-tab-bar-shown',
+    isTabBarShown && isMiniPlayerShown && 'parvane-mini-player-shown',
   );
 
   const handleBlur = useLastCallback(() => {
@@ -906,6 +916,7 @@ const Main = ({
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
       {shouldMountPlanner && <Planner />}
       {shouldMountHealth && <Health />}
+      {shouldMountMusic && <Music />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
       {shouldMountKnowledge && <Knowledge />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}

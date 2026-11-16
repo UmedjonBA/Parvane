@@ -42,15 +42,13 @@ describe('Модули (MODULES-1)', () => {
     });
   });
 
-  it('настройки устройства: «Музыки» в web ещё нет, выключенное и порядок запоминаются', async () => {
+  it('настройки устройства: выключенное и порядок запоминаются, список сервера сильнее выбора', async () => {
     const {
       getModulesView, moveModule, setHealthBlockOn, setModuleOn, setServerOffModules,
     } = await import('./parvaneModules');
     await loadProtocol();
     await settle();
-    expect(getModulesView().enabled).toEqual(['chats', 'plan', 'health', 'notes', 'files', 'profile']);
-    const music = getModulesView().modules.find(({ id }) => id === 'music');
-    expect(music).toMatchObject({ isOn: false, isUnavailable: true });
+    expect(getModulesView().enabled).toEqual(['chats', 'plan', 'health', 'notes', 'files', 'music', 'profile']);
 
     setModuleOn('files', false);
     setModuleOn('chats', false);
@@ -59,7 +57,7 @@ describe('Модули (MODULES-1)', () => {
     setServerOffModules(['notes', 'smarthome']);
     await settle();
     const view = getModulesView();
-    expect(view.enabled).toEqual(['chats', 'health', 'plan', 'profile']);
+    expect(view.enabled).toEqual(['chats', 'health', 'plan', 'music', 'profile']);
     expect(view.prefs.healthBlocks).toEqual(['sleep', 'body', 'water']);
     expect(view.modules.find(({ id }) => id === 'notes')).toMatchObject({ isOn: false, isServerOff: true });
     expect(JSON.parse(localValues.get('parvane:modules')!)).toMatchObject({ off: ['files'] });

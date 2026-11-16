@@ -1941,6 +1941,20 @@
         "desktop": "открыто",
         "android": "открыто"
       }
+    },
+    {
+      "id": "MUSIC-1",
+      "title": "«Музыка»: порядок воспроизведения ведёт движок, плеер один на приложение",
+      "kind": "ui",
+      "record": "движок: статические вызовы musicQueueView / Start / Next{auto} / Prev / Jump / Shuffle{on, seed} / Repeat / Add{tracks, next} / Remove / Move / Clear; очередь — JSON {tracks, index, shuffle, repeat, order, seed}, ответ добавляет currentId и upcoming; сервер — методы music.* (spec 039)",
+      "behaviour": "Клиент хранит очередь как JSON и играет трек currentId; что играет следующим, «вперемешку» (порядок задаёт seed и одинаков на всех клиентах), повтор (весь список по кругу; один трек держится, только когда доигран сам), правку очереди считает движок — клиент этих правил не повторяет. Конец очереди без повтора останавливает воспроизведение. Плеер один на приложение и играет в любом модуле; очередь и играющий трек переживают перезапуск (возвращаются на паузе). Байты трека клиент берёт по подписанной ссылке music.stream.url и запрашивает новую до истечения срока. Рекомендаций в первой версии нет — на главной заглушка",
+      "sample": "conformance/music-queue/cases.json",
+      "status": "18 ноя 2026: движок — сделано (backend/protocol/src/music_queue.rs, тест tests/music_queue_vectors.rs); web — сделано (слушать: библиотека, плеер, любимое, поиск); добавление треков, плейлисты, карточка в чат и офлайн — открыто; desktop и android — открыто",
+      "clients": {
+        "web": "api/parvane/musicApi.ts, components/parvane/music/* (musicPlayer.ts — единственный плеер); тесты musicFormat.test.ts, scripts/run_web_music_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
     }
   ]
 }

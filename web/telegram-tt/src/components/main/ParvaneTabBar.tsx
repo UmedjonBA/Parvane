@@ -21,6 +21,7 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useParvaneModules from '../../hooks/useParvaneModules';
 
+import MusicMiniPlayer from '../parvane/music/MusicMiniPlayer';
 import Menu from '../ui/Menu';
 import MenuItem from '../ui/MenuItem';
 import ParvaneIcon from './ParvaneIcon';
@@ -96,6 +97,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   // «+» зависит от модуля: в «Чатах» и «Файлах» — меню, в «Плане» и «Здоровье» — быстрый ввод записи,
   // в «Заметках» — новая заметка; в «Профиле» кнопки нет
   const hasAddMenu = activeModule === 'chats' || activeModule === 'files';
+  // «Музыка»: добавление треков появится вместе с загрузкой — пока кнопки нет
   const handleAddClick = useLastCallback(() => {
     if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
@@ -120,6 +122,8 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
 
   return (
     <>
+      {/* Мини-плеер «Музыки»: в самой «Музыке» плеер уже на экране */}
+      {activeModule !== 'music' && <MusicMiniPlayer />}
       <nav className={styles.root} aria-label={lang('ParvaneModules')} data-modules={modules.join(' ')}>
         {isScrollable && (
           <button
@@ -168,7 +172,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
           </button>
         )}
       </nav>
-      {activeModule !== 'profile' && (
+      {activeModule !== 'profile' && activeModule !== 'music' && (
         <div className={styles.addWrap}>
           <button
             type="button"

@@ -23,6 +23,7 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useParvaneModules from '../../hooks/useParvaneModules';
 
+import MusicMiniPlayer from '../parvane/music/MusicMiniPlayer';
 import Menu from '../ui/Menu';
 import MenuItem from '../ui/MenuItem';
 import ParvaneIcon from './ParvaneIcon';
@@ -66,7 +67,8 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
 
   // «+» зависит от модуля, как на телефоне: меню в «Чатах», «Файлах» и «Профиле», быстрый ввод записи
   // в «Плане» и «Здоровье», новая заметка в «Заметках»
-  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'profile';
+  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'profile'
+    || activeModule === 'music';
   const handleAddClick = useLastCallback(() => {
     if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
@@ -126,6 +128,7 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
         ))}
       </div>
       <div className={styles.spacer} />
+      <MusicMiniPlayer isCompact />
       {/* Общий поиск (палитра): заметки, записи «Плана», чаты и команды. То же — Ctrl+K */}
       <button
         type="button"
