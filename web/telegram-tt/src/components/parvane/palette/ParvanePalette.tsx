@@ -5,6 +5,7 @@ import { getActions, getGlobal } from '../../../global';
 
 import type { GlobalState } from '../../../global/types';
 import type { LangFn } from '../../../util/localization';
+import type { ParvaneModuleId } from '../../../util/parvaneModules';
 import type { ParvaneIconName } from '../../main/ParvaneIcon';
 import type { PaletteGroup, PaletteItem, PaletteRange } from './paletteSearch';
 import { LeftColumnContent } from '../../../types';
@@ -39,6 +40,7 @@ import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import Modal from '../../ui/Modal';
@@ -165,34 +167,39 @@ const ParvanePalette = () => {
     openChat({ id: chatId, shouldReplaceHistory: true });
   });
 
+  const { enabled: enabledModules } = useParvaneModules();
+  const isNotesOn = enabledModules.includes('notes');
+  const isPlanOn = enabledModules.includes('plan');
+
   const commands = useMemo((): PaletteEntry[] => {
-    const command = (key: string, title: string, icon: ParvaneIconName, run: NoneToVoidFunction): PaletteEntry => (
-      withNormalized({
-        key, group: 'command', title, icon, tone: ACCENT, run,
-      })
-    );
+    // Команда выключенного модуля в поиске не показывается (экран «Модули»)
+    const command = (
+      module: ParvaneModuleId, key: string, title: string, icon: ParvaneIconName, run: NoneToVoidFunction,
+    ): PaletteEntry | undefined => (!enabledModules.includes(module) ? undefined : withNormalized({
+      key, group: 'command', title, icon, tone: ACCENT, run,
+    }));
     return [
-      command('nav:chats', lang('ParvaneSectionMessenger'), 'chat', () => {
+      command('chats', 'nav:chats', lang('ParvaneSectionMessenger'), 'chat', () => {
         setParvaneSection('messenger');
         openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
       }),
-      command('nav:today', lang('PlannerToday'), 'sun', () => openPlannerView('today')),
-      command('nav:calendar', lang('PlannerViewCalendar'), 'calendar', () => openPlannerView('calendar')),
-      command('nav:knowledge', lang('ParvaneSectionKnowledge'), 'book', () => openKnowledgeView('notes')),
-      command('nav:health', lang('PlannerHealth'), 'heart', () => openPlannerView('health')),
-      command('nav:cloud', lang('ParvaneSectionCloud'), 'cloud', () => openKnowledgeView('files')),
-      command('quick', lang('PlannerQuickTitle'), 'plus', () => requestPlannerAdd()),
-      command('quick:sleep', lang('ParvanePaletteLogSleep'), 'plus', () => (
+      command('plan', 'nav:today', lang('PlannerToday'), 'sun', () => openPlannerView('today')),
+      command('plan', 'nav:calendar', lang('PlannerViewCalendar'), 'calendar', () => openPlannerView('calendar')),
+      command('notes', 'nav:knowledge', lang('ParvaneModuleNotes'), 'note', () => openKnowledgeView('notes')),
+      command('health', 'nav:health', lang('PlannerHealth'), 'heart', () => openPlannerView('health')),
+      command('files', 'nav:cloud', lang('ParvaneModuleFiles'), 'folder', () => openKnowledgeView('files')),
+      command('plan', 'quick', lang('PlannerQuickTitle'), 'plus', () => requestPlannerAdd()),
+      command('health', 'quick:sleep', lang('ParvanePaletteLogSleep'), 'plus', () => (
         requestPlannerAddText(`${lang('ParvanePaletteSleepText')} `)
       )),
-      command('quick:food', lang('ParvanePaletteLogFood'), 'plus', () => (
+      command('health', 'quick:food', lang('ParvanePaletteLogFood'), 'plus', () => (
         requestPlannerAddText(`${lang('ParvanePaletteFoodText')} `)
       )),
       // Заметка с таким названием уже есть — откроется она, иначе раздел создаст новую
-      command('newnote', lang('KnowledgeNewNote'), 'note', () => openNote(lang('KnowledgeNewNote'))),
-      command('settings', lang('PlannerSettings'), 'sliders', () => requestPlannerSettings()),
-    ];
-  }, [lang]);
+      command('notes', 'newnote', lang('KnowledgeNewNote'), 'note', () => openNote(lang('KnowledgeNewNote'))),
+      command('plan', 'settings', lang('PlannerSettings'), 'sliders', () => requestPlannerSettings()),
+    ].filter(Boolean);
+  }, [lang, enabledModules]);
 
   // Список чатов берётся на момент открытия: пока палитра открыта, он почти не меняется
   const chats = useMemo(
@@ -202,7 +209,7 @@ const ParvanePalette = () => {
 
   // Строки для сравнения приводятся здесь, один раз на список (E2): раньше `matchItem` нормализовал полный
   // текст каждой заметки на каждое нажатие клавиши
-  const noteEntries = useMemo((): PaletteEntry[] => (!isOpen ? [] : notes.map((note) => withNormalized({
+  const noteEntries = useMemo((): PaletteEntry[] => (!isOpen || !isNotesOn ? [] : notes.map((note) => withNormalized({
     key: `note:${note.id}`,
     group: 'note',
     title: note.title,
@@ -211,17 +218,17 @@ const ParvanePalette = () => {
     tone: folderColor(note.folder, note.isDaily),
     meta: note.folder.split('/')[0],
     run: () => openNote(note.title),
-  }))), [isOpen, notes]);
+  }))), [isOpen, isNotesOn, notes]);
 
   const recordEntries = useMemo((): PaletteEntry[] => {
-    if (!isOpen || !isPlannerLoaded || !planner) return [];
+    if (!isOpen || !isPlanOn || !isPlannerLoaded || !planner) return [];
     return collectPlannerRecords(planner, toDayKey(new Date())).map((record) => withNormalized({
       ...record,
       ...RECORD_LOOK[record.kind],
       meta: record.day ? formatDayShort(lang, record.day) : lang('PlannerUndatedShort'),
       run: () => openRecordInPlan({ kind: record.kind, id: record.id, day: record.day }),
     }));
-  }, [isOpen, isPlannerLoaded, planner, lang]);
+  }, [isOpen, isPlanOn, isPlannerLoaded, planner, lang]);
 
   const items = useMemo(
     () => (isPlanScope ? recordEntries : [...commands, ...chats, ...noteEntries, ...recordEntries]),

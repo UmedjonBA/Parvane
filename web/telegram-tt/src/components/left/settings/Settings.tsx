@@ -27,6 +27,7 @@ import SettingsGeneralBackgroundColor from './SettingsGeneralBackgroundColor';
 import SettingsHeader from './SettingsHeader';
 import SettingsLanguage from './SettingsLanguage';
 import SettingsMain from './SettingsMain';
+import SettingsModules from './SettingsModules';
 import SettingsNotifications from './SettingsNotifications';
 import SettingsPerformance from './SettingsPerformance';
 import SettingsPrivacy from './SettingsPrivacy';
@@ -354,6 +355,13 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.Performance:
         return (
           <SettingsPerformance
+            isActive={isScreenActive}
+            onReset={handleReset}
+          />
+        );
+      case SettingsScreens.ParvaneModules:
+        return (
+          <SettingsModules
             isActive={isScreenActive}
             onReset={handleReset}
           />

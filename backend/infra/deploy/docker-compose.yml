@@ -137,8 +137,8 @@ services:
       # Раздел «Облако» (spec 016): место на аккаунт и предел одного файла
       # (шифртекст; 2 ГиБ открытого текста + запас PVB2). Медиа чатов — прежние
       # пределы шарда (4 ГиБ / 512 МиБ).
-      PARVANE_CLOUD_DRIVE_QUOTA_BYTES: ${PARVANE_CLOUD_DRIVE_QUOTA_BYTES:-10737418240}
-      PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES: ${PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES:-2306867200}
+      PARVANE_CLOUD_DRIVE_QUOTA_BYTES: ${PARVANE_CLOUD_DRIVE_QUOTA_BYTES:-21474836480}
+      PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES: ${PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES:-4613734400}
       # Ссылки облака для людей без аккаунта (spec 022): выключатель создания
       # (0 — новых ссылок нет, прежние живут до срока либо отзыва), файлов в
       # одной ссылке, ссылок на аккаунт, дней на продление истёкшей ссылки.

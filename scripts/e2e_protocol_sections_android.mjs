@@ -223,7 +223,7 @@ try {
     await cloud.folderRow(WEB_SHARED).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   await step(`web: в «Знаниях» заметка «${WEB_NOTE}»`, async () => {
-    await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+    await sidebar.getByRole('tab', { name: 'Notes' }).click();
     await knowledge.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await noteRow('Overview').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await knowledge.getByRole('button', { name: 'New note' }).click();
@@ -312,7 +312,7 @@ try {
   if (await xWait(notesRe(X_NOTE), 60000).then(() => true, () => false)) {
     ok(`X: заметка «${X_NOTE}» создана`);
     await check(`web: заметка X «${X_NOTE}» в «Знаниях» ≤ 60 с`, () => timed('заметка', async () => {
-      await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+      await sidebar.getByRole('tab', { name: 'Notes' }).click();
       await knowledge.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await noteRow(X_NOTE).waitFor({ state: 'visible', timeout: WEB_SYNC_BUDGET_MS });
     }));

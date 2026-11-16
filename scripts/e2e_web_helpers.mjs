@@ -9,8 +9,9 @@ export const LOGIN_TIMEOUT_MS = 60000;
 export const RECONNECT_TIMEOUT_MS = 30000;
 
 // --- Оболочка: меню «☰» в шапке списка чатов нет, его пункты — в «Профиле» (главный экран настроек).
-// «Профиль» открывает кнопка `Profile`: на компьютере — в боковой панели `#FoldersSidebar`, на телефоне — в
-// нижней панели (`navigation` `Sections`). Вернуться к списку чатов — вкладка/кнопка `Chats` там же.
+// «Профиль» — модуль `Profile`: на компьютере — вкладка боковой панели `#FoldersSidebar`, на телефоне — кнопка
+// нижней ленты (`navigation` `Modules`). Вернуться к списку чатов — вкладка/кнопка `Chats` там же. «+» (`New entry`)
+// — отдельная кнопка `[data-add-for]`: на телефоне плавает над лентой, на компьютере стоит внизу панели.
 
 // Признак «показан список чатов»: заголовок «Чаты» в шапке списка. Он есть на обеих ширинах и только в
 // состоянии списка — в поиске, контактах, настройках и при открытой панели форума его нет
@@ -31,8 +32,8 @@ export async function waitForChatList(page, timeout = LOGIN_TIMEOUT_MS) {
 // название входит счётчик непрочитанного — поэтому по началу названия
 function shellButton(page, name) {
   const pattern = new RegExp(`^${name}`);
-  const rail = page.locator('#FoldersSidebar').getByRole(name === 'Profile' ? 'button' : 'tab', { name: pattern });
-  const bar = page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: pattern });
+  const rail = page.locator('#FoldersSidebar').getByRole('tab', { name: pattern });
+  const bar = page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: pattern });
   return rail.or(bar).first();
 }
 
@@ -120,10 +121,11 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   const tabName = screen === 'health' ? 'Health' : 'Calendar';
   const rail = page.locator('#FoldersSidebar');
   if (await rail.isVisible().catch(() => false)) {
-    await rail.getByRole('tab', { name: tabName, exact: true }).click();
+    // Модуль «План» в панели называется Planner, «Здоровье» — отдельный модуль
+    await rail.getByRole('tab', { name: screen === 'health' ? 'Health' : 'Planner', exact: true }).click();
   } else {
     if (!(await planner.isVisible().catch(() => false))) {
-      await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Planner' }).click();
+      await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Planner' }).click();
     }
     await planner.locator('header').getByText(tabName, { exact: true }).first().click();
   }

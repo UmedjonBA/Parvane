@@ -29,6 +29,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMouseInside from '../../../hooks/useMouseInside';
 import useOldLang from '../../../hooks/useOldLang';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Icon from '../../common/icons/Icon';
 import ArticlePickerModal from '../../parvane/article/ArticlePickerModal';
@@ -98,6 +99,11 @@ const AttachMenu = ({
   const [handleMouseEnter, handleMouseLeave, markMouseInside] = useMouseInside(isAttachMenuOpen, closeAttachMenu);
   // Parvane (spec 011): задание в чат — форма открывается из меню вложений
   const [isTaskOfferOpen, openTaskOffer, closeTaskOffer] = useFlag();
+  // Пункты выключенных модулей в меню не показываются (экран «Модули»)
+  const { enabled: enabledModules } = useParvaneModules();
+  const isFilesOn = enabledModules.includes('files');
+  const isNotesOn = enabledModules.includes('notes');
+  const isPlanOn = enabledModules.includes('plan');
   const [isArticleOpen, openArticle, closeArticle] = useFlag();
 
   const canSendVideoAndPhoto = canSendPhotos && canSendVideos;
@@ -319,13 +325,13 @@ const AttachMenu = ({
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
             )}
             {/* GROUP-2: файл из облака уходит документом — без права на документы пункта нет */}
-            {!editingMessage && !isScheduled && canAttachMedia && canSendDocuments && (
+            {isFilesOn && !editingMessage && !isScheduled && canAttachMedia && canSendDocuments && (
               <MenuItem icon="folder" onClick={handleCloudAttach}>{lang('ParvaneCloudAttachFromCloud')}</MenuItem>
             )}
-            {!editingMessage && !isScheduled && (
+            {isNotesOn && !editingMessage && !isScheduled && (
               <MenuItem icon="document" onClick={handleArticlePick}>{lang('ArticleMenuItem')}</MenuItem>
             )}
-            {!editingMessage && !isScheduled && (
+            {isPlanOn && !editingMessage && !isScheduled && (
               <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>
             )}
           </Menu>

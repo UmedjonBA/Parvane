@@ -103,7 +103,7 @@ try {
   const { page } = sessions.alice;
   const knowledge = page.locator('#ParvaneKnowledge');
   const note = knowledge.locator('[data-note-id]');
-  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   // Справка нового хранилища пишется сама — заметку создаём после неё, чтобы «Обзор» её не перебил
   await knowledge.locator('[data-note-row="Overview"]').first().waitFor({ state: 'visible', timeout: 60000 });
   await knowledge.getByRole('button', { name: 'New note' }).click();
@@ -145,7 +145,7 @@ try {
   }).catch((e) => String(e));
   console.log(`перед перезагрузкой: неотправленные ${JSON.stringify(pending)}`);
   await relogin(page, PASSWORD);
-  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   await knowledge.locator(`[data-note-row="${title}"]`).first().click();
   await expectImageEmbed(note.locator('[data-note-body]'), 'карта.png');
   console.log('OK: заметка с картинкой, видео и таблицей; картинка после перезагрузки');
@@ -218,7 +218,7 @@ try {
   // Escape забирает висящее уведомление «Сохранено» — окно закрывается крестиком
   await bobPage.locator('.Modal').filter({ has: viewer }).getByRole('button', { name: 'Close' }).click();
   await viewer.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
-  await bobPage.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+  await bobPage.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   const bobRow = bobPage.locator(`#ParvaneKnowledge [data-note-row="${title}"]`).first();
   await bobRow.waitFor({ state: 'visible', timeout: 60000 });
   await bobRow.click();

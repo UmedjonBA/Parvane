@@ -246,14 +246,14 @@ try {
     await timed(`пусто ${round}: Календарь`, async () => { await openPlannerScreen(page, 'calendar'); await visible(planner, 'план'); });
     await timed(`пусто ${round}: Сегодня`, () => openPlannerScreen(page, 'today'));
     await timed(`пусто ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(planner.locator('[data-planner-health]'), 'здоровье'); });
-    await timed(`пусто ${round}: Знания`, async () => { await openSection('Knowledge'); await visible(knowledge, 'знания'); });
-    await timed(`пусто ${round}: Файлы`, async () => { await openSection('Cloud'); await visible(cloud, 'файлы'); });
+    await timed(`пусто ${round}: Знания`, async () => { await openSection('Notes'); await visible(knowledge, 'знания'); });
+    await timed(`пусто ${round}: Файлы`, async () => { await openSection('Files'); await visible(cloud, 'файлы'); });
     await timed(`пусто ${round}: Чаты`, async () => { await openSection('Chats'); await waitForChatList(page); });
   }
   await idle('простой в Чатах (пусто)', 20);
 
   // ── Данные: заметки со ссылками, записи плана, сообщения ───────────────────
-  await openSection('Knowledge');
+  await openSection('Notes');
   await visible(knowledge.locator('[data-note-row="Overview"]'), 'справка создана');
   const note = knowledge.locator('[data-note-id]');
   const noteTitle = (i) => `Заметка ${i}`;
@@ -315,14 +315,14 @@ try {
     await timed(`данные ${round}: Сегодня`, () => openPlannerScreen(page, 'today'));
     await timed(`данные ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(planner.locator('[data-planner-health]'), 'здоровье'); });
     await timed(`данные ${round}: Знания (заметки)`, async () => {
-      await openSection('Knowledge');
+      await openSection('Notes');
       await visible(knowledge.locator(`[data-note-row="${noteTitle(NOTES)}"]`), 'список заметок');
     });
     await timed(`данные ${round}: Граф`, async () => {
       await openTab('Graph');
       await page.waitForFunction((count) => document.querySelectorAll('[data-notes-graph] [data-node]').length >= count, NOTES, { timeout: STEP_TIMEOUT_MS });
     });
-    await timed(`данные ${round}: Файлы`, async () => { await openSection('Cloud'); await visible(cloud, 'файлы'); });
+    await timed(`данные ${round}: Файлы`, async () => { await openSection('Files'); await visible(cloud, 'файлы'); });
     await timed(`данные ${round}: Чаты`, async () => { await openSection('Chats'); await waitForChatList(page); });
   }
 
@@ -349,7 +349,7 @@ try {
   });
   await page.keyboard.press('Escape');
 
-  await openSection('Knowledge');
+  await openSection('Notes');
   await openTab('Notes');
   await knowledge.locator(`[data-note-row="${noteTitle(3)}"]`).click();
   await visible(note.locator('[data-note-body]'), 'заметка');
@@ -423,7 +423,7 @@ try {
   await timed('CPU×4: Календарь', async () => { await openPlannerScreen(page, 'calendar'); await visible(planner, 'план'); });
   await timed('CPU×4: Сегодня', () => openPlannerScreen(page, 'today'));
   await timed('CPU×4: Знания (заметки)', async () => {
-    await openSection('Knowledge');
+    await openSection('Notes');
     await visible(knowledge.locator(`[data-note-row="${noteTitle(NOTES)}"]`), 'список заметок');
   });
   await timed('CPU×4: Граф', async () => {
@@ -443,7 +443,7 @@ try {
     await page.locator('.Transition_slide-active > .MessageList .Message').filter({ hasText: `сообщение ${MESSAGES} ` }).first()
       .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
-  await openSection('Knowledge');
+  await openSection('Notes');
   await openTab('Canvas');
   await visible(card, 'карточка холста');
   await framed('CPU×4: холст: перетащить карточку (40 шагов)', async () => {

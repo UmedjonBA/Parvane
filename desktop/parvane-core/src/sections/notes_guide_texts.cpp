@@ -209,7 +209,7 @@ Parvane — мессенджер, план, здоровье, заметки и 
             {"files", 8, R"PV(Файлы и Облако)PV",
              R"PV(# Файлы и Облако
 
-Пункт «Облако» боковой панели, он же вкладка «Файлы» раздела «Знания». Личный диск: 10 ГБ на аккаунт, один файл — до 2 ГБ. Файлы шифруются на устройстве: сервер не видит ни имён, ни содержимого. #справка
+Пункт «Облако» боковой панели, он же вкладка «Файлы» раздела «Знания». Личный диск: 20 ГБ на аккаунт, один файл — до 4 ГБ. Файлы шифруются на устройстве: сервер не видит ни имён, ни содержимого. #справка
 
 ## Диск
 - Папки, загрузка файлов, переименование, перенос, поиск и сортировка.
@@ -563,7 +563,7 @@ Notes and links — [[Notes]]. Files on cards — [[Files and Cloud]]. Back: [[O
             {"files", 8, R"PV(Files and Cloud)PV",
              R"PV(# Files and Cloud
 
-“Cloud” in the sidebar, which is also the “Files” tab of “Knowledge”. A personal drive: 10 GB per account, one file up to 2 GB. Files are encrypted on the device: the server sees neither names nor content. #guide
+“Cloud” in the sidebar, which is also the “Files” tab of “Knowledge”. A personal drive: 20 GB per account, one file up to 4 GB. Files are encrypted on the device: the server sees neither names nor content. #guide
 
 ## The drive
 - Folders, uploads, renaming, moving, search and sorting.

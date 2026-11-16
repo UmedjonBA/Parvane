@@ -13,8 +13,8 @@ import type { NoteEditRequest } from './NoteView';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getNoteRequest, getParvaneSection,
-  setKnowledgeView, setParvaneSection,
+  consumeModuleAddRequest, consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest,
+  getNoteRequest, getParvaneSection, setKnowledgeView, setParvaneSection,
 } from '../../../util/parvaneSection';
 import { setCloudActive } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
@@ -121,6 +121,7 @@ const Knowledge = () => {
   const view = useDerivedState(getKnowledgeView);
   const planner = useDerivedState(getPlannerState);
   const noteRequest = useDerivedState(getNoteRequest);
+  const addRequest = useDerivedState(getModuleAddRequest);
   const guideOpenId = useDerivedState(getGuideOpenId);
   const currentUserId = useSelector(selectCurrentUserId);
 
@@ -282,6 +283,14 @@ const Knowledge = () => {
     expandGroup(folder?.path || ROOT_FOLDER);
     void createIn(folder?.id);
   });
+
+  // «+» навигации: новая заметка там же, где её создаёт кнопка раздела
+  useEffect(() => {
+    if (addRequest !== 'note' || status !== 'ready') return;
+    consumeModuleAddRequest();
+    if (view !== 'notes') setKnowledgeView('notes');
+    handleNew();
+  }, [addRequest, status, view]);
 
   const handleNewInFolder = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     expandGroup(e.currentTarget.dataset.groupKey!);

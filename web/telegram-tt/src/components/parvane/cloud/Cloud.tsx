@@ -15,7 +15,8 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import {
-  getIsParvaneScreenShown, getKnowledgeView, getParvaneSection, setParvaneSection,
+  consumeModuleAddRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest, getParvaneSection,
+  setParvaneSection,
 } from '../../../util/parvaneSection';
 import { formatFileSize } from '../../../util/textFormat';
 import {
@@ -483,6 +484,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
   };
 
   const handleNewFolder = useLastCallback(() => setDialog({ type: 'newFolder' }));
+
+  // «+» навигации: загрузка файлов либо новая папка
+  const addRequest = useDerivedState(getModuleAddRequest);
+  useEffect(() => {
+    if (addRequest !== 'upload' && addRequest !== 'folder') return;
+    consumeModuleAddRequest();
+    if (addRequest === 'upload') handlePickFiles();
+    else handleNewFolder();
+  }, [addRequest]);
   const handleNewShared = useLastCallback(() => setDialog({ type: 'newShared' }));
   const handleEmptyTrash = useLastCallback(() => setDialog({ type: 'emptyTrash' }));
 

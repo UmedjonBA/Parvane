@@ -47,6 +47,9 @@ const PATHS = {
   note: ['M6 3h9l4 4v14H6z', 'M14 3v5h5'],
   logout: ['M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4', 'M10 8l-4 4 4 4M6 12h10'],
   star: ['M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z'],
+  music: ['M9 18V5l11-2v13', 'M6 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6z', 'M17 13a3 3 0 1 0 0 6a3 3 0 1 0 0-6z'],
+  left: ['M15 5l-7 7 7 7'],
+  upload: ['M12 16V4M7 9l5-5 5 5', 'M4 20h16'],
 } satisfies Record<string, string[]>;
 
 export type ParvaneIconName = keyof typeof PATHS;

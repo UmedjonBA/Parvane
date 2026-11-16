@@ -219,6 +219,23 @@ export function openKnowledgeView(view: KnowledgeView) {
   setParvaneSection('cloud');
 }
 
+// «+» навигации в модулях «Заметки» и «Файлы»: новая заметка, загрузка файлов, новая папка. Запрос забирает
+// раздел, когда он показан и готов (как запрос новой записи «Плана»)
+export type ModuleAddRequest = 'note' | 'upload' | 'folder';
+const [getModuleAddRequest, setModuleAddRequest] = createSignal<ModuleAddRequest | undefined>(undefined);
+
+export { getModuleAddRequest };
+
+export function requestModuleAdd(request: ModuleAddRequest) {
+  if (request === 'note') openKnowledgeView(getKnowledgeView() === 'files' ? 'notes' : getKnowledgeView());
+  else openKnowledgeView('files');
+  setModuleAddRequest(request);
+}
+
+export function consumeModuleAddRequest() {
+  setModuleAddRequest(undefined);
+}
+
 // Запрос «открыть настройки плана» из «Профиля»: «План» открывает свои настройки и сбрасывает запрос
 // (как запрос новой записи). Пока раздел запрос не читает, «Профиль» просто открывает «Сегодня»
 const [getPlannerSettingsRequest, setPlannerSettingsRequest] = createSignal(false);

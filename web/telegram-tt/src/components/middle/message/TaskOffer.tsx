@@ -15,6 +15,7 @@ import { offerInPlanKey, parseOfferInPlanKey } from '../../parvane/taskOffer/tas
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
@@ -95,6 +96,7 @@ const TaskOffer = ({
     }
   });
 
+  const isPlanOn = useParvaneModules().enabled.includes('plan');
   const handleAccept = useLastCallback(() => respond(true));
   const handleDecline = useLastCallback(() => respond(false));
 
@@ -108,30 +110,8 @@ const TaskOffer = ({
   const nameOf = (userId: string) => getUserFullName(usersById[userId]) || userId;
   const meta = formatOfferWhen(lang, taskOffer);
 
-  return (
-    <div
-      className={styles.root}
-      data-task-offer={taskOffer.id}
-      data-kind={kind}
-      data-decision={String(taskOffer.myDecision)}
-      data-in-plan={String(isInPlan)}
-    >
-      <div className={styles.head}>
-        <span className={buildClassName(styles.badge, isEvent && styles.badgeEvent)}>
-          <Icon name={isEvent ? 'calendar' : 'check'} />
-        </span>
-        <div className={styles.titles}>
-          <span className={styles.label}>{lang(isEvent ? 'TaskOfferEventLabel' : 'TaskOfferLabel')}</span>
-          <span className={styles.name}>{taskOffer.name}</span>
-          {meta && <span className={styles.meta}>{meta}</span>}
-        </div>
-      </div>
-      {taskOffer.description && <p className={styles.description}>{taskOffer.description}</p>}
-      {Boolean(taskOffer.steps.length) && (
-        <ol className={styles.steps}>
-          {taskOffer.steps.map((step, index) => <li key={`${index}${step}`}>{step}</li>)}
-        </ol>
-      )}
+  function renderActions() {
+    return (
       <div className={styles.actions}>
         {isInPlan ? (
           <Button
@@ -159,6 +139,35 @@ const TaskOffer = ({
           </>
         )}
       </div>
+    );
+  }
+
+  return (
+    <div
+      className={styles.root}
+      data-task-offer={taskOffer.id}
+      data-kind={kind}
+      data-decision={String(taskOffer.myDecision)}
+      data-in-plan={String(isInPlan)}
+    >
+      <div className={styles.head}>
+        <span className={buildClassName(styles.badge, isEvent && styles.badgeEvent)}>
+          <Icon name={isEvent ? 'calendar' : 'check'} />
+        </span>
+        <div className={styles.titles}>
+          <span className={styles.label}>{lang(isEvent ? 'TaskOfferEventLabel' : 'TaskOfferLabel')}</span>
+          <span className={styles.name}>{taskOffer.name}</span>
+          {meta && <span className={styles.meta}>{meta}</span>}
+        </div>
+      </div>
+      {taskOffer.description && <p className={styles.description}>{taskOffer.description}</p>}
+      {Boolean(taskOffer.steps.length) && (
+        <ol className={styles.steps}>
+          {taskOffer.steps.map((step, index) => <li key={`${index}${step}`}>{step}</li>)}
+        </ol>
+      )}
+      {/* «План» выключен на устройстве — карточка остаётся текстом, без действий */}
+      {isPlanOn && renderActions()}
       {Boolean(taskOffer.responses.length) && (
         <div className={styles.responses}>
           {Boolean(accepted.length) && (

@@ -64,7 +64,7 @@ try {
       && rect.width > 0;
   });
 
-  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок');
   await knowledge.getByRole('button', { name: 'New note' }).click();
   await visible(note, 'открытая заметка');

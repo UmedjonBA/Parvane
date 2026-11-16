@@ -84,6 +84,14 @@ pub fn history_call(name: &str, args_json: &str) -> Result<String, JsValue> {
     }
 }
 
+/// Функции без клиента по имени — та же единая точка входа, что `pv_call` у desktop и android
+/// (`host::call::call_static`): правила списка модулей (`modules*`) и другие расчёты для показа, которые
+/// обязаны совпадать на всех клиентах. Результат — JSON-текст.
+#[wasm_bindgen(js_name = staticCall)]
+pub fn static_call(name: &str, args_json: &str) -> Result<String, JsValue> {
+    let args = parse_call_args(args_json)?;
+    parvane_protocol::host::call::call_static(name, &args).map(|v| v.to_string()).map_err(|e| JsValue::from_str(&e))
+}
 
 /// Материал гранта линковки + копия корня под ключом восстановления (поле `rb`).
 #[wasm_bindgen(js_name = grantWithRootBackup)]

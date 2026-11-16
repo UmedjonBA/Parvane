@@ -1217,7 +1217,7 @@ mod tests {
         // Готовый файл облака и незавершённая загрузка медиа — в счёте своих bucket'ов.
         assert_eq!(used.iter().map(|u| (u.0, u.1, u.2)).collect::<Vec<_>>(), vec![(0, 6, 10), (1, 6, 10)]);
         let real = usage_of(&c, "nobody@local").await;
-        assert_eq!(real[1].2, 10 * 1024 * 1024 * 1024);
+        assert_eq!(real[1].2, 20 * 1024 * 1024 * 1024);
         assert!(real[1].3 > real[0].3, "предел файла облака выше предела медиа");
         // Bucket не из схемы — отказ.
         let bad = req("cloud.blob.upload_chunk", "q@local", UploadChunkRequest { upload_id: String::new(), index: 0, data: vec![1], bucket: 9 });

@@ -71,7 +71,7 @@ try {
   };
 
   // ── Данные: заметка, задача и событие ─────────────────────────────────────
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок');
   // Справка нового хранилища пишется по одной заметке: дождаться её, чтобы не спорить с её записью
   await visible(knowledge.locator('[data-note-row="Overview"]'), '«Обзор» справки нового хранилища');
@@ -256,7 +256,7 @@ try {
   // Пустой список без запроса места не занимает — проверяем, что он есть, а не виден
   await page.locator('[data-palette-scope="plan"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   assert.equal(await input.getAttribute('placeholder'), 'Search the plan', 'подпись поля поиска по плану');
-  await input.fill('cloud');
+  await input.fill('files');
   await page.waitForTimeout(400);
   assert.equal(await group('command').count(), 0, 'в поиске по плану есть команды');
   await page.keyboard.press('Escape');
@@ -264,9 +264,9 @@ try {
   // Ctrl+K — по-прежнему общий поиск
   await page.keyboard.press('Control+k');
   await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
-  await input.fill('cloud');
-  await found('command', 'Cloud').click();
-  // Команда «Облако» — вкладка «Файлы» раздела «Знания»; лупа в шапке ищет по файлам
+  await input.fill('files');
+  await found('command', 'Files').click();
+  // Команда «Файлы» — вкладка «Файлы» раздела «Знания»; лупа в шапке ищет по файлам
   const cloud = page.locator('#ParvaneCloud');
   await visible(cloud, '«Файлы» по команде на телефоне');
   const cloudHeader = cloud.locator('header');

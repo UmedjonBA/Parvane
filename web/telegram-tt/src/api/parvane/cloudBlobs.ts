@@ -3,7 +3,7 @@ import {
   BLOB_DEFAULT_CHUNK, BLOB_HEADER_BYTES, BLOB_TAG_BYTES, decryptBlobChunks, sealBlobChunk, writeBlobHeader,
 } from './blobcrypt';
 
-// Parvane (spec 016): блобы раздела «Облако». Файл до 2 ГБ нельзя держать в
+// Parvane (spec 016): блобы раздела «Облако». Файл до 4 ГБ нельзя держать в
 // памяти целиком, поэтому и загрузка, и скачивание идут потоком:
 //   - шифртекст PVB2 (BLOB-1) детерминирован ключом и nonce, поэтому любой его
 //     отрезок вычисляется из нужных кусков файла (`File.slice`) — чанк облака

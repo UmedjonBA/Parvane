@@ -58,9 +58,9 @@ try {
   };
 
   // ── «Знания» в боковой панели; «Файлы» — вкладка, рядом заметки, граф и холст ──
-  await sidebar.getByRole('tab', { name: 'Cloud' }).click();
+  await sidebar.getByRole('tab', { name: 'Files' }).click();
   await visible(cloud, 'вкладка «Файлы»');
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок');
   console.log('OK: «Знания» открыты, «Файлы» — одна из вкладок');
 
@@ -102,7 +102,7 @@ try {
   await visible(planner, 'экран «Сегодня»');
   await page.waitForTimeout(1500);
   assert.equal(await planner.locator('[data-task-id]').count(), 0, 'справка завела задачи в «Плане»');
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(guide, 'папка справки после возврата в раздел');
   console.log(`OK: новое хранилище — папка «${GUIDE_FOLDER}» из ${GUIDE_NOTES} заметок, ссылки ведут на заметки справки`);
 
@@ -269,7 +269,7 @@ try {
   assert.equal(await sheet.locator('[data-task-id]').filter({ hasText: 'проверить обе GPU' }).count(), 0, 'пункт без даты — не задача');
   await sheetTask.locator('input[type="checkbox"]').check();
   await page.keyboard.press('Escape');
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await row(NOTE).click();
   await page.waitForFunction(() => document.querySelector('[data-note-body] input[type="checkbox"]')?.checked === true, undefined, {
     timeout: STEP_TIMEOUT_MS,
@@ -350,7 +350,7 @@ try {
   await page.locator('#planner-quick-input').fill(`созвон завтра 16:00 [[${NOTE}]]`);
   await page.locator('#planner-quick-input').press('Enter');
   await planner.getByText('Added:').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await row(NOTE).click();
   await visible(note.locator('[data-note-planned]').getByText('созвон'), 'событие в «Запланировано»');
   await visible(note.locator('[data-note-planned]').getByText('заказать блок питания'), 'задача из пункта в «Запланировано»');
@@ -489,7 +489,7 @@ try {
   await reloadPage(page);
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   // «Знания» в боковой панели открывают заметки — граф выбирается вкладкой
   await openTab('Graph');
   await visible(graph, 'вкладка графа после перезагрузки');
@@ -1500,7 +1500,7 @@ try {
     planner.locator('[data-today-note="text"]').getByText(DAILY_TEXT),
     'текст заметки дня на «Сегодня» после перезагрузки',
   );
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');
   assert.equal(await row(GUIDE_OVERVIEW).count(), 0, 'удалённая справка не вернулась после перезагрузки');

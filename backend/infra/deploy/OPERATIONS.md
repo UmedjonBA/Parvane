@@ -145,8 +145,8 @@ docker run --rm -v parvane_db-cloud:/data alpine sh -c 'ls -lh /data/*.db'
 df -h /                                     # свободно на хосте
 ```
 Пределы на аккаунт: медиа чатов — `PARVANE_CLOUD_OWNER_QUOTA_BYTES` (4 ГиБ), облако —
-`PARVANE_CLOUD_DRIVE_QUOTA_BYTES` (10 ГиБ, задан в compose); предел файла облака —
-`PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES`. Худший случай по диску — число аккаунтов × 14 ГиБ.
+`PARVANE_CLOUD_DRIVE_QUOTA_BYTES` (20 ГиБ, задан в compose); предел файла облака —
+`PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES`. Худший случай по диску — число аккаунтов × 24 ГиБ.
 
 Место удалённых файлов возвращается диску (`auto_vacuum = INCREMENTAL`; шард вызывает
 `incremental_vacuum` после удаления и раз в час). Режим действует для базы, созданной новым шардом;

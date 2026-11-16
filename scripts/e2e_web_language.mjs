@@ -25,7 +25,7 @@ let bobSession;
 
 // «Профиль» боковой панели — главный экран настроек (подпись кнопки зависит от языка)
 async function openSettings(page) {
-  await page.locator('#FoldersSidebar').getByRole('button', { name: /^(Profile|Профиль)$/ }).click();
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: /^(Profile|Профиль)$/ }).click();
   await page.locator('.settings-main-scroll').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 

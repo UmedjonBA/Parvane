@@ -91,6 +91,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 import useSchedule from '../../../hooks/useSchedule';
 import useShowTransition from '../../../hooks/useShowTransition';
 
@@ -637,6 +638,8 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
   });
 
   // Parvane (spec 016): файлы сообщения (альбома) — в папку облака
+  const isFilesModuleOn = useParvaneModules().enabled.includes('files');
+
   const handleSaveToCloud = useLastCallback(() => {
     const global = getGlobal();
     const files = (album?.messages || [message]).map((msg) => {
@@ -780,7 +783,7 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         canCopyLink={canCopyLink}
         canSelect={canSelect}
         canDownload={canDownload}
-        canSaveToCloud={canDownload}
+        canSaveToCloud={canDownload && isFilesModuleOn}
         canSaveGif={canSaveGif}
         canRevote={canRevote}
         canClosePoll={canClosePoll}

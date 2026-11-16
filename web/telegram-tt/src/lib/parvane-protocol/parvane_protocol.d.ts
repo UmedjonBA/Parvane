@@ -260,6 +260,13 @@ export function sealReport(admin_public: Uint8Array, reporter: string, plaintext
 export function start(): void;
 
 /**
+ * Функции без клиента по имени — та же единая точка входа, что `pv_call` у desktop и android
+ * (`host::call::call_static`): правила списка модулей (`modules*`) и другие расчёты для показа, которые
+ * обязаны совпадать на всех клиентах. Результат — JSON-текст.
+ */
+export function staticCall(name: string, args_json: string): string;
+
+/**
  * Открыть хранилище: байты корня (`root`) с носителя либо пусто — новый профиль (поколение 1, новый DEK;
  * обёртку даёт `storeWrapDevice`). Существующее — заблокировано до `storeUnlock`.
  */
@@ -339,6 +346,7 @@ export interface InitOutput {
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly start: () => void;
+    readonly staticCall: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly storeOpen: (a: number, b: number, c: number) => void;
     readonly verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly verifyServerDescriptor: (a: number, b: number, c: number) => void;

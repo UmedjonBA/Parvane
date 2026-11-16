@@ -52,7 +52,9 @@ import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvan
 import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
-import { getKnowledgeView, getParvaneSection } from '../../util/parvaneSection';
+import {
+  getKnowledgeView, getParvaneSection, getPlannerView, setParvaneSection,
+} from '../../util/parvaneSection';
 import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
   consumePendingInvite,
@@ -65,6 +67,7 @@ import {
 } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
 import { callApi } from '../../api/gramjs';
+import { getActiveModule } from './parvaneModuleNav';
 
 import useInterval from '../../hooks/schedulers/useInterval';
 import useTimeout from '../../hooks/schedulers/useTimeout';
@@ -74,6 +77,7 @@ import useDerivedState from '../../hooks/useDerivedState';
 import useForceUpdate from '../../hooks/useForceUpdate';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
+import useParvaneModules from '../../hooks/useParvaneModules';
 import usePrevDuringAnimation from '../../hooks/usePrevDuringAnimation';
 import usePreventPinchZoomGesture from '../../hooks/usePreventPinchZoomGesture';
 import useShowTransition from '../../hooks/useShowTransition';
@@ -805,6 +809,14 @@ const Main = ({
   // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
   const isCloudFilesOpen = isCloudOpen && knowledgeView === 'files';
   const isKnowledgeOpen = isCloudOpen && !isCloudFilesOpen;
+  // Открытый модуль выключили (экран «Модули», список сервера, сохранённый раздел прежнего запуска) —
+  // показываем «Чаты»: в выключенный модуль навигация не ведёт
+  const { enabled: enabledModules } = useParvaneModules();
+  const plannerView = useDerivedState(getPlannerView);
+  const openModuleId = getActiveModule(parvaneSection, plannerView, knowledgeView, false);
+  useEffect(() => {
+    if (!enabledModules.includes(openModuleId)) setParvaneSection('messenger');
+  }, [enabledModules, openModuleId]);
   // Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются смонтированными и скрываются
   // (`Main.scss`), как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не
   // теряет выбранный день, папку, заметку, положение списка. Запрос «новая запись» делят два раздела: окно

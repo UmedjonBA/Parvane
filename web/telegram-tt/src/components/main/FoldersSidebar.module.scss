@@ -5,7 +5,8 @@
 
   position: relative;
 
-  overflow: hidden auto;
+  // Меню «+» раскрывается вбок за пределы панели, поэтому прокручивается только список модулей
+  overflow: visible;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -36,12 +37,21 @@
 }
 
 .sections {
+  scrollbar-width: none;
+
+  overflow: hidden auto;
   display: flex;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 0.25rem;
   align-items: center;
 
   width: 100%;
+  min-height: 0;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .spacer {
@@ -113,4 +123,48 @@
   text-align: center;
 
   background: var(--pv-blue);
+}
+
+// «+» внизу панели: меню либо быстрый ввод — по открытому модулю
+.addWrap {
+  position: relative;
+  margin-top: 0.25rem;
+}
+
+.addButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 3.25rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.875rem;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--pv-blue);
+  }
+}
+
+.addButton .addIcon {
+  width: 1.5rem;
+  height: 1.5rem;
+  stroke-width: 2.4;
+}
+
+.addMenu {
+  position: absolute;
+  bottom: 0;
+  left: 100%;
+
+  width: 14.5rem;
+  margin-left: 0.5rem;
 }

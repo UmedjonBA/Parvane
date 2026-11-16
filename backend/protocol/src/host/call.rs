@@ -67,6 +67,10 @@ impl Args<'_> {
     fn n(&self, k: &'static str) -> Result<usize, String> {
         usize::try_from(self.u(k)?).map_err(|_| missing(k))
     }
+    /// Значение как есть; нет ключа — `null`.
+    fn raw(&self, k: &str) -> &Value {
+        self.0.get(k).unwrap_or(&Value::Null)
+    }
     fn flag(&self, k: &'static str) -> Result<bool, String> {
         self.0.get(k).and_then(Value::as_bool).ok_or_else(|| missing(k))
     }
@@ -609,6 +613,11 @@ pub fn call_static(name: &str, args: &Value) -> R {
     let a = Args(args);
     Ok(match name {
         "version" => json!(crate::version()),
+        // Модули приложения (MODULES-1): правила списка — одни на все клиенты, клиент хранит настройки как JSON
+        "modulesView" => serde_json::to_value(crate::modules::view(a.raw("prefs"), a.raw("serverOff"), a.raw("available"))).map_err(|_| err(ProtoError::Malformed))?,
+        "modulesSetOn" => serde_json::to_value(crate::modules::set_on(a.raw("prefs"), a.s("id")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,
+        "modulesMove" => serde_json::to_value(crate::modules::move_to(a.raw("prefs"), a.s("id")?, a.i("to")?)).map_err(|_| err(ProtoError::Malformed))?,
+        "modulesSetBlock" => serde_json::to_value(crate::modules::set_block(a.raw("prefs"), a.s("block")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,
         "protoMajor" => json!(crate::PROTO_MAJOR),
         // spec 035: пять осей версий (то же, что WASM `engineInfo` и C ABI `pv_engine_info`).
         "engineInfo" => serde_json::to_value(crate::engine_info()).map_err(|_| err(ProtoError::Malformed))?,
@@ -686,6 +695,7 @@ pub const NOT_ROUTED: &[(&str, &str)] = &[
     ("start", "инициализация модуля WASM (часы браузера)"),
     ("new", "конструктор PvAnonPlanner — pv_anon_planner_new"),
     ("historyCall", "диспетчер статических функций `history*` WASM — у хостов это call_static / pv_call"),
+    ("staticCall", "диспетчер функций без клиента WASM — у хостов это call_static / pv_call"),
     ("assign", "PvAnonPlanner — pv_anon_planner_*"),
     ("expired", "PvAnonPlanner — pv_anon_planner_*"),
     ("closed", "PvAnonPlanner — pv_anon_planner_*"),

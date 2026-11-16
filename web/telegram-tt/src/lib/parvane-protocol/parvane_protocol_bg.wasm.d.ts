@@ -55,6 +55,7 @@ export const recoveryTgOpen: (a: number, b: number, c: number, d: number, e: num
 export const runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
 export const sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const start: () => void;
+export const staticCall: (a: number, b: number, c: number, d: number, e: number) => void;
 export const storeOpen: (a: number, b: number, c: number) => void;
 export const verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const verifyServerDescriptor: (a: number, b: number, c: number) => void;

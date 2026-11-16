@@ -333,8 +333,8 @@ export const GUIDE_EN: GuideSet = {
         '# Files and Cloud',
         '',
         p(
-          '“Cloud” in the sidebar, which is also the “Files” tab of “Knowledge”. A personal drive: 10 GB per account,',
-          'one file up to 2 GB. Files are encrypted on the device: the server sees neither names nor content. #guide',
+          '“Cloud” in the sidebar, which is also the “Files” tab of “Knowledge”. A personal drive: 20 GB per account,',
+          'one file up to 4 GB. Files are encrypted on the device: the server sees neither names nor content. #guide',
         ),
         '',
         '## The drive',

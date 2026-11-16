@@ -39,14 +39,14 @@ try {
   const { page } = session;
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   const planner = page.locator('#ParvanePlanner');
-  const tabBar = page.getByRole('navigation', { name: 'Sections' });
+  const tabBar = page.getByRole('navigation', { name: 'Modules' });
   const input = page.locator('#planner-quick-input');
   const form = page.locator('form[data-quick-kind]');
   const chip = (field) => form.locator(`[data-quick-chip="${field}"]`);
   const addButton = form.getByRole('button', { name: 'Add', exact: true });
 
   const openQuick = async () => {
-    await tabBar.getByRole('button', { name: 'New entry' }).click();
+    await page.getByRole('button', { name: 'New entry' }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   };
   const expectKind = async (kind) => {
@@ -97,8 +97,8 @@ try {
   // ── «+» из списка чатов открывает «План» и строку ввода ───────────────────
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // На списке чатов «+» открывает меню, запись в план — его пункт
-  await tabBar.getByRole('button', { name: 'New entry' }).click();
-  await tabBar.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await page.getByRole('button', { name: 'New entry' }).click();
+  await page.getByRole('menuitem', { name: 'Planner entry' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await addButton.isDisabled(), true, 'пустую строку добавить нельзя');

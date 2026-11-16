@@ -220,6 +220,9 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
 
         <div className={styles.caption}>Parvane</div>
         <div className={styles.card}>
+          {renderScreenRow(
+            'sliders', lang('ParvaneModules'), SettingsScreens.ParvaneModules, lang('ParvaneProfileModulesHint'),
+          )}
           {renderActionRow(
             'sliders', lang('PlannerSettings'), lang('ParvaneProfilePlanHint'), handleOpenPlannerSettings,
           )}

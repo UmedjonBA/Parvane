@@ -12,6 +12,7 @@ import { findMedia } from './articleMedia';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
@@ -34,6 +35,9 @@ const ArticleViewer = ({
   const { showNotification } = getActions();
   const lang = useLang();
   const [isSaving, setIsSaving] = useState(false);
+
+  // «Заметки» выключены на устройстве — статья только читается
+  const isNotesOn = useParvaneModules().enabled.includes('notes');
 
   const handleSave = useLastCallback(async () => {
     setIsSaving(true);
@@ -79,11 +83,13 @@ const ArticleViewer = ({
     >
       <div data-article-viewer>
         <ArticleBody title={title} markdown={markdown} media={media} />
-        <div className={styles.viewerActions} data-article-save>
-          <Button size="smaller" noForcedUpperCase disabled={isSaving} onClick={handleSave}>
-            {lang('ArticleSaveToNotes')}
-          </Button>
-        </div>
+        {isNotesOn && (
+          <div className={styles.viewerActions} data-article-save>
+            <Button size="smaller" noForcedUpperCase disabled={isSaving} onClick={handleSave}>
+              {lang('ArticleSaveToNotes')}
+            </Button>
+          </div>
+        )}
       </div>
     </Modal>
   );

@@ -264,8 +264,8 @@ export interface LangPair {
   'ParvaneInviteRequested': undefined;
   'ParvaneInviteDeclined': undefined;
   'ParvaneUpgradeRequired': undefined;
-  'ParvaneStateNeedsUpdate': undefined;
   'ParvaneDataNeedsUpdate': undefined;
+  'ParvaneStateNeedsUpdate': undefined;
   'ParvaneMessageNeedsUpdate': undefined;
   'ParvaneDeviceLegacy': undefined;
   'ParvaneInviteEditUnsupported': undefined;
@@ -2305,6 +2305,30 @@ export interface LangPair {
   'ParvaneSectionCloud': undefined;
   'ParvaneTabBarAdd': undefined;
   'ParvaneTabBarProfile': undefined;
+  'ParvaneModules': undefined;
+  'ParvaneModuleNotes': undefined;
+  'ParvaneModuleFiles': undefined;
+  'ParvaneModuleMusic': undefined;
+  'ParvaneRibbonBack': undefined;
+  'ParvaneRibbonForward': undefined;
+  'ParvaneAddUpload': undefined;
+  'ParvaneAddFolder': undefined;
+  'ParvaneModulesHint': undefined;
+  'ParvaneModulesOrderHint': undefined;
+  'ParvaneModuleAlwaysOn': undefined;
+  'ParvaneModuleHidden': undefined;
+  'ParvaneModuleServerOff': undefined;
+  'ParvaneModuleSoon': undefined;
+  'ParvaneModulePlanHint': undefined;
+  'ParvaneModuleNotesHint': undefined;
+  'ParvaneModuleFilesHint': undefined;
+  'ParvaneModuleMusicHint': undefined;
+  'ParvaneHealthBlockSleep': undefined;
+  'ParvaneHealthBlockBody': undefined;
+  'ParvaneHealthBlockFood': undefined;
+  'ParvaneHealthBlockWater': undefined;
+  'ParvaneHealthBlockWorkouts': undefined;
+  'ParvaneProfileModulesHint': undefined;
   'ParvaneProfileTitle': undefined;
   'ParvaneCloudTabDrive': undefined;
   'ParvaneCloudTabShared': undefined;
@@ -4891,6 +4915,19 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneL2Disabled': {
     'user': V;
+  };
+  'ParvaneModuleHealthBlocks': {
+    'count': V;
+    'total': V;
+  };
+  'ParvaneModuleDrag': {
+    'name': V;
+  };
+  'ParvaneModuleMoveUp': {
+    'name': V;
+  };
+  'ParvaneModuleMoveDown': {
+    'name': V;
   };
   'ParvaneCloudSelected': {
     'count': V;

@@ -60,16 +60,16 @@ try {
   // ── Панель: видна без папок, в ней только разделы; меню «☰» нет ни в ней, ни в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 5, 'в панели пять разделов: чаты, календарь, здоровье, знания, облако');
+  assert.equal(await sidebar.getByRole('tab').count(), 6, 'в панели шесть модулей: чаты, план, здоровье, заметки, файлы, профиль');
   assert.equal(await sidebar.getByRole('button', { name: 'Search' }).count(), 1, 'внизу панели — «Поиск»');
-  assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'внизу панели — «Профиль»');
+  assert.equal(await sidebar.getByRole('button', { name: 'New entry' }).count(), 1, 'внизу панели — «+»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 0, 'меню «☰» убрано: его пункты в «Профиле»');
   // Разделы идут сверху под знаком, «Поиск» и «Профиль» прижаты к низу панели
   const geometry = await page.evaluate(() => {
     const bar = document.querySelector('#FoldersSidebar').getBoundingClientRect();
     const tabs = [...document.querySelectorAll('#FoldersSidebar [role="tablist"] > button')].map((el) => el.getBoundingClientRect());
-    const profile = document.querySelector('#FoldersSidebar > button:last-of-type').getBoundingClientRect();
+    const profile = document.querySelector('#FoldersSidebar [data-add-for]').getBoundingClientRect();
     return {
       barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top, profileBottom: profile.bottom,
     };
@@ -77,10 +77,10 @@ try {
   // Над разделами — знак и надпись «parvane»
   assert.ok(geometry.firstTop - geometry.barTop < 110, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
-    geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.6,
-    `разделы должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
+    geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.75,
+    `модули должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
   );
-  assert.ok(geometry.barBottom - geometry.profileBottom < 24, `«Профиль» не у нижнего края: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.barBottom - geometry.profileBottom < 24, `«+» не у нижнего края: ${JSON.stringify(geometry)}`);
   // Шапка списка чатов: заголовок, «Написать» с меню из четырёх пунктов; карандаша Telegram нет
   const chatsHeader = page.locator('#LeftMainHeader');
   await chatsHeader.getByRole('heading', { name: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -98,7 +98,7 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('#parvane-palette-search').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await waitForChatList(page, STEP_TIMEOUT_MS);
-  console.log('OK: панель — знак, пять разделов сверху, «Поиск» и «Профиль» внизу');
+  console.log('OK: панель — знак, шесть модулей сверху, «Поиск» и «+» внизу');
 
   // ── Раздел «План» вместо колонок мессенджера ──────────────────────────────
   await openPlannerScreen(page, 'calendar');
@@ -824,10 +824,10 @@ try {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.waitForTimeout(800);
   assert.equal(await isShown(page, '#FoldersSidebar'), false, 'на телефоне боковой панели нет');
-  const tabBar = page.getByRole('navigation', { name: 'Sections' });
+  const tabBar = page.getByRole('navigation', { name: 'Modules' });
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const barGeometry = await page.evaluate(() => {
-    const bar = document.querySelector('nav[aria-label="Sections"]').getBoundingClientRect();
+    const bar = document.querySelector('nav[aria-label="Modules"]').getBoundingClientRect();
     const list = document.querySelector('#LeftColumn').getBoundingClientRect();
     return { barTop: bar.top, barBottom: bar.bottom, listBottom: list.bottom, height: window.innerHeight };
   });
@@ -1001,7 +1001,7 @@ try {
   await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — виды в шапке, день карточкой под месяцем, форма шторкой, вид «День» с полосой недели');
   // «+» нижней панели открывает ввод текстом прямо в «Плане» (spec 017, сценарий quick_input)
-  await tabBar.getByRole('button', { name: 'New entry' }).click();
+  await page.getByRole('button', { name: 'New entry' }).click();
   await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
@@ -1032,8 +1032,9 @@ try {
   assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» возвращают к списку');
   await tabBar.locator('button[aria-current="page"]', { hasText: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // На списке чатов «+» — меню: новое сообщение, группа, канал, запись в план; карандаша Telegram нет
-  await tabBar.getByRole('button', { name: 'New entry' }).click();
-  const addMenu = tabBar;
+  await page.getByRole('button', { name: 'New entry' }).click();
+  // Меню «+» раскрывается у плавающей кнопки, вне ленты
+  const addMenu = page;
   for (const item of ['New Message', 'New Group', 'New Channel', 'Planner entry']) {
     await addMenu.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }

@@ -201,7 +201,7 @@ try {
   });
 
   await step(`web: в «Знаниях» заметка «${WEB_NOTE}»`, async () => {
-    await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+    await sidebar.getByRole('tab', { name: 'Notes' }).click();
     await knowledge.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     // Новое хранилище сначала пишет справку — после неё папка-хранилище уже есть
     await noteRow('Overview').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -301,7 +301,7 @@ try {
   } else fail(`web: папка desktop «${DESK_FOLDER}» (desktop её не создал)`);
   if (deskNote) {
     await check(`web: заметка desktop «${DESK_NOTE}» в «Знаниях» ≤ 60 с`, () => timed('заметка', async () => {
-      await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+      await sidebar.getByRole('tab', { name: 'Notes' }).click();
       await knowledge.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await noteRow(DESK_NOTE).waitFor({ state: 'visible', timeout: WEB_SYNC_BUDGET_MS });
       await noteRow(DESK_NOTE).click();

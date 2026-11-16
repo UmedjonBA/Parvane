@@ -42,12 +42,12 @@ import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
+import { getIsModuleOn, getModulesView } from '../../util/parvaneModules';
 import {
   clearWorkerReminders, isWorkerReminderShown, markWorkerReminderShown, saveWorkerReminders,
 } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
-import { preauth } from './v2/control';
 import {
   createV2Controller, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
@@ -64,11 +64,9 @@ import {
   clearLoginStorage,
   consumeLegacyCredentials,
   isSessionExpired,
-  isTokenDueForRenewal,
   parseLoginCredentials,
   readLoginAddress,
   readRememberMe,
-  readTokenClaims,
   saveLoginAddress,
   touchSessionActivity,
 } from './authStorage';
@@ -133,6 +131,8 @@ import {
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
+import { refreshServerModules } from './serverModules';
+import { createSessionRenewal } from './sessionRenewal';
 import {
   dropStickerRef, FAVORITE_STICKERS_LIMIT, matchStickersForEmoji, moveSetToTop, pushStickerRef, RECENT_STICKERS_LIMIT,
   resolveStickerRefs, sortSetsByOrder, stickerRefOf,
@@ -329,57 +329,17 @@ const L2_PREFETCH_MAX_BYTES = 32 * 1024 * 1024;
 // Полный выход: запись «устройство вышло» в журнал — сетевой шаг; стирание на устройстве его дольше не ждёт
 const LEAVE_TIMEOUT_MS = 5000;
 const MS_IN_SECOND = 1000;
-// Продление сессии без пароля (`identity.session.renew`): неудачную попытку повторяем не чаще раза в час
-const RENEW_RETRY_MS = 60 * 60 * 1000;
-// После продления по отказу сервера страница перезагружается; повторный отказ в этот срок — уже не истёкший
-// токен, а настоящий отзыв: второй раз не продлеваем, спрашиваем пароль
-const RENEW_RELOAD_GUARD_MS = 2 * 60 * 1000;
-const RENEW_RELOAD_GUARD_KEY = 'parvane:session-renewed-at';
-let lastRenewAttemptAt = 0;
-let renewInFlight: Promise<string | undefined> | undefined;
-
-/** Новый токен вместо `current` по подписи ключа устройства. `undefined` — сервер отказал, нет связи или у
- * устройства нет ключа в журнале: вызывающий остаётся с прежним токеном. Удачное продление сразу становится
- * токеном сессии (следующее подключение идёт уже с ним) и сохраняется для запуска без пароля. */
-function renewSessionToken(address: string, current: string): Promise<string | undefined> {
-  if (renewInFlight) return renewInFlight;
-  lastRenewAttemptAt = Date.now();
-  renewInFlight = (async () => {
-    try {
-      const deviceId = readTokenClaims(current)?.dev;
-      if (!deviceId) return undefined;
-      const proof = await v2Controller.renewProof(address, deviceId);
-      if (!proof) return undefined;
-      const reply = await preauth(getGatewayUrl(), 'identity.session.renew', {
-        token: current, device_proof: proof.proof, proof_ts_ms: String(proof.tsMs),
-      });
-      const next = typeof reply.token === 'string' ? reply.token : '';
-      if (!next) return undefined;
-      if (token === current) {
-        token = next;
-        getV2Bridge().setToken(next);
-      }
-      if (readRememberMe()) await saveSecureSession(address, next).catch(() => undefined);
-      lastRenewAttemptAt = 0; // пауза между попытками — только после неудачи
-      logDebug('сессия продлена без пароля');
-      return next;
-    } catch (err) {
-      logDebug(`продление сессии не удалось: ${String(err)}`);
-      return undefined;
-    } finally {
-      renewInFlight = undefined;
-    }
-  })();
-  return renewInFlight;
-}
-
-function readRenewReloadGuard() {
-  try {
-    return Number(sessionStorage.getItem(RENEW_RELOAD_GUARD_KEY)) || 0;
-  } catch {
-    return 0;
-  }
-}
+// Продление сессии без пароля (SESSION-1) — `sessionRenewal.ts`
+const sessionRenewal = createSessionRenewal({
+  getToken: () => token,
+  setToken: (next) => {
+    token = next;
+    getV2Bridge().setToken(next);
+  },
+  buildProof: (address, deviceId) => v2Controller.renewProof(address, deviceId),
+  saveToken: (address, next) => saveSecureSession(address, next),
+  log: logDebug,
+});
 
 if (typeof window !== 'undefined') {
   const touchIfVisible = () => {
@@ -387,11 +347,7 @@ if (typeof window !== 'undefined') {
   };
   window.setInterval(touchIfVisible, SESSION_ACTIVITY_INTERVAL_MS);
   // Открытая вкладка продлевает сессию заранее (половина срока токена), не дожидаясь отказа сервера
-  window.setInterval(() => {
-    if (!store.self || !token || !isTokenDueForRenewal(token)) return;
-    if (Date.now() - lastRenewAttemptAt < RENEW_RETRY_MS) return;
-    void renewSessionToken(store.self, token);
-  }, SESSION_ACTIVITY_INTERVAL_MS);
+  window.setInterval(() => sessionRenewal.renewIfDue(store.self), SESSION_ACTIVITY_INTERVAL_MS);
   document.addEventListener('visibilitychange', touchIfVisible);
   window.addEventListener('pagehide', () => {
     if (store.self) touchSessionActivity();
@@ -1397,17 +1353,9 @@ const v2Controller = createV2Controller({
     const rejected = token;
     void (async () => {
       // Сначала продление: чаще всего у токена просто вышел срок, а ключ устройства на месте
-      if (self && rejected && readRememberMe() && Date.now() - readRenewReloadGuard() > RENEW_RELOAD_GUARD_MS) {
-        const renewed = await renewSessionToken(self, rejected);
-        if (renewed) {
-          try {
-            sessionStorage.setItem(RENEW_RELOAD_GUARD_KEY, String(Date.now()));
-          } catch {
-            // без отметки повторный отказ продлит ещё раз — сервер откажет, и вход пойдёт паролем
-          }
-          window.location.reload();
-          return;
-        }
+      if (await sessionRenewal.recoverAfterReject(self, rejected)) {
+        window.location.reload();
+        return;
       }
       logDebug('v2: токен не принят сервером — нужен повторный вход');
       await clearSecureSession(self).catch(() => undefined);
@@ -1598,6 +1546,7 @@ const connectionController = createConnectionController({
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
+    void refreshServerModules(logDebug);
     void v2Controller.start().then(registerV2Wake).then(startReminders);
   },
   resetSyncPromise: syncController.resetPromise,
@@ -1648,9 +1597,7 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
           try {
             // Срок токена вышел или прошла его половина — продлеваем подписью устройства; не вышло (нет связи,
             // отказ) — идём с прежним: живой токен сервер примет, истёкший отвергнет и продление повторится там
-            const resumeToken = isTokenDueForRenewal(savedToken)
-              ? await renewSessionToken(savedAddress, savedToken) || savedToken
-              : savedToken;
+            const resumeToken = await sessionRenewal.freshForStart(savedAddress, savedToken);
             await connectionController.connectWithToken(savedAddress, resumeToken);
             saveLoginAddress(savedAddress);
             touchSessionActivity();
@@ -2003,11 +1950,18 @@ const reminderScheduler = createReminderScheduler({
 });
 
 // Напоминаниям нужен «План» и без открытого раздела: контейнер подключается в фоне (опрос — редкий)
+// Напоминания скрытого «Плана» на этом устройстве не приходят (экран «Модули»)
 function startReminders() {
   if (!v2Controller.isReady()) return;
+  if (!getIsModuleOn('plan')) {
+    reminderScheduler.stop();
+    return;
+  }
   void v2Controller.planner.ensure(true).catch(() => undefined);
   reminderScheduler.start();
 }
+
+getModulesView.subscribe(startReminders);
 
 // Уже выданная подписка web-push → регистрация пробуждения v2 (T102):
 // registerDevice мог отработать раньше, чем поднялся v2-стек

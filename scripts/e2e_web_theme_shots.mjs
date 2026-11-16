@@ -68,7 +68,7 @@ try {
       await sidebar.getByRole('tab', { name: 'Health' }).click();
       await shot('health');
       // «Знания»: заметка и файлы
-      await sidebar.getByRole('tab', { name: 'Cloud' }).click();
+      await sidebar.getByRole('tab', { name: 'Files' }).click();
       await page.locator('#ParvaneCloud').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await shot('files');
       await page.locator('#ParvaneCloud header').getByText('Notes', { exact: true }).first().click();
@@ -80,7 +80,7 @@ try {
       await knowledge.locator('[data-canvas-from-graph]').first().click().catch(() => undefined);
       await shot('canvas');
       // Настройки: выбор схемы
-      await sidebar.getByRole('button', { name: 'Profile' }).click();
+      await sidebar.getByRole('tab', { name: 'Profile' }).click();
       await shot('settings');
       // Те же экраны на ширине телефона: нижняя панель, вкладки внутри разделов
       await context.close();
@@ -90,7 +90,7 @@ try {
       });
       const phonePage = phoneSession.page;
       await dismissRecoveryKeyDialog(phonePage).catch(() => undefined);
-      const bar = phonePage.getByRole('navigation', { name: 'Sections' });
+      const bar = phonePage.getByRole('navigation', { name: 'Modules' });
       const phone = async (name, open) => {
         await open().catch((err) => console.log(`WARN: телефон, ${name}: ${String(err).split('\n')[0]}`));
         await phonePage.waitForTimeout(700);
@@ -99,7 +99,7 @@ try {
       await phone('chats', () => bar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }));
       await phone('profile', () => bar.getByRole('button', { name: 'Profile' }).click());
       await phone('chats2', () => bar.getByRole('button', { name: 'Chats' }).click());
-      await phone('plus', () => bar.getByRole('button', { name: 'New entry' }).click());
+      await phone('plus', () => phonePage.getByRole('button', { name: 'New entry' }).click());
       await phonePage.keyboard.press('Escape');
       await phone('today', async () => {
         await bar.getByRole('button', { name: 'Planner' }).click();
@@ -108,11 +108,11 @@ try {
       await phone('calendar', () => openPlannerScreen(phonePage, 'calendar'));
       await phone('health', () => phonePage.locator('#ParvanePlanner').locator('header').getByText('Health', { exact: true }).first().click());
       await phone('quick', async () => {
-        await bar.getByRole('button', { name: 'New entry' }).click();
+        await phonePage.getByRole('button', { name: 'New entry' }).click();
         await phonePage.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
       });
       await phonePage.keyboard.press('Escape');
-      await phone('knowledge', () => bar.getByRole('button', { name: 'Knowledge' }).click());
+      await phone('knowledge', () => bar.getByRole('button', { name: 'Notes' }).click());
       await phone('files', () => phonePage.getByRole('tab', { name: 'Files' }).first().click());
       console.log(`OK: снимки ${scheme} / ${mode}`);
       await phoneContext.close();

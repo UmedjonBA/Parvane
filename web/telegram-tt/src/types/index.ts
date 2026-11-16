@@ -240,6 +240,7 @@ export enum SettingsScreens {
   PrivacyBlockedUsers,
   PrivacyNoPaidMessages,
   Performance,
+  ParvaneModules,
   Folders,
   FoldersCreateFolder,
   FoldersEditFolder,

@@ -66,6 +66,18 @@ export function historyStatic<T>(name: string, args: unknown = {}): T {
   return JSON.parse(pv.historyCall(name, JSON.stringify(args))) as T;
 }
 
+/** Движок загружен: статические функции можно звать без ожидания. */
+export function isProtocolLoaded() {
+  return Boolean(loaded);
+}
+
+/** Функция движка без клиента (`staticCall`, у desktop и android — `pv_call`): результат — разобранный JSON.
+ * Отказ (`{"error": …}`) либо не загруженный движок — исключение. */
+export function engineStatic<T>(name: string, args: unknown = {}): T {
+  if (!loaded) throw new Error('engine is not loaded');
+  return JSON.parse(pv.staticCall(name, JSON.stringify(args))) as T;
+}
+
 // ── Модель движка (spec 035, T112; contracts/engine-api.md) ─────────────────────────────────────────────
 //
 // Единственная точка вызова модели в web (ENGINE-1): `ModelHost` держит `PvEngine` и выполняет его итоги

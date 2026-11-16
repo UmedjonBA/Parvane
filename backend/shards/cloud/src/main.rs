@@ -148,14 +148,14 @@ pub(crate) const BUCKETS: [i64; 2] = [BUCKET_MEDIA, BUCKET_DRIVE];
 
 /// Верхняя граница размера одного файла (шифртекст) по bucket'у.
 /// PARVANE_CLOUD_MAX_FILE_BYTES — медиа (512 МиБ);
-/// PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES — облако (2 ГиБ открытого текста + запас PVB2).
+/// PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES — облако (4 ГиБ открытого текста + запас PVB2).
 pub(crate) fn max_file_bytes(bucket: i64) -> i64 {
     #[cfg(test)]
     if let Some(q) = tests::FILE_MAX_OVERRIDE.with(|c| c.get()) {
         return q;
     }
     if bucket == BUCKET_DRIVE {
-        env_usize("PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES", 2200 * 1024 * 1024) as i64
+        env_usize("PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES", 4400 * 1024 * 1024) as i64
     } else {
         env_usize("PARVANE_CLOUD_MAX_FILE_BYTES", 512 * 1024 * 1024) as i64
     }
@@ -166,14 +166,14 @@ pub(crate) fn max_total_chunks() -> u32 {
 }
 /// Суммарная квота хранилища на владельца по bucket'у (0 = без лимита).
 /// PARVANE_CLOUD_OWNER_QUOTA_BYTES — медиа (4 ГиБ);
-/// PARVANE_CLOUD_DRIVE_QUOTA_BYTES — облако (10 ГиБ).
+/// PARVANE_CLOUD_DRIVE_QUOTA_BYTES — облако (20 ГиБ).
 pub(crate) fn owner_quota_bytes(bucket: i64) -> i64 {
     #[cfg(test)]
     if let Some(q) = tests::QUOTA_OVERRIDE.with(|c| c.get()) {
         return q;
     }
     if bucket == BUCKET_DRIVE {
-        env_usize("PARVANE_CLOUD_DRIVE_QUOTA_BYTES", 10 * 1024 * 1024 * 1024) as i64
+        env_usize("PARVANE_CLOUD_DRIVE_QUOTA_BYTES", 20 * 1024 * 1024 * 1024) as i64
     } else {
         env_usize("PARVANE_CLOUD_OWNER_QUOTA_BYTES", 4 * 1024 * 1024 * 1024) as i64
     }

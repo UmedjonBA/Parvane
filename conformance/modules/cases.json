@@ -1,0 +1,48 @@
+{
+  "rule": "MODULES-1",
+  "note": "Общий образец списка модулей: вход — сохранённые настройки устройства (prefs), список сервера (serverOff, словарь сервера) и модули, экраны которых есть в клиенте (available, null — все); выход — приведённые настройки, включённые модули по порядку и причины для выключателя.",
+  "cases": [
+    {
+      "name": "первый запуск",
+      "prefs": null, "serverOff": [], "available": null,
+      "order": ["chats", "plan", "health", "notes", "files", "music", "profile"],
+      "off": [], "healthBlocks": ["sleep", "body"],
+      "enabled": ["chats", "plan", "health", "notes", "files", "music", "profile"],
+      "serverOffModules": [], "unavailable": []
+    },
+    {
+      "name": "порядок пользователя, неизвестное отброшено, новые модули на своих местах",
+      "prefs": { "order": ["notes", "chats", "wiki", "profile", "notes"], "off": ["chats", "files", "wiki", "profile"], "healthBlocks": ["water", "nope"] },
+      "serverOff": [], "available": null,
+      "order": ["notes", "files", "music", "chats", "plan", "health", "profile"],
+      "off": ["files"], "healthBlocks": ["water"],
+      "enabled": ["notes", "music", "chats", "plan", "health", "profile"],
+      "serverOffModules": [], "unavailable": []
+    },
+    {
+      "name": "сервер выключил План и Музыку, неизвестный идентификатор пропущен",
+      "prefs": { "off": ["health"] }, "serverOff": ["planner", "music", "smarthome", 7, "planner"], "available": null,
+      "order": ["chats", "plan", "health", "notes", "files", "music", "profile"],
+      "off": ["health"], "healthBlocks": ["sleep", "body"],
+      "enabled": ["chats", "notes", "files", "profile"],
+      "serverOffModules": ["plan", "music"], "unavailable": []
+    },
+    {
+      "name": "экранов Музыки в клиенте нет; Чаты и Профиль включены, даже если их нет в available",
+      "prefs": { "order": ["profile", "music", "chats"] }, "serverOff": ["chats", "profile"],
+      "available": ["plan", "health", "notes", "files"],
+      "order": ["profile", "music", "chats", "plan", "health", "notes", "files"],
+      "off": [], "healthBlocks": ["sleep", "body"],
+      "enabled": ["profile", "chats", "plan", "health", "notes", "files"],
+      "serverOffModules": [], "unavailable": ["music"]
+    },
+    {
+      "name": "негодное сохранённое — настройки по умолчанию, пустой список блоков сохраняется",
+      "prefs": { "order": "notes", "off": 5, "healthBlocks": [] }, "serverOff": "music", "available": null,
+      "order": ["chats", "plan", "health", "notes", "files", "music", "profile"],
+      "off": [], "healthBlocks": [],
+      "enabled": ["chats", "plan", "health", "notes", "files", "music", "profile"],
+      "serverOffModules": [], "unavailable": []
+    }
+  ]
+}

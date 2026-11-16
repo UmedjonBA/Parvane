@@ -172,7 +172,7 @@ try {
     await phonePage.waitForTimeout(800);
   }, { escape: false });
   await step(phonePage, '18-phone-planner-today', async () => {
-    await phonePage.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Planner' }).click();
+    await phonePage.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Planner' }).click();
     await phonePage.locator('#ParvanePlanner').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }, { escape: false });
   await step(phonePage, '19-phone-planner-week', async () => {

@@ -1,24 +1,30 @@
 import { memo } from '@teact';
 import { getActions, withGlobal } from '../../global';
 
-import type { ParvaneIconName } from './ParvaneIcon';
-import { LeftColumnContent, SettingsScreens } from '../../types';
+import type { ParvaneModuleId } from '../../util/parvaneModules';
+import { LeftColumnContent } from '../../types';
 
 import { ALL_FOLDER_ID } from '../../config';
 import { selectLeftColumnContentKey } from '../../global/selectors';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import {
-  getKnowledgeView, getParvaneSection, getPlannerView, openKnowledgeView, openPlannerCalendar, openPlannerView,
-  setParvaneSection,
+  getKnowledgeView, getParvaneSection, getPlannerView, requestModuleAdd, requestPlannerAdd, setParvaneSection,
 } from '../../util/parvaneSection';
 import { openPalette } from '../parvane/palette/paletteOpen';
+import {
+  getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
+} from './parvaneModuleNav';
 
 import useDerivedState from '../../hooks/useDerivedState';
+import useFlag from '../../hooks/useFlag';
 import { useFolderManagerForUnreadCounters } from '../../hooks/useFolderManager';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
+import useParvaneModules from '../../hooks/useParvaneModules';
 
+import Menu from '../ui/Menu';
+import MenuItem from '../ui/MenuItem';
 import ParvaneIcon from './ParvaneIcon';
 
 import styles from './FoldersSidebar.module.scss';
@@ -37,95 +43,87 @@ type OwnProps = {
 
 const MAX_BADGE_COUNT = 99;
 
-// Parvane: боковая панель разделов на компьютере. Сверху знак и разделы (Чаты, Календарь, Здоровье,
-// Знания, Облако), внизу общий поиск (палитра Ctrl+K) и профиль. «Сегодня» — первый вид календаря,
-// отдельной кнопки у него нет.
+// Parvane: боковая панель модулей на компьютере. Сверху знак и модули в порядке пользователя
+// (`parvaneModules`), внизу общий поиск (палитра Ctrl+K) и «+». «Профиль» — такой же модуль, как остальные.
 // Папок чатов здесь нет — они над списком чатов.
-// На телефоне разделы в нижней панели (`ParvaneTabBar`)
+// На телефоне модули в нижней ленте (`ParvaneTabBar`)
 const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => {
-  const { openLeftColumnContent, openSettingsScreen } = getActions();
+  const { openLeftColumnContent } = getActions();
 
   const lang = useLang();
 
   const section = useDerivedState(getParvaneSection);
   const plannerView = useDerivedState(getPlannerView);
   const knowledgeView = useDerivedState(getKnowledgeView);
+  const { enabled: modules } = useParvaneModules();
   const unreadCount = useFolderManagerForUnreadCounters()[ALL_FOLDER_ID]?.chatsCount || 0;
 
-  const isProfileOpen = section === 'messenger' && isSettingsOpen;
-  const isFilesOpen = section === 'cloud' && knowledgeView === 'files';
+  const activeModule = getActiveModule(section, plannerView, knowledgeView, isSettingsOpen);
+  const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();
 
-  // Из «Профиля» «Чаты» возвращают к списку чатов; в остальном колонка остаётся, как была
-  const handleSelectChats = useLastCallback(() => {
+  const handleModuleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    openModule(e.currentTarget.dataset.module as ParvaneModuleId, isSettingsOpen);
+  });
+
+  // «+» зависит от модуля, как на телефоне: меню в «Чатах», «Файлах» и «Профиле», быстрый ввод записи
+  // в «Плане» и «Здоровье», новая заметка в «Заметках»
+  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'profile';
+  const handleAddClick = useLastCallback(() => {
+    if (hasAddMenu) openAddMenu();
+    else if (activeModule === 'notes') requestModuleAdd('note');
+    else requestPlannerAdd();
+  });
+
+  const handleNewMessage = useLastCallback(() => {
     setParvaneSection('messenger');
-    if (isSettingsOpen) openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
+    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
   });
 
-  const handleSelectCalendar = useLastCallback(() => {
-    openPlannerCalendar();
-  });
-
-  const handleSelectHealth = useLastCallback(() => {
-    openPlannerView('health');
-  });
-
-  const handleSelectKnowledge = useLastCallback(() => {
-    openKnowledgeView('notes');
-  });
-
-  const handleSelectFiles = useLastCallback(() => {
-    openKnowledgeView('files');
-  });
-
-  const handleSelectProfile = useLastCallback(() => {
+  const handleNewGroup = useLastCallback(() => {
     setParvaneSection('messenger');
-    openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
-    openSettingsScreen({ screen: SettingsScreens.Main });
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
   });
+
+  const handleNewChannel = useLastCallback(() => {
+    setParvaneSection('messenger');
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
+  });
+
+  const handleUpload = useLastCallback(() => requestModuleAdd('upload'));
+  const handleNewFolder = useLastCallback(() => requestModuleAdd('folder'));
 
   if (!isActive) {
     return undefined;
   }
 
-  function renderTab(
-    icon: ParvaneIconName, title: string, isSelected: boolean, onClick: NoneToVoidFunction, badge?: number,
-  ) {
-    return (
-      <button
-        type="button"
-        role="tab"
-        aria-selected={isSelected}
-        className={buildClassName(styles.section, isSelected && styles.sectionActive)}
-        onClick={onClick}
-      >
-        <ParvaneIcon name={icon} />
-        <span className={styles.sectionTitle}>{title}</span>
-        {Boolean(badge) && (
-          <span className={styles.badge}>{badge > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : badge}</span>
-        )}
-      </button>
-    );
-  }
-
   return (
     <div className={styles.root} id="FoldersSidebar">
       <div className={styles.logo} aria-hidden>parvane</div>
-      <div className={styles.sections} role="tablist" aria-label={lang('ParvaneSections')}>
-        {renderTab(
-          'chat', lang('ParvaneSectionMessenger'), section === 'messenger' && !isSettingsOpen, handleSelectChats,
-          unreadCount,
-        )}
-        {renderTab(
-          'calendar', lang('PlannerViewCalendar'), section === 'planner' && plannerView !== 'health',
-          handleSelectCalendar,
-        )}
-        {renderTab(
-          'heart', lang('PlannerHealth'), section === 'planner' && plannerView === 'health', handleSelectHealth,
-        )}
-        {renderTab(
-          'book', lang('ParvaneSectionKnowledge'), section === 'cloud' && !isFilesOpen, handleSelectKnowledge,
-        )}
-        {renderTab('cloud', lang('ParvaneSectionCloud'), isFilesOpen, handleSelectFiles)}
+      <div
+        className={styles.sections}
+        role="tablist"
+        aria-label={lang('ParvaneModules')}
+        data-modules={modules.join(' ')}
+      >
+        {modules.map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            data-module={id}
+            aria-selected={id === activeModule}
+            className={buildClassName(styles.section, id === activeModule && styles.sectionActive)}
+            onClick={handleModuleClick}
+          >
+            <ParvaneIcon name={MODULE_ICONS[id]} />
+            <span className={styles.sectionTitle}>{lang(MODULE_TITLE_KEYS[id])}</span>
+            {id === 'chats' && Boolean(unreadCount) && (
+              <span className={styles.badge}>
+                {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
       <div className={styles.spacer} />
       {/* Общий поиск (палитра): заметки, записи «Плана», чаты и команды. То же — Ctrl+K */}
@@ -137,17 +135,41 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
         onClick={openPalette}
       >
         <ParvaneIcon name="search" />
-        <span className={styles.sectionTitle}>{lang('Search')}</span>
       </button>
-      <button
-        type="button"
-        className={buildClassName(styles.section, isProfileOpen && styles.sectionActive)}
-        aria-current={isProfileOpen ? 'page' : undefined}
-        onClick={handleSelectProfile}
-      >
-        <ParvaneIcon name="user" />
-        <span className={styles.sectionTitle}>{lang('ParvaneTabBarProfile')}</span>
-      </button>
+      <div className={styles.addWrap}>
+        <button
+          type="button"
+          className={styles.addButton}
+          aria-label={lang('ParvaneTabBarAdd')}
+          aria-haspopup={hasAddMenu ? 'menu' : undefined}
+          data-add-for={activeModule}
+          onClick={handleAddClick}
+        >
+          <ParvaneIcon name="plus" className={styles.addIcon} />
+        </button>
+        <Menu
+          isOpen={isAddMenuOpen}
+          className={styles.addMenu}
+          positionX="left"
+          positionY="bottom"
+          autoClose
+          onClose={closeAddMenu}
+        >
+          {activeModule === 'files' ? (
+            <>
+              <MenuItem icon="download" onClick={handleUpload}>{lang('ParvaneAddUpload')}</MenuItem>
+              <MenuItem icon="folder" onClick={handleNewFolder}>{lang('ParvaneAddFolder')}</MenuItem>
+            </>
+          ) : (
+            <>
+              <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
+              <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
+              <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
+              <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
+            </>
+          )}
+        </Menu>
+      </div>
     </div>
   );
 };

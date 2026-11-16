@@ -92,13 +92,19 @@ try {
   await createGroupViaUi(peer.page, 'Книжный клуб', [userName]).catch((err) => console.log(`WARN группа: ${err}`));
   await sendText(peer.page, 'Читаем «Мастера и Маргариту» к пятнице').catch(() => undefined);
 
-  // Кнопки панели по месту: подписи зависят от языка, у «Чатов» в имени ещё и счётчик
-  const NAV = [/Chats|Чаты/, /Planner|План/, /New entry|Новая запись/, /Knowledge|Знания/, /Profile|Профиль/];
+  // Модули ленты — по `data-module`, «+» — отдельная плавающая кнопка `[data-add-for]` (подписи зависят от языка)
+  const NAV = [
+    [/Chats|Чаты/, 'chats'], [/Planner|План/, 'plan'], [/Health|Здоровье/, 'health'], [/Notes|Заметки|Knowledge|Знания/, 'notes'],
+    [/Files|Файлы/, 'files'], [/Profile|Профиль/, 'profile'],
+  ];
   const navTo = async (name) => {
-    const index = NAV.findIndex((re) => re.source === name.source.replace(/^\^\(|\)\$$/g, ''));
-    const buttons = bar.locator(':scope > button');
-    console.log(`панель: кнопок ${await buttons.count()}, жму ${index}`);
-    await buttons.nth(index >= 0 ? index : 0).evaluate((el) => el.click());
+    const probe = name.source.replace(/^\^\(|\)\$$/g, '').split('|')[0];
+    if (/New entry|Новая запись/.test(probe)) {
+      await page.locator('[data-add-for]').evaluate((el) => el.click());
+      return;
+    }
+    const moduleId = NAV.find(([re]) => re.test(probe))?.[1] || 'chats';
+    await bar.locator(`[data-module="${moduleId}"]`).evaluate((el) => el.click());
   };
   // Нажатие через DOM: окна и шторки web перехватывают указатель у соседних слоёв
   const tap = (locator) => locator.first().evaluate((el) => el.click());
