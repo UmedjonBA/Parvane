@@ -30,6 +30,7 @@ import type { EngineClient as PvClient } from './engineClient';
 import type {
   EditPatch, HOp,
 } from './historyModel';
+import type { PersonalDeps } from './personalSync';
 import type { StateJournalHost } from './stateJournal';
 
 import { withDetectedLinks } from '../autoEntities';
@@ -55,6 +56,7 @@ import {
 } from './engine';
 import { EngineClient } from './engineClient';
 import { pickEscrowKey } from './escrowKey';
+import { createHealthSync } from './health';
 import { historyBatchWindow } from './historyBatch';
 import {
   encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
@@ -135,6 +137,10 @@ type Deps = {
   recordPlannerContainer?: (ref: { domain: string; id: string }) => void;
   /** Состояние или статус планировщика изменились — UI перечитает. */
   onPlannerChanged?: () => void;
+  /** «Здоровье» (spec 038): то же для контейнера здоровья. */
+  healthContainerFromState?: () => { domain: string; id: string } | undefined;
+  recordHealthContainer?: (ref: { domain: string; id: string }) => void;
+  onHealthChanged?: () => void;
   /** Облако (spec 016): контейнеры из журнала личного состояния и их запись. */
   cloudEntriesFromState?: () => CloudStateEntry[];
   recordCloudEntry?: (entry: CloudStateEntry) => void;
@@ -283,6 +289,7 @@ type PendingJoin = {
 export type KeyJoinOutcome = {
   result: SskRotationResult;
   planner?: string;
+  health?: string;
   cloud?: string;
 };
 export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'intercepted' | 'failed';
@@ -1548,7 +1555,7 @@ export function createV2Controller(deps: Deps) {
   }
 
   // Планировщик на сервере (spec 010): жизненный цикл контейнера и очередь — `./planner`
-  const planner = createPlannerSync({
+  const personalDeps: Omit<PersonalDeps, 'stateContainer' | 'recordContainer' | 'onChanged'> = {
     log: deps.log,
     pv: () => pv,
     client: () => client,
@@ -1566,9 +1573,19 @@ export function createV2Controller(deps: Deps) {
     deleteRecord: async (key) => {
       await storage?.deleteRecord(key);
     },
+  };
+  const planner = createPlannerSync({
+    ...personalDeps,
     stateContainer: () => deps.plannerContainerFromState?.(),
     recordContainer: (container) => deps.recordPlannerContainer?.(container),
     onChanged: () => deps.onPlannerChanged?.(),
+  });
+  // «Здоровье» на сервере (spec 038): тот же жизненный цикл, свой контейнер — `./health`
+  const health = createHealthSync({
+    ...personalDeps,
+    stateContainer: () => deps.healthContainerFromState?.(),
+    recordContainer: (container) => deps.recordHealthContainer?.(container),
+    onChanged: () => deps.onHealthChanged?.(),
   });
 
   // Облако (spec 016): контейнеры домена `cloud.v1`, очереди и доступ — `./cloud`
@@ -1941,6 +1958,7 @@ export function createV2Controller(deps: Deps) {
     }
     // Ключ контейнера планировщика принят или контейнер надо подключить (spec 010)
     if (ev.type === 'plannerChanged') planner.onEngineEvent();
+    if (ev.type === 'healthChanged') health.onEngineEvent();
     if (ev.type === 'cloudChanged' && ev.id) cloud.onEngineEvent(ev.id);
     // Отозвано своё устройство (другим своим устройством): журнал — заново;
     // ротации ключей делает отзывавшее устройство и раздаёт по E2E
@@ -2211,6 +2229,7 @@ export function createV2Controller(deps: Deps) {
       const payload: KeyBundlePayload = {
         grant: b64(material),
         planner: planner.keysExport(),
+        health: health.keysExport(),
         cloud: cloud.keysExport(),
         groups: groupKeys !== '[]' ? groupKeys : undefined,
       };
@@ -2609,7 +2628,7 @@ export function createV2Controller(deps: Deps) {
     deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
     if (payload.groups) await applyBundleGroups(payload.groups);
     return {
-      result: 'ok', planner: payload.planner, cloud: payload.cloud,
+      result: 'ok', planner: payload.planner, health: payload.health, cloud: payload.cloud,
     };
   }
 
@@ -5163,6 +5182,7 @@ export function createV2Controller(deps: Deps) {
     storedMessage: knownMessage,
     /** Планировщик на сервере (spec 010). */
     planner,
+    health,
     /** Счётчики-базис SC-009 (spec 035, T009): записи кэша групп с запуска страницы. */
     auditCounters: () => ({
       groupCacheWrites: 0, groups: client?.groupList().length ?? 0,
@@ -5287,6 +5307,7 @@ export function createV2Controller(deps: Deps) {
       l2PeerTimer = undefined;
       setTimerSyncMode(false);
       planner.reset();
+      health.reset();
       cloud.reset();
       ready = false;
       starting = undefined;

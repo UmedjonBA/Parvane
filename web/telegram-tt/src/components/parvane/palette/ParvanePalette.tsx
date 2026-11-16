@@ -15,7 +15,7 @@ import { selectPeer } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import {
-  openKnowledgeView, openNote, openPlannerView, requestPlannerAdd, requestPlannerAddText, requestPlannerSettings,
+  openHealth, openKnowledgeView, openNote, openPlannerView, requestHealthAdd, requestPlannerAdd, requestPlannerSettings,
   setParvaneSection,
 } from '../../../util/parvaneSection';
 import { getCloudStatus } from '../cloud/cloudStore';
@@ -186,14 +186,14 @@ const ParvanePalette = () => {
       command('plan', 'nav:today', lang('PlannerToday'), 'sun', () => openPlannerView('today')),
       command('plan', 'nav:calendar', lang('PlannerViewCalendar'), 'calendar', () => openPlannerView('calendar')),
       command('notes', 'nav:knowledge', lang('ParvaneModuleNotes'), 'note', () => openKnowledgeView('notes')),
-      command('health', 'nav:health', lang('PlannerHealth'), 'heart', () => openPlannerView('health')),
+      command('health', 'nav:health', lang('PlannerHealth'), 'heart', () => openHealth()),
       command('files', 'nav:cloud', lang('ParvaneModuleFiles'), 'folder', () => openKnowledgeView('files')),
       command('plan', 'quick', lang('PlannerQuickTitle'), 'plus', () => requestPlannerAdd()),
       command('health', 'quick:sleep', lang('ParvanePaletteLogSleep'), 'plus', () => (
-        requestPlannerAddText(`${lang('ParvanePaletteSleepText')} `)
+        requestHealthAdd(`${lang('ParvanePaletteSleepText')} `)
       )),
       command('health', 'quick:food', lang('ParvanePaletteLogFood'), 'plus', () => (
-        requestPlannerAddText(`${lang('ParvanePaletteFoodText')} `)
+        requestHealthAdd(`${lang('ParvanePaletteFoodText')} `)
       )),
       // Заметка с таким названием уже есть — откроется она, иначе раздел создаст новую
       command('notes', 'newnote', lang('KnowledgeNewNote'), 'note', () => openNote(lang('KnowledgeNewNote'))),

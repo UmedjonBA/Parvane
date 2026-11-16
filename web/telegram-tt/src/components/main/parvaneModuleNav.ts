@@ -1,16 +1,16 @@
 import { getActions } from '../../global';
 
 import type { ParvaneModuleId } from '../../util/parvaneModules';
-import type { KnowledgeView, ParvaneSection, PlannerView } from '../../util/parvaneSection';
+import type { KnowledgeView, ParvaneSection } from '../../util/parvaneSection';
 import type { ParvaneIconName } from './ParvaneIcon';
 import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import {
-  openKnowledgeView, openPlannerCalendar, openPlannerView, setParvaneSection,
+  openHealth, openKnowledgeView, openPlannerCalendar, setParvaneSection,
 } from '../../util/parvaneSection';
 
 // Parvane: общее для ленты модулей (телефон) и боковой панели (компьютер) — значок, подпись, «какой модуль
-// сейчас открыт» и переход в модуль. «Здоровье» пока экран «Плана», «Файлы» — вкладка «Знаний»
+// сейчас открыт» и переход в модуль. «Файлы» пока вкладка «Знаний»
 export const MODULE_ICONS: Record<ParvaneModuleId, ParvaneIconName> = {
   chats: 'chat',
   plan: 'calendar',
@@ -32,9 +32,10 @@ export const MODULE_TITLE_KEYS = {
 } as const satisfies Record<ParvaneModuleId, string>;
 
 export function getActiveModule(
-  section: ParvaneSection, plannerView: PlannerView, knowledgeView: KnowledgeView, isSettingsOpen: boolean,
+  section: ParvaneSection, knowledgeView: KnowledgeView, isSettingsOpen: boolean,
 ): ParvaneModuleId {
-  if (section === 'planner') return plannerView === 'health' ? 'health' : 'plan';
+  if (section === 'health') return 'health';
+  if (section === 'planner') return 'plan';
   if (section === 'cloud') return knowledgeView === 'files' ? 'files' : 'notes';
   return isSettingsOpen ? 'profile' : 'chats';
 }
@@ -50,7 +51,7 @@ export function openModule(id: ParvaneModuleId, isSettingsOpen: boolean) {
       openPlannerCalendar();
       break;
     case 'health':
-      openPlannerView('health');
+      openHealth();
       break;
     case 'notes':
       openKnowledgeView('notes');

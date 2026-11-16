@@ -204,6 +204,22 @@ impl PersonalState {
         }
     }
 
+    /// Изменения для записи разобранного ввода «Здоровья» (HEALTH-3).
+    fn health_compose(&self, parsed: &[serde_json::Value], now_ms: i64) -> Option<serde_json::Value> {
+        match self {
+            Self::Health(st) => Some(crate::domain::health_view::compose_changes(st, parsed, now_ms)),
+            Self::Planner(_) => None,
+        }
+    }
+
+    /// Сводка «Здоровья» для экранов (HEALTH-3); у планировщика её нет.
+    fn health_view(&self, now_ms: i64, tz_min: i32) -> Option<String> {
+        match self {
+            Self::Health(st) => Some(crate::domain::health_view::view_json(st, now_ms, tz_min)),
+            Self::Planner(_) => None,
+        }
+    }
+
     fn rev(&self) -> u64 {
         match self {
             Self::Planner(st) => st.rev(),
@@ -919,6 +935,18 @@ impl Client {
     }
     pub fn health_state_json(&self) -> Option<String> {
         self.personal_state_json(Personal::Health)
+    }
+    /// Изменения для записи разобранных записей: id, сведение «лёг» и «встал» в один сон. Контейнера ещё нет —
+    /// считается от пустого состояния.
+    pub fn health_compose_json(&self, parsed: &[serde_json::Value], now_ms: i64) -> String {
+        let composed = self.health.as_ref().and_then(|p| p.state.health_compose(parsed, now_ms));
+        composed.unwrap_or_else(|| crate::domain::health_view::compose_changes(&Default::default(), parsed, now_ms)).to_string()
+    }
+    /// Сводка для экранов «Здоровья» на момент `now_ms` в поясе `tz_min` (HEALTH-3).
+    /// Контейнера ещё нет (первое открытие) — сводка пустого состояния.
+    pub fn health_view_json(&self, now_ms: i64, tz_min: i32) -> String {
+        let view = self.health.as_ref().and_then(|p| p.state.health_view(now_ms, tz_min));
+        view.unwrap_or_else(|| crate::domain::health_view::view_json(&Default::default(), now_ms, tz_min))
     }
     pub fn health_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
         self.personal_create(Personal::Health, ts_ms)

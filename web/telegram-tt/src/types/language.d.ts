@@ -2329,6 +2329,77 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'HealthQuickPlaceholder': undefined;
+  'HealthQuickLabel': undefined;
+  'HealthQuickEnter': undefined;
+  'HealthQuickNothing': undefined;
+  'HealthQuickFailed': undefined;
+  'HealthKindSleep': undefined;
+  'HealthKindSleepStart': undefined;
+  'HealthKindSleepEnd': undefined;
+  'HealthKindWeight': undefined;
+  'HealthKindPressure': undefined;
+  'HealthKindPulse': undefined;
+  'HealthKindSteps': undefined;
+  'HealthKindWater': undefined;
+  'HealthKindMood': undefined;
+  'HealthKindTemperature': undefined;
+  'HealthKindGlucose': undefined;
+  'HealthKindHeight': undefined;
+  'HealthKindWaist': undefined;
+  'HealthKindHips': undefined;
+  'HealthKindChest': undefined;
+  'HealthKindBodyFat': undefined;
+  'HealthKindSpo2': undefined;
+  'HealthUnitKg': undefined;
+  'HealthUnitMmhg': undefined;
+  'HealthUnitBpm': undefined;
+  'HealthUnitMl': undefined;
+  'HealthUnitCelsius': undefined;
+  'HealthUnitMmol': undefined;
+  'HealthUnitCm': undefined;
+  'HealthUnitPercent': undefined;
+  'HealthToday': undefined;
+  'HealthYesterday': undefined;
+  'HealthSleepOnGoal': undefined;
+  'HealthSleepWeek': undefined;
+  'HealthGoalShort': undefined;
+  'HealthOpenSleep': undefined;
+  'HealthSleepEmpty': undefined;
+  'HealthSleepWeekChart': undefined;
+  'HealthWeekdayMon': undefined;
+  'HealthWeekdayTue': undefined;
+  'HealthWeekdayWed': undefined;
+  'HealthWeekdayThu': undefined;
+  'HealthWeekdayFri': undefined;
+  'HealthWeekdaySat': undefined;
+  'HealthWeekdaySun': undefined;
+  'HealthSleepBed': undefined;
+  'HealthSleepWake': undefined;
+  'HealthNoEntries': undefined;
+  'HealthChartMonth': undefined;
+  'HealthGoalLabel': undefined;
+  'HealthGoalNone': undefined;
+  'HealthSleepGoal': undefined;
+  'HealthSleepGoalBed': undefined;
+  'HealthSleepGoalWake': undefined;
+  'HealthEntriesTitle': undefined;
+  'HealthExampleWeight': undefined;
+  'HealthExampleSleep': undefined;
+  'HealthExamplePressure': undefined;
+  'HealthExamplePulse': undefined;
+  'HealthExampleSteps': undefined;
+  'HealthExampleMood': undefined;
+  'HealthStatusNeedsLinking': undefined;
+  'HealthStatusNoKey': undefined;
+  'HealthStatusOffline': undefined;
+  'HealthStatusLoading': undefined;
+  'HealthFirstText': undefined;
+  'HealthFirstTry': undefined;
+  'HealthBodyTitle': undefined;
+  'HealthBodyEmpty': undefined;
+  'HealthRecentTitle': undefined;
+  'HealthBlocks': undefined;
   'ParvaneProfileTitle': undefined;
   'ParvaneCloudTabDrive': undefined;
   'ParvaneCloudTabShared': undefined;
@@ -4928,6 +4999,40 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneModuleMoveDown': {
     'name': V;
+  };
+  'HealthQuickUnparsed': {
+    'text': V;
+  };
+  'HealthDuration': {
+    'hours': V;
+    'minutes': V;
+  };
+  'HealthSleepBelowGoal': {
+    'duration': V;
+  };
+  'HealthSleepAboveGoal': {
+    'duration': V;
+  };
+  'HealthGoalValue': {
+    'value': V;
+  };
+  'HealthWeekDelta': {
+    'delta': V;
+  };
+  'HealthMonthDelta': {
+    'delta': V;
+  };
+  'HealthDeleteEntry': {
+    'name': V;
+  };
+  'HealthLeftToGoal': {
+    'delta': V;
+  };
+  'HealthToGoal': {
+    'delta': V;
+  };
+  'HealthMoodScore': {
+    'value': V;
   };
   'ParvaneCloudSelected': {
     'count': V;

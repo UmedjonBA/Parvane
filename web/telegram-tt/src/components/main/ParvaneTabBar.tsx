@@ -8,7 +8,7 @@ import { LeftColumnContent } from '../../types';
 import { ALL_FOLDER_ID } from '../../config';
 import buildClassName from '../../util/buildClassName';
 import {
-  getKnowledgeView, getPlannerView, requestModuleAdd, requestPlannerAdd,
+  getKnowledgeView, requestHealthAdd, requestModuleAdd, requestPlannerAdd,
 } from '../../util/parvaneSection';
 import {
   getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
@@ -49,11 +49,10 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   const lang = useLang();
   const scrollRef = useRef<HTMLDivElement>();
   const { enabled: modules } = useParvaneModules();
-  const plannerView = useDerivedState(getPlannerView);
   const knowledgeView = useDerivedState(getKnowledgeView);
   const unreadCount = useFolderManagerForUnreadCounters()[ALL_FOLDER_ID]?.chatsCount || 0;
 
-  const activeModule = getActiveModule(section, plannerView, knowledgeView, Boolean(isSettingsOpen));
+  const activeModule = getActiveModule(section, knowledgeView, Boolean(isSettingsOpen));
   const isScrollable = modules.length > MAX_FIT_MODULES;
 
   const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();
@@ -100,6 +99,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   const handleAddClick = useLastCallback(() => {
     if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
+    else if (activeModule === 'health') requestHealthAdd();
     else requestPlannerAdd();
   });
 

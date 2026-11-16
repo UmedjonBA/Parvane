@@ -186,10 +186,11 @@ try {
   });
   await page.goBack().catch(() => undefined);
   await page.waitForTimeout(800);
-  await step(page, 'plan-health', () => tap(planner.locator('header').getByText(/^(Health|Здоровье)$/)));
+  // «Здоровье» — отдельный модуль ленты
+  await step(page, 'plan-health', () => navTo(/^(Health|Здоровье)$/));
   for (const y of [700, 1400, 2100, 2800]) {
     await step(page, `plan-health-${y}`, async () => {
-      await planner.evaluate((root, top) => {
+      await page.locator('#ParvaneHealth').evaluate((root, top) => {
         const el = [...root.querySelectorAll('*')].find((n) => n.scrollHeight > n.clientHeight + 50
           && getComputedStyle(n).overflowY !== 'visible');
         if (el) el.scrollTop = top;

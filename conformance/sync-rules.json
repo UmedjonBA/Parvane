@@ -1345,7 +1345,7 @@
       "snapshotEvery": 200,
       "ignoreUnknownDomain": true,
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/planner.ts (жизненный цикл контейнера, очередь), controller.ts (событие plannerChanged, planner), provider.ts (экспорт/импорт ключей в линковке); сценарий scripts/e2e_web_planner_sync.mjs",
+        "web": "web/telegram-tt/src/api/parvane/v2/personalSync.ts (жизненный цикл личного контейнера, очередь; вид — planner.ts), controller.ts (событие plannerChanged, planner), provider.ts (экспорт/импорт ключей в линковке); сценарий scripts/e2e_web_planner_sync.mjs",
         "desktop": "движок общий (backend/protocol/src/client_planner.rs): ключ контейнера принимается и хранится, раздела «План» нет; тест client_flow.rs planner_container_shared_with_own_devices_and_rotated_on_revoke, planner_key_from_stranger_is_ignored",
         "android": "spec 031: «План» есть — android/jni/jni_sections.cpp (хаб разделов, порт desktop: PlannerSync/PlannerStore ядра, событие движка plannerChanged → sectionsEngineEvent), android/jni/jni_planner_ops.cpp; ключи контейнера — из копии ключей аккаунта (android/jni/jni_account.cpp noteDomainKeys) и грантом движка; экраны — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/PlannerController.kt — сценарий android/tgx_sections_flow.sh (правки desktop ↔ X, на сервере только шифртекст)"
       }
@@ -1389,7 +1389,7 @@
       "ignoreUnknownDomain": true,
       "spec035": {
         "truncation": "Snapshot.complete (под подписью автора) → шард domains удаляет операции seq ≤ upto_seq, синк отвечает truncated_upto; complete только без range-hold (hold::note, domain::hold_journal); тесты domains::tests::truncate_after_complete_snapshot, client_flow::planner_truncated_cursor_takes_snapshot, backend/protocol/tests/range_hold.rs",
-        "open": "хосты web (v2/planner.ts, v2/cloud.ts) и ядра (sections/planner_sync.cpp, sections/cloud_sync.cpp) берут снимок только при пустом курсоре, по need_snapshot — нет; намерение IntentDomainOp модели клиенты не используют"
+        "open": "хосты web (v2/personalSync.ts, v2/cloud.ts) и ядра (sections/planner_sync.cpp, sections/cloud_sync.cpp) берут снимок только при пустом курсоре, по need_snapshot — нет; намерение IntentDomainOp модели клиенты не используют"
       },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/cloud.ts (жизненный цикл контейнеров, очереди, доступ), cloudBlobs.ts (потоковые блобы), cloudDrive.ts (методы провайдера), controller.ts (событие cloudChanged, копия ключей), provider.ts (экспорт/импорт ключей в линковке); тесты cloudBlobs.test.ts, cloudModel.test.ts; сценарии scripts/e2e_web_cloud.mjs, e2e_web_cloud_sync.mjs, e2e_web_cloud_chat.mjs, e2e_web_cloud_share.mjs",
@@ -1925,6 +1925,19 @@
       "status": "16 ноя 2026: движок — сделано (тест указан); клиенты — открыто",
       "clients": {
         "web": "движок: тест backend/protocol/tests/health_parse_vectors.rs",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "HEALTH-3",
+      "title": "«Здоровье»: сводку для экранов и запись разобранного ввода считает движок",
+      "kind": "domain",
+      "record": "движок: healthView {nowMs, tzMin} → {today, sleep{goalBedMin, goalWakeMin, goalMinutes, last, lastTotalMinutes, lastDeltaMinutes, week[7], avgMinutes, openStartMs}, metrics[{kind, unit, isSum, last, goal, toGoal, today, weekDelta, monthDelta, series[30 дней]}], recent[]}; healthCompose {entries, nowMs} → {changes}; цели — Goal с именем вида (weight, steps, water, …) и sleep_bed / sleep_wake (минуты от полуночи); отметки sleep_start / sleep_end",
+      "behaviour": "Клиент показывает числа из healthView и сам не считает: день записи, главный сон дня (самый длинный; дневной входит в сумму дня), сумму дня у steps и water, отклонение от цели, изменение за неделю и месяц. Разобранные записи клиент пишет через healthCompose: движок даёт каждой записи id, отметку «встал» после незакрытой отметки «лёг» сводит в один сон (отметка «лёг» удаляется), сон отрезком закрывает незакрытое «лёг». Запись из будущего в сводку не входит. Какие блоки показывать — настройка устройства (MODULES-1)",
+      "status": "17 ноя 2026: движок — сделано (backend/protocol/src/domain/health_view.rs, тесты там же); web — сделано; desktop и android — открыто",
+      "clients": {
+        "web": "api/parvane/healthApi.ts, v2/health.ts (контейнер — v2/personalSync.ts), components/parvane/health/*; тесты healthFormat.test.ts, scripts/run_web_health_e2e.sh",
         "desktop": "открыто",
         "android": "открыто"
       }

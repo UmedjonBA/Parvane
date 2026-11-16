@@ -81,7 +81,8 @@ fn engine_client_methods() -> Vec<String> {
             let name: String = l.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
             (!name.is_empty() && l[name.len()..].starts_with('(')).then_some(name)
         })
-        .filter(|n| !["constructor", "c", "free", "historySession"].contains(&n.as_str()))
+        // `personal` — не действие, а набор действий личного контейнера: имена вида `<вид>Xxx` собирает сам
+        .filter(|n| !["constructor", "c", "free", "historySession", "personal"].contains(&n.as_str()))
         .collect();
     out.sort();
     out.dedup();

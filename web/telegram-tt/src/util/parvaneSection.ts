@@ -5,11 +5,11 @@ import { createSignal } from './signals';
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
 // панели. Мессенджер остаётся смонтированным (звонки, синхронизация) — раздел
 // только решает, что показано справа от панели
-export type ParvaneSection = 'messenger' | 'planner' | 'cloud';
+export type ParvaneSection = 'messenger' | 'planner' | 'health' | 'cloud';
 
 // Раздел переживает обновление страницы в этой вкладке; новая вкладка открывается на чатах
 const SECTION_KEY = 'parvane:section';
-const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'cloud'];
+const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'health', 'cloud'];
 
 function readSection(): ParvaneSection {
   try {
@@ -55,8 +55,10 @@ function saveView(key: string, view: PlannerView) {
   }
 }
 
+// «Здоровье» — отдельный модуль (spec 041): сохранённый прежде экран «Здоровье» читается как «Сегодня»
 function readPlannerView(): PlannerView {
-  return readSavedView(PLANNER_VIEW_KEY) || 'today';
+  const saved = readSavedView(PLANNER_VIEW_KEY);
+  return !saved || saved === 'health' ? 'today' : saved;
 }
 
 // Записи прежних версий ключа стороны не несут: тогда сторона — последний экран, если это не «Здоровье»
@@ -89,9 +91,13 @@ export function setPlannerCalendarView(view: PlannerCalendarView) {
 }
 
 export function setPlannerView(view: PlannerView) {
+  // Прежний экран «Здоровье» внутри «Плана» заменён модулем: переход ведёт в него
+  if (view === 'health') {
+    setParvaneSection('health');
+    return;
+  }
   setPlannerViewSignal(view);
   saveView(PLANNER_VIEW_KEY, view);
-  if (view === 'health') return;
   calendarSide = view;
   saveView(PLANNER_CALENDAR_SIDE_KEY, view);
 }
@@ -102,6 +108,10 @@ export function showPlannerCalendar() {
 }
 
 export function openPlannerView(view: PlannerView) {
+  if (view === 'health') {
+    setParvaneSection('health');
+    return;
+  }
   setPlannerView(view);
   setParvaneSection('planner');
 }
@@ -236,6 +246,27 @@ export function consumeModuleAddRequest() {
   setModuleAddRequest(undefined);
 }
 
+// «Здоровье» — отдельный модуль (spec 041): запрос «записать показатель» открывает модуль и ставит курсор в строку
+// ввода; `text` — заготовка строки («сон », «вода »). Запрос забирает раздел (как запрос новой записи «Плана»)
+export type HealthAddRequest = { text?: string };
+const [getHealthAddRequest, setHealthAddRequest] = createSignal<HealthAddRequest | undefined>(undefined);
+
+export { getHealthAddRequest };
+
+export function openHealth() {
+  setParvaneSection('health');
+}
+
+/** Функцию ставят и обработчиком нажатия (тогда аргументом приходит событие): текстом считается только строка. */
+export function requestHealthAdd(text?: unknown) {
+  setParvaneSection('health');
+  setHealthAddRequest({ text: typeof text === 'string' ? text : undefined });
+}
+
+export function consumeHealthAddRequest() {
+  setHealthAddRequest(undefined);
+}
+
 // Запрос «открыть настройки плана» из «Профиля»: «План» открывает свои настройки и сбрасывает запрос
 // (как запрос новой записи). Пока раздел запрос не читает, «Профиль» просто открывает «Сегодня»
 const [getPlannerSettingsRequest, setPlannerSettingsRequest] = createSignal(false);
@@ -279,8 +310,10 @@ function applyLaunchTarget() {
       break;
     case 'today':
     case 'calendar':
-    case 'health':
       openPlannerView(target);
+      break;
+    case 'health':
+      openHealth();
       break;
     case 'entry':
       requestPlannerAdd();

@@ -595,22 +595,30 @@ export function createStateJournal(deps: Deps) {
 
   // ── контейнер планировщика (spec 010) ──────────────────────────────────────
 
-  /** Контейнер планировщика, объявленный любым своим устройством: {domain, id(hex)}. */
-  function plannerContainer(): { domain: string; id: string } | undefined {
-    const [container] = valuesOf<{ ref?: { domain?: string; id?: string } }>(K.plannerContainer);
+  // Личный контейнер домена («План», «Здоровье» — spec 038): регистр своего вида, одна форма значения
+  function personalContainer(kind: string): { domain: string; id: string } | undefined {
+    const [container] = valuesOf<{ ref?: { domain?: string; id?: string } }>(kind);
     const ref = container?.ref;
     if (!ref?.domain || !ref.id) return undefined;
     return { domain: ref.domain, id: b64ToHex(ref.id) };
   }
 
-  /** Объявить свой контейнер планировщика (LWW-регистр, один на пользователя). */
-  function recordPlannerContainer(ref: { domain: string; id: string }) {
+  function recordPersonalContainer(kind: string, ref: { domain: string; id: string }) {
     void serial(async () => {
-      await put([{
-        kind: K.plannerContainer, key: '', value: { ref: { domain: ref.domain, id: hexToB64(ref.id) } },
-      }]);
-    }).catch((e: unknown) => deps.log(`v2: запись контейнера планировщика в журнал состояния: ${String(e)}`));
+      await put([{ kind, key: '', value: { ref: { domain: ref.domain, id: hexToB64(ref.id) } } }]);
+    }).catch((e: unknown) => deps.log(`v2: запись контейнера (${kind}) в журнал состояния: ${String(e)}`));
   }
+
+  /** Контейнер планировщика, объявленный любым своим устройством: {domain, id(hex)}. */
+  const plannerContainer = () => personalContainer(K.plannerContainer);
+  /** Объявить свой контейнер планировщика (LWW-регистр, один на пользователя). */
+  const recordPlannerContainer = (ref: { domain: string; id: string }) => (
+    recordPersonalContainer(K.plannerContainer, ref)
+  );
+  const healthContainer = () => personalContainer(K.healthContainer);
+  const recordHealthContainer = (ref: { domain: string; id: string }) => (
+    recordPersonalContainer(K.healthContainer, ref)
+  );
 
   // ── контейнеры облака (spec 016) ───────────────────────────────────────────
 
@@ -1241,6 +1249,8 @@ export function createStateJournal(deps: Deps) {
     removeGroupInvite,
     plannerContainer,
     recordPlannerContainer,
+    healthContainer,
+    recordHealthContainer,
     cloudEntries,
     recordCloudEntry,
     reset: () => {

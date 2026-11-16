@@ -106,7 +106,7 @@ try {
         await openPlannerScreen(phonePage, 'today');
       });
       await phone('calendar', () => openPlannerScreen(phonePage, 'calendar'));
-      await phone('health', () => phonePage.locator('#ParvanePlanner').locator('header').getByText('Health', { exact: true }).first().click());
+      await phone('health', () => bar.getByRole('button', { name: 'Health' }).click());
       await phone('quick', async () => {
         await phonePage.getByRole('button', { name: 'New entry' }).click();
         await phonePage.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');

@@ -186,12 +186,12 @@ describe('сторож исходников', () => {
   const read = (name: string) => readFileSync(`${__dirname}/${name}`, 'utf8');
 
   it('L2: возврат на вкладку и открытие раздела не опрашивают сервер вне ритма таймера', () => {
-    ['stateJournal.ts', 'planner.ts', 'cloud.ts'].forEach((file) => {
+    ['stateJournal.ts', 'personalSync.ts', 'cloud.ts'].forEach((file) => {
       const src = read(file);
       const handler = src.slice(src.indexOf('addEventListener(\'visibilitychange\''));
       expect(handler.slice(0, 600), file).toContain('isTimerSyncMode()');
     });
-    expect(read('planner.ts')).toContain('!isHidden() && !isTimerSyncMode()) void syncNow()');
+    expect(read('personalSync.ts')).toContain('!isHidden() && !isTimerSyncMode()) void syncNow()');
     expect(read('cloud.ts')).toContain('!isHidden() && !isTimerSyncMode()) void syncNow(true)');
   });
 

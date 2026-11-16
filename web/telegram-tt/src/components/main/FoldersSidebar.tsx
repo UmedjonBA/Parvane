@@ -9,7 +9,7 @@ import { selectLeftColumnContentKey } from '../../global/selectors';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import {
-  getKnowledgeView, getParvaneSection, getPlannerView, requestModuleAdd, requestPlannerAdd, setParvaneSection,
+  getKnowledgeView, getParvaneSection, requestHealthAdd, requestModuleAdd, requestPlannerAdd, setParvaneSection,
 } from '../../util/parvaneSection';
 import { openPalette } from '../parvane/palette/paletteOpen';
 import {
@@ -53,12 +53,11 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   const lang = useLang();
 
   const section = useDerivedState(getParvaneSection);
-  const plannerView = useDerivedState(getPlannerView);
   const knowledgeView = useDerivedState(getKnowledgeView);
   const { enabled: modules } = useParvaneModules();
   const unreadCount = useFolderManagerForUnreadCounters()[ALL_FOLDER_ID]?.chatsCount || 0;
 
-  const activeModule = getActiveModule(section, plannerView, knowledgeView, isSettingsOpen);
+  const activeModule = getActiveModule(section, knowledgeView, isSettingsOpen);
   const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();
 
   const handleModuleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -71,6 +70,7 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   const handleAddClick = useLastCallback(() => {
     if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
+    else if (activeModule === 'health') requestHealthAdd();
     else requestPlannerAdd();
   });
 

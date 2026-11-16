@@ -56,7 +56,7 @@ import {
   type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
 } from './v2/historyModel';
 import { pickRecoveryKey } from './v2/keyBundle';
-import { parseLinkCloudKeys, parseLinkPlannerKeys } from './v2/linkKeys';
+import { parseLinkCloudKeys, parseLinkHealthKeys, parseLinkPlannerKeys } from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import { createTabSignal } from './v2/tabSignal';
@@ -84,6 +84,7 @@ import {
   buildApiVideoFromSavedRecord, buildBuiltinGifs, BUILTIN_GIF_TAGS, canConvertGif, convertGifToWebm,
 } from './gifs';
 import { createGroupController } from './groups';
+import { createHealthApi } from './healthApi';
 import { createHistoryRows, type ModelChat } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
@@ -1401,6 +1402,11 @@ const v2Controller = createV2Controller({
   // Планировщик на сервере (spec 010): контейнер объявляется в журнале состояния
   plannerContainerFromState: () => stateJournal.plannerContainer(),
   recordPlannerContainer: (ref) => stateJournal.recordPlannerContainer(ref),
+  healthContainerFromState: () => stateJournal.healthContainer(),
+  recordHealthContainer: (ref) => stateJournal.recordHealthContainer(ref),
+  onHealthChanged: () => {
+    window.dispatchEvent(new CustomEvent('parvane-health-changed'));
+  },
   onPlannerChanged: () => {
     reminderScheduler.onPlannerChanged();
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-planner-changed'));
@@ -2029,6 +2035,7 @@ async function syncFromKeyBundle() {
   const bundle = await v2Controller.fetchKeyBundle();
   if (!bundle || store.self !== owner) return;
   if (bundle.planner) v2Controller.planner.keysImport(bundle.planner);
+  if (bundle.health) v2Controller.health.keysImport(bundle.health);
   if (bundle.cloud) v2Controller.cloud.keysImport(bundle.cloud);
   await v2Controller.applyBundleGroupsFrom(bundle.groups)
     .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
@@ -2056,7 +2063,9 @@ async function completeJoinFromBundle() {
   if (bundle) {
     await v2Controller.applyBundleGroupsFrom(bundle.groups)
       .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
-    completeKeyJoin({ result: 'ok', planner: bundle.planner, cloud: bundle.cloud });
+    completeKeyJoin({
+      result: 'ok', planner: bundle.planner, health: bundle.health, cloud: bundle.cloud,
+    });
   }
   await v2Controller.ackJoined();
 }
@@ -2070,6 +2079,7 @@ function completeKeyJoin(outcome: KeyJoinOutcome) {
   window.dispatchEvent(new CustomEvent('parvane-device-joined'));
   void registerV2Wake();
   if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
+  if (outcome.health) v2Controller.health.keysImport(outcome.health);
   if (outcome.cloud) v2Controller.cloud.keysImport(outcome.cloud);
   window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
 }
@@ -2434,10 +2444,12 @@ async function pollHistoryLinkGrant(generation: number) {
     return;
   }
   let plannerKeys: string | undefined;
+  let healthKeys: string | undefined;
   let cloudKeys: string | undefined;
   try {
     const exportText = await media.blob.text();
     plannerKeys = parseLinkPlannerKeys(exportText);
+    healthKeys = parseLinkHealthKeys(exportText);
     cloudKeys = parseLinkCloudKeys(exportText);
   } catch (err) {
     logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
@@ -2447,6 +2459,8 @@ async function pollHistoryLinkGrant(generation: number) {
   await joinV2WithLinkGrant(boxPayload.v2);
   // spec 010: ключи контейнера планировщика старого устройства
   if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);
+  // spec 038: ключи контейнера здоровья
+  if (healthKeys) v2Controller.health.keysImport(healthKeys);
   // spec 016: ключи контейнеров облака старого устройства
   if (cloudKeys) v2Controller.cloud.keysImport(cloudKeys);
 }
@@ -2658,9 +2672,16 @@ const translation = createTranslation({
   log: logDebug,
 });
 
+// «Здоровье» (spec 038): методы раздела — `healthApi.ts`
+const healthMethods = createHealthApi({
+  health: () => v2Controller.health,
+  log: logDebug,
+});
+
 const methods = {
   // Языковые пакеты из сборки (fallback.strings / ru.strings)
   ...langPackMethods,
+  ...healthMethods,
 
   fetchAppConfig({ hash }: { hash?: number }) {
     return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);
@@ -4183,6 +4204,7 @@ const methods = {
         linkVersion: 2,
         // spec 010: ключи контейнера планировщика — чтобы раздел открылся сразу после привязки
         planner: v2Controller.planner.keysExport(),
+        health: v2Controller.health.keysExport(),
         // spec 016: ключи контейнеров облака (личный диск, совместные папки)
         cloud: v2Controller.cloud.keysExport(),
       });

@@ -398,9 +398,9 @@ const Planner = () => {
       : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
         : syncStatus === 'no-key' ? 'PlannerSyncPending'
           : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
+  // «Здоровье» — отдельный модуль ленты (spec 041): во вкладках «Плана» остаётся календарь
   const viewTabs = [
     { title: lang('PlannerViewCalendar') },
-    { title: lang('PlannerHealth') },
   ];
   const isToday = view === 'today';
   const isHealth = view === 'health';

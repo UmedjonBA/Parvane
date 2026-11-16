@@ -1830,7 +1830,7 @@ LINK-1) — `device_log/`; журнал группы (GROUP-1, GROUP-2 прав�
 
 Реализации: движок `client_planner.rs`, `domain/planner.rs`,
 `domain/planner_json.rs`; шард `domains` (`key.rotate`, `container.list`);
-web `v2/planner.ts`, `controller.ts`, `provider.ts`, `plannerSync.ts`,
+web `v2/personalSync.ts` (вид — `planner.ts`), `controller.ts`, `provider.ts`, `plannerSync.ts`,
 `plannerStore.ts`. Тесты: движок `planner_domain.rs`, `client_flow.rs`
 (ключ своим устройствам, смена эпохи, чужой ключ игнорируется), шард
 `tests.rs key_rotate_and_container_list`; web `plannerSync.test.ts`, сторож
@@ -1927,7 +1927,7 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
    `domains::tests::truncate_after_complete_snapshot`, движок `client_flow::planner_truncated_cursor_takes_snapshot`.
    С spec 035 (11 ноя 2026) условие `complete` учитывает отметки `range-hold` журнала контейнера (`hold::note`,
    `domain::hold_journal`): снимок не заменяет и не обрезает то, чего составитель не понял (тесты
-   `tests/compat_circle.rs`, `tests/range_hold.rs`). ОТКРЫТО: хосты web (`v2/planner.ts`, `v2/cloud.ts`) и ядра
+   `tests/compat_circle.rs`, `tests/range_hold.rs`). ОТКРЫТО: хосты web (`v2/personalSync.ts`, `v2/cloud.ts`) и ядра
    (`sections/planner_sync.cpp`, `sections/cloud_sync.cpp`) берут снимок только при пустом курсоре, а по
    `need_snapshot` (курсор внутри обрезанного) — нет: курсор такого устройства стоит. Домены в модель движка ещё не
    переведены: намерение `IntentDomainOp` в `model.proto` есть, но клиенты зовут вызовы `planner*`/`cloud*`
@@ -2611,4 +2611,20 @@ string), черта, таблицы GFM, встроенные файлы; в с�
    отказ в течение 2 минут после продления второй раз не продлевается. Web дополнительно продлевает заранее — с
    половины срока.
 5. Web больше не гасит сохранённую сессию после суток без активности: предел — 180 суток.
+
+## HEALTH-3. Сводка «Здоровья» и запись ввода — в движке (17 ноя 2026)
+
+1. `healthView {nowMs, tzMin}` отдаёт всё, что экран показывает числом: последнюю ночь и её отклонение от цели,
+   режим сна за семь дней (сумма сна дня, «лёг / встал» главного сна), показатели с последним значением, итогом дня
+   (шаги, вода), остатком до цели, изменением за неделю и месяц и рядом за 30 дней, последние записи. Клиент эти
+   значения не пересчитывает.
+2. Цели — регистры `Goal`: имя вида (`weight`, `steps`, `water`, …) либо `sleep_bed` / `sleep_wake` (минуты от
+   полуночи; длительность по цели — от «лечь» до «встать» через полночь).
+3. `healthCompose {entries, nowMs}` превращает разобранные записи (`healthParse`) в изменения: случайный id каждой
+   записи; отметка `sleep_end` после незакрытой `sleep_start` (не старше суток) становится одним сном, отметка
+   «лёг» удаляется; сон отрезком тоже закрывает незакрытое «лёг».
+4. Контейнера ещё нет — сводка и изменения считаются от пустого состояния: первая запись создаёт контейнер.
+5. Контейнер здоровья в web живёт тем же кодом, что контейнер «Плана» (`v2/personalSync.ts`); его ключи едут в
+   копии ключей аккаунта (`health`) и в экспорте привязки устройства (`health`), указатель — вид состояния
+   `OBJECT_KIND_HEALTH_CONTAINER`.
 

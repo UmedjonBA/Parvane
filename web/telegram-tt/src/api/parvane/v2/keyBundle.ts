@@ -27,6 +27,8 @@ export type KeyBundlePayload = {
   grant: string;
   // Ключи контейнера планировщика (`plannerKeysExport`)
   planner?: string;
+  // Ключи контейнера здоровья (`healthKeysExport`, spec 038)
+  health?: string;
   // Ключи контейнеров облака (`cloudKeysExport`, JSON-массив)
   cloud?: string;
   // Ключи групп (`groupKeysExport`, JSON-массив base64): группы видны сразу после входа по ключу
@@ -227,6 +229,7 @@ export async function openKeyBundle(
     return {
       grant: payload.grant,
       planner: typeof payload.planner === 'string' ? payload.planner : undefined,
+      health: typeof payload.health === 'string' ? payload.health : undefined,
       cloud: typeof payload.cloud === 'string' ? payload.cloud : undefined,
       groups: typeof payload.groups === 'string' ? payload.groups : undefined,
       seq: readBundleSeq(payload.seq) || undefined,

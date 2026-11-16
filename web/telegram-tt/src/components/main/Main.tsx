@@ -53,7 +53,7 @@ import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
 import {
-  getKnowledgeView, getParvaneSection, getPlannerView, setParvaneSection,
+  getKnowledgeView, getParvaneSection, setParvaneSection,
 } from '../../util/parvaneSection';
 import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
@@ -99,6 +99,7 @@ import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
 import Cloud from '../parvane/Cloud.async';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
+import Health from '../parvane/Health.async';
 import Knowledge from '../parvane/Knowledge.async';
 import ParvanePalette from '../parvane/palette/ParvanePalette.async';
 import Planner from '../parvane/Planner.async';
@@ -804,6 +805,7 @@ const Main = ({
   const chatPatternColor = schemeChatColors && !hasOwnPattern ? schemeChatColors.pattern : patternColor;
   const chatBackgroundColor = backgroundColor || schemeChatColors?.background;
   const isPlannerOpen = parvaneSection === 'planner';
+  const isHealthOpen = parvaneSection === 'health';
   const isCloudOpen = parvaneSection === 'cloud';
   const knowledgeView = useDerivedState(getKnowledgeView);
   // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
@@ -812,8 +814,7 @@ const Main = ({
   // Открытый модуль выключили (экран «Модули», список сервера, сохранённый раздел прежнего запуска) —
   // показываем «Чаты»: в выключенный модуль навигация не ведёт
   const { enabled: enabledModules } = useParvaneModules();
-  const plannerView = useDerivedState(getPlannerView);
-  const openModuleId = getActiveModule(parvaneSection, plannerView, knowledgeView, false);
+  const openModuleId = getActiveModule(parvaneSection, knowledgeView, false);
   useEffect(() => {
     if (!enabledModules.includes(openModuleId)) setParvaneSection('messenger');
   }, [enabledModules, openModuleId]);
@@ -825,6 +826,9 @@ const Main = ({
   const isPlannerMountedRef = useRef(false);
   const shouldMountPlanner = isPlannerOpen || isPlannerMountedRef.current;
   isPlannerMountedRef.current = shouldMountPlanner;
+  const isHealthMountedRef = useRef(false);
+  const shouldMountHealth = isHealthOpen || isHealthMountedRef.current;
+  isHealthMountedRef.current = shouldMountHealth;
   const isCloudMountedRef = useRef(false);
   const shouldMountCloud = isCloudFilesOpen || isCloudMountedRef.current;
   isCloudMountedRef.current = shouldMountCloud;
@@ -851,6 +855,7 @@ const Main = ({
     isFullscreen && 'is-fullscreen',
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
+    isHealthOpen && 'section-health',
     isCloudOpen && 'section-cloud',
     isCloudFilesOpen && 'section-cloud-files',
     isKnowledgeOpen && 'section-knowledge',
@@ -900,6 +905,7 @@ const Main = ({
       />
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
       {shouldMountPlanner && <Planner />}
+      {shouldMountHealth && <Health />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
       {shouldMountKnowledge && <Knowledge />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}

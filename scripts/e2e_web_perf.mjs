@@ -245,7 +245,7 @@ try {
   for (const round of [1, 2]) {
     await timed(`пусто ${round}: Календарь`, async () => { await openPlannerScreen(page, 'calendar'); await visible(planner, 'план'); });
     await timed(`пусто ${round}: Сегодня`, () => openPlannerScreen(page, 'today'));
-    await timed(`пусто ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(planner.locator('[data-planner-health]'), 'здоровье'); });
+    await timed(`пусто ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(page.locator('#ParvaneHealth'), 'здоровье'); });
     await timed(`пусто ${round}: Знания`, async () => { await openSection('Notes'); await visible(knowledge, 'знания'); });
     await timed(`пусто ${round}: Файлы`, async () => { await openSection('Files'); await visible(cloud, 'файлы'); });
     await timed(`пусто ${round}: Чаты`, async () => { await openSection('Chats'); await waitForChatList(page); });
@@ -313,7 +313,7 @@ try {
   for (const round of [1, 2]) {
     await timed(`данные ${round}: Календарь`, async () => { await openPlannerScreen(page, 'calendar'); await visible(planner, 'план'); });
     await timed(`данные ${round}: Сегодня`, () => openPlannerScreen(page, 'today'));
-    await timed(`данные ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(planner.locator('[data-planner-health]'), 'здоровье'); });
+    await timed(`данные ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(page.locator('#ParvaneHealth'), 'здоровье'); });
     await timed(`данные ${round}: Знания (заметки)`, async () => {
       await openSection('Notes');
       await visible(knowledge.locator(`[data-note-row="${noteTitle(NOTES)}"]`), 'список заметок');

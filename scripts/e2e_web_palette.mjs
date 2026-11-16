@@ -139,7 +139,7 @@ try {
   await selectedIs('nav:health', 'по запросу выбрана не команда «Здоровье»');
   await page.keyboard.press('Enter');
   await hidden(input, 'Enter не закрыл палитру');
-  await visible(planner.locator('[data-health="activity"]'), 'экран «Здоровье» по команде');
+  await visible(page.locator('#ParvaneHealth'), 'модуль «Здоровье» по команде');
   console.log('OK: кнопка боковой панели, стрелки, команда-переход');
 
   // ── Заметка: по названию (регистр) и по тексту (отрывок) ──────────────────

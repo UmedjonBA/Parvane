@@ -320,6 +320,7 @@
 #Main.parvane-tab-bar-shown {
   > #LeftColumn,
   > #ParvanePlanner,
+  > #ParvaneHealth,
   > #ParvaneKnowledge,
   > #ParvaneCloud {
     bottom: var(--parvane-tab-bar-height);
@@ -330,6 +331,7 @@
 // мессенджера; сами колонки остаются смонтированными (звонки, синхронизация),
 // но скрыты
 #Main.section-planner,
+#Main.section-health,
 #Main.section-cloud {
   > #LeftColumn,
   > #MiddleColumn,
@@ -341,6 +343,7 @@
 // Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются
 // смонтированными под другими разделами (см. Main.tsx) — скрываем их так же, как колонки
 #Main:not(.section-planner) > #ParvanePlanner,
+#Main:not(.section-health) > #ParvaneHealth,
 #Main:not(.section-knowledge) > #ParvaneKnowledge,
 #Main:not(.section-cloud-files) > #ParvaneCloud {
   display: none;

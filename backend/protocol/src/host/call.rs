@@ -480,6 +480,13 @@ impl HostClient {
             "healthHasKey" => json!(c.health_has_key()),
             "healthHeadSeq" => json!(c.health_head_seq()),
             "healthStateJson" => c.health_state_json().map_or(Value::Null, parsed),
+            // HEALTH-3: изменения для записи разобранного ввода (id записей, «лёг» + «встал» → один сон)
+            "healthCompose" => {
+                let entries: Vec<Value> = a.raw("entries").as_array().cloned().unwrap_or_default();
+                parsed(c.health_compose_json(&entries, a.i("nowMs")?))
+            }
+            // HEALTH-3: сводка для экранов — считает движок, клиент рисует
+            "healthView" => parsed(c.health_view_json(a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
             "healthCreate" => req(&c.health_create(a.i("tsMs")?).map_err(cerr)?),
             "healthAttach" => {
                 c.health_attach(&a.b("getResponse")?, &a.b("grantsResponse")?).map_err(cerr)?;

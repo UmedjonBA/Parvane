@@ -109,28 +109,43 @@ export async function openEditProfile(page) {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Экран «Плана»: `today`, `calendar` (сетка в виде, который устройство запомнило, — по умолчанию месяц)
-// либо `health`. «Сегодня» — первый пункт переключателя вида календаря, отдельной кнопки раздела у него
+// Экран «Плана»: `today` либо `calendar` (сетка в виде, который устройство запомнило, — по умолчанию месяц);
+// `health` открывает модуль «Здоровье». «Сегодня» — первый пункт переключателя вида календаря, отдельной кнопки раздела у него
 // нет: путь — «Календарь» в боковой панели (на телефоне — «План» нижней панели и вкладка «Календарь»),
 // затем пункт переключателя. Кнопка «Календарь» сама открывает то, что календарь показывал в последний
 // раз, поэтому нужный пункт выбирается явно
 const PLANNER_CALENDAR_VIEWS = ['week', 'month', 'year', 'agenda'];
 
+/** Модуль «Здоровье» (spec 041): вкладка боковой панели либо кнопка нижней ленты. Возвращает корень модуля. */
+export async function openHealthModule(page) {
+  const health = page.locator('#ParvaneHealth');
+  const rail = page.locator('#FoldersSidebar');
+  // После перезагрузки навигации ещё нет: ждём панель либо ленту, потом выбираем путь
+  await rail.or(page.getByRole('navigation', { name: 'Modules' })).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (await rail.isVisible().catch(() => false)) {
+    await rail.getByRole('tab', { name: 'Health', exact: true }).click();
+  } else {
+    await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Health' }).click();
+  }
+  await health.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  return health;
+}
+
 export async function openPlannerScreen(page, screen = 'calendar') {
+  // «Здоровье» — отдельный модуль, экрана в «Плане» у него больше нет
+  if (screen === 'health') return openHealthModule(page);
   const planner = page.locator('#ParvanePlanner');
-  const tabName = screen === 'health' ? 'Health' : 'Calendar';
   const rail = page.locator('#FoldersSidebar');
   if (await rail.isVisible().catch(() => false)) {
-    // Модуль «План» в панели называется Planner, «Здоровье» — отдельный модуль
-    await rail.getByRole('tab', { name: screen === 'health' ? 'Health' : 'Planner', exact: true }).click();
+    await rail.getByRole('tab', { name: 'Planner', exact: true }).click();
   } else {
     if (!(await planner.isVisible().catch(() => false))) {
       await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Planner' }).click();
     }
-    await planner.locator('header').getByText(tabName, { exact: true }).first().click();
+    await planner.locator('header').getByText('Calendar', { exact: true }).first().click();
   }
   await planner.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  if (screen === 'health') return planner;
   const saved = await page.evaluate(() => localStorage.getItem('parvane:planner-view'));
   const value = screen === 'today' ? 'today' : PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
   const segment = planner.getByRole('group', { name: 'Calendar view' }).locator(`button[data-value="${value}"]`);

@@ -16,7 +16,7 @@ import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironme
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
 import {
-  markContactsFromProfile, openKnowledgeView, openPlannerView, requestPlannerSettings,
+  markContactsFromProfile, openHealth, openKnowledgeView, requestPlannerSettings,
 } from '../../../util/parvaneSection';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -130,7 +130,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   });
 
   const handleOpenHealth = useLastCallback(() => {
-    openPlannerView('health');
+    openHealth();
   });
 
   const handleOpenVault = useLastCallback(() => {

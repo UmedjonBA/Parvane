@@ -1074,6 +1074,7 @@ pub mod planner_json;
 pub mod health;
 /// JSON «Здоровья» для хостов: сведённое состояние и изменения.
 pub mod health_json;
+pub mod health_view;
 
 /// Тестовый домен `sample.v1` (SC-005): LWW-карта.
 pub mod sample {

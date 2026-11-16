@@ -2005,8 +2005,10 @@ describe('DOMAIN-1: планировщик parvane.planner.v1 — ключи к�
   });
 
   it('web: контейнер, очередь и ключи в экспорте линковки', () => {
-    const sync = readRepo('web/telegram-tt/src/api/parvane/v2/planner.ts');
-    expect(sync).toContain(`export const PLANNER_DOMAIN = '${r.domain}';`);
+    expect(readRepo('web/telegram-tt/src/api/parvane/v2/planner.ts'))
+      .toContain(`export const PLANNER_DOMAIN = '${r.domain}';`);
+    // Жизненный цикл личного контейнера — общий для «Плана» и «Здоровья» (spec 038)
+    const sync = readRepo('web/telegram-tt/src/api/parvane/v2/personalSync.ts');
     expect(sync).toContain('\'domain.op.sync\'');
     expect(sync).toContain('\'domain.snapshot.get\'');
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');

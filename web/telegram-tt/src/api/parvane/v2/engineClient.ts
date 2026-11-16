@@ -62,6 +62,9 @@ function bytesIn(value: any, fields: string[]) {
   return out;
 }
 
+/** Вид личного контейнера домена. */
+export type PersonalKind = 'planner' | 'health';
+
 export class EngineClient {
   constructor(private readonly host: ClientCore) {}
 
@@ -469,6 +472,57 @@ export class EngineClient {
   peerRenamedTo(user: string): string | undefined {
     const v = this.c('peerRenamedTo', { user });
     return isNil(v) ? undefined : text(v);
+  }
+
+  /** Сводка «Здоровья» для экранов (HEALTH-3): считает движок. Контейнера нет — `undefined`. */
+  healthView(nowMs: number, tzMin: number): string | undefined {
+    const v = this.c('healthView', { nowMs, tzMin });
+    return isNil(v) ? undefined : text(v);
+  }
+
+  /** Изменения для записи разобранных записей (HEALTH-3): JSON `{changes}` для `prepareLocal`. */
+  healthCompose(entries: unknown[], nowMs: number): string {
+    return text(this.c('healthCompose', { entries, nowMs }));
+  }
+
+  /** Разбор свободного ввода «Здоровья» (HEALTH-2): JSON `{entries, unparsed, problems}`. */
+  healthParse(input: string, nowMs: number, tzMin: number): string {
+    return text(this.c('healthParse', { text: input, nowMs, tzMin }));
+  }
+
+  /** Личный контейнер домена этого вида («План», «Здоровье»): один набор вызовов движка, имена — `<вид>Xxx`. */
+  personal(kind: PersonalKind) {
+    const call = (name: string, args: Record<string, unknown> = {}) => this.c(`${kind}${name}`, args);
+    const textOrNone = (v: unknown) => (isNil(v) ? undefined : text(v));
+    const shareName = kind === 'planner' ? 'sharePlannerWithOwnDevices' : 'shareHealthWithOwnDevices';
+    return {
+      applyLocal: (op: Uint8Array) => call('ApplyLocal', { op: b(op) }) as number,
+      attach: (getResponse: Uint8Array, grantsResponse: Uint8Array) => {
+        call('Attach', { getResponse: b(getResponse), grantsResponse: b(grantsResponse) });
+      },
+      container: (): any => reqs(call('Container')),
+      create: (tsMs: number): any => reqs(call('Create', { tsMs })),
+      hasKey: () => call('HasKey') as boolean,
+      headSeq: () => call('HeadSeq') as number,
+      ingestGrants: (grantsResponse: Uint8Array) => (
+        call('IngestGrants', { grantsResponse: b(grantsResponse) }) as number
+      ),
+      ingestSnapshot: (snapshotResponse: Uint8Array) => (
+        call('IngestSnapshot', { snapshotResponse: b(snapshotResponse) }) as number
+      ),
+      ingestSync: (syncResponse: Uint8Array): any => reqs(call('IngestSync', { syncResponse: b(syncResponse) })),
+      isAttached: () => call('IsAttached') as boolean,
+      keysExport: () => textOrNone(call('KeysExport')),
+      keysImport: (json: string) => {
+        call('KeysImport', { json });
+      },
+      prepareLocal: (changesJson: string): any => bytesIn(reqs(call('PrepareLocal', { changesJson })), ['op']),
+      seal: (op: Uint8Array, opIdHex: string, tsMs: number): any => reqs(call('Seal', { op: b(op), opIdHex, tsMs })),
+      size: () => call('Size') as number,
+      snapshotRequest: (tsMs: number): any => reqs(call('SnapshotRequest', { tsMs })),
+      stateJson: () => textOrNone(call('StateJson')),
+      shareWithOwnDevices: (): Array<any> => reqs(this.c(shareName, {})),
+    };
   }
 
   plannerApplyLocal(op: Uint8Array): number {
