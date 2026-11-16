@@ -84,6 +84,7 @@ enum class ObjectKind : int32_t {
     OBJECT_KIND_CHAT_CLEARED = 18,
     OBJECT_KIND_SAVED_GIF = 19,
     OBJECT_KIND_FAVED_STICKER = 20,
+    OBJECT_KIND_HEALTH_CONTAINER = 21,
 };
 void to_json(nlohmann::json &j, const ObjectKind &v);
 void from_json(const nlohmann::json &j, ObjectKind &v);

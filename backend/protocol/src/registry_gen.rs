@@ -55,7 +55,7 @@ pub const INTERNAL_ACCOUNT_GONE: &str = "v2.internal.messenger.account_gone";
 pub const INTERNAL_EPH_IN: &str = "v2.internal.gateway.eph_in";
 
 /// Роли NATS, у которых есть v2-права.
-pub const ROLES: &[&str] = &["identity", "messenger", "cloud", "call", "preview", "push", "gateway", "domains", "federation"];
+pub const ROLES: &[&str] = &["identity", "messenger", "cloud", "call", "preview", "push", "gateway", "domains", "federation", "music"];
 
 /// Токен subject'а журнала устройства: без `.`/`*`/`>` — hex SHA-256 от
 /// проверенного адреса и device_id (не раскрывает адрес в имени subject'а).

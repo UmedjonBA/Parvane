@@ -73,6 +73,7 @@ enum ObjectKind {
   OBJECT_KIND_CHAT_CLEARED = 18;      // ключ: peer_key; отметка 2 — граница очистки (только растёт)
   OBJECT_KIND_SAVED_GIF = 19;         // ключ: "g:<sha256>" (GIF-1); StickerPack
   OBJECT_KIND_FAVED_STICKER = 20;     // ключ: set_id ‖ "/" ‖ sticker_id (FR-075); FavedSticker
+  OBJECT_KIND_HEALTH_CONTAINER = 21;  // одиночка; PlannerContainer (ссылка на контейнер «Здоровья», spec 038)
 }
 
 message ObjectKey {

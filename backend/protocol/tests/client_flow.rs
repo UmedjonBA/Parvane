@@ -1398,6 +1398,103 @@ fn planner_edit(dom: &mut MiniDomains, srv: &mut Server, c: &mut Client, changes
     dom.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);
 }
 
+fn health_kinds(c: &Client) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(&c.health_state_json().unwrap()).unwrap();
+    v["entries"].as_array().unwrap().iter().map(|e| format!("{}={}", e["kind"].as_str().unwrap(), e["value"])).collect()
+}
+
+fn health_edit(dom: &mut MiniDomains, srv: &mut Server, c: &mut Client, changes: &str) {
+    let local = c.health_prepare_local(changes).unwrap();
+    let req = c.health_seal(&local.op, &local.op_id, 1).unwrap();
+    dom.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);
+}
+
+/// spec 038: «Здоровье» — второй личный контейнер рядом с планировщиком; ключи двух контейнеров не путаются,
+/// записи двух устройств складываются, отзыв устройства поднимает эпоху обоих.
+#[test]
+fn health_container_lives_next_to_planner() {
+    let mut srv = Server::default();
+    let (mut plan, mut dom) = (MiniDomains::default(), MiniDomains::default());
+    let mut alice = setup(&mut srv, "alice@local");
+    let create = alice.planner_create(1).unwrap();
+    plan.handle(&mut srv, "alice@local", "d1", &create);
+    let create = alice.health_create(1).unwrap();
+    dom.handle(&mut srv, "alice@local", "d1", &create);
+    assert!(alice.health_has_key() && alice.planner_has_key());
+    assert_ne!(alice.health_container().unwrap().id, alice.planner_container().unwrap().id);
+    assert_eq!(alice.health_create(1).unwrap_err(), ClientError::Proto(parvane_protocol::ProtoError::Duplicate));
+    const T: i64 = 1_794_000_000_000;
+    health_edit(&mut dom, &mut srv, &mut alice, &format!(r#"{{"changes":[{{"entry":{{"id":"w1","kind":"water","atMs":{T},"tzMin":180,"value":250,"unit":"ml"}}}}]}}"#));
+    planner_edit(&mut plan, &mut srv, &mut alice, r#"{"changes":[{"task":{"id":"t1","name":"Первая","status":"queue"}}]}"#);
+    assert_eq!(health_kinds(&alice), vec!["water=250.0"]);
+
+    // Второе устройство: ключи обоих контейнеров приходят вместе с ключом доставки
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    assert_eq!(shared.len(), 3, "ключ доставки и ключи двух контейнеров");
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(ev.iter().any(|e| matches!(e, Event::HealthChanged { head_seq: 0, .. })), "{ev:?}");
+    assert!(ev.iter().any(|e| matches!(e, Event::PlannerChanged { head_seq: 0, .. })), "{ev:?}");
+    // Подключение планировщика не съедает ключ «Здоровья», и наоборот
+    alice2.planner_attach(&plan.get_response(), &plan.grants_response(0)).unwrap();
+    assert!(alice2.planner_has_key() && !alice2.health_is_attached());
+    alice2.health_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    assert!(alice2.health_has_key());
+    // Чужой контейнер в слот «Здоровья» не подключается
+    let mut alice_x = Client::import(&alice2.export(&[1u8; 32]).unwrap(), &[1u8; 32]).unwrap();
+    assert!(alice_x.health_attach(&plan.get_response(), &plan.grants_response(0)).is_err());
+    assert_eq!(alice2.health_ingest_sync(&dom.sync_response(0)).unwrap().applied, 1);
+    assert_eq!(alice2.planner_ingest_sync(&plan.sync_response(0)).unwrap().applied, 1);
+
+    // Прибавка воды со второго устройства — отдельная запись, первая цела
+    health_edit(&mut dom, &mut srv, &mut alice2, &format!(r#"{{"changes":[{{"entry":{{"id":"w2","kind":"water","atMs":{},"tzMin":180,"value":300,"unit":"ml"}}}},{{"goal":{{"id":"water_ml","target":2000}}}}]}}"#, T + 60_000));
+    // Свою операцию alice ещё не видела в журнале — её эхо идемпотентно
+    let r = alice.health_ingest_sync(&dom.sync_response(alice.health_head_seq())).unwrap();
+    assert_eq!((r.applied, r.head_seq), (3, 2));
+    assert_eq!(health_kinds(&alice), vec!["water=250.0", "water=300.0"]);
+
+    // Персист и экспорт ключей линковки
+    let key = [7u8; 32];
+    let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert!(restored.health_has_key() && restored.planner_has_key());
+    assert_eq!(restored.health_state_json(), alice.health_state_json());
+    let export = alice.health_keys_export().unwrap();
+    assert_eq!((export.domain.as_str(), export.keys.len()), ("parvane.health.v1", 1));
+    let mut alice3 = Client::new("alice@local", "d3", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice3.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d3", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    // Ключи обоих контейнеров импортированы до подключения — ни один не потерян
+    alice3.planner_keys_import(&alice.planner_keys_export().unwrap()).unwrap();
+    alice3.health_keys_import(&export).unwrap();
+    alice3.planner_attach(&plan.get_response(), &plan.grants_response(0)).unwrap();
+    alice3.health_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    assert!(alice3.planner_has_key() && alice3.health_has_key());
+    assert_eq!(alice3.health_ingest_sync(&dom.sync_response(0)).unwrap().applied, 3);
+
+    // Отзыв d2: эпоха поднимается у обоих контейнеров
+    let mut requests = vec![];
+    for _ in 0..8 {
+        match alice.revoke_device("d2") {
+            Ok(o) => {
+                requests = o.requests;
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    let rotates: Vec<&OutRequest> = requests.iter().filter(|r| r.method == "domain.key.rotate").collect();
+    assert_eq!(rotates.len(), 2, "планировщик и «Здоровье»");
+}
+
 #[test]
 fn planner_container_shared_with_own_devices_and_rotated_on_revoke() {
     let mut srv = Server::default();

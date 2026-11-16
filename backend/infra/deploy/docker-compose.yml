@@ -43,6 +43,7 @@ services:
       PARVANE_PUSH_PASS: ${PARVANE_PUSH_PASS}
       PARVANE_DOMAINS_PASS: ${PARVANE_DOMAINS_PASS}
       PARVANE_FEDERATION_PASS: ${PARVANE_FEDERATION_PASS}
+      PARVANE_MUSIC_PASS: ${PARVANE_MUSIC_PASS}
       PARVANE_GATEWAY_PASS: ${PARVANE_GATEWAY_PASS}
     read_only: true
     cap_drop:
@@ -177,6 +178,50 @@ services:
       PARVANE_NATS_PASS: ${PARVANE_PREVIEW_PASS}
       PARVANE_DB_PATH: /data/preview.db
       PARVANE_LOG_LEVEL: info
+
+  # «Музыка» (spec 039) — необязательный модуль: `docker compose --profile music up -d`. Без профиля сервисы не
+  # стартуют; тогда добавьте `music` в PARVANE_DISABLED_MODULES, чтобы клиенты спрятали модуль.
+  music:
+    <<: *shard-common
+    profiles: ["music"]
+    command: ["/usr/local/bin/music"]
+    volumes:
+      - db-music:/data
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: music
+      PARVANE_NATS_PASS: ${PARVANE_MUSIC_PASS:-}
+      PARVANE_MUSIC_NAVIDROME_URL: http://navidrome:4533
+      PARVANE_MUSIC_PUBLIC_BASE: ${PARVANE_MUSIC_PUBLIC_BASE:-}
+      PARVANE_MUSIC_HTTP_BIND: 0.0.0.0:9340
+      # Ключ подписи ссылок потока и обложек (создаётся при первом старте, 0600)
+      PARVANE_MUSIC_URL_KEY_FILE: /data/music-url.key
+      PARVANE_LOG_LEVEL: info
+
+  # Музыкальный сервер: наружу не опубликован, пользователя называет только шард music (заголовок Remote-User
+  # от доверенной сети compose). Внешние обращения выключены: ни Last.fm, ни Spotify, ни телеметрии.
+  navidrome:
+    image: deluan/navidrome:latest
+    profiles: ["music"]
+    restart: unless-stopped
+    cap_drop: ["ALL"]
+    mem_limit: 512m
+    pids_limit: 256
+    volumes:
+      - navidrome-data:/data
+      - ${PARVANE_MUSIC_DIR:-music-library}:/music:ro
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_EXTAUTH_TRUSTEDSOURCES: ${PARVANE_MUSIC_TRUSTED_SOURCES:-172.16.0.0/12}
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_LASTFM_ENABLED: "false"
+      ND_LISTENBRAINZ_ENABLED: "false"
+      ND_ENABLEEXTERNALSERVICES: "false"
+      ND_ENABLESHARING: "false"
+      ND_ENABLEUSEREDITING: "false"
+      ND_SCANNER_SCHEDULE: "@every 15m"
+      ND_LOGLEVEL: warn
 
   push:
     <<: *shard-common
@@ -333,6 +378,9 @@ volumes:
   db-push:
   db-domains:
   db-federation:
+  db-music:
+  navidrome-data:
+  music-library:
   caddy-data:
   caddy-config:
   well-known:

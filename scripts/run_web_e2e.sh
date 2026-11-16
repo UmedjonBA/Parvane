@@ -64,6 +64,7 @@ PREVIEW_PASS="parvane-e2e-preview"
 PUSH_PASS="parvane-e2e-push"
 DOMAINS_PASS="parvane-e2e-domains"
 FEDERATION_PASS="parvane-e2e-federation"
+MUSIC_PASS="parvane-e2e-music"
 GATEWAY_PASS="parvane-e2e-gateway"
 
 log() {
@@ -182,6 +183,7 @@ env \
   PARVANE_PUSH_PASS="$PUSH_PASS" \
   PARVANE_DOMAINS_PASS="$DOMAINS_PASS" \
   PARVANE_FEDERATION_PASS="$FEDERATION_PASS" \
+  PARVANE_MUSIC_PASS="$MUSIC_PASS" \
   PARVANE_GATEWAY_PASS="$GATEWAY_PASS" \
   nats-server -c "$ROOT/backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
   >"$TEMP_ROOT/nats.log" 2>&1 &

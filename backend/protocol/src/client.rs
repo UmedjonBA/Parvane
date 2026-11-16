@@ -154,6 +154,8 @@ pub enum Event {
     /// Контейнер планировщика (spec 010): принят ключ эпохи, применены
     /// ожидавшие операции либо контейнер ещё надо подключить (`head_seq` 0).
     PlannerChanged { seq: u64, head_seq: u64 },
+    /// Контейнер «Здоровья» (spec 038): пришёл ключ либо изменилось состояние.
+    HealthChanged { seq: u64, head_seq: u64 },
     /// Контейнер облака (spec 016): принят ключ эпохи и применены ожидавшие
     /// операции либо контейнер ещё надо подключить (ключ ждёт).
     CloudChanged { seq: u64, id: Vec<u8> },
@@ -385,6 +387,8 @@ pub struct Client {
     eph: BTreeMap<[u8; ephemeral::CHANNEL_ID_LEN], (EphChannel, EphTarget)>,
     /// Контейнер планировщика (spec 010) и ключи, ждущие его подключения.
     planner: Option<PlannerLocal>,
+    /// Контейнер «Здоровья» (spec 038) — тот же код, что у планировщика (`Personal`).
+    health: Option<PlannerLocal>,
     planner_pending_keys: Vec<ContainerKeyShare>,
     /// Ключи из экспорта линковки: (домен, id контейнера, эпоха, ключ).
     planner_trusted_keys: Vec<(String, Vec<u8>, u64, [u8; 32])>,
@@ -508,6 +512,7 @@ impl Client {
             l2_group_pref: BTreeMap::new(),
             eph: BTreeMap::new(),
             planner: None,
+            health: None,
             planner_pending_keys: vec![],
             planner_trusted_keys: vec![],
             planner_authors: BTreeMap::new(),
@@ -2029,11 +2034,7 @@ impl Client {
             o.state_key_version = Some(v);
         }
         // Контейнер планировщика (spec 010, REVOKE-1): новая эпоха ключа.
-        match self.planner_rotate_on_revoke(now_ms()) {
-            Ok(r) => o.requests.extend(r),
-            Err(ClientError::Proto(e)) => self.last_error = Some(e),
-            Err(ClientError::Need(_)) => {}
-        }
+        o.requests.extend(self.personal_rotate_all_on_revoke(now_ms()));
         // Контейнеры облака (spec 016), где пользователь админ: новая эпоха ключа.
         o.requests.extend(self.cloud_rotate_on_revoke(now_ms()));
         // Собеседники.
@@ -2419,7 +2420,7 @@ impl Client {
                 if share.domain == crate::domain::cloud::DOMAIN_NAME {
                     return Ok(self.cloud_accept_key(&sender, &share, seq));
                 }
-                return Ok(self.planner_accept_key(&sender, &share, seq));
+                return Ok(self.personal_accept_key(&sender, &share, seq));
             }
             Some(content::Kind::GroupKey(gk)) => {
                 let gk = gk.clone();
@@ -3146,7 +3147,7 @@ impl Client {
         }
         // Ключ контейнера планировщика (spec 010) — тем же устройствам.
         // … и ключи контейнеров облака (spec 016).
-        for c in account.into_iter().chain(self.planner_key_content()).chain(self.cloud_key_contents_for_own_devices()) {
+        for c in account.into_iter().chain(self.personal_key_contents()).chain(self.cloud_key_contents_for_own_devices()) {
             let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
             let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
             if !r.envelopes.is_empty() {
@@ -3714,7 +3715,8 @@ impl Client {
             group_behind: self.groups.iter().filter_map(|(id, g)| g.behind.map(|v| (b(id), v))).collect(),
             l2_direct: self.l2_direct.iter().map(|(chat, s)| (chat.clone(), s.prefs().map(|(u, p)| (u.to_string(), p.enabled, p.ts_ms)).collect())).collect(),
             l2_group_pref: self.l2_group_pref.iter().map(|(g, p)| (b(g), p.enabled, p.ts_ms)).collect(),
-            planner: self.planner_persist(),
+            planner: self.personal_persist(Personal::Planner),
+            health: self.personal_persist(Personal::Health),
             planner_pending_keys: self.planner_pending_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
             planner_trusted_keys: self.planner_trusted_keys.iter().map(|(d, id, e, k)| (d.clone(), b(id), *e, b(k))).collect(),
             planner_authors: self.planner_authors.iter().map(|(k, d)| (b(k), d.clone())).collect(),
@@ -3904,7 +3906,10 @@ impl Client {
             }
         }
         if let Some(pp) = &p.planner {
-            c.planner_restore(pp)?;
+            c.personal_restore(Personal::Planner, pp)?;
+        }
+        if let Some(pp) = &p.health {
+            c.personal_restore(Personal::Health, pp)?;
         }
         for (k, user, dev) in &p.cloud_authors {
             c.cloud_authors.insert(d32(k)?, (user.clone(), dev.clone()));
@@ -4087,6 +4092,9 @@ struct Persisted {
     /// Контейнер планировщика (spec 010).
     #[serde(default)]
     planner: Option<PersistedPlanner>,
+    /// Контейнер «Здоровья» (spec 038).
+    #[serde(default)]
+    health: Option<PersistedPlanner>,
     #[serde(default)]
     planner_pending_keys: Vec<String>,
     #[serde(default)]

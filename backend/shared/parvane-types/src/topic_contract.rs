@@ -20,6 +20,7 @@ pub const NOTES_REPLY_INBOX: &str = "_INBOX.notes.>";
 pub const CALENDAR_REPLY_INBOX: &str = "_INBOX.calendar.>";
 pub const CALL_REPLY_INBOX: &str = "_INBOX.call.>";
 pub const PREVIEW_REPLY_INBOX: &str = "_INBOX.preview.>";
+pub const MUSIC_REPLY_INBOX: &str = "_INBOX.music.>";
 pub const PUSH_REPLY_INBOX: &str = "_INBOX.push.>";
 pub const GATEWAY_REPLY_INBOX: &str = "_INBOX.gateway.>";
 
@@ -65,6 +66,9 @@ pub const CALENDAR_NATS_PUBLISH: &[&str] = &[IDENTITY_VERIFY, REQUEST_INBOX];
 
 pub const PREVIEW_NATS_SUBSCRIBE: &[&str] = &[PREVIEW_REPLY_INBOX];
 pub const PREVIEW_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
+/// Шард music (spec 039): только методы v2 из реестра и свой ящик ответов.
+pub const MUSIC_NATS_SUBSCRIBE: &[&str] = &[MUSIC_REPLY_INBOX];
+pub const MUSIC_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];
 
 pub const PUSH_NATS_SUBSCRIBE: &[&str] = &[PUSH_REPLY_INBOX];
 pub const PUSH_NATS_PUBLISH: &[&str] = &[REQUEST_INBOX];

@@ -1,0 +1,174 @@
+// «Музыка» (spec 039): общая библиотека сервера. Шард `music` — тонкая прослойка перед Navidrome (Subsonic):
+// каталог и отметки — этими методами, байты трека и обложки — по HTTPS-ссылке с подписью и сроком
+// (`/_parvane/music/…`), а не через gateway. Сервер видит треки и прослушивания (это не E2E).
+// Идентификаторы треков, альбомов, артистов и обложек — строки музыкального сервера.
+syntax = "proto3";
+
+package parvane.music.v1;
+
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+
+service MusicService {
+  rpc Info(InfoRequest) returns (InfoResponse) {
+    option (parvane.core.v2.method) = {name: "music.info" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc LibrarySearch(LibrarySearchRequest) returns (LibrarySearchResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.search" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc LibraryRecent(LibraryRecentRequest) returns (LibraryRecentResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.recent" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc LibraryAlbum(LibraryAlbumRequest) returns (LibraryAlbumResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.album" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc LibraryArtist(LibraryArtistRequest) returns (LibraryArtistResponse) {
+    option (parvane.core.v2.method) = {name: "music.library.artist" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc TrackGet(TrackGetRequest) returns (TrackGetResponse) {
+    option (parvane.core.v2.method) = {name: "music.track.get" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc StreamUrl(StreamUrlRequest) returns (StreamUrlResponse) {
+    option (parvane.core.v2.method) = {name: "music.stream.url" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc StarSet(StarSetRequest) returns (StarSetResponse) {
+    option (parvane.core.v2.method) = {name: "music.star.set" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc StarList(StarListRequest) returns (StarListResponse) {
+    option (parvane.core.v2.method) = {name: "music.star.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+}
+
+message Track {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  string title = 2 [(parvane.core.v2.max_len) = 512];
+  string artist = 3 [(parvane.core.v2.max_len) = 512];
+  string album = 4 [(parvane.core.v2.max_len) = 512];
+  string album_id = 5 [(parvane.core.v2.max_len) = 64];
+  string artist_id = 6 [(parvane.core.v2.max_len) = 64];
+  uint32 duration_secs = 7;
+  uint64 size_bytes = 8;
+  // Тип исходного файла (audio/mpeg, audio/flac …).
+  string mime = 9 [(parvane.core.v2.max_len) = 64];
+  // Идентификатор обложки: ссылка — `InfoResponse.cover_base` ‖ cover_id.
+  string cover_id = 10 [(parvane.core.v2.max_len) = 96];
+  uint32 track_no = 11;
+  uint32 year = 12;
+  uint32 bitrate_kbps = 13;
+  // «Любимое» у вызывающего.
+  bool starred = 14;
+}
+
+message Album {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  string title = 2 [(parvane.core.v2.max_len) = 512];
+  string artist = 3 [(parvane.core.v2.max_len) = 512];
+  string artist_id = 4 [(parvane.core.v2.max_len) = 64];
+  string cover_id = 5 [(parvane.core.v2.max_len) = 96];
+  uint32 track_count = 6;
+  uint32 duration_secs = 7;
+  uint32 year = 8;
+}
+
+message Artist {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  string name = 2 [(parvane.core.v2.max_len) = 512];
+  string cover_id = 3 [(parvane.core.v2.max_len) = 96];
+  uint32 album_count = 4;
+}
+
+message InfoRequest {}
+message InfoResponse {
+  // Библиотека подключена; иначе остальные методы отвечают UNAVAILABLE.
+  bool enabled = 1;
+  // База ссылок обложек: `cover_base` ‖ cover_id (‖ "?size=<пиксели>"); действует до `cover_expires_ms`.
+  string cover_base = 2 [(parvane.core.v2.max_len) = 1024];
+  int64 cover_expires_ms = 3;
+  // Лимиты добавления (этап B): треков в сутки и байт на человека; 0 — добавление выключено.
+  uint32 add_per_day = 4;
+  uint64 quota_bytes = 5;
+  uint32 added_today = 6;
+  uint64 used_bytes = 7;
+}
+
+message LibrarySearchRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 256];
+  uint32 offset = 2;
+  // 1…50; 0 — 20.
+  uint32 limit = 3;
+}
+message LibrarySearchResponse {
+  repeated Track tracks = 1 [(parvane.core.v2.max_items) = 50];
+  repeated Album albums = 2 [(parvane.core.v2.max_items) = 50];
+  repeated Artist artists = 3 [(parvane.core.v2.max_items) = 50];
+}
+
+message LibraryRecentRequest {
+  uint32 offset = 1;
+  uint32 limit = 2;
+}
+message LibraryRecentResponse {
+  repeated Album albums = 1 [(parvane.core.v2.max_items) = 50];
+}
+
+message LibraryAlbumRequest {
+  string album_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message LibraryAlbumResponse {
+  Album album = 1;
+  repeated Track tracks = 2 [(parvane.core.v2.max_items) = 1000];
+}
+
+message LibraryArtistRequest {
+  string artist_id = 1 [(parvane.core.v2.max_len) = 64];
+}
+message LibraryArtistResponse {
+  Artist artist = 1;
+  repeated Album albums = 2 [(parvane.core.v2.max_items) = 500];
+}
+
+message TrackGetRequest {
+  repeated string track_ids = 1 [
+    (parvane.core.v2.max_items) = 100,
+    (parvane.core.v2.max_len) = 64
+  ];
+}
+message TrackGetResponse {
+  // Только найденные, в порядке запроса.
+  repeated Track tracks = 1 [(parvane.core.v2.max_items) = 100];
+}
+
+enum StreamQuality {
+  STREAM_QUALITY_UNSPECIFIED = 0;
+  // Файл как есть.
+  STREAM_QUALITY_ORIGINAL = 1;
+  // Opus 128 кбит/с (перекодирует музыкальный сервер) — для мобильной сети.
+  STREAM_QUALITY_OPUS = 2;
+}
+
+message StreamUrlRequest {
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+  StreamQuality quality = 2;
+}
+message StreamUrlResponse {
+  // HTTPS-ссылка с подписью: GET с Range, без заголовков авторизации.
+  string url = 1 [(parvane.core.v2.max_len) = 1024];
+  int64 expires_ms = 2;
+  string mime = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+message StarSetRequest {
+  string track_id = 1 [(parvane.core.v2.max_len) = 64];
+  bool starred = 2;
+}
+message StarSetResponse {}
+
+message StarListRequest {
+  uint32 offset = 1;
+  uint32 limit = 2;
+}
+message StarListResponse {
+  repeated Track tracks = 1 [(parvane.core.v2.max_items) = 50];
+  // Есть ещё за пределами страницы.
+  bool more = 2;
+}

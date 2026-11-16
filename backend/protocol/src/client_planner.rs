@@ -10,14 +10,216 @@
 // пришедшие раньше ключа, ждут в `pending_ops`. Отзыв своего устройства
 // поднимает эпоху записью «rotate» (REVOKE-1, R6).
 
-use crate::domain::{self as dom, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, JsonCache, KeyRing, LamportGuard as DomainGuard};
+use crate::domain::{self as dom, health, health_json, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, JsonCache, KeyRing, LamportGuard as DomainGuard};
 use crate::pb::parvane::core::v2::{
     ContainerKeyShare, ContainerOp, DomainContainerCreateRequest, DomainContainerGetResponse, DomainGrantListResponse,
     DomainKeyRotateRequest, DomainOpAppendRequest, DomainOpSyncResponse, DomainSnapshotGetResponse,
     DomainSnapshotPutRequest,
 };
 
-/// Локальное состояние контейнера планировщика.
+/// Личный контейнер домена — один на пользователя, ключ эпохи у своих устройств: планировщик (spec 010) и
+/// «Здоровье» (spec 038). Весь код контейнера общий; различается только сведённое состояние (`PersonalState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Personal {
+    Planner,
+    Health,
+}
+
+impl Personal {
+    pub const ALL: [Personal; 2] = [Personal::Planner, Personal::Health];
+
+    pub fn domain(self) -> &'static str {
+        match self {
+            Personal::Planner => planner::DOMAIN_NAME,
+            Personal::Health => health::DOMAIN_NAME,
+        }
+    }
+
+    pub fn of_domain(domain: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.domain() == domain)
+    }
+
+    fn snapshot_every(self) -> u64 {
+        match self {
+            Personal::Planner => planner::SNAPSHOT_EVERY,
+            Personal::Health => health::SNAPSHOT_EVERY,
+        }
+    }
+
+    fn changed(self, seq: u64, head_seq: u64) -> Event {
+        match self {
+            Personal::Planner => Event::PlannerChanged { seq, head_seq },
+            Personal::Health => Event::HealthChanged { seq, head_seq },
+        }
+    }
+}
+
+/// Поле `Client` личного контейнера. Макрос, а не метод: заимствуется одно поле, остальные поля клиента
+/// (`last_error`, ожидающие ключи) остаются доступны рядом.
+macro_rules! slot {
+    ($c:expr, $kind:expr) => {
+        match $kind {
+            Personal::Planner => &mut $c.planner,
+            Personal::Health => &mut $c.health,
+        }
+    };
+}
+macro_rules! slot_ref {
+    ($c:expr, $kind:expr) => {
+        match $kind {
+            Personal::Planner => &$c.planner,
+            Personal::Health => &$c.health,
+        }
+    };
+}
+
+/// Сведённое состояние личного контейнера.
+#[derive(Debug, Clone, PartialEq)]
+enum PersonalState {
+    Planner(planner::PlannerState),
+    Health(health::HealthState),
+}
+
+impl PersonalState {
+    fn new(kind: Personal) -> Self {
+        match kind {
+            Personal::Planner => Self::Planner(Default::default()),
+            Personal::Health => Self::Health(Default::default()),
+        }
+    }
+
+    /// Имя типа открытого текста операции и снимка — для отметок `range-hold` (поиск непонятого в байтах).
+    fn op_type(&self) -> &'static str {
+        match self {
+            Self::Planner(_) => crate::hold::PLANNER_TYPE,
+            Self::Health(_) => crate::hold::HEALTH_TYPE,
+        }
+    }
+
+    fn snapshot_type(&self) -> &'static str {
+        match self {
+            Self::Planner(_) => crate::hold::PLANNER_SNAPSHOT_TYPE,
+            Self::Health(_) => crate::hold::HEALTH_SNAPSHOT_TYPE,
+        }
+    }
+
+    /// Открытый текст операции журнала: разбор, часы, применение. `opaque` — операция не разобрана целиком.
+    fn open_op(&mut self, guard: &mut DomainGuard, pt: &[u8], author_device: &str, opaque: &mut bool) -> Result<usize> {
+        match self {
+            Self::Planner(st) => {
+                let op = planner::decode_op(pt).inspect_err(|_| *opaque = true)?;
+                planner::guard_op(guard, &op).inspect_err(|_| *opaque = true)?;
+                st.apply_op(&op, author_device)
+            }
+            Self::Health(st) => {
+                let op = health::decode_op(pt).inspect_err(|_| *opaque = true)?;
+                health::guard_op(guard, &op).inspect_err(|_| *opaque = true)?;
+                st.apply_op(&op, author_device)
+            }
+        }
+    }
+
+    /// Открытый текст снимка: метки — в часы до слияния (негодная метка — отказ всему снимку), затем слияние.
+    fn merge_snapshot(&mut self, guard: &mut DomainGuard, pt: &[u8], upto_seq: u64) -> Result<()> {
+        match self {
+            Self::Planner(st) => {
+                let s = planner::decode_snapshot(pt)?;
+                planner::guard_snapshot(guard, &s, upto_seq)?;
+                st.merge_snapshot(&s)
+            }
+            Self::Health(st) => {
+                let s = health::decode_snapshot(pt)?;
+                health::guard_snapshot(guard, &s, upto_seq)?;
+                st.merge_snapshot(&s)
+            }
+        }
+    }
+
+    /// Локальная правка хоста (JSON): метка движка, применение; байты операции с метками и число применённых.
+    fn prepare_local(&mut self, guard: &mut DomainGuard, changes_json: &str, dev: &str) -> Result<(Vec<u8>, usize)> {
+        match self {
+            Self::Planner(st) => {
+                let mut op = planner_json::op_from_json(changes_json)?;
+                planner::stamp_op(&mut op, &dom::Stamp::new(guard.tick(), dev));
+                let applied = st.apply_op(&op, dev)?;
+                Ok((op.encode_to_vec(), applied))
+            }
+            Self::Health(st) => {
+                let mut op = health_json::op_from_json(changes_json)?;
+                health::stamp_op(&mut op, &dom::Stamp::new(guard.tick(), dev));
+                let applied = st.apply_op(&op, dev)?;
+                Ok((op.encode_to_vec(), applied))
+            }
+        }
+    }
+
+    fn apply_local(&mut self, guard: &mut DomainGuard, op_bytes: &[u8], dev: &str) -> Result<usize> {
+        match self {
+            Self::Planner(st) => {
+                let op = planner::decode_op(op_bytes)?;
+                planner::guard_op(guard, &op)?;
+                st.apply_op(&op, dev)
+            }
+            Self::Health(st) => {
+                let op = health::decode_op(op_bytes)?;
+                health::guard_op(guard, &op)?;
+                st.apply_op(&op, dev)
+            }
+        }
+    }
+
+    /// Байты заменяющего снимка; `RangeHeld` — над непонятым снимок запрещён (FR-035).
+    fn replacement_snapshot(&self, holds: &[crate::pb::parvane::engine::v1::RangeHold], container: &crate::pb::parvane::core::v2::Container, upto_seq: u64) -> Result<Vec<u8>> {
+        match self {
+            Self::Planner(st) => Ok(st.replacement_snapshot(holds, container, upto_seq)?.encode_to_vec()),
+            Self::Health(st) => {
+                dom::replacement_allowed(holds, container, upto_seq)?;
+                Ok(st.to_snapshot().encode_to_vec())
+            }
+        }
+    }
+
+    fn snapshot_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Planner(st) => st.to_snapshot().encode_to_vec(),
+            Self::Health(st) => st.to_snapshot().encode_to_vec(),
+        }
+    }
+
+    fn from_snapshot_bytes(kind: Personal, bytes: &[u8]) -> Result<Self> {
+        Ok(match kind {
+            Personal::Planner => Self::Planner(planner::PlannerState::from_snapshot(&planner::decode_snapshot(bytes)?)?),
+            Personal::Health => {
+                let mut st = health::HealthState::default();
+                st.merge_snapshot(&health::decode_snapshot(bytes)?)?;
+                Self::Health(st)
+            }
+        })
+    }
+
+    fn state_json(&self, head_seq: u64) -> String {
+        match self {
+            Self::Planner(st) => planner_json::state_json(st, head_seq),
+            Self::Health(st) => health_json::state_json(st, head_seq),
+        }
+    }
+
+    fn rev(&self) -> u64 {
+        match self {
+            Self::Planner(st) => st.rev(),
+            Self::Health(st) => st.rev(),
+        }
+    }
+
+    fn size_estimate(&self) -> usize {
+        match self {
+            Self::Planner(st) => st.size_estimate(),
+            Self::Health(st) => st.snapshot_size(),
+        }
+    }
+}
+
+/// Локальное состояние личного контейнера (планировщик, «Здоровье»).
 #[derive(Debug, Clone, PartialEq)]
 struct PlannerLocal {
     genesis: SignedOp,
@@ -25,7 +227,7 @@ struct PlannerLocal {
     access: ContainerAccess,
     keys: KeyRing,
     guard: DomainGuard,
-    state: planner::PlannerState,
+    state: PersonalState,
     head_seq: u64,
     snapshot_seq: u64,
     /// Операции журнала, ждущие ключа своей эпохи (в порядке seq).
@@ -131,49 +333,49 @@ impl Client {
             .collect()
     }
 
-    pub fn planner_container(&self) -> Option<Ref> {
-        self.planner.as_ref().and_then(|p| p.access.container.r#ref.clone())
+    pub fn personal_container(&self, kind: Personal) -> Option<Ref> {
+        slot_ref!(self, kind).as_ref().and_then(|p| p.access.container.r#ref.clone())
     }
 
-    pub fn planner_is_attached(&self) -> bool {
-        self.planner.is_some()
+    pub fn personal_is_attached(&self, kind: Personal) -> bool {
+        slot_ref!(self, kind).is_some()
     }
 
     /// Есть ли ключ текущей эпохи (без него писать и читать новое нельзя).
-    pub fn planner_has_key(&self) -> bool {
-        self.planner.as_ref().is_some_and(|p| p.keys.get(p.access.epoch).is_some())
+    pub fn personal_has_key(&self, kind: Personal) -> bool {
+        slot_ref!(self, kind).as_ref().is_some_and(|p| p.keys.get(p.access.epoch).is_some())
     }
 
-    pub fn planner_head_seq(&self) -> u64 {
-        self.planner.as_ref().map(|p| p.head_seq).unwrap_or(0)
+    pub fn personal_head_seq(&self, kind: Personal) -> u64 {
+        slot_ref!(self, kind).as_ref().map(|p| p.head_seq).unwrap_or(0)
     }
 
     /// Сведённое состояние для хоста (JSON, только живые объекты). Пока
     /// ревизия состояния и `head_seq` не менялись — та же строка из кэша.
-    pub fn planner_state_json(&self) -> Option<String> {
-        self.planner.as_ref().map(|p| p.json_cache.get_or(p.state.rev(), p.head_seq, || planner_json::state_json(&p.state, p.head_seq)))
+    pub fn personal_state_json(&self, kind: Personal) -> Option<String> {
+        slot_ref!(self, kind).as_ref().map(|p| p.json_cache.get_or(p.state.rev(), p.head_seq, || p.state.state_json(p.head_seq)))
     }
 
     /// Создать контейнер планировщика: генезис + ключ эпохи 1 → `domain.container.create`.
     /// Повторный вызов при существующем контейнере — `Duplicate`.
-    pub fn planner_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
-        if self.planner.is_some() {
+    pub fn personal_create(&mut self, kind: Personal, ts_ms: i64) -> CResult<OutRequest> {
+        if slot_ref!(self, kind).is_some() {
             return Err(ClientError::Proto(ProtoError::Duplicate));
         }
-        let (container, genesis) = dom::new_container(&self.acc, &self.domain, planner::DOMAIN_NAME, &self.user, ts_ms)?;
+        let (container, genesis) = dom::new_container(&self.acc, &self.domain, kind.domain(), &self.user, ts_ms)?;
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
         let access = ContainerAccess::from_genesis(&genesis, &resolve)?;
         let mut keys = KeyRing::default();
         keys.insert(dom::FIRST_EPOCH, dom::new_epoch_key());
         debug_assert_eq!(access.container.r#ref, container.r#ref);
-        self.planner = Some(PlannerLocal {
+        *slot!(self, kind) = Some(PlannerLocal {
             genesis: genesis.clone(),
             grants: vec![],
             access,
             keys,
             guard: DomainGuard::default(),
-            state: planner::PlannerState::default(),
+            state: PersonalState::new(kind),
             head_seq: 0,
             snapshot_seq: 0,
             pending_ops: vec![],
@@ -189,29 +391,29 @@ impl Client {
     /// Подключить существующий контейнер (новое устройство): ответы
     /// `domain.container.get` и `domain.grant.list`. Ключи — из ожидающих
     /// (`container_key` своих устройств, экспорт линковки).
-    pub fn planner_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> CResult<()> {
+    pub fn personal_attach(&mut self, kind: Personal, get_response: &[u8], grants_response: &[u8]) -> CResult<()> {
         let got: DomainContainerGetResponse = decode_checked(get_response, Origin::Server)?;
         let grants: DomainGrantListResponse = decode_checked(grants_response, Origin::Server)?;
         let genesis = got.genesis.ok_or(ProtoError::InvalidField("genesis"))?;
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
         let access = ContainerAccess::replay(&genesis, &grants.entries, &resolve, &no_groups)?;
-        if access.container.domain != planner::DOMAIN_NAME || !self.is_own_address(&access.owner) {
+        if access.container.domain != kind.domain() || !self.is_own_address(&access.owner) {
             return Err(ClientError::Proto(ProtoError::ContextMismatch));
         }
-        if let Some(p) = &self.planner {
+        if let Some(p) = slot_ref!(self, kind) {
             if p.access.container.r#ref != access.container.r#ref {
                 return Err(ClientError::Proto(ProtoError::ContextMismatch));
             }
         }
-        let existing = self.planner.take();
+        let existing = slot!(self, kind).take();
         let local = PlannerLocal {
             genesis,
             grants: grants.entries,
             access,
             keys: existing.as_ref().map(|p| p.keys.clone()).unwrap_or_default(),
             guard: existing.as_ref().map(|p| p.guard.clone()).unwrap_or_default(),
-            state: existing.as_ref().map(|p| p.state.clone()).unwrap_or_default(),
+            state: existing.as_ref().map(|p| p.state.clone()).unwrap_or_else(|| PersonalState::new(kind)),
             head_seq: existing.as_ref().map(|p| p.head_seq).unwrap_or(0),
             snapshot_seq: existing.as_ref().map(|p| p.snapshot_seq).unwrap_or(0),
             cut: existing.as_ref().map(|p| p.cut.clone()).unwrap_or_default(),
@@ -221,28 +423,34 @@ impl Client {
             last_op_epoch: 0,
             json_cache: JsonCache::default(),
         };
-        self.planner = Some(local);
-        self.planner_absorb_pending_keys();
+        *slot!(self, kind) = Some(local);
+        self.personal_absorb_pending_keys(kind);
         Ok(())
     }
 
     /// Принять ключи, ждавшие контейнера или журнала грантов: доверенные (из
     /// экспорта линковки) и присланные своими устройствами (`container_key`,
     /// чья голова журнала грантов была новее нашей). Непринятые остаются ждать.
-    fn planner_absorb_pending_keys(&mut self) {
+    fn personal_absorb_pending_keys(&mut self, kind: Personal) {
         let me = self.identity_names(&self.user.clone());
-        let Some(p) = self.planner.as_mut() else { return };
+        let Some(p) = slot!(self, kind).as_mut() else { return };
         let trusted = std::mem::take(&mut self.planner_trusted_keys);
         for (d, id, epoch, key) in trusted {
             let matches = p.access.container.domain == d && p.access.container.r#ref.as_ref().is_some_and(|r| r.id == id);
             if matches && epoch >= dom::FIRST_EPOCH && epoch <= p.access.epoch {
                 p.keys.insert(epoch, Zeroizing::new(key));
-            } else if matches {
+            } else if matches || Personal::of_domain(&d).is_some_and(|k| k != kind) {
+                // Эпоха впереди журнала грантов либо ключ другого личного контейнера — ждёт дальше
                 self.planner_trusted_keys.push((d, id, epoch, key));
             }
         }
         let shares = std::mem::take(&mut self.planner_pending_keys);
         for share in shares {
+            // Ключ другого личного контейнера ждёт своего подключения
+            if share.domain != kind.domain() {
+                self.planner_pending_keys.push(share);
+                continue;
+            }
             match p.access.accept_key_share_any(&share, &me, &no_groups) {
                 Ok((epoch, key)) => {
                     p.keys.insert(epoch, key);
@@ -251,22 +459,22 @@ impl Client {
                 Err(_) => {}
             }
         }
-        self.planner_retry_pending();
+        self.personal_retry_pending(kind);
     }
 
     /// Догнать журнал грантов (смена эпохи другим устройством): новые записи после известной версии.
-    pub fn planner_ingest_grants(&mut self, grants_response: &[u8]) -> CResult<u64> {
+    pub fn personal_ingest_grants(&mut self, kind: Personal, grants_response: &[u8]) -> CResult<u64> {
         let grants: DomainGrantListResponse = decode_checked(grants_response, Origin::Server)?;
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         for e in grants.entries {
             if p.access.apply(&e, &resolve, &no_groups).is_ok() {
                 p.grants.push(e);
             }
         }
         let version = p.access.version;
-        self.planner_absorb_pending_keys();
+        self.personal_absorb_pending_keys(kind);
         Ok(version)
     }
 
@@ -289,19 +497,17 @@ impl Client {
         let pt = dom::open_op(op, &p.access.container, key)?;
         // Непонятое в снимок из разобранного не войдёт — отметка диапазона запрещает заменяющий снимок (FR-032)
         let journal = dom::hold_journal(&p.access.container);
-        if crate::hold::note(&mut p.holds, &journal, crate::hold::PLANNER_TYPE, op.seq, op.seq, &pt) {
+        if crate::hold::note(&mut p.holds, &journal, p.state.op_type(), op.seq, op.seq, &pt) {
             p.opaque = true;
         }
-        let decoded = planner::decode_op(&pt).inspect_err(|_| p.opaque = true)?;
-        planner::guard_op(&mut p.guard, &decoded).inspect_err(|_| p.opaque = true)?;
-        p.state.apply_op(&decoded, author_device)
+        p.state.open_op(&mut p.guard, &pt, author_device, &mut p.opaque)
     }
 
     /// Применить отложенные операции, для которых появился ключ.
-    fn planner_retry_pending(&mut self) -> usize {
+    fn personal_retry_pending(&mut self, kind: Personal) -> usize {
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let Some(p) = self.planner.as_mut() else { return 0 };
+        let Some(p) = slot!(self, kind).as_mut() else { return 0 };
         let pending = std::mem::take(&mut p.pending_ops);
         let mut applied = 0;
         for op in pending {
@@ -319,11 +525,11 @@ impl Client {
     /// Страница журнала контейнера (`domain.op.sync`): проверка автора,
     /// расшифровка, применение в порядке seq. Свои операции (уже применённые
     /// локально) идемпотентны. Негодная запись пропускается, курсор идёт дальше.
-    pub fn planner_ingest_sync(&mut self, sync_response: &[u8]) -> CResult<PlannerIngest> {
+    pub fn personal_ingest_sync(&mut self, kind: Personal, sync_response: &[u8]) -> CResult<PlannerIngest> {
         let r: DomainOpSyncResponse = decode_checked(sync_response, Origin::Server)?;
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         let mut out = PlannerIngest { more: r.more, ..Default::default() };
         // spec 035 (S7-22): сервер обрезал журнал дальше курсора — сначала снимок (`domain.snapshot.get`)
         if r.truncated_upto > p.head_seq {
@@ -391,23 +597,26 @@ impl Client {
     }
 
     /// Снимок контейнера (`domain.snapshot.get`): слить, сдвинуть курсор.
-    pub fn planner_ingest_snapshot(&mut self, snapshot_response: &[u8]) -> CResult<u64> {
+    pub fn personal_ingest_snapshot(&mut self, kind: Personal, snapshot_response: &[u8]) -> CResult<u64> {
         let r: DomainSnapshotGetResponse = decode_checked(snapshot_response, Origin::Server)?;
-        let Some(s) = r.snapshot else { return Ok(self.planner_head_seq()) };
+        let Some(s) = r.snapshot else { return Ok(self.personal_head_seq(kind)) };
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         p.access.check_snapshot_author(&s, &resolve, &no_groups)?;
         let key = p.keys.get(s.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_snapshot(&s, &p.access.container, key)?;
-        let decoded = planner::decode_snapshot(&pt)?;
         // Снимок составителя новее этой версии: его непонятое накрывает весь диапазон снимка (FR-032)
         let journal = dom::hold_journal(&p.access.container);
-        crate::hold::note(&mut p.holds, &journal, crate::hold::PLANNER_SNAPSHOT_TYPE, 1, s.upto_seq.max(1), &pt);
+        // Разбор — до отметки: неразбираемый снимок отметок не оставляет
+        let mut probe = p.state.clone();
+        let mut probe_guard = p.guard.clone();
+        probe.merge_snapshot(&mut probe_guard, &pt, s.upto_seq)?;
+        crate::hold::note(&mut p.holds, &journal, p.state.snapshot_type(), 1, s.upto_seq.max(1), &pt);
         // Метки снимка — в часы до слияния (иначе свои следующие метки могут оказаться ниже, а метка
         // u64::MAX навсегда победила бы); негодная метка — отказ всему снимку.
-        planner::guard_snapshot(&mut p.guard, &decoded, s.upto_seq)?;
-        p.state.merge_snapshot(&decoded)?;
+        p.state = probe;
+        p.guard = probe_guard;
         p.cut.note_snapshot(s.upto_seq, p.head_seq);
         if s.upto_seq > p.head_seq {
             p.head_seq = s.upto_seq;
@@ -418,30 +627,25 @@ impl Client {
 
     /// Локальная правка хоста (JSON изменений): метки движка, применение
     /// сразу (офлайн-first), байты операции — хосту в очередь отправки.
-    pub fn planner_prepare_local(&mut self, changes_json: &str) -> CResult<PlannerLocalOp> {
-        let mut op = planner_json::op_from_json(changes_json)?;
+    pub fn personal_prepare_local(&mut self, kind: Personal, changes_json: &str) -> CResult<PlannerLocalOp> {
         let dev = self.device_id.clone();
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
-        let stamp = dom::Stamp::new(p.guard.tick(), &dev);
-        planner::stamp_op(&mut op, &stamp);
-        let applied = p.state.apply_op(&op, &dev)?;
-        Ok(PlannerLocalOp { op_id: sign::new_op_id(), op: op.encode_to_vec(), applied })
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        let (op, applied) = p.state.prepare_local(&mut p.guard, changes_json, &dev)?;
+        Ok(PlannerLocalOp { op_id: sign::new_op_id(), op, applied })
     }
 
     /// Применить локально уже помеченную операцию (повтор после перезапуска хоста
     /// из очереди отправки): идемпотентно.
-    pub fn planner_apply_local(&mut self, op_bytes: &[u8]) -> CResult<usize> {
-        let op = planner::decode_op(op_bytes)?;
+    pub fn personal_apply_local(&mut self, kind: Personal, op_bytes: &[u8]) -> CResult<usize> {
         let dev = self.device_id.clone();
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
-        planner::guard_op(&mut p.guard, &op)?;
-        Ok(p.state.apply_op(&op, &dev)?)
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+        Ok(p.state.apply_local(&mut p.guard, op_bytes, &dev)?)
     }
 
     /// Зашифровать операцию ключом текущей эпохи → `domain.op.append`
     /// (тот же `op_id` при повторе — сервер ответит DUPLICATE).
-    pub fn planner_seal(&mut self, op_bytes: &[u8], op_id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
-        let p = self.planner.as_ref().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+    pub fn personal_seal(&mut self, kind: Personal, op_bytes: &[u8], op_id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
+        let p = slot_ref!(self, kind).as_ref().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         let epoch = p.access.epoch;
         let key = p.keys.get(epoch).ok_or(ProtoError::Crypto)?;
         let sealed = dom::seal_op_with_id(&self.acc, &p.access.container, epoch, key, op_bytes, ts_ms, op_id)?;
@@ -449,17 +653,17 @@ impl Client {
     }
 
     /// Снимок по порогу (R5): после `SNAPSHOT_EVERY` операций с прошлого снимка.
-    pub fn planner_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
-        let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
+    pub fn personal_snapshot_request(&mut self, kind: Personal, ts_ms: i64) -> CResult<Option<OutRequest>> {
+        let p = slot!(self, kind).as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         // Операции, ждущие ключа эпохи, в снимок не входят, а курсор их уже прошёл — снимок их потерял бы.
-        if p.head_seq < p.snapshot_seq.saturating_add(planner::SNAPSHOT_EVERY) || !p.pending_ops.is_empty() || !p.cut.held.is_empty() {
+        if p.head_seq < p.snapshot_seq.saturating_add(kind.snapshot_every()) || !p.pending_ops.is_empty() || !p.cut.held.is_empty() {
             return Ok(None);
         }
         let epoch = p.access.epoch;
         let key = p.keys.get(epoch).ok_or(ProtoError::Crypto)?;
         // FR-035: заменяющий снимок над непонятым запрещён — журнал остаётся источником (исход 2 FR-034)
         let pt = match p.state.replacement_snapshot(&p.holds, &p.access.container, p.head_seq) {
-            Ok(snap) => snap.encode_to_vec(),
+            Ok(bytes) => bytes,
             Err(ProtoError::RangeHeld) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
@@ -476,12 +680,12 @@ impl Client {
     }
 
     /// Размер открытого текста снимка — для предупреждения о потолке (FR-012).
-    pub fn planner_size(&self) -> usize {
-        self.planner.as_ref().map(|p| p.state.size_estimate()).unwrap_or(0)
+    pub fn personal_size(&self, kind: Personal) -> usize {
+        slot_ref!(self, kind).as_ref().map(|p| p.state.size_estimate()).unwrap_or(0)
     }
 
-    fn planner_key_content(&self) -> Option<Content> {
-        let p = self.planner.as_ref()?;
+    fn personal_key_content(&self, kind: Personal) -> Option<Content> {
+        let p = slot_ref!(self, kind).as_ref()?;
         let (epoch, key) = p.keys.latest()?;
         let share = p.access.key_share(epoch, key).ok()?;
         Some(Content { kind: Some(content::Kind::ContainerKey(share)), ..Default::default() })
@@ -489,29 +693,29 @@ impl Client {
 
     /// Раздать ключ текущей эпохи своим устройствам (после создания контейнера,
     /// смены эпохи; новым устройствам — вместе с группами, T142).
-    pub fn share_planner_with_own_devices(&mut self) -> CResult<Vec<OutRequest>> {
-        let Some(c) = self.planner_key_content() else { return Ok(vec![]) };
+    pub fn share_personal_with_own_devices(&mut self, kind: Personal) -> CResult<Vec<OutRequest>> {
+        let Some(c) = self.personal_key_content(kind) else { return Ok(vec![]) };
         Ok(self.seal_to_own_devices(&c)?.into_iter().collect())
     }
 
     /// Ключ контейнера от своего устройства (`Content.container_key`).
-    fn planner_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64) -> Vec<Event> {
-        if !self.is_own_address(sender) || share.domain != planner::DOMAIN_NAME {
+    fn personal_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64) -> Vec<Event> {
+        let Some(kind) = Personal::of_domain(&share.domain).filter(|_| self.is_own_address(sender)) else {
             return vec![Event::Skipped { seq }];
-        }
+        };
         let me = self.identity_names(&self.user.clone());
-        if let Some(p) = self.planner.as_mut() {
+        if let Some(p) = slot!(self, kind).as_mut() {
             match p.access.accept_key_share_any(share, &me, &no_groups) {
                 Ok((epoch, key)) => {
                     p.keys.insert(epoch, key);
-                    self.planner_retry_pending();
-                    let head = self.planner_head_seq();
-                    return vec![Event::PlannerChanged { seq, head_seq: head }];
+                    self.personal_retry_pending(kind);
+                    let head = self.personal_head_seq(kind);
+                    return vec![kind.changed(seq, head)];
                 }
                 Err(ProtoError::Expired) | Err(ProtoError::BrokenChain) => {
                     // Журнал грантов раздающего новее нашего — догнать и принять позже.
                     self.planner_pending_keys.push(share.clone());
-                    return vec![Event::PlannerChanged { seq, head_seq: self.planner_head_seq() }];
+                    return vec![kind.changed(seq, self.personal_head_seq(kind))];
                 }
                 Err(e) => {
                     self.last_error = Some(e);
@@ -523,15 +727,15 @@ impl Client {
         if self.planner_pending_keys.len() < 16 {
             self.planner_pending_keys.push(share.clone());
         }
-        vec![Event::PlannerChanged { seq, head_seq: 0 }]
+        vec![kind.changed(seq, 0)]
     }
 
     /// Смена эпохи при отзыве своего устройства (REVOKE-1): запись «rotate»,
     /// новый ключ, раздача оставшимся своим устройствам.
-    fn planner_rotate_on_revoke(&mut self, ts_ms: i64) -> CResult<Vec<OutRequest>> {
+    fn personal_rotate_on_revoke(&mut self, kind: Personal, ts_ms: i64) -> CResult<Vec<OutRequest>> {
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let Some(p) = self.planner.as_mut() else { return Ok(vec![]) };
+        let Some(p) = slot!(self, kind).as_mut() else { return Ok(vec![]) };
         if p.keys.get(p.access.epoch).is_none() {
             return Ok(vec![]);
         }
@@ -540,13 +744,13 @@ impl Client {
         p.grants.push(rotate.clone());
         p.keys.insert(p.access.epoch, dom::new_epoch_key());
         let mut out = vec![OutRequest::id("domain.key.rotate", &DomainKeyRotateRequest { rotate: Some(rotate) })];
-        out.extend(self.share_planner_with_own_devices()?);
+        out.extend(self.share_personal_with_own_devices(kind)?);
         Ok(out)
     }
 
     /// Ключи контейнера для экспорта линковки (новому устройству).
-    pub fn planner_keys_export(&self) -> Option<PlannerKeysExport> {
-        let p = self.planner.as_ref()?;
+    pub fn personal_keys_export(&self, kind: Personal) -> Option<PlannerKeysExport> {
+        let p = slot_ref!(self, kind).as_ref()?;
         let r = p.access.container.r#ref.as_ref()?;
         let mut keys: Vec<(u64, String)> = Vec::new();
         for epoch in dom::FIRST_EPOCH..=p.access.epoch {
@@ -562,14 +766,18 @@ impl Client {
         let id = hex::decode(&export.id).map_err(|_| ProtoError::Malformed)?;
         for (epoch, key) in &export.keys {
             let k: [u8; 32] = unb64(key)?.as_slice().try_into().map_err(|_| ProtoError::Malformed)?;
-            self.planner_trusted_keys.push((export.domain.clone(), id.clone(), *epoch, k));
+            if self.planner_trusted_keys.len() < 256 {
+                self.planner_trusted_keys.push((export.domain.clone(), id.clone(), *epoch, k));
+            }
         }
-        self.planner_absorb_pending_keys();
+        for kind in Personal::ALL {
+            self.personal_absorb_pending_keys(kind);
+        }
         Ok(())
     }
 
-    fn planner_persist(&self) -> Option<PersistedPlanner> {
-        let p = self.planner.as_ref()?;
+    fn personal_persist(&self, kind: Personal) -> Option<PersistedPlanner> {
+        let p = slot_ref!(self, kind).as_ref()?;
         let mut keys = vec![];
         for epoch in dom::FIRST_EPOCH..=p.access.epoch {
             if let Some(k) = p.keys.get(epoch) {
@@ -580,7 +788,7 @@ impl Client {
             genesis: b64(&p.genesis.encode_to_vec()),
             grants: p.grants.iter().map(|g| b64(&g.encode_to_vec())).collect(),
             keys,
-            snapshot: b64(&p.state.to_snapshot().encode_to_vec()),
+            snapshot: b64(&p.state.snapshot_bytes()),
             head_seq: p.head_seq,
             snapshot_seq: p.snapshot_seq,
             guard_max: p.guard.max_seen(),
@@ -592,7 +800,7 @@ impl Client {
         })
     }
 
-    fn planner_restore(&mut self, pp: &PersistedPlanner) -> Result<()> {
+    fn personal_restore(&mut self, kind: Personal, pp: &PersistedPlanner) -> Result<()> {
         let genesis = SignedOp::decode(unb64(&pp.genesis)?.as_slice()).map_err(|_| ProtoError::Malformed)?;
         let grants = pp.grants.iter().map(|g| SignedOp::decode(unb64(g)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
         let authors = self.planner_author_map();
@@ -603,8 +811,7 @@ impl Client {
             let arr: [u8; 32] = unb64(k)?.as_slice().try_into().map_err(|_| ProtoError::Malformed)?;
             keys.insert(*epoch, Zeroizing::new(arr));
         }
-        let snapshot = planner::decode_snapshot(&unb64(&pp.snapshot)?)?;
-        let state = planner::PlannerState::from_snapshot(&snapshot)?;
+        let state = PersonalState::from_snapshot_bytes(kind, &unb64(&pp.snapshot)?)?;
         let mut guard = DomainGuard::default();
         if pp.guard_max > 0 {
             let _ = guard.check(&dom::Stamp::new(pp.guard_max.min(dom::LAMPORT_MAX_JUMP), "restore"));
@@ -619,7 +826,131 @@ impl Client {
         let cut = dom::EpochCut { held, head_op_id: unb64(&pp.head_op_id)? };
         let holds = if pp.holds.is_empty() { vec![] } else { crate::hold::decode(&unb64(&pp.holds)?)? };
         let opaque = pp.opaque.unwrap_or(true);
-        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque, holds });
+        *slot!(self, kind) = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default(), cut, opaque, holds });
         Ok(())
+    }
+    pub fn share_planner_with_own_devices(&mut self) -> CResult<Vec<OutRequest>> {
+        self.share_personal_with_own_devices(Personal::Planner)
+    }
+    pub fn share_health_with_own_devices(&mut self) -> CResult<Vec<OutRequest>> {
+        self.share_personal_with_own_devices(Personal::Health)
+    }
+    /// Ключи «Здоровья» из экспорта линковки: запись несёт домен, общий приём разложит по контейнерам.
+    pub fn health_keys_import(&mut self, export: &PlannerKeysExport) -> Result<()> {
+        self.planner_keys_import(export)
+    }
+    /// Ключи текущих эпох личных контейнеров — новым своим устройствам (T142).
+    fn personal_key_contents(&self) -> Vec<Content> {
+        Personal::ALL.into_iter().filter_map(|k| self.personal_key_content(k)).collect()
+    }
+    /// Смена эпохи личных контейнеров при отзыве своего устройства (REVOKE-1).
+    fn personal_rotate_all_on_revoke(&mut self, ts_ms: i64) -> Vec<OutRequest> {
+        let mut out = Vec::new();
+        for kind in Personal::ALL {
+            match self.personal_rotate_on_revoke(kind, ts_ms) {
+                Ok(r) => out.extend(r),
+                Err(ClientError::Proto(e)) => self.last_error = Some(e),
+                Err(ClientError::Need(_)) => {}
+            }
+        }
+        out
+    }
+
+    // ── обёртки по доменам: планировщик (spec 010) и «Здоровье» (spec 038) ──
+    pub fn planner_container(&self) -> Option<Ref> {
+        self.personal_container(Personal::Planner)
+    }
+    pub fn planner_is_attached(&self) -> bool {
+        self.personal_is_attached(Personal::Planner)
+    }
+    pub fn planner_has_key(&self) -> bool {
+        self.personal_has_key(Personal::Planner)
+    }
+    pub fn planner_head_seq(&self) -> u64 {
+        self.personal_head_seq(Personal::Planner)
+    }
+    pub fn planner_state_json(&self) -> Option<String> {
+        self.personal_state_json(Personal::Planner)
+    }
+    pub fn planner_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_create(Personal::Planner, ts_ms)
+    }
+    pub fn planner_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> CResult<()> {
+        self.personal_attach(Personal::Planner, get_response, grants_response)
+    }
+    pub fn planner_ingest_grants(&mut self, grants_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_grants(Personal::Planner, grants_response)
+    }
+    pub fn planner_ingest_sync(&mut self, sync_response: &[u8]) -> CResult<PlannerIngest> {
+        self.personal_ingest_sync(Personal::Planner, sync_response)
+    }
+    pub fn planner_ingest_snapshot(&mut self, snapshot_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_snapshot(Personal::Planner, snapshot_response)
+    }
+    pub fn planner_prepare_local(&mut self, changes_json: &str) -> CResult<PlannerLocalOp> {
+        self.personal_prepare_local(Personal::Planner, changes_json)
+    }
+    pub fn planner_apply_local(&mut self, op_bytes: &[u8]) -> CResult<usize> {
+        self.personal_apply_local(Personal::Planner, op_bytes)
+    }
+    pub fn planner_seal(&mut self, op_bytes: &[u8], op_id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_seal(Personal::Planner, op_bytes, op_id, ts_ms)
+    }
+    pub fn planner_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
+        self.personal_snapshot_request(Personal::Planner, ts_ms)
+    }
+    pub fn planner_size(&self) -> usize {
+        self.personal_size(Personal::Planner)
+    }
+    pub fn planner_keys_export(&self) -> Option<PlannerKeysExport> {
+        self.personal_keys_export(Personal::Planner)
+    }
+    pub fn health_container(&self) -> Option<Ref> {
+        self.personal_container(Personal::Health)
+    }
+    pub fn health_is_attached(&self) -> bool {
+        self.personal_is_attached(Personal::Health)
+    }
+    pub fn health_has_key(&self) -> bool {
+        self.personal_has_key(Personal::Health)
+    }
+    pub fn health_head_seq(&self) -> u64 {
+        self.personal_head_seq(Personal::Health)
+    }
+    pub fn health_state_json(&self) -> Option<String> {
+        self.personal_state_json(Personal::Health)
+    }
+    pub fn health_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_create(Personal::Health, ts_ms)
+    }
+    pub fn health_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> CResult<()> {
+        self.personal_attach(Personal::Health, get_response, grants_response)
+    }
+    pub fn health_ingest_grants(&mut self, grants_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_grants(Personal::Health, grants_response)
+    }
+    pub fn health_ingest_sync(&mut self, sync_response: &[u8]) -> CResult<PlannerIngest> {
+        self.personal_ingest_sync(Personal::Health, sync_response)
+    }
+    pub fn health_ingest_snapshot(&mut self, snapshot_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_snapshot(Personal::Health, snapshot_response)
+    }
+    pub fn health_prepare_local(&mut self, changes_json: &str) -> CResult<PlannerLocalOp> {
+        self.personal_prepare_local(Personal::Health, changes_json)
+    }
+    pub fn health_apply_local(&mut self, op_bytes: &[u8]) -> CResult<usize> {
+        self.personal_apply_local(Personal::Health, op_bytes)
+    }
+    pub fn health_seal(&mut self, op_bytes: &[u8], op_id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_seal(Personal::Health, op_bytes, op_id, ts_ms)
+    }
+    pub fn health_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
+        self.personal_snapshot_request(Personal::Health, ts_ms)
+    }
+    pub fn health_size(&self) -> usize {
+        self.personal_size(Personal::Health)
+    }
+    pub fn health_keys_export(&self) -> Option<PlannerKeysExport> {
+        self.personal_keys_export(Personal::Health)
     }
 }

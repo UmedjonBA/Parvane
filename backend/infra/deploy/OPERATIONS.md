@@ -518,3 +518,13 @@ docker compose exec federation federation_admin unpin <домен>    # прин
 Очередь записей групп и «аккаунт удалён» (`outbox`) повторяет доставку до суток. База — том `parvane_db-federation`
 (`federation.db`), в бэкап — вместе с остальными. Тестовый транспорт по http в образ не собирается (фича
 `insecure-test-transport`, сторож `insecure_transport_never_ships`).
+
+## «Музыка» (spec 039) — необязательный модуль
+
+Включить: в `~/parvane/.env` задать `PARVANE_MUSIC_PUBLIC_BASE=https://<внешний адрес>` и, если музыка лежит в
+каталоге сервера, `PARVANE_MUSIC_DIR=/путь/к/музыке`; затем `docker compose --profile music up -d`. Navidrome наружу
+не опубликован: пользователя ему называет только шард `music` (заголовок `Remote-User`, доверенная сеть —
+`PARVANE_MUSIC_TRUSTED_SOURCES`, по умолчанию `172.16.0.0/12`; сузить до адреса шарда, если в сети compose есть
+посторонние контейнеры). Выключить для всех: `PARVANE_DISABLED_MODULES=music` и остановить оба сервиса. Ключ подписи
+ссылок — `music-url.key` на томе `db-music` (потеря ключа лишь обрывает выданные ссылки). На слабом сервере
+перекодирование в Opus нагружает процессор — модуль по умолчанию выключен.

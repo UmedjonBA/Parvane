@@ -42,10 +42,11 @@ const CALENDAR_BINDINGS: &[(&str, &str)] = &[
 ];
 
 const PREVIEW_BINDINGS: &[(&str, &str)] = &[];
+const MUSIC_BINDINGS: &[(&str, &str)] = &[];
 
 const PUSH_BINDINGS: &[(&str, &str)] = &[];
 
-fn role_contracts() -> [RoleContract; 11] {
+fn role_contracts() -> [RoleContract; 12] {
     [
         RoleContract {
             name: "identity",
@@ -83,6 +84,11 @@ fn role_contracts() -> [RoleContract; 11] {
             publish: PREVIEW_NATS_PUBLISH,
         },
         RoleContract {
+            name: "music",
+            subscribe: MUSIC_NATS_SUBSCRIBE,
+            publish: MUSIC_NATS_PUBLISH,
+        },
+        RoleContract {
             name: "push",
             subscribe: PUSH_NATS_SUBSCRIBE,
             publish: PUSH_NATS_PUBLISH,
@@ -107,7 +113,7 @@ fn role_contracts() -> [RoleContract; 11] {
     ]
 }
 
-fn shard_contracts() -> [ShardContract; 8] {
+fn shard_contracts() -> [ShardContract; 9] {
     [
         ShardContract {
             name: "identity",
@@ -150,6 +156,12 @@ fn shard_contracts() -> [ShardContract; 8] {
             source: include_str!("../../../shards/preview/src/main.rs"),
             bindings: PREVIEW_BINDINGS,
             nats_subscribe: PREVIEW_NATS_SUBSCRIBE,
+        },
+        ShardContract {
+            name: "music",
+            source: include_str!("../../../shards/music/src/main.rs"),
+            bindings: MUSIC_BINDINGS,
+            nats_subscribe: MUSIC_NATS_SUBSCRIBE,
         },
         ShardContract {
             name: "push",

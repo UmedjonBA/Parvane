@@ -153,6 +153,7 @@ fn event_json(e: &Event) -> Value {
         }),
         Event::StateKeyRotated { seq, key_version } => json!({"type": "stateKeyRotated", "seq": seq, "keyVersion": key_version}),
         Event::PlannerChanged { seq, head_seq } => json!({"type": "plannerChanged", "seq": seq, "headSeq": head_seq}),
+        Event::HealthChanged { seq, head_seq } => json!({"type": "healthChanged", "seq": seq, "headSeq": head_seq}),
         Event::CloudChanged { seq, id } => json!({"type": "cloudChanged", "seq": seq, "id": hex::encode(id)}),
         Event::Typing { .. } | Event::Presence { .. } => eph_event_json(e),
         Event::Internal { seq } => json!({"type": "internal", "seq": seq}),

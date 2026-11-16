@@ -17,6 +17,14 @@
 		reverse_proxy gateway:9222
 	}
 
+	# «Музыка» (spec 039): поток трека и обложки по ссылке с подписью — шарду music (без профиля `music` — 502)
+	@music path /_parvane/music/*
+	handle @music {
+		reverse_proxy music:9340 {
+			flush_interval -1
+		}
+	}
+
 	# Федерация (spec 028): подписанные кадры других серверов — шарду federation
 	handle /_parvane/s2s {
 		request_body {

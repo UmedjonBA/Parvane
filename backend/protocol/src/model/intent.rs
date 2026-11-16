@@ -449,6 +449,9 @@ impl Engine {
         let req = if c.planner_container().is_some_and(|p| p.id == container.id) {
             c.planner_apply_local(&d.op).map_err(cerr)?;
             c.planner_seal(&d.op, &op_id, now).map_err(cerr)?
+        } else if c.health_container().is_some_and(|p| p.id == container.id) {
+            c.health_apply_local(&d.op).map_err(cerr)?;
+            c.health_seal(&d.op, &op_id, now).map_err(cerr)?
         } else {
             c.cloud_apply_local(&container.id, &d.op).map_err(cerr)?;
             c.cloud_seal(&container.id, &d.op, &op_id, now).map_err(cerr)?

@@ -207,7 +207,7 @@ pub fn value_type(kind: i32) -> Option<&'static str> {
         K::PinList => "parvane.state.v1.PinnedOrder",
         K::Call => "parvane.state.v1.CallRecord",
         K::GroupInvite => "parvane.state.v1.GroupInvite",
-        K::PlannerContainer => "parvane.state.v1.PlannerContainer",
+        K::PlannerContainer | K::HealthContainer => "parvane.state.v1.PlannerContainer",
         K::CloudContainer => "parvane.state.v1.CloudContainer",
         K::QuickReaction => "parvane.state.v1.QuickReaction",
         K::StickerPack | K::SavedGif => "parvane.state.v1.StickerPack",
@@ -249,7 +249,7 @@ fn check_key(object: &Option<ObjectKey>) -> Result<(i32, String)> {
     let ok = match K::try_from(o.kind) {
         Ok(K::Unspecified) => false,
         Ok(K::Folder) => !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()) && (k == "0" || !k.starts_with('0')) && k.parse::<u32>().is_ok(),
-        Ok(K::NotifyDefaults | K::PlannerContainer | K::QuickReaction | K::FolderOrder) => k.is_empty(),
+        Ok(K::NotifyDefaults | K::PlannerContainer | K::HealthContainer | K::QuickReaction | K::FolderOrder) => k.is_empty(),
         Ok(K::Block | K::PeerNotify | K::Draft | K::Archive | K::UnreadMark | K::ChatCleared) => is_peer_key(k),
         Ok(K::Contact) => address::is_valid_address(k),
         Ok(K::PinList) => k == "1" || k == "2",

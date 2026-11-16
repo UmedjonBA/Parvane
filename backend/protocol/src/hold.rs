@@ -30,6 +30,8 @@ pub const HISTORY: &str = "history";
 /// Типы открытого текста записей журналов.
 pub const HISTORY_TYPE: &str = "parvane.history.v1.HistoryBatch";
 pub const PLANNER_TYPE: &str = "parvane.planner.v1.PlannerOp";
+pub const HEALTH_TYPE: &str = "parvane.health.v1.HealthOp";
+pub const HEALTH_SNAPSHOT_TYPE: &str = "parvane.health.v1.HealthSnapshot";
 pub const CLOUD_TYPE: &str = "parvane.cloud.v1.CloudOp";
 /// Типы открытого текста снимков доменов (снимок, составленный движком будущего, тоже может нести непонятное).
 pub const PLANNER_SNAPSHOT_TYPE: &str = "parvane.planner.v1.PlannerSnapshot";

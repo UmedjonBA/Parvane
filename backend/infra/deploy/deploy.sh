@@ -114,6 +114,7 @@ PARVANE_NOTES_PASS=$(gen)
 PARVANE_CALENDAR_PASS=$(gen)
 PARVANE_CALL_PASS=$(gen)
 PARVANE_PREVIEW_PASS=$(gen)
+PARVANE_MUSIC_PASS=$(gen)
 PARVANE_PUSH_PASS=$(gen)
 PARVANE_DOMAINS_PASS=$(gen)
 PARVANE_GATEWAY_PASS=$(gen)
@@ -127,6 +128,11 @@ fi
 if ! grep -q '^PARVANE_DOMAINS_PASS=' .env; then
   printf 'PARVANE_DOMAINS_PASS=%s\n' "$(openssl rand -hex 24)" >> .env
   echo "PARVANE_DOMAINS_PASS добавлен в .env"
+fi
+# spec 039: шард music — свой пароль NATS (сам шард стартует только с профилем compose `music`)
+if ! grep -q '^PARVANE_MUSIC_PASS=' .env; then
+  printf 'PARVANE_MUSIC_PASS=%s\n' "$(openssl rand -hex 24)" >> .env
+  echo "PARVANE_MUSIC_PASS добавлен в .env"
 fi
 # spec 028: шард federation — свой пароль NATS
 if ! grep -q '^PARVANE_FEDERATION_PASS=' .env; then

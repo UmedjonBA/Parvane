@@ -1994,13 +1994,14 @@ describe('DOMAIN-1: планировщик parvane.planner.v1 — ключи к�
     expect(planner).toContain(`pub const SNAPSHOT_EVERY: u64 = ${r.snapshotEvery};`);
     const client = readRepo('backend/protocol/src/client_planner.rs');
     expect(client).toContain(`OutRequest::id("${r.rotateMethod}"`);
-    expect(client).toContain('fn planner_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64)');
-    // spec 026: «своё устройство» — и под прежним ником
-    expect(client).toContain('if !self.is_own_address(sender) || share.domain != planner::DOMAIN_NAME {');
+    // spec 038: код контейнера общий для личных доменов (планировщик, «Здоровье»)
+    expect(client).toContain('fn personal_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64)');
+    // spec 026: «своё устройство» — и под прежним ником; домен ключа — только личный контейнер
+    expect(client).toContain('Personal::of_domain(&share.domain).filter(|_| self.is_own_address(sender))');
     const core = readRepo('backend/protocol/src/client.rs');
     const kind = r.keyShareKind.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase());
     expect(core).toContain(`Some(content::Kind::${kind}(share)) => {`);
-    expect(core).toContain('match self.planner_rotate_on_revoke(now_ms()) {');
+    expect(core).toContain('o.requests.extend(self.personal_rotate_all_on_revoke(now_ms()));');
   });
 
   it('web: контейнер, очередь и ключи в экспорте линковки', () => {

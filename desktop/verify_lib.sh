@@ -56,7 +56,7 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 PIDS=()
 # Пароли ролей NATS (как в run_web_e2e.sh; только для локального стека)
-PV_NATS_ROLES="identity messenger cloud notes calendar call preview push domains federation gateway"
+PV_NATS_ROLES="identity messenger cloud notes calendar call preview push domains federation music gateway"
 nats_pass() { echo "parvane-desk-e2e-$1"; }
 # Открытый ключ администратора для жалоб (spec 024) — тестовая пара, закрытая часть
 # в scripts/e2e_report_admin.key (тот же ключ, что у web-e2e)

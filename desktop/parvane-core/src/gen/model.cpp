@@ -201,6 +201,7 @@ void to_json(nlohmann::json &j, const ObjectKind &v) {
     case ObjectKind::OBJECT_KIND_CHAT_CLEARED: j = "OBJECT_KIND_CHAT_CLEARED"; return;
     case ObjectKind::OBJECT_KIND_SAVED_GIF: j = "OBJECT_KIND_SAVED_GIF"; return;
     case ObjectKind::OBJECT_KIND_FAVED_STICKER: j = "OBJECT_KIND_FAVED_STICKER"; return;
+    case ObjectKind::OBJECT_KIND_HEALTH_CONTAINER: j = "OBJECT_KIND_HEALTH_CONTAINER"; return;
     }
     j = static_cast<int32_t>(v);
 }
@@ -229,6 +230,7 @@ void from_json(const nlohmann::json &j, ObjectKind &v) {
         if (s == "OBJECT_KIND_CHAT_CLEARED") { v = ObjectKind::OBJECT_KIND_CHAT_CLEARED; return; }
         if (s == "OBJECT_KIND_SAVED_GIF") { v = ObjectKind::OBJECT_KIND_SAVED_GIF; return; }
         if (s == "OBJECT_KIND_FAVED_STICKER") { v = ObjectKind::OBJECT_KIND_FAVED_STICKER; return; }
+        if (s == "OBJECT_KIND_HEALTH_CONTAINER") { v = ObjectKind::OBJECT_KIND_HEALTH_CONTAINER; return; }
         v = {};
         return;
     }

@@ -19,7 +19,7 @@ COPY backend/protocol ./backend/protocol
 COPY backend/tests ./backend/tests
 WORKDIR /src/backend
 RUN cargo build --release --locked \
-    -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway -p federation
+    -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway -p federation -p music
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update \
@@ -38,5 +38,6 @@ COPY --from=builder /src/backend/target/release/push /usr/local/bin/push
 COPY --from=builder /src/backend/target/release/domains /usr/local/bin/domains
 COPY --from=builder /src/backend/target/release/gateway /usr/local/bin/gateway
 COPY --from=builder /src/backend/target/release/federation /usr/local/bin/federation
+COPY --from=builder /src/backend/target/release/music /usr/local/bin/music
 COPY --from=builder /src/backend/target/release/federation_admin /usr/local/bin/federation_admin
 USER parvane

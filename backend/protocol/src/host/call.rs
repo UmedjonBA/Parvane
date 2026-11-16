@@ -470,6 +470,40 @@ impl HostClient {
                 c.planner_keys_import(&e).map_err(err)?;
                 Value::Null
             }
+            // ── «Здоровье» (spec 038): тот же личный контейнер, что у планировщика ──
+            "healthContainer" => c.health_container().map_or(Value::Null, |r| json!({"domain": r.domain, "id": hex::encode(&r.id)})),
+            "healthIsAttached" => json!(c.health_is_attached()),
+            "healthHasKey" => json!(c.health_has_key()),
+            "healthHeadSeq" => json!(c.health_head_seq()),
+            "healthStateJson" => c.health_state_json().map_or(Value::Null, parsed),
+            "healthCreate" => req(&c.health_create(a.i("tsMs")?).map_err(cerr)?),
+            "healthAttach" => {
+                c.health_attach(&a.b("getResponse")?, &a.b("grantsResponse")?).map_err(cerr)?;
+                Value::Null
+            }
+            "healthIngestGrants" => json!(c.health_ingest_grants(&a.b("grantsResponse")?).map_err(cerr)?),
+            "healthIngestSync" => {
+                let r = c.health_ingest_sync(&a.b("syncResponse")?).map_err(cerr)?;
+                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "missingEpoch": r.missing_epoch, "needSnapshot": r.need_snapshot})
+            }
+            "healthIngestSnapshot" => json!(c.health_ingest_snapshot(&a.b("snapshotResponse")?).map_err(cerr)?),
+            "healthPrepareLocal" => {
+                let r = c.health_prepare_local(&a.text("changesJson")?).map_err(cerr)?;
+                json!({"opId": hex::encode(&r.op_id), "op": b64(&r.op), "applied": r.applied})
+            }
+            "healthApplyLocal" => json!(c.health_apply_local(&a.b("op")?).map_err(cerr)?),
+            "healthSeal" => req(&c.health_seal(&a.b("op")?, &a.hex("opIdHex")?, a.i("tsMs")?).map_err(cerr)?),
+            "healthSnapshotRequest" => c.health_snapshot_request(a.i("tsMs")?).map_err(cerr)?.map_or(Value::Null, |r| req(&r)),
+            "healthSize" => json!(c.health_size()),
+            "shareHealthWithOwnDevices" => reqs(&c.share_health_with_own_devices().map_err(cerr)?),
+            "healthKeysExport" => c.health_keys_export().and_then(|e| serde_json::to_value(&e).ok()).unwrap_or(Value::Null),
+            "healthKeysImport" => {
+                let e: crate::client::PlannerKeysExport = serde_json::from_str(&a.text("json")?).map_err(|_| malformed())?;
+                c.health_keys_import(&e).map_err(err)?;
+                Value::Null
+            }
+            // Разбор свободного ввода (HEALTH-2): клиент сам не разбирает
+            "healthParse" => parsed(crate::health_parse::parse_json(&a.text("text")?, a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
 
             // ── облако (spec 016); id контейнера — hex ──
             "cloudContainers" => parsed(c.cloud_containers_json()),
