@@ -3,7 +3,9 @@ import { memo } from '../../../lib/teact/teact';
 import type { HealthSleepView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatClock, formatDurationShort, sleepBar } from './healthFormat';
+import {
+  formatClock, formatDurationShort, sleepBar, WEEKDAY_KEYS,
+} from './healthFormat';
 import useHealthLabels from './useHealthLabels';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
@@ -19,11 +21,6 @@ type OwnProps = {
   onBed: NoneToVoidFunction;
   onWake: NoneToVoidFunction;
 };
-
-const WEEKDAY_KEYS = [
-  'HealthWeekdayMon', 'HealthWeekdayTue', 'HealthWeekdayWed', 'HealthWeekdayThu', 'HealthWeekdayFri',
-  'HealthWeekdaySat', 'HealthWeekdaySun',
-] as const;
 
 // Parvane (spec 038): карточка сна — последняя ночь, отклонение от цели и режим за неделю: когда лёг и
 // встал по дням на общей шкале с целью. Числа считает движок

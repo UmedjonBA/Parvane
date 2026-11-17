@@ -16,6 +16,10 @@ use serde_json::{json, Value};
 
 use crate::domain::health::{civil_from_days, days_from_civil, minute_of_day};
 
+#[path = "health_parse_food.rs"]
+mod food;
+pub use food::{meal_by_minute, part_in_range, KIND_FOOD, KIND_WORKOUT};
+
 const DAY_MS: i64 = 86_400_000;
 const MIN_MS: i64 = 60_000;
 /// Сколько вперёд от «сейчас» может стоять время записи без явного дня, прежде чем разбор отнесёт её к вчера.
@@ -25,7 +29,7 @@ pub const GLASS_ML: f64 = 250.0;
 pub const MAX_INPUT: usize = 2000;
 
 /// Одна разобранная запись (id и метки ставит домен).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Parsed {
     pub kind: &'static str,
     pub at_ms: i64,
@@ -34,6 +38,12 @@ pub struct Parsed {
     pub value: f64,
     pub value2: f64,
     pub unit: &'static str,
+    /// Название: что съедено.
+    pub name: String,
+    /// Приём пищи либо тип тренировки.
+    pub tag: &'static str,
+    /// Именованные числа: БЖУ и граммы еды, километры и упражнения тренировки.
+    pub parts: Vec<(&'static str, f64)>,
 }
 
 /// Значение распознано, но не принято.
@@ -610,6 +620,9 @@ fn kind_of(kind: &str) -> Option<&'static Kind> {
 
 /// Значение показателя в разумном диапазоне; у вида вне словаря диапазона нет. Общая проверка разбора и форм.
 pub fn in_range(kind: &str, value: f64, value2: f64) -> bool {
+    if let Some(ok) = food::value_in_range(kind, value) {
+        return ok;
+    }
     let Some(k) = kind_of(kind) else { return true };
     value >= k.min && value <= k.max && (kind != "pressure" || (value2 >= 30.0 && value2 <= 200.0 && value > value2))
 }
@@ -714,6 +727,9 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
     let mut p = Parser { text, used: vec![false; n], noise: vec![false; n], toks };
     let today = (now_ms + i64::from(tz_min) * MIN_MS).div_euclid(DAY_MS);
 
+    // Еда и тренировки — отдельным проходом: их лексемы основной разбор пропускает
+    let found = food::scan(&mut p, today, &mut res.problems);
+
     let mut items: Vec<Item> = Vec::new();
     let mut cur_day: Option<i64> = None;
     let mut pending_time: Option<(u32, usize, usize)> = None;
@@ -745,6 +761,10 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
 
     let mut i = 0;
     while i < n {
+        if p.used.get(i).copied().unwrap_or(false) {
+            i += 1;
+            continue;
+        }
         // Разделитель: время, сказанное до него, к следующей записи не относится
         if p.is(i, &Tok::Sep) {
             p.used[i] = true;
@@ -1155,7 +1175,20 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             None if day == today => now_ms,
             None => local_ms(day, 720, tz_min),
         };
-        res.entries.push(Parsed { kind: it.kind, at_ms, end_ms: 0, value: it.value, value2: it.value2, unit: it.unit });
+        res.entries.push(Parsed { kind: it.kind, at_ms, end_ms: 0, value: it.value, value2: it.value2, unit: it.unit, ..Default::default() });
+    }
+
+    // ── еда и тренировки: день — названный во фразе, иначе общий для строки ──
+    for f in found {
+        let day = f.day.or(cur_day).unwrap_or(today);
+        let at_ms = match f.minute {
+            Some(m) if f.day.or(cur_day).is_none() && local_ms(day, m, tz_min) > now_ms + FUTURE_SLACK_MS => local_ms(day - 1, m, tz_min),
+            Some(m) => local_ms(day, m, tz_min),
+            None if day == today => now_ms,
+            None => local_ms(day, 720, tz_min),
+        };
+        let tag = if f.kind == KIND_FOOD && f.tag.is_empty() { meal_by_minute(minute_of_day(at_ms, tz_min)) } else { f.tag };
+        res.entries.push(Parsed { kind: f.kind, at_ms, value: f.value, unit: f.unit, name: f.name, tag, parts: f.parts, ..Default::default() });
     }
 
     // ── сон ──
@@ -1180,7 +1213,7 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             }
             let minutes = ((end - start) / MIN_MS) as f64;
             if sleep_in_range(minutes) {
-                res.entries.push(Parsed { kind: "sleep", at_ms: start, end_ms: end, value: minutes, value2: 0.0, unit: "min" });
+                res.entries.push(Parsed { kind: "sleep", at_ms: start, end_ms: end, value: minutes, value2: 0.0, unit: "min", ..Default::default() });
             } else {
                 res.problems.push(Problem { text: span_text, code: "range" });
             }
@@ -1190,14 +1223,14 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             if late(t) {
                 t -= DAY_MS;
             }
-            res.entries.push(Parsed { kind: "sleep_start", at_ms: t, end_ms: 0, value: 0.0, value2: 0.0, unit: "" });
+            res.entries.push(Parsed { kind: "sleep_start", at_ms: t, end_ms: 0, value: 0.0, value2: 0.0, unit: "", ..Default::default() });
         }
         (None, Some(w), None) => {
             let mut t = local_ms(day, w, tz_min);
             if late(t) {
                 t -= DAY_MS;
             }
-            res.entries.push(Parsed { kind: "sleep_end", at_ms: t, end_ms: 0, value: 0.0, value2: 0.0, unit: "" });
+            res.entries.push(Parsed { kind: "sleep_end", at_ms: t, end_ms: 0, value: 0.0, value2: 0.0, unit: "", ..Default::default() });
         }
         (bed_only, wake_only, Some(d)) => {
             if sleep_in_range(d) {
@@ -1208,17 +1241,17 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                         if b >= 12 * 60 || late(start) {
                             start -= DAY_MS;
                         }
-                        res.entries.push(Parsed { kind: "sleep", at_ms: start, end_ms: start + (d as i64) * MIN_MS, value: d, value2: 0.0, unit: "min" });
+                        res.entries.push(Parsed { kind: "sleep", at_ms: start, end_ms: start + (d as i64) * MIN_MS, value: d, value2: 0.0, unit: "min", ..Default::default() });
                     }
                     (None, Some(w)) => {
                         let mut end = local_ms(day, w, tz_min);
                         if late(end) {
                             end -= DAY_MS;
                         }
-                        res.entries.push(Parsed { kind: "sleep", at_ms: end - (d as i64) * MIN_MS, end_ms: end, value: d, value2: 0.0, unit: "min" });
+                        res.entries.push(Parsed { kind: "sleep", at_ms: end - (d as i64) * MIN_MS, end_ms: end, value: d, value2: 0.0, unit: "min", ..Default::default() });
                     }
                     // Только длительность: запись-момент на начало дня, время сна неизвестно
-                    _ => res.entries.push(Parsed { kind: "sleep", at_ms: local_ms(day, 0, tz_min), end_ms: 0, value: d, value2: 0.0, unit: "min" }),
+                    _ => res.entries.push(Parsed { kind: "sleep", at_ms: local_ms(day, 0, tz_min), end_ms: 0, value: d, value2: 0.0, unit: "min", ..Default::default() }),
                 }
             } else {
                 res.problems.push(Problem { text: span_text, code: "range" });
@@ -1285,6 +1318,15 @@ pub fn parse_json(text: &str, now_ms: i64, tz_min: i32) -> String {
                 "kind": e.kind, "atMs": e.at_ms, "endMs": e.end_ms, "tzMin": tz_min, "value": e.value, "value2": e.value2, "unit": e.unit,
                 "source": "text", "day": day_text(e.at_ms, tz_min), "time": hhmm(minute_of_day(e.at_ms, tz_min)),
             });
+            if !e.name.is_empty() {
+                o["name"] = json!(e.name);
+            }
+            if !e.tag.is_empty() {
+                o["tag"] = json!(e.tag);
+            }
+            if !e.parts.is_empty() {
+                o["parts"] = Value::Object(e.parts.iter().map(|(k, v)| (k.to_string(), json!(v))).collect());
+            }
             if e.end_ms != 0 {
                 o["endDay"] = json!(day_text(e.end_ms, tz_min));
                 o["endTime"] = json!(hhmm(minute_of_day(e.end_ms, tz_min)));

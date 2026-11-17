@@ -2039,6 +2039,281 @@
      "unit": "steps"
     }
    ]
+  },
+  {
+   "text": "завтрак овсянка, яйцо, кофе 430 ккал б 22 ж 14 у 48",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 430,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "name": "овсянка, яйцо, кофе",
+     "parts": {
+      "carbs": 48,
+      "fat": 14,
+      "protein": 22
+     }
+    }
+   ]
+  },
+  {
+   "text": "съел гречку с курицей 520 ккал",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 520,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "name": "гречку с курицей"
+    }
+   ]
+  },
+  {
+   "text": "вчера ужин паста 600 ккал",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-15",
+     "time": "12:00",
+     "value": 600,
+     "unit": "kcal",
+     "tag": "dinner",
+     "name": "паста"
+    }
+   ]
+  },
+  {
+   "text": "на перекус творог 200 г 240 ккал",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 240,
+     "unit": "kcal",
+     "tag": "snack",
+     "name": "творог",
+     "parts": {
+      "grams": 200
+     }
+    }
+   ]
+  },
+  {
+   "text": "ужин 22 г белка 14 г жира 48 г углеводов",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 406,
+     "unit": "kcal",
+     "tag": "dinner",
+     "parts": {
+      "carbs": 48,
+      "fat": 14,
+      "protein": 22
+     }
+    }
+   ]
+  },
+  {
+   "text": "вес 72, завтрак омлет 300 ккал",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 300,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "name": "омлет"
+    },
+    {
+     "kind": "weight",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 72,
+     "unit": "kg"
+    }
+   ]
+  },
+  {
+   "text": "1 420 ккал",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 1420,
+     "unit": "kcal",
+     "tag": "breakfast"
+    }
+   ]
+  },
+  {
+   "text": "на ужин паста",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 0,
+     "unit": "kcal",
+     "tag": "dinner",
+     "name": "паста"
+    }
+   ]
+  },
+  {
+   "text": "lunch chicken salad 450 kcal",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 450,
+     "unit": "kcal",
+     "tag": "lunch",
+     "name": "chicken salad"
+    }
+   ]
+  },
+  {
+   "text": "кофе с сахаром 50 ккал в 9:15",
+   "entries": [
+    {
+     "kind": "food",
+     "day": "2026-11-16",
+     "time": "09:15",
+     "value": 50,
+     "unit": "kcal",
+     "tag": "breakfast",
+     "name": "кофе с сахаром"
+    }
+   ]
+  },
+  {
+   "text": "съел 20000 ккал",
+   "entries": [],
+   "problems": [
+    "съел 20000 ккал"
+   ]
+  },
+  {
+   "text": "бег 35 минут 6,2 км",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 35,
+     "unit": "min",
+     "tag": "run",
+     "parts": {
+      "km": 6.2
+     }
+    }
+   ]
+  },
+  {
+   "text": "зал 1:20, 6 упражнений",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 80,
+     "unit": "min",
+     "tag": "strength",
+     "parts": {
+      "exercises": 6
+     }
+    }
+   ]
+  },
+  {
+   "text": "вчера плавал 40 мин",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-15",
+     "time": "12:00",
+     "value": 40,
+     "unit": "min",
+     "tag": "swim"
+    }
+   ]
+  },
+  {
+   "text": "пробежал 5 км за 28 минут",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 28,
+     "unit": "min",
+     "tag": "run",
+     "parts": {
+      "km": 5
+     }
+    }
+   ]
+  },
+  {
+   "text": "тренировка полтора часа, пульс 120",
+   "entries": [
+    {
+     "kind": "pulse",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 120,
+     "unit": "bpm"
+    },
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 90,
+     "unit": "min",
+     "tag": "other"
+    }
+   ]
+  },
+  {
+   "text": "ran 5 km in 28 minutes",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 28,
+     "unit": "min",
+     "tag": "run",
+     "parts": {
+      "km": 5
+     }
+    }
+   ]
+  },
+  {
+   "text": "гулял 40 минут",
+   "entries": [
+    {
+     "kind": "workout",
+     "day": "2026-11-16",
+     "time": "10:00",
+     "value": 40,
+     "unit": "min",
+     "tag": "walk"
+    }
+   ]
   }
  ]
 }

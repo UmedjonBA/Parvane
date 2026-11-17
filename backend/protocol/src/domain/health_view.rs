@@ -4,7 +4,7 @@
 //! Результат `view_json(state, now_ms, tz_min)`:
 //! `{today, sleep:{goalBedMin, goalWakeMin, goalMinutes, last, lastDeltaMinutes, week:[7 дней], avgMinutes},
 //!   metrics:[{kind, unit, isSum, last, goal, toGoal, today, weekDelta, monthDelta, series:[30 дней]}],
-//!   recent:[записи, новые первыми]}`.
+//!   recent:[записи, новые первыми], nutrition:{…}, activity:{…}}` — питание и активность считает `health_day`.
 //! Цели — регистры `Goal` с именем вида (`weight`, `steps`, `water`, …) и `sleep_bed` / `sleep_wake` (минуты от
 //! полуночи). Виды-суммы (`steps`, `water`): значение дня — сумма записей; остальные — последняя запись дня.
 
@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::health::{self, HealthState};
+use super::health_day;
 use super::health_json::entry_json;
 use crate::pb::parvane::health::v1::Entry;
 
@@ -24,6 +25,8 @@ pub const KIND_SLEEP_END: &str = "sleep_end";
 const SUM_KINDS: [&str; 2] = ["steps", "water"];
 const GOAL_SLEEP_BED: &str = "sleep_bed";
 const GOAL_SLEEP_WAKE: &str = "sleep_wake";
+/// Цели, которые показывают свои блоки (сон, питание, активность), а не список показателей.
+const OWN_GOALS: [&str; 7] = [GOAL_SLEEP_BED, GOAL_SLEEP_WAKE, "kcal", "protein", "fat", "carbs", "active_min"];
 const WEEK_DAYS: i64 = 7;
 const SERIES_DAYS: i64 = 30;
 const RECENT_LIMIT: usize = 30;
@@ -34,7 +37,7 @@ pub(super) fn day_index(ms: i64, tz_min: i32) -> i64 {
     (ms + i64::from(tz_min) * 60_000).div_euclid(DAY_MS)
 }
 
-fn day_text(index: i64) -> String {
+pub(super) fn day_text(index: i64) -> String {
     let (y, m, d) = health::civil_from_days(index);
     format!("{y:04}-{m:02}-{d:02}")
 }
@@ -72,7 +75,7 @@ pub fn open_sleep_start<'a>(entries: &[&'a Entry], now_ms: i64) -> Option<&'a En
     (!closed).then_some(start)
 }
 
-fn round1(v: f64) -> f64 {
+pub(super) fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
@@ -183,37 +186,46 @@ pub fn view_json(state: &HealthState, now_ms: i64, tz_min: i32) -> String {
     entries.sort_by(|a, b| (a.at_ms, &a.id).cmp(&(b.at_ms, &b.id)));
     let goals: BTreeMap<&str, f64> = state.live_goals().map(|g| (g.id.as_str(), g.target)).collect();
     let is_sleep_kind = |k: &str| k == KIND_SLEEP || k == KIND_SLEEP_START || k == KIND_SLEEP_END;
-    let mut kinds: Vec<&str> = entries.iter().map(|e| e.kind.as_str()).filter(|k| !is_sleep_kind(k)).collect();
-    // Показатель с целью виден и без записей
-    kinds.extend(goals.keys().copied().filter(|g| *g != GOAL_SLEEP_BED && *g != GOAL_SLEEP_WAKE));
+    let mut kinds: Vec<&str> = entries.iter().map(|e| e.kind.as_str()).filter(|k| !is_sleep_kind(k) && !health_day::has_own_block(k)).collect();
+    // Показатель с целью виден и без записей; цели питания и активных минут — в своих блоках
+    kinds.extend(goals.keys().copied().filter(|g| !OWN_GOALS.contains(g)));
     kinds.sort_unstable();
     kinds.dedup();
-    let recent: Vec<Value> = entries.iter().rev().filter(|e| entry_day_index(e) <= today).take(RECENT_LIMIT).map(|e| entry_json(e)).collect();
+    let recent: Vec<Value> = entries.iter().rev().filter(|e| entry_day_index(e) <= today && e.kind != health_day::KIND_FOOD_CLOSE).take(RECENT_LIMIT).map(|e| entry_json(e)).collect();
     json!({
         "today": day_text(today),
         "sleep": sleep_view(&entries, &goals, today, now_ms),
         "metrics": kinds.iter().map(|k| metric_view(k, &entries, &goals, today)).collect::<Vec<_>>(),
         "recent": recent,
+        "nutrition": health_day::nutrition_view(&entries, &goals, today),
+        "activity": health_day::activity_view(&entries, &goals, today),
     })
     .to_string()
 }
 
 /// Изменения для записи разобранного ввода (`health_parse::parse_json` → поле `entries`): каждой записи —
 /// случайный id; «встал» после незакрытого «лёг» сводится в один сон (отметка «лёг» удаляется); сон отрезком
-/// закрывает незакрытое «лёг». Результат — `{"changes":[…]}` для `op_from_json`.
+/// закрывает незакрытое «лёг»; `food_close` — закрыть либо открыть день питания (`health_day::close_change`).
+/// Результат — `{"changes":[…]}` для `op_from_json`.
 pub fn compose_changes(state: &HealthState, parsed: &[Value], now_ms: i64) -> Value {
     let entries: Vec<&Entry> = state.live_entries().collect();
     let mut open = open_sleep_start(&entries, now_ms).map(|e| (e.id.clone(), e.at_ms, e.tz_min));
+    let goals: BTreeMap<&str, f64> = state.live_goals().map(|g| (g.id.as_str(), g.target)).collect();
     let mut changes = Vec::new();
     for item in parsed {
         let Some(src) = item.as_object() else { continue };
         let field = |k: &str| src.get(k).cloned().unwrap_or(Value::Null);
         let kind = src.get("kind").and_then(Value::as_str).unwrap_or("");
+        if kind == health_day::KIND_FOOD_CLOSE {
+            changes.extend(health_day::close_change(src, &goals));
+            continue;
+        }
         let at_ms = src.get("atMs").and_then(Value::as_i64).unwrap_or(0);
         let end_ms = src.get("endMs").and_then(Value::as_i64).unwrap_or(0);
         let mut entry = json!({
             "id": new_id(), "kind": kind, "atMs": at_ms, "endMs": end_ms, "tzMin": field("tzMin"), "value": field("value"),
             "value2": field("value2"), "unit": field("unit"), "source": field("source"), "note": field("note"),
+            "name": field("name"), "tag": field("tag"), "parts": field("parts"),
         });
         let closes = match &open {
             Some((_, start_ms, _)) if kind == KIND_SLEEP_END && at_ms > *start_ms && at_ms - *start_ms <= health::MAX_SPAN_MS => true,

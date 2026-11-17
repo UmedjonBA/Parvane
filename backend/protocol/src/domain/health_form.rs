@@ -23,7 +23,7 @@ pub fn entries_json(state: &HealthState, kind: &str, limit: usize, now_ms: i64, 
     let today = day_index(now_ms, tz_min.clamp(health::TZ_MIN, health::TZ_MAX));
     let limit = limit.min(MAX_PAGE);
     let wanted = |e: &Entry| match kind {
-        "" => true,
+        "" => e.kind != super::health_day::KIND_FOOD_CLOSE,
         KIND_SLEEP => SLEEP_KINDS.contains(&e.kind.as_str()),
         _ => e.kind == kind,
     };
@@ -56,6 +56,9 @@ fn problem_of(entry: &Value, now_ms: i64) -> Option<&'static str> {
     if e.kind == KIND_SLEEP {
         let minutes = if e.end_ms != 0 { ((e.end_ms - e.at_ms) / 60_000) as f64 } else { e.value };
         return (!health_parse::sleep_in_range(minutes)).then_some("span");
+    }
+    if e.parts.iter().any(|p| !health_parse::part_in_range(&p.key, p.value)) {
+        return Some("value");
     }
     (!health_parse::in_range(&e.kind, e.value, e.value2)).then_some("value")
 }

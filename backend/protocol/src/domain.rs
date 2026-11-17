@@ -1074,6 +1074,7 @@ pub mod planner_json;
 pub mod health;
 /// JSON «Здоровья» для хостов: сведённое состояние и изменения.
 pub mod health_json;
+pub mod health_day;
 pub mod health_form;
 pub mod health_view;
 /// Плейлисты «Музыки» `parvane.music.v1` (spec 039, этап C).

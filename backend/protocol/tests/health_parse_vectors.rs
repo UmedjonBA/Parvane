@@ -34,7 +34,7 @@ fn free_text_matches_shared_cases() {
                 if e["value2"].as_f64().unwrap() != 0.0 {
                     o["value2"] = e["value2"].clone();
                 }
-                for k in ["endDay", "endTime"] {
+                for k in ["endDay", "endTime", "name", "tag", "parts"] {
                     if !e[k].is_null() {
                         o[k] = e[k].clone();
                     }
@@ -50,6 +50,11 @@ fn free_text_matches_shared_cases() {
                 for k in ["value", "value2"] {
                     if let Some(n) = e.get(k).and_then(Value::as_f64) {
                         e[k] = json!(n);
+                    }
+                }
+                if let Some(parts) = e.get_mut("parts").and_then(Value::as_object_mut) {
+                    for v in parts.values_mut() {
+                        *v = json!(v.as_f64());
                     }
                 }
                 e

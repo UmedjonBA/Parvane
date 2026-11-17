@@ -1,8 +1,13 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
+import type { HealthExtraForm } from './healthDayFormat';
 import type { HealthDraft, HealthEntry } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
+import {
+  EMPTY_EXTRA_FORM, extraDraftOf, extraFormOf, FOOD_KIND, hasExtraFields, MEALS, mealTitleKey, WORKOUT_KIND,
+  WORKOUT_TAGS, workoutTitleKey,
+} from './healthDayFormat';
 import {
   buildSleepSpan, formatClock, fromLocalParts, parseClock, parseNumber, toLocalParts,
 } from './healthFormat';
@@ -28,7 +33,7 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-type Form = {
+type Form = HealthExtraForm & {
   value: string;
   value2: string;
   day: string;
@@ -38,11 +43,13 @@ type Form = {
 };
 
 const EMPTY_FORM: Form = {
-  value: '', value2: '', day: '', time: '', endTime: '', note: '',
+  ...EMPTY_EXTRA_FORM, value: '', value2: '', day: '', time: '', endTime: '', note: '',
 };
 const NAP_FROM = '14:00';
 const NAP_TO = '15:00';
 const NOTE_MAX = 500;
+const NAME_MAX = 120;
+const DECIMAL = { inputMode: 'decimal' } as const;
 const PROBLEM_KEYS = {
   value: 'HealthFormProblemValue',
   future: 'HealthFormProblemFuture',
@@ -52,7 +59,7 @@ const PROBLEM_KEYS = {
 
 // Parvane (spec 038, 041; доски `ZpHealthX`, `ZdHealthX`): окно правки записи и дневного сна. Поля зависят
 // от вида: значение (у давления — два), отрезок сна «с — до» по дню пробуждения, длительность либо только
-// время отметки. Годится ли запись, решает движок (`healthCheck`) — теми же диапазонами, что у ввода строкой
+// время отметки; у еды — название, приём и БЖУ, у тренировки — тип, расстояние и упражнения. Годится ли запись, решает движок (`healthCheck`) — теми же диапазонами, что у ввода строкой
 const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
   const {
     lang, kindTitle, unitTitle, duration,
@@ -65,6 +72,8 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
   const isDuration = isSleep && !isSpan;
   const isMark = kind === 'sleep_start' || kind === 'sleep_end';
   const hasSecondValue = kind === 'pressure';
+  const isFood = kind === FOOD_KIND;
+  const isWorkout = kind === WORKOUT_KIND;
 
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [problem, setProblem] = useState<string>();
@@ -87,6 +96,7 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
     const start = toLocalParts(opened.atMs, opened.tzMin);
     const end = opened.endMs ? toLocalParts(opened.endMs, opened.tzMin) : undefined;
     setForm({
+      ...extraFormOf(opened),
       value: opened.kind === 'sleep' ? formatClock(opened.value) : String(opened.value),
       value2: String(opened.value2),
       day: (end || start).day,
@@ -96,7 +106,7 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
     });
   }, [target, today]);
 
-  const handleField = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleField = useLastCallback((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.currentTarget;
     setForm((current) => ({ ...current, [name]: value }));
     setProblem(undefined);
@@ -126,9 +136,10 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
     if (isMark) return { ...base, atMs };
     const value = isDuration ? parseClock(form.value) : parseNumber(form.value);
     const value2 = hasSecondValue ? parseNumber(form.value2) : 0;
-    if (value === undefined || value2 === undefined) return undefined;
+    const extra = extraDraftOf(kind, form, entry?.parts);
+    if (value === undefined || value2 === undefined || !extra) return undefined;
     return {
-      ...base, atMs, value, value2,
+      ...base, ...extra, atMs, value, value2,
     };
   }
 
@@ -162,7 +173,25 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
   });
 
   const unit = entry && unitTitle(entry.unit);
-  const valueLabel = unit ? `${kindTitle(kind)}, ${unit}` : kindTitle(kind);
+  const ownLabel = isFood ? lang('HealthFoodKcal') : isWorkout ? lang('HealthWorkoutMinutes') : undefined;
+  const valueLabel = ownLabel || (unit ? `${kindTitle(kind)}, ${unit}` : kindTitle(kind));
+  const tags: readonly string[] = isFood ? MEALS : WORKOUT_TAGS;
+
+  function renderTag() {
+    return (
+      <label className={styles.field}>
+        <span className={buildClassName(kit.muted, kit.small)}>
+          {lang(isFood ? 'HealthFoodMeal' : 'HealthWorkoutType')}
+        </span>
+        <select className={kit.input} name="tag" value={form.tag} data-health-field="tag" onChange={handleField}>
+          {!tags.includes(form.tag) && <option value={form.tag}>{form.tag}</option>}
+          {tags.map((tag) => (
+            <option key={tag} value={tag}>{lang(isFood ? mealTitleKey(tag) : workoutTitleKey(tag))}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
 
   function renderField(name: keyof Form, label: string, type: string, extra?: { max?: string; inputMode?: 'decimal' }) {
     return (
@@ -175,7 +204,7 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
           value={form[name]}
           max={extra?.max}
           inputMode={extra?.inputMode}
-          maxLength={name === 'note' ? NOTE_MAX : undefined}
+          maxLength={name === 'note' ? NOTE_MAX : name === 'name' ? NAME_MAX : undefined}
           data-health-field={name}
           autoComplete="off"
           onChange={handleField}
@@ -192,12 +221,27 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
       onEnter={handleSave}
     >
       <div className={styles.fields} data-health-sheet={kind}>
+        {isFood && renderField('name', lang('HealthFoodName'), 'text')}
+        {hasExtraFields(kind) && renderTag()}
         {!isSleep && !isMark && (
           <div className={styles.fieldRow}>
             {renderField('value', hasSecondValue ? lang('HealthPressureUpper') : valueLabel, 'text', {
               inputMode: 'decimal',
             })}
             {hasSecondValue && renderField('value2', lang('HealthPressureLower'), 'text', { inputMode: 'decimal' })}
+          </div>
+        )}
+        {isFood && (
+          <div className={styles.fieldRow}>
+            {renderField('protein', lang('HealthFieldGrams', { name: lang('HealthMacroProtein') }), 'text', DECIMAL)}
+            {renderField('fat', lang('HealthFieldGrams', { name: lang('HealthMacroFat') }), 'text', DECIMAL)}
+            {renderField('carbs', lang('HealthFieldGrams', { name: lang('HealthMacroCarbs') }), 'text', DECIMAL)}
+          </div>
+        )}
+        {isWorkout && (
+          <div className={styles.fieldRow}>
+            {renderField('km', lang('HealthWorkoutKm'), 'text', DECIMAL)}
+            {renderField('exercises', lang('HealthWorkoutExercisesField'), 'text', DECIMAL)}
           </div>
         )}
         {isDuration && renderField('value', lang('HealthSleepDuration'), 'time')}

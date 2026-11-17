@@ -28,6 +28,10 @@ const MAX_KIND: usize = 24;
 const MAX_UNIT: usize = 12;
 const MAX_SOURCE: usize = 32;
 const MAX_NOTE: usize = 500;
+const MAX_NAME: usize = 120;
+const MAX_TAG: usize = 16;
+const MAX_PART_KEY: usize = 16;
+const MAX_PARTS: usize = 12;
 /// Отрезок не длиннее двух суток.
 pub const MAX_SPAN_MS: i64 = 48 * 3_600_000;
 /// Смещение местного времени: от UTC−12 до UTC+14.
@@ -118,6 +122,17 @@ pub fn check_entry(e: &Entry) -> Result<()> {
     if e.note.len() > MAX_NOTE || e.note.chars().any(|c| c.is_control() && c != '\n') {
         return Err(ProtoError::InvalidField("health_note"));
     }
+    if e.name.len() > MAX_NAME || e.name.chars().any(char::is_control) {
+        return Err(ProtoError::InvalidField("health_name"));
+    }
+    if !(e.tag.is_empty() || is_name(&e.tag, MAX_TAG)) {
+        return Err(ProtoError::InvalidField("health_tag"));
+    }
+    // Имена чисел не повторяются: иначе значение зависело бы от того, какое из двух прочёл клиент
+    let unique = e.parts.iter().enumerate().all(|(i, p)| e.parts.iter().take(i).all(|q| q.key != p.key));
+    if e.parts.len() > MAX_PARTS || !unique || e.parts.iter().any(|p| !is_name(&p.key, MAX_PART_KEY) || !is_number(p.value)) {
+        return Err(ProtoError::InvalidField("health_parts"));
+    }
     Ok(())
 }
 
@@ -132,6 +147,11 @@ pub fn check_goal(g: &Goal) -> Result<()> {
         return Err(ProtoError::InvalidField("health_goal"));
     }
     Ok(())
+}
+
+/// Именованное число записи; `None` — не задано («неизвестно», а не ноль).
+pub fn part(e: &Entry, key: &str) -> Option<f64> {
+    e.parts.iter().find(|p| p.key == key).map(|p| p.value)
 }
 
 /// День записи `ГГГГ-ММ-ДД` по местному времени записи: у отрезка — день его конца (сон — день пробуждения).

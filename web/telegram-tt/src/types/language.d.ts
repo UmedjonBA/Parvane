@@ -2517,6 +2517,65 @@ export interface LangPair {
   'HealthMoodScore5': undefined;
   'HealthMoodNote': undefined;
   'HealthRecord': undefined;
+  'HealthKindFood': undefined;
+  'HealthKindWorkout': undefined;
+  'HealthUnitKcal': undefined;
+  'HealthUnitMin': undefined;
+  'HealthUnitGram': undefined;
+  'HealthNutritionTitle': undefined;
+  'HealthActivityTitle': undefined;
+  'HealthMealBreakfast': undefined;
+  'HealthMealLunch': undefined;
+  'HealthMealDinner': undefined;
+  'HealthMealSnack': undefined;
+  'HealthMealOther': undefined;
+  'HealthWorkoutStrength': undefined;
+  'HealthWorkoutRun': undefined;
+  'HealthWorkoutWalk': undefined;
+  'HealthWorkoutBike': undefined;
+  'HealthWorkoutSwim': undefined;
+  'HealthWorkoutYoga': undefined;
+  'HealthWorkoutOther': undefined;
+  'HealthMacroKcal': undefined;
+  'HealthMacroProtein': undefined;
+  'HealthMacroFat': undefined;
+  'HealthMacroCarbs': undefined;
+  'HealthNutritionNoGoal': undefined;
+  'HealthMealsTitle': undefined;
+  'HealthMealEmpty': undefined;
+  'HealthMealAdd': undefined;
+  'HealthDayClose': undefined;
+  'HealthDayCloseQuestion': undefined;
+  'HealthDayCloseHint': undefined;
+  'HealthDayLogged': undefined;
+  'HealthDayGoal': undefined;
+  'HealthDayUnder': undefined;
+  'HealthDayOver': undefined;
+  'HealthDayCloseConfirm': undefined;
+  'HealthDayCloseCancel': undefined;
+  'HealthDayReopenHint': undefined;
+  'HealthDayClosed': undefined;
+  'HealthDayReopen': undefined;
+  'HealthKcalWeekTitle': undefined;
+  'HealthNutritionGoals': undefined;
+  'HealthStepsToday': undefined;
+  'HealthActiveMinutes': undefined;
+  'HealthActiveGoalLabel': undefined;
+  'HealthWorkoutCount': undefined;
+  'HealthPerWeek': undefined;
+  'HealthDistance': undefined;
+  'HealthStepsByDay': undefined;
+  'HealthWorkoutsWeek': undefined;
+  'HealthWorkoutsEmpty': undefined;
+  'HealthQuickLine': undefined;
+  'HealthWorkoutExample': undefined;
+  'HealthFoodName': undefined;
+  'HealthFoodMeal': undefined;
+  'HealthFoodKcal': undefined;
+  'HealthWorkoutType': undefined;
+  'HealthWorkoutMinutes': undefined;
+  'HealthWorkoutKm': undefined;
+  'HealthWorkoutExercisesField': undefined;
   'HealthFirstBlocks': undefined;
   'HealthFirstBlocksHint': undefined;
   'HealthFirstDone': undefined;
@@ -5228,6 +5287,47 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'HealthWaterBottle': {
     'ml': V;
+  };
+  'HealthMacrosShort': {
+    'protein': V;
+    'fat': V;
+    'carbs': V;
+  };
+  'HealthKcalValue': {
+    'value': V;
+  };
+  'HealthKmValue': {
+    'value': V;
+  };
+  'HealthKcalLeft': {
+    'left': V;
+    'goal': V;
+  };
+  'HealthKcalOver': {
+    'over': V;
+    'goal': V;
+  };
+  'HealthKcalWeekAvg': {
+    'avg': V;
+  };
+  'HealthKcalWeekAvgGoal': {
+    'avg': V;
+    'goal': V;
+  };
+  'HealthActiveGoalWeek': {
+    'goal': V;
+  };
+  'HealthWorkoutCountWeek': {
+    'count': V;
+  };
+  'HealthWorkoutExercises': {
+    'count': V;
+  };
+  'HealthWorkoutPace': {
+    'pace': V;
+  };
+  'HealthFieldGrams': {
+    'name': V;
   };
   'ParvaneCloudSelected': {
     'count': V;

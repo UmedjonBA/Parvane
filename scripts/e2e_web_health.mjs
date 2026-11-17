@@ -55,6 +55,10 @@ try {
   // Блок «Вода» включается прямо с первого экрана — плитка появляется сразу
   await health.locator('[data-health-first] [data-block="water"]').click();
   await card(health, 'water').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.locator('[data-health-first] [data-block="food"]').click();
+  await health.locator('[data-health-first] [data-block="workouts"]').click();
+  await card(health, 'food').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await card(health, 'workout').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await health.locator('[data-health-first]').getByRole('button', { name: '72 kg' }).click();
   await page.waitForFunction(() => document.querySelector('[data-health-quick] input')?.value === '72 kg', undefined, { timeout: STEP_TIMEOUT_MS });
   const preview = health.locator('[data-health-preview]');
@@ -176,6 +180,62 @@ try {
   await expectValue(health, 'steps', '3,000');
   console.log('OK: запись удалена, сумма дня пересчитана');
 
+  // ── Питание: еда одной строкой, приёмы и итог дня против цели ─────────────
+  await addLine(health, 'завтрак овсянка 430 ккал б 22 ж 14 у 48', 'food');
+  await expectValue(health, 'food', '430');
+  await addLine(health, 'обед гречка с курицей 520 ккал', 'food');
+  await expectValue(health, 'food', '950');
+  await card(health, 'food').getByRole('button').first().click();
+  const food = health.locator('[data-health-detail="food"]');
+  await food.locator('[data-health-meal="breakfast"] [data-health-value]').filter({ hasText: '430' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await food.locator('[data-health-meal="breakfast"]').getByText('P 22 F 14 C 48').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await food.locator('[data-health-meal="dinner"]').getByText('not logged yet').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const kcalGoal = food.locator('[data-health-goal="kcal"]');
+  await kcalGoal.fill('2200');
+  await kcalGoal.blur();
+  await food.locator('[data-health-macro="kcal"] [data-health-value]').filter({ hasText: '950 / 2,200' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: питание — приёмы пищи, БЖУ и калории против цели');
+
+  // ── Закрыть день питания: недобор виден до закрытия; день открывается снова ─
+  await food.locator('[data-health-action="close-day"]').click();
+  const closeSheet = page.locator('[data-health-sheet="close-day"]');
+  await closeSheet.locator('[data-health-day-delta]').filter({ hasText: '1,250' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('[data-health-action="confirm-close-day"]').click();
+  await food.locator('[data-health-day-closed]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await food.locator('[data-health-action="reopen-day"]').click();
+  await food.locator('[data-health-action="close-day"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: день питания закрыт и открыт снова');
+
+  // ── Правка записи еды: калории меняют итог приёма ─────────────────────────
+  await food.locator('[data-health-entries] [data-kind="food"]').filter({ hasText: 'овсянка' })
+    .locator('[data-health-entry-edit]').click();
+  const foodSheet = page.locator('[data-health-sheet="food"]');
+  await foodSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.waitForFunction(() => document.querySelector('[data-health-field="value"]')?.value === '430', undefined, { timeout: STEP_TIMEOUT_MS });
+  await foodSheet.locator('[data-health-field="value"]').fill('400');
+  await page.locator('[data-health-save]').click();
+  await foodSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await food.locator('[data-health-meal="breakfast"] [data-health-value]').filter({ hasText: '400' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.getByRole('button', { name: 'Back' }).click();
+  await expectValue(health, 'food', '920');
+  console.log('OK: запись еды правится в окне');
+
+  // ── Активность: тренировка одной строкой, минуты, пробег и темп ───────────
+  await addLine(health, 'бег 35 минут 6,2 км', 'workout');
+  await expectValue(health, 'workout', '35');
+  await card(health, 'workout').getByRole('button').first().click();
+  const activity = health.locator('[data-health-detail="workout"]');
+  await activity.locator('[data-health-tile="km"] [data-health-value]').filter({ hasText: '6.2 km' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await activity.locator('[data-health-workout="run"]').getByText('pace 5:39').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await activity.locator('[data-health-tile="steps"] [data-health-value]').filter({ hasText: '3,000' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.getByRole('button', { name: 'Back' }).click();
+  console.log('OK: активность — тренировка, пробег, темп и шаги дня');
+
   // ── Строка ввода «Плана»: показатель тела уходит в «Здоровье», а не в «План» ─
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Planner', exact: true }).click();
   await page.locator('#FoldersSidebar').getByRole('button', { name: 'New entry' }).click();
@@ -192,6 +252,8 @@ try {
   const reloaded = await openHealthModule(page);
   await expectValue(reloaded, 'weight', '73.5');
   await expectValue(reloaded, 'steps', '3,000');
+  await expectValue(reloaded, 'food', '920');
+  await expectValue(reloaded, 'workout', '35');
   await card(reloaded, 'sleep').locator('[data-health-sleep-total]').filter({ hasText: '7 h 30 min' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: записи пережили перезагрузку');

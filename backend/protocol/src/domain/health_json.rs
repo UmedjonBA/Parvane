@@ -1,7 +1,7 @@
 //! JSON «Здоровья» для хостов (spec 038): сведённое состояние и изменения.
 //!
 //! Состояние: `{headSeq, sizeBytes, entries:[{id, kind, atMs, endMs, tzMin, day, value, value2, unit, source,
-//! note}], goals:{<имя>: число}}` — только живое; `day` считает движок (`health::entry_day`), записи идут по
+//! note, name, tag, parts:{<имя>: число}}], goals:{<имя>: число}}` — только живое; `day` считает движок (`health::entry_day`), записи идут по
 //! времени. Изменения: `{"changes":[{"entry":{…}}, {"entry":{"id":…, "deleted":true}}, {"goal":{"id":…,
 //! "target":…}}, {"goal":{"id":…, "deleted":true}}]}` — метки ставит движок (`health::stamp_op`).
 
@@ -9,13 +9,35 @@ use serde_json::{json, Map, Value};
 
 use super::health::{self, HealthState};
 use crate::error::{ProtoError, Result};
-use crate::pb::parvane::health::v1::{change, Change, Entry, Goal, HealthOp};
+use crate::pb::parvane::health::v1::{change, Change, Entry, Goal, HealthOp, Part};
 
 pub fn entry_json(e: &Entry) -> Value {
+    let parts: Map<String, Value> = e.parts.iter().map(|p| (p.key.clone(), json!(p.value))).collect();
     json!({
         "id": e.id, "kind": e.kind, "atMs": e.at_ms, "endMs": e.end_ms, "tzMin": e.tz_min, "day": health::entry_day(e),
         "value": e.value, "value2": e.value2, "unit": e.unit, "source": e.source, "note": e.note,
+        "name": e.name, "tag": e.tag, "parts": parts,
     })
+}
+
+/// `parts` изменения: объект «имя → число»; `null` и отсутствие числа — «не задано». Порядок — по имени.
+fn parts_of(o: &Map<String, Value>) -> Result<Vec<Part>> {
+    let bad = || ProtoError::InvalidField("parts");
+    match o.get("parts") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Object(m)) => {
+            let mut parts = Vec::with_capacity(m.len());
+            for (key, v) in m {
+                if v.is_null() {
+                    continue;
+                }
+                parts.push(Part { key: key.clone(), value: v.as_f64().filter(|n| n.is_finite()).ok_or_else(bad)? });
+            }
+            parts.sort_by(|a, b| a.key.cmp(&b.key));
+            Ok(parts)
+        }
+        Some(_) => Err(bad()),
+    }
 }
 
 pub fn state_json(state: &HealthState, head_seq: u64) -> String {
@@ -76,6 +98,9 @@ pub fn entry_of(o: &Map<String, Value>) -> Result<Entry> {
         unit: text(o, "unit")?,
         source: text(o, "source")?,
         note: text(o, "note")?,
+        name: text(o, "name")?,
+        tag: text(o, "tag")?,
+        parts: parts_of(o)?,
         ..Default::default()
     };
     // Локальная правка проверяется сразу: негодное не уходит в журнал

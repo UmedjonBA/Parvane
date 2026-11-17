@@ -534,3 +534,97 @@
   border-radius: 0.1875rem;
   background: var(--pv-blue);
 }
+
+// ── питание и активность ────────────────────────────────────────────────────
+
+.dayFill {
+  display: block;
+  height: 100%;
+  border-radius: 0.1875rem;
+  background: var(--pv-green);
+}
+
+.macroRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.macroTrack {
+  flex: none;
+  width: 100%;
+}
+
+.mealRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  min-height: 2rem;
+}
+
+.mealTitle {
+  flex: none;
+  min-width: 4.5rem;
+}
+
+.mealNames {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mealKcal {
+  flex: none;
+  min-width: 2.75rem;
+  text-align: end;
+}
+
+.tile {
+  cursor: default;
+}
+
+.bars {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.barColumn {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.barTrack {
+  display: flex;
+  align-items: flex-end;
+
+  width: 100%;
+  height: 4.5rem;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-raised);
+}
+
+.bar {
+  display: block;
+
+  width: 100%;
+  min-height: 0;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-line2);
+}
+
+.barFull {
+  background: var(--pv-aqua);
+}
+
+.barLabel {
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+}

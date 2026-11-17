@@ -23,6 +23,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import { HealthActivityCard, HealthNutritionCard } from './HealthDayCards';
 import HealthDetail from './HealthDetail';
 import HealthEntries from './HealthEntries';
 import HealthEntrySheet from './HealthEntrySheet';
@@ -78,6 +79,7 @@ const Health = () => {
   const water = view?.metrics.find((metric) => metric.kind === WATER_KIND);
   const mood = view?.metrics.find((metric) => metric.kind === MOOD_KIND);
   const isEmpty = Boolean(view) && !view.recent.length && !view.metrics.length;
+  const shownRecent = view?.recent.filter((entry) => !hiddenKinds.includes(entry.kind));
 
   const addMark = useLastCallback((kind: 'sleep_start' | 'sleep_end') => {
     const now = Date.now();
@@ -175,11 +177,13 @@ const Health = () => {
               </button>
             </div>
           )}
+          {blocks.includes('food') && <HealthNutritionCard nutrition={view.nutrition} onOpen={setDetailKind} />}
           {blocks.includes('water') && <HealthWaterCard metric={water} onOpen={setDetailKind} />}
+          {blocks.includes('workouts') && <HealthActivityCard activity={view.activity} onOpen={setDetailKind} />}
         </div>
         <div className={kit.caps}>{lang('HealthRecentTitle')}</div>
         <HealthEntries
-          entries={view.recent.slice(0, RECENT_ON_SUMMARY)}
+          entries={shownRecent!.slice(0, RECENT_ON_SUMMARY)}
           today={view.today}
           withKind
           onEdit={handleEdit}
@@ -222,6 +226,7 @@ const Health = () => {
               onWake={handleWake}
               onEdit={handleEdit}
               onNap={handleNap}
+              onExample={handleExample}
             />
           )
           : renderSummary()}

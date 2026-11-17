@@ -16,7 +16,7 @@ export const MOOD_MAX = 5;
 // Блоки модуля (экран «Модули») → виды записей
 export const BLOCK_KINDS: Record<string, string[]> = {
   water: ['water'],
-  food: ['food', 'calories'],
+  food: ['food'],
   workouts: ['workout'],
 };
 
@@ -38,6 +38,8 @@ const KIND_TITLE_KEYS = {
   chest: 'HealthKindChest',
   body_fat: 'HealthKindBodyFat',
   spo2: 'HealthKindSpo2',
+  food: 'HealthKindFood',
+  workout: 'HealthKindWorkout',
 } as const;
 
 const UNIT_KEYS = {
@@ -49,7 +51,15 @@ const UNIT_KEYS = {
   mmol_l: 'HealthUnitMmol',
   cm: 'HealthUnitCm',
   pct: 'HealthUnitPercent',
+  kcal: 'HealthUnitKcal',
+  min: 'HealthUnitMin',
 } as const;
+
+// Дни недели сводки: 0 — понедельник
+export const WEEKDAY_KEYS = [
+  'HealthWeekdayMon', 'HealthWeekdayTue', 'HealthWeekdayWed', 'HealthWeekdayThu', 'HealthWeekdayFri',
+  'HealthWeekdaySat', 'HealthWeekdaySun',
+] as const;
 
 export type HealthKindTitleKey = typeof KIND_TITLE_KEYS[keyof typeof KIND_TITLE_KEYS];
 export type HealthUnitKey = typeof UNIT_KEYS[keyof typeof UNIT_KEYS];
@@ -148,6 +158,7 @@ export function parsedValue(entry: HealthParsedEntry, locale: string) {
   if (entry.kind === 'sleep' && entry.endMs) return `${entry.time} → ${entry.endTime}`;
   if (entry.kind === 'sleep') return formatDurationShort(entry.value);
   if (entry.kind === 'sleep_start' || entry.kind === 'sleep_end') return entry.time;
+  if (entry.kind === 'workout') return formatDurationShort(entry.value);
   return formatValue(entry, locale);
 }
 

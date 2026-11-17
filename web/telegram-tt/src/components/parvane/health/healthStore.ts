@@ -99,6 +99,16 @@ export async function addHealthEntries(entries: HealthDraft[]) {
   return Boolean(isAdded);
 }
 
+/** Закрыть день питания либо открыть снова: регистр дня ведёт движок (`food_close`). */
+export async function setFoodDayClosed(day: string, isClosed: boolean) {
+  const entry = {
+    kind: 'food_close', day, tzMin: tzMinutes(), closed: isClosed,
+  };
+  const isDone = await callHealth('parvaneHealthAdd', { entries: [entry], nowMs: Date.now() }).catch(() => false);
+  if (isDone) await refreshHealth();
+  return Boolean(isDone);
+}
+
 export type HealthEntriesPage = { entries: HealthEntry[]; hasMore: boolean };
 
 /** Записи показателя новыми первыми, не больше `limit`; `sleep` — сон вместе с отметками «лёг» и «встал». */

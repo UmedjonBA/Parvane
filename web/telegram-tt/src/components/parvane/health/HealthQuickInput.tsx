@@ -100,6 +100,7 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
             return (
               <span key={`${entry.kind}${index}`} className={styles.quickChip} data-kind={entry.kind}>
                 {titleKey ? lang(titleKey) : entry.kind}
+                {Boolean(entry.name) && ` · ${entry.name}`}
                 {' · '}
                 <b className={kit.mono}>{parsedValue(entry, lang.code)}</b>
                 {' · '}

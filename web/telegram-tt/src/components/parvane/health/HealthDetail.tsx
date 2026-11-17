@@ -4,6 +4,7 @@ import type { HealthEntriesPage } from './healthStore';
 import type { HealthEntry, HealthView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
+import { FOOD_KIND, WORKOUT_KIND } from './healthDayFormat';
 import {
   buildSparkline, formatClock, formatDelta, formatNumber, formatValue, MOOD_KIND, parseClock,
 } from './healthFormat';
@@ -12,8 +13,10 @@ import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import HealthActivityDetail from './HealthActivityDetail';
 import HealthEntries from './HealthEntries';
 import HealthMoodScale from './HealthMoodScale';
+import HealthNutritionDetail from './HealthNutritionDetail';
 import HealthSleepCard from './HealthSleepCard';
 
 import kit from '../notes/PvKit.module.scss';
@@ -27,6 +30,7 @@ type OwnProps = {
   onWake: NoneToVoidFunction;
   onEdit: (entry: HealthEntry) => void;
   onNap: NoneToVoidFunction;
+  onExample: (text: string) => void;
 };
 
 const CHART_WIDTH = 480;
@@ -37,7 +41,7 @@ const PAGE_SIZE = 30;
 // Parvane (spec 038): подробный экран показателя либо сна — крупное значение, график за месяц, цель и записи.
 // Цель правится на месте и сохраняется по выходу из поля; записи приходят из движка страницами
 const HealthDetail = ({
-  view, kind, onBed, onWake, onEdit, onNap,
+  view, kind, onBed, onWake, onEdit, onNap, onExample,
 }: OwnProps) => {
   const {
     lang, kindTitle, unitTitle,
@@ -114,6 +118,23 @@ const HealthDetail = ({
     if (target !== goalWakeMin) void setHealthGoal('sleep_wake', target);
   });
 
+  function renderBlock() {
+    if (kind === FOOD_KIND) return <HealthNutritionDetail nutrition={view.nutrition} onExample={onExample} />;
+    if (kind === WORKOUT_KIND) return <HealthActivityDetail activity={view.activity} onExample={onExample} />;
+    return (
+      <>
+        {kind === MOOD_KIND && <HealthMoodScale />}
+        {(metric || kind !== MOOD_KIND) && renderMetric()}
+      </>
+    );
+  }
+
+  function renderTitle() {
+    if (kind === FOOD_KIND) return lang('HealthNutritionTitle');
+    if (kind === WORKOUT_KIND) return lang('HealthActivityTitle');
+    return kindTitle(kind);
+  }
+
   function renderMetric() {
     if (!metric) return <div className={kit.muted}>{lang('HealthNoEntries')}</div>;
     const { last, isSum } = metric;
@@ -170,7 +191,7 @@ const HealthDetail = ({
 
   return (
     <div className={styles.detail} data-health-detail={kind}>
-      <h2 className={styles.detailTitle}>{kindTitle(kind)}</h2>
+      <h2 className={styles.detailTitle}>{renderTitle()}</h2>
       {isSleep ? (
         <>
           <HealthSleepCard sleep={view.sleep} today={view.today} isDetail onBed={onBed} onWake={onWake} />
@@ -210,12 +231,7 @@ const HealthDetail = ({
             {lang('HealthNapTitle')}
           </button>
         </>
-      ) : (
-        <>
-          {kind === MOOD_KIND && <HealthMoodScale />}
-          {(metric || kind !== MOOD_KIND) && renderMetric()}
-        </>
-      )}
+      ) : renderBlock()}
       <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
       <HealthEntries entries={entries} today={view.today} onEdit={onEdit} />
       {hasMore && (
