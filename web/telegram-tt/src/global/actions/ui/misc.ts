@@ -13,7 +13,6 @@ import { getAllMultitabTokens, getCurrentTabId, reestablishMasterToSelf } from '
 import { getAllNotificationsCount } from '../../../util/folderManager';
 import { shouldShowErrorDialog } from '../../../util/getReadableErrorText';
 import { compact, unique } from '../../../util/iteratees';
-import { refreshFromCache } from '../../../util/localization';
 import * as langProvider from '../../../util/oldLangProvider';
 import updateIcon from '../../../util/updateIcon';
 import { setPageTitle, setPageTitleInstant } from '../../../util/updatePageTitle';
@@ -882,10 +881,6 @@ addActionHandler('setShouldCloseRightColumn', (global, actions, payload): Action
   return updateTabState(global, {
     shouldCloseRightColumn: value,
   }, tabId);
-});
-
-addActionHandler('refreshLangPackFromCache', (global, actions, payload): ActionReturnType => {
-  refreshFromCache(payload.langCode);
 });
 
 addActionHandler('processPremiumFloodWait', (global, actions, payload): ActionReturnType => {

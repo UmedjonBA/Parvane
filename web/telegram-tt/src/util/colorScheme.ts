@@ -4,9 +4,11 @@ import type { ThemeKey } from '../types';
 
 import { createSignal } from './signals';
 
-// Parvane (spec 019): цветовая схема приложения. Схема — две палитры (светлая и тёмная) из десятка
-// тонов; из них выводятся переменные `--color-*` поверх `styles/themes.json`. «Telegram» — без замен.
-// Настройка устройства: localStorage, читается до первой отрисовки
+// Parvane (spec 019, 041 A6): цветовая схема приложения. Схема — две палитры (светлая и тёмная) из десятка
+// тонов; из них выводятся переменные `--color-*` поверх `styles/themes.json` («Telegram» — без замен) и
+// переменные `--pv-*` своих экранов. Gruvbox повторяет токены макета (`pv.css`) значение в значение;
+// остальные схемы задают тот же набор переменных. Размеры и радиусы макета от схемы не зависят —
+// они в `styles/_variables.scss`. Настройка устройства: localStorage, читается до первой отрисовки
 export type ColorScheme = 'gruvbox' | 'telegram' | 'nord' | 'catppuccin' | 'solarized';
 export const COLOR_SCHEMES: ColorScheme[] = ['gruvbox', 'telegram', 'nord', 'catppuccin', 'solarized'];
 export const DEFAULT_COLOR_SCHEME: ColorScheme = 'gruvbox';
@@ -39,6 +41,8 @@ type SchemeColors = Record<string, [light: string, dark: string]>;
 // текст белый, поэтому он темнее
 type Tones = {
   accent: string;
+  // Акцент текстом и значком на панели (`--at` макета): тот же тон, но читаемый на светлом фоне
+  accentText: string;
   accentInk: string;
   blue: string;
   purple: string;
@@ -63,7 +67,7 @@ const PALETTES: Record<Exclude<ColorScheme, 'telegram'>, [light: Palette, dark: 
     line: '#e3d4ae',
     lineStrong: '#d5c4a1',
     text: '#3c3836',
-    muted: '#7c6f64',
+    muted: '#665c54',
     faint: '#a89984',
     accent: '#b57614',
     link: '#076678',
@@ -176,6 +180,7 @@ const PALETTES: Record<Exclude<ColorScheme, 'telegram'>, [light: Palette, dark: 
 const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   gruvbox: [{
     accent: '#b57614',
+    accentText: '#8a5a0b',
     accentInk: '#fbf1c7',
     blue: '#076678',
     purple: '#8f3f71',
@@ -186,6 +191,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     yellow: '#b57614',
   }, {
     accent: '#fabd2f',
+    accentText: '#fabd2f',
     accentInk: '#1d2021',
     blue: '#83a598',
     purple: '#d3869b',
@@ -197,6 +203,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   }],
   telegram: [{
     accent: '#3390ec',
+    accentText: '#1c6fb5',
     accentInk: '#ffffff',
     blue: '#3390ec',
     purple: '#8b5a96',
@@ -207,6 +214,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     yellow: '#b8860b',
   }, {
     accent: '#8774e1',
+    accentText: '#9d8df0',
     accentInk: '#ffffff',
     blue: '#6ab3f3',
     purple: '#cb86db',
@@ -218,6 +226,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   }],
   nord: [{
     accent: '#5e81ac',
+    accentText: '#3f6591',
     accentInk: '#eceff4',
     blue: '#5e81ac',
     purple: '#8f6a8a',
@@ -228,6 +237,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     yellow: '#a8842c',
   }, {
     accent: '#88c0d0',
+    accentText: '#88c0d0',
     accentInk: '#2e3440',
     blue: '#81a1c1',
     purple: '#b48ead',
@@ -239,6 +249,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   }],
   catppuccin: [{
     accent: '#8839ef',
+    accentText: '#7527d9',
     accentInk: '#eff1f5',
     blue: '#1e66f5',
     purple: '#8839ef',
@@ -249,6 +260,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     yellow: '#df8e1d',
   }, {
     accent: '#cba6f7',
+    accentText: '#cba6f7',
     accentInk: '#1e1e2e',
     blue: '#89b4fa',
     purple: '#cba6f7',
@@ -260,6 +272,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
   }],
   solarized: [{
     accent: '#268bd2',
+    accentText: '#1a6fb0',
     accentInk: '#fdf6e3',
     blue: '#268bd2',
     purple: '#6c71c4',
@@ -270,6 +283,7 @@ const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
     yellow: '#b58900',
   }, {
     accent: '#2aa198',
+    accentText: '#2aa198',
     accentInk: '#002b36',
     blue: '#268bd2',
     purple: '#6c71c4',
@@ -404,14 +418,16 @@ export function getSchemeSwatches(scheme: ColorScheme, theme: ThemeKey) {
   return [palette.bg, palette.panel, palette.accent, palette.text];
 }
 
-/** Переменные `--pv-*` для своих разделов: акцент прототипа, цвета видов записей и нейтральные тона.
- * У «Telegram» нейтральные тона берутся из переменных мессенджера. */
+/** Переменные `--pv-*` своих экранов — имена токенов `pv.css` с приставкой: акцент, цвета видов записей и
+ * нейтральные тона. Набор один для всех схем и обеих тем; у «Telegram» нейтральные тона берутся из
+ * переменных мессенджера. */
 export function buildSchemeTokens(scheme: ColorScheme, theme: ThemeKey): Record<string, string> {
   const index = theme === 'dark' ? DARK : LIGHT;
   const tones = TONES[scheme][index];
   const palette = scheme === 'telegram' ? undefined : PALETTES[scheme][index];
   return {
     '--pv-accent': tones.accent,
+    '--pv-at': tones.accentText,
     '--pv-accent-ink': tones.accentInk,
     '--pv-blue': tones.blue,
     '--pv-purple': tones.purple,

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ApiOldLangString } from '../types';
 
-import { buildLangPackFromText } from './langPacks';
+import { parseLanguageStrings } from '../../util/localization/languages';
 import { OLD_LANG_PACK_EN, OLD_LANG_PACK_RU } from './oldLangPack';
 
 import enText from '../../assets/localization/fallback.strings?raw';
@@ -67,8 +67,8 @@ function collectCalls(): Call[] {
 
 describe('Старый лангпак: сторож сырых ключей', () => {
   const calls = collectCalls();
-  const en = buildLangPackFromText('en', enText).strings;
-  const ru = buildLangPackFromText('ru', ruText).strings;
+  const en = parseLanguageStrings(enText);
+  const ru = parseLanguageStrings(ruText);
 
   it('находит вызовы старого провайдера', () => {
     // Защита от поломки обхода: без вызовов тест ничего бы не проверял

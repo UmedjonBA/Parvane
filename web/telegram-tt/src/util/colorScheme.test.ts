@@ -8,6 +8,27 @@ import {
 
 const WHITE = new Color('#ffffff');
 
+// Токены макета `local-workdirs/design-2026-11-17/parvane-design/pv.css`: [светлая, тёмная]
+const PV_CSS: Record<string, [string, string]> = {
+  '--pv-bg': ['#ebdbb2', '#1d2021'],
+  '--pv-panel': ['#fbf1c7', '#282828'],
+  '--pv-raised': ['#f2e5bc', '#32302f'],
+  '--pv-line': ['#e3d4ae', '#3c3836'],
+  '--pv-line2': ['#d5c4a1', '#504945'],
+  '--pv-fg': ['#3c3836', '#ebdbb2'],
+  '--pv-muted': ['#665c54', '#a89984'],
+  '--pv-accent': ['#b57614', '#fabd2f'],
+  '--pv-at': ['#8a5a0b', '#fabd2f'],
+  '--pv-accent-ink': ['#fbf1c7', '#1d2021'],
+  '--pv-blue': ['#076678', '#83a598'],
+  '--pv-purple': ['#8f3f71', '#d3869b'],
+  '--pv-orange': ['#af3a03', '#fe8019'],
+  '--pv-aqua': ['#427b58', '#8ec07c'],
+  '--pv-green': ['#79740e', '#b8bb26'],
+  '--pv-red': ['#9d0006', '#fb4934'],
+};
+const TELEGRAM_PANEL = { light: '#ffffff', dark: '#212121' };
+
 describe('цветовые схемы', () => {
   it('тона своих разделов есть у каждой схемы в обеих темах; тёмный текст читается на акценте', () => {
     COLOR_SCHEMES.forEach((scheme) => {
@@ -17,6 +38,28 @@ describe('цветовые схемы', () => {
         const accent = new Color(tokens['--pv-accent']);
         const ink = new Color(tokens['--pv-accent-ink']);
         expect(ink.contrast(accent, 'WCAG21'), `${scheme} ${theme}`).toBeGreaterThan(3);
+      });
+    });
+  });
+
+  it('Gruvbox повторяет токены макета pv.css в обеих темах', () => {
+    (['light', 'dark'] as const).forEach((theme, index) => {
+      const tokens = buildSchemeTokens('gruvbox', theme);
+      Object.entries(PV_CSS).forEach(([property, pair]) => {
+        expect(tokens[property], `${property} ${theme}`).toBe(pair[index]);
+      });
+    });
+  });
+
+  it('набор переменных своих экранов один у всех схем; акцент текстом читается на панели', () => {
+    const names = Object.keys(buildSchemeTokens('gruvbox', 'light')).sort();
+    COLOR_SCHEMES.forEach((scheme) => {
+      (['light', 'dark'] as const).forEach((theme) => {
+        const tokens = buildSchemeTokens(scheme, theme);
+        expect(Object.keys(tokens).sort(), `${scheme} ${theme}`).toEqual(names);
+        Object.entries(tokens).forEach(([property, value]) => expect(value, `${scheme} ${property}`).toBeTruthy());
+        const panel = new Color(scheme === 'telegram' ? TELEGRAM_PANEL[theme] : tokens['--pv-panel']);
+        expect(new Color(tokens['--pv-at']).contrast(panel, 'WCAG21'), `${scheme} ${theme}`).toBeGreaterThan(4.5);
       });
     });
   });

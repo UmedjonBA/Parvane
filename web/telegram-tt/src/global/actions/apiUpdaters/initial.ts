@@ -4,12 +4,10 @@ import type {
   ApiUpdateConnectionState,
   ApiUpdateCurrentUser,
 } from '../../../api/types';
-import type { LangCode } from '../../../types';
 import type { RequiredGlobalActions } from '../../index';
 import type { ActionReturnType, GlobalState } from '../../types';
 
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import { oldSetLanguage } from '../../../util/oldLangProvider';
 import { updateSessionUserId } from '../../../util/sessions';
 import { forceWebsync } from '../../../util/websync';
 import {
@@ -19,14 +17,9 @@ import { updateUser, updateUserFullInfo } from '../../reducers';
 import { updateAuth } from '../../reducers/auth';
 import { updateTabState } from '../../reducers/tabs';
 import { selectTabState } from '../../selectors';
-import { selectSharedSettings } from '../../selectors/sharedState';
 
 addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
   switch (update['@type']) {
-    case 'updateApiReady':
-      onUpdateApiReady(global);
-      break;
-
     case 'updateAuthorizationState':
       onUpdateAuthorizationState(global, update);
       break;
@@ -56,10 +49,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       break;
   }
 });
-
-function onUpdateApiReady<T extends GlobalState>(global: T) {
-  void oldSetLanguage(selectSharedSettings(global).language as LangCode);
-}
 
 function onUpdateAuthorizationState<T extends GlobalState>(global: T, update: ApiUpdateAuthorizationState) {
   const wasAuthReady = global.auth.state === 'authorizationStateReady';

@@ -721,8 +721,6 @@ export interface LangPair {
   'SettingsPerformanceMediaViewer': undefined;
   'SettingsPerformanceComposer': undefined;
   'SettingsPerformanceContextAnimation': undefined;
-  'SettingsPerformanceContextBlur': undefined;
-  'SettingsPerformanceMessageBlur': undefined;
   'SettingsPerformanceRightColumn': undefined;
   'SettingsPerformanceThanos': undefined;
   'SettingsPerformanceTextStreaming': undefined;
@@ -2426,6 +2424,7 @@ export interface LangPair {
   'HealthQuickEnter': undefined;
   'HealthQuickNothing': undefined;
   'HealthQuickFailed': undefined;
+  'HealthQuickRecalled': undefined;
   'HealthKindSleep': undefined;
   'HealthKindSleepStart': undefined;
   'HealthKindSleepEnd': undefined;

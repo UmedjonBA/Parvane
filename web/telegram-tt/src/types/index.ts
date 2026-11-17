@@ -117,7 +117,7 @@ export type AnimationLevel = 0 | 1 | 2;
 export type FoldersPosition = 'top' | 'left';
 export type PerformanceTypeKey = (
   'pageTransitions' | 'messageSendingAnimations' | 'mediaViewerAnimations'
-  | 'messageComposerAnimations' | 'contextMenuAnimations' | 'contextMenuBlur' | 'messageBlur'
+  | 'messageComposerAnimations' | 'contextMenuAnimations'
   | 'rightColumnAnimations' | 'animatedEmoji' | 'loopAnimatedStickers' | 'reactionEffects' | 'stickerEffects'
   | 'autoplayGifs' | 'autoplayVideos' | 'storyRibbonAnimations' | 'snapEffect' | 'textStreaming'
 );
@@ -129,11 +129,6 @@ export interface IThemeSettings {
   patternColor?: string;
   isBlurred?: boolean;
 }
-
-export type LangCode = (
-  'en' | 'ar' | 'be' | 'ca' | 'nl' | 'fr' | 'de' | 'id' | 'it' | 'ko' | 'ms' | 'fa' | 'pl' | 'pt-br' | 'ru' | 'es'
-  | 'tr' | 'uk' | 'uz'
-);
 
 export type TimeFormat = '24h' | '12h';
 

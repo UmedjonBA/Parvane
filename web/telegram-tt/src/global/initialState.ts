@@ -17,16 +17,15 @@ import {
   MACOS_DEFAULT_MESSAGE_TEXT_SIZE_PX,
 } from '../config';
 import { IS_IOS, IS_MAC_OS } from '../util/browser/windowEnvironment';
+import { getBrowserLanguageCode } from '../util/localization/languages';
 import { DEFAULT_APP_CONFIG } from '../limits';
 import { INITIAL_BROWSER_STATE } from './helpers/browser';
 
 export const INITIAL_PERFORMANCE_STATE_MAX: PerformanceType = {
-  messageBlur: true,
   animatedEmoji: true,
   autoplayGifs: true,
   autoplayVideos: true,
   contextMenuAnimations: true,
-  contextMenuBlur: true,
   loopAnimatedStickers: true,
   mediaViewerAnimations: true,
   messageComposerAnimations: true,
@@ -41,12 +40,10 @@ export const INITIAL_PERFORMANCE_STATE_MAX: PerformanceType = {
 };
 
 export const INITIAL_PERFORMANCE_STATE_MED: PerformanceType = {
-  messageBlur: false,
   animatedEmoji: true,
   autoplayGifs: true,
   autoplayVideos: true,
   contextMenuAnimations: true,
-  contextMenuBlur: true,
   loopAnimatedStickers: true,
   mediaViewerAnimations: true,
   messageComposerAnimations: true,
@@ -61,12 +58,10 @@ export const INITIAL_PERFORMANCE_STATE_MED: PerformanceType = {
 };
 
 export const INITIAL_PERFORMANCE_STATE_MIN: PerformanceType = {
-  messageBlur: false,
   animatedEmoji: false,
   autoplayGifs: false,
   autoplayVideos: false,
   contextMenuAnimations: false,
-  contextMenuBlur: false,
   loopAnimatedStickers: false,
   mediaViewerAnimations: false,
   messageComposerAnimations: false,
@@ -79,13 +74,6 @@ export const INITIAL_PERFORMANCE_STATE_MIN: PerformanceType = {
   snapEffect: false,
   textStreaming: false,
 };
-
-// Parvane: язык интерфейса на чистой установке — по языку браузера (в сборке
-// есть только английский и русский); дальше выбор хранится в настройках
-function getDefaultLanguage() {
-  const browserLanguage = typeof navigator !== 'undefined' ? navigator.language : '';
-  return /^ru\b/i.test(browserLanguage) ? 'ru' : 'en';
-}
 
 export const INITIAL_SHARED_STATE: SharedState = {
   settings: {
@@ -100,7 +88,8 @@ export const INITIAL_SHARED_STATE: SharedState = {
     messageSendKeyCombo: 'enter',
     performance: INITIAL_PERFORMANCE_STATE_MAX,
     shouldSkipBrowserCloseConfirmation: false,
-    language: getDefaultLanguage(),
+    // Язык на чистой установке — язык браузера, если он есть в реестре; дальше выбор хранится в настройках
+    language: getBrowserLanguageCode(),
     timeFormat: '24h',
     wasTimeFormatSetManually: false,
     isConnectionStatusMinimized: true,

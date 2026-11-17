@@ -21,7 +21,7 @@ import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import {
   addBlockedUser, deletePeerPhoto,
   removeBlockedUser, replaceSettings, updateChat,
-  updateNotifyDefaults, updateSharedSettings, updateUser, updateUserFullInfo,
+  updateNotifyDefaults, updateUser, updateUserFullInfo,
 } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
 import {
@@ -370,17 +370,6 @@ addActionHandler('updateWebNotificationSettings', async (global, actions, payloa
       setGlobal(global);
     }
   }
-});
-
-addActionHandler('loadLanguages', async (global): Promise<void> => {
-  const result = await callApi('fetchLanguages');
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = updateSharedSettings(global, { languages: result });
-  setGlobal(global);
 });
 
 addActionHandler('loadPrivacySettings', async (global, actions, payload): Promise<void> => {

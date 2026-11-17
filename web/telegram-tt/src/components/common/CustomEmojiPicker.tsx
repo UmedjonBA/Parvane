@@ -67,7 +67,6 @@ type OwnProps = {
   selectedReactionIds?: string[];
   isStatusPicker?: boolean;
   isReactionPicker?: boolean;
-  isTranslucent?: boolean;
   noAddButton?: boolean;
   onCustomEmojiSelect: (sticker: ApiSticker) => void;
   onReactionSelect?: (reaction: ApiReactionWithPaid) => void;
@@ -130,7 +129,6 @@ const CustomEmojiPicker: FC<OwnProps & StateProps> = ({
   canAnimate,
   isReactionPicker,
   isStatusPicker,
-  isTranslucent,
   noAddButton,
   isSavedMessages,
   isCurrentUserPremium,
@@ -387,7 +385,6 @@ const CustomEmojiPicker: FC<OwnProps & StateProps> = ({
         noContextMenu
         isCurrentUserPremium
         sharedCanvasRef={withSharedCanvas ? (isHq ? sharedCanvasHqRef : sharedCanvasRef) : undefined}
-        withTranslucentThumb={isTranslucent}
         onClick={selectStickerSet}
         clickArg={index}
         forcePlayback
@@ -461,7 +458,6 @@ const CustomEmojiPicker: FC<OwnProps & StateProps> = ({
                   isCurrentUserPremium={isCurrentUserPremium}
                   selectedReactionIds={selectedReactionIds}
                   availableReactions={availableReactions}
-                  isTranslucent={isTranslucent}
                   onReactionSelect={onReactionSelect}
                   onReactionContext={onReactionContext}
                   onStickerSelect={handleEmojiSelect}

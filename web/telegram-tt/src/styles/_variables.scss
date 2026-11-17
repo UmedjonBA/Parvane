@@ -226,21 +226,57 @@
 
     --color-negative-progress: #CE4C47;
 
+    // Parvane (spec 041 A6): токены макета `pv.css`, не зависящие от цветовой схемы, — радиусы и размеры
+    // (в rem: 16px = 1rem). Цвета `--pv-*` ставит выбранная схема (`util/colorScheme.ts`)
+    --pv-radius-xs: 0.375rem; // подпись клавиши
+    --pv-radius-sm: 0.5rem; // обложка, вкладка внутри переключателя
+    --pv-radius-md: 0.625rem; // переключатель, пункт боковой навигации
+    --pv-radius: 0.75rem; // кнопка, поле ввода, кнопка-значок, пункт панели модулей
+    --pv-radius-card: 0.875rem; // карточка, меню
+    --pv-radius-dialog: 1rem; // окно, «+»
+    --pv-radius-sheet: 1.125rem; // шторка снизу
+    --pv-header-height: 3.5rem;
+    --pv-row-height: 3.75rem;
+    --pv-settings-row-height: 3.25rem;
+    --pv-menu-item-height: 3rem;
+    --pv-nav-item-height: 2.375rem;
+    --pv-button-height: 2.75rem;
+    --pv-input-height: 3rem;
+    --pv-chip-height: 2rem;
+    --pv-seg-item-height: 2.125rem;
+    --pv-touch-size: 2.75rem; // цель нажатия на телефоне
+    --pv-avatar-size: 2.75rem;
+    --pv-ribbon-height: 3.5rem;
+    --pv-ribbon-item-width: 3.75rem;
+    --pv-mini-player-height: 3.25rem;
+    --pv-fab-size: 3.25rem;
+    --pv-rail-width: 4.75rem;
+    --pv-rail-item-width: 4.25rem;
+    --pv-rail-item-height: 3.5rem;
+    --pv-font-size: 0.9375rem;
+    --pv-font-size-small: 0.8125rem;
+    --pv-font-size-caption: 0.75rem;
+    --pv-focus-ring: 0 0 0 2px var(--pv-blue); // фокус с клавиатуры
+    --pv-outline: 0 0 0 1px var(--pv-line2); // вместо тени у меню и всплывающих окон
+    --pv-scrim: rgb(0 0 0 / 40%);
+
     --vh: 1vh;
 
-    --border-radius-button: 1rem;
-    --border-radius-button-tiny: 0.875rem;
-    --border-radius-modal: 2rem;
-    --border-radius-toast: 1rem;
-    --border-radius-island: 1.5rem;
-    --border-radius-pane: 2rem;
-    --shadow-island: 0 1px 4px 0 #0000000D;
-    --shadow-pane: 0 1px 5px -1px rgba(0, 0, 0, 0.21);
-    --shadow-footer: 0 1px 8px 1px rgba(0, 0, 0, 0.12);
-    --shadow-chat-list-panel: 0 1px 8px 0 rgba(0, 0, 0, 0.1);
-    --border-radius-default: 1rem;
-    --border-radius-default-small: 0.625rem;
-    --border-radius-default-tiny: 0.375rem;
+    // Parvane (spec 041 A6): обвязка по макету `pv.css` — плоско. Радиусы берутся из токенов макета, вместо
+    // теней у островов, шапки и поля ввода тонкая линия цвета схемы
+    --border-radius-button: var(--pv-radius);
+    --border-radius-button-tiny: var(--pv-radius-md);
+    --border-radius-modal: var(--pv-radius-dialog);
+    --border-radius-toast: var(--pv-radius);
+    --border-radius-island: var(--pv-radius-card);
+    --border-radius-pane: var(--pv-radius-card);
+    --shadow-island: 0 0 0 1px var(--color-borders);
+    --shadow-pane: 0 0 0 1px var(--color-borders);
+    --shadow-footer: 0 0 0 1px var(--color-borders);
+    --shadow-chat-list-panel: 0 0 0 1px var(--color-borders);
+    --border-radius-default: var(--pv-radius);
+    --border-radius-default-small: var(--pv-radius-md);
+    --border-radius-default-tiny: var(--pv-radius-xs);
     --border-radius-messages: 0.9375rem;
     --border-radius-messages-small: 0.375rem;
     --border-radius-forum-avatar: 33.3333%;
@@ -249,7 +285,7 @@
     --right-column-padding: 1rem;
     --right-column-content-width: calc(var(--right-column-width) - var(--right-column-padding));
     --middle-panel-inline-padding: 1rem;
-    --folders-sidebar-width: 5rem;
+    --folders-sidebar-width: var(--pv-rail-width);
     --window-controls-width: 0rem;
     --middle-header-height: 3rem;
     --middle-header-gap: 0.5rem;

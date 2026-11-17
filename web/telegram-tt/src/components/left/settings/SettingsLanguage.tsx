@@ -1,18 +1,15 @@
 import type { FC } from '../../../lib/teact/teact';
-import {
-  memo, useEffect, useMemo, useState,
-} from '../../../lib/teact/teact';
+import { memo, useMemo } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { SharedSettings } from '../../../global/types';
-import type { AccountSettings, LangCode } from '../../../types';
+import type { AccountSettings } from '../../../types';
 import { SettingsScreens } from '../../../types';
 
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_TRANSLATION_SUPPORTED } from '../../../util/browser/windowEnvironment';
-import { oldSetLanguage } from '../../../util/oldLangProvider';
+import { LANGUAGES } from '../../../util/localization/languages';
 
-import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -22,34 +19,27 @@ import ItemPicker, { type ItemPickerOption } from '../../common/pickers/ItemPick
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
-import Loading from '../../ui/Loading';
-import Transition from '../../ui/Transition';
 
 type OwnProps = {
   isActive?: boolean;
   onReset: () => void;
 };
 
-type StateProps = Pick<SharedSettings, 'language' | 'languages'>
+type StateProps = Pick<SharedSettings, 'language'>
   & Pick<AccountSettings, 'canTranslate' | 'doNotTranslate'>;
 
 const SettingsLanguage: FC<OwnProps & StateProps> = ({
   isActive,
-  languages,
   language,
   canTranslate,
   doNotTranslate,
   onReset,
 }) => {
   const {
-    loadLanguages,
     setSharedSettingOption,
     setSettingOption,
     openSettingsScreen,
   } = getActions();
-
-  const [selectedLanguage, setSelectedLanguage] = useState<string>(language);
-  const [isLoading, markIsLoading, unmarkIsLoading] = useFlag();
 
   const lang = useOldLang();
   const newLang = useLang();
@@ -70,37 +60,16 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
     return lang('Languages', doNotTranslate.length);
   }, [doNotTranslate, lang, language]);
 
-  useEffect(() => {
-    if (!languages?.length) {
-      loadLanguages();
-    }
-  }, [languages]);
-
+  // Строки нового языка подгружает обработчик смены настройки (`changeLanguage`)
   const handleChange = useLastCallback((langCode: string) => {
-    setSelectedLanguage(langCode);
-    markIsLoading();
-
-    void oldSetLanguage(langCode as LangCode, () => {
-      unmarkIsLoading();
-
-      setSharedSettingOption({ language: langCode });
-    });
+    setSharedSettingOption({ language: langCode });
   });
 
-  const options = useMemo(() => {
-    if (!languages) return undefined;
-    const currentLangCode = (window.navigator.language || 'en').toLowerCase();
-    const shortLangCode = currentLangCode.substr(0, 2);
-
-    return languages.map(({ langCode, nativeName, name }) => ({
-      value: langCode,
-      label: nativeName,
-      subLabel: name,
-      isLoading: langCode === selectedLanguage && isLoading,
-    } satisfies ItemPickerOption)).sort((a) => {
-      return currentLangCode && (a.value === currentLangCode || a.value === shortLangCode) ? -1 : 0;
-    });
-  }, [isLoading, languages, selectedLanguage]);
+  const options = useMemo(() => LANGUAGES.map(({ code, nativeName, name }) => ({
+    value: code,
+    label: nativeName,
+    subLabel: name,
+  } satisfies ItemPickerOption)), []);
 
   useHistoryBack({
     isActive,
@@ -130,36 +99,27 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
       ) : (
         <IslandDescription>{newLang('ParvaneTranslateUnavailable')}</IslandDescription>
       )}
-      <Transition activeKey={options ? 1 : 0} name="fade" className="settings-language-transition">
-        {options ? (
-          <>
-            <IslandTitle>{lang('Localization.InterfaceLanguage')}</IslandTitle>
-            <Island>
-              <ItemPicker
-                items={options}
-                selectedValue={selectedLanguage}
-                forceRenderAllItems
-                onSelectedValueChange={handleChange}
-                itemInputType="radio"
-                className="settings-picker"
-              />
-            </Island>
-          </>
-        ) : (
-          <Loading />
-        )}
-      </Transition>
+      <IslandTitle>{lang('Localization.InterfaceLanguage')}</IslandTitle>
+      <Island>
+        <ItemPicker
+          items={options}
+          selectedValue={language}
+          forceRenderAllItems
+          onSelectedValueChange={handleChange}
+          itemInputType="radio"
+          className="settings-picker"
+        />
+      </Island>
     </div>
   );
 };
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { language, languages } = selectSharedSettings(global);
+    const { language } = selectSharedSettings(global);
     const { canTranslate, doNotTranslate } = global.settings.byKey;
 
     return {
-      languages,
       language,
       canTranslate,
       doNotTranslate,

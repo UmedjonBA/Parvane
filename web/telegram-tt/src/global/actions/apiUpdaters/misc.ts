@@ -1,7 +1,7 @@
 import type { ActionReturnType } from '../../types';
 
 import { SERVICE_NOTIFICATIONS_USER_ID } from '../../../config';
-import { applyLangPackDifference, getTranslationFn } from '../../../util/localization';
+import { getTranslationFn } from '../../../util/localization';
 import { getPeerTitle } from '../../helpers/peers';
 import { addActionHandler, setGlobal } from '../../index';
 import {
@@ -101,11 +101,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       global = updateStealthMode(global, update.stealthMode);
       setGlobal(global);
       break;
-
-    case 'updateLangPack': {
-      applyLangPackDifference(update.version, update.strings, update.keysToRemove);
-      break;
-    }
 
     case 'newMessage': {
       const action = update.message.content?.action;

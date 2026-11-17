@@ -314,9 +314,9 @@
 // Parvane: нижняя панель разделов на телефоне (`ParvaneTabBar`) — список чатов, «План» и «Облако»
 // заканчиваются над ней
 #Main {
-  --parvane-tab-bar-height: calc(3.5rem + env(safe-area-inset-bottom));
+  --parvane-tab-bar-height: calc(var(--pv-ribbon-height) + env(safe-area-inset-bottom));
   // Мини-плеер «Музыки» между содержимым и лентой: его высота прибавляется, пока есть что играть
-  --parvane-mini-player-height: 3.25rem;
+  --parvane-mini-player-height: var(--pv-mini-player-height);
   --parvane-bottom-inset: var(--parvane-tab-bar-height);
 }
 

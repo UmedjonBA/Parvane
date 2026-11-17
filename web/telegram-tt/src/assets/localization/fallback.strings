@@ -828,8 +828,6 @@
 "SettingsPerformanceMediaViewer" = "Media Viewer Animations";
 "SettingsPerformanceComposer" = "Message Composer Animations";
 "SettingsPerformanceContextAnimation" = "Context Menu Animation";
-"SettingsPerformanceContextBlur" = "Context Menu Blur";
-"SettingsPerformanceMessageBlur" = "Message Blur";
 "SettingsPerformanceRightColumn" = "Right Column Animation";
 "SettingsPerformanceThanos" = "Dust-effect deletion";
 "SettingsPerformanceTextStreaming" = "Text Streaming";
@@ -3285,6 +3283,7 @@
 "HealthQuickEnter" = "Enter to save";
 "HealthQuickNothing" = "Nothing to save yet";
 "HealthQuickFailed" = "Not saved. Check the line and try again";
+"HealthQuickRecalled" = "same as last time";
 "HealthKindSleep" = "Sleep";
 "HealthKindSleepStart" = "Went to bed";
 "HealthKindSleepEnd" = "Woke up";

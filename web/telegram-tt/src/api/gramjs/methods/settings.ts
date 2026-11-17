@@ -1,12 +1,10 @@
 import { Api as GramJs } from '../../../lib/gramjs';
 import { RPCError } from '../../../lib/gramjs/errors';
 
-import type { LANG_PACKS } from '../../../config';
 import type {
   ApiBirthday,
   ApiDisallowedGiftsSettings,
   ApiInputPrivacyRules,
-  ApiLanguage,
   ApiNotifyPeerType,
   ApiPasskeyRegistrationOption,
   ApiPeerNotifySettings,
@@ -18,7 +16,6 @@ import type {
 import {
   ACCEPTABLE_USERNAME_ERRORS,
   DEBUG,
-  LANG_PACK,
   MUTE_INDEFINITE_TIMESTAMP,
   UNMUTE_TIMESTAMP,
 } from '../../../config';
@@ -29,14 +26,11 @@ import { buildApiPhoto, buildPrivacyRules } from '../apiBuilders/common';
 import { buildApiDisallowedGiftsSettings } from '../apiBuilders/gifts';
 import {
   buildApiCountryList,
-  buildApiLanguage,
   buildApiPasskey,
   buildApiSession,
   buildApiTimezone,
   buildApiWallpaper,
   buildApiWebSession,
-  buildLangStrings,
-  oldBuildLangPack,
 } from '../apiBuilders/misc';
 import {
   buildApiPeerColors,
@@ -58,8 +52,6 @@ import { buildInputPasskeyCredential } from '../gramjsBuilders/passkeys';
 import { addPhotoToLocalDb } from '../helpers/localDb';
 import localDb from '../localDb';
 import { getClient, invokeRequest, uploadFile } from './client';
-
-const BETA_LANG_CODES = ['ar', 'fa', 'id', 'ko', 'uz', 'en'];
 
 export function updateProfile({
   firstName,
@@ -421,126 +413,6 @@ export function updateNotificationSettings(peerType: ApiNotifyPeerType, {
     peer,
     settings: new GramJs.InputPeerNotifySettings(settings),
   }));
-}
-
-export async function fetchLangPack({
-  langPack,
-  langCode,
-}: {
-  langPack: string;
-  langCode: string;
-}) {
-  const result = await invokeRequest(new GramJs.langpack.GetLangPack({
-    langPack,
-    langCode,
-  }));
-  if (!result) {
-    return undefined;
-  }
-
-  const { strings, keysToRemove } = buildLangStrings(result.strings);
-
-  return {
-    version: result.version,
-    strings,
-    keysToRemove,
-  };
-}
-
-export async function fetchLangDifference({
-  langPack,
-  langCode,
-  fromVersion,
-}: {
-  langPack: string;
-  langCode: string;
-  fromVersion: number;
-}) {
-  const result = await invokeRequest(new GramJs.langpack.GetDifference({
-    langPack,
-    langCode,
-    fromVersion,
-  }));
-  if (!result) {
-    return undefined;
-  }
-
-  const { strings, keysToRemove } = buildLangStrings(result.strings);
-
-  return {
-    version: result.version,
-    strings,
-    keysToRemove,
-  };
-}
-
-export async function fetchLanguages(): Promise<ApiLanguage[] | undefined> {
-  const result = await invokeRequest(new GramJs.langpack.GetLanguages({
-    langPack: LANG_PACK,
-  }));
-  if (!result) {
-    return undefined;
-  }
-
-  return result.map(buildApiLanguage);
-}
-
-export async function fetchLanguage({
-  langPack,
-  langCode,
-}: {
-  langPack: string;
-  langCode: string;
-}): Promise<ApiLanguage | undefined> {
-  const result = await invokeRequest(new GramJs.langpack.GetLanguage({
-    langPack,
-    langCode,
-  }));
-  if (!result) {
-    return undefined;
-  }
-
-  return buildApiLanguage(result);
-}
-
-export async function fetchLangStrings({
-  langPack,
-  langCode,
-  keys,
-}: {
-  langPack: string;
-  langCode: string;
-  keys: string[];
-}) {
-  const result = await invokeRequest(new GramJs.langpack.GetStrings({
-    langPack,
-    langCode,
-    keys,
-  }));
-  if (!result) {
-    return undefined;
-  }
-
-  return buildLangStrings(result);
-}
-
-export async function oldFetchLangPack({ sourceLangPacks, langCode }: {
-  sourceLangPacks: typeof LANG_PACKS;
-  langCode: string;
-}) {
-  const results = await Promise.all(sourceLangPacks.map((langPack) => {
-    return invokeRequest(new GramJs.langpack.GetLangPack({
-      langPack,
-      langCode: BETA_LANG_CODES.includes(langCode) ? `${langCode}-raw` : langCode,
-    }));
-  }));
-
-  const collections = results.filter(Boolean).map(oldBuildLangPack);
-  if (!collections.length) {
-    return undefined;
-  }
-
-  return { langPack: Object.assign({}, ...collections.reverse()) as typeof collections[0] };
 }
 
 export async function fetchPrivacySettings(privacyKey: ApiPrivacyKey) {

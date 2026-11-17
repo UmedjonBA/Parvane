@@ -159,7 +159,7 @@
   font-size: 0.875rem;
 
   background: var(--pv-panel);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 }
 
 .graphNotice .graphNoticeUndo {
@@ -1075,7 +1075,7 @@
   color: var(--pv-accent-ink);
 
   background: var(--pv-accent);
-  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 
   &:focus-visible {
     outline: 2px solid var(--pv-fg);
@@ -1096,7 +1096,7 @@
   border-color: var(--pv-accent);
 
   background: var(--pv-panel);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 }
 
 // Выбор папок графа: чип и список с галочками под ним
@@ -1140,7 +1140,7 @@
   border-radius: 0.875rem;
 
   background: var(--pv-panel);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 }
 
 .graphFolderName {
@@ -1370,7 +1370,7 @@
   border-radius: 0.75rem;
 
   background: var(--pv-panel);
-  box-shadow: 0 0.375rem 1.125rem rgb(0 0 0 / 25%);
+  box-shadow: var(--pv-outline);
 }
 
 .canvasCardText {
@@ -1961,7 +1961,7 @@
   border-radius: 0.75rem;
 
   background: var(--pv-panel);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 }
 
 .canvasBar {
@@ -2264,7 +2264,7 @@
   color: var(--pv-accent-ink);
 
   background: var(--pv-accent);
-  box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 
   &:focus-visible {
     outline: 2px solid var(--pv-fg);

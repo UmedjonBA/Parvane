@@ -1,8 +1,8 @@
 // Синтез ApiOldLangPack для старого lang-провайдера (useOldLang). Без него
 // легаси-экраны показывают голые ключи вида `Weekday.ShortMonday`. Имена
-// дней/месяцев берём из Intl — без сети. Ключи, которых здесь нет, старый
-// провайдер добирает из нового пакета (fallback.strings / ru.strings), см.
-// util/oldLangProvider.ts.
+// дней/месяцев берём из Intl — без сети. Словари старых ключей есть у английского
+// (основа) и русского; остальным языкам старые ключи переводит их файл строк
+// `<код>.strings`, а чего там нет — показывается по-английски, см. util/oldLangProvider.ts.
 
 import type { ApiOldLangPack } from '../types';
 
@@ -2913,15 +2913,14 @@ function capitalize(text: string) {
   return text.charAt(0).toLocaleUpperCase() + text.slice(1);
 }
 
-function isRussian(langCode: string) {
-  return /^ru\b/i.test(langCode);
-}
+const OLD_LANG_PACKS: Record<string, ApiOldLangPack | undefined> = {
+  en: OLD_LANG_PACK_EN,
+  ru: OLD_LANG_PACK_RU,
+};
 
+// Словарь старых ключей самого языка (без английской основы) и имена дней и месяцев
 export function buildOldLangPack(langCode: string): ApiOldLangPack {
-  const pack: ApiOldLangPack = {
-    ...OLD_LANG_PACK_EN,
-    ...(isRussian(langCode) ? OLD_LANG_PACK_RU : {}),
-  };
+  const pack: ApiOldLangPack = { ...OLD_LANG_PACKS[langCode] };
 
   const longWeekday = new Intl.DateTimeFormat(langCode, { weekday: 'long' });
   const shortWeekday = new Intl.DateTimeFormat(langCode, { weekday: 'short' });

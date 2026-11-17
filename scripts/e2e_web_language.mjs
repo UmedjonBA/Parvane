@@ -59,20 +59,35 @@ async function walkSettingsScreens(page) {
   await page.waitForTimeout(500);
   const labelsOf = async () => (await settings.locator('.ListItem:visible').allInnerTexts())
     .map((text) => text.split('\n')[0].trim()).filter(Boolean);
+  // Строки языка догружаются отдельной частью сборки: ждём, пока подписи главного экрана перестанут меняться
+  let settled = await labelsOf();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await page.waitForTimeout(400);
+    const next = await labelsOf();
+    if (next.join('|') === settled.join('|')) break;
+    settled = next;
+  }
   classifyTexts(await settings.innerText(), found);
-  const mainLabels = (await labelsOf()).filter((label) => !SKIPPED_ITEMS.test(label));
+  const mainLabels = settled.filter((label) => !SKIPPED_ITEMS.test(label));
   assert.ok(mainLabels.length >= 6, `главный экран настроек не распознан: ${mainLabels.join(' | ')}`);
   const mainItem = (label) => settings.locator('.ListItem:visible').filter({ hasText: label }).first();
+  // «Назад» нажимается один раз за попытку, дальше ждём сам главный экран: переход между экранами не мгновенный,
+  // а второе нажатие на главном экране выводит из настроек
   const backToMain = async () => {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (await mainItem(mainLabels[1]).isVisible().catch(() => false)) return;
       await page.getByRole('button', { name: /Назад|Go back|Back/ }).first().click();
-      await page.waitForTimeout(700);
+      await mainItem(mainLabels[1]).waitFor({ state: 'visible', timeout: 4000 }).catch(() => undefined);
     }
   };
   for (const label of mainLabels) {
-    await mainItem(label).click();
-    await page.waitForTimeout(900);
+    // Нажатие во время перехода между экранами теряется: ждём, пока главный экран уйдёт, иначе нажимаем снова
+    const marker = mainItem(mainLabels[label === mainLabels[1] ? 0 : 1]);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await mainItem(label).click();
+      if (await marker.waitFor({ state: 'hidden', timeout: 2500 }).then(() => true, () => false)) break;
+    }
+    await page.waitForTimeout(500);
     classifyTexts(await settings.innerText(), found);
     await backToMain();
   }

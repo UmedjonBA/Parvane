@@ -1,4 +1,3 @@
-import type { ApiLanguage } from '../../api/types';
 import type {
   AnimationLevel, FoldersPosition, PerformanceType, Point, Size, ThemeKey, TimeFormat,
 } from '../../types';
@@ -12,7 +11,6 @@ export interface SharedSettings {
   shouldUseSystemTheme: boolean;
   theme: ThemeKey;
   language: string;
-  languages?: ApiLanguage[];
   performance: PerformanceType;
   messageTextSize: number;
   instantViewFontSizeAdjust: number;

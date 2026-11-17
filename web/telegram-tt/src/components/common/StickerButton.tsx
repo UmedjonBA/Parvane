@@ -42,7 +42,6 @@ type OwnProps<T> = {
   isCurrentUserPremium?: boolean;
   shouldIgnorePremium?: boolean;
   sharedCanvasRef?: ElementRef<HTMLCanvasElement>;
-  withTranslucentThumb?: boolean;
   forcePlayback?: boolean;
   isEffectEmoji?: boolean;
   noShowPremium?: boolean;
@@ -80,7 +79,6 @@ const StickerButton = <T extends number | ApiSticker | ApiBotInlineMediaResult |
   shouldIgnorePremium,
   noShowPremium,
   sharedCanvasRef,
-  withTranslucentThumb,
   forcePlayback,
   isEffectEmoji,
   noIcons,
@@ -295,7 +293,6 @@ const StickerButton = <T extends number | ApiSticker | ApiBotInlineMediaResult |
           noVideoOnMobile
           withSharedAnimation
           sharedCanvasRef={sharedCanvasRef}
-          withTranslucentThumb={withTranslucentThumb}
           customColor={customColor}
           forceAlways={forcePlayback}
         />

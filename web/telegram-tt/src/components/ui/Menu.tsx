@@ -4,7 +4,6 @@ import {
 
 import type { MenuPositionOptions } from '../../hooks/useMenuPosition';
 
-import { IS_BACKDROP_BLUR_SUPPORTED } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
 import { preventMessageInputBlurWithBubbling } from '../middle/helpers/preventMessageInputBlur';
@@ -139,7 +138,6 @@ const Menu = ({
       className={buildClassName(
         'Menu',
         !noCompact && !isTouchScreen && 'compact',
-        !IS_BACKDROP_BLUR_SUPPORTED && 'no-blur',
         withPortal && 'in-portal',
         className,
       )}

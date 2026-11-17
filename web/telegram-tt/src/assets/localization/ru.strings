@@ -1338,6 +1338,7 @@
 "HealthQuickEnter" = "Enter — сохранить";
 "HealthQuickNothing" = "Пока нечего записать";
 "HealthQuickFailed" = "Не записано. Проверьте строку и попробуйте ещё раз";
+"HealthQuickRecalled" = "как в прошлый раз";
 "HealthKindSleep" = "Сон";
 "HealthKindSleepStart" = "Лёг";
 "HealthKindSleepEnd" = "Встал";
@@ -1941,12 +1942,10 @@
 "SettingsPerformanceAutoplayVideo" = "Автозапуск видео";
 "SettingsPerformanceComposer" = "Анимации поля ввода";
 "SettingsPerformanceContextAnimation" = "Анимация контекстного меню";
-"SettingsPerformanceContextBlur" = "Размытие контекстного меню";
 "SettingsPerformanceInterfaceAnimations" = "Анимации интерфейса";
 "SettingsPerformanceLoopStickers" = "Зацикливать анимированные стикеры";
 "SettingsPerformanceMediaAutoplay" = "Автозапуск медиа";
 "SettingsPerformanceMediaViewer" = "Анимации просмотра медиа";
-"SettingsPerformanceMessageBlur" = "Размытие сообщений";
 "SettingsPerformancePageTransitions" = "Переходы между экранами";
 "SettingsPerformanceReactionEffects" = "Эффекты реакций";
 "SettingsPerformanceRightColumn" = "Анимация правой колонки";

@@ -1,7 +1,6 @@
 import type { TeactNode } from '../../lib/teact/teact';
 
 import type {
-  ApiLanguage,
   LangPackStringValue,
   LangPackStringValueDeleted,
   LangPackStringValuePlural,
@@ -18,6 +17,7 @@ import type {
   RegularLangKey,
   RegularLangKeyWithVariables,
 } from '../../types/language';
+import type { InterfaceLanguage } from './languages';
 
 export interface LangFnOptionsRegular {
   withNodes?: never;
@@ -167,10 +167,11 @@ export type LangFn = {
   preciseNumber: (value: number) => string;
   timeFormat: TimeFormat;
   internalFormatters: LangFormatters;
+  // Письмо справа налево не поддерживается: флаг никогда не выставляется, остался для разметки форка
   isRtl?: boolean;
   rawCode: string;
   code: string;
-  languageInfo: ApiLanguage;
+  languageInfo: InterfaceLanguage;
 };
 
 // Allow basic polyfill

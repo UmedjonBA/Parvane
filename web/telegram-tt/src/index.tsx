@@ -64,7 +64,7 @@ async function init() {
 
   const global = getGlobal();
 
-  initLocalization(selectSharedSettings(global).language, true);
+  initLocalization(selectSharedSettings(global).language);
 
   subscribeToMasterChange((isMasterTab) => {
     getActions()

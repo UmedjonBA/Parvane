@@ -444,7 +444,7 @@
   color: var(--pv-panel);
 
   background: var(--pv-fg);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+  box-shadow: var(--pv-outline);
 }
 
 .fileInput {

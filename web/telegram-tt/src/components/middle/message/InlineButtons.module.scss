@@ -18,7 +18,7 @@
   font-weight: var(--font-weight-medium);
   line-height: 1.25;
 
-  @include mixins.action-message-bg($isModule: true);
+  @include mixins.action-message-bg;
 
   transition: background-color 150ms, color 150ms, backdrop-filter 150ms, filter 150ms, opacity 150ms;
 

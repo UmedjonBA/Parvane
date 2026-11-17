@@ -51,7 +51,10 @@ export function createHealthApi(deps: Deps) {
       }
     },
 
-    /** Разбор строки ввода (HEALTH-2): JSON `{entries, unparsed, problems}`; движок не готов — `undefined`. */
+    /**
+     * Разбор строки ввода (HEALTH-2) с подстановкой «моих продуктов» (HEALTH-3 п. 13): JSON `{entries, unparsed,
+     * problems}`; движок не готов — `undefined`.
+     */
     // eslint-disable-next-line @typescript-eslint/require-await
     async parvaneHealthParse({ text, nowMs, tzMin }: { text: string; nowMs: number; tzMin: number }) {
       try {

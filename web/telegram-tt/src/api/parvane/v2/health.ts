@@ -36,8 +36,8 @@ export function createHealthSync(deps: PersonalDeps) {
       const client = deps.client();
       return client ? client.healthCheck(entry, nowMs) : 'form';
     },
-    /** Разбор строки ввода; движок не поднят — `undefined`. */
-    parseJson: (input: string, nowMs: number, tzMin: number) => deps.client()?.healthParse(input, nowMs, tzMin),
+    /** Разбор строки ввода с подстановкой чисел еды из прошлых записей; движок не поднят — `undefined`. */
+    parseJson: (input: string, nowMs: number, tzMin: number) => deps.client()?.healthRecall(input, nowMs, tzMin),
   };
 }
 

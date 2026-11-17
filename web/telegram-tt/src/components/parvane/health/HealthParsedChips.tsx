@@ -15,7 +15,7 @@ type OwnProps = {
 };
 
 // Как движок понял строку ввода (HEALTH-2): плашка на каждую запись и на каждый непонятый кусок. Общие для
-// строки ввода «Здоровья» и окна ввода «Плана»
+// строки ввода «Здоровья» и окна ввода «Плана». Еда с числами из прошлой записи помечена «как в прошлый раз»
 const HealthParsedChips = ({ parsed }: OwnProps) => {
   const lang = useLang();
 
@@ -31,6 +31,12 @@ const HealthParsedChips = ({ parsed }: OwnProps) => {
             <b className={kit.mono}>{parsedValue(entry, lang.code)}</b>
             {' · '}
             {entry.kind === 'sleep' && entry.endMs ? entry.endDay : `${entry.day}, ${entry.time}`}
+            {entry.recalled && (
+              <span className={kit.muted} data-recalled>
+                {' · '}
+                {lang('HealthQuickRecalled')}
+              </span>
+            )}
           </span>
         );
       })}

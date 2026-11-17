@@ -308,7 +308,6 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
       isConnectionStatusMinimized: untypedCached.settings.byKey.isConnectionStatusMinimized,
       shouldForceHttpTransport: untypedCached.settings.byKey.shouldForceHttpTransport,
       language: untypedCached.settings.byKey.language,
-      languages: untypedCached.settings.languages,
       shouldSkipBrowserCloseConfirmation: Boolean(untypedCached.settings.byKey.shouldSkipBrowserCloseConfirmation),
       browserCachedPosition: untypedCached.settings.browserCachedPosition,
       browserCachedSize: untypedCached.settings.browserCachedSize,
@@ -335,10 +334,6 @@ function unsafeMigrateCache(cached: GlobalState, initialState: GlobalState) {
   if (!cachedSharedSettings.wasAnimationLevelSetManually) {
     cachedSharedSettings.animationLevel = ANIMATION_LEVEL_DEFAULT;
     cachedSharedSettings.performance = INITIAL_PERFORMANCE_STATE_MED;
-  }
-
-  if (cachedSharedSettings.performance.messageBlur === undefined) {
-    cachedSharedSettings.performance.messageBlur = false;
   }
 
   if (cachedSharedSettings.performance.textStreaming === undefined) {
@@ -493,10 +488,6 @@ function reduceGlobal<T extends GlobalState>(global: T) {
 function reduceSharedState(sharedState: SharedState): SharedState {
   return {
     ...sharedState,
-    settings: {
-      ...sharedState.settings,
-      languages: undefined,
-    },
     isInitial: undefined,
   };
 }

@@ -260,7 +260,6 @@ export interface ActionPayloads {
     hasPushNotifications?: boolean;
     notificationSoundVolume?: number;
   };
-  loadLanguages: undefined;
 
   loadPasskeys: undefined;
   startPasskeyRegistration: WithTabId | undefined;
@@ -2347,9 +2346,6 @@ export interface ActionPayloads {
     size: Size;
   };
   // Misc
-  refreshLangPackFromCache: {
-    langCode: string;
-  };
   openPollModal: {
     chatId: string;
     threadId?: ThreadId;

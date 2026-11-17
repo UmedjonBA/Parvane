@@ -485,6 +485,8 @@ impl HostClient {
                 let entries: Vec<Value> = a.raw("entries").as_array().cloned().unwrap_or_default();
                 parsed(c.health_compose_json(&entries, a.i("nowMs")?))
             }
+            // HEALTH-3 п. 13: разбор строки с подстановкой «моих продуктов» — то, что клиент показывает и пишет
+            "healthRecall" => parsed(c.health_recall_json(&a.text("text")?, a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
             // HEALTH-3: сводка для экранов — считает движок, клиент рисует
             "healthView" => parsed(c.health_view_json(a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
             // HEALTH-3: записи показателя страницами для подробного экрана

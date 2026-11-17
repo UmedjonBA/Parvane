@@ -100,21 +100,11 @@
   &.compact {
     .bubble {
       padding: 0.25rem 0;
-      background: var(--color-background-compact-menu);
-      backdrop-filter: blur(10px);
-
-      body.no-menu-blur & {
-        background: var(--color-background);
-        backdrop-filter: none;
-      }
+      background: var(--color-background);
     }
 
     .footer {
       background: none;
-    }
-
-    &.no-blur .bubble {
-      background: var(--color-background);
     }
   }
 

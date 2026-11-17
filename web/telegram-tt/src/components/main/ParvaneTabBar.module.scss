@@ -47,7 +47,7 @@
   align-items: center;
   justify-content: center;
 
-  width: 3.75rem;
+  width: var(--pv-ribbon-item-width);
   height: 100%;
   padding: 0;
   border: none;
@@ -151,11 +151,11 @@
   align-items: center;
   justify-content: center;
 
-  width: 3.25rem;
-  height: 3.25rem;
+  width: var(--pv-fab-size);
+  height: var(--pv-fab-size);
   padding: 0;
   border: 2px solid var(--pv-bg);
-  border-radius: 1rem;
+  border-radius: var(--pv-radius-dialog);
 
   color: var(--pv-accent-ink);
 
@@ -163,7 +163,7 @@
   outline: none;
 
   &:focus-visible {
-    box-shadow: 0 0 0 2px var(--pv-blue);
+    box-shadow: var(--pv-focus-ring);
   }
 }
 

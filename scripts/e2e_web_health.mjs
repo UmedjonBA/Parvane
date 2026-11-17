@@ -246,6 +246,17 @@ try {
   await expectValue(health, 'food', '920');
   console.log('OK: запись еды правится в окне');
 
+  // ── «Мои продукты»: еда, записанная с калориями, в следующий раз пишется одним названием ─
+  await addLine(health, 'перекус творог 240 ккал б 30', 'food');
+  await expectValue(health, 'food', '1,160');
+  await quickInput(health).fill('творог');
+  // До сохранения видно, что калории подставлены из прошлой записи
+  const recalledChip = health.locator('[data-health-preview] [data-kind="food"]').filter({ hasText: '240' });
+  await recalledChip.locator('[data-recalled]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await quickInput(health).press('Enter');
+  await expectValue(health, 'food', '1,400');
+  console.log('OK: еда одним названием берёт калории прошлой записи');
+
   // ── Активность: тренировка одной строкой, минуты, пробег и темп ───────────
   await addLine(health, 'бег 35 минут 6,2 км', 'workout');
   await expectValue(health, 'workout', '35');
@@ -283,7 +294,7 @@ try {
   const reloaded = await openHealthModule(page);
   await expectValue(reloaded, 'weight', '73.5');
   await expectValue(reloaded, 'steps', '3,000');
-  await expectValue(reloaded, 'food', '920');
+  await expectValue(reloaded, 'food', '1,400');
   await expectValue(reloaded, 'workout', '35');
   await card(reloaded, 'sleep').locator('[data-health-sleep-total]').filter({ hasText: '7 h 30 min' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

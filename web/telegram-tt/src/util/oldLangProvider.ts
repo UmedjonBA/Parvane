@@ -1,105 +1,29 @@
-import { getGlobal } from '../global';
-
 import type { ApiOldLangPack, ApiOldLangString } from '../api/types';
-import type { LangCode, TimeFormat } from '../types';
+import type { TimeFormat } from '../types';
 
-import { LANG_PACKS } from '../config';
-import { selectSharedSettings } from '../global/selectors/sharedState';
-import { callApi } from '../api/gramjs';
+import { buildOldLangPack, OLD_LANG_PACK_EN } from '../api/parvane/oldLangPack';
 import { createCallbackManager } from './callbacks';
-import { addLocalizationCallback, getLangStringByKey, loadAndChangeLanguage } from './localization';
+import { addLocalizationCallback, getLangStringByKey, getTranslationFn as getNewTranslationFn } from './localization';
 import { formatInteger } from './textFormat';
-
-const FALLBACK_LANG_CODE = 'en';
 
 export interface LangFn {
   (key: string, value?: any, format?: 'i', pluralValue?: number): string;
 
+  // Письмо справа налево не поддерживается: флаг никогда не выставляется, остался для разметки форка
   isRtl?: boolean;
-  code?: LangCode;
-  langName?: string;
+  code?: string;
   timeFormat?: TimeFormat;
 }
 
 const SUBSTITUTION_REGEX = /%\d?\$?[sdf@]/g;
-const PLURAL_OPTIONS = ['value', 'zeroValue', 'oneValue', 'twoValue', 'fewValue', 'manyValue', 'otherValue'] as const;
-// Some rules edited from https://github.com/eemeli/make-plural/blob/master/packages/plurals/cardinals.js
-const PLURAL_RULES = {
-  /* eslint-disable @stylistic/max-len */
-  en: (n: number) => (n !== 1 ? 6 : 2),
-  ar: (n: number) => (n === 0 ? 1 : n === 1 ? 2 : n === 2 ? 3 : n % 100 >= 3 && n % 100 <= 10 ? 4 : n % 100 >= 11 ? 5 : 6),
-  be: (n: number) => {
-    const s = String(n).split('.');
-    const t0 = Number(s[0]) === n;
-    const n10 = t0 ? Number(s[0].slice(-1)) : 0;
-    const n100 = t0 ? Number(s[0].slice(-2)) : 0;
-    return n10 === 1 && n100 !== 11
-      ? 2
-      : (n10 >= 2 && n10 <= 4) && (n100 < 12 || n100 > 14)
-        ? 4
-        : (t0 && n10 === 0) || (n10 >= 5 && n10 <= 9) || (n100 >= 11 && n100 <= 14)
-          ? 5
-          : 6;
-  },
-  ca: (n: number) => (n !== 1 ? 6 : 2),
-  cs: (n: number) => {
-    const s = String(n).split('.');
-    const i = Number(s[0]);
-    const v0 = !s[1];
-    return n === 1 && v0 ? 2 : (i >= 2 && i <= 4) && v0 ? 4 : !v0 ? 5 : 6;
-  },
-  de: (n: number) => (n !== 1 ? 6 : 2),
-  es: (n: number) => (n !== 1 ? 6 : 2),
-  fa: (n: number) => (n > 1 ? 6 : 2),
-  fi: (n: number) => (n !== 1 ? 6 : 2),
-  fr: (n: number) => (n > 1 ? 6 : 2),
-  id: () => 0,
-  it: (n: number) => (n !== 1 ? 6 : 2),
-  hr: (n: number) => {
-    const s = String(n).split('.');
-    const i = s[0];
-    const f = s[1] || '';
-    const v0 = !s[1];
-    const i10 = Number(i.slice(-1));
-    const i100 = Number(i.slice(-2));
-    const f10 = Number(f.slice(-1));
-    const f100 = Number(f.slice(-2));
-    return (v0 && i10 === 1 && i100 !== 11) || (f10 === 1 && f100 !== 11) ? 2
-      : (v0 && (i10 >= 2 && i10 <= 4) && (i100 < 12 || i100 > 14)) || ((f10 >= 2 && f10 <= 4) && (f100 < 12 || f100 > 14)) ? 4
-        : 6;
-  },
-  hu: (n: number) => (n > 1 ? 6 : 2),
-  ko: () => 0,
-  ms: () => 0,
-  nb: (n: number) => (n > 1 ? 6 : 2),
-  nl: (n: number) => (n !== 1 ? 6 : 2),
-  pl: (n: number) => (n === 1 ? 2 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 4 : 5),
-  'pt-br': (n: number) => (n > 1 ? 6 : 2),
-  ru: (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 2 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 4 : 5),
-  sk: (n: number) => {
-    const s = String(n).split('.');
-    const i = Number(s[0]);
-    const v0 = !s[1];
-    return n === 1 && v0 ? 2 : (i >= 2 && i <= 4) && v0 ? 4 : !v0 ? 5 : 6;
-  },
-  sr: (n: number) => {
-    const s = String(n).split('.');
-    const i = s[0];
-    const f = s[1] || '';
-    const v0 = !s[1];
-    const i10 = Number(i.slice(-1));
-    const i100 = Number(i.slice(-2));
-    const f10 = Number(f.slice(-1));
-    const f100 = Number(f.slice(-2));
-    return (v0 && i10 === 1 && i100 !== 11) || (f10 === 1 && f100 !== 11) ? 2
-      : (v0 && (i10 >= 2 && i10 <= 4) && (i100 < 12 || i100 > 14)) || ((f10 >= 2 && f10 <= 4) && (f100 < 12 || f100 > 14)) ? 4
-        : 6;
-  },
-  tr: (n: number) => (n > 1 ? 6 : 2),
-  uk: (n: number) => (n % 10 === 1 && n % 100 !== 11 ? 2 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 4 : 5),
-  uz: (n: number) => (n > 1 ? 6 : 2),
-  /* eslint-enable @stylistic/max-len */
-};
+const PLURAL_OPTIONS = {
+  zero: 'zeroValue',
+  one: 'oneValue',
+  two: 'twoValue',
+  few: 'fewValue',
+  many: 'manyValue',
+  other: 'otherValue',
+} as const;
 
 const cache = new Map<string, string>();
 
@@ -115,6 +39,7 @@ export { addCallback, removeCallback };
 
 let currentLangCode: string | undefined;
 let currentTimeFormat: TimeFormat | undefined;
+let pluralRules: Intl.PluralRules | undefined;
 
 function createLangFn() {
   return (key: string, value?: any, format?: 'i', pluralValue?: number) => {
@@ -126,7 +51,12 @@ function createLangFn() {
       }
     }
 
-    const langString = langPack?.[key] || bridgeFromNewLangPack(key, value, pluralValue);
+    // Порядок: словарь старых ключей своего языка, перевод из файла строк языка, английский словарь старых
+    // ключей, английская база. Так язык без своего словаря переводит старые ключи прямо в `<код>.strings`
+    const langString = langPack?.[key]
+      || bridgeFromNewLangPack(key, value, pluralValue, true)
+      || OLD_LANG_PACK_EN[key]
+      || bridgeFromNewLangPack(key, value, pluralValue);
     if (!langString) {
       return key;
     }
@@ -135,76 +65,52 @@ function createLangFn() {
   };
 }
 
-// Parvane: ключа нет в синтезированном старом пакете — берём строку нового
-// пакета (fallback.strings / ru.strings). Плейсхолдеры `{name}` превращаем в
+// Строка нового пакета для старого ключа. Плейсхолдеры `{name}` превращаем в
 // позиционные `%@`, форму множественного числа выбирает новый провайдер
-function bridgeFromNewLangPack(key: string, value?: any, pluralValue?: number): string | undefined {
+function bridgeFromNewLangPack(
+  key: string, value?: any, pluralValue?: number, shouldSkipBase?: boolean,
+): string | undefined {
   const count = pluralValue ?? (typeof value === 'number' ? value : 0);
-  const bridged = getLangStringByKey(key, count);
+  const bridged = getLangStringByKey(key, count, shouldSkipBase);
   if (!bridged) return undefined;
   return bridged.replace(/\{[A-Za-z0-9_]+\}/g, '%@');
 }
 
-// Смена языка/подгрузка нового пакета должна сбросить кэш мостовых строк и
-// перерисовать компоненты на useOldLang
+let translationFn: LangFn = createLangFn();
+
+// Язык ведёт новый провайдер (`changeLanguage`): по его оповещению пересобираем словарь старых ключей,
+// сбрасываем кэш мостовых строк и перерисовываем компоненты на `useOldLang`
 addLocalizationCallback(() => {
   cache.clear();
+  syncLanguage();
   runCallbacks();
 });
 
-let translationFn: LangFn = createLangFn();
+function syncLanguage() {
+  const langCode = getNewTranslationFn().rawCode;
+  if (langCode === currentLangCode) return;
+
+  cache.clear();
+  currentLangCode = langCode;
+  langPack = buildOldLangPack(langCode);
+  pluralRules = new Intl.PluralRules(langCode);
+
+  translationFn = createLangFn();
+  translationFn.code = langCode;
+  translationFn.timeFormat = currentTimeFormat;
+}
 
 /**
  * @deprecated Do not translate inside non-reactive contexts. Pass parameters to the component instead
  */
 export function oldTranslate(...args: Parameters<LangFn>) {
-  return translationFn(...args);
+  return getTranslationFn()(...args);
 }
 
 export function getTranslationFn(): LangFn {
+  // Оповещение нового провайдера приходит со следующим кадром — сверяем язык и при прямом обращении
+  syncLanguage();
   return translationFn;
-}
-
-/**
- * @deprecated Migrate to `changeLanguage` in `util/localization.ts` instead
- */
-export async function oldSetLanguage(langCode: LangCode, callback?: NoneToVoidFunction) {
-  loadAndChangeLanguage(langCode, true);
-  if (langPack && langCode === currentLangCode) {
-    if (callback) {
-      callback();
-    }
-
-    return;
-  }
-
-  // Parvane: старый пакет синтезируется локально (oldLangPack.ts), кэш
-  // Cache Storage не нужен — из-за него правки словаря не доезжали до клиента
-  const newLangPack = await fetchRemote(langCode);
-  if (!newLangPack) {
-    return;
-  }
-
-  cache.clear();
-
-  currentLangCode = langCode;
-  langPack = newLangPack;
-  document.documentElement.lang = langCode;
-
-  const global = getGlobal();
-  const { languages, timeFormat } = selectSharedSettings(global);
-  const langInfo = languages?.find((lang) => lang.langCode === langCode);
-  translationFn = createLangFn();
-  translationFn.isRtl = Boolean(langInfo?.isRtl);
-  translationFn.code = langCode.replace('-raw', '') as LangCode;
-  translationFn.langName = langInfo?.nativeName;
-  translationFn.timeFormat = timeFormat;
-
-  if (callback) {
-    callback();
-  }
-
-  runCallbacks();
 }
 
 export function setTimeFormat(timeFormat: TimeFormat) {
@@ -218,22 +124,8 @@ export function setTimeFormat(timeFormat: TimeFormat) {
   runCallbacks();
 }
 
-async function fetchRemote(langCode: string): Promise<ApiOldLangPack | undefined> {
-  const remote = await callApi('oldFetchLangPack', { sourceLangPacks: LANG_PACKS, langCode });
-  if (remote) {
-    return remote.langPack;
-  }
-
-  return undefined;
-}
-
 function getPluralOption(amount: number) {
-  const langCode = currentLangCode?.replace('-raw', '') || FALLBACK_LANG_CODE;
-  const optionIndex = PLURAL_RULES[langCode as keyof typeof PLURAL_RULES]
-    ? PLURAL_RULES[langCode as keyof typeof PLURAL_RULES](amount)
-    : 0;
-
-  return PLURAL_OPTIONS[optionIndex];
+  return PLURAL_OPTIONS[pluralRules?.select(amount) || 'other'];
 }
 
 function processTemplate(template: string, value: any) {
@@ -249,17 +141,12 @@ function processTemplate(template: string, value: any) {
 function processTranslation(
   langString: ApiOldLangString | undefined, key: string, value?: any, format?: 'i', pluralValue?: number,
 ) {
-  const preferredPluralOption = typeof value === 'number' || pluralValue !== undefined
-    ? getPluralOption(pluralValue ?? value)
-    : 'value';
+  const hasPluralValue = typeof value === 'number' || pluralValue !== undefined;
   const template = typeof langString === 'string'
     ? langString
-    : preferredPluralOption === 'value'
-      // Support cached older `langString` interface
-      ? (typeof langString === 'object' ? (langString as any).value : langString)
-      : typeof langString === 'object'
-        ? langString[preferredPluralOption] || langString.otherValue
-        : undefined;
+    : hasPluralValue && typeof langString === 'object'
+      ? langString[getPluralOption(pluralValue ?? value)] || langString.otherValue
+      : undefined;
 
   if (!template?.trim()) {
     const parts = key.split('.');

@@ -10,7 +10,7 @@ import type { AnimationLevel, ThreadId } from '../../../types';
 import type { MenuPositionOptions } from '../../ui/Menu';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
-import { selectIsContextMenuTranslucent, selectTabState } from '../../../global/selectors';
+import { selectTabState } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
@@ -69,7 +69,6 @@ export type OwnProps = {
 
 type StateProps = {
   isLeftColumnShown: boolean;
-  isBackgroundTranslucent?: boolean;
   animationLevel: AnimationLevel;
 };
 
@@ -98,7 +97,6 @@ const SymbolMenu: FC<OwnProps & StateProps> = ({
   addRecentEmoji,
   addRecentCustomEmoji,
   isLeftColumnShown,
-  isBackgroundTranslucent,
   animationLevel,
   ...menuPositionOptions
 }) => {
@@ -215,7 +213,6 @@ const SymbolMenu: FC<OwnProps & StateProps> = ({
             idPrefix={idPrefix}
             loadAndPlay={isOpen && (isActive || isFrom)}
             chatId={chatId}
-            isTranslucent={!isMobile && isBackgroundTranslucent}
             onCustomEmojiSelect={handleCustomEmojiSelect}
           />
         );
@@ -230,7 +227,6 @@ const SymbolMenu: FC<OwnProps & StateProps> = ({
             noContextMenus={!isMessageComposer}
             chatId={chatId}
             threadId={threadId}
-            isTranslucent={!isMobile && isBackgroundTranslucent}
             onStickerSelect={handleStickerSelect}
           />
         );
@@ -345,7 +341,6 @@ export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
     return {
       isLeftColumnShown: selectTabState(global).isLeftColumnShown,
-      isBackgroundTranslucent: selectIsContextMenuTranslucent(global),
       animationLevel: selectSharedSettings(global).animationLevel,
     };
   },

@@ -89,7 +89,6 @@ import { createGroupController } from './groups';
 import { createHealthApi } from './healthApi';
 import { createHistoryRows, type ModelChat } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
-import { langPackMethods } from './langPacks';
 import {
   exportLinkPrivateScalar,
   exportLinkPublicKey,
@@ -2701,8 +2700,6 @@ const musicMethods = createMusicApi({
 });
 
 const methods = {
-  // Языковые пакеты из сборки (fallback.strings / ru.strings)
-  ...langPackMethods,
   ...healthMethods,
   ...musicMethods,
 
@@ -3519,10 +3516,6 @@ const methods = {
     await syncController.ensureSynced().catch(() => undefined);
     await syncController.ensureChatLoaded(chat.id);
     return findFirstMessageIdAfterDate(store.getMessages(chat.id), timestamp);
-  },
-
-  oldFetchLangPack({ langCode }: { langCode: string }) {
-    return Promise.resolve({ langPack: buildOldLangPack(langCode) });
   },
 
   // ── фон чата ────────────────────────────────────────────────────────────────

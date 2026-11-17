@@ -25,7 +25,6 @@ export const DEBUG_MORE = false;
 export const DEBUG_CALLS = false;
 export const DEBUG_LOG_FILENAME = 'tt-log.json';
 export const STRICTERDOM_ENABLED = DEBUG;
-export const FORCE_FALLBACK_LANG = DEBUG;
 
 export const BETA_CHANGELOG_URL = 'https://telegra.ph/WebA-Beta-03-20';
 
@@ -376,7 +375,6 @@ export const DELETED_COMMENTS_CHANNEL_ID = (-CHANNEL_ID_BASE - 777n).toString();
 export const MAX_MEDIA_FILES_FOR_ALBUM = 10;
 export const MAX_ACTIVE_PINNED_CHATS = 5;
 export const SCHEDULED_WHEN_ONLINE = 0x7FFFFFFE;
-export const LANG_PACKS = ['android', 'ios', 'tdesktop', 'macos'] as const;
 export const GENERAL_TOPIC_ID = 1;
 export const FRESH_AUTH_PERIOD = 86400; // 1 day
 export const GIVEAWAY_BOOST_PER_PREMIUM = 4;

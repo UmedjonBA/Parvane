@@ -17,12 +17,6 @@
   height: var(--symbol-menu-height);
   padding: 0 !important;
 
-  :global(body:not(.no-menu-blur)) & {
-    --color-background: var(--color-background-compact-menu);
-
-    backdrop-filter: blur(25px);
-  }
-
   &:global(.bubble) {
     --offset-x: -0.75rem;
     --offset-y: calc(100% + 0.625rem);

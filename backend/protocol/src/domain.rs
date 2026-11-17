@@ -1075,6 +1075,8 @@ pub mod health;
 /// JSON «Здоровья» для хостов: сведённое состояние и изменения.
 pub mod health_json;
 pub mod health_day;
+/// «Мои продукты»: подстановка чисел еды из прошлых записей (HEALTH-3 п. 13).
+pub mod health_recall;
 pub mod health_form;
 pub mod health_view;
 /// Плейлисты «Музыки» `parvane.music.v1` (spec 039, этап C).

@@ -518,6 +518,14 @@ export class EngineClient {
     return text(this.c('healthParse', { text: input, nowMs, tzMin }));
   }
 
+  /**
+   * Разбор ввода с подстановкой «моих продуктов» (HEALTH-3 п. 13): тот же JSON, что у `healthParse`; еда, названная
+   * без чисел, несёт калории, БЖУ и граммы прошлой записи с тем же названием и пометку `recalled`.
+   */
+  healthRecall(input: string, nowMs: number, tzMin: number): string {
+    return text(this.c('healthRecall', { text: input, nowMs, tzMin }));
+  }
+
   /** Личный контейнер домена этого вида («План», «Здоровье»): один набор вызовов движка, имена — `<вид>Xxx`. */
   personal(kind: PersonalKind) {
     const call = (name: string, args: Record<string, unknown> = {}) => this.c(`${kind}${name}`, args);

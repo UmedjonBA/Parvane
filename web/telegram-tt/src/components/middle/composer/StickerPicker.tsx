@@ -54,7 +54,6 @@ type OwnProps = {
   threadId?: ThreadId;
   className: string;
   isHidden?: boolean;
-  isTranslucent?: boolean;
   loadAndPlay: boolean;
   canSendStickers?: boolean;
   noContextMenus?: boolean;
@@ -86,7 +85,6 @@ const StickerPicker: FC<OwnProps & StateProps> = ({
   threadId,
   className,
   isHidden,
-  isTranslucent,
   loadAndPlay,
   canSendStickers,
   recentStickers,
@@ -321,7 +319,6 @@ const StickerPicker: FC<OwnProps & StateProps> = ({
           noContextMenu
           isCurrentUserPremium
           sharedCanvasRef={withSharedCanvas ? sharedCanvasRef : undefined}
-          withTranslucentThumb={isTranslucent}
           onClick={selectStickerSet}
           clickArg={index}
           forcePlayback
@@ -386,7 +383,6 @@ const StickerPicker: FC<OwnProps & StateProps> = ({
                 favoriteStickers={favoriteStickers}
                 isSavedMessages={isSavedMessages}
                 isCurrentUserPremium={isCurrentUserPremium}
-                isTranslucent={isTranslucent}
                 isChatStickerSet={stickerSet.id === chatStickerSetId}
                 onStickerSelect={handleStickerSelect}
                 onStickerUnfave={handleStickerUnfave}

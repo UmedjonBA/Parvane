@@ -159,10 +159,6 @@ export function selectCanAnimateSnapEffect<T extends GlobalState>(global: T) {
   return IS_SNAP_EFFECT_SUPPORTED && selectPerformanceSettingsValue(global, 'snapEffect');
 }
 
-export function selectIsContextMenuTranslucent<T extends GlobalState>(global: T) {
-  return selectPerformanceSettingsValue(global, 'contextMenuBlur');
-}
-
 export function selectIsSynced<T extends GlobalState>(global: T) {
   return global.isSynced;
 }

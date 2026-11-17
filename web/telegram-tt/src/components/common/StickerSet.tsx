@@ -60,7 +60,6 @@ type OwnProps = {
   withDefaultStatusIcon?: boolean;
   isChatEmojiSet?: boolean;
   isChatStickerSet?: boolean;
-  isTranslucent?: boolean;
   noContextMenus?: boolean;
   noAddButton?: boolean;
   forcePlayback?: boolean;
@@ -105,7 +104,6 @@ const StickerSet = ({
   withDefaultStatusIcon,
   isChatEmojiSet,
   isChatStickerSet,
-  isTranslucent,
   noContextMenus,
   noAddButton,
   forcePlayback,
@@ -395,7 +393,6 @@ const StickerSet = ({
                 isCurrentUserPremium={isCurrentUserPremium}
                 shouldIgnorePremium={isChatEmojiSet}
                 sharedCanvasRef={canvasRef}
-                withTranslucentThumb={isTranslucent}
                 onClick={onStickerSelect}
                 clickArg={sticker}
                 noIcons={isEmoji && !isRecent}

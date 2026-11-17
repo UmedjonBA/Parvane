@@ -16,7 +16,7 @@ import {
 } from '../../../global/initialState';
 import { selectPerformanceSettings } from '../../../global/selectors';
 import { areDeepEqual } from '../../../util/areDeepEqual';
-import { IS_BACKDROP_BLUR_SUPPORTED, IS_SNAP_EFFECT_SUPPORTED } from '../../../util/browser/windowEnvironment';
+import { IS_SNAP_EFFECT_SUPPORTED } from '../../../util/browser/windowEnvironment';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -60,8 +60,6 @@ const PERFORMANCE_OPTIONS: PerformanceSection[] = [
     { key: 'mediaViewerAnimations', label: 'SettingsPerformanceMediaViewer' },
     { key: 'messageComposerAnimations', label: 'SettingsPerformanceComposer' },
     { key: 'contextMenuAnimations', label: 'SettingsPerformanceContextAnimation' },
-    { key: 'contextMenuBlur', label: 'SettingsPerformanceContextBlur', disabled: !IS_BACKDROP_BLUR_SUPPORTED },
-    { key: 'messageBlur', label: 'SettingsPerformanceMessageBlur', disabled: !IS_BACKDROP_BLUR_SUPPORTED },
     { key: 'rightColumnAnimations', label: 'SettingsPerformanceRightColumn' },
     { key: 'snapEffect', label: 'SettingsPerformanceThanos' },
     // Parvane: «Постепенный вывод текста» — для черновиков ботов/ИИ (`updateChatTypingDraft`), у Parvane их нет (C2)

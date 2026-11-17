@@ -90,6 +90,7 @@ pub const READS: &[&str] = &[
     "healthStateJson",
     "healthView",
     "healthCompose",
+    "healthRecall",
     "healthEntries",
     "healthDays",
     "healthCheck",

@@ -35,10 +35,11 @@ export default function useHealthParse(text: string, isDisabled?: boolean) {
 
 /**
  * Строка целиком понята «Здоровьем»: есть что записать, ничего не осталось неразобранным и ни одна запись не
- * догадка (еда без единого числа — «обед с Петей завтра» остаётся делом «Плана»). Так решает чужой ввод; в самом
+ * догадка (еда без единого числа — «обед с Петей завтра» остаётся делом «Плана») и не одно лишь название продукта
+ * без слова приёма («кофе» — задача, а не еда). Так решает чужой ввод; в самом
  * модуле догадки записываются.
  */
 export function isWholeHealthLine(parsed: HealthParseResult) {
   return parsed.entries.length > 0 && !parsed.unparsed.length && !parsed.problems.length
-    && !parsed.entries.some((entry) => entry.guess);
+    && !parsed.entries.some((entry) => entry.guess || entry.bare);
 }

@@ -1,5 +1,6 @@
-// Parvane: общие детали разделов «Знания» и «Файлы» по прототипу `disain/prototype.html` — шапка острова,
-// вкладки, кнопки, чипы, строки списка, значки, шторки. Цвета — только переменные `--pv-*` (их ставит схема).
+// Parvane: общие детали своих экранов — шапка острова, вкладки, кнопки, чипы, строки списка, значки, шторки.
+// Цвета — только переменные `--pv-*` (их ставит цветовая схема), радиусы — токены макета `pv.css` из
+// `styles/_variables.scss`; плоско: без теней, фокус с клавиатуры — синяя рамка 2 px.
 
 // ── остров и шапка ───────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@
   background: none;
 
   &:focus-visible {
-    outline: 2px solid var(--pv-accent);
+    outline: 2px solid var(--pv-blue);
     outline-offset: 2px;
   }
 
@@ -166,7 +167,7 @@
 
   width: 2.25rem;
   height: 2.25rem;
-  border-radius: 50%;
+  border-radius: var(--pv-radius);
 
   color: var(--pv-muted);
 
@@ -220,7 +221,7 @@
 
   height: 2.25rem;
   padding: 0 0.875rem;
-  border-radius: 0.5rem;
+  border-radius: var(--pv-radius);
 
   font-size: 0.875rem;
   color: var(--pv-fg);
@@ -279,7 +280,7 @@
   flex: none;
 
   padding: 0.1875rem;
-  border-radius: 1.125rem;
+  border-radius: var(--pv-radius-md);
 
   background: var(--pv-raised);
 
@@ -308,7 +309,7 @@
 
   height: 1.875rem;
   padding: 0 0.875rem;
-  border-radius: 0.9375rem;
+  border-radius: var(--pv-radius-sm);
 
   font-size: 0.875rem;
   color: var(--pv-muted);
@@ -327,12 +328,10 @@
 .segItemOn {
   color: var(--pv-fg);
   background: var(--pv-panel);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 
   @media (max-width: 760px) {
     border-bottom-color: var(--pv-accent);
     background: none;
-    box-shadow: none;
   }
 }
 
@@ -398,7 +397,7 @@
   width: 100%;
   min-height: 2.75rem;
   padding: 0.375rem 0.625rem;
-  border-radius: 0.5rem;
+  border-radius: var(--pv-radius-sm);
 
   &:hover:not(:disabled),
   &:focus-visible {
@@ -511,7 +510,7 @@
 .card {
   min-width: 0;
   padding: 1rem;
-  border-radius: 0.75rem;
+  border-radius: var(--pv-radius-card);
   background: var(--pv-raised);
 }
 
@@ -568,7 +567,7 @@
   padding: 0 0.875rem;
   padding-inline-start: 2.5rem;
   border: 1px solid transparent;
-  border-radius: 1.3125rem;
+  border-radius: var(--pv-radius);
 
   font: inherit;
   color: var(--pv-fg);
@@ -624,7 +623,7 @@
   height: 2.625rem;
   padding: 0 0.75rem;
   border: 1px solid var(--pv-line2);
-  border-radius: 0.5rem;
+  border-radius: var(--pv-radius);
 
   font: inherit;
   color: var(--pv-fg);
@@ -648,7 +647,7 @@
   min-height: 7.5rem;
   padding: 0.75rem;
   border: 1px solid var(--pv-line2);
-  border-radius: 0.5rem;
+  border-radius: var(--pv-radius);
 
   font-family: var(--font-family-monospace);
   font-size: 0.875rem;
@@ -722,7 +721,7 @@
     :global(.modal-dialog) {
       min-width: 100%;
       max-height: 90vh;
-      border-radius: 1.125rem 1.125rem 0 0;
+      border-radius: var(--pv-radius-sheet) var(--pv-radius-sheet) 0 0;
     }
 
     :global(.modal-content) {

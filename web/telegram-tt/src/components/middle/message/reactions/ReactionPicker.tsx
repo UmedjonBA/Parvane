@@ -20,7 +20,6 @@ import {
   selectChat,
   selectChatFullInfo,
   selectChatMessage,
-  selectIsContextMenuTranslucent,
   selectIsCurrentUserPremium,
   selectPeerStory,
   selectTabState,
@@ -53,7 +52,6 @@ interface StateProps {
   story?: ApiStory | ApiStorySkipped;
   isCurrentUserPremium?: boolean;
   position?: IAnchorPosition;
-  isTranslucent?: boolean;
   sendAsMessage?: boolean;
   chatId?: string;
   isForEffects?: boolean;
@@ -69,7 +67,6 @@ const ReactionPicker: FC<OwnProps & StateProps> = ({
   message,
   story,
   position,
-  isTranslucent,
   isCurrentUserPremium,
   shouldUseFullPicker,
   sendAsMessage,
@@ -255,7 +252,6 @@ const ReactionPicker: FC<OwnProps & StateProps> = ({
           canSendStickers={false}
           noContextMenus={false}
           chatId={chatId}
-          isTranslucent={isTranslucent}
           onStickerSelect={handleStickerSelect}
           isForEffects={isForEffects}
         />
@@ -269,7 +265,6 @@ const ReactionPicker: FC<OwnProps & StateProps> = ({
             isReactionPicker
             className={!shouldUseFullPicker && !renderedStoryId ? styles.hidden : undefined}
             selectedReactionIds={selectedReactionIds}
-            isTranslucent={isTranslucent}
             onCustomEmojiSelect={renderedStoryId ? handleStoryReactionSelect : handleToggleCustomReaction}
             onReactionSelect={renderedStoryId ? handleStoryReactionSelect : handleToggleReaction}
             onReactionContext={handleReactionContextMenu}
@@ -318,7 +313,6 @@ export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => {
     position,
     shouldUseFullPicker: (chat?.isForbidden || areSomeReactionsAllowed || shouldUseCurrentReactions) ? false
       : (areAllReactionsAllowed || isPrivateChat),
-    isTranslucent: selectIsContextMenuTranslucent(global),
     isCurrentUserPremium: selectIsCurrentUserPremium(global),
     sendAsMessage,
     isForEffects,

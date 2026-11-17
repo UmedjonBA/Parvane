@@ -255,6 +255,14 @@ impl PersonalState {
         }
     }
 
+    /// Разбор строки с подстановкой «моих продуктов» (HEALTH-3 п. 13).
+    fn health_recall(&self, text: &str, now_ms: i64, tz_min: i32) -> Option<String> {
+        match self {
+            Self::Health(st) => Some(crate::domain::health_recall::recall_json(st, text, now_ms, tz_min)),
+            Self::Planner(_) | Self::Music(_) => None,
+        }
+    }
+
     /// Сводка «Здоровья» для экранов (HEALTH-3); у планировщика её нет.
     fn health_view(&self, now_ms: i64, tz_min: i32) -> Option<String> {
         match self {
@@ -1009,7 +1017,12 @@ impl Client {
         let composed = self.health.as_ref().and_then(|p| p.state.health_compose(parsed, now_ms));
         composed.unwrap_or_else(|| crate::domain::health_view::compose_changes(&Default::default(), parsed, now_ms)).to_string()
     }
-    /// Сводка для экранов «Здоровья» на момент `now_ms` в поясе `tz_min` (HEALTH-3).
+    /// Разбор строки ввода с подстановкой чисел еды из прошлых записей с тем же названием (HEALTH-3 п. 13).
+    /// Контейнера ещё нет — прошлых записей нет, итог равен разбору.
+    pub fn health_recall_json(&self, text: &str, now_ms: i64, tz_min: i32) -> String {
+        let recalled = self.health.as_ref().and_then(|p| p.state.health_recall(text, now_ms, tz_min));
+        recalled.unwrap_or_else(|| crate::health_parse::parse_json(text, now_ms, tz_min))
+    }
     /// Контейнера ещё нет (первое открытие) — сводка пустого состояния.
     pub fn health_view_json(&self, now_ms: i64, tz_min: i32) -> String {
         let view = self.health.as_ref().and_then(|p| p.state.health_view(now_ms, tz_min));
