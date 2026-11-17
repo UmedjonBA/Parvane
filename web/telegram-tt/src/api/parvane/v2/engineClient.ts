@@ -63,7 +63,7 @@ function bytesIn(value: any, fields: string[]) {
 }
 
 /** Вид личного контейнера домена. */
-export type PersonalKind = 'planner' | 'health';
+export type PersonalKind = 'planner' | 'health' | 'music';
 
 export class EngineClient {
   constructor(private readonly host: ClientCore) {}
@@ -485,6 +485,16 @@ export class EngineClient {
     return text(this.c('healthCompose', { entries, nowMs }));
   }
 
+  /** Плейлисты «Музыки» для экранов (MUSIC-2): считает движок; контейнера ещё нет — пустой список. */
+  musicStateJson(): string {
+    return text(this.c('musicStateJson', {}));
+  }
+
+  /** Действие над плейлистами → JSON `{changes, id?, skipped?}` для `prepareLocal` (MUSIC-2). */
+  musicCompose(action: Record<string, unknown>, nowMs: number): string {
+    return text(this.c('musicCompose', { action, nowMs }));
+  }
+
   /** Разбор свободного ввода «Здоровья» (HEALTH-2): JSON `{entries, unparsed, problems}`. */
   healthParse(input: string, nowMs: number, tzMin: number): string {
     return text(this.c('healthParse', { text: input, nowMs, tzMin }));
@@ -494,7 +504,7 @@ export class EngineClient {
   personal(kind: PersonalKind) {
     const call = (name: string, args: Record<string, unknown> = {}) => this.c(`${kind}${name}`, args);
     const textOrNone = (v: unknown) => (isNil(v) ? undefined : text(v));
-    const shareName = kind === 'planner' ? 'sharePlannerWithOwnDevices' : 'shareHealthWithOwnDevices';
+    const shareName = `share${kind[0].toUpperCase()}${kind.slice(1)}WithOwnDevices`;
     return {
       applyLocal: (op: Uint8Array) => call('ApplyLocal', { op: b(op) }) as number,
       attach: (getResponse: Uint8Array, grantsResponse: Uint8Array) => {

@@ -73,6 +73,7 @@ import {
 } from './l2';
 import { createL2Ticker } from './l2Ticks';
 import { createMessageIndex, type MessageIndex } from './messageIndex';
+import { createMusicPlaylistsSync } from './musicPlaylists';
 import { createPlannerSync } from './planner';
 import { createReconnectBackoff } from './reconnectBackoff';
 import { isTelegramCodeIntercepted } from './telegramCode';
@@ -141,6 +142,10 @@ type Deps = {
   healthContainerFromState?: () => { domain: string; id: string } | undefined;
   recordHealthContainer?: (ref: { domain: string; id: string }) => void;
   onHealthChanged?: () => void;
+  /** Плейлисты «Музыки» (spec 039): то же для их контейнера. */
+  musicContainerFromState?: () => { domain: string; id: string } | undefined;
+  recordMusicContainer?: (ref: { domain: string; id: string }) => void;
+  onMusicChanged?: () => void;
   /** Облако (spec 016): контейнеры из журнала личного состояния и их запись. */
   cloudEntriesFromState?: () => CloudStateEntry[];
   recordCloudEntry?: (entry: CloudStateEntry) => void;
@@ -290,6 +295,7 @@ export type KeyJoinOutcome = {
   result: SskRotationResult;
   planner?: string;
   health?: string;
+  music?: string;
   cloud?: string;
 };
 export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'intercepted' | 'failed';
@@ -1587,6 +1593,13 @@ export function createV2Controller(deps: Deps) {
     recordContainer: (container) => deps.recordHealthContainer?.(container),
     onChanged: () => deps.onHealthChanged?.(),
   });
+  // Плейлисты «Музыки» (spec 039, этап C): третий личный контейнер — `./musicPlaylists`
+  const music = createMusicPlaylistsSync({
+    ...personalDeps,
+    stateContainer: () => deps.musicContainerFromState?.(),
+    recordContainer: (container) => deps.recordMusicContainer?.(container),
+    onChanged: () => deps.onMusicChanged?.(),
+  });
 
   // Облако (spec 016): контейнеры домена `cloud.v1`, очереди и доступ — `./cloud`
   const cloud = createCloudSync({
@@ -1959,6 +1972,7 @@ export function createV2Controller(deps: Deps) {
     // Ключ контейнера планировщика принят или контейнер надо подключить (spec 010)
     if (ev.type === 'plannerChanged') planner.onEngineEvent();
     if (ev.type === 'healthChanged') health.onEngineEvent();
+    if (ev.type === 'musicChanged') music.onEngineEvent();
     if (ev.type === 'cloudChanged' && ev.id) cloud.onEngineEvent(ev.id);
     // Отозвано своё устройство (другим своим устройством): журнал — заново;
     // ротации ключей делает отзывавшее устройство и раздаёт по E2E
@@ -2230,6 +2244,7 @@ export function createV2Controller(deps: Deps) {
         grant: b64(material),
         planner: planner.keysExport(),
         health: health.keysExport(),
+        music: music.keysExport(),
         cloud: cloud.keysExport(),
         groups: groupKeys !== '[]' ? groupKeys : undefined,
       };
@@ -2628,7 +2643,7 @@ export function createV2Controller(deps: Deps) {
     deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
     if (payload.groups) await applyBundleGroups(payload.groups);
     return {
-      result: 'ok', planner: payload.planner, health: payload.health, cloud: payload.cloud,
+      result: 'ok', planner: payload.planner, health: payload.health, music: payload.music, cloud: payload.cloud,
     };
   }
 
@@ -5183,6 +5198,8 @@ export function createV2Controller(deps: Deps) {
     /** Планировщик на сервере (spec 010). */
     planner,
     health,
+    /** Плейлисты «Музыки» (spec 039, этап C). */
+    music,
     /** Счётчики-базис SC-009 (spec 035, T009): записи кэша групп с запуска страницы. */
     auditCounters: () => ({
       groupCacheWrites: 0, groups: client?.groupList().length ?? 0,
@@ -5308,6 +5325,7 @@ export function createV2Controller(deps: Deps) {
       setTimerSyncMode(false);
       planner.reset();
       health.reset();
+      music.reset();
       cloud.reset();
       ready = false;
       starting = undefined;

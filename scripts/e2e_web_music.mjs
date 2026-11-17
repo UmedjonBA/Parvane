@@ -3,7 +3,8 @@
 // слушателя: главная, альбом, воспроизведение и переход на следующий трек, пауза, любимое, поиск и «играть
 // следующим», плеер вне модуля, очередь после перезагрузки, полоса плеера на телефоне; «Найти и скачать»
 // (поддельный сервис скачивания `scripts/fake_music_fetch.mjs`, лимит раннера — три трека в сутки): уверенное
-// совпадение качается само, спорное — выбором файла, ничего не нашлось, лимит, «Загруженное» и удаление.
+// совпадение качается само, спорное — выбором файла, ничего не нашлось, лимит, «Загруженное» и удаление;
+// плейлисты (личный контейнер): создать, добавить, порядок, играть, переименовать, перезагрузка, удалить.
 // Запуск: scripts/run_web_music_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -226,6 +227,82 @@ try {
   await everyone.getByText(`added by ${user.split('@')[0]}`).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await everyone.locator('[data-track]').count(), 2, 'на главной два добавленных трека');
   console.log('OK: «Загруженное» — расход, удаление; «Новое на сервере» — кто добавил');
+
+  // ── Плейлисты: создать, добавить треки, порядок, повтор не добавляется ────
+  const nav = (view) => wide.locator(`[data-view="${view}"]`).click();
+  await nav('playlists');
+  await wide.locator('[data-music-empty]').getByText('No playlists yet').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await wide.getByPlaceholder('New playlist name').fill('Дорога');
+  await wide.getByRole('button', { name: 'Create', exact: true }).click();
+  const opened = wide.locator('[data-music-playlist]');
+  await opened.locator('[data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await nav('albums');
+  await wide.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  const albumRow = (id) => wide.locator(`[data-music-tracks] [data-track="${id}"]`);
+  const picker = wide.locator('[data-playlist-picker]');
+  const addToPlaylist = async (trackId, playlistName, expected) => {
+    await albumRow(trackId).locator('[data-music-to-playlist]').click();
+    await picker.getByRole('button', { name: playlistName, exact: true }).click();
+    await wide.locator(`[data-playlist-picker="${expected}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await picker.getByRole('button', { name: 'Close' }).click();
+    await picker.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  };
+  await albumRow('t1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await addToPlaylist('t1', 'Дорога', 'added');
+  await addToPlaylist('t3', 'Дорога', 'added');
+  await addToPlaylist('t1', 'Дорога', 'present');
+  // Новый плейлист прямо из выбора — сразу с треком
+  await albumRow('t2').locator('[data-music-to-playlist]').click();
+  await picker.getByPlaceholder('New playlist name').fill('Вечер');
+  await picker.getByRole('button', { name: 'Create and add' }).click();
+  await wide.locator('[data-playlist-picker="added"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await picker.getByRole('button', { name: 'Close' }).click();
+  await nav('playlists');
+  const lists = wide.locator('[data-music-playlists]');
+  await lists.getByRole('button', { name: /Дорога.*2 tracks/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await lists.getByRole('button', { name: /Вечер.*1 track/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: плейлисты созданы, треки добавлены, повтор трека не добавляется');
+
+  // ── Страница плейлиста: порядок, воспроизведение, убрать трек, переименовать ─
+  await lists.getByRole('button', { name: /Дорога/ }).click();
+  const order = () => opened.locator('[data-track]').evaluateAll((rows) => rows.map((row) => row.dataset.track));
+  const waitOrder = async (expected) => {
+    await page.waitForFunction((want) => {
+      const rows = [...document.querySelectorAll('#ParvaneMusic [data-music-playlist] [data-track]')];
+      return rows.map((row) => row.dataset.track).join() === want;
+    }, expected.join(), { timeout: STEP_TIMEOUT_MS });
+  };
+  await waitOrder(['t1', 't3']);
+  await opened.getByRole('button', { name: 'Move down: Северный ветер' }).click();
+  await waitOrder(['t3', 't1']);
+  await opened.getByRole('button', { name: 'Play', exact: true }).click();
+  await wideSide.locator('[data-music-now]').filter({ hasText: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wideSide.locator('[data-music-queue="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wideSide.getByRole('button', { name: 'Pause' }).click();
+  await opened.getByRole('button', { name: 'Remove from the playlist: Соль' }).click();
+  await waitOrder(['t1']);
+  await opened.getByLabel('Playlist name').fill('В дорогу');
+  await opened.getByLabel('Playlist name').press('Enter');
+  await opened.getByRole('button', { name: 'All playlists' }).click();
+  await lists.getByRole('button', { name: /В дорогу.*1 track/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.deepEqual(await order(), [], 'страница плейлиста закрыта');
+  console.log('OK: порядок треков, воспроизведение плейлиста, удаление трека, переименование');
+
+  // ── Перезагрузка: плейлисты на месте; удаление плейлиста в два нажатия ────
+  // Правки уходят на сервер пакетом: до перезагрузки дожидаемся записи
+  await page.waitForTimeout(3000);
+  await reloadPage(page);
+  const again2 = await openMusic(page);
+  await again2.locator('[data-view="playlists"]').click();
+  const lists2 = again2.locator('[data-music-playlists]');
+  await lists2.getByRole('button', { name: /В дорогу.*1 track/ }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await lists2.getByRole('button', { name: /Вечер/ }).click();
+  await again2.locator('[data-music-playlist] [data-track="t2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await again2.locator('[data-playlist-delete="ask"]').click();
+  await again2.locator('[data-playlist-delete="confirm"]').click();
+  await lists2.getByRole('button', { name: /В дорогу/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await lists2.getByRole('button').count(), 1, 'после удаления остался один плейлист');
+  console.log('OK: плейлисты пережили перезагрузку, плейлист удалён');
 
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');

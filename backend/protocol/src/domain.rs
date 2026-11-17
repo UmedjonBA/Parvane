@@ -1075,6 +1075,9 @@ pub mod health;
 /// JSON «Здоровья» для хостов: сведённое состояние и изменения.
 pub mod health_json;
 pub mod health_view;
+/// Плейлисты «Музыки» `parvane.music.v1` (spec 039, этап C).
+pub mod music;
+pub mod music_json;
 
 /// Тестовый домен `sample.v1` (SC-005): LWW-карта.
 pub mod sample {

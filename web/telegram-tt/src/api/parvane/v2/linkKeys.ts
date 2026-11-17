@@ -13,7 +13,12 @@ export function parseLinkHealthKeys(stateJson: string): string | undefined {
   return parseLinkPersonalKeys(stateJson, 'health');
 }
 
-function parseLinkPersonalKeys(stateJson: string, field: 'planner' | 'health'): string | undefined {
+/** Ключи контейнера плейлистов «Музыки» из экспорта линковки (spec 039) — JSON для движка (`musicKeysImport`). */
+export function parseLinkMusicKeys(stateJson: string): string | undefined {
+  return parseLinkPersonalKeys(stateJson, 'music');
+}
+
+function parseLinkPersonalKeys(stateJson: string, field: 'planner' | 'health' | 'music'): string | undefined {
   try {
     const raw = (JSON.parse(stateJson) as Record<string, unknown>)[field];
     // Экспорт кладёт JSON движка строкой; объект — прежняя форма

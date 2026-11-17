@@ -56,7 +56,9 @@ import {
   type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
 } from './v2/historyModel';
 import { pickRecoveryKey } from './v2/keyBundle';
-import { parseLinkCloudKeys, parseLinkHealthKeys, parseLinkPlannerKeys } from './v2/linkKeys';
+import {
+  parseLinkCloudKeys, parseLinkHealthKeys, parseLinkMusicKeys, parseLinkPlannerKeys,
+} from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import { createTabSignal } from './v2/tabSignal';
@@ -1408,6 +1410,11 @@ const v2Controller = createV2Controller({
   onHealthChanged: () => {
     window.dispatchEvent(new CustomEvent('parvane-health-changed'));
   },
+  musicContainerFromState: () => stateJournal.musicContainer(),
+  recordMusicContainer: (ref) => stateJournal.recordMusicContainer(ref),
+  onMusicChanged: () => {
+    window.dispatchEvent(new CustomEvent('parvane-music-playlists-changed'));
+  },
   onPlannerChanged: () => {
     reminderScheduler.onPlannerChanged();
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-planner-changed'));
@@ -2037,6 +2044,7 @@ async function syncFromKeyBundle() {
   if (!bundle || store.self !== owner) return;
   if (bundle.planner) v2Controller.planner.keysImport(bundle.planner);
   if (bundle.health) v2Controller.health.keysImport(bundle.health);
+  if (bundle.music) v2Controller.music.keysImport(bundle.music);
   if (bundle.cloud) v2Controller.cloud.keysImport(bundle.cloud);
   await v2Controller.applyBundleGroupsFrom(bundle.groups)
     .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
@@ -2065,7 +2073,7 @@ async function completeJoinFromBundle() {
     await v2Controller.applyBundleGroupsFrom(bundle.groups)
       .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
     completeKeyJoin({
-      result: 'ok', planner: bundle.planner, health: bundle.health, cloud: bundle.cloud,
+      result: 'ok', planner: bundle.planner, health: bundle.health, music: bundle.music, cloud: bundle.cloud,
     });
   }
   await v2Controller.ackJoined();
@@ -2081,6 +2089,7 @@ function completeKeyJoin(outcome: KeyJoinOutcome) {
   void registerV2Wake();
   if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
   if (outcome.health) v2Controller.health.keysImport(outcome.health);
+  if (outcome.music) v2Controller.music.keysImport(outcome.music);
   if (outcome.cloud) v2Controller.cloud.keysImport(outcome.cloud);
   window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
 }
@@ -2446,11 +2455,13 @@ async function pollHistoryLinkGrant(generation: number) {
   }
   let plannerKeys: string | undefined;
   let healthKeys: string | undefined;
+  let musicKeys: string | undefined;
   let cloudKeys: string | undefined;
   try {
     const exportText = await media.blob.text();
     plannerKeys = parseLinkPlannerKeys(exportText);
     healthKeys = parseLinkHealthKeys(exportText);
+    musicKeys = parseLinkMusicKeys(exportText);
     cloudKeys = parseLinkCloudKeys(exportText);
   } catch (err) {
     logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
@@ -2462,6 +2473,8 @@ async function pollHistoryLinkGrant(generation: number) {
   if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);
   // spec 038: ключи контейнера здоровья
   if (healthKeys) v2Controller.health.keysImport(healthKeys);
+  // spec 039: ключи контейнера плейлистов
+  if (musicKeys) v2Controller.music.keysImport(musicKeys);
   // spec 016: ключи контейнеров облака старого устройства
   if (cloudKeys) v2Controller.cloud.keysImport(cloudKeys);
 }
@@ -2682,6 +2695,7 @@ const healthMethods = createHealthApi({
 // «Музыка» (spec 039): методы раздела — `musicApi.ts`
 const musicMethods = createMusicApi({
   call: (method, request) => getV2Bridge().control.call(method, request),
+  playlists: () => v2Controller.music,
   log: logDebug,
 });
 
@@ -4213,6 +4227,7 @@ const methods = {
         // spec 010: ключи контейнера планировщика — чтобы раздел открылся сразу после привязки
         planner: v2Controller.planner.keysExport(),
         health: v2Controller.health.keysExport(),
+        music: v2Controller.music.keysExport(),
         // spec 016: ключи контейнеров облака (личный диск, совместные папки)
         cloud: v2Controller.cloud.keysExport(),
       });

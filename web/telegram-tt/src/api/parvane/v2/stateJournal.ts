@@ -619,6 +619,10 @@ export function createStateJournal(deps: Deps) {
   const recordHealthContainer = (ref: { domain: string; id: string }) => (
     recordPersonalContainer(K.healthContainer, ref)
   );
+  const musicContainer = () => personalContainer(K.musicContainer);
+  const recordMusicContainer = (ref: { domain: string; id: string }) => (
+    recordPersonalContainer(K.musicContainer, ref)
+  );
 
   // ── контейнеры облака (spec 016) ───────────────────────────────────────────
 
@@ -1251,6 +1255,8 @@ export function createStateJournal(deps: Deps) {
     recordPlannerContainer,
     healthContainer,
     recordHealthContainer,
+    musicContainer,
+    recordMusicContainer,
     cloudEntries,
     recordCloudEntry,
     reset: () => {

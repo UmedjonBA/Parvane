@@ -2,11 +2,38 @@
 // Navidrome). Ответы приводятся к одному виду здесь: сервер пишет поля именами схемы, большие числа — строками.
 // Ошибки — кодами протокола; «Музыка не подключена на сервере» — `enabled: false`
 
+import type { MusicPlaylistAction, MusicPlaylistsSync } from './v2/musicPlaylists';
+
 type Json = Record<string, unknown>;
 
 type Deps = {
   call: (method: string, request: Json) => Promise<Json>;
+  // Плейлисты — личный контейнер пользователя (сервер видит шифртекст)
+  playlists: () => MusicPlaylistsSync;
   log: (message: string) => void;
+};
+
+export type MusicPlaylistItem = {
+  // Id записи в плейлисте (не трека): один трек может стоять в разных плейлистах
+  id: string;
+  trackId: string;
+  title: string;
+  artist: string;
+  durationSecs: number;
+};
+
+export type MusicPlaylist = {
+  id: string;
+  name: string;
+  count: number;
+  durationSecs: number;
+  items: MusicPlaylistItem[];
+};
+
+export type MusicPlaylistsReply = {
+  status: ReturnType<MusicPlaylistsSync['status']>;
+  // JSON плейлистов движка — строкой: экран пропускает равные, не разбирая
+  view?: string;
 };
 
 export type MusicTrack = {
@@ -219,6 +246,22 @@ function toFetchJob(raw: Json): MusicFetchJob {
 }
 
 export function createMusicApi(deps: Deps) {
+  // Подключение контейнера плейлистов — один раз за сессию страницы; дальше синк идёт по таймеру модуля
+  let isPlaylistsStarted = false;
+  // Действия над плейлистами — строго по одному: следующее считается от состояния после предыдущего
+  let playlistChain: Promise<unknown> = Promise.resolve();
+
+  async function actOnPlaylists(action: MusicPlaylistAction) {
+    const playlists = deps.playlists();
+    const composed = playlists.compose(action, Date.now());
+    if (!composed) return undefined;
+    if (composed.changes.length) {
+      playlists.apply(composed.changes);
+      await playlists.flush();
+    }
+    return { id: composed.id, skipped: composed.skipped || 0, changed: composed.changes.length };
+  }
+
   return {
     /** Подключена ли библиотека и откуда брать обложки. Отказ сервера — «не подключена». */
     async parvaneMusicInfo(): Promise<MusicInfo> {
@@ -299,6 +342,41 @@ export function createMusicApi(deps: Deps) {
 
     async parvaneMusicStar({ trackId, isStarred }: { trackId: string; isStarred: boolean }) {
       await deps.call('music.star.set', { track_id: trackId, starred: isStarred });
+      return true;
+    },
+
+    /** Плейлисты пользователя: состояние контейнера и показ движка. */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async parvaneMusicPlaylists(): Promise<MusicPlaylistsReply> {
+      try {
+        const playlists = deps.playlists();
+        const status = playlists.status();
+        if (status !== 'needs-linking' && status !== 'loading' && !isPlaylistsStarted) {
+          isPlaylistsStarted = true;
+          void playlists.ensure();
+        }
+        return { status, view: playlists.viewJson() };
+      } catch (err) {
+        deps.log(`музыка: плейлисты не прочитаны: ${String(err)}`);
+        return { status: 'offline' };
+      }
+    },
+
+    /** Действие над плейлистами (создать, переименовать, удалить, добавить треки, убрать, переставить):
+     * изменения считает движок. Ответ — id нового плейлиста, число пропущенных повторов; `undefined` — не удалось. */
+    parvaneMusicPlaylistAct({ action }: { action: MusicPlaylistAction }) {
+      const run = playlistChain.then(() => actOnPlaylists(action)).catch((err: unknown) => {
+        deps.log(`музыка: действие над плейлистом не выполнено: ${String(err)}`);
+        return undefined;
+      });
+      playlistChain = run;
+      return run;
+    },
+
+    /** Есть ли у плейлистов зрители: без них опрос сервера редкий. */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async parvaneMusicPlaylistsSetActive({ isActive }: { isActive: boolean }) {
+      deps.playlists().setActive(isActive);
       return true;
     },
 

@@ -1,0 +1,58 @@
+// Плейлисты «Музыки» (spec 039, этап C): контейнер `parvane.music.v1` — один на пользователя, содержимое —
+// открытый текст операций и снимков каркаса доменов (core/v2/domain.proto) под ключом эпохи. Сервер видит
+// шифртекст: что человек собрал в плейлисты, знают только его устройства (сами треки общей библиотеки сервер
+// видит — это не E2E, решение пользователя).
+//
+// Плейлист — регистр целиком по `stamp`, удаление — надгробие. Трек в плейлисте — отдельная запись со своим
+// случайным id: два устройства, добавившие по треку одновременно, не затирают друг друга. Порядок — число
+// `rank` (перестановка — правка одной записи; при равных — по id). Запись удалённого плейлиста не показывается.
+syntax = "proto3";
+
+package parvane.music.v1;
+
+import "parvane/core/v2/domain.proto";
+import "parvane/core/v2/options.proto";
+
+message Playlist {
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string name = 3 [(parvane.core.v2.max_len) = 240];
+  parvane.core.v2.LwwStamp deleted = 4;
+  int64 created_ms = 5;
+}
+
+message PlaylistItem {
+  // Случайный id записи (не «плейлист + трек»).
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  string playlist_id = 3 [(parvane.core.v2.max_len) = 64];
+  // Id трека в библиотеке сервера `server`.
+  string track_id = 4 [(parvane.core.v2.max_len) = 128];
+  // Домен сервера библиотеки; пусто — свой сервер.
+  string server = 5 [(parvane.core.v2.max_len) = 253];
+  double rank = 6;
+  // Подписи на момент добавления: показываются, пока трек не перечитан с сервера либо когда его там уже нет.
+  string title = 7 [(parvane.core.v2.max_len) = 600];
+  string artist = 8 [(parvane.core.v2.max_len) = 600];
+  uint32 duration_secs = 9;
+  parvane.core.v2.LwwStamp deleted = 10;
+  int64 added_ms = 11;
+}
+
+message PlaylistChange {
+  oneof change {
+    Playlist playlist = 1;
+    PlaylistItem item = 2;
+  }
+}
+
+// Открытый текст ContainerOp: пакет изменений одного устройства.
+message MusicOp {
+  repeated PlaylistChange changes = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+// Открытый текст снимка: плейлисты и записи с надгробиями.
+message MusicSnapshot {
+  repeated Playlist playlists = 1 [(parvane.core.v2.max_items) = 2000];
+  repeated PlaylistItem items = 2 [(parvane.core.v2.max_items) = 60000];
+}

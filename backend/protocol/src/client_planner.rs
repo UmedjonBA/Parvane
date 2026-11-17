@@ -10,7 +10,7 @@
 // пришедшие раньше ключа, ждут в `pending_ops`. Отзыв своего устройства
 // поднимает эпоху записью «rotate» (REVOKE-1, R6).
 
-use crate::domain::{self as dom, health, health_json, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, JsonCache, KeyRing, LamportGuard as DomainGuard};
+use crate::domain::{self as dom, health, health_json, music, music_json, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, JsonCache, KeyRing, LamportGuard as DomainGuard};
 use crate::pb::parvane::core::v2::{
     ContainerKeyShare, ContainerOp, DomainContainerCreateRequest, DomainContainerGetResponse, DomainGrantListResponse,
     DomainKeyRotateRequest, DomainOpAppendRequest, DomainOpSyncResponse, DomainSnapshotGetResponse,
@@ -23,15 +23,18 @@ use crate::pb::parvane::core::v2::{
 pub enum Personal {
     Planner,
     Health,
+    /// Плейлисты «Музыки» (spec 039, этап C).
+    Music,
 }
 
 impl Personal {
-    pub const ALL: [Personal; 2] = [Personal::Planner, Personal::Health];
+    pub const ALL: [Personal; 3] = [Personal::Planner, Personal::Health, Personal::Music];
 
     pub fn domain(self) -> &'static str {
         match self {
             Personal::Planner => planner::DOMAIN_NAME,
             Personal::Health => health::DOMAIN_NAME,
+            Personal::Music => music::DOMAIN_NAME,
         }
     }
 
@@ -43,6 +46,7 @@ impl Personal {
         match self {
             Personal::Planner => planner::SNAPSHOT_EVERY,
             Personal::Health => health::SNAPSHOT_EVERY,
+            Personal::Music => music::SNAPSHOT_EVERY,
         }
     }
 
@@ -50,6 +54,7 @@ impl Personal {
         match self {
             Personal::Planner => Event::PlannerChanged { seq, head_seq },
             Personal::Health => Event::HealthChanged { seq, head_seq },
+            Personal::Music => Event::MusicChanged { seq, head_seq },
         }
     }
 }
@@ -61,6 +66,7 @@ macro_rules! slot {
         match $kind {
             Personal::Planner => &mut $c.planner,
             Personal::Health => &mut $c.health,
+            Personal::Music => &mut $c.music,
         }
     };
 }
@@ -69,6 +75,7 @@ macro_rules! slot_ref {
         match $kind {
             Personal::Planner => &$c.planner,
             Personal::Health => &$c.health,
+            Personal::Music => &$c.music,
         }
     };
 }
@@ -78,6 +85,7 @@ macro_rules! slot_ref {
 enum PersonalState {
     Planner(planner::PlannerState),
     Health(health::HealthState),
+    Music(music::MusicState),
 }
 
 impl PersonalState {
@@ -85,6 +93,7 @@ impl PersonalState {
         match kind {
             Personal::Planner => Self::Planner(Default::default()),
             Personal::Health => Self::Health(Default::default()),
+            Personal::Music => Self::Music(Default::default()),
         }
     }
 
@@ -93,6 +102,7 @@ impl PersonalState {
         match self {
             Self::Planner(_) => crate::hold::PLANNER_TYPE,
             Self::Health(_) => crate::hold::HEALTH_TYPE,
+            Self::Music(_) => crate::hold::MUSIC_TYPE,
         }
     }
 
@@ -100,6 +110,7 @@ impl PersonalState {
         match self {
             Self::Planner(_) => crate::hold::PLANNER_SNAPSHOT_TYPE,
             Self::Health(_) => crate::hold::HEALTH_SNAPSHOT_TYPE,
+            Self::Music(_) => crate::hold::MUSIC_SNAPSHOT_TYPE,
         }
     }
 
@@ -116,6 +127,11 @@ impl PersonalState {
                 health::guard_op(guard, &op).inspect_err(|_| *opaque = true)?;
                 st.apply_op(&op, author_device)
             }
+            Self::Music(st) => {
+                let op = music::decode_op(pt).inspect_err(|_| *opaque = true)?;
+                music::guard_op(guard, &op).inspect_err(|_| *opaque = true)?;
+                st.apply_op(&op, author_device)
+            }
         }
     }
 
@@ -130,6 +146,11 @@ impl PersonalState {
             Self::Health(st) => {
                 let s = health::decode_snapshot(pt)?;
                 health::guard_snapshot(guard, &s, upto_seq)?;
+                st.merge_snapshot(&s)
+            }
+            Self::Music(st) => {
+                let s = music::decode_snapshot(pt)?;
+                music::guard_snapshot(guard, &s, upto_seq)?;
                 st.merge_snapshot(&s)
             }
         }
@@ -150,6 +171,12 @@ impl PersonalState {
                 let applied = st.apply_op(&op, dev)?;
                 Ok((op.encode_to_vec(), applied))
             }
+            Self::Music(st) => {
+                let mut op = music_json::op_from_json(changes_json)?;
+                music::stamp_op(&mut op, &dom::Stamp::new(guard.tick(), dev));
+                let applied = st.apply_op(&op, dev)?;
+                Ok((op.encode_to_vec(), applied))
+            }
         }
     }
 
@@ -165,6 +192,11 @@ impl PersonalState {
                 health::guard_op(guard, &op)?;
                 st.apply_op(&op, dev)
             }
+            Self::Music(st) => {
+                let op = music::decode_op(op_bytes)?;
+                music::guard_op(guard, &op)?;
+                st.apply_op(&op, dev)
+            }
         }
     }
 
@@ -176,6 +208,10 @@ impl PersonalState {
                 dom::replacement_allowed(holds, container, upto_seq)?;
                 Ok(st.to_snapshot().encode_to_vec())
             }
+            Self::Music(st) => {
+                dom::replacement_allowed(holds, container, upto_seq)?;
+                Ok(st.to_snapshot().encode_to_vec())
+            }
         }
     }
 
@@ -183,6 +219,7 @@ impl PersonalState {
         match self {
             Self::Planner(st) => st.to_snapshot().encode_to_vec(),
             Self::Health(st) => st.to_snapshot().encode_to_vec(),
+            Self::Music(st) => st.to_snapshot().encode_to_vec(),
         }
     }
 
@@ -194,6 +231,11 @@ impl PersonalState {
                 st.merge_snapshot(&health::decode_snapshot(bytes)?)?;
                 Self::Health(st)
             }
+            Personal::Music => {
+                let mut st = music::MusicState::default();
+                st.merge_snapshot(&music::decode_snapshot(bytes)?)?;
+                Self::Music(st)
+            }
         })
     }
 
@@ -201,6 +243,7 @@ impl PersonalState {
         match self {
             Self::Planner(st) => planner_json::state_json(st, head_seq),
             Self::Health(st) => health_json::state_json(st, head_seq),
+            Self::Music(st) => music_json::state_json(st, head_seq),
         }
     }
 
@@ -208,7 +251,7 @@ impl PersonalState {
     fn health_compose(&self, parsed: &[serde_json::Value], now_ms: i64) -> Option<serde_json::Value> {
         match self {
             Self::Health(st) => Some(crate::domain::health_view::compose_changes(st, parsed, now_ms)),
-            Self::Planner(_) => None,
+            Self::Planner(_) | Self::Music(_) => None,
         }
     }
 
@@ -216,7 +259,7 @@ impl PersonalState {
     fn health_view(&self, now_ms: i64, tz_min: i32) -> Option<String> {
         match self {
             Self::Health(st) => Some(crate::domain::health_view::view_json(st, now_ms, tz_min)),
-            Self::Planner(_) => None,
+            Self::Planner(_) | Self::Music(_) => None,
         }
     }
 
@@ -224,6 +267,7 @@ impl PersonalState {
         match self {
             Self::Planner(st) => st.rev(),
             Self::Health(st) => st.rev(),
+            Self::Music(st) => st.rev(),
         }
     }
 
@@ -231,6 +275,7 @@ impl PersonalState {
         match self {
             Self::Planner(st) => st.size_estimate(),
             Self::Health(st) => st.snapshot_size(),
+            Self::Music(st) => st.snapshot_size(),
         }
     }
 }
@@ -851,8 +896,14 @@ impl Client {
     pub fn share_health_with_own_devices(&mut self) -> CResult<Vec<OutRequest>> {
         self.share_personal_with_own_devices(Personal::Health)
     }
+    pub fn share_music_with_own_devices(&mut self) -> CResult<Vec<OutRequest>> {
+        self.share_personal_with_own_devices(Personal::Music)
+    }
     /// Ключи «Здоровья» из экспорта линковки: запись несёт домен, общий приём разложит по контейнерам.
     pub fn health_keys_import(&mut self, export: &PlannerKeysExport) -> Result<()> {
+        self.planner_keys_import(export)
+    }
+    pub fn music_keys_import(&mut self, export: &PlannerKeysExport) -> Result<()> {
         self.planner_keys_import(export)
     }
     /// Ключи текущих эпох личных контейнеров — новым своим устройствам (T142).
@@ -980,5 +1031,64 @@ impl Client {
     }
     pub fn health_keys_export(&self) -> Option<PlannerKeysExport> {
         self.personal_keys_export(Personal::Health)
+    }
+    pub fn music_container(&self) -> Option<Ref> {
+        self.personal_container(Personal::Music)
+    }
+    pub fn music_is_attached(&self) -> bool {
+        self.personal_is_attached(Personal::Music)
+    }
+    pub fn music_has_key(&self) -> bool {
+        self.personal_has_key(Personal::Music)
+    }
+    pub fn music_head_seq(&self) -> u64 {
+        self.personal_head_seq(Personal::Music)
+    }
+    /// Плейлисты для экранов (MUSIC-2). Контейнера ещё нет — пустое состояние.
+    pub fn music_state_json(&self) -> String {
+        self.personal_state_json(Personal::Music).unwrap_or_else(|| music_json::state_json(&Default::default(), 0))
+    }
+    /// Действие пользователя над плейлистами → изменения для `music_prepare_local` (MUSIC-2).
+    /// Контейнера ещё нет — считается от пустого состояния (первым действием может быть только создание).
+    pub fn music_compose_json(&self, action: &serde_json::Value, now_ms: i64) -> Result<String> {
+        let empty = music::MusicState::default();
+        let state = match self.music.as_ref().map(|p| &p.state) {
+            Some(PersonalState::Music(st)) => st,
+            _ => &empty,
+        };
+        music_json::compose(state, action, now_ms, music_json::new_id).map(|v| v.to_string())
+    }
+    pub fn music_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_create(Personal::Music, ts_ms)
+    }
+    pub fn music_attach(&mut self, get_response: &[u8], grants_response: &[u8]) -> CResult<()> {
+        self.personal_attach(Personal::Music, get_response, grants_response)
+    }
+    pub fn music_ingest_grants(&mut self, grants_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_grants(Personal::Music, grants_response)
+    }
+    pub fn music_ingest_sync(&mut self, sync_response: &[u8]) -> CResult<PlannerIngest> {
+        self.personal_ingest_sync(Personal::Music, sync_response)
+    }
+    pub fn music_ingest_snapshot(&mut self, snapshot_response: &[u8]) -> CResult<u64> {
+        self.personal_ingest_snapshot(Personal::Music, snapshot_response)
+    }
+    pub fn music_prepare_local(&mut self, changes_json: &str) -> CResult<PlannerLocalOp> {
+        self.personal_prepare_local(Personal::Music, changes_json)
+    }
+    pub fn music_apply_local(&mut self, op_bytes: &[u8]) -> CResult<usize> {
+        self.personal_apply_local(Personal::Music, op_bytes)
+    }
+    pub fn music_seal(&mut self, op_bytes: &[u8], op_id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
+        self.personal_seal(Personal::Music, op_bytes, op_id, ts_ms)
+    }
+    pub fn music_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
+        self.personal_snapshot_request(Personal::Music, ts_ms)
+    }
+    pub fn music_size(&self) -> usize {
+        self.personal_size(Personal::Music)
+    }
+    pub fn music_keys_export(&self) -> Option<PlannerKeysExport> {
+        self.personal_keys_export(Personal::Music)
     }
 }

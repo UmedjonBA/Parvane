@@ -513,6 +513,40 @@ impl HostClient {
                 c.health_keys_import(&e).map_err(err)?;
                 Value::Null
             }
+            // ── Плейлисты «Музыки» (spec 039, этап C): тот же личный контейнер ──
+            "musicContainer" => c.music_container().map_or(Value::Null, |r| json!({"domain": r.domain, "id": hex::encode(&r.id)})),
+            "musicIsAttached" => json!(c.music_is_attached()),
+            "musicHasKey" => json!(c.music_has_key()),
+            "musicHeadSeq" => json!(c.music_head_seq()),
+            "musicStateJson" => parsed(c.music_state_json()),
+            // MUSIC-2: действие пользователя → изменения считает движок
+            "musicCompose" => parsed(c.music_compose_json(a.raw("action"), a.i("nowMs")?).map_err(err)?),
+            "musicCreate" => req(&c.music_create(a.i("tsMs")?).map_err(cerr)?),
+            "musicAttach" => {
+                c.music_attach(&a.b("getResponse")?, &a.b("grantsResponse")?).map_err(cerr)?;
+                Value::Null
+            }
+            "musicIngestGrants" => json!(c.music_ingest_grants(&a.b("grantsResponse")?).map_err(cerr)?),
+            "musicIngestSync" => {
+                let r = c.music_ingest_sync(&a.b("syncResponse")?).map_err(cerr)?;
+                json!({"applied": r.applied, "headSeq": r.head_seq, "more": r.more, "grantsBehind": r.grants_behind, "missingEpoch": r.missing_epoch, "needSnapshot": r.need_snapshot})
+            }
+            "musicIngestSnapshot" => json!(c.music_ingest_snapshot(&a.b("snapshotResponse")?).map_err(cerr)?),
+            "musicPrepareLocal" => {
+                let r = c.music_prepare_local(&a.text("changesJson")?).map_err(cerr)?;
+                json!({"opId": hex::encode(&r.op_id), "op": b64(&r.op), "applied": r.applied})
+            }
+            "musicApplyLocal" => json!(c.music_apply_local(&a.b("op")?).map_err(cerr)?),
+            "musicSeal" => req(&c.music_seal(&a.b("op")?, &a.hex("opIdHex")?, a.i("tsMs")?).map_err(cerr)?),
+            "musicSnapshotRequest" => c.music_snapshot_request(a.i("tsMs")?).map_err(cerr)?.map_or(Value::Null, |r| req(&r)),
+            "musicSize" => json!(c.music_size()),
+            "shareMusicWithOwnDevices" => reqs(&c.share_music_with_own_devices().map_err(cerr)?),
+            "musicKeysExport" => c.music_keys_export().and_then(|e| serde_json::to_value(&e).ok()).unwrap_or(Value::Null),
+            "musicKeysImport" => {
+                let e: crate::client::PlannerKeysExport = serde_json::from_str(&a.text("json")?).map_err(|_| malformed())?;
+                c.music_keys_import(&e).map_err(err)?;
+                Value::Null
+            }
             // Разбор свободного ввода (HEALTH-2): клиент сам не разбирает
             "healthParse" => parsed(crate::health_parse::parse_json(&a.text("text")?, a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
 

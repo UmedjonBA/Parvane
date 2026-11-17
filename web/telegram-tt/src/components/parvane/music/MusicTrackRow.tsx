@@ -23,17 +23,27 @@ type OwnProps = {
   canRemove?: boolean;
   // Приписка к исполнителю: «добавила Алия»
   note?: string;
+  // Плейлист: трека уже нет на сервере — играть нечего
+  isMissing?: boolean;
+  // Подпись крестика вместо «убрать из очереди»
+  removeLabel?: string;
+  // Плейлист: индекс последней строки — у крайних строк стрелка выключена
+  lastIndex?: number;
   // «Загруженное»: убрать трек из библиотеки сервера
   onDelete?: (track: MusicTrack) => void;
   onPlay: (index: number) => void;
   onStar?: (track: MusicTrack) => void;
   onAddNext?: (track: MusicTrack) => void;
   onRemove?: (index: number) => void;
+  onAddToPlaylist?: (track: MusicTrack) => void;
+  // Плейлист: переставить строку на место `toIndex`
+  onMove?: (index: number, toIndex: number) => void;
 };
 
 // Parvane (spec 039): строка трека — обложка, название и исполнитель, длительность; нажатие играет
 const MusicTrackRow = ({
-  track, index, isCurrent, isPlaying, canRemove, note, onPlay, onStar, onAddNext, onRemove, onDelete,
+  track, index, isCurrent, isPlaying, canRemove, note, isMissing, removeLabel, lastIndex,
+  onPlay, onStar, onAddNext, onRemove, onDelete, onAddToPlaylist, onMove,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -42,12 +52,15 @@ const MusicTrackRow = ({
   const handleAddNext = useLastCallback(() => onAddNext?.(track));
   const handleRemove = useLastCallback(() => onRemove?.(index));
   const handleDelete = useLastCallback(() => onDelete?.(track));
+  const handleAddToPlaylist = useLastCallback(() => onAddToPlaylist?.(track));
+  const handleMoveUp = useLastCallback(() => onMove?.(index, index - 1));
+  const handleMoveDown = useLastCallback(() => onMove?.(index, index + 1));
   const nowPlaying = isCurrent && isPlaying && lang('MusicNowPlaying');
   const artistLine = [track.artist, note, nowPlaying].filter(Boolean).join(' · ');
 
   return (
     <li className={buildClassName(styles.track, isCurrent && styles.trackCurrent)} data-track={track.id}>
-      <button type="button" className={styles.trackMain} onClick={handlePlay}>
+      <button type="button" className={styles.trackMain} disabled={isMissing} onClick={handlePlay}>
         <MusicCover
           coverId={track.coverId}
           toneId={track.albumId || track.id}
@@ -78,6 +91,39 @@ const MusicTrackRow = ({
           <ParvaneIcon name="plus" isSmall />
         </button>
       )}
+      {onAddToPlaylist && (
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('MusicAddToPlaylist')}
+          data-music-to-playlist
+          onClick={handleAddToPlaylist}
+        >
+          <ParvaneIcon name="list" isSmall />
+        </button>
+      )}
+      {onMove && (
+        <>
+          <button
+            type="button"
+            className={kit.ib}
+            aria-label={lang('MusicPlaylistMoveUp', { name: track.title })}
+            disabled={index === 0}
+            onClick={handleMoveUp}
+          >
+            <ParvaneIcon name="left" isSmall className={styles.turnUp} />
+          </button>
+          <button
+            type="button"
+            className={kit.ib}
+            aria-label={lang('MusicPlaylistMoveDown', { name: track.title })}
+            disabled={index === lastIndex}
+            onClick={handleMoveDown}
+          >
+            <ParvaneIcon name="left" isSmall className={styles.turnDown} />
+          </button>
+        </>
+      )}
       {onDelete && (
         <button
           type="button"
@@ -93,7 +139,7 @@ const MusicTrackRow = ({
         <button
           type="button"
           className={kit.ib}
-          aria-label={lang('MusicQueueRemove', { name: track.title })}
+          aria-label={removeLabel || lang('MusicQueueRemove', { name: track.title })}
           onClick={handleRemove}
         >
           <ParvaneIcon name="close" isSmall />

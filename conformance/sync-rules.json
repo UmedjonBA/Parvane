@@ -1955,6 +1955,20 @@
         "desktop": "открыто",
         "android": "открыто"
       }
+    },
+    {
+      "id": "MUSIC-2",
+      "title": "«Музыка»: плейлисты — личный контейнер, порядок и правки считает движок",
+      "kind": "ui",
+      "record": "контейнер домена parvane.music.v1 (proto/parvane/music/v1/playlists.proto: Playlist, PlaylistItem, MusicOp, MusicSnapshot), ссылка на него — объект личного состояния OBJECT_KIND_MUSIC_CONTAINER; движок: musicStateJson, musicCompose{action, nowMs}, musicPrepareLocal и остальные вызовы личного контейнера",
+      "behaviour": "Плейлисты одинаковы на всех устройствах пользователя; сервер видит только шифртекст. Показ (плейлисты по времени создания, треки по месту rank, при равных — по id записи, число и длительность) клиент берёт готовым из musicStateJson. Действие пользователя (создать, переименовать, удалить, добавить треки, убрать, переставить) клиент передаёт в musicCompose и записывает полученные изменения — мест, id записей и пропуск повторов сам не считает. Трек в плейлисте — отдельная запись: одновременные добавления с двух устройств не теряются. Трек, которого на сервере больше нет, остаётся строкой с подписью из плейлиста и не играет. Ключи контейнера едут новому устройству в экспорте привязки (поле music) и в копии ключей аккаунта",
+      "sample": "backend/protocol/src/domain/music_json.rs (тесты), backend/protocol/tests/client_flow.rs music_playlists_container_syncs_between_own_devices",
+      "status": "17 ноя 2026: движок — сделано; web — сделано (список, страница плейлиста, «в плейлист», перестановка стрелками); desktop и android — открыто",
+      "clients": {
+        "web": "api/parvane/v2/musicPlaylists.ts, api/parvane/musicApi.ts (parvaneMusicPlaylists, parvaneMusicPlaylistAct), components/parvane/music/MusicPlaylists.tsx, MusicPlaylistPicker.tsx, musicPlaylists.ts",
+        "desktop": "ОТКРЫТО: раздела «Музыка» нет; движок общий, контейнер домена игнорируется без ошибок (DOMAIN-1)",
+        "android": "ОТКРЫТО: раздела «Музыка» нет; движок общий, контейнер домена игнорируется без ошибок (DOMAIN-1)"
+      }
     }
   ]
 }

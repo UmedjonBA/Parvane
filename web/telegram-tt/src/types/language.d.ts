@@ -2329,6 +2329,24 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'MusicPlaylists': undefined;
+  'MusicPlaylistsAll': undefined;
+  'MusicPlaylistsEmpty': undefined;
+  'MusicPlaylistEmpty': undefined;
+  'MusicPlaylistNewPlaceholder': undefined;
+  'MusicPlaylistCreate': undefined;
+  'MusicPlaylistCreateAndAdd': undefined;
+  'MusicPlaylistName': undefined;
+  'MusicPlaylistDelete': undefined;
+  'MusicPlaylistDeleteConfirm': undefined;
+  'MusicAddToPlaylist': undefined;
+  'MusicPlaylistAdded': undefined;
+  'MusicPlaylistAlreadyThere': undefined;
+  'MusicPlaylistFailed': undefined;
+  'MusicPlaylistsNeedLinking': undefined;
+  'MusicPlaylistsNoKey': undefined;
+  'MusicPlaylistsOffline': undefined;
+  'MusicTrackMissing': undefined;
   'MusicAdded': undefined;
   'MusicAddedEmpty': undefined;
   'MusicFetchTitle': undefined;
@@ -5059,6 +5077,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneModuleMoveDown': {
     'name': V;
   };
+  'MusicPlaylistRemove': {
+    'name': V;
+  };
+  'MusicPlaylistMoveUp': {
+    'name': V;
+  };
+  'MusicPlaylistMoveDown': {
+    'name': V;
+  };
+  'MusicAddToPlaylistTitle': {
+    'name': V;
+  };
   'MusicSizeGb': {
     'value': V;
   };
@@ -6350,6 +6380,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'PollModalAddMoreText': {
+    'count': V;
+  };
+  'MusicTracksCount': {
     'count': V;
   };
   'MusicAlbumsCount': {

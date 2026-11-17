@@ -2553,3 +2553,59 @@ fn group_photo_key_rides_epoch_envelope() {
     drain(&mut srv, &mut alice);
     assert_eq!(alice.group_avatar_key(&g.id), Some(secret));
 }
+
+/// spec 039, этап C: плейлисты «Музыки» — третий личный контейнер. Действия считает движок (`music_compose_json`),
+/// второе устройство получает ключ вместе с остальными, одновременные добавления двух устройств не теряются.
+#[test]
+fn music_playlists_container_syncs_between_own_devices() {
+    let mut srv = Server::default();
+    let mut dom = MiniDomains::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    // До контейнера: пустой показ, действие «создать» считается от пустого состояния
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&alice.music_state_json()).unwrap()["playlists"], serde_json::json!([]));
+    let create = alice.music_create(1).unwrap();
+    dom.handle(&mut srv, "alice@local", "d1", &create);
+    assert!(alice.music_has_key());
+    let act = |dom: &mut MiniDomains, srv: &mut Server, c: &mut Client, action: serde_json::Value| -> serde_json::Value {
+        let out: serde_json::Value = serde_json::from_str(&c.music_compose_json(&action, 1_794_000_000_000).unwrap()).unwrap();
+        let local = c.music_prepare_local(&serde_json::json!({"changes": out["changes"]}).to_string()).unwrap();
+        let req = c.music_seal(&local.op, &local.op_id, 1).unwrap();
+        dom.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);
+        out
+    };
+    let track = |id: &str| serde_json::json!({"id": id, "title": id, "artist": "Группа", "durationSecs": 100});
+    let tracks_of = |c: &Client| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(&c.music_state_json()).unwrap();
+        v["playlists"][0]["items"].as_array().unwrap().iter().map(|i| i["trackId"].as_str().unwrap().to_string()).collect()
+    };
+    let id = act(&mut dom, &mut srv, &mut alice, serde_json::json!({"action": "create", "name": "Дорога"}))["id"].as_str().unwrap().to_string();
+    act(&mut dom, &mut srv, &mut alice, serde_json::json!({"action": "add", "playlistId": id, "tracks": [track("a"), track("b")]}));
+
+    // Второе устройство: ключ контейнера приходит с ключом доставки
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(ev.iter().any(|e| matches!(e, Event::MusicChanged { head_seq: 0, .. })), "{ev:?}");
+    alice2.music_attach(&dom.get_response(), &dom.grants_response(0)).unwrap();
+    assert_eq!(alice2.music_ingest_sync(&dom.sync_response(0)).unwrap().applied, 3);
+    assert_eq!(tracks_of(&alice2), ["a", "b"]);
+
+    // Оба устройства добавляют по треку, не видя друг друга: после синка оба трека на месте, порядок одинаков
+    act(&mut dom, &mut srv, &mut alice, serde_json::json!({"action": "add", "playlistId": id, "tracks": [track("c")]}));
+    act(&mut dom, &mut srv, &mut alice2, serde_json::json!({"action": "add", "playlistId": id, "tracks": [track("d")]}));
+    alice.music_ingest_sync(&dom.sync_response(alice.music_head_seq())).unwrap();
+    alice2.music_ingest_sync(&dom.sync_response(alice2.music_head_seq())).unwrap();
+    assert_eq!(tracks_of(&alice).len(), 4);
+    assert_eq!(tracks_of(&alice), tracks_of(&alice2));
+
+    // Персист и экспорт ключей линковки
+    let key = [7u8; 32];
+    let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert_eq!(restored.music_state_json(), alice.music_state_json());
+    assert_eq!(alice.music_keys_export().unwrap().domain, "parvane.music.v1");
+}

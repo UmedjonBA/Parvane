@@ -156,6 +156,8 @@ pub enum Event {
     PlannerChanged { seq: u64, head_seq: u64 },
     /// Контейнер «Здоровья» (spec 038): пришёл ключ либо изменилось состояние.
     HealthChanged { seq: u64, head_seq: u64 },
+    /// Плейлисты «Музыки» изменились (spec 039, этап C).
+    MusicChanged { seq: u64, head_seq: u64 },
     /// Контейнер облака (spec 016): принят ключ эпохи и применены ожидавшие
     /// операции либо контейнер ещё надо подключить (ключ ждёт).
     CloudChanged { seq: u64, id: Vec<u8> },
@@ -389,6 +391,7 @@ pub struct Client {
     planner: Option<PlannerLocal>,
     /// Контейнер «Здоровья» (spec 038) — тот же код, что у планировщика (`Personal`).
     health: Option<PlannerLocal>,
+    music: Option<PlannerLocal>,
     planner_pending_keys: Vec<ContainerKeyShare>,
     /// Ключи из экспорта линковки: (домен, id контейнера, эпоха, ключ).
     planner_trusted_keys: Vec<(String, Vec<u8>, u64, [u8; 32])>,
@@ -513,6 +516,7 @@ impl Client {
             eph: BTreeMap::new(),
             planner: None,
             health: None,
+            music: None,
             planner_pending_keys: vec![],
             planner_trusted_keys: vec![],
             planner_authors: BTreeMap::new(),
@@ -3717,6 +3721,7 @@ impl Client {
             l2_group_pref: self.l2_group_pref.iter().map(|(g, p)| (b(g), p.enabled, p.ts_ms)).collect(),
             planner: self.personal_persist(Personal::Planner),
             health: self.personal_persist(Personal::Health),
+            music: self.personal_persist(Personal::Music),
             planner_pending_keys: self.planner_pending_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
             planner_trusted_keys: self.planner_trusted_keys.iter().map(|(d, id, e, k)| (d.clone(), b(id), *e, b(k))).collect(),
             planner_authors: self.planner_authors.iter().map(|(k, d)| (b(k), d.clone())).collect(),
@@ -3911,6 +3916,9 @@ impl Client {
         if let Some(pp) = &p.health {
             c.personal_restore(Personal::Health, pp)?;
         }
+        if let Some(pp) = &p.music {
+            c.personal_restore(Personal::Music, pp)?;
+        }
         for (k, user, dev) in &p.cloud_authors {
             c.cloud_authors.insert(d32(k)?, (user.clone(), dev.clone()));
         }
@@ -4095,6 +4103,9 @@ struct Persisted {
     /// Контейнер «Здоровья» (spec 038).
     #[serde(default)]
     health: Option<PersistedPlanner>,
+    /// Контейнер плейлистов «Музыки» (spec 039, этап C).
+    #[serde(default)]
+    music: Option<PersistedPlanner>,
     #[serde(default)]
     planner_pending_keys: Vec<String>,
     #[serde(default)]

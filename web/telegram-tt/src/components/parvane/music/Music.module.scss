@@ -524,3 +524,48 @@
   font-size: 0.75rem;
   color: var(--pv-green);
 }
+
+// Плейлисты: форма нового, страница плейлиста, выбор плейлиста для трека
+.playlistForm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.playlist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.playlistName {
+  min-width: 8rem;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.75rem;
+
+  background: var(--pv-raised);
+}
+
+.pickerList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.turnUp {
+  transform: rotate(90deg);
+}
+
+.turnDown {
+  transform: rotate(-90deg);
+}

@@ -51,6 +51,7 @@ const COVERED_KIND_ONEOFS: &[&str] = &[
     "parvane.state.v2.StateOp.op",
     "parvane.core.v2.UserDeviceLogEntry.change",
     "parvane.health.v1.Change.change",
+    "parvane.music.v1.PlaylistChange.change",
 ];
 /// Схема «движка будущего» (T025): виды ≥ 1000 разрешены только здесь.
 const SAMPLE_PACKAGE: &str = "parvane.sample.v1";

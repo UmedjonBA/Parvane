@@ -52,6 +52,7 @@ export const K = {
   groupInvite: 'OBJECT_KIND_GROUP_INVITE',
   plannerContainer: 'OBJECT_KIND_PLANNER_CONTAINER',
   healthContainer: 'OBJECT_KIND_HEALTH_CONTAINER',
+  musicContainer: 'OBJECT_KIND_MUSIC_CONTAINER',
   cloudContainer: 'OBJECT_KIND_CLOUD_CONTAINER',
   unreadMark: 'OBJECT_KIND_UNREAD_MARK',
   quickReaction: 'OBJECT_KIND_QUICK_REACTION',

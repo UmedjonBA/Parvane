@@ -21,6 +21,8 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
 import MusicFetch from './MusicFetch';
+import MusicPlaylistPicker from './MusicPlaylistPicker';
+import MusicPlaylists from './MusicPlaylists';
 import MusicQueue from './MusicQueue';
 import MusicTrackRow from './MusicTrackRow';
 
@@ -29,6 +31,8 @@ import styles from './Music.module.scss';
 
 type View =
   | { kind: 'home' | 'starred' | 'artists' | 'albums' | 'added' | 'queue' }
+  // Плейлисты пользователя: список либо открытый плейлист
+  | { kind: 'playlists'; id?: string }
   | { kind: 'album'; id: string }
   | { kind: 'artist'; id: string }
   | { kind: 'search'; query: string };
@@ -100,6 +104,8 @@ const Music = () => {
   // Содержимое помнит, для какого вида оно загружено: список прежнего вида под новым заголовком не показывается
   const [loaded, setLoaded] = useState<{ view: View; content: Content }>();
   const [query, setQuery] = useState('');
+  // Трек, для которого выбирают плейлист
+  const [pickerTrack, setPickerTrack] = useState<MusicTrack>();
   const loadIdRef = useRef(0);
   const current = getCurrentTrack(player);
   const content = loaded?.view === view ? loaded.content : undefined;
@@ -121,9 +127,19 @@ const Music = () => {
   });
 
   const isEnabled = info?.isEnabled;
+  const isPlaylistsShown = isShown && view.kind === 'playlists';
   useEffect(() => {
-    if (isShown && isEnabled) void load(view);
+    if (isShown && isEnabled && view.kind !== 'playlists') void load(view);
   }, [isShown, isEnabled, view, load]);
+
+  // Пока плейлисты на экране, их контейнер сверяется с сервером часто
+  useEffect(() => {
+    if (!isPlaylistsShown) return undefined;
+    void callMusic('parvaneMusicPlaylistsSetActive', { isActive: true });
+    return () => {
+      void callMusic('parvaneMusicPlaylistsSetActive', { isActive: false });
+    };
+  }, [isPlaylistsShown]);
 
   // Поиск идёт с задержкой после набора; пустая строка возвращает главную
   useEffect(() => {
@@ -180,6 +196,8 @@ const Music = () => {
     void load(view);
   });
   const handlePlayAll = useLastCallback(() => handlePlayFrom(0));
+  const handleOpenPlaylist = useLastCallback((id?: string) => setView({ kind: 'playlists', id }));
+  const handleClosePicker = useLastCallback(() => setPickerTrack(undefined));
   const handleAddNext = useLastCallback((track: MusicTrack) => addToQueue([track], true));
 
   const handleStar = useLastCallback((track: MusicTrack) => {
@@ -208,6 +226,7 @@ const Music = () => {
             onPlay={onPlay}
             onStar={handleStar}
             onAddNext={handleAddNext}
+            onAddToPlaylist={setPickerTrack}
           />
         ))}
       </ul>
@@ -276,6 +295,16 @@ const Music = () => {
 
   function renderContent() {
     if (view.kind === 'queue') return <MusicQueue />;
+    if (view.kind === 'playlists') {
+      return (
+        <MusicPlaylists
+          playlistId={view.id}
+          currentTrackId={current?.id}
+          isPlaying={player.isPlaying}
+          onOpen={handleOpenPlaylist}
+        />
+      );
+    }
     if (!content) return <div className={kit.muted}>{lang('MusicLoading')}</div>;
     if (content.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     const { tracks, albums, artists } = content;
@@ -367,6 +396,16 @@ const Music = () => {
               <span>{lang(item.titleKey)}</span>
             </button>
           ))}
+          <button
+            type="button"
+            className={buildClassName(styles.navItem, view.kind === 'playlists' && styles.navItemOn)}
+            aria-current={view.kind === 'playlists' ? 'page' : undefined}
+            data-view="playlists"
+            onClick={handleNav}
+          >
+            <ParvaneIcon name="list" isSmall />
+            <span>{lang('MusicPlaylists')}</span>
+          </button>
           {info.isFetchEnabled && (
             <button
               type="button"
@@ -400,6 +439,7 @@ const Music = () => {
               onChange={handleQueryChange}
             />
           )}
+          {pickerTrack && <MusicPlaylistPicker key={pickerTrack.id} track={pickerTrack} onClose={handleClosePicker} />}
           {renderContent()}
         </div>
         <aside className={styles.side}>
