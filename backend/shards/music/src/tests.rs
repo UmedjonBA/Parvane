@@ -152,7 +152,7 @@ async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
     let (fake, base) = spawn_fake().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = format!("http://{}", listener.local_addr().unwrap());
-    let ctx = Arc::new(Ctx { sub: Some(Subsonic::new(&base).unwrap()), key: [9u8; 32], public_base: public.clone() });
+    let ctx = Arc::new(Ctx { sub: Some(Arc::new(Subsonic::new(&base).unwrap())), fetch: None, key: [9u8; 32], public_base: public.clone() });
     tokio::spawn(http::serve_listener(ctx.clone(), listener));
     (fake, ctx, public)
 }
@@ -247,7 +247,7 @@ async fn stream_links_carry_ranges_and_refuse_foreign_tokens() {
 
 #[tokio::test]
 async fn disabled_library_answers_unavailable() {
-    let ctx = Ctx { sub: None, key: [9u8; 32], public_base: String::new() };
+    let ctx = Ctx { sub: None, fetch: None, key: [9u8; 32], public_base: String::new() };
     let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
     assert!(!info.enabled && info.cover_base.is_empty());
     assert_eq!(call::<pb::LibrarySearchResponse>(&ctx, "alice@local", "music.library.search", pb::LibrarySearchRequest::default()).await.unwrap_err(), ErrorCode::Unavailable);
@@ -262,7 +262,7 @@ async fn real_navidrome() {
     let base = std::env::var("PARVANE_TEST_NAVIDROME_URL").expect("PARVANE_TEST_NAVIDROME_URL");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = format!("http://{}", listener.local_addr().unwrap());
-    let ctx = Arc::new(Ctx { sub: Some(Subsonic::new(&base).unwrap()), key: [9u8; 32], public_base: public.clone() });
+    let ctx = Arc::new(Ctx { sub: Some(Arc::new(Subsonic::new(&base).unwrap())), fetch: None, key: [9u8; 32], public_base: public.clone() });
     tokio::spawn(http::serve_listener(ctx.clone(), listener));
     // Служебный пользователь первым — как при старте шарда
     ctx.sub.as_ref().unwrap().call(crate::subsonic::SERVICE_USER, "ping", &[]).await.expect("ping служебным пользователем");
@@ -316,4 +316,211 @@ async fn real_navidrome() {
         eprintln!("обложка: {} {:?}", c.status(), c.headers().get("content-type"));
         assert_eq!(c.status().as_u16(), 200);
     }
+}
+
+// ── «Найти и скачать» (этап B): поддельный сервис скачивания ────────────────────────────────────────────────
+
+/// Поддельный сервис скачивания: каталог и кандидаты заданы тестом, «загрузка» пишет файл в папку библиотеки.
+#[derive(Default)]
+struct FakeFetch {
+    catalog: Mutex<Vec<serde_json::Value>>,
+    /// Источник → кандидаты; источника нет в таблице — он «отказал» (503).
+    candidates: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    asked_sources: Mutex<Vec<String>>,
+    library_dir: Mutex<std::path::PathBuf>,
+}
+
+async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Response<Full<Bytes>> {
+    use http_body_util::BodyExt as _;
+    let reply = |status: u16, body: serde_json::Value| Response::builder().status(status).header("content-type", "application/json").body(Full::new(Bytes::from(body.to_string()))).unwrap();
+    let path = req.uri().path().to_string();
+    let q: HashMap<String, String> = req.uri().query().unwrap_or("").split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    match path.as_str() {
+        "/health" => reply(200, json!({"ok": true})),
+        "/catalog" => reply(200, json!({"tracks": fake.catalog.lock().unwrap().clone()})),
+        "/candidates" => {
+            let source = q.get("source").cloned().unwrap_or_default();
+            fake.asked_sources.lock().unwrap().push(source.clone());
+            match fake.candidates.lock().unwrap().get(&source) {
+                Some(list) => reply(200, json!({"candidates": list})),
+                None => reply(503, json!({})),
+            }
+        }
+        "/download" => {
+            let body = req.into_body().collect().await.unwrap().to_bytes();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let rel = format!("{}.mp3", v["dest"].as_str().unwrap());
+            let full = fake.library_dir.lock().unwrap().join(&rel);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(&full, vec![7u8; 4000]).unwrap();
+            // «preview» в id — источник отдал отрывок
+            let duration = if v["id"].as_str().unwrap_or("").contains("preview") { 30 } else { 215 };
+            reply(200, json!({"path": rel, "bytes": 4000, "duration": duration}))
+        }
+        _ => reply(404, json!({})),
+    }
+}
+
+/// Шард с поддельными музыкальным сервером и сервисом скачивания; лимит — `per_day` треков в сутки.
+async fn setup_fetch(per_day: u32, quota: u64) -> (Arc<FakeFetch>, Arc<Ctx>, std::path::PathBuf) {
+    let (_, base) = spawn_fake().await;
+    let fake = Arc::new(FakeFetch::default());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let f = fake.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { continue };
+            let f = f.clone();
+            tokio::spawn(async move {
+                let svc = hyper::service::service_fn(move |req| {
+                    let f = f.clone();
+                    async move { Ok::<_, Infallible>(fake_fetch_serve(f, req).await) }
+                });
+                let _ = hyper::server::conn::http1::Builder::new().serve_connection(hyper_util::rt::TokioIo::new(stream), svc).await;
+            });
+        }
+    });
+    let mut salt = [0u8; 6];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+    let dir = std::env::temp_dir().join(format!("parvane-music-test-{}", salt.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+    std::fs::create_dir_all(dir.join("library")).unwrap();
+    *fake.library_dir.lock().unwrap() = dir.join("library");
+    let pool = crate::fetch::store::open(dir.join("music.db").to_str().unwrap()).await.unwrap();
+    let service = crate::fetch::service::FetchService::new(&url).unwrap();
+    let fetch = crate::fetch::jobs::Fetch::new(service, pool, Default::default(), dir.join("library"), per_day, quota, vec!["admin@local".into()]);
+    let ctx = Arc::new(Ctx { sub: Some(Arc::new(Subsonic::new(&base).unwrap())), fetch: Some(Arc::new(fetch)), key: [9u8; 32], public_base: String::new() });
+    (fake, ctx, dir)
+}
+
+fn catalog_track(title: &str) -> pb::CatalogTrack {
+    pb::CatalogTrack { artist: "Группа".into(), title: title.into(), duration_secs: 215, ..Default::default() }
+}
+
+fn found(id: &str, title: &str, duration: u32) -> serde_json::Value {
+    json!({"id": id, "title": title, "uploader": "Группа", "duration": duration, "uploaded": "2025-01-10", "bitrate": 128})
+}
+
+/// Дождаться конца задачи пользователя (не «ищем» и не «качаем»).
+async fn settled(ctx: &Ctx, user: &str, job_id: &str) -> pb::FetchJob {
+    for _ in 0..200 {
+        let jobs = call::<pb::FetchStatusResponse>(ctx, user, "music.fetch.status", pb::FetchStatusRequest {}).await.unwrap().jobs;
+        let job = jobs.into_iter().find(|j| j.job_id == job_id).expect("задача в списке");
+        if !matches!(pb::FetchState::try_from(job.state), Ok(pb::FetchState::Searching | pb::FetchState::Downloading)) {
+            return job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("задача не закончилась");
+}
+
+async fn start(ctx: &Ctx, user: &str, title: &str) -> Result<pb::FetchJob, ErrorCode> {
+    call::<pb::FetchStartResponse>(ctx, user, "music.fetch.start", pb::FetchStartRequest { track: Some(catalog_track(title)), ..Default::default() }).await.map(|r| r.job.unwrap())
+}
+
+#[tokio::test]
+async fn fetch_catalog_marks_tracks_already_in_library() {
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    *fake.catalog.lock().unwrap() = vec![
+        json!({"artist": "Группа", "title": "Песня t1", "album": "Альбом", "duration": 215, "explicit": true, "year": 2020}),
+        json!({"artist": "Группа", "title": "Совсем другая", "duration": 200, "explicit": null}),
+        json!({"artist": "", "title": "без исполнителя"}),
+    ];
+    let r: pb::FetchCatalogResponse = call(&ctx, "alice@local", "music.fetch.catalog", pb::FetchCatalogRequest { query: "песня".into(), limit: 0 }).await.unwrap();
+    assert_eq!(r.tracks.len(), 2, "эталон без исполнителя отброшен");
+    assert_eq!(r.tracks[0].library_track_id, "t1");
+    assert_eq!(r.tracks[0].explicit, pb::Explicit::Yes as i32);
+    assert_eq!(r.tracks[1].library_track_id, "");
+    assert_eq!(r.tracks[1].explicit, pb::Explicit::Unspecified as i32);
+    let empty = call::<pb::FetchCatalogResponse>(&ctx, "alice@local", "music.fetch.catalog", pb::FetchCatalogRequest { query: " ".into(), limit: 0 }).await;
+    assert_eq!(empty.unwrap_err(), ErrorCode::Invalid);
+    let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
+    assert!(info.fetch_enabled && info.add_per_day == 30 && info.added_today == 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn fetch_takes_confident_match_and_tracks_who_added_it() {
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    // Кавер отброшен сверкой, точное совпадение берётся само
+    fake.candidates.lock().unwrap().insert("soundcloud".into(), vec![found("cover", "Группа - Песня t2 (cover)", 215), found("exact", "Группа - Песня t2", 215)]);
+    let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
+    assert_eq!(job.state, pb::FetchState::Searching as i32);
+    let done = settled(&ctx, "alice@local", &job.job_id).await;
+    assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
+    assert_eq!(done.track_id, "t2");
+    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud"], "русский трек: сначала SoundCloud; уверенное совпадение заканчивает поиск");
+    let mine: pb::AddedListResponse = call(&ctx, "alice@local", "music.added.list", pb::AddedListRequest { mine: true, ..Default::default() }).await.unwrap();
+    assert_eq!(mine.tracks.len(), 1);
+    assert_eq!((mine.tracks[0].adder.as_str(), mine.tracks[0].bytes, mine.tracks[0].track.as_ref().unwrap().id.as_str()), ("alice", 4000, "t2"));
+    // «Новое на сервере» видно всем, с тем, кто добавил
+    let all: pb::AddedListResponse = call(&ctx, "bob@local", "music.added.list", pb::AddedListRequest::default()).await.unwrap();
+    assert_eq!(all.tracks[0].adder, "alice");
+    let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
+    assert_eq!((info.added_today, info.used_bytes), (1, 4000));
+    let files = |user: &str| std::fs::read_dir(dir.join("library").join(nd_user(user))).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(files("alice@local"), 1);
+    // Чужой удалить не может, добавивший — может; файл стирается
+    let del = |user: &'static str| call::<pb::AddedDeleteResponse>(&ctx, user, "music.added.delete", pb::AddedDeleteRequest { track_id: "t2".into() });
+    assert_eq!(del("bob@local").await.unwrap_err(), ErrorCode::Forbidden);
+    del("alice@local").await.unwrap();
+    assert_eq!(files("alice@local"), 0);
+    assert_eq!(del("alice@local").await.unwrap_err(), ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn fetch_asks_to_choose_reports_nothing_found_and_admin_can_delete() {
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    {
+        let mut c = fake.candidates.lock().unwrap();
+        c.insert("youtube".into(), vec![found("live", "Группа - Песня t3 (live)", 215)]);
+        c.insert("soundcloud".into(), vec![]);
+    }
+    // Только другая версия: уверенности нет — список на выбор
+    let job = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t3").await.unwrap().job_id).await;
+    assert_eq!(job.state, pb::FetchState::NeedsChoice as i32, "{job:?}");
+    assert_eq!(job.candidates.len(), 1);
+    assert_eq!((job.candidates[0].id.as_str(), job.candidates[0].source.as_str(), job.candidates[0].uploaded.as_str()), ("live", "youtube", "2025-01-10"));
+    assert!(job.candidates[0].score < 900);
+    let pick = |candidate: &str| pb::FetchStartRequest { job_id: job.job_id.clone(), candidate_id: candidate.into(), ..Default::default() };
+    assert_eq!(call::<pb::FetchStartResponse>(&ctx, "alice@local", "music.fetch.start", pick("чужой")).await.unwrap_err(), ErrorCode::NotFound);
+    assert_eq!(call::<pb::FetchStartResponse>(&ctx, "bob@local", "music.fetch.start", pick("live")).await.unwrap_err(), ErrorCode::NotFound, "чужая задача");
+    call::<pb::FetchStartResponse>(&ctx, "alice@local", "music.fetch.start", pick("live")).await.unwrap();
+    assert_eq!(settled(&ctx, "alice@local", &job.job_id).await.state, pb::FetchState::Done as i32);
+    // Администратор удаляет чужое добавление
+    call::<pb::AddedDeleteResponse>(&ctx, "admin@local", "music.added.delete", pb::AddedDeleteRequest { track_id: "t3".into() }).await.unwrap();
+    // Ничего подходящего: чужой исполнитель
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("other", "Другие - Песня t1", 215)]);
+    let none = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t1").await.unwrap().job_id).await;
+    assert_eq!((none.state, none.failure), (pb::FetchState::Failed as i32, pb::FetchFailure::NotFound as i32));
+    // Источник отдал отрывок вместо трека: файл убран, задача не удалась
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("preview-1", "Группа - Песня t1", 215)]);
+    let short = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t1").await.unwrap().job_id).await;
+    assert_eq!((short.state, short.failure), (pb::FetchState::Failed as i32, pb::FetchFailure::Source as i32));
+    assert_eq!(std::fs::read_dir(dir.join("library").join(nd_user("alice@local"))).unwrap().count(), 0, "отрывок и удалённый трек не остались на диске");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn fetch_enforces_daily_limit_and_quota() {
+    let (fake, ctx, dir) = setup_fetch(1, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("a", "Группа - Песня t1", 215), found("b", "Группа - Песня t2", 215)]);
+    let first = start(&ctx, "alice@local", "Песня t1").await.unwrap();
+    // Идущая задача уже расходует суточный лимит
+    assert_eq!(start(&ctx, "alice@local", "Песня t2").await.unwrap_err(), ErrorCode::Limit);
+    assert_eq!(settled(&ctx, "alice@local", &first.job_id).await.state, pb::FetchState::Done as i32);
+    assert_eq!(start(&ctx, "alice@local", "Песня t2").await.unwrap_err(), ErrorCode::Limit);
+    // У другого пользователя свой лимит
+    assert!(start(&ctx, "bob@local", "Песня t2").await.is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+    // Место: файл не помещается — убирается, задача не удалась
+    let (fake, ctx, dir) = setup_fetch(30, 1000).await;
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("a", "Группа - Песня t1", 215)]);
+    let job = settled(&ctx, "alice@local", &start(&ctx, "alice@local", "Песня t1").await.unwrap().job_id).await;
+    assert_eq!((job.state, job.failure), (pb::FetchState::Failed as i32, pb::FetchFailure::Limit as i32));
+    // Без сервиса скачивания методы отвечают UNAVAILABLE
+    let (_, plain, _) = setup().await;
+    assert_eq!(start(&plain, "alice@local", "Песня t1").await.unwrap_err(), ErrorCode::Unavailable);
+    let _ = std::fs::remove_dir_all(dir);
 }

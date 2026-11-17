@@ -187,6 +187,7 @@ services:
     command: ["/usr/local/bin/music"]
     volumes:
       - db-music:/data
+      - ${PARVANE_MUSIC_DIR:-music-library}:/music
     environment:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: music
@@ -196,7 +197,35 @@ services:
       PARVANE_MUSIC_HTTP_BIND: 0.0.0.0:9340
       # Ключ подписи ссылок потока и обложек (создаётся при первом старте, 0600)
       PARVANE_MUSIC_URL_KEY_FILE: /data/music-url.key
+      # «Найти и скачать» (этап B): включается адресом сервиса скачивания (профиль music-fetch). Шарду нужна
+      # та же папка библиотеки: по ней он стирает удалённые треки
+      PARVANE_DB_PATH: /data/music.db
+      PARVANE_MUSIC_FETCH_URL: ${PARVANE_MUSIC_FETCH_URL:-}
+      PARVANE_MUSIC_LIBRARY_DIR: /music
+      PARVANE_MUSIC_ADD_PER_DAY: ${PARVANE_MUSIC_ADD_PER_DAY:-30}
+      PARVANE_MUSIC_QUOTA_BYTES: ${PARVANE_MUSIC_QUOTA_BYTES:-5368709120}
+      PARVANE_MUSIC_ADMINS: ${PARVANE_MUSIC_ADMINS:-}
+      PARVANE_MUSIC_ORIGINAL_BEFORE: ${PARVANE_MUSIC_ORIGINAL_BEFORE:-}
+      PARVANE_MUSIC_SOUNDCLOUD_BEFORE: ${PARVANE_MUSIC_SOUNDCLOUD_BEFORE:-}
+      PARVANE_MUSIC_SOURCES_RU: ${PARVANE_MUSIC_SOURCES_RU:-}
+      PARVANE_MUSIC_SOURCES: ${PARVANE_MUSIC_SOURCES:-}
       PARVANE_LOG_LEVEL: info
+
+  # Сервис скачивания для «Найти и скачать»: необязательный, выключен по умолчанию. Включается профилем
+  # `music-fetch` и переменной PARVANE_MUSIC_FETCH_URL=http://music-fetch:9350. Источники — на ответственности
+  # администратора сервера (backend/infra/music-fetch/README.md). Наружу не опубликован
+  music-fetch:
+    build: ../music-fetch
+    profiles: ["music-fetch"]
+    restart: unless-stopped
+    cap_drop: ["ALL"]
+    mem_limit: 512m
+    pids_limit: 256
+    volumes:
+      - ${PARVANE_MUSIC_DIR:-music-library}:/music
+    environment:
+      MUSIC_FETCH_LIBRARY_DIR: /music
+      MUSIC_FETCH_PROXY: ${PARVANE_MUSIC_FETCH_PROXY:-}
 
   # Музыкальный сервер: наружу не опубликован, пользователя называет только шард music (заголовок Remote-User
   # от доверенной сети compose). Внешние обращения выключены: ни Last.fm, ни Spotify, ни телеметрии.

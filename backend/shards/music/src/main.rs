@@ -6,6 +6,7 @@
 //! `PARVANE_MUSIC_PUBLIC_BASE` (внешний адрес сервера для ссылок), `PARVANE_MUSIC_HTTP_BIND` (по умолчанию
 //! `0.0.0.0:9340`), `PARVANE_MUSIC_URL_KEY_FILE` (ключ подписи ссылок, создаётся при первом старте).
 
+mod fetch;
 mod http;
 mod subsonic;
 mod token;
@@ -21,7 +22,9 @@ use tracing::{error, info, warn};
 
 pub(crate) struct Ctx {
     /// Музыкальный сервер; `None` — библиотека выключена.
-    pub sub: Option<subsonic::Subsonic>,
+    pub sub: Option<Arc<subsonic::Subsonic>>,
+    /// «Найти и скачать» (этап B); `None` — сервис скачивания не подключён.
+    pub fetch: Option<Arc<fetch::jobs::Fetch>>,
     pub key: [u8; 32],
     /// Внешний адрес сервера без завершающей косой (`https://example.org:20443`).
     pub public_base: String,
@@ -54,6 +57,57 @@ fn load_url_key(path: &str) -> Result<[u8; 32]> {
     Ok(key)
 }
 
+fn env_days(name: &str) -> Option<i64> {
+    let text = env_nonempty(name)?;
+    let day = fetch::service::parse_day(&text);
+    if day.is_none() {
+        warn!("{name}: ожидалась дата ГГГГ-ММ-ДД — значение пропущено");
+    }
+    day
+}
+
+fn env_list(name: &str) -> Option<Vec<String>> {
+    env_nonempty(name).map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+}
+
+/// «Найти и скачать»: включается адресом сервиса скачивания. Правила сверки — значения по умолчанию из
+/// `matching::Rules`, даты и порядок источников переопределяются окружением.
+async fn open_fetch() -> Result<Option<Arc<fetch::jobs::Fetch>>> {
+    let Some(url) = env_nonempty("PARVANE_MUSIC_FETCH_URL") else {
+        info!("PARVANE_MUSIC_FETCH_URL не задан — «Найти и скачать» выключено");
+        return Ok(None);
+    };
+    let Some(library_dir) = env_nonempty("PARVANE_MUSIC_LIBRARY_DIR") else {
+        error!("PARVANE_MUSIC_LIBRARY_DIR не задан — «Найти и скачать» выключено: шарду нужна папка библиотеки");
+        return Ok(None);
+    };
+    let service = fetch::service::FetchService::new(&url).context("клиент сервиса скачивания")?;
+    if !service.health().await {
+        warn!("сервис скачивания пока не отвечает — запросы будут получать UNAVAILABLE до его готовности");
+    }
+    let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./music.db".to_string());
+    let pool = fetch::store::open(&db_path).await.context("база шарда music")?;
+    let mut rules = fetch::matching::Rules::default();
+    if let Some(day) = env_days("PARVANE_MUSIC_ORIGINAL_BEFORE") {
+        rules.original_before_day = day;
+    }
+    if let Some(day) = env_days("PARVANE_MUSIC_SOUNDCLOUD_BEFORE") {
+        rules.uploaded_before_day.insert("soundcloud".to_string(), day);
+    }
+    if let Some(order) = env_list("PARVANE_MUSIC_SOURCES_RU") {
+        rules.sources_ru = order;
+    }
+    if let Some(order) = env_list("PARVANE_MUSIC_SOURCES") {
+        rules.sources_default = order;
+    }
+    let env_num = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default);
+    let add_per_day = env_num("PARVANE_MUSIC_ADD_PER_DAY", 30).min(u64::from(u32::MAX)) as u32;
+    let quota_bytes = env_num("PARVANE_MUSIC_QUOTA_BYTES", 5 * 1024 * 1024 * 1024);
+    let admins = env_list("PARVANE_MUSIC_ADMINS").unwrap_or_default();
+    info!("«Найти и скачать» включено: {add_per_day} треков в сутки, {quota_bytes} байт на человека");
+    Ok(Some(Arc::new(fetch::jobs::Fetch::new(service, pool, rules, library_dir.into(), add_per_day, quota_bytes, admins))))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     parvane_v2rt::exit_if_engine_info();
@@ -67,7 +121,7 @@ async fn main() -> Result<()> {
     let key = load_url_key(&std::env::var("PARVANE_MUSIC_URL_KEY_FILE").unwrap_or_else(|_| "./music-url.key".to_string()))?;
     let public_base = env_nonempty("PARVANE_MUSIC_PUBLIC_BASE").unwrap_or_default().trim_end_matches('/').to_string();
     let sub = match env_nonempty("PARVANE_MUSIC_NAVIDROME_URL") {
-        Some(url) => Some(subsonic::Subsonic::new(&url).context("клиент музыкального сервера")?),
+        Some(url) => Some(Arc::new(subsonic::Subsonic::new(&url).context("клиент музыкального сервера")?)),
         None => {
             warn!("PARVANE_MUSIC_NAVIDROME_URL не задан — библиотека выключена, методы music.* отвечают UNAVAILABLE");
             None
@@ -76,7 +130,8 @@ async fn main() -> Result<()> {
     if sub.is_some() && public_base.is_empty() {
         error!("PARVANE_MUSIC_PUBLIC_BASE не задан — ссылки на поток будут относительными и вне браузера не откроются");
     }
-    let ctx = Arc::new(Ctx { sub, key, public_base });
+    let fetch = if sub.is_some() { open_fetch().await? } else { None };
+    let ctx = Arc::new(Ctx { sub, fetch, key, public_base });
 
     // Свежий музыкальный сервер делает администратором первого пришедшего — пусть это будет служебный пользователь
     if let Some(s) = &ctx.sub {

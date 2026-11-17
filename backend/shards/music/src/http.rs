@@ -61,7 +61,7 @@ async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return plain(StatusCode::METHOD_NOT_ALLOWED);
     }
-    let Some(sub) = ctx.sub.as_ref() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
+    let Some(sub) = ctx.sub.as_deref() else { return plain(StatusCode::SERVICE_UNAVAILABLE) };
     let path = req.uri().path();
     let range = req.headers().get(hyper::header::RANGE).and_then(|v| v.to_str().ok()).filter(|r| r.len() <= 128);
     let (endpoint, user, params, cache): (&str, String, Vec<(&str, String)>, &str) = if let Some(tok) = path.strip_prefix("/_parvane/music/s/") {

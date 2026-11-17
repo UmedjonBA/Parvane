@@ -40,9 +40,22 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
     }
     let user = nd_user(&req.user);
     if method == "music.info" {
-        return info_reply(ctx, &user);
+        return info_reply(ctx, &req.user, &user).await;
     }
-    let sub = ctx.sub.as_ref().ok_or(ErrorCode::Unavailable)?;
+    let sub_shared = ctx.sub.as_ref().ok_or(ErrorCode::Unavailable)?;
+    let sub: &Subsonic = sub_shared;
+    // Этап B: «Найти и скачать» — только с подключённым сервисом скачивания
+    if method.starts_with("music.fetch.") || method.starts_with("music.added.") {
+        let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
+        return match method {
+            "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
+            "music.fetch.start" => fetch.start(sub_shared.clone(), &req.user, body(&req)?).await,
+            "music.fetch.status" => fetch.status(&req.user),
+            "music.added.list" => fetch.added_list(sub, &req.user, body(&req)?).await,
+            "music.added.delete" => fetch.added_delete(sub, &req.user, body(&req)?).await,
+            _ => Err(ErrorCode::Unavailable),
+        };
+    }
     match method {
         "music.library.search" => search(sub, &user, body(&req)?).await,
         "music.library.recent" => recent(sub, &user, body(&req)?).await,
@@ -60,7 +73,7 @@ fn page(limit: u32) -> u32 {
     if limit == 0 { PAGE_DEFAULT } else { limit.min(PAGE_MAX) }
 }
 
-fn info_reply(ctx: &Ctx, user: &str) -> Reply {
+async fn info_reply(ctx: &Ctx, address: &str, user: &str) -> Reply {
     let exp = now_ms() + token::COVER_TTL_MS;
     let cover_base = match &ctx.sub {
         Some(_) => token::sign(&ctx.key, &Claims { user: user.to_string(), exp_ms: exp, grant: Grant::Covers })
@@ -68,8 +81,17 @@ fn info_reply(ctx: &Ctx, user: &str) -> Reply {
             .ok_or(ErrorCode::Unavailable)?,
         None => String::new(),
     };
-    // Добавление треков — этап B: лимиты нулевые («выключено»)
-    Ok(pb::InfoResponse { enabled: ctx.sub.is_some(), cover_expires_ms: if cover_base.is_empty() { 0 } else { exp }, cover_base, ..Default::default() }.encode_to_vec())
+    // Добавление треков (этап B): без сервиса скачивания лимиты нулевые («выключено»)
+    let mut info = pb::InfoResponse { enabled: ctx.sub.is_some(), cover_expires_ms: if cover_base.is_empty() { 0 } else { exp }, cover_base, ..Default::default() };
+    if let Some(fetch) = &ctx.fetch {
+        let (today, used) = fetch.usage(address).await;
+        info.fetch_enabled = true;
+        info.add_per_day = fetch.add_per_day;
+        info.quota_bytes = fetch.quota_bytes;
+        info.added_today = today;
+        info.used_bytes = used;
+    }
+    Ok(info.encode_to_vec())
 }
 
 async fn search(sub: &Subsonic, user: &str, r: pb::LibrarySearchRequest) -> Reply {

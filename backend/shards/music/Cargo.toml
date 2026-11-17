@@ -11,6 +11,8 @@ path = "src/main.rs"
 parvane-types = { path = "../../shared/parvane-types" }
 parvane-protocol = { path = "../../protocol" }
 parvane-v2rt = { path = "../../shared/parvane-v2rt" }
+parvane-db = { path = "../../shared/parvane-db" }
+sqlx = { workspace = true }
 prost = "0.14"
 tokio = { workspace = true }
 async-nats = { workspace = true }
@@ -25,7 +27,7 @@ base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 rand = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
