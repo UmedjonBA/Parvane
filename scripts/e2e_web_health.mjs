@@ -52,6 +52,9 @@ try {
   await health.locator('[data-health-status="ready"]').or(page.locator('#ParvaneHealth[data-health-status="ready"]'))
     .first().waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
   await health.locator('[data-health-first]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Блок «Вода» включается прямо с первого экрана — плитка появляется сразу
+  await health.locator('[data-health-first] [data-block="water"]').click();
+  await card(health, 'water').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await health.locator('[data-health-first]').getByRole('button', { name: '72 kg' }).click();
   await page.waitForFunction(() => document.querySelector('[data-health-quick] input')?.value === '72 kg', undefined, { timeout: STEP_TIMEOUT_MS });
   const preview = health.locator('[data-health-preview]');
@@ -64,6 +67,13 @@ try {
   await health.locator('[data-health-first]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await page.waitForFunction(() => document.querySelector('[data-health-quick] input')?.value === '', undefined, { timeout: STEP_TIMEOUT_MS });
   console.log('OK: запись сохранена, плитка веса показывает значение');
+
+  // ── Вода: прибавки кнопками складываются за день ─────────────────────────
+  await card(health, 'water').locator('[data-health-action="glass"]').click();
+  await expectValue(health, 'water', '250');
+  await card(health, 'water').locator('[data-health-action="bottle"]').click();
+  await expectValue(health, 'water', '750');
+  console.log('OK: вода — стакан и бутылка сложены за день');
 
   // ── Непонятое остаётся в поле, понятое записывается ───────────────────────
   await quickInput(health).fill('давление 125 на 82 абракадабра');
@@ -113,9 +123,56 @@ try {
   await health.getByRole('button', { name: 'Back' }).click();
   console.log('OK: цель веса и цель режима сна считаются движком');
 
-  // ── Удаление записи: сумма шагов пересчитана ──────────────────────────────
+  // ── Правка записи: значение вне диапазона не принимается, верное — сохраняется ─
   const entries = health.locator('[data-health-entries]');
-  await entries.locator('[data-kind="steps"]').filter({ hasText: '5,400' }).getByRole('button').click();
+  await entries.locator('[data-kind="pulse"] [data-health-entry-edit]').click();
+  const sheet = page.locator('[data-health-sheet="pulse"]');
+  await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const valueField = sheet.locator('[data-health-field="value"]');
+  await page.waitForFunction(() => document.querySelector('[data-health-field="value"]')?.value === '64', undefined, { timeout: STEP_TIMEOUT_MS });
+  await valueField.fill('900');
+  await page.locator('[data-health-save]').click();
+  await page.locator('[data-health-problem="value"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await valueField.fill('66');
+  await sheet.locator('[data-health-field="note"]').fill('после прогулки');
+  await page.locator('[data-health-save]').click();
+  await sheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await expectValue(health, 'pulse', '66');
+  await entries.locator('[data-kind="pulse"]').getByText('после прогулки').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: запись правится в окне, значение вне диапазона отклонено');
+
+  // ── Самочувствие шкалой из пяти точек ─────────────────────────────────────
+  await card(health, 'mood').click();
+  const scale = health.locator('[data-health-mood-scale]');
+  await scale.locator('[data-score="4"]').click();
+  await scale.locator('[data-health-mood-save]').click();
+  await health.locator('[data-health-detail="mood"] [data-health-entries] [data-kind="mood"]')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.getByRole('button', { name: 'Back' }).click();
+  await card(health, 'mood').getByText('4 of 5').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: самочувствие записано шкалой');
+
+  // ── Дневной сон формой: позавчера, час — в неделе сна у этого дня 1:00 ────
+  const napDay = await page.evaluate(() => {
+    const date = new Date(Date.now() - 2 * 86400000);
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  });
+  await card(health, 'sleep').getByRole('button', { name: 'Open sleep' }).click();
+  await health.locator('[data-health-action="nap"]').click();
+  const napSheet = page.locator('[data-health-sheet="sleep"]');
+  await napSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await napSheet.locator('[data-health-field="day"]').fill(napDay);
+  await napSheet.locator('[data-health-span]').filter({ hasText: '1 h 0 min' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('[data-health-save]').click();
+  await napSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await health.locator(`[data-health-card="sleep"] [data-day="${napDay}"]`).filter({ hasText: '1:00' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.getByRole('button', { name: 'Back' }).click();
+  console.log('OK: дневной сон добавлен формой');
+
+  // ── Удаление записи: сумма шагов пересчитана ──────────────────────────────
+  await entries.locator('[data-kind="steps"]').filter({ hasText: '5,400' }).getByRole('button', { name: /^Delete entry/ }).click();
   await expectValue(health, 'steps', '3,000');
   console.log('OK: запись удалена, сумма дня пересчитана');
 

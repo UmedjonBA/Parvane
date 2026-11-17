@@ -1,7 +1,8 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
-import type { HealthParseResult } from './healthTypes';
+import type { HealthSheetTarget } from './HealthEntrySheet';
+import type { HealthDraft, HealthEntry } from './healthTypes';
 import { LeftColumnContent, SettingsScreens } from '../../../types';
 
 import buildClassName from '../../../util/buildClassName';
@@ -9,7 +10,9 @@ import {
   consumeHealthAddRequest, getHealthAddRequest, getIsParvaneScreenShown, getParvaneSection, setParvaneSection,
 } from '../../../util/parvaneSection';
 import { formatDate } from '../planner/plannerFormat';
-import { BLOCK_KINDS, MOOD_KIND, orderMetrics } from './healthFormat';
+import {
+  BLOCK_KINDS, MOOD_KIND, orderMetrics, WATER_KIND,
+} from './healthFormat';
 import {
   addHealthEntries, getHealthState, watchHealth,
 } from './healthStore';
@@ -22,17 +25,18 @@ import useParvaneModules from '../../../hooks/useParvaneModules';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import HealthDetail from './HealthDetail';
 import HealthEntries from './HealthEntries';
+import HealthEntrySheet from './HealthEntrySheet';
+import HealthFirst from './HealthFirst';
 import HealthMetricCard from './HealthMetricCard';
 import HealthQuickInput from './HealthQuickInput';
 import HealthSleepCard from './HealthSleepCard';
+import HealthWaterCard from './HealthWaterCard';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
 
-const EXAMPLE_KEYS = [
-  'HealthExampleWeight', 'HealthExampleSleep', 'HealthExamplePressure', 'HealthExamplePulse', 'HealthExampleSteps',
-  'HealthExampleMood',
-] as const;
+// Первое открытие закрыто кнопкой «Готово» — на этом устройстве
+const FIRST_DONE_KEY = 'parvane:health-first-done';
 const RECENT_ON_SUMMARY = 8;
 const DATE_FORMAT = { weekday: 'long', day: 'numeric', month: 'long' } as const;
 const STATUS_KEYS = {
@@ -55,6 +59,8 @@ const Health = () => {
   const { prefs } = useParvaneModules();
   const [detailKind, setDetailKind] = useState<string>();
   const [example, setExample] = useState<{ text?: string }>();
+  const [sheetTarget, setSheetTarget] = useState<HealthSheetTarget>();
+  const [isFirstDone, setIsFirstDone] = useState(readIsFirstDone);
 
   const isShown = section === 'health';
   useEffect(() => {
@@ -67,14 +73,15 @@ const Health = () => {
     .filter(([block]) => !blocks.includes(block as typeof blocks[number]))
     .flatMap(([, kinds]) => kinds);
   const metrics = orderMetrics(view?.metrics || []).filter((metric) => (
-    metric.kind !== MOOD_KIND && !hiddenKinds.includes(metric.kind)
+    metric.kind !== MOOD_KIND && metric.kind !== WATER_KIND && !hiddenKinds.includes(metric.kind)
   ));
+  const water = view?.metrics.find((metric) => metric.kind === WATER_KIND);
   const mood = view?.metrics.find((metric) => metric.kind === MOOD_KIND);
   const isEmpty = Boolean(view) && !view.recent.length && !view.metrics.length;
 
   const addMark = useLastCallback((kind: 'sleep_start' | 'sleep_end') => {
     const now = Date.now();
-    const entry: HealthParseResult['entries'][number] = {
+    const entry: HealthDraft = {
       kind,
       atMs: now,
       endMs: 0,
@@ -83,8 +90,6 @@ const Health = () => {
       value2: 0,
       unit: '',
       source: 'button',
-      day: '',
-      time: '',
     };
     void addHealthEntries([entry]);
   });
@@ -101,9 +106,20 @@ const Health = () => {
     openSettingsScreen({ screen: SettingsScreens.ParvaneModules });
   });
 
-  const handleExample = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setExample({ text: e.currentTarget.textContent || '' });
+  const handleExample = useLastCallback((text: string) => setExample({ text }));
+
+  const handleFirstDone = useLastCallback(() => {
+    setIsFirstDone(true);
+    try {
+      localStorage.setItem(FIRST_DONE_KEY, '1');
+    } catch {
+      // Подсказка вернётся после перезагрузки
+    }
   });
+
+  const handleEdit = useLastCallback((entry: HealthEntry) => setSheetTarget({ entry }));
+  const handleNap = useLastCallback(() => setSheetTarget({ napDay: view!.today }));
+  const handleSheetClose = useLastCallback(() => setSheetTarget(undefined));
 
   const handleRequestHandled = useLastCallback(() => {
     if (request) consumeHealthAddRequest();
@@ -123,16 +139,8 @@ const Health = () => {
     }
     return (
       <>
-        {isEmpty && (
-          <section className={buildClassName(kit.card, styles.card)} data-health-first>
-            <div>{lang('HealthFirstText')}</div>
-            <div className={kit.caps}>{lang('HealthFirstTry')}</div>
-            <div className={styles.examples}>
-              {EXAMPLE_KEYS.map((key) => (
-                <button key={key} type="button" className={kit.chip} onClick={handleExample}>{lang(key)}</button>
-              ))}
-            </div>
-          </section>
+        {isEmpty && !isFirstDone && (
+          <HealthFirst blocks={blocks} onExample={handleExample} onDone={handleFirstDone} />
         )}
         <div className={styles.grid}>
           {blocks.includes('sleep') && (
@@ -153,22 +161,29 @@ const Health = () => {
                 ))}
                 {!metrics.length && <div className={kit.muted}>{lang('HealthBodyEmpty')}</div>}
               </div>
-              {mood?.last && (
-                <button
-                  type="button"
-                  className={buildClassName(kit.card, styles.mood)}
-                  data-health-card="mood"
-                  onClick={handleOpenMood}
-                >
-                  <span className={kit.grow}>{lang('HealthKindMood')}</span>
-                  <span className={kit.mono}>{lang('HealthMoodScore', { value: Math.round(mood.last.value) })}</span>
-                </button>
-              )}
+              <button
+                type="button"
+                className={buildClassName(kit.card, styles.mood)}
+                data-health-card="mood"
+                onClick={handleOpenMood}
+              >
+                <span className={kit.grow}>{lang('HealthKindMood')}</span>
+                <span className={mood?.last ? kit.mono : kit.muted}>
+                  {mood?.last
+                    ? lang('HealthMoodScore', { value: Math.round(mood.last.value) }) : lang('HealthMoodAsk')}
+                </span>
+              </button>
             </div>
           )}
+          {blocks.includes('water') && <HealthWaterCard metric={water} onOpen={setDetailKind} />}
         </div>
         <div className={kit.caps}>{lang('HealthRecentTitle')}</div>
-        <HealthEntries entries={view.recent.slice(0, RECENT_ON_SUMMARY)} today={view.today} withKind />
+        <HealthEntries
+          entries={view.recent.slice(0, RECENT_ON_SUMMARY)}
+          today={view.today}
+          withKind
+          onEdit={handleEdit}
+        />
       </>
     );
   }
@@ -199,11 +214,29 @@ const Health = () => {
       )}
       <div className={buildClassName(styles.body, 'custom-scroll')}>
         {detailKind && view
-          ? <HealthDetail view={view} kind={detailKind} onBed={handleBed} onWake={handleWake} />
+          ? (
+            <HealthDetail
+              view={view}
+              kind={detailKind}
+              onBed={handleBed}
+              onWake={handleWake}
+              onEdit={handleEdit}
+              onNap={handleNap}
+            />
+          )
           : renderSummary()}
       </div>
+      {view && <HealthEntrySheet target={sheetTarget} today={view.today} onClose={handleSheetClose} />}
     </div>
   );
 };
+
+function readIsFirstDone() {
+  try {
+    return Boolean(localStorage.getItem(FIRST_DONE_KEY));
+  } catch {
+    return false;
+  }
+}
 
 export default memo(Health);

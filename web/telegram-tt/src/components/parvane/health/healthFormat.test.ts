@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { HealthMetricView } from './healthTypes';
 
 import {
-  buildSparkline, dayRelation, formatClock, formatDelta, formatDurationShort, formatValue, orderMetrics, sleepBar,
-  splitDuration,
+  buildSleepSpan, buildSparkline, dayRelation, formatClock, formatDelta, formatDurationShort, formatValue,
+  fromLocalParts, orderMetrics, parseNumber, sleepBar, splitDuration, toLocalParts,
 } from './healthFormat';
 
 describe('Оформление значений «Здоровья»', () => {
@@ -47,5 +47,28 @@ describe('Оформление значений «Здоровья»', () => {
     expect(dayRelation('2026-11-14', '2026-11-15')).toBe('yesterday');
     expect(dayRelation('2026-10-31', '2026-11-01')).toBe('yesterday');
     expect(dayRelation('2026-11-10', '2026-11-15')).toBe('date');
+  });
+
+  it('поля формы: день и время в поясе записи', () => {
+    // 2026-11-15 07:20 в UTC+3
+    const ms = Date.UTC(2026, 10, 15, 4, 20);
+    expect(toLocalParts(ms, 180)).toEqual({ day: '2026-11-15', time: '07:20' });
+    expect(toLocalParts(Date.UTC(2026, 10, 14, 22, 30), 180)).toEqual({ day: '2026-11-15', time: '01:30' });
+    expect(fromLocalParts('2026-11-15', '07:20', 180)).toBe(ms);
+    expect(fromLocalParts('', '07:20', 180)).toBeUndefined();
+    expect(parseNumber('72,5')).toBe(72.5);
+    expect(parseNumber(' 64 ')).toBe(64);
+    expect(parseNumber('')).toBeUndefined();
+    expect(parseNumber('семь')).toBeUndefined();
+  });
+
+  it('отрезок сна считается от дня пробуждения', () => {
+    const night = buildSleepSpan('2026-11-15', '23:30', '07:00', 180)!;
+    expect(toLocalParts(night.atMs, 180)).toEqual({ day: '2026-11-14', time: '23:30' });
+    expect(night.minutes).toBe(450);
+    const nap = buildSleepSpan('2026-11-14', '14:00', '15:10', 180)!;
+    expect(toLocalParts(nap.atMs, 180).day).toBe('2026-11-14');
+    expect(nap.minutes).toBe(70);
+    expect(buildSleepSpan('2026-11-14', '', '15:10', 180)).toBeUndefined();
   });
 });

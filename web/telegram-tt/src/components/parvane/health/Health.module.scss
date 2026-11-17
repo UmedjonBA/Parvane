@@ -61,8 +61,8 @@
   min-width: 0;
 
   @media (max-width: 600px) {
-    order: 3;
     flex-basis: 100%;
+    order: 3;
   }
 }
 
@@ -238,7 +238,9 @@
   position: absolute;
   top: 0.125rem;
   bottom: 0.125rem;
+
   border-radius: 0.125rem;
+
   background: var(--pv-aqua);
 }
 
@@ -383,4 +385,152 @@
 
 .empty {
   padding: 1rem 0;
+}
+
+.entryMain {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: 1;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0;
+
+  font: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--pv-blue);
+  }
+}
+
+.entryNote {
+  overflow: hidden;
+  flex: 0 1 12rem;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  align-self: center;
+}
+
+// ── окно правки записи и дневного сна ────────────────────────────────────────
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fieldRow {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  min-width: 0;
+}
+
+// ── самочувствие шкалой ─────────────────────────────────────────────────────
+
+.moodScale {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+
+.moodDot {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.5rem 0.125rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.625rem;
+
+  font: inherit;
+  color: var(--pv-muted);
+
+  background: none;
+  outline: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--pv-blue);
+  }
+}
+
+.moodDotOn {
+  border-color: var(--pv-accent);
+  color: var(--pv-fg);
+  background: color-mix(in srgb, var(--pv-accent) 16%, transparent);
+}
+
+.moodNumber {
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+// ── вода ────────────────────────────────────────────────────────────────────
+
+.waterHead {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+
+  padding: 0;
+
+  font: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--pv-blue);
+  }
+}
+
+.waterTrack {
+  overflow: hidden;
+  display: block;
+
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-hover);
+}
+
+.waterFill {
+  display: block;
+  height: 100%;
+  border-radius: 0.1875rem;
+  background: var(--pv-blue);
 }

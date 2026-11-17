@@ -485,6 +485,19 @@ export class EngineClient {
     return text(this.c('healthCompose', { entries, nowMs }));
   }
 
+  /** Записи показателя новыми первыми (HEALTH-3): JSON `{entries, hasMore}`; пустой вид — все записи. */
+  healthEntries(kind: string, limit: number, nowMs: number, tzMin: number): string {
+    return text(this.c('healthEntries', {
+      kind, limit, nowMs, tzMin,
+    }));
+  }
+
+  /** Проверка записи из формы (HEALTH-3): код отказа либо `undefined`, если запись годится. */
+  healthCheck(entry: unknown, nowMs: number): string | undefined {
+    const { problem } = this.c('healthCheck', { entry, nowMs }) as { problem?: string };
+    return isNil(problem) ? undefined : problem;
+  }
+
   /** Плейлисты «Музыки» для экранов (MUSIC-2): считает движок; контейнера ещё нет — пустой список. */
   musicStateJson(): string {
     return text(this.c('musicStateJson', {}));

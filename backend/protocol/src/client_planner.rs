@@ -263,6 +263,14 @@ impl PersonalState {
         }
     }
 
+    /// Записи показателя для подробного экрана «Здоровья» (HEALTH-3).
+    fn health_entries(&self, kind: &str, limit: usize, now_ms: i64, tz_min: i32) -> Option<String> {
+        match self {
+            Self::Health(st) => Some(crate::domain::health_form::entries_json(st, kind, limit, now_ms, tz_min)),
+            Self::Planner(_) | Self::Music(_) => None,
+        }
+    }
+
     fn rev(&self) -> u64 {
         match self {
             Self::Planner(st) => st.rev(),
@@ -998,6 +1006,11 @@ impl Client {
     pub fn health_view_json(&self, now_ms: i64, tz_min: i32) -> String {
         let view = self.health.as_ref().and_then(|p| p.state.health_view(now_ms, tz_min));
         view.unwrap_or_else(|| crate::domain::health_view::view_json(&Default::default(), now_ms, tz_min))
+    }
+    /// Записи вида новыми первыми, не больше `limit` (HEALTH-3): подробный экран показывает их страницами.
+    pub fn health_entries_json(&self, kind: &str, limit: usize, now_ms: i64, tz_min: i32) -> String {
+        let page = self.health.as_ref().and_then(|p| p.state.health_entries(kind, limit, now_ms, tz_min));
+        page.unwrap_or_else(|| crate::domain::health_form::entries_json(&Default::default(), kind, limit, now_ms, tz_min))
     }
     pub fn health_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
         self.personal_create(Personal::Health, ts_ms)

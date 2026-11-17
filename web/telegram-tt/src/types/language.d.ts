@@ -2492,6 +2492,34 @@ export interface LangPair {
   'HealthBodyEmpty': undefined;
   'HealthRecentTitle': undefined;
   'HealthBlocks': undefined;
+  'HealthEntryDelete': undefined;
+  'HealthEntriesMore': undefined;
+  'HealthFieldDate': undefined;
+  'HealthFieldTime': undefined;
+  'HealthFieldNote': undefined;
+  'HealthPressureUpper': undefined;
+  'HealthPressureLower': undefined;
+  'HealthSleepDuration': undefined;
+  'HealthSleepWakeDay': undefined;
+  'HealthSleepFrom': undefined;
+  'HealthSleepTo': undefined;
+  'HealthNapTitle': undefined;
+  'HealthNapAdd': undefined;
+  'HealthFormProblemValue': undefined;
+  'HealthFormProblemFuture': undefined;
+  'HealthFormProblemSpan': undefined;
+  'HealthFormProblemForm': undefined;
+  'HealthMoodAsk': undefined;
+  'HealthMoodScore1': undefined;
+  'HealthMoodScore2': undefined;
+  'HealthMoodScore3': undefined;
+  'HealthMoodScore4': undefined;
+  'HealthMoodScore5': undefined;
+  'HealthMoodNote': undefined;
+  'HealthRecord': undefined;
+  'HealthFirstBlocks': undefined;
+  'HealthFirstBlocksHint': undefined;
+  'HealthFirstDone': undefined;
   'ParvaneProfileTitle': undefined;
   'ParvaneCloudTabDrive': undefined;
   'ParvaneCloudTabShared': undefined;
@@ -5182,6 +5210,24 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'HealthMoodScore': {
     'value': V;
+  };
+  'HealthEntryEdit': {
+    'name': V;
+  };
+  'HealthEntryEditTitle': {
+    'name': V;
+  };
+  'HealthSleepDurationValue': {
+    'duration': V;
+  };
+  'HealthWaterOfGoal': {
+    'goal': V;
+  };
+  'HealthWaterGlass': {
+    'ml': V;
+  };
+  'HealthWaterBottle': {
+    'ml': V;
   };
   'ParvaneCloudSelected': {
     'count': V;

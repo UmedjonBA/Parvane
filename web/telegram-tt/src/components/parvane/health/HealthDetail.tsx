@@ -1,17 +1,19 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
-import type { HealthView } from './healthTypes';
+import type { HealthEntriesPage } from './healthStore';
+import type { HealthEntry, HealthView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  buildSparkline, formatClock, formatDelta, formatNumber, formatValue,
+  buildSparkline, formatClock, formatDelta, formatNumber, formatValue, MOOD_KIND, parseClock,
 } from './healthFormat';
-import { setHealthGoal } from './healthStore';
+import { loadHealthEntries, setHealthGoal } from './healthStore';
 import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import HealthEntries from './HealthEntries';
+import HealthMoodScale from './HealthMoodScale';
 import HealthSleepCard from './HealthSleepCard';
 
 import kit from '../notes/PvKit.module.scss';
@@ -23,22 +25,19 @@ type OwnProps = {
   kind: string;
   onBed: NoneToVoidFunction;
   onWake: NoneToVoidFunction;
+  onEdit: (entry: HealthEntry) => void;
+  onNap: NoneToVoidFunction;
 };
 
 const CHART_WIDTH = 480;
 const CHART_HEIGHT = 120;
-const MINUTES_IN_HOUR = 60;
 const SLEEP_KINDS = ['sleep', 'sleep_start', 'sleep_end'];
-
-function clockToMinutes(value: string) {
-  const [hours, minutes] = value.split(':').map(Number);
-  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * MINUTES_IN_HOUR + minutes : undefined;
-}
+const PAGE_SIZE = 30;
 
 // Parvane (spec 038): подробный экран показателя либо сна — крупное значение, график за месяц, цель и записи.
-// Цель правится на месте и сохраняется по выходу из поля
+// Цель правится на месте и сохраняется по выходу из поля; записи приходят из движка страницами
 const HealthDetail = ({
-  view, kind, onBed, onWake,
+  view, kind, onBed, onWake, onEdit, onNap,
 }: OwnProps) => {
   const {
     lang, kindTitle, unitTitle,
@@ -46,7 +45,28 @@ const HealthDetail = ({
   const isSleep = kind === 'sleep';
   const metric = view.metrics.find((item) => item.kind === kind);
   const unit = metric ? unitTitle(metric.unit) : '';
-  const entries = view.recent.filter((entry) => (isSleep ? SLEEP_KINDS.includes(entry.kind) : entry.kind === kind));
+
+  // До ответа движка — записи вида из сводки; сводка сменилась — страница перечитывается
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [page, setPage] = useState<HealthEntriesPage & { kind: string }>();
+  useEffect(() => {
+    setLimit(PAGE_SIZE);
+  }, [kind]);
+  useEffect(() => {
+    let isStale = false;
+    void loadHealthEntries(kind, limit).then((loaded) => {
+      if (loaded && !isStale) setPage({ ...loaded, kind });
+    });
+    return () => {
+      isStale = true;
+    };
+  }, [kind, limit, view]);
+  const entries = page?.kind === kind
+    ? page.entries
+    : view.recent.filter((entry) => (isSleep ? SLEEP_KINDS.includes(entry.kind) : entry.kind === kind));
+  const hasMore = page?.kind === kind && page.hasMore;
+
+  const handleMore = useLastCallback(() => setLimit(limit + PAGE_SIZE));
 
   const [goalText, setGoalText] = useState('');
   const [bedText, setBedText] = useState('');
@@ -84,13 +104,13 @@ const HealthDetail = ({
 
   const handleBedCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
     const { value } = e.currentTarget;
-    const target = value ? clockToMinutes(value) : undefined;
+    const target = value ? parseClock(value) : undefined;
     if (target !== goalBedMin) void setHealthGoal('sleep_bed', target);
   });
 
   const handleWakeCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
     const { value } = e.currentTarget;
-    const target = value ? clockToMinutes(value) : undefined;
+    const target = value ? parseClock(value) : undefined;
     if (target !== goalWakeMin) void setHealthGoal('sleep_wake', target);
   });
 
@@ -181,10 +201,28 @@ const HealthDetail = ({
               </label>
             </div>
           </section>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, styles.more)}
+            data-health-action="nap"
+            onClick={onNap}
+          >
+            {lang('HealthNapTitle')}
+          </button>
         </>
-      ) : renderMetric()}
+      ) : (
+        <>
+          {kind === MOOD_KIND && <HealthMoodScale />}
+          {(metric || kind !== MOOD_KIND) && renderMetric()}
+        </>
+      )}
       <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
-      <HealthEntries entries={entries} today={view.today} />
+      <HealthEntries entries={entries} today={view.today} onEdit={onEdit} />
+      {hasMore && (
+        <button type="button" className={buildClassName(kit.btn, styles.more)} data-health-more onClick={handleMore}>
+          {lang('HealthEntriesMore')}
+        </button>
+      )}
     </div>
   );
 };

@@ -30,7 +30,7 @@ const RECENT_LIMIT: usize = 30;
 const DAY_MIN: i64 = 1440;
 const DAY_MS: i64 = 86_400_000;
 
-fn day_index(ms: i64, tz_min: i32) -> i64 {
+pub(super) fn day_index(ms: i64, tz_min: i32) -> i64 {
     (ms + i64::from(tz_min) * 60_000).div_euclid(DAY_MS)
 }
 
@@ -40,7 +40,7 @@ fn day_text(index: i64) -> String {
 }
 
 /// День записи как номер дня от эпохи (у отрезка — день конца: сон относится к дню пробуждения).
-fn entry_day_index(e: &Entry) -> i64 {
+pub(super) fn entry_day_index(e: &Entry) -> i64 {
     day_index(if e.end_ms != 0 { e.end_ms } else { e.at_ms }, e.tz_min)
 }
 

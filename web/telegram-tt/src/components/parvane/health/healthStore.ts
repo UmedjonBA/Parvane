@@ -1,6 +1,6 @@
 import type { createHealthApi } from '../../../api/parvane/healthApi';
 import type {
-  HealthEntry, HealthParseResult, HealthStatus, HealthView,
+  HealthDraft, HealthEntry, HealthParseResult, HealthStatus, HealthView,
 } from './healthTypes';
 
 import { createSignal } from '../../../util/signals';
@@ -92,11 +92,26 @@ export async function parseHealthInput(text: string): Promise<HealthParseResult 
 }
 
 /** Записать разобранные записи; `false` — не записано (движок не готов, нечего писать). */
-export async function addHealthEntries(entries: HealthParseResult['entries']) {
+export async function addHealthEntries(entries: HealthDraft[]) {
   if (!entries.length) return false;
   const isAdded = await callHealth('parvaneHealthAdd', { entries, nowMs: Date.now() }).catch(() => false);
   if (isAdded) await refreshHealth();
   return Boolean(isAdded);
+}
+
+export type HealthEntriesPage = { entries: HealthEntry[]; hasMore: boolean };
+
+/** Записи показателя новыми первыми, не больше `limit`; `sleep` — сон вместе с отметками «лёг» и «встал». */
+export async function loadHealthEntries(kind: string, limit: number): Promise<HealthEntriesPage | undefined> {
+  const json = await callHealth('parvaneHealthEntries', {
+    kind, limit, nowMs: Date.now(), tzMin: tzMinutes(),
+  }).catch(() => undefined);
+  return json ? parseEngineJson<HealthEntriesPage>(json) : undefined;
+}
+
+/** Проверка записи формы движком: код отказа (`value`, `future`, `span`, `form`) либо `undefined`. */
+export function checkHealthEntry(entry: HealthDraft) {
+  return callHealth('parvaneHealthCheck', { entry, nowMs: Date.now() }).catch(() => 'form');
 }
 
 async function applyChanges(changes: unknown[]) {
@@ -110,9 +125,8 @@ export function deleteHealthEntry(id: string) {
 }
 
 /** Правка записи: запись уходит целиком с тем же id. */
-export function saveHealthEntry(entry: HealthEntry) {
-  const { day, ...fields } = entry;
-  return applyChanges([{ entry: fields }]);
+export function saveHealthEntry(id: string, entry: HealthDraft) {
+  return applyChanges([{ entry: { ...entry, id } }]);
 }
 
 /** Цель показателя либо режима сна (`sleep_bed`, `sleep_wake` — минуты от полуночи); `undefined` — снять. */

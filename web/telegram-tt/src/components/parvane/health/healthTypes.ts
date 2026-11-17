@@ -66,6 +66,9 @@ export type HealthView = {
   recent: HealthEntry[];
 };
 
+// Запись без id: из формы, кнопки либо разбора — id даёт движок (`healthCompose`)
+export type HealthDraft = Omit<HealthEntry, 'id' | 'day' | 'note'> & { note?: string };
+
 export type HealthParsedEntry = {
   kind: string;
   atMs: number;

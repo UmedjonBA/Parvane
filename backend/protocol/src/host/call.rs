@@ -487,6 +487,12 @@ impl HostClient {
             }
             // HEALTH-3: сводка для экранов — считает движок, клиент рисует
             "healthView" => parsed(c.health_view_json(a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
+            // HEALTH-3: записи показателя страницами для подробного экрана
+            "healthEntries" => {
+                let tz_min = i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?;
+                let limit = usize::try_from(a.i("limit")?).map_err(|_| malformed())?;
+                parsed(c.health_entries_json(&a.text("kind")?, limit, a.i("nowMs")?, tz_min))
+            }
             "healthCreate" => req(&c.health_create(a.i("tsMs")?).map_err(cerr)?),
             "healthAttach" => {
                 c.health_attach(&a.b("getResponse")?, &a.b("grantsResponse")?).map_err(cerr)?;
@@ -549,6 +555,9 @@ impl HostClient {
             }
             // Разбор свободного ввода (HEALTH-2): клиент сам не разбирает
             "healthParse" => parsed(crate::health_parse::parse_json(&a.text("text")?, a.i("nowMs")?, i32::try_from(a.i("tzMin")?).map_err(|_| malformed())?)),
+
+            // Проверка записи из формы (HEALTH-3): диапазоны — те же, что у разбора
+            "healthCheck" => crate::domain::health_form::check_json(a.raw("entry"), a.i("nowMs")?),
 
             // ── облако (spec 016); id контейнера — hex ──
             "cloudContainers" => parsed(c.cloud_containers_json()),

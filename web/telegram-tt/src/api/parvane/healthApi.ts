@@ -55,6 +55,30 @@ export function createHealthApi(deps: Deps) {
       }
     },
 
+    /** Записи показателя новыми первыми: JSON `{entries, hasMore}`; `sleep` — сон вместе с отметками. */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async parvaneHealthEntries({
+      kind, limit, nowMs, tzMin,
+    }: { kind: string; limit: number; nowMs: number; tzMin: number }) {
+      try {
+        return deps.health().entriesJson(kind, limit, nowMs, tzMin);
+      } catch (err) {
+        deps.log(`здоровье: записи не прочитаны: ${String(err)}`);
+        return undefined;
+      }
+    },
+
+    /** Проверка записи формы (диапазоны — как у разбора): код отказа либо `undefined`. */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async parvaneHealthCheck({ entry, nowMs }: { entry: unknown; nowMs: number }) {
+      try {
+        return deps.health().checkEntry(entry, nowMs);
+      } catch (err) {
+        deps.log(`здоровье: запись не проверена: ${String(err)}`);
+        return 'form';
+      }
+    },
+
     /** Записать разобранные записи (поле `entries` разбора): id и сведение сна — в движке. `false` — не записано. */
     async parvaneHealthAdd({ entries, nowMs }: { entries: unknown[]; nowMs: number }) {
       const health = deps.health();

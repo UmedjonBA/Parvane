@@ -15,10 +15,14 @@ type OwnProps = {
   entries: HealthEntry[];
   today: string;
   withKind?: boolean;
+  onEdit: (entry: HealthEntry) => void;
 };
 
-// Parvane (spec 038): список записей — вид, значение, когда; запись удаляется крестиком
-const HealthEntries = ({ entries, today, withKind }: OwnProps) => {
+// Parvane (spec 038): список записей — вид, значение, когда. Нажатие на запись открывает правку,
+// крестик удаляет
+const HealthEntries = ({
+  entries, today, withKind, onEdit,
+}: OwnProps) => {
   const {
     lang, kindTitle, entryValue, entryWhen,
   } = useHealthLabels(today);
@@ -27,15 +31,31 @@ const HealthEntries = ({ entries, today, withKind }: OwnProps) => {
     void deleteHealthEntry(e.currentTarget.dataset.id!);
   });
 
+  const handleEdit = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    onEdit(entries.find((entry) => entry.id === e.currentTarget.dataset.id)!);
+  });
+
   if (!entries.length) return <div className={buildClassName(kit.muted, styles.empty)}>{lang('HealthNoEntries')}</div>;
 
   return (
     <ul className={styles.entries} data-health-entries>
       {entries.map((entry) => (
         <li key={entry.id} className={styles.entry} data-kind={entry.kind}>
-          {withKind && <span className={styles.entryKind}>{kindTitle(entry.kind)}</span>}
-          <span className={buildClassName(kit.mono, styles.entryValue)}>{entryValue(entry)}</span>
-          <span className={buildClassName(kit.muted, kit.small, styles.entryWhen)}>{entryWhen(entry)}</span>
+          <button
+            type="button"
+            className={styles.entryMain}
+            aria-label={lang('HealthEntryEdit', { name: `${kindTitle(entry.kind)} ${entryValue(entry)}` })}
+            data-id={entry.id}
+            data-health-entry-edit
+            onClick={handleEdit}
+          >
+            {withKind && <span className={styles.entryKind}>{kindTitle(entry.kind)}</span>}
+            <span className={buildClassName(kit.mono, styles.entryValue)}>{entryValue(entry)}</span>
+            {Boolean(entry.note) && (
+              <span className={buildClassName(kit.muted, kit.small, styles.entryNote)}>{entry.note}</span>
+            )}
+            <span className={buildClassName(kit.muted, kit.small, styles.entryWhen)}>{entryWhen(entry)}</span>
+          </button>
           <button
             type="button"
             className={kit.ib}

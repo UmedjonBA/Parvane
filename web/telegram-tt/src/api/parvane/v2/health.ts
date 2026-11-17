@@ -25,6 +25,15 @@ export function createHealthSync(deps: PersonalDeps) {
       const json = deps.client()?.healthCompose(entries, nowMs);
       return json ? (JSON.parse(json) as { changes: unknown[] }).changes : undefined;
     },
+    /** Записи показателя страницей (JSON `{entries, hasMore}`); движок не поднят — `undefined`. */
+    entriesJson: (kind: string, limit: number, nowMs: number, tzMin: number) => (
+      deps.client()?.healthEntries(kind, limit, nowMs, tzMin)
+    ),
+    /** Проверка записи формы движком: код отказа либо `undefined`. Движок не поднят — отказ `form`. */
+    checkEntry: (entry: unknown, nowMs: number) => {
+      const client = deps.client();
+      return client ? client.healthCheck(entry, nowMs) : 'form';
+    },
     /** Разбор строки ввода; движок не поднят — `undefined`. */
     parseJson: (input: string, nowMs: number, tzMin: number) => deps.client()?.healthParse(input, nowMs, tzMin),
   };

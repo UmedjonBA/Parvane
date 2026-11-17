@@ -5,10 +5,13 @@ import type { HealthEntry, HealthMetricView, HealthParsedEntry } from './healthT
 
 const MINUTES_IN_HOUR = 60;
 const MINUTES_IN_DAY = 1440;
+const MS_IN_MINUTE = 60000;
+export const MS_IN_DAY = MINUTES_IN_DAY * MS_IN_MINUTE;
 
 // Показатели тела в порядке плиток сводки; остальные виды идут за ними по алфавиту
 export const BODY_KINDS = ['weight', 'pressure', 'pulse', 'steps'];
 export const MOOD_KIND = 'mood';
+export const WATER_KIND = 'water';
 export const MOOD_MAX = 5;
 // Блоки модуля (экран «Модули») → виды записей
 export const BLOCK_KINDS: Record<string, string[]> = {
@@ -160,4 +163,38 @@ export function dayRelation(day: string, today: string): 'today' | 'yesterday' |
   const previous = new Date(`${today}T12:00:00`);
   previous.setDate(previous.getDate() - 1);
   return day === localDayKey(previous) ? 'yesterday' : 'date';
+}
+
+/** Момент → день `ГГГГ-ММ-ДД` и время `ЧЧ:ММ` в поясе записи (поля формы). */
+export function toLocalParts(ms: number, tzMin: number) {
+  const iso = new Date(ms + tzMin * MS_IN_MINUTE).toISOString();
+  return { day: iso.slice(0, 10), time: iso.slice(11, 16) };
+}
+
+/** День и время полей формы в поясе записи → момент; негодный ввод — `undefined`. */
+export function fromLocalParts(day: string, time: string, tzMin: number) {
+  const ms = Date.parse(`${day}T${time}:00Z`);
+  return Number.isFinite(ms) ? ms - tzMin * MS_IN_MINUTE : undefined;
+}
+
+/** Отрезок сна по дню пробуждения: «лёг» позже «встал» по часам — лёг накануне. */
+export function buildSleepSpan(wakeDay: string, bedTime: string, wakeTime: string, tzMin: number) {
+  const endMs = fromLocalParts(wakeDay, wakeTime, tzMin);
+  const sameDayStart = fromLocalParts(wakeDay, bedTime, tzMin);
+  if (endMs === undefined || sameDayStart === undefined) return undefined;
+  const atMs = sameDayStart < endMs ? sameDayStart : sameDayStart - MS_IN_DAY;
+  return { atMs, endMs, minutes: Math.round((endMs - atMs) / MS_IN_MINUTE) };
+}
+
+/** Число из поля формы: запятая и точка равноправны; не число — `undefined`. */
+export function parseNumber(text: string) {
+  const cleaned = text.trim().replace(',', '.');
+  const value = cleaned ? Number(cleaned) : NaN;
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/** Время поля `ЧЧ:ММ` → минуты от полуночи (оно же — длительность до суток); негодный ввод — `undefined`. */
+export function parseClock(value: string) {
+  const [hours, minutes] = value.split(':').map(Number);
+  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * MINUTES_IN_HOUR + minutes : undefined;
 }

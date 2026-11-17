@@ -19,7 +19,7 @@ use crate::domain::health::{civil_from_days, days_from_civil, minute_of_day};
 const DAY_MS: i64 = 86_400_000;
 const MIN_MS: i64 = 60_000;
 /// Сколько вперёд от «сейчас» может стоять время записи без явного дня, прежде чем разбор отнесёт её к вчера.
-const FUTURE_SLACK_MS: i64 = 30 * MIN_MS;
+pub const FUTURE_SLACK_MS: i64 = 30 * MIN_MS;
 /// Стакан воды, мл.
 pub const GLASS_ML: f64 = 250.0;
 pub const MAX_INPUT: usize = 2000;
@@ -608,6 +608,17 @@ fn kind_of(kind: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.kind == kind)
 }
 
+/// Значение показателя в разумном диапазоне; у вида вне словаря диапазона нет. Общая проверка разбора и форм.
+pub fn in_range(kind: &str, value: f64, value2: f64) -> bool {
+    let Some(k) = kind_of(kind) else { return true };
+    value >= k.min && value <= k.max && (kind != "pressure" || (value2 >= 30.0 && value2 <= 200.0 && value > value2))
+}
+
+/// Длительность сна в минутах: от десяти минут до суток.
+pub fn sleep_in_range(minutes: f64) -> bool {
+    (10.0..=1440.0).contains(&minutes)
+}
+
 fn keyword(word: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| any(word, k.exact) || stem(word, k.stems))
 }
@@ -1129,9 +1140,10 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
 
     // ── записи-моменты ──
     for it in &items {
-        let Some(k) = kind_of(it.kind) else { continue };
-        let ok = it.value >= k.min && it.value <= k.max && (it.kind != "pressure" || (it.value2 >= 30.0 && it.value2 <= 200.0 && it.value > it.value2));
-        if !ok {
+        if kind_of(it.kind).is_none() {
+            continue;
+        }
+        if !in_range(it.kind, it.value, it.value2) {
             res.problems.push(Problem { text: p.slice(it.from, it.to), code: "range" });
             continue;
         }
@@ -1167,7 +1179,7 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
                 start -= DAY_MS;
             }
             let minutes = ((end - start) / MIN_MS) as f64;
-            if (10.0..=1440.0).contains(&minutes) {
+            if sleep_in_range(minutes) {
                 res.entries.push(Parsed { kind: "sleep", at_ms: start, end_ms: end, value: minutes, value2: 0.0, unit: "min" });
             } else {
                 res.problems.push(Problem { text: span_text, code: "range" });
@@ -1188,7 +1200,7 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             res.entries.push(Parsed { kind: "sleep_end", at_ms: t, end_ms: 0, value: 0.0, value2: 0.0, unit: "" });
         }
         (bed_only, wake_only, Some(d)) => {
-            if (10.0..=1440.0).contains(&d) {
+            if sleep_in_range(d) {
                 match (bed_only, wake_only) {
                     // Длительность и один край: второй край считается
                     (Some(b), None) => {
