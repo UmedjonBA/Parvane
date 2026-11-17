@@ -143,8 +143,8 @@ const MEAL_LABELS = {
   other: 'PlannerMealOther',
 } as const;
 const NAME_MAX_LENGTH = 160;
-// Виды строки, которые ведёт модуль «Здоровье»: сон, показатели тела, вода
-const HEALTH_MODULE_KINDS: QuickKind[] = ['sleep', 'metric', 'water'];
+// Виды строки, которые ведёт модуль «Здоровье»: сон, показатели тела, вода, еда и тренировки (spec 041 B4)
+const HEALTH_MODULE_KINDS: QuickKind[] = ['sleep', 'metric', 'water', 'food', 'workout'];
 
 /** Записать строку в «Здоровье» его разбором; `false` — разбор ничего не понял либо модуль не готов. */
 async function forwardToHealth(text: string) {
@@ -315,12 +315,11 @@ const PlannerQuickInput = ({
     const value = inputRef.current?.value ?? text;
     const entry = parse(value);
     if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
-    // «Здоровье» — отдельный модуль (spec 041): сон, показатели тела и вода из строки «Плана» пишутся в его
-    // контейнер. Чего разбор «Здоровья» не понял (еда, тренировка) — остаётся записью «Плана», как раньше
+    // «Здоровье» — отдельный модуль (spec 041): его строки из ввода «Плана» пишутся в его контейнер, календарь
+    // «Плана» читает их оттуда. Чего разбор «Здоровья» не понял, остаётся в поле: «План» здоровье не хранит
     if (HEALTH_MODULE_KINDS.includes(entry.kind) && getIsModuleOn('health')) {
       void forwardToHealth(value).then((isAdded) => {
         if (isAdded) onCreated(entry.day);
-        else savePlannerEntry(value, entry);
       });
       return;
     }

@@ -493,6 +493,8 @@ impl HostClient {
                 let limit = usize::try_from(a.i("limit")?).map_err(|_| malformed())?;
                 parsed(c.health_entries_json(&a.text("kind")?, limit, a.i("nowMs")?, tz_min))
             }
+            // Здоровье по дням для календаря «Плана» (spec 041 B4)
+            "healthDays" => parsed(c.health_days_json(&a.text("fromDay")?, &a.text("toDay")?)),
             "healthCreate" => req(&c.health_create(a.i("tsMs")?).map_err(cerr)?),
             "healthAttach" => {
                 c.health_attach(&a.b("getResponse")?, &a.b("grantsResponse")?).map_err(cerr)?;

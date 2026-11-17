@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::health;
+use super::health::{self, HealthState};
 use super::health_json::entry_json;
-use super::health_view::{day_text, entry_day_index, round1};
+use super::health_view::{day_text, entry_day_index, round1, KIND_SLEEP, TAG_SLEEP_ASIDE};
 use crate::pb::parvane::health::v1::Entry;
 
 pub const KIND_FOOD: &str = "food";
@@ -134,6 +134,60 @@ pub fn activity_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64
     })
 }
 
+/// Больше дней за один запрос календарь не просит.
+pub const MAX_DAYS_SPAN: i64 = 800;
+
+/// Здоровье по дням для календаря «Плана» (spec 041 B4): сны, приёмы пищи и тренировки каждого дня отрезка.
+/// `{goals:{<имя>: число}, days:[{day, closed, sleeps:[{id, minutes, bedMin, wakeMin}], foods:[{id, minute, name,
+/// tag, kcal, parts}], workouts:[{id, minute, minutes, name, tag, parts}]}]}` — только дни с записями, по
+/// возрастанию. Сон «не в сумму» не входит; время — минуты от местной полуночи записи.
+pub fn days_json(state: &HealthState, from_day: &str, to_day: &str) -> String {
+    let empty = || json!({"goals": {}, "days": []}).to_string();
+    let (Some(from), Some(to)) = (parse_day(from_day), parse_day(to_day)) else { return empty() };
+    if to < from || to - from > MAX_DAYS_SPAN {
+        return empty();
+    }
+    let mut days: BTreeMap<i64, [Vec<Value>; 3]> = BTreeMap::new();
+    let mut closed: Vec<i64> = Vec::new();
+    let mut entries: Vec<&Entry> = state.live_entries().collect();
+    entries.sort_by(|a, b| (a.at_ms, &a.id).cmp(&(b.at_ms, &b.id)));
+    for e in entries {
+        let day = entry_day_index(e);
+        if !(from..=to).contains(&day) {
+            continue;
+        }
+        let minute = health::minute_of_day(e.at_ms, e.tz_min);
+        let parts: serde_json::Map<String, Value> = e.parts.iter().map(|p| (p.key.clone(), json!(p.value))).collect();
+        let (slot, item) = match e.kind.as_str() {
+            KIND_SLEEP if e.tag != TAG_SLEEP_ASIDE => {
+                let span = e.end_ms > e.at_ms;
+                let minutes = if span { (e.end_ms - e.at_ms) / 60_000 } else { (e.value as i64).max(0) };
+                let clock = |ms: i64| if span { json!(health::minute_of_day(ms, e.tz_min)) } else { Value::Null };
+                (0, json!({"id": e.id, "minutes": minutes, "bedMin": clock(e.at_ms), "wakeMin": clock(e.end_ms)}))
+            }
+            KIND_FOOD => (1, json!({"id": e.id, "minute": minute, "name": e.name, "tag": e.tag, "kcal": e.value, "parts": parts})),
+            KIND_WORKOUT => (2, json!({"id": e.id, "minute": minute, "minutes": workout_minutes(e), "name": e.name, "tag": e.tag, "parts": parts})),
+            KIND_FOOD_CLOSE => {
+                closed.push(day);
+                continue;
+            }
+            _ => continue,
+        };
+        if let Some(list) = days.entry(day).or_default().get_mut(slot) {
+            list.push(item);
+        }
+    }
+    for day in &closed {
+        days.entry(*day).or_default();
+    }
+    let goals: serde_json::Map<String, Value> = state.live_goals().map(|g| (g.id.clone(), json!(g.target))).collect();
+    let list: Vec<Value> = days
+        .into_iter()
+        .map(|(day, [sleeps, foods, workouts])| json!({"day": day_text(day), "closed": closed.contains(&day), "sleeps": sleeps, "foods": foods, "workouts": workouts}))
+        .collect();
+    json!({"goals": goals, "days": list}).to_string()
+}
+
 fn parse_day(text: &str) -> Option<i64> {
     let mut it = text.split('-');
     let (y, m, d) = (it.next()?.parse::<i64>().ok()?, it.next()?.parse::<u32>().ok()?, it.next()?.parse::<u32>().ok()?);
@@ -160,7 +214,6 @@ pub fn close_change(src: &serde_json::Map<String, Value>, goals: &BTreeMap<&str,
 
 #[cfg(test)]
 mod tests {
-    use super::super::health::HealthState;
     use super::super::health_json::op_from_json;
     use super::super::health_view::{compose_changes, day_index, view_json};
     use super::*;
@@ -237,6 +290,42 @@ mod tests {
         apply(&mut st, &close, 4);
         assert_eq!(view(&st)["nutrition"]["closed"], true);
         assert!(compose_changes(&st, &[json!({"kind": "food_close", "day": "15.11.2026"})], NOW)["changes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn days_for_calendar_carry_sleep_food_and_workouts() {
+        let mut st = HealthState::default();
+        let sleep = |id: &str, from: i64, to: i64, tag: &str| json!({"entry": {"id": id, "kind": "sleep", "atMs": from, "endMs": to, "tzMin": TZ, "unit": "min", "tag": tag}});
+        apply(
+            &mut st,
+            &json!({"changes": [
+                sleep("night", at(-1, 23, 30), at(0, 7, 0), ""),
+                sleep("nap", at(0, 14, 0), at(0, 15, 0), "aside"),
+                {"entry": {"id": "dur", "kind": "sleep", "atMs": at(-2, 0, 0), "tzMin": TZ, "value": 420, "unit": "min"}},
+                food("l1", "lunch", "гречка", at(0, 13, 15), 520.0, (42.0, 16.0, 52.0)),
+                {"entry": {"id": "run", "kind": "workout", "atMs": at(-1, 9, 0), "tzMin": TZ, "value": 35, "unit": "min", "tag": "run", "parts": {"km": 6.2}}},
+                {"entry": {"id": "w", "kind": "weight", "atMs": at(0, 8, 0), "tzMin": TZ, "value": 72, "unit": "kg"}},
+                {"goal": {"id": "kcal", "target": 2200}},
+            ]}),
+            1,
+        );
+        let close = compose_changes(&st, &[json!({"kind": "food_close", "day": "2026-11-10", "tzMin": TZ})], NOW);
+        apply(&mut st, &close, 2);
+        let v: Value = serde_json::from_str(&days_json(&st, "2026-11-01", "2026-11-15")).unwrap();
+        assert_eq!(v["goals"]["kcal"], 2200.0);
+        let days = v["days"].as_array().unwrap();
+        assert_eq!(days.iter().map(|d| d["day"].as_str().unwrap()).collect::<Vec<_>>(), ["2026-11-10", "2026-11-13", "2026-11-14", "2026-11-15"]);
+        assert_eq!(days[0]["closed"], true);
+        assert_eq!(days[1]["sleeps"][0], json!({"id": "dur", "minutes": 420, "bedMin": null, "wakeMin": null}));
+        assert_eq!(days[2]["workouts"][0]["minutes"], 35.0);
+        assert_eq!(days[2]["workouts"][0]["parts"]["km"], 6.2);
+        let today = &days[3];
+        assert_eq!(today["sleeps"], json!([{"id": "night", "minutes": 450, "bedMin": 1410, "wakeMin": 420}]), "сон «не в сумму» не входит");
+        assert_eq!(today["foods"][0]["minute"], 13 * 60 + 15);
+        assert_eq!(today["foods"][0]["kcal"], 520.0);
+        // Отрезок вне записей и негодный отрезок — пусто
+        assert!(serde_json::from_str::<Value>(&days_json(&st, "2026-12-01", "2026-12-31")).unwrap()["days"].as_array().unwrap().is_empty());
+        assert_eq!(days_json(&st, "2026-11-15", "2026-11-01"), days_json(&st, "x", "y"));
     }
 
     #[test]

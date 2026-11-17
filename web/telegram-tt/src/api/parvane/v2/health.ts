@@ -29,6 +29,8 @@ export function createHealthSync(deps: PersonalDeps) {
     entriesJson: (kind: string, limit: number, nowMs: number, tzMin: number) => (
       deps.client()?.healthEntries(kind, limit, nowMs, tzMin)
     ),
+    /** Сны, приёмы пищи и тренировки по дням отрезка (JSON `{goals, days}`); движок не поднят — `undefined`. */
+    daysJson: (fromDay: string, toDay: string) => deps.client()?.healthDays(fromDay, toDay),
     /** Проверка записи формы движком: код отказа либо `undefined`. Движок не поднят — отказ `form`. */
     checkEntry: (entry: unknown, nowMs: number) => {
       const client = deps.client();

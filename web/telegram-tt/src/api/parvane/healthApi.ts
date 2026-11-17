@@ -21,13 +21,20 @@ export function createHealthApi(deps: Deps) {
   // Подключение контейнера и опрос — один раз за сессию страницы; дальше синк идёт по таймеру модуля
   let isEnsureStarted = false;
 
-  function readState(nowMs: number, tzMin: number): HealthStateReply {
+  // Контейнер подключается при первом обращении любого экрана — «Здоровья» либо календаря «Плана»
+  function ensureOnce() {
     const health = deps.health();
     const status = health.status();
     if (status !== 'needs-linking' && status !== 'loading' && !isEnsureStarted) {
       isEnsureStarted = true;
       void health.ensure();
     }
+    return health;
+  }
+
+  function readState(nowMs: number, tzMin: number): HealthStateReply {
+    const health = ensureOnce();
+    const status = health.status();
     return {
       status, view: health.viewJson(nowMs, tzMin), hasPending: health.hasPending(), error: health.lastError(),
     };
@@ -64,6 +71,17 @@ export function createHealthApi(deps: Deps) {
         return deps.health().entriesJson(kind, limit, nowMs, tzMin);
       } catch (err) {
         deps.log(`здоровье: записи не прочитаны: ${String(err)}`);
+        return undefined;
+      }
+    },
+
+    /** Здоровье по дням отрезка — календарю «Плана»: JSON `{goals, days}`; движок не готов — `undefined`. */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async parvaneHealthDays({ fromDay, toDay }: { fromDay: string; toDay: string }) {
+      try {
+        return ensureOnce().daysJson(fromDay, toDay);
+      } catch (err) {
+        deps.log(`здоровье: дни не прочитаны: ${String(err)}`);
         return undefined;
       }
     },

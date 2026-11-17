@@ -271,6 +271,14 @@ impl PersonalState {
         }
     }
 
+    /// Здоровье по дням для календаря «Плана».
+    fn health_days(&self, from_day: &str, to_day: &str) -> Option<String> {
+        match self {
+            Self::Health(st) => Some(crate::domain::health_day::days_json(st, from_day, to_day)),
+            Self::Planner(_) | Self::Music(_) => None,
+        }
+    }
+
     fn rev(&self) -> u64 {
         match self {
             Self::Planner(st) => st.rev(),
@@ -1011,6 +1019,11 @@ impl Client {
     pub fn health_entries_json(&self, kind: &str, limit: usize, now_ms: i64, tz_min: i32) -> String {
         let page = self.health.as_ref().and_then(|p| p.state.health_entries(kind, limit, now_ms, tz_min));
         page.unwrap_or_else(|| crate::domain::health_form::entries_json(&Default::default(), kind, limit, now_ms, tz_min))
+    }
+    /// Сны, приёмы пищи и тренировки по дням отрезка — календарю «Плана» (spec 041 B4).
+    pub fn health_days_json(&self, from_day: &str, to_day: &str) -> String {
+        let days = self.health.as_ref().and_then(|p| p.state.health_days(from_day, to_day));
+        days.unwrap_or_else(|| crate::domain::health_day::days_json(&Default::default(), from_day, to_day))
     }
     pub fn health_create(&mut self, ts_ms: i64) -> CResult<OutRequest> {
         self.personal_create(Personal::Health, ts_ms)

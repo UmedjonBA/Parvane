@@ -1,6 +1,6 @@
 import type { createHealthApi } from '../../../api/parvane/healthApi';
 import type {
-  HealthDraft, HealthEntry, HealthParseResult, HealthStatus, HealthView,
+  HealthDays, HealthDraft, HealthEntry, HealthParseResult, HealthStatus, HealthView,
 } from './healthTypes';
 
 import { createSignal } from '../../../util/signals';
@@ -82,6 +82,53 @@ export function watchHealth(isActive: boolean) {
     return;
   }
   void refreshHealth().then(scheduleRefresh);
+}
+
+// ── здоровье по дням для календаря «Плана» ──────────────────────────────────
+// Отрезок с запасом: календарь листают назад на месяцы, а запрос дешёвый (дни без записей не приходят)
+const DAYS_BACK = 400;
+const MS_IN_DAY = 86400000;
+const DAYS_RETRY_MS = 3000;
+
+const [getHealthDays, setHealthDays] = createSignal<HealthDays | undefined>(undefined);
+
+export { getHealthDays };
+
+let lastDaysJson: string | undefined;
+let isWatchingDays = false;
+let daysRetryTimer: number | undefined;
+
+function dayKey(ms: number) {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export async function refreshHealthDays() {
+  const now = Date.now();
+  const json = await callHealth('parvaneHealthDays', {
+    fromDay: dayKey(now - DAYS_BACK * MS_IN_DAY), toDay: dayKey(now + MS_IN_DAY),
+  }).catch(() => undefined);
+  window.clearTimeout(daysRetryTimer);
+  if (json === undefined) {
+    // Движок ещё не поднят: событие об изменении может не прийти — спрашиваем снова
+    daysRetryTimer = window.setTimeout(() => void refreshHealthDays(), DAYS_RETRY_MS);
+    return;
+  }
+  if (json === lastDaysJson) return;
+  lastDaysJson = json;
+  setHealthDays(parseEngineJson<HealthDays>(json));
+}
+
+/** Календарь «Плана» показан: дни здоровья читаются сейчас и после каждого изменения записей. */
+export function watchHealthDays() {
+  if (!isWatchingDays) {
+    isWatchingDays = true;
+    window.addEventListener(HEALTH_EVENT, () => {
+      void refreshHealthDays();
+    });
+  }
+  void refreshHealthDays();
 }
 
 /** Разбор строки ввода движком: что получится записать и что не понято. */

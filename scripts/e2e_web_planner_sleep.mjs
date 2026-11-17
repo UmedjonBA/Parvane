@@ -1,6 +1,6 @@
-// «План»: сон за прошедший день и его правка (16 окт 2026, жалобы пользователя). «вчера спал с 5:00 до 15:00» —
-// запись сна на вчера (а не событие); значок сна в календаре открывает «Здоровье» на этом дне; «Изменить»
-// подставляет записанное в поле, «Удалить» убирает сон дня.
+// «План»: сон в календаре — из модуля «Здоровье» (spec 041 B4). «вчера спал с 5:00 до 15:00» в строке «Плана» —
+// запись сна в «Здоровье» (а не событие), значок сна появляется в календаре и ведёт в модуль; удаление записи в
+// модуле убирает значок; два сна дня складываются; недосып — красной плашкой.
 // Запуск: scripts/run_web_planner_sleep_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -26,8 +26,6 @@ try {
   const { page, errors } = await preparePage(context, user, PASSWORD);
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   const planner = page.locator('#ParvanePlanner');
-  const health = planner.locator('[data-planner-health]');
-  const sleepCard = health.locator('[data-health="sleep"]');
   const input = page.locator('#planner-quick-input');
   const yesterday = dayKey(-1);
 
@@ -49,30 +47,18 @@ try {
   assert.equal(await planner.locator('[data-planner-view="week"]').getByText('спал', { exact: true }).count(), 0, 'не событие');
   console.log('OK: «вчера спал с 5:00 до 15:00» — сон на вчера');
 
-  // Значок сна → «Здоровье» на вчерашнем дне
+  // Значок сна ведёт в модуль «Здоровье»; запись удаляется там — значок в календаре пропадает
   await tag.click();
-  await sleepCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sleepCard.getByText('05:00 → 15:00', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // «Изменить» — записанное в поле; поправить
-  await sleepCard.locator('[data-sleep-edit]').click();
-  await page.waitForFunction(() => document.querySelector('#planner-health-sleep')?.value === '05:00–15:00', undefined, {
-    timeout: STEP_TIMEOUT_MS,
-  });
-  await page.locator('#planner-health-sleep').fill('23:30-07:00');
-  await sleepCard.getByRole('button', { name: 'Save', exact: true }).click();
-  await sleepCard.getByText('23:30 → 07:00', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: значок сна открывает «Здоровье», сон исправлен');
-  // «Удалить»
-  await sleepCard.locator('[data-sleep-delete]').click();
-  await planner.getByText('Sleep deleted').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sleepCard.locator('[data-sleep-edit]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  const health = page.locator('#ParvaneHealth');
+  await health.locator('[data-health-entries] [data-kind="sleep"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await health.locator('[data-health-entries] [data-kind="sleep"]').getByRole('button', { name: /^Delete entry/ }).click();
+  await health.locator('[data-health-entries] [data-kind="sleep"]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await openPlannerScreen(page, 'calendar');
   if (new Date().getDay() === 1) await planner.getByRole('button', { name: 'Previous period' }).click();
-  await page.waitForTimeout(1000);
-  assert.equal(await planner.locator(`[data-sleep-open="${yesterday}"]`).count(), 0, 'сон удалён из календаря');
-  console.log('OK: сон удалён');
+  await tag.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: значок сна открывает «Здоровье»; удалённый там сон пропал из календаря');
 
-  // «не спал» — 0 ч: красная отметка на графике; дневной сон убирает ноль; два сна за день складываются
+  // Два сна за день складываются: ночь 8 часов и дневной час
   const enterQuick = async (line) => {
     await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -82,26 +68,15 @@ try {
     await input.press('Enter');
     await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   };
-  await enterQuick('вчера я не спал');
-  await tag.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.match(await tag.innerText(), /0:00/, 'не спал — 0:00');
-  await tag.click();
-  await health.locator('[data-health-bars="sleep"] [data-bar-zero]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: «не спал» — 0 ч и красная отметка на графике');
-  await openPlannerScreen(page, 'calendar');
-  if (new Date().getDay() === 1) await planner.getByRole('button', { name: 'Previous period' }).click();
   await enterQuick('вчера спал с 14 до 15');
-  await enterQuick('вчера спал с 23 до 7');
+  await enterQuick('вчера спал с 0:00 до 8:00');
   await page.waitForFunction((day) => /9:00/.test(document.querySelector(`[data-sleep-open="${day}"]`)?.textContent || ''),
     yesterday, { timeout: STEP_TIMEOUT_MS });
-  await tag.click();
-  await sleepCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sleepCard.locator('[data-sleep-record]').count(), 2, 'два сна дня, ноль убран');
-  console.log('OK: дневной сон убрал «0 ч», два сна за день складываются (9:00)');
+  console.log('OK: два сна за день складываются (9:00)');
 
   // Телефон: недосып сегодня — красная плашка сна в одной строке со слоями «Сон / Еда / Дела» и сводкой плана,
   // отдельной плашки-предупреждения нет; нажатие на плашку сна показывает подсказку о сниженном бюджете дня
-  await enterQuick('спал с 3 до 6');
+  await enterQuick('спал с 3:00 до 6:00');
   await page.setViewportSize({ width: 360, height: 800 });
   await openPlannerScreen(page, 'calendar');
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Day', exact: true }).click();

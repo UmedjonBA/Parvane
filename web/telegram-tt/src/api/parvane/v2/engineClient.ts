@@ -492,6 +492,11 @@ export class EngineClient {
     }));
   }
 
+  /** Здоровье по дням отрезка для календаря «Плана»: JSON `{goals, days}`. */
+  healthDays(fromDay: string, toDay: string): string {
+    return text(this.c('healthDays', { fromDay, toDay }));
+  }
+
   /** Проверка записи из формы (HEALTH-3): код отказа либо `undefined`, если запись годится. */
   healthCheck(entry: unknown, nowMs: number): string | undefined {
     const { problem } = this.c('healthCheck', { entry, nowMs }) as { problem?: string };

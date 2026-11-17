@@ -15,11 +15,13 @@ import {
   setParvaneSection, setPlannerCalendarView, setPlannerPickedDay,
   setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
+import { getHealthDays, watchHealthDays } from '../health/healthStore';
 import { consumePlannerRecordRequest, getPlannerRecordRequest, openPlanSearch } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
   formatDay, formatDayLabel, formatPeriod, formatWeekRange,
 } from './plannerFormat';
+import { withHealthDays } from './plannerHealthDays';
 import { readLayers, saveLayers } from './plannerLayers';
 import {
   addDays, detachInstance, eventInstance, fromDayKey, getWeekKeys, hasInstanceOn, PLANNER_CALENDAR_VIEWS, shiftPeriod,
@@ -37,6 +39,7 @@ import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
@@ -49,7 +52,6 @@ import PlannerDateNav from './PlannerDateNav';
 import PlannerDayPanel from './PlannerDayPanel';
 import PlannerDayStrip from './PlannerDayStrip';
 import PlannerEventEditor from './PlannerEventEditor';
-import PlannerHealth from './PlannerHealth';
 import PlannerLayerChips from './PlannerLayerChips';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
@@ -75,7 +77,6 @@ const FORM_FOCUS_DELAY_MS = 250;
 const SNAPSHOT_WARN_BYTES = 786432;
 // Вкладки раздела на телефоне: «Сегодня» — первый вид календаря, своей вкладки у него нет
 const TAB_CALENDAR = 0;
-const TAB_HEALTH = 1;
 // Пункт «Сегодня» в переключателе вида календаря
 const SEGMENT_TODAY = 'today';
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
@@ -128,7 +129,18 @@ function focusNewName() {
 const Planner = () => {
   const lang = useLang();
 
-  const state = useDerivedState(getPlannerState);
+  const ownState = useDerivedState(getPlannerState);
+  // Сон, еда и тренировки в календаре — из модуля «Здоровье» (spec 041 B4); без модуля «План» их не показывает
+  const healthDays = useDerivedState(getHealthDays);
+  const { enabled: enabledModules } = useParvaneModules();
+  const isHealthOn = enabledModules.includes('health');
+  const state = useMemo(
+    () => withHealthDays(ownState, isHealthOn ? healthDays : undefined),
+    [ownState, healthDays, isHealthOn],
+  );
+  useEffect(() => {
+    if (isHealthOn) watchHealthDays();
+  }, [isHealthOn]);
   const isLoaded = useDerivedState(getIsPlannerLoaded);
   // Снимок с устройства, пока движок не поднялся: показывается, правки ждут загрузки
   const isCached = useDerivedState(getIsPlannerCached);
@@ -270,9 +282,8 @@ const Planner = () => {
     setFormParams(undefined);
   });
 
-  const handleSwitchTab = useLastCallback((index: number) => {
-    if (index === TAB_HEALTH) setPlannerView('health');
-    else showPlannerCalendar();
+  const handleSwitchTab = useLastCallback(() => {
+    showPlannerCalendar();
   });
 
   const handleOpenCalendar = useLastCallback(() => {
@@ -283,13 +294,9 @@ const Planner = () => {
     setPlannerView('health');
   });
 
-  // Значок сна в календаре: «Здоровье» на этом дне, к карточке сна
-  const handleOpenSleep = useLastCallback((sleepDay: string) => {
-    pickDay(sleepDay);
+  // Значок сна в календаре ведёт в модуль «Здоровье»
+  const handleOpenSleep = useLastCallback(() => {
     setPlannerView('health');
-    requestAnimationFrame(() => {
-      document.querySelector('[data-health="sleep"]')?.scrollIntoView({ block: 'start' });
-    });
   });
 
   const handleOpenSettings = useLastCallback(() => {
@@ -403,7 +410,6 @@ const Planner = () => {
     { title: lang('PlannerViewCalendar') },
   ];
   const isToday = view === 'today';
-  const isHealth = view === 'health';
   const isCalendar = view === 'calendar';
   const isMonthView = calendarView === 'month';
   const isWeekView = calendarView === 'week';
@@ -500,55 +506,41 @@ const Planner = () => {
 
   function renderHeader() {
     // «Сегодня» — вид календаря: шапка та же, переключатель вида остаётся на месте
-    if (!isHealth) {
-      return (
-        <PlannerPeriodBar
-          heading={isToday ? lang('PlannerToday') : undefined}
-          title={periodTitle}
-          prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
-          nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
-          picked={picked}
-          today={today}
-          isNarrow={isNarrow}
-          segments={calendarSegments}
-          activeSegment={isToday ? SEGMENT_TODAY : calendarView}
-          segmentsLabel={lang('PlannerCalView')}
-          layers={layers}
-          trailing={(
-            <>
-              {settingsButton}
-              {!isNarrow && (
-                <button
-                  type="button"
-                  className={buildClassName(styles.ib, styles.ibAccent)}
-                  aria-label={lang('PlannerAddEntry')}
-                  onClick={handleOpenQuick}
-                >
-                  <Icon name="add" />
-                </button>
-              )}
-            </>
-          )}
-          onPrev={handlePrevPeriod}
-          onNext={handleNextPeriod}
-          onToday={handleToday}
-          onPickDay={pickDay}
-          onSwitchSegment={handleSwitchSegment}
-          onToggleLayer={handleToggleLayer}
-        />
-      );
-    }
-    // Телефон: шапки у «Здоровья» нет — вкладки сверху, запись добавляет «+» нижней панели
-    if (isNarrow) return undefined;
     return (
-      <div className={styles.hdr}>
-        <h1 className={styles.hdrTitle}>{lang('PlannerHealth')}</h1>
-        <span className={styles.grow} />
-        {settingsButton}
-        <button type="button" className={buildClassName(styles.pill, styles.pillAccent)} onClick={handleOpenQuick}>
-          {lang('PlannerAddEntry')}
-        </button>
-      </div>
+      <PlannerPeriodBar
+        heading={isToday ? lang('PlannerToday') : undefined}
+        title={periodTitle}
+        prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
+        nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
+        picked={picked}
+        today={today}
+        isNarrow={isNarrow}
+        segments={calendarSegments}
+        activeSegment={isToday ? SEGMENT_TODAY : calendarView}
+        segmentsLabel={lang('PlannerCalView')}
+        layers={layers}
+        trailing={(
+          <>
+            {settingsButton}
+            {!isNarrow && (
+              <button
+                type="button"
+                className={buildClassName(styles.ib, styles.ibAccent)}
+                aria-label={lang('PlannerAddEntry')}
+                onClick={handleOpenQuick}
+              >
+                <Icon name="add" />
+              </button>
+            )}
+          </>
+        )}
+        onPrev={handlePrevPeriod}
+        onNext={handleNextPeriod}
+        onToday={handleToday}
+        onPickDay={pickDay}
+        onSwitchSegment={handleSwitchSegment}
+        onToggleLayer={handleToggleLayer}
+      />
     );
   }
 
@@ -693,7 +685,7 @@ const Planner = () => {
             </>
           ) : (
             <h2 className={styles.sideTitle}>
-              {lang(side === 'settings' ? (isHealth ? 'PlannerHealthSettings' : 'PlannerSettings') : 'PlannerTitleNew')}
+              {lang(side === 'settings' ? 'PlannerSettings' : 'PlannerTitleNew')}
             </h2>
           )}
           <span className={styles.grow} />
@@ -702,18 +694,8 @@ const Planner = () => {
           </button>
         </div>
         <div className={buildClassName(styles.content, styles.sideContent, 'custom-scroll')}>
-          {side === 'settings' && isHealth ? (
-            // Шестерёнка «Здоровья» — его цели (16 окт 2026; раньше — настройки плана и цели в конце экрана)
-            <PlannerHealth
-              state={state}
-              day={picked}
-              today={today}
-              mode="goals"
-              onExample={handleQuickText}
-              onOpenSettings={handleOpenSettings}
-            />
-          ) : side === 'settings' ? (
-            <PlannerSettings state={state} userId={currentUserId} />
+          {side === 'settings' ? (
+            <PlannerSettings state={ownState} userId={currentUserId} />
           ) : side === 'form' ? (
             <PlannerTaskForm
               state={state}
@@ -773,7 +755,7 @@ const Planner = () => {
               <TabList
                 className={styles.viewTabs}
                 tabs={viewTabs}
-                activeTab={isHealth ? TAB_HEALTH : TAB_CALENDAR}
+                activeTab={TAB_CALENDAR}
                 onSwitchTab={handleSwitchTab}
               />
               <button
@@ -811,27 +793,17 @@ const Planner = () => {
                   onNext={handleNextPeriod}
                   onToday={handleToday}
                 />
-                {isHealth ? (
-                  <PlannerHealth
-                    state={state}
-                    day={picked}
-                    today={today}
-                    onExample={handleQuickText}
-                    onOpenSettings={handleOpenSettings}
-                  />
-                ) : (
-                  <PlannerToday
-                    state={state}
-                    day={picked}
-                    today={today}
-                    isNarrow={isNarrow}
-                    onOpenTask={handleOpenTask}
-                    onOpenEvent={handleOpenEvent}
-                    onOpenCalendar={handleOpenCalendar}
-                    onOpenHealth={handleOpenHealth}
-                    onQuick={handleQuickText}
-                  />
-                )}
+                <PlannerToday
+                  state={state}
+                  day={picked}
+                  today={today}
+                  isNarrow={isNarrow}
+                  onOpenTask={handleOpenTask}
+                  onOpenEvent={handleOpenEvent}
+                  onOpenCalendar={handleOpenCalendar}
+                  onOpenHealth={handleOpenHealth}
+                  onQuick={handleQuickText}
+                />
               </>
             )}
           </div>

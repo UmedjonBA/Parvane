@@ -146,4 +146,17 @@ export type HealthParseResult = {
   problems: { text: string; code: string }[];
 };
 
+// Здоровье по дням для календаря «Плана» (`healthDays`): только дни с записями
+export type HealthDay = {
+  day: string;
+  closed: boolean;
+  sleeps: { id: string; minutes: number; bedMin?: number; wakeMin?: number }[];
+  foods: { id: string; minute: number; name: string; tag: string; kcal: number; parts: Record<string, number> }[];
+  workouts: {
+    id: string; minute: number; minutes: number; name: string; tag: string; parts: Record<string, number>;
+  }[];
+};
+
+export type HealthDays = { goals: Record<string, number>; days: HealthDay[] };
+
 export type HealthStatus = 'loading' | 'needs-linking' | 'no-key' | 'offline' | 'ready';
