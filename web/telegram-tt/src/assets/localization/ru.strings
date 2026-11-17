@@ -1445,6 +1445,12 @@
 "HealthWaterOfGoal" = "из {goal} мл";
 "HealthWaterGlass" = "+ стакан {ml}";
 "HealthWaterBottle" = "+ бутылка {ml}";
+"HealthPeriodWeek" = "Неделя";
+"HealthPeriodMonth" = "Месяц";
+"HealthPeriodYear" = "Год";
+"HealthSleepCountInSum" = "Считать в сумму сна за сутки";
+"HealthDayPrev" = "Предыдущий день";
+"HealthDayNext" = "Следующий день";
 "HealthKindFood" = "Еда";
 "HealthKindWorkout" = "Тренировка";
 "HealthUnitKcal" = "ккал";

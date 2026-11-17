@@ -5,6 +5,9 @@
 //! `{today, sleep:{goalBedMin, goalWakeMin, goalMinutes, last, lastDeltaMinutes, week:[7 дней], avgMinutes},
 //!   metrics:[{kind, unit, isSum, last, goal, toGoal, today, weekDelta, monthDelta, series:[30 дней]}],
 //!   recent:[записи, новые первыми], nutrition:{…}, activity:{…}}` — питание и активность считает `health_day`.
+//! У показателя ещё `year` — двенадцать месяцев `[{month, value, value2}]` (среднее значений дней), у сна —
+//! `month` (30 дней, минуты) и `year` (среднее минут за ночь по месяцам). Сон с меткой `aside` («не считать в
+//! сумму сна за сутки») виден в записях, но в суммы, неделю и средние не входит.
 //! Цели — регистры `Goal` с именем вида (`weight`, `steps`, `water`, …) и `sleep_bed` / `sleep_wake` (минуты от
 //! полуночи). Виды-суммы (`steps`, `water`): значение дня — сумма записей; остальные — последняя запись дня.
 
@@ -30,6 +33,9 @@ const OWN_GOALS: [&str; 7] = [GOAL_SLEEP_BED, GOAL_SLEEP_WAKE, "kcal", "protein"
 const WEEK_DAYS: i64 = 7;
 const SERIES_DAYS: i64 = 30;
 const RECENT_LIMIT: usize = 30;
+const YEAR_MONTHS: i64 = 12;
+/// Метка сна, который пользователь попросил не считать в сумму сна за сутки (дневной сон формой).
+pub const TAG_SLEEP_ASIDE: &str = "aside";
 const DAY_MIN: i64 = 1440;
 const DAY_MS: i64 = 86_400_000;
 
@@ -75,6 +81,22 @@ pub fn open_sleep_start<'a>(entries: &[&'a Entry], now_ms: i64) -> Option<&'a En
     (!closed).then_some(start)
 }
 
+/// Двенадцать месяцев до месяца дня `today` включительно: `(текст ГГГГ-ММ, первый день, первый день следующего)`.
+fn year_months(today: i64) -> Vec<(String, i64, i64)> {
+    let (y, m, _) = health::civil_from_days(today);
+    let index = y * 12 + i64::from(m) - 1;
+    (index - YEAR_MONTHS + 1..=index)
+        .map(|i| {
+            let first = |i: i64| health::days_from_civil(i.div_euclid(12), (i.rem_euclid(12) + 1) as u32, 1);
+            (format!("{:04}-{:02}", i.div_euclid(12), i.rem_euclid(12) + 1), first(i), first(i + 1))
+        })
+        .collect()
+}
+
+fn mean(values: &[f64]) -> Option<f64> {
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+}
+
 pub(super) fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
@@ -98,7 +120,7 @@ fn sleep_json(e: &Entry) -> Value {
 }
 
 fn sleep_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64, now_ms: i64) -> Value {
-    let sleeps: Vec<&&Entry> = entries.iter().filter(|e| e.kind == KIND_SLEEP && sleep_minutes(e) > 0 && entry_day_index(e) <= today).collect();
+    let sleeps: Vec<&&Entry> = entries.iter().filter(|e| e.kind == KIND_SLEEP && e.tag != TAG_SLEEP_ASIDE && sleep_minutes(e) > 0 && entry_day_index(e) <= today).collect();
     // Главный сон дня — самый длинный; дневной сон входит в сумму дня, но не в «лёг / встал»
     let main_of = |day: i64| sleeps.iter().filter(|e| entry_day_index(e) == day).max_by_key(|e| (sleep_minutes(e), e.at_ms));
     let total_of = |day: i64| sleeps.iter().filter(|e| entry_day_index(e) == day).map(|e| sleep_minutes(e)).sum::<i64>();
@@ -129,6 +151,11 @@ fn sleep_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64, now_m
         "lastDeltaMinutes": last_day.zip(goal_minutes).map(|(day, goal)| total_of(day) - goal),
         "week": week,
         "avgMinutes": avg,
+        "month": (today - SERIES_DAYS + 1..=today).map(|day| json!({"day": day_text(day), "minutes": main_of(day).map(|_| total_of(day))})).collect::<Vec<_>>(),
+        "year": year_months(today).into_iter().map(|(month, from, to)| {
+            let nights: Vec<f64> = (from..to.min(today + 1)).filter(|d| main_of(*d).is_some()).map(|d| total_of(d) as f64).collect();
+            json!({"month": month, "minutes": mean(&nights).map(f64::round)})
+        }).collect::<Vec<_>>(),
         // Отмечено «лёг», а «встал» ещё нет: экран предлагает «Встал»
         "openStartMs": open_sleep_start(entries, now_ms).map(|e| e.at_ms),
     })
@@ -176,6 +203,12 @@ fn metric_view(kind: &str, entries: &[&Entry], goals: &BTreeMap<&str, f64>, toda
         "weekDelta": delta(7),
         "monthDelta": delta(30),
         "series": series,
+        // Год по месяцам: среднее значений дней (у сумм — среднее дневных итогов); месяц без записей — пусто
+        "year": year_months(today).into_iter().map(|(month, from, to)| {
+            let days: Vec<(f64, f64)> = (from..to.min(today + 1)).filter_map(value_on).collect();
+            let avg = |pick: fn(&(f64, f64)) -> f64| mean(&days.iter().map(pick).collect::<Vec<_>>()).map(round1);
+            json!({"month": month, "value": avg(|d| d.0), "value2": avg(|d| d.1)})
+        }).collect::<Vec<_>>(),
     })
 }
 
@@ -377,6 +410,36 @@ mod tests {
         let lone = compose_changes(&HealthState::default(), &[woke.clone(), woke], at(0, 7, 30));
         assert_eq!(lone["changes"][0]["entry"]["kind"], "sleep_end");
         assert_ne!(lone["changes"][0]["entry"]["id"], lone["changes"][1]["entry"]["id"]);
+    }
+
+    #[test]
+    fn year_by_months_and_sleep_set_aside() {
+        let mut nap = entry("nap", "sleep", at(0, 14, 0), at(0, 15, 0), 0.0, 0.0);
+        nap = nap.replace(r#""unit":"u""#, r#""unit":"u","tag":"aside""#);
+        let st = state(&[
+            entry("w1", "weight", at(-40, 8, 0), 0, 74.0, 0.0),
+            entry("w2", "weight", at(-10, 8, 0), 0, 73.0, 0.0),
+            entry("w3", "weight", at(0, 8, 0), 0, 72.0, 0.0),
+            entry("st1", "steps", at(-1, 9, 0), 0, 4000.0, 0.0),
+            entry("st2", "steps", at(-1, 19, 0), 0, 2000.0, 0.0),
+            entry("st3", "steps", at(0, 9, 0), 0, 8000.0, 0.0),
+            entry("s1", "sleep", at(-1, 23, 0), at(0, 7, 0), 0.0, 0.0),
+            nap,
+        ]);
+        let v: Value = serde_json::from_str(&view_json(&st, NOW, TZ)).unwrap();
+        let metric = |kind: &str| v["metrics"].as_array().unwrap().iter().find(|m| m["kind"] == kind).cloned().unwrap();
+        let year = metric("weight")["year"].clone();
+        assert_eq!(year.as_array().unwrap().len(), 12);
+        assert_eq!(year[11], json!({"month": "2026-11", "value": 72.5, "value2": 0.0}), "ноябрь: 73 и 72");
+        assert_eq!(year[10]["value"], 74.0);
+        assert_eq!(year[0], json!({"month": "2025-12", "value": null, "value2": null}));
+        assert_eq!(metric("steps")["year"][11]["value"], 7000.0, "среднее дневных итогов: 6000 и 8000");
+        // Сон «не в сумму» виден в записях, но ночь остаётся 8 часов
+        assert_eq!(v["sleep"]["lastTotalMinutes"], 480);
+        assert_eq!(v["sleep"]["month"].as_array().unwrap().len(), 30);
+        assert_eq!(v["sleep"]["month"][29], json!({"day": "2026-11-15", "minutes": 480}));
+        assert_eq!(v["sleep"]["year"][11], json!({"month": "2026-11", "minutes": 480.0}));
+        assert!(v["recent"].as_array().unwrap().iter().any(|e| e["id"] == "nap"));
     }
 
     #[test]

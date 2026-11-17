@@ -109,6 +109,13 @@ export async function setFoodDayClosed(day: string, isClosed: boolean) {
   return Boolean(isDone);
 }
 
+/** Сводка на конец прошедшего дня: питание и итоги такими, какими они были в тот день. */
+export async function loadHealthViewAt(day: string): Promise<HealthView | undefined> {
+  const nowMs = new Date(`${day}T23:59:00`).getTime();
+  const reply = await callHealth('parvaneHealthState', { nowMs, tzMin: tzMinutes() }).catch(() => undefined);
+  return reply?.view ? parseEngineJson<HealthView>(reply.view) : undefined;
+}
+
 export type HealthEntriesPage = { entries: HealthEntry[]; hasMore: boolean };
 
 /** Записи показателя новыми первыми, не больше `limit`; `sleep` — сон вместе с отметками «лёг» и «встал». */

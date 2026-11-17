@@ -49,6 +49,8 @@ const NAP_FROM = '14:00';
 const NAP_TO = '15:00';
 const NOTE_MAX = 500;
 const NAME_MAX = 120;
+// Сон с этой меткой движок не считает в сумму сна за сутки
+const SLEEP_ASIDE_TAG = 'aside';
 const DECIMAL = { inputMode: 'decimal' } as const;
 const PROBLEM_KEYS = {
   value: 'HealthFormProblemValue',
@@ -127,7 +129,7 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
     };
     if (isSpan) {
       return span && {
-        ...base, atMs: span.atMs, endMs: span.endMs, value: span.minutes,
+        ...base, atMs: span.atMs, endMs: span.endMs, value: span.minutes, tag: form.tag,
       };
     }
     // Сон одной длительностью хранит момент начала дня: меняется только день
@@ -142,6 +144,11 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
       ...base, ...extra, atMs, value, value2,
     };
   }
+
+  const handleCountInSum = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const tag = e.currentTarget.checked ? '' : SLEEP_ASIDE_TAG;
+    setForm((current) => ({ ...current, tag }));
+  });
 
   const handleSave = useLastCallback(async () => {
     if (isSaving) return;
@@ -259,6 +266,17 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
           <div className={kit.muted} data-health-span>
             {lang('HealthSleepDurationValue', { duration: duration(span.minutes) })}
           </div>
+        )}
+        {isSpan && (
+          <label className={styles.checkRow}>
+            <input
+              type="checkbox"
+              checked={form.tag !== SLEEP_ASIDE_TAG}
+              data-health-field="countInSum"
+              onChange={handleCountInSum}
+            />
+            <span>{lang('HealthSleepCountInSum')}</span>
+          </label>
         )}
         {renderField('note', lang('HealthFieldNote'), 'text')}
         {problem && (

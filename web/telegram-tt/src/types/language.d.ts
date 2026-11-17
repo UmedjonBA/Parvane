@@ -2517,6 +2517,12 @@ export interface LangPair {
   'HealthMoodScore5': undefined;
   'HealthMoodNote': undefined;
   'HealthRecord': undefined;
+  'HealthPeriodWeek': undefined;
+  'HealthPeriodMonth': undefined;
+  'HealthPeriodYear': undefined;
+  'HealthSleepCountInSum': undefined;
+  'HealthDayPrev': undefined;
+  'HealthDayNext': undefined;
   'HealthKindFood': undefined;
   'HealthKindWorkout': undefined;
   'HealthUnitKcal': undefined;

@@ -628,3 +628,27 @@
   font-size: 0.6875rem;
   color: var(--pv-muted);
 }
+
+.periodChart {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  align-items: flex-start;
+
+  > svg,
+  > .bars {
+    align-self: stretch;
+  }
+}
+
+.checkRow,
+.dayNav {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.dayNav {
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+}

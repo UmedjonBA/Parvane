@@ -115,6 +115,11 @@ try {
   await goal.fill('70');
   await goal.blur();
   await detail.locator('[data-health-to-goal]').filter({ hasText: '+2' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Период графика: неделя, месяц, год — ряды из движка (за год — один месяц с записью)
+  await detail.locator('[data-health-period="week"]').click();
+  await detail.locator('[data-health-chart="week"][data-health-chart-points="1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await detail.locator('[data-health-period="year"]').click();
+  await detail.locator('[data-health-chart="year"][data-health-chart-points="1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Режим сна: цель «лечь / встать» даёт отклонение последней ночи
   await health.getByRole('button', { name: 'Back' }).click();
   await card(health, 'sleep').getByRole('button', { name: 'Open sleep' }).click();
@@ -172,6 +177,15 @@ try {
   await napSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await health.locator(`[data-health-card="sleep"] [data-day="${napDay}"]`).filter({ hasText: '1:00' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Считать в сумму сна» снята — сон остаётся в записях, но из суммы дня уходит
+  await health.locator('[data-health-detail="sleep"] [data-health-entries] [data-kind="sleep"]').filter({ hasText: '1 h 0 min' })
+    .locator('[data-health-entry-edit]').click();
+  await napSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await napSheet.locator('[data-health-field="countInSum"]').uncheck();
+  await page.locator('[data-health-save]').click();
+  await napSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await health.locator(`[data-health-card="sleep"] [data-day="${napDay}"]`).filter({ hasText: '—' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await health.getByRole('button', { name: 'Back' }).click();
   console.log('OK: дневной сон добавлен формой');
 
@@ -197,6 +211,15 @@ try {
   await food.locator('[data-health-macro="kcal"] [data-health-value]').filter({ hasText: '950 / 2,200' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: питание — приёмы пищи, БЖУ и калории против цели');
+
+  // ── Прошлый день: вчера записей нет, сегодня — на месте ───────────────────
+  await food.getByRole('button', { name: 'Previous day' }).click();
+  await food.locator('[data-health-macro="kcal"] [data-health-value]').filter({ hasText: /^0 \/ 2,200/ })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await food.getByRole('button', { name: 'Next day' }).click();
+  await food.locator('[data-health-macro="kcal"] [data-health-value]').filter({ hasText: '950 / 2,200' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: питание листается по дням');
 
   // ── Закрыть день питания: недобор виден до закрытия; день открывается снова ─
   await food.locator('[data-health-action="close-day"]').click();

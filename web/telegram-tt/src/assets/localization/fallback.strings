@@ -3392,6 +3392,12 @@
 "HealthWaterOfGoal" = "of {goal} ml";
 "HealthWaterGlass" = "+ glass {ml}";
 "HealthWaterBottle" = "+ bottle {ml}";
+"HealthPeriodWeek" = "Week";
+"HealthPeriodMonth" = "Month";
+"HealthPeriodYear" = "Year";
+"HealthSleepCountInSum" = "Count towards the day's sleep total";
+"HealthDayPrev" = "Previous day";
+"HealthDayNext" = "Next day";
 "HealthKindFood" = "Food";
 "HealthKindWorkout" = "Workout";
 "HealthUnitKcal" = "kcal";

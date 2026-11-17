@@ -6,7 +6,7 @@ import type { HealthEntry, HealthView } from './healthTypes';
 import buildClassName from '../../../util/buildClassName';
 import { FOOD_KIND, WORKOUT_KIND } from './healthDayFormat';
 import {
-  buildSparkline, formatClock, formatDelta, formatNumber, formatValue, MOOD_KIND, parseClock,
+  formatClock, formatDelta, formatNumber, formatValue, MOOD_KIND, parseClock,
 } from './healthFormat';
 import { loadHealthEntries, setHealthGoal } from './healthStore';
 import useHealthLabels from './useHealthLabels';
@@ -17,6 +17,7 @@ import HealthActivityDetail from './HealthActivityDetail';
 import HealthEntries from './HealthEntries';
 import HealthMoodScale from './HealthMoodScale';
 import HealthNutritionDetail from './HealthNutritionDetail';
+import HealthPeriodChart from './HealthPeriodChart';
 import HealthSleepCard from './HealthSleepCard';
 
 import kit from '../notes/PvKit.module.scss';
@@ -33,8 +34,6 @@ type OwnProps = {
   onExample: (text: string) => void;
 };
 
-const CHART_WIDTH = 480;
-const CHART_HEIGHT = 120;
 const SLEEP_KINDS = ['sleep', 'sleep_start', 'sleep_end'];
 const PAGE_SIZE = 30;
 
@@ -139,7 +138,6 @@ const HealthDetail = ({
     if (!metric) return <div className={kit.muted}>{lang('HealthNoEntries')}</div>;
     const { last, isSum } = metric;
     const value = isSum ? formatNumber(metric.today ?? 0, lang.code) : last ? formatValue(last, lang.code) : '—';
-    const points = buildSparkline(metric.series.map((point) => point.value), CHART_WIDTH, CHART_HEIGHT, 6);
     return (
       <section className={buildClassName(kit.card, styles.card)} data-health-card={kind}>
         <div className={styles.sleepLine}>
@@ -163,14 +161,7 @@ const HealthDetail = ({
               && lang('HealthMonthDelta', { delta: formatDelta(metric.monthDelta, lang.code) })}
           </div>
         )}
-        <svg
-          className={styles.chart}
-          viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-          role="img"
-          aria-label={lang('HealthChartMonth')}
-        >
-          {metric.series.length > 1 && <polyline className={styles.sparkLine} points={points} />}
-        </svg>
+        <HealthPeriodChart metric={metric} today={view.today} />
         <label className={styles.goal}>
           <span className={kit.muted}>{lang('HealthGoalLabel')}</span>
           <input
@@ -195,6 +186,7 @@ const HealthDetail = ({
       {isSleep ? (
         <>
           <HealthSleepCard sleep={view.sleep} today={view.today} isDetail onBed={onBed} onWake={onWake} />
+          <HealthPeriodChart sleep={view.sleep} today={view.today} />
           <section className={buildClassName(kit.card, styles.card)}>
             <div className={kit.caps}>{lang('HealthSleepGoal')}</div>
             <div className={styles.goalRow}>

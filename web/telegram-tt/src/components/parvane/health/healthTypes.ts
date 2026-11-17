@@ -50,6 +50,9 @@ export type HealthSleepView = {
   week: HealthSleepDay[];
   avgMinutes?: number;
   openStartMs?: number;
+  // Сумма сна по дням за 30 дней и средняя ночь по месяцам года
+  month: { day: string; minutes?: number }[];
+  year: { month: string; minutes?: number }[];
 };
 
 export type HealthMetricView = {
@@ -63,6 +66,8 @@ export type HealthMetricView = {
   weekDelta?: number;
   monthDelta?: number;
   series: { day: string; value: number; value2: number }[];
+  // Двенадцать месяцев: среднее значений дней; месяц без записей — без значения
+  year: { month: string; value?: number; value2?: number }[];
 };
 
 export type HealthMacros = { kcal: number; protein: number; fat: number; carbs: number };

@@ -1,4 +1,4 @@
-import { memo, useState } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { HealthNutritionView } from './healthTypes';
 
@@ -7,11 +7,13 @@ import {
   barShares, goalShare, MACRO_KEYS, MACROS, mealTitleKey,
 } from './healthDayFormat';
 import { formatNumber, WEEKDAY_KEYS } from './healthFormat';
-import { setFoodDayClosed } from './healthStore';
+import { shiftDay } from './healthPeriods';
+import { loadHealthViewAt, setFoodDayClosed } from './healthStore';
+import useHealthLabels from './useHealthLabels';
 
-import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ParvaneIcon from '../../main/ParvaneIcon';
 import PvSheet from '../notes/PvSheet';
 import HealthGoalInput from './HealthGoalInput';
 
@@ -19,16 +21,40 @@ import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
 
 type OwnProps = {
+  // Питание сегодняшнего дня; прошлый день экран запрашивает у движка сам
   nutrition: HealthNutritionView;
   // Заготовка строки ввода: «ужин »
   onExample: (text: string) => void;
 };
 
 // Parvane (spec 041 B3; доски `XdHealth`, `ZpHealthX`, `PhModSettings`): питание за день — калории и БЖУ против
-// целей, приёмы пищи, закрытие дня и калории за неделю. Все числа — из движка (`healthView.nutrition`)
-const HealthNutritionDetail = ({ nutrition, onExample }: OwnProps) => {
-  const lang = useLang();
+// целей, приёмы пищи, закрытие дня и калории за неделю. Все числа — из движка (`healthView.nutrition`); прошлый
+// день — та же сводка на конец того дня
+const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProps) => {
+  const today = todayNutrition.day;
+  const { lang, dayTitle } = useHealthLabels(today);
   const [isClosing, setIsClosing] = useState(false);
+  const [pastDay, setPastDay] = useState<string>();
+  const [past, setPast] = useState<HealthNutritionView>();
+  // Данные сменились (запись, закрытие дня) — прошлый день перечитывается
+  useEffect(() => {
+    if (!pastDay) return undefined;
+    let isStale = false;
+    void loadHealthViewAt(pastDay).then((view) => {
+      if (view && !isStale) setPast(view.nutrition);
+    });
+    return () => {
+      isStale = true;
+    };
+  }, [pastDay, todayNutrition]);
+  const isPast = Boolean(pastDay) && past?.day === pastDay;
+  const nutrition = isPast ? past : todayNutrition;
+
+  const handlePrevDay = useLastCallback(() => setPastDay(shiftDay(pastDay || today, -1)));
+  const handleNextDay = useLastCallback(() => {
+    const next = shiftDay(pastDay!, 1);
+    setPastDay(next >= today ? undefined : next);
+  });
   const {
     total, goals, meals, week, weekAvg, left, day, closed: isClosed,
   } = nutrition;
@@ -52,6 +78,21 @@ const HealthNutritionDetail = ({ nutrition, onExample }: OwnProps) => {
 
   return (
     <>
+      <div className={styles.dayNav} data-health-day={nutrition.day}>
+        <button type="button" className={kit.ib} aria-label={lang('HealthDayPrev')} onClick={handlePrevDay}>
+          <ParvaneIcon name="left" isSmall />
+        </button>
+        <span className={kit.grow}>{dayTitle(pastDay || today)}</span>
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('HealthDayNext')}
+          disabled={!pastDay}
+          onClick={handleNextDay}
+        >
+          <ParvaneIcon name="right" isSmall />
+        </button>
+      </div>
       <section className={buildClassName(kit.card, styles.card)} data-health-card="food">
         {MACROS.map((macro) => {
           const goal = goals[macro];
@@ -81,7 +122,7 @@ const HealthNutritionDetail = ({ nutrition, onExample }: OwnProps) => {
               <span className={buildClassName(kit.muted, kit.grow, styles.mealNames)}>
                 {isEmpty ? lang('HealthMealEmpty') : meal.names}
               </span>
-              {isEmpty ? (
+              {isEmpty && isPast ? undefined : isEmpty ? (
                 <button type="button" className={kit.btn} data-title={title} onClick={handleAdd}>
                   {lang('HealthMealAdd')}
                 </button>
