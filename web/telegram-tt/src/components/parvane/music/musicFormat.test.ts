@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { coverTone, formatTrackTime, splitListTime } from './musicFormat';
+import {
+  coverTone, formatTrackTime, splitBytes, splitListTime,
+} from './musicFormat';
 
 describe('Оформление значений «Музыки»', () => {
   it('длительность трека и списка', () => {
@@ -8,6 +10,8 @@ describe('Оформление значений «Музыки»', () => {
     expect(formatTrackTime(222)).toBe('3:42');
     expect(formatTrackTime(3725)).toBe('1:02:05');
     expect(splitListTime(6720)).toEqual({ hours: 1, minutes: 52 });
+    expect(splitBytes(5 * 1024 * 1024 * 1024)).toEqual({ value: 5, isGigabytes: true });
+    expect(splitBytes(300 * 1024 * 1024)).toEqual({ value: 300, isGigabytes: false });
   });
 
   it('тон заглушки обложки постоянен для одного id', () => {

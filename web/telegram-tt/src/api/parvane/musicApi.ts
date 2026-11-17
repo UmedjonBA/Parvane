@@ -46,11 +46,78 @@ export type MusicInfo = {
   // База ссылок обложек: `<coverBase>/<coverId>?size=N`; пусто — обложек нет
   coverBase: string;
   coverExpiresMs: number;
+  // «Найти и скачать»: сервис скачивания подключён; лимиты и расход пользователя
+  isFetchEnabled: boolean;
+  addPerDay: number;
+  addedToday: number;
+  quotaBytes: number;
+  usedBytes: number;
+};
+
+// Эталон трека из каталога: с ним сервер сверяет найденные в сети файлы
+export type MusicCatalogTrack = {
+  artist: string;
+  title: string;
+  album: string;
+  durationSecs: number;
+  // Пометка каталога «с ненормативной лексикой»; `undefined` — каталог не знает
+  isExplicit?: boolean;
+  year: number;
+  // Трек уже есть в библиотеке сервера
+  libraryTrackId?: string;
+};
+
+export type MusicFetchCandidate = {
+  id: string;
+  source: string;
+  title: string;
+  uploader: string;
+  durationSecs: number;
+  // День загрузки `ГГГГ-ММ-ДД`; пусто — источник не сообщил
+  uploaded: string;
+  // Оценка совпадения с эталоном, 0…1000
+  score: number;
+  // Копия, про которую известно, что она не отредактирована
+  isTrustedOriginal: boolean;
+};
+
+export type MusicFetchState = 'searching' | 'choice' | 'downloading' | 'done' | 'failed';
+export type MusicFetchFailure = 'notFound' | 'source' | 'library' | 'limit';
+
+export type MusicFetchJob = {
+  jobId: string;
+  state: MusicFetchState;
+  track: MusicCatalogTrack;
+  candidates: MusicFetchCandidate[];
+  trackId?: string;
+  failure?: MusicFetchFailure;
+};
+
+export type MusicAddedTrack = {
+  track: MusicTrack;
+  addedMs: number;
+  bytes: number;
+  // Ник добавившего
+  adder: string;
 };
 
 export type MusicStreamQuality = 'original' | 'opus';
 
 const PAGE = 50;
+const FETCH_STATES: Record<string, MusicFetchState> = {
+  FETCH_STATE_SEARCHING: 'searching',
+  FETCH_STATE_NEEDS_CHOICE: 'choice',
+  FETCH_STATE_DOWNLOADING: 'downloading',
+  FETCH_STATE_DONE: 'done',
+  FETCH_STATE_FAILED: 'failed',
+};
+const FETCH_FAILURES: Record<string, MusicFetchFailure> = {
+  FETCH_FAILURE_NOT_FOUND: 'notFound',
+  FETCH_FAILURE_SOURCE: 'source',
+  FETCH_FAILURE_LIBRARY: 'library',
+  FETCH_FAILURE_LIMIT: 'limit',
+};
+const EXPLICIT_NAMES = { yes: 'EXPLICIT_YES', no: 'EXPLICIT_NO' };
 const QUALITY_NAMES: Record<MusicStreamQuality, string> = {
   original: 'STREAM_QUALITY_ORIGINAL',
   opus: 'STREAM_QUALITY_OPUS',
@@ -106,6 +173,51 @@ function toArtist(raw: Json): MusicArtist {
   };
 }
 
+function toCatalogTrack(raw: Json): MusicCatalogTrack {
+  const explicit = text(raw, 'explicit');
+  return {
+    artist: text(raw, 'artist'),
+    title: text(raw, 'title'),
+    album: text(raw, 'album'),
+    durationSecs: count(raw, 'duration_secs'),
+    isExplicit: explicit === EXPLICIT_NAMES.yes ? true : explicit === EXPLICIT_NAMES.no ? false : undefined,
+    year: count(raw, 'year'),
+    libraryTrackId: text(raw, 'library_track_id') || undefined,
+  };
+}
+
+function fromCatalogTrack(track: MusicCatalogTrack): Json {
+  return {
+    artist: track.artist,
+    title: track.title,
+    album: track.album,
+    duration_secs: track.durationSecs,
+    explicit: track.isExplicit === undefined ? undefined : track.isExplicit ? EXPLICIT_NAMES.yes : EXPLICIT_NAMES.no,
+    year: track.year,
+  };
+}
+
+function toFetchJob(raw: Json): MusicFetchJob {
+  const track = field(raw, 'track');
+  return {
+    jobId: text(raw, 'job_id'),
+    state: FETCH_STATES[text(raw, 'state')] || 'failed',
+    track: toCatalogTrack(track && typeof track === 'object' ? track as Json : {}),
+    candidates: list(raw, 'candidates').map((candidate) => ({
+      id: text(candidate, 'id'),
+      source: text(candidate, 'source'),
+      title: text(candidate, 'title'),
+      uploader: text(candidate, 'uploader'),
+      durationSecs: count(candidate, 'duration_secs'),
+      uploaded: text(candidate, 'uploaded'),
+      score: count(candidate, 'score'),
+      isTrustedOriginal: Boolean(field(candidate, 'trusted_original')),
+    })),
+    trackId: text(raw, 'track_id') || undefined,
+    failure: FETCH_FAILURES[text(raw, 'failure')],
+  };
+}
+
 export function createMusicApi(deps: Deps) {
   return {
     /** Подключена ли библиотека и откуда брать обложки. Отказ сервера — «не подключена». */
@@ -116,10 +228,24 @@ export function createMusicApi(deps: Deps) {
           isEnabled: Boolean(field(reply, 'enabled')),
           coverBase: text(reply, 'cover_base'),
           coverExpiresMs: count(reply, 'cover_expires_ms'),
+          isFetchEnabled: Boolean(field(reply, 'fetch_enabled')),
+          addPerDay: count(reply, 'add_per_day'),
+          addedToday: count(reply, 'added_today'),
+          quotaBytes: count(reply, 'quota_bytes'),
+          usedBytes: count(reply, 'used_bytes'),
         };
       } catch (err) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);
-        return { isEnabled: false, coverBase: '', coverExpiresMs: 0 };
+        return {
+          isEnabled: false,
+          coverBase: '',
+          coverExpiresMs: 0,
+          isFetchEnabled: false,
+          addPerDay: 0,
+          addedToday: 0,
+          quotaBytes: 0,
+          usedBytes: 0,
+        };
       }
     },
 
@@ -173,6 +299,50 @@ export function createMusicApi(deps: Deps) {
 
     async parvaneMusicStar({ trackId, isStarred }: { trackId: string; isStarred: boolean }) {
       await deps.call('music.star.set', { track_id: trackId, starred: isStarred });
+      return true;
+    },
+
+    /** «Найти в сети»: эталоны треков из каталога по названию или исполнителю. */
+    async parvaneMusicFetchCatalog({ query }: { query: string }) {
+      const reply = await deps.call('music.fetch.catalog', { query });
+      return list(reply, 'tracks').map(toCatalogTrack);
+    },
+
+    /** Скачать трек по эталону. Отказ — кодом протокола: `ERROR_CODE_LIMIT` (лимит), `ERROR_CODE_DUPLICATE`. */
+    async parvaneMusicFetchStart({ track }: { track: MusicCatalogTrack }) {
+      const reply = await deps.call('music.fetch.start', { track: fromCatalogTrack(track) });
+      return toFetchJob(field(reply, 'job') as Json);
+    },
+
+    /** Продолжить задачу файлом, который выбрал пользователь. */
+    async parvaneMusicFetchChoose({ jobId, candidateId }: { jobId: string; candidateId: string }) {
+      const reply = await deps.call('music.fetch.start', { job_id: jobId, candidate_id: candidateId });
+      return toFetchJob(field(reply, 'job') as Json);
+    },
+
+    /** Задачи скачивания пользователя: идущие и законченные за последний час. */
+    async parvaneMusicFetchStatus() {
+      const reply = await deps.call('music.fetch.status', {});
+      return list(reply, 'jobs').map(toFetchJob);
+    },
+
+    /** Добавленное в библиотеку: своё («Загруженное») либо недавнее всех («Новое на сервере»). */
+    async parvaneMusicAdded({ isMine }: { isMine: boolean }): Promise<MusicAddedTrack[]> {
+      const reply = await deps.call('music.added.list', { mine: isMine, limit: PAGE });
+      return list(reply, 'tracks').map((raw) => {
+        const track = field(raw, 'track');
+        return {
+          track: toTrack(track && typeof track === 'object' ? track as Json : {}),
+          addedMs: count(raw, 'added_ms'),
+          bytes: count(raw, 'bytes'),
+          adder: text(raw, 'adder'),
+        };
+      });
+    },
+
+    /** Убрать добавленный трек из библиотеки (добавивший либо администратор). */
+    async parvaneMusicAddedDelete({ trackId }: { trackId: string }) {
+      await deps.call('music.added.delete', { track_id: trackId });
       return true;
     },
 

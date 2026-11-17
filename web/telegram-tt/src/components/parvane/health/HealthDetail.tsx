@@ -7,9 +7,9 @@ import {
   buildSparkline, formatClock, formatDelta, formatNumber, formatValue,
 } from './healthFormat';
 import { setHealthGoal } from './healthStore';
+import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
-import useHealthLabels from './useHealthLabels';
 
 import HealthEntries from './HealthEntries';
 import HealthSleepCard from './HealthSleepCard';

@@ -6,9 +6,9 @@ import buildClassName from '../../../util/buildClassName';
 import {
   buildSparkline, formatDelta, formatNumber, formatValue,
 } from './healthFormat';
+import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
-import useHealthLabels from './useHealthLabels';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';

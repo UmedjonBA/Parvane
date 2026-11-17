@@ -4,7 +4,6 @@ import type { HealthSleepView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatClock, formatDurationShort, sleepBar } from './healthFormat';
-
 import useHealthLabels from './useHealthLabels';
 
 import ParvaneIcon from '../../main/ParvaneIcon';

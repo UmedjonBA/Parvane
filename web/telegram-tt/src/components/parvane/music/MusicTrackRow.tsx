@@ -21,6 +21,10 @@ type OwnProps = {
   isPlaying?: boolean;
   // Очередь: трек убирается крестиком
   canRemove?: boolean;
+  // Приписка к исполнителю: «добавила Алия»
+  note?: string;
+  // «Загруженное»: убрать трек из библиотеки сервера
+  onDelete?: (track: MusicTrack) => void;
   onPlay: (index: number) => void;
   onStar?: (track: MusicTrack) => void;
   onAddNext?: (track: MusicTrack) => void;
@@ -29,7 +33,7 @@ type OwnProps = {
 
 // Parvane (spec 039): строка трека — обложка, название и исполнитель, длительность; нажатие играет
 const MusicTrackRow = ({
-  track, index, isCurrent, isPlaying, canRemove, onPlay, onStar, onAddNext, onRemove,
+  track, index, isCurrent, isPlaying, canRemove, note, onPlay, onStar, onAddNext, onRemove, onDelete,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -37,6 +41,9 @@ const MusicTrackRow = ({
   const handleStar = useLastCallback(() => onStar?.(track));
   const handleAddNext = useLastCallback(() => onAddNext?.(track));
   const handleRemove = useLastCallback(() => onRemove?.(index));
+  const handleDelete = useLastCallback(() => onDelete?.(track));
+  const nowPlaying = isCurrent && isPlaying && lang('MusicNowPlaying');
+  const artistLine = [track.artist, note, nowPlaying].filter(Boolean).join(' · ');
 
   return (
     <li className={buildClassName(styles.track, isCurrent && styles.trackCurrent)} data-track={track.id}>
@@ -50,7 +57,7 @@ const MusicTrackRow = ({
         <span className={styles.trackText}>
           <span className={styles.trackTitle}>{track.title}</span>
           <span className={buildClassName(kit.muted, kit.small, styles.trackArtist)}>
-            {isCurrent && isPlaying ? `${track.artist} · ${lang('MusicNowPlaying')}` : track.artist}
+            {artistLine}
           </span>
         </span>
         <span className={buildClassName(kit.mono, kit.muted, kit.small)}>{formatTrackTime(track.durationSecs)}</span>
@@ -69,6 +76,17 @@ const MusicTrackRow = ({
       {onAddNext && (
         <button type="button" className={kit.ib} aria-label={lang('MusicPlayNext')} onClick={handleAddNext}>
           <ParvaneIcon name="plus" isSmall />
+        </button>
+      )}
+      {onDelete && (
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('MusicAddedDelete', { name: track.title })}
+          data-music-delete
+          onClick={handleDelete}
+        >
+          <ParvaneIcon name="close" isSmall />
         </button>
       )}
       {canRemove && (

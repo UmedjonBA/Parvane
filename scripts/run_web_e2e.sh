@@ -253,12 +253,21 @@ fi
 if [[ "${PARVANE_E2E_MUSIC:-0}" == "1" ]]; then
   MUSIC_LIBRARY_PORT="${PARVANE_E2E_MUSIC_LIBRARY_PORT:-19431}"
   MUSIC_HTTP_PORT="${PARVANE_E2E_MUSIC_HTTP_PORT:-19432}"
-  node "$ROOT/scripts/fake_subsonic.mjs" "$MUSIC_LIBRARY_PORT" >"$TEMP_ROOT/fake-subsonic.log" 2>&1 &
+  MUSIC_FETCH_PORT="${PARVANE_E2E_MUSIC_FETCH_PORT:-19433}"
+  mkdir -p "$TEMP_ROOT/music-library"
+  node "$ROOT/scripts/fake_subsonic.mjs" "$MUSIC_LIBRARY_PORT" "$TEMP_ROOT/music-library" >"$TEMP_ROOT/fake-subsonic.log" 2>&1 &
   PIDS+=("$!")
   wait_for_log fake-subsonic 'fake subsonic' "${PIDS[-1]}"
+  # «Найти и скачать»: поддельный сервис скачивания (`scripts/fake_music_fetch.mjs`) пишет в ту же папку
+  node "$ROOT/scripts/fake_music_fetch.mjs" "$MUSIC_FETCH_PORT" "$TEMP_ROOT/music-library" >"$TEMP_ROOT/fake-music-fetch.log" 2>&1 &
+  PIDS+=("$!")
+  wait_for_log fake-music-fetch 'fake music fetch' "${PIDS[-1]}"
   PARVANE_MUSIC_NAVIDROME_URL="http://127.0.0.1:$MUSIC_LIBRARY_PORT" \
   PARVANE_MUSIC_HTTP_BIND="127.0.0.1:$MUSIC_HTTP_PORT" \
   PARVANE_MUSIC_URL_KEY_FILE="$TEMP_ROOT/music-url.key" \
+  PARVANE_MUSIC_FETCH_URL="http://127.0.0.1:$MUSIC_FETCH_PORT" \
+  PARVANE_MUSIC_LIBRARY_DIR="$TEMP_ROOT/music-library" \
+  PARVANE_MUSIC_ADD_PER_DAY="${PARVANE_E2E_MUSIC_ADD_PER_DAY:-3}" \
     start_shard music "$MUSIC_PASS"
   wait_for_log music 'Music шард запущен' "${PIDS[-1]}"
   export PARVANE_MUSIC_ORIGIN="http://127.0.0.1:$MUSIC_HTTP_PORT"

@@ -70,7 +70,7 @@ const Health = () => {
     metric.kind !== MOOD_KIND && !hiddenKinds.includes(metric.kind)
   ));
   const mood = view?.metrics.find((metric) => metric.kind === MOOD_KIND);
-  const isEmpty = Boolean(view) && !view!.recent.length && !view!.metrics.length;
+  const isEmpty = Boolean(view) && !view.recent.length && !view.metrics.length;
 
   const addMark = useLastCallback((kind: 'sleep_start' | 'sleep_end') => {
     const now = Date.now();
@@ -194,7 +194,7 @@ const Health = () => {
       </header>
       {view && status !== 'ready' && (
         <div className={styles.notice} role="status">
-          {lang(STATUS_KEYS[status as keyof typeof STATUS_KEYS] || 'HealthStatusLoading')}
+          {lang(STATUS_KEYS[status] || 'HealthStatusLoading')}
         </div>
       )}
       <div className={buildClassName(styles.body, 'custom-scroll')}>

@@ -1,7 +1,9 @@
 // Модуль «Музыка» (spec 039, 041; правило MUSIC-1). Библиотека — поддельный Subsonic-сервер за шардом music
 // (`scripts/fake_subsonic.mjs`): два альбома, пять треков, первый трек длится 4 секунды. Проверяется путь
 // слушателя: главная, альбом, воспроизведение и переход на следующий трек, пауза, любимое, поиск и «играть
-// следующим», плеер вне модуля, очередь после перезагрузки, полоса плеера на телефоне.
+// следующим», плеер вне модуля, очередь после перезагрузки, полоса плеера на телефоне; «Найти и скачать»
+// (поддельный сервис скачивания `scripts/fake_music_fetch.mjs`, лимит раннера — три трека в сутки): уверенное
+// совпадение качается само, спорное — выбором файла, ничего не нашлось, лимит, «Загруженное» и удаление.
 // Запуск: scripts/run_web_music_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -147,6 +149,83 @@ try {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   console.log('OK: телефон — полоса плеера над лентой, плеер отдельным видом');
+
+  // ── «Найти и скачать»: уверенное совпадение качается само ─────────────────
+  await page.setViewportSize(WIDE);
+  await page.waitForTimeout(800);
+  const wide = page.locator('#ParvaneMusic');
+  const wideSide = wide.locator('aside');
+  // Вид «Плеер» есть только на телефоне: на широком экране возвращаемся на главную, где есть строка поиска
+  await wide.locator('[data-view="home"]').click();
+  const fetchRow = (title) => wide.locator(`[data-music-fetch] [data-fetch-track="${title}"]`);
+  const searchFor = async (text, title) => {
+    await wide.getByRole('searchbox').fill(text);
+    await fetchRow(title).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    return fetchRow(title);
+  };
+  const bus = await searchFor('автобус', 'Ночной автобус');
+  await wide.locator('[data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bus.locator('[data-fetch-download]').click();
+  await bus.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  assert.equal(await bus.locator('[data-fetch-candidates]').count(), 0, 'уверенное совпадение не спрашивает выбора');
+  await bus.locator('[data-fetch-play]').click();
+  await wideSide.locator('[data-music-now]').filter({ hasText: 'Ночной автобус' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wideSide.getByRole('button', { name: 'Pause' }).click();
+  console.log('OK: трек найден в сети, скачан без вопросов и играет');
+
+  // ── Трек, который уже есть в библиотеке, скачивать не предлагается ────────
+  const glass = await searchFor('glass', 'Glass Harbor');
+  await glass.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await glass.locator('[data-fetch-download]').count(), 0, 'трек из библиотеки не скачивается заново');
+  console.log('OK: трек из библиотеки отмечен в каталоге');
+
+  // ── Спорное совпадение: нужна версия без цензуры, известной нет — выбор файла ─
+  const loud = await searchFor('громкая', 'Громкая песня');
+  await loud.locator('[data-fetch-download]').click();
+  const candidates = loud.locator('[data-fetch-candidates]');
+  await candidates.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  // Студийная копия — первой, концертная запись — ниже; у каждой источник и дата загрузки
+  assert.equal(await candidates.getByRole('button', { name: 'This one' }).count(), 2, 'в списке два файла');
+  const offered = await candidates.locator('li').filter({ has: page.getByRole('button', { name: 'This one' }) }).allInnerTexts();
+  assert.match(offered[0], /YouTube · Полдень · 0:30 · 2026-06-01/, `первой — студийная копия: ${offered[0]}`);
+  assert.match(offered[1], /live/, `концертная запись — ниже: ${offered[1]}`);
+  assert.equal(await candidates.locator('[data-fetch-trusted]').count(), 0, 'новые копии не помечены «без цензуры»');
+  await candidates.getByRole('button', { name: 'This one' }).first().click();
+  await loud.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  console.log('OK: спорное совпадение скачано после выбора файла');
+
+  // ── Ничего подходящего в источниках ───────────────────────────────────────
+  const empty = await searchFor('пустой', 'Пустой трек');
+  await empty.locator('[data-fetch-download]').click();
+  await empty.locator('[data-fetch-state="failed"]').getByText('No suitable file was found').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  console.log('OK: файла нет в источниках — задача честно не удалась');
+
+  // ── Лимит: три трека в сутки ──────────────────────────────────────────────
+  const morning = await searchFor('утро', 'Утро');
+  await morning.locator('[data-fetch-download]').click();
+  await morning.locator('[data-fetch-play]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  const again = await searchFor('пустой', 'Пустой трек');
+  await again.getByRole('button', { name: 'Try again' }).click();
+  await wide.locator('[data-fetch-notice="limit"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wide.getByRole('searchbox').fill('');
+  console.log('OK: четвёртый трек за сутки не принят — лимит');
+
+  // ── «Загруженное»: свои треки, расход, удаление ───────────────────────────
+  await wide.locator('[data-view="added"]').click();
+  const mine = wide.locator('[data-music-added="mine"]');
+  await mine.locator('[data-track]').nth(2).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wide.locator('[data-music-usage]').getByText('Today 3 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await mine.getByRole('button', { name: 'Remove from the server library: Утро' }).click();
+  await wide.locator('[data-music-usage]').getByText('Today 2 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Список перечитывается отдельным запросом — после расхода
+  await mine.locator('[data-track]').nth(2).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await mine.locator('[data-track]').count(), 2, 'после удаления в «Загруженном» два трека');
+  // «Новое на сервере» на главной: добавленное с тем, кто добавил
+  await wide.locator('[data-view="home"]').click();
+  const everyone = wide.locator('[data-music-added="all"]');
+  await everyone.getByText(`added by ${user.split('@')[0]}`).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await everyone.locator('[data-track]').count(), 2, 'на главной два добавленных трека');
+  console.log('OK: «Загруженное» — расход, удаление; «Новое на сервере» — кто добавил');
 
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');

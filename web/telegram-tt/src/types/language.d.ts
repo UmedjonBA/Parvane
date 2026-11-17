@@ -2329,6 +2329,29 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'MusicAdded': undefined;
+  'MusicAddedEmpty': undefined;
+  'MusicFetchTitle': undefined;
+  'MusicFetchLooking': undefined;
+  'MusicFetchNothing': undefined;
+  'MusicFetchUnavailable': undefined;
+  'MusicFetchDownload': undefined;
+  'MusicFetchRetry': undefined;
+  'MusicFetchInLibrary': undefined;
+  'MusicFetchSearching': undefined;
+  'MusicFetchDownloading': undefined;
+  'MusicFetchChoose': undefined;
+  'MusicFetchTakeThis': undefined;
+  'MusicFetchUncensored': undefined;
+  'MusicFetchNotFound': undefined;
+  'MusicFetchSourceFailed': undefined;
+  'MusicFetchLibraryPending': undefined;
+  'MusicFetchNoSpace': undefined;
+  'MusicFetchLimit': undefined;
+  'MusicFetchStartFailed': undefined;
+  'MusicSourceYoutube': undefined;
+  'MusicSourceReupload': undefined;
+  'MusicSourceSoundcloud': undefined;
   'MusicHome': undefined;
   'MusicStarred': undefined;
   'MusicArtists': undefined;
@@ -5035,6 +5058,24 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneModuleMoveDown': {
     'name': V;
+  };
+  'MusicSizeGb': {
+    'value': V;
+  };
+  'MusicSizeMb': {
+    'value': V;
+  };
+  'MusicAddedBy': {
+    'name': V;
+  };
+  'MusicAddedDelete': {
+    'name': V;
+  };
+  'MusicAddedUsage': {
+    'today': V;
+    'perDay': V;
+    'used': V;
+    'quota': V;
   };
   'MusicListTime': {
     'hours': V;

@@ -3,9 +3,14 @@
 // API не пускает (отказ 40), а страница `/app/` заводит. Треки — настоящие WAV (тишина), чтобы браузер их играл:
 // первый короткий (переход на следующий трек виден за секунды), остальные длиннее. Поток отдаётся с Range.
 // Запуск: node scripts/fake_subsonic.mjs <порт>
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 
 const PORT = Number(process.argv[2] || 19431);
+// Папка библиотеки (необязательно): по `startScan` файлы из неё становятся треками — как у настоящего сервера
+// после загрузки через «Найти и скачать». Имя файла: `<исполнитель> - <название> [<метка>].<расширение>`
+const LIBRARY_DIR = process.argv[3];
 const SAMPLE_RATE = 8000;
 
 const ARTISTS = [
@@ -92,7 +97,33 @@ function fail(res, code) {
   }));
 }
 
-const matches = (text, query) => !query || text.toLowerCase().includes(query);
+// Файлы папки библиотеки → треки; удалённый файл убирает свой трек
+function scanLibrary() {
+  if (!LIBRARY_DIR || !fs.existsSync(LIBRARY_DIR)) return;
+  const files = fs.readdirSync(LIBRARY_DIR, { recursive: true }).map(String).filter((file) => /\.[a-z0-9]+$/i.test(file));
+  for (let i = SONGS.length - 1; i >= 0; i--) {
+    if (SONGS[i].file && !files.includes(SONGS[i].file)) {
+      AUDIO.delete(SONGS[i].id);
+      SONGS.splice(i, 1);
+    }
+  }
+  files.filter((file) => !SONGS.some((song) => song.file === file)).forEach((file) => {
+    const name = path.basename(file).replace(/\.[a-z0-9]+$/i, '').replace(/\s*\[[^\]]*\]$/, '');
+    const [artist, title] = name.includes(' - ') ? name.split(' - ') : ['', name];
+    let album = ALBUMS.find((item) => item.artist === artist && item.name === 'Загруженное');
+    if (!album) {
+      album = { id: `al-up-${ALBUMS.length}`, name: 'Загруженное', artist, artistId: `ar-up-${ALBUMS.length}`, year: 2026 };
+      ALBUMS.push(album);
+      ARTISTS.push({ id: album.artistId, name: artist });
+    }
+    const id = `up${SONGS.length + 1}`;
+    SONGS.push({ id, title: title.trim(), albumId: album.id, duration: 30, file });
+    AUDIO.set(id, wav(30));
+  });
+}
+
+// Как у настоящего сервера: совпасть должно каждое слово запроса, порядок слов не важен
+const matches = (text, query) => query.split(/\s+/).filter(Boolean).every((word) => text.toLowerCase().includes(word));
 const page = (items, offset, size) => items.slice(Number(offset) || 0, (Number(offset) || 0) + (Number(size) || 20));
 
 http.createServer((req, res) => {
@@ -110,6 +141,9 @@ http.createServer((req, res) => {
   switch (url.pathname) {
     case '/rest/ping':
       return reply(res, {});
+    case '/rest/startScan':
+      scanLibrary();
+      return reply(res, { scanStatus: { scanning: false } });
     case '/rest/search3': {
       const query = (q.get('query') || '').replace(/"/g, '').trim().toLowerCase();
       const songs = SONGS.filter((song) => {

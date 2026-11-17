@@ -2,11 +2,13 @@ import {
   memo, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
-import type { MusicAlbum, MusicArtist, MusicTrack } from '../../../api/parvane/musicApi';
+import type {
+  MusicAddedTrack, MusicAlbum, MusicArtist, MusicTrack,
+} from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
 import { getParvaneSection } from '../../../util/parvaneSection';
-import { splitListTime } from './musicFormat';
+import { splitBytes, splitListTime } from './musicFormat';
 import {
   addToQueue, callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks,
   restoreMusicQueue, setTrackStarred,
@@ -18,6 +20,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
+import MusicFetch from './MusicFetch';
 import MusicQueue from './MusicQueue';
 import MusicTrackRow from './MusicTrackRow';
 
@@ -25,7 +28,7 @@ import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
 
 type View =
-  | { kind: 'home' | 'starred' | 'artists' | 'albums' | 'queue' }
+  | { kind: 'home' | 'starred' | 'artists' | 'albums' | 'added' | 'queue' }
   | { kind: 'album'; id: string }
   | { kind: 'artist'; id: string }
   | { kind: 'search'; query: string };
@@ -34,6 +37,8 @@ type Content = {
   tracks?: MusicTrack[];
   albums?: MusicAlbum[];
   artists?: MusicArtist[];
+  // Добавленное: «Новое на сервере» (с тем, кто добавил) и «Загруженное» (своё)
+  added?: MusicAddedTrack[];
   title?: string;
   subtitle?: string;
   isFailed?: boolean;
@@ -46,13 +51,21 @@ const NAV = [
   { kind: 'albums', icon: 'disc', titleKey: 'MusicAlbums' },
 ] as const;
 const SEARCH_DELAY_MS = 300;
-const EMPTY_KEYS = { search: 'MusicNothingFound', starred: 'MusicStarredEmpty' } as const;
+const EMPTY_KEYS = { search: 'MusicNothingFound', starred: 'MusicStarredEmpty', added: 'MusicAddedEmpty' } as const;
 
 /** Содержимое вида с сервера. Библиотека целиком — поиск с пустой строкой. */
-async function fetchContent(view: View): Promise<Content> {
+async function fetchContent(view: View, isFetchEnabled: boolean): Promise<Content> {
   switch (view.kind) {
-    case 'home':
-      return { albums: await callMusic('parvaneMusicRecent') };
+    case 'home': {
+      // С подключённым скачиванием «Новое на сервере» — добавленные треки с тем, кто добавил
+      const [albums, added] = await Promise.all([
+        callMusic('parvaneMusicRecent'),
+        isFetchEnabled ? callMusic('parvaneMusicAdded', { isMine: false }).catch(() => []) : [],
+      ]);
+      return { albums, added };
+    }
+    case 'added':
+      return { added: await callMusic('parvaneMusicAdded', { isMine: true }) };
     case 'starred':
       return { tracks: (await callMusic('parvaneMusicStarred')).tracks };
     case 'artists':
@@ -94,14 +107,15 @@ const Music = () => {
 
   useEffect(() => {
     if (!isShown || info) return;
-    void loadMusicInfo().then((loaded) => {
-      if (loaded.isEnabled) void restoreMusicQueue();
+    void loadMusicInfo().then((fresh) => {
+      if (fresh.isEnabled) void restoreMusicQueue();
     });
   }, [isShown, info]);
 
   const load = useLastCallback(async (next: View) => {
     const id = ++loadIdRef.current;
-    const fetched = await fetchContent(next).catch((): Content => ({ isFailed: true }));
+    const fetched = await fetchContent(next, Boolean(getMusicInfo()?.isFetchEnabled))
+      .catch((): Content => ({ isFailed: true }));
     // Пока шёл запрос, открыли другой вид
     if (id === loadIdRef.current) setLoaded({ view: next, content: fetched });
   });
@@ -147,6 +161,24 @@ const Music = () => {
   });
 
   const handlePlayRecent = useLastCallback((index: number) => playTracks(recent, index));
+
+  const handlePlayAdded = useLastCallback((index: number) => {
+    const tracks = (content?.added || []).map((item) => item.track).filter((track) => track.id);
+    playTracks(tracks, index);
+  });
+
+  // Скачанный трек из блока «Найти в сети»: сведения берутся с сервера и трек играет
+  const handlePlayLibraryTrack = useLastCallback(async (trackId: string) => {
+    const tracks = await callMusic('parvaneMusicTracks', { trackIds: [trackId] }).catch(() => []);
+    const found = tracks.filter(Boolean);
+    if (found.length) playTracks(found, 0);
+  });
+
+  const handleDeleteAdded = useLastCallback(async (track: MusicTrack) => {
+    await callMusic('parvaneMusicAddedDelete', { trackId: track.id }).catch(() => undefined);
+    void loadMusicInfo();
+    void load(view);
+  });
   const handlePlayAll = useLastCallback(() => handlePlayFrom(0));
   const handleAddNext = useLastCallback((track: MusicTrack) => addToQueue([track], true));
 
@@ -176,6 +208,32 @@ const Music = () => {
             onPlay={onPlay}
             onStar={handleStar}
             onAddNext={handleAddNext}
+          />
+        ))}
+      </ul>
+    );
+  }
+
+  function renderSize(bytes: number) {
+    const size = splitBytes(bytes);
+    const digits = size.isGigabytes ? 1 : 0;
+    const value = new Intl.NumberFormat(lang.code, { maximumFractionDigits: digits }).format(size.value);
+    return lang(size.isGigabytes ? 'MusicSizeGb' : 'MusicSizeMb', { value });
+  }
+
+  function renderAdded(added: MusicAddedTrack[], isMine: boolean) {
+    return (
+      <ul className={styles.tracks} data-music-added={isMine ? 'mine' : 'all'}>
+        {added.map((item, index) => (
+          <MusicTrackRow
+            key={item.track.id}
+            track={item.track}
+            index={index}
+            isCurrent={item.track.id === current?.id}
+            isPlaying={player.isPlaying}
+            note={isMine ? undefined : lang('MusicAddedBy', { name: item.adder })}
+            onPlay={handlePlayAdded}
+            onDelete={isMine ? handleDeleteAdded : undefined}
           />
         ))}
       </ul>
@@ -221,7 +279,8 @@ const Music = () => {
     if (!content) return <div className={kit.muted}>{lang('MusicLoading')}</div>;
     if (content.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     const { tracks, albums, artists } = content;
-    const isEmpty = !tracks?.length && !albums?.length && !artists?.length;
+    const added = (content.added || []).filter((item) => item.track.id);
+    const isEmpty = !tracks?.length && !albums?.length && !artists?.length && !added.length;
     const total = splitListTime((tracks || []).reduce((sum, track) => sum + track.durationSecs, 0));
     return (
       <>
@@ -240,8 +299,20 @@ const Music = () => {
               </>
             )}
             <div className={kit.caps}>{lang('MusicNewOnServer')}</div>
+            {Boolean(added.length) && renderAdded(added, false)}
           </>
         )}
+        {view.kind === 'added' && info && (
+          <div className={buildClassName(kit.muted, kit.small)} data-music-usage>
+            {lang('MusicAddedUsage', {
+              today: info.addedToday,
+              perDay: info.addPerDay,
+              used: renderSize(info.usedBytes),
+              quota: renderSize(info.quotaBytes),
+            })}
+          </div>
+        )}
+        {view.kind === 'added' && Boolean(added.length) && renderAdded(added, true)}
         {content.title && (
           <div className={styles.listHead}>
             <div className={kit.grow}>
@@ -265,9 +336,12 @@ const Music = () => {
             {lang(EMPTY_KEYS[view.kind as keyof typeof EMPTY_KEYS] || 'MusicEmpty')}
           </div>
         )}
-        {Boolean(artists?.length) && renderArtists(artists!)}
-        {Boolean(albums?.length) && renderAlbums(albums!)}
-        {Boolean(tracks?.length) && renderTracks(tracks!, handlePlayFrom)}
+        {Boolean(artists?.length) && renderArtists(artists)}
+        {Boolean(albums?.length) && renderAlbums(albums)}
+        {Boolean(tracks?.length) && renderTracks(tracks, handlePlayFrom)}
+        {view.kind === 'search' && info?.isFetchEnabled && (
+          <MusicFetch query={view.query} onPlayLibraryTrack={handlePlayLibraryTrack} />
+        )}
       </>
     );
   }
@@ -293,6 +367,18 @@ const Music = () => {
               <span>{lang(item.titleKey)}</span>
             </button>
           ))}
+          {info.isFetchEnabled && (
+            <button
+              type="button"
+              className={buildClassName(styles.navItem, view.kind === 'added' && styles.navItemOn)}
+              aria-current={view.kind === 'added' ? 'page' : undefined}
+              data-view="added"
+              onClick={handleNav}
+            >
+              <ParvaneIcon name="upload" isSmall />
+              <span>{lang('MusicAdded')}</span>
+            </button>
+          )}
           <button
             type="button"
             className={buildClassName(styles.navItem, styles.navQueue, view.kind === 'queue' && styles.navItemOn)}

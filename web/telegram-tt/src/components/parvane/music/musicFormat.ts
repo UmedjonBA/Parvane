@@ -25,3 +25,10 @@ export function coverTone(id: string) {
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) % 9973;
   return `var(--pv-${tones[hash % tones.length]})`;
 }
+
+/** Объём для подписи расхода: число и единица — гигабайты с десятой либо целые мегабайты (двоичные). */
+export function splitBytes(bytes: number) {
+  const megabytes = bytes / (1024 * 1024);
+  if (megabytes >= 1024) return { value: megabytes / 1024, isGigabytes: true };
+  return { value: Math.round(megabytes), isGigabytes: false };
+}
