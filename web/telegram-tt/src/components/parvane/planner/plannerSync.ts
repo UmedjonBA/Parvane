@@ -1,13 +1,12 @@
 /* eslint-disable no-null/no-null -- контракт JSON движка (planner_json.rs): null = «не задано», отсутствие поля = «без изменений» */
 import type {
-  PlannerEvent, PlannerExercise, PlannerFoodEntry, PlannerGoal, PlannerGoalRecord, PlannerGoalValues,
-  PlannerHealthGoals, PlannerHealthRecord, PlannerLearnedWord, PlannerList, PlannerNutrient, PlannerNutritionDay,
-  PlannerOccurrence, PlannerQuickLine, PlannerRepeat, PlannerState, PlannerTask,
+  PlannerEvent, PlannerLearnedWord, PlannerList, PlannerOccurrence, PlannerQuickLine, PlannerRepeat, PlannerState,
+  PlannerTask,
 } from './plannerModel';
 
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, isKnownNumber, normalizeLearned, normalizeQuickLines,
-  PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_REPEAT_KINDS, PLANNER_STATUSES,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, normalizeLearned, normalizeQuickLines, PLANNER_REPEAT_KINDS,
+  PLANNER_STATUSES,
 } from './plannerModel';
 
 // Parvane (spec 010): планировщик ↔ движок. Состояние для экранов (`PlannerState`)
@@ -48,34 +47,6 @@ type EngineEvent = {
   listId?: string;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
-type EngineGoal = { target: number; tolerance: number } | null;
-type EngineGoals = {
-  kcal: EngineGoal; protein: EngineGoal; fat: EngineGoal; carbs: EngineGoal; fiber?: EngineGoal; water?: EngineGoal;
-} | null;
-type EngineGoalPeriod = {
-  id: string; startDay: string; endDay: string;
-  kcal: EngineGoal; protein: EngineGoal; fat: EngineGoal; carbs: EngineGoal; fiber: EngineGoal; water: EngineGoal;
-};
-type EngineEntry = {
-  id: string;
-  name: string;
-  meal: string;
-  kcal: number;
-  protein: number | null;
-  fat: number | null;
-  carbs: number | null;
-  fiber: number | null;
-  grams: number | null;
-  per100: boolean;
-  sugar?: number | null;
-  salt?: number | null;
-  time?: string;
-};
-// spec 020: запись здоровья; `details` — JSON (упражнения тренировки либо цели здоровья)
-type EngineHealth = {
-  id: string; day: string; kind: string; time: string; endTime: string; value: number; value2: number;
-  name: string; details: string;
-};
 // Слово словаря правок ввода текстом: `kind` пуст и `minutes: null` — «не выучено»
 type EngineLearned = {
   id: string; kind: string; kindCount: number; minutes: number | null; minutesCount: number; touched: number;
@@ -84,15 +55,11 @@ type EngineLearned = {
 type EngineQuickLine = {
   id: string; text: string; count: number; touched: number; hidden: boolean;
 };
-type EngineDay = {
-  day: string; entries: EngineEntry[]; isComplete: boolean; fixedGoals: EngineGoals; waterMl: number | null;
-};
 type EngineSettings = {
   dayStart: number; dayEnd: number; lunchStart: number; lunchEnd: number; margin: number; budget: number;
 } | null;
 export type EngineState = {
-  tasks: EngineTask[]; events: EngineEvent[]; lists: EngineList[]; nutrition: EngineDay[];
-  settings: EngineSettings; goals: EngineGoals; goalPeriods?: EngineGoalPeriod[]; health?: EngineHealth[];
+  tasks: EngineTask[]; events: EngineEvent[]; lists: EngineList[]; settings: EngineSettings;
   // Движок прежней сборки словаря не отдаёт
   learned?: EngineLearned[];
   // История ввода текстом; движок прежней сборки её не знает — и не принимает правку `quickLine`
@@ -104,23 +71,7 @@ export type EngineState = {
 
 export type PlannerChange = Record<string, unknown>;
 
-const NUTRIENTS: PlannerNutrient[] = ['kcal', 'protein', 'fat', 'carbs', 'fiber'];
-// Цели здоровья — одна запись здоровья с известным id; день у неё условный (движок требует дату)
-const HEALTH_GOALS_ID = 'health-goals';
-const HEALTH_GOALS_KIND = 'goals';
-const HEALTH_GOALS_DAY = '2000-01-01';
-
 // ── движок → состояние ───────────────────────────────────────────────────────
-
-function goalValuesFrom(goals: EngineGoals | EngineGoalPeriod | undefined): PlannerGoalValues {
-  const out: PlannerGoalValues = {};
-  if (!goals) return out;
-  PLANNER_GOAL_METRICS.forEach((metric) => {
-    const goal = (goals as Record<string, EngineGoal | undefined>)[metric];
-    if (goal) out[metric] = { target: goal.target, tolerance: goal.tolerance };
-  });
-  return out;
-}
 
 function repeatFrom(repeat: EngineRepeat | undefined, legacyWeekdays?: number[] | null): PlannerRepeat | undefined {
   if (repeat && PLANNER_REPEAT_KINDS.includes(repeat.kind as PlannerRepeat['kind'])) {
@@ -142,83 +93,6 @@ function repeatFrom(repeat: EngineRepeat | undefined, legacyWeekdays?: number[] 
 function occurrencesFrom(items: EngineOccurrence[] | undefined): PlannerOccurrence[] | undefined {
   if (!items?.length) return undefined;
   return items.map((o) => ({ day: o.day, excluded: o.excluded, done: o.done, doneSteps: o.doneSteps }));
-}
-
-function entryFrom(e: EngineEntry): PlannerFoodEntry {
-  const grams = e.grams ?? undefined;
-  const per100: Partial<Record<PlannerNutrient, number>> | undefined = e.per100 && grams ? {} : undefined;
-  const value = (v: number | null) => (v === null ? undefined : v);
-  const entry: PlannerFoodEntry = {
-    id: e.id,
-    name: e.name,
-    meal: PLANNER_MEALS.includes(e.meal as PlannerFoodEntry['meal']) ? e.meal as PlannerFoodEntry['meal'] : 'other',
-    kcal: e.kcal,
-    protein: value(e.protein),
-    fat: value(e.fat),
-    carbs: value(e.carbs),
-    fiber: value(e.fiber),
-    grams,
-    per100,
-    sugar: value(e.sugar ?? null),
-    salt: value(e.salt ?? null),
-    time: e.time || undefined,
-  };
-  if (per100 && grams) {
-    NUTRIENTS.forEach((nutrient) => {
-      const v = entry[nutrient];
-      if (isKnownNumber(v)) per100[nutrient] = Math.round((v / grams) * 100 * 10000) / 10000;
-    });
-  }
-  return entry;
-}
-
-function parseDetails<T>(details: string): T | undefined {
-  if (!details) return undefined;
-  try {
-    return JSON.parse(details) as T;
-  } catch {
-    // Негодные подробности — запись остаётся без них
-    return undefined;
-  }
-}
-
-function healthFrom(record: EngineHealth): PlannerHealthRecord {
-  const exercises = parseDetails<{ ex?: PlannerExercise[] }>(record.details)?.ex;
-  return {
-    id: record.id,
-    day: record.day,
-    kind: record.kind,
-    time: record.time || undefined,
-    endTime: record.endTime || undefined,
-    value: record.value,
-    value2: record.value2 || undefined,
-    name: record.name || undefined,
-    exercises: Array.isArray(exercises) && exercises.length ? exercises : undefined,
-  };
-}
-
-function healthChange(record: PlannerHealthRecord): PlannerChange {
-  return {
-    health: {
-      id: record.id,
-      day: record.day,
-      kind: record.kind,
-      time: record.time || '',
-      endTime: record.endTime || '',
-      value: record.value,
-      value2: record.value2 || 0,
-      name: record.name || '',
-      details: record.exercises?.length ? JSON.stringify({ ex: record.exercises }) : '',
-    },
-  };
-}
-
-function healthGoalsChange(goals: PlannerHealthGoals): PlannerChange {
-  return {
-    health: {
-      id: HEALTH_GOALS_ID, day: HEALTH_GOALS_DAY, kind: HEALTH_GOALS_KIND, value: 0, details: JSON.stringify(goals),
-    },
-  };
 }
 
 // JSON записи считается один раз на объект: записи состояния не меняются на месте (правка идёт по глубокой
@@ -248,22 +122,6 @@ function reuseById<T extends { id: string }>(next: T[], previous: T[] | undefine
     const kept = before && stableJson(before) === stableJson(item) ? before : item;
     if (kept !== previous[index]) isSame = false;
     return kept;
-  });
-  return isSame ? previous : result;
-}
-
-function reuseByKey<T extends object>(
-  next: Record<string, T>, previous: Record<string, T> | undefined,
-): Record<string, T> {
-  if (!previous) return next;
-  const nextKeys = Object.keys(next);
-  let isSame = nextKeys.length === Object.keys(previous).length;
-  const result: Record<string, T> = {};
-  nextKeys.forEach((key) => {
-    const before = previous[key];
-    const kept = before && stableJson(before) === stableJson(next[key]) ? before : next[key];
-    if (kept !== before) isSame = false;
-    result[key] = kept;
   });
   return isSame ? previous : result;
 }
@@ -305,22 +163,9 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     remind: t.remind ?? undefined,
     source: t.source ? { chat: t.source.chat, opId: t.source.opId } : undefined,
   }));
-  const nutrition: Record<string, PlannerNutritionDay> = {};
-  engine.nutrition.forEach((d) => {
-    if (!d.entries.length && !d.isComplete && d.waterMl === null) return;
-    const fixedGoals = d.fixedGoals ? goalValuesFrom(d.fixedGoals) : undefined;
-    nutrition[d.day] = {
-      entries: d.entries.map(entryFrom),
-      isComplete: d.isComplete,
-      fixedGoals: fixedGoals && Object.keys(fixedGoals).length ? fixedGoals : undefined,
-      waterMl: d.waterMl === null ? undefined : d.waterMl,
-    };
-  });
   const s = engine.settings;
-  const goals = goalValuesFrom(engine.goals);
-  const healthGoalsRecord = engine.health?.find((record) => record.id === HEALTH_GOALS_ID);
   const built: PlannerState = {
-    version: 1,
+    ...empty,
     tasks,
     events: engine.events.map((e): PlannerEvent => {
       const repeat = repeatFrom(e.repeat, e.weekdays);
@@ -345,18 +190,10 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     }),
     projects: ['', ...lists.map((list) => list.name)],
     lists,
-    nutrition,
-    goals: Object.keys(goals).length ? goals : empty.goals,
-    goalPeriods: (engine.goalPeriods || []).map((p) => ({
-      id: p.id, startDay: p.startDay || '', endDay: p.endDay || '', goals: goalValuesFrom(p),
-    })),
     budget: s?.budget ?? empty.budget,
     settings: s ? {
       dayStart: s.dayStart, dayEnd: s.dayEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd, margin: s.margin,
     } : { ...DEFAULT_PLANNER_SETTINGS },
-    health: (engine.health || []).filter((record) => record.kind !== HEALTH_GOALS_KIND).map(healthFrom),
-    healthGoals: (healthGoalsRecord && parseDetails<PlannerHealthGoals>(healthGoalsRecord.details))
-      || empty.healthGoals,
     learned: normalizeLearned((engine.learned || []).map((word) => ({
       ...word, kind: word.kind as PlannerLearnedWord['kind'], minutes: word.minutes ?? undefined,
     }))),
@@ -372,12 +209,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     events: reuseById(built.events, previous.events),
     lists: reuseById(built.lists, previous.lists),
     projects: reuseValue(built.projects, previous.projects),
-    nutrition: reuseByKey(built.nutrition, previous.nutrition),
-    goals: reuseValue(built.goals, previous.goals),
-    goalPeriods: reuseById(built.goalPeriods, previous.goalPeriods),
     settings: reuseValue(built.settings, previous.settings),
-    health: reuseById(built.health, previous.health),
-    healthGoals: reuseValue(built.healthGoals, previous.healthGoals),
     learned: reuseById(built.learned, previous.learned),
     quickLines: reuseById(built.quickLines, previous.quickLines),
     reminded: reuseValue(built.reminded, previous.reminded),
@@ -478,57 +310,6 @@ function listChange(l: PlannerList): PlannerChange {
   };
 }
 
-function goalsOf(goals: PlannerGoalValues) {
-  const out: Record<string, PlannerGoal | null> = {};
-  PLANNER_GOAL_METRICS.forEach((metric) => {
-    out[metric] = goals[metric] ? { target: goals[metric].target, tolerance: goals[metric].tolerance } : null;
-  });
-  return out;
-}
-
-function goalPeriodChange(record: PlannerGoalRecord): PlannerChange {
-  return { goalPeriod: { id: record.id, startDay: record.startDay, endDay: record.endDay, ...goalsOf(record.goals) } };
-}
-
-function entryOf(e: PlannerFoodEntry) {
-  const num = (v: number | undefined) => (isKnownNumber(v) ? v : null);
-  return {
-    id: e.id,
-    name: e.name,
-    meal: e.meal,
-    kcal: e.kcal,
-    protein: num(e.protein),
-    fat: num(e.fat),
-    carbs: num(e.carbs),
-    fiber: num(e.fiber),
-    grams: num(e.grams),
-    per100: Boolean(e.per100),
-    sugar: num(e.sugar),
-    salt: num(e.salt),
-    time: e.time || '',
-  };
-}
-
-function dayChange(day: string, d: PlannerNutritionDay, previous?: PlannerNutritionDay): PlannerChange {
-  const entries: unknown[] = [];
-  const beforeById = new Map((previous?.entries || []).map((p) => [p.id, p]));
-  const afterIds = new Set(d.entries.map((e) => e.id));
-  d.entries.forEach((e) => {
-    const before = beforeById.get(e.id);
-    if (!before || stableJson(before) !== stableJson(e)) entries.push(entryOf(e));
-  });
-  previous?.entries.forEach((p) => {
-    if (!afterIds.has(p.id)) entries.push({ id: p.id, deleted: true });
-  });
-  const change: Record<string, unknown> = { day, entries };
-  if (!previous || previous.isComplete !== d.isComplete) change.isComplete = d.isComplete;
-  if (!previous || stableJson(previous.fixedGoals) !== stableJson(d.fixedGoals)) {
-    change.fixedGoals = d.fixedGoals ? goalsOf(d.fixedGoals) : null;
-  }
-  if (!previous || previous.waterMl !== d.waterMl) change.waterMl = d.waterMl === undefined ? null : d.waterMl;
-  return { nutritionDay: change };
-}
-
 // Слово словаря правок: значение и его счётчик уходят парой (движок сводит их отдельными регистрами,
 // пара под одной меткой остаётся согласованной), и только изменившаяся пара — тип, исправленный на одном
 // устройстве, не затирает длительность, исправленную на другом. Новое слово уходит целиком: оно могло
@@ -611,29 +392,7 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
     changes.push(onlyChanged('event', eventChange(next, event, before), before && eventChange(previous, before)));
   }, (event) => changes.push({ event: { id: event.id, deleted: true } }));
 
-  if (next.nutrition !== previous.nutrition) {
-    Object.entries(next.nutrition).forEach(([day, record]) => {
-      const before = previous.nutrition[day];
-      if (!before || !same(before, record)) changes.push(dayChange(day, record, before));
-    });
-    Object.entries(previous.nutrition).forEach(([day, record]) => {
-      if (!next.nutrition[day]) {
-        changes.push(dayChange(day, { entries: [], isComplete: false }, record));
-      }
-    });
-  }
-
   if (!same(previous.settings, next.settings) || previous.budget !== next.budget) changes.push(settingsChange(next));
-  if (!same(previous.goals, next.goals)) changes.push({ goals: goalsOf(next.goals) });
-
-  diffById(next.goalPeriods, previous.goalPeriods, (record) => {
-    changes.push(goalPeriodChange(record));
-  }, (record) => changes.push({ goalPeriod: { id: record.id, deleted: true } }));
-
-  diffById(next.health, previous.health, (record) => {
-    changes.push(healthChange(record));
-  }, (record) => changes.push({ health: { id: record.id, deleted: true } }));
-  if (!same(previous.healthGoals, next.healthGoals)) changes.push(healthGoalsChange(next.healthGoals));
 
   diffById(next.learned, previous.learned, (word, before) => {
     changes.push(learnedChange(word, before));
@@ -669,7 +428,7 @@ export function legacyToChanges(legacy: PlannerState, devicePrefix: string): Pla
     events: legacy.events.map((e) => ({ ...e, id: rename(e.id) })),
   };
   const changes = diffChanges(createEmptyPlannerState(), state);
-  // Настройки и цели по умолчанию diff не выдаёт — для переноса они не нужны
+  // Настройки по умолчанию diff не выдаёт — для переноса они не нужны
   changes.push({ migration: { sourceDevice: devicePrefix.slice(0, 64), count: changes.length } });
   return changes;
 }

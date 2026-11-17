@@ -219,31 +219,18 @@ describe('палитра: записи «Плана»', () => {
     }), TODAY)).toBe('2026-09-01');
   });
 
-  it('собираются события, задачи и тренировки с названием — еда и показатели не входят', () => {
+  it('собираются события и задачи', () => {
     const records = collectPlannerRecords(state({
       tasks: [task({
         id: 't1', name: 'Проверить работы', description: 'до пятницы', steps: [{ text: '9 класс', isDone: false }],
       })],
       events: [event({ id: 'e1', name: 'Созвон', description: 'по серверу', day: '2026-10-09' })],
-      health: [
-        {
-          id: 'h1', day: '2026-10-07', kind: 'workout', value: 60, name: 'Зал', exercises: [{ name: 'Присед' }],
-        },
-        {
-          id: 'h2', day: '2026-10-08', kind: 'weight', value: 72,
-        },
-        {
-          id: 'h3', day: '2026-10-08', kind: 'workout', value: 30,
-        },
-      ],
     }), TODAY);
     expect(records.map(({ key, day }) => [key, day])).toEqual([
       ['event:e1', '2026-10-09'],
-      ['workout:h1', '2026-10-07'],
       ['task:t1', undefined],
     ]);
     expect(titles(records, '9 класс')).toEqual([['record', ['Проверить работы']]]);
-    expect(titles(records, 'присед')).toEqual([['record', ['Зал']]]);
     expect(titles(records, 'серверу')).toEqual([['record', ['Созвон']]]);
   });
 });

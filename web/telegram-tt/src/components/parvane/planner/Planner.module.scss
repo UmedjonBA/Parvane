@@ -249,10 +249,6 @@
   --planner-kind: var(--pv-note);
 }
 
-.kindMetric {
-  --planner-kind: var(--pv-metric);
-}
-
 .kindDue {
   --planner-kind: var(--pv-red);
 }
@@ -3236,13 +3232,6 @@
   min-height: 1.875rem;
 
   font-size: 0.875rem;
-}
-
-.quickName {
-  width: 100%;
-  margin-top: 0.125rem;
-  font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
 }
 
 // Другие чтения выбранного чипа — строкой под чипами

@@ -259,12 +259,20 @@ try {
   await health.getByRole('button', { name: 'Back' }).click();
   console.log('OK: активность — тренировка, пробег, темп и шаги дня');
 
-  // ── Строка ввода «Плана»: показатель тела уходит в «Здоровье», а не в «План» ─
+  // ── Строка ввода «Плана»: строку, понятую «Здоровьем» целиком, окно отдаёт ему; с выбранным видом
+  // «Задача» та же строка — обычная задача «Плана» ─
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Planner', exact: true }).click();
   await page.locator('#FoldersSidebar').getByRole('button', { name: 'New entry' }).click();
   const plannerInput = page.locator('#planner-quick-input');
   await plannerInput.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await plannerInput.fill('вес 73,5');
+  const quickForm = page.locator('form[data-quick-kind]');
+  await page.locator('form[data-quick-kind="health"] [data-kind="weight"]').filter({ hasText: '73.5' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await quickForm.getByRole('radio', { name: 'Task' }).click();
+  await page.locator('form[data-quick-kind="task"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await quickForm.getByRole('radio', { name: 'Auto' }).click();
+  await page.locator('form[data-quick-kind="health"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await plannerInput.press('Enter');
   await plannerInput.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await expectValue(await openHealthModule(page), 'weight', '73.5');

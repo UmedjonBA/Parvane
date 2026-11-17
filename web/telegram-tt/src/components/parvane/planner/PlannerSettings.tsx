@@ -169,7 +169,6 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
         />
       </div>
       <p className={styles.sheetHint}>{lang('PlannerSettingsHint')}</p>
-      <p className={styles.sheetHint}>{lang('PlannerSettingsGoalsHint')}</p>
       <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleReset}>
         {lang('PlannerSettingsReset')}
       </button>

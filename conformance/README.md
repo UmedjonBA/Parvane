@@ -1827,6 +1827,9 @@ LINK-1) — `device_log/`; журнал группы (GROUP-1, GROUP-2 прав�
    побеждает» по полям объекта, надгробия, метки `(lamport, device_id)` +
    байты изменения; снимок каждые 200 операций; потолки каркаса (операция
    256 КБ, снимок 1 МБ).
+6. **С 17 ноя 2026 (spec 041 B4)** здоровья, питания и целей питания в `planner.v1` нет — они в домене
+   `parvane.health.v1`: сообщения удалены, номера полей `Change` 4, 6, 8, 9 и `PlannerSnapshot` 4, 6, 7, 8
+   зарезервированы, изменения `nutritionDay`/`goals`/`goalPeriod`/`health` движок отвергает как неизвестный вид.
 
 Реализации: движок `client_planner.rs`, `domain/planner.rs`,
 `domain/planner_json.rs`; шард `domains` (`key.rotate`, `container.list`);

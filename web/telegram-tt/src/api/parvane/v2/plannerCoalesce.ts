@@ -1,6 +1,6 @@
 // Правки планировщика копятся до отправки и уходят одной операцией с одной меткой. Две правки одного
-// поля под одной меткой движок сводит по байтам, а не по порядку — поздняя могла проиграть ранней
-// (вода, записанная сразу после еды, пропадала). Поэтому перед отправкой правки одного объекта
+// поля под одной меткой движок сводит по байтам, а не по порядку — поздняя могла проиграть ранней.
+// Поэтому перед отправкой правки одного объекта
 // склеиваются: поздние поля заменяют ранние, списки по ключу — тоже.
 
 type Change = Record<string, unknown>;
@@ -9,17 +9,15 @@ type Body = Record<string, unknown>;
 const KEYED_LISTS: Record<string, { field: string; key: string }> = {
   task: { field: 'occurrences', key: 'day' },
   event: { field: 'occurrences', key: 'day' },
-  nutritionDay: { field: 'entries', key: 'id' },
 };
 
 function kindOf(change: Change) {
   return Object.keys(change)[0];
 }
 
-// Объект правки: у дня питания ключ — день, у настроек и целей объект один, у остальных — id
+// Объект правки: у настроек объект один, у остальных — id
 function targetOf(kind: string, body: Body) {
-  if (kind === 'nutritionDay') return `${kind}:${String(body.day)}`;
-  if (kind === 'settings' || kind === 'goals' || kind === 'migration') return kind;
+  if (kind === 'settings') return kind;
   return `${kind}:${String(body.id)}`;
 }
 

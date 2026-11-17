@@ -138,6 +138,8 @@ export type HealthParsedEntry = {
   name?: string;
   tag?: string;
   parts?: Record<string, number>;
+  // Догадка движка без единого числа: окно ввода «Плана» такую строку «Здоровью» не отдаёт
+  guess?: boolean;
 };
 
 export type HealthParseResult = {

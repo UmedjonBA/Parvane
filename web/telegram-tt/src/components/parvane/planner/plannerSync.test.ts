@@ -49,51 +49,13 @@ const ENGINE: EngineState = {
     origin: null,
   }],
   lists: [{ id: 'l1', name: 'Работа', order: 0 }],
-  nutrition: [{
-    day: '2026-10-08',
-    entries: [{
-      id: 'f1',
-      name: 'Творог',
-      meal: 'breakfast',
-      kcal: 300,
-      protein: 45,
-      fat: null,
-      carbs: null,
-      fiber: null,
-      grams: 250,
-      per100: true,
-    }],
-    isComplete: true,
-    fixedGoals: {
-      kcal: { target: 2000, tolerance: 100 }, protein: { target: 120, tolerance: 20 }, fat: null, carbs: null,
-    },
-    waterMl: 500,
-  }],
   settings: { dayStart: 480, dayEnd: 1200, lunchStart: 0, lunchEnd: 0, margin: 10, budget: 480 },
-  goals: {
-    kcal: { target: 2100, tolerance: 100 },
-    protein: null,
-    fat: null,
-    carbs: null,
-    water: { target: 2000, tolerance: 300 },
-  },
-  goalPeriods: [{
-    id: 'g1',
-    startDay: '2026-10-15',
-    endDay: '2026-10-15',
-    kcal: { target: 1500, tolerance: 100 },
-    protein: null,
-    fat: null,
-    carbs: null,
-    fiber: null,
-    water: null,
-  }],
   headSeq: 7,
   sizeBytes: 1234,
 };
 
 describe('планировщик ↔ движок (spec 010)', () => {
-  it('состояние движка превращается в состояние экранов: списки по имени, «не задано», значения на 100 г', () => {
+  it('состояние движка превращается в состояние экранов: списки по имени, «не задано»', () => {
     const state = fromEngineState(ENGINE);
     expect(state.projects).toEqual(['', 'Работа']);
     expect(state.tasks[0]).toMatchObject({
@@ -108,17 +70,12 @@ describe('планировщик ↔ движок (spec 010)', () => {
       occurrences: [{ day: '2026-10-14', excluded: true, done: false, doneSteps: [] }],
       origin: undefined,
     });
-    expect(state.goals).toEqual({ kcal: { target: 2100, tolerance: 100 }, water: { target: 2000, tolerance: 300 } });
-    expect(state.goalPeriods).toEqual([{
-      id: 'g1', startDay: '2026-10-15', endDay: '2026-10-15', goals: { kcal: { target: 1500, tolerance: 100 } },
-    }]);
-    const day = state.nutrition['2026-10-08'];
-    expect(day.entries[0]).toMatchObject({ kcal: 300, protein: 45, fat: undefined, grams: 250 });
-    expect(day.entries[0].per100).toEqual({ kcal: 120, protein: 18 });
-    expect(day.fixedGoals).toEqual({ kcal: { target: 2000, tolerance: 100 }, protein: { target: 120, tolerance: 20 } });
-    expect(day.waterMl).toBe(500);
     expect(state.budget).toBe(480);
     expect(state.settings.dayStart).toBe(480);
+    // Здоровье, питание и цели «План» не хранит: в собственном состоянии они пусты
+    expect(state).toMatchObject({
+      nutrition: {}, goals: {}, goalPeriods: [], health: [], healthGoals: {},
+    });
   });
 
   it('разница состояний — только изменённые объекты; удаление — надгробие; список создаётся', () => {
@@ -131,24 +88,21 @@ describe('планировщик ↔ движок (spec 010)', () => {
     after.tasks.push({
       id: 't3', name: 'Новая', description: '', steps: [], status: 'queue', project: 'Дом', rank: 1,
     });
-    after.nutrition['2026-10-08'].entries = [];
     after.budget = 600;
     const changes = diffChanges(before, after);
     const kinds = changes.map((c) => Object.keys(c)[0]);
-    expect(kinds.sort()).toEqual(['list', 'nutritionDay', 'settings', 'task', 'task', 'task']);
+    expect(kinds.sort()).toEqual(['list', 'settings', 'task', 'task', 'task']);
     const taskChange = (id: string) => changes.find((c) => (c.task as { id?: string } | undefined)?.id === id);
     // Правка существующей задачи несёт только изменённое поле — остальные не переписываются
     expect(taskChange('t1')).toEqual({ task: { id: 't1', status: 'done' } });
     expect(taskChange('t2')).toEqual({ task: { id: 't2', deleted: true } });
     expect(taskChange('t3')).toMatchObject({ task: { listId: 'l2', minutes: null, day: '' } });
-    const day = changes.find((c) => c.nutritionDay) as { nutritionDay: { entries: unknown[] } };
-    expect(day.nutritionDay.entries).toEqual([{ id: 'f1', deleted: true }]);
     expect(changes.find((c) => c.settings)).toEqual({ settings: { ...after.settings, budget: 600 } });
     // Ничего не менялось — изменений нет
     expect(diffChanges(after, structuredClone(after))).toEqual([]);
   });
 
-  it('spec 011: правило повтора и только изменённые дни экземпляров; записи целей — целиком и надгробием', () => {
+  it('spec 011: правило повтора и только изменённые дни экземпляров', () => {
     const before = fromEngineState(ENGINE);
     const after: PlannerState = structuredClone(before);
     // Отметка ещё одного дня и правка правила ряда
@@ -156,10 +110,6 @@ describe('планировщик ↔ движок (spec 010)', () => {
     after.events[1].repeat = { ...after.events[1].repeat!, endDay: '2026-12-31' };
     after.tasks[0].repeat = { kind: 'monthly', interval: 1, monthDay: 20, startDay: '2026-10-01' };
     after.tasks[0].occurrences = [{ day: '2026-10-20', done: true, doneSteps: [0] }];
-    after.goalPeriods = [{
-      id: 'g2', startDay: '2026-11-01', endDay: '', goals: { water: { target: 2500, tolerance: 200 } },
-    }];
-    after.goals = { kcal: { target: 2100, tolerance: 100 } };
     const changes = diffChanges(before, after);
     expect(changes.find((c) => (c.event as { id?: string } | undefined)?.id === 'e2')).toMatchObject({
       event: {
@@ -182,28 +132,6 @@ describe('планировщик ↔ движок (spec 010)', () => {
           kind: 'monthly', interval: 1, weekdays: [], monthDay: 20, startDay: '2026-10-01', endDay: '', count: 0,
         },
         occurrences: [{ day: '2026-10-20', excluded: false, done: true, doneSteps: [0] }],
-      },
-    });
-    const periods = changes.filter((c) => c.goalPeriod);
-    expect(periods).toEqual([
-      {
-        goalPeriod: {
-          id: 'g2',
-          startDay: '2026-11-01',
-          endDay: '',
-          kcal: null,
-          protein: null,
-          fat: null,
-          carbs: null,
-          fiber: null,
-          water: { target: 2500, tolerance: 200 },
-        },
-      },
-      { goalPeriod: { id: 'g1', deleted: true } },
-    ]);
-    expect(changes.find((c) => c.goals)).toEqual({
-      goals: {
-        kcal: { target: 2100, tolerance: 100 }, protein: null, fat: null, carbs: null, fiber: null, water: null,
       },
     });
     // Унаследованное событие по дням недели при записи получает правило, а `weekdays` обнуляется
@@ -335,18 +263,12 @@ describe('планировщик ↔ движок: повторный разбо
     expect(same.tasks).toBe(previous.tasks);
     expect(same.events).toBe(previous.events);
     expect(same.lists).toBe(previous.lists);
-    expect(same.nutrition).toBe(previous.nutrition);
-    expect(same.goals).toBe(previous.goals);
-    expect(same.goalPeriods).toBe(previous.goalPeriods);
     expect(same.settings).toBe(previous.settings);
-    expect(same.health).toBe(previous.health);
-    expect(same.healthGoals).toBe(previous.healthGoals);
     expect(same.projects).toBe(previous.projects);
 
     const engine = structuredClone(ENGINE);
     engine.tasks[0].status = 'done';
     engine.tasks.push({ ...engine.tasks[1], id: 't9', name: 'Новая' });
-    engine.nutrition[0].waterMl = 750;
     const next = fromEngineState(engine, previous);
     expect(next.tasks).not.toBe(previous.tasks);
     expect(next.tasks[0]).not.toBe(previous.tasks[0]);
@@ -354,8 +276,6 @@ describe('планировщик ↔ движок: повторный разбо
     expect(next.tasks[1]).toBe(previous.tasks[1]);
     expect(next.tasks[2].id).toBe('t9');
     expect(next.events).toBe(previous.events);
-    expect(next.nutrition).not.toBe(previous.nutrition);
-    expect(next.nutrition['2026-10-08'].waterMl).toBe(750);
     // Разбор с прежним состоянием даёт то же, что разбор без него
     expect(next).toEqual(fromEngineState(engine));
     // Пропавшая запись — массив новый, оставшиеся объекты прежние
@@ -367,74 +287,9 @@ describe('планировщик ↔ движок: повторный разбо
   });
 });
 
-describe('планировщик ↔ движок: здоровье (spec 020)', () => {
-  const ENGINE_EMPTY: EngineState = {
-    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
-  };
-
-  it('записи здоровья, цели здоровья и новые поля питания уходят изменениями', () => {
-    const empty = createEmptyPlannerState();
-    const next: PlannerState = {
-      ...empty,
-      health: [
-        { id: 'weight-2026-10-11', day: '2026-10-11', kind: 'weight', value: 74.7 },
-        {
-          id: 'w1', day: '2026-10-11', kind: 'workout', time: '19:00', value: 60, name: 'Зал',
-          exercises: [{ name: 'присед', sets: 4, reps: 8, weight: 80 }],
-        },
-      ],
-      healthGoals: { ...empty.healthGoals, steps: 10000 },
-      nutrition: {
-        '2026-10-11': {
-          entries: [{ id: 'f1', name: 'Обед', meal: 'lunch', kcal: 520, sugar: 14, time: '13:30' }], isComplete: false,
-        },
-      },
-    };
-    const changes = diffChanges(empty, next);
-    const health = changes.filter((change) => 'health' in change)
-      .map((change) => change.health as Record<string, unknown>);
-    expect(health.map(({ id }) => id)).toEqual(['weight-2026-10-11', 'w1', 'health-goals']);
-    expect(health[1].details).toBe('{"ex":[{"name":"присед","sets":4,"reps":8,"weight":80}]}');
-    expect(JSON.parse(health[2].details as string).steps).toBe(10000);
-    const day = changes.find((change) => 'nutritionDay' in change)!.nutritionDay as {
-      entries: Record<string, unknown>[];
-    };
-    expect(day.entries[0]).toMatchObject({ sugar: 14, salt: null, time: '13:30' });
-    // Удаление записи — надгробие
-    expect(diffChanges(next, { ...next, health: [next.health[1]] }))
-      .toEqual([{ health: { id: 'weight-2026-10-11', deleted: true } }]);
-  });
-
-  it('состояние строится из записей движка; цели здоровья — из записи вида goals', () => {
-    const state = fromEngineState({
-      ...ENGINE_EMPTY,
-      health: [
-        {
-          id: 'w1', day: '2026-10-11', kind: 'workout', time: '19:00', endTime: '', value: 60, value2: 0, name: 'Зал',
-          details: '{"ex":[{"name":"жим","sets":3,"reps":10,"weight":60}]}',
-        },
-        {
-          id: 'health-goals', day: '2000-01-01', kind: 'goals', time: '', endTime: '', value: 0, value2: 0, name: '',
-          details: '{"steps":9000,"sleepMinutes":450}',
-        },
-        {
-          id: 'x', day: '2026-10-11', kind: 'pulse', time: '', endTime: '', value: 64, value2: 0, name: '',
-          details: 'не JSON',
-        },
-      ],
-    });
-    expect(state.health.map(({ id }) => id)).toEqual(['w1', 'x']);
-    expect(state.health[0].exercises).toEqual([{ name: 'жим', sets: 3, reps: 10, weight: 60 }]);
-    expect(state.health[1].exercises).toBeUndefined();
-    expect(state.healthGoals).toEqual({ steps: 9000, sleepMinutes: 450 });
-    // Без записи целей — цели по умолчанию
-    expect(fromEngineState(ENGINE_EMPTY).healthGoals.activeMinutes).toBe(150);
-  });
-});
-
 describe('планировщик ↔ движок: словарь правок ввода текстом', () => {
   const ENGINE_EMPTY: EngineState = {
-    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
+    tasks: [], events: [], lists: [], settings: null, headSeq: 0, sizeBytes: 0,
   };
   const word = {
     id: 'пара', kind: 'event' as const, kindCount: 2, minutes: 105, minutesCount: 3, touched: 4,
@@ -497,7 +352,7 @@ describe('планировщик ↔ движок: словарь правок �
 
 describe('планировщик ↔ движок: история ввода текстом', () => {
   const ENGINE_EMPTY: EngineState = {
-    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
+    tasks: [], events: [], lists: [], settings: null, headSeq: 0, sizeBytes: 0,
   };
   const line = {
     id: 'q01', text: 'созвон завтра 16:00', count: 2, touched: 4,

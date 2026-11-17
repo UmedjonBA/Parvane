@@ -7,8 +7,7 @@
 // общие для всех языков. «Сейчас» и «сегодня» приходят только из `ctx`.
 
 import type {
-  PlannerEventError, PlannerExercise, PlannerGoalMetric, PlannerHealthGoals, PlannerHealthKind, PlannerMeal,
-  PlannerNutrient, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
+  PlannerEventError, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
 } from './plannerModel';
 import type { NumeralEdit } from './plannerNumerals';
 import type { PickItem } from './plannerQuickPick';
@@ -21,21 +20,10 @@ import {
 import { restoreNumerals, rewriteNumerals, toSourceOffset } from './plannerNumerals';
 import { candidateScore, pickCandidates } from './plannerQuickPick';
 
-// sleep, workout, metric — записи здоровья (spec 020); goal — правка целей и настроек, записи не создаёт
-export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout' | 'metric' | 'goal';
-export type QuickNutrient = PlannerNutrient | 'sugar' | 'salt';
+// Сон, еду, воду, показатели и тренировки разбирает движок «Здоровья» (`parseHealthInput`), не этот разбор
+export type QuickKind = 'task' | 'event';
 export type QuickField =
-  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | 'description'
-  | 'list' | 'place' | 'important' | 'remind' | QuickNutrient;
-// Показатель здоровья одной строкой: «вес 72,4», «давление 120/80», «пульс 64», «шаги 9500», «самочувствие 4»
-export type QuickMetric = Exclude<PlannerHealthKind, 'sleep' | 'workout'>;
-export type QuickGoalChanges = {
-  goals: Partial<Record<PlannerGoalMetric, number>>;
-  health: PlannerHealthGoals;
-  dayStart?: number;
-  dayEnd?: number;
-  budget?: number;
-};
+  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'description' | 'list' | 'place' | 'important' | 'remind';
 export type QuickLang = 'ru' | 'en';
 // Другие чтения строки: значение поля, на которое пользователь может переключиться. `pick` — ключ
 // значения: время `HH:MM` либо `HH:MM-HH:MM`, день и срок `YYYY-MM-DD`, тип записи, для повтора —
@@ -46,17 +34,16 @@ export type QuickAlt = { field: QuickAltField; pick: string; day?: string };
 // Чтение, закреплённое пользователем; тип закрепляется выбором типа (`ctx.kind`)
 export type QuickPick = Partial<Record<Exclude<QuickAltField, 'kind'>, string>>;
 // Выученное по правкам пользователя (`plannerQuickLearn.ts`): первое слово названия → значения по умолчанию
-export type QuickLearnedKind = 'task' | 'event';
-export type QuickLearned = Record<string, { kind?: QuickLearnedKind; minutes?: number }>;
+export type QuickLearned = Record<string, { kind?: QuickKind; minutes?: number }>;
 export type QuickSpan = { field: QuickField; from: number; to: number };
 export type QuickError = PlannerTaskError | PlannerEventError;
 
 export type QuickDraft = {
   kind: QuickKind;
   name: string;
-  // Описание задачи либо события: часть строки после названия (правила — у `splitName`)
+  // Описание: часть строки после названия (правила — у `splitName`)
   description?: string;
-  // Явные метки строки задачи либо события: `#список` (только у задачи), `@место` (первая строка
+  // Явные метки строки: `#список`, `@место` (первая строка
   // описания записи — `quickDescription`), `!` — важное (только у задачи: статус «В работе»)
   list?: string;
   place?: string;
@@ -72,18 +59,7 @@ export type QuickDraft = {
   minutes?: number;
   due?: string;
   repeat?: PlannerRepeat;
-  meal?: PlannerMeal;
-  grams?: number;
-  nutrients?: Partial<Record<QuickNutrient, number>>;
-  waterMl?: number;
-  // Здоровье: показатель и его значения; у тренировки — километры и упражнения
-  metric?: QuickMetric;
-  value?: number;
-  value2?: number;
-  distanceKm?: number;
-  exercises?: PlannerExercise[];
-  goalChanges?: QuickGoalChanges;
-  // Задача и событие. Первое слово названия (нижний регистр, «ё» → «е», без служебных и однобуквенных
+  // Первое слово названия (нижний регистр, «ё» → «е», без служебных и однобуквенных
   // слов) — ключ личного словаря правок
   head?: string;
   // Событие со временем: обычная длительность для этого слова без словаря правок
@@ -98,14 +74,12 @@ export type QuickDraft = {
 
 export type QuickContext = {
   today: string;
-  // Минуты от полуночи: «время уже прошло» и приём пищи по времени суток
+  // Минуты от полуночи: «время уже прошло»
   nowMinutes: number;
   dayStart: number;
   dayEnd: number;
   // Тип выбран пользователем — сильнее слов строки
   kind?: QuickKind;
-  // Типы, которые разбор вправе выбрать сам (по умолчанию все)
-  kinds?: QuickKind[];
   // Значения, снятые пользователем: их слова остаются в названии
   skip?: QuickField[];
   // Значения по умолчанию из личного словаря правок; явное значение в строке и выбор пользователя сильнее.
@@ -124,10 +98,7 @@ export const QUICK_REPEAT_OPEN = 'open';
 export const QUICK_REPEAT_END = 'end';
 const MAX_ALTERNATIVES = 4;
 const MAX_PICK_ROUNDS = 8;
-const GLASS_ML = 250;
-const ML_IN_LITRE = 1000;
 const MINUTES_IN_HOUR = 60;
-const KM_IN_MILE = 1.609344;
 const DAYS_IN_WEEK = 7;
 
 const LETTER = 'a-zа-я';
@@ -136,13 +107,8 @@ const NUM = '\\d+(?:[.,]\\d+)?';
 const HOUR = '[01]?\\d|2[0-4]';
 const MINUTE = '[0-5]\\d';
 const DASH = '-|–|—';
-const ALL_KINDS: QuickKind[] = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
 const SEPARATOR = `(?![${ALNUM}])`;
-const MAX_MOOD = 5;
 const MIN_TYPO_LENGTH = 6;
-const MAX_SLEEP_MINUTES = 16 * 60;
-const MAX_STEPS = 200000;
-const MARKER_FIELDS: QuickField[] = ['list', 'place', 'important'];
 
 // ── словарь языка ────────────────────────────────────────────────────────────
 // Значения — тела регулярных выражений по свёрнутой строке (нижний регистр, «ё» → «е»). В телах допустимы
@@ -151,13 +117,11 @@ const MARKER_FIELDS: QuickField[] = ['list', 'place', 'important'];
 type Entry<T> = [body: string, value: T];
 type Daypart = 'am' | 'pm' | 'night';
 type SpanUnit = 'week' | 'month' | 'year';
-type GoalWord = PlannerGoalMetric | 'sugar' | 'salt' | 'sleep' | 'weight' | 'steps' | 'day' | 'budget';
 
 type QuickWords = {
   // Слова в начале строки: тип записи
   task: string;
   event: string;
-  water: string;
   // Длинные слова разбора через пробел: слово строки с одной опечаткой заменяется словом отсюда
   typoWords: string;
   // Обычные слова, отличающиеся от слов разбора одной буквой («завтрак» — не «завтра»)
@@ -178,33 +142,6 @@ type QuickWords = {
   descWeak: string;
   // Сокращения с точкой, после которых предложение не кончается («ул. Ленина»); одна буква — тоже сокращение
   abbreviations: string;
-  sleep: string;
-  // Слова перед словом сна («сегодня я спал…») и глаголы «лёг … встал …»
-  sleepPrefix?: string;
-  // «вчера» / «позавчера» у записи сна: сон записывается на этот день (день подъёма)
-  sleepYesterday?: string;
-  sleepDayBefore?: string;
-  // «не спал» — отметка дня без сна (0 ч)
-  sleepNone?: string;
-  sleepBed?: string;
-  sleepWake?: string;
-  workout: string;
-  goal: string;
-  metrics: Entry<QuickMetric>[];
-  // Слова здоровья, обычные и в названиях дел («run tests», «weight of the book»): запись здоровья —
-  // только если после слова разобралось значение, иначе строка идёт общим разбором
-  weakLeads?: string;
-  // Питание и вода
-  kcal: string;
-  gram: string;
-  macros: Entry<QuickNutrient>[];
-  // Однобуквенные обозначения, совпадающие с обычными словами («f1», «c4»): считаются, только когда в
-  // строке не меньше двух признаков питания
-  shortMacros?: Entry<QuickNutrient>[];
-  meals: Entry<PlannerMeal>[];
-  ml: string;
-  litre: string;
-  glass: string;
   // Длительность
   hour: string;
   minute: string;
@@ -258,19 +195,12 @@ type QuickWords = {
   spans: Entry<SpanUnit>[];
   spanLead?: string;
   numbers: Record<string, number>;
-  // Здоровье
-  kg: string;
-  beats: string;
-  pressureOver: string;
-  distance: Entry<number>[];
-  goals: Record<GoalWord, string>;
 };
 
 const WORDS: Record<QuickLang, QuickWords> = {
   ru: {
     task: 'задач[ау]',
     event: 'событие',
-    water: 'вод[аыу]',
     typoWords: 'понедельник понедельника понедельникам вторник вторника вторникам средам четверг четверга четвергам'
       + ' пятница пятницу пятницы пятницам суббота субботу субботы субботам воскресенье воскресенья воскресеньям'
       + ' января февраля апреля августа сентября октября ноября декабря сегодня завтра послезавтра'
@@ -286,28 +216,6 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + '|еще|уже|тоже|там|тут|в|во|на|у|из|для|к|ко|от|по|с|со|за|до|при|о|об|под|над|через|после|перед|без',
     abbreviations: 'ул|пр|пер|пл|кв|корп|стр|оф|ауд|каб|эт|им|см|напр|др|руб|тыс|млн|мин|сек|тел|доб|кг|гр|мл|шт|уп'
       + '|экз|км|мм',
-    sleep: 'сон|(?:по|про)?спал[аи]?|выспал(?:ся|ась)',
-    sleepPrefix: 'сегодня|ночью|сейчас|я',
-    sleepYesterday: 'вчера',
-    sleepDayBefore: 'позавчера',
-    sleepNone: 'не\\s+(?:по)?спал[аи]?|без\\s+сна',
-    sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
-    sleepWake: 'встал[а]?|проснул(?:ся|ась)',
-    workout: 'зал|бег|тренировк[аиу]|кардио|плавание|йога|велосипед|прогулк[аиу]|спорт',
-    goal: 'цел[ьи]',
-    metrics: [
-      ['вес', 'weight'], ['давление', 'pressure'], ['пульс', 'pulse'], ['шаги', 'steps'], ['самочувствие', 'mood'],
-    ],
-    kcal: 'ккал|кал',
-    gram: 'г|гр|грамм(?:а|ов)?',
-    macros: [
-      ['б|белк[иа]|белок', 'protein'], ['ж|жир[ыа]?', 'fat'], ['у|углевод[ыа]?', 'carbs'],
-      ['кл|клетчатк[аи]', 'fiber'], ['сахар[а]?', 'sugar'], ['сол[ьи]', 'salt'],
-    ],
-    meals: [['завтрак', 'breakfast'], ['обед', 'lunch'], ['ужин', 'dinner'], ['перекус', 'snack']],
-    ml: 'мл',
-    litre: 'л|литр(?:а|ов)?',
-    glass: 'стакан(?:а|ов)?',
     hour: 'ч|час(?:а|ов)?',
     minute: 'м|мин|минут[аы]?',
     halfHour: 'полчаса',
@@ -352,30 +260,10 @@ const WORDS: Record<QuickLang, QuickWords> = {
     numbers: {
       две: 2, два: 2, три: 3, четыре: 4,
     },
-    kg: 'кг',
-    beats: 'уд',
-    pressureOver: 'на',
-    distance: [['км', 1]],
-    goals: {
-      kcal: 'ккал|калории|калорий',
-      protein: 'белок|белки|белка',
-      fat: 'жиры|жир',
-      carbs: 'углеводы|углеводов',
-      fiber: 'клетчатка|клетчатки',
-      water: 'вод[аыу]',
-      sugar: 'сахар[а]?',
-      salt: 'сол[ьи]',
-      sleep: 'сон',
-      weight: 'вес',
-      steps: 'шаги',
-      day: 'день',
-      budget: 'бюджет',
-    },
   },
   en: {
     task: 'task|todo|to-do',
     event: 'event',
-    water: 'water',
     typoWords: 'monday mondays tuesday tuesdays wednesday wednesdays thursday thursdays friday fridays saturday'
       + ' saturdays sunday sundays january february august september october november december tomorrow'
       + ' weekly monthly yearly weekdays weekends minutes',
@@ -386,32 +274,6 @@ const WORDS: Record<QuickLang, QuickWords> = {
     descWeak: 'i|me|we|us|you|he|him|she|her|they|them|it|this|that|there|what|who|if|when|and|or|but|not|to|also'
       + '|just|still|at|in|on|from|for|after|before|with|without|of|by|the|a|an',
     abbreviations: 'etc|vs|mr|mrs|ms|dr|st|no|approx|apt|rm|tel|ext|min|max|hr|hrs|kg|ml|pcs|km|lb|lbs|oz',
-    sleep: 'sleep|slept',
-    sleepPrefix: 'today|tonight|last\\s+night|i',
-    sleepYesterday: 'yesterday',
-    sleepNone: 'didn\'?t\\s+sleep|did\\s+not\\s+sleep|no\\s+sleep',
-    sleepDayBefore: '(?:the\\s+)?day\\s+before\\s+yesterday',
-    sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
-    sleepWake: 'woke(?:\\s+up)?|got\\s+up',
-    workout: 'gym|workout|training|cardio|run|running|jog|jogging|swim|swimming|yoga|bike|cycling|walk|hike',
-    goal: 'goals?',
-    metrics: [
-      ['weight', 'weight'], ['pressure|bp|blood\\s+pressure', 'pressure'], ['pulse|hr|heart\\s+rate', 'pulse'],
-      ['steps', 'steps'], ['mood', 'mood'],
-    ],
-    weakLeads: 'run|running|jog|jogging|swim|swimming|bike|cycling|walk|hike|training|cardio|yoga|steps|pressure'
-      + '|blood\\s+pressure|heart\\s+rate|weight|sleep|mood|goals?',
-    kcal: 'kcal|cal|calories',
-    gram: 'g|gr|grams?',
-    macros: [
-      ['proteins?', 'protein'], ['fats?', 'fat'], ['carbs?|carbohydrates', 'carbs'], ['fiber|fibre', 'fiber'],
-      ['sugar', 'sugar'], ['salt', 'salt'],
-    ],
-    shortMacros: [['p', 'protein'], ['f', 'fat'], ['c', 'carbs']],
-    meals: [['breakfast', 'breakfast'], ['lunch', 'lunch'], ['dinner|supper', 'dinner'], ['snack', 'snack']],
-    ml: 'ml|millilit(?:er|re)s?',
-    litre: 'l|lit(?:er|re)s?',
-    glass: 'glass(?:es)?|cups?',
     hour: 'h|hr|hrs|hours?',
     minute: 'min|mins|minutes?',
     minuteGlued: 'm',
@@ -465,25 +327,6 @@ const WORDS: Record<QuickLang, QuickWords> = {
     numbers: {
       a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, other: 2, second: 2,
     },
-    kg: 'kg',
-    beats: 'bpm',
-    pressureOver: 'over',
-    distance: [['km|k|kilomet(?:er|re)s?', 1], ['mi|miles?', KM_IN_MILE]],
-    goals: {
-      kcal: 'kcal|calories|cal',
-      protein: 'proteins?',
-      fat: 'fats?',
-      carbs: 'carbs?|carbohydrates',
-      fiber: 'fiber|fibre',
-      water: 'water',
-      sugar: 'sugar',
-      salt: 'salt',
-      sleep: 'sleep',
-      weight: 'weight',
-      steps: 'steps',
-      day: 'day',
-      budget: 'budget',
-    },
   },
 };
 
@@ -492,20 +335,12 @@ type Groups = (string | undefined)[];
 // ── кандидаты ────────────────────────────────────────────────────────────────
 // Распознаватель предлагает кандидата: участок строки, поле (чип) и значение. Слот — значение, которое
 // в записи одно; оценка и выбор набора — `plannerQuickPick.ts`. Ранг распознавателя — насколько он точен:
-// метки и единицы питания старше длительности, длительность — времени, время — повтора, срок — дня;
-// внутри поля составное старше простого.
+// метки старше длительности, длительность — времени, время — повтора, срок — дня; внутри поля составное
+// старше простого.
 const RANK = {
   kind: 60,
   // Метки: список, место, «важное» — по убыванию
   marker: 58,
-  kcal: 54,
-  // Нутриенты по порядку словаря — по убыванию
-  macro: 52,
-  shortMacro: 44,
-  grams: 40,
-  meal: 39,
-  waterLead: 38,
-  water: 37,
   durationHalf: 34,
   durationHours: 33,
   durationMinutes: 32,
@@ -527,10 +362,6 @@ const RANK = {
 };
 
 type CandidateValue = {
-  nutrient?: QuickNutrient;
-  isShort?: boolean;
-  amount?: number;
-  meal?: PlannerMeal;
   minutes?: number;
   // Время в минутах от полуночи; `altStart` — другое чтение часа («в 7»: утро либо вечер)
   start?: number;
@@ -561,24 +392,16 @@ type Chosen = {
   slots: Map<string, Candidate>;
   // Занятые символы строки; день в счёт не идёт — он младше всех
   taken: boolean[];
-  nutrients: number;
-  regularNutrients: number;
 };
 
 function chosenState(items: Candidate[], length: number): Chosen {
   const taken = new Array<boolean>(length).fill(false);
   const slots = new Map<string, Candidate>();
-  let nutrients = 0;
-  let regularNutrients = 0;
   items.forEach((item) => {
     slots.set(item.slot, item);
     if (item.slot !== 'day') taken.fill(true, item.from, item.to);
-    if (item.value.nutrient) nutrients += 1;
-    if (item.value.nutrient && !item.value.isShort) regularNutrients += 1;
   });
-  return {
-    items, slots, taken, nutrients, regularNutrients,
-  };
+  return { items, slots, taken };
 }
 
 function matchZones(re: RegExp, lower: string) {
@@ -667,11 +490,7 @@ function compile(id: QuickLang, words: QuickWords) {
     `(?:(?:${words.weekdayLead})\\s+)?(?:${weekday})`,
   ].join('|');
   const listSeparator = `(?:\\s*,\\s*(?:(?:${words.and})\\s+)?|\\s+(?:${words.and})\\s+)`;
-  const lead = (body: string) => new RegExp(`^\\s*(?:${body})${SEPARATOR}\\s*`);
   const whole = (body: string) => new RegExp(`^(?:${body})$`);
-  const anywhere = (body: string) => new RegExp(`(?:^|[^${ALNUM}])(?:${body})${SEPARATOR}`);
-  const sleepDays = [words.sleepDayBefore, words.sleepYesterday].filter(Boolean).join('|');
-  const sleepPrefixes = [words.sleepPrefix, sleepDays].filter(Boolean).join('|');
   return {
     id,
     words,
@@ -686,7 +505,6 @@ function compile(id: QuickLang, words: QuickWords) {
     // Единица минут после числа
     minutes: `(?:\\s*(?:${words.minute})${words.minuteGlued ? `|(?:${words.minuteGlued})` : ''})`,
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
-    waterLead: lead(words.water),
     eventMinutes: (words.eventMinutes || []).map(([body, minutes]) => (
       // Ссылки на заметки перед словом (их заглушки) первым словом не считаются: «[[Сервер]] созвон 16:00»
       [new RegExp(`^\\s*(?:[\\ue000-\\uf8ff]+\\s*)*(?:${body})${SEPARATOR}`), minutes] as const
@@ -709,23 +527,6 @@ function compile(id: QuickLang, words: QuickWords) {
     abbreviationTail: new RegExp(`(?:^|[^${ALNUM}])(?:${words.abbreviations}|[${LETTER}])$`),
     typoWords: words.typoWords.split(' '),
     typoSafe: new Set([...words.typoWords.split(' '), ...(words.typoSafe || '').split(' ')]),
-    sleepLead: lead(`(?:(?:${sleepPrefixes || '(?!)'})\\s+)*(?:${words.sleep})`),
-    sleepDayBefore: words.sleepDayBefore ? anywhere(words.sleepDayBefore) : undefined,
-    // Вся строка — «[вчера] [я] не спал [вчера]»
-    sleepNone: words.sleepNone ? new RegExp(
-      `^\\s*(?:(?:${sleepPrefixes})\\s+)*(?:${words.sleepNone})(?:\\s+(?:${sleepDays}))?\\s*[.!]?\\s*$`,
-    ) : undefined,
-    sleepYesterday: words.sleepYesterday ? anywhere(words.sleepYesterday) : undefined,
-    plainSleepLead: lead(words.sleep),
-    bedWake: words.sleepBed && words.sleepWake ? new RegExp(
-      `(?:^|[^${ALNUM}])(?:${words.sleepBed})\\s+(?:(?:${words.at})\\s+)?(\\d{1,2})(?:[:.](\\d{2}))?`
-      + `[^${ALNUM}]+(?:(?:${words.and})\\s+)?(?:${words.sleepWake})\\s+(?:(?:${words.at})\\s+)?`
-      + `(\\d{1,2})(?:[:.](\\d{2}))?${SEPARATOR}`,
-    ) : undefined,
-    workoutLead: lead(words.workout),
-    goalLead: lead(words.goal),
-    metricLead: new RegExp(`^\\s*(${bodies(words.metrics)})${SEPARATOR}\\s*(.*)$`),
-    weakLead: words.weakLeads ? lead(words.weakLeads) : undefined,
     listSplit: new RegExp(listSeparator),
     isEvery: whole(words.every),
     isFunctionWord: whole(words.descWeak),
@@ -745,9 +546,6 @@ function compile(id: QuickLang, words: QuickWords) {
     unitOf: lookup(words.units),
     adverbOf: lookup(words.adverbs),
     spanOf: lookup(words.spans),
-    mealOf: lookup(words.meals),
-    metricOf: lookup(words.metrics),
-    distanceOf: lookup(words.distance),
     namedTimeOf: lookup(words.namedTimes || []),
     countOf: (text?: string) => (text ? (words.numbers[text] ?? Number(text)) : 1),
   };
@@ -882,13 +680,6 @@ function fold(text: string) {
   return folded.length === text.length ? folded : text;
 }
 
-function mealByTime(minutes: number): PlannerMeal {
-  if (minutes < 11 * MINUTES_IN_HOUR) return 'breakfast';
-  if (minutes < 16 * MINUTES_IN_HOUR) return 'lunch';
-  if (minutes < 22 * MINUTES_IN_HOUR) return 'dinner';
-  return 'snack';
-}
-
 // Язык разбора. Строка без букв либо с буквами одного языка словаря разбирается этим языком (без букв —
 // языком интерфейса): русская строка понятна и при английском интерфейсе, и наоборот. Строка со смешанными
 // буквами («зал присед 4x8x80», «созвон Zoom завтра») разбирается обоими словарями по отдельности, берётся
@@ -905,7 +696,7 @@ export function parseQuickInput(typed: string, ctx: QuickContext): QuickDraft {
     ? `${linked.slice(0, remind.from)}${' '.repeat(remind.to - remind.from)}${linked.slice(remind.to)}`
     : linked;
   const draft = parseMasked(text, ctx);
-  if (remind && (draft.kind === 'task' || draft.kind === 'event')) {
+  if (remind) {
     draft.remind = remind.minutes;
     const span: QuickSpan = { field: 'remind', from: remind.from, to: remind.to };
     draft.spans = [...draft.spans, span].sort((a, b) => a.from - b.from);
@@ -965,7 +756,7 @@ function parseMasked(text: string, ctx: QuickContext): QuickDraft {
   if (!has[lang]) return parseLine(text, ctx, langOf(other));
   const own = parseLine(text, ctx, langOf(lang));
   const foreign = parseLine(text, ctx, langOf(other));
-  return recognisedCount(foreign) > recognisedCount(own) ? foreign : own;
+  return foreign.spans.length > own.spans.length ? foreign : own;
 }
 
 // «по понидельникам каждую ниделю»: длинное слово с одной опечаткой (замена, пропуск, лишняя буква,
@@ -991,12 +782,6 @@ function isOneEditAway(a: string, b: string) {
   return a.length > b.length ? restA.slice(1) === restB : restA === restB.slice(1);
 }
 
-// Сколько распознано: помеченные участки; запись здоровья, еды или воды без ошибки — ещё одно
-function recognisedCount(draft: QuickDraft) {
-  const isPlain = draft.kind === 'task' || draft.kind === 'event';
-  return draft.spans.length + (!isPlain && !draft.error ? 1 : 0);
-}
-
 // Строка проходит правку опечаток и замену числительных цифрами (`plannerNumerals.ts`), затем разбор
 function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
   const { text, edits } = rewriteNumerals(fixTypos(typed, lang), lang.id);
@@ -1011,19 +796,13 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   const taken = new Array<boolean>(text.length).fill(false);
   const spans: QuickSpan[] = [];
   const skipped = new Set(ctx.skip);
-  const allowed = new Set<QuickKind>(ctx.kind ? [ctx.kind] : (ctx.kinds || ALL_KINDS));
-
-  // Здоровье и цели узнаются по первому слову; тип, выбранный пользователем, сильнее слова
-  const health = parseHealth(text, lower, edits, ctx, allowed, lang);
-  if (health) return health;
 
   const draft: QuickDraft = { kind: 'task', name: '', spans };
   let explicitKind = ctx.kind;
 
   // ── кандидаты ──────────────────────────────────────────────────────────────
   // Каждый распознаватель предлагает все свои совпадения, не глядя на остальные; условие `when` —
-  // зависимость от уже выбранного («граммы — только у еды», «до <дата>» — конец ряда, только если есть
-  // повтор). Лучший набор без пересечений выбирает `pickCandidates` (`plannerQuickPick.ts`)
+  // зависимость от уже выбранного («до <дата>» — конец ряда, только если есть повтор). Лучший набор без пересечений выбирает `pickCandidates` (`plannerQuickPick.ts`)
   const pool: Candidate[] = [];
   const push = (
     slot: string, field: QuickField, rank: number, from: number, to: number, value: CandidateValue = {},
@@ -1054,7 +833,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   if (!explicitKind) {
     const lead = lang.kindLead.exec(lower);
     const leadKind: QuickKind | undefined = lead ? (lead[2] ? 'event' : 'task') : undefined;
-    if (lead && leadKind && allowed.has(leadKind) && !skipped.has('kind')) {
+    if (lead && leadKind && !skipped.has('kind')) {
       explicitKind = leadKind;
       push('kind', 'kind', RANK.kind, 0, lead[0].length);
     }
@@ -1067,58 +846,19 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     if (found) push(field, field, RANK.marker - index, found.from, found.to);
   });
 
-  // Числа с единицами: питание и вода
-  const isFoodIn = (state: Chosen) => explicitKind === 'food' || (!explicitKind && state.nutrients > 0);
-  const isWaterIn = (state: Chosen) => explicitKind === 'water' || state.slots.has('water');
-  if (allowed.has('food') && explicitKind !== 'water') {
-    offer('kcal', 'kcal', RANK.kcal, `(${NUM})\\s*(?:${words.kcal})`, (g) => (
-      { nutrient: 'kcal', amount: toNumber(g[1]!) }
-    ));
-    const macroBody = (names: string) => `(?:${names})\\s*(${NUM})(?:\\s*(?:${words.gram}))?`;
-    words.macros.forEach(([names, nutrient], index) => {
-      offer(nutrient, nutrient, RANK.macro - index, macroBody(names), (g) => ({ nutrient, amount: toNumber(g[1]!) }));
-    });
-    // «f1», «c4» — обычные слова: одна буква с числом считается, когда признаков питания не меньше двух
-    const short = (words.shortMacros || []).filter(([names]) => word(macroBody(names)).test(lower));
-    short.forEach(([names, nutrient], index) => {
-      offer(`short-${nutrient}`, nutrient, RANK.shortMacro - index, macroBody(names), (g) => (
-        { nutrient, amount: toNumber(g[1]!), isShort: true }
-      ), (state) => state.regularNutrients + short.length > 1);
-    });
-  }
-  offer('grams', 'grams', RANK.grams, `(${NUM})\\s*(?:${words.gram})`, (g) => ({ amount: toNumber(g[1]!) }), isFoodIn);
-  offer('meal', 'meal', RANK.meal, bodies(words.meals), (g) => ({ meal: lang.mealOf(g[0]!) }), isFoodIn);
-
-  if (allowed.has('water') && (!explicitKind || explicitKind === 'water')) {
-    const lead = lang.waterLead.exec(lower);
-    const volume = `(${NUM})\\s*(?:(${words.ml})|(${words.glass})|(${words.litre}))`;
-    const found = word(volume).exec(lower);
-    const rest = found ? lower.slice(lead?.[0].length || 0).replace(found[2], '').trim() : 'x';
-    // Вода — слово «вода» в начале либо один объём без других слов
-    if (found && (lead || explicitKind === 'water' || !rest)) {
-      const isNotFood = (state: Chosen) => !isFoodIn(state);
-      offer('water', 'water', RANK.water, volume, (g) => (
-        { amount: Math.round(toNumber(g[1]!) * (g[2] ? 1 : g[3] ? GLASS_ML : ML_IN_LITRE)) }
-      ), isNotFood);
-      if (lead) push('waterLead', 'kind', RANK.waterLead, 0, lead[0].length, {}, isNotFood);
-    }
-  }
-
   // Длительность: составная старше простой
-  const isPlainIn = (state: Chosen) => !isFoodIn(state) && !isWaterIn(state);
   offer('minutes', 'minutes', RANK.durationHalf, `(${words.hourAndHalf})|(?:${words.halfHour})`, (g) => (
     { minutes: g[1] ? 90 : 30 }
-  ), isPlainIn);
+  ));
   const hoursBody = `(${NUM})\\s*(?:${words.hour})(?:\\s*(\\d{1,2})${lang.minutes})?`;
   offer('minutes', 'minutes', RANK.durationHours, hoursBody, (g) => (
     { minutes: Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR) + Number(g[2] || 0) }
-  ), isPlainIn);
+  ));
   offer('minutes', 'minutes', RANK.durationMinutes, `(\\d{1,4})${lang.minutes}`, (g) => (
     { minutes: Number(g[1]) }
-  ), isPlainIn);
+  ));
 
   // Время: диапазон старше одного значения, часы с минутами — голого часа
-  const isNotWaterIn = (state: Chosen) => !isWaterIn(state);
   const clock = `(${HOUR})(?::(${MINUTE}))?(?:\\s*(${lang.daypart}))?`;
   const repeatZones = matchZones(
     word(`(?:${words.every}|${words.oncePer})\\s+(?:${lang.count})\\s+(?:${bodies(words.units)})`), lower,
@@ -1142,7 +882,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
       if (same !== undefined && same < to) from = same;
     }
     return { start: from, end: to };
-  }, isNotWaterIn);
+  });
   const clockBody = `${lang.daypartLead}(?:(?:${words.at})\\s+)?(${HOUR}):(${MINUTE})(?:\\s*(${lang.daypart}))?`;
   offer('time', 'time', RANK.timeClock, clockBody, (g, from, to) => {
     const part = daypartIn(g[4], g[1]);
@@ -1155,7 +895,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     }
     const start = resolveHour(hour, minute, part);
     return start === undefined ? undefined : { start };
-  }, isNotWaterIn);
+  });
   const hourBody = `${lang.daypartLead}(?:(${words.at})\\s+)?(${HOUR})(?![.:,]\\d)(?:\\s*(${lang.daypart}))?`;
   offer('time', 'time', RANK.timeHour, hourBody, (g, from, to) => {
     // Голый час — только с предлогом («в 5») либо с уточнением, понятным без него («5pm»)
@@ -1172,12 +912,12 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     const start = resolveBareHour(hour, ctx);
     const isAmbiguous = hour >= 1 && hour < 12;
     return { start, altStart: isAmbiguous ? (start + MINUTES_IN_DAY / 2) % MINUTES_IN_DAY : undefined };
-  }, isNotWaterIn);
+  });
   if (words.namedTimes) {
     offer('time', 'time', RANK.timeNamed, `(?:(?:${words.at})\\s+)?(${bodies(words.namedTimes)})`, (g) => {
       const start = lang.namedTimeOf(g[1]!);
       return start === undefined ? undefined : { start };
-    }, isNotWaterIn);
+    });
   }
 
   // Повтор
@@ -1185,21 +925,21 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   const repeatKindIn = (state: Chosen) => (
     state.slots.get('repeatKind')?.value.repeatKind || (state.slots.has('weekdays') ? 'weekly' as const : undefined)
   );
-  const hasRepeatIn = (state: Chosen) => isPlainIn(state) && Boolean(repeatKindIn(state));
+  const hasRepeatIn = (state: Chosen) => Boolean(repeatKindIn(state));
   // Дни недели — только у еженедельного повтора
   const isWeeklyIn = (state: Chosen) => {
     const kind = state.slots.get('repeatKind')?.value.repeatKind;
-    return isPlainIn(state) && (!kind || kind === 'weekly');
+    return !kind || kind === 'weekly';
   };
   offer('repeatKind', 'repeat', RANK.repeatEvery, `(?:${words.every})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => (
     { repeatKind: lang.unitOf(g[2]!), interval: lang.countOf(g[1]) }
-  ), isPlainIn);
+  ));
   offer('repeatKind', 'repeat', RANK.repeatAdverb, bodies(words.adverbs), (g) => (
     { repeatKind: lang.adverbOf(g[0]!) }
-  ), isPlainIn);
+  ));
   offer('repeatKind', 'repeat', RANK.repeatOnce, `(?:${words.oncePer})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => (
     { repeatKind: lang.unitOf(g[2]!), interval: lang.countOf(g[1]) }
-  ), isPlainIn);
+  ));
   offer('weekdays', 'repeat', RANK.repeatWorkdays, words.workdays, () => ({ days: [1, 2, 3, 4, 5] }), isWeeklyIn);
   offer('weekdays', 'repeat', RANK.repeatWeekends, words.weekends, () => ({ days: [6, 0] }), isWeeklyIn);
   const dayList = `(?:${lang.weekday})(?:${lang.listSeparator}(?:${lang.weekday}))*`;
@@ -1237,7 +977,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   }, hasRepeatIn);
 
   // Срок и дата: «до пт» как срок старше «пт» как дня
-  offer('due', 'due', RANK.due, untilBody, (g) => readDate(g[1]!), isPlainIn);
+  offer('due', 'due', RANK.due, untilBody, (g) => readDate(g[1]!));
   offer('day', 'day', RANK.day, `(?:(?:${words.dayLead})\\s+)?(${lang.date})`, (g) => {
     const value = readDate(g[1]!);
     if (!value) return undefined;
@@ -1247,7 +987,6 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     // числом или перед уже распознанным значением
     return { ...value, weekday, isWeak: g[0] === g[1] && Boolean(lang.isWeakWeekday?.test(g[1]!)) };
   }, (state, { value, from, to }) => {
-    if (isWaterIn(state)) return false;
     if (value.weekday === undefined) return true;
     // «1000 Вт» — не вторник: день недели сразу после числа, не распознанного как значение, — не день
     const before = lower.slice(0, from).trimEnd().length - 1;
@@ -1282,20 +1021,10 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     state = chosenState(chosen, text.length);
     if (chosen.length === current.items.length && chosen.every((item, index) => item === current.items[index])) break;
   }
-  const isFood = isFoodIn(state);
-  const isWater = isWaterIn(state);
   let picked = state.items;
   const valueOf = (slot: string) => picked.find((item) => item.slot === slot)?.value;
 
   // ── значения выбранных кандидатов ──────────────────────────────────────────
-  const nutrients: Partial<Record<QuickNutrient, number>> = {};
-  // Однобуквенное обозначение разбирается после полного и потому сильнее его
-  [false, true].forEach((isShort) => picked.forEach(({ value }) => {
-    if (value.nutrient && Boolean(value.isShort) === isShort) nutrients[value.nutrient] = value.amount;
-  }));
-  draft.grams = valueOf('grams')?.amount;
-  draft.meal = valueOf('meal')?.meal;
-  draft.waterMl = valueOf('water')?.amount;
   draft.minutes = valueOf('minutes')?.minutes;
   const time = valueOf('time');
   const start = time?.start;
@@ -1330,10 +1059,9 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   };
   settle();
 
-  // ── тип задачи либо события; метки, которые ему не положены ───────────────
+  // ── тип записи; метки, которые ему не положены ────────────────────────────
   const blank = () => restoreNumerals(text.split('').map((char, i) => (taken[i] ? ' ' : char)).join(''), edits);
   const hasTime = start !== undefined;
-  let learned: QuickLearned[string] | undefined;
   // Другие чтения: второе значение выбранного кандидата («в 7» — 07:00 либо 19:00) и кандидаты того же
   // поля, которым не хватило места в слоте («созвон 16:00 или 18:00»)
   const alternatives: QuickAlt[] = [];
@@ -1366,34 +1094,27 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     const closed = openZones.map(({ groups }) => readDate(groups[1]!)?.day).find(Boolean);
     if (closed) suggest('repeat', QUICK_REPEAT_END, closed);
   }
-  if (isWater || isFood) {
-    unmark(MARKER_FIELDS);
-  } else {
-    // Первое слово названия считается до возврата меток: «#дом купить молоко» — «купить»
-    draft.head = headWord(blank(), lang);
-    learned = draft.head && ctx.learned && Object.prototype.hasOwnProperty.call(ctx.learned, draft.head)
-      ? ctx.learned[draft.head] : undefined;
-    const guessed: QuickKind = hasTime && allowed.has('event') ? 'event' : 'task';
-    draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind : guessed;
-    if (!allowed.has(draft.kind)) draft.kind = allowed.has('task') ? 'task' : 'event';
-    // Тип, выученный по правкам: когда пользователь не выбрал тип сам и не снял выученный
-    if (!explicitKind && learned?.kind && learned.kind !== draft.kind && allowed.has(learned.kind)
-      && !skipped.has('kind')) {
-      draft.kind = learned.kind;
-      draft.learned = ['kind'];
-    }
-    // У события нет статуса: «!» остаётся в названии; «#группа» — и у события (16 окт 2026)
-    if (draft.kind === 'event') unmark(['important']);
-    // Событие либо задача: разбор выбрал сам — другое чтение остаётся вариантом (у задачи без даты и
-    // времени его нет: событию нужен день)
-    const otherKind: QuickKind = draft.kind === 'event' ? 'task' : 'event';
-    const isDated = hasTime || Boolean(valueOf('day') || repeatKind);
-    if (!explicitKind && allowed.has(otherKind) && (draft.kind === 'event' || isDated)) suggest('kind', otherKind);
-    const list = markerText('list');
-    draft.list = list && list.replace(/_/g, ' ');
-    draft.place = markerText('place');
-    draft.isImportant = spans.some(({ field }) => field === 'important') || undefined;
+  // Первое слово названия считается до возврата меток: «#дом купить молоко» — «купить»
+  draft.head = headWord(blank(), lang);
+  const learned = draft.head && ctx.learned && Object.prototype.hasOwnProperty.call(ctx.learned, draft.head)
+    ? ctx.learned[draft.head] : undefined;
+  draft.kind = explicitKind || (hasTime ? 'event' : 'task');
+  // Тип, выученный по правкам: когда пользователь не выбрал тип сам и не снял выученный
+  if (!explicitKind && learned?.kind && learned.kind !== draft.kind && !skipped.has('kind')) {
+    draft.kind = learned.kind;
+    draft.learned = ['kind'];
   }
+  // У события нет статуса: «!» остаётся в названии; «#группа» — и у события (16 окт 2026)
+  if (draft.kind === 'event') unmark(['important']);
+  // Событие либо задача: разбор выбрал сам — другое чтение остаётся вариантом (у задачи без даты и
+  // времени его нет: событию нужен день)
+  const otherKind: QuickKind = draft.kind === 'event' ? 'task' : 'event';
+  const isDated = hasTime || Boolean(valueOf('day') || repeatKind);
+  if (!explicitKind && (draft.kind === 'event' || isDated)) suggest('kind', otherKind);
+  const list = markerText('list');
+  draft.list = list && list.replace(/_/g, ' ');
+  draft.place = markerText('place');
+  draft.isImportant = spans.some(({ field }) => field === 'important') || undefined;
 
   if (alternatives.length) draft.alternatives = alternatives;
 
@@ -1401,8 +1122,6 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   const plain = blank();
   draft.name = cleanName(plain);
   spans.sort((a, b) => a.from - b.from);
-  const mealSpan = spans.find(({ field }) => field === 'meal');
-  const mealText = mealSpan ? text.slice(mealSpan.from, mealSpan.to) : '';
   if (edits.length) {
     spans.forEach((span) => {
       span.from = toSourceOffset(span.from, edits);
@@ -1410,31 +1129,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     });
   }
 
-  // ── вода и еда ────────────────────────────────────────────────────────────
-  if (isWater) {
-    draft.kind = 'water';
-    draft.day = ctx.today;
-    if (draft.waterMl === undefined) draft.error = 'name';
-    return draft;
-  }
-  if (isFood) {
-    draft.kind = 'food';
-    draft.day = day || ctx.today;
-    draft.meal = draft.meal || mealByTime(start ?? ctx.nowMinutes);
-    if (start !== undefined && start < MINUTES_IN_DAY) draft.start = toTime(start);
-    if (nutrients.kcal === undefined) {
-      const { protein, fat, carbs } = nutrients;
-      if (protein !== undefined || fat !== undefined || carbs !== undefined) {
-        nutrients.kcal = Math.round((protein || 0) * 4 + (fat || 0) * 9 + (carbs || 0) * 4);
-      }
-    }
-    draft.nutrients = nutrients;
-    if (!draft.name) draft.name = mealText;
-    if (!draft.name) draft.error = 'name';
-    return draft;
-  }
-
-  // ── задача либо событие: название и описание ──────────────────────────────
+  // ── название и описание ───────────────────────────────────────────────────
   const split = skipped.has('description') ? undefined : splitName(plain, fold(plain), lang);
   if (split) {
     draft.name = split.name;
@@ -1664,239 +1359,4 @@ function splitName(plain: string, lower: string, lang: Lang) {
     match = lead.exec(lower);
   }
   return undefined;
-}
-
-// ── здоровье и цели (spec 020) ───────────────────────────────────────────────
-
-function parseHealth(
-  text: string, lower: string, edits: NumeralEdit[], ctx: QuickContext, allowed: Set<QuickKind>, lang: Lang,
-): QuickDraft | undefined {
-  const can = (kind: QuickKind) => allowed.has(kind) && (!ctx.kind || ctx.kind === kind);
-  // Слово, обычное и в названиях дел: без разобранного значения это не запись здоровья
-  const isWeak = !ctx.kind && Boolean(lang.weakLead?.test(lower));
-  const settle = (draft?: QuickDraft) => (isWeak && draft?.error ? undefined : draft);
-  if (!ctx.skip?.includes('kind')) {
-    if (can('goal') && lang.goalLead.test(lower)) {
-      const goal = parseGoal(lower.replace(lang.goalLead, ''), ctx, lang);
-      // Найденная, но неверная цель — ошибка цели, а не название дела
-      return isWeak && goal.error === 'name' ? undefined : goal;
-    }
-    const metric = can('metric') && lang.metricLead.exec(lower);
-    if (metric) return settle(parseMetric(lang.metricOf(metric[1])!, metric[2], ctx, lang));
-    if (can('sleep') && lang.sleepNone?.test(lower)) {
-      return sleepOnDay(healthDraft('sleep', ctx, { minutes: 0 }), lower, ctx, lang);
-    }
-    if (can('sleep') && lang.sleepLead.test(lower)) {
-      const sleep = sleepOnDay(parseSleep(lower.replace(lang.sleepLead, ''), ctx, lang), lower, ctx, lang);
-      // «я спал плохо» без времени — не запись сна, а обычная строка
-      return !lang.plainSleepLead.test(lower) && sleep.error ? undefined : settle(sleep);
-    }
-    const bedWake = can('sleep') && lang.bedWake?.exec(lower);
-    if (bedWake) return sleepOnDay(sleepRange(bedWake, ctx), lower, ctx, lang);
-  }
-  if (ctx.kind === 'sleep' && lang.sleepNone?.test(lower)) {
-    return sleepOnDay(healthDraft('sleep', ctx, { minutes: 0 }), lower, ctx, lang);
-  }
-  if (ctx.kind === 'sleep') return sleepOnDay(parseSleep(lower, ctx, lang), lower, ctx, lang);
-  // Тип «цель» выбран вызывающим: слово «цель» в начале не обязательно
-  if (ctx.kind === 'goal') return parseGoal(lower, ctx, lang);
-  if (can('workout') && (ctx.kind === 'workout' || lang.workoutLead.test(lower))) {
-    return settle(parseWorkout(text, lower, edits, ctx, lang));
-  }
-  return undefined;
-}
-
-function healthDraft(kind: QuickKind, ctx: QuickContext, patch: Partial<QuickDraft>): QuickDraft {
-  return {
-    kind, name: '', day: ctx.today, spans: [], ...patch,
-  };
-}
-
-function parseMetric(metric: QuickMetric, rest: string, ctx: QuickContext, { words }: Lang): QuickDraft {
-  const fail = healthDraft('metric', ctx, { metric, error: 'name' });
-  if (metric === 'pressure') {
-    const pair = new RegExp(`^(\\d{2,3})\\s*(?:\\/|${words.pressureOver})\\s*(\\d{2,3})$`).exec(rest.trim());
-    return pair ? healthDraft('metric', ctx, { metric, value: Number(pair[1]), value2: Number(pair[2]) }) : fail;
-  }
-  const number = new RegExp(`^(\\d[\\d ]*(?:[.,]\\d+)?)\\s*(?:${words.kg}|${words.beats})?$`).exec(rest.trim());
-  if (!number) return fail;
-  const value = toNumber(number[1].replace(/ /g, ''));
-  const isWhole = Number.isInteger(value);
-  const isValid = metric === 'weight' ? value > 0 && value < 500
-    : metric === 'mood' ? isWhole && value >= 1 && value <= MAX_MOOD
-      : metric === 'steps' ? isWhole && value <= MAX_STEPS : isWhole && value > 0 && value < 300;
-  return isValid ? healthDraft('metric', ctx, { metric, value }) : fail;
-}
-
-// «23:40-07:30» — лёг и встал (ночь уходит за полночь); «7,5 ч», «7 ч 30 мин» — только длительность
-function parseSleep(rest: string, ctx: QuickContext, lang: Lang): QuickDraft {
-  const { words } = lang;
-  // Минуты необязательны: «с 4 до 12»; «7-8 ч» — не время, а длительность
-  const range = new RegExp(
-    `(\\d{1,2})(?:[:.](\\d{2}))?\\s*(?:${DASH}|${words.to})\\s*(\\d{1,2})(?:[:.](\\d{2}))?`
-    + `(?![.,:]?\\d|\\s*(?:${words.hour})${SEPARATOR})`,
-  ).exec(rest);
-  if (range) return sleepRange(range, ctx);
-  const duration = new RegExp(
-    `(${NUM})\\s*(?:${words.hour})${SEPARATOR}(?:\\s*(\\d{1,2})${lang.minutes}${SEPARATOR})?`,
-  ).exec(rest);
-  const minutes = duration ? Math.round(toNumber(duration[1]) * MINUTES_IN_HOUR) + Number(duration[2] || 0) : 0;
-  // «0», «0 ч», «0ч» — записанный ноль, как «не спал»
-  if ((duration && minutes === 0) || /^\s*0\s*$/.test(rest)) return healthDraft('sleep', ctx, { minutes: 0 });
-  return minutes > 0 && minutes < MINUTES_IN_DAY
-    ? healthDraft('sleep', ctx, { minutes }) : healthDraft('sleep', ctx, { error: 'time' });
-}
-
-// «вчера спал с 5 до 15», «позавчера лёг в 23 встал в 7»: сон — на названный день (день подъёма)
-function sleepOnDay(draft: QuickDraft, lower: string, ctx: QuickContext, lang: Lang): QuickDraft {
-  const shift = lang.sleepDayBefore?.test(lower) ? -2 : lang.sleepYesterday?.test(lower) ? -1 : 0;
-  return shift ? { ...draft, day: addDays(ctx.today, shift) } : draft;
-}
-
-// Группы: час и минуты отхода ко сну, час и минуты подъёма
-function sleepRange(groups: RegExpExecArray, ctx: QuickContext): QuickDraft {
-  const typedBed = resolveHour(Number(groups[1]), Number(groups[2] || 0));
-  const wake = resolveHour(Number(groups[3]), Number(groups[4] || 0));
-  // «с 11 до 7» — лёг вечером: сон дольше 16 часов означает, что час отхода назван без «вечера»
-  const isEvening = typedBed !== undefined && wake !== undefined && typedBed < MINUTES_IN_DAY / 2
-    && (wake - typedBed + MINUTES_IN_DAY) % MINUTES_IN_DAY > MAX_SLEEP_MINUTES;
-  const bed = isEvening ? typedBed + MINUTES_IN_DAY / 2 : typedBed;
-  if (bed === undefined || wake === undefined || bed === wake || bed >= MINUTES_IN_DAY || wake >= MINUTES_IN_DAY) {
-    return healthDraft('sleep', ctx, { error: 'time' });
-  }
-  return healthDraft('sleep', ctx, {
-    start: toTime(bed), end: toTime(wake), minutes: (wake - bed + MINUTES_IN_DAY) % MINUTES_IN_DAY,
-  });
-}
-
-// Тренировка-запись: «бег 5 км 28 мин», «зал присед 4x8x80, жим 3x10x60», «зал 60 мин». Тренировка с
-// временем начала, на будущий день либо с повтором — запланированное событие календаря, его разбирает
-// основной разбор
-function parseWorkout(
-  text: string, lower: string, edits: NumeralEdit[], ctx: QuickContext, lang: Lang,
-): QuickDraft | undefined {
-  const { words } = lang;
-  const taken = new Array<boolean>(text.length).fill(false);
-  const cut = (from: number, to: number) => {
-    for (let i = from; i < to; i++) taken[i] = true;
-  };
-  let distanceKm: number | undefined;
-  const distance = new RegExp(`(${NUM})\\s*(${bodies(words.distance)})${SEPARATOR}`).exec(lower);
-  if (distance) {
-    distanceKm = Math.round(toNumber(distance[1]) * (lang.distanceOf(distance[2]) || 1) * 100) / 100;
-    cut(distance.index, distance.index + distance[0].length);
-  }
-  const exercises: PlannerExercise[] = [];
-  // Название, затем «подходы × повторы × вес» (вес необязателен); упражнения разделены запятой
-  const sets = new RegExp(
-    `([${LETTER}][${LETTER} ]*?)\\s*(\\d{1,2})\\s*[xх×*]\\s*(\\d{1,3})`
-    + `(?:\\s*[xх×*]\\s*(\\d+(?:[.,]\\d+)?))?\\s*(?:${words.kg})?\\s*(?:,|;|$)`,
-    'g',
-  );
-  const lead = lang.workoutLead.exec(lower);
-  sets.lastIndex = lead ? lead[0].length : 0;
-  let match = sets.exec(lower);
-  while (match) {
-    exercises.push({
-      name: text.slice(match.index, match.index + match[1].length).trim(),
-      sets: Number(match[2]),
-      reps: Number(match[3]),
-      weight: match[4] ? toNumber(match[4]) : undefined,
-    });
-    cut(match.index, match.index + match[0].length);
-    match = sets.exec(lower);
-  }
-  const rest = [...text].map((char, i) => (taken[i] ? ' ' : char)).join('');
-  // У записи тренировки нет ни описания, ни меток: название не делится
-  const base = parseText(rest, edits, {
-    ...ctx, kind: 'event', kinds: undefined, skip: [...(ctx.skip || []), 'description', ...MARKER_FIELDS],
-  }, lang);
-  const isRecord = Boolean(distanceKm || exercises.length)
-    || (!base.start && !base.repeat && (base.day || ctx.today) <= ctx.today);
-  if (!isRecord && ctx.kind !== 'workout') return undefined;
-  const hasContent = Boolean(distanceKm || exercises.length || base.minutes);
-  // «бег 28 мин» — запись тренировки либо дело с длительностью: второе чтение остаётся вариантом
-  const plainKinds = (['task', 'event'] as const).filter((kind) => !ctx.kinds || ctx.kinds.includes(kind));
-  const other = !ctx.kind && plainKinds.length
-    ? parseText(text, edits, { ...ctx, kinds: plainKinds, pick: undefined }, lang).kind : undefined;
-  return {
-    kind: 'workout',
-    alternatives: other ? [{ field: 'kind', pick: other }] : undefined,
-    name: base.name,
-    day: base.day || ctx.today,
-    start: base.start,
-    minutes: base.minutes,
-    distanceKm,
-    exercises: exercises.length ? exercises : undefined,
-    spans: [],
-    error: !base.name ? 'name' : !hasContent ? 'minutes' : undefined,
-  };
-}
-
-// «цель белок 140 вода 2,5л сон 8ч день с 8 до 22» — меняет цели и настройки
-function parseGoal(rest: string, ctx: QuickContext, { words }: Lang): QuickDraft {
-  const names = words.goals;
-  const changes: QuickGoalChanges = { goals: {}, health: {} };
-  let found = 0;
-  const take = (body: string, apply: (groups: Groups) => void) => {
-    const match = word(body).exec(rest);
-    if (!match) return;
-    apply(match.slice(2));
-    found += 1;
-  };
-  const goal = (metric: Exclude<PlannerGoalMetric, 'water'>) => {
-    take(`(?:${names[metric]})\\s*(${NUM})`, (g) => {
-      changes.goals[metric] = toNumber(g[1]!);
-    });
-  };
-  goal('kcal');
-  goal('protein');
-  goal('fat');
-  goal('carbs');
-  goal('fiber');
-  take(`(?:${names.water})\\s*(${NUM})\\s*(?:(${words.ml})|(${words.litre}))?`, (g) => {
-    const amount = toNumber(g[1]!);
-    // Без единицы: большое число — миллилитры, малое — литры
-    changes.goals.water = Math.round(g[2] || (!g[3] && amount > 20) ? amount : amount * ML_IN_LITRE);
-  });
-  take(`(?:${names.sugar})\\s*(${NUM})`, (g) => {
-    changes.health.sugarMax = toNumber(g[1]!);
-  });
-  take(`(?:${names.salt})\\s*(${NUM})`, (g) => {
-    changes.health.saltMax = toNumber(g[1]!);
-  });
-  // «сон 23:30-07:00» — режим: когда ложиться и вставать (минуты от полуночи); «сон 8ч» — длительность
-  take(
-    `(?:${names.sleep})\\s+(?:(?:${words.from})\\s+)?(${HOUR}):(${MINUTE})\\s*(?:${DASH}|${words.to})\\s*`
-    + `(${HOUR}):(${MINUTE})`,
-    (g) => {
-      changes.health.bedtime = (Number(g[1]) % 24) * MINUTES_IN_HOUR + Number(g[2]);
-      changes.health.wakeTime = (Number(g[3]) % 24) * MINUTES_IN_HOUR + Number(g[4]);
-    },
-  );
-  take(`(?:${names.sleep})\\s*(${NUM})(?![:\\d])\\s*(?:${words.hour})?`, (g) => {
-    changes.health.sleepMinutes = Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR);
-  });
-  take(`(?:${names.weight})\\s*(${NUM})`, (g) => {
-    changes.health.weight = toNumber(g[1]!);
-  });
-  take(`(?:${names.steps})\\s*(\\d[\\d ]*\\d|\\d)`, (g) => {
-    changes.health.steps = Number(g[1]!.replace(/ /g, ''));
-  });
-  take(
-    `(?:${names.day})\\s+(?:(?:${words.from})\\s+)?(${HOUR})(?::(${MINUTE}))?\\s*(?:${DASH}|${words.to})\\s*`
-    + `(${HOUR})(?::(${MINUTE}))?`,
-    (g) => {
-      changes.dayStart = Number(g[1]) * MINUTES_IN_HOUR + Number(g[2] || 0);
-      changes.dayEnd = Number(g[3]) * MINUTES_IN_HOUR + Number(g[4] || 0);
-    },
-  );
-  take(`(?:${names.budget})\\s*(${NUM})\\s*(?:${words.hour})?`, (g) => {
-    changes.budget = Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR);
-  });
-  const isWindowValid = changes.dayStart === undefined || changes.dayEnd === undefined
-    || changes.dayStart < changes.dayEnd;
-  return healthDraft('goal', ctx, {
-    day: undefined, goalChanges: changes, error: !found ? 'name' : !isWindowValid ? 'time' : undefined,
-  });
 }

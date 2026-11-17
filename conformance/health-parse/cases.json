@@ -2166,7 +2166,8 @@
      "value": 0,
      "unit": "kcal",
      "tag": "dinner",
-     "name": "паста"
+     "name": "паста",
+     "guess": true
     }
    ]
   },

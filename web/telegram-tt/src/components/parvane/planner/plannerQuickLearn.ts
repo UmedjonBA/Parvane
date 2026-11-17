@@ -21,12 +21,12 @@
 // перенос повторится, только если запасной путь снова что-то записал.
 
 import type { PlannerLearnedWord } from './plannerModel';
-import type { QuickDraft, QuickLearned, QuickLearnedKind } from './plannerQuick';
+import type { QuickDraft, QuickKind, QuickLearned } from './plannerQuick';
 
 import { MIN_TASK_MINUTES, MINUTES_IN_DAY } from './plannerModel';
 
 type Counted<T> = { value: T; count: number };
-type LearnHead = { kind?: Counted<QuickLearnedKind>; minutes?: Counted<number>; at: number };
+type LearnHead = { kind?: Counted<QuickKind>; minutes?: Counted<number>; at: number };
 export type LearnStore = { tick: number; heads: Record<string, LearnHead> };
 
 // Столько одинаковых правок делают значение умолчанием
@@ -46,7 +46,7 @@ export function createLearnStore(): LearnStore {
   return { tick: 0, heads: {} };
 }
 
-function isLearnedKind(kind: unknown): kind is QuickLearnedKind {
+function isLearnedKind(kind: unknown): kind is QuickKind {
   return kind === 'task' || kind === 'event';
 }
 
@@ -67,12 +67,12 @@ function correct<T>(entry: Counted<T> | undefined, value: T, base: T): Counted<T
  */
 export function recordCorrection(store: LearnStore, auto: QuickDraft, final: QuickDraft): LearnStore {
   const head = final.head;
-  if (!head || final.error || !isLearnedKind(final.kind)) return store;
+  if (!head || final.error) return store;
   const known = Object.prototype.hasOwnProperty.call(store.heads, head) ? store.heads[head] : undefined;
   let kind = known?.kind;
   let minutes = known?.minutes;
 
-  if (isLearnedKind(auto.kind) && !final.learned?.includes('kind')) {
+  if (!final.learned?.includes('kind')) {
     const isRejected = kind !== undefined && kind.count >= LEARN_THRESHOLD && final.kind !== kind.value;
     // Тип совпал с выбором разбора: это правка, только если отвергнуто выученное
     if (final.kind !== auto.kind || isRejected) kind = correct(kind, final.kind, auto.kind);

@@ -18,41 +18,18 @@ describe('планировщик: склейка правок одной опе�
     ]);
   });
 
-  it('день питания: вода после еды не теряется, записи сводятся по id', () => {
-    expect(coalesceChanges([
-      { nutritionDay: { day: '2026-10-12', entries: [{ id: 'f1', name: 'обед', kcal: 500 }], waterMl: null } },
-      { nutritionDay: { day: '2026-10-12', entries: [], waterMl: 250 } },
-      {
-        nutritionDay: {
-          day: '2026-10-12', entries: [{ id: 'f1', name: 'обед', kcal: 520 }, { id: 'f2', deleted: true }],
-        },
-      },
-      { nutritionDay: { day: '2026-10-12', entries: [], waterMl: 750 } },
-      { nutritionDay: { day: '2026-10-13', entries: [], waterMl: 100 } },
-    ])).toEqual([
-      {
-        nutritionDay: {
-          day: '2026-10-12',
-          entries: [{ id: 'f1', name: 'обед', kcal: 520 }, { id: 'f2', deleted: true }],
-          waterMl: 750,
-        },
-      },
-      { nutritionDay: { day: '2026-10-13', entries: [], waterMl: 100 } },
-    ]);
-  });
-
   it('экземпляры ряда сводятся по дню; удаление заменяет прежние правки', () => {
     expect(coalesceChanges([
       { task: { id: 't1', occurrences: [{ day: '2026-10-12', done: false }] } },
       { task: { id: 't1', occurrences: [{ day: '2026-10-12', done: true }, { day: '2026-10-13', done: true }] } },
-      { health: { id: 'h1', kind: 'weight', value: 72.4 } },
-      { health: { id: 'h1', kind: 'weight', value: 72.1 } },
-      { health: { id: 'h2', kind: 'pulse', value: 64 } },
-      { health: { id: 'h2', deleted: true } },
+      { list: { id: 'l1', name: 'Дом' } },
+      { list: { id: 'l1', color: 3 } },
+      { event: { id: 'e2', name: 'Созвон' } },
+      { event: { id: 'e2', deleted: true } },
     ])).toEqual([
       { task: { id: 't1', occurrences: [{ day: '2026-10-12', done: true }, { day: '2026-10-13', done: true }] } },
-      { health: { id: 'h1', kind: 'weight', value: 72.1 } },
-      { health: { id: 'h2', deleted: true } },
+      { list: { id: 'l1', name: 'Дом', color: 3 } },
+      { event: { id: 'e2', deleted: true } },
     ]);
   });
 

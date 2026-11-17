@@ -32,6 +32,8 @@ pub(super) struct Found {
     pub parts: Vec<(&'static str, f64)>,
     pub minute: Option<u32>,
     pub day: Option<i64>,
+    /// Еда без единого числа («на ужин паста»): догадка по слову приёма — чужой ввод («План») ей не верит.
+    pub guess: bool,
 }
 
 /// Значение записи еды либо тренировки в разумном диапазоне (общая проверка разбора и форм).
@@ -341,10 +343,11 @@ impl Parser<'_> {
         }
         if !(1.0..=MAX_KCAL).contains(&value) && (kcal.is_some() || has_macros) || parts.iter().any(|p| !part_in_range(p.0, p.1)) {
             problems.push(Problem { text: self.slice(start, end), code: "range" });
-            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None }, start, end));
+            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false }, start, end));
         }
         parts.sort_by(|x, y| x.0.cmp(y.0));
-        Some((Found { kind: KIND_FOOD, tag, name, value, unit: "kcal", parts, minute: minute.or(lead_minute), day }, start, end))
+        let guess = kcal.is_none() && !has_macros;
+        Some((Found { kind: KIND_FOOD, tag, name, value, unit: "kcal", parts, minute: minute.or(lead_minute), day, guess }, start, end))
     }
 
     /// Длительность тренировки: единица обязательна («35 минут», «1 ч 20», «1:20», «час»).
@@ -437,9 +440,9 @@ impl Parser<'_> {
         let km_ok = km.map_or(true, |d| d > 0.0);
         if !(0.0..=MAX_WORKOUT_MIN).contains(&value) || !km_ok || parts.iter().any(|p| !part_in_range(p.0, p.1)) {
             problems.push(Problem { text: self.slice(start, end), code: "range" });
-            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None }, start, end));
+            return Some((Found { kind: "", tag: "", name: String::new(), value: 0.0, unit: "", parts: Vec::new(), minute: None, day: None, guess: false }, start, end));
         }
-        Some((Found { kind: KIND_WORKOUT, tag, name: String::new(), value, unit: "min", parts, minute: minute.or(lead_minute), day }, start, end))
+        Some((Found { kind: KIND_WORKOUT, tag, name: String::new(), value, unit: "min", parts, minute: minute.or(lead_minute), day, guess: false }, start, end))
     }
 }
 

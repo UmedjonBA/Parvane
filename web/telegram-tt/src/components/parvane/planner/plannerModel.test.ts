@@ -4,13 +4,13 @@ import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
   countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
-  expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayIndex, getDayLoad, getDefaultEventEnd,
-  getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
-  getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
+  expandRepeat, findSlots, getDayAvailability, getDayIndex, getDayLoad, getDefaultEventEnd,
+  getEligibleTasks, getEventsForDay, getGoalsForDay, getListColor, getMonthGridKeys,
+  getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
   getUndatedTasks,
-  getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, layoutTimed, makeFoodEntry, moveTask, nextOpenInstance,
+  getWeekKeys, getYearKeys, isHolidayOn, layoutTimed, moveTask, nextOpenInstance,
   normalizePlannerState, occursOn, removeSeries, setOccurrence, setTaskDone, setTaskStepDone, shiftPeriod,
-  splitSeries, truncateSeries, updateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings,
+  splitSeries, truncateSeries, updateSeries, validateEvent, validateRepeat, validateSettings,
   validateTask,
 } from './plannerModel';
 
@@ -174,17 +174,8 @@ describe('планировщик: настройки дня и порядок о
   });
 });
 
-describe('планировщик: питание', () => {
-  it('запись на 100 г пересчитывается по весу, неизвестное остаётся неизвестным', () => {
-    const entry = makeFoodEntry({
-      name: ' Творог ', meal: 'breakfast', isPer100: true, grams: 250, values: { kcal: 120, protein: 18 },
-    });
-    expect(entry).toMatchObject({ name: 'Творог', kcal: 300, protein: 45, grams: 250 });
-    expect(entry.fat).toBeUndefined();
-    expect(entry.per100).toEqual({ kcal: 120, protein: 18 });
-  });
-
-  it('пропуски не считаются нулём; статус дня — по завершённости и цели', () => {
+describe('планировщик: питание из «Здоровья» (чтение подставленного)', () => {
+  it('пропуски не считаются нулём', () => {
     const state = stateWith({
       nutrition: {
         [TODAY]: {
@@ -196,35 +187,9 @@ describe('планировщик: питание', () => {
         },
       },
     });
+    expect(getNutrientTotal(state, TODAY, 'kcal')).toEqual({ value: 2050, missing: 0, count: 2 });
     expect(getNutrientTotal(state, TODAY, 'protein')).toEqual({ value: 60, missing: 1, count: 2 });
-    expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('ok');
-    expect(getNutrientStatus(state, TODAY, 'protein')).toBe('incomplete');
-    expect(getNutrientStatus(state, '2026-10-07', 'kcal')).toBe('none');
-    state.nutrition[TODAY].isComplete = false;
-    expect(getNutrientStatus(state, TODAY, 'kcal', TODAY)).toBe('open');
-    // spec 013: прошедший день завершён сам, без отметки
-    expect(getNutrientStatus(state, TODAY, 'kcal', '2026-10-09')).toBe('ok');
-  });
-
-  it('цели завершённого дня не меняются при смене текущих целей', () => {
-    const state = stateWith({
-      nutrition: {
-        [TODAY]: {
-          entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 2000 }],
-          isComplete: true,
-          fixedGoals: { kcal: { target: 2000, tolerance: 100 } },
-        },
-      },
-      goals: { kcal: { target: 3000, tolerance: 100 } },
-    });
-    expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('ok');
-    const stat = getNutrientStatistics(state, [TODAY, '2026-10-09'], 'kcal', TODAY);
-    expect(stat).toMatchObject({ sum: 2000, inGoal: 1, average: 2000, goalLow: 1900, goalHigh: 2100 });
-    // SC-005: правка списка целей задним числом завершённый день не переоценивает
-    state.goalPeriods.push({
-      id: 'g', startDay: TODAY, endDay: TODAY, goals: { kcal: { target: 1000, tolerance: 50 } },
-    });
-    expect(getNutrientStatus(state, TODAY, 'kcal')).toBe('ok');
+    expect(getNutrientTotal(state, '2026-10-07', 'kcal')).toEqual({ value: 0, missing: 0, count: 0 });
   });
 });
 
@@ -539,9 +504,7 @@ describe('планировщик: правка «Все в серии»', () => 
   });
 });
 
-// ── spec 011: цели по датам ──────────────────────────────────────────────────
-
-describe('планировщик: цели питания по датам (spec 011)', () => {
+describe('планировщик: цели питания дня (чтение подставленного)', () => {
   const base = { kcal: { target: 2000, tolerance: 100 }, water: { target: 2000, tolerance: 300 } };
   const state = stateWith({
     goals: base,
@@ -553,50 +516,18 @@ describe('планировщик: цели питания по датам (spec 
       { id: 'short', startDay: '2026-11-01', endDay: '2026-11-03', goals: { kcal: { target: 1800, tolerance: 100 } } },
     ],
   });
+  const kcalOn = (day: string) => getGoalsForDay(state, day).kcal?.target;
 
-  it('SC-004: накрывающая запись — позже начатая, затем короче; иначе цели «с самого начала»', () => {
-    expect(getGoalRecordForDay(state, '2026-10-14')?.id).toBe('');
-    expect(getGoalRecordForDay(state, '2026-10-15')?.id).toBe('day');
-    expect(getGoalRecordForDay(state, '2026-10-16')?.id).toBe('');
-    expect(getGoalRecordForDay(state, '2026-10-22')?.id).toBe('week');
-    expect(getGoalRecordForDay(state, '2026-10-25')?.id).toBe('inside');
-    expect(getGoalRecordForDay(state, '2026-10-28')?.id).toBe('');
-    expect(getGoalRecordForDay(state, '2026-11-02')?.id).toBe('short');
-    expect(getGoalRecordForDay(state, '2026-11-10')?.id).toBe('long');
-    expect(getGoalRecordForDay(stateWith({ goals: {} }), TODAY)).toBeUndefined();
-    expect(validateGoalRecord({ startDay: '2026-11-05', endDay: '2026-11-01', goals: base })).toBe('endDay');
-    expect(validateGoalRecord({ startDay: '2026-11-05', endDay: '', goals: {} })).toBe('empty');
-    expect(validateGoalRecord({ startDay: '', endDay: '', goals: { fiber: { target: 10, tolerance: 20 } } }))
-      .toBe('fiber');
-  });
-
-  it('статусы по воде и клетчатке; показатель без цели — только факт', () => {
-    const food = stateWith({
-      goals: { ...base, fiber: { target: 30, tolerance: 5 } },
-      nutrition: {
-        [TODAY]: {
-          entries: [{ id: 'a', name: 'a', meal: 'lunch', kcal: 2000, fiber: 20 }],
-          isComplete: true,
-          fixedGoals: { ...base, fiber: { target: 30, tolerance: 5 } },
-          waterMl: 1500,
-        },
-        '2026-10-07': {
-          entries: [{ id: 'b', name: 'b', meal: 'lunch', kcal: 1000 }],
-          isComplete: true,
-          fixedGoals: { kcal: { target: 1000, tolerance: 100 } },
-          waterMl: 2000,
-        },
-      },
-    });
-    expect(getNutrientTotal(food, TODAY, 'water')).toEqual({ value: 1500, missing: 0, count: 1 });
-    expect(getNutrientStatus(food, TODAY, 'water')).toBe('below');
-    expect(getNutrientStatus(food, TODAY, 'fiber')).toBe('below');
-    expect(getNutrientStatus(food, TODAY, 'protein')).toBe('nogoal');
-    expect(getNutrientStatus(food, '2026-10-07', 'water')).toBe('nogoal');
-    expect(getNutrientStatus(food, '2026-10-07', 'fiber')).toBe('nogoal');
-    expect(getNutrientStatus(food, '2026-10-06', 'water')).toBe('none');
-    const stat = getNutrientStatistics(food, ['2026-10-07', TODAY], 'water', TODAY);
-    expect(stat).toMatchObject({ recorded: ['2026-10-07', TODAY], withGoal: [TODAY], inGoal: 0, average: 1750 });
+  it('накрывающая запись — позже начатая, затем короче; иначе цели без дат', () => {
+    expect(kcalOn('2026-10-14')).toBe(2000);
+    expect(kcalOn('2026-10-15')).toBe(1500);
+    expect(kcalOn('2026-10-16')).toBe(2000);
+    expect(kcalOn('2026-10-22')).toBe(2500);
+    expect(kcalOn('2026-10-25')).toBe(1200);
+    expect(kcalOn('2026-10-28')).toBe(2000);
+    expect(kcalOn('2026-11-02')).toBe(1800);
+    expect(kcalOn('2026-11-10')).toBe(2200);
+    expect(getGoalsForDay(createEmptyPlannerState(), TODAY)).toEqual({});
   });
 });
 
@@ -632,6 +563,14 @@ describe('планировщик: статистика времени и хра�
     expect(restored.events).toEqual([]);
     expect(restored.projects).toEqual(['', 'Работа', 'Дом']);
     expect(restored.lists.map((list) => list.name)).toEqual(['Работа', 'Дом']);
+    // Питание, цели и здоровье из сохранённого не читаются: «План» их не хранит
+    expect(normalizePlannerState({
+      version: 1,
+      tasks: [],
+      nutrition: { [TODAY]: { entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 1 }], isComplete: false } },
+      goals: { kcal: { target: 2000, tolerance: 100 } },
+      health: [{ id: 'h', day: TODAY, kind: 'sleep', value: 400 }],
+    })).toMatchObject({ nutrition: {}, goals: {}, health: [] });
     // Описание события: строка сохраняется, пустое либо негодное значение — «описания нет»
     const events = normalizePlannerState({
       version: 1,
@@ -755,37 +694,6 @@ describe('планировщик: событие на весь день, цве�
     expect(getListColor(state, 'Дом')).toBe(3);
     expect(getListColor(state, 'Работа')).toBe(0);
     expect(getListColor(state, '')).toBe(0);
-  });
-});
-
-describe('планировщик: день питания завершается сам (spec 013)', () => {
-  const dayBefore = '2026-10-07';
-  const make = () => stateWith({
-    nutrition: {
-      [dayBefore]: { entries: [{ id: 'a', name: 'a', meal: 'other', kcal: 2000 }], isComplete: false },
-      [TODAY]: { entries: [{ id: 'b', name: 'b', meal: 'other', kcal: 2000 }], isComplete: false },
-    },
-    goals: { kcal: { target: 2000, tolerance: 100 } },
-  });
-
-  it('прошедший день закрыт, сегодняшний открыт', () => {
-    const state = make();
-    expect(isDayClosed(state, dayBefore, TODAY)).toBe(true);
-    expect(isDayClosed(state, TODAY, TODAY)).toBe(false);
-    expect(getNutrientStatus(state, dayBefore, 'kcal', TODAY)).toBe('ok');
-    expect(getNutrientStatus(state, TODAY, 'kcal', TODAY)).toBe('open');
-  });
-
-  it('правка цели не переоценивает прошедшие дни', () => {
-    const state = make();
-    expect(freezePastGoals(state, TODAY)).toBe(1);
-    state.goals = { kcal: { target: 1000, tolerance: 50 } };
-    expect(getGoalsForDay(state, dayBefore, TODAY).kcal!.target).toBe(2000);
-    expect(getNutrientStatus(state, dayBefore, 'kcal', TODAY)).toBe('ok');
-    expect(getGoalsForDay(state, TODAY, TODAY).kcal!.target).toBe(1000);
-    // Повторная заморозка уже зафиксированное не трогает
-    expect(freezePastGoals(state, TODAY)).toBe(0);
-    expect(state.nutrition[TODAY].fixedGoals).toBeUndefined();
   });
 });
 

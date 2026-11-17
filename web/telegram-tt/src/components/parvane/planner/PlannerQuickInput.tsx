@@ -7,7 +7,7 @@ import type {
   PlannerEvent, PlannerLearnedWord, PlannerQuickLine, PlannerSettings, PlannerTask,
 } from './plannerModel';
 import type {
-  QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickLang, QuickPick,
+  QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
 } from './plannerQuick';
 import type { LearnStore } from './plannerQuickLearn';
 import type { QuickCandidate, QuickHistory } from './plannerQuickSuggest';
@@ -17,12 +17,13 @@ import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import { getIsModuleOn } from '../../../util/parvaneModules';
 import { addHealthEntries, parseHealthInput } from '../health/healthStore';
+import useHealthParse, { isWholeHealthLine } from '../health/useHealthParse';
 import {
-  formatDay, formatDayLabel, formatDuration, formatRemind, formatRepeat, formatSpan,
+  formatDay, formatDayLabel, formatDuration, formatRemind, formatRepeat,
 } from './plannerFormat';
-import { applyQuickDraft, formatPace } from './plannerHealth';
-import { toMinutes, toTime } from './plannerModel';
+import { toMinutes } from './plannerModel';
 import { getQuickLang, parseQuickInput, QUICK_REPEAT_END } from './plannerQuick';
+import { applyQuickDraft } from './plannerQuickApply';
 import {
   correctWords, hasLearned, learnedDefaults, learnStoreFromWords, mergeLearnStores, readLearned, recordCorrection,
   resetLearned, saveLearned,
@@ -40,13 +41,14 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
 import Modal from '../../ui/Modal';
+import HealthParsedChips from '../health/HealthParsedChips';
 import { EVENT_ERROR_KEYS, TASK_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
 
 type OwnProps = {
   isOpen: boolean;
-  // Строка, с которой окно открывается (пример с экрана «Здоровье»)
+  // Строка, с которой окно открывается («задача сегодня », «обед »)
   initialText?: string;
   today: string;
   settings: PlannerSettings;
@@ -68,117 +70,41 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-type KindChoice = 'auto' | 'task' | 'event' | 'food' | 'sleep' | 'workout';
+type KindChoice = 'auto' | QuickKind;
 type Chip = {
   field: QuickField;
   text: string;
   isFixed?: boolean;
   // Значение подставлено из словаря правок: снятый чип возвращает обычное
   isLearned?: boolean;
-  key?: string;
 };
 
-const KIND_CHOICES: KindChoice[] = ['auto', 'event', 'task', 'food', 'sleep', 'workout'];
+const KIND_CHOICES: KindChoice[] = ['auto', 'event', 'task'];
 const KIND_LABELS = {
   auto: 'PlannerQuickAuto',
   event: 'PlannerKindEvent',
   task: 'PlannerKindTask',
-  food: 'PlannerKindFood',
-  sleep: 'PlannerKindSleep',
-  workout: 'PlannerKindWorkout',
-} as const;
-const DRAFT_KIND_LABELS = {
-  event: 'PlannerKindEvent',
-  task: 'PlannerKindTask',
-  food: 'PlannerKindFood',
-  water: 'PlannerHealthWater',
-  sleep: 'PlannerKindSleep',
-  workout: 'PlannerKindWorkout',
-  metric: 'PlannerHealthBody',
-  goal: 'PlannerHealthGoals',
-} as const satisfies Record<QuickKind, string>;
+} as const satisfies Record<KindChoice, string>;
 const KIND_CLASSES = {
   event: styles.kindEvent,
   task: styles.kindTask,
-  food: styles.kindFood,
-  water: styles.kindFood,
-  sleep: styles.kindSleep,
-  workout: styles.kindWorkout,
-  metric: styles.kindMetric,
-  goal: styles.kindMuted,
 } satisfies Record<QuickKind, string>;
 const KIND_ICONS = {
   event: 'calendar',
   task: 'check',
-  food: 'eats',
-  water: 'eats',
-  sleep: 'darkmode',
-  workout: 'sport',
-  metric: 'heart-outline',
-  goal: 'settings',
 } as const satisfies Record<QuickKind, IconName>;
-// Виды, которые в переключателе стоят под одной кнопкой
-const CHOICE_OF: Partial<Record<QuickKind, KindChoice>> = { water: 'food', metric: 'auto', goal: 'auto' };
-// Какие виды строк подсказывать при выбранном виде окна ('auto' — все)
-const CHOICE_KINDS: Record<KindChoice, QuickKind[] | undefined> = {
-  auto: undefined,
-  task: ['task'],
-  event: ['event'],
-  food: ['food', 'water'],
-  sleep: ['sleep'],
-  workout: ['workout'],
-};
-const METRIC_LABELS = {
-  weight: 'PlannerHealthWeight',
-  pressure: 'PlannerHealthPressure',
-  pulse: 'PlannerHealthPulse',
-  steps: 'PlannerHealthStepsShort',
-  mood: 'PlannerHealthMood',
-} as const;
-const MEAL_LABELS = {
-  breakfast: 'PlannerMealBreakfast',
-  lunch: 'PlannerMealLunch',
-  dinner: 'PlannerMealDinner',
-  snack: 'PlannerMealSnack',
-  other: 'PlannerMealOther',
-} as const;
 const NAME_MAX_LENGTH = 160;
-// Виды строки, которые ведёт модуль «Здоровье»: сон, показатели тела, вода, еда и тренировки (spec 041 B4)
-const HEALTH_MODULE_KINDS: QuickKind[] = ['sleep', 'metric', 'water', 'food', 'workout'];
-
-/** Записать строку в «Здоровье» его разбором; `false` — разбор ничего не понял либо модуль не готов. */
-async function forwardToHealth(text: string) {
-  const parsed = await parseHealthInput(text);
-  return parsed?.entries.length ? addHealthEntries(parsed.entries) : false;
-}
 const INPUT_MAX_LENGTH = 300;
 const FOCUS_DELAY_MS = 200;
 const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
 // Столько строк истории и записей «Плана» разбираются сразу при открытии; больше — сначала показываются
 // примеры, полный список собирается, когда окно показано и браузер свободен
 const SYNC_CANDIDATES_LIMIT = 120;
-const MINUTES_IN_DAY_FULL = 1440;
 const EMPTY_HISTORY: QuickHistory = { tick: 0, lines: [], hidden: [] };
 
-// Пример с экрана «Здоровье» («бег 5 км 30 мин», «вес 72,4»): вид окна и подсказки только этого вида (у
-// показателя — того же показателя, по первому слову строки); иное — не пример
-const EXAMPLE_KINDS: Partial<Record<QuickKind, KindChoice>> = {
-  food: 'food', water: 'food', sleep: 'sleep', workout: 'workout', metric: 'auto',
-};
-type ExampleFilter = { choice: KindChoice; kinds: QuickKind[]; lead?: string };
-
-function exampleFilterOf(text: string, today: string, quickLang: QuickLang): ExampleFilter | undefined {
-  const draft = parseQuickInput(text, {
-    today, nowMinutes: 0, dayStart: 0, dayEnd: MINUTES_IN_DAY_FULL, lang: quickLang,
-  });
-  const choice = draft.error ? undefined : EXAMPLE_KINDS[draft.kind];
-  if (!choice) return undefined;
-  const isMetric = draft.kind === 'metric' || draft.kind === 'water';
-  const lead = isMetric ? text.trim().split(/\s+/)[0].toLowerCase() : undefined;
-  return { choice, kinds: [draft.kind], lead };
-}
-
-// Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
+// Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем. Строку параллельно
+// разбирает движок «Здоровья»: понятая им целиком («вес 72,4», «обед гречка 650 ккал») уходит в модуль
+// «Здоровье», остальное — задача либо событие «Плана»
 const PlannerQuickInput = ({
   isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, quickLines, tasks, events, onCreated,
   onMore, onClose,
@@ -187,10 +113,12 @@ const PlannerQuickInput = ({
   const suggestionsRef = useRef<HTMLDivElement>();
   const [text, setText] = useState('');
   const [choice, setChoice] = useState<KindChoice>('auto');
-  // Окно открыто кнопкой вида («+ Спорт», «Записать сон», значение показателя): пример — подсказкой в пустом
-  // поле, вид выбран, подсказки — этого вида
-  const [examplePlaceholder, setExamplePlaceholder] = useState<string>();
-  const [exampleFilter, setExampleFilter] = useState<ExampleFilter>();
+  // Строка «Здоровья»: вид не выбран вручную, модуль включён, движок понял строку целиком
+  const canBeHealth = isOpen && choice === 'auto' && getIsModuleOn('health');
+  const { parsed: healthParsed, isCurrent: isHealthCurrent } = useHealthParse(text, !canBeHealth);
+  const healthLine = isHealthCurrent && healthParsed && isWholeHealthLine(healthParsed) ? healthParsed : undefined;
+  const [hasHealthFailed, setHasHealthFailed] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [skip, setSkip] = useState<QuickField[]>([]);
   // Чтения, выбранные из вариантов чипа, и чип, у которого варианты сейчас показаны
   const [pick, setPick] = useState<QuickPick>({});
@@ -219,17 +147,11 @@ const PlannerQuickInput = ({
       // Закрытое окно не хранит прежнюю строку: иначе при следующем открытии она мелькнёт на кадр
       typedRef.current = false;
       setText('');
-      setExamplePlaceholder(undefined);
       return undefined;
     }
-    // Начало строки («задача сегодня ») — в поле; готовый пример вида — подсказкой, поле пустое
-    const quickLang = getQuickLang(lang.code);
-    const isExample = Boolean(initialText) && !initialText.endsWith(' ');
-    const example = isExample ? exampleFilterOf(initialText, today, quickLang) : undefined;
-    if (!typedRef.current) setText(example ? '' : initialText || '');
-    setExamplePlaceholder(example ? initialText : undefined);
-    setExampleFilter(example);
-    setChoice(example?.choice || 'auto');
+    if (!typedRef.current) setText(initialText || '');
+    setChoice('auto');
+    setHasHealthFailed(false);
     setSkip([]);
     setPick({});
     setAltField(undefined);
@@ -237,7 +159,7 @@ const PlannerQuickInput = ({
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => window.clearTimeout(timeout);
-  }, [isOpen, initialText, userId, today, lang.code]);
+  }, [isOpen, initialText, userId]);
 
   // Разбор без участия пользователя: с ним сравнивается добавленная запись (словарь правок)
   const baseContext = useLastCallback((): QuickContext => {
@@ -274,10 +196,10 @@ const PlannerQuickInput = ({
   const errorKey = !hasText || !draft.error ? undefined
     : EVENT_ERROR_KEYS[draft.error as keyof typeof EVENT_ERROR_KEYS]
       || TASK_ERROR_KEYS[draft.error as keyof typeof TASK_ERROR_KEYS];
-  const canSubmit = hasText && !draft.error && !isNameTooLong;
+  const canSubmit = hasText && (Boolean(healthLine) || (!draft.error && !isNameTooLong));
   const isKindLearned = Boolean(draft.learned?.includes('kind'));
   const altsOf = (field: QuickField) => draft.alternatives?.filter((alt) => alt.field === field) || [];
-  const kindLabel = draft.metric ? lang(METRIC_LABELS[draft.metric]) : lang(DRAFT_KIND_LABELS[draft.kind]);
+  const kindLabel = lang(KIND_LABELS[draft.kind]);
   const shownAlts = altField ? altsOf(altField) : [];
 
   // Подпись чипа: с другими чтениями — кнопка, раскрывающая их
@@ -303,30 +225,45 @@ const PlannerQuickInput = ({
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     typedRef.current = true;
     setText(e.currentTarget.value);
+    setHasHealthFailed(false);
     // Правка строки возвращает снятые значения и выбранные чтения: слова могли измениться
     if (skip.length) setSkip([]);
     if (Object.keys(pick).length) setPick({});
     setAltField(undefined);
   });
 
-  const handleSubmit = useLastCallback((e?: React.FormEvent) => {
+  const handleSubmit = useLastCallback(async (e?: React.FormEvent) => {
     e?.preventDefault();
-    // Enter может прийти раньше перерисовки: черновик берётся из самого поля, а не из показанного
+    // Enter может прийти раньше перерисовки: строка берётся из самого поля, а не из показанного
     const value = inputRef.current?.value ?? text;
-    const entry = parse(value);
-    if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
-    // «Здоровье» — отдельный модуль (spec 041): его строки из ввода «Плана» пишутся в его контейнер, календарь
-    // «Плана» читает их оттуда. Чего разбор «Здоровья» не понял, остаётся в поле: «План» здоровье не хранит
-    if (HEALTH_MODULE_KINDS.includes(entry.kind) && getIsModuleOn('health')) {
-      void forwardToHealth(value).then((isAdded) => {
-        if (isAdded) onCreated(entry.day);
-      });
-      return;
+    if (!value.trim() || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    try {
+      if (!await saveHealthLine(value)) savePlannerEntry(value);
+    } finally {
+      isSubmittingRef.current = false;
     }
-    savePlannerEntry(value, entry);
   });
 
-  const savePlannerEntry = useLastCallback((value: string, entry: QuickDraft) => {
+  // «Здоровье» — отдельный модуль (spec 041): строка, понятая его движком целиком, пишется в его контейнер,
+  // календарь «Плана» читает её оттуда. `true` — строка была строкой «Здоровья» (записана либо показана ошибка)
+  const saveHealthLine = useLastCallback(async (value: string) => {
+    if (choice !== 'auto' || !getIsModuleOn('health')) return false;
+    // Разбирается именно эта строка: показанный разбор мог относиться к прежней
+    const parsed = await parseHealthInput(value);
+    if (!parsed || !isWholeHealthLine(parsed)) return false;
+    if (await addHealthEntries(parsed.entries)) {
+      const [first] = parsed.entries;
+      onCreated(first.endDay || first.day);
+    } else {
+      setHasHealthFailed(true);
+    }
+    return true;
+  });
+
+  const savePlannerEntry = useLastCallback((value: string) => {
+    const entry = parse(value);
+    if (entry.error || entry.name.length > NAME_MAX_LENGTH) return;
     // Правка угаданного типа либо длительности запоминается за первым словом названия
     const auto = parseQuickInput(value, baseContext());
     const local = readLearned(userId);
@@ -340,17 +277,16 @@ const PlannerQuickInput = ({
     // историю, иначе на этом
     const localHistory = readHistory(userId);
     const isHistorySynced = canSyncQuickHistory();
-    const historyKey = lineKey(value, entry, baseContext().lang!);
+    const historyKey = lineKey(entry, baseContext().lang!);
     if (!isHistorySynced) saveHistory(userId, recordHistoryLine(localHistory, value, historyKey));
     updatePlanner((state) => {
-      applyQuickDraft(state, entry, today);
+      applyQuickDraft(state, entry);
       // Правка словаря — в той же правке «Плана», что и запись: одна операция, одна отмена
       const words = isSynced ? correctWords(state.learned, local, auto, entry) : undefined;
       if (words) state.learned = words;
       // Строка истории — тоже: «Отменить» убирает запись вместе с её подсказкой
       if (isHistorySynced) state.quickLines = recordQuickLine(state.quickLines, localHistory, value, historyKey);
-    }, entry.kind === 'goal' ? lang('PlannerNoticeGoalsSaved')
-      : lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
+    }, lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
     // Запись устройства влита в «План» той же правкой
     if (isSynced && hasLearned(local)) resetLearned(userId);
     if (isHistorySynced && hasHistory(localHistory)) resetHistory(userId);
@@ -361,7 +297,7 @@ const PlannerQuickInput = ({
   const handleKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
     e.preventDefault();
-    handleSubmit();
+    void handleSubmit();
   });
 
   const handleSkip = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -390,7 +326,9 @@ const PlannerQuickInput = ({
     inputRef.current?.focus();
   });
 
-  const handleSubmitClick = useLastCallback(() => handleSubmit());
+  const handleSubmitClick = useLastCallback(() => {
+    void handleSubmit();
+  });
 
   // Примеры — на языке интерфейса: их разбирает словарь того же языка
   const examples = useMemo(() => lang('PlannerQuickExamples').split(/\s*\|\s*/).filter(Boolean), [lang]);
@@ -437,11 +375,8 @@ const PlannerQuickInput = ({
   const candidates = idleCandidates || quickCandidates;
   const suggestions = useMemo(() => {
     if (!candidates) return [];
-    // Пример показателя сужает подсказки до него, пока вид окна не сменён вручную
-    const filter = exampleFilter && exampleFilter.choice === choice ? exampleFilter : undefined;
-    const pool = filter?.lead ? candidates.filter(({ line }) => line.startsWith(filter.lead!)) : candidates;
-    return filterSuggestions(text, pool, undefined, filter?.kinds || CHOICE_KINDS[choice]);
-  }, [candidates, text, choice, exampleFilter]);
+    return filterSuggestions(text, candidates, undefined, choice === 'auto' ? undefined : [choice]);
+  }, [candidates, text, choice]);
   const hasExamples = suggestions.some(({ source }) => source === 'example');
   const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');
 
@@ -525,7 +460,7 @@ const PlannerQuickInput = ({
       hasCloseButton
       onClose={onClose}
     >
-      <form className={styles.quickForm} data-quick-kind={draft.kind} onSubmit={handleSubmit}>
+      <form className={styles.quickForm} data-quick-kind={healthLine ? 'health' : draft.kind} onSubmit={handleSubmit}>
         <input
           ref={inputRef}
           id="planner-quick-input"
@@ -533,7 +468,7 @@ const PlannerQuickInput = ({
           type="text"
           value={text}
           maxLength={INPUT_MAX_LENGTH}
-          placeholder={examplePlaceholder || lang('PlannerQuickPlaceholder')}
+          placeholder={lang('PlannerQuickPlaceholder')}
           aria-label={lang('PlannerQuickTitle')}
           autoComplete="off"
           enterKeyHint="done"
@@ -541,7 +476,13 @@ const PlannerQuickInput = ({
           onKeyDown={handleKeyDown}
         />
         <div className={styles.quickPreview} aria-live="polite">
-          {hasText ? (
+          {healthLine ? (
+            <>
+              <HealthParsedChips parsed={healthLine} />
+              <span className={styles.muted}>{lang('PlannerQuickToHealth')}</span>
+              {hasHealthFailed && <div className={styles.quickError} role="alert">{lang('HealthQuickFailed')}</div>}
+            </>
+          ) : hasText ? (
             <>
               <span
                 className={buildClassName(styles.tag, styles.tagLarge, KIND_CLASSES[draft.kind])}
@@ -565,10 +506,10 @@ const PlannerQuickInput = ({
                 )}
               </span>
               {chips.map(({
-                field, text: label, isFixed, isLearned, key,
+                field, text: label, isFixed, isLearned,
               }) => (
                 <span
-                  key={key || field}
+                  key={field}
                   className={buildClassName(styles.tag, styles.tagLarge, styles.kindMuted)}
                   data-quick-chip={field}
                   data-learned={isLearned ? '1' : undefined}
@@ -608,39 +549,30 @@ const PlannerQuickInput = ({
                   ))}
                 </div>
               )}
-              {draft.kind === 'task' || draft.kind === 'event' ? (
-                <div className={styles.quickParts}>
-                  <div className={styles.quickPart} data-quick-part="name">
-                    <span className={styles.quickPartLabel}>{lang('PlannerQuickName')}</span>
-                    <span className={buildClassName(styles.quickPartText, styles.quickPartName)} dir="auto">
-                      {draft.name || lang('PlannerQuickNoName')}
-                    </span>
+              <div className={styles.quickParts}>
+                <div className={styles.quickPart} data-quick-part="name">
+                  <span className={styles.quickPartLabel}>{lang('PlannerQuickName')}</span>
+                  <span className={buildClassName(styles.quickPartText, styles.quickPartName)} dir="auto">
+                    {draft.name || lang('PlannerQuickNoName')}
+                  </span>
+                </div>
+                {draft.description && (
+                  <div className={styles.quickPart} data-quick-part="description" data-quick-chip="description">
+                    <span className={styles.quickPartLabel}>{lang('PlannerFieldDescription')}</span>
+                    <span className={styles.quickPartText} dir="auto">{draft.description}</span>
+                    <button
+                      type="button"
+                      className={styles.tagRemove}
+                      data-field="description"
+                      aria-label={lang('PlannerQuickRemove', { value: lang('PlannerFieldDescription') })}
+                      title={lang('PlannerQuickDescriptionToName')}
+                      onClick={handleSkip}
+                    >
+                      <Icon name="close" />
+                    </button>
                   </div>
-                  {draft.description && (
-                    <div className={styles.quickPart} data-quick-part="description" data-quick-chip="description">
-                      <span className={styles.quickPartLabel}>{lang('PlannerFieldDescription')}</span>
-                      <span className={styles.quickPartText} dir="auto">{draft.description}</span>
-                      <button
-                        type="button"
-                        className={styles.tagRemove}
-                        data-field="description"
-                        aria-label={lang('PlannerQuickRemove', { value: lang('PlannerFieldDescription') })}
-                        title={lang('PlannerQuickDescriptionToName')}
-                        onClick={handleSkip}
-                      >
-                        <Icon name="close" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className={styles.quickName} dir="auto">
-                  {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
-                    || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
-                    || (draft.kind === 'water' && lang('PlannerHealthWater'))
-                    || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
-                </div>
-              )}
+                )}
+              </div>
               {errorKey && <div className={styles.quickError} role="alert">{lang(errorKey)}</div>}
               {isNameTooLong && <div className={styles.quickError} role="alert">{lang('PlannerQuickTooLong')}</div>}
             </>
@@ -650,8 +582,7 @@ const PlannerQuickInput = ({
         </div>
         <div className={buildClassName(styles.hscroll, 'no-scrollbar')} role="radiogroup">
           {KIND_CHOICES.map((kind) => {
-            const isActive = choice === kind
-              || (choice === 'auto' && hasText && (CHOICE_OF[draft.kind] || draft.kind) === kind);
+            const isActive = choice === kind || (choice === 'auto' && hasText && !healthLine && draft.kind === kind);
             return (
               <button
                 key={kind}
@@ -738,7 +669,7 @@ const PlannerQuickInput = ({
 function formatAlt(lang: ReturnType<typeof useLang>, draft: QuickDraft, alt: QuickAlt) {
   switch (alt.field) {
     case 'kind':
-      return lang(DRAFT_KIND_LABELS[alt.pick as QuickKind]);
+      return lang(KIND_LABELS[alt.pick as QuickKind]);
     case 'time':
       return alt.pick.replace('-', '–');
     case 'day':
@@ -753,73 +684,13 @@ function formatAlt(lang: ReturnType<typeof useLang>, draft: QuickDraft, alt: Qui
   }
 }
 
-const TIME_GOAL_KEYS = new Set(['bedtime', 'wakeTime']);
-
 function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[] {
   const has = (field: QuickField) => draft.spans.some((span) => span.field === field);
   const chips: Chip[] = [];
-  const fixed = (field: QuickField, text: string) => chips.push({ field, text, isFixed: true });
-  const number = (value: number) => lang.number(value);
-  if (draft.kind === 'goal') {
-    const changes = draft.goalChanges!;
-    Object.entries(changes.goals).forEach(([metric, value]) => fixed('health', `${metric} → ${number(value)}`));
-    // Цель режима сна — минуты от полуночи: показываются временем
-    Object.entries(changes.health).forEach(([key, value]) => fixed(
-      'health', `${key} → ${TIME_GOAL_KEYS.has(key) ? toTime(value) : number(value)}`,
-    ));
-    if (changes.dayStart !== undefined) {
-      fixed('time', `${toTime(changes.dayStart)}–${toTime(changes.dayEnd!)}`);
-    }
-    if (changes.budget) fixed('minutes', formatDuration(lang, changes.budget));
-    return chips.map((chip, index) => ({ ...chip, key: `${chip.field}${index}` }));
-  }
-  if (draft.kind === 'metric') {
-    if (draft.value !== undefined) {
-      fixed('health', draft.value2 ? `${draft.value}/${draft.value2}` : number(draft.value));
-    }
-    return chips;
-  }
-  if (draft.kind === 'water') {
-    if (draft.waterMl) fixed('water', lang('PlannerHealthMl', { value: draft.waterMl }));
-    return chips;
-  }
-  if (draft.kind === 'sleep') {
-    if (draft.start && draft.end) fixed('time', `${draft.start}–${draft.end}`);
-    if (draft.minutes) fixed('minutes', formatSpan(draft.minutes));
-    return chips;
-  }
   if (draft.repeat) {
     chips.push({ field: 'repeat', text: formatRepeat(lang, draft.repeat) });
   } else if (draft.day) {
     chips.push({ field: 'day', text: formatDay(lang, draft.day), isFixed: draft.isDayAssumed || !has('day') });
-  }
-  if (draft.kind === 'food') {
-    const nutrients = draft.nutrients || {};
-    if (draft.meal) fixed('meal', lang(MEAL_LABELS[draft.meal]));
-    if (nutrients.kcal !== undefined) fixed('kcal', lang('PlannerHealthKcal', { value: number(nutrients.kcal) }));
-    if (nutrients.protein !== undefined || nutrients.fat !== undefined || nutrients.carbs !== undefined) {
-      fixed('protein', lang('PlannerHealthMacros', {
-        protein: number(nutrients.protein || 0), fat: number(nutrients.fat || 0), carbs: number(nutrients.carbs || 0),
-      }));
-    }
-    if (nutrients.fiber !== undefined) {
-      fixed('fiber', lang('PlannerHealthFiberShort', { value: number(nutrients.fiber) }));
-    }
-    if (draft.grams) fixed('grams', lang('PlannerHealthGramsNoGoal', { value: number(draft.grams) }));
-    return chips;
-  }
-  if (draft.kind === 'workout') {
-    if (draft.start) fixed('time', draft.start);
-    if (draft.minutes) fixed('minutes', formatDuration(lang, draft.minutes));
-    if (draft.distanceKm) {
-      const pace = formatPace(draft.minutes || 0, draft.distanceKm);
-      fixed('health', [
-        lang('PlannerHealthKm', { value: number(draft.distanceKm) }),
-        pace && lang('PlannerHealthPace', { value: pace }),
-      ].filter(Boolean).join(' · '));
-    }
-    if (draft.exercises) fixed('grams', lang('PlannerQuickWorkoutSets', { count: draft.exercises.length }));
-    return chips;
   }
   if (draft.isAllDay) chips.push({ field: 'time', text: lang('PlannerAllDayShort'), isFixed: true });
   else if (draft.start) {

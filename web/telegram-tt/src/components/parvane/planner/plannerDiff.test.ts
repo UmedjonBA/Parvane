@@ -69,63 +69,7 @@ const DIFF_ENGINE: EngineState = {
     isHoliday: true, color: 0, description: 'выходной',
   }],
   lists: [{ id: 'l1', name: 'Работа', order: 0 }, { id: 'l2', name: 'Дом', order: 1, color: 3 }],
-  nutrition: [{
-    day: '2026-10-08',
-    entries: [{
-      id: 'f1',
-      name: 'Творог',
-      meal: 'breakfast',
-      kcal: 300,
-      protein: 45,
-      fat: null,
-      carbs: null,
-      fiber: null,
-      grams: 250,
-      per100: true,
-      time: '08:30',
-    }, {
-      id: 'f2', name: 'Суп', meal: 'lunch', kcal: 450, protein: 20, fat: 15, carbs: 40, fiber: 5, grams: null,
-      per100: false, sugar: 3, salt: 2,
-    }],
-    isComplete: true,
-    fixedGoals: {
-      kcal: { target: 2000, tolerance: 100 }, protein: { target: 120, tolerance: 20 }, fat: null, carbs: null,
-    },
-    waterMl: 500,
-  }, {
-    day: '2026-10-09', entries: [], isComplete: false, fixedGoals: null, waterMl: 1250,
-  }],
   settings: { dayStart: 480, dayEnd: 1200, lunchStart: 780, lunchEnd: 840, margin: 10, budget: 480 },
-  goals: {
-    kcal: { target: 2100, tolerance: 100 },
-    protein: null,
-    fat: null,
-    carbs: null,
-    water: { target: 2000, tolerance: 300 },
-  },
-  goalPeriods: [{
-    id: 'g1',
-    startDay: '2026-10-15',
-    endDay: '2026-10-15',
-    kcal: { target: 1500, tolerance: 100 },
-    protein: null,
-    fat: null,
-    carbs: null,
-    fiber: null,
-    water: null,
-  }],
-  health: [{
-    id: 'h1', day: '2026-10-08', kind: 'sleep', time: '23:30', endTime: '07:00', value: 450, value2: 0, name: '',
-    details: '',
-  }, {
-    id: 'h2', day: '2026-10-08', kind: 'weight', time: '', endTime: '', value: 81.5, value2: 0, name: '', details: '',
-  }, {
-    id: 'h3', day: '2026-10-07', kind: 'workout', time: '18:00', endTime: '', value: 45, value2: 5, name: 'бег',
-    details: '{"ex":[{"name":"бег","minutes":45}]}',
-  }, {
-    id: 'health-goals', day: '2000-01-01', kind: 'goals', time: '', endTime: '', value: 0, value2: 0, name: '',
-    details: '{"steps":8000,"bedtime":"23:00"}',
-  }],
   learned: [{
     id: 'пара', kind: '', kindCount: 0, minutes: 105, minutesCount: 4, touched: 9,
   }, {
@@ -204,49 +148,12 @@ const DIFF_CASES: [string, (draft: PlannerState) => void][] = [
     });
     d.events[1].occurrences!.push({ day: '2026-10-19', excluded: true });
   }],
-  ['правка и удаление записи еды, вода', (d) => {
-    const day = d.nutrition['2026-10-08'];
-    day.entries[0].kcal = 320;
-    day.entries[0].time = '09:00';
-    day.entries = day.entries.filter((e) => e.id !== 'f2');
-    day.waterMl = 750;
-  }],
-  ['новая запись еды и закрытие дня', (d) => {
-    d.nutrition['2026-10-09'].entries.push({
-      id: 'f9', name: 'Яблоко', meal: 'snack', kcal: 80, carbs: 20, fiber: 3, grams: 150, time: '16:00',
-    });
-    d.nutrition['2026-10-09'].isComplete = true;
-    d.nutrition['2026-10-09'].fixedGoals = { kcal: { target: 1800, tolerance: 50 } };
-  }],
-  ['день еды исчезает и появляется новый', (d) => {
-    delete d.nutrition['2026-10-09'];
-    d.nutrition['2026-10-10'] = { entries: [], isComplete: false, waterMl: 250 };
-  }],
-  ['цели и настройки', (d) => {
-    d.goals = { ...d.goals, protein: { target: 130, tolerance: 10 } };
+  ['бюджет и окно дня', (d) => {
     d.budget = 600;
     d.settings = { ...d.settings, dayEnd: 1260 };
   }],
   ['только бюджет', (d) => {
     d.budget = 420;
-  }],
-  ['период целей: правка, удаление, новый', (d) => {
-    d.goalPeriods[0].goals = { kcal: { target: 1400, tolerance: 100 }, water: { target: 2500, tolerance: 200 } };
-    d.goalPeriods.push({ id: 'g2', startDay: '2026-11-01', endDay: '2026-11-07', goals: {} });
-  }],
-  ['удаление периода целей', (d) => {
-    d.goalPeriods = [];
-  }],
-  ['здоровье: правка, удаление, новая запись', (d) => {
-    d.health[1].value = 81.1;
-    d.health = d.health.filter((r) => r.id !== 'h3');
-    d.health.push({
-      id: 'h9', day: '2026-10-08', kind: 'workout', time: '19:00', value: 30, value2: 4.2, name: 'бег',
-      exercises: [{ name: 'бег', minutes: 30 }],
-    } as PlannerState['health'][number]);
-  }],
-  ['цели здоровья', (d) => {
-    d.healthGoals = { ...d.healthGoals, steps: 10000, waterMl: 2500 } as PlannerState['healthGoals'];
   }],
   ['словарь: правка типа, длительности, удаление, новое слово', (d) => {
     d.learned[0].minutes = 120;
@@ -274,11 +181,7 @@ const DIFF_CASES: [string, (draft: PlannerState) => void][] = [
     d.tasks[1].name = 'Переименовано';
     d.events[2].color = 2;
     d.lists[1].order = 5;
-    d.nutrition['2026-10-08'].isComplete = false;
     d.budget = 500;
-    d.goalPeriods[0].endDay = '2026-10-16';
-    d.health[0].value = 420;
-    d.healthGoals = { ...d.healthGoals, bedtime: '22:30' } as PlannerState['healthGoals'];
     d.learned[1].touched = 11;
     d.quickLines[1].touched = 2;
   }],
@@ -555,90 +458,7 @@ const EXPECTED: Record<string, unknown[]> = {
       },
     },
   ],
-  'правка и удаление записи еды, вода': [
-    {
-      nutritionDay: {
-        day: '2026-10-08',
-        entries: [
-          {
-            id: 'f1',
-            name: 'Творог',
-            meal: 'breakfast',
-            kcal: 320,
-            protein: 45,
-            fat: null,
-            carbs: null,
-            fiber: null,
-            grams: 250,
-            per100: true,
-            sugar: null,
-            salt: null,
-            time: '09:00',
-          },
-          {
-            id: 'f2',
-            deleted: true,
-          },
-        ],
-        waterMl: 750,
-      },
-    },
-  ],
-  'новая запись еды и закрытие дня': [
-    {
-      nutritionDay: {
-        day: '2026-10-09',
-        entries: [
-          {
-            id: 'f9',
-            name: 'Яблоко',
-            meal: 'snack',
-            kcal: 80,
-            protein: null,
-            fat: null,
-            carbs: 20,
-            fiber: 3,
-            grams: 150,
-            per100: false,
-            sugar: null,
-            salt: null,
-            time: '16:00',
-          },
-        ],
-        isComplete: true,
-        fixedGoals: {
-          kcal: {
-            target: 1800,
-            tolerance: 50,
-          },
-          protein: null,
-          fat: null,
-          carbs: null,
-          fiber: null,
-          water: null,
-        },
-      },
-    },
-  ],
-  'день еды исчезает и появляется новый': [
-    {
-      nutritionDay: {
-        day: '2026-10-10',
-        entries: [],
-        isComplete: false,
-        fixedGoals: null,
-        waterMl: 250,
-      },
-    },
-    {
-      nutritionDay: {
-        day: '2026-10-09',
-        entries: [],
-        waterMl: null,
-      },
-    },
-  ],
-  'цели и настройки': [
+  'бюджет и окно дня': [
     {
       settings: {
         dayStart: 480,
@@ -647,25 +467,6 @@ const EXPECTED: Record<string, unknown[]> = {
         lunchEnd: 840,
         margin: 10,
         budget: 600,
-      },
-    },
-    {
-      goals: {
-        kcal: {
-          target: 2100,
-          tolerance: 100,
-        },
-        protein: {
-          target: 130,
-          tolerance: 10,
-        },
-        fat: null,
-        carbs: null,
-        fiber: null,
-        water: {
-          target: 2000,
-          tolerance: 300,
-        },
       },
     },
   ],
@@ -678,93 +479,6 @@ const EXPECTED: Record<string, unknown[]> = {
         lunchEnd: 840,
         margin: 10,
         budget: 420,
-      },
-    },
-  ],
-  'период целей: правка, удаление, новый': [
-    {
-      goalPeriod: {
-        id: 'g1',
-        startDay: '2026-10-15',
-        endDay: '2026-10-15',
-        kcal: {
-          target: 1400,
-          tolerance: 100,
-        },
-        protein: null,
-        fat: null,
-        carbs: null,
-        fiber: null,
-        water: {
-          target: 2500,
-          tolerance: 200,
-        },
-      },
-    },
-    {
-      goalPeriod: {
-        id: 'g2',
-        startDay: '2026-11-01',
-        endDay: '2026-11-07',
-        kcal: null,
-        protein: null,
-        fat: null,
-        carbs: null,
-        fiber: null,
-        water: null,
-      },
-    },
-  ],
-  'удаление периода целей': [
-    {
-      goalPeriod: {
-        id: 'g1',
-        deleted: true,
-      },
-    },
-  ],
-  'здоровье: правка, удаление, новая запись': [
-    {
-      health: {
-        id: 'h2',
-        day: '2026-10-08',
-        kind: 'weight',
-        time: '',
-        endTime: '',
-        value: 81.1,
-        value2: 0,
-        name: '',
-        details: '',
-      },
-    },
-    {
-      health: {
-        id: 'h9',
-        day: '2026-10-08',
-        kind: 'workout',
-        time: '19:00',
-        endTime: '',
-        value: 30,
-        value2: 4.2,
-        name: 'бег',
-        details: '{"ex":[{"name":"бег","minutes":30}]}',
-      },
-    },
-    {
-      health: {
-        id: 'h3',
-        deleted: true,
-      },
-    },
-  ],
-  'цели здоровья': [
-    {
-      health: {
-        id: 'health-goals',
-        day: '2000-01-01',
-        kind: 'goals',
-        value: 0,
-        details: '{"steps":10000,"bedtime":"23:00","waterMl":2500}',
       },
     },
   ],
@@ -857,13 +571,6 @@ const EXPECTED: Record<string, unknown[]> = {
       },
     },
     {
-      nutritionDay: {
-        day: '2026-10-08',
-        entries: [],
-        isComplete: false,
-      },
-    },
-    {
       settings: {
         dayStart: 480,
         dayEnd: 1200,
@@ -871,44 +578,6 @@ const EXPECTED: Record<string, unknown[]> = {
         lunchEnd: 840,
         margin: 10,
         budget: 500,
-      },
-    },
-    {
-      goalPeriod: {
-        id: 'g1',
-        startDay: '2026-10-15',
-        endDay: '2026-10-16',
-        kcal: {
-          target: 1500,
-          tolerance: 100,
-        },
-        protein: null,
-        fat: null,
-        carbs: null,
-        fiber: null,
-        water: null,
-      },
-    },
-    {
-      health: {
-        id: 'h1',
-        day: '2026-10-08',
-        kind: 'sleep',
-        time: '23:30',
-        endTime: '07:00',
-        value: 420,
-        value2: 0,
-        name: '',
-        details: '',
-      },
-    },
-    {
-      health: {
-        id: 'health-goals',
-        day: '2000-01-01',
-        kind: 'goals',
-        value: 0,
-        details: '{"steps":8000,"bedtime":"22:30"}',
       },
     },
     {

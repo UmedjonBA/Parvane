@@ -47,7 +47,7 @@ export type QuickCandidate = QuickSuggestion & {
   at: number;
   // Строки истории, которые кандидат представляет: «Забыть» стирает их все
   texts: string[];
-  // Вид записи строки — подсказки окна, открытого под вид (сон, спорт, еда…), только этого вида
+  // Вид записи строки — при выбранном виде окна подсказки только этого вида
   kind: QuickKind;
 };
 
@@ -211,7 +211,7 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
   sources.history.lines.forEach(({ text, count, at }) => {
     const draft = parseCached(text, ctx);
     if (draft.error) return;
-    const key = lineKey(text, draft, uiLang);
+    const key = lineKey(draft, uiLang);
     const known = byKey.get(key);
     // Строки одного шаблона («созвон завтра 16:00», «созвон пт 16:00»): показывается самая свежая
     if (known) {
@@ -291,9 +291,8 @@ export function isSuggestionPrefix(input: string, suggestion: string) {
   return Boolean(typed.trim()) && line.startsWith(typed) && line !== typed.trimEnd();
 }
 
-/** Ключ шаблона добавленной строки: задача и событие — строка без даты, остальное — сама строка. */
-export function lineKey(text: string, draft: QuickDraft, uiLang: QuickLang) {
-  if (draft.kind !== 'task' && draft.kind !== 'event') return foldLine(normalizeLine(text));
+/** Ключ шаблона добавленной строки: строка без даты. */
+export function lineKey(draft: QuickDraft, uiLang: QuickLang) {
   const lineDraft: QuickLineDraft = {
     kind: draft.kind,
     name: draft.name,

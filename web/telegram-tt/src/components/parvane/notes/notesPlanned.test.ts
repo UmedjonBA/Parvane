@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { QuickContext } from '../planner/plannerQuick';
 
-import { applyQuickDraft } from '../planner/plannerHealth';
 import { createEmptyPlannerState } from '../planner/plannerModel';
 import { parseQuickInput } from '../planner/plannerQuick';
+import { applyQuickDraft } from '../planner/plannerQuickApply';
 import {
   buildPlannedIndex, nearestPlanned, notePlanLine, plannedOf,
 } from './notesPlanned';
@@ -20,7 +20,7 @@ function plan(title: string, tail: string) {
   const state = createEmptyPlannerState();
   const draft = parseQuickInput(`${notePlanLine(title)}${tail}`, CTX);
   expect(draft.error).toBeUndefined();
-  applyQuickDraft(state, draft, TODAY);
+  applyQuickDraft(state, draft);
   return state;
 }
 

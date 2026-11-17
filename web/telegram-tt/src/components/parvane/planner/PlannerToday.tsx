@@ -84,7 +84,7 @@ const PlannerToday = ({
       value: lang('PlannerMinutesValue', { minutes: routine.spread! }),
     }) : undefined;
   const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
-  const kcalGoal = getGoalsForDay(state, day, today).kcal?.target;
+  const kcalGoal = getGoalsForDay(state, day).kcal?.target;
 
   const handleTasksClick = useLastCallback(() => {
     tasksRef.current?.scrollIntoView({ block: 'start' });

@@ -177,134 +177,9 @@ const PLANNER_ENGINE: EngineState = {
       id: 'l-garden-dup', name: 'Огород', order: 2, color: 1,
     },
   ],
-  nutrition: [
-    {
-      day: '2026-11-02',
-      entries: [
-        {
-          id: 'f-oat',
-          name: 'Овсянка',
-          meal: 'breakfast',
-          kcal: 340,
-          protein: 12,
-          fat: 6,
-          carbs: 58,
-          fiber: 8,
-          grams: 300,
-          per100: true,
-          time: '08:10',
-        },
-        {
-          id: 'f-fish',
-          name: 'Треска',
-          meal: 'dinner',
-          kcal: 180,
-          protein: 40,
-          fat: null,
-          carbs: null,
-          fiber: null,
-          grams: null,
-          per100: false,
-          sugar: 0,
-          salt: 1.5,
-        },
-      ],
-      isComplete: true,
-      fixedGoals: {
-        kcal: { target: 1900, tolerance: 100 },
-        protein: { target: 110, tolerance: 15 },
-        fat: null,
-        carbs: null,
-        water: { target: 1800, tolerance: 200 },
-      },
-      waterMl: 1600,
-    },
-    {
-      day: '2026-11-03', entries: [], isComplete: false, fixedGoals: null, waterMl: 400,
-    },
-    {
-      day: '2026-11-04', entries: [], isComplete: false, fixedGoals: null, waterMl: null,
-    },
-  ],
   settings: {
     dayStart: 420, dayEnd: 1320, lunchStart: 0, lunchEnd: 0, margin: 5, budget: 540,
   },
-  goals: {
-    kcal: { target: 1900, tolerance: 100 },
-    protein: { target: 110, tolerance: 15 },
-    fat: null,
-    carbs: null,
-    fiber: { target: 25, tolerance: 5 },
-    water: { target: 1800, tolerance: 200 },
-  },
-  goalPeriods: [{
-    id: 'g-cut',
-    startDay: '2026-11-10',
-    endDay: '2026-11-24',
-    kcal: { target: 1600, tolerance: 80 },
-    protein: null,
-    fat: null,
-    carbs: null,
-    fiber: null,
-    water: null,
-  }],
-  health: [
-    {
-      id: 'h-sleep',
-      day: '2026-11-02',
-      kind: 'sleep',
-      time: '23:10',
-      endTime: '06:40',
-      value: 450,
-      value2: 0,
-      name: '',
-      details: '',
-    },
-    {
-      id: 'h-weight',
-      day: '2026-11-03',
-      kind: 'weight',
-      time: '',
-      endTime: '',
-      value: 73.4,
-      value2: 0,
-      name: '',
-      details: '',
-    },
-    {
-      id: 'h-run',
-      day: '2026-11-03',
-      kind: 'workout',
-      time: '07:00',
-      endTime: '07:40',
-      value: 40,
-      value2: 6.5,
-      name: 'бег',
-      details: '{"ex":[{"name":"разминка","reps":10},{"name":"бег","sets":1,"weight":0}]}',
-    },
-    {
-      id: 'h-bad',
-      day: '2026-11-01',
-      kind: 'mood',
-      time: '',
-      endTime: '',
-      value: 4,
-      value2: 0,
-      name: '',
-      details: '{не json',
-    },
-    {
-      id: 'health-goals',
-      day: '2000-01-01',
-      kind: 'goals',
-      time: '',
-      endTime: '',
-      value: 0,
-      value2: 0,
-      name: '',
-      details: '{"sugarMax":40,"saltMax":5,"sleepMinutes":480,"steps":9000,"activeMinutes":150,"workouts":3}',
-    },
-  ],
   learned: [
     {
       id: 'созвон', kind: 'event', kindCount: 3, minutes: 30, minutesCount: 2, touched: 12,
@@ -375,18 +250,8 @@ function buildPlannerVector() {
   edited.events.push({
     id: 'e-new', name: 'Врач', start: '11:00', end: '11:40', day: '2026-11-18', remind: 15, project: 'Дом',
   });
-  edited.nutrition['2026-11-03'].waterMl = 900;
-  delete edited.nutrition['2026-11-02'];
-  edited.nutrition['2026-11-06'] = { entries: [], isComplete: false, waterMl: 250 };
   edited.budget = 600;
   edited.settings = { ...edited.settings, margin: 10 };
-  edited.goals = { ...edited.goals, water: { target: 2000, tolerance: 200 } };
-  edited.goalPeriods[0].endDay = '2026-11-30';
-  edited.health = edited.health.filter((h) => h.id !== 'h-weight');
-  edited.health.push({
-    id: 'h-steps', day: '2026-11-04', kind: 'steps', value: 8200,
-  });
-  edited.healthGoals = { ...edited.healthGoals, steps: 10000 };
   edited.learned[0].minutes = 45;
   edited.learned = edited.learned.filter((w) => w.id !== 'прогулка');
   edited.quickLines[0].count = 3;
@@ -394,15 +259,13 @@ function buildPlannerVector() {
 
   const coalesceInput = [
     { task: { id: 't-water', status: 'done' } },
-    { nutritionDay: { day: '2026-11-03', entries: [{ id: 'f-a', name: 'Чай', meal: 'other', kcal: 5 }] } },
+    { event: { id: 'e-rent', occurrences: [{ day: '2026-11-05', done: false }] } },
     { task: { id: 't-water', name: 'Полить всё', occurrences: [{ day: '2026-11-09', done: true }] } },
     {
-      nutritionDay: {
-        day: '2026-11-03',
-        waterMl: 700,
-        entries: [{ id: 'f-a', kcal: 7 }, {
-          id: 'f-b', name: 'Хлеб', meal: 'other', kcal: 90,
-        }],
+      event: {
+        id: 'e-rent',
+        color: 2,
+        occurrences: [{ day: '2026-11-05', done: true }, { day: '2026-12-05', excluded: true }],
       },
     },
     { settings: { budget: 500 } },

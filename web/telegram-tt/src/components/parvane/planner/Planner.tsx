@@ -479,7 +479,7 @@ const Planner = () => {
     openQuick();
   });
 
-  // Пример на экране «Здоровье», «+» у задач и «Еда» у расписания открывают ввод с готовой строкой
+  // «+» у задач и «Еда» у расписания открывают ввод с началом строки
   const handleQuickText = useLastCallback((text: string) => {
     setQuickText(text);
     openQuick();

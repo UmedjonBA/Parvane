@@ -1,5 +1,6 @@
-// Parvane (spec 009): модель планировщика — задачи, события, свободные окна,
-// питание и статистика. Чистые функции над `PlannerState`, без UI и хранилища.
+// Parvane (spec 009): модель планировщика — задачи, события, свободные окна и статистика времени.
+// Чистые функции над `PlannerState`, без UI и хранилища. Сон, еду и цели ведёт модуль «Здоровье»: здесь
+// только их вид для показа в календаре.
 // Референс возможностей — макет пользователя planner.html (вариант «списки»).
 
 // Три статуса (spec 013); прежние `later` и `waiting` читаются как `queue`
@@ -108,10 +109,9 @@ export type PlannerEvent = {
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
 
-export type PlannerMetric = 'kcal' | 'protein' | 'fat' | 'carbs';
-export type PlannerNutrient = PlannerMetric | 'fiber';
-export const PLANNER_METRICS: PlannerMetric[] = ['kcal', 'protein', 'fat', 'carbs'];
-export const PLANNER_NUTRIENTS: PlannerNutrient[] = [...PLANNER_METRICS, 'fiber'];
+// ── здоровье для показа: заполняет `withHealthDays` из модуля «Здоровье» ─────
+
+type PlannerNutrient = 'kcal' | 'protein' | 'fat' | 'carbs' | 'fiber';
 
 export type PlannerMeal = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'other';
 export const PLANNER_MEALS: PlannerMeal[] = ['breakfast', 'lunch', 'dinner', 'snack', 'other'];
@@ -127,67 +127,47 @@ export type PlannerFoodEntry = {
   carbs?: number;
   fiber?: number;
   grams?: number;
-  per100?: Partial<Record<PlannerNutrient, number>>;
-  // spec 020: сахар и соль, граммы (у них не цель, а предел «не больше»); время приёма `HH:MM`
-  sugar?: number;
-  salt?: number;
+  // Время приёма `HH:MM`
   time?: string;
 };
 
-// Запись здоровья (spec 020). Вид — строка: незнакомый вид хранится и не показывается.
-// weight — `value` кг; pressure — `value` / `value2`; pulse, steps, mood (1…5) — `value`;
-// sleep — `time` лёг, `endTime` встал, `value` минут; workout — `time`, `value` минут, `value2` км, `name`
-export type PlannerHealthKind = 'weight' | 'pressure' | 'pulse' | 'steps' | 'mood' | 'sleep' | 'workout';
-export const PLANNER_HEALTH_KINDS: PlannerHealthKind[] = [
-  'weight', 'pressure', 'pulse', 'steps', 'mood', 'sleep', 'workout',
-];
-// Упражнение силовой тренировки: подходы × повторы × вес
-export type PlannerExercise = { name: string; sets?: number; reps?: number; weight?: number };
+// Запись здоровья: sleep — `time` лёг, `endTime` встал, `value` минут; workout — `time`, `value` минут,
+// `value2` км, `name`
+export type PlannerHealthKind = 'sleep' | 'workout';
 export type PlannerHealthRecord = {
   id: string;
   day: string;
-  kind: string;
+  kind: PlannerHealthKind;
   time?: string;
   endTime?: string;
   value: number;
   value2?: number;
   name?: string;
-  exercises?: PlannerExercise[];
 };
-// Цели здоровья: пределы сахара и соли (г), сон (мин), вес (кг), шаги за день, активные минуты и
-// тренировки за 7 дней; режим сна — время отхода ко сну и подъёма минутами от полуночи (все цели — числа)
+// Цели здоровья: сон (мин), вес (кг), шаги за день, активные минуты за 7 дней; режим сна — время отхода ко
+// сну и подъёма минутами от полуночи
 export type PlannerHealthGoals = {
-  sugarMax?: number;
-  saltMax?: number;
   sleepMinutes?: number;
   bedtime?: number;
   wakeTime?: number;
   weight?: number;
   steps?: number;
   activeMinutes?: number;
-  workouts?: number;
-};
-// 150 активных минут в неделю — норма ВОЗ
-export const DEFAULT_HEALTH_GOALS: PlannerHealthGoals = {
-  sugarMax: 50, saltMax: 5, sleepMinutes: 480, steps: 8000, activeMinutes: 150, workouts: 3,
 };
 
 export type PlannerGoal = { target: number; tolerance: number };
-// Показатели с целью (spec 011): питательные вещества и вода (мл)
+// Показатели с целью: питательные вещества и вода (мл)
 export type PlannerGoalMetric = PlannerNutrient | 'water';
-export const PLANNER_GOAL_METRICS: PlannerGoalMetric[] = [...PLANNER_NUTRIENTS, 'water'];
 export type PlannerGoalValues = Partial<Record<PlannerGoalMetric, PlannerGoal>>;
 
 // Запись цели с датами: один день (`endDay === startDay`), промежуток или бессрочно (`endDay === ''`);
-// пустой `startDay` — «с самого начала». Для дня действует накрывающая запись (getGoalRecordForDay)
+// пустой `startDay` — «с самого начала». Для дня действует накрывающая запись (`getGoalsForDay`)
 export type PlannerGoalRecord = { id: string; startDay: string; endDay: string; goals: PlannerGoalValues };
 
 export type PlannerNutritionDay = {
   entries: PlannerFoodEntry[];
+  // День питания закрыт
   isComplete: boolean;
-  // Цели на момент завершения дня — чтобы смена целей не переписывала историю
-  fixedGoals?: PlannerGoalValues;
-  waterMl?: number;
 };
 
 // Настройки дня (T014): окна дня, перерыв и запас при поиске времени — минуты от полуночи
@@ -234,15 +214,15 @@ export type PlannerState = {
   events: PlannerEvent[];
   projects: string[];
   lists: PlannerList[];
-  nutrition: Record<string, PlannerNutritionDay>;
-  // Цели «с самого начала» (этапы 1–2) — запись с самым низким приоритетом
-  goals: PlannerGoalValues;
-  // Записи целей с датами (spec 011)
-  goalPeriods: PlannerGoalRecord[];
   // Дневной бюджет времени, минут
   budget: number;
   settings: PlannerSettings;
-  // spec 020: записи здоровья и цели здоровья
+  // Здоровье, питание и цели — только данные для показа: их подставляет `withHealthDays`
+  // (`plannerHealthDays.ts`) из модуля «Здоровье». Собственное состояние «Плана» держит эти поля пустыми:
+  // «План» их не хранит, не пишет и движку не отправляет
+  nutrition: Record<string, PlannerNutritionDay>;
+  goals: PlannerGoalValues;
+  goalPeriods: PlannerGoalRecord[];
   health: PlannerHealthRecord[];
   healthGoals: PlannerHealthGoals;
   // Словарь правок ввода текстом: едет с данными «Плана» на все устройства
@@ -263,8 +243,6 @@ export type PlannerTimed = {
 
 export type PlannerSlot = { start: number; end: number };
 export type PlannerBusyGroup = PlannerSlot & { items: PlannerTimed[] };
-// `nogoal` — факт есть, цели по показателю нет (spec 011, FR-011)
-export type PlannerNutrientStatus = 'none' | 'nogoal' | 'incomplete' | 'open' | 'below' | 'above' | 'ok';
 
 export const MINUTES_IN_DAY = 1440;
 export const MIN_TASK_MINUTES = 5;
@@ -287,18 +265,13 @@ export function createEmptyPlannerState(): PlannerState {
     events: [],
     projects: [''],
     lists: [],
-    nutrition: {},
-    goals: {
-      kcal: { target: 2000, tolerance: 100 },
-      protein: { target: 120, tolerance: 20 },
-      fat: { target: 70, tolerance: 15 },
-      carbs: { target: 230, tolerance: 30 },
-    },
-    goalPeriods: [],
     budget: 600,
     settings: { ...DEFAULT_PLANNER_SETTINGS },
+    nutrition: {},
+    goals: {},
+    goalPeriods: [],
     health: [],
-    healthGoals: { ...DEFAULT_HEALTH_GOALS },
+    healthGoals: {},
     learned: [],
     quickLines: [],
     reminded: [],
@@ -697,7 +670,7 @@ export function instanceKey(item: PlannerSeriesItem) {
 type InstanceEntry<T> = { instance: T; occurrence?: PlannerOccurrence; done?: boolean; doneSteps?: number[] };
 let taskInstances = new WeakMap<PlannerTask, Map<string, InstanceEntry<PlannerTask>>>();
 let eventInstances = new WeakMap<PlannerEvent, Map<string, InstanceEntry<PlannerEvent>>>();
-// Индексы по объекту состояния (`getDayIndex`, индекс здоровья) — там же
+// Индексы по объекту состояния (`getDayIndex`) — там же
 let stateCaches = new WeakMap<PlannerState, Map<string, unknown>>();
 
 /** Сбросить кэши экземпляров и индексов: вызывается перед публикацией черновика правки. */
@@ -1486,7 +1459,7 @@ export function validateEvent(event: Omit<PlannerEvent, 'id'>): PlannerEventErro
   return undefined;
 }
 
-// ── питание ──────────────────────────────────────────────────────────────────
+// ── питание: чтение подставленного ───────────────────────────────────────────
 
 export function isKnownNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -1496,42 +1469,9 @@ function roundNutrient(value: number) {
   return Math.round((value + Number.EPSILON) * 10000) / 10000;
 }
 
-export function makeFoodEntry(raw: {
-  id?: string;
-  name: string;
-  meal: PlannerMeal;
-  isPer100: boolean;
-  grams?: number;
-  values: Partial<Record<PlannerNutrient, number>>;
-}): PlannerFoodEntry {
-  const factor = raw.isPer100 ? (raw.grams || 0) / 100 : 1;
-  const scaled: Partial<Record<PlannerNutrient, number>> = {};
-  PLANNER_NUTRIENTS.forEach((nutrient) => {
-    const value = raw.values[nutrient];
-    if (isKnownNumber(value)) scaled[nutrient] = roundNutrient(value * factor);
-  });
-  return {
-    id: raw.id || newId(),
-    name: raw.name.trim(),
-    meal: raw.meal,
-    kcal: scaled.kcal || 0,
-    protein: scaled.protein,
-    fat: scaled.fat,
-    carbs: scaled.carbs,
-    fiber: scaled.fiber,
-    grams: raw.isPer100 ? raw.grams : undefined,
-    per100: raw.isPer100 ? { ...raw.values } : undefined,
-  };
-}
-
-/** Факт дня по показателю: сумма записей; вода — `waterMl` (одно число, пропусков нет). */
-export function getNutrientTotal(state: PlannerState, day: string, nutrient: PlannerGoalMetric) {
-  const record = state.nutrition[day];
-  if (nutrient === 'water') {
-    const known = isKnownNumber(record?.waterMl);
-    return { value: known ? record.waterMl! : 0, missing: 0, count: known ? 1 : 0 };
-  }
-  const entries = record?.entries || [];
+/** Факт дня по показателю: сумма записей; `missing` — записи без значения. */
+export function getNutrientTotal(state: PlannerState, day: string, nutrient: PlannerNutrient) {
+  const entries = state.nutrition[day]?.entries || [];
   let value = 0;
   let missing = 0;
   entries.forEach((entry) => {
@@ -1542,8 +1482,8 @@ export function getNutrientTotal(state: PlannerState, day: string, nutrient: Pla
   return { value: roundNutrient(value), missing, count: entries.length };
 }
 
-/** Запись цели, действующая в день (FR-010): накрывающая, затем позже начатая, короче, позже в списке. */
-export function getGoalRecordForDay(state: PlannerState, day: string): PlannerGoalRecord | undefined {
+/** Цели, действующие в день: накрывающая запись с датами (позже начатая, короче), иначе цели без дат. */
+export function getGoalsForDay(state: PlannerState, day: string): PlannerGoalValues {
   const length = (r: PlannerGoalRecord) => (r.endDay && r.startDay
     ? epochDays(r.endDay) - epochDays(r.startDay) : Number.POSITIVE_INFINITY);
   let best: PlannerGoalRecord | undefined;
@@ -1552,107 +1492,7 @@ export function getGoalRecordForDay(state: PlannerState, day: string): PlannerGo
     if (!best || record.startDay > best.startDay
       || (record.startDay === best.startDay && length(record) <= length(best))) best = record;
   });
-  if (best) return best;
-  return Object.keys(state.goals).length ? { id: '', startDay: '', endDay: '', goals: state.goals } : undefined;
-}
-
-/**
- * День питания завершён (spec 013): прошедший — сам, без действия пользователя; отметка
- * `isComplete` прежних версий тоже учитывается.
- */
-export function isDayClosed(state: PlannerState, day: string, today = toDayKey(new Date())) {
-  return day < today || Boolean(state.nutrition[day]?.isComplete);
-}
-
-/** Цели, действующие в день: у завершённого дня — зафиксированные, иначе — по записи. */
-export function getGoalsForDay(state: PlannerState, day: string, today?: string): PlannerGoalValues {
-  const record = state.nutrition[day];
-  if (record?.fixedGoals && isDayClosed(state, day, today)) return record.fixedGoals;
-  return getGoalRecordForDay(state, day)?.goals || {};
-}
-
-/**
- * Перед правкой целей: прошедшим дням с записями фиксируются цели, действовавшие до правки, —
- * иначе смена цели переоценила бы историю. Возвращает число затронутых дней.
- */
-export function freezePastGoals(state: PlannerState, today = toDayKey(new Date())) {
-  let count = 0;
-  Object.entries(state.nutrition).forEach(([day, record]) => {
-    if (day >= today || record.fixedGoals || !(record.entries.length || record.waterMl)) return;
-    record.fixedGoals = structuredClone(getGoalRecordForDay(state, day)?.goals || {});
-    record.isComplete = true;
-    count++;
-  });
-  return count;
-}
-
-export function getNutrientGoal(
-  state: PlannerState, day: string, metric: PlannerGoalMetric, today?: string,
-): PlannerGoal | undefined {
-  return getGoalsForDay(state, day, today)[metric];
-}
-
-export function getNutrientStatus(
-  state: PlannerState, day: string, metric: PlannerGoalMetric, today?: string,
-): PlannerNutrientStatus {
-  const record = state.nutrition[day];
-  const total = getNutrientTotal(state, day, metric);
-  if (!record || !total.count) return 'none';
-  const goal = getNutrientGoal(state, day, metric, today);
-  if (!goal) return 'nogoal';
-  if (total.missing) return 'incomplete';
-  if (!isDayClosed(state, day, today)) return 'open';
-  if (total.value < goal.target - goal.tolerance) return 'below';
-  if (total.value > goal.target + goal.tolerance) return 'above';
-  return 'ok';
-}
-
-export function getNutrientStatistics(state: PlannerState, days: string[], metric: PlannerGoalMetric, today: string) {
-  const recorded = days.filter((day) => day <= today && getNutrientTotal(state, day, metric).count);
-  const complete = recorded
-    .filter((day) => isDayClosed(state, day, today) && !getNutrientTotal(state, day, metric).missing);
-  // Дни «в норме» считаются по собственной цели каждого дня; дни без цели в норму не входят
-  const withGoal = complete.filter((day) => getNutrientGoal(state, day, metric, today));
-  const sum = roundNutrient(recorded.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0));
-  const completeSum = roundNutrient(
-    complete.reduce((total, day) => total + getNutrientTotal(state, day, metric).value, 0),
-  );
-  return {
-    recorded,
-    complete,
-    withGoal,
-    sum,
-    completeSum,
-    inGoal: withGoal.filter((day) => getNutrientStatus(state, day, metric, today) === 'ok').length,
-    average: complete.length ? roundNutrient(completeSum / complete.length) : undefined,
-    goalLow: withGoal.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric, today)!;
-      return total + goal.target - goal.tolerance;
-    }, 0),
-    goalHigh: withGoal.reduce((total, day) => {
-      const goal = getNutrientGoal(state, day, metric, today)!;
-      return total + goal.target + goal.tolerance;
-    }, 0),
-  };
-}
-
-export type PlannerGoalRecordError = 'startDay' | 'endDay' | 'empty' | PlannerGoalMetric;
-
-/** Запись цели: даты, конец не раньше начала, хотя бы один показатель, каждая цель годна. */
-export function validateGoalRecord(record: Omit<PlannerGoalRecord, 'id'>): PlannerGoalRecordError | undefined {
-  if (record.startDay && !DAY_KEY_PATTERN.test(record.startDay)) return 'startDay';
-  if (record.endDay && (!DAY_KEY_PATTERN.test(record.endDay) || (record.startDay && record.endDay < record.startDay))) {
-    return 'endDay';
-  }
-  const metrics = PLANNER_GOAL_METRICS.filter((metric) => record.goals[metric]);
-  if (!metrics.length) return 'empty';
-  return metrics.find((metric) => !validateGoal(record.goals[metric]!, metric === 'kcal' || metric === 'water'));
-}
-
-export function validateGoal(goal: PlannerGoal, isInteger: boolean) {
-  const { target, tolerance } = goal;
-  if (!isKnownNumber(target) || target <= 0 || !isKnownNumber(tolerance) || tolerance > target) return false;
-  return !isInteger || (Number.isInteger(target) && Number.isInteger(tolerance));
+  return best?.goals || state.goals;
 }
 
 // ── статистика времени ───────────────────────────────────────────────────────
@@ -1770,60 +1610,19 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     if (!lists.some((list) => list.name === name)) lists.push({ id: newId(), name, order: lists.length });
   });
 
-  const nutrition: Record<string, PlannerNutritionDay> = {};
-  if (saved.nutrition && typeof saved.nutrition === 'object') {
-    Object.entries(saved.nutrition).forEach(([day, record]) => {
-      if (!isDay(day) || !record || !Array.isArray(record.entries)) return;
-      // Этап 1 хранил цели завершённого дня как `goal` (ккал) и `macroGoals` — сводятся в `fixedGoals`
-      const legacy = record as { goal?: PlannerGoal; macroGoals?: Partial<Record<PlannerMetric, PlannerGoal>> };
-      const fixedGoals = normalizeGoalValues(record.fixedGoals
-        || (legacy.goal || legacy.macroGoals ? { kcal: legacy.goal, ...legacy.macroGoals } : undefined));
-      nutrition[day] = {
-        entries: record.entries
-          .filter((entry) => entry && typeof entry.name === 'string' && isKnownNumber(entry.kcal))
-          .map((entry) => ({
-            ...entry,
-            id: typeof entry.id === 'string' && entry.id ? entry.id : newId(),
-            meal: PLANNER_MEALS.includes(entry.meal) ? entry.meal : 'other',
-          })),
-        isComplete: Boolean(record.isComplete),
-        fixedGoals: fixedGoals && Object.keys(fixedGoals).length ? fixedGoals : undefined,
-        waterMl: isKnownNumber(record.waterMl) ? record.waterMl : undefined,
-      };
-    });
-  }
-
-  // Этап 1: `calorieGoal` + `macroGoals`; spec 011: `goals` целиком
-  const legacyGoals = saved as { calorieGoal?: PlannerGoal; macroGoals?: Partial<Record<PlannerMetric, PlannerGoal>> };
-  const goals = normalizeGoalValues(saved.goals
-    || (legacyGoals.calorieGoal || legacyGoals.macroGoals
-      ? { kcal: legacyGoals.calorieGoal, ...legacyGoals.macroGoals } : undefined)) || empty.goals;
-  const goalPeriods: PlannerGoalRecord[] = (Array.isArray(saved.goalPeriods) ? saved.goalPeriods : [])
-    .filter((record) => record && typeof record.id === 'string' && record.id && record.goals)
-    .map((record) => ({
-      id: record.id,
-      startDay: isDay(record.startDay) ? record.startDay : '',
-      endDay: isDay(record.endDay) ? record.endDay : '',
-      goals: normalizeGoalValues(record.goals) || {},
-    }))
-    .filter((record) => !validateGoalRecord(record));
-
   return {
     version: 1,
     tasks,
     events,
     projects,
     lists,
-    nutrition,
-    goals,
-    goalPeriods,
     budget: isKnownNumber(saved.budget) && validateBudget(saved.budget) ? saved.budget : empty.budget,
     settings: normalizeSettings(saved.settings),
-    health: (Array.isArray(saved.health) ? saved.health : [])
-      .filter((record) => record && typeof record.id === 'string' && isDay(record.day)
-        && typeof record.kind === 'string' && isKnownNumber(record.value)),
-    healthGoals: saved.healthGoals && typeof saved.healthGoals === 'object'
-      ? { ...saved.healthGoals } : empty.healthGoals,
+    nutrition: empty.nutrition,
+    goals: empty.goals,
+    goalPeriods: empty.goalPeriods,
+    health: empty.health,
+    healthGoals: empty.healthGoals,
     learned: normalizeLearned(saved.learned),
     quickLines: normalizeQuickLines(saved.quickLines),
     reminded: Array.isArray(saved.reminded) ? saved.reminded.filter((id) => typeof id === 'string') : [],
@@ -1911,19 +1710,6 @@ function normalizeSeries(raw: Partial<PlannerTask & PlannerEvent>) {
   if (raw.source && typeof raw.source.opId === 'string' && raw.source.opId) {
     out.source = { chat: typeof raw.source.chat === 'string' ? raw.source.chat : '', opId: raw.source.opId };
   }
-  return out;
-}
-
-function normalizeGoalValues(raw: unknown): PlannerGoalValues | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const values = raw as Partial<Record<PlannerGoalMetric, PlannerGoal | undefined>>;
-  const out: PlannerGoalValues = {};
-  PLANNER_GOAL_METRICS.forEach((metric) => {
-    const goal = values[metric];
-    if (goal && validateGoal(goal, metric === 'kcal' || metric === 'water')) {
-      out[metric] = { target: goal.target, tolerance: goal.tolerance };
-    }
-  });
   return out;
 }
 

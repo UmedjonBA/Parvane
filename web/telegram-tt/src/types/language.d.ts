@@ -2711,22 +2711,17 @@ export interface LangPair {
   'ParvaneCloudTrashExpired': undefined;
   'PlannerAdd': undefined;
   'PlannerAddEntry': undefined;
-  'PlannerAddFood': undefined;
   'PlannerAddTaskForDay': undefined;
   'PlannerAddTaskToList': undefined;
   'PlannerAriaLists': undefined;
   'PlannerCreate': undefined;
   'PlannerCreateList': undefined;
-  'PlannerDayNutrition': undefined;
   'PlannerDaySchedule': undefined;
   'PlannerDeleteEvent': undefined;
   'PlannerDeleteTask': undefined;
   'PlannerErrorDayAfterDue': undefined;
   'PlannerErrorEventRepeat': undefined;
   'PlannerErrorEventTime': undefined;
-  'PlannerErrorGoalDates': undefined;
-  'PlannerErrorGoalEmpty': undefined;
-  'PlannerErrorGrams': undefined;
   'PlannerErrorMinutes': undefined;
   'PlannerErrorName': undefined;
   'PlannerErrorNeedDay': undefined;
@@ -2743,7 +2738,6 @@ export interface LangPair {
   'PlannerErrorSettingsMargin': undefined;
   'PlannerErrorSettingsWindow': undefined;
   'PlannerErrorStartNeeds': undefined;
-  'PlannerErrorWater': undefined;
   'PlannerEventOnce': undefined;
   'PlannerFieldDate': undefined;
   'PlannerFieldDescription': undefined;
@@ -2759,46 +2753,7 @@ export interface LangPair {
   'PlannerFieldTaskName': undefined;
   'PlannerFieldWorkDate': undefined;
   'PlannerFindSlots': undefined;
-  'PlannerFoodAdd': undefined;
-  'PlannerFoodAddTitle': undefined;
-  'PlannerFoodEditTitle': undefined;
-  'PlannerFoodEmpty': undefined;
-  'PlannerFoodExtra': undefined;
-  'PlannerFoodFiberNone': undefined;
-  'PlannerFoodFutureDay': undefined;
-  'PlannerFoodGrams': undefined;
-  'PlannerFoodMeal': undefined;
-  'PlannerFoodMissingNote': undefined;
-  'PlannerFoodName': undefined;
-  'PlannerFoodPer100': undefined;
-  'PlannerFoodPer100Hint': undefined;
-  'PlannerFoodPortionHint': undefined;
-  'PlannerFoodRequired': undefined;
-  'PlannerFoodStatusAbove': undefined;
-  'PlannerFoodStatusBelow': undefined;
-  'PlannerFoodStatusIncomplete': undefined;
-  'PlannerFoodStatusNoGoal': undefined;
-  'PlannerFoodStatusNone': undefined;
-  'PlannerFoodStatusOk': undefined;
-  'PlannerFoodStatusOpen': undefined;
-  'PlannerFoodWater': undefined;
   'PlannerFree': undefined;
-  'PlannerGoalActive': undefined;
-  'PlannerGoalAdd': undefined;
-  'PlannerGoalBaseHint': undefined;
-  'PlannerGoalEditTitle': undefined;
-  'PlannerGoalEndKind': undefined;
-  'PlannerGoalEndOpen': undefined;
-  'PlannerGoalEndSingle': undefined;
-  'PlannerGoalEndUntil': undefined;
-  'PlannerGoalFrom': undefined;
-  'PlannerGoalFromStart': undefined;
-  'PlannerGoalMetricsHint': undefined;
-  'PlannerGoalNewTitle': undefined;
-  'PlannerGoalNoGoal': undefined;
-  'PlannerGoalTo': undefined;
-  'PlannerGoalTolerance': undefined;
-  'PlannerGoalsTitle': undefined;
   'PlannerGroupDeadlines': undefined;
   'PlannerGroupEvents': undefined;
   'PlannerGroupUntimed': undefined;
@@ -2810,15 +2765,6 @@ export interface LangPair {
   'PlannerMealLunch': undefined;
   'PlannerMealOther': undefined;
   'PlannerMealSnack': undefined;
-  'PlannerMetricCarbs': undefined;
-  'PlannerMetricCarbsShort': undefined;
-  'PlannerMetricFat': undefined;
-  'PlannerMetricFatShort': undefined;
-  'PlannerMetricFiber': undefined;
-  'PlannerMetricKcal': undefined;
-  'PlannerMetricProtein': undefined;
-  'PlannerMetricProteinShort': undefined;
-  'PlannerMetricWater': undefined;
   'PlannerRemindAtStart': undefined;
   'PlannerRemind': undefined;
   'PlannerRemindNone': undefined;
@@ -2830,18 +2776,12 @@ export interface LangPair {
   'PlannerNoEstimate': undefined;
   'PlannerNoList': undefined;
   'PlannerNoticeEventDeleted': undefined;
-  'PlannerNoticeFoodAdded': undefined;
-  'PlannerNoticeFoodDeleted': undefined;
-  'PlannerNoticeFoodUpdated': undefined;
-  'PlannerNoticeGoalDeleted': undefined;
-  'PlannerNoticeGoalsUpdated': undefined;
   'PlannerRenameHint': undefined;
   'PlannerNoticeReordered': undefined;
   'PlannerNoticeSettingsSaved': undefined;
   'PlannerNoticeLearnedReset': undefined;
   'PlannerNoticeStepAdded': undefined;
   'PlannerNoticeUndone': undefined;
-  'PlannerNoticeWaterUpdated': undefined;
   'PlannerPeriodDay': undefined;
   'PlannerPeriodMonth': undefined;
   'PlannerPrevMonth': undefined;
@@ -2915,22 +2855,9 @@ export interface LangPair {
   'PlannerNoticeCleared': undefined;
   'PlannerSettingsLearnedHint': undefined;
   'PlannerSlotsNone': undefined;
-  'PlannerStatAverage': undefined;
-  'PlannerStatChartMetric': undefined;
-  'PlannerStatChartNote': undefined;
-  'PlannerStatFiberNone': undefined;
-  'PlannerStatHistory': undefined;
-  'PlannerStatHistoryEmpty': undefined;
-  'PlannerStatInGoal': undefined;
-  'PlannerStatKcalLogged': undefined;
-  'PlannerStatMetric': undefined;
-  'PlannerStatNoCompleteDays': undefined;
-  'PlannerStatNutrition': undefined;
-  'PlannerStatOpenDiary': undefined;
   'PlannerStatTime': undefined;
   'PlannerStatTimeEmpty': undefined;
   'PlannerStatTimeNote': undefined;
-  'PlannerStatWaterNone': undefined;
   'PlannerStatusActive': undefined;
   'PlannerStatusDone': undefined;
   'PlannerStatusQueue': undefined;
@@ -2944,9 +2871,6 @@ export interface LangPair {
   'PlannerToday': undefined;
   'PlannerJumpToday': undefined;
   'PlannerUndo': undefined;
-  'PlannerUnitGram': undefined;
-  'PlannerUnitKcal': undefined;
-  'PlannerUnitMl': undefined;
   'PlannerViewCalendar': undefined;
   'PlannerViewStatistics': undefined;
   'PlannerViewTasks': undefined;
@@ -3035,44 +2959,9 @@ export interface LangPair {
   'ParvaneProfileVault': undefined;
   'ParvaneProfileVaultHint': undefined;
   'ParvaneCompose': undefined;
-  'PlannerKindFood': undefined;
-  'PlannerKindSleep': undefined;
-  'PlannerKindWorkout': undefined;
   'PlannerHealth': undefined;
-  'PlannerHealthNutrition': undefined;
-  'PlannerHealthWater': undefined;
-  'PlannerHealthBody': undefined;
   'PlannerHealthSleep': undefined;
-  'PlannerHealthActivity': undefined;
-  'PlannerHealthGoals': undefined;
-  'PlannerHealthProtein': undefined;
-  'PlannerHealthFat': undefined;
-  'PlannerHealthCarbs': undefined;
-  'PlannerHealthFiber': undefined;
-  'PlannerHealthSugar': undefined;
-  'PlannerHealthSalt': undefined;
-  'PlannerHealthNoMeals': undefined;
-  'PlannerHealthAddGlass': undefined;
-  'PlannerHealthAddBottle': undefined;
-  'PlannerHealthWeight': undefined;
-  'PlannerHealthPressure': undefined;
-  'PlannerHealthPulse': undefined;
-  'PlannerHealthMood': undefined;
   'PlannerHealthSleepNone': undefined;
-  'PlannerHealthSteps': undefined;
-  'PlannerHealthStepsShort': undefined;
-  'PlannerHealthActiveMinutes': undefined;
-  'PlannerHealthWorkouts': undefined;
-  'PlannerHealthNoWorkouts': undefined;
-  'PlannerHealthHintTitle': undefined;
-  'PlannerHealthHint': undefined;
-  'PlannerHealthExamples': undefined;
-  'PlannerHealthGoalsText': undefined;
-  'PlannerHealthGoalsPlaceholder': undefined;
-  'PlannerHealthGoalsApply': undefined;
-  'PlannerNoticeGoalsSaved': undefined;
-  'PlannerHealthGoalsBad': undefined;
-  'PlannerNoticeHealthDeleted': undefined;
   'PlannerHealthBudgetReduced': undefined;
   'PlannerHealthFood': undefined;
   'PlannerTomorrow': undefined;
@@ -3104,42 +2993,7 @@ export interface LangPair {
   'PlannerQuickRecentTitle': undefined;
   'PlannerQuickSuggestionsTitle': undefined;
   'PlannerQuickExamples': undefined;
-  'PlannerSettingsGoalsHint': undefined;
-  'PlannerHealthGoalsShort': undefined;
-  'PlannerHealthCloseDay': undefined;
-  'PlannerHealthDayClosedHint': undefined;
-  'PlannerHealthDayClosed': undefined;
-  'PlannerHealthDayReopened': undefined;
-  'PlannerHealthNoMacros': undefined;
-  'PlannerHealthNoRecords': undefined;
-  'PlannerHealthWeightChart': undefined;
-  'PlannerHealthSleepAdd': undefined;
-  'PlannerHealthWaterExample': undefined;
-  'PlannerHealthWeightExample': undefined;
-  'PlannerHealthPressureExample': undefined;
-  'PlannerHealthPulseExample': undefined;
-  'PlannerHealthMoodExample': undefined;
-  'PlannerHealthSleepExample': undefined;
-  'PlannerNoticeSleepDeleted': undefined;
-  'PlannerHealthSleepAddShort': undefined;
-  'PlannerHealthSleepEditLabel': undefined;
-  'PlannerNoticeSleepUpdated': undefined;
-  'PlannerHealthSettings': undefined;
-  'PlannerHealthSleepDayLabel': undefined;
-  'PlannerHealthSleepDayPlaceholder': undefined;
-  'PlannerHealthSleepDayBad': undefined;
-  'PlannerSleepRoutine': undefined;
-  'PlannerSleepRoutineStable': undefined;
-  'PlannerSleepRoutineDrifting': undefined;
-  'PlannerSleepRoutineBroken': undefined;
-  'PlannerSleepRoutineNone': undefined;
-  'PlannerSleepRoutineGoalHint': undefined;
-  'PlannerSleepRoutineGoalExample': undefined;
-  'PlannerSleepRoutineChart': undefined;
-  'PlannerSleepRoutineLegend': undefined;
-  'PlannerHealthWorkoutExample': undefined;
-  'PlannerHealthActivityHint': undefined;
-  'PlannerHealthKcalWeek': undefined;
+  'PlannerQuickToHealth': undefined;
   'ParvanePalettePlaceholder': undefined;
   'ParvanePaletteCommands': undefined;
   'ParvanePaletteSearchPlan': undefined;
@@ -5399,9 +5253,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudTrashCount': {
     'count': V;
   };
-  'PlannerAriaChart': {
-    'name': V;
-  };
   'PlannerAriaDay': {
     'date': V;
     'hours': V;
@@ -5415,9 +5266,6 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'PlannerAriaEditEvent': {
-    'name': V;
-  };
-  'PlannerAriaEditFood': {
     'name': V;
   };
   'PlannerAriaFreeSlot': {
@@ -5470,35 +5318,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerDueValue': {
     'date': V;
   };
-  'PlannerErrorGoal': {
-    'name': V;
-  };
-  'PlannerErrorNutrient': {
-    'name': V;
-  };
   'PlannerErrorOutsideWindow': {
     'from': V;
     'to': V;
-  };
-  'PlannerFoodDayResult': {
-    'status': V;
-  };
-  'PlannerFoodFiberValue': {
-    'value': V;
-  };
-  'PlannerGoalPeriodOpen': {
-    'from': V;
-  };
-  'PlannerGoalPeriodRange': {
-    'from': V;
-    'to': V;
-  };
-  'PlannerGoalPeriodSingle': {
-    'date': V;
-  };
-  'PlannerGoalTarget': {
-    'name': V;
-    'unit': V;
   };
   'PlannerHoursValue': {
     'hours': V;
@@ -5643,25 +5465,8 @@ export interface LangPairWithVariables<V = LangVariable> {
     'window': V;
     'margin': V;
   };
-  'PlannerStatDays': {
-    'complete': V;
-    'open': V;
-  };
-  'PlannerStatFiber': {
-    'value': V;
-    'days': V;
-  };
-  'PlannerStatKcalGoal': {
-    'sum': V;
-    'low': V;
-    'high': V;
-  };
   'PlannerStatTimeUnrated': {
     'count': V;
-  };
-  'PlannerStatWater': {
-    'value': V;
-    'days': V;
   };
   'PlannerSteps': {
     'done': V;
@@ -5708,79 +5513,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerHealthKcal': {
     'value': V;
   };
-  'PlannerHealthKcalLeft': {
-    'value': V;
-  };
   'PlannerHealthKcalOver': {
     'value': V;
   };
   'PlannerHealthGoalValue': {
     'value': V;
   };
-  'PlannerHealthGrams': {
-    'value': V;
-    'goal': V;
-  };
-  'PlannerHealthGramsNoGoal': {
-    'value': V;
-  };
-  'PlannerHealthLimit': {
-    'value': V;
-    'goal': V;
-  };
-  'PlannerHealthMacros': {
-    'protein': V;
-    'fat': V;
-    'carbs': V;
-  };
-  'PlannerHealthFiberShort': {
-    'value': V;
-  };
-  'PlannerHealthLitres': {
-    'value': V;
-  };
-  'PlannerHealthMl': {
-    'value': V;
-  };
-  'PlannerHealthKg': {
-    'value': V;
-  };
-  'PlannerHealthWeekChange': {
-    'value': V;
-  };
-  'PlannerHealthBpm': {
-    'value': V;
-  };
-  'PlannerHealthSleepAverage': {
-    'value': V;
-  };
-  'PlannerHealthSleepShort': {
-    'hours': V;
-  };
-  'PlannerHealthMinutes': {
-    'value': V;
-  };
-  'PlannerHealthKm': {
-    'value': V;
-  };
-  'PlannerHealthPace': {
-    'value': V;
-  };
-  'PlannerHealthDelete': {
-    'name': V;
-  };
   'PlannerHealthSleepGoal': {
     'from': V;
     'to': V;
     'goal': V;
-  };
-  'PlannerHealthDayWindow': {
-    'from': V;
-    'to': V;
-    'budget': V;
-  };
-  'PlannerQuickWorkoutSets': {
-    'count': V;
   };
   'PlannerMinutesShort': {
     'minutes': V;
@@ -5808,67 +5550,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickDefault': {
     'date': V;
-  };
-  'PlannerHealthSleepHours': {
-    'hours': V;
-  };
-  'PlannerSleepRoutineSummary': {
-    'bed': V;
-    'bedSpread': V;
-    'wake': V;
-    'wakeSpread': V;
-  };
-  'PlannerSleepRoutineHint': {
-    'count': V;
-    'min': V;
-  };
-  'PlannerSleepRoutineUntimed': {
-    'count': V;
-  };
-  'PlannerSleepRoutineOutliers': {
-    'nights': V;
-  };
-  'PlannerSleepRoutineBedGoal': {
-    'value': V;
-  };
-  'PlannerSleepRoutineWakeGoal': {
-    'value': V;
-  };
-  'PlannerSleepRoutineLater': {
-    'value': V;
-    'goal': V;
-  };
-  'PlannerSleepRoutineEarlier': {
-    'value': V;
-    'goal': V;
-  };
-  'PlannerSleepRoutineOnGoal': {
-    'goal': V;
-  };
-  'PlannerSleepRoutineGoalShort': {
-    'bed': V;
-    'wake': V;
-  };
-  'PlannerSleepRoutineJetlagLater': {
-    'value': V;
-  };
-  'PlannerSleepRoutineJetlagEarlier': {
-    'value': V;
-  };
-  'PlannerSleepRoutineDetail': {
-    'day': V;
-    'sleeps': V;
-  };
-  'PlannerSleepRoutineDetailTotal': {
-    'day': V;
-    'sleeps': V;
-    'total': V;
-  };
-  'PlannerSleepRoutineDetailNone': {
-    'day': V;
-  };
-  'PlannerSleepRoutineDetailUntimed': {
-    'value': V;
   };
   'PlannerSleepRoutineDriftingShort': {
     'value': V;

@@ -44,6 +44,8 @@ pub struct Parsed {
     pub tag: &'static str,
     /// Именованные числа: БЖУ и граммы еды, километры и упражнения тренировки.
     pub parts: Vec<(&'static str, f64)>,
+    /// Запись — догадка без единого числа (еда по слову приёма): строка может оказаться не про здоровье.
+    pub guess: bool,
 }
 
 /// Значение распознано, но не принято.
@@ -1188,7 +1190,7 @@ pub fn parse(text: &str, now_ms: i64, tz_min: i32) -> ParseResult {
             None => local_ms(day, 720, tz_min),
         };
         let tag = if f.kind == KIND_FOOD && f.tag.is_empty() { meal_by_minute(minute_of_day(at_ms, tz_min)) } else { f.tag };
-        res.entries.push(Parsed { kind: f.kind, at_ms, value: f.value, unit: f.unit, name: f.name, tag, parts: f.parts, ..Default::default() });
+        res.entries.push(Parsed { kind: f.kind, at_ms, value: f.value, unit: f.unit, name: f.name, tag, parts: f.parts, guess: f.guess, ..Default::default() });
     }
 
     // ── сон ──
@@ -1318,6 +1320,9 @@ pub fn parse_json(text: &str, now_ms: i64, tz_min: i32) -> String {
                 "kind": e.kind, "atMs": e.at_ms, "endMs": e.end_ms, "tzMin": tz_min, "value": e.value, "value2": e.value2, "unit": e.unit,
                 "source": "text", "day": day_text(e.at_ms, tz_min), "time": hhmm(minute_of_day(e.at_ms, tz_min)),
             });
+            if e.guess {
+                o["guess"] = json!(true);
+            }
             if !e.name.is_empty() {
                 o["name"] = json!(e.name);
             }

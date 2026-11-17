@@ -26,7 +26,7 @@ const every = (kind: PlannerRepeat['kind'], interval = 1) => ({ kind, interval }
 
 function history(...lines: string[]): QuickHistory {
   return lines.reduce((store, line) => (
-    recordHistoryLine(store, line, lineKey(line, parseQuickInput(line, CTX), 'ru'))
+    recordHistoryLine(store, line, lineKey(parseQuickInput(line, CTX), 'ru'))
   ), createQuickHistory());
 }
 
@@ -301,7 +301,7 @@ describe('подсказки: источники', () => {
     });
     expect(texts(candidates)).toEqual(expect.arrayContaining([
       'купить молоко, хлеб', 'пара 15:00 1 ч', 'событие Физика пара 10:00 1 ч', 'задача Матан 2 по пн',
-      'задача вес 72',
+      'вес 72', 'обед 520 ккал',
     ]));
     expect(texts(candidates).some((text) => text.includes('\n'))).toBe(false);
   });
@@ -528,7 +528,7 @@ describe('подсказки: история и «Забыть»', () => {
     expect(texts(buildSuggestions('', { ...base, history: forgotten }, CTX))).toEqual(['купить кабель']);
     // Добавленная снова строка перестаёт быть забытой
     const line = 'летучка 10:00 20 мин';
-    const again = recordHistoryLine(forgotten, line, lineKey(line, parseQuickInput(line, CTX), 'ru'));
+    const again = recordHistoryLine(forgotten, line, lineKey(parseQuickInput(line, CTX), 'ru'));
     expect(again.hidden).toEqual([]);
     expect(texts(buildSuggestions('', { ...base, history: again }, CTX))).toEqual([line, 'купить кабель']);
   });
@@ -579,7 +579,7 @@ describe('подсказки: история и «Забыть»', () => {
 });
 
 describe('подсказки: история в данных «Плана»', () => {
-  const key = (line: string) => lineKey(line, parseQuickInput(line, CTX), 'ru');
+  const key = (line: string) => lineKey(parseQuickInput(line, CTX), 'ru');
 
   it('ключ записи — по строке без регистра и лишних пробелов, только латиница и цифры', () => {
     expect(quickLineId('Купить  кабель')).toBe(quickLineId(' купить КАБЕЛЬ'));
@@ -693,17 +693,15 @@ describe('подсказки: история в данных «Плана»', ()
   });
 });
 
-describe('подсказки окна, открытого под вид (16 окт 2026)', () => {
+describe('подсказки при выбранном виде записи', () => {
   it('выбран вид — только строки этого вида: свои первыми, затем примеры', () => {
     const candidates = buildCandidates(sources({
-      history: history('спал с 14 до 15', 'созвон завтра 16:00', 'бег 3 км 20 мин'),
-      examples: [...EXAMPLES, 'сон 23:40-07:30', 'бег 5 км 28 мин'],
+      history: history('планёрка завтра 10:00', 'купить кабель'),
     }), CTX);
-    expect(filterSuggestions('', candidates, 8, ['sleep'])).toEqual([
-      { text: 'спал с 14 до 15', source: 'history' }, { text: 'сон 23:40-07:30', source: 'example' },
+    expect(filterSuggestions('', candidates, 8, ['event'])).toEqual([
+      { text: 'планёрка завтра 10:00', source: 'history' }, { text: 'созвон завтра 16:00 45 мин', source: 'example' },
     ]);
-    expect(filterSuggestions('', candidates, 8, ['workout']).map(({ text }) => text))
-      .toEqual(['бег 3 км 20 мин', 'бег 5 км 28 мин']);
-    expect(filterSuggestions('', candidates, 8, ['water']).map(({ text }) => text)).toEqual(['вода 500 мл']);
+    expect(filterSuggestions('', candidates, 8, ['task']).map(({ text }) => text))
+      .toEqual(['купить кабель', 'задача проверить работы до пт', 'вода 500 мл']);
   });
 });

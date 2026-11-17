@@ -38,8 +38,8 @@ export function consumePlannerRecordRequest() {
   setPlannerRecordRequest(undefined);
 }
 
-/** Запись с датой — «Календарь» на её дне, тренировка — «Здоровье», задача без даты — «Сегодня». */
+/** Запись с датой — «Календарь» на её дне, задача без даты — «Сегодня». */
 export function openRecordInPlan(request: PlannerRecordRequest) {
   setPlannerRecordRequest(request);
-  openPlannerView(request.kind === 'workout' ? 'health' : request.day ? 'calendar' : 'today');
+  openPlannerView(request.day ? 'calendar' : 'today');
 }

@@ -66,7 +66,6 @@ const ACCENT = 'var(--pv-accent)';
 const RECORD_LOOK = {
   event: { icon: 'calendar', tone: 'var(--pv-event)' },
   task: { icon: 'check', tone: 'var(--pv-task)' },
-  workout: { icon: 'heart', tone: 'var(--pv-workout)' },
 } as const;
 const GROUP_KEYS = {
   command: 'ParvanePaletteCommands',

@@ -3,9 +3,8 @@ import type { PaletteItem } from './paletteSearch';
 
 import { addDays, hasInstanceOn, REPEAT_HORIZON_DAYS } from '../planner/plannerModel';
 
-// Parvane: записи «Плана» для палитры. Как в прототипе, ищутся события, задачи и тренировки
-// (у них есть название); еда, сон и показатели в общий поиск не входят
-export type PaletteRecordKind = 'task' | 'event' | 'workout';
+// Parvane: записи «Плана» для палитры — события и задачи. Записи «Здоровья» в общий поиск не входят
+export type PaletteRecordKind = 'task' | 'event';
 
 export type PaletteRecordItem = PaletteItem & {
   group: 'record';
@@ -51,23 +50,12 @@ export function collectPlannerRecords(state: PlannerState, today: string): Palet
     text: [task.description, ...task.steps.map(({ text }) => text)].filter(Boolean).join('\n'),
     day: recordDay(task, today),
   }));
-  const workouts = state.health
-    .filter((record) => record.kind === 'workout' && record.name)
-    .map((record): PaletteRecordItem => ({
-      key: `workout:${record.id}`,
-      group: 'record',
-      kind: 'workout',
-      id: record.id,
-      title: record.name!,
-      text: record.exercises?.map(({ name }) => name).join('\n'),
-      day: record.day,
-    }));
   // Ближайшие к сегодня — первыми: при равном совпадении порядок источника решает, что видно
   const todayNumber = dayNumber(today);
   const distance = (item: PaletteRecordItem) => (
     item.day ? Math.abs(dayNumber(item.day) - todayNumber) : Number.POSITIVE_INFINITY
   );
-  return [...events, ...tasks, ...workouts].sort((a, b) => {
+  return [...events, ...tasks].sort((a, b) => {
     const da = distance(a);
     const db = distance(b);
     return da === db ? 0 : da - db;

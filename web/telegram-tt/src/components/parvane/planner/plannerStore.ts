@@ -180,7 +180,7 @@ async function migrateLegacy(result: StateResult) {
     const state = normalizePlannerState(legacy.state);
     const prefix = typeof navigator === 'undefined' ? 'web' : `web${Math.abs(hashCode(navigator.userAgent)) % 100000}`;
     const changes = legacyToChanges(state, prefix);
-    const count = state.tasks.length + state.events.length + Object.keys(state.nutrition).length;
+    const count = state.tasks.length + state.events.length;
     await callParvane('parvanePlannerApply', { changes });
     await callParvane('parvanePlannerFlush');
     await callParvane('parvanePlannerMarkMigrated', { count });

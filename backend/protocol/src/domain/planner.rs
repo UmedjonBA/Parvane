@@ -1,14 +1,15 @@
 //! Домен планировщика `parvane.planner.v1` (spec 010, R2/R3): сведённое
 //! состояние контейнера и применение операций.
 //!
-//! Объекты — задачи, события, списки, дни питания; у каждого поля своя метка
+//! Объекты — задачи, события, списки; у каждого поля своя метка
 //! `LwwStamp`, побеждает большая метка `(lamport, device_id)`, при равных —
 //! большие байты значения (полный порядок → сведение коммутативно, ассоциативно
 //! и идемпотентно, любой порядок применения даёт один снимок). Удаление —
 //! метка `deleted`: объект виден, пока самая свежая правка его полей новее
 //! надгробия (старая правка после удаления ничего не воскрешает, новая —
-//! воскрешает). Запись питания сливается целиком по `stamp`. Настройки и цели —
-//! регистры под одной меткой.
+//! воскрешает). Настройки — регистр под одной меткой. Здоровье, питание и цели
+//! питания с 17 ноя 2026 живут в домене `parvane.health.v1` (spec 041 B4): здесь их
+//! нет, номера полей схемы зарезервированы.
 //!
 //! Словарь правок ввода текстом (`LearnedWord`, ключ — слово): тип, длительность, их счётчики и
 //! свежесть — отдельные регистры, удаление — надгробие, как у задачи. Потолок словаря — не отказ при
@@ -17,8 +18,8 @@
 //! возвращаются, когда место освобождается. Хранится не более `MAX_LEARNED_STORED` слов с надгробиями:
 //! лишнее в снимок не попадает (сначала самые старые надгробия).
 //!
-//! История ввода текстом (`QuickLine`, ключ — id строки): регистр целиком по `stamp` и надгробие, как у
-//! записи здоровья, — строки двух устройств объединяются, у одной строки побеждает позднее использование,
+//! История ввода текстом (`QuickLine`, ключ — id строки): регистр целиком по `stamp` и надгробие —
+//! строки двух устройств объединяются, у одной строки побеждает позднее использование,
 //! забытая строка возвращается только использованием новее надгробия. Потолок — то же правило показа, что
 //! у словаря: живыми считаются `MAX_QUICK_LIVE` самых свежих строк и столько же забытых шаблонов
 //! (`quick_live`), хранится не более `MAX_QUICK_STORED` записей с надгробиями.
@@ -38,7 +39,7 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
+    change, Bool, Change, Event, LearnedWord, List, Occurrence, Origin as TaskOrigin,
     PlannerOp, PlannerSnapshot, QuickLine, Reminded, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
@@ -53,22 +54,17 @@ pub const MINUTES_IN_DAY: u32 = 1440;
 pub const MIN_BUDGET: u32 = 60;
 pub const MAX_MARGIN: u32 = 180;
 pub const STATUSES: [&str; 5] = ["queue", "active", "later", "waiting", "done"];
-pub const MEALS: [&str; 5] = ["breakfast", "lunch", "dinner", "snack", "other"];
 const MAX_ID: usize = 64;
 const MAX_NAME: usize = 200;
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_LIST_NAME: usize = 60;
 /// Цвет списка: 0 — нет, 1…8 — индекс палитры клиента (spec 013).
 pub const MAX_LIST_COLOR: u32 = 8;
-const MAX_FOOD_NAME: usize = 120;
-/// spec 011: повторы и цели по датам.
+/// spec 011: повторы.
 pub const MAX_OCCURRENCES: usize = 2000;
 pub const MAX_REPEAT_INTERVAL: u32 = 99;
 pub const MAX_REPEAT_COUNT: u32 = 999;
 const MAX_CHAT: usize = 128;
-/// spec 020: записи здоровья.
-const MAX_HEALTH_KIND: usize = 16;
-const MAX_HEALTH_DETAILS: usize = 4000;
 /// Словарь правок ввода текстом: виды записи, потолок счётчика (как `LEARN_MAX_COUNT` клиента), число
 /// живых слов и число хранимых вместе с надгробиями (= `max_items` снимка).
 pub const LEARNED_KINDS: [&str; 2] = ["task", "event"];
@@ -240,33 +236,6 @@ fn check_origin(o: &TaskOrigin) -> Result<()> {
     Ok(())
 }
 
-fn check_goal(g: &Goal) -> Result<()> {
-    if g.target == 0 || g.tolerance > g.target {
-        return Err(ProtoError::InvalidField("goal"));
-    }
-    Ok(())
-}
-
-/// Запись цели с датами: заданные показатели (`set`) — как в GoalSet.
-fn check_goal_period(p: &GoalPeriod) -> Result<()> {
-    if !is_id(&p.id) {
-        return Err(ProtoError::InvalidField("id"));
-    }
-    if p.stamp.is_none() && p.deleted.is_some() {
-        return Ok(());
-    }
-    if !(p.start_day.is_empty() || is_day(&p.start_day)) || !(p.end_day.is_empty() || is_day(&p.end_day)) {
-        return Err(ProtoError::InvalidField("period_day"));
-    }
-    if !p.start_day.is_empty() && !p.end_day.is_empty() && p.end_day < p.start_day {
-        return Err(ProtoError::InvalidField("end_day"));
-    }
-    for g in [&p.kcal, &p.protein, &p.fat, &p.carbs, &p.fiber, &p.water].into_iter().flatten().filter(|g| g.set) {
-        check_goal(g)?;
-    }
-    Ok(())
-}
-
 fn check_event(e: &Event) -> Result<()> {
     if !is_id(&e.id) {
         return Err(ProtoError::InvalidField("id"));
@@ -324,53 +293,6 @@ fn check_list(l: &List) -> Result<()> {
     Ok(())
 }
 
-fn check_entry(e: &FoodEntry) -> Result<()> {
-    if !is_id(&e.id) {
-        return Err(ProtoError::InvalidField("id"));
-    }
-    // Надгробие без содержимого — только id и метка удаления.
-    if e.stamp.is_none() && e.deleted.is_some() {
-        return Ok(());
-    }
-    if e.name.len() > MAX_FOOD_NAME || !MEALS.contains(&e.meal.as_str()) {
-        return Err(ProtoError::InvalidField("entry"));
-    }
-    if [e.kcal, e.protein, e.fat, e.carbs, e.fiber, e.grams, e.sugar, e.salt].iter().any(|v| !v.is_finite() || *v < 0.0) {
-        return Err(ProtoError::InvalidField("nutrient"));
-    }
-    if !(e.time.is_empty() || is_time(&e.time)) {
-        return Err(ProtoError::InvalidField("entry_time"));
-    }
-    Ok(())
-}
-
-/// Запись здоровья (spec 020): вид — непустая строка из строчных латинских букв; числа конечны и не
-/// отрицательны; `details` движок не разбирает.
-fn check_health(r: &HealthRecord) -> Result<()> {
-    if !is_id(&r.id) {
-        return Err(ProtoError::InvalidField("id"));
-    }
-    if r.stamp.is_none() && r.deleted.is_some() {
-        return Ok(());
-    }
-    if !is_day(&r.day) {
-        return Err(ProtoError::InvalidField("health_day"));
-    }
-    if r.kind.is_empty() || r.kind.len() > MAX_HEALTH_KIND || !r.kind.bytes().all(|b| b.is_ascii_lowercase()) {
-        return Err(ProtoError::InvalidField("health_kind"));
-    }
-    if !(r.time.is_empty() || is_time(&r.time)) || !(r.end_time.is_empty() || is_time(&r.end_time)) {
-        return Err(ProtoError::InvalidField("health_time"));
-    }
-    if [r.value, r.value2].iter().any(|v| !v.is_finite() || *v < 0.0) {
-        return Err(ProtoError::InvalidField("health_value"));
-    }
-    if r.name.len() > MAX_FOOD_NAME || r.details.len() > MAX_HEALTH_DETAILS {
-        return Err(ProtoError::InvalidField("health_text"));
-    }
-    Ok(())
-}
-
 /// Слово словаря правок: непустое, без пробелов и управляющих знаков, строчными буквами; тип — `task`,
 /// `event` либо пусто; длительность — как оценка задачи; счётчики не выше потолка.
 fn check_learned(w: &LearnedWord) -> Result<()> {
@@ -405,27 +327,6 @@ fn check_quick_line(l: &QuickLine) -> Result<()> {
     Ok(())
 }
 
-fn check_day(d: &NutritionDay) -> Result<()> {
-    if !is_day(&d.day) {
-        return Err(ProtoError::InvalidField("day"));
-    }
-    if d.entries.len() > 200 {
-        return Err(ProtoError::InvalidField("entries"));
-    }
-    d.entries.iter().try_for_each(check_entry)?;
-    if let Some(g) = &d.fixed_goals {
-        check_goals(g)?;
-    }
-    Ok(())
-}
-
-fn check_goals(g: &GoalSet) -> Result<()> {
-    for goal in [&g.kcal, &g.protein, &g.fat, &g.carbs, &g.fiber, &g.water].into_iter().flatten() {
-        check_goal(goal)?;
-    }
-    Ok(())
-}
-
 pub fn check_settings(s: &Settings) -> Result<()> {
     let m = |v: u32| v <= MINUTES_IN_DAY;
     if !m(s.day_start) || !m(s.day_end) || s.day_start >= s.day_end {
@@ -451,13 +352,7 @@ pub struct PlannerState {
     pub tasks: BTreeMap<String, Task>,
     pub events: BTreeMap<String, Event>,
     pub lists: BTreeMap<String, List>,
-    pub nutrition: BTreeMap<String, NutritionDay>,
     pub settings: Option<Settings>,
-    pub goals: Option<GoalSet>,
-    /// spec 011: записи целей с датами (ключ — id).
-    pub goal_periods: BTreeMap<String, GoalPeriod>,
-    /// spec 020: записи здоровья (ключ — id).
-    pub health: BTreeMap<String, HealthRecord>,
     /// Словарь правок ввода текстом (ключ — слово).
     pub learned: BTreeMap<String, LearnedWord>,
     /// История ввода текстом: строки и забытые шаблоны (ключ — id).
@@ -556,14 +451,6 @@ impl PlannerState {
             }
         }
         is_alive(best, e.deleted.as_ref())
-    }
-
-    pub fn is_goal_period_alive(p: &GoalPeriod) -> bool {
-        stamp_key(p.stamp.as_ref()) > stamp_key(p.deleted.as_ref())
-    }
-
-    pub fn is_health_alive(r: &HealthRecord) -> bool {
-        stamp_key(r.stamp.as_ref()) > stamp_key(r.deleted.as_ref())
     }
 
     /// Слово не удалено: самая свежая правка его полей новее надгробия.
@@ -673,10 +560,6 @@ impl PlannerState {
         is_alive(best, l.deleted.as_ref())
     }
 
-    pub fn is_entry_alive(e: &FoodEntry) -> bool {
-        stamp_key(e.stamp.as_ref()) > stamp_key(e.deleted.as_ref())
-    }
-
     fn merge_task(&mut self, inc: &Task) {
         let cur = self.tasks.entry(inc.id.clone()).or_insert_with(|| Task { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.name, inc.name, Str);
@@ -724,48 +607,6 @@ impl PlannerState {
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
-    fn merge_goal_period(&mut self, inc: &GoalPeriod) {
-        match self.goal_periods.get_mut(&inc.id) {
-            Some(c) => {
-                let inc_bytes = inc.encode_to_vec();
-                let cur_bytes = c.encode_to_vec();
-                let deleted = c.deleted.clone();
-                if is_newer(inc.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
-                    *c = inc.clone();
-                    c.deleted = deleted;
-                }
-                merge_deleted(&mut c.deleted, inc.deleted.as_ref());
-            }
-            None => {
-                // Надгробие без метки — только id и `deleted`, иначе его
-                // «попутные» поля зависели бы от порядка применения.
-                let fresh = if inc.stamp.is_none() { GoalPeriod { id: inc.id.clone(), deleted: inc.deleted.clone(), ..Default::default() } } else { inc.clone() };
-                self.goal_periods.insert(inc.id.clone(), fresh);
-            }
-        }
-    }
-
-    fn merge_health(&mut self, inc: &HealthRecord) {
-        match self.health.get_mut(&inc.id) {
-            Some(c) => {
-                let inc_bytes = inc.encode_to_vec();
-                let cur_bytes = c.encode_to_vec();
-                let deleted = c.deleted.clone();
-                if is_newer(inc.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
-                    *c = inc.clone();
-                    c.deleted = deleted;
-                }
-                merge_deleted(&mut c.deleted, inc.deleted.as_ref());
-            }
-            None => {
-                // Надгробие без метки — только id и `deleted`, иначе его
-                // «попутные» поля зависели бы от порядка применения.
-                let fresh = if inc.stamp.is_none() { HealthRecord { id: inc.id.clone(), deleted: inc.deleted.clone(), ..Default::default() } } else { inc.clone() };
-                self.health.insert(inc.id.clone(), fresh);
-            }
-        }
-    }
-
     fn merge_learned(&mut self, inc: &LearnedWord) {
         let cur = self.learned.entry(inc.id.clone()).or_insert_with(|| LearnedWord { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.kind, inc.kind, Str);
@@ -805,29 +646,6 @@ impl PlannerState {
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
-    fn merge_day(&mut self, inc: &NutritionDay) {
-        let cur = self.nutrition.entry(inc.day.clone()).or_insert_with(|| NutritionDay { day: inc.day.clone(), ..Default::default() });
-        merge_reg!(cur.is_complete, inc.is_complete, Bool);
-        merge_reg!(cur.fixed_goals, inc.fixed_goals, GoalSet);
-        merge_reg!(cur.water_ml, inc.water_ml, U32);
-        for e in &inc.entries {
-            match cur.entries.iter_mut().find(|c| c.id == e.id) {
-                Some(c) => {
-                    let inc_bytes = e.encode_to_vec();
-                    let cur_bytes = c.encode_to_vec();
-                    let deleted = c.deleted.clone();
-                    if is_newer(e.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
-                        *c = e.clone();
-                        c.deleted = deleted;
-                    }
-                    merge_deleted(&mut c.deleted, e.deleted.as_ref());
-                }
-                None => cur.entries.push(if e.stamp.is_none() { FoodEntry { id: e.id.clone(), deleted: e.deleted.clone(), ..Default::default() } } else { e.clone() }),
-            }
-        }
-        cur.entries.sort_by(|a, b| a.id.cmp(&b.id));
-    }
-
     /// Применить одно изменение (проверка значений внутри).
     pub fn apply_change(&mut self, c: &Change) -> Result<()> {
         self.cache.touch();
@@ -844,25 +662,9 @@ impl PlannerState {
                 check_list(l)?;
                 self.merge_list(l);
             }
-            Some(change::Change::NutritionDay(d)) => {
-                check_day(d)?;
-                self.merge_day(d);
-            }
             Some(change::Change::Settings(s)) => {
                 check_settings(s)?;
                 merge_reg!(self.settings, Some(s.clone()), Settings);
-            }
-            Some(change::Change::Goals(g)) => {
-                check_goals(g)?;
-                merge_reg!(self.goals, Some(g.clone()), GoalSet);
-            }
-            Some(change::Change::GoalPeriod(p)) => {
-                check_goal_period(p)?;
-                self.merge_goal_period(p);
-            }
-            Some(change::Change::Health(r)) => {
-                check_health(r)?;
-                self.merge_health(r);
             }
             Some(change::Change::Learned(w)) => {
                 check_learned(w)?;
@@ -915,25 +717,9 @@ impl PlannerState {
             check_list(l)?;
             self.merge_list(l);
         }
-        for d in &s.nutrition {
-            check_day(d)?;
-            self.merge_day(d);
-        }
         if let Some(st) = &s.settings {
             check_settings(st)?;
             merge_reg!(self.settings, Some(st.clone()), Settings);
-        }
-        if let Some(g) = &s.goals {
-            check_goals(g)?;
-            merge_reg!(self.goals, Some(g.clone()), GoalSet);
-        }
-        for p in &s.goal_periods {
-            check_goal_period(p)?;
-            self.merge_goal_period(p);
-        }
-        for r in &s.health {
-            check_health(r)?;
-            self.merge_health(r);
         }
         for w in &s.learned {
             check_learned(w)?;
@@ -969,11 +755,7 @@ impl PlannerState {
             tasks: self.tasks.values().cloned().collect(),
             events: self.events.values().cloned().collect(),
             lists: self.lists.values().cloned().collect(),
-            nutrition: self.nutrition.values().cloned().collect(),
             settings: self.settings.clone(),
-            goals: self.goals.clone(),
-            goal_periods: self.goal_periods.values().cloned().collect(),
-            health: self.health.values().cloned().collect(),
             learned: self.learned_stored(),
             quick_lines: self.quick_stored(),
             reminded: self.reminded_stored(),
@@ -1066,25 +848,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(l.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(l.deleted.as_ref())?;
             }
-            Some(change::Change::NutritionDay(d)) => {
-                push(d.is_complete.as_ref().and_then(|f| f.stamp.as_ref()))?;
-                push(d.fixed_goals.as_ref().and_then(|f| f.stamp.as_ref()))?;
-                push(d.water_ml.as_ref().and_then(|f| f.stamp.as_ref()))?;
-                for e in &d.entries {
-                    push(e.stamp.as_ref())?;
-                    push(e.deleted.as_ref())?;
-                }
-            }
             Some(change::Change::Settings(s)) => push(s.stamp.as_ref())?,
-            Some(change::Change::Goals(g)) => push(g.stamp.as_ref())?,
-            Some(change::Change::GoalPeriod(p)) => {
-                push(p.stamp.as_ref())?;
-                push(p.deleted.as_ref())?;
-            }
-            Some(change::Change::Health(r)) => {
-                push(r.stamp.as_ref())?;
-                push(r.deleted.as_ref())?;
-            }
             Some(change::Change::Learned(w)) => {
                 for s in learned_stamps(w) {
                     push(Some(s))?;
@@ -1115,15 +879,9 @@ pub fn snapshot_stamps(s: &PlannerSnapshot) -> Result<Vec<Stamp>> {
     s.tasks.iter().for_each(|x| add(change::Change::Task(x.clone())));
     s.events.iter().for_each(|x| add(change::Change::Event(x.clone())));
     s.lists.iter().for_each(|x| add(change::Change::List(x.clone())));
-    s.nutrition.iter().for_each(|x| add(change::Change::NutritionDay(x.clone())));
     if let Some(x) = &s.settings {
         add(change::Change::Settings(x.clone()));
     }
-    if let Some(x) = &s.goals {
-        add(change::Change::Goals(x.clone()));
-    }
-    s.goal_periods.iter().for_each(|x| add(change::Change::GoalPeriod(x.clone())));
-    s.health.iter().for_each(|x| add(change::Change::Health(x.clone())));
     s.learned.iter().for_each(|x| add(change::Change::Learned(x.clone())));
     s.quick_lines.iter().for_each(|x| add(change::Change::QuickLine(x.clone())));
     s.reminded.iter().for_each(|x| add(change::Change::Reminded(x.clone())));
@@ -1241,40 +999,7 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     l.deleted = Some(pb.clone());
                 }
             }
-            Some(change::Change::NutritionDay(d)) => {
-                if let Some(f) = &mut d.is_complete {
-                    f.stamp = Some(pb.clone());
-                }
-                if let Some(f) = &mut d.fixed_goals {
-                    f.stamp = Some(pb.clone());
-                }
-                if let Some(f) = &mut d.water_ml {
-                    f.stamp = Some(pb.clone());
-                }
-                for e in &mut d.entries {
-                    if e.deleted.is_some() {
-                        e.deleted = Some(pb.clone());
-                    } else {
-                        e.stamp = Some(pb.clone());
-                    }
-                }
-            }
             Some(change::Change::Settings(s)) => s.stamp = Some(pb.clone()),
-            Some(change::Change::Goals(g)) => g.stamp = Some(pb.clone()),
-            Some(change::Change::GoalPeriod(p)) => {
-                if p.deleted.is_some() {
-                    p.deleted = Some(pb.clone());
-                } else {
-                    p.stamp = Some(pb.clone());
-                }
-            }
-            Some(change::Change::Health(r)) => {
-                if r.deleted.is_some() {
-                    r.deleted = Some(pb.clone());
-                } else {
-                    r.stamp = Some(pb.clone());
-                }
-            }
             Some(change::Change::Learned(w)) => {
                 st(&mut w.kind);
                 for f in [&mut w.kind_count, &mut w.minutes, &mut w.minutes_count, &mut w.touched].into_iter().flatten() {

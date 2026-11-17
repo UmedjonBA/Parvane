@@ -5,7 +5,7 @@ import type {
 } from './plannerModel';
 
 import {
-  getDailyRecord, getLatestRecord, getWorkouts,
+  getDailyRecord, getWorkouts,
 } from './plannerHealth';
 import {
   addDays, countConflicts, countUnrated, createEmptyPlannerState, expandRepeat, getDayEntry, getDayIndex,
@@ -269,7 +269,7 @@ function synthState(seed: number, count: number): PlannerState {
     };
   });
   const health: PlannerHealthRecord[] = Array.from({ length: Math.floor(count / 2) }, (_, i) => {
-    const kind = pick(['weight', 'sleep', 'steps', 'workout', 'pressure']);
+    const kind = pick(['sleep', 'workout'] as const);
     return {
       id: `h${i}`, day: day(), kind, value: i, time: kind === 'workout' ? time() : undefined,
     };
@@ -354,36 +354,21 @@ describe('индекс дня (C2) совпадает с функциями дн
 describe('индекс здоровья (C2) совпадает с перебором записей', () => {
   it.each([[11, 200], [12, 500]])('состояние #%d', (seed, count) => {
     const state = synthState(seed, count);
-    const kinds = ['weight', 'sleep', 'steps', 'pressure'] as const;
     allDays('2025-12-20', '2027-02-20').forEach((day) => {
-      kinds.forEach((kind) => {
-        const dayRecords = state.health.filter((record) => record.kind === kind && record.day === day);
-        if (kind === 'sleep' && dayRecords.length > 1) {
-          // Несколько снов дня (16 окт 2026): сумма, время — самого долгого
-          const main = dayRecords.reduce((best, item) => (item.value > best.value ? item : best));
-          expect(getDailyRecord(state, kind, day))
-            .toEqual({ ...main, value: dayRecords.reduce((sum, item) => sum + item.value, 0) });
-        } else {
-          expect(getDailyRecord(state, kind, day)).toBe(dayRecords[0]);
-        }
-        const latest = state.health.filter((record) => record.kind === kind && record.day <= day)
-          .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))[0];
-        expect(getLatestRecord(state, kind, day)).toBe(latest);
-      });
+      const dayRecords = state.health.filter((record) => record.kind === 'sleep' && record.day === day);
+      if (dayRecords.length > 1) {
+        // Несколько снов дня (16 окт 2026): сумма, время — самого долгого
+        const main = dayRecords.reduce((best, item) => (item.value > best.value ? item : best));
+        expect(getDailyRecord(state, 'sleep', day))
+          .toEqual({ ...main, value: dayRecords.reduce((sum, item) => sum + item.value, 0) });
+      } else {
+        expect(getDailyRecord(state, 'sleep', day)).toBe(dayRecords[0]);
+      }
     });
     const week = allDays('2026-03-01', '2026-03-07');
     expect(getWorkouts(state, week)).toEqual(state.health
       .filter((record) => record.kind === 'workout' && week.includes(record.day))
       .sort((a, b) => (a.day === b.day ? (b.time || '').localeCompare(a.time || '') : a.day < b.day ? 1 : -1)));
-  });
-
-  it('дописанный на месте массив перечитывается', () => {
-    const state = synthState(2, 10);
-    expect(getDailyRecord(state, 'mood', '2026-05-05')).toBeUndefined();
-    state.health.push({
-      id: 'm', day: '2026-05-05', kind: 'mood', value: 4,
-    });
-    expect(getDailyRecord(state, 'mood', '2026-05-05')?.id).toBe('m');
   });
 });
 

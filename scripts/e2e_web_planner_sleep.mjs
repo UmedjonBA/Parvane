@@ -1,5 +1,6 @@
-// «План»: сон в календаре — из модуля «Здоровье» (spec 041 B4). «вчера спал с 5:00 до 15:00» в строке «Плана» —
-// запись сна в «Здоровье» (а не событие), значок сна появляется в календаре и ведёт в модуль; удаление записи в
+// «План»: сон в календаре — из модуля «Здоровье» (spec 041 B4). «вчера спал с 5:00 до 15:00» в строке «Плана»
+// целиком понимает разбор «Здоровья» (окно показывает `data-quick-kind="health"`) — это запись сна в «Здоровье»
+// (а не событие), значок сна появляется в календаре и ведёт в модуль; удаление записи в
 // модуле убирает значок; два сна дня складываются; недосып — красной плашкой.
 // Запуск: scripts/run_web_planner_sleep_e2e.sh
 import assert from 'node:assert/strict';
@@ -36,7 +37,7 @@ try {
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await input.fill('вчера спал с 5:00 до 15:00');
-  await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === 'sleep', undefined, {
+  await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === 'health', undefined, {
     timeout: STEP_TIMEOUT_MS,
   });
   await input.press('Enter');
@@ -63,7 +64,7 @@ try {
     await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await input.fill(line);
-    await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === 'sleep',
+    await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === 'health',
       undefined, { timeout: STEP_TIMEOUT_MS });
     await input.press('Enter');
     await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });

@@ -351,18 +351,7 @@ try {
     const event = state?.state?.events?.find((e) => e.name === 'Праздник двора');
     return event?.description === 'Столы во дворе\nпринести пирог' && event?.allDay === true && event?.isHoliday === true;
   }, SYNC_TIMEOUT_MS, 'на A — описание события, поправленное на B; остальные поля прежние');
-  // Запись цели с A видна на B
-  await sessions.bob1.page.evaluate(async ({ day }) => {
-    await window.__parvaneDiagCallApi('parvanePlannerApply', {
-      changes: [{ goalPeriod: { id: `goal-${day}`, startDay: day, endDay: day, kcal: { target: 1500, tolerance: 100 }, water: { target: 2000, tolerance: 300 } } }],
-    });
-    await window.__parvaneDiagCallApi('parvanePlannerFlush');
-  }, { day: todayKey() });
-  await waitFor(async () => {
-    const state = await sessions.bob2.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
-    return state?.state?.goalPeriods?.some((g) => g.id === `goal-${todayKey()}` && g.water?.target === 2000);
-  }, SYNC_TIMEOUT_MS, 'запись цели с A на B');
-  console.log('OK: ряд, отметка экземпляра и правка ряда сходятся; запись цели синхронизируется');
+  console.log('OK: ряд, отметка экземпляра и правка ряда сходятся');
 
   // ── Словарь правок ввода текстом: выученное на A подставляется на B, сброс на B действует на A ──
   const learnedHead = 'летучка';
@@ -502,9 +491,6 @@ try {
       { id: 2, name: `Вторая-${suffix}`, description: '', steps: [], status: 'queue', project: '', rank: 1 },
     ],
     events: [],
-    nutrition: {},
-    calorieGoal: { target: 2000, tolerance: 100 },
-    macroGoals: { protein: { target: 120, tolerance: 20 }, fat: { target: 70, tolerance: 15 }, carbs: { target: 230, tolerance: 30 } },
   };
   await sessions.carol.page.evaluate((state) => window.__parvaneDiagCallApi('parvaneSavePlanner', { state }), legacy);
   await expectTaskInDay(sessions.carol.page, legacyTask, true);

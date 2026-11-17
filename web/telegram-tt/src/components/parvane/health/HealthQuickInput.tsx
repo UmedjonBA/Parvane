@@ -2,14 +2,14 @@ import {
   memo, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
-import type { HealthParseResult } from './healthTypes';
-
 import buildClassName from '../../../util/buildClassName';
-import { kindTitleKey, parsedValue } from './healthFormat';
 import { addHealthEntries, parseHealthInput } from './healthStore';
+import useHealthParse from './useHealthParse';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+
+import HealthParsedChips from './HealthParsedChips';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
@@ -20,18 +20,15 @@ type OwnProps = {
   onRequestHandled: NoneToVoidFunction;
 };
 
-const PARSE_DELAY_MS = 200;
-
 // Parvane (spec 038, HEALTH-2): запись одной строкой. Под полем — как движок понял ввод, до сохранения:
 // что запишется и что не разобрано. Enter сохраняет понятое
 const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
   const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
   const [text, setText] = useState('');
-  const [parsed, setParsed] = useState<HealthParseResult>();
   const [isSaving, setIsSaving] = useState(false);
   const [hasFailed, setHasFailed] = useState(false);
-  const parseIdRef = useRef(0);
+  const { parsed } = useHealthParse(text);
 
   useEffect(() => {
     if (!request) return;
@@ -39,21 +36,6 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
     inputRef.current?.focus();
     onRequestHandled();
   }, [request, onRequestHandled]);
-
-  // Разбор идёт с задержкой после набора; ответ устаревшего запроса отбрасывается
-  useEffect(() => {
-    const id = ++parseIdRef.current;
-    if (!text.trim()) {
-      setParsed(undefined);
-      return undefined;
-    }
-    const timer = window.setTimeout(() => {
-      void parseHealthInput(text).then((result) => {
-        if (id === parseIdRef.current) setParsed(result);
-      });
-    }, PARSE_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [text]);
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setText(e.currentTarget.value);
@@ -69,7 +51,6 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
     const isAdded = result ? await addHealthEntries(result.entries) : false;
     setIsSaving(false);
     if (!isAdded) {
-      setParsed(result);
       setHasFailed(true);
       return;
     }
@@ -77,8 +58,7 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
     setText(result!.unparsed.join(' '));
   });
 
-  const entries = parsed?.entries || [];
-  const unparsed = parsed?.unparsed || [];
+  const hasEntries = Boolean(parsed?.entries.length);
 
   return (
     <form className={styles.quick} data-health-quick onSubmit={handleSubmit}>
@@ -95,26 +75,9 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
       />
       {Boolean(text.trim()) && (
         <div className={styles.quickPreview} role="status" data-health-preview>
-          {entries.map((entry, index) => {
-            const titleKey = kindTitleKey(entry.kind);
-            return (
-              <span key={`${entry.kind}${index}`} className={styles.quickChip} data-kind={entry.kind}>
-                {titleKey ? lang(titleKey) : entry.kind}
-                {Boolean(entry.name) && ` · ${entry.name}`}
-                {' · '}
-                <b className={kit.mono}>{parsedValue(entry, lang.code)}</b>
-                {' · '}
-                {entry.kind === 'sleep' && entry.endMs ? entry.endDay : `${entry.day}, ${entry.time}`}
-              </span>
-            );
-          })}
-          {unparsed.map((piece) => (
-            <span key={piece} className={buildClassName(styles.quickChip, styles.quickChipUnparsed)} data-unparsed>
-              {lang('HealthQuickUnparsed', { text: piece })}
-            </span>
-          ))}
-          {Boolean(entries.length) && !isSaving && <span className={kit.muted}>{lang('HealthQuickEnter')}</span>}
-          {parsed && !entries.length && !unparsed.length && (
+          {parsed && <HealthParsedChips parsed={parsed} />}
+          {hasEntries && !isSaving && <span className={kit.muted}>{lang('HealthQuickEnter')}</span>}
+          {parsed && !hasEntries && !parsed.unparsed.length && (
             <span className={kit.muted}>{lang('HealthQuickNothing')}</span>
           )}
           {hasFailed && <span className={styles.quickError}>{lang('HealthQuickFailed')}</span>}

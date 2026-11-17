@@ -47,8 +47,8 @@ describe('ввод текстом: тип и название', () => {
     ['завтра 15:00', { kind: 'event', name: '', error: 'name' }],
     ['созвон 16:00', { kind: 'task', name: 'созвон', start: '16:00', minutes: 30 }, { kind: 'task' }],
     ['отчёт', { kind: 'event', name: 'отчёт', isAllDay: true }, { kind: 'event' }],
-    ['обед 520 ккал', { kind: 'task', name: 'обед 520 ккал' }, { kinds: ['task', 'event'] }],
-    ['вода 500 мл', { kind: 'task', name: 'вода 500 мл' }, { kinds: ['task', 'event'] }],
+    ['обед 520 ккал', { kind: 'task', name: 'обед 520 ккал' }],
+    ['вода 500 мл', { kind: 'task', name: 'вода 500 мл' }],
   ]);
 });
 
@@ -72,7 +72,7 @@ describe('ввод текстом: время', () => {
     ['пара 10–12:30', { name: 'пара', start: '10:00', end: '12:30' }],
     ['пара 10:00 — 11:00', { name: 'пара', start: '10:00', end: '11:00' }],
     ['счёт 10-12', { kind: 'task', name: 'счёт 10-12', start: undefined }],
-    ['сон 23:40-07:30', { kind: 'event', error: 'time' }, { kinds: ['task', 'event'] }],
+    ['сон 23:40-07:30', { kind: 'event', error: 'time' }],
     ['созвон 23:30', { start: '23:30', end: '23:59', error: undefined }],
     ['доклад 23:30', { start: '23:30', end: undefined, error: 'time' }],
     ['созвон 23:00', { start: '23:00', end: '23:30', error: undefined }],
@@ -369,9 +369,6 @@ describe('ввод текстом: название и описание', () => 
       name: 'созвон — обсудить бюджет', description: undefined,
     }, { skip: ['description'] }],
     // Еда, вода и здоровье названий не делят
-    ['обед гречка 13:00 650 ккал — вкусно', { kind: 'food', name: 'гречка — вкусно', description: undefined }],
-    ['бег 5 км 28 мин — парк', { kind: 'workout', description: undefined }],
-    ['сон 23:40-07:30', { kind: 'sleep', description: undefined }],
   ]);
 
   it('помечает участок описания', () => {
@@ -381,159 +378,6 @@ describe('ввод текстом: название и описание', () => 
       ['day', 'завтра'], ['time', '16:00'], ['description', 'обсудить бюджет'],
     ]);
   });
-});
-
-describe('ввод текстом: еда и вода', () => {
-  run([
-    ['обед гречка 150г б30 ж10 у60 кл6 520 ккал', {
-      kind: 'food',
-      name: 'гречка',
-      meal: 'lunch',
-      grams: 150,
-      nutrients: {
-        kcal: 520, protein: 30, fat: 10, carbs: 60, fiber: 6,
-      },
-      day: '2026-10-08',
-      error: undefined,
-    }],
-    ['обед гречка 13:00 650 ккал', { kind: 'food', name: 'гречка', meal: 'lunch', nutrients: { kcal: 650 } }],
-    ['овсянка 9:00 300 ккал', { kind: 'food', name: 'овсянка', meal: 'breakfast' }],
-    ['творог 200 ккал', { kind: 'food', name: 'творог', meal: 'lunch' }],
-    ['творог 200 ккал', { meal: 'dinner' }, { nowMinutes: 19 * 60 }],
-    ['ужин 600 ккал', { kind: 'food', name: 'ужин', meal: 'dinner' }],
-    ['перекус орехи 30 г 180 кал', { kind: 'food', name: 'орехи', meal: 'snack', grams: 30 }],
-    ['курица белки 30 жиры 5 углеводы 0', {
-      kind: 'food', name: 'курица', nutrients: { protein: 30, fat: 5, carbs: 0, kcal: 165 },
-    }],
-    ['сыр б 12,5 ж 15', { kind: 'food', name: 'сыр', nutrients: { protein: 12.5, fat: 15, kcal: 185 } }],
-    ['520 ккал', { kind: 'food', error: 'name' }],
-    ['обед завтра 700 ккал', { kind: 'food', day: '2026-10-09', meal: 'lunch' }],
-    ['обед с Петей 13:00', { kind: 'event', name: 'обед с Петей', start: '13:00' }],
-    ['вода 500 мл', { kind: 'water', waterMl: 500, name: '', day: '2026-10-08' }],
-    ['2 стакана', { kind: 'water', waterMl: 500 }],
-    ['1,5 л', { kind: 'water', waterMl: 1500 }],
-    ['вода 2 литра', { kind: 'water', waterMl: 2000 }],
-    ['воды стакан', { kind: 'task', name: 'воды стакан' }],
-    ['купить молоко 2 л', { kind: 'task', name: 'купить молоко 2 л', waterMl: undefined }],
-    ['кефир', { kind: 'water', waterMl: undefined }, { kind: 'water' }],
-    ['гречка', { kind: 'food', name: 'гречка', nutrients: {} }, { kind: 'food' }],
-  ]);
-});
-
-describe('ввод текстом: здоровье (spec 020)', () => {
-  run([
-    ['сон 23:40-07:30', {
-      kind: 'sleep', start: '23:40', end: '07:30', minutes: 470, day: '2026-10-08', error: undefined,
-    }],
-    ['сон 00:50–07:36', { kind: 'sleep', start: '00:50', end: '07:36', minutes: 406 }],
-    ['спал 7,5 ч', { kind: 'sleep', minutes: 450, start: undefined }],
-    ['сегодня я спал с 4:00 до 12:00', { kind: 'sleep', start: '04:00', end: '12:00', minutes: 480, error: undefined }],
-    ['спал с 4 до 12', { kind: 'sleep', start: '04:00', end: '12:00', minutes: 480 }],
-    ['поспала с 23 до 7:30', { kind: 'sleep', start: '23:00', end: '07:30', minutes: 510 }],
-    ['лёг в 1:30, встал в 9', { kind: 'sleep', start: '01:30', end: '09:00', minutes: 450 }],
-    ['уснула в 23 и проснулась в 6:45', { kind: 'sleep', start: '23:00', end: '06:45', minutes: 465 }],
-    ['спал с 11 до 7', { kind: 'sleep', start: '23:00', end: '07:00', minutes: 480 }],
-    ['я спал 6 ч', { kind: 'sleep', minutes: 360, start: undefined }],
-    ['я спал плохо', { kind: 'task', name: 'я спал плохо' }],
-    // Сон за прошедший день — на день подъёма (16 окт 2026)
-    ['вчера спал с 5:00 до 15:00', {
-      kind: 'sleep', start: '05:00', end: '15:00', minutes: 600, day: '2026-10-07',
-    }],
-    ['спал вчера 8 ч', { kind: 'sleep', minutes: 480, day: '2026-10-07' }],
-    ['позавчера спала с 23 до 7', { kind: 'sleep', start: '23:00', end: '07:00', day: '2026-10-06' }],
-    ['вчера лёг в 1 встал в 9', { kind: 'sleep', start: '01:00', end: '09:00', day: '2026-10-07' }],
-    ['спал с 4 до 12', { kind: 'sleep', day: '2026-10-08' }],
-    // «Не спал» — сон 0 ч: день учитывается
-    ['не спал', { kind: 'sleep', minutes: 0, day: '2026-10-08', error: undefined }],
-    ['вчера я не спал', { kind: 'sleep', minutes: 0, day: '2026-10-07' }],
-    ['я не спала вчера', { kind: 'sleep', minutes: 0, day: '2026-10-07' }],
-    ['сегодня не спал', { kind: 'sleep', minutes: 0, day: '2026-10-08' }],
-    ['не спал над отчётом', { kind: 'task', name: 'не спал над отчётом' }],
-    ['сон 7 ч 30 мин', { kind: 'sleep', minutes: 450 }],
-    ['сон', { kind: 'sleep', error: 'time' }],
-    ['сон 25:00-07:00', { kind: 'sleep', error: 'time' }],
-    ['сонная лощина', { kind: 'task', name: 'сонная лощина' }],
-    ['вес 72,4', { kind: 'metric', metric: 'weight', value: 72.4, day: '2026-10-08', error: undefined }],
-    ['Вес 80 кг', { kind: 'metric', metric: 'weight', value: 80 }],
-    ['давление 120/80', { kind: 'metric', metric: 'pressure', value: 120, value2: 80 }],
-    ['давление 130 на 85', { kind: 'metric', metric: 'pressure', value: 130, value2: 85 }],
-    ['давление 120', { kind: 'metric', metric: 'pressure', error: 'name' }],
-    ['пульс 64', { kind: 'metric', metric: 'pulse', value: 64 }],
-    ['шаги 9500', { kind: 'metric', metric: 'steps', value: 9500 }],
-    ['шаги 12 300', { kind: 'metric', metric: 'steps', value: 12300 }],
-    ['самочувствие 4', { kind: 'metric', metric: 'mood', value: 4 }],
-    ['самочувствие 7', { kind: 'metric', metric: 'mood', error: 'name' }],
-    ['вес книги проверить', { kind: 'metric', error: 'name' }],
-    ['вес книги проверить', { kind: 'task', name: 'вес книги проверить' }, { kind: 'task' }],
-    ['бег 5 км 28 мин', {
-      kind: 'workout', name: 'бег', distanceKm: 5, minutes: 28, day: '2026-10-08', error: undefined,
-    }],
-    ['Бег 10,5 км', { kind: 'workout', name: 'Бег', distanceKm: 10.5, minutes: undefined, error: undefined }],
-    ['зал присед 4x8x80, жим 3x10x60', {
-      kind: 'workout',
-      name: 'зал',
-      exercises: [{ name: 'присед', sets: 4, reps: 8, weight: 80 }, { name: 'жим', sets: 3, reps: 10, weight: 60 }],
-      error: undefined,
-    }],
-    ['зал подтягивания 3х8', { kind: 'workout', exercises: [{ name: 'подтягивания', sets: 3, reps: 8 }] }],
-    ['зал 60 мин', { kind: 'workout', name: 'зал', minutes: 60, start: undefined }],
-    ['зал', { kind: 'workout', error: 'minutes' }],
-    ['йога вчера 40 мин', { kind: 'workout', name: 'йога', day: '2026-10-07', minutes: 40 }],
-    ['отчёт вчера', { kind: 'task', name: 'отчёт', day: '2026-10-07' }],
-    // Тренировка с временем, на будущий день либо с повтором — событие календаря
-    ['зал завтра 19:00 60 мин', { kind: 'event', name: 'зал', day: '2026-10-09', start: '19:00', end: '20:00' }],
-    ['зал 19:00', { kind: 'event', name: 'зал', start: '19:00' }],
-    ['бег по вт и чт 7:00', { kind: 'event', name: 'бег' }],
-    ['зал завтра', { kind: 'task', name: 'зал', day: '2026-10-09' }],
-    ['зал завтра 19:00 60 мин', { kind: 'workout', name: 'зал', day: '2026-10-09', start: '19:00', minutes: 60 }, {
-      kind: 'workout',
-    }],
-    ['залить фундамент', { kind: 'task', name: 'залить фундамент' }],
-    ['обед гречка сахар 14 соль 0,5 520 ккал', {
-      kind: 'food', name: 'гречка', nutrients: { kcal: 520, sugar: 14, salt: 0.5 },
-    }],
-    ['цель белок 140 вода 2,5л сон 8ч день с 8 до 22', {
-      kind: 'goal',
-      day: undefined,
-      goalChanges: {
-        goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
-      },
-      error: undefined,
-    }],
-    // Режим сна: время отхода ко сну и подъёма; длительность рядом остаётся длительностью
-    ['цель сон 23:30-07:00', {
-      kind: 'goal', goalChanges: { goals: {}, health: { bedtime: 1410, wakeTime: 420 } }, error: undefined,
-    }],
-    ['цель сон с 0:30 до 8:15 сон 7,5 ч', {
-      kind: 'goal',
-      goalChanges: { goals: {}, health: { bedtime: 30, wakeTime: 495, sleepMinutes: 450 } },
-      error: undefined,
-    }],
-    ['цели ккал 2200 жиры 75 углеводы 260 клетчатка 30', {
-      kind: 'goal',
-      goalChanges: {
-        goals: {
-          kcal: 2200, fat: 75, carbs: 260, fiber: 30,
-        },
-        health: {},
-      },
-    }],
-    ['цель сахар 50 соль 5 вес 72 шаги 8000 бюджет 10 ч', {
-      kind: 'goal',
-      goalChanges: {
-        goals: {},
-        health: {
-          sugarMax: 50, saltMax: 5, weight: 72, steps: 8000,
-        },
-        budget: 600,
-      },
-    }],
-    ['цель вода 2000', { kind: 'goal', goalChanges: { goals: { water: 2000 }, health: {} } }],
-    ['цель день с 22 до 8', { kind: 'goal', error: 'time' }],
-    ['цель выучить язык', { kind: 'goal', error: 'name' }],
-    ['цель выучить язык', { kind: 'task', name: 'цель выучить язык' }, { kinds: ['task', 'event'] }],
-    ['целый день дома', { kind: 'task', name: 'целый день дома' }],
-  ]);
 });
 
 describe('ввод текстом: участки', () => {
@@ -564,8 +408,8 @@ describe('quick input (en): kind and name', () => {
     ['tomorrow 15:00', { kind: 'event', name: '', error: 'name' }],
     ['call 16:00', { kind: 'task', name: 'call', start: '16:00', minutes: 30 }, { kind: 'task' }],
     ['report', { kind: 'event', name: 'report', isAllDay: true }, { kind: 'event' }],
-    ['lunch 520 kcal', { kind: 'task', name: 'lunch 520 kcal' }, { kinds: ['task', 'event'] }],
-    ['water 500 ml', { kind: 'task', name: 'water 500 ml' }, { kinds: ['task', 'event'] }],
+    ['lunch 520 kcal', { kind: 'task', name: 'lunch 520 kcal' }],
+    ['water 500 ml', { kind: 'task', name: 'water 500 ml' }],
   ], EN);
 });
 
@@ -850,154 +694,6 @@ describe('quick input (en): name and description', () => {
       name: 'lesson on English will be a test', description: undefined, end: '15:45',
     }, { skip: ['description'] }],
     // Meals and health records are not split
-    ['lunch buckwheat 13:00 650 kcal — tasty', { kind: 'food', description: undefined }],
-    ['run 5 km 28 min - park', { kind: 'workout', description: undefined }],
-  ], EN);
-});
-
-describe('quick input (en): meal and water', () => {
-  run([
-    ['lunch buckwheat 150g p30 f10 c60 fiber 6 520 kcal', {
-      kind: 'food',
-      name: 'buckwheat',
-      meal: 'lunch',
-      grams: 150,
-      nutrients: {
-        kcal: 520, protein: 30, fat: 10, carbs: 60, fiber: 6,
-      },
-      day: '2026-10-08',
-      error: undefined,
-    }],
-    ['lunch buckwheat 13:00 650 kcal', { kind: 'food', name: 'buckwheat', meal: 'lunch', nutrients: { kcal: 650 } }],
-    ['oatmeal 9:00 300 kcal', { kind: 'food', name: 'oatmeal', meal: 'breakfast' }],
-    ['cottage cheese 200 kcal', { kind: 'food', name: 'cottage cheese', meal: 'lunch' }],
-    ['cottage cheese 200 kcal', { meal: 'dinner' }, { nowMinutes: 19 * 60 }],
-    ['dinner 600 kcal', { kind: 'food', name: 'dinner', meal: 'dinner' }],
-    ['snack nuts 30 g 180 cal', { kind: 'food', name: 'nuts', meal: 'snack', grams: 30 }],
-    ['chicken protein 30 fat 5 carbs 0', {
-      kind: 'food', name: 'chicken', nutrients: { protein: 30, fat: 5, carbs: 0, kcal: 165 },
-    }],
-    ['cheese p 12.5 f 15', { kind: 'food', name: 'cheese', nutrients: { protein: 12.5, fat: 15, kcal: 185 } }],
-    ['lunch buckwheat sugar 14 salt 0.5 520 kcal', {
-      kind: 'food', name: 'buckwheat', nutrients: { kcal: 520, sugar: 14, salt: 0.5 },
-    }],
-    ['520 kcal', { kind: 'food', error: 'name' }],
-    ['lunch tomorrow 700 kcal', { kind: 'food', day: '2026-10-09', meal: 'lunch' }],
-    ['lunch with Pete 13:00', { kind: 'event', name: 'lunch with Pete', start: '13:00' }],
-    // Одна буква с числом — не питание, пока признак один
-    ['watch f1 race 15:00', { kind: 'event', name: 'watch f1 race', start: '15:00' }],
-    ['vitamin c 500', { kind: 'task', name: 'vitamin c 500' }],
-    ['water 500 ml', { kind: 'water', waterMl: 500, name: '', day: '2026-10-08' }],
-    ['2 glasses', { kind: 'water', waterMl: 500 }],
-    ['1.5 l', { kind: 'water', waterMl: 1500 }],
-    ['water 2 liters', { kind: 'water', waterMl: 2000 }],
-    ['glass of water', { kind: 'task', name: 'glass of water' }],
-    ['buy milk 2 l', { kind: 'task', name: 'buy milk 2 l', waterMl: undefined }],
-    ['waterproof jacket 2 l', { kind: 'task', name: 'waterproof jacket 2 l', waterMl: undefined }],
-    ['kefir', { kind: 'water', waterMl: undefined }, { kind: 'water' }],
-    ['buckwheat', { kind: 'food', name: 'buckwheat', nutrients: {} }, { kind: 'food' }],
-  ], EN);
-});
-
-describe('quick input (en): health', () => {
-  run([
-    ['sleep 23:40-07:30', {
-      kind: 'sleep', start: '23:40', end: '07:30', minutes: 470, day: '2026-10-08', error: undefined,
-    }],
-    ['slept 7.5 h', { kind: 'sleep', minutes: 450, start: undefined }],
-    ['today i slept from 4:00 to 12:00', { kind: 'sleep', start: '04:00', end: '12:00', minutes: 480 }],
-    ['slept from 11 to 7', { kind: 'sleep', start: '23:00', end: '07:00', minutes: 480 }],
-    ['yesterday slept from 5:00 to 15:00', { kind: 'sleep', start: '05:00', end: '15:00', day: '2026-10-07' }],
-    ['didn\'t sleep yesterday', { kind: 'sleep', minutes: 0, day: '2026-10-07' }],
-    ['went to bed at 1:30, woke up at 9', { kind: 'sleep', start: '01:30', end: '09:00', minutes: 450 }],
-    ['sleep 7 hours 30 min', { kind: 'sleep', minutes: 450 }],
-    ['slept', { kind: 'sleep', error: 'time' }],
-    ['sleep 25:00-07:00', { kind: 'sleep', error: 'time' }, { kind: 'sleep' }],
-    ['sleepy hollow', { kind: 'task', name: 'sleepy hollow' }],
-    ['weight 72.4', { kind: 'metric', metric: 'weight', value: 72.4, day: '2026-10-08', error: undefined }],
-    ['Weight 80 kg', { kind: 'metric', metric: 'weight', value: 80 }],
-    ['bp 120/80', { kind: 'metric', metric: 'pressure', value: 120, value2: 80 }],
-    ['blood pressure 130 over 85', { kind: 'metric', metric: 'pressure', value: 130, value2: 85 }],
-    ['bp 120', { kind: 'metric', metric: 'pressure', error: 'name' }],
-    ['pulse 64', { kind: 'metric', metric: 'pulse', value: 64 }],
-    ['hr 64 bpm', { kind: 'metric', metric: 'pulse', value: 64 }],
-    ['steps 9500', { kind: 'metric', metric: 'steps', value: 9500 }],
-    ['steps 12 300', { kind: 'metric', metric: 'steps', value: 12300 }],
-    ['mood 4', { kind: 'metric', metric: 'mood', value: 4 }],
-    ['mood 7', { kind: 'metric', metric: 'mood', error: 'name' }, { kind: 'metric' }],
-    // Обычные слова в начале строки: без значения — название дела
-    ['weight of the book', { kind: 'task', name: 'weight of the book' }],
-    ['weight of the book', { kind: 'metric', error: 'name' }, { kind: 'metric' }],
-    ['steps to reproduce the bug', { kind: 'task', name: 'steps to reproduce the bug' }],
-    ['run tests', { kind: 'task', name: 'run tests' }],
-    ['walk the dog', { kind: 'task', name: 'walk the dog' }],
-    ['running late', { kind: 'task', name: 'running late' }],
-    ['goal learn the language', { kind: 'task', name: 'goal learn the language' }],
-    ['goal learn the language', { kind: 'goal', error: 'name' }, { kind: 'goal' }],
-    ['run 5 km 28 min', {
-      kind: 'workout', name: 'run', distanceKm: 5, minutes: 28, day: '2026-10-08', error: undefined,
-    }],
-    ['Run 10.5 km', { kind: 'workout', name: 'Run', distanceKm: 10.5, minutes: undefined, error: undefined }],
-    ['run 5k', { kind: 'workout', name: 'run', distanceKm: 5 }],
-    ['run 3 mi 30 min', { kind: 'workout', name: 'run', distanceKm: 4.83, minutes: 30 }],
-    ['gym squat 4x8x80, bench press 3x10x60', {
-      kind: 'workout',
-      name: 'gym',
-      exercises: [
-        { name: 'squat', sets: 4, reps: 8, weight: 80 }, { name: 'bench press', sets: 3, reps: 10, weight: 60 },
-      ],
-      error: undefined,
-    }],
-    ['gym pullups 3x8', { kind: 'workout', exercises: [{ name: 'pullups', sets: 3, reps: 8 }] }],
-    ['gym 60 min', { kind: 'workout', name: 'gym', minutes: 60, start: undefined }],
-    ['gym', { kind: 'workout', error: 'minutes' }],
-    ['yoga yesterday 40 min', { kind: 'workout', name: 'yoga', day: '2026-10-07', minutes: 40 }],
-    // Тренировка с временем, на будущий день либо с повтором — событие календаря
-    ['gym tomorrow 19:00 60 min', { kind: 'event', name: 'gym', day: '2026-10-09', start: '19:00', end: '20:00' }],
-    ['gym 7pm', { kind: 'event', name: 'gym', start: '19:00' }],
-    ['run on tue and thu 7:00', { kind: 'event', name: 'run' }],
-    ['gym tomorrow', { kind: 'task', name: 'gym', day: '2026-10-09' }],
-    ['gym tomorrow 19:00 60 min', { kind: 'workout', name: 'gym', day: '2026-10-09', start: '19:00', minutes: 60 }, {
-      kind: 'workout',
-    }],
-    ['goal protein 140 water 2.5l sleep 8h day from 8 to 22', {
-      kind: 'goal',
-      day: undefined,
-      goalChanges: {
-        goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
-      },
-      error: undefined,
-    }],
-    ['goal sleep 23:30-07:00 sleep 8h', {
-      kind: 'goal',
-      goalChanges: { goals: {}, health: { bedtime: 1410, wakeTime: 420, sleepMinutes: 480 } },
-      error: undefined,
-    }],
-    ['goals kcal 2200 fat 75 carbs 260 fiber 30', {
-      kind: 'goal',
-      goalChanges: {
-        goals: {
-          kcal: 2200, fat: 75, carbs: 260, fiber: 30,
-        },
-        health: {},
-      },
-    }],
-    ['goal sugar 50 salt 5 weight 72 steps 8000 budget 10 h', {
-      kind: 'goal',
-      goalChanges: {
-        goals: {},
-        health: {
-          sugarMax: 50, saltMax: 5, weight: 72, steps: 8000,
-        },
-        budget: 600,
-      },
-    }],
-    ['goal water 2000', { kind: 'goal', goalChanges: { goals: { water: 2000 }, health: {} } }],
-    ['goal day from 22 to 8', { kind: 'goal', error: 'time' }],
-    // Поле целей на экране «Здоровье»: тип задан, слова «goal» нет
-    ['protein 140 water 2.5l', { kind: 'goal', goalChanges: { goals: { protein: 140, water: 2500 } } }, {
-      kind: 'goal',
-    }],
   ], EN);
 });
 
@@ -1005,22 +701,17 @@ describe('ввод текстом: язык словаря', () => {
   run([
     // Русский интерфейс (по умолчанию), строка латиницей — английский словарь
     ['call tomorrow 5pm', { kind: 'event', name: 'call', day: '2026-10-09', start: '17:00' }],
-    ['weight 72.4', { kind: 'metric', metric: 'weight', value: 72.4 }],
     // Смешанные буквы — словарь, распознавший больше; при равенстве — язык интерфейса
     ['созвон tomorrow 16:00', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '16:00' }],
     ['созвон Zoom завтра 16:00', { kind: 'event', name: 'созвон Zoom', day: '2026-10-09', start: '16:00' }],
-    ['зал squat 4x8x80', { kind: 'workout', name: 'зал', exercises: [{ name: 'squat', sets: 4, reps: 8 }] }],
     ['MacBook завтра', { kind: 'task', name: 'MacBook', day: '2026-10-09' }],
     ['обед sat down', { kind: 'task', name: 'обед sat down', day: undefined }],
-    ['белок 140 вода 2,5л', { kind: 'goal', goalChanges: { goals: { protein: 140, water: 2500 } } }, { kind: 'goal' }],
   ]);
   run([
     // Английский интерфейс, строка кириллицей — русский словарь
     ['созвон завтра в 5', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '17:00' }],
-    ['вес 72,4', { kind: 'metric', metric: 'weight', value: 72.4 }],
     ['созвон tomorrow 16:00 ', { kind: 'event', name: 'созвон', day: '2026-10-09', start: '16:00' }],
     ['call завтра 16:00', { kind: 'event', name: 'call', day: '2026-10-09', start: '16:00' }],
-    ['зал присед 4x8x80, жим 3x10x60', { kind: 'workout', name: 'зал', error: undefined }],
     ['созвон Zoom 16:00', { kind: 'event', name: 'созвон Zoom', start: '16:00' }],
   ], EN);
 
@@ -1028,21 +719,11 @@ describe('ввод текстом: язык словаря', () => {
     expect(['ru', 'ru-RU', 'en', 'de', undefined].map(getQuickLang)).toEqual(['ru', 'ru', 'en', 'en', 'en']);
   });
 
-  // Примеры и подсказки экранов лежат в строках локализации: каждый обязан разбираться своим словарём
-  it.each([['fallback.strings', 'en'], ['ru.strings', 'ru']] as const)('примеры из %s разбираются', (file, lang) => {
+  // Подсказка в пустом поле лежит в строках локализации: она обязана разбираться своим словарём
+  it.each([['fallback.strings', 'en'], ['ru.strings', 'ru']] as const)('подсказка поля из %s', (file, lang) => {
     const strings = readFileSync(resolve(__dirname, '../../../assets/localization', file), 'utf8');
-    const value = (key: string) => new RegExp(`^"${key}" = "(.*)";$`, 'm').exec(strings)![1];
-    const examples = value('PlannerHealthExamples').split(/\s*\|\s*/);
-    expect(examples).toHaveLength(9);
-    [...examples, value('PlannerQuickPlaceholder')].forEach((line) => {
-      const draft = parseQuickInput(line, { ...CTX, lang });
-      expect(draft.error, line).toBeUndefined();
-      expect(draft.kind === 'task' && !draft.spans.length, line).toBe(false);
-    });
-    const goals = parseQuickInput(value('PlannerHealthGoalsPlaceholder'), { ...CTX, lang, kind: 'goal' });
-    expect(goals.goalChanges).toMatchObject({
-      goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
-    });
+    const line = /^"PlannerQuickPlaceholder" = "(.*)";$/m.exec(strings)![1];
+    expect(parseQuickInput(line, { ...CTX, lang })).toMatchObject({ kind: 'event', minutes: 45, error: undefined });
   });
 
   // Примеры окна ввода: каждый разбирается без ошибки, один показывает описание
@@ -1115,7 +796,7 @@ describe('ввод текстом: числительные словами', () 
     ['встреча без двадцати пяти десять', { name: 'встреча', start: '09:35', day: '2026-10-09' }],
     ['встреча четверть шестого', { name: 'встреча', start: '17:15' }],
     ['встреча пять минут шестого', { name: 'встреча', start: '17:05' }],
-    ['обед в полдень', { kind: 'event', name: 'обед', start: '12:00' }, { kinds: ['task', 'event'] }],
+    ['обед в полдень', { kind: 'event', name: 'обед', start: '12:00' }],
     ['смена в полночь', { kind: 'event', name: 'смена', start: '00:00', day: '2026-10-09' }],
     ['отчёт за полдня', { kind: 'task', name: 'отчёт за полдня', start: undefined }],
     // Уточнение времени суток: перед часом, после часа; без часа — не время
@@ -1136,9 +817,6 @@ describe('ввод текстом: числительные словами', () 
     ['встреча полтретьего', { kind: 'task', name: 'встреча полтретьего' }, { skip: ['time'] }],
     ['созвон 16:00 на час', { name: 'созвон на час', end: '16:30', minutes: undefined }, { skip: ['minutes'] }],
     // Здоровье понимает те же слова
-    ['сон семь часов', { kind: 'sleep', minutes: 420 }],
-    ['бег пять км двадцать восемь минут', { kind: 'workout', name: 'бег', distanceKm: 5, minutes: 28 }],
-    ['зал три подхода 60 мин', { kind: 'workout', name: 'зал три подхода', minutes: 60 }],
   ]);
 
   it('участки и описание — в позициях слов пользователя', () => {
@@ -1181,7 +859,7 @@ describe('quick input (en): numerals in words', () => {
     ['report once in 2 weeks', {
       kind: 'task', name: 'report', repeat: { kind: 'weekly', interval: 2 }, start: undefined,
     }],
-    ['lunch at noon', { kind: 'event', name: 'lunch', start: '12:00' }, { kinds: ['task', 'event'] }],
+    ['lunch at noon', { kind: 'event', name: 'lunch', start: '12:00' }],
     ['shift at midnight', { name: 'shift', start: '00:00' }],
     // Daypart before the hour; without an hour it is not a time
     ['call tomorrow morning at seven', { name: 'call', day: '2026-10-09', start: '07:00' }],
@@ -1189,7 +867,7 @@ describe('quick input (en): numerals in words', () => {
     ['call tonight at 8', { name: 'call', start: '20:00' }],
     ['call at 8 tonight', { name: 'call', start: '20:00' }],
     ['call mom this evening', { kind: 'task', name: 'call mom this evening', start: undefined }],
-    ['morning run plan', { kind: 'task', name: 'morning run plan', start: undefined }, { kinds: ['task', 'event'] }],
+    ['morning run plan', { kind: 'task', name: 'morning run plan', start: undefined }],
     // A number nobody consumed stays as typed
     ['buy five apples', { kind: 'task', name: 'buy five apples', day: undefined }],
     ['Buy Twenty-Five Bricks', { kind: 'task', name: 'Buy Twenty-Five Bricks' }],
@@ -1197,8 +875,6 @@ describe('quick input (en): numerals in words', () => {
     ['one on one with Ann 5pm', { kind: 'event', name: 'one on one with Ann', start: '17:00' }],
     ['call at five', { kind: 'task', name: 'call at five', start: undefined }, { skip: ['time'] }],
     ['call half past two', { kind: 'task', name: 'call half past two' }, { skip: ['time'] }],
-    ['sleep seven hours', { kind: 'sleep', minutes: 420 }],
-    ['run five km twenty eight min', { kind: 'workout', name: 'run', distanceKm: 5, minutes: 28 }],
   ], EN);
 });
 
@@ -1244,8 +920,6 @@ describe('ввод текстом: явные метки', () => {
     }],
     ['цена 5#шт и #тег/путь', { name: 'цена 5#шт и #тег/путь', list: undefined }],
     // Еда, вода и здоровье меток не знают
-    ['обед гречка 520 ккал #дом !', { kind: 'food', name: 'гречка #дом !', list: undefined, isImportant: undefined }],
-    ['зал 60 мин @клуб', { kind: 'workout', name: 'зал @клуб', place: undefined }],
   ]);
 });
 
@@ -1267,7 +941,6 @@ describe('quick input (en): explicit markers', () => {
     ['item #1 of the plan', { name: 'item #1 of the plan', list: undefined }],
     ['mail to a@b.com', { name: 'mail to a@b.com', place: undefined }],
     ['open https://site.com/#top', { name: 'open https://site.com/#top', list: undefined }],
-    ['lunch rice 520 kcal #home', { kind: 'food', name: 'rice #home', list: undefined }],
   ], EN);
 });
 
@@ -1316,7 +989,6 @@ describe('ввод текстом: обычная длительность и в
     ['др Маши завтра', { kind: 'task', learned: undefined }, { ...LEARNED, kind: 'task' }],
     ['задача др Маши завтра', { kind: 'task', head: 'др', learned: undefined }, LEARNED],
     ['др Маши завтра', { kind: 'task', learned: undefined }, { ...LEARNED, skip: ['kind'] }],
-    ['купить молоко 18:00', { kind: 'event', learned: undefined }, { ...LEARNED, kinds: ['event'] }],
     // Первое слово: без служебных и однобуквенных слов, меток и цифр; «ё» → «е»
     ['в банке взять справку', { head: 'банке' }],
     ['мне купить молоко 18:00', { kind: 'task', head: 'купить', learned: ['kind'] }, LEARNED],
@@ -1324,7 +996,6 @@ describe('ввод текстом: обычная длительность и в
     ['5 отчётов', { head: 'отчетов' }],
     ['Ёлку купить', { head: 'елку', learned: undefined }, LEARNED],
     ['2026', { head: undefined }],
-    ['обед 520 ккал', { kind: 'food', head: undefined }],
   ]);
   run([
     ['call tomorrow 10:00', { end: '10:30', usualMinutes: 30, head: 'call' }],
@@ -1359,7 +1030,6 @@ describe('ввод текстом: выбор кандидатов и други
     ['отчёт до пт', { name: 'отчёт', due: '2026-10-09', day: undefined, alternatives: undefined }],
     ['отчёт по вт, чт и пт', { name: 'отчёт', day: '2026-10-08', repeat: { kind: 'weekly', weekdays: [2, 4, 5] } }],
     ['отчёт раз в 2 недели', { name: 'отчёт', repeat: { kind: 'weekly', interval: 2 }, start: undefined }],
-    ['обед 150г б30 ж10', { kind: 'food', grams: 150, nutrients: { protein: 30, fat: 10 } }],
     // Голый час: утро либо вечер
     ['созвон в 7', { start: '19:00', day: '2026-10-08', alternatives: [{ field: 'time', pick: '07:00' }, TASK] }],
     ['созвон в 7', {
@@ -1426,12 +1096,6 @@ describe('ввод текстом: выбор кандидатов и други
     ['купить молоко', { kind: 'task', alternatives: undefined }],
     ['купить молоко 18:00', { kind: 'task', alternatives: undefined }, { kind: 'task' }],
     ['задача купить молоко 18:00', { kind: 'task', alternatives: undefined }],
-    ['купить молоко 18:00', { kind: 'event', alternatives: undefined }, { kinds: ['event'] }],
-    // «28 мин» — длительность тренировки либо длительность дела
-    ['бег 28 мин', { kind: 'workout', minutes: 28, alternatives: [TASK] }],
-    ['бег 28 мин', { kind: 'task', name: 'бег', minutes: 28, alternatives: undefined }, { kind: 'task' }],
-    ['бег 28 мин', { kind: 'workout', alternatives: undefined }, { kind: 'workout' }],
-    ['бег 28 мин', { kind: 'workout', alternatives: undefined }, { kinds: ['workout'] }],
     // Ключ, которому в строке ничего не отвечает, не действует
     ['созвон в 7', { start: '19:00' }, { pick: { time: '09:00', day: '2026-10-20', due: '2026-10-20' } }],
     ['созвон 16:00', { start: '16:00', alternatives: [TASK] }, { pick: { time: '18:00' } }],
@@ -1462,8 +1126,6 @@ describe('ввод текстом: выбор кандидатов и други
     }, { pick: { repeat: 'open' } }],
     ['buy milk 6pm', { kind: 'event', alternatives: [TASK] }],
     ['buy milk tomorrow', { kind: 'task', alternatives: [EVENT] }],
-    ['run 28 min', { kind: 'workout', minutes: 28, alternatives: [TASK] }],
-    ['run 28 min', { kind: 'task', name: 'run', minutes: 28 }, { kind: 'task' }],
   ], EN);
 });
 
@@ -1486,14 +1148,13 @@ describe('ввод текстом: любая строка разбираетс�
     'constructor', '__proto__', 'toString', 'undefined', 'NaN', ' ', '  ',
   ];
   const CONTEXTS: Partial<QuickContext>[] = [
-    {}, { lang: 'en' }, { kinds: ['task', 'event'] }, { kind: 'task' }, { kind: 'event' }, { kind: 'food' },
-    { kind: 'water' }, { kind: 'sleep' }, { kind: 'workout' }, { kind: 'metric' }, { kind: 'goal' },
+    {}, { lang: 'en' }, { kind: 'task' }, { kind: 'event' },
     { skip: ['time', 'day', 'kind', 'minutes', 'due', 'repeat', 'description', 'list', 'place', 'important'] },
     { pick: { time: '07:00', day: '2026-10-12', due: '2026-10-12', repeat: 'open' } },
     { learned: { созвон: { kind: 'task', minutes: 20 }, call: { kind: 'event', minutes: 1440 } } },
     { today: '2026-12-31', nowMinutes: 1439, dayStart: 0, dayEnd: 1440 }, { today: '2028-02-29', nowMinutes: 0 },
   ];
-  const KINDS = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
+  const KINDS = ['task', 'event'];
 
   function check(line: string, ctx: Partial<QuickContext>) {
     const draft = parseQuickInput(line, { ...CTX, ...ctx });
@@ -1505,7 +1166,7 @@ describe('ввод текстом: любая строка разбираетс�
       expect(isInside, `участок ${from}–${to} в строке длины ${line.length}`).toBe(true);
     });
     // Запись без ошибки пригодна к добавлению: время и день — правильного вида
-    if (!draft.error && (draft.kind === 'task' || draft.kind === 'event')) {
+    if (!draft.error) {
       expect(draft.name.trim()).not.toBe('');
       if (draft.start) expect(draft.start).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
       if (draft.end) expect(draft.end).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);

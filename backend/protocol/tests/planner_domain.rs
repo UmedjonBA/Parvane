@@ -7,7 +7,7 @@ use parvane_protocol::domain::planner::{self, PlannerState, SNAPSHOT_WARN_BYTES}
 use parvane_protocol::domain::{LamportGuard, Stamp};
 use parvane_protocol::pb::parvane::core::v2::LwwStamp;
 use parvane_protocol::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, LearnedWord, List, NutritionDay, Occurrence, PlannerOp, QuickLine, Repeat,
+    change, Bool, Change, Event, LearnedWord, List, Occurrence, PlannerOp, QuickLine, Repeat,
     RepeatKind, Settings, Step, Steps, Str, Task, I32, U32,
 };
 use parvane_protocol::ProtoError;
@@ -57,7 +57,7 @@ fn weekly(lamport: u64, dev: &str, weekdays: Vec<u32>, start: &str, end: &str) -
     })
 }
 
-// ── spec 011: повторы, экземпляры, цели по датам ────────────────────────────
+// ── spec 011: повторы, экземпляры ───────────────────────────────────────────
 
 #[test]
 fn occurrences_merge_per_day_from_two_devices() {
@@ -107,44 +107,6 @@ fn repeat_is_a_whole_register_and_invalid_rule_is_skipped() {
     let many = Change { change: Some(change::Change::Event(Event { id: "x".into(), occurrences: vec![Occurrence { day: "2026-10-01".into(), stamp: st(1, "d1"), done_steps: (0..101).collect(), ..Default::default() }], ..Default::default() })) };
     assert!(matches!(st_.apply_change(&many), Err(ProtoError::InvalidField("occurrence"))));
     assert_eq!(st_.tasks["e"].repeat.as_ref().unwrap().weekdays, vec![5]);
-}
-
-#[test]
-fn goal_period_merges_whole_and_tombstone_is_stable() {
-    let goal = |t: u32| Some(Goal { target: t, tolerance: 10, set: true });
-    let p = |lamport: u64, dev: &str, kcal: u32| GoalPeriod {
-        id: "g".into(),
-        stamp: st(lamport, dev),
-        start_day: "2026-10-15".into(),
-        end_day: "2026-10-20".into(),
-        kcal: goal(kcal),
-        water: Some(Goal { target: 2000, tolerance: 300, set: true }),
-        ..Default::default()
-    };
-    let mut a = PlannerState::default();
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(p(2, "d1", 1800))) }).unwrap();
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(p(1, "d2", 1500))) }).unwrap();
-    assert_eq!(a.goal_periods["g"].kcal.as_ref().unwrap().target, 1800);
-    // Надгробие с меткой 3 скрывает; правка с меткой 2 не воскрешает, с меткой 4 — воскрешает.
-    let del = GoalPeriod { id: "g".into(), deleted: st(3, "d1"), ..Default::default() };
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(del)) }).unwrap();
-    assert!(!PlannerState::is_goal_period_alive(&a.goal_periods["g"]));
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(p(2, "d3", 1700))) }).unwrap();
-    assert!(!PlannerState::is_goal_period_alive(&a.goal_periods["g"]));
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(p(4, "d2", 1600))) }).unwrap();
-    assert!(PlannerState::is_goal_period_alive(&a.goal_periods["g"]));
-    assert_eq!(a.goal_periods["g"].kcal.as_ref().unwrap().target, 1600);
-    // Негодная запись: конец раньше начала, цель с допуском больше значения; незаданный показатель не проверяется.
-    let bad = GoalPeriod { end_day: "2026-10-01".into(), ..p(5, "d1", 1000) };
-    assert!(matches!(a.apply_change(&Change { change: Some(change::Change::GoalPeriod(bad)) }), Err(ProtoError::InvalidField("end_day"))));
-    let bad_goal = GoalPeriod { fiber: Some(Goal { target: 10, tolerance: 20, set: true }), ..p(5, "d1", 1000) };
-    assert!(a.apply_change(&Change { change: Some(change::Change::GoalPeriod(bad_goal)) }).is_err());
-    let unset_goal = GoalPeriod { fiber: Some(Goal { target: 0, tolerance: 0, set: false }), ..p(5, "d1", 1000) };
-    a.apply_change(&Change { change: Some(change::Change::GoalPeriod(unset_goal)) }).unwrap();
-    // Снимок несёт записи целей.
-    let snap = a.to_snapshot();
-    assert_eq!(snap.goal_periods.len(), 1);
-    assert_eq!(snapshot_bytes(&PlannerState::from_snapshot(&snap).unwrap()), snapshot_bytes(&a));
 }
 
 fn op(changes: Vec<change::Change>) -> PlannerOp {
@@ -258,49 +220,6 @@ fn invalid_change_is_skipped_but_others_apply() {
     let ok_settings = Settings { stamp: st(2, "d1"), day_start: 480, day_end: 1200, lunch_start: 0, lunch_end: 0, margin: 10, budget: 480 };
     assert_eq!(a.apply_op(&op(vec![change::Change::Settings(ok_settings)]), "d1").unwrap(), 1);
     assert_eq!(a.settings.as_ref().unwrap().day_start, 480);
-    let bad_goal = GoalSet { stamp: st(3, "d1"), kcal: Some(Goal { target: 100, tolerance: 200, set: false }), ..Default::default() };
-    assert_eq!(a.apply_op(&op(vec![change::Change::Goals(bad_goal)]), "d1").unwrap(), 0);
-}
-
-#[test]
-fn nutrition_entries_merge_whole_and_day_fields_by_stamp() {
-    let entry = |id: &str, name: &str, l: u64, dev: &str| FoodEntry {
-        id: id.into(),
-        stamp: st(l, dev),
-        name: name.into(),
-        meal: "lunch".into(),
-        kcal: 500.0,
-        known: 1,
-        ..Default::default()
-    };
-    let day1 = NutritionDay {
-        day: "2026-10-08".into(),
-        entries: vec![entry("e1", "суп", 1, "d1")],
-        is_complete: Some(Bool { stamp: st(1, "d1"), value: false }),
-        ..Default::default()
-    };
-    let day2 = NutritionDay {
-        day: "2026-10-08".into(),
-        entries: vec![entry("e1", "борщ", 2, "d2"), entry("e2", "хлеб", 2, "d2")],
-        is_complete: Some(Bool { stamp: st(2, "d2"), value: true }),
-        ..Default::default()
-    };
-    let mut a = PlannerState::default();
-    a.apply_op(&op(vec![change::Change::NutritionDay(day1.clone())]), "d1").unwrap();
-    a.apply_op(&op(vec![change::Change::NutritionDay(day2.clone())]), "d2").unwrap();
-    let mut b = PlannerState::default();
-    b.apply_op(&op(vec![change::Change::NutritionDay(day2)]), "d2").unwrap();
-    b.apply_op(&op(vec![change::Change::NutritionDay(day1)]), "d1").unwrap();
-    assert_eq!(snapshot_bytes(&a), snapshot_bytes(&b));
-    let d = &a.nutrition["2026-10-08"];
-    assert_eq!(d.entries.len(), 2);
-    assert_eq!(d.entries.iter().find(|e| e.id == "e1").unwrap().name, "борщ");
-    assert!(d.is_complete.as_ref().unwrap().value);
-    // Удаление записи — надгробие; старая версия записи не воскрешает.
-    let del = NutritionDay { day: "2026-10-08".into(), entries: vec![FoodEntry { id: "e2".into(), deleted: st(5, "d1"), ..Default::default() }], ..Default::default() };
-    a.apply_op(&op(vec![change::Change::NutritionDay(del)]), "d1").unwrap();
-    let e2 = a.nutrition["2026-10-08"].entries.iter().find(|e| e.id == "e2").unwrap();
-    assert!(!PlannerState::is_entry_alive(e2));
 }
 
 // spec 013: цвет списка, «весь день» и «праздник» сводятся как отдельные регистры,
@@ -743,7 +662,7 @@ fn stamp_op_marks_every_present_register() {
     let stamps = planner::op_stamps(&o).unwrap();
     assert_eq!(stamps.len(), 8);
     assert!(stamps.iter().all(|s| s.lamport == 9 && s.device_id == "d1"));
-    // spec 011: правило, экземпляры, источник и запись цели тоже получают метку.
+    // spec 011: правило, экземпляры и источник тоже получают метку.
     let mut o = op(vec![
         change::Change::Task(Task {
             id: "t".into(),
@@ -752,15 +671,13 @@ fn stamp_op_marks_every_present_register() {
             source: Some(parvane_protocol::pb::parvane::planner::v1::Source { chat: "bob@local".into(), op_id: "ab".into(), stamp: None }),
             ..Default::default()
         }),
-        change::Change::GoalPeriod(GoalPeriod { id: "g".into(), start_day: "2026-10-01".into(), ..Default::default() }),
-        change::Change::GoalPeriod(GoalPeriod { id: "h".into(), deleted: Some(LwwStamp::default()), ..Default::default() }),
     ]);
     planner::stamp_op(&mut o, &Stamp::new(10, "d1"));
     let stamps = planner::op_stamps(&o).unwrap();
-    assert_eq!(stamps.len(), 6);
+    assert_eq!(stamps.len(), 4);
     assert!(stamps.iter().all(|s| s.lamport == 10 && s.device_id == "d1"));
     let mut st_ = PlannerState::default();
-    assert_eq!(st_.apply_op(&o, "d1").unwrap(), 3);
+    assert_eq!(st_.apply_op(&o, "d1").unwrap(), 1);
     // Слово словаря правок: метку получает каждый присутствующий регистр и надгробие.
     let mut o = op(vec![
         change::Change::Learned(LearnedWord {
@@ -781,30 +698,16 @@ fn stamp_op_marks_every_present_register() {
 }
 
 #[test]
-fn size_estimate_grows_with_data_and_year_of_food_fits() {
+fn size_estimate_grows_with_data_and_year_of_tasks_fits() {
     let mut a = PlannerState::default();
     assert_eq!(a.size_estimate(), 0);
-    // Год питания: 365 дней × 10 записей.
+    // Год задач: 365 дней × 10 задач (питание и здоровье — в домене `health.v1`, spec 041 B4).
     for d in 0..365u32 {
-        let day = format!("2026-{:02}-{:02}", d / 31 % 12 + 1, d % 28 + 1);
-        let entries = (0..10)
-            .map(|i| FoodEntry {
-                id: format!("{day}-{i}"),
-                stamp: st(1, "d1"),
-                name: "Куриная грудка с рисом и овощами".into(),
-                meal: "lunch".into(),
-                kcal: 650.0,
-                protein: 55.0,
-                fat: 10.0,
-                carbs: 80.0,
-                known: 15,
-                ..Default::default()
-            })
-            .collect();
-        a.apply_op(&op(vec![change::Change::NutritionDay(NutritionDay { day, entries, ..Default::default() })]), "d1").unwrap();
+        let tasks = (0..10).map(|i| change::Change::Task(task(&format!("t{d}-{i}"), "Подготовить отчёт по итогам недели", 1, "d1"))).collect();
+        a.apply_op(&op(tasks), "d1").unwrap();
     }
     let size = a.size_estimate();
-    assert!(size > 100_000 && size < SNAPSHOT_WARN_BYTES, "год питания: {size} байт");
+    assert!(size > 100_000 && size < SNAPSHOT_WARN_BYTES, "год задач: {size} байт");
 }
 
 // ── property: порядок применения не влияет на снимок ────────────────────────
@@ -812,7 +715,7 @@ fn size_estimate_grows_with_data_and_year_of_food_fits() {
 fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
     let dev = prop::sample::select(vec!["d1".to_string(), "d2".to_string(), "d3".to_string()]);
     let id = prop::sample::select(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-    (dev, id, 1u64..40, 0u8..11, prop::option::of(1u64..40)).prop_map(|(dev, id, lamport, kind, del)| {
+    (dev, id, 1u64..40, 0u8..10, prop::option::of(1u64..40)).prop_map(|(dev, id, lamport, kind, del)| {
         let field = |v: &str| s(v, lamport, &dev);
         let change = match kind {
             0 => change::Change::Task(Task { id: id.clone(), name: field("имя"), ..Default::default() }),
@@ -845,16 +748,8 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
                 occurrences: vec![Occurrence { day: format!("2026-10-{:02}", 1 + lamport % 5), stamp: st(lamport, &dev), done: lamport % 2 == 0, excluded: lamport % 3 == 0, done_steps: vec![] }],
                 ..Default::default()
             }),
-            7 => change::Change::GoalPeriod(GoalPeriod {
-                id: id.clone(),
-                stamp: del.is_none().then(|| LwwStamp { lamport, device_id: dev.clone() }),
-                deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }),
-                start_day: "2026-10-10".into(),
-                kcal: Some(Goal { target: 1000 + lamport as u32, tolerance: 50, set: true }),
-                ..Default::default()
-            }),
             // Словарь правок: пара «значение + счётчик», свежесть, надгробие
-            8 => change::Change::Learned(LearnedWord {
+            7 => change::Change::Learned(LearnedWord {
                 id: id.clone(),
                 kind: if lamport % 2 == 0 { field(if lamport % 4 == 0 { "task" } else { "event" }) } else { None },
                 kind_count: if lamport % 2 == 0 { Some(U32 { stamp: st(lamport, &dev), value: (lamport % 6) as u32, unset: false }) } else { None },
@@ -863,7 +758,7 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
                 touched: Some(U32 { stamp: st(lamport, &dev), value: lamport as u32, unset: false }),
                 ..Default::default()
             }),
-            9 => change::Change::Learned(LearnedWord { id: id.clone(), deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }).or(st(lamport, &dev)), ..Default::default() }),
+            8 => change::Change::Learned(LearnedWord { id: id.clone(), deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }).or(st(lamport, &dev)), ..Default::default() }),
             _ => change::Change::Settings(Settings { stamp: st(lamport, &dev), day_start: 540, day_end: 1260, lunch_start: 780, lunch_end: 840, margin: 15, budget: 600 + lamport as u32 }),
         };
         (change, dev)

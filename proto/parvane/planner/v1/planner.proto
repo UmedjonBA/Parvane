@@ -6,8 +6,13 @@
 // метка LwwStamp (lamport, device_id); при равных метках порядок добивается
 // хэшем байтов изменения (backend/protocol/src/domain/planner.rs). Удаление —
 // надгробие `deleted` с меткой: правка со старшей меткой воскрешает объект,
-// с младшей — игнорируется. Запись питания (FoodEntry) сливается целиком по
-// `stamp`. Метка не может обогнать виденный максимум больше чем на 2^20 (D-16).
+// с младшей — игнорируется. Метка не может обогнать виденный максимум больше
+// чем на 2^20 (D-16).
+//
+// С 17 ноя 2026 (spec 041 B4) здоровья, питания и целей питания здесь нет: они
+// живут в домене `parvane.health.v1`. Сообщения HealthRecord, FoodEntry,
+// NutritionDay, Goal, GoalSet, GoalPeriod удалены, номера их полей в Change и
+// PlannerSnapshot зарезервированы; данные не переносились.
 syntax = "proto3";
 
 package parvane.planner.v1;
@@ -190,86 +195,6 @@ message List {
   U32 color = 5;
 }
 
-message Goal {
-  uint32 target = 1;
-  uint32 tolerance = 2;
-  // цель по показателю задана (GoalPeriod); в GoalSet задана ⇔ target > 0
-  bool set = 3;
-}
-
-// Цели по калориям, БЖУ, клетчатке и воде — под одной меткой. С spec 011 —
-// запись «с самого начала» с самым низким приоритетом (research R6).
-message GoalSet {
-  parvane.core.v2.LwwStamp stamp = 1;
-  Goal kcal = 2;
-  Goal protein = 3;
-  Goal fat = 4;
-  Goal carbs = 5;
-  Goal fiber = 6;
-  // вода — мл
-  Goal water = 7;
-}
-
-// Запись цели с датами (spec 011): регистр целиком по `stamp`, надгробие.
-// Для дня действует накрывающая запись: позже начатая, затем короче, затем
-// позже изменённая; пусто в end_day — бессрочно, пусто в start_day — с начала.
-message GoalPeriod {
-  string id = 1 [(parvane.core.v2.max_len) = 64];
-  parvane.core.v2.LwwStamp stamp = 2;
-  string start_day = 3 [(parvane.core.v2.max_len) = 10];
-  string end_day = 4 [(parvane.core.v2.max_len) = 10];
-  Goal kcal = 5;
-  Goal protein = 6;
-  Goal fat = 7;
-  Goal carbs = 8;
-  Goal fiber = 9;
-  Goal water = 10;
-  parvane.core.v2.LwwStamp deleted = 11;
-}
-
-// Запись дневника питания — LWW-регистр целиком.
-message FoodEntry {
-  string id = 1 [(parvane.core.v2.max_len) = 64];
-  parvane.core.v2.LwwStamp stamp = 2;
-  string name = 3 [(parvane.core.v2.max_len) = 120];
-  // breakfast | lunch | dinner | snack | other
-  string meal = 4 [(parvane.core.v2.max_len) = 16];
-  double kcal = 5;
-  double protein = 6;
-  double fat = 7;
-  double carbs = 8;
-  double fiber = 9;
-  double grams = 10;
-  // Битовая маска известных значений: 1 kcal, 2 protein, 4 fat, 8 carbs,
-  // 16 fiber, 32 grams. Неизвестное не равно нулю.
-  uint32 known = 11;
-  bool per100 = 12;
-  parvane.core.v2.LwwStamp deleted = 13;
-  // spec 020: сахар и соль (граммы; биты `known` 64 и 128) и время приёма `HH:MM` (пусто — не задано).
-  double sugar = 14;
-  double salt = 15;
-  string time = 16 [(parvane.core.v2.max_len) = 5];
-}
-
-// Запись здоровья (spec 020): регистр целиком по `stamp`, надгробие. Вид записи — строка, чтобы новый
-// показатель не требовал смены схемы: weight (value — кг), pressure (value / value2 — верхнее и нижнее),
-// pulse, steps, mood (1…5), sleep (time — лёг, end_time — встал, value — минуты), workout (time, value —
-// минуты, value2 — километры, name, details — упражнения), goals (одна запись с целями здоровья в details).
-// Незнакомый вид клиент хранит и не показывает. `details` — JSON, движок его не разбирает.
-message HealthRecord {
-  string id = 1 [(parvane.core.v2.max_len) = 64];
-  parvane.core.v2.LwwStamp stamp = 2;
-  string day = 3 [(parvane.core.v2.max_len) = 10];
-  string kind = 4 [(parvane.core.v2.max_len) = 16];
-  string time = 5 [(parvane.core.v2.max_len) = 5];
-  string end_time = 6 [(parvane.core.v2.max_len) = 5];
-  double value = 7;
-  double value2 = 8;
-  string name = 9 [(parvane.core.v2.max_len) = 120];
-  string details = 10 [(parvane.core.v2.max_len) = 4000];
-  parvane.core.v2.LwwStamp deleted = 11;
-}
-
 // Слово словаря правок ввода текстом (12 окт 2026): первое слово названия записи → тип записи и
 // длительность события, которые пользователь выбирает вместо угаданных. Счётчик — сколько раз подряд
 // правка повторилась (клиент подставляет значение с порога 3, потолок 5). Значение и его счётчик —
@@ -318,15 +243,6 @@ message Reminded {
   parvane.core.v2.LwwStamp deleted = 3;
 }
 
-message NutritionDay {
-  string day = 1 [(parvane.core.v2.max_len) = 10];
-  repeated FoodEntry entries = 2 [(parvane.core.v2.max_items) = 200];
-  Bool is_complete = 3;
-  // цели на момент завершения дня
-  GoalSet fixed_goals = 4;
-  U32 water_ml = 5;
-}
-
 // Настройки дня (минуты от полуночи) и дневной бюджет — под одной меткой.
 message Settings {
   parvane.core.v2.LwwStamp stamp = 1;
@@ -347,17 +263,16 @@ message Migration {
 // ── операция и снимок ───────────────────────────────────────────────────────
 
 message Change {
+  // 17 ноя 2026 (spec 041 B4): питание, цели питания и здоровье — в `parvane.health.v1`
+  reserved 4, 6, 8, 9;
+  reserved "nutrition_day", "goals", "goal_period", "health";
+
   oneof change {
     Task task = 1;
     Event event = 2;
     List list = 3;
-    // слияние по полям дня и по записям
-    NutritionDay nutrition_day = 4;
     Settings settings = 5;
-    GoalSet goals = 6;
     Migration migration = 7;
-    GoalPeriod goal_period = 8;
-    HealthRecord health = 9;
     LearnedWord learned = 10;
     QuickLine quick_line = 11;
     Reminded reminded = 12;
@@ -371,14 +286,14 @@ message PlannerOp {
 
 // Открытый текст Snapshot: сведённое состояние на момент upto_seq.
 message PlannerSnapshot {
+  // 17 ноя 2026 (spec 041 B4): питание, цели питания и здоровье — в `parvane.health.v1`
+  reserved 4, 6, 7, 8;
+  reserved "nutrition", "goals", "goal_periods", "health";
+
   repeated Task tasks = 1 [(parvane.core.v2.max_items) = 20000];
   repeated Event events = 2 [(parvane.core.v2.max_items) = 5000];
   repeated List lists = 3 [(parvane.core.v2.max_items) = 100];
-  repeated NutritionDay nutrition = 4 [(parvane.core.v2.max_items) = 4000];
   Settings settings = 5;
-  GoalSet goals = 6;
-  repeated GoalPeriod goal_periods = 7 [(parvane.core.v2.max_items) = 1000];
-  repeated HealthRecord health = 8 [(parvane.core.v2.max_items) = 20000];
   // живые слова и надгробия вместе; движок не пишет в снимок больше (planner.rs `MAX_LEARNED_STORED`)
   repeated LearnedWord learned = 9 [(parvane.core.v2.max_items) = 2000];
   // история ввода текстом: живые строки и надгробия вместе, не больше `MAX_QUICK_STORED` (planner.rs)
