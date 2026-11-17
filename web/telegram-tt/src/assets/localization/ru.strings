@@ -1211,6 +1211,15 @@
 "ParvaneHealthBlockWater" = "Вода";
 "ParvaneHealthBlockWorkouts" = "Тренировки";
 "ParvaneProfileModulesHint" = "Что показывать и в каком порядке";
+"MusicSendToChat" = "Отправить в чат";
+"MusicTrackSent" = "Трек отправлен";
+"MusicTrackNotSent" = "Не удалось отправить трек";
+"MusicTrackSummary" = "Трек: {title}";
+"MusicTrackCardLabel" = "Трек";
+"MusicTrackCardPlay" = "Слушать";
+"MusicTrackCardMissing" = "Этого трека больше нет в библиотеке сервера";
+"MusicTrackCardFailed" = "Не удалось включить трек. Попробуйте ещё раз";
+"MusicTrackCardOtherServer" = "Из библиотеки сервера {server}: здесь его не включить";
 "MusicPlaylists" = "Плейлисты";
 "MusicPlaylistsAll" = "Все плейлисты";
 "MusicPlaylistsEmpty" = "Плейлистов пока нет. Назовите первый в поле выше";

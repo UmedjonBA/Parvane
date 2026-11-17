@@ -1226,6 +1226,35 @@
       "client": {
         "class": "message",
         "v1": {
+          "kind": "music_track",
+          "text": "Lampa — Ночной автобус",
+          "title": "Ночной автобус",
+          "track_id": "t42"
+        }
+      },
+      "expect": {
+        "content": {
+          "music_track": {
+            "artist": "Lampa",
+            "duration_secs": 215,
+            "server": "music.example",
+            "text": "Lampa — Ночной автобус",
+            "title": "Ночной автобус",
+            "track_id": "t42"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "d201620a03743432120d6d757369632e6578616d706c651a1bd09dd0bed187d0bdd0bed0b920d0b0d0b2d182d0bed0b1d183d18122054c616d706128d70132254c616d706120e2809420d09dd0bed187d0bdd0bed0b920d0b0d0b2d182d0bed0b1d183d181"
+      },
+      "name": "music-track"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
           "kind": "mod_report",
           "reason": "spam",
           "text": "Жалоба на сообщение в группе: спам"

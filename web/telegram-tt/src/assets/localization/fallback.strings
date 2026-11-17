@@ -3164,6 +3164,15 @@
 "ParvaneHealthBlockWater" = "Water";
 "ParvaneHealthBlockWorkouts" = "Workouts";
 "ParvaneProfileModulesHint" = "What is shown and in what order";
+"MusicSendToChat" = "Send to a chat";
+"MusicTrackSent" = "Track sent";
+"MusicTrackNotSent" = "Could not send the track";
+"MusicTrackSummary" = "Track: {title}";
+"MusicTrackCardLabel" = "Track";
+"MusicTrackCardPlay" = "Play";
+"MusicTrackCardMissing" = "This track is no longer in the server library";
+"MusicTrackCardFailed" = "Could not start the track. Try again";
+"MusicTrackCardOtherServer" = "From the library of {server}: it cannot be played here";
 "MusicPlaylists" = "Playlists";
 "MusicPlaylistsAll" = "All playlists";
 "MusicPlaylistsEmpty" = "No playlists yet. Name the first one above";

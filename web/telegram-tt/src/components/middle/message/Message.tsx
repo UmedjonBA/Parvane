@@ -207,6 +207,7 @@ import MessageEffect from './MessageEffect';
 import MessageMeta from './MessageMeta';
 import MessagePhoneCall from './MessagePhoneCall';
 import ModReportCard from './ModReportCard';
+import MusicTrackCard from './MusicTrackCard';
 import PaidMediaOverlay from './PaidMediaOverlay';
 import Photo from './Photo';
 import Poll from './poll/Poll';
@@ -589,7 +590,7 @@ const Message = ({
     voice, document, sticker, contact,
     invoice, location,
     action, game, storyData, giveaway,
-    giveawayResults, todo, dice, taskOffer, article, modReport,
+    giveawayResults, todo, dice, taskOffer, article, modReport, musicTrack,
   } = getMessageContent(message);
 
   const messageReplyInfo = getMessageReplyInfo(message);
@@ -1480,6 +1481,9 @@ const Message = ({
         )}
         {article && (
           <ArticleCard article={article} />
+        )}
+        {musicTrack && (
+          <MusicTrackCard track={musicTrack} />
         )}
         {modReport && (
           <ModReportCard report={modReport} />

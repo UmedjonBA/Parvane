@@ -24,6 +24,7 @@ import MusicFetch from './MusicFetch';
 import MusicPlaylistPicker from './MusicPlaylistPicker';
 import MusicPlaylists from './MusicPlaylists';
 import MusicQueue from './MusicQueue';
+import MusicSendDialog from './MusicSendDialog';
 import MusicTrackRow from './MusicTrackRow';
 
 import kit from '../notes/PvKit.module.scss';
@@ -106,6 +107,8 @@ const Music = () => {
   const [query, setQuery] = useState('');
   // Трек, для которого выбирают плейлист
   const [pickerTrack, setPickerTrack] = useState<MusicTrack>();
+  // Трек, который отправляют в чат
+  const [sentTrack, setSentTrack] = useState<MusicTrack>();
   const loadIdRef = useRef(0);
   const current = getCurrentTrack(player);
   const content = loaded?.view === view ? loaded.content : undefined;
@@ -198,6 +201,7 @@ const Music = () => {
   const handlePlayAll = useLastCallback(() => handlePlayFrom(0));
   const handleOpenPlaylist = useLastCallback((id?: string) => setView({ kind: 'playlists', id }));
   const handleClosePicker = useLastCallback(() => setPickerTrack(undefined));
+  const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
   const handleAddNext = useLastCallback((track: MusicTrack) => addToQueue([track], true));
 
   const handleStar = useLastCallback((track: MusicTrack) => {
@@ -227,6 +231,7 @@ const Music = () => {
             onStar={handleStar}
             onAddNext={handleAddNext}
             onAddToPlaylist={setPickerTrack}
+            onSendToChat={setSentTrack}
           />
         ))}
       </ul>
@@ -456,6 +461,7 @@ const Music = () => {
         <span className={buildClassName(kit.muted, kit.small)}>{lang('MusicServerLibrary')}</span>
       </header>
       {renderBody()}
+      <MusicSendDialog track={sentTrack} onClose={handleCloseSend} />
     </div>
   );
 };

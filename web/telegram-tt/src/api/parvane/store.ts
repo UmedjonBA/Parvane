@@ -930,6 +930,20 @@ function buildMessageContent(
     // его можно в разделе «Облако» («Доступные мне»)
     case 'cloud_invite':
       return { text: { text: content.text || `📁 ${content.name || ''}` } };
+    // TRACK-1: трек «Музыки» — карточка; играет, если библиотека — на сервере этого аккаунта
+    case 'music_track':
+      return content.track_id
+        ? {
+          musicTrack: {
+            mediaType: 'musicTrack',
+            trackId: content.track_id,
+            server: content.track_server || '',
+            title: content.title || '',
+            artist: content.artist || '',
+            durationSecs: content.duration_secs || 0,
+          },
+        }
+        : { text: { text: content.text || `🎵 ${content.title || ''}` } };
     // ARTICLE-1: статья — карточка с окном чтения
     case 'article':
       return content.markdown !== undefined

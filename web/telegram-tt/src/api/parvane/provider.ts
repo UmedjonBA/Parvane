@@ -2696,6 +2696,7 @@ const healthMethods = createHealthApi({
 const musicMethods = createMusicApi({
   call: (method, request) => getV2Bridge().control.call(method, request),
   playlists: () => v2Controller.music,
+  selfDomain: () => store.self.split('@')[1] || '',
   log: logDebug,
 });
 

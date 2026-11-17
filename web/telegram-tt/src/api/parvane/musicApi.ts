@@ -8,6 +8,8 @@ type Json = Record<string, unknown>;
 
 type Deps = {
   call: (method: string, request: Json) => Promise<Json>;
+  // Домен сервера аккаунта: его библиотеку и играет «Музыка»
+  selfDomain: () => string;
   // Плейлисты — личный контейнер пользователя (сервер видит шифртекст)
   playlists: () => MusicPlaylistsSync;
   log: (message: string) => void;
@@ -70,6 +72,8 @@ export type MusicArtist = {
 
 export type MusicInfo = {
   isEnabled: boolean;
+  // Домен сервера библиотеки (сервер аккаунта): карточка трека в чате играет только треки этого сервера
+  server: string;
   // База ссылок обложек: `<coverBase>/<coverId>?size=N`; пусто — обложек нет
   coverBase: string;
   coverExpiresMs: number;
@@ -269,6 +273,7 @@ export function createMusicApi(deps: Deps) {
         const reply = await deps.call('music.info', {});
         return {
           isEnabled: Boolean(field(reply, 'enabled')),
+          server: deps.selfDomain(),
           coverBase: text(reply, 'cover_base'),
           coverExpiresMs: count(reply, 'cover_expires_ms'),
           isFetchEnabled: Boolean(field(reply, 'fetch_enabled')),
@@ -281,6 +286,7 @@ export function createMusicApi(deps: Deps) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);
         return {
           isEnabled: false,
+          server: deps.selfDomain(),
           coverBase: '',
           coverExpiresMs: 0,
           isFetchEnabled: false,

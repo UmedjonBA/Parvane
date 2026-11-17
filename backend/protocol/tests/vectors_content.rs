@@ -203,6 +203,13 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             json!({"article": {"title": "Поход", "markdown": "# Поход\n\n- палатка\n- [[Маршрут]]", "text": "Статья «Поход»"}}),
             msg(json!({"kind": "article", "title": "Поход", "text": "Статья «Поход»"})),
         ),
+        // Трек «Музыки» (TRACK-1): карточка трека общей библиотеки; клиент без «Музыки» показывает `text`.
+        (
+            "music-track",
+            json!({"music_track": {"track_id": "t42", "server": "music.example", "title": "Ночной автобус", "artist": "Lampa",
+                "duration_secs": 215, "text": "Lampa — Ночной автобус"}}),
+            msg(json!({"kind": "music_track", "track_id": "t42", "title": "Ночной автобус", "text": "Lampa — Ночной автобус"})),
+        ),
         // Жалоба админам группы (spec 024, REPORT-1): клиент без модерации показывает `text`.
         (
             "mod-report",

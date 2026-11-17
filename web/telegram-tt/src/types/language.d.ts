@@ -2329,6 +2329,13 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'MusicSendToChat': undefined;
+  'MusicTrackSent': undefined;
+  'MusicTrackNotSent': undefined;
+  'MusicTrackCardLabel': undefined;
+  'MusicTrackCardPlay': undefined;
+  'MusicTrackCardMissing': undefined;
+  'MusicTrackCardFailed': undefined;
   'MusicPlaylists': undefined;
   'MusicPlaylistsAll': undefined;
   'MusicPlaylistsEmpty': undefined;
@@ -5076,6 +5083,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneModuleMoveDown': {
     'name': V;
+  };
+  'MusicTrackSummary': {
+    'title': V;
+  };
+  'MusicTrackCardOtherServer': {
+    'server': V;
   };
   'MusicPlaylistRemove': {
     'name': V;

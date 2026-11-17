@@ -36,6 +36,7 @@ type OwnProps = {
   onAddNext?: (track: MusicTrack) => void;
   onRemove?: (index: number) => void;
   onAddToPlaylist?: (track: MusicTrack) => void;
+  onSendToChat?: (track: MusicTrack) => void;
   // Плейлист: переставить строку на место `toIndex`
   onMove?: (index: number, toIndex: number) => void;
 };
@@ -43,7 +44,7 @@ type OwnProps = {
 // Parvane (spec 039): строка трека — обложка, название и исполнитель, длительность; нажатие играет
 const MusicTrackRow = ({
   track, index, isCurrent, isPlaying, canRemove, note, isMissing, removeLabel, lastIndex,
-  onPlay, onStar, onAddNext, onRemove, onDelete, onAddToPlaylist, onMove,
+  onPlay, onStar, onAddNext, onRemove, onDelete, onAddToPlaylist, onSendToChat, onMove,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -53,6 +54,7 @@ const MusicTrackRow = ({
   const handleRemove = useLastCallback(() => onRemove?.(index));
   const handleDelete = useLastCallback(() => onDelete?.(track));
   const handleAddToPlaylist = useLastCallback(() => onAddToPlaylist?.(track));
+  const handleSendToChat = useLastCallback(() => onSendToChat?.(track));
   const handleMoveUp = useLastCallback(() => onMove?.(index, index - 1));
   const handleMoveDown = useLastCallback(() => onMove?.(index, index + 1));
   const nowPlaying = isCurrent && isPlaying && lang('MusicNowPlaying');
@@ -100,6 +102,17 @@ const MusicTrackRow = ({
           onClick={handleAddToPlaylist}
         >
           <ParvaneIcon name="list" isSmall />
+        </button>
+      )}
+      {onSendToChat && (
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('MusicSendToChat')}
+          data-music-to-chat
+          onClick={handleSendToChat}
+        >
+          <ParvaneIcon name="chat" isSmall />
         </button>
       )}
       {onMove && (

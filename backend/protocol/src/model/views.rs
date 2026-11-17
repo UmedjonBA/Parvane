@@ -419,6 +419,17 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             put(&mut o, "text", json!(ci.text));
             o
         }
+        K::MusicTrack(t) => {
+            let mut o = Map::new();
+            o.insert("kind".into(), json!("music_track"));
+            o.insert("track_id".into(), json!(t.track_id));
+            put(&mut o, "track_server", json!(t.server));
+            o.insert("title".into(), json!(char_prefix(&t.title, 600)));
+            put(&mut o, "artist", json!(char_prefix(&t.artist, 600)));
+            put(&mut o, "duration_secs", json!(t.duration_secs));
+            put(&mut o, "text", json!(char_prefix(&t.text, 600)));
+            o
+        }
         K::Article(a) => {
             let mut o = Map::new();
             o.insert("kind".into(), json!("article"));
@@ -737,6 +748,15 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
                 r.insert("messages".into(), Value::Array(messages));
             }
             ("mod_report", Value::Object(r))
+        }
+        "music_track" => {
+            let mut t = Map::new();
+            set(&mut t, "track_id", c.get("track_id"));
+            set(&mut t, "server", c.get("track_server"));
+            for k in ["title", "artist", "duration_secs", "text"] {
+                set(&mut t, k, c.get(k));
+            }
+            ("music_track", Value::Object(t))
         }
         "article" => {
             let mut a = Map::new();
@@ -1070,7 +1090,8 @@ pub fn wire_to_body(c: &Map<String, Value>, has: &dyn Fn(&str) -> bool) -> Optio
         }),
         "article" if has("article") => V::Article(ViewArticle { title: str_of(c, "title"), markdown: str_of(c, "markdown") }),
         // Без возможности — текст для клиентов без раздела (TASK-1, CLOUD-1, ARTICLE-1); жалоба — текстом
-        "task_offer" | "cloud_invite" | "article" | "mod_report" => return Some(text_body(str_of(c, "text"))),
+        // Трек «Музыки» (TRACK-1): клиентам без раздела — текстом; свой вид показа появится вместе с «Музыкой» там
+        "task_offer" | "cloud_invite" | "article" | "mod_report" | "music_track" => return Some(text_body(str_of(c, "text"))),
         "task_response" => V::Service(ViewService {
             kind: if bool_of(c, "accepted") { "task_accepted".into() } else { "task_declined".into() },
             text: str_of(c, "text"),
@@ -1235,5 +1256,23 @@ mod tests {
         assert_eq!(b, text_body("Задание: Дело".into()));
         let b = wire_to_body(offer.as_object().unwrap(), &|f| f == "task_offer").unwrap();
         assert!(matches!(b.kind, Some(view_body::Kind::TaskOffer(_))));
+    }
+
+    /// TRACK-1: трек «Музыки» проходит туда и обратно; клиент без раздела получает текст.
+    #[test]
+    fn music_track_roundtrip_and_text_fallback() {
+        let wire = json!({
+            "kind": "music_track", "track_id": "t42", "track_server": "music.example", "title": "Ночной автобус",
+            "artist": "Lampa", "duration_secs": 215, "text": "Lampa — Ночной автобус",
+        });
+        let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
+        let Some(content::Kind::MusicTrack(t)) = &content.kind else { panic!("не трек: {content:?}") };
+        assert_eq!((t.track_id.as_str(), t.server.as_str(), t.duration_secs), ("t42", "music.example", 215));
+        assert_eq!(content_to_wire(&content).unwrap(), wire);
+        assert_eq!(class_of(&content), Class::Message);
+        assert!(crate::msg::is_trackable(&content));
+        let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
+        let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
+        assert_eq!(text.text, "Lampa — Ночной автобус");
     }
 }

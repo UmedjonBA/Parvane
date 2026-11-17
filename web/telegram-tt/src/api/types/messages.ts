@@ -427,6 +427,17 @@ export interface ApiModReport {
   messages: { uuid: string; authorId: string; text: string; date: number; isProven?: boolean }[];
 }
 
+// Parvane (TRACK-1): трек «Музыки» — карточка трека общей библиотеки сервера
+export interface ApiMusicTrackCard {
+  mediaType: 'musicTrack';
+  trackId: string;
+  // Домен сервера библиотеки
+  server: string;
+  title: string;
+  artist: string;
+  durationSecs: number;
+}
+
 // Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown
 export interface ApiArticle {
   mediaType: 'article';
@@ -770,6 +781,7 @@ export type MediaContent = {
   todo?: ApiMediaTodo;
   taskOffer?: ApiTaskOffer;
   article?: ApiArticle;
+  musicTrack?: ApiMusicTrackCard;
   modReport?: ApiModReport;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;

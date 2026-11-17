@@ -2206,6 +2206,23 @@ describe('CLOUD-1: приглашение в папку облака — вид�
   });
 });
 
+describe('TRACK-1: трек «Музыки» — видимое сообщение, клиент без «Музыки» показывает текст', () => {
+  const r = rule('TRACK-1') as unknown as { fieldNumbers: Record<string, number>; fallbackField: string };
+
+  it('схема, движок и web согласованы', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`MusicTrack music_track = ${r.fieldNumbers.music_track};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 6 [(parvane.core.v2.max_len) = 600];`);
+    const views = readRepo('backend/protocol/src/model/views.rs');
+    expect(views).toContain('"music_track" => {');
+    // Клиентам без раздела — текстом
+    expect(views).toContain('| "music_track" => return Some(text_body(str_of(c, "text"))),');
+    expect(readRepo('backend/protocol/src/msg.rs')).toContain('| Some(content::Kind::MusicTrack(_))');
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'music_track\':');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('kind: \'music_track\',');
+  });
+});
+
 describe('ARTICLE-1: статья — видимое сообщение, клиент без окна чтения показывает текст', () => {
   const r = rule('ARTICLE-1') as unknown as {
     kinds: string[];

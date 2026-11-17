@@ -138,6 +138,7 @@ const EMOJI_PACKS_PER_MESSAGE = 4;
 const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
 // Статья (ARTICLE-1): пределы полей схемы `Article`
 const ARTICLE_MAX_LENGTH = 65536;
+const MUSIC_LABEL_MAX = 600;
 const ARTICLE_TITLE_MAX = 200;
 const ARTICLE_TEXT_MAX = 600;
 const ARTICLE_MEDIA_MAX = 32;
@@ -169,6 +170,21 @@ const REPORT_PROOFS_MAX = 100 * 1024;
 const V2_GROUP_PREFIX = 'v2g:';
 
 // Поля статьи: название в пределах схемы и `text` — для клиентов без окна чтения
+// TRACK-1: содержимое карточки трека; `text` — «исполнитель — название» для клиентов без «Музыки»
+function musicTrackContent(track: {
+  trackId: string; server: string; title: string; artist: string; durationSecs: number;
+}): WireMessageContent {
+  return {
+    kind: 'music_track',
+    track_id: track.trackId,
+    track_server: track.server,
+    title: track.title.slice(0, MUSIC_LABEL_MAX),
+    artist: track.artist.slice(0, MUSIC_LABEL_MAX),
+    duration_secs: track.durationSecs,
+    text: `🎵 ${[track.artist, track.title].filter(Boolean).join(' — ')}`.slice(0, MUSIC_LABEL_MAX),
+  };
+}
+
 function articleFields(title: string, markdown: string) {
   const cleanTitle = title.trim().slice(0, ARTICLE_TITLE_MAX);
   return { title: cleanTitle, markdown, text: articleText(cleanTitle, markdown) };
@@ -1675,10 +1691,10 @@ export function createMessageController(deps: MessageDependencies) {
       const fromAddress = currentStore.getAddressForId(fromChat.id) || '';
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       for (const message of messages) {
-        const { article } = message.content;
+        const { article, musicTrack } = message.content;
         const wireContent = article
           ? { kind: 'article', ...articleFields(article.title, article.markdown) }
-          : deps.media.messageToWireContent(message);
+          : musicTrack ? musicTrackContent(musicTrack) : deps.media.messageToWireContent(message);
         if (!wireContent) continue;
         // Зашифрованное медиа: файл в облаке выдан только участникам исходного
         // чата, у нового получателя доступа нет (грант только при загрузке) —
@@ -1883,6 +1899,34 @@ export function createMessageController(deps: MessageDependencies) {
         deps.log(`удаление по жалобе не прошло: ${String(error)}`);
         return false;
       }
+    },
+
+    // Трек «Музыки» в чат (TRACK-1): карточка трека библиотеки своего сервера, байтов трека сообщение не несёт
+    async parvaneSendMusicTrack({ chatId, track }: {
+      chatId: string;
+      track: { id: string; title: string; artist: string; durationSecs: number };
+    }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chatId);
+      if (!toAddress || !track.id) return false;
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        ...musicTrackContent({
+          trackId: track.id,
+          server: currentStore.self.split('@')[1] || '',
+          title: track.title,
+          artist: track.artist,
+          durationSecs: track.durationSecs,
+        }),
+        ttl_secs: ttlSecs || undefined,
+      };
+      await publishInner(toAddress, content, uuid);
+      // v2 свою операцию назад не присылает: строка идёт обычным конвейером (как статья)
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
     },
 
     // Статья (ARTICLE-1): заметка «Знаний» целиком; картинки заметки не входят

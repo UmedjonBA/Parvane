@@ -304,6 +304,26 @@ try {
   assert.equal(await lists2.getByRole('button').count(), 1, 'после удаления остался один плейлист');
   console.log('OK: плейлисты пережили перезагрузку, плейлист удалён');
 
+  // ── Трек в чат: карточка в «Избранном», из неё трек играет ────────────────
+  await again2.locator('[data-view="albums"]').click();
+  await again2.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  await again2.locator('[data-music-tracks] [data-track="t2"] [data-music-to-chat]').click();
+  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().click();
+  await page.getByText('Track sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
+  const card = page.locator('[data-music-track-card="t2"]');
+  await card.getByText('Harbor Lights').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // В списке чатов — сводка «Трек: …», а не пустая строка
+  await page.locator('#LeftColumn .chat-list').getByText(/Track: .*Harbor Lights/).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await card.getByRole('button', { name: 'Play', exact: true }).click();
+  const backInMusic = await openMusic(page);
+  await backInMusic.locator('aside [data-music-now]').filter({ hasText: 'Harbor Lights' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('aside [data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: трек отправлен в чат карточкой и играет из неё');
+
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');
 } catch (error) {
