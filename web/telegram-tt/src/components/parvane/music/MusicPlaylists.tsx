@@ -6,6 +6,7 @@ import type { MusicPlaylist, MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
 import { splitListTime } from './musicFormat';
+import { saveTracksOffline } from './musicOffline';
 import { playTracks } from './musicPlayer';
 import {
   actOnPlaylists, getPlaylists, getPlaylistsStatus, loadPlaylistTracks, refreshPlaylists,
@@ -135,6 +136,10 @@ const MusicPlaylists = ({
     if (first >= 0) handlePlay(first);
   });
 
+  const handleSaveOffline = useLastCallback(() => {
+    saveTracksOffline(rows.filter((row) => !row.isMissing).map((row) => row.track));
+  });
+
   const handleRemove = useLastCallback((index: number) => {
     void actOnPlaylists({ action: 'remove', itemId: rows[index].itemId });
   });
@@ -207,6 +212,11 @@ const MusicPlaylists = ({
           {Boolean(rows.length) && (
             <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handlePlayAll}>
               {lang('MusicPlayAll')}
+            </button>
+          )}
+          {Boolean(rows.length) && (
+            <button type="button" className={kit.btn} data-music-save-offline onClick={handleSaveOffline}>
+              {lang('MusicOfflineSave')}
             </button>
           )}
           <button

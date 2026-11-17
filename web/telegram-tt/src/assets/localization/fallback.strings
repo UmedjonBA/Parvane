@@ -3164,6 +3164,18 @@
 "ParvaneHealthBlockWater" = "Water";
 "ParvaneHealthBlockWorkouts" = "Workouts";
 "ParvaneProfileModulesHint" = "What is shown and in what order";
+"MusicOffline" = "Downloaded";
+"MusicOfflineSave" = "Download";
+"MusicOfflineNoNetwork" = "No connection: only downloaded tracks play";
+"MusicOfflineEmpty" = "Nothing is downloaded yet. Open an album or a playlist and download it to listen without a connection";
+"MusicOfflineProgress" = "Downloading: {done} of {total}";
+"MusicOfflineLimit" = "There is no room left for downloads on this device";
+"MusicOfflineFailed" = "Could not download: no connection to the server";
+"MusicOfflineClear" = "Delete all downloads";
+"MusicOfflineClearConfirm" = "Delete for good";
+"MusicOfflineRemove" = "Remove from this device: {name}";
+"MusicOfflineUsage_one" = "{count} track · {used} of {limit} on this device";
+"MusicOfflineUsage_other" = "{count} tracks · {used} of {limit} on this device";
 "MusicSendToChat" = "Send to a chat";
 "MusicTrackSent" = "Track sent";
 "MusicTrackNotSent" = "Could not send the track";
@@ -3199,7 +3211,7 @@
 "MusicTracksCount_other" = "{count} tracks";
 "MusicSizeGb" = "{value} GB";
 "MusicSizeMb" = "{value} MB";
-"MusicAdded" = "Uploaded";
+"MusicAdded" = "Added by me";
 "MusicAddedEmpty" = "You have not added anything yet. Find a track and download it";
 "MusicAddedBy" = "added by {name}";
 "MusicAddedDelete" = "Remove from the server library: {name}";

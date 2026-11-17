@@ -5,11 +5,11 @@ import type {
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import { engineStatic, loadProtocol } from '../../../api/parvane/v2/engine';
-
 // Parvane (spec 039, 041): плеер «Музыки» — один на приложение: играет в любом модуле, им управляют экран
 // «Музыки», мини-плеер на телефоне и виджет в боковой панели. Порядок воспроизведения (следующий трек,
 // «вперемешку», повтор, правка очереди) считает движок (`musicQueue*`, правило MUSIC-1); здесь — элемент
 // `<audio>`, ссылки на поток и память устройства (очередь, недавно прослушанное)
+import { loadOfflineUrl } from './musicOffline';
 
 type MusicMethods = ReturnType<typeof createMusicApi>;
 export const callMusic = callApi as unknown as <N extends keyof MusicMethods>(
@@ -165,6 +165,9 @@ function rememberPlayed(track: MusicTrack) {
 }
 
 async function streamUrlOf(trackId: string) {
+  // Трек, сохранённый на устройстве, играет без сервера
+  const offlineUrl = await loadOfflineUrl(trackId);
+  if (offlineUrl) return offlineUrl;
   const cached = streamUrls.get(trackId);
   if (cached && cached.expiresMs - URL_MARGIN_MS > Date.now()) return cached.url;
   const reply = await callMusic('parvaneMusicStreamUrl', { trackId, quality: pickQuality() });

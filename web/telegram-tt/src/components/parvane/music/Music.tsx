@@ -9,6 +9,7 @@ import type {
 import buildClassName from '../../../util/buildClassName';
 import { getParvaneSection } from '../../../util/parvaneSection';
 import { splitBytes, splitListTime } from './musicFormat';
+import { saveTracksOffline } from './musicOffline';
 import {
   addToQueue, callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks,
   restoreMusicQueue, setTrackStarred,
@@ -21,6 +22,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
 import MusicFetch from './MusicFetch';
+import MusicOffline from './MusicOffline';
 import MusicPlaylistPicker from './MusicPlaylistPicker';
 import MusicPlaylists from './MusicPlaylists';
 import MusicQueue from './MusicQueue';
@@ -31,7 +33,7 @@ import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
 
 type View =
-  | { kind: 'home' | 'starred' | 'artists' | 'albums' | 'added' | 'queue' }
+  | { kind: 'home' | 'starred' | 'artists' | 'albums' | 'added' | 'offline' | 'queue' }
   // Плейлисты пользователя: список либо открытый плейлист
   | { kind: 'playlists'; id?: string }
   | { kind: 'album'; id: string }
@@ -132,7 +134,7 @@ const Music = () => {
   const isEnabled = info?.isEnabled;
   const isPlaylistsShown = isShown && view.kind === 'playlists';
   useEffect(() => {
-    if (isShown && isEnabled && view.kind !== 'playlists') void load(view);
+    if (isShown && isEnabled && view.kind !== 'playlists' && view.kind !== 'offline') void load(view);
   }, [isShown, isEnabled, view, load]);
 
   // Пока плейлисты на экране, их контейнер сверяется с сервером часто
@@ -199,6 +201,9 @@ const Music = () => {
     void load(view);
   });
   const handlePlayAll = useLastCallback(() => handlePlayFrom(0));
+  const handleSaveOffline = useLastCallback(() => {
+    if (content?.tracks) saveTracksOffline(content.tracks);
+  });
   const handleOpenPlaylist = useLastCallback((id?: string) => setView({ kind: 'playlists', id }));
   const handleClosePicker = useLastCallback(() => setPickerTrack(undefined));
   const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
@@ -300,6 +305,7 @@ const Music = () => {
 
   function renderContent() {
     if (view.kind === 'queue') return <MusicQueue />;
+    if (view.kind === 'offline') return <MusicOffline currentTrackId={current?.id} isPlaying={player.isPlaying} />;
     if (view.kind === 'playlists') {
       return (
         <MusicPlaylists
@@ -361,6 +367,9 @@ const Music = () => {
                 <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handlePlayAll}>
                   {lang('MusicPlayAll')}
                 </button>
+                <button type="button" className={kit.btn} data-music-save-offline onClick={handleSaveOffline}>
+                  {lang('MusicOfflineSave')}
+                </button>
               </>
             )}
           </div>
@@ -410,6 +419,16 @@ const Music = () => {
           >
             <ParvaneIcon name="list" isSmall />
             <span>{lang('MusicPlaylists')}</span>
+          </button>
+          <button
+            type="button"
+            className={buildClassName(styles.navItem, view.kind === 'offline' && styles.navItemOn)}
+            aria-current={view.kind === 'offline' ? 'page' : undefined}
+            data-view="offline"
+            onClick={handleNav}
+          >
+            <ParvaneIcon name="cloud" isSmall />
+            <span>{lang('MusicOffline')}</span>
           </button>
           {info.isFetchEnabled && (
             <button

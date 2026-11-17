@@ -2329,6 +2329,14 @@ export interface LangPair {
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
   'ParvaneProfileModulesHint': undefined;
+  'MusicOffline': undefined;
+  'MusicOfflineSave': undefined;
+  'MusicOfflineNoNetwork': undefined;
+  'MusicOfflineEmpty': undefined;
+  'MusicOfflineLimit': undefined;
+  'MusicOfflineFailed': undefined;
+  'MusicOfflineClear': undefined;
+  'MusicOfflineClearConfirm': undefined;
   'MusicSendToChat': undefined;
   'MusicTrackSent': undefined;
   'MusicTrackNotSent': undefined;
@@ -5084,6 +5092,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneModuleMoveDown': {
     'name': V;
   };
+  'MusicOfflineProgress': {
+    'done': V;
+    'total': V;
+  };
+  'MusicOfflineRemove': {
+    'name': V;
+  };
   'MusicTrackSummary': {
     'title': V;
   };
@@ -6394,6 +6409,11 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   };
   'PollModalAddMoreText': {
     'count': V;
+  };
+  'MusicOfflineUsage': {
+    'count': V;
+    'used': V;
+    'limit': V;
   };
   'MusicTracksCount': {
     'count': V;

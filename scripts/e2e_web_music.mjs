@@ -4,7 +4,8 @@
 // следующим», плеер вне модуля, очередь после перезагрузки, полоса плеера на телефоне; «Найти и скачать»
 // (поддельный сервис скачивания `scripts/fake_music_fetch.mjs`, лимит раннера — три трека в сутки): уверенное
 // совпадение качается само, спорное — выбором файла, ничего не нашлось, лимит, «Загруженное» и удаление;
-// плейлисты (личный контейнер): создать, добавить, порядок, играть, переименовать, перезагрузка, удалить.
+// плейлисты (личный контейнер): создать, добавить, порядок, играть, переименовать, перезагрузка, удалить;
+// трек в чат карточкой; «Загруженное» — альбом на устройстве играет без сети.
 // Запуск: scripts/run_web_music_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -323,6 +324,35 @@ try {
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backInMusic.locator('aside [data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: трек отправлен в чат карточкой и играет из неё');
+
+  // ── «Загруженное»: альбом на устройстве играет без сети ───────────────────
+  const backSide = backInMusic.locator('aside');
+  await backSide.getByRole('button', { name: 'Pause' }).click();
+  await backInMusic.locator('[data-view="offline"]').click();
+  await backInMusic.locator('[data-music-offline="0"] [data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('[data-view="albums"]').click();
+  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  await backInMusic.locator('[data-music-save-offline]').click();
+  await backInMusic.locator('[data-view="offline"]').click();
+  await backInMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await backInMusic.locator('[data-offline-usage]').getByText(/3 tracks · .* of 1 GB on this device/)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await context.setOffline(true);
+  await backInMusic.locator('[data-offline-banner]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('[data-music-offline] [data-track="t3"]').getByRole('button').first().click();
+  await backSide.locator('[data-music-now]').filter({ hasText: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backSide.locator('[data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backSide.locator('[data-music-position]').filter({ hasText: /0:0[1-9]/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backSide.getByRole('button', { name: 'Pause' }).click();
+  await context.setOffline(false);
+  await backInMusic.locator('[data-offline-banner]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: альбом загружен на устройство и играет без сети');
+  await backInMusic.getByRole('button', { name: 'Remove from this device: Соль' }).click();
+  await backInMusic.locator('[data-music-offline="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('[data-offline-clear="ask"]').click();
+  await backInMusic.locator('[data-offline-clear="confirm"]').click();
+  await backInMusic.locator('[data-music-offline="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: загруженное убирается по одному и целиком');
 
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');
