@@ -1,0 +1,505 @@
+// Parvane (spec 041 D1): заметка по доскам `PhNotesMore`, `DeskNotes`, `XpNotes` — шапка с режимами «Просмотр /
+// Правка / Рядом», чтение, редактор с кнопками разметки, меню действий. Текст заметки, «Запланировано» и
+// «Связи» красит `Knowledge.module.scss`. Цвета — переменные `--pv-*`
+
+.note {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+// Панель рядом с графом: высоту и прокрутку даёт сама панель
+.notePanel {
+  height: auto;
+  min-height: 100%;
+}
+
+// ── шапка ────────────────────────────────────────────────────────────────────
+
+.bar {
+  position: relative;
+  z-index: 2;
+
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  min-height: var(--pv-header-height);
+  padding: 0.375rem 0.5rem 0.375rem 1.75rem;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.barCompact {
+  gap: 0.25rem;
+  padding: 0 0.375rem;
+  background: var(--pv-panel);
+}
+
+.notePanel .barCompact {
+  position: sticky;
+  top: 0;
+  margin: 0 -0.375rem;
+}
+
+.barTitle {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  margin: 0;
+
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTitleLead {
+  padding-inline-start: 0.625rem;
+}
+
+.notePanel .barTitle {
+  font-size: var(--pv-font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-muted);
+}
+
+.crumb {
+  overflow: hidden;
+  flex: 1 1 0;
+
+  min-width: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar .modes {
+  flex: 0 1 18.75rem;
+  min-width: 15rem;
+}
+
+.kbd {
+  flex: none;
+
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-xs);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+
+  @media (max-width: 1100px) {
+    display: none;
+  }
+}
+
+.barText {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: var(--pv-touch-size);
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+  white-space: nowrap;
+
+  background: none;
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.barTextMuted {
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-muted);
+}
+
+.bar .ibOn {
+  color: var(--pv-at);
+  background: var(--pv-raised);
+}
+
+.more {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+// ── чтение ───────────────────────────────────────────────────────────────────
+
+.scroll {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.notePanel .scroll {
+  overflow: visible;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  min-width: 0;
+  padding: 1.125rem 1.75rem 1.5rem;
+
+  @media (max-width: 760px) {
+    padding: 1rem;
+  }
+}
+
+.notePanel .body {
+  padding: 0.875rem 0 0;
+}
+
+.meta {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.metaFolder {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    border-radius: var(--pv-radius-xs);
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.title {
+  margin: 0;
+
+  font-size: 1.625rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+  color: var(--pv-fg);
+  overflow-wrap: anywhere;
+
+  @media (max-width: 760px) {
+    font-size: 1.5rem;
+  }
+}
+
+.titleInput {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+
+  font-family: inherit;
+
+  background: none;
+  outline: none;
+
+  &:hover {
+    border-bottom-color: var(--pv-line2);
+  }
+
+  &:focus {
+    border-bottom-color: var(--pv-accent);
+  }
+}
+
+.body .wideButton {
+  align-self: stretch;
+  max-width: 70ch;
+  margin-top: 0.25rem;
+}
+
+// ── правка ───────────────────────────────────────────────────────────────────
+
+.work {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.notePanel .work {
+  flex-direction: column;
+  min-height: 24rem;
+  margin: 0 -0.375rem;
+}
+
+.editPane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+
+  min-width: 0;
+  min-height: 0;
+}
+
+.workSplit .editPane {
+  border-inline-end: 1px solid var(--pv-line);
+}
+
+.editor {
+  resize: none;
+
+  flex: 1 1 auto;
+
+  width: 100%;
+  min-height: 0;
+  padding: 1rem 1.75rem;
+  border: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-muted);
+  }
+
+  @media (max-width: 760px) {
+    padding: 1rem;
+  }
+}
+
+.notePanel .editor {
+  min-height: 18rem;
+  padding: 0.875rem 1rem;
+}
+
+.previewPane {
+  overflow-y: auto;
+  flex: 1 1 0;
+
+  min-width: 0;
+  min-height: 0;
+  padding: 1.125rem 1.75rem 1.5rem;
+
+  @media (max-width: 760px) {
+    padding: 1rem;
+  }
+}
+
+.suggest {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+
+  padding: 0.375rem 0.625rem;
+  border-top: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size-small);
+
+  background: var(--pv-panel);
+}
+
+.suggestLabel {
+  color: var(--pv-muted);
+}
+
+.suggestChip {
+  cursor: var(--custom-cursor, pointer);
+
+  overflow: hidden;
+
+  max-width: 14rem;
+  height: 1.875rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.9375rem;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.tools {
+  scrollbar-width: none;
+
+  overflow-x: auto;
+  display: flex;
+  flex: none;
+  gap: 0.125rem;
+
+  padding: 0.25rem 0.375rem;
+  padding-bottom: calc(0.25rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.toolsGap {
+  display: flex;
+  flex: none;
+  gap: 0.125rem;
+
+  margin-inline-start: 0.375rem;
+  padding-inline-start: 0.375rem;
+  border-inline-start: 1px solid var(--pv-line);
+}
+
+.tool {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  min-width: var(--pv-touch-size);
+  height: var(--pv-touch-size);
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius-md);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  @media (min-width: 761px) {
+    min-width: 2.25rem;
+    height: 2.25rem;
+    font-size: var(--pv-font-size-small);
+  }
+}
+
+// ── меню действий ────────────────────────────────────────────────────────────
+
+.menuBackdrop {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+}
+
+.menu {
+  position: absolute;
+  z-index: 11;
+  inset-block-start: calc(100% + 0.25rem);
+  inset-inline-end: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  min-width: 14.5rem;
+  padding: 0.375rem 0;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.menuSheet {
+  display: flex;
+  flex-direction: column;
+  margin: 0 -1rem;
+}
+
+.menuItem {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  height: var(--pv-menu-item-height);
+  padding: 0 1rem;
+  border: 0;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+  white-space: nowrap;
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--pv-focus-ring);
+  }
+}
+
+.menu .menuItem {
+  height: 2.5rem;
+}
+
+.menuItemDanger {
+  color: var(--pv-red);
+}

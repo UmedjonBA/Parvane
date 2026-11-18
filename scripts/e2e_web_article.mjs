@@ -106,7 +106,7 @@ try {
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   // Справка нового хранилища пишется сама — заметку создаём после неё, чтобы «Обзор» её не перебил
   await knowledge.locator('[data-note-row="Overview"]').first().waitFor({ state: 'visible', timeout: 60000 });
-  await knowledge.getByRole('button', { name: 'New note' }).click();
+  await page.locator('#FoldersSidebar [data-add-for="notes"]').click();
   await note.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.waitForTimeout(400);
   await note.getByLabel('Note title').fill(title);

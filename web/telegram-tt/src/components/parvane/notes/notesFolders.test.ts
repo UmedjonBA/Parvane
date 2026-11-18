@@ -73,14 +73,14 @@ describe('папки заметок', () => {
       note('2026-10-11', 'Ежедневные', true), note('2026-10-12', 'Ежедневные', true),
     ];
     const groups = buildNoteGroups({
-      notes, folders, dailyFolders: ['Ежедневные', 'Daily'], dailyShown: 1,
+      notes, folders, dailyFolders: ['Ежедневные', 'Daily'],
     });
     expect(groups.map(({ key, folderId, items }) => [key, folderId, items.length])).toEqual([
       ['', undefined, 1], ['Идеи', 'empty', 0], ['Работа', 'work', 1], ['Работа/Сервер', 'deep', 1],
-      [DAILY_GROUP_KEY, 'd', 1],
+      [DAILY_GROUP_KEY, 'd', 2],
     ]);
     const daily = groups[groups.length - 1];
-    expect(daily).toMatchObject({ isDaily: true, folder: 'Ежедневные', hidden: 1 });
+    expect(daily).toMatchObject({ isDaily: true, folder: 'Ежедневные' });
     expect(daily.items[0].title).toBe('2026-10-12');
   });
 
@@ -92,19 +92,6 @@ describe('папки заметок', () => {
     // Пустая папка заметок дня отдельной строкой не показывается
     const daily = [{ id: 'd', path: 'Daily', name: 'Daily' }];
     expect(buildNoteGroups({ notes: [], folders: daily, dailyFolders: ['Daily'] }).map(({ key }) => key)).toEqual(['']);
-  });
-
-  it('группы списка при поиске: только найденное, заметки дня все', () => {
-    const groups = buildNoteGroups({
-      notes: [note('Железо', 'Работа/Сервер'), note('2026-10-11', 'Daily', true), note('2026-10-12', 'Daily', true)],
-      folders: listNoteFolders(TREE, 'v'),
-      dailyFolders: ['Daily'],
-      isSearch: true,
-      dailyShown: 1,
-    });
-    expect(groups.map(({ key, items, hidden }) => [key, items.length, hidden])).toEqual([
-      ['Работа/Сервер', 1, 0], [DAILY_GROUP_KEY, 2, 0],
-    ]);
   });
 
   it('заметка с названием-датой вне заметок дня остаётся в своей папке', () => {

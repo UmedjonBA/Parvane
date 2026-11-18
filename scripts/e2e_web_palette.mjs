@@ -75,7 +75,7 @@ try {
   await visible(knowledge, 'раздел заметок');
   // Справка нового хранилища пишется по одной заметке: дождаться её, чтобы не спорить с её записью
   await visible(knowledge.locator('[data-note-row="Overview"]'), '«Обзор» справки нового хранилища');
-  await knowledge.getByRole('button', { name: 'New note' }).click();
+  await sidebar.locator('[data-add-for="notes"]').click();
   const note = knowledge.locator('[data-note-id]');
   // «Обзор» справки открывается сам: ждём именно новую заметку, иначе название достаётся «Обзору»
   await visible(knowledge.locator('[data-note-title="New note"]'), 'новая заметка открыта');
@@ -249,6 +249,8 @@ try {
   // ── Телефон: лупа в шапке раздела ─────────────────────────────────────────
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
+  // Заметка на телефоне занимает весь экран, ленты модулей под ней нет — сначала назад к списку
+  await knowledge.getByRole('button', { name: 'Back to notes' }).click();
   await openPlannerScreen(page, 'calendar');
   // Лупа «Плана» ищет только по записям плана: команд и чатов в ней нет
   await planner.locator('[data-palette-open]').click();
@@ -266,18 +268,19 @@ try {
   await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   await input.fill('files');
   await found('command', 'Files').click();
-  // Команда «Файлы» — вкладка «Файлы» раздела «Знания»; лупа в шапке ищет по файлам
+  // Команда «Файлы» открывает модуль «Файлы»; лупа в шапке ищет по файлам
   const cloud = page.locator('#ParvaneCloud');
   await visible(cloud, '«Файлы» по команде на телефоне');
   const cloudHeader = cloud.locator('header');
   await cloudHeader.locator('[data-section-search-open]').click();
   await visible(cloudHeader.locator('[data-section-search]'), 'поле поиска по файлам в шапке');
-  await cloudHeader.locator('[role="tablist"]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  // Поле встаёт на место названия модуля
+  await hidden(cloudHeader.getByRole('heading', { name: 'Files' }), 'название модуля осталось рядом с полем поиска');
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/palette-phone.png` });
   }
   await cloudHeader.locator('[data-section-search-close]').click();
-  await visible(cloudHeader.locator('[role="tablist"]'), 'вкладки «Файлов» после закрытия поиска');
+  await visible(cloudHeader.getByRole('heading', { name: 'Files' }), 'название «Файлов» после закрытия поиска');
   console.log('OK: на телефоне лупа «Плана» ищет по плану, лупа «Файлов» — по файлам, Ctrl+K — везде');
 
   assert.deepEqual(session.errors, [], `ошибки страницы: ${session.errors.join('; ')}`);

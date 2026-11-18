@@ -8,13 +8,12 @@ import { LeftColumnContent } from '../../types';
 import { ALL_FOLDER_ID } from '../../config';
 import buildClassName from '../../util/buildClassName';
 import {
-  getKnowledgeView, requestHealthAdd, requestModuleAdd, requestPlannerAdd,
+  requestHealthAdd, requestModuleAdd, requestPlannerAdd,
 } from '../../util/parvaneSection';
 import {
   getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
 } from './parvaneModuleNav';
 
-import useDerivedState from '../../hooks/useDerivedState';
 import useFlag from '../../hooks/useFlag';
 import { useFolderManagerForUnreadCounters } from '../../hooks/useFolderManager';
 import useLang from '../../hooks/useLang';
@@ -50,10 +49,9 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   const lang = useLang();
   const scrollRef = useRef<HTMLDivElement>();
   const { enabled: modules } = useParvaneModules();
-  const knowledgeView = useDerivedState(getKnowledgeView);
   const unreadCount = useFolderManagerForUnreadCounters()[ALL_FOLDER_ID]?.chatsCount || 0;
 
-  const activeModule = getActiveModule(section, knowledgeView, Boolean(isSettingsOpen));
+  const activeModule = getActiveModule(section, Boolean(isSettingsOpen));
   const isScrollable = modules.length > MAX_FIT_MODULES;
 
   const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();

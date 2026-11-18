@@ -1,9 +1,9 @@
 // Markdown заметки (MD-1, 6 ноя 2026): тестовый файл пользователя со всеми конструкциями (`conformance/markdown/`)
 // показывается целиком — H1–H6, вложенные цитаты, callouts (сворачиваемый закрыт), подсветка кода, таблицы, задачи
 // (и в нумерованном списке — галочка сохраняется), нумерация с 7, якорь `#раздел` прокручивает к заголовку,
-// HTML не исполняется, комментарии скрыты. Правка на широком экране — редактор и живой просмотр рядом, список
-// заметок и «Связи» убраны; на телефоне — одно окно и кнопка «правка ↔ просмотр», которая остаётся на экране
-// при прокрутке. Снимки — в PARVANE_E2E_SHOT_DIR / PARVANE_E2E_BACKEND_LOG_DIR.
+// HTML не исполняется, комментарии скрыты. Правка на широком экране в режиме «Рядом» — редактор и живой просмотр
+// рядом, колонка «Связи» убрана; на телефоне — одно окно и глазок «правка ↔ просмотр» в шапке, которая остаётся
+// на экране при прокрутке. Снимки — в PARVANE_E2E_SHOT_DIR / PARVANE_E2E_BACKEND_LOG_DIR.
 // Запуск: scripts/run_web_markdown_e2e.sh
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -52,12 +52,6 @@ try {
       && ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))) node = node.parentElement;
     if (node) node.scrollTop = to === 'end' ? node.scrollHeight : to;
   }, where);
-  // Правый нижний угол экрана (над нижней панелью разделов телефона)
-  const inCorner = (locator) => locator.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.right > window.innerWidth - 96 && rect.right <= window.innerWidth
-      && rect.bottom > window.innerHeight - 200 && rect.bottom <= window.innerHeight;
-  });
   const inViewport = (locator) => locator.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth
@@ -66,17 +60,17 @@ try {
 
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок');
-  await knowledge.getByRole('button', { name: 'New note' }).click();
+  await page.locator('#FoldersSidebar [data-add-for="notes"]').click();
   await visible(note, 'открытая заметка');
   const title = note.getByLabel('Note title');
   await title.fill(TITLE);
   await title.blur();
 
-  // ── Правка на широком экране: редактор и просмотр рядом, без списка и «Связей» ──
+  // ── Правка на широком экране, режим «Рядом»: редактор и просмотр рядом, без колонки «Связи» ──
   const editor = page.locator('#knowledge-note-editor');
   // Переименование перерисовывает заметку — нажатие сразу после него может потеряться: повторить
   for (let attempt = 0; attempt < 5 && !await editor.isVisible(); attempt++) {
-    await note.getByRole('button', { name: 'Edit' }).first().click().catch(() => undefined);
+    await note.getByRole('button', { name: 'Split', exact: true }).click().catch(() => undefined);
     await editor.waitFor({ state: 'visible', timeout: 3000 }).catch(() => undefined);
   }
   // Редактор после открытия правки ещё раз перерисовывается — заполнение может попасть в отцепленный узел
@@ -90,7 +84,9 @@ try {
   await visible(split, 'правка с просмотром рядом');
   const preview = note.locator('[data-note-preview]');
   await visible(preview.locator('[role="heading"][aria-level="4"]'), 'H4 в живом просмотре');
-  assert.equal(await knowledge.locator('[data-notes-list]').count(), 0, 'список заметок убран на время правки');
+  assert.equal(await note.getAttribute('data-note-mode'), 'split', 'режим заметки — не «Рядом»');
+  assert.equal(await knowledge.locator('[data-notes-list]').count(), 1, 'список заметок остаётся при правке');
+  assert.equal(await knowledge.getByRole('complementary', { name: 'Links' }).count(), 0, 'колонка «Связи» не убрана на время правки');
   const editorBox = await editor.boundingBox();
   const previewBox = await preview.boundingBox();
   assert.ok(editorBox && previewBox && previewBox.x > editorBox.x + editorBox.width - 1, 'просмотр справа от редактора');
@@ -151,8 +147,9 @@ try {
   console.log('OK: правка — панели одной высоты, прокрутка синхронна по строкам в обе стороны');
   await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body, 'текст заметки после сохранения');
-  await visible(knowledge.locator('[data-notes-list]'), 'список заметок вернулся после правки');
-  console.log('OK: правка — редактор и живой просмотр рядом, список и «Связи» на время правки убраны');
+  assert.equal(await note.getAttribute('data-note-mode'), 'view', 'после «Готово» заметка не в просмотре');
+  await visible(knowledge.getByRole('complementary', { name: 'Links' }), 'колонка «Связи» вернулась после правки');
+  console.log('OK: правка «Рядом» — редактор и живой просмотр, «Связи» на время правки убраны');
 
   // ── Показ: все конструкции ──
   for (let level = 1; level <= 6; level++) {
@@ -203,11 +200,16 @@ try {
   await visible(page.getByText('Text copied to clipboard', { exact: false }).first(), 'уведомление о копировании');
   await scrollNote(0.9);
   const bar = page.locator('[data-note-bar]');
-  await visible(bar.locator('[data-note-bar-edit]'), '«Изменить» в шапке');
-  await visible(bar.locator('[data-note-bar-plan]'), '«Запланировать» в шапке');
-  assert.ok(await inViewport(bar.locator('[data-note-bar-edit]')), '«Изменить» на экране и в конце заметки');
+  const editMode = bar.getByRole('button', { name: 'Edit', exact: true });
+  await visible(editMode, '«Правка» в шапке');
+  assert.ok(await inViewport(editMode), '«Правка» на экране и в конце заметки');
+  await bar.locator('[data-note-menu]').click();
+  await visible(page.locator('[data-note-menu-list] [data-note-action="plan"]'), '«Запланировать» в меню заметки');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-note-menu-list]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('Escape не закрыл меню заметки'));
   await scrollNote(0);
-  console.log('OK: текст выделяется, «Копировать» у кода, «Изменить»/«Запланировать» в закреплённой шапке');
+  console.log('OK: текст выделяется, «Копировать» у кода, режимы и меню — в закреплённой шапке');
 
   // ── Якорь `#раздел` прокручивает к заголовку ──
   await scrollNote(0);
@@ -233,17 +235,17 @@ try {
   }, undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('галочка нумерованного пункта не сохранилась'));
   console.log('OK: галочка в нумерованном списке отмечается');
 
-  // ── Телефон: одно окно, кнопка «правка ↔ просмотр» на месте при прокрутке ──
+  // ── Телефон: одно окно, глазок «правка ↔ просмотр» в шапке — на месте при прокрутке ──
   await page.setViewportSize(PHONE);
   await visible(note, 'заметка на телефоне');
   await note.getByRole('button', { name: 'Edit' }).first().click();
   const toggle = note.locator('[data-note-preview-toggle]');
   await visible(note.locator('[data-note-edit="editor"]'), 'на телефоне — только редактор');
   await visible(toggle, 'кнопка просмотра');
-  assert.ok(await inCorner(toggle), 'кнопка просмотра в правом нижнем углу');
+  assert.ok(await inViewport(toggle), 'глазок просмотра в шапке');
   await scrollNote('end');
   await page.waitForTimeout(300);
-  assert.ok(await inCorner(toggle), 'кнопка на экране после прокрутки вниз (редактор)');
+  assert.ok(await inViewport(toggle), 'кнопка на экране после прокрутки вниз (редактор)');
   await shot('phone-editor');
   await toggle.click();
   await visible(note.locator('[data-note-edit="preview"]'), 'на телефоне — просмотр вместо редактора');
@@ -251,11 +253,11 @@ try {
   await visible(note.locator('[data-note-preview] [role="heading"][aria-level="6"]'), 'H6 в просмотре на телефоне');
   await scrollNote(4000);
   await page.waitForTimeout(300);
-  assert.ok(await inCorner(toggle), 'кнопка на экране посреди прокрутки (просмотр)');
+  assert.ok(await inViewport(toggle), 'кнопка на экране посреди прокрутки (просмотр)');
   await shot('phone-preview-mid');
   await scrollNote('end');
   await page.waitForTimeout(300);
-  assert.ok(await inCorner(toggle), 'кнопка на экране в конце прокрутки (просмотр)');
+  assert.ok(await inViewport(toggle), 'кнопка на экране в конце прокрутки (просмотр)');
   await shot('phone-preview-end');
   await toggle.click();
   await visible(note.locator('[data-note-edit="editor"]'), 'обратно к редактору');

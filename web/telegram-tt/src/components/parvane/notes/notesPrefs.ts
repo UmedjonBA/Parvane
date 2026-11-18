@@ -1,13 +1,12 @@
-// Настройки раздела «Знания» на этом устройстве: свёрнутые папки, «справку уже показывали», папки графа,
+// Настройки модуля «Заметки» на этом устройстве: «справку уже показывали», папки графа,
 // качество картинок на холсте
 
 import type { CanvasImageQuality } from './notesCanvasImages';
 
-const COLLAPSED_KEY = 'parvane:knowledge-collapsed';
 const GUIDE_SEEN_KEY = 'parvane:knowledge-guide-seen';
 const GRAPH_FOLDERS_KEY = 'parvane:knowledge-graph-folders';
 const CANVAS_IMAGES_KEY = 'parvane:knowledge-canvas-images';
-const COLLAPSED_MAX = 200;
+const GRAPH_FOLDERS_MAX = 200;
 
 function read(key: string) {
   try {
@@ -26,20 +25,6 @@ function write(key: string, value?: string) {
   }
 }
 
-/** Ключи свёрнутых групп списка (пути папок). */
-export function readCollapsedFolders(): string[] {
-  try {
-    const value: unknown = JSON.parse(read(COLLAPSED_KEY) || '[]');
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-  } catch (err) {
-    return [];
-  }
-}
-
-export function writeCollapsedFolders(keys: string[]) {
-  write(COLLAPSED_KEY, JSON.stringify(keys.slice(0, COLLAPSED_MAX)));
-}
-
 /** Папки, выбранные на графе (пути, корень — пустая строка); `undefined` — все папки. */
 export function readGraphFolders(): string[] | undefined {
   try {
@@ -51,7 +36,7 @@ export function readGraphFolders(): string[] | undefined {
 }
 
 export function writeGraphFolders(paths?: readonly string[]) {
-  write(GRAPH_FOLDERS_KEY, paths && JSON.stringify(paths.slice(0, COLLAPSED_MAX)));
+  write(GRAPH_FOLDERS_KEY, paths && JSON.stringify(paths.slice(0, GRAPH_FOLDERS_MAX)));
 }
 
 /** Сообщение о появившейся справке на этом устройстве уже показано (либо справку открывали). */

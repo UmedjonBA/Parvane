@@ -15,8 +15,8 @@ import { selectPeer } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import {
-  openHealth, openKnowledgeView, openNote, openPlannerView, requestHealthAdd, requestPlannerAdd, requestPlannerSettings,
-  setParvaneSection,
+  openFiles, openHealth, openNote, openNotes, openPlannerView, requestHealthAdd, requestPlannerAdd,
+  requestPlannerSettings, setParvaneSection,
 } from '../../../util/parvaneSection';
 import { getCloudStatus } from '../cloud/cloudStore';
 import { folderColor } from '../notes/notesLook';
@@ -184,9 +184,9 @@ const ParvanePalette = () => {
       }),
       command('plan', 'nav:today', lang('PlannerToday'), 'sun', () => openPlannerView('today')),
       command('plan', 'nav:calendar', lang('PlannerViewCalendar'), 'calendar', () => openPlannerView('calendar')),
-      command('notes', 'nav:knowledge', lang('ParvaneModuleNotes'), 'note', () => openKnowledgeView('notes')),
+      command('notes', 'nav:knowledge', lang('ParvaneModuleNotes'), 'note', () => openNotes()),
       command('health', 'nav:health', lang('PlannerHealth'), 'heart', () => openHealth()),
-      command('files', 'nav:cloud', lang('ParvaneModuleFiles'), 'folder', () => openKnowledgeView('files')),
+      command('files', 'nav:cloud', lang('ParvaneModuleFiles'), 'folder', () => openFiles()),
       command('plan', 'quick', lang('PlannerQuickTitle'), 'plus', () => requestPlannerAdd()),
       command('health', 'quick:sleep', lang('ParvanePaletteLogSleep'), 'plus', () => (
         requestHealthAdd(`${lang('ParvanePaletteSleepText')} `)

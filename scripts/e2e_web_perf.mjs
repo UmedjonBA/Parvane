@@ -227,13 +227,15 @@ try {
   const planner = page.locator('#ParvanePlanner');
   const cloud = page.locator('#ParvaneCloud');
   const openSection = (name) => sidebar.getByRole('tab', { name, exact: true }).click();
+  // «Files» — отдельный модуль; «Notes», «Graph», «Canvas» — виды модуля «Заметки»
+  const VIEW_TABS = { Notes: 'List', Graph: 'Graph', Canvas: 'Canvas' };
   const openTab = async (name) => {
-    // Раздел появляется после переключения не сразу — шапка берётся у того, что показан
-    // Разделы после первого показа остаются в DOM скрытыми (E1): берём тот, что виден
-    const shown = page.locator('#ParvaneKnowledge:visible, #ParvaneCloud:visible');
-    await shown.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    const header = (await knowledge.isVisible().catch(() => false)) ? knowledge : cloud;
-    await header.locator('header').getByText(name, { exact: true }).first().click();
+    if (name === 'Files') {
+      await openSection('Files');
+      return;
+    }
+    if (!(await knowledge.isVisible().catch(() => false))) await openSection('Notes');
+    await knowledge.locator('[role="tablist"]').getByRole('tab', { name: VIEW_TABS[name], exact: true }).click();
   };
 
   // ── Старт ──────────────────────────────────────────────────────────────────
@@ -259,14 +261,14 @@ try {
   const noteTitle = (i) => `Заметка ${i}`;
   const seedNotesMs = await timed(`создание ${NOTES} заметок`, async () => {
     for (let i = 1; i <= NOTES; i++) {
-      await knowledge.getByRole('button', { name: 'New note' }).click();
+      await sidebar.locator('[data-add-for="notes"]').click();
       await visible(note, 'открытая заметка');
       await page.waitForTimeout(300);
       const title = note.getByLabel('Note title');
       await title.fill(noteTitle(i));
       await title.blur();
       await visible(knowledge.locator(`[data-note-row="${noteTitle(i)}"]`), 'строка заметки');
-      await note.locator('[data-note-bar-edit]').click();
+      await note.getByRole('button', { name: 'Edit', exact: true }).first().click();
       const links = [1, 2, 3].map((d) => `[[${noteTitle(((i + d - 1) % NOTES) + 1)}]]`).join(', ');
       await page.locator('#knowledge-note-editor').fill(
         `# ${noteTitle(i)}\n\nТекст заметки номер ${i} про сервер и кабель.\n\nСвязи: ${links}\n\n- [ ] пункт ${i}\n#тег${i % 5}`,
@@ -353,7 +355,7 @@ try {
   await openTab('Notes');
   await knowledge.locator(`[data-note-row="${noteTitle(3)}"]`).click();
   await visible(note.locator('[data-note-body]'), 'заметка');
-  await note.locator('[data-note-bar-edit]').click();
+  await note.getByRole('button', { name: 'Edit', exact: true }).first().click();
   const editor = page.locator('#knowledge-note-editor');
   await visible(editor, 'редактор');
   await editor.press('End');

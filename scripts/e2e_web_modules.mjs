@@ -124,8 +124,7 @@ try {
   await page.evaluate(() => {
     const prefs = JSON.parse(localStorage.getItem('parvane:modules'));
     localStorage.setItem('parvane:modules', JSON.stringify({ ...prefs, off: ['files'] }));
-    sessionStorage.setItem('parvane:section', 'cloud');
-    localStorage.setItem('parvane:knowledge-tab', 'files');
+    sessionStorage.setItem('parvane:section', 'files');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator(SIDE).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

@@ -5,11 +5,11 @@ import { createSignal } from './signals';
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
 // панели. Мессенджер остаётся смонтированным (звонки, синхронизация) — раздел
 // только решает, что показано справа от панели
-export type ParvaneSection = 'messenger' | 'planner' | 'health' | 'music' | 'cloud';
+export type ParvaneSection = 'messenger' | 'planner' | 'health' | 'music' | 'notes' | 'files';
 
 // Раздел переживает обновление страницы в этой вкладке; новая вкладка открывается на чатах
 const SECTION_KEY = 'parvane:section';
-const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'health', 'music', 'cloud'];
+const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'health', 'music', 'notes', 'files'];
 
 function readSection(): ParvaneSection {
   try {
@@ -22,7 +22,7 @@ function readSection(): ParvaneSection {
 
 const [getParvaneSection, setSignal] = createSignal<ParvaneSection>(readSection());
 // Запрос «новая запись»: окно ввода текстом «Плана». `text` — заготовка строки; `isInPlace` — окно
-// показывает раздел, из которого пришёл запрос («Знания»), и после записи пользователь остаётся в нём.
+// показывает раздел, из которого пришёл запрос («Заметки»), и после записи пользователь остаётся в нём.
 // Запрос забирает тот, кто показывает окно: «План» либо `PlannerQuickHost` открытого раздела
 export type PlannerAddRequest = { text?: string; isInPlace?: boolean };
 const [getPlannerAddRequest, setPlannerAddRequest] = createSignal<PlannerAddRequest | undefined>(undefined);
@@ -131,14 +131,19 @@ export function openPlannerCalendar() {
 /**
  * Показан ли экран пользователю. Разделы после первого показа остаются смонтированными и скрытыми (E1,
  * `Main.tsx`): слушатели клавиш на документе, таймеры и обработка запросов в скрытом разделе обязаны
- * сверяться с этим признаком — иначе скрытый «План» или холст «Знаний» перехватит клавишу у мессенджера.
- * «Знания» (`knowledge`) и «Файлы» (`files`) — две части раздела `cloud`
+ * сверяться с этим признаком — иначе скрытый «План» или холст «Заметок» перехватит клавишу у мессенджера
  */
-export function getIsParvaneScreenShown(screen: ParvaneSection | 'knowledge' | 'files') {
-  const section = getParvaneSection();
-  if (screen === 'knowledge') return section === 'cloud' && getKnowledgeView() !== 'files';
-  if (screen === 'files') return section === 'cloud' && getKnowledgeView() === 'files';
-  return section === screen;
+export function getIsParvaneScreenShown(screen: ParvaneSection) {
+  return getParvaneSection() === screen;
+}
+
+// Экран модуля занял весь экран телефона (открытая заметка, доска `PhNotesMore`): лента модулей и «+» скрыты
+const [getIsParvaneNavCovered, setParvaneNavCoveredSignal] = createSignal(false);
+
+export { getIsParvaneNavCovered };
+
+export function setParvaneNavCovered(isCovered: boolean) {
+  setParvaneNavCoveredSignal(isCovered);
 }
 
 export function setParvaneSection(section: ParvaneSection) {
@@ -161,11 +166,11 @@ export function requestPlannerAdd(text?: unknown) {
 }
 
 /**
- * Окно ввода текстом поверх раздела «Знания» («Запланировать» в заметке): раздел не меняется. Из раздела,
+ * Окно ввода текстом поверх модуля «Заметки» («Запланировать» в заметке): раздел не меняется. Из раздела,
  * который окно не держит, запрос открывает «План», как `requestPlannerAdd`.
  */
 export function requestPlannerAddInPlace(text: string) {
-  if (getParvaneSection() !== 'cloud') {
+  if (getParvaneSection() !== 'notes') {
     requestPlannerAdd(text);
     return;
   }
@@ -182,9 +187,9 @@ export function consumePlannerAddRequest() {
   setPlannerAddRequest(undefined);
 }
 
-// Вкладка раздела «Знания»: заметки, граф связей, холст либо файлы (прежнее «Облако»)
-export type KnowledgeView = 'notes' | 'graph' | 'canvas' | 'files';
-export const KNOWLEDGE_VIEWS: KnowledgeView[] = ['notes', 'graph', 'canvas', 'files'];
+// Вид модуля «Заметки»: список, граф связей либо холст
+export type KnowledgeView = 'notes' | 'graph' | 'canvas';
+export const KNOWLEDGE_VIEWS: KnowledgeView[] = ['notes', 'graph', 'canvas'];
 
 const KNOWLEDGE_VIEW_KEY = 'parvane:knowledge-tab';
 
@@ -212,21 +217,25 @@ export function setKnowledgeView(view: KnowledgeView) {
   }
 }
 
-/** Открыть «Знания» на заметке с этим названием (нет такой — раздел создаст). */
+/** Открыть «Заметки» на заметке с этим названием (нет такой — раздел создаст). */
 export function openNote(title: string) {
   setNoteRequest(title);
-  setKnowledgeView('notes');
-  setParvaneSection('cloud');
+  openNotes('notes');
 }
 
 export function consumeNoteRequest() {
   setNoteRequest(undefined);
 }
 
-/** Открыть «Знания» на вкладке: «Облако» боковой панели — это вкладка «Файлы». */
-export function openKnowledgeView(view: KnowledgeView) {
-  setKnowledgeView(view);
-  setParvaneSection('cloud');
+/** Открыть модуль «Заметки»; `view` — на этом виде, иначе на том, что был открыт в последний раз. */
+export function openNotes(view?: KnowledgeView) {
+  if (view) setKnowledgeView(view);
+  setParvaneSection('notes');
+}
+
+/** Открыть модуль «Файлы». */
+export function openFiles() {
+  setParvaneSection('files');
 }
 
 // «+» навигации в модулях «Заметки» и «Файлы»: новая заметка, загрузка файлов, новая папка. Запрос забирает
@@ -237,8 +246,8 @@ const [getModuleAddRequest, setModuleAddRequest] = createSignal<ModuleAddRequest
 export { getModuleAddRequest };
 
 export function requestModuleAdd(request: ModuleAddRequest) {
-  if (request === 'note') openKnowledgeView(getKnowledgeView() === 'files' ? 'notes' : getKnowledgeView());
-  else openKnowledgeView('files');
+  if (request === 'note') openNotes();
+  else openFiles();
   setModuleAddRequest(request);
 }
 
@@ -319,8 +328,10 @@ function applyLaunchTarget() {
       requestPlannerAdd();
       break;
     case 'notes':
+      openNotes('notes');
+      break;
     case 'files':
-      openKnowledgeView(target);
+      openFiles();
       break;
     default:
       break;

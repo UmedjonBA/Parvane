@@ -51,33 +51,79 @@ try {
   const body = note.locator('[data-note-body]');
   const visible = (locator, what) => locator.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail(`не появилось: ${what}`));
+  // Модуль в панели компьютера либо в ленте телефона
+  const moduleButton = (name) => sidebar.getByRole('tab', { name })
+    .or(page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name })).first();
+  // «Файлы» — отдельный модуль навигации; «Notes», «Graph», «Canvas» — виды модуля «Заметки»
+  const VIEW_TABS = { Notes: 'List', Graph: 'Graph', Canvas: 'Canvas' };
   const openTab = async (name) => {
-    // Скрытый раздел остаётся в DOM (E1) — шапку берём у показанного
-    const header = (await knowledge.isVisible().catch(() => false)) ? knowledge : cloud;
-    await header.locator('header').getByText(name, { exact: true }).first().click();
+    if (name === 'Files') {
+      await moduleButton('Files').click();
+      return;
+    }
+    if (!(await knowledge.isVisible().catch(() => false))) await moduleButton('Notes').click();
+    const tabs = knowledge.locator('[role="tablist"]');
+    // Заметка на весь экран телефона: видов над ней нет, открыт и так список
+    if (name === 'Notes' && !(await tabs.count())) return;
+    await tabs.getByRole('tab', { name: VIEW_TABS[name], exact: true }).click();
   };
 
-  // ── «Знания» в боковой панели; «Файлы» — вкладка, рядом заметки, граф и холст ──
+  // ── «Заметки» и «Файлы» — отдельные модули боковой панели; в «Заметках» виды: список, граф, холст ──
   await sidebar.getByRole('tab', { name: 'Files' }).click();
-  await visible(cloud, 'вкладка «Файлы»');
+  await visible(cloud, 'модуль «Файлы»');
+  assert.equal(await cloud.locator('[role="tablist"]').count(), 0, 'в «Файлах» остались вкладки заметок');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
-  await visible(knowledge, 'раздел заметок');
-  console.log('OK: «Знания» открыты, «Файлы» — одна из вкладок');
+  await visible(knowledge, 'модуль «Заметки»');
+  assert.deepEqual(
+    await knowledge.locator('[role="tablist"] [role="tab"]').allInnerTexts(), ['List', 'Graph', 'Canvas'],
+    'виды «Заметок» — не «Список / Граф / Холст»',
+  );
+  console.log('OK: «Заметки» и «Файлы» — отдельные модули, в «Заметках» три вида');
 
   // ── Новое хранилище встречает папкой «Справка Parvane»: заметки о продукте, связанные ссылками ──
-  const trashOpenNote = async () => {
-    await note.getByRole('button', { name: 'Move to trash' }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Move to trash' }).click();
+  // Действие из меню «Ещё» заметки (`scope` — заметка в колонке либо панель графа)
+  const noteAction = async (scope, action) => {
+    await scope.locator('[data-note-menu]').click();
+    await page.locator(`[data-note-menu-list] [data-note-action="${action}"]`).click();
   };
-  const folderOf = (name) => knowledge.locator(`[data-folder="${name}"]`);
-  const rowsIn = (name) => folderOf(name).locator('[data-note-row]');
+  const trashNoteIn = async (scope) => {
+    await noteAction(scope, 'delete');
+    await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
+  };
+  const trashOpenNote = () => trashNoteIn(note);
+  // «+» панели модулей: новая заметка
+  const addNote = () => sidebar.locator('[data-add-for="notes"]').click();
+  // Строка папки в списке (папки видны, пока ни одна не открыта) и её счётчик
+  const folderOf = (name) => knowledge.locator(`[data-notes-folders] [data-folder="${name}"]`);
+  const folderCount = (name, count, what) => page.waitForFunction(
+    ([folder, wanted]) => [...document.querySelectorAll('#ParvaneKnowledge [data-notes-folders] [data-folder]')]
+      .find((item) => item.dataset.folder === folder)?.querySelector('[data-folder-count]')?.textContent === wanted,
+    [name, String(count)], { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail(what));
+  const openFolder = knowledge.locator('[data-folder-open]');
+  const closeFolder = async () => {
+    if (await openFolder.count()) await knowledge.locator('[data-folder-back]').click();
+    await openFolder.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  };
+  const enterFolder = async (name) => {
+    if (await knowledge.locator(`[data-folder-open="${name}"]`).count()) return;
+    await closeFolder();
+    await folderOf(name).click();
+    await visible(knowledge.locator(`[data-folder-open="${name}"]`), `открытая папка «${name}»`);
+  };
+  const folderMenu = async (name) => {
+    await enterFolder(name);
+    await knowledge.locator('[data-folder-menu]').click();
+  };
+  // Заметки папки: строки и общего списка, и открытой папки несут путь своей папки
+  const rowsIn = (name) => knowledge.locator(`[data-note-row][data-row-folder="${name}"]`);
   const guide = folderOf(GUIDE_FOLDER);
   const guideRows = rowsIn(GUIDE_FOLDER);
   // Число строк по селектору — с ожиданием: список следует за облаком не мгновенно
   const waitRows = (selector, count, what) => page.waitForFunction(
     ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: 60000 },
   ).catch(() => assert.fail(what));
-  const GUIDE_ROWS = `#ParvaneKnowledge [data-folder="${GUIDE_FOLDER}"] [data-note-row]`;
+  const GUIDE_ROWS = `#ParvaneKnowledge [data-note-row][data-row-folder="${GUIDE_FOLDER}"]`;
   const ALL_ROWS = '#ParvaneKnowledge [data-note-row]';
 
   await visible(row(GUIDE_OVERVIEW), '«Обзор» справки нового хранилища');
@@ -127,16 +173,20 @@ try {
   const chipOf = (name) => note.locator(`[data-note-folder="${name}"]`);
   const gone = (locator, what) => locator.first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail(what));
-  // Заголовок папки сворачивает её; состояние хранится на устройстве
-  await guide.locator('[data-folder-toggle]').click();
-  await gone(guideRows, 'свёрнутая папка показывает заметки');
-  assert.equal(await guide.getAttribute('data-collapsed'), 'true', 'папка не помечена свёрнутой');
-  assert.deepEqual(
-    await page.evaluate(() => JSON.parse(localStorage.getItem('parvane:knowledge-collapsed') || '[]')),
-    [GUIDE_FOLDER], 'свёрнутая папка не запомнена на устройстве',
-  );
-  await guide.locator('[data-folder-toggle]').click();
-  await waitRows(GUIDE_ROWS, GUIDE_NOTES, 'развёрнутая папка не показала заметки');
+  // Список: папки строками со счётчиком и недавние заметки; строка заметки — название, время, начало текста,
+  // тег и связи
+  await folderCount(GUIDE_FOLDER, GUIDE_NOTES, 'счётчик папки справки не равен числу её заметок');
+  await visible(knowledge.locator('[data-notes-recent]'), 'недавние заметки под папками');
+  const overviewRow = await row(GUIDE_OVERVIEW).innerText();
+  assert.match(overviewRow, /\d\d:\d\d/, 'в строке заметки нет времени правки');
+  assert.match(overviewRow, /#guide/, 'в строке заметки нет тега');
+  assert.match(overviewRow, /\d+ links?/, 'в строке заметки нет числа связей');
+  // Папка открывается: в списке остаются только её заметки, стрелка возвращает к папкам
+  await enterFolder(GUIDE_FOLDER);
+  await waitRows(ALL_ROWS, GUIDE_NOTES, 'открытая папка показывает не свои заметки');
+  assert.equal(await knowledge.locator('[data-notes-folders]').count(), 0, 'под открытой папкой остался список папок');
+  await closeFolder();
+  await visible(guide, 'папки после возврата из открытой');
   // Новая папка: пустая видна в списке и предлагает добавить заметку
   await knowledge.locator('[data-notes-new-folder]').click();
   await visible(folderName, 'поле названия новой папки');
@@ -145,22 +195,30 @@ try {
   await visible(page.locator('[data-folder-error="bad-name"]'), 'отказ негодному названию папки');
   await folderName.fill(FOLDER);
   await folderName.press('Enter');
-  await visible(folderOf(FOLDER).locator('[data-folder-empty]'), 'пустая папка в списке');
+  await folderCount(FOLDER, 0, 'пустая папка в списке');
   await visible(folderOf(''), '«Без папки» рядом с папками');
-  // «+» в заголовке папки создаёт заметку в ней
-  await folderOf(FOLDER).locator('[data-folder-add]').click();
+  // Пустая открытая папка предлагает добавить заметку — она создаётся в ней
+  await enterFolder(FOLDER);
+  await knowledge.locator('[data-folder-empty]').click();
   await visible(chipOf(FOLDER), 'папка новой заметки');
   await page.waitForTimeout(400);
   await note.getByLabel('Note title').fill(DRAFT);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(FOLDER).and(row(DRAFT)), 'заметка в своей папке');
   const draftId = await note.getAttribute('data-note-id');
-  // Новая заметка при открытой заметке папки ложится в ту же папку
-  await knowledge.locator('[data-notes-new]').click();
-  await waitRows(`#ParvaneKnowledge [data-folder="${FOLDER}"] [data-note-row]`, 2, 'новая заметка не легла в папку открытой заметки');
+  // «+» при открытой папке создаёт заметку в ней
+  await addNote();
+  await waitRows(`#ParvaneKnowledge [data-note-row][data-row-folder="${FOLDER}"]`, 2, 'новая заметка не легла в открытую папку');
   await visible(chipOf(FOLDER), 'папка второй заметки');
   await trashOpenNote();
-  await waitRows(`#ParvaneKnowledge [data-folder="${FOLDER}"] [data-note-row]`, 1, 'вторая заметка папки не удалена');
+  await waitRows(`#ParvaneKnowledge [data-note-row][data-row-folder="${FOLDER}"]`, 1, 'вторая заметка папки не удалена');
+  // «+» без открытой папки кладёт заметку в папку открытой заметки
+  await closeFolder();
+  await row(DRAFT).click();
+  await addNote();
+  await waitRows(`#ParvaneKnowledge [data-note-row][data-row-folder="${FOLDER}"]`, 2, 'новая заметка не легла в папку открытой заметки');
+  await trashOpenNote();
+  await waitRows(`#ParvaneKnowledge [data-note-row][data-row-folder="${FOLDER}"]`, 1, 'заметка рядом с открытой не удалена');
   // Перенос: кнопка с названием папки под заголовком заметки → выбор папки
   await row(DRAFT).click();
   await chipOf(FOLDER).click();
@@ -169,7 +227,7 @@ try {
   await picker.locator('[data-folder-option=""]').click();
   await visible(rowsIn('').and(row(DRAFT)), 'заметка перенесена в «Без папки»');
   await visible(chipOf(''), 'у заметки нет папки');
-  await visible(folderOf(FOLDER).locator('[data-folder-empty]'), 'папка после переноса пуста');
+  await folderCount(FOLDER, 0, 'папка после переноса не пуста');
   // «Новая папка…» в выборе создаёт папку и переносит заметку в неё
   await chipOf('').click();
   await picker.locator('[data-folder-option-new]').click();
@@ -179,7 +237,7 @@ try {
   await visible(chipOf(FOLDER_NEW), 'новая папка у заметки');
   assert.equal(await note.getAttribute('data-note-id'), draftId, 'перенос заменил заметку другой');
   // Переименование папки: заметка остаётся в ней
-  await folderOf(FOLDER_NEW).locator('[data-folder-menu]').click();
+  await folderMenu(FOLDER_NEW);
   await visible(page.locator('[data-folder-sheet="edit"]'), 'шторка папки');
   await folderName.fill(FOLDER);
   await folderName.press('Enter');
@@ -187,9 +245,12 @@ try {
   await folderName.fill(FOLDER_RENAMED);
   await folderName.press('Enter');
   await visible(rowsIn(FOLDER_RENAMED).and(row(DRAFT)), 'заметка в переименованной папке');
-  await gone(folderOf(FOLDER_NEW), 'прежнее название папки осталось в списке');
+  await visible(knowledge.locator(`[data-folder-open="${FOLDER_RENAMED}"]`), 'переименованная папка осталась открытой');
+  await closeFolder();
+  await visible(folderOf(FOLDER_RENAMED), 'новое название папки в списке');
+  assert.equal(await folderOf(FOLDER_NEW).count(), 0, 'прежнее название папки осталось в списке');
   // Удаление папки с заметкой: после вопроса заметка переезжает в «Без папки»
-  await folderOf(FOLDER_RENAMED).locator('[data-folder-menu]').click();
+  await folderMenu(FOLDER_RENAMED);
   await page.locator('[data-folder-delete]').click();
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.locator('#knowledge-folder-delete-move').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -197,17 +258,18 @@ try {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-folder-delete.png` });
   }
   await page.locator('#knowledge-folder-delete-move').click();
+  await visible(knowledge.locator('[data-notes-folders]'), 'список папок после удаления открытой');
   await gone(folderOf(FOLDER_RENAMED), 'удалённая папка осталась в списке');
   await visible(rowsIn('').and(row(DRAFT)), 'заметка удалённой папки — в «Без папки»');
   // Пустая папка удаляется без вопроса
-  await folderOf(FOLDER).locator('[data-folder-menu]').click();
+  await folderMenu(FOLDER);
   await page.locator('[data-folder-delete]').click();
   await gone(folderOf(FOLDER), 'пустая папка не удалена');
   await row(DRAFT).click();
   await visible(knowledge.locator(`[data-note-title="${DRAFT}"]`), 'перенесённая заметка открыта');
   await trashOpenNote();
   await gone(row(DRAFT), 'заметка-черновик не удалена');
-  console.log('OK: папки — сворачивание, создание, заметка в папке, перенос, переименование, удаление');
+  console.log('OK: папки — список со счётчиками, открытая папка, создание, заметка в папке, перенос, переименование, удаление');
 
   // ── Кнопка справки — только когда справки нет: удалённая заметка создаётся заново, остальные не трогаются ──
   assert.equal(await knowledge.locator('[data-notes-guide]').count(), 0, 'кнопка справки при живой справке');
@@ -230,7 +292,7 @@ try {
     await trashOpenNote();
     await waitRows(GUIDE_ROWS, left - 1, `заметка справки не удалена (осталось ${left})`);
   }
-  await guide.locator('[data-folder-menu]').click();
+  await folderMenu(GUIDE_FOLDER);
   await page.locator('[data-folder-delete]').click();
   await gone(guide, 'пустая папка справки не удалена');
   await visible(knowledge.getByText('No notes yet'), 'пустое состояние после удаления справки');
@@ -241,7 +303,7 @@ try {
   console.log('OK: справка создаётся один раз, после удаления сама не возвращается');
 
   // ── Новая заметка, название, текст со ссылкой, тегом и пунктами ───────────
-  await knowledge.getByRole('button', { name: 'New note' }).click();
+  await addNote();
   await visible(note, 'открытая заметка');
   const title = note.getByLabel('Note title');
   await title.fill(NOTE);
@@ -267,7 +329,9 @@ try {
   const sheetTask = sheet.locator('[data-task-id]').filter({ hasText: 'заказать блок питания' });
   await visible(sheetTask, 'задача из пункта заметки');
   assert.equal(await sheet.locator('[data-task-id]').filter({ hasText: 'проверить обе GPU' }).count(), 0, 'пункт без даты — не задача');
-  await sheetTask.locator('input[type="checkbox"]').check();
+  // Нажатие, а не `check()`: выполненная задача уходит из списка «без даты» — под нагрузкой раньше, чем
+  // Playwright успевает перечитать галочку (дошла ли отметка, проверяет заметка ниже)
+  await sheetTask.locator('input[type="checkbox"]').click();
   await page.keyboard.press('Escape');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await row(NOTE).click();
@@ -291,7 +355,7 @@ try {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   });
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
-  await visible(knowledge.locator('[data-folder="Daily"]'), 'папка ежедневных заметок');
+  await visible(folderOf('Daily'), 'папка ежедневных заметок');
   await openPlannerScreen(page, 'today');
   // Заметка по шаблону пуста: приглашение остаётся; «Изменить» — правка на месте (как в прототипе), Escape отменяет
   await visible(planner.locator('[data-today-note="empty"]'), 'карточка пустой заметки дня');
@@ -534,8 +598,7 @@ try {
   await gone(gedge(OTHER, GRAPH_NOTE), 'связь с новой заметкой');
   await clickNode(GRAPH_NOTE);
   await visible(panel.locator(`[data-note-title="${GRAPH_NOTE}"]`), 'новая заметка в панели');
-  await panel.getByRole('button', { name: 'Move to trash' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Move to trash' }).click();
+  await trashNoteIn(panel);
   await gone(gnode(GRAPH_NOTE), 'удалённая заметка на графе');
   await gone(panel, 'панель удалённой заметки');
   assert.equal(await graph.locator('[data-node][data-kind="note"]').count(), 2, 'на графе снова две заметки');
@@ -576,7 +639,8 @@ try {
   await visible(folderName, 'поле названия папки для графа');
   await folderName.fill(GRAPH_FOLDER);
   await folderName.press('Enter');
-  await folderOf(GRAPH_FOLDER).locator('[data-folder-add]').click();
+  await enterFolder(GRAPH_FOLDER);
+  await knowledge.locator('[data-folder-empty]').click();
   await visible(chipOf(GRAPH_FOLDER), 'папка заметки для графа');
   // Название меняется у заметки, которая уже записана: строка в списке — знак, что запись дошла
   await visible(rowsIn(GRAPH_FOLDER).and(row('New note')), 'новая заметка в папке для графа');
@@ -585,6 +649,7 @@ try {
   await note.getByLabel('Note title').fill(FOLDER_NOTE);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(GRAPH_FOLDER).and(row(FOLDER_NOTE)), 'заметка в папке для графа');
+  await closeFolder();
   await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill(`В ней стоит [[${NOTE}]]`);
   await note.getByRole('button', { name: 'Save' }).first().click();
@@ -711,7 +776,7 @@ try {
   await openTab('Notes');
   // Папка с заметкой — «Удалить вместе с заметками»: в списке нет ни папки, ни заметки
   await visible(row(FOLDER_NOTE), 'заметка папки перед удалением');
-  await folderOf(GRAPH_FOLDER).locator('[data-folder-menu]').click();
+  await folderMenu(GRAPH_FOLDER);
   await page.locator('[data-folder-delete]').click();
   await page.locator('#knowledge-folder-delete-all').click();
   await gone(folderOf(GRAPH_FOLDER), 'папка для графа не удалена');
@@ -1634,18 +1699,19 @@ try {
   const headerSearch = knowledgeHeader.locator('[data-section-search]');
   await knowledgeHeader.locator('[data-section-search-open]').click();
   await visible(headerSearch, 'поле поиска в шапке по лупе');
-  await headerTabs.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  // Поле встаёт на место названия модуля, виды под ним остаются
+  await visible(headerTabs, 'виды под открытым поиском');
   await headerSearch.fill('X99');
   await visible(phoneGraph.locator('[data-node][data-found][data-title*="X99"]').first(), 'граф подсветил найденную точку');
   await knowledgeHeader.locator('[data-section-search-close]').click();
-  await visible(headerTabs, 'вкладки после закрытия поиска');
+  await headerSearch.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('поиск не закрылся'));
   assert.equal(await phoneGraph.locator('[data-node][data-found]').count(), 0, 'подсветка осталась после закрытия поиска');
   // «Назад» сначала закрывает поиск, раздел остаётся на месте
   await knowledgeHeader.locator('[data-section-search-open]').click();
   await headerSearch.fill('X99');
   await page.waitForTimeout(300);
   await page.evaluate(() => window.history.back());
-  await visible(headerTabs, '«назад» не закрыл поиск');
+  await headerSearch.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«назад» не закрыл поиск'));
   await visible(phoneGraph, '«назад» с открытым поиском увёл с графа');
   // Холст: та же лупа ищет карточки холста
   await openTab('Canvas');

@@ -18,8 +18,6 @@ export type NoteGroup<T extends GroupedNote> = {
   folderId?: string;
   isDaily: boolean;
   items: T[];
-  // Сколько заметок дня не показано
-  hidden: number;
 };
 
 export const ROOT_FOLDER = '';
@@ -91,18 +89,14 @@ export function folderContents<T extends FolderNode>(nodes: T[], folderId: strin
   };
 }
 
-/** Группы списка заметок: «Без папки», папки по алфавиту (пустые тоже), заметки дня — в конце, свежие сверху.
- * При поиске (`isSearch`) остаются только группы с найденным. */
+/** Папки списка заметок: «Без папки», папки по алфавиту (пустые тоже), заметки дня — в конце, свежие сверху. */
 export function buildNoteGroups<T extends GroupedNote>({
-  notes, folders, dailyFolders, isSearch, dailyShown,
+  notes, folders, dailyFolders,
 }: {
   notes: T[];
   folders: NoteFolder[];
   // Названия папки заметок дня: пустая, она отдельной строкой не показывается
   dailyFolders: string[];
-  isSearch?: boolean;
-  // Сколько заметок дня показать; не задано — все
-  dailyShown?: number;
 }): NoteGroup<T>[] {
   const byFolder = new Map<string, T[]>();
   const daily: T[] = [];
@@ -114,28 +108,24 @@ export function buildNoteGroups<T extends GroupedNote>({
       else byFolder.set(note.folder, [note]);
     }
   });
-  if (!isSearch) {
-    folders.forEach(({ path }) => {
-      if (!byFolder.has(path) && !dailyFolders.includes(path)) byFolder.set(path, []);
-    });
-    // «Без папки» видна, пока есть папки: в неё переносят заметки и в ней создают новые
-    if (folders.length && !byFolder.has(ROOT_FOLDER)) byFolder.set(ROOT_FOLDER, []);
-  }
+  folders.forEach(({ path }) => {
+    if (!byFolder.has(path) && !dailyFolders.includes(path)) byFolder.set(path, []);
+  });
+  // «Без папки» видна, пока есть папки: в неё переносят заметки и в ней создают новые
+  if (folders.length && !byFolder.has(ROOT_FOLDER)) byFolder.set(ROOT_FOLDER, []);
   const idOf = (path: string) => folders.find((folder) => folder.path === path)?.id;
   const result: NoteGroup<T>[] = [...byFolder.entries()].sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([folder, items]) => ({
-      key: folder, folder, folderId: idOf(folder), isDaily: false, items, hidden: 0,
+      key: folder, folder, folderId: idOf(folder), isDaily: false, items,
     }));
   if (daily.length) {
     daily.sort((a, b) => (a.title < b.title ? 1 : -1));
-    const shown = isSearch || dailyShown === undefined ? daily : daily.slice(0, dailyShown);
     result.push({
       key: DAILY_GROUP_KEY,
       folder: daily[0].folder,
       folderId: idOf(daily[0].folder),
       isDaily: true,
-      items: shown,
-      hidden: daily.length - shown.length,
+      items: daily,
     });
   }
   return result;

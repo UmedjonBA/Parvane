@@ -4,8 +4,9 @@ import {
 
 import type { GlobalState } from '../../../global/types';
 import type { KnowledgeView } from '../../../util/parvaneSection';
+import type { FolderRemoval } from './NoteFolderRemoval';
 import type { GraphCanvasScope } from './notesCanvasGraph';
-import type { FolderSubmitError, NoteGroup } from './notesFolders';
+import type { FolderSubmitError } from './notesFolders';
 import type { GraphLinkOutcome, GraphPick } from './NotesGraph';
 import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
@@ -14,7 +15,7 @@ import type { NoteEditRequest } from './NoteView';
 import buildClassName from '../../../util/buildClassName';
 import {
   consumeModuleAddRequest, consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest,
-  getNoteRequest, getParvaneSection, setKnowledgeView, setParvaneSection,
+  getNoteRequest, getParvaneSection, setKnowledgeView, setParvaneNavCovered, setParvaneSection,
 } from '../../../util/parvaneSection';
 import { setCloudActive } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
@@ -23,18 +24,15 @@ import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
 import { serializeCanvas } from './notesCanvas';
 import { canvasFromGraph, freeCanvasTitle } from './notesCanvasGraph';
 import {
-  buildNoteGroups, folderCaption, isInFolder, ROOT_FOLDER,
+  DAILY_GROUP_KEY, folderCaption, isInFolder, ROOT_FOLDER,
 } from './notesFolders';
 import { buildGuide, findGuideOverview, getGuideLang } from './notesGuide';
 import { addLinkToText, canLinkTitle, removeLinkFromText } from './notesLinkEdit';
-import {
-  avatarText, displayTitle, folderColor, formatDayShort, isDayTitle, previewOf,
-} from './notesLook';
+import { formatNoteEdited } from './notesList';
+import { isDayTitle } from './notesLook';
 import { parseNote } from './notesModel';
-import { buildPlannedIndex, nearestPlanned, plannedOf } from './notesPlanned';
-import {
-  isGuideSeen, markGuideSeen, readCollapsedFolders, writeCollapsedFolders,
-} from './notesPrefs';
+import { buildPlannedIndex, plannedOf } from './notesPlanned';
+import { isGuideSeen, markGuideSeen } from './notesPrefs';
 import {
   applyPlannerToNotes, consumeGuideOpen, createNote, createNoteFolder, deleteNote, deleteNoteFolder,
   findNoteByTitle, getCanvases, getGuideOpenId, getNoteFolders, getNotes, getNotesIndex, getNotesNotice,
@@ -50,19 +48,19 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
-import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
-import Modal from '../../ui/Modal';
 import PlannerQuickHost from '../planner/PlannerQuickHost';
 import SectionHistoryBack from '../SectionHistoryBack';
 import GraphPanel from './GraphPanel';
 import KnowledgeTabs from './KnowledgeTabs';
 import NoteFolderPicker from './NoteFolderPicker';
+import NoteFolderRemoval from './NoteFolderRemoval';
 import NoteFolderSheet from './NoteFolderSheet';
 import NoteLinks from './NoteLinks';
 import NotesCanvas from './NotesCanvas';
 import NotesGraph from './NotesGraph';
+import NotesList from './NotesList';
 import NoteView from './NoteView';
 import PvHeaderSearch from './PvHeaderSearch';
 import PvIcon from './PvIcon';
@@ -71,15 +69,15 @@ import PvResizer from './PvResizer';
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
 
-// Узкий экран: виден либо список, либо заметка; вкладки раздела — подчёркнутой строкой
+// Узкий экран (телефон): виден либо список, либо заметка
 const NARROW_WIDTH = 760;
 // Пределы ширины панелей, которые меняет пользователь (px)
 const NOTES_LIST_MIN = 220;
 const NOTES_LIST_MAX = 560;
-const NOTES_LINKS_MIN = 280;
+const NOTES_LINKS_MIN = 200;
 const NOTES_LINKS_MAX = 640;
-// Широкий экран: «Связи» открытой заметки — отдельный остров справа
-const SIDE_MIN_WIDTH = 1241;
+// Широкий экран: «Связи» открытой заметки — отдельная колонка справа
+const SIDE_MIN_WIDTH = 1100;
 const NOTICE_HIDE_MS = 6000;
 // Пауза между набором в поиске и самим поиском
 const SEARCH_DELAY_MS = 150;
@@ -88,12 +86,7 @@ const SEARCH_LABELS = {
   graph: 'KnowledgeGraphSearch',
   canvas: 'KnowledgeCanvasSearch',
 } as const;
-// Столько последних заметок дня видно в списке, пока не попросили все
-const DAILY_SHOWN = 5;
 const NOTE_LINK = /(\[\[[^\]\n]+\]\])/;
-const NOTE_DRAG_TYPE = 'application/x-parvane-note';
-// Названия папки заметок дня на обоих языках (как в `notesStore`)
-const DAILY_FOLDERS = ['Ежедневные', 'Daily'];
 const NOTICE_KEYS = {
   conflict: 'KnowledgeNoticeConflict',
   merged: 'KnowledgeNoticeMerged',
@@ -101,8 +94,6 @@ const NOTICE_KEYS = {
   'folder-files': 'KnowledgeNoticeFolderFiles',
 } as const;
 
-type Group = NoteGroup<NoteEntry>;
-type FolderRemoval = { id: string; name: string; count: number };
 // Сообщение о правке связи на графе; `undo` возвращает текст заметки
 type GraphNotice = { text: string; at: number; undo?: NoneToVoidFunction };
 
@@ -110,8 +101,8 @@ function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
 }
 
-// Parvane: раздел «Знания» — заметки `.md` в зашифрованной папке облака, граф связей и холсты.
-// Вкладка «Файлы» — прежнее «Облако» (его рисует `Cloud`, шапка у них общая — `KnowledgeTabs`)
+// Parvane: модуль «Заметки» — заметки `.md` в зашифрованной папке облака, граф связей и холсты.
+// Раскладка — по доскам `Notes`, `PhNotesMore`, `DeskNotes` макета (spec 041 D1)
 const Knowledge = () => {
   const notes = useDerivedState(getNotes);
   const folders = useDerivedState(getNoteFolders);
@@ -135,16 +126,13 @@ const Knowledge = () => {
   const [searchStep, setSearchStep] = useState(0);
   const [isSearchOpen, openSearch, closeSearch] = useFlag();
   const [isNoticeShown, setIsNoticeShown] = useState(false);
-  const [areAllDailyShown, setAreAllDailyShown] = useState(false);
-  const [collapsed, setCollapsed] = useState(readCollapsedFolders);
+  // Папка, открытая в списке (ключ группы); без неё список показывает папки и недавние заметки
+  const [openGroupKey, setOpenGroupKey] = useState<string>();
   const [hasSeenGuide, setHasSeenGuide] = useState(() => isGuideSeen(currentUserId));
-  // Папка под указателем при перетаскивании заметки
-  const [dropKey, setDropKey] = useState<string>();
   // Шторка папки: правится папка `sheetFolderId`, без неё — создаётся новая
   const [sheetFolderId, setSheetFolderId] = useState<string>();
   const [isFolderSheetOpen, openFolderSheet, closeFolderSheet] = useFlag();
   const [removal, setRemoval] = useState<FolderRemoval>();
-  const [isRemovalOpen, openRemoval, closeRemoval] = useFlag();
   const [movedNoteId, setMovedNoteId] = useState<string>();
   const [isPickerOpen, openPicker, closePicker] = useFlag();
   const [isRestoreOpen, openRestore, closeRestore] = useFlag();
@@ -176,7 +164,7 @@ const Knowledge = () => {
   // Пока раздел открыт, изменения облака применяются к заметкам сразу; закрыт — при следующем открытии
   // Зависимости — сигналы раздела: по ним значение пересчитывается
   // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  const isShown = useDerivedState(() => getIsParvaneScreenShown('knowledge'), [getParvaneSection, getKnowledgeView]);
+  const isShown = useDerivedState(() => getIsParvaneScreenShown('notes'), [getParvaneSection]);
   useEffect(() => (isShown ? retainNotes() : undefined), [isShown]);
   // Заметки лежат в облаке: пока раздел на экране, облако опрашивается часто — заметка с другого устройства
   // появляется за секунды, а не через минуту фонового опроса
@@ -262,26 +250,22 @@ const Knowledge = () => {
     void openTitle(noteRequest);
   }, [noteRequest, status]);
 
-  const expandGroup = useLastCallback((key: string) => {
-    if (!collapsed.includes(key)) return;
-    const next = collapsed.filter((item) => item !== key);
-    setCollapsed(next);
-    writeCollapsedFolders(next);
-  });
-
   const createIn = useLastCallback(async (folderId?: string) => {
     hasPickedNoteRef.current = true;
     const id = await createNote(lang('KnowledgeNewNote'), vaultName, { folderId });
     if (id) setOpenId(id);
   });
 
-  // Новая заметка ложится в папку открытой заметки; из справки и заметок дня — в «Без папки»
+  // Новая заметка ложится в папку, открытую в списке, иначе — в папку открытой заметки; из справки и заметок
+  // дня — в «Без папки»
   const handleNew = useLastCallback(() => {
+    if (openGroupKey !== undefined && openGroupKey !== DAILY_GROUP_KEY && !searchQuery.trim()) {
+      void createIn(folders.find(({ path }) => path === openGroupKey)?.id);
+      return;
+    }
     const isOwnFolder = openNote && !(openNote.isDaily && isDayTitle(openNote.title))
       && openNote.folder !== guideOverview?.folder;
-    const folder = isOwnFolder ? folders.find(({ path }) => path === openNote.folder) : undefined;
-    expandGroup(folder?.path || ROOT_FOLDER);
-    void createIn(folder?.id);
+    void createIn(isOwnFolder ? folders.find(({ path }) => path === openNote.folder)?.id : undefined);
   });
 
   // «+» навигации: новая заметка там же, где её создаёт кнопка раздела
@@ -291,11 +275,6 @@ const Knowledge = () => {
     if (view !== 'notes') setKnowledgeView('notes');
     handleNew();
   }, [addRequest, status, view]);
-
-  const handleNewInFolder = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    expandGroup(e.currentTarget.dataset.groupKey!);
-    void createIn(e.currentTarget.dataset.folderId || undefined);
-  });
 
   // «Справка Parvane»: открыть «Обзор»; справки нет (удалена либо ещё не создана) — предложить создать
   const handleGuide = useLastCallback(() => {
@@ -349,42 +328,36 @@ const Knowledge = () => {
     closeSearch();
   }, [view, closeSearch]);
 
-  const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+  const handlePick = useLastCallback((noteId: string) => {
     hasPickedNoteRef.current = true;
-    setOpenId(e.currentTarget.dataset.id);
+    setOpenId(noteId);
   });
 
   const handleBack = useLastCallback(() => {
     setOpenId(undefined);
   });
 
-  const handleShowAllDaily = useLastCallback(() => {
-    setAreAllDailyShown(true);
-  });
-
   const handleSave = useLastCallback((noteId: string, text: string, base?: string) => (
     saveNote(noteId, text, vaultName, base)
   ));
-  const handleToggleGroup = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const key = e.currentTarget.dataset.groupKey!;
-    const next = collapsed.includes(key) ? collapsed.filter((item) => item !== key) : [...collapsed, key];
-    setCollapsed(next);
-    writeCollapsedFolders(next);
-  });
-
   const handleNewFolder = useLastCallback(() => {
     setSheetFolderId(undefined);
     openFolderSheet();
   });
 
-  const handleFolderMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setSheetFolderId(e.currentTarget.dataset.folderId);
+  const handleFolderMenu = useLastCallback((folderId: string) => {
+    setSheetFolderId(folderId);
     openFolderSheet();
   });
 
+  // Переименованная папка остаётся открытой в списке: ключ группы — её путь
   const handleFolderSubmit = useLastCallback(async (name: string): Promise<FolderSubmitError | undefined> => {
-    if (sheetFolder) return renameNoteFolder(sheetFolder.id, name, vaultName);
-    return (await createNoteFolder(name, vaultName)).error;
+    if (!sheetFolder) return (await createNoteFolder(name, vaultName)).error;
+    const failure = await renameNoteFolder(sheetFolder.id, name, vaultName);
+    if (!failure && openGroupKey === sheetFolder.path) {
+      setOpenGroupKey([...sheetFolder.path.split('/').slice(0, -1), name].join('/'));
+    }
+    return failure;
   });
 
   // Пустая папка удаляется сразу; с заметками — после вопроса: заметки в «Без папки» либо вместе с папкой в корзину
@@ -397,7 +370,10 @@ const Knowledge = () => {
       return;
     }
     setRemoval({ id: sheetFolder.id, name: folderCaption(sheetFolder.path), count });
-    openRemoval();
+  });
+
+  const closeRemoval = useLastCallback(() => {
+    setRemoval(undefined);
   });
 
   const handleRemovalMove = useLastCallback(() => {
@@ -428,29 +404,8 @@ const Knowledge = () => {
     return undefined;
   });
 
-  const handleDragStart = useLastCallback((e: React.DragEvent<HTMLButtonElement>) => {
-    e.dataTransfer.setData(NOTE_DRAG_TYPE, e.currentTarget.dataset.id!);
-    e.dataTransfer.effectAllowed = 'move';
-  });
-
-  const handleDragOver = useLastCallback((e: React.DragEvent<HTMLElement>) => {
-    if (!e.dataTransfer.types.includes(NOTE_DRAG_TYPE)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const key = e.currentTarget.dataset.groupKey;
-    if (key !== dropKey) setDropKey(key);
-  });
-
-  const handleDragLeave = useLastCallback((e: React.DragEvent<HTMLElement>) => {
-    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropKey(undefined);
-  });
-
-  const handleDrop = useLastCallback((e: React.DragEvent<HTMLElement>) => {
-    const noteId = e.dataTransfer.getData(NOTE_DRAG_TYPE);
-    setDropKey(undefined);
-    if (!noteId) return;
-    e.preventDefault();
-    void moveNote(noteId, e.currentTarget.dataset.folderId || undefined);
+  const handleMoveNote = useLastCallback((noteId: string, folderId?: string) => {
+    void moveNote(noteId, folderId);
   });
 
   const handleRename = useLastCallback((noteId: string, title: string) => {
@@ -628,216 +583,39 @@ const Knowledge = () => {
     showGraphNotice(lang('KnowledgeGraphUnlinked', names), revertNote(fromId, from.text));
   });
 
-  const found = useMemo(() => (searchQuery.trim() ? index.search(searchQuery) : undefined), [index, searchQuery]);
   const noteById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes]);
-  const groups = useMemo(() => buildNoteGroups({
-    notes: found ? found.map((item) => noteById.get(item.id)!).filter(Boolean) : notes,
-    folders,
-    dailyFolders: DAILY_FOLDERS,
-    isSearch: Boolean(found),
-    dailyShown: areAllDailyShown ? undefined : DAILY_SHOWN,
-  }), [notes, noteById, folders, found, areAllDailyShown]);
+  const found = useMemo(() => (
+    searchQuery.trim()
+      ? index.search(searchQuery).map((item) => noteById.get(item.id)!).filter(Boolean)
+      : undefined
+  ), [index, noteById, searchQuery]);
 
   const isList = view === 'notes';
   const isNoteShown = isList && Boolean(openNote);
   const isNoteAlone = isNarrow && isNoteShown;
-  // Правка заметки на широком экране: список и «Связи» убраны, место — редактору и просмотру
+  // Правка заметки: колонка «Связи» убрана, место — редактору и просмотру
   const [isNoteEditing, setIsNoteEditing] = useState(false);
-  const isEditFocus = isNoteEditing && !isNarrow;
-  const openFolder = openNote && (openNote.isDaily ? lang('KnowledgeDailyFolder') : folderCaption(openNote.folder));
   const isGuideNew = Boolean(guideOverview) && !hasSeenGuide && !found;
 
-  function renderRow(note: NoteEntry) {
-    const next = nearestPlanned(plannedOf(plannedIndex, note), today);
-    const isDaily = note.isDaily && isDayTitle(note.title);
-    return (
-      <button
-        key={note.id}
-        type="button"
-        className={buildClassName(kit.row, styles.listRow, note.id === openId && kit.rowSel)}
-        draggable={!isNarrow && !isDaily}
-        data-id={note.id}
-        data-note-row={note.title}
-        onClick={handlePick}
-        onDragStart={handleDragStart}
-      >
-        <span className={kit.ava} style={`--c: ${folderColor(note.folder, note.isDaily)}`} aria-hidden="true">
-          {avatarText(note)}
-        </span>
-        <span className={kit.rowText}>
-          <span className={kit.ttl}>{displayTitle(lang, note)}</span>
-          <span className={kit.sub}>{previewOf(note) || lang('KnowledgeNoteEmpty')}</span>
-        </span>
-        {next?.day && (
-          <span className={kit.meta} title={lang('KnowledgeNearest')}>{formatDayShort(lang, next.day)}</span>
-        )}
-      </button>
-    );
-  }
+  // Заметка на весь экран телефона: ленты модулей и «+» под ней нет
+  const isNavCovered = isShown && isNoteAlone;
+  useEffect(() => {
+    setParvaneNavCovered(isNavCovered);
+    return () => setParvaneNavCovered(false);
+  }, [isNavCovered]);
+  const [now] = useState(() => Date.now());
 
-  function renderGroup(group: Group) {
-    const isRoot = !group.isDaily && group.folder === ROOT_FOLDER;
-    const caption = group.isDaily ? lang('KnowledgeDailyFolder')
-      : isRoot ? lang('KnowledgeRoot') : folderCaption(group.folder);
-    // При поиске свёрнутые папки раскрыты: иначе найденное было бы не видно
-    const isCollapsed = !found && collapsed.includes(group.key);
-    // В папку переносят и в ней создают, пока её узел известен; «Без папки» — корень хранилища
-    const isTarget = !found && !group.isDaily && (isRoot || Boolean(group.folderId));
-    return (
-      <section
-        key={group.key}
-        className={buildClassName(styles.folder, dropKey === group.key && styles.folderDrop)}
-        data-folder={group.folder}
-        data-folder-id={group.folderId}
-        data-group-key={group.key}
-        data-collapsed={isCollapsed ? 'true' : undefined}
-        onDragOver={isTarget ? handleDragOver : undefined}
-        onDragLeave={isTarget ? handleDragLeave : undefined}
-        onDrop={isTarget ? handleDrop : undefined}
-      >
-        <div className={styles.folderHead}>
-          <h3 className={buildClassName(kit.grp, styles.folderTitle)}>
-            <button
-              type="button"
-              className={buildClassName(kit.plain, styles.folderToggle)}
-              aria-expanded={!isCollapsed}
-              data-folder-toggle
-              data-group-key={group.key}
-              onClick={handleToggleGroup}
-            >
-              <PvIcon name={isCollapsed ? 'right' : 'down'} isSmall />
-              <span className={styles.folderCaption}>{caption}</span>
-              {isCollapsed && <span className={styles.folderCount}>{group.items.length + group.hidden}</span>}
-            </button>
-          </h3>
-          {isTarget && (
-            <button
-              type="button"
-              className={buildClassName(kit.ib, styles.folderButton)}
-              aria-label={lang('KnowledgeFolderAddNote', { name: caption })}
-              title={lang('KnowledgeFolderAddNote', { name: caption })}
-              data-folder-add
-              data-folder-id={group.folderId}
-              data-group-key={group.key}
-              onClick={handleNewInFolder}
-            >
-              <PvIcon name="plus" isSmall />
-            </button>
-          )}
-          {isTarget && group.folderId && (
-            <button
-              type="button"
-              className={buildClassName(kit.ib, styles.folderButton)}
-              aria-label={lang('KnowledgeFolderActions', { name: caption })}
-              title={lang('KnowledgeFolderActions', { name: caption })}
-              data-folder-menu
-              data-folder-id={group.folderId}
-              onClick={handleFolderMenu}
-            >
-              <PvIcon name="dots" isSmall />
-            </button>
-          )}
-        </div>
-        {!isCollapsed && group.items.map(renderRow)}
-        {!isCollapsed && !group.items.length && (
-          <button
-            type="button"
-            className={buildClassName(kit.plain, styles.folderEmpty)}
-            data-folder-empty
-            data-folder-id={group.folderId}
-            data-group-key={group.key}
-            onClick={handleNewInFolder}
-          >
-            {lang('KnowledgeFolderEmpty')}
-          </button>
-        )}
-        {!isCollapsed && group.hidden > 0 && (
-          <button
-            type="button"
-            className={buildClassName(kit.btn, kit.btnGhost, kit.btnWide)}
-            onClick={handleShowAllDaily}
-          >
-            {lang('KnowledgeShowAll', { count: group.hidden + group.items.length })}
-          </button>
-        )}
-      </section>
-    );
-  }
-
-  function renderList() {
-    return (
-      <aside className={buildClassName(styles.list, 'custom-scroll')} data-notes-list>
-        {isGuideNew && (
-          <div className={styles.guideNotice} role="status" data-notes-guide-notice>
-            <span className={styles.guideNoticeText}>{lang('KnowledgeGuideAdded', { name: guideFolderName })}</span>
-            <button
-              type="button"
-              className={buildClassName(kit.btn, kit.btnAcc)}
-              data-notes-guide-open
-              onClick={handleGuide}
-            >
-              {lang('KnowledgeGuideOpen')}
-            </button>
-            <button
-              type="button"
-              className={kit.ib}
-              aria-label={lang('KnowledgeGuideDismiss')}
-              title={lang('KnowledgeGuideDismiss')}
-              data-notes-guide-dismiss
-              onClick={markGuide}
-            >
-              <PvIcon name="x" isSmall />
-            </button>
-          </div>
-        )}
-        {!notes.length && <p className={styles.mutedLine}>{lang('KnowledgeEmpty')}</p>}
-        {Boolean(notes.length) && !groups.length && (
-          <p className={styles.mutedLine}>{lang('KnowledgeNothingFound')}</p>
-        )}
-        {groups.map(renderGroup)}
-        <div className={styles.listButtons}>
-          <button
-            type="button"
-            className={buildClassName(kit.btn, styles.listButton)}
-            data-notes-new
-            onClick={handleNew}
-          >
-            <PvIcon name="plus" isSmall />
-            {lang('KnowledgeNewNote')}
-          </button>
-          <button
-            type="button"
-            className={buildClassName(kit.btn, styles.listButton)}
-            data-notes-new-folder
-            onClick={handleNewFolder}
-          >
-            <PvIcon name="folder" isSmall />
-            {lang('KnowledgeNewFolder')}
-          </button>
-        </div>
-        {/* Справка есть у всех с первого открытия; кнопка нужна, только чтобы вернуть удалённую */}
-        {!guideOverview && (
-          <button
-            type="button"
-            className={buildClassName(kit.btn, kit.btnGhost, kit.btnWide)}
-            data-notes-guide
-            onClick={handleGuide}
-          >
-            {lang('KnowledgeGuideReturn')}
-          </button>
-        )}
-      </aside>
-    );
-  }
-
-  // Системное «назад»: открытая на телефоне заметка — к списку, панель рядом с графом либо холстом (на
-  // компьютере; на телефоне это шторка со своей записью) — закрыть, иначе — к чатам
+  // Системное «назад»: открытая на телефоне заметка — к списку, открытая папка — к папкам, панель рядом с
+  // графом либо холстом (на компьютере; на телефоне это шторка со своей записью) — закрыть, иначе — к чатам
   const isPanelLevel = !isNarrow && Boolean(shownPick);
+  const isGroupLevel = isList && openGroupKey !== undefined && !found;
   const handleHistoryBack = useLastCallback(() => {
     if (isSearchShown && !isNoteAlone) {
       handleSearchClose();
     } else if (isNoteAlone) {
       handleBack();
+    } else if (isGroupLevel && isNarrow) {
+      setOpenGroupKey(undefined);
     } else if (isPanelLevel) {
       handleGraphClose();
     } else {
@@ -847,161 +625,243 @@ const Knowledge = () => {
     return true;
   });
 
+  function renderSearch() {
+    return (
+      <PvHeaderSearch
+        value={viewQuery}
+        label={lang(SEARCH_LABELS[view])}
+        id={view === 'notes' ? 'knowledge-search' : undefined}
+        isOpen={isSearchShown}
+        onOpen={openSearch}
+        onClose={handleSearchClose}
+        onChange={handleQuery}
+        onEnter={handleSearchEnter}
+      />
+    );
+  }
+
+  function renderList() {
+    return (
+      <NotesList
+        notes={notes}
+        folders={folders}
+        index={index}
+        plannedIndex={plannedIndex}
+        today={today}
+        found={found}
+        openId={isNarrow ? undefined : openId}
+        openGroupKey={openGroupKey}
+        vaultName={vaultName}
+        guideNoticeFolder={isGuideNew ? guideFolderName : undefined}
+        hasGuide={Boolean(guideOverview)}
+        isNarrow={isNarrow}
+        onPick={handlePick}
+        onOpenGroup={setOpenGroupKey}
+        onNewFolder={handleNewFolder}
+        onFolderMenu={handleFolderMenu}
+        onNewInFolder={createIn}
+        onMoveNote={handleMoveNote}
+        onGuide={handleGuide}
+        onGuideDismiss={markGuide}
+      />
+    );
+  }
+
+  function renderNote(note: NoteEntry) {
+    return (
+      <NoteView
+        note={note}
+        index={index}
+        planner={planner}
+        planned={openPlanned}
+        layout={isNarrow ? 'screen' : 'pane'}
+        hasLinks={isNarrow || !hasSide}
+        onBack={isNarrow ? handleBack : undefined}
+        onOpenTitle={openTitle}
+        onSave={handleSave}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        onPickFolder={handleAskMove}
+        onEditingChange={setIsNoteEditing}
+      />
+    );
+  }
+
+  // Телефон: шапка с названием модуля, под ней — виды; открытая заметка занимает весь экран со своей шапкой
+  function renderPhone() {
+    return (
+      <div className={styles.page}>
+        {!isNoteAlone && (
+          <header className={styles.head}>
+            <div className={styles.headRow}>
+              {!isSearchShown && <h1 className={styles.headTitle}>{lang('ParvaneModuleNotes')}</h1>}
+              {renderSearch()}
+              {isList && !isSearchShown && (
+                <button
+                  type="button"
+                  className={kit.ib}
+                  aria-label={lang('KnowledgeNewFolder')}
+                  title={lang('KnowledgeNewFolder')}
+                  data-notes-new-folder
+                  onClick={handleNewFolder}
+                >
+                  <PvIcon name="folderNew" />
+                </button>
+              )}
+            </div>
+            <div className={styles.viewRow}>
+              <KnowledgeTabs className={styles.viewTabs} />
+            </div>
+          </header>
+        )}
+        {renderNotice()}
+        <div className={styles.content}>
+          {status !== 'ready' ? <Loading /> : isList
+            ? (openNote ? renderNote(openNote) : renderList()) : renderBoard()}
+          {renderGraphNotice()}
+        </div>
+      </div>
+    );
+  }
+
+  // Компьютер, список: колонка списка с видами и поиском, заметка с режимами, справа — «Связи»
+  function renderDesktopList() {
+    return (
+      <>
+        <aside className={styles.listPane}>
+          <div className={styles.listHead}>
+            <KnowledgeTabs />
+            <div className={styles.searchRow}>{renderSearch()}</div>
+          </div>
+          {status === 'ready' ? renderList() : <Loading />}
+        </aside>
+        <PvResizer
+          panel="notes-list"
+          edge="end"
+          target="previous"
+          min={NOTES_LIST_MIN}
+          max={NOTES_LIST_MAX}
+          className={styles.listResizer}
+        />
+        <div className={styles.page}>
+          {renderNotice()}
+          <div className={styles.content}>
+            {status !== 'ready' ? <Loading /> : openNote ? renderNote(openNote) : (
+              <p className={styles.pickNote}>
+                {lang('KnowledgePickNote').split(NOTE_LINK).map((part, i) => (
+                  part.startsWith('[[')
+                    ? <span key={i} className={styles.linkSample}>{part}</span>
+                    : part
+                ))}
+              </p>
+            )}
+          </div>
+        </div>
+        {hasSide && openNote && !isNoteEditing && status === 'ready' && (
+          <aside className={styles.side} aria-label={lang('KnowledgeLinks')}>
+            <PvResizer panel="notes-links" edge="start" min={NOTES_LINKS_MIN} max={NOTES_LINKS_MAX} />
+            <div className={buildClassName(styles.sideContent, 'custom-scroll')}>
+              <NoteLinks note={openNote} index={index} planned={openPlanned} onOpenTitle={openTitle} />
+            </div>
+            <div className={styles.sideFoot}>
+              {lang('KnowledgeEdited', { when: formatNoteEdited(lang, openNote.updatedAt, now) })}
+            </div>
+          </aside>
+        )}
+      </>
+    );
+  }
+
+  // Компьютер, граф и холст: виды и поиск — в полосе над полем
+  function renderDesktopBoard() {
+    return (
+      <div className={styles.page}>
+        <header className={buildClassName(styles.head, styles.headBoard)}>
+          <KnowledgeTabs className={styles.boardTabs} />
+          <div className={styles.searchRow}>{renderSearch()}</div>
+          <span
+            className={styles.headHint}
+            title={lang(view === 'canvas' ? 'KnowledgeCanvasHint' : 'KnowledgeGraphHint')}
+          >
+            {lang(view === 'canvas' ? 'KnowledgeCanvasHint' : 'KnowledgeGraphHint')}
+          </span>
+        </header>
+        {renderNotice()}
+        <div className={styles.content}>
+          {status !== 'ready' ? <Loading /> : renderBoard()}
+          {renderGraphNotice()}
+        </div>
+      </div>
+    );
+  }
+
+  function renderBoard() {
+    return view === 'graph' ? (
+      <NotesGraph
+        notes={notes}
+        planner={planner}
+        pickedId={shownPick && (pickNote?.id || shownPick.id)}
+        linkFromId={linkFromId}
+        onPick={handleGraphPick}
+        onOpen={handleGraphOpen}
+        onLink={linkInGraph}
+        onLinkNew={linkNewInGraph}
+        onUnlink={unlinkInGraph}
+        onLinkModeEnd={handleLinkModeEnd}
+        onClose={handleGraphClose}
+        onMakeCanvas={makeGraphCanvas}
+        query={graphQuery}
+        searchStep={searchStep}
+      />
+    ) : (
+      <NotesCanvas
+        canvases={canvases}
+        notes={notes}
+        isNarrow={isNarrow}
+        openId={graphCanvasId}
+        onOpenTitle={pickTitleInGraph}
+        query={canvasQuery}
+        searchStep={searchStep}
+      />
+    );
+  }
+
+  function renderNotice() {
+    if (!isNoticeShown || !notice) return undefined;
+    return (
+      <div className={styles.notice} role="status">
+        {notice.code === 'guide-failed' ? lang('KnowledgeNoticeGuideFailed')
+          : lang(NOTICE_KEYS[notice.code], { name: notice.title })}
+      </div>
+    );
+  }
+
+  function renderGraphNotice() {
+    if (view !== 'graph' || !graphNotice) return undefined;
+    return (
+      <div className={styles.graphNotice} role="status" data-graph-notice>
+        <span>{graphNotice.text}</span>
+        {graphNotice.undo && (
+          <button
+            type="button"
+            className={buildClassName(kit.plain, styles.graphNoticeUndo)}
+            data-graph-undo
+            onClick={graphNotice.undo}
+          >
+            <PvIcon name="undo" isSmall />
+            {lang('KnowledgeGraphUndo')}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div id="ParvaneKnowledge" className={styles.root} data-knowledge-view={view} data-status={status}>
       {isShown && (
         <SectionHistoryBack onBack={handleHistoryBack} />
       )}
-      <div className={buildClassName(kit.island, styles.page)}>
-        {!isNoteAlone && (
-          <header className={buildClassName(kit.hdr, kit.hdrTabs, isSearchShown && kit.hdrSearching)}>
-            <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>
-            <KnowledgeTabs />
-            <PvHeaderSearch
-              value={viewQuery}
-              label={lang(SEARCH_LABELS[view === 'files' ? 'notes' : view])}
-              id={view === 'notes' ? 'knowledge-search' : undefined}
-              isOpen={isSearchShown}
-              onOpen={openSearch}
-              onClose={handleSearchClose}
-              onChange={handleQuery}
-              onEnter={handleSearchEnter}
-            />
-            {isNoteShown && (
-              <span className={buildClassName(kit.muted, kit.hideM, styles.crumb)}>
-                {`/ ${openFolder || lang('KnowledgeRoot')}`}
-              </span>
-            )}
-            <span className={buildClassName(kit.grow, kit.hideM)} />
-            {isList && (
-              <button
-                type="button"
-                className={buildClassName(kit.pill, kit.pillAcc, kit.hideM)}
-                onClick={handleNew}
-              >
-                <PvIcon name="plus" isSmall />
-                {lang('KnowledgeNoteShort')}
-              </button>
-            )}
-            {view === 'canvas' && (
-              <span className={buildClassName(kit.muted, kit.small, kit.hideM)}>{lang('KnowledgeCanvasHint')}</span>
-            )}
-            {view === 'graph' && (
-              <span
-                className={buildClassName(kit.muted, kit.small, kit.hideM, styles.graphHint)}
-                title={lang('KnowledgeGraphHint')}
-              >
-                {lang('KnowledgeGraphHint')}
-              </span>
-            )}
-          </header>
-        )}
-        {isNoticeShown && notice && (
-          <div className={styles.notice} role="status">
-            {notice.code === 'guide-failed' ? lang('KnowledgeNoticeGuideFailed')
-              : lang(NOTICE_KEYS[notice.code], { name: notice.title })}
-          </div>
-        )}
-        <div className={styles.content}>
-          {status !== 'ready' ? <Loading /> : view === 'graph' ? (
-            <NotesGraph
-              notes={notes}
-              planner={planner}
-              pickedId={shownPick && (pickNote?.id || shownPick.id)}
-              linkFromId={linkFromId}
-              onPick={handleGraphPick}
-              onOpen={handleGraphOpen}
-              onLink={linkInGraph}
-              onLinkNew={linkNewInGraph}
-              onUnlink={unlinkInGraph}
-              onLinkModeEnd={handleLinkModeEnd}
-              onClose={handleGraphClose}
-              onMakeCanvas={makeGraphCanvas}
-              query={graphQuery}
-              searchStep={searchStep}
-            />
-          ) : view === 'canvas' ? (
-            <NotesCanvas
-              canvases={canvases}
-              notes={notes}
-              isNarrow={isNarrow}
-              openId={graphCanvasId}
-              onOpenTitle={pickTitleInGraph}
-              query={canvasQuery}
-              searchStep={searchStep}
-            />
-          ) : (
-            <div className={buildClassName(styles.layout, isEditFocus && styles.layoutFocus)}>
-              {!isNoteAlone && !isEditFocus && renderList()}
-              {!isNoteAlone && !isNarrow && !isEditFocus && (
-                <PvResizer
-                  panel="notes-list"
-                  edge="end"
-                  target="previous"
-                  min={NOTES_LIST_MIN}
-                  max={NOTES_LIST_MAX}
-                  className={styles.listResizer}
-                />
-              )}
-              {(!isNarrow || isNoteShown) && (
-                <div className={buildClassName(styles.pane, 'custom-scroll')}>
-                  {openNote ? (
-                    <NoteView
-                      note={openNote}
-                      index={index}
-                      planner={planner}
-                      planned={openPlanned}
-                      hasLinks={!hasSide}
-                      onBack={isNarrow ? handleBack : undefined}
-                      onOpenTitle={openTitle}
-                      onSave={handleSave}
-                      onRename={handleRename}
-                      onDelete={handleDelete}
-                      onPickFolder={handleAskMove}
-                      onEditingChange={setIsNoteEditing}
-                    />
-                  ) : (
-                    <p className={styles.pickNote}>
-                      {lang('KnowledgePickNote').split(NOTE_LINK).map((part, i) => (
-                        part.startsWith('[[')
-                          ? <span key={i} className={styles.linkSample}>{part}</span>
-                          : part
-                      ))}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          {view === 'graph' && graphNotice && (
-            <div className={styles.graphNotice} role="status" data-graph-notice>
-              <span>{graphNotice.text}</span>
-              {graphNotice.undo && (
-                <button
-                  type="button"
-                  className={buildClassName(kit.plain, styles.graphNoticeUndo)}
-                  data-graph-undo
-                  onClick={graphNotice.undo}
-                >
-                  <PvIcon name="undo" isSmall />
-                  {lang('KnowledgeGraphUndo')}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-      {hasSide && isNoteShown && openNote && !isEditFocus && (
-        <aside className={buildClassName(kit.island, styles.side)} aria-label={lang('KnowledgeLinks')}>
-          <PvResizer panel="notes-links" edge="start" min={NOTES_LINKS_MIN} max={NOTES_LINKS_MAX} />
-          <header className={kit.hdr}>
-            <h1 className={kit.hdrSmall}>{lang('KnowledgeLinks')}</h1>
-          </header>
-          <div className={buildClassName(styles.sideContent, 'custom-scroll')}>
-            <NoteLinks note={openNote} index={index} planned={openPlanned} onOpenTitle={openTitle} />
-          </div>
-        </aside>
-      )}
+      {isNarrow ? renderPhone() : isList ? renderDesktopList() : renderDesktopBoard()}
       {(isNarrow ? isPanelView : Boolean(shownPick)) && (
         <GraphPanel
           // На телефоне лист уходит, пока в режиме «Связать» выбирают цель на графе
@@ -1041,38 +901,12 @@ const Knowledge = () => {
         onCreate={handleMoveToNew}
         onClose={closePicker}
       />
-      <Modal
-        className="confirm"
-        title={lang('KnowledgeFolderDeleteTitle')}
-        isOpen={isRemovalOpen}
+      <NoteFolderRemoval
+        removal={removal}
+        onMove={handleRemovalMove}
+        onDeleteAll={handleRemovalWithNotes}
         onClose={closeRemoval}
-        isNativeDialog
-        noTitleAutoFocus
-      >
-        <p>{lang('KnowledgeFolderDeleteConfirm', { name: removal?.name || '', count: removal?.count || 0 })}</p>
-        <div className="dialog-buttons-column">
-          <Button
-            className="confirm-dialog-button"
-            isText
-            id="knowledge-folder-delete-move"
-            onClick={handleRemovalMove}
-          >
-            {lang('KnowledgeFolderDeleteAction')}
-          </Button>
-          <Button
-            className="confirm-dialog-button"
-            isText
-            color="danger"
-            id="knowledge-folder-delete-all"
-            onClick={handleRemovalWithNotes}
-          >
-            {lang('KnowledgeFolderDeleteWithNotes')}
-          </Button>
-          <Button className="confirm-dialog-button" isText onClick={closeRemoval}>
-            {lang('Cancel')}
-          </Button>
-        </div>
-      </Modal>
+      />
       <ConfirmDialog
         isOpen={isRestoreOpen}
         text={lang('KnowledgeGuideRestoreText', { name: buildGuide(guideLang).folderName })}

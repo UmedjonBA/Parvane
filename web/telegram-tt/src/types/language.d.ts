@@ -3002,11 +3002,9 @@ export interface LangPair {
   'ParvanePaletteSleepText': undefined;
   'ParvanePaletteFoodText': undefined;
   'ParvanePaletteLoading': undefined;
-  'ParvaneSectionKnowledge': undefined;
   'KnowledgeNotes': undefined;
   'KnowledgeGraph': undefined;
   'KnowledgeCanvas': undefined;
-  'KnowledgeFiles': undefined;
   'KnowledgeVaultName': undefined;
   'KnowledgeDailyFolder': undefined;
   'KnowledgeNewNote': undefined;
@@ -3014,7 +3012,6 @@ export interface LangPair {
   'KnowledgeSearch': undefined;
   'KnowledgeEmpty': undefined;
   'KnowledgeNothingFound': undefined;
-  'KnowledgeGuide': undefined;
   'KnowledgeGuideOpen': undefined;
   'KnowledgeGuideDismiss': undefined;
   'KnowledgeGuideRestore': undefined;
@@ -3079,7 +3076,6 @@ export interface LangPair {
   'KnowledgeCanvasNoColor': undefined;
   'KnowledgeCanvasChooseNote': undefined;
   'KnowledgeCanvasDamaged': undefined;
-  'KnowledgeNoteShort': undefined;
   'KnowledgeNoteEmpty': undefined;
   'KnowledgeLinks': undefined;
   'KnowledgeNearest': undefined;
@@ -3192,7 +3188,6 @@ export interface LangPair {
   'ParvaneLiveLocation15Min': undefined;
   'ParvaneLiveLocation1Hour': undefined;
   'ParvaneLiveLocation8Hours': undefined;
-  'KnowledgeFolderDeleteTitle': undefined;
   'KnowledgeFolderDeleteWithNotes': undefined;
   'KnowledgeGuideReturn': undefined;
   'ArticleMenuItem': undefined;
@@ -3310,6 +3305,27 @@ export interface LangPair {
   'KnowledgePreviewShow': undefined;
   'KnowledgePreviewHide': undefined;
   'KnowledgePreviewTitle': undefined;
+  'KnowledgeList': undefined;
+  'KnowledgeViewLabel': undefined;
+  'KnowledgeFolders': undefined;
+  'KnowledgeRecent': undefined;
+  'KnowledgeAllNotes': undefined;
+  'KnowledgeModeLabel': undefined;
+  'KnowledgeModeView': undefined;
+  'KnowledgeModeEdit': undefined;
+  'KnowledgeModeSplit': undefined;
+  'KnowledgeEditorLabel': undefined;
+  'KnowledgeCopyLink': undefined;
+  'KnowledgeLinkCopied': undefined;
+  'KnowledgeLinkSuggest': undefined;
+  'KnowledgeTools': undefined;
+  'KnowledgeToolHeading': undefined;
+  'KnowledgeToolBold': undefined;
+  'KnowledgeToolTask': undefined;
+  'KnowledgeToolLink': undefined;
+  'KnowledgeToolCode': undefined;
+  'KnowledgeToolCallout': undefined;
+  'KnowledgeToolList': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5563,13 +5579,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'KnowledgeFolderDeleteConfirm': {
-    'name': V;
     'count': V;
   };
   'KnowledgeFolderActions': {
-    'name': V;
-  };
-  'KnowledgeFolderAddNote': {
     'name': V;
   };
   'KnowledgeNoticeFolderFiles': {
@@ -5720,6 +5732,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneExportDoneMissing': {
     'count': V;
+  };
+  'KnowledgeStorageHint': {
+    'name': V;
+  };
+  'KnowledgeEdited': {
+    'when': V;
+  };
+  'KnowledgeLinkNew': {
+    'name': V;
+  };
+  'KnowledgeFolderDeleteQuestion': {
+    'name': V;
   };
 }
 
@@ -6260,6 +6284,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'days': V;
   };
   'KnowledgeFilesItems': {
+    'count': V;
+  };
+  'KnowledgeLinksCount': {
     'count': V;
   };
 }

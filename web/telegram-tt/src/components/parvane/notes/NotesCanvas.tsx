@@ -614,7 +614,7 @@ const NotesCanvas = ({
 
   // Escape перехватывают общие слушатели приложения раньше поля — отмена правки встаёт в их очередь
   useEffect(() => (inline ? captureEscKeyListener(() => {
-    if (!getIsParvaneScreenShown('knowledge')) return false;
+    if (!getIsParvaneScreenShown('notes')) return false;
     finishInline(true);
     return undefined;
   }) : undefined), [inline]);
@@ -631,7 +631,7 @@ const NotesCanvas = ({
   // нажатие, пришедшее в том же кадре, что и меню либо выделение
   const handleEscape = useLastCallback(() => {
     // Скрытый раздел (смонтирован, но не показан) клавишу не берёт
-    if (!getIsParvaneScreenShown('knowledge')) return false;
+    if (!getIsParvaneScreenShown('notes')) return false;
     // Правка началась в этом же кадре — её слушатель ещё не встал в очередь
     if (inlineRef.current) finishInline(true);
     else if (menu) setMenu(undefined);
@@ -1761,7 +1761,7 @@ const NotesCanvas = ({
 
   // ── клавиши и буфер обмена ──
   // Клавиши холста молчат, пока раздел скрыт, открыта шторка или окно, идёт правка на месте либо фокус в чужом поле
-  const isKeyboardBusy = () => Boolean(!getIsParvaneScreenShown('knowledge')
+  const isKeyboardBusy = () => Boolean(!getIsParvaneScreenShown('notes')
     || inlineRef.current || editing || linkDraft || noteDraft || filePreview
     || isPickingNote
     || isPickingFile || isMenuOpen || isDeleteOpen || document.body.classList.contains('has-open-dialog')

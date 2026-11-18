@@ -16,7 +16,7 @@ import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironme
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
 import {
-  markContactsFromProfile, openHealth, openKnowledgeView, requestPlannerSettings,
+  markContactsFromProfile, openFiles, openHealth, requestPlannerSettings,
 } from '../../../util/parvaneSection';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -134,7 +134,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   });
 
   const handleOpenVault = useLastCallback(() => {
-    openKnowledgeView('files');
+    openFiles();
   });
 
   // Адрес аккаунта — `имя@сервер`: в карточке он целиком, моноширинным

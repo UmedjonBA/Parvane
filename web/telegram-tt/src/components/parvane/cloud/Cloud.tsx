@@ -15,7 +15,7 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumeModuleAddRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest, getParvaneSection,
+  consumeModuleAddRequest, getIsParvaneScreenShown, getModuleAddRequest, getParvaneSection,
   setParvaneSection,
 } from '../../../util/parvaneSection';
 import { formatFileSize } from '../../../util/textFormat';
@@ -41,7 +41,6 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
-import KnowledgeTabs from '../notes/KnowledgeTabs';
 import PvHeaderSearch from '../notes/PvHeaderSearch';
 import PvIcon from '../notes/PvIcon';
 import SectionHistoryBack from '../SectionHistoryBack';
@@ -144,7 +143,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
   // Пока раздел на экране, сервер опрашивается часто; скрыт (раздел остаётся смонтированным) — редко
   // Зависимости — сигналы раздела: по ним значение пересчитывается
   // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  const isShown = useDerivedState(() => getIsParvaneScreenShown('files'), [getParvaneSection, getKnowledgeView]);
+  const isShown = useDerivedState(() => getIsParvaneScreenShown('files'), [getParvaneSection]);
   useEffect(() => {
     if (!isShown) return undefined;
     setCloudActive(true);
@@ -796,9 +795,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
     >
       {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={buildClassName(kit.island, styles.page)}>
-        <header className={buildClassName(kit.hdr, kit.hdrTabs, isSearchShown && kit.hdrSearching)}>
-          {!isMobile && <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>}
-          <KnowledgeTabs />
+        <header className={kit.hdr}>
+          <h1 className={buildClassName(kit.hdrTitle, isSearchShown && kit.hideM)}>{lang('ParvaneModuleFiles')}</h1>
+          {!isSearchShown && <span className={buildClassName(kit.grow, kit.onlyM)} />}
           {!isBlocked && (
             <PvHeaderSearch
               value={query}

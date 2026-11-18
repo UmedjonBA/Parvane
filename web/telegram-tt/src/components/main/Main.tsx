@@ -53,7 +53,7 @@ import {
   markMediaTampered, migrateCustomBackgrounds, purgePlaintextMediaCaches,
 } from '../../util/parvaneMediaIntegrity';
 import {
-  getKnowledgeView, getParvaneSection, setParvaneSection,
+  getIsParvaneNavCovered, getParvaneSection, setParvaneSection,
 } from '../../util/parvaneSection';
 import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
@@ -809,15 +809,14 @@ const Main = ({
   const isPlannerOpen = parvaneSection === 'planner';
   const isHealthOpen = parvaneSection === 'health';
   const isMusicOpen = parvaneSection === 'music';
-  const isCloudOpen = parvaneSection === 'cloud';
-  const knowledgeView = useDerivedState(getKnowledgeView);
-  // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
-  const isCloudFilesOpen = isCloudOpen && knowledgeView === 'files';
-  const isKnowledgeOpen = isCloudOpen && !isCloudFilesOpen;
+  // «Заметки» (`Knowledge`) и «Файлы» (`Cloud`) — отдельные модули
+  const isCloudFilesOpen = parvaneSection === 'files';
+  const isKnowledgeOpen = parvaneSection === 'notes';
+  const isCloudOpen = isCloudFilesOpen || isKnowledgeOpen;
   // Открытый модуль выключили (экран «Модули», список сервера, сохранённый раздел прежнего запуска) —
   // показываем «Чаты»: в выключенный модуль навигация не ведёт
   const { enabled: enabledModules } = useParvaneModules();
-  const openModuleId = getActiveModule(parvaneSection, knowledgeView, false);
+  const openModuleId = getActiveModule(parvaneSection, false);
   useEffect(() => {
     if (!enabledModules.includes(openModuleId)) setParvaneSection('messenger');
   }, [enabledModules, openModuleId]);
@@ -825,7 +824,7 @@ const Main = ({
   // (`Main.scss`), как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не
   // теряет выбранный день, папку, заметку, положение списка. Запрос «новая запись» делят два раздела: окно
   // поверх «Знаний» (`PlannerQuickHost`, `isInPlace`) «План» не трогает; слушатели клавиш холста и графа
-  // сверяются с `getIsParvaneScreenShown('knowledge')`
+  // сверяются с `getIsParvaneScreenShown('notes')`
   const isPlannerMountedRef = useRef(false);
   const shouldMountPlanner = isPlannerOpen || isPlannerMountedRef.current;
   isPlannerMountedRef.current = shouldMountPlanner;
@@ -847,7 +846,8 @@ const Main = ({
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
     && settingsScreen === SettingsScreens.Main;
-  const isTabBarShown = Boolean(isMobile) && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
+  const isNavCovered = useDerivedState(getIsParvaneNavCovered);
+  const isTabBarShown = Boolean(isMobile) && !isNavCovered && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
     && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
 
   // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он

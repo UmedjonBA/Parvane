@@ -757,8 +757,6 @@
     ],
     "groups": [
       {
-        "isSearch": false,
-        "dailyShown": 1,
         "result": [
           {
             "key": "",
@@ -770,8 +768,7 @@
                 "folder": "",
                 "isDaily": false
               }
-            ],
-            "hidden": 0
+            ]
           },
           {
             "key": "Дневник",
@@ -784,8 +781,7 @@
                 "folder": "Дневник",
                 "isDaily": true
               }
-            ],
-            "hidden": 0
+            ]
           },
           {
             "key": "Дом",
@@ -798,8 +794,7 @@
                 "folder": "Дом",
                 "isDaily": false
               }
-            ],
-            "hidden": 0
+            ]
           },
           {
             "key": "Дом/Участок",
@@ -812,16 +807,14 @@
                 "folder": "Дом/Участок",
                 "isDaily": false
               }
-            ],
-            "hidden": 0
+            ]
           },
           {
             "key": "Идеи",
             "folder": "Идеи",
             "folderId": "ideas",
             "isDaily": false,
-            "items": [],
-            "hidden": 0
+            "items": []
           },
           {
             "key": "Старое",
@@ -833,95 +826,7 @@
                 "folder": "Старое",
                 "isDaily": false
               }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "\u0000daily",
-            "folder": "Дневник",
-            "folderId": "diary",
-            "isDaily": true,
-            "items": [
-              {
-                "title": "2026-11-03",
-                "folder": "Дневник",
-                "isDaily": true
-              }
-            ],
-            "hidden": 1
-          }
-        ]
-      },
-      {
-        "isSearch": true,
-        "result": [
-          {
-            "key": "",
-            "folder": "",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "рассада",
-                "folder": "",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дневник",
-            "folder": "Дневник",
-            "folderId": "diary",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "не день",
-                "folder": "Дневник",
-                "isDaily": true
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дом",
-            "folder": "Дом",
-            "folderId": "home",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Огород",
-                "folder": "Дом",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дом/Участок",
-            "folder": "Дом/Участок",
-            "folderId": "plot",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Теплица",
-                "folder": "Дом/Участок",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Старое",
-            "folder": "Старое",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Потерянная",
-                "folder": "Старое",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
+            ]
           },
           {
             "key": "\u0000daily",
@@ -939,108 +844,7 @@
                 "folder": "Дневник",
                 "isDaily": true
               }
-            ],
-            "hidden": 0
-          }
-        ]
-      },
-      {
-        "isSearch": false,
-        "result": [
-          {
-            "key": "",
-            "folder": "",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "рассада",
-                "folder": "",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дневник",
-            "folder": "Дневник",
-            "folderId": "diary",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "не день",
-                "folder": "Дневник",
-                "isDaily": true
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дом",
-            "folder": "Дом",
-            "folderId": "home",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Огород",
-                "folder": "Дом",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Дом/Участок",
-            "folder": "Дом/Участок",
-            "folderId": "plot",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Теплица",
-                "folder": "Дом/Участок",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "Идеи",
-            "folder": "Идеи",
-            "folderId": "ideas",
-            "isDaily": false,
-            "items": [],
-            "hidden": 0
-          },
-          {
-            "key": "Старое",
-            "folder": "Старое",
-            "isDaily": false,
-            "items": [
-              {
-                "title": "Потерянная",
-                "folder": "Старое",
-                "isDaily": false
-              }
-            ],
-            "hidden": 0
-          },
-          {
-            "key": "\u0000daily",
-            "folder": "Дневник",
-            "folderId": "diary",
-            "isDaily": true,
-            "items": [
-              {
-                "title": "2026-11-03",
-                "folder": "Дневник",
-                "isDaily": true
-              },
-              {
-                "title": "2026-11-01",
-                "folder": "Дневник",
-                "isDaily": true
-              }
-            ],
-            "hidden": 0
+            ]
           }
         ]
       }

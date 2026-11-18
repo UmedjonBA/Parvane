@@ -71,7 +71,7 @@ try {
       await sidebar.getByRole('tab', { name: 'Files' }).click();
       await page.locator('#ParvaneCloud').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await shot('files');
-      await page.locator('#ParvaneCloud header').getByText('Notes', { exact: true }).first().click();
+      await sidebar.getByRole('tab', { name: 'Notes' }).click();
       const knowledge = page.locator('#ParvaneKnowledge');
       // Новому аккаунту «Знания» сами открывают заметку-инструкцию
       await knowledge.locator('[data-note-body]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

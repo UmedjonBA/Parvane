@@ -242,8 +242,6 @@ export async function preparePage(context, user, password, options = {}) {
     if (!localStorage.getItem('parvane:planner-calendar-tab')) {
       localStorage.setItem('parvane:planner-calendar-tab', '1');
     }
-    // Раздел «Знания» открывается на вкладке «Файлы»: сценарии облака ждут список файлов сразу
-    if (!localStorage.getItem('parvane:knowledge-tab')) localStorage.setItem('parvane:knowledge-tab', 'files');
     // Блок «Повтор и детали» карточки записи раскрыт: сценарии правят поля внутри него
     if (!localStorage.getItem('parvane:planner-details')) localStorage.setItem('parvane:planner-details', '1');
     Object.entries(seed || {}).forEach(([key, value]) => {

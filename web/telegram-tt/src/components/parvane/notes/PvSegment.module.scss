@@ -1,0 +1,54 @@
+// Parvane: переключатель макета (`.seg` в `pv.css`, доски `Notes`, `DeskNotes`) — сегменты одной ширины в рамке.
+// Высота сегмента — `--pv-seg-item-height`; на телефоне экранный переключатель выше (цель нажатия)
+
+.root {
+  display: flex;
+  flex: none;
+  gap: 0.1875rem;
+
+  min-width: 0;
+  padding: 0.1875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius);
+
+  background: var(--pv-bg);
+}
+
+.item {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: 1 1 0;
+  gap: 0.375rem;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 0;
+  height: var(--pv-seg-item-height);
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  white-space: nowrap;
+
+  background: none;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  @media (max-width: 760px) {
+    height: 2.375rem;
+    font-size: 0.875rem;
+  }
+}
+
+.itemOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  background: var(--pv-panel);
+}

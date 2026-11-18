@@ -1,0 +1,261 @@
+// Parvane (spec 041 D1): список заметок по доскам `Notes`, `PhNotesMore`, `DeskNotes` — папки строками со
+// счётчиком, заметки строками «название и время, начало текста, тег и связи». Цвета — переменные `--pv-*`
+
+.root {
+  overflow-y: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-height: 0;
+}
+
+.cap {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+
+  min-height: 2.5rem;
+  margin: 0;
+  padding: 0.875rem 1rem 0.375rem;
+}
+
+.capTitle {
+  flex: 1 1 auto;
+
+  margin: 0;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cap .capButton {
+  width: 2rem;
+  height: 2rem;
+  margin-block: -0.375rem;
+  margin-inline-end: -0.375rem;
+}
+
+.block {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+
+  border-top: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.row,
+.folderRow,
+.groupEmpty {
+  cursor: var(--custom-cursor, pointer);
+
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--pv-line);
+
+  font: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--pv-focus-ring);
+  }
+}
+
+.row {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.1875rem;
+
+  min-width: 0;
+  padding: 0.5625rem 0.875rem;
+
+  @media (max-width: 760px) {
+    padding: 0.75rem 1rem;
+  }
+}
+
+.rowOn,
+.rowOn:hover {
+  background: var(--pv-raised);
+}
+
+.rowTop {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.rowTitle,
+.folderName {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowTime,
+.folderCount {
+  flex: none;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.rowPreview {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  overflow: hidden;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-blue);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderRow {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 1rem;
+
+  @media (min-width: 761px) {
+    min-height: var(--pv-touch-size);
+    padding-inline: 0.875rem;
+  }
+}
+
+.folderRowDrop,
+.folderRowDrop:hover {
+  background: var(--pv-raised);
+  box-shadow: inset 0 0 0 2px var(--pv-accent);
+}
+
+.folderIcon {
+  color: var(--c, var(--pv-muted));
+}
+
+.group {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  background: var(--pv-panel);
+}
+
+.groupHead {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+
+  min-height: 3rem;
+  padding: 0.125rem 0.375rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-bg);
+}
+
+.groupTitle {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  margin: 0;
+
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupHead .folderCount {
+  padding-inline: 0.5rem;
+}
+
+.groupEmpty {
+  padding: 1rem;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.guideNotice {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size-small);
+
+  background: var(--pv-raised);
+}
+
+.guideNoticeText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.guideNotice .guideNoticeButton {
+  height: 2.25rem;
+  padding: 0 0.75rem;
+}
+
+.root .wideButton {
+  align-self: stretch;
+  margin: 0.5rem 0.75rem 0;
+}
+
+.empty {
+  flex: none;
+
+  margin: 0;
+  padding: 1.5rem 1rem;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.hint {
+  flex: none;
+
+  margin: 0;
+  padding: 0.5rem 1rem 1rem;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}

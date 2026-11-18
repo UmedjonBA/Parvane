@@ -684,24 +684,22 @@ function buildNotesVector() {
         return { id, notes: c.notes.map((n) => n.id), others: c.others.map((n) => n.id) };
       }),
       groups: [
-        { isSearch: false, dailyShown: 1 }, { isSearch: true }, { isSearch: false },
-      ].map((opts) => ({
-        ...opts,
-        result: buildNoteGroups({
-          notes: [
-            { title: 'Огород', folder: 'Дом', isDaily: false },
-            { title: 'Теплица', folder: 'Дом/Участок', isDaily: false },
-            { title: 'рассада', folder: '', isDaily: false },
-            { title: '2026-11-03', folder: 'Дневник', isDaily: true },
-            { title: '2026-11-01', folder: 'Дневник', isDaily: true },
-            { title: 'не день', folder: 'Дневник', isDaily: true },
-            { title: 'Потерянная', folder: 'Старое', isDaily: false },
-          ],
-          folders: listNoteFolders(VAULT_TREE, 'v'),
-          dailyFolders: ['Дневник'],
-          ...opts,
-        }),
-      })),
+        {
+          result: buildNoteGroups({
+            notes: [
+              { title: 'Огород', folder: 'Дом', isDaily: false },
+              { title: 'Теплица', folder: 'Дом/Участок', isDaily: false },
+              { title: 'рассада', folder: '', isDaily: false },
+              { title: '2026-11-03', folder: 'Дневник', isDaily: true },
+              { title: '2026-11-01', folder: 'Дневник', isDaily: true },
+              { title: 'не день', folder: 'Дневник', isDaily: true },
+              { title: 'Потерянная', folder: 'Старое', isDaily: false },
+            ],
+            folders: listNoteFolders(VAULT_TREE, 'v'),
+            dailyFolders: ['Дневник'],
+          }),
+        },
+      ],
     },
   };
 }

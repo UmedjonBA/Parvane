@@ -127,6 +127,7 @@ const GraphPanel = ({
       index={index}
       planner={planner}
       planned={planned}
+      layout="panel"
       hasLinks
       isGraphHidden
       editRequest={editRequest}
