@@ -1,6 +1,6 @@
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
-import { createEmptyPlannerState, normalizePlannerState, type PlannerState } from './plannerModel';
+import { createEmptyPlannerState, type PlannerState } from './plannerModel';
 import {
   hasLearned, learnStoreFromWords, learnStoreToWords, mergeLearnStores, readLearned, resetLearned,
 } from './plannerQuickLearn';
@@ -8,7 +8,7 @@ import {
   hasHistory, historyFromLines, historyToLines, mergeHistories, readHistory, resetHistory,
 } from './plannerQuickSuggest';
 import {
-  diffChanges, type EngineState, fromEngineState, hasEngineQuickLines, isLegacyPlannerRecord, legacyToChanges,
+  diffChanges, type EngineState, fromEngineState, hasEngineQuickLines,
   type PlannerChange,
 } from './plannerSync';
 
@@ -32,7 +32,6 @@ type StateResult = {
   raw?: string;
   revision?: number;
 };
-type LegacyResult = { status: 'ok'; state?: unknown } | { status: 'not-ready' };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
@@ -59,7 +58,6 @@ let stateBeforeLastChange: PlannerState | undefined;
 // своей правкой: после неё показан черновик, и следующий ответ движка применяется в любом случае
 let appliedEngine: { raw?: string; revision?: number; fingerprint?: string } | undefined;
 let isListening = false;
-let isMigrating = false;
 // Запись словаря правок на устройстве проверяется один раз за загрузку, когда «План» готов
 let isLearnedMigrated = false;
 // Пока устройство не привязано, стек планировщика не запускается — опрашиваем до готовности
@@ -117,7 +115,6 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
         if (next && next.status !== 'needs-linking' && next.status !== 'loading' && linkingTimer !== undefined) {
           window.clearInterval(linkingTimer);
           linkingTimer = undefined;
-          void migrateLegacy(next);
         }
       });
     }, LINKING_POLL_MS);
@@ -170,26 +167,6 @@ export function setPlannerActive(isActive: boolean) {
   }
 }
 
-// Данные этапа 1 (FR-008): запись устройства → изменения одной партией, затем маркер
-async function migrateLegacy(result: StateResult) {
-  if (isMigrating || result.status !== 'ready') return;
-  const legacy = await callParvane('parvaneLoadPlanner').catch(() => undefined) as LegacyResult | undefined;
-  if (!legacy || legacy.status !== 'ok' || !isLegacyPlannerRecord(legacy.state)) return;
-  isMigrating = true;
-  try {
-    const state = normalizePlannerState(legacy.state);
-    const prefix = typeof navigator === 'undefined' ? 'web' : `web${Math.abs(hashCode(navigator.userAgent)) % 100000}`;
-    const changes = legacyToChanges(state, prefix);
-    const count = state.tasks.length + state.events.length;
-    await callParvane('parvanePlannerApply', { changes });
-    await callParvane('parvanePlannerFlush');
-    await callParvane('parvanePlannerMarkMigrated', { count });
-    await refreshFromEngine();
-  } finally {
-    isMigrating = false;
-  }
-}
-
 /** Словарь правок ввода текстом пишется в данные «Плана»: «План» загружен и не ждёт привязки либо ключа. */
 export function canSyncLearned() {
   const status = getPlannerStatus();
@@ -239,12 +216,6 @@ function migrateQuickHistory() {
   resetHistory(loadedUserId);
 }
 
-function hashCode(text: string) {
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
-  return hash;
-}
-
 // `userId` — текущий аккаунт: при его смене в той же вкладке состояние читается заново
 export function loadPlanner(userId?: string) {
   listen();
@@ -259,10 +230,7 @@ export function loadPlanner(userId?: string) {
       // Аккаунт провайдеру может быть ещё не известен — снимок спрашивается, пока его нет
       if (!getIsPlannerLoaded() && !getIsPlannerCached()) await showCachedPlanner();
       const result = await refreshFromEngine();
-      if (result && result.status !== 'loading') {
-        await migrateLegacy(result);
-        return;
-      }
+      if (result && result.status !== 'loading') return;
       await new Promise((resolve) => {
         window.setTimeout(resolve, LOAD_RETRY_MS);
       });

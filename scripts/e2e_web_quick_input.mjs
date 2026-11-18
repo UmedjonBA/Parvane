@@ -128,25 +128,27 @@ try {
   await submit('Быстрый созвон');
   console.log('OK: событие одной строкой — время и длительность распознаны');
 
-  // ── «Сегодня» на телефоне: карточки, расписание дня, задачи — одной колонкой (spec 018) ──
+  // ── «День» на телефоне (spec 041 E1): загрузка дня, дела по времени, задачи без времени — одной колонкой ──
   await openPlannerScreen(page, 'today');
   const todayView = planner.locator('[data-planner-today]');
   await todayView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const order = await todayView.evaluate((el) => {
     const top = (selector) => el.querySelector(selector)?.getBoundingClientRect().top;
-    return { cards: top('[data-today-card]'), tasks: top('[data-today-tasks]'), width: el.scrollWidth - el.clientWidth };
+    return {
+      load: top('[data-day-plan]'), schedule: top('[data-today-schedule]'), untimed: top('[data-today-untimed]'),
+      width: el.scrollWidth - el.clientWidth,
+    };
   });
-  assert.ok(order.cards < order.tasks, `карточки стоят выше задач: ${JSON.stringify(order)}`);
-  assert.ok(order.tasks - order.cards > 150, `между карточками и задачами — расписание дня: ${JSON.stringify(order)}`);
+  assert.ok(order.load < order.schedule && order.schedule < order.untimed,
+    `загрузка, дела по времени, задачи без времени — сверху вниз: ${JSON.stringify(order)}`);
   assert.ok(order.width <= 1, `экран не шире телефона: ${JSON.stringify(order)}`);
   assert.equal(await planner.locator('[data-planner-day]').count(), 0, 'отдельной панели дня на телефоне нет');
-  await page.waitForTimeout(700);
-  // Выделение вкладки — вырез, съезжающий на выбранную: после анимации он стоит у левого края («Сегодня»)
-  const clip = await planner.locator('header [aria-hidden="true"]').first().evaluate((el) => el.style.clipPath);
-  const leftInset = Number(/inset\(\S+ \S+ \S+ ([\d.]+)%/.exec(clip)?.[1]);
-  assert.ok(leftInset < 10, `выделена должна быть вкладка «Сегодня»: ${clip}`);
+  assert.equal(
+    await planner.getByRole('group', { name: 'Calendar view' }).locator('button[aria-pressed="true"]').innerText(), 'Day',
+    'выбран вид «День»',
+  );
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/today-phone.png` });
-  console.log('OK: «Сегодня» на телефоне — карточки, расписание, задачи');
+  console.log('OK: «День» на телефоне — загрузка, расписание, задачи');
 
   // ── Снятый чип возвращает слова в название; ошибка не даёт добавить ───────
   await openQuick();

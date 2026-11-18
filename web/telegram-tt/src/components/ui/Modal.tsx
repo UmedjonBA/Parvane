@@ -147,7 +147,8 @@ const Modal = (props: OwnProps) => {
     return true;
   });
 
-  useEffect(() => (
+  // Слушатель ставится в одном кадре с окном: эффект следующего кадра пропускал Escape сразу после появления окна
+  useLayoutEffect(() => (
     isOpen ? captureKeyboardListeners({ onEsc: onClose, onEnter: handleEnter }) : undefined
   ), [isOpen, onClose, handleEnter]);
   useEffect(() => (isOpen && modalRef.current ? trapFocus(modalRef.current) : undefined), [isOpen, modalRef]);

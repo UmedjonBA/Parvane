@@ -3,7 +3,8 @@ import { memo, useMemo } from '../../../lib/teact/teact';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatMonthName, formatWeekday } from './plannerFormat';
+import { formatDay, formatMonthName, getLoadLevel } from './plannerFormat';
+import { getDayBudget } from './plannerHealth';
 import {
   fromDayKey, getDayIndex, getMonthGridKeys, getYearMonths, toDayKey,
 } from './plannerModel';
@@ -12,6 +13,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import styles from './Planner.module.scss';
+import pv from './PlannerPv.module.scss';
 
 type OwnProps = {
   state: PlannerState;
@@ -21,12 +23,11 @@ type OwnProps = {
   onOpenMonth: (day: string) => void;
 };
 
-const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
-// Самый насыщенный цвет клетки — день, занятый на весь бюджет, %
-const MAX_LOAD_TINT = 85;
+const LEGEND_LEVELS = [0, 1, 2, 3];
+const LEGEND_CLASSES = [undefined, pv.legendCell1, pv.legendCell2, pv.legendCell3];
 
-// Вид «Год»: двенадцать месяцев; насыщенность клетки — загрузка дня, красное число — праздник, точка —
-// срок задачи. Нажатие открывает месяц
+// Вид «Год»: двенадцать месяцев клетками без чисел; насыщенность клетки — загрузка дня (четыре ступени),
+// красная рамка — праздник, точка — срок задачи. Нажатие открывает месяц
 const PlannerYear = ({
   state, year, picked, today, onOpenMonth,
 }: OwnProps) => {
@@ -58,17 +59,10 @@ const PlannerYear = ({
                 {formatMonthName(lang, month)}
               </button>
               <div className={styles.yearGrid}>
-                {WEEKDAY_INDEXES.map((weekday) => (
-                  <span key={`w${weekday}`} className={styles.yearWeekday}>
-                    {formatWeekday(lang, weekday).charAt(0)}
-                  </span>
-                ))}
                 {days.map((day) => {
                   if (!day.startsWith(prefix)) return <span key={day} />;
                   const entry = index.get(day);
                   const count = entry ? entry.tasks.length + entry.events.length + entry.deadlines.length : 0;
-                  const tint = entry && state.budget
-                    ? Math.min(MAX_LOAD_TINT, Math.round((entry.minutes / state.budget) * MAX_LOAD_TINT)) : 0;
                   return (
                     <button
                       key={day}
@@ -80,7 +74,7 @@ const PlannerYear = ({
                         day === today && styles.yearDayToday,
                         day === picked && styles.yearDayPicked,
                       )}
-                      style={tint ? `--planner-load: ${tint}%` : undefined}
+                      data-level={entry ? getLoadLevel(entry.minutes, getDayBudget(state, day)) : 0}
                       data-day={day}
                       aria-label={lang('PlannerAriaYearDay', { date: formatDay(lang, day), count })}
                       onClick={handleDayClick}
@@ -95,6 +89,13 @@ const PlannerYear = ({
         })}
       </div>
       <p className={styles.yearLegend}>{lang('PlannerYearLegend')}</p>
+      <div className={pv.legend} aria-hidden>
+        {lang('PlannerYearLess')}
+        {LEGEND_LEVELS.map((level) => (
+          <span key={level} className={buildClassName(pv.legendCell, LEGEND_CLASSES[level])} />
+        ))}
+        {lang('PlannerYearMore')}
+      </div>
     </div>
   );
 };

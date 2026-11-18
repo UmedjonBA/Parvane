@@ -31,6 +31,8 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
   // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
   onOpenSleep?: (day: string) => void;
+  // Только события на весь день (колонка справа от шкалы часов)
+  scope?: 'allDay';
 };
 
 type FeedRow = { minutes: number; node: TeactNode };
@@ -52,13 +54,14 @@ function getNowMinutes() {
 // Расписание дня списком по времени: подъём, приёмы пищи, события, задачи и тренировки; сегодня — красная
 // черта «сейчас» между прошедшим и предстоящим
 const PlannerDayFeed = ({
-  state, day, today, layers, onOpenTask, onOpenEvent, onOpenSleep,
+  state, day, today, layers, onOpenTask, onOpenEvent, onOpenSleep, scope,
 }: OwnProps) => {
   const [nowMinutes, setNowMinutes] = useState(getNowMinutes);
 
   const lang = useLang();
 
-  const isToday = day === today;
+  const isAllDayOnly = scope === 'allDay';
+  const isToday = day === today && !isAllDayOnly;
   // Черта «сейчас» идёт по минутам, только пока показан сегодняшний день
   useInterval(() => setNowMinutes(getNowMinutes()), isToday ? MINUTE_MS : undefined, true);
 
@@ -85,7 +88,7 @@ const PlannerDayFeed = ({
   const allDay = layers.work ? entry.allDay : [];
 
   const handleOpenSleep = () => onOpenSleep?.(day);
-  const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
+  const sleep = layers.sleep && !isAllDayOnly ? getDailyRecord(state, 'sleep', day) : undefined;
   if (sleep?.endTime) {
     rows.push({
       // Подъём стоит раньше дела, начавшегося в ту же минуту
@@ -110,7 +113,7 @@ const PlannerDayFeed = ({
     });
   }
 
-  if (layers.food) {
+  if (layers.food && !isAllDayOnly) {
     (state.nutrition[day]?.entries || []).forEach((meal) => {
       if (!meal.time) return;
       rows.push({
@@ -129,7 +132,7 @@ const PlannerDayFeed = ({
     });
   }
 
-  if (layers.work) {
+  if (layers.work && !isAllDayOnly) {
     entry.timed.forEach((item) => {
       const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
       const color = item.task ? getListColor(state, item.task.project) : getEventColor(state, item.event!);
@@ -147,6 +150,7 @@ const PlannerDayFeed = ({
               )}
               style={listColorStyle(color)}
               data-block={itemKey}
+              data-task-id={item.task?.id}
             >
               {item.task && (
                 <input
@@ -212,8 +216,9 @@ const PlannerDayFeed = ({
   const nodes = rows.map((row) => row.node);
   if (isToday) nodes.splice(nowIndex, 0, nowLine);
 
+  if (isAllDayOnly && !allDay.length) return undefined;
   if (!rows.length && !allDay.length && !isToday) {
-    return <p className={styles.muted}>{lang('PlannerFree')}</p>;
+    return <p className={styles.feedEmpty}>{lang('PlannerFree')}</p>;
   }
 
   return (

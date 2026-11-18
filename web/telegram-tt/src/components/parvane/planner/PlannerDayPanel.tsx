@@ -1,170 +1,75 @@
-import type { TeactNode } from '../../../lib/teact/teact';
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo } from '../../../lib/teact/teact';
 
 import type { PlannerLayers } from './plannerLayers';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import {
-  formatDay, formatHours, formatHoursNumber, formatRelativeDay, formatSpan,
-} from './plannerFormat';
-import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
-import { formatPlainName } from './plannerLinks';
-import {
-  getDayEntry, getListColor, getNutrientTotal, instanceKey,
-} from './plannerModel';
+import { formatDayLong, formatRelativeDay } from './plannerFormat';
+import { getDayBudget } from './plannerHealth';
+import { getDayEntry, getListColor, instanceKey } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
-import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
-import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import PlannerDayFeed from './PlannerDayFeed';
+import PlannerDayTags from './PlannerDayTags';
+import PlannerLoad from './PlannerLoad';
 import PlannerTaskRow from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
-
-function stopPropagation(e: React.PointerEvent) {
-  e.stopPropagation();
-}
+import pv from './PlannerPv.module.scss';
 
 type OwnProps = {
   state: PlannerState;
   day: string;
   today: string;
   layers: PlannerLayers;
-  // `island` — правая панель календаря (шапка со стрелками дня), `card` — карточка под месяцем на телефоне,
-  // `summary` — только сводка и задачи без времени над сеткой дня
-  variant: 'island' | 'card' | 'summary';
-  onShiftDay?: (delta: number) => void;
+  // `rail` — левая колонка компьютера (загрузка и дела выбранного дня), `list` — день под сеткой месяца
+  // на телефоне
+  variant: 'rail' | 'list';
   onAdd?: NoneToVoidFunction;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
   // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
   onOpenSleep?: (day: string) => void;
-  // Начало строки сводки (на телефоне — плашки слоёв, чтобы слои и сводка шли одной строкой)
-  leading?: TeactNode;
 };
 
-// День календаря: сводка плашками (недосып — красная плашка сна с подсказкой по нажатию), задачи без времени и расписание списком
+// Выбранный день календаря: загрузка полосой, метки дня, задачи без времени и расписание списком
 const PlannerDayPanel = ({
-  state, day, today, layers, variant, onShiftDay, onAdd, onOpenTask, onOpenEvent, onOpenSleep, leading,
+  state, day, today, layers, variant, onAdd, onOpenTask, onOpenEvent, onOpenSleep,
 }: OwnProps) => {
   const lang = useLang();
-  const [isSleepHintShown, setIsSleepHintShown] = useState(false);
-
-  // Подсказка закрывается при смене дня и нажатием в любом месте
-  useEffect(() => {
-    setIsSleepHintShown(false);
-  }, [day]);
-  useEffect(() => {
-    if (!isSleepHintShown) return undefined;
-    const close = () => setIsSleepHintShown(false);
-    document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
-  }, [isSleepHintShown]);
-
-  const handleSleepClick = useLastCallback(() => setIsSleepHintShown((shown) => !shown));
-
-  const handlePrev = useLastCallback(() => onShiftDay!(-1));
-  const handleNext = useLastCallback(() => onShiftDay!(1));
-
-  const handleDeadlineClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onOpenTask(e.currentTarget.dataset.id!);
-  });
 
   // Дела дня — из индекса (построен сеткой календаря либо для одного дня)
   const entry = getDayEntry(state, day);
-  const load = entry.minutes;
-  const budget = getDayBudget(state, day);
-  const { unrated } = entry;
-  const sleep = getDailyRecord(state, 'sleep', day);
-  const isShort = isShortSleep(state, day);
-  const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
   const untimed = layers.work ? entry.untimed : [];
-  const deadlines = layers.work ? entry.deadlines : [];
-  const planArgs = { planned: formatHoursNumber(lang, load), budget: formatHours(lang, budget) };
-  const planText = lang('PlannerDayPlan', planArgs);
-  const isLine = Boolean(leading);
-  const title = formatDay(lang, day);
-  const relative = formatRelativeDay(lang, day, today);
+  const isRail = variant === 'rail';
 
-  const body: TeactNode = (
-    <>
-      <div className={buildClassName(styles.sumRow, isLine && styles.sumRowLine)}>
-        {leading}
-        {/* В строке со слоями на телефоне — коротко, значком вместо слова «План» */}
-        <span
-          className={buildClassName(styles.tag, styles.tagLarge, load > budget ? styles.kindDue : styles.kindEvent)}
-          title={isLine ? planText : undefined}
-          data-day-plan
-        >
-          {isLine && <Icon name="clock" />}
-          {isLine ? lang('PlannerDayPlanShort', planArgs) : planText}
-        </span>
-        {Boolean(unrated) && (
-          <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindMuted)}>
-            {lang('PlannerDayUnrated', { count: unrated })}
-          </span>
-        )}
-        {layers.sleep && sleep && (variant === 'summary' || isShort) && (
-          isShort ? (
-            <button
-              type="button"
-              className={buildClassName(styles.tag, styles.tagLarge, styles.tagButton, styles.kindDue)}
-              aria-expanded={isSleepHintShown}
-              data-sleep-short={day}
-              onPointerDown={stopPropagation}
-              onClick={handleSleepClick}
-            >
-              <Icon name="darkmode" />
-              {formatSpan(sleep.value)}
-            </button>
-          ) : (
-            <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindSleep)}>
-              <Icon name="darkmode" />
-              {formatSpan(sleep.value)}
-            </span>
-          )
-        )}
-        {layers.food && Boolean(kcal) && (
-          <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindFood)}>
-            <Icon name="eats" />
-            {lang('PlannerHealthKcal', { value: lang.number(kcal) })}
-          </span>
-        )}
-        {deadlines.map((task) => (
-          <button
-            key={task.id}
-            type="button"
-            className={buildClassName(styles.tag, styles.tagLarge, styles.tagButton, styles.kindDue)}
-            data-id={task.id}
-            onClick={handleDeadlineClick}
-          >
-            <Icon name="flag" />
-            {lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) })}
-          </button>
+  return (
+    <section className={isRail ? pv.railDay : pv.dayList} data-planner-day={day}>
+      {!isRail && <h3 className={buildClassName(pv.cap, pv.capFlush)}>{formatDayLong(lang, day)}</h3>}
+      <PlannerLoad
+        title={isRail ? lang('PlannerTodayLoad') : formatRelativeDay(lang, day, today)}
+        minutes={entry.minutes}
+        budget={getDayBudget(state, day)}
+        isCaption={isRail}
+      />
+      <PlannerDayTags state={state} day={day} layers={layers} onOpenTask={onOpenTask} />
+      {isRail && (
+        <h3 className={buildClassName(pv.cap, pv.capFlush)}>
+          {day === today ? lang('PlannerRailToday') : formatDayLong(lang, day)}
+        </h3>
+      )}
+      <div className={isRail ? styles.rowsPlain : pv.dayCard}>
+        {untimed.map((task) => (
+          <PlannerTaskRow
+            key={instanceKey(task)}
+            task={task}
+            context="day"
+            color={getListColor(state, task.project)}
+            onOpen={onOpenTask}
+          />
         ))}
-      </div>
-      {isShort && isSleepHintShown && (
-        <div className={styles.sleepHint} role="tooltip" data-sleep-hint>
-          {lang('PlannerSleepWarn', { sleep: formatSpan(sleep!.value), budget: formatHours(lang, budget) })}
-        </div>
-      )}
-      {Boolean(untimed.length) && (
-        <div className={styles.rows}>
-          {untimed.map((task) => (
-            <PlannerTaskRow
-              key={instanceKey(task)}
-              task={task}
-              context="day"
-              color={getListColor(state, task.project)}
-              onOpen={onOpenTask}
-            />
-          ))}
-        </div>
-      )}
-      {variant !== 'summary' && (
         <PlannerDayFeed
           state={state}
           day={day}
@@ -174,47 +79,14 @@ const PlannerDayPanel = ({
           onOpenEvent={onOpenEvent}
           onOpenSleep={onOpenSleep}
         />
-      )}
+      </div>
       {onAdd && (
-        <button type="button" className={styles.btn} onClick={onAdd}>
+        <button type="button" className={pv.wideButton} onClick={onAdd}>
           <Icon name="add" />
           {lang('PlannerAddForDay')}
         </button>
       )}
-    </>
-  );
-
-  if (variant === 'summary') {
-    return <div className={styles.daySummary} data-day-summary={day}>{body}</div>;
-  }
-
-  if (variant === 'card') {
-    return (
-      <section className={buildClassName(styles.card, styles.stack)} data-planner-day={day}>
-        <h3 className={styles.dayCardTitle}>{`${relative}, ${title}`}</h3>
-        {body}
-      </section>
-    );
-  }
-
-  return (
-    <aside className={styles.side} data-planner-day={day}>
-      <PvResizer panel="planner-side" edge="start" min={PLANNER_SIDE_MIN} max={PLANNER_SIDE_MAX} />
-      <div className={styles.hdr}>
-        <div className={styles.hdrText}>
-          <span className={styles.hdrOver}>{relative}</span>
-          <h2 className={styles.sideTitle}>{title}</h2>
-        </div>
-        <span className={styles.grow} />
-        <button type="button" className={styles.ib} aria-label={lang('PlannerPrevDay')} onClick={handlePrev}>
-          <Icon name="previous" />
-        </button>
-        <button type="button" className={styles.ib} aria-label={lang('PlannerNextDay')} onClick={handleNext}>
-          <Icon name="next" />
-        </button>
-      </div>
-      <div className={buildClassName(styles.content, styles.sideContent, styles.stack, 'custom-scroll')}>{body}</div>
-    </aside>
+    </section>
   );
 };
 

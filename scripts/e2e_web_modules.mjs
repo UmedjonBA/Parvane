@@ -37,7 +37,8 @@ async function closeAddMenu(page) {
   const isClosed = () => backdrop.count().then((count) => count === 0);
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
-  if (!(await isClosed())) await page.mouse.click(20, 120);
+  // Нажимаем саму подложку: нажатие в точку экрана попадало в чат, если меню успевало закрыться само
+  if (!(await isClosed())) await backdrop.first().click({ position: { x: 5, y: 5 }, timeout: 2000 }).catch(() => {});
   await page.waitForFunction(() => !document.querySelector('.Menu .backdrop'), undefined, { timeout: WAIT_MS });
 }
 

@@ -1,6 +1,6 @@
-// Parvane: раздел «План» — вид по прототипу «Пространство Parvane» (disain/prototype.html).
-// Нейтральные тона, акцент и цвета видов записей — переменные схемы `--pv-*`; свои здесь только размеры.
-// Раскладка — колонки вплотную с линией 1 px: страница раздела и справа день календаря либо карточка записи.
+// Parvane: модуль «План» по макету spec 041 (`local-workdirs/design-2026-11-17/parvane-design`, доски плана).
+// Цвета — переменные схемы `--pv-*`, размеры — токены макета; шапка, левая колонка и вид «День» — в
+// `PlannerPv.module.scss`. Здесь — общие детали, сетки календаря, карточка записи и окна.
 
 // Акцент раздела — яркий тон схемы с тёмным текстом на нём: кнопки, галочки и вкладки мессенджера внутри
 // «Плана» берут его вместо акцента мессенджера
@@ -58,71 +58,36 @@
 
   min-width: 0;
   min-height: 0;
-
-  background: var(--pv-panel);
-
-  animation: side-appear 0.9s ease-out;
 }
 
 .page {
   position: relative;
   flex: 1 1 auto;
+  background: var(--pv-bg);
 }
 
 .side {
   position: relative;
+
   flex: 0 0 var(--planner-side-width);
+
   width: var(--planner-side-width);
   border-inline-start: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
 }
 
 // ── шапки ────────────────────────────────────────────────────────────────────
 
-.mtabs {
-  display: flex;
-  flex: none;
-  align-items: center;
-
-  padding: 0.375rem 0.5rem 0 0.625rem;
-  border-bottom: 1px solid var(--pv-line);
-}
-
-.viewTabs {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .hdr {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
-  gap: 0.625rem 0.875rem;
+  gap: 0.5rem;
   align-items: center;
 
-  min-height: 3.75rem;
-  padding: 0.75rem 1.125rem;
+  min-height: var(--pv-header-height);
+  padding: 0 0.375rem 0 1rem;
   border-bottom: 1px solid var(--pv-line);
-
-  @media (max-width: 925px) {
-    gap: 0.5rem;
-    min-height: 3.5rem;
-    padding: 0.5rem 0.75rem;
-  }
-}
-
-.hdrTitle {
-  margin: 0;
-
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.5rem;
-  white-space: nowrap;
-}
-
-.hdrText {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 
 .hdrOver {
@@ -139,32 +104,6 @@
   font-size: 1.125rem;
   font-weight: var(--font-weight-semibold);
   line-height: 1.5rem;
-}
-
-.calendarHdr {
-  gap: 0.5rem;
-
-  .segButton {
-    padding: 0 0.625rem;
-  }
-
-  @media (max-width: 925px) {
-    .periodNav {
-      flex: 1 0 100%;
-    }
-
-    .grow {
-      display: none;
-    }
-
-    // Пять пунктов переключателя («Сегодня» и четыре вида) и настройки — в одну строку телефона
-    .seg {
-      scrollbar-width: none;
-      overflow-x: auto;
-      flex: 0 1 auto;
-      min-width: 0;
-    }
-  }
 }
 
 .grow {
@@ -196,10 +135,10 @@
   flex: 1 1 auto;
 
   min-height: 0;
-  padding: 1.25rem;
+  padding: 0 1rem 1rem;
 
   @media (max-width: 925px) {
-    padding: 0.875rem 1rem 1.5rem;
+    padding: 0.75rem 1rem 5.5rem;
   }
 }
 
@@ -212,7 +151,7 @@
 }
 
 .sideContent {
-  padding: 1.125rem;
+  padding: 1rem;
 }
 
 // ── общие детали ─────────────────────────────────────────────────────────────
@@ -290,13 +229,6 @@
   text-align: center;
 }
 
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-  min-width: 0;
-}
-
 // Круглая кнопка со значком
 .ib {
   cursor: var(--custom-cursor, pointer);
@@ -306,11 +238,11 @@
   align-items: center;
   justify-content: center;
 
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--pv-button-height);
+  height: var(--pv-button-height);
   padding: 0;
   border: none;
-  border-radius: 50%;
+  border-radius: var(--pv-radius);
 
   font-size: 1.375rem;
   color: var(--pv-muted);
@@ -319,7 +251,12 @@
 
   &:hover {
     color: var(--pv-fg);
-    background: var(--pv-hover);
+    background: var(--pv-raised);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
   }
 }
 
@@ -329,43 +266,6 @@
   font-size: 1rem;
 }
 
-.ibAccent,
-.ibAccent:hover {
-  color: var(--pv-accent-ink);
-  background: var(--pv-accent);
-}
-
-.pill {
-  cursor: var(--custom-cursor, pointer);
-
-  display: inline-flex;
-  flex: none;
-  gap: 0.375rem;
-  align-items: center;
-
-  height: 2.125rem;
-  padding: 0 0.875rem;
-  border: none;
-  border-radius: 1.0625rem;
-
-  font-size: 0.875rem;
-  color: var(--pv-fg);
-  white-space: nowrap;
-
-  background: var(--pv-raised);
-
-  &:hover {
-    background: var(--pv-hover);
-  }
-}
-
-.pillAccent,
-.pillAccent:hover {
-  font-weight: var(--font-weight-semibold);
-  color: var(--pv-accent-ink);
-  background: var(--pv-accent);
-}
-
 .btn {
   cursor: var(--custom-cursor, pointer);
 
@@ -373,19 +273,26 @@
   flex: none;
   gap: 0.375rem;
   align-items: center;
+  justify-content: center;
 
-  min-height: 2.25rem;
-  padding: 0 0.875rem;
-  border: none;
-  border-radius: var(--planner-radius-small);
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
 
   font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
   color: var(--pv-fg);
 
-  background: var(--pv-hover);
+  background: var(--pv-raised);
 
   &:hover {
-    background: var(--pv-line2);
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
   }
 
   &:disabled {
@@ -396,36 +303,33 @@
 
 .btnAccent,
 .btnAccent:hover {
+  border-color: var(--pv-at);
   font-weight: var(--font-weight-semibold);
   color: var(--pv-accent-ink);
-  background: var(--pv-accent);
+  background: var(--pv-at);
 }
 
 .btnGhost {
+  border-color: transparent;
   color: var(--pv-muted);
   background: none;
 
   &:hover {
     color: var(--pv-fg);
-    background: var(--pv-hover);
+    background: var(--pv-raised);
   }
 }
 
 .btnDanger {
   align-self: flex-start;
   color: var(--pv-red);
-  background: none;
-
-  &:hover {
-    background: color-mix(in srgb, var(--pv-red) 14%, transparent);
-  }
 }
 
 // Вариант во всю ширину: выбор объёма правки ряда
 .btnWide {
   justify-content: flex-start;
   width: 100%;
-  min-height: 2.875rem;
+  min-height: var(--pv-button-height);
 }
 
 .linkButton {
@@ -442,50 +346,7 @@
   background: none;
 }
 
-.seg {
-  display: inline-flex;
-  flex: none;
-
-  padding: 0.1875rem;
-  border-radius: 1.125rem;
-
-  background: var(--pv-raised);
-}
-
-.segButton {
-  cursor: var(--custom-cursor, pointer);
-
-  height: 1.875rem;
-  padding: 0 0.875rem;
-  border: none;
-  border-radius: 0.9375rem;
-
-  font-size: 0.875rem;
-  color: var(--pv-muted);
-  white-space: nowrap;
-
-  background: none;
-
-  &:hover {
-    color: var(--pv-fg);
-  }
-}
-
-.segOn {
-  color: var(--pv-fg);
-  background: var(--pv-panel);
-  box-shadow: var(--pv-outline);
-}
-
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-}
-
 .chip {
-  --planner-color: var(--planner-kind, var(--pv-accent));
-
   cursor: var(--custom-cursor, pointer);
 
   display: inline-flex;
@@ -493,34 +354,24 @@
   gap: 0.375rem;
   align-items: center;
 
-  min-height: 1.875rem;
+  min-height: var(--pv-chip-height);
   padding: 0 0.75rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: 0.9375rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
 
   font-size: 0.8125rem;
-  color: var(--pv-muted);
+  color: var(--pv-fg);
   text-align: start;
 
-  background: none;
-
-  &:hover {
-    color: var(--pv-fg);
-  }
+  background: var(--pv-raised);
 }
 
 .chipOn,
 .chipOn:hover {
-  border-color: transparent;
-  color: var(--planner-color);
-  background: color-mix(in srgb, var(--planner-color) 22%, transparent);
-}
-
-.chipDot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--planner-color);
+  border-color: var(--pv-fg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  background: var(--pv-fg);
 }
 
 .hscroll {
@@ -645,13 +496,13 @@
 
 .card {
   min-width: 0;
-  padding: 1rem;
-  border: none;
-  border-radius: var(--planner-radius);
+  padding: 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
 
   color: var(--pv-fg);
 
-  background: var(--pv-raised);
+  background: var(--pv-panel);
 }
 
 .cardHead {
@@ -665,32 +516,15 @@
   margin-bottom: 0.625rem;
 }
 
-.stack > .cardHead {
-  margin-bottom: 0;
-}
-
 .cardTitle {
   margin: 0;
 
-  font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: var(--font-weight-semibold);
-  line-height: 1.125rem;
+  line-height: 1rem;
   color: var(--pv-muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.cardNote {
-  flex: none;
-  font-size: 0.8125rem;
-  color: var(--pv-muted);
-}
-
-.cardText {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--pv-muted);
+  letter-spacing: 0.04em;
 }
 
 .groupTitle {
@@ -700,13 +534,12 @@
 
   margin: 0.75rem 0 0.125rem;
 
-  font-family: var(--font-family-monospace);
   font-size: 0.75rem;
   font-weight: var(--font-weight-semibold);
-  line-height: 1.125rem;
+  line-height: 1rem;
   color: var(--pv-muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
 }
 
 .groupTitleFirst {
@@ -732,11 +565,6 @@
   height: 0.25rem;
 }
 
-.progThick {
-  height: 0.5rem;
-  border-radius: 0.25rem;
-}
-
 .progFill {
   display: block;
   height: 100%;
@@ -744,7 +572,7 @@
   background: var(--planner-kind, var(--pv-accent));
 }
 
-// Круглая галочка задачи
+// Галочка задачи: квадрат макета, отмеченная — акцент текстом
 .check {
   cursor: var(--custom-cursor, pointer);
 
@@ -756,21 +584,21 @@
   height: 1.375rem;
   margin: 0;
   border: 0.125rem solid var(--pv-line2);
-  border-radius: 50%;
+  border-radius: 0.3125rem;
 
   appearance: none;
-  background: none;
+  background: var(--pv-panel);
 
   &::after {
     content: "";
 
     position: absolute;
-    top: 22%;
-    left: 22%;
+    top: 20%;
+    left: 20%;
     transform: rotate(-45deg);
 
-    width: 56%;
-    height: 32%;
+    width: 60%;
+    height: 34%;
     border-bottom: 0.125rem solid var(--pv-accent-ink);
     border-left: 0.125rem solid var(--pv-accent-ink);
 
@@ -778,8 +606,8 @@
   }
 
   &:checked {
-    border-color: var(--pv-task);
-    background: var(--pv-task);
+    border-color: var(--pv-at);
+    background: var(--pv-at);
   }
 
   &:checked::after {
@@ -787,8 +615,8 @@
   }
 
   &:focus-visible {
-    outline: 0.125rem solid var(--pv-accent);
-    outline-offset: 0.125rem;
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
   }
 }
 
@@ -797,37 +625,94 @@
   height: 1.25rem;
 }
 
-.checkGreen:checked {
-  border-color: var(--pv-green);
-  background: var(--pv-green);
-}
-
 // ── строка задачи ────────────────────────────────────────────────────────────
 
-.rows {
+// Список без карточки (левая колонка компьютера): плотные строки, галочка слева, полосы цвета нет
+.rowsPlain {
   min-width: 0;
+
+  .row {
+    gap: 0.625rem;
+    min-height: 2.5rem;
+    padding: 0.25rem 0;
+    border-top: 0;
+  }
+
+  .row::before {
+    display: none;
+  }
+
+  .row > .check {
+    order: 0;
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .rowTitle {
+    font-size: 0.875rem;
+  }
+
+  .feedLine {
+    min-height: 2.5rem;
+    padding: 0.25rem 0 0.25rem 0.625rem;
+    border-top: 0;
+  }
+
+  .feedTime {
+    width: 2.5rem;
+    font-size: 0.75rem;
+  }
+
+  .feedBlockName {
+    font-size: 0.875rem;
+  }
+
+  .feedBlock > .check {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
 }
 
 .row {
+  --planner-color: var(--planner-list-color, var(--pv-task));
+
+  position: relative;
+
   display: flex;
   gap: 0.75rem;
   align-items: center;
 
-  width: calc(100% + 1.25rem);
+  width: 100%;
   min-width: 0;
-  min-height: 2.75rem;
-  margin: 0 -0.625rem;
-  padding: 0.375rem 0.625rem;
+  min-height: 3.25rem;
+  padding: 0.375rem 0.75rem 0.375rem 1rem;
   border: none;
-  border-radius: var(--planner-radius-small);
+  border-top: 1px solid var(--pv-line);
 
   color: var(--pv-fg);
   text-align: start;
 
   background: none;
 
-  &:hover {
-    background: var(--pv-hover);
+  &::before {
+    content: "";
+
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    bottom: 0;
+
+    width: 0.25rem;
+
+    background: var(--planner-color);
+  }
+
+  &:first-child {
+    border-top: 0;
+  }
+
+  > .check {
+    order: 3;
   }
 
   > :global(.icon) {
@@ -894,7 +779,7 @@
   gap: 0.125rem 0.625rem;
   align-items: center;
 
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   color: var(--pv-muted);
 
   :global(.icon) {
@@ -916,30 +801,6 @@
   font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
   color: var(--pv-muted);
-}
-
-.rowIcon {
-  --planner-color: var(--planner-kind, var(--pv-muted));
-
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 0.5rem;
-
-  font-size: 1.125rem;
-  color: var(--planner-color);
-
-  background: color-mix(in srgb, var(--planner-color) 22%, transparent);
-}
-
-.rowUndated {
-  margin-top: 0.375rem;
-  border-top: 1px dashed var(--pv-line2);
-  border-radius: 0 0 var(--planner-radius-small) var(--planner-radius-small);
 }
 
 // Квадрат цвета списка
@@ -1103,170 +964,76 @@
   }
 }
 
-// ── шапка дня: «Сегодня», «Здоровье» ─────────────────────────────────────────
-
-.dateNav {
-  display: flex;
-  gap: 0.625rem;
-  align-items: center;
-  margin-bottom: 1rem;
-}
-
-.dateNavOver {
-  font-size: 0.875rem;
-  color: var(--pv-muted);
-}
-
-.dateNavBig {
-  font-family: var(--font-family-monospace);
-  font-size: 1.625rem;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.1;
-
-  @media (max-width: 925px) {
-    font-size: 1.375rem;
-  }
-}
-
-// ── «Сегодня» ────────────────────────────────────────────────────────────────
-
-// Правая колонка с ручкой ширины в промежутке между колонками
-.todaySide {
-  position: relative;
-}
-
-.todayResizer {
-  inset-inline-start: -0.8125rem;
-
-  // Колонки встали одна под другой — менять нечего
-  @media (max-width: 1240px) {
-    display: none;
-  }
-
-  @media (max-width: 1640px) {
-    .withSide & {
-      display: none;
-    }
-  }
-}
-
-.todayGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--pv-panel-planner-today, 21.25rem);
-  gap: 1rem;
-  align-items: start;
-
-  @media (max-width: 1240px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  // Открыта карточка записи: странице уже, расписание уходит под задачи
-  @media (max-width: 1640px) {
-    .withSide & {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.625rem;
-
-  @media (max-width: 925px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  @media (max-width: 1640px) and (min-width: 926px) {
-    .withSide & {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-}
-
-.stat {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-
-  font-size: inherit;
-  text-align: start;
-
-  &:hover {
-    background: var(--pv-hover);
-  }
-}
-
-.statLabel {
-  font-family: var(--font-family-monospace);
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-semibold);
-  color: var(--planner-kind);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.statValue {
-  font-family: var(--font-family-monospace);
-  font-size: 1.5rem;
-  font-weight: var(--font-weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-}
-
-.statUnit {
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-normal);
-  color: var(--pv-muted);
-}
-
-.statSub {
-  unicode-bidi: plaintext;
-  min-height: 1.125rem;
-  font-size: 0.75rem;
-  color: var(--pv-muted);
-}
-
 // ── расписание дня списком ───────────────────────────────────────────────────
 
 .feed {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
   min-width: 0;
 }
 
+// Строка дня по макету: полоса цвета записи у левого края, время, название с подписью, галочка справа
 .feedLine {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  gap: 0.625rem;
+  position: relative;
+
+  display: flex;
+  gap: 0.75rem;
   align-items: center;
 
-  padding: 0.1875rem 0;
+  min-width: 0;
+  min-height: 3.5rem;
+  padding: 0.375rem 0.75rem 0.375rem 1rem;
+  border-top: 1px solid var(--pv-line);
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+.feedEmpty {
+  margin: 0;
+  padding: 0.875rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
 }
 
 .feedTime {
   direction: ltr;
+  flex: none;
+
+  width: 2.75rem;
 
   font-family: var(--font-family-monospace);
   font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
-  color: var(--pv-muted);
 }
 
 // Подъём и приём пищи: значок цвета записи и подпись
 .feedMark {
   display: flex;
+  flex: 1 1 auto;
   gap: 0.5rem;
   align-items: center;
 
   min-width: 0;
-  padding: 0.25rem 0;
+  padding: 0;
 
   font-size: 0.875rem;
   color: var(--planner-kind);
+
+  &::before {
+    content: "";
+
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    bottom: 0;
+
+    width: 0.25rem;
+
+    background: var(--planner-kind);
+  }
 
   :global(.icon) {
     flex: none;
@@ -1321,29 +1088,28 @@
 .feedBlock {
   --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
 
-  overflow: hidden;
   display: flex;
-  gap: 0.5rem;
+  flex: 1 1 auto;
+  gap: 0.75rem;
   align-items: center;
 
   min-width: 0;
-  padding: 0.375rem 0.625rem;
-  border-inline-start: 0.1875rem solid var(--planner-color);
-  border-radius: 0.375rem;
 
-  background: color-mix(in srgb, var(--planner-color) 16%, var(--pv-raised));
+  &::before {
+    content: "";
 
-  &:hover {
-    background: color-mix(in srgb, var(--planner-color) 26%, var(--pv-raised));
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    bottom: 0;
+
+    width: 0.25rem;
+
+    background: var(--planner-color);
   }
 
-  // На острове дня фон — панель, а не карточка
-  .side & {
-    background: color-mix(in srgb, var(--planner-color) 16%, var(--pv-panel));
-  }
-
-  .side &:hover {
-    background: color-mix(in srgb, var(--planner-color) 26%, var(--pv-panel));
+  > .check {
+    order: 2;
   }
 }
 
@@ -1388,7 +1154,6 @@
   flex-wrap: wrap;
   gap: 0 0.5rem;
 
-  font-family: var(--font-family-monospace);
   font-size: 0.75rem;
   color: var(--pv-muted);
 }
@@ -1407,20 +1172,22 @@
 }
 
 .feedNow {
-  display: grid;
-  grid-template-columns: 3rem minmax(0, 1fr);
-  gap: 0.625rem;
+  display: flex;
+  gap: 0.5rem;
   align-items: center;
 
+  padding: 0 0.75rem 0 1rem;
+
   font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
+  font-size: 0.6875rem;
   font-weight: var(--font-weight-semibold);
+  line-height: 1rem;
   color: var(--pv-red);
 }
 
 .feedNowLine {
+  flex: 1 1 auto;
   height: 0.125rem;
-  border-radius: 0.0625rem;
   background: var(--pv-red);
 }
 
@@ -1432,168 +1199,29 @@
   gap: 0.5rem;
 }
 
-// Телефон: плашки слоёв и сводка дня — одной строкой, плашки поменьше
-.sumRowLine {
-  gap: 0.3125rem;
-  align-items: center;
-
-  > .chips {
-    display: contents;
-  }
-
-  .chipDot {
-    display: none;
-  }
-
-  .chip {
-    min-height: 1.625rem;
-    padding: 0 0.5rem;
-    font-size: 0.8125rem;
-  }
-
-  .tagLarge {
-    padding: 0.1875rem 0.5rem;
-  }
-}
-
 // Подсказка красной плашки сна: недосып снизил бюджет дня
 .sleepHint {
   align-self: flex-start;
 
   max-width: 100%;
   padding: 0.375rem 0.625rem;
-  border-radius: var(--planner-radius-small);
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-sm);
 
   font-size: 0.8125rem;
   color: var(--pv-red);
 
-  background: color-mix(in srgb, var(--pv-red) 14%, transparent);
-}
-
-.daySummary {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-  margin-bottom: 0.625rem;
-}
-
-.dayCardTitle {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: var(--font-weight-semibold);
-}
-
-.layerRow {
-  margin-bottom: 0.75rem;
+  background: var(--pv-panel);
 }
 
 .monthDay {
-  margin-top: 1rem;
-}
-
-// ── шапка календаря: период и выбор месяца ───────────────────────────────────
-
-.periodNav {
-  position: relative;
-  display: flex;
-  gap: 0.125rem;
-  align-items: center;
-
-  .pill {
-    margin-inline-start: 0.5rem;
-  }
-
-  @media (max-width: 925px) {
-    justify-content: space-between;
-  }
-}
-
-.periodTitle {
-  cursor: var(--custom-cursor, pointer);
-
-  margin-inline-end: 0.375rem;
-  padding: 0.25rem 0.375rem;
-  border: none;
-  border-radius: var(--planner-radius-small);
-
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.5rem;
-  color: var(--pv-fg);
-  white-space: nowrap;
-
-  background: none;
-
-  &:hover {
-    background: var(--pv-hover);
-  }
-
-  @media (max-width: 925px) {
-    font-size: 1.0625rem;
-  }
-}
-
-.periodPicker {
-  position: absolute;
-  z-index: 6;
-  inset-inline-start: 0;
-  top: 100%;
-
-  width: 16rem;
   margin-top: 0.25rem;
-  padding: 0.75rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius);
-
-  background: var(--pv-panel);
-  box-shadow: var(--pv-outline);
-}
-
-.periodPickerYear {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-}
-
-.periodPickerYearValue {
-  font-family: var(--font-family-monospace);
-  font-weight: var(--font-weight-semibold);
-}
-
-.periodPickerMonths {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
-}
-
-.periodPickerMonth {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0.375rem 0;
-  border: none;
-  border-radius: var(--planner-radius-small);
-
-  font-size: 0.875rem;
-  color: var(--pv-fg);
-
-  background: none;
-
-  &:hover {
-    background: var(--pv-hover);
-  }
-}
-
-.periodPickerMonthActive,
-.periodPickerMonthActive:hover {
-  color: var(--pv-accent-ink);
-  background: var(--pv-accent);
 }
 
 // ── неделя и сетка дня ───────────────────────────────────────────────────────
 
 .week {
-  --planner-hours-width: 3.25rem;
+  --planner-hours-width: 2.75rem;
 
   display: flex;
   flex: 1 1 auto;
@@ -1604,7 +1232,7 @@
 }
 
 .weekSingle {
-  --planner-hours-width: 2.875rem;
+  --planner-hours-width: 3.25rem;
 
   flex: none;
 }
@@ -1617,7 +1245,7 @@
 
 .weekHead {
   flex: none;
-  padding-inline-end: 0.625rem;
+  padding-inline-end: 0.75rem;
   border-bottom: 1px solid var(--pv-line);
 }
 
@@ -1628,33 +1256,36 @@
   flex-direction: column;
 
   min-width: 0;
-  padding: 0.5rem 0.5rem 0.375rem;
+  padding: 0.375rem 0.375rem 0.25rem;
   border: none;
-  border-inline-start: 1px solid var(--pv-line);
 
-  color: var(--pv-fg);
-  text-align: start;
+  color: var(--pv-muted);
+  text-align: center;
 
   background: none;
 
   &:hover {
-    background: var(--pv-hover);
+    color: var(--pv-fg);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--pv-focus-ring);
   }
 
   .prog {
-    margin-top: 0.375rem;
+    margin-top: 0.25rem;
   }
 }
 
 .weekDayPicked {
-  box-shadow: inset 0 -0.125rem 0 var(--pv-accent);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 }
 
 .weekDayName {
+  font-family: var(--font-family-monospace);
   font-size: 0.75rem;
-  color: var(--pv-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 
   .weekDayHoliday & {
     color: var(--pv-red);
@@ -1663,27 +1294,25 @@
 
 .weekDayRow {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.375rem;
   align-items: baseline;
+  justify-content: center;
 }
 
 .weekDayNumber {
   font-family: var(--font-family-monospace);
-  font-size: 1.125rem;
-  font-weight: var(--font-weight-semibold);
+  font-size: 0.75rem;
 
   .weekDayToday & {
-    color: var(--pv-accent);
+    color: var(--pv-at);
   }
 }
 
 .weekDayLoad {
   overflow: hidden;
 
-  margin-inline-start: auto;
-
   font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   color: var(--pv-muted);
   white-space: nowrap;
 }
@@ -1724,7 +1353,7 @@
 
 .weekGrid {
   position: relative;
-  padding-inline-end: 0.625rem;
+  padding-inline-end: 0.75rem;
 
   .weekSingle & {
     padding-inline-end: 0;
@@ -1737,19 +1366,14 @@
 
 .weekHour {
   position: absolute;
-  inset-inline-end: 0.5rem;
-  transform: translateY(-50%);
+  inset-inline-end: 0.375rem;
 
   direction: ltr;
 
   font-family: var(--font-family-monospace);
   font-size: 0.6875rem;
-  color: var(--pv-faint);
-
-  // Подпись первого часа обрезалась бы краем сетки
-  &:first-child {
-    visibility: hidden;
-  }
+  line-height: 1rem;
+  color: var(--pv-muted);
 }
 
 .weekColumn {
@@ -1760,18 +1384,11 @@
   min-width: 0;
   border-inline-start: 1px solid var(--pv-line);
 
-  background-image:
- repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent calc(var(--planner-hour) - 1px),
-    var(--pv-line) calc(var(--planner-hour) - 1px),
-    var(--pv-line) var(--planner-hour)
-  );
+  background-image: repeating-linear-gradient(to bottom, var(--pv-line) 0 1px, transparent 1px var(--planner-hour));
 }
 
 .weekColumnToday {
-  background-color: color-mix(in srgb, var(--pv-accent) 4%, transparent);
+  background-color: var(--pv-panel);
 }
 
 // Событие на весь день заливает колонку дня тем же тоном, что и свою клетку в строке «весь день»
@@ -1823,16 +1440,21 @@
   display: flex;
 
   box-sizing: border-box;
-  margin-top: 1px;
-  padding: 0.1875rem 0.4375rem;
-  border: 1px solid var(--pv-panel);
-  border-inline-start: 0.1875rem solid var(--planner-color);
-  border-radius: 0.375rem;
+  margin: 1px 0.1875rem 0;
+  padding: 0.1875rem 0.375rem;
+  border: 1px solid var(--pv-line);
+  border-inline-start: 0.25rem solid var(--planner-color);
+  border-radius: var(--pv-radius-sm);
 
-  background: color-mix(in srgb, var(--planner-color) 20%, var(--pv-panel));
+  background: var(--pv-panel);
 
   &:hover {
-    background: color-mix(in srgb, var(--planner-color) 32%, var(--pv-panel));
+    border-color: var(--pv-line2);
+    border-inline-start-color: var(--planner-color);
+  }
+
+  .weekColumnToday & {
+    background: var(--pv-raised);
   }
 }
 
@@ -1852,8 +1474,8 @@
   padding: 0;
   border: none;
 
-  font-size: 0.8125rem;
-  line-height: 1.3;
+  font-size: 0.75rem;
+  line-height: 1.25;
   color: var(--pv-fg);
   text-align: start;
 
@@ -1861,8 +1483,12 @@
 }
 
 .weekBlockName {
+  overflow: hidden;
   flex: none;
-  font-weight: var(--font-weight-medium);
+
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 
   .weekBlockDone & {
     text-decoration: line-through;
@@ -1946,25 +1572,13 @@
   }
 }
 
-// ── телефон: полоса дней недели и день под ней ───────────────────────────────
-
-.phoneWeek {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-
-  min-width: 0;
-  min-height: 0;
-}
+// ── телефон: полоса дней над днём (доска `PhonePlan`) ────────────────────────
 
 .stripBar {
   flex: none;
-  padding: 0.5rem 0.75rem 0.625rem;
+  padding: 0.5rem 0.625rem;
   border-bottom: 1px solid var(--pv-line);
-}
-
-.phoneWeekDay {
-  padding-top: 0.75rem;
+  background: var(--pv-panel);
 }
 
 .dayStrip {
@@ -1973,9 +1587,9 @@
 
   overflow-x: auto;
   display: grid;
-  grid-auto-columns: calc((100% - 6 * 0.25rem) / 7);
+  grid-auto-columns: calc((100% - 6 * 0.125rem) / 7);
   grid-auto-flow: column;
-  gap: 0.25rem;
+  gap: 0.125rem;
 }
 
 .dayStripDay {
@@ -1984,89 +1598,96 @@
 
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: 0.0625rem;
   align-items: center;
+  justify-content: center;
 
   min-width: 0;
-  padding: 0.375rem 0 0.4375rem;
+  height: 3.25rem;
+  padding: 0;
   border: none;
-  border-radius: var(--planner-radius);
+  border-radius: var(--pv-radius);
 
   color: var(--pv-fg);
 
   background: none;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--pv-focus-ring);
+  }
+}
+
+.dayStripPicked {
+  color: var(--pv-panel);
+  background: var(--pv-fg);
 }
 
 .dayStripWeekday {
   font-size: 0.6875rem;
-  color: var(--pv-muted);
-  text-transform: uppercase;
+  text-transform: lowercase;
 
-  .dayStripHoliday & {
+  .dayStripHoliday:not(.dayStripPicked) & {
     color: var(--pv-red);
   }
 }
 
 .dayStripNumber {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  width: 2.125rem;
-  height: 2.125rem;
-  border-radius: 50%;
-
   font-family: var(--font-family-monospace);
-  font-size: 1.0625rem;
+  font-size: 0.9375rem;
   font-weight: var(--font-weight-semibold);
 
-  .dayStripToday & {
-    color: var(--pv-accent);
-  }
-
-  .dayStripPicked & {
-    color: var(--pv-accent-ink);
-    background: var(--pv-accent);
+  .dayStripToday:not(.dayStripPicked) & {
+    color: var(--pv-at);
   }
 }
 
+// Точка под числом: в дне есть дела; перегруженный день — красная
 .dayStripLoad {
-  overflow: hidden;
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 50%;
+  background: transparent;
 
-  width: 1.375rem;
-  height: 0.1875rem;
-  border-radius: 0.125rem;
+  &:not([data-load="0"]) {
+    background: var(--pv-muted);
+  }
 
-  background: var(--pv-line);
+  .dayStripPicked &:not([data-load="0"]) {
+    background: var(--pv-panel);
+  }
 }
 
 .dayStripLoadFill {
-  display: block;
-  height: 100%;
-  background: var(--pv-event);
-}
-
-.dayStripLoadOver {
-  background: var(--pv-red);
+  display: none;
 }
 
 // ── месяц ────────────────────────────────────────────────────────────────────
 
+// Компьютер (доска `RdPlan`): клетки вплотную, между ними линия; телефон (доска `PhPlanMore`): плитки с числом
+// и полоской загрузки
 .month {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.375rem;
+  gap: 1px;
 
   @media (max-width: 925px) {
     gap: 0.1875rem;
+    margin: 0 -0.375rem;
   }
 }
 
 .monthWeekday {
-  padding: 0 0.375rem;
-  font-size: 0.75rem;
+  padding: 0 0.375rem 0.25rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
   color: var(--pv-muted);
-  text-transform: uppercase;
+  text-transform: lowercase;
+
+  @media (max-width: 925px) {
+    text-align: center;
+  }
 }
 
 .monthCell {
@@ -2075,41 +1696,62 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0.1875rem;
+  gap: 0.125rem;
 
   min-width: 0;
-  min-height: 6.5rem;
-  padding: 0.5rem;
-  border-radius: var(--planner-radius-small);
+  min-height: 5.75rem;
+  padding: 0.25rem 0.375rem;
 
   font-size: 0.75rem;
 
-  background: var(--pv-raised);
+  background: var(--pv-bg);
+  box-shadow: 0 0 0 1px var(--pv-line);
 
   &:hover {
-    background: var(--pv-hover);
+    background: var(--pv-raised);
   }
 
   @media (max-width: 925px) {
-    gap: 0.25rem;
+    gap: 0.1875rem;
     align-items: center;
-    min-height: 3.375rem;
-    padding: 0.3125rem 0.25rem;
+    justify-content: center;
+
+    min-height: 2.875rem;
+    padding: 0;
+    border-radius: var(--pv-radius-md);
+
+    background: var(--pv-panel);
+    box-shadow: none;
   }
 }
 
 .monthCellOutside {
-  opacity: 0.4;
+  color: var(--pv-faint);
+
+  @media (max-width: 925px) {
+    visibility: hidden;
+  }
 }
 
-.monthCellPicked {
-  box-shadow: 0 0 0 0.125rem var(--pv-accent);
+.monthCellToday {
+  background: var(--pv-panel);
+}
+
+.monthCellPicked,
+.monthCellPicked:hover {
+  background: var(--pv-panel);
+  box-shadow: 0 0 0 1px var(--pv-line), inset 0 0 0 0.125rem var(--pv-fg);
+
+  @media (max-width: 925px) {
+    color: var(--pv-panel);
+    background: var(--pv-fg);
+    box-shadow: none;
+  }
 }
 
 // Праздник — заливкой клетки (цвет события, без цвета — красный)
-.monthCellHoliday,
-.monthCellHoliday:hover {
-  background: color-mix(in srgb, var(--planner-holiday-color, var(--pv-red)) 14%, var(--pv-raised));
+.monthCellHoliday .monthNumber {
+  color: var(--planner-holiday-color, var(--pv-red));
 }
 
 .monthHead {
@@ -2125,18 +1767,20 @@
 
 .monthNumber {
   font-family: var(--font-family-monospace);
-  font-size: 0.9375rem;
-  font-weight: var(--font-weight-semibold);
+  font-size: 0.75rem;
 
   .monthCellToday & {
-    padding: 0 0.375rem;
-    border-radius: 0.625rem;
-    color: var(--pv-accent-ink);
-    background: var(--pv-accent);
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-at);
   }
 
   @media (max-width: 925px) {
     font-size: 0.875rem;
+
+    .monthCellPicked & {
+      font-weight: var(--font-weight-semibold);
+      color: inherit;
+    }
   }
 }
 
@@ -2212,29 +1856,45 @@
   background: transparent;
 }
 
-.monthDots {
+// Полоска под числом на телефоне: чем длиннее день по плану, тем она ярче
+.monthLoad {
   display: none;
-  gap: 0.1875rem;
-  min-height: 0.3125rem;
+
+  width: 1rem;
+  height: 0.1875rem;
+  border-radius: 0.125rem;
+
+  background: transparent;
+
+  &[data-level="1"] {
+    background: var(--pv-line2);
+  }
+
+  &[data-level="2"] {
+    background: var(--pv-muted);
+  }
+
+  &[data-level="3"] {
+    background: var(--pv-aqua);
+  }
 
   @media (max-width: 925px) {
-    display: flex;
+    display: block;
   }
-}
-
-.monthDot {
-  width: 0.3125rem;
-  height: 0.3125rem;
-  border-radius: 50%;
-  background: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
 }
 
 // ── год ──────────────────────────────────────────────────────────────────────
 
+// Год (доски `XpPlan`, `XdPlan`): клетки без чисел, насыщенность — загрузка дня в четыре ступени
 .year {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13.75rem, 1fr));
-  gap: 1.125rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.5rem 1.25rem;
+
+  @media (max-width: 925px) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.875rem 0.75rem;
+  }
 }
 
 .yearMonthTitle {
@@ -2242,23 +1902,23 @@
 
   display: block;
 
-  margin-bottom: 0.375rem;
+  margin-bottom: 0.25rem;
   padding: 0;
   border: none;
 
-  font-size: 0.9375rem;
-  font-weight: var(--font-weight-semibold);
-  color: var(--pv-fg);
+  font-size: 0.75rem;
+  color: var(--pv-muted);
 
   background: none;
 
   &:hover {
-    text-decoration: underline;
+    color: var(--pv-fg);
   }
 }
 
 .yearMonthCurrent {
-  color: var(--pv-accent);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 }
 
 .yearGrid {
@@ -2267,37 +1927,48 @@
   gap: 0.125rem;
 }
 
-.yearWeekday {
-  font-size: 0.625rem;
-  color: var(--pv-faint);
-  text-align: center;
-}
-
 // Насыщенность клетки — загрузка дня
 .yearDay {
   cursor: var(--custom-cursor, pointer);
 
   position: relative;
 
-  aspect-ratio: 1;
+  overflow: hidden;
+
+  height: 1.125rem;
   padding: 0;
   border: none;
-  border-radius: 0.3125rem;
+  border-radius: 0.1875rem;
 
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  color: var(--pv-fg);
+  font-size: 0;
+  color: transparent;
 
-  background: color-mix(in srgb, var(--pv-event) var(--planner-load, 0%), var(--pv-raised));
+  background: var(--pv-raised);
+
+  &[data-level="1"] {
+    background: var(--pv-line2);
+  }
+
+  &[data-level="2"] {
+    background: var(--pv-muted);
+  }
+
+  &[data-level="3"] {
+    background: var(--pv-aqua);
+  }
 
   &:hover {
-    outline: 1px solid var(--pv-line2);
+    outline: 1px solid var(--pv-fg);
+  }
+
+  @media (max-width: 925px) {
+    height: 0.6875rem;
+    border-radius: 0.125rem;
   }
 }
 
 .yearDayHoliday {
-  font-weight: var(--font-weight-semibold);
-  color: var(--pv-red);
+  box-shadow: inset 0 0 0 1px var(--pv-red);
 }
 
 .yearDayDue::after {
@@ -2326,14 +1997,15 @@
 }
 
 .yearLegend {
-  margin: 0.875rem 0 0;
-  font-size: 0.8125rem;
+  margin: 0.875rem 0 0.5rem;
+  font-size: 0.75rem;
   color: var(--pv-muted);
 }
 
 // ── список ───────────────────────────────────────────────────────────────────
 
 .agenda {
+  min-width: 0;
   max-width: 44rem;
 }
 
@@ -2426,34 +2098,30 @@
   gap: 0.5rem;
   align-items: center;
 
-  min-height: 2.25rem;
+  min-height: 2.75rem;
   padding: 0 0.75rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius);
 
   font-size: 0.875rem;
   color: var(--pv-fg);
   text-align: start;
 
-  background: var(--pv-panel);
+  background: var(--pv-raised);
 
   &:hover {
-    border-color: var(--pv-accent);
-  }
-
-  :global(.icon) {
-    font-size: 1rem;
+    border-color: var(--pv-line2);
   }
 
   @media (max-width: 925px) {
     flex: none;
-    min-height: 2rem;
+    min-height: var(--pv-chip-height);
     border-radius: 1rem;
   }
 }
 
 .groupChipActive {
-  border-color: var(--pv-accent);
+  border-color: var(--pv-fg);
 }
 
 .groupChipStatic {
@@ -2508,9 +2176,9 @@
   flex-direction: column;
   gap: 0.75rem;
 
-  padding: 0.875rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  padding: 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
 
   background: var(--pv-panel);
 }
@@ -2553,38 +2221,56 @@
 }
 
 .feedLinePicked {
-  background: color-mix(in srgb, var(--pv-accent) 18%, transparent);
-  outline: 2px solid var(--pv-accent);
+  background: var(--pv-raised);
+  box-shadow: inset 0 0 0 0.125rem var(--pv-fg);
 }
 
 .agendaDay {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+
+  @media (max-width: 925px) {
+    margin: 0 -1rem;
+    border-width: 1px 0;
+    border-radius: 0;
+  }
 }
 
+// Подпись дня держится у верхнего края, пока листается его список
 .agendaDayTitle {
   cursor: var(--custom-cursor, pointer);
 
-  align-self: flex-start;
+  position: sticky;
+  z-index: 1;
+  top: 0;
 
-  margin: 0.875rem 0 0.375rem;
-  padding: 0;
+  padding: 0.5rem 1rem;
   border: none;
+  border-bottom: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card) var(--pv-radius-card) 0 0;
 
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: var(--font-weight-semibold);
   color: var(--pv-muted);
+  text-align: start;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 
-  background: none;
+  background: var(--pv-raised);
 
-  &:hover {
-    text-decoration: underline;
+  @media (max-width: 925px) {
+    border-radius: 0;
   }
 }
 
 .agendaDayToday {
-  color: var(--pv-accent);
+  color: var(--pv-fg);
 }
 
 // ── карточка записи, формы, настройки ────────────────────────────────────────
@@ -2599,7 +2285,7 @@
   align-items: flex-end;
   justify-content: center;
 
-  background: rgb(0 0 0 / 45%);
+  background: rgb(0 0 0 / 40%);
 }
 
 .scrimCentered {
@@ -2609,45 +2295,31 @@
   }
 }
 
+// Телефон: карточка записи и настройки — экран целиком (доска `PhPlanMore`, «Запись»)
 .sheetPane {
   flex: none;
 
   width: 100%;
-  max-height: 88%;
-  border-radius: var(--planner-island-radius) var(--planner-island-radius) 0 0;
+  height: 100%;
+  border: 0;
 
-  box-shadow: var(--pv-outline);
+  background: var(--pv-bg);
 
-  @media (prefers-reduced-motion: no-preference) {
-    animation: planner-sheet-up 0.18s ease-out;
+  > .hdr {
+    background: var(--pv-panel);
   }
 }
 
 .sheetPaneCentered {
   @media (min-width: 926px) {
     width: min(35rem, 100%);
+    height: auto;
     max-height: 80vh;
-    border-radius: var(--planner-island-radius);
-    box-shadow: var(--pv-outline);
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius-dialog);
+
+    background: var(--pv-panel);
   }
-}
-
-@keyframes planner-sheet-up {
-  from {
-    transform: translateY(1rem);
-    opacity: 0;
-  }
-}
-
-.grab {
-  flex: none;
-
-  width: 2.5rem;
-  height: 0.25rem;
-  margin: 0.5rem auto 0;
-  border-radius: 0.125rem;
-
-  background: var(--pv-line2);
 }
 
 .typePill {
@@ -2658,18 +2330,12 @@
   gap: 0.375rem;
   align-items: center;
 
-  height: 1.75rem;
-  padding: 0 0.75rem;
-  border-radius: 0.875rem;
-
-  font-size: 0.8125rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--planner-color);
-
-  background: color-mix(in srgb, var(--planner-color) 20%, transparent);
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 
   :global(.icon) {
-    font-size: 1rem;
+    color: var(--planner-color);
   }
 }
 
@@ -2725,23 +2391,27 @@
 .fieldLabel {
   display: block;
 
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.375rem;
 
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: var(--font-weight-normal);
   color: var(--pv-muted);
 }
 
 .fieldInput {
-  height: 2.625rem;
-  padding: 0 0.75rem;
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
   border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  border-radius: var(--pv-radius);
 
   font-size: 0.9375rem;
   color: var(--pv-fg);
 
-  background: var(--pv-panel);
+  background: var(--pv-bg);
+
+  .sheetPane:not(.sheetPaneCentered) & {
+    background: var(--pv-panel);
+  }
 }
 
 .fields {
@@ -2757,11 +2427,12 @@
 
 .kindSwitch {
   display: flex;
-  gap: 0.25rem;
-  align-self: flex-start;
+  gap: 0.1875rem;
+  align-self: stretch;
 
   padding: 0.1875rem;
-  border-radius: 1.25rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-md);
 
   background: var(--pv-bg);
 }
@@ -2769,19 +2440,22 @@
 .kindSwitchButton {
   cursor: var(--custom-cursor, pointer);
 
-  height: 2rem;
+  flex: 1 1 0;
+
+  height: var(--pv-seg-item-height);
   padding: 0 1rem;
   border: none;
-  border-radius: 1rem;
+  border-radius: var(--pv-radius-sm);
 
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   color: var(--pv-muted);
 
   background: transparent;
 }
 
 .kindSwitchActive {
+  font-weight: var(--font-weight-semibold);
   color: var(--pv-fg);
   background: var(--pv-panel);
 }
@@ -2806,22 +2480,26 @@
 
 .cardTitleInput {
   width: 100%;
+  height: var(--pv-input-height);
   margin: 0 0 0.25rem;
-  padding: 0.25rem 0 0.5rem;
-  border: none;
-  border-bottom: 1px solid var(--pv-line2);
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
 
   font: inherit;
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.5rem;
+  font-size: 1.0625rem;
+  font-weight: var(--font-weight-medium);
   color: var(--pv-fg);
 
-  background: transparent;
+  background: var(--pv-bg);
   outline: none;
 
   &:focus {
-    border-bottom-color: var(--pv-accent);
+    border-color: var(--pv-blue);
+  }
+
+  .sheetPane:not(.sheetPaneCentered) & {
+    background: var(--pv-panel);
   }
 }
 
@@ -2855,25 +2533,31 @@
 }
 
 .cardRowButton {
+  cursor: var(--custom-cursor, pointer);
+
   display: flex;
   gap: 0.5rem;
   align-items: center;
 
   width: 100%;
-  min-height: 2.625rem;
-  padding: 0 0.75rem;
+  min-height: var(--pv-input-height);
+  padding: 0 0.875rem;
   border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  border-radius: var(--pv-radius);
 
   font: inherit;
   font-size: 0.9375rem;
   color: var(--pv-fg);
   text-align: start;
 
-  background: var(--pv-panel);
+  background: var(--pv-bg);
 
   &:hover {
-    border-color: var(--pv-accent);
+    border-color: var(--pv-muted);
+  }
+
+  .sheetPane:not(.sheetPaneCentered) & {
+    background: var(--pv-panel);
   }
 }
 
@@ -2926,9 +2610,10 @@
 .slot {
   cursor: var(--custom-cursor, pointer);
 
+  min-height: 2.5rem;
   padding: 0.5rem 0.75rem;
-  border: none;
-  border-radius: var(--planner-radius-small);
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-md);
 
   font-family: var(--font-family-monospace);
   font-size: 0.8125rem;
@@ -2938,15 +2623,16 @@
   background: var(--pv-raised);
 
   &:hover {
-    background: var(--pv-hover);
+    border-color: var(--pv-line2);
   }
 }
 
 // Блок «Повтор и детали»
 .detailsFold {
   padding: 0 0.75rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+  background: var(--pv-panel);
 }
 
 .detailsToggle {
@@ -3010,22 +2696,24 @@
 }
 
 // Объём правки ряда: только это, это и последующие, все в серии
+// Объём правки ряда (доска `XpPlan`): кнопки во всю ширину, в карточке записи
 .seriesPrompt {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  align-items: flex-start;
+  align-items: stretch;
 
   padding: 0.75rem;
-  border-radius: var(--planner-radius);
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card);
 
-  background: var(--pv-raised);
+  background: var(--pv-panel);
 }
 
 .seriesTitle {
   margin: 0;
-  font-size: 0.875rem;
-  color: var(--pv-muted);
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
 }
 
 .swatches {
@@ -3052,7 +2740,7 @@
 }
 
 .swatchActive {
-  outline: 0.125rem solid var(--pv-accent);
+  outline: 0.125rem solid var(--pv-fg);
 }
 
 .listCreate {
@@ -3073,8 +2761,9 @@
   flex-shrink: 0;
 
   width: auto;
-  padding-inline: 0.875rem;
-  border-radius: var(--planner-radius-small);
+  height: 2.5rem;
+  padding-inline: 1rem;
+  border-radius: var(--pv-radius);
 
   font-weight: var(--font-weight-semibold);
   text-transform: none;
@@ -3097,10 +2786,10 @@
   position: static;
   transform: none !important;
 
-  margin: 0 0 0.25rem;
+  margin: 0 0 0.375rem;
   padding: 0;
 
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   color: var(--pv-muted);
   white-space: normal;
 
@@ -3108,20 +2797,24 @@
 }
 
 .root :global(.input-group) > :global(.form-control) {
-  height: 2.625rem;
-  padding: 0 0.75rem;
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
   border: 1px solid var(--pv-line2);
-  border-radius: var(--planner-radius-small);
+  border-radius: var(--pv-radius);
 
   font-size: 0.9375rem;
   color: var(--pv-fg);
 
-  background: var(--pv-panel);
+  background: var(--pv-bg);
   box-shadow: none;
 
   &:focus {
-    border-color: var(--pv-accent);
+    border-color: var(--pv-blue);
   }
+}
+
+.sheetPane:not(.sheetPaneCentered) :global(.input-group) > :global(.form-control) {
+  background: var(--pv-panel);
 }
 
 .root :global(.input-group) > :global(textarea.form-control) {
@@ -3132,7 +2825,7 @@
 .root :global(.input-group.with-arrow)::after {
   top: auto;
   right: 1rem;
-  bottom: 1.125rem;
+  bottom: 1.3125rem;
 
   width: 0.5rem;
   height: 0.5rem;
@@ -3146,13 +2839,17 @@
 
   :global(.modal-dialog) {
     max-width: 35rem;
-    border-radius: var(--planner-island-radius);
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius-dialog);
+
     color: var(--pv-fg);
+
     background: var(--pv-panel);
+    box-shadow: none;
   }
 
   :global(.modal-title) {
-    font-size: 1.125rem;
+    font-size: 1.0625rem;
     font-weight: var(--font-weight-semibold);
   }
 
@@ -3161,10 +2858,14 @@
       align-items: flex-end;
     }
 
-    :global(.modal-dialog) {
+    &:global(.Modal) :global(.modal-dialog) {
+      width: 100%;
+      // Общий `Modal.scss` ограничивает `max-width` через `!important` внутри слоя — его не перебить; минимум сильнее
+      min-width: 100%;
       max-width: none;
       margin: 0;
-      border-radius: var(--planner-island-radius) var(--planner-island-radius) 0 0;
+      border-width: 1px 0 0;
+      border-radius: var(--pv-radius-sheet) var(--pv-radius-sheet) 0 0;
     }
   }
 }
@@ -3200,19 +2901,24 @@
 
 .quickInput {
   width: 100%;
-  height: 3.25rem;
-  padding: 0 1rem;
-  border: 0.125rem solid var(--pv-accent);
-  border-radius: var(--planner-radius);
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
 
-  font-size: 1.0625rem;
+  font-size: 1rem;
   color: var(--pv-fg);
 
-  background: var(--pv-raised);
+  background: var(--pv-bg);
   outline: none;
 
   &::placeholder {
-    color: var(--pv-faint);
+    color: var(--pv-muted);
+  }
+
+  &:focus {
+    border-color: var(--pv-blue);
+    box-shadow: 0 0 0 1px var(--pv-blue);
   }
 }
 
@@ -3300,21 +3006,19 @@
   align-items: center;
 
   max-width: 100%;
-  min-height: 1.875rem;
+  min-height: var(--pv-chip-height);
   padding: 0 0.75rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: 0.9375rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
 
   font-size: 0.8125rem;
-  color: var(--pv-muted);
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
 
   &:hover,
   &:focus-within {
-    color: var(--pv-fg);
-  }
-
-  &:focus-within {
-    border-color: var(--pv-accent);
+    border-color: var(--pv-line2);
   }
 }
 
@@ -3347,438 +3051,6 @@
   font-size: 0.8125rem;
 }
 
-// ── «Здоровье» ───────────────────────────────────────────────────────────────
-
-.health {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  align-items: start;
-
-  @media (max-width: 1100px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  @media (max-width: 1500px) {
-    .withSide & {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-}
-
-.healthWide {
-  grid-column: 1 / -1;
-}
-
-// Значение показателя «Здоровья» — кнопка: открывает ввод текстом для него
-.healthValueButton {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0;
-  border: none;
-
-  font-family: inherit;
-  color: inherit;
-  text-align: start;
-
-  background: none;
-
-  &:hover {
-    filter: brightness(1.15);
-  }
-}
-
-.healthBig {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: baseline;
-}
-
-.sleepRow {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-
-  padding: 0.125rem 0;
-  border-bottom: 1px solid var(--pv-line);
-}
-
-.sleepRowTime {
-  font-family: var(--font-family-monospace);
-  font-size: 0.875rem;
-}
-
-.ibActive {
-  color: var(--pv-accent);
-}
-
-.big {
-  font-family: var(--font-family-monospace);
-  font-size: 2.125rem;
-  font-weight: var(--font-weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  color: var(--planner-kind, var(--pv-fg));
-}
-
-.macros {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-}
-
-.macroRow {
-  display: grid;
-  grid-template-columns: 5.25rem 6.5rem minmax(0, 1fr);
-  gap: 0.625rem;
-  align-items: center;
-}
-
-.healthTime {
-  flex: none;
-
-  width: 2.875rem;
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
-  color: var(--pv-muted);
-}
-
-.healthRowHead {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: space-between;
-
-  margin-bottom: 0.25rem;
-
-  font-size: 0.875rem;
-}
-
-.healthRowValue {
-  font-weight: var(--font-weight-semibold);
-  color: var(--planner-kind);
-}
-
-.healthFacts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-
-.healthFact {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-
-  min-width: 0;
-  padding: 0.625rem 0.75rem;
-  border-radius: var(--planner-radius);
-
-  background: var(--pv-panel);
-}
-
-.healthFactLabel {
-  overflow: hidden;
-
-  font-size: 0.75rem;
-  color: var(--pv-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.healthFactValue {
-  font-family: var(--font-family-monospace);
-  font-weight: var(--font-weight-semibold);
-  color: var(--planner-kind, var(--pv-fg));
-}
-
-.healthGoalForm {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-
-  .fieldInput {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-}
-
-// Столбики недели с пунктиром цели
-.bars {
-  position: relative;
-
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-end;
-
-  height: 9.375rem;
-  padding-top: 1.125rem;
-}
-
-.barsColumn {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  gap: 0.25rem;
-  align-items: center;
-  justify-content: flex-end;
-
-  min-width: 0;
-  height: 100%;
-}
-
-.barsValue {
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  color: var(--pv-muted);
-  white-space: nowrap;
-}
-
-.barsFill {
-  display: block;
-
-  width: 100%;
-  max-width: 2.125rem;
-  border-radius: 0.375rem 0.375rem 0.125rem 0.125rem;
-
-  background: var(--planner-kind, var(--pv-accent));
-
-  .barsColumnLow & {
-    background: var(--pv-red);
-  }
-
-  // Записанный ноль (сон 0 ч): красная «свеча» минимальной высоты — день учтён, а не пуст
-  .barsColumnZero & {
-    min-height: 0.375rem;
-    background: var(--pv-red);
-  }
-
-  .barsColumnCurrent & {
-    box-shadow: 0 0 0 0.125rem var(--pv-fg);
-  }
-}
-
-.barsGoal {
-  pointer-events: none;
-
-  position: absolute;
-  right: 0;
-  left: 0;
-
-  border-top: 1px dashed var(--pv-faint);
-}
-
-.barsGoalLabel {
-  position: absolute;
-  top: -1rem;
-  right: 0;
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  color: var(--pv-faint);
-}
-
-.barsLabels {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.375rem;
-}
-
-.barsLabel {
-  flex: 1 1 0;
-  font-size: 0.75rem;
-  color: var(--pv-muted);
-  text-align: center;
-}
-
-.barsLabelCurrent {
-  font-weight: var(--font-weight-semibold);
-  color: var(--pv-fg);
-}
-
-// График веса
-.spark {
-  display: block;
-  width: 100%;
-}
-
-.sparkGoal {
-  stroke: var(--pv-faint);
-  stroke-dasharray: 4 4;
-}
-
-.sparkLabel {
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  fill: var(--pv-faint);
-}
-
-.sparkLine {
-  fill: none;
-  stroke: var(--pv-green);
-  stroke-width: 2;
-}
-
-.sparkDot {
-  fill: var(--pv-green);
-}
-
-// Режим сна: тон плашки уровня («стабильный» — зелёный, «плавает» — жёлтый, «сбит» — красный .kindDue)
-.toneGood {
-  --planner-kind: var(--pv-green);
-}
-
-.toneWarn {
-  --planner-kind: var(--pv-yellow);
-}
-
-// График режима: дни колонками, сверху вниз — часы суток; столбик — сон от отхода до подъёма, цвет основного сна —
-// по отклонению от среднего, дневной сон бледнее. Справа — поле подписей часов, снизу — строка чисел
-.routineChart {
-  --routine-gutter: 3rem;
-  --routine-days: 1.5rem;
-  --routine-top: 0.5rem;
-
-  position: relative;
-  height: 13rem;
-}
-
-.routineLayer {
-  pointer-events: none;
-  position: absolute;
-  inset: var(--routine-top) var(--routine-gutter) var(--routine-days) 0;
-}
-
-.routineGrid,
-.routineMean,
-.routineGoal {
-  position: absolute;
-  inset-inline: 0;
-  border-top: 1px solid var(--pv-line);
-}
-
-.routineMidnight {
-  border-top-color: var(--pv-muted);
-}
-
-.routineMean {
-  border-top-color: var(--pv-fg);
-  opacity: 0.6;
-}
-
-.routineGoal {
-  border-top: 1px dashed var(--pv-green);
-}
-
-.routineTicks {
-  position: absolute;
-  inset-block: var(--routine-top) var(--routine-days);
-  inset-inline-end: 0;
-  width: var(--routine-gutter);
-}
-
-.routineTick {
-  position: absolute;
-  inset-inline-end: 0;
-  transform: translateY(-50%);
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  line-height: 1;
-  color: var(--pv-muted);
-}
-
-.routineColumns {
-  position: absolute;
-  inset: 0 var(--routine-gutter) 0 0;
-  display: flex;
-}
-
-.routineColumn {
-  cursor: pointer;
-
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-
-  min-width: 0;
-  margin: 0;
-  padding: var(--routine-top) 0 0;
-  border: 0;
-  border-radius: 0.375rem;
-
-  color: inherit;
-
-  background: none;
-  outline: none;
-}
-
-.routineColumn:focus-visible {
-  box-shadow: inset 0 0 0 0.125rem var(--pv-accent);
-}
-
-.routineColumn:hover,
-.routineColumnPicked {
-  background: var(--pv-hover);
-}
-
-.routineTrack {
-  position: relative;
-  flex: 1 1 auto;
-}
-
-.routineBar {
-  position: absolute;
-  inset-inline: 22%;
-
-  min-height: 0.125rem;
-  border-radius: 0.125rem;
-
-  background: var(--pv-sleep);
-}
-
-.routineBarDrift {
-  background: var(--pv-yellow);
-}
-
-.routineBarOff {
-  background: var(--pv-red);
-}
-
-.routineBarNap {
-  opacity: 0.5;
-}
-
-.routineDot {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-
-  width: 0.375rem;
-  height: 0.375rem;
-  border-radius: 50%;
-
-  background: var(--pv-faint);
-}
-
-.routineDay {
-  flex: 0 0 var(--routine-days);
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.6875rem;
-  line-height: var(--routine-days);
-  color: var(--pv-muted);
-  text-align: center;
-}
-
-.routineDayCurrent {
-  font-weight: var(--font-weight-semibold);
-  color: var(--pv-fg);
-}
-
 // ── уведомление с «Отменить» ─────────────────────────────────────────────────
 
 .toast {
@@ -3786,7 +3058,7 @@
 
   position: absolute;
   z-index: 30;
-  bottom: 1.75rem;
+  bottom: 1.5rem;
   left: 50%;
   transform: translateX(-50%);
 
@@ -3795,17 +3067,16 @@
   align-items: center;
 
   max-width: calc(100% - 2rem);
-  padding: 0.625rem 1.125rem;
-  border-radius: 1.375rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--pv-radius);
 
   font-size: 0.875rem;
   color: var(--pv-panel);
 
   background: var(--pv-fg);
-  box-shadow: var(--pv-outline);
 
   @media (max-width: 925px) {
-    bottom: 1rem;
+    bottom: 5rem;
   }
 }
 
@@ -3824,14 +3095,4 @@
   text-decoration: underline;
 
   background: none;
-}
-
-@keyframes side-appear {
-  from {
-    box-shadow: 0 0 0 2px var(--pv-accent);
-  }
-
-  to {
-    box-shadow: 0 0 0 2px transparent;
-  }
 }

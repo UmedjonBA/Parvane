@@ -109,11 +109,10 @@ export async function openEditProfile(page) {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Экран «Плана»: `today` либо `calendar` (сетка в виде, который устройство запомнило, — по умолчанию месяц);
-// `health` открывает модуль «Здоровье». «Сегодня» — первый пункт переключателя вида календаря, отдельной кнопки раздела у него
-// нет: путь — «Календарь» в боковой панели (на телефоне — «План» нижней панели и вкладка «Календарь»),
-// затем пункт переключателя. Кнопка «Календарь» сама открывает то, что календарь показывал в последний
-// раз, поэтому нужный пункт выбирается явно
+// Экран «Плана»: `today` — вид «День», `calendar` — сетка в виде, который устройство запомнило (по умолчанию
+// месяц); `health` открывает модуль «Здоровье». «День» — первый пункт переключателя вида (значение `today`):
+// путь — «План» в панели модулей (на телефоне — в ленте), затем пункт переключателя. Модуль сам открывает то,
+// что показывал в последний раз, поэтому нужный пункт выбирается явно
 const PLANNER_CALENDAR_VIEWS = ['week', 'month', 'year', 'agenda'];
 
 /** Модуль «Здоровье» (spec 041): вкладка боковой панели либо кнопка нижней ленты. Возвращает корень модуля. */
@@ -143,7 +142,6 @@ export async function openPlannerScreen(page, screen = 'calendar') {
     if (!(await planner.isVisible().catch(() => false))) {
       await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Planner' }).click();
     }
-    await planner.locator('header').getByText('Calendar', { exact: true }).first().click();
   }
   await planner.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const saved = await page.evaluate(() => localStorage.getItem('parvane:planner-view'));

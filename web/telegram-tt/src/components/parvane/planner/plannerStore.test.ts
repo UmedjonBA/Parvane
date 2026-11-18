@@ -65,7 +65,7 @@ describe('Перечитка состояния движка без измене
     vi.stubGlobal('window', { addEventListener: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
     api.mockReset();
     api.mockImplementation((method: string) => Promise.resolve(
-      method === 'parvanePlannerState' ? answer : method === 'parvaneLoadPlanner' ? { status: 'ok' } : undefined,
+      method === 'parvanePlannerState' ? answer : undefined,
     ));
   });
 
@@ -173,7 +173,7 @@ describe('Словарь правок: перенос записи устрой�
     vi.stubGlobal('window', { addEventListener: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
     api.mockReset();
     api.mockImplementation((method: string) => Promise.resolve(
-      method === 'parvanePlannerState' ? answer : method === 'parvaneLoadPlanner' ? { status: 'ok' } : undefined,
+      method === 'parvanePlannerState' ? answer : undefined,
     ));
   });
 
@@ -272,7 +272,7 @@ describe('История ввода текстом: перенос записи 
     vi.stubGlobal('window', { addEventListener: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
     api.mockReset();
     api.mockImplementation((method: string) => Promise.resolve(
-      method === 'parvanePlannerState' ? answer : method === 'parvaneLoadPlanner' ? { status: 'ok' } : undefined,
+      method === 'parvanePlannerState' ? answer : undefined,
     ));
   });
 

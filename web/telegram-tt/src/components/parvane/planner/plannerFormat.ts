@@ -149,6 +149,27 @@ export function formatWeekRange(lang: LangFn, day: string) {
   return `${formatDayShort(lang, days[0])} – ${formatDayShort(lang, days[days.length - 1])}`;
 }
 
+// Ступени загрузки дня для клеток года и полоски месяца: нет дел, до трети бюджета, до двух третей, больше
+const LOAD_LEVEL_STEPS = [1 / 3, 2 / 3];
+
+export function getLoadLevel(minutes: number, budget: number) {
+  if (!minutes || !budget) return 0;
+  return 1 + LOAD_LEVEL_STEPS.filter((step) => minutes / budget > step).length;
+}
+
+const MS_IN_DAY = 86400000;
+const DAYS_IN_WEEK = 7;
+const THURSDAY = 4;
+
+/** Номер недели года по ISO 8601: неделя с понедельника, первая — та, где четверг года. */
+export function formatWeekNumber(day: string) {
+  const date = fromDayKey(day);
+  const weekday = date.getDay() || DAYS_IN_WEEK;
+  const thursday = new Date(date.getFullYear(), date.getMonth(), date.getDate() + THURSDAY - weekday);
+  const yearStart = new Date(thursday.getFullYear(), 0, 1);
+  return Math.ceil(((thursday.getTime() - yearStart.getTime()) / MS_IN_DAY + 1) / DAYS_IN_WEEK);
+}
+
 // Цвет списка — переменная палитры собеседников (`--color-peer-0…7`)
 export function listColorStyle(color?: number) {
   return color ? `--planner-list-color: var(--color-peer-${color - 1})` : undefined;

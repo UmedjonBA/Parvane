@@ -4,7 +4,7 @@ import type { LangFn } from '../../../util/localization';
 
 import {
   formatDate, formatDay, formatDayLabel, formatDayLong, formatDayShort, formatMonth, formatMonthShort, formatNumber,
-  formatPeriod, formatRelativeDay, formatWeekday,
+  formatPeriod, formatRelativeDay, formatWeekday, formatWeekNumber, getLoadLevel,
 } from './plannerFormat';
 import { fromDayKey } from './plannerModel';
 
@@ -53,5 +53,22 @@ describe('подписи дат и чисел: кэш Intl даёт то же, �
     expect(formatMonth(lang, new Date(2026, 9, 1))).toBe('Октябрь 2026');
     expect(formatWeekday(lang, 0)).toBe('Пн');
     expect(formatNumber(lang, 1.5)).toBe('1,5');
+  });
+
+  it('номер недели — по ISO 8601', () => {
+    expect(formatWeekNumber('2026-11-15')).toBe(46);
+    expect(formatWeekNumber('2026-11-16')).toBe(47);
+    expect(formatWeekNumber('2026-01-01')).toBe(1);
+    expect(formatWeekNumber('2027-01-01')).toBe(53);
+    expect(formatWeekNumber('2024-12-30')).toBe(1);
+  });
+
+  it('ступени загрузки дня — четыре', () => {
+    expect(getLoadLevel(0, 480)).toBe(0);
+    expect(getLoadLevel(60, 0)).toBe(0);
+    expect(getLoadLevel(120, 480)).toBe(1);
+    expect(getLoadLevel(240, 480)).toBe(2);
+    expect(getLoadLevel(400, 480)).toBe(3);
+    expect(getLoadLevel(900, 480)).toBe(3);
   });
 });

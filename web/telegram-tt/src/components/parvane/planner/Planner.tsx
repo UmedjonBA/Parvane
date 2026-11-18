@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
@@ -12,20 +12,21 @@ import buildClassName from '../../../util/buildClassName';
 import {
   consumePlannerAddRequest, consumePlannerSettingsRequest, getIsParvaneScreenShown, getParvaneSection,
   getPlannerAddRequest, getPlannerCalendarView, getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView,
-  setParvaneSection, setPlannerCalendarView, setPlannerPickedDay,
-  setPlannerView, showPlannerCalendar,
+  setParvaneNavCovered, setParvaneSection, setPlannerCalendarView, setPlannerPickedDay, setPlannerView,
 } from '../../../util/parvaneSection';
 import { getHealthDays, watchHealthDays } from '../health/healthStore';
 import { consumePlannerRecordRequest, getPlannerRecordRequest, openPlanSearch } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
-  formatDay, formatDayLabel, formatPeriod, formatWeekRange,
+  formatDay, formatDayLabel, formatDayLong, formatMonth, formatPeriod, formatRelativeDay, formatSpan,
+  formatWeekRange,
 } from './plannerFormat';
+import { getDayBudget } from './plannerHealth';
 import { withHealthDays } from './plannerHealthDays';
 import { readLayers, saveLayers } from './plannerLayers';
 import {
-  addDays, detachInstance, eventInstance, fromDayKey, getWeekKeys, hasInstanceOn, PLANNER_CALENDAR_VIEWS, shiftPeriod,
-  taskInstance, toDayKey,
+  detachInstance, eventInstance, fromDayKey, getDayEntry, getUndatedTasks, getWeekKeys, hasInstanceOn,
+  PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance, toDayKey,
 } from './plannerModel';
 import {
   getHasQuickLines, getIsPlannerCached, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState,
@@ -44,26 +45,27 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
 import Loading from '../../ui/Loading';
-import TabList from '../../ui/TabList';
 import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import SectionHistoryBack from '../SectionHistoryBack';
 import PlannerAgenda from './PlannerAgenda';
-import PlannerDateNav from './PlannerDateNav';
+import PlannerDay from './PlannerDay';
 import PlannerDayPanel from './PlannerDayPanel';
 import PlannerDayStrip from './PlannerDayStrip';
 import PlannerEventEditor from './PlannerEventEditor';
-import PlannerLayerChips from './PlannerLayerChips';
+import PlannerHeader from './PlannerHeader';
 import PlannerMonth from './PlannerMonth';
-import PlannerPeriodBar from './PlannerPeriodBar';
 import PlannerQuickInput from './PlannerQuickInput';
+import PlannerRail from './PlannerRail';
 import PlannerSettings from './PlannerSettings';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
-import PlannerToday from './PlannerToday';
+import PlannerUndated from './PlannerUndated';
 import PlannerWeek from './PlannerWeek';
+import PlannerWeekList from './PlannerWeekList';
 import PlannerYear from './PlannerYear';
 
 import styles from './Planner.module.scss';
+import pv from './PlannerPv.module.scss';
 
 type SwipePeriod = 'day' | 'week' | 'month';
 
@@ -75,9 +77,7 @@ function selectCurrentUserId(global: GlobalState) {
 const NEW_NAME_ID = 'planner-new-name';
 const FORM_FOCUS_DELAY_MS = 250;
 const SNAPSHOT_WARN_BYTES = 786432;
-// Вкладки раздела на телефоне: «Сегодня» — первый вид календаря, своей вкладки у него нет
-const TAB_CALENDAR = 0;
-// Пункт «Сегодня» в переключателе вида календаря
+// Пункт «День» в переключателе вида: экран дня (в сигналах раздела он зовётся `today`)
 const SEGMENT_TODAY = 'today';
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
 const CALENDAR_VIEW_LABELS = {
@@ -115,10 +115,9 @@ function msUntilTomorrow() {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() + MS_IN_SECOND;
 }
 
-// Parvane (spec 009): раздел «План» — календарь с загрузкой дней («Сегодня» — первый его вид, выбирается
-// в том же переключателе, что неделя, месяц, год и список) и «Здоровье». Данные — запись устройства
-// (plannerStore). Раскладка — острова: страница раздела и справа день календаря либо карточка
-// записи; на телефоне карточка и настройки выезжают снизу
+// Parvane: модуль «План» по макету spec 041 — виды «День / Неделя / Месяц / Год / Список» в одном переключателе.
+// Компьютер: слева колонка с месяцем и делами выбранного дня (неделя и месяц), справа карточка записи;
+// телефон: одна колонка, карточка записи и настройки — на весь экран поверх ленты модулей
 // Курсор ставится в поле названия, только если человек ещё не начал заполнять форму сам
 function focusNewName() {
   const field = document.getElementById(NEW_NAME_ID);
@@ -172,6 +171,7 @@ const Planner = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   // Начатый жест листания (телефон): что листается и где палец коснулся экрана
   const swipeRef = useRef<{ period: SwipePeriod; start: SwipePoint }>();
+  const contentRef = useRef<HTMLDivElement>();
 
   const currentUserId = useSelector(selectCurrentUserId);
   const { width: windowWidth } = useWindowSize();
@@ -282,18 +282,6 @@ const Planner = () => {
     setFormParams(undefined);
   });
 
-  const handleSwitchTab = useLastCallback(() => {
-    showPlannerCalendar();
-  });
-
-  const handleOpenCalendar = useLastCallback(() => {
-    setPlannerView('calendar');
-  });
-
-  const handleOpenHealth = useLastCallback(() => {
-    setPlannerView('health');
-  });
-
   // Значок сна в календаре ведёт в модуль «Здоровье»
   const handleOpenSleep = useLastCallback(() => {
     setPlannerView('health');
@@ -309,10 +297,6 @@ const Planner = () => {
 
   const handlePrevPeriod = useLastCallback(() => changePeriod(-1));
   const handleNextPeriod = useLastCallback(() => changePeriod(1));
-
-  const handleShiftDay = useLastCallback((delta: number) => {
-    pickDay(addDays(picked, delta));
-  });
 
   // Телефон: горизонтальный свайп листает то, что названо в `data-swipe` под пальцем, — дни, недели, месяцы
   const handleTouchStart = useLastCallback((e: React.TouchEvent<HTMLDivElement>) => {
@@ -354,6 +338,12 @@ const Planner = () => {
     saveLayers(next);
   });
 
+  // Число дня в неделе телефона открывает этот день
+  const handleOpenDay = useLastCallback((day: string) => {
+    pickDay(day);
+    setPlannerView('today');
+  });
+
   // Нажатие на день в виде «Год» открывает месяц этого дня
   const handleOpenMonth = useLastCallback((day: string) => {
     pickDay(day);
@@ -369,6 +359,11 @@ const Planner = () => {
   const handleScrimClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) handleCloseSide();
   });
+
+  // Другой вид открывается с начала: прокрутка прежнего вида на него не переносится
+  useLayoutEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [view, calendarView]);
 
   const handleUndo = useLastCallback(() => {
     undoPlanner(lang('PlannerNoticeUndone'));
@@ -392,6 +387,12 @@ const Planner = () => {
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : formParams ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
   const isSheet = side === 'settings' || (Boolean(side) && isNarrow);
+  // Карточка записи и настройки на телефоне — на весь экран: ленты модулей и «+» под ними нет
+  const isNavCovered = isShown && isNarrow && Boolean(side);
+  useEffect(() => {
+    setParvaneNavCovered(isNavCovered);
+    return () => setParvaneNavCovered(false);
+  }, [isNavCovered]);
   // Месяц — один объект на месяц выбранного дня: иначе `memo` сетки месяца не срабатывал бы никогда
   const monthKey = picked.slice(0, 7);
   const month = useMemo(() => {
@@ -405,30 +406,30 @@ const Planner = () => {
       : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
         : syncStatus === 'no-key' ? 'PlannerSyncPending'
           : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
-  // «Здоровье» — отдельный модуль ленты (spec 041): во вкладках «Плана» остаётся календарь
-  const viewTabs = [
-    { title: lang('PlannerViewCalendar') },
-  ];
   const isToday = view === 'today';
   const isCalendar = view === 'calendar';
   const isMonthView = calendarView === 'month';
   const isWeekView = calendarView === 'week';
   // Сетка недели на компьютере листается сама, а шапки дней стоят на месте; на телефоне под полосой дней
   // листается день
-  const isFlush = isCalendar && isWeekView && hasContent;
-  const calendarSegments = [
-    { value: SEGMENT_TODAY, label: lang('PlannerToday') },
-    ...PLANNER_CALENDAR_VIEWS.map((item) => ({
-      value: item,
-      // На телефоне «Неделя» показывает один день с полосой дней недели и называется «День»
-      label: lang(isNarrow && item === 'week' ? CALENDAR_VIEW_LABELS.day
-        : isNarrow && item === 'month' ? 'PlannerCalMonthShort' : CALENDAR_VIEW_LABELS[item]),
-    })),
-  ];
-  const pickedDays = useMemo(() => [picked], [picked]);
+  const isFlush = hasContent && !isNarrow && (isToday || (isCalendar && isWeekView));
+  const calendarSegments = useMemo(() => [
+    { value: SEGMENT_TODAY, label: lang('PlannerCalDay') },
+    ...PLANNER_CALENDAR_VIEWS.map((item) => ({ value: item, label: lang(CALENDAR_VIEW_LABELS[item]) })),
+  ], [lang]);
   const weekDays = useMemo(() => getWeekKeys(picked), [picked]);
-  const periodTitle = isWeekView && !isNarrow ? formatWeekRange(lang, picked)
-    : formatPeriod(lang, isWeekView ? 'month' : calendarView, picked);
+  const periodTitle = isToday
+    ? `${formatRelativeDay(lang, picked, today)}, ${formatDayLong(lang, picked).toLowerCase()}`
+    : isWeekView ? formatWeekRange(lang, picked) : formatPeriod(lang, calendarView, picked);
+  // Загрузка выбранного дня в шапке вида «День» на компьютере
+  const dayLoad = isToday && hasContent && !isNarrow ? lang('PlannerLoadOf', {
+    planned: formatSpan(getDayEntry(state, picked).minutes), budget: formatSpan(getDayBudget(state, picked)),
+  }) : undefined;
+  const isRailShown = hasContent && !isNarrow && isCalendar && (isWeekView || isMonthView);
+
+  // «Без даты» — одно окно на раздел: его открывают левая колонка и вид «День»
+  const [isUndatedOpen, openUndated, closeUndated] = useFlag();
+  const undated = useMemo(() => getUndatedTasks(state), [state]);
 
   // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
   // Полная форма — по «Подробнее» в окне ввода, по «Добавить на этот день» и по нажатию на свободное время
@@ -498,49 +499,57 @@ const Planner = () => {
     window.setTimeout(focusNewName, FORM_FOCUS_DELAY_MS);
   });
 
-  const settingsButton = (
-    <button type="button" className={styles.ib} aria-label={lang('PlannerSettings')} onClick={handleOpenSettings}>
-      <Icon name="settings" />
-    </button>
-  );
-
   function renderHeader() {
-    // «Сегодня» — вид календаря: шапка та же, переключатель вида остаётся на месте
     return (
-      <PlannerPeriodBar
-        heading={isToday ? lang('PlannerToday') : undefined}
+      <PlannerHeader
         title={periodTitle}
-        prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
-        nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
+        load={dayLoad}
         picked={picked}
         today={today}
         isNarrow={isNarrow}
         segments={calendarSegments}
         activeSegment={isToday ? SEGMENT_TODAY : calendarView}
-        segmentsLabel={lang('PlannerCalView')}
-        layers={layers}
-        trailing={(
-          <>
-            {settingsButton}
-            {!isNarrow && (
-              <button
-                type="button"
-                className={buildClassName(styles.ib, styles.ibAccent)}
-                aria-label={lang('PlannerAddEntry')}
-                onClick={handleOpenQuick}
-              >
-                <Icon name="add" />
-              </button>
-            )}
-          </>
-        )}
+        prevLabel={lang(isMonthView && isCalendar ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
+        nextLabel={lang(isMonthView && isCalendar ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
         onPrev={handlePrevPeriod}
         onNext={handleNextPeriod}
         onToday={handleToday}
         onPickDay={pickDay}
         onSwitchSegment={handleSwitchSegment}
-        onToggleLayer={handleToggleLayer}
+        onOpenQuick={handleOpenQuick}
+        onOpenSearch={openPlanSearch}
+        onOpenSettings={handleOpenSettings}
       />
+    );
+  }
+
+  // Телефон: строка периода под шапкой — месяц либо год со стрелками и «Текущая дата»
+  function renderPeriod() {
+    return (
+      <div className={pv.period}>
+        <span className={pv.periodTitle}>
+          {isMonthView ? formatMonth(lang, month) : String(month.getFullYear())}
+        </span>
+        {picked !== today && (
+          <button type="button" className={pv.today} onClick={handleToday}>{lang('PlannerJumpToday')}</button>
+        )}
+        <button
+          type="button"
+          className={pv.navButton}
+          aria-label={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevYear')}
+          onClick={handlePrevPeriod}
+        >
+          <Icon name="previous" />
+        </button>
+        <button
+          type="button"
+          className={pv.navButton}
+          aria-label={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextYear')}
+          onClick={handleNextPeriod}
+        >
+          <Icon name="next" />
+        </button>
+      </div>
     );
   }
 
@@ -573,9 +582,6 @@ const Planner = () => {
     if (isMonthView) {
       return (
         <>
-          {isNarrow && (
-            <div className={styles.layerRow}><PlannerLayerChips layers={layers} onToggle={handleToggleLayer} /></div>
-          )}
           <div data-swipe="month">
             <PlannerMonth
               state={state}
@@ -590,56 +596,39 @@ const Planner = () => {
             />
           </div>
           {isNarrow && (
-            <div className={styles.monthDay}>
-              <PlannerDayPanel
-                state={state}
-                day={picked}
-                today={today}
-                layers={layers}
-                variant="card"
-                onAdd={handleAddToDay}
-                onOpenTask={handleOpenTask}
-                onOpenEvent={handleOpenEvent}
-                onOpenSleep={handleOpenSleep}
-              />
-            </div>
+            <>
+              <p className={pv.hint}>{lang('PlannerMonthLoadHint')}</p>
+              <div className={styles.monthDay}>
+                <PlannerDayPanel
+                  state={state}
+                  day={picked}
+                  today={today}
+                  layers={layers}
+                  variant="list"
+                  onAdd={handleAddToDay}
+                  onOpenTask={handleOpenTask}
+                  onOpenEvent={handleOpenEvent}
+                  onOpenSleep={handleOpenSleep}
+                />
+              </div>
+            </>
           )}
         </>
       );
     }
     if (isNarrow) {
-      // Телефон: неделя — полоса дней и сетка выбранного дня под ней
       return (
-        <div className={styles.phoneWeek} data-planner-view="week">
-          <div className={styles.stripBar}>
-            <PlannerDayStrip state={state} weekStart={weekDays[0]} picked={picked} today={today} onPickDay={pickDay} />
-          </div>
-          <div className={buildClassName(styles.content, styles.phoneWeekDay, 'custom-scroll')} data-swipe="day">
-            <PlannerDayPanel
-              state={state}
-              day={picked}
-              today={today}
-              layers={layers}
-              variant="summary"
-              leading={<PlannerLayerChips layers={layers} onToggle={handleToggleLayer} />}
-              onOpenTask={handleOpenTask}
-              onOpenEvent={handleOpenEvent}
-              onOpenSleep={handleOpenSleep}
-            />
-            <PlannerWeek
-              state={state}
-              days={pickedDays}
-              picked={picked}
-              today={today}
-              layers={layers}
-              onPickDay={pickDay}
-              onCreateForDay={handleCreateForDay}
-              onCreateAt={handleCreateAt}
-              onOpenTask={handleOpenTask}
-              onOpenEvent={handleOpenEvent}
-              onOpenSleep={handleOpenSleep}
-            />
-          </div>
+        <div data-swipe="week">
+          <PlannerWeekList
+            state={state}
+            days={weekDays}
+            picked={picked}
+            today={today}
+            layers={layers}
+            onOpenDay={handleOpenDay}
+            onOpenTask={handleOpenTask}
+            onOpenEvent={handleOpenEvent}
+          />
         </div>
       );
     }
@@ -670,7 +659,6 @@ const Planner = () => {
         )}
         data-planner-side={side}
       >
-        {isNarrow && <span className={styles.grab} />}
         {!isSheet && <PvResizer panel="planner-side" edge="start" min={PLANNER_SIDE_MIN} max={PLANNER_SIDE_MAX} />}
         <div className={buildClassName(styles.hdr, styles.sideHdr)}>
           {side === 'task' || side === 'event' ? (
@@ -695,7 +683,12 @@ const Planner = () => {
         </div>
         <div className={buildClassName(styles.content, styles.sideContent, 'custom-scroll')}>
           {side === 'settings' ? (
-            <PlannerSettings state={ownState} userId={currentUserId} />
+            <PlannerSettings
+              state={ownState}
+              userId={currentUserId}
+              layers={layers}
+              onToggleLayer={handleToggleLayer}
+            />
           ) : side === 'form' ? (
             <PlannerTaskForm
               state={state}
@@ -748,27 +741,21 @@ const Planner = () => {
     >
       {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={styles.body}>
+        {isRailShown && (
+          <PlannerRail
+            state={state}
+            picked={picked}
+            today={today}
+            layers={layers}
+            onPickDay={pickDay}
+            onAdd={handleAddToDay}
+            onOpenTask={handleOpenTask}
+            onOpenEvent={handleOpenEvent}
+            onOpenSleep={handleOpenSleep}
+            onOpenUndated={openUndated}
+          />
+        )}
         <main className={styles.page}>
-          {/* Компьютер: экраны «Плана» — кнопки боковой панели, вкладок в шапке нет */}
-          {isNarrow && (
-            <header className={styles.mtabs}>
-              <TabList
-                className={styles.viewTabs}
-                tabs={viewTabs}
-                activeTab={TAB_CALENDAR}
-                onSwitchTab={handleSwitchTab}
-              />
-              <button
-                type="button"
-                className={styles.ib}
-                aria-label={lang('ParvanePaletteSearchPlan')}
-                data-palette-open
-                onClick={openPlanSearch}
-              >
-                <Icon name="search" />
-              </button>
-            </header>
-          )}
           {renderHeader()}
           {syncNoticeKey && (
             <div
@@ -778,51 +765,46 @@ const Planner = () => {
               {lang(syncNoticeKey)}
             </div>
           )}
+          {isNarrow && hasContent && isToday && (
+            <div className={styles.stripBar}>
+              <PlannerDayStrip
+                state={state}
+                weekStart={weekDays[0]}
+                picked={picked}
+                today={today}
+                onPickDay={pickDay}
+              />
+            </div>
+          )}
+          {isNarrow && hasContent && isCalendar && (isMonthView || calendarView === 'year') && renderPeriod()}
           <div
+            ref={contentRef}
             className={buildClassName(styles.content, isFlush && styles.contentFlush, 'custom-scroll')}
             data-swipe={isNarrow && !isCalendar ? 'day' : undefined}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
           >
             {!hasContent ? <Loading /> : isCalendar ? renderCalendar() : (
-              <>
-                <PlannerDateNav
-                  day={picked}
-                  today={today}
-                  onPrev={handlePrevPeriod}
-                  onNext={handleNextPeriod}
-                  onToday={handleToday}
-                />
-                <PlannerToday
-                  state={state}
-                  day={picked}
-                  today={today}
-                  isNarrow={isNarrow}
-                  onOpenTask={handleOpenTask}
-                  onOpenEvent={handleOpenEvent}
-                  onOpenCalendar={handleOpenCalendar}
-                  onOpenHealth={handleOpenHealth}
-                  onQuick={handleQuickText}
-                />
-              </>
+              <PlannerDay
+                state={state}
+                day={picked}
+                today={today}
+                layers={layers}
+                isNarrow={isNarrow}
+                noAside={Boolean(side) && !isSheet}
+                onPickDay={pickDay}
+                onCreateForDay={handleCreateForDay}
+                onCreateAt={handleCreateAt}
+                onOpenTask={handleOpenTask}
+                onOpenEvent={handleOpenEvent}
+                onOpenSleep={handleOpenSleep}
+                onOpenUndated={openUndated}
+                onQuick={handleQuickText}
+              />
             )}
           </div>
         </main>
         {side && !isSheet && renderSide()}
-        {hasContent && isCalendar && !isNarrow && calendarView !== 'agenda' && !(side && !isSheet) && (
-          <PlannerDayPanel
-            state={state}
-            day={picked}
-            today={today}
-            layers={layers}
-            variant="island"
-            onShiftDay={handleShiftDay}
-            onAdd={handleAddToDay}
-            onOpenTask={handleOpenTask}
-            onOpenEvent={handleOpenEvent}
-            onOpenSleep={handleOpenSleep}
-          />
-        )}
       </div>
       {side && isSheet && (
         <div
@@ -840,6 +822,15 @@ const Planner = () => {
           )}
         </div>
       )}
+      <PlannerUndated
+        isOpen={isUndatedOpen}
+        state={state}
+        day={picked}
+        today={today}
+        tasks={undated}
+        onOpenTask={handleOpenTask}
+        onClose={closeUndated}
+      />
       <PlannerQuickInput
         isOpen={isQuickOpen}
         initialText={quickText}

@@ -2,8 +2,8 @@
 // одного аккаунта: непривязанное видит «данные появятся после привязки»,
 // после привязки — весь планировщик; правки онлайн сходятся; правки без сети
 // на обоих устройствах сливаются (разные объекты сохраняются, удалённое не
-// воскресает); очередь переживает перезагрузку; данные этапа 1 переносятся
-// один раз; словарь правок ввода текстом едет с данными «Плана» (выученное на
+// воскресает); очередь переживает перезагрузку; данные одного устройства не дублируются;
+// словарь правок ввода текстом едет с данными «Плана» (выученное на
 // одном устройстве подставляется на другом, сброс действует на оба); история
 // строк ввода текстом — тоже (строка первого устройства — подсказка на втором,
 // «Забыть» действует на оба, история переживает перезагрузку); в базе
@@ -474,30 +474,26 @@ try {
   await closePlanner(sessions.bob1.page);
   console.log('OK: правка без сети ушла после перезагрузки; история ввода текстом на месте');
 
-  // ── US3: перенос данных этапа 1 ───────────────────────────────────────────
+  // ── Третий аккаунт: данные переживают перезагрузку ────────────────────────
   const carol = `psync-carol-${suffix}@local`;
   const legacyTask = `Старая-${suffix}`;
   const carolContext = await browser.newContext({ viewport: WIDE });
   sessions.carol = await preparePage(carolContext, carol, PASSWORD);
   await dismissRecoveryKeyDialog(sessions.carol.page).catch(() => undefined);
   await sessions.carol.page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, { timeout: STEP_TIMEOUT_MS });
-  const legacy = {
-    version: 1,
-    nextId: 3,
-    projects: ['', 'Дом'],
-    budget: 600,
-    tasks: [
-      { id: 1, name: legacyTask, description: '', steps: [], status: 'queue', project: 'Дом', rank: 0, day: todayKey(), start: '15:00', minutes: 30 },
-      { id: 2, name: `Вторая-${suffix}`, description: '', steps: [], status: 'queue', project: '', rank: 1 },
-    ],
-    events: [],
-  };
-  await sessions.carol.page.evaluate((state) => window.__parvaneDiagCallApi('parvaneSavePlanner', { state }), legacy);
+  // Аккаунт с данными и одним устройством: после перезагрузки задача на месте и не продублирована
+  await sessions.carol.page.evaluate(async ({ name, day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{
+        task: {
+          id: 'carol-first', name, description: '', steps: [], status: 'queue', listId: '', rank: 0, day, start: '15:00',
+          due: '', minutes: 30,
+        },
+      }],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { name: legacyTask, day: todayKey() });
   await expectTaskInDay(sessions.carol.page, legacyTask, true);
-  await sessions.carol.page.waitForFunction(async () => {
-    const r = await window.__parvaneDiagCallApi('parvaneLoadPlanner');
-    return Boolean(r?.state?.migrated);
-  }, undefined, { timeout: SYNC_TIMEOUT_MS });
   await closePlanner(sessions.carol.page);
   await reloadPage(sessions.carol.page);
   await relogin(sessions.carol.page, PASSWORD).catch(() => undefined);
@@ -511,7 +507,7 @@ try {
   await todayTasks.getByText(legacyTask).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await todayTasks.getByText(legacyTask).count(), 1, 'после перезагрузки задача не продублирована');
   await closePlanner(sessions.carol.page);
-  console.log('OK: данные этапа 1 перенесены один раз');
+  console.log('OK: данные одного устройства пережили перезагрузку без дублей');
 
   // ── US4: третье устройство стартует со снимка ─────────────────────────────
   // Порог снимка — 200 операций: bob1 и bob2 параллельно пишут по 105 правок,

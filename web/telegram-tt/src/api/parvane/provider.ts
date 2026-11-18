@@ -207,8 +207,6 @@ import {
 } from './wire';
 
 const LOGIN_HASH_PREFIX = '#parvane=';
-// Свой фон чата — в шифрованном хранилище, а не открытым блобом в Cache Storage
-const PLANNER_RECORD = 'planner';
 // Подключение контейнера планировщика запускается один раз за сессию (spec 010)
 let plannerEnsureStarted = false;
 
@@ -3566,23 +3564,6 @@ const methods = {
     return { status: 'ok' as const, blob: new Blob([bytes as BlobPart], { type: mimeType || 'image/jpeg' }) };
   },
 
-  // Планировщик (spec 009): состояние целиком одной шифрованной записью устройства.
-  // `not-ready` — провайдер ещё не знает пользователя, вызывающий повторяет
-  async parvaneLoadPlanner() {
-    if (!store.self) return { status: 'not-ready' as const };
-    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
-    if (!storage) return { status: 'not-ready' as const };
-    return { status: 'ok' as const, state: await storage.loadRecord<unknown>(PLANNER_RECORD) };
-  },
-
-  async parvaneSavePlanner({ state }: { state: unknown }) {
-    if (!store.self) return false;
-    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
-    if (!storage) return false;
-    await storage.saveRecord(PLANNER_RECORD, state);
-    return true;
-  },
-
   // Планировщик на сервере (spec 010): состояние — из движка (контейнер домена);
   // первый вызов запускает подключение контейнера и синхронизацию, итог —
   // событием `parvane-planner-changed`
@@ -3771,15 +3752,6 @@ const methods = {
 
   async parvanePlannerFlush() {
     await v2Controller.planner.flush();
-    return true;
-  },
-
-  /** Данные этапа 1 перенесены в контейнер: запись устройства — маркер (FR-008). */
-  async parvanePlannerMarkMigrated({ count }: { count: number }) {
-    if (!store.self) return false;
-    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
-    if (!storage) return false;
-    await storage.saveRecord(PLANNER_RECORD, { migrated: true, at: Date.now(), count });
     return true;
   },
 

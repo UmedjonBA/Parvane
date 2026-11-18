@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
 
+import type { PlannerLayer, PlannerLayers } from './plannerLayers';
 import type { PlannerSettings as Settings, PlannerSettingsError, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
@@ -21,6 +22,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import PlannerField from './PlannerField';
+import PlannerLayerList from './PlannerLayerList';
 import PlannerListPicker from './PlannerListPicker';
 
 import styles from './Planner.module.scss';
@@ -29,6 +31,9 @@ type OwnProps = {
   state: PlannerState;
   // Аккаунт: запись словаря правок ввода текстом на устройстве (пока «План» недоступен) — у каждого своя
   userId?: string;
+  // Слои календаря — настройка устройства
+  layers: PlannerLayers;
+  onToggleLayer: (layer: PlannerLayer) => void;
 };
 
 const ERROR_KEYS = {
@@ -41,7 +46,9 @@ const BUDGET_STEP = 30;
 // Parvane (spec 009, T014): настройки дня — бюджет и окна дня.
 // Каждое поле сохраняется само по завершении ввода; негодное значение не
 // применяется и объясняется уведомлением
-const PlannerSettings = ({ state, userId }: OwnProps) => {
+const PlannerSettings = ({
+  state, userId, layers, onToggleLayer,
+}: OwnProps) => {
   const lang = useLang();
 
   const { settings, budget } = state;
@@ -144,7 +151,10 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
 
   return (
     <div className={styles.editor}>
-      <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('ParvaneSectionPlanner')}</h3>
+      <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('PlannerLayers')}</h3>
+      <PlannerLayerList layers={layers} onToggle={onToggleLayer} />
+      <p className={styles.sheetHint}>{lang('PlannerLayersHint')}</p>
+      <h3 className={styles.groupTitle}>{lang('PlannerSettingsDay')}</h3>
       <div className={styles.fields}>
         <PlannerField
           label={lang('PlannerSettingsDayStart')}

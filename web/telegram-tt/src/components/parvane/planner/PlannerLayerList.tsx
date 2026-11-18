@@ -9,6 +9,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import styles from './Planner.module.scss';
+import pv from './PlannerPv.module.scss';
 
 type OwnProps = {
   layers: PlannerLayers;
@@ -20,14 +21,19 @@ const LAYER_LABELS = {
   food: 'PlannerHealthFood',
   work: 'PlannerLayerWork',
 } as const satisfies Record<PlannerLayer, string>;
+const LAYER_HINTS = {
+  sleep: 'PlannerLayerFromHealth',
+  food: 'PlannerLayerFromHealth',
+  work: 'PlannerLayerWorkHint',
+} as const satisfies Record<PlannerLayer, string>;
 const LAYER_KINDS = {
   sleep: styles.kindSleep,
   food: styles.kindFood,
   work: styles.kindEvent,
 } satisfies Record<PlannerLayer, string>;
 
-// Слои календаря: сон, еда, дела — каждый включается и выключается своей плашкой
-const PlannerLayerChips = ({ layers, onToggle }: OwnProps) => {
+// Слои календаря (доска `RpPlan`): сон, еда, дела — строка с точкой цвета и выключателем
+const PlannerLayerList = ({ layers, onToggle }: OwnProps) => {
   const lang = useLang();
 
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -35,22 +41,28 @@ const PlannerLayerChips = ({ layers, onToggle }: OwnProps) => {
   });
 
   return (
-    <div className={styles.chips} role="group" aria-label={lang('PlannerLayers')}>
+    <div className={pv.layers} role="group" aria-label={lang('PlannerLayers')}>
       {PLANNER_LAYERS.map((layer) => (
         <button
           key={layer}
           type="button"
-          className={buildClassName(styles.chip, LAYER_KINDS[layer], layers[layer] && styles.chipOn)}
+          className={buildClassName(pv.layer, LAYER_KINDS[layer])}
+          role="switch"
+          aria-checked={layers[layer]}
           aria-pressed={layers[layer]}
           data-layer={layer}
           onClick={handleClick}
         >
-          <span className={styles.chipDot} />
-          {lang(LAYER_LABELS[layer])}
+          <span className={pv.layerDot} />
+          <span className={pv.layerText}>
+            <span>{lang(LAYER_LABELS[layer])}</span>
+            <span className={pv.layerHint}>{lang(LAYER_HINTS[layer])}</span>
+          </span>
+          <span className={buildClassName(pv.switch, layers[layer] && pv.switchOn)} />
         </button>
       ))}
     </div>
   );
 };
 
-export default memo(PlannerLayerChips);
+export default memo(PlannerLayerList);

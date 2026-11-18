@@ -5,7 +5,7 @@ import type { PlannerDayIndexEntry, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatHours, formatSpan, formatWeekday, listColorStyle,
+  formatDay, formatHours, formatSpan, formatWeekday, getLoadLevel, listColorStyle,
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatPlainName } from './plannerLinks';
@@ -45,7 +45,6 @@ type Entry = {
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
 const PREVIEW_COUNT = 2;
-const DOT_COUNT = 4;
 const KIND_CLASSES = {
   event: styles.kindEvent,
   task: styles.kindTask,
@@ -131,9 +130,6 @@ const PlannerMonth = ({
         order: '',
       }));
       const entries = layers.work ? [...dayItems, ...dueItems] : [];
-      // Точки (телефон): по одной на цвет записи, недосып — красная
-      const dots = [...new Map(entries.map((item) => [`${item.kind}${item.color}`, item])).values()]
-        .slice(0, DOT_COUNT);
       return {
         day,
         minutes: entry.minutes,
@@ -145,7 +141,6 @@ const PlannerMonth = ({
         holiday: entry.holiday,
         allDayCount: entry.allDay.length,
         entries,
-        dots,
       };
     });
   }, [state, days, layers, lang]);
@@ -156,7 +151,7 @@ const PlannerMonth = ({
         <span key={`weekday${index}`} className={styles.monthWeekday}>{formatWeekday(lang, index)}</span>
       ))}
       {cells.map(({
-        day, minutes, unrated, conflicts, budget, sleep, isShort, holiday, allDayCount, entries, dots,
+        day, minutes, unrated, conflicts, budget, sleep, isShort, holiday, allDayCount, entries,
       }) => {
         return (
           <div
@@ -227,16 +222,11 @@ const PlannerMonth = ({
                 {`+${entries.length - PREVIEW_COUNT}`}
               </span>
             )}
-            <span className={styles.monthDots} data-all-day-marks={allDayCount || undefined}>
-              {dots.map((entry) => (
-                <span
-                  key={entry.key}
-                  className={buildClassName(styles.monthDot, KIND_CLASSES[entry.kind])}
-                  style={listColorStyle(entry.color)}
-                />
-              ))}
-              {sleep && isShort && <span className={buildClassName(styles.monthDot, styles.kindDue)} />}
-            </span>
+            <span
+              className={styles.monthLoad}
+              data-level={getLoadLevel(minutes, budget)}
+              data-all-day-marks={allDayCount || undefined}
+            />
           </div>
         );
       })}

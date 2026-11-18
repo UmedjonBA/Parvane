@@ -1,0 +1,907 @@
+// Parvane: «План» по макету spec 041 (доски `PhonePlan`, `PhPlanMore`, `XpPlan`, `RpPlan`, `DeskPlan`, `RdPlan`,
+// `XdPlan`): шапка с переключателем вида, левая колонка компьютера (месяц, загрузка, дела дня), день списком,
+// неделя списком на телефоне, загрузка дня полосой. Размеры — токены `--pv-*`, цвета — переменные схемы.
+
+// ── шапка ────────────────────────────────────────────────────────────────────
+
+.header {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: var(--pv-header-height);
+  padding: 0.75rem 1rem;
+
+  // На узком окне компьютера поле «Запись строкой» уходит на вторую строку, а не сжимается до буквы
+  @media (min-width: 926px) {
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 925px) {
+    gap: 0.25rem;
+    padding: 0 0.375rem 0 1rem;
+    border-bottom: 1px solid var(--pv-line);
+    background: var(--pv-panel);
+  }
+}
+
+.title {
+  flex: none;
+
+  margin: 0;
+
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+  white-space: nowrap;
+}
+
+.titleButton {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+
+  &:focus-visible {
+    border-radius: var(--pv-radius-xs);
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.nav {
+  position: relative;
+
+  display: flex;
+  flex: none;
+  gap: 0.125rem;
+  align-items: center;
+}
+
+.navButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font-size: 1.25rem;
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-raised);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  @media (max-width: 925px) {
+    width: var(--pv-button-height);
+    height: var(--pv-button-height);
+    border-radius: var(--pv-radius);
+  }
+}
+
+.segment {
+  background: var(--pv-panel);
+}
+
+.load {
+  flex: none;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+  white-space: nowrap;
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+// Поле «Запись строкой» в шапке компьютера: нажатие открывает окно ввода
+.quick {
+  cursor: text;
+
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.5rem;
+  align-items: center;
+
+  min-width: 14rem;
+  height: 2.5rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  color: var(--pv-muted);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: var(--pv-bg);
+
+  &:hover {
+    border-color: var(--pv-muted);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.quickText {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.quickKey {
+  flex: none;
+
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-xs);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+}
+
+// Виды календаря на телефоне: чипы в шапке, листаются вбок
+.views {
+  scrollbar-width: none;
+
+  overflow-x: auto;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.375rem;
+  align-items: center;
+  justify-content: flex-start;
+
+  min-width: 0;
+  padding: 0 0.25rem;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.view {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+
+  height: var(--pv-chip-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.viewOn {
+  border-color: var(--pv-fg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  background: var(--pv-fg);
+}
+
+// Строка периода под шапкой телефона: «Ноябрь 2026» и стрелки
+.period {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0.375rem 0.375rem 0 1rem;
+}
+
+.periodTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.today {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: var(--pv-chip-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+// Выбор месяца и года по нажатию на заголовок периода
+.picker {
+  position: absolute;
+  z-index: 5;
+  inset-inline-start: 0;
+  top: calc(100% + 0.375rem);
+
+  width: 16rem;
+  padding: 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.pickerYear {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-bottom: 0.5rem;
+
+  font-family: var(--font-family-monospace);
+  font-weight: var(--font-weight-semibold);
+}
+
+.pickerMonths {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.pickerMonth {
+  cursor: var(--custom-cursor, pointer);
+
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-raised);
+  }
+}
+
+.pickerMonthOn,
+.pickerMonthOn:hover {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  background: var(--pv-fg);
+}
+
+// ── подписи разделов, группы строк, подсказки (`.cap`, `.grp`, `.sr`, `.hint` макета) ──────────────
+
+.cap {
+  flex: none;
+
+  margin: 0;
+  padding: 0.875rem 1rem 0.375rem;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.capRow {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+
+  min-height: 2rem;
+}
+
+.capFlush {
+  padding-inline: 0;
+}
+
+.hint {
+  flex: none;
+
+  margin: 0;
+  padding: 0.5rem 1rem 0;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// ── загрузка дня ─────────────────────────────────────────────────────────────
+
+.loadBlock {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  min-width: 0;
+}
+
+.loadHead {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.loadTitle {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loadTitleSmall {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.loadValue {
+  flex: none;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.loadOver {
+  color: var(--pv-red);
+}
+
+.loadBar {
+  overflow: hidden;
+  display: block;
+
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-line2);
+}
+
+.loadFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--pv-aqua);
+}
+
+.loadFillOver {
+  background: var(--pv-red);
+}
+
+.loadSub {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// ── левая колонка компьютера ─────────────────────────────────────────────────
+
+.rail {
+  overflow: hidden auto;
+  display: flex;
+  flex: 0 0 15.625rem;
+  flex-direction: column;
+  gap: 0.875rem;
+
+  width: 15.625rem;
+  min-height: 0;
+  padding: 0.875rem;
+  border-inline-end: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  @media (max-width: 925px) {
+    display: none;
+  }
+}
+
+.miniHead {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.375rem;
+}
+
+.miniTitle {
+  flex: 1 1 auto;
+  font-weight: var(--font-weight-semibold);
+}
+
+.miniWeek {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.miniGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.125rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  text-align: center;
+}
+
+.miniDay {
+  cursor: var(--custom-cursor, pointer);
+
+  height: 1.625rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font: inherit;
+  line-height: 1.625rem;
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-raised);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.miniDayOutside {
+  color: var(--pv-faint);
+}
+
+.miniDayWeek {
+  background: var(--pv-raised);
+}
+
+.miniDayToday {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+.miniDayPicked,
+.miniDayPicked:hover {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+  background: var(--pv-fg);
+}
+
+.railDay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.railFoot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  margin-top: auto;
+}
+
+.wideButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+// ── день: список на телефоне, сетка с колонкой справа на компьютере ───────────
+
+.dayRoot {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  min-height: 0;
+}
+
+.dayList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.dayCard {
+  overflow: hidden;
+  flex: none;
+
+  min-width: 0;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.dayCardPad {
+  padding: 0.25rem 0.75rem;
+}
+
+.dayEmpty {
+  margin: 0;
+  padding: 0.875rem 0.75rem;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.dayDesk {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dayGrid {
+  overflow: hidden auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 0.75rem 0.75rem 0;
+}
+
+.dayAside {
+  overflow: hidden auto;
+  display: flex;
+  flex: 0 0 17.5rem;
+  flex-direction: column;
+  gap: 0.625rem;
+
+  width: 17.5rem;
+  min-height: 0;
+  padding: 0.75rem 0.875rem;
+  border-inline-start: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.asideHint {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// ── неделя списком (телефон) ─────────────────────────────────────────────────
+
+.weekList {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.weekRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: stretch;
+
+  min-height: 3.5rem;
+  padding: 0.5rem 1rem 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.weekRowPicked {
+  background: var(--pv-panel);
+}
+
+.weekDate {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+
+  width: 2.25rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font: inherit;
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.weekDateName {
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+}
+
+.weekDateNumber {
+  font-family: var(--font-family-monospace);
+  font-size: 1.0625rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.weekDateToday {
+  color: var(--pv-at);
+}
+
+.weekItems {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.25rem;
+  justify-content: center;
+
+  min-width: 0;
+}
+
+.weekItem {
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-blue)));
+
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  min-width: 0;
+  min-height: 1.75rem;
+  padding: 0 0 0 0.5rem;
+  border: 0;
+  border-inline-start: 0.1875rem solid var(--planner-color);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.weekItemDone {
+  color: var(--pv-muted);
+  text-decoration: line-through;
+}
+
+.weekItemTime {
+  flex: none;
+
+  width: 2.75rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.weekItemName {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weekFree {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.weekBar {
+  margin-top: 0.25rem;
+}
+
+// ── год: клетки загрузки ─────────────────────────────────────────────────────
+
+.legend {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.legendCell {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 0.1875rem;
+  background: var(--pv-raised);
+}
+
+.legendCell1 {
+  background: var(--pv-line2);
+}
+
+.legendCell2 {
+  background: var(--pv-muted);
+}
+
+.legendCell3 {
+  background: var(--pv-aqua);
+}
+
+// ── слои календаря в настройках (доска `RpPlan`) ─────────────────────────────
+
+.layers {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.layer {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 1rem;
+  border: 0;
+  border-top: 1px solid var(--pv-line);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:first-child {
+    border-top: 0;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: inset var(--pv-focus-ring);
+  }
+}
+
+.layerDot {
+  flex: none;
+
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+
+  background: var(--planner-kind);
+}
+
+.layerText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.layerHint {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.switch {
+  position: relative;
+
+  flex: none;
+
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: 0.8125rem;
+
+  background: var(--pv-line2);
+
+  &::after {
+    content: "";
+
+    position: absolute;
+    top: 0.1875rem;
+    left: 0.1875rem;
+
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+
+    background: var(--pv-panel);
+  }
+}
+
+.switchOn {
+  background: var(--pv-accent);
+
+  &::after {
+    left: 1.3125rem;
+  }
+}

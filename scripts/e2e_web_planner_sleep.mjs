@@ -75,41 +75,39 @@ try {
     yesterday, { timeout: STEP_TIMEOUT_MS });
   console.log('OK: два сна за день складываются (9:00)');
 
-  // Телефон: недосып сегодня — красная плашка сна в одной строке со слоями «Сон / Еда / Дела» и сводкой плана,
-  // отдельной плашки-предупреждения нет; нажатие на плашку сна показывает подсказку о сниженном бюджете дня
+  // Телефон: недосып сегодня — красная метка сна под полосой загрузки дня, отдельной плашки-предупреждения
+  // нет; нажатие на метку показывает подсказку о сниженном бюджете дня
   await enterQuick('спал с 3:00 до 6:00');
   await page.setViewportSize({ width: 360, height: 800 });
-  await openPlannerScreen(page, 'calendar');
-  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Day', exact: true }).click();
+  await openPlannerScreen(page, 'today');
   const today = dayKey(0);
-  const summary = planner.locator(`[data-planner-view="week"] [data-day-summary="${today}"]`);
-  const shortTag = summary.locator(`[data-sleep-short="${today}"]`);
+  const dayView = planner.locator(`[data-planner-today="${today}"]`);
+  const shortTag = dayView.locator(`[data-day-summary="${today}"] [data-sleep-short="${today}"]`);
   await shortTag.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.match(await shortTag.innerText(), /3:00/, 'красная плашка сна — 3:00');
+  assert.match(await shortTag.innerText(), /3:00/, 'красная метка сна — 3:00');
   assert.equal(await planner.getByText(/budget reduced/).count(), 0, 'предупреждения плашкой нет');
-  const line = await summary.evaluate((node) => {
-    const center = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.top + r.height / 2); };
-    const chip = node.querySelector('[data-layer="sleep"]');
-    const sleepTag = node.querySelector('[data-sleep-short]');
-    const row = sleepTag.parentElement;
+  const line = await dayView.evaluate((node) => {
+    const row = node.querySelector('[data-day-summary]');
     return {
-      chip: chip && center(chip), sleep: center(sleepTag), sameRow: Boolean(chip) && chip.parentElement.parentElement === row,
       pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
       rowOverflow: row.scrollWidth - row.clientWidth,
-      chipLeft: chip && Math.round(chip.getBoundingClientRect().left - row.getBoundingClientRect().left),
     };
   });
-  assert.ok(line.sameRow && Math.abs(line.chip - line.sleep) <= 2 && line.pageOverflow <= 0
-    && line.rowOverflow <= 0 && line.chipLeft >= 0,
-    `слои и сводка — одной строкой: ${JSON.stringify(line)}`);
+  assert.ok(line.pageOverflow <= 0 && line.rowOverflow <= 0, `метки дня помещаются в экран: ${JSON.stringify(line)}`);
   await shortTag.click();
-  const hint = summary.locator('[data-sleep-hint]');
+  const hint = dayView.locator('[data-sleep-hint]');
   await hint.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await hint.innerText(), /3:00.*budget reduced/, 'подсказка о сниженном бюджете');
   if (process.env.PARVANE_SLEEP_SHOT) await page.screenshot({ path: process.env.PARVANE_SLEEP_SHOT });
-  await summary.locator('[data-day-plan]').click();
+  await dayView.locator('[data-day-plan]').click();
   await hint.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: телефон — недосып красной плашкой в строке слоёв, подсказка по нажатию');
+  // Слой «Сон» выключается в настройках «Плана»: метка пропадает
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await planner.locator('[data-planner-side="settings"] [data-layer="sleep"]').click();
+  await shortTag.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await planner.locator('[data-planner-side="settings"] [data-layer="sleep"]').click();
+  await shortTag.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — недосып красной меткой дня, подсказка по нажатию, слой «Сон» в настройках');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_sleep: OK');
 } finally {

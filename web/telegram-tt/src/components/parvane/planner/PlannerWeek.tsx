@@ -13,7 +13,7 @@ import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
 import {
   addDays, fromDayKey, getDayRange, getEventColor, getListColor, getNutrientTotal, instanceKey, layoutTimed,
-  MINUTES_IN_DAY, toMinutes, toTime,
+  MINUTES_IN_DAY, toMinutes,
 } from './plannerModel';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
@@ -48,8 +48,8 @@ const HOURS_IN_DAY = 24;
 const PERCENT = 100;
 const MINUTE_MS = 60000;
 // Высота часа в сетке, rem: неделя и сетка одного дня на телефоне
-const HOUR_REM = 3;
-const HOUR_REM_SINGLE = 3.5;
+const HOUR_REM = 2.75;
+const HOUR_REM_SINGLE = 3;
 const MIN_BLOCK_REM = 1.5;
 // Новое дело из сетки начинается с получаса и длится час
 const CREATE_STEP = 30;
@@ -342,7 +342,7 @@ const PlannerWeek = ({
           <div className={styles.weekHours}>
             {hours.map((hour, index) => (
               <span key={hour} className={styles.weekHour} style={`top: ${index * hourRem}rem`}>
-                {toTime(hour * MINUTES_IN_HOUR)}
+                {String(hour).padStart(2, '0')}
               </span>
             ))}
           </div>
@@ -412,6 +412,7 @@ const PlannerWeek = ({
                     )}
                     style={color ? `${position}; ${color}` : position}
                     data-block={itemKey}
+                    data-task-id={item.task?.id}
                     data-lane={lane}
                   >
                     <button
