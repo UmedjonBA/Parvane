@@ -2326,7 +2326,6 @@ export interface LangPair {
   'ParvaneHealthBlockFood': undefined;
   'ParvaneHealthBlockWater': undefined;
   'ParvaneHealthBlockWorkouts': undefined;
-  'ParvaneProfileModulesHint': undefined;
   'MusicOffline': undefined;
   'MusicOfflineSave': undefined;
   'MusicOfflineNoNetwork': undefined;
@@ -2700,14 +2699,43 @@ export interface LangPair {
   'ParvaneCloudLinkStateForever': undefined;
   'ParvaneCloudLinkStateExpired': undefined;
   'ParvaneCloudLinks': undefined;
-  'ParvaneCloudLinksNone': undefined;
   'ParvaneCloudLinksEmpty': undefined;
   'ParvaneCloudLinksEmptyHint': undefined;
   'ParvaneCloudView': undefined;
   'ParvaneCloudToTrash': undefined;
-  'ParvaneCloudSharedNone': undefined;
   'ParvaneCloudTrashNote': undefined;
   'ParvaneCloudTrashExpired': undefined;
+  'ParvaneCloudTabOwned': undefined;
+  'ParvaneCloudUsed': undefined;
+  'ParvaneCloudEncryptedNote': undefined;
+  'ParvaneCloudLinkShort': undefined;
+  'ParvaneCloudLinkCopyLink': undefined;
+  'ParvaneCloudLinkManage': undefined;
+  'ParvaneCloudTrashKeeps': undefined;
+  'ParvaneCloudShareAtOnce': undefined;
+  'ParvaneCloudShareAtOnceHint': undefined;
+  'ParvaneCloudTransfers': undefined;
+  'ParvaneCloudDismiss': undefined;
+  'ParvaneCloudYou': undefined;
+  'ParvaneCloudFolderOwner': undefined;
+  'ParvaneCloudToTrashShort': undefined;
+  'ParvaneCloudPreviewKeys': undefined;
+  'ParvaneCloudInviteNoSpace': undefined;
+  'ParvaneCloudStateNotLinked': undefined;
+  'ParvaneCloudStateOffline': undefined;
+  'ParvaneCloudStateNoKey': undefined;
+  'ParvaneCloudEmptyOwned': undefined;
+  'ParvaneCloudAccessLink': undefined;
+  'ParvaneCloudPath': undefined;
+  'ParvaneCloudOwnedNote': undefined;
+  'ParvaneCloudSharedNote': undefined;
+  'ParvaneCloudColumnDeleted': undefined;
+  'ParvaneCloudColumnState': undefined;
+  'ParvaneCloudColumnAccess': undefined;
+  'ParvaneCloudFreeUp': undefined;
+  'ParvaneCloudDropHint': undefined;
+  'ParvaneCloudLinksNote': undefined;
+  'ParvaneCloudSharedHint': undefined;
   'PlannerAdd': undefined;
   'PlannerAddEntry': undefined;
   'PlannerAddTaskForDay': undefined;
@@ -2938,22 +2966,39 @@ export interface LangPair {
   'PlannerDetails': undefined;
   'PlannerMarkDone': undefined;
   'ParvaneColorScheme': undefined;
-  'ParvaneColorSchemeHint': undefined;
   'ParvaneTabBarPlanEntry': undefined;
   'ParvaneAppearance': undefined;
   'ParvaneThemeSystem': undefined;
   'ParvaneThemeLight': undefined;
   'ParvaneThemeDark': undefined;
-  'ParvaneProfileMessenger': undefined;
-  'ParvaneProfileGeneralHint': undefined;
-  'ParvaneProfileDataHint': undefined;
-  'ParvaneProfilePrivacyHint': undefined;
-  'ParvaneProfileDevicesHint': undefined;
-  'ParvaneProfilePlanHint': undefined;
-  'ParvaneProfileHealthGoals': undefined;
-  'ParvaneProfileHealthHint': undefined;
-  'ParvaneProfileVault': undefined;
-  'ParvaneProfileVaultHint': undefined;
+  'ParvaneProfileOverview': undefined;
+  'ParvaneProfileGroupApp': undefined;
+  'ParvaneProfileGroupAccount': undefined;
+  'ParvaneProfileGroupData': undefined;
+  'ParvaneProfileDevices': undefined;
+  'ParvaneProfileKeys': undefined;
+  'ParvaneProfileMessengerSettings': undefined;
+  'ParvaneProfileAbout': undefined;
+  'ParvaneProfileEdit': undefined;
+  'ParvaneProfileSavedHint': undefined;
+  'ParvaneProfileContactsHint': undefined;
+  'ParvaneProfileArchiveHint': undefined;
+  'ParvaneProfileThisDevice': undefined;
+  'ParvaneThemeAuto': undefined;
+  'ParvaneAppearanceMode': undefined;
+  'ParvaneAppearanceTextSize': undefined;
+  'ParvaneAppearanceSmaller': undefined;
+  'ParvaneAppearanceLarger': undefined;
+  'ParvaneAppearanceTextAndChats': undefined;
+  'ParvaneAppearanceChatBackground': undefined;
+  'ParvaneAppearanceAnimationsOn': undefined;
+  'ParvaneAppearanceAnimationsOff': undefined;
+  'ParvaneAppearanceFontHint': undefined;
+  'ParvaneKeysBackupHint': undefined;
+  'ParvaneKeysBackupSave': undefined;
+  'ParvaneKeysBackupSaveHint': undefined;
+  'ParvaneKeysBackupRestore': undefined;
+  'ParvaneAboutServer': undefined;
   'ParvaneCompose': undefined;
   'PlannerHealth': undefined;
   'PlannerHealthSleep': undefined;
@@ -3187,13 +3232,11 @@ export interface LangPair {
   'KnowledgeCanvasImagesThumb': undefined;
   'KnowledgeCanvasImagesHint': undefined;
   'KnowledgeFilesVault': undefined;
-  'KnowledgeFilesUploadFile': undefined;
   'KnowledgeFilesShareOpen': undefined;
   'KnowledgeFilesSharedAlone': undefined;
   'KnowledgeFilesOnlyYou': undefined;
   'KnowledgeFilesCanEdit': undefined;
   'KnowledgeFilesViewOnly': undefined;
-  'KnowledgeFilesEncrypted': undefined;
   'KnowledgeFilesHere': undefined;
   'KnowledgeFilesPrevious': undefined;
   'KnowledgeFilesNext': undefined;
@@ -5225,10 +5268,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudSelected': {
     'count': V;
   };
-  'ParvaneCloudUsage': {
-    'used': V;
-    'total': V;
-  };
   'ParvaneCloudUsageTrash': {
     'size': V;
   };
@@ -5247,9 +5286,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudInviteText': {
     'name': V;
     'role': V;
-  };
-  'ParvaneCloudSharedBy': {
-    'name': V;
   };
   'ParvaneCloudLinkTitle': {
     'name': V;
@@ -5280,11 +5316,33 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
     'folder': V;
   };
-  'ParvaneCloudSharedCount': {
-    'count': V;
-  };
   'ParvaneCloudTrashCount': {
     'count': V;
+  };
+  'ParvaneCloudUsedOf': {
+    'used': V;
+    'total': V;
+  };
+  'ParvaneCloudMoveInto': {
+    'action': V;
+    'name': V;
+  };
+  'ParvaneCloudMembers': {
+    'count': V;
+  };
+  'ParvaneCloudPreviewPosition': {
+    'index': V;
+    'count': V;
+  };
+  'ParvaneCloudAccessLinkUntil': {
+    'date': V;
+  };
+  'ParvaneCloudLinksRemoveDead': {
+    'count': V;
+  };
+  'ParvaneCloudAlmostFull': {
+    'used': V;
+    'total': V;
   };
   'PlannerAriaDay': {
     'date': V;
@@ -5531,6 +5589,23 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerUndatedAssign': {
     'name': V;
     'date': V;
+  };
+  'ParvaneProfileBio': {
+    'bio': V;
+  };
+  'ParvaneProfileModulesCount': {
+    'count': V;
+    'total': V;
+  };
+  'ParvaneProfileDevicesCount': {
+    'count': V;
+  };
+  'ParvaneProfileVersion': {
+    'name': V;
+    'version': V;
+  };
+  'ParvaneAboutVersion': {
+    'version': V;
   };
   'PlannerHealthKcal': {
     'value': V;

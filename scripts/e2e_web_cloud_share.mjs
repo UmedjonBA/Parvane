@@ -116,7 +116,9 @@ try {
   await openPrivateChatStrict(b, alice);
   await findMessageContainer(b, `Invitation to the folder “${FOLDER}” (reader)`).waitFor({ state: 'visible', timeout: SYNC });
   await bc.open();
-  // Приглашение — строкой вверху корня, ответ прямо в ней
+  // Приглашение — карточкой в «Доступных мне», ответ прямо в ней; в колонке мест — счётчик
+  await bc.cloud.locator('[data-virtual="shared"][data-count="1"]').waitFor({ state: 'visible', timeout: SYNC });
+  await bc.openShared();
   const inviteRow = bc.folderRow(FOLDER);
   await inviteRow.waitFor({ state: 'visible', timeout: SYNC });
   assert.equal(await inviteRow.getAttribute('data-container-kind'), 'invite', 'до принятия — приглашение');
@@ -126,16 +128,14 @@ try {
     await bc.cloud.locator('[role="list"] > [role="listitem"]').first().getAttribute('data-container-kind'), 'invite',
     'приглашение стоит первой строкой',
   );
-  assert.equal(await bc.virtual('shared').getAttribute('data-count'), '0', 'до принятия в «Доступных мне» пусто');
   await inviteRow.getByRole('button', { name: 'Accept', exact: true }).click();
   await bc.item('план.txt').waitFor({ state: 'visible', timeout: SYNC });
-  assert.deepEqual(await bc.crumbs(), ['Cloud', 'Shared with me', FOLDER], 'принятая папка лежит в «Доступных мне»');
-  // «Доступные мне» — строка-папка в конце корня
+  assert.deepEqual(await bc.crumbs(), ['Shared with me', FOLDER], 'принятая папка лежит в «Доступных мне»');
   await bc.root();
-  assert.equal(await bc.folderRow(FOLDER).count(), 0, 'приглашения в корне больше нет');
-  await bc.virtual('shared').getByText('Folders: 1').waitFor({ state: 'visible', timeout: STEP });
+  assert.equal(await bc.folderRow(FOLDER).count(), 0, 'чужой папки в диске нет');
+  assert.equal(await bc.virtual('shared').getAttribute('data-count'), '1');
   await bc.openShared();
-  assert.deepEqual(await bc.crumbs(), ['Cloud', 'Shared with me']);
+  assert.deepEqual(await bc.crumbs(), ['Shared with me']);
   assert.equal(await bc.folderRow(FOLDER).getAttribute('data-container-kind'), 'shared', 'после принятия — чужая папка');
   assert.equal(await bc.hasFolderMenuAction(FOLDER, 'Leave folder'), true, '«Покинуть папку» — в меню строки');
   await bc.folderRow(FOLDER).click();
@@ -197,6 +197,7 @@ try {
   await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
   await second.locator(`[data-member="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
   await bc.root();
+  await bc.openShared();
   const photoInvite = bc.folderRow('Фото');
   await photoInvite.waitFor({ state: 'visible', timeout: SYNC });
   await photoInvite.getByRole('button', { name: 'Accept', exact: true }).click();
@@ -254,6 +255,7 @@ try {
   await ac.folderRow(ARCHIVE).click();
   assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл папки цел у владельца');
   await bc.root();
+  await bc.openShared();
   const archiveInvite = bc.folderRow(ARCHIVE);
   await archiveInvite.waitFor({ state: 'visible', timeout: SYNC });
   await archiveInvite.getByRole('button', { name: 'Accept', exact: true }).click();
@@ -264,7 +266,7 @@ try {
   // Поиск идёт по всем папкам: участник находит файл чужой папки, владелец — своей совместной
   const bobSearch = bc.cloud.getByRole('searchbox');
   await bobSearch.fill('глубоко');
-  await bc.item('глубоко.txt').getByText(`Cloud / Shared with me / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
+  await bc.item('глубоко.txt').getByText(`Shared with me / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
   await bobSearch.fill('');
   await bc.item('отчёт.txt').waitFor({ state: 'visible', timeout: STEP });
   console.log('OK: обычная папка стала совместной вместе с вложенным, участник читает файлы');
@@ -274,8 +276,8 @@ try {
   await ac.upload('личный.txt', 'с личного диска');
   const aliceSearch = ac.cloud.getByRole('searchbox');
   await aliceSearch.fill('.txt');
-  await ac.item('глубоко.txt').getByText(`Cloud / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
-  await ac.item('личный.txt').getByText('Cloud', { exact: true }).waitFor({ state: 'visible' });
+  await ac.item('глубоко.txt').getByText(`My drive / ${ARCHIVE} / Вложенная`).waitFor({ state: 'visible', timeout: STEP });
+  await ac.item('личный.txt').getByText('My drive', { exact: true }).waitFor({ state: 'visible' });
   const found = await ac.names();
   for (const name of ['глубоко.txt', 'личный.txt', 'отчёт.txt', 'план.txt']) {
     assert.ok(found.includes(name), `поиск по всем папкам должен найти ${name}: ${found.join(', ')}`);
@@ -287,7 +289,7 @@ try {
   assert.equal((await bc.download('личный.txt')).toString(), 'с личного диска', 'участник читает перенесённый файл');
   await ac.folderRow(ARCHIVE).click();
   await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
-  await moveTo('отчёт.txt', 'Cloud');
+  await moveTo('отчёт.txt', 'My drive');
   await bc.item('отчёт.txt').waitFor({ state: 'detached', timeout: SYNC });
   await toMyFiles();
   assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл вернулся на личный диск целым');

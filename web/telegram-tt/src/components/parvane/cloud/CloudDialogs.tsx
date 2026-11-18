@@ -15,7 +15,7 @@ import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
 
 import kit from '../notes/PvKit.module.scss';
-import styles from './Cloud.module.scss';
+import styles from './CloudSheets.module.scss';
 
 type NameProps = {
   isOpen: boolean;
@@ -23,7 +23,11 @@ type NameProps = {
   label: string;
   confirmLabel: string;
   initialName?: string;
-  onSubmit: (name: string) => void;
+  // Где появится папка: «в «Мой диск / Сервер»»
+  note?: string;
+  // Новая папка в корне диска: выключатель «сразу открыть доступ»
+  canShare?: boolean;
+  onSubmit: (name: string, isShared?: boolean) => void;
   onClose: NoneToVoidFunction;
 };
 
@@ -31,15 +35,16 @@ const NAME_SORT = { key: 'name', isDescending: false } as const;
 const NO_IDS: string[] = [];
 const FOCUS_DELAY_MS = 150;
 // Отступ строки дерева: поле строки и шаг на уровень вложенности
-const TREE_PAD_REM = 0.625;
-const TREE_STEP_REM = 1.125;
+const TREE_PAD_REM = 1;
+const TREE_STEP_REM = 1.25;
 
 // Название новой папки либо новое имя файла/папки: проверка — как в движке
 const CloudNameDialogBase = ({
-  isOpen, title, label, confirmLabel, initialName, onSubmit, onClose,
+  isOpen, title, label, confirmLabel, initialName, note, canShare, onSubmit, onClose,
 }: NameProps) => {
   const lang = useLang();
   const [name, setName] = useState('');
+  const [isShared, setIsShared] = useState(false);
   const [hasTried, setHasTried] = useState(false);
   const inputRef = useRef<HTMLInputElement>();
 
@@ -50,6 +55,7 @@ const CloudNameDialogBase = ({
     if (isOpen && !wasOpenRef.current) {
       setName(initialName || '');
       setHasTried(false);
+      setIsShared(false);
     }
     wasOpenRef.current = isOpen;
   }, [isOpen, initialName]);
@@ -77,27 +83,51 @@ const CloudNameDialogBase = ({
     setName(value);
     setHasTried(true);
     if (validateName(value)) return;
-    onSubmit(value);
+    onSubmit(value, canShare && isShared);
   });
 
+  const handleToggleShared = useLastCallback(() => setIsShared(!isShared));
+
   return (
-    <PvSheet isOpen={isOpen} title={title} onClose={onClose} onEnter={handleSubmit}>
-      <form className={styles.nameForm} onSubmit={handleSubmit}>
-        <input
-          ref={inputRef}
-          id="parvane-cloud-name"
-          className={kit.input}
-          value={name}
-          placeholder={label}
-          aria-label={label}
-          aria-invalid={Boolean(errorText)}
-          autoComplete="off"
-          enterKeyHint="done"
-          onChange={handleChange}
-        />
-        <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)}>{confirmLabel}</button>
+    <PvSheet isOpen={isOpen} title={title} className={styles.narrow} onClose={onClose} onEnter={handleSubmit}>
+      <form className={styles.form} onSubmit={handleSubmit}>
+        {note && <div className={styles.note} dir="auto">{note}</div>}
+        <label className={styles.field}>
+          {label}
+          <input
+            ref={inputRef}
+            id="parvane-cloud-name"
+            className={kit.input}
+            value={name}
+            aria-label={label}
+            aria-invalid={Boolean(errorText)}
+            autoComplete="off"
+            enterKeyHint="done"
+            onChange={handleChange}
+          />
+        </label>
+        {errorText && <div className={kit.fieldError} role="alert">{errorText}</div>}
+        {canShare && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={isShared}
+            className={styles.switchRow}
+            data-share-switch
+            onClick={handleToggleShared}
+          >
+            <span className={styles.switchText}>
+              {lang('ParvaneCloudShareAtOnce')}
+              <span className={styles.note}>{` ${lang('ParvaneCloudShareAtOnceHint')}`}</span>
+            </span>
+            <span className={buildClassName(styles.switch, isShared && styles.switchOn)} />
+          </button>
+        )}
+        <div className={styles.buttons}>
+          <button type="button" className={kit.btn} onClick={onClose}>{lang('Cancel')}</button>
+          <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)}>{confirmLabel}</button>
+        </div>
       </form>
-      {errorText && <div className={kit.fieldError} role="alert">{errorText}</div>}
     </PvSheet>
   );
 };
@@ -126,7 +156,7 @@ type TreeRow = {
   name: string;
   depth: number;
   icon: PvIconName;
-  color: string;
+  isShared?: boolean;
   // Здесь переносимое лежит сейчас
   isCurrent: boolean;
   isDisabled: boolean;
@@ -170,8 +200,8 @@ const CloudFolderDialogBase = ({
         place: source.id,
         name: source.name,
         depth: 0,
-        icon: source.isShared ? 'users' : 'cloud',
-        color: source.isShared ? 'var(--pv-purple)' : 'var(--pv-fg)',
+        icon: 'folder',
+        isShared: source.isShared,
         isCurrent: isHome && current === undefined,
         isDisabled: isHome && current === undefined,
       });
@@ -186,7 +216,6 @@ const CloudFolderDialogBase = ({
             name: node.name,
             depth,
             icon: 'folder',
-            color: 'var(--pv-blue)',
             isCurrent,
             isDisabled: isMoved || isCurrent || !canMoveInto(source.nodes, movedIds, node.id),
           });
@@ -209,15 +238,22 @@ const CloudFolderDialogBase = ({
     setPicked(e.currentTarget.dataset.key);
   });
 
+  const actionLabel = confirmLabel || lang('ParvaneCloudMoveHere');
+
   return (
-    <PvSheet isOpen={isOpen} title={title || lang('ParvaneCloudMoveTitle')} onClose={onClose}>
+    <PvSheet
+      isOpen={isOpen}
+      title={title || lang('ParvaneCloudMoveTitle')}
+      className={buildClassName(styles.narrow, styles.full)}
+      onClose={onClose}
+    >
       <div className={buildClassName(styles.tree, 'custom-scroll')} role="list">
         {rows.map((row) => (
           <button
             key={row.key}
             type="button"
             role="listitem"
-            className={buildClassName(kit.row, row.key === picked && kit.rowSel)}
+            className={buildClassName(styles.treeRow, row.key === picked && styles.treeRowOn)}
             style={`padding-inline-start: ${TREE_PAD_REM + row.depth * TREE_STEP_REM}rem`}
             disabled={row.isDisabled}
             aria-current={row.key === picked ? 'true' : undefined}
@@ -225,28 +261,26 @@ const CloudFolderDialogBase = ({
             data-place-id={row.folder ? undefined : row.place}
             onClick={handlePick}
           >
-            <span className={buildClassName(kit.ava, kit.avaS)} style={`--c: ${row.color}`}>
-              <PvIcon name={row.icon} isSmall />
-            </span>
-            <span className={buildClassName(kit.rowText, kit.ttl)} dir="auto">{row.name}</span>
-            {row.isCurrent && (
-              <span className={buildClassName(kit.muted, kit.small)}>{lang('KnowledgeFilesHere')}</span>
-            )}
-            {row.key === picked && !row.isDisabled && <PvIcon name="check" isSmall className={styles.treeCheck} />}
+            <PvIcon
+              name={row.icon}
+              isSmall
+              className={buildClassName(styles.treeIcon, row.isShared && styles.treeIconShared)}
+            />
+            <span className={styles.treeName} dir="auto">{row.name}</span>
+            {row.isCurrent && <span className={styles.treeHere}>{lang('KnowledgeFilesHere')}</span>}
           </button>
         ))}
       </div>
-      <div className={kit.sheetButtons}>
+      <div className={buildClassName(styles.buttons, styles.buttonsColumn)}>
+        <button type="button" className={kit.btn} onClick={onClose}>{lang('Cancel')}</button>
         <button
           type="button"
           className={buildClassName(kit.btn, kit.btnAcc)}
           disabled={!target}
+          aria-label={actionLabel}
           onClick={handleSubmit}
         >
-          {confirmLabel || lang('ParvaneCloudMoveHere')}
-        </button>
-        <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={onClose}>
-          {lang('Cancel')}
+          {target ? lang('ParvaneCloudMoveInto', { action: actionLabel, name: target.name }) : actionLabel}
         </button>
       </div>
     </PvSheet>

@@ -9,9 +9,6 @@ import { cancelCloudTransfer, getCloudTransfers, retryCloudUpload } from './clou
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 
-import PvIcon from '../notes/PvIcon';
-
-import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
 
 export const CLOUD_ERROR_KEYS = {
@@ -44,52 +41,49 @@ const CloudTransfers = () => {
 
   return (
     <>
+      <h3 className={styles.caption}>{lang('ParvaneCloudTransfers')}</h3>
       {transfers.map((t) => {
         const percent = t.total ? Math.min(PERCENT, Math.round((t.done / t.total) * PERCENT)) : 0;
+        const isFailed = t.state === 'failed';
         const stateText = t.state === 'done' ? lang('Done')
-          : t.state === 'failed' ? lang(CLOUD_ERROR_KEYS[t.error || 'rejected'])
+          : isFailed ? lang(CLOUD_ERROR_KEYS[t.error || 'rejected'])
             : lang(PROGRESS_KEYS[t.kind], { percent, size: formatFileSize(lang, t.total) });
         return (
           <div
             key={t.id}
-            className={buildClassName(
-              styles.plainRow, styles.transfer, t.state === 'failed' && styles.transferFailed,
-            )}
+            className={buildClassName(styles.item, styles.itemPlain, styles.transfer)}
             role="listitem"
             data-transfer-kind={t.kind}
             data-transfer-state={t.state}
             data-name={t.name}
           >
-            <span className={kit.ava} style="--c: var(--pv-blue)">
-              <PvIcon name={t.kind === 'upload' ? 'upload' : t.kind === 'move' ? 'move' : 'download'} isSmall />
+            <span className={buildClassName(styles.dot, isFailed ? styles.dotBad : styles.dotGood)} />
+            <span className={styles.itemText}>
+              <span className={styles.itemTitle} dir="auto">{t.name}</span>
+              <span className={buildClassName(styles.itemSub, isFailed && styles.itemBad)}>{stateText}</span>
             </span>
-            <span className={kit.rowText}>
-              <span className={kit.ttl} dir="auto">{t.name}</span>
-              {t.state === 'active' && (
-                <span className={styles.transferBar}>
-                  <span className={styles.transferBarFill} style={`width: ${percent}%`} />
-                </span>
-              )}
-              <span className={buildClassName(kit.sub, styles.transferState)}>{stateText}</span>
-            </span>
-            {t.state === 'failed' && t.kind === 'upload' && (
-              <button
-                type="button"
-                className={buildClassName(kit.btn, kit.btnGhost)}
-                onClick={() => retryCloudUpload(t.id)}
-              >
+            {t.state === 'active' && <span className={styles.transferFacts}>{`${percent}%`}</span>}
+            {isFailed && t.kind === 'upload' && (
+              <button type="button" className={styles.textButton} onClick={() => retryCloudUpload(t.id)}>
                 {lang('ParvaneCloudRetry')}
               </button>
             )}
             {t.state !== 'done' && (
-              <button
-                type="button"
-                className={kit.ib}
-                aria-label={lang('Cancel')}
-                onClick={() => cancelCloudTransfer(t)}
-              >
-                <PvIcon name="x" isSmall />
+              <button type="button" className={styles.textButton} onClick={() => cancelCloudTransfer(t)}>
+                {lang(isFailed ? 'ParvaneCloudDismiss' : 'Cancel')}
               </button>
+            )}
+            {t.state === 'active' && (
+              <span
+                className={styles.transferBar}
+                role="progressbar"
+                aria-valuenow={percent}
+                aria-valuemin={0}
+                aria-valuemax={PERCENT}
+                aria-label={t.name}
+              >
+                <span className={styles.transferBarFill} style={`width: ${percent}%`} />
+              </span>
             )}
           </div>
         );

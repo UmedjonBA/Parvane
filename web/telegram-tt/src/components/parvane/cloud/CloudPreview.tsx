@@ -1,5 +1,7 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
+import type { PvIconName } from '../notes/PvIcon';
+import type { CloudItemAction } from './CloudItem';
 import type { CloudNode } from './cloudModel';
 
 import buildClassName from '../../../util/buildClassName';
@@ -13,11 +15,10 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Loading from '../../ui/Loading';
+import Modal from '../../ui/Modal';
 import PvIcon from '../notes/PvIcon';
-import PvSheet from '../notes/PvSheet';
 
-import kit from '../notes/PvKit.module.scss';
-import styles from './Cloud.module.scss';
+import styles from './CloudSheets.module.scss';
 
 type Entry = { container: string; node: CloudNode };
 
@@ -27,23 +28,26 @@ type OwnProps = {
   maxBytes: number;
   // Файлы той же папки — для перехода «‹ ›»
   siblings?: Entry[];
-  // Где лежит и у кого есть доступ — строками сведений
-  folderText?: string;
-  accessText?: string;
+  // Телефон: действия под просмотром, а не в шапке
+  isNarrow?: boolean;
+  canEdit?: boolean;
+  // Просмотр вне «Файлов» (карточка холста): из действий только скачивание
+  isDownloadOnly?: boolean;
   onNavigate?: (container: string, node: CloudNode) => void;
-  onDownload: (container: string, node: CloudNode) => void;
-  onSend?: (container: string, node: CloudNode) => void;
+  onAction: (action: CloudItemAction, container: string, node: CloudNode) => void;
   onMore?: (container: string, node: CloudNode) => void;
   onClose: NoneToVoidFunction;
 };
 
+type PreviewAction = { action: CloudItemAction; icon: PvIconName; title: string; isDanger?: boolean };
+
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-// Просмотр файла облака без скачивания на диск: фото, видео, аудио и PDF — средствами браузера из
-// расшифрованного содержимого, текстовые файлы (заметки, данные, код) — текстом; остальное — скачать,
-// а на месте просмотра стоит тип файла. Под просмотром — сведения и действия
+// Просмотр файла без скачивания на диск (доски `XpFiles`, `XdFiles`): всегда тёмный, на весь экран. Фото, видео,
+// аудио и PDF — средствами браузера из расшифрованного содержимого, текстовые файлы — текстом; остальное —
+// скачать, а на месте просмотра стоит тип файла. Действия — в шапке на компьютере, под просмотром на телефоне
 const CloudPreview = ({
-  container, node, maxBytes, siblings, folderText, accessText, onNavigate, onDownload, onSend, onMore, onClose,
+  container, node, maxBytes, siblings, isNarrow, canEdit, isDownloadOnly, onNavigate, onAction, onMore, onClose,
 }: OwnProps) => {
   const lang = useLang();
   const [url, setUrl] = useState<string>();
@@ -98,95 +102,146 @@ const CloudPreview = ({
 
   const handlePrevious = useLastCallback(() => go(-1));
   const handleNext = useLastCallback(() => go(1));
-  const handleDownload = useLastCallback(() => onDownload(container!, node!));
-  const handleSend = useLastCallback(() => onSend?.(container!, node!));
   const handleMore = useLastCallback(() => onMore?.(container!, node!));
 
-  const isBig = canPreview && !hasFailed && (kind === 'photo' || kind === 'video' || kind === 'pdf' || isText);
+  const handleAction = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    onAction(e.currentTarget.dataset.previewAction as CloudItemAction, container!, node!);
+  });
+
+  // Стрелки клавиатуры листают файлы папки
+  useEffect(() => {
+    if (!isOpen || !hasNeighbours) return undefined;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') handlePrevious();
+      if (e.key === 'ArrowRight') handleNext();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, hasNeighbours, handlePrevious, handleNext]);
+
   const typeLabel = node ? fileTypeLabel(node.name) : '';
   const stubText = isTooLarge ? lang('ParvaneCloudPreviewTooLarge')
     : kind === 'other' && typeLabel ? lang('ParvaneCloudPreviewNoViewer', { type: typeLabel })
       : lang('ParvaneCloudPreviewUnavailable');
   const dateText = node?.mtime
-    ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '') : '';
+  const facts = [
+    hasNeighbours && lang('ParvaneCloudPreviewPosition', { index: position + 1, count: siblings!.length }),
+    node && formatFileSize(lang, node.size),
+    !isNarrow && dateText,
+  ].filter(Boolean).join(' · ');
+  const actions: PreviewAction[] = [
+    { action: 'download', icon: 'download', title: lang('ParvaneCloudDownload') },
+    ...(isDownloadOnly ? [] : [
+      { action: 'send', icon: 'chat', title: lang('KnowledgeFilesToChat') },
+    ] satisfies PreviewAction[]),
+    ...(canEdit && !isDownloadOnly ? [
+      { action: 'link', icon: 'link', title: lang('ParvaneCloudLinkShort') },
+      { action: 'delete', icon: 'trash', title: lang('ParvaneCloudToTrashShort'), isDanger: true },
+    ] satisfies PreviewAction[] : []),
+  ];
 
   return (
-    <PvSheet
-      isOpen={isOpen}
-      title={node?.name}
-      isWide={isBig}
-      headBefore={hasNeighbours && (
-        <button type="button" className={kit.ib} aria-label={lang('KnowledgeFilesPrevious')} onClick={handlePrevious}>
-          <PvIcon name="left" />
-        </button>
-      )}
-      headAfter={hasNeighbours && (
-        <button type="button" className={kit.ib} aria-label={lang('KnowledgeFilesNext')} onClick={handleNext}>
-          <PvIcon name="right" />
-        </button>
-      )}
-      onClose={onClose}
-    >
-      <div className={buildClassName(styles.previewArt, isBig && styles.previewArtBig)} data-preview-kind={kind}>
-        {(!canPreview || hasFailed) && (
-          <div className={styles.previewStub} data-preview-stub>
-            {typeLabel ? (
-              <span className={styles.previewType} data-preview-type>{typeLabel}</span>
-            ) : (
-              <PvIcon name={kind === 'photo' ? 'image' : 'note'} className={styles.previewStubIcon} />
-            )}
-            <span>{stubText}</span>
-          </div>
+    <Modal isOpen={isOpen} className={styles.preview} onClose={onClose}>
+      <div className={styles.previewBar} data-preview={node?.id}>
+        {isNarrow && (
+          <button type="button" className={styles.previewIcon} aria-label={lang('Close')} onClick={onClose}>
+            <PvIcon name="x" />
+          </button>
         )}
-        {canPreview && !hasFailed && !url && text === undefined && <Loading />}
-        {text !== undefined && (
-          <pre className={buildClassName(styles.previewText, 'custom-scroll')} dir="auto" data-preview-text>{text}</pre>
+        <div className={styles.previewTitle}>
+          <span className={styles.previewName} dir="auto">{node?.name}</span>
+          <span className={styles.previewFacts}>{facts}</span>
+        </div>
+        {!isNarrow && actions.map((item) => (
+          <button
+            key={item.action}
+            type="button"
+            className={buildClassName(styles.previewChip, item.isDanger && styles.previewDanger)}
+            data-preview-action={item.action}
+            onClick={handleAction}
+          >
+            {item.title}
+          </button>
+        ))}
+        {onMore && (
+          <button type="button" className={styles.previewIcon} aria-label={lang('MenuMore')} onClick={handleMore}>
+            <PvIcon name="dots" />
+          </button>
         )}
-        {url && kind === 'photo' && <img className={styles.previewMedia} src={url} alt={node!.name} />}
-        {url && kind === 'video' && <video className={styles.previewMedia} src={url} controls autoPlay />}
-        {url && kind === 'audio' && <audio className={styles.previewAudio} src={url} controls autoPlay />}
-        {url && kind === 'pdf' && <iframe className={styles.previewFrame} src={url} title={node!.name} />}
+        {!isNarrow && (
+          <button type="button" className={styles.previewIcon} aria-label={lang('Close')} onClick={onClose}>
+            <PvIcon name="x" />
+          </button>
+        )}
       </div>
-      {node && (
-        <div className={styles.previewFacts}>
-          <span className={kit.muted}>{lang('ParvaneCloudSize')}</span>
-          <span>{formatFileSize(lang, node.size)}</span>
-          <span className={kit.muted}>{lang('ParvaneCloudModified')}</span>
-          <span>{dateText}</span>
-          {folderText && (
-            <>
-              <span className={kit.muted}>{lang('ParvaneCloudFolder')}</span>
-              <span dir="auto">{folderText}</span>
-            </>
+      <div className={styles.previewStage}>
+        {hasNeighbours && (
+          <button
+            type="button"
+            className={buildClassName(styles.previewIcon, styles.previewArrow, styles.previewArrowPrev)}
+            aria-label={lang('KnowledgeFilesPrevious')}
+            onClick={handlePrevious}
+          >
+            <PvIcon name="left" />
+          </button>
+        )}
+        <div
+          className={buildClassName(styles.previewArt, (isText || kind === 'pdf') && styles.previewArtText)}
+          data-preview-kind={kind}
+        >
+          {(!canPreview || hasFailed) && (
+            <div className={styles.previewStub} data-preview-stub>
+              {typeLabel ? (
+                <span className={styles.previewType} data-preview-type>{typeLabel}</span>
+              ) : (
+                <PvIcon name={kind === 'photo' ? 'image' : 'file'} />
+              )}
+              <span>{stubText}</span>
+            </div>
           )}
-          {accessText && (
-            <>
-              <span className={kit.muted}>{lang('ParvaneCloudShare')}</span>
-              <span dir="auto">{accessText}</span>
-            </>
+          {canPreview && !hasFailed && !url && text === undefined && <Loading />}
+          {text !== undefined && (
+            <pre className={buildClassName(styles.previewText, 'custom-scroll')} dir="auto" data-preview-text>
+              {text}
+            </pre>
           )}
+          {url && kind === 'photo' && <img className={styles.previewMedia} src={url} alt={node!.name} />}
+          {url && kind === 'video' && <video className={styles.previewMedia} src={url} controls autoPlay />}
+          {url && kind === 'audio' && <audio className={styles.previewAudio} src={url} controls autoPlay />}
+          {url && kind === 'pdf' && <iframe className={styles.previewFrame} src={url} title={node!.name} />}
+        </div>
+        {hasNeighbours && (
+          <button
+            type="button"
+            className={buildClassName(styles.previewIcon, styles.previewArrow, styles.previewArrowNext)}
+            aria-label={lang('KnowledgeFilesNext')}
+            onClick={handleNext}
+          >
+            <PvIcon name="right" />
+          </button>
+        )}
+      </div>
+      <div className={styles.previewFoot}>
+        {`${hasNeighbours ? `${lang('ParvaneCloudPreviewKeys')} · ` : ''}${lang('KnowledgeFilesDecryptedHere')}`}
+      </div>
+      {isNarrow && (
+        <div className={styles.previewTabs}>
+          {actions.map((item) => (
+            <button
+              key={item.action}
+              type="button"
+              className={buildClassName(styles.previewTab, item.isDanger && styles.previewDanger)}
+              data-preview-action={item.action}
+              onClick={handleAction}
+            >
+              <PvIcon name={item.icon} />
+              {item.title}
+            </button>
+          ))}
         </div>
       )}
-      <div className={kit.sheetButtons}>
-        <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleDownload}>
-          <PvIcon name="download" isSmall />
-          {lang('ParvaneCloudDownload')}
-        </button>
-        {onSend && (
-          <button type="button" className={kit.btn} onClick={handleSend}>
-            <PvIcon name="chat" isSmall />
-            {lang('KnowledgeFilesToChat')}
-          </button>
-        )}
-        {onMore && (
-          <button type="button" className={kit.btn} onClick={handleMore}>
-            <PvIcon name="dots" isSmall />
-            {lang('MenuMore')}
-          </button>
-        )}
-      </div>
-      <div className={buildClassName(kit.muted, kit.small)}>{lang('KnowledgeFilesDecryptedHere')}</div>
-    </PvSheet>
+    </Modal>
   );
 };
 

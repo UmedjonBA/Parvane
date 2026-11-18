@@ -9,7 +9,7 @@ export function cloudDriver(page) {
   const cloud = page.locator('#ParvaneCloud');
   const item = (name) => cloud.locator(`[data-node-id][data-name="${name}"]`);
   const folderRow = (name) => cloud.locator(`[data-container-id][data-name="${name}"]`);
-  // Строки-папки в конце корня: 'shared' — «Доступные мне», 'trash' — «Корзина»
+  // Места «Файлов» (колонка слева): 'owned' — «Общие папки», 'shared' — «Доступные мне», 'links', 'trash'
   const virtual = (view) => cloud.locator(`[data-virtual="${view}"]`);
   const openVirtual = async (view) => {
     await virtual(view).click();
@@ -23,8 +23,8 @@ export function cloudDriver(page) {
     // Путь сверху списка
     crumbs: () => cloud.locator('nav span > button').allInnerTexts(),
     root: async () => {
-      await cloud.locator('nav').getByRole('button', { name: 'Cloud', exact: true }).click();
-      await virtual('trash').waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
+      await cloud.locator('[data-nav-place="drive"]').click();
+      await page.locator('#ParvaneCloud[data-place="drive"]').waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
     },
     openShared: () => openVirtual('shared'),
     openTrash: () => openVirtual('trash'),
@@ -74,8 +74,10 @@ export function cloudDriver(page) {
       await page.getByRole('menuitem').first().waitFor({ state: 'detached', timeout: CLOUD_STEP_TIMEOUT_MS });
       return found > 0;
     },
-    // Кнопки шапки: 'New folder', 'New shared folder' (загрузка идёт через поле выбора файлов)
+    // Кнопки шапки: 'New folder'; 'New shared folder' — в «Общих папках» (загрузка идёт через поле выбора файлов)
     add: async (action) => {
+      // Новая общая папка создаётся в «Общих папках»
+      if (action === 'New shared folder') await openVirtual('owned');
       await cloud.getByRole('button', { name: action, exact: true }).click();
     },
     upload: async (name, content, mimeType = 'text/plain') => {

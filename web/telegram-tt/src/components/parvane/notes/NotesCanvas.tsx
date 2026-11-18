@@ -1244,6 +1244,11 @@ const NotesCanvas = ({
     void downloadCloudNode(container, node, isNarrow ? PREVIEW_MAX_BYTES_NARROW : PREVIEW_MAX_BYTES);
   });
 
+  // Просмотр файла карточки: из действий здесь только скачивание
+  const handlePreviewAction = useLastCallback((_action: string, container: string, node: CloudNode) => {
+    handleDownload(container, node);
+  });
+
   const handleOpenNote = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const node = findNode(docRef.current, e.currentTarget.dataset.node!);
     finishInline();
@@ -2671,7 +2676,9 @@ const NotesCanvas = ({
         container={filePreview?.container}
         node={filePreview?.node}
         maxBytes={isNarrow ? PREVIEW_MAX_BYTES_NARROW : PREVIEW_MAX_BYTES}
-        onDownload={handleDownload}
+        isNarrow={isNarrow}
+        isDownloadOnly
+        onAction={handlePreviewAction}
         onClose={handleClosePreview}
       />
     </div>

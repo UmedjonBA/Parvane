@@ -141,8 +141,8 @@ try {
   const path = cloud.locator('nav');
   const crumbs = () => path.locator('span > button').allInnerTexts();
   const toRoot = async () => {
-    await path.getByRole('button', { name: 'Cloud', exact: true }).click();
-    await cloud.locator('[data-virtual="trash"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await cloud.locator('[data-nav-place="drive"]').click();
+    await page.locator('#ParvaneCloud[data-place="drive"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   };
   const trashRow = cloud.locator('[data-virtual="trash"]');
   const openTrash = async () => {
@@ -165,15 +165,15 @@ try {
   assert.equal(await sidebar.getByRole('tab', { name: 'Notes' }).getAttribute('aria-selected'), 'false', '«Знания» — заметки, не файлы');
   await cloud.getByText('No files yet').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await cloud.getByText('Drag files here or press Upload.').waitFor({ state: 'visible' });
-  // Один список без вкладок: путь из одного шага, в конце корня — «Доступные мне» и «Корзина»
-  assert.deepEqual(await crumbs(), ['Cloud'], 'в корне путь — один шаг');
-  assert.equal(await cloud.locator('header').getByText('Trash', { exact: true }).count(), 0, 'вкладок в шапке нет');
+  // Места — колонкой слева: диск, общие папки, доступные мне, ссылки, корзина; путь в корне — один шаг
+  assert.deepEqual(await crumbs(), ['My drive'], 'в корне путь — один шаг');
   await cloud.locator('[data-virtual="shared"]').getByText('Shared with me', { exact: true }).waitFor({ state: 'visible' });
-  await trashRow.getByText('Trash is empty').waitFor({ state: 'visible' });
   assert.deepEqual(
-    await cloud.locator('[role="list"] > [role="listitem"]').evaluateAll((els) => els.map((el) => el.dataset.virtual)),
-    ['shared', 'links', 'trash'], 'строки-папки стоят в конце корня',
+    await cloud.locator('[data-cloud-nav] [data-nav-place]').evaluateAll((els) => els.map((el) => el.dataset.navPlace)),
+    ['drive', 'owned', 'shared', 'links', 'trash'], 'места стоят в колонке слева',
   );
+  assert.equal(await trashRow.getAttribute('data-count'), '0', 'корзина пуста');
+  assert.equal(await trashRow.getAttribute('aria-selected'), 'false');
   assert.equal(await cloud.getByRole('button', { name: 'Tiles' }).count(), 0, 'переключателя вида нет');
   assert.equal(counts().ops, 0, 'пустой раздел диск на сервере не создаёт');
   console.log('OK: раздел открывается с панели, пустое состояние вместо бесконечной загрузки');
@@ -239,8 +239,7 @@ try {
   await createFolder('Внутри');
   await item('Внутри').click();
   await path.getByRole('button', { name: 'Внутри' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.deepEqual(await crumbs(), ['Cloud', SECRET_NAME, 'Внутри'], 'путь от корня');
-  assert.equal(await trashRow.count(), 0, 'строки-папки — только в корне');
+  assert.deepEqual(await crumbs(), ['My drive', SECRET_NAME, 'Внутри'], 'путь от корня');
   await toRoot();
   await item('данные.bin').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: папка в папке, путь, отказ пустого имени и имени со знаком /');
@@ -296,13 +295,13 @@ try {
   // ── Корзина: удалить папку с содержимым, восстановить, стереть файл навсегда ──
   await menuAction(SECRET_NAME, 'Move to trash');
   await item(SECRET_NAME).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  // Корзина — строка-папка в конце корня: счётчик, срок хранения, путь «Cloud / Trash»
-  await trashRow.getByText('Items: 1 · kept for 30 days').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await trashRow.getAttribute('data-count'), '1');
+  // Корзина — место в колонке слева: счётчик, под названием — срок хранения
+  await cloud.locator('[data-virtual="trash"][data-count="1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await openTrash();
+  await cloud.locator('header').getByText('Items: 1 · kept for 30 days').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await item(SECRET_NAME).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.deepEqual(await names(), [SECRET_NAME], 'в корзине — папка целиком, а не её содержимое по одному');
-  assert.deepEqual(await crumbs(), ['Cloud', 'Trash'], 'корзина открывается как папка');
+  assert.deepEqual(await crumbs(), ['Trash'], 'путь корзины — одно место');
   await item(SECRET_NAME).getByText('Deleted in 30 days').waitFor({ state: 'visible' });
   assert.equal(await item(SECRET_NAME).getAttribute('data-days-left'), '30', 'срок корзины — 30 дней');
   assert.equal(await cloud.getByRole('button', { name: 'Upload', exact: true }).count(), 0, 'в корзину не загружают');
@@ -311,7 +310,7 @@ try {
   await item(SECRET_NAME).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await cloud.getByText('Trash is empty').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await toRoot();
-  await trashRow.getByText('Trash is empty').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-virtual="trash"][data-count="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await item(SECRET_NAME).click();
   await item('дневник.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await item('Внутри').waitFor({ state: 'visible' });
@@ -348,17 +347,16 @@ try {
   await search.fill('ДНЕВ');
   await item('дневник.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.deepEqual((await names()).sort(), ['дневник (2).txt', 'дневник.txt']);
-  await item('дневник.txt').getByText(`Cloud / ${SECRET_NAME}`).waitFor({ state: 'visible' });
+  await item('дневник.txt').getByText(`My drive / ${SECRET_NAME}`).waitFor({ state: 'visible' });
   await cloud.getByText('Found: 2 · in all folders except the trash').waitFor({ state: 'visible' });
   assert.equal(await path.count(), 0, 'пока идёт поиск, вместо пути — сколько найдено');
-  assert.equal(await trashRow.count(), 0, 'строк-папок в найденном нет');
   await search.fill('нет такого');
   await cloud.getByText('Nothing found').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await search.fill('');
   await item('снимок.png').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const sortBy = async (title) => {
-    await cloud.getByRole('button', { name: 'Sorting' }).click();
-    await page.getByRole('menuitem', { name: title, exact: true }).click();
+    // Сортировка — заголовки колонок
+    await cloud.getByRole('button', { name: title, exact: true }).click();
   };
   const expectOrder = (expected, message) => pollUntil(
     names, (list) => JSON.stringify(list) === JSON.stringify(expected), message, 5000,
@@ -384,12 +382,28 @@ try {
   console.log('OK: только список, сортировка запоминается');
 
   // ── Просмотр: фото и PDF открываются в разделе ────────────────────────────
+  // Нажатие выбирает файл: его сведения и действия — в панели справа; просмотр — двойным нажатием
   await item('снимок.png').click();
+  const detail = cloud.locator('[data-cloud-detail]');
+  await detail.getByText('снимок.png').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await item('снимок.png').getAttribute('aria-current'), 'true', 'выбранная строка отмечена');
+  assert.equal(await page.locator('.Modal.open').count(), 0, 'одно нажатие просмотр не открывает');
+  for (const title of ['Download', 'Send to chat', 'Rename', 'Move to trash', 'Copy link']) {
+    await detail.getByRole('button', { name: title, exact: true }).waitFor({ state: 'visible' });
+  }
+  // Меню у курсора по правой кнопке; Escape закрывает его сразу после появления
+  await item('отчёт.pdf').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await page.getByRole('menuitem').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await cloud.waitFor({ state: 'visible' });
+  console.log('OK: панель выбранного файла, меню по правой кнопке закрывается клавишей Escape');
+  await item('снимок.png').dblclick();
   const preview = page.locator('.Modal').filter({ hasText: 'снимок.png' });
   await preview.locator('[data-preview-kind="photo"] img').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await preview.getByRole('button', { name: 'Close', exact: true }).last().click();
   await preview.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await item('отчёт.pdf').click();
+  await item('отчёт.pdf').dblclick();
   const pdfPreview = page.locator('.Modal').filter({ hasText: 'отчёт.pdf' });
   await pdfPreview.locator('[data-preview-kind="pdf"] iframe').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   await pdfPreview.getByRole('button', { name: 'Close', exact: true }).last().click();
@@ -398,7 +412,7 @@ try {
 
   // ── Просмотр: текстовый файл читается на месте; для прочего — тип файла и «Скачать» ──
   await item(SECRET_NAME).click();
-  await item('дневник.txt').click();
+  await item('дневник.txt').dblclick();
   const textPreview = page.locator('.Modal').filter({ hasText: 'дневник.txt' });
   await textPreview.locator('[data-preview-kind="text"] [data-preview-text]').filter({ hasText: SECRET_TEXT })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -416,7 +430,7 @@ try {
   await failed.getByText('The file is too large.').waitFor({ state: 'visible' });
   assert.equal(await item('большой.bin').count(), 0, 'отказанный файл в списке не появился');
   assert.deepEqual(counts(), beforeBig, 'отказ до начала: на сервере ничего не изменилось');
-  await failed.getByRole('button', { name: 'Cancel' }).click();
+  await failed.getByRole('button', { name: 'Remove', exact: true }).click();
   await failed.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: файл больше предела отклонён до начала загрузки');
 
@@ -450,6 +464,26 @@ try {
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   const box = await cloud.boundingBox();
   assert.ok(box.width >= 389 && box.x <= 1, `раздел должен занимать экран: ${JSON.stringify(box)}`);
+  // Места — чипами под шапкой; панели выбранного файла нет: нажатие сразу открывает тёмный просмотр на весь экран
+  await cloud.locator('[data-virtual="trash"]').click();
+  await page.locator('#ParvaneCloud[data-place="trash"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-nav-place="drive"]').click();
+  await item('снимок.png').click();
+  const phonePreview = page.locator('.Modal').filter({ hasText: 'снимок.png' });
+  await phonePreview.locator('[data-preview-kind="photo"] img').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await cloud.locator('[data-cloud-detail]').count(), 0, 'на телефоне панели файла нет');
+  const previewBox = await phonePreview.locator('.modal-dialog').boundingBox();
+  assert.ok(previewBox.width >= 389 && previewBox.height >= 799, `просмотр на весь экран: ${JSON.stringify(previewBox)}`);
+  await phonePreview.getByRole('button', { name: 'To chat', exact: true }).waitFor({ state: 'visible' });
+  await phonePreview.getByRole('button', { name: 'Close', exact: true }).click();
+  await phonePreview.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // «⋯» — шторка во всю ширину с названием файла
+  await item('снимок.png').getByRole('button', { name: 'Actions' }).click();
+  const sheetBox = await page.locator('.Modal.open .modal-dialog').boundingBox();
+  assert.ok(sheetBox.width >= 389, `шторка действий во всю ширину: ${JSON.stringify(sheetBox)}`);
+  await page.keyboard.press('Escape');
+  await page.locator('.Modal.open').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — места чипами, просмотр на весь экран, шторка действий');
   await tabBar.getByRole('button', { name: 'Chats' }).click();
   // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
   await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });

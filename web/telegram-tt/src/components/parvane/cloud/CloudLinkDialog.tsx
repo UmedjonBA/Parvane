@@ -11,6 +11,8 @@ import useLang from '../../../hooks/useLang';
 import PvSheet from '../notes/PvSheet';
 import CloudLinkBlock from './CloudLinkBlock';
 
+import styles from './CloudSheets.module.scss';
+
 // Чья шторка открыта: узел дерева (ссылка ищется по источнику либо создаётся) или строка «Моих ссылок»
 export type CloudLinkTarget = { source: CloudLinkSource } | { linkId: string };
 
@@ -34,6 +36,7 @@ const CloudLinkDialog = ({ target, onClose }: OwnProps) => {
   return (
     <PvSheet
       isOpen={Boolean(target)}
+      className={styles.narrow}
       title={name ? lang('ParvaneCloudLinkTitle', { name }) : lang('ParvaneCloudLinkHeading')}
       onClose={onClose}
     >

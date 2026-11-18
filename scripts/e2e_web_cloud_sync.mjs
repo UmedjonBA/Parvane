@@ -43,7 +43,7 @@ function driver(page) {
       await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
     },
     root: async () => {
-      await cloud.locator('nav').getByRole('button', { name: 'Cloud', exact: true }).click();
+      await cloud.locator('[data-nav-place="drive"]').click();
     },
     names: () => cloud.locator('[role="listitem"][data-node-id]')
       .evaluateAll((els) => els.map((el) => el.dataset.name).sort()),

@@ -211,7 +211,7 @@ try {
   await drive.item(SUB_NAME).click();
   await drive.upload(DEEP_NAME, DEEP_TEXT);
   await drive.root();
-  await cloud.locator('[data-virtual="links"]').getByText('No links yet').waitFor({ state: 'visible' });
+  await cloud.locator('[data-virtual="links"][data-count="0"]').waitFor({ state: 'visible' });
   const usedBefore = await pollUntil(used, (n) => n > fileBytes.length, 'занятое место после загрузок');
   assert.equal(await linksBytes(), 0, 'ссылок ещё нет');
   console.log('OK: исходники загружены');
@@ -355,10 +355,10 @@ try {
   console.log('OK: ссылка на папку — структура, сворачивание, просмотр, миниатюра, скачивание файла и всей папки ZIP');
 
   // ── «Мои ссылки»: строки, размер, полный адрес, продление ─────────────────
-  await cloud.locator('[data-virtual="links"]').getByText('Links: 2').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-virtual="links"][data-count="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await drive.virtual('links').click();
   await page.locator('#ParvaneCloud[data-place="links"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.deepEqual(await drive.crumbs(), ['Cloud', 'My links']);
+  assert.deepEqual(await drive.crumbs(), ['My links']);
   const row = (id) => cloud.locator(`[data-link-row="${id}"]`);
   await row(fileLinkId).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await cloud.locator('[data-link-row]').count(), 2);

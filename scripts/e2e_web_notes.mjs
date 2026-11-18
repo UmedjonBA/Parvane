@@ -71,7 +71,7 @@ try {
   // ── «Заметки» и «Файлы» — отдельные модули боковой панели; в «Заметках» виды: список, граф, холст ──
   await sidebar.getByRole('tab', { name: 'Files' }).click();
   await visible(cloud, 'модуль «Файлы»');
-  assert.equal(await cloud.locator('[role="tablist"]').count(), 0, 'в «Файлах» остались вкладки заметок');
+  assert.equal(await cloud.locator('[role="tab"][data-view]').count(), 0, 'в «Файлах» остались вкладки заметок');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'модуль «Заметки»');
   assert.deepEqual(

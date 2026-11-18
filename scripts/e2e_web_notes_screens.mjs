@@ -83,8 +83,9 @@ try {
   // ── «Заметки» и «Файлы» — отдельные модули ───────────────────────────────
   await sidebar.getByRole('tab', { name: 'Files' }).click();
   await visible(cloud, 'модуль «Файлы»');
-  assert.equal(await cloud.locator('[role="tablist"]').count(), 0, 'в «Файлах» остались виды заметок');
-  await visible(cloud.getByRole('heading', { name: 'Files' }), 'название модуля в шапке «Файлов»');
+  assert.equal(await cloud.locator('[role="tab"][data-view]').count(), 0, 'в «Файлах» остались виды заметок');
+  // На компьютере в шапке «Файлов» — путь от «Моего диска» (название модуля — в шапке телефона)
+  await visible(cloud.locator('nav').getByRole('button', { name: 'My drive', exact: true }), 'путь в шапке «Файлов»');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'модуль «Заметки»');
   assert.equal(await cloud.isVisible(), false, '«Файлы» видны под «Заметками»');

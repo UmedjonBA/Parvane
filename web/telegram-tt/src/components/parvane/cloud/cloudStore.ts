@@ -17,7 +17,7 @@ import {
 
 export type CloudStatus = CloudDriveState['status'];
 // Строки-папки в конце корня: принятые чужие папки, свои ссылки (spec 022) и корзина
-export type CloudVirtualFolder = 'shared' | 'links' | 'trash';
+export type CloudVirtualFolder = 'owned' | 'shared' | 'links' | 'trash';
 // Место в едином списке: корень, строка-папка корня, контейнер (совместная папка), папка внутри
 export type CloudPlace = { view?: CloudVirtualFolder; container?: string; folder?: string };
 export type CloudPrefs = { sort: CloudSort };
@@ -645,4 +645,12 @@ export async function extendCloudLink(linkId: string, ttlDays: number) {
   if (!result?.ok) showCloudNotice(result?.error || 'rejected');
   await refreshCloudLinks();
   return Boolean(result?.ok);
+}
+
+/** «Убрать недействующие»: истёкшие и недоделанные ссылки отзываются, их копии перестают занимать место. */
+export async function revokeDeadCloudLinks() {
+  const dead = (getCloudLinks() || []).filter((l) => l.state !== 'active');
+  for (const link of dead) {
+    await revokeCloudLink(link.id);
+  }
 }

@@ -2,6 +2,7 @@ import {
   memo, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
+import type { CloudMenuAnchor } from './CloudMenu';
 import type { CloudNode } from './cloudModel';
 
 import buildClassName from '../../../util/buildClassName';
@@ -14,7 +15,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvIcon from '../notes/PvIcon';
 
-import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
 
 export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send'
@@ -23,7 +23,9 @@ export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete'
 type OwnProps = {
   container: string;
   node: CloudNode;
-  // Подпись после размера и даты: путь (поиск)
+  // У кого доступ: «только я», «ссылка, 7 дн.», имя общей папки
+  accessText?: string;
+  // Поиск: путь до папки вместо доступа
   hint?: string;
   // Корзина: подпись со сроком и сколько дней осталось до стирания
   trashHint?: string;
@@ -34,24 +36,29 @@ type OwnProps = {
   isSelected?: boolean;
   // Хотя бы одна строка выделена: флажки видны и без наведения
   isSelecting?: boolean;
+  // Компьютер: строка, чьи сведения показаны в панели справа
+  isCurrent?: boolean;
   isTrash?: boolean;
+  // Телефон: сведения второй строкой, а не колонками
+  isNarrow?: boolean;
   // Хранилище заметок «Знания»
   isVault?: boolean;
   // Чужая совместная папка
   isIncoming?: boolean;
-  onOpen: (container: string, node: CloudNode) => void;
+  onOpen: (container: string, node: CloudNode, isForced?: boolean) => void;
   onToggle: (node: CloudNode) => void;
-  onMenu: (container: string, node: CloudNode) => void;
+  onMenu: (container: string, node: CloudNode, anchor?: CloudMenuAnchor) => void;
   onAction: (action: CloudItemAction, container: string, node: CloudNode) => void;
 };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-// Parvane (spec 016): строка файла/папки по прототипу — цветная плитка со значком, название, строка
-// сведений, «⋯». Нажатие открывает (в корзине — меню), флажок поверх плитки выделяет
+// Строка файла либо папки (доски `PhoneFiles`, `DeskFiles`, `RdFiles`): на компьютере — строка таблицы
+// «Имя / Доступ / Изменён / Размер», на телефоне — название, строка сведений и размер. Нажатие открывает папку;
+// файл на компьютере сперва выбирается (панель справа), открывается двойным нажатием либо Enter
 const CloudItem = ({
-  container, node, hint, trashHint, daysLeft, childCount, folderSize, isSelected, isSelecting, isTrash, isVault,
-  isIncoming, onOpen, onToggle, onMenu, onAction,
+  container, node, accessText, hint, trashHint, daysLeft, childCount, folderSize, isSelected, isSelecting, isCurrent,
+  isTrash, isNarrow, isVault, isIncoming, onOpen, onToggle, onMenu, onAction,
 }: OwnProps) => {
   const lang = useLang();
   const rowRef = useRef<HTMLDivElement>();
@@ -99,6 +106,10 @@ const CloudItem = ({
     else onOpen(container, node);
   });
 
+  const handleForcedOpen = useLastCallback(() => {
+    if (!isTrash) onOpen(container, node, true);
+  });
+
   const handleToggle = useLastCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onToggle(node);
@@ -106,7 +117,13 @@ const CloudItem = ({
 
   const handleMenu = useLastCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onMenu(container, node);
+    const box = e.currentTarget.getBoundingClientRect();
+    onMenu(container, node, { x: box.left, y: box.bottom });
+  });
+
+  const handleContextMenu = useLastCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    onMenu(container, node, { x: e.clientX, y: e.clientY });
   });
 
   const handleRestore = useLastCallback((e: React.MouseEvent) => {
@@ -114,42 +131,59 @@ const CloudItem = ({
     onAction('restore', container, node);
   });
 
+  const handlePurge = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAction('purge', container, node);
+  });
+
   const handleKeyDown = useLastCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.target === e.currentTarget) handleOpen();
+    if (e.key === 'Enter' && e.target === e.currentTarget) handleForcedOpen();
   });
 
   const dateText = node.mtime
     ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '')
     : '';
-  const facts = isTrash ? [trashHint]
-    : isVault ? [lang('KnowledgeFilesVault')]
-      : isFolder ? [lang('KnowledgeFilesItems', { count: childCount || 0 }, { pluralValue: childCount || 0 })]
-        : [formatFileSize(lang, node.size), dateText];
-  const color = isVault ? 'var(--pv-yellow)'
-    : isIncoming ? 'var(--pv-purple)' : isFolder ? 'var(--pv-blue)' : 'var(--pv-fg)';
+  const sizeText = isFolder ? '' : formatFileSize(lang, node.size);
+  const place = hint || (isVault ? lang('KnowledgeFilesVault') : accessText);
+  // Телефон: вторая строка — «14 ноя · только я», у папки — «Папка · только я». В корзине срок стоит второй
+  // строкой и на компьютере (в широком окне она встаёт колонкой); на телефоне к нему приписан размер
+  const subParts = isTrash ? [trashHint, isNarrow && sizeText]
+    : [isFolder ? lang('ParvaneCloudFolder') : dateText, place];
+  const countText = isFolder
+    ? lang('KnowledgeFilesItems', { count: childCount || 0 }, { pluralValue: childCount || 0 }) : undefined;
 
   return (
     <div
       ref={rowRef}
-      className={buildClassName(kit.row, styles.item, isSelected && kit.rowSel, isSelecting && styles.itemSelecting)}
+      className={buildClassName(
+        styles.item, isCurrent && styles.itemOn, isSelected && styles.itemOn, isSelecting && styles.itemSelecting,
+      )}
       role="listitem"
       tabIndex={0}
+      aria-current={isCurrent ? 'true' : undefined}
       data-node-id={node.id}
       data-container={container}
       data-days-left={daysLeft}
       data-kind={node.kind}
       data-name={node.name}
       onClick={handleOpen}
+      onDoubleClick={handleForcedOpen}
+      onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}
     >
-      <span className={styles.itemIcon}>
-        <span className={kit.ava} style={`--c: ${color}`}>
-          {thumbUrl ? (
-            <img className={styles.itemThumb} src={thumbUrl} alt="" draggable={false} data-thumb />
-          ) : (
-            <PvIcon name={isFolder ? 'folder' : fileKind === 'photo' ? 'image' : 'note'} isSmall />
-          )}
-        </span>
+      <span
+        className={buildClassName(
+          styles.itemIcon,
+          isFolder && styles.itemIconFolder,
+          isIncoming && isFolder && styles.itemIconShared,
+          isVault && styles.itemIconVault,
+        )}
+      >
+        {thumbUrl ? (
+          <img className={styles.itemThumb} src={thumbUrl} alt="" draggable={false} data-thumb />
+        ) : (
+          <PvIcon name={isFolder ? 'folder' : fileKind === 'photo' ? 'image' : 'file'} />
+        )}
         <button
           type="button"
           role="checkbox"
@@ -158,35 +192,47 @@ const CloudItem = ({
           className={buildClassName(styles.itemCheck, isSelected && styles.itemCheckOn)}
           onClick={handleToggle}
         >
-          {isSelected && <PvIcon name="check" isSmall />}
+          {isSelected && <PvIcon name="check" isSmall className={styles.itemCheckMark} />}
         </button>
       </span>
-      <span className={kit.rowText}>
-        <span className={kit.ttl} title={node.name} dir="auto">{node.name}</span>
+      <span className={buildClassName(styles.itemText, isTrash && styles.itemTextWide)}>
+        <span className={styles.itemTitle} title={node.name} dir="auto">{node.name}</span>
+        {(isNarrow || isTrash) && (
+          <span className={styles.itemSub} dir="auto">{subParts.filter(Boolean).join(' · ')}</span>
+        )}
+      </span>
+      {!isNarrow && !isTrash && <span className={styles.cellAccess} title={place} dir="auto">{place}</span>}
+      {!isNarrow && !isTrash && <span className={styles.cellDate}>{dateText}</span>}
+      {!(isNarrow && isTrash) && (
         <span
-          className={kit.sub}
-          dir="auto"
-          title={isFolder && folderSize ? formatFileSize(lang, folderSize) : undefined}
+          className={styles.cellSize}
+          title={isFolder && folderSize ? `${countText} · ${formatFileSize(lang, folderSize)}` : countText}
         >
-          {facts.filter(Boolean).map((fact, i) => (
-            <span key={fact}>{`${i ? ' · ' : ''}${fact}`}</span>
-          ))}
-          {hint && (
-            <>
-              {' · '}
-              <span>{hint}</span>
-            </>
+          {sizeText || (isNarrow ? '' : '—')}
+        </span>
+      )}
+      {isTrash && (
+        <span className={styles.cellActions}>
+          <button type="button" className={styles.textButton} onClick={handleRestore}>
+            {lang('ParvaneCloudRestore')}
+          </button>
+          {!isNarrow && (
+            <button
+              type="button"
+              className={buildClassName(styles.textButton, styles.textButtonDanger)}
+              data-purge
+              onClick={handlePurge}
+            >
+              {lang('ParvaneCloudDeleteForever')}
+            </button>
           )}
         </span>
-      </span>
-      {isTrash && (
-        <button type="button" className={buildClassName(kit.btn, kit.btnGhost, kit.hideM)} onClick={handleRestore}>
-          {lang('ParvaneCloudRestore')}
+      )}
+      {!(isNarrow && isTrash) && (
+        <button type="button" className={styles.itemMenu} aria-label={lang('ParvaneCloudActions')} onClick={handleMenu}>
+          <PvIcon name="dots" />
         </button>
       )}
-      <button type="button" className={kit.ib} aria-label={lang('ParvaneCloudActions')} onClick={handleMenu}>
-        <PvIcon name="dots" />
-      </button>
     </div>
   );
 };

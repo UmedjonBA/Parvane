@@ -1,120 +1,322 @@
-// Parvane (spec 016): «Файлы» по прототипу `disain/prototype.html` (`vCloud`, `vFileMenu`, `vPreview`, `vMove`,
-// `vShare`). Общие детали — `notes/PvKit.module.scss`; цвета — переменные `--pv-*`.
+// Parvane (spec 041 E2): «Файлы» по макету — доски `PhoneFiles`, `DeskFiles`, `RdFiles`, `RpFiles`, `ZpFilesX`,
+// `ZdFilesX`, `XdFiles`. Компьютер: колонка мест, список таблицей, справа панель выбранного файла. Телефон:
+// шапка, места чипами, список строками. Цвета — переменные `--pv-*`, размеры — токены макета.
+// Окна и шторки — `CloudSheets.module.scss`.
 
 .root {
   position: relative;
   z-index: 1;
 
-  display: flex;
+  display: grid;
   grid-column: 2 / -1;
+  grid-template-areas: "nav head detail" "nav body detail";
+  grid-template-columns: 13.75rem minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
 
   min-width: 0;
 
   font-family: var(--font-family);
-  font-size: 0.9375rem;
-  line-height: 1.45;
+  font-size: var(--pv-font-size);
+  line-height: 1.35;
   color: var(--pv-fg);
 
+  background: var(--pv-bg);
   outline: none;
 
-  @media (max-width: 600px) {
+  @media (max-width: 760px) {
     position: fixed;
     inset: 0;
+
+    grid-template-areas: "head" "nav" "body";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
 }
 
-.page {
-  position: relative;
-  flex: 1 1 auto;
-}
+// ── места: колонка на компьютере, чипы на телефоне ───────────────────────────
 
-.syncNotice {
-  flex: none;
-
-  padding: 0.5rem 1.125rem;
-  border-bottom: 1px solid var(--pv-line);
-
-  font-size: 0.875rem;
-  color: var(--pv-muted);
-
-  background: var(--pv-raised);
-}
-
-.syncNoticeBlocking {
-  color: var(--pv-fg);
-}
-
-.content {
-  position: relative;
-
-  overflow-y: auto;
-  flex: 1 1 auto;
+.nav {
+  display: flex;
+  grid-area: nav;
+  flex-direction: column;
+  gap: 0.125rem;
 
   min-height: 0;
-  padding: 1.25rem;
-
-  @media (max-width: 760px) {
-    padding: 0.875rem 1rem 1.5rem;
-  }
-}
-
-// Поиск и сортировка
-.tools {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 0.625rem;
-}
-
-.sortPill {
-  cursor: var(--custom-cursor, pointer);
-
-  display: inline-flex;
-  flex: none;
-  gap: 0.375rem;
-  align-items: center;
-
-  height: 2.625rem;
-  padding: 0 0.75rem 0 1rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: 1.3125rem;
-
-  font: inherit;
-  color: var(--pv-fg);
+  padding: 0.75rem 0.5rem;
+  border-inline-end: 1px solid var(--pv-line);
 
   background: var(--pv-panel);
 
-  &:hover,
-  &.sortPillOpen {
+  @media (max-width: 760px) {
+    scrollbar-width: none;
+
+    overflow-x: auto;
+    flex-direction: row;
+    gap: 0.375rem;
+
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--pv-line);
+    border-inline-end: 0;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+  }
+}
+
+.navItem {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  height: 2.5rem;
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: var(--pv-radius-md);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+  white-space: nowrap;
+
+  background: none;
+
+  &:hover {
     background: var(--pv-hover);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--pv-accent);
-    outline-offset: 2px;
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  @media (max-width: 760px) {
+    height: var(--pv-chip-height);
+    padding: 0 0.75rem;
+    border: 1px solid var(--pv-line);
+    border-radius: calc(var(--pv-chip-height) / 2);
+
+    font-size: var(--pv-font-size-small);
+
+    background: var(--pv-raised);
   }
 }
 
-// Путь: «Облако / Папка / Вложенная»
-.path {
+.navItemOn {
+  font-weight: var(--font-weight-semibold);
+  background: var(--pv-raised);
+
+  @media (max-width: 760px) {
+    border-color: var(--pv-fg);
+    color: var(--pv-panel);
+    background: var(--pv-fg);
+
+    &:hover {
+      background: var(--pv-fg);
+    }
+  }
+}
+
+.navIcon {
+  color: var(--pv-muted);
+
+  @media (max-width: 760px) {
+    display: none;
+  }
+}
+
+.navItemOn .navIcon {
+  color: var(--pv-accent);
+}
+
+.navLabel {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.navCount {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-normal);
+  color: var(--pv-muted);
+
+  @media (max-width: 760px) {
+    display: none;
+  }
+}
+
+.navSpace {
+  flex: 1 1 auto;
+}
+
+// ── занятое место ────────────────────────────────────────────────────────────
+
+.usage {
+  flex: none;
+  padding: 0.625rem;
+}
+
+// Телефон: в конце списка, справа место под «+»
+.usageInList {
+  margin-top: auto;
+  padding: 0.75rem 5.5rem 1rem 1rem;
+}
+
+.usageHead {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.125rem;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.usageTitle {
+  flex: 1 1 auto;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.usageValue {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  white-space: nowrap;
+}
+
+.usageBar {
+  overflow: hidden;
+
+  height: 0.375rem;
+  margin: 0.375rem 0 0.5rem;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-line2);
+}
+
+.usageFill {
+  height: 100%;
+  border-radius: 0.1875rem;
+  background: var(--pv-blue);
+}
+
+.usageNote {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.usageWarn {
+  .usageValue,
+  .usageAlert {
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-red);
+  }
+
+  .usageFill {
+    background: var(--pv-red);
+  }
+}
+
+// ── шапка ────────────────────────────────────────────────────────────────────
+
+.head {
+  display: flex;
+  grid-area: head;
+  gap: 0.625rem;
   align-items: center;
 
-  margin: -0.375rem 0 0.5rem -0.625rem;
+  min-width: 0;
+  min-height: 4rem;
+  padding: 0.75rem 1rem;
+
+  @media (max-width: 760px) {
+    gap: 0.25rem;
+
+    min-height: var(--pv-header-height);
+    padding: 0 0.375rem 0 1rem;
+    border-bottom: 1px solid var(--pv-line);
+
+    background: var(--pv-panel);
+  }
+}
+
+.headTitle {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  margin: 0;
+
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.headSub {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.head .headButton {
+  height: 2.5rem;
+  padding: 0 0.875rem;
+}
+
+.head .headSearch {
+  flex: 0 0 12.5rem;
+  min-width: 0;
+
+  @media (max-width: 760px) {
+    flex: 1 1 auto;
+  }
+}
+
+// Путь: «Мой диск / Папка / Вложенная» — последняя ступень выделена
+.path {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0 0.25rem;
+  align-items: baseline;
+
+  min-width: 0;
+
+  font-size: 1.125rem;
+  color: var(--pv-muted);
+}
+
+.pathInList {
+  flex: none;
+  padding: 0.625rem 1rem 0.375rem;
+  font-size: var(--pv-font-size-small);
 }
 
 .pathStep {
   display: inline-flex;
-  gap: 0.125rem;
-  align-items: center;
+  gap: 0.25rem;
+  align-items: baseline;
   min-width: 0;
 }
 
 .pathSlash {
   font-style: normal;
-  color: var(--pv-faint);
 }
 
 .pathLink {
@@ -122,15 +324,13 @@
 
   overflow: hidden;
 
-  max-width: 14rem;
-  height: 2.25rem;
-  padding: 0 0.875rem;
+  max-width: 16rem;
+  padding: 0;
   border: 0;
-  border-radius: 0.5rem;
+  border-radius: var(--pv-radius-xs);
 
   font: inherit;
-  font-size: 0.875rem;
-  color: var(--pv-muted);
+  color: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
 
@@ -138,140 +338,295 @@
 
   &:hover {
     color: var(--pv-fg);
-    background: var(--pv-hover);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--pv-accent);
-    outline-offset: 2px;
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
   }
 }
 
-.pathArrow {
-  flex-shrink: 0;
-  font-size: 1rem;
-  color: var(--pv-faint);
+.pathStep:last-child .pathLink {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 }
 
-// Вместо пути, пока идёт поиск: сколько найдено и где искали
-.found {
-  margin-bottom: 0.375rem;
-  font-size: 0.8125rem;
-  color: var(--pv-muted);
-}
-
-// Путь либо число найденного — слева, сортировка — справа в той же строке
-.toolsMain {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin-block: 0;
-}
-
-// Полоса совместной папки: чья она и у кого доступ
-.banner {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-
-  width: 100%;
-  margin-bottom: 0.625rem;
-  padding: 0.625rem 0.75rem;
-  border: 0;
-  border-radius: 0.5rem;
-
-  font: inherit;
-  font-size: 0.875rem;
-  color: var(--pv-purple);
-  text-align: start;
-
-  background: color-mix(in srgb, var(--pv-purple) 12%, transparent);
-
-  &:is(button) {
-    cursor: var(--custom-cursor, pointer);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--pv-accent);
-    outline-offset: 2px;
-  }
-}
-
-.content .chips {
-  margin-bottom: 0.625rem;
-}
-
-.trashNote {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 0.375rem;
-}
-
+// Выделение: полоса на месте шапки
 .selection {
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  gap: 0.25rem 0.5rem;
+  gap: 0.375rem;
   align-items: center;
 
-  margin-bottom: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.5rem;
-
-  background: var(--pv-raised);
+  min-width: 0;
 }
 
 .selectionCount {
-  margin-inline-end: auto;
-  font-size: 0.875rem;
-  font-weight: 500;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.chipDanger {
+  color: var(--pv-red);
 }
 
 // ── список ───────────────────────────────────────────────────────────────────
 
-// Строки шире колонки на свои поля: плитки стоят по краю поиска, подсветка выходит за него
+.body {
+  position: relative;
+
+  container: cloud-body / inline-size;
+  overflow-y: auto;
+  display: flex;
+  grid-area: body;
+  flex-direction: column;
+
+  min-width: 0;
+  min-height: 0;
+}
+
 .list {
   display: flex;
+  flex: none;
   flex-direction: column;
-  margin-inline: -0.625rem;
 }
 
-.list .item {
-  min-height: 3.25rem;
-}
-
-// Строка без подсветки под курсором: приглашение, ход загрузки, участник папки
-.plainRow {
+.columns {
   display: flex;
+  flex: none;
   gap: 0.75rem;
   align-items: center;
 
-  width: 100%;
-  min-height: 3.25rem;
-  padding: 0.375rem 0.625rem;
-  border-radius: 0.5rem;
+  padding: 0 1rem 0.375rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+
+  @media (max-width: 760px) {
+    display: none;
+  }
+}
+
+.columnName {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-inline-start: 2.125rem;
+}
+
+.columnSort {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  gap: 0.125rem;
+  align-items: center;
+
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-xs);
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.columnSortOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+.cellAccess,
+.cellDate,
+.cellSize,
+.cellWide {
+  overflow: hidden;
+  flex: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cellAccess {
+  width: 6rem;
+}
+
+.cellDate {
+  width: 5.25rem;
+}
+
+.cellSize {
+  width: 4rem;
+  text-align: end;
+}
+
+// «Удалится», «Состояние», «Доступ» списков мест: колонка только в широком окне, в узком эти сведения стоят
+// второй строкой под названием (`.itemTextWide`)
+.cellWide {
+  display: none;
+  width: 16rem;
+
+  @container cloud-body (min-width: 58rem) {
+    display: block;
+  }
+}
+
+.itemTextWide {
+  @container cloud-body (min-width: 58rem) {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+
+    .itemTitle {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .itemSub {
+      flex: none;
+      width: 16rem;
+      font-size: var(--pv-font-size-small);
+    }
+  }
+}
+
+.cellActions {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+  justify-content: flex-end;
+
+  width: 14rem;
+
+  @media (max-width: 760px) {
+    width: auto;
+  }
+}
+
+// Ячейка-кнопка: «Доступ» своей общей папки открывает участников
+.cellButton {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.cellMenu {
+  flex: none;
+  width: 2rem;
+
+  @media (max-width: 760px) {
+    display: none;
+  }
+}
+
+.item {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 2.875rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  &:hover,
+  &:focus-visible {
+    background: var(--pv-hover);
+    outline: none;
+  }
+
+  &:focus-visible {
+    box-shadow: inset var(--pv-focus-ring);
+  }
+
+  @media (max-width: 760px) {
+    min-height: 3.625rem;
+    padding: 0 0.25rem 0 1rem;
+    border-bottom: 0;
+  }
+}
+
+// Строка без нажатия: ход загрузки, приглашение
+.itemPlain {
+  cursor: default;
+
+  &:hover {
+    background: none;
+  }
+}
+
+.itemOn {
+  background: var(--pv-raised);
 }
 
 .itemIcon {
   position: relative;
+
   display: flex;
   flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.375rem;
+  height: 1.375rem;
+
+  color: var(--pv-fg);
+}
+
+.itemIconFolder {
+  color: var(--pv-blue);
+}
+
+.itemIconShared {
+  color: var(--pv-purple);
+}
+
+.itemIconVault {
+  color: var(--pv-accent);
 }
 
 // Миниатюра картинки на месте значка строки
 .itemThumb {
   width: 100%;
   height: 100%;
-  border-radius: inherit;
+  border-radius: 0.25rem;
   object-fit: cover;
 }
 
-// Флажок выделения стоит поверх плитки: виден под курсором и пока идёт выделение
+// Флажок выделения на месте значка: виден под курсором и пока идёт выделение
 .itemCheck {
   cursor: var(--custom-cursor, pointer);
 
   position: absolute;
   z-index: 1;
-  inset: 0;
+  inset: -0.5rem;
 
   display: flex;
   align-items: center;
@@ -279,26 +634,25 @@
 
   padding: 0;
   border: 0;
-  border-radius: 0.625rem;
 
   color: var(--pv-accent-ink);
 
   opacity: 0;
-  background: var(--pv-raised);
-
-  transition: opacity 0.15s;
+  background: none;
 
   &::before {
     content: "";
 
-    width: 1.375rem;
-    height: 1.375rem;
-    border: 2px solid var(--pv-line2);
-    border-radius: 50%;
+    position: absolute;
+    inset: 0.5625rem;
+
+    border: 2px solid var(--pv-muted);
+    border-radius: 0.25rem;
+
+    background: var(--pv-panel);
   }
 
   .item:hover &,
-  .item:focus-visible &,
   .itemSelecting &,
   &:focus-visible {
     opacity: 1;
@@ -318,88 +672,353 @@
 
 .itemCheckOn {
   opacity: 1;
-  background: var(--pv-accent);
 
   &::before {
-    content: none;
+    border-color: var(--pv-at);
+    background: var(--pv-at);
   }
 }
 
-.shared {
-  color: var(--pv-purple);
+.itemCheckMark {
+  position: relative;
 }
 
-.list .sharedButton {
-  color: var(--pv-purple);
+.itemText {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-// Приглашение в чужую папку: строка вверху корня с ответом
-.inviteRow {
-  flex-wrap: wrap;
-  margin-bottom: 0.375rem;
-  background: color-mix(in srgb, var(--pv-purple) 10%, transparent);
+.itemTitle {
+  overflow: hidden;
+  display: block;
+
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemSub {
+  overflow: hidden;
+  display: block;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemBad {
+  color: var(--pv-red);
+}
+
+.item .cellAccess,
+.item .cellWide {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.item .cellDate {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.item .cellSize {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+}
+
+.item .cellSize {
+  @media (max-width: 760px) {
+    width: auto;
+    font-size: var(--pv-font-size-caption);
+    color: var(--pv-muted);
+
+    &:last-child {
+      margin-inline-end: 0.75rem;
+    }
+  }
+}
+
+.itemMenu {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  color: var(--pv-muted);
+
+  opacity: 0;
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-line);
+  }
+
+  .item:hover &,
+  .itemOn &,
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
 
   @media (max-width: 760px) {
-    padding-bottom: 0.625rem;
+    width: var(--pv-touch-size);
+    height: var(--pv-touch-size);
+    opacity: 1;
+  }
+}
+
+// Кнопка-слово в строке: «Восстановить», «Отозвать»
+.textButton {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: 2rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+
+  @media (max-width: 760px) {
+    height: var(--pv-touch-size);
+    padding: 0 0.5rem;
+    border: 0;
+
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-at);
+
+    background: none;
+  }
+}
+
+.textButtonDanger {
+  color: var(--pv-red);
+
+  @media (max-width: 760px) {
+    color: var(--pv-red);
+  }
+}
+
+// Точка состояния в начале строки: ссылка, сбой
+.dot {
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0 0.4375rem;
+  border-radius: 50%;
+
+  background: var(--pv-muted);
+}
+
+.dotGood {
+  background: var(--pv-aqua, var(--pv-blue));
+}
+
+.dotBad {
+  background: var(--pv-red);
+}
+
+.caption {
+  flex: none;
+
+  margin: 0;
+  padding: 0.875rem 1rem 0.375rem;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hint {
+  flex: none;
+  padding: 0.625rem 1rem;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// Полоса над списком: совместная папка, место кончается, состояние связи
+.strip {
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: calc(100% - 2rem);
+  margin: 0 1rem 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: var(--pv-panel);
+
+  @media (max-width: 760px) {
+    margin-top: 0.5rem;
+  }
+}
+
+.stripButton {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover {
+    background: var(--pv-raised);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.stripText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stripTitle {
+  display: block;
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-medium);
+}
+
+.stripIcon {
+  color: var(--pv-purple);
+}
+
+// Приглашение в чужую папку: карточка с ответом
+.invite {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  margin: 0.5rem 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--pv-at);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+
+  @media (min-width: 761px) {
+    flex-direction: row;
+    align-items: center;
   }
 }
 
 .inviteText {
-  @media (max-width: 760px) {
-    flex: 1 1 calc(100% - 3.75rem);
-  }
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .inviteTitle {
   display: block;
+  font-weight: var(--font-weight-semibold);
   overflow-wrap: anywhere;
+}
+
+.inviteNote {
+  display: block;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
 }
 
 .inviteButtons {
   display: flex;
   flex: none;
-  gap: 0.375rem;
+  gap: 0.5rem;
 
   @media (max-width: 760px) {
-    justify-content: flex-end;
-    width: 100%;
+    > * {
+      flex: 1 1 0;
+    }
   }
 }
 
 // Ход загрузки, скачивания, переноса
+.transfer {
+  flex-wrap: wrap;
+  padding-block: 0.5rem;
+}
+
 .transferBar {
   overflow: hidden;
-  display: block;
+  flex: 1 0 100%;
 
   height: 0.25rem;
-  margin: 0.3125rem 0 0.1875rem;
   border-radius: 0.125rem;
 
-  background: var(--pv-raised);
+  background: var(--pv-line2);
 }
 
 .transferBarFill {
   display: block;
   height: 100%;
-  background: var(--pv-blue);
+  border-radius: 0.125rem;
+  background: var(--pv-accent);
 }
 
-.transferFailed .transferState {
-  color: var(--pv-red);
-}
-
-.list .empty {
-  padding: 2.5rem 0;
-}
-
-.usage {
-  margin-top: 0.875rem;
-  font-size: 0.8125rem;
+.transferFacts {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
 }
 
-.usageWarn .usageAlert {
-  color: var(--pv-red);
+.empty {
+  max-width: 36ch;
+  margin: auto;
+  padding: 2.5rem 1rem;
+
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+.emptyHint {
+  margin-top: 0.25rem;
+  font-size: var(--pv-font-size-small);
 }
 
 .dropZone {
@@ -414,11 +1033,11 @@
   justify-content: center;
 
   border: 0.125rem dashed var(--pv-accent);
-  border-radius: 0.75rem;
+  border-radius: var(--pv-radius);
 
   font-size: 1.125rem;
-  font-weight: 500;
-  color: var(--pv-accent);
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-at);
 
   background: color-mix(in srgb, var(--pv-panel) 88%, var(--pv-accent));
 }
@@ -434,304 +1053,85 @@
   transform: translateX(-50%);
 
   max-width: calc(100% - 2rem);
-  padding: 0.625rem 1.125rem;
-  border-radius: 1.375rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--pv-radius);
 
-  font-size: 0.875rem;
+  font-size: var(--pv-font-size-small);
+  font-weight: var(--font-weight-semibold);
   color: var(--pv-panel);
 
   background: var(--pv-fg);
-  box-shadow: var(--pv-outline);
 }
 
 .fileInput {
   display: none;
 }
 
-// ── шторки ───────────────────────────────────────────────────────────────────
+// ── панель выбранного файла (компьютер) ──────────────────────────────────────
 
-.menu {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.nameForm {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-// Дерево папок в «Переместить»
-.tree {
+.detail {
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-
-  max-height: 50vh;
-}
-
-.treeCheck {
-  color: var(--pv-accent);
-}
-
-// Просмотр файла
-.previewArt {
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  min-height: 13.75rem;
-  border-radius: 0.75rem;
-
-  color: var(--pv-muted);
-
-  background: var(--pv-raised);
-}
-
-.previewStub {
-  display: flex;
+  grid-area: detail;
   flex-direction: column;
   gap: 0.75rem;
-  align-items: center;
 
-  max-width: 36ch;
-  padding: 1.5rem 1rem;
+  width: 15rem;
+  min-height: 0;
+  padding: 1rem 0.875rem;
+  border-inline-start: 1px solid var(--pv-line);
 
-  font-size: 0.875rem;
-  text-align: center;
+  background: var(--pv-panel);
 }
 
-.previewStub .previewStubIcon {
-  width: 3rem;
-  height: 3rem;
-}
-
-// Тип файла, для которого просмотра нет: крупно на месте значка
-.previewType {
-  padding: 0.5rem 1rem;
-  border: 2px solid var(--pv-line2);
-  border-radius: 0.75rem;
-
-  font-family: var(--font-family-monospace);
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 1.2;
-  color: var(--pv-fg);
-  letter-spacing: 0.04em;
-}
-
-// Текстовый файл: моноширинно, с прокруткой в обе стороны
-.previewText {
-  user-select: text;
-
-  overflow: auto;
-  align-self: stretch;
-
-  width: 100%;
-  max-height: 60vh;
-  margin: 0;
-  padding: 0.875rem 1rem;
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  color: var(--pv-fg);
-  text-align: start;
-  tab-size: 2;
-  white-space: pre;
-}
-
-.previewMedia {
-  max-width: 100%;
-  max-height: 60vh;
-}
-
-.previewAudio {
-  width: 100%;
-  margin: 0 1rem;
-}
-
-.previewFrame {
-  width: 100%;
-  height: 60vh;
-  border: 0;
-}
-
-.previewFacts {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.375rem 1rem;
-
-  font-size: 0.875rem;
+.detailName {
+  font-weight: var(--font-weight-semibold);
   overflow-wrap: anywhere;
 }
 
-// Доступ к совместной папке
-.share {
-  display: flex;
-  flex-direction: column;
-  gap: 0.875rem;
-}
-
-.shareAdd {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.share .roleSelect {
-  flex: none;
-  width: auto;
-}
-
-.share .roleSelectSmall {
-  height: 2.125rem;
-}
-
-.members {
-  display: flex;
-  flex-direction: column;
-}
-
-// ── ссылка для людей без аккаунта (`CloudLinkBlock`, spec 022) ───────────────
-
-.link {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.linkHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-
-  font-weight: 500;
-  color: var(--pv-blue);
-}
-
-.linkUrlRow,
-.linkTerm,
-.linkProgress {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.linkUrl {
-  user-select: all;
-
-  overflow: hidden;
-  flex: 1 1 auto;
-
-  min-width: 0;
-  padding: 0.5rem 0.625rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: 0.5rem;
-
-  font-size: 0.75rem;
-  line-height: 1.25rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  background: var(--pv-bg);
-}
-
-.linkTerm,
-.linkProgress {
-  font-size: 0.875rem;
-}
-
-.linkExpired {
-  color: var(--pv-red);
-}
-
-.linkKeyNote {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-
-  font-size: 0.8125rem;
+.detailFacts {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
 }
 
-// ── выбор файлов облака в чате (`CloudChatDialogs`) ──────────────────────────
-
-.dialog :global(.modal-dialog) {
-  width: 26rem;
-  max-width: calc(100vw - 2rem);
-}
-
-.dialogPath {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.125rem;
-  align-items: center;
-
-  padding-bottom: 0.5rem;
-
-  font-size: 0.875rem;
-}
-
-.dialogList {
-  overflow-y: auto;
+.detailCard {
   display: flex;
   flex-direction: column;
-
-  height: 16rem;
-  border: 1px solid var(--pv-line);
-  border-radius: 0.75rem;
-}
-
-.dialogFolder {
-  display: flex;
-  flex-shrink: 0;
-  gap: 0.75rem;
-  align-items: center;
+  gap: 0.5rem;
 
   padding: 0.625rem 0.75rem;
-  border: none;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
 
-  font-size: 0.9375rem;
-  color: var(--pv-fg);
-  text-align: start;
-
-  background: transparent;
-
-  &:hover:not(:disabled) {
-    background: var(--pv-hover);
-  }
-
-  &:disabled {
-    opacity: 0.4;
-  }
-}
-
-.dialogFolderName {
-  overflow: hidden;
-  flex: 1 1 auto;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.dialogPicked {
-  color: var(--pv-accent);
   background: var(--pv-raised);
 }
 
-.dialogSize {
-  flex-shrink: 0;
-  font-size: 0.8125rem;
-  color: var(--pv-muted);
+.detailChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
 }
 
-.dialogEmpty {
-  padding: 1.5rem 1rem;
-  font-size: 0.875rem;
+.detailCaption {
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--pv-muted);
-  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detail .detailButton {
+  flex: none;
+  width: 100%;
+  height: 2.5rem;
+}
+
+.detailSpace {
+  flex: 1 1 auto;
+}
+
+.detailNote {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
 }

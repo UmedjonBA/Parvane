@@ -17,10 +17,10 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import PvIcon from '../notes/PvIcon';
 
 import kit from '../notes/PvKit.module.scss';
-import styles from './Cloud.module.scss';
+import seg from '../notes/PvSegment.module.scss';
+import styles from './CloudSheets.module.scss';
 
 type OwnProps = {
   // Готовая (либо недоделанная) ссылка; не задана — блок предлагает создать её для `source`
@@ -31,7 +31,7 @@ type OwnProps = {
   onRevoked?: NoneToVoidFunction;
 };
 
-const TTL_KEYS = {
+export const CLOUD_LINK_TTL_KEYS = {
   1: 'ParvaneCloudLinkTtlDay',
   7: 'ParvaneCloudLinkTtlWeek',
   30: 'ParvaneCloudLinkTtlMonth',
@@ -107,20 +107,23 @@ const CloudLinkBlock = ({
   });
 
   const renderTtl = (selected?: number) => (
-    <div className={kit.chips} role="group" aria-label={lang('ParvaneCloudLinkTtl')}>
-      {LINK_TTL_DAYS.map((days) => (
-        <button
-          key={days}
-          type="button"
-          className={buildClassName(kit.chip, selected === days && kit.chipOn)}
-          aria-pressed={selected === days}
-          disabled={isBusy}
-          data-link-ttl={days}
-          onClick={handleTtl}
-        >
-          {lang(TTL_KEYS[days])}
-        </button>
-      ))}
+    <div>
+      <div className={styles.caption}>{lang('ParvaneCloudLinkTtl')}</div>
+      <div className={seg.root} role="group" aria-label={lang('ParvaneCloudLinkTtl')}>
+        {LINK_TTL_DAYS.map((days) => (
+          <button
+            key={days}
+            type="button"
+            className={buildClassName(seg.item, selected === days && seg.itemOn)}
+            aria-pressed={selected === days}
+            disabled={isBusy}
+            data-link-ttl={days}
+            onClick={handleTtl}
+          >
+            {lang(CLOUD_LINK_TTL_KEYS[days])}
+          </button>
+        ))}
+      </div>
     </div>
   );
 
@@ -131,29 +134,20 @@ const CloudLinkBlock = ({
 
   return (
     <div className={styles.link} data-link-block data-link-id={link?.id} data-link-state={state}>
-      {hasHeading && (
-        <div className={styles.linkHead}>
-          <PvIcon name="link" isSmall />
-          <span>{lang('ParvaneCloudLinkHeading')}</span>
-        </div>
-      )}
+      {hasHeading && <div className={styles.linkHead}>{lang('ParvaneCloudLinkHeading')}</div>}
       {!link && !isPreparingHere && (
         <>
-          <div className={buildClassName(kit.muted, kit.small)}>{lang('ParvaneCloudLinkNote')}</div>
-          <div className={buildClassName(kit.muted, kit.small)}>{lang('ParvaneCloudLinkTtl')}</div>
+          <div className={styles.note}>{lang('ParvaneCloudLinkNote')}</div>
           {renderTtl(ttl)}
-          <div className={kit.sheetButtons}>
-            <button
-              type="button"
-              className={buildClassName(kit.btn, kit.btnAcc)}
-              disabled={!source || Boolean(progress)}
-              data-link-create
-              onClick={handleCreate}
-            >
-              <PvIcon name="link" isSmall />
-              {lang('ParvaneCloudLinkCreate')}
-            </button>
-          </div>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            disabled={!source || Boolean(progress)}
+            data-link-create
+            onClick={handleCreate}
+          >
+            {lang('ParvaneCloudLinkCreate')}
+          </button>
         </>
       )}
       {isPreparingHere && progress && (
@@ -168,56 +162,57 @@ const CloudLinkBlock = ({
               ? lang('ParvaneCloudLinkPreparing', { done: progress.done, total: progress.total })
               : lang('ParvaneCloudLinkPreparingStart')}
           </span>
-          <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={cancelCloudLinkCreate}>
+          <button type="button" className={kit.btn} onClick={cancelCloudLinkCreate}>
             {lang('Cancel')}
           </button>
         </div>
       )}
       {link?.state === 'preparing' && (
         <>
-          <div className={buildClassName(kit.muted, kit.small)}>{lang('ParvaneCloudLinkUnfinishedNote')}</div>
-          <div className={kit.sheetButtons}>
-            <button
-              type="button"
-              className={buildClassName(kit.btn, kit.btnDanger)}
-              disabled={isBusy}
-              data-link-revoke
-              onClick={openConfirm}
-            >
-              {lang('ParvaneCloudDelete')}
-            </button>
-          </div>
+          <div className={styles.note}>{lang('ParvaneCloudLinkUnfinishedNote')}</div>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, styles.danger)}
+            disabled={isBusy}
+            data-link-revoke
+            onClick={openConfirm}
+          >
+            {lang('ParvaneCloudDelete')}
+          </button>
         </>
       )}
       {link && link.state !== 'preparing' && (
         <>
-          {link.url ? (
-            <div className={styles.linkUrlRow}>
-              <div className={buildClassName(kit.mono, styles.linkUrl)} dir="ltr" data-link-url>{link.url}</div>
-              <button
-                type="button"
-                className={buildClassName(kit.btn, kit.btnAcc)}
-                data-link-copy
-                onClick={handleCopy}
-              >
-                <PvIcon name={isCopied ? 'check' : 'copy'} isSmall />
-                {lang(isCopied ? 'ParvaneCloudLinkCopied' : 'ParvaneCloudLinkCopy')}
-              </button>
-            </div>
-          ) : (
-            <div className={buildClassName(kit.muted, kit.small)}>{lang('ParvaneCloudLinkNoName')}</div>
+          <div className={styles.note}>{lang('ParvaneCloudLinkKeyNote')}</div>
+          {isExtending && (
+            <>
+              {renderTtl()}
+              <div className={styles.note}>{lang('ParvaneCloudLinkExtendHint')}</div>
+            </>
           )}
-          <div className={styles.linkTerm}>
-            <span
-              className={buildClassName(kit.grow, link.state === 'expired' && styles.linkExpired)}
+          <div className={styles.linkCard}>
+            {link.url ? (
+              <div className={styles.linkUrl} dir="ltr" data-link-url>{link.url}</div>
+            ) : (
+              <div className={styles.note}>{lang('ParvaneCloudLinkNoName')}</div>
+            )}
+            <div
+              className={buildClassName(styles.linkTerm, link.state === 'expired' && styles.linkExpired)}
               data-link-term={link.expiresAt}
             >
               {termText}
               {link.bytes > 0 && ` · ${formatFileSize(lang, link.bytes)}`}
-            </span>
+            </div>
+          </div>
+          {link.url && (
+            <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} data-link-copy onClick={handleCopy}>
+              {lang(isCopied ? 'ParvaneCloudLinkCopied' : 'ParvaneCloudLinkCopy')}
+            </button>
+          )}
+          <div className={styles.linkPair}>
             <button
               type="button"
-              className={buildClassName(kit.btn, link.state === 'expired' ? kit.btnAcc : kit.btnGhost)}
+              className={kit.btn}
               aria-expanded={isExtending}
               disabled={isBusy}
               data-link-extend
@@ -225,27 +220,9 @@ const CloudLinkBlock = ({
             >
               {lang('ParvaneCloudLinkExtend')}
             </button>
-          </div>
-          {isExtending && (
-            <>
-              <div className={buildClassName(kit.muted, kit.small)}>{lang('ParvaneCloudLinkExtendHint')}</div>
-              {renderTtl()}
-            </>
-          )}
-          <div className={styles.linkKeyNote}>
-            <PvIcon name="lock" isSmall />
-            <span>{lang('ParvaneCloudLinkKeyNote')}</span>
-          </div>
-          <div className={kit.sheetButtons}>
-            {link.url && link.state === 'active' && (
-              <button type="button" className={kit.btn} data-link-preview onClick={handlePreview}>
-                <PvIcon name="eye" isSmall />
-                {lang('ParvaneCloudLinkPreview')}
-              </button>
-            )}
             <button
               type="button"
-              className={buildClassName(kit.btn, kit.btnDanger)}
+              className={buildClassName(kit.btn, styles.danger)}
               disabled={isBusy}
               data-link-revoke
               onClick={openConfirm}
@@ -253,6 +230,11 @@ const CloudLinkBlock = ({
               {lang('ParvaneCloudLinkRevoke')}
             </button>
           </div>
+          {link.url && link.state === 'active' && (
+            <button type="button" className={styles.linkPlain} data-link-preview onClick={handlePreview}>
+              {lang('ParvaneCloudLinkPreview')}
+            </button>
+          )}
         </>
       )}
       <ConfirmDialog

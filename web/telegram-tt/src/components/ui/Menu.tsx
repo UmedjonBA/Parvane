@@ -1,5 +1,5 @@
 import {
-  beginHeavyAnimation, type ElementRef, memo, useEffect, useRef,
+  beginHeavyAnimation, type ElementRef, memo, useLayoutEffect, useRef,
 } from '../../lib/teact/teact';
 
 import type { MenuPositionOptions } from '../../hooks/useMenuPosition';
@@ -86,7 +86,8 @@ const Menu = ({
 
   useMenuPosition(isOpen, containerRef, bubbleRef, positionOptions);
 
-  useEffect(
+  // Parvane: слушатель ставится в том же кадре, что и меню, — иначе Escape сразу после появления уходил мимо
+  useLayoutEffect(
     () => (isOpen ? captureEscKeyListener(onClose) : undefined),
     [isOpen, onClose],
   );

@@ -21,13 +21,13 @@ import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
-import Modal from '../../ui/Modal';
+import PvIcon from '../notes/PvIcon';
+import PvSheet from '../notes/PvSheet';
 import { CloudFolderDialog } from './CloudDialogs';
 import { CLOUD_ERROR_KEYS } from './CloudTransfers';
 
-import styles from './Cloud.module.scss';
+import kit from '../notes/PvKit.module.scss';
+import styles from './CloudSheets.module.scss';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 const NAME_SORT = { key: 'name', isDescending: false } as const;
@@ -115,54 +115,75 @@ const CloudChatDialogs = () => {
         onSubmit={handleSave}
         onClose={closeCloudBridge}
       />
-      <Modal
+      <PvSheet
         isOpen={request?.type === 'attach'}
         title={lang('ParvaneCloudChooseFiles')}
-        className={styles.dialog}
+        className={buildClassName(styles.narrow, styles.full)}
         onClose={closeCloudBridge}
       >
-        <div className={styles.dialogPath}>
-          <button type="button" className={styles.pathLink} onClick={() => setFolder(undefined)}>
+        <div className={styles.pickPath}>
+          <button
+            type="button"
+            className={buildClassName(styles.pickCrumb, !path.length && styles.pickCrumbLast)}
+            onClick={() => setFolder(undefined)}
+          >
             {lang('ParvaneCloudTabDrive')}
           </button>
-          {path.map((n) => (
-            <span key={n.id} className={styles.pathStep}>
-              <Icon name="next" className={styles.pathArrow} />
-              <button type="button" className={styles.pathLink} onClick={() => setFolder(n.id)}>{n.name}</button>
+          {path.map((n, index) => (
+            <span key={n.id}>
+              {'/ '}
+              <button
+                type="button"
+                className={buildClassName(styles.pickCrumb, index === path.length - 1 && styles.pickCrumbLast)}
+                onClick={() => setFolder(n.id)}
+              >
+                {n.name}
+              </button>
             </span>
           ))}
         </div>
-        <div className={buildClassName(styles.dialogList, 'custom-scroll')} role="list">
-          {children.map((n) => (
-            <button
-              key={n.id}
-              type="button"
-              role="listitem"
-              className={buildClassName(styles.dialogFolder, picked.includes(n.id) && styles.dialogPicked)}
-              aria-selected={picked.includes(n.id)}
-              data-name={n.name}
-              onClick={handleRowClick(n)}
-            >
-              <Icon name={n.kind === 'folder' ? 'folder' : picked.includes(n.id) ? 'check' : 'document'} />
-              <span className={styles.dialogFolderName} dir="auto">{n.name}</span>
-              {n.kind === 'file' && <span className={styles.dialogSize}>{formatFileSize(lang, n.size)}</span>}
-            </button>
-          ))}
+        <div className={buildClassName(styles.tree, 'custom-scroll')} role="list">
+          {children.map((n) => {
+            const isPicked = picked.includes(n.id);
+            return (
+              <button
+                key={n.id}
+                type="button"
+                role="listitem"
+                className={buildClassName(styles.treeRow, isPicked && styles.treeRowOn)}
+                aria-selected={isPicked}
+                data-name={n.name}
+                onClick={handleRowClick(n)}
+              >
+                <PvIcon
+                  name={n.kind === 'folder' ? 'folder' : isPicked ? 'check' : 'file'}
+                  isSmall
+                  className={n.kind === 'folder' ? styles.treeIcon : undefined}
+                />
+                <span className={styles.treeName} dir="auto">{n.name}</span>
+                {n.kind === 'file' && <span className={styles.pickSize}>{formatFileSize(lang, n.size)}</span>}
+                {n.kind === 'folder' && <PvIcon name="right" isSmall />}
+              </button>
+            );
+          })}
           {!children.length && (
-            <div className={styles.dialogEmpty}>
+            <div className={styles.pickEmpty}>
               {lang(nodes.length ? 'ParvaneCloudEmptyFolder' : 'ParvaneCloudEmpty')}
             </div>
           )}
         </div>
-        <div className="dialog-buttons">
-          <Button className="confirm-dialog-button" isText disabled={!picked.length} onClick={handleSend}>
+        <div className={styles.buttons}>
+          <button type="button" className={kit.btn} onClick={closeCloudBridge}>{lang('Cancel')}</button>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            disabled={!picked.length}
+            onClick={handleSend}
+          >
             {lang('ParvaneCloudSend')}
-          </Button>
-          <Button className="confirm-dialog-button" isText onClick={closeCloudBridge}>
-            {lang('Cancel')}
-          </Button>
+          </button>
         </div>
-      </Modal>
+      </PvSheet>
     </>
   );
 };
