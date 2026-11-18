@@ -11,8 +11,7 @@ import type { ReducerAction } from '../../hooks/useReducer';
 import { type AnimationLevel, LeftColumnContent, SettingsScreens } from '../../types';
 
 import {
-  selectCurrentChat, selectIsCurrentUserFrozen, selectIsForumPanelOpen,
-  selectPeerHasProfileBackground, selectTabState,
+  selectCurrentChat, selectIsCurrentUserFrozen, selectIsForumPanelOpen, selectTabState,
 } from '../../global/selectors';
 import { selectSharedSettings } from '../../global/selectors/sharedState';
 import {
@@ -60,7 +59,6 @@ type StateProps = {
   isClosingSearch?: boolean;
   archiveSettings: GlobalState['archiveSettings'];
   isAccountFrozen?: boolean;
-  hasProfileBackground?: boolean;
 };
 
 enum ContentType {
@@ -96,7 +94,6 @@ function LeftColumn({
   isClosingSearch,
   archiveSettings,
   isAccountFrozen,
-  hasProfileBackground,
   isFoldersSidebarShown,
 }: OwnProps & StateProps) {
   const {
@@ -186,22 +183,31 @@ function LeftColumn({
     if (contentKey === LeftColumnContent.Settings) {
       switch (settingsScreen) {
         case SettingsScreens.EditProfile:
-        case SettingsScreens.Folders:
         case SettingsScreens.General:
         case SettingsScreens.Notifications:
         case SettingsScreens.DataStorage:
         case SettingsScreens.Privacy:
-        case SettingsScreens.Performance:
         case SettingsScreens.ActiveSessions:
         case SettingsScreens.Language:
-        case SettingsScreens.Stickers:
-        case SettingsScreens.Experimental:
         case SettingsScreens.ParvaneModules:
+        case SettingsScreens.ParvaneAppearance:
+        case SettingsScreens.ParvaneKeysBackup:
+        case SettingsScreens.ParvaneAbout:
           openSettingsScreen({ screen: SettingsScreens.Main });
           return;
 
-        case SettingsScreens.GeneralChatBackground:
+        // Parvane (spec 041 E3): папки и стикеры открываются из «Настроек мессенджера», фон чатов и
+        // подробные анимации — из «Оформления», экспериментальные настройки — из «О приложении»
+        case SettingsScreens.Folders:
+        case SettingsScreens.Stickers:
           openSettingsScreen({ screen: SettingsScreens.General });
+          return;
+        case SettingsScreens.GeneralChatBackground:
+        case SettingsScreens.Performance:
+          openSettingsScreen({ screen: SettingsScreens.ParvaneAppearance });
+          return;
+        case SettingsScreens.Experimental:
+          openSettingsScreen({ screen: SettingsScreens.ParvaneAbout });
           return;
         case SettingsScreens.GeneralChatBackgroundColor:
           openSettingsScreen({ screen: SettingsScreens.GeneralChatBackground });
@@ -508,7 +514,6 @@ function LeftColumn({
             foldersDispatch={foldersDispatch}
             animationLevel={animationLevel}
             shouldSkipTransition={shouldSkipHistoryAnimations}
-            hasProfileBackground={hasProfileBackground}
             onReset={handleReset}
           />
         );
@@ -614,8 +619,6 @@ export default memo(withGlobal<OwnProps>(
       isClosingSearch: tabState.globalSearch.isClosing,
       archiveSettings,
       isAccountFrozen,
-      hasProfileBackground: currentUserId
-        ? selectPeerHasProfileBackground(global, currentUserId) : undefined,
       contentKey: leftColumn.contentKey,
       settingsScreen: leftColumn.settingsScreen,
     };

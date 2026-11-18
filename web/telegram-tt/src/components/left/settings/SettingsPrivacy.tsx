@@ -10,7 +10,6 @@ import {
 } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { copyTextToClipboard } from '../../../util/clipboard';
-import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -20,7 +19,6 @@ import useOldLang from '../../../hooks/useOldLang';
 
 import Island, { IslandTitle } from '../../gili/layout/Island';
 import AccountDeleteModal from '../../parvane/account/AccountDeleteModal';
-import DataExportModal from '../../parvane/export/DataExportModal';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
@@ -38,7 +36,6 @@ const STORAGE_MIGRATION_POLL_MS = 500;
 
 // Новый PIN хранилища не короче (WEB-15; та же проверка — в `secureStorage.setStoragePin`)
 const STORAGE_PIN_MIN_LENGTH = 8;
-const KEYS_PASSWORD_MIN_LENGTH = 8;
 
 type OwnProps = {
   isActive?: boolean;
@@ -345,48 +342,6 @@ const SettingsPrivacy = ({
     }
   });
 
-  const handleExportE2eKeys = useLastCallback(async () => {
-    const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
-    if (!password) return;
-    // Копия держит закрытые ключи и историю: короткий пароль подбирается офлайн
-    if (password.length < KEYS_PASSWORD_MIN_LENGTH) {
-      showNotification({ message: oldLang('ParvaneKeysPasswordTooShort') });
-      return;
-    }
-    const result = await callParvane('parvaneExportE2eKeys', { password }) as { payload: string } | undefined;
-    if (!result) {
-      showNotification({ message: oldLang('ParvaneKeysExportFailed') });
-      return;
-    }
-    const blob = new Blob([result.payload], { type: 'application/json' });
-    const anchor = document.createElement('a');
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = 'parvane-e2e-keys.json';
-    anchor.click();
-    URL.revokeObjectURL(anchor.href);
-    showNotification({ message: oldLang('ParvaneKeysExported') });
-  });
-
-  const handleImportE2eKeys = useLastCallback(() => {
-    openSystemFilesDialog('.json', (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      void (async () => {
-        const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
-        if (!password) return;
-        const payload = await file.text();
-        const result = await callParvane('parvaneImportE2eKeys', { payload, password });
-        showNotification({
-          message: oldLang(result ? 'ParvaneKeysImported' : 'ParvaneKeysImportFailed'),
-        });
-      })();
-    }, true);
-  });
-
-  const [isExportOpen, setIsExportOpen] = useState(false);
-  const openExport = useLastCallback(() => setIsExportOpen(true));
-  const closeExport = useLastCallback(() => setIsExportOpen(false));
-
   const handleChatInTitleChange = useLastCallback((isChecked: boolean) => {
     setSharedSettingOption({
       canDisplayChatInTitle: isChecked,
@@ -404,20 +359,7 @@ const SettingsPrivacy = ({
           {oldLang('BlockedUsers')}
           <span className="settings-item__current-value">{blockedCount || ''}</span>
         </ListItem>
-        <ListItem icon="key" narrow onClick={handleExportE2eKeys}>
-          {oldLang('ParvaneExportKeys')}
-        </ListItem>
-        <ListItem icon="download" narrow onClick={handleImportE2eKeys}>
-          {oldLang('ParvaneImportKeys')}
-        </ListItem>
-        {/* Parvane: выгрузка данных — архив собирается на устройстве */}
-        <div data-export-open>
-          <ListItem icon="download" narrow onClick={openExport}>
-            {lang('ParvaneExportData')}
-          </ListItem>
-        </div>
       </Island>
-      <DataExportModal isOpen={isExportOpen} onClose={closeExport} />
 
       {/* Parvane: скрыты серверные MTProto-разделы — Passcode/2FA/Passkeys/
           Web Sessions, privacy-видимость (номер/last seen/фото/bio/…),

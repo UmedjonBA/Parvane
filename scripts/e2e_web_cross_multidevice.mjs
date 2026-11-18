@@ -127,7 +127,7 @@ async function openDevicesScreen(page) {
     return page.locator('.SettingsActiveSessions');
   }
   await openProfile(page);
-  await page.getByRole('button', { name: 'Devices' }).click();
+  await page.locator('[data-profile-item="devices"]:visible').click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;

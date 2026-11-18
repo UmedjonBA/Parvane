@@ -136,7 +136,7 @@ try {
 
   // ── Settings → Devices на первом устройстве: видим второе и отзываем ───────
   await openProfile(bobDevice1.page);
-  await bobDevice1.page.getByRole('button', { name: 'Devices' }).click();
+  await bobDevice1.page.locator('[data-profile-item="devices"]:visible').click();
 
   const sessionsScreen = bobDevice1.page.locator('.SettingsActiveSessions');
   await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

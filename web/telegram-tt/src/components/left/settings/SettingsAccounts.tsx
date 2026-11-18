@@ -18,7 +18,7 @@ import useMultiaccountInfo from '../../../hooks/useMultiaccountInfo';
 import Avatar from '../../common/Avatar';
 import ParvaneIcon from '../../main/ParvaneIcon';
 
-import styles from './SettingsMain.module.scss';
+import styles from './profile/Profile.module.scss';
 
 type OwnProps = {
   currentUser: ApiUser;
@@ -78,7 +78,7 @@ const SettingsAccounts = ({ currentUser, totalLimit }: OwnProps & StateProps) =>
   if (!otherSlots.length && !newAccountUrl) return undefined;
 
   return (
-    <div className={styles.card}>
+    <div className={buildClassName(styles.group, styles.accounts)} data-profile-accounts>
       {otherSlots.map((slot) => {
         const account = accounts[Number(slot)];
         const peer: CustomPeer = {
@@ -88,20 +88,18 @@ const SettingsAccounts = ({ currentUser, totalLimit }: OwnProps & StateProps) =>
         };
 
         return (
-          <a key={slot} className={styles.row} href={getAccountSlotUrl(Number(slot))} onClick={handleAccountClick}>
-            <Avatar size="small" className={styles.avatar} peer={peer} previewUrl={account.avatarUri} />
-            <span className={styles.rowText}>
-              <span className={styles.rowTitle}>{peer.title}</span>
-            </span>
-            <ParvaneIcon name="right" isSmall className={styles.chevron} />
+          <a key={slot} className={styles.menuRow} href={getAccountSlotUrl(Number(slot))} onClick={handleAccountClick}>
+            <Avatar size="small" className={styles.headAvatar} peer={peer} previewUrl={account.avatarUri} />
+            <span className={styles.menuTitle}>{peer.title}</span>
+            <ParvaneIcon name="right" isSmall className={styles.menuChevron} />
           </a>
         );
       })}
       {newAccountUrl && (
         // Без `noreferrer`: новая вкладка аккаунта узнаёт, откуда пришла
-        <a className={styles.row} href={newAccountUrl} rel="noopener" onClick={handleNewAccountClick}>
-          <span className={styles.tile}><ParvaneIcon name="plus" isSmall /></span>
-          <span className={buildClassName(styles.rowText, styles.rowTitle)}>{lang('MenuAddAccount')}</span>
+        <a className={styles.menuRow} href={newAccountUrl} rel="noopener" onClick={handleNewAccountClick}>
+          <ParvaneIcon name="plus" className={styles.menuIcon} />
+          <span className={styles.menuTitle}>{lang('MenuAddAccount')}</span>
         </a>
       )}
     </div>

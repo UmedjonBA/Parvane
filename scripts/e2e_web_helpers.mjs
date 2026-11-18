@@ -37,12 +37,15 @@ function shellButton(page, name) {
   return rail.or(bar).first();
 }
 
-const profileScreen = (page) => page.locator('.settings-main-scroll');
+// «Профиль» (spec 041 E3): на телефоне — экран со списком разделов, на компьютере — колонка разделов слева,
+// справа «Обзор». И то и другое помечено `data-profile-menu`, пункты и плитки — `data-profile-item`
+const profileScreen = (page) => page.locator('[data-profile-menu]');
 
-// Строка «Профиля» по точному названию (подпись строки в название не входит)
+// Пункт «Профиля» по точному названию (`Devices and account`, `Language`, …) либо плитка `Saved Messages`,
+// `Contacts`, `Archived Chats`; подпись справа в название не входит
 export function profileRow(page, name) {
-  return profileScreen(page).locator('.ListItem')
-    .filter({ has: page.getByText(name, { exact: true }) }).first().locator('.ListItem-button');
+  return page.locator('[data-profile-item]:visible')
+    .filter({ has: page.getByText(name, { exact: true }) }).first();
 }
 
 // «Профиль» — главный экран настроек; из вложенного экрана настроек возвращается к главному
@@ -55,10 +58,25 @@ export async function openProfile(page) {
   return screen;
 }
 
-// Экран настроек по названию строки «Профиля» (`Devices`, `Privacy and Security`, `Language`, …)
+// Экраны, которые открываются со второго шага: папки и стикеры — из «Настроек мессенджера», фон чатов и
+// подробные анимации — из «Оформления»
+const NESTED_SETTINGS = {
+  'Chat Folders': 'Messenger settings',
+  'Stickers and Emoji': 'Messenger settings',
+  'Chat background': 'Appearance',
+  'Animations and Performance': 'Appearance',
+};
+
+// Экран настроек по названию пункта «Профиля» (`Devices and account`, `Privacy and Security`, `Language`, …)
 export async function openSettingsScreen(page, name) {
   await openProfile(page);
-  await profileRow(page, name).click();
+  const parent = NESTED_SETTINGS[name];
+  if (!parent) {
+    await profileRow(page, name).click();
+    return;
+  }
+  await profileRow(page, parent).click();
+  await page.locator('#Settings .Transition_slide-active').getByText(name, { exact: true }).first().click();
 }
 
 // К списку чатов из «Профиля» (кнопка `Chats`) и из поиска или контактов (стрелка «назад» в шапке)
@@ -91,20 +109,10 @@ export async function openContacts(page) {
   await profileRow(page, 'Contacts').click();
 }
 
-// «Мой профиль»: карточка аккаунта вверху «Профиля»
-export async function openMyProfile(page) {
-  const screen = await openProfile(page);
-  await screen.getByRole('button', { name: 'My Profile', exact: true }).click();
-}
-
-// Правка своего профиля: карандаша в шапке «Профиля» нет (по прототипу) — путь через карточку аккаунта
-// («My Profile») и карандаш в шапке открывшегося профиля. На широком экране профиль остаётся открытым справа
+// Правка своего профиля: карандаш в шапке «Профиля» на телефоне, «Изменить» в «Обзоре» на компьютере
 export async function openEditProfile(page) {
-  await openMyProfile(page);
-  // Свой профиль, а не сведения «Избранного»: у тех карандаш правит контакт
-  await page.locator('#RightColumn .RightHeader .title').getByText('My Profile', { exact: true })
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit', exact: true }).click();
+  await openProfile(page);
+  await page.locator('[data-profile-edit]:visible').first().click();
   await page.locator('#Settings').getByLabel('First name (required)')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
@@ -154,9 +162,9 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   return planner;
 }
 
-// Строка «Log Out» внизу экрана «Профиль» (меню «⋯» в шапке нет); `[data-settings-sign-out]` — от языка не зависит
+// Пункт «Log Out» — последний в списке разделов «Профиля»; `[data-settings-sign-out]` — от языка не зависит
 export function logOutRow(page) {
-  return page.locator('#Settings [data-settings-sign-out] .ListItem-button').first();
+  return page.locator('[data-settings-sign-out]:visible').first();
 }
 
 // Полный выход из аккаунта (не reload): «Профиль» → строка «Log Out» → подтверждение
@@ -1303,7 +1311,7 @@ export async function openDevicesScreen(page) {
     await page.waitForTimeout(700);
     if (await shown.isVisible().catch(() => false)) return shown;
   }
-  await openSettingsScreen(page, 'Devices');
+  await openSettingsScreen(page, 'Devices and account');
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;

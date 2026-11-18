@@ -6,9 +6,10 @@ import { getActions } from '../../../global';
 
 import { SettingsScreens } from '../../../types';
 
+import buildClassName from '../../../util/buildClassName';
+
 import useAppLayout from '../../../hooks/useAppLayout';
 import useLang from '../../../hooks/useLang';
-import useMultiClick from '../../../hooks/useMultiClick';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
@@ -18,26 +19,20 @@ import MenuItem from '../../ui/MenuItem';
 type OwnProps = {
   currentScreen: SettingsScreens;
   editedFolderId?: number;
-  hasProfileBackground?: boolean;
+  // Экран открыт из колонки «Профиля» компьютера: стрелки «Назад» нет, только название
+  isRoot?: boolean;
   onReset: () => void;
 };
 
 const SettingsHeader: FC<OwnProps> = ({
   currentScreen,
   editedFolderId,
-  hasProfileBackground,
+  isRoot,
   onReset,
 }) => {
-  const {
-    openDeleteChatFolderModal,
-    openSettingsScreen,
-  } = getActions();
+  const { openDeleteChatFolderModal } = getActions();
 
   const { isMobile } = useAppLayout();
-
-  const handleMultiClick = useMultiClick(5, () => {
-    openSettingsScreen({ screen: SettingsScreens.Experimental });
-  });
 
   const openDeleteFolderConfirmation = useCallback(() => {
     if (!editedFolderId) return;
@@ -68,7 +63,7 @@ const SettingsHeader: FC<OwnProps> = ({
       case SettingsScreens.EditProfile:
         return <h3>{oldLang('lng_settings_information')}</h3>;
       case SettingsScreens.General:
-        return <h3>{oldLang('General')}</h3>;
+        return <h3>{lang('ParvaneProfileMessengerSettings')}</h3>;
       case SettingsScreens.QuickReaction:
         return <h3>{oldLang('DoubleTapSetting')}</h3>;
       case SettingsScreens.CustomEmoji:
@@ -151,11 +146,17 @@ const SettingsHeader: FC<OwnProps> = ({
 
       case SettingsScreens.ParvaneModules:
         return <h3>{lang('ParvaneModules')}</h3>;
+      case SettingsScreens.ParvaneAppearance:
+        return <h3>{lang('ParvaneAppearance')}</h3>;
+      case SettingsScreens.ParvaneKeysBackup:
+        return <h3>{lang('ParvaneProfileKeys')}</h3>;
+      case SettingsScreens.ParvaneAbout:
+        return <h3>{lang('ParvaneProfileAbout')}</h3>;
       case SettingsScreens.Performance:
         return <h3>{lang('MenuAnimations')}</h3>;
 
       case SettingsScreens.ActiveSessions:
-        return <h3>{oldLang('SessionsTitle')}</h3>;
+        return <h3>{lang('ParvaneProfileDevices')}</h3>;
       case SettingsScreens.ActiveWebsites:
         return <h3>{oldLang('OtherWebSessions')}</h3>;
       case SettingsScreens.PrivacyBlockedUsers:
@@ -246,23 +247,15 @@ const SettingsHeader: FC<OwnProps> = ({
         return <h3>{lang('SettingsPasskeyTitle')}</h3>;
 
       default:
-        return (
-          <div className="settings-main-header">
-            {/* Parvane: главный экран настроек — раздел «Профиль» (так он назван в боковой и нижней панели).
-                Карандаша и меню «⋯» в шапке нет, как в прототипе: правка профиля — из карточки аккаунта («Мой профиль»),
-                выход — последней строкой экрана (SettingsSignOut) */}
-            <h3 onClick={handleMultiClick}>
-              {lang('ParvaneProfileTitle')}
-            </h3>
-          </div>
-        );
+        return undefined;
     }
   }
 
+  // Parvane (spec 041 E3): у главного экрана «Профиля» шапки нет — аккаунт стоит первым блоком экрана
+  if (currentScreen === SettingsScreens.Main) return undefined;
+
   return (
-    <div className={hasProfileBackground && currentScreen === SettingsScreens.Main
-      ? 'left-header' : 'left-header secondary'}
-    >
+    <div className={buildClassName('left-header secondary', isRoot && 'pv-settings-root')}>
       <Button
         round
         size="smaller"

@@ -14,6 +14,7 @@ import {
   preparePage,
   sendText,
   openProfile,
+  openSettingsScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-content-e2e-password';
@@ -119,8 +120,7 @@ try {
     .waitFor({ state: 'visible', timeout: (SCHEDULE_DELAY_SECS + 90) * 1000 });
 
   // ── Папки чатов: локальный персист после reload ────────────────────────────
-  await openProfile(aliceSession.page);
-  await aliceSession.page.getByRole('button', { name: 'Chat Folders' }).click();
+  await openSettingsScreen(aliceSession.page, 'Chat Folders');
   await aliceSession.page.getByRole('button', { name: 'Create New Folder' }).click();
   const folderNameInput = aliceSession.page.getByRole('textbox', { name: 'Folder name' });
   await folderNameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

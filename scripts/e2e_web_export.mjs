@@ -18,7 +18,7 @@ import {
   LOGIN_TIMEOUT_MS,
   openPlannerScreen,
   openPrivateChatStrict,
-  openSettingsScreen,
+  openProfile,
   preparePage,
   showChatList,
 } from './e2e_web_helpers.mjs';
@@ -78,8 +78,9 @@ async function createPlannerTask(page, name) {
 
 async function openExportDialog(page) {
   await showChatList(page);
-  await openSettingsScreen(page, 'Privacy and Security');
-  await page.locator('[data-export-open] .ListItem-button').click();
+  // «Выгрузить мои данные» — пункт «Профиля» (spec 041 E3), окно открывается сразу
+  await openProfile(page);
+  await page.locator('[data-export-open]:visible').click();
   const dialog = page.locator('[data-export-dialog]');
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return dialog;

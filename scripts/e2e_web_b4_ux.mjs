@@ -20,7 +20,7 @@ import {
   requireEnv,
   sendText,
   openProfile,
-  openMyProfile,
+  openEditProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-b4-e2e-password';
@@ -160,9 +160,7 @@ try {
   );
   assert.equal(hasOverflow, false, 'mobile layout must not overflow horizontally');
 
-  // ── «Мой профиль» на телефоне (карточка аккаунта в «Профиле»): «назад» ведёт
-  // обратно в «Профиль», а не в «Избранное»; карандаш открывает редактирование
-  // профиля, откуда «назад» (системная кнопка) идёт в настройки и затем в список чатов
+  // ── Правка профиля на телефоне: «назад» (системная кнопка) идёт в «Профиль» и затем в список чатов
   const mobilePage = mobileSession.page;
   // Что лежит под пальцем в середине экрана: колонка и открытый чат (hash)
   const topColumn = () => mobilePage.evaluate(() => {
@@ -179,35 +177,15 @@ try {
       assert.fail(`${message}: ожидалось ${expected}, на экране ${await topColumn()}`);
     });
   };
-  const openOwnProfile = async () => {
-    await openMyProfile(mobilePage);
-    await mobilePage.locator('#RightColumn .RightHeader').getByText('My Profile')
-      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    // Чат «Избранное» под профилем не рисуется — иначе он мелькает при возврате в список чатов
-    const middleVisibility = await mobilePage.evaluate(
-      () => getComputedStyle(document.querySelector('#MiddleColumn')).visibility,
-    );
-    assert.equal(middleVisibility, 'hidden', 'под «Моим профилем» на телефоне виден чат «Избранное»');
-  };
-  await openOwnProfile();
-  await mobilePage.locator('#RightColumn .RightHeader .close-button').click();
-  // Сразу после нажатия (профиль ещё уезжает) чат по-прежнему скрыт
-  assert.equal(await mobilePage.evaluate(
-    () => getComputedStyle(document.querySelector('#MiddleColumn')).visibility,
-  ), 'hidden', 'чат «Избранное» показался во время закрытия «Моего профиля»');
-  await waitTop('LeftColumn|true|', '«назад» из «Моего профиля»');
-
-  await openOwnProfile();
-  await mobilePage.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit' }).click();
-  await waitTop('LeftColumn|true|', 'карандаш в «Моём профиле»');
+  // Карандаш в шапке «Профиля» открывает правку профиля (spec 041 E3: отдельного «Моего профиля» нет)
+  await openEditProfile(mobilePage);
+  await waitTop('LeftColumn|true|', 'карандаш в «Профиле»');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'visible', timeout: 10_000 });
   await mobilePage.waitForTimeout(600);
   await mobilePage.goBack();
   await waitTop('LeftColumn|true|', '«назад» из редактирования профиля');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'hidden', timeout: 10_000 });
   await mobilePage.waitForTimeout(600);
-  // Одно нажатие: профиль выше закрывали кнопкой дважды (крестик, карандаш) — запись закрытого профиля
-  // в истории браузера остаться не должна (`useHistoryBack`: отметка «заменена» сбрасывается с новой записью)
   await mobilePage.goBack();
   await waitTop('LeftColumn|false|', '«назад» из «Профиля» — с первого нажатия');
 

@@ -34,13 +34,10 @@ const RAW_KEY = /^(lng_\w+|[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+|[A-Z][a-z]+([
 const ENGLISH_LINE = /^[A-Za-z][A-Za-z'’,.!?:()-]*( [A-Za-z'’,.!?:()-]+)+$/;
 // Имена собственные и то, что по-русски пишется так же
 const ENGLISH_ALLOWED = /Parvane|Telegram|GIF|Ctrl|Cmd|Enter|Wi-Fi|Web|Linux|Chrome|Firefox|Playwright|@local/;
-// Пункты, которые не открывают экран настроек или уводят из них: выход, отчёт об ошибке и прежние пункты
-// меню списка чатов («Избранное», «Архив», «Контакты», ночной режим, уровень анимаций, установка)
-const SKIPPED_ITEMS = new RegExp([
-  'Выйти|Log Out|Сообщить|Report|Вопрос|Ask',
-  'Избранное|Saved Messages|Архив|Archived|Контакты|Contacts',
-  'Ночной режим|Night Mode|^(Анимации|Animations)$|Установить|Install',
-].join('|'), 'i');
+// Пункты «Профиля», открывающие экран настроек (выгрузка, отчёт об ошибке и выход — окна)
+const SCREEN_ITEMS = [
+  'modules', 'appearance', 'notifications', 'language', 'devices', 'privacy', 'keys', 'data', 'messenger', 'about',
+];
 
 function classifyTexts(text, found) {
   text.split('\n').map((line) => line.trim()).filter(Boolean).forEach((line) => {
@@ -49,53 +46,38 @@ function classifyTexts(text, found) {
   });
 }
 
-// Обход: каждый пункт главного экрана настроек и пункты экранов первого уровня
+// Обход: «Обзор», колонка разделов и каждый экран, который открывается из неё (компьютер)
 async function walkSettingsScreens(page) {
   const found = { rawKeys: new Set(), english: new Set() };
   const settings = page.locator('#Settings');
-  // Экран «Язык» уходит анимацией: пока он виден, его пункты («Не переводить») попадали бы в обход
+  const menu = page.locator('[data-profile-menu="nav"]');
+  // Экран «Язык» уходит: пока он виден, его пункты («Не переводить») попадали бы в обход
   await settings.locator('.settings-language').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS })
     .catch(() => undefined);
-  await page.waitForTimeout(500);
-  const labelsOf = async () => (await settings.locator('.ListItem:visible').allInnerTexts())
-    .map((text) => text.split('\n')[0].trim()).filter(Boolean);
-  // Строки языка догружаются отдельной частью сборки: ждём, пока подписи главного экрана перестанут меняться
-  let settled = await labelsOf();
+  // Строки языка догружаются отдельной частью сборки: ждём, пока подписи колонки перестанут меняться
+  let settled = await menu.innerText();
   for (let attempt = 0; attempt < 20; attempt++) {
     await page.waitForTimeout(400);
-    const next = await labelsOf();
-    if (next.join('|') === settled.join('|')) break;
+    const next = await menu.innerText();
+    if (next === settled) break;
     settled = next;
   }
+  classifyTexts(settled, found);
   classifyTexts(await settings.innerText(), found);
-  const mainLabels = settled.filter((label) => !SKIPPED_ITEMS.test(label));
-  assert.ok(mainLabels.length >= 6, `главный экран настроек не распознан: ${mainLabels.join(' | ')}`);
-  const mainItem = (label) => settings.locator('.ListItem:visible').filter({ hasText: label }).first();
-  // «Назад» нажимается один раз за попытку, дальше ждём сам главный экран: переход между экранами не мгновенный,
-  // а второе нажатие на главном экране выводит из настроек
-  const backToMain = async () => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      if (await mainItem(mainLabels[1]).isVisible().catch(() => false)) return;
-      await page.getByRole('button', { name: /Назад|Go back|Back/ }).first().click();
-      await mainItem(mainLabels[1]).waitFor({ state: 'visible', timeout: 4000 }).catch(() => undefined);
-    }
-  };
-  for (const label of mainLabels) {
-    // Нажатие во время перехода между экранами теряется: ждём, пока главный экран уйдёт, иначе нажимаем снова
-    const marker = mainItem(mainLabels[label === mainLabels[1] ? 0 : 1]);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await mainItem(label).click();
-      if (await marker.waitFor({ state: 'hidden', timeout: 2500 }).then(() => true, () => false)) break;
-    }
-    await page.waitForTimeout(500);
+  for (const id of SCREEN_ITEMS) {
+    const item = menu.locator(`[data-profile-item="${id}"]`);
+    await item.click();
+    await menu.locator(`[data-profile-item="${id}"][aria-current="page"]`)
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await page.waitForTimeout(700);
     classifyTexts(await settings.innerText(), found);
-    await backToMain();
   }
+  await menu.locator('[data-profile-item="overview"]').click();
   return { rawKeys: [...found.rawKeys].sort(), english: [...found.english].sort() };
 }
 
 async function pickLanguage(page, nativeName) {
-  await page.getByRole('button', { name: /^(Language|Язык)/ }).click();
+  await page.locator('[data-profile-item="language"]').click();
   // ItemPicker рендерит пункты как div[role=button] с названием языка
   const option = page.locator('.settings-language [role="button"]').filter({ hasText: nativeName }).first();
   await option.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -122,9 +104,10 @@ try {
   await page.locator('#Settings, .settings-content, .SettingsHeader, #LeftColumn')
     .locator('text=Язык интерфейса').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.getByRole('button', { name: /Назад|Go back|Back/ }).first().click();
-  await page.locator('#Settings .settings-main-header').getByText('Профиль', { exact: true })
+  // «Язык» открыт из колонки разделов: стрелки «Назад» у него нет, колонка переведена на месте
+  await page.locator('[data-profile-item="overview"]').getByText('Обзор', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('[data-profile-item="overview"]').click();
   console.log('OK: интерфейс переключился на русский');
 
   // ── Экраны настроек на русском: ни сырых ключей, ни английских подписей (spec 012, A8) ──
@@ -156,8 +139,7 @@ try {
   await openSettings(page);
   await pickLanguage(page, 'English');
   await page.locator('text=Interface Language').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.getByRole('button', { name: /Go back|Back|Назад/ }).first().click();
-  await page.locator('#Settings .settings-main-header').getByText('Profile', { exact: true })
+  await page.locator('[data-profile-item="overview"]').getByText('Overview', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: обратно на английский');
 

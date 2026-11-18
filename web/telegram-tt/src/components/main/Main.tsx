@@ -846,6 +846,9 @@ const Main = ({
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
     && settingsScreen === SettingsScreens.Main;
+  // Parvane (spec 041 E3): «Профиль» на компьютере занимает место колонок мессенджера (`SettingsPv.scss`)
+  const isProfileWide = isDesktop && parvaneSection === 'messenger'
+    && leftColumnContentKey === LeftColumnContent.Settings;
   const isNavCovered = useDerivedState(getIsParvaneNavCovered);
   const isTabBarShown = Boolean(isMobile) && !isNavCovered && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
     && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
@@ -868,6 +871,7 @@ const Main = ({
     isCloudOpen && 'section-cloud',
     isCloudFilesOpen && 'section-cloud-files',
     isKnowledgeOpen && 'section-knowledge',
+    isProfileWide && 'section-profile',
     isTabBarShown && 'parvane-tab-bar-shown',
     isTabBarShown && isMiniPlayerShown && 'parvane-mini-player-shown',
   );

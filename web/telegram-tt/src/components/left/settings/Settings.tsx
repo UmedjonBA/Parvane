@@ -8,14 +8,19 @@ import { SettingsScreens } from '../../../types';
 
 import { selectTabState } from '../../../global/selectors';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
+import { getIsProfileRootScreen } from './profile/profileMenu';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useScrollNotch from '../../../hooks/useScrollNotch';
 
 import Transition from '../../ui/Transition';
 import SettingsFolders from './folders/SettingsFolders';
 import SettingsPasscode from './passcode/SettingsPasscode';
+import ProfileNav from './profile/ProfileNav';
+import SettingsAbout from './SettingsAbout';
 import SettingsActiveSessions from './SettingsActiveSessions';
+import SettingsAppearance from './SettingsAppearance';
 import SettingsCustomEmoji from './SettingsCustomEmoji';
 import SettingsDataStorage from './SettingsDataStorage';
 import SettingsDoNotTranslate from './SettingsDoNotTranslate';
@@ -25,6 +30,7 @@ import SettingsGeneral from './SettingsGeneral';
 import SettingsGeneralBackground from './SettingsGeneralBackground';
 import SettingsGeneralBackgroundColor from './SettingsGeneralBackgroundColor';
 import SettingsHeader from './SettingsHeader';
+import SettingsKeysBackup from './SettingsKeysBackup';
 import SettingsLanguage from './SettingsLanguage';
 import SettingsMain from './SettingsMain';
 import SettingsModules from './SettingsModules';
@@ -36,6 +42,7 @@ import SettingsQuickReaction from './SettingsQuickReaction';
 import SettingsStickers from './SettingsStickers';
 
 import './Settings.scss';
+import './profile/SettingsPv.scss';
 
 const TRANSITION_RENDER_COUNT = Object.keys(SettingsScreens).length / 2;
 const TRANSITION_DURATION = 200;
@@ -130,7 +137,6 @@ export type OwnProps = {
   foldersDispatch: FolderEditDispatch;
   animationLevel: AnimationLevel;
   shouldSkipTransition?: boolean;
-  hasProfileBackground?: boolean;
   onReset: (forceReturnToChatList?: true | Event) => void;
 };
 
@@ -142,11 +148,12 @@ const Settings: FC<OwnProps> = ({
   onReset,
   animationLevel,
   shouldSkipTransition,
-  hasProfileBackground,
 }) => {
   const { closeShareChatFolderModal, openSettingsScreen } = getActions();
 
   const containerRef = useRef<HTMLDivElement>();
+  // Parvane (spec 041 E3): на компьютере «Профиль» — две колонки: разделы слева, экран справа
+  const { isDesktop } = useAppLayout();
 
   const [privacyPasscode, setPrivacyPasscode] = useState<string>('');
 
@@ -233,11 +240,10 @@ const Settings: FC<OwnProps> = ({
         return (
           <SettingsGeneral
             isActive={isScreenActive
-              || activeScreen === SettingsScreens.GeneralChatBackgroundColor
-              || activeScreen === SettingsScreens.GeneralChatBackground
+              || activeScreen === SettingsScreens.Stickers
               || activeScreen === SettingsScreens.QuickReaction
               || activeScreen === SettingsScreens.CustomEmoji
-              || isPrivacyScreen || isFoldersScreen}
+              || isFoldersScreen}
             onReset={handleReset}
           />
         );
@@ -366,6 +372,25 @@ const Settings: FC<OwnProps> = ({
             onReset={handleReset}
           />
         );
+      case SettingsScreens.ParvaneAppearance:
+        return (
+          <SettingsAppearance
+            isActive={isScreenActive
+              || activeScreen === SettingsScreens.GeneralChatBackground
+              || activeScreen === SettingsScreens.GeneralChatBackgroundColor
+              || activeScreen === SettingsScreens.Performance}
+            onReset={handleReset}
+          />
+        );
+      case SettingsScreens.ParvaneKeysBackup:
+        return <SettingsKeysBackup isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvaneAbout:
+        return (
+          <SettingsAbout
+            isActive={isScreenActive || activeScreen === SettingsScreens.Experimental}
+            onReset={handleReset}
+          />
+        );
 
       default:
         return undefined;
@@ -384,18 +409,18 @@ const Settings: FC<OwnProps> = ({
           currentScreen={currentScreen}
           onReset={handleReset}
           editedFolderId={foldersState.folderId}
-          hasProfileBackground={hasProfileBackground}
+          isRoot={isDesktop && getIsProfileRootScreen(currentScreen)}
         />
         {renderCurrentSectionContent(isScreenActive, activeKey)}
       </>
     );
   }
 
-  return (
+  const screens = (
     <Transition
       ref={containerRef}
       id="Settings"
-      name={resolveTransitionName('layers', animationLevel, shouldSkipTransition)}
+      name={resolveTransitionName('layers', animationLevel, shouldSkipTransition || isDesktop)}
       activeKey={currentScreen}
       renderCount={TRANSITION_RENDER_COUNT}
       shouldWrap
@@ -403,6 +428,15 @@ const Settings: FC<OwnProps> = ({
     >
       {renderCurrentSection}
     </Transition>
+  );
+
+  if (!isDesktop) return screens;
+
+  return (
+    <div className="pv-profile">
+      <ProfileNav currentScreen={currentScreen} />
+      <div className="pv-profile-pane">{screens}</div>
+    </div>
   );
 };
 

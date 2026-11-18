@@ -8,7 +8,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   buildPngBuffer, dismissRecoveryKeyDialog, LOGIN_TIMEOUT_MS, preparePage, reloadPage, relogin,
-  openProfile,
+  openSettingsScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-background-e2e-1';
@@ -44,9 +44,8 @@ const PATTERN_COUNT = 10;
 const GRADIENT_COUNT = 18;
 
 async function openBackgroundSettings(page) {
-  await openProfile(page);
-  await page.getByText('General Settings', { exact: false }).first().click();
-  await page.getByText('Chat Wallpaper', { exact: true }).first().click();
+  // «Профиль → Оформление → Фон чатов» (spec 041 E3)
+  await openSettingsScreen(page, 'Chat background');
   await page.locator('[data-bg-pattern]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 

@@ -278,6 +278,9 @@ export enum SettingsScreens {
   DoNotTranslate,
   FoldersShare,
   Passkeys,
+  ParvaneAppearance,
+  ParvaneKeysBackup,
+  ParvaneAbout,
 }
 
 export type StickerSetOrReactionsSetOrRecent = Pick<ApiStickerSet, (

@@ -1011,24 +1011,20 @@ try {
   // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
   await planner.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await tabBar.getByRole('button', { name: 'Profile' }).getAttribute('aria-current'), 'page');
-  // «Профиль»: карточка аккаунта не уходит под шапку, настройки мессенджера и блок Parvane — карточками;
-  // «Оформление» — окно с режимом и цветовыми схемами
-  const profile = page.locator('#Settings');
-  for (const row of ['General Settings', 'Chat Folders', 'Devices', 'Planner settings', 'Health goals', 'Notes storage', 'Appearance']) {
-    await profile.getByRole('button', { name: row }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Профиль» (spec 041 E3): аккаунт первым блоком, разделы списком; «Оформление» — экран с цветовыми
+  // схемами и режимом, «назад» возвращает к списку разделов
+  const profile = page.locator('[data-profile-menu="list"]');
+  await profile.locator('[data-profile-head="phone"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const id of ['modules', 'appearance', 'devices', 'privacy', 'data', 'messenger', 'about']) {
+    await profile.locator(`[data-profile-item="${id}"]`).waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   }
-  const profileGeometry = await page.evaluate(() => {
-    const avatar = document.querySelector('#Settings .Avatar').getBoundingClientRect();
-    const header = document.querySelector('#Settings .left-header').getBoundingClientRect();
-    return { avatarTop: avatar.top, headerBottom: header.bottom };
-  });
-  assert.ok(profileGeometry.avatarTop >= profileGeometry.headerBottom, `аватар под шапкой: ${JSON.stringify(profileGeometry)}`);
-  await profile.getByRole('button', { name: 'Appearance' }).click();
+  await profile.locator('[data-profile-item="appearance"]').click();
   const schemes = page.getByRole('radiogroup', { name: 'Colour scheme' });
   await schemes.getByRole('radio', { name: 'Nord' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await page.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio').count(), 3, 'режим: как в системе, светлая, тёмная');
+  assert.equal(await page.getByRole('group', { name: 'Mode' }).getByRole('button').count(), 3, 'режим: как в системе, светлая, тёмная');
   await page.keyboard.press('Escape');
   await schemes.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await profile.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await tabBar.getByRole('button', { name: 'Chats' }).click();
   assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» возвращают к списку');
   await tabBar.locator('button[aria-current="page"]', { hasText: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

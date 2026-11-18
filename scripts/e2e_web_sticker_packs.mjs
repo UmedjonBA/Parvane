@@ -20,7 +20,8 @@ import {
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
-  openProfile,
+  closeSettings,
+  openSettingsScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-packs-e2e-password';
@@ -189,8 +190,7 @@ try {
 
   // ── Алиса создаёт пак из файлов ────────────────────────────────────────────
   aliceSession.page.on('dialog', (dialog) => dialog.accept(packName));
-  await openProfile(aliceSession.page);
-  await aliceSession.page.getByRole('button', { name: 'Stickers and Emoji' }).click();
+  await openSettingsScreen(aliceSession.page, 'Stickers and Emoji');
   const fileChooserPromise = aliceSession.page.waitForEvent('filechooser');
   await aliceSession.page.getByRole('button', { name: 'Create Sticker Pack' }).click();
   const fileChooser = await fileChooserPromise;
@@ -199,10 +199,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // Выходим из настроек в чат
-  for (let i = 0; i < 3; i++) {
-    await aliceSession.page.keyboard.press('Escape');
-    await aliceSession.page.waitForTimeout(400);
-  }
+  await closeSettings(aliceSession.page);
   await openPrivateChat(aliceSession.page, bob);
 
   // ── Стикер из пака: отправка Бобу ──────────────────────────────────────────

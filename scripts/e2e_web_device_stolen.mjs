@@ -35,7 +35,7 @@ try {
   await logOut(device2.page);
 
   await openProfile(device1.page);
-  await device1.page.getByRole('button', { name: 'Devices' }).click();
+  await device1.page.locator('[data-profile-item="devices"]:visible').click();
   const screen = device1.page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const left = screen.locator('[data-left-device]');

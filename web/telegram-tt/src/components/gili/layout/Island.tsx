@@ -9,11 +9,13 @@ type OwnProps = React.HTMLAttributes<HTMLDivElement> & {
   ref?: ElementRef<HTMLDivElement>;
 };
 
+// Parvane: рядом с классами модуля стоят постоянные метки `pv-island*` — по ним экраны настроек красят
+// острова по макету (`left/settings/profile/SettingsPv.scss`); в сборке имена классов модуля — хеши
 const Island = ({ ref, className, children, ...otherProps }: OwnProps) => {
   return (
     <div
       ref={ref}
-      className={buildClassName(styles.island, className)}
+      className={buildClassName(styles.island, 'pv-island', className)}
       {...otherProps}
     >
       {children}
@@ -24,7 +26,7 @@ const Island = ({ ref, className, children, ...otherProps }: OwnProps) => {
 const IslandDescription = ({ className, children, ...otherProps }: OwnProps) => {
   return (
     <div
-      className={buildClassName(styles.description, className)}
+      className={buildClassName(styles.description, 'pv-island-description', className)}
       {...otherProps}
     >
       {children}
@@ -35,7 +37,7 @@ const IslandDescription = ({ className, children, ...otherProps }: OwnProps) => 
 const IslandTitle = ({ className, children, ...otherProps }: OwnProps) => {
   return (
     <div
-      className={buildClassName(styles.title, className)}
+      className={buildClassName(styles.title, 'pv-island-title', className)}
       {...otherProps}
     >
       {children}

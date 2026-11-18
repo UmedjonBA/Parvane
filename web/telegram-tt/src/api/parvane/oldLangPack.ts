@@ -204,8 +204,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   'MuteFor.Forever': 'Mute forever',
   'Common.Done': 'Done',
   ParvaneCreatePack: 'Create Sticker Pack',
-  ParvaneExportKeys: 'Export E2E Keys',
-  ParvaneImportKeys: 'Import E2E Keys',
   // Заголовок экрана Settings → Devices (SettingsHeader)
   SessionsTitle: 'Devices',
   // Авто-линковка истории (Settings → Devices)
@@ -1608,8 +1606,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'MuteFor.Forever': 'Выключить навсегда',
   'Common.Done': 'Готово',
   ParvaneCreatePack: 'Создать набор стикеров',
-  ParvaneExportKeys: 'Экспорт ключей E2E',
-  ParvaneImportKeys: 'Импорт ключей E2E',
   SessionsTitle: 'Устройства',
   ParvaneLinkPendingTitle: 'Или подтвердите на другом устройстве',
   ParvaneLinkPendingText: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код %@.',

@@ -22,6 +22,7 @@ import {
 const PASSWORD = 'Parvane-keys-e2e-password';
 const BACKUP_PASSWORD = 'backup-secret-phrase';
 
+// «Профиль → Копия ключей» (spec 041 E3; прежде строки стояли в «Конфиденциальности»)
 async function openPrivacySettings(page) {
   // Непривязанное устройство web само открывает экран «Устройства» — назад к списку чатов
   if (await page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: 2500 })
@@ -29,7 +30,7 @@ async function openPrivacySettings(page) {
     await closeSettings(page);
   }
   await openProfile(page);
-  await page.getByRole('button', { name: 'Privacy and Security' }).click();
+  await page.locator('[data-profile-item="keys"]:visible').click();
 }
 
 const browser = await chromium.launch();
@@ -58,7 +59,7 @@ try {
   bobSession.page.on('dialog', (dialog) => dialog.accept(BACKUP_PASSWORD));
   await openPrivacySettings(bobSession.page);
   const downloadPromise = bobSession.page.waitForEvent('download', { timeout: LOGIN_TIMEOUT_MS });
-  await bobSession.page.getByRole('button', { name: 'Export E2E Keys' }).click();
+  await bobSession.page.locator('[data-keys-action="save"]').click();
   const download = await downloadPromise;
   const backupDir = await mkdtemp(join(tmpdir(), 'parvane-keys-'));
   const backupPath = join(backupDir, 'parvane-e2e-keys.json');
@@ -79,7 +80,7 @@ try {
   newDevice.page.on('dialog', (dialog) => dialog.accept(BACKUP_PASSWORD));
   await openPrivacySettings(newDevice.page);
   const fileChooserPromise = newDevice.page.waitForEvent('filechooser');
-  await newDevice.page.getByRole('button', { name: 'Import E2E Keys' }).click();
+  await newDevice.page.locator('[data-keys-action="restore"]').click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles(backupPath);
   await newDevice.page.locator('.Notification').filter({ hasText: 'imported' }).first()
