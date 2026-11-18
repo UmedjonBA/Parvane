@@ -24,6 +24,8 @@ pub mod history;
 pub mod health_parse;
 pub mod modules;
 pub mod music_queue;
+/// Раскладка графа заметок и холста из графа (spec 040).
+pub mod notes_graph;
 pub mod hold;
 pub mod host;
 pub mod identity;

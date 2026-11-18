@@ -1,0 +1,580 @@
+{
+ "rule": "NOTES-1",
+ "note": "Общий образец раскладки графа заметок и холста из графа: вызов движка (call) с входом (args) обязан дать ровно expect — на любом устройстве и в любом клиенте. Данные выдуманы. Ожидаемое пересоздаётся тестом движка: NOTES_GRAPH_REGEN=1 cargo test -p parvane-protocol --test notes_graph_vectors.",
+ "cases": [
+  {
+   "name": "все заметки: две связные группы, заметки, которых ещё нет, и одиночки отдельным рядом",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":548,"kind":"group","nodes":10,"w":760,"x":0,"y":0},
+     {"h":139,"kind":"group","nodes":2,"w":234,"x":0,"y":608},
+     {"h":32,"kind":"singles","nodes":3,"w":390,"x":0,"y":807}
+    ],
+    "bounds": {"h":839,"w":760,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":248,"cy":333,"from":"n1","mutual":false,"to":"n2","x1":165,"x2":330,"y1":367,"y2":299},
+     {"curved":false,"cx":86,"cy":326,"from":"n1","mutual":true,"to":"n3","x1":139,"x2":32,"y1":364,"y2":286},
+     {"curved":false,"cx":158,"cy":291,"from":"n1","mutual":false,"to":"n4","x1":152,"x2":164,"y1":358,"y2":224},
+     {"curved":false,"cx":105,"cy":446,"from":"n1","mutual":false,"to":"n5","x1":143,"x2":64,"y1":386,"y2":509},
+     {"curved":false,"cx":255,"cy":251,"from":"n2","mutual":false,"to":"n4","x1":330,"x2":179,"y1":287,"y2":215},
+     {"curved":false,"cx":389,"cy":220,"from":"n2","mutual":false,"to":"missing:рассада","x1":352,"x2":427,"y1":280,"y2":156},
+     {"curved":false,"cx":93,"cy":244,"from":"n3","mutual":false,"to":"n4","x1":34,"x2":151,"y1":272,"y2":215},
+     {"curved":false,"cx":158,"cy":119,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":164,"x2":152,"y1":194,"y2":41},
+     {"curved":false,"cx":457,"cy":329,"from":"n6","mutual":false,"to":"n2","x1":555,"x2":358,"y1":359,"y2":298},
+     {"curved":false,"cx":637,"cy":316,"from":"n6","mutual":false,"to":"missing:перец","x1":581,"x2":695,"y1":355,"y2":274},
+     {"curved":false,"cx":635,"cy":430,"from":"n7","mutual":false,"to":"n6","x1":692,"x2":580,"y1":487,"y2":375},
+     {"curved":false,"cx":112,"cy":678,"from":"n8","mutual":true,"to":"n9","x1":59,"x2":164,"y1":711,"y2":644}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"left","w":42,"x":93,"y":365},"r":12,"title":"Огород","x":151,"y":373},
+     {"block":0,"degree":4,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":323,"y":309},"r":12,"title":"Томаты","x":344,"y":293},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"top","w":42,"x":0,"y":247},"r":11,"title":"Огурцы","x":21,"y":278},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":36,"x":147,"y":225},"r":12,"title":"Полив","x":165,"y":209},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":50,"x":33,"y":532},"r":9,"title":"Компост","x":58,"y":519},
+     {"block":0,"degree":3,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"right","w":78,"x":585,"y":356},"r":12,"title":"Рецепт лечо","x":569,"y":364},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":640,"y":509},"r":9,"title":"Заготовки на зиму","x":700,"y":496},
+     {"block":1,"degree":1,"group":"","id":"n8","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":98,"x":0,"y":731},"r":9,"title":"Чтение на лето","x":49,"y":718},
+     {"block":1,"degree":1,"group":"","id":"n9","kind":"note","label":{"h":16,"show":true,"side":"top","w":120,"x":114,"y":608},"r":9,"title":"Список фантастики","x":174,"y":637},
+     {"block":2,"degree":0,"group":"Гараж","id":"n10","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":106,"y":823},"r":6,"title":"Ремонт велосипеда","x":166,"y":813},
+     {"block":2,"degree":0,"group":"","id":"n11","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":92,"x":0,"y":823},"r":6,"title":"Идеи подарков","x":46,"y":813},
+     {"block":2,"degree":0,"group":"Дача","id":"n12","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":150,"x":240,"y":823},"r":6,"title":"Очень длинное название заметки о планах на следующий сезон","x":315,"y":813},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"top","w":50,"x":408,"y":117},"r":9,"title":"Рассада","x":433,"y":146},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":16,"show":true,"side":"top","w":98,"x":102,"y":0},"r":9,"title":"Бочка для воды","x":151,"y":29},
+     {"block":0,"degree":1,"id":"missing:перец","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":36,"x":687,"y":280},"r":9,"title":"Перец","x":705,"y":267}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "другое зерно — другая раскладка тех же узлов",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"seed":8},
+   "expect": {
+    "blocks": [
+     {"h":541,"kind":"group","nodes":10,"w":752,"x":0,"y":0},
+     {"h":195,"kind":"group","nodes":2,"w":166,"x":0,"y":601},
+     {"h":32,"kind":"singles","nodes":3,"w":390,"x":0,"y":856}
+    ],
+    "bounds": {"h":888,"w":752,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":298,"cy":265,"from":"n1","mutual":false,"to":"n2","x1":232,"x2":364,"y1":280,"y2":249},
+     {"curved":false,"cx":138,"cy":301,"from":"n1","mutual":true,"to":"n3","x1":202,"x2":73,"y1":287,"y2":314},
+     {"curved":false,"cx":182,"cy":231,"from":"n1","mutual":false,"to":"n4","x1":209,"x2":155,"y1":271,"y2":191},
+     {"curved":false,"cx":230,"cy":198,"from":"n1","mutual":false,"to":"n5","x1":219,"x2":240,"y1":269,"y2":123},
+     {"curved":false,"cx":263,"cy":212,"from":"n2","mutual":false,"to":"n4","x1":365,"x2":161,"y1":241,"y2":182},
+     {"curved":false,"cx":433,"cy":177,"from":"n2","mutual":false,"to":"missing:рассада","x1":388,"x2":479,"y1":233,"y2":117},
+     {"curved":false,"cx":103,"cy":248,"from":"n3","mutual":false,"to":"n4","x1":66,"x2":139,"y1":305,"y2":191},
+     {"curved":false,"cx":98,"cy":104,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":139,"x2":56,"y1":165,"y2":39},
+     {"curved":false,"cx":483,"cy":302,"from":"n6","mutual":false,"to":"n2","x1":574,"x2":392,"y1":351,"y2":252},
+     {"curved":false,"cx":661,"cy":322,"from":"n6","mutual":false,"to":"missing:перец","x1":600,"x2":723,"y1":351,"y2":291},
+     {"curved":false,"cx":640,"cy":435,"from":"n7","mutual":false,"to":"n6","x1":685,"x2":595,"y1":502,"y2":370},
+     {"curved":false,"cx":78,"cy":699,"from":"n8","mutual":true,"to":"n9","x1":54,"x2":101,"y1":641,"y2":756}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":196,"y":300},"r":12,"title":"Огород","x":217,"y":284},
+     {"block":0,"degree":4,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":358,"y":261},"r":12,"title":"Томаты","x":379,"y":245},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":38,"y":332},"r":11,"title":"Огурцы","x":59,"y":317},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"left","w":36,"x":95,"y":170},"r":12,"title":"Полив","x":147,"y":178},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"top","w":50,"x":217,"y":82},"r":9,"title":"Компост","x":242,"y":111},
+     {"block":0,"degree":3,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"left","w":78,"x":493,"y":350},"r":12,"title":"Рецепт лечо","x":587,"y":358},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":632,"y":525},"r":9,"title":"Заготовки на зиму","x":692,"y":512},
+     {"block":1,"degree":1,"group":"","id":"n8","kind":"note","label":{"h":16,"show":true,"side":"top","w":98,"x":0,"y":601},"r":9,"title":"Чтение на лето","x":49,"y":630},
+     {"block":1,"degree":1,"group":"","id":"n9","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":46,"y":780},"r":9,"title":"Список фантастики","x":106,"y":767},
+     {"block":2,"degree":0,"group":"Гараж","id":"n10","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":106,"y":872},"r":6,"title":"Ремонт велосипеда","x":166,"y":862},
+     {"block":2,"degree":0,"group":"","id":"n11","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":92,"x":0,"y":872},"r":6,"title":"Идеи подарков","x":46,"y":862},
+     {"block":2,"degree":0,"group":"Дача","id":"n12","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":150,"x":240,"y":872},"r":6,"title":"Очень длинное название заметки о планах на следующий сезон","x":315,"y":862},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"top","w":50,"x":461,"y":79},"r":9,"title":"Рассада","x":486,"y":108},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":16,"show":true,"side":"top","w":98,"x":0,"y":0},"r":9,"title":"Бочка для воды","x":49,"y":29},
+     {"block":0,"degree":1,"id":"missing:перец","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":36,"x":716,"y":299},"r":9,"title":"Перец","x":734,"y":286}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "папка с подпапками: ссылки на заметки вне папки не рисуются",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"scope":{"folder":"Дача","kind":"folder"},"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":547,"kind":"group","nodes":7,"w":473,"x":0,"y":0},
+     {"h":32,"kind":"singles","nodes":1,"w":150,"x":0,"y":607}
+    ],
+    "bounds": {"h":639,"w":473,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":149,"cy":278,"from":"n1","mutual":false,"to":"n2","x1":115,"x2":183,"y1":360,"y2":195},
+     {"curved":false,"cx":94,"cy":312,"from":"n1","mutual":true,"to":"n3","x1":105,"x2":81,"y1":359,"y2":263},
+     {"curved":false,"cx":179,"cy":345,"from":"n1","mutual":false,"to":"n4","x1":123,"x2":234,"y1":368,"y2":322},
+     {"curved":false,"cx":67,"cy":446,"from":"n1","mutual":false,"to":"n5","x1":101,"x2":31,"y1":387,"y2":508},
+     {"curved":false,"cx":219,"cy":249,"from":"n2","mutual":false,"to":"n4","x1":195,"x2":242,"y1":195,"y2":302},
+     {"curved":false,"cx":222,"cy":105,"from":"n2","mutual":false,"to":"missing:рассада","x1":195,"x2":250,"y1":167,"y2":40},
+     {"curved":false,"cx":163,"cy":283,"from":"n3","mutual":false,"to":"n4","x1":91,"x2":234,"y1":254,"y2":310},
+     {"curved":false,"cx":336,"cy":325,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":263,"x2":412,"y1":317,"y2":332}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"left","w":42,"x":51,"y":366},"r":12,"title":"Огород","x":109,"y":374},
+     {"block":0,"degree":3,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"right","w":42,"x":205,"y":173},"r":12,"title":"Томаты","x":189,"y":181},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"top","w":42,"x":57,"y":218},"r":11,"title":"Огурцы","x":78,"y":249},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":36,"x":230,"y":332},"r":12,"title":"Полив","x":248,"y":316},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":50,"x":0,"y":531},"r":9,"title":"Компост","x":25,"y":518},
+     {"block":1,"degree":0,"group":"Дача","id":"n12","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":150,"x":0,"y":623},"r":6,"title":"Очень длинное название заметки о планах на следующий сезон","x":75,"y":613},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"top","w":50,"x":230,"y":0},"r":9,"title":"Рассада","x":255,"y":29},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":98,"x":375,"y":346},"r":9,"title":"Бочка для воды","x":424,"y":333}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "вокруг заметки, глубина 1",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"scope":{"depth":1,"kind":"around","note":"n2"},"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":302,"kind":"group","nodes":5,"w":333,"x":0,"y":0}
+    ],
+    "bounds": {"h":302,"w":333,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":148,"cy":204,"from":"n1","mutual":false,"to":"n2","x1":134,"x2":160,"y1":257,"y2":152},
+     {"curved":false,"cx":79,"cy":209,"from":"n1","mutual":false,"to":"n4","x1":122,"x2":36,"y1":260,"y2":157},
+     {"curved":false,"cx":96,"cy":142,"from":"n2","mutual":false,"to":"n4","x1":149,"x2":41,"y1":138,"y2":145},
+     {"curved":false,"cx":95,"cy":195,"from":"n2","mutual":false,"to":"missing:рассада","x1":152,"x2":34,"y1":147,"y2":245},
+     {"curved":false,"cx":229,"cy":83,"from":"n6","mutual":false,"to":"n2","x1":285,"x2":176,"y1":37,"y2":127}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":2,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":110,"y":286},"r":11,"title":"Огород","x":131,"y":271},
+     {"block":0,"degree":4,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"right","w":42,"x":180,"y":129},"r":12,"title":"Томаты","x":164,"y":137},
+     {"block":0,"degree":2,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"top","w":36,"x":9,"y":115},"r":11,"title":"Полив","x":27,"y":146},
+     {"block":0,"degree":1,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"top","w":78,"x":255,"y":0},"r":9,"title":"Рецепт лечо","x":294,"y":29},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":50,"x":0,"y":266},"r":9,"title":"Рассада","x":25,"y":253}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "вокруг заметки, глубина 2 (глубина больше 3 приводится к 3)",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"scope":{"depth":2,"kind":"around","note":"n7"},"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":325,"kind":"group","nodes":4,"w":344,"x":0,"y":0}
+    ],
+    "bounds": {"h":325,"w":344,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":250,"cy":222,"from":"n6","mutual":false,"to":"n2","x1":229,"x2":271,"y1":162,"y2":285},
+     {"curved":false,"cx":275,"cy":89,"from":"n6","mutual":false,"to":"missing:перец","x1":234,"x2":318,"y1":137,"y2":38},
+     {"curved":false,"cx":142,"cy":132,"from":"n7","mutual":false,"to":"n6","x1":72,"x2":209,"y1":118,"y2":145}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":1,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":254,"y":309},"r":9,"title":"Томаты","x":275,"y":296},
+     {"block":0,"degree":3,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"right","w":78,"x":240,"y":140},"r":12,"title":"Рецепт лечо","x":224,"y":148},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":0,"y":129},"r":9,"title":"Заготовки на зиму","x":60,"y":116},
+     {"block":0,"degree":1,"id":"missing:перец","kind":"missing","label":{"h":16,"show":true,"side":"top","w":36,"x":308,"y":0},"r":9,"title":"Перец","x":326,"y":29}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "метка вместе с вложенными, решётка и регистр не важны",
+   "call": "notesGraphLayout",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"scope":{"kind":"tag","tag":"#Дача"},"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":547,"kind":"group","nodes":7,"w":473,"x":0,"y":0}
+    ],
+    "bounds": {"h":547,"w":473,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":149,"cy":278,"from":"n1","mutual":false,"to":"n2","x1":115,"x2":183,"y1":360,"y2":195},
+     {"curved":false,"cx":94,"cy":312,"from":"n1","mutual":true,"to":"n3","x1":105,"x2":81,"y1":359,"y2":263},
+     {"curved":false,"cx":179,"cy":345,"from":"n1","mutual":false,"to":"n4","x1":123,"x2":234,"y1":368,"y2":322},
+     {"curved":false,"cx":67,"cy":446,"from":"n1","mutual":false,"to":"n5","x1":101,"x2":31,"y1":387,"y2":508},
+     {"curved":false,"cx":219,"cy":249,"from":"n2","mutual":false,"to":"n4","x1":195,"x2":242,"y1":195,"y2":302},
+     {"curved":false,"cx":222,"cy":105,"from":"n2","mutual":false,"to":"missing:рассада","x1":195,"x2":250,"y1":167,"y2":40},
+     {"curved":false,"cx":163,"cy":283,"from":"n3","mutual":false,"to":"n4","x1":91,"x2":234,"y1":254,"y2":310},
+     {"curved":false,"cx":336,"cy":325,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":263,"x2":412,"y1":317,"y2":332}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"left","w":42,"x":51,"y":366},"r":12,"title":"Огород","x":109,"y":374},
+     {"block":0,"degree":3,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"right","w":42,"x":205,"y":173},"r":12,"title":"Томаты","x":189,"y":181},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"top","w":42,"x":57,"y":218},"r":11,"title":"Огурцы","x":78,"y":249},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":36,"x":230,"y":332},"r":12,"title":"Полив","x":248,"y":316},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":50,"x":0,"y":531},"r":9,"title":"Компост","x":25,"y":518},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"top","w":50,"x":230,"y":0},"r":9,"title":"Рассада","x":255,"y":29},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":98,"x":375,"y":346},"r":9,"title":"Бочка для воды","x":424,"y":333}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "без одиночек и без заметок, которых ещё нет",
+   "call": "notesGraphLayout",
+   "args": {"hideMissing":true,"hideOrphans":true,"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":670,"kind":"group","nodes":7,"w":460,"x":0,"y":0},
+     {"h":132,"kind":"group","nodes":2,"w":238,"x":520,"y":0}
+    ],
+    "bounds": {"h":670,"w":758,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":263,"cy":414,"from":"n1","mutual":false,"to":"n2","x1":270,"x2":255,"y1":473,"y2":354},
+     {"curved":false,"cx":295,"cy":564,"from":"n1","mutual":true,"to":"n3","x1":276,"x2":313,"y1":502,"y2":626},
+     {"curved":false,"cx":327,"cy":493,"from":"n1","mutual":false,"to":"n4","x1":287,"x2":366,"y1":489,"y2":497},
+     {"curved":false,"cx":354,"cy":447,"from":"n1","mutual":false,"to":"n5","x1":285,"x2":424,"y1":481,"y2":411},
+     {"curved":false,"cx":317,"cy":419,"from":"n2","mutual":false,"to":"n4","x1":262,"x2":372,"y1":351,"y2":486},
+     {"curved":false,"cx":349,"cy":569,"from":"n3","mutual":false,"to":"n4","x1":323,"x2":375,"y1":626,"y2":512},
+     {"curved":false,"cx":202,"cy":256,"from":"n6","mutual":false,"to":"n2","x1":157,"x2":245,"y1":184,"y2":326},
+     {"curved":false,"cx":105,"cy":101,"from":"n7","mutual":false,"to":"n6","x1":66,"x2":143,"y1":39,"y2":160},
+     {"curved":false,"cx":645,"cy":66,"from":"n8","mutual":true,"to":"n9","x1":699,"x2":590,"y1":97,"y2":35}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"left","w":42,"x":214,"y":480},"r":12,"title":"Огород","x":272,"y":488},
+     {"block":0,"degree":3,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"right","w":42,"x":269,"y":331},"r":12,"title":"Томаты","x":253,"y":339},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":296,"y":654},"r":11,"title":"Огурцы","x":317,"y":639},
+     {"block":0,"degree":3,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"right","w":36,"x":397,"y":490},"r":12,"title":"Полив","x":381,"y":498},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":50,"x":410,"y":419},"r":9,"title":"Компост","x":435,"y":406},
+     {"block":0,"degree":2,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"right","w":78,"x":165,"y":164},"r":11,"title":"Рецепт лечо","x":150,"y":172},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":16,"show":true,"side":"top","w":120,"x":0,"y":0},"r":9,"title":"Заготовки на зиму","x":60,"y":29},
+     {"block":1,"degree":1,"group":"","id":"n8","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":98,"x":660,"y":116},"r":9,"title":"Чтение на лето","x":709,"y":103},
+     {"block":1,"degree":1,"group":"","id":"n9","kind":"note","label":{"h":16,"show":true,"side":"top","w":120,"x":520,"y":0},"r":9,"title":"Список фантастики","x":580,"y":29}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "заметки дней и записи плана: записи с одним названием — один узел",
+   "call": "notesGraphLayout",
+   "args": {"hideOrphans":true,"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"records":[{"id":"r1","links":["Томаты","Теплица"],"title":"Высадить рассаду","type":"task"},{"id":"r2","links":["Огурцы"],"title":"Высадить рассаду","type":"task"},{"id":"r3","links":[],"title":"Без ссылок","type":"event"}],"seed":7,"withDays":true,"withRecords":true},
+   "expect": {
+    "blocks": [
+     {"h":883,"kind":"group","nodes":13,"w":697,"x":0,"y":0},
+     {"h":202,"kind":"group","nodes":2,"w":147,"x":757,"y":0}
+    ],
+    "bounds": {"h":883,"w":904,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":230,"cy":601,"from":"n1","mutual":false,"to":"n2","x1":198,"x2":261,"y1":693,"y2":510},
+     {"curved":false,"cx":274,"cy":750,"from":"n1","mutual":true,"to":"n3","x1":207,"x2":342,"y1":715,"y2":785},
+     {"curved":false,"cx":275,"cy":671,"from":"n1","mutual":false,"to":"n4","x1":208,"x2":342,"y1":701,"y2":640},
+     {"curved":false,"cx":133,"cy":781,"from":"n1","mutual":false,"to":"n5","x1":183,"x2":80,"y1":720,"y2":845},
+     {"curved":false,"cx":312,"cy":564,"from":"n2","mutual":false,"to":"n4","x1":276,"x2":348,"y1":508,"y2":621},
+     {"curved":false,"cx":206,"cy":429,"from":"n2","mutual":false,"to":"missing:рассада","x1":255,"x2":153,"y1":482,"y2":372},
+     {"curved":false,"cx":356,"cy":713,"from":"n3","mutual":false,"to":"n4","x1":355,"x2":356,"y1":777,"y2":649},
+     {"curved":false,"cx":436,"cy":576,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":368,"x2":506,"y1":625,"y2":524},
+     {"curved":false,"cx":283,"cy":354,"from":"n6","mutual":false,"to":"n2","x1":297,"x2":269,"y1":229,"y2":477},
+     {"curved":false,"cx":363,"cy":156,"from":"n6","mutual":false,"to":"missing:перец","x1":310,"x2":417,"y1":204,"y2":106},
+     {"curved":false,"cx":267,"cy":122,"from":"n7","mutual":false,"to":"n6","x1":239,"x2":294,"y1":40,"y2":200},
+     {"curved":false,"cx":825,"cy":101,"from":"n8","mutual":true,"to":"n9","x1":809,"x2":841,"y1":41,"y2":161},
+     {"curved":false,"cx":139,"cy":642,"from":"d1","mutual":false,"to":"n1","x1":94,"x2":183,"y1":587,"y2":696},
+     {"curved":false,"cx":176,"cy":535,"from":"d1","mutual":false,"to":"n2","x1":98,"x2":252,"y1":570,"y2":501},
+     {"curved":false,"cx":375,"cy":578,"from":"r1","mutual":false,"to":"n2","x1":471,"x2":280,"y1":652,"y2":504},
+     {"curved":false,"cx":578,"cy":676,"from":"r1","mutual":false,"to":"missing:теплица","x1":498,"x2":660,"y1":663,"y2":689},
+     {"curved":false,"cx":419,"cy":727,"from":"r1","mutual":false,"to":"n3","x1":473,"x2":365,"y1":672,"y2":781}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":5,"group":"Дача","id":"n1","kind":"note","label":{"h":16,"show":true,"side":"left","w":42,"x":134,"y":700},"r":13,"title":"Огород","x":193,"y":708},
+     {"block":0,"degree":6,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":16,"show":true,"side":"right","w":42,"x":285,"y":486},"r":14,"title":"Томаты","x":267,"y":494},
+     {"block":0,"degree":3,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":42,"x":334,"y":808},"r":12,"title":"Огурцы","x":355,"y":792},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":16,"show":true,"side":"right","w":36,"x":372,"y":626},"r":12,"title":"Полив","x":356,"y":634},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":50,"x":47,"y":867},"r":9,"title":"Компост","x":72,"y":854},
+     {"block":0,"degree":3,"group":"Кухня","id":"n6","kind":"note","label":{"h":16,"show":true,"side":"right","w":78,"x":315,"y":206},"r":12,"title":"Рецепт лечо","x":299,"y":214},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":16,"show":true,"side":"top","w":120,"x":175,"y":0},"r":9,"title":"Заготовки на зиму","x":235,"y":29},
+     {"block":1,"degree":1,"group":"","id":"n8","kind":"note","label":{"h":16,"show":true,"side":"top","w":98,"x":757,"y":0},"r":9,"title":"Чтение на лето","x":806,"y":29},
+     {"block":1,"degree":1,"group":"","id":"n9","kind":"note","label":{"h":16,"show":true,"side":"bottom","w":120,"x":784,"y":186},"r":9,"title":"Список фантастики","x":844,"y":173},
+     {"block":0,"degree":2,"group":"Дневник","id":"d1","kind":"day","label":{"h":16,"show":true,"side":"left","w":70,"x":0,"y":568},"r":11,"title":"2031-05-04","x":85,"y":576},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":16,"show":true,"side":"top","w":50,"x":120,"y":334},"r":9,"title":"Рассада","x":145,"y":363},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":16,"show":true,"side":"top","w":98,"x":467,"y":488},"r":9,"title":"Бочка для воды","x":516,"y":517},
+     {"block":0,"degree":1,"id":"missing:перец","kind":"missing","label":{"h":16,"show":true,"side":"top","w":36,"x":408,"y":69},"r":9,"title":"Перец","x":426,"y":98},
+     {"block":0,"degree":3,"group":"task","id":"r1","kind":"record","label":{"h":16,"show":true,"side":"left","w":112,"x":355,"y":653},"r":12,"title":"Высадить рассаду","x":483,"y":661},
+     {"block":0,"degree":1,"id":"missing:теплица","kind":"missing","label":{"h":16,"show":true,"side":"bottom","w":50,"x":647,"y":704},"r":9,"title":"Теплица","x":672,"y":691}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "свои размеры подписи: узкий знак и короткая подпись",
+   "call": "notesGraphLayout",
+   "args": {"charWidth":6,"hideOrphans":true,"labelHeight":14,"labelMaxWidth":80,"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":536,"kind":"group","nodes":10,"w":725,"x":0,"y":0},
+     {"h":129,"kind":"group","nodes":2,"w":197,"x":0,"y":596}
+    ],
+    "bounds": {"h":725,"w":725,"x":0,"y":0},
+    "edges": [
+     {"curved":false,"cx":243,"cy":326,"from":"n1","mutual":false,"to":"n2","x1":160,"x2":325,"y1":360,"y2":292},
+     {"curved":false,"cx":82,"cy":319,"from":"n1","mutual":true,"to":"n3","x1":134,"x2":29,"y1":357,"y2":279},
+     {"curved":false,"cx":154,"cy":285,"from":"n1","mutual":false,"to":"n4","x1":147,"x2":160,"y1":351,"y2":218},
+     {"curved":false,"cx":100,"cy":438,"from":"n1","mutual":false,"to":"n5","x1":138,"x2":60,"y1":379,"y2":499},
+     {"curved":false,"cx":250,"cy":245,"from":"n2","mutual":false,"to":"n4","x1":325,"x2":175,"y1":280,"y2":209},
+     {"curved":false,"cx":383,"cy":214,"from":"n2","mutual":false,"to":"missing:рассада","x1":347,"x2":420,"y1":273,"y2":152},
+     {"curved":false,"cx":90,"cy":237,"from":"n3","mutual":false,"to":"n4","x1":31,"x2":147,"y1":265,"y2":209},
+     {"curved":false,"cx":153,"cy":115,"from":"n4","mutual":false,"to":"missing:бочка для воды","x1":160,"x2":146,"y1":188,"y2":39},
+     {"curved":false,"cx":451,"cy":322,"from":"n6","mutual":false,"to":"n2","x1":548,"x2":353,"y1":352,"y2":291},
+     {"curved":false,"cx":629,"cy":310,"from":"n6","mutual":false,"to":"missing:перец","x1":574,"x2":686,"y1":348,"y2":270},
+     {"curved":false,"cx":624,"cy":421,"from":"n7","mutual":false,"to":"n6","x1":677,"x2":572,"y1":476,"y2":368},
+     {"curved":false,"cx":99,"cy":661,"from":"n8","mutual":true,"to":"n9","x1":50,"x2":147,"y1":692,"y2":629}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "nodes": [
+     {"block":0,"degree":4,"group":"Дача","id":"n1","kind":"note","label":{"h":14,"show":true,"side":"left","w":36,"x":94,"y":359},"r":12,"title":"Огород","x":146,"y":366},
+     {"block":0,"degree":4,"group":"Дача/Грядки","id":"n2","kind":"note","label":{"h":14,"show":true,"side":"bottom","w":36,"x":321,"y":302},"r":12,"title":"Томаты","x":339,"y":286},
+     {"block":0,"degree":2,"group":"Дача/Грядки","id":"n3","kind":"note","label":{"h":14,"show":true,"side":"bottom","w":36,"x":0,"y":286},"r":11,"title":"Огурцы","x":18,"y":271},
+     {"block":0,"degree":4,"group":"Дача","id":"n4","kind":"note","label":{"h":14,"show":true,"side":"right","w":30,"x":177,"y":196},"r":12,"title":"Полив","x":161,"y":203},
+     {"block":0,"degree":1,"group":"Дача","id":"n5","kind":"note","label":{"h":14,"show":true,"side":"bottom","w":42,"x":33,"y":522},"r":9,"title":"Компост","x":54,"y":509},
+     {"block":0,"degree":3,"group":"Кухня","id":"n6","kind":"note","label":{"h":14,"show":true,"side":"right","w":66,"x":578,"y":350},"r":12,"title":"Рецепт лечо","x":562,"y":357},
+     {"block":0,"degree":1,"group":"Кухня","id":"n7","kind":"note","label":{"h":14,"show":true,"side":"bottom","w":80,"x":645,"y":498},"r":9,"title":"Заготовки на зиму","x":685,"y":485},
+     {"block":1,"degree":1,"group":"","id":"n8","kind":"note","label":{"h":14,"show":true,"side":"bottom","w":80,"x":0,"y":711},"r":9,"title":"Чтение на лето","x":40,"y":698},
+     {"block":1,"degree":1,"group":"","id":"n9","kind":"note","label":{"h":14,"show":true,"side":"top","w":80,"x":117,"y":596},"r":9,"title":"Список фантастики","x":157,"y":623},
+     {"block":0,"degree":1,"id":"missing:рассада","kind":"missing","label":{"h":14,"show":true,"side":"top","w":42,"x":405,"y":115},"r":9,"title":"Рассада","x":426,"y":142},
+     {"block":0,"degree":1,"id":"missing:бочка для воды","kind":"missing","label":{"h":14,"show":true,"side":"top","w":80,"x":105,"y":0},"r":9,"title":"Бочка для воды","x":145,"y":27},
+     {"block":0,"degree":1,"id":"missing:перец","kind":"missing","label":{"h":14,"show":true,"side":"bottom","w":30,"x":681,"y":276},"r":9,"title":"Перец","x":696,"y":263}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "холст из графа: уровни от главной заметки, одиночки сеткой",
+   "call": "notesGraphCanvas",
+   "args": {"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":740,"kind":"group","nodes":7,"w":1180,"x":0,"y":0},
+     {"h":340,"kind":"group","nodes":2,"w":250,"x":0,"y":860},
+     {"h":140,"kind":"singles","nodes":3,"w":870,"x":0,"y":1320}
+    ],
+    "bounds": {"h":1460,"w":1180,"x":0,"y":0},
+    "cards": [
+     {"block":0,"folder":"Дача","height":140,"id":"n1","kind":"note","level":0,"title":"Огород","width":250,"x":470,"y":0},
+     {"block":0,"folder":"Дача/Грядки","height":140,"id":"n2","kind":"note","level":1,"title":"Томаты","width":250,"x":0,"y":200},
+     {"block":0,"folder":"Дача/Грядки","height":140,"id":"n3","kind":"note","level":1,"title":"Огурцы","width":250,"x":310,"y":200},
+     {"block":0,"folder":"Дача","height":140,"id":"n4","kind":"note","level":1,"title":"Полив","width":250,"x":620,"y":200},
+     {"block":0,"folder":"Дача","height":140,"id":"n5","kind":"note","level":1,"title":"Компост","width":250,"x":930,"y":200},
+     {"block":0,"folder":"Кухня","height":140,"id":"n6","kind":"note","level":2,"title":"Рецепт лечо","width":250,"x":470,"y":400},
+     {"block":0,"folder":"Кухня","height":140,"id":"n7","kind":"note","level":3,"title":"Заготовки на зиму","width":250,"x":470,"y":600},
+     {"block":1,"folder":"","height":140,"id":"n8","kind":"note","level":0,"title":"Чтение на лето","width":250,"x":0,"y":860},
+     {"block":1,"folder":"","height":140,"id":"n9","kind":"note","level":1,"title":"Список фантастики","width":250,"x":0,"y":1060},
+     {"block":2,"folder":"Гараж","height":140,"id":"n10","kind":"note","level":0,"title":"Ремонт велосипеда","width":250,"x":310,"y":1320},
+     {"block":2,"folder":"","height":140,"id":"n11","kind":"note","level":0,"title":"Идеи подарков","width":250,"x":0,"y":1320},
+     {"block":2,"folder":"Дача","height":140,"id":"n12","kind":"note","level":0,"title":"Очень длинное название заметки о планах на следующий сезон","width":250,"x":620,"y":1320}
+    ],
+    "edges": [
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n2","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":true,"to":"n3","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n4","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n5","toSide":"top"},
+     {"from":"n2","fromSide":"right","mutual":false,"to":"n4","toSide":"left"},
+     {"from":"n3","fromSide":"right","mutual":false,"to":"n4","toSide":"left"},
+     {"from":"n6","fromSide":"top","mutual":false,"to":"n2","toSide":"bottom"},
+     {"from":"n7","fromSide":"top","mutual":false,"to":"n6","toSide":"bottom"},
+     {"from":"n8","fromSide":"bottom","mutual":true,"to":"n9","toSide":"top"}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "холст из графа по папке, свои размеры карточки",
+   "call": "notesGraphCanvas",
+   "args": {"cardHeight":100,"cardWidth":200,"gap":40,"grid":20,"notes":[{"folder":"Дача","id":"n1","links":["Томаты","Огурцы","Полив","Компост"],"tags":["дача"],"title":"Огород"},{"folder":"Дача/Грядки","id":"n2","links":["Полив","Рассада"],"tags":["дача/овощи","весна"],"title":"Томаты"},{"folder":"Дача/Грядки","id":"n3","links":["Полив","Огород"],"tags":["дача/овощи"],"title":"Огурцы"},{"folder":"Дача","id":"n4","links":["Бочка для воды"],"tags":["дача"],"title":"Полив"},{"folder":"Дача","id":"n5","links":[],"tags":["дача"],"title":"Компост"},{"folder":"Кухня","id":"n6","links":["Томаты","Перец"],"tags":["рецепты"],"title":"Рецепт лечо"},{"folder":"Кухня","id":"n7","links":["Рецепт лечо"],"tags":["рецепты","осень"],"title":"Заготовки на зиму"},{"folder":"","id":"n8","links":["Список фантастики"],"tags":["книги"],"title":"Чтение на лето"},{"folder":"","id":"n9","links":["Чтение на лето"],"tags":["книги"],"title":"Список фантастики"},{"folder":"Гараж","id":"n10","links":[],"tags":["#техника"],"title":"Ремонт велосипеда"},{"folder":"","id":"n11","links":[],"title":"Идеи подарков"},{"folder":"Дача","id":"n12","links":[],"title":"Очень длинное название заметки о планах на следующий сезон"},{"folder":"Дневник","id":"d1","isDaily":true,"links":["Огород","Томаты"],"title":"2031-05-04"}],"scope":{"folder":"Дача","kind":"folder"},"seed":7},
+   "expect": {
+    "blocks": [
+     {"h":240,"kind":"group","nodes":5,"w":920,"x":0,"y":0},
+     {"h":100,"kind":"singles","nodes":1,"w":200,"x":0,"y":320}
+    ],
+    "bounds": {"h":420,"w":920,"x":0,"y":0},
+    "cards": [
+     {"block":0,"folder":"Дача","height":100,"id":"n1","kind":"note","level":0,"title":"Огород","width":200,"x":360,"y":0},
+     {"block":0,"folder":"Дача/Грядки","height":100,"id":"n2","kind":"note","level":1,"title":"Томаты","width":200,"x":0,"y":140},
+     {"block":0,"folder":"Дача/Грядки","height":100,"id":"n3","kind":"note","level":1,"title":"Огурцы","width":200,"x":240,"y":140},
+     {"block":0,"folder":"Дача","height":100,"id":"n4","kind":"note","level":1,"title":"Полив","width":200,"x":480,"y":140},
+     {"block":0,"folder":"Дача","height":100,"id":"n5","kind":"note","level":1,"title":"Компост","width":200,"x":720,"y":140},
+     {"block":1,"folder":"Дача","height":100,"id":"n12","kind":"note","level":0,"title":"Очень длинное название заметки о планах на следующий сезон","width":200,"x":0,"y":320}
+    ],
+    "edges": [
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n2","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":true,"to":"n3","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n4","toSide":"top"},
+     {"from":"n1","fromSide":"bottom","mutual":false,"to":"n5","toSide":"top"},
+     {"from":"n2","fromSide":"right","mutual":false,"to":"n4","toSide":"left"},
+     {"from":"n3","fromSide":"right","mutual":false,"to":"n4","toSide":"left"}
+    ],
+    "folders": [
+     {"count":3,"path":""},
+     {"count":1,"path":"Гараж"},
+     {"count":4,"path":"Дача"},
+     {"count":2,"path":"Дача/Грядки"},
+     {"count":2,"path":"Кухня"}
+    ],
+    "tags": [
+     {"count":1,"tag":"весна"},
+     {"count":3,"tag":"дача"},
+     {"count":2,"tag":"дача/овощи"},
+     {"count":2,"tag":"книги"},
+     {"count":1,"tag":"осень"},
+     {"count":2,"tag":"рецепты"},
+     {"count":1,"tag":"техника"}
+    ]
+   }
+  },
+  {
+   "name": "пустой вход",
+   "call": "notesGraphLayout",
+   "args": {},
+   "expect": {
+    "blocks": [],
+    "bounds": {"h":0,"w":0,"x":0,"y":0},
+    "edges": [],
+    "folders": [],
+    "nodes": [],
+    "tags": []
+   }
+  }
+ ]
+}

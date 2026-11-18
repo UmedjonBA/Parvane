@@ -1986,6 +1986,20 @@
         "desktop": "ОТКРЫТО: карточки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_track_roundtrip_and_text_fallback",
         "android": "ОТКРЫТО: карточки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_track_roundtrip_and_text_fallback"
       }
+    },
+    {
+      "id": "NOTES-1",
+      "title": "«Заметки»: раскладку графа и холста из графа считает движок, клиент рисует по координатам",
+      "kind": "ui",
+      "record": "движок: статические вызовы без состояния notesGraphLayout и notesGraphCanvas (WASM staticCall, C ABI pv_call); вход — JSON {notes[{id, title, folder, links, tags, isDaily}], records[{id, title, links, type}], scope{kind: all | folder{folder} | around{note, depth 1–3} | tag{tag}}, hideOrphans, hideMissing, withDays, withRecords, seed, aspect, charWidth, labelMaxWidth, labelHeight, cardWidth, cardHeight, gap, grid}; выход графа — {nodes[{id, title, kind, group, degree, x, y, r, label{x, y, w, h, side, show}, block}], edges[{from, to, mutual, x1, y1, cx, cy, x2, y2, curved}], blocks, bounds, folders, tags}; выход холста — {cards[{id, title, kind, folder, x, y, width, height, level, block}], edges[{from, to, mutual, fromSide, toSide}], blocks, bounds, folders, tags}",
+      "behaviour": "Клиент передаёт заметки (ссылки и метки он уже знает), область и зерно и рисует ответ — сам узлы не раскладывает, подписи не расставляет, связи не строит. Один вход даёт один ответ на любом устройстве (координаты — целые). Кружки и показанные подписи разных узлов не накладываются; подпись, которой места не нашлось, приходит с show: false. Связные группы раскладываются порознь, заметки без связей — отдельным рядом по папкам, блоки упакованы без наложений. Область: все заметки, папка с подпапками, заметка с соседями до глубины 1–3, метка с вложенными; ссылка на заметку вне области не рисуется; заметки дней включает withDays, выбор папки и метки их не касается. Холст из графа — карточки только существующих заметок той же области: связная группа уровнями от заметки с наибольшим числом связей, заметки без связей сеткой, места кратны шагу сетки",
+      "sample": "conformance/notes-graph/cases.json",
+      "status": "18 ноя 2026: движок — сделано (backend/protocol/src/notes_graph/, тест tests/notes_graph_vectors.rs); web — обёртка и тест по общему образцу сделаны, экраны графа и холста ещё рисуют прежней раскладкой (spec 040 T6, этап D2); desktop и android — открыто (свои порты раскладки удаляются на их этапе)",
+      "clients": {
+        "web": "components/parvane/notes/notesGraphEngine.ts (вызов движка и типы), тест notesGraphEngine.test.ts (общий образец через WASM); экраны NotesGraph.tsx и NotesCanvas.tsx — ОТКРЫТО (прежние notesGraph.ts layoutGraph и notesCanvasGraph.ts)",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
     }
   ]
 }

@@ -701,6 +701,9 @@ pub fn call_static(name: &str, args: &Value) -> R {
         "modulesSetOn" => serde_json::to_value(crate::modules::set_on(a.raw("prefs"), a.s("id")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,
         "modulesMove" => serde_json::to_value(crate::modules::move_to(a.raw("prefs"), a.s("id")?, a.i("to")?)).map_err(|_| err(ProtoError::Malformed))?,
         "modulesSetBlock" => serde_json::to_value(crate::modules::set_block(a.raw("prefs"), a.s("block")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,
+        // Граф заметок и холст из графа (NOTES-1): раскладку считает движок, клиент рисует по координатам
+        "notesGraphLayout" => crate::notes_graph::layout_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
+        "notesGraphCanvas" => crate::notes_graph::canvas_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
         "protoMajor" => json!(crate::PROTO_MAJOR),
         // spec 035: пять осей версий (то же, что WASM `engineInfo` и C ABI `pv_engine_info`).
         "engineInfo" => serde_json::to_value(crate::engine_info()).map_err(|_| err(ProtoError::Malformed))?,
