@@ -1,0 +1,38 @@
+// Холст по макету (доски `XpNotes`, `XdNotes`): инструменты с подписями, масштаб чипом внизу слева,
+// подсказка пустого холста
+
+.toolWide {
+  gap: 0.375rem;
+  width: auto;
+  padding-inline: 0.625rem;
+
+  @media (max-width: 760px) {
+    width: 2.375rem;
+    padding-inline: 0;
+  }
+}
+
+.toolLabel {
+  font-size: 0.8125rem;
+
+  @media (max-width: 760px) {
+    display: none;
+  }
+}
+
+.zoomChip {
+  cursor: default;
+
+  position: absolute;
+  z-index: 5;
+  bottom: 0.875rem;
+  left: 1rem;
+
+  background: var(--pv-panel);
+}
+
+.blank {
+  width: min(44ch, calc(100% - 2rem));
+  font-size: 0.875rem;
+  line-height: 1.5;
+}

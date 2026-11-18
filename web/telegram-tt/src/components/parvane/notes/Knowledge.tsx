@@ -505,13 +505,17 @@ const Knowledge = () => {
   // заметки только из него. Повторное нажатие, пока файл пишется, второго холста не создаёт
   const makeGraphCanvas = useLastCallback(async (scope: GraphCanvasScope) => {
     if (isMakingCanvasRef.current) return;
-    const content = canvasFromGraph(notes.map((note) => ({
-      id: note.id,
-      title: note.title,
-      folder: note.folder,
-      links: parseNote(note.text).links,
-      isDaily: note.isDaily,
-    })), { scope });
+    const content = canvasFromGraph(notes.map((note) => {
+      const parsed = parseNote(note.text);
+      return {
+        id: note.id,
+        title: note.title,
+        folder: note.folder,
+        links: parsed.links,
+        tags: parsed.tags,
+        isDaily: note.isDaily,
+      };
+    }), { scope });
     if (!content.nodes.length) {
       showGraphNotice(lang('KnowledgeGraphToCanvasEmpty'));
       return;
@@ -812,6 +816,7 @@ const Knowledge = () => {
         onMakeCanvas={makeGraphCanvas}
         query={graphQuery}
         searchStep={searchStep}
+        isNarrow={isNarrow}
       />
     ) : (
       <NotesCanvas
@@ -876,6 +881,8 @@ const Knowledge = () => {
           onClose={handleGraphClose}
           onOpenInNotes={handleOpenInNotes}
           onLinkStart={view === 'graph' ? setLinkFromId : undefined}
+          onLinkTitle={view === 'graph' ? linkNewInGraph : undefined}
+          onUnlink={view === 'graph' ? unlinkInGraph : undefined}
           onCreate={pickTitleInGraph}
           onOpenInPlan={handleOpenInPlan}
           onOpenTitle={pickTitleInGraph}

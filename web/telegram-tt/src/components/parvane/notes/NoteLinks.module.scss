@@ -1,0 +1,90 @@
+// «Связи» заметки по макету (доска `DeskNotes`): подпись раздела, малый граф карточкой, карточки связей
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.empty {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.graph {
+  display: block;
+
+  width: 100%;
+  max-width: 26rem;
+  height: 8.125rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.625rem;
+
+  background: var(--pv-panel);
+}
+
+.graphEdge {
+  fill: none;
+  stroke: var(--pv-line2);
+  stroke-width: 1.5;
+}
+
+.graphDot {
+  fill: var(--c, var(--pv-note));
+}
+
+.graphDotMissing {
+  fill-opacity: 0.35;
+}
+
+.graphNode {
+  cursor: var(--custom-cursor, pointer);
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.root .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+}
+
+.cardButton {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.cardTitle {
+  overflow: hidden;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardSub {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}

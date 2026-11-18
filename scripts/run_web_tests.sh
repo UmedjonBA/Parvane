@@ -142,6 +142,7 @@ log "Article in chat e2e (ARTICLE-1)"
 log "Markdown in notes e2e (MD-1)"
 "$ROOT/scripts/run_web_markdown_e2e.sh"
 "$ROOT/scripts/run_web_notes_screens_e2e.sh"
+"$ROOT/scripts/run_web_notes_graph_e2e.sh"
 
 log "Offline device catch-up e2e (conformance: device was absent)"
 "$ROOT/scripts/run_web_offline_device_e2e.sh"

@@ -1,0 +1,409 @@
+// Граф и холст модуля «Заметки» по макету (spec 041 D2, spec 040; доски `Notes`, `XpNotes`, `XdNotes`, `DeskNotes`):
+// точки, подписи и связи стоят там, где их поставил движок (NOTES-1), область графа — все / метка / вокруг
+// заметки, точку можно переставить руками (место переживает перезагрузку, «Разложить заново» возвращает),
+// панель выбранной заметки правит связи, «Связи» заметки — карточки с малым графом, холст из графа — уровнями,
+// «Обновить из графа» есть только у него, колесо двигает поле холста. Снимки телефон/компьютер ×
+// светлая/тёмная — в PARVANE_E2E_SHOT_DIR / PARVANE_E2E_BACKEND_LOG_DIR.
+// Запуск: scripts/run_web_notes_graph_e2e.sh
+import assert from 'node:assert/strict';
+
+import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
+
+import { dismissRecoveryKeyDialog, preparePage, reloadPage, relogin } from './e2e_web_helpers.mjs';
+
+const PASSWORD = 'Parvane-notes-graph-1';
+// Размеры досок макета: окно компьютера и телефон
+const DESK = { width: 1120, height: 700 };
+const PHONE = { width: 360, height: 800 };
+const STEP_TIMEOUT_MS = 20000;
+const SHOT_DIR = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR || '';
+// Выдуманные заметки: маяк ссылается на причал (отдельной строкой) и склад (внутри текста), причал — на маяк
+const HUB = 'Маяк у мыса';
+const PIER = 'Причал';
+const STORE = 'Склад снастей';
+const LONE = 'Одинокая лодка';
+const NEW_LINKED = 'Буй';
+const GUIDE_NOTES = 12;
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: DESK });
+let session;
+
+try {
+  const user = `ngraph-${Date.now().toString(36)}@local`;
+  session = await preparePage(context, user, PASSWORD);
+  const { page } = session;
+  await dismissRecoveryKeyDialog(page).catch(() => undefined);
+  const sidebar = page.locator('#FoldersSidebar');
+  const knowledge = page.locator('#ParvaneKnowledge');
+  const note = knowledge.locator('[data-note-id]');
+  const editor = page.locator('#knowledge-note-editor');
+  const graph = knowledge.locator('[data-notes-graph]');
+  const panel = page.locator('[data-graph-panel]');
+  const board = knowledge.locator('[data-canvas-board]');
+  const row = (title) => knowledge.locator(`[data-note-row="${title}"]`);
+  const gnode = (title) => graph.locator(`[data-node][data-title="${title}"]`);
+  const gedge = (from, to) => graph.locator(`[data-graph-edge][data-from-title="${from}"][data-to-title="${to}"]`);
+  const visible = (locator, what) => locator.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(`не появилось: ${what}`));
+  const gone = (locator, what) => locator.first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(what));
+  const count = (selector, wanted, what) => page.waitForFunction(
+    ([query, number]) => document.querySelectorAll(query).length === number, [selector, wanted],
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(async () => assert.fail(`${what}: ${await page.locator(selector).count()} вместо ${wanted}`));
+  const openTab = (name) => knowledge.getByRole('tab', { name, exact: true }).click();
+  const shot = async (name) => {
+    if (!SHOT_DIR) return;
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOT_DIR}/d2-${name}.png` }).catch(() => undefined);
+  };
+  // Снимок в светлой и тёмной теме: клиент следует теме системы
+  const shotBoth = async (name) => {
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await shot(`${name}-${scheme}`);
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+  };
+  // Редактор после открытия правки ещё раз перерисовывается — заполнение может попасть в отцепленный узел
+  const fillEditor = async (text) => {
+    for (let attempt = 0; ; attempt++) {
+      try { await editor.fill(text, { timeout: 5000 }); return; } catch (error) {
+        if (attempt >= 4) throw error;
+        await page.waitForTimeout(500);
+      }
+    }
+  };
+  const createNote = async (title, text) => {
+    await sidebar.locator('[data-add-for="notes"]').click();
+    await visible(knowledge.locator('[data-note-title="New note"]'), `новая заметка для «${title}»`);
+    // Поле названия подхватывает название открытой заметки эффектом — набор раньше него был бы стёрт
+    await page.waitForTimeout(400);
+    await note.getByLabel('Note title').fill(title);
+    await note.getByLabel('Note title').blur();
+    await visible(row(title), `строка заметки «${title}»`);
+    if (!text) return;
+    await note.locator('[data-note-bar]').getByRole('button', { name: 'Edit', exact: true }).click();
+    await visible(editor, 'редактор');
+    await fillEditor(text);
+    await note.getByRole('button', { name: 'Save' }).first().click();
+    await editor.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('правка не сохранилась'));
+  };
+  // Точка — её кружок; место берётся, когда оно устоялось (граф вписывается после смены того, что показано)
+  const centreOf = async (title) => {
+    const circle = gnode(title).locator('[data-graph-dot]');
+    await circle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    let box = await circle.boundingBox();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.waitForTimeout(150);
+      const next = await circle.boundingBox();
+      const isStill = box && next && Math.abs(next.x - box.x) < 0.5 && Math.abs(next.y - box.y) < 0.5;
+      box = next;
+      if (isStill) break;
+    }
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const clickNode = async (title) => {
+    const at = await centreOf(title);
+    await page.mouse.click(at.x, at.y);
+  };
+  const graphBusyDone = () => page.waitForFunction(
+    () => !document.querySelector('#ParvaneKnowledge [data-notes-graph]')?.hasAttribute('data-graph-busy'),
+    undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('раскладка графа не закончилась'));
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
+  await visible(knowledge, 'модуль «Заметки»');
+  await visible(row('Overview'), 'справка нового хранилища');
+  await createNote(STORE, 'Сети и канаты. #порт/склад\n');
+  await createNote(PIER, `Отсюда виден [[${HUB}]] в ясную погоду. #порт\n`);
+  await createNote(HUB, `Светит всю ночь, рядом лежит [[${STORE}]] под навесом.\n\n[[${PIER}]]\n`);
+  await createNote(LONE, 'Ни с чем не связана.\n');
+
+  // ── «Связи» заметки: малый граф от движка и карточки ─────────────────────
+  await row(HUB).click();
+  await visible(knowledge.locator(`[data-note-title="${HUB}"]`), 'заметка-узел открыта');
+  const links = knowledge.locator('[data-note-links]');
+  await visible(links, '«Связи» заметки');
+  assert.equal(await links.getAttribute('data-note-links'), '2', 'у заметки не две связи');
+  await visible(links.locator(`[data-link-way="both"][data-title="${PIER}"]`), 'взаимная связь карточкой');
+  await visible(links.locator(`[data-link-way="out"][data-title="${STORE}"]`), 'упомянутая заметка карточкой');
+  const mini = links.locator('[data-note-graph]');
+  await visible(mini, 'малый граф «Связей»');
+  assert.equal(await mini.getAttribute('data-note-graph'), '3', 'на малом графе не заметка и две соседки');
+  const miniBoxes = await mini.locator('circle').evaluateAll((dots) => dots.map((dot) => {
+    const box = dot.getBoundingClientRect();
+    return [box.left + box.width / 2, box.top + box.height / 2, box.width / 2];
+  }));
+  miniBoxes.forEach((a, i) => miniBoxes.slice(i + 1).forEach((b) => {
+    assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) >= a[2] + b[2], 'точки малого графа накладываются');
+  }));
+  await shotBoth('desk-links');
+  // Точка малого графа и карточка открывают заметку
+  await mini.locator(`[data-title="${PIER}"] circle`).click();
+  await visible(knowledge.locator(`[data-note-title="${PIER}"]`), 'заметка по точке малого графа');
+  await visible(knowledge.locator(`[data-note-links] [data-link-way="both"][data-title="${HUB}"]`), 'обратная связь карточкой');
+  await knowledge.locator(`[data-note-links] button[data-title="${HUB}"]`).click();
+  await visible(knowledge.locator(`[data-note-title="${HUB}"]`), 'заметка по карточке связи');
+  console.log('OK: «Связи» заметки — карточки и малый граф от движка, точка и карточка открывают заметку');
+
+  // ── Граф: точки и подписи стоят по раскладке движка ──────────────────────
+  await openTab('Graph');
+  await visible(graph, 'граф');
+  await graphBusyDone();
+  const NOTES_ON_GRAPH = '#ParvaneKnowledge [data-notes-graph] [data-node][data-kind="note"]';
+  await count(NOTES_ON_GRAPH, GUIDE_NOTES + 4, 'на графе не все заметки');
+  await visible(gedge(HUB, STORE), 'связь маяк → склад');
+  assert.equal(await graph.locator(`[data-graph-edge][data-mutual="true"]`).filter({ has: page.locator('path') }).count() >= 1, true, 'взаимная связь не отмечена');
+  await centreOf(HUB);
+  const circles = await graph.locator('[data-graph-dot]').evaluateAll((dots) => dots.map((dot) => {
+    const box = dot.getBoundingClientRect();
+    return [box.left + box.width / 2, box.top + box.height / 2, box.width / 2];
+  }));
+  circles.forEach((a, i) => circles.slice(i + 1).forEach((b) => {
+    assert.ok(Math.hypot(a[0] - b[0], a[1] - b[1]) >= a[2] + b[2] - 1, 'кружки графа накладываются');
+  }));
+  // Граф вписан: все кружки внутри поля
+  const field = await graph.boundingBox();
+  circles.forEach(([x, y]) => assert.ok(
+    x >= field.x && x <= field.x + field.width && y >= field.y && y <= field.y + field.height, 'точка за краем поля после вписывания',
+  ));
+  assert.ok(await graph.locator('[data-graph-label="shown"]').count() >= 4, 'подписей на графе почти нет');
+  // Наконечник стрелки — у каждой связи
+  const headless = await graph.locator('[data-graph-edge]').evaluateAll((edges) => (
+    edges.filter((edge) => !edge.querySelector('[data-edge-head]')).length
+  ));
+  assert.equal(headless, 0, 'у связей нет наконечников');
+  await shotBoth('desk-graph');
+  console.log('OK: граф — точки без наложений, подписи, наконечники, вписан в поле');
+
+  // ── Область графа: метка с вложенными, скрытие одиночных ─────────────────
+  const scopeChip = graph.locator('[data-graph-scope]');
+  const scopeMenu = graph.locator('[data-graph-scope-menu]');
+  await scopeChip.click();
+  await visible(scopeMenu.locator('[data-graph-scope-tag="порт"]'), 'метка в списке областей');
+  await shot('desk-graph-scope-light');
+  await scopeMenu.locator('[data-graph-scope-tag="порт"]').click();
+  await count(NOTES_ON_GRAPH, 2, 'по метке с вложенными — не две заметки');
+  await visible(gnode(PIER), 'заметка с меткой');
+  await visible(gnode(STORE), 'заметка с вложенной меткой');
+  assert.equal(await scopeChip.getAttribute('data-graph-scope'), 'tag', 'чип не показывает метку');
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-scope-all]').click();
+  await count(NOTES_ON_GRAPH, GUIDE_NOTES + 4, '«Все заметки» не вернули заметки');
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-hide-orphans]').click();
+  await gone(gnode(LONE), 'одиночная заметка не скрыта');
+  await count(NOTES_ON_GRAPH, GUIDE_NOTES + 3, 'скрытие одиночных убрало не одну заметку');
+  await scopeMenu.locator('[data-graph-hide-orphans]').click();
+  await visible(gnode(LONE), 'одиночная заметка после снятия скрытия');
+  await page.keyboard.press('Escape');
+  await gone(scopeMenu, 'Escape не закрыл список областей');
+  console.log('OK: область графа — метка с вложенными, скрытие одиночных');
+
+  // ── Ручная расстановка: место точки запоминается, «Вписать» её не трогает, «Разложить заново» возвращает ──
+  await graphBusyDone();
+  const before = await centreOf(LONE);
+  const anchorBefore = await centreOf(HUB);
+  await page.mouse.move(before.x, before.y);
+  await page.mouse.down();
+  await page.mouse.move(before.x + 40, before.y - 30, { steps: 4 });
+  await page.mouse.move(before.x + 90, before.y - 70, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForFunction(() => document.querySelector('#ParvaneKnowledge [data-notes-graph]').dataset.graphPlaced === '1',
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('место переставленной точки не запомнено'));
+  const moved = await centreOf(LONE);
+  assert.ok(Math.abs(moved.x - before.x - 90) < 3 && Math.abs(moved.y - before.y + 70) < 3, `точка встала не туда: ${JSON.stringify([before, moved])}`);
+  const anchorAfter = await centreOf(HUB);
+  assert.ok(Math.abs(anchorAfter.x - anchorBefore.x) < 1 && Math.abs(anchorAfter.y - anchorBefore.y) < 1, 'перестановка одной точки сдвинула другую');
+  // Расстояние между точками в единицах поля от вида не зависит: по нему сверяется место после перезагрузки
+  const apartOf = async () => {
+    const scale = Number(await graph.getAttribute('data-graph-scale'));
+    const a = await centreOf(LONE);
+    const b = await centreOf(HUB);
+    return [Math.round((a.x - b.x) / scale), Math.round((a.y - b.y) / scale)];
+  };
+  const apart = await apartOf();
+  await graph.locator('[data-graph-fit]').click();
+  assert.equal(await graph.getAttribute('data-graph-placed'), '1', '«Вписать» стёрло ручную расстановку');
+  await page.waitForTimeout(1500);
+  await reloadPage(page);
+  await relogin(page, PASSWORD).catch(() => undefined);
+  await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
+  await openTab('Graph');
+  await visible(gnode(LONE), 'граф после перезагрузки');
+  await graphBusyDone();
+  assert.equal(await graph.getAttribute('data-graph-placed'), '1', 'ручная расстановка не пережила перезагрузку');
+  const apartReloaded = await apartOf();
+  assert.ok(Math.abs(apartReloaded[0] - apart[0]) <= 2 && Math.abs(apartReloaded[1] - apart[1]) <= 2,
+    `после перезагрузки точка стоит иначе: ${apart} → ${apartReloaded}`);
+  await graph.locator('[data-graph-relayout]').click();
+  await page.waitForFunction(() => document.querySelector('#ParvaneKnowledge [data-notes-graph]').dataset.graphPlaced === '0',
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«Разложить заново» не сняло ручную расстановку'));
+  const apartReset = await apartOf();
+  assert.ok(Math.abs(apartReset[0] - apart[0]) > 20 || Math.abs(apartReset[1] - apart[1]) > 20, 'точка не вернулась на место раскладки');
+  assert.equal(await graph.locator('[data-graph-relayout]').isDisabled(), true, '«Разложить заново» доступно без ручной расстановки');
+  console.log('OK: ручная расстановка — место запомнено, пережило перезагрузку, «Вписать» отдельно от «Разложить заново»');
+
+  // ── Связь ведут настоящей мышью от кольца вокруг заметки ────────────────
+  const ringOf = async (title) => {
+    const at = await centreOf(title);
+    await page.mouse.move(at.x, at.y);
+    const radius = Number(await gnode(title).locator('[data-graph-handle]').getAttribute('r'));
+    const scale = Number(await graph.getAttribute('data-graph-scale'));
+    return { x: at.x, y: at.y - (radius - 1) * scale };
+  };
+  const ring = await ringOf(STORE);
+  const target = await centreOf(LONE);
+  await page.mouse.move(ring.x, ring.y);
+  await page.mouse.down();
+  await page.mouse.move((ring.x + target.x) / 2, (ring.y + target.y) / 2, { steps: 5 });
+  await page.mouse.move(target.x, target.y, { steps: 5 });
+  await graph.locator('[data-graph-draft]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    const state = await graph.evaluate((element) => ({
+      classes: element.className, world: element.firstElementChild.getAttribute('style'), picked: element.dataset.graphPicked,
+      drafts: element.querySelectorAll('line').length,
+    }));
+    assert.fail(`линия связи под указателем не появилась: ${JSON.stringify(state)}`);
+  });
+  await page.mouse.up();
+  await visible(gedge(STORE, LONE), 'связь, проведённая мышью');
+  await visible(knowledge.locator('[data-graph-notice]').getByText('Link added'), 'сообщение о новой связи');
+  await knowledge.locator('[data-graph-undo]').click();
+  await gone(gedge(STORE, LONE), 'отмена не убрала проведённую связь');
+  console.log('OK: связь ведётся мышью от кольца заметки, «Отменить» её снимает');
+
+  // ── Панель выбранной заметки: связи карточкой, «Убрать связь», «Связать с заметкой» ──
+  await clickNode(HUB);
+  const panelLinks = panel.locator('[data-graph-panel-links]');
+  await visible(panelLinks, 'связи в панели графа');
+  await visible(panel.locator('[data-graph-panel-open]'), '«Открыть в заметках»');
+  await visible(panelLinks.locator(`[data-graph-panel-unlink="${PIER}"]`), '«Убрать связь» у ссылки отдельной строкой');
+  assert.equal(await panelLinks.locator(`[data-graph-panel-unlink="${STORE}"]`).count(), 0, 'у ссылки внутри текста есть «Убрать связь»');
+  await visible(panelLinks.locator('[data-link-way="out"]').filter({ hasText: 'from the text' }), 'пометка «из текста»');
+  await shotBoth('desk-graph-panel');
+  await panelLinks.locator(`[data-graph-panel-unlink="${PIER}"]`).click();
+  await gone(panelLinks.locator(`[data-graph-panel-unlink="${PIER}"]`), 'связь не убрана из панели');
+  // Причал по-прежнему ссылается на маяк: связь осталась, но уже в одну сторону
+  await visible(gedge(PIER, HUB), 'обратная ссылка после снятия прямой');
+  await visible(panelLinks.locator(`[data-link-way="in"]`).filter({ hasText: PIER }), 'связь стала входящей');
+  // «Связать с заметкой»: существующая заметка и новая
+  await panelLinks.locator('[data-graph-panel-link-input]').fill(LONE);
+  await panelLinks.locator('[data-graph-panel-link-input]').press('Enter');
+  await visible(gedge(HUB, LONE), 'связь с существующей заметкой из поля панели');
+  await panelLinks.locator('[data-graph-panel-link-input]').fill(NEW_LINKED);
+  await panelLinks.locator('[data-graph-panel-link-input]').press('Enter');
+  await visible(gnode(NEW_LINKED), 'новая заметка из поля панели');
+  await visible(gedge(HUB, NEW_LINKED), 'связь с новой заметкой');
+  assert.equal(await gnode(NEW_LINKED).getAttribute('data-kind'), 'note', 'новая заметка — не настоящая');
+  // Область «вокруг заметки» из панели: маяк и его соседи
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-scope-around]').click();
+  await count(NOTES_ON_GRAPH, 5, 'вокруг маяка на один шаг — не пять заметок');
+  await scopeMenu.locator('[data-graph-scope-all]').click();
+  console.log('OK: панель графа — связи карточкой, «Убрать связь», «Связать с заметкой», область вокруг заметки');
+
+  // ── Холст из графа: уровнями, «Обновить из графа» только у него ───────────
+  // Пока фокус в поле панели, Escape — дело поля: панель закрывает её крестик
+  await panel.locator('[data-graph-panel-close]').click();
+  await gone(panel, 'панель графа не закрылась');
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-hide-orphans]').click();
+  await page.keyboard.press('Escape');
+  await graph.locator('[data-graph-to-canvas]').click();
+  await visible(board, 'холст, созданный с графа');
+  const FILE_CARDS = '#ParvaneKnowledge [data-canvas-node][data-canvas-type="file"]';
+  // Без одиночных: справка (12) и пять связанных заметок
+  await count(FILE_CARDS, GUIDE_NOTES + 5, 'на холсте из графа не все связанные заметки');
+  const cards = await board.locator('[data-canvas-type="file"]').evaluateAll((nodes) => nodes.map((node) => (
+    [parseFloat(node.style.left), parseFloat(node.style.top), parseFloat(node.style.width), parseFloat(node.style.height)]
+  )));
+  cards.forEach((a, i) => cards.slice(i + 1).forEach((b) => {
+    assert.ok(a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1], 'карточки холста из графа накладываются');
+  }));
+  assert.ok(cards.every(([x, y]) => x % 10 === 0 && y % 10 === 0), 'карточки холста стоят не по сетке');
+  assert.ok(new Set(cards.map(([, y]) => y)).size >= 2, 'холст из графа не разложен уровнями');
+  await visible(knowledge.locator('[data-canvas-refresh]'), '«Обновить из графа» у холста из графа');
+  await knowledge.locator('[data-canvas-refresh]').click();
+  await visible(page.getByText('Nothing to update'), 'обновление без новых заметок');
+  await shotBoth('desk-canvas-graph');
+
+  // Колесо двигает поле, Ctrl + колесо меняет масштаб
+  const world = knowledge.locator('[data-canvas-world]');
+  const zoomChip = knowledge.locator('[data-canvas-zoom]');
+  const viewOf = async () => {
+    const [x, y, scale] = (await world.getAttribute('style')).match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/).slice(1).map(Number);
+    return { x, y, scale };
+  };
+  const boardBox = await board.boundingBox();
+  await page.mouse.move(boardBox.x + boardBox.width / 2, boardBox.y + boardBox.height / 2);
+  const viewBefore = await viewOf();
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(400);
+  const viewPanned = await viewOf();
+  assert.ok(Math.abs(viewPanned.y - viewBefore.y + 120) < 1 && viewPanned.scale === viewBefore.scale, `колесо не сдвинуло поле: ${JSON.stringify([viewBefore, viewPanned])}`);
+  await page.mouse.wheel(60, 0);
+  await page.waitForTimeout(400);
+  assert.ok(Math.abs((await viewOf()).x - viewPanned.x + 60) < 1, 'колесо вбок не сдвинуло поле');
+  const zoomBefore = await zoomChip.innerText();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -200);
+  await page.keyboard.up('Control');
+  await page.waitForFunction((text) => document.querySelector('#ParvaneKnowledge [data-canvas-zoom]').textContent !== text,
+    zoomBefore, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('Ctrl + колесо не изменило масштаб'));
+  assert.ok((await viewOf()).scale > viewPanned.scale, 'Ctrl + колесо вверх не приблизило');
+  assert.match(await zoomChip.innerText(), /^\d+%$/, 'масштаб холста не показан процентами');
+
+  // Холст, сделанный руками: подсказка пустого поля, «Обновить из графа» нет
+  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  await visible(knowledge.locator('[data-canvas-blank]'), 'подсказка пустого холста');
+  assert.equal(await knowledge.locator('[data-canvas-refresh]').count(), 0, '«Обновить из графа» стоит на холсте, сделанном руками');
+  await visible(knowledge.locator('[data-canvas-tool="text"]').getByText('Text'), 'подпись у кнопки инструмента');
+  await shotBoth('desk-canvas-blank');
+  await knowledge.locator('[data-canvas-tool="text"]').click();
+  await gone(knowledge.locator('[data-canvas-blank]'), 'подсказка осталась на холсте с карточкой');
+  await page.keyboard.press('Escape');
+  console.log('OK: холст — из графа уровнями по сетке, «Обновить» только у него, колесо двигает поле, подсказка пустого холста');
+
+  // ── Телефон ───────────────────────────────────────────────────────────────
+  await page.setViewportSize(PHONE);
+  await page.waitForTimeout(800);
+  await shotBoth('phone-canvas');
+  await openTab('Graph');
+  await visible(graph, 'граф на телефоне');
+  await graphBusyDone();
+  await centreOf(HUB);
+  const zoomButton = await graph.getByRole('button', { name: 'Zoom in' }).boundingBox();
+  assert.ok(zoomButton.width >= 44 && zoomButton.height >= 44, `цель нажатия кнопки масштаба ${zoomButton.width}×${zoomButton.height}`);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert.ok(overflow <= 1, `экран шире телефона на ${overflow}px`);
+  await shotBoth('phone-graph');
+  // Выбранная точка — лист снизу со связями
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await clickNode(HUB);
+    const isOpen = await panel.locator('[data-graph-panel-links]')
+      .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
+    if (isOpen) break;
+    await page.waitForTimeout(600);
+  }
+  await visible(panel.locator('[data-graph-panel-links]'), 'связи в листе графа на телефоне');
+  await shotBoth('phone-graph-sheet');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
+  await panel.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('лист графа не закрылся'));
+  console.log('OK: телефон — граф с кнопками масштаба, лист выбранной заметки со связями');
+
+  console.log('e2e_web_notes_graph: OK');
+} catch (error) {
+  if (SHOT_DIR) {
+    const [page] = context.pages();
+    await page?.screenshot({ path: `${SHOT_DIR}/notes-graph-failure.png` }).catch(() => {});
+    console.log(`--- раздел при сбое ---\n${await page?.locator('#ParvaneKnowledge').innerText().catch(() => '')}`);
+    console.log(`--- журнал провайдера ---\n${(session?.logs || []).slice(-40).join('\n')}`);
+  }
+  throw error;
+} finally {
+  await browser.close();
+}

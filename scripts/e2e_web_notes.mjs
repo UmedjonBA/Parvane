@@ -448,7 +448,7 @@ try {
   // Точка — её кружок: подпись под ним нажатий не принимает
   // Граф после открытия вкладки и смены ширины вписывается заново: место точки берётся, когда оно устоялось
   const centreOf = async (title) => {
-    const circle = gnode(title).locator('circle').first();
+    const circle = gnode(title).locator('[data-graph-dot]');
     await circle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     let box = await circle.boundingBox();
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -609,7 +609,7 @@ try {
   await visible(graph.locator('[data-node][data-kind="record"]'), 'узел записи «Плана»');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-graph.png` });
   // Запись «Плана» в панели: день и время, переход в «План» есть
-  const recordNode = graph.locator('[data-node][data-kind="record"]').locator('circle').first();
+  const recordNode = graph.locator('[data-node][data-kind="record"]').locator('[data-graph-dot]').first();
   const recordBox = await recordNode.boundingBox();
   await page.mouse.click(recordBox.x + recordBox.width / 2, recordBox.y + recordBox.height / 2);
   await visible(panel.locator('[data-graph-panel-record]').getByText('созвон'), 'запись «Плана» в панели графа');
@@ -629,11 +629,10 @@ try {
   const FOLDER_NOTE = 'Стойка';
   const GRAPH_NOTES = '#ParvaneKnowledge [data-notes-graph] [data-node][data-kind="note"]';
   const BOARD_FILES = '#ParvaneKnowledge [data-canvas-node][data-canvas-type="file"]';
-  const BOARD_GROUPS = '#ParvaneKnowledge [data-canvas-node][data-canvas-type="group"]';
   const domCount = (selector, count, what) => page.waitForFunction(
     ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: STEP_TIMEOUT_MS },
   ).catch(() => assert.fail(what));
-  const savedGraphFolders = () => page.evaluate(() => JSON.parse(localStorage.getItem('parvane:knowledge-graph-folders')));
+  const savedGraphFilter = () => page.evaluate(() => JSON.parse(localStorage.getItem('parvane:knowledge-graph-filter')));
   // Папка с заметкой, которая ссылается на заметку без папки
   await knowledge.locator('[data-notes-new-folder]').click();
   await visible(folderName, 'поле названия папки для графа');
@@ -657,33 +656,56 @@ try {
 
   await openTab('Graph');
   await visible(graph, 'граф с заметкой папки');
-  const foldersChip = graph.locator('[data-graph-folders]');
-  const foldersMenu = graph.locator('[data-graph-folders-menu]');
+  const scopeChip = graph.locator('[data-graph-scope]');
+  const scopeMenu = graph.locator('[data-graph-scope-menu]');
   await domCount(GRAPH_NOTES, 3, 'на графе не три заметки');
-  await visible(foldersChip, 'чип выбора папок на графе');
-  assert.equal(await foldersChip.getAttribute('data-graph-folders'), 'all', 'по умолчанию выбраны не все папки');
+  await visible(scopeChip, 'чип области на графе');
+  assert.equal(await scopeChip.getAttribute('data-graph-scope'), 'all', 'по умолчанию показаны не все заметки');
   // Одна папка: её заметки, соседей из других папок нет — ни точкой, ни «заметкой, которой ещё нет»
-  await foldersChip.click();
-  await visible(foldersMenu, 'список папок графа');
-  await foldersMenu.locator(`[data-graph-folder="${GRAPH_FOLDER}"]`).click();
+  await scopeChip.click();
+  await visible(scopeMenu, 'список областей графа');
+  await scopeMenu.locator(`[data-graph-scope-folder="${GRAPH_FOLDER}"]`).click();
+  await gone(scopeMenu, 'выбор папки не закрыл список областей');
   await domCount(GRAPH_NOTES, 1, 'после выбора папки на графе остались чужие заметки');
   await visible(gnode(FOLDER_NOTE), 'заметка выбранной папки на графе');
   assert.equal(await graph.locator('[data-node][data-kind="missing"]').count(), 0, 'сосед из другой папки показан «заметкой, которой ещё нет»');
   assert.equal(await graph.locator('[data-graph-edge]').count(), 0, 'связь с заметкой другой папки осталась');
   await visible(graph.getByText('Notes 1', { exact: true }), 'счётчик заметок считает видимые');
-  assert.equal(await foldersChip.getAttribute('data-graph-folders'), '1', 'чип не показывает выбранную папку');
-  assert.deepEqual(await savedGraphFolders(), [GRAPH_FOLDER], 'выбор папок не запомнен на устройстве');
-  // Вторая галочка — «Без папки»: отмечены все, это снова «все папки»
-  await foldersMenu.locator('[data-graph-folder=""]').click();
-  await domCount(GRAPH_NOTES, 3, 'после выбора всех папок заметки не вернулись');
-  assert.equal(await foldersChip.getAttribute('data-graph-folders'), 'all', 'все отмеченные папки не стали «всеми папками»');
-  assert.equal(await savedGraphFolders(), null, 'выбор «все папки» остался записан');
-  await foldersMenu.locator(`[data-graph-folder="${GRAPH_FOLDER}"]`).click();
-  await domCount(GRAPH_NOTES, 1, 'папка не выбрана снова');
-  // Escape закрывает список папок
+  assert.equal(await scopeChip.getAttribute('data-graph-scope'), 'folder', 'чип не показывает выбранную папку');
+  assert.deepEqual((await savedGraphFilter()).scope, { kind: 'folder', folder: GRAPH_FOLDER }, 'область графа не запомнена на устройстве');
+  // «Все заметки» возвращают остальные; «скрывать одиночные» убирает заметки без связей
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-scope-all]').click();
+  await domCount(GRAPH_NOTES, 3, '«Все заметки» не вернули заметки');
+  assert.equal(await savedGraphFilter(), null, 'область «все заметки» осталась записана');
+  // Вокруг заметки: FOLDER_NOTE ссылается на NOTE, NOTE — на OTHER. Глубина 1 — две заметки, глубина 2 — три
+  await clickNode(FOLDER_NOTE);
+  await visible(panel.locator(`[data-note-title="${FOLDER_NOTE}"]`), 'заметка для области «вокруг»');
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-scope-around]').click();
+  await domCount(GRAPH_NOTES, 2, 'вокруг заметки на один шаг — не две заметки');
+  assert.equal(await scopeChip.getAttribute('data-graph-scope'), 'around', 'чип не показывает область «вокруг заметки»');
+  await scopeMenu.locator('[data-graph-scope-depth="2"]').click();
+  await domCount(GRAPH_NOTES, 3, 'вокруг заметки на два шага — не три заметки');
+  await scopeMenu.locator('[data-graph-scope-all]').click();
+  await gone(scopeMenu, '«Все заметки» не закрыли список');
   await page.keyboard.press('Escape');
-  await gone(foldersMenu, 'Escape не закрыл список папок');
-  console.log('OK: граф — выбор папок: одна папка без соседей, все папки, выбор запомнен');
+  await gone(panel, 'Escape не закрыл панель после выбора области');
+  // «Скрывать одиночные»: в хранилище все три заметки связаны цепочкой — остаются все; без связи FOLDER_NOTE ушла бы
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-hide-orphans]').click();
+  await visible(scopeMenu.locator('[data-graph-hide-orphans][aria-checked="true"]'), '«скрывать одиночные» отмечено');
+  await domCount(GRAPH_NOTES, 3, '«скрывать одиночные» убрало связанные заметки');
+  await scopeMenu.locator('[data-graph-hide-orphans]').click();
+  await visible(scopeMenu.locator('[data-graph-hide-orphans][aria-checked="false"]'), '«скрывать одиночные» снято');
+  await scopeMenu.locator(`[data-graph-scope-folder="${GRAPH_FOLDER}"]`).click();
+  await domCount(GRAPH_NOTES, 1, 'папка не выбрана снова');
+  // Escape закрывает список областей
+  await scopeChip.click();
+  await visible(scopeMenu, 'список областей открыт снова');
+  await page.keyboard.press('Escape');
+  await gone(scopeMenu, 'Escape не закрыл список областей');
+  console.log('OK: граф — область: папка без соседей, все заметки, вокруг заметки (глубина), скрытие одиночных, выбор запомнен');
 
   // Escape: правка в панели остаётся, режим «Связать» отменяется первым, потом закрывается панель
   await clickNode(FOLDER_NOTE);
@@ -706,7 +728,7 @@ try {
   assert.equal(await graph.getAttribute('data-graph-picked'), null, 'после Escape точка осталась выбранной');
   console.log('OK: граф — Escape: сначала режим «Связать», потом панель; правку в панели не закрывает');
 
-  // «Создать холст» при выбранной папке: на холсте только её заметка, в группе с именем папки
+  // «Холст из графа» при выбранной папке: на холсте только её заметка
   const graphChip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
   const graphBoard = knowledge.locator('[data-canvas-board]');
   await graph.locator('[data-graph-to-canvas]').click();
@@ -715,51 +737,38 @@ try {
   await visible(graphChip('Link graph'), 'холст с графа назван «Link graph»');
   assert.equal(await graphChip('Link graph').getAttribute('aria-pressed'), 'true', 'созданный с графа холст не открыт');
   await domCount(BOARD_FILES, 1, 'на холсте из одной папки не одна карточка');
-  await domCount(BOARD_GROUPS, 1, 'заметка папки не обведена группой');
-  await visible(
-    graphBoard.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: GRAPH_FOLDER }),
-    'группа названа именем папки',
-  );
   assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 0, 'на холсте из одной папки есть стрелка наружу');
   // Холст помнит свой набор: обновление из графа чужих заметок не втягивает
   await knowledge.locator('[data-canvas-refresh]').click();
   await visible(page.getByText('Nothing to update'), 'обновление холста одной папки ничего не добавляет');
   await domCount(BOARD_FILES, 1, 'обновление втянуло заметки вне набора холста');
 
-  // Выбор папки пережил уход с вкладки; все папки — холст со всеми заметками, папка обведена группой
+  // Выбор папки пережил уход с вкладки; все заметки — холст со всеми заметками
   await openTab('Graph');
-  await visible(foldersChip, 'чип папок после возврата на граф');
-  assert.equal(await foldersChip.getAttribute('data-graph-folders'), '1', 'выбор папки не пережил уход с вкладки');
+  await visible(scopeChip, 'чип области после возврата на граф');
+  assert.equal(await scopeChip.getAttribute('data-graph-scope'), 'folder', 'выбор папки не пережил уход с вкладки');
   await domCount(GRAPH_NOTES, 1, 'после возврата на граф показаны не только заметки выбранной папки');
-  await foldersChip.click();
-  await foldersMenu.locator('[data-graph-folder-all]').click();
-  await gone(foldersMenu, '«Все папки» не закрыли список');
-  await domCount(GRAPH_NOTES, 3, '«Все папки» не вернули заметки');
+  await scopeChip.click();
+  await scopeMenu.locator('[data-graph-scope-all]').click();
+  await gone(scopeMenu, '«Все заметки» не закрыли список');
+  await domCount(GRAPH_NOTES, 3, '«Все заметки» не вернули заметки');
   await graph.locator('[data-graph-to-canvas]').click();
   await visible(graphChip('Link graph 2'), 'второй холст с графа');
   assert.equal(await graphChip('Link graph 2').getAttribute('aria-pressed'), 'true', 'второй холст с графа не открыт');
-  // Заметки дней на графе выключены — на холсте их нет: NOTE, OTHER и заметка папки
+  // Заметки дней на графе выключены — на холсте их нет: NOTE, OTHER и заметка папки цепочкой уровней
   await domCount(BOARD_FILES, 3, 'на холсте со всеми папками не три карточки');
-  await domCount(BOARD_GROUPS, 1, 'на холсте со всеми папками не одна группа');
   await domCount('#ParvaneKnowledge [data-canvas-edge]', 2, 'на холсте со всеми папками не две стрелки');
-  await visible(
-    graphBoard.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: GRAPH_FOLDER }),
-    'группа папки на холсте со всеми папками',
-  );
-  // В группе лежит заметка папки и только она
-  const grouped = await graphBoard.evaluate((element, title) => {
-    const frame = element.querySelector('[data-canvas-type="group"]').getBoundingClientRect();
-    return Array.from(element.querySelectorAll('[data-canvas-type="file"]')).map((card) => {
-      const box = card.getBoundingClientRect();
-      const isInside = box.left >= frame.left && box.right <= frame.right
-        && box.top >= frame.top && box.bottom <= frame.bottom;
-      return [card.textContent.includes(title), isInside];
-    });
-  }, FOLDER_NOTE);
-  assert.equal(grouped.filter(([, isInside]) => isInside).length, 1, 'в группе папки не одна карточка');
-  assert.ok(grouped.every(([isFolderNote, isInside]) => isFolderNote === isInside), 'в группе папки лежит не её заметка');
+  // Раскладка движка — уровнями: карточки не накладываются и стоят не в одну кучу
+  const levelBoxes = await graphBoard.locator('[data-canvas-type="file"]').evaluateAll((nodes) => nodes.map((node) => {
+    const box = node.getBoundingClientRect();
+    return [box.left, box.top, box.right, box.bottom];
+  }));
+  levelBoxes.forEach((a, i) => levelBoxes.slice(i + 1).forEach((b) => {
+    assert.ok(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1], 'карточки холста из графа накладываются');
+  }));
+  assert.ok(new Set(levelBoxes.map((box) => Math.round(box[1]))).size >= 2, 'холст из графа не разложен уровнями');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-folders.png` });
-  console.log('OK: граф — «Создать холст»: холст из видимого, папка обведена группой, набор холста помнится');
+  console.log('OK: граф — «Холст из графа»: холст из видимого, уровнями, область холста помнится');
 
   // Убрать за собой: холсты, заметку и папку — дальше сценарий идёт с прежним набором
   for (const [name, renamed] of [['Link graph 2', 'С графа 2'], ['Link graph', 'С графа 1']]) {
@@ -798,12 +807,7 @@ try {
   // Заметки: NOTE, OTHER и заметка дня; ссылка одна — из NOTE в OTHER
   await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'на холсте из графа не по карточке на заметку');
   await canvasCount('[data-canvas-edge]', 1, 'на холсте из графа не по стрелке на ссылку');
-  // Заметка дня лежит в папке «Daily» — она обведена группой с этим названием; остальные заметки без папки
-  await canvasCount('[data-canvas-node][data-canvas-type="group"]', 1, 'папка заметки дня не обведена группой');
-  await visible(
-    board.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: 'Daily' }),
-    'группа названа именем папки',
-  );
+  await canvasCount('[data-canvas-node][data-canvas-type="group"]', 0, 'холст из графа обвёл папку группой');
   const boxes = await board.locator(fileCardsOnly).evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return [box.left, box.top, box.right, box.bottom];
@@ -1011,7 +1015,7 @@ try {
   await inlineField.fill('Сервер');
   await inlineField.press('Enter');
   await visible(groupCard.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'новое название группы');
-  assert.equal(await board.getByText('Group', { exact: true }).count(), 0, 'слова-заглушки на холсте нет');
+  assert.equal(await groupCard.getByText('Group', { exact: true }).count(), 0, 'слова-заглушки на холсте нет');
   console.log('OK: текст карточки и название группы правятся двойным кликом на месте');
 
   // ── Холст как редактор: размер, группы, отмена, клавиши, стрелки — настоящими движениями мыши ──
@@ -1645,7 +1649,7 @@ try {
   // ── Телефон: выбранная точка графа — лист снизу, после закрытия граф работает ──
   await openTab('Graph');
   const phoneGraph = knowledge.locator('[data-notes-graph]');
-  const phoneNode = phoneGraph.locator(`[data-node][data-title="${NOTE}"]`).locator('circle').first();
+  const phoneNode = phoneGraph.locator(`[data-node][data-title="${NOTE}"]`).locator('[data-graph-dot]');
   await visible(phoneNode, 'заметка на графе телефона');
   const phoneSheet = page.locator('[data-graph-panel]');
   // Граф после смены ширины вписывается заново — точка могла сдвинуться между замером и нажатием

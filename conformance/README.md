@@ -2711,7 +2711,7 @@ string), черта, таблицы GFM, встроенные файлы; в с�
    (`backend/protocol/tests/notes_graph_vectors.rs`, пересоздание — `NOTES_GRAPH_REGEN=1`) и тест web через WASM
    (`notesGraphEngine.test.ts`). Изменение раскладки = пересоздание образца и пересборка WASM в одном шаге.
 
-Сделано в движке; web — обёртка `notesGraphEngine.ts` и тест (экраны — этап D2 spec 041); desktop и android — открыто.
+Сделано в движке и в web (обёртка `notesGraphEngine.ts`, экраны графа, малого графа и холста из графа — spec 041 D2, 18 ноя 2026; web-раскладка удалена); desktop и android — открыто.
 
 ## MUSIC-2. Плейлисты «Музыки» — личный контейнер, порядок и правки в движке (17 ноя 2026)
 

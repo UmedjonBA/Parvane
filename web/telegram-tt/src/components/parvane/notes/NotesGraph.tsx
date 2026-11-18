@@ -6,8 +6,11 @@ import type { PlannerState } from '../planner/plannerModel';
 import type { BoardView } from './boardView';
 import type { GraphCanvasScope } from './notesCanvasGraph';
 import type {
-  GraphEdge, GraphLayoutRun, GraphNode, GraphPoint, GraphRecordInput,
-} from './notesGraph';
+  NotesGraphEdge, NotesGraphLayout, NotesGraphNode, NotesGraphRecord,
+} from './notesGraphEngine';
+import type {
+  GraphFilter, GraphNoteSource, GraphPlaces, GraphPoint,
+} from './notesGraphView';
 import type { NoteEntry } from './notesStore';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
@@ -18,26 +21,34 @@ import { debounce } from '../../../util/schedulers';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
-import { folderCaption, ROOT_FOLDER } from './notesFolders';
+import { notesGraphEdgePath } from './notesGraphEngine';
 import {
-  buildGraph, canLinkFrom, canLinkTo, edgeShape, GRAPH_FRAME_WORK, GRAPH_SYNC_WORK, isNoteInGraph, listGraphFolders,
-  MISSING_NODE_PREFIX, neighboursOf, nodeAt, nodeRadius, resolveGraphFolders, startGraphLayout,
-} from './notesGraph';
-import { displayTitle, folderColor } from './notesLook';
+  applyGraphPlaces, buildGraphInput, canLinkTo, edgeHeads, edgePoint, graphRects, MISSING_NODE_PREFIX,
+  moveGraphNode, neighboursOf, nodeAt, NOTES_GRAPH_ASPECT_TALL, NOTES_GRAPH_ASPECT_WIDE, resolveGraphScope,
+  scopeKey, straightGraphEdge,
+} from './notesGraphView';
+import { displayTitle } from './notesLook';
 import { normalizeNoteTitle, parseNoteCached } from './notesModel';
-import { readGraphFolders, writeGraphFolders } from './notesPrefs';
+import {
+  readGraphFilter, readGraphPlaces, writeGraphFilter, writeGraphPlaces,
+} from './notesPrefs';
+import useNotesGraphLayout from './useNotesGraphLayout';
 
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useResizeObserver from '../../../hooks/useResizeObserver';
 
+import { edgeKey, edgePair, GraphEdges, GraphNodes } from './NotesGraphLayers';
+import NotesGraphScope, { NotesGraphScopeChip } from './NotesGraphScope';
 import PvIcon from './PvIcon';
 
-import styles from './Knowledge.module.scss';
+import board from './Knowledge.module.scss';
+import styles from './NotesGraph.module.scss';
 import kit from './PvKit.module.scss';
 
 // Выбранная точка графа — то, что показывает панель справа
-export type GraphPick = Pick<GraphNode, 'id' | 'kind' | 'title' | 'group'>;
+export type GraphPick = Pick<NotesGraphNode, 'id' | 'kind' | 'title' | 'group'>;
 export type GraphLinkOutcome = 'added' | 'exists' | 'refused' | 'failed';
 
 type OwnProps = {
@@ -49,6 +60,8 @@ type OwnProps = {
   // Поиск из шапки раздела: найденные точки подсвечены; рост `searchStep` (Enter в поле) выбирает следующую
   query: string;
   searchStep: number;
+  // Телефон: инструменты — одной строкой сверху, масштаб — кнопками-значками
+  isNarrow?: boolean;
   onPick: (node: GraphPick) => void;
   // Двойное нажатие: заметка открывается на вкладке «Заметки»
   onOpen: (node: GraphPick) => void;
@@ -59,7 +72,7 @@ type OwnProps = {
   onLinkModeEnd: NoneToVoidFunction;
   // Escape без иных дел закрывает панель выбранной точки
   onClose: NoneToVoidFunction;
-  // «Создать холст»: холст из заметок, которые сейчас видны на графе
+  // «Холст из графа»: холст из заметок, которые сейчас видны на графе
   onMakeCanvas: (scope: GraphCanvasScope) => void;
 };
 
@@ -76,32 +89,25 @@ type Drag = {
   hasMoved: boolean;
   // Точка, которую тянут: её элемент, связи с их элементами и место под указателем — пока тянут, двигается
   // только это, без перерисовки графа; место закрепляется состоянием при отпускании
-  node?: GraphNode;
+  node?: NotesGraphNode;
   element?: SVGGElement;
-  edges?: { edge: GraphEdge; element: SVGGElement; other: GraphNode }[];
+  edges?: { edge: NotesGraphEdge; element: SVGGElement; other: NotesGraphNode }[];
   at?: GraphPoint;
 };
 
 // Связь, которую ведут: от точки `from` до места указателя на поле; `overId` — заметка под указателем
 type Draft = GraphPoint & { from: string; overId?: string };
 
-// Раскладка свободная (не сжата в область): область задаёт только центр
-const LAYOUT = { width: 900, height: 620, isLoose: true };
 const LINK = /\[\[([^\]|\n]+)/g;
 const RECORD_LINK = /\[\[[^\]\n]*\]\]/g;
-const LABEL_MAX = 22;
-const LABEL_GAP = 17;
 // Мельче этого масштаба подписи остаются только у выбранной точки, её соседей и найденного поиском
 const LABEL_MIN_SCALE = 0.55;
-// Кольцо, за которое тянут связь: настолько шире кружка
-const HANDLE_GAP = 5;
+// Крупнее этого видны и подписи, которым движок не нашёл места без наложений
+const LABEL_ALL_SCALE = 1.6;
 // Запас попадания в точку при отпускании связи, в пикселях экрана
 const DROP_SLOP = 10;
-// Место под подпись точки при вписывании графа в поле
-const FIT_BOX_WIDTH = 120;
-const FIT_BOX_HEIGHT = 60;
 const FIT_TOP = 60;
-const FIT_BOTTOM = 20;
+const FIT_BOTTOM = 56;
 // Выбранная точка ближе этого к краю поля считается скрытой — поле сдвигается к ней
 const REVEAL_PAD = 32;
 const DRAG_THRESHOLD = 5;
@@ -113,261 +119,39 @@ const REMOVE_AT_MIDDLE = 0.5;
 const REMOVE_AT_SOURCE = 0.3;
 // Редактор заметки в панели графа: пока он открыт, Escape панель не закрывает
 const PANEL_EDITOR = '[data-graph-panel] #knowledge-note-editor';
-
-// Места точек переживают уход с вкладки: граф не перетряхивается, пока его не попросят разложить заново
-const placedById = new Map<string, GraphPoint>();
-const NO_RECORDS: GraphRecordInput[] = [];
-
-// Записи «Плана» для графа: события и задачи со ссылками в названии
-function recordsOf(planner: PlannerState): GraphRecordInput[] {
-  return [
-    ...planner.events.map((event) => ({
-      id: `e${event.id}`, title: event.name, links: linksIn(event.name), type: 'event',
-    })),
-    ...planner.tasks.map((task) => ({
-      id: `t${task.id}`, title: task.name, links: linksIn(task.name), type: 'task',
-    })),
-  ];
-}
-
-// Элементы связей и точек графа по ключу — чтобы во время перетаскивания править их напрямую
-function elementsByKey<T extends SVGElement>(root: ParentNode, attribute: string) {
-  const result = new Map<string, T>();
-  root.querySelectorAll<T>(`[${attribute}]`).forEach((element) => {
-    result.set(element.getAttribute(attribute)!, element);
-  });
-  return result;
-}
-
-// Линия связи в DOM по новым концам: две линии (область нажатия и видимая) и наконечники
-function writeEdge(element: SVGGElement, from: GraphNode, to: GraphNode, isMutual?: true) {
-  const shape = edgeShape(from, to, nodeRadius(from.degree), nodeRadius(to.degree), isMutual);
-  element.querySelectorAll('line').forEach((line) => {
-    line.setAttribute('x1', String(shape.x1));
-    line.setAttribute('y1', String(shape.y1));
-    line.setAttribute('x2', String(shape.x2));
-    line.setAttribute('y2', String(shape.y2));
-  });
-  element.querySelectorAll('path').forEach((path, i) => {
-    if (shape.heads[i]) path.setAttribute('d', shape.heads[i]);
-  });
-}
-
-// Точка в DOM на новом месте: кружок, кольцо и подпись
-function writeNode(element: SVGGElement, node: GraphNode, at: GraphPoint) {
-  element.querySelectorAll('circle').forEach((circle) => {
-    circle.setAttribute('cx', String(at.x));
-    circle.setAttribute('cy', String(at.y));
-  });
-  const text = element.querySelector('text');
-  if (text) {
-    text.setAttribute('x', String(at.x));
-    text.setAttribute('y', String(at.y + nodeRadius(node.degree) + LABEL_GAP));
-  }
-}
-
-function worldTransform(view: BoardView) {
-  return `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
-}
-
-type EdgesProps = {
-  edges: GraphEdge[];
-  byId: Map<string, GraphNode>;
-  picked?: string;
-  found?: Set<string>;
-  linkSourceId?: string;
-  pickedEdge?: string;
-  flash?: string;
+const NO_RECORDS: NotesGraphRecord[] = [];
+const EMPTY_LAYOUT: NotesGraphLayout = {
+  nodes: [],
+  edges: [],
+  blocks: [],
+  bounds: {
+    x: 0, y: 0, w: 0, h: 0,
+  },
+  folders: [],
+  tags: [],
 };
 
-// Слой связей. Не зависит от вида поля: сдвиг и масштаб его не перерисовывают
-const GraphEdges = memo(({
-  edges, byId, picked, found, linkSourceId, pickedEdge, flash,
-}: EdgesProps) => (
-  <g data-graph-edges>
-    {edges.map((edge) => {
-      const from = byId.get(edge.from);
-      const to = byId.get(edge.to);
-      if (!from || !to) return undefined;
-      const key = keyOf(edge);
-      const shape = edgeShape(from, to, nodeRadius(from.degree), nodeRadius(to.degree), edge.isMutual);
-      // Править можно связь между заметками: у дней и записей «Плана» ссылки стоят не в тексте заметки
-      const isEditable = canLinkFrom(from) && canLinkTo(to);
-      const isOn = picked === edge.from || picked === edge.to;
-      // Пока ведут связь, граф виден целиком: любая заметка — цель
-      const isDim = !linkSourceId
-        && (found ? !(found.has(edge.from) && found.has(edge.to)) : Boolean(picked) && !isOn);
-      return (
-        <g
-          key={key}
-          className={buildClassName(
-            styles.graphEdge,
-            isEditable && styles.graphEdgeEditable,
-            isOn && !isDim && styles.graphEdgeOn,
-            isDim && key !== pickedEdge && styles.graphDim,
-            key === pickedEdge && styles.graphEdgePicked,
-            flash === pairOf(edge.from, edge.to) && styles.graphEdgeFlash,
-          )}
-          data-graph-edge={key}
-          data-from={edge.from}
-          data-to={edge.to}
-          data-from-title={from.title}
-          data-to-title={to.title}
-          data-editable={isEditable ? 'true' : undefined}
-          data-mutual={edge.isMutual ? 'true' : undefined}
-        >
-          <line className={styles.graphEdgeHit} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
-          <line className={styles.graphEdgeLine} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
-          {shape.heads.map((head) => <path key={head} d={head} />)}
-        </g>
-      );
-    })}
-  </g>
-));
-
-type NodesProps = {
-  nodes: GraphNode[];
-  labels: Map<string, string>;
-  picked?: string;
-  neighbours?: Set<string>;
-  found?: Set<string>;
-  overId?: string;
-  linkSourceId?: string;
-  areLabelsShown: boolean;
-};
-
-// Слой точек. Из вида поля ему нужен только порог подписей — он меняется при закреплении масштаба
-const GraphNodes = memo(({
-  nodes, labels, picked, neighbours, found, overId, linkSourceId, areLabelsShown,
-}: NodesProps) => (
-  <g data-graph-nodes>
-    {nodes.map((node) => {
-      const radius = nodeRadius(node.degree);
-      const label = labels.get(node.id) || node.title;
-      const isNear = picked === node.id || Boolean(picked && neighbours?.has(node.id));
-      const isFound = Boolean(found?.has(node.id));
-      const isTarget = overId === node.id;
-      const isSource = linkSourceId === node.id;
-      const isDim = linkSourceId ? !isSource && !canLinkTo(node)
-        : found ? !isFound : Boolean(picked) && !isNear;
-      const hasLabel = areLabelsShown || isNear || isFound || isTarget || isSource;
-      return (
-        <g
-          key={node.id}
-          className={buildClassName(
-            styles.graphNode,
-            node.kind === 'missing' && styles.graphMissing,
-            picked === node.id && styles.graphPicked,
-            isFound && styles.graphFound,
-            isTarget && styles.graphTarget,
-            isSource && styles.graphSource,
-            isDim && styles.graphDim,
-          )}
-          style={`--c: ${colorOf(node)}`}
-          data-node={node.id}
-          data-kind={node.kind}
-          data-title={node.title}
-          data-found={isFound ? '' : undefined}
-        >
-          <circle cx={node.x} cy={node.y} r={radius} />
-          {canLinkFrom(node) && (
-            <circle
-              className={styles.graphHandle}
-              cx={node.x}
-              cy={node.y}
-              r={radius + HANDLE_GAP}
-              data-graph-handle={node.id}
-            />
-          )}
-          {hasLabel && (
-            <text x={node.x} y={node.y + radius + LABEL_GAP}>
-              {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
-            </text>
-          )}
-        </g>
-      );
-    })}
-  </g>
-));
-
-// Остаток долгой раскладки идёт порциями в свободное время: `tick` зовётся после каждой порции, пока не кончится
-// работа или её не отменят
-function continueLayout(run: GraphLayoutRun, tick: (isDone: boolean) => void) {
-  const hasIdle = 'requestIdleCallback' in self;
-  let isCancelled = false;
-  let handle: number | undefined;
-  const chunk = () => {
-    handle = undefined;
-    if (isCancelled) return;
-    const isDone = run.step(GRAPH_FRAME_WORK);
-    tick(isDone);
-    if (!isDone) schedule();
-  };
-  const schedule = () => {
-    handle = hasIdle ? self.requestIdleCallback(chunk, { timeout: 200 }) : self.setTimeout(chunk, 16);
-  };
-  schedule();
-  return () => {
-    isCancelled = true;
-    if (handle === undefined) return;
-    if (hasIdle) self.cancelIdleCallback(handle);
-    else self.clearTimeout(handle);
-  };
-}
-
-function linksIn(text: string) {
-  return [...text.matchAll(LINK)].map((match) => match[1].trim());
-}
-
-function colorOf(node: GraphNode) {
-  if (node.kind === 'missing') return 'var(--pv-faint)';
-  if (node.kind === 'day') return 'var(--pv-note)';
-  if (node.kind === 'record') return node.group === 'task' ? 'var(--pv-task)' : 'var(--pv-event)';
-  return folderColor(node.group || '');
-}
-
-function keyOf(edge: GraphEdge) {
-  return `${edge.from}>${edge.to}`;
-}
-
-function pairOf(a: string, b: string) {
-  return a < b ? `${a}>${b}` : `${b}>${a}`;
-}
-
-function normalizeQuery(value: string) {
-  return value.trim().toLowerCase().replace(/ё/g, 'е');
-}
-
-function isTyping(target: EventTarget | null) {
-  const element = target as HTMLElement | null;
-  return Boolean(element?.closest?.('input, textarea, [contenteditable="true"]'));
-}
-
-// Граф связей: заметки, заметки, которых ещё нет (блёклые), по желанию дни и записи «Плана».
-// Поле двигается и масштабируется (колесо, щипок, кнопки), точки перетаскиваются. Нажатие выбирает точку —
-// её показывает панель справа; двойное открывает заметку на вкладке «Заметки». Связь — это ссылка в тексте:
-// её ведут от кольца вокруг заметки к другой заметке (или на пустое место — к новой), а убирают, выбрав линию
+// Граф связей: заметки, заметки, которых ещё нет (блёклые), по желанию дни и записи «Плана». Места точек,
+// подписи и линии считает движок (`layoutNotesGraph`, правило NOTES-1) — экран рисует по готовым координатам.
+// Поле двигается и масштабируется, точку можно переставить руками (место запоминается на устройстве). Нажатие
+// выбирает точку — её показывает панель; двойное открывает заметку. Связь — это ссылка в тексте: её ведут от
+// кольца вокруг заметки к другой заметке (или на пустое место — к новой), а убирают, выбрав линию
 const NotesGraph = ({
-  notes, planner, pickedId, linkFromId, query, searchStep, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd,
-  onClose, onMakeCanvas,
+  notes, planner, pickedId, linkFromId, query, searchStep, isNarrow, onPick, onOpen, onLink, onLinkNew, onUnlink,
+  onLinkModeEnd, onClose, onMakeCanvas,
 }: OwnProps) => {
   const boardRef = useRef<HTMLDivElement>();
   const worldRef = useRef<HTMLDivElement>();
   const newInputRef = useRef<HTMLInputElement>();
-  const foldersRef = useRef<HTMLSpanElement>();
-  const folderMenuRef = useRef<HTMLDivElement>();
   const [withDays, setWithDays] = useState(false);
   const [withRecords, setWithRecords] = useState(false);
-  // Выбор папок запоминается на устройстве; `undefined` — все папки
-  const [savedFolders, setSavedFolders] = useState(readGraphFolders);
-  const [isFolderMenuOpen, setIsFolderMenuOpen] = useState(false);
+  // Область графа запоминается на устройстве
+  const [savedFilter, setSavedFilter] = useState(readGraphFilter);
+  const [isScopeOpen, openScope, closeScope] = useFlag();
   // Вид поля: закреплённый — состоянием (от него зависят подписи и кнопки над полем), живой — в ссылке.
   // Во время жеста меняется только живой и пишется прямо в DOM; состояние догоняет при отпускании
   const [view, setView] = useState<BoardView>({ scale: 1, x: 0, y: 0 });
   const viewRef = useRef<BoardView>(view);
-  const [moved, setMoved] = useState<Record<string, GraphPoint>>({});
-  // Растёт, когда граф просят разложить заново
-  const [layoutRound, setLayoutRound] = useState(0);
   const [draft, setDraft] = useState<Draft>();
   // Связь брошена на пустое место: здесь спрашивают название новой заметки
   const [newAt, setNewAt] = useState<Draft>();
@@ -380,80 +164,68 @@ const NotesGraph = ({
   const lastTapRef = useRef<{ id?: string; at: number }>({ at: 0 });
   const sizeRef = useRef<{ width: number; height: number }>();
   const fitKeyRef = useRef<string>();
-  const fitRef = useRef<NoneToVoidFunction>();
+  const shouldFitRef = useRef(false);
+  // Вид поставлен вписыванием и с тех пор не менялся руками
+  const isAutoFitRef = useRef(false);
+  const shouldDropPickRef = useRef(false);
 
   const lang = useLang();
 
-  // Папки с заметками; выбор приводится к ним — удалённая папка из него выпадает
-  const folderOptions = useMemo(() => listGraphFolders(notes), [notes]);
-  const folders = useMemo(() => resolveGraphFolders(savedFolders, folderOptions), [savedFolders, folderOptions]);
-  const foldersKey = folders ? folders.join('\n') : undefined;
+  const sources = useMemo((): GraphNoteSource[] => notes.map((note) => {
+    const parsed = parseNoteCached(note);
+    return {
+      id: note.id,
+      title: note.title,
+      folder: note.folder,
+      isDaily: note.isDaily,
+      links: parsed.links,
+      tags: parsed.tags,
+    };
+  }), [notes]);
 
-  // Записи «Плана» нужны графу только при включённых «Записях»: без них изменения плана граф не трогают
+  // Область, которой больше не из чего собраться (папку убрали, заметку удалили), читается как «все заметки»
+  const filter = useMemo((): GraphFilter => {
+    const scope = resolveGraphScope(savedFilter.scope, sources);
+    return scope === savedFilter.scope ? savedFilter : { ...savedFilter, scope };
+  }, [savedFilter, sources]);
+  const placesKey = scopeKey(filter.scope);
+
+  // Ручная расстановка — своя у каждой области; переживает перезагрузку
+  const [placed, setPlaced] = useState<{ key: string; places: GraphPlaces }>(() => (
+    { key: placesKey, places: readGraphPlaces(placesKey) }
+  ));
+  const places = useMemo(() => (
+    placed.key === placesKey ? placed.places : readGraphPlaces(placesKey)
+  ), [placed, placesKey]);
+  const savePlaces = (next: GraphPlaces) => {
+    setPlaced({ key: placesKey, places: next });
+    writeGraphPlaces(placesKey, next);
+  };
+
+  // Записи «Плана» нужны графу только при включённых «Событиях и задачах»: без них изменения плана граф не трогают
   const plannerForGraph = withRecords ? planner : undefined;
   const records = useMemo(() => (plannerForGraph ? recordsOf(plannerForGraph) : NO_RECORDS), [plannerForGraph]);
 
-  // Сборка графа и начало раскладки. Точки, у которых уже есть место, стоят на нём: новая связь, заметка или
-  // смена папок граф не перетряхивают. Первая порция работы — сразу, остаток — порциями в свободное время
-  const built = useMemo(() => {
-    const graph = buildGraph({
-      notes: notes.map((note) => ({
-        id: note.id,
-        title: note.title,
-        folder: note.folder,
-        links: parseNoteCached(note).links,
-        isDaily: note.isDaily,
-      })),
-      records,
-    }, { withDays, withRecords, folders });
-    const run = startGraphLayout(graph.nodes, graph.edges, placedById, LAYOUT);
-    run.step(GRAPH_SYNC_WORK);
-    return { run, edges: graph.edges };
-    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  }, [notes, records, withDays, withRecords, foldersKey, layoutRound]);
-  const [layoutTick, setLayoutTick] = useState(0);
-  // `layoutTick` растёт после каждой порции раскладки — места точек перечитываются
-  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  const graph = useMemo(() => ({ nodes: built.run.nodes(), edges: built.edges }), [built, layoutTick]);
-  // Законченная раскладка запоминает места точек; если граф вписывали, он вписывается снова по готовым местам
-  const refitRef = useRef(false);
-  const rememberPlaces = (run: GraphLayoutRun) => {
-    run.nodes().forEach((node) => placedById.set(node.id, { x: node.x, y: node.y }));
-  };
-  useEffect(() => {
-    const { run } = built;
-    if (run.isDone) {
-      rememberPlaces(run);
-      return undefined;
-    }
-    return continueLayout(run, (isDone) => {
-      setLayoutTick((tick) => tick + 1);
-      if (!isDone) return;
-      rememberPlaces(run);
-      if (refitRef.current) {
-        refitRef.current = false;
-        fitRef.current?.();
-      }
-    });
-  }, [built]);
+  const input = useMemo(() => buildGraphInput(sources, records, filter, {
+    withDays, withRecords, aspect: isNarrow ? NOTES_GRAPH_ASPECT_TALL : NOTES_GRAPH_ASPECT_WIDE,
+  }), [sources, records, filter, withDays, withRecords, isNarrow]);
+  const { layout, isBusy } = useNotesGraphLayout(input);
 
-  const nodes = useMemo(() => graph.nodes.map((node) => ({ ...node, ...moved[node.id] })), [graph, moved]);
+  const graph = useMemo(() => applyGraphPlaces(layout || EMPTY_LAYOUT, places), [layout, places]);
+  const { nodes, edges } = graph;
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const neighbours = useMemo(() => (
-    pickedId ? neighboursOf(pickedId, graph.edges) : undefined
-  ), [pickedId, graph]);
+  const neighbours = useMemo(() => (pickedId ? neighboursOf(pickedId, edges) : undefined), [pickedId, edges]);
   const dailyById = useMemo(() => (
     new Map(notes.filter((note) => note.isDaily).map((note) => [note.id, note]))
   ), [notes]);
   const picked = pickedId && byId.has(pickedId) ? pickedId : undefined;
   const linkFrom = linkFromId ? byId.get(linkFromId) : undefined;
-  const selectedEdge = pickedEdge ? graph.edges.find((edge) => keyOf(edge) === pickedEdge) : undefined;
+  const selectedEdge = pickedEdge ? edges.find((edge) => edgeKey(edge) === pickedEdge) : undefined;
 
-  // Подписи точек: у заметки дня — дата словами, у записи «Плана» — название без разметки ссылок. Считаются
-  // по графу и языку, не на каждую перерисовку
+  // Подписи точек: у заметки дня — дата словами, у записи «Плана» — название без разметки ссылок
   const labels = useMemo(() => {
     const result = new Map<string, string>();
-    graph.nodes.forEach((node) => {
+    nodes.forEach((node) => {
       const daily = dailyById.get(node.id);
       if (daily) result.set(node.id, displayTitle(lang, daily));
       else if (node.kind === 'record') {
@@ -461,28 +233,31 @@ const NotesGraph = ({
       } else result.set(node.id, node.title);
     });
     return result;
-  }, [graph, dailyById, lang]);
+  }, [nodes, dailyById, lang]);
 
   const found = useMemo(() => {
     const wanted = normalizeQuery(query);
     if (!wanted) return undefined;
-    return new Set(graph.nodes.filter((node) => normalizeQuery(labels.get(node.id) || node.title).includes(wanted)
+    return new Set(nodes.filter((node) => normalizeQuery(labels.get(node.id) || node.title).includes(wanted)
       || normalizeQuery(node.title).includes(wanted)).map(({ id }) => id));
-  }, [query, graph, labels]);
+  }, [query, nodes, labels]);
 
   // Ссылки выбранной связи: одна, при взаимной связи — две (у каждой заметки своя, убираются по отдельности)
   const removals = useMemo(() => {
     const from = selectedEdge && byId.get(selectedEdge.from);
     const to = selectedEdge && byId.get(selectedEdge.to);
     if (!selectedEdge || !from || !to) return [];
-    const at = (share: number) => ({ x: from.x + (to.x - from.x) * share, y: from.y + (to.y - from.y) * share });
-    if (!selectedEdge.isMutual) return [{ from, to, spot: at(REMOVE_AT_MIDDLE) }];
-    return [{ from, to, spot: at(REMOVE_AT_SOURCE) }, { from: to, to: from, spot: at(1 - REMOVE_AT_SOURCE) }];
+    if (!selectedEdge.mutual) return [{ from, to, spot: edgePoint(selectedEdge, REMOVE_AT_MIDDLE) }];
+    return [
+      { from, to, spot: edgePoint(selectedEdge, REMOVE_AT_SOURCE) },
+      { from: to, to: from, spot: edgePoint(selectedEdge, 1 - REMOVE_AT_SOURCE) },
+    ];
   }, [selectedEdge, byId]);
 
   // Новый вид: сразу в DOM (поле, фон, масштаб для сценариев) и в живую ссылку; `isFinal` закрепляет состоянием
   const applyView = (next: BoardView, isFinal: boolean) => {
     viewRef.current = next;
+    isAutoFitRef.current = false;
     if (isFinal) {
       setView(next);
       return;
@@ -490,13 +265,13 @@ const NotesGraph = ({
     requestMutation(() => {
       if (viewRef.current !== next) return;
       const world = worldRef.current;
-      const board = boardRef.current;
+      const field = boardRef.current;
       if (world) world.style.transform = worldTransform(next);
-      if (!board) return;
-      board.style.cssText = boardBackgroundStyle(next);
-      board.dataset.graphScale = String(next.scale);
+      if (!field) return;
+      field.style.cssText = boardBackgroundStyle(next);
+      field.dataset.graphScale = String(next.scale);
       // Крестики выбранной связи стоят над полем в экранных координатах — едут вместе с ним
-      board.querySelectorAll<HTMLElement>('[data-graph-edge-remove]').forEach((button) => {
+      field.querySelectorAll<HTMLElement>('[data-graph-edge-remove]').forEach((button) => {
         const removal = removals.find(({ from }) => from.id === button.dataset.graphEdgeRemove);
         if (!removal) return;
         button.style.left = `${next.x + removal.spot.x * next.scale}px`;
@@ -508,32 +283,24 @@ const NotesGraph = ({
   // Колесо: вид едет сразу, состояние закрепляется, когда колесо остановилось
   const commitViewSoon = useMemo(() => debounce(commitView, 120, false), [commitView]);
 
+  // «Вписать»: всё показанное целиком на поле; расстановку не трогает
   const fit = useLastCallback(() => {
     const box = boardRef.current?.getBoundingClientRect();
     if (!box) return;
-    // Пока раскладка не закончена, вписывается промежуточный граф — по готовому вписывание повторится
-    refitRef.current = !built.run.isDone;
-    applyView(fitRects(
-      nodes.map((node) => ({
-        x: node.x - FIT_BOX_WIDTH / 2, y: node.y - FIT_BOX_HEIGHT / 2, width: FIT_BOX_WIDTH, height: FIT_BOX_HEIGHT,
-      })),
-      box.width,
-      box.height,
-      FIT_TOP,
-      FIT_BOTTOM,
-    ), true);
+    applyView(fitRects(graphRects(nodes), box.width, box.height, FIT_TOP, isNarrow ? 0 : FIT_BOTTOM), true);
+    isAutoFitRef.current = true;
   });
-  fitRef.current = fit;
 
-  // Граф вписывается в поле при открытии, при смене фильтра и когда его раскладывают заново. Новая заметка
-  // или связь вид не трогают: масштаб и место выбирает пользователь
-  const hasNodes = graph.nodes.length > 0;
+  // Граф вписывается в поле при открытии и при смене того, что на нём показано. Новая заметка или связь вид
+  // не трогают: масштаб и место выбирает пользователь
+  const hasNodes = nodes.length > 0;
   useEffect(() => {
-    const key = `${hasNodes}${withDays}${withRecords}${layoutRound}${foldersKey}`;
+    if (isBusy) return;
+    const key = [hasNodes, withDays, withRecords, placesKey, filter.hideOrphans, filter.hideMissing, isNarrow].join();
     if (fitKeyRef.current === key) return;
     fitKeyRef.current = key;
     fit();
-  }, [hasNodes, withDays, withRecords, layoutRound, foldersKey]);
+  }, [isBusy, hasNodes, withDays, withRecords, placesKey, filter.hideOrphans, filter.hideMissing, isNarrow]);
 
   // Вид, в котором точка видна: прежний, если она и так на поле, иначе поле сдвигается к ней без смены масштаба
   const revealIn = (current: BoardView, node: GraphPoint | undefined, width: number, height: number) => {
@@ -556,13 +323,20 @@ const NotesGraph = ({
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [picked]);
 
-  // Панель справа открылась или закрылась: поле стало уже или шире. Граф остаётся посередине в прежнем
-  // масштабе; сдвигается к выбранной точке, только если она оказалась за краем
+  // Панель справа открылась или закрылась: поле стало уже или шире. Вписанный граф вписывается заново; вид,
+  // который выбрали руками, остаётся посередине в прежнем масштабе и сдвигается к выбранной точке, только если
+  // она оказалась за краем
   const handleResize = useLastCallback((entry: ResizeObserverEntry) => {
     const { width, height } = entry.contentRect;
     const previous = sizeRef.current;
     sizeRef.current = { width, height };
-    if (!previous || previous.width === width) return;
+    if (!previous) return;
+    // Вид после «Вписать» никто не трогал — граф вписывается в новое поле заново
+    if (isAutoFitRef.current && (previous.width !== width || previous.height !== height)) {
+      fit();
+      return;
+    }
+    if (previous.width === width) return;
     const current = viewRef.current;
     const centred = { ...current, x: current.x + (width - previous.width) / 2 };
     applyView(revealIn(centred, picked ? byId.get(picked) : undefined, width, height), true);
@@ -587,7 +361,7 @@ const NotesGraph = ({
     if (newAt) newInputRef.current?.focus();
   }, [newAt]);
 
-  const pickOf = (node: GraphNode): GraphPick => ({
+  const pickOf = (node: NotesGraphNode): GraphPick => ({
     id: node.id, kind: node.kind, title: node.title, group: node.group,
   });
 
@@ -630,10 +404,10 @@ const NotesGraph = ({
     setDraft(undefined);
   };
 
-  const connect = useLastCallback(async (fromId: string, to: GraphNode) => {
+  const connect = useLastCallback(async (fromId: string, to: NotesGraphNode) => {
     clearDraft();
     const outcome = await onLink(fromId, to.title);
-    if (outcome === 'added' || outcome === 'exists') setFlash(pairOf(fromId, to.id));
+    if (outcome === 'added' || outcome === 'exists') setFlash(edgePair(fromId, to.id));
   });
 
   const cancelNew = useLastCallback(() => {
@@ -647,12 +421,12 @@ const NotesGraph = ({
     if (!at || !title.trim()) return;
     const spot = { x: at.x, y: at.y };
     // Новая заметка встаёт туда, где бросили связь: место ждёт её под названием
-    placedById.set(MISSING_NODE_PREFIX + normalizeNoteTitle(title), spot);
+    const waiting = { ...places, [MISSING_NODE_PREFIX + normalizeNoteTitle(title)]: spot };
+    savePlaces(waiting);
     const id = await onLinkNew(at.from, title);
     if (!id) return;
-    placedById.set(id, spot);
-    setMoved((current) => ({ ...current, [id]: spot }));
-    setFlash(pairOf(at.from, id));
+    savePlaces({ ...waiting, [id]: spot });
+    setFlash(edgePair(at.from, id));
   });
 
   const removeLink = useLastCallback((fromId?: string) => {
@@ -675,7 +449,7 @@ const NotesGraph = ({
       clearDraft();
       return;
     }
-    const handleId = target.closest<SVGElement>('[data-graph-handle]')?.dataset.graphHandle;
+    const handleId = target.closest<SVGElement>('[data-graph-ring]')?.dataset.graphRing;
     const id = handleId || target.closest<SVGElement>('[data-node]')?.dataset.node;
     const edge = id ? undefined : target.closest<SVGElement>('[data-graph-edge]')?.dataset.graphEdge;
     const node = id ? byId.get(id) : undefined;
@@ -702,9 +476,9 @@ const NotesGraph = ({
     drag.node = node;
     drag.element = nodeElements.get(node.id);
     drag.edges = [];
-    graph.edges.forEach((edge) => {
+    edges.forEach((edge) => {
       if (edge.from !== node.id && edge.to !== node.id) return;
-      const element = edgeElements.get(keyOf(edge));
+      const element = edgeElements.get(edgeKey(edge));
       const other = byId.get(edge.from === node.id ? edge.to : edge.from);
       if (element && other) drag.edges!.push({ edge, element, other });
     });
@@ -712,11 +486,11 @@ const NotesGraph = ({
 
   const writeDraggedNode = (drag: Drag, at: GraphPoint) => {
     if (!drag.node) return;
-    if (drag.element) writeNode(drag.element, drag.node, at);
-    const movedNode = { ...drag.node, x: at.x, y: at.y };
+    drag.element?.setAttribute('transform', `translate(${at.x} ${at.y})`);
+    const movedNode = moveGraphNode(drag.node, at);
     drag.edges?.forEach(({ edge, element, other }) => {
-      if (edge.from === drag.node!.id) writeEdge(element, movedNode, other, edge.isMutual);
-      else writeEdge(element, other, movedNode, edge.isMutual);
+      const isFrom = edge.from === drag.node!.id;
+      writeEdge(element, straightGraphEdge(edge, isFrom ? movedNode : other, isFrom ? other : movedNode));
     });
   };
 
@@ -772,11 +546,7 @@ const NotesGraph = ({
     if (drag.hasMoved) {
       if (drag.mode === 'node') {
         // Место, куда точку поставили руками, она сохраняет; граф перерисовывается один раз — по отпусканию
-        const at = drag.at;
-        if (at) {
-          placedById.set(drag.id!, at);
-          setMoved({ ...moved, [drag.id!]: at });
-        }
+        if (drag.at) savePlaces({ ...places, [drag.id!]: drag.at });
         return;
       }
       if (drag.mode !== 'link') {
@@ -841,21 +611,21 @@ const NotesGraph = ({
     commitViewSoon();
   });
 
-  // Escape по очереди: название новой заметки, список папок, режим «Связать», выбранная линия, панель выбранной
-  // точки. Панель не закрывается, пока в ней правят заметку или набирают текст в поле: там Escape — дело поля.
-  // Общие слушатели приложения перехватывают Escape раньше — обработчик встаёт в их очередь
+  // Escape по очереди: название новой заметки, список областей, режим «Связать», выбранная линия, панель
+  // выбранной точки. Панель не закрывается, пока в ней правят заметку или набирают текст в поле: там Escape —
+  // дело поля. Общие слушатели приложения перехватывают Escape раньше — обработчик встаёт в их очередь
   const handleEscape = useLastCallback(() => {
     // Скрытый раздел (смонтирован, но не показан) клавишу не берёт
     if (!getIsParvaneScreenShown('notes')) return false;
     if (newAt) cancelNew();
-    else if (isFolderMenuOpen) setIsFolderMenuOpen(false);
+    else if (isScopeOpen) closeScope();
     else if (linkFromId) onLinkModeEnd();
     else if (pickedEdge) setPickedEdge(undefined);
     else if (document.querySelector(PANEL_EDITOR) || isTyping(document.activeElement)) return false;
     else onClose();
     return undefined;
   });
-  const hasEscapeTarget = Boolean(newAt || isFolderMenuOpen || linkFromId || pickedEdge || pickedId);
+  const hasEscapeTarget = Boolean(newAt || isScopeOpen || linkFromId || pickedEdge || pickedId);
   useEffect(() => (hasEscapeTarget ? captureEscKeyListener(handleEscape) : undefined), [hasEscapeTarget]);
 
   // Delete убирает выбранную связь
@@ -880,58 +650,39 @@ const NotesGraph = ({
 
   const handleZoomIn = useLastCallback(() => zoomBy(BOARD_ZOOM_STEP));
   const handleZoomOut = useLastCallback(() => zoomBy(1 / BOARD_ZOOM_STEP));
-  // «Вписать» раскладывает граф заново (сдвинутые руками точки возвращаются) и показывает его целиком
-  const handleFit = useLastCallback(() => {
-    placedById.clear();
-    setMoved({});
-    setLayoutRound(layoutRound + 1);
+  // «Разложить заново»: точки, переставленные руками, возвращаются на места раскладки, граф вписывается
+  const handleRelayout = useLastCallback(() => {
+    shouldFitRef.current = true;
+    savePlaces({});
   });
+  const hasPlaces = Object.keys(places).length > 0;
+  useEffect(() => {
+    if (!shouldFitRef.current) return;
+    shouldFitRef.current = false;
+    fit();
+  }, [places]);
 
+  const handleToggleScope = useLastCallback(() => (isScopeOpen ? closeScope() : openScope()));
   const handleToggleDays = useLastCallback(() => setWithDays(!withDays));
   const handleToggleRecords = useLastCallback(() => setWithRecords(!withRecords));
 
-  // ── выбор папок ──
-  const handleToggleFolderMenu = useLastCallback(() => setIsFolderMenuOpen(!isFolderMenuOpen));
+  const handleFilter = useLastCallback((next: GraphFilter) => {
+    setSavedFilter(next);
+    writeGraphFilter(next);
+    shouldDropPickRef.current = true;
+  });
 
-  // Нажатие мимо списка папок закрывает его
+  // Точка, открытая в панели, ушла с графа вместе со своей областью — панель закрывается
   useEffect(() => {
-    if (!isFolderMenuOpen) return undefined;
-    const handleOutside = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (foldersRef.current?.contains(target) || folderMenuRef.current?.contains(target)) return;
-      setIsFolderMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', handleOutside, true);
-    return () => document.removeEventListener('pointerdown', handleOutside, true);
-  }, [isFolderMenuOpen]);
+    if (!shouldDropPickRef.current || isBusy || !layout) return;
+    shouldDropPickRef.current = false;
+    if (pickedId && !byId.has(pickedId)) onClose();
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [layout, isBusy]);
 
-  const pickFolders = (next?: string[]) => {
-    const resolved = resolveGraphFolders(next, folderOptions);
-    setSavedFolders(resolved);
-    writeGraphFolders(resolved);
-    // Заметка в панели ушла с графа вместе со своей папкой — панель закрывается
-    const pickedNote = pickedId ? notes.find(({ id }) => id === pickedId) : undefined;
-    if (pickedNote && !isNoteInGraph(pickedNote, { withDays, folders: resolved })) onClose();
-  };
-
-  const handleAllFolders = useLastCallback(() => {
-    pickFolders(undefined);
-    setIsFolderMenuOpen(false);
-  });
-
-  // Папка в списке — галочка: из «всех папок» нажатие оставляет одну, дальше папки добавляются и убираются;
-  // сняли последнюю либо отметили все — снова «все папки»
-  const handleFolder = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const path = e.currentTarget.dataset.graphFolder!;
-    if (!folders) pickFolders([path]);
-    else pickFolders(folders.includes(path) ? folders.filter((item) => item !== path) : [...folders, path]);
-  });
-
-  const captionOf = (path: string) => (path === ROOT_FOLDER ? lang('KnowledgeRoot') : folderCaption(path));
-
-  // «Создать холст»: заметки, что сейчас на графе, — выбранные папки и, если включены, дни. Поиск набор не сужает
+  // «Холст из графа»: заметки, что сейчас на графе, — та же область. Поиск набор не сужает
   const handleMakeCanvas = useLastCallback(() => {
-    onMakeCanvas({ folders, days: withDays });
+    onMakeCanvas({ scope: filter.scope, hideOrphans: filter.hideOrphans, days: withDays });
   });
 
   // Enter в поиске шапки выбирает следующую найденную точку (после выбранной, по кругу)
@@ -950,14 +701,13 @@ const NotesGraph = ({
 
   const noteCount = nodes.filter(({ kind }) => kind === 'note').length;
   const hasCanvasNotes = nodes.some(({ kind }) => kind === 'note' || kind === 'day');
-  // Выбирать есть из чего, когда заметки лежат больше чем в одном месте
-  const hasFolderChoice = folderOptions.length > 1;
-  const foldersLabel = !folders ? lang('KnowledgeGraphFoldersAll')
-    : folders.length === 1 ? captionOf(folders[0]) : lang('KnowledgeGraphFoldersCount', { count: folders.length });
+  const pickedNode = picked ? byId.get(picked) : undefined;
+  const pickedNote = pickedNode?.kind === 'note' ? { id: pickedNode.id, title: pickedNode.title } : undefined;
+  const aroundTitle = filter.scope.kind === 'around'
+    ? notes.find(({ id }) => id === (filter.scope as { note: string }).note)?.title : undefined;
   const line = newAt || draft;
   const lineFrom = line ? byId.get(line.from) : undefined;
   const linkSourceId = line?.from || linkFromId;
-  const areLabelsShown = view.scale >= LABEL_MIN_SCALE;
   // Поле и фон рисуются по живому виду: перерисовка посреди жеста не откатывает их к закреплённому
   const liveView = viewRef.current;
   const toScreen = (point: GraphPoint) => (
@@ -967,24 +717,45 @@ const NotesGraph = ({
   const newInputStyle = newAt && `left: clamp(7.75rem, ${view.x + newAt.x * view.scale}px, calc(100% - 7.75rem)); `
     + `top: clamp(5rem, ${view.y + newAt.y * view.scale}px, calc(100% - 2rem))`;
 
+  function renderChip(label: string, onClick: NoneToVoidFunction, attribute: string, isDisabled?: boolean) {
+    return (
+      <button
+        type="button"
+        className={buildClassName(kit.chip, styles.chip)}
+        disabled={isDisabled}
+        {...{ [attribute]: '' }}
+        onClick={onClick}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  const relayoutChip = renderChip(lang('KnowledgeGraphRelayout'), handleRelayout, 'data-graph-relayout', !hasPlaces);
+  const canvasChip = renderChip(
+    lang('KnowledgeGraphToCanvas'), handleMakeCanvas, 'data-graph-to-canvas', !hasCanvasNotes,
+  );
+
   return (
     <div
       ref={boardRef}
-      className={buildClassName(styles.board, Boolean(linkSourceId) && styles.boardLinking)}
+      className={buildClassName(board.board, styles.root, Boolean(linkSourceId) && styles.linking)}
       style={boardBackgroundStyle(liveView)}
       data-notes-graph
       data-graph-scale={liveView.scale}
       data-graph-picked={picked}
+      data-graph-busy={isBusy ? '' : undefined}
+      data-graph-placed={Object.keys(places).length}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
       onWheel={handleWheel}
     >
-      <div ref={worldRef} className={styles.world} style={`transform: ${worldTransform(liveView)}`}>
-        <svg className={styles.graphSvg} width="1" height="1">
+      <div ref={worldRef} className={board.world} style={`transform: ${worldTransform(liveView)}`}>
+        <svg className={styles.svg} width="1" height="1">
           <GraphEdges
-            edges={graph.edges}
+            edges={edges}
             byId={byId}
             picked={picked}
             found={found}
@@ -994,7 +765,7 @@ const NotesGraph = ({
           />
           {line && lineFrom && (
             <line
-              className={styles.graphDraft}
+              className={styles.draft}
               x1={lineFrom.x}
               y1={lineFrom.y}
               x2={line.x}
@@ -1010,25 +781,20 @@ const NotesGraph = ({
             found={found}
             overId={line?.overId}
             linkSourceId={linkSourceId}
-            areLabelsShown={areLabelsShown}
+            areLabelsHidden={view.scale < LABEL_MIN_SCALE}
+            areAllLabelsShown={view.scale >= LABEL_ALL_SCALE}
           />
         </svg>
       </div>
-      <div className={styles.boardTools} data-board-tools>
-        {/* Одна строка, как на холсте: не помещается — листается вбок */}
-        <div className={buildClassName(styles.boardScroll, styles.graphToolRow)}>
-          <span
-            className={buildClassName(kit.chip, kit.chipOn, styles.boardChip, styles.boardChipOn)}
-            style="--c: var(--pv-note)"
-          >
+      <div className={styles.tools} data-board-tools>
+        {/* Одна строка: не помещается — листается вбок */}
+        <div className={styles.toolRow} data-graph-tool-row>
+          <span className={buildClassName(kit.chip, kit.chipOn, styles.chip)} data-graph-count={noteCount}>
             {lang('KnowledgeGraphNotes', { count: noteCount })}
           </span>
           <button
             type="button"
-            className={buildClassName(
-              kit.chip, styles.boardChip, withDays && kit.chipOn, withDays && styles.boardChipOn,
-            )}
-            style="--c: var(--pv-note)"
+            className={buildClassName(kit.chip, styles.chip, withDays && kit.chipOn)}
             aria-pressed={withDays}
             onClick={handleToggleDays}
           >
@@ -1036,102 +802,50 @@ const NotesGraph = ({
           </button>
           <button
             type="button"
-            className={buildClassName(
-              kit.chip, styles.boardChip, withRecords && kit.chipOn, withRecords && styles.boardChipOn,
-            )}
-            style="--c: var(--pv-event)"
+            className={buildClassName(kit.chip, styles.chip, withRecords && kit.chipOn)}
             aria-pressed={withRecords}
             onClick={handleToggleRecords}
           >
             {lang('KnowledgeGraphRecords')}
           </button>
-          {hasFolderChoice && (
-            <span ref={foldersRef} className={styles.graphFolders}>
-              <button
-                type="button"
-                className={buildClassName(
-                  kit.chip, styles.boardChip, folders && kit.chipOn, folders && styles.boardChipOn,
-                )}
-                aria-haspopup="menu"
-                aria-expanded={isFolderMenuOpen}
-                title={lang('KnowledgeGraphFolders')}
-                data-graph-folders={folders ? folders.length : 'all'}
-                onClick={handleToggleFolderMenu}
-              >
-                <PvIcon name="folder" isSmall />
-                <span className={styles.graphFoldersLabel}>{foldersLabel}</span>
-                <PvIcon name={isFolderMenuOpen ? 'up' : 'down'} isSmall />
-              </button>
-            </span>
-          )}
-          <button
-            type="button"
-            className={buildClassName(kit.chip, styles.boardChip)}
-            title={lang('KnowledgeGraphToCanvasTitle')}
-            disabled={!hasCanvasNotes}
-            data-graph-to-canvas
-            onClick={handleMakeCanvas}
-          >
-            <PvIcon name="board" isSmall />
-            {lang('KnowledgeGraphToCanvas')}
-          </button>
+          <NotesGraphScopeChip
+            filter={filter}
+            aroundTitle={aroundTitle}
+            isOpen={isScopeOpen}
+            onToggle={handleToggleScope}
+          />
+          {isNarrow && relayoutChip}
+          {isNarrow && canvasChip}
         </div>
-        {isFolderMenuOpen && (
-          <div
-            ref={folderMenuRef}
-            className={buildClassName(styles.graphFoldersMenu, 'custom-scroll')}
-            role="menu"
-            aria-label={lang('KnowledgeGraphFolders')}
-            data-graph-folders-menu
-          >
-            <button
-              type="button"
-              className={styles.canvasMenuItem}
-              role="menuitemradio"
-              aria-checked={!folders}
-              data-graph-folder-all
-              onClick={handleAllFolders}
-            >
-              <PvIcon name="check" isSmall className={buildClassName(folders && styles.graphFolderOff)} />
-              <span className={styles.graphFolderName}>{lang('KnowledgeGraphFoldersAll')}</span>
-            </button>
-            {folderOptions.map(({ path, count }) => {
-              const isOn = Boolean(folders?.includes(path));
-              return (
-                <button
-                  key={path}
-                  type="button"
-                  className={styles.canvasMenuItem}
-                  role="menuitemcheckbox"
-                  aria-checked={isOn}
-                  data-graph-folder={path}
-                  onClick={handleFolder}
-                >
-                  <PvIcon name="check" isSmall className={buildClassName(!isOn && styles.graphFolderOff)} />
-                  <span className={styles.graphFolderName} style={`--c: ${folderColor(path)}`}>
-                    {captionOf(path)}
-                  </span>
-                  <span className={styles.graphFolderCount}>{count}</span>
-                </button>
-              );
-            })}
-          </div>
+        {isScopeOpen && (
+          <NotesGraphScope
+            filter={filter}
+            folders={graph.folders}
+            tags={graph.tags}
+            pickedNote={pickedNote}
+            aroundTitle={aroundTitle}
+            onClose={closeScope}
+            onChange={handleFilter}
+          />
         )}
       </div>
       {linkFrom && (
         <div
-          className={buildClassName(styles.boardHint, styles.graphLinkHint)}
+          className={buildClassName(board.boardHint, styles.linkHint)}
           role="status"
           data-board-tools
           data-graph-link-mode={linkFrom.id}
         >
           <span>{lang('KnowledgeGraphConnectHint', { name: linkFrom.title })}</span>
-          <button type="button" className={buildClassName(kit.plain, styles.graphLinkCancel)} onClick={onLinkModeEnd}>
+          <button type="button" className={buildClassName(kit.plain, styles.linkCancel)} onClick={onLinkModeEnd}>
             {lang('Cancel')}
           </button>
         </div>
       )}
-      {!nodes.length && <p className={styles.boardEmpty}>{lang('KnowledgeGraphEmpty')}</p>}
+      {isBusy && (
+        <div className={styles.busy} role="status" data-graph-busy-note>{lang('KnowledgeGraphBusy')}</div>
+      )}
+      {!nodes.length && !isBusy && <p className={board.boardEmpty}>{lang('KnowledgeGraphEmpty')}</p>}
       {removals.map(({ from, spot }) => {
         const label = removals.length > 1
           ? lang('KnowledgeGraphRemoveLinkFrom', { name: from.title }) : lang('KnowledgeGraphRemoveLink');
@@ -1139,7 +853,7 @@ const NotesGraph = ({
           <button
             key={from.id}
             type="button"
-            className={styles.graphEdgeRemove}
+            className={styles.edgeRemove}
             style={toScreen(spot)}
             aria-label={label}
             title={label}
@@ -1155,7 +869,7 @@ const NotesGraph = ({
       {newAt && (
         <input
           ref={newInputRef}
-          className={buildClassName(kit.input, styles.graphNewInput)}
+          className={buildClassName(kit.input, styles.newInput)}
           style={newInputStyle}
           maxLength={NEW_TITLE_MAX}
           placeholder={lang('KnowledgeGraphNewLinked')}
@@ -1167,29 +881,82 @@ const NotesGraph = ({
           onBlur={cancelNew}
         />
       )}
-      <div className={styles.boardZoom} data-board-tools>
-        <button
-          type="button"
-          className={styles.boardTool}
-          aria-label={lang('KnowledgeZoomIn')}
-          onClick={handleZoomIn}
-        >
-          <PvIcon name="plus" isSmall />
-        </button>
-        <button
-          type="button"
-          className={styles.boardTool}
-          aria-label={lang('KnowledgeZoomOut')}
-          onClick={handleZoomOut}
-        >
-          <PvIcon name="minus" isSmall />
-        </button>
-        <button type="button" className={styles.boardTool} aria-label={lang('KnowledgeZoomFit')} onClick={handleFit}>
-          <PvIcon name="fit" isSmall />
-        </button>
-      </div>
+      {isNarrow ? (
+        <div className={styles.zoom} data-board-tools>
+          <button type="button" className={styles.zoomTool} aria-label={lang('KnowledgeZoomIn')} onClick={handleZoomIn}>
+            <PvIcon name="plus" />
+          </button>
+          <button
+            type="button"
+            className={styles.zoomTool}
+            aria-label={lang('KnowledgeZoomOut')}
+            onClick={handleZoomOut}
+          >
+            <PvIcon name="minus" />
+          </button>
+          <button type="button" className={styles.zoomTool} aria-label={lang('KnowledgeZoomFit')} onClick={fit}>
+            <PvIcon name="fit" />
+          </button>
+        </div>
+      ) : (
+        <div className={styles.bottomRow} data-board-tools>
+          {renderChip(lang('KnowledgeZoomIn'), handleZoomIn, 'data-graph-zoom-in')}
+          {renderChip(lang('KnowledgeZoomOut'), handleZoomOut, 'data-graph-zoom-out')}
+          {renderChip(lang('KnowledgeZoomFit'), fit, 'data-graph-fit')}
+          {relayoutChip}
+          {canvasChip}
+        </div>
+      )}
     </div>
   );
 };
+
+// Записи «Плана» для графа: события и задачи со ссылками в названии
+function recordsOf(planner: PlannerState): NotesGraphRecord[] {
+  return [
+    ...planner.events.map((event) => ({
+      id: `e${event.id}`, title: event.name, links: findLinks(event.name), type: 'event',
+    })),
+    ...planner.tasks.map((task) => ({
+      id: `t${task.id}`, title: task.name, links: findLinks(task.name), type: 'task',
+    })),
+  ];
+}
+
+function findLinks(text: string) {
+  return [...text.matchAll(LINK)].map((match) => match[1].trim());
+}
+
+// Элементы связей и точек графа по ключу — чтобы во время перетаскивания править их напрямую
+function elementsByKey<T extends SVGElement>(root: ParentNode, attribute: string) {
+  const result = new Map<string, T>();
+  root.querySelectorAll<T>(`[${attribute}]`).forEach((element) => {
+    result.set(element.getAttribute(attribute)!, element);
+  });
+  return result;
+}
+
+// Линия связи в DOM по новым концам: область нажатия, видимая линия и наконечники
+function writeEdge(element: SVGGElement, edge: NotesGraphEdge) {
+  const path = notesGraphEdgePath(edge);
+  element.querySelectorAll('[data-edge-line]').forEach((line) => line.setAttribute('d', path));
+  const heads = edgeHeads(edge);
+  element.querySelectorAll('[data-edge-head]').forEach((head, i) => {
+    if (heads[i]) head.setAttribute('d', heads[i]);
+  });
+}
+
+function worldTransform(view: BoardView) {
+  return `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+}
+
+function normalizeQuery(value: string) {
+  return value.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
+function isTyping(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest?.('input, textarea, [contenteditable="true"]'));
+}
 
 export default memo(NotesGraph);

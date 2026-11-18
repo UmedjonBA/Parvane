@@ -1996,7 +1996,7 @@
       "sample": "conformance/notes-graph/cases.json",
       "status": "18 ноя 2026: движок — сделано (backend/protocol/src/notes_graph/, тест tests/notes_graph_vectors.rs); web — обёртка и тест по общему образцу сделаны, экраны графа и холста ещё рисуют прежней раскладкой (spec 040 T6, этап D2); desktop и android — открыто (свои порты раскладки удаляются на их этапе)",
       "clients": {
-        "web": "components/parvane/notes/notesGraphEngine.ts (вызов движка и типы), тест notesGraphEngine.test.ts (общий образец через WASM); экраны NotesGraph.tsx и NotesCanvas.tsx — ОТКРЫТО (прежние notesGraph.ts layoutGraph и notesCanvasGraph.ts)",
+        "web": "components/parvane/notes/notesGraphEngine.ts (вызов движка и типы), тест notesGraphEngine.test.ts (общий образец через WASM); экраны по ответу движка: NotesGraph.tsx + notesGraphView.ts (размеры подписи NOTES_GRAPH_METRICS, наконечники, ручная расстановка поверх ответа), NoteLinksGraph.tsx (малый граф), notesCanvasGraph.ts (холст из графа и область при обновлении); прежний notesGraph.ts удалён; сценарий scripts/run_web_notes_graph_e2e.sh",
         "desktop": "открыто",
         "android": "открыто"
       }

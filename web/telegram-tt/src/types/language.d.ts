@@ -2872,7 +2872,6 @@ export interface LangPair {
   'PlannerUndo': undefined;
   'PlannerViewCalendar': undefined;
   'PlannerViewStatistics': undefined;
-  'PlannerViewTasks': undefined;
   'TaskOfferAddedToPlan': undefined;
   'TaskOfferAlreadyInPlan': undefined;
   'TaskOfferDecline': undefined;
@@ -2932,9 +2931,7 @@ export interface LangPair {
   'PlannerQuickLearned': undefined;
   'PlannerQuickAlternatives': undefined;
   'PlannerTodayNoTasks': undefined;
-  'PlannerTodayAllDone': undefined;
   'PlannerTodayLoad': undefined;
-  'PlannerTodayOver': undefined;
   'PlannerUndatedTitle': undefined;
   'PlannerUndatedEmpty': undefined;
   'PlannerAgendaEmpty': undefined;
@@ -2960,8 +2957,6 @@ export interface LangPair {
   'ParvaneCompose': undefined;
   'PlannerHealth': undefined;
   'PlannerHealthSleep': undefined;
-  'PlannerHealthSleepNone': undefined;
-  'PlannerHealthBudgetReduced': undefined;
   'PlannerHealthFood': undefined;
   'PlannerTomorrow': undefined;
   'PlannerDuePassed': undefined;
@@ -2970,11 +2965,7 @@ export interface LangPair {
   'PlannerAllDayTiny': undefined;
   'PlannerDueTiny': undefined;
   'PlannerAddForDay': undefined;
-  'PlannerPrevDay': undefined;
-  'PlannerNextDay': undefined;
-  'PlannerSchedule': undefined;
   'PlannerNewTask': undefined;
-  'PlannerUndatedAll': undefined;
   'PlannerAutoSaved': undefined;
   'PlannerSaved': undefined;
   'PlannerUndatedShort': undefined;
@@ -2986,7 +2977,17 @@ export interface LangPair {
   'PlannerDailyNotePlaceholder': undefined;
   'PlannerLayers': undefined;
   'PlannerLayerWork': undefined;
-  'PlannerCalMonthShort': undefined;
+  'PlannerRailToday': undefined;
+  'PlannerDayTimed': undefined;
+  'PlannerDayUntimed': undefined;
+  'PlannerMonthLoadHint': undefined;
+  'PlannerQuickField': undefined;
+  'PlannerYearLess': undefined;
+  'PlannerYearMore': undefined;
+  'PlannerLayerFromHealth': undefined;
+  'PlannerLayerWorkHint': undefined;
+  'PlannerLayersHint': undefined;
+  'PlannerSettingsDay': undefined;
   'PlannerYearLegend': undefined;
   'PlannerQuickExamplesTitle': undefined;
   'PlannerQuickRecentTitle': undefined;
@@ -3043,10 +3044,8 @@ export interface LangPair {
   'KnowledgeDaily': undefined;
   'KnowledgeGraphDays': undefined;
   'KnowledgeGraphRecords': undefined;
-  'KnowledgeGraphFolders': undefined;
   'KnowledgeGraphFoldersAll': undefined;
   'KnowledgeGraphToCanvas': undefined;
-  'KnowledgeGraphToCanvasTitle': undefined;
   'KnowledgeGraphToCanvasEmpty': undefined;
   'KnowledgeGraphEmpty': undefined;
   'KnowledgeZoomIn': undefined;
@@ -3098,6 +3097,25 @@ export interface LangPair {
   'KnowledgeGraphNewLinked': undefined;
   'KnowledgeGraphRemoveLink': undefined;
   'KnowledgeGraphUndo': undefined;
+  'KnowledgeGraphScope': undefined;
+  'KnowledgeGraphScopeAll': undefined;
+  'KnowledgeGraphScopeDepth': undefined;
+  'KnowledgeGraphScopeFolders': undefined;
+  'KnowledgeGraphScopeTags': undefined;
+  'KnowledgeGraphHideOrphans': undefined;
+  'KnowledgeGraphHideMissing': undefined;
+  'KnowledgeGraphRelayout': undefined;
+  'KnowledgeGraphBusy': undefined;
+  'KnowledgeLinkWayIn': undefined;
+  'KnowledgeLinkWayOut': undefined;
+  'KnowledgeLinkWayBoth': undefined;
+  'KnowledgeGraphLinkInText': undefined;
+  'KnowledgeGraphLinkWith': undefined;
+  'KnowledgeGraphLinkWithHint': undefined;
+  'KnowledgeGraphLinkInTextHint': undefined;
+  'KnowledgeCanvasRefreshTitle': undefined;
+  'KnowledgeCanvasBlank': undefined;
+  'KnowledgeCanvasBlankTouch': undefined;
   'KnowledgeCanvasTextCard': undefined;
   'KnowledgeCanvasEdgeTitle': undefined;
   'KnowledgeCanvasOpenNote': undefined;
@@ -5311,14 +5329,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerDayOverload': {
     'minutes': V;
   };
-  'PlannerDayPlan': {
-    'planned': V;
-    'budget': V;
-  };
-  'PlannerDayPlanShort': {
-    'planned': V;
-    'budget': V;
-  };
   'PlannerDayUnrated': {
     'count': V;
   };
@@ -5515,9 +5525,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerQuickRemove': {
     'value': V;
   };
-  'PlannerTodayLeft': {
-    'count': V;
-  };
   'PlannerUndated': {
     'count': V;
   };
@@ -5527,17 +5534,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerHealthKcal': {
     'value': V;
-  };
-  'PlannerHealthKcalOver': {
-    'value': V;
-  };
-  'PlannerHealthGoalValue': {
-    'value': V;
-  };
-  'PlannerHealthSleepGoal': {
-    'from': V;
-    'to': V;
-    'goal': V;
   };
   'PlannerMinutesShort': {
     'minutes': V;
@@ -5553,9 +5549,22 @@ export interface LangPairWithVariables<V = LangVariable> {
     'sleep': V;
     'budget': V;
   };
-  'PlannerKcalLeftOf': {
-    'left': V;
-    'goal': V;
+  'PlannerLoadOf': {
+    'planned': V;
+    'budget': V;
+  };
+  'PlannerLoadFree': {
+    'value': V;
+  };
+  'PlannerLoadOver': {
+    'value': V;
+  };
+  'PlannerWeekShort': {
+    'week': V;
+  };
+  'PlannerWeekTitle': {
+    'range': V;
+    'week': V;
   };
   'PlannerMonthSleep': {
     'value': V;
@@ -5565,12 +5574,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickDefault': {
     'date': V;
-  };
-  'PlannerSleepRoutineDriftingShort': {
-    'value': V;
-  };
-  'PlannerSleepRoutineBrokenShort': {
-    'value': V;
   };
   'KnowledgeGuideAdded': {
     'name': V;
@@ -5593,9 +5596,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeDeleteConfirm': {
     'name': V;
   };
-  'KnowledgeBacklinks': {
-    'count': V;
-  };
   'KnowledgeNoticeConflict': {
     'name': V;
   };
@@ -5606,9 +5606,6 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'KnowledgeGraphNotes': {
-    'count': V;
-  };
-  'KnowledgeGraphFoldersCount': {
     'count': V;
   };
   'KnowledgeCanvasName': {
@@ -5655,6 +5652,15 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeGraphUnlinkInline': {
     'to': V;
     'from': V;
+  };
+  'KnowledgeGraphScopeAround': {
+    'name': V;
+  };
+  'KnowledgeGraphScopeAroundShort': {
+    'name': V;
+  };
+  'KnowledgeLinksTitle': {
+    'count': V;
   };
   'KnowledgeCanvasNoteRestored': {
     'name': V;

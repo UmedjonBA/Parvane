@@ -1,4 +1,4 @@
-import { memo, useEffect } from '../../../lib/teact/teact';
+import { memo, useLayoutEffect } from '../../../lib/teact/teact';
 
 import type { PvIconName } from './PvIcon';
 
@@ -29,7 +29,8 @@ const NoteMenu = ({
   isOpen, title, items, isSheet, onPick, onClose,
 }: OwnProps) => {
   // Escape закрывает открытое меню (шторку закрывает само окно)
-  useEffect(() => (isOpen && !isSheet ? captureEscKeyListener(onClose) : undefined), [isOpen, isSheet, onClose]);
+  // Слушатель ставится в том же кадре, что и меню: иначе Escape сразу после появления меню уходил мимо
+  useLayoutEffect(() => (isOpen && !isSheet ? captureEscKeyListener(onClose) : undefined), [isOpen, isSheet, onClose]);
 
   const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onClose();

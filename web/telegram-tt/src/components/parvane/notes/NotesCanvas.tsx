@@ -43,7 +43,8 @@ import {
 } from './notesCanvasEdit';
 import { noteTitleOfPath, resolveDrivePath } from './notesCanvasFiles';
 import {
-  canvasFromGraph, findFreeSpot, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph, renameCanvasNote,
+  canvasFromGraph, findFreeSpot, freeCanvasTitle, GRAPH_NOTE_FIELD, isGraphCanvas, refreshCanvasFromGraph,
+  renameCanvasNote,
 } from './notesCanvasGraph';
 import {
   createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
@@ -78,6 +79,7 @@ import PvIcon from './PvIcon';
 import PvSheet from './PvSheet';
 
 import styles from './Knowledge.module.scss';
+import look from './NotesCanvasLook.module.scss';
 import kit from './PvKit.module.scss';
 
 type OwnProps = {
@@ -145,6 +147,8 @@ const NEW_OFFSET_X = 280;
 const NEW_OFFSET_Y = 40;
 const NEW_COLUMNS = 3;
 const DRAG_THRESHOLD = 3;
+// Щипок на тачпаде приходит колесом с Ctrl и малыми шагами — масштаб от него идёт быстрее
+const WHEEL_ZOOM_BOOST = 3;
 // Место под панель инструментов сверху (на телефоне она в два ряда) и под название группы над рамкой
 const FIT_TOP = 64;
 const FIT_TOP_NARROW = 112;
@@ -754,13 +758,17 @@ const NotesCanvas = ({
   });
 
   // Заметки и ссылки между ними — вход холста из графа и его обновления
-  const graphNotes = () => notes.map((note) => ({
-    id: note.id,
-    title: note.title,
-    folder: note.folder,
-    links: parseNote(note.text).links,
-    isDaily: note.isDaily,
-  }));
+  const graphNotes = () => notes.map((note) => {
+    const parsed = parseNote(note.text);
+    return {
+      id: note.id,
+      title: note.title,
+      folder: note.folder,
+      links: parsed.links,
+      tags: parsed.tags,
+      isDaily: note.isDaily,
+    };
+  });
 
   // «Холст из графа»: карточка на каждую заметку, стрелка на каждую ссылку; дальше это обычный холст
   const handleGraphCanvas = useLastCallback(() => {
@@ -774,7 +782,7 @@ const NotesCanvas = ({
   // исчезнувших ссылок уходят; сделанное руками не трогается. Один шаг истории. Новые карточки выделены, вид
   // сдвигается к ним, только если они за краем поля
   const handleRefreshGraph = useLastCallback(() => {
-    if (!entry) return;
+    if (!entry || !isGraphCanvas(docRef.current)) return;
     finishInline();
     dropGesture();
     setMenu(undefined);
@@ -1876,8 +1884,20 @@ const NotesCanvas = ({
   const handleWheel = useLastCallback((e: React.WheelEvent<HTMLDivElement>) => {
     // В меню и в поле текста заметки колесо листает их, а не меняет масштаб
     if ((e.target as Element).closest('[data-canvas-context], [data-canvas-note-editor]')) return;
-    const box = e.currentTarget.getBoundingClientRect();
-    applyView(zoomByWheel(viewRef.current, e.deltaY, e.clientX - box.left, e.clientY - box.top), false);
+    const current = viewRef.current;
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl + колесо и щипок на тачпаде (он приходит колесом с Ctrl) — масштаб
+      const box = e.currentTarget.getBoundingClientRect();
+      applyView(zoomByWheel(current, e.deltaY * WHEEL_ZOOM_BOOST, e.clientX - box.left, e.clientY - box.top), false);
+    } else {
+      // Колесо и два пальца на тачпаде двигают поле; с Shift колесо мыши ведёт вбок
+      const isSideways = e.shiftKey && !e.deltaX;
+      applyView({
+        ...current,
+        x: current.x - (isSideways ? e.deltaY : e.deltaX),
+        y: current.y - (isSideways ? 0 : e.deltaY),
+      }, false);
+    }
     commitViewSoon();
   });
 
@@ -2055,6 +2075,7 @@ const NotesCanvas = ({
     }
   }
 
+  const isFromGraph = isGraphCanvas(doc);
   const item = (command: CanvasCommand, icon: CanvasMenuItem['icon'], label: string, isDanger?: boolean) => ({
     command, icon, label, isDanger,
   });
@@ -2069,7 +2090,7 @@ const NotesCanvas = ({
       item('file', 'file', lang('KnowledgeCanvasFileChoose')),
       item('paste', 'paste', lang('KnowledgeCanvasPaste')),
       item('selectAll', 'select', lang('KnowledgeCanvasSelectAll')),
-      item('refreshGraph', 'refresh', lang('KnowledgeCanvasRefresh')),
+      ...(isFromGraph ? [item('refreshGraph', 'refresh', lang('KnowledgeCanvasRefresh'))] : []),
       item('fitView', 'fit', lang('KnowledgeZoomFit')),
     ];
   } else if (menu?.kind === 'drop') {
@@ -2204,16 +2225,18 @@ const NotesCanvas = ({
               <PvIcon name="graph" isSmall />
               {lang('KnowledgeCanvasFromGraphShort')}
             </button>
-            <button
-              type="button"
-              className={buildClassName(kit.chip, styles.boardChip)}
-              title={lang('KnowledgeCanvasRefresh')}
-              aria-label={lang('KnowledgeCanvasRefresh')}
-              data-canvas-refresh
-              onClick={handleRefreshGraph}
-            >
-              <PvIcon name="refresh" isSmall />
-            </button>
+            {isFromGraph && (
+              <button
+                type="button"
+                className={buildClassName(kit.chip, styles.boardChip)}
+                title={lang('KnowledgeCanvasRefreshTitle')}
+                data-canvas-refresh
+                onClick={handleRefreshGraph}
+              >
+                <PvIcon name="refresh" isSmall />
+                {lang('KnowledgeCanvasRefresh')}
+              </button>
+            )}
             <button
               type="button"
               className={buildClassName(kit.chip, styles.boardChip)}
@@ -2228,23 +2251,25 @@ const NotesCanvas = ({
           <div className={styles.boardToolRow}>
             <button
               type="button"
-              className={styles.boardTool}
+              className={buildClassName(styles.boardTool, look.toolWide)}
               title={lang('KnowledgeCanvasTextCard')}
               aria-label={lang('KnowledgeCanvasText')}
               data-canvas-tool="text"
               onClick={handleAddText}
             >
               <PvIcon name="text" isSmall />
+              <span className={look.toolLabel}>{lang('KnowledgeCanvasText')}</span>
             </button>
             <button
               type="button"
-              className={styles.boardTool}
+              className={buildClassName(styles.boardTool, look.toolWide)}
               title={lang('KnowledgeCanvasChooseNote')}
               aria-label={lang('KnowledgeCanvasNote')}
               data-canvas-tool="note"
               onClick={handleAddNote}
             >
               <PvIcon name="note" isSmall />
+              <span className={look.toolLabel}>{lang('KnowledgeCanvasNote')}</span>
             </button>
             <button
               type="button"
@@ -2258,33 +2283,36 @@ const NotesCanvas = ({
             </button>
             <button
               type="button"
-              className={styles.boardTool}
+              className={buildClassName(styles.boardTool, look.toolWide)}
               title={lang('KnowledgeCanvasLinkTitle')}
               aria-label={lang('KnowledgeCanvasLinkCard')}
               data-canvas-tool="link"
               onClick={handleAddLink}
             >
               <PvIcon name="open" isSmall />
+              <span className={look.toolLabel}>{lang('KnowledgeCanvasLinkCard')}</span>
             </button>
             <button
               type="button"
-              className={styles.boardTool}
+              className={buildClassName(styles.boardTool, look.toolWide)}
               title={lang('KnowledgeCanvasFileChoose')}
               aria-label={lang('KnowledgeCanvasFileCard')}
               data-canvas-tool="file"
               onClick={handleAddFile}
             >
               <PvIcon name="file" isSmall />
+              <span className={look.toolLabel}>{lang('KnowledgeCanvasFileCard')}</span>
             </button>
             <button
               type="button"
-              className={styles.boardTool}
+              className={buildClassName(styles.boardTool, look.toolWide)}
               title={lang(selection.nodes.length ? 'KnowledgeCanvasWrap' : 'KnowledgeCanvasGroup')}
               aria-label={lang('KnowledgeCanvasGroup')}
               data-canvas-tool="group"
               onClick={handleAddGroup}
             >
               <PvIcon name="group" isSmall />
+              <span className={look.toolLabel}>{lang('KnowledgeCanvasGroup')}</span>
             </button>
             <button
               type="button"
@@ -2353,6 +2381,14 @@ const NotesCanvas = ({
             onDistribute={handleDistribute}
           />
         )}
+        {!doc.nodes.length && !inline && (
+          <p className={buildClassName(styles.boardEmpty, look.blank)} data-canvas-blank>
+            {lang(isNarrow ? 'KnowledgeCanvasBlankTouch' : 'KnowledgeCanvasBlank')}
+          </p>
+        )}
+        <div className={buildClassName(kit.chip, kit.mono, look.zoomChip)} data-board-tools data-canvas-zoom>
+          {`${Math.round(view.scale * 100)}%`}
+        </div>
         <div className={styles.boardZoom} data-board-tools>
           <button
             type="button"

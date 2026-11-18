@@ -15,6 +15,7 @@ import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import GraphPanelLinks from './GraphPanelLinks';
 import NoteView from './NoteView';
 import PvIcon from './PvIcon';
 import PvResizer from './PvResizer';
@@ -45,6 +46,9 @@ type OwnProps = {
   // «Связать»: следующая нажатая на графе заметка получит ссылку из этой
   // Режим «Связать» есть только на графе; рядом с холстом кнопки нет
   onLinkStart?: (noteId: string) => void;
+  // Правка связей из панели графа: ссылка на заметку по названию и снятие ссылки
+  onLinkTitle?: (fromId: string, title: string) => void;
+  onUnlink?: (fromId: string, toTitle: string) => void;
   onCreate: (title: string) => void;
   onOpenInPlan: (record: PlannedItem) => void;
   onOpenTitle: (title: string) => void;
@@ -60,8 +64,8 @@ type Shown = { pick: GraphPick; note?: NoteEntry; record?: PlannedItem };
 // правка, «Запланировано», обратные ссылки); заметки ещё нет — предложение создать; запись «Плана» — её день
 // и время с переходом в «План»
 const GraphPanel = ({
-  pick, note, record, index, planner, planned, isSheet, editRequest, onClose, onOpenInNotes, onLinkStart, onCreate,
-  onOpenInPlan, onOpenTitle, onSave, onRename, onDelete, onPickFolder,
+  pick, note, record, index, planner, planned, isSheet, editRequest, onClose, onOpenInNotes, onLinkStart, onLinkTitle,
+  onUnlink, onCreate, onOpenInPlan, onOpenTitle, onSave, onRename, onDelete, onPickFolder,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -121,22 +125,37 @@ const GraphPanel = ({
     );
   }
 
+  // Панель графа: связи заметки правятся здесь же; рядом с холстом — только заметка
+  const isGraphSide = Boolean(onLinkTitle && onUnlink);
   const body = shownNote ? (
-    <NoteView
-      note={shownNote}
-      index={index}
-      planner={planner}
-      planned={planned}
-      layout="panel"
-      hasLinks
-      isGraphHidden
-      editRequest={editRequest}
-      onOpenTitle={onOpenTitle}
-      onSave={onSave}
-      onRename={onRename}
-      onDelete={onDelete}
-      onPickFolder={onPickFolder}
-    />
+    <>
+      {isGraphSide && (
+        <GraphPanelLinks
+          note={shownNote}
+          index={index}
+          planned={planned}
+          onOpenInNotes={handleOpenInNotes}
+          onPickTitle={onOpenTitle}
+          onLink={onLinkTitle!}
+          onUnlink={onUnlink!}
+        />
+      )}
+      <NoteView
+        note={shownNote}
+        index={index}
+        planner={planner}
+        planned={planned}
+        layout="panel"
+        hasLinks={!isGraphSide}
+        isGraphHidden
+        editRequest={editRequest}
+        onOpenTitle={onOpenTitle}
+        onSave={onSave}
+        onRename={onRename}
+        onDelete={onDelete}
+        onPickFolder={onPickFolder}
+      />
+    </>
   ) : shownRecord ? renderRecord(shownRecord) : (
     <div className={styles.graphInfo} style="--c: var(--pv-faint)">
       <span className={buildClassName(kit.caps, styles.graphInfoKind)}>{lang('KnowledgeGraphKindMissing')}</span>
@@ -168,16 +187,18 @@ const GraphPanel = ({
           {lang('KnowledgeGraphConnect')}
         </button>
       )}
-      <button
-        type="button"
-        className={kit.ib}
-        aria-label={lang('KnowledgeGraphOpenInNotes')}
-        title={lang('KnowledgeGraphOpenInNotes')}
-        data-graph-panel-open
-        onClick={handleOpenInNotes}
-      >
-        <PvIcon name="open" />
-      </button>
+      {!isGraphSide && (
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('KnowledgeGraphOpenInNotes')}
+          title={lang('KnowledgeGraphOpenInNotes')}
+          data-graph-panel-open
+          onClick={handleOpenInNotes}
+        >
+          <PvIcon name="open" />
+        </button>
+      )}
     </>
   );
 

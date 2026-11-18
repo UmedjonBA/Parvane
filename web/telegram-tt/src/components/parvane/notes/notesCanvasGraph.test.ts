@@ -1,16 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import {
+  beforeAll, describe, expect, it,
+} from 'vitest';
 
 import type { CanvasDoc, CanvasEdge, CanvasNode } from './notesCanvas';
-import type { GraphNoteInput } from './notesGraph';
+import type { NotesGraphNote } from './notesGraphEngine';
 
+import { loadProtocol } from '../../../api/parvane/v2/engine';
 import { parseCanvas, serializeCanvas } from './notesCanvas';
 import {
   canvasFromGraph, freeCanvasTitle, GRAPH_CANVAS_CARD_HEIGHT, GRAPH_CANVAS_GAP, GRAPH_EDGE_PREFIX,
-  GRAPH_FOLDER_FIELD, GRAPH_GROUP_HEAD, GRAPH_NOTE_FIELD, GRAPH_SCOPE_FIELD, isCustomizedEdge, isGraphEdge,
-  isInCanvasScope, refreshCanvasFromGraph, renameCanvasFolder, renameCanvasNote, scopeOfCanvas,
+  GRAPH_NOTE_FIELD, GRAPH_SCOPE_FIELD, isCustomizedEdge, isGraphCanvas, isGraphEdge, refreshCanvasFromGraph,
+  renameCanvasFolder, renameCanvasNote, scopeOfCanvas,
 } from './notesCanvasGraph';
 
-function note(title: string, links: string[] = [], extra: Partial<GraphNoteInput> = {}): GraphNoteInput {
+// Места карточек считает движок (NOTES-1): тесты идут с настоящим WASM
+beforeAll(async () => {
+  await loadProtocol();
+});
+
+function note(title: string, links: string[] = [], extra: Partial<NotesGraphNote> = {}): NotesGraphNote {
   return {
     id: `id-${title}`, title, folder: '', links, ...extra,
   };
@@ -31,22 +39,8 @@ function overlaps(doc: CanvasDoc, gap = 0) {
   return count;
 }
 
-function groupsOf(doc: CanvasDoc) {
-  return doc.nodes.filter(({ type }) => type === 'group');
-}
-
 function cardsOf(doc: CanvasDoc) {
   return doc.nodes.filter(({ type }) => type === 'file');
-}
-
-function contains(outer: CanvasNode, inner: CanvasNode) {
-  return inner.x >= outer.x && inner.y >= outer.y
-    && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
-}
-
-// Карточки, лежащие в группе целиком: названия файлов по алфавиту
-function filesIn(doc: CanvasDoc, group: CanvasNode) {
-  return cardsOf(doc).filter((node) => contains(group, node)).map(({ file }) => file).sort();
 }
 
 function edgeTitles(doc: CanvasDoc) {
@@ -55,8 +49,76 @@ function edgeTitles(doc: CanvasDoc) {
 }
 
 describe('canvasFromGraph', () => {
-  it('пустой список заметок — пустой холст', () => {
-    expect(canvasFromGraph([])).toEqual({ nodes: [], edges: [] });
+  it('пустой список заметок — пустой холст; он всё равно помечен как холст из графа', () => {
+    const doc = canvasFromGraph([]);
+    expect(doc.nodes).toEqual([]);
+    expect(doc.edges).toEqual([]);
+    expect(isGraphCanvas(doc)).toBe(true);
+    expect(isGraphCanvas({ nodes: [], edges: [] })).toBe(false);
+  });
+
+  it('один вход — один результат; идентификаторы не повторяются', () => {
+    const notes = [note('A', ['B', 'C']), note('B', ['C']), note('C'), note('D')];
+    const first = canvasFromGraph(notes, { makeId: counter() });
+    expect(canvasFromGraph(notes, { makeId: counter() })).toEqual(first);
+    const ids = [...first.nodes, ...first.edges].map(({ id }) => id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('область холста — как у графа: папка с подпапками, метка, вокруг заметки, без одиночных, без дней', () => {
+    const notes = [
+      note('Сервер', ['Диски'], { folder: 'Железо' }),
+      note('Диски', [], { folder: 'Железо/Хранение', tags: ['#склад'] }),
+      note('Курс', [], { folder: 'Учёба', tags: ['склад/книги'] }),
+      note('Одна'),
+      note('2026-10-12', ['Сервер'], { isDaily: true }),
+    ];
+    const files = (doc: CanvasDoc) => cardsOf(doc).map(({ file }) => file).sort();
+
+    // Заметок дней папка и метка не касаются (NOTES-1): их включает и выключает только `days`
+    const folderScope = { scope: { kind: 'folder' as const, folder: 'Железо' }, days: false as const };
+    const folder = canvasFromGraph(notes, { scope: folderScope, makeId: counter() });
+    expect(files(folder)).toEqual(['Диски.md', 'Сервер.md']);
+    expect(scopeOfCanvas(folder)).toEqual(folderScope);
+    expect(folder.extra?.[GRAPH_SCOPE_FIELD]).toEqual(folderScope);
+    expect(files(canvasFromGraph(notes, { scope: { scope: folderScope.scope }, makeId: counter() })))
+      .toEqual(['2026-10-12.md', 'Диски.md', 'Сервер.md']);
+
+    const tag = canvasFromGraph(notes, {
+      scope: { scope: { kind: 'tag', tag: 'склад' }, days: false }, makeId: counter(),
+    });
+    expect(files(tag)).toEqual(['Диски.md', 'Курс.md']);
+
+    const around = canvasFromGraph(notes, {
+      scope: { scope: { kind: 'around', note: 'id-Диски', depth: 1 }, days: false }, makeId: counter(),
+    });
+    expect(files(around)).toEqual(['Диски.md', 'Сервер.md']);
+    expect(scopeOfCanvas(around)).toEqual({ scope: { kind: 'around', note: 'id-Диски', depth: 1 }, days: false });
+
+    const linked = canvasFromGraph(notes, { scope: { scope: { kind: 'all' }, hideOrphans: true }, makeId: counter() });
+    expect(files(linked)).toEqual(['2026-10-12.md', 'Диски.md', 'Сервер.md']);
+
+    const noDays = canvasFromGraph(notes, { scope: { scope: { kind: 'all' }, days: false }, makeId: counter() });
+    expect(files(noDays)).toEqual(['Диски.md', 'Курс.md', 'Одна.md', 'Сервер.md']);
+  });
+
+  it('негодная запись области в файле читается как «все заметки»; у холста без записи области нет', () => {
+    const doc = canvasFromGraph([note('A')], { makeId: counter() });
+    expect(scopeOfCanvas({ ...doc, extra: { [GRAPH_SCOPE_FIELD]: { scope: { kind: 'folder' } } } }))
+      .toEqual({ scope: { kind: 'all' } });
+    expect(scopeOfCanvas({ ...doc, extra: { [GRAPH_SCOPE_FIELD]: 'все' } })).toBeUndefined();
+    expect(scopeOfCanvas({ ...doc, extra: undefined })).toBeUndefined();
+  });
+
+  it('стрелка несёт стороны карточек от движка; взаимная ссылка — одна стрелка с двумя наконечниками', () => {
+    const doc = canvasFromGraph([note('A', ['B']), note('B', ['A', 'C']), note('C')], { makeId: counter() });
+    expect(doc.edges.length).toBe(2);
+    doc.edges.forEach((edge) => {
+      expect(['top', 'right', 'bottom', 'left']).toContain(edge.fromSide);
+      expect(['top', 'right', 'bottom', 'left']).toContain(edge.toSide);
+      expect(isCustomizedEdge(edge)).toBe(false);
+    });
+    expect(doc.edges.filter(({ fromEnd }) => fromEnd === 'arrow').length).toBe(1);
   });
 
   it('карточка на каждую заметку в порядке входа, стрелка на каждую ссылку', () => {
@@ -131,111 +193,6 @@ describe('canvasFromGraph', () => {
     expect(overlaps(doc, 98)).toBe(0);
   });
 
-  it('один вход и одно зерно — один результат; идентификаторы не повторяются', () => {
-    const notes = [note('A', ['B', 'C']), note('B', ['C']), note('C', ['A'])];
-    const first = canvasFromGraph(notes, { makeId: counter() });
-    expect(canvasFromGraph(notes, { makeId: counter() })).toEqual(first);
-    const ids = [...first.nodes, ...first.edges].map(({ id }) => id);
-    expect(new Set(ids).size).toBe(ids.length);
-    // Генератор, выдающий одно и то же, не ломает холст
-    const stuck = canvasFromGraph(notes, { makeId: () => 'same' });
-    const stuckIds = [...stuck.nodes, ...stuck.edges].map(({ id }) => id);
-    expect(new Set(stuckIds).size).toBe(stuckIds.length);
-  });
-
-  it('заметки папки обведены группой с её названием; заметки без папки — без группы', () => {
-    const doc = canvasFromGraph([
-      note('Корень', ['Сервер']),
-      note('Сервер', ['Диск'], { folder: 'Железо' }),
-      note('Диск', [], { folder: 'Железо' }),
-      note('Рецепт', ['Корень'], { folder: 'Дом/Кухня' }),
-    ], { makeId: counter() });
-
-    const groups = groupsOf(doc);
-    expect(groups.map(({ label }) => label)).toEqual(['Дом / Кухня', 'Железо']);
-    expect(groups.map((group) => group[GRAPH_FOLDER_FIELD])).toEqual(['Дом/Кухня', 'Железо']);
-    expect(filesIn(doc, groups[0])).toEqual(['Рецепт.md']);
-    expect(filesIn(doc, groups[1])).toEqual(['Диск.md', 'Сервер.md']);
-    // Группы лежат под карточками, карточки идут в порядке входа
-    expect(doc.nodes.map(({ type }) => type)).toEqual(['group', 'group', 'file', 'file', 'file', 'file']);
-    expect(cardsOf(doc).map(({ file }) => file)).toEqual(['Корень.md', 'Сервер.md', 'Диск.md', 'Рецепт.md']);
-    // Ссылки между папками остаются стрелками
-    expect(edgeTitles(doc).sort()).toEqual(['Корень.md → Сервер.md', 'Рецепт.md → Корень.md', 'Сервер.md → Диск.md']);
-    // Своя подпись группы
-    const named = canvasFromGraph([note('A', [], { folder: 'x/y' })], { folderLabel: (path) => `[${path}]` });
-    expect(groupsOf(named)[0].label).toBe('[x/y]');
-  });
-
-  it('группы папок не наезжают ни друг на друга, ни на чужие карточки; над рамкой есть место шапке', () => {
-    const folders = ['', 'Работа', 'Дом', 'Учёба', 'Архив'];
-    const notes = Array.from({ length: 45 }, (_, i) => note(`Заметка ${i}`, [
-      `Заметка ${(i + 5) % 45}`, `Заметка ${(i * 7) % 45}`,
-    ], { folder: folders[i % folders.length] }));
-    const doc = canvasFromGraph(notes, { makeId: counter() });
-
-    const groups = groupsOf(doc);
-    const cards = cardsOf(doc);
-    expect(groups.length).toBe(4);
-    expect(cards.length).toBe(45);
-    expect(overlaps({ nodes: cards, edges: [] }, GRAPH_CANVAS_GAP - 2)).toBe(0);
-    // Рамка вместе с шапкой над ней
-    const withHead = groups.map((group) => ({
-      ...group, y: group.y - GRAPH_GROUP_HEAD, height: group.height + GRAPH_GROUP_HEAD,
-    }));
-    expect(overlaps({ nodes: withHead, edges: [] }, GRAPH_CANVAS_GAP - 2)).toBe(0);
-    cards.forEach((node) => {
-      const folder = notes.find(({ id }) => id === node[GRAPH_NOTE_FIELD])!.folder;
-      withHead.forEach((group) => {
-        if (group[GRAPH_FOLDER_FIELD] === folder) expect(contains(group, node)).toBe(true);
-        else expect(overlaps({ nodes: [group, node], edges: [] })).toBe(0);
-      });
-    });
-    expect(Math.min(...doc.nodes.map(({ x }) => x))).toBe(0);
-    expect(Math.min(...doc.nodes.map(({ y }) => y))).toBe(0);
-    expect(canvasFromGraph(notes, { makeId: counter() })).toEqual(doc);
-  });
-
-  it('набор заметок: только выбранные папки и без заметок дней; набор записан в холст', () => {
-    const notes = [
-      note('Корень', ['Сервер', 'Чужая']),
-      note('Сервер', ['Чужая'], { folder: 'Железо' }),
-      note('Чужая', ['Корень'], { folder: 'Архив' }),
-      note('2026-10-12', ['Корень'], { folder: 'Ежедневные', isDaily: true }),
-    ];
-    const doc = canvasFromGraph(notes, {
-      scope: { folders: ['Железо', '', 'Железо'], days: false }, makeId: counter(),
-    });
-    expect(cardsOf(doc).map(({ file }) => file)).toEqual(['Корень.md', 'Сервер.md']);
-    expect(groupsOf(doc).map(({ label }) => label)).toEqual(['Железо']);
-    // Ссылки на заметки вне набора стрелок не дают
-    expect(edgeTitles(doc)).toEqual(['Корень.md → Сервер.md']);
-    expect(doc.extra).toEqual({ [GRAPH_SCOPE_FIELD]: { folders: ['', 'Железо'], days: false } });
-    expect(scopeOfCanvas(doc)).toEqual({ folders: ['', 'Железо'], days: false });
-    expect(scopeOfCanvas(parseCanvas(serializeCanvas(doc)).doc)).toEqual({ folders: ['', 'Железо'], days: false });
-
-    // Папки выбраны, дни включены: заметок дней выбор папок не касается
-    const withDays = canvasFromGraph(notes, { scope: { folders: ['Железо'] }, makeId: counter() });
-    expect(cardsOf(withDays).map(({ file }) => file)).toEqual(['Сервер.md', '2026-10-12.md']);
-    // Набор без ограничений в холст не пишется; пустой итог набор помнит
-    expect(canvasFromGraph(notes, { scope: {} }).extra).toBeUndefined();
-    expect(canvasFromGraph(notes, { scope: { days: true } }).extra).toBeUndefined();
-    expect(canvasFromGraph(notes, { scope: { folders: ['Нет такой'], days: false } })).toEqual({
-      nodes: [], edges: [], extra: { [GRAPH_SCOPE_FIELD]: { folders: ['Нет такой'], days: false } },
-    });
-  });
-
-  it('набор заметок холста: негодная запись в файле — набора нет', () => {
-    const doc = (value: unknown): CanvasDoc => ({ nodes: [], edges: [], extra: { [GRAPH_SCOPE_FIELD]: value } });
-    expect(scopeOfCanvas({ nodes: [], edges: [] })).toBeUndefined();
-    expect(scopeOfCanvas(doc('все'))).toBeUndefined();
-    expect(scopeOfCanvas(doc({ folders: 'Железо', days: 1 }))).toBeUndefined();
-    expect(scopeOfCanvas(doc({ folders: ['б', 5, 'а'] }))).toEqual({ folders: ['а', 'б'] });
-    expect(isInCanvasScope({ folder: 'Архив' }, undefined)).toBe(true);
-    expect(isInCanvasScope({ folder: 'Архив' }, { folders: [] })).toBe(false);
-    expect(isInCanvasScope({ folder: 'Архив', isDaily: true }, { folders: [] })).toBe(true);
-    expect(isInCanvasScope({ folder: 'Архив', isDaily: true }, { days: false })).toBe(false);
-  });
-
   it('результат — обычный файл JSON Canvas: запись и разбор ничего не теряют', () => {
     const doc = canvasFromGraph([note('A', ['B']), note('B')], { makeId: counter() });
     const parsed = parseCanvas(serializeCanvas(doc));
@@ -272,110 +229,6 @@ describe('refreshCanvasFromGraph', () => {
     expect(result).toMatchObject({
       added: { cards: [], edges: [] }, removed: { edges: [] }, renamed: { cards: [] }, missing: { cards: [] },
     });
-  });
-
-  it('новая заметка папки встаёт в группу этой папки, рамка растёт за ней; остальное не трогается', () => {
-    const notes = [
-      note('Корень', ['Сервер']),
-      note('Сервер', ['Диск'], { folder: 'Железо' }),
-      note('Диск', [], { folder: 'Железо' }),
-      note('Рецепт', [], { folder: 'Кухня' }),
-    ];
-    const doc = canvasFromGraph(notes, { makeId: counter() });
-    const more = [
-      ...notes,
-      note('Сеть', ['Сервер'], { folder: 'Железо' }),
-      note('Питание', [], { folder: 'Железо' }),
-      note('Суп', [], { folder: 'Кухня' }),
-    ];
-    const result = refreshCanvasFromGraph(doc, more, { makeId: counter() });
-
-    expect(filesOf(result.doc, result.added.cards).sort()).toEqual(['Питание.md', 'Сеть.md', 'Суп.md']);
-    const [hardware, kitchen] = groupsOf(result.doc);
-    expect(filesIn(result.doc, hardware)).toEqual(['Диск.md', 'Питание.md', 'Сервер.md', 'Сеть.md']);
-    expect(filesIn(result.doc, kitchen)).toEqual(['Рецепт.md', 'Суп.md']);
-    // Группы остались на своих слоях, прежние карточки — те же объекты
-    expect(result.doc.nodes.slice(0, 2).map(({ id }) => id)).toEqual(doc.nodes.slice(0, 2).map(({ id }) => id));
-    doc.nodes.slice(2).forEach((node, i) => expect(result.doc.nodes[i + 2]).toBe(node));
-    expect(groupsOf(result.doc).map(({ label }) => label)).toEqual(['Железо', 'Кухня']);
-    // Ничего не наложилось: карточки между собой, группы (с шапкой) между собой и с чужими карточками
-    const cards = cardsOf(result.doc);
-    expect(overlaps({ nodes: cards, edges: [] })).toBe(0);
-    const withHead = groupsOf(result.doc).map((group) => ({
-      ...group, y: group.y - GRAPH_GROUP_HEAD, height: group.height + GRAPH_GROUP_HEAD,
-    }));
-    expect(overlaps({ nodes: withHead, edges: [] })).toBe(0);
-    expect(overlaps({ nodes: [withHead[0], cards.find(({ file }) => file === 'Корень.md')!], edges: [] })).toBe(0);
-    expect(edgeTitles(result.doc)).toContain('Сеть.md → Сервер.md');
-    // Повторное обновление менять нечего
-    expect(refreshCanvasFromGraph(result.doc, more).doc).toBe(result.doc);
-  });
-
-  it('группу папки удалили — её новая заметка встаёт как любая другая, новой группы нет', () => {
-    const notes = [note('Сервер', [], { folder: 'Железо' }), note('Диск', [], { folder: 'Железо' })];
-    const built = canvasFromGraph(notes, { makeId: counter() });
-    const doc = { ...built, nodes: cardsOf(built) };
-    const result = refreshCanvasFromGraph(doc, [...notes, note('Сеть', ['Диск'], { folder: 'Железо' })], {
-      makeId: counter(),
-    });
-    expect(groupsOf(result.doc)).toEqual([]);
-    expect(filesOf(result.doc, result.added.cards)).toEqual(['Сеть.md']);
-    doc.nodes.forEach((node, i) => expect(result.doc.nodes[i]).toBe(node));
-    expect(overlaps(result.doc)).toBe(0);
-  });
-
-  it('группа без пути папки (своя) и группа другой папки новую заметку не забирают', () => {
-    const doc: CanvasDoc = {
-      nodes: [
-        { id: 'own', type: 'group', x: -20, y: -20, width: 290, height: 180, label: 'Железо' },
-        card('Сервер', 0, 0),
-        {
-          id: 'other', type: 'group', x: 480, y: -20, width: 290, height: 180, [GRAPH_FOLDER_FIELD]: 'Кухня',
-        },
-      ],
-      edges: [],
-    };
-    const result = refreshCanvasFromGraph(doc, [
-      note('Сервер', [], { folder: 'Железо' }), note('Диск', [], { folder: 'Железо' }),
-    ], { makeId: counter() });
-    doc.nodes.forEach((node, i) => expect(result.doc.nodes[i]).toBe(node));
-    const added = result.doc.nodes[3];
-    expect(added.file).toBe('Диск.md');
-    expect(overlaps({ nodes: [doc.nodes[2], added], edges: [] })).toBe(0);
-  });
-
-  it('холст с набором заметок: обновление берёт новые заметки только из набора', () => {
-    const notes = [note('Сервер', [], { folder: 'Железо' }), note('Чужая', [], { folder: 'Архив' })];
-    const doc = canvasFromGraph(notes, { scope: { folders: ['Железо'], days: false }, makeId: counter() });
-    expect(cardsOf(doc).map(({ file }) => file)).toEqual(['Сервер.md']);
-    expect(refreshCanvasFromGraph(doc, notes).doc).toBe(doc);
-
-    const more = [
-      ...notes,
-      note('Диск', ['Чужая', 'Сервер'], { folder: 'Железо' }),
-      note('Новая чужая', ['Сервер'], { folder: 'Архив' }),
-      note('Без папки', ['Сервер']),
-      note('2026-10-12', ['Сервер'], { folder: 'Ежедневные', isDaily: true }),
-    ];
-    const result = refreshCanvasFromGraph(doc, more, { makeId: counter() });
-    expect(filesOf(result.doc, result.added.cards)).toEqual(['Диск.md']);
-    expect(edgeTitles(result.doc)).toEqual(['Диск.md → Сервер.md']);
-    expect(result.missing.cards).toEqual([]);
-    expect(scopeOfCanvas(result.doc)).toEqual({ folders: ['Железо'], days: false });
-
-    // Карточку заметки вне набора положили руками: она своя — не «пропавшая», стрелки по ссылкам к ней идут
-    const manual: CanvasDoc = { ...result.doc, nodes: [...result.doc.nodes, card('Чужая', 2000, 2000)] };
-    const again = refreshCanvasFromGraph(manual, more, { makeId: counter() });
-    expect(again.added.cards).toEqual([]);
-    expect(again.missing.cards).toEqual([]);
-    expect(edgeTitles(again.doc)).toContain('Диск.md → Чужая.md');
-
-    // Совсем пустой холст с набором заполняется только набором
-    const empty: CanvasDoc = { nodes: [], edges: [], extra: doc.extra };
-    const filled = refreshCanvasFromGraph(empty, more, { makeId: counter() });
-    expect(cardsOf(filled.doc).map(({ file }) => file)).toEqual(['Сервер.md', 'Диск.md']);
-    expect(filled.added.cards.length).toBe(2);
-    expect(scopeOfCanvas(filled.doc)).toEqual({ folders: ['Железо'], days: false });
   });
 
   it('стрелки холста из графа узнаются по началу идентификатора, карточки несут идентификатор заметки', () => {
@@ -590,8 +443,6 @@ describe('refreshCanvasFromGraph', () => {
     const kept: CanvasEdge[] = [
       { ...auto, id: `${GRAPH_EDGE_PREFIX}label`, label: 'ведёт' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}color`, color: '3' },
-      { ...auto, id: `${GRAPH_EDGE_PREFIX}side`, fromSide: 'top' },
-      { ...auto, id: `${GRAPH_EDGE_PREFIX}to-side`, toSide: 'left' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}no-ends`, toEnd: 'none' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}extra`, weight: 2 },
       { id: 'drawn', fromNode: a.id, toNode: b.id },
@@ -725,31 +576,34 @@ describe('refreshCanvasFromGraph', () => {
   });
 });
 
-describe('renameCanvasFolder', () => {
-  const made = () => canvasFromGraph([
-    note('A', [], { folder: 'Дом' }), note('B', [], { folder: 'Дом/Кухня' }), note('C', [], { folder: 'Домики' }),
-  ], { scope: { folders: ['Дом', 'Дом/Кухня', 'Домики'] }, makeId: counter() });
-
-  it('путь папки и подпапок меняется в наборе заметок и у групп, соседняя папка с тем же началом — нет', () => {
-    const doc = renameCanvasFolder(made(), 'Дом', 'Квартира');
-    expect(scopeOfCanvas(doc)?.folders).toEqual(['Домики', 'Квартира', 'Квартира/Кухня']);
-    const groups = doc.nodes.filter(({ type }) => type === 'group');
-    expect(groups.map((group) => group[GRAPH_FOLDER_FIELD]).sort()).toEqual(['Домики', 'Квартира', 'Квартира/Кухня']);
-    expect(groups.map(({ label }) => label).sort()).toEqual(['Домики', 'Квартира', 'Квартира / Кухня']);
-    // Новая заметка переименованной папки после обновления попадает в набор
-    expect(isInCanvasScope({ folder: 'Квартира', isDaily: false }, scopeOfCanvas(doc))).toBe(true);
+describe('область холста при обновлении', () => {
+  it('обновление берёт новые заметки только из области холста', () => {
+    const notes = [note('Сервер', [], { folder: 'Железо' }), note('Курс', [], { folder: 'Учёба' })];
+    const doc = canvasFromGraph(notes, { scope: { scope: { kind: 'folder', folder: 'Железо' } }, makeId: counter() });
+    const more = [
+      ...notes,
+      note('Диски', ['Сервер'], { folder: 'Железо/Хранение' }),
+      note('Экзамен', ['Сервер'], { folder: 'Учёба' }),
+    ];
+    const result = refreshCanvasFromGraph(doc, more, { makeId: counter() });
+    expect(result.added.cards.map((id) => result.doc.nodes.find((node) => node.id === id)!.file)).toEqual(['Диски.md']);
+    expect(result.added.edges.length).toBe(1);
+    expect(scopeOfCanvas(result.doc)).toEqual({ scope: { kind: 'folder', folder: 'Железо' } });
   });
+});
 
-  it('свою подпись группы человек сохраняет; нечего менять — прежний документ', () => {
-    const base = made();
-    const custom = {
-      ...base,
-      nodes: base.nodes.map((node) => (node[GRAPH_FOLDER_FIELD] === 'Дом' ? { ...node, label: 'Моё' } : node)),
-    };
-    const doc = renameCanvasFolder(custom, 'Дом', 'Квартира');
-    expect(doc.nodes.find((node) => node[GRAPH_FOLDER_FIELD] === 'Квартира')?.label).toBe('Моё');
-    expect(renameCanvasFolder(base, 'Нет такой', 'Другая')).toBe(base);
-    expect(renameCanvasFolder(base, 'Дом', 'Дом')).toBe(base);
+describe('renameCanvasFolder', () => {
+  it('путь папки меняется в области холста — у самой папки и у её подпапки; чужая папка не трогается', () => {
+    const doc = canvasFromGraph([note('A', [], { folder: 'Железо/Сеть' })], {
+      scope: { scope: { kind: 'folder', folder: 'Железо/Сеть' } }, makeId: counter(),
+    });
+    expect(scopeOfCanvas(renameCanvasFolder(doc, 'Железо', 'Техника'))?.scope)
+      .toEqual({ kind: 'folder', folder: 'Техника/Сеть' });
+    expect(scopeOfCanvas(renameCanvasFolder(doc, 'Железо/Сеть', 'Железо/Связь'))?.scope)
+      .toEqual({ kind: 'folder', folder: 'Железо/Связь' });
+    expect(renameCanvasFolder(doc, 'Желез', 'Техника')).toBe(doc);
+    expect(renameCanvasFolder(doc, 'Учёба', 'Курсы')).toBe(doc);
+    expect(renameCanvasFolder({ nodes: [], edges: [] }, 'Железо', 'Техника')).toEqual({ nodes: [], edges: [] });
   });
 });
 

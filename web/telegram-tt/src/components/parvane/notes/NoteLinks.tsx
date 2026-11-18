@@ -5,14 +5,14 @@ import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
-import { displayTitle, folderColor } from './notesLook';
+import { listNoteLinks } from './notesLinksView';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import PvIcon from './PvIcon';
+import NoteLinksGraph from './NoteLinksGraph';
 
-import styles from './Knowledge.module.scss';
+import styles from './NoteLinks.module.scss';
 import kit from './PvKit.module.scss';
 
 type OwnProps = {
@@ -20,136 +20,59 @@ type OwnProps = {
   index: NotesIndex;
   planned: PlannedItem[];
   className?: string;
-  // Только обратные ссылки: рядом уже стоит большой граф
+  // Только карточки: рядом уже стоит большой граф
   isGraphHidden?: boolean;
   onOpenTitle: (title: string) => void;
 };
 
-type Point = {
-  key: string;
-  label: string;
-  color: string;
-  // Заметку можно открыть; запись «Плана» только показана
-  title?: string;
-  x: number;
-  y: number;
-};
+const WAY_KEYS = {
+  in: 'KnowledgeLinkWayIn',
+  out: 'KnowledgeLinkWayOut',
+  both: 'KnowledgeLinkWayBoth',
+} as const;
 
-const WIDTH = 320;
-const HEIGHT = 240;
-const RADIUS_X = 92;
-const RADIUS_Y = 80;
-const MAX_POINTS = 8;
-const LABEL_MAX = 16;
-const LABEL_BELOW = 18;
-const LABEL_ABOVE = -10;
-
-function shorten(text: string) {
-  return text.length > LABEL_MAX ? `${text.slice(0, LABEL_MAX - 1)}…` : text;
-}
-
-// «Связи» заметки: обратные ссылки и малый граф — заметка в центре, вокруг заметки, на которые она
-// ссылается, заметки, ссылающиеся на неё, и записи «Плана» со ссылкой сюда
+// «Связи» заметки по макету (доски `DeskNotes`, `PhNotesMore`): малый граф и карточки — на кого заметка
+// ссылается, кто ссылается на неё, записи «Плана» со ссылкой сюда
 const NoteLinks = ({
   note, index, planned, className, isGraphHidden, onOpenTitle,
 }: OwnProps) => {
   const lang = useLang();
 
-  const backlinks = useMemo(() => index.backlinks(note.id), [index, note.id]);
+  const items = useMemo(() => listNoteLinks(note.id, index, planned), [note.id, index, planned]);
 
-  const points = useMemo(() => {
-    const indexed = index.byId(note.id);
-    const seen = new Set<string>([note.id]);
-    const found: Omit<Point, 'x' | 'y'>[] = [];
-    const addNote = (other?: NoteEntry | { id: string; title: string; folder: string; isDaily?: boolean }) => {
-      if (!other || seen.has(other.id)) return;
-      seen.add(other.id);
-      found.push({
-        key: other.id,
-        label: displayTitle(lang, { title: other.title, isDaily: Boolean(other.isDaily) }),
-        color: folderColor(other.folder, other.isDaily),
-        title: other.title,
-      });
-    };
-    (indexed?.linkedIds || []).forEach((id) => addNote(index.byId(id)));
-    backlinks.forEach((other) => addNote(other));
-    planned.forEach((item) => {
-      if (seen.has(item.key)) return;
-      seen.add(item.key);
-      found.push({
-        key: item.key,
-        label: item.name,
-        color: item.kind === 'task' ? 'var(--pv-task)' : 'var(--pv-event)',
-      });
-    });
-    const shown = found.slice(0, MAX_POINTS);
-    return shown.map((point, i): Point => {
-      const angle = -Math.PI / 2 + (i / shown.length) * Math.PI * 2;
-      return {
-        ...point,
-        x: WIDTH / 2 + Math.cos(angle) * RADIUS_X,
-        y: HEIGHT / 2 + Math.sin(angle) * RADIUS_Y,
-      };
-    });
-  }, [index, note.id, backlinks, planned, lang]);
-
-  const handleOpen = useLastCallback((e: React.MouseEvent<HTMLElement | SVGElement>) => {
-    const title = (e.currentTarget as HTMLElement).dataset.title;
-    if (title) onOpenTitle(title);
+  const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    onOpenTitle(e.currentTarget.dataset.title!);
   });
 
   return (
-    <div className={buildClassName(styles.links, className)}>
-      <section data-note-backlinks>
-        <h3 className={buildClassName(kit.caps, styles.linksCaption)}>
-          {lang('KnowledgeBacklinks', { count: backlinks.length })}
-        </h3>
-        {!backlinks.length && <p className={styles.mutedLine}>{lang('KnowledgeBacklinksEmpty')}</p>}
-        {backlinks.map((other) => (
+    <div className={buildClassName(styles.root, className)} data-note-links={items.length}>
+      <h3 className={kit.caps}>{lang('KnowledgeLinksTitle', { count: items.length })}</h3>
+      {!isGraphHidden && items.length > 0 && (
+        <NoteLinksGraph note={note} index={index} planned={planned} onOpenTitle={onOpenTitle} />
+      )}
+      {!items.length && <p className={styles.empty}>{lang('KnowledgeBacklinksEmpty')}</p>}
+      <div className={styles.cards} data-note-backlinks>
+        {items.map((item) => (item.way === 'record' ? (
+          <div key={item.key} className={buildClassName(kit.card, styles.card)} data-link-way="record">
+            <span className={styles.cardTitle}>{item.title}</span>
+            <span className={styles.cardSub}>
+              {lang(item.recordKind === 'task' ? 'KnowledgeGraphKindTask' : 'KnowledgeGraphKindEvent')}
+            </span>
+          </div>
+        ) : (
           <button
-            key={other.id}
+            key={item.key}
             type="button"
-            className={buildClassName(kit.row, styles.linkRow)}
-            data-title={other.title}
+            className={buildClassName(kit.card, styles.card, styles.cardButton)}
+            data-title={item.title}
+            data-link-way={item.way}
             onClick={handleOpen}
           >
-            <span className={buildClassName(kit.ava, kit.avaS)} style={`--c: ${folderColor(other.folder)}`}>
-              <PvIcon name="note" isSmall />
-            </span>
-            <span className={buildClassName(kit.rowText, kit.ttl)}>{other.title}</span>
+            <span className={styles.cardTitle}>{item.title}</span>
+            <span className={styles.cardSub}>{lang(WAY_KEYS[item.way])}</span>
           </button>
-        ))}
-      </section>
-      {!isGraphHidden && (
-        <section data-note-graph>
-          <h3 className={buildClassName(kit.caps, styles.linksCaption)}>{lang('KnowledgeGraph')}</h3>
-          <svg
-            className={styles.miniGraph}
-            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            role="img"
-            aria-label={lang('KnowledgeGraph')}
-          >
-            {points.map((point) => (
-              <line key={`l${point.key}`} x1={WIDTH / 2} y1={HEIGHT / 2} x2={point.x} y2={point.y} />
-            ))}
-            <circle className={styles.miniCenter} cx={WIDTH / 2} cy={HEIGHT / 2} r={9} />
-            {points.map((point) => (
-              <g
-                key={point.key}
-                className={point.title ? styles.miniNode : ''}
-                style={`--c: ${point.color}`}
-                data-title={point.title}
-                onClick={point.title ? handleOpen : undefined}
-              >
-                <circle cx={point.x} cy={point.y} r={6} />
-                <text x={point.x} y={point.y + (point.y > HEIGHT / 2 ? LABEL_BELOW : LABEL_ABOVE)}>
-                  {shorten(point.label)}
-                </text>
-              </g>
-            ))}
-          </svg>
-        </section>
-      )}
+        )))}
+      </div>
     </div>
   );
 };
