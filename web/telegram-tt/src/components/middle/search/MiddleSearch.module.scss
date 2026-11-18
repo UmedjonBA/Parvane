@@ -27,27 +27,25 @@
 .header {
   pointer-events: auto;
 
+  // Parvane (spec 041 A6): строка поиска занимает место шапки чата — та же плоская полоса
   position: absolute;
-  top: 1rem;
+  top: 0;
   right: 0;
   left: 0;
 
   display: flex;
   align-items: center;
 
-  width: calc(100% - var(--middle-panel-inline-padding) * 2);
-  max-width: calc(var(--messages-container-width) - var(--middle-panel-inline-padding) * 2);
+  width: 100%;
   height: var(--middle-header-height);
-  margin: 0 auto;
   padding-top: 0.25rem;
   padding-right: max(0.8125rem, env(safe-area-inset-right));
   padding-bottom: 0.25rem;
   padding-left: max(0.25rem, env(safe-area-inset-left));
-  border-radius: 2rem;
+  border-bottom: var(--pv-divider);
 
   opacity: 0;
   background-color: var(--color-background);
-  box-shadow: var(--shadow-island);
 
   transition: opacity 200ms ease-in-out;
 
@@ -59,17 +57,7 @@
     padding-left: var(--window-controls-width);
   }
 
-  @media (min-width: 1276px) {
-    /* stylelint-disable-next-line @stylistic/max-line-length */
-    width: calc(100% - var(--right-column-width) - var(--middle-panel-inline-padding) * 2);
-
-    :global(#Main.right-column-open) & {
-      width: calc(100% - var(--middle-panel-inline-padding) * 2);
-    }
-  }
-
   @media (max-width: 600px) {
-    top: 0.5rem;
     padding-right: max(0.5rem, env(safe-area-inset-right));
     padding-left: max(0.5rem, env(safe-area-inset-left));
   }

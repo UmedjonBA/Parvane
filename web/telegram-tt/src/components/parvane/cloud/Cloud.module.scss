@@ -7,10 +7,8 @@
 
   display: flex;
   grid-column: 2 / -1;
-  gap: 0.5rem;
 
   min-width: 0;
-  margin: 0.5rem 0.5rem 0.5rem 0;
 
   font-family: var(--font-family);
   font-size: 0.9375rem;
@@ -22,7 +20,6 @@
   @media (max-width: 600px) {
     position: fixed;
     inset: 0;
-    margin: 0;
   }
 }
 

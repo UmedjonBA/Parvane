@@ -53,8 +53,8 @@
   }
 
   #LeftColumn {
-    height: calc(100% - var(--call-header-height) - 2rem);
-    margin-top: calc(var(--call-header-height) + 1rem);
+    height: calc(100% - var(--call-header-height));
+    margin-top: var(--call-header-height);
   }
 
   #MiddleColumn {
@@ -85,20 +85,16 @@
   min-width: var(--left-column-min-width);
   max-width: var(--left-column-max-width);
   height: auto;
-  margin: 1rem;
-  margin-inline-end: 0;
-  border-radius: var(--border-radius-island);
+  // Parvane (spec 041 A6): колонки стоят вплотную, между ними линия 1 px — без островов и зазоров
+  border-inline-end: var(--pv-divider);
 
   background-color: var(--color-background);
-  box-shadow: var(--shadow-island);
 
   @media (min-width: 926px) {
     --left-column-max-width: 40vw;
 
     .folders-sidebar-visible & {
       --left-column-max-width: calc(40vw - var(--folders-sidebar-width));
-
-      margin-left: 0.5rem;
     }
   }
 
@@ -114,13 +110,12 @@
 
   @media (max-width: 925px) {
     position: fixed;
-    top: 1rem;
-    left: 1rem;
-    transform: translate3d(calc(-100% - 1rem), 0, 0);
+    top: 0;
+    left: 0;
+    transform: translate3d(-100%, 0, 0);
 
     width: 26.5rem !important;
-    height: calc(var(--vh, 1vh) * 100 - 2rem);
-    margin: 0;
+    height: calc(var(--vh, 1vh) * 100);
 
     &::after {
       pointer-events: none;
@@ -192,9 +187,7 @@
     width: calc(100vw - env(safe-area-inset-left)) !important;
     max-width: none;
     height: auto;
-    border-radius: 0;
-
-    box-shadow: none;
+    border-inline-end: none;
 
     // Fix: when opening the SymbolMenu, the chat list flashes in the background
     body.is-symbol-menu-open &::before {
@@ -256,7 +249,7 @@
     }
 
     #Main.left-column-open & {
-      transform: translate3d(calc(33.5rem), 0, 0);
+      transform: translate3d(calc(26.5rem + var(--folders-sidebar-width)), 0, 0);
     }
 
     body.no-right-column-animations #Main.right-column-open &,
@@ -296,7 +289,7 @@
     }
 
     #LeftColumn {
-      left: 1rem !important;
+      left: 0 !important;
     }
 
     &.left-column-open {
@@ -305,7 +298,7 @@
       }
 
       #LeftColumn {
-        left: calc(var(--folders-sidebar-width) + 0.5rem) !important;
+        left: var(--folders-sidebar-width) !important;
       }
     }
   }
@@ -347,6 +340,12 @@
   > #RightColumn-wrapper {
     display: none;
   }
+}
+
+// Parvane (spec 041 A6): модули стоят вплотную к панели модулей и к краям окна, колонки внутри — без зазоров
+#Main > #ParvaneKnowledge {
+  gap: 0;
+  margin: 0;
 }
 
 // Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются

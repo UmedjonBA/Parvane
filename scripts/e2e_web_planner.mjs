@@ -65,7 +65,7 @@ try {
   assert.equal(await sidebar.getByRole('button', { name: 'New entry' }).count(), 1, 'внизу панели — «+»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 0, 'меню «☰» убрано: его пункты в «Профиле»');
-  // Разделы идут сверху под знаком, «Поиск» и «Профиль» прижаты к низу панели
+  // Разделы идут сверху, «Поиск» и «+» прижаты к низу панели
   const geometry = await page.evaluate(() => {
     const bar = document.querySelector('#FoldersSidebar').getBoundingClientRect();
     const tabs = [...document.querySelectorAll('#FoldersSidebar [role="tablist"] > button')].map((el) => el.getBoundingClientRect());
@@ -74,7 +74,7 @@ try {
       barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top, profileBottom: profile.bottom,
     };
   });
-  // Над разделами — знак и надпись «parvane»
+  // Разделы начинаются от верхнего края панели
   assert.ok(geometry.firstTop - geometry.barTop < 110, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
     geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.8,

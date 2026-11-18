@@ -5,19 +5,12 @@
   right: 0;
   left: 0;
 
-  width: calc(100% - var(--middle-panel-inline-padding) * 2);
-  max-width: calc(var(--messages-container-width) - var(--middle-panel-inline-padding) * 2);
-  margin: 0 auto;
-
-  &_withRightColumnAnimation {
-    /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
-    transition: transform var(--layer-transition);
-  }
+  // Parvane (spec 041 A6): панели под шапкой — во всю ширину колонки, как сама шапка
+  width: 100%;
 
   @media (min-width: 1276px) {
-    width: calc(100% - var(--right-column-width) - var(--middle-panel-inline-padding) * 2);
     :global(#Main.right-column-open) & {
-      transform: translate3d(calc(var(--right-column-width) / -2), 0, 0);
+      width: calc(100% - var(--right-column-width));
     }
   }
 

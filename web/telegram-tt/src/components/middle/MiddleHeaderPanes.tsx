@@ -6,10 +6,7 @@ import type { MessageListType, ThreadId } from '../../types';
 import type { Signal } from '../../util/signals';
 
 import { requestForcedReflow, requestMeasure, requestMutation } from '../../lib/fasterdom/fasterdom';
-import {
-  selectCanAnimateRightColumn,
-  selectCurrentMiddleSearch,
-} from '../../global/selectors';
+import { selectCurrentMiddleSearch } from '../../global/selectors';
 import buildClassName from '../../util/buildClassName';
 import { REM } from '../common/helpers/mediaDimensions';
 import { AT_BOTTOM_THRESHOLD, AT_TOP_THRESHOLD, SCROLL_BOTTOM_SENTINEL } from './helpers/messageListReserves';
@@ -35,7 +32,6 @@ type OwnProps = {
 };
 
 type StateProps = {
-  withRightColumnAnimation?: boolean;
   isMiddleSearchOpen?: boolean;
 };
 
@@ -55,7 +51,6 @@ const MiddleHeaderPanes = ({
   messageListType,
   getCurrentPinnedIndex,
   getLoadingPinnedId,
-  withRightColumnAnimation,
   isMiddleSearchOpen,
   onFocusPinnedMessage,
 }: OwnProps & StateProps) => {
@@ -184,7 +179,6 @@ const MiddleHeaderPanes = ({
         buildClassName(
           'MiddleHeaderPanes',
           styles.root,
-          withRightColumnAnimation && styles.root_withRightColumnAnimation,
           className,
         )
       }
@@ -209,7 +203,6 @@ const MiddleHeaderPanes = ({
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
     return {
-      withRightColumnAnimation: selectCanAnimateRightColumn(global),
       isMiddleSearchOpen: Boolean(selectCurrentMiddleSearch(global)),
     };
   },

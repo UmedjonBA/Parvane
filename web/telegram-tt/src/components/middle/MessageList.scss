@@ -9,6 +9,11 @@
   --message-list-fade-floor: rgba(0, 0, 0, 0.24);
   --message-list-top-fade-ramp: 1.5rem;
   --message-list-bottom-fade: var(--message-list-min-reserve);
+  // Parvane (spec 041 A6): ленту сообщений не перерисовываем — вложения и кнопки в сообщениях сохраняют
+  // прежние скругления, а не токены макета
+  --border-radius-default: 1rem;
+  --border-radius-button: 1rem;
+  --border-radius-button-tiny: 0.875rem;
 
   container-type: size;
   overflow-x: hidden;

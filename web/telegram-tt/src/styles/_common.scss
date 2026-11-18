@@ -135,6 +135,9 @@
 
 // Used by ChatList and ContactList components
 .chat-list {
+  // Parvane (spec 041 A6): список чатов не перерисовываем — у строк прежнее скругление, а не токен макета
+  --border-radius-default: 1rem;
+
   overflow-x: hidden;
   overflow-y: scroll;
 

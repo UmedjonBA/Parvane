@@ -11,29 +11,16 @@
   flex-shrink: 0;
   align-items: center;
 
-  width: calc(100% - var(--middle-panel-inline-padding) * 2);
-  max-width: calc(var(--messages-container-width) - var(--middle-panel-inline-padding) * 2);
+  // Parvane (spec 041 A6): шапка чата — плоская полоса во всю ширину колонки с линией снизу
+  width: 100%;
   height: var(--middle-header-height);
-  margin: var(--middle-panel-inline-padding) auto 0;
   padding-top: 0.25rem;
   padding-right: max(0.8125rem, env(safe-area-inset-right));
   padding-bottom: 0.25rem;
   padding-left: max(0.25rem, env(safe-area-inset-left));
-  border-radius: 2rem;
+  border-bottom: var(--pv-divider);
 
   background: var(--color-background);
-  box-shadow: var(--shadow-pane);
-
-  /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
-  transition: transform var(--layer-transition);
-
-  body.no-page-transitions & {
-    transition: none !important;
-  }
-
-  body.no-right-column-animations & {
-    transition: none !important;
-  }
 
   .Transition {
     width: 100%;
@@ -328,10 +315,14 @@
     }
   }
 
+  @media (min-width: 926px) {
+    padding-left: 0.75rem;
+  }
+
+  // Широкое окно: правая колонка не перекрывает шапку, а сужает её
   @media (min-width: 1276px) {
-    width: calc(100% - var(--right-column-width) - var(--middle-panel-inline-padding) * 2);
     #Main.right-column-open & {
-      transform: translate3d(calc(var(--right-column-width) / -2), 0, 0);
+      width: calc(100% - var(--right-column-width));
     }
   }
 

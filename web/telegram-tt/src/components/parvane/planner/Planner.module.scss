@@ -1,6 +1,6 @@
 // Parvane: раздел «План» — вид по прототипу «Пространство Parvane» (disain/prototype.html).
 // Нейтральные тона, акцент и цвета видов записей — переменные схемы `--pv-*`; свои здесь только размеры.
-// Раскладка — острова на фоне приложения: страница раздела и справа день календаря либо карточка записи.
+// Раскладка — колонки вплотную с линией 1 px: страница раздела и справа день календаря либо карточка записи.
 
 // Акцент раздела — яркий тон схемы с тёмным текстом на нём: кнопки, галочки и вкладки мессенджера внутри
 // «Плана» берут его вместо акцента мессенджера
@@ -27,7 +27,6 @@
   flex-direction: column;
 
   min-width: 0;
-  margin: 0.5rem 0.5rem 0.5rem 0;
 
   font-size: 0.9375rem;
   line-height: 1.45;
@@ -42,14 +41,12 @@
   @media (max-width: 600px) {
     position: fixed;
     inset: 0;
-    margin: 0;
   }
 }
 
 .body {
   display: flex;
   flex: 1 1 auto;
-  gap: 0.5rem;
   min-height: 0;
 }
 
@@ -61,7 +58,6 @@
 
   min-width: 0;
   min-height: 0;
-  border-radius: var(--planner-island-radius);
 
   background: var(--pv-panel);
 
@@ -71,16 +67,13 @@
 .page {
   position: relative;
   flex: 1 1 auto;
-
-  @media (max-width: 600px) {
-    border-radius: 0;
-  }
 }
 
 .side {
   position: relative;
   flex: 0 0 var(--planner-side-width);
   width: var(--planner-side-width);
+  border-inline-start: 1px solid var(--pv-line);
 }
 
 // ── шапки ────────────────────────────────────────────────────────────────────
