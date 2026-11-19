@@ -16,7 +16,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках
 "$ROOT/scripts/mute_test_audio_watch.sh" $$ >/dev/null 2>&1 & # сторож тишины (звук тестовых процессов)
 WEB_ROOT="$ROOT/web/telegram-tt"
-TEMP_ROOT="$(mktemp -d /tmp/parvane-web-e2e.XXXXXX)"
+TEMP_PARENT="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+TEMP_ROOT="$(mktemp -d "$TEMP_PARENT/parvane-web-e2e.XXXXXX")"
 PIDS=()
 ALLOCATED_PORTS=()
 
@@ -101,7 +102,7 @@ cleanup() {
   fi
 
   case "$TEMP_ROOT" in
-    /tmp/parvane-web-e2e.*) find "$TEMP_ROOT" -depth -delete ;;
+    "$TEMP_PARENT"/parvane-web-e2e.*) find "$TEMP_ROOT" -depth -delete ;;
     *) printf 'Refusing to clean unexpected temp path: %s\n' "$TEMP_ROOT" >&2 ;;
   esac
 
