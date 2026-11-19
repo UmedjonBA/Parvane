@@ -3,9 +3,10 @@ import { memo } from '../../../lib/teact/teact';
 import type { HealthEntry } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
-import { deleteHealthEntry } from './healthStore';
+import { deleteHealthEntry, getHealthState } from './healthStore';
 import useHealthLabels from './useHealthLabels';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import kit from '../notes/PvKit.module.scss';
@@ -26,6 +27,8 @@ const HealthEntries = ({
   const {
     lang, kindTitle, entryValue, entryWhen,
   } = useHealthLabels(today);
+  // Правки, которые не ушли из-за связи (доска `PhStates`)
+  const { unsentIds } = useDerivedState(getHealthState);
 
   const handleDelete = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     void deleteHealthEntry(e.currentTarget.dataset.id!);
@@ -55,6 +58,9 @@ const HealthEntries = ({
               <span className={buildClassName(kit.muted, kit.small, styles.entryNote)}>{entry.note}</span>
             )}
             <span className={buildClassName(kit.muted, kit.small, styles.entryWhen)}>{entryWhen(entry)}</span>
+            {unsentIds.includes(entry.id) && (
+              <span className={styles.entryUnsent} data-unsent>{lang('ParvaneUnsentMark')}</span>
+            )}
           </button>
           <button
             type="button"

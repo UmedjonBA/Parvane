@@ -181,7 +181,9 @@ try {
   await health.locator('[data-health-detail="sleep"] [data-health-entries] [data-kind="sleep"]').filter({ hasText: '1 h 0 min' })
     .locator('[data-health-entry-edit]').click();
   await napSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await napSheet.locator('[data-health-field="countInSum"]').uncheck();
+  // Выключатель `PvSwitch`: кнопка `role="switch"`, состояние — `aria-checked`
+  await napSheet.locator('[role="switch"][data-health-field="countInSum"][aria-checked="true"]').click();
+  await napSheet.locator('[data-health-field="countInSum"][aria-checked="false"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('[data-health-save]').click();
   await napSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await health.locator(`[data-health-card="sleep"] [data-day="${napDay}"]`).filter({ hasText: '—' })

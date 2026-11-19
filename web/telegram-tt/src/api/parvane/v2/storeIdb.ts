@@ -138,7 +138,11 @@ export function openStoreIdb(name = STORE_DB, factory: IDBFactory = indexedDB): 
     r.onupgradeneeded = () => {
       if (!r.result.objectStoreNames.contains(RECORDS)) r.result.createObjectStore(RECORDS);
     };
-    r.onsuccess = () => resolve(new StoreIdb(name, r.result));
+    r.onsuccess = () => {
+      // Другая вкладка стирает профиль (выход): соединение уступает удалению базы
+      r.result.onversionchange = () => r.result.close();
+      resolve(new StoreIdb(name, r.result));
+    };
     r.onerror = () => reject(r.error);
     r.onblocked = () => reject(new Error(`${name}: база занята другой вкладкой`));
   });

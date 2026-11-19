@@ -9,7 +9,9 @@ import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { callApi } from '../../../api/gramjs';
 import { kindOfFile } from './cloudModel';
+import { getCloudUnsent } from './cloudStore';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -66,6 +68,8 @@ const CloudItem = ({
   const isFolder = node.kind === 'folder';
   const fileKind = isFolder ? undefined : kindOfFile(node.mime, node.name);
   const thumbId = node.thumb?.fileId;
+  // Правка узла не ушла из-за связи (доска `PhStates`)
+  const isUnsent = useDerivedState(getCloudUnsent).has(node.id);
 
   // Миниатюра картинки вместо значка: читается, когда строка показалась на экране (адрес хранит провайдер)
   useEffect(() => {
@@ -200,6 +204,7 @@ const CloudItem = ({
         {(isNarrow || isTrash) && (
           <span className={styles.itemSub} dir="auto">{subParts.filter(Boolean).join(' · ')}</span>
         )}
+        {isUnsent && <span className={styles.itemUnsent} data-unsent>{lang('ParvaneUnsentMark')}</span>}
       </span>
       {!isNarrow && !isTrash && <span className={styles.cellAccess} title={place} dir="auto">{place}</span>}
       {!isNarrow && !isTrash && <span className={styles.cellDate}>{dateText}</span>}

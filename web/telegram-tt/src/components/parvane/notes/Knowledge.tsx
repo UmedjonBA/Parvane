@@ -726,8 +726,9 @@ const Knowledge = () => {
         )}
         {renderNotice()}
         <div className={styles.content}>
-          {status !== 'ready' ? (isList ? <PvSkeleton /> : <PvLoading />) : isList
-            ? (openNote ? renderNote(openNote) : renderList()) : renderBoard()}
+          {status !== 'ready'
+            ? (isList ? <PvSkeleton onRetry={retryCloud} /> : <PvLoading onRetry={retryCloud} />)
+            : isList ? (openNote ? renderNote(openNote) : renderList()) : renderBoard()}
           {renderGraphNotice()}
         </div>
       </div>
@@ -743,7 +744,7 @@ const Knowledge = () => {
             <KnowledgeTabs />
             <div className={styles.searchRow}>{renderSearch()}</div>
           </div>
-          {status === 'ready' ? renderList() : <PvSkeleton />}
+          {status === 'ready' ? renderList() : <PvSkeleton onRetry={retryCloud} />}
         </aside>
         <PvResizer
           panel="notes-list"
@@ -756,7 +757,7 @@ const Knowledge = () => {
         <div className={styles.page}>
           {renderNotice()}
           <div className={styles.content}>
-            {status !== 'ready' ? <PvLoading /> : openNote ? renderNote(openNote) : (
+            {status !== 'ready' ? <PvLoading onRetry={retryCloud} /> : openNote ? renderNote(openNote) : (
               <p className={styles.pickNote}>
                 {lang('KnowledgePickNote').split(NOTE_LINK).map((part, i) => (
                   part.startsWith('[[')
@@ -798,7 +799,7 @@ const Knowledge = () => {
         </header>
         {renderNotice()}
         <div className={styles.content}>
-          {status !== 'ready' ? <PvLoading /> : renderBoard()}
+          {status !== 'ready' ? <PvLoading onRetry={retryCloud} /> : renderBoard()}
           {renderGraphNotice()}
         </div>
       </div>

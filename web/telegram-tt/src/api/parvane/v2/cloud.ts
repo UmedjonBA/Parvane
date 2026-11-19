@@ -47,7 +47,8 @@ export type CloudStateEntry = {
 
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
-type OutboxItem = { opId: string; op: string };
+// `ids` — узлы, которые меняет операция (пометка «не отправлено», spec 041 E6); у очереди прежних версий поля нет
+type OutboxItem = { opId: string; op: string; ids?: string[] };
 
 type EngineContainer = {
   id: string;
@@ -109,6 +110,14 @@ const MAX_OPS_PER_BATCH = 400;
 const CALL_TIMEOUT_MS = 20000;
 // Срок корзины проверяется раз в час (и при первом синке контейнера), а не каждый опрос
 const TRASH_CHECK_MS = 60 * 60 * 1000;
+
+// Операция дерева — `{ op, id, … }`: id узла
+function collectNodeIds(ops: unknown[]) {
+  return ops.flatMap((op) => {
+    const id = op && typeof op === 'object' ? (op as { id?: unknown }).id : undefined;
+    return typeof id === 'string' && id ? [id] : [];
+  });
+}
 
 function hexToB64(hex: string) {
   const bytes = new Uint8Array(hex.length / 2);
@@ -774,10 +783,11 @@ export function createCloudSync(deps: Deps) {
     if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const outbox = await loadOutbox(id);
     for (let i = 0; i < ops.length; i += MAX_OPS_PER_BATCH) {
-      const local = client.cloudPrepareLocal(id, JSON.stringify({ ops: ops.slice(i, i + MAX_OPS_PER_BATCH) })) as {
+      const batch = ops.slice(i, i + MAX_OPS_PER_BATCH);
+      const local = client.cloudPrepareLocal(id, JSON.stringify({ ops: batch })) as {
         opId: string; op: Uint8Array;
       };
-      outbox.push({ opId: local.opId, op: bytesToB64(local.op) });
+      outbox.push({ opId: local.opId, op: bytesToB64(local.op), ids: collectNodeIds(batch) });
     }
     touch();
     await saveOutbox(id);
@@ -1093,6 +1103,8 @@ export function createCloudSync(deps: Deps) {
     status: currentStatus,
     lastError: () => lastError,
     hasPending: (id: string) => Boolean(outboxes.get(id)?.length),
+    // Узлы всех контейнеров с правками, которые сервер ещё не принял
+    unsentIds: () => [...outboxes.values()].flatMap((items) => items.flatMap((item) => item.ids || [])),
     createFolder,
     share,
     unshare,

@@ -83,6 +83,8 @@ export type MusicInfo = {
   addedToday: number;
   quotaBytes: number;
   usedBytes: number;
+  // Сервер не ответил: модуль показывает «Нет ответа от сервера» с «Повторить», а не «не подключена»
+  isFailed?: boolean;
 };
 
 // Эталон трека из каталога: с ним сервер сверяет найденные в сети файлы
@@ -286,6 +288,7 @@ export function createMusicApi(deps: Deps) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);
         return {
           isEnabled: false,
+          isFailed: true,
           server: deps.selfDomain(),
           coverBase: '',
           coverExpiresMs: 0,

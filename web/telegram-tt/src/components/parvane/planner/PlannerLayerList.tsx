@@ -8,6 +8,8 @@ import { PLANNER_LAYERS } from './plannerLayers';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PvSwitch from '../notes/PvSwitch';
+
 import styles from './Planner.module.scss';
 import pv from './PlannerPv.module.scss';
 
@@ -36,30 +38,26 @@ const LAYER_KINDS = {
 const PlannerLayerList = ({ layers, onToggle }: OwnProps) => {
   const lang = useLang();
 
-  const handleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleClick = useLastCallback((isOn: boolean, e: React.MouseEvent<HTMLButtonElement>) => {
     onToggle(e.currentTarget.dataset.layer as PlannerLayer);
   });
 
   return (
     <div className={pv.layers} role="group" aria-label={lang('PlannerLayers')}>
       {PLANNER_LAYERS.map((layer) => (
-        <button
+        <PvSwitch
           key={layer}
-          type="button"
+          isOn={layers[layer]}
           className={buildClassName(pv.layer, LAYER_KINDS[layer])}
-          role="switch"
-          aria-checked={layers[layer]}
-          aria-pressed={layers[layer]}
           data-layer={layer}
-          onClick={handleClick}
+          onChange={handleClick}
         >
           <span className={pv.layerDot} />
           <span className={pv.layerText}>
             <span>{lang(LAYER_LABELS[layer])}</span>
             <span className={pv.layerHint}>{lang(LAYER_HINTS[layer])}</span>
           </span>
-          <span className={buildClassName(pv.switch, layers[layer] && pv.switchOn)} />
-        </button>
+        </PvSwitch>
       ))}
     </div>
   );

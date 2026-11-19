@@ -265,6 +265,11 @@ try {
   await createTask(sessions.bob2.page, taskC, '12:00');
   await sessions.bob2.page.waitForTimeout(3000);
   await planner2b.locator('[data-offline-bar]').waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  // Запись, правка которой не ушла, помечена «не отправлено» (доска `PhStates`)
+  await expectTaskInDay(sessions.bob2.page, taskC, true);
+  await planner2b.locator('[data-planner-day] [data-block]', { hasText: taskC }).locator('[data-unsent]')
+    .waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS })
+    .catch(() => assert.fail(`${taskC}: без сети нет пометки «не отправлено»`));
   await closePlanner(sessions.bob2.page);
   await deleteTask(sessions.bob1.page, taskA);
   await createTask(sessions.bob1.page, taskD, '13:00');
@@ -273,6 +278,8 @@ try {
   await expectTaskInDay(sessions.bob2.page, taskD, true);
   await expectTaskInDay(sessions.bob2.page, taskA, false, STEP_TIMEOUT_MS);
   await expectTaskInDay(sessions.bob2.page, taskC, true, STEP_TIMEOUT_MS);
+  await planner2b.locator('[data-unsent]').first().waitFor({ state: 'detached', timeout: SYNC_TIMEOUT_MS })
+    .catch(() => assert.fail('после возврата связи пометка «не отправлено» осталась'));
   await closePlanner(sessions.bob2.page);
   await expectTaskInDay(sessions.bob1.page, taskC, true);
   await expectTaskInDay(sessions.bob1.page, taskB, true, STEP_TIMEOUT_MS);

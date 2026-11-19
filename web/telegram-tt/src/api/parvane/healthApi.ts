@@ -14,6 +14,8 @@ export type HealthStateReply = {
   // JSON сводки движка (`healthView`) — строкой: экран пропускает равные, не разбирая
   view?: string;
   hasPending: boolean;
+  // Записи, правки которых не ушли из-за связи (пометка «не отправлено»); на связи очередь уходит за секунды
+  unsentIds: string[];
   error?: string;
 };
 
@@ -36,7 +38,11 @@ export function createHealthApi(deps: Deps) {
     const health = ensureOnce();
     const status = health.status();
     return {
-      status, view: health.viewJson(nowMs, tzMin), hasPending: health.hasPending(), error: health.lastError(),
+      status,
+      view: health.viewJson(nowMs, tzMin),
+      hasPending: health.hasPending(),
+      unsentIds: status === 'ready' ? [] : health.unsentIds(),
+      error: health.lastError(),
     };
   }
 
@@ -47,7 +53,9 @@ export function createHealthApi(deps: Deps) {
         return readState(nowMs, tzMin);
       } catch (err) {
         deps.log(`здоровье: состояние не прочитано: ${String(err)}`);
-        return { status: 'offline', hasPending: false, error: String(err) };
+        return {
+          status: 'offline', hasPending: false, unsentIds: [], error: String(err),
+        };
       }
     },
 

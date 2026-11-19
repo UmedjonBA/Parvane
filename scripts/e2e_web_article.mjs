@@ -246,6 +246,27 @@ try {
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.deepEqual(plaintextLeaks([secret]), [], 'текст статьи в базах шардов');
 
+  // «Заметки» выключены на устройстве: «В заметки» в окне чтения на месте и ведёт в лист «Модуль выключен» (E6)
+  await bobPage.evaluate(() => {
+    const prefs = {
+      order: ['chats', 'profile'], off: [], healthBlocks: [], ...JSON.parse(localStorage.getItem('parvane:modules') || '{}'),
+    };
+    localStorage.setItem('parvane:modules', JSON.stringify({ ...prefs, off: [...prefs.off, 'notes'] }));
+  });
+  await relogin(bobPage, PASSWORD);
+  await showChatList(bobPage);
+  await openPrivateChatStrict(bobPage, alice);
+  const offCard = bobPage.locator(`.Transition_slide-active [data-article-card="${title}"]`).first();
+  await offCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offCard.locator('[data-article-read] button').click();
+  await viewer.locator('[data-article-save] button').click();
+  const notesOff = bobPage.locator('[data-module-off="notes"]');
+  await notesOff.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await notesOff.getByRole('button', { name: 'Not now' }).click();
+  await notesOff.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await viewer.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: окно чтения при выключенных «Заметках» — лист «Модуль выключен»');
+
   for (const [name, s] of Object.entries(sessions)) {
     assert.deepEqual(s.errors, [], `${name} page errors: ${s.errors.join('; ')}`);
   }

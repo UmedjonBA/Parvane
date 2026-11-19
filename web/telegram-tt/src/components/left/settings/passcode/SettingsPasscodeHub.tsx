@@ -11,6 +11,7 @@ import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
+import PvSwitch from '../../../parvane/notes/PvSwitch';
 import Loading from '../../../ui/Loading';
 import ProfileIcon from '../profile/ProfileIcon';
 
@@ -107,15 +108,12 @@ const SettingsPasscodeHub = ({
       <div className={styles.group}>
         <div className={styles.setRow}>
           <span className={styles.setTitle}>{askLabel}</span>
-          <button
-            type="button"
-            role="switch"
-            className={buildClassName(styles.switch, isEnabled && styles.switchOn)}
-            aria-checked={Boolean(isEnabled)}
-            aria-label={askLabel}
+          <PvSwitch
+            isOn={Boolean(isEnabled)}
+            label={askLabel}
+            isDisabled={isEnabled === undefined}
             data-pin-toggle
-            disabled={isEnabled === undefined}
-            onClick={handleToggle}
+            onChange={handleToggle}
           />
         </div>
         {isEnabled && (

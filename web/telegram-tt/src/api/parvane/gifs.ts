@@ -3,7 +3,9 @@
 // также наполняется отправленными/полученными kind=gif и персистится в
 // IndexedDB (мета + ключи блоба — сам блоб дотягивается из cloud по file_id).
 
-import { createStore, del, get, set } from 'idb-keyval';
+import {
+  clear, createStore, del, get, set,
+} from 'idb-keyval';
 
 import type { ApiVideo } from '../types';
 
@@ -147,6 +149,11 @@ export type SavedGifRecord = {
   nonceB64?: string;
   capability?: string;
 };
+
+/** Выход из аккаунта: сохранённые GIF всех аккаунтов устройства стираются. */
+export function clearSavedGifs() {
+  return clear(SAVED_STORAGE);
+}
 
 function savedKey(user: string) {
   return `gifs:${user}`;

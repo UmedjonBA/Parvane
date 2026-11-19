@@ -1,5 +1,6 @@
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 
+import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { createSignal } from '../../../util/signals';
 import { callMusic } from './musicPlayer';
 
@@ -33,6 +34,16 @@ export { getOfflineState };
 const queue: MusicTrack[] = [];
 const objectUrls = new Map<string, string>();
 let isRunning = false;
+
+// Выход из аккаунта: файлы стёрты вместе с кэшем (`deviceWipe.ts`), в памяти вкладки их списка тоже нет
+if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_WIPED_EVENT, forgetOffline);
+
+function forgetOffline() {
+  queue.length = 0;
+  objectUrls.forEach((url) => URL.revokeObjectURL(url));
+  objectUrls.clear();
+  setOfflineState({ entries: [], pending: 0, total: 0 });
+}
 
 function readIndex(): OfflineEntry[] {
   try {

@@ -65,12 +65,16 @@ export async function saveWorkerReminders(items: WorkerReminder[]) {
   }
 }
 
-/** Выход из аккаунта: напоминаний на устройстве больше нет. */
+/** Выход из аккаунта: напоминаний на устройстве больше нет — ни записей, ни ключа. */
 export async function clearWorkerReminders() {
   const db = await openDb();
   try {
-    await write(db, DATA_RECORD, undefined);
-    await write(db, SHOWN_RECORD, []);
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   } finally {
     db.close();
   }

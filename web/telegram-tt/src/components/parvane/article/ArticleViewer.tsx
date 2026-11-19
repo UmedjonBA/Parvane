@@ -7,10 +7,11 @@ import { saveArticleToNotes } from './articleSave';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useParvaneModules from '../../../hooks/useParvaneModules';
+import useModuleGate from '../../../hooks/useModuleGate';
 
 import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
+import PvModuleOff from '../notes/PvModuleOff';
 import ArticleBody from './ArticleBody';
 
 import styles from './Article.module.scss';
@@ -31,8 +32,9 @@ const ArticleViewer = ({
   const lang = useLang();
   const [isSaving, setIsSaving] = useState(false);
 
-  // «Заметки» выключены на устройстве — статья только читается
-  const isNotesOn = useParvaneModules().enabled.includes('notes');
+  // «Заметки» выключены на устройстве — кнопка ведёт в лист «Модуль выключен», как у карточки в чате;
+  // выключены сервером — статья только читается
+  const gate = useModuleGate('notes');
 
   const handleSave = useLastCallback(async () => {
     setIsSaving(true);
@@ -43,6 +45,8 @@ const ArticleViewer = ({
       setIsSaving(false);
     }
   });
+
+  const handleSaveClick = useLastCallback(() => gate.run(handleSave));
 
   return (
     <Modal
@@ -55,14 +59,21 @@ const ArticleViewer = ({
     >
       <div data-article-viewer>
         <ArticleBody title={title} markdown={markdown} media={media} />
-        {isNotesOn && (
+        {(gate.isOn || gate.canEnable) && (
           <div className={styles.viewerActions} data-article-save>
-            <Button size="smaller" noForcedUpperCase disabled={isSaving} onClick={handleSave}>
+            <Button size="smaller" noForcedUpperCase disabled={isSaving} onClick={handleSaveClick}>
               {lang('ArticleSaveToNotes')}
             </Button>
           </div>
         )}
       </div>
+      <PvModuleOff
+        isOpen={gate.isAsked}
+        module="notes"
+        hint={lang('ModuleOffHintNote')}
+        onEnable={gate.enable}
+        onClose={gate.dismiss}
+      />
     </Modal>
   );
 };

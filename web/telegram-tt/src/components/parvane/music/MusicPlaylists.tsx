@@ -57,6 +57,10 @@ const MusicPlaylists = ({
     void refreshPlaylists();
   }, []);
 
+  const handleRetry = useLastCallback(() => {
+    void refreshPlaylists();
+  });
+
   // Сведения о треках (обложка, отметка «любимое») — с сервера; подписи из плейлиста видны сразу
   useEffect(() => {
     if (!trackIdsKey) return;
@@ -260,7 +264,7 @@ const MusicPlaylists = ({
     return <div className={styles.error} role="status" data-playlists-status={status}>{lang(STATUS_KEYS[status])}</div>;
   }
   if (status === 'loading' && !playlists.length) {
-    return <PvSkeleton data-playlists-status="loading" />;
+    return <PvSkeleton data-playlists-status="loading" onRetry={handleRetry} />;
   }
   return playlist ? renderPlaylist(playlist) : renderList(playlists);
 };

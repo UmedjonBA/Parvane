@@ -610,6 +610,8 @@ async function clearIn(ctx: Ctx, user: string) {
   if (id) await del(id, KEYS);
   const dir = await directory(ctx);
   await dir.commit({ batchId: '0', puts: [], deletes: [`profile/${user}`] });
+  // Пустая база профиля тоже не остаётся (spec 041 E6). Открыта в другой вкладке — удалится, когда та её закроет
+  if (id && typeof indexedDB !== 'undefined') indexedDB.deleteDatabase(`${STORE_DB}-${id}`);
 }
 
 async function clearRecordsIn(ctx: Ctx, user: string) {

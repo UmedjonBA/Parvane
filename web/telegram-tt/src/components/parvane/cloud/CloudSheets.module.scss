@@ -200,68 +200,19 @@
   color: var(--pv-muted);
 }
 
+// Строка-выключатель (`PvSwitch`): раскладку даёт он, здесь — рамка и фон карточки
 .switchRow {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-
-  width: 100%;
   min-height: var(--pv-settings-row-height);
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--pv-line);
   border-radius: var(--pv-radius);
 
-  font: inherit;
-  color: var(--pv-fg);
-  text-align: start;
-
   background: var(--pv-raised);
-
-  &:focus-visible {
-    outline: none;
-    box-shadow: var(--pv-focus-ring);
-  }
 }
 
 .switchText {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.switch {
-  position: relative;
-
-  flex: none;
-
-  width: 2.75rem;
-  height: 1.625rem;
-  border-radius: 0.8125rem;
-
-  background: var(--pv-line2);
-
-  &::after {
-    content: "";
-
-    position: absolute;
-    inset-block-start: 0.1875rem;
-    inset-inline-start: 0.1875rem;
-
-    width: 1.25rem;
-    height: 1.25rem;
-    border-radius: 50%;
-
-    background: var(--pv-panel);
-  }
-}
-
-.switchOn {
-  background: var(--pv-accent);
-
-  &::after {
-    inset-inline-start: 1.3125rem;
-  }
 }
 
 // ── перенос: дерево папок ────────────────────────────────────────────────────

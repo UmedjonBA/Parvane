@@ -136,7 +136,9 @@ const Health = () => {
 
   function renderSummary() {
     if (!view) {
-      if (status === 'ready' || status === 'loading') return <PvLoading data-health-status={status} />;
+      if (status === 'ready' || status === 'loading') {
+        return <PvLoading data-health-status={status} onRetry={retryHealth} />;
+      }
       return <PvEmpty text={lang(STATUS_KEYS[status])} data-health-status={status} />;
     }
     return (

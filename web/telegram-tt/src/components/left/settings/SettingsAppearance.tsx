@@ -13,6 +13,7 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PvSwitch from '../../parvane/notes/PvSwitch';
 import ProfileAppearance from './profile/ProfileAppearance';
 import ProfileIcon from './profile/ProfileIcon';
 
@@ -72,14 +73,7 @@ const SettingsAppearance = ({ isActive, animationLevel, onReset }: OwnProps & St
               {lang(isAnimated ? 'ParvaneAppearanceAnimationsOn' : 'ParvaneAppearanceAnimationsOff')}
             </span>
           </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isAnimated}
-            aria-label={lang('MenuUIFeaturesSwitch')}
-            className={buildClassName(styles.switch, isAnimated && styles.switchOn)}
-            onClick={handleAnimationToggle}
-          />
+          <PvSwitch isOn={isAnimated} label={lang('MenuUIFeaturesSwitch')} onChange={handleAnimationToggle} />
         </div>
         <button type="button" className={rowClass} data-appearance-row="performance" onClick={handleOpenPerformance}>
           <span className={styles.setTitle}>{lang('MenuAnimations')}</span>

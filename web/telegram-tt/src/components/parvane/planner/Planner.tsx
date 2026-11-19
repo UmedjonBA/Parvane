@@ -65,6 +65,7 @@ import PlannerWeek from './PlannerWeek';
 import PlannerWeekList from './PlannerWeekList';
 import PlannerYear from './PlannerYear';
 
+import pvStates from '../notes/PvStates.module.scss';
 import styles from './Planner.module.scss';
 import pv from './PlannerPv.module.scss';
 
@@ -787,7 +788,9 @@ const Planner = () => {
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
           >
-            {!hasContent ? <PvLoading /> : isCalendar ? renderCalendar() : (
+            {!hasContent ? (
+              <PvLoading className={pvStates.loadingFill} onRetry={retryPlanner} />
+            ) : isCalendar ? renderCalendar() : (
               <PlannerDay
                 state={state}
                 day={picked}

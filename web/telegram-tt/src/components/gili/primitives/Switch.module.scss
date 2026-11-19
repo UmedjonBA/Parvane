@@ -1,3 +1,5 @@
+// Parvane: вид выключателя наследованных экранов — как у `PvSwitch` (доска `ZpStates`): дорожка 44 × 26 px,
+// бегунок 20 px с отступом 3 px, без анимации, фокус — рамка 2 px, недоступный — прозрачность 0.45
 @layer ui.input {
   .root {
     cursor: var(--custom-cursor, pointer);
@@ -8,8 +10,8 @@
     flex-shrink: 0;
     align-items: center;
 
-    width: 1.875rem;
-    height: 0.875rem;
+    width: 2.75rem;
+    height: 1.625rem;
   }
 
   .input {
@@ -26,22 +28,20 @@
   }
 
   .track {
-    --switch-track-color: var(--ui-border-color, var(--color-borders-input));
+    --switch-track-color: var(--pv-line2);
 
     display: flex;
     align-items: center;
 
     width: 100%;
     height: 100%;
-    border-radius: 0.625rem;
+    border-radius: 0.8125rem;
 
     background-color: var(--switch-track-color);
-
-    transition: background-color 0.15s ease, border-color 0.15s ease;
   }
 
   .thumb {
-    transform: translateX(-0.125rem);
+    transform: translateX(0.1875rem);
 
     display: flex;
     align-items: center;
@@ -49,34 +49,31 @@
 
     width: 1.25rem;
     height: 1.25rem;
-    border: 0.125rem solid var(--switch-track-color);
     border-radius: 50%;
 
     color: var(--switch-track-color);
 
-    background-color: var(--ui-bg-color, var(--color-background));
-
-    transition: transform 0.15s ease, border-color 0.15s ease;
+    background-color: var(--pv-panel);
   }
 
   .input {
     &:checked + .track {
-      --switch-track-color: var(--ui-accent-color, var(--color-primary));
+      --switch-track-color: var(--pv-accent);
 
       .thumb {
-        transform: translateX(0.75rem);
+        transform: translateX(1.3125rem);
       }
     }
 
     &:focus-visible + .track {
-      outline: 2px solid var(--ui-accent-color, var(--color-primary));
+      outline: 2px solid var(--pv-blue);
       outline-offset: 2px;
     }
   }
 
   .disabled {
     cursor: default;
-    opacity: var(--input-disabled-opacity, 0.5);
+    opacity: 0.45;
   }
 
   .nonInteractive {
@@ -86,12 +83,9 @@
 
   .lockIconTransition {
     transform: scale(0.5);
-
     display: flex;
     align-items: center;
     justify-content: center;
-
-    transition: transform 0.15s ease;
 
     &:global(.open) {
       transform: scale(1);

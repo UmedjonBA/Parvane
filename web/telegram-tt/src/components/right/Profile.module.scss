@@ -46,13 +46,6 @@
   :global(.narrow) {
     margin-bottom: 0;
   }
-
-  :global([dir="rtl"]) {
-    :global(.Switcher) {
-      margin-right: auto;
-      margin-left: 0;
-    }
-  }
 }
 
 .sharedMediaTabs {

@@ -417,6 +417,19 @@
   white-space: nowrap;
 }
 
+// Пометка «не отправлено» у записи (доска `PhStates`)
+.entryUnsent {
+  overflow: hidden;
+  flex: 0 1 auto;
+
+  min-width: 0;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-orange);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .more {
   align-self: center;
 }
@@ -637,11 +650,20 @@
   }
 }
 
-.checkRow,
 .dayNav {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+// Строка-выключатель формы (доска `ZpHealthX`: «Считать в сумму сна за сутки»)
+.switchRow {
+  min-height: 3rem;
+}
+
+.switchText {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .dayNav {

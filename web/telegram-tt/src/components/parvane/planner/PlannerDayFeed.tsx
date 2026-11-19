@@ -19,6 +19,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
 import PlannerName from './PlannerName';
+import PlannerUnsentMark from './PlannerUnsentMark';
 
 import styles from './Planner.module.scss';
 
@@ -175,6 +176,7 @@ const PlannerDayFeed = ({
                   {item.task?.description.includes('[[') && <PlannerName name={item.task.description} onlyLinks />}
                 </span>
                 {note && <span className={styles.feedBlockNote} data-block-note>{note}</span>}
+                <PlannerUnsentMark id={item.task ? item.task.id : item.event!.id} />
               </button>
             </div>
           </div>

@@ -23,12 +23,17 @@ try {
   const bobSession = await preparePage(bobContext, bob, PASSWORD);
   const { page } = aliceSession;
 
-  // Пустой список чатов: empty-state вместо спиннера
-  const emptyFolderTitle = page.locator('.chat-list h3', { hasText: 'No chats yet' });
-  await emptyFolderTitle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Пустой список чатов: «пусто» по макету (призрак, заголовок, «Новое сообщение») вместо спиннера
+  const chatsEmpty = page.locator('.chat-list [data-chats-empty]');
+  await chatsEmpty.getByRole('heading', { name: 'No chats yet' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Спиннер может догорать после появления empty-state — ждём его снятия, а не считаем в моменте
   await page.locator('.chat-list .Loading').waitFor({ state: 'detached', timeout: 10000 })
     .catch(() => assert.fail('chat list stuck in spinner'));
+  // «Новое сообщение» открывает выбор собеседника, «Назад» возвращает список
+  await chatsEmpty.getByRole('button', { name: 'New Message' }).click();
+  await chatsEmpty.waitFor({ state: 'hidden', timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await chatsEmpty.waitFor({ state: 'visible', timeout: 10000 });
 
   // Пустая переписка: greeting вместо спиннера
   await openPrivateChat(page, bob);

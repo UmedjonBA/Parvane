@@ -32,6 +32,7 @@ import InfiniteScroll from '../../ui/InfiniteScroll';
 import Loading from '../../ui/Loading';
 import Archive from './Archive';
 import Chat from './Chat';
+import ChatListEmpty from './ChatListEmpty';
 import EmptyFolder from './EmptyFolder';
 
 type OwnProps = {
@@ -263,7 +264,8 @@ const ChatList = ({
       {viewportIds?.length ? (
         renderChats()
       ) : viewportIds && !viewportIds.length && !isSaved ? (
-        (
+        // Parvane: чатов нет вовсе (и в архиве тоже) — «пусто» по макету, пустая папка — как раньше
+        folderType === 'all' && !shouldDisplayArchive ? <ChatListEmpty key="empty" /> : (
           <EmptyFolder
             folderId={folderId}
             folderType={folderType}

@@ -1,0 +1,86 @@
+// Parvane: выключатель макета (`.sw` в `pv.css`, доска `ZpStates`) — дорожка 44 × 26 px, бегунок 20 px с отступом
+// 3 px. Включён — цвет акцента, выключен — `--pv-line2`; нажатие меняет вид сразу, без анимации; фокус с
+// клавиатуры — рамка 2 px; выключенный (недоступный) — прозрачность 0.45. Сброс кнопки и раскладка строки — под
+// `:where()`, чтобы класс строки вызывающего (`className`) перекрывал их независимо от порядка стилей в сборке
+
+:where(.root) {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  padding: 0;
+  border: 0;
+  border-radius: 0.8125rem;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+  outline: none;
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.root:focus-visible {
+  outline: 2px solid var(--pv-blue);
+  outline-offset: 2px;
+}
+
+// Вся строка — выключатель: подпись слева, дорожка в конце
+:where(.row) {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+
+  width: 100%;
+  border-radius: 0;
+
+  color: var(--pv-fg);
+  text-align: start;
+}
+
+.row:focus-visible {
+  outline-offset: -2px;
+}
+
+.track {
+  position: relative;
+
+  display: block;
+  flex: none;
+
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: 0.8125rem;
+
+  background: var(--pv-line2);
+
+  &::after {
+    content: "";
+
+    position: absolute;
+    inset-block-start: 0.1875rem;
+    inset-inline-start: 0.1875rem;
+
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+
+    background: var(--pv-panel);
+  }
+
+  .root:disabled & {
+    opacity: 0.45;
+  }
+}
+
+.trackOn {
+  background: var(--pv-accent);
+
+  &::after {
+    inset-inline-start: 1.3125rem;
+  }
+}

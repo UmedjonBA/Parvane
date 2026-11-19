@@ -21,7 +21,9 @@ export type PersonalSyncStatus = 'loading' | 'needs-linking' | 'no-key' | 'offli
 type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
 
-type OutboxItem = { opId: string; op: string };
+// `ids` — записи, которые несёт операция (пометка «не отправлено» у записи, spec 041 E6); у очереди прежних
+// версий поля нет
+type OutboxItem = { opId: string; op: string; ids?: string[] };
 // Повторов отправки одной операции после EXPIRED за проход (сервер, всегда отвечающий EXPIRED, не держит цикл вечно)
 const SEND_EXPIRED_RETRIES = 3;
 type ContainerRef = { domain: string; id: string };
@@ -61,6 +63,15 @@ const SYNC_PAGES = 50;
 const MAX_CHANGES_PER_OP = 400;
 // Запрос без ответа (обрыв во время setOffline/реконнекта) не должен вешать очередь модуля
 const CALL_TIMEOUT_MS = 20000;
+
+// Правка — `{ <вид>: { id, … } }`: id записи; у правок без id (настройки) записи нет
+function collectChangeIds(changes: unknown[]) {
+  return changes.flatMap((change) => {
+    const body = change && typeof change === 'object' ? Object.values(change)[0] as unknown : undefined;
+    const id = body && typeof body === 'object' ? (body as { id?: unknown }).id : undefined;
+    return typeof id === 'string' && id ? [id] : [];
+  });
+}
 
 function hexToB64(hex: string) {
   const bytes = new Uint8Array(hex.length / 2);
@@ -383,7 +394,7 @@ export function createPersonalSync(deps: PersonalDeps, spec: PersonalSpec) {
         const local = client.personal(spec.kind).prepareLocal(JSON.stringify({ changes: chunk })) as {
           opId: string; op: Uint8Array; applied: number;
         };
-        outbox.push({ opId: local.opId, op: bytesToB64(local.op) });
+        outbox.push({ opId: local.opId, op: bytesToB64(local.op), ids: collectChangeIds(chunk) });
         prepared += 1;
       } catch (e) {
         deps.log(`${spec.label}: правка отвергнута движком: ${String(e)}`);
@@ -437,6 +448,8 @@ export function createPersonalSync(deps: PersonalDeps, spec: PersonalSpec) {
       }
       outbox.shift();
       await saveOutbox();
+      // Запись ушла: экраны снимают с неё пометку «не отправлено»
+      if (!outbox.length) deps.onChanged();
     }
   }
 
@@ -682,6 +695,8 @@ export function createPersonalSync(deps: PersonalDeps, spec: PersonalSpec) {
     // Правки, ещё не превращённые в операцию: состояние движка их не содержит —
     // UI не должен затирать ими свой черновик
     hasPending: () => pendingChanges.length > 0,
+    // Записи с правками, которые ещё не приняты сервером: и копящиеся, и операции очереди
+    unsentIds: () => [...collectChangeIds(pendingChanges), ...outbox.flatMap((item) => item.ids || [])],
     keysExport,
     keysImport,
     onEngineEvent,

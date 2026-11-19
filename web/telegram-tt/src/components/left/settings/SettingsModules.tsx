@@ -14,6 +14,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import PvSwitch from '../../parvane/notes/PvSwitch';
 
 import styles from './SettingsModules.module.scss';
 
@@ -47,14 +48,12 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
 
   useHistoryBack({ isActive, onBack: onReset });
 
-  const handleToggle = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const id = e.currentTarget.dataset.module as ParvaneModuleId;
-    setModuleOn(id, e.currentTarget.getAttribute('aria-checked') !== 'true');
+  const handleToggle = useLastCallback((isOn: boolean, e: React.MouseEvent<HTMLButtonElement>) => {
+    setModuleOn(e.currentTarget.dataset.module as ParvaneModuleId, isOn);
   });
 
-  const handleBlockToggle = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const block = e.currentTarget.dataset.block as HealthBlockId;
-    setHealthBlockOn(block, e.currentTarget.getAttribute('aria-checked') !== 'true');
+  const handleBlockToggle = useLastCallback((isOn: boolean, e: React.MouseEvent<HTMLButtonElement>) => {
+    setHealthBlockOn(e.currentTarget.dataset.block as HealthBlockId, isOn);
   });
 
   const handleMove = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -99,25 +98,6 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
       return lang('ParvaneModuleHealthBlocks', { count: prefs.healthBlocks.length, total: HEALTH_BLOCK_IDS.length });
     }
     return lang(MODULE_HINT_KEYS[module.id as keyof typeof MODULE_HINT_KEYS]);
-  }
-
-  function renderSwitch(
-    isOn: boolean, label: string, onClick: (e: React.MouseEvent<HTMLButtonElement>) => void, isDisabled: boolean,
-    data: { module?: ParvaneModuleId; block?: HealthBlockId },
-  ) {
-    return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={isOn}
-        aria-label={label}
-        disabled={isDisabled}
-        data-module={data.module}
-        data-block={data.block}
-        className={buildClassName(styles.switch, isOn && styles.switchOn, isDisabled && styles.switchLocked)}
-        onClick={onClick}
-      />
-    );
   }
 
   return (
@@ -175,7 +155,14 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
                 >
                   ↓
                 </button>
-                {renderSwitch(module.isOn, title, handleToggle, isSwitchDisabled, { module: module.id })}
+                <PvSwitch
+                  isOn={module.isOn}
+                  label={title}
+                  isDisabled={isSwitchDisabled}
+                  className={styles.switch}
+                  data-module={module.id}
+                  onChange={handleToggle}
+                />
               </div>
               {module.id === 'health' && module.isOn && (
                 <div className={styles.blocks}>
@@ -184,9 +171,12 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
                     return (
                       <div key={block} className={styles.block}>
                         <span className={styles.blockTitle}>{blockTitle}</span>
-                        {renderSwitch(
-                          prefs.healthBlocks.includes(block), blockTitle, handleBlockToggle, false, { block },
-                        )}
+                        <PvSwitch
+                          isOn={prefs.healthBlocks.includes(block)}
+                          label={blockTitle}
+                          data-block={block}
+                          onChange={handleBlockToggle}
+                        />
                       </div>
                     );
                   })}

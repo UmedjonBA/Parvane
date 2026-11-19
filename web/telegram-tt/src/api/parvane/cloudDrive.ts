@@ -53,6 +53,8 @@ export type CloudDriveState = {
   rootId?: string;
   containers: CloudContainerInfo[];
   trees: Record<string, CloudStateJson>;
+  // Узлы, правки которых не ушли из-за связи (пометка «не отправлено»); у снимка для запуска без сети нет
+  unsentIds?: string[];
   error?: string;
 };
 export type CloudUsage = {
@@ -882,7 +884,12 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         if (tree) trees[c.id] = tree;
       });
       return Promise.resolve({
-        status, rootId: cloud.rootId(), containers, trees, error: cloud.lastError(),
+        status,
+        rootId: cloud.rootId(),
+        containers,
+        trees,
+        unsentIds: status === 'ready' ? [] : cloud.unsentIds(),
+        error: cloud.lastError(),
       });
     },
 

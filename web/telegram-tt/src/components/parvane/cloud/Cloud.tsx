@@ -940,7 +940,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
             {placeAction.title}
           </button>
         )}
-        {!isLoaded && !isBlocked && <PvSkeleton />}
+        {!isLoaded && status !== 'needs-linking' && <PvSkeleton onRetry={isOffline ? undefined : retryCloud} />}
         {isLoaded && renderColumns()}
         {isLoaded && (
           <div className={styles.list} role="list">

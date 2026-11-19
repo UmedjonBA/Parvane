@@ -3184,6 +3184,10 @@
 "PvOfflineNotes" = "No connection yet: showing the notes saved on this device";
 "PvOfflineFiles" = "No connection yet: showing the file list saved on this device";
 "PvOfflineMusic" = "No connection yet: only tracks downloaded to this device play";
+"PvNoAnswer" = "No response from server";
+"PvNoAnswerText" = "The server has not answered for more than 10 seconds. Check the connection and try again.";
+"PvChatsEmptyTitle" = "No chats yet";
+"PvChatsEmptyText" = "Find someone by username and write first. Messages are encrypted on your devices.";
 "ModuleOffTitle" = "{module} is turned off";
 "ModuleOffNotNow" = "Not now";
 "ModuleOffSame" = "Links to notes, files and plan entries from modules that are turned off behave the same way.";
@@ -3318,7 +3322,7 @@
 "MusicWidgetOpen" = "Player: {title}, {artist}. Press to open";
 "MusicAlbumsCount_one" = "{count} album";
 "MusicAlbumsCount_other" = "{count} albums";
-"HealthQuickPlaceholder" = "Write it down: 72 kg, bp 120/80, went to bed at 23:30";
+"HealthQuickPlaceholder" = "e.g. 72 kg, bp 120/80, bed at 23:30";
 "HealthQuickLabel" = "Entry in one line";
 "HealthQuickUnparsed" = "not understood: {text}";
 "HealthQuickEnter" = "Enter to save";
@@ -3909,6 +3913,7 @@
 "PlannerStepNew" = "New step";
 "PlannerSteps" = "Steps · {done}/{total}";
 "PlannerSyncPending" = "Waiting for the planner key from your other device. Some data has not arrived yet.";
+"ParvaneUnsentMark" = "not sent · will go when online";
 "PlannerTimeConflict" = "Time conflict";
 "PlannerTitleNew" = "New entry";
 "PlannerToday" = "Today";

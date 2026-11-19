@@ -2309,6 +2309,10 @@
 "PvOfflineNotes" = "Связи пока нет: показаны заметки, сохранённые на устройстве";
 "PvOfflineFiles" = "Связи пока нет: показан список файлов, сохранённый на устройстве";
 "PvOfflineMusic" = "Связи пока нет: играет только загруженное на устройство";
+"PvNoAnswer" = "Нет ответа от сервера";
+"PvNoAnswerText" = "Сервер не отвечает дольше 10 секунд. Проверьте связь и повторите.";
+"PvChatsEmptyTitle" = "Чатов пока нет";
+"PvChatsEmptyText" = "Найдите собеседника по нику и напишите первым. Переписка шифруется на ваших устройствах.";
 "ModuleOffTitle" = "Модуль «{module}» выключен";
 "ModuleOffNotNow" = "Не сейчас";
 "ModuleOffSame" = "Так же ведут себя ссылки на заметки, файлы и записи плана из выключенных модулей.";
@@ -2449,7 +2453,7 @@
 "MusicAlbumsCount_few" = "{count} альбома";
 "MusicAlbumsCount_many" = "{count} альбомов";
 "MusicAlbumsCount_other" = "{count} альбома";
-"HealthQuickPlaceholder" = "Запишите: 72 кг, давление 120 на 80, лёг в 23:30";
+"HealthQuickPlaceholder" = "72 кг, давление 120 на 80, лёг в 23:30";
 "HealthQuickLabel" = "Запись строкой";
 "HealthQuickUnparsed" = "не понято: {text}";
 "HealthQuickEnter" = "Enter — сохранить";
@@ -3044,6 +3048,7 @@
 "PlannerStepNew" = "Новый шаг";
 "PlannerSteps" = "Шаги · {done}/{total}";
 "PlannerSyncPending" = "Ждём ключ планировщика от другого вашего устройства. Часть данных ещё не получена.";
+"ParvaneUnsentMark" = "не отправлено · уйдёт при появлении связи";
 "PlannerTimeConflict" = "Пересечение времени";
 "PlannerTitleNew" = "Новая запись";
 "PlannerToday" = "Сегодня";

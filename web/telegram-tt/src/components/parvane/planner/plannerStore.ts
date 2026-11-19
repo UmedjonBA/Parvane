@@ -26,6 +26,8 @@ type StateResult = {
   state?: EngineState;
   sizeBytes: number;
   hasPending: boolean;
+  // Записи с правками, которые сервер ещё не принял
+  unsentIds?: string[];
   error?: string;
   // Провайдер новой сборки отдаёт сырую строку JSON состояния и номер ревизии: по ним без разбора видно,
   // что состояние не изменилось. У провайдера прежней сборки полей нет — сравнивается отпечаток
@@ -49,6 +51,9 @@ const [getPlannerSizeBytes, setPlannerSizeBytes] = createSignal(0);
 // Движок отдаёт историю ввода текстом (`quickLines`): значит, примет и её правку. У движка прежней сборки
 // (вкладка со старым WASM) признака нет — история остаётся на устройстве
 const [getHasQuickLines, setHasQuickLines] = createSignal(false);
+// Записи, правки которых не ушли из-за связи: пометка «не отправлено» у строки. Пока «План» на связи, очередь
+// уходит за секунды — пометка не мигает при каждой правке
+const [getPlannerUnsent, setPlannerUnsent] = createSignal<ReadonlySet<string>>(new Set());
 
 let loadPromise: Promise<void> | undefined;
 let loadedUserId: string | undefined;
@@ -68,7 +73,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 export {
   getPlannerState, getIsPlannerLoaded, getIsPlannerCached, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes,
-  getHasQuickLines,
+  getHasQuickLines, getPlannerUnsent,
 };
 
 function listen() {
@@ -85,6 +90,7 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
   if (!result) return undefined;
   setPlannerStatus(result.status);
   setPlannerSizeBytes(result.sizeBytes || 0);
+  publishUnsent(result.status === 'ready' ? [] : result.unsentIds || []);
   if (result.state) setHasQuickLines(hasEngineQuickLines(result.state));
   if (result.state && result.status !== 'needs-linking' && !result.hasPending) {
     // Пока у провайдера есть непревращённые в операцию правки, состояние движка
@@ -120,6 +126,13 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
     }, LINKING_POLL_MS);
   }
   return result;
+}
+
+function publishUnsent(ids: string[]) {
+  const next = new Set(ids);
+  const current = getPlannerUnsent();
+  if (next.size === current.size && ids.every((id) => current.has(id))) return;
+  setPlannerUnsent(next);
 }
 
 function markLoaded() {

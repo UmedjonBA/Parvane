@@ -458,7 +458,7 @@
 }
 
 .cellAccess {
-  width: 6rem;
+  width: 8.5rem;
 }
 
 .cellDate {
@@ -712,10 +712,31 @@
   color: var(--pv-red);
 }
 
+// Пометка «не отправлено» у узла (доска `PhStates`)
+.itemUnsent {
+  overflow: hidden;
+  display: block;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-orange);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .item .cellAccess,
 .item .cellWide {
   font-size: var(--pv-font-size-small);
   color: var(--pv-muted);
+}
+
+// Длинная подпись доступа («хранилище заметок · .md») — двумя строками, а не обрезкой
+.item .cellAccess {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .item .cellDate {

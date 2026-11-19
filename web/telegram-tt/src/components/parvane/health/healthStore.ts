@@ -25,9 +25,13 @@ export type HealthState = {
   status: HealthStatus;
   view?: HealthView;
   hasPending: boolean;
+  // Записи, правки которых не ушли из-за связи
+  unsentIds: string[];
 };
 
-const [getHealthState, setHealthState] = createSignal<HealthState>({ status: 'loading', hasPending: false });
+const [getHealthState, setHealthState] = createSignal<HealthState>({
+  status: 'loading', hasPending: false, unsentIds: [],
+});
 
 export { getHealthState };
 
@@ -51,9 +55,13 @@ export async function refreshHealth() {
   if (!reply) return;
   const previous = getHealthState();
   const isSameView = reply.view === lastViewJson;
-  if (isSameView && previous.status === reply.status && previous.hasPending === reply.hasPending) return;
+  const isSameUnsent = previous.unsentIds.join() === reply.unsentIds.join();
+  if (isSameView && isSameUnsent && previous.status === reply.status && previous.hasPending === reply.hasPending) {
+    return;
+  }
   lastViewJson = reply.view;
   setHealthState({
+    unsentIds: isSameUnsent ? previous.unsentIds : reply.unsentIds,
     status: reply.status,
     view: isSameView ? previous.view : reply.view ? parseEngineJson<HealthView>(reply.view) : undefined,
     hasPending: reply.hasPending,

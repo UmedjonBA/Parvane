@@ -16,6 +16,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
 import PlannerName from './PlannerName';
+import PlannerUnsentMark from './PlannerUnsentMark';
 
 import styles from './Planner.module.scss';
 
@@ -133,6 +134,7 @@ const PlannerTaskRow = ({
             {hasNotes && <PlannerName name={task.description} onlyLinks />}
           </span>
         )}
+        <PlannerUnsentMark id={task.id} />
       </button>
       {Boolean(meta) && <span className={styles.rowMeta}>{meta}</span>}
       {assignLabel !== undefined && (

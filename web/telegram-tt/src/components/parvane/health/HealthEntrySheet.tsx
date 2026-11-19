@@ -20,6 +20,7 @@ import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvSheet from '../notes/PvSheet';
+import PvSwitch from '../notes/PvSwitch';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
@@ -145,8 +146,8 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
     };
   }
 
-  const handleCountInSum = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const tag = e.currentTarget.checked ? '' : SLEEP_ASIDE_TAG;
+  const handleCountInSum = useLastCallback((isOn: boolean) => {
+    const tag = isOn ? '' : SLEEP_ASIDE_TAG;
     setForm((current) => ({ ...current, tag }));
   });
 
@@ -268,15 +269,14 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
           </div>
         )}
         {isSpan && (
-          <label className={styles.checkRow}>
-            <input
-              type="checkbox"
-              checked={form.tag !== SLEEP_ASIDE_TAG}
-              data-health-field="countInSum"
-              onChange={handleCountInSum}
-            />
-            <span>{lang('HealthSleepCountInSum')}</span>
-          </label>
+          <PvSwitch
+            isOn={form.tag !== SLEEP_ASIDE_TAG}
+            className={styles.switchRow}
+            data-health-field="countInSum"
+            onChange={handleCountInSum}
+          >
+            <span className={styles.switchText}>{lang('HealthSleepCountInSum')}</span>
+          </PvSwitch>
         )}
         {renderField('note', lang('HealthFieldNote'), 'text')}
         {problem && (

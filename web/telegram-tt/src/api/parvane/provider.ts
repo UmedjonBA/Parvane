@@ -40,11 +40,11 @@ import {
 } from '../../config';
 import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
-import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
+import { diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { getIsModuleOn, getModulesView } from '../../util/parvaneModules';
 import {
-  clearWorkerReminders, isWorkerReminderShown, markWorkerReminderShown, saveWorkerReminders,
+  isWorkerReminderShown, markWorkerReminderShown, saveWorkerReminders,
 } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
@@ -63,7 +63,6 @@ import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import { createTabSignal } from './v2/tabSignal';
 import {
-  clearLoginStorage,
   consumeLegacyCredentials,
   isSessionExpired,
   parseLoginCredentials,
@@ -79,6 +78,7 @@ import {
   AccountDeletionPendingError, canonicalAddress, createConnectionController, TwoFactorRequiredError,
 } from './connectionController';
 import { contactNameOverride, withContactName, withContactNote } from './contactInfo';
+import { wipeAccountFromDevice } from './deviceWipe';
 import { isSharedSetId, localStickerRef, sharedFavedId } from './favedIds';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
@@ -260,6 +260,7 @@ function readPlannerState() {
     state: state as unknown,
     sizeBytes: state?.sizeBytes ?? 0,
     hasPending,
+    unsentIds: planner.unsentIds(),
     error: planner.lastError(),
     raw: json,
     revision: state?.headSeq,
@@ -5205,7 +5206,6 @@ const methods = {
         withTimeout(v2Controller.leave()),
         withTimeout(v2Controller.pushSetAlarms([]).catch(() => undefined)),
       ]);
-      await clearWorkerReminders().catch(() => undefined);
     }
     connectionController.shutdown();
     mediaService.clearCache();
@@ -5220,20 +5220,11 @@ const methods = {
     polls.reset();
     taskOffers.reset();
     if (!noSessionClear) {
-      clearLoginStorage();
-      // Диагностический журнал прежнего аккаунта не переживает полный выход
-      try {
-        clearDiag();
-      } catch {
-        // журнал недоступен — выход не должен падать
-      }
-      if (user) {
-        localState.clearUserData(user);
-        await SecureE2eStorage.clear(user);
-        await clearSecureSession(user).catch(() => undefined);
-        // Ключи стёрты — следующий вход идёт новым устройством
-        connectionController.forgetDeviceId(user);
-      }
+      if (user) localState.clearUserData(user);
+      // Всё, что аккаунт оставил на устройстве: хранилище профиля, кэши, ключи страницы (и под PIN — без него)
+      await wipeAccountFromDevice(user);
+      // Ключи стёрты — следующий вход идёт новым устройством
+      if (user) connectionController.forgetDeviceId(user);
       // Выход с экрана блокировки: хранилища больше нет, ждать PIN некому
       dropPinRequest();
     }

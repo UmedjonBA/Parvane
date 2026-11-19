@@ -53,6 +53,9 @@ const DEFAULT_PREFS: CloudPrefs = { sort: { key: 'name', isDescending: false } }
 const ROOT = 'root';
 
 const [getCloudData, setCloudData] = createSignal<CloudDriveState | undefined>(undefined);
+// Узлы, правки которых не ушли из-за связи (пометка «не отправлено»): свой сигнал, чтобы строки не
+// перерисовывались при каждом обновлении дерева
+const [getCloudUnsent, setCloudUnsent] = createSignal<ReadonlySet<string>>(new Set());
 // Показан снимок с устройства (`cloudSnapshot.ts`), движок своё дерево ещё не отдал
 let isShowingSaved = false;
 const [getIsCloudLoaded, setIsCloudLoaded] = createSignal(false);
@@ -72,7 +75,7 @@ const [getCloudLinkProgress, setCloudLinkProgress] = createSignal<
 
 export {
   getCloudData, getIsCloudLoaded, getCloudStatus, getCloudPlace, getCloudTransfers, getHasCloudTransfers, getCloudUsage,
-  getCloudPrefs, getCloudNotice, getCloudLinks, getCloudLinkProgress,
+  getCloudPrefs, getCloudNotice, getCloudLinks, getCloudLinkProgress, getCloudUnsent,
 };
 
 function setCloudTransfers(list: CloudTransfer[]) {
@@ -154,6 +157,7 @@ export async function refreshCloud(): Promise<CloudDriveState | undefined> {
   const result = await callParvane('parvaneCloudState').catch(() => undefined) as CloudDriveState | undefined;
   if (!result) return undefined;
   setCloudStatus(result.status);
+  publishUnsent(result.unsentIds || []);
   // Без сети движок отвечает пустым деревом: снимок с устройства оно не заменяет (и не опережает — аккаунт
   // провайдеру к первому ответу мог быть ещё не известен, снимок спрашивается ещё раз)
   const isEmpty = result.status !== 'ready' && !result.rootId;
@@ -233,10 +237,18 @@ async function showSavedCloud() {
   setCloudData(saved);
 }
 
+function publishUnsent(ids: string[]) {
+  const next = new Set(ids);
+  const current = getCloudUnsent();
+  if (next.size === current.size && ids.every((id) => current.has(id))) return;
+  setCloudUnsent(next);
+}
+
 function resetCloud() {
   loadPromise = undefined;
   isShowingSaved = false;
   setCloudData(undefined);
+  publishUnsent([]);
   setIsCloudLoaded(false);
   setCloudStatus('loading');
   setCloudPlaceSignal({});

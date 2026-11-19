@@ -317,7 +317,8 @@ try {
     await timed(`данные ${round}: Сегодня`, () => openPlannerScreen(page, 'today'));
     await timed(`данные ${round}: Здоровье`, async () => { await openPlannerScreen(page, 'health'); await visible(page.locator('#ParvaneHealth'), 'здоровье'); });
     await timed(`данные ${round}: Знания (заметки)`, async () => {
-      await openSection('Notes');
+      // Модуль открывается на прошлом виде (граф) — к списку переходим явно
+      await openTab('Notes');
       await visible(knowledge.locator(`[data-note-row="${noteTitle(NOTES)}"]`), 'список заметок');
     });
     await timed(`данные ${round}: Граф`, async () => {
@@ -425,7 +426,8 @@ try {
   await timed('CPU×4: Календарь', async () => { await openPlannerScreen(page, 'calendar'); await visible(planner, 'план'); });
   await timed('CPU×4: Сегодня', () => openPlannerScreen(page, 'today'));
   await timed('CPU×4: Знания (заметки)', async () => {
-    await openSection('Notes');
+    // Модуль открывается на прошлом виде (граф) — к списку переходим явно
+    await openTab('Notes');
     await visible(knowledge.locator(`[data-note-row="${noteTitle(NOTES)}"]`), 'список заметок');
   });
   await timed('CPU×4: Граф', async () => {

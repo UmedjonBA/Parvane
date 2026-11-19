@@ -2,6 +2,7 @@ import type {
   createMusicApi, MusicInfo, MusicStreamQuality, MusicTrack,
 } from '../../../api/parvane/musicApi';
 
+import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import { engineStatic, loadProtocol } from '../../../api/parvane/v2/engine';
@@ -69,6 +70,23 @@ let audio: HTMLAudioElement | undefined;
 let loadedTrackId: string | undefined;
 let isRestored = false;
 const streamUrls = new Map<string, { url: string; expiresMs: number }>();
+
+// Выход из аккаунта: плеер замолкает и забывает очередь, сведения о библиотеке и недавнее прежнего аккаунта
+if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_WIPED_EVENT, forgetMusicPlayer);
+
+function forgetMusicPlayer() {
+  audio?.pause();
+  audio?.removeAttribute('src');
+  loadedTrackId = undefined;
+  isRestored = false;
+  streamUrls.clear();
+  setMusicPlayer({
+    queue: EMPTY_QUEUE, tracksById: {}, isPlaying: false, hasError: false,
+  });
+  setMusicPosition({ positionSecs: 0, durationSecs: 0 });
+  setMusicInfo(undefined);
+  setMusicRecent([]);
+}
 
 function readJson<T>(key: string): T | undefined {
   try {

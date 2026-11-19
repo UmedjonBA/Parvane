@@ -262,6 +262,8 @@ try {
   console.log('OK: совместная папка на A, участник с B приглашён редактором');
 
   await bc.open();
+  // Приглашение — карточкой в «Доступных мне» (spec 041 E2)
+  await bc.openShared();
   const inviteRow = bc.folderRow(FOLDER);
   await inviteRow.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   await inviteRow.getByRole('button', { name: 'Accept', exact: true }).click();

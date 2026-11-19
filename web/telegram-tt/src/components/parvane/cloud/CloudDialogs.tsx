@@ -13,6 +13,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
+import PvSwitch from '../notes/PvSwitch';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './CloudSheets.module.scss';
@@ -86,7 +87,7 @@ const CloudNameDialogBase = ({
     onSubmit(value, canShare && isShared);
   });
 
-  const handleToggleShared = useLastCallback(() => setIsShared(!isShared));
+  const handleToggleShared = useLastCallback((isOn: boolean) => setIsShared(isOn));
 
   return (
     <PvSheet isOpen={isOpen} title={title} className={styles.narrow} onClose={onClose} onEnter={handleSubmit}>
@@ -108,20 +109,12 @@ const CloudNameDialogBase = ({
         </label>
         {errorText && <div className={kit.fieldError} role="alert">{errorText}</div>}
         {canShare && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isShared}
-            className={styles.switchRow}
-            data-share-switch
-            onClick={handleToggleShared}
-          >
+          <PvSwitch isOn={isShared} className={styles.switchRow} data-share-switch onChange={handleToggleShared}>
             <span className={styles.switchText}>
               {lang('ParvaneCloudShareAtOnce')}
               <span className={styles.note}>{` ${lang('ParvaneCloudShareAtOnceHint')}`}</span>
             </span>
-            <span className={buildClassName(styles.switch, isShared && styles.switchOn)} />
-          </button>
+          </PvSwitch>
         )}
         <div className={styles.buttons}>
           <button type="button" className={kit.btn} onClick={onClose}>{lang('Cancel')}</button>

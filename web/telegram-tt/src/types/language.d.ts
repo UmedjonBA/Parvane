@@ -2347,6 +2347,10 @@ export interface LangPair {
   'PvOfflineNotes': undefined;
   'PvOfflineFiles': undefined;
   'PvOfflineMusic': undefined;
+  'PvNoAnswer': undefined;
+  'PvNoAnswerText': undefined;
+  'PvChatsEmptyTitle': undefined;
+  'PvChatsEmptyText': undefined;
   'ModuleOffNotNow': undefined;
   'ModuleOffSame': undefined;
   'ModuleOffEnablePlan': undefined;
@@ -2928,6 +2932,7 @@ export interface LangPair {
   'PlannerStepAdd': undefined;
   'PlannerStepNew': undefined;
   'PlannerSyncPending': undefined;
+  'ParvaneUnsentMark': undefined;
   'PlannerTimeConflict': undefined;
   'PlannerTitleNew': undefined;
   'PlannerToday': undefined;

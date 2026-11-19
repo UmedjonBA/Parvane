@@ -110,6 +110,7 @@
 .skeletonCaption {
   display: flex;
   flex: none;
+  gap: 0.75rem;
   align-items: center;
 
   height: 1.875rem;
@@ -117,6 +118,26 @@
 
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
+}
+
+// «Повторить» рядом с «Нет ответа от сервера» — текстом акцента, как в полосе «нет связи»
+.skeletonRetry {
+  cursor: pointer;
+
+  min-height: 1.5rem;
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:focus-visible {
+    border-radius: 0.25rem;
+    box-shadow: var(--pv-focus-ring);
+  }
 }
 
 .skeletonHead {
@@ -202,4 +223,47 @@
   border-radius: 0.25rem;
 
   background: var(--pv-line);
+}
+
+// Вторая колонка сведений — только на компьютере (доска `ZdMisc`)
+.skeletonWide {
+  display: none;
+  flex: none;
+
+  width: 6rem;
+  height: 0.5625rem;
+  border-radius: 0.25rem;
+
+  background: var(--pv-line);
+}
+
+// Компьютер (доска `ZdMisc`): строка ниже, подписи нет, справа две колонки сведений
+@media (min-width: 926px) {
+  .skeletonRow {
+    min-height: 2.875rem;
+  }
+
+  .skeletonIcon {
+    width: 1.375rem;
+    height: 1.375rem;
+  }
+
+  .skeletonSub {
+    display: none;
+  }
+
+  .skeletonWide {
+    display: block;
+  }
+
+  .skeletonMeta {
+    width: 3rem;
+    height: 0.5625rem;
+  }
+}
+
+// Загрузка занимает всю высоту прокручиваемого поля и стоит по центру («План»)
+.loadingFill {
+  box-sizing: border-box;
+  min-height: 100%;
 }

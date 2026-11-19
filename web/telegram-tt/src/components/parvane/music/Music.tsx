@@ -344,7 +344,7 @@ const Music = () => {
         />
       );
     }
-    if (!content) return <PvSkeleton />;
+    if (!content) return <PvSkeleton onRetry={handleRetry} />;
     if (content.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     const { tracks, albums, artists } = content;
     const added = (content.added || []).filter((item) => item.track.id);
@@ -427,7 +427,7 @@ const Music = () => {
   }
 
   function renderBody() {
-    if (!info) return <PvLoading />;
+    if (!info || info.isFailed) return <PvLoading onRetry={handleRetry} />;
     if (!info.isEnabled) return <PvEmpty text={lang('MusicNotConnected')} data-music-off />;
     return (
       <div className={styles.layout}>
