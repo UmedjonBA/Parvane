@@ -1,5 +1,8 @@
-// PWA: манифест (цвета заставки, значки maskable, ярлыки, без чужого снимка), ярлык `?open=` открывает раздел и
-// убирается из адреса, запуск без сети — оболочка из кэша service worker, в том числе по ярлыку.
+// PWA: манифест (цвета заставки, значки maskable, ярлыки, «Поделиться», без чужого снимка), ярлык `?open=` открывает
+// раздел и убирается из адреса, запуск без сети — оболочка из кэша service worker, в том числе по ярлыку.
+// spec 041 F2: ярлыки «Новое сообщение» / «План на сегодня» / «Новая заметка» / «Музыка», POST «Поделиться» доходит
+// до экрана выбора и сохраняется в «Файлы», нажатие на уведомление (событие `notificationclick` в service worker)
+// открывает нужное место.
 // Установка, оболочка в кэше целиком и обновление после выкладки — `e2e_web_pwa_offline.mjs`.
 // Запуск: scripts/run_web_pwa_e2e.sh
 import assert from 'node:assert/strict';
@@ -15,8 +18,13 @@ const OFFLINE_TASK = 'Полить цветы';
 const BASE_URL = process.env.PARVANE_E2E_BASE_URL;
 assert.ok(BASE_URL, 'нужен PARVANE_E2E_BASE_URL');
 
-const browser = await chromium.launch();
-const context = await browser.newContext({ viewport: WIDE });
+// Полный Chromium в новом безголовом режиме: в `chrome-headless-shell` разрешение на уведомления у service worker
+// всегда «denied» — показать уведомление, чтобы нажать на него, было бы нельзя
+const browser = await chromium.launch({ channel: 'chromium' });
+// Разрешение на уведомления: service worker показывает уведомление, на которое сценарий нажимает
+const context = await browser.newContext({ viewport: WIDE, permissions: ['notifications'] });
+const SHARED_TEXT = `Поделились ${Date.now().toString(36)}`;
+const SHARED_FILE = 'shared-report.txt';
 let session;
 
 try {
@@ -36,10 +44,15 @@ try {
   assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'), 'есть значок maskable');
   assert.deepEqual(
     manifest.shortcuts.map(({ url }) => url),
-    ['./?open=chats', './?open=today', './?open=notes', './?open=entry'],
+    ['./?open=compose', './?open=today', './?open=new-note', './?open=music'],
     'ярлыки приложения',
   );
-  console.log('OK: манифест — цвета, значки maskable, ярлыки');
+  assert.equal(manifest.share_target?.action, './share/');
+  assert.equal(manifest.share_target.method, 'POST');
+  assert.equal(manifest.share_target.enctype, 'multipart/form-data');
+  assert.equal(manifest.share_target.params.files[0].name, 'files');
+  assert.equal(manifest.share_target.params.text, 'text');
+  console.log('OK: манифест — цвета, значки maskable, ярлыки, «Поделиться»');
 
   // ── Ярлык открывает раздел и убирается из адреса ─────────────────────────
   const user = `pwa-${Date.now().toString(36)}@local`;
@@ -64,6 +77,16 @@ try {
   await page.waitForTimeout(4000);
   console.log('OK: ярлыки «Заметки» и «Новая запись» открывают своё, адрес чистый');
 
+  // ── Ярлыки манифеста (spec 041 F2) ───────────────────────────────────────
+  await page.goto(`${BASE_URL}/?open=music`);
+  await page.locator('#ParvaneMusic').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.goto(`${BASE_URL}/?open=compose`);
+  await page.getByPlaceholder('Search contacts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.goto(`${BASE_URL}/?open=new-note`);
+  await page.locator('#ParvaneKnowledge').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(new URL(page.url()).searchParams.get('open'), null, 'параметр ярлыка остался в адресе');
+  console.log('OK: ярлыки «Музыка», «Новое сообщение», «Новая заметка»');
+
   // ── Без сети: оболочка из кэша service worker ────────────────────────────
   // Раздел помнится во вкладке (после ярлыка — «План»): к чатам — своим ярлыком
   await page.goto(`${BASE_URL}/?open=chats`);
@@ -75,6 +98,60 @@ try {
       await page.waitForFunction(() => Boolean(navigator.serviceWorker?.controller), undefined, { timeout: STEP_TIMEOUT_MS });
     });
   await waitForChatList(page);
+
+  // ── «Поделиться в Parvane»: POST `share/` (как от системы) → экран выбора → «В „Файлы“» ─────────
+  // Форма — со страницы без политики безопасности приложения (у него `form-action 'none'`), как POST от системы
+  await page.goto('about:blank');
+  await page.evaluate(({ action, text, fileName }) => {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.enctype = 'multipart/form-data';
+    form.action = action;
+    const textInput = document.createElement('input');
+    textInput.name = 'text';
+    textInput.value = text;
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.name = 'files';
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([`${text}\n`], fileName, { type: 'text/plain' }));
+    fileInput.files = transfer.files;
+    form.append(textInput, fileInput);
+    document.body.append(form);
+    form.submit();
+  }, { action: `${BASE_URL}/share/`, text: SHARED_TEXT, fileName: SHARED_FILE });
+  const shareSheet = page.locator('[data-share-sheet]');
+  await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await shareSheet.locator('[data-share-content]').getByText(SHARED_FILE).waitFor({ state: 'visible' });
+  assert.equal(new URL(page.url()).searchParams.get('open'), null, 'параметр «Поделиться» остался в адресе');
+  for (const destination of ['chat', 'files', 'note']) {
+    assert.equal(await shareSheet.locator(`[data-share-to="${destination}"]`).count(), 1, `нет пункта ${destination}`);
+  }
+  await shareSheet.locator('[data-share-to="files"]').click();
+  await page.locator('.Notification').getByText('Saved to Files').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await shareSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Поделиться» — экран выбора, файл сохранён в «Файлы» (Мой диск / Входящие)');
+
+  // ── Нажатие на уведомление открывает нужное место ─────────────────────────
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+  const clickNotification = (data, action) => worker.evaluate(async ({ notifyData, notifyAction }) => {
+    await self.registration.showNotification('e2e', { data: notifyData, tag: 'e2e-click' });
+    const [notification] = await self.registration.getNotifications({ tag: 'e2e-click' });
+    self.dispatchEvent(new NotificationEvent('notificationclick', { notification, action: notifyAction }));
+  }, { notifyData: data, notifyAction: action });
+  await clickNotification({ kind: 'reminder', reminderKey: 'e2e@2026-01-01@5', reminderTitle: 'e2e' }, '');
+  await page.locator('#ParvanePlanner').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const selfId = await page.evaluate(() => window.__parvaneGetGlobal?.().currentUserId);
+  assert.ok(selfId, 'нет id своего аккаунта (диагностическая сборка?)');
+  await clickNotification({ kind: 'message', chatId: selfId }, '');
+  await page.locator('#ParvanePlanner').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#MiddleColumn').getByText('Saved Messages').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: нажатие на уведомление — напоминание открывает «План», сообщение — свой чат');
+  await page.goto(`${BASE_URL}/?open=chats`);
+  await waitForChatList(page);
+
   await context.setOffline(true);
   for (const url of [BASE_URL, `${BASE_URL}/?open=today`]) {
     await page.goto(url, { waitUntil: 'domcontentloaded' });

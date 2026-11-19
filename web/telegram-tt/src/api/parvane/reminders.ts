@@ -7,6 +7,8 @@
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { WorkerReminder } from '../../util/reminderStore';
 
+import { NOTIFY_SNOOZE_MS } from '../../util/systemNotify';
+
 type Deps = {
   stateJson: () => string | undefined;
   isReady: () => boolean;
@@ -24,6 +26,10 @@ type Deps = {
   canKeepText: () => Promise<boolean>;
   formatMessage: (reminder: PlannerReminder) => string;
   log: (text: string) => void;
+  // «Через 10 мин» в уведомлении (spec 041 F2): отложенные напоминания этого устройства переживают перезагрузку
+  ringSnoozed: (snooze: WorkerReminder) => void;
+  loadSnoozes: () => Promise<WorkerReminder[]>;
+  saveSnoozes: (items: WorkerReminder[]) => Promise<void>;
 };
 
 const TICK_MS = 30 * 1000;
@@ -33,6 +39,10 @@ const CHANGE_DELAY_MS = 1500;
 const WRITE_JITTER_MS = 12 * 1000;
 // Звенит только свежее: пропущенное (приложение было закрыто) лишь дописывается в «Избранное»
 const FRESH_MS = 2 * 60 * 1000;
+// Ключ отложенного: `<ключ напоминания>~<момент>` — у каждого откладывания своя отметка «показано»
+const SNOOZE_SEPARATOR = '~';
+// Предел `push.alarm.set` (`SetAlarmsRequest.at_ms`)
+const MAX_ALARMS = 64;
 
 type ReminderModule = typeof import('../../components/parvane/planner/plannerReminders');
 
@@ -45,6 +55,7 @@ export function createReminderScheduler(deps: Deps) {
   // Наступившие, которые это устройство уже обработало: позвонило / взялось записать в «Избранное»
   const rung = new Set<string>();
   const handled = new Set<string>();
+  let snoozes: WorkerReminder[] | undefined;
 
   function loadModule() {
     module ??= import('../../components/parvane/planner/plannerReminders');
@@ -58,14 +69,50 @@ export function createReminderScheduler(deps: Deps) {
     return readReminders(json, Date.now(), FRESH_MS);
   }
 
+  async function readSnoozes() {
+    snoozes ??= await deps.loadSnoozes().catch(() => []);
+    return snoozes;
+  }
+
+  async function writeSnoozes(items: WorkerReminder[]) {
+    snoozes = items;
+    await deps.saveSnoozes(items).catch((e: unknown) => deps.log(`напоминания: отложенные не сохранены: ${String(e)}`));
+  }
+
+  /** «Через 10 мин»: напоминание звенит снова через `NOTIFY_SNOOZE_MS` — и у закрытого приложения тоже. */
+  async function snooze(key: string, title?: string) {
+    const base = key.split(SNOOZE_SEPARATOR)[0];
+    const at = Date.now() + NOTIFY_SNOOZE_MS;
+    const others = (await readSnoozes()).filter((item) => item.key.split(SNOOZE_SEPARATOR)[0] !== base);
+    await writeSnoozes([...others, { key: `${base}${SNOOZE_SEPARATOR}${at}`, at, title }]);
+    lastAlarms = '';
+    await tick();
+  }
+
+  async function ringSnoozes() {
+    const list = await readSnoozes();
+    const now = Date.now();
+    const due = list.filter(({ at }) => at <= now);
+    if (!due.length) return;
+    await writeSnoozes(list.filter(({ at }) => at > now));
+    for (const item of due) {
+      if (await deps.isShown(item.key).catch(() => false)) continue;
+      deps.ringSnoozed(item);
+      void deps.markShown(item.key).catch(() => undefined);
+    }
+  }
+
   async function publishUpcoming(upcoming: PlannerReminder[]) {
-    const signature = upcoming.map(({ key, at, title }) => `${key}:${at}:${title}`).join('|');
+    const pending = await readSnoozes();
+    const items = [...upcoming.map(({ key, at, title }) => ({ key, at, title })), ...pending];
+    const signature = items.map(({ key, at, title }) => `${key}:${at}:${title}`).join('|');
     if (signature === lastAlarms) return;
     lastAlarms = signature;
     const keepText = await deps.canKeepText();
-    await deps.saveForWorker(upcoming.map(({ key, at, title }) => ({ key, at, title: keepText ? title : undefined })))
+    await deps.saveForWorker(items.map(({ key, at, title }) => ({ key, at, title: keepText ? title : undefined })))
       .catch((e: unknown) => deps.log(`напоминания: для service worker не сохранены: ${String(e)}`));
-    const moments = [...new Set(upcoming.map(({ at }) => at))];
+    // Сервер принимает не больше `MAX_ALARMS` моментов: ближайшие
+    const moments = [...new Set(items.map(({ at }) => at))].sort((a, b) => a - b).slice(0, MAX_ALARMS);
     await deps.setAlarms(moments)
       .then(() => deps.log(`напоминания: будильник на сервере (${moments.length})`))
       .catch((e: unknown) => {
@@ -94,6 +141,7 @@ export function createReminderScheduler(deps: Deps) {
     try {
       const result = await read();
       if (!result) return;
+      await ringSnoozes();
       await publishUpcoming(result.upcoming);
       // Звенит свежее, даже если другое устройство уже отметило его «напомнено» (его такт мог прийти раньше)
       for (const reminder of result.fresh) {
@@ -140,7 +188,10 @@ export function createReminderScheduler(deps: Deps) {
     lastAlarms = '';
     rung.clear();
     handled.clear();
+    snoozes = undefined;
   }
 
-  return { start, stop, onPlannerChanged };
+  return {
+    start, stop, onPlannerChanged, snooze,
+  };
 }

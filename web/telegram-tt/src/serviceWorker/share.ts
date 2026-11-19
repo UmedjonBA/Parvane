@@ -1,81 +1,35 @@
-import Deferred from '../util/Deferred';
+import {
+  buildSharedMeta, hasSharedContent, readShareForm, SHARE_CACHE, SHARE_FILE_URL, SHARE_META_URL,
+} from '../util/shareTarget';
 
 declare const self: ServiceWorkerGlobalScope;
 
-type ShareData = {
-  title?: string;
-  text?: string;
-  url?: string;
-  files?: File[];
-};
-
-const READY_CLIENT_DEFERREDS = new Map<string, Deferred<void>>();
-
+// «Поделиться в Parvane» (`share_target` манифеста): POST `share/` от системы. Полученное кладётся в кэш, затем
+// приложение открывается на `?open=share` — экран «Поделиться» забирает его оттуда (`util/sharedInbox.ts`)
 export async function respondForShare(e: FetchEvent) {
   if (e.request.method === 'POST') {
     try {
-      const formData = await e.request.formData();
-      const data = parseFormData(formData);
-      requestShare(data, e.resultingClientId);
+      await saveShared(await e.request.formData());
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[SHARE] Failed to parse input data', err);
+      console.warn('[SHARE] Failed to save shared data', err);
     }
   }
-
-  return Response.redirect('.');
+  return Response.redirect(new URL('./?open=share', self.registration.scope).href, 303);
 }
 
-export function handleClientMessage(e: ExtendableMessageEvent) {
-  const { source, data } = e;
-  if (!source) return;
-
-  if (data.type === 'clientReady') {
-    const { id } = source as Client;
-    const deferred = READY_CLIENT_DEFERREDS.get(id);
-    if (deferred) {
-      deferred.resolve();
-    } else {
-      READY_CLIENT_DEFERREDS.set(id, Deferred.resolved());
-    }
-  }
-}
-
-async function requestShare(data: ShareData, clientId: string) {
-  const client = await self.clients.get(clientId);
-  if (!client) {
-    return;
-  }
-
-  await getClientReadyDeferred(clientId);
-
-  client.postMessage({
-    type: 'share',
-    payload: data,
-  });
-}
-
-function getClientReadyDeferred(clientId: string) {
-  const deferred = READY_CLIENT_DEFERREDS.get(clientId);
-  if (deferred) {
-    return deferred.promise;
-  }
-
-  const newDeferred = new Deferred<void>();
-  READY_CLIENT_DEFERREDS.set(clientId, newDeferred);
-  return newDeferred.promise;
-}
-
-function parseFormData(formData: FormData): ShareData {
-  const files = formData.getAll('files') as File[];
-  const title = formData.get('title') as string;
-  const text = formData.get('text') as string;
-  const url = formData.get('url') as string;
-
-  return {
-    title,
-    text,
-    url,
-    files,
-  };
+async function saveShared(form: FormData) {
+  const shared = readShareForm(form);
+  if (!hasSharedContent(shared)) return;
+  // Прежнее непринятое заменяется: экран показывает последнее полученное
+  await caches.delete(SHARE_CACHE);
+  const cache = await caches.open(SHARE_CACHE);
+  await Promise.all(shared.files.map((file, index) => cache.put(
+    new Request(`${SHARE_FILE_URL}${index}`),
+    new Response(file, { headers: { 'Content-Type': file.type || 'application/octet-stream' } }),
+  )));
+  // Сведения — последними: страница читает файлы, только когда сведения уже есть
+  await cache.put(new Request(SHARE_META_URL), new Response(JSON.stringify(buildSharedMeta(shared, Date.now())), {
+    headers: { 'Content-Type': 'application/json' },
+  }));
 }

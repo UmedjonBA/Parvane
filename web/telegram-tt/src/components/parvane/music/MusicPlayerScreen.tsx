@@ -15,6 +15,7 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 import Modal from '../../ui/Modal';
 import MusicControls from './MusicControls';
 import MusicCover from './MusicCover';
+import MusicOfflineButton from './MusicOfflineButton';
 import MusicPlaylistPicker from './MusicPlaylistPicker';
 import MusicQueue from './MusicQueue';
 import MusicSendDialog from './MusicSendDialog';
@@ -86,7 +87,10 @@ const MusicPlayerScreen = () => {
                   {track.album && ` · ${track.album}`}
                 </span>
               </span>
-              {isOffline && <span className={styles.saved}>{lang('MusicSavedOnDevice')}</span>}
+              <span className={styles.saved}>
+                <MusicOfflineButton track={track} />
+                {isOffline && lang('MusicSavedOnDevice')}
+              </span>
             </div>
             <div className={styles.transport}>
               <MusicControls isFullScreen />

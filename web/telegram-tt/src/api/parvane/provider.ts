@@ -40,11 +40,12 @@ import {
 } from '../../config';
 import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
+import { showReminderNotification } from '../../util/pageNotify';
 import { diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { getIsModuleOn, getModulesView } from '../../util/parvaneModules';
 import {
-  isWorkerReminderShown, markWorkerReminderShown, saveWorkerReminders,
+  isWorkerReminderShown, loadWorkerSnoozes, markWorkerReminderShown, saveWorkerReminders, saveWorkerSnoozes,
 } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
@@ -1935,6 +1936,12 @@ function formatReminderMessage(reminder: PlannerReminder) {
     .replace('{when}', formatReminderWhen(reminder));
 }
 
+// Наступившее напоминание: всплывающая строка в открытом окне, системное уведомление — при скрытом (spec 041 F2)
+function ringReminder(key: string, title: string, text: string) {
+  window.dispatchEvent(new CustomEvent('parvane-reminder', { detail: { text, key } }));
+  showReminderNotification({ key, title, text });
+}
+
 const reminderScheduler = createReminderScheduler({
   stateJson: () => v2Controller.planner.stateJson(),
   isReady: () => v2Controller.planner.status() === 'ready',
@@ -1942,17 +1949,10 @@ const reminderScheduler = createReminderScheduler({
   flush: () => v2Controller.planner.flush(),
   syncNow: () => v2Controller.planner.syncNow(),
   sendToSelf: (text) => messageController.methods.parvaneSendSelfText({ text }),
-  ring: (reminder) => {
-    const text = formatReminderMessage(reminder);
-    window.dispatchEvent(new CustomEvent('parvane-reminder', { detail: { text, key: reminder.key } }));
-    if (document.visibilityState === 'visible' || typeof Notification === 'undefined'
-      || Notification.permission !== 'granted') return;
-    void navigator.serviceWorker?.getRegistration()
-      .then((registration) => registration?.showNotification('Parvane', {
-        body: text, tag: `reminder:${reminder.key}`,
-      }))
-      .catch(() => undefined);
-  },
+  ring: (reminder) => ringReminder(reminder.key, reminder.title, formatReminderMessage(reminder)),
+  ringSnoozed: ({ key, title }) => ringReminder(key, title || '', `⏰ ${title || ''}`.trim()),
+  loadSnoozes: loadWorkerSnoozes,
+  saveSnoozes: saveWorkerSnoozes,
   setAlarms: (atMs) => v2Controller.pushSetAlarms(atMs),
   saveForWorker: (items) => saveWorkerReminders(items),
   markShown: (key) => markWorkerReminderShown(key),
@@ -3749,6 +3749,12 @@ const methods = {
   // eslint-disable-next-line @typescript-eslint/require-await
   async parvanePlannerApply({ changes }: { changes: unknown[] }) {
     v2Controller.planner.apply(changes);
+    return true;
+  },
+
+  // «Через 10 мин» в уведомлении напоминания (spec 041 F2)
+  async parvaneSnoozeReminder({ key, title }: { key: string; title?: string }) {
+    await reminderScheduler.snooze(key, title);
     return true;
   },
 

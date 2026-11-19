@@ -59,6 +59,9 @@ message Content {
     // показывает поле `text`.
     MusicTrack music_track = 26;
     // spec 037 (план, номер не занимать другим): 27 — «аккаунт переехал» (доказательство — `Rename`).
+    // Плейлист «Музыки» (spec 041 C4, PLAYLIST-1): название и треки общей библиотеки сервера. Клиент без «Музыки»
+    // показывает поле `text`.
+    MusicPlaylistShare music_playlist = 28;
   }
   // D-09: v1 не бывает содержимым v2-конверта (запись LegacyV1Record удалена, T096).
   reserved 99;
@@ -463,6 +466,26 @@ message MusicTrack {
   uint32 duration_secs = 5;
   // «Исполнитель — название» для клиентов без «Музыки».
   string text = 6 [(parvane.core.v2.max_len) = 600];
+}
+
+// Плейлист в чат (spec 041 C4, PLAYLIST-1): снимок плейлиста отправителя — название и треки по порядку. Байтов треков
+// и ссылки на личный контейнер отправителя сообщение не несёт: получатель слушает треки из библиотеки своего сервера,
+// если `server` — его сервер, и может сохранить плейлист к себе (новый плейлист своего контейнера `music.v1`).
+// Треков не больше 500 первых; отправитель урезает подписи так, чтобы сообщение уместилось в операцию.
+message MusicPlaylistShare {
+  string name = 1 [(parvane.core.v2.max_len) = 240];
+  // Домен сервера библиотеки.
+  string server = 2 [(parvane.core.v2.max_len) = 253];
+  repeated MusicPlaylistShareTrack tracks = 3 [(parvane.core.v2.max_items) = 500];
+  // Название и первые треки для клиентов без «Музыки».
+  string text = 4 [(parvane.core.v2.max_len) = 600];
+}
+
+message MusicPlaylistShareTrack {
+  string track_id = 1 [(parvane.core.v2.max_len) = 128];
+  string title = 2 [(parvane.core.v2.max_len) = 400];
+  string artist = 3 [(parvane.core.v2.max_len) = 400];
+  uint32 duration_secs = 4;
 }
 
 message Article {

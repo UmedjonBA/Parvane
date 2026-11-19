@@ -250,6 +250,7 @@ const Music = () => {
             index={index}
             isCurrent={track.id === current?.id}
             isPlaying={player.isPlaying}
+            canSaveOffline
             onPlay={onPlay}
             onStar={handleStar}
             onAddNext={handleAddNext}

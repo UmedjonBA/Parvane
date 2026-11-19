@@ -59,6 +59,9 @@ const PATHS = {
   list: ['M4 7h16M4 12h16M4 17h16'],
   disc: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M12 10a2 2 0 1 0 0 4a2 2 0 1 0 0-4z'],
   upload: ['M12 16V4M7 9l5-5 5 5', 'M4 20h16'],
+  download: ['M12 4v11M7 11l5 5 5-5', 'M5 20h14'],
+  downloaded: ['M12 21a9 9 0 1 0 0-18a9 9 0 1 0 0 18z', 'M12 7v8M8.5 12l3.5 3.5 3.5-3.5'],
+  grip: ['M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01'],
 } satisfies Record<string, string[]>;
 
 export type ParvaneIconName = keyof typeof PATHS;

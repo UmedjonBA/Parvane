@@ -2360,6 +2360,7 @@ export interface LangPair {
   'ModuleOffBodyNotes': undefined;
   'ModuleOffBodyMusic': undefined;
   'ModuleOffHintTrack': undefined;
+  'ModuleOffHintPlaylist': undefined;
   'ModuleOffHintTask': undefined;
   'ModuleOffHintEvent': undefined;
   'ModuleOffHintNote': undefined;
@@ -2382,6 +2383,15 @@ export interface LangPair {
   'MusicTrackCardPlay': undefined;
   'MusicTrackCardMissing': undefined;
   'MusicTrackCardFailed': undefined;
+  'MusicPlaylistSent': undefined;
+  'MusicPlaylistNotSent': undefined;
+  'MusicPlaylistCardLabel': undefined;
+  'MusicPlaylistCardListen': undefined;
+  'MusicPlaylistCardOpen': undefined;
+  'MusicPlaylistCardMissing': undefined;
+  'MusicPlaylistSave': undefined;
+  'MusicPlaylistSaved': undefined;
+  'MusicPlaylistNotSaved': undefined;
   'MusicPlaylists': undefined;
   'MusicPlaylistsAll': undefined;
   'MusicPlaylistsEmpty': undefined;
@@ -2459,6 +2469,9 @@ export interface LangPair {
   'MusicRepeatOne': undefined;
   'MusicCollapse': undefined;
   'MusicSavedOnDevice': undefined;
+  'MusicOfflineSaveTrack': undefined;
+  'MusicOfflineSaving': undefined;
+  'MusicOfflineSaved': undefined;
   'MusicInFavourites': undefined;
   'MusicOpenPlayer': undefined;
   'HealthQuickPlaceholder': undefined;
@@ -3464,6 +3477,28 @@ export interface LangPair {
   'ParvanePinWrongCurrent': undefined;
   'ParvanePinOn': undefined;
   'ParvanePinOff': undefined;
+  'NotifyModuleCall': undefined;
+  'NotifyActionReply': undefined;
+  'NotifyActionRead': undefined;
+  'NotifyActionAnswer': undefined;
+  'NotifyActionDecline': undefined;
+  'NotifyActionDone': undefined;
+  'NotifyActionSnooze': undefined;
+  'ShareTitle': undefined;
+  'ShareWhere': undefined;
+  'ShareToChat': undefined;
+  'ShareToChatHint': undefined;
+  'ShareToFiles': undefined;
+  'ShareToFilesHint': undefined;
+  'ShareToNote': undefined;
+  'ShareToNoteHint': undefined;
+  'ShareRecentChats': undefined;
+  'ShareCaption': undefined;
+  'ShareCaptionPlaceholder': undefined;
+  'ShareChooseChat': undefined;
+  'ShareIncomingFolder': undefined;
+  'ShareSavedToFiles': undefined;
+  'ShareFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5215,13 +5250,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicTrackCardOtherServer': {
     'server': V;
   };
+  'MusicPlaylistSummary': {
+    'name': V;
+  };
+  'MusicPlaylistCardMore': {
+    'count': V;
+  };
   'MusicPlaylistRemove': {
-    'name': V;
-  };
-  'MusicPlaylistMoveUp': {
-    'name': V;
-  };
-  'MusicPlaylistMoveDown': {
     'name': V;
   };
   'MusicAddToPlaylistTitle': {
@@ -5250,6 +5285,12 @@ export interface LangPairWithVariables<V = LangVariable> {
     'minutes': V;
   };
   'MusicQueueRemove': {
+    'name': V;
+  };
+  'MusicQueueDrag': {
+    'name': V;
+  };
+  'MusicPlaylistDrag': {
     'name': V;
   };
   'MusicQueueTitle': {
@@ -5926,6 +5967,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvanePinAttemptsLeft': {
     'count': V;
   };
+  'NotifyCallFrom': {
+    'name': V;
+  };
+  'ShareFromApp': {
+    'size': V;
+  };
+  'ShareSendTo': {
+    'name': V;
+  };
+  'ShareSavedToNote': {
+    'title': V;
+  };
 }
 
 export interface LangPairPlural {
@@ -6468,6 +6521,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'KnowledgeLinksCount': {
+    'count': V;
+  };
+  'ShareSendToCount': {
     'count': V;
   };
 }

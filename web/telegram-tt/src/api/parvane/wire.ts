@@ -18,6 +18,14 @@ export type WireReplyQuote = {
   offset?: number;
 };
 
+// PLAYLIST-1: трек плейлиста в сообщении
+export type WirePlaylistTrack = {
+  track_id: string;
+  title: string;
+  artist?: string;
+  duration_secs?: number;
+};
+
 export type WireWebPage = {
   url: string;
   site_name?: string;
@@ -140,6 +148,9 @@ export type WireMessageContent = {
   track_id?: string;
   track_server?: string;
   artist?: string;
+  // kind=music_playlist (spec 041 C4, PLAYLIST-1): плейлист — `name`, домен сервера библиотеки (`track_server`),
+  // треки по порядку; `text` — для клиентов без «Музыки»
+  playlist_tracks?: WirePlaylistTrack[];
   // kind=cloud_invite (spec 016, CLOUD-1): приглашение в совместную папку
   // облака — `container` (ссылка на контейнер, id в base64), `name`, `role`
   // (1 — читатель, 2 — редактор), `text` — для клиентов без раздела

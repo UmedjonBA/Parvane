@@ -1,7 +1,11 @@
 import type { WorkerReminder } from '../util/reminderStore';
+import type { NotifyButton, NotifyCommand, NotifyData } from '../util/systemNotify';
 
 import { APP_NAME, DEBUG, DEBUG_MORE } from '../config';
 import { takeDueWorkerReminders } from '../util/reminderStore';
+import {
+  buildNotifyButtons, buildNotifyTitle, getWorkerNotifyTexts, resolveNotifyClick,
+} from '../util/systemNotify';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -36,14 +40,12 @@ type NotificationData = {
   icon?: string;
   reaction?: string;
   shouldReplaceHistory?: boolean;
+  // Кнопки уведомления (spec 041 F2): подписи страница кладёт на своём языке
+  actions?: NotifyButton[];
 };
 
-type FocusMessageData = {
-  chatId?: string;
-  messageId?: number;
-  reaction?: string;
-  shouldReplaceHistory?: boolean;
-};
+// `actions` нет в типах DOM этой версии TypeScript, но Chromium их показывает
+type NotificationOptionsWithActions = NotificationOptions & { actions?: NotifyButton[] };
 
 type CloseNotificationData = {
   lastReadInboxMessageId?: number;
@@ -51,20 +53,26 @@ type CloseNotificationData = {
 };
 
 let lastSyncAt = new Date().valueOf();
-// Текст пробуждения v2 — как у v1-пуша шарда push (содержимого сервер не знает)
-const WAKE_DESCRIPTION = 'New message';
 // Сколько ждать ответа окна: замороженная страница не ответит вовсе
 const CLIENT_PING_TIMEOUT_MS = 1000;
 const shownNotifications = new Set();
-const clickBuffer: Record<string, NotificationData> = {};
+// Команда нажатия ждёт, пока открытое по нажатию окно загрузится (`clientReady`)
+const pendingCommands: Record<string, NotifyCommand> = {};
+const NEW_CLIENT_KEY = 'new';
 
 function getPushData(e: PushEvent | Notification): PushData | undefined {
   try {
     const data = e.data.json() as PushData;
-    // Пробуждение протокола v2 (`push.wake.*`) — пустой объект: сервер не
-    // знает ни чата, ни текста, показываем то же, что и v1-пуш
+    // Пробуждение протокола v2 (`push.wake.*`) — пустой объект: сервер не знает ни чата, ни текста (E2E).
+    // Заголовок — «Parvane · Чаты», текст — «Новое сообщение» (доска `ZpSystem`)
     if (!data.custom) {
-      return { ...data, description: data.description || WAKE_DESCRIPTION, custom: {} };
+      const texts = getWorkerNotifyTexts(self.navigator.language);
+      return {
+        ...data,
+        title: data.title || buildNotifyTitle(APP_NAME, texts.chats),
+        description: data.description || texts.newMessage,
+        custom: {},
+      };
     }
     return data;
   } catch (error) {
@@ -149,19 +157,15 @@ function showNotification({
   icon,
   reaction,
   isSilent,
-  shouldReplaceHistory,
+  actions,
 }: NotificationData) {
   const isFirstBatch = new Date().valueOf() - lastSyncAt < 1000;
   const tag = String(isFirstBatch ? 0 : chatId || 0);
-  const options: NotificationOptions = {
+  const data: NotifyData = { kind: chatId ? 'message' : 'wake', chatId, messageId };
+  const options: NotificationOptionsWithActions = {
     body,
-    data: {
-      chatId,
-      messageId,
-      reaction,
-      count: 1,
-      shouldReplaceHistory,
-    },
+    data,
+    actions: chatId ? actions : undefined,
     icon: icon || 'icon-192x192.png',
     badge: 'icon-192x192.png',
     tag,
@@ -230,65 +234,84 @@ export function handlePush(e: PushEvent) {
   })());
 }
 
+// Напоминание «Плана» закрытого приложения: «Parvane · План», название записи, «Готово» и «Через 10 мин».
+// При PIN хранилища названия нет — общий текст
 function showReminder(reminder: WorkerReminder) {
-  const isRu = self.navigator.language.toLowerCase().startsWith('ru');
-  const heading = isRu ? 'Напоминание' : 'Reminder';
-  return self.registration.showNotification(reminder.title ? `⏰ ${reminder.title}` : `⏰ ${heading}`, {
-    body: reminder.title ? heading : (isRu ? 'Откройте «План»' : 'Open the Planner'),
+  const texts = getWorkerNotifyTexts(self.navigator.language);
+  const data: NotifyData = { kind: 'reminder', reminderKey: reminder.key, reminderTitle: reminder.title };
+  const options: NotificationOptionsWithActions = {
+    body: reminder.title || texts.openPlanner,
     icon: 'icon-192x192.png',
     badge: 'icon-192x192.png',
     tag: `reminder:${reminder.key}`,
-  });
+    data,
+    actions: buildNotifyButtons('reminder', (action) => (action === 'done' ? texts.done : texts.snooze)),
+  };
+  return self.registration.showNotification(buildNotifyTitle(APP_NAME, texts.planner), options);
 }
 
-async function focusChatMessage(client: WindowClient, data: FocusMessageData) {
-  if (!data.chatId) return;
-  client.postMessage({
-    type: 'focusMessage',
-    payload: data,
-  });
-  if (!client.focused) {
-    // Catch "focus not allowed" DOM Exceptions
-    try {
-      await client.focus();
-    } catch (error) {
-      if (DEBUG) {
-        // eslint-disable-next-line no-console
-        console.warn('[SW] ', error);
-      }
+async function focusClient(client: WindowClient) {
+  if (client.focused) return;
+  // Catch "focus not allowed" DOM Exceptions
+  try {
+    await client.focus();
+  } catch (error) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.warn('[SW] ', error);
     }
   }
 }
 
+/**
+ * Нажатие на уведомление или его кнопку (spec 041 F2): команда странице (`util/notifyCommands.ts`) — открыть
+ * чат, ответить на звонок, отметить задачу и т. п. Фоновое действие при живой странице выполняется без её
+ * показа; иначе приложение показывается (открывается), и команда ждёт его готовности.
+ */
 export function handleNotificationClick(e: NotificationEvent) {
-  const appUrl = self.registration.scope;
   e.notification.close(); // Android needs explicit close.
-  const { data } = e.notification;
-  const notifyClients = async () => {
-    const clients = await getClients();
-    await Promise.all(clients.map((client) => {
-      clickBuffer[client.id] = data;
-      return focusChatMessage(client, data);
-    }));
-    if (!self.clients.openWindow || clients.length > 0) return undefined;
-    // Store notification data for default client (fix for android)
-    clickBuffer[0] = data;
-    // If there is no opened client we need to open one and wait until it is fully loaded
-    try {
-      const newClient = await self.clients.openWindow(appUrl);
-      if (newClient) {
-        // Store notification data until client is fully loaded
-        clickBuffer[newClient.id] = data;
-      }
-    } catch (error) {
-      if (DEBUG) {
-        // eslint-disable-next-line no-console
-        console.warn('[SW] ', error);
-      }
+  const { command, shouldFocus } = resolveNotifyClick(e.notification.data, e.action);
+  // Номер команды: страница выполняет каждую один раз, сколько бы раз она ни пришла
+  command.id = `${Date.now()}-${Math.random()}`;
+  keepAlive(e, runNotifyCommand(command, shouldFocus));
+}
+
+async function runNotifyCommand(command: NotifyCommand, shouldFocus: boolean) {
+  const clients = await getClients();
+  const client = clients.find((c) => c.focused) || clients.find((c) => c.visibilityState === 'visible') || clients[0];
+  if (!client) {
+    await openClient(command);
+    return;
+  }
+  // Если страница ещё грузится, команду заберёт её `clientReady`
+  pendingCommands[client.id] = command;
+  client.postMessage({ type: 'parvaneNotify', payload: command });
+  // Фоновое действие при живой странице — без показа; иначе окно показывается (свёрнутое PWA на Android
+  // заморожено и оживает, только когда его покажут)
+  if (shouldFocus || !(await hasLiveClient())) await focusClient(client);
+}
+
+async function openClient(command: NotifyCommand) {
+  if (!self.clients.openWindow) return;
+  pendingCommands[NEW_CLIENT_KEY] = command;
+  try {
+    const newClient = await self.clients.openWindow(self.registration.scope);
+    if (newClient) pendingCommands[newClient.id] = command;
+  } catch (error) {
+    if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.warn('[SW] ', error);
     }
-    return undefined;
-  };
-  e.waitUntil(notifyClients());
+  }
+}
+
+// Событие, созданное не браузером (сценарий вызывает `notificationclick` сам), `waitUntil` не принимает
+function keepAlive(e: ExtendableEvent, promise: Promise<unknown>) {
+  try {
+    e.waitUntil(promise);
+  } catch {
+    // Обработка идёт и так
+  }
 }
 
 export function handleClientMessage(e: ExtendableMessageEvent) {
@@ -299,13 +322,14 @@ export function handleClientMessage(e: ExtendableMessageEvent) {
   if (!e.data) return;
   const source = e.source as WindowClient;
   if (e.data.type === 'clientReady') {
-    // focus on chat message when client is fully ready
-    const data = clickBuffer[source.id] || clickBuffer[0];
-    if (data) {
-      delete clickBuffer[source.id];
-      delete clickBuffer[0];
-      e.waitUntil(focusChatMessage(source, data));
-    }
+    // Окно, открытое нажатием на уведомление, загрузилось: команда нажатия — ему
+    const command = pendingCommands[source.id] || pendingCommands[NEW_CLIENT_KEY];
+    delete pendingCommands[NEW_CLIENT_KEY];
+    if (command) source.postMessage({ type: 'parvaneNotify', payload: command });
+  }
+  // Страница выполнила команду: повторять её при следующем `clientReady` (перезагрузка) не нужно
+  if (e.data.type === 'parvaneNotifyDone') {
+    delete pendingCommands[source.id];
   }
   if (e.data.type === 'showMessageNotification') {
     // store messageId for already shown notification

@@ -117,6 +117,7 @@ import ForwardRecipientPicker from './ForwardRecipientPicker.async';
 import HistoryCalendar from './HistoryCalendar.async';
 import NewContactModal from './NewContactModal.async';
 import ParvaneBugReportModal from './ParvaneBugReportModal';
+import ParvaneSystemHost from './ParvaneSystemHost';
 import ParvaneTabBar from './ParvaneTabBar';
 import PremiumLimitReachedModal from './premium/common/PremiumLimitReachedModal.async';
 import ConfettiContainer from './visualEffects/ConfettiContainer';
@@ -938,6 +939,7 @@ const Main = ({
       <MediaViewer isOpen={isMediaViewerOpen} />
       <ForwardRecipientPicker isOpen={isForwardModalOpen} />
       <DraftRecipientPicker requestedDraft={requestedDraft} />
+      <ParvaneSystemHost />
       <Dialogs />
       <AudioPlayer noUi />
       <ModalContainer />

@@ -2,8 +2,9 @@ import { memo } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  clearQueue, getCurrentTrack, getMusicPlayer, playQueueItem, removeQueueItem, setTrackStarred,
+  clearQueue, getCurrentTrack, getMusicPlayer, moveQueueItem, playQueueItem, removeQueueItem, setTrackStarred,
 } from './musicPlayer';
+import useDragReorder from './useDragReorder';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -31,6 +32,8 @@ const MusicQueue = ({ isListOnly, isExpanded, onToggleExpanded }: OwnProps) => {
   const track = getCurrentTrack(player);
   const { upcoming, index } = player.queue;
   const tracks = upcoming.map((id) => player.tracksById[id]).filter(Boolean);
+  // Порядок проигрывания меняет движок (MUSIC-1): играющий трек остаётся играющим
+  const { handlers: drag, getRowState } = useDragReorder(tracks.length, moveQueueItem);
 
   const handleStar = useLastCallback(() => {
     if (track) void setTrackStarred(track, !track.isStarred);
@@ -92,6 +95,9 @@ const MusicQueue = ({ isListOnly, isExpanded, onToggleExpanded }: OwnProps) => {
             isCurrent={position === index}
             isPlaying={player.isPlaying}
             canRemove
+            dragLabel={lang('MusicQueueDrag', { name: item.title })}
+            dragState={getRowState(position)}
+            drag={drag}
             onPlay={playQueueItem}
             onRemove={removeQueueItem}
           />

@@ -1988,6 +1988,23 @@
       }
     },
     {
+      "id": "PLAYLIST-1",
+      "title": "Плейлист «Музыки» в чате — видимое сообщение со снимком плейлиста; клиент без «Музыки» показывает текст",
+      "kind": "content",
+      "record": "msg.v2 Content.music_playlist = 28 (MusicPlaylistShare: name, server, tracks[MusicPlaylistShareTrack: track_id, title, artist, duration_secs] ≤ 500, text); формат строки: kind music_playlist, name, track_server, playlist_tracks[{track_id, title, artist, duration_secs}], text",
+      "behaviour": "Сообщение — снимок плейлиста отправителя: название и треки общей библиотеки по порядку, без байтов треков и без ссылки на его личный контейнер. Пределы — в байтах UTF-8, отправитель урезает подписи и берёт треки по порядку, пока сообщение умещается. Клиент с «Музыкой» показывает карточку (название, число треков, длительность, первые три трека, «Слушать», «Открыть»), играет треки из библиотеки своего сервера, если server — его сервер (отсутствующие пропускаются), и сохраняет плейлист к себе новым плейлистом своего контейнера music.v1. Клиент без «Музыки» показывает поле text. Сообщение видимое: считается непрочитанным, пересылается карточкой, на него можно ответить",
+      "fieldNumbers": {
+        "music_playlist": 28
+      },
+      "fallbackField": "text",
+      "status": "19 ноя 2026: движок и web — сделано (spec 041 C4); desktop и android показывают text общим путём (wire_to_body), сборками не проверялось",
+      "clients": {
+        "web": "api/parvane/store.ts (case 'music_playlist'), musicPlaylistContent.ts (поля и пределы), messages.ts (parvaneSendMusicPlaylist, пересылка), components/middle/message/MusicPlaylistCard.tsx, components/parvane/music/MusicPlaylistSheet.tsx, musicSharedPlaylist.ts, MusicSendDialog.tsx; сценарий scripts/run_web_music_e2e.sh",
+        "desktop": "ОТКРЫТО: карточки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_playlist_roundtrip_and_text_fallback",
+        "android": "ОТКРЫТО: карточки нет; текст — общим путём движка (views.rs wire_to_body), тест движка music_playlist_roundtrip_and_text_fallback"
+      }
+    },
+    {
       "id": "NOTES-1",
       "title": "«Заметки»: раскладку графа и холста из графа считает движок, клиент рисует по координатам",
       "kind": "ui",

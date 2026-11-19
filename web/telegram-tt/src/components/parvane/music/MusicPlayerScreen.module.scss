@@ -70,7 +70,11 @@
 }
 
 .saved {
-  display: block;
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  justify-content: center;
+
   font-size: var(--pv-font-size-small);
   color: var(--pv-aqua);
 }
@@ -155,6 +159,7 @@
 
   .art { width: min(13.5rem, 28dvh); }
   .info { justify-self: start; text-align: start; }
+  .saved { justify-content: flex-start; }
   .title { font-size: 1.25rem; }
   .transport { width: 100%; }
   .queue {

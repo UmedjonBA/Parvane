@@ -1,12 +1,13 @@
 import { getActions } from '../global';
 
+import type { NotifyCommand } from './systemNotify';
+
 import { DEBUG, DEBUG_MORE, IS_TEST } from '../config';
 // eslint-disable-next-line import-x/default
 import serviceWorkerUrl from '../serviceWorker/service.worker.ts?worker&url';
 import { IS_ANDROID, IS_IOS, IS_SERVICE_WORKER_SUPPORTED } from './browser/windowEnvironment';
-import { formatShareText } from './deeplink';
-import { validateFiles } from './files';
 import { notifyClientReady, playNotifySoundDebounced } from './notifications';
+import { runNotifyCommand } from './notifyCommands';
 import { handleAppShellMessage, requestAppShellPrecache } from './precacheAppShell';
 
 type WorkerAction = {
@@ -27,11 +28,12 @@ function handleWorkerMessage(e: MessageEvent) {
   }
   if (!action.type) return;
   handleAppShellMessage(action.type, action.payload);
-  const dispatch = getActions();
   const payload = action.payload;
   switch (action.type) {
-    case 'focusMessage':
-      dispatch.focusMessage?.(payload as any);
+    // Нажатие на системное уведомление (spec 041 F2)
+    case 'parvaneNotify':
+      runNotifyCommand(payload as NotifyCommand);
+      navigator.serviceWorker.controller?.postMessage({ type: 'parvaneNotifyDone' });
       break;
     // Service worker спрашивает перед показом push, жива ли страница (иначе покажет уведомление сам)
     case 'parvanePing':
@@ -39,12 +41,6 @@ function handleWorkerMessage(e: MessageEvent) {
       break;
     case 'playNotificationSound':
       playNotifySoundDebounced(action.payload.id);
-      break;
-    case 'share':
-      dispatch.openChatWithDraft({
-        text: formatShareText(payload.url, payload.text, payload.title),
-        files: validateFiles(payload.files),
-      });
       break;
   }
 }

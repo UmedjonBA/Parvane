@@ -9,7 +9,7 @@ import {
   handleNotificationClick,
   handlePush,
 } from './pushNotification';
-import { handleClientMessage as handleShareMessage, respondForShare } from './share';
+import { respondForShare } from './share';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -78,6 +78,7 @@ self.addEventListener('fetch', (e: FetchEvent) => {
 
   if (pathname.includes('/share/')) {
     e.respondWith(respondForShare(e));
+    return true;
   }
 
   if (protocol === 'http:' || protocol === 'https:') {
@@ -100,7 +101,6 @@ self.addEventListener('push', handlePush);
 self.addEventListener('notificationclick', handleNotificationClick);
 self.addEventListener('message', (event) => {
   handleNotificationMessage(event);
-  handleShareMessage(event);
   handlePrecacheMessage(event, isHashedAsset);
 });
 

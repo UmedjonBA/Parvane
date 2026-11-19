@@ -210,6 +210,16 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
                 "duration_secs": 215, "text": "Lampa — Ночной автобус"}}),
             msg(json!({"kind": "music_track", "track_id": "t42", "title": "Ночной автобус", "text": "Lampa — Ночной автобус"})),
         ),
+        // Плейлист «Музыки» (PLAYLIST-1): название и треки по порядку; клиент без «Музыки» показывает `text`.
+        (
+            "music-playlist",
+            json!({"music_playlist": {"name": "Для работы", "server": "music.example", "tracks": [
+                {"track_id": "t42", "title": "Ночной автобус", "artist": "Lampa", "duration_secs": 222},
+                {"track_id": "t7", "title": "Берег", "artist": "Тихий порт", "duration_secs": 231}],
+                "text": "🎵 Для работы: Lampa — Ночной автобус, Тихий порт — Берег"}}),
+            msg(json!({"kind": "music_playlist", "name": "Для работы",
+                "text": "🎵 Для работы: Lampa — Ночной автобус, Тихий порт — Берег"})),
+        ),
         // Жалоба админам группы (spec 024, REPORT-1): клиент без модерации показывает `text`.
         (
             "mod-report",

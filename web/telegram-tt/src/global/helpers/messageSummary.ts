@@ -165,6 +165,7 @@ function getSummaryDescription(
     taskOffer,
     article,
     musicTrack,
+    musicPlaylist,
     modReport,
   } = mediaContent;
   const { poll } = statefulContent || {};
@@ -286,6 +287,10 @@ function getSummaryDescription(
 
   if (musicTrack) {
     summary = lang('MusicTrackSummary', { title: [musicTrack.artist, musicTrack.title].filter(Boolean).join(' — ') });
+  }
+
+  if (musicPlaylist) {
+    summary = lang('MusicPlaylistSummary', { name: musicPlaylist.name });
   }
 
   if (modReport) {

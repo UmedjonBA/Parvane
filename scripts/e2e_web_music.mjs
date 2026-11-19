@@ -4,8 +4,10 @@
 // следующим», плеер вне модуля, очередь после перезагрузки, полоса плеера на телефоне; «Найти и скачать»
 // (поддельный сервис скачивания `scripts/fake_music_fetch.mjs`, лимит раннера — три трека в сутки): уверенное
 // совпадение качается само, спорное — выбором файла, ничего не нашлось, лимит, «Загруженное» и удаление;
-// плейлисты (личный контейнер): создать, добавить, порядок, играть, переименовать, перезагрузка, удалить;
-// трек в чат карточкой; «Загруженное» — альбом на устройстве играет без сети.
+// плейлисты (личный контейнер): создать, добавить, порядок перетаскиванием, играть, переименовать, перезагрузка,
+// удалить; порядок очереди перетаскиванием за ручку (компьютер и телефон); трек и плейлист в чат карточкой
+// (плейлист — «Открыть», «Сохранить к себе», «Слушать»); «Загруженное» — один трек и альбом на устройстве играют
+// без сети.
 // Запуск: scripts/run_web_music_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -27,6 +29,24 @@ const STEP_TIMEOUT_MS = 20000;
 // Звук без жеста пользователя: сценарий нажимает кнопки сам, но автозапуск в безголовом режиме надёжнее разрешить
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
 let session;
+
+// Перетащить строку за ручку на место строки `toId`: мышь — те же события указателя, что и палец
+async function dragRow(page, list, fromId, toId) {
+  const handle = await list.locator(`[data-track="${fromId}"] [data-music-drag]`).boundingBox();
+  const target = await list.locator(`[data-track="${toId}"]`).boundingBox();
+  const x = handle.x + handle.width / 2;
+  await page.mouse.move(x, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, target.y + target.height / 2, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function waitRows(page, list, expected) {
+  await list.locator('[data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.waitForFunction(([root, want]) => [...root.querySelectorAll('[data-track]')]
+    .map((row) => row.dataset.track).join() === want, [await list.elementHandle(), expected.join()],
+  { timeout: STEP_TIMEOUT_MS });
+}
 
 async function openMusic(page) {
   const rail = page.locator('#FoldersSidebar');
@@ -110,6 +130,12 @@ try {
   await music.getByRole('searchbox').fill('');
   console.log('OK: поиск, «играть следующим», пустой результат');
 
+  // ── Очередь: порядок перетаскиванием за ручку, играющий трек не меняется ─
+  await dragRow(page, side.locator('[data-music-queue]'), 't1', 't2');
+  await waitRows(page, side.locator('[data-music-queue]'), ['t2', 't1', 't3', 't4']);
+  await side.locator('[data-music-now]').filter({ hasText: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: очередь переставлена перетаскиванием');
+
   // ── Плеер вне модуля: виджет в боковой панели ─────────────────────────────
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   const widget = page.locator('#FoldersSidebar [data-music-widget]');
@@ -165,13 +191,16 @@ try {
   await full.getByRole('heading', { name: 'Glass Harbor' }).waitFor();
   await full.getByRole('button', { name: /^Queue/ }).click();
   await full.locator('[aria-expanded="true"]').waitFor();
+  // Телефон: та же ручка в очереди полного плеера
+  await dragRow(page, full, 't1', 't2');
+  await waitRows(page, full, ['t1', 't2', 't3', 't4']);
   await full.getByRole('button', { name: 'Collapse' }).click();
   await full.waitFor({ state: 'detached' });
   await ribbon.waitFor();
   await mini.waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
-  console.log('OK: телефон — полный плеер из полосы, следующий трек, очередь и возврат ленты');
+  console.log('OK: телефон — полный плеер из полосы, следующий трек, очередь перетаскиванием и возврат ленты');
 
   // ── «Найти и скачать»: уверенное совпадение качается само ─────────────────
   await page.setViewportSize(WIDE);
@@ -295,7 +324,7 @@ try {
     }, expected.join(), { timeout: STEP_TIMEOUT_MS });
   };
   await waitOrder(['t1', 't3']);
-  await opened.getByRole('button', { name: 'Move down: Северный ветер' }).click();
+  await dragRow(page, opened, 't1', 't3');
   await waitOrder(['t3', 't1']);
   await opened.getByRole('button', { name: 'Play', exact: true }).click();
   await wideSide.locator('[data-music-now]').filter({ hasText: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -346,11 +375,49 @@ try {
   await backInMusic.locator('aside [data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: трек отправлен в чат карточкой и играет из неё');
 
-  // ── «Загруженное»: альбом на устройстве играет без сети ───────────────────
+  // ── Плейлист в чат: карточка, «Открыть», «Сохранить к себе», «Слушать» ────
   const backSide = backInMusic.locator('aside');
   await backSide.getByRole('button', { name: 'Pause' }).click();
+  await backInMusic.locator('[data-view="playlists"]').click();
+  await backInMusic.locator('[data-music-playlists]').getByRole('button', { name: /В дорогу/ }).click();
+  await backInMusic.locator('[data-music-playlist] [data-music-playlist-to-chat]').click();
+  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().click();
+  await page.getByText('Playlist sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
+  const playlistCard = page.locator('[data-music-playlist-card="В дорогу"]');
+  await playlistCard.getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await playlistCard.getByText(/^1 track/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#LeftColumn .chat-list').getByText('Playlist: В дорогу').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await playlistCard.getByRole('button', { name: 'Open', exact: true }).click();
+  const sharedSheet = page.locator('[data-music-playlist-sheet]');
+  await sharedSheet.locator('[data-track="t1"]').getByText('Северный ветер').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sharedSheet.getByRole('button', { name: 'Save to my playlists' }).click();
+  await page.getByText('Playlist saved to your playlists').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sharedSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await playlistCard.getByRole('button', { name: 'Listen', exact: true }).click();
+  await openMusic(page);
+  await backSide.locator('[data-music-now]').filter({ hasText: 'Северный ветер' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Первый трек короткий (4 с): к этому моменту он может уже доиграть
+  const pauseAfterListen = backSide.getByRole('button', { name: 'Pause' });
+  if (await pauseAfterListen.isVisible()) await pauseAfterListen.click();
+  await backInMusic.locator('[data-view="playlists"]').click();
+  await backInMusic.locator('[data-music-playlists]').getByRole('button', { name: /В дорогу.*1 track/ }).nth(1)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: плейлист отправлен в чат карточкой, открыт, сохранён к себе и играет');
+
+  // ── «Загруженное»: один трек и альбом на устройстве играют без сети ───────
   await backInMusic.locator('[data-view="offline"]').click();
   await backInMusic.locator('[data-music-offline="0"] [data-music-empty]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('[data-view="albums"]').click();
+  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  const albumTracks = backInMusic.locator('[data-music-tracks]');
+  await albumTracks.locator('[data-track="t2"] [data-music-offline-track="none"]').click();
+  await albumTracks.locator('[data-track="t2"] [data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await backInMusic.locator('[data-view="offline"]').click();
+  await backInMusic.locator('[data-music-offline="1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: один трек загружен на устройство из меню трека');
   await backInMusic.locator('[data-view="albums"]').click();
   await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
   await backInMusic.locator('[data-music-save-offline]').click();

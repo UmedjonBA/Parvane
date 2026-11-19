@@ -1,5 +1,8 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useMemo, useState,
+} from '../../../lib/teact/teact';
 
+import type { MusicTrack } from '../../../api/parvane/musicApi';
 import type { ApiMusicTrackCard } from '../../../api/types';
 
 import buildClassName from '../../../util/buildClassName';
@@ -14,6 +17,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useModuleGate from '../../../hooks/useModuleGate';
 
 import Icon from '../../common/icons/Icon';
+import MusicOfflineButton from '../../parvane/music/MusicOfflineButton';
 import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
 import kit from '../../parvane/notes/PvKit.module.scss';
@@ -34,6 +38,20 @@ const MusicTrackCard = ({ track }: OwnProps) => {
   // Чей это трек, известно после сведений о «Музыке»: до них карточка только показывает
   const isOwnServer = info ? info.server === track.server : undefined;
   const canPlay = Boolean(isOwnServer && info?.isEnabled && isMusicOn);
+  // «Скачать для офлайна» (доска `MusicChat`): в «Загруженном» трек виден с подписями карточки
+  const offlineTrack = useMemo<MusicTrack>(() => ({
+    id: track.trackId,
+    title: track.title,
+    artist: track.artist,
+    album: '',
+    albumId: '',
+    artistId: '',
+    durationSecs: track.durationSecs,
+    coverId: '',
+    trackNo: 0,
+    year: 0,
+    isStarred: false,
+  }), [track]);
 
   useEffect(() => {
     if (isMusicOn && !getMusicInfo()) void loadMusicInfo().catch(() => undefined);
@@ -83,6 +101,7 @@ const MusicTrackCard = ({ track }: OwnProps) => {
           <div className={styles.title}>{track.title}</div>
           {track.artist && <div className={styles.artist}>{track.artist}</div>}
         </div>
+        {canPlay && <MusicOfflineButton track={offlineTrack} />}
       </div>
       <div className={styles.source}>
         <Icon name="volume-1" className={styles.sourceIcon} />

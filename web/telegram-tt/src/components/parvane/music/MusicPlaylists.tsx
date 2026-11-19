@@ -11,6 +11,7 @@ import { playTracks } from './musicPlayer';
 import {
   actOnPlaylists, getPlaylists, getPlaylistsStatus, loadPlaylistTracks, refreshPlaylists,
 } from './musicPlaylists';
+import useDragReorder from './useDragReorder';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
@@ -19,6 +20,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvEmpty from '../notes/PvEmpty';
 import PvSkeleton from '../notes/PvSkeleton';
+import MusicSendDialog from './MusicSendDialog';
 import MusicTrackRow from './MusicTrackRow';
 
 import kit from '../notes/PvKit.module.scss';
@@ -50,6 +52,7 @@ const MusicPlaylists = ({
   const [newName, setNewName] = useState('');
   const [libraryTracks, setLibraryTracks] = useState<Map<string, MusicTrack>>();
   const [isDeleteAsked, askDelete, cancelDelete] = useFlag();
+  const [isSendOpen, openSend, closeSend] = useFlag();
   const playlist = playlistId ? playlists.find((item) => item.id === playlistId) : undefined;
   const trackIdsKey = playlist?.items.map((item) => item.trackId).join('\n');
 
@@ -150,9 +153,11 @@ const MusicPlaylists = ({
     void actOnPlaylists({ action: 'remove', itemId: rows[index].itemId });
   });
 
+  // Место строки считает движок (MUSIC-2): перестановка — правка одной записи
   const handleMove = useLastCallback((index: number, toIndex: number) => {
     void actOnPlaylists({ action: 'move', itemId: rows[index].itemId, toIndex });
   });
+  const { handlers: drag, getRowState } = useDragReorder(rows.length, handleMove);
 
   function renderList(items: MusicPlaylist[]) {
     return (
@@ -225,6 +230,11 @@ const MusicPlaylists = ({
               {lang('MusicOfflineSave')}
             </button>
           )}
+          {Boolean(rows.length) && (
+            <button type="button" className={kit.btn} data-music-playlist-to-chat onClick={openSend}>
+              {lang('MusicSendToChat')}
+            </button>
+          )}
           <button
             type="button"
             className={buildClassName(kit.btn, isDeleteAsked && kit.btnDanger)}
@@ -248,14 +258,17 @@ const MusicPlaylists = ({
                 note={row.isMissing ? lang('MusicTrackMissing') : undefined}
                 canRemove
                 removeLabel={lang('MusicPlaylistRemove', { name: row.track.title })}
-                lastIndex={rows.length - 1}
+                dragLabel={lang('MusicPlaylistDrag', { name: row.track.title })}
+                dragState={getRowState(index)}
+                drag={drag}
+                canSaveOffline
                 onPlay={handlePlay}
                 onRemove={handleRemove}
-                onMove={handleMove}
               />
             ))}
           </ul>
         )}
+        <MusicSendDialog playlist={isSendOpen ? opened : undefined} onClose={closeSend} />
       </div>
     );
   }

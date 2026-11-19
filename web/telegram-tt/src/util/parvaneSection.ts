@@ -1,5 +1,8 @@
 import type { PlannerCalendarView } from '../components/parvane/planner/plannerModel';
+import type { LaunchTarget } from './launchTarget';
 
+import { LAUNCH_PARAM, parseLaunchTarget, stripLaunchParam } from './launchTarget';
+import { getIsModuleOn } from './parvaneModules';
 import { createSignal } from './signals';
 
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
@@ -303,37 +306,58 @@ export function getIsContactsFromProfile() {
   return isContactsFromProfile;
 }
 
-// Ярлыки установленного приложения (долгое нажатие на значок, `shortcuts` манифеста): `?open=<куда>` в адресе
-// запуска. Разбирается один раз при загрузке и убирается из адреса, чтобы перезагрузка не повторяла переход
-const LAUNCH_PARAM = 'open';
+// Адрес запуска `?open=<куда>` (ярлыки установленного приложения, «Поделиться в Parvane»): разбирается один раз
+// при загрузке и убирается из адреса, чтобы перезагрузка не повторяла переход. То, что требует вошедшего
+// приложения («Новое сообщение», экран «Поделиться»), ждёт в запросе запуска — его забирает `ParvaneSystemHost`
+export type LaunchRequest = 'compose' | 'share';
+const [getLaunchRequest, setLaunchRequest] = createSignal<LaunchRequest | undefined>(undefined);
+
+export { getLaunchRequest };
+
+export function consumeLaunchRequest() {
+  setLaunchRequest(undefined);
+}
 
 function applyLaunchTarget() {
-  const url = new URL(window.location.href);
-  const target = url.searchParams.get(LAUNCH_PARAM);
-  if (!target) return;
-  url.searchParams.delete(LAUNCH_PARAM);
-  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  const target = parseLaunchTarget(window.location.search, getIsModuleOn);
+  if (new URLSearchParams(window.location.search).has(LAUNCH_PARAM)) {
+    window.history.replaceState(window.history.state, '', stripLaunchParam(window.location.href));
+  }
+  if (target) openLaunchTarget(target);
+}
+
+/** Перейти по адресу запуска (ярлык, «Поделиться», нажатие на уведомление закрытого приложения). */
+export function openLaunchTarget(target: LaunchTarget) {
   switch (target) {
     case 'chats':
       setParvaneSection('messenger');
+      break;
+    case 'compose':
+    case 'share':
+      setParvaneSection('messenger');
+      setLaunchRequest(target);
       break;
     case 'today':
     case 'calendar':
       openPlannerView(target);
       break;
-    case 'health':
-      openHealth();
-      break;
     case 'entry':
       requestPlannerAdd();
+      break;
+    case 'health':
+      openHealth();
       break;
     case 'notes':
       openNotes('notes');
       break;
+    case 'newNote':
+      requestModuleAdd('note');
+      break;
     case 'files':
       openFiles();
       break;
-    default:
+    case 'music':
+      setParvaneSection('music');
       break;
   }
 }

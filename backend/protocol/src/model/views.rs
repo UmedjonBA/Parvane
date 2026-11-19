@@ -430,6 +430,29 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
             put(&mut o, "text", json!(char_prefix(&t.text, 600)));
             o
         }
+        // PLAYLIST-1: плейлист — название и треки по порядку; трек без id не показывается
+        K::MusicPlaylist(p) => {
+            let mut o = Map::new();
+            o.insert("kind".into(), json!("music_playlist"));
+            o.insert("name".into(), json!(p.name));
+            put(&mut o, "track_server", json!(p.server));
+            let tracks: Vec<Value> = p
+                .tracks
+                .iter()
+                .filter(|t| !t.track_id.is_empty())
+                .map(|t| {
+                    let mut x = Map::new();
+                    x.insert("track_id".into(), json!(t.track_id));
+                    x.insert("title".into(), json!(t.title));
+                    put(&mut x, "artist", json!(t.artist));
+                    put(&mut x, "duration_secs", json!(t.duration_secs));
+                    Value::Object(x)
+                })
+                .collect();
+            o.insert("playlist_tracks".into(), Value::Array(tracks));
+            put(&mut o, "text", json!(p.text));
+            o
+        }
         K::Article(a) => {
             let mut o = Map::new();
             o.insert("kind".into(), json!("article"));
@@ -757,6 +780,27 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
                 set(&mut t, k, c.get(k));
             }
             ("music_track", Value::Object(t))
+        }
+        "music_playlist" => {
+            let mut p = Map::new();
+            set(&mut p, "name", c.get("name"));
+            set(&mut p, "server", c.get("track_server"));
+            if let Some(Value::Array(list)) = c.get("playlist_tracks") {
+                let tracks: Vec<Value> = list
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .map(|t| {
+                        let mut x = Map::new();
+                        for k in ["track_id", "title", "artist", "duration_secs"] {
+                            set(&mut x, k, t.get(k));
+                        }
+                        Value::Object(x)
+                    })
+                    .collect();
+                set(&mut p, "tracks", Some(&Value::Array(tracks)));
+            }
+            set(&mut p, "text", c.get("text"));
+            ("music_playlist", Value::Object(p))
         }
         "article" => {
             let mut a = Map::new();
@@ -1091,7 +1135,10 @@ pub fn wire_to_body(c: &Map<String, Value>, has: &dyn Fn(&str) -> bool) -> Optio
         "article" if has("article") => V::Article(ViewArticle { title: str_of(c, "title"), markdown: str_of(c, "markdown") }),
         // Без возможности — текст для клиентов без раздела (TASK-1, CLOUD-1, ARTICLE-1); жалоба — текстом
         // Трек «Музыки» (TRACK-1): клиентам без раздела — текстом; свой вид показа появится вместе с «Музыкой» там
-        "task_offer" | "cloud_invite" | "article" | "mod_report" | "music_track" => return Some(text_body(str_of(c, "text"))),
+        // Плейлист (PLAYLIST-1) — так же
+        "task_offer" | "cloud_invite" | "article" | "mod_report" | "music_track" | "music_playlist" => {
+            return Some(text_body(str_of(c, "text")))
+        }
         "task_response" => V::Service(ViewService {
             kind: if bool_of(c, "accepted") { "task_accepted".into() } else { "task_declined".into() },
             text: str_of(c, "text"),
@@ -1274,5 +1321,28 @@ mod tests {
         let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
         let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
         assert_eq!(text.text, "Lampa — Ночной автобус");
+    }
+
+    /// PLAYLIST-1: плейлист проходит туда и обратно с порядком треков; клиент без раздела получает текст.
+    #[test]
+    fn music_playlist_roundtrip_and_text_fallback() {
+        let wire = json!({
+            "kind": "music_playlist", "name": "Для работы", "track_server": "music.example",
+            "playlist_tracks": [
+                {"track_id": "t2", "title": "Ночной автобус", "artist": "Lampa", "duration_secs": 222},
+                {"track_id": "t1", "title": "Берег"},
+            ],
+            "text": "🎵 Для работы",
+        });
+        let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
+        let Some(content::Kind::MusicPlaylist(p)) = &content.kind else { panic!("не плейлист: {content:?}") };
+        assert_eq!((p.name.as_str(), p.server.as_str(), p.tracks.len()), ("Для работы", "music.example", 2));
+        assert_eq!((p.tracks[0].track_id.as_str(), p.tracks[1].track_id.as_str()), ("t2", "t1"));
+        assert_eq!(content_to_wire(&content).unwrap(), wire);
+        assert_eq!(class_of(&content), Class::Message);
+        assert!(crate::msg::is_trackable(&content));
+        let body = wire_to_body(wire.as_object().unwrap(), &|_| true).unwrap();
+        let Some(view_body::Kind::Text(text)) = body.kind else { panic!("не текст") };
+        assert_eq!(text.text, "🎵 Для работы");
     }
 }

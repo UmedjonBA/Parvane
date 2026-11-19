@@ -438,6 +438,15 @@ export interface ApiMusicTrackCard {
   durationSecs: number;
 }
 
+// Parvane (PLAYLIST-1): плейлист «Музыки» — название и треки общей библиотеки сервера
+export interface ApiMusicPlaylistCard {
+  mediaType: 'musicPlaylist';
+  name: string;
+  // Домен сервера библиотеки
+  server: string;
+  tracks: { trackId: string; title: string; artist: string; durationSecs: number }[];
+}
+
 // Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown
 export interface ApiArticle {
   mediaType: 'article';
@@ -782,6 +791,7 @@ export type MediaContent = {
   taskOffer?: ApiTaskOffer;
   article?: ApiArticle;
   musicTrack?: ApiMusicTrackCard;
+  musicPlaylist?: ApiMusicPlaylistCard;
   modReport?: ApiModReport;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;

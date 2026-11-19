@@ -1,6 +1,7 @@
 import { memo } from '../../../lib/teact/teact';
 
 import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { DragHandlers, DragRowState } from './useDragReorder';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatTrackTime } from './musicFormat';
@@ -10,6 +11,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
+import MusicOfflineButton from './MusicOfflineButton';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
@@ -27,8 +29,12 @@ type OwnProps = {
   isMissing?: boolean;
   // Подпись крестика вместо «убрать из очереди»
   removeLabel?: string;
-  // Плейлист: индекс последней строки — у крайних строк стрелка выключена
-  lastIndex?: number;
+  // Очередь и плейлист: ручка перетаскивания с этой подписью
+  dragLabel?: string;
+  dragState?: DragRowState;
+  drag?: DragHandlers;
+  // Кнопка «загрузить на устройство» (доски `XpMusic`, `MusicChat`)
+  canSaveOffline?: boolean;
   // «Загруженное»: убрать трек из библиотеки сервера
   onDelete?: (track: MusicTrack) => void;
   onPlay: (index: number) => void;
@@ -37,14 +43,18 @@ type OwnProps = {
   onRemove?: (index: number) => void;
   onAddToPlaylist?: (track: MusicTrack) => void;
   onSendToChat?: (track: MusicTrack) => void;
-  // Плейлист: переставить строку на место `toIndex`
-  onMove?: (index: number, toIndex: number) => void;
 };
+
+const DRAG_STATE_CLASSES = {
+  dragged: styles.trackDragged,
+  above: styles.trackOver,
+  below: styles.trackOverBelow,
+} as const;
 
 // Parvane (spec 039): строка трека — обложка, название и исполнитель, длительность; нажатие играет
 const MusicTrackRow = ({
-  track, index, isCurrent, isPlaying, canRemove, note, isMissing, removeLabel, lastIndex,
-  onPlay, onStar, onAddNext, onRemove, onDelete, onAddToPlaylist, onSendToChat, onMove,
+  track, index, isCurrent, isPlaying, canRemove, note, isMissing, removeLabel, dragLabel, dragState, drag,
+  canSaveOffline, onPlay, onStar, onAddNext, onRemove, onDelete, onAddToPlaylist, onSendToChat,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -55,13 +65,17 @@ const MusicTrackRow = ({
   const handleDelete = useLastCallback(() => onDelete?.(track));
   const handleAddToPlaylist = useLastCallback(() => onAddToPlaylist?.(track));
   const handleSendToChat = useLastCallback(() => onSendToChat?.(track));
-  const handleMoveUp = useLastCallback(() => onMove?.(index, index - 1));
-  const handleMoveDown = useLastCallback(() => onMove?.(index, index + 1));
   const nowPlaying = isCurrent && isPlaying && lang('MusicNowPlaying');
   const artistLine = [track.artist, note, nowPlaying].filter(Boolean).join(' · ');
 
   return (
-    <li className={buildClassName(styles.track, isCurrent && styles.trackCurrent)} data-track={track.id}>
+    <li
+      className={buildClassName(
+        styles.track, isCurrent && styles.trackCurrent, dragState && DRAG_STATE_CLASSES[dragState],
+      )}
+      data-track={track.id}
+      data-drag-row={drag ? true : undefined}
+    >
       <button type="button" className={styles.trackMain} disabled={isMissing} onClick={handlePlay}>
         <MusicCover
           coverId={track.coverId}
@@ -115,28 +129,7 @@ const MusicTrackRow = ({
           <ParvaneIcon name="chat" isSmall />
         </button>
       )}
-      {onMove && (
-        <>
-          <button
-            type="button"
-            className={kit.ib}
-            aria-label={lang('MusicPlaylistMoveUp', { name: track.title })}
-            disabled={index === 0}
-            onClick={handleMoveUp}
-          >
-            <ParvaneIcon name="left" isSmall className={styles.turnUp} />
-          </button>
-          <button
-            type="button"
-            className={kit.ib}
-            aria-label={lang('MusicPlaylistMoveDown', { name: track.title })}
-            disabled={index === lastIndex}
-            onClick={handleMoveDown}
-          >
-            <ParvaneIcon name="left" isSmall className={styles.turnDown} />
-          </button>
-        </>
-      )}
+      {canSaveOffline && !isMissing && <MusicOfflineButton track={track} />}
       {onDelete && (
         <button
           type="button"
@@ -156,6 +149,22 @@ const MusicTrackRow = ({
           onClick={handleRemove}
         >
           <ParvaneIcon name="close" isSmall />
+        </button>
+      )}
+      {drag && (
+        <button
+          type="button"
+          className={styles.handle}
+          aria-label={dragLabel}
+          data-index={index}
+          data-music-drag
+          onPointerDown={drag.onPointerDown}
+          onPointerMove={drag.onPointerMove}
+          onPointerUp={drag.onPointerUp}
+          onPointerCancel={drag.onPointerCancel}
+          onKeyDown={drag.onKeyDown}
+        >
+          <ParvaneIcon name="grip" isSmall className={styles.handleIcon} />
         </button>
       )}
     </li>

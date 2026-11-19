@@ -944,6 +944,23 @@ function buildMessageContent(
           },
         }
         : { text: { text: content.text || `🎵 ${content.title || ''}` } };
+    // PLAYLIST-1: плейлист «Музыки» — карточка; треки играют из библиотеки сервера этого аккаунта
+    case 'music_playlist':
+      return content.playlist_tracks?.length
+        ? {
+          musicPlaylist: {
+            mediaType: 'musicPlaylist',
+            name: content.name || '',
+            server: content.track_server || '',
+            tracks: content.playlist_tracks.map((track) => ({
+              trackId: track.track_id,
+              title: track.title || '',
+              artist: track.artist || '',
+              durationSecs: track.duration_secs || 0,
+            })),
+          },
+        }
+        : { text: { text: content.text || `🎵 ${content.name || ''}` } };
     // ARTICLE-1: статья — карточка с окном чтения
     case 'article':
       return content.markdown !== undefined

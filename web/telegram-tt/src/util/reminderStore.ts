@@ -8,6 +8,8 @@ const STORE = 'kv';
 const KEY_RECORD = 'key';
 const DATA_RECORD = 'data';
 const SHOWN_RECORD = 'shown';
+// Отложенные «Через 10 мин» (spec 041 F2): страница добавляет их к ближайшим в `DATA_RECORD` сама
+const SNOOZE_RECORD = 'snoozed';
 // Пробуждение приходит не точно в срок: сработавшим считается всё, что наступит в ближайшую минуту
 const EARLY_MS = 60 * 1000;
 // Старое (устройство было выключено) не показывается — его допишет в «Избранное» открытое приложение
@@ -52,14 +54,44 @@ async function cryptoKey(db: IDBDatabase) {
 
 type Sealed = { iv: Uint8Array<ArrayBuffer>; data: ArrayBuffer };
 
-/** Страница: ближайшие напоминания (заменяют прежние). */
-export async function saveWorkerReminders(items: WorkerReminder[]) {
+async function writeSealed(record: string, items: WorkerReminder[]) {
   const db = await openDb();
   try {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const plain = new TextEncoder().encode(JSON.stringify(items));
     const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await cryptoKey(db), plain);
-    await write(db, DATA_RECORD, { iv, data } satisfies Sealed);
+    await write(db, record, { iv, data } satisfies Sealed);
+  } finally {
+    db.close();
+  }
+}
+
+async function readSealed(db: IDBDatabase, record: string): Promise<WorkerReminder[]> {
+  const sealed = await read<Sealed>(db, record);
+  if (!sealed) return [];
+  const key = await read<CryptoKey>(db, KEY_RECORD);
+  if (!key) return [];
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: sealed.iv }, key, sealed.data);
+  return JSON.parse(new TextDecoder().decode(plain)) as WorkerReminder[];
+}
+
+/** Страница: ближайшие напоминания (заменяют прежние). */
+export function saveWorkerReminders(items: WorkerReminder[]) {
+  return writeSealed(DATA_RECORD, items);
+}
+
+/** Страница: отложенные «Через 10 мин» (заменяют прежние). */
+export function saveWorkerSnoozes(items: WorkerReminder[]) {
+  return writeSealed(SNOOZE_RECORD, items);
+}
+
+/** Страница: отложенные напоминания этого устройства. */
+export async function loadWorkerSnoozes(): Promise<WorkerReminder[]> {
+  const db = await openDb();
+  try {
+    return await readSealed(db, SNOOZE_RECORD);
+  } catch {
+    return [];
   } finally {
     db.close();
   }
@@ -84,12 +116,7 @@ export async function clearWorkerReminders() {
 export async function takeDueWorkerReminders(now: number): Promise<WorkerReminder[]> {
   const db = await openDb();
   try {
-    const sealed = await read<Sealed>(db, DATA_RECORD);
-    if (!sealed) return [];
-    const key = await read<CryptoKey>(db, KEY_RECORD);
-    if (!key) return [];
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: sealed.iv }, key, sealed.data);
-    const items = JSON.parse(new TextDecoder().decode(plain)) as WorkerReminder[];
+    const items = await readSealed(db, DATA_RECORD);
     const shown = new Set(await read<string[]>(db, SHOWN_RECORD) || []);
     const due = items.filter(({ key: id, at }) => at <= now + EARLY_MS && at >= now - LATE_MS && !shown.has(id));
     if (due.length) {

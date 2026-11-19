@@ -168,7 +168,8 @@
 }
 
 .mixText {
-  font-size: 1.0625rem;
+  margin-top: 0.125rem;
+  font-size: 1.25rem;
   font-weight: var(--font-weight-semibold);
 }
 
@@ -558,10 +559,53 @@
   gap: 0.5rem;
 }
 
-.turnUp {
-  transform: rotate(90deg);
+.trackNo {
+  flex: none;
+  width: 1.25rem;
+  text-align: end;
 }
 
-.turnDown {
-  transform: rotate(-90deg);
+// Перетаскивание строки за ручку (очередь, плейлист)
+.handle {
+  touch-action: none;
+  cursor: grab;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.5rem;
+  height: 2.75rem;
+  padding: 0;
+  border: none;
+
+  color: var(--color-text-secondary);
+
+  background: none;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+.handleIcon {
+  stroke-width: 2.6;
+}
+
+.trackDragged {
+  opacity: 0.5;
+}
+
+.trackOver {
+  box-shadow: inset 0 2px 0 var(--pv-accent);
+}
+
+.trackOverBelow {
+  box-shadow: inset 0 -2px 0 var(--pv-accent);
+}
+
+// Трек на устройстве (доска `MusicPlayer`: «Загружено для офлайна»)
+.offlineOn {
+  color: var(--pv-aqua);
 }

@@ -1,11 +1,12 @@
 import type { SendMessageParams } from '../../types';
 import type {
-  ApiChat, ApiMessage, ApiMessageEntity, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
+  ApiChat, ApiMessage, ApiMessageEntity, ApiMusicPlaylistCard, ApiOnProgress, ApiSticker, ApiUpdate, ApiUser, ApiVideo,
 } from '../types';
 import type { ForwardOptions } from './forwardOptions';
 import type { GatewayConnection } from './gateway';
 import type { createLocalState } from './localState';
 import type { createMediaService } from './media';
+import type { PlaylistShareTrack } from './musicPlaylistContent';
 import type { PollStore } from './polls';
 import type { StoredPack } from './stickerPacks';
 import type { ParvaneStore } from './store';
@@ -30,6 +31,7 @@ import {
   albumFields, createAlbumIds, createAlbumSendQueue, quoteFromReplyInfo, replyInfoWithQuote, sendExtras,
   withMediaSpoiler,
 } from './messageExtras';
+import { buildMusicPlaylistContent } from './musicPlaylistContent';
 import {
   buildPvpkArchive,
   buildStickerId,
@@ -183,6 +185,15 @@ function musicTrackContent(track: {
     duration_secs: track.durationSecs,
     text: `🎵 ${[track.artist, track.title].filter(Boolean).join(' — ')}`.slice(0, MUSIC_LABEL_MAX),
   };
+}
+
+// PLAYLIST-1: пересылка карточки плейлиста — тем же снимком
+function playlistCardContent(playlist: ApiMusicPlaylistCard) {
+  return buildMusicPlaylistContent({
+    name: playlist.name,
+    server: playlist.server,
+    tracks: playlist.tracks.map((track) => ({ ...track, id: track.trackId })),
+  });
 }
 
 function articleFields(title: string, markdown: string) {
@@ -1691,10 +1702,11 @@ export function createMessageController(deps: MessageDependencies) {
       const fromAddress = currentStore.getAddressForId(fromChat.id) || '';
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       for (const message of messages) {
-        const { article, musicTrack } = message.content;
+        const { article, musicTrack, musicPlaylist } = message.content;
         const wireContent = article
           ? { kind: 'article', ...articleFields(article.title, article.markdown) }
-          : musicTrack ? musicTrackContent(musicTrack) : deps.media.messageToWireContent(message);
+          : musicTrack ? musicTrackContent(musicTrack)
+            : musicPlaylist ? playlistCardContent(musicPlaylist) : deps.media.messageToWireContent(message);
         if (!wireContent) continue;
         // Зашифрованное медиа: файл в облаке выдан только участникам исходного
         // чата, у нового получателя доступа нет (грант только при загрузке) —
@@ -1923,6 +1935,31 @@ export function createMessageController(deps: MessageDependencies) {
       };
       await publishInner(toAddress, content, uuid);
       // v2 свою операцию назад не присылает: строка идёт обычным конвейером (как статья)
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
+    // Плейлист «Музыки» в чат (PLAYLIST-1): название и треки библиотеки своего сервера по порядку
+    async parvaneSendMusicPlaylist({ chatId, playlist }: {
+      chatId: string;
+      playlist: { name: string; tracks: PlaylistShareTrack[] };
+    }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chatId);
+      if (!toAddress || !playlist.tracks.length) return false;
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        ...buildMusicPlaylistContent({
+          name: playlist.name,
+          server: currentStore.self.split('@')[1] || '',
+          tracks: playlist.tracks,
+        }),
+        ttl_secs: ttlSecs || undefined,
+      };
+      await publishInner(toAddress, content, uuid);
       await deps.sync.applyExternal({
         id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
       });

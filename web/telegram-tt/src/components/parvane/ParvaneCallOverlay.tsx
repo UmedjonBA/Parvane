@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from '../../lib/teact/teact';
 
 import type { CallInfo } from './call/callTypes';
 
+import { closeCallNotification, showCallNotification } from '../../util/pageNotify';
 import { callApi } from '../../api/gramjs';
 import { formatCallDuration, getWindowCall, hasVideoTrack } from './call/callTypes';
 
@@ -71,6 +72,15 @@ const ParvaneCallOverlay = () => {
       tone.src = '';
     };
   }, [state]);
+
+  // Входящий при скрытом окне — системное уведомление с «Ответить» и «Отклонить» (spec 041 F2, доска `ZpSystem`)
+  const incomingCallId = state === 'incoming' ? call?.incoming?.callId : undefined;
+  const incomingName = call?.pendingGroupTitle || call?.peerName || call?.incoming?.from;
+  useEffect(() => {
+    if (!incomingCallId) return undefined;
+    showCallNotification(incomingCallId, incomingName || '');
+    return closeCallNotification;
+  }, [incomingCallId, incomingName]);
 
   const handleAccept = useLastCallback(() => callParvane('parvaneAcceptCall'));
   const handleHangup = useLastCallback(() => callParvane('parvaneHangUp'));

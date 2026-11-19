@@ -39,8 +39,10 @@ import { buildCollectionByKey } from './iteratees';
 import { getTranslationFn } from './localization';
 import * as mediaLoader from './mediaLoader';
 import { oldTranslate } from './oldLangProvider';
+import { buildPageNotifyButtons } from './pageNotify';
 import { debounce } from './schedulers';
 import { getServerTime } from './serverTime';
+import { buildMessageNotifyBody, buildNotifyTitle } from './systemNotify';
 
 import MessageSummary from '../components/common/MessageSummary';
 
@@ -381,25 +383,28 @@ function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: A
   const { isScreenLocked } = global.passcode;
   const isSelf = chat.id === global.currentUserId;
 
-  let body: string;
-  if (
-    !isScreenLocked
-    && getShouldShowMessagePreview(chat, selectNotifyDefaults(global), selectNotifyException(global, chat.id))
-  ) {
-    const senderName = sender ? getMessageSenderName(getTranslationFn(), chat.id, sender) : undefined;
-    let summary = jsxToHtml(<span><MessageSummary message={message} /></span>)[0].textContent || '';
-
+  // Доска `ZpSystem` (spec 041 F2): «Parvane · Чаты», чат первой строкой; текст — только если он включён в
+  // настройках уведомлений, иначе «Новое сообщение»
+  const lang = getTranslationFn();
+  const isTextShown = !isScreenLocked
+    && getShouldShowMessagePreview(chat, selectNotifyDefaults(global), selectNotifyException(global, chat.id));
+  let summary = '';
+  if (isTextShown) {
+    summary = jsxToHtml(<span><MessageSummary message={message} /></span>)[0].textContent || '';
     if (hasReaction) {
-      const emoji = getReactionEmoji(reaction);
-      summary = oldTranslate('PushReactText', [emoji, summary]);
+      summary = oldTranslate('PushReactText', [getReactionEmoji(reaction), summary]);
     }
-
-    body = senderName ? `${senderName}: ${summary}` : summary;
-  } else {
-    body = getTranslationFn()('NotificationMessageTextHidden');
   }
+  const body = buildMessageNotifyBody({
+    chatTitle: getChatTitle(oldTranslate, chat, isSelf),
+    senderName: sender && isTextShown ? getMessageSenderName(lang, chat.id, sender) : undefined,
+    summary,
+    isTextShown,
+    isLocked: Boolean(isScreenLocked),
+    hiddenText: lang('NotificationMessageTextHidden'),
+  });
 
-  let title = isScreenLocked ? APP_NAME : getChatTitle(oldTranslate, chat, isSelf);
+  let title = buildNotifyTitle(APP_NAME, lang('ParvaneSectionMessenger'));
 
   if (message.isSilent) {
     title += ' 🔕';
@@ -522,6 +527,8 @@ export async function notifyAboutMessage({
           shouldReplaceHistory: true,
           isSilent: isSilent || message.isSilent,
           reaction: activeReaction?.reaction,
+          // Экран под PIN — без кнопок: «Ответить» открыл бы чат мимо блокировки
+          actions: getGlobal().passcode.isScreenLocked ? undefined : buildPageNotifyButtons('message'),
         },
       });
     }

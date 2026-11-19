@@ -3,6 +3,7 @@ import {
 } from 'vitest';
 
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
+import type { WorkerReminder } from '../../util/reminderStore';
 
 import { createReminderScheduler } from './reminders';
 
@@ -30,6 +31,7 @@ function device() {
   const alarms: number[][] = [];
   const saved: unknown[] = [];
   const shown = new Set<string>();
+  const snoozed: WorkerReminder[] = [];
   const scheduler = createReminderScheduler({
     stateJson: () => '{}',
     isReady: () => true,
@@ -59,9 +61,15 @@ function device() {
     canKeepText: () => Promise.resolve(true),
     formatMessage: ({ title }) => `⏰ ${title}`,
     log: () => undefined,
+    ringSnoozed: ({ key }) => rung.push(key),
+    loadSnoozes: () => Promise.resolve([...snoozed]),
+    saveSnoozes: (items) => {
+      snoozed.splice(0, snoozed.length, ...items);
+      return Promise.resolve();
+    },
   });
   return {
-    scheduler, sent, rung, alarms, saved,
+    scheduler, sent, rung, alarms, saved, snoozed,
   };
 }
 
@@ -138,6 +146,38 @@ describe('планировщик напоминаний', () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(a.rung).toEqual([]);
     expect(a.sent).toEqual(['⏰ Отчёт']);
+    a.scheduler.stop();
+  });
+
+  it('«Через 10 мин»: будильник на сервере и для service worker, звенит один раз через 10 минут', async () => {
+    const a = device();
+    a.scheduler.start();
+    await vi.advanceTimersByTimeAsync(2000);
+    const snoozedAt = Date.now();
+    await a.scheduler.snooze('t1@2026-10-20@15', 'Отчёт');
+    const at = snoozedAt + 10 * 60 * 1000;
+    expect(a.alarms.at(-1)).toEqual([at]);
+    expect(a.saved.at(-1)).toEqual([{ key: `t1@2026-10-20@15~${at}`, at, title: 'Отчёт' }]);
+    expect(a.snoozed).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+    expect(a.rung).toEqual([]);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(a.rung).toEqual([`t1@2026-10-20@15~${at}`]);
+    expect(a.snoozed).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(a.rung).toHaveLength(1);
+    a.scheduler.stop();
+  });
+
+  it('повторное «Через 10 мин» заменяет прежнее откладывание той же записи', async () => {
+    const a = device();
+    a.scheduler.start();
+    await vi.advanceTimersByTimeAsync(2000);
+    await a.scheduler.snooze('t1@2026-10-20@15', 'Отчёт');
+    await vi.advanceTimersByTimeAsync(60_000);
+    await a.scheduler.snooze(a.snoozed[0].key, 'Отчёт');
+    expect(a.snoozed).toHaveLength(1);
+    expect(a.snoozed[0].at).toBe(Date.now() + 10 * 60 * 1000);
     a.scheduler.stop();
   });
 });

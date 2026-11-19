@@ -6,7 +6,10 @@
     "scope": "./",
     "lang": "en",
     "dir": "ltr",
-    "categories": ["social", "productivity"],
+    "categories": [
+        "social",
+        "productivity"
+    ],
     "icons": [
         {
             "src": "icon-square-192x192.png",
@@ -53,7 +56,9 @@
             "files": [
                 {
                     "name": "files",
-                    "accept": "*/*"
+                    "accept": [
+                        "*/*"
+                    ]
                 }
             ]
         }
@@ -64,9 +69,9 @@
     "id": "./",
     "shortcuts": [
         {
-            "name": "Chats",
-            "short_name": "Chats",
-            "url": "./?open=chats",
+            "name": "New message",
+            "short_name": "Message",
+            "url": "./?open=compose",
             "icons": [
                 {
                     "src": "icon-192x192.png",
@@ -76,7 +81,7 @@
             ]
         },
         {
-            "name": "Today",
+            "name": "Today's plan",
             "short_name": "Today",
             "url": "./?open=today",
             "icons": [
@@ -88,9 +93,9 @@
             ]
         },
         {
-            "name": "Notes",
-            "short_name": "Notes",
-            "url": "./?open=notes",
+            "name": "New note",
+            "short_name": "Note",
+            "url": "./?open=new-note",
             "icons": [
                 {
                     "src": "icon-192x192.png",
@@ -100,9 +105,9 @@
             ]
         },
         {
-            "name": "New entry",
-            "short_name": "Entry",
-            "url": "./?open=entry",
+            "name": "Music",
+            "short_name": "Music",
+            "url": "./?open=music",
             "icons": [
                 {
                     "src": "icon-192x192.png",

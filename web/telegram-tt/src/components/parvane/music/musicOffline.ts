@@ -34,6 +34,8 @@ export { getOfflineState };
 const queue: MusicTrack[] = [];
 const objectUrls = new Map<string, string>();
 let isRunning = false;
+// Трек, который качается сейчас (из очереди он уже взят)
+let currentId: string | undefined;
 
 // Выход из аккаунта: файлы стёрты вместе с кэшем (`deviceWipe.ts`), в памяти вкладки их списка тоже нет
 if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_WIPED_EVENT, forgetOffline);
@@ -73,6 +75,11 @@ export function isTrackOffline(trackId: string) {
   return getOfflineState().entries.some((entry) => entry.track.id === trackId);
 }
 
+/** Трек ждёт загрузки либо качается сейчас. */
+export function isTrackSaving(trackId: string) {
+  return currentId === trackId || queue.some((item) => item.id === trackId);
+}
+
 export function getOfflineBytes(state = getOfflineState()) {
   return state.entries.reduce((sum, entry) => sum + entry.bytes, 0);
 }
@@ -108,7 +115,9 @@ async function runQueue() {
   isRunning = true;
   while (queue.length) {
     const track = queue.shift()!;
+    currentId = track.id;
     const outcome = await saveOne(track);
+    currentId = undefined;
     if (outcome !== 'saved') {
       // Места нет либо сервер недоступен: остальное не качается, пока человек не попросит снова
       queue.length = 0;
