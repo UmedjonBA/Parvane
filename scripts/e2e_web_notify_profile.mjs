@@ -14,6 +14,7 @@ import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
   clickUntil,
+  dumpDiagJournal,
   findMessage,
   openPrivateChatStrict,
   preparePage,
@@ -26,6 +27,7 @@ import {
 
 const PASSWORD = 'Parvane-notify-e2e-password';
 const SIBLING_SYNC_TIMEOUT_MS = 60000;
+const PROFILE_REFRESH_TIMEOUT_MS = 10000;
 
 // Число замученных чатов по глобальному стейту tt (диаг-хук e2e-сборки)
 async function mutedChatCount(page) {
@@ -127,13 +129,15 @@ try {
   const alice = `np-alice-${suffix}@local`;
   const bob = `np-bob-${suffix}@local`;
   const hello = `np-hello-${suffix}`;
-  const bio = `Bio from dev1 ${suffix}`;
+  const originalBio = `Bio from dev1 ${suffix}`;
+  const bio = `Updated bio from dev1 ${suffix}`;
 
+  console.log('Шаг: Вход первого устройства');
   const aliceDev1 = await preparePage(aliceDev1Context, alice, PASSWORD);
 
   // ── dev1 правит bio ДО того, как bob впервые резолвит alice ───────────────
   await openEditProfile(aliceDev1.page);
-  await aliceDev1.page.getByLabel('Bio').fill(bio);
+  await aliceDev1.page.getByLabel('Bio').fill(originalBio);
   await aliceDev1.page.getByRole('button', { name: 'Save', exact: true }).click();
   // FAB прячется классом (не display) — ждём потерю класса revealed
   await aliceDev1.page.waitForFunction(() => {
@@ -144,6 +148,7 @@ try {
   console.log('OK: dev1 сохранил bio');
 
   // ── Чат alice↔bob существует на обеих сторонах ────────────────────────────
+  console.log('Шаг: Вход Боба и открытие чата');
   const bobSession = await preparePage(bobContext, bob, PASSWORD);
   await openPrivateChatStrict(aliceDev1.page, bob);
   await sendText(aliceDev1.page, hello);
@@ -152,9 +157,20 @@ try {
 
   // ── bob видит bio alice в профиле ─────────────────────────────────────────
   await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
-  await bobSession.page.locator('#RightColumn').getByText(bio, { exact: true })
+  await bobSession.page.locator('#RightColumn').getByText(originalBio, { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: bob видит bio alice в профиле');
+
+  // Профиль у Боба остаётся открытым. После сохранения не посылаем сообщений и не обновляем страницу
+  console.log('Шаг: обновление bio в уже открытом профиле');
+  await openEditProfile(aliceDev1.page);
+  await aliceDev1.page.getByLabel('Bio').fill(bio);
+  await saveProfileFab(aliceDev1.page);
+  await bobSession.page.locator('#RightColumn').getByText(bio, { exact: true })
+    .waitFor({ state: 'visible', timeout: PROFILE_REFRESH_TIMEOUT_MS });
+  console.log('OK: bio изменилось в открытом профиле без переходов');
+  await closeSettings(aliceDev1.page);
+
 
   // ── Username только для чтения, без ошибок ────────────────────────────────
   const aliceNick = alice.split('@')[0];
@@ -168,11 +184,13 @@ try {
 
   // ── Личный канал: группа alice с bob ──────────────────────────────────────
   await closeSettings(aliceDev1.page);
+  console.log('Шаг: Создание группы для личного канала');
   const channelTitle = `NP-G-${suffix.slice(-6)}`;
   await createGroupWith(aliceDev1.page, bob, channelTitle);
 
   // ── Дата рождения (нативная модалка), цвет имени, телефон, личный канал ───
   await openEditProfile(aliceDev1.page);
+  console.log('Шаг: Сохранение даты рождения, цвета, телефона и личного канала');
   await aliceDev1.page.locator('.ListItem').filter({ hasText: 'Birthday' }).first().click();
   const modal = aliceDev1.page.locator('.modal-dialog').filter({ hasText: 'Date of Birth' });
   await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -202,8 +220,7 @@ try {
   const phone = `+7900${String(Date.now()).slice(-6)}`;
   await aliceDev1.page.getByLabel('Phone', { exact: true }).fill(phone);
   await saveProfileFab(aliceDev1.page);
-  // SC-011: отсчёт от сохранения; живого пуша профиля в контракте нет — bob
-  // видит поля, открыв профиль alice (fetchFullUser перечитывает identity)
+  // SC-011: отсчёт от сохранения, профиль у Боба остался открыт
   const profileSavedAt = Date.now();
   await closeSettings(aliceDev1.page);
 
@@ -251,13 +268,11 @@ try {
     }
     await closeSettings(page);
   };
-  await bobSession.page.keyboard.press('Escape');
-  await openPrivateChatStrict(bobSession.page, alice);
-  await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').first().click();
+  console.log('Шаг: проверка публичных полей в открытом профиле');
   await expectProfile('bob live');
   const profileVisibleMs = Date.now() - profileSavedAt;
   console.log(`bob sees alice's profile fields ${profileVisibleMs} ms after save`);
-  assert(profileVisibleMs <= 10000, `profile fields reached bob in ${profileVisibleMs} ms (SC-011: ≤ 10 s)`);
+  assert(profileVisibleMs <= PROFILE_REFRESH_TIMEOUT_MS, `profile fields reached bob in ${profileVisibleMs} ms (SC-011: ≤ 10 s)`);
   // Заголовок секции личного канала переведён, а не сырой ключ (FR-003)
   await bobSession.page.locator('#RightColumn').getByText('Channel', { exact: true }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -329,6 +344,7 @@ try {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [index, context] of browser.contexts().entries()) {
     for (const [pageIndex, page] of context.pages().entries()) {
+      await dumpDiagJournal(page, `notify-profile ${index}/${pageIndex}`, 100);
       await page.screenshot({ path: `${dir}notify-profile-${index}-${pageIndex}.png` }).catch(() => {});
     }
   }

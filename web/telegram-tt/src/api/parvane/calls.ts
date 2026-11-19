@@ -5,6 +5,8 @@ import type { ParvaneStore } from './store';
 import {
   CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, RING_TIMEOUT_MS, type WireCallSignal,
 } from './callengine';
+import { createCallScreenShare } from './callScreenShare';
+import { getIsCallVideoMuted } from './callVideoState';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import {
   GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, inviteGroupTitle, type WireGroupInvite,
@@ -73,7 +75,10 @@ type CallWindowState = {
   isRemoteMuted?: boolean;
   isRemoteCameraOff?: boolean;
   // Участники группового звонка с выключенной камерой (spec 024)
-  groupCameraOff?: string[];
+  groupVideoMuted?: Record<string, boolean>;
+  screenStream?: MediaStream;
+  canShareScreen?: boolean;
+  hasScreenShareError?: boolean;
   // Входящее приглашение в групповой звонок ждёт согласия
   pendingGroup?: boolean;
   // Название группы, если приглашённый в ней состоит: в WireGroupInvite поля
@@ -97,6 +102,19 @@ export function pickIceTransportPolicy(isRelayOnly: boolean, isForcedForTest: bo
 export function createCallController(deps: CallDependencies) {
   let engine: CallEngine | undefined;
   let groupEngine: GroupCallEngine | undefined;
+  const screenShare = createCallScreenShare({
+    getSenders: () => {
+      if (groupEngine?.currentGroupCallId) return groupEngine.getVideoSenders();
+      const sender = engine?.getVideoSender();
+      return sender ? [sender] : [];
+    },
+    getCamera: () => getLocalStream()?.getVideoTracks()[0],
+    onChange: (screenStream) => {
+      emitWindowState({ screenStream, hasScreenShareError: undefined });
+      sendMediaState();
+    },
+    onError: () => emitWindowState({ hasScreenShareError: true }),
+  });
   // Приглашение в групповой звонок до решения пользователя: парные сигналы
   // участников копятся, микрофон/камера не запрашиваются (spec 002 US6)
   type PendingGroupInvite = {
@@ -263,7 +281,14 @@ export function createCallController(deps: CallDependencies) {
         callWindow.parvaneCall!.isCameraOff = undefined;
         callWindow.parvaneCall!.isRemoteMuted = undefined;
         callWindow.parvaneCall!.isRemoteCameraOff = undefined;
+        callWindow.parvaneCall!.canShareScreen = undefined;
+        callWindow.parvaneCall!.hasScreenShareError = undefined;
+        if (!callWindow.parvaneCall!.group) {
+          screenShare.reset();
+          callWindow.parvaneCall!.screenStream = undefined;
+        }
       }
+      if (state === 'active') callWindow.parvaneCall!.canShareScreen = Boolean(engine?.getVideoSender());
       if (state === 'busy') {
         // Показываем «занято» пару секунд, затем закрываем оверлей
         window.setTimeout(() => {
@@ -348,14 +373,25 @@ export function createCallController(deps: CallDependencies) {
         // Локальный поток появляется асинхронно (getUserMedia) — подхватываем его
         // для превью и кнопки камеры, как только медиа поднялось
         callWindow.parvaneCall!.localStream = groupEngine?.getLocalStream();
+        callWindow.parvaneCall!.canShareScreen = Boolean(groupEngine?.getVideoSenders().length);
+        const sender = state === 'active' ? groupEngine?.getVideoSender(peer) : undefined;
+        if (sender) {
+          void screenShare.attach(sender).then((isAttached) => {
+            if (isAttached && groupEngine?.currentGroupCallId === group.groupCallId
+              && callWindow.parvaneCall!.screenStream) sendMediaState();
+          }).catch(() => {
+            if (groupEngine?.currentGroupCallId === group.groupCallId) {
+              emitWindowState({ hasScreenShareError: true });
+            }
+          });
+        }
         emit();
       },
       onPeerMedia: (peer, { isVideoMuted }) => {
         // Камера участника выключена — его плитка без застывшего кадра (spec 024)
-        const off = new Set(callWindow.parvaneCall!.groupCameraOff || []);
-        if (isVideoMuted) off.add(peer);
-        else off.delete(peer);
-        callWindow.parvaneCall!.groupCameraOff = Array.from(off);
+        callWindow.parvaneCall!.groupVideoMuted = {
+          ...callWindow.parvaneCall!.groupVideoMuted, [peer]: isVideoMuted,
+        };
         emit();
       },
       onPeerStream: (peer, stream) => {
@@ -366,8 +402,13 @@ export function createCallController(deps: CallDependencies) {
         emit();
       },
       onEnded: () => {
+        screenShare.reset();
         callWindow.parvaneCall!.group = undefined;
         callWindow.parvaneCall!.groupStreams = undefined;
+        callWindow.parvaneCall!.groupVideoMuted = undefined;
+        callWindow.parvaneCall!.screenStream = undefined;
+        callWindow.parvaneCall!.canShareScreen = undefined;
+        callWindow.parvaneCall!.hasScreenShareError = undefined;
         callWindow.parvaneCall!.localStream = undefined;
         callWindow.parvaneCall!.isMuted = undefined;
         callWindow.parvaneCall!.isCameraOff = undefined;
@@ -516,6 +557,7 @@ export function createCallController(deps: CallDependencies) {
   }
 
   function teardown() {
+    screenShare.reset();
     try {
       engine?.hangUp();
       groupEngine?.leave();
@@ -842,11 +884,12 @@ export function createCallController(deps: CallDependencies) {
     window.dispatchEvent(new CustomEvent('parvane-call'));
   }
 
+  function getLocalStream() {
+    return groupEngine?.currentGroupCallId ? groupEngine.getLocalStream() : engine?.getLocalStream();
+  }
+
   function toggleMute() {
-    const stream = groupEngine?.currentGroupCallId
-      ? groupEngine.getLocalStream()
-      : engine?.getLocalStream();
-    const tracks = stream?.getAudioTracks() || [];
+    const tracks = getLocalStream()?.getAudioTracks() || [];
     if (!tracks.length) return undefined;
     const shouldMute = tracks.some((track) => track.enabled);
     tracks.forEach((track) => {
@@ -860,10 +903,7 @@ export function createCallController(deps: CallDependencies) {
   function toggleCamera() {
     // В mesh камеру гасим через track.enabled (без ренеготиации): пиры видят
     // застывший/пустой кадр, звук не трогаем
-    const stream = groupEngine?.currentGroupCallId
-      ? groupEngine.getLocalStream()
-      : engine?.getLocalStream();
-    const tracks = stream?.getVideoTracks() || [];
+    const tracks = getLocalStream()?.getVideoTracks() || [];
     if (!tracks.length) return undefined;
     const shouldDisable = tracks.some((track) => track.enabled);
     tracks.forEach((track) => {
@@ -879,7 +919,10 @@ export function createCallController(deps: CallDependencies) {
   function sendMediaState() {
     const callWindow = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall;
     const isAudioMuted = Boolean(callWindow?.isMuted);
-    const isVideoMuted = Boolean(callWindow?.isCameraOff);
+    const hasCamera = Boolean(getLocalStream()?.getVideoTracks().length);
+    const isVideoMuted = getIsCallVideoMuted({
+      hasCamera, isCameraOff: callWindow?.isCameraOff, isSharingScreen: Boolean(callWindow?.screenStream),
+    });
     if (groupEngine?.currentGroupCallId) {
       groupEngine.sendMediaState(isAudioMuted, isVideoMuted);
       return;
@@ -920,6 +963,10 @@ export function createCallController(deps: CallDependencies) {
     teardown,
     toggleCamera,
     toggleMute,
+    toggleScreenShare: () => {
+      emitWindowState({ hasScreenShareError: undefined });
+      return screenShare.toggle();
+    },
   };
 }
 

@@ -7,6 +7,15 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  checkCallAudioOutput,
+  checkCallMinimize,
+  expectSharedScreen,
+  findCallTimer,
+  mockCallMedia,
+  saveCallState,
+} from './e2e_web_call_media.mjs';
+
+import {
   dumpDiagJournal,
   relogin,
   LOGIN_TIMEOUT_MS,
@@ -36,6 +45,11 @@ const browser = await chromium.launch({
 });
 const aliceContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
 const bobContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
+await mockCallMedia(aliceContext);
+await bobContext.addInitScript(() => {
+  Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', { value: undefined, configurable: true });
+  navigator.mediaDevices.getDisplayMedia = undefined;
+});
 
 
 function findHistoryEntry(page, text) {
@@ -93,9 +107,9 @@ try {
   await aliceSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSas.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Таймер длительности: формат 0:SS появляется только в состоянии active
-  await aliceSession.page.getByText(/^\d+:\d{2}$/).first()
+  await findCallTimer(aliceSession.page)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await bobSession.page.getByText(/^\d+:\d{2}$/).first()
+  await findCallTimer(bobSession.page)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // Звук реально идёт в обе стороны (растёт bytesReceived)
@@ -106,6 +120,21 @@ try {
   const bobSasText = (await bobSas.innerText()).trim();
   assert(aliceSasText.length > 0, 'SAS is empty on the caller side');
   assert.equal(aliceSasText, bobSasText, 'SAS emoji differ between the two peers');
+
+  for (const name of ['Audio output', 'Share screen']) {
+    assert.equal(await bobSession.page.getByRole('button', { name, exact: true }).count(), 0,
+      `Кнопка «${name}» доступна без браузерного API`);
+  }
+  await checkCallAudioOutput(aliceSession.page, false, 1, true);
+  await checkCallMinimize(aliceSession.page, { shotPrefix: '' });
+  await aliceSession.page.getByRole('button', { name: 'Share screen', exact: true }).click();
+  await expectSharedScreen(bobSession.page, '[data-call-screen="video"] video');
+  await expectMediaFlowing(bobSession.page, { audio: true, video: true });
+  await saveCallState(bobSession.page, 'screen');
+  await aliceSession.page.getByRole('button', { name: 'Stop sharing screen', exact: true }).click();
+  await bobSession.page.locator('[data-call-screen="voice"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await aliceSession.page.evaluate(() => window.__testScreenStream.getVideoTracks()[0].readyState), 'ended');
+  console.log('OK: показ экрана в голосовом звонке, остановка и возврат к голосу');
 
   // ── Busy: третий пользователь звонит занятой стороне и видит «занято» ──────
   await openPrivateChat(carolSession.page, alice);
@@ -139,7 +168,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' }).click();
   // Соединено — у обеих сторон идёт таймер длительности (состояние active)
-  await Promise.all([aliceSession.page, bobSession.page].map((page) => page.getByText(/^\d+:\d{2}$/).first()
+  await Promise.all([aliceSession.page, bobSession.page].map((page) => findCallTimer(page)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })));
   const videoConnectedAt = Date.now();
   // Удалённое видео (плюс локальное превью у обеих сторон)
@@ -154,6 +183,12 @@ try {
   console.log(`1-1 video call: frames and audio flow both ways within ${Date.now() - videoConnectedAt} ms`);
   // Живой узор фейковой камеры у собеседника
   await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  await aliceSession.page.getByRole('button', { name: 'Share screen', exact: true }).click();
+  await expectSharedScreen(bobSession.page, '[data-call-screen="video"] video');
+  await aliceSession.page.getByRole('button', { name: 'Stop sharing screen', exact: true }).click();
+  await expectSharedScreen(bobSession.page, '[data-call-screen="video"] video', false);
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  console.log('OK: камера вернулась после показа экрана в видеозвонке');
   // Камера выкл → у Боба «камера выключена» вместо застывшего кадра (spec 024); вкл → изображение возвращается
   await aliceSession.page.getByRole('button', { name: 'Turn camera off' }).click();
   await aliceSession.page.getByRole('button', { name: 'Turn camera on' })
@@ -248,8 +283,8 @@ try {
     const carolContext = await browser.newContext({ permissions: ['microphone'] });
     const daveContext = await browser.newContext({ permissions: ['microphone'] });
     try {
-      const carol = `call-carol-${suffix}@local`;
-      const dave = `call-dave-${suffix}@local`;
+      const carol = `call-relay-carol-${suffix}@local`;
+      const dave = `call-relay-dave-${suffix}@local`;
       const carolSession = await preparePage(carolContext, carol, PASSWORD, {
         seedLocalStorage: forceRelaySeed,
       });
@@ -262,9 +297,9 @@ try {
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await daveSession.page.getByRole('button', { name: 'Accept' }).click();
       // active достижим только если relay-кандидаты через TURN сработали
-      await carolSession.page.getByText(/^\d+:\d{2}$/).first()
+      await findCallTimer(carolSession.page)
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      await daveSession.page.getByText(/^\d+:\d{2}$/).first()
+      await findCallTimer(daveSession.page)
         .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
       await carolSession.page.getByRole('button', { name: 'End Call' }).click();
       console.log('OK: relay-only звонок через TURN с ephemeral-кредами');

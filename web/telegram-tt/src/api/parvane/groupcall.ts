@@ -10,6 +10,7 @@
 
 import type { CallMedia, WireCallSignal } from './callengine';
 
+import { getCallVideoSender, prepareCallVideo } from './callScreenShare';
 import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
 
 export type WireGroupInvite = {
@@ -112,6 +113,7 @@ class MeshPeerSession {
       }
       const pc = await this.createPc(media);
       if (!pc) return undefined;
+      prepareCallVideo(pc, this.engine.getLocalStream()!, true);
       const offer = await pc.createOffer();
       if (this.pc !== pc) return undefined;
       await pc.setLocalDescription(offer);
@@ -142,6 +144,7 @@ class MeshPeerSession {
       if (this.pc !== pc) return undefined;
       this.remoteReady = true;
       this.flushCandidates();
+      prepareCallVideo(pc, this.engine.getLocalStream()!, false);
       const answer = await pc.createAnswer();
       if (this.pc !== pc) return undefined;
       await pc.setLocalDescription(answer);
@@ -353,6 +356,15 @@ export class GroupCallEngine {
 
   get currentGroupCallId() {
     return this.groupCallId;
+  }
+
+  getVideoSender(peer: string) {
+    return getCallVideoSender(this.sessions.get(peer)?.pc);
+  }
+
+  getVideoSenders() {
+    return Array.from(this.sessions.keys()).map((peer) => this.getVideoSender(peer))
+      .filter((sender): sender is RTCRtpSender => Boolean(sender));
   }
 
   getLocalStream() {

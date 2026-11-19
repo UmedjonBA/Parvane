@@ -3642,6 +3642,13 @@ export interface LangPair {
   'ParvaneAuthTelegramQrHide': undefined;
   'ParvaneAuthTelegramQrHint': undefined;
   'ParvaneNotifySound': undefined;
+  'ParvaneCallReturn': undefined;
+  'ParvaneCallShareScreen': undefined;
+  'ParvaneCallStopSharing': undefined;
+  'ParvaneCallScreenError': undefined;
+  'ParvaneCallAudioOutput': undefined;
+  'ParvaneCallDefaultAudio': undefined;
+  'ParvaneCallAudioError': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -6186,6 +6193,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneDeviceSeen': {
     'time': V;
+  };
+  'ParvaneCallReturnTo': {
+    'name': V;
+    'time': V;
+  };
+  'ParvaneCallAudioDevice': {
+    'number': V;
   };
 }
 

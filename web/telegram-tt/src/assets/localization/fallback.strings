@@ -4747,3 +4747,14 @@
 "ParvaneAuthTelegramQrHide" = "Hide QR code";
 "ParvaneAuthTelegramQrHint" = "QR code of the bot link: scan it with the phone where Telegram is installed";
 "ParvaneNotifySound" = "Sound";
+
+"ParvaneCallMinimize" = "Minimize call";
+"ParvaneCallReturn" = "Return";
+"ParvaneCallReturnTo" = "Return to call: {name}, {time}";
+"ParvaneCallShareScreen" = "Share screen";
+"ParvaneCallStopSharing" = "Stop sharing screen";
+"ParvaneCallScreenError" = "Could not share the screen";
+"ParvaneCallAudioOutput" = "Audio output";
+"ParvaneCallDefaultAudio" = "System default";
+"ParvaneCallAudioDevice" = "Audio device {number}";
+"ParvaneCallAudioError" = "Could not switch audio output";

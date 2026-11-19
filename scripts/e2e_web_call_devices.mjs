@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
+import { findCallTimer } from './e2e_web_call_media.mjs';
+
 import {
   assertNoPageErrors,
   exchangeMessages,
@@ -58,13 +60,13 @@ try {
   const acceptedAt = Date.now();
   await incoming(b2).waitFor({ state: 'hidden', timeout: ANSWERED_ELSEWHERE_MS });
   console.log(`OK: второе устройство перестало звонить через ${Date.now() - acceptedAt} мс после ответа на первом`);
-  await Promise.all([a, b1].map((page) => page.getByText(/^\d+:\d{2}$/).first()
+  await Promise.all([a, b1].map((page) => findCallTimer(page)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })));
   await Promise.all([a, b1].map((page) => expectMediaFlowing(page, { audio: true })));
   assert.equal(await endCall(b2).count(), 0, 'второе устройство вошло в звонок');
   // Разговор не рвётся
   await a.waitForTimeout(3000);
-  assert.equal(await a.getByText(/^\d+:\d{2}$/).count() > 0, true, 'звонок у звонящего оборвался');
+  assert(await findCallTimer(a).isVisible(), 'звонок у звонящего оборвался');
   await endCall(a).click();
   await endCall(b1).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   // На втором — без «пропущенного»

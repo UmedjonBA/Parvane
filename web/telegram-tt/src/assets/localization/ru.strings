@@ -4004,3 +4004,14 @@
 "ParvaneAuthTelegramQrHide" = "Скрыть QR-код";
 "ParvaneAuthTelegramQrHint" = "QR-код ссылки на бота: отсканируйте телефоном, где установлен Telegram";
 "ParvaneNotifySound" = "Звук";
+
+"ParvaneCallMinimize" = "Свернуть звонок";
+"ParvaneCallReturn" = "вернуться";
+"ParvaneCallReturnTo" = "Вернуться к звонку: {name}, {time}";
+"ParvaneCallShareScreen" = "Показать экран";
+"ParvaneCallStopSharing" = "Остановить показ экрана";
+"ParvaneCallScreenError" = "Не удалось показать экран";
+"ParvaneCallAudioOutput" = "Вывод звука";
+"ParvaneCallDefaultAudio" = "Как в системе";
+"ParvaneCallAudioDevice" = "Устройство вывода {number}";
+"ParvaneCallAudioError" = "Не удалось переключить вывод звука";

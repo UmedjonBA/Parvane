@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
+import { checkMinimizedCallStrip, saveCallState } from './e2e_web_call_media.mjs';
+
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
@@ -198,6 +200,37 @@ try {
   // «Open player» тоже содержит «Play» — имя кнопки точное
   await mini.getByRole('button', { name: 'Play', exact: true }).click();
   await page.locator('[data-music-mini="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Состояние звонка подаём через тот же вход, что у контроллера. Сам плеер воспроизводит тестовый трек
+  await page.evaluate(() => {
+    window.parvaneCall = { state: 'active', peerName: 'Лена' };
+    window.dispatchEvent(new Event('parvane-call'));
+  });
+  const minimize = page.getByRole('button', { name: 'Minimize call', exact: true });
+  await minimize.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Музыка встаёт на паузу с началом разговора, а не при сворачивании
+  await page.waitForFunction(() => document.querySelector('[data-music-mini]')?.getAttribute('data-music-mini')
+    === 'paused', undefined, { timeout: STEP_TIMEOUT_MS });
+  await minimize.click();
+  const strip = await checkMinimizedCallStrip(page);
+  await page.locator('[data-music-mini="paused"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const [stripBox, pausedBox, currentRibbonBox] = await Promise.all([
+    strip.boundingBox(), mini.boundingBox(), ribbon.boundingBox(),
+  ]);
+  assert.ok(stripBox.y + stripBox.height < pausedBox.y, 'Плашка звонка должна оставаться вверху');
+  assert.ok(Math.abs(pausedBox.y + pausedBox.height - currentRibbonBox.y) <= 1, 'Мини-плеер должен быть над лентой');
+  await saveCallState(page, 'minimized-music');
+  await strip.click();
+  await minimize.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await mini.getAttribute('data-music-mini'), 'paused', 'Возврат к звонку не возобновляет музыку сам');
+  await page.evaluate(() => {
+    window.parvaneCall = { state: 'ended' };
+    window.dispatchEvent(new Event('parvane-call'));
+  });
+  await minimize.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await mini.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.locator('[data-music-mini="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: звонок ставит музыку на паузу, плашка звонка вверху, мини-плеер над лентой');
+
   await mini.getByRole('button', { name: 'Open player' }).click();
   await full.getByRole('heading', { name: 'Соль' }).waitFor();
   await ribbon.waitFor({ state: 'detached' });

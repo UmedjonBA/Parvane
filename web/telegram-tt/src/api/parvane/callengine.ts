@@ -3,6 +3,7 @@
 // SDP/ICE через call.signal → call.user.<to>. Wire-совместимо с десктопом:
 // CallSignal Invite/Answer/Ice/Hangup/Reject.
 
+import { getCallVideoSender, prepareCallVideo } from './callScreenShare';
 import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
 
 export type CallMedia = 'audio' | 'video';
@@ -130,6 +131,7 @@ export class CallEngine {
       }
       if (!await this.setupPeerConnection(media, callId)) return;
       const pc = this.pc!;
+      prepareCallVideo(pc, this.localStream!, true);
       const offer = await pc.createOffer();
       if (!this.isCurrentConnection(peer, callId, pc)) return;
       await pc.setLocalDescription(offer);
@@ -171,6 +173,7 @@ export class CallEngine {
       this.remoteReady = true;
       this.flushCandidates();
 
+      prepareCallVideo(pc, this.localStream!, false);
       const answer = await pc.createAnswer();
       if (!this.isCurrentConnection(from, callId, pc)) return;
       await pc.setLocalDescription(answer);
@@ -440,6 +443,10 @@ export class CallEngine {
     this.incomingFrom = undefined;
     this.incomingCallId = undefined;
     this.cb.onSas(undefined);
+  }
+
+  getVideoSender() {
+    return getCallVideoSender(this.pc);
   }
 
   getLocalStream() {

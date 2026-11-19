@@ -1,3 +1,4 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import { memo } from '../../../lib/teact/teact';
 
 import type { CallInfo } from './callTypes';
@@ -19,6 +20,8 @@ type OwnProps = {
   hasRemoteVideo: boolean;
   onToggleMute: NoneToVoidFunction;
   onToggleCamera: NoneToVoidFunction;
+  extraControls?: TeactNode;
+  onMinimize?: NoneToVoidFunction;
   onHangup: NoneToVoidFunction;
 };
 
@@ -32,7 +35,7 @@ const STATUS_KEYS: Record<string, string> = {
 
 // Исходящий и идущий личный звонок (доски `PhCalls`, `DkCalls`); с видео собеседника — тёмный экран `RpCalls`
 const CallActive = ({
-  call, peerName, time, hasRemoteVideo, onToggleMute, onToggleCamera, onHangup,
+  call, peerName, time, hasRemoteVideo, onToggleMute, onToggleCamera, onHangup, extraControls, onMinimize,
 }: OwnProps) => {
   const lang = useOldLang();
 
@@ -40,6 +43,8 @@ const CallActive = ({
   const isActive = state === 'active';
   const isConnected = isActive || state === 'connecting';
   const hasLocalVideo = hasVideoTrack(call.localStream);
+  const preview = call.screenStream || (!call.isCameraOff && hasLocalVideo ? call.localStream : undefined);
+  const showRemoteCameraOff = hasLocalVideo && call.isRemoteCameraOff;
   const statusKey = STATUS_KEYS[state];
 
   function renderStatus() {
@@ -57,10 +62,10 @@ const CallActive = ({
   }
 
   function renderRemoteState() {
-    if (!isConnected || !(call.isRemoteCameraOff || call.isRemoteMuted)) return undefined;
+    if (!isConnected || !(showRemoteCameraOff || call.isRemoteMuted)) return undefined;
     return (
       <div className={styles.remoteState}>
-        {call.isRemoteCameraOff && (
+        {showRemoteCameraOff && (
           <span className={styles.remoteItem} data-remote-camera-off>
             <i className="icon icon-video-stop" aria-hidden />
             {lang('ParvaneCallPeerCameraOff')}
@@ -95,8 +100,23 @@ const CallActive = ({
             onClick={onToggleCamera}
           />
         )}
+        {extraControls}
         <CallButton icon="icon-phone-discard" kind="hangup" label={lang('CallEndCall')} onClick={onHangup} />
       </div>
+    );
+  }
+
+  function renderMinimize() {
+    if (!onMinimize) return undefined;
+    return (
+      <button
+        type="button"
+        className={styles.minimize}
+        aria-label={lang('ParvaneCallMinimize')}
+        onClick={onMinimize}
+      >
+        <i className="icon icon-down" aria-hidden />
+      </button>
     );
   }
 
@@ -120,9 +140,8 @@ const CallActive = ({
           {renderSas(styles.videoSas)}
           {renderRemoteState()}
         </div>
-        {hasLocalVideo && !call.isCameraOff && (
-          <CallVideo stream={call.localStream!} className={styles.videoLocal} isSilent />
-        )}
+        {renderMinimize()}
+        {preview && <CallVideo stream={preview} className={styles.videoLocal} isSilent />}
         {renderControls()}
       </div>
     );
@@ -130,6 +149,7 @@ const CallActive = ({
 
   return (
     <div className={styles.voice}>
+      {renderMinimize()}
       <div className={styles.avatar} aria-hidden>{getCallInitial(peerName)}</div>
       <div className={styles.name}>{peerName}</div>
       {renderStatus()}
@@ -139,8 +159,8 @@ const CallActive = ({
       {isConnected && <div className={styles.note}>{lang('ParvaneCallEncrypted')}</div>}
       {renderControls()}
       {/* Своя камера при выключенной у собеседника: превью в углу */}
-      {hasLocalVideo && !call.isCameraOff && isConnected && (
-        <CallVideo stream={call.localStream!} className={styles.voiceLocal} isSilent />
+      {preview && isConnected && (
+        <CallVideo stream={preview} className={styles.voiceLocal} isSilent />
       )}
     </div>
   );

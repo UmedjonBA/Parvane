@@ -48,6 +48,7 @@ import { REM } from '../helpers/mediaDimensions.ts';
 import renderText from '../helpers/renderText.tsx';
 
 import { useVtn } from '../../../hooks/animations/useVtn';
+import useInterval from '../../../hooks/schedulers/useInterval';
 import useIntervalForceUpdate from '../../../hooks/schedulers/useIntervalForceUpdate';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -105,6 +106,8 @@ const EMOJI_TOPIC_SIZE = 120;
 const LOAD_MORE_THRESHOLD = 3;
 const MAX_PHOTO_DASH_COUNT = 30;
 const STATUS_UPDATE_INTERVAL = 1000 * 60; // 1 min
+
+const OPEN_PROFILE_REFRESH_MS = 4000;
 
 const PATTERN_Y_SHIFT = 8 * REM;
 const PATTERN_PLAIN_Y_SHIFT = 5.25 * REM;
@@ -199,6 +202,11 @@ const ProfileInfo = ({
   useEffect(() => {
     if (hasUser && isActive !== false) loadFullUser({ userId: peerId });
   }, [hasUser, peerId, isActive]);
+
+  // Изменения в чужом профиле сервер не рассылает. Перечитываем только открытую карточку в видимой вкладке
+  useInterval(() => {
+    if (document.visibilityState === 'visible') loadFullUser({ userId: peerId });
+  }, isActive && user && !user.isSelf ? OPEN_PROFILE_REFRESH_MS : undefined, true);
 
   useEffect(() => {
     if (photos.length - currentPhotoIndex <= LOAD_MORE_THRESHOLD) {
