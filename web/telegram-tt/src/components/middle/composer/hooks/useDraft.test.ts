@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import Teact, { captureImmediateEffects } from '../../../../lib/teact/teact';
+import Teact, { captureImmediateEffects, type VirtualElementComponent } from '../../../../lib/teact/teact';
 import TeactDOM from '../../../../lib/teact/teact-dom';
 
 import type { ApiDraft } from '../../../../api/types';
@@ -23,8 +23,13 @@ it('не восстанавливает отправленный текст до
     return undefined;
   }
 
+  function renderComposer(savedDraft?: ApiDraft) {
+    const element = Teact.createElement(Composer, { savedDraft }) as VirtualElementComponent;
+    TeactDOM.render(element, root);
+  }
+
   try {
-    TeactDOM.render(Teact.createElement(Composer, { savedDraft: draft }), root);
+    renderComposer(draft);
     expect(getHtml()).toBe(draft.text.text);
 
     // Композер очищает поле в фазе измерения, пока проп ещё содержит отправленный черновик
@@ -33,7 +38,7 @@ it('не восстанавливает отправленный текст до
     runLayoutEffects();
     expect(getHtml()).toBe('');
 
-    TeactDOM.render(Teact.createElement(Composer, {}), root);
+    renderComposer();
     expect(getHtml()).toBe('');
   } finally {
     TeactDOM.render(undefined, root);
