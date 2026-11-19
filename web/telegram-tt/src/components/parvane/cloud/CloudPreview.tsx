@@ -14,9 +14,9 @@ import {
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
 import PvIcon from '../notes/PvIcon';
+import PvLoading from '../notes/PvLoading';
 
 import styles from './CloudSheets.module.scss';
 
@@ -200,7 +200,7 @@ const CloudPreview = ({
               <span>{stubText}</span>
             </div>
           )}
-          {canPreview && !hasFailed && !url && text === undefined && <Loading />}
+          {canPreview && !hasFailed && !url && text === undefined && <PvLoading />}
           {text !== undefined && (
             <pre className={buildClassName(styles.previewText, 'custom-scroll')} dir="auto" data-preview-text>
               {text}

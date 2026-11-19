@@ -155,6 +155,11 @@ function isAppliedEngineState(result: StateResult) {
   return appliedEngine.fingerprint !== undefined && JSON.stringify(result.state) === appliedEngine.fingerprint;
 }
 
+/** «Повторить» полосы «нет связи»: синхронизация сейчас и перечитывание состояния. */
+export function retryPlanner() {
+  void callParvane('parvanePlannerSync').catch(() => undefined).then(() => loadPlanner(loadedUserId));
+}
+
 /**
  * Раздел «План» на экране либо нет: провайдер новой сборки реже опрашивает движок, пока раздел скрыт.
  * У провайдера прежней сборки метода нет — вызов просто не удаётся.

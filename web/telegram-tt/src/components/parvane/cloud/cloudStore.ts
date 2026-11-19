@@ -180,6 +180,11 @@ export async function refreshCloud(): Promise<CloudDriveState | undefined> {
   return result;
 }
 
+/** «Повторить» полосы «нет связи»: синхронизация сейчас и перечитывание состояния. */
+export function retryCloud() {
+  void callParvane('parvaneCloudSync').catch(() => undefined).then(refreshCloud);
+}
+
 /** Открытая папка или контейнер исчезли (удалены, доступ отозван) — подняться выше. */
 function fixPlace(data: CloudDriveState) {
   const place = getCloudPlace();

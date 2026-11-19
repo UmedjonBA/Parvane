@@ -361,7 +361,7 @@ try {
   // Оболочка приложения в кэше сервис-воркера целиком — для перезагрузки без сети ниже (PWA, spec 041 F1)
   await page.locator('html[data-app-shell]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS * 6 });
   await context.setOffline(true);
-  await backInMusic.locator('[data-offline-banner]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await backInMusic.locator('[data-offline-bar]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backInMusic.locator('[data-music-offline] [data-track="t3"]').getByRole('button').first().click();
   await backSide.locator('[data-music-now]').filter({ hasText: 'Соль' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backSide.locator('[data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -380,7 +380,7 @@ try {
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await offlineMusic.locator('aside').getByRole('button', { name: 'Pause' }).click();
   await context.setOffline(false);
-  await offlineMusic.locator('[data-offline-banner]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS * 3 });
+  await offlineMusic.locator('[data-offline-bar]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS * 3 });
   console.log('OK: запуск без сети — «Загруженное» открывается и играет');
   await backInMusic.getByRole('button', { name: 'Remove from this device: Соль' }).click();
   await backInMusic.locator('[data-music-offline="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

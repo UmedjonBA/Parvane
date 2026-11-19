@@ -127,6 +127,8 @@
 
 // ── кнопки ───────────────────────────────────────────────────────────────────
 
+// Состояния по доске `ZpStates`: нажатие — мгновенная смена заливки (без волны и переходов), фокус с
+// клавиатуры — синяя рамка 2 px, наведение на компьютере — чуть темнее у кнопок и «как нажато» у строк
 .ib,
 .pill,
 .btn,
@@ -173,8 +175,13 @@
     background: var(--pv-hover);
   }
 
+  &:active:not(:disabled) {
+    color: var(--pv-fg);
+    background: var(--pv-line2);
+  }
+
   &:disabled {
-    opacity: 0.4;
+    opacity: 0.45;
   }
 }
 
@@ -197,6 +204,10 @@
   &:hover {
     background: var(--pv-hover);
   }
+
+  &:active {
+    background: var(--pv-line2);
+  }
 }
 
 .pillAcc {
@@ -205,8 +216,12 @@
   background: var(--pv-accent);
 
   &:hover {
-    background: var(--pv-accent);
-    filter: brightness(1.06);
+    background: color-mix(in srgb, var(--pv-accent) 88%, var(--pv-fg));
+  }
+
+  &:active {
+    color: var(--pv-panel);
+    background: var(--pv-fg);
   }
 }
 
@@ -232,8 +247,12 @@
     background: var(--pv-hover);
   }
 
+  &:active:not(:disabled) {
+    background: var(--pv-line2);
+  }
+
   &:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
   }
 }
 
@@ -244,8 +263,12 @@
   background: var(--pv-at);
 
   &:hover:not(:disabled) {
-    background: var(--pv-at);
-    filter: brightness(1.06);
+    background: color-mix(in srgb, var(--pv-at) 88%, var(--pv-fg));
+  }
+
+  &:active:not(:disabled) {
+    color: var(--pv-panel);
+    background: var(--pv-fg);
   }
 }
 
@@ -258,6 +281,11 @@
     color: var(--pv-fg);
     background: var(--pv-hover);
   }
+
+  &:active:not(:disabled) {
+    color: var(--pv-fg);
+    background: var(--pv-line2);
+  }
 }
 
 .btnDanger {
@@ -265,6 +293,11 @@
 
   &:hover:not(:disabled) {
     background: color-mix(in srgb, var(--pv-red) 14%, var(--pv-raised));
+  }
+
+  &:active:not(:disabled) {
+    color: var(--pv-red);
+    background: color-mix(in srgb, var(--pv-red) 24%, var(--pv-raised));
   }
 }
 
@@ -362,6 +395,14 @@
   white-space: nowrap;
 
   background: var(--pv-raised);
+
+  &:active:not(:disabled) {
+    background: var(--pv-line2);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+  }
 }
 
 // Выбранный чип — тёмная заливка; `--c` красит его в цвет вида записи
@@ -370,6 +411,10 @@
   font-weight: var(--font-weight-semibold);
   color: var(--pv-panel);
   background: var(--c, var(--pv-fg));
+
+  &:active:not(:disabled) {
+    background: var(--c, var(--pv-fg));
+  }
 }
 
 .dot {
@@ -395,12 +440,17 @@
   border-radius: var(--pv-radius-sm);
 
   &:hover:not(:disabled),
-  &:focus-visible {
+  &:active:not(:disabled) {
     background: var(--pv-hover);
   }
 
+  // Рамка фокуса у строки — внутрь: соседние строки стоят вплотную
+  &:focus-visible {
+    outline-offset: -2px;
+  }
+
   &:disabled {
-    opacity: 0.45;
+    opacity: 0.55;
   }
 }
 

@@ -17,6 +17,8 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PvEmpty from '../notes/PvEmpty';
+import PvSkeleton from '../notes/PvSkeleton';
 import MusicTrackRow from './MusicTrackRow';
 
 import kit from '../notes/PvKit.module.scss';
@@ -164,7 +166,7 @@ const MusicPlaylists = ({
             {lang('MusicPlaylistCreate')}
           </button>
         </form>
-        {!items.length && <div className={kit.muted} data-music-empty>{lang('MusicPlaylistsEmpty')}</div>}
+        {!items.length && <PvEmpty text={lang('MusicPlaylistsEmpty')} data-music-empty />}
         {Boolean(items.length) && (
           <ul className={styles.tracks} data-music-playlists>
             {items.map((item) => {
@@ -228,7 +230,7 @@ const MusicPlaylists = ({
             {lang(isDeleteAsked ? 'MusicPlaylistDeleteConfirm' : 'MusicPlaylistDelete')}
           </button>
         </div>
-        {!rows.length && <div className={kit.muted} data-music-empty>{lang('MusicPlaylistEmpty')}</div>}
+        {!rows.length && <PvEmpty text={lang('MusicPlaylistEmpty')} data-music-empty />}
         {Boolean(rows.length) && (
           <ul className={styles.tracks} data-music-tracks>
             {rows.map((row, index) => (
@@ -258,7 +260,7 @@ const MusicPlaylists = ({
     return <div className={styles.error} role="status" data-playlists-status={status}>{lang(STATUS_KEYS[status])}</div>;
   }
   if (status === 'loading' && !playlists.length) {
-    return <div className={kit.muted} data-playlists-status="loading">{lang('MusicLoading')}</div>;
+    return <PvSkeleton data-playlists-status="loading" />;
   }
   return playlist ? renderPlaylist(playlist) : renderList(playlists);
 };

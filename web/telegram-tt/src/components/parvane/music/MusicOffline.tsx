@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
 import { splitBytes } from './musicFormat';
@@ -12,6 +12,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PvEmpty from '../notes/PvEmpty';
 import MusicTrackRow from './MusicTrackRow';
 
 import kit from '../notes/PvKit.module.scss';
@@ -26,18 +27,7 @@ type OwnProps = {
 const MusicOffline = ({ currentTrackId, isPlaying }: OwnProps) => {
   const lang = useLang();
   const state = useDerivedState(getOfflineState);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isClearAsked, askClear, cancelClear] = useFlag();
-
-  useEffect(() => {
-    const update = () => setIsOnline(navigator.onLine);
-    window.addEventListener('online', update);
-    window.addEventListener('offline', update);
-    return () => {
-      window.removeEventListener('online', update);
-      window.removeEventListener('offline', update);
-    };
-  }, []);
 
   const handlePlay = useLastCallback((index: number) => {
     playTracks(state.entries.map((entry) => entry.track), index);
@@ -62,9 +52,6 @@ const MusicOffline = ({ currentTrackId, isPlaying }: OwnProps) => {
   const count = state.entries.length;
   return (
     <div className={styles.playlist} data-music-offline={count}>
-      {!isOnline && (
-        <div className={styles.error} role="status" data-offline-banner>{lang('MusicOfflineNoNetwork')}</div>
-      )}
       <div className={styles.listHead}>
         <span className={buildClassName(kit.muted, kit.grow)} data-offline-usage>
           {lang('MusicOfflineUsage', {
@@ -92,7 +79,7 @@ const MusicOffline = ({ currentTrackId, isPlaying }: OwnProps) => {
           {lang(state.problem === 'limit' ? 'MusicOfflineLimit' : 'MusicOfflineFailed')}
         </div>
       )}
-      {!count && !state.pending && <div className={kit.muted} data-music-empty>{lang('MusicOfflineEmpty')}</div>}
+      {!count && !state.pending && <PvEmpty text={lang('MusicOfflineEmpty')} data-music-empty />}
       {Boolean(count) && (
         <ul className={styles.tracks} data-music-tracks>
           {state.entries.map((entry, index) => (

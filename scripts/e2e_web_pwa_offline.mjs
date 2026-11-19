@@ -175,6 +175,13 @@ try {
   await page.locator('#ParvanePlanner').getByText(OFFLINE_TASK).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('без сети «План» не показал сохранённую запись'));
+  // Полоса «нет связи» с «Повторить»: нажатие без сети ничего не ломает, полоса остаётся
+  const planBar = page.locator('#ParvanePlanner [data-offline-bar]');
+  await planBar.getByText('No connection yet: showing the plan saved on this device')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planBar.getByRole('button', { name: 'Retry' }).click();
+  await page.waitForTimeout(1000);
+  assert.equal(await planBar.count(), 1, 'полоса «нет связи» пропала без сети');
   await page.goto(`${BASE_URL}/?open=notes`, { waitUntil: 'domcontentloaded' });
   await page.locator(`#ParvaneKnowledge [data-note-row="${GUIDE_NOTE}"]`).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
@@ -199,6 +206,8 @@ try {
       console.log('--- заметки без сети ---', JSON.stringify(state), '\n', session.logs.slice(-25).join('\n'));
       assert.fail('без сети «Заметки» не показали сохранённое');
     });
+  await page.locator('#ParvaneKnowledge [data-offline-bar]').getByText('showing the notes saved on this device')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Модуль, который при сети не открывали ни разу: его части кода есть только в заранее скачанной оболочке
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Health' }).click();
   await page.locator('#ParvaneHealth').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })

@@ -160,10 +160,15 @@
   color: var(--pv-accent-ink);
 
   background: var(--pv-accent);
-  outline: none;
+
+  // Состояния по доске `ZpStates`: нажатие — заливка цвета `--at`, фокус — рамка 2 px с отступом
+  &:active {
+    background: var(--pv-at);
+  }
 
   &:focus-visible {
-    box-shadow: var(--pv-focus-ring);
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
   }
 }
 

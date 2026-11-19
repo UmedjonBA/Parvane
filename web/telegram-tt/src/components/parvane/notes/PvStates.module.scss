@@ -1,0 +1,205 @@
+// Parvane: состояния экранов модулей по макету (доски `PhStates`, `ZpStates`, `ZdMisc`) — «пусто», загрузка
+// призраком и загрузка списка заглушками строк. Цвета — переменные `--pv-*`, плоско, без мигания
+
+// ── призрак ──────────────────────────────────────────────────────────────────
+
+.ghost {
+  flex: none;
+
+  width: 4.5rem;
+  height: 4.5rem;
+
+  color: var(--pv-line2);
+
+  fill: currentColor;
+  shape-rendering: crispEdges;
+}
+
+// Подпрыгивает на один «пиксель» рывком; общий запрет анимаций (`.no-animations`) его останавливает
+.ghostLoading {
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--pv-accent);
+  animation: pv-ghost-hop 0.8s steps(1) infinite;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+@keyframes pv-ghost-hop {
+  0% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-0.25rem);
+  }
+}
+
+// ── пусто ────────────────────────────────────────────────────────────────────
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+
+  max-width: 24rem;
+  margin: auto;
+  padding: 2rem;
+
+  font-size: var(--pv-font-size);
+  line-height: 1.35;
+  color: var(--pv-fg);
+  text-align: center;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+}
+
+.emptyText {
+  margin: 0;
+  color: var(--pv-muted);
+}
+
+.emptyAction {
+  margin-top: 0.25rem;
+}
+
+.emptyLink {
+  height: var(--pv-touch-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+// ── загрузка ─────────────────────────────────────────────────────────────────
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  margin: auto;
+  padding: 1.25rem;
+
+  font-size: var(--pv-font-size);
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+// ── загрузка списка ──────────────────────────────────────────────────────────
+
+.skeleton {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  width: 100%;
+  min-height: 0;
+}
+
+.skeletonCaption {
+  display: flex;
+  flex: none;
+  align-items: center;
+
+  height: 1.875rem;
+  padding: 0.375rem 1rem 0;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.skeletonHead {
+  width: 7.5rem;
+  height: 0.75rem;
+  border-radius: 0.25rem;
+  background: var(--pv-line2);
+}
+
+.skeletonRow {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 3.625rem;
+  padding: 0 1rem;
+}
+
+.skeletonIcon {
+  flex: none;
+
+  width: 1.625rem;
+  height: 1.625rem;
+  border-radius: 0.375rem;
+
+  background: var(--pv-line2);
+}
+
+.skeletonText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 0;
+}
+
+.skeletonTitle {
+  width: 62%;
+  height: 0.75rem;
+  border-radius: 0.25rem;
+  background: var(--pv-line2);
+}
+
+.skeletonSub {
+  width: 40%;
+  height: 0.5625rem;
+  border-radius: 0.25rem;
+  background: var(--pv-line);
+}
+
+// Ширины полос разные, как у настоящих строк
+.skeletonRow:nth-child(4n + 3) .skeletonTitle {
+  width: 48%;
+}
+
+.skeletonRow:nth-child(4n + 3) .skeletonSub {
+  width: 55%;
+}
+
+.skeletonRow:nth-child(4n) .skeletonTitle {
+  width: 70%;
+}
+
+.skeletonRow:nth-child(4n) .skeletonSub {
+  width: 34%;
+}
+
+.skeletonRow:nth-child(4n + 1) .skeletonTitle {
+  width: 54%;
+}
+
+.skeletonRow:nth-child(4n + 1) .skeletonSub {
+  width: 46%;
+}
+
+.skeletonMeta {
+  flex: none;
+
+  width: 2.5rem;
+  height: 0.625rem;
+  border-radius: 0.25rem;
+
+  background: var(--pv-line);
+}

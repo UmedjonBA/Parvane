@@ -788,14 +788,12 @@ export function createCloudSync(deps: Deps) {
 
   // ── API ────────────────────────────────────────────────────────────────────
 
-  /** Раздел открыт (`active`) либо облако понадобилось в фоне. */
-  async function ensure(active: boolean) {
+  /** Облако понадобилось (первый запрос состояния, фон). Признак открытого раздела не трогает: его ведёт
+   * `setActive` — запрос состояния, пришедший после открытия раздела, иначе выключал частый опрос, и чужие
+   * папки переставали догоняться (приглашение оставалось без названия). */
+  async function ensure() {
     isWanted = true;
     setListeners();
-    if (active !== isActive) {
-      isActive = active;
-      scheduleSync();
-    }
     await syncNow(true);
   }
 

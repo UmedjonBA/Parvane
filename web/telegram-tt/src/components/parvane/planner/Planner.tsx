@@ -31,7 +31,7 @@ import {
 import {
   getHasQuickLines, getIsPlannerCached, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState,
   getPlannerStatus,
-  loadPlanner, setPlannerActive, undoPlanner, updatePlanner,
+  loadPlanner, retryPlanner, setPlannerActive, undoPlanner, updatePlanner,
 } from './plannerStore';
 import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
 
@@ -44,7 +44,8 @@ import useParvaneModules from '../../../hooks/useParvaneModules';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
-import Loading from '../../ui/Loading';
+import PvLoading from '../notes/PvLoading';
+import PvOfflineBar from '../notes/PvOfflineBar';
 import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import SectionHistoryBack from '../SectionHistoryBack';
 import PlannerAgenda from './PlannerAgenda';
@@ -401,11 +402,12 @@ const Planner = () => {
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [monthKey]);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
-  const syncNoticeKey = !isLoaded && isCached ? 'PlannerShowingSaved'
+  // Нет связи: показан снимок с устройства либо движок работает без сервера — общая полоса с «Повторить»
+  const isOffline = (!isLoaded && isCached) || syncStatus === 'offline';
+  const syncNoticeKey = isOffline ? undefined
     : syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
-      : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
-        : syncStatus === 'no-key' ? 'PlannerSyncPending'
-          : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
+      : syncStatus === 'no-key' ? 'PlannerSyncPending'
+        : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
   const isToday = view === 'today';
   const isCalendar = view === 'calendar';
   const isMonthView = calendarView === 'month';
@@ -757,6 +759,7 @@ const Planner = () => {
         )}
         <main className={styles.page}>
           {renderHeader()}
+          {isOffline && <PvOfflineBar text={lang('PvOfflinePlan')} onRetry={retryPlanner} />}
           {syncNoticeKey && (
             <div
               className={buildClassName(styles.syncNotice, syncStatus === 'needs-linking' && styles.syncNoticeBlocking)}
@@ -784,7 +787,7 @@ const Planner = () => {
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
           >
-            {!hasContent ? <Loading /> : isCalendar ? renderCalendar() : (
+            {!hasContent ? <PvLoading /> : isCalendar ? renderCalendar() : (
               <PlannerDay
                 state={state}
                 day={picked}

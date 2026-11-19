@@ -554,11 +554,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'group invite links and cached group details, folders, pinned and archived chats, notification settings. '
     + 'You will be asked for it on every reload. Your account password is never stored. Not covered: theme, '
     + 'language and panel layout.',
-  ParvaneStoragePinPlaceholder: 'PIN (at least 8 characters)',
-  ParvaneStoragePinRepeat: 'Repeat PIN',
-  ParvaneStoragePinSet: 'Set PIN',
-  ParvaneStoragePinRemove: 'Remove PIN',
-  ParvaneStoragePinEnabled: 'PIN is set',
   ParvaneStoragePinDone: 'Storage PIN updated',
   ParvaneStoragePinFailed: 'Could not update the storage PIN',
   // spec 035 T044: фоновая смена ключа хранилища после установки PIN
@@ -569,7 +564,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneContactsNoMatch: 'No contacts matched your search.',
   ParvaneContactsEmpty: 'Contact list is empty.',
   ParvanePrivacySaveFailed: 'The server did not save the setting. Check the connection and try again',
-  ParvaneStoragePinPrompt: 'Enter the storage PIN to unlock your E2E keys',
   ParvaneChangePasswordDone: 'Password changed. Devices trusted for two-factor must confirm sign-in again.',
   ParvaneChangePasswordFailed: 'Could not change the password',
   ParvaneSecurityKeyTitle: 'Security key',
@@ -1991,11 +1985,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'сохранённая сессия, история и черновики, контакты с вашими именами и заметками, заблокированные, ссылки-'
     + 'приглашения и сведения групп, папки, закреплённые и архивные чаты, настройки уведомлений. Его спросят при '
     + 'каждой перезагрузке. Пароль аккаунта не сохраняется. Не защищены: тема, язык и раскладка панелей.',
-  ParvaneStoragePinPlaceholder: 'PIN (не короче 8 символов)',
-  ParvaneStoragePinRepeat: 'Повторите PIN',
-  ParvaneStoragePinSet: 'Установить PIN',
-  ParvaneStoragePinRemove: 'Снять PIN',
-  ParvaneStoragePinEnabled: 'PIN установлен',
   ParvaneStoragePinDone: 'PIN хранилища обновлён',
   ParvaneStoragePinFailed: 'Не удалось обновить PIN хранилища',
   ParvaneStorageMigrating: 'Локальные данные перешифровываются новым ключом… Приложением можно пользоваться.',
@@ -2004,7 +1993,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneContactsNoMatch: 'Контакты по запросу не найдены.',
   ParvaneContactsEmpty: 'Список контактов пуст.',
   ParvanePrivacySaveFailed: 'Сервер не сохранил настройку. Проверьте связь и попробуйте ещё раз',
-  ParvaneStoragePinPrompt: 'Введите PIN хранилища, чтобы разблокировать E2E-ключи',
   ParvaneChangePasswordDone: 'Пароль изменён. Доверенные для 2FA устройства подтвердят вход заново.',
   ParvaneChangePasswordFailed: 'Не удалось сменить пароль',
   ParvaneSecurityKeyTitle: 'Ключ безопасности',

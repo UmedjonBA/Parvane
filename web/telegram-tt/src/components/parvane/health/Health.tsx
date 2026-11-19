@@ -14,7 +14,7 @@ import {
   BLOCK_KINDS, MOOD_KIND, orderMetrics, WATER_KIND,
 } from './healthFormat';
 import {
-  addHealthEntries, getHealthState, watchHealth,
+  addHealthEntries, getHealthState, retryHealth, watchHealth,
 } from './healthStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -23,6 +23,9 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import PvEmpty from '../notes/PvEmpty';
+import PvLoading from '../notes/PvLoading';
+import PvOfflineBar from '../notes/PvOfflineBar';
 import { HealthActivityCard, HealthNutritionCard } from './HealthDayCards';
 import HealthDetail from './HealthDetail';
 import HealthEntries from './HealthEntries';
@@ -133,11 +136,8 @@ const Health = () => {
 
   function renderSummary() {
     if (!view) {
-      return (
-        <div className={buildClassName(kit.muted, styles.empty)} data-health-status={status}>
-          {lang(STATUS_KEYS[status as keyof typeof STATUS_KEYS] || 'HealthStatusLoading')}
-        </div>
-      );
+      if (status === 'ready' || status === 'loading') return <PvLoading data-health-status={status} />;
+      return <PvEmpty text={lang(STATUS_KEYS[status])} data-health-status={status} />;
     }
     return (
       <>
@@ -211,7 +211,8 @@ const Health = () => {
         </div>
         <button type="button" className={kit.btn} onClick={handleOpenBlocks}>{lang('HealthBlocks')}</button>
       </header>
-      {view && status !== 'ready' && (
+      {view && status === 'offline' && <PvOfflineBar text={lang('PvOfflineHealth')} onRetry={retryHealth} />}
+      {view && status !== 'ready' && status !== 'offline' && (
         <div className={styles.notice} role="status">
           {lang(STATUS_KEYS[status] || 'HealthStatusLoading')}
         </div>

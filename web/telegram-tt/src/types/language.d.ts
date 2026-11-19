@@ -2341,6 +2341,24 @@ export interface LangPair {
   'ParvaneModuleNotesHint': undefined;
   'ParvaneModuleFilesHint': undefined;
   'ParvaneModuleMusicHint': undefined;
+  'PvOfflineRetry': undefined;
+  'PvOfflinePlan': undefined;
+  'PvOfflineHealth': undefined;
+  'PvOfflineNotes': undefined;
+  'PvOfflineFiles': undefined;
+  'PvOfflineMusic': undefined;
+  'ModuleOffNotNow': undefined;
+  'ModuleOffSame': undefined;
+  'ModuleOffEnablePlan': undefined;
+  'ModuleOffEnableNotes': undefined;
+  'ModuleOffEnableMusic': undefined;
+  'ModuleOffBodyPlan': undefined;
+  'ModuleOffBodyNotes': undefined;
+  'ModuleOffBodyMusic': undefined;
+  'ModuleOffHintTrack': undefined;
+  'ModuleOffHintTask': undefined;
+  'ModuleOffHintEvent': undefined;
+  'ModuleOffHintNote': undefined;
   'ParvaneHealthBlockSleep': undefined;
   'ParvaneHealthBlockBody': undefined;
   'ParvaneHealthBlockFood': undefined;
@@ -2348,7 +2366,6 @@ export interface LangPair {
   'ParvaneHealthBlockWorkouts': undefined;
   'MusicOffline': undefined;
   'MusicOfflineSave': undefined;
-  'MusicOfflineNoNetwork': undefined;
   'MusicOfflineEmpty': undefined;
   'MusicOfflineLimit': undefined;
   'MusicOfflineFailed': undefined;
@@ -2409,7 +2426,6 @@ export interface LangPair {
   'MusicPlayer': undefined;
   'MusicServerLibrary': undefined;
   'MusicSearchPlaceholder': undefined;
-  'MusicLoading': undefined;
   'MusicLoadFailed': undefined;
   'MusicNotConnected': undefined;
   'MusicMixTitle': undefined;
@@ -2620,7 +2636,6 @@ export interface LangPair {
   'ParvaneCloudEmptyShared': undefined;
   'ParvaneCloudNothingFound': undefined;
   'ParvaneCloudNeedsLinking': undefined;
-  'ParvaneCloudSyncUnavailable': undefined;
   'ParvaneCloudSyncPending': undefined;
   'ParvaneCloudDownload': undefined;
   'ParvaneCloudRename': undefined;
@@ -2745,7 +2760,6 @@ export interface LangPair {
   'ParvaneCloudPreviewKeys': undefined;
   'ParvaneCloudInviteNoSpace': undefined;
   'ParvaneCloudStateNotLinked': undefined;
-  'ParvaneCloudStateOffline': undefined;
   'ParvaneCloudStateNoKey': undefined;
   'ParvaneCloudEmptyOwned': undefined;
   'ParvaneCloudAccessLink': undefined;
@@ -2914,8 +2928,6 @@ export interface LangPair {
   'PlannerStepAdd': undefined;
   'PlannerStepNew': undefined;
   'PlannerSyncPending': undefined;
-  'PlannerSyncUnavailable': undefined;
-  'PlannerShowingSaved': undefined;
   'PlannerTimeConflict': undefined;
   'PlannerTitleNew': undefined;
   'PlannerToday': undefined;
@@ -3079,7 +3091,6 @@ export interface LangPair {
   'KnowledgeNewNote': undefined;
   'KnowledgeNoteTitle': undefined;
   'KnowledgeSearch': undefined;
-  'KnowledgeEmpty': undefined;
   'KnowledgeNothingFound': undefined;
   'KnowledgeGuideOpen': undefined;
   'KnowledgeGuideDismiss': undefined;
@@ -3110,6 +3121,8 @@ export interface LangPair {
   'KnowledgeBacklinksEmpty': undefined;
   'KnowledgeMissingNote': undefined;
   'KnowledgeDaily': undefined;
+  'KnowledgeUntitled': undefined;
+  'KnowledgeConflictWord': undefined;
   'KnowledgeGraphDays': undefined;
   'KnowledgeGraphRecords': undefined;
   'KnowledgeGraphFoldersAll': undefined;
@@ -3419,6 +3432,33 @@ export interface LangPair {
   'KnowledgeToolCode': undefined;
   'KnowledgeToolCallout': undefined;
   'KnowledgeToolList': undefined;
+  'ParvaneLoading': undefined;
+  'KnowledgeEmptyTitle': undefined;
+  'KnowledgeEmptyText': undefined;
+  'KnowledgeEmptyGuide': undefined;
+  'MusicEmptyTitle': undefined;
+  'MusicEmptyText': undefined;
+  'MusicEmptyFind': undefined;
+  'ParvanePinEnter': undefined;
+  'ParvanePinErase': undefined;
+  'ParvanePinForgot': undefined;
+  'ParvanePinForgotConfirm': undefined;
+  'ParvanePinSignOut': undefined;
+  'ParvanePinSigningOut': undefined;
+  'ParvanePinLimitNote': undefined;
+  'ParvanePinAbout': undefined;
+  'ParvanePinStartCaption': undefined;
+  'ParvanePinAsk': undefined;
+  'ParvanePinLockNow': undefined;
+  'ParvanePinChange': undefined;
+  'ParvanePinCreate': undefined;
+  'ParvanePinRepeat': undefined;
+  'ParvanePinCurrent': undefined;
+  'ParvanePinNew': undefined;
+  'ParvanePinMismatch': undefined;
+  'ParvanePinWrongCurrent': undefined;
+  'ParvanePinOn': undefined;
+  'ParvanePinOff': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5154,6 +5194,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneModuleMoveDown': {
     'name': V;
   };
+  'ModuleOffTitle': {
+    'module': V;
+  };
   'MusicOfflineProgress': {
     'done': V;
     'total': V;
@@ -5864,6 +5907,19 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'KnowledgeFolderDeleteQuestion': {
     'name': V;
+  };
+  'ParvanePinDots': {
+    'count': V;
+    'total': V;
+  };
+  'ParvanePinDigit': {
+    'digit': V;
+  };
+  'ParvanePinWrong': {
+    'count': V;
+  };
+  'ParvanePinAttemptsLeft': {
+    'count': V;
   };
 }
 

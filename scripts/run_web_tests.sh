@@ -190,6 +190,9 @@ log "Rejected saved token: sign-in screen, then back to work (E6-1)"
 "$ROOT/scripts/run_web_auth_reject_e2e.sh"
 "$ROOT/scripts/run_web_auth_screens_e2e.sh"
 
+log "Storage PIN: digits, lock screen, five wrong attempts sign out (spec 041 E6)"
+"$ROOT/scripts/run_web_pin_e2e.sh"
+
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"
 

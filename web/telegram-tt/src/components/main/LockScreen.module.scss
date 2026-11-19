@@ -1,40 +1,97 @@
-.container {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
+// «PIN при запуске» (spec 041 E6, доска `ZpSystem`): на телефоне — весь экран, шире — та же колонка по центру
 
+.root {
+  position: fixed;
+  z-index: 2;
+  inset: 0;
+
+  overflow-y: auto;
   display: flex;
-  align-items: center;
   justify-content: center;
+
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
 }
 
-.wrapper {
-  z-index: 2;
-
-  display: inline-flex;
+.column {
+  display: flex;
   flex-direction: column;
+  gap: 1rem;
+  align-items: center;
 
-  max-width: 20rem;
-  padding: 1.5rem 1rem 0;
-  border-radius: var(--border-radius-default);
+  width: 100%;
+  max-width: 22.5rem;
+  min-height: 100%;
+  padding: 4.5rem 1.5rem 1.5rem;
 
-  color: var(--color-text);
-
-  background: var(--color-background);
-
-  &[dir="rtl"] {
-    text-align: right;
+  @media (min-width: 601px) {
+    min-height: 0;
+    margin: auto 0;
+    padding-top: 1.5rem;
   }
 }
 
-.icon {
-  width: 10rem;
-  height: 10rem;
-  margin: 0 auto 1rem;
+.logo {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 1rem;
+
+  font-size: 1.625rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
 }
 
-.help {
-  margin-top: 2rem;
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+}
+
+.spacer {
+  flex: 1 1 0;
+  min-height: 0.5rem;
+}
+
+.forgot {
+  cursor: var(--custom-cursor, pointer);
+
+  min-height: 2.75rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+.note {
+  margin: 0;
+
+  font-size: var(--pv-font-size-caption);
+  line-height: 1.35;
+  color: var(--pv-muted);
+  text-align: center;
 }

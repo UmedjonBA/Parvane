@@ -873,7 +873,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       if (status !== 'needs-linking' && status !== 'loading' && !isEnsureStarted) {
         isEnsureStarted = true;
         // Частый опрос включает сам раздел (`parvaneCloudSetActive`)
-        void cloud.ensure(false);
+        void cloud.ensure();
       }
       const containers = cloud.containers();
       const trees: Record<string, CloudStateJson> = {};

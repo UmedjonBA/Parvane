@@ -264,7 +264,7 @@ try {
   await bob2Context.setOffline(true);
   await createTask(sessions.bob2.page, taskC, '12:00');
   await sessions.bob2.page.waitForTimeout(3000);
-  await planner2b.getByText(/sync is unavailable/).waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await planner2b.locator('[data-offline-bar]').waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   await closePlanner(sessions.bob2.page);
   await deleteTask(sessions.bob1.page, taskA);
   await createTask(sessions.bob1.page, taskD, '13:00');

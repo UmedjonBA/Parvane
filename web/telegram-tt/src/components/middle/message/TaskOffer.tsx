@@ -15,7 +15,9 @@ import { offerInPlanKey, parseOfferInPlanKey } from '../../parvane/taskOffer/tas
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useParvaneModules from '../../../hooks/useParvaneModules';
+import useModuleGate from '../../../hooks/useModuleGate';
+
+import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
 import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './TaskOffer.module.scss';
@@ -94,13 +96,15 @@ const TaskOffer = ({
     }
   });
 
-  const isPlanOn = useParvaneModules().enabled.includes('plan');
-  const handleAccept = useLastCallback(() => respond(true));
+  // «План» выключен на устройстве: «В план» и «открыть» ведут в лист «Модуль выключен», после включения
+  // действие выполняется
+  const gate = useModuleGate('plan');
+  const handleAccept = useLastCallback(() => gate.run(() => void respond(true)));
   const handleDecline = useLastCallback(() => respond(false));
 
   const handleOpenPlan = useLastCallback(() => {
     // Задача, принятая до появления «События», открывается как задача
-    openOfferInPlan(planned?.kind || kind, planned?.day || taskOffer.day);
+    gate.run(() => openOfferInPlan(planned?.kind || kind, planned?.day || taskOffer.day));
   });
 
   const accepted = taskOffer.responses.filter((r) => r.isAccepted);
@@ -166,8 +170,8 @@ const TaskOffer = ({
           {taskOffer.steps.map((step, index) => <li key={`${index}${step}`}>{step}</li>)}
         </ol>
       )}
-      {/* «План» выключен на устройстве — карточка остаётся текстом, без действий */}
-      {isPlanOn && renderActions()}
+      {/* «План» выключен сервером — карточка остаётся текстом, без действий (MODULES-1) */}
+      {(gate.isOn || gate.canEnable) && renderActions()}
       {Boolean(taskOffer.responses.length) && (
         <div className={styles.responses}>
           {Boolean(accepted.length) && (
@@ -178,6 +182,13 @@ const TaskOffer = ({
           )}
         </div>
       )}
+      <PvModuleOff
+        isOpen={gate.isAsked}
+        module="plan"
+        hint={lang(isEvent ? 'ModuleOffHintEvent' : 'ModuleOffHintTask')}
+        onEnable={gate.enable}
+        onClose={gate.dismiss}
+      />
     </div>
   );
 };

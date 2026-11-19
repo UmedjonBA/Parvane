@@ -18,9 +18,9 @@ vi.mock('idb-keyval', async (importOriginal) => {
 });
 
 import {
-  clearSecureSession, clearTrustSecret, hasSecureProfile, hasStoragePin, isStorageUnlocked, loadSecureSession,
-  loadTrustSecret, lockStorage, peekSecureRecord, saveSecureSession, saveTrustSecret, SecureE2eStorage,
-  secureStorageInternals, setStoragePin, unlockStorageWithPin,
+  checkStoragePin, clearSecureSession, clearTrustSecret, hasSecureProfile, hasStoragePin, isStorageUnlocked,
+  loadSecureSession, loadTrustSecret, lockStorage, peekSecureRecord, saveSecureSession, saveTrustSecret,
+  SecureE2eStorage, secureStorageInternals, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
 
 const USER = 'secure-storage@local';
@@ -133,10 +133,22 @@ describe('secure E2E storage batches (perf A6)', () => {
     expect(await storage.loadRecord('j:1')).toBeUndefined();
   });
 
-  it('a new PIN shorter than 8 characters is rejected (WEB-15)', async () => {
+  it('a new PIN shorter than 4 characters is rejected', async () => {
     const user = 'gina@local';
     await SecureE2eStorage.open(user);
-    await expect(setStoragePin(user, '1234')).rejects.toThrow(/too short/);
+    await expect(setStoragePin(user, '123')).rejects.toThrow(/too short/);
+    await SecureE2eStorage.clear(user);
+  });
+
+  it('checks the current PIN without locking or unlocking the storage', async () => {
+    const user = 'pin-check@local';
+    const storage = await SecureE2eStorage.open(user);
+    await storage.saveRecord('m:1', { id: 1 });
+    expect(await checkStoragePin(user, '4821')).toBe(false);
+    await setStoragePin(user, '4821');
+    expect(await checkStoragePin(user, '0000')).toBe(false);
+    expect(await checkStoragePin(user, '4821')).toBe(true);
+    expect(await (await SecureE2eStorage.open(user)).loadRecord('m:1')).toEqual({ id: 1 });
     await SecureE2eStorage.clear(user);
   });
 

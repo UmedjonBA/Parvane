@@ -197,10 +197,12 @@
   background: var(--pv-panel);
 }
 
+// Подпись плитки переносится на вторую строку: «Saved Messages» в одну строку на телефоне не помещается
 .tileTitle {
-  @include ellipsis;
-
   max-width: 100%;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .headDesk .tileTitle {

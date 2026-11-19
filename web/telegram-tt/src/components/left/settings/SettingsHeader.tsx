@@ -192,17 +192,11 @@ const SettingsHeader: FC<OwnProps> = ({
       case SettingsScreens.PasscodeNewPasscode:
       case SettingsScreens.PasscodeNewPasscodeConfirm:
       case SettingsScreens.PasscodeCongratulations:
-        return <h3>{oldLang('Passcode')}</h3>;
-
       case SettingsScreens.PasscodeTurnOff:
-        return <h3>{oldLang('PasscodeController.Disable.Title')}</h3>;
-
       case SettingsScreens.PasscodeChangePasscodeCurrent:
       case SettingsScreens.PasscodeChangePasscodeNew:
-        return <h3>{oldLang('PasscodeController.Change.Title')}</h3>;
-
       case SettingsScreens.PasscodeChangePasscodeConfirm:
-        return <h3>{oldLang('PasscodeController.ReEnterPasscode.Placeholder')}</h3>;
+        return <h3>{oldLang('ParvaneStoragePinTitle')}</h3>;
 
       case SettingsScreens.Folders:
         return <h3>{oldLang('Filters')}</h3>;

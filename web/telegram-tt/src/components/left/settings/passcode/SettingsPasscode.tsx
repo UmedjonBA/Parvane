@@ -1,18 +1,16 @@
-import type { FC } from '../../../../lib/teact/teact';
-import { memo, useCallback } from '../../../../lib/teact/teact';
-import { getActions, withGlobal } from '../../../../global';
+import { memo, useState } from '../../../../lib/teact/teact';
+import { getActions } from '../../../../global';
 
-import type { GlobalState } from '../../../../global/types';
 import { SettingsScreens } from '../../../../types';
 
-import { decryptSession } from '../../../../util/passcode';
+import { callApi } from '../../../../api/gramjs';
 
+import useLang from '../../../../hooks/useLang';
+import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
-import SettingsPasscodeForm from '../SettingsPasswordForm';
-import SettingsPasscodeCongratulations from './SettingsPasscodeCongratulations';
-import SettingsPasscodeEnabled from './SettingsPasscodeEnabled';
-import SettingsPasscodeStart from './SettingsPasscodeStart';
+import SettingsPasscodeEntry from './SettingsPasscodeEntry';
+import SettingsPasscodeHub from './SettingsPasscodeHub';
 
 export type OwnProps = {
   passcode: string;
@@ -23,202 +21,134 @@ export type OwnProps = {
   onReset: () => void;
 };
 
-type StateProps = GlobalState['passcode'];
+const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 
-const SettingsPasscode: FC<OwnProps & StateProps> = ({
+const NEW_PIN_SCREENS = [SettingsScreens.PasscodeNewPasscode, SettingsScreens.PasscodeNewPasscodeConfirm];
+const CHANGE_PIN_SCREENS = [
+  SettingsScreens.PasscodeChangePasscodeCurrent,
+  SettingsScreens.PasscodeChangePasscodeNew,
+  SettingsScreens.PasscodeChangePasscodeConfirm,
+];
+const NESTED_SCREENS = [...NEW_PIN_SCREENS, ...CHANGE_PIN_SCREENS, SettingsScreens.PasscodeTurnOff];
+
+// Parvane (spec 041 E6): «PIN хранилища» по доскам `RpProfileB`, `ZdProfileX` — экран с выключателем и шаги
+// ввода цифрами: включение (новый · повтор), смена (текущий · новый · повтор), выключение (текущий).
+// Прежде здесь был код-пароль Telegram Web A, а PIN хранилища задавался двумя полями в «Конфиденциальности»
+const SettingsPasscode = ({
   passcode,
   currentScreen,
   shownScreen,
-  error,
   isActive,
-  isLoading,
   onSetPasscode,
   onReset,
-}) => {
-  const {
-    setPasscode,
-    clearPasscode,
-    setPasscodeError,
-    clearPasscodeError,
-    openSettingsScreen,
-  } = getActions();
+}: OwnProps) => {
+  const { openSettingsScreen, showNotification } = getActions();
 
-  const lang = useOldLang();
+  const lang = useLang();
+  const oldLang = useOldLang();
+  const [error, setError] = useState<string | undefined>();
+  const [isBusy, setIsBusy] = useState(false);
 
-  const handleStartWizard = useCallback(() => {
+  const clearError = useLastCallback(() => setError(undefined));
+
+  const handleStart = useLastCallback(() => {
     onSetPasscode('');
     openSettingsScreen({ screen: SettingsScreens.PasscodeNewPasscode });
-  }, [onSetPasscode]);
+  });
 
-  const handleNewPassword = useCallback((value: string) => {
-    onSetPasscode(value);
-    openSettingsScreen({ screen: SettingsScreens.PasscodeNewPasscodeConfirm });
-  }, [onSetPasscode]);
-
-  const handleNewPasswordConfirm = useCallback(() => {
-    setPasscode({ passcode });
-    onSetPasscode('');
-    openSettingsScreen({ screen: SettingsScreens.PasscodeCongratulations });
-  }, [onSetPasscode, passcode]);
-
-  const handleChangePasswordCurrent = useCallback((currentPasscode: string) => {
-    onSetPasscode('');
-    decryptSession(currentPasscode).then(() => {
-      openSettingsScreen({ screen: SettingsScreens.PasscodeChangePasscodeNew });
-    }, () => {
-      setPasscodeError({
-        error: lang('PasscodeController.Error.Current'),
-      });
+  const handleNewPin = useLastCallback((pin: string) => {
+    onSetPasscode(pin);
+    openSettingsScreen({
+      screen: currentScreen === SettingsScreens.PasscodeNewPasscode
+        ? SettingsScreens.PasscodeNewPasscodeConfirm : SettingsScreens.PasscodeChangePasscodeConfirm,
     });
-  }, [lang, onSetPasscode]);
+  });
 
-  const handleChangePasswordNew = useCallback((value: string) => {
-    onSetPasscode(value);
-    openSettingsScreen({ screen: SettingsScreens.PasscodeChangePasscodeConfirm });
-  }, [onSetPasscode]);
+  const applyPin = useLastCallback(async (pin: string) => {
+    setIsBusy(true);
+    const isDone = Boolean(await callParvane('parvaneSetStoragePin', { pin }));
+    setIsBusy(false);
+    onSetPasscode('');
+    showNotification({ message: oldLang(isDone ? 'ParvaneStoragePinDone' : 'ParvaneStoragePinFailed') });
+    openSettingsScreen({ screen: SettingsScreens.PasscodeEnabled });
+  });
 
-  const handleTurnOff = useCallback((currentPasscode: string) => {
-    decryptSession(currentPasscode).then(() => {
-      clearPasscode();
-      openSettingsScreen({ screen: SettingsScreens.Privacy });
-    }, () => {
-      setPasscodeError({
-        error: lang('PasscodeController.Error.Current'),
-      });
-    });
-  }, [lang]);
+  const handleRepeat = useLastCallback((pin: string) => {
+    if (pin !== passcode) {
+      setError(lang('ParvanePinMismatch'));
+      return;
+    }
+    void applyPin(pin);
+  });
+
+  const checkCurrent = useLastCallback(async (pin: string) => {
+    setIsBusy(true);
+    const isRight = Boolean(await callParvane('parvaneCheckStoragePin', { pin }));
+    setIsBusy(false);
+    if (!isRight) setError(lang('ParvanePinWrongCurrent'));
+    return isRight;
+  });
+
+  const handleCurrentForChange = useLastCallback(async (pin: string) => {
+    if (!await checkCurrent(pin)) return;
+    onSetPasscode('');
+    openSettingsScreen({ screen: SettingsScreens.PasscodeChangePasscodeNew });
+  });
+
+  const handleCurrentForTurnOff = useLastCallback(async (pin: string) => {
+    if (await checkCurrent(pin)) void applyPin('');
+  });
+
+  function renderEntry(step: string, title: string, onComplete: (pin: string) => void, nextScreens: SettingsScreens[]) {
+    return (
+      <SettingsPasscodeEntry
+        step={step}
+        title={title}
+        error={error}
+        isBusy={isBusy}
+        isActive={isActive}
+        isBackActive={isActive || nextScreens.includes(shownScreen)}
+        onComplete={onComplete}
+        onClearError={clearError}
+        onReset={onReset}
+      />
+    );
+  }
 
   switch (currentScreen) {
     case SettingsScreens.PasscodeDisabled:
+    case SettingsScreens.PasscodeEnabled:
+    case SettingsScreens.PasscodeCongratulations:
       return (
-        <SettingsPasscodeStart
-          onStart={handleStartWizard}
-          isActive={isActive || [
-            SettingsScreens.PasscodeNewPasscode,
-            SettingsScreens.PasscodeNewPasscodeConfirm,
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
+        <SettingsPasscodeHub
+          isActive={isActive}
+          isBackActive={isActive || NESTED_SCREENS.includes(shownScreen)}
+          onStart={handleStart}
           onReset={onReset}
         />
       );
 
     case SettingsScreens.PasscodeNewPasscode:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          placeholder={lang('EnterNewPasscode')}
-          submitLabel={lang('Continue')}
-          onSubmit={handleNewPassword}
-          isActive={isActive || [
-            SettingsScreens.PasscodeNewPasscodeConfirm,
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
+      return renderEntry('new', lang('ParvanePinCreate'), handleNewPin, [SettingsScreens.PasscodeNewPasscodeConfirm]);
 
     case SettingsScreens.PasscodeNewPasscodeConfirm:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          expectedPassword={passcode}
-          placeholder={lang('ReEnterYourPasscode')}
-          submitLabel={lang('Continue')}
-          isLoading={isLoading}
-          onSubmit={handleNewPasswordConfirm}
-          isActive={isActive || [
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
-
-    case SettingsScreens.PasscodeCongratulations:
-      return (
-        <SettingsPasscodeCongratulations
-          isActive={isActive}
-          onReset={onReset}
-        />
-      );
-
-    case SettingsScreens.PasscodeEnabled:
-      return (
-        <SettingsPasscodeEnabled
-          isActive={isActive || [
-            SettingsScreens.PasscodeChangePasscodeCurrent,
-            SettingsScreens.PasscodeChangePasscodeNew,
-            SettingsScreens.PasscodeChangePasscodeConfirm,
-            SettingsScreens.PasscodeCongratulations,
-            SettingsScreens.PasscodeTurnOff,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
+    case SettingsScreens.PasscodeChangePasscodeConfirm:
+      return renderEntry('repeat', lang('ParvanePinRepeat'), handleRepeat, []);
 
     case SettingsScreens.PasscodeChangePasscodeCurrent:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          error={error}
-          onClearError={clearPasscodeError}
-          placeholder={lang('PasscodeController.Current.Placeholder')}
-          onSubmit={handleChangePasswordCurrent}
-          isActive={isActive || [
-            SettingsScreens.PasscodeChangePasscodeNew,
-            SettingsScreens.PasscodeChangePasscodeConfirm,
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
+      return renderEntry('current', lang('ParvanePinCurrent'), handleCurrentForChange, [
+        SettingsScreens.PasscodeChangePasscodeNew, SettingsScreens.PasscodeChangePasscodeConfirm,
+      ]);
 
     case SettingsScreens.PasscodeChangePasscodeNew:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          placeholder={lang('PleaseEnterNewFirstPassword')}
-          onSubmit={handleChangePasswordNew}
-          isActive={isActive || [
-            SettingsScreens.PasscodeChangePasscodeConfirm,
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
-
-    case SettingsScreens.PasscodeChangePasscodeConfirm:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          expectedPassword={passcode}
-          placeholder={lang('PasscodeController.ReEnterPasscode.Placeholder')}
-          isLoading={isLoading}
-          onSubmit={handleNewPasswordConfirm}
-          isActive={isActive || [
-            SettingsScreens.PasscodeCongratulations,
-          ].includes(shownScreen)}
-          onReset={onReset}
-        />
-      );
+      return renderEntry('new', lang('ParvanePinNew'), handleNewPin, [SettingsScreens.PasscodeChangePasscodeConfirm]);
 
     case SettingsScreens.PasscodeTurnOff:
-      return (
-        <SettingsPasscodeForm
-          shouldDisablePasswordManager
-          error={error ? lang(error) : undefined}
-          onClearError={clearPasscodeError}
-          placeholder={lang('PasscodeController.Current.Placeholder')}
-          onSubmit={handleTurnOff}
-          isActive={isActive}
-          onReset={onReset}
-        />
-      );
+      return renderEntry('current', lang('ParvanePinCurrent'), handleCurrentForTurnOff, []);
 
     default:
       return undefined;
   }
 };
 
-export default memo(withGlobal<OwnProps>(
-  (global): Complete<StateProps> => ({ ...global.passcode } as Complete<StateProps>),
-)(SettingsPasscode));
+export default memo(SettingsPasscode);

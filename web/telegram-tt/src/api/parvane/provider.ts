@@ -108,8 +108,8 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { createMusicApi } from './musicApi';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
-import { buildOldLangPack } from './oldLangPack';
 import { hydratePersonal } from './personalStore';
+import { dropPinRequest, requestPinUnlock } from './pinGate';
 import { PollStore } from './polls';
 import { savePrivacySetting } from './privacySave';
 import { isCurrentAvatarDeleted } from './profilePhoto';
@@ -129,7 +129,8 @@ import {
   verifyGifBytes,
 } from './savedGifJournal';
 import {
-  clearSecureSession, getStorageMigration, hasSecureProfile, hasStoragePin, isStorageUnlocked, loadSecureSession,
+  checkStoragePin, clearSecureSession, getStorageMigration, hasSecureProfile, hasStoragePin, isStorageUnlocked,
+  loadSecureSession,
   onStorageLocked, peekSecureRecord, renameStorageUser,
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
@@ -1518,8 +1519,12 @@ const connectionController = createConnectionController({
     // Смена ника (spec 026): прежние адреса ведут в прежние чаты
     for (const [from, to] of localState.loadRenames()) store.registerUserRename(from, to);
   },
-  unlockStorage: (user) => ensureStorageUnlocked(user),
-  unlockForProof: (user) => promptStorageUnlock(user),
+  unlockStorage: async (user) => {
+    await ensureStorageUnlocked(user);
+  },
+  unlockForProof: async (user) => {
+    await promptStorageUnlock(user);
+  },
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     // Отзыв устройства сообщает сам сервер и подтвердить его по журналу здесь нельзя, поэтому
@@ -1602,7 +1607,8 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
         // Устройством не пользовались дольше окна продления — пароль просим заново
         await clearSecureSession(savedAddress).catch(() => undefined);
       } else if (readRememberMe()) {
-        await ensureStorageUnlocked(savedAddress);
+        // Выход с экрана блокировки: экран входа покажет запуск, начатый после выхода
+        if (!await ensureStorageUnlocked(savedAddress)) return;
         const savedToken = await loadSecureSession(savedAddress).catch(() => undefined);
         if (savedToken) {
           try {
@@ -1756,9 +1762,8 @@ function logDebug(message: string) {
   diagLog('log', message);
 }
 
-// P-39: хранилище под PIN — спрашиваем PIN до открытия E2E/сессии.
-// Минимальный UI: нативный prompt (3 попытки); при отказе хранилище остаётся
-// закрытым — E2E и сохранённая сессия недоступны до перезагрузки
+// P-39: хранилище под PIN — спрашиваем PIN до открытия E2E/сессии. PIN вводят на экране блокировки
+// (`pinGate` → `LockScreen`, spec 041 E6); пять неверных вводов — выход из аккаунта на устройстве
 // spec 035 T045: другая вкладка установила PIN или сменила ключ поколением — у этой вкладки нет нового DEK, писать
 // ей нельзя. Перезагрузка спросит PIN (ensureStorageUnlocked) и откроет хранилище заново
 onStorageLocked((user) => {
@@ -1766,21 +1771,17 @@ onStorageLocked((user) => {
   window.location.reload();
 });
 
+// Ответ `false` — с экрана блокировки вышли из аккаунта: хранилище стёрто, продолжать вход нечем
 async function ensureStorageUnlocked(user: string) {
-  await promptStorageUnlock(user);
+  if (!await promptStorageUnlock(user)) return false;
   // spec 035 T046: личные данные (контакты, блокировки, папки…) — в память до первого чтения
   await hydratePersonal(user).catch(() => undefined);
+  return true;
 }
 
 async function promptStorageUnlock(user: string) {
-  if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return;
-  const prompts = buildOldLangPack('en');
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const pin = window.prompt(prompts.ParvaneStoragePinPrompt as string, '');
-    // eslint-disable-next-line no-null/no-null
-    if (pin === null) return;
-    if (await unlockStorageWithPin(user, pin).catch(() => false)) return;
-  }
+  if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return true;
+  return requestPinUnlock(user, (pin) => unlockStorageWithPin(user, pin).catch(() => false));
 }
 
 // «Keep me signed in» (P-39): при включённом флаге сохраняем JWT сессии
@@ -4756,6 +4757,12 @@ const methods = {
     }
   },
 
+  // Смена и выключение PIN спрашивают текущий (spec 041 E6); хранилище при этом открыто и не меняется
+  async parvaneCheckStoragePin({ pin }: { pin: string }) {
+    if (!store.self) return false;
+    return checkStoragePin(store.self, pin).catch(() => false);
+  },
+
   // spec 035 T044: ход фоновой смены ключа хранилища после установки PIN (экран хода в настройках)
   parvaneGetStorageMigration() {
     if (!store.self) return undefined;
@@ -5227,6 +5234,8 @@ const methods = {
         // Ключи стёрты — следующий вход идёт новым устройством
         connectionController.forgetDeviceId(user);
       }
+      // Выход с экрана блокировки: хранилища больше нет, ждать PIN некому
+      dropPinRequest();
     }
     return undefined;
   },

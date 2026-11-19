@@ -21,6 +21,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
+import PvEmpty from '../notes/PvEmpty';
 import PlannerGroupBar, { type GroupStats } from './PlannerGroupBar';
 import PlannerName from './PlannerName';
 
@@ -284,7 +285,7 @@ const PlannerAgenda = ({
         )}
       </aside>
       <div className={styles.agenda}>
-        {!days.length && <p className={styles.empty}>{lang('PlannerAgendaEmpty')}</p>}
+        {!days.length && <PvEmpty title={lang('PlannerAgendaEmpty')} data-agenda-empty />}
         {days.map(([key, entry]) => (
           <section key={key} className={styles.agendaDay} data-day={key}>
             <button

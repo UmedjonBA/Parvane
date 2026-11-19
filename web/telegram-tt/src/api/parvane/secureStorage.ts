@@ -26,8 +26,9 @@ import { storeOpen } from '../../lib/parvane-protocol/parvane_protocol';
 import { loadProtocol } from './v2/engine';
 import { openStoreIdb, STORE_DB } from './v2/storeIdb';
 import { createStorageSignal } from './v2/tabSignal';
-// Новый PIN — не короче: копию профиля перебирают офлайн (WEB-15)
-export const STORAGE_PIN_MIN_LENGTH = 8;
+// Новый PIN — не короче. По макету (spec 041 E6) PIN — четыре цифры: копию профиля с таким PIN перебирают
+// офлайн за минуты (WEB-15 ослаблен решением «по макету»), он закрывает приложение, а не диск от разбора
+export const STORAGE_PIN_MIN_LENGTH = 4;
 const PIN_ITERATIONS = 310_000;
 // Записей в одной транзакции записи пачкой
 const WRITE_BATCH = 512;
@@ -664,6 +665,25 @@ async function unlockWithPinIn(ctx: Ctx, user: string, pin: string): Promise<boo
   return true;
 }
 
+// Тот ли это PIN — без смены состояния открытого хранилища: обёртка проверяется на копии корня
+async function checkPinIn(ctx: Ctx, user: string, pin: string): Promise<boolean> {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return false;
+  const i = info(p);
+  if (!i.wraps.includes('pin') || !i.pinSalt || !i.pinIterations) return false;
+  const kek = await pinKek(pin, unhex(i.pinSalt), i.pinIterations);
+  const probe = storeOpen(p.engine.rootBytes());
+  try {
+    probe.storeUnlock(kek, true);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    kek.fill(0);
+    probe.free();
+  }
+}
+
 function lockIn(ctx: Ctx, user: string) {
   const p = ctx.resolved.get(user);
   if (!p) return;
@@ -768,6 +788,7 @@ function makeApi(ctx: Ctx) {
     hasStoragePin: (user: string) => hasPinIn(ctx, user),
     isStorageUnlocked: (user: string) => isUnlockedIn(ctx, user),
     unlockStorageWithPin: (user: string, pin: string) => unlockWithPinIn(ctx, user, pin),
+    checkStoragePin: (user: string, pin: string) => checkPinIn(ctx, user, pin),
     lockStorage: (user: string) => lockIn(ctx, user),
     setStoragePin: (user: string, pin: string) => setPinIn(ctx, user, pin),
     renameStorageUser: (oldUser: string, newUser: string) => renameIn(ctx, oldUser, newUser),
@@ -786,7 +807,8 @@ function makeApi(ctx: Ctx) {
 
 const api = makeApi(DEFAULT_CTX);
 export const {
-  hasStoragePin, isStorageUnlocked, unlockStorageWithPin, lockStorage, setStoragePin, renameStorageUser,
+  hasStoragePin, isStorageUnlocked, unlockStorageWithPin, checkStoragePin, lockStorage, setStoragePin,
+  renameStorageUser,
   saveTrustSecret, loadTrustSecret, clearTrustSecret, saveSecureSession, loadSecureSession, clearSecureSession,
   getStorageMigration,
 } = api;

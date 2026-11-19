@@ -17,7 +17,8 @@ import {
   consumeModuleAddRequest, consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest,
   getNoteRequest, getParvaneSection, setKnowledgeView, setParvaneNavCovered, setParvaneSection,
 } from '../../../util/parvaneSection';
-import { setCloudActive } from '../cloud/cloudStore';
+import { retryCloud, setCloudActive } from '../cloud/cloudStore';
+import useCloudOffline from '../cloud/useCloudOffline';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
@@ -49,7 +50,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import Loading from '../../ui/Loading';
 import PlannerQuickHost from '../planner/PlannerQuickHost';
 import SectionHistoryBack from '../SectionHistoryBack';
 import GraphPanel from './GraphPanel';
@@ -64,7 +64,10 @@ import NotesList from './NotesList';
 import NoteView from './NoteView';
 import PvHeaderSearch from './PvHeaderSearch';
 import PvIcon from './PvIcon';
+import PvLoading from './PvLoading';
+import PvOfflineBar from './PvOfflineBar';
 import PvResizer from './PvResizer';
+import PvSkeleton from './PvSkeleton';
 
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
@@ -108,6 +111,7 @@ const Knowledge = () => {
   const folders = useDerivedState(getNoteFolders);
   const canvases = useDerivedState(getCanvases);
   const status = useDerivedState(getNotesStatus);
+  const isOffline = useCloudOffline();
   const notice = useDerivedState(getNotesNotice);
   const view = useDerivedState(getKnowledgeView);
   const planner = useDerivedState(getPlannerState);
@@ -175,10 +179,12 @@ const Knowledge = () => {
   }, [isShown]);
 
   useEffect(() => {
-    void loadNotes(currentUserId, { guideLang, vaultName });
+    void loadNotes(currentUserId, {
+      guideLang, vaultName, untitledName: lang('KnowledgeUntitled'), conflictWord: lang('KnowledgeConflictWord'),
+    });
     void loadPlanner(currentUserId);
     setHasSeenGuide(isGuideSeen(currentUserId));
-  }, [currentUserId, guideLang, vaultName]);
+  }, [currentUserId, guideLang, vaultName, lang]);
 
   const markGuide = useLastCallback(() => {
     markGuideSeen(currentUserId);
@@ -720,7 +726,7 @@ const Knowledge = () => {
         )}
         {renderNotice()}
         <div className={styles.content}>
-          {status !== 'ready' ? <Loading /> : isList
+          {status !== 'ready' ? (isList ? <PvSkeleton /> : <PvLoading />) : isList
             ? (openNote ? renderNote(openNote) : renderList()) : renderBoard()}
           {renderGraphNotice()}
         </div>
@@ -737,7 +743,7 @@ const Knowledge = () => {
             <KnowledgeTabs />
             <div className={styles.searchRow}>{renderSearch()}</div>
           </div>
-          {status === 'ready' ? renderList() : <Loading />}
+          {status === 'ready' ? renderList() : <PvSkeleton />}
         </aside>
         <PvResizer
           panel="notes-list"
@@ -750,7 +756,7 @@ const Knowledge = () => {
         <div className={styles.page}>
           {renderNotice()}
           <div className={styles.content}>
-            {status !== 'ready' ? <Loading /> : openNote ? renderNote(openNote) : (
+            {status !== 'ready' ? <PvLoading /> : openNote ? renderNote(openNote) : (
               <p className={styles.pickNote}>
                 {lang('KnowledgePickNote').split(NOTE_LINK).map((part, i) => (
                   part.startsWith('[[')
@@ -792,7 +798,7 @@ const Knowledge = () => {
         </header>
         {renderNotice()}
         <div className={styles.content}>
-          {status !== 'ready' ? <Loading /> : renderBoard()}
+          {status !== 'ready' ? <PvLoading /> : renderBoard()}
           {renderGraphNotice()}
         </div>
       </div>
@@ -832,12 +838,16 @@ const Knowledge = () => {
   }
 
   function renderNotice() {
-    if (!isNoticeShown || !notice) return undefined;
     return (
-      <div className={styles.notice} role="status">
-        {notice.code === 'guide-failed' ? lang('KnowledgeNoticeGuideFailed')
-          : lang(NOTICE_KEYS[notice.code], { name: notice.title })}
-      </div>
+      <>
+        {isOffline && <PvOfflineBar text={lang('PvOfflineNotes')} onRetry={retryCloud} />}
+        {isNoticeShown && notice && (
+          <div className={styles.notice} role="status">
+            {notice.code === 'guide-failed' ? lang('KnowledgeNoticeGuideFailed')
+              : lang(NOTICE_KEYS[notice.code], { name: notice.title })}
+          </div>
+        )}
+      </>
     );
   }
 

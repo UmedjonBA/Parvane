@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from '../lib/teact/teact';
+import { useEffect, useLayoutEffect, useState } from '../lib/teact/teact';
 import { withGlobal } from '../global';
 
 import type { GlobalState } from '../global/types';
@@ -19,6 +19,7 @@ import { getInitialLocationHash, parseInitialLocationHash } from '../util/routin
 import { checkSessionLocked, hasStoredSession } from '../util/sessions';
 import { updateSizes } from '../util/windowSize';
 import { isSessionExpired, readLoginAddress, readRememberMe } from '../api/parvane/authStorage';
+import { getPinRequest, subscribeToPinRequest } from '../api/parvane/pinGate';
 
 import useTauriDrag from '../hooks/tauri/useTauriDrag';
 import useAppLayout from '../hooks/useAppLayout';
@@ -40,8 +41,6 @@ import styles from './App.module.scss';
 
 type StateProps = {
   authState: GlobalState['auth']['state'];
-  isScreenLocked?: boolean;
-  hasPasscode?: boolean;
   inactiveReason?: 'auth' | 'otherClient';
   hasWebAuthTokenFailed?: boolean;
   isTestServer?: boolean;
@@ -72,8 +71,6 @@ function hasParvaneStoredSession() {
 
 const App = ({
   authState,
-  isScreenLocked,
-  hasPasscode,
   inactiveReason,
   hasWebAuthTokenFailed,
   isTestServer,
@@ -82,6 +79,16 @@ const App = ({
 }: StateProps) => {
   const { isMobile } = useAppLayout();
   const isMobileOs = PLATFORM_ENV === 'iOS' || PLATFORM_ENV === 'Android';
+
+  // Parvane (spec 041 E6): провайдер ждёт PIN хранилища — поверх всего экран блокировки. Код-пароль
+  // Telegram Web A (`global.passcode`) отключён и экран не открывает
+  const [isPinRequested, setIsPinRequested] = useState(() => Boolean(getPinRequest()));
+  useEffect(() => {
+    const update = () => setIsPinRequested(Boolean(getPinRequest()));
+    // Запрос мог прийти между первой отрисовкой и подпиской
+    update();
+    return subscribeToPinRequest(update);
+  }, []);
 
   useEffect(() => {
     if (IS_INSTALL_PROMPT_SUPPORTED) {
@@ -143,7 +150,7 @@ const App = ({
 
   if (inactiveReason) {
     activeKey = AppScreens.inactive;
-  } else if (isScreenLocked) {
+  } else if (isPinRequested) {
     page = 'lock';
     activeKey = AppScreens.lock;
   } else if (authState) {
@@ -182,8 +189,6 @@ const App = ({
     // Каркас списка чатов вместо мелькающей формы входа; бандл Main качается параллельно соединению
     page = 'main';
     activeKey = AppScreens.starting;
-  } else if (hasPasscode) {
-    activeKey = AppScreens.lock;
   } else {
     page = isMobileOs ? 'authPhoneNumber' : 'authQrCode';
     activeKey = AppScreens.auth;
@@ -219,7 +224,7 @@ const App = ({
       case AppScreens.main:
         return <Main isMobile={isMobile} />;
       case AppScreens.lock:
-        return <LockScreen isLocked={isScreenLocked} />;
+        return <LockScreen isLocked={isPinRequested} />;
       case AppScreens.inactive:
         return <AppInactive inactiveReason={inactiveReason!} />;
       case AppScreens.starting:
@@ -283,8 +288,6 @@ export default withGlobal(
     const { state: authState, hasWebAuthTokenFailed, hasWebAuthTokenPasswordRequired } = global.auth;
     return {
       authState,
-      isScreenLocked: global.passcode?.isScreenLocked,
-      hasPasscode: global.passcode?.hasPasscode,
       inactiveReason: selectTabState(global).inactiveReason,
       hasWebAuthTokenFailed: hasWebAuthTokenFailed || hasWebAuthTokenPasswordRequired,
       theme: selectTheme(global),

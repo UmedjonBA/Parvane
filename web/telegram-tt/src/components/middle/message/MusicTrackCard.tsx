@@ -11,9 +11,10 @@ import {
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useParvaneModules from '../../../hooks/useParvaneModules';
+import useModuleGate from '../../../hooks/useModuleGate';
 
 import Icon from '../../common/icons/Icon';
+import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
 import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './MusicTrackCard.module.scss';
@@ -26,10 +27,10 @@ type OwnProps = {
 // сервера: байтов трека в сообщении нет. Трек чужого сервера либо убранный из библиотеки только показывается
 const MusicTrackCard = ({ track }: OwnProps) => {
   const lang = useLang();
-  const { enabled } = useParvaneModules();
+  const gate = useModuleGate('music');
   const [problem, setProblem] = useState<'missing' | 'failed'>();
   const info = useDerivedState(getMusicInfo);
-  const isMusicOn = enabled.includes('music');
+  const isMusicOn = gate.isOn;
   // Чей это трек, известно после сведений о «Музыке»: до них карточка только показывает
   const isOwnServer = info ? info.server === track.server : undefined;
   const canPlay = Boolean(isOwnServer && info?.isEnabled && isMusicOn);
@@ -52,11 +53,25 @@ const MusicTrackCard = ({ track }: OwnProps) => {
     }
   });
 
+  // «Музыка» выключена на устройстве: кнопка ведёт в лист «Модуль выключен», после включения трек играет,
+  // если он с этого сервера
+  const handlePlayClick = useLastCallback(() => {
+    gate.run(async () => {
+      const known = getMusicInfo() || await loadMusicInfo().catch(() => undefined);
+      if (known?.isEnabled && known.server === track.server) void handlePlay();
+    });
+  });
+
   return (
     <div className={styles.root} data-music-track-card={track.trackId}>
       <div className={styles.head}>
-        {canPlay ? (
-          <button type="button" className={styles.play} aria-label={lang('MusicTrackCardPlay')} onClick={handlePlay}>
+        {canPlay || gate.canEnable ? (
+          <button
+            type="button"
+            className={styles.play}
+            aria-label={lang('MusicTrackCardPlay')}
+            onClick={handlePlayClick}
+          >
             <Icon name="play" />
           </button>
         ) : (
@@ -84,6 +99,13 @@ const MusicTrackCard = ({ track }: OwnProps) => {
           {lang(problem === 'missing' ? 'MusicTrackCardMissing' : 'MusicTrackCardFailed')}
         </p>
       )}
+      <PvModuleOff
+        isOpen={gate.isAsked}
+        module="music"
+        hint={lang('ModuleOffHintTrack')}
+        onEnable={gate.enable}
+        onClose={gate.dismiss}
+      />
     </div>
   );
 };

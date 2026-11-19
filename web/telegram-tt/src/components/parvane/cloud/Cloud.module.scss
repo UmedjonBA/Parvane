@@ -1007,20 +1007,6 @@
   color: var(--pv-muted);
 }
 
-.empty {
-  max-width: 36ch;
-  margin: auto;
-  padding: 2.5rem 1rem;
-
-  color: var(--pv-muted);
-  text-align: center;
-}
-
-.emptyHint {
-  margin-top: 0.25rem;
-  font-size: var(--pv-font-size-small);
-}
-
 .dropZone {
   pointer-events: none;
 

@@ -19,8 +19,13 @@ import { openMusicPlayer } from './musicPlayerView';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useBrowserOnline from '../../../hooks/window/useBrowserOnline';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
+import PvEmpty from '../notes/PvEmpty';
+import PvLoading from '../notes/PvLoading';
+import PvOfflineBar from '../notes/PvOfflineBar';
+import PvSkeleton from '../notes/PvSkeleton';
 import MusicCover from './MusicCover';
 import MusicFetch from './MusicFetch';
 import MusicOffline from './MusicOffline';
@@ -59,7 +64,7 @@ const NAV = [
   { kind: 'albums', icon: 'disc', titleKey: 'MusicAlbums' },
 ] as const;
 const SEARCH_DELAY_MS = 300;
-const EMPTY_KEYS = { search: 'MusicNothingFound', starred: 'MusicStarredEmpty', added: 'MusicAddedEmpty' } as const;
+const EMPTY_KEYS = { starred: 'MusicStarredEmpty', added: 'MusicAddedEmpty' } as const;
 
 /** Содержимое вида с сервера. Библиотека целиком — поиск с пустой строкой. */
 async function fetchContent(view: View, isFetchEnabled: boolean): Promise<Content> {
@@ -108,6 +113,7 @@ const Music = () => {
   // Содержимое помнит, для какого вида оно загружено: список прежнего вида под новым заголовком не показывается
   const [loaded, setLoaded] = useState<{ view: View; content: Content }>();
   const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>();
   // Трек, для которого выбирают плейлист
   const [pickerTrack, setPickerTrack] = useState<MusicTrack>();
   // Трек, который отправляют в чат
@@ -116,6 +122,7 @@ const Music = () => {
   const current = getCurrentTrack(player);
   const content = loaded?.view === view ? loaded.content : undefined;
   const isShown = section === 'music';
+  const isOnline = useBrowserOnline();
 
   useEffect(() => {
     if (!isShown || info) return;
@@ -158,6 +165,8 @@ const Music = () => {
     }, SEARCH_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
+
+  const handleFocusSearch = useLastCallback(() => searchRef.current?.focus());
 
   const handleQueryChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.currentTarget.value);
@@ -206,6 +215,10 @@ const Music = () => {
     void load(view);
   });
   const handlePlayAll = useLastCallback(() => handlePlayFrom(0));
+  const handleRetry = useLastCallback(() => {
+    void loadMusicInfo();
+    if (view.kind !== 'playlists' && view.kind !== 'offline') void load(view);
+  });
   const handleSaveOffline = useLastCallback(() => {
     if (content?.tracks) saveTracksOffline(content.tracks);
   });
@@ -308,6 +321,16 @@ const Music = () => {
     );
   }
 
+  // Над находками каталога «ничего не найдено» остаётся строкой
+  function renderEmpty(isLine: boolean) {
+    if (isLine) return <div className={kit.muted} data-music-empty>{lang('MusicNothingFound')}</div>;
+    if (view.kind === 'search') return <PvEmpty title={lang('MusicNothingFound')} data-music-empty />;
+    if (view.kind === 'starred' || view.kind === 'added') {
+      return <PvEmpty text={lang(EMPTY_KEYS[view.kind])} data-music-empty />;
+    }
+    return <PvEmpty title={lang('MusicEmpty')} data-music-empty />;
+  }
+
   function renderContent() {
     if (view.kind === 'queue') return <MusicQueue />;
     if (view.kind === 'offline') return <MusicOffline currentTrackId={current?.id} isPlaying={player.isPlaying} />;
@@ -321,12 +344,25 @@ const Music = () => {
         />
       );
     }
-    if (!content) return <div className={kit.muted}>{lang('MusicLoading')}</div>;
+    if (!content) return <PvSkeleton />;
     if (content.isFailed) return <div className={styles.error} role="alert">{lang('MusicLoadFailed')}</div>;
     const { tracks, albums, artists } = content;
     const added = (content.added || []).filter((item) => item.track.id);
     const isEmpty = !tracks?.length && !albums?.length && !artists?.length && !added.length;
     const total = splitListTime((tracks || []).reduce((sum, track) => sum + track.durationSecs, 0));
+    const isFetchShown = view.kind === 'search' && info?.isFetchEnabled;
+    // Пустая библиотека сервера (доски `RpMusicB`, `ZdMusicX`): вместо главной — приглашение найти первый трек
+    if (view.kind === 'home' && isEmpty && !recent.length) {
+      return (
+        <PvEmpty
+          title={lang('MusicEmptyTitle')}
+          text={lang('MusicEmptyText')}
+          actionText={info?.isFetchEnabled ? lang('MusicEmptyFind') : undefined}
+          data-music-empty
+          onAction={handleFocusSearch}
+        />
+      );
+    }
     return (
       <>
         {view.kind === 'home' && (
@@ -379,15 +415,11 @@ const Music = () => {
             )}
           </div>
         )}
-        {isEmpty && (
-          <div className={kit.muted} data-music-empty>
-            {lang(EMPTY_KEYS[view.kind as keyof typeof EMPTY_KEYS] || 'MusicEmpty')}
-          </div>
-        )}
+        {isEmpty && renderEmpty(Boolean(isFetchShown))}
         {Boolean(artists?.length) && renderArtists(artists)}
         {Boolean(albums?.length) && renderAlbums(albums)}
         {Boolean(tracks?.length) && renderTracks(tracks, handlePlayFrom)}
-        {view.kind === 'search' && info?.isFetchEnabled && (
+        {isFetchShown && (
           <MusicFetch query={view.query} onPlayLibraryTrack={handlePlayLibraryTrack} />
         )}
       </>
@@ -395,10 +427,8 @@ const Music = () => {
   }
 
   function renderBody() {
-    if (!info) return <div className={buildClassName(styles.main, kit.muted)}>{lang('MusicLoading')}</div>;
-    if (!info.isEnabled) {
-      return <div className={buildClassName(styles.main, kit.muted)} data-music-off>{lang('MusicNotConnected')}</div>;
-    }
+    if (!info) return <PvLoading />;
+    if (!info.isEnabled) return <PvEmpty text={lang('MusicNotConnected')} data-music-off />;
     return (
       <div className={styles.layout}>
         <nav className={styles.nav} aria-label={lang('ParvaneModuleMusic')}>
@@ -460,6 +490,7 @@ const Music = () => {
         <div className={buildClassName(styles.main, 'custom-scroll')} data-music-view={view.kind}>
           {view.kind !== 'queue' && (
             <input
+              ref={searchRef}
               className={buildClassName(kit.input, styles.search)}
               type="search"
               value={query}
@@ -484,6 +515,7 @@ const Music = () => {
         <h1 className={styles.title}>{lang('ParvaneModuleMusic')}</h1>
         <span className={buildClassName(kit.muted, kit.small)}>{lang('MusicServerLibrary')}</span>
       </header>
+      {!isOnline && <PvOfflineBar text={lang('PvOfflineMusic')} onRetry={handleRetry} />}
       {renderBody()}
       <MusicSendDialog track={sentTrack} onClose={handleCloseSend} />
     </div>

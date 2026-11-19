@@ -54,7 +54,12 @@ export type NotesNotice = {
 export type NoteSaveResult = { status: 'saved' | 'failed' } | { status: 'restored'; id: string; title: string };
 export type FolderDeleteResult = 'done' | 'has-notes' | 'has-files' | 'failed';
 
-export type NotesOptions = { guideLang: GuideLang; vaultName: string };
+// `untitledName`, `conflictWord` — подписи на языке интерфейса: название заметки без названия и слово в
+// названии копии «… (конфликт …)»
+export type NotesOptions = { guideLang: GuideLang; vaultName: string; untitledName: string; conflictWord: string };
+
+const UNTITLED_NAME = 'Untitled';
+const CONFLICT_WORD = 'conflict';
 
 type TextContent = { fileId: string; text: string };
 type TextResult = TextContent | undefined;
@@ -677,7 +682,7 @@ function cleanTitle(title: string) {
 }
 
 function uniqueTitle(title: string, notes = getNotes()) {
-  const clean = cleanTitle(title) || 'Без названия';
+  const clean = cleanTitle(title) || notesOptions?.untitledName || UNTITLED_NAME;
   if (!findNoteByTitle(clean, notes)) return clean;
   for (let n = 2; ; n++) {
     if (!findNoteByTitle(`${clean} ${n}`, notes)) return `${clean} ${n}`;
@@ -785,7 +790,8 @@ async function writeNote(note: NoteEntry, text: string, expectedFileId?: string)
 async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs: string, vaultName: string) {
   const merged = mergeNotes(base, mine, theirs);
   if (merged.hasConflict) {
-    await createNote(`${note.title} (конфликт ${new Date().toLocaleString()})`, vaultName, { text: theirs });
+    const word = notesOptions?.conflictWord || CONFLICT_WORD;
+    await createNote(`${note.title} (${word} ${new Date().toLocaleString()})`, vaultName, { text: theirs });
     notify('conflict', note.title);
     return mine;
   }

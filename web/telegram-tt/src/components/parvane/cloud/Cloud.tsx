@@ -27,9 +27,11 @@ import {
   getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudUsage, getContainer,
   getHasCloudTransfers, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder, linkOfSource,
   loadCloud, moveCloudNodes, moveCloudNodesAcross, peerLabel, purgeCloudNodes, refreshCloud, refreshCloudLinks,
-  renameCloudNode, restoreCloudNodes, revokeDeadCloudLinks, setCloudActive, setCloudPlace, setCloudPrefs,
+  renameCloudNode, restoreCloudNodes, retryCloud,
+  revokeDeadCloudLinks, setCloudActive, setCloudPlace, setCloudPrefs,
   shareCloudFolder, trashCloudNodes, uploadCloudFiles,
 } from './cloudStore';
+import useCloudOffline from './useCloudOffline';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -39,9 +41,11 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import Loading from '../../ui/Loading';
+import PvEmpty from '../notes/PvEmpty';
 import PvHeaderSearch from '../notes/PvHeaderSearch';
 import PvIcon from '../notes/PvIcon';
+import PvOfflineBar from '../notes/PvOfflineBar';
+import PvSkeleton from '../notes/PvSkeleton';
 import SectionHistoryBack from '../SectionHistoryBack';
 import CloudDetail from './CloudDetail';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
@@ -123,6 +127,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
 
   const data = useDerivedState(getCloudData);
   const isLoaded = useDerivedState(getIsCloudLoaded);
+  const isOffline = useCloudOffline();
   const status = useDerivedState(getCloudStatus);
   const place = useDerivedState(getCloudPlace);
   const prefs = useDerivedState(getCloudPrefs);
@@ -557,7 +562,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const handleNewShared = useLastCallback(() => setDialog({ type: 'newShared' }));
   const handleEmptyTrash = useLastCallback(() => setDialog({ type: 'emptyTrash' }));
   const handleRevokeDead = useLastCallback(() => void revokeDeadCloudLinks());
-  const handleRetry = useLastCallback(() => void refreshCloud());
 
   // «Доступ» в открытой общей папке: участники
   const handleAccess = useLastCallback(() => {
@@ -565,10 +569,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
   });
 
   const statusKey = status === 'needs-linking' ? 'ParvaneCloudNeedsLinking'
-    : status === 'offline' ? 'ParvaneCloudSyncUnavailable'
-      : status === 'no-key' ? 'ParvaneCloudSyncPending' : undefined;
-  const statusTitleKey = status === 'needs-linking' ? 'ParvaneCloudStateNotLinked'
-    : status === 'offline' ? 'ParvaneCloudStateOffline' : 'ParvaneCloudStateNoKey';
+    : status === 'no-key' ? 'ParvaneCloudSyncPending' : undefined;
+  const statusTitleKey = status === 'needs-linking' ? 'ParvaneCloudStateNotLinked' : 'ParvaneCloudStateNoKey';
   const isBlocked = status === 'needs-linking' || status === 'loading';
 
   const isAlmostFull = getIsCloudAlmostFull(usage);
@@ -860,6 +862,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
         )}
       </header>
       <div className={buildClassName(styles.body, 'custom-scroll')}>
+        {isOffline && <PvOfflineBar text={lang('PvOfflineFiles')} onRetry={retryCloud} />}
         {isNarrow && !isSearch && !isVirtual && renderPath(styles.pathInList)}
         {statusKey && (
           <div className={styles.strip} role="status">
@@ -868,11 +871,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
               <span className={styles.stripTitle}>{lang(statusTitleKey)}</span>
               {lang(statusKey)}
             </span>
-            {status === 'offline' && (
-              <button type="button" className={styles.textButton} onClick={handleRetry}>
-                {lang('ParvaneCloudRetry')}
-              </button>
-            )}
           </div>
         )}
         {isAlmostFull && usage && !isTrash && (
@@ -942,7 +940,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
             {placeAction.title}
           </button>
         )}
-        {!isLoaded && !isBlocked && <Loading />}
+        {!isLoaded && !isBlocked && <PvSkeleton />}
         {isLoaded && renderColumns()}
         {isLoaded && (
           <div className={styles.list} role="list">
@@ -997,15 +995,14 @@ const Cloud = ({ isMobile }: OwnProps) => {
           </div>
         )}
         {isLoaded && !hasRows && !hasTransfers && (
-          <div className={styles.empty}>
-            <div>{lang(emptyKey)}</div>
-            {emptyKey === 'ParvaneCloudEmpty' && (
-              <div className={styles.emptyHint}>{lang('ParvaneCloudEmptyHint')}</div>
-            )}
-            {emptyKey === 'ParvaneCloudLinksEmpty' && (
-              <div className={styles.emptyHint}>{lang('ParvaneCloudLinksEmptyHint')}</div>
-            )}
-          </div>
+          <PvEmpty
+            title={lang(emptyKey)}
+            text={emptyKey === 'ParvaneCloudEmpty' ? lang('ParvaneCloudEmptyHint')
+              : emptyKey === 'ParvaneCloudLinksEmpty' ? lang('ParvaneCloudLinksEmptyHint') : undefined}
+            actionText={emptyKey === 'ParvaneCloudEmpty' && canAdd ? lang('ParvaneCloudUpload') : undefined}
+            data-cloud-empty
+            onAction={handlePickFiles}
+          />
         )}
         {isLoaded && hasRows && !isNarrow && (
           <div className={styles.hint}>

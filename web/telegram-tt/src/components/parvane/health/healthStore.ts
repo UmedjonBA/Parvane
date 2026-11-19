@@ -60,6 +60,11 @@ export async function refreshHealth() {
   });
 }
 
+/** «Повторить» полосы «нет связи»: синхронизация сейчас и перечитывание состояния. */
+export function retryHealth() {
+  void callHealth('parvaneHealthSync').catch(() => undefined).then(refreshHealth);
+}
+
 function scheduleRefresh() {
   window.clearTimeout(refreshTimer);
   const { status } = getHealthState();

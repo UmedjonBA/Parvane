@@ -19,6 +19,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import PvEmpty from './PvEmpty';
 import PvIcon from './PvIcon';
 
 import styles from './NotesList.module.scss';
@@ -103,6 +104,8 @@ const NotesList = ({
   const handleFolderMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onFolderMenu(e.currentTarget.dataset.folderId!);
   });
+
+  const handleNewNote = useLastCallback(() => onNewInFolder());
 
   const handleNewInFolder = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onNewInFolder(e.currentTarget.dataset.folderId || undefined);
@@ -299,9 +302,19 @@ const NotesList = ({
             {lang('KnowledgeShowAll', { count: recent.length })}
           </button>
         )}
-        {!notes.length && <p className={styles.empty}>{lang('KnowledgeEmpty')}</p>}
+        {!notes.length && (
+          <PvEmpty
+            title={lang('KnowledgeEmptyTitle')}
+            text={lang('KnowledgeEmptyText')}
+            actionText={lang('KnowledgeNewNote')}
+            linkText={lang('KnowledgeEmptyGuide')}
+            data-notes-empty
+            onAction={handleNewNote}
+            onLink={onGuide}
+          />
+        )}
         {/* Справка есть у всех с первого открытия; кнопка нужна, только чтобы вернуть удалённую */}
-        {!hasGuide && (
+        {!hasGuide && Boolean(notes.length) && (
           <button
             type="button"
             className={buildClassName(kit.btn, kit.btnGhost, styles.wideButton)}
@@ -321,7 +334,7 @@ const NotesList = ({
       {found ? (
         <div className={styles.block} data-notes-found>
           {found.map((note) => renderRow(note, true))}
-          {!found.length && <p className={styles.empty}>{lang('KnowledgeNothingFound')}</p>}
+          {!found.length && <PvEmpty title={lang('KnowledgeNothingFound')} data-notes-nothing />}
         </div>
       ) : openGroup ? renderOpenGroup(openGroup) : renderRoot()}
     </div>

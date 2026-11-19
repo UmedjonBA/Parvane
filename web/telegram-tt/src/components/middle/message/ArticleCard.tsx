@@ -11,9 +11,10 @@ import { inlineText, parseMarkdown } from '../../parvane/markdown/markdown';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useParvaneModules from '../../../hooks/useParvaneModules';
+import useModuleGate from '../../../hooks/useModuleGate';
 
 import ArticleViewer from '../../parvane/article/ArticleViewer';
+import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
 import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './ArticleCard.module.scss';
@@ -32,7 +33,7 @@ const ArticleCard = ({ article }: OwnProps) => {
   const lang = useLang();
   const [isOpen, open, close] = useFlag();
   const [isSaving, setIsSaving] = useState(false);
-  const isNotesOn = useParvaneModules().enabled.includes('notes');
+  const gate = useModuleGate('notes');
 
   const preview = useMemo(() => buildPreview(article), [article]);
 
@@ -46,6 +47,9 @@ const ArticleCard = ({ article }: OwnProps) => {
     }
   });
 
+  // «Заметки» выключены на устройстве: кнопка ведёт в лист «Модуль выключен», после включения статья сохраняется
+  const handleSaveClick = useLastCallback(() => gate.run(handleSave));
+
   return (
     <div className={styles.root} data-article-card={article.title}>
       <div className={styles.label}>{lang('ArticleLabel')}</div>
@@ -57,13 +61,13 @@ const ArticleCard = ({ article }: OwnProps) => {
             {lang('ArticleRead')}
           </button>
         </span>
-        {isNotesOn && (
+        {(gate.isOn || gate.canEnable) && (
           <button
             type="button"
             className={buildClassName(kit.chip, styles.action)}
             disabled={isSaving}
             data-article-to-notes
-            onClick={handleSave}
+            onClick={handleSaveClick}
           >
             {lang('ArticleToNotes')}
           </button>
@@ -75,6 +79,13 @@ const ArticleCard = ({ article }: OwnProps) => {
         markdown={article.markdown}
         media={article.media}
         onClose={close}
+      />
+      <PvModuleOff
+        isOpen={gate.isAsked}
+        module="notes"
+        hint={lang('ModuleOffHintNote')}
+        onEnable={gate.enable}
+        onClose={gate.dismiss}
       />
     </div>
   );

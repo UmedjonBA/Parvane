@@ -9,6 +9,8 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  findMessageContainers,
+  openSavedMessages,
   preparePage,
 } from './e2e_web_helpers.mjs';
 
@@ -131,6 +133,42 @@ try {
   await page.locator(SIDE).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator(`${SIDE} [data-module="chats"][aria-selected="true"]`).waitFor({ state: 'visible', timeout: WAIT_MS });
   console.log('OK: сохранённый раздел выключенного модуля открывает «Чаты»');
+
+  // Карточка модуля, выключенного на устройстве (spec 041 E6): действие ведёт в лист «Модуль выключен»,
+  // «Не сейчас» ничего не меняет, «Включить» возвращает модуль и выполняет действие
+  const offerName = `Задание-${suffix}`;
+  await openSavedMessages(page);
+  await page.getByRole('button', { name: 'Add an attachment' }).click();
+  await page.getByRole('menuitem', { name: 'Suggest for plan', exact: true }).click();
+  const offerDialog = page.getByRole('dialog');
+  await offerDialog.locator('#task-offer-name').waitFor({ state: 'visible', timeout: WAIT_MS });
+  await offerDialog.locator('#task-offer-name').fill(offerName);
+  await offerDialog.getByRole('button', { name: 'Send', exact: true }).click();
+  const offerCard = findMessageContainers(page, offerName).locator('[data-task-offer]').first();
+  await offerCard.waitFor({ state: 'visible', timeout: WAIT_MS });
+  await openModulesScreen(page, SIDE);
+  await page.locator('[role="switch"][data-module="plan"]').click();
+  await expectModules(page, SIDE, ['chats', 'health', 'profile'], '«План» остался в панели');
+  // «Профиль» на компьютере занимает всё окно — возвращаемся в чат
+  await openSavedMessages(page);
+  const toPlan = offerCard.getByRole('button', { name: 'To plan' });
+  const moduleOff = page.locator('[data-module-off="plan"]');
+  await toPlan.click();
+  await moduleOff.getByText('The task will go to your plan once the module is on')
+    .waitFor({ state: 'visible', timeout: WAIT_MS });
+  await page.getByText('Planner is turned off', { exact: true }).waitFor({ state: 'visible', timeout: WAIT_MS });
+  await moduleOff.getByRole('button', { name: 'Not now' }).click();
+  await moduleOff.waitFor({ state: 'hidden', timeout: WAIT_MS });
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator(`${SIDE} [data-module="plan"]`).count(), 0, '«Не сейчас» включило модуль');
+  assert.equal(await offerCard.getAttribute('data-in-plan'), 'false', '«Не сейчас» добавило задание в план');
+  await toPlan.click();
+  await moduleOff.getByRole('button', { name: 'Turn on Planner' }).click();
+  await page.locator(`${SIDE} [data-module="plan"]`).waitFor({ state: 'visible', timeout: WAIT_MS });
+  await page.locator(`[data-task-offer][data-in-plan="true"]`).filter({ hasText: offerName })
+    .waitFor({ state: 'visible', timeout: WAIT_MS * 2 });
+  await moduleOff.waitFor({ state: 'hidden', timeout: WAIT_MS });
+  console.log('OK: карточка выключенного модуля — лист «Модуль выключен», «Включить» выполняет действие');
 
   // ── Телефон ───────────────────────────────────────────────────────────────
   const phone = await browser.newContext({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
