@@ -3829,3 +3829,14 @@
 "ShareSavedToFiles" = "Сохранено в «Файлы»: Мой диск / Входящие";
 "ShareSavedToNote" = "Сохранено в заметку «{title}»";
 "ShareFailed" = "Не удалось сохранить полученное";
+
+"ParvaneCallMinimize" = "Свернуть звонок";
+"ParvaneCallReturn" = "вернуться";
+"ParvaneCallReturnTo" = "Вернуться к звонку: {name}, {time}";
+"ParvaneCallShareScreen" = "Показать экран";
+"ParvaneCallStopSharing" = "Остановить показ экрана";
+"ParvaneCallScreenError" = "Не удалось показать экран";
+"ParvaneCallAudioOutput" = "Вывод звука";
+"ParvaneCallDefaultAudio" = "Как в системе";
+"ParvaneCallAudioDevice" = "Устройство вывода {number}";
+"ParvaneCallAudioError" = "Не удалось переключить вывод звука";

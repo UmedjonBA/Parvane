@@ -1372,6 +1372,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   'Story.ToastViewInChat': 'View in Chat',
   PushReactText: '%1$@ to your "%2$@"',
   /* eslint-enable @stylistic/max-len */
+  ParvaneCallMinimize: 'Minimize call',
+  ParvaneCallReturn: 'Return',
+  ParvaneCallReturnTo: 'Return to call: %1$@, %2$@',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -2911,6 +2914,9 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'Story.ToastViewInChat': 'Открыть в чате',
   PushReactText: '%1$@ на ваше «%2$@»',
   /* eslint-enable @stylistic/max-len */
+  ParvaneCallMinimize: 'Свернуть звонок',
+  ParvaneCallReturn: 'вернуться',
+  ParvaneCallReturnTo: 'Вернуться к звонку: %1$@, %2$@',
 };
 
 function capitalize(text: string) {

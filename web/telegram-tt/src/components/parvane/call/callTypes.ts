@@ -11,7 +11,10 @@ export type CallInfo = {
   isCameraOff?: boolean;
   isRemoteMuted?: boolean;
   isRemoteCameraOff?: boolean;
-  groupCameraOff?: string[];
+  groupVideoMuted?: Record<string, boolean>;
+  screenStream?: MediaStream;
+  canShareScreen?: boolean;
+  hasScreenShareError?: boolean;
   pendingGroup?: boolean;
   pendingGroupTitle?: string;
   group?: {

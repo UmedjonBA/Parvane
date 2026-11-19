@@ -9,6 +9,15 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  checkCallAudioOutput,
+  checkCallMinimize,
+  expectSharedScreen,
+  mockCallMedia,
+  saveCallState,
+  stopScreenInBrowser,
+} from './e2e_web_call_media.mjs';
+
+import {
   LOGIN_TIMEOUT_MS,
   callMediaStats,
   dumpDiagJournal,
@@ -132,6 +141,7 @@ const contexts = await Promise.all(
   Array.from({ length: 4 }, () => browser.newContext({ permissions: ['microphone', 'camera'] })),
 );
 await Promise.all(contexts.map((context) => countGetUserMedia(context)));
+await mockCallMedia(contexts[0], true);
 // Журналы диагностики при падении — по имени участника
 const diagSessions = [];
 
@@ -212,6 +222,22 @@ try {
   await expectMediaFlowing(aliceSession.page, { audio: true, minPeers: 2 });
   await expectMediaFlowing(bobSession.page, { audio: true, minPeers: 2 });
   await expectMediaFlowing(carolSession.page, { audio: true, minPeers: 2 });
+
+  await checkCallAudioOutput(aliceSession.page, true, 2);
+  const viewport = aliceSession.page.viewportSize();
+  await aliceSession.page.setViewportSize({ width: 360, height: 800 });
+  await checkCallMinimize(aliceSession.page, { minPeers: 2, shotPrefix: 'group-', isPhone: true });
+  await aliceSession.page.setViewportSize(viewport);
+  await saveCallState(aliceSession.page, 'group');
+  await aliceSession.page.getByRole('button', { name: 'Share screen', exact: true }).click();
+  const sharedTile = `[data-peer="${alice}"] video`;
+  await Promise.all([bobSession, carolSession].map(({ page }) => expectSharedScreen(page, sharedTile)));
+  await saveCallState(bobSession.page, 'group-screen');
+  await stopScreenInBrowser(aliceSession.page);
+  for (const { page } of [bobSession, carolSession]) {
+    await page.locator(sharedTile).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  }
+  console.log('OK: показ экрана доходит по mesh до обоих участников и прекращается по событию браузера');
 
   // ── Mute в групповом звонке ────────────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();

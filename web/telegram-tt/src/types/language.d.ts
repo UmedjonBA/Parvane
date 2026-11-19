@@ -3499,6 +3499,13 @@ export interface LangPair {
   'ShareIncomingFolder': undefined;
   'ShareSavedToFiles': undefined;
   'ShareFailed': undefined;
+  'ParvaneCallReturn': undefined;
+  'ParvaneCallShareScreen': undefined;
+  'ParvaneCallStopSharing': undefined;
+  'ParvaneCallScreenError': undefined;
+  'ParvaneCallAudioOutput': undefined;
+  'ParvaneCallDefaultAudio': undefined;
+  'ParvaneCallAudioError': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5978,6 +5985,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ShareSavedToNote': {
     'title': V;
+  };
+  'ParvaneCallReturnTo': {
+    'name': V;
+    'time': V;
+  };
+  'ParvaneCallAudioDevice': {
+    'number': V;
   };
 }
 

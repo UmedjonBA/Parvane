@@ -14,7 +14,6 @@ type OwnProps = {
   name: string;
   status: string;
   stream?: MediaStream;
-  isOwn?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
   // Номер цвета кружка: участники различаются цветом, как в списке чатов
@@ -25,10 +24,9 @@ const TONE_CLASSES = [
   styles.toneBlue, styles.toneOrange, styles.tonePurple, styles.toneGreen, styles.toneRed, styles.toneAqua,
 ];
 
-// Плитка участника группового звонка: кружок, имя и состояние; с камерой — её картинка. Видео участника
-// несёт и его звук, поэтому элемент остаётся и при выключенной камере — тогда он скрыт
+// Плитка участника группового звонка: кружок, имя, состояние и видео
 const CallPeerTile = ({
-  peer, peerState, name, status, stream, isOwn, isMuted, isCameraOff, tone = 0,
+  peer, peerState, name, status, stream, isMuted, isCameraOff, tone = 0,
 }: OwnProps) => {
   const isPictureShown = hasVideoTrack(stream) && !isCameraOff;
   const isAway = peerState === 'busy' || peerState === 'declined';
@@ -40,11 +38,11 @@ const CallPeerTile = ({
       data-peer-state={peerState}
       data-camera-off={isCameraOff ? '1' : undefined}
     >
-      {stream && (
+      {stream && isPictureShown && (
         <CallVideo
           stream={stream}
-          className={buildClassName(styles.tileVideo, !isPictureShown && styles.tileVideoHidden)}
-          isSilent={isOwn}
+          className={styles.tileVideo}
+          isSilent
         />
       )}
       {!isPictureShown && (

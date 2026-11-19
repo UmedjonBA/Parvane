@@ -1,17 +1,24 @@
-import { memo, useEffect, useRef, useState } from '../../lib/teact/teact';
+import { memo, useEffect, useLayoutEffect, useState } from '../../lib/teact/teact';
 
 import type { CallInfo } from './call/callTypes';
 
 import { closeCallNotification, showCallNotification } from '../../util/pageNotify';
 import { callApi } from '../../api/gramjs';
 import { formatCallDuration, getWindowCall, hasVideoTrack } from './call/callTypes';
+import useCallAudioOutput from './call/useCallAudioOutput';
+import { getMusicPlayer, togglePlay } from './music/musicPlayer';
 
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useOldLang from '../../hooks/useOldLang';
 
 import CallActive from './call/CallActive';
+import CallAudio from './call/CallAudio';
+import CallButton from './call/CallButton';
 import CallGroup from './call/CallGroup';
 import CallIncoming from './call/CallIncoming';
+import CallMinimized from './call/CallMinimized';
+import CallOutputList from './call/CallOutputList';
 
 import styles from './call/Call.module.scss';
 
@@ -25,11 +32,16 @@ const callParvane = callApi as unknown as (name: string) => void;
 const ParvaneCallOverlay = () => {
   const [call, setCall] = useState<CallInfo | undefined>();
   const [duration, setDuration] = useState(0);
-  const audioRef = useRef<HTMLAudioElement>();
+  const [isMinimized, setIsMinimized] = useState(false);
+  const langNew = useLang();
   const lang = useOldLang();
 
   useEffect(() => {
-    const updateCall = () => setCall({ ...getWindowCall() } as CallInfo);
+    const updateCall = () => {
+      const current = getWindowCall();
+      setCall(current && { ...current });
+    };
+    updateCall();
     window.addEventListener('parvane-call', updateCall);
     return () => window.removeEventListener('parvane-call', updateCall);
   }, []);
@@ -39,6 +51,15 @@ const ParvaneCallOverlay = () => {
   const isVisible = (Boolean(state) && state !== 'ended') || Boolean(group);
   // Личный звонок считает время с соединения, групповой — с входа в звонок
   const isTimed = state === 'active' || Boolean(group);
+  const output = useCallAudioOutput(isTimed, call?.localStream);
+  const { resetOutput, isOutputOpen } = output;
+  const groupId = group?.groupCallId;
+
+  useLayoutEffect(() => {
+    if (isTimed) return;
+    setIsMinimized(false);
+    resetOutput();
+  }, [isTimed, resetOutput]);
 
   useEffect(() => {
     setDuration(0);
@@ -48,15 +69,7 @@ const ParvaneCallOverlay = () => {
       setDuration(Math.floor((Date.now() - since) / TICK_MS));
     }, TICK_MS);
     return () => window.clearInterval(timer);
-  }, [isTimed]);
-
-  // Звук собеседника личного звонка — отдельным элементом: видео собеседника играет без звука
-  const remoteStream = call?.remoteStream;
-  useEffect(() => {
-    if (!remoteStream || !audioRef.current) return;
-    audioRef.current.srcObject = remoteStream;
-    void audioRef.current.play().catch(() => undefined);
-  }, [remoteStream]);
+  }, [isTimed, groupId]);
 
   // Гудки: входящий и исходящий — по кругу, «занято» — один раз
   useEffect(() => {
@@ -87,23 +100,29 @@ const ParvaneCallOverlay = () => {
   const handleToggleMute = useLastCallback(() => callParvane('parvaneToggleMute'));
   const handleToggleCamera = useLastCallback(() => callParvane('parvaneToggleCamera'));
 
+  const handleToggleScreen = useLastCallback(() => callParvane('parvaneToggleScreenShare'));
+  const handleExpand = useLastCallback(() => setIsMinimized(false));
+  const handleMinimize = useLastCallback(() => {
+    if (getMusicPlayer().isPlaying) togglePlay();
+    output.closeOutput();
+    setIsMinimized(true);
+  });
+
+  useLayoutEffect(() => {
+    if (!isTimed || isMinimized || isOutputOpen) return undefined;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      handleMinimize();
+    };
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  }, [isTimed, isMinimized, isOutputOpen, handleMinimize]);
+
   if (!isVisible || !call) return undefined;
 
   const time = formatCallDuration(duration);
-
-  if (group) {
-    return (
-      <div className={styles.overlay} data-call-screen="group">
-        <CallGroup
-          call={call}
-          time={time}
-          onToggleMute={handleToggleMute}
-          onToggleCamera={handleToggleCamera}
-          onHangup={handleHangup}
-        />
-      </div>
-    );
-  }
 
   const peerName = call.peerName || call.incoming?.from || lang('Call');
 
@@ -125,21 +144,81 @@ const ParvaneCallOverlay = () => {
     );
   }
 
-  const hasRemoteVideo = hasVideoTrack(remoteStream) && !call.isRemoteCameraOff;
+  const remoteStream = call.remoteStream;
+  const hasRemoteVideo = hasVideoTrack(remoteStream)
+    && !(call.isRemoteCameraOff ?? !hasVideoTrack(call.localStream));
+  const streams = group ? Object.values(call.groupStreams || {}) : (remoteStream ? [remoteStream] : []);
+  const isSharing = Boolean(call.screenStream);
+  const extraControls = (
+    <>
+      {output.canChooseOutput && (
+        <CallButton
+          icon="icon-speaker"
+          kind={output.sinkId ? 'on' : 'plain'}
+          label={langNew('ParvaneCallAudioOutput')}
+          onClick={output.toggleOutput}
+        />
+      )}
+      {isTimed && (isSharing || (call.canShareScreen && Boolean(navigator.mediaDevices?.getDisplayMedia))) && (
+        <CallButton
+          icon={isSharing ? 'icon-share-screen-stop' : 'icon-share-screen'}
+          kind={isSharing ? 'on' : 'plain'}
+          label={langNew(isSharing ? 'ParvaneCallStopSharing' : 'ParvaneCallShareScreen')}
+          onClick={handleToggleScreen}
+        />
+      )}
+    </>
+  );
 
   return (
-    <div className={styles.overlay} data-call-screen={hasRemoteVideo ? 'video' : 'voice'}>
-      <CallActive
-        call={call}
-        peerName={peerName}
-        time={time}
-        hasRemoteVideo={hasRemoteVideo}
-        onToggleMute={handleToggleMute}
-        onToggleCamera={handleToggleCamera}
-        onHangup={handleHangup}
-      />
-      <audio ref={audioRef} autoPlay />
-    </div>
+    <>
+      {/* Звук живёт вне экранов звонка и продолжает играть при сворачивании и смене модуля */}
+      <div ref={output.audioHostRef} data-call-audio hidden>
+        {streams.map((stream) => <CallAudio key={stream.id} stream={stream} sinkId={output.sinkId} />)}
+      </div>
+      {isTimed && isMinimized ? (
+        <CallMinimized name={group?.title || peerName} time={time} onExpand={handleExpand} />
+      ) : (
+        <div className={styles.overlay} data-call-screen={group ? 'group' : (hasRemoteVideo ? 'video' : 'voice')}>
+          {group ? (
+            <CallGroup
+              call={call}
+              time={time}
+              onToggleMute={handleToggleMute}
+              onToggleCamera={handleToggleCamera}
+              onHangup={handleHangup}
+              onMinimize={handleMinimize}
+              extraControls={extraControls}
+            />
+          ) : (
+            <CallActive
+              call={call}
+              peerName={peerName}
+              time={time}
+              hasRemoteVideo={hasRemoteVideo}
+              onToggleMute={handleToggleMute}
+              onToggleCamera={handleToggleCamera}
+              onHangup={handleHangup}
+              onMinimize={isTimed ? handleMinimize : undefined}
+              extraControls={extraControls}
+            />
+          )}
+          {isOutputOpen && (
+            <CallOutputList
+              outputs={output.outputs}
+              sinkId={output.sinkId}
+              onChoose={output.chooseOutput}
+              onClose={output.closeOutput}
+            />
+          )}
+          {(call.hasScreenShareError || output.hasOutputError) && (
+            <div className={styles.mediaError} role="status">
+              {langNew(call.hasScreenShareError ? 'ParvaneCallScreenError' : 'ParvaneCallAudioError')}
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 };
 

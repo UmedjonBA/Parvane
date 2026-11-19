@@ -5240,6 +5240,9 @@ const methods = {
   disconnect() {
     return Promise.resolve(undefined);
   },
+  parvaneToggleScreenShare() {
+    return callController.toggleScreenShare();
+  },
 };
 
 function selfId() {
