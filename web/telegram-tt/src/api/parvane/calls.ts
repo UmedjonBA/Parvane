@@ -6,6 +6,7 @@ import {
   CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, RING_TIMEOUT_MS, type WireCallSignal,
 } from './callengine';
 import { createCallScreenShare } from './callScreenShare';
+import { getIsCallVideoMuted } from './callVideoState';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import {
   GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, inviteGroupTitle, type WireGroupInvite,
@@ -919,8 +920,9 @@ export function createCallController(deps: CallDependencies) {
     const callWindow = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall;
     const isAudioMuted = Boolean(callWindow?.isMuted);
     const hasCamera = Boolean(getLocalStream()?.getVideoTracks().length);
-    const hasVideo = Boolean(callWindow?.screenStream) || (hasCamera && !callWindow?.isCameraOff);
-    const isVideoMuted = !hasVideo;
+    const isVideoMuted = getIsCallVideoMuted({
+      hasCamera, isCameraOff: callWindow?.isCameraOff, isSharingScreen: Boolean(callWindow?.screenStream),
+    });
     if (groupEngine?.currentGroupCallId) {
       groupEngine.sendMediaState(isAudioMuted, isVideoMuted);
       return;
