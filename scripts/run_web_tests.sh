@@ -104,6 +104,12 @@ log "Cross-client profile desktop -> web e2e (bio, phone, name color, personal c
 log "Two-browser long video streaming and integrity e2e (thumbnail, seek, tampering)"
 "$ROOT/scripts/run_web_video_stream_e2e.sh"
 
+log "PWA e2e (manifest, app shortcuts, offline shell)"
+"$ROOT/scripts/run_web_pwa_e2e.sh"
+
+log "PWA install, offline launch and update after a release e2e"
+"$ROOT/scripts/run_web_pwa_offline_e2e.sh"
+
 log "Two-browser contacts e2e"
 "$ROOT/scripts/run_web_contacts_e2e.sh"
 
@@ -139,6 +145,7 @@ log "Task offer in chat e2e (spec 011, TASK-1)"
 
 log "Article in chat e2e (ARTICLE-1)"
 "$ROOT/scripts/run_web_article_e2e.sh"
+"$ROOT/scripts/run_web_chat_design_e2e.sh"
 log "Markdown in notes e2e (MD-1)"
 "$ROOT/scripts/run_web_markdown_e2e.sh"
 "$ROOT/scripts/run_web_notes_screens_e2e.sh"
@@ -181,6 +188,7 @@ log "Per-callee ring cap: the caller is told why the call did not go out"
 
 log "Rejected saved token: sign-in screen, then back to work (E6-1)"
 "$ROOT/scripts/run_web_auth_reject_e2e.sh"
+"$ROOT/scripts/run_web_auth_screens_e2e.sh"
 
 log "Honest native UI e2e (hidden unsupported actions, no unimplemented methods)"
 "$ROOT/scripts/run_web_honest_ui_e2e.sh"

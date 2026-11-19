@@ -15,11 +15,12 @@ import ParvaneIcon from '../../main/ParvaneIcon';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
+import screen from './MusicPlayerScreen.module.scss';
 
 const REPEAT_KEYS = { off: 'MusicRepeatOff', all: 'MusicRepeatAll', one: 'MusicRepeatOne' } as const;
 
 // Parvane (spec 039): управление плеером — позиция в треке и кнопки. Порядок («вперемешку», повтор) ведёт движок
-const MusicControls = () => {
+const MusicControls = ({ isFullScreen }: { isFullScreen?: boolean }) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const { positionSecs, durationSecs } = useDerivedState(getMusicPosition);
@@ -33,9 +34,9 @@ const MusicControls = () => {
 
   return (
     <div className={styles.controls} data-music-controls>
-      <div className={styles.progress}>
+      <div className={buildClassName(styles.progress, isFullScreen && screen.progress)}>
         <input
-          className={styles.slider}
+          className={buildClassName(styles.slider, isFullScreen && screen.seek)}
           type="range"
           min={0}
           max={total || 1}
@@ -45,12 +46,12 @@ const MusicControls = () => {
           style={`--progress: ${total ? (Math.min(positionSecs, total) / total) * 100 : 0}%`}
           onChange={handleSeek}
         />
-        <div className={buildClassName(styles.times, kit.mono, kit.muted, kit.small)}>
+        <div className={buildClassName(styles.times, kit.mono, kit.muted, kit.small, isFullScreen && screen.times)}>
           <span data-music-position>{formatTrackTime(positionSecs)}</span>
           <span>{formatTrackTime(total)}</span>
         </div>
       </div>
-      <div className={styles.buttons}>
+      <div className={buildClassName(styles.buttons, isFullScreen && screen.playback)}>
         <button
           type="button"
           className={buildClassName(kit.ib, shuffle && styles.modeOn)}
@@ -65,7 +66,7 @@ const MusicControls = () => {
         </button>
         <button
           type="button"
-          className={styles.playButton}
+          className={buildClassName(styles.playButton, isFullScreen && screen.playButton)}
           aria-label={lang(player.isPlaying ? 'MusicPause' : 'MusicPlay')}
           data-music-play={player.isPlaying ? 'playing' : 'paused'}
           onClick={togglePlay}

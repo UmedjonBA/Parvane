@@ -1,0 +1,606 @@
+// Parvane: экраны звонка по макету (доски `PhCalls`, `RpCalls`, `DkCalls`). Экран занимает окно целиком,
+// плоско: без теней и размытия. Цвета — токены схемы; экран с видео собеседника всегда тёмный (`--call-*`)
+
+.overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.spacer {
+  flex: 1 1 0;
+}
+
+// ── кнопки ───────────────────────────────────────────────────────────────────
+
+.round {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 3.5rem;
+  height: 3.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+
+  font-size: 1.5rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 600px) {
+    width: 3.75rem;
+    height: 3.75rem;
+  }
+}
+
+.roundLarge {
+  width: 4.25rem;
+  height: 4.25rem;
+  font-size: 1.75rem;
+
+  @media (max-width: 600px) {
+    width: 4.25rem;
+    height: 4.25rem;
+  }
+}
+
+.on {
+  color: var(--pv-panel);
+  background: var(--pv-fg);
+}
+
+.hangup {
+  color: var(--pv-panel);
+  background: var(--pv-red);
+}
+
+.accept {
+  color: var(--pv-panel);
+  background: var(--pv-aqua);
+}
+
+.captioned {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-size: 0.8125rem;
+}
+
+.controls {
+  display: flex;
+  flex: none;
+  gap: 0.875rem;
+  justify-content: center;
+
+  @media (max-width: 600px) {
+    gap: 1rem;
+  }
+}
+
+// ── личный звонок без видео и входящий ──────────────────────────────────────
+
+.voice,
+.incoming {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.625rem;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 0;
+  padding: 1.5rem;
+
+  text-align: center;
+
+  @media (max-width: 600px) {
+    justify-content: flex-start;
+    padding: 4.5rem 1.5rem 2rem;
+  }
+}
+
+.incoming {
+  @media (max-width: 600px) {
+    padding: 6rem 1.5rem 2.5rem;
+  }
+}
+
+// На компьютере кнопки стоят сразу под сведениями, на телефоне — у нижнего края
+.voice .spacer,
+.incoming .spacer {
+  @media (min-width: 601px) {
+    flex: none;
+    height: 1.125rem;
+  }
+}
+
+.avatar,
+.avatarLarge {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 8rem;
+  height: 8rem;
+  border-radius: 50%;
+
+  font-size: 2.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+
+  background: var(--pv-purple);
+}
+
+.avatar {
+  @media (max-width: 600px) {
+    width: 7rem;
+    height: 7rem;
+    font-size: 2.5rem;
+  }
+}
+
+.avatarLarge {
+  margin-top: 0.75rem;
+  background: var(--pv-orange);
+}
+
+.name,
+.nameLarge {
+  overflow: hidden;
+
+  max-width: 100%;
+  margin-top: 0.5rem;
+
+  font-size: 1.625rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name {
+  @media (max-width: 600px) {
+    font-size: 1.5rem;
+  }
+}
+
+.status {
+  font-family: var(--font-family-monospace);
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.statusError {
+  color: var(--pv-red);
+}
+
+.note {
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.remoteState {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.sas {
+  max-width: 100%;
+  margin-top: 0.625rem;
+  padding: 0.625rem 1rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-raised);
+}
+
+.sasHint {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.sasValue {
+  margin-top: 0.125rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.1em;
+}
+
+.answer {
+  display: flex;
+  flex: none;
+  gap: 3.5rem;
+  margin-top: 1.25rem;
+}
+
+.voiceLocal {
+  position: absolute;
+  right: 1rem;
+  bottom: 7rem;
+
+  width: 6rem;
+  height: 9rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  object-fit: cover;
+  background: var(--pv-raised);
+
+  @media (min-width: 601px) {
+    bottom: 1rem;
+    width: 12rem;
+    height: 9rem;
+  }
+}
+
+// ── личный звонок с видео: всегда тёмный ────────────────────────────────────
+
+.remoteItem {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.video {
+  --call-bg: #1d2021;
+  --call-fg: #ebdbb2;
+  --call-muted: #a89984;
+  --call-raised: #504945;
+  --call-line: #665c54;
+  --call-red: #fb4934;
+
+  position: relative;
+
+  flex: 1 1 auto;
+
+  min-height: 0;
+
+  color: var(--call-fg);
+
+  background: var(--call-bg);
+
+  .status,
+  .remoteState,
+  .sasHint {
+    color: var(--call-muted);
+  }
+
+  .statusError {
+    color: var(--call-red);
+  }
+
+  .controls {
+    position: absolute;
+    right: 0;
+    bottom: 1.5rem;
+    left: 0;
+  }
+
+  .round {
+    color: var(--call-fg);
+    background: var(--call-raised);
+  }
+
+  .on {
+    color: var(--call-bg);
+    background: var(--call-fg);
+  }
+
+  .hangup {
+    color: var(--call-bg);
+    background: var(--call-red);
+  }
+}
+
+.videoRemote {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+
+  object-fit: contain;
+  background: #32302f;
+}
+
+.videoHead {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  left: 1rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: flex-start;
+
+  .status {
+    font-size: 0.75rem;
+  }
+
+  .remoteState {
+    justify-content: flex-start;
+  }
+}
+
+.videoName {
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.videoSas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: baseline;
+
+  font-size: 0.75rem;
+
+  .sasValue {
+    margin-top: 0;
+    font-size: 0.875rem;
+  }
+}
+
+.videoLocal {
+  position: absolute;
+  right: 1rem;
+  bottom: 7rem;
+
+  width: 6rem;
+  height: 9rem;
+  border: 1px solid var(--call-line);
+  border-radius: var(--pv-radius);
+
+  object-fit: cover;
+  background: var(--call-raised);
+
+  @media (min-width: 601px) {
+    width: 12rem;
+    height: 9rem;
+  }
+}
+
+// ── групповой звонок ─────────────────────────────────────────────────────────
+
+.group {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-height: 0;
+
+  background: var(--pv-bg);
+}
+
+.groupHead {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: baseline;
+
+  min-height: var(--pv-header-height);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  @media (max-width: 600px) {
+    flex-direction: column;
+    gap: 0;
+    justify-content: center;
+  }
+}
+
+.groupTitle {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupMeta {
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+  white-space: nowrap;
+}
+
+.tiles {
+  overflow-y: auto;
+  display: grid;
+  grid-auto-rows: minmax(9.375rem, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  flex: 1 1 auto;
+  gap: 0.75rem;
+
+  min-height: 0;
+  padding: 1rem;
+
+  @media (max-width: 600px) {
+    grid-auto-rows: 9.375rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.625rem;
+    padding: 0.75rem;
+  }
+}
+
+.tile {
+  position: relative;
+
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.tileAway {
+  opacity: 0.55;
+}
+
+.tileAvatar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+
+  background: var(--pv-blue);
+
+  @media (max-width: 600px) {
+    width: 3.5rem;
+    height: 3.5rem;
+    font-size: 1.25rem;
+  }
+}
+
+.toneBlue {
+  background: var(--pv-blue);
+}
+
+.toneOrange {
+  background: var(--pv-orange);
+}
+
+.tonePurple {
+  background: var(--pv-purple);
+}
+
+.toneGreen {
+  background: var(--pv-green);
+}
+
+.toneRed {
+  background: var(--pv-red);
+}
+
+.toneAqua {
+  background: var(--pv-aqua);
+}
+
+.tileName {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tileStatus {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.tileVideo {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+
+  object-fit: cover;
+  background: var(--pv-raised);
+}
+
+// Камера выключена: элемент остаётся ради звука участника
+.tileVideoHidden {
+  pointer-events: none;
+  opacity: 0;
+}
+
+// Поверх картинки камеры подписи лежат плашкой у нижнего края
+.tileWithPicture {
+  justify-content: flex-end;
+
+  .tileName,
+  .tileStatus {
+    position: relative;
+    padding: 0 0.5rem;
+    border-radius: var(--pv-radius-sm);
+    background: var(--pv-panel);
+  }
+}
+
+.tileMuted {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+
+  font-size: 1.125rem;
+  color: var(--pv-red);
+}
+
+.groupBar {
+  display: flex;
+  flex: none;
+  gap: 0.875rem;
+  align-items: center;
+  justify-content: center;
+
+  height: 5rem;
+  border-top: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  @media (max-width: 600px) {
+    gap: 1rem;
+
+    height: auto;
+    padding: 0.75rem 0 1.25rem;
+    border-top: 0;
+
+    background: none;
+  }
+}

@@ -49,7 +49,7 @@ async function openStartPage(context) {
 async function pressAuthButton(page, screen, name, targetScreenId) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await screen.getByRole('button', { name }).dispatchEvent('mousedown', { button: 0 });
+    await screen.locator('[data-auth-register]').dispatchEvent('click');
     try {
       await page.locator(`.Transition_slide-active > ${targetScreenId}`).waitFor({ state: 'visible', timeout: 3000 });
       return;
@@ -66,7 +66,7 @@ async function registerViaForm(page, nick) {
   // Поле почты не показывается: сервер подтверждает через Telegram
   await registerScreen.locator('#sign-up-parvane-password').fill(PASSWORD);
   assert.equal(await registerScreen.locator('#sign-up-parvane-email').count(), 0, 'поле почты не ожидается');
-  await registerScreen.getByRole('button', { name: 'Create account' }).click();
+  await registerScreen.locator('[data-auth-submit]').click();
   return waitTelegramScreen(page);
 }
 
@@ -137,7 +137,7 @@ try {
   const passwordScreen = resumeSession.page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
   const { token: bobToken2 } = await waitTelegramScreen(resumeSession.page);
   assert.notEqual(bobToken2, bobToken, 'повторный вход выдаёт новый токен');
   const stale = await botConfirm(bobToken, 1003);
@@ -157,7 +157,7 @@ try {
   const ghostPassword = ghostSession.page.locator('.Transition_slide-active > #auth-password-form');
   await ghostPassword.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await ghostPassword.locator('#sign-in-password').fill(PASSWORD);
-  await ghostPassword.getByRole('button', { name: 'Next' }).click();
+  await ghostPassword.locator('[data-auth-submit]').click();
   await ghostPassword.getByText('Invalid password', { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await pressAuthButton(ghostSession.page, ghostPassword, 'Create account', '#auth-registration-form');

@@ -14,6 +14,7 @@ import {
   addToQueue, callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks,
   restoreMusicQueue, setTrackStarred,
 } from './musicPlayer';
+import { openMusicPlayer } from './musicPlayerView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -163,6 +164,10 @@ const Music = () => {
   });
 
   const handleNav = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (e.currentTarget.dataset.view === 'queue' && getCurrentTrack()) {
+      openMusicPlayer();
+      return;
+    }
     setQuery('');
     setView({ kind: e.currentTarget.dataset.view as 'home' });
   });

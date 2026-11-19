@@ -24,6 +24,7 @@ import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
 import { requestCloudAttach } from '../../parvane/cloud/cloudBridge';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -196,6 +197,15 @@ const AttachMenu = ({
 
   const oldLang = useOldLang();
   const lang = useLang();
+  // На телефоне меню — шторка во всю ширину: рисуется вне полосы ввода, иначе её сдвиг обрезал бы края
+  const { isMobile } = useAppLayout();
+  // Шторка на узком экране открывается и закрывается только нажатием: меню по наведению — для компьютера
+  const isHoverMenu = !IS_TOUCH_ENV && !isMobile;
+
+  // Меню, открытое наведением на компьютере, не должно стать шторкой поверх экрана при сужении окна
+  useEffect(() => {
+    closeAttachMenu();
+  }, [isMobile, closeAttachMenu]);
 
   const handlePollCreate = useLastCallback(() => {
     closeAttachMenu();
@@ -235,6 +245,7 @@ const AttachMenu = ({
                 round
                 color="translucent"
                 onActivate={handleToggleAttachMenu}
+                noHoverActivation={isMobile}
                 ariaLabel="Replace an attachment"
                 ariaControls="replace-menu-controls"
                 hasPopup
@@ -249,6 +260,7 @@ const AttachMenu = ({
                 round
                 color="translucent"
                 onActivate={handleToggleAttachMenu}
+                noHoverActivation={isMobile}
                 ariaLabel="Add an attachment"
                 ariaControls="attach-menu-controls"
                 hasPopup
@@ -258,6 +270,9 @@ const AttachMenu = ({
             )
           }
           <Menu
+            // Смена раскладки переносит меню в портал: без нового ключа у пересозданного пузыря нет классов
+            // скрытого состояния (их ставит `useShowTransition` на прежний элемент), и он виден поверх экрана
+            key={isMobile ? 'sheet' : 'menu'}
             id="attach-menu-controls"
             isOpen={isMenuOpen}
             autoClose
@@ -265,16 +280,18 @@ const AttachMenu = ({
             positionY="bottom"
             onClose={closeAttachMenu}
             className="AttachMenu--menu fluid"
+            withPortal={isMobile}
             onCloseAnimationEnd={closeAttachMenu}
-            onMouseEnter={!IS_TOUCH_ENV ? handleMouseEnter : undefined}
-            onMouseLeave={!IS_TOUCH_ENV ? handleMouseLeave : undefined}
-            noCloseOnBackdrop={!IS_TOUCH_ENV}
+            onMouseEnter={isHoverMenu ? handleMouseEnter : undefined}
+            onMouseLeave={isHoverMenu ? handleMouseLeave : undefined}
+            noCloseOnBackdrop={isHoverMenu}
             ariaLabelledBy="attach-menu-button"
           >
             {/*
            ** Using ternary operator here causes some attributes from first clause
            ** transferring to the fragment content in the second clause
            */}
+            <div className="AttachMenu--caption">{lang('AttachMenuTitle')}</div>
             {!canAttachMedia && (
               <MenuItem className="media-disabled" disabled>
                 {lang(messageListType === 'scheduled' && paidMessagesStars
@@ -292,7 +309,7 @@ const AttachMenu = ({
                 )}
                 {((canSendDocuments || canSendAudios) && !isPhotoOrVideo)
                   && (
-                    <MenuItem icon="document" onClick={handleDocumentSelect}>
+                    <MenuItem icon="document" className="attach-tile--file" onClick={handleDocumentSelect}>
                       {oldLang(!canSendDocuments && canSendAudios ? 'InputAttach.Popover.Music' : 'AttachDocument')}
                     </MenuItem>
                   )}
@@ -304,11 +321,12 @@ const AttachMenu = ({
               </>
             )}
             {canAttachPolls && !editingMessage && (
-              <MenuItem icon="poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
+              <MenuItem icon="poll" className="attach-tile--poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
             )}
             {!editingMessage && (
               <NestedMenuItem
                 icon="location"
+                className="attach-tile--place"
                 submenu={(
                   <>
                     <MenuItem onClick={handleParvaneLocation}>{lang('ParvaneLocationCurrent')}</MenuItem>
@@ -329,10 +347,14 @@ const AttachMenu = ({
               <MenuItem icon="folder" onClick={handleCloudAttach}>{lang('ParvaneCloudAttachFromCloud')}</MenuItem>
             )}
             {isNotesOn && !editingMessage && !isScheduled && (
-              <MenuItem icon="document" onClick={handleArticlePick}>{lang('ArticleMenuItem')}</MenuItem>
+              <MenuItem icon="document" className="attach-tile--note" onClick={handleArticlePick}>
+                {lang('ArticleMenuItem')}
+              </MenuItem>
             )}
             {isPlanOn && !editingMessage && !isScheduled && (
-              <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>
+              <MenuItem icon="calendar" className="attach-tile--plan" onClick={handleTaskOfferCreate}>
+                {lang('TaskOfferMenuItem')}
+              </MenuItem>
             )}
           </Menu>
         </>

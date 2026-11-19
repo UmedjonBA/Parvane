@@ -36,5 +36,5 @@ test('registers and signs in through the live production stack', async ({ page }
     legacyE2eKeyCount: 0,
   });
   expect(await page.evaluate(() => localStorage.getItem('parvane:creds'))).toBeNull();
-  expect(await callDiagApi(page, 'parvaneDiagHasSecureRecord', { name: 'v2-engine-bin' })).toBe(true);
+  expect(await callDiagApi(page, 'parvaneDiagHasSecureRecord', { name: 'v2-model-device-key' })).toBe(true);
 });

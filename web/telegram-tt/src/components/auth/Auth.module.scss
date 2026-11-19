@@ -1,0 +1,834 @@
+// Parvane: экраны входа по макету (доски `PhAuth`, `XpAuth`, `ZpAuthX`, `DkAuth`, `RdAuth`, `ZdAuthX`).
+// Телефон — экран во всю ширину с шапкой, компьютер — окно по центру. Цвета — переменные схемы `--pv-*`,
+// размеры — токены `pv.css` из `styles/_variables.scss`; плоско, фокус с клавиатуры — синяя рамка 2 px.
+
+.root {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+
+  height: 100%;
+
+  font-family: var(--font-family);
+  font-size: var(--pv-font-size);
+  line-height: 1.35;
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+}
+
+// ── раскладка ────────────────────────────────────────────────────────────────
+
+// Содержимое экрана: на телефоне — колонка во всю высоту, на компьютере — по центру окна
+.page {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 0.875rem;
+
+  width: 100%;
+  padding: 0.5rem 1.5rem 1.5rem;
+
+  @media (min-width: 601px) {
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+}
+
+// Экран входа на телефоне начинается со знака приложения, шапки у него нет
+.pageStart {
+  gap: 1rem;
+
+  @media (max-width: 600px) {
+    padding-top: 4.5rem;
+  }
+}
+
+// Вход и регистрация на компьютере: слева знак и описание, справа окно с формой
+.split {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 1rem;
+
+  width: 100%;
+
+  @media (min-width: 601px) {
+    flex: none;
+    gap: 1.5rem;
+    max-width: 23.75rem;
+  }
+
+  @media (min-width: 861px) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2.5rem;
+    align-items: center;
+
+    max-width: 47.5rem;
+  }
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  @media (max-width: 600px) {
+    gap: 1rem;
+  }
+}
+
+.dialog {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  gap: 0.875rem;
+
+  min-width: 0;
+
+  @media (min-width: 601px) {
+    flex: none;
+    gap: 0.75rem;
+
+    width: 100%;
+    padding: 1rem;
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius-dialog);
+
+    background: var(--pv-panel);
+  }
+}
+
+.dialogCode {
+  @media (min-width: 601px) {
+    gap: 0.875rem;
+    max-width: 27.5rem;
+  }
+}
+
+.dialogWide {
+  @media (min-width: 601px) {
+    max-width: 40rem;
+  }
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  margin: 0;
+
+  @media (min-width: 601px) {
+    gap: 0.75rem;
+  }
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1 1 0;
+  min-height: 0.5rem;
+}
+
+.onlyDesk {
+  @media (max-width: 600px) {
+    display: none !important;
+  }
+}
+
+// ── шапка телефона и заголовок окна ──────────────────────────────────────────
+
+.bar {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+
+  height: var(--pv-header-height);
+  padding: 0 1rem 0 0.375rem;
+
+  @media (min-width: 601px) {
+    display: none;
+  }
+}
+
+.barLined {
+  border-bottom: 1px solid var(--pv-line);
+  background: var(--pv-panel);
+}
+
+.barTitle {
+  overflow: hidden;
+
+  margin: 0;
+
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barSub {
+  display: block;
+  font-size: var(--pv-font-size-small);
+  font-weight: var(--font-weight-normal);
+  color: var(--pv-muted);
+}
+
+.step {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+
+  @media (max-width: 600px) {
+    display: none;
+  }
+}
+
+.headTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+}
+
+// ── знак и название ──────────────────────────────────────────────────────────
+
+.logo {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 4rem;
+  height: 4rem;
+  border-radius: 1.125rem;
+
+  font-size: 1.875rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+}
+
+.logoSmall {
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--pv-radius-card);
+  font-size: 1.5rem;
+}
+
+.name {
+  margin: 0;
+  font-size: 1.625rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.35;
+
+  @media (min-width: 861px) {
+    font-size: 1.875rem;
+  }
+}
+
+.text {
+  margin: 0;
+}
+
+.muted {
+  margin: 0;
+  color: var(--pv-muted);
+}
+
+.small {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.note {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.noteCenter {
+  @media (max-width: 600px) {
+    text-align: center;
+  }
+}
+
+.strong {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  overflow-wrap: anywhere;
+}
+
+.error {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-red);
+}
+
+// ── поля ─────────────────────────────────────────────────────────────────────
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  margin: 0;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.fieldLabel {
+  margin: 0;
+}
+
+.control {
+  position: relative;
+  display: block;
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-size: var(--pv-font-size);
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-muted);
+    opacity: 1;
+  }
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+
+  &:read-only {
+    color: var(--pv-muted);
+  }
+
+  @media (min-width: 601px) {
+    height: var(--pv-button-height);
+  }
+}
+
+.inputMono {
+  font-family: var(--font-family-monospace);
+  font-size: 0.875rem;
+}
+
+.inputError {
+  border-color: var(--pv-red);
+}
+
+.inputWithToggle {
+  padding-inline-end: 3rem;
+}
+
+.toggle {
+  cursor: var(--custom-cursor, pointer);
+
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: var(--pv-touch-size);
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+.hint {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.hintError {
+  color: var(--pv-red);
+}
+
+.check {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  margin: 0;
+
+  font-size: 0.875rem;
+}
+
+.checkBox {
+  flex: none;
+
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+
+  accent-color: var(--pv-at);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+}
+
+// ── кнопки ───────────────────────────────────────────────────────────────────
+
+.button,
+.link,
+.iconButton,
+.chip {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+  text-decoration: none;
+
+  background: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.button {
+  display: inline-flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  height: var(--pv-button-height);
+  padding: 0 1.125rem;
+  border: 1px solid transparent;
+  border-radius: var(--pv-radius);
+
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  white-space: nowrap;
+
+  background: var(--pv-at);
+
+  &:hover:not(:disabled) {
+    color: var(--pv-accent-ink);
+    text-decoration: none;
+    filter: brightness(1.06);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.buttonQuiet {
+  border-color: var(--pv-line2);
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-fg);
+  background: var(--pv-raised);
+
+  &:hover:not(:disabled) {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+    filter: none;
+  }
+}
+
+.buttonBusy {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.link {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  height: var(--pv-button-height);
+  padding: 0 0.75rem;
+  border-radius: var(--pv-radius);
+
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+  text-align: center;
+
+  &:hover {
+    color: var(--pv-at);
+    text-decoration: none;
+    background: var(--pv-hover);
+  }
+}
+
+.iconButton {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: var(--pv-touch-size);
+  height: var(--pv-touch-size);
+  border-radius: var(--pv-radius);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.chip {
+  display: inline-flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1.125rem;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+  white-space: nowrap;
+
+  background: var(--pv-raised);
+
+  &:hover {
+    color: var(--pv-fg);
+    text-decoration: none;
+    background: var(--pv-hover);
+  }
+}
+
+// Кнопки под окном: на телефоне столбиком во всю ширину, на компьютере в ряд справа
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  @media (min-width: 601px) {
+    flex-flow: row wrap;
+    justify-content: flex-end;
+  }
+}
+
+.actionsStart {
+  @media (min-width: 601px) {
+    margin-inline-end: auto;
+  }
+}
+
+.actionsButton {
+  @media (min-width: 601px) {
+    height: 2.5rem;
+  }
+}
+
+// ── карточки ─────────────────────────────────────────────────────────────────
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+
+  @media (min-width: 601px) {
+    background: var(--pv-raised);
+  }
+}
+
+.caps {
+  margin: 0;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nextRow {
+  display: flex;
+  gap: 0.625rem;
+  font-size: 0.875rem;
+}
+
+.nextNumber {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  color: var(--pv-muted);
+}
+
+// Плашка состояния (`XpAuth`): точка цвета стороны, что случилось и одна кнопка
+.notice {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+
+  @media (min-width: 601px) {
+    background: var(--pv-raised);
+  }
+}
+
+.dot {
+  flex: none;
+
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-top: 0.3125rem;
+  border-radius: 50%;
+
+  background: var(--c, var(--pv-line2));
+}
+
+.dotOrange {
+  --c: var(--pv-orange);
+}
+
+.dotRed {
+  --c: var(--pv-red);
+}
+
+.dotAqua {
+  --c: var(--pv-aqua);
+}
+
+.dotAccent {
+  --c: var(--pv-accent);
+}
+
+.noticeTitle {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+// ── шаги подтверждения в Telegram ────────────────────────────────────────────
+
+.steps {
+  display: flex;
+  flex-direction: column;
+
+  margin: 0 -1.5rem;
+  border-top: 1px solid var(--pv-line);
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  @media (min-width: 601px) {
+    overflow: hidden;
+
+    margin: 0;
+    border: 1px solid var(--pv-line);
+    border-radius: var(--pv-radius-card);
+
+    background: var(--pv-raised);
+  }
+}
+
+.stepRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 1rem;
+
+  @media (min-width: 601px) {
+    min-height: 2.75rem;
+    padding: 0.3125rem 0.875rem;
+    font-size: 0.875rem;
+  }
+}
+
+.stepRow + .stepRow {
+  border-top: 1px solid var(--pv-line);
+}
+
+.stepDot {
+  margin-top: 0;
+}
+
+.stepHint {
+  display: block;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  overflow-wrap: anywhere;
+}
+
+.stepLink {
+  color: inherit;
+
+  &:hover {
+    color: var(--pv-at);
+  }
+}
+
+// ── код из письма ────────────────────────────────────────────────────────────
+
+.code {
+  position: relative;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.codeCell {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 0;
+  height: 3.5rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-family: var(--font-family-monospace);
+  font-size: 1.375rem;
+  font-weight: var(--font-weight-semibold);
+
+  background: var(--pv-bg);
+}
+
+.codeCellOn {
+  border-color: var(--pv-accent);
+}
+
+.codeCellError {
+  border-color: var(--pv-red);
+}
+
+// Настоящее поле лежит поверх клеток невидимым: вставка, набор и менеджер кодов работают как в обычном поле;
+// фокус показывает рамка текущей клетки
+.codeInput {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+
+  font-size: 1rem;
+  color: transparent;
+
+  opacity: 0;
+  background: none;
+  outline: none;
+  caret-color: transparent;
+}
+
+// ── язык, тема и приложение для телефона под формой входа ─────────────────────
+
+.prefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+
+  @media (max-width: 600px) {
+    justify-content: center;
+  }
+}
+
+.select {
+  cursor: var(--custom-cursor, pointer);
+
+  height: var(--pv-chip-height);
+  padding: 0 0.625rem;
+  border: 1px solid var(--pv-line);
+  border-radius: calc(var(--pv-chip-height) / 2);
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+}
+
+.prefsLink {
+  height: var(--pv-chip-height);
+}
+
+.spinner {
+  flex: none;
+
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+
+  animation: auth-spin 0.8s linear infinite;
+}
+
+@keyframes auth-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

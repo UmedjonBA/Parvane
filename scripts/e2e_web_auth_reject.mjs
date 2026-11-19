@@ -67,7 +67,7 @@ try {
   // ── Вход паролем: сессия новая, история и переписка на месте ──────────────
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
   await clickUntil(
-    passwordScreen.getByRole('button', { name: 'Next' }),
+    passwordScreen.locator('[data-auth-submit]'),
     () => aliceSession.page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },
   );

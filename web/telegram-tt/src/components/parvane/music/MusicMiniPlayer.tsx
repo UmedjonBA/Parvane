@@ -1,14 +1,13 @@
 import { memo } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
-import { setParvaneSection } from '../../../util/parvaneSection';
 import {
   getCurrentTrack, getMusicPlayer, getMusicPosition, playNext, togglePlay,
 } from './musicPlayer';
+import { openMusicPlayer } from './musicPlayerView';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
-import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicCover from './MusicCover';
@@ -22,14 +21,12 @@ type OwnProps = {
 
 // Parvane (spec 039, 041): плеер вне «Музыки» — играет в любом модуле. Телефон: полоса между содержимым и
 // лентой (название, пауза, следующий). Компьютер: компактный виджет внизу боковой панели. Нажатие открывает
-// «Музыку». Нечего играть — ничего не рисуется
+// полноэкранный плеер. Нечего играть — ничего не рисуется
 const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const { positionSecs, durationSecs } = useDerivedState(getMusicPosition);
   const track = getCurrentTrack(player);
-
-  const handleOpen = useLastCallback(() => setParvaneSection('music'));
 
   if (!track) return undefined;
 
@@ -43,7 +40,7 @@ const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
         className={styles.widget}
         aria-label={lang('MusicWidgetOpen', { title: track.title, artist: track.artist })}
         data-music-widget={player.isPlaying ? 'playing' : 'paused'}
-        onClick={handleOpen}
+        onClick={openMusicPlayer}
       >
         <MusicCover
           coverId={track.coverId}
@@ -64,7 +61,7 @@ const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
       style={`--progress: ${progress}%`}
       data-music-mini={player.isPlaying ? 'playing' : 'paused'}
     >
-      <button type="button" className={styles.barOpen} aria-label={lang('MusicOpenPlayer')} onClick={handleOpen}>
+      <button type="button" className={styles.barOpen} aria-label={lang('MusicOpenPlayer')} onClick={openMusicPlayer}>
         <MusicCover coverId={track.coverId} toneId={track.albumId || track.id} size={36} className={styles.barCover} />
         <span className={styles.barText}>
           <span className={styles.barTitle}>{track.title}</span>

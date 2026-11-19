@@ -57,7 +57,7 @@ async function openLoginPage(context, user) {
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
   return session;
 }
 
@@ -68,7 +68,7 @@ async function openLoginPage(context, user) {
 async function pressAuthButton(page, screen, name, targetScreenId) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await screen.getByRole('button', { name }).dispatchEvent('mousedown', { button: 0 });
+    await screen.locator('[data-auth-register]').dispatchEvent('click');
     try {
       await page.locator(`.Transition_slide-active > ${targetScreenId}`).waitFor({ state: 'visible', timeout: 3000 });
       return;
@@ -96,7 +96,7 @@ async function submitRegisterForm(registerScreen, { nick, email }) {
   }
   await registerScreen.locator('#sign-up-parvane-email').fill(email);
   await registerScreen.locator('#sign-up-parvane-password').fill(PASSWORD);
-  await registerScreen.getByRole('button', { name: 'Create account' }).click();
+  await registerScreen.locator('[data-auth-submit]').click();
 }
 
 async function waitCodeScreen(page) {
@@ -129,7 +129,7 @@ try {
 
   const codeScreen = await waitCodeScreen(page);
   // В шапке экрана кода — почта, а не адрес аккаунта
-  await codeScreen.locator('h1').getByText(aliceEmail).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await codeScreen.locator('[data-auth-email]').getByText(aliceEmail).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const code = await fetchLatestCode(aliceEmail);
 
   // Неверный код отклоняется с ошибкой, аккаунт не активируется

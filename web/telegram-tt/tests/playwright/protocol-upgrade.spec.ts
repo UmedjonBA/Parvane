@@ -28,6 +28,10 @@ test('v2 client below min_supported shows the native update dialog', async ({ pa
   await submitPassword(page, PASSWORD);
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await expect(passwordScreen.getByText('no longer supported')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+  // Плашка «обновите приложение» с одной кнопкой (spec 041 E4)
+  await expect(passwordScreen.locator('[data-auth-update]')).toBeVisible();
+  const shotDir = process.env.PARVANE_E2E_AUTH_SHOT_DIR;
+  if (shotDir) await page.screenshot({ path: `${shotDir}/upgrade-required.png` });
   // Сессии нет
   await expect(page.locator('#LeftColumn')).toHaveCount(0);
 });

@@ -340,7 +340,7 @@ export async function preparePage(context, user, password, options = {}) {
   const passwordScreen = await submitNickUntilPassword(page, user);
   await passwordScreen.locator('#sign-in-password').fill(password);
   await clickUntil(
-    passwordScreen.getByRole('button', { name: 'Next' }),
+    passwordScreen.locator('[data-auth-submit]'),
     () => page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },
   );
@@ -361,53 +361,29 @@ export async function preparePage(context, user, password, options = {}) {
   return { page, errors, logs };
 }
 
-// Экран входа: ввести ник (или полный адрес) и нажать Next. Экран может
-// перемонтироваться сразу после появления (провайдер повторно шлёт
-// WaitPhoneNumber после чтения storage) и сбросить введённое — повторяем ввод,
-// пока не появится кнопка
+// Экран входа — одна форма «сервер, ник, пароль» (spec 041 E4): ввести ник (или полный адрес) и нажать Enter —
+// без пароля форма переходит к шагу пароля (тот же экран, корень `#auth-password-form`). Провайдер может
+// повторно прислать шаг ника (после чтения storage) — повторяем, пока шаг ника не сменится
 export async function submitNick(page, user) {
   const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
   const addressInput = addressScreen.getByLabel('Nickname');
-  await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const nextButton = addressScreen.getByRole('button', { name: 'Next' });
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
-  for (;;) {
-    try {
-      await addressInput.fill(user);
-    } catch (err) {
-      // Экран ника мелькнул после отправки и уступил экрану пароля (повтор
-      // WaitPhoneNumber под нагрузкой) — ник уже принят, вводить заново нечего
-      if (await passwordScreen.isVisible().catch(() => false)) return;
-      // Поле ника пропало посреди ввода — снимаем состояние страницы для разбора
-      const shot = `web/telegram-tt/test-results/submit-nick-${Date.now()}.png`;
-      await page.screenshot({ path: shot }).catch(() => {});
-      const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch((e) => String(e));
-      console.error(`submitNick: поле ника недоступно (${page.url()}); снимок ${shot}; текст страницы: ${text}`);
-      throw err;
-    }
-    try {
-      await nextButton.waitFor({ state: 'visible', timeout: 3000 });
-      break;
-    } catch (err) {
-      if (Date.now() > deadline) throw err;
-    }
+  try {
+    await addressInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  } catch (err) {
+    if (await passwordScreen.isVisible().catch(() => false)) return;
+    // Поле ника не появилось — снимаем состояние страницы для разбора
+    const shot = `web/telegram-tt/test-results/submit-nick-${Date.now()}.png`;
+    await page.screenshot({ path: shot }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch((e) => String(e));
+    console.error(`submitNick: поле ника недоступно (${page.url()}); снимок ${shot}; текст страницы: ${text}`);
+    throw err;
   }
-  // Под нагрузкой кнопка «Next» перерисовывается и обычный click не проходит
-  // («element is not stable»), а перерисовка формы после подгрузки языка
-  // теряет введённый ник — перед каждой попыткой перепроверяем значение,
-  // шлём Enter и клик, пока экран ника не сменится
   const hidden = () => addressScreen.waitFor({ state: 'hidden', timeout: 8000 }).then(() => true).catch(() => false);
   for (let attempt = 0; attempt < 8; attempt++) {
+    if (await passwordScreen.isVisible().catch(() => false)) return;
     if ((await addressInput.inputValue().catch(() => '')) !== user) await addressInput.fill(user).catch(() => {});
     await addressInput.press('Enter').catch(() => {});
-    if (await hidden()) return;
-    try {
-      if (attempt % 2 === 0) await nextButton.click({ timeout: 5000 });
-      else await nextButton.click({ force: true, timeout: 5000 });
-    } catch {
-      // кнопка перемонтировалась — проверим результат и попробуем снова
-    }
     if (await hidden()) return;
   }
   await addressScreen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
@@ -749,7 +725,7 @@ export async function relogin(page, password) {
   if (await passwordScreen.isVisible()) {
     await passwordScreen.locator('#sign-in-password').fill(password);
     await clickUntil(
-      passwordScreen.getByRole('button', { name: 'Next' }),
+      passwordScreen.locator('[data-auth-submit]'),
       () => leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
       { settleMs: 15000 },
     );
@@ -1108,7 +1084,7 @@ export async function createGroupViaUi(page, title, memberNames, options = {}) {
   await page.mouse.move(800, 360);
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
-  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.locator('[data-add-for="chats"]').click();
   await page.getByRole('menuitem', { name: 'New Group' }).click();
   const memberSearch = page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

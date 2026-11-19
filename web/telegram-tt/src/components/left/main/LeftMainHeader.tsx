@@ -1,6 +1,4 @@
-import {
-  memo, useEffect, useMemo, useRef, useState,
-} from '../../../lib/teact/teact';
+import { memo, useEffect, useMemo } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { GlobalState } from '../../../global/types';
@@ -20,22 +18,16 @@ import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
-import { markContactsFromProfile, requestPlannerAdd } from '../../../util/parvaneSection';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useConnectionStatus from '../../../hooks/useConnectionStatus';
-import useFlag from '../../../hooks/useFlag';
 import { useHotkeys } from '../../../hooks/useHotkeys';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
-import useResizeObserver from '../../../hooks/useResizeObserver';
 
 import PeerChip from '../../common/PeerChip';
-import ParvaneIcon from '../../main/ParvaneIcon';
 import Button from '../../ui/Button';
-import Menu from '../../ui/Menu';
-import MenuItem from '../../ui/MenuItem';
 import SearchInput from '../../ui/SearchInput';
 import ShowTransition from '../../ui/ShowTransition';
 import ConnectionStatusOverlay from '../ConnectionStatusOverlay';
@@ -72,9 +64,6 @@ const CLEAR_DATE_SEARCH_PARAM = { date: undefined };
 const CLEAR_CHAT_SEARCH_PARAM = { id: undefined };
 
 const IS_WITH_WINDOW_BUTTONS = IS_TAURI && IS_MAC_OS;
-// Ширина шапки без полей, px. Меньше — у «Написать» остаётся один значок (так у колонки в четверть окна
-// шириной 1280; при 1440 подпись ещё помещается)
-const COMPACT_HEADER_WIDTH = 330;
 
 const LeftMainHeader = ({
   shouldHideSearch,
@@ -105,7 +94,6 @@ const LeftMainHeader = ({
     lockScreen,
     openSettingsScreen,
     searchMessagesGlobal,
-    openLeftColumnContent,
   } = getActions();
 
   const oldLang = useOldLang();
@@ -113,31 +101,10 @@ const LeftMainHeader = ({
   const { isMobile } = useAppLayout();
 
   const isChatList = content === LeftColumnContent.ChatList;
-  // Parvane: шапка списка чатов по прототипу — заголовок «Чаты», поиск пилюлей (на телефоне — значком)
-  // и на компьютере кнопка «Написать». Поле поиска то же: по фокусу оно разворачивается во всю шапку,
-  // заголовок и «Написать» уходят
+  // Parvane: шапка списка чатов по макету (доски `DeskChats`, `Main`). Компьютер — одно поле поиска 40 px,
+  // заголовок оставлен только для чтения с экрана; телефон — заголовок «Чаты» и поиск значком. Создание
+  // чата — «+» панели модулей и ленты. По фокусу поле открывает поиск
   const isChatsHeader = isChatList && !shouldHideSearch;
-
-  const [isComposeMenuOpen, openComposeMenu, closeComposeMenu] = useFlag();
-
-  const headerRef = useRef<HTMLDivElement>();
-  const [isCompact, setIsCompact] = useState(false);
-  useResizeObserver(headerRef, (entry) => {
-    setIsCompact(entry.contentRect.width < COMPACT_HEADER_WIDTH);
-  });
-
-  const handleNewMessage = useLastCallback(() => {
-    markContactsFromProfile(false);
-    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
-  });
-
-  const handleNewGroup = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
-  });
-
-  const handleNewChannel = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
-  });
 
   const selectedSearchDate = useMemo(() => {
     return searchDate
@@ -242,11 +209,8 @@ const LeftMainHeader = ({
   return (
     <div className="LeftMainHeader">
       <div
-        ref={headerRef}
         id="LeftMainHeader"
-        className={buildClassName(
-          'left-header', isChatsHeader && 'left-header--chats', isCompact && 'left-header--compact',
-        )}
+        className={buildClassName('left-header', isChatsHeader && 'left-header--chats')}
         data-tauri-drag-region={IS_WITH_WINDOW_BUTTONS ? true : undefined}
       >
         {/* Parvane: меню «☰» нет — его пункты в «Профиле». Вне списка чатов на этом месте «назад» */}
@@ -268,7 +232,6 @@ const LeftMainHeader = ({
           className={buildClassName(
             (globalSearchChatId || searchDate) ? 'with-picker-item' : undefined,
             shouldHideSearch && 'SearchInput--hidden',
-            isChatsHeader && 'SearchInput--pill',
           )}
           value={isClosingSearch ? undefined : (contactsFilter || searchQuery)}
           focused={isSearchFocused}
@@ -286,33 +249,6 @@ const LeftMainHeader = ({
         >
           {searchContent}
         </SearchInput>
-        {isChatsHeader && !isMobile && (
-          <div className="left-header-compose-wrapper">
-            <button
-              type="button"
-              className="left-header-compose"
-              aria-label={lang('NewMessageTitle')}
-              aria-haspopup="menu"
-              aria-expanded={isComposeMenuOpen}
-              onClick={openComposeMenu}
-            >
-              <ParvaneIcon name="pen" isSmall />
-              <span className="left-header-compose-label">{lang('ParvaneCompose')}</span>
-            </button>
-            <Menu
-              isOpen={isComposeMenuOpen}
-              positionX="right"
-              positionY="top"
-              autoClose
-              onClose={closeComposeMenu}
-            >
-              <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
-              <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
-              <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
-              <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
-            </Menu>
-          </div>
-        )}
         {/* Parvane: кнопка emoji-статуса (звёздочка premium) — подписок нет */}
         {hasPasscode && (
           <Button

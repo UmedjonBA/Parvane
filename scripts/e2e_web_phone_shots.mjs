@@ -51,7 +51,7 @@ try {
   await step(authPage, 'auth-register', async () => {
     const form = authPage.locator('.Transition_slide-active > #auth-registration-form');
     for (let attempt = 0; attempt < 5; attempt++) {
-      await start.getByRole('button', { name: /Create account|Создать/ }).click();
+      await start.locator('[data-auth-register]').click();
       if (await form.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) break;
     }
     await form.waitFor({ state: 'visible', timeout: 5000 });

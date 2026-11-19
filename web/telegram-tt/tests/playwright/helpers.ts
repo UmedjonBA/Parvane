@@ -41,31 +41,32 @@ export async function submitAddress(page: Page, user: string, options: SubmitAdd
   const addressScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');
   const addressInput = addressScreen.getByLabel('Nickname');
   await expect(addressInput).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
-  // Экран может перемонтироваться сразу после появления (например, после
-  // logout) и сбросить введённое — повторяем ввод, пока не появится кнопка
+  // Экран может перемонтироваться сразу после появления (например, после logout) и сбросить введённое —
+  // повторяем ввод, пока значение не удержится
   await expect(async () => {
     await addressInput.fill(user);
-    await expect(addressScreen.getByRole('button', { name: 'Next' })).toBeVisible({ timeout: 3000 });
+    await expect(addressInput).toHaveValue(user, { timeout: 3000 });
   }).toPass({ timeout: LOGIN_TIMEOUT_MS });
   if (options.keepSignedIn === false) {
-    // input чекбокса визуально скрыт — кликаем по его label
     const keep = addressScreen.locator('#sign-in-keep-session');
     if (await keep.isChecked()) {
-      await addressScreen.locator('label:has(#sign-in-keep-session)').click();
+      await keep.uncheck();
       await expect(keep).not.toBeChecked({ timeout: 3000 });
     }
   }
-  await addressScreen.getByRole('button', { name: 'Next' }).click();
+  // Форма входа одна (сервер, ник, пароль): Enter в поле ника без пароля переводит к шагу пароля
+  await addressInput.press('Enter');
 }
 
 export async function submitPassword(page: Page, password: string) {
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await expect(passwordScreen).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+  const passwordInput = passwordScreen.locator('#sign-in-password');
   await expect(async () => {
-    await passwordScreen.locator('#sign-in-password').fill(password);
-    await expect(passwordScreen.getByRole('button', { name: 'Next' })).toBeVisible({ timeout: 3000 });
+    await passwordInput.fill(password);
+    await expect(passwordInput).toHaveValue(password, { timeout: 3000 });
   }).toPass({ timeout: LOGIN_TIMEOUT_MS });
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
 }
 
 export async function expectSignedIn(page: Page) {
@@ -82,25 +83,26 @@ export async function registerAndSignIn(
 
 const PROFILE_STEP_TIMEOUT_MS = 5000;
 
-// «Профиль» — главный экран настроек: кнопка `Profile` боковой панели (компьютер) либо нижней панели
-// (телефон). Диалог ключа восстановления (v2) появляется в произвольный момент после входа и перекрывает
+// «Профиль» — главный экран настроек: пункт `profile` панели модулей (компьютер) либо ленты (телефон).
+// Диалог ключа восстановления (v2) появляется в произвольный момент после входа и перекрывает
 // кнопку — нажатие повторяется, пока экран не откроется
 export async function openProfile(page: Page) {
-  const rail = page.locator('#FoldersSidebar').getByRole('button', { name: 'Profile' });
-  const bar = page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Profile' });
+  const entry = page.locator('#FoldersSidebar [data-module="profile"], nav[data-modules] [data-module="profile"]');
   const screen = page.locator('.settings-main-scroll');
   await expect(async () => {
-    if (!(await screen.isVisible())) await rail.or(bar).first().click({ timeout: PROFILE_STEP_TIMEOUT_MS });
-    await expect(screen).toBeVisible({ timeout: PROFILE_STEP_TIMEOUT_MS });
+    if (!(await screen.first().isVisible())) {
+      await entry.locator('visible=true').first().click({ timeout: PROFILE_STEP_TIMEOUT_MS });
+    }
+    await expect(screen.first()).toBeVisible({ timeout: PROFILE_STEP_TIMEOUT_MS });
   }).toPass({ timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Правка своего профиля: карандаша в шапке «Профиля» нет — путь через карточку аккаунта («My Profile») и
-// карандаш в шапке открывшегося профиля
+// Правка своего профиля: карандаш (телефон) либо «Изменить» (компьютер) на главном экране «Профиля»
 export async function openEditProfile(page: Page) {
   await openProfile(page);
-  await page.locator('.settings-main-scroll').getByRole('button', { name: 'My Profile', exact: true }).click();
-  await page.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.locator('[data-profile-edit]:visible').first().click();
+  await expect(page.locator('#Settings').getByLabel('First name (required)'))
+    .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
 }
 
 export function uniqueUser(prefix: string, projectName: string) {
@@ -116,7 +118,7 @@ export type SecureStateSnapshot = {
   keyExtractable?: boolean;
   // Корень хранилища (`root`) в базе профиля `parvane-store-v3-<id>`
   hasRoot: boolean;
-  // Состояние движка v2 — запись `g<поколение>/engine-core/v2-engine-bin` (значение — шифртекст движка)
+  // Состояние модели движка — запись `g<поколение>/<раздел>/v2-model-device-key` (ключ обёртки хранилища модели)
   hasState: boolean;
   // Число записей базы профиля (после выхода — 0)
   recordCount: number;
@@ -194,7 +196,7 @@ export async function readSecureStateSnapshot(
       hasKey: key !== undefined,
       keyExtractable: key?.extractable,
       hasRoot: records.some(([name]) => name === 'root'),
-      hasState: records.some(([name]) => /^g\d+\/engine-core\/v2-engine-bin$/.test(name)),
+      hasState: records.some(([name]) => /^g\d+\/[^/]+\/v2-model-device-key$/.test(name)),
       recordCount: records.length,
       secretLeaked: Boolean(secret) && (
         records.some(([, value]) => toText(value).includes(secret!))

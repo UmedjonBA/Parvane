@@ -9,15 +9,23 @@ import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicControls from './MusicControls';
 import MusicCover from './MusicCover';
 import MusicTrackRow from './MusicTrackRow';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
+import screen from './MusicPlayerScreen.module.scss';
 
 // Parvane (spec 039): плеер и очередь — что играет, управление и треки в порядке проигрывания
-const MusicQueue = () => {
+type OwnProps = {
+  isListOnly?: boolean;
+  isExpanded?: boolean;
+  onToggleExpanded?: NoneToVoidFunction;
+};
+
+const MusicQueue = ({ isListOnly, isExpanded, onToggleExpanded }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const track = getCurrentTrack(player);
@@ -36,7 +44,7 @@ const MusicQueue = () => {
 
   return (
     <div className={styles.queue} data-music-queue={tracks.length}>
-      {track && (
+      {!isListOnly && track && (
         <div className={styles.now}>
           <MusicCover
             coverId={track.coverId}
@@ -58,13 +66,24 @@ const MusicQueue = () => {
           </button>
         </div>
       )}
-      {player.hasError && <div className={styles.error} role="alert">{lang('MusicPlayError')}</div>}
-      <MusicControls />
+      {!isListOnly && player.hasError && <div className={styles.error} role="alert">{lang('MusicPlayError')}</div>}
+      {!isListOnly && <MusicControls />}
       <div className={styles.queueHead}>
-        <span className={buildClassName(kit.caps, kit.grow)}>{lang('MusicQueueTitle', { count: tracks.length })}</span>
+        {onToggleExpanded ? (
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnGhost)}
+            aria-expanded={isExpanded}
+            onClick={onToggleExpanded}
+          >
+            <ParvaneIcon name="list" isSmall />
+            {lang('MusicQueueTitle', { count: tracks.length })}
+          </button>
+        ) : <span className={kit.caps}>{lang('MusicQueueTitle', { count: tracks.length })}</span>}
+        <span className={kit.grow} />
         <button type="button" className={kit.btn} onClick={clearQueue}>{lang('MusicQueueClear')}</button>
       </div>
-      <ul className={buildClassName(styles.tracks, 'custom-scroll')}>
+      <ul className={buildClassName(styles.tracks, isListOnly && screen.queueRows, 'custom-scroll')}>
         {tracks.map((item, position) => (
           <MusicTrackRow
             key={`${item.id}:${position}`}

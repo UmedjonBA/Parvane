@@ -68,6 +68,7 @@ import {
 import updateIcon from '../../util/updateIcon';
 import { callApi } from '../../api/gramjs';
 import { getCurrentTrack, getMusicPlayer } from '../parvane/music/musicPlayer';
+import { getIsMusicPlayerOpen } from '../parvane/music/musicPlayerView';
 import { getActiveModule } from './parvaneModuleNav';
 
 import useInterval from '../../hooks/schedulers/useInterval';
@@ -103,6 +104,7 @@ import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
 import Health from '../parvane/Health.async';
 import Knowledge from '../parvane/Knowledge.async';
 import Music from '../parvane/Music.async';
+import MusicPlayerScreen from '../parvane/music/MusicPlayerScreen';
 import ParvanePalette from '../parvane/palette/ParvanePalette.async';
 import Planner from '../parvane/Planner.async';
 import RightColumn from '../right/RightColumn';
@@ -850,8 +852,10 @@ const Main = ({
   const isProfileWide = isDesktop && parvaneSection === 'messenger'
     && leftColumnContentKey === LeftColumnContent.Settings;
   const isNavCovered = useDerivedState(getIsParvaneNavCovered);
-  const isTabBarShown = Boolean(isMobile) && !isNavCovered && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
-    && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
+  const isMusicPlayerOpen = useDerivedState(getIsMusicPlayerOpen);
+  const isTabBarShown = Boolean(isMobile) && !isMusicPlayerOpen && !isNavCovered
+    && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
+      && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
 
   // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он
   // закрывается, сам чат скрыт — иначе при возврате в список чатов он мелькал под уезжающим профилем
@@ -923,6 +927,7 @@ const Main = ({
       {shouldMountMusic && <Music />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
       {shouldMountKnowledge && <Knowledge />}
+      {isMusicPlayerOpen && <MusicPlayerScreen />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}

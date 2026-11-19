@@ -1,14 +1,9 @@
 import { memo, useState } from '../../../lib/teact/teact';
-import { getActions, getGlobal } from '../../../global';
+import { getActions } from '../../../global';
 
 import type { ApiArticleMedia } from '../../../api/types';
 
-import { embedNames, renameEmbeds } from '../markdown/markdown';
-import { parseNote } from '../notes/notesModel';
-import {
-  createNote, findNoteByTitle, loadNotes, saveChatFilesToVault,
-} from '../notes/notesStore';
-import { findMedia } from './articleMedia';
+import { saveArticleToNotes } from './articleSave';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -42,31 +37,8 @@ const ArticleViewer = ({
   const handleSave = useLastCallback(async () => {
     setIsSaving(true);
     try {
-      // Хранилище читается раньше записи: без дерева облака папка «Знаний» создалась бы второй раз
-      await loadNotes(getGlobal().currentUserId);
-      let body = parseNote(markdown).body.trim();
-      // Встроенные файлы статьи ложатся в хранилище рядом с заметкой; занятые имена получают номер
-      const files = embedNames(body)
-        .map((name) => ({ name, item: findMedia(media, name) }))
-        .filter(({ item }) => item);
-      if (files.length) {
-        const renamed = await saveChatFilesToVault(lang('KnowledgeVaultName'), files.map(({ item }) => ({
-          fileId: item!.fileId, name: item!.name, mime: item!.mimeType, size: item!.size,
-        })));
-        if (!renamed) {
-          showNotification({ message: lang('ArticleSaveFailed') });
-          return;
-        }
-        const targets = files.map(({ name, item }) => [name, renamed.get(item!.name) || item!.name] as const);
-        body = renameEmbeds(body, new Map(targets));
-      }
-      const id = await createNote(title, lang('KnowledgeVaultName'), { text: `# ${title}\n\n${body}\n` });
-      const saved = id ? findNoteByTitle(title) : undefined;
-      showNotification({
-        message: id
-          ? lang('ArticleSaved', { title: saved?.id === id ? saved.title : title })
-          : lang('ArticleSaveFailed'),
-      });
+      const saved = await saveArticleToNotes({ title, markdown, media }, lang);
+      showNotification({ message: saved ? lang('ArticleSaved', { title: saved }) : lang('ArticleSaveFailed') });
     } finally {
       setIsSaving(false);
     }

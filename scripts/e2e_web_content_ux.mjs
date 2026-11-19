@@ -74,7 +74,7 @@ try {
   const passwordScreen = aliceTab2.locator('.Transition_slide-active > #auth-password-form');
   if (await passwordScreen.isVisible().catch(() => false)) {
     await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+    await passwordScreen.locator('[data-auth-submit]').click();
   }
   await aliceTab2.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openPrivateChat(aliceTab2, bob);

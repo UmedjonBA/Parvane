@@ -47,7 +47,7 @@ try {
   await startScreen.getByLabel('Nickname').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await startScreen.getByRole('button', { name: 'Create account' }).dispatchEvent('mousedown', { button: 0 });
+    await startScreen.locator('[data-auth-register]').dispatchEvent('click');
     const isShown = await page.locator('.Transition_slide-active > #auth-registration-form')
       .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
     if (isShown) break;
@@ -56,7 +56,7 @@ try {
   const form = page.locator('.Transition_slide-active > #auth-registration-form');
   await form.locator('#sign-up-parvane-nick').fill(`smoke-w-${Date.now().toString(36)}`);
   await form.locator('#sign-up-parvane-password').fill(PASSWORD);
-  await form.getByRole('button', { name: 'Create account' }).click();
+  await form.locator('[data-auth-submit]').click();
   const link = page.locator('.Transition_slide-active > #auth-telegram-form #auth-telegram-link');
   await link.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const match = /^https:\/\/t\.me\/([^?]+)\?start=([A-Za-z0-9_-]+)$/.exec((await link.getAttribute('href')) || '');

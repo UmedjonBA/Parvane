@@ -86,6 +86,7 @@ import { callApi } from '../../../api/gramjs';
 import { buildCloudChatFile, requestCloudSave } from '../../parvane/cloud/cloudBridge';
 import { getSelectionAsFormattedText } from './helpers/getSelectionAsFormattedText';
 import { isSelectionRangeInsideMessage } from './helpers/isSelectionRangeInsideMessage';
+import { openMessageInPlan, saveMessageToNote } from './helpers/messageModules';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -638,7 +639,21 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
   });
 
   // Parvane (spec 016): файлы сообщения (альбома) — в папку облака
-  const isFilesModuleOn = useParvaneModules().enabled.includes('files');
+  const enabledModules = useParvaneModules().enabled;
+  const isFilesModuleOn = enabledModules.includes('files');
+  // «В план» и «В заметку» (доска `ZpChat`) — для сообщений с текстом
+  const messageText = message.content.text?.text;
+
+  const handleToPlan = useLastCallback(() => {
+    openMessageInPlan(messageText!);
+    closeMenu();
+  });
+
+  const handleToNote = useLastCallback(async () => {
+    closeMenu();
+    const title = await saveMessageToNote(messageText!, lang);
+    showNotification({ message: title ? lang('ArticleSaved', { title }) : lang('MessageNoteFailed') });
+  });
 
   const handleSaveToCloud = useLastCallback(() => {
     const global = getGlobal();
@@ -784,6 +799,8 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         canSelect={canSelect}
         canDownload={canDownload}
         canSaveToCloud={canDownload && isFilesModuleOn}
+        canToPlan={Boolean(messageText) && !canSendNow && enabledModules.includes('plan')}
+        canToNote={Boolean(messageText) && !canSendNow && enabledModules.includes('notes')}
         canSaveGif={canSaveGif}
         canRevote={canRevote}
         canClosePoll={canClosePoll}
@@ -825,6 +842,8 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
         onCopyNumber={handleCopyNumber}
         onDownload={handleDownloadClick}
         onSaveToCloud={handleSaveToCloud}
+        onToPlan={handleToPlan}
+        onToNote={handleToNote}
         onSaveGif={handleSaveGif}
         onCancelVote={handleCancelVote}
         onClosePoll={openClosePollDialog}

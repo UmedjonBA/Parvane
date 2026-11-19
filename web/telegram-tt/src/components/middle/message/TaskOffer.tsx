@@ -17,9 +17,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
-import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
-
+import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './TaskOffer.module.scss';
 
 type OwnProps = {
@@ -110,38 +108,43 @@ const TaskOffer = ({
   const nameOf = (userId: string) => getUserFullName(usersById[userId]) || userId;
   const meta = formatOfferWhen(lang, taskOffer);
 
+  const stateLabel = isInPlan
+    ? lang('TaskOfferAccepted')
+    : (taskOffer.myDecision === false ? lang('TaskOfferDeclined') : undefined);
+
   function renderActions() {
+    if (isInPlan) {
+      return (
+        <button type="button" className={buildClassName(kit.chip, styles.inPlan)} onClick={handleOpenPlan}>
+          {lang('TaskOfferInPlanOpen')}
+        </button>
+      );
+    }
     return (
       <div className={styles.actions}>
-        {isInPlan ? (
-          <Button
-            className={styles.inPlan}
-            size="tiny"
-            color="translucent"
-            iconName="check"
-            onClick={handleOpenPlan}
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, styles.action)}
+          disabled={isBusy}
+          onClick={handleAccept}
+        >
+          {lang(isEvent ? 'TaskOfferToCalendar' : 'TaskOfferToPlan')}
+        </button>
+        {!taskOffer.isOwn && taskOffer.myDecision === undefined && (
+          <button
+            type="button"
+            className={buildClassName(kit.btn, styles.action)}
+            disabled={isBusy}
+            onClick={handleDecline}
           >
-            {lang('TaskOfferInPlanOpen')}
-          </Button>
-        ) : (
-          <>
-            {taskOffer.myDecision === false && (
-              <span className={styles.status}>{lang('TaskOfferDeclined')}</span>
-            )}
-            <Button size="tiny" iconName="calendar" disabled={isBusy} onClick={handleAccept}>
-              {lang(isEvent ? 'TaskOfferToCalendar' : 'TaskOfferToPlan')}
-            </Button>
-            {!taskOffer.isOwn && taskOffer.myDecision === undefined && (
-              <Button size="tiny" color="translucent" disabled={isBusy} onClick={handleDecline}>
-                {lang('TaskOfferDecline')}
-              </Button>
-            )}
-          </>
+            {lang('TaskOfferDecline')}
+          </button>
         )}
       </div>
     );
   }
 
+  // Карточка по макету (доски `ZpChat`, `PhCalls`): подпись с решением, название, срок, кнопки во всю ширину
   return (
     <div
       className={styles.root}
@@ -150,16 +153,13 @@ const TaskOffer = ({
       data-decision={String(taskOffer.myDecision)}
       data-in-plan={String(isInPlan)}
     >
-      <div className={styles.head}>
-        <span className={buildClassName(styles.badge, isEvent && styles.badgeEvent)}>
-          <Icon name={isEvent ? 'calendar' : 'check'} />
-        </span>
-        <div className={styles.titles}>
-          <span className={styles.label}>{lang(isEvent ? 'TaskOfferEventLabel' : 'TaskOfferLabel')}</span>
-          <span className={styles.name}>{taskOffer.name}</span>
-          {meta && <span className={styles.meta}>{meta}</span>}
-        </div>
+      <div className={styles.label}>
+        <span>{lang(isEvent ? 'TaskOfferEventLabel' : 'TaskOfferLabel')}</span>
+        {stateLabel && ' · '}
+        {stateLabel && <span>{stateLabel}</span>}
       </div>
+      <div className={styles.name}>{taskOffer.name}</div>
+      {meta && <div className={buildClassName(styles.meta, kit.mono)}>{meta}</div>}
       {taskOffer.description && <p className={styles.description}>{taskOffer.description}</p>}
       {Boolean(taskOffer.steps.length) && (
         <ol className={styles.steps}>

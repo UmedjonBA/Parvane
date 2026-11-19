@@ -76,7 +76,7 @@ try {
 
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
   await clickUntil(
-    passwordScreen.getByRole('button', { name: 'Next' }),
+    passwordScreen.locator('[data-auth-submit]'),
     () => page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },
   );

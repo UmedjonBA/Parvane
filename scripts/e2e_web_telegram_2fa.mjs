@@ -20,6 +20,7 @@ import {
   waitForChatList,
 } from './e2e_web_helpers.mjs';
 import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
+import { shootAuthScreen } from './e2e_web_auth_shots.mjs';
 
 const PASSWORD = 'Parvane-telegram-2fa-password';
 const SECRET = process.env.PARVANE_TELEGRAM_SECRET;
@@ -51,7 +52,7 @@ async function openStartPage(context) {
 async function pressAuthButton(page, screen, name, targetScreenId) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await screen.getByRole('button', { name }).dispatchEvent('mousedown', { button: 0 });
+    await screen.locator('[data-auth-register]').dispatchEvent('click');
     try {
       await page.locator(`.Transition_slide-active > ${targetScreenId}`).waitFor({ state: 'visible', timeout: 3000 });
       return;
@@ -65,7 +66,9 @@ async function waitTelegramScreen(page, expectedTitle) {
   const telegramScreen = page.locator('.Transition_slide-active > #auth-telegram-form');
   await telegramScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   if (expectedTitle) {
-    await telegramScreen.getByText(expectedTitle, { exact: false }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    // Заголовок есть и в шапке телефона, и в окне компьютера — виден один из них
+    await telegramScreen.getByText(expectedTitle, { exact: false }).locator('visible=true').first()
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   }
   const link = telegramScreen.locator('#auth-telegram-link');
   await link.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -81,7 +84,7 @@ async function enterPassword(page) {
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
 }
 
 async function loginWithPassword(page, nick) {
@@ -241,8 +244,8 @@ try {
   const registerScreen = s1.page.locator('.Transition_slide-active > #auth-registration-form');
   await registerScreen.locator('#sign-up-parvane-nick').fill(nick);
   await registerScreen.locator('#sign-up-parvane-password').fill(PASSWORD);
-  await registerScreen.getByRole('button', { name: 'Create account' }).click();
-  const { token: regToken } = await waitTelegramScreen(s1.page, 'Confirm via Telegram');
+  await registerScreen.locator('[data-auth-submit]').click();
+  const { token: regToken } = await waitTelegramScreen(s1.page, 'Confirm your account');
   assert.equal((await botConfirm(regToken, TG_OWNER)).ok, true);
   await signedIn(s1.page);
 
@@ -270,6 +273,8 @@ try {
   await reloadToPasswordLogin(s1.page, address, { dropTrustSecret: true });
   const { telegramScreen, token: loginToken } = await waitTelegramScreen(s1.page, 'Confirm sign-in');
   assert.notEqual(loginToken, regToken);
+  assert.equal(await telegramScreen.getAttribute('data-telegram-mode'), 'login', 'экран Telegram в режиме входа');
+  await shootAuthScreen(s1.page, 'telegram-login');
   assert.equal(await s1.page.locator('#LeftColumn').count(), 0, 'без подтверждения входа быть не должно');
   const stranger = await botConfirm(loginToken, TG_STRANGER);
   assert.equal(stranger.ok, false, 'чужой Telegram не должен подтверждать вход');

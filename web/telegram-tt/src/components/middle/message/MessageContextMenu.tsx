@@ -99,6 +99,8 @@ type OwnProps = {
   isCurrentUserPremium?: boolean;
   canDownload?: boolean;
   canSaveToCloud?: boolean;
+  canToPlan?: boolean;
+  canToNote?: boolean;
   canSaveGif?: boolean;
   canRevote?: boolean;
   canClosePoll?: boolean;
@@ -134,6 +136,8 @@ type OwnProps = {
   onCopyNumber?: NoneToVoidFunction;
   onDownload?: NoneToVoidFunction;
   onSaveToCloud?: NoneToVoidFunction;
+  onToPlan?: NoneToVoidFunction;
+  onToNote?: NoneToVoidFunction;
   onSaveGif?: NoneToVoidFunction;
   onCancelVote?: NoneToVoidFunction;
   onClosePoll?: NoneToVoidFunction;
@@ -195,6 +199,8 @@ const MessageContextMenu: FC<OwnProps> = ({
   canSelect,
   canDownload,
   canSaveToCloud,
+  canToPlan,
+  canToNote,
   canSaveGif,
   canRevote,
   canClosePoll,
@@ -235,6 +241,8 @@ const MessageContextMenu: FC<OwnProps> = ({
   onCopyNumber,
   onDownload,
   onSaveToCloud,
+  onToPlan,
+  onToNote,
   onSaveGif,
   onCancelVote,
   onClosePoll,
@@ -349,6 +357,8 @@ const MessageContextMenu: FC<OwnProps> = ({
     onCopyNumber,
   );
 
+  const hasModuleItems = canToPlan || canToNote || canSaveToCloud;
+
   const getTriggerElement = useLastCallback(() => {
     return document.querySelector(`.Transition_slide-active > .MessageList`);
   });
@@ -460,6 +470,7 @@ const MessageContextMenu: FC<OwnProps> = ({
           </MenuItem>
         )}
         {canEdit && <MenuItem icon="edit" onClick={onEdit}>{oldLang('Edit')}</MenuItem>}
+        {canForward && <MenuItem icon="forward" onClick={onForward}>{oldLang('Forward')}</MenuItem>}
         {canAppendTodoList && (
           <MenuItem icon="add" onClick={onAppendTodoList}>
             {lang('MenuButtonAppendTodoList')}
@@ -539,11 +550,25 @@ const MessageContextMenu: FC<OwnProps> = ({
             {isDownloading ? oldLang('lng_context_cancel_download') : oldLang('lng_media_download')}
           </MenuItem>
         )}
+        {canSelect && <MenuItem icon="select" onClick={onSelect}>{oldLang('Common.Select')}</MenuItem>}
+        {/* Parvane: действия модулей — отдельной группой с пояснением справа (доска `ZpChat`) */}
+        {hasModuleItems && <MenuSeparator />}
+        {canToPlan && (
+          <MenuItem icon="calendar" onClick={onToPlan}>
+            {lang('MessageToPlan')}
+            <span className="MessageContextMenu--hint">{lang('MessageToPlanHint')}</span>
+          </MenuItem>
+        )}
+        {canToNote && (
+          <MenuItem icon="document" onClick={onToNote}>
+            {lang('MessageToNote')}
+            <span className="MessageContextMenu--hint">{lang('MessageToNoteHint')}</span>
+          </MenuItem>
+        )}
         {canSaveToCloud && (
           <MenuItem icon="folder" onClick={onSaveToCloud}>{lang('ParvaneCloudSaveToCloud')}</MenuItem>
         )}
-        {canForward && <MenuItem icon="forward" onClick={onForward}>{oldLang('Forward')}</MenuItem>}
-        {canSelect && <MenuItem icon="select" onClick={onSelect}>{oldLang('Common.Select')}</MenuItem>}
+        {hasModuleItems && (canReport || canDelete) && <MenuSeparator />}
         {canReport && <MenuItem icon="flag" onClick={onReport}>{oldLang('lng_context_report_msg')}</MenuItem>}
         {canDelete && <MenuItem destructive icon="delete" onClick={onDelete}>{oldLang('Delete')}</MenuItem>}
         {hasCustomEmoji && (

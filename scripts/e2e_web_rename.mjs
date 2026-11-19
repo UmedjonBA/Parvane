@@ -153,7 +153,7 @@ try {
   const passwordScreen = a2.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
   await a2.locator('#LeftColumn').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await poll(() => ownUsername(a2), (u) => u === newNick, 'ник на втором устройстве', RENAME_TIMEOUT_MS);
   await poll(

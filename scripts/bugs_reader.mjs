@@ -129,11 +129,11 @@ async function loginPersistent(ctx, user, password) {
   ]);
   if (signedIn) return page;
   await addressInput.fill(user);
-  await addressScreen.getByRole('button', { name: 'Next' }).click();
+  await addressScreen.locator('[data-auth-submit]').click();
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(password);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return page;
 }
@@ -149,7 +149,7 @@ async function registerPersistent(ctx, nick, password) {
   const start = page.locator('.Transition_slide-active > #auth-phone-number-form');
   await start.getByLabel('Nickname').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   for (let i = 0; i < 20; i++) {
-    await start.getByRole('button', { name: 'Create account' }).dispatchEvent('mousedown', { button: 0 });
+    await start.locator('[data-auth-register]').dispatchEvent('click');
     const shown = await page.locator('.Transition_slide-active > #auth-registration-form')
       .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
     if (shown) break;
@@ -157,7 +157,7 @@ async function registerPersistent(ctx, nick, password) {
   const form = page.locator('.Transition_slide-active > #auth-registration-form');
   await form.locator('#sign-up-parvane-nick').fill(nick);
   await form.locator('#sign-up-parvane-password').fill(password);
-  await form.getByRole('button', { name: 'Create account' }).click();
+  await form.locator('[data-auth-submit]').click();
   const link = page.locator('.Transition_slide-active > #auth-telegram-form #auth-telegram-link');
   await link.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const token = /start=([A-Za-z0-9_-]+)/.exec(await link.getAttribute('href') || '')?.[1];

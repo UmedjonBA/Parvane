@@ -158,7 +158,7 @@ try {
   ]);
   if (await passwordScreen.isVisible()) {
     await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+    await passwordScreen.locator('[data-auth-submit]').click();
   }
   await bobPage.locator('.MiddleHeader').getByText(title).first().waitFor({ state: 'visible', timeout: 60000 });
   const bobFeed = bobPage.locator('#MiddleColumn .Message');

@@ -1,47 +1,46 @@
+import type { ChangeEvent } from 'react';
 import {
-  memo, useCallback, useEffect, useRef, useState,
+  memo, useEffect, useRef, useState,
 } from '../../lib/teact/teact';
 import { getActions, withGlobal } from '../../global';
 
 import type { GlobalState } from '../../global/types';
 
 import { IS_TOUCH_ENV } from '../../util/browser/windowEnvironment';
-import { pick } from '../../util/iteratees';
+import buildClassName from '../../util/buildClassName';
 import { fetchParvaneAuthContext } from '../../api/parvane/authApi';
 
+import useFlag from '../../hooks/useFlag';
 import useHistoryBack from '../../hooks/useHistoryBack';
 import useLang from '../../hooks/useLang';
+import useLastCallback from '../../hooks/useLastCallback';
 
-import Icon from '../common/icons/Icon';
-import TrackingMonkey from '../common/TrackingMonkey';
-import InputText from '../ui/InputText';
-import Loading from '../ui/Loading';
+import { AuthBar, AuthSubmit } from './AuthParts';
 
-type StateProps = {
-  auth: GlobalState['auth'];
-};
+import styles from './Auth.module.scss';
 
-// Parvane: 6-значный код подтверждения почты (identity.email.confirm)
+type StateProps = Pick<GlobalState, 'auth'>;
+
+// Parvane: 6-значный код подтверждения почты (`identity.email.confirm`)
 const CODE_LENGTH = 6;
+const CODE_CELLS = Array.from({ length: CODE_LENGTH }, (_, index) => index);
+const STEP = 2;
+const TOTAL_STEPS = 3;
 
-const AuthCode = ({
-  auth,
-}: StateProps) => {
-  const {
-    setAuthCode,
-    returnToAuthPhoneNumber,
-    clearAuthErrorKey,
-  } = getActions();
+// Новый аккаунт, шаг 2: код из письма. Клетки показывают набранное, само поле одно и лежит поверх них
+const AuthCode = ({ auth }: StateProps) => {
+  const { setAuthCode, returnToAuthPhoneNumber, clearAuthErrorKey } = getActions();
 
-  const { isLoading, errorKey } = auth;
-
-  const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
 
-  const [code, setCode] = useState<string>('');
-  // Parvane: в шапке — почта, на которую ушёл код (без домена сервера в
-  // адресе аккаунта пользователю показывать нечего)
+  const [code, setCode] = useState('');
+  // Почта, на которую ушёл код: адрес аккаунта пользователю здесь ничего не говорит
   const [email, setEmail] = useState('');
+  const [isFocused, markFocused, unmarkFocused] = useFlag();
+
+  const lang = useLang();
+
+  const { isLoading, errorKey } = auth;
 
   useEffect(() => {
     let isCancelled = false;
@@ -52,96 +51,117 @@ const AuthCode = ({
       isCancelled = true;
     };
   }, []);
-  const [isTracking, setIsTracking] = useState(false);
-  const [trackingDirection, setTrackingDirection] = useState(1);
 
   useEffect(() => {
-    if (!IS_TOUCH_ENV) {
-      inputRef.current!.focus();
-    }
+    if (!IS_TOUCH_ENV) inputRef.current!.focus();
   }, []);
+
+  const handleBack = useLastCallback(() => {
+    returnToAuthPhoneNumber();
+  });
 
   useHistoryBack({
     isActive: true,
-    onBack: returnToAuthPhoneNumber,
+    onBack: handleBack,
   });
 
-  const onCodeChange = useCallback((e: React.FormEvent<HTMLInputElement>) => {
-    if (errorKey) {
-      clearAuthErrorKey();
-    }
+  const handleChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
+    if (errorKey) clearAuthErrorKey();
 
-    const { currentTarget: target } = e;
-    target.value = target.value.replace(/[^\d]+/, '').substr(0, CODE_LENGTH);
+    const value = e.target.value.replace(/\D+/g, '').slice(0, CODE_LENGTH);
+    if (value === code) return;
 
-    if (target.value === code) {
-      return;
-    }
+    setCode(value);
+    if (value.length === CODE_LENGTH) setAuthCode({ code: value });
+  });
 
-    setCode(target.value);
+  const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (isLoading || code.length !== CODE_LENGTH) return;
+    setAuthCode({ code });
+  });
 
-    if (!isTracking) {
-      setIsTracking(true);
-    } else if (!target.value.length) {
-      setIsTracking(false);
-    }
-
-    if (code && code.length > target.value.length) {
-      setTrackingDirection(-1);
-    } else {
-      setTrackingDirection(1);
-    }
-
-    if (target.value.length === CODE_LENGTH) {
-      setAuthCode({ code: target.value });
-    }
-  }, [errorKey, code, isTracking]);
-
-  function handleReturnToAuthPhoneNumber() {
-    returnToAuthPhoneNumber();
-  }
+  const errorText = errorKey && lang.withRegular(errorKey);
+  const step = lang('ParvaneAuthStep', { step: STEP, total: TOTAL_STEPS });
+  const activeCell = Math.min(code.length, CODE_LENGTH - 1);
 
   return (
-    <div id="auth-code-form" className="custom-scroll">
-      <div className="auth-form">
-        <TrackingMonkey
-          code={code}
-          codeLength={CODE_LENGTH}
-          isTracking={isTracking}
-          trackingDirection={trackingDirection}
-        />
-        <h1>
-          {email}
-          <div
-            className="auth-number-edit div-button"
-            onClick={handleReturnToAuthPhoneNumber}
-            role="button"
-            tabIndex={0}
-            title={lang('WrongNumber')}
-            aria-label={lang('WrongNumber')}
-          >
-            <Icon name="edit" />
+    <div id="auth-code-form" className={styles.root}>
+      <AuthBar title={lang('ParvaneAuthConfirmTitle')} step={step} onBack={handleBack} />
+      <div className={styles.page}>
+        <form
+          className={buildClassName(styles.dialog, styles.dialogCode)}
+          action=""
+          noValidate
+          onSubmit={handleSubmit}
+        >
+          <div className={styles.head}>
+            <h1 className={buildClassName(styles.headTitle, styles.grow)}>{lang('ParvaneAuthConfirmTitle')}</h1>
+            <span className={styles.step}>{step}</span>
           </div>
-        </h1>
-        <p className="note">{lang('ParvaneCodeSentEmail')}</p>
-        <InputText
-          ref={inputRef}
-          id="sign-in-code"
-          label={lang('Code')}
-          onInput={onCodeChange}
-          value={code}
-          error={errorKey && lang.withRegular(errorKey)}
-          autoComplete="off"
-          inputMode="numeric"
-        />
-        {isLoading && <Loading />}
+          <p className={styles.muted}>
+            {lang('ParvaneAuthCodeSentTo', {
+              email: <span className={styles.strong} data-auth-email>{email}</span>,
+            }, { withNodes: true })}
+          </p>
+          <div className={styles.code}>
+            {CODE_CELLS.map((index) => (
+              <span
+                key={index}
+                className={buildClassName(
+                  styles.codeCell,
+                  isFocused && index === activeCell && styles.codeCellOn,
+                  errorText && styles.codeCellError,
+                )}
+                aria-hidden="true"
+              >
+                {code[index]}
+              </span>
+            ))}
+            <input
+              ref={inputRef}
+              id="sign-in-code"
+              className={styles.codeInput}
+              type="text"
+              value={code}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={CODE_LENGTH}
+              aria-label={lang('ParvaneAuthCodeGroup')}
+              aria-invalid={Boolean(errorText)}
+              onChange={handleChange}
+              onFocus={markFocused}
+              onBlur={unmarkFocused}
+            />
+          </div>
+          {errorText && <p className={styles.error} role="alert">{errorText}</p>}
+          <p className={styles.small}>{lang('ParvaneAuthCodeResendHint')}</p>
+          <div className={buildClassName(styles.actions, styles.onlyDesk)}>
+            <button
+              type="button"
+              className={buildClassName(styles.button, styles.buttonQuiet, styles.actionsButton)}
+              data-auth-back="dialog"
+              onClick={handleBack}
+            >
+              {lang('Back')}
+            </button>
+            <AuthSubmit
+              label={lang('Next')}
+              className={styles.actionsButton}
+              isLoading={isLoading}
+              isDisabled={code.length !== CODE_LENGTH}
+            />
+          </div>
+        </form>
       </div>
     </div>
   );
 };
 
 export default memo(withGlobal(
-  (global): Complete<StateProps> => (
-    pick(global, ['auth'])
-  ),
+  (global): Complete<StateProps> => {
+    return {
+      auth: global.auth,
+    };
+  },
 )(AuthCode));

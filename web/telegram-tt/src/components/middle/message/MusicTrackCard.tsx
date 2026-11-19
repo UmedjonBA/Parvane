@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { ApiMusicTrackCard } from '../../../api/types';
 
+import buildClassName from '../../../util/buildClassName';
 import { formatTrackTime } from '../../parvane/music/musicFormat';
 import {
   callMusic, getMusicInfo, loadMusicInfo, playTracks,
@@ -13,9 +14,9 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
 
-import styles from './ArticleCard.module.scss';
+import kit from '../../parvane/notes/PvKit.module.scss';
+import styles from './MusicTrackCard.module.scss';
 
 type OwnProps = {
   track: ApiMusicTrackCard;
@@ -54,28 +55,34 @@ const MusicTrackCard = ({ track }: OwnProps) => {
   return (
     <div className={styles.root} data-music-track-card={track.trackId}>
       <div className={styles.head}>
-        <span className={styles.badge}>
-          <Icon name="play" />
-        </span>
-        <div className={styles.titles}>
-          <span className={styles.label}>
-            {[track.artist || lang('MusicTrackCardLabel'), formatTrackTime(track.durationSecs)].join(' · ')}
+        {canPlay ? (
+          <button type="button" className={styles.play} aria-label={lang('MusicTrackCardPlay')} onClick={handlePlay}>
+            <Icon name="play" />
+          </button>
+        ) : (
+          <span className={buildClassName(styles.play, styles.playOff)} aria-hidden>
+            <Icon name="play" />
           </span>
-          <span className={styles.title}>{track.title}</span>
+        )}
+        <div className={styles.titles}>
+          <div className={styles.title}>{track.title}</div>
+          {track.artist && <div className={styles.artist}>{track.artist}</div>}
         </div>
       </div>
+      <div className={styles.source}>
+        <Icon name="volume-1" className={styles.sourceIcon} />
+        <span>
+          {`${lang('MusicTrackCardLabel')} · `}
+          <span className={kit.mono}>{formatTrackTime(track.durationSecs)}</span>
+        </span>
+      </div>
       {isOwnServer === false && (
-        <p className={styles.preview}>{lang('MusicTrackCardOtherServer', { server: track.server })}</p>
+        <p className={styles.note}>{lang('MusicTrackCardOtherServer', { server: track.server })}</p>
       )}
       {problem && (
-        <p className={styles.preview} role="status" data-track-problem={problem}>
+        <p className={styles.note} role="status" data-track-problem={problem}>
           {lang(problem === 'missing' ? 'MusicTrackCardMissing' : 'MusicTrackCardFailed')}
         </p>
-      )}
-      {canPlay && (
-        <div className={styles.actions}>
-          <Button size="tiny" noForcedUpperCase onClick={handlePlay}>{lang('MusicTrackCardPlay')}</Button>
-        </div>
       )}
     </div>
   );

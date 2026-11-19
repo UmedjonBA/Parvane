@@ -63,14 +63,14 @@ async function loginOrRegister(page, address) {
     if (await leftColumn.isVisible().catch(() => false)) return;
     if (!addressDone && await addressInput.isVisible().catch(() => false)) {
       await addressInput.fill(address).catch(() => {});
-      await addressForm.getByRole('button', { name: 'Next' }).click().catch(() => {});
+      await addressForm.locator('[data-auth-submit]').click().catch(() => {});
       addressDone = true;
       await page.waitForTimeout(800);
       continue;
     }
     if (!passwordDone && await passwordInput.isVisible().catch(() => false)) {
       await passwordInput.fill(PASSWORD).catch(() => {});
-      await passwordForm.getByRole('button', { name: 'Next' }).click().catch(() => {});
+      await passwordForm.locator('[data-auth-submit]').click().catch(() => {});
       passwordDone = true;
       await page.waitForTimeout(800);
       continue;

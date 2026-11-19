@@ -94,7 +94,7 @@ try {
   // ── Группа и канал ────────────────────────────────────────────────────────
   await page.mouse.move(800, 360);
   await page.locator('#LeftColumn').hover();
-  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.locator('[data-add-for="chats"]').click();
   await page.getByRole('menuitem', { name: 'New Group' }).click();
   const memberSearch = page.locator('#new-group-picker-search');
   await memberSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -107,7 +107,7 @@ try {
 
   await page.mouse.move(800, 360);
   await page.locator('#LeftColumn').hover();
-  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.locator('[data-add-for="chats"]').click();
   await page.getByRole('menuitem', { name: 'New Channel' }).click();
   await selectPickerRow(page, '#LeftColumn', bobName);
   await page.locator('#LeftColumn .FloatingActionButton').click();

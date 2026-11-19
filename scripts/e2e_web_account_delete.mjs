@@ -18,6 +18,7 @@ import {
   sendText,
   showChatList,
 } from './e2e_web_helpers.mjs';
+import { shootAuthScreen } from './e2e_web_auth_shots.mjs';
 
 const PASSWORD = 'Parvane-delete-e2e-password';
 const STEP_TIMEOUT_MS = 90000;
@@ -46,7 +47,7 @@ async function submitPassword(page) {
   const form = page.locator('.Transition_slide-active > #auth-password-form');
   await form.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await form.locator('#sign-in-password').fill(PASSWORD);
-  await form.getByRole('button', { name: 'Next' }).click();
+  await form.locator('[data-auth-submit]').click();
   return form;
 }
 
@@ -87,6 +88,7 @@ try {
   await a.locator('[data-restore-account]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const notice = await form.innerText();
   assert.match(notice, /will be deleted on/, `текст экрана: ${notice}`);
+  await shootAuthScreen(a, 'deletion-pending');
   console.log('OK: вход предлагает восстановить аккаунт');
 
   // Боб: Алиса — «Удалённый аккаунт» (профиль не находится, журнал с признаком deleted)

@@ -115,8 +115,25 @@ try {
   const widget = page.locator('#FoldersSidebar [data-music-widget]');
   await widget.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await widget.click();
-  await music.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: виджет плеера в боковой панели открывает «Музыку»');
+  const full = page.locator('[data-music-full]');
+  await full.getByRole('heading', { name: 'Соль' }).waitFor();
+  await full.getByRole('button', { name: 'Play', exact: true }).click();
+  await full.getByRole('button', { name: 'Pause', exact: true }).click();
+  await full.getByRole('button', { name: 'Add to a playlist' }).click();
+  const fullPicker = page.locator('.Modal [data-playlist-picker]');
+  await fullPicker.getByRole('button', { name: 'Close' }).click();
+  await full.getByRole('button', { name: 'Send to a chat' }).click();
+  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().waitFor();
+  await page.keyboard.press('Escape');
+  const slider = full.getByRole('slider');
+  await slider.press('Home');
+  await slider.press('ArrowRight');
+  await full.locator('[data-music-position]').filter({ hasText: /^0:01$/ }).waitFor();
+  await page.keyboard.press('Escape');
+  await full.waitFor({ state: 'detached' });
+  await widget.waitFor();
+  assert.equal(await music.isVisible(), false);
+  console.log('OK: виджет — полный плеер, пауза, продолжение, перемотка, Escape возвращает в чаты');
 
   // ── Перезагрузка: очередь возвращается на паузе с того же трека ───────────
   await reloadPage(page);
@@ -142,20 +159,24 @@ try {
   await mini.getByRole('button', { name: 'Play', exact: true }).click();
   await page.locator('[data-music-mini="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await mini.getByRole('button', { name: 'Open player' }).click();
-  const phoneMusic = page.locator('#ParvaneMusic');
-  await phoneMusic.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await mini.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await phoneMusic.getByRole('navigation', { name: 'Music' }).getByRole('button', { name: 'Player' }).click();
-  await phoneMusic.locator('[data-music-view="queue"] [data-music-now]').filter({ hasText: 'Соль' })
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await full.getByRole('heading', { name: 'Соль' }).waitFor();
+  await ribbon.waitFor({ state: 'detached' });
+  await full.getByRole('button', { name: 'Next track' }).click();
+  await full.getByRole('heading', { name: 'Glass Harbor' }).waitFor();
+  await full.getByRole('button', { name: /^Queue/ }).click();
+  await full.locator('[aria-expanded="true"]').waitFor();
+  await full.getByRole('button', { name: 'Collapse' }).click();
+  await full.waitFor({ state: 'detached' });
+  await ribbon.waitFor();
+  await mini.waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
-  console.log('OK: телефон — полоса плеера над лентой, плеер отдельным видом');
+  console.log('OK: телефон — полный плеер из полосы, следующий трек, очередь и возврат ленты');
 
   // ── «Найти и скачать»: уверенное совпадение качается само ─────────────────
   await page.setViewportSize(WIDE);
   await page.waitForTimeout(800);
-  const wide = page.locator('#ParvaneMusic');
+  const wide = await openMusic(page);
   const wideSide = wide.locator('aside');
   // Вид «Плеер» есть только на телефоне: на широком экране возвращаемся на главную, где есть строка поиска
   await wide.locator('[data-view="home"]').click();
@@ -337,6 +358,8 @@ try {
   await backInMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await backInMusic.locator('[data-offline-usage]').getByText(/3 tracks · .* of 1 GB on this device/)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Оболочка приложения в кэше сервис-воркера целиком — для перезагрузки без сети ниже (PWA, spec 041 F1)
+  await page.locator('html[data-app-shell]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS * 6 });
   await context.setOffline(true);
   await backInMusic.locator('[data-offline-banner]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backInMusic.locator('[data-music-offline] [data-track="t3"]').getByRole('button').first().click();
@@ -344,9 +367,21 @@ try {
   await backSide.locator('[data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backSide.locator('[data-music-position]').filter({ hasText: /0:0[1-9]/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backSide.getByRole('button', { name: 'Pause' }).click();
-  await context.setOffline(false);
-  await backInMusic.locator('[data-offline-banner]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: альбом загружен на устройство и играет без сети');
+
+  // ── Приложение запущено без сети: «Загруженное» на месте и играет ─────────
+  await page.goto(process.env.PARVANE_E2E_BASE_URL, { waitUntil: 'domcontentloaded' });
+  const offlineMusic = await openMusic(page);
+  await offlineMusic.locator('[data-view="offline"]').click();
+  await offlineMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offlineMusic.locator('[data-music-offline] [data-track="t1"]').getByRole('button').first().click();
+  await offlineMusic.locator('aside [data-music-play="playing"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offlineMusic.locator('aside [data-music-position]').filter({ hasText: /0:0[1-9]/ })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offlineMusic.locator('aside').getByRole('button', { name: 'Pause' }).click();
+  await context.setOffline(false);
+  await offlineMusic.locator('[data-offline-banner]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS * 3 });
+  console.log('OK: запуск без сети — «Загруженное» открывается и играет');
   await backInMusic.getByRole('button', { name: 'Remove from this device: Соль' }).click();
   await backInMusic.locator('[data-music-offline="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backInMusic.locator('[data-offline-clear="ask"]').click();

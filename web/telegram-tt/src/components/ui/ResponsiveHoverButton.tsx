@@ -12,6 +12,8 @@ import Button from './Button';
 type OwnProps = {
   onActivate: (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => void;
   noClickActivation?: boolean;
+  // Открывать только нажатием: наведение не считается (шторка на узком экране)
+  noHoverActivation?: boolean;
 } & Omit<ButtonProps, (
   'onClick' | 'onMouseDown' |
   'onMouseEnter' | 'onMouseLeave' |
@@ -22,11 +24,14 @@ const BUTTON_ACTIVATE_DELAY = 200;
 let openTimeout: number | undefined;
 let isFirstTimeActivation = true;
 
-const ResponsiveHoverButton: FC<OwnProps> = ({ onActivate, noClickActivation, ...buttonProps }) => {
+const ResponsiveHoverButton: FC<OwnProps> = ({
+  onActivate, noClickActivation, noHoverActivation, ...buttonProps
+}) => {
   const isMouseInsideRef = useRef(false);
 
   const handleMouseEnter = useLastCallback((e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
     isMouseInsideRef.current = true;
+    if (noHoverActivation) return;
 
     // This is used to counter additional delay caused by asynchronous module loading
     if (isFirstTimeActivation) {

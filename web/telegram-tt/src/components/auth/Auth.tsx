@@ -13,10 +13,9 @@ import useHistoryBack from '../../hooks/useHistoryBack';
 
 import Transition from '../ui/Transition';
 import AuthCode from './AuthCode.async';
-import AuthParvane from './AuthParvane';
-import AuthParvaneRegister from './AuthParvaneRegister';
-import AuthParvaneTelegram from './AuthParvaneTelegram';
-import AuthPassword from './AuthPassword.async';
+import AuthLogin from './AuthLogin';
+import AuthRegister from './AuthRegister';
+import AuthTelegram from './AuthTelegram';
 
 import './Auth.scss';
 
@@ -53,21 +52,18 @@ const Auth = ({
     true,
   );
 
+  // Ник и пароль — одна форма входа: шаг пароля тот же экран, без смены слайда
   function getScreen() {
     switch (renderingAuthState) {
       case 'authorizationStateWaitCode':
         return <AuthCode />;
-      case 'authorizationStateWaitPassword':
-        return <AuthPassword />;
       case 'authorizationStateWaitRegistration':
-        return <AuthParvaneRegister />;
-      // Parvane: WaitQrCode = подтверждение регистрации в Telegram-боте
+        return <AuthRegister />;
+      // Parvane: `WaitQrCode` — подтверждение в Telegram-боте сервера
       case 'authorizationStateWaitQrCode':
-        return <AuthParvaneTelegram />;
-      case 'authorizationStateWaitPhoneNumber':
-        return <AuthParvane />;
+        return <AuthTelegram />;
       default:
-        return <AuthParvane />;
+        return <AuthLogin isPasswordStep={renderingAuthState === 'authorizationStateWaitPassword'} />;
     }
   }
 
@@ -75,16 +71,12 @@ const Auth = ({
     switch (renderingAuthState) {
       case 'authorizationStateWaitCode':
         return 0;
-      case 'authorizationStateWaitPassword':
-        return 1;
       case 'authorizationStateWaitRegistration':
         return 2;
-      case 'authorizationStateWaitPhoneNumber':
-        return 3;
       case 'authorizationStateWaitQrCode':
         return 4;
       default:
-        return isMobile ? 3 : 4;
+        return 3;
     }
   }
 

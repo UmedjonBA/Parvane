@@ -90,3 +90,59 @@
     margin-inline: 0.25rem;
   }
 }
+
+// Parvane: меню сообщения по макету (доска `ZpChat`) — строка 48 px, пояснение пункта справа; на телефоне
+// меню — шторка у нижнего края поверх затемнения, реакции остаются над ней
+.MessageContextMenu {
+  .MenuItem {
+    min-height: var(--pv-menu-item-height);
+    padding-block: 0.5rem;
+
+    .icon {
+      margin-inline-end: 0.75rem;
+      font-size: 1.375rem;
+    }
+  }
+
+  &--hint {
+    flex: 1 1 auto;
+
+    margin-inline-start: 1rem;
+
+    font-size: 0.75rem;
+    color: var(--pv-muted);
+    text-align: end;
+  }
+
+  @media (max-width: 600px) {
+    .backdrop {
+      background: rgba(0, 0, 0, 0.4);
+    }
+
+    .bubble {
+      position: fixed !important;
+      inset: auto 0 0 !important;
+      transform: none !important;
+
+      width: 100%;
+      max-width: none;
+      max-height: none !important;
+    }
+
+    &_items,
+    &.with-reactions &_items {
+      max-height: 70vh !important;
+      margin-inline-end: 0;
+      padding: 0.5rem 0 max(0.5rem, env(safe-area-inset-bottom));
+      border-top: 1px solid var(--pv-line2);
+      border-radius: var(--pv-radius-sheet) var(--pv-radius-sheet) 0 0;
+
+      background: var(--pv-panel);
+      box-shadow: none;
+    }
+
+    .ReactionSelector {
+      inset-inline: 0.5rem auto;
+    }
+  }
+}

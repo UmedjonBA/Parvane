@@ -87,7 +87,7 @@ async function reopenDevice(context) {
   if (await passwordScreen.isVisible()) {
     await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
     await clickUntil(
-      passwordScreen.getByRole('button', { name: 'Next' }),
+      passwordScreen.locator('[data-auth-submit]'),
       () => leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
       { settleMs: 15000 },
     );

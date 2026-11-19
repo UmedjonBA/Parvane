@@ -76,7 +76,7 @@ async function openStartPage(context) {
 async function pressAuthButton(page, screen, name, targetScreenId) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await screen.getByRole('button', { name }).dispatchEvent('mousedown', { button: 0 });
+    await screen.locator('[data-auth-register]').dispatchEvent('click');
     try {
       await page.locator(`.Transition_slide-active > ${targetScreenId}`).waitFor({ state: 'visible', timeout: 3000 });
       return;
@@ -105,7 +105,7 @@ async function register(context, nick, telegramId, { isReloadedAfterCreate } = {
   const form = page.locator('.Transition_slide-active > #auth-registration-form');
   await form.locator('#sign-up-parvane-nick').fill(nick);
   await form.locator('#sign-up-parvane-password').fill(PASSWORD);
-  await form.getByRole('button', { name: 'Create account' }).click();
+  await form.locator('[data-auth-submit]').click();
   const link = page.locator('.Transition_slide-active > #auth-telegram-form #auth-telegram-link');
   await link.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const token = /start=([A-Za-z0-9_-]+)$/.exec(await link.getAttribute('href'))[1];
@@ -137,7 +137,7 @@ async function login(context, nick) {
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
   await passwordScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-  await passwordScreen.getByRole('button', { name: 'Next' }).click();
+  await passwordScreen.locator('[data-auth-submit]').click();
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return { ...session, address: `${nick}@local` };
 }
@@ -152,7 +152,7 @@ async function ensureSignedIn(page) {
   ]);
   if (await passwordScreen.isVisible()) {
     await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
-    await passwordScreen.getByRole('button', { name: 'Next' }).click();
+    await passwordScreen.locator('[data-auth-submit]').click();
   }
   await leftColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }

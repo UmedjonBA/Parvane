@@ -102,7 +102,7 @@ async function createGroup(page, members, title) {
   await page.mouse.move(800, 360);
   await page.waitForTimeout(200);
   await page.locator('#LeftColumn').hover();
-  await page.getByRole('button', { name: 'New Message' }).click();
+  await page.locator('[data-add-for="chats"]').click();
   await page.getByRole('menuitem', { name: 'New Group' }).click();
   const search = page.locator('#new-group-picker-search');
   await search.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

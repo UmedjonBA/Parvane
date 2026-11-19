@@ -68,7 +68,7 @@ async function register(context, nick, telegramId) {
   // Кнопка — событием mousedown: стартовая маска в headless-вкладке перехватывает указатель
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   for (;;) {
-    await startScreen.getByRole('button', { name: 'Create account' }).dispatchEvent('mousedown', { button: 0 });
+    await startScreen.locator('[data-auth-register]').dispatchEvent('click');
     const isShown = await page.locator('.Transition_slide-active > #auth-registration-form')
       .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
     if (isShown) break;
@@ -77,7 +77,7 @@ async function register(context, nick, telegramId) {
   const form = page.locator('.Transition_slide-active > #auth-registration-form');
   await form.locator('#sign-up-parvane-nick').fill(nick);
   await form.locator('#sign-up-parvane-password').fill(PASSWORD);
-  await form.getByRole('button', { name: 'Create account' }).click();
+  await form.locator('[data-auth-submit]').click();
   const link = page.locator('.Transition_slide-active > #auth-telegram-form #auth-telegram-link');
   await link.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const href = await link.getAttribute('href');
