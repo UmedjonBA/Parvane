@@ -24,9 +24,11 @@ import {
   dumpDiagJournal,
   exchangeMessages,
   expectMediaFlowing,
+  findMessage,
   openPrivateChat,
   preparePage,
   remoteVideoLuma,
+  sendText,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-group-calls-e2e-password';
@@ -110,8 +112,18 @@ async function waitActivePeers(page, count, label) {
     (expected) => document.querySelectorAll('[data-peer-state="active"]').length === expected,
     count,
     { timeout: LOGIN_TIMEOUT_MS },
-  ).catch(() => {
-    assert.fail(`${label}: не дождались ${count} активных участников`);
+  ).catch(async () => {
+    const mesh = await page.evaluate(() => ({
+      peers: window.parvaneCall?.group?.peerStates,
+      connections: (globalThis.__parvaneE2ePeers || []).map((peer) => ({
+        connection: peer.connectionState,
+        ice: peer.iceConnectionState,
+        signaling: peer.signalingState,
+        local: peer.localDescription?.type,
+        remote: peer.remoteDescription?.type,
+      })),
+    }));
+    assert.fail(`${label}: не дождались ${count} активных участников (${JSON.stringify(mesh)})`);
   });
 }
 
@@ -165,9 +177,10 @@ try {
   ]);
   diagSessions.push(['alice', aliceSession], ['bob', bobSession], ['carol', carolSession], ['dave', daveSession]);
 
-  // Знакомим пиров (имена/чаты) до группового пикера
-  await openPrivateChat(aliceSession.page, bob);
-  await openPrivateChat(aliceSession.page, carol);
+  // Ключи доставки с инициатором готовы до проверки согласия и соединений mesh
+  await exchangeMessages(aliceSession.page, alice, bobSession.page, bob, `gc-ab-${suffix}`);
+  await exchangeMessages(aliceSession.page, alice, carolSession.page, carol, `gc-ac-${suffix}`);
+  // Боб и Кэрол до звонка не переписываются: их пара проверяет обмен ключами доступа по ходу звонка
 
   // ── Группа с тремя участниками через UI ────────────────────────────────────
   await aliceSession.page.mouse.move(800, 360);
@@ -188,32 +201,39 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Create Group' }).click();
   await aliceSession.page.locator('#editable-message-text')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Название группы на экране входящего есть только у того, кто уже знает её
-  // состав: о новой группе участник узнаёт по первому сообщению в неё
-  // (`refreshGroupsIfUnknownChat`), поэтому до звонка ждём, пока группа
-  // появится в списке чатов у обоих приглашённых — иначе гонка с приглашением
-  for (const [label, session] of [['bob', bobSession], ['carol', carolSession]]) {
-    await session.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).first()
-      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => {
-        assert.fail(`${label}: новая группа не появилась в списке чатов`);
+  // Строка чата появляется раньше, чем участники дочитают журнал и первую эпоху группы
+  const invited = [['bob', bobSession], ['carol', carolSession]];
+  const groupGreeting = `gc-start-${suffix}`;
+  await openGroupChat(aliceSession.page, groupTitle);
+  await sendText(aliceSession.page, groupGreeting);
+  await Promise.all(invited.map(async ([label, { page }]) => {
+    await openGroupChat(page, groupTitle);
+    await findMessage(page, groupGreeting).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+      .catch(() => assert.fail(`${label}: не получил первое сообщение группы`));
+    await page.evaluate(() => {
+      globalThis.__testFirstGroupStates = [];
+      window.addEventListener('parvane-call', () => {
+        const call = window.parvaneCall;
+        if (call?.state === 'incoming') globalThis.__testFirstGroupStates.push(call.pendingGroupTitle);
       });
-  }
+    });
+  }));
 
   // ── Групповой звонок из шапки группы ───────────────────────────────────────
-  await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await aliceSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  // Входящий вызов с согласием: экран приглашения с названием группы
-  // (приглашённый в ней состоит), микрофон не запрошен до «Принять» (FR-060)
-  for (const session of [bobSession, carolSession]) {
-    await session.page.getByText(`${groupTitle}: group call`, { exact: true })
-      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    assert.equal(await session.page.evaluate(() => globalThis.__parvaneGumCalls), 0, 'getUserMedia before consent');
-  }
-  await acceptGroupCall(bobSession.page, 'bob');
-  await acceptGroupCall(carolSession.page, 'carol');
+  // Оба экрана согласия должны появиться до первых парных офферов от принявших участников
+  await Promise.all(invited.map(async ([label, { page }]) => {
+    await page.locator('[data-call-screen="incoming"]').getByText(`${groupTitle}: group call`, { exact: true })
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(async () => {
+        const titles = await page.evaluate(() => globalThis.__testFirstGroupStates);
+        assert.fail(`${label}: не было приглашения в «${groupTitle}», полученные названия: ${JSON.stringify(titles)}`);
+      });
+    assert.equal(await page.evaluate(() => globalThis.__parvaneGumCalls), 0, 'getUserMedia before consent');
+  }));
+  await Promise.all(invited.map(([label, { page }]) => acceptGroupCall(page, label)));
   // После согласия: у каждого участника по два active-пира
   await waitActivePeers(aliceSession.page, 2, 'alice');
   await waitActivePeers(bobSession.page, 2, 'bob');

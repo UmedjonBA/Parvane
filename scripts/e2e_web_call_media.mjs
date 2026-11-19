@@ -62,18 +62,27 @@ export async function checkCallAudioOutput(page, hasSystemPicker, streams, scree
   console.log(`OK: вывод звука выбран для всех потоков (${streams})`);
 }
 
+export async function checkMinimizedCallStrip(page) {
+  const strip = page.getByRole('button', { name: /^Return to call:/ });
+  await strip.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await strip.getAttribute('data-call-minimized'), 'true');
+  assert.equal(await strip.getByText('Return', { exact: true }).count(), 1);
+  assert.equal(await strip.locator('button').count(), 0, 'На плашке одна кнопка возврата');
+  const stripBox = await strip.boundingBox();
+  assert.deepEqual(stripBox, { x: 0, y: 0, width: page.viewportSize().width, height: 44 });
+  assert.equal((await page.locator('#Main').boundingBox()).y, stripBox.y + stripBox.height);
+  return strip;
+}
+
 export async function checkCallMinimize(page, { minPeers = 1, shotPrefix, isPhone = false } = {}) {
   const screen = page.locator('[data-call-screen]');
-  const strip = page.getByRole('button', { name: /^Return to call:/ });
   const audio = page.locator('[data-call-audio] audio').first();
   await audio.evaluate((element) => { window.__testCallAudio = element; });
   await page.getByRole('button', { name: 'Minimize call', exact: true }).click();
-  await strip.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const strip = await checkMinimizedCallStrip(page);
   await screen.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
-  const before = await strip.getAttribute('aria-label');
-  const stripBox = await strip.boundingBox();
-  assert.equal(stripBox.height, 44, 'Высота плашки по макету');
-  assert.equal((await page.locator('#Main').boundingBox()).y, stripBox.y + stripBox.height);
+  const elapsed = strip.locator('[data-call-elapsed]');
+  const before = await elapsed.innerText();
   if (isPhone) {
     const navigation = page.getByRole('navigation', { name: 'Modules' });
     const back = page.locator('#MiddleColumn .MiddleHeader .back-button button:visible').first();
@@ -87,8 +96,8 @@ export async function checkCallMinimize(page, { minPeers = 1, shotPrefix, isPhon
     'Звук должен продолжаться в прежнем элементе после сворачивания и смены модуля');
   await page.waitForFunction(
     (previous) => {
-      const label = document.querySelector('[data-call-minimized]')?.getAttribute('aria-label');
-      return Boolean(label && label !== previous);
+      const elapsedText = document.querySelector('[data-call-elapsed]')?.textContent;
+      return Boolean(elapsedText && elapsedText !== previous);
     },
     before,
     { timeout: LOGIN_TIMEOUT_MS },
@@ -118,7 +127,10 @@ export async function saveCallState(page, name) {
         await page.emulateMedia({ colorScheme: scheme });
         await page.waitForFunction((theme) => document.documentElement.classList.contains(`theme-${theme}`), scheme,
           { timeout: 5000 });
-        await page.screenshot({ path: join(dir, `call-${name}-${size}-${scheme}.png`) });
+        await page.screenshot({
+          path: join(dir, `call-${name}-${size}-${scheme}.png`),
+          animations: 'disabled',
+        });
       }
     }
   } finally {

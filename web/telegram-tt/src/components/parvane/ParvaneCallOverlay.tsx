@@ -61,6 +61,11 @@ const ParvaneCallOverlay = () => {
     resetOutput();
   }, [isTimed, resetOutput]);
 
+  // Доска `RpCalls`: на время звонка мини-плеер ставится на паузу; после звонка музыка сама не возобновляется
+  useEffect(() => {
+    if (isTimed && getMusicPlayer().isPlaying) togglePlay();
+  }, [isTimed]);
+
   useEffect(() => {
     setDuration(0);
     if (!isTimed) return undefined;
@@ -103,7 +108,6 @@ const ParvaneCallOverlay = () => {
   const handleToggleScreen = useLastCallback(() => callParvane('parvaneToggleScreenShare'));
   const handleExpand = useLastCallback(() => setIsMinimized(false));
   const handleMinimize = useLastCallback(() => {
-    if (getMusicPlayer().isPlaying) togglePlay();
     output.closeOutput();
     setIsMinimized(true);
   });

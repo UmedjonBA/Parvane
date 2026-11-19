@@ -1,5 +1,7 @@
 import { memo } from '../../../lib/teact/teact';
 
+import buildClassName from '../../../util/buildClassName';
+
 import useOldLang from '../../../hooks/useOldLang';
 
 import styles from './Call.module.scss';
@@ -20,14 +22,14 @@ const CallMinimized = ({ name, time, onExpand }: OwnProps) => {
       aria-label={lang('ParvaneCallReturnTo', [name, time])}
       onClick={onExpand}
     >
-      <i className="icon icon-phone" aria-hidden />
-      <span className={styles.minimizedName}>{name}</span>
-      <span className={styles.minimizedTime}>
-        {'· '}
-        {time}
+      <i className={buildClassName('icon icon-phone', styles.minimizedIcon)} aria-hidden />
+      <span className={styles.minimizedIdentity}>
+        <span className={styles.minimizedName}>{name}</span>
+        <span aria-hidden>·</span>
+        <span className={styles.minimizedTime} data-call-elapsed>{time}</span>
       </span>
       <span className={styles.minimizedReturn}>{lang('ParvaneCallReturn')}</span>
-      <i className="icon icon-next" aria-hidden />
+      <i className={buildClassName('icon icon-next', styles.minimizedIcon)} aria-hidden />
     </button>
   );
 };

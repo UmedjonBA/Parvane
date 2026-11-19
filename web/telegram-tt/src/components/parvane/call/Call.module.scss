@@ -627,6 +627,20 @@
   }
 }
 
+.minimizedIcon {
+  flex: none;
+  font-size: 1.125rem;
+}
+
+.minimizedIdentity {
+  display: flex;
+  flex: 1 1 0;
+  gap: 0.25rem;
+  align-items: baseline;
+
+  min-width: 0;
+}
+
 .minimizedName {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -640,7 +654,7 @@
 }
 
 .minimizedReturn {
-  margin-inline-start: auto;
+  flex: none;
   font-size: 0.8125rem;
   font-weight: var(--font-weight-normal);
 }
