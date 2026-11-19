@@ -7,6 +7,7 @@ import type { PlannerLayer } from './plannerLayers';
 import type { PlannerCalendarView } from './plannerModel';
 import type { SwipePoint } from './plannerSwipe';
 import type { PlannerFormParams } from './PlannerTaskForm';
+import type { PlannerTasksTab } from './PlannerTasks';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -15,7 +16,7 @@ import {
   setParvaneNavCovered, setParvaneSection, setPlannerCalendarView, setPlannerPickedDay, setPlannerView,
 } from '../../../util/parvaneSection';
 import { getHealthDays, watchHealthDays } from '../health/healthStore';
-import { consumePlannerRecordRequest, getPlannerRecordRequest, openPlanSearch } from '../palette/paletteOpen';
+import { consumePlannerRecordRequest, getPlannerRecordRequest } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
   formatDay, formatDayLabel, formatDayLong, formatMonth, formatPeriod, formatRelativeDay, formatSpan,
@@ -25,7 +26,7 @@ import { getDayBudget } from './plannerHealth';
 import { withHealthDays } from './plannerHealthDays';
 import { readLayers, saveLayers } from './plannerLayers';
 import {
-  detachInstance, eventInstance, fromDayKey, getDayEntry, getUndatedTasks, getWeekKeys, hasInstanceOn,
+  detachInstance, eventInstance, fromDayKey, getDayEntry, getWeekKeys, hasInstanceOn,
   PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance, toDayKey,
 } from './plannerModel';
 import {
@@ -54,13 +55,15 @@ import PlannerDayPanel from './PlannerDayPanel';
 import PlannerDayStrip from './PlannerDayStrip';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerHeader from './PlannerHeader';
+import PlannerImport from './PlannerImport';
 import PlannerMonth from './PlannerMonth';
 import PlannerQuickInput from './PlannerQuickInput';
 import PlannerRail from './PlannerRail';
+import PlannerSearch from './PlannerSearch';
 import PlannerSettings from './PlannerSettings';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
-import PlannerUndated from './PlannerUndated';
+import PlannerTasks from './PlannerTasks';
 import PlannerWeek from './PlannerWeek';
 import PlannerWeekList from './PlannerWeekList';
 import PlannerYear from './PlannerYear';
@@ -70,6 +73,8 @@ import styles from './Planner.module.scss';
 import pv from './PlannerPv.module.scss';
 
 type SwipePeriod = 'day' | 'week' | 'month';
+// Экраны поверх видов: «Задачи», поиск по «Плану», «Расписание на неделю»
+type PlannerScreen = 'tasks' | 'search' | 'import';
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
@@ -171,6 +176,8 @@ const Planner = () => {
   const [eventEditor, setEventEditor] = useState<{ id: string; day: string }>();
   const [formParams, setFormParams] = useState<PlannerFormParams>();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [screen, setScreen] = useState<PlannerScreen>();
+  const [tasksTab, setTasksTab] = useState<PlannerTasksTab>('undated');
   // Начатый жест листания (телефон): что листается и где палец коснулся экрана
   const swipeRef = useRef<{ period: SwipePeriod; start: SwipePoint }>();
   const contentRef = useRef<HTMLDivElement>();
@@ -390,7 +397,7 @@ const Planner = () => {
     : isSettingsOpen ? 'settings' : formParams ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
   const isSheet = side === 'settings' || (Boolean(side) && isNarrow);
   // Карточка записи и настройки на телефоне — на весь экран: ленты модулей и «+» под ними нет
-  const isNavCovered = isShown && isNarrow && Boolean(side);
+  const isNavCovered = isShown && isNarrow && Boolean(side || screen);
   useEffect(() => {
     setParvaneNavCovered(isNavCovered);
     return () => setParvaneNavCovered(false);
@@ -428,11 +435,43 @@ const Planner = () => {
   const dayLoad = isToday && hasContent && !isNarrow ? lang('PlannerLoadOf', {
     planned: formatSpan(getDayEntry(state, picked).minutes), budget: formatSpan(getDayBudget(state, picked)),
   }) : undefined;
-  const isRailShown = hasContent && !isNarrow && isCalendar && (isWeekView || isMonthView);
+  const isRailShown = hasContent && !isNarrow && !screen && isCalendar && (isWeekView || isMonthView);
 
-  // «Без даты» — одно окно на раздел: его открывают левая колонка и вид «День»
-  const [isUndatedOpen, openUndated, closeUndated] = useFlag();
-  const undated = useMemo(() => getUndatedTasks(state), [state]);
+  // «Без даты» в левой колонке и в виде «День» открывает экран «Задачи» на этом разделе
+  const openUndated = useLastCallback(() => {
+    setTasksTab('undated');
+    setScreen('tasks');
+  });
+
+  const handleOpenTasks = useLastCallback(() => {
+    setScreen('tasks');
+  });
+
+  const handleOpenSearch = useLastCallback(() => {
+    setScreen('search');
+  });
+
+  // «Расписание на неделю» из настроек: настройки закрываются, экран открывается на месте видов
+  const handleOpenImport = useLastCallback(() => {
+    setIsSettingsOpen(false);
+    setScreen('import');
+  });
+
+  const handleCloseScreen = useLastCallback(() => {
+    setScreen(undefined);
+  });
+
+  // Escape закрывает экран, если поверх него нет окна и нажатие не в карточке записи
+  useEffect(() => {
+    if (!screen) return undefined;
+    const handleEscape = (e: KeyboardEvent) => {
+      const target = e.target instanceof HTMLElement ? e.target : undefined;
+      if (e.key !== 'Escape' || document.querySelector('.Modal') || target?.closest('[data-planner-side]')) return;
+      setScreen(undefined);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [screen]);
 
   // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
   // Полная форма — по «Подробнее» в окне ввода, по «Добавить на этот день» и по нажатию на свободное время
@@ -520,7 +559,8 @@ const Planner = () => {
         onPickDay={pickDay}
         onSwitchSegment={handleSwitchSegment}
         onOpenQuick={handleOpenQuick}
-        onOpenSearch={openPlanSearch}
+        onOpenSearch={handleOpenSearch}
+        onOpenTasks={handleOpenTasks}
         onOpenSettings={handleOpenSettings}
       />
     );
@@ -652,6 +692,37 @@ const Planner = () => {
     );
   }
 
+  // Экран вместо видов: «Задачи», поиск, «Расписание на неделю»
+  function renderScreen() {
+    return (
+      <main className={styles.page} data-planner-screen={screen}>
+        {screen === 'tasks' ? (
+          <PlannerTasks
+            state={state}
+            today={today}
+            tab={tasksTab}
+            isNarrow={isNarrow}
+            onChangeTab={setTasksTab}
+            onOpenTask={handleOpenTask}
+            onOpenSearch={handleOpenSearch}
+            onClose={handleCloseScreen}
+          />
+        ) : screen === 'search' ? (
+          <PlannerSearch
+            state={state}
+            today={today}
+            isNarrow={isNarrow}
+            onOpenTask={handleOpenTask}
+            onOpenEvent={handleOpenEvent}
+            onClose={handleCloseScreen}
+          />
+        ) : (
+          <PlannerImport state={ownState} today={today} isNarrow={isNarrow} onClose={handleCloseScreen} />
+        )}
+      </main>
+    );
+  }
+
   function renderSide() {
     const sideDay = side === 'task' ? editedTask!.instanceDay || editedTask!.day
       : side === 'event' ? eventEditor!.day : undefined;
@@ -691,6 +762,7 @@ const Planner = () => {
               userId={currentUserId}
               layers={layers}
               onToggleLayer={handleToggleLayer}
+              onOpenImport={handleOpenImport}
             />
           ) : side === 'form' ? (
             <PlannerTaskForm
@@ -725,6 +797,10 @@ const Planner = () => {
 
   // Системное «назад»: открытая форма, карточка записи либо настройки — закрыть, иначе — к чатам
   const handleHistoryBack = useLastCallback(() => {
+    if (!side && screen) {
+      setScreen(undefined);
+      return true;
+    }
     if (!side) {
       setParvaneSection('messenger');
       return false;
@@ -758,58 +834,62 @@ const Planner = () => {
             onOpenUndated={openUndated}
           />
         )}
-        <main className={styles.page}>
-          {renderHeader()}
-          {isOffline && <PvOfflineBar text={lang('PvOfflinePlan')} onRetry={retryPlanner} />}
-          {syncNoticeKey && (
-            <div
-              className={buildClassName(styles.syncNotice, syncStatus === 'needs-linking' && styles.syncNoticeBlocking)}
-              role="status"
-            >
-              {lang(syncNoticeKey)}
-            </div>
-          )}
-          {isNarrow && hasContent && isToday && (
-            <div className={styles.stripBar}>
-              <PlannerDayStrip
-                state={state}
-                weekStart={weekDays[0]}
-                picked={picked}
-                today={today}
-                onPickDay={pickDay}
-              />
-            </div>
-          )}
-          {isNarrow && hasContent && isCalendar && (isMonthView || calendarView === 'year') && renderPeriod()}
-          <div
-            ref={contentRef}
-            className={buildClassName(styles.content, isFlush && styles.contentFlush, 'custom-scroll')}
-            data-swipe={isNarrow && !isCalendar ? 'day' : undefined}
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-          >
-            {!hasContent ? (
-              <PvLoading className={pvStates.loadingFill} onRetry={retryPlanner} />
-            ) : isCalendar ? renderCalendar() : (
-              <PlannerDay
-                state={state}
-                day={picked}
-                today={today}
-                layers={layers}
-                isNarrow={isNarrow}
-                noAside={Boolean(side) && !isSheet}
-                onPickDay={pickDay}
-                onCreateForDay={handleCreateForDay}
-                onCreateAt={handleCreateAt}
-                onOpenTask={handleOpenTask}
-                onOpenEvent={handleOpenEvent}
-                onOpenSleep={handleOpenSleep}
-                onOpenUndated={openUndated}
-                onQuick={handleQuickText}
-              />
+        {hasContent && screen ? renderScreen() : (
+          <main className={styles.page}>
+            {renderHeader()}
+            {isOffline && <PvOfflineBar text={lang('PvOfflinePlan')} onRetry={retryPlanner} />}
+            {syncNoticeKey && (
+              <div
+                className={buildClassName(
+                  styles.syncNotice, syncStatus === 'needs-linking' && styles.syncNoticeBlocking,
+                )}
+                role="status"
+              >
+                {lang(syncNoticeKey)}
+              </div>
             )}
-          </div>
-        </main>
+            {isNarrow && hasContent && isToday && (
+              <div className={styles.stripBar}>
+                <PlannerDayStrip
+                  state={state}
+                  weekStart={weekDays[0]}
+                  picked={picked}
+                  today={today}
+                  onPickDay={pickDay}
+                />
+              </div>
+            )}
+            {isNarrow && hasContent && isCalendar && (isMonthView || calendarView === 'year') && renderPeriod()}
+            <div
+              ref={contentRef}
+              className={buildClassName(styles.content, isFlush && styles.contentFlush, 'custom-scroll')}
+              data-swipe={isNarrow && !isCalendar ? 'day' : undefined}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+            >
+              {!hasContent ? (
+                <PvLoading className={pvStates.loadingFill} onRetry={retryPlanner} />
+              ) : isCalendar ? renderCalendar() : (
+                <PlannerDay
+                  state={state}
+                  day={picked}
+                  today={today}
+                  layers={layers}
+                  isNarrow={isNarrow}
+                  noAside={Boolean(side) && !isSheet}
+                  onPickDay={pickDay}
+                  onCreateForDay={handleCreateForDay}
+                  onCreateAt={handleCreateAt}
+                  onOpenTask={handleOpenTask}
+                  onOpenEvent={handleOpenEvent}
+                  onOpenSleep={handleOpenSleep}
+                  onOpenUndated={openUndated}
+                  onQuick={handleQuickText}
+                />
+              )}
+            </div>
+          </main>
+        )}
         {side && !isSheet && renderSide()}
       </div>
       {side && isSheet && (
@@ -828,15 +908,6 @@ const Planner = () => {
           )}
         </div>
       )}
-      <PlannerUndated
-        isOpen={isUndatedOpen}
-        state={state}
-        day={picked}
-        today={today}
-        tasks={undated}
-        onOpenTask={handleOpenTask}
-        onClose={closeUndated}
-      />
       <PlannerQuickInput
         isOpen={isQuickOpen}
         initialText={quickText}

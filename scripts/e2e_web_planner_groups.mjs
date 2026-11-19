@@ -51,10 +51,12 @@ try {
   // Расписание без группы
   await openPlannerScreen(page, 'calendar');
   await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await sidePane.locator('[data-schedule-input]').fill(SCHEDULE);
-  await sidePane.locator('[data-schedule-add]').click();
+  await sidePane.locator('[data-schedule-open]').click();
+  const importScreen = planner.locator('[data-planner-import]');
+  await importScreen.locator('[data-schedule-input]').fill(SCHEDULE);
+  await importScreen.locator('[data-schedule-add]').click();
   await planner.getByText('Schedule added: 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await closeSide();
+  await importScreen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
 
   // Вид «Список»: панели дня нет, ряд групп есть
   await openList();

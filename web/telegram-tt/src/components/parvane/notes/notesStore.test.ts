@@ -1,19 +1,23 @@
 import {
-  beforeEach, describe, expect, it, vi,
+  beforeAll, beforeEach, describe, expect, it, vi,
 } from 'vitest';
 
 import type { CloudDriveState, CloudNodeJson } from '../../../api/parvane/cloudDrive';
 
+import { loadProtocol } from '../../../api/parvane/v2/engine';
+
 // Хранилище заметок поверх облака-заглушки: дерево личного диска в памяти, запись текста создаёт либо
 // заменяет узел. Проверяется запись с карточки холста, когда заметку за время правки удалили
 
-type WriteArgs = { parent?: string; node?: string; name: string; text: string };
+type WriteArgs = { parent?: string; node?: string; name: string; text: string; expectedFileId?: string };
 
 const DRIVE = 'drive';
 const VAULT = 'Знания';
 
 type CloudStub = {
   data: unknown; set: (data: unknown) => void; texts: Map<string, string>; writes: unknown[]; count: number;
+  // Нет связи: запись текста отказывает, как облако без сервера
+  isOffline: boolean;
 };
 
 const cloud = vi.hoisted<CloudStub>(() => ({
@@ -22,6 +26,7 @@ const cloud = vi.hoisted<CloudStub>(() => ({
   texts: new Map<string, string>(),
   writes: [],
   count: 0,
+  isOffline: false,
 }));
 
 vi.mock('../cloud/cloudStore', async () => {
@@ -32,8 +37,10 @@ vi.mock('../cloud/cloudStore', async () => {
     setCloudData(data);
   };
   const stateOf = (data: unknown) => data as { trees: Record<string, { nodes: unknown[] }> } | undefined;
+  const [getCloudStatus] = createSignal('ready');
   return {
     getCloudData,
+    getCloudStatus,
     getNodes: (id?: string, data: unknown = getCloudData()) => (id && stateOf(data)?.trees[id]?.nodes) || [],
     loadCloud: () => Promise.resolve(),
     refreshCloud: () => {
@@ -57,7 +64,15 @@ vi.mock('../../../api/gramjs', () => ({
       const text = cloud.texts.get(args.node!);
       return Promise.resolve(text === undefined ? undefined : { text, fileId: blobOf(args.node!) });
     }
+    if (method === 'parvaneCloudSync') return Promise.resolve(!cloud.isOffline);
     if (method !== 'parvaneCloudWriteText') return Promise.resolve(undefined);
+    if (cloud.isOffline) return Promise.resolve({ ok: false, error: 'offline' });
+    // Заметку тем временем изменило другое устройство: запись не делается, возвращается текущий текст
+    if (args.node && args.expectedFileId && args.expectedFileId !== blobOf(args.node)) {
+      return Promise.resolve({
+        ok: true, node: args.node, fileId: blobOf(args.node), conflict: cloud.texts.get(args.node),
+      });
+    }
     cloud.writes.push(args);
     const id = args.node || `new${++cloud.count}`;
     cloud.texts.set(id, args.text);
@@ -133,6 +148,73 @@ const TREE = () => [
 ];
 const TEXTS = { n1: '# Идея\n\nстарое\n', n2: '# План\n' };
 const DRAFT = '# Идея\n\nстарое\nнабрано на карточке\n';
+
+// Сведение заметок считает движок (NOTES-2)
+beforeAll(async () => {
+  await loadProtocol();
+});
+
+// Другое устройство записало заметку: новая версия файла
+function writeElsewhere(id: string, text: string) {
+  cloud.texts.set(id, text);
+  cloud.set(stateWith(treeNodes().map((node) => (
+    node.id === id ? { ...node, mtime: 7, blob: { fileId: `${id}-other` } as CloudNodeJson['blob'] } : node
+  ))));
+}
+
+describe('хранилище заметок: очередь без связи и расхождение правок', () => {
+  beforeEach(() => {
+    cloud.count = 0;
+    cloud.isOffline = false;
+  });
+
+  it('без связи текст ждёт в очереди с пометкой и уходит при появлении связи', async () => {
+    const outbox = await import('./notesOutbox');
+    const store = await open(TREE(), TEXTS);
+    cloud.isOffline = true;
+    expect(await store.saveNote('n1', DRAFT, VAULT, TEXTS.n1)).toBe(true);
+    expect(cloud.writes).toEqual([]);
+    expect(outbox.getNotesUnsent().has('n1')).toBe(true);
+    expect(store.getNotes().find(({ id }) => id === 'n1')?.text).toBe(DRAFT);
+    // Повторная правка без связи заменяет текст в очереди, основа остаётся прежней
+    const second = `${DRAFT}ещё\n`;
+    expect(await store.saveNote('n1', second, VAULT, DRAFT)).toBe(true);
+    expect(outbox.getQueuedText('n1')).toMatchObject({ text: second, base: TEXTS.n1, baseFileId: 'n1-v0' });
+    cloud.isOffline = false;
+    await store.flushNoteOutbox(VAULT);
+    expect(lastWrite()).toMatchObject({ node: 'n1', text: second });
+    expect(outbox.getNotesUnsent().size).toBe(0);
+  });
+
+  it('текст из очереди уходит поверх чужой правки другого места — сводится сам', async () => {
+    const outbox = await import('./notesOutbox');
+    const store = await open(TREE(), TEXTS);
+    cloud.isOffline = true;
+    await store.saveNote('n1', DRAFT, VAULT, TEXTS.n1);
+    cloud.isOffline = false;
+    writeElsewhere('n1', '# Идея другая\n\nстарое\n');
+    await store.flushNoteOutbox(VAULT);
+    expect(lastWrite()).toMatchObject({ node: 'n1', text: '# Идея другая\n\nстарое\nнабрано на карточке\n' });
+    expect(outbox.getNoteConflict('n1')).toBeUndefined();
+  });
+
+  it('одно место изменено на двух устройствах — ждёт решения; выбор пишет заметку и убирает копию', async () => {
+    const outbox = await import('./notesOutbox');
+    const store = await open(TREE(), TEXTS);
+    cloud.isOffline = true;
+    await store.saveNote('n1', '# Идея\n\nмоё\n', VAULT, TEXTS.n1);
+    cloud.isOffline = false;
+    writeElsewhere('n1', '# Идея\n\nчужое\n');
+    await store.flushNoteOutbox(VAULT);
+    const conflict = outbox.getNoteConflict('n1');
+    expect(conflict).toMatchObject({ mine: '# Идея\n\nмоё\n', theirs: '# Идея\n\nчужое\n', base: TEXTS.n1 });
+    expect(conflict?.copyId).toBeTruthy();
+    expect(cloud.texts.get('n1')).toBe('# Идея\n\nмоё\n');
+    expect(await store.resolveNoteConflict('n1', ['both'], undefined, VAULT)).toBe(true);
+    expect(cloud.texts.get('n1')).toBe('# Идея\n\nмоё\nчужое\n');
+    expect(outbox.getNoteConflict('n1')).toBeUndefined();
+  });
+});
 
 describe('хранилище заметок: запись с карточки холста', () => {
   beforeEach(() => {

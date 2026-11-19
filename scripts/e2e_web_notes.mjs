@@ -420,8 +420,10 @@ try {
   await visible(note.locator('[data-note-planned]').getByText('заказать блок питания'), 'задача из пункта в «Запланировано»');
   console.log('OK: «Запланировано» показывает событие со ссылкой и задачу из пункта');
 
-  // ── Ссылка на несуществующую заметку создаёт её; обратные ссылки; поиск ───
+  // ── Ссылка на несуществующую заметку: вопрос, «Создать и открыть»; обратные ссылки; поиск ───
   await body.getByRole('button', { name: OTHER }).click();
+  await visible(page.locator('[data-note-missing-sheet]'), 'вопрос о заметке, которой нет');
+  await page.locator('[data-note-missing-sheet] [data-missing-create]').click();
   await visible(knowledge.locator(`[data-note-title="${OTHER}"]`), 'созданная по ссылке заметка');
   // На широком экране «Связи» — отдельный остров справа от заметки, на узком — под её текстом
   await visible(knowledge.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }), 'обратная ссылка');
@@ -891,6 +893,7 @@ try {
   // Новая заметка, на которую ссылается прежняя
   const noteText = await rewriteNote((text) => `${text}\n\nКуда ставить: [[${CASE}]]`);
   await body.getByRole('button', { name: CASE }).click();
+  await page.locator('[data-note-missing-sheet] [data-missing-create]').click();
   await visible(knowledge.locator(`[data-note-title="${CASE}"]`), 'новая заметка по ссылке');
   await backToCanvas();
   await canvasCount(fileCards, 3, 'карточка новой заметки появилась без обновления');

@@ -258,6 +258,12 @@
   font-weight: var(--font-weight-medium);
 }
 
+// Трек на устройстве — отметка перед длительностью (сама загрузка — в меню трека)
+.trackSaved {
+  flex: none;
+  color: var(--pv-aqua);
+}
+
 .cover {
   position: relative;
 

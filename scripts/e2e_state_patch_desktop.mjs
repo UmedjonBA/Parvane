@@ -197,12 +197,9 @@ try {
     const since = await startDesktop({ PARVANE_AUTOPATCH: `dump|Работа|${CAROL}@60,dump|Работа|${CAROL}@120` });
     await waitDesktopLog(workdir, /линковка: оффер \(обязательство\) опубликован/, 120000, desktop, { since });
     const screen = await openDevicesScreen(web);
-    const offer = screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+    const offer = screen.locator('[data-link-offer]:not([data-link-code=""])').first();
     await offer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-    await offer.locator('.ListItem-button').click();
-    const transfer = web.getByRole('button', { name: 'Transfer', exact: true });
-    await transfer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await transfer.click();
+    await offer.locator('[data-link-confirm]').click();
     await web.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await closeSettings(web);
     await waitDesktopLog(workdir, /линковка: грант v2 получен/, LINK_TIMEOUT_MS, desktop, { since });

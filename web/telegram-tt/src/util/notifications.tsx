@@ -38,6 +38,7 @@ import jsxToHtml from './element/jsxToHtml';
 import { buildCollectionByKey } from './iteratees';
 import { getTranslationFn } from './localization';
 import * as mediaLoader from './mediaLoader';
+import { getIsNotifyAllowedNow } from './notifyPrefs';
 import { oldTranslate } from './oldLangProvider';
 import { buildPageNotifyButtons } from './pageNotify';
 import { debounce } from './schedulers';
@@ -442,7 +443,7 @@ export async function notifyAboutCall({
   call: ApiPhoneCall; user: ApiUser;
 }) {
   const { hasWebNotifications } = selectSettingsKeys(getGlobal());
-  if (document.hasFocus() || !hasWebNotifications) return;
+  if (document.hasFocus() || !hasWebNotifications || !getIsNotifyAllowedNow('chats')) return;
   const areNotificationsSupported = checkIfNotificationsSupported();
   if (!areNotificationsSupported) return;
 
@@ -478,6 +479,8 @@ export async function notifyAboutMessage({
   const global = getGlobal();
   const { hasWebNotifications } = selectSettingsKeys(global);
   if (!checkIfShouldNotify(chat, message)) return;
+  // Модуль «Чаты» выключен в «Уведомлениях» либо идёт «Не беспокоить» — ни уведомления, ни звука
+  if (!getIsNotifyAllowedNow('chats')) return;
   const isChatSilent = getIsChatSilent(
     chat, selectNotifyDefaults(getGlobal()), selectNotifyException(getGlobal(), chat.id),
   );

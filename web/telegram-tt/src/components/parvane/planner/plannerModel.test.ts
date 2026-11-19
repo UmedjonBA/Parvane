@@ -4,7 +4,7 @@ import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
   countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
-  expandRepeat, findSlots, getDayAvailability, getDayIndex, getDayLoad, getDefaultEventEnd,
+  expandRepeat, getDayAvailability, getDayIndex, getDayLoad, getDefaultEventEnd,
   getEligibleTasks, getEventsForDay, getGoalsForDay, getListColor, getMonthGridKeys,
   getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
   getUndatedTasks,
@@ -70,27 +70,7 @@ describe('планировщик: события и загрузка дня', ()
   });
 });
 
-describe('планировщик: поиск окна и проверки ввода', () => {
-  it('окно ищется сразу после занятого времени, без запаса и перерыва', () => {
-    const state = stateWith({
-      tasks: [task({ id: '1', day: TODAY, start: '09:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
-    });
-    const [first] = findSlots(state, state.tasks[1], TODAY, TODAY);
-    expect(first).toEqual({ day: TODAY, start: '10:00', end: '12:00' });
-  });
-
-  it('день сверх бюджета пропускается, дедлайн ограничивает поиск', () => {
-    const state = stateWith({
-      budget: 120,
-      tasks: [task({ id: '1', day: TODAY, minutes: 100 }), task({ id: '2', minutes: 60, due: '2026-10-09' })],
-    });
-    expect(findSlots(state, state.tasks[1], TODAY, TODAY).map(({ day }) => day)).toEqual(['2026-10-09']);
-  });
-
-  it('задача без оценки окна не получает', () => {
-    expect(findSlots(createEmptyPlannerState(), task({}), TODAY, TODAY)).toEqual([]);
-  });
-
+describe('планировщик: проверки ввода', () => {
   it('проверки задачи', () => {
     expect(validateTask({ name: ' ' })).toBe('name');
     expect(validateTask({ name: 'a', minutes: 3 })).toBe('minutes');
@@ -123,13 +103,6 @@ describe('планировщик: настройки дня и порядок о
       tasks: [task({ id: '1', day: TODAY, start: '08:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
     });
     expect(getDayAvailability(state, TODAY).free).toEqual([{ start: 540, end: 1080 }]);
-    // Окно начинается сразу после задачи
-    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '09:00', end: '11:00' });
-    // Перерыв и запас из записей прежних версий на поиск времени не влияют
-    state.settings = {
-      dayStart: 480, dayEnd: 1080, lunchStart: 540, lunchEnd: 600, margin: 30,
-    };
-    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '09:00', end: '11:00' });
   });
 
   it('проверки настроек', () => {

@@ -41,6 +41,15 @@ async function dragRow(page, list, fromId, toId) {
   await page.mouse.up();
 }
 
+// Меню трека (доски `XpMusic`, `ZdMusicX`): «⋯» строки и пункт по названию. На компьютере меню — у курсора
+// (вне раздела, через портал), на телефоне — шторка; в обоих случаях это `role="menu"`
+async function pickTrackAction(page, row, action) {
+  await row.locator('[data-music-menu]').click();
+  const menu = page.getByRole('menu');
+  await menu.getByRole('menuitem', { name: action, exact: true }).click();
+  await menu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+}
+
 async function waitRows(page, list, expected) {
   await list.locator('[data-track]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.waitForFunction(([root, want]) => [...root.querySelectorAll('[data-track]')]
@@ -120,11 +129,16 @@ try {
   await music.getByRole('searchbox').fill('glass');
   const found = music.locator('[data-music-view="search"] [data-track="t4"]');
   await found.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await found.getByRole('button', { name: 'Play next' }).click();
+  assert.equal(await found.getByRole('button', { name: 'Play next' }).count(), 0, 'действия трека — в меню, не в строке');
+  await pickTrackAction(page, found, 'Play next');
   await side.locator('[data-music-queue="4"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Очередь в порядке проигрывания: найденный трек — сразу после играющего
   const queueOrder = await side.locator('[data-track]').evaluateAll((rows) => rows.map((row) => row.dataset.track));
   assert.deepEqual(queueOrder, ['t1', 't2', 't3', 't4'], 'порядок очереди после «играть следующим»');
+  // Переход из меню трека: «К альбому» открывает альбом, поиск очищается
+  await pickTrackAction(page, found, 'Go to album');
+  await music.locator('[data-music-view="album"] [data-track="t4"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await music.getByRole('searchbox').inputValue(), '', 'поиск очищен переходом');
   await music.getByRole('searchbox').fill('нет такого');
   await music.locator('[data-music-empty]').getByText('Nothing found').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await music.getByRole('searchbox').fill('');
@@ -203,6 +217,26 @@ try {
   console.log('OK: телефон — полный плеер из полосы, следующий трек, очередь перетаскиванием и возврат ленты');
 
   // ── «Найти и скачать»: уверенное совпадение качается само ─────────────────
+  // Телефон: меню трека — шторка снизу
+  const phoneMusic = await openMusic(page);
+  await phoneMusic.locator('[data-view="albums"]').click();
+  await phoneMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  const phoneRow = phoneMusic.locator('[data-music-tracks] [data-track="t2"]');
+  await phoneRow.locator('[data-music-menu]').click();
+  const sheetMenu = page.locator('.Modal [role="menu"]');
+  await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const item of ['Play next', 'Add to queue', 'Add to favourites', 'Add to a playlist', 'Send to a chat', 'Download for offline']) {
+    await sheetMenu.getByRole('menuitem', { name: item, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-track-menu-phone.png` });
+  }
+  const sheetOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert.ok(sheetOverflow <= 0, `горизонтальное переполнение со шторкой меню: ${sheetOverflow}`);
+  await page.locator('.Modal').getByRole('button', { name: 'Close' }).click();
+  await sheetMenu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — меню трека шторкой');
+
   await page.setViewportSize(WIDE);
   await page.waitForTimeout(800);
   const wide = await openMusic(page);
@@ -267,7 +301,7 @@ try {
   const mine = wide.locator('[data-music-added="mine"]');
   await mine.locator('[data-track]').nth(2).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await wide.locator('[data-music-usage]').getByText('Today 3 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await mine.getByRole('button', { name: 'Remove from the server library: Утро' }).click();
+  await pickTrackAction(page, mine.locator('[data-track]').filter({ hasText: 'Утро' }), 'Remove from the server library');
   await wide.locator('[data-music-usage]').getByText('Today 2 of 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Список перечитывается отдельным запросом — после расхода
   await mine.locator('[data-track]').nth(2).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -292,7 +326,7 @@ try {
   const albumRow = (id) => wide.locator(`[data-music-tracks] [data-track="${id}"]`);
   const picker = wide.locator('[data-playlist-picker]');
   const addToPlaylist = async (trackId, playlistName, expected) => {
-    await albumRow(trackId).locator('[data-music-to-playlist]').click();
+    await pickTrackAction(page, albumRow(trackId), 'Add to a playlist');
     await picker.getByRole('button', { name: playlistName, exact: true }).click();
     await wide.locator(`[data-playlist-picker="${expected}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await picker.getByRole('button', { name: 'Close' }).click();
@@ -303,7 +337,7 @@ try {
   await addToPlaylist('t3', 'Дорога', 'added');
   await addToPlaylist('t1', 'Дорога', 'present');
   // Новый плейлист прямо из выбора — сразу с треком
-  await albumRow('t2').locator('[data-music-to-playlist]').click();
+  await pickTrackAction(page, albumRow('t2'), 'Add to a playlist');
   await picker.getByPlaceholder('New playlist name').fill('Вечер');
   await picker.getByRole('button', { name: 'Create and add' }).click();
   await wide.locator('[data-playlist-picker="added"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -358,7 +392,7 @@ try {
   // ── Трек в чат: карточка в «Избранном», из неё трек играет ────────────────
   await again2.locator('[data-view="albums"]').click();
   await again2.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  await again2.locator('[data-music-tracks] [data-track="t2"] [data-music-to-chat]').click();
+  await pickTrackAction(page, again2.locator('[data-music-tracks] [data-track="t2"]'), 'Send to a chat');
   await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().click();
   await page.getByText('Track sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
@@ -413,8 +447,16 @@ try {
   await backInMusic.locator('[data-view="albums"]').click();
   await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
   const albumTracks = backInMusic.locator('[data-music-tracks]');
-  await albumTracks.locator('[data-track="t2"] [data-music-offline-track="none"]').click();
-  await albumTracks.locator('[data-track="t2"] [data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await albumTracks.locator('[data-track="t2"][data-music-offline-track="none"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await albumTracks.locator('[data-track="t2"] [data-music-menu]').click();
+    await page.getByRole('menu').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-track-menu-desk.png` });
+    await page.keyboard.press('Escape');
+    await page.getByRole('menu').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  }
+  await pickTrackAction(page, albumTracks.locator('[data-track="t2"]'), 'Download for offline');
+  await albumTracks.locator('[data-track="t2"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await backInMusic.locator('[data-view="offline"]').click();
   await backInMusic.locator('[data-music-offline="1"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: один трек загружен на устройство из меню трека');
@@ -455,6 +497,37 @@ try {
   await backInMusic.locator('[data-offline-clear="confirm"]').click();
   await backInMusic.locator('[data-music-offline="0"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: загруженное убирается по одному и целиком');
+
+  // ── Загруженный плейлист следует за составом: новое докачивается, убранное стирается ─
+  await backInMusic.locator('[data-view="albums"]').click();
+  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  const offAlbum = backInMusic.locator('[data-music-tracks]');
+  await pickTrackAction(page, offAlbum.locator('[data-track="t3"]'), 'Add to a playlist');
+  const offPicker = backInMusic.locator('[data-playlist-picker]');
+  await offPicker.getByPlaceholder('New playlist name').fill('Офлайн');
+  await offPicker.getByRole('button', { name: 'Create and add' }).click();
+  await backInMusic.locator('[data-playlist-picker="added"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offPicker.getByRole('button', { name: 'Close' }).click();
+  await backInMusic.locator('[data-view="playlists"]').click();
+  await backInMusic.locator('[data-music-playlists]').getByRole('button', { name: /Офлайн/ }).click();
+  const offList = backInMusic.locator('[data-music-playlist]');
+  await offList.locator('[data-track="t3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offList.locator('[data-music-save-offline]').click();
+  await offList.locator('[data-track="t3"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await backInMusic.locator('[data-view="albums"]').click();
+  await backInMusic.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
+  await pickTrackAction(page, offAlbum.locator('[data-track="t2"]'), 'Add to a playlist');
+  await offPicker.getByRole('button', { name: 'Офлайн', exact: true }).click();
+  await backInMusic.locator('[data-playlist-picker="added"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await offPicker.getByRole('button', { name: 'Close' }).click();
+  await offAlbum.locator('[data-track="t2"][data-music-offline-track="saved"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await backInMusic.locator('[data-view="playlists"]').click();
+  await backInMusic.locator('[data-music-playlists]').getByRole('button', { name: /Офлайн/ }).click();
+  await offList.getByRole('button', { name: 'Remove from the playlist: Соль' }).click();
+  await backInMusic.locator('[data-view="offline"]').click();
+  await backInMusic.locator('[data-music-offline="1"] [data-track="t2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  assert.equal(await backInMusic.locator('[data-music-offline] [data-track="t3"]').count(), 0, 'убранный из плейлиста трек стёрт');
+  console.log('OK: загруженный плейлист — новый трек докачан, убранный стёрт с устройства');
 
   assertNoPageErrors({ session });
   console.log('OK: модуль «Музыка»');

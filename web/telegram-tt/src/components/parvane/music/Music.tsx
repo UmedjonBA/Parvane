@@ -9,9 +9,11 @@ import type {
 import buildClassName from '../../../util/buildClassName';
 import { getParvaneSection } from '../../../util/parvaneSection';
 import { splitBytes, splitListTime } from './musicFormat';
+import { consumeMusicGoTo, getMusicGoTo } from './musicGoTo';
 import { saveTracksOffline } from './musicOffline';
+import { startOfflinePlaylistSync } from './musicOfflineSync';
 import {
-  addToQueue, callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks,
+  callMusic, getCurrentTrack, getMusicInfo, getMusicPlayer, getMusicRecent, loadMusicInfo, playTracks,
   restoreMusicQueue, setTrackStarred,
 } from './musicPlayer';
 import { openMusicPlayer } from './musicPlayerView';
@@ -124,10 +126,21 @@ const Music = () => {
   const isShown = section === 'music';
   const isOnline = useBrowserOnline();
 
+  // «К исполнителю» / «К альбому» из меню трека (строка могла стоять в плеере)
+  const goTo = useDerivedState(getMusicGoTo);
+  useEffect(() => {
+    if (!goTo) return;
+    setQuery('');
+    setView({ kind: goTo.kind, id: goTo.id });
+    consumeMusicGoTo();
+  }, [goTo]);
+
   useEffect(() => {
     if (!isShown || info) return;
     void loadMusicInfo().then((fresh) => {
-      if (fresh.isEnabled) void restoreMusicQueue();
+      if (!fresh.isEnabled) return;
+      void restoreMusicQueue();
+      startOfflinePlaylistSync();
     });
   }, [isShown, info]);
 
@@ -225,7 +238,6 @@ const Music = () => {
   const handleOpenPlaylist = useLastCallback((id?: string) => setView({ kind: 'playlists', id }));
   const handleClosePicker = useLastCallback(() => setPickerTrack(undefined));
   const handleCloseSend = useLastCallback(() => setSentTrack(undefined));
-  const handleAddNext = useLastCallback((track: MusicTrack) => addToQueue([track], true));
 
   const handleStar = useLastCallback((track: MusicTrack) => {
     const isStarred = !track.isStarred;
@@ -250,10 +262,10 @@ const Music = () => {
             index={index}
             isCurrent={track.id === current?.id}
             isPlaying={player.isPlaying}
+            canQueue
             canSaveOffline
             onPlay={onPlay}
             onStar={handleStar}
-            onAddNext={handleAddNext}
             onAddToPlaylist={setPickerTrack}
             onSendToChat={setSentTrack}
           />
@@ -280,7 +292,11 @@ const Music = () => {
             isCurrent={item.track.id === current?.id}
             isPlaying={player.isPlaying}
             note={isMine ? undefined : lang('MusicAddedBy', { name: item.adder })}
+            canQueue
+            canSaveOffline
             onPlay={handlePlayAdded}
+            onAddToPlaylist={setPickerTrack}
+            onSendToChat={setSentTrack}
             onDelete={isMine ? handleDeleteAdded : undefined}
           />
         ))}

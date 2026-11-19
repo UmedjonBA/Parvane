@@ -216,16 +216,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   // Заголовок экрана Settings → Devices (SettingsHeader)
   SessionsTitle: 'Devices',
   // Авто-линковка истории (Settings → Devices)
-  ParvaneLinkPendingTitle: 'Or confirm on another device',
-  ParvaneLinkPendingText: 'Waiting for your other device. Open Settings → Devices there and confirm code %@.',
-  ParvaneLinkPendingWait: 'Waiting for your other device. Open Settings → Devices there — '
-    + 'the verification code will appear on both devices.',
   // Новое устройство без других устройств аккаунта (ключ восстановления / сброс)
-  ParvaneRecoverTitle: 'No other device?',
-  ParvaneRecoverText: 'Enter your recovery key to sign this device in: your chats and planner will appear here '
-    + 'and your other devices stay signed in.',
   // Ключ восстановления через Telegram-бота (spec 015)
-  ParvaneTgRecoverTitle: 'Confirm in Telegram',
   ParvaneTgRecoverWaiting: 'The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key '
     + '(the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.',
   ParvaneTgRecoverCode: 'Verification code: %@. The bot message you reply to must show the same code; '
@@ -279,10 +271,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'key; until then new devices can\'t be added and contacts see a warning.',
   ParvaneLeftDeviceStolenDone: 'Device marked as stolen',
   ParvaneLeftDeviceStolenFailed: 'Could not mark the device as stolen',
-  ParvaneLinkRequests: 'History transfer requests',
-  ParvaneLinkOfferCode: 'Code: %@',
-  ParvaneLinkConfirm: 'Transfer message history to this device? Make sure it shows code %@.',
-  ParvaneLinkConfirmAction: 'Transfer',
   ParvaneLinkGranted: 'History transferred',
   ParvaneLinkFailed: 'History transfer failed',
   ParvaneKeysPasswordPrompt: 'Backup password',
@@ -539,13 +527,11 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneTwoFactorEnableConfirm: 'Enable two-factor',
   ParvaneSessionPasswordHint: 'Enter your current password to terminate the session.',
   ParvaneSessionTerminateFailed: 'Could not terminate the session. Check the password and try again.',
-  ParvaneChangePasswordTitle: 'Change password',
   ParvaneChangePasswordOld: 'Current password',
   ParvaneChangePasswordNew: 'New password (at least 8 characters)',
   ParvaneChangePasswordRepeat: 'Repeat new password',
   ParvaneChangePasswordButton: 'Change password',
   ParvaneGroupAddTitle: 'Groups',
-  ParvaneGroupAddToggle: 'Anyone can add me to groups',
   ParvaneGroupAddInfo: 'When off, you can only join groups yourself via an invite link.',
   ParvaneStoragePinTitle: 'Storage PIN',
   // spec 035 T046 (PV-020): перечень того, что лежит под PIN
@@ -576,15 +562,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneRateLimited: 'Too many actions, please slow down.',
   ParvaneUpgradeAvailable: 'A new version of Parvane is available. Update the app: '
     + 'this version will stop working soon.',
-  ParvaneStrangersToggle: 'Messages from people not in my contacts',
   ParvaneStrangersInfo: 'When off, only people you have written to can message you.',
-  ParvaneCallsToggle: 'Incoming calls',
   ParvaneCallsInfo: 'When off, nobody can call you: calls are declined without ringing.',
-  ParvaneCallsRelayToggle: 'Calls only through the server',
-  ParvaneCallsRelayInfo: 'Your IP address is hidden from the other side; the call may sound a bit worse. '
-    + 'This device only.',
-  ParvanePresenceToggle: 'Show when I am online',
-  ParvanePresenceInfo: 'When off, others do not see whether you are online.',
   ParvaneL2Toggle: 'Enhanced privacy',
   ParvaneL2Info: 'Message sizes are padded to a fixed grid; typing and online status are not sent in this chat. '
     + 'The mode is visible to all participants.',
@@ -1621,14 +1600,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   'Common.Done': 'Готово',
   ParvaneCreatePack: 'Создать набор стикеров',
   SessionsTitle: 'Устройства',
-  ParvaneLinkPendingTitle: 'Или подтвердите на другом устройстве',
-  ParvaneLinkPendingText: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код %@.',
-  ParvaneLinkPendingWait: 'Ждём ваше другое устройство. Откройте там Настройки → Устройства — '
-    + 'код сверки появится на обоих устройствах.',
-  ParvaneRecoverTitle: 'Нет другого устройства?',
-  ParvaneRecoverText: 'Введите ключ восстановления, чтобы подключить это устройство: здесь появятся ваши чаты и '
-    + 'план, а другие устройства останутся подключены.',
-  ParvaneTgRecoverTitle: 'Подтвердите вход в Telegram',
   ParvaneTgRecoverWaiting: 'Бот Parvane отправил вам сообщение в Telegram. Ответьте на него ключом восстановления '
     + '(бот присылал ключ в этот же чат) — на этом устройстве появятся ваши чаты и план.',
   ParvaneTgRecoverCode: 'Код сверки: %@. В сообщении бота, на которое вы отвечаете, должен быть такой же код; '
@@ -1682,10 +1653,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'ключ восстановления; до смены новые устройства не добавляются, а собеседники видят предупреждение.',
   ParvaneLeftDeviceStolenDone: 'Устройство отмечено украденным',
   ParvaneLeftDeviceStolenFailed: 'Не удалось отметить устройство украденным',
-  ParvaneLinkRequests: 'Запросы на перенос истории',
-  ParvaneLinkOfferCode: 'Код: %@',
-  ParvaneLinkConfirm: 'Перенести историю сообщений на это устройство? Убедитесь, что на нём показан код %@.',
-  ParvaneLinkConfirmAction: 'Перенести',
   ParvaneLinkGranted: 'История перенесена',
   ParvaneLinkFailed: 'Не удалось перенести историю',
   ParvaneKeysPasswordPrompt: 'Пароль резервной копии',
@@ -1972,13 +1939,11 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneTwoFactorEnableConfirm: 'Включить двухфакторный вход',
   ParvaneSessionPasswordHint: 'Введите текущий пароль, чтобы завершить сеанс.',
   ParvaneSessionTerminateFailed: 'Не удалось завершить сеанс. Проверьте пароль и попробуйте ещё раз.',
-  ParvaneChangePasswordTitle: 'Смена пароля',
   ParvaneChangePasswordOld: 'Текущий пароль',
   ParvaneChangePasswordNew: 'Новый пароль (не короче 8 символов)',
   ParvaneChangePasswordRepeat: 'Повторите новый пароль',
   ParvaneChangePasswordButton: 'Сменить пароль',
   ParvaneGroupAddTitle: 'Группы',
-  ParvaneGroupAddToggle: 'Кто угодно может добавить меня в группу',
   ParvaneGroupAddInfo: 'Если выключено, попасть в группу можно только самому по инвайт-ссылке.',
   ParvaneStoragePinTitle: 'PIN хранилища',
   ParvaneStoragePinInfo: 'Необязательный PIN, которым шифруется всё, что этот браузер хранит для аккаунта: E2E-ключи, '
@@ -2004,14 +1969,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneSecurityKeyDevice: 'Устройство %@',
   ParvaneRateLimited: 'Слишком много действий, подождите немного.',
   ParvaneUpgradeAvailable: 'Доступна новая версия Parvane. Обновите приложение: эта версия скоро перестанет работать.',
-  ParvaneStrangersToggle: 'Сообщения от тех, кого нет в контактах',
   ParvaneStrangersInfo: 'Если выключено, писать вам могут только те, кому писали вы.',
-  ParvaneCallsToggle: 'Входящие звонки',
   ParvaneCallsInfo: 'Если выключено, вам никто не может позвонить: вызовы отклоняются без звонка.',
-  ParvaneCallsRelayToggle: 'Звонки только через сервер',
-  ParvaneCallsRelayInfo: 'Собеседник не видит ваш IP-адрес; звук может стать чуть хуже. Только на этом устройстве.',
-  ParvanePresenceToggle: 'Показывать, что я в сети',
-  ParvanePresenceInfo: 'Если выключено, другие не видят, в сети ли вы.',
   ParvaneL2Toggle: 'Усиленная приватность',
   ParvaneL2Info: 'Размеры сообщений выравниваются по фиксированной сетке, «печатает» и статус «в сети» в этом чате '
     + 'не передаются. Режим виден всем участникам.',

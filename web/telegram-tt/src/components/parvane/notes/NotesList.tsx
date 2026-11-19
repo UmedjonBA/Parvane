@@ -13,12 +13,16 @@ import {
 import {
   displayTitle, folderColor, formatDayShort, isDayTitle, previewOf,
 } from './notesLook';
+import { sortPinnedFirst } from './notesMeta';
 import { nearestPlanned, plannedOf } from './notesPlanned';
+import { getNotesMeta } from './notesStore';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import NoteUnsentMark from './NoteUnsentMark';
 import PvEmpty from './PvEmpty';
 import PvIcon from './PvIcon';
 
@@ -74,11 +78,13 @@ const NotesList = ({
   const lang = useLang();
 
   const groups = useMemo(() => buildNoteGroups({ notes, folders, dailyFolders: DAILY_FOLDERS }), [notes, folders]);
-  const recent = useMemo(() => sortByRecent(notes), [notes]);
+  // Закреплённые заметки (меню заметки «Закрепить вверху») стоят первыми
+  const { pinned } = useDerivedState(getNotesMeta);
+  const recent = useMemo(() => sortPinnedFirst(sortByRecent(notes), pinned), [notes, pinned]);
   const openGroup = found ? undefined : groups.find(({ key }) => key === openGroupKey);
   const groupNotes = useMemo(() => (
-    openGroup && !openGroup.isDaily ? sortByRecent(openGroup.items) : openGroup?.items
-  ), [openGroup]);
+    openGroup && !openGroup.isDaily ? sortPinnedFirst(sortByRecent(openGroup.items), pinned) : openGroup?.items
+  ), [openGroup, pinned]);
   // Папки показываются, когда есть что выбирать: одна «Без папки» — это просто список
   const hasFolders = groups.some((group) => group.isDaily || group.folder !== ROOT_FOLDER);
 
@@ -144,6 +150,7 @@ const NotesList = ({
     const folder = !hasFolder ? undefined
       : isDaily ? lang('KnowledgeDailyFolder') : note.folder ? folderCaption(note.folder) : undefined;
     const meta = [
+      pinned.includes(note.id) ? lang('KnowledgePinned') : undefined,
       folder,
       tag && `#${tag}`,
       linkCount ? lang('KnowledgeLinksCount', { count: linkCount }, { pluralValue: linkCount }) : undefined,
@@ -158,6 +165,7 @@ const NotesList = ({
         data-id={note.id}
         data-note-row={note.title}
         data-row-folder={note.folder}
+        data-pinned={pinned.includes(note.id) || undefined}
         onClick={handlePick}
         onDragStart={handleDragStart}
       >
@@ -167,6 +175,7 @@ const NotesList = ({
         </span>
         <span className={styles.rowPreview}>{previewOf(note) || lang('KnowledgeNoteEmpty')}</span>
         {meta && <span className={styles.rowMeta}>{meta}</span>}
+        <NoteUnsentMark noteId={note.id} />
       </button>
     );
   }

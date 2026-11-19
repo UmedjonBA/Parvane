@@ -1028,27 +1028,6 @@
   color: var(--pv-muted);
 }
 
-.dropZone {
-  pointer-events: none;
-
-  position: absolute;
-  z-index: 2;
-  inset: 0.5rem;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border: 0.125rem dashed var(--pv-accent);
-  border-radius: var(--pv-radius);
-
-  font-size: 1.125rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--pv-at);
-
-  background: color-mix(in srgb, var(--pv-panel) 88%, var(--pv-accent));
-}
-
 // Короткое сообщение поверх раздела: «Отправлено», «Сохранено», отказ
 .notice {
   cursor: var(--custom-cursor, pointer);

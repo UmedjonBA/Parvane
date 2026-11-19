@@ -9,8 +9,8 @@ import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
-  validateEvent,
+  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, instanceKey, removeSeries, splitSeries, toDayKey,
+  toMinutes, toTime, truncateSeries, updateSeries, validateEvent,
 } from './plannerModel';
 import {
   changedFields, detachWithDescription, getDescriptionScope, patchCopies, seriesOfCopy,
@@ -29,6 +29,7 @@ import TextArea from '../../ui/TextArea';
 import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
+import PlannerFreeTime from './PlannerFreeTime';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRemindSelect from './PlannerRemindSelect';
 import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
@@ -93,6 +94,7 @@ const PlannerEventEditor = ({
   );
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState<Pending>();
+  const [today] = useState(() => toDayKey(new Date()));
 
   const isInstance = Boolean(event.repeat && event.instanceDay);
 
@@ -289,6 +291,14 @@ const PlannerEventEditor = ({
       : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
 
   const hasDate = !event.repeat || isInstance;
+  const spanMinutes = toMinutes(end) - toMinutes(start);
+
+  // Окно из «Найти свободное время» ставится в поля формы; запись — по «Сохранить»
+  const handleFreeSlot = useLastCallback((slotDay: string, slotStart: number, slotEnd: number) => {
+    setDay(slotDay);
+    setStart(toTime(slotStart));
+    setEnd(toTime(slotEnd));
+  });
 
   return (
     <form className={buildClassName(styles.editor, styles.eventCard)} onSubmit={handleSubmit}>
@@ -318,6 +328,18 @@ const PlannerEventEditor = ({
           <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
         </div>
       </PlannerCardRow>
+
+      {hasDate && !isAllDay && (
+        <PlannerFreeTime
+          state={state}
+          name={name.trim() || event.name}
+          minutes={spanMinutes > 0 ? spanMinutes : undefined}
+          fromDay={day || today}
+          today={today}
+          exceptKey={instanceKey(event)}
+          onPick={handleFreeSlot}
+        />
+      )}
 
       <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
 

@@ -1,7 +1,11 @@
 import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { OfflineHolds } from './musicOfflineHolds';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
 import { createSignal } from '../../../util/signals';
+import {
+  addHolds, dropHolds, EMPTY_HOLDS,
+} from './musicOfflineHolds';
 import { callMusic } from './musicPlayer';
 
 // Parvane (spec 039, 041 C3): «Загруженное» — треки, сохранённые на устройстве для игры без сети. Файл трека
@@ -24,6 +28,8 @@ export type OfflineState = {
 
 const CACHE_NAME = 'parvane-music-offline';
 const INDEX_KEY = 'parvane:music-offline';
+// Почему треки на устройстве: загруженные плейлисты и их состав (`musicOfflineHolds.ts`)
+const HOLDS_KEY = 'parvane:music-offline-holds';
 // Сколько места на устройстве отдано под загруженное
 export const OFFLINE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
@@ -36,15 +42,39 @@ const objectUrls = new Map<string, string>();
 let isRunning = false;
 // Трек, который качается сейчас (из очереди он уже взят)
 let currentId: string | undefined;
+let holds = readHolds();
 
 // Выход из аккаунта: файлы стёрты вместе с кэшем (`deviceWipe.ts`), в памяти вкладки их списка тоже нет
 if (typeof window !== 'undefined') window.addEventListener(ACCOUNT_WIPED_EVENT, forgetOffline);
 
 function forgetOffline() {
+  holds = EMPTY_HOLDS;
   queue.length = 0;
   objectUrls.forEach((url) => URL.revokeObjectURL(url));
   objectUrls.clear();
   setOfflineState({ entries: [], pending: 0, total: 0 });
+}
+
+function readHolds(): OfflineHolds {
+  try {
+    const saved = localStorage.getItem(HOLDS_KEY);
+    return saved ? JSON.parse(saved) as OfflineHolds : EMPTY_HOLDS;
+  } catch {
+    return EMPTY_HOLDS;
+  }
+}
+
+export function getOfflineHolds() {
+  return holds;
+}
+
+export function setOfflineHolds(next: OfflineHolds) {
+  holds = next;
+  try {
+    localStorage.setItem(HOLDS_KEY, JSON.stringify(next));
+  } catch {
+    // Память устройства недоступна: загруженные плейлисты сверяются до перезагрузки
+  }
 }
 
 function readIndex(): OfflineEntry[] {
@@ -101,8 +131,15 @@ export async function loadOfflineUrl(trackId: string) {
   }
 }
 
-/** Сохранить треки на устройстве: уже сохранённые и стоящие в очереди пропускаются. */
-export function saveTracksOffline(tracks: MusicTrack[]) {
+/** Сохранить треки на устройстве: уже сохранённые и стоящие в очереди пропускаются. `playlistId` — загружается
+ * плейлист целиком (`tracks` — весь его состав): дальше он следует за составом (`musicOfflineSync.ts`). */
+export function saveTracksOffline(tracks: MusicTrack[], playlistId?: string) {
+  setOfflineHolds(addHolds(holds, tracks.map((track) => track.id), playlistId));
+  queueOfflineTracks(tracks);
+}
+
+/** Докачать треки, отметки которых уже стоят (сверка загруженного плейлиста). */
+export function queueOfflineTracks(tracks: MusicTrack[]) {
   const fresh = tracks.filter((track) => !isTrackOffline(track.id) && !queue.some((item) => item.id === track.id));
   if (!fresh.length) return;
   queue.push(...fresh);
@@ -154,6 +191,7 @@ async function saveOne(track: MusicTrack): Promise<'saved' | 'limit' | 'failed'>
 export async function removeOffline(trackIds?: string[]) {
   const state = getOfflineState();
   const gone = trackIds || state.entries.map((entry) => entry.track.id);
+  setOfflineHolds(dropHolds(holds, trackIds));
   try {
     const cache = await caches.open(CACHE_NAME);
     await Promise.all(gone.map((id) => cache.delete(requestOf(id))));

@@ -2,6 +2,7 @@ import type { NotifyButton, NotifyData, NotifyKind } from './systemNotify';
 
 import { APP_NAME } from '../config';
 import { getTranslationFn } from './localization';
+import { getIsNotifyAllowedNow } from './notifyPrefs';
 import { buildNotifyButtons, buildNotifyTitle } from './systemNotify';
 
 // Системные уведомления, которые показывает открытое приложение (spec 041 F2, доска `ZpSystem`): звонок и
@@ -30,7 +31,7 @@ export function buildPageNotifyButtons(kind: NotifyKind) {
 
 /** Входящий звонок, когда окно скрыто или не в фокусе: «Parvane · Звонок», «Ответить» и «Отклонить». */
 export function showCallNotification(callId: string, peerName: string) {
-  if (document.visibilityState === 'visible' && document.hasFocus()) return;
+  if ((document.visibilityState === 'visible' && document.hasFocus()) || !getIsNotifyAllowedNow('chats')) return;
   const lang = getTranslationFn();
   void showPageNotification(buildNotifyTitle(APP_NAME, lang('NotifyModuleCall')), {
     body: lang('NotifyCallFrom', { name: peerName }),
@@ -48,7 +49,7 @@ export function closeCallNotification() {
 
 /** Напоминание «Плана» при скрытом окне: «Parvane · План», текст, «Готово» и «Через 10 мин». */
 export function showReminderNotification({ key, title, text }: { key: string; title: string; text: string }) {
-  if (document.visibilityState === 'visible') return;
+  if (document.visibilityState === 'visible' || !getIsNotifyAllowedNow('plan')) return;
   const lang = getTranslationFn();
   void showPageNotification(buildNotifyTitle(APP_NAME, lang('ParvaneSectionPlanner')), {
     body: text,

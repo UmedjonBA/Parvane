@@ -74,6 +74,8 @@ const CloudContainerRowBase = ({
       data-container-id={info.id}
       data-container-kind={info.kind}
       data-name={info.name}
+      data-drop-container={info.role === 'owner' || info.role === 'editor' ? info.id : undefined}
+      data-drop-name={name}
       onClick={handleOpen}
       onContextMenu={handleContextMenu}
       onKeyDown={handleKeyDown}

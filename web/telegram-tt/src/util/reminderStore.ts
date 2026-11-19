@@ -10,6 +10,8 @@ const DATA_RECORD = 'data';
 const SHOWN_RECORD = 'shown';
 // Отложенные «Через 10 мин» (spec 041 F2): страница добавляет их к ближайшим в `DATA_RECORD` сама
 const SNOOZE_RECORD = 'snoozed';
+// Настройки уведомлений устройства (`notifyPrefs.ts`): без секретов, открыто — service worker решает по ним, показывать ли
+const NOTIFY_PREFS_RECORD = 'notify-prefs';
 // Пробуждение приходит не точно в срок: сработавшим считается всё, что наступит в ближайшую минуту
 const EARLY_MS = 60 * 1000;
 // Старое (устройство было выключено) не показывается — его допишет в «Избранное» открытое приложение
@@ -92,6 +94,28 @@ export async function loadWorkerSnoozes(): Promise<WorkerReminder[]> {
     return await readSealed(db, SNOOZE_RECORD);
   } catch {
     return [];
+  } finally {
+    db.close();
+  }
+}
+
+/** Страница: настройки уведомлений для service worker (заменяют прежние). */
+export async function saveWorkerNotifyPrefs(prefs: unknown) {
+  const db = await openDb();
+  try {
+    await write(db, NOTIFY_PREFS_RECORD, prefs);
+  } finally {
+    db.close();
+  }
+}
+
+/** Service worker: настройки уведомлений, как их записала страница (разбирает `systemNotify.ts readNotifyPrefs`). */
+export async function loadWorkerNotifyPrefs(): Promise<unknown> {
+  const db = await openDb();
+  try {
+    return await read<unknown>(db, NOTIFY_PREFS_RECORD);
+  } catch {
+    return undefined;
   } finally {
     db.close();
   }

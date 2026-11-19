@@ -88,6 +88,7 @@ import useBackgroundMode from '../../hooks/window/useBackgroundMode';
 import useBeforeUnload from '../../hooks/window/useBeforeUnload';
 import { useFullscreenStatus } from '../../hooks/window/useFullscreen';
 
+import AuthRecoveryKey from '../auth/AuthRecoveryKey';
 import CustomEmojiSetsModal from '../common/CustomEmojiSetsModal.async';
 import DeleteMessageModal from '../common/DeleteMessageModal.async';
 import StickerSetModal from '../common/StickerSetModal.async';
@@ -478,31 +479,6 @@ const Main = ({
       });
     window.addEventListener(DATA_TOO_NEW_EVENT, handleDataTooNew);
     return () => window.removeEventListener(DATA_TOO_NEW_EVENT, handleDataTooNew);
-  }, [showDialog]);
-
-  // Parvane: ключ восстановления корня (spec 007, D-12) — показать один раз
-  useEffect(() => {
-    const handleRecoveryKey = async () => {
-      const result = await (callApi as unknown as (name: string) => Promise<{
-        recoveryKey: string; hasEscrow?: boolean;
-      } | undefined>)('parvaneTakeRecoveryKey');
-      if (!result) return;
-      // Окно показывается, только когда ключ не ушёл владельцу в Telegram (spec 015). Сервер
-      // держит копию корня для администратора — потерянный ключ выпишут заново
-      const variables = { key: result.recoveryKey };
-      showDialog({
-        data: {
-          type: 'localized',
-          text: result.hasEscrow
-            ? { key: 'ParvaneRecoveryKeyAdmin', variables }
-            : { key: 'ParvaneRecoveryKey', variables },
-        },
-      });
-    };
-    // Ключ мог появиться до монтирования Main
-    void handleRecoveryKey();
-    window.addEventListener('parvane-recovery-key', handleRecoveryKey);
-    return () => window.removeEventListener('parvane-recovery-key', handleRecoveryKey);
   }, [showDialog]);
 
   // Parvane: сервер скоро отключит эту версию (E6) — мягкое напоминание
@@ -940,6 +916,7 @@ const Main = ({
       <ForwardRecipientPicker isOpen={isForwardModalOpen} />
       <DraftRecipientPicker requestedDraft={requestedDraft} />
       <ParvaneSystemHost />
+      <AuthRecoveryKey />
       <Dialogs />
       <AudioPlayer noUi />
       <ModalContainer />

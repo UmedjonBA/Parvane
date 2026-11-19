@@ -19,11 +19,13 @@ import {
   setParvaneSection,
 } from '../../../util/parvaneSection';
 import { formatFileSize } from '../../../util/textFormat';
+import { dropPlaceTitle } from './cloudDrop';
 import {
   childrenOf, fileTypeLabel, folderStats, listedNodes, pathOf, searchNodes, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
 import {
-  canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId, getCloudData,
+  canEditContainer, copyCloudNode, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
+  getCloudData,
   getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudUsage, getContainer,
   getHasCloudTransfers, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder, linkOfSource,
   loadCloud, moveCloudNodes, moveCloudNodesAcross, peerLabel, purgeCloudNodes, refreshCloud, refreshCloudLinks,
@@ -31,6 +33,7 @@ import {
   revokeDeadCloudLinks, setCloudActive, setCloudPlace, setCloudPrefs,
   shareCloudFolder, trashCloudNodes, uploadCloudFiles,
 } from './cloudStore';
+import useCloudDrag from './useCloudDrag';
 import useCloudOffline from './useCloudOffline';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -38,6 +41,7 @@ import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
@@ -49,10 +53,12 @@ import PvSkeleton from '../notes/PvSkeleton';
 import SectionHistoryBack from '../SectionHistoryBack';
 import CloudDetail from './CloudDetail';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
+import CloudDropZone from './CloudDropZone';
 import CloudItem from './CloudItem';
 import CloudLinkDialog from './CloudLinkDialog';
 import CloudMenu from './CloudMenu';
 import CloudNav from './CloudNav';
+import CloudNoteDialog from './CloudNoteDialog';
 import CloudPreview from './CloudPreview';
 import { CloudContainerRow, CloudInviteCard, CloudLinkRow } from './CloudRows';
 import CloudSendDialog from './CloudSendDialog';
@@ -62,6 +68,7 @@ import CloudUsage, { getIsCloudAlmostFull } from './CloudUsage';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
+import dragStyles from './CloudDrag.module.scss';
 
 type OwnProps = {
   isMobile?: boolean;
@@ -83,7 +90,8 @@ type Dialog =
   | { type: 'shareFolder'; entry: Entry }
   | { type: 'leave'; container: string }
   | { type: 'link'; target: CloudLinkTarget }
-  | { type: 'send'; entries: Entry[] };
+  | { type: 'send'; entries: Entry[] }
+  | { type: 'note'; entry: Entry };
 
 const SORT_KEYS: CloudSortKey[] = ['name', 'date', 'size'];
 // Просмотр держит файл в памяти: на телефоне предел ниже
@@ -101,6 +109,15 @@ const SORT_SHORT_KEYS = {
 } as const;
 const SORT_TITLE_KEYS = {
   name: 'ParvaneCloudSortName', date: 'ParvaneCloudSortDate', size: 'ParvaneCloudSortSize',
+} as const;
+// Пустое место (доска `PhStates`: заголовок и что здесь бывает): подсказка под заголовком
+const EMPTY_HINT_KEYS = {
+  ParvaneCloudEmpty: 'ParvaneCloudEmptyHint',
+  ParvaneCloudEmptyFolder: 'ParvaneCloudEmptyHint',
+  ParvaneCloudEmptyTrash: 'ParvaneCloudEmptyTrashHint',
+  ParvaneCloudEmptyShared: 'ParvaneCloudEmptySharedHint',
+  ParvaneCloudEmptyOwned: 'ParvaneCloudEmptyOwnedHint',
+  ParvaneCloudLinksEmpty: 'ParvaneCloudLinksEmptyHint',
 } as const;
 const VIEW_KEYS = {
   owned: 'ParvaneCloudTabOwned',
@@ -147,9 +164,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const [dialog, setDialog] = useState<Dialog>();
   const [preview, setPreview] = useState<Entry>();
   const [menu, setMenu] = useState<MenuTarget>();
-  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>();
-  const dragDepthRef = useRef(0);
+  // «Вложить в заметку» нет, если «Заметки» выключены сервером (MODULES-1)
+  const notesModule = useParvaneModules().states.find((m) => m.id === 'notes');
+  const canAttachToNote = Boolean(notesModule && !notesModule.isServerOff && !notesModule.isUnavailable);
 
   const currentUserId = useSelector(selectCurrentUserId);
   const { width: windowWidth } = useWindowSize();
@@ -370,6 +388,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (action === 'purge') setDialog({ type: 'purge', entries: [entry] });
     if (action === 'send') setDialog({ type: 'send', entries: [entry] });
     if (action === 'share') setDialog({ type: 'shareFolder', entry });
+    if (action === 'copy') void copyCloudNode(entryContainer, node);
+    if (action === 'note') setDialog({ type: 'note', entry });
     if (action === 'link') {
       setDialog({ type: 'link', target: { source: { container: entryContainer, node: node.id, name: node.name } } });
     }
@@ -513,31 +533,14 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (files.length) uploadCloudFiles(files);
   });
 
-  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types || []).includes('Files');
-
-  const handleDragEnter = useLastCallback((e: React.DragEvent) => {
-    if (!canEdit || !hasFiles(e)) return;
-    e.preventDefault();
-    dragDepthRef.current += 1;
-    setIsDragging(true);
-  });
-
-  const handleDragOver = useLastCallback((e: React.DragEvent) => {
-    if (canEdit && hasFiles(e)) e.preventDefault();
-  });
-
-  const handleDragLeave = useLastCallback(() => {
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (!dragDepthRef.current) setIsDragging(false);
-  });
-
-  const handleDrop = useLastCallback((e: React.DragEvent) => {
-    dragDepthRef.current = 0;
-    setIsDragging(false);
-    if (!canEdit || !hasFiles(e)) return;
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer?.files || []);
-    if (files.length) uploadCloudFiles(files);
+  // Перетаскивание: файлы с компьютера — в открытую папку, строки (компьютер) — на папку
+  const drag = useCloudDrag({
+    canUpload: canEdit && status !== 'needs-linking' && status !== 'loading',
+    selected: selectedEntries,
+    getEntry: (id, nodeId) => entries.find((e) => e.container === id && e.node.id === nodeId),
+    canEdit: (id) => canEditContainer(id, data),
+    nodesOf: (id) => getNodes(id, data),
+    onUpload: uploadCloudFiles,
   });
 
   const handleSort = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -599,6 +602,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const previewSiblings = entries.filter((entry) => entry.node.kind === 'file');
   const navPlace: CloudNavPlace = place.view || 'drive';
   const hasFileColumns = !isTrash && !isLinksList && !isOwnedList && !isSharedList;
+  // Строки тащат мышью на компьютере; на телефоне перенос — выделением и «Переместить»
+  const canDragRows = !isNarrow && !IS_TOUCH_ENV && !isTrash;
 
   const dayText = (seconds: number) => new Date(seconds * 1000)
     .toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '');
@@ -661,23 +666,37 @@ const Cloud = ({ isMobile }: OwnProps) => {
       !isFolder && item(
         'download', 'download', lang('ParvaneCloudDownload'), undefined, formatFileSize(lang, entry.node.size),
       ),
-      canEditThis && item('rename', 'edit', lang('ParvaneCloudRename')),
-      canEditThis && !isFixed && item('move', 'move', lang('ParvaneCloudMove')),
       // Ссылка для людей без аккаунта (spec 022): личный диск либо совместная папка с правом правки
       canEditThis && item('link', 'link', lang('ParvaneCloudLink'), undefined, linkHint),
       isFolder && canEditThis && entry.container === data?.rootId
       && item('share', 'users', lang('KnowledgeFilesShareOpen')),
+      canEditThis && item('rename', 'edit', lang('ParvaneCloudRename')),
+      canEditThis && !isFixed && item('move', 'move', lang('ParvaneCloudMove')),
+      canEditThis && !isFixed && item('copy', 'copy', lang('ParvaneCloudMakeCopy')),
       !isFolder && item('send', 'chat', lang('ParvaneCloudSendToChat')),
+      !isFolder && canAttachToNote && item('note', 'note', lang('ParvaneCloudAttachToNote')),
       IS_TOUCH_ENV && item('select', 'check', lang('ParvaneCloudSelect')),
       canEditThis && !isFixed && item('delete', 'trash', lang('ParvaneCloudToTrash'), true),
     ].filter((action): action is CloudMenuAction => Boolean(action));
   };
 
-  function renderCrumb(key: string, title: string, onClick: NoneToVoidFunction, isFirst?: boolean) {
+  // Ступень пути принимает перетащенные строки, если за ней папка (`dropFolder` — пусто у корня контейнера)
+  function renderCrumb(
+    key: string, title: string, onClick: NoneToVoidFunction, isFirst?: boolean, dropFolder?: string,
+  ) {
     return (
       <span key={key} className={styles.pathStep}>
         {!isFirst && <i className={styles.pathSlash} aria-hidden="true">/</i>}
-        <button type="button" className={styles.pathLink} onClick={onClick}>{title}</button>
+        <button
+          type="button"
+          className={styles.pathLink}
+          data-drop-container={dropFolder !== undefined ? containerId : undefined}
+          data-drop-folder={dropFolder || undefined}
+          data-drop-name={title}
+          onClick={onClick}
+        >
+          {title}
+        </button>
       </span>
     );
   }
@@ -687,9 +706,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
       <nav className={buildClassName(styles.path, className)} aria-label={lang('ParvaneCloudPath')}>
         {renderCrumb(
           'place', place.view ? virtualName(place.view) : lang('ParvaneCloudTabDrive'), handleOpenView, true,
+          place.view ? undefined : '',
         )}
-        {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
-        {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
+        {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder(), undefined, '')}
+        {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id), undefined, n.id))}
       </nav>
     );
   }
@@ -802,13 +822,21 @@ const Cloud = ({ isMobile }: OwnProps) => {
       data-sync-status={status}
       data-loaded={isLoaded ? '1' : '0'}
       data-place={isVirtual ? place.view : 'drive'}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragStart={drag.handlers.onDragStart}
+      onDragEnd={drag.handlers.onDragEnd}
+      onDragEnter={drag.handlers.onDragEnter}
+      onDragOver={drag.handlers.onDragOver}
+      onDragLeave={drag.handlers.onDragLeave}
+      onDrop={drag.handlers.onDrop}
     >
       {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
-      <CloudNav place={navPlace} counts={navCounts} footer={isNarrow ? undefined : usageBlock} onPick={handleNav} />
+      <CloudNav
+        place={navPlace}
+        counts={navCounts}
+        driveId={data?.rootId}
+        footer={isNarrow ? undefined : usageBlock}
+        onPick={handleNav}
+      />
       <header className={styles.head}>
         {selectedEntries.length > 0 ? renderSelection() : (
           <>
@@ -985,6 +1013,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
                   isNarrow={isNarrow}
                   isVault={isVault(entry)}
                   isIncoming={getContainer(entry.container, data)?.kind === 'shared'}
+                  isDraggable={canDragRows && canEditEntry(entry) && !isVault(entry)}
+                  isDropTarget={!isTrash && canEditEntry(entry)}
                   onOpen={handleOpen}
                   onToggle={handleToggle}
                   onMenu={handleMenu}
@@ -997,10 +1027,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
         {isLoaded && !hasRows && !hasTransfers && (
           <PvEmpty
             title={lang(emptyKey)}
-            text={emptyKey === 'ParvaneCloudEmpty' ? lang('ParvaneCloudEmptyHint')
-              : emptyKey === 'ParvaneCloudLinksEmpty' ? lang('ParvaneCloudLinksEmptyHint') : undefined}
-            actionText={emptyKey === 'ParvaneCloudEmpty' && canAdd ? lang('ParvaneCloudUpload') : undefined}
-            data-cloud-empty
+            text={emptyKey === 'ParvaneCloudNothingFound' ? undefined : lang(EMPTY_HINT_KEYS[emptyKey])}
+            actionText={canAdd && !isSearch ? lang('ParvaneCloudUpload') : undefined}
+            data-cloud-empty={emptyKey}
             onAction={handlePickFiles}
           />
         )}
@@ -1013,7 +1042,12 @@ const Cloud = ({ isMobile }: OwnProps) => {
           </div>
         )}
         {isNarrow && usageBlock}
-        {isDragging && <div className={styles.dropZone}>{lang('ParvaneCloudDropHere')}</div>}
+        {drag.rowDrag && (
+          <div className={dragStyles.toast} role="status" data-cloud-drag-hint>
+            {drag.rowDrag.target
+              ? lang('ParvaneCloudDragOnto', { name: drag.rowDrag.target }) : lang('ParvaneCloudDragHint')}
+          </div>
+        )}
         {notice && (
           <div className={styles.notice} role="alert" onClick={hideCloudNotice}>
             {notice.code === 'saved' ? lang('ParvaneCloudSavedToCloud')
@@ -1021,6 +1055,17 @@ const Cloud = ({ isMobile }: OwnProps) => {
           </div>
         )}
       </div>
+      {drag.uploadCount !== undefined && (
+        <CloudDropZone
+          place={dropPlaceTitle(
+            place.view ? virtualName(place.view) : lang('ParvaneCloudTabDrive'),
+            container && containerName(container),
+            nodes,
+            place.folder,
+          )}
+          count={drag.uploadCount}
+        />
+      )}
       {current && (
         <CloudDetail
           container={current.container}
@@ -1110,6 +1155,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
         entries={dialog?.type === 'send' ? dialog.entries : undefined}
         onClose={handleCloseDialog}
       />
+      <CloudNoteDialog entry={dialog?.type === 'note' ? dialog.entry : undefined} onClose={handleCloseDialog} />
       <CloudPreview
         container={preview?.container}
         node={preview?.node}

@@ -557,9 +557,10 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
   /** Перенести узлы со всем вложенным в другой контейнер: копия в назначение,
    * удаление в источнике (FR-032). `wrapper` — папка источника, чьё содержимое
    * переносится, а сама она стирается. Блобы копируются на сервере: общий блоб
-   * двух контейнеров стёрло бы устройство, увидевшее удаление в источнике. */
+   * двух контейнеров стёрло бы устройство, увидевшее удаление в источнике. `isCopy` — «Сделать копию»: то же
+   * самое без удаления в источнике (`from` и `to` могут совпадать). */
   async function moveNodes(args: {
-    from: string; items: CloudMoveItem[]; to: string; parent?: string; wrapper?: string;
+    from: string; items: CloudMoveItem[]; to: string; parent?: string; wrapper?: string; isCopy?: boolean;
     signal?: AbortSignal; onProgress?: (done: number, total: number) => void;
   }) {
     const cloud = deps.cloud();
@@ -646,11 +647,17 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       }
       // Источник стирается только после того, как сервер принял узлы назначения
       if (!await cloud.flush(args.to)) throw new V2Error('ERROR_CODE_FORBIDDEN');
-      await cloud.apply(args.from, purges);
-      await cloud.flush(args.from);
+      if (!args.isCopy) {
+        await cloud.apply(args.from, purges);
+        await cloud.flush(args.from);
+      }
       usage = undefined;
       done += bytes;
       args.onProgress?.(done, total);
+    }
+    if (args.isCopy) {
+      if (folders.length) await cloud.flush(args.to);
+      return total;
     }
     const at = Date.now();
     const tail: unknown[] = rescued.map((n) => ({
@@ -1029,19 +1036,27 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       try {
         const existing = args.node ? findNode(args.container, args.node) : undefined;
         if (args.node && !existing) return { ok: false, error: 'not-found' };
-        if (existing?.blob && args.expectedFileId && existing.blob.fileId !== args.expectedFileId) {
-          const current = await loadBlob(existing.blob, existing.mime || TEXT_MIME);
-          if (!current) return { ok: false, error: 'offline' };
+        // Узел изменился с той версии, от которой шла правка: запись не делается, возвращается текущее содержимое
+        const readConflict = async () => {
+          const node = args.node ? findNode(args.container, args.node) : undefined;
+          if (!node?.blob || !args.expectedFileId || node.blob.fileId === args.expectedFileId) return undefined;
+          const current = await loadBlob(node.blob, node.mime || TEXT_MIME);
+          if (!current) return { ok: false as const, error: 'offline' as const };
           return {
-            ok: true,
+            ok: true as const,
             container: args.container,
             node: args.node!,
-            fileId: existing.blob.fileId,
+            fileId: node.blob.fileId,
             conflict: await current.text(),
           };
-        }
+        };
+        const before = await readConflict();
+        if (before) return before;
         const mime = args.mime || TEXT_MIME;
         const uploaded = await uploadCloudBlob(deps.transport(), new Blob([args.text], { type: mime }));
+        // Загрузка могла ждать связи: за это время дерево догнало чужую правку — проверить ещё раз перед записью
+        const after = await readConflict();
+        if (after) return after;
         const blob = {
           fileId: uploaded.fileId,
           key: uploaded.key,
@@ -1214,6 +1229,19 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     }): Promise<CloudResult> {
       const error = await runMove(transferId, (signal, onProgress) => moveNodes({
         from, items, to, parent, signal, onProgress,
+      }));
+      return error ? { ok: false, error } : { ok: true };
+    },
+
+    /** Копия узлов со всем вложенным (серверные копии блобов): «Сделать копию» — в ту же папку того же
+     * контейнера, вложение файла общей папки в заметку — в папку заметки на личном диске (`to`). */
+    async parvaneCloudCopy({
+      container, items, to, parent, transferId,
+    }: {
+      container: string; items: CloudMoveItem[]; to?: string; parent?: string; transferId: string;
+    }): Promise<CloudResult> {
+      const error = await runMove(transferId, (signal, onProgress) => moveNodes({
+        from: container, items, to: to || container, parent, isCopy: true, signal, onProgress,
       }));
       return error ? { ok: false, error } : { ok: true };
     },

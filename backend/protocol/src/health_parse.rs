@@ -18,7 +18,7 @@ use crate::domain::health::{civil_from_days, days_from_civil, minute_of_day};
 
 #[path = "health_parse_food.rs"]
 mod food;
-pub use food::{meal_by_minute, part_in_range, KIND_FOOD, KIND_WORKOUT};
+pub use food::{meal_by_minute, part_in_range, workout_tag_of, KIND_FOOD, KIND_WORKOUT};
 
 const DAY_MS: i64 = 86_400_000;
 const MIN_MS: i64 = 60_000;

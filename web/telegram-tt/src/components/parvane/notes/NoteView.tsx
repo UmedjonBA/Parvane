@@ -27,7 +27,9 @@ import { folderCaption } from './notesFolders';
 import { formatNoteEdited } from './notesList';
 import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
+import { getNoteConflicts } from './notesOutbox';
 import { nearestPlanned, notePlanLine } from './notesPlanned';
+import { changeNotesMeta, getNotesMeta } from './notesStore';
 import { getNoteTasks, markerOfTask } from './notesTasks';
 import useSplitScrollSync from './useSplitScrollSync';
 
@@ -39,10 +41,15 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import MarkdownBlocks from '../markdown/MarkdownBlocks';
 import CanvasFilePicker from './CanvasFilePicker';
+import NoteArticleDialog from './NoteArticleDialog';
+import NoteCanvasSheet from './NoteCanvasSheet';
+import NoteConflictBar from './NoteConflictBar';
+import NoteConflictView from './NoteConflictView';
 import NoteEditorTools from './NoteEditorTools';
 import NoteEmbed from './NoteEmbed';
 import NoteLinks from './NoteLinks';
 import NoteMenu from './NoteMenu';
+import NoteUnsentMark from './NoteUnsentMark';
 import PvIcon from './PvIcon';
 import PvSegment from './PvSegment';
 
@@ -78,6 +85,8 @@ type OwnProps = {
   onPickFolder?: (noteId: string) => void;
   // Правка открыта/закрыта: раздел на это время убирает колонку «Связи»
   onEditingChange?: (isEditing: boolean) => void;
+  // Заметку положили на холст из меню: открыть этот холст
+  onOpenCanvas?: (canvasId: string) => void;
 };
 
 const MARKER = / \^(t[a-z0-9]{4,12})\s*$/;
@@ -95,7 +104,7 @@ const MODE_KEY = 'e';
 // переключаются одной кнопкой (Ctrl+E), на телефоне — «Изменить» и глазок просмотра в шапке
 const NoteView = ({
   note, index, planner, planned, layout, hasLinks, isGraphHidden, editRequest, onBack, onOpenTitle, onSave,
-  onRename, onDelete, onPickFolder, onEditingChange,
+  onRename, onDelete, onPickFolder, onEditingChange, onOpenCanvas,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
   const [mode, setMode] = useState<NoteMode>('view');
@@ -113,6 +122,11 @@ const NoteView = ({
   const [isDeleteOpen, openDelete, closeDelete] = useFlag();
   const [isMenuOpen, openMenu, closeMenu] = useFlag();
   const [isCloudPickerOpen, openCloudPicker, closeCloudPicker] = useFlag();
+  // Действие меню в своей шторке: статьёй в чат, на холст
+  const [menuSheet, setMenuSheet] = useState<'article' | 'canvas'>();
+  const [isConflictOpen, openConflict, closeConflict] = useFlag();
+  const conflict = useDerivedState(getNoteConflicts).get(note.id);
+  const isPinned = useDerivedState(getNotesMeta).pinned.includes(note.id);
   const fileInputRef = useRef<HTMLInputElement>();
   const { showNotification } = getActions();
 
@@ -142,6 +156,7 @@ const NoteView = ({
   // либо с другого устройства) открытую правку не закрывает: сброс по названию терял редактор и набранный текст
   useEffect(() => {
     closeEdit();
+    closeConflict();
   }, [note.id]);
 
   useEffect(() => {
@@ -318,6 +333,10 @@ const NoteView = ({
     onPickFolder?.(note.id);
   });
 
+  const closeMenuSheet = useLastCallback(() => {
+    setMenuSheet(undefined);
+  });
+
   const handleMenuAction = useLastCallback((action: string) => {
     switch (action) {
       case 'rename':
@@ -332,6 +351,13 @@ const NoteView = ({
         break;
       case 'day':
         handleOpenDay();
+        break;
+      case 'pin':
+        void changeNotesMeta({ kind: 'pin', note: note.id, isPinned: !isPinned });
+        break;
+      case 'article':
+      case 'canvas':
+        setMenuSheet(action);
         break;
       case 'copy':
         copyTextToClipboard(`[[${note.title}]]`);
@@ -473,12 +499,15 @@ const NoteView = ({
     items.push(isDaily
       ? { action: 'day', label: lang('KnowledgeOpenDay'), icon: 'cal' }
       : { action: 'plan', label: lang('KnowledgePlan'), icon: 'cal' });
+    items.push({ action: 'pin', label: lang(isPinned ? 'KnowledgeUnpin' : 'KnowledgePin'), icon: 'up' });
+    items.push({ action: 'article', label: lang('KnowledgeSendArticle'), icon: 'chat' });
+    items.push({ action: 'canvas', label: lang('KnowledgeAddToCanvas'), icon: 'board' });
     items.push({ action: 'copy', label: lang('KnowledgeCopyLink'), icon: 'link' });
     items.push({
       action: 'delete', label: lang('KnowledgeDelete'), icon: 'trash', isDanger: true,
     });
     return items;
-  }, [lang, isDaily, onPickFolder]);
+  }, [lang, isDaily, onPickFolder, isPinned]);
 
   function renderMore() {
     return (
@@ -702,6 +731,7 @@ const NoteView = ({
               </button>
             ) : <span>{folderName}</span>}
             <span>{` · ${edited}`}</span>
+            <NoteUnsentMark noteId={note.id} className={view.metaUnsent} />
           </div>
           {isDaily ? (
             <h2 className={view.title}>{shownTitle}</h2>
@@ -785,7 +815,10 @@ const NoteView = ({
       data-note-mode={isEditing ? (isCompact ? 'edit' : mode) : 'view'}
     >
       {isCompact ? renderCompactBar() : renderPaneBar()}
-      {isEditing ? (
+      {conflict && !isConflictOpen && <NoteConflictBar onOpen={openConflict} />}
+      {conflict && isConflictOpen ? (
+        <NoteConflictView conflict={conflict} onDone={closeConflict} />
+      ) : isEditing ? (
         <div
           className={buildClassName(view.work, isSplit && view.workSplit)}
           data-note-edit={isCompact ? (isPreview ? 'preview' : 'editor') : isSplit ? 'split' : 'editor'}
@@ -794,6 +827,12 @@ const NoteView = ({
           {isPreviewShown && renderPreview()}
         </div>
       ) : renderReading()}
+      <NoteArticleDialog note={menuSheet === 'article' ? note : undefined} onClose={closeMenuSheet} />
+      <NoteCanvasSheet
+        note={menuSheet === 'canvas' ? note : undefined}
+        onOpenCanvas={onOpenCanvas}
+        onClose={closeMenuSheet}
+      />
       <CanvasFilePicker
         isOpen={isCloudPickerOpen}
         nodes={driveNodes}

@@ -1,3 +1,4 @@
+import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useLayoutEffect } from '../../../lib/teact/teact';
 
 import type { PvIconName } from '../notes/PvIcon';
@@ -15,11 +16,14 @@ import styles from './CloudSheets.module.scss';
 
 export type CloudMenuAction<T extends string = string> = {
   key: T;
-  icon: PvIconName;
+  // Значок набора `PvIcon` либо свой (`glyph`: значки «Музыки»)
+  icon?: PvIconName;
+  glyph?: TeactNode;
   title: string;
   // Подпись справа: размер, срок ссылки
   hint?: string;
   isDanger?: boolean;
+  isDisabled?: boolean;
 };
 
 export type CloudMenuAnchor = { x: number; y: number };
@@ -69,9 +73,10 @@ const CloudMenu = ({
       aria-label={action.title}
       className={buildClassName(styles.menuItem, action.isDanger && styles.menuItemDanger)}
       data-action={action.key}
+      disabled={action.isDisabled}
       onClick={handlePick}
     >
-      <PvIcon name={action.icon} className={styles.menuIcon} />
+      {action.glyph || (action.icon && <PvIcon name={action.icon} className={styles.menuIcon} />)}
       <span className={styles.menuLabel}>{action.title}</span>
       {action.hint && <span className={styles.menuHint}>{action.hint}</span>}
     </button>

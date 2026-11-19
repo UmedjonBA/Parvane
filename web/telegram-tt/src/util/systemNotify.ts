@@ -113,6 +113,55 @@ export function parseReminderKey(key: string): { id: string; day: string } | und
   return { id, day };
 }
 
+// Настройки уведомлений устройства (spec 041 E3, доски `PhProfileA`, `DkSettingsB`): выключенные модули и «Не
+// беспокоить». Хранит их `util/notifyPrefs.ts`, копию для service worker — `reminderStore.ts`
+export type NotifyModule = 'chats' | 'plan';
+
+export type NotifyPrefs = {
+  off: NotifyModule[];
+  isQuietOn: boolean;
+  // Минуты от полуночи; конец раньше начала — тишина через полночь
+  quietFrom: number;
+  quietTo: number;
+};
+
+const MINUTES_IN_DAY = 24 * 60;
+const NOTIFY_MODULES = new Set<string>(['chats', 'plan']);
+
+export const DEFAULT_NOTIFY_PREFS: NotifyPrefs = {
+  off: [], isQuietOn: false, quietFrom: 23 * 60 + 30, quietTo: 7 * 60,
+};
+
+/** Сохранённые настройки любой версии: неизвестное и испорченное — по умолчанию. */
+export function readNotifyPrefs(raw: unknown): NotifyPrefs {
+  if (!raw || typeof raw !== 'object') return DEFAULT_NOTIFY_PREFS;
+  const data = raw as Record<string, unknown>;
+  const readMinutes = (value: unknown, fallback: number) => (
+    typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < MINUTES_IN_DAY ? value : fallback
+  );
+  return {
+    off: Array.isArray(data.off)
+      ? data.off.filter((id): id is NotifyModule => typeof id === 'string' && NOTIFY_MODULES.has(id))
+      : [],
+    isQuietOn: data.isQuietOn === true,
+    quietFrom: readMinutes(data.quietFrom, DEFAULT_NOTIFY_PREFS.quietFrom),
+    quietTo: readMinutes(data.quietTo, DEFAULT_NOTIFY_PREFS.quietTo),
+  };
+}
+
+/** Попадает ли минута суток в «Не беспокоить»; начало входит, конец — нет. */
+export function getIsQuietMinute(prefs: NotifyPrefs, minute: number) {
+  if (!prefs.isQuietOn || prefs.quietFrom === prefs.quietTo) return false;
+  if (prefs.quietFrom < prefs.quietTo) return minute >= prefs.quietFrom && minute < prefs.quietTo;
+  return minute >= prefs.quietFrom || minute < prefs.quietTo;
+}
+
+/** Показывать ли системное уведомление модуля сейчас: модуль не выключен и не время «Не беспокоить». */
+export function getIsNotifyAllowed(prefs: NotifyPrefs, module: NotifyModule, now: Date) {
+  if (prefs.off.includes(module)) return false;
+  return !getIsQuietMinute(prefs, now.getHours() * 60 + now.getMinutes());
+}
+
 // Тексты service worker: у него нет общего механизма языков (как у страницы публичной ссылки) — свой словарь
 const WORKER_TEXTS = {
   en: {

@@ -1,14 +1,17 @@
-import type { FC } from '../../../lib/teact/teact';
-import {
-  memo, useCallback, useEffect, useMemo, useState,
-} from '../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiSession } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
+import type { KeyDialogMode } from './devices/DeviceDialogs';
+import type { LinkOffer } from './devices/useDeviceLink';
+import type { ProfileIconName } from './profile/ProfileIcon';
+import { SettingsScreens } from '../../../types';
 
+import buildClassName from '../../../util/buildClassName';
 import { formatPastTimeShort } from '../../../util/dates/oldDateFormat';
 import { callApi } from '../../../api/gramjs';
+import useDeviceLink from './devices/useDeviceLink';
 import getSessionAppLine from './helpers/getSessionAppLine';
 import getSessionIcon from './helpers/getSessionIcon';
 
@@ -18,264 +21,90 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
-import Island, { IslandTitle } from '../../gili/layout/Island';
+import PvSheet from '../../parvane/notes/PvSheet';
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import ListItem from '../../ui/ListItem';
-import RadioGroup from '../../ui/RadioGroup';
 import SecretForm from '../../ui/SecretForm';
+import DeviceConfirmSignIn from './devices/DeviceConfirmSignIn';
+import { DeviceKeyDialog, ResetIdentityDialog } from './devices/DeviceDialogs';
+import ProfileIcon from './profile/ProfileIcon';
 import SessionSignOutMode, { type SignOutMode } from './SessionSignOutMode';
 import SettingsActiveSession from './SettingsActiveSession';
 
-import './SettingsActiveSessions.scss';
+import styles from './devices/Devices.module.scss';
+import profile from './profile/Profile.module.scss';
 
 type OwnProps = {
   isActive?: boolean;
   onReset: () => void;
 };
 
-type StateProps = GlobalState['activeSessions'];
+type StateProps = Pick<GlobalState['activeSessions'], 'byHash' | 'orderedHashes'>;
 
-// Parvane: авто-линковка истории — статус собственного оффера и запросы
-// других устройств опрашиваются, пока экран открыт
-type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired'
-  | 'intercepted';
-type LinkStatus = {
-  isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean; telegram?: TelegramRecoveryState;
-  telegramCode?: string;
-};
-// Parvane (spec 015): бот просит владельца ответить ключом восстановления в Telegram
-const TELEGRAM_RECOVERY_TEXT: Partial<Record<TelegramRecoveryState, string>> = {
-  waiting: 'ParvaneTgRecoverWaiting',
-  joining: 'ParvaneTgRecoverJoining',
-  done: 'ParvaneTgRecoverDone',
-  failed: 'ParvaneTgRecoverFailed',
-  limit: 'ParvaneTgRecoverLimit',
-  expired: 'ParvaneTgRecoverExpired',
-  intercepted: 'ParvaneTgRecoverIntercepted',
-};
-type LinkOffer = { deviceId: string; code?: string };
-// Parvane (T128, D-12): отозвано устройство, державшее ключ подписи устройств —
-// ключ обновляется корнем из копии под ключом восстановления
-type SskState = {
-  isRotationNeeded: boolean; hasBackup: boolean; isEscrowCopyMissing?: boolean; canSendKeyToTelegram?: boolean;
-};
-type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
-type TelegramSendResult = SskRotationResult | 'no_telegram';
-const TELEGRAM_SEND_RESULT_KEYS: Record<TelegramSendResult, string> = {
-  ok: 'ParvaneTgSendDone',
-  bad_key: 'ParvaneSskRotationBadKey',
-  no_backup: 'ParvaneSskRotationNoBackup',
-  failed: 'ParvaneSskRotationFailed',
-  no_telegram: 'ParvaneTgSendNoTelegram',
-};
-const SSK_RESULT_KEYS: Record<SskRotationResult, string> = {
-  ok: 'ParvaneSskRotationDone',
-  bad_key: 'ParvaneSskRotationBadKey',
-  no_backup: 'ParvaneSskRotationNoBackup',
-  failed: 'ParvaneSskRotationFailed',
-};
-// Parvane (T130): новое устройство без других устройств аккаунта — вход по
-// ключу восстановления либо сброс защищённой личности
-const ESCROW_RESULT_KEYS: Record<SskRotationResult, string> = {
-  ok: 'ParvaneEscrowDone',
-  bad_key: 'ParvaneSskRotationBadKey',
-  no_backup: 'ParvaneSskRotationNoBackup',
-  failed: 'ParvaneSskRotationFailed',
-};
-type KeyDialogMode = 'rotate' | 'recover' | 'escrow' | 'telegram';
-const KEY_DIALOG_TEXT: Record<KeyDialogMode, string> = {
-  rotate: 'ParvaneSskRotationText',
-  recover: 'ParvaneRecoverText',
-  escrow: 'ParvaneEscrowText',
-  telegram: 'ParvaneTgSendText',
-};
-const KEY_DIALOG_ACTION: Record<KeyDialogMode, string> = {
-  rotate: 'ParvaneSskRotationAction',
-  recover: 'ParvaneRecoverAction',
-  escrow: 'ParvaneEscrowAction',
-  telegram: 'ParvaneTgSendAction',
-};
-const RECOVER_RESULT_KEYS: Record<SskRotationResult, string> = {
-  ok: 'ParvaneRecoverDone',
-  bad_key: 'ParvaneSskRotationBadKey',
-  no_backup: 'ParvaneRecoverNoBackup',
-  failed: 'ParvaneSskRotationFailed',
-};
-type ResetResult = 'ok' | 'bad_password' | 'failed';
-const RESET_RESULT_KEYS: Record<ResetResult, string> = {
-  ok: 'ParvaneResetDone',
-  bad_password: 'ParvaneResetBadPassword',
-  failed: 'ParvaneResetFailed',
-};
-const LINK_UI_POLL_MS = 5000;
+const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
+const PHONE_ICONS = new Set(['android', 'apple']);
+const BROWSER_ICONS = new Set(['chrome', 'brave', 'vivaldi', 'safari', 'firefox', 'opera', 'samsung']);
+const DEVICE_ID_PREVIEW = 8;
 
-const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
+// Parvane (spec 041 E3): «Профиль → Устройства» по доскам `PhProfileA`, `DkSettingsA`: запрос нового своего
+// устройства карточкой с кодом сверки, «Мои устройства» с «Выйти на нём» и «Украдено», «Привязать новое
+// устройство», «Завершить другие сеансы», ключи. Это устройство ещё не подтверждено — сверху «Подтвердите вход»
+// (`devices/DeviceConfirmSignIn.tsx`). Действия прежние: провайдер (LINK-1, RECOVER-1/2, REVOKE-1, P-07 — отзыв
+// устройства только с текущим паролем)
+const SettingsActiveSessions = ({
   isActive,
   onReset,
   byHash,
   orderedHashes,
-  ttlDays,
-}) => {
-  const {
-    terminateAllAuthorizations,
-    changeSessionTtl,
-    showNotification,
-  } = getActions();
+}: OwnProps & StateProps) => {
+  const { terminateAllAuthorizations, showNotification, openSettingsScreen } = getActions();
 
-  const oldLang = useOldLang();
   const lang = useLang();
-  const [isConfirmTerminateAllDialogOpen, openConfirmTerminateAllDialog, closeConfirmTerminateAllDialog] = useFlag();
+  const oldLang = useOldLang();
+  const {
+    linkStatus, linkOffers, sskState, leftDevices, refresh,
+  } = useDeviceLink(isActive);
+
   const [openedSessionHash, setOpenedSessionHash] = useState<string | undefined>();
-  const [isModalOpen, openModal, closeModal] = useFlag();
-
-  const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
-  const [linkStatus, setLinkStatus] = useState<LinkStatus | undefined>();
-  const [linkOffers, setLinkOffers] = useState<LinkOffer[]>([]);
-  const [confirmingOffer, setConfirmingOffer] = useState<LinkOffer | undefined>();
-
-  const [sskState, setSskState] = useState<SskState | undefined>();
-  // ENG-04: вышедшие сами устройства, державшие ключ подписи устройств
-  const [leftDevices, setLeftDevices] = useState<string[]>([]);
+  const [isTerminateAllOpen, openTerminateAll, closeTerminateAll] = useFlag();
+  const [terminateAllPassword, setTerminateAllPassword] = useState('');
+  const [terminateAllMode, setTerminateAllMode] = useState<SignOutMode>('keep');
+  const [isLinkSheetOpen, openLinkSheet, closeLinkSheet] = useFlag();
+  const [keyDialogMode, setKeyDialogMode] = useState<KeyDialogMode | undefined>();
+  const [isResetOpen, openReset, closeReset] = useFlag();
   const [stolenDevice, setStolenDevice] = useState<string | undefined>();
-  const [isSskDialogOpen, openSskDialog, closeSskDialog] = useFlag();
-  const [recoveryKey, setRecoveryKey] = useState('');
+  // «Отклонить» запрос: сервер отказа не принимает, запрос просто скрывается здесь до истечения
+  const [declinedOffers, setDeclinedOffers] = useState<string[]>([]);
 
-  const refreshLinkState = useLastCallback(async () => {
-    const status = await callParvane('parvaneGetLinkStatus') as LinkStatus | undefined;
-    setLinkStatus(status);
-    const offers = await callParvane('parvaneListLinkOffers') as { offers: LinkOffer[] } | undefined;
-    const liveOffers = offers?.offers || [];
-    setLinkOffers(liveOffers);
-    // LINK-1 п. 13: запрос подтвердило другое своё устройство (или он истёк) — окно подтверждения закрывается
-    setConfirmingOffer((current) => (
-      current && !liveOffers.some((offer) => offer.deviceId === current.deviceId && offer.code === current.code)
-        ? undefined : current
-    ));
-    setSskState(await callParvane('parvaneGetSskState') as SskState | undefined);
-    const left = await callParvane('parvaneGetLeftDevices') as { deviceIds: string[] } | undefined;
-    setLeftDevices(left?.deviceIds || []);
-    // Другое устройство могло выйти само — список перечитается по событию провайдера
-    void callParvane('parvanePollOwnDevices');
-  });
+  useHistoryBack({ isActive, onBack: onReset });
 
-  const handleRecoveryKeyChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setRecoveryKey(e.currentTarget.value);
-  });
+  const sessions = useMemo(() => orderedHashes.map((hash) => byHash[hash]), [byHash, orderedHashes]);
+  const otherSessions = sessions.filter((session) => !session.isCurrent);
+  const currentSession = sessions.find((session) => session.isCurrent);
+  const visibleOffers = linkOffers.filter((offer) => !declinedOffers.includes(getOfferKey(offer)));
+  const isUnconfirmed = Boolean(linkStatus?.canRecover);
+  const isRotationNeeded = Boolean(sskState?.isRotationNeeded);
 
-  const handleCloseSskDialog = useLastCallback(() => {
-    setRecoveryKey('');
-    closeSskDialog();
-  });
-
-  // Диалог ключа восстановления общий: обновление ключа подписи (T128), вход
-  // нового устройства по ключу (T130) и страховочная копия для администратора
-  const [keyDialogMode, setKeyDialogMode] = useState<KeyDialogMode>('rotate');
-  const [isResetDialogOpen, openResetDialog, closeResetDialog] = useFlag();
-  const [resetPassword, setResetPassword] = useState('');
-
-  const handleOpenRecover = useLastCallback(() => {
-    setKeyDialogMode('recover');
-    openSskDialog();
-  });
-
-  const handleOpenRotate = useLastCallback(() => {
-    setKeyDialogMode('rotate');
-    openSskDialog();
-  });
-
-  const handleOpenEscrow = useLastCallback(() => {
-    setKeyDialogMode('escrow');
-    openSskDialog();
-  });
-
-  const handleOpenTelegramSend = useLastCallback(() => {
-    setKeyDialogMode('telegram');
-    openSskDialog();
-  });
-
-  const handleRequestTelegramKey = useLastCallback(async () => {
-    await callParvane('parvaneRequestTelegramKey');
-    void refreshLinkState();
-  });
-
-  const handleResetPasswordChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setResetPassword(e.currentTarget.value);
-  });
-
-  const handleCloseResetDialog = useLastCallback(() => {
-    setResetPassword('');
-    closeResetDialog();
-  });
-
-  const handleResetIdentity = useLastCallback(async () => {
-    const password = resetPassword;
-    handleCloseResetDialog();
-    if (!password) return;
-    const result = await callParvane('parvaneResetIdentity', { password }) as ResetResult | undefined;
-    showNotification({ message: oldLang(RESET_RESULT_KEYS[result || 'failed']) });
-    void refreshLinkState();
-  });
-
-  const handleRotateSsk = useLastCallback(async () => {
-    if (keyDialogMode === 'recover') {
-      const key = recoveryKey;
-      handleCloseSskDialog();
-      if (!key) return;
-      const result = await callParvane('parvaneRecoverWithKey', { recoveryKey: key }) as SskRotationResult | undefined;
-      showNotification({ message: oldLang(RECOVER_RESULT_KEYS[result || 'failed']) });
-      void refreshLinkState();
-      return;
-    }
-    if (keyDialogMode === 'telegram') {
-      const key = recoveryKey;
-      handleCloseSskDialog();
-      if (!key) return;
-      const result = await callParvane('parvaneSendKeyToTelegram', { recoveryKey: key }) as
-        TelegramSendResult | undefined;
-      showNotification({ message: oldLang(TELEGRAM_SEND_RESULT_KEYS[result || 'failed']) });
-      void refreshLinkState();
-      return;
-    }
-    if (keyDialogMode === 'escrow') {
-      const key = recoveryKey;
-      handleCloseSskDialog();
-      if (!key) return;
-      const result = await callParvane('parvaneStoreEscrowCopy', { recoveryKey: key }) as SskRotationResult | undefined;
-      showNotification({ message: oldLang(ESCROW_RESULT_KEYS[result || 'failed']) });
-      void refreshLinkState();
-      return;
-    }
-    const key = recoveryKey;
-    handleCloseSskDialog();
-    if (!key) return;
-    const result = await callParvane('parvaneRotateSsk', { recoveryKey: key }) as SskRotationResult | undefined;
-    showNotification({ message: oldLang(SSK_RESULT_KEYS[result || 'failed']) });
-    void refreshLinkState();
-  });
-
-  useEffect(() => {
-    if (!isActive) return undefined;
-    void refreshLinkState();
-    const timer = window.setInterval(() => {
-      void refreshLinkState();
-    }, LINK_UI_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [isActive, refreshLinkState]);
-
-  const handleGrantLink = useLastCallback(async () => {
-    const offer = confirmingOffer;
-    setConfirmingOffer(undefined);
-    if (!offer) return;
+  const handleGrantLink = useLastCallback(async (offer: LinkOffer) => {
     const result = await callParvane('parvaneGrantLink', { deviceId: offer.deviceId });
-    showNotification({
-      message: oldLang(result ? 'ParvaneLinkGranted' : 'ParvaneLinkFailed'),
-    });
-    void refreshLinkState();
+    showNotification({ message: oldLang(result ? 'ParvaneLinkGranted' : 'ParvaneLinkFailed') });
+    void refresh();
+  });
+
+  const handleCloseTerminateAll = useLastCallback(() => {
+    setTerminateAllPassword('');
+    setTerminateAllMode('keep');
+    closeTerminateAll();
+  });
+
+  const handleTerminateAll = useLastCallback(() => {
+    if (!terminateAllPassword) return;
+    terminateAllAuthorizations({ password: terminateAllPassword, shouldRotateKeys: terminateAllMode === 'rotate' });
+    handleCloseTerminateAll();
   });
 
   const handleDismissLeftDevices = useLastCallback(async () => {
     await callParvane('parvaneDismissLeftDevices', { deviceIds: leftDevices });
-    void refreshLinkState();
+    void refresh();
   });
 
   const handleReportStolen = useLastCallback(async () => {
@@ -286,493 +115,223 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     showNotification({
       message: oldLang(isDone ? 'ParvaneLeftDeviceStolenDone' : 'ParvaneLeftDeviceStolenFailed'),
     });
-    void refreshLinkState();
+    void refresh();
   });
 
-  const autoTerminateValue = useMemo(() => {
-    // https://github.com/DrKLO/Telegram/blob/96dce2c9aabc33b87db61d830aa087b6b03fe397/TMessagesProj/src/main/java/org/telegram/ui/SessionsActivity.java#L195
-    if (ttlDays === undefined) {
-      return undefined;
-    }
-
-    if (ttlDays <= 7) {
-      return '7';
-    }
-
-    if (ttlDays <= 30) {
-      return '30';
-    }
-
-    if (ttlDays <= 93) {
-      return '90';
-    }
-
-    if (ttlDays <= 183) {
-      return '183';
-    }
-
-    if (ttlDays > 183) {
-      return '365';
-    }
-
-    return undefined;
-  }, [ttlDays]);
-
-  const AUTO_TERMINATE_OPTIONS = useMemo(() => {
-    const options = [{
-      label: lang('Weeks', { count: 1 }, { pluralValue: 1 }),
-      value: '7',
-    }, {
-      label: lang('Months', { count: 1 }, { pluralValue: 1 }),
-      value: '30',
-    }, {
-      label: lang('Months', { count: 3 }, { pluralValue: 3 }),
-      value: '90',
-    }, {
-      label: lang('Months', { count: 6 }, { pluralValue: 6 }),
-      value: '183',
-    }];
-    if (ttlDays && ttlDays >= 365) {
-      options.push({
-        label: lang('Years', { count: 1 }, { pluralValue: 1 }),
-        value: '365',
-      });
-    }
-    return options;
-  }, [lang, ttlDays]);
-
-  // Parvane (P-07): отзыв устройства требует текущий пароль — «завершить все»
-  // спрашивает его в диалоге подтверждения, отзыв одного — в модалке сеанса
-  const [terminateAllPassword, setTerminateAllPassword] = useState('');
-  const [terminateAllMode, setTerminateAllMode] = useState<SignOutMode>('keep');
-
-  const handleTerminateAllPasswordChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setTerminateAllPassword(e.currentTarget.value);
-  }, []);
-
-  const handleCloseTerminateAllDialog = useCallback(() => {
-    setTerminateAllPassword('');
-    setTerminateAllMode('keep');
-    closeConfirmTerminateAllDialog();
-  }, [closeConfirmTerminateAllDialog]);
-
-  const handleTerminateAllSessions = useCallback(() => {
-    if (!terminateAllPassword) return;
-    terminateAllAuthorizations({ password: terminateAllPassword, shouldRotateKeys: terminateAllMode === 'rotate' });
-    handleCloseTerminateAllDialog();
-  }, [handleCloseTerminateAllDialog, terminateAllAuthorizations, terminateAllPassword, terminateAllMode]);
-
-  const handleOpenSessionModal = useCallback((hash: string) => {
-    setOpenedSessionHash(hash);
-    openModal();
-  }, [openModal]);
-
-  const handleCloseSessionModal = useCallback(() => {
-    setOpenedSessionHash(undefined);
-    closeModal();
-  }, [closeModal]);
-
-  const handleChangeSessionTtl = useCallback((value: string) => {
-    changeSessionTtl({ days: Number(value) });
-  }, [changeSessionTtl]);
-
-  const currentSession = useMemo(() => {
-    const currentSessionHash = orderedHashes.find((hash) => byHash[hash].isCurrent);
-
-    return currentSessionHash ? byHash[currentSessionHash] : undefined;
-  }, [byHash, orderedHashes]);
-
-  const otherSessionHashes = useMemo(() => {
-    return orderedHashes.filter((hash) => !byHash[hash].isCurrent);
-  }, [byHash, orderedHashes]);
-  const hasOtherSessions = Boolean(otherSessionHashes.length);
-
-  useHistoryBack({
-    isActive,
-    onBack: onReset,
-  });
-
-  function renderCurrentSession(session: ApiSession) {
+  function renderOffer(offer: LinkOffer) {
     return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {lang('AuthSessionsCurrentSession')}
-        </IslandTitle>
-        <Island>
-          <ListItem narrow inactive icon={`device-${getSessionIcon(session)}`} iconClassName="icon-device">
-            <div className="multiline-item full-size" dir="auto">
-              <span className="title" dir="auto">{session.deviceModel}</span>
-              <span className="subtitle black tight">{getSessionAppLine(lang, session)}</span>
-              {Boolean(session.ip || getLocation(session)) && (
-                <span className="subtitle">
-                  {[session.ip, getLocation(session)].filter(Boolean).join(' - ')}
-                </span>
-              )}
-            </div>
-          </ListItem>
-
-          {hasOtherSessions && (
-            <ListItem
-              className="destructive mb-0 no-icon"
-              icon="stop"
-              ripple
-              narrow
-              onClick={openConfirmTerminateAllDialog}
-            >
-              {lang('TerminateAllSessions')}
-            </ListItem>
-          )}
-        </Island>
-      </>
-    );
-  }
-
-  function renderOtherSessions(sessionHashes: string[]) {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {lang('OtherSessions')}
-        </IslandTitle>
-        <Island>
-          {sessionHashes.map(renderSession)}
-        </Island>
-      </>
-    );
-  }
-
-  function renderAutoTerminate() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {lang('TerminateOldSessionHeader')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">{lang('IfInactiveFor')}</p>
-          <RadioGroup
-            name="session_ttl"
-            options={AUTO_TERMINATE_OPTIONS}
-            selected={autoTerminateValue}
-            onChange={handleChangeSessionTtl}
-          />
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane: новое устройство ждёт передачу истории — показываем код сверки
-  function renderLinkPending(code?: string) {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneLinkPendingTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">
-            {code ? oldLang('ParvaneLinkPendingText', code) : oldLang('ParvaneLinkPendingWait')}
-          </p>
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane (spec 015): бот ждёт ответа владельца с ключом восстановления
-  function renderTelegramRecovery(state: TelegramRecoveryState, verifyCode?: string) {
-    const textKey = TELEGRAM_RECOVERY_TEXT[state];
-    if (!textKey) return undefined;
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneTgRecoverTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger" data-telegram-recovery={state}>
-            {oldLang(textKey)}
-          </p>
-          {state === 'waiting' && Boolean(verifyCode) && (
-            <p className="settings-item-description-larger" data-telegram-code={verifyCode}>
-              {oldLang('ParvaneTgRecoverCode', verifyCode)}
-            </p>
-          )}
-          {state !== 'joining' && state !== 'done' && (
-            <ListItem icon="send" narrow ripple onClick={handleRequestTelegramKey}>
-              {oldLang('ParvaneTgRecoverAgain')}
-            </ListItem>
-          )}
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane (spec 015): ключ восстановления этого аккаунта в Telegram ещё не уходил
-  function renderTelegramSend() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneTgSendTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">{oldLang('ParvaneTgSendText')}</p>
-          <ListItem icon="send" narrow ripple onClick={handleOpenTelegramSend}>
-            {oldLang('ParvaneTgSendAction')}
-          </ListItem>
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane: других устройств не осталось — ключ восстановления или сброс
-  function renderRecover() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneRecoverTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">
-            {oldLang('ParvaneRecoverText')}
-          </p>
-          {Boolean(linkStatus?.hasEscrow) && (
-            <p className="settings-item-description-larger">{oldLang('ParvaneLostKeyAdmin')}</p>
-          )}
-          <ListItem icon="key" narrow ripple onClick={handleOpenRecover}>
-            {oldLang('ParvaneRecoverAction')}
-          </ListItem>
-          <ListItem icon="delete" narrow ripple destructive onClick={openResetDialog}>
-            {oldLang('ParvaneResetAction')}
-          </ListItem>
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane: ключ подписи устройств ждёт обновления после отзыва устройства
-  function renderSskRotation(hasBackup: boolean) {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneSskRotationTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">
-            {oldLang(hasBackup ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup')}
-          </p>
-          {Boolean(linkStatus?.hasEscrow) && (
-            <p className="settings-item-description-larger">{oldLang('ParvaneLostKeyAdmin')}</p>
-          )}
-          {hasBackup && (
-            <ListItem icon="key" narrow ripple onClick={handleOpenRotate}>
-              {oldLang('ParvaneSskRotationAction')}
-            </ListItem>
-          )}
-          <ListItem icon="delete" narrow ripple destructive onClick={openResetDialog}>
-            {oldLang('ParvaneResetAction')}
-          </ListItem>
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane: сервер держит страховочные копии, а у этого аккаунта её ещё нет
-  function renderEscrowMissing() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneEscrowTitle')}
-        </IslandTitle>
-        <Island>
-          <p className="settings-item-description-larger">{oldLang('ParvaneEscrowText')}</p>
-          <ListItem icon="key" narrow ripple onClick={handleOpenEscrow}>
-            {oldLang('ParvaneEscrowAction')}
-          </ListItem>
-        </Island>
-      </>
-    );
-  }
-
-  // Parvane: запросы истории от других устройств аккаунта
-  function renderLeftDevices() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneLeftDevices')}
-        </IslandTitle>
-        <Island>
-          {leftDevices.map((deviceId) => (
-            <ListItem
-              key={deviceId}
-              icon="delete-user"
-              narrow
-              ripple
-              onClick={() => setStolenDevice(deviceId)}
-            >
-              <div className="multiline-item full-size" dir="auto" data-left-device={deviceId}>
-                <span className="title">{`Web ${deviceId.slice(0, 8)}`}</span>
-                <span className="subtitle">{oldLang('ParvaneLeftDeviceSignedOut')}</span>
-              </div>
-            </ListItem>
-          ))}
-          <ListItem icon="check" narrow ripple onClick={handleDismissLeftDevices}>
-            <span data-left-devices-dismiss>{oldLang('ParvaneLeftDevicesDismiss')}</span>
-          </ListItem>
-        </Island>
-        <p className="settings-item-description-larger">{oldLang('ParvaneLeftDevicesHint')}</p>
-      </>
-    );
-  }
-
-  function renderLinkOffers() {
-    return (
-      <>
-        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-          {oldLang('ParvaneLinkRequests')}
-        </IslandTitle>
-        <Island>
-          {linkOffers.map((offer) => (
-            <ListItem
-              key={offer.deviceId}
-              icon="key"
-              narrow
-              ripple
-              disabled={!offer.code}
-              onClick={() => setConfirmingOffer(offer)}
-            >
-              <div className="multiline-item full-size" dir="auto">
-                <span className="title">
-                  {offer.deviceId ? `Web ${offer.deviceId.slice(0, 8)}` : 'Desktop'}
-                </span>
-                <span className="subtitle">
-                  {offer.code ? oldLang('ParvaneLinkOfferCode', offer.code) : oldLang('ParvaneLinkOfferWait')}
-                </span>
-              </div>
-            </ListItem>
-          ))}
-        </Island>
-      </>
-    );
-  }
-
-  function renderSession(sessionHash: string) {
-    const session = byHash[sessionHash];
-
-    return (
-      <ListItem
-        key={session.hash}
-        ripple
-        narrow
-        contextActions={[{
-          title: lang('SessionTerminate'),
-          icon: 'stop',
-          destructive: true,
-          handler: () => {
-            handleOpenSessionModal(session.hash);
-          },
-        }]}
-        icon={`device-${getSessionIcon(session)}`}
-        iconClassName="icon-device"
-        onClick={() => { handleOpenSessionModal(session.hash); }}
+      <div
+        key={offer.deviceId}
+        className={styles.offer}
+        data-link-offer={offer.deviceId}
+        data-link-code={offer.code || ''}
       >
-        <div className="multiline-item full-size" dir="auto">
-          <span className="title title-with-date">
-            {session.deviceModel}
-            <span className="date">{formatPastTimeShort(oldLang, session.dateActive * 1000)}</span>
-          </span>
-          <span className="subtitle black tight">{getSessionAppLine(lang, session)}</span>
-          {Boolean(session.ip || getLocation(session)) && (
-            <span className="subtitle">
-              {[session.ip, getLocation(session)].filter(Boolean).join(' ')}
-            </span>
-          )}
+        <div className={styles.offerText}>
+          <div className={styles.cardTitle}>
+            {lang('ParvaneDeviceOfferTitle', { name: getDeviceLabel(offer.deviceId) })}
+          </div>
+          <p className={styles.cardText}>
+            {offer.code ? lang('ParvaneDeviceOfferText') : oldLang('ParvaneLinkOfferWait')}
+          </p>
         </div>
-      </ListItem>
+        {Boolean(offer.code) && <div className={buildClassName(styles.bigCode, styles.offerCode)}>{offer.code}</div>}
+        <div className={styles.offerActions}>
+          <button
+            type="button"
+            className={styles.button}
+            data-link-decline
+            onClick={() => setDeclinedOffers([...declinedOffers, getOfferKey(offer)])}
+          >
+            {lang('ParvaneDeviceDecline')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(styles.button, styles.buttonAccent)}
+            disabled={!offer.code}
+            data-link-confirm
+            onClick={() => handleGrantLink(offer)}
+          >
+            {lang('ParvaneDeviceConfirm')}
+          </button>
+        </div>
+      </div>
     );
   }
+
+  function renderSession(session: ApiSession) {
+    const { isCurrent } = session;
+    const appLine = getSessionAppLine(lang, session);
+    const hint = isCurrent
+      ? lang('ParvaneDeviceThis')
+      : [appLine, lang('ParvaneDeviceSeen', { time: formatPastTimeShort(oldLang, session.dateActive * 1000) })]
+        .filter(Boolean).join(' · ');
+    return (
+      <div
+        key={session.hash}
+        className={styles.deviceRow}
+        data-session-row={session.hash}
+        data-session-current={isCurrent ? 'true' : undefined}
+      >
+        <ProfileIcon name={getDeviceIcon(session)} className={styles.deviceIcon} />
+        <span className={styles.deviceText}>
+          <span className={styles.deviceName} dir="auto">{session.deviceModel}</span>
+          <span className={styles.deviceHint}>{hint}</span>
+        </span>
+        {!isCurrent && (
+          <button
+            type="button"
+            className={styles.chip}
+            data-session-signout
+            onClick={() => setOpenedSessionHash(session.hash)}
+          >
+            {lang('ParvaneDeviceSignOutOn')}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  function renderLeftDevice(deviceId: string) {
+    return (
+      <div key={deviceId} className={styles.deviceRow}>
+        <ProfileIcon name="globe" className={styles.deviceIcon} />
+        <span className={styles.deviceText}>
+          <span className={styles.deviceName}>{getDeviceLabel(deviceId)}</span>
+          <span className={styles.deviceHint}>{oldLang('ParvaneLeftDeviceSignedOut')}</span>
+        </span>
+        <button
+          type="button"
+          className={buildClassName(styles.chip, styles.chipDanger)}
+          data-left-device={deviceId}
+          onClick={() => setStolenDevice(deviceId)}
+        >
+          {lang('ParvaneDeviceStolen')}
+        </button>
+      </div>
+    );
+  }
+
+  function renderKeyRow(title: string, hint: string, actions: { label: string; onClick: NoneToVoidFunction }[]) {
+    return (
+      <div className={buildClassName(profile.setRow, profile.setRowWrap)}>
+        <span className={profile.setText}>
+          <span className={profile.setTitle}>{title}</span>
+          <span className={profile.setHint}>{hint}</span>
+        </span>
+        {actions.map(({ label, onClick }) => (
+          <button key={label} type="button" className={styles.chip} data-device-action onClick={onClick}>
+            {label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  const keysRowClass = buildClassName(profile.setRow, profile.setRowAction);
 
   return (
-    <div className="settings-content custom-scroll SettingsActiveSessions">
-      {currentSession && renderCurrentSession(currentSession)}
-      {Boolean(linkStatus?.telegram) && (linkStatus.canRecover || linkStatus.telegram === 'done')
-        && renderTelegramRecovery(linkStatus.telegram, linkStatus.telegramCode)}
-      {Boolean(linkStatus?.isPending) && renderLinkPending(linkStatus.code)}
-      {Boolean(linkStatus?.canRecover) && renderRecover()}
-      {Boolean(linkOffers.length) && renderLinkOffers()}
-      {Boolean(sskState?.isRotationNeeded) && renderSskRotation(Boolean(sskState?.hasBackup))}
-      {Boolean(sskState?.isEscrowCopyMissing) && !sskState?.isRotationNeeded && renderEscrowMissing()}
-      {Boolean(sskState?.canSendKeyToTelegram) && !sskState?.isRotationNeeded && renderTelegramSend()}
-      {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
-      {Boolean(leftDevices.length) && renderLeftDevices()}
-      {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
-          показывается только когда бэкенд отдал ttlDays */}
-      {ttlDays !== undefined && renderAutoTerminate()}
-      {hasOtherSessions && (
-        <ConfirmDialog
-          isOpen={isConfirmTerminateAllDialogOpen}
-          onClose={handleCloseTerminateAllDialog}
-          text={lang('AreYouSureSessions')}
-          confirmLabel={lang('TerminateAllSessions')}
-          confirmHandler={handleTerminateAllSessions}
-          confirmIsDestructive
-          isConfirmDisabled={!terminateAllPassword}
-          areButtonsInColumn
-        >
-          <SessionSignOutMode name="terminate_all_mode" selected={terminateAllMode} onChange={setTerminateAllMode} />
-          <SecretForm>
-            <input
-              type="password"
-              className="form-control"
-              autoComplete="current-password"
-              placeholder={oldLang('ParvanePasswordConfirm')}
-              aria-label={oldLang('ParvanePasswordConfirm')}
-              value={terminateAllPassword}
-              onChange={handleTerminateAllPasswordChange}
-            />
-          </SecretForm>
-        </ConfirmDialog>
+    <div className={buildClassName('settings-content custom-scroll SettingsActiveSessions', profile.screen)}>
+      {isUnconfirmed && (
+        <DeviceConfirmSignIn linkStatus={linkStatus} onRefresh={refresh} onResetIdentity={openReset} />
       )}
+
+      {!isUnconfirmed && linkStatus?.telegram === 'done' && (
+        <div className={profile.hint} data-telegram-recovery="done">{oldLang('ParvaneTgRecoverDone')}</div>
+      )}
+
+      {visibleOffers.map(renderOffer)}
+
+      <div className={profile.caption}>{lang('ParvaneDeviceMine')}</div>
+      <div className={profile.group}>
+        {currentSession && renderSession(currentSession)}
+        {otherSessions.map(renderSession)}
+        {leftDevices.map(renderLeftDevice)}
+      </div>
+      {Boolean(leftDevices.length) && (
+        <div className={profile.hint}>
+          {oldLang('ParvaneLeftDevicesHint')}
+          {' '}
+          <button
+            type="button"
+            className={styles.linkInline}
+            data-left-devices-dismiss
+            onClick={handleDismissLeftDevices}
+          >
+            {oldLang('ParvaneLeftDevicesDismiss')}
+          </button>
+        </div>
+      )}
+
+      {!isUnconfirmed && (
+        <div className={styles.actions}>
+          <button type="button" className={styles.button} data-link-new onClick={openLinkSheet}>
+            {lang('ParvaneDeviceLinkNew')}
+          </button>
+          {Boolean(otherSessions.length) && (
+            <button
+              type="button"
+              className={buildClassName(styles.button, styles.buttonDanger)}
+              data-terminate-all
+              onClick={openTerminateAll}
+            >
+              {lang('TerminateAllSessions')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isUnconfirmed && (
+        <>
+          <div className={profile.caption}>{lang('ParvaneDeviceKeys')}</div>
+          <div className={profile.group}>
+            {isRotationNeeded && renderKeyRow(
+              oldLang('ParvaneSskRotationTitle'),
+              oldLang(sskState.hasBackup ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup'),
+              [
+                { label: oldLang('ParvaneSskRotationAction'), onClick: () => setKeyDialogMode('rotate') },
+                { label: oldLang('ParvaneResetAction'), onClick: openReset },
+              ].filter((_, index) => index > 0 || sskState.hasBackup),
+            )}
+            {Boolean(sskState?.isEscrowCopyMissing) && !isRotationNeeded && renderKeyRow(
+              oldLang('ParvaneEscrowTitle'),
+              oldLang('ParvaneEscrowText'),
+              [{ label: oldLang('ParvaneEscrowAction'), onClick: () => setKeyDialogMode('escrow') }],
+            )}
+            {Boolean(sskState?.canSendKeyToTelegram) && !isRotationNeeded && renderKeyRow(
+              oldLang('ParvaneTgSendTitle'),
+              oldLang('ParvaneTgSendText'),
+              [{ label: oldLang('ParvaneTgSendAction'), onClick: () => setKeyDialogMode('telegram') }],
+            )}
+            <button
+              type="button"
+              className={keysRowClass}
+              data-device-keys-backup
+              onClick={() => openSettingsScreen({ screen: SettingsScreens.ParvaneKeysBackup })}
+            >
+              <span className={profile.setTitle}>{lang('ParvaneProfileKeys')}</span>
+              <ProfileIcon name="right" isSmall className={profile.menuChevron} />
+            </button>
+          </div>
+          {Boolean(linkStatus?.hasEscrow) && isRotationNeeded && (
+            <div className={profile.hint}>{oldLang('ParvaneLostKeyAdmin')}</div>
+          )}
+        </>
+      )}
+
+      <PvSheet isOpen={isLinkSheetOpen} title={lang('ParvaneDeviceLinkNew')} onClose={closeLinkSheet}>
+        <p className={styles.sheetText}>{lang('ParvaneDeviceLinkNewText')}</p>
+      </PvSheet>
       <ConfirmDialog
-        isOpen={Boolean(stolenDevice)}
-        onClose={() => setStolenDevice(undefined)}
-        text={stolenDevice ? oldLang('ParvaneLeftDeviceStolenConfirm', `Web ${stolenDevice.slice(0, 8)}`) : ''}
-        confirmLabel={oldLang('ParvaneLeftDeviceStolen')}
-        confirmHandler={handleReportStolen}
+        isOpen={isTerminateAllOpen}
+        onClose={handleCloseTerminateAll}
+        text={lang('AreYouSureSessions')}
+        confirmLabel={lang('TerminateAllSessions')}
+        confirmHandler={handleTerminateAll}
         confirmIsDestructive
-      />
-      <ConfirmDialog
-        isOpen={Boolean(confirmingOffer)}
-        onClose={() => setConfirmingOffer(undefined)}
-        text={confirmingOffer?.code ? oldLang('ParvaneLinkConfirm', confirmingOffer.code) : ''}
-        confirmLabel={oldLang('ParvaneLinkConfirmAction')}
-        confirmHandler={handleGrantLink}
-      />
-      <ConfirmDialog
-        isOpen={isSskDialogOpen}
-        onClose={handleCloseSskDialog}
-        text={oldLang(KEY_DIALOG_TEXT[keyDialogMode])}
-        confirmLabel={oldLang(KEY_DIALOG_ACTION[keyDialogMode])}
-        confirmHandler={handleRotateSsk}
-        isConfirmDisabled={!recoveryKey}
+        isConfirmDisabled={!terminateAllPassword}
         areButtonsInColumn
       >
-        <input
-          type="text"
-          className="form-control"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={oldLang('ParvaneSskRotationPlaceholder')}
-          aria-label={oldLang('ParvaneSskRotationPlaceholder')}
-          value={recoveryKey}
-          onChange={handleRecoveryKeyChange}
-        />
-      </ConfirmDialog>
-      <ConfirmDialog
-        isOpen={isResetDialogOpen}
-        onClose={handleCloseResetDialog}
-        text={oldLang('ParvaneResetText')}
-        confirmLabel={oldLang('ParvaneResetConfirm')}
-        confirmHandler={handleResetIdentity}
-        confirmIsDestructive
-        isConfirmDisabled={!resetPassword}
-        areButtonsInColumn
-      >
+        <SessionSignOutMode name="terminate_all_mode" selected={terminateAllMode} onChange={setTerminateAllMode} />
         <SecretForm>
           <input
             type="password"
@@ -780,20 +339,50 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
             autoComplete="current-password"
             placeholder={oldLang('ParvanePasswordConfirm')}
             aria-label={oldLang('ParvanePasswordConfirm')}
-            value={resetPassword}
-            onChange={handleResetPasswordChange}
+            value={terminateAllPassword}
+            onChange={(e) => setTerminateAllPassword(e.currentTarget.value)}
           />
         </SecretForm>
       </ConfirmDialog>
-      <SettingsActiveSession isOpen={isModalOpen} hash={openedSessionHash} onClose={handleCloseSessionModal} />
+      <ConfirmDialog
+        isOpen={Boolean(stolenDevice)}
+        onClose={() => setStolenDevice(undefined)}
+        text={stolenDevice ? oldLang('ParvaneLeftDeviceStolenConfirm', getDeviceLabel(stolenDevice)) : ''}
+        confirmLabel={oldLang('ParvaneLeftDeviceStolen')}
+        confirmHandler={handleReportStolen}
+        confirmIsDestructive
+      />
+      <DeviceKeyDialog mode={keyDialogMode} onClose={() => setKeyDialogMode(undefined)} onDone={refresh} />
+      <ResetIdentityDialog isOpen={isResetOpen} onClose={closeReset} onDone={refresh} />
+      <SettingsActiveSession
+        isOpen={Boolean(openedSessionHash)}
+        hash={openedSessionHash}
+        onClose={() => setOpenedSessionHash(undefined)}
+      />
     </div>
   );
 };
 
-function getLocation(session: ApiSession) {
-  return [session.region, session.country].filter(Boolean).join(', ');
+function getOfferKey(offer: LinkOffer) {
+  return `${offer.deviceId}:${offer.code || ''}`;
+}
+
+// У устройства в журнале v2 нет имени — только начало идентификатора
+function getDeviceLabel(deviceId: string) {
+  return deviceId ? `Web ${deviceId.slice(0, DEVICE_ID_PREVIEW)}` : 'Desktop';
+}
+
+function getDeviceIcon(session: ApiSession): ProfileIconName {
+  const icon = getSessionIcon(session);
+  if (PHONE_ICONS.has(icon) && /android|iphone|ipad|ios/i.test(`${session.platform} ${session.deviceModel}`)) {
+    return 'phone';
+  }
+  return BROWSER_ICONS.has(icon) ? 'globe' : 'laptop';
 }
 
 export default memo(withGlobal<OwnProps>(
-  (global): Complete<StateProps> => global.activeSessions as Complete<StateProps>,
+  (global): Complete<StateProps> => ({
+    byHash: global.activeSessions.byHash,
+    orderedHashes: global.activeSessions.orderedHashes,
+  }),
 )(SettingsActiveSessions));

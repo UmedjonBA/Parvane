@@ -832,3 +832,77 @@
     transform: rotate(360deg);
   }
 }
+
+// Повторная отправка кода: отсчёт моноширинным, ссылка в строке текста
+.mono {
+  font-family: var(--font-family-monospace);
+}
+
+.linkInline {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  &:focus-visible {
+    border-radius: var(--pv-radius-xs);
+    outline: none;
+    box-shadow: var(--pv-focus-ring);
+  }
+}
+
+// Ключ восстановления (`XpAuth`, `RdAuth`): экран поверх приложения, ключ крупно в рамке акцента
+.overlay {
+  position: fixed;
+  z-index: var(--z-modal);
+  inset: 0;
+}
+
+.keyBox {
+  user-select: all;
+
+  padding: 1rem 0.75rem;
+  border: 1px solid var(--pv-at);
+  border-radius: var(--pv-radius-card);
+
+  font-family: var(--font-family-monospace);
+  font-size: 1.25rem;
+  line-height: 1.5;
+  color: var(--pv-fg);
+  text-align: center;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+
+  background: var(--pv-raised);
+}
+
+.keyActions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+// «Показать QR» экрана Telegram
+.qr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.qrImage {
+  overflow: hidden;
+  width: 12.5rem;
+  height: 12.5rem;
+  border-radius: var(--pv-radius-card);
+}

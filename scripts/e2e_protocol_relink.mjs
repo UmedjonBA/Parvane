@@ -113,7 +113,7 @@ try {
   // bob1 выходит и входит снова в том же браузере
   // Экран «Устройства» у bob2 открыт заранее: список должен обновиться сам
   const devOpen = await openDevicesScreen(bob2Page);
-  const openRows = devOpen.locator('.ListItem:has(.title-with-date)');
+  const openRows = devOpen.locator('[data-session-row]:not([data-session-current])');
   await openRows.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await openRows.count(), 1, 'bob2: до выхода bob1 в списке не один другой сеанс');
   const mark = logs.bob1.length;
@@ -150,7 +150,7 @@ try {
   // сеанс (нынешний bob1), он назван браузером, а не кодом; ключ подписи устройств
   // обновлять не просят (устройство вышло само, а не отозвано)
   const devAfterRelink = await openDevicesScreen(bob2Page);
-  const otherRows = devAfterRelink.locator('.ListItem:has(.title-with-date)');
+  const otherRows = devAfterRelink.locator('[data-session-row]:not([data-session-current])');
   await otherRows.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bob2Page.waitForTimeout(3000);
   assert.equal(await otherRows.count(), 1, `bob2: в списке устройств остался «призрак»: ${await otherRows.allTextContents()}`);
@@ -163,11 +163,11 @@ try {
   // ── bob2 завершает сеанс bob1; ключ восстановления утерян — сброс на месте ──
   const resetMark = logs.bob2.length;
   const dev2 = await openDevicesScreen(bob2Page);
-  const otherSession = dev2.locator('.ListItem:has(.title-with-date)').first();
+  const otherSession = dev2.locator('[data-session-row]:not([data-session-current])').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await terminateSessionWithPassword(bob2Page, otherSession, PASSWORD, { rotateKeys: true });
   await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await dev2.locator('.ListItem').filter({ hasText: 'Reset secure identity' }).locator('.ListItem-button').click();
+  await dev2.locator('[data-device-action]').filter({ hasText: 'Reset secure identity' }).click();
   const resetInput = bob2Page.locator('.Modal input[aria-label="Current password"]');
   await resetInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await resetInput.fill(PASSWORD);

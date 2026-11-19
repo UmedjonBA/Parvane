@@ -4,7 +4,10 @@ import type { HealthActivityView, HealthWorkoutView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
 import { barShares, formatPace, workoutTitleKey } from './healthDayFormat';
-import { formatDurationShort, formatNumber, WEEKDAY_KEYS } from './healthFormat';
+import {
+  formatClock, formatDurationShort, formatNumber, WEEKDAY_KEYS,
+} from './healthFormat';
+import useHealthPlannedWorkouts from './useHealthPlannedWorkouts';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -29,6 +32,7 @@ const HealthActivityDetail = ({ activity, onExample }: OwnProps) => {
   } = activity;
   const number = (value: number) => formatNumber(value, lang.code);
   const shares = barShares(stepsWeek.map((item) => item.value), stepsGoal);
+  const planned = useHealthPlannedWorkouts();
 
   const handleLine = useLastCallback(() => onExample(lang('HealthWorkoutExample')));
 
@@ -97,7 +101,21 @@ const HealthActivityDetail = ({ activity, onExample }: OwnProps) => {
             </span>
           </div>
         ))}
-        {!workouts.length && <div className={kit.muted}>{lang('HealthWorkoutsEmpty')}</div>}
+        {planned.map((workout) => (
+          <div key={workout.key} className={styles.mealRow} data-health-workout-planned={workout.tag}>
+            <span className={styles.mealTitle}>{workout.name}</span>
+            <span className={buildClassName(kit.muted, kit.grow, styles.mealNames)}>
+              {[
+                lang(WEEKDAY_KEYS[(workout.weekday + 6) % 7]),
+                workout.start !== undefined
+                  ? lang('HealthWorkoutPlannedAt', { time: formatClock(workout.start) })
+                  : lang('HealthWorkoutPlanned'),
+              ].join(' · ')}
+            </span>
+            <span className={buildClassName(kit.mono, styles.mealKcal)}>—</span>
+          </div>
+        ))}
+        {!workouts.length && !planned.length && <div className={kit.muted}>{lang('HealthWorkoutsEmpty')}</div>}
         <button
           type="button"
           className={buildClassName(kit.btn, styles.more)}

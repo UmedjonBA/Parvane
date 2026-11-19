@@ -2,9 +2,9 @@ import type { WorkerReminder } from '../util/reminderStore';
 import type { NotifyButton, NotifyCommand, NotifyData } from '../util/systemNotify';
 
 import { APP_NAME, DEBUG, DEBUG_MORE } from '../config';
-import { takeDueWorkerReminders } from '../util/reminderStore';
+import { loadWorkerNotifyPrefs, takeDueWorkerReminders } from '../util/reminderStore';
 import {
-  buildNotifyButtons, buildNotifyTitle, getWorkerNotifyTexts, resolveNotifyClick,
+  buildNotifyButtons, buildNotifyTitle, getIsNotifyAllowed, getWorkerNotifyTexts, readNotifyPrefs, resolveNotifyClick,
 } from '../util/systemNotify';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -226,10 +226,14 @@ export function handlePush(e: PushEvent) {
     // Пробуждение без данных бывает и будильником напоминания «Плана» (этап 4 плана 15 окт 2026):
     // наступившее напоминание показывается вместо общего «новое сообщение»
     const reminders = await takeDueWorkerReminders(Date.now()).catch(() => []);
+    // Модули, выключенные в «Профиль → Уведомления», и «Не беспокоить» (spec 041 E3) — настройки страницы
+    const prefs = readNotifyPrefs(await loadWorkerNotifyPrefs().catch(() => undefined));
+    const now = new Date();
     if (reminders.length) {
-      await Promise.all(reminders.map(showReminder));
+      if (getIsNotifyAllowed(prefs, 'plan', now)) await Promise.all(reminders.map(showReminder));
       return;
     }
+    if (!getIsNotifyAllowed(prefs, 'chats', now)) return;
     await showNotification(notification);
   })());
 }

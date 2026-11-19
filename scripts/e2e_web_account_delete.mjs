@@ -70,7 +70,7 @@ try {
 
   // ── удаление ──
   await openSettingsScreen(a, 'Privacy and Security');
-  await a.locator('[data-delete-account-open] .ListItem-button').click();
+  await a.locator('[data-delete-account-open]').click();
   const dialog = a.locator('[data-delete-account-dialog]');
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await dialog.locator('#parvane-delete-password').fill(`${PASSWORD}-wrong`);

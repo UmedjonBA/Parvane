@@ -34,6 +34,8 @@ type OwnProps = {
   onSwitchSegment: (value: string) => void;
   onOpenQuick: NoneToVoidFunction;
   onOpenSearch: NoneToVoidFunction;
+  // Экран «Задачи» (по срокам, без даты, группы)
+  onOpenTasks: NoneToVoidFunction;
   onOpenSettings: NoneToVoidFunction;
 };
 
@@ -43,7 +45,7 @@ const MONTHS_IN_YEAR = 12;
 // со стрелками, переключатель вида и поле «Запись строкой» (доска `DeskPlan`)
 const PlannerHeader = ({
   title, load, picked, today, isNarrow, segments, activeSegment, prevLabel, nextLabel,
-  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onOpenQuick, onOpenSearch, onOpenSettings,
+  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onOpenQuick, onOpenSearch, onOpenTasks, onOpenSettings,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -84,6 +86,30 @@ const PlannerHeader = ({
     </button>
   );
 
+  const searchButton = (
+    <button
+      type="button"
+      className={styles.navButton}
+      aria-label={lang('PlannerSearchTitle')}
+      data-planner-search-open
+      onClick={onOpenSearch}
+    >
+      <Icon name="search" />
+    </button>
+  );
+
+  const tasksButton = (
+    <button
+      type="button"
+      className={styles.navButton}
+      aria-label={lang('PlannerTasksTitle')}
+      data-planner-tasks-open
+      onClick={onOpenTasks}
+    >
+      <Icon name="check" />
+    </button>
+  );
+
   if (isNarrow) {
     return (
       <header className={styles.header}>
@@ -102,15 +128,8 @@ const PlannerHeader = ({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          className={styles.navButton}
-          aria-label={lang('ParvanePaletteSearchPlan')}
-          data-palette-open
-          onClick={onOpenSearch}
-        >
-          <Icon name="search" />
-        </button>
+        {searchButton}
+        {tasksButton}
         {settingsButton}
       </header>
     );
@@ -195,6 +214,8 @@ const PlannerHeader = ({
         <span className={styles.quickText}>{lang('PlannerQuickField')}</span>
         <span className={styles.quickKey}>Enter</span>
       </button>
+      {searchButton}
+      {tasksButton}
       {settingsButton}
     </header>
   );

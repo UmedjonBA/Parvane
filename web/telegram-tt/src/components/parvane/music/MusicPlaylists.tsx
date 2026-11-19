@@ -146,7 +146,8 @@ const MusicPlaylists = ({
   });
 
   const handleSaveOffline = useLastCallback(() => {
-    saveTracksOffline(rows.filter((row) => !row.isMissing).map((row) => row.track));
+    // Плейлист загружается целиком и дальше следует за составом (`musicOfflineSync.ts`)
+    saveTracksOffline(rows.filter((row) => !row.isMissing).map((row) => row.track), playlist!.id);
   });
 
   const handleRemove = useLastCallback((index: number) => {
@@ -261,6 +262,7 @@ const MusicPlaylists = ({
                 dragLabel={lang('MusicPlaylistDrag', { name: row.track.title })}
                 dragState={getRowState(index)}
                 drag={drag}
+                canQueue
                 canSaveOffline
                 onPlay={handlePlay}
                 onRemove={handleRemove}

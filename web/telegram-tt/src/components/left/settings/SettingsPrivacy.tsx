@@ -1,14 +1,11 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo, useEffect, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import type { GlobalState } from '../../../global/types';
 import { SettingsScreens } from '../../../types';
 
-import {
-  selectCanSetPasscode, selectIsCurrentUserFrozen,
-  selectIsCurrentUserPremium,
-} from '../../../global/selectors';
+import { selectIsCurrentUserFrozen } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
+import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { callApi } from '../../../api/gramjs';
 
@@ -17,19 +14,13 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
-import Island, { IslandTitle } from '../../gili/layout/Island';
 import AccountDeleteModal from '../../parvane/account/AccountDeleteModal';
-import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
-import ListItem from '../../ui/ListItem';
-import SecretForm from '../../ui/SecretForm';
+import PrivacySignIn from './profile/PrivacySignIn';
+import ProfileChoiceSheet from './profile/ProfileChoiceSheet';
+import ProfileIcon from './profile/ProfileIcon';
+import ProfileSwitchRow from './profile/ProfileSwitchRow';
 
-// parvane* — кастомные методы провайдера вне типизированного Methods
-// Parvane: серверных MTProto-разделов (веб-сессии, passkeys, автоархив, TTL
-// аккаунта) нет в контракте — экраны скрыты, запросы не отправляются
-const IS_SERVER_SECURITY_SECTIONS_SUPPORTED = false as boolean;
-
-const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+import styles from './profile/Profile.module.scss';
 
 type OwnProps = {
   isActive?: boolean;
@@ -37,117 +28,64 @@ type OwnProps = {
 };
 
 type StateProps = {
-  isCurrentUserPremium?: boolean;
-  hasPassword?: boolean;
-  hasPasscode?: boolean;
-  canSetPasscode?: boolean;
   blockedCount: number;
-  webAuthCount: number;
-  isSensitiveEnabled?: boolean;
-  canChangeSensitive?: boolean;
-  canDisplayAutoarchiveSetting: boolean;
-  shouldArchiveAndMuteNewNonContact?: boolean;
-  shouldNewNonContactPeersRequirePremium?: boolean;
-  shouldChargeForMessages: boolean;
   canDisplayChatInTitle?: boolean;
   isCurrentUserFrozen?: boolean;
-  needAgeVideoVerification?: boolean;
-  privacy: GlobalState['settings']['privacy'];
-  accountDaysTtl?: number;
-  passkeyCount?: number;
-  arePasskeysAvailable?: boolean;
 };
 
+type Audience = 'anyone' | 'nobody';
+type ChoiceRow = 'message' | 'call' | 'groups';
+type CallPresencePolicy = {
+  isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean; isRelayOnly?: boolean;
+};
+
+const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+const CHOICE_ROWS: ChoiceRow[] = ['message', 'call', 'groups'];
+// Начало отпечатка в строке, весь — в буфер обмена
+const KEY_PREVIEW_LENGTH = 4;
+
+// Parvane (spec 041 E3): «Профиль → Конфиденциальность» строками по доскам `PhProfileB`, `DkSettingsB`: «кто может»
+// значением с выбором в шторке, выключатели, защита входа (`profile/PrivacySignIn.tsx`), шифрование. Настройки
+// прежние: «писать мне» — сообщения от незнакомых (T079), «звонить мне» и «в сети» (FR-040), «добавлять в группы»
+// (P-34), звонки через сервер — только это устройство. Сервер не принял — значение возвращается с уведомлением (B14)
 const SettingsPrivacy = ({
   isActive,
-  isCurrentUserPremium,
-  hasPassword,
-  hasPasscode,
   blockedCount,
-  webAuthCount,
-  passkeyCount,
-  arePasskeysAvailable,
-  isSensitiveEnabled,
-  canChangeSensitive,
-  canDisplayAutoarchiveSetting,
-  shouldArchiveAndMuteNewNonContact,
-  shouldNewNonContactPeersRequirePremium,
-  shouldChargeForMessages,
   canDisplayChatInTitle,
-  canSetPasscode,
-  needAgeVideoVerification,
-  privacy,
   isCurrentUserFrozen,
-  accountDaysTtl,
   onReset,
 }: OwnProps & StateProps) => {
   const {
-    loadPrivacySettings,
-    loadBlockedUsers,
-    loadGlobalPrivacySettings,
-    loadWebAuthorizations,
-    setSharedSettingOption,
-    openSettingsScreen,
-    loadAccountDaysTtl,
-    loadPasskeys,
+    loadBlockedUsers, setSharedSettingOption, openSettingsScreen, showNotification,
   } = getActions();
 
+  const lang = useLang();
+  const oldLang = useOldLang();
+
+  const [isAccountDeleteOpen, setIsAccountDeleteOpen] = useState(false);
+  const [openChoice, setOpenChoice] = useState<ChoiceRow | undefined>();
+  const [ownFingerprint, setOwnFingerprint] = useState('');
+  // Согласие на добавление в группы: сервер отклоняет добавление без него
+  const [isGroupAddAllowed, setIsGroupAddAllowed] = useState(true);
+  const [strangers, setStrangers] = useState<{ isAvailable: boolean; isAllowed: boolean }>();
+  const [callPresence, setCallPresence] = useState<CallPresencePolicy>();
+
+  useHistoryBack({ isActive, onBack: onReset });
+
   useEffect(() => {
-    if (!isCurrentUserFrozen) {
-      loadBlockedUsers();
-      // Parvane: строки privacy-видимости, веб-сессии и passkeys скрыты — их
-      // данные не грузим; loadPrivacySettings — это 13 вызовов
-      // fetchPrivacySettings, метода нет в провайдере (api-missing в журнале)
-      if (IS_SERVER_SECURITY_SECTIONS_SUPPORTED) {
-        loadPrivacySettings({});
-        loadWebAuthorizations();
-        loadPasskeys();
-      }
-    }
+    if (!isCurrentUserFrozen) loadBlockedUsers();
   }, [isCurrentUserFrozen]);
 
   useEffect(() => {
-    // Parvane: автоархив и удаление аккаунта по TTL скрыты — их данные не грузим
-    if (IS_SERVER_SECURITY_SECTIONS_SUPPORTED && isActive && !isCurrentUserFrozen) {
-      loadGlobalPrivacySettings();
-      loadAccountDaysTtl();
-    }
-  }, [isActive, isCurrentUserFrozen]);
-
-  const oldLang = useOldLang();
-  const lang = useLang();
-  // spec 027: удаление аккаунта
-  const [isAccountDeleteOpen, setIsAccountDeleteOpen] = useState(false);
-  const openAccountDelete = useLastCallback(() => setIsAccountDeleteOpen(true));
-  const closeAccountDelete = useLastCallback(() => setIsAccountDeleteOpen(false));
-
-  useHistoryBack({
-    isActive,
-    onBack: onReset,
-  });
-
-  const { showNotification } = getActions();
-
-  type TwoFactorState = { enabled: boolean; telegramLinked: boolean };
-  const [twoFactor, setTwoFactor] = useState<TwoFactorState | undefined>();
-  const [isTwoFactorBusy, setIsTwoFactorBusy] = useState(false);
+    void (callParvane('parvaneGetGroupAddPolicy', {}) as Promise<{ policy: string } | undefined>)
+      .then((state) => setIsGroupAddAllowed(state?.policy !== 'nobody'));
+    void (callParvane('parvaneGetStrangersPolicy', {}) as Promise<{ isAvailable: boolean; isAllowed: boolean }>)
+      .then(setStrangers);
+    void (callParvane('parvaneGetCallPresencePolicy', {}) as Promise<CallPresencePolicy>).then(setCallPresence);
+  }, []);
 
   useEffect(() => {
-    if (!isActive) return;
-    let isCancelled = false;
-    void (callParvane('parvaneFetchTwoFactor', undefined) as Promise<TwoFactorState | undefined>)
-      .then((state) => {
-        if (!isCancelled && state) setTwoFactor(state);
-      })
-      .catch(() => undefined);
-    return () => {
-      isCancelled = true;
-    };
-  }, [isActive]);
-
-  const [ownFingerprint, setOwnFingerprint] = useState('');
-  useEffect(() => {
-    if (!isActive) return;
+    if (!isActive) return undefined;
     let isCancelled = false;
     void (callParvane('parvaneFetchSecurityInfo', {}) as Promise<{ own: string } | undefined>)
       .then((info) => {
@@ -159,124 +97,19 @@ const SettingsPrivacy = ({
     };
   }, [isActive]);
 
-  const handleCopyOwnKey = useLastCallback(() => {
-    if (ownFingerprint) copyTextToClipboard(ownFingerprint);
-  });
-
-  // P-07: смена настройки 2FA требует текущий пароль — показываем поле ввода и
-  // отправляем пароль вместе с запросом (один украденный JWT второй фактор не
-  // снимет). Включение спрашивает пароль тоже: метод v2 `set_2fa` принимает
-  // только свежий пароль, без соединения v1 иначе 2FA не включить (E6-1).
-  const [twoFactorPassword, setTwoFactorPassword] = useState('');
-  const [pendingTwoFactor, setPendingTwoFactor] = useState<boolean | undefined>();
-
-  const applyTwoFactor = useLastCallback(async (enabled: boolean, password: string) => {
-    setIsTwoFactorBusy(true);
-    try {
-      const state = await (
-        callParvane('parvaneSetTwoFactor', { enabled, password }) as Promise<TwoFactorState | undefined>
-      );
-      if (state) setTwoFactor(state);
-      setPendingTwoFactor(undefined);
-      setTwoFactorPassword('');
-    } catch {
-      showNotification({ message: oldLang('ParvaneTwoFactorFailed') });
-    } finally {
-      setIsTwoFactorBusy(false);
-    }
-  });
-
-  const handleTwoFactorChange = useLastCallback((enabled: boolean) => {
-    // повторный клик до подтверждения возвращает тумблер — запрос закрываем
-    setPendingTwoFactor(enabled === Boolean(twoFactor?.enabled) ? undefined : enabled);
-    setTwoFactorPassword('');
-  });
-
-  const handleConfirmTwoFactor = useLastCallback(() => {
-    if (!twoFactorPassword || pendingTwoFactor === undefined) return;
-    void applyTwoFactor(pendingTwoFactor, twoFactorPassword);
-  });
-
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [newPasswordRepeat, setNewPasswordRepeat] = useState('');
-  const [isPasswordBusy, setIsPasswordBusy] = useState(false);
-  const canChangePassword = Boolean(oldPassword) && newPassword.length >= 8 && newPassword === newPasswordRepeat;
-
-  const handleChangePassword = useLastCallback(async () => {
-    if (!canChangePassword) return;
-    setIsPasswordBusy(true);
-    try {
-      await callParvane('parvaneChangePassword', { oldPassword, newPassword });
-      setOldPassword('');
-      setNewPassword('');
-      setNewPasswordRepeat('');
-      showNotification({ message: oldLang('ParvaneChangePasswordDone') });
-    } catch (error) {
-      // Провайдер отдаёт причину ключом словаря (пусто — причина неизвестна)
-      const reasonKey = (error as Error)?.message;
-      const failed = oldLang('ParvaneChangePasswordFailed');
-      showNotification({ message: reasonKey ? `${failed}: ${oldLang(reasonKey)}` : failed });
-    } finally {
-      setIsPasswordBusy(false);
-    }
-  });
-
-  // P-34: согласие на добавление в группы (сервер отклоняет add без него)
-  const [allowGroupAdd, setAllowGroupAdd] = useState(true);
-  useEffect(() => {
-    void (callParvane('parvaneGetGroupAddPolicy', {}) as Promise<{ policy: string } | undefined>)
-      .then((state) => setAllowGroupAdd(state?.policy !== 'nobody'));
-  }, []);
-  // B14: сервер не принял — переключатель возвращается, пользователь видит уведомление
   const notifyPrivacyFailed = useLastCallback(() => {
     showNotification({ message: oldLang('ParvanePrivacySaveFailed') });
   });
-  const handleGroupAddChange = useLastCallback((allowed: boolean) => {
-    setAllowGroupAdd(allowed);
-    void callParvane('parvaneSetGroupAddPolicy', { policy: allowed ? 'anyone' : 'nobody' }).then((isSaved) => {
+
+  const handleGroupAddChange = useLastCallback((isAllowed: boolean) => {
+    setIsGroupAddAllowed(isAllowed);
+    void callParvane('parvaneSetGroupAddPolicy', { policy: isAllowed ? 'anyone' : 'nobody' }).then((isSaved) => {
       if (isSaved) return;
-      setAllowGroupAdd(!allowed);
+      setIsGroupAddAllowed(!isAllowed);
       notifyPrivacyFailed();
     });
   });
 
-  // Протокол v2 (spec 007, T079): сообщения от незнакомых (анонимные жетоны)
-  const [strangers, setStrangers] = useState<{ isAvailable: boolean; isAllowed: boolean }>();
-  useEffect(() => {
-    void (callParvane('parvaneGetStrangersPolicy', {}) as Promise<{ isAvailable: boolean; isAllowed: boolean }>)
-      .then(setStrangers);
-  }, []);
-  // Parvane: «кто может звонить» и «кто видит, что я в сети» (FR-040)
-  type CallPresencePolicy = {
-    isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean; isRelayOnly?: boolean;
-  };
-  const [callPresence, setCallPresence] = useState<CallPresencePolicy>();
-  useEffect(() => {
-    void (callParvane('parvaneGetCallPresencePolicy', {}) as Promise<CallPresencePolicy>).then(setCallPresence);
-  }, []);
-  const handleCallsChange = useLastCallback((isAllowed: boolean) => {
-    const isPresenceShown = callPresence?.isPresenceShown ?? true;
-    setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed }));
-    void callParvane('parvaneSetCallsPolicy', { isAllowed }).then((isSaved) => {
-      if (isSaved) return;
-      setCallPresence((current) => (current ? { ...current, areCallsAllowed: !isAllowed } : current));
-      notifyPrivacyFailed();
-    });
-  });
-  const handleRelayChange = useLastCallback((isRelayOnly: boolean) => {
-    setCallPresence((current) => (current ? { ...current, isRelayOnly } : current));
-    void callParvane('parvaneSetCallsRelay', { isRelayOnly });
-  });
-  const handlePresenceChange = useLastCallback((isShown: boolean) => {
-    const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
-    setCallPresence((current) => ({ ...current, isAvailable: true, areCallsAllowed, isPresenceShown: isShown }));
-    void callParvane('parvaneSetPresencePolicy', { isShown }).then((isSaved) => {
-      if (isSaved) return;
-      setCallPresence((current) => (current ? { ...current, isPresenceShown: !isShown } : current));
-      notifyPrivacyFailed();
-    });
-  });
   const handleStrangersChange = useLastCallback((isAllowed: boolean) => {
     setStrangers({ isAvailable: true, isAllowed });
     void callParvane('parvaneSetStrangersPolicy', { isAllowed }).then((isSaved) => {
@@ -286,248 +119,191 @@ const SettingsPrivacy = ({
     });
   });
 
-  // PIN хранилища (spec 041 E6): здесь — только строка с состоянием, сам экран — `passcode/SettingsPasscode`
-  const [isPinEnabled, setIsPinEnabled] = useState(false);
-  useEffect(() => {
-    if (!isActive) return;
-    void (callParvane('parvaneGetStoragePin', {}) as Promise<{ enabled: boolean } | undefined>)
-      .then((state) => setIsPinEnabled(Boolean(state?.enabled)));
-  }, [isActive]);
-
-  const handleChatInTitleChange = useLastCallback((isChecked: boolean) => {
-    setSharedSettingOption({
-      canDisplayChatInTitle: isChecked,
+  const handleCallsChange = useLastCallback((isAllowed: boolean) => {
+    const isPresenceShown = callPresence?.isPresenceShown ?? true;
+    setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed }));
+    void callParvane('parvaneSetCallsPolicy', { isAllowed }).then((isSaved) => {
+      if (isSaved) return;
+      setCallPresence((current) => (current ? { ...current, areCallsAllowed: !isAllowed } : current));
+      notifyPrivacyFailed();
     });
   });
 
+  const handleRelayChange = useLastCallback((isRelayOnly: boolean) => {
+    setCallPresence((current) => (current ? { ...current, isRelayOnly } : current));
+    void callParvane('parvaneSetCallsRelay', { isRelayOnly });
+  });
+
+  const handlePresenceChange = useLastCallback((isShown: boolean) => {
+    const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
+    setCallPresence((current) => ({ ...current, isAvailable: true, areCallsAllowed, isPresenceShown: isShown }));
+    void callParvane('parvaneSetPresencePolicy', { isShown }).then((isSaved) => {
+      if (isSaved) return;
+      setCallPresence((current) => (current ? { ...current, isPresenceShown: !isShown } : current));
+      notifyPrivacyFailed();
+    });
+  });
+
+  const handleChoice = useLastCallback((value: string) => {
+    const isAllowed = (value as Audience) === 'anyone';
+    if (openChoice === 'message') handleStrangersChange(isAllowed);
+    if (openChoice === 'call') handleCallsChange(isAllowed);
+    if (openChoice === 'groups') handleGroupAddChange(isAllowed);
+  });
+
+  const handleCopyKey = useLastCallback(() => {
+    if (!ownFingerprint) return;
+    copyTextToClipboard(ownFingerprint);
+    showNotification({ message: lang('ParvanePrivacyKeyCopied') });
+  });
+
+  const handleChatInTitleChange = useLastCallback((isOn: boolean) => {
+    setSharedSettingOption({ canDisplayChatInTitle: isOn });
+  });
+
+  const rowClass = buildClassName(styles.setRow, styles.setRowAction);
+  const anyoneLabel = lang('ParvanePrivacyEveryone');
+  const nobodyLabel = lang('ParvanePrivacyNobody');
+  const choices: Record<ChoiceRow, { title: string; hint: string; isAllowed: boolean; nobody: string }> = {
+    message: {
+      title: lang('ParvanePrivacyMessageMe'),
+      hint: oldLang('ParvaneStrangersInfo'),
+      isAllowed: Boolean(strangers?.isAllowed),
+      nobody: lang('ParvanePrivacyWrittenTo'),
+    },
+    call: {
+      title: lang('ParvanePrivacyCallMe'),
+      hint: oldLang('ParvaneCallsInfo'),
+      isAllowed: Boolean(callPresence?.areCallsAllowed),
+      nobody: nobodyLabel,
+    },
+    groups: {
+      title: lang('ParvanePrivacyAddToGroups'),
+      hint: oldLang('ParvaneGroupAddInfo'),
+      isAllowed: isGroupAddAllowed,
+      nobody: nobodyLabel,
+    },
+  };
+  const visibleChoices = CHOICE_ROWS.filter((row) => (
+    (row !== 'message' || strangers?.isAvailable) && (row !== 'call' || callPresence?.isAvailable)
+  ));
+  const sheet = openChoice ? choices[openChoice] : undefined;
+  const sheetNobody = sheet?.nobody || nobodyLabel;
+  const sheetOptions = useMemo(() => [
+    { value: 'anyone', label: anyoneLabel },
+    { value: 'nobody', label: sheetNobody },
+  ], [anyoneLabel, sheetNobody]);
+
   return (
-    <div className="settings-content custom-scroll">
-      <Island>
-        <ListItem
-          icon="delete-user"
-          narrow
+    <div className={buildClassName('settings-content custom-scroll', styles.screen)} data-settings-privacy>
+      <div className={styles.caption}>{lang('ParvanePrivacyWhoCan')}</div>
+      <div className={styles.group}>
+        {visibleChoices.map((row) => (
+          <button
+            key={row}
+            type="button"
+            className={rowClass}
+            data-privacy-row={row}
+            onClick={() => setOpenChoice(row)}
+          >
+            <span className={styles.setTitle}>{choices[row].title}</span>
+            <span className={styles.menuValue} data-privacy-value={choices[row].isAllowed ? 'anyone' : 'nobody'}>
+              {choices[row].isAllowed ? anyoneLabel : choices[row].nobody}
+            </span>
+            <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+          </button>
+        ))}
+        {callPresence?.isAvailable && (
+          <ProfileSwitchRow
+            title={lang('ParvanePrivacyOnline')}
+            isOn={callPresence.isPresenceShown}
+            onChange={handlePresenceChange}
+            data-privacy-row="online"
+          />
+        )}
+        {callPresence?.isAvailable && (
+          <ProfileSwitchRow
+            title={lang('ParvanePrivacyRelay')}
+            hint={lang('ParvanePrivacyRelayHint')}
+            isOn={Boolean(callPresence.isRelayOnly)}
+            onChange={handleRelayChange}
+            data-privacy-row="relay"
+          />
+        )}
+      </div>
+
+      <PrivacySignIn isActive={isActive} />
+
+      <div className={styles.caption}>{lang('ParvanePrivacyEncryption')}</div>
+      <div className={styles.group}>
+        <button
+          type="button"
+          className={rowClass}
+          title={oldLang('ParvaneSecurityKeyOwnHint')}
+          data-privacy-row="key"
+          data-security-key={ownFingerprint}
+          onClick={handleCopyKey}
+        >
+          <span className={styles.setTitle}>{oldLang('ParvaneSecurityKeyOwn')}</span>
+          <span className={styles.setValue}>
+            {ownFingerprint ? `${ownFingerprint.slice(0, KEY_PREVIEW_LENGTH)} …` : '…'}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={rowClass}
+          data-privacy-row="blocked"
           onClick={() => openSettingsScreen({ screen: SettingsScreens.PrivacyBlockedUsers })}
         >
-          {oldLang('BlockedUsers')}
-          <span className="settings-item__current-value">{blockedCount || ''}</span>
-        </ListItem>
-      </Island>
+          <span className={styles.setTitle}>{oldLang('BlockedUsers')}</span>
+          <span className={styles.menuValue}>{blockedCount}</span>
+          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+        </button>
+      </div>
+      <div className={styles.hint}>{lang('ParvanePrivacyEncryptionHint')}</div>
 
-      {/* Parvane: скрыты серверные MTProto-разделы — Passcode/2FA/Passkeys/
-          Web Sessions, privacy-видимость (номер/last seen/фото/bio/…),
-          sensitive-контент, автоархив и удаление аккаунта по TTL */}
-
-      {/* Parvane: свой ключ безопасности — отпечаток identity-ключа устройства */}
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-        {oldLang('ParvaneSecurityKeyOwn')}
-      </IslandTitle>
-      <Island>
-        <ListItem icon="key" narrow multiline onClick={handleCopyOwnKey}>
-          <span className="title" style="font-family: var(--font-monospace); font-size: 0.875rem">
-            {ownFingerprint || '…'}
-          </span>
-          <span className="subtitle">{oldLang('ParvaneSecurityKeyOwnHint')}</span>
-        </ListItem>
-      </Island>
-
-      {/* Parvane: двухфакторный вход — подтверждение в привязанном Telegram */}
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-        {oldLang('ParvaneTwoFactorTitle')}
-      </IslandTitle>
-      <Island>
-        <Checkbox
-          label={oldLang('ParvaneTwoFactorToggle')}
-          subLabel={twoFactor && !twoFactor.telegramLinked
-            ? oldLang('ParvaneTwoFactorNoTelegram')
-            : oldLang('ParvaneTwoFactorInfo')}
-          checked={pendingTwoFactor ?? Boolean(twoFactor?.enabled)}
-          disabled={!twoFactor || !twoFactor.telegramLinked || isTwoFactorBusy}
-          onCheck={handleTwoFactorChange}
+      <div className={styles.caption}>{oldLang('lng_settings_window_system')}</div>
+      <div className={styles.group}>
+        <ProfileSwitchRow
+          title={oldLang('lng_settings_title_chat_name')}
+          isOn={Boolean(canDisplayChatInTitle)}
+          onChange={handleChatInTitleChange}
+          data-privacy-row="title"
         />
-        {pendingTwoFactor !== undefined && (
-          <SecretForm className="settings-item">
-            <input
-              type="password"
-              className="form-control"
-              autoComplete="current-password"
-              placeholder={oldLang('ParvanePasswordConfirm')}
-              value={twoFactorPassword}
-              onChange={(e) => setTwoFactorPassword(e.currentTarget.value)}
-              disabled={isTwoFactorBusy}
-            />
-            <Button size="smaller" disabled={!twoFactorPassword || isTwoFactorBusy} onClick={handleConfirmTwoFactor}>
-              {oldLang(pendingTwoFactor ? 'ParvaneTwoFactorEnableConfirm' : 'ParvaneTwoFactorDisableConfirm')}
-            </Button>
-          </SecretForm>
-        )}
-      </Island>
+      </div>
 
-      {/* Parvane: смена пароля (P-07) */}
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-        {oldLang('ParvaneChangePasswordTitle')}
-      </IslandTitle>
-      <Island>
-        <SecretForm className="settings-item">
-          <input
-            type="password"
-            className="form-control"
-            autoComplete="current-password"
-            placeholder={oldLang('ParvaneChangePasswordOld')}
-            value={oldPassword}
-            onChange={(e) => setOldPassword(e.currentTarget.value)}
-            disabled={isPasswordBusy}
-          />
-          <input
-            type="password"
-            className="form-control"
-            autoComplete="new-password"
-            placeholder={oldLang('ParvaneChangePasswordNew')}
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.currentTarget.value)}
-            disabled={isPasswordBusy}
-          />
-          <input
-            type="password"
-            className="form-control"
-            autoComplete="new-password"
-            placeholder={oldLang('ParvaneChangePasswordRepeat')}
-            value={newPasswordRepeat}
-            onChange={(e) => setNewPasswordRepeat(e.currentTarget.value)}
-            disabled={isPasswordBusy}
-          />
-          <Button size="smaller" disabled={!canChangePassword || isPasswordBusy} onClick={handleChangePassword}>
-            {oldLang('ParvaneChangePasswordButton')}
-          </Button>
-        </SecretForm>
-      </Island>
-
-      {/* Parvane: кто может добавлять меня в группы (P-34) */}
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-        {oldLang('ParvaneGroupAddTitle')}
-      </IslandTitle>
-      <Island>
-        <Checkbox
-          label={oldLang('ParvaneGroupAddToggle')}
-          subLabel={oldLang('ParvaneGroupAddInfo')}
-          checked={allowGroupAdd}
-          onCheck={handleGroupAddChange}
-        />
-        {strangers?.isAvailable && (
-          <Checkbox
-            label={oldLang('ParvaneStrangersToggle')}
-            subLabel={oldLang('ParvaneStrangersInfo')}
-            checked={strangers.isAllowed}
-            onCheck={handleStrangersChange}
-          />
-        )}
-        {callPresence?.isAvailable && (
-          <Checkbox
-            label={oldLang('ParvaneCallsToggle')}
-            subLabel={oldLang('ParvaneCallsInfo')}
-            checked={callPresence.areCallsAllowed}
-            onCheck={handleCallsChange}
-          />
-        )}
-        {callPresence?.isAvailable && (
-          <Checkbox
-            label={oldLang('ParvaneCallsRelayToggle')}
-            subLabel={oldLang('ParvaneCallsRelayInfo')}
-            checked={Boolean(callPresence.isRelayOnly)}
-            onCheck={handleRelayChange}
-          />
-        )}
-        {callPresence?.isAvailable && (
-          <Checkbox
-            label={oldLang('ParvanePresenceToggle')}
-            subLabel={oldLang('ParvanePresenceInfo')}
-            checked={callPresence.isPresenceShown}
-            onCheck={handlePresenceChange}
-          />
-        )}
-      </Island>
-
-      {/* Parvane: PIN хранилища E2E-ключей и сессии (P-39) — экран по макету, spec 041 E6 */}
-      <Island>
-        <ListItem
-          icon="lock"
-          narrow
-          onClick={() => openSettingsScreen({ screen: SettingsScreens.PasscodeEnabled })}
+      <div className={styles.group}>
+        <button
+          type="button"
+          className={buildClassName(rowClass, styles.danger)}
+          data-delete-account-open
+          onClick={() => setIsAccountDeleteOpen(true)}
         >
-          {oldLang('ParvaneStoragePinTitle')}
-          <span className="settings-item__current-value" data-pin-state={isPinEnabled ? 'on' : 'off'}>
-            {lang(isPinEnabled ? 'ParvanePinOn' : 'ParvanePinOff')}
-          </span>
-        </ListItem>
-      </Island>
+          <span className={styles.setTitle}>{lang('ParvaneDeleteAccountTitle')}</span>
+        </button>
+      </div>
 
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
-        {oldLang('lng_settings_window_system')}
-      </IslandTitle>
-      <Island>
-        <Checkbox
-          label={oldLang('lng_settings_title_chat_name')}
-          checked={Boolean(canDisplayChatInTitle)}
-          onCheck={handleChatInTitleChange}
-        />
-      </Island>
-
-      <Island>
-        <div data-delete-account-open>
-          <ListItem icon="delete" destructive narrow onClick={openAccountDelete}>
-            {lang('ParvaneDeleteAccountTitle')}
-          </ListItem>
-        </div>
-      </Island>
-      <AccountDeleteModal isOpen={isAccountDeleteOpen} onClose={closeAccountDelete} />
-
+      <ProfileChoiceSheet
+        isOpen={Boolean(sheet)}
+        title={sheet?.title || ''}
+        hint={sheet?.hint}
+        options={sheetOptions}
+        selected={sheet?.isAllowed ? 'anyone' : 'nobody'}
+        onSelect={handleChoice}
+        onClose={() => setOpenChoice(undefined)}
+      />
+      <AccountDeleteModal isOpen={isAccountDeleteOpen} onClose={() => setIsAccountDeleteOpen(false)} />
     </div>
   );
 };
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const {
-      settings: {
-        byKey: {
-          hasPassword, isSensitiveEnabled, canChangeSensitive, shouldArchiveAndMuteNewNonContact,
-          shouldNewNonContactPeersRequirePremium, nonContactPeersPaidStars,
-        },
-        privacy,
-        accountDaysTtl,
-        passkeys,
-      },
-      blocked,
-      passcode: {
-        hasPasscode,
-      },
-      appConfig,
-    } = global;
-
     const { canDisplayChatInTitle } = selectSharedSettings(global);
-    const shouldChargeForMessages = Boolean(nonContactPeersPaidStars);
-    const isCurrentUserFrozen = selectIsCurrentUserFrozen(global);
-    const isCurrentUserPremium = selectIsCurrentUserPremium(global);
-
     return {
-      isCurrentUserPremium,
-      hasPassword,
-      hasPasscode: Boolean(hasPasscode),
-      blockedCount: blocked.totalCount,
-      webAuthCount: global.activeWebSessions.orderedHashes.length,
-      isSensitiveEnabled,
-      canDisplayAutoarchiveSetting: appConfig.canDisplayAutoarchiveSetting || isCurrentUserPremium,
-      shouldArchiveAndMuteNewNonContact,
-      canChangeSensitive,
-      shouldNewNonContactPeersRequirePremium,
-      shouldChargeForMessages,
-      needAgeVideoVerification: Boolean(appConfig.needAgeVideoVerification),
-      privacy,
+      blockedCount: global.blocked.totalCount,
       canDisplayChatInTitle,
-      canSetPasscode: selectCanSetPasscode(global),
-      isCurrentUserFrozen,
-      accountDaysTtl,
-      passkeyCount: passkeys?.length,
-      arePasskeysAvailable: appConfig.arePasskeysAvailable,
+      isCurrentUserFrozen: selectIsCurrentUserFrozen(global),
     };
   },
 )(SettingsPrivacy));

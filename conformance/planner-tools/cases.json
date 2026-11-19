@@ -1,0 +1,522 @@
+{
+  "about": "PLANNER-2: подсказки «Плана» в движке (spec 041 E1). Вызовы без состояния plannerFreeTime, plannerScheduleParse, plannerSearch, plannerWorkouts; expect — ответ движка целиком. Данные выдуманные. Пересоздать ожидаемое: PLANNER_TOOLS_REGEN=1 cargo test -p parvane-protocol --test planner_tools_vectors.",
+  "cases": [
+    {
+      "args": {
+        "budget": 480,
+        "dayEnd": 1260,
+        "dayStart": 540,
+        "days": [
+          {
+            "busy": [
+              [
+                540,
+                1050
+              ]
+            ],
+            "day": "2026-11-16",
+            "load": 300
+          },
+          {
+            "busy": [
+              [
+                600,
+                720
+              ],
+              [
+                780,
+                1200
+              ]
+            ],
+            "day": "2026-11-17",
+            "load": 340
+          },
+          {
+            "busy": [],
+            "day": "2026-11-18",
+            "load": 470
+          },
+          {
+            "busy": [
+              [
+                540,
+                600
+              ],
+              [
+                1020,
+                1080
+              ]
+            ],
+            "day": "2026-11-19",
+            "load": 360
+          }
+        ],
+        "limit": 3,
+        "margin": 15,
+        "minutes": 90,
+        "nowMinute": 480,
+        "part": "any",
+        "today": "2026-11-16"
+      },
+      "call": "plannerFreeTime",
+      "expect": {
+        "slots": [
+          {
+            "budget": 480,
+            "day": "2026-11-16",
+            "end": 1155,
+            "isBeforeFirst": false,
+            "isFreeAfter": true,
+            "load": 300,
+            "start": 1065,
+            "weekday": 1
+          },
+          {
+            "budget": 480,
+            "day": "2026-11-19",
+            "end": 705,
+            "isBeforeFirst": false,
+            "isFreeAfter": false,
+            "load": 360,
+            "start": 615,
+            "weekday": 4
+          },
+          {
+            "budget": 480,
+            "day": "2026-11-19",
+            "end": 1185,
+            "isBeforeFirst": false,
+            "isFreeAfter": true,
+            "load": 360,
+            "start": 1095,
+            "weekday": 4
+          }
+        ],
+        "total": 3
+      },
+      "name": "свободное время: первые окна разных дней, запас и бюджет"
+    },
+    {
+      "args": {
+        "budget": 600,
+        "dayEnd": 1320,
+        "dayStart": 480,
+        "days": [
+          {
+            "busy": [],
+            "day": "2026-11-20",
+            "load": 0
+          },
+          {
+            "busy": [
+              [
+                1080,
+                1140
+              ]
+            ],
+            "day": "2026-11-21",
+            "load": 60
+          },
+          {
+            "busy": [
+              [
+                480,
+                1200
+              ]
+            ],
+            "day": "2026-11-22",
+            "load": 120
+          }
+        ],
+        "limit": 5,
+        "margin": 0,
+        "minutes": 60,
+        "nowMinute": 1001,
+        "part": "weekend",
+        "today": "2026-11-21"
+      },
+      "call": "plannerFreeTime",
+      "expect": {
+        "slots": [
+          {
+            "budget": 600,
+            "day": "2026-11-21",
+            "end": 1065,
+            "isBeforeFirst": true,
+            "isFreeAfter": false,
+            "load": 60,
+            "start": 1005,
+            "weekday": 6
+          },
+          {
+            "budget": 600,
+            "day": "2026-11-22",
+            "end": 1260,
+            "isBeforeFirst": false,
+            "isFreeAfter": true,
+            "load": 120,
+            "start": 1200,
+            "weekday": 0
+          },
+          {
+            "budget": 600,
+            "day": "2026-11-21",
+            "end": 1200,
+            "isBeforeFirst": false,
+            "isFreeAfter": true,
+            "load": 60,
+            "start": 1140,
+            "weekday": 6
+          }
+        ],
+        "total": 3
+      },
+      "name": "свободное время: вечер, выходные, сегодня после текущего времени"
+    },
+    {
+      "args": {
+        "text": "пн 10-11 созвон · вт 14-16 сервер · ср 18:30 зал",
+        "today": "2026-11-15"
+      },
+      "call": "plannerScheduleParse",
+      "expect": {
+        "items": [
+          {
+            "description": null,
+            "end": "11:00",
+            "isEndGuessed": false,
+            "name": "Созвон",
+            "start": "10:00",
+            "weekday": 1
+          },
+          {
+            "description": null,
+            "end": "16:00",
+            "isEndGuessed": false,
+            "name": "Сервер",
+            "start": "14:00",
+            "weekday": 2
+          },
+          {
+            "description": null,
+            "end": "19:30",
+            "isEndGuessed": true,
+            "name": "Зал",
+            "start": "18:30",
+            "weekday": 3
+          }
+        ],
+        "problems": [],
+        "until": null
+      },
+      "name": "расписание одной строкой через точки"
+    },
+    {
+      "args": {
+        "text": "Понедельник:\n10:00–11:30 Лекция, корпус Б\n12.00-13.00 обед\nВторник — свободна\nчт вечер ???\nFri 9:00-10:00 standup\nс 18 до 20 тренировка\nдо 31 декабря",
+        "today": "2026-11-15"
+      },
+      "call": "plannerScheduleParse",
+      "expect": {
+        "items": [
+          {
+            "description": "корпус Б",
+            "end": "11:30",
+            "isEndGuessed": false,
+            "name": "Лекция",
+            "start": "10:00",
+            "weekday": 1
+          },
+          {
+            "description": null,
+            "end": "13:00",
+            "isEndGuessed": false,
+            "name": "Обед",
+            "start": "12:00",
+            "weekday": 1
+          },
+          {
+            "description": null,
+            "end": "10:00",
+            "isEndGuessed": false,
+            "name": "Standup",
+            "start": "09:00",
+            "weekday": 5
+          },
+          {
+            "description": null,
+            "end": "20:00",
+            "isEndGuessed": false,
+            "name": "Тренировка",
+            "start": "18:00",
+            "weekday": 5
+          }
+        ],
+        "problems": [
+          {
+            "text": "чт вечер ???",
+            "weekday": 4
+          }
+        ],
+        "until": "2026-12-31"
+      },
+      "name": "расписание строками с заголовками, сроком и непонятой строкой"
+    },
+    {
+      "args": {
+        "text": "09:00-10:00 зарядка\nср 25:00-26:00 ночь\nвс 10:00-09:00 наоборот\nдо 15.12.2026",
+        "today": "2026-11-15"
+      },
+      "call": "plannerScheduleParse",
+      "expect": {
+        "items": [],
+        "problems": [
+          {
+            "text": "09:00-10:00 зарядка",
+            "weekday": null
+          },
+          {
+            "text": "ср 25:00-26:00 ночь",
+            "weekday": 3
+          },
+          {
+            "text": "вс 10:00-09:00 наоборот",
+            "weekday": 0
+          }
+        ],
+        "until": "2026-12-15"
+      },
+      "name": "расписание: срок с годом и время без дня"
+    },
+    {
+      "args": {
+        "aheadLimit": 10,
+        "filter": "all",
+        "items": [
+          {
+            "day": "2026-11-15",
+            "end": 1170,
+            "group": "Спорт",
+            "key": "e1@2026-11-15",
+            "kind": "event",
+            "name": "Зал",
+            "series": "e1",
+            "start": 1080
+          },
+          {
+            "day": "2026-11-18",
+            "end": 1200,
+            "group": "Спорт",
+            "key": "e2@2026-11-18",
+            "kind": "event",
+            "name": "Зал",
+            "start": 1110
+          },
+          {
+            "due": "2026-11-30",
+            "key": "t1",
+            "kind": "task",
+            "name": "Продлить абонемент в зал"
+          },
+          {
+            "description": "для зала",
+            "key": "t2",
+            "kind": "task",
+            "name": "Купить кроссовки"
+          },
+          {
+            "day": "2026-11-08",
+            "end": 1170,
+            "group": "Спорт",
+            "key": "e1@2026-11-08",
+            "kind": "event",
+            "name": "Зал",
+            "series": "e1",
+            "start": 1080
+          },
+          {
+            "day": "2026-11-11",
+            "end": 1170,
+            "group": "Спорт",
+            "isDone": true,
+            "key": "e1@2026-11-11",
+            "kind": "event",
+            "name": "Зал",
+            "series": "e1",
+            "start": 1080
+          },
+          {
+            "day": "2026-11-15",
+            "end": 600,
+            "key": "e3@2026-11-15",
+            "kind": "event",
+            "name": "Зал утром",
+            "start": 540
+          },
+          {
+            "day": "2026-11-16",
+            "end": 660,
+            "key": "x",
+            "kind": "event",
+            "name": "Созвон",
+            "start": 600
+          },
+          {
+            "day": "2026-11-22",
+            "end": 1170,
+            "group": "Спорт",
+            "key": "e1@2026-11-22",
+            "kind": "event",
+            "name": "Зал",
+            "series": "e1",
+            "start": 1080
+          }
+        ],
+        "nowMinute": 700,
+        "pastLimit": 2,
+        "query": "ЗАЛ",
+        "today": "2026-11-15"
+      },
+      "call": "plannerSearch",
+      "expect": {
+        "ahead": [
+          "e1@2026-11-15",
+          "e2@2026-11-18",
+          "t1",
+          "t2"
+        ],
+        "aheadTotal": 4,
+        "past": [
+          "e3@2026-11-15",
+          "e1@2026-11-11"
+        ],
+        "pastTotal": 3
+      },
+      "name": "поиск: впереди и прошло, лимиты"
+    },
+    {
+      "args": {
+        "aheadLimit": 10,
+        "filter": "tasks",
+        "items": [
+          {
+            "due": "2026-11-30",
+            "key": "t1",
+            "kind": "task",
+            "name": "Продлить абонемент в зал"
+          },
+          {
+            "key": "t3",
+            "kind": "task",
+            "name": "Абонемент в бассейн"
+          },
+          {
+            "day": "2026-11-10",
+            "isDone": true,
+            "key": "t4",
+            "kind": "task",
+            "name": "Абонемент в Зал"
+          }
+        ],
+        "nowMinute": 0,
+        "pastLimit": 10,
+        "query": "абонемент зал",
+        "today": "2026-11-15"
+      },
+      "call": "plannerSearch",
+      "expect": {
+        "ahead": [
+          "t1"
+        ],
+        "aheadTotal": 1,
+        "past": [],
+        "pastTotal": 0
+      },
+      "name": "поиск: несколько слов и фильтр задач"
+    },
+    {
+      "args": {
+        "days": 7,
+        "items": [
+          {
+            "day": "2026-11-15",
+            "key": "a",
+            "minutes": 90,
+            "name": "Зал · силовая",
+            "start": 1080
+          },
+          {
+            "day": "2026-11-15",
+            "key": "b",
+            "minutes": 60,
+            "name": "Созвон с командой",
+            "start": 1080
+          },
+          {
+            "day": "2026-11-15",
+            "key": "c",
+            "minutes": 40,
+            "name": "Бег",
+            "start": 420
+          },
+          {
+            "day": "2026-11-17",
+            "isDone": true,
+            "key": "d",
+            "name": "Йога"
+          },
+          {
+            "day": "2026-11-21",
+            "key": "e",
+            "minutes": 45,
+            "name": "Swimming pool",
+            "start": 600
+          },
+          {
+            "day": "2026-11-22",
+            "key": "f",
+            "name": "Велосипед"
+          },
+          {
+            "day": "2026-11-16",
+            "key": "g",
+            "name": "Растяжка"
+          }
+        ],
+        "nowMinute": 600,
+        "today": "2026-11-15"
+      },
+      "call": "plannerWorkouts",
+      "expect": [
+        {
+          "day": "2026-11-15",
+          "key": "a",
+          "minutes": 90,
+          "name": "Зал · силовая",
+          "start": 1080,
+          "tag": "strength",
+          "weekday": 0
+        },
+        {
+          "day": "2026-11-16",
+          "key": "g",
+          "minutes": null,
+          "name": "Растяжка",
+          "start": null,
+          "tag": "other",
+          "weekday": 1
+        },
+        {
+          "day": "2026-11-21",
+          "key": "e",
+          "minutes": 45,
+          "name": "Swimming pool",
+          "start": 600,
+          "tag": "swim",
+          "weekday": 6
+        }
+      ],
+      "name": "тренировки «Плана» для «Здоровья»"
+    }
+  ]
+}

@@ -17,14 +17,12 @@ export async function openApp(page: Page, gatewayUrl: string): Promise<string[]>
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });
   });
-  // Протокол v2 по умолчанию (T135): диалог ключа восстановления появляется
-  // после первого входа в произвольный момент и перекрывает интерфейс
-  // (диалог выхода тоже упоминает ключ восстановления — отличаем по кнопке OK)
-  const recoveryDialog = page.locator('.Modal .modal-dialog')
-    .filter({ hasText: /recovery key|ключ восстановления/i })
-    .filter({ has: page.getByRole('button', { name: 'OK', exact: true }) });
-  await page.addLocatorHandler(recoveryDialog, async (dialog) => {
-    await dialog.getByRole('button', { name: 'OK' }).click();
+  // Протокол v2 по умолчанию (T135): экран ключа восстановления (spec 041 E4) появляется после первого входа
+  // в произвольный момент и перекрывает интерфейс — отмечаем «Я сохранил ключ» и закрываем
+  const recoveryScreen = page.locator('[data-recovery-key-screen]');
+  await page.addLocatorHandler(recoveryScreen, async (screen) => {
+    await screen.locator('[data-recovery-key-saved]').check();
+    await screen.locator('[data-recovery-key-done]').click();
   });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   return pageErrors;

@@ -28,6 +28,7 @@ const PROGRESS_KEYS = {
   upload: 'KnowledgeFilesUploading',
   download: 'KnowledgeFilesDownloading',
   move: 'KnowledgeFilesMoving',
+  copy: 'ParvaneCloudCopying',
 } as const;
 
 const PERCENT = 100;

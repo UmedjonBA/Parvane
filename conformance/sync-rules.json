@@ -2017,6 +2017,34 @@
         "desktop": "открыто",
         "android": "открыто"
       }
+    },
+    {
+      "id": "NOTES-2",
+      "title": "«Заметки»: правку с двух устройств сводит движок, расхождение решает человек",
+      "kind": "ui",
+      "record": "движок: статические вызовы notesMerge {base, mine, theirs} → {text, conflict, parts[{text[]} | {base[], mine[], theirs[], line}], autoLines} и notesMergeResolve {base, mine, theirs, choices[mine|theirs|both]} → {text}",
+      "behaviour": "Построчное трёхстороннее слияние от общей версии: разные места складываются, одинаковые правки берутся один раз; одно место, изменённое по-разному, — расхождение, текст до решения — моя версия, чужая сохраняется копией рядом. Выбор в каждом расхождении — моя строка, их строка или обе; клиент текст сам не сводит",
+      "sample": "conformance/notes-merge/cases.json",
+      "status": "19 ноя 2026: движок и web — сделано (spec 040 T9, хвосты D spec 041); desktop и android — открыто",
+      "clients": {
+        "web": "components/parvane/notes/notesMerge.ts (вызов движка), notesStore.ts (сведение при записи, копия «конфликт», запись расхождения), notesOutbox.ts (очередь без связи и расхождения на устройстве), NoteConflictView.tsx, NoteConflictBar.tsx; тесты notesMerge.test.ts (общий образец), notesStore.test.ts; сценарий scripts/run_web_notes_sync_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "PLANNER-2",
+      "title": "«План»: свободное время, расписание текстом, поиск и тренировки для «Здоровья» считает движок",
+      "kind": "ui",
+      "record": "движок: статические вызовы без состояния plannerFreeTime {minutes, days[{day, busy[[от, до)], load}], dayStart, dayEnd, budget, margin, part: any|morning|evening|weekend, limit, today, nowMinute} → {slots[{day, weekday, start, end, isFreeAfter, isBeforeFirst, load, budget}], total}; plannerScheduleParse {text, today} → {items[{weekday, start, end, name, description, isEndGuessed}], problems[{text, weekday}], until}; plannerSearch {query, filter: all|events|tasks|done, items[{key, kind, series, name, description, group, day, due, start, end, isDone}], today, nowMinute, aheadLimit, pastLimit} → {ahead[ключи], past[ключи], aheadTotal, pastTotal}; plannerWorkouts {items[{key, name, day, start, minutes, isDone}], today, nowMinute, days} → [{key, name, day, weekday, start, minutes, tag}]",
+      "behaviour": "Клиент раскрывает повторы своей моделью и передаёт готовые промежутки и записи, движок решает остальное. Свободное время: день, где запись перебрала бы бюджет, пропускается; окно — внутри окна дня (утро — до 12:00, вечер — с 17:00, выходные — сб и вс), сегодня — не раньше текущей минуты, начало округлено до 5 минут, запас margin до и после занятого; первые окна разных дней идут первыми. Расписание: кусок — строка либо часть между «·» и «;», день недели действует до следующего, «18:30 зал» — событие на час, непонятое — в problems, срок «до …» с годом и без. Поиск: каждое слово запроса — подстрока названия, описания либо группы; «Впереди» по дате (без даты — в конце), ряд — ближайшим экземпляром; «Прошло» — сначала недавнее. Тренировка — запись со словом тренировки из разбора «Здоровья», невыполненная, с сегодняшнего дня на days дней, сегодняшняя — пока не закончилась",
+      "sample": "conformance/planner-tools/cases.json",
+      "status": "19 ноя 2026: движок (backend/protocol/src/planner_tools/, тест tests/planner_tools_vectors.rs) и web — сделано; desktop и android — открыто",
+      "clients": {
+        "web": "components/parvane/planner/plannerTools.ts (сборка входа и вызов), тест plannerTools.test.ts (общий образец через WASM); экраны PlannerFreeTime.tsx, PlannerImport.tsx, PlannerSearch.tsx, health/useHealthPlannedWorkouts.ts; прежние findSlots и plannerSchedule.ts удалены; сценарий scripts/run_web_planner_more_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
     }
   ]
 }

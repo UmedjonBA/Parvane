@@ -15,6 +15,7 @@ import useHistoryBack from '../../hooks/useHistoryBack';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
+import AuthCodeResend from './AuthCodeResend';
 import { AuthBar, AuthSubmit } from './AuthParts';
 
 import styles from './Auth.module.scss';
@@ -135,7 +136,7 @@ const AuthCode = ({ auth }: StateProps) => {
             />
           </div>
           {errorText && <p className={styles.error} role="alert">{errorText}</p>}
-          <p className={styles.small}>{lang('ParvaneAuthCodeResendHint')}</p>
+          <AuthCodeResend />
           <div className={buildClassName(styles.actions, styles.onlyDesk)}>
             <button
               type="button"

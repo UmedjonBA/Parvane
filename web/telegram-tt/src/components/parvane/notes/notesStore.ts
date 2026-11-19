@@ -1,7 +1,8 @@
 // Хранилище «Знаний»: заметки — обычные `.md` в папке «Знания» личного диска облака (зашифрованные блобы,
 // дерево — домен `cloud.v1`). Тексты читаются при открытии раздела и держатся в памяти; указатель связей
-// строится из содержимого. Сохранение сводит правки с двух устройств построчно; при расхождении рядом
-// создаётся копия «… (конфликт …)» — молча ничего не теряется.
+// строится из содержимого. Сохранение сводит правки с двух устройств построчно (движок, NOTES-2); при расхождении
+// рядом создаётся копия «… (конфликт …)», а на этом устройстве расхождение ждёт решения на экране расхождения —
+// молча ничего не теряется. Без связи текст ждёт в очереди устройства (`notesOutbox.ts`) и уходит при появлении связи.
 //
 // Работа с деревом облака скупая (ревью производительности 13 окт 2026, D1/D2): события облака сливаются в
 // один проход, проход по тому же дереву не повторяется, объекты заметок, которые не изменились, остаются
@@ -13,6 +14,8 @@ import type { CloudDriveState } from '../../../api/parvane/cloudDrive';
 import type { CloudNode } from '../cloud/cloudModel';
 import type { FolderSubmitError, NoteFolder } from './notesFolders';
 import type { GuideDrive, GuideLang, GuideMode } from './notesGuide';
+import type { NotesMergeChoice } from './notesMerge';
+import type { NotesMeta, NotesMetaChange } from './notesMeta';
 import type { NotesIndex, NoteSource } from './notesModel';
 
 import { createSignal } from '../../../util/signals';
@@ -20,7 +23,7 @@ import { callApi } from '../../../api/gramjs';
 import { SecureE2eStorage } from '../../../api/parvane/secureStorage';
 import { freeName } from '../cloud/cloudModel';
 import {
-  getCloudData, getNodes, loadCloud, moveCloudNodes, refreshCloud, renameCloudNode, trashCloudNodes,
+  getCloudData, getCloudStatus, getNodes, loadCloud, moveCloudNodes, refreshCloud, renameCloudNode, trashCloudNodes,
 } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
@@ -31,10 +34,19 @@ import {
   buildGuideMarker, findGuideOverview, GUIDE_MARKER_MIME, GUIDE_MARKER_NAME, GUIDE_MARKER_NODE_ID, hasGuideMarker,
   planGuide,
 } from './notesGuide';
-import { mergeNotes } from './notesMerge';
+import { setChosenFolderTones } from './notesLook';
+import { mergeNotes, resolveNotes } from './notesMerge';
+import {
+  applyNotesMetaChange, EMPTY_NOTES_META, NOTES_META_MIME, NOTES_META_NAME, parseNotesMeta, serializeNotesMeta,
+  tonesByTopPath,
+} from './notesMeta';
 import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNoteCached, renameLinks,
 } from './notesModel';
+import {
+  dropNoteConflict, dropQueuedText, getNoteConflict, getQueuedText, listQueuedTexts, loadNotesOutbox, queueNoteText,
+  resetNotesOutbox, saveNoteConflict,
+} from './notesOutbox';
 import {
   applyNoteTasks, applyPlannerToNote, hasNoteTaskChanges, markerOfTask, noteTasksBySource, noteTasksSignature,
   planNoteTasks,
@@ -68,7 +80,9 @@ type BatchTextItem = { id: string; text?: string; fileId?: string; error?: strin
 // Запись кэша текстов в хранилище устройства: узел, версия файла, текст
 type CachedText = TextContent & { node: string };
 type GuideResult = { status: 'retry' | 'skipped' } | { status: 'done'; isFreshVault: boolean; overviewId?: string };
-type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string } | undefined;
+type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string; error?: string } | undefined;
+// Итог отправки текста: `queued` — связи нет, текст ждёт в очереди устройства
+type PushResult = { status: 'sent'; text: string; fileId: string } | { status: 'queued' | 'failed' };
 type VaultFile = { node: CloudNode; folder: string; isNote: boolean };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -92,6 +106,12 @@ const TEXT_CACHE_CHUNK = 24;
 const TEXT_CACHE_PAUSE_MS = 40;
 // Признак того, что вызов провайдера упал (а не что метода нет)
 const CALL_FAILED = Symbol('call-failed');
+// Очередь текстов без связи: повтор отправки, пока она не пуста
+const FLUSH_RETRY_MS = 15_000;
+// Отказы облака, после которых текст ждёт связи; остальные (нет места, нет доступа) — «не сохранено»
+const QUEUED_ERRORS = new Set(['offline', 'rejected']);
+// Столько облако может молчать над записью текста, прежде чем текст ляжет в очередь
+const WRITE_WAIT_MS = 8000;
 
 const [getNotes, setNotes] = createSignal<NoteEntry[]>([]);
 const [getCanvases, setCanvases] = createSignal<CanvasEntry[]>([]);
@@ -99,11 +119,13 @@ const [getNotesStatus, setNotesStatus] = createSignal<NotesStatus>('loading');
 const [getNotesNotice, setNotesNotice] = createSignal<NotesNotice | undefined>(undefined);
 // Папки хранилища (пустые тоже): список заметок показывает их заголовками
 const [getNoteFolders, setNoteFolders] = createSignal<NoteFolder[]>([]);
+// Цвета папок и закреплённые заметки (файл `.parvane-notes.json` в корне хранилища)
+const [getNotesMeta, setNotesMeta] = createSignal<NotesMeta>(EMPTY_NOTES_META);
 // «Обзор» справки, созданной в этой сессии вместе с хранилищем: раздел открывает его сам
 const [getGuideOpenId, setGuideOpenId] = createSignal<string | undefined>(undefined);
 
 export {
-  getNotes, getCanvases, getNotesStatus, getNotesNotice, getNoteFolders, getGuideOpenId,
+  getNotes, getCanvases, getNotesStatus, getNotesNotice, getNoteFolders, getGuideOpenId, getNotesMeta,
 };
 
 let isListening = false;
@@ -202,8 +224,10 @@ function notesStorage() {
   storageRun ||= (async () => {
     const info = await callParvane('fetchParvaneDiagStoreInfo', {}).catch(() => undefined) as
       { self?: string } | undefined;
-    if (!info?.self) return undefined;
-    return SecureE2eStorage.open(info.self).catch(() => undefined);
+    const storage = info?.self ? await SecureE2eStorage.open(info.self).catch(() => undefined) : undefined;
+    // Не открылось (движок ещё поднимается) — следующий вызов попробует снова
+    if (!storage) storageRun = undefined;
+    return storage;
   })();
   return storageRun;
 }
@@ -211,7 +235,10 @@ function notesStorage() {
 function loadTextCache() {
   textCacheRun ||= (async () => {
     const storage = await notesStorage();
-    if (!storage) return undefined;
+    if (!storage) {
+      textCacheRun = undefined;
+      return undefined;
+    }
     const records = await storage.loadRecordsByPrefix<CachedText>(TEXT_CACHE_PREFIX).catch(() => []);
     const cache = new Map<string, CachedText>();
     records.forEach((record) => {
@@ -352,6 +379,89 @@ async function readTexts(files: VaultFile[]) {
   if (cache) pruneTextCache(new Set(files.map(({ node }) => node.id)));
 }
 
+function findMetaNode(nodes: CloudNode[], vaultId: string) {
+  return nodes.find((node) => (
+    node.kind === 'file' && !node.trashed && node.parent === vaultId && node.name === NOTES_META_NAME
+  ));
+}
+
+// Новые цвета и закрепления — в сигнал и в цвета папок; `true` — цвета изменились (папки перерисовываются)
+function publishMeta(meta: NotesMeta, folders = getNoteFolders()) {
+  const previous = getNotesMeta();
+  if (JSON.stringify(previous) === JSON.stringify(meta)) return false;
+  setNotesMeta(meta);
+  setChosenFolderTones(tonesByTopPath(meta, folders));
+  return JSON.stringify(previous.tones) !== JSON.stringify(meta.tones);
+}
+
+/** Цвет папки либо закрепление заметки: заплатка поверх последней версии файла (другое устройство могло изменить
+ * иное — его правка остаётся). На экране — сразу. */
+export async function changeNotesMeta(change: NotesMetaChange) {
+  const vault = await ensureFolder(getNotesVaultName());
+  if (!vault) return false;
+  if (publishMeta(applyNotesMetaChange(getNotesMeta(), change))) setNoteFolders([...getNoteFolders()]);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const node = findMetaNode(getNodes(rootIdOf()), vault);
+    const current = node ? await readText(node) : undefined;
+    if (node && !current) break;
+    const text = serializeNotesMeta(applyNotesMetaChange(parseNotesMeta(current?.text), change));
+    const result = await callParvane('parvaneCloudWriteText', {
+      container: rootIdOf() || ROOT,
+      parent: vault,
+      node: node?.id,
+      name: NOTES_META_NAME,
+      text,
+      mime: NOTES_META_MIME,
+      expectedFileId: current?.fileId,
+    }).catch(() => undefined) as WriteResult;
+    if (!result?.ok || !result.node || !result.fileId) break;
+    if (result.conflict !== undefined) {
+      await refreshCloud();
+      continue;
+    }
+    rememberText(result.node, { fileId: result.fileId, text });
+    await refreshCloud();
+    await queueSync();
+    return true;
+  }
+  notify('failed', NOTES_META_NAME);
+  return false;
+}
+
+/** Вложить папку в другую (`targetId` не задан — в корень хранилища). Заметки остаются в ней; холсты из графа
+ * помнят папку путём — путь в них меняется вместе с папкой. */
+export async function nestNoteFolder(
+  folderId: string, targetId?: string, vaultName = getNotesVaultName(),
+): Promise<FolderSubmitError | undefined> {
+  const rootId = rootIdOf();
+  const nodes = getNodes(rootId);
+  const vault = findVault(nodes);
+  const node = nodes.find(({ id }) => id === folderId);
+  const source = getNoteFolders().find(({ id }) => id === folderId);
+  const target = targetId ? getNoteFolders().find(({ id }) => id === targetId) : undefined;
+  if (!rootId || !vault || !node || !source || (targetId && !target)) return 'failed';
+  // В саму себя и в свои подпапки — нельзя
+  if (target && (target.path === source.path || target.path.startsWith(`${source.path}/`))) return 'failed';
+  const parent = target?.id || vault.id;
+  if (node.parent === parent) return undefined;
+  const siblings = nodes.filter((other) => (
+    other.kind === 'folder' && !other.trashed && other.id !== folderId && other.parent === parent
+  )).map((other) => other.name);
+  const error = checkFolderName(source.name, siblings);
+  if (error) return error;
+  const newPath = target ? `${target.path}/${source.name}` : source.name;
+  if (!(await moveCloudNodes(rootId, [node], parent))) return 'failed';
+  await queueSync();
+  await withSyncSuspended(async () => {
+    for (const canvas of getCanvases()) {
+      const parsed = parseCanvas(canvas.text);
+      const doc = parsed.error ? parsed.doc : renameCanvasFolder(parsed.doc, source.path, newPath);
+      if (doc !== parsed.doc) await saveCanvas(canvas.title, serializeCanvas(doc), vaultName, canvas.id);
+    }
+  });
+  return undefined;
+}
+
 async function syncFromCloud(data: CloudDriveState | undefined) {
   // Облако ещё не прочитано — ждём; прочитано, но личного диска нет (создастся первой заметкой) — пусто
   if (!data) return;
@@ -360,7 +470,8 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   const vault = findVault(nodes);
   const files = vaultFilesOf(nodes, vault);
   const userId = notesUserId;
-  await readTexts(files);
+  const metaNode = vault && findMetaNode(nodes, vault.id);
+  const [, , metaText] = await Promise.all([readTexts(files), loadNotesOutbox(), metaNode && readText(metaNode)]);
   // Аккаунт сменился за время чтения: результат прохода прежнего аккаунта не применяется
   if (userId !== notesUserId) return;
   // Заметка, у которой не изменились ни версия файла, ни папка, ни название, ни время, остаётся прежним
@@ -370,7 +481,10 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   const notes: NoteEntry[] = [];
   const canvases: CanvasEntry[] = [];
   files.forEach(({ node, folder, isNote }) => {
-    const content = texts.get(node.id);
+    // Текст из очереди устройства (не ушёл без связи) показывается поверх версии облака
+    const pending = isNote ? getQueuedText(node.id) : undefined;
+    const stored = texts.get(node.id) || (pending && { fileId: pending.baseFileId, text: pending.text });
+    const content = stored && pending ? { fileId: stored.fileId, text: pending.text } : stored;
     if (!content) return;
     const title = node.name.slice(0, -(isNote ? NOTE_EXTENSION : CANVAS_EXTENSION).length);
     if (!isNote) {
@@ -408,8 +522,12 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   if (!isSameList(notes, getNotes())) setNotes(notes);
   if (!isSameList(canvases, getCanvases())) setCanvases(canvases);
   const folders = vault ? listNoteFolders(nodes, vault.id) : [];
-  if (!isSameFolders(folders, getNoteFolders())) setNoteFolders(folders);
+  // Файл не прочитался (нет связи) — остаются прежние цвета и закрепления
+  const isMetaChanged = !metaNode || metaText ? publishMeta(parseNotesMeta(metaText?.text), folders) : false;
+  if (isMetaChanged || !isSameFolders(folders, getNoteFolders())) setNoteFolders(folders);
   setNotesStatus('ready');
+  // Очередь текстов могла прочитаться с устройства только сейчас (хранилище открылось позже первого прохода)
+  if (listQueuedTexts().length) void flushNoteOutbox();
   if (hasGuideMarker(nodes, VAULT_NAMES)) isGuideSettled = true;
   else startGuide();
 }
@@ -613,6 +731,8 @@ function resetForUser() {
   lastSyncedData = undefined;
   storageRun = undefined;
   textCacheRun = undefined;
+  // Своё замыкание на каждый аккаунт: запись прежнего аккаунта в хранилище нового не попадёт
+  resetNotesOutbox(() => notesStorage());
   appliedPlanner = undefined;
   isGuideSettled = false;
   guideAttempts = 0;
@@ -620,6 +740,8 @@ function resetForUser() {
   setNotes([]);
   setCanvases([]);
   setNoteFolders([]);
+  setNotesMeta(EMPTY_NOTES_META);
+  setChosenFolderTones(new Map());
   setNotesStatus('loading');
 }
 
@@ -635,8 +757,18 @@ export function loadNotes(userId?: string, options?: NotesOptions) {
   if (!isListening) {
     isListening = true;
     getCloudData.subscribe(handleCloudChange);
+    // Связь вернулась — очередь текстов уходит
+    getCloudStatus.subscribe(() => {
+      if (getCloudStatus() !== 'offline') void flushNoteOutbox();
+    });
+    if (typeof window !== 'undefined') window.addEventListener('online', () => void flushNoteOutbox());
   }
-  return queueSync();
+  return queueSync().then(() => flushNoteOutbox());
+}
+
+/** Название папки хранилища, с которым открыто хранилище (для действий вне раздела: меню заметки, экраны). */
+export function getNotesVaultName() {
+  return notesOptions?.vaultName || VAULT_NAMES[0];
 }
 
 export function getNotesIndex(notes = getNotes()): NotesIndex {
@@ -790,8 +922,13 @@ async function writeNote(note: NoteEntry, text: string, expectedFileId?: string)
 async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs: string, vaultName: string) {
   const merged = mergeNotes(base, mine, theirs);
   if (merged.hasConflict) {
+    // Чужая версия — копией рядом (видна на всех устройствах), расхождение ждёт решения на этом устройстве
     const word = notesOptions?.conflictWord || CONFLICT_WORD;
-    await createNote(`${note.title} (${word} ${new Date().toLocaleString()})`, vaultName, { text: theirs });
+    const copyTitle = `${note.title} (${word} ${new Date().toLocaleString()})`;
+    const copyId = await createNote(copyTitle, vaultName, { text: theirs });
+    void saveNoteConflict({
+      node: note.id, title: note.title, copyId, base, mine, theirs, at: Date.now(),
+    });
     notify('conflict', note.title);
     return mine;
   }
@@ -816,19 +953,13 @@ export async function saveNote(
     text = await reconcileNote(note, baseText, text, note.text, vaultName);
   }
   if (text === note.text) return true;
-  let result = await writeNote(note, text, note.fileId);
-  if (result?.ok && result.conflict !== undefined) {
-    // Заметку тем временем изменило другое устройство: сводим построчно от общей версии
-    text = await reconcileNote(note, note.text, text, result.conflict, vaultName);
-    result = await writeNote(note, text, result.fileId);
-    // Второе расхождение подряд — пишем свою версию: чужая уже сохранена копией либо сведена
-    if (result?.ok && result.conflict !== undefined) result = await writeNote(note, text);
-  }
-  if (!result?.ok || !result.fileId) {
+  const pushed = await pushNoteText(note, text, vaultName);
+  if (pushed.status === 'failed') {
     notify('failed', note.title);
     return false;
   }
-  rememberText(note.id, { fileId: result.fileId, text });
+  const fileId = pushed.status === 'sent' ? pushed.fileId : note.fileId;
+  if (pushed.status === 'sent') text = pushed.text;
   if (text !== planned.text) planned = planNoteTasks(text, ctx);
   const { tasks } = planned;
   tasks.forEach(({ marker }) => knownMarkers.add(marker));
@@ -840,10 +971,123 @@ export async function saveNote(
   }
   setNotes(getNotes().map((entry) => (entry.id === note.id
     ? {
-      ...entry, text, fileId: result.fileId!, updatedAt: Date.now(),
+      ...entry, text, fileId, updatedAt: Date.now(),
     } : entry)));
-  void refreshCloud();
+  if (pushed.status === 'sent') void refreshCloud();
   return true;
+}
+
+// Текст в облако от версии, с которой шла правка (для текста из очереди — от версии до неё). Заметку тем временем
+// изменило другое устройство — сводим построчно от общей версии; связи нет — текст ждёт в очереди устройства
+async function pushNoteText(note: NoteEntry, draft: string, vaultName: string): Promise<PushResult> {
+  const pending = getQueuedText(note.id);
+  const base = pending ? pending.base : note.text;
+  const baseFileId = pending ? pending.baseFileId : note.fileId;
+  // В очереди лежит прежний текст — теперь там этот: если отправка не удастся, уйдёт он
+  if (pending && pending.text !== draft) void queueNoteText({ ...pending, title: note.title, text: draft });
+  const queue = (): PushResult => {
+    scheduleFlush();
+    // Тот же текст уже ждёт — запись не повторяется
+    if (pending?.text === draft) return { status: 'queued' };
+    void queueNoteText({
+      node: note.id, title: note.title, base, baseFileId, text: draft, at: Date.now(),
+    });
+    return { status: 'queued' };
+  };
+  // Облако без связи: запись ждала бы соединения — текст сразу в очередь
+  if (isCloudOffline()) return queue();
+  const sending = sendNoteText(note, draft, base, baseFileId, vaultName);
+  const outcome = await Promise.race([sending, pause(WRITE_WAIT_MS).then(() => undefined)]);
+  if (outcome) return outcome;
+  // Облако молчит (связь пропала посреди записи): текст ждёт в очереди; запись, дошедшая позже, её снимает
+  void sending.then((late) => {
+    if (late.status !== 'sent') return;
+    setNotes(getNotes().map((entry) => (entry.id === note.id && entry.text === late.text
+      ? { ...entry, fileId: late.fileId } : entry)));
+  });
+  return queue();
+}
+
+// Запись текста с одним сведением: заметку тем временем изменило другое устройство — сводим от общей версии
+async function sendNoteText(
+  note: NoteEntry, draft: string, base: string, baseFileId: string, vaultName: string,
+): Promise<PushResult> {
+  let text = draft;
+  let fromText = base;
+  let fromFileId = baseFileId;
+  let result = await writeNote(note, text, fromFileId);
+  if (result?.ok && result.conflict !== undefined) {
+    const theirs = result.conflict;
+    text = await reconcileNote(note, fromText, text, theirs, vaultName);
+    fromText = theirs;
+    fromFileId = result.fileId || fromFileId;
+    result = await writeNote(note, text, fromFileId);
+    // Второе расхождение подряд — пишем свою версию: чужая уже сохранена копией либо сведена
+    if (result?.ok && result.conflict !== undefined) result = await writeNote(note, text);
+  }
+  if (result?.ok && result.fileId) {
+    rememberText(note.id, { fileId: result.fileId, text });
+    void dropQueuedText(note.id, draft);
+    return { status: 'sent', text, fileId: result.fileId };
+  }
+  if (result && !QUEUED_ERRORS.has(result.error || '')) return { status: 'failed' };
+  void queueNoteText({
+    node: note.id, title: note.title, base: fromText, baseFileId: fromFileId, text, at: Date.now(),
+  });
+  scheduleFlush();
+  return { status: 'queued' };
+}
+
+// Нет связи: облако само это знает либо браузер уже вне сети (облако узнает с задержкой, а запись ждала бы связи)
+function isCloudOffline() {
+  return getCloudStatus() === 'offline' || (typeof navigator !== 'undefined' && navigator.onLine === false);
+}
+
+let flushRun: Promise<void> | undefined;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined;
+    void flushNoteOutbox();
+  }, FLUSH_RETRY_MS);
+}
+
+/** Очередь текстов — в облако по одному; первый неотправленный (нет связи) останавливает проход до повтора. */
+export function flushNoteOutbox(vaultName = notesOptions?.vaultName) {
+  if (flushRun || !vaultName || !listQueuedTexts().length) return flushRun;
+  const userId = notesUserId;
+  flushRun = (async () => {
+    // Сначала догнать облако: правка другого устройства, сделанная, пока здесь не было связи, должна стать видна —
+    // иначе запись от прежней версии молча затёрла бы её, а не дала расхождение
+    if (isCloudOffline()) return;
+    if (!(await callParvane('parvaneCloudSync').catch(() => false))) return;
+    await refreshCloud();
+    await queueSync();
+    for (const item of listQueuedTexts()) {
+      if (userId !== notesUserId) return;
+      const note = getNotes().find(({ id }) => id === item.node);
+      if (!note) {
+        // Заметку удалили, пока текст ждал: набранное не теряется — новая заметка с тем же названием
+        const isAlive = getNodes(rootIdOf()).some(({ id, trashed }) => id === item.node && !trashed);
+        if (isAlive || !getCloudData() || getNotesStatus() !== 'ready') continue;
+        if (!(await createNote(item.title, vaultName, { text: item.text }))) break;
+        void dropQueuedText(item.node, item.text);
+        continue;
+      }
+      const pushed = await pushNoteText(note, item.text, vaultName);
+      if (pushed.status !== 'sent') break;
+      setNotes(getNotes().map((entry) => (entry.id === note.id ? {
+        ...entry, text: pushed.text, fileId: pushed.fileId, updatedAt: Date.now(),
+      } : entry)));
+    }
+  })().catch(() => undefined).finally(() => {
+    flushRun = undefined;
+    if (listQueuedTexts().length) scheduleFlush();
+    else void refreshCloud();
+  });
+  return flushRun;
 }
 
 /** Сохранить текст, набранный на карточке холста. Заметку за время правки могли удалить (с другого
@@ -861,6 +1105,22 @@ export async function saveNoteOrRestore(
   const id = await createNote(title, vaultName, { text: draft, folderId: node?.parent || undefined });
   const created = id ? getNotes().find((note) => note.id === id) : undefined;
   return id ? { status: 'restored', id, title: created?.title || title } : { status: 'failed' };
+}
+
+/** Расхождение решено на экране: заметка получает текст по выбору в каждом месте, копия «… (конфликт …)» — в
+ * корзину. `keepCopy` — «Сохранить вторую как копию»: заметка остаётся моей версией, копия остаётся. */
+export async function resolveNoteConflict(
+  noteId: string, choices: NotesMergeChoice[], keepCopy?: boolean, vaultName = getNotesVaultName(),
+) {
+  const conflict = getNoteConflict(noteId);
+  if (!conflict) return false;
+  if (!keepCopy) {
+    const text = resolveNotes(conflict.base, conflict.mine, conflict.theirs, choices);
+    if (!(await saveNote(noteId, text, vaultName, conflict.mine))) return false;
+    if (conflict.copyId) await deleteNote(conflict.copyId);
+  }
+  await dropNoteConflict(noteId);
+  return true;
 }
 
 /** Галочки и удаления из «Плана» → в заметки (вызывается при изменении «Плана» и после загрузки).

@@ -1,0 +1,68 @@
+// Перетаскивание в «Файлах» (доски `ZdMisc`, `XdFiles`)
+
+// Файлы тащат над окном: рамка поверх всего раздела
+.zone {
+  pointer-events: none;
+
+  position: absolute;
+  z-index: 4;
+  inset: 0.75rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0 5rem;
+  border: 0.1875rem dashed var(--pv-accent);
+  border-radius: var(--pv-radius-card);
+
+  text-align: center;
+
+  opacity: 0.96;
+  background: var(--pv-raised);
+}
+
+.zoneIcon {
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--pv-accent);
+}
+
+.zoneTitle {
+  font-size: 1.375rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+.zoneText {
+  color: var(--pv-muted);
+}
+
+// Строки тащат: подсказка у нижнего края списка
+.toast {
+  pointer-events: none;
+
+  position: sticky;
+  z-index: 3;
+  bottom: 0.75rem;
+
+  align-self: flex-start;
+
+  // Короткий список — подсказка всё равно у нижнего края (доска `XdFiles`)
+  margin: auto 1rem 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--pv-radius-md);
+
+  font-size: 0.875rem;
+  color: var(--pv-panel);
+
+  background: var(--pv-fg);
+}
+
+// Папка под курсором, на которую можно отпустить (ставится из `useCloudDrag`)
+.dropOver {
+  outline: 0.125rem dashed var(--pv-accent);
+  outline-offset: -0.125rem;
+}

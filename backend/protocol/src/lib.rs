@@ -26,6 +26,10 @@ pub mod modules;
 pub mod music_queue;
 /// Раскладка графа заметок и холста из графа (spec 040).
 pub mod notes_graph;
+/// Сведение текста заметки с двух устройств (spec 040 T9).
+pub mod notes_merge;
+/// Подсказки «Плана» без состояния: свободное время, расписание текстом, поиск, тренировки (spec 041 E1).
+pub mod planner_tools;
 pub mod hold;
 pub mod host;
 pub mod identity;

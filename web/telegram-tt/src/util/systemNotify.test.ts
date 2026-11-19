@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildMessageNotifyBody, buildNotifyButtons, buildNotifyTitle, getWorkerNotifyTexts, parseReminderKey,
-  readNotifyData, resolveNotifyClick,
+  buildMessageNotifyBody, buildNotifyButtons, buildNotifyTitle, DEFAULT_NOTIFY_PREFS, getIsNotifyAllowed,
+  getIsQuietMinute, getWorkerNotifyTexts, parseReminderKey, readNotifyData, readNotifyPrefs, resolveNotifyClick,
 } from './systemNotify';
 
 const BODY = {
@@ -72,5 +72,28 @@ describe('системные уведомления', () => {
   it('тексты service worker — русский по языку системы, иначе английский', () => {
     expect(getWorkerNotifyTexts('ru-RU').snooze).toBe('Через 10 мин');
     expect(getWorkerNotifyTexts('de-DE').newMessage).toBe('New message');
+  });
+  it('настройки уведомлений: выключенный модуль молчит, «Не беспокоить» — через полночь и внутри дня', () => {
+    const at = (hours: number, minutes: number) => new Date(2026, 10, 19, hours, minutes);
+    const prefs = { ...DEFAULT_NOTIFY_PREFS, off: ['plan' as const] };
+    expect(getIsNotifyAllowed(prefs, 'plan', at(12, 0))).toBe(false);
+    expect(getIsNotifyAllowed(prefs, 'chats', at(12, 0))).toBe(true);
+    const night = { ...DEFAULT_NOTIFY_PREFS, isQuietOn: true };
+    expect(getIsNotifyAllowed(night, 'chats', at(23, 30))).toBe(false);
+    expect(getIsNotifyAllowed(night, 'chats', at(3, 0))).toBe(false);
+    expect(getIsNotifyAllowed(night, 'chats', at(7, 0))).toBe(true);
+    expect(getIsNotifyAllowed(night, 'chats', at(23, 29))).toBe(true);
+    const day = { ...night, quietFrom: 13 * 60, quietTo: 14 * 60 };
+    expect(getIsQuietMinute(day, 13 * 60 + 59)).toBe(true);
+    expect(getIsQuietMinute(day, 14 * 60)).toBe(false);
+    expect(getIsQuietMinute({ ...day, quietTo: 13 * 60 }, 13 * 60)).toBe(false);
+    expect(getIsQuietMinute({ ...night, isQuietOn: false }, 0)).toBe(false);
+  });
+
+  it('сохранённые настройки уведомлений: неизвестное и испорченное — по умолчанию', () => {
+    expect(readNotifyPrefs(undefined)).toEqual(DEFAULT_NOTIFY_PREFS);
+    expect(readNotifyPrefs({ off: ['chats', 'evil', 3], isQuietOn: 'yes', quietFrom: 1440, quietTo: 60 })).toEqual({
+      ...DEFAULT_NOTIFY_PREFS, off: ['chats'], quietTo: 60,
+    });
   });
 });

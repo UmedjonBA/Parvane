@@ -175,6 +175,21 @@ try {
   await shoot(bobPage, 'card');
   console.log('OK: статья отправлена, карточка у обоих');
 
+  // ── То же из меню заметки: «Отправить статьёй в чат» → выбор чата ─────────
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
+  await knowledge.locator(`[data-note-row="${title}"]`).first().click();
+  await note.locator('[data-note-menu]').first().click();
+  await page.locator('[data-note-menu-list] [data-note-action="article"]').click();
+  const recipients = page.locator('.Modal').filter({ has: page.locator('.ChatOrUserPicker-item') });
+  await recipients.locator('.ChatOrUserPicker-item').filter({ hasText: bob.split('@')[0] }).first().click();
+  await page.getByText('Sent to chat as article').first().waitFor({ state: 'visible', timeout: 60000 })
+    .catch(() => assert.fail('статья из меню заметки не ушла'));
+  await bobPage.waitForFunction((wanted) => (
+    document.querySelectorAll(`.Transition_slide-active [data-article-card="${wanted}"]`).length >= 2
+  ), title, { timeout: 60000 }).catch(() => assert.fail('вторая статья (из меню заметки) не дошла до Боба'));
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  console.log('OK: статья из меню заметки');
+
   // ── Окно чтения: разметка, картинка подписью, «Сохранить в заметки» ───────
   await bobCard.locator('[data-article-read] button').click();
   const viewer = bobPage.locator('[data-article-viewer]');
@@ -228,14 +243,14 @@ try {
   await expectImageEmbed(bobPage.locator('#ParvaneKnowledge [data-note-body]'), 'карта.png');
   console.log('OK: окно чтения с разметкой и файлами, статья с файлами сохранена в заметки получателя');
 
-  // ── Пересылка: статья уходит статьёй, а не пропадает ─────────────────────
+  // ── Пересылка: статья уходит статьёй, а не пропадает (третья карточка: вторая — из меню заметки) ──
   await forwardMessage(page, title, bob);
   await bobPage.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   await showChatList(bobPage);
   await openPrivateChatStrict(bobPage, alice);
   await bobPage.waitForFunction((t) => document.querySelectorAll(
     `.Transition_slide-active [data-article-card="${t}"]`,
-  ).length === 2, title, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('пересланная статья не дошла'));
+  ).length === 3, title, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('пересланная статья не дошла'));
   console.log('OK: пересланная статья — карточка статьи');
 
   // ── Перезагрузка: карточка на месте; открытого текста в базах нет ─────────

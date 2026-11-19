@@ -173,22 +173,18 @@ try {
   await dev2Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const dev1Screen = await openDevicesScreen(bobDevice1.page);
-  const pendingText = dev2Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const dev2Code = (await pendingText.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
+  const dev2Code = await pendingText.getAttribute('data-link-code');
 
   // ── Старое устройство видит запрос с тем же кодом и подтверждает ──────────
-  const offerItem = dev1Screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const offerItem = dev1Screen.locator('[data-link-offer]:not([data-link-code=""])').first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const offerText = await offerItem.textContent();
-  // Именно из «Code: NNNN NNNN NNNN» — device_id в заголовке тоже содержит цифры
-  const dev1Code = offerText.match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  // Код сверки — атрибут карточки запроса (spec 041 E3), а не текст: device_id в заголовке тоже содержит цифры
+  const dev1Code = await offerItem.getAttribute('data-link-code');
   assert.equal(dev1Code, dev2Code, 'SAS codes must match on both devices');
 
-  await offerItem.locator('.ListItem-button').click();
-  const transferButton = bobDevice1.page.getByRole('button', { name: 'Transfer', exact: true });
-  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await transferButton.click();
+  await offerItem.locator('[data-link-confirm]').click();
   await bobDevice1.page.getByText('History transferred')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
@@ -223,30 +219,27 @@ try {
   await dev3Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const firstOld = await openDevicesScreen(bobDevice1.page);
-  const firstOffer = firstOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const firstOffer = firstOld.locator('[data-link-offer]:not([data-link-code=""])').first();
   await firstOffer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-  const firstCode = (await firstOffer.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
-  const dev3Pending = dev3Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  const firstCode = await firstOffer.getAttribute('data-link-code');
+  const dev3Pending = dev3Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await dev3Pending.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-  const thirdCode = (await dev3Pending.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
+  const thirdCode = await dev3Pending.getAttribute('data-link-code');
   assert.equal(firstCode, thirdCode, 'первое старое устройство: код не совпал с новым');
   const secondOld = await openDevicesScreen(bobDevice2.page);
-  const secondOffer = secondOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const secondOffer = secondOld.locator('[data-link-offer]:not([data-link-code=""])').first();
   await secondOffer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-  const secondCode = (await secondOffer.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  const secondCode = await secondOffer.getAttribute('data-link-code');
   assert.equal(secondCode, thirdCode, 'второе старое устройство: код не совпал с новым');
   const isThirdLinked = bobDevice3.page.waitForEvent('console', {
     predicate: (message) => message.text().includes('[parvane] v2: готов'),
     timeout: LINK_TIMEOUT_MS,
   });
-  await secondOffer.locator('.ListItem-button').click();
-  const secondTransfer = bobDevice2.page.getByRole('button', { name: 'Transfer', exact: true });
-  await secondTransfer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await secondTransfer.click();
+  await secondOffer.locator('[data-link-confirm]').click();
   await bobDevice2.page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await isThirdLinked;
   // Запрос подтверждён вторым — у первого он пропадает со следующим опросом экрана
-  await firstOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ })
+  await firstOld.locator('[data-link-offer]:not([data-link-code=""])')
     .waitFor({ state: 'detached', timeout: SIBLING_SYNC_TIMEOUT_MS });
   await closeSettings(bobDevice1.page);
   await closeSettings(bobDevice2.page);

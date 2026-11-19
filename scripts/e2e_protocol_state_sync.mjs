@@ -30,6 +30,7 @@ import {
   relogin,
   sendText,
   openProfile,
+  openSettingsScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-v2-state-password';
@@ -61,8 +62,7 @@ async function installUnreadMarkReader(page) {
 // Текст подтверждения выхода (диалог закрывается без выхода)
 async function readLogoutWarning(page) {
   await openProfile(page);
-  // Ждём сам экран настроек, затем строку «Log Out» внизу него
-  await page.locator('#Settings .settings-main-header').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // openProfile ждёт «Профиль» (`[data-profile-menu]`), дальше — строка «Log Out»
   await logOutRow(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await logOutRow(page).click();
   const dialog = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: 'Log Out' }) }).first();
@@ -119,7 +119,7 @@ async function openDevicesScreen(page) {
     return page.locator('.SettingsActiveSessions');
   }
   await openProfile(page);
-  await page.getByRole('button', { name: 'Devices' }).click();
+  await page.locator('[data-profile-item="devices"]:visible').click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;
@@ -139,8 +139,8 @@ async function closeSettings(page) {
 
 // Папка через нативный экран Settings → Chat Folders (как e2e_web_content_features)
 async function createFolder(page, folderName, chatName) {
-  await openProfile(page);
-  await page.getByRole('button', { name: 'Chat Folders' }).click();
+  // С E3 папки — строкой «Настроек мессенджера»
+  await openSettingsScreen(page, 'Chat Folders');
   await page.getByRole('button', { name: 'Create New Folder' }).click();
   const nameInput = page.getByRole('textbox', { name: 'Folder name' });
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -249,17 +249,14 @@ try {
   await dev2Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const dev1Screen = await openDevicesScreen(bob1Page);
-  const pendingText = dev2Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const dev2Code = (await pendingText.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
-  const offerItem = dev1Screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const dev2Code = await pendingText.getAttribute('data-link-code');
+  const offerItem = dev1Screen.locator('[data-link-offer]:not([data-link-code=""])').first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const dev1Code = (await offerItem.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  const dev1Code = await offerItem.getAttribute('data-link-code');
   assert.equal(dev1Code, dev2Code, 'коды сверки на устройствах не совпали');
-  await offerItem.locator('.ListItem-button').click();
-  const transferButton = bob1Page.getByRole('button', { name: 'Transfer', exact: true });
-  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await transferButton.click();
+  await offerItem.locator('[data-link-confirm]').click();
   await bob1Page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Грант → запись в журнале устройств → v2 и журнал состояния на bob2 ─────

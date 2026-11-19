@@ -20,7 +20,7 @@ import PvIcon from '../notes/PvIcon';
 import styles from './Cloud.module.scss';
 
 export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send'
-  | 'share' | 'select' | 'link';
+  | 'share' | 'select' | 'link' | 'copy' | 'note';
 
 type OwnProps = {
   container: string;
@@ -47,6 +47,10 @@ type OwnProps = {
   isVault?: boolean;
   // Чужая совместная папка
   isIncoming?: boolean;
+  // Компьютер: строку можно перетащить на папку (события ловит корень раздела, `useCloudDrag`)
+  isDraggable?: boolean;
+  // Папка принимает перетащенные строки
+  isDropTarget?: boolean;
   onOpen: (container: string, node: CloudNode, isForced?: boolean) => void;
   onToggle: (node: CloudNode) => void;
   onMenu: (container: string, node: CloudNode, anchor?: CloudMenuAnchor) => void;
@@ -60,13 +64,14 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 // файл на компьютере сперва выбирается (панель справа), открывается двойным нажатием либо Enter
 const CloudItem = ({
   container, node, accessText, hint, trashHint, daysLeft, childCount, folderSize, isSelected, isSelecting, isCurrent,
-  isTrash, isNarrow, isVault, isIncoming, onOpen, onToggle, onMenu, onAction,
+  isTrash, isNarrow, isVault, isIncoming, isDraggable, isDropTarget, onOpen, onToggle, onMenu, onAction,
 }: OwnProps) => {
   const lang = useLang();
   const rowRef = useRef<HTMLDivElement>();
   const [thumbUrl, setThumbUrl] = useState<string>();
   const isFolder = node.kind === 'folder';
   const fileKind = isFolder ? undefined : kindOfFile(node.mime, node.name);
+  const canDropHere = isFolder && isDropTarget;
   const thumbId = node.thumb?.fileId;
   // Правка узла не ушла из-за связи (доска `PhStates`)
   const isUnsent = useDerivedState(getCloudUnsent).has(node.id);
@@ -170,6 +175,9 @@ const CloudItem = ({
       data-days-left={daysLeft}
       data-kind={node.kind}
       data-name={node.name}
+      data-drop-container={canDropHere ? container : undefined}
+      data-drop-folder={canDropHere ? node.id : undefined}
+      draggable={isDraggable || undefined}
       onClick={handleOpen}
       onDoubleClick={handleForcedOpen}
       onContextMenu={handleContextMenu}

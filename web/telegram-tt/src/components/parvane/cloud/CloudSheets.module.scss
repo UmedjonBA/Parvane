@@ -99,6 +99,12 @@
   margin: 0 -1rem;
 }
 
+// «Вложить в заметку…»: поиск над списком заметок
+.noteSearch {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
 .menuBackdrop {
   position: fixed;
   z-index: var(--z-portal-menu);

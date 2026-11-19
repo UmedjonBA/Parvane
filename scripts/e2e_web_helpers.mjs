@@ -1200,7 +1200,7 @@ export async function callProviderForChat(page, method, chatTitle, userName, ext
 // паролем (P-07), поэтому без него кнопка выключена
 // `rotateKeys` — режим «Sign out and change keys» (отзыв со сменой ключей); по умолчанию — «Just sign out»
 export async function terminateSessionWithPassword(page, sessionRow, password, { rotateKeys } = {}) {
-  await sessionRow.locator('.ListItem-button').click();
+  await sessionRow.locator('[data-session-signout]').click();
   const terminateButton = page.getByRole('button', { name: 'Terminate Session' });
   await terminateButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await terminateButton.isDisabled(), true, 'Terminate Session is enabled without the password');
@@ -1212,8 +1212,7 @@ export async function terminateSessionWithPassword(page, sessionRow, password, {
 
 // «Terminate All Other Sessions» → выбор режима → пароль → подтверждение
 export async function terminateAllSessionsWithPassword(page, password, { rotateKeys } = {}) {
-  await page.locator('.SettingsActiveSessions .ListItem').filter({ hasText: 'Terminate All Other Sessions' })
-    .locator('.ListItem-button').click();
+  await page.locator('.SettingsActiveSessions [data-terminate-all]').click();
   const dialog = page.locator('.Modal').filter({ hasText: 'terminate all other sessions' });
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   if (rotateKeys) await dialog.getByText('Sign out and change keys', { exact: true }).click();
@@ -1317,51 +1316,48 @@ export async function linkSecondDevice(oldPage, newPage) {
   await newScreen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const oldScreen = await openDevicesScreen(oldPage);
-  const pendingText = newScreen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  const pendingText = newScreen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const newCode = (await pendingText.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
-  const offerItem = oldScreen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const newCode = await pendingText.getAttribute('data-link-code');
+  const offerItem = oldScreen.locator('[data-link-offer]:not([data-link-code=""])').first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const oldCode = (await offerItem.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  const oldCode = await offerItem.getAttribute('data-link-code');
   assert.equal(oldCode, newCode, 'коды сверки на устройствах не совпали');
   const isLinked = newPage.waitForEvent('console', {
     predicate: (message) => message.text().includes('[parvane] v2: готов'),
     timeout: LINK_DEVICE_TIMEOUT_MS,
   });
-  await offerItem.locator('.ListItem-button').click();
-  const transferButton = oldPage.getByRole('button', { name: 'Transfer', exact: true });
-  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await transferButton.click();
+  await offerItem.locator('[data-link-confirm]').click();
   await oldPage.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await isLinked;
   await closeSettings(newPage);
   await closeSettings(oldPage);
 }
 
-// Диалог выхода с единственного устройства тоже упоминает ключ восстановления —
-// диалог самого ключа отличаем по кнопке OK
-const recoveryKeyDialog = (page) => page.locator('.Modal .modal-dialog')
-  .filter({ hasText: /recovery key|ключ восстановления/i })
-  .filter({ has: page.getByRole('button', { name: 'OK', exact: true }) });
+// Экран ключа восстановления (spec 041 E4) перекрывает интерфейс — закрывается отметкой «Я сохранил ключ»
+const recoveryKeyScreen = (page) => page.locator('[data-recovery-key-screen]');
 
-// Диалог ключа восстановления перекрывает интерфейс — обработчик закрывает его
-// перед любым действием Playwright, когда бы он ни появился
-export async function autoDismissRecoveryKeyDialog(page) {
-  await page.addLocatorHandler(recoveryKeyDialog(page), async (dialog) => {
-    await dialog.getByRole('button', { name: 'OK' }).click();
-  });
+async function closeRecoveryKeyScreen(screen) {
+  await screen.locator('[data-recovery-key-saved]').check();
+  await screen.locator('[data-recovery-key-done]').click();
 }
 
+// Обработчик закрывает экран ключа перед любым действием Playwright, когда бы он ни появился
+export async function autoDismissRecoveryKeyDialog(page) {
+  await page.addLocatorHandler(recoveryKeyScreen(page), closeRecoveryKeyScreen);
+}
+
+// Текст экрана (в нём ключ) — сценарии берут ключ из него
 export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
-  const dialog = recoveryKeyDialog(page);
+  const screen = recoveryKeyScreen(page);
   try {
-    await dialog.waitFor({ state: 'visible', timeout });
+    await screen.waitFor({ state: 'visible', timeout });
   } catch {
     return undefined;
   }
-  const text = await dialog.innerText();
-  await dialog.getByRole('button', { name: 'OK' }).click();
-  await dialog.waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
+  const text = await screen.innerText();
+  await closeRecoveryKeyScreen(screen);
+  await screen.waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
   return text;
 }
 

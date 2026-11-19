@@ -19,6 +19,8 @@ export type CloudNavCounts = Record<CloudVirtualFolder, number>;
 type OwnProps = {
   place: CloudNavPlace;
   counts: CloudNavCounts;
+  // Личный диск: «Мой диск» принимает перетащенные строки (его корень)
+  driveId?: string;
   // Компьютер: блок занятого места внизу колонки
   footer?: TeactNode;
   onPick: (place: CloudNavPlace) => void;
@@ -36,7 +38,7 @@ const PLACES: { place: CloudNavPlace; icon: PvIconName; key: 'ParvaneCloudTabDri
 // Места «Файлов» (доски `DeskFiles`, `PhoneFiles`): на компьютере — колонка со счётчиками и занятым местом внизу,
 // на телефоне — ряд чипов под шапкой
 const CloudNav = ({
-  place, counts, footer, onPick,
+  place, counts, driveId, footer, onPick,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -59,6 +61,8 @@ const CloudNav = ({
             data-nav-place={item.place}
             data-virtual={item.place === 'drive' ? undefined : item.place}
             data-count={item.place === 'drive' ? undefined : count}
+            data-drop-container={item.place === 'drive' ? driveId : undefined}
+            data-drop-name={lang(item.key)}
             onClick={handleClick}
           >
             <PvIcon name={item.icon} isSmall className={styles.navIcon} />

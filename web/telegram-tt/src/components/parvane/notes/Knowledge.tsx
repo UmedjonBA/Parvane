@@ -58,6 +58,7 @@ import NoteFolderPicker from './NoteFolderPicker';
 import NoteFolderRemoval from './NoteFolderRemoval';
 import NoteFolderSheet from './NoteFolderSheet';
 import NoteLinks from './NoteLinks';
+import NoteMissingSheet from './NoteMissingSheet';
 import NotesCanvas from './NotesCanvas';
 import NotesGraph from './NotesGraph';
 import NotesList from './NotesList';
@@ -149,6 +150,8 @@ const Knowledge = () => {
   const [graphNotice, setGraphNotice] = useState<GraphNotice>();
   // Холст, созданный с графа: вкладка «Холст» открывается на нём
   const [graphCanvasId, setGraphCanvasId] = useState<string>();
+  // Ссылка из заметки на заметку, которой ещё нет: шторка с вопросом (доска `RpNotes`)
+  const [missingTitle, setMissingTitle] = useState<string>();
   const isMakingCanvasRef = useRef(false);
   // Человек уже открыл либо создал заметку: «Обзор» справки, дописанной позже, его не перебивает. Окно гонки
   // закономерно: в новом хранилище `createNote` → `ensureFolder` ждёт `guideRun` (папку хранилища создаёт
@@ -248,6 +251,27 @@ const Knowledge = () => {
   const openTitle = useLastCallback(async (title: string) => {
     const id = await ensureNote(title);
     if (id) setOpenId(id);
+  });
+
+  // Ссылка в тексте заметки: существующая (и заметка дня) открывается, несуществующая — сначала вопрос
+  const askTitle = useLastCallback((title: string) => {
+    if (findNoteByTitle(title) || isDayTitle(title)) void openTitle(title);
+    else setMissingTitle(title);
+  });
+
+  const closeMissing = useLastCallback(() => setMissingTitle(undefined));
+
+  const handleCreateMissing = useLastCallback(async (title: string, folderId?: string) => {
+    setMissingTitle(undefined);
+    hasPickedNoteRef.current = true;
+    const id = await createNote(title, vaultName, { folderId });
+    if (id) setOpenId(id);
+  });
+
+  // Заметку положили на холст из её меню: вид «Холст» с этим холстом
+  const openCanvasFromNote = useLastCallback((canvasId: string) => {
+    setGraphCanvasId(canvasId);
+    setKnowledgeView('canvas');
   });
 
   useEffect(() => {
@@ -687,12 +711,13 @@ const Knowledge = () => {
         layout={isNarrow ? 'screen' : 'pane'}
         hasLinks={isNarrow || !hasSide}
         onBack={isNarrow ? handleBack : undefined}
-        onOpenTitle={openTitle}
+        onOpenTitle={askTitle}
         onSave={handleSave}
         onRename={handleRename}
         onDelete={handleDelete}
         onPickFolder={handleAskMove}
         onEditingChange={setIsNoteEditing}
+        onOpenCanvas={openCanvasFromNote}
       />
     );
   }
@@ -918,6 +943,14 @@ const Knowledge = () => {
         onPick={handleMove}
         onCreate={handleMoveToNew}
         onClose={closePicker}
+      />
+      <NoteMissingSheet
+        title={missingTitle}
+        index={index}
+        folders={folders}
+        folderId={openNote && folders.find(({ path }) => path === openNote.folder)?.id}
+        onCreate={handleCreateMissing}
+        onClose={closeMissing}
       />
       <NoteFolderRemoval
         removal={removal}

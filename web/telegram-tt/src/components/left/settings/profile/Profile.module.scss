@@ -692,3 +692,73 @@
 .overview .accounts {
   margin-top: 0;
 }
+
+// «Уведомления»: громкость под выключателем звука, часы «Не беспокоить»
+.volumeRow {
+  display: block;
+  padding-block: 0.75rem 0.25rem;
+}
+
+.timeField {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  min-width: 0;
+}
+
+.timeInput {
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size);
+  color: var(--pv-fg);
+
+  color-scheme: inherit;
+  background: var(--pv-bg);
+
+  &:focus-visible {
+    border-color: var(--pv-accent);
+    outline: none;
+  }
+}
+
+// Шторка выбора значения строки («Писать мне — Кто угодно»)
+.choiceList {
+  margin: 0 -1rem;
+}
+
+.choiceRow:first-child {
+  border-top: 0;
+}
+
+.choiceHint {
+  padding-top: 0.75rem;
+  font-size: var(--pv-font-size-caption);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+// Поля под строкой (подтверждение паролем, смена пароля): та же группа, отступы строки
+.formRow {
+  padding: 0.5rem 1rem 0.75rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: stretch;
+
+  :global(.form-control) {
+    margin: 0;
+  }
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+}

@@ -1,5 +1,6 @@
-// «План»: расписание на неделю текстом и «Очистить план» (16 окт 2026, просьба пользователя). В «Настройках плана»
-// вставляется недельное расписание с «до <дата>» — строки становятся еженедельными событиями с сегодняшнего дня до
+// «План»: расписание на неделю текстом и «Очистить план» (16 окт 2026, просьба пользователя). Из «Настроек плана»
+// открывается экран «Расписание на неделю» (spec 041 E1, разбор — движок): недельное расписание с «до <дата>» —
+// строки становятся еженедельными событиями с сегодняшнего дня до
 // этой даты (видны на следующей неделе и после перезагрузки); «Очистить план» с подтверждением стирает задачи и
 // события. Запуск: scripts/run_web_planner_schedule_e2e.sh
 import assert from 'node:assert/strict';
@@ -64,8 +65,9 @@ try {
   const week = planner.locator('[data-planner-view="week"]');
   const openSettings = async () => {
     await planner.getByRole('button', { name: 'Planner settings' }).click();
-    await sidePane.locator('[data-schedule-input]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await sidePane.locator('[data-schedule-open]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   };
+  const importScreen = planner.locator('[data-planner-import]');
   const closeSide = async () => {
     await sidePane.getByRole('button', { name: 'Close' }).first().click();
     await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -85,12 +87,14 @@ try {
 
   await openPlannerScreen(page, 'calendar');
   await openSettings();
-  await sidePane.locator('[data-schedule-input]').fill(SCHEDULE);
-  await sidePane.locator('[data-schedule-preview]').filter({ hasText: 'Events per week: 12.' })
+  await sidePane.locator('[data-schedule-open]').click();
+  await importScreen.locator('[data-schedule-input]').fill(SCHEDULE);
+  await importScreen.locator('[data-import-summary]').filter({ hasText: 'Understood events: 12 · until' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await sidePane.locator('[data-schedule-add]').click();
+  assert.equal(await importScreen.locator('[data-import-problem]').count(), 0, 'всё расписание понято');
+  await importScreen.locator('[data-schedule-add]').click();
   await planner.getByText('Schedule added: 12').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await closeSide();
+  await importScreen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: расписание принято — 12 событий в неделю');
 
   // Следующая неделя: все занятия на месте (повторы с сегодняшнего дня)

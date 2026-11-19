@@ -451,6 +451,95 @@ try {
   await item('ролик.mp4').locator('img[data-thumb]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: у загруженного видео — миниатюра из кадра');
 
+  // ── Перетаскивание (spec 041 E2, доски `ZdMisc`, `XdFiles`) ────────────────
+  const shotDir = process.env.PARVANE_E2E_SHOT_DIR;
+  // Файл с компьютера: поверх раздела — «Отпустите, чтобы загрузить в …», отпущенный ложится в открытую папку
+  const dropData = await page.evaluateHandle(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['перетащено мышью'], 'перетащенный.txt', { type: 'text/plain' }));
+    return data;
+  });
+  await cloud.dispatchEvent('dragenter', { dataTransfer: dropData });
+  const zone = cloud.locator('[data-cloud-drop-zone]');
+  await zone.getByText('Release to upload to «My drive»').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await zone.getByText('1 file · encrypted on this device').waitFor({ state: 'visible' });
+  if (shotDir) await page.screenshot({ path: `${shotDir}/files-drop-zone.png` });
+  await cloud.dispatchEvent('drop', { dataTransfer: dropData });
+  await zone.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: 60000 });
+  await waitUploadsDone();
+  // Строка на папку списка: перенос, подсказка называет папку; ступень пути принимает обратно. События HTML5 —
+  // своими `dispatchEvent`: при перетаскивании мышью Playwright-Chromium не рисует кадры до отпускания
+  const dragTo = async (name, target, hint) => {
+    const data = await page.evaluateHandle(() => new DataTransfer());
+    await item(name).dispatchEvent('dragstart', { dataTransfer: data });
+    await target.dispatchEvent('dragover', { dataTransfer: data });
+    await cloud.locator('[data-cloud-drag-hint]').getByText(hint).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    if (shotDir && name === 'перетащенный.txt') await page.screenshot({ path: `${shotDir}/files-drag-row.png` });
+    await target.dispatchEvent('drop', { dataTransfer: data });
+    await item(name).dispatchEvent('dragend', { dataTransfer: data }).catch(() => undefined);
+  };
+  await dragTo('перетащенный.txt', item(SECRET_NAME), `Drag onto a folder — «${SECRET_NAME}»`);
+  await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-cloud-drag-hint]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await item(SECRET_NAME).click();
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await dragTo('перетащенный.txt', path.getByRole('button', { name: 'My drive' }), 'Drag onto a folder — «My drive»');
+  await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await toRoot();
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: файл с компьютера загружен перетаскиванием; строка перенесена на папку и обратно на путь');
+  if (shotDir) {
+    await item('перетащенный.txt').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Make a copy', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.screenshot({ path: `${shotDir}/files-menu.png` });
+    await page.keyboard.press('Escape');
+    await page.getByRole('menuitem').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  }
+
+  // ── «Сделать копию»: файл и папка рядом с собой, имя с номером ────────────
+  await menuAction('перетащенный.txt', 'Make a copy');
+  await item('перетащенный (2).txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  assert.equal((await downloadOf('перетащенный (2).txt')).toString(), 'перетащено мышью', 'копия совпадает с файлом');
+  await menuAction(SECRET_NAME, 'Make a copy');
+  await item(`${SECRET_NAME} (2)`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await item(`${SECRET_NAME} (2)`).click();
+  await item('дневник.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await item('Внутри').waitFor({ state: 'visible' });
+  await toRoot();
+  await item(SECRET_NAME).waitFor({ state: 'visible' });
+  console.log('OK: копия файла и папки с содержимым');
+
+  // ── «Вложить в заметку…»: файл встаёт в конец заметки вложением ───────────
+  const knowledge = page.locator('#ParvaneKnowledge');
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
+  // Хранилище со справкой создаётся при первом открытии «Заметок»
+  // Заметки справки пишутся по одной — вложение ждёт, пока их запишут все двенадцать
+  await page.waitForFunction(() => document.querySelectorAll('#ParvaneKnowledge [data-note-row]').length === 12,
+    undefined, { timeout: 60000 });
+  await openCloud();
+  await menuAction('перетащенный.txt', 'Attach to a note…');
+  const notePick = page.locator('[data-cloud-note-list]');
+  const noteTitle = 'Overview';
+  await notePick.locator(`[data-cloud-note="${noteTitle}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (shotDir) await page.screenshot({ path: `${shotDir}/files-attach-note.png` });
+  await page.locator('[data-cloud-note-search]').fill('overview');
+  // Совпавшая названием заметка — первой (остальные справки упоминают «Overview» в тексте)
+  await page.waitForFunction(() => document.querySelector('[data-cloud-note-list] [data-cloud-note]')
+    ?.getAttribute('data-cloud-note') === 'Overview', undefined, { timeout: STEP_TIMEOUT_MS });
+  await notePick.locator(`[data-cloud-note="${noteTitle}"]`).click();
+  await page.getByText(`Attached to «${noteTitle}»`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await notePick.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
+  await knowledge.locator(`[data-note-row="${noteTitle}"]`).click();
+  const openedNote = knowledge.locator('[data-note-id]');
+  await openedNote.getByRole('button', { name: 'Edit' }).first().click();
+  await page.waitForFunction(() => document.querySelector('#knowledge-note-editor')?.value
+    .trimEnd().endsWith('![[перетащенный.txt]]'), undefined, { timeout: STEP_TIMEOUT_MS });
+  await openedNote.getByRole('button', { name: 'Save' }).first().click();
+  await openCloud();
+  console.log('OK: файл вложен в заметку');
+
   // ── Телефон: вход и возврат нижней панелью, без горизонтальной прокрутки ─
   await sidebar.getByRole('tab', { name: 'Chats' }).click();
   await page.setViewportSize({ width: 390, height: 800 });

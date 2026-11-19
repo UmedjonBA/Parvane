@@ -310,13 +310,13 @@ try {
   // Задачи без даты видны прямо в карточке «Задачи» под «Без даты» (16 окт 2026)
   await todayView.locator('[data-today-tasks]').getByText('Вторая задача').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Без даты» открывает экран «Задачи» на этом разделе (spec 041 E1)
   await undatedRow.click();
-  const undatedSheet = page.locator('[data-planner-undated]');
+  const undatedSheet = planner.locator('[data-planner-tasks="undated"]');
   await undatedSheet.getByText('Вторая задача').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.ok(await undatedSheet.locator('[data-project=""]').count(), 'задачи сгруппированы по спискам');
   await undatedSheet.getByRole('button', { name: /^Schedule Вторая задача for / }).click();
   await planner.getByText('Moved to').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await closeByEscape(undatedSheet, 'окно «Без даты»');
+  await closeByEscape(undatedSheet, 'экран «Задачи»');
   await todayView.locator('[data-today-tasks]').getByText('Вторая задача').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // «+» карточки «Задачи» — задача на этот день, а не «без даты»

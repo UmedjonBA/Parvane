@@ -71,7 +71,7 @@ async function openDevicesScreen(page) {
     return page.locator('.SettingsActiveSessions');
   }
   await openProfile(page);
-  await page.getByRole('button', { name: 'Devices' }).click();
+  await page.locator('[data-profile-item="devices"]:visible').click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;
@@ -91,7 +91,7 @@ async function closeSettings(page) {
 
 // Ввести ключ восстановления в диалоге «Renew key» экрана Devices
 async function submitRecoveryKey(page, screen, key) {
-  await screen.locator('.ListItem').filter({ hasText: 'Renew key' }).locator('.ListItem-button').click();
+  await screen.locator('[data-device-action]').filter({ hasText: 'Renew key' }).click();
   const input = page.locator('.Modal input[aria-label="Recovery key"]');
   await input.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await input.fill(key);
@@ -131,14 +131,11 @@ try {
   await dev2Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   let dev1Screen = await openDevicesScreen(bob1Page);
-  const pendingText = dev2Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const offerItem = dev1Screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const offerItem = dev1Screen.locator('[data-link-offer]:not([data-link-code=""])').first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await offerItem.locator('.ListItem-button').click();
-  const transferButton = bob1Page.getByRole('button', { name: 'Transfer', exact: true });
-  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await transferButton.click();
+  await offerItem.locator('[data-link-confirm]').click();
   await bob1Page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await waitLog('bob2', 'v2: устройство привязано грантом линковки', LINK_TIMEOUT_MS);
   await waitLog('bob2', 'v2: готов');
@@ -155,7 +152,7 @@ try {
 
   // ── (1) bob1 завершает сеанс bob2 ───────────────────────────────────────────
   dev1Screen = await openDevicesScreen(bob1Page);
-  const otherSession = dev1Screen.locator('.ListItem:has(.title-with-date)').first();
+  const otherSession = dev1Screen.locator('[data-session-row]:not([data-session-current])').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD, { rotateKeys: true });
   await waitLog('bob1', 'v2: устройство отозвано');

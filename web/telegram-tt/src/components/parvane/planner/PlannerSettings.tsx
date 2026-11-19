@@ -1,17 +1,15 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import { memo } from '../../../lib/teact/teact';
 
 import type { PlannerLayer, PlannerLayers } from './plannerLayers';
 import type { PlannerSettings as Settings, PlannerSettingsError, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDate } from './plannerFormat';
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, fromDayKey, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
-  toDayKey, toMinutes, toTime, validateBudget, validateSettings,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
+  toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
 import { resetLearned } from './plannerQuickLearn';
 import { resetHistory } from './plannerQuickSuggest';
-import { buildScheduleEvents, parseSchedule } from './plannerSchedule';
 import {
   canSyncLearned, canSyncQuickHistory, showPlannerNotice, updatePlanner,
 } from './plannerStore';
@@ -23,7 +21,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import PlannerField from './PlannerField';
 import PlannerLayerList from './PlannerLayerList';
-import PlannerListPicker from './PlannerListPicker';
 
 import styles from './Planner.module.scss';
 
@@ -34,6 +31,8 @@ type OwnProps = {
   // Слои календаря — настройка устройства
   layers: PlannerLayers;
   onToggleLayer: (layer: PlannerLayer) => void;
+  // Экран «Расписание на неделю»
+  onOpenImport: NoneToVoidFunction;
 };
 
 const ERROR_KEYS = {
@@ -47,19 +46,13 @@ const BUDGET_STEP = 30;
 // Каждое поле сохраняется само по завершении ввода; негодное значение не
 // применяется и объясняется уведомлением
 const PlannerSettings = ({
-  state, userId, layers, onToggleLayer,
+  state, userId, layers, onToggleLayer, onOpenImport,
 }: OwnProps) => {
   const lang = useLang();
 
   const { settings, budget } = state;
 
-  const [scheduleText, setScheduleText] = useState('');
-  // Дата конца, выбранная полем; нет — из текста («до 15.12.2026»)
-  const [scheduleUntil, setScheduleUntil] = useState<string>();
-  const [scheduleGroup, setScheduleGroup] = useState('');
   const [isClearOpen, openClear, closeClear] = useFlag();
-  const schedule = useMemo(() => parseSchedule(scheduleText), [scheduleText]);
-  const until = scheduleUntil || schedule.endDay;
 
   const applySettings = useLastCallback((changes: Partial<Settings>) => {
     const next = { ...settings, ...changes };
@@ -118,29 +111,6 @@ const PlannerSettings = ({
     }
   });
 
-  const handleScheduleText = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setScheduleText(e.currentTarget.value);
-  });
-
-  // Каждая строка — еженедельный ряд с сегодняшнего дня до даты конца включительно
-  const handleScheduleAdd = useLastCallback(() => {
-    const today = toDayKey(new Date());
-    if (!schedule.items.length) {
-      showPlannerNotice(lang('PlannerErrorScheduleEmpty'));
-      return;
-    }
-    if (!until || until < today) {
-      showPlannerNotice(lang('PlannerErrorScheduleUntil'));
-      return;
-    }
-    const events = buildScheduleEvents(schedule.items, today, until, scheduleGroup);
-    updatePlanner((draft) => {
-      draft.events.push(...events);
-    }, lang('PlannerNoticeScheduleAdded', { count: events.length }));
-    setScheduleText('');
-    setScheduleUntil(undefined);
-  });
-
   const handleClear = useLastCallback(() => {
     closeClear();
     updatePlanner((draft) => {
@@ -193,45 +163,14 @@ const PlannerSettings = ({
       </button>
 
       <h3 className={styles.groupTitle}>{lang('PlannerScheduleTitle')}</h3>
-      <p className={styles.sheetHint}>{lang('PlannerScheduleHint')}</p>
-      <textarea
-        className={buildClassName(styles.dailyEditor, styles.scheduleInput)}
-        data-schedule-input
-        value={scheduleText}
-        aria-label={lang('PlannerScheduleTitle')}
-        placeholder={lang('PlannerSchedulePlaceholder')}
-        onChange={handleScheduleText}
-      />
-      <PlannerListPicker id="planner-schedule-list" state={state} value={scheduleGroup} onChange={setScheduleGroup} />
-      <div className={styles.fields}>
-        <PlannerField
-          label={lang('PlannerScheduleUntil')}
-          type="date"
-          value={until}
-          onCommit={setScheduleUntil}
-        />
-      </div>
-      {Boolean(schedule.items.length) && (
-        <p className={styles.sheetHint} data-schedule-preview>
-          {lang('PlannerSchedulePreview', {
-            count: schedule.items.length,
-            date: until
-              ? formatDate(lang.code, fromDayKey(until), { day: 'numeric', month: 'long', year: 'numeric' })
-              : '—',
-          })}
-        </p>
-      )}
-      {Boolean(schedule.skipped.length) && (
-        <p className={styles.sheetHint}>{lang('PlannerScheduleSkipped', { count: schedule.skipped.length })}</p>
-      )}
+      <p className={styles.sheetHint}>{lang('PlannerImportIntro')}</p>
       <button
         type="button"
         className={buildClassName(styles.btn, styles.btnAccent)}
-        data-schedule-add
-        disabled={!schedule.items.length}
-        onClick={handleScheduleAdd}
+        data-schedule-open
+        onClick={onOpenImport}
       >
-        {lang('PlannerScheduleAdd')}
+        {lang('PlannerScheduleTitle')}
       </button>
 
       <h3 className={styles.groupTitle}>{lang('PlannerClearTitle')}</h3>

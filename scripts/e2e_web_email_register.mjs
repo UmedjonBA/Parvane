@@ -16,6 +16,8 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-email-e2e-password';
+// Ссылка «Отправить ещё раз» появляется через минуту после показа экрана кода
+const RESEND_WAIT_MS = 75000;
 const backendLogDir = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
 assert(backendLogDir, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
 const identityLogPath = path.join(backendLogDir, 'identity.log');
@@ -138,8 +140,18 @@ try {
   await codeScreen.getByText('Invalid code', { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  // Верный код завершает регистрацию и логинит
-  await submitCode(codeScreen, code);
+  // «Отправить ещё раз» (spec 041 E4): сначала отсчёт, через минуту — ссылка; новое письмо несёт новый код
+  await codeScreen.locator('[data-auth-resend="wait"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const resendLink = codeScreen.locator('[data-auth-resend="send"]');
+  await resendLink.waitFor({ state: 'visible', timeout: RESEND_WAIT_MS });
+  await resendLink.click();
+  const aliceResentCode = await fetchLatestCode(aliceEmail, { notEqualTo: code });
+  await codeScreen.locator('[data-auth-resend="wait"]').getByText('New code sent.', { exact: false })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: код из письма отправлен ещё раз по ссылке после отсчёта');
+
+  // Верный (новый) код завершает регистрацию и логинит
+  await submitCode(codeScreen, aliceResentCode);
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Аккаунт создан на домене сервера: в профиле — @ник, адрес в localStorage — ник@local
   const savedAddress = await page.evaluate(() => localStorage.getItem('parvane:login-address') || '');

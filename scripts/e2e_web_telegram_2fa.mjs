@@ -168,7 +168,8 @@ async function openPrivacySettings(page) {
 }
 
 const waitToggle = async (page, toggle, enabled) => page.waitForFunction(
-  ([el, want]) => el && !el.disabled && el.checked === want,
+  // Выключатель экрана по макету (spec 041 E3) — кнопка `role="switch"`, состояние в `aria-checked`
+  ([el, want]) => el && !el.disabled && el.getAttribute('aria-checked') === String(want),
   [await toggle.elementHandle(), enabled],
   { timeout: LOGIN_TIMEOUT_MS },
 );
@@ -182,7 +183,7 @@ async function enableTwoFactor(page) {
     // включение тоже спрашивает текущий пароль (метод v2 без свежего пароля
     // 2FA не включает — иначе без соединения v1 настройка недоступна)
     const confirmButton = page.getByRole('button', { name: 'Enable two-factor', exact: true });
-    const passwordInput = page.locator('.settings-item').filter({ has: confirmButton }).locator('input[type="password"]');
+    const passwordInput = page.locator('[data-twofa-confirm] input[type="password"]');
     await passwordInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await page.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, {
       timeout: LOGIN_TIMEOUT_MS,
@@ -214,7 +215,7 @@ async function disableTwoFactor(page) {
   // Поле пароля — то, что рядом с кнопкой выключения: такой же placeholder
   // у поля «Текущий пароль» в секции смены пароля ниже
   const confirmButton = page.getByRole('button', { name: 'Disable two-factor', exact: true });
-  const passwordInput = page.locator('.settings-item').filter({ has: confirmButton }).locator('input[type="password"]');
+  const passwordInput = page.locator('[data-twofa-confirm] input[type="password"]');
   await passwordInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await serverTwoFactor(page), true, '2FA выключился без ввода пароля');
   assert.equal(await confirmButton.isDisabled(), true, 'подтверждение доступно без пароля');

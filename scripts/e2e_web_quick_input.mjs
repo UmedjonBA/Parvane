@@ -387,11 +387,12 @@ try {
   const undatedSheet = page.locator('[data-planner-undated]');
   await undatedSheet.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await undatedSheet.getByText('купить кабель').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Список из метки создан один раз, обе задачи — в нём
-  const listSection = undatedSheet.locator(`[data-project="${LIST_NAME}"]`);
-  await listSection.getByText('купить краску').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await listSection.getByText('купить валик').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await undatedSheet.locator('[data-project]').count(), 2, 'списки: «Без списка» и один из метки');
+  // Список из метки создан один раз, обе задачи — в нём (группа — в подписи строки и в колонке групп)
+  for (const name of ['купить краску', 'купить валик']) {
+    await undatedSheet.locator('[data-task-id]').filter({ hasText: name }).filter({ hasText: LIST_NAME }).first()
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  assert.equal(await planner.locator(`[data-planner-groups] [data-group="${LIST_NAME}"]`).count(), 1, 'группа из метки одна');
   await page.keyboard.press('Escape');
   await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // На компьютере ввод открывается кнопкой в шапке

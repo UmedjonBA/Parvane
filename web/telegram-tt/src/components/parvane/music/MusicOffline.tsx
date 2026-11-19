@@ -89,6 +89,7 @@ const MusicOffline = ({ currentTrackId, isPlaying }: OwnProps) => {
               index={index}
               isCurrent={entry.track.id === currentTrackId}
               isPlaying={isPlaying}
+              canQueue
               canRemove
               removeLabel={lang('MusicOfflineRemove', { name: entry.track.title })}
               onPlay={handlePlay}

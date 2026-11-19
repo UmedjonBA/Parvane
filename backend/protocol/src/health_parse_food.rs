@@ -127,6 +127,12 @@ fn macro_word(word: &str) -> Option<&'static str> {
     }
 }
 
+/// Тип тренировки по названию записи «Плана» (spec 041 E1, «Активность» «Здоровья»): первое слово тренировки в
+/// названии; регистр и «ё» не различаются.
+pub fn workout_tag_of(name: &str) -> Option<&'static str> {
+    name.to_lowercase().replace('ё', "е").split(|c: char| !c.is_alphanumeric()).find_map(workout_word)
+}
+
 /// Слово тренировки → тип. «walked» сюда не входит: «walked 8000 steps» — это шаги.
 fn workout_word(word: &str) -> Option<&'static str> {
     if any(word, &["бег", "бегал", "бегала", "побегал", "побегала", "пробежал", "пробежала", "run", "ran", "running", "jog", "jogging", "jogged"]) || stem(word, &["пробежк"]) {

@@ -11,6 +11,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import NoteFolderActions from './NoteFolderActions';
 import PvIcon from './PvIcon';
 import PvSheet from './PvSheet';
 
@@ -118,6 +119,7 @@ const NoteFolderSheet = ({
             </button>
           )}
         </div>
+        {folder && <NoteFolderActions folder={folder} onDone={onClose} />}
       </div>
     </PvSheet>
   );

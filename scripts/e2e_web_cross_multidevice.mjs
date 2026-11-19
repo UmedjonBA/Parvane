@@ -176,14 +176,11 @@ try {
   const devScreen = await openDevicesScreen(bobWeb.page);
   const offer = await waitDesktopLog(desktopWorkdir, /линковка \(dev\): код сверки (\d{4} \d{4} \d{4})/, 60000, desktop);
   const desktopCode = offer[1];
-  const offerItem = devScreen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  const offerItem = devScreen.locator('[data-link-offer]:not([data-link-code=""])').first();
   await offerItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const webCode = (await offerItem.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  const webCode = await offerItem.getAttribute('data-link-code');
   assert.equal(webCode, desktopCode, 'SAS codes must match (web ↔ desktop)');
-  await offerItem.locator('.ListItem-button').click();
-  const transferButton = bobWeb.page.getByRole('button', { name: 'Transfer', exact: true });
-  await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await transferButton.click();
+  await offerItem.locator('[data-link-confirm]').click();
   await bobWeb.page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await closeSettings(bobWeb.page);
 

@@ -252,17 +252,15 @@ try {
   // Заметка на телефоне занимает весь экран, ленты модулей под ней нет — сначала назад к списку
   await knowledge.getByRole('button', { name: 'Back to notes' }).click();
   await openPlannerScreen(page, 'calendar');
-  // Лупа «Плана» ищет только по записям плана: команд и чатов в ней нет
-  await planner.locator('[data-palette-open]').click();
-  await visible(input, 'палитра по лупе «Плана» на телефоне');
-  // Пустой список без запроса места не занимает — проверяем, что он есть, а не виден
-  await page.locator('[data-palette-scope="plan"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await input.getAttribute('placeholder'), 'Search the plan', 'подпись поля поиска по плану');
-  await input.fill('files');
+  // Лупа «Плана» открывает поиск по плану (экран с чипами, spec 041 E1), а не палитру: команд и чатов в нём нет
+  await planner.locator('[data-planner-search-open]').click();
+  const planSearch = planner.locator('[data-planner-search]');
+  await visible(planSearch.locator('[data-planner-search-input]'), 'поиск по плану по лупе «Плана» на телефоне');
+  await planSearch.locator('[data-planner-search-input]').fill('files');
   await page.waitForTimeout(400);
   assert.equal(await group('command').count(), 0, 'в поиске по плану есть команды');
   await page.keyboard.press('Escape');
-  await hidden(input, 'Escape не закрыл поиск по плану');
+  await hidden(planSearch, 'Escape не закрыл поиск по плану');
   // Ctrl+K — по-прежнему общий поиск
   await page.keyboard.press('Control+k');
   await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });

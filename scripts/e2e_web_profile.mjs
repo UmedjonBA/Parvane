@@ -137,6 +137,67 @@ try {
   await hidden(logOutButton);
   console.log('OK: выгрузка и выход открываются из списка разделов');
 
+  // ── «Уведомления», «Конфиденциальность», «Устройства» по доскам (хвосты E3) ──
+  await profileRow(page, 'Notifications').click();
+  const notify = page.locator('[data-settings-notifications]');
+  await shown(notify);
+  const chatsSwitch = notify.locator('[data-notify-module="chats"]');
+  assert.equal(await chatsSwitch.getAttribute('aria-checked'), 'true', 'уведомления «Чатов» выключены по умолчанию');
+  await chatsSwitch.click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('parvane:notify-prefs') || '{}').off?.includes('chats'));
+  // Копия настроек для service worker — в базе напоминаний
+  const readWorkerPrefs = () => page.evaluate(() => new Promise((resolve) => {
+    const request = indexedDB.open('parvane-reminders', 1);
+    request.onerror = () => resolve(undefined);
+    request.onsuccess = () => {
+      const get = request.result.transaction('kv').objectStore('kv').get('notify-prefs');
+      get.onsuccess = () => {
+        request.result.close();
+        resolve(get.result);
+      };
+    };
+  }));
+  assert.deepEqual((await readWorkerPrefs())?.off, ['chats'], 'service worker не получил выключенный модуль');
+  await notify.locator('[data-notify-row="quiet"]').click();
+  const quietFrom = notify.locator('[data-notify-quiet="from"]');
+  await shown(quietFrom);
+  assert.equal(await quietFrom.inputValue(), '23:30');
+  await quietFrom.fill('22:15');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('parvane:notify-prefs') || '{}').quietFrom === 22 * 60 + 15);
+  assert.equal((await readWorkerPrefs())?.isQuietOn, true, 'service worker не получил «Не беспокоить»');
+  await chatsSwitch.click();
+  await notify.locator('[data-notify-row="quiet"]').click();
+  await hidden(quietFrom);
+  assert.deepEqual((await readWorkerPrefs())?.off, []);
+  console.log('OK: «Уведомления» — модули и «Не беспокоить» сохраняются и доходят до service worker');
+
+  await profileRow(page, 'Privacy and Security').click();
+  const privacy = page.locator('[data-settings-privacy]');
+  const groupsRow = privacy.locator('[data-privacy-row="groups"]');
+  await shown(groupsRow.locator('[data-privacy-value="anyone"]'));
+  await groupsRow.click();
+  await page.locator('[role="radiogroup"] [data-choice="nobody"]').click();
+  await shown(groupsRow.locator('[data-privacy-value="nobody"]'));
+  const groupPolicy = () => page.evaluate(() => window.__parvaneDiagCallApi('parvaneGetGroupAddPolicy', {}));
+  assert.equal((await groupPolicy())?.policy, 'nobody', '«Добавлять в группы» не сохранилось');
+  await groupsRow.click();
+  await page.locator('[role="radiogroup"] [data-choice="anyone"]').click();
+  await shown(groupsRow.locator('[data-privacy-value="anyone"]'));
+  await privacy.locator('[data-privacy-row="password"]').click();
+  await shown(privacy.locator('[data-password-form] input[type="password"]').first());
+  await shown(privacy.locator('[data-security-key]'));
+  console.log('OK: «Конфиденциальность» — строки «кто может» с выбором в шторке, смена пароля, ключ');
+
+  await profileRow(page, 'Devices and account').click();
+  const devicesScreen = page.locator('.SettingsActiveSessions');
+  await shown(devicesScreen.locator('[data-session-current]').getByText('this device'));
+  assert.equal(await devicesScreen.locator('[data-confirm-sign-in]').count(), 0, 'единственное устройство просят подтвердить');
+  await devicesScreen.locator('[data-link-new]').click();
+  await shown(page.locator('.Modal').getByText(/sign in with your nick and password/));
+  await page.keyboard.press('Escape');
+  await hidden(page.locator('.Modal').getByText(/sign in with your nick and password/));
+  console.log('OK: «Устройства» — это устройство, «Привязать новое устройство»');
+
   // Escape: экран → «Обзор» → список чатов
   await page.keyboard.press('Escape');
   await shown(overview);

@@ -229,15 +229,12 @@ try {
 
   await step('web: подтверждает оффер desktop (Settings → Devices → Transfer)', async () => {
     await openProfile(page);
-    await page.getByRole('button', { name: 'Devices' }).click();
+    await page.locator('[data-profile-item="devices"]:visible').click();
     const screen = page.locator('.SettingsActiveSessions');
     await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    const offerItem = screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+    const offerItem = screen.locator('[data-link-offer]:not([data-link-code=""])').first();
     await offerItem.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-    await offerItem.locator('.ListItem-button').click();
-    const transferButton = page.getByRole('button', { name: 'Transfer', exact: true });
-    await transferButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await transferButton.click();
+    await offerItem.locator('[data-link-confirm]').click();
     await page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await closeSettings(page);
   });

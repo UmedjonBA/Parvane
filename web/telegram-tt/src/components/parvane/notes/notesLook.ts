@@ -4,9 +4,9 @@ import type { LangFn } from '../../../util/localization';
 import type { NoteEntry } from './notesStore';
 
 import { fromDayKey } from '../planner/plannerModel';
+import { FOLDER_TONES } from './notesMeta';
 import { parseNoteCached } from './notesModel';
 
-const FOLDER_TONES = ['blue', 'green', 'orange', 'purple', 'aqua', 'red'] as const;
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const PREVIEW_MAX = 140;
 const HASH_BASE = 31;
@@ -17,6 +17,12 @@ const dayTitleFormats = new Map<string, Intl.DateTimeFormat>();
 const dayShortFormats = new Map<string, Intl.DateTimeFormat>();
 // Строка под названием — по объекту заметки (объекты хранилища живут, пока заметка не изменилась)
 const previewByNote = new WeakMap<object, { text: string; title: string; preview: string }>();
+// Цвета, выбранные человеком (`notesMeta.ts`): верхняя папка → тон
+let chosenTones: ReadonlyMap<string, string> = new Map();
+
+export function setChosenFolderTones(tones: ReadonlyMap<string, string>) {
+  chosenTones = tones;
+}
 
 function formatOf(cache: Map<string, Intl.DateTimeFormat>, locale: string, options: Intl.DateTimeFormatOptions) {
   let format = cache.get(locale);
@@ -35,6 +41,8 @@ function formatOf(cache: Map<string, Intl.DateTimeFormat>, locale: string, optio
 export function folderColor(folder: string, isDaily?: boolean) {
   const top = folder.split('/')[0];
   if (isDaily || !top) return 'var(--pv-note)';
+  const chosen = chosenTones.get(top);
+  if (chosen) return `var(--pv-${chosen})`;
   let hash = HASH_SEED;
   for (const char of top) hash = (hash * HASH_BASE + char.codePointAt(0)!) % 0xffff;
   return `var(--pv-${FOLDER_TONES[hash % FOLDER_TONES.length]})`;

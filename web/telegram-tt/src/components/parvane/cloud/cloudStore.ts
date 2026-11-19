@@ -24,7 +24,7 @@ export type CloudPlace = { view?: CloudVirtualFolder; container?: string; folder
 export type CloudPrefs = { sort: CloudSort };
 export type CloudTransfer = {
   id: string;
-  kind: 'upload' | 'download' | 'move';
+  kind: 'upload' | 'download' | 'move' | 'copy';
   name: string;
   done: number;
   total: number;
@@ -359,12 +359,12 @@ export function moveCloudNodes(container: string, nodes: CloudNode[], target?: s
   return applyOps(container, ops);
 }
 
-function addMoveTransfer(container: string, nodes: CloudNode[]) {
-  const id = `move-${Date.now()}-${++transferSeq}`;
+function addMoveTransfer(container: string, nodes: CloudNode[], kind: 'move' | 'copy' = 'move') {
+  const id = `${kind}-${Date.now()}-${++transferSeq}`;
   const all = getNodes(container);
   const name = nodes.length > 1 ? `${nodes[0].name} +${nodes.length - 1}` : nodes[0].name;
   setCloudTransfers([...getCloudTransfers(), {
-    id, kind: 'move', name, done: 0, total: nodes.reduce((sum, n) => sum + sizeOf(all, n.id), 0), state: 'active',
+    id, kind, name, done: 0, total: nodes.reduce((sum, n) => sum + sizeOf(all, n.id), 0), state: 'active',
   }]);
   return id;
 }
@@ -383,6 +383,23 @@ export async function moveCloudNodesAcross(from: string, nodes: CloudNode[], to:
   }).catch(() => undefined);
   await refreshCloud();
   void refreshCloudUsage();
+}
+
+/** «Сделать копию»: копия рядом с узлом, имя — с номером («отчёт (2).pdf»); блобы копирует сервер. `target` —
+ * копия в папку другого контейнера (файл общей папки — к заметке). Итог — имя копии; не вышло — `undefined`. */
+export async function copyCloudNode(
+  container: string, node: CloudNode, target?: { container: string; parent?: string },
+) {
+  const to = target?.container || container;
+  const parent = target ? target.parent : node.parent || undefined;
+  const name = freeName(namesIn(getNodes(to), parent), node.name);
+  const result = await callParvane('parvaneCloudCopy', {
+    container, items: [{ id: node.id, name }], to, parent, transferId: addMoveTransfer(container, [node], 'copy'),
+  }).catch(() => undefined) as CloudResult | undefined;
+  // Отказ виден в строке передачи (как у переноса)
+  await refreshCloud();
+  void refreshCloudUsage();
+  return result?.ok ? name : undefined;
 }
 
 /** Сделать папку личного диска совместной; возвращает id новой совместной папки. */
@@ -497,7 +514,8 @@ function applyTransferEvent(event: CloudTransferEvent) {
   const list = getCloudTransfers();
   const known = list.find((t) => t.id === event.id);
   if (!known) return;
-  const next = { ...known, ...event };
+  // Вид строки задаёт экран: копия идёт тем же переносом провайдера
+  const next = { ...known, ...event, kind: known.kind };
   setCloudTransfers(list.map((t) => (t.id === event.id ? next : t)));
   if (event.state === 'done' || event.state === 'canceled') {
     if (event.kind === 'upload') uploadSpecs.delete(event.id);
@@ -578,7 +596,7 @@ export function cancelCloudTransfer(transfer: CloudTransfer) {
     return;
   }
   const method = transfer.kind === 'upload' ? 'parvaneCloudCancelUpload'
-    : transfer.kind === 'move' ? 'parvaneCloudCancelMove' : 'parvaneCloudCancelDownload';
+    : transfer.kind === 'move' || transfer.kind === 'copy' ? 'parvaneCloudCancelMove' : 'parvaneCloudCancelDownload';
   const args = transfer.kind === 'upload' ? { uploadId: transfer.id } : { transferId: transfer.id };
   void callParvane(method, args).catch(() => undefined);
 }

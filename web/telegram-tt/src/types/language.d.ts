@@ -2299,7 +2299,6 @@ export interface LangPair {
   'ParvaneAuthNextRecoveryKey': undefined;
   'ParvaneAuthConfirmTitle': undefined;
   'ParvaneAuthCodeGroup': undefined;
-  'ParvaneAuthCodeResendHint': undefined;
   'ParvaneAuthTelegramAccountTitle': undefined;
   'ParvaneAuthTelegramAccountText': undefined;
   'ParvaneAuthTelegramLoginTitle': undefined;
@@ -2472,6 +2471,11 @@ export interface LangPair {
   'MusicOfflineSaveTrack': undefined;
   'MusicOfflineSaving': undefined;
   'MusicOfflineSaved': undefined;
+  'MusicAddToQueue': undefined;
+  'MusicGoToArtist': undefined;
+  'MusicGoToAlbum': undefined;
+  'MusicOfflineRemoveTrack': undefined;
+  'MusicDeleteFromServer': undefined;
   'MusicInFavourites': undefined;
   'MusicOpenPlayer': undefined;
   'HealthQuickPlaceholder': undefined;
@@ -2689,7 +2693,6 @@ export interface LangPair {
   'ParvaneCloudLinkErrorLimit': undefined;
   'ParvaneCloudLinkErrorDisabled': undefined;
   'ParvaneCloudRetry': undefined;
-  'ParvaneCloudDropHere': undefined;
   'ParvaneCloudFolder': undefined;
   'ParvaneCloudSelect': undefined;
   'ParvaneCloudActions': undefined;
@@ -2790,6 +2793,12 @@ export interface LangPair {
   'ParvaneCloudDropHint': undefined;
   'ParvaneCloudLinksNote': undefined;
   'ParvaneCloudSharedHint': undefined;
+  'ParvaneCloudEmptyTrashHint': undefined;
+  'ParvaneCloudEmptySharedHint': undefined;
+  'ParvaneCloudEmptyOwnedHint': undefined;
+  'ParvaneCloudMakeCopy': undefined;
+  'ParvaneCloudAttachToNote': undefined;
+  'ParvaneCloudDragHint': undefined;
   'PlannerAdd': undefined;
   'PlannerAddEntry': undefined;
   'PlannerAddTaskForDay': undefined;
@@ -2833,7 +2842,56 @@ export interface LangPair {
   'PlannerFieldStatus': undefined;
   'PlannerFieldTaskName': undefined;
   'PlannerFieldWorkDate': undefined;
-  'PlannerFindSlots': undefined;
+  'PlannerFreeTimeTitle': undefined;
+  'PlannerFreeTimeFreeAfter': undefined;
+  'PlannerFreeTimeBeforeFirst': undefined;
+  'PlannerFreeTimePick': undefined;
+  'PlannerFreeTimeAny': undefined;
+  'PlannerFreeTimeMorning': undefined;
+  'PlannerFreeTimeEvening': undefined;
+  'PlannerFreeTimeWeekend': undefined;
+  'PlannerFreeTimeMore': undefined;
+  'PlannerFreeTimeFurther': undefined;
+  'PlannerTasksTitle': undefined;
+  'PlannerTasksTabs': undefined;
+  'PlannerTasksByDue': undefined;
+  'PlannerTasksOverdue': undefined;
+  'PlannerTasksDueToday': undefined;
+  'PlannerTasksDueWeek': undefined;
+  'PlannerTasksDueLater': undefined;
+  'PlannerTasksNoDue': undefined;
+  'PlannerTasksNoDueText': undefined;
+  'PlannerTasksActiveHint': undefined;
+  'PlannerTasksForToday': undefined;
+  'PlannerTasksGroupName': undefined;
+  'PlannerTasksNewGroup': undefined;
+  'PlannerTasksCreate': undefined;
+  'PlannerTasksGroupsHint': undefined;
+  'PlannerSearchTitle': undefined;
+  'PlannerSearchPlaceholder': undefined;
+  'PlannerSearchReset': undefined;
+  'PlannerSearchShow': undefined;
+  'PlannerSearchAll': undefined;
+  'PlannerSearchEvents': undefined;
+  'PlannerSearchTasks': undefined;
+  'PlannerSearchDone': undefined;
+  'PlannerSearchNone': undefined;
+  'PlannerSearchKeysHint': undefined;
+  'PlannerSearchTask': undefined;
+  'PlannerSearchWasDone': undefined;
+  'PlannerSearchMissed': undefined;
+  'PlannerImportIntro': undefined;
+  'PlannerImportText': undefined;
+  'PlannerImportPlaceholder': undefined;
+  'PlannerImportGuessedEnd': undefined;
+  'PlannerImportNotUnderstood': undefined;
+  'PlannerImportProblemsHint': undefined;
+  'PlannerImportUntil': undefined;
+  'PlannerImportNoEnd': undefined;
+  'PlannerImportMonthEnd': undefined;
+  'PlannerImportPickDate': undefined;
+  'PlannerImportAdd': undefined;
+  'HealthWorkoutPlanned': undefined;
   'PlannerFree': undefined;
   'PlannerGroupDeadlines': undefined;
   'PlannerGroupEvents': undefined;
@@ -2922,12 +2980,8 @@ export interface LangPair {
   'PlannerNoticeGroupSaved': undefined;
   'PlannerNoticeGroupDeleted': undefined;
   'PlannerErrorGroupDuplicate': undefined;
-  'PlannerScheduleGroup': undefined;
   'PlannerScheduleTitle': undefined;
-  'PlannerScheduleHint': undefined;
-  'PlannerSchedulePlaceholder': undefined;
   'PlannerScheduleUntil': undefined;
-  'PlannerScheduleAdd': undefined;
   'PlannerErrorScheduleEmpty': undefined;
   'PlannerErrorScheduleUntil': undefined;
   'PlannerClearTitle': undefined;
@@ -2935,7 +2989,6 @@ export interface LangPair {
   'PlannerClearConfirm': undefined;
   'PlannerNoticeCleared': undefined;
   'PlannerSettingsLearnedHint': undefined;
-  'PlannerSlotsNone': undefined;
   'PlannerStatTime': undefined;
   'PlannerStatTimeEmpty': undefined;
   'PlannerStatTimeNote': undefined;
@@ -3013,7 +3066,6 @@ export interface LangPair {
   'PlannerQuickAlternatives': undefined;
   'PlannerTodayNoTasks': undefined;
   'PlannerTodayLoad': undefined;
-  'PlannerUndatedTitle': undefined;
   'PlannerUndatedEmpty': undefined;
   'PlannerAgendaEmpty': undefined;
   'PlannerDetails': undefined;
@@ -3067,7 +3119,6 @@ export interface LangPair {
   'PlannerAutoSaved': undefined;
   'PlannerSaved': undefined;
   'PlannerUndatedShort': undefined;
-  'PlannerUndatedHint': undefined;
   'PlannerDailyNote': undefined;
   'PlannerDailyNoteHint': undefined;
   'PlannerDailyNoteWrite': undefined;
@@ -3499,6 +3550,98 @@ export interface LangPair {
   'ShareIncomingFolder': undefined;
   'ShareSavedToFiles': undefined;
   'ShareFailed': undefined;
+  'KnowledgeConflictBanner': undefined;
+  'KnowledgeConflictHint': undefined;
+  'KnowledgeConflictOpen': undefined;
+  'KnowledgeConflictTheirs': undefined;
+  'KnowledgeConflictBoth': undefined;
+  'KnowledgeConflictEmpty': undefined;
+  'KnowledgeConflictSave': undefined;
+  'KnowledgeConflictKeepCopy': undefined;
+  'KnowledgeMissingName': undefined;
+  'KnowledgeMissingFolder': undefined;
+  'KnowledgeMissingCreate': undefined;
+  'KnowledgeMissingLater': undefined;
+  'KnowledgeSendArticle': undefined;
+  'KnowledgeArticleSent': undefined;
+  'KnowledgeAddToCanvas': undefined;
+  'KnowledgeCanvasAddFailed': undefined;
+  'ParvaneNotifyBackground': undefined;
+  'ParvaneNotifyWebHint': undefined;
+  'ParvaneNotifyOfflineHint': undefined;
+  'ParvaneNotifyByModule': undefined;
+  'ParvaneNotifyChatsHint': undefined;
+  'ParvaneNotifyPlanHint': undefined;
+  'ParvaneNotifyModulesHint': undefined;
+  'ParvaneNotifyChatTypes': undefined;
+  'ParvaneNotifyHow': undefined;
+  'ParvaneNotifyVolume': undefined;
+  'ParvaneNotifyShowText': undefined;
+  'ParvaneNotifyShowTextHint': undefined;
+  'ParvaneNotifyQuiet': undefined;
+  'ParvaneNotifyQuietFrom': undefined;
+  'ParvaneNotifyQuietTo': undefined;
+  'ParvaneNotifyQuietHint': undefined;
+  'ParvanePrivacyWhoCan': undefined;
+  'ParvanePrivacyMessageMe': undefined;
+  'ParvanePrivacyCallMe': undefined;
+  'ParvanePrivacyAddToGroups': undefined;
+  'ParvanePrivacyEveryone': undefined;
+  'ParvanePrivacyNobody': undefined;
+  'ParvanePrivacyWrittenTo': undefined;
+  'ParvanePrivacyOnline': undefined;
+  'ParvanePrivacyRelay': undefined;
+  'ParvanePrivacyRelayHint': undefined;
+  'ParvanePrivacyChangePassword': undefined;
+  'ParvanePrivacyEncryption': undefined;
+  'ParvanePrivacyEncryptionHint': undefined;
+  'ParvanePrivacyKeyCopied': undefined;
+  'ParvaneAuthCodeNotReceived': undefined;
+  'ParvaneAuthCodeResend': undefined;
+  'ParvaneAuthCodeResent': undefined;
+  'ParvaneAuthCodeResendFailed': undefined;
+  'ParvaneDeviceOfferText': undefined;
+  'ParvaneDeviceDecline': undefined;
+  'ParvaneDeviceConfirm': undefined;
+  'ParvaneDeviceThis': undefined;
+  'ParvaneDeviceSignOutOn': undefined;
+  'ParvaneDeviceStolen': undefined;
+  'ParvaneDeviceMine': undefined;
+  'ParvaneDeviceLinkNew': undefined;
+  'ParvaneDeviceLinkNewText': undefined;
+  'ParvaneDeviceKeys': undefined;
+  'ParvaneConfirmSignInTitle': undefined;
+  'ParvaneConfirmSignInText': undefined;
+  'ParvaneConfirmWayDevice': undefined;
+  'ParvaneConfirmWayDeviceText': undefined;
+  'ParvaneConfirmWaiting': undefined;
+  'ParvaneConfirmWayKey': undefined;
+  'ParvaneConfirmWayKeyText': undefined;
+  'ParvaneConfirmWayTelegram': undefined;
+  'ParvaneConfirmOpenTelegram': undefined;
+  'ParvaneConfirmNoWay': undefined;
+  'ParvaneConfirmWithoutHistory': undefined;
+  'ParvaneRecoveryKeyTitle': undefined;
+  'ParvaneRecoveryKeyText': undefined;
+  'ParvaneRecoveryKeyCopy': undefined;
+  'ParvaneRecoveryKeyFile': undefined;
+  'ParvaneRecoveryKeyCopied': undefined;
+  'ParvaneRecoveryKeyWhereTitle': undefined;
+  'ParvaneRecoveryKeyWhere': undefined;
+  'ParvaneRecoveryKeyAdminHint': undefined;
+  'ParvaneRecoveryKeySaved': undefined;
+  'ParvaneRecoveryKeyDone': undefined;
+  'KnowledgeFolderColor': undefined;
+  'KnowledgeFolderColorAuto': undefined;
+  'KnowledgeFolderNest': undefined;
+  'KnowledgeFolderNestTop': undefined;
+  'KnowledgePin': undefined;
+  'KnowledgeUnpin': undefined;
+  'KnowledgePinned': undefined;
+  'ParvaneAuthTelegramQrShow': undefined;
+  'ParvaneAuthTelegramQrHide': undefined;
+  'ParvaneAuthTelegramQrHint': undefined;
+  'ParvaneNotifySound': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -3619,12 +3762,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneGroupCallIncomingNamed': {
     'group': V;
-  };
-  'ParvaneRecoveryKey': {
-    'key': V;
-  };
-  'ParvaneRecoveryKeyAdmin': {
-    'key': V;
   };
   'Channel.Persmission.Denied.SendMessages.Until': {
     '0': V;
@@ -5296,6 +5433,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MusicQueueTitle': {
     'count': V;
   };
+  'MusicTrackActions': {
+    'name': V;
+  };
   'MusicWidgetOpen': {
     'title': V;
     'artist': V;
@@ -5472,6 +5612,22 @@ export interface LangPairWithVariables<V = LangVariable> {
     'used': V;
     'total': V;
   };
+  'ParvaneCloudCopying': {
+    'percent': V;
+    'size': V;
+  };
+  'ParvaneCloudAttachedToNote': {
+    'name': V;
+  };
+  'ParvaneCloudAttachFailed': {
+    'name': V;
+  };
+  'ParvaneCloudDropRelease': {
+    'place': V;
+  };
+  'ParvaneCloudDragOnto': {
+    'name': V;
+  };
   'PlannerAriaDay': {
     'date': V;
     'hours': V;
@@ -5532,6 +5688,51 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerErrorOutsideWindow': {
     'from': V;
     'to': V;
+  };
+  'PlannerFreeTimeHint': {
+    'name': V;
+    'duration': V;
+    'date': V;
+    'margin': V;
+  };
+  'PlannerFreeTimeLoad': {
+    'load': V;
+    'budget': V;
+  };
+  'PlannerFreeTimeNone': {
+    'date': V;
+  };
+  'PlannerTasksGroupStats': {
+    'count': V;
+    'hours': V;
+  };
+  'PlannerSearchFound': {
+    'count': V;
+  };
+  'PlannerSearchAhead': {
+    'count': V;
+  };
+  'PlannerSearchPast': {
+    'count': V;
+  };
+  'PlannerSearchMore': {
+    'count': V;
+  };
+  'PlannerSearchDue': {
+    'date': V;
+  };
+  'PlannerImportUnderstood': {
+    'count': V;
+  };
+  'PlannerImportUnderstoodUntil': {
+    'count': V;
+    'date': V;
+  };
+  'PlannerImportAddCount': {
+    'count': V;
+  };
+  'HealthWorkoutPlannedAt': {
+    'time': V;
   };
   'PlannerHoursValue': {
     'hours': V;
@@ -5657,24 +5858,8 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
     'count': V;
   };
-  'PlannerSchedulePreview': {
-    'count': V;
-    'date': V;
-  };
-  'PlannerScheduleSkipped': {
-    'count': V;
-  };
   'PlannerNoticeScheduleAdded': {
     'count': V;
-  };
-  'PlannerSlotsHint': {
-    'window': V;
-    'lunch': V;
-    'margin': V;
-  };
-  'PlannerSlotsHintNoBreak': {
-    'window': V;
-    'margin': V;
   };
   'PlannerStatTimeUnrated': {
     'count': V;
@@ -5978,6 +6163,29 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ShareSavedToNote': {
     'title': V;
+  };
+  'KnowledgeConflictPlace': {
+    'index': V;
+    'total': V;
+    'line': V;
+  };
+  'KnowledgeConflictMine': {
+    'when': V;
+  };
+  'KnowledgeMissingTitle': {
+    'name': V;
+  };
+  'KnowledgeCanvasAdded': {
+    'name': V;
+  };
+  'ParvaneAuthCodeResendIn': {
+    'time': V;
+  };
+  'ParvaneDeviceOfferTitle': {
+    'name': V;
+  };
+  'ParvaneDeviceSeen': {
+    'time': V;
   };
 }
 
@@ -6514,6 +6722,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'ParvaneCloudTrashDaysLeft': {
     'count': V;
   };
+  'ParvaneCloudDropFiles': {
+    'count': V;
+  };
   'PlannerDaysValue': {
     'days': V;
   };
@@ -6525,6 +6736,13 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   };
   'ShareSendToCount': {
     'count': V;
+  };
+  'KnowledgeConflictAuto': {
+    'count': V;
+  };
+  'KnowledgeMissingRefs': {
+    'count': V;
+    'names': V;
   };
 }
 export type RegularLangKey = keyof LangPair;

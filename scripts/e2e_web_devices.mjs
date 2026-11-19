@@ -140,10 +140,10 @@ try {
 
   const sessionsScreen = bobDevice1.page.locator('.SettingsActiveSessions');
   await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Текущее устройство — отдельным блоком, второе — в «Active sessions»
-  await sessionsScreen.getByText('THIS DEVICE').first()
+  // «Мои устройства» (spec 041 E3): это устройство помечено `data-session-current`, второе — строкой с «Выйти на нём»
+  await sessionsScreen.locator('[data-session-current]').getByText('this device')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const otherSession = sessionsScreen.locator('.ListItem:has(.title-with-date)').first();
+  const otherSession = sessionsScreen.locator('[data-session-row]:not([data-session-current])').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // Клик по устройству → модалка → пароль → Terminate Session. Отзыв требует
@@ -153,9 +153,9 @@ try {
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // «Завершить все другие сеансы» в режиме по умолчанию «Just sign out» (решение владельца 15 окт 2026)
   await terminateAllSessionsWithPassword(bobDevice1.page, PASSWORD);
-  // Второе устройство исчезло из списка (секция Active sessions скрывается)
-  await sessionsScreen.getByText('Active sessions')
-    .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // Второе устройство исчезло из списка
+  await sessionsScreen.locator('[data-session-row]:not([data-session-current])')
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   // Ключи прежние: смену ключа подписи не просят, устройство — среди вышедших (его можно отметить украденным)
   await sessionsScreen.locator('[data-left-device]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await sessionsScreen.getByText('Device signing key', { exact: true }).count(), 0,

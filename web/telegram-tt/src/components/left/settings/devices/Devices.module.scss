@@ -1,0 +1,349 @@
+// Parvane (spec 041 E3/E4): «Устройства» и «Подтвердите вход» по доскам `PhProfileA`, `DkSettingsA`, `PhAuth`,
+// `DkAuth`. Цвета — токены схемы `--pv-*`; группы строк — классы `profile/Profile.module.scss`
+
+@mixin plain-button {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+.muted {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+// ── «Подтвердите вход» ─────────────────────────────────────────────────────
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem 0.25rem;
+
+  :global(.pv-profile-pane) & {
+    padding-inline: 0;
+  }
+}
+
+.confirmHead {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  @media (min-width: 926px) {
+    align-items: center;
+    text-align: center;
+  }
+}
+
+.confirmTitle {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+.confirmCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.625rem;
+}
+
+.confirmFoot {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 0;
+  margin: 0;
+  padding: 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+}
+
+.cardActive {
+  border-color: var(--pv-accent);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+.cardText {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+.cardSpacer {
+  flex: 1 1 auto;
+}
+
+.bigCode {
+  padding: 0.5rem 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: 1.5rem;
+  color: var(--pv-fg);
+  text-align: center;
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  margin: 0;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.statusDot {
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+
+  background: var(--pv-orange);
+}
+
+.keyInput {
+  width: 100%;
+  height: var(--pv-input-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size);
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+
+  &:focus-visible {
+    border-color: var(--pv-accent);
+    outline: none;
+  }
+}
+
+.button {
+  @include plain-button;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: var(--pv-button-height);
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-fg);
+  text-align: center;
+  text-decoration: none;
+
+  background: var(--pv-raised);
+
+  &:hover {
+    color: var(--pv-fg);
+    text-decoration: none;
+    background: var(--pv-hover);
+  }
+}
+
+.buttonAccent {
+  border-color: transparent;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  background: var(--pv-at);
+
+  &:hover:not(:disabled) {
+    color: var(--pv-accent-ink);
+    background: color-mix(in srgb, var(--pv-at) 88%, var(--pv-fg));
+  }
+}
+
+.buttonDanger {
+  color: var(--pv-red);
+
+  &:hover {
+    color: var(--pv-red);
+  }
+}
+
+.link {
+  @include plain-button;
+
+  min-height: var(--pv-touch-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+.linkInline {
+  @include plain-button;
+
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+// ── «Устройства» ──────────────────────────────────────────────────────────
+
+// Запрос нового устройства: название, большой код сверки, «Отклонить» и «Подтвердить»
+.offer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+
+  margin: 0.75rem 1rem 0;
+  padding: 0.875rem;
+  border: 1px solid var(--pv-accent);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+  :global(.pv-profile-pane) & {
+    margin-inline: 0;
+  }
+}
+
+.offerText {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.offerCode {
+  flex: 1 1 auto;
+  padding: 0;
+  font-size: 1.375rem;
+}
+
+.offerActions {
+  display: flex;
+  flex: 1 1 14rem;
+  gap: 0.5rem;
+
+  > .button {
+    flex: 1 1 0;
+  }
+}
+
+.deviceRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 0.75rem 0.375rem 1rem;
+  border-top: 1px solid var(--pv-line);
+
+  color: var(--pv-fg);
+}
+
+.deviceIcon {
+  flex: none;
+  color: var(--pv-muted);
+}
+
+.deviceText {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.deviceName {
+  overflow: hidden;
+  font-size: var(--pv-font-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deviceHint {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip {
+  @include plain-button;
+
+  flex: none;
+
+  height: var(--pv-chip-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-md);
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.chipDanger {
+  color: var(--pv-red);
+}
+
+// Кнопки под списком: «Привязать новое устройство» и «Завершить другие сеансы»
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0;
+
+  @media (min-width: 926px) {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-inline: 0;
+  }
+}
+
+.sheetText {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  line-height: 1.4;
+  color: var(--pv-muted);
+}

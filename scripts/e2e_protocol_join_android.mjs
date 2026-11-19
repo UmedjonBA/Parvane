@@ -213,12 +213,9 @@ try {
   await pullFor(TG_ALICE, 'ask');
   await check('D: web подтверждает X (код сверки, «Передать»)', async () => {
     const screen = await openDevicesScreen(alice2.page);
-    const offerItem = screen.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+    const offerItem = screen.locator('[data-link-offer]:not([data-link-code=""])').first();
     await offerItem.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-    await offerItem.locator('.ListItem-button').click();
-    const transfer = alice2.page.getByRole('button', { name: 'Transfer', exact: true });
-    await transfer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-    await transfer.click();
+    await offerItem.locator('[data-link-confirm]').click();
     await alice2.page.getByText('History transferred').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
     await closeSettings(alice2.page);
     await xWait(/привязка: грант v2 получен/, LINK_TIMEOUT_MS, mark);

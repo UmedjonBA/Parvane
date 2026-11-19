@@ -252,8 +252,6 @@ export const MAX_SLOT_MARGIN = 180;
 export const DEFAULT_PLANNER_SETTINGS: PlannerSettings = {
   dayStart: 540, dayEnd: 1260, lunchStart: 780, lunchEnd: 840, margin: 15,
 };
-const SLOT_SEARCH_DAYS = 7;
-const SLOT_ANSWERS = 3;
 const DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 export const EVENTS_GROUP = '\u0000events';
@@ -1323,36 +1321,6 @@ export function getDayAvailability(state: PlannerState, day: string) {
   return {
     free, groups, freeMinutes: free.reduce((sum, slot) => sum + slot.end - slot.start, 0),
   };
-}
-
-// Ближайшие свободные окна под задачу: в окнах дня, мимо перерыва, с запасом (settings)
-export function findSlots(state: PlannerState, task: PlannerTask, today: string, picked: string) {
-  if (!task.minutes) return [];
-  const minutes = task.minutes;
-  // Перерыва и запаса между делами нет (spec 018 FR-006): свободное время — окно дня минус занятое.
-  // Поля `lunch*` и `margin` остаются в настройках только ради записей прежних версий
-  const { dayStart, dayEnd } = state.settings;
-  const base = task.day && task.day >= today ? task.day : (picked >= today ? picked : today);
-  const answers: { day: string; start: string; end: string }[] = [];
-  for (let offset = 0; offset < SLOT_SEARCH_DAYS && answers.length < SLOT_ANSWERS; offset++) {
-    const day = addDays(base, offset);
-    if (task.due && day > task.due) break;
-    const ownLoad = task.day === day ? minutes : 0;
-    if (getDayLoad(state, day) - ownLoad + minutes > state.budget) continue;
-    const busy = getTimedForDay(state, day, instanceKey(task)).map((item): [number, number] => [
-      Math.max(dayStart, toMinutes(item.start)),
-      Math.min(dayEnd, toMinutes(item.end)),
-    ]).filter(([from, until]) => from < until).sort((a, b) => a[0] - b[0]);
-    let cursor = dayStart;
-    for (const [from, until] of [...busy, [dayEnd, dayEnd]]) {
-      if (from - cursor >= minutes) {
-        answers.push({ day, start: toTime(cursor), end: toTime(cursor + minutes) });
-        break;
-      }
-      cursor = Math.max(cursor, until);
-    }
-  }
-  return answers;
 }
 
 // ── списки задач ─────────────────────────────────────────────────────────────

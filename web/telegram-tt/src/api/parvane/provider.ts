@@ -4947,6 +4947,20 @@ const methods = {
     }
   },
 
+  // Экран кода, «Отправить ещё раз» (spec 041 E4): повторная регистрация тем же паролем — сервер перевыпускает код
+  // неподтверждённого аккаунта и шлёт письмо заново (identity `register.rs`); новой команды протокола не нужно
+  async parvaneResendEmailCode() {
+    const user = pendingLoginAddress || readLoginAddress();
+    if (!user || !pendingLoginPassword) return false;
+    try {
+      const result = await connectionController.registerAccount(user, pendingLoginPassword, pendingEmail);
+      return result.confirmRequired;
+    } catch (err) {
+      logDebug(`перевысылка кода не удалась: ${String(err)}`);
+      return false;
+    }
+  },
+
   restartAuth() {
     pendingLoginAddress = '';
     pendingLoginPassword = '';

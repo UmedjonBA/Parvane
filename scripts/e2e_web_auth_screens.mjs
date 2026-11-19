@@ -195,6 +195,10 @@ async function runTelegram() {
   assert.match(href || '', /^https:\/\/t\.me\/[^?]+\?start=/, 'ссылка на бота');
   assert.equal(await telegram.locator('[data-telegram-open]').getAttribute('href'), href, 'кнопка «Открыть»');
   assert.equal(await telegram.getAttribute('data-telegram-mode'), 'register');
+  // «Показать QR» (spec 041 E4): та же ссылка картинкой
+  await telegram.locator('[data-telegram-qr]').click();
+  await telegram.locator('[data-telegram-qr] + div svg').first().waitFor({ state: 'visible', timeout: 15000 });
+  await telegram.locator('[data-telegram-qr]').click();
   await shootAuthScreen(page, 'telegram');
   await page.setViewportSize(PHONE.viewport);
   await expectNoOverflow(page, 'Telegram на телефоне');

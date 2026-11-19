@@ -22,6 +22,8 @@ const NOTE = 'Настройка туннеля';
 const OTHER = 'Резервные копии';
 const GUIDE_OVERVIEW = 'Overview';
 const WORD = 'маршрутизатор';
+const CABINET = 'Шкаф';
+const ARCHIVE = 'Архив';
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: DESK });
@@ -205,7 +207,7 @@ try {
   await visible(menuItem('rename'), 'меню заметки');
   assert.deepEqual(
     await page.locator('[data-note-menu-list] [data-note-action]').evaluateAll((items) => items.map((item) => item.dataset.noteAction)),
-    ['rename', 'move', 'plan', 'copy', 'delete'], 'состав меню заметки',
+    ['rename', 'move', 'plan', 'pin', 'article', 'canvas', 'copy', 'delete'], 'состав меню заметки',
   );
   await shotBoth('desk-menu');
   await menuItem('rename').click();
@@ -223,6 +225,7 @@ try {
   await menuItem('copy').click();
   await visible(page.getByText('Link copied').first(), 'уведомление о скопированной ссылке');
   console.log('OK: меню заметки — переименовать, перенести, скопировать ссылку');
+
 
   // ── Телефон: шапка, виды, папки, заметка на весь экран ───────────────────
   await page.setViewportSize(PHONE);
@@ -281,6 +284,65 @@ try {
   await visible(folderRow(FOLDER), 'папки после закрытия поиска');
   console.log('OK: телефон — шапка, виды, папки, заметка на весь экран, шторка действий, правка');
 
+  // ── «Отправить статьёй в чат» и «Добавить на холст» из меню ───────────────
+  await page.setViewportSize(DESK);
+  await page.waitForTimeout(800);
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для меню');
+  await bar.locator('[data-note-menu]').click();
+  await menuItem('article').click();
+  const recipients = page.locator('.Modal .modal-dialog').filter({ hasText: 'Send to chat as article' });
+  await visible(recipients, 'выбор чата для статьи');
+  await page.keyboard.press('Escape');
+  await recipients.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await bar.locator('[data-note-menu]').click();
+  await menuItem('canvas').click();
+  await visible(page.locator('[data-note-canvas-sheet]'), 'выбор холста');
+  await shotBoth('desk-canvas-pick');
+  await page.locator('[data-note-canvas-sheet] [data-canvas-option-new]').click();
+  await page.waitForFunction(
+    () => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === 'canvas', undefined,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('после «Добавить на холст» не открылся холст'));
+  await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки на холсте');
+  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста');
+  console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте');
+
+  // ── Ссылка на заметку, которой ещё нет: сначала вопрос ────────────────────
+  await bar.getByRole('button', { name: 'Edit', exact: true }).click();
+  await visible(editor, 'редактор для ссылки');
+  await editor.press('Control+End');
+  await editor.pressSequentially(`\nрядом [[${CABINET}]]`);
+  await note.locator('[data-note-bar] [data-note-bar-edit]').click();
+  await mode('view', '«Готово» не закрыло правку');
+  await body.getByRole('button', { name: CABINET }).click();
+  const missingSheet = page.locator('[data-note-missing-sheet]');
+  await visible(missingSheet, 'вопрос о заметке, которой нет');
+  assert.match(await missingSheet.innerText(), new RegExp(`Linked from 1 note: «${NOTE}»`), 'кто ссылается');
+  await page.waitForFunction((wanted) => (
+    document.querySelector('[data-note-missing-sheet] [data-missing-name]')?.value === wanted
+  ), CABINET, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('в шторке нет названия из ссылки'));
+  assert.match(await missingSheet.locator('[data-missing-folder]').innerText(), new RegExp(FOLDER), 'папка заметки со ссылкой');
+  await shotBoth('desk-missing');
+  await page.setViewportSize(PHONE);
+  await page.waitForTimeout(800);
+  await shotBoth('phone-missing');
+  await page.setViewportSize(DESK);
+  await page.waitForTimeout(800);
+  await missingSheet.locator('[data-missing-later]').click();
+  await missingSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await row(CABINET).count(), 0, '«Не сейчас» создало заметку');
+  await body.getByRole('button', { name: CABINET }).click();
+  await visible(missingSheet, 'вопрос второй раз');
+  await missingSheet.locator('[data-missing-create]').click();
+  await visible(knowledge.locator(`[data-note-title="${CABINET}"]`), 'новая заметка по ссылке открыта');
+  await visible(note.locator(`[data-note-folder="${FOLDER}"]`), 'заметка по ссылке — в папке заметки со ссылкой');
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка со ссылкой');
+  console.log('OK: ссылка на несуществующую заметку — вопрос «Создать и открыть / Не сейчас»');
+
   // ── Удаление из меню ──────────────────────────────────────────────────────
   await page.setViewportSize(DESK);
   await page.waitForTimeout(800);
@@ -291,6 +353,40 @@ try {
   await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
   await gone(row(OTHER), 'заметка не удалена из меню');
   console.log('OK: удаление заметки из меню');
+
+  // ── Закрепить вверху, цвет папки, «Вложить в другую папку» ────────────────
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для закрепления');
+  await note.locator('[data-note-menu]').click();
+  await menuItem('pin').click();
+  await visible(knowledge.locator(`[data-note-row="${NOTE}"][data-pinned]`), 'закреплённая заметка в списке');
+  await note.locator('[data-note-menu]').click();
+  await visible(menuItem('pin').filter({ hasText: 'Unpin' }), '«Открепить» в меню закреплённой');
+  await page.keyboard.press('Escape');
+  await knowledge.locator('[data-notes-new-folder]').first().click();
+  await page.locator('#knowledge-folder-name').fill(ARCHIVE);
+  await page.locator('#knowledge-folder-name').press('Enter');
+  await visible(folderRow(ARCHIVE), 'вторая папка');
+  await folderRow(FOLDER).click();
+  await visible(knowledge.locator(`[data-folder-open="${FOLDER}"]`), 'папка открыта для действий');
+  await knowledge.locator('[data-folder-menu]').first().click();
+  const actions = page.locator('[data-folder-actions]');
+  await visible(actions, 'другие действия с папкой');
+  await actions.locator('[data-tone="red"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-folder-actions] [data-tone="red"]')?.getAttribute('aria-pressed') === 'true',
+    undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('цвет папки не выбрался'));
+  await shotBoth('desk-folder-actions');
+  await actions.locator('[data-folder-nest]').click();
+  await actions.locator(`[data-folder-nest-target="${ARCHIVE}"]`).click();
+  await page.locator('[data-folder-sheet]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await knowledge.locator('[data-folder-back]').click().catch(() => undefined);
+  await knowledge.locator('#knowledge-search').fill(NOTE);
+  await row(NOTE).first().click();
+  await visible(note.locator(`[data-note-folder="${ARCHIVE}/${FOLDER}"]`), 'папка вложена в другую — путь заметки');
+  await knowledge.locator('#knowledge-search').fill('');
+  console.log('OK: закрепление, цвет папки, вложение папки в другую');
 
   console.log('e2e_web_notes_screens: OK');
 } catch (error) {

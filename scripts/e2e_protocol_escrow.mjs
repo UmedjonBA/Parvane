@@ -78,7 +78,7 @@ async function openDevicesScreen(page) {
     return page.locator('.SettingsActiveSessions');
   }
   await openProfile(page);
-  await page.getByRole('button', { name: 'Devices' }).click();
+  await page.locator('[data-profile-item="devices"]:visible').click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;
@@ -97,7 +97,16 @@ async function closeSettings(page) {
 }
 
 async function submitDialog(page, screen, action, inputLabel, value, confirm) {
-  await screen.locator('.ListItem').filter({ hasText: action }).locator('.ListItem-button').click();
+  // «Подтвердите вход» (spec 041 E4): ключ восстановления вводится прямо в карточке, без диалога
+  if (action === 'Use recovery key') {
+    await screen.locator('[data-recover-key-input]').fill(value);
+    await screen.locator('[data-recover-key-submit]').click();
+    return;
+  }
+  // Непривязанное устройство: сброс — «Войти без истории» карточки «Подтвердите вход»
+  const resetLink = screen.locator('[data-reset-identity]');
+  if (action === 'Reset secure identity' && await resetLink.isVisible()) await resetLink.click();
+  else await screen.locator('[data-device-action]').filter({ hasText: action }).click();
   const input = page.locator(`.Modal input[aria-label="${inputLabel}"]`);
   await input.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await input.fill(value);
@@ -165,14 +174,14 @@ try {
   const bob2Page = sessions.bob2.page;
   await waitLog('bob2', 'нужна линковка этого устройства');
   const dev2 = await openDevicesScreen(bob2Page);
-  await dev2.getByText('No other device?').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await dev2.locator('[data-confirm-way="key"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await dev2.getByText(/Ask the server administrator/).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await submitDialog(bob2Page, dev2, 'Use recovery key', 'Recovery key', lostKey, 'Use recovery key');
   await expectToast(bob2Page, 'This recovery key does not match');
   await submitDialog(bob2Page, dev2, 'Use recovery key', 'Recovery key', issuedKey, 'Use recovery key');
   await waitLog('bob2', 'v2: устройство восстановлено ключом восстановления');
   await waitLog('bob2', 'v2: готов');
-  await dev2.getByText('No other device?').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await dev2.locator('[data-confirm-way="key"]').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await dismissRecoveryKeyDialog(bob2Page, 3000), undefined,
     'bob2: при восстановлении показан новый ключ — создан новый корень');
   await closeSettings(bob2Page);

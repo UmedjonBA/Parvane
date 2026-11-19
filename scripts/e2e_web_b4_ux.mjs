@@ -138,12 +138,13 @@ try {
   // ── Честный push-fallback: Offline Notifications выключен и «Not supported»
   await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Notifications' }).click();
-  const webRow = aliceSession.page.locator('.Checkbox').filter({ hasText: 'Web Notifications' }).first();
+  // Строки-выключатели экрана по макету (spec 041 E3): `[data-notify-row]` — кнопка `role="switch"`
+  const webRow = aliceSession.page.locator('[data-notify-row="web"]');
   await webRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const offlineRow = aliceSession.page.locator('.Checkbox').filter({ hasText: 'Offline Notifications' }).first();
+  const offlineRow = aliceSession.page.locator('[data-notify-row="offline"]');
   await offlineRow.getByText('Not supported').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await offlineRow.locator('input').isDisabled(), true, 'offline push toggle must be disabled');
-  assert.equal(await offlineRow.locator('input').isChecked(), false, 'offline push toggle must be off');
+  assert.equal(await offlineRow.isDisabled(), true, 'offline push toggle must be disabled');
+  assert.equal(await offlineRow.getAttribute('aria-checked'), 'false', 'offline push toggle must be off');
 
   // ── Push-шард (v2): VAPID-ключ отдаётся вошедшему (`push.wake.describe`
   // через мост), регистрация без входа отвергается gateway (канал ID) ───────

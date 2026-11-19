@@ -12,6 +12,7 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import { AuthBar, AuthLogo } from './AuthParts';
+import AuthTelegramQr from './AuthTelegramQr';
 
 import styles from './Auth.module.scss';
 
@@ -141,6 +142,7 @@ const AuthTelegram = ({ auth }: StateProps) => {
               {lang('ParvaneTelegramCheck')}
             </button>
           </div>
+          {link && <AuthTelegramQr link={link} />}
           <p className={styles.note}>{lang('ParvaneAuthTelegramExpiry')}</p>
         </div>
       </div>

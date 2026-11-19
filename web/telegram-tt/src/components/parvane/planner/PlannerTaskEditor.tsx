@@ -11,11 +11,12 @@ import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatClock, formatDay, formatStatus,
+  formatDay, formatStatus,
 } from './plannerFormat';
 import {
-  detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
-  removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, updateSeries, validateRepeat,
+  detachInstance, excludeInstance, instanceKey, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
+  removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, toTime, truncateSeries, updateSeries,
+  validateRepeat,
 } from './plannerModel';
 import {
   changedFields, getDescriptionScope, patchCopies, seriesOfCopy, setDescription, shareDescription, updateFromCopy,
@@ -32,6 +33,7 @@ import TextArea from '../../ui/TextArea';
 import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
+import PlannerFreeTime from './PlannerFreeTime';
 import PlannerListPicker from './PlannerListPicker';
 import PlannerName from './PlannerName';
 import PlannerRemindSelect from './PlannerRemindSelect';
@@ -54,7 +56,6 @@ type OwnProps = {
   onOpenTask: (taskId: string, day?: string) => void;
 };
 
-type Slot = { day: string; start: string; end: string };
 // `rule` — новое правило повтора у экземпляра; без правила — «Не повторяется»
 // `copy` — правка отделённого дня ряда: только он либо весь ряд с остальными отделёнными днями
 type Pending = { kind: 'patch' | 'copy'; changes: Partial<PlannerTask>; notice: string }
@@ -86,8 +87,6 @@ const PlannerTaskEditor = ({
   }, [task.id]);
 
   const [stepText, setStepText] = useState('');
-  const [slots, setSlots] = useState<Slot[]>();
-  const [slotHint, setSlotHint] = useState<string>();
   const [pending, setPending] = useState<Pending>();
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(task.repeat, task.day || today),
@@ -107,7 +106,6 @@ const PlannerTaskEditor = ({
       const target = draft.tasks.find(({ id }) => id === task.id);
       if (target) Object.assign(target, changes);
     }, notice);
-    setSlots(undefined);
   });
 
   // У экземпляра ряда правка полей требует выбора объёма (FR-004); у отделённого дня — тоже, если изменённое
@@ -139,7 +137,6 @@ const PlannerTaskEditor = ({
         if (target) Object.assign(target, action.changes);
         updateFromCopy(draft, 'task', task, changedFields(task, action.changes));
       }, action.notice);
-      setSlots(undefined);
       return;
     }
     if (action.kind === 'rule') {
@@ -326,26 +323,11 @@ const PlannerTaskEditor = ({
     patch({ project }, lang('PlannerNoticeListUpdated', { name: task.name }));
   });
 
-  const handleFindSlots = useLastCallback(() => {
-    if (!task.minutes) {
-      setSlots(undefined);
-      setSlotHint(lang('PlannerErrorNeedMinutes'));
-      return;
-    }
-    const found = findSlots(state, task, today, picked);
-    setSlots(found);
-    const { settings } = state;
-    const window = `${formatClock(settings.dayStart)}–${formatClock(settings.dayEnd)}`;
-    setSlotHint(found.length ? window : lang('PlannerSlotsNone'));
-  });
-
-  const handleSlotClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const slot = slots![Number(e.currentTarget.dataset.index)];
-    onPickDay(slot.day);
-    patch(
-      { day: slot.day, start: slot.start },
-      lang('PlannerNoticeScheduled', { date: formatDay(lang, slot.day), time: slot.start }),
-    );
+  // Окно из «Найти свободное время»: задача встаёт на этот день и время
+  const handleFreeSlot = useLastCallback((day: string, start: number) => {
+    const time = toTime(start);
+    onPickDay(day);
+    patch({ day, start: time }, lang('PlannerNoticeScheduled', { date: formatDay(lang, day), time }));
   });
 
   // Правило повтора: у шаблона ряда и разовой задачи пишется сразу; у экземпляра спрашивается объём —
@@ -555,23 +537,15 @@ const PlannerTaskEditor = ({
         </form>
       </PlannerCardRow>
 
-      <PlannerCardRow icon="search" row="slots">
-        <button type="button" className={styles.btn} onClick={handleFindSlots}>{lang('PlannerFindSlots')}</button>
-        <div className={styles.slots} aria-live="polite">
-          {slotHint && <span className={styles.small}>{slotHint}</span>}
-          {slots?.map((slot, index) => (
-            <button
-              key={`${slot.day}${slot.start}`}
-              type="button"
-              className={styles.slot}
-              data-index={index}
-              onClick={handleSlotClick}
-            >
-              {`${formatDay(lang, slot.day)} · ${slot.start}–${slot.end}`}
-            </button>
-          ))}
-        </div>
-      </PlannerCardRow>
+      <PlannerFreeTime
+        state={state}
+        name={task.name}
+        minutes={task.minutes}
+        fromDay={task.instanceDay || task.day || picked}
+        today={today}
+        exceptKey={instanceKey(task)}
+        onPick={handleFreeSlot}
+      />
 
       {promptMode ? (
         <PlannerSeriesPrompt
