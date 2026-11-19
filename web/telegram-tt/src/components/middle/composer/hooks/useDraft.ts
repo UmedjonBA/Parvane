@@ -127,7 +127,7 @@ const useDraft = ({
       ?.map((entity) => entity.type === ApiMessageEntityTypes.CustomEmoji && entity.documentId)
       .filter(Boolean) || [];
     if (customEmojiIds.length) loadCustomEmojis({ ids: customEmojiIds });
-  }, [chatId, threadId, draft, getHtml, setHtml, editedMessage, isDisabled]);
+  }, [chatId, threadId, draft, setHtml, editedMessage, isDisabled]);
 
   // Save draft on chat change. Should be layout effect to read correct html on cleanup
   useLayoutEffect(() => {
