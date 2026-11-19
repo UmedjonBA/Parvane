@@ -53,13 +53,7 @@ const useDraft = ({
   const isTouchedRef = useRef(false);
 
   useEffect(() => {
-    const html = getHtml();
-    const isLocalDraft = draft?.isLocal !== undefined;
-    if (getTextWithEntitiesAsHtml(draft?.text) === html && !isLocalDraft) {
-      isTouchedRef.current = false;
-    } else {
-      isTouchedRef.current = true;
-    }
+    isTouchedRef.current = Boolean(draft?.isLocal) || getTextWithEntitiesAsHtml(draft?.text) !== getHtml();
   }, [draft, getHtml]);
   useEffect(() => {
     isTouchedRef.current = false;
