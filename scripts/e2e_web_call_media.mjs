@@ -85,7 +85,14 @@ export async function checkCallMinimize(page, { minPeers = 1, shotPrefix, isPhon
   await expectMediaFlowing(page, { audio: true, minPeers });
   assert(await audio.evaluate((element) => element === window.__testCallAudio && !element.paused),
     'Звук должен продолжаться в прежнем элементе после сворачивания и смены модуля');
-  assert.notEqual(await strip.getAttribute('aria-label'), before, 'Таймер в свёрнутом звонке остановился');
+  await page.waitForFunction(
+    (previous) => {
+      const label = document.querySelector('[data-call-minimized]')?.getAttribute('aria-label');
+      return Boolean(label && label !== previous);
+    },
+    before,
+    { timeout: LOGIN_TIMEOUT_MS },
+  );
   if (shotPrefix !== undefined) await saveCallState(page, `${shotPrefix}minimized`);
   await strip.click();
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -107,15 +114,6 @@ export async function saveCallState(page, name) {
   try {
     for (const [size, width, height] of [['desktop', 1120, 700], ['phone', 360, 800]]) {
       await page.setViewportSize({ width, height });
-      if (size === 'phone' && name.endsWith('minimized')) {
-        const notesBack = page.getByRole('button', { name: 'Back to notes', exact: true });
-        const notesList = page.locator('[data-notes-list]:visible');
-        await notesBack.or(notesList).first().waitFor({ state: 'visible', timeout: 5000 });
-        if (await notesBack.isVisible()) {
-          await notesBack.click();
-          await notesList.waitFor({ state: 'visible', timeout: 5000 });
-        }
-      }
       for (const scheme of ['light', 'dark']) {
         await page.emulateMedia({ colorScheme: scheme });
         await page.waitForFunction((theme) => document.documentElement.classList.contains(`theme-${theme}`), scheme,

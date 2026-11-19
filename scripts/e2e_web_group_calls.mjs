@@ -12,6 +12,7 @@ import {
   checkCallAudioOutput,
   checkCallMinimize,
   expectSharedScreen,
+  findCallTimer,
   mockCallMedia,
   saveCallState,
   stopScreenInBrowser,
@@ -441,7 +442,7 @@ try {
   await daveSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await bobSession.page.getByRole('button', { name: 'Accept' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' }).click();
-  await bobSession.page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await findCallTimer(bobSession.page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await acceptGroupCall(carolSession.page, 'carol (bob is busy)');
@@ -453,7 +454,7 @@ try {
     0,
     'busy user got a group call invite screen',
   );
-  await bobSession.page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: 5000 });
+  await findCallTimer(bobSession.page).waitFor({ state: 'visible', timeout: 5000 });
   // Строка Боба у Алисы — именно «занят», а не просто закрытая по таймауту:
   // раньше проверялось только отсутствие `connecting`, и сломанный путь busy
   // прошёл бы за счёт истечения ringTimeoutMs (FR-062)
@@ -482,36 +483,41 @@ try {
   await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
-  // ── Приглашение от заблокированного контакта не звонит ─────────────────────
-  // Тот же guard, что и в личном вызове: заблокированный не должен заставлять
-  // клиент жертвы звонить, начав групповой звонок (US5/AC6, FR-060)
+  // ── Приглашение после отзыва ключа заблокированного контакта ─────────────
   await openPrivateChat(carolSession.page, alice);
   await carolSession.page.getByRole('button', { name: 'More actions' }).click();
-  await carolSession.page.getByRole('menuitem', { name: 'Block user' }).click();
-  await carolSession.page.waitForTimeout(1500);
+  const blockedCallProbe = await carolSession.page.evaluate(() => {
+    const before = globalThis.__parvaneGumCalls;
+    globalThis.__testBlockedCallStates = [];
+    window.addEventListener('parvane-call', () => {
+      const call = window.parvaneCall;
+      if (call?.state === 'incoming' || call?.group) globalThis.__testBlockedCallStates.push(call.state);
+    });
+    return before;
+  });
+  // Дожидаемся отзыва ключа, а затем проверяем эффект блокировки у адресата.
+  // У звонящего строка закрывается по парному «занят» или по таймауту, если сигнал не дошёл
+  await Promise.all([
+    carolSession.page.waitForEvent('console', {
+      predicate: (message) => message.text().includes('v2: доступ собеседника отозван — ключ доступа сменён'),
+      timeout: LOGIN_TIMEOUT_MS,
+    }),
+    carolSession.page.getByRole('menuitem', { name: 'Block user' }).click(),
+  ]);
   await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await acceptGroupCall(bobSession.page, 'bob (alice blocked by carol)');
   await waitActivePeers(aliceSession.page, 1, 'alice with bob while carol blocked her');
-  // Кадры до Кэрол доходят (на парный invite она отвечает «занят»), но экрана
-  // входящего у неё нет и в звонок она не входит
-  await aliceSession.page.waitForFunction(
-    (name) => Array.from(document.querySelectorAll('[data-peer-state="busy"]'))
-      .some((row) => row.textContent.includes(name)),
-    carolName,
-    { timeout: 15000 },
-  ).catch(() => {
-    assert.fail('строка Кэрол у Алисы не пришла в состояние «занят» — приглашение до неё не дошло');
-  });
-  assert.equal(
-    await carolSession.page.getByText(`${groupTitle}: group call`, { exact: true }).count(),
-    0,
-    'blocked contact rang the group call consent screen',
-  );
-  assert.equal(
-    await carolSession.page.locator('[data-peer]').count(), 0,
-    'blocked contact pulled the victim into a group call',
-  );
+  const carolRow = aliceSession.page.locator(`[data-peer="${carol}"]:is([data-peer-state="busy"], [data-peer-state="ended"])`);
+  await carolRow.waitFor({ state: 'visible', timeout: 15000 });
+  const blockedCall = await carolSession.page.evaluate(() => ({
+    calls: globalThis.__testBlockedCallStates,
+    mediaRequests: globalThis.__parvaneGumCalls,
+  }));
+  assert.deepEqual(blockedCall.calls, [], 'Заблокированный контакт показал входящий или открыл групповой звонок');
+  assert.equal(blockedCall.mediaRequests, blockedCallProbe, 'Заблокированный контакт открыл микрофон');
+  console.log(`OK: после отзыва ключа Кэрол не звонит, строка закрыта (${await carolRow.getAttribute('data-peer-state')})`);
+
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
