@@ -53,6 +53,12 @@ function getThemeColor(isDarkTheme: boolean) {
     || (isDarkTheme ? '#212121' : '#fff');
 }
 
+// В `index.html` два тега (светлая и тёмная системная тема): тема приложения может не совпадать с системной
+function setThemeColorMeta(isDarkTheme: boolean) {
+  const color = getThemeColor(isDarkTheme);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((tag) => tag.setAttribute('content', color));
+}
+
 /** Смена цветовой схемы: цвета текущей темы применяются сразу, выбор запоминается устройством. */
 export function applyColorScheme(scheme: ColorScheme) {
   currentScheme = scheme;
@@ -63,7 +69,7 @@ export function applyColorScheme(scheme: ColorScheme) {
   requestMutation(() => {
     applyColorAnimationStep(index, index);
     applySchemeTokens(isDarkTheme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getThemeColor(isDarkTheme));
+    setThemeColorMeta(isDarkTheme);
   });
 }
 
@@ -86,7 +92,6 @@ const switchTheme = (theme: ThemeKey, withAnimation: boolean) => {
   const startIndex = isDarkTheme ? 0 : 1;
   const endIndex = isDarkTheme ? 1 : 0;
   const startAt = Date.now();
-  const themeColorTag = document.querySelector('meta[name="theme-color"]');
 
   requestMutation(() => {
     document.documentElement.classList.remove(`theme-${isDarkTheme ? 'light' : 'dark'}`);
@@ -97,9 +102,7 @@ const switchTheme = (theme: ThemeKey, withAnimation: boolean) => {
     }
     document.documentElement.classList.add(themeClassName);
     applySchemeTokens(isDarkTheme);
-    if (themeColorTag) {
-      themeColorTag.setAttribute('content', getThemeColor(isDarkTheme));
-    }
+    setThemeColorMeta(isDarkTheme);
 
     setTimeout(() => {
       requestMutation(() => {

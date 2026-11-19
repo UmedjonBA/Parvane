@@ -40,6 +40,8 @@ export type MusicPlayerState = {
 };
 
 const QUEUE_KEY = 'parvane:music-queue';
+// Последние сведения о библиотеке сервера — для запуска без сети
+const INFO_KEY = 'parvane:music-info';
 const RECENT_KEY = 'parvane:music-recent';
 const RECENT_LIMIT = 20;
 // Ссылка на поток берётся заново за минуту до конца срока
@@ -114,7 +116,16 @@ export function coverUrl(coverId: string | undefined, size: number) {
 }
 
 export async function loadMusicInfo() {
+  // Запуск без сети: сервер не ответит — сведения берутся с устройства, чтобы открылось «Загруженное»;
+  // сеть вернулась — спрашиваем сервер заново
+  const saved = navigator.onLine ? undefined : readJson<MusicInfo>(INFO_KEY);
+  if (saved) {
+    setMusicInfo(saved);
+    window.addEventListener('online', () => void loadMusicInfo(), { once: true });
+    return saved;
+  }
   const info = await callMusic('parvaneMusicInfo');
+  if (info.isEnabled) writeJson(INFO_KEY, info);
   setMusicInfo(info);
   return info;
 }

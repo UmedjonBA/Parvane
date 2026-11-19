@@ -17,10 +17,13 @@
   <meta name="mobile-web-app-title" content="%TG_APP_TITLE%">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="%TG_APP_TITLE%">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="application-name" content="%TG_APP_TITLE%">
-  <meta name="msapplication-TileColor" content="#2b5797">
+  <meta name="msapplication-TileColor" content="#1d2021">
   <meta name="msapplication-config" content="./browserconfig.xml">
-  <meta name="theme-color" content="#ffffff">
+  <!-- Parvane (PWA): цвет панели схемы по умолчанию до запуска кода; дальше оба значения ведёт `switchTheme.ts` -->
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbf1c7">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#282828">
   <meta name="google" content="notranslate">
 
   <meta http-equiv="Content-Security-Policy" content="%TG_CSP%">

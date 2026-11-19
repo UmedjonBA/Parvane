@@ -8,6 +8,7 @@ import { callApi } from '../../../api/gramjs';
 import {
   type CloudNode, type CloudSort, freeName, namesIn, normalizeName, sizeOf, trashOf, usageOf,
 } from './cloudModel';
+import { loadCloudView, rememberCloudView } from './cloudSnapshot';
 
 // Parvane (spec 016): состояние раздела «Облако» — сигналы поверх контейнеров
 // домена в движке. Экраны читают дерево (`parvaneCloudState`) и правят его
@@ -52,6 +53,8 @@ const DEFAULT_PREFS: CloudPrefs = { sort: { key: 'name', isDescending: false } }
 const ROOT = 'root';
 
 const [getCloudData, setCloudData] = createSignal<CloudDriveState | undefined>(undefined);
+// Показан снимок с устройства (`cloudSnapshot.ts`), движок своё дерево ещё не отдал
+let isShowingSaved = false;
 const [getIsCloudLoaded, setIsCloudLoaded] = createSignal(false);
 const [getCloudStatus, setCloudStatus] = createSignal<CloudStatus>('loading');
 const [getCloudPlace, setCloudPlaceSignal] = createSignal<CloudPlace>({});
@@ -151,10 +154,17 @@ export async function refreshCloud(): Promise<CloudDriveState | undefined> {
   const result = await callParvane('parvaneCloudState').catch(() => undefined) as CloudDriveState | undefined;
   if (!result) return undefined;
   setCloudStatus(result.status);
-  if (result.status !== 'needs-linking' && result.status !== 'loading') {
+  // Без сети движок отвечает пустым деревом: снимок с устройства оно не заменяет (и не опережает — аккаунт
+  // провайдеру к первому ответу мог быть ещё не известен, снимок спрашивается ещё раз)
+  const isEmpty = result.status !== 'ready' && !result.rootId;
+  if (isEmpty && !getIsCloudLoaded()) await showSavedCloud();
+  const isEmptyOverSaved = isEmpty && isShowingSaved;
+  if (result.status !== 'needs-linking' && result.status !== 'loading' && !isEmptyOverSaved) {
+    isShowingSaved = false;
     setCloudData(result);
     setIsCloudLoaded(true);
     fixPlace(result);
+    if (result.status === 'ready') rememberCloudView(result);
   }
   if (result.status === 'needs-linking' && linkingTimer === undefined && typeof window !== 'undefined') {
     // Пока устройство не привязано, стек облака не запускается — опрашиваем до готовности
@@ -194,6 +204,8 @@ export function loadCloud(userId?: string) {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
     for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt++) {
+      // Аккаунт провайдеру может быть ещё не известен — снимок спрашивается, пока его нет
+      if (!getIsCloudLoaded()) await showSavedCloud();
       const result = await refreshCloud();
       if (result && result.status !== 'loading') break;
       await new Promise((resolve) => {
@@ -207,8 +219,18 @@ export function loadCloud(userId?: string) {
   return loadPromise;
 }
 
+// Снимок с устройства — сразу, до движка: без сети дерево (а с ним заметки) не стоит на загрузке
+async function showSavedCloud() {
+  if (isShowingSaved) return;
+  const saved = await loadCloudView();
+  if (!saved || getIsCloudLoaded()) return;
+  isShowingSaved = true;
+  setCloudData(saved);
+}
+
 function resetCloud() {
   loadPromise = undefined;
+  isShowingSaved = false;
   setCloudData(undefined);
   setIsCloudLoaded(false);
   setCloudStatus('loading');

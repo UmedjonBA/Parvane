@@ -1,5 +1,6 @@
 // PWA: манифест (цвета заставки, значки maskable, ярлыки, без чужого снимка), ярлык `?open=` открывает раздел и
 // убирается из адреса, запуск без сети — оболочка из кэша service worker, в том числе по ярлыку.
+// Установка, оболочка в кэше целиком и обновление после выкладки — `e2e_web_pwa_offline.mjs`.
 // Запуск: scripts/run_web_pwa_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -29,6 +30,7 @@ try {
   })();
   const manifest = await (await fetch(new URL(manifestPath, `${BASE_URL}/`))).json();
   assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.scope, './');
   assert.equal(manifest.background_color, '#1d2021', 'заставка тёмная, как фон значка');
   assert.equal(manifest.screenshots, undefined, 'чужого снимка в манифесте нет');
   assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'), 'есть значок maskable');

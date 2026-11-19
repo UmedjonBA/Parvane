@@ -1,7 +1,8 @@
 import { DEBUG } from '../config';
 import { pause } from '../util/schedulers';
-import { pruneAssetCache, respondWithCache, respondWithCacheNetworkFirst } from './assetCache';
+import { respondWithCache, respondWithCacheNetworkFirst } from './assetCache';
 import { respondForDownload } from './download';
+import { handleClientMessage as handlePrecacheMessage, pruneAppShellCache } from './precache';
 import { respondForProgressive } from './progressive';
 import {
   handleClientMessage as handleNotificationMessage,
@@ -12,11 +13,13 @@ import { handleClientMessage as handleShareMessage, respondForShare } from './sh
 
 declare const self: ServiceWorkerGlobalScope;
 
-const CACHE_FIRST_ASSET_EXTENSIONS = 'js|css|woff2?|svg|png|jpe?g|tgs|json|wasm';
+const CACHE_FIRST_ASSET_EXTENSIONS = 'm?js|css|woff2?|svg|png|jpe?g|webp|tgs|json|wasm';
 // B3: WASM (движок протокола 2,7 МБ) больше не «сначала сеть» — имя файла с хешем, он в кэше навсегда,
 // как и остальные хешированные ассеты; «сначала сеть» остаётся для HTML и `compatTest.js` (без хеша в имени;
 // без него приложение не запускается — без сети раньше оставался белый экран)
-const RE_NETWORK_FIRST_ASSETS = /(?:\.html|\/compatTest\.js)$/;
+// Файлы `assets/` без хеша в имени (копии из библиотек, например декодер Opus) — тоже «сначала сеть»: в кэше
+// их держит набор оболочки (`precache.ts`)
+const RE_NETWORK_FIRST_ASSETS = /(?:\.html|\/compatTest\.js|\/assets\/[^/]+)$/;
 const RE_CACHE_FIRST_ASSETS = new RegExp(
   `(?:/assets/[^/]+|/(?:[^/]+\\.)?worker|/index)-[\\w-]{8}`
   + `\\.(${CACHE_FIRST_ASSET_EXTENSIONS})$`,
@@ -44,8 +47,8 @@ self.addEventListener('activate', (e) => {
       // An attempt to fix freezing UI on iOS
       pause(ACTIVATE_TIMEOUT),
       Promise.all([
-        // B3: не стирать кэш целиком при каждой смене service worker (= каждый деплой), а убрать устаревшее
-        pruneAssetCache((url) => RE_CACHE_FIRST_ASSETS.test(new URL(url).pathname)),
+        // B3: не стирать кэш целиком при каждой смене service worker, а убрать устаревшее
+        pruneAppShellCache(isHashedAsset),
         // Become available to all pages
         self.clients.claim(),
       ]),
@@ -78,13 +81,14 @@ self.addEventListener('fetch', (e: FetchEvent) => {
   }
 
   if (protocol === 'http:' || protocol === 'https:') {
-    if (pathname === scopePathname || pathname.match(RE_NETWORK_FIRST_ASSETS)) {
-      e.respondWith(respondWithCacheNetworkFirst(e));
+    // Хешированные — раньше: под «сначала сеть» подходит и любой файл `assets/`
+    if (pathname.match(RE_CACHE_FIRST_ASSETS)) {
+      e.respondWith(respondWithCache(e));
       return true;
     }
 
-    if (pathname.match(RE_CACHE_FIRST_ASSETS)) {
-      e.respondWith(respondWithCache(e));
+    if (pathname === scopePathname || pathname.match(RE_NETWORK_FIRST_ASSETS)) {
+      e.respondWith(respondWithCacheNetworkFirst(e));
       return true;
     }
   }
@@ -97,4 +101,9 @@ self.addEventListener('notificationclick', handleNotificationClick);
 self.addEventListener('message', (event) => {
   handleNotificationMessage(event);
   handleShareMessage(event);
+  handlePrecacheMessage(event, isHashedAsset);
 });
+
+function isHashedAsset(url: string) {
+  return RE_CACHE_FIRST_ASSETS.test(new URL(url).pathname);
+}

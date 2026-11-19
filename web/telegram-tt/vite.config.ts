@@ -9,6 +9,7 @@ import { type Target, viteStaticCopy } from 'vite-plugin-static-copy';
 import { watchAndRun } from 'vite-plugin-watch-and-run';
 
 import buildGitInfoPlugin from './plugins/gitInfo';
+import buildPrecacheManifestPlugin from './plugins/precacheManifest';
 import packageJson from './package.json' with { type: 'json' };
 
 const DIR_NAME = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +110,7 @@ export default defineConfig(({ mode }): UserConfig => {
     cloudLinkRedirectPlugin(),
     downloadPagePlugin(),
     buildVersionFilePlugin(APP_BUILD),
+    buildPrecacheManifestPlugin(APP_BUILD),
     buildGitInfoPlugin({
       appEnv,
       head: HEAD,

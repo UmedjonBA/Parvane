@@ -250,7 +250,9 @@ function storeTexts(items: CachedText[]) {
 // Записи узлов, которых в хранилище больше нет (удалены, в корзине), уходят из кэша
 function pruneTextCache(alive: Set<string>) {
   queueTextCacheWrite(async (storage, cache) => {
-    const stale = [...cache.keys()].filter((node) => !alive.has(node));
+    // Текст в памяти — заметка этой сессии: проход по дереву, начатый до её создания, её ещё не видел, а запись
+    // кэша больше никто бы не написал (без сети заметка пропадала). Удалённое уйдёт при следующем запуске
+    const stale = [...cache.keys()].filter((node) => !alive.has(node) && !texts.has(node));
     for (const node of stale) {
       cache.delete(node);
       await storage.deleteRecord(`${TEXT_CACHE_PREFIX}${node}`);
@@ -335,6 +337,12 @@ async function readTexts(files: VaultFile[]) {
     if (userId !== notesUserId) return;
     got.forEach((content, id) => texts.set(id, content));
     storeTexts(needed.filter((node) => got.has(node.id)).map((node) => ({ node: node.id, ...got.get(node.id)! })));
+    // Облако не ответило (нет сети), а на устройстве лежит другая версия текста: заметка показывается с ней, а не
+    // пропадает из списка. Версия не совпадает с деревом — следующий проход спросит облако снова
+    needed.forEach((node) => {
+      const stored = cache?.get(node.id);
+      if (stored && !got.has(node.id) && !texts.has(node.id)) texts.set(node.id, stored);
+    });
   }
   if (cache) pruneTextCache(new Set(files.map(({ node }) => node.id)));
 }

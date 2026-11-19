@@ -7,6 +7,7 @@ import { IS_ANDROID, IS_IOS, IS_SERVICE_WORKER_SUPPORTED } from './browser/windo
 import { formatShareText } from './deeplink';
 import { validateFiles } from './files';
 import { notifyClientReady, playNotifySoundDebounced } from './notifications';
+import { handleAppShellMessage, requestAppShellPrecache } from './precacheAppShell';
 
 type WorkerAction = {
   type: string;
@@ -25,6 +26,7 @@ function handleWorkerMessage(e: MessageEvent) {
     console.log('[SW] Message from worker', action);
   }
   if (!action.type) return;
+  handleAppShellMessage(action.type, action.payload);
   const dispatch = getActions();
   const payload = action.payload;
   switch (action.type) {
@@ -52,6 +54,7 @@ function subscribeToWorker() {
   navigator.serviceWorker.addEventListener('message', handleWorkerMessage);
   // Notify web worker that client is ready to receive messages
   notifyClientReady();
+  requestAppShellPrecache();
 }
 
 if (IS_SERVICE_WORKER_SUPPORTED) {
@@ -70,6 +73,8 @@ if (IS_SERVICE_WORKER_SUPPORTED) {
         }
       }
 
+      // Первый визит: сервис-воркер берёт страницу под управление уже после `ready` — подписаться и тогда
+      navigator.serviceWorker.addEventListener('controllerchange', subscribeToWorker);
       await navigator.serviceWorker.register(serviceWorkerUrl, SERVICE_WORKER_OPTIONS);
 
       if (DEBUG) {
