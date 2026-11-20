@@ -249,3 +249,53 @@ export function getPlannedWorkouts(state: PlannerState, today: string, nowMinute
   });
   return result.map((item) => ({ ...item, start: item.start ?? undefined, minutes: item.minutes ?? undefined }));
 }
+
+export type RecordActionKind = 'tomorrow' | 'place' | 'duplicate';
+
+// `move` — правка самой записи, `detach` — отделение дня ряда, `copy` — новая запись `record`, `none` — нечего делать
+export type RecordAction = {
+  mode: 'move' | 'detach' | 'copy' | 'none';
+  day?: string;
+  start?: string;
+  minutes?: number;
+  due?: string;
+  record?: Partial<PlannerTask & PlannerEvent>;
+};
+
+/** Что сделать с записью по действию меню либо перетаскиванию на шкалу (`plannerRecordAction`). */
+export function getRecordAction({
+  action, item, today, dropDay, dropMinute, step,
+}: {
+  action: RecordActionKind;
+  item: PlannerTask | PlannerEvent;
+  today: string;
+  dropDay?: string;
+  dropMinute?: number;
+  // Шаг минуты на шкале (15 по умолчанию; окно свободного времени ставится точно — 1)
+  step?: number;
+}): RecordAction {
+  const isTask = 'status' in item;
+  const minutes = isTask ? item.minutes : toMinutes(item.end) - toMinutes(item.start);
+  const result = engineStatic<RecordAction>('plannerRecordAction', {
+    action,
+    today,
+    day: item.day,
+    instanceDay: item.instanceDay,
+    isSeries: Boolean(item.repeat),
+    due: isTask ? item.due : undefined,
+    minutes: minutes ?? -1,
+    dropDay,
+    dropMinute: dropMinute ?? -1,
+    step,
+    record: action === 'duplicate' ? item : undefined,
+  });
+  // Движок пишет отсутствующее значение как `null`
+  return {
+    mode: result.mode,
+    day: result.day || undefined,
+    start: result.start || undefined,
+    minutes: result.minutes ?? undefined,
+    due: result.due || undefined,
+    record: result.record || undefined,
+  };
+}

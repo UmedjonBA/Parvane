@@ -72,6 +72,8 @@ export type CloudLinkInfo = {
   expiresAt: number;
   bytes: number;
   files: number;
+  /** Сколько раз получатели открыли ссылку (считает сервер, кто открывал — не хранит). */
+  opens: number;
   /** Из записи владельца; у готовящейся ссылки и при недоступном ключе диска их нет. */
   name?: string;
   kind?: LinkKind;
@@ -115,7 +117,7 @@ type LinkInfoReply = {
   linkId?: string; link_id?: string; state?: string | number;
   createdAt?: string | number; created_at?: string | number;
   expiresAt?: string | number; expires_at?: string | number;
-  bytes?: string | number; files?: number;
+  bytes?: string | number; files?: number; opens?: string | number;
   ownerRecord?: string; owner_record?: string;
 };
 type LinkAddReply = {
@@ -736,6 +738,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       expiresAt: Number(reply.expiresAt || reply.expires_at || 0),
       bytes: Number(reply.bytes || 0),
       files: reply.files || 0,
+      opens: Number(reply.opens || 0),
     };
     const wire = reply.ownerRecord || reply.owner_record;
     const record = wire ? await openOwnerRecord(base64ToBytes(wire), keys, id).catch(() => undefined) : undefined;
@@ -860,6 +863,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         expiresAt: Number(published.expiresAt || published.expires_at || 0),
         bytes: Array.from(copies.values()).reduce((sum, c) => sum + c.blobSize, 0),
         files: plan.files.length,
+        opens: 0,
         name: plan.name,
         kind: plan.kind,
         source,
@@ -1529,6 +1533,11 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       } catch (e) {
         return { ok: false, error: errorOf(e) };
       }
+    },
+
+    /** Участники своей папки, ещё не принявшие приглашение (адреса); сервер не ответил — `undefined`. */
+    parvaneCloudPendingInvites({ container }: { container: string }): Promise<string[] | undefined> {
+      return deps.cloud().pendingInvites(container);
     },
 
     async parvaneCloudLeave({ container }: { container: string }): Promise<CloudResult> {

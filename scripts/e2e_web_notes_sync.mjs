@@ -1,7 +1,8 @@
 // «Заметки» на двух устройствах одного аккаунта (spec 041 хвосты D, spec 040 T9): текст, сохранённый без связи,
 // ждёт в очереди устройства с пометкой «не отправлено», переживает перезагрузку и уходит при появлении связи;
 // одна строка, изменённая на двух устройствах, — экран расхождения (доски `RpNotes`, `ZdNotesX`): выбор в каждом
-// месте, «Сохранить объединённую заметку», копия «… (конфликт …)» уходит в корзину. Снимки — компьютер и телефон.
+// месте, «Сохранить объединённую заметку», копия «… (конфликт …)» уходит в корзину; холст, правленный на обоих почти
+// одновременно, сводится по карточкам (NOTES-3). Снимки — компьютер и телефон.
 // Запуск: scripts/run_web_notes_sync_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -187,6 +188,35 @@ try {
     await b.body.innerText().then((text) => text.includes('Порт = 51821')), false, 'на втором устройстве — отвергнутая строка',
   );
   console.log('OK: расхождение правок — экран с выбором, объединённая заметка на обоих устройствах, копия убрана');
+
+  // ── Холст на двух устройствах: карточки, добавленные почти одновременно, есть на обоих (NOTES-3) ─────
+  const canvasCard = (d, text) => d.knowledge.locator('[data-canvas-board] [data-canvas-type="text"]').filter({ hasText: text });
+  const addTextCard = async (d, text) => {
+    await d.knowledge.locator('[data-canvas-tool="text"]').click();
+    const field = d.knowledge.locator('textarea[data-canvas-inline]');
+    await d.visible(field, 'поле текста карточки');
+    await field.fill(text);
+    await field.press('Enter');
+    await d.visible(canvasCard(d, text), `карточка «${text}»`);
+  };
+  await a.knowledge.getByRole('tab', { name: 'Canvas', exact: true }).click();
+  await a.knowledge.locator('[data-canvas-list] [data-canvas-new]').first().click();
+  await a.visible(a.knowledge.locator('[data-canvas-chip="Canvas 1"]'), 'новый холст');
+  await addTextCard(a, 'Север');
+  await b.knowledge.getByRole('tab', { name: 'Canvas', exact: true }).click();
+  const tile = b.knowledge.locator('[data-canvas-tile="Canvas 1"][data-canvas-id], [data-canvas-tile="Canvas 1"] [data-canvas-id]');
+  await b.visible(tile, 'холст первого устройства в списке второго', SYNC_TIMEOUT_MS);
+  await tile.first().click();
+  await b.visible(canvasCard(b, 'Север'), 'карточка первого устройства на втором', SYNC_TIMEOUT_MS);
+  // Обе правки — в окне отложенной записи друг друга: запись второго натыкается на чужую версию и сводится
+  await Promise.all([addTextCard(a, 'Юг'), addTextCard(b, 'Запад')]);
+  for (const [d, name] of [[a, 'первом'], [b, 'втором']]) {
+    for (const text of ['Север', 'Юг', 'Запад']) {
+      await d.visible(canvasCard(d, text), `на ${name} устройстве нет карточки «${text}» после сведения`, SYNC_TIMEOUT_MS);
+    }
+  }
+  await a.shot('canvas-merged');
+  console.log('OK: холст на двух устройствах — одновременные правки сведены, на обоих все карточки');
 
   console.log('e2e_web_notes_sync: OK');
 } catch (error) {

@@ -243,6 +243,13 @@ try {
   await expectMediaFlowing(aliceSession.page, { audio: true, minPeers: 2 });
   await expectMediaFlowing(bobSession.page, { audio: true, minPeers: 2 });
   await expectMediaFlowing(carolSession.page, { audio: true, minPeers: 2 });
+  // «Говорит» (доска `PhCalls`): гудки поддельного микрофона Chromium — речь участника
+  await aliceSession.page.waitForFunction(
+    () => Boolean(document.querySelector('[data-peer][data-peer-state="active"][data-speaking]')),
+    undefined,
+    { timeout: 15000 },
+  ).catch(() => assert.fail('у Алисы ни один участник не «говорит»'));
+  console.log('OK: состояние «говорит» у плитки участника');
 
   await checkCallAudioOutput(aliceSession.page, true, 2);
   const viewport = aliceSession.page.viewportSize();
@@ -355,8 +362,23 @@ try {
     assert.fail('строка Кэрол у Алисы не пришла в состояние «отклонил»');
   });
   console.log(`group call decline cleared the row in ${declineMs} ms`);
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
-  await bobSession.page.getByText('Group Call', { exact: true })
+  // «Позвать участника» (доски `PhCalls`, `DkCalls`): отказавшую зовут снова, она входит в идущий звонок.
+  // Повтор того же звонка у отказавшей глушится 2,5 с — ждём их
+  await aliceSession.page.waitForTimeout(3000);
+  await aliceSession.page.locator('[data-call-free-place]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByRole('button', { name: 'Invite participant', exact: true }).click();
+  await aliceSession.page.locator('[data-call-invite-list]').getByRole('button', { name: carolName }).click();
+  await acceptGroupCall(carolSession.page, 'carol (invited again)');
+  await Promise.all([
+    waitActivePeers(aliceSession.page, 2, 'alice after inviting carol'),
+    waitActivePeers(bobSession.page, 2, 'bob after carol joined'),
+    waitActivePeers(carolSession.page, 2, 'carol joined the running call'),
+  ]);
+  console.log('OK: отказавшую позвали снова — она в идущем звонке');
+  for (const { page } of [aliceSession, bobSession]) {
+    await page.getByRole('button', { name: 'End Call' }).click();
+  }
+  await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Отклонение при ОБРАТНОМ порядке адресов ────────────────────────────────
@@ -467,14 +489,17 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await acceptGroupCall(carolSession.page, 'carol (bob is busy)');
   await waitActivePeers(aliceSession.page, 1, 'alice with carol while bob is busy');
-  // Боб остаётся в личном звонке, приглашения не видит
-  await bobSession.page.waitForTimeout(2000);
+  // Боб остаётся в личном звонке: приглашение — карточкой поверх разговора (доска `DkCalls`), не экраном входящего
+  const waitingCard = bobSession.page.getByRole('alertdialog', { name: 'Incoming call' });
+  await waitingCard.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(
     await bobSession.page.getByText(`${groupTitle}: group call`, { exact: true }).count(),
     0,
     'busy user got a group call invite screen',
   );
   await findCallTimer(bobSession.page).waitFor({ state: 'visible', timeout: 5000 });
+  await waitingCard.getByRole('button', { name: 'Decline', exact: true }).click();
+  await waitingCard.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   // Строка Боба у Алисы — именно «занят», а не просто закрытая по таймауту:
   // раньше проверялось только отсутствие `connecting`, и сломанный путь busy
   // прошёл бы за счёт истечения ringTimeoutMs (FR-062)
@@ -490,16 +515,26 @@ try {
   // отдельного узла с этим словом нет
   await aliceSession.page.locator('[data-peer-state="busy"]').first()
     .getByText(/busy/).waitFor({ state: 'visible', timeout: 5000 });
-  // Личный звонок Алисе во время группового — «Line busy», групповой живёт
-  await daveSession.page.getByRole('button', { name: 'End Call' }).click();
+  // Занятого зовут снова; «Принять» на карточке завершает личный звонок с Дейвом и вводит Боба в групповой
+  await aliceSession.page.waitForTimeout(3000);
+  await aliceSession.page.getByRole('button', { name: 'Invite participant', exact: true }).click();
+  await aliceSession.page.locator('[data-call-invite-list]').getByRole('button', { name: bobName }).click();
+  await waitingCard.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await waitingCard.getByRole('button', { name: 'Join', exact: true }).click();
   await daveSession.page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
-  await bobSession.page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS })
-    .catch(() => {});
+  await Promise.all([
+    waitActivePeers(aliceSession.page, 2, 'alice after bob joined from the card'),
+    waitActivePeers(bobSession.page, 2, 'bob joined from the card'),
+  ]);
+  console.log('OK: карточка приглашения поверх разговора — «Отклонить» даёт «занят», «Принять» переводит в групповой');
+  // Личный звонок Алисе во время группового — «Line busy», групповой живёт
   await openPrivateChat(daveSession.page, alice);
   await daveSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await daveSession.page.getByText('Line busy', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await waitActivePeers(aliceSession.page, 1, 'alice group call survives a 1-1 attempt');
-  await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
+  await waitActivePeers(aliceSession.page, 2, 'alice group call survives a 1-1 attempt');
+  for (const { page } of [aliceSession, bobSession]) {
+    await page.getByRole('button', { name: 'End Call' }).click();
+  }
   await carolSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 

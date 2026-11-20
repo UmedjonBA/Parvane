@@ -1,16 +1,23 @@
-import { memo, useEffect, useState } from '../../../../lib/teact/teact';
+import { memo, useEffect, useMemo, useState } from '../../../../lib/teact/teact';
 import { getActions } from '../../../../global';
 
+import type { PvSegmentItem } from '../../../parvane/notes/PvSegment';
 import { SettingsScreens } from '../../../../types';
 
+import {
+  AUTO_LOCK_CHOICES, getAutoLockMinutes, lockAppNow, setAutoLockMinutes,
+} from '../../../../util/autoLock';
+import { IS_MAC_OS } from '../../../../util/browser/windowEnvironment';
 import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
 
+import useDerivedState from '../../../../hooks/useDerivedState';
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
+import PvSegment from '../../../parvane/notes/PvSegment';
 import PvSwitch from '../../../parvane/notes/PvSwitch';
 import Loading from '../../../ui/Loading';
 import ProfileIcon from '../profile/ProfileIcon';
@@ -86,9 +93,21 @@ const SettingsPasscodeHub = ({
     onStart();
   });
 
+  const autoLockMinutes = useDerivedState(getAutoLockMinutes);
+  const autoLockItems = useMemo<PvSegmentItem<string>[]>(() => AUTO_LOCK_CHOICES.map((minutes) => ({
+    value: String(minutes),
+    label: minutes
+      ? lang('ParvanePinAutoLockMinutes', { count: minutes }, { pluralValue: minutes })
+      : lang('ParvanePinAutoLockOff'),
+  })), [lang]);
+
+  const handleAutoLockChange = useLastCallback((value: string) => {
+    setAutoLockMinutes(Number(value));
+  });
+
+  // Ключ хранилища живёт только в памяти вкладки: перезагрузка закрывает его, запуск спросит PIN
   const handleLockNow = useLastCallback(() => {
-    // Ключ хранилища живёт только в памяти вкладки: перезагрузка закрывает его, запуск спросит PIN
-    window.location.reload();
+    lockAppNow();
   });
 
   const handleChange = useLastCallback(() => {
@@ -117,8 +136,21 @@ const SettingsPasscodeHub = ({
           />
         </div>
         {isEnabled && (
+          <div className={buildClassName(styles.setRow, styles.setRowWrap)} data-pin-autolock={autoLockMinutes}>
+            <span className={styles.setTitle}>{lang('ParvanePinAutoLock')}</span>
+            <PvSegment
+              items={autoLockItems}
+              value={String(autoLockMinutes)}
+              label={lang('ParvanePinAutoLock')}
+              className={styles.setSegment}
+              onChange={handleAutoLockChange}
+            />
+          </div>
+        )}
+        {isEnabled && (
           <button type="button" className={actionRowClass} data-pin-lock-now onClick={handleLockNow}>
             <span className={styles.setTitle}>{lang('ParvanePinLockNow')}</span>
+            <span className={styles.setValue}>{IS_MAC_OS ? '⌘L' : 'Ctrl+L'}</span>
           </button>
         )}
         {isEnabled && (

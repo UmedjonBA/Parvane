@@ -170,13 +170,6 @@ export function clearDiag() {
   scheduleSave();
 }
 
-// Открытие модалки отчёта из любого места UI без прокидывания пропсов
-// (пункт меню живёт в дропдауне, модалка — в Main).
-export const BUG_REPORT_OPEN_EVENT = 'parvane:open-bug-report';
-export function openBugReport() {
-  window.dispatchEvent(new CustomEvent(BUG_REPORT_OPEN_EVENT));
-}
-
 export function installParvaneDiag() {
   if (installed || !PARVANE_DIAG_ENABLED || typeof window === 'undefined') return;
   installed = true;

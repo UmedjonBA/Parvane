@@ -3,7 +3,8 @@ import { memo, useMemo } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { SharedSettings } from '../../../global/types';
-import type { AccountSettings } from '../../../types';
+import type { AccountSettings, TimeFormat } from '../../../types';
+import type { IRadioOption } from '../../ui/RadioGroup';
 import { SettingsScreens } from '../../../types';
 
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
@@ -19,18 +20,20 @@ import ItemPicker, { type ItemPickerOption } from '../../common/pickers/ItemPick
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
+import RadioGroup from '../../ui/RadioGroup';
 
 type OwnProps = {
   isActive?: boolean;
   onReset: () => void;
 };
 
-type StateProps = Pick<SharedSettings, 'language'>
+type StateProps = Pick<SharedSettings, 'language' | 'timeFormat'>
   & Pick<AccountSettings, 'canTranslate' | 'doNotTranslate'>;
 
 const SettingsLanguage: FC<OwnProps & StateProps> = ({
   isActive,
   language,
+  timeFormat,
   canTranslate,
   doNotTranslate,
   onReset,
@@ -63,6 +66,18 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
   // Строки нового языка подгружает обработчик смены настройки (`changeLanguage`)
   const handleChange = useLastCallback((langCode: string) => {
     setSharedSettingOption({ language: langCode });
+  });
+
+  // Parvane (spec 041, доска `RpProfileA`): «Формат» — время 12 / 24 часа (прежде в «Настройках мессенджера»).
+  // Первого дня недели и единиц на доске нет функции: неделя «Плана» всегда с понедельника, единицы — метрические
+  const timeFormatOptions: IRadioOption[] = useMemo(() => [
+    { label: newLang('SettingsTimeFormat24'), value: '24h' },
+    { label: newLang('SettingsTimeFormat12'), value: '12h' },
+  ], [newLang]);
+
+  const handleTimeFormatChange = useLastCallback((newTimeFormat: string) => {
+    setSharedSettingOption({ timeFormat: newTimeFormat as TimeFormat });
+    setSharedSettingOption({ wasTimeFormatSetManually: true });
   });
 
   const options = useMemo(() => LANGUAGES.map(({ code, nativeName, name }) => ({
@@ -110,17 +125,29 @@ const SettingsLanguage: FC<OwnProps & StateProps> = ({
           className="settings-picker"
         />
       </Island>
+      <IslandTitle>{newLang('ParvaneLanguageFormat')}</IslandTitle>
+      <Island>
+        <div data-language-time-format>
+          <RadioGroup
+            name="language-time-format"
+            options={timeFormatOptions}
+            selected={timeFormat}
+            onChange={handleTimeFormatChange}
+          />
+        </div>
+      </Island>
     </div>
   );
 };
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { language } = selectSharedSettings(global);
+    const { language, timeFormat } = selectSharedSettings(global);
     const { canTranslate, doNotTranslate } = global.settings.byKey;
 
     return {
       language,
+      timeFormat,
       canTranslate,
       doNotTranslate,
     };

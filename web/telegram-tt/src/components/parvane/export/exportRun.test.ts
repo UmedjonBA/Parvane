@@ -6,7 +6,9 @@ import type { ExportSnapshot } from './exportModel';
 import type { ExportSource } from './exportRun';
 
 import { DEFAULT_EXPORT_LABELS } from './exportModel';
-import { cloudExportFiles, runDataExport, treeFilePaths } from './exportRun';
+import {
+  cloudExportFiles, getExportSections, runDataExport, treeFilePaths,
+} from './exportRun';
 import { createZipWriter, ExportError } from './exportZip';
 
 const PHOTO = new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3, 4, 5]);
@@ -149,6 +151,25 @@ describe('runDataExport', () => {
     expect(decoder.decode(files['cloud/My files/readme.txt'])).toBe('abc');
     expect(Object.keys(files).some((name) => name.includes('/media/'))).toBe(false);
     expect(decoder.decode(files['index.html'])).toContain('cloud/My%20files/readme.txt');
+  });
+
+  it('leaves out sections that are switched off and numbers the chosen ones', async () => {
+    const source = fakeSource();
+    const seen: string[] = [];
+    const result = await runDataExport({
+      source,
+      options: {
+        includeMedia: true, includeCloud: false, includeChats: false, includePlanner: false, includeContacts: false,
+      },
+      labels: DEFAULT_EXPORT_LABELS,
+      signal: new AbortController().signal,
+      onProgress: (p) => { if (p.section) seen.push(`${p.stage} ${p.section}/${p.sections}`); },
+    });
+    expect(source.mediaCalls).toEqual([]);
+    expect(Object.keys(await unzip(result.blob)).sort()).toEqual(['index.html', 'notes/Garden/Seeds.md']);
+    expect(new Set(seen)).toEqual(new Set(['notes 1/1']));
+    expect(getExportSections({ includeMedia: false, includeCloud: true }))
+      .toEqual(['chats', 'planner', 'notes', 'contacts', 'cloud']);
   });
 
   it('stops with `canceled` when aborted mid-way', async () => {

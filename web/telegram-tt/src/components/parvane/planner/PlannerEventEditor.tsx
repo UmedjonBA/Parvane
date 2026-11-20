@@ -26,7 +26,7 @@ import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import TextArea from '../../ui/TextArea';
-import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import { PLANNER_SIDE_FORM_ID, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerFreeTime from './PlannerFreeTime';
@@ -301,7 +301,11 @@ const PlannerEventEditor = ({
   });
 
   return (
-    <form className={buildClassName(styles.editor, styles.eventCard)} onSubmit={handleSubmit}>
+    <form
+      id={PLANNER_SIDE_FORM_ID}
+      className={buildClassName(styles.editor, styles.eventCard)}
+      onSubmit={handleSubmit}
+    >
       <input
         id="planner-event-name"
         className={styles.cardTitleInput}
@@ -379,7 +383,7 @@ const PlannerEventEditor = ({
         />
       ) : (
         <div className={styles.actions}>
-          <Button type="submit" size="smaller">{lang('Save')}</Button>
+          <Button type="submit" size="smaller" className={styles.footSave}>{lang('Save')}</Button>
           <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
             <Icon name="delete" />
             {lang('PlannerDeleteEvent')}

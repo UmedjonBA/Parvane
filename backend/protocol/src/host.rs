@@ -273,6 +273,25 @@ pub fn apply_grant_former_names(c: &mut Client, v: &Value) {
     }
 }
 
+/// Поле `fsk` материала гранта: прежние ключи личного состояния `[{"k": hex, "v": версия}]`. Ключ журнала истории
+/// выводится из ключа состояния, и записи, запечатанные до смены ключа отзывом устройства, новое устройство без
+/// прежних ключей не открывает (третья привязка теряла историю, сценарий `relink`).
+pub fn put_grant_former_state_keys(c: &Client, m: &mut Value) {
+    let keys = c.former_state_keys();
+    if !keys.is_empty() {
+        m["fsk"] = Value::Array(keys.into_iter().map(|(k, v)| json!({"k": hex::encode(k.as_bytes()), "v": v})).collect());
+    }
+}
+
+/// Прежние ключи личного состояния из гранта (поле `fsk`); негодные записи пропускаются, грант без поля принимается.
+pub fn apply_grant_former_state_keys(c: &mut Client, v: &Value) {
+    let keys = v.get("fsk").and_then(Value::as_array).into_iter().flatten().filter_map(|e| {
+        let k = crate::state::StateKey::from_bytes(&hex::decode(e["k"].as_str()?).ok()?).ok()?;
+        Some((k, u32::try_from(e["v"].as_u64()?).ok()?))
+    });
+    c.adopt_former_state_keys(keys.collect());
+}
+
 /// Поле `pk` материала гранта линковки: ключи доступа собеседников старого
 /// устройства `[{"u": адрес, "k": hex, "g": поколение}]` (общее для C ABI и WASM).
 pub fn grant_peer_keys(c: &Client) -> Value {
@@ -431,6 +450,7 @@ impl HostClient {
         }
         m["pk"] = grant_peer_keys(&self.inner);
         put_grant_former_names(&self.inner, &mut m);
+        put_grant_former_state_keys(&self.inner, &mut m);
         Ok(m.to_string())
     }
 
@@ -446,6 +466,7 @@ impl HostClient {
         }
         apply_grant_peer_keys(&mut self.inner, &v);
         apply_grant_former_names(&mut self.inner, &v);
+        apply_grant_former_state_keys(&mut self.inner, &v);
         Ok(reqs_json(&reqs))
     }
 
@@ -1190,6 +1211,43 @@ mod tests {
         let plain = event_json(&ev(Disposition::Stub));
         assert_eq!(plain["disposition"], json!("stub"));
         assert!(plain.get("critical").is_none());
+    }
+
+    /// Дефект `relink` (третья привязка теряла историю): после отзыва устройства ключ личного состояния сменился, а
+    /// грант нёс только текущий — записи журнала истории под прежним ключом новое устройство не открывало.
+    #[test]
+    fn link_grant_carries_former_state_keys_for_history() {
+        use crate::pb::parvane::history::v1::{AppendRequest, HistoryRecord, SyncResponse};
+        let mut a = HostClient::new("alice@local", "d1", "local").unwrap();
+        a.create_identity_typed(2).unwrap();
+        a.inner.set_state_key(crate::state::StateKey::generate(), 1);
+        let row = crate::history::row_op(crate::pb::parvane::history::v1::MessageRow {
+            id: vec![7; 16],
+            chat: Some(crate::pb::parvane::state::v1::Peer { kind: Some(crate::pb::parvane::state::v1::peer::Kind::User(
+                crate::pb::parvane::core::v2::UserRef { address: "bob@local".into() })) }),
+            from: "bob@local".into(), ts_ms: 1,
+            body: serde_json::to_vec(&json!({"content": {"kind": "text", "text": "early"}})).unwrap() });
+        let bodies = a.history_session().unwrap().session().seal(vec![row], false, 1).unwrap();
+        let req = AppendRequest::decode(bodies[0].1.as_slice()).unwrap();
+        let resp = SyncResponse {
+            records: vec![HistoryRecord { seq: 1, op_id: req.op_id, aead_ciphertext: req.aead_ciphertext, chunk: req.chunk }],
+            more: false, head_seq: 1, compacted: None,
+        }.encode_to_vec();
+        // Отзыв устройства: новый ключ личного состояния (версия 2)
+        a.inner.set_state_key(crate::state::StateKey::generate(), 2);
+
+        let grant = a.link_grant_material().unwrap();
+        assert!(serde_json::from_str::<Value>(&grant).unwrap()["fsk"].is_array(), "прежний ключ — в гранте");
+        let mut b = HostClient::new("alice@local", "d3", "local").unwrap();
+        b.join_with_grant(&grant, 2).unwrap();
+        assert_eq!(b.inner.state_keys_all().iter().map(|(_, v)| *v).collect::<Vec<_>>(), vec![2, 1]);
+        let got = b.history_session().unwrap().session().ingest(&resp).unwrap();
+        assert_eq!((got.rejected, got.ops.len()), (0, 1), "запись под прежним ключом открывается на новом устройстве");
+        // Мусор в поле пропускается, текущий ключ в прежние не попадает
+        apply_grant_former_state_keys(&mut b.inner, &json!({"fsk": [{"k": "zz", "v": 1}, {"v": 3}, 5]}));
+        let current = hex::encode(b.inner.state_key().unwrap().0.as_bytes());
+        apply_grant_former_state_keys(&mut b.inner, &json!({"fsk": [{"k": current, "v": 2}]}));
+        assert_eq!(b.inner.state_keys_all().len(), 2);
     }
 
     #[test]

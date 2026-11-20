@@ -258,9 +258,11 @@ try {
   await phoneRow.locator('[data-music-menu]').click();
   const sheetMenu = page.locator('.Modal [role="menu"]');
   await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  for (const item of ['Play next', 'Add to queue', 'Add to favourites', 'Add to a playlist', 'Send to a chat', 'Download for offline']) {
+  for (const item of ['Play next', 'Add to queue', 'Add to favourites', 'Send to a chat', 'Download for offline']) {
     await sheetMenu.getByRole('menuitem', { name: item, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
+  // «В плейлист» на телефоне — чипы внизу шторки (доска `XpMusic`)
+  await page.locator('.Modal [data-playlist-chips] [data-playlist-chip-new]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-track-menu-phone.png` });
   }
@@ -375,10 +377,22 @@ try {
   await picker.getByRole('button', { name: 'Create and add' }).click();
   await wide.locator('[data-playlist-picker="added"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await picker.getByRole('button', { name: 'Close' }).click();
+  // Телефон (доска `XpMusic`): в шторке трека плейлисты — чипами внизу; где трек уже есть — чип выделен
+  await page.setViewportSize(PHONE);
+  await albumRow('t1').locator('[data-music-menu]').click();
+  const chips = page.locator('[data-playlist-chips]');
+  await chips.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await page.getByRole('menu').getByRole('menuitem', { name: 'Add to a playlist', exact: true }).count(), 0,
+    'на телефоне пункт «В плейлист» заменён чипами');
+  assert.equal(await chips.getByRole('button', { name: 'Дорога', exact: true }).getAttribute('aria-pressed'), 'true');
+  await chips.getByRole('button', { name: 'Вечер', exact: true }).click();
+  await chips.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await page.setViewportSize(WIDE);
+  console.log('OK: чипы плейлистов в шторке трека на телефоне');
   await nav('playlists');
   const lists = wide.locator('[data-music-playlists]');
   await lists.getByRole('button', { name: /Дорога.*2 tracks/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await lists.getByRole('button', { name: /Вечер.*1 track/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await lists.getByRole('button', { name: /Вечер.*2 tracks/ }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: плейлисты созданы, треки добавлены, повтор трека не добавляется');
 
   // ── Страница плейлиста: порядок, воспроизведение, убрать трек, переименовать ─

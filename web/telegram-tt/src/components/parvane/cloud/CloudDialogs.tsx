@@ -1,17 +1,13 @@
 import {
-  memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  memo, useEffect, useLayoutEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
-import type { PvIconName } from '../notes/PvIcon';
-import type { CloudNode } from './cloudModel';
-
 import buildClassName from '../../../util/buildClassName';
-import { canMoveInto, childrenOf, sortNodes, validateName } from './cloudModel';
+import { validateName } from './cloudModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
 import PvSwitch from '../notes/PvSwitch';
 
@@ -32,12 +28,7 @@ type NameProps = {
   onClose: NoneToVoidFunction;
 };
 
-const NAME_SORT = { key: 'name', isDescending: false } as const;
-const NO_IDS: string[] = [];
 const FOCUS_DELAY_MS = 150;
-// Отступ строки дерева: поле строки и шаг на уровень вложенности
-const TREE_PAD_REM = 1;
-const TREE_STEP_REM = 1.25;
 
 // Название новой папки либо новое имя файла/папки: проверка — как в движке
 const CloudNameDialogBase = ({
@@ -125,160 +116,4 @@ const CloudNameDialogBase = ({
   );
 };
 
-export type CloudMovePlace = { id: string; name: string; isShared?: boolean; nodes: CloudNode[] };
-
-type MoveProps = {
-  isOpen: boolean;
-  rootName: string;
-  nodes: CloudNode[];
-  movedIds: string[];
-  startFolder?: string;
-  // Несколько мест назначения (личный диск и совместные папки); `sourcePlace` — откуда переносят
-  places?: CloudMovePlace[];
-  sourcePlace?: string;
-  confirmLabel?: string;
-  title?: string;
-  onSubmit: (target?: string, place?: string) => void;
-  onClose: NoneToVoidFunction;
-};
-
-type TreeRow = {
-  key: string;
-  place?: string;
-  folder?: string;
-  name: string;
-  depth: number;
-  icon: PvIconName;
-  isShared?: boolean;
-  // Здесь переносимое лежит сейчас
-  isCurrent: boolean;
-  isDisabled: boolean;
-};
-
-function rowKey(place?: string, folder?: string) {
-  return `${place || ''}/${folder || ''}`;
-}
-
-// Выбор папки назначения: дерево всех папок (личный диск и совместные папки с правом записи).
-// Папка не может попасть в себя и во вложенную; место, где переносимое уже лежит, помечено
-const CloudFolderDialogBase = ({
-  isOpen, rootName, nodes: ownNodes, movedIds: ownMovedIds, startFolder, places, sourcePlace, confirmLabel, title,
-  onSubmit, onClose,
-}: MoveProps) => {
-  const lang = useLang();
-  const [picked, setPicked] = useState<string>();
-
-  const hasPlaces = Boolean(places && places.length > 1);
-  const isMoving = ownMovedIds.length > 0;
-
-  useEffect(() => {
-    if (!isOpen) return;
-    // Перенос: место выбирает человек. Сохранение: сразу стоит открытая папка
-    setPicked(isMoving ? undefined : rowKey(hasPlaces ? sourcePlace : undefined, startFolder));
-  }, [isOpen, isMoving, hasPlaces, sourcePlace, startFolder]);
-
-  const rows = useMemo(() => {
-    const sources: { id?: string; name: string; isShared?: boolean; nodes: CloudNode[] }[] = hasPlaces
-      ? places!.map((place) => ({ ...place }))
-      : [{ name: rootName, nodes: ownNodes }];
-    const result: TreeRow[] = [];
-    sources.forEach((source) => {
-      // В чужом для переносимого дереве запретных папок нет
-      const movedIds = !hasPlaces || source.id === sourcePlace ? ownMovedIds : NO_IDS;
-      const first = movedIds.length ? source.nodes.find(({ id }) => id === movedIds[0]) : undefined;
-      const current = first ? first.parent || undefined : undefined;
-      const isHome = Boolean(first);
-      result.push({
-        key: rowKey(source.id),
-        place: source.id,
-        name: source.name,
-        depth: 0,
-        icon: 'folder',
-        isShared: source.isShared,
-        isCurrent: isHome && current === undefined,
-        isDisabled: isHome && current === undefined,
-      });
-      const walk = (parent: string | undefined, depth: number) => {
-        sortNodes(childrenOf(source.nodes, parent).filter((n) => n.kind === 'folder'), NAME_SORT).forEach((node) => {
-          const isMoved = movedIds.includes(node.id);
-          const isCurrent = isHome && node.id === current;
-          result.push({
-            key: rowKey(source.id, node.id),
-            place: source.id,
-            folder: node.id,
-            name: node.name,
-            depth,
-            icon: 'folder',
-            isCurrent,
-            isDisabled: isMoved || isCurrent || !canMoveInto(source.nodes, movedIds, node.id),
-          });
-          // Содержимое переносимой папки целью быть не может — его и не показываем
-          if (!isMoved) walk(node.id, depth + 1);
-        });
-      };
-      walk(undefined, 1);
-    });
-    return result;
-  }, [hasPlaces, places, rootName, ownNodes, ownMovedIds, sourcePlace]);
-
-  const target = rows.find((row) => row.key === picked && !row.isDisabled);
-
-  const handleSubmit = useLastCallback(() => {
-    if (target) onSubmit(target.folder, hasPlaces ? target.place : undefined);
-  });
-
-  const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setPicked(e.currentTarget.dataset.key);
-  });
-
-  const actionLabel = confirmLabel || lang('ParvaneCloudMoveHere');
-
-  return (
-    <PvSheet
-      isOpen={isOpen}
-      title={title || lang('ParvaneCloudMoveTitle')}
-      className={buildClassName(styles.narrow, styles.full)}
-      onClose={onClose}
-    >
-      <div className={buildClassName(styles.tree, 'custom-scroll')} role="list">
-        {rows.map((row) => (
-          <button
-            key={row.key}
-            type="button"
-            role="listitem"
-            className={buildClassName(styles.treeRow, row.key === picked && styles.treeRowOn)}
-            style={`padding-inline-start: ${TREE_PAD_REM + row.depth * TREE_STEP_REM}rem`}
-            disabled={row.isDisabled}
-            aria-current={row.key === picked ? 'true' : undefined}
-            data-key={row.key}
-            data-place-id={row.folder ? undefined : row.place}
-            onClick={handlePick}
-          >
-            <PvIcon
-              name={row.icon}
-              isSmall
-              className={buildClassName(styles.treeIcon, row.isShared && styles.treeIconShared)}
-            />
-            <span className={styles.treeName} dir="auto">{row.name}</span>
-            {row.isCurrent && <span className={styles.treeHere}>{lang('KnowledgeFilesHere')}</span>}
-          </button>
-        ))}
-      </div>
-      <div className={buildClassName(styles.buttons, styles.buttonsColumn)}>
-        <button type="button" className={kit.btn} onClick={onClose}>{lang('Cancel')}</button>
-        <button
-          type="button"
-          className={buildClassName(kit.btn, kit.btnAcc)}
-          disabled={!target}
-          aria-label={actionLabel}
-          onClick={handleSubmit}
-        >
-          {target ? lang('ParvaneCloudMoveInto', { action: actionLabel, name: target.name }) : actionLabel}
-        </button>
-      </div>
-    </PvSheet>
-  );
-};
-
 export const CloudNameDialog = memo(CloudNameDialogBase);
-export const CloudFolderDialog = memo(CloudFolderDialogBase);

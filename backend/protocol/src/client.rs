@@ -1932,6 +1932,25 @@ impl Client {
         self.state_key.iter().chain(self.former_state_keys.iter()).map(|(k, v)| (k, *v)).collect()
     }
 
+    /// Прежние ключи личного состояния (новые сначала) — в материал гранта линковки и копию ключей аккаунта.
+    pub fn former_state_keys(&self) -> Vec<(&StateKey, u32)> {
+        self.former_state_keys.iter().map(|(k, v)| (k, *v)).collect()
+    }
+
+    /// Прежние ключи личного состояния из гранта своего устройства: без них новое устройство не открывает записи
+    /// журнала истории, запечатанные до смены ключа отзывом (spec 033; третья привязка теряла историю). Текущий и
+    /// уже известные пропускаются; порядок — по версии, новые сначала.
+    pub fn adopt_former_state_keys(&mut self, keys: Vec<(StateKey, u32)>) {
+        for (k, v) in keys {
+            let is_current = self.state_key.as_ref().is_some_and(|(c, _)| c.as_bytes() == k.as_bytes());
+            if !is_current && !self.former_state_keys.iter().any(|(f, _)| f.as_bytes() == k.as_bytes()) {
+                self.former_state_keys.push((k, v));
+            }
+        }
+        self.former_state_keys.sort_by(|a, b| b.1.cmp(&a.1));
+        self.former_state_keys.truncate(FORMER_STATE_KEYS_MAX);
+    }
+
     /// Сменить ключ личного состояния, сохранив прежний среди прежних (если он другой).
     fn replace_state_key(&mut self, key: StateKey, version: u32) {
         if let Some((old, ov)) = self.state_key.take() {

@@ -17,6 +17,7 @@ export const CLOUD_TRASH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 // Текстовый файл крупнее в просмотре не открывается (его можно скачать)
 export const CLOUD_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const NAME_SORT: CloudSort = { key: 'name', isDescending: false };
 const SERVICE_PREFIX = '.parvane-';
 const TYPE_LABEL_MAX_LENGTH = 8;
 // Как `c.is_control()` движка: C0, DEL и C1
@@ -196,6 +197,29 @@ export function usageOf(nodes: CloudNode[]) {
 /** Размер папки со всем вложенным. */
 export function sizeOf(nodes: CloudNode[], id: string) {
   return subtreeOf(nodes, id).reduce((sum, n) => sum + n.size, 0);
+}
+
+export type CloudTreeRow = { id: string; name: string; depth: number };
+
+/** Дерево папок колонки мест (доска `XdFiles`): папки корня, а у папок на пути к открытой — их вложенные папки.
+ * Порядок — по имени, глубина корня — 0; корзина и служебное не показываются. */
+export function navTreeOf(nodes: CloudNode[], openFolder?: string): CloudTreeRow[] {
+  const folders = sortNodes(listedNodes(nodes).filter((n) => n.kind === 'folder' && !n.trashed), NAME_SORT);
+  const byParent = new Map<string, CloudNode[]>();
+  folders.forEach((n) => {
+    const key = n.parent || '';
+    byParent.set(key, [...(byParent.get(key) || []), n]);
+  });
+  const expanded = new Set(pathOf(nodes, openFolder).map((n) => n.id));
+  const rows: CloudTreeRow[] = [];
+  const walk = (parent: string, depth: number) => {
+    (byParent.get(parent) || []).forEach((n) => {
+      rows.push({ id: n.id, name: n.name, depth });
+      if (expanded.has(n.id)) walk(n.id, depth + 1);
+    });
+  };
+  walk('', 0);
+  return rows;
 }
 
 export type FolderStats = { count: number; size: number };

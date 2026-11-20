@@ -11,6 +11,7 @@ import {
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
+import { getGridMinute } from './plannerMenuTarget';
 import {
   addDays, fromDayKey, getDayRange, getEventColor, getListColor, getNutrientTotal, instanceKey, layoutTimed,
   MINUTES_IN_DAY, toMinutes,
@@ -22,6 +23,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
 import PlannerName from './PlannerName';
+import { TASK_DRAG_TYPE } from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
 
@@ -40,6 +42,8 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
   // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
   onOpenSleep?: (day: string) => void;
+  // Задача, брошенная на колонку шкалы (доска `RdPlan`): ключ экземпляра, день и минута под курсором
+  onPlaceTask?: (taskKey: string, day: string, minute: number) => void;
 };
 
 const ALL_DAY_FILL_PERCENT = 14;
@@ -86,6 +90,7 @@ function allDayFillStyle(state: PlannerState, events: PlannerEvent[]) {
 
 const PlannerWeek = ({
   state, days, picked, today, layers, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent, onOpenSleep,
+  onPlaceTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -189,6 +194,19 @@ const PlannerWeek = ({
     const minutes = gridStart + ((e.clientY - rect.top) / rect.height) * gridMinutes;
     const start = Math.floor(minutes / CREATE_STEP) * CREATE_STEP;
     onCreateAt(e.currentTarget.dataset.day!, Math.max(0, Math.min(start, gridStart + gridMinutes - CREATE_MINUTES)));
+  });
+
+  const handleDragOver = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!onPlaceTask || !e.dataTransfer.types.includes(TASK_DRAG_TYPE)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  });
+
+  const handleDrop = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
+    const taskKey = e.dataTransfer.getData(TASK_DRAG_TYPE);
+    if (!taskKey || !onPlaceTask) return;
+    e.preventDefault();
+    onPlaceTask(taskKey, e.currentTarget.dataset.day!, getGridMinute(e.currentTarget, e.clientY));
   });
 
   const handleItemClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -354,8 +372,11 @@ const PlannerWeek = ({
               className={buildClassName(styles.weekColumn, day === today && styles.weekColumnToday)}
               style={`height: ${hours.length * hourRem}rem`}
               data-day={day}
+              data-grid-day={day}
               onClick={handleColumnClick}
               onDoubleClick={isSingle ? undefined : handleColumnDoubleClick}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
             >
               {Boolean(allDay.length) && (
                 <span

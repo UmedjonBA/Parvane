@@ -21,6 +21,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import PlannerField from './PlannerField';
 import PlannerLayerList from './PlannerLayerList';
+import PlannerReminderSample from './PlannerReminderSample';
 
 import styles from './Planner.module.scss';
 
@@ -124,6 +125,8 @@ const PlannerSettings = ({
       <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('PlannerLayers')}</h3>
       <PlannerLayerList layers={layers} onToggle={onToggleLayer} />
       <p className={styles.sheetHint}>{lang('PlannerLayersHint')}</p>
+      <h3 className={styles.groupTitle}>{lang('PlannerReminderSampleTitle')}</h3>
+      <PlannerReminderSample state={state} />
       <h3 className={styles.groupTitle}>{lang('PlannerSettingsDay')}</h3>
       <div className={styles.fields}>
         <PlannerField

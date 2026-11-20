@@ -670,3 +670,38 @@
   font-weight: var(--font-weight-semibold);
   text-align: center;
 }
+
+// Первое открытие (доски `ZpHealthX`, `ZdHealthX`): на компьютере — две колонки, «Что считать» строками с выключателями
+.first {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+
+  @media (max-width: 925px) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+}
+
+.firstColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.firstBlocks {
+  overflow: hidden;
+  padding: 0;
+}
+
+.firstBlock {
+  min-height: var(--pv-settings-row-height);
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}

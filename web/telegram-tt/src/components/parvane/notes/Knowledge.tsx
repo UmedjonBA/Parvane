@@ -627,20 +627,25 @@ const Knowledge = () => {
   const isList = view === 'notes';
   const isNoteShown = isList && Boolean(openNote);
   const isNoteAlone = isNarrow && isNoteShown;
+  // Открытый холст на телефоне: инструменты внизу вместо ленты модулей (доска `XpNotes`); шапка модуля остаётся —
+  // в ней поиск по холсту
+  const isCanvasOpen = view === 'canvas' && Boolean(graphCanvasId) && canvases.some(({ id }) => id === graphCanvasId);
+  const isCanvasAlone = isNarrow && isCanvasOpen;
   // Правка заметки: колонка «Связи» убрана, место — редактору и просмотру
   const [isNoteEditing, setIsNoteEditing] = useState(false);
   const isGuideNew = Boolean(guideOverview) && !hasSeenGuide && !found;
 
   // Заметка на весь экран телефона: ленты модулей и «+» под ней нет
-  const isNavCovered = isShown && isNoteAlone;
+  const isNavCovered = isShown && (isNoteAlone || isCanvasAlone);
   useEffect(() => {
     setParvaneNavCovered(isNavCovered);
     return () => setParvaneNavCovered(false);
   }, [isNavCovered]);
   const [now] = useState(() => Date.now());
 
-  // Системное «назад»: открытая на телефоне заметка — к списку, открытая папка — к папкам, панель рядом с
-  // графом либо холстом (на компьютере; на телефоне это шторка со своей записью) — закрыть, иначе — к чатам
+  // Системное «назад»: открытая на телефоне заметка — к списку, открытый холст — к списку холстов, открытая
+  // папка — к папкам, панель рядом с графом (на компьютере; на телефоне это шторка со своей записью) — закрыть,
+  // иначе — к чатам
   const isPanelLevel = !isNarrow && Boolean(shownPick);
   const isGroupLevel = isList && openGroupKey !== undefined && !found;
   const handleHistoryBack = useLastCallback(() => {
@@ -648,6 +653,8 @@ const Knowledge = () => {
       handleSearchClose();
     } else if (isNoteAlone) {
       handleBack();
+    } else if (isCanvasOpen) {
+      setGraphCanvasId(undefined);
     } else if (isGroupLevel && isNarrow) {
       setOpenGroupKey(undefined);
     } else if (isPanelLevel) {
@@ -857,6 +864,7 @@ const Knowledge = () => {
         isNarrow={isNarrow}
         openId={graphCanvasId}
         onOpenTitle={pickTitleInGraph}
+        onOpenCanvas={setGraphCanvasId}
         query={canvasQuery}
         searchStep={searchStep}
       />

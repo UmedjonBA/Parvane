@@ -3090,3 +3090,91 @@
 
   background: none;
 }
+
+// ── карточка записи на телефоне строками настроек (доска `PhPlanMore`) ─────────
+// Подпись слева, значение справа, строки через линию; «Сохранить» — в шапке
+
+.sideSave {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: var(--pv-button-height);
+  padding: 0 0.75rem;
+  border: 0;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+}
+
+.sheetPane .sideRows {
+  .cardRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding-block: 0;
+  }
+
+  .cardRowIcon {
+    display: none;
+  }
+
+  .cardRowBody,
+  .fields,
+  .fieldsThree {
+    gap: 0;
+  }
+
+  .fields,
+  .fieldsThree {
+    grid-template-columns: minmax(0, 1fr);
+
+    > :first-child {
+      grid-column: auto;
+    }
+  }
+
+  .field {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    justify-content: space-between;
+
+    min-height: var(--pv-settings-row-height);
+    border-bottom: 1px solid var(--pv-line);
+  }
+
+  .fieldLabel {
+    flex: none;
+    margin: 0;
+    font-size: 0.9375rem;
+    color: var(--pv-fg);
+  }
+
+  .fieldInput {
+    min-width: 0;
+    max-width: 60%;
+    padding: 0;
+    border: 0;
+
+    font-family: var(--font-family-monospace);
+    text-align: end;
+
+    background: none;
+  }
+
+  .cardRowButton {
+    min-height: var(--pv-settings-row-height);
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+
+    background: none;
+  }
+
+  .footSave {
+    display: none;
+  }
+}

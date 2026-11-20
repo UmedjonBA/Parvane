@@ -226,6 +226,31 @@ try {
   await visible(page.getByText('Link copied').first(), 'уведомление о скопированной ссылке');
   console.log('OK: меню заметки — переименовать, перенести, скопировать ссылку');
 
+  // ── «Отправить статьёй в чат» и «Добавить на холст» из меню ───────────────
+  // Нарочно до шагов телефона: шторка холста, снятая вместе с заметкой при выборе, оставляла запись в истории, и
+  // системное «назад» в открытой папке телефона уходило на неё впустую (`useHistoryBack`, снятие при размонтировании)
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для меню');
+  await bar.locator('[data-note-menu]').click();
+  await menuItem('article').click();
+  const recipients = page.locator('.Modal .modal-dialog').filter({ hasText: 'Send to chat as article' });
+  await visible(recipients, 'выбор чата для статьи');
+  await page.keyboard.press('Escape');
+  await recipients.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await bar.locator('[data-note-menu]').click();
+  await menuItem('canvas').click();
+  await visible(page.locator('[data-note-canvas-sheet]'), 'выбор холста');
+  await shotBoth('desk-canvas-pick');
+  await page.locator('[data-note-canvas-sheet] [data-canvas-option-new]').click();
+  await page.waitForFunction(
+    () => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === 'canvas', undefined,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('после «Добавить на холст» не открылся холст'));
+  await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки на холсте');
+  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста');
+  console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте');
 
   // ── Телефон: шапка, виды, папки, заметка на весь экран ───────────────────
   await page.setViewportSize(PHONE);
@@ -284,33 +309,11 @@ try {
   await visible(folderRow(FOLDER), 'папки после закрытия поиска');
   console.log('OK: телефон — шапка, виды, папки, заметка на весь экран, шторка действий, правка');
 
-  // ── «Отправить статьёй в чат» и «Добавить на холст» из меню ───────────────
+  // ── Ссылка на заметку, которой ещё нет: сначала вопрос ────────────────────
   await page.setViewportSize(DESK);
   await page.waitForTimeout(800);
   await row(NOTE).click();
-  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для меню');
-  await bar.locator('[data-note-menu]').click();
-  await menuItem('article').click();
-  const recipients = page.locator('.Modal .modal-dialog').filter({ hasText: 'Send to chat as article' });
-  await visible(recipients, 'выбор чата для статьи');
-  await page.keyboard.press('Escape');
-  await recipients.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
-  await bar.locator('[data-note-menu]').click();
-  await menuItem('canvas').click();
-  await visible(page.locator('[data-note-canvas-sheet]'), 'выбор холста');
-  await shotBoth('desk-canvas-pick');
-  await page.locator('[data-note-canvas-sheet] [data-canvas-option-new]').click();
-  await page.waitForFunction(
-    () => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === 'canvas', undefined,
-    { timeout: STEP_TIMEOUT_MS },
-  ).catch(() => assert.fail('после «Добавить на холст» не открылся холст'));
-  await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки на холсте');
-  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
-  await row(NOTE).click();
-  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста');
-  console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте');
-
-  // ── Ссылка на заметку, которой ещё нет: сначала вопрос ────────────────────
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для ссылки');
   await bar.getByRole('button', { name: 'Edit', exact: true }).click();
   await visible(editor, 'редактор для ссылки');
   await editor.press('Control+End');

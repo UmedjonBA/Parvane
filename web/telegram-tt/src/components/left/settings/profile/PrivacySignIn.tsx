@@ -5,6 +5,7 @@ import { SettingsScreens } from '../../../../types';
 
 import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
+import { consumePasswordFormRequest } from './profileRequests';
 
 import useFlag from '../../../../hooks/useFlag';
 import useLang from '../../../../hooks/useLang';
@@ -48,6 +49,16 @@ const PrivacySignIn = ({ isActive }: OwnProps) => {
 
   const canChangePassword = Boolean(oldPassword) && newPassword.length >= PASSWORD_MIN_LENGTH
     && newPassword === newPasswordRepeat;
+
+  // Форма пароля раскрыта — только пока экран открыт: при уходе она сворачивается, по просьбе карточки аккаунта
+  // («Пароль · сменить») раскрывается при входе
+  useEffect(() => {
+    if (!isActive) {
+      closePasswordForm();
+      return;
+    }
+    if (consumePasswordFormRequest()) openPasswordForm();
+  }, [isActive, openPasswordForm, closePasswordForm]);
 
   useEffect(() => {
     if (!isActive) return undefined;

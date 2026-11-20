@@ -52,13 +52,14 @@ try {
   await health.locator('[data-health-status="ready"]').or(page.locator('#ParvaneHealth[data-health-status="ready"]'))
     .first().waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
   await health.locator('[data-health-first]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Блок «Вода» включается прямо с первого экрана — плитка появляется сразу
-  await health.locator('[data-health-first] [data-block="water"]').click();
-  await card(health, 'water').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await health.locator('[data-health-first] [data-block="food"]').click();
-  await health.locator('[data-health-first] [data-block="workouts"]').click();
-  await card(health, 'food').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await card(health, 'workout').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Первое открытие — экран вместо сводки (ZdHealthX): блоки включаются выключателями «Что считать», плитки
+  // появятся в сводке после первой записи; строка ввода — на этом же экране, в шапке её нет
+  for (const block of ['water', 'food', 'workouts']) {
+    await health.locator(`[data-health-first] [data-block="${block}"]`).click();
+    await health.locator(`[data-health-first] [data-block="${block}"][aria-checked="true"]`)
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  assert.equal(await health.locator('[data-health-quick]').count(), 1, 'одна строка ввода — на экране первого открытия');
   await health.locator('[data-health-first]').getByRole('button', { name: '72 kg' }).click();
   await page.waitForFunction(() => document.querySelector('[data-health-quick] input')?.value === '72 kg', undefined, { timeout: STEP_TIMEOUT_MS });
   const preview = health.locator('[data-health-preview]');
@@ -69,6 +70,9 @@ try {
   await quickInput(health).press('Enter');
   await expectValue(health, 'weight', '72.0');
   await health.locator('[data-health-first]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  for (const kind of ['water', 'food', 'workout']) {
+    await card(health, kind).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
   await page.waitForFunction(() => document.querySelector('[data-health-quick] input')?.value === '', undefined, { timeout: STEP_TIMEOUT_MS });
   console.log('OK: запись сохранена, плитка веса показывает значение');
 

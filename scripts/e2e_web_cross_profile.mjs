@@ -20,6 +20,7 @@ import {
   preparePage,
   sendText,
   openEditProfile,
+  saveEditProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-xprofile-e2e-password';
@@ -175,11 +176,7 @@ try {
   await openEditProfile(bobWeb.page);
   await bobWeb.page.getByLabel('Bio').fill(bobBio);
   await bobWeb.page.getByLabel('Phone', { exact: true }).fill(bobPhone);
-  await bobWeb.page.getByRole('button', { name: 'Save', exact: true }).click();
-  await bobWeb.page.waitForFunction(() => {
-    const fab = document.querySelector('.FloatingActionButton');
-    return !fab || !fab.classList.contains('revealed');
-  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await saveEditProfile(bobWeb.page);
   await bobWeb.page.locator('.ListItem').filter({ hasText: 'Name color' }).first().click();
   // Палитра начинается с цвета 1, поэтому выбираем по классу цвета, а не по
   // позиции: ниже десктоп ждёт именно `color=2`

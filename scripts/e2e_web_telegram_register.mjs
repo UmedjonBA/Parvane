@@ -158,7 +158,7 @@ try {
   await ghostPassword.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await ghostPassword.locator('#sign-in-password').fill(PASSWORD);
   await ghostPassword.locator('[data-auth-submit]').click();
-  await ghostPassword.getByText('Invalid password', { exact: false })
+  await ghostPassword.getByText('Wrong password', { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await pressAuthButton(ghostSession.page, ghostPassword, 'Create account', '#auth-registration-form');
   const ghostForm = ghostSession.page.locator('.Transition_slide-active > #auth-registration-form');

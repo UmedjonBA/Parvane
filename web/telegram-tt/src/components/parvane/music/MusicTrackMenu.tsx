@@ -17,6 +17,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ParvaneIcon from '../../main/ParvaneIcon';
 import CloudMenu from '../cloud/CloudMenu';
+import MusicPlaylistChips from './MusicPlaylistChips';
 
 import sheets from '../cloud/CloudSheets.module.scss';
 
@@ -68,12 +69,19 @@ const MusicTrackMenu = ({
   ): CloudMenuAction => ({
     key, title, glyph: <ParvaneIcon name={icon} className={sheets.menuIcon} />, ...extra,
   });
+  const handleNewPlaylist = useLastCallback(() => {
+    onClose();
+    onAddToPlaylist?.(track);
+  });
+
+  // Телефон: плейлисты чипами внизу шторки вместо пункта (доска `XpMusic`); у курсора на компьютере — пункт
+  const hasChips = !anchor && Boolean(onAddToPlaylist);
   const offlineKey = isSaved ? 'MusicOfflineRemoveTrack' : isSaving ? 'MusicOfflineSaving' : 'MusicOfflineSaveTrack';
   const actions = [
     canQueue && item('next', 'next', lang('MusicPlayNext')),
     canQueue && item('queue', 'list', lang('MusicAddToQueue')),
     onStar && item('star', 'heart', lang(track.isStarred ? 'MusicUnstar' : 'MusicStar')),
-    onAddToPlaylist && item('playlist', 'plus', lang('MusicAddToPlaylist')),
+    onAddToPlaylist && !hasChips && item('playlist', 'plus', lang('MusicAddToPlaylist')),
     onSendToChat && item('chat', 'chat', lang('MusicSendToChat')),
     canSaveOffline && item('offline', isSaved ? 'downloaded' : 'download', lang(offlineKey), { isDisabled: isSaving }),
     track.artistId && item('artist', 'user', lang('MusicGoToArtist')),
@@ -89,6 +97,7 @@ const MusicTrackMenu = ({
       facts={facts}
       actions={actions}
       anchor={anchor}
+      footer={hasChips ? <MusicPlaylistChips track={track} onNew={handleNewPlaylist} onDone={onClose} /> : undefined}
       onPick={handlePick}
       onClose={onClose}
     />

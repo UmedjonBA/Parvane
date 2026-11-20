@@ -428,3 +428,15 @@
     }
   }
 }
+
+// Parvane (spec 041, доска `DkSettingsA`): «Плотный список чатов» — строка 56 px (`util/chatListDensity.ts`),
+// аватар 2.5rem. Размер аватара задаёт сам компонент строкой стиля — правило сильнее только с `!important`
+.chat-list-dense .Chat.chat-item-clickable {
+  .ListItem-button {
+    padding-block: 0.4375rem;
+  }
+
+  .Avatar {
+    --_size: 2.625rem !important;
+  }
+}

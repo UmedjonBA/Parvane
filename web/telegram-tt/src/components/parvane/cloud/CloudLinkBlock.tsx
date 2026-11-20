@@ -201,6 +201,7 @@ const CloudLinkBlock = ({
               data-link-term={link.expiresAt}
             >
               {termText}
+              {` · ${lang('ParvaneCloudLinkOpens', { count: link.opens })}`}
               {link.bytes > 0 && ` · ${formatFileSize(lang, link.bytes)}`}
             </div>
           </div>

@@ -236,6 +236,20 @@ try {
   await waitForChatList(page);
   console.log('OK: верный ввод открывает приложение и сбрасывает счётчик');
 
+  // spec 041 (`ZdProfileX`): Ctrl+L блокирует сразу, а без действий приложение блокируется само
+  await page.keyboard.press('Control+KeyL');
+  await shown(lockWithLeft(page, 5), LOGIN_TIMEOUT_MS);
+  await tapPin(lock(page), '1379');
+  await waitForChatList(page);
+  await openPinScreen(page);
+  await shown(slide(page).locator('[data-pin-autolock="5"]'));
+  await page.evaluate(() => localStorage.setItem('parvane:e2e:autolockMs', '3000'));
+  await shown(lockWithLeft(page, 5), LOGIN_TIMEOUT_MS);
+  await page.evaluate(() => localStorage.removeItem('parvane:e2e:autolockMs'));
+  await tapPin(lock(page), '1379');
+  await waitForChatList(page);
+  console.log('OK: Ctrl+L и автоблокировка без действий');
+
   // Выключение спрашивает текущий PIN; без PIN перезагрузка экран блокировки не показывает
   await openPinScreen(page);
   await shown(hub(page, 'on'));

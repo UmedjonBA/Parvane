@@ -16,7 +16,17 @@ import { createZipWriter, ExportError, throwIfAborted } from './exportZip';
 // Глубже папки не обходим (как kExportMaxDepth в desktop)
 const EXPORT_MAX_DEPTH = 64;
 
-export type ExportOptions = { includeMedia: boolean; includeCloud: boolean };
+/** Разделы архива. Не заданное `include*` разделов чатов, «Плана», заметок и контактов — «да» (прежний вызов). */
+export type ExportOptions = {
+  includeMedia: boolean;
+  includeCloud: boolean;
+  includeChats?: boolean;
+  includePlanner?: boolean;
+  includeNotes?: boolean;
+  includeContacts?: boolean;
+};
+
+export type ExportSection = 'chats' | 'planner' | 'notes' | 'contacts' | 'cloud';
 
 export type ExportStage = 'prepare' | 'chats' | 'planner' | 'notes' | 'contacts' | 'cloud' | 'finishing';
 
@@ -27,7 +37,20 @@ export type ExportProgress = {
   total: number;
   /** Записано байт архива. */
   bytes: number;
+  /** Номер раздела (с 1) и число выбранных разделов — «Идёт выгрузка: Заметки 3 из 6». */
+  section?: number;
+  sections?: number;
 };
+
+/** Выбранные разделы по порядку выгрузки. */
+export function getExportSections(options: ExportOptions): ExportSection[] {
+  const all: [ExportSection, boolean | undefined][] = [
+    ['chats', options.includeChats], ['planner', options.includePlanner], ['notes', options.includeNotes],
+    ['contacts', options.includeContacts], ['cloud', options.includeCloud],
+  ];
+  return all.filter(([section, isOn]) => (section === 'cloud' ? Boolean(isOn) : isOn !== false))
+    .map(([section]) => section);
+}
 
 /** Файл облака к выгрузке: где лежит в облаке и куда ляжет в архиве (`cloud/…`). */
 export type ExportCloudFile = {
@@ -149,10 +172,15 @@ export async function runDataExport(args: {
   let progress: ExportProgress = {
     stage: 'prepare', done: 0, total: 0, bytes: 0,
   };
+  const sections = getExportSections(options);
   const report = (patch: Partial<ExportProgress>) => {
     progress = { ...progress, ...patch };
+    const index = sections.indexOf(progress.stage as ExportSection);
+    progress.sections = sections.length;
+    progress.section = index >= 0 ? index + 1 : undefined;
     onProgress?.(progress);
   };
+  const isOn = (section: ExportSection) => sections.includes(section);
   const writer = createZipWriter({
     signal,
     onBytes: (bytes) => {
@@ -167,12 +195,12 @@ export async function runDataExport(args: {
     const snapshot = await source.snapshot();
     throwIfAborted(signal);
     if (!snapshot) throw new ExportError('failed', 'no snapshot');
-    const chats: ExportChat[] = assignChatDirs(snapshot.chats, labels, options.includeMedia);
+    const chats: ExportChat[] = isOn('chats') ? assignChatDirs(snapshot.chats, labels, options.includeMedia) : [];
     const mediaTotal = chats.reduce(
       (sum, chat) => sum + chat.messages.filter((m) => m.media?.status === 'included').length, 0,
     );
     let chatSteps = 0;
-    report({ stage: 'chats', done: 0, total: mediaTotal + chats.length });
+    if (isOn('chats')) report({ stage: 'chats', done: 0, total: mediaTotal + chats.length });
     for (const chat of chats) {
       for (const message of chat.messages) {
         const { media } = message;
@@ -196,41 +224,47 @@ export async function runDataExport(args: {
       report({ done: ++chatSteps });
     }
 
-    const sections: ExportIndexSections = {};
-    report({ stage: 'planner', done: 0, total: 1 });
-    const planner = await source.planner().catch(() => undefined);
-    throwIfAborted(signal);
-    if (planner) {
-      sections.planner = 'planner/planner.json';
-      await writer.addText(sections.planner, prettyJson(planner));
+    const index: ExportIndexSections = {};
+    if (isOn('planner')) {
+      report({ stage: 'planner', done: 0, total: 1 });
+      const planner = await source.planner().catch(() => undefined);
+      throwIfAborted(signal);
+      if (planner) {
+        index.planner = 'planner/planner.json';
+        await writer.addText(index.planner, prettyJson(planner));
+      }
+      report({ done: 1 });
     }
-    report({ done: 1 });
 
-    report({ stage: 'notes', done: 0, total: 1 });
-    const notes = await source.notes().catch(() => []);
-    throwIfAborted(signal);
-    if (notes.length) {
-      sections.notes = [];
-      report({ total: notes.length });
-      for (const note of notes) {
-        const path = `notes/${note.path}`;
-        await writer.addText(path, note.text, note.mtime ? new Date(note.mtime) : undefined);
-        sections.notes.push(path);
-        result.notes++;
-        report({ done: result.notes });
+    if (isOn('notes')) {
+      report({ stage: 'notes', done: 0, total: 1 });
+      const notes = await source.notes().catch(() => []);
+      throwIfAborted(signal);
+      if (notes.length) {
+        index.notes = [];
+        report({ total: notes.length });
+        for (const note of notes) {
+          const path = `notes/${note.path}`;
+          await writer.addText(path, note.text, note.mtime ? new Date(note.mtime) : undefined);
+          index.notes.push(path);
+          result.notes++;
+          report({ done: result.notes });
+        }
       }
     }
 
-    report({ stage: 'contacts', done: 0, total: 1 });
-    sections.contacts = 'contacts.json';
-    await writer.addText(sections.contacts, contactsJson(snapshot.contacts));
-    report({ done: 1 });
+    if (isOn('contacts')) {
+      report({ stage: 'contacts', done: 0, total: 1 });
+      index.contacts = 'contacts.json';
+      await writer.addText(index.contacts, contactsJson(snapshot.contacts));
+      report({ done: 1 });
+    }
 
-    if (options.includeCloud) {
+    if (isOn('cloud')) {
       report({ stage: 'cloud', done: 0, total: 0 });
       const files = await source.cloudFiles();
       throwIfAborted(signal);
-      sections.cloud = [];
+      index.cloud = [];
       report({ total: files.length });
       let done = 0;
       for (const file of files) {
@@ -243,7 +277,7 @@ export async function runDataExport(args: {
         throwIfAborted(signal);
         if (blob) {
           await writer.addBlob(file.path, blob, file.mtime ? new Date(file.mtime) : undefined);
-          sections.cloud.push(file.path);
+          index.cloud.push(file.path);
           result.cloudFiles++;
         } else {
           result.cloudFailed++;
@@ -254,7 +288,7 @@ export async function runDataExport(args: {
 
     report({ stage: 'finishing', done: 0, total: 1 });
     await writer.addText('index.html', renderIndexHtml(
-      { address: snapshot.self, name: snapshot.selfName }, chats, sections, labels, now,
+      { address: snapshot.self, name: snapshot.selfName }, chats, index, labels, now,
     ));
     const blob = await writer.finish();
     report({ done: 1, bytes: blob.size });

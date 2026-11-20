@@ -7,6 +7,7 @@ import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
+import { markKeyChanged } from '../../util/parvaneKeyChange';
 import { nonCountedKinds, rowTsMs } from './v2/historyModel';
 import { createBatchedResolver } from './batchedResolver';
 import { readPollFields } from './polls';
@@ -401,6 +402,7 @@ export function createSyncController(deps: SyncDependencies) {
     };
     store.putMessage(message);
     deps.sendUpdate({ '@type': 'newMessage', chatId, id, message });
+    markKeyChanged(chatId);
     deps.log(`ключ безопасности ${address} изменился`);
   }
 

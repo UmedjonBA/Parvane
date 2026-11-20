@@ -15,6 +15,7 @@ import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes } from '../types';
 
+import { noteSendFailure } from '../../util/parvaneSendFailures';
 import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
 import { withAutoEntities } from './autoEntities';
@@ -908,6 +909,7 @@ export function createMessageController(deps: MessageDependencies) {
     }
     const detailMessage = detail instanceof Error ? detail.message : '';
     deps.log(`${E2E_SEND_ERROR}${detailMessage ? ` ${detailMessage}` : ''}`);
+    noteSendFailure(chatId, localId, reason);
     deps.sendUpdate({
       '@type': 'updateMessageSendFailed', chatId, localId, error: E2E_SEND_ERROR,
     });

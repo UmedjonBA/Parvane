@@ -36,6 +36,8 @@ type OwnProps = {
   actions: CloudMenuAction[];
   // Компьютер: меню у этой точки окна; без неё — шторка снизу
   anchor?: CloudMenuAnchor;
+  // Шторка телефона: блок под пунктами (чипы плейлистов «Музыки», доска `XpMusic`)
+  footer?: TeactNode;
   onPick: (key: string) => void;
   onClose: NoneToVoidFunction;
 };
@@ -49,7 +51,7 @@ const EDGE_PX = 8;
 // Действия с файлом либо папкой (доски `XpFiles`, `ZdFilesX`): на телефоне — шторка с названием и строкой
 // сведений, на компьютере — меню у курсора
 const CloudMenu = ({
-  isOpen, title, facts, actions, anchor, onPick, onClose,
+  isOpen, title, facts, actions, anchor, footer, onPick, onClose,
 }: OwnProps) => {
   const isPop = Boolean(anchor);
 
@@ -87,6 +89,7 @@ const CloudMenu = ({
       <PvSheet isOpen={isOpen} title={title} isTight onClose={onClose}>
         {facts && <div className={styles.menuFacts}>{facts}</div>}
         <div className={styles.menuList} role="menu" aria-label={title}>{rows}</div>
+        {footer}
       </PvSheet>
     );
   }

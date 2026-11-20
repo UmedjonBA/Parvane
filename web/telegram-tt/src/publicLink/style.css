@@ -1,42 +1,49 @@
-/* Parvane (spec 022): публичная страница ссылки. Тона — как в приложении
-   (палитра прототипа), тёмная либо светлая — по настройке системы. */
+/* Parvane (spec 022, вид — spec 041 E2, доска `RpFiles`): публичная страница ссылки. Токены — `pv.css` макета
+   (Gruvbox), тёмная либо светлая — по настройке системы; шрифты — те же, что у приложения (лежат в сборке). */
 
 :root {
+  --bg: #ebdbb2;
+  --panel: #fbf1c7;
+  --raised: #f2e5bc;
+  --hover: #ebdbb2;
+  --line: #e3d4ae;
+  --line2: #d5c4a1;
+  --fg: #3c3836;
+  --muted: #665c54;
+  --accent: #b57614;
+  --accent-text: #8a5a0b;
+  --accent-ink: #fbf1c7;
+  --blue: #076678;
+  --purple: #8f3f71;
+  --aqua: #427b58;
+  --red: #9d0006;
+  --green: #79740e;
+  --radius: 0.875rem;
+  --radius-btn: 0.75rem;
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --bg: #1d2021;
-  --panel: #282828;
-  --raised: #32302f;
-  --hover: #3c3836;
-  --line: #504945;
-  --fg: #ebdbb2;
-  --muted: #a89984;
-  --accent: #fabd2f;
-  --accent-ink: #1d2021;
-  --blue: #83a598;
-  --purple: #d3869b;
-  --aqua: #8ec07c;
-  --red: #fb4934;
-  --green: #b8bb26;
-
-  color-scheme: dark light;
+  color-scheme: light dark;
 }
 
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #ebdbb2;
-    --panel: #fbf1c7;
-    --raised: #f2e5bc;
-    --hover: #ebdbb2;
-    --line: #d5c4a1;
-    --fg: #3c3836;
-    --muted: #7c6f64;
-    --accent: #b57614;
-    --accent-ink: #fbf1c7;
-    --blue: #076678;
-    --purple: #8f3f71;
-    --aqua: #427b58;
-    --red: #9d0006;
-    --green: #79740e;
+    --bg: #1d2021;
+    --panel: #282828;
+    --raised: #32302f;
+    --hover: #3c3836;
+    --line: #3c3836;
+    --line2: #504945;
+    --fg: #ebdbb2;
+    --muted: #a89984;
+    --accent: #fabd2f;
+    --accent-text: #fabd2f;
+    --accent-ink: #1d2021;
+    --blue: #83a598;
+    --purple: #d3869b;
+    --aqua: #8ec07c;
+    --red: #fb4934;
+    --green: #b8bb26;
   }
 }
 
@@ -58,9 +65,9 @@ body {
   min-height: 100vh;
   padding: 1.5rem 1rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
 
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font);
   font-size: 0.9375rem;
-  line-height: 1.45;
+  line-height: 1.35;
   color: var(--fg);
 
   background: var(--bg);
@@ -69,31 +76,45 @@ body {
 .page {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.875rem;
 
   width: 100%;
-  max-width: 44rem;
+  max-width: 36rem;
+  min-height: calc(100vh - 3rem);
   margin: 0 auto;
-  padding: 1.25rem;
+  padding: 1.75rem 1.5rem 1.5rem;
+  border: 1px solid var(--line);
   border-radius: 1.125rem;
 
   background: var(--panel);
 }
 
+/* Знак Parvane: плитка цвета акцента с буквой */
 .brand {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.02em;
+  display: flex;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius);
+
+  font-size: 1.375rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+
+  background: var(--accent);
 }
 
 .status {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  align-items: flex-start;
-
-  padding: 1.5rem 0;
+  align-items: stretch;
 }
 
 .status-title,
@@ -130,19 +151,72 @@ body {
   color: var(--muted);
 }
 
-.head {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-}
-
 .titles {
   min-width: 0;
 }
 
 .facts {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Карточки: «Файл зашифрован…», «Если ссылка не работает» */
+.card {
+  margin: 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+
+  font-size: 0.875rem;
+
+  background: var(--panel);
+}
+
+.secure {
+  background: var(--raised);
+}
+
+.grow {
+  flex: 1 1 auto;
+}
+
+.trouble {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+}
+
+.dot {
+  flex: none;
+
+  width: 0.625rem;
+  height: 0.625rem;
+  margin-top: 0.3125rem;
+  border-radius: 50%;
+
+  background: var(--red);
+}
+
+.trouble-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.trouble-title {
+  font-weight: 600;
+}
+
+.trouble-hint {
   font-size: 0.8125rem;
   color: var(--muted);
+}
+
+.foot {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* ── плитка значка ── */
@@ -347,14 +421,42 @@ button:disabled {
 }
 
 .btn.acc {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--accent-ink);
-  background: var(--accent);
+  background: var(--accent-text);
 }
 
 .btn.acc:hover:not(:disabled) {
-  background: var(--accent);
+  background: var(--accent-text);
   filter: brightness(1.08);
+}
+
+/* Единственный файл ссылки: «Скачать» во всю ширину (доска `RpFiles`) */
+.hero .line {
+  min-height: 0;
+  padding: 0;
+}
+
+.hero .actions {
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.hero .btn {
+  width: 100%;
+  height: 2.75rem;
+  border-radius: var(--radius-btn);
+  font-size: 0.9375rem;
+}
+
+.hero .progress,
+.hero .note {
+  padding: 0.5rem 0 0;
+}
+
+.hero .preview {
+  margin: 0.625rem 0 0;
 }
 
 .btn.ghost {
@@ -434,22 +536,10 @@ button:disabled {
   max-height: 60vh;
   margin: 0;
 
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-
-.foot {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--line);
-
-  font-size: 0.75rem;
-  color: var(--muted);
 }
 
 @media (max-width: 760px) {
@@ -460,7 +550,8 @@ button:disabled {
 
   .page {
     min-height: 100vh;
-    padding: 1rem;
+    padding: 1.75rem 1.5rem 1.5rem;
+    border: 0;
     border-radius: 0;
   }
 
@@ -473,18 +564,18 @@ button:disabled {
     flex-basis: calc(100% - 7rem);
   }
 
-  .file .actions {
+  .file:not(.hero) .actions {
     width: 100%;
     padding-inline-start: 2.625rem;
   }
 
-  .file .actions .btn {
+  .file:not(.hero) .actions .btn {
     flex: 1 1 0;
     height: 2.5rem;
   }
 
-  .progress,
-  .note {
+  .file:not(.hero) .progress,
+  .file:not(.hero) .note {
     padding-inline-start: 0.5rem;
   }
 }

@@ -13,17 +13,18 @@ import { callApi } from '../../../api/gramjs';
 import { closeCloudBridge, getCloudBridgeRequest } from './cloudBridge';
 import { childrenOf, listedNodes, pathOf, sortNodes } from './cloudModel';
 import {
-  getCloudData, getNodes, loadCloud, refreshCloud, refreshCloudUsage,
+  createCloudFolderAt, getCloudData, getNodes, loadCloud, refreshCloud, refreshCloudUsage,
 } from './cloudStore';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
-import { CloudFolderDialog } from './CloudDialogs';
+import CloudMoveDialog from './CloudMoveDialog';
 import { CLOUD_ERROR_KEYS } from './CloudTransfers';
 
 import kit from '../notes/PvKit.module.scss';
@@ -31,7 +32,10 @@ import styles from './CloudSheets.module.scss';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 const NAME_SORT = { key: 'name', isDescending: false } as const;
+const NO_IDS: string[] = [];
 const ROOT = 'root';
+// Как в стилях: уже — раскладка телефона (окно сохранения — папка за папкой)
+const NARROW_WIDTH = 760;
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
@@ -48,6 +52,7 @@ const CloudChatDialogs = () => {
   const currentUserId = useSelector(selectCurrentUserId);
   const [folder, setFolder] = useState<string>();
   const [picked, setPicked] = useState<string[]>([]);
+  const { width: windowWidth } = useWindowSize();
 
   const isOpen = Boolean(request);
   useEffect(() => {
@@ -83,6 +88,11 @@ const CloudChatDialogs = () => {
     })();
   });
 
+  // «Новая папка» в окне сохранения — на личном диске
+  const handleNewFolder = useLastCallback((
+    place: string | undefined, parent: string | undefined, name: string,
+  ) => createCloudFolderAt(rootId || ROOT, parent, name));
+
   const handleSend = useLastCallback(() => {
     if (request?.type !== 'attach' || !rootId || !picked.length) return;
     const { chatId } = request;
@@ -105,13 +115,15 @@ const CloudChatDialogs = () => {
 
   return (
     <>
-      <CloudFolderDialog
+      <CloudMoveDialog
         isOpen={request?.type === 'save'}
+        isStepwise={windowWidth <= NARROW_WIDTH}
         title={lang('ParvaneCloudChooseFolder')}
         confirmLabel={lang('ParvaneCloudSaveHere')}
         rootName={lang('ParvaneCloudTabDrive')}
         nodes={nodes}
-        movedIds={[]}
+        movedIds={NO_IDS}
+        onCreateFolder={handleNewFolder}
         onSubmit={handleSave}
         onClose={closeCloudBridge}
       />

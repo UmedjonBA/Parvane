@@ -1,5 +1,5 @@
 {
-  "about": "PLANNER-2: подсказки «Плана» в движке (spec 041 E1). Вызовы без состояния plannerFreeTime, plannerScheduleParse, plannerSearch, plannerWorkouts; expect — ответ движка целиком. Данные выдуманные. Пересоздать ожидаемое: PLANNER_TOOLS_REGEN=1 cargo test -p parvane-protocol --test planner_tools_vectors.",
+  "about": "PLANNER-2: подсказки «Плана» в движке (spec 041 E1). Вызовы без состояния plannerFreeTime, plannerScheduleParse, plannerSearch, plannerWorkouts, plannerRecordAction; expect — ответ движка целиком. Данные выдуманные. Пересоздать ожидаемое: PLANNER_TOOLS_REGEN=1 cargo test -p parvane-protocol --test planner_tools_vectors.",
   "cases": [
     {
       "args": {
@@ -517,6 +517,292 @@
         }
       ],
       "name": "тренировки «Плана» для «Здоровья»"
+    },
+    {
+      "args": {
+        "action": "tomorrow",
+        "day": "2026-11-15",
+        "minutes": 30,
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-16",
+        "due": null,
+        "mode": "move"
+      },
+      "name": "перенос на завтра: разовая задача сегодня"
+    },
+    {
+      "args": {
+        "action": "tomorrow",
+        "day": "2026-11-10",
+        "due": "2026-11-12",
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-16",
+        "due": "2026-11-16",
+        "mode": "move"
+      },
+      "name": "перенос на завтра: просроченная задача уходит на завтра, срок сдвигается"
+    },
+    {
+      "args": {
+        "action": "tomorrow",
+        "day": "",
+        "instanceDay": "2026-11-20",
+        "isSeries": true,
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-21",
+        "due": null,
+        "mode": "detach"
+      },
+      "name": "перенос на завтра: день будущего ряда отделяется на следующий день"
+    },
+    {
+      "args": {
+        "action": "tomorrow",
+        "isSeries": true,
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "mode": "none"
+      },
+      "name": "перенос на завтра: шаблон ряда без дня не переносится"
+    },
+    {
+      "args": {
+        "action": "tomorrow",
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-16",
+        "due": null,
+        "mode": "move"
+      },
+      "name": "перенос на завтра: задача без даты — на завтра"
+    },
+    {
+      "args": {
+        "action": "place",
+        "dropDay": "2026-11-16",
+        "dropMinute": 617,
+        "due": "2026-11-15",
+        "minutes": 45,
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-16",
+        "due": "2026-11-16",
+        "minutes": 45,
+        "mode": "move",
+        "start": "10:15"
+      },
+      "name": "на шкалу: минута вниз до 15, своя длительность"
+    },
+    {
+      "args": {
+        "action": "place",
+        "dropDay": "2026-11-15",
+        "dropMinute": 1430,
+        "instanceDay": "2026-11-15",
+        "isSeries": true,
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "day": "2026-11-15",
+        "due": null,
+        "minutes": 60,
+        "mode": "detach",
+        "start": "23:00"
+      },
+      "name": "на шкалу: без длительности — час, конец до полуночи; день ряда отделяется"
+    },
+    {
+      "args": {
+        "action": "duplicate",
+        "instanceDay": "2026-11-15",
+        "record": {
+          "description": "",
+          "id": "t1",
+          "instanceDay": "2026-11-15",
+          "minutes": 45,
+          "name": "Обновить сервер",
+          "occurrences": [
+            {
+              "day": "2026-11-08",
+              "done": true
+            }
+          ],
+          "project": "Сервер",
+          "rank": 3,
+          "remind": 15,
+          "repeat": {
+            "interval": 1,
+            "kind": "weekly",
+            "startDay": "2026-11-01",
+            "weekdays": [
+              0
+            ]
+          },
+          "start": "10:00",
+          "status": "done",
+          "steps": [
+            {
+              "isDone": true,
+              "text": "Снять копию"
+            },
+            {
+              "isDone": false,
+              "text": "Перезапустить"
+            }
+          ]
+        },
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "mode": "copy",
+        "record": {
+          "day": "2026-11-15",
+          "description": "",
+          "minutes": 45,
+          "name": "Обновить сервер",
+          "project": "Сервер",
+          "rank": 3,
+          "remind": 15,
+          "start": "10:00",
+          "status": "queue",
+          "steps": [
+            {
+              "isDone": false,
+              "text": "Снять копию"
+            },
+            {
+              "isDone": false,
+              "text": "Перезапустить"
+            }
+          ]
+        }
+      },
+      "name": "дублировать: день ряда — разовая невыполненная копия"
+    },
+    {
+      "args": {
+        "action": "duplicate",
+        "record": {
+          "description": "",
+          "id": "t1",
+          "minutes": 45,
+          "name": "Обновить сервер",
+          "occurrences": [
+            {
+              "day": "2026-11-08",
+              "done": true
+            }
+          ],
+          "project": "Сервер",
+          "rank": 3,
+          "remind": 15,
+          "repeat": {
+            "interval": 1,
+            "kind": "weekly",
+            "startDay": "2026-11-01",
+            "weekdays": [
+              0
+            ]
+          },
+          "start": "10:00",
+          "status": "done",
+          "steps": [
+            {
+              "isDone": true,
+              "text": "Снять копию"
+            },
+            {
+              "isDone": false,
+              "text": "Перезапустить"
+            }
+          ]
+        },
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "mode": "copy",
+        "record": {
+          "description": "",
+          "minutes": 45,
+          "name": "Обновить сервер",
+          "project": "Сервер",
+          "rank": 3,
+          "remind": 15,
+          "repeat": {
+            "interval": 1,
+            "kind": "weekly",
+            "startDay": "2026-11-01",
+            "weekdays": [
+              0
+            ]
+          },
+          "start": "10:00",
+          "status": "queue",
+          "steps": [
+            {
+              "isDone": false,
+              "text": "Снять копию"
+            },
+            {
+              "isDone": false,
+              "text": "Перезапустить"
+            }
+          ]
+        }
+      },
+      "name": "дублировать: шаблон ряда — такой же ряд"
+    },
+    {
+      "args": {
+        "action": "duplicate",
+        "record": {
+          "day": "2026-11-15",
+          "description": "Взять сумку",
+          "end": "19:30",
+          "id": "e1",
+          "name": "Зал",
+          "origin": {
+            "day": "2026-11-15",
+            "seriesId": "e0"
+          },
+          "project": "Спорт",
+          "remind": 15,
+          "start": "18:00"
+        },
+        "today": "2026-11-15"
+      },
+      "call": "plannerRecordAction",
+      "expect": {
+        "mode": "copy",
+        "record": {
+          "day": "2026-11-15",
+          "description": "Взять сумку",
+          "end": "19:30",
+          "name": "Зал",
+          "project": "Спорт",
+          "remind": 15,
+          "start": "18:00"
+        }
+      },
+      "name": "дублировать: событие без отделения"
     }
   ]
 }

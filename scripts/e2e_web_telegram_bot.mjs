@@ -217,7 +217,7 @@ try {
   // ── 4. Текст без запроса — справка ──
   let mark = sent.length;
   ownerWrites(TG_ALICE, 'привет');
-  await botSays(TG_ALICE, (m) => m.text.includes('Create account'), mark);
+  await botSays(TG_ALICE, (m) => m.text.includes('«Новый аккаунт»'), mark);
 
   // ── 3. Новое устройство: бот просит ключ, владелец отвечает ──
   await first.page.close();

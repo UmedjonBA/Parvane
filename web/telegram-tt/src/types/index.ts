@@ -281,6 +281,10 @@ export enum SettingsScreens {
   ParvaneAppearance,
   ParvaneKeysBackup,
   ParvaneAbout,
+  ParvaneDeleteAccount,
+  ParvaneExport,
+  ParvaneBugReport,
+  ParvaneHelp,
 }
 
 export type StickerSetOrReactionsSetOrRecent = Pick<ApiStickerSet, (

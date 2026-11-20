@@ -438,6 +438,17 @@ export interface ApiMusicTrackCard {
   durationSecs: number;
 }
 
+// Parvane (CLOUD-1): приглашение в совместную папку «Файлов» — карточка с правами и ответом
+export interface ApiCloudInviteCard {
+  mediaType: 'cloudInvite';
+  // Контейнер папки (hex) и сервер его домена
+  containerId: string;
+  name: string;
+  isEditor?: true;
+  // Текст для выключенного модуля
+  text: string;
+}
+
 // Parvane (PLAYLIST-1): плейлист «Музыки» — название и треки общей библиотеки сервера
 export interface ApiMusicPlaylistCard {
   mediaType: 'musicPlaylist';
@@ -792,6 +803,7 @@ export type MediaContent = {
   article?: ApiArticle;
   musicTrack?: ApiMusicTrackCard;
   musicPlaylist?: ApiMusicPlaylistCard;
+  cloudInvite?: ApiCloudInviteCard;
   modReport?: ApiModReport;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;

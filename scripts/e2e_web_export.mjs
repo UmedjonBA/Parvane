@@ -78,7 +78,7 @@ async function createPlannerTask(page, name) {
 
 async function openExportDialog(page) {
   await showChatList(page);
-  // «Выгрузить мои данные» — пункт «Профиля» (spec 041 E3), окно открывается сразу
+  // «Выгрузить мои данные» — пункт «Профиля», экраном (spec 041, доска `DkSettingsB`)
   await openProfile(page);
   await page.locator('[data-export-open]:visible').click();
   const dialog = page.locator('[data-export-dialog]');
@@ -124,8 +124,13 @@ try {
 
   // ── выгрузка ──
   const dialog = await openExportDialog(a);
-  assert.equal(await isChecked(dialog, 'media'), true, 'медиа по умолчанию включены');
+  // По доске: чаты, «План», заметки и контакты — да; вложения и файлы диска — по желанию
+  for (const option of ['chats', 'planner', 'notes', 'contacts']) {
+    assert.equal(await isChecked(dialog, option), true, `${option} по умолчанию включены`);
+  }
+  assert.equal(await isChecked(dialog, 'media'), false, 'вложения по умолчанию выключены');
   assert.equal(await isChecked(dialog, 'cloud'), false, 'файлы облака по умолчанию выключены');
+  await dialog.locator('[data-export-option="media"] input').check();
   const downloadPromise = a.waitForEvent('download', { timeout: EXPORT_TIMEOUT_MS });
   await dialog.locator('[data-export-start] button').click();
   const download = await downloadPromise;
@@ -176,10 +181,11 @@ try {
 
   // ── отмена ── (диаг-сборка: задержка перед сбором данных, чтобы «Отмена» гарантированно пришлась на ход)
   await a.evaluate(() => localStorage.setItem('parvane:e2e:exportDelayMs', '8000'));
-  await dialog.locator('[data-export-option="cloud"] label').click();
+  await dialog.locator('[data-export-option="cloud"] input').check();
   assert.equal(await isChecked(dialog, 'cloud'), true, 'галочка облака включилась');
   await dialog.locator('[data-export-start] button').click();
   await dialog.locator('[data-export-progress]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.match(await dialog.locator('[data-export-progress]').innerText(), /Exporting:/, 'ход выгрузки разделом');
   await dialog.locator('[data-export-cancel] button').click();
   await dialog.locator('[data-export-error="canceled"]').waitFor({ state: 'visible', timeout: EXPORT_TIMEOUT_MS });
   assert.equal(await dialog.locator('[data-export-done]').count(), 0, 'отменённая выгрузка не скачивается');

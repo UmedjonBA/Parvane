@@ -146,6 +146,30 @@ service DomainService {
       federated: true
     };
   }
+  // Получатель гранта принял приглашение (spec 041 E2): отметка сервера у его действующего гранта. Без неё
+  // владелец видит участника в «Приглашениях · ждёт ответа». Отметка не подписана — это только подсказка экрану:
+  // доступ и ключи по-прежнему задаёт журнал грантов. Смена роли отметку сохраняет, отзыв и выход — снимают.
+  rpc DomainGrantAccept(DomainGrantAcceptRequest) returns (DomainGrantAcceptResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.accept"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+      federated: true
+    };
+  }
+  // Кто из получателей грантов ещё не принял приглашение (только админ контейнера).
+  rpc DomainGrantPending(DomainGrantPendingRequest) returns (DomainGrantPendingResponse) {
+    option (parvane.core.v2.method) = {
+      name: "domain.grant.pending"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "domains"
+      federated: true
+    };
+  }
 }
 
 // Уровень доступа к контейнеру. Владелец — всегда ADMIN.
@@ -370,4 +394,19 @@ message DomainGrantLeaveRequest {
 
 message DomainGrantLeaveResponse {
   uint64 version = 1;
+}
+
+message DomainGrantAcceptRequest {
+  Ref container = 1;
+}
+
+message DomainGrantAcceptResponse {}
+
+message DomainGrantPendingRequest {
+  Ref container = 1;
+}
+
+message DomainGrantPendingResponse {
+  // Получатели действующих грантов-пользователей без отметки «принял».
+  repeated UserRef users = 1 [(max_items) = 1024];
 }

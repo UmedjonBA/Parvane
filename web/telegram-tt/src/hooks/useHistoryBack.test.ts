@@ -16,7 +16,7 @@ vi.mock('../config', async (importOriginal) => ({ ...await importOriginal<object
 
 const SETTLE_MS = 80;
 
-type Flags = { isProfileShown: boolean; isInfoShown: boolean };
+type Flags = { isProfileShown: boolean; isInfoShown: boolean; noInfo?: boolean };
 
 let useHistoryBack: typeof import('./useHistoryBack').default;
 let root: HTMLElement;
@@ -37,10 +37,10 @@ const Info: FC<{ isActive: boolean }> = ({ isActive }) => {
   useHistoryBack({ isActive, onBack: onInfoBack });
   return undefined;
 };
-const Screen: FC<Flags> = ({ isProfileShown, isInfoShown }) => Teact.createElement(
+const Screen: FC<Flags> = ({ isProfileShown, isInfoShown, noInfo }) => Teact.createElement(
   'div', {},
   Teact.createElement(Profile, { isActive: isProfileShown }),
-  Teact.createElement(Info, { isActive: isInfoShown }),
+  noInfo ? undefined : Teact.createElement(Info, { isActive: isInfoShown }),
 );
 
 async function show(flags: Flags) {
@@ -75,5 +75,19 @@ describe('useHistoryBack: экран, закрытый кнопкой повто
     expect(onInfoBack).not.toHaveBeenCalled();
     expect(onProfileBack).toHaveBeenCalledTimes(1);
     expect(cursor()).toBe(0);
+  });
+
+  // Случай «Заметок»: шторка «Добавить на холст» смонтирована закрытой, открыта, и выбор в ней закрывает её и
+  // переключает вид — шторка снимается вместе с заметкой в том же кадре. Её запись обязана уйти
+  it('окно, открытое после монтирования и снятое при закрытии, не оставляет записи', async () => {
+    await show({ isProfileShown: true, isInfoShown: false });
+    const opened = cursor();
+    await show({ isProfileShown: true, isInfoShown: true });
+    expect(cursor()).toBe(opened + 1);
+
+    // Закрыто и снято одной отрисовкой
+    await show({ isProfileShown: true, isInfoShown: false, noInfo: true });
+    expect(cursor()).toBe(opened);
+    expect(realIndex()).toBe(opened);
   });
 });

@@ -345,6 +345,8 @@ message LinkInfo {
   uint64 bytes = 5;
   uint32 files = 6;
   bytes owner_record = 7 [(parvane.core.v2.max_len) = 4096];
+  // Сколько раз получатели открыли ссылку (`cloud.link.get` действующей неистёкшей ссылки).
+  uint64 opens = 8;
 }
 message LinkListResponse {
   repeated LinkInfo links = 1 [(parvane.core.v2.max_items) = 256];

@@ -22,7 +22,7 @@ use parvane_protocol::domain::{self, no_groups, Author, ContainerAccess, Grantee
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{
     Container, ContainerOp, DomainContainerCreateRequest, DomainContainerCreateResponse, DomainContainerGetRequest,
-    DomainContainerGetResponse, DomainGrantLeaveRequest, DomainGrantLeaveResponse, DomainGrantListRequest, DomainKeyRotateRequest, DomainKeyRotateResponse, DomainContainerListRequest, DomainContainerListResponse, DomainGrantListResponse, DomainGrantRevokeRequest,
+    DomainContainerGetResponse, DomainGrantAcceptRequest, DomainGrantAcceptResponse, DomainGrantLeaveRequest, DomainGrantLeaveResponse, DomainGrantListRequest, DomainGrantPendingRequest, DomainGrantPendingResponse, DomainKeyRotateRequest, DomainKeyRotateResponse, DomainContainerListRequest, DomainContainerListResponse, DomainGrantListResponse, DomainGrantRevokeRequest,
     DomainGrantRevokeResponse, DomainGrantSetRequest, DomainGrantSetResponse, DomainOpAppendRequest, DomainOpAppendResponse,
     DomainOpSyncRequest, DomainOpSyncResponse, DomainSnapshotGetRequest, DomainSnapshotGetResponse, DomainSnapshotPutRequest,
     DomainSnapshotPutResponse, ErrorCode, GrantLevel, KeyOwnerRequest, KeyOwnerResponse, OpBody, Ref, ShardRequest, SignedOp,
@@ -513,6 +513,8 @@ impl Domains {
                 let ev = self.grant_write(user, raw_signed(&req.body, 1)?, domain::OP_LEAVE).await?;
                 Ok(DomainGrantLeaveResponse { version: ev.version }.encode_to_vec())
             }
+            "domain.grant.accept" => self.grant_accept(user, body(&req)?).await,
+            "domain.grant.pending" => self.grant_pending(user, body(&req)?).await,
             "domain.container.list" => self.container_list(user, body(&req)?).await,
             "domain.grant.list" => self.grant_list(user, body(&req)?).await,
             "domain.snapshot.put" => self.snapshot_put(user, body(&req)?).await,
@@ -874,6 +876,40 @@ impl Domains {
             })
             .collect();
         Ok(DomainContainerListResponse { containers }.encode_to_vec())
+    }
+
+    /// Получатель гранта принял приглашение: отметка у его действующего гранта (владельцу отмечать нечего).
+    async fn grant_accept(&self, user: &str, r: DomainGrantAcceptRequest) -> Reply {
+        let id = self.container_id(r.container.as_ref())?;
+        let meta = self.meta(&id).await?.ok_or(ErrorCode::NotFound)?;
+        if user != meta.owner {
+            let done = sqlx::query("UPDATE container_grants SET accepted = 1 WHERE container = ? AND kind = 0 AND grantee = ?")
+                .bind(&id)
+                .bind(user)
+                .execute(&self.pool)
+                .await
+                .map_err(db_err)?;
+            if done.rows_affected() == 0 {
+                return Err(ErrorCode::NotFound);
+            }
+        }
+        Ok(DomainGrantAcceptResponse {}.encode_to_vec())
+    }
+
+    /// Получатели грантов, ещё не принявшие приглашение (экран доступа владельца).
+    async fn grant_pending(&self, user: &str, r: DomainGrantPendingRequest) -> Reply {
+        let id = self.container_id(r.container.as_ref())?;
+        self.require(&id, user, GrantLevel::Admin).await?;
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT grantee FROM container_grants WHERE container = ? AND kind = 0 AND accepted = 0 ORDER BY grantee LIMIT ?",
+        )
+        .bind(&id)
+        .bind(PAGE_ITEMS as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        let users = rows.into_iter().map(|(address,)| UserRef { address }).collect();
+        Ok(DomainGrantPendingResponse { users }.encode_to_vec())
     }
 
     async fn grant_list(&self, user: &str, r: DomainGrantListRequest) -> Reply {

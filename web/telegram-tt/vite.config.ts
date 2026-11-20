@@ -501,6 +501,7 @@ function buildLinkCsp(appEnv: string) {
   connect-src 'self' ${gatewayOrigins(appEnv)};
   script-src 'self';
   style-src 'self';
+  font-src 'self' data:;
   img-src 'self' blob: data:;
   object-src 'none';
   frame-src 'none';

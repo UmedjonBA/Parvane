@@ -84,6 +84,14 @@ export class TwoFactorRequiredError extends Error {
   }
 }
 
+/** Неверный пароль (spec 041): сколько попыток осталось до временной блокировки и сколько она ещё продлится. */
+export class PasswordRejectedError extends Error {
+  constructor(public attemptsLeft: number, public lockedMs: number) {
+    super('неверный логин или пароль');
+    this.name = 'PasswordRejectedError';
+  }
+}
+
 /** Аккаунт ждёт удаления (spec 027): пароль верен, вход — только с отменой удаления. */
 export class AccountDeletionPendingError extends Error {
   constructor(public deletionAtMs: number) {
@@ -244,6 +252,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
         trust_secret?: string;
         address?: string;
         deletion_at_ms?: number;
+        password_wrong?: boolean;
+        attempts_left?: number;
+        locked_ms?: number;
       };
       if (parsed.trust_secret) await writeTrustSecretAsync(user, parsed.trust_secret);
       lastIssuedAddress = parsed.address;
@@ -271,6 +282,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
         // а существование аккаунта здесь определяет ответ register
         throw new Error('нужна регистрация через почту');
       }
+    }
+    if (!response.ok && response.password_wrong) {
+      throw new PasswordRejectedError(response.attempts_left || 0, response.locked_ms || 0);
     }
     if (!response.ok || !response.token) {
       throw new Error(response.error || 'identity отказал в выдаче токена');

@@ -14,7 +14,11 @@ import useAppLayout from '../../../hooks/useAppLayout';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useScrollNotch from '../../../hooks/useScrollNotch';
 
+import DataExportScreen from '../../parvane/export/DataExportScreen';
 import Transition from '../../ui/Transition';
+import SettingsBugReport from './account/SettingsBugReport';
+import SettingsDeleteAccount from './account/SettingsDeleteAccount';
+import SettingsHelp from './account/SettingsHelp';
 import SettingsFolders from './folders/SettingsFolders';
 import SettingsPasscode from './passcode/SettingsPasscode';
 import ProfileNav from './profile/ProfileNav';
@@ -391,6 +395,15 @@ const Settings: FC<OwnProps> = ({
             onReset={handleReset}
           />
         );
+
+      case SettingsScreens.ParvaneDeleteAccount:
+        return <SettingsDeleteAccount isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvaneExport:
+        return <DataExportScreen isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvaneBugReport:
+        return <SettingsBugReport isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvaneHelp:
+        return <SettingsHelp isActive={isScreenActive} onReset={handleReset} />;
 
       default:
         return undefined;

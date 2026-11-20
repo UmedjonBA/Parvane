@@ -31,6 +31,7 @@ import {
   sendText,
   autoDismissRecoveryKeyDialog,
   openEditProfile,
+  saveEditProfile,
   showChatList,
 } from './e2e_web_helpers.mjs';
 
@@ -57,12 +58,7 @@ async function setOwnBio(page, bio) {
     if (await bioInput.inputValue() === bio) break;
   }
   assert.equal(await bioInput.inputValue(), bio, 'bio field was reset before saving');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  // FAB прячется классом (не display) — ждём потерю класса revealed
-  await page.waitForFunction(() => {
-    const fab = document.querySelector('.FloatingActionButton');
-    return !fab || !fab.classList.contains('revealed');
-  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await saveEditProfile(page);
   await showChatList(page);
 }
 

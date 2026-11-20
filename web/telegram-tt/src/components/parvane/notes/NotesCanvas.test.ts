@@ -173,19 +173,31 @@ async function mount(doc: unknown = DOC, notes: unknown[] = []) {
   store.notes = notes;
   TeactDOM.render(Teact.createElement(NotesCanvas, {
     canvases: [{
-      id: 'canvas', title: 'Холст', text: JSON.stringify(doc), fileId: 'file',
+      id: 'canvas', title: 'Холст', text: JSON.stringify(doc), fileId: 'file', updatedAt: 0,
     }],
     notes,
     isNarrow: false,
+    openId: 'canvas',
     query: '',
     searchStep: 0,
     onOpenTitle: () => undefined,
+    onOpenCanvas: () => undefined,
   }) as Parameters<typeof TeactDOM.render>[0], root);
   await frame();
 }
 
 beforeAll(async () => {
   Object.assign(HTMLElement.prototype, { setPointerCapture: () => undefined });
+  // Мини-карта следит за размером поля; в jsdom наблюдателя нет
+  Object.assign(window, {
+    ResizeObserver: class {
+      observe() {}
+
+      unobserve() {}
+
+      disconnect() {}
+    },
+  });
   Object.assign(window, {
     matchMedia: () => ({
       matches: false, addEventListener: () => undefined, removeEventListener: () => undefined,
@@ -229,13 +241,13 @@ describe('холст: нажатия мыши', () => {
     const onError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await mount();
     await press(ON_EDGE);
-    expect(barActions()).toContain('direction');
+    expect(barActions()).toContain('swap');
     // Группу берут за шапку: выделение переходит со стрелки на группу
     await dragGroup(120, -80);
     await drop({ x: HEAD.x + 120, y: HEAD.y - 80 });
     expect(onError).not.toHaveBeenCalled();
     expect(placeOf('pair')).toEqual([-580, 20]);
-    expect(barActions()).not.toContain('direction');
+    expect(barActions()).not.toContain('swap');
     expect(find('[data-canvas-edge="edge"]').getAttribute('class')).toBe('');
     onError.mockRestore();
   });
@@ -243,7 +255,7 @@ describe('холст: нажатия мыши', () => {
   it('Escape снимает выделение со стрелки', async () => {
     await mount();
     await press(ON_EDGE);
-    expect(barActions()).toContain('direction');
+    expect(barActions()).toContain('swap');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     await frame();
     expect(root.querySelector('[data-canvas-selection-bar]')).toBeNull();
@@ -265,7 +277,7 @@ describe('холст: нажатия мыши', () => {
     await drag(ON_EDGE, 120, -80);
     await drop({ x: ON_EDGE.x + 120, y: ON_EDGE.y - 80 });
     expect(placeOf('pair')).toEqual([-700, 100]);
-    expect(barActions()).toContain('direction');
+    expect(barActions()).toContain('swap');
   });
 
   it('с Shift внутри группы рисуется рамка выделения, группа стоит', async () => {

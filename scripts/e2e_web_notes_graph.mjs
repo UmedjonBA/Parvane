@@ -355,9 +355,12 @@ try {
   await page.waitForFunction((text) => document.querySelector('#ParvaneKnowledge [data-canvas-zoom]').textContent !== text,
     zoomBefore, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('Ctrl + колесо не изменило масштаб'));
   assert.ok((await viewOf()).scale > viewPanned.scale, 'Ctrl + колесо вверх не приблизило');
-  assert.match(await zoomChip.innerText(), /^\d+%$/, 'масштаб холста не показан процентами');
+  assert.match(await zoomChip.innerText(), /^\d+% · /, 'масштаб холста не показан процентами');
 
-  // Холст, сделанный руками: подсказка пустого поля, «Обновить из графа» нет
+  // Холст, сделанный руками: подсказка пустого поля, «Обновить из графа» нет. Новый холст — из списка холстов
+  await knowledge.locator('[data-canvas-back]').click();
+  await visible(knowledge.locator('[data-canvas-list] [data-canvas-tile]'), 'список холстов строками');
+  await shotBoth('desk-canvas-list');
   await knowledge.getByRole('button', { name: 'New canvas' }).click();
   await visible(knowledge.locator('[data-canvas-blank]'), 'подсказка пустого холста');
   assert.equal(await knowledge.locator('[data-canvas-refresh]').count(), 0, '«Обновить из графа» стоит на холсте, сделанном руками');
@@ -368,10 +371,94 @@ try {
   await page.keyboard.press('Escape');
   console.log('OK: холст — из графа уровнями по сетке, «Обновить» только у него, колесо двигает поле, подсказка пустого холста');
 
+  // ── Холст по макету: перетаскивание заметок, панель выделенного, стрелка, перецепление, мини-карта, картинка ──
+  const noteCard = (title) => board.locator('[data-canvas-type="file"]')
+    .filter({ has: page.locator('[data-canvas-note-head]').getByText(title, { exact: true }) });
+  const sidePanel = knowledge.locator('[data-canvas-selection-bar]');
+  const boardBox2 = await board.boundingBox();
+  // Ссылки на заметки, брошенные на поле, — карточки этих заметок
+  const dropText = (text, x, y) => board.evaluate((element, [value, px, py]) => {
+    const transfer = new DataTransfer();
+    transfer.setData('text/plain', value);
+    const box = element.getBoundingClientRect();
+    const init = {
+      dataTransfer: transfer, clientX: box.left + px, clientY: box.top + py, bubbles: true, cancelable: true,
+    };
+    element.dispatchEvent(new DragEvent('dragover', init));
+    element.dispatchEvent(new DragEvent('drop', init));
+  }, [text, x, y]);
+  await dropText(`[[${HUB}]]\n[[${PIER}]]`, boardBox2.width * 0.15, boardBox2.height * 0.2);
+  await visible(noteCard(HUB), 'карточка заметки, брошенной на холст');
+  await visible(noteCard(PIER), 'вторая брошенная заметка — карточкой ниже');
+  await dropText(`[[${STORE}]]`, boardBox2.width * 0.55, boardBox2.height * 0.2);
+  await visible(noteCard(STORE), 'третья брошенная заметка');
+  // Панель выделенного сбоку поля: «Выделено: 1», «Связать стрелкой» — от карточки к следующей нажатой
+  await noteCard(HUB).click({ position: { x: 20, y: 10 } });
+  await visible(sidePanel.getByText('Selected: 1'), 'панель выделенного');
+  await visible(knowledge.locator('[data-canvas-minimap] [data-canvas-minimap-view]'), 'мини-карта с видимой частью');
+  await shotBoth('desk-canvas-panel');
+  await sidePanel.locator('[data-canvas-action="connect"]').click();
+  await noteCard(PIER).click({ position: { x: 20, y: 10 } });
+  await count('#ParvaneKnowledge [data-canvas-edge]', 1, 'стрелка «Связать стрелкой» не появилась');
+  // Стрелка выбирается нажатием по линии — панель стрелки
+  const edgePoint = await board.locator('[data-canvas-edge] path').first().evaluate((path) => {
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM();
+    return { x: point.x * matrix.a + point.y * matrix.c + matrix.e, y: point.x * matrix.b + point.y * matrix.d + matrix.f };
+  });
+  await page.mouse.click(edgePoint.x, edgePoint.y);
+  const edgePanel = knowledge.locator('[data-canvas-edge-panel]');
+  await visible(edgePanel, 'панель стрелки');
+  assert.equal(await edgePanel.locator('[data-canvas-edge-from]').innerText(), HUB, 'начало стрелки в панели');
+  assert.equal(await edgePanel.locator('[data-canvas-edge-to]').innerText(), PIER, 'конец стрелки в панели');
+  await edgePanel.locator('[data-canvas-edge-label]').fill('ведёт к');
+  await edgePanel.locator('[data-canvas-edge-label]').press('Enter');
+  await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт к' }), 'подпись стрелки из панели');
+  await edgePanel.locator('[data-direction="both"]').click();
+  await page.waitForFunction(() => document.querySelector('#ParvaneKnowledge [data-canvas-edge]')?.dataset.canvasEnds === 'arrow-arrow',
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«↔» не поставило стрелки на оба конца'));
+  await edgePanel.locator('[data-line="dashed"]').click();
+  await page.waitForFunction(() => {
+    const lines = document.querySelectorAll('#ParvaneKnowledge [data-canvas-edge] path');
+    return Array.from(lines).some((line) => getComputedStyle(line).strokeDasharray !== 'none');
+  }, undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«Пунктир» не сделал линию пунктирной'));
+  await shotBoth('desk-canvas-edge');
+  await edgePanel.locator('[data-canvas-action="swap"]').click();
+  await page.waitForFunction((title) => document.querySelector('#ParvaneKnowledge [data-canvas-edge-from]')?.textContent === title,
+    PIER, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«Поменять концы» не поменяло начало и конец'));
+  // Конец стрелки перецепляется на другую карточку: ручку конца тянут на неё
+  const endHandle = board.locator('[data-canvas-edge-end="to"]');
+  await visible(endHandle, 'ручка конца выбранной стрелки');
+  const handleBox = await endHandle.boundingBox();
+  const storeBox = await noteCard(STORE).boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(storeBox.x + storeBox.width / 2, storeBox.y + storeBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction((title) => document.querySelector('#ParvaneKnowledge [data-canvas-edge-to]')?.textContent === title,
+    STORE, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('конец стрелки не перецепился на другую карточку'));
+  // Картинка из буфера обмена — файлом в облако и карточкой на холсте
+  const filesBefore = await board.locator('[data-canvas-type="file"]').count();
+  await page.mouse.move(boardBox2.x + boardBox2.width * 0.3, boardBox2.y + boardBox2.height * 0.7);
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+    transfer.items.add(new File([bytes], 'buoy.png', { type: 'image/png' }));
+    document.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
+  });
+  await count('#ParvaneKnowledge [data-canvas-node][data-canvas-type="file"]', filesBefore + 1, 'вставленная картинка не встала карточкой');
+  await visible(board.locator('[data-canvas-type="file"]').filter({ hasText: 'buoy' }), 'карточка вставленной картинки');
+  console.log('OK: холст по макету — заметки перетаскиванием, панель выделенного и стрелки, перецепление, мини-карта, картинка из буфера');
+
   // ── Телефон ───────────────────────────────────────────────────────────────
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
+  // Открытый холст на телефоне: инструменты нижней панелью вместо ленты модулей; «назад» — к плиткам холстов
+  await visible(knowledge.locator('[data-canvas-bottom-tools] [data-canvas-tool="text"]'), 'инструменты внизу холста');
   await shotBoth('phone-canvas');
+  await page.evaluate(() => window.history.back());
+  await visible(knowledge.locator('[data-canvas-list] [data-canvas-new]'), '«назад» с холста — к плиткам холстов');
+  await shotBoth('phone-canvas-list');
   await openTab('Graph');
   await visible(graph, 'граф на телефоне');
   await graphBusyDone();

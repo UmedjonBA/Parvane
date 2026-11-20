@@ -267,7 +267,7 @@ async fn session_required() {
     assert_eq!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::Forbidden));
     // Все методы реестра роли "domains" обслуживаются.
     let names: Vec<&str> = parvane_v2rt::methods_of("domains").iter().map(|m| m.name).collect();
-    assert_eq!(names.len(), 12, "{names:?}");
+    assert_eq!(names.len(), 14, "{names:?}");
     for n in names {
         let req = ShardRequest { method: n.into(), user: "alice@local".into(), device_id: "d1".into(), body: vec![], ..Default::default() };
         assert_ne!(d.dispatch(n, req).await, Err(ErrorCode::Unavailable), "{n}");
@@ -525,4 +525,64 @@ async fn truncate_after_complete_snapshot() {
         append(&d, "alice@local", &op(&alice, &c, 1, &k1, i, "a1", "y")).await.unwrap();
     }
     assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 21, "a1", "y")).await, Err(ErrorCode::Limit));
+}
+
+#[tokio::test]
+async fn invitation_is_pending_until_accepted() {
+    use parvane_protocol::pb::parvane::core::v2::{
+        DomainGrantAcceptRequest, DomainGrantLeaveRequest, DomainGrantPendingRequest, DomainGrantPendingResponse,
+    };
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let bob = device(&d, "bob@local", "b1");
+    let carol = device(&d, "carol@local", "c1");
+    let (c, genesis) = domain::new_container(&alice, "local", sample::DOMAIN_NAME, "alice@local", 1).unwrap();
+    let cref = c.r#ref.clone().unwrap();
+    call(&d, "alice@local", "domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }).await.unwrap();
+    let keys = [(&alice, "alice@local"), (&bob, "bob@local"), (&carol, "carol@local")];
+    let pending = |user: &'static str| {
+        let (d, cref) = (&d, cref.clone());
+        async move {
+            call(d, user, "domain.grant.pending", &DomainGrantPendingRequest { container: Some(cref) })
+                .await
+                .map(|b| resp::<DomainGrantPendingResponse>(b).users.into_iter().map(|u| u.address).collect::<Vec<_>>())
+        }
+    };
+    let accept = |user: &'static str| {
+        let (d, cref) = (&d, cref.clone());
+        async move { call(d, user, "domain.grant.accept", &DomainGrantAcceptRequest { container: Some(cref) }).await.map(|_| ()) }
+    };
+    let grant = |who: &'static str, level: GrantLevel, ts: i64| {
+        let (d, cref, alice, keys) = (&d, cref.clone(), &alice, &keys);
+        async move {
+            let acc = access_of(d, "alice@local", &cref, keys).await;
+            let g = domain::sign_grant(alice, &acc, &Grantee::User(who.into()), level, ts).unwrap();
+            call(d, "alice@local", "domain.grant.set", &DomainGrantSetRequest { grant: Some(g) }).await.unwrap();
+        }
+    };
+    assert_eq!(pending("alice@local").await, Ok(vec![]));
+    grant("bob@local", GrantLevel::Read, 2).await;
+    grant("carol@local", GrantLevel::Write, 3).await;
+    assert_eq!(pending("alice@local").await, Ok(vec!["bob@local".to_string(), "carol@local".to_string()]));
+    // Список видит только админ; принять может только получатель гранта (владелец — без отметки).
+    assert_eq!(pending("bob@local").await, Err(ErrorCode::Forbidden));
+    assert_eq!(accept("mallory@local").await, Err(ErrorCode::NotFound));
+    assert_eq!(accept("alice@local").await, Ok(()));
+    assert_eq!(accept("bob@local").await, Ok(()));
+    assert_eq!(accept("bob@local").await, Ok(()), "повтор — тот же итог");
+    assert_eq!(pending("alice@local").await, Ok(vec!["carol@local".to_string()]));
+    // Смена роли принятого отметку сохраняет; выход снимает грант вместе с отметкой, новый грант снова ждёт ответа.
+    grant("bob@local", GrantLevel::Write, 4).await;
+    assert_eq!(pending("alice@local").await, Ok(vec!["carol@local".to_string()]));
+    let acc = access_of(&d, "bob@local", &cref, &keys).await;
+    let leave = domain::sign_leave(&bob, &acc, &Grantee::User("bob@local".into()), 5).unwrap();
+    call(&d, "bob@local", "domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(leave) }).await.unwrap();
+    assert_eq!(accept("bob@local").await, Err(ErrorCode::NotFound));
+    grant("bob@local", GrantLevel::Read, 6).await;
+    assert_eq!(pending("alice@local").await, Ok(vec!["bob@local".to_string(), "carol@local".to_string()]));
+    // Отозванный («Отменить» приглашение) из списка уходит.
+    let acc = access_of(&d, "alice@local", &cref, &keys).await;
+    let rev = domain::sign_revoke(&alice, &acc, &Grantee::User("carol@local".into()), 7).unwrap();
+    call(&d, "alice@local", "domain.grant.revoke", &DomainGrantRevokeRequest { grant: Some(rev) }).await.unwrap();
+    assert_eq!(pending("alice@local").await, Ok(vec!["bob@local".to_string()]));
 }

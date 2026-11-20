@@ -1,0 +1,415 @@
+{
+ "rule": "NOTES-3",
+ "about": "Сведение холста (JSON Canvas) с двух устройств: трёхстороннее слияние по id карточек и стрелок с общей версией (base). Поле, изменённое одной стороной, — её; обеими по-разному — моё (mine) и +1 к conflicts; удалённое одной стороной и не тронутое другой — удалено, изменённое другой — остаётся; стрелки к ушедшим карточкам убираются; незнакомые поля сохраняются. Порядок: мой, затем добавленное только у них. Сравнивается doc как JSON-объект (порядок ключей не важен). Данные выдуманы.",
+ "cases": [
+  {
+   "name": "разные карточки сдвинуты на двух устройствах — оба сдвига",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 100, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 200, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 100,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 200,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      }
+     ]
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "одна карточка: место моё, текст их",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 50, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай с дровами\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 50,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай с дровами"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      }
+     ]
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "одно поле изменено по-разному — моё, одно расхождение",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 10, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 20, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 10,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      }
+     ]
+    },
+    "conflicts": 1
+   }
+  },
+  {
+   "name": "добавлено на обоих: мои новые по моему порядку, их новые — после",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"c\", \"type\": \"text\", \"x\": 0, \"y\": 200, \"width\": 250, \"height\": 60, \"text\": \"Колодец\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}, {\"id\": \"d\", \"type\": \"text\", \"x\": 0, \"y\": 400, \"width\": 250, \"height\": 60, \"text\": \"Компост\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}, {\"id\": \"bd\", \"fromNode\": \"b\", \"toNode\": \"d\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "c",
+       "type": "text",
+       "x": 0,
+       "y": 200,
+       "width": 250,
+       "height": 60,
+       "text": "Колодец"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      },
+      {
+       "id": "d",
+       "type": "text",
+       "x": 0,
+       "y": 400,
+       "width": 250,
+       "height": 60,
+       "text": "Компост"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      },
+      {
+       "id": "bd",
+       "fromNode": "b",
+       "toNode": "d"
+      }
+     ]
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "удалено у них, не тронуто у меня — удалено вместе со стрелкой",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}], \"edges\": []}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      }
+     ],
+     "edges": []
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "удалено у меня, изменено у них — карточка остаётся с их правкой, моя удалённая стрелка не возвращается",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}], \"edges\": []}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица и рассада\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица и рассада"
+      }
+     ],
+     "edges": []
+    },
+    "conflicts": 1
+   }
+  },
+  {
+   "name": "стрелка: подпись правлю я, концы и направление — они",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"через двор\"}]}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\", \"fromSide\": \"right\", \"toSide\": \"left\", \"toEnd\": \"none\"}]}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "через двор",
+       "fromSide": "right",
+       "toSide": "left",
+       "toEnd": "none"
+      }
+     ]
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "незнакомые поля карточки и файла сохраняются и сводятся",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\", \"color\": \"4\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}], \"pvView\": {\"zoom\": 1}}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\", \"styleAttributes\": {\"shape\": \"pill\"}}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}], \"metadata\": {\"author\": \"выдумка\"}}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай",
+       "color": "4",
+       "styleAttributes": {
+        "shape": "pill"
+       }
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      }
+     ],
+     "pvView": {
+      "zoom": 1
+     },
+     "metadata": {
+      "author": "выдумка"
+     }
+    },
+    "conflicts": 0
+   }
+  },
+  {
+   "name": "общей версии нет (новый холст на двух устройствах) — одинаковое берётся раз, разное в одном поле — моё",
+   "base": "",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}], \"edges\": []}",
+   "theirs": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 40, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"z\", \"type\": \"text\", \"x\": 0, \"y\": 90, \"width\": 250, \"height\": 60, \"text\": \"Забор\"}], \"edges\": []}",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "z",
+       "type": "text",
+       "x": 0,
+       "y": 90,
+       "width": 250,
+       "height": 60,
+       "text": "Забор"
+      }
+     ],
+     "edges": []
+    },
+    "conflicts": 1
+   }
+  },
+  {
+   "name": "чужая версия не читается — остаётся моя",
+   "base": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "mine": "{\"nodes\": [{\"id\": \"a\", \"type\": \"text\", \"x\": 0, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Сарай\"}, {\"id\": \"b\", \"type\": \"text\", \"x\": 300, \"y\": 0, \"width\": 250, \"height\": 60, \"text\": \"Теплица\"}], \"edges\": [{\"id\": \"ab\", \"fromNode\": \"a\", \"toNode\": \"b\", \"label\": \"рядом\"}]}",
+   "theirs": "{ не холст",
+   "expect": {
+    "doc": {
+     "nodes": [
+      {
+       "id": "a",
+       "type": "text",
+       "x": 0,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Сарай"
+      },
+      {
+       "id": "b",
+       "type": "text",
+       "x": 300,
+       "y": 0,
+       "width": 250,
+       "height": 60,
+       "text": "Теплица"
+      }
+     ],
+     "edges": [
+      {
+       "id": "ab",
+       "fromNode": "a",
+       "toNode": "b",
+       "label": "рядом"
+      }
+     ]
+    },
+    "conflicts": 1
+   }
+  },
+  {
+   "name": "пустой текст с обеих сторон — пустой холст",
+   "base": "",
+   "mine": "",
+   "theirs": "",
+   "expect": {
+    "doc": {
+     "nodes": [],
+     "edges": []
+    },
+    "conflicts": 0
+   }
+  }
+ ]
+}

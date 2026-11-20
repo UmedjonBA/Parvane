@@ -4,6 +4,7 @@ import { memo } from '../../../lib/teact/teact';
 import type { CallInfo } from './callTypes';
 
 import buildClassName from '../../../util/buildClassName';
+import { getCallSasWords } from './callSas';
 import { getCallInitial, hasVideoTrack } from './callTypes';
 
 import useOldLang from '../../../hooks/useOldLang';
@@ -120,12 +121,14 @@ const CallActive = ({
     );
   }
 
-  function renderSas(className: string) {
-    if (!call.sas) return undefined;
+  // Сверка ключей словами (CALL-3): четыре слова одинаковы у обоих собеседников
+  function renderSas(className: string, noHint?: boolean) {
+    const words = getCallSasWords(call.sasFingerprints);
+    if (!words) return undefined;
     return (
-      <div className={className} title={lang('CallEmojiKeyTooltip', peerName)}>
-        <div className={styles.sasHint}>{lang('ParvaneCallSasHint')}</div>
-        <div className={styles.sasValue}>{call.sas}</div>
+      <div className={className} title={lang('CallEmojiKeyTooltip', peerName)} data-call-sas>
+        {!noHint && <div className={styles.sasHint}>{lang('ParvaneCallSasHint')}</div>}
+        <div className={styles.sasValue}>{words.join(' · ')}</div>
       </div>
     );
   }
@@ -137,7 +140,7 @@ const CallActive = ({
         <div className={styles.videoHead}>
           <div className={styles.videoName}>{peerName}</div>
           {renderStatus()}
-          {renderSas(styles.videoSas)}
+          {renderSas(styles.videoSas, true)}
           {renderRemoteState()}
         </div>
         {renderMinimize()}

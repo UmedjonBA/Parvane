@@ -167,6 +167,8 @@ fn issue(id: &mut Conn, login: &str, device_id: &str, cancel: bool) -> Result<ip
         ipb::SessionIssueRequest { login: login.into(), password: PASSWORD.into(), device_id: device_id.into(), cancel_deletion: cancel, ..Default::default() }.encode_to_vec(),
     )
     .map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap())
+    // spec 041: неверный пароль (и несуществующий аккаунт) — ответ без токена с `password_wrong`: это отказ во входе
+    .and_then(|r| if r.password_wrong { Err(ErrorCode::Forbidden) } else { Ok(r) })
 }
 
 fn auth(addr: &str, token: &str) -> Option<Conn> {

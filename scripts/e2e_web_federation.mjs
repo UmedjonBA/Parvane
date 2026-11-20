@@ -118,6 +118,9 @@ async function createGroup(page, members, title) {
     await page.waitForTimeout(300);
   }
   await page.getByRole('button', { name: 'Create Group' }).click();
+  // Поле ввода прежнего чата видно и до открытия группы: ждём шапку новой группы, иначе текст уходит в прежний чат
+  await page.locator('.MiddleHeader').getByText(title, { exact: true }).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
 }
 
@@ -255,7 +258,8 @@ try {
   await shareDialog.getByRole('button', { name: 'Add people', exact: true }).click();
   const picker = a.locator('.Modal').filter({ has: a.locator('.ChatOrUserPicker-item') });
   await picker.locator('.ChatOrUserPicker-item').filter({ hasText: nick(boris) }).first().click();
-  await shareDialog.locator(`[data-member="${boris}"]`).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
+  // До ответа Бориса он — в «Приглашениях · ждёт ответа» (spec 041 E2)
+  await shareDialog.locator(`[data-invited="${boris}"]`).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
   await shareDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
   await ac.folderRow(FOLDER).click();
   await ac.upload(FILE_A, CONTENT_A);

@@ -2,16 +2,17 @@ import type { ProfileIconName } from './ProfileIcon';
 import { SettingsScreens } from '../../../../types';
 
 // Parvane (spec 041 E3): пункты «Профиля» — один список для экрана телефона и колонки компьютера
-// (доски `PhoneProfile`, `DeskProfile`). Пункт без экрана — действие: выгрузка, отчёт об ошибке, выход
+// (доски `PhoneProfile`, `DeskProfile`). Пункт без экрана — действие (выход)
 export type ProfileItemId = 'overview' | 'modules' | 'appearance' | 'notifications' | 'language' | 'devices'
-  | 'privacy' | 'keys' | 'data' | 'export' | 'messenger' | 'bug' | 'about' | 'signOut';
+  | 'privacy' | 'keys' | 'data' | 'export' | 'messenger' | 'help' | 'bug' | 'about' | 'signOut';
 
 export type ProfileItem = {
   id: ProfileItemId;
   icon: ProfileIconName;
   titleKey: 'ParvaneProfileOverview' | 'ParvaneModules' | 'ParvaneAppearance' | 'Notifications' | 'Language'
     | 'ParvaneProfileDevices' | 'PrivacySettings' | 'ParvaneProfileKeys' | 'DataSettings' | 'ParvaneExportData'
-    | 'ParvaneProfileMessengerSettings' | 'MenuReportBug' | 'ParvaneProfileAbout' | 'LogOutTitle';
+    | 'ParvaneProfileMessengerSettings' | 'ParvaneHelpTitle' | 'MenuReportBug' | 'ParvaneProfileAbout'
+    | 'LogOutTitle';
   screen?: SettingsScreens;
   // Только в колонке компьютера: на телефоне «Обзор» — сам экран «Профиля»
   isNavOnly?: boolean;
@@ -62,14 +63,15 @@ export const PROFILE_GROUPS: ProfileGroup[] = [{
   titleKey: 'ParvaneProfileGroupData',
   items: [
     { id: 'data', icon: 'disk', titleKey: 'DataSettings', screen: SettingsScreens.DataStorage },
-    { id: 'export', icon: 'download', titleKey: 'ParvaneExportData' },
+    { id: 'export', icon: 'download', titleKey: 'ParvaneExportData', screen: SettingsScreens.ParvaneExport },
   ],
 }, {
   id: 'more',
   titleKey: 'MenuMore',
   items: [
     { id: 'messenger', icon: 'chat', titleKey: 'ParvaneProfileMessengerSettings', screen: SettingsScreens.General },
-    { id: 'bug', icon: 'bug', titleKey: 'MenuReportBug' },
+    { id: 'help', icon: 'help', titleKey: 'ParvaneHelpTitle', screen: SettingsScreens.ParvaneHelp },
+    { id: 'bug', icon: 'bug', titleKey: 'MenuReportBug', screen: SettingsScreens.ParvaneBugReport },
     { id: 'about', icon: 'info', titleKey: 'ParvaneProfileAbout', screen: SettingsScreens.ParvaneAbout },
     { id: 'signOut', icon: 'logout', titleKey: 'LogOutTitle', isDanger: true },
   ],
@@ -99,7 +101,10 @@ export function getProfileItemId(screen: SettingsScreens): ProfileItemId {
   if (APPEARANCE_SCREENS.includes(screen)) return 'appearance';
   if (screen === SettingsScreens.Notifications) return 'notifications';
   if (screen === SettingsScreens.Language || screen === SettingsScreens.DoNotTranslate) return 'language';
-  if (screen === SettingsScreens.ActiveSessions) return 'devices';
+  if (screen === SettingsScreens.ActiveSessions || screen === SettingsScreens.ParvaneDeleteAccount) return 'devices';
+  if (screen === SettingsScreens.ParvaneExport) return 'export';
+  if (screen === SettingsScreens.ParvaneHelp) return 'help';
+  if (screen === SettingsScreens.ParvaneBugReport) return 'bug';
   if (screen === SettingsScreens.ParvaneKeysBackup) return 'keys';
   if (screen === SettingsScreens.DataStorage) return 'data';
   if (screen === SettingsScreens.ParvaneAbout || screen === SettingsScreens.Experimental) return 'about';

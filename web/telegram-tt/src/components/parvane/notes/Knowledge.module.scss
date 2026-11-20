@@ -1493,10 +1493,11 @@
 }
 
 // На телефоне панель прижата к низу поля, слева от кнопок масштаба
+// На телефоне — полосой вверху поля, под шапкой холста (доска `XpNotes`)
 .canvasBarDocked {
-  top: auto;
-  right: 3.625rem;
-  bottom: 0.625rem;
+  top: 0.625rem;
+  right: 0.625rem;
+  bottom: auto;
   left: 0.625rem;
   transform: none;
 

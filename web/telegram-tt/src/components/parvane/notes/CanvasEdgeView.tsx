@@ -3,9 +3,11 @@ import { memo } from '../../../lib/teact/teact';
 import type { CanvasEdge, CanvasNode } from './notesCanvas';
 
 import { edgeAnchors } from './notesCanvas';
+import { edgeLineOf } from './notesCanvasEdges';
 import { curveBetween, curvePoint } from './notesCanvasEdit';
 import { arrowPath, colorStyle, curvePath } from './notesCanvasLook';
 
+import parts from './CanvasParts.module.scss';
 import styles from './Knowledge.module.scss';
 
 type OwnProps = {
@@ -20,6 +22,8 @@ type OwnProps = {
 };
 
 const EDGE_LABEL_SHIFT = 4;
+// Ручка конца выбранной стрелки: за неё конец перецепляют на другую карточку (радиус не мельчает с масштабом)
+const END_RADIUS = 6;
 
 // Стрелка холста. Перерисовывается, только когда сменились она сама, один из её узлов или выделение:
 // сдвиг и масштаб поля, движение других карточек её не трогают
@@ -44,13 +48,36 @@ const CanvasEdgeView = ({
       style={colorStyle(edge.color) || undefined}
     >
       <path className={styles.canvasEdgeHit} d={path} />
-      <path className={styles.canvasEdge} d={path} />
+      <path
+        className={edgeLineOf(edge) === 'dashed' ? `${styles.canvasEdge} ${parts.edgeDashed}` : styles.canvasEdge}
+        d={path}
+      />
       {hasStartArrow && <path className={styles.canvasArrow} d={arrowPath(curve.p)} />}
       {hasEndArrow && <path className={styles.canvasArrow} d={arrowPath(curve.q)} />}
       {edge.label && !isLabelHidden && (
         <text className={styles.canvasEdgeLabel} x={label.x} y={label.y + EDGE_LABEL_SHIFT}>
           {edge.label}
         </text>
+      )}
+      {isOn && (
+        <>
+          <circle
+            className={parts.edgeEnd}
+            cx={curve.p.x}
+            cy={curve.p.y}
+            r={END_RADIUS}
+            data-canvas-edge-end="from"
+            data-edge={edge.id}
+          />
+          <circle
+            className={parts.edgeEnd}
+            cx={curve.q.x}
+            cy={curve.q.y}
+            r={END_RADIUS}
+            data-canvas-edge-end="to"
+            data-edge={edge.id}
+          />
+        </>
       )}
     </g>
   );

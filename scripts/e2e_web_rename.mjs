@@ -81,18 +81,19 @@ try {
   console.log('OK: второе устройство привязано');
 
   // ── смена ника ──
+  // spec 041 (`XpProfile`): ник — блоком в «Изменить профиль»; занятый ник виден до отправки
   await openEditProfile(a);
-  await a.locator('[data-rename-open] .ListItem-button').click();
   const dialog = a.locator('[data-rename-dialog]');
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Ник занят — отказ с объяснением
   await dialog.locator('#parvane-rename-nick').fill(bob.split('@')[0]);
+  await dialog.locator('[data-rename-nick-state="taken"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(PASSWORD);
   await dialog.locator('#parvane-rename-key').fill(recoveryKey);
-  await dialog.getByRole('button', { name: 'Change', exact: true }).click();
-  await dialog.locator('[data-rename-error="taken"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
+  assert.equal(await dialog.getByRole('button', { name: 'Change', exact: true }).isDisabled(), true,
+    'занятый ник не отправляется');
   // Неверный пароль
   await dialog.locator('#parvane-rename-nick').fill(newNick);
+  await dialog.locator('[data-rename-nick-state="free"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(`${PASSWORD}-wrong`);
   await dialog.getByRole('button', { name: 'Change', exact: true }).click();
   await dialog.locator('[data-rename-error="bad_password"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });

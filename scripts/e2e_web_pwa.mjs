@@ -87,6 +87,18 @@ try {
   assert.equal(new URL(page.url()).searchParams.get('open'), null, 'параметр ярлыка остался в адресе');
   console.log('OK: ярлыки «Музыка», «Новое сообщение», «Новая заметка»');
 
+  // Личный диск уже есть на сервере: «Поделиться → Файлы» ниже открывает приложение заново, и запись журнала
+  // состояния о диске дочитывается позже, чем доступна кнопка. Прежде правка корня в это время отвергалась («Could
+  // not save what was shared» — плавающий шаг: диск успевала создать справка «Заметок», а могла и не успеть); теперь
+  // сохранение ждёт сверки диска. Диск создаётся здесь явно — первой папкой
+  await page.goto(`${BASE_URL}/?open=files`);
+  const cloud = page.locator('#ParvaneCloud[data-sync-status="ready"]');
+  await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.getByRole('button', { name: 'New folder', exact: true }).click();
+  await page.locator('#parvane-cloud-name').fill('Архив');
+  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await cloud.locator('[data-kind="folder"][data-name="Архив"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+
   // ── Без сети: оболочка из кэша service worker ────────────────────────────
   // Раздел помнится во вкладке (после ярлыка — «План»): к чатам — своим ярлыком
   await page.goto(`${BASE_URL}/?open=chats`);

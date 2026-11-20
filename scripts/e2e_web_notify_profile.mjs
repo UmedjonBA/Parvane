@@ -22,6 +22,7 @@ import {
   sendText,
   linkSecondDevice,
   openEditProfile,
+  saveEditProfile,
   showChatList,
 } from './e2e_web_helpers.mjs';
 
@@ -72,11 +73,7 @@ async function closeSettings(page) {
 }
 
 async function saveProfileFab(page) {
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.waitForFunction(() => {
-    const fab = document.querySelector('.FloatingActionButton');
-    return !fab || !fab.classList.contains('revealed');
-  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await saveEditProfile(page);
 }
 
 async function createGroupWith(page, member, title) {
@@ -138,12 +135,7 @@ try {
   // ── dev1 правит bio ДО того, как bob впервые резолвит alice ───────────────
   await openEditProfile(aliceDev1.page);
   await aliceDev1.page.getByLabel('Bio').fill(originalBio);
-  await aliceDev1.page.getByRole('button', { name: 'Save', exact: true }).click();
-  // FAB прячется классом (не display) — ждём потерю класса revealed
-  await aliceDev1.page.waitForFunction(() => {
-    const fab = document.querySelector('.FloatingActionButton');
-    return !fab || !fab.classList.contains('revealed');
-  }, undefined, { timeout: LOGIN_TIMEOUT_MS });
+  await saveEditProfile(aliceDev1.page);
   await closeSettings(aliceDev1.page);
   console.log('OK: dev1 сохранил bio');
 
@@ -175,12 +167,15 @@ try {
   // ── Username только для чтения, без ошибок ────────────────────────────────
   const aliceNick = alice.split('@')[0];
   await openEditProfile(aliceDev1.page);
-  const usernameInput = aliceDev1.page.getByLabel('Username', { exact: true });
+  // spec 041 (`XpProfile`): ник — поле блока смены ника, без «@»
+  const usernameInput = aliceDev1.page.locator('#parvane-rename-nick');
   await usernameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await usernameInput.inputValue(), `@${aliceNick}`, 'username shows the nick');
-  assert(await usernameInput.evaluate((input) => input.readOnly), 'username must be read-only');
-  await usernameInput.pressSequentially('zzz').catch(() => {});
-  assert.equal(await usernameInput.inputValue(), `@${aliceNick}`, 'username must not change on typing');
+  assert.equal(await usernameInput.inputValue(), aliceNick, 'username shows the nick');
+  // Правка поля сама ник не меняет: появляются пароль и ключ для смены, возврат прежнего ника их прячет
+  await usernameInput.pressSequentially('zzz');
+  await aliceDev1.page.locator('#parvane-rename-password').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await usernameInput.fill(aliceNick);
+  await aliceDev1.page.locator('#parvane-rename-password').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Личный канал: группа alice с bob ──────────────────────────────────────
   await closeSettings(aliceDev1.page);

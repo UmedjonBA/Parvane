@@ -51,7 +51,8 @@ type CallCallbacks = {
   onState: (state: CallState) => void;
   onRemoteStream: (stream: MediaStream) => void;
   onIncoming: (from: string, callId: string, media: CallMedia) => void;
-  onSas: (sas?: string) => void;
+  // Отпечатки DTLS своей и чужой стороны: по ним показываются слова сверки (CALL-2)
+  onSas: (fingerprints?: [string, string]) => void;
   // Собеседник выключил или включил микрофон или камеру (spec 024)
   onRemoteMedia?: (state: { isAudioMuted: boolean; isVideoMuted: boolean }) => void;
   // Причина завершения звонка (без содержимого) — в журнал провайдера, для разбора обрывов
@@ -61,13 +62,6 @@ type CallCallbacks = {
 // Сервер не отдал ICE-конфигурацию: только адреса устройства (локальная сеть). Сторонний STUN (раньше — Google)
 // не используется: он видел бы, кто и когда звонит (WEB-14)
 export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [];
-
-const SAS_EMOJI = [
-  '🐱', '🐶', '🦊', '🐻', '🐼', '🐨', '🦁', '🐯',
-  '🐸', '🐵', '🦉', '🦄', '🐝', '🦋', '🌺', '🌈',
-  '🍎', '🍊', '🍋', '🍉', '🍇', '🍓', '🥝', '🍑',
-  '🎸', '🎹', '🎺', '🥁', '🎨', '🎲', '🚀', '⚓',
-];
 
 export class CallEngine {
   private pc?: RTCPeerConnection;
@@ -185,7 +179,7 @@ export class CallEngine {
         return;
       }
       this.cb.sendSignal(from, { type: 'answer', call_id: callId, sdp, sig: signature });
-      await this.emitSas(callId);
+      this.emitSas(callId);
     } catch {
       if (this.isCurrentCall(from, callId)) this.endAfterMediaFailure('reject');
     }
@@ -301,7 +295,7 @@ export class CallEngine {
         this.remoteReady = true;
         this.flushCandidates();
         this.cb.onState('connecting');
-        await this.emitSas(signal.call_id);
+        this.emitSas(signal.call_id);
         break;
       case 'ice':
         if (signal.call_id !== this.callId || from !== this.peer) return;
@@ -519,12 +513,13 @@ export class CallEngine {
     }
   }
 
-  private async emitSas(callId: string) {
+  private emitSas(callId: string) {
     const localSdp = this.pc?.localDescription?.sdp;
     const remoteSdp = this.pc?.remoteDescription?.sdp;
     if (!localSdp || !remoteSdp) return;
-    const sas = await buildSas(localSdp, remoteSdp);
-    if (sas && callId === this.callId) this.cb.onSas(sas);
+    const local = parseFingerprint(localSdp);
+    const remote = parseFingerprint(remoteSdp);
+    if (local && remote && callId === this.callId) this.cb.onSas([local, remote]);
   }
 }
 
@@ -535,14 +530,4 @@ function buildSignedData(callId: string, sdp: string) {
 function parseFingerprint(sdp: string) {
   const match = sdp.match(/^a=fingerprint:[^ ]+ (.+)\r?$/m);
   return match?.[1];
-}
-
-async function buildSas(localSdp: string, remoteSdp: string) {
-  const localFingerprint = parseFingerprint(localSdp);
-  const remoteFingerprint = parseFingerprint(remoteSdp);
-  if (!localFingerprint || !remoteFingerprint) return undefined;
-  const fingerprints = [localFingerprint, remoteFingerprint].sort();
-  const input = new TextEncoder().encode(fingerprints.join('|'));
-  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
-  return Array.from(hash.slice(0, 4), (byte) => SAS_EMOJI[byte % SAS_EMOJI.length]).join('');
 }

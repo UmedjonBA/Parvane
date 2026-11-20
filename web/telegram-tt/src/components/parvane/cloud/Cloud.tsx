@@ -4,11 +4,11 @@ import {
 
 import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import type { GlobalState } from '../../../global/types';
-import type { CloudMovePlace } from './CloudDialogs';
 import type { CloudItemAction } from './CloudItem';
 import type { CloudLinkTarget } from './CloudLinkDialog';
 import type { CloudMenuAction, CloudMenuAnchor } from './CloudMenu';
 import type { CloudNode, CloudSortKey } from './cloudModel';
+import type { CloudMovePlace } from './CloudMoveDialog';
 import type { CloudNavCounts, CloudNavPlace } from './CloudNav';
 import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
@@ -21,11 +21,12 @@ import {
 import { formatFileSize } from '../../../util/textFormat';
 import { dropPlaceTitle } from './cloudDrop';
 import {
-  childrenOf, fileTypeLabel, folderStats, listedNodes, pathOf, searchNodes, sortNodes, trashDaysLeft, usageOf,
+  childrenOf, fileTypeLabel, folderStats, listedNodes, navTreeOf, pathOf, searchNodes, sortNodes, trashDaysLeft,
+  usageOf,
 } from './cloudModel';
 import {
-  canEditContainer, copyCloudNode, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
-  getCloudData,
+  canEditContainer, copyCloudNode, createCloudFolder, createCloudFolderAt, downloadCloudNode, emptyCloudTrash,
+  getActiveContainerId, getCloudData,
   getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudUsage, getContainer,
   getHasCloudTransfers, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder, linkOfSource,
   loadCloud, moveCloudNodes, moveCloudNodesAcross, peerLabel, purgeCloudNodes, refreshCloud, refreshCloudLinks,
@@ -52,11 +53,12 @@ import PvOfflineBar from '../notes/PvOfflineBar';
 import PvSkeleton from '../notes/PvSkeleton';
 import SectionHistoryBack from '../SectionHistoryBack';
 import CloudDetail from './CloudDetail';
-import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
+import { CloudNameDialog } from './CloudDialogs';
 import CloudDropZone from './CloudDropZone';
 import CloudItem from './CloudItem';
 import CloudLinkDialog from './CloudLinkDialog';
 import CloudMenu from './CloudMenu';
+import CloudMoveDialog from './CloudMoveDialog';
 import CloudNav from './CloudNav';
 import CloudNoteDialog from './CloudNoteDialog';
 import CloudPreview from './CloudPreview';
@@ -258,9 +260,17 @@ const Cloud = ({ isMobile }: OwnProps) => {
         id: c.id,
         name: c.kind === 'root' ? lang('ParvaneCloudTabDrive') : c.name || lang('ParvaneCloudSharedFolder'),
         isShared: c.kind !== 'root',
+        members: c.kind === 'root' ? undefined : c.members.length,
         nodes: getNodes(c.id, data),
       }))
   ), [allContainers, data, lang]);
+
+  // Дерево папок диска в колонке мест (компьютер): раскрыт путь до открытой папки диска
+  const driveFolder = !place.view && !place.container ? place.folder : undefined;
+  const driveNodes = getNodes(data?.rootId, data);
+  const navTree = useMemo(() => (isNarrow ? undefined : navTreeOf(driveNodes, driveFolder)), [
+    isNarrow, driveNodes, driveFolder,
+  ]);
 
   const navCounts: CloudNavCounts = useMemo(() => ({
     owned: ownedFolders.length,
@@ -297,6 +307,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
     return { view: isShared ? 'shared' : place.view === 'owned' ? 'owned' : undefined, container: id, folder };
   };
 
+  /** Откуда удалено: папка узла (она может лежать в корзине и сама) либо корень его места. */
+  const trashOriginName = (entry: Entry) => {
+    const parent = entry.node.parent
+      ? getNodes(entry.container, data).find((n) => n.id === entry.node.parent) : undefined;
+    if (parent) return parent.name;
+    return entry.container === data?.rootId
+      ? lang('ParvaneCloudTabDrive') : containerName(getContainer(entry.container, data));
+  };
+
   /** Путь до папки узла словами — подпись найденного. */
   const pathText = (entry: Entry) => {
     const entryPlace = placeOf(entry.container);
@@ -321,6 +340,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
   });
 
   const handleNav = useLastCallback((next: CloudNavPlace) => goTo(next === 'drive' ? {} : { view: next }));
+  const handleNavFolder = useLastCallback((folder: string) => goTo({ folder }));
   const handleOpenView = useLastCallback(() => goTo(place.view ? { view: place.view } : {}));
   const handleOpenTrash = useLastCallback(() => goTo({ view: 'trash' }));
 
@@ -513,6 +533,11 @@ const Cloud = ({ isMobile }: OwnProps) => {
     setSelected([]);
     setDialog(undefined);
   });
+
+  // «Новая папка» в окне переноса: место не задано — контейнер переносимого
+  const handleMoveNewFolder = useLastCallback((
+    placeId: string | undefined, parent: string | undefined, name: string,
+  ) => createCloudFolderAt(placeId || (dialog?.type === 'move' ? dialog.container : containerId), parent, name));
 
   const handleConfirmShareFolder = useLastCallback(() => {
     if (dialog?.type !== 'shareFolder') return;
@@ -834,8 +859,11 @@ const Cloud = ({ isMobile }: OwnProps) => {
         place={navPlace}
         counts={navCounts}
         driveId={data?.rootId}
+        tree={navTree}
+        openFolder={driveFolder}
         footer={isNarrow ? undefined : usageBlock}
         onPick={handleNav}
+        onPickFolder={handleNavFolder}
       />
       <header className={styles.head}>
         {selectedEntries.length > 0 ? renderSelection() : (
@@ -1000,9 +1028,12 @@ const Cloud = ({ isMobile }: OwnProps) => {
                   node={entry.node}
                   accessText={accessText(entry)}
                   hint={isSearch ? pathText(entry) : undefined}
-                  trashHint={daysLeft === undefined ? undefined
-                    : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
-                      : lang('ParvaneCloudTrashExpired')}
+                  trashHint={daysLeft === undefined ? undefined : [
+                    daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
+                      : lang('ParvaneCloudTrashExpired'),
+                    // Компьютер (доска `RdFiles`): откуда удалено — туда же «Восстановить» и вернёт
+                    !isNarrow && lang('ParvaneCloudTrashWasIn', { name: trashOriginName(entry) }),
+                  ].filter(Boolean).join(' · ')}
                   daysLeft={daysLeft}
                   childCount={stats?.count}
                   folderSize={stats?.size}
@@ -1102,15 +1133,17 @@ const Cloud = ({ isMobile }: OwnProps) => {
         onSubmit={handleSubmitName}
         onClose={handleCloseDialog}
       />
-      <CloudFolderDialog
+      <CloudMoveDialog
         isOpen={dialog?.type === 'move'}
-        title={moveTitle}
+        isStepwise={isNarrow}
+        title={isNarrow ? undefined : moveTitle}
         rootName={moveRootName}
         nodes={dialog?.type === 'move' ? getNodes(dialog.container, data) : nodes}
         movedIds={dialog?.type === 'move' ? dialog.nodes.map((n) => n.id) : []}
         startFolder={moveContainer === containerId ? place.folder : undefined}
         places={movePlaces}
         sourcePlace={dialog?.type === 'move' ? dialog.container : undefined}
+        onCreateFolder={handleMoveNewFolder}
         onSubmit={handleSubmitMove}
         onClose={handleCloseDialog}
       />

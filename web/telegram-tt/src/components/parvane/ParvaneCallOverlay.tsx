@@ -1,11 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useState } from '../../lib/teact/teact';
+import { getActions } from '../../global';
 
+import type { CallAction } from '../../api/parvane/calls';
+import type { CallCandidate } from './call/CallInvitePicker';
 import type { CallInfo } from './call/callTypes';
 
 import { closeCallNotification, showCallNotification } from '../../util/pageNotify';
 import { callApi } from '../../api/gramjs';
+import { hasSeveralCameras } from '../../api/parvane/callCameraSwitch';
 import { formatCallDuration, getWindowCall, hasVideoTrack } from './call/callTypes';
 import useCallAudioOutput from './call/useCallAudioOutput';
+import useCallSpeakers from './call/useCallSpeakers';
 import { getMusicPlayer, togglePlay } from './music/musicPlayer';
 
 import useLang from '../../hooks/useLang';
@@ -15,24 +20,35 @@ import useOldLang from '../../hooks/useOldLang';
 import CallActive from './call/CallActive';
 import CallAudio from './call/CallAudio';
 import CallButton from './call/CallButton';
-import CallGroup from './call/CallGroup';
+import CallGroup, { SELF_SPEAKER } from './call/CallGroup';
 import CallIncoming from './call/CallIncoming';
+import CallInvitePicker from './call/CallInvitePicker';
 import CallMinimized from './call/CallMinimized';
 import CallOutputList from './call/CallOutputList';
+import CallWaitingInvite from './call/CallWaitingInvite';
 
 import styles from './call/Call.module.scss';
 
 const TICK_MS = 1000;
 
 // parvane* — кастомные методы провайдера, вне типизированного Methods
-const callParvane = callApi as unknown as (name: string) => void;
+const callParvane = callApi as unknown as (name: string, args?: unknown) => Promise<unknown> | undefined;
+
+function runCallAction(action: CallAction, address?: string) {
+  return callParvane('parvaneCallAction', { action, address });
+}
 
 // Parvane: экраны звонка поверх приложения (доски `PhCalls`, `RpCalls`, `DkCalls`) — входящий, исходящий и
 // идущий личный, групповой. Здесь состояние, таймер, звук и гудки; разметка — в `call/*`
 const ParvaneCallOverlay = () => {
+  const { openChat } = getActions();
   const [call, setCall] = useState<CallInfo | undefined>();
   const [duration, setDuration] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [canSwitchCamera, setCanSwitchCamera] = useState(false);
+  // «Позвать участника»: выбор открыт; `candidates` — `undefined`, пока список грузится
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [candidates, setCandidates] = useState<CallCandidate[] | undefined>();
   const langNew = useLang();
   const lang = useOldLang();
 
@@ -58,8 +74,29 @@ const ParvaneCallOverlay = () => {
   useLayoutEffect(() => {
     if (isTimed) return;
     setIsMinimized(false);
+    setIsInviteOpen(false);
     resetOutput();
   }, [isTimed, resetOutput]);
+
+  // «Сменить камеру» (доска `RpCalls`) — только если камер больше одной
+  const hasLocalVideo = hasVideoTrack(call?.localStream);
+  useEffect(() => {
+    setCanSwitchCamera(false);
+    if (!isTimed || !hasLocalVideo) return undefined;
+    let isActual = true;
+    void hasSeveralCameras().then((hasSeveral) => {
+      if (isActual) setCanSwitchCamera(hasSeveral);
+    });
+    return () => {
+      isActual = false;
+    };
+  }, [isTimed, hasLocalVideo]);
+
+  // Кто говорит: свой микрофон и звук каждого участника группового звонка
+  const speakers = useCallSpeakers(group ? {
+    ...call?.groupStreams,
+    [SELF_SPEAKER]: call?.isMuted ? undefined : call?.localStream,
+  } : {});
 
   // Доска `RpCalls`: на время звонка мини-плеер ставится на паузу; после звонка музыка сама не возобновляется
   useEffect(() => {
@@ -109,11 +146,42 @@ const ParvaneCallOverlay = () => {
   const handleExpand = useLastCallback(() => setIsMinimized(false));
   const handleMinimize = useLastCallback(() => {
     output.closeOutput();
+    setIsInviteOpen(false);
     setIsMinimized(true);
+  });
+  const handleSwitchCamera = useLastCallback(() => runCallAction('switchCamera'));
+  const handleAcceptWaiting = useLastCallback(() => runCallAction('acceptWaiting'));
+  const handleDeclineWaiting = useLastCallback(() => runCallAction('declineWaiting'));
+
+  // «Ответить сообщением» (доска `RpCalls`): вызов отклоняется, открывается чат со звонящим
+  const handleReplyWithMessage = useLastCallback(() => {
+    const chatId = call?.peerChatId;
+    handleHangup();
+    if (chatId) openChat({ id: chatId });
+  });
+
+  // «Открыть чат» (доска `DkCalls`): звонок сворачивается в плашку, открывается чат собеседника либо группы
+  const handleOpenChat = useLastCallback(() => {
+    const chatId = call?.peerChatId;
+    if (!chatId) return;
+    handleMinimize();
+    openChat({ id: chatId });
+  });
+
+  const handleOpenInvite = useLastCallback(() => {
+    output.closeOutput();
+    setCandidates(undefined);
+    setIsInviteOpen(true);
+    void runCallAction('candidates')?.then((list) => setCandidates(list as CallCandidate[]));
+  });
+  const handleCloseInvite = useLastCallback(() => setIsInviteOpen(false));
+  const handleInvite = useLastCallback((address: string) => {
+    setIsInviteOpen(false);
+    void runCallAction('invite', address);
   });
 
   useLayoutEffect(() => {
-    if (!isTimed || isMinimized || isOutputOpen) return undefined;
+    if (!isTimed || isMinimized || isOutputOpen || isInviteOpen) return undefined;
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
@@ -122,9 +190,19 @@ const ParvaneCallOverlay = () => {
     };
     window.addEventListener('keydown', handleEscape, true);
     return () => window.removeEventListener('keydown', handleEscape, true);
-  }, [isTimed, isMinimized, isOutputOpen, handleMinimize]);
+  }, [isTimed, isMinimized, isOutputOpen, isInviteOpen, handleMinimize]);
 
-  if (!isVisible || !call) return undefined;
+  const waiting = call?.waitingInvite;
+  const waitingCard = waiting && (
+    <CallWaitingInvite
+      fromName={waiting.fromName}
+      title={waiting.title}
+      onAccept={handleAcceptWaiting}
+      onDecline={handleDeclineWaiting}
+    />
+  );
+
+  if (!isVisible || !call) return waitingCard;
 
   const time = formatCallDuration(duration);
 
@@ -141,8 +219,11 @@ const ParvaneCallOverlay = () => {
         <CallIncoming
           peerName={peerName}
           status={call.pendingGroup ? groupText : lang('CallStatusIncoming')}
+          handle={call.peerHandle}
+          isContact={call.isPeerContact}
           onAccept={handleAccept}
           onDecline={handleHangup}
+          onReplyWithMessage={call.peerChatId ? handleReplyWithMessage : undefined}
         />
       </div>
     );
@@ -155,6 +236,9 @@ const ParvaneCallOverlay = () => {
   const isSharing = Boolean(call.screenStream);
   const extraControls = (
     <>
+      {canSwitchCamera && (
+        <CallButton icon="icon-flip" label={langNew('ParvaneCallSwitchCamera')} onClick={handleSwitchCamera} />
+      )}
       {output.canChooseOutput && (
         <CallButton
           icon="icon-speaker"
@@ -170,6 +254,9 @@ const ParvaneCallOverlay = () => {
           label={langNew(isSharing ? 'ParvaneCallStopSharing' : 'ParvaneCallShareScreen')}
           onClick={handleToggleScreen}
         />
+      )}
+      {isTimed && call.peerChatId && (
+        <CallButton icon="icon-message" label={langNew('ParvaneCallOpenChat')} onClick={handleOpenChat} />
       )}
     </>
   );
@@ -188,6 +275,8 @@ const ParvaneCallOverlay = () => {
             <CallGroup
               call={call}
               time={time}
+              speakers={speakers}
+              onInvite={group.address ? handleOpenInvite : undefined}
               onToggleMute={handleToggleMute}
               onToggleCamera={handleToggleCamera}
               onHangup={handleHangup}
@@ -207,6 +296,9 @@ const ParvaneCallOverlay = () => {
               extraControls={extraControls}
             />
           )}
+          {isInviteOpen && (
+            <CallInvitePicker candidates={candidates} onChoose={handleInvite} onClose={handleCloseInvite} />
+          )}
           {isOutputOpen && (
             <CallOutputList
               outputs={output.outputs}
@@ -222,6 +314,7 @@ const ParvaneCallOverlay = () => {
           )}
         </div>
       )}
+      {waitingCard}
     </>
   );
 };

@@ -48,6 +48,39 @@ export async function mockCallMedia(context, useSystemPicker = false) {
   }, { useSystemPicker });
 }
 
+// Вторая камера устройства («Сменить камеру», доска `RpCalls`): её картинка — те же красная и зелёная половины,
+// что у показа экрана, поэтому у собеседника её узнаёт `expectSharedScreen`
+export async function mockSecondCamera(context) {
+  await context.addInitScript(() => {
+    const devices = navigator.mediaDevices;
+    const camera = { kind: 'videoinput', deviceId: 'test-camera-2', label: 'Test camera 2', groupId: 'test' };
+    const enumerateDevices = devices.enumerateDevices.bind(devices);
+    // Ровно две камеры: первая настоящая (поддельная Chromium) и эта
+    devices.enumerateDevices = async () => {
+      const list = await enumerateDevices();
+      const first = list.find((device) => device.kind === 'videoinput');
+      return [...list.filter((device) => device.kind !== 'videoinput'), ...(first ? [first] : []), camera];
+    };
+    const getUserMedia = devices.getUserMedia.bind(devices);
+    devices.getUserMedia = async (constraints) => {
+      if (constraints?.video?.deviceId?.exact !== camera.deviceId) return getUserMedia(constraints);
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 180;
+      const drawing = canvas.getContext('2d');
+      const stream = canvas.captureStream(12);
+      const timer = setInterval(() => {
+        if (stream.getVideoTracks()[0].readyState === 'ended') clearInterval(timer);
+        drawing.fillStyle = '#e02020';
+        drawing.fillRect(0, 0, 160, 180);
+        drawing.fillStyle = '#20e020';
+        drawing.fillRect(160, 0, 160, 180);
+      }, 80);
+      return stream;
+    };
+  });
+}
+
 export async function checkCallAudioOutput(page, hasSystemPicker, streams, screenshots = false) {
   await page.getByRole('button', { name: 'Audio output', exact: true }).click();
   if (!hasSystemPicker) {

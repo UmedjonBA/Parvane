@@ -1,5 +1,5 @@
 import { APP_REVISION } from 'virtual:git-info';
-import { memo, useEffect, useMemo } from '../../../lib/teact/teact';
+import { memo, useEffect, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiUser } from '../../../api/types';
@@ -12,6 +12,8 @@ import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
+import { formatFileSize } from '../../../util/textFormat';
+import { fetchStorageUsage, formatBackupDate, getKeysBackupSavedAt } from './profile/profileStatus';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -60,6 +62,13 @@ const SettingsMain = ({
   const { isDesktop } = useAppLayout();
   const colorScheme = useDerivedState(getColorScheme);
   const { states: modules } = useParvaneModules();
+  const [storageUsage, setStorageUsage] = useState<number | undefined>();
+  const keysSavedAt = isActive ? getKeysBackupSavedAt(currentUserId) : undefined;
+
+  useEffect(() => {
+    if (!isActive) return;
+    void fetchStorageUsage().then(setStorageUsage);
+  }, [isActive]);
 
   useEffect(() => {
     if (currentUserId) {
@@ -90,8 +99,10 @@ const SettingsMain = ({
     appearance: `${SCHEME_NAMES[colorScheme]} · ${modeName}`,
     language: lang.languageInfo.nativeName,
     devices: deviceCount ? String(deviceCount) : undefined,
+    keys: keysSavedAt ? formatBackupDate(keysSavedAt, lang.code) : lang('ParvaneKeysBackupNoneShort'),
+    data: storageUsage !== undefined ? formatFileSize(lang, storageUsage) : undefined,
     export: 'ZIP',
-  }), [lang, modules, colorScheme, modeName, deviceCount]);
+  }), [lang, modules, colorScheme, modeName, deviceCount, keysSavedAt, storageUsage]);
 
   if (isDesktop) return <ProfileOverview />;
 

@@ -92,8 +92,17 @@ fn shift(shapes: &mut [Shape], nodes: &[usize], dx: f64, dy: f64) {
     }
 }
 
-/// Раскладывает одну связную группу; после неё левый верхний угол занятого — в нуле. Возвращает размер.
-fn place_group(graph: &Graph, shapes: &mut [Shape], members: &[usize], group_edges: &[(usize, usize)], rng: &mut Rng) -> (f64, f64) {
+/// Раскладывает одну связную группу. Без закреплённых узлов левый верхний угол занятого после неё — в нуле и
+/// возвращается размер; с закреплёнными (`pins` — места по номеру узла) группа остаётся там, где её держат они,
+/// и возвращается `None`.
+fn place_group(
+    graph: &Graph,
+    shapes: &mut [Shape],
+    members: &[usize],
+    group_edges: &[(usize, usize)],
+    pins: &BTreeMap<usize, (f64, f64)>,
+    rng: &mut Rng,
+) -> Option<(f64, f64)> {
     let mut clusters: BTreeMap<&str, usize> = BTreeMap::new();
     let bodies: Vec<Body> = members
         .iter()
@@ -105,7 +114,11 @@ fn place_group(graph: &Graph, shapes: &mut [Shape], members: &[usize], group_edg
             Body { r: s.r, half_w: s.r.max(s.label_w / 2.0) + PAD, half_h: s.r + label + PAD, label_w: s.label_w, degree: s.degree, cluster }
         })
         .collect();
-    let places = force::run(&bodies, group_edges, rng);
+    let fixed: Vec<Option<(f64, f64)>> = members.iter().map(|i| pins.get(i).copied()).collect();
+    // Закреплённая группа начинает с прежних мест (раскладки без закрепления): сдвигается только то, что тянет
+    // переставленная точка
+    let start: Option<Vec<(f64, f64)>> = (!pins.is_empty()).then(|| members.iter().map(|&i| (shapes[i].x, shapes[i].y)).collect());
+    let places = force::run(&bodies, group_edges, &fixed, start.as_deref(), rng);
     let mut part: Vec<Shape> = members.iter().zip(&places).map(|(&i, &(x, y))| Shape { x, y, ..shapes[i].clone() }).collect();
     let mut adj = vec![Vec::new(); part.len()];
     for &(a, b) in group_edges {
@@ -113,13 +126,28 @@ fn place_group(graph: &Graph, shapes: &mut [Shape], members: &[usize], group_edg
         adj[b].push(a);
     }
     labels::choose_sides(&mut part, &adj);
-    separate::run(&mut part);
+    let is_fixed: Vec<bool> = fixed.iter().map(Option::is_some).collect();
+    separate::run(&mut part, &is_fixed);
     for (&i, shape) in members.iter().zip(part) {
         shapes[i] = shape;
     }
+    if is_fixed.contains(&true) {
+        return None;
+    }
     let all = union_of(shapes, members);
     shift(shapes, members, -all.x0, -all.y0);
-    (all.x1 - all.x0, all.y1 - all.y0)
+    Some((all.x1 - all.x0, all.y1 - all.y0))
+}
+
+/// Закреплённые узлы входа по номеру узла графа: только узлы этого графа и только конечные места.
+fn pins_of(input: &Input, graph: &Graph) -> BTreeMap<usize, (f64, f64)> {
+    let index: BTreeMap<&str, usize> = graph.nodes.iter().enumerate().map(|(i, node)| (node.id.as_str(), i)).collect();
+    input
+        .pinned
+        .iter()
+        .filter(|pin| pin.x.is_finite() && pin.y.is_finite())
+        .filter_map(|pin| index.get(pin.id.as_str()).map(|&i| (i, (pin.x.round(), pin.y.round()))))
+        .collect()
 }
 
 pub(crate) fn layout(input: &Input) -> GraphOut {
@@ -152,10 +180,14 @@ pub(crate) fn layout(input: &Input) -> GraphOut {
     }
     let (group_edges, _) = edges_by_group(&groups, count, &graph.edges);
     let mut rng = Rng::new(if input.seed.is_finite() && input.seed > 0.0 { input.seed as u64 } else { 0 });
-    let mut sized: Vec<(Vec<usize>, f64, f64)> = Vec::with_capacity(groups.len());
-    for (members, own_edges) in groups.into_iter().zip(&group_edges) {
-        let (w, h) = place_group(&graph, &mut shapes, &members, own_edges, &mut rng);
-        sized.push((members, w, h));
+    let pins = pins_of(input, &graph);
+    // Сначала — раскладка без закрепления: она задаёт систему координат (ту, в которой клиент ставил точки) и места
+    // свободных блоков, которые поэтому остаются там, где их видели
+    let no_pins = BTreeMap::new();
+    let mut sized: Vec<(Vec<usize>, f64, f64, usize)> = Vec::with_capacity(groups.len());
+    for (g, (members, own_edges)) in groups.into_iter().zip(&group_edges).enumerate() {
+        let (w, h) = place_group(&graph, &mut shapes, &members, own_edges, &no_pins, &mut rng).unwrap_or((0.0, 0.0));
+        sized.push((members, w, h, g));
     }
     // Высокие группы первыми: полки выходят плотнее; при равных — порядок входа
     sized.sort_by(|a, b| b.2.total_cmp(&a.2));
@@ -177,19 +209,16 @@ pub(crate) fn layout(input: &Input) -> GraphOut {
     let (single_places, _, _) = pack::shelves(&single_sizes, width, SINGLE_GAP);
     let singles_top = if sized.is_empty() { 0.0 } else { groups_height + BLOCK_GAP };
 
-    let mut members: Vec<Vec<usize>> = Vec::with_capacity(sized.len() + 1);
-    for ((nodes, _, _), &(x, y)) in sized.into_iter().zip(&group_places) {
+    let mut members: Vec<Vec<usize>> = Vec::with_capacity(sized.len() + 2);
+    let mut group_ids: Vec<usize> = Vec::with_capacity(sized.len());
+    for ((nodes, _, _, g), &(x, y)) in sized.into_iter().zip(&group_places) {
         shift(&mut shapes, &nodes, x, y);
         members.push(nodes);
+        group_ids.push(g);
     }
     for (&i, &(x, y)) in singles.iter().zip(&single_places) {
         shift(&mut shapes, &[i], x, y + singles_top);
     }
-    let group_blocks = members.len();
-    if !singles.is_empty() {
-        members.push(singles);
-    }
-
     // Целые места; левый верхний угол всего поля — в нуле
     for s in &mut shapes {
         s.x = s.x.round();
@@ -198,7 +227,66 @@ pub(crate) fn layout(input: &Input) -> GraphOut {
     let everything: Vec<usize> = (0..count).collect();
     let all = union_of(&shapes, &everything);
     shift(&mut shapes, &everything, -all.x0.floor(), -all.y0.floor());
+
+    // Закреплённые: группа с закреплёнными узлами раскладывается заново вокруг них, закреплённая одиночка встаёт на
+    // своё место отдельным блоком. Свободный блок, на который они легли, уходит под всё занятое
+    let mut anchored: Vec<usize> = Vec::new();
+    if !pins.is_empty() {
+        let mut pinned_rng = Rng::new(if input.seed.is_finite() && input.seed > 0.0 { input.seed as u64 } else { 0 });
+        for (b, nodes) in members.iter().enumerate() {
+            if nodes.iter().any(|i| pins.contains_key(i)) {
+                let own_edges = &group_edges[group_ids[b]];
+                place_group(&graph, &mut shapes, nodes, own_edges, &pins, &mut pinned_rng);
+                anchored.push(b);
+            }
+        }
+        singles.retain(|&i| match pins.get(&i) {
+            Some(&(x, y)) => {
+                shapes[i].x = x;
+                shapes[i].y = y;
+                anchored.push(members.len());
+                members.push(vec![i]);
+                false
+            }
+            None => true,
+        });
+        for s in &mut shapes {
+            s.x = s.x.round();
+            s.y = s.y.round();
+        }
+    }
+    let group_blocks = members.len();
+    if !singles.is_empty() {
+        members.push(singles);
+    }
+    if !anchored.is_empty() {
+        // Свободный блок, на чьи узлы легли закреплённые, не уезжает целиком: его узлы отходят от закреплённых тем же
+        // снятием наложений (закреплённые стоят), остальное — на прежних местах
+        let pinned_nodes: Vec<usize> = anchored.iter().flat_map(|&b| members[b].iter().copied()).collect();
+        let taken: Vec<Rect> = pinned_nodes.iter().map(|&i| shapes[i].bounds()).collect();
+        for b in 0..members.len() {
+            if anchored.contains(&b) {
+                continue;
+            }
+            let hit = members[b].iter().any(|&i| {
+                let r = shapes[i].bounds();
+                taken.iter().any(|t| r.x0 < t.x1 && t.x0 < r.x1 && r.y0 < t.y1 && t.y0 < r.y1)
+            });
+            if !hit {
+                continue;
+            }
+            let nodes: Vec<usize> = members[b].iter().chain(&pinned_nodes).copied().collect();
+            let mut part: Vec<Shape> = nodes.iter().map(|&i| shapes[i].clone()).collect();
+            let fixed: Vec<bool> = (0..nodes.len()).map(|k| k >= members[b].len()).collect();
+            separate::run(&mut part, &fixed);
+            for (&i, shape) in members[b].iter().zip(part) {
+                shapes[i] = Shape { x: shape.x.round(), y: shape.y.round(), ..shape };
+            }
+        }
+    }
+    // С закреплёнными угол поля — где придётся (`bounds.x`, `bounds.y`): места заданы клиентом
     let all = union_of(&shapes, &everything);
+    let (left, top) = (all.x0.floor(), all.y0.floor());
 
     let mut block_of = vec![0usize; count];
     let mut blocks = Vec::with_capacity(members.len());
@@ -232,5 +320,5 @@ pub(crate) fn layout(input: &Input) -> GraphOut {
             }
         })
         .collect();
-    GraphOut { nodes, edges, blocks, bounds: BoundsOut { x: 0, y: 0, w: int(all.x1.ceil()), h: int(all.y1.ceil()) }, folders, tags }
+    GraphOut { nodes, edges, blocks, bounds: BoundsOut { x: int(left), y: int(top), w: int(all.x1.ceil() - left), h: int(all.y1.ceil() - top) }, folders, tags }
 }

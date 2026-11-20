@@ -352,7 +352,13 @@ async fn v2_identity_live() {
         let token = ok_of::<ipb::SessionIssueResponse>(issue, "v2-issue", &mut f).map(|r| r.token).unwrap_or_default();
         f.check("v2-issue-token", !token.is_empty(), "");
         let bad = c.call("identity.session.issue", ipb::SessionIssueRequest { login: user.clone(), password: "wrong-Pass-1".into(), device_id: "d1".into(), ..Default::default() }.encode_to_vec());
-        f.check("v2-issue-wrong-password", bad == Err(ErrorCode::Forbidden), &bad);
+        // spec 041: неверный пароль — ответ без токена с признаком и счётчиком попыток, а не FORBIDDEN
+        let bad = bad.map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap_or_default());
+        f.check(
+            "v2-issue-wrong-password",
+            matches!(&bad, Ok(r) if r.password_wrong && r.token.is_empty() && r.attempts_left > 0),
+            &bad,
+        );
         c.send(frame::Kind::Auth(Auth { token }));
         f.check("v2-auth", matches!(c.recv().and_then(|x| x.kind), Some(frame::Kind::AuthOk(_))), "");
 

@@ -126,7 +126,7 @@
       }
     },
     {
-      "name": "грант: ключи состояния и доставки на сервере новее — берутся серверные, остальное своё",
+      "name": "грант: ключи состояния и доставки на сервере новее — берутся серверные, остальное своё; вытесненный свой ключ состояния — в прежние (`fsk`)",
       "own": {
         "grant": "eyJzc2siOiJmZiIsImxvZyI6IjAxIiwic2siOiJhYSIsInNrdiI6MSwiZGsiOiJkMSIsImdlbiI6MX0="
       },
@@ -134,7 +134,19 @@
         "grant": "eyJzc2siOiJlZSIsImxvZyI6IjAyIiwic2siOiJiYiIsInNrdiI6MiwiZGsiOiJkMiIsImdlbiI6M30="
       },
       "merged": {
-        "grant": "eyJzc2siOiJmZiIsImxvZyI6IjAxIiwic2siOiJiYiIsInNrdiI6MiwiZGsiOiJkMiIsImdlbiI6M30="
+        "grant": "eyJzc2siOiJmZiIsImxvZyI6IjAxIiwic2siOiJiYiIsInNrdiI6MiwiZGsiOiJkMiIsImdlbiI6MywiZnNrIjpbeyJrIjoiYWEiLCJ2IjoxfV19"
+      }
+    },
+    {
+      "name": "грант: прежние ключи состояния (`fsk`) — объединение обеих копий, новые сначала",
+      "own": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiY2MiLCJza3YiOjMsImZzayI6W3siayI6ImFhIiwidiI6MX1dLCJkayI6ImQxIiwiZ2VuIjoxfQ=="
+      },
+      "server": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiY2MiLCJza3YiOjMsImZzayI6W3siayI6ImJiIiwidiI6Mn0seyJrIjoiYWEiLCJ2IjoxfV0sImRrIjoiZDEiLCJnZW4iOjF9"
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiY2MiLCJza3YiOjMsImZzayI6W3siayI6ImJiIiwidiI6Mn0seyJrIjoiYWEiLCJ2IjoxfV0sImRrIjoiZDEiLCJnZW4iOjF9"
       }
     },
     {

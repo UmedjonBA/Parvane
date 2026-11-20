@@ -1,4 +1,5 @@
 import '../../global/actions/all';
+import './parvaneDiagHooks';
 
 import {
   beginHeavyAnimation,
@@ -70,6 +71,7 @@ import { callApi } from '../../api/gramjs';
 import { getCurrentTrack, getMusicPlayer } from '../parvane/music/musicPlayer';
 import { getIsMusicPlayerOpen } from '../parvane/music/musicPlayerView';
 import { getActiveModule } from './parvaneModuleNav';
+import useAutoLock from './useAutoLock';
 
 import useInterval from '../../hooks/schedulers/useInterval';
 import useTimeout from '../../hooks/schedulers/useTimeout';
@@ -95,6 +97,7 @@ import StickerSetModal from '../common/StickerSetModal.async';
 import UnreadCount from '../common/UnreadCounter';
 import LeftColumn from '../left/LeftColumn';
 import MediaViewer from '../mediaViewer/MediaViewer.async';
+import MessageNoteDialog from '../middle/message/MessageNoteDialog';
 import ReactionPicker from '../middle/message/reactions/ReactionPicker.async';
 import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
@@ -117,7 +120,6 @@ import FoldersSidebar from './FoldersSidebar';
 import ForwardRecipientPicker from './ForwardRecipientPicker.async';
 import HistoryCalendar from './HistoryCalendar.async';
 import NewContactModal from './NewContactModal.async';
-import ParvaneBugReportModal from './ParvaneBugReportModal';
 import ParvaneSystemHost from './ParvaneSystemHost';
 import ParvaneTabBar from './ParvaneTabBar';
 import PremiumLimitReachedModal from './premium/common/PremiumLimitReachedModal.async';
@@ -883,6 +885,8 @@ const Main = ({
   useBackgroundMode(handleBlur, handleFocus, IS_TAURI);
   useBeforeUnload(handleBlur);
   usePreventPinchZoomGesture(isMediaViewerOpen || isStoryViewerOpen);
+  // Parvane (spec 041): автоблокировка и Ctrl+L при заданном PIN
+  useAutoLock();
 
   return (
     <div
@@ -907,6 +911,7 @@ const Main = ({
       {isMusicPlayerOpen && <MusicPlayerScreen />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
+      <MessageNoteDialog />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}
       <ParvanePalette />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
@@ -936,7 +941,6 @@ const Main = ({
         isByPhoneNumber={newContactByPhoneNumber}
       />
       <DownloadManager />
-      <ParvaneBugReportModal />
       <ConfettiContainer />
       {IS_WAVE_TRANSFORM_SUPPORTED && <WaveContainer />}
       <SnapEffectContainer />

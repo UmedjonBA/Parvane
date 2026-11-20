@@ -166,6 +166,7 @@ function getSummaryDescription(
     article,
     musicTrack,
     musicPlaylist,
+    cloudInvite,
     modReport,
   } = mediaContent;
   const { poll } = statefulContent || {};
@@ -291,6 +292,10 @@ function getSummaryDescription(
 
   if (musicPlaylist) {
     summary = lang('MusicPlaylistSummary', { name: musicPlaylist.name });
+  }
+
+  if (cloudInvite) {
+    summary = cloudInvite.text;
   }
 
   if (modReport) {

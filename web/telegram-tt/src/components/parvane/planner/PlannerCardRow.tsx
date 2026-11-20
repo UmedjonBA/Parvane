@@ -14,6 +14,9 @@ import PlannerRepeatFields, { draftToRepeat } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
 
+// Форма карточки записи: «Сохранить» в шапке телефона отправляет её атрибутом `form` (доска `PhPlanMore`)
+export const PLANNER_SIDE_FORM_ID = 'planner-side-form';
+
 type RowProps = {
   icon: IconName;
   // Метка строки для сценариев: `data-card-row`

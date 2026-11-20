@@ -3,7 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
-import type { ApiBirthday, ApiUsername } from '../../../api/types';
+import type { ApiBirthday, ApiPhoto, ApiUsername } from '../../../api/types';
 import { ApiMediaFormat } from '../../../api/types';
 import { ProfileEditProgress } from '../../../types';
 
@@ -16,6 +16,7 @@ import { throttle } from '../../../util/schedulers';
 import { callApi } from '../../../api/gramjs';
 import { buildParvaneUserLink } from '../../common/helpers/formatUsername';
 import renderText from '../../common/helpers/renderText';
+import { setProfileSaveHandler } from './profile/profileRequests';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -28,12 +29,11 @@ import ManageUsernames from '../../common/ManageUsernames';
 import ChatOrUserPicker from '../../common/pickers/ChatOrUserPicker';
 import Island, { IslandDescription, IslandOutside, IslandTitle } from '../../gili/layout/Island';
 import Surface from '../../gili/layout/Surface';
-import UsernameChangeModal from '../../parvane/rename/UsernameChangeModal';
 import AvatarEditable from '../../ui/AvatarEditable';
-import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
+import ProfileNickChange from './account/ProfileNickChange';
 
 type OwnProps = {
   isActive: boolean;
@@ -42,6 +42,7 @@ type OwnProps = {
 
 type StateProps = {
   currentAvatarHash?: string;
+  currentAvatarPhotoId?: string;
   currentFirstName?: string;
   currentLastName?: string;
   currentBirthday?: ApiBirthday;
@@ -82,6 +83,7 @@ const ERROR_FIRST_NAME_MISSING = 'Please provide your first name';
 const SettingsEditProfile = ({
   isActive,
   currentAvatarHash,
+  currentAvatarPhotoId,
   currentFirstName,
   currentLastName,
   currentBirthday,
@@ -103,6 +105,7 @@ const SettingsEditProfile = ({
     loadCurrentUser,
     updateProfile,
     openBirthdaySetupModal,
+    deleteProfilePhoto,
   } = getActions();
 
   const oldLang = useOldLang();
@@ -129,10 +132,6 @@ const SettingsEditProfile = ({
   const [isChannelPickerOpen, setIsChannelPickerOpen] = useState(false);
   const [channelSearch, setChannelSearch] = useState('');
   const readOnlyUsername = usernames?.[0]?.username;
-  // Смена ника (spec 026) — отдельным окном: нужен пароль и ключ восстановления
-  const [isRenameOpen, setIsRenameOpen] = useState(false);
-  const openRename = useLastCallback(() => setIsRenameOpen(true));
-  const closeRename = useLastCallback(() => setIsRenameOpen(false));
 
   const currentAvatarBlobUrl = useMedia(currentAvatarHash, false, ApiMediaFormat.BlobUrl);
 
@@ -251,6 +250,11 @@ const SettingsEditProfile = ({
     openBirthdaySetupModal({ currentBirthday });
   });
 
+  const handleAvatarRemove = useLastCallback(() => {
+    // Фото у аккаунта одно: провайдер снимает его по идентификатору текущего (`deleteProfilePhotos`)
+    deleteProfilePhoto({ photo: { id: currentAvatarPhotoId! } as ApiPhoto });
+  });
+
   const handleProfileSave = useLastCallback(() => {
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
@@ -284,8 +288,20 @@ const SettingsEditProfile = ({
     });
   });
 
+  // «Готово» шапки: есть что сохранить — сохранить, иначе назад
+  const handleDone = useLastCallback(() => {
+    if (isSaveButtonShown && !isLoading) handleProfileSave();
+    else onReset();
+  });
+
+  useEffect(() => {
+    if (!isActive) return undefined;
+    setProfileSaveHandler(handleDone);
+    return () => setProfileSaveHandler(undefined);
+  }, [isActive, handleDone]);
+
   return (
-    <div className="settings-fab-wrapper">
+    <div className="settings-fab-wrapper" data-edit-profile data-dirty={isSaveButtonShown ? '' : undefined}>
       <Surface scrollable className="settings-content no-border">
         <IslandOutside className="settings-content-header">
           <AvatarEditable
@@ -294,6 +310,11 @@ const SettingsEditProfile = ({
             title={lang('AriaSettingsEditProfilePhoto')}
             disabled={isLoading}
           />
+          {currentAvatarPhotoId && !photo && (
+            <button type="button" className="parvane-avatar-remove" data-avatar-remove onClick={handleAvatarRemove}>
+              {lang('ParvaneProfileRemovePhoto')}
+            </button>
+          )}
         </IslandOutside>
         <Island>
           <div className="settings-input">
@@ -323,6 +344,17 @@ const SettingsEditProfile = ({
         <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
           {renderText(oldLang('lng_settings_about_bio'), ['br', 'simple_markdown'])}
         </IslandDescription>
+
+        {/* Parvane (spec 041, `XpProfile`): ник — своим блоком, смена (spec 026) с паролем и ключом восстановления */}
+        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang('Username')}</IslandTitle>
+        <ProfileNickChange currentNick={readOnlyUsername} />
+        {readOnlyUsername && (
+          <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+            {oldLang('lng_username_link')}
+            <br />
+            <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
+          </IslandDescription>
+        )}
 
         <Island>
           <ListItem
@@ -404,33 +436,6 @@ const SettingsEditProfile = ({
           onClose={() => setIsChannelPickerOpen(false)}
         />
 
-        {/* Parvane: username — ник из адреса, не редактируется (сервер его не хранит) */}
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang('Username')}</IslandTitle>
-        <Island>
-          <div className="settings-input">
-            <InputText
-              value={readOnlyUsername ? `@${readOnlyUsername}` : ''}
-              label={oldLang('Username')}
-              readOnly
-            />
-          </div>
-        </Island>
-        {readOnlyUsername && (
-          <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-            {oldLang('lng_username_link')}
-            <br />
-            <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
-          </IslandDescription>
-        )}
-        {readOnlyUsername && (
-          <Island>
-            <div data-rename-open>
-              <ListItem icon="edit" onClick={openRename}>{lang('ParvaneChangeUsername')}</ListItem>
-            </div>
-          </Island>
-        )}
-        <UsernameChangeModal isOpen={isRenameOpen} currentNick={readOnlyUsername} onClose={closeRename} />
-
         {shouldRenderUsernamesManage && (
           <ManageUsernames
             usernames={usernames}
@@ -439,14 +444,6 @@ const SettingsEditProfile = ({
         )}
       </Surface>
 
-      <FloatingActionButton
-        isShown={isSaveButtonShown}
-        onClick={handleProfileSave}
-        disabled={isLoading}
-        ariaLabel={oldLang('Save')}
-        iconName="check"
-        isLoading={isLoading}
-      />
     </div>
   );
 };
@@ -476,6 +473,7 @@ export default memo(withGlobal<OwnProps>(
 
     return {
       currentAvatarHash,
+      currentAvatarPhotoId: currentUser?.avatarPhotoId,
       currentFirstName,
       currentLastName,
       currentBirthday: currentUserFullInfo?.birthday,

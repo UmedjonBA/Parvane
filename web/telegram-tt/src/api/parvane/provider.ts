@@ -5,6 +5,7 @@
 import type { ExportSnapshot, ExportSourceChat } from '../../components/parvane/export/exportModel';
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { SendMessageParams, ThreadReadState } from '../../types';
+import type { RegularLangFnParameters } from '../../util/localization/types';
 import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
 import type {
   ApiAppConfig,
@@ -72,11 +73,12 @@ import {
   saveLoginAddress,
   touchSessionActivity,
 } from './authStorage';
-import { createCallController } from './calls';
+import { type CallAction, createCallController } from './calls';
 import { createCloudDrive } from './cloudDrive';
 import { buildComposerWebPage } from './composerWebPage';
 import {
-  AccountDeletionPendingError, canonicalAddress, createConnectionController, TwoFactorRequiredError,
+  AccountDeletionPendingError, canonicalAddress, createConnectionController, PasswordRejectedError,
+  TwoFactorRequiredError,
 } from './connectionController';
 import { contactNameOverride, withContactName, withContactNote } from './contactInfo';
 import { wipeAccountFromDevice } from './deviceWipe';
@@ -1745,6 +1747,17 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
 const ACCOUNT_DELETE_RELOAD_MS = 4000;
 
 /** spec 027: аккаунт ждёт удаления — экран пароля с датой и кнопкой «Восстановить аккаунт» */
+// spec 041: неверный пароль со счётчиком попыток, а после серии неудач — сколько ждать (минуты, вверх)
+function buildPasswordRejectedKey({ attemptsLeft, lockedMs }: PasswordRejectedError): RegularLangFnParameters {
+  if (lockedMs > 0) {
+    const minutes = Math.max(1, Math.ceil(lockedMs / 60000));
+    return { key: 'ParvaneLoginLocked', variables: { count: minutes }, options: { pluralValue: minutes } };
+  }
+  return {
+    key: 'ParvaneLoginAttemptsLeft', variables: { count: attemptsLeft }, options: { pluralValue: attemptsLeft },
+  };
+}
+
 function reportDeletionPending(user: string, password: string, deletionAtMs: number) {
   pendingLoginAddress = user;
   pendingLoginPassword = password;
@@ -4061,6 +4074,23 @@ const methods = {
     return { result: 'ok', address: out.address };
   },
 
+  // spec 041 (`XpProfile`): «Свободен» под полем ника до смены. Занят — сервер знает такой адрес (профиль
+  // находится); прежние ники и имена публичных групп сервер проверит при самой смене
+  async parvaneCheckNick({ nick }: { nick: string }): Promise<'free' | 'taken' | 'own' | 'invalid' | 'unknown'> {
+    const clean = nick.trim().replace(/^@/, '').toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_.-]{1,63}$/.test(clean)) return 'invalid';
+    const address = `${clean}@${store.self.split('@')[1] || ''}`;
+    if (store.canonicalAddress(address) === store.self) return 'own';
+    if (!connection) return 'unknown';
+    try {
+      const response = await connection.request(TOPIC_IDENTITY_RESOLVE, JSON.stringify({ usernames: [address] }));
+      const users = (JSON.parse(response) as { users?: WireUserInfo[] }).users || [];
+      return users.some((user) => user.username === address) ? 'taken' : 'free';
+    } catch {
+      return 'unknown';
+    }
+  },
+
   // spec 027: удалить аккаунт (7 дней отсрочки). После ответа UI выходит; сессии закрывает сервер
   async parvaneDeleteAccount({ password }: { password: string }) {
     const out = await v2Controller.deleteAccount(password);
@@ -4569,6 +4599,11 @@ const methods = {
     return Promise.resolve(callController.toggleCamera());
   },
 
+  // Действия звонка по макету (spec 041): участники для «Позвать», приглашение, смена камеры, карточка поверх звонка
+  parvaneCallAction({ action, address }: { action: CallAction; address?: string }) {
+    return Promise.resolve(callController.act(action, address));
+  },
+
   // ── логин через штатные Auth-экраны ────────────────────────────────────────
   // «Телефон» = ник (сервер дополняет до ник@домен) или полный адрес
   // user@server; дальше нативный экран пароля
@@ -4863,7 +4898,11 @@ const methods = {
       // Повторный WaitPassword сбрасывает auth.isLoading, чтобы форма дала
       // ввести пароль ещё раз
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
-      sendUpdate({ '@type': 'updateAuthorizationError', errorKey: { key: 'ErrorIncorrectPassword' } });
+      sendUpdate({
+        '@type': 'updateAuthorizationError',
+        errorKey: err instanceof PasswordRejectedError
+          ? buildPasswordRejectedKey(err) : { key: 'ErrorIncorrectPassword' },
+      });
     }
   },
 

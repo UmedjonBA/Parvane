@@ -91,11 +91,9 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
     await expect(page.locator('.AvatarEditable img')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   }
 
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  // Сохранение завершилось: FAB теряет класс revealed после сброса
-  // touched-состояния (скрывается через CSS, не через display)
-  await expect(page.getByRole('button', { name: 'Save', exact: true }))
-    .not.toHaveClass(/revealed/, { timeout: LOGIN_TIMEOUT_MS });
+  // «Готово» в шапке (spec 041, `XpProfile`): сохранение завершилось, когда экран снял отметку несохранённого
+  await page.locator('[data-profile-done]:visible').click();
+  await expect(page.locator('[data-edit-profile][data-dirty]')).toHaveCount(0, { timeout: LOGIN_TIMEOUT_MS });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   // «Keep me signed in» включён по умолчанию — после reload сессия

@@ -928,8 +928,20 @@ function buildMessageContent(
       return { text: { text: content.text || (content.accepted ? '✅' : '❌') } };
     // spec 016 (CLOUD-1): приглашение в совместную папку — текстом; принять
     // его можно в разделе «Облако» («Доступные мне»)
-    case 'cloud_invite':
-      return { text: { text: content.text || `📁 ${content.name || ''}` } };
+    case 'cloud_invite': {
+      const text = content.text || `📁 ${content.name || ''}`;
+      return content.container?.id
+        ? {
+          cloudInvite: {
+            mediaType: 'cloudInvite',
+            containerId: b64ToHex(content.container.id),
+            name: content.name || '',
+            isEditor: content.role === 2 || undefined,
+            text,
+          },
+        }
+        : { text: { text } };
+    }
     // TRACK-1: трек «Музыки» — карточка; играет, если библиотека — на сервере этого аккаунта
     case 'music_track':
       return content.track_id

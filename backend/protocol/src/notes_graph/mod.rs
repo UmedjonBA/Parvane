@@ -49,6 +49,15 @@ pub struct RecordIn {
     pub kind: String,
 }
 
+/// Закреплённый узел: id и место центра.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct PinIn {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
 /// Область графа.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -96,6 +105,9 @@ pub struct Input {
     pub char_width: Option<f64>,
     pub label_max_width: Option<f64>,
     pub label_height: Option<f64>,
+    /// Закреплённые узлы (spec 040 T10): точки, переставленные руками, стоят ровно здесь (центр узла в
+    /// координатах прошлого ответа); их связная группа раскладывается вокруг них и в упаковке не двигается.
+    pub pinned: Vec<PinIn>,
     /// Холст: размер карточки, просвет и шаг сетки.
     pub card_width: Option<f64>,
     pub card_height: Option<f64>,

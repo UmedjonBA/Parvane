@@ -154,6 +154,26 @@
   flex: 1 1 auto;
 }
 
+// Дерево папок диска под «Моим диском» (доска `XdFiles`); на телефоне его нет
+.navTree {
+  overflow-y: auto;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-height: 0;
+}
+
+.navFolder {
+  height: 2.25rem;
+  color: var(--pv-muted);
+}
+
+.navFolder.navItemOn {
+  color: var(--pv-fg);
+}
+
 // ── занятое место ────────────────────────────────────────────────────────────
 
 .usage {

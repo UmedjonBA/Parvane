@@ -82,6 +82,29 @@
   color: var(--pv-red);
 }
 
+// «Отменить» у ждущего ответа приглашения (доска `PhFilesMore`)
+.textDanger {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  padding: 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius-xs);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-red);
+
+  background: none;
+
+  &:hover:not(:disabled),
+  &:focus-visible {
+    background: var(--pv-hover);
+    outline: none;
+  }
+}
+
 // ── меню файла ───────────────────────────────────────────────────────────────
 
 .menuFacts {
@@ -304,6 +327,90 @@
   color: var(--pv-muted);
 }
 
+// Перенос шагами (телефон, доска `XpFiles`): строка — выбор, стрелка справа — внутрь папки
+.moveStepRow {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.moveStepPick {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.moveStepText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.moveStepOpen {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 3rem;
+  border: 0;
+
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+    outline: none;
+  }
+}
+
+// «Новая папка» строкой под папками шага
+.moveNewRow {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border: 0;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent);
+  text-align: start;
+
+  background: none;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--pv-hover);
+    outline: none;
+  }
+}
+
+// Название новой папки прямо в окне переноса
+.moveNameForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.moveNameInput {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.moveNameError {
+  flex-basis: 100%;
+}
+
 // ── ссылка для людей без аккаунта ────────────────────────────────────────────
 
 .link {
@@ -404,6 +511,24 @@
 
 .shareRole {
   flex: 1 1 10rem;
+}
+
+// «Ник собеседника» и «Из контактов» (доска `PhFilesMore`)
+.shareNick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.shareNickRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.shareNickInput {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .members {

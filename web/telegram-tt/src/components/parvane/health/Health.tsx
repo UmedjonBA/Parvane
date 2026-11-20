@@ -82,6 +82,8 @@ const Health = () => {
   const water = view?.metrics.find((metric) => metric.kind === WATER_KIND);
   const mood = view?.metrics.find((metric) => metric.kind === MOOD_KIND);
   const isEmpty = Boolean(view) && !view.recent.length && !view.metrics.length;
+  // Первое открытие — отдельным экраном вместо сводки (доски `ZpHealthX`, `ZdHealthX`); строка ввода — в нём
+  const isFirst = isEmpty && !isFirstDone && !detailKind;
   const shownRecent = view?.recent.filter((entry) => !hiddenKinds.includes(entry.kind));
 
   const addMark = useLastCallback((kind: 'sleep_start' | 'sleep_end') => {
@@ -141,11 +143,19 @@ const Health = () => {
       }
       return <PvEmpty text={lang(STATUS_KEYS[status])} data-health-status={status} />;
     }
+    if (isFirst) {
+      return (
+        <HealthFirst
+          blocks={blocks}
+          request={quickRequest}
+          onExample={handleExample}
+          onRequestHandled={handleRequestHandled}
+          onDone={handleFirstDone}
+        />
+      );
+    }
     return (
       <>
-        {isEmpty && !isFirstDone && (
-          <HealthFirst blocks={blocks} onExample={handleExample} onDone={handleFirstDone} />
-        )}
         <div className={styles.grid}>
           {blocks.includes('sleep') && (
             <HealthSleepCard
@@ -205,13 +215,18 @@ const Health = () => {
         <div className={styles.headerTitle}>
           <h1 className={styles.title}>{lang('PlannerHealth')}</h1>
           <div className={buildClassName(kit.muted, kit.small)}>
-            {view && formatDate(lang.code, new Date(`${view.today}T12:00:00`), DATE_FORMAT)}
+            {isFirst ? lang('HealthFirstSubtitle')
+              : view && formatDate(lang.code, new Date(`${view.today}T12:00:00`), DATE_FORMAT)}
           </div>
         </div>
-        <div className={styles.headerQuick}>
-          <HealthQuickInput request={quickRequest} onRequestHandled={handleRequestHandled} />
-        </div>
-        <button type="button" className={kit.btn} onClick={handleOpenBlocks}>{lang('HealthBlocks')}</button>
+        {!isFirst && (
+          <div className={styles.headerQuick}>
+            <HealthQuickInput request={quickRequest} onRequestHandled={handleRequestHandled} />
+          </div>
+        )}
+        {!isFirst && (
+          <button type="button" className={kit.btn} onClick={handleOpenBlocks}>{lang('HealthBlocks')}</button>
+        )}
       </header>
       {view && status === 'offline' && <PvOfflineBar text={lang('PvOfflineHealth')} onRetry={retryHealth} />}
       {view && status !== 'ready' && status !== 'offline' && (

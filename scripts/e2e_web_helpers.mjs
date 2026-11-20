@@ -76,7 +76,14 @@ export async function openSettingsScreen(page, name) {
     return;
   }
   await profileRow(page, parent).click();
-  await page.locator('#Settings .Transition_slide-active').getByText(name, { exact: true }).first().click();
+  const screen = page.locator('#Settings .Transition_slide-active');
+  // «Фон чатов» — переключатель «По умолчанию / Рисунок / Своя картинка»: экран выбора открывает «Рисунок»
+  if (name === 'Chat background') {
+    await screen.locator('[data-appearance-row="background"]').getByRole('button', { name: 'Pattern', exact: true })
+      .click();
+    return;
+  }
+  await screen.getByText(name, { exact: true }).first().click();
 }
 
 // К списку чатов из «Профиля» (кнопка `Chats`) и из поиска или контактов (стрелка «назад» в шапке)
@@ -115,6 +122,13 @@ export async function openEditProfile(page) {
   await page.locator('[data-profile-edit]:visible').first().click();
   await page.locator('#Settings').getByLabel('First name (required)')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// «Готово» в шапке «Изменить профиль» (spec 041, `XpProfile`): сохраняет и ждёт, пока экран перестанет помнить
+// несохранённое (`data-dirty` снимается после ответа сервера)
+export async function saveEditProfile(page) {
+  await page.locator('[data-profile-done]:visible').click();
+  await page.locator('[data-edit-profile][data-dirty]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 }
 
 // Экран «Плана»: `today` — вид «День», `calendar` — сетка в виде, который устройство запомнило (по умолчанию

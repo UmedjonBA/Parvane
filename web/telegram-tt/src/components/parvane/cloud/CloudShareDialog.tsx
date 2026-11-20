@@ -41,6 +41,9 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 const USER_CHAT_TYPES = ['users'] as const;
 const SHARE_ROLES: ShareRole[] = ['reader', 'editor'];
 const AVATAR_TONES = ['orange', 'purple', 'red', 'aqua', 'green'];
+// Пока окно открыто и есть ждущие ответа — их список перечитывается (получатель принимает у себя)
+const PENDING_POLL_MS = 5000;
+const NO_PENDING: string[] = [];
 
 function nameOf(address: string) {
   return peerLabel(address);
@@ -48,6 +51,14 @@ function nameOf(address: string) {
 
 function initialOf(name: string) {
   return (Array.from(name)[0] || '').toUpperCase();
+}
+
+/** Адрес из поля «Ник собеседника»: `@nick` — свой сервер, `nick@сервер` — как есть; пусто — `undefined`. */
+function addressOfNick(text: string, selfDomain?: string) {
+  const nick = text.trim().replace(/^@/, '');
+  if (!nick || /\s/.test(nick)) return undefined;
+  if (nick.includes('@')) return nick;
+  return selfDomain ? `${nick}@${selfDomain}` : undefined;
 }
 
 // Шторка доступа к совместной папке: создание, участники и их права «Просмотр / Правка» (владелец),
@@ -66,7 +77,13 @@ const CloudShareDialog = ({
   const [isBusy, markBusy, unmarkBusy] = useFlag();
   const [isPickerOpen, openPicker, closePicker] = useFlag();
   const [confirm, setConfirm] = useState<'remove' | 'leave' | 'private'>();
+  // Есть ли текст в поле ника (само поле — без привязки к состоянию, значение читается из него)
+  const [hasNick, setHasNick] = useState(false);
+  const [nickError, setNickError] = useState<string>();
+  // Приглашённые, ещё не принявшие приглашение (сервер владельца); `undefined` — не известно, все — участники
+  const [pending, setPending] = useState<string[]>();
   const nameRef = useRef<HTMLInputElement>();
+  const nickRef = useRef<HTMLInputElement>();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -75,11 +92,36 @@ const CloudShareDialog = ({
     setHasTried(false);
     setNewRole('reader');
     setConfirm(undefined);
+    setHasNick(false);
+    setNickError(undefined);
+    if (nickRef.current) nickRef.current.value = '';
   }, [isOpen, containerId]);
 
   const id = containerId || createdId;
   const container = getContainer(id, data);
   const isOwner = container?.role === 'owner';
+  const memberCount = container?.members.length || 0;
+
+  const loadPending = useLastCallback(async () => {
+    if (!id || !isOwner) return;
+    const list = await callParvane('parvaneCloudPendingInvites', { container: id })
+      .catch(() => undefined) as string[] | undefined;
+    setPending(list);
+  });
+
+  useEffect(() => {
+    if (!isOpen || !isOwner) {
+      setPending(undefined);
+      return undefined;
+    }
+    void loadPending();
+    const timer = window.setInterval(() => void loadPending(), PENDING_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isOpen, isOwner, id, memberCount, loadPending]);
+
+  const pendingList = pending || NO_PENDING;
+  const accepted = container ? container.members.filter((m) => !pendingList.includes(m.user)) : [];
+  const invited = container ? container.members.filter((m) => pendingList.includes(m.user)) : [];
   const folderName = container?.name || lang('ParvaneCloudSharedFolder');
   const roleTitle = (role: CloudRole) => lang(
     role === 'owner' ? 'ParvaneCloudRoleOwner'
@@ -92,6 +134,7 @@ const CloudShareDialog = ({
       const result = await callParvane(method, args).catch(() => undefined) as CloudResult | undefined;
       if (!result?.ok) showCloudNotice(result?.error || 'rejected');
       await onChanged();
+      void loadPending();
       return result;
     } finally {
       unmarkBusy();
@@ -122,6 +165,49 @@ const CloudShareDialog = ({
       role: newRole,
       inviteText: lang('ParvaneCloudInviteText', { name: folderName, role: roleText }),
     });
+  });
+
+  const handleNickInput = useLastCallback((e: React.FormEvent<HTMLInputElement>) => {
+    setHasNick(Boolean(e.currentTarget.value.trim()));
+    setNickError(undefined);
+  });
+
+  // «Ник собеседника» (доска `PhFilesMore`): приглашение по нику без чата с ним; ник своего сервера — `@nick`
+  const handleNickSubmit = useLastCallback(async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const text = nickRef.current?.value || '';
+    if (!text.trim()) {
+      openPicker();
+      return;
+    }
+    const selfDomain = getCloudData()?.containers.find((c) => c.kind === 'root')?.owner.split('@')[1];
+    const user = addressOfNick(text, selfDomain);
+    if (!user) {
+      setNickError(lang('ParvaneCloudNickInvalid'));
+      return;
+    }
+    // Ник сверяется с сервером точным поиском: грант незнакомому адресу иначе долго ждал бы его ключей
+    markBusy();
+    const chatId = await callParvane('parvaneResolveExactAddress', { address: user })
+      .catch(() => undefined) as string | undefined;
+    unmarkBusy();
+    if (!chatId) {
+      setNickError(lang('ParvaneCloudNickNotFound'));
+      return;
+    }
+    const roleText = roleTitle(newRole).toLocaleLowerCase();
+    const result = await run('parvaneCloudShare', {
+      container: id,
+      chatId,
+      role: newRole,
+      inviteText: lang('ParvaneCloudInviteText', { name: folderName, role: roleText }),
+    });
+    if (result?.ok) {
+      if (nickRef.current) nickRef.current.value = '';
+      setHasNick(false);
+    } else {
+      setNickError(lang('ParvaneCloudErrorRejected'));
+    }
   });
 
   const handleNewRole = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -210,6 +296,31 @@ const CloudShareDialog = ({
         {container && (
           <div className={styles.share} data-container-id={container.id} data-role={container.role}>
             {isOwner && (
+              <form className={styles.shareNick} onSubmit={handleNickSubmit} data-share-nick>
+                <label className={styles.field}>
+                  {lang('ParvaneCloudNickLabel')}
+                  <span className={styles.shareNickRow}>
+                    <input
+                      ref={nickRef}
+                      className={buildClassName(kit.input, styles.shareNickInput)}
+                      placeholder="@nick"
+                      aria-label={lang('ParvaneCloudNickLabel')}
+                      aria-invalid={Boolean(nickError)}
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      enterKeyHint="send"
+                      onInput={handleNickInput}
+                    />
+                    <button type="submit" className={kit.btn} disabled={isBusy} data-share-nick-submit>
+                      {lang(hasNick ? 'ParvaneCloudNickInvite' : 'ParvaneCloudFromContacts')}
+                    </button>
+                  </span>
+                </label>
+                {nickError && <div className={kit.fieldError} role="alert">{nickError}</div>}
+              </form>
+            )}
+            {isOwner && (
               <div className={styles.shareAdd}>
                 <select
                   className={buildClassName(styles.role, styles.shareRole)}
@@ -231,7 +342,7 @@ const CloudShareDialog = ({
               </div>
             )}
             <h3 className={styles.caption}>
-              {lang('ParvaneCloudMembers', { count: container.members.length + 1 })}
+              {lang('ParvaneCloudMembers', { count: (isOwner ? accepted.length : container.members.length) + 1 })}
             </h3>
             <div className={styles.members} role="list">
               <div className={styles.member} role="listitem">
@@ -244,7 +355,7 @@ const CloudShareDialog = ({
                 </span>
                 <span className={styles.role}>{roleTitle('owner')}</span>
               </div>
-              {isOwner && container.members.map((m, index) => (
+              {isOwner && accepted.map((m, index) => (
                 <div
                   key={m.user}
                   className={styles.member}
@@ -292,6 +403,38 @@ const CloudShareDialog = ({
             </div>
             {isOwner && !container.members.length && (
               <div className={styles.note}>{lang('ParvaneCloudNoMembers')}</div>
+            )}
+            {isOwner && invited.length > 0 && (
+              <>
+                <h3 className={styles.caption}>{lang('ParvaneCloudInvitations')}</h3>
+                <div className={styles.members} role="list" data-invitations>
+                  {invited.map((m) => (
+                    <div
+                      key={m.user}
+                      className={styles.member}
+                      role="listitem"
+                      data-invited={m.user}
+                      data-role={m.role}
+                    >
+                      <span className={styles.memberText}>
+                        <span className={styles.memberName} dir="ltr">{`@${nameOf(m.user)}`}</span>
+                        <span className={styles.memberSub}>
+                          {`${lang('ParvaneCloudInviteWaiting')} · ${roleTitle(m.role)}`}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className={buildClassName(styles.textDanger)}
+                        disabled={isBusy}
+                        data-invite-cancel
+                        onClick={handleRemoveMember(m.user)}
+                      >
+                        {lang('ParvaneCloudInviteCancel')}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
             {roleHint}
             {/* Ссылка для людей без аккаунта (spec 022): снимок всей папки, создаёт владелец либо редактор */}

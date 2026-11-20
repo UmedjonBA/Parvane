@@ -16,6 +16,8 @@ type OwnProps = {
   stream?: MediaStream;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  // Говорит сейчас: рамка цвета акцента и подпись «говорит» (доска `PhCalls`)
+  isSpeaking?: boolean;
   // Номер цвета кружка: участники различаются цветом, как в списке чатов
   tone?: number;
 };
@@ -26,15 +28,21 @@ const TONE_CLASSES = [
 
 // Плитка участника группового звонка: кружок, имя, состояние и видео
 const CallPeerTile = ({
-  peer, peerState, name, status, stream, isMuted, isCameraOff, tone = 0,
+  peer, peerState, name, status, stream, isMuted, isCameraOff, isSpeaking, tone = 0,
 }: OwnProps) => {
   const isPictureShown = hasVideoTrack(stream) && !isCameraOff;
   const isAway = peerState === 'busy' || peerState === 'declined';
 
   return (
     <div
-      className={buildClassName(styles.tile, isPictureShown && styles.tileWithPicture, isAway && styles.tileAway)}
+      className={buildClassName(
+        styles.tile,
+        isPictureShown && styles.tileWithPicture,
+        isAway && styles.tileAway,
+        isSpeaking && styles.tileSpeaking,
+      )}
       data-peer={peer}
+      data-speaking={isSpeaking ? '1' : undefined}
       data-peer-state={peerState}
       data-camera-off={isCameraOff ? '1' : undefined}
     >

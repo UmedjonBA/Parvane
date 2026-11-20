@@ -244,6 +244,26 @@ async fn issue_locks_out_after_repeated_failures() {
     assert!(err.contains("много"), "ожидался лок-аут: {err}");
 }
 
+// Карта лимитера входа общая для тестов процесса: заполняющий её тест (ID-02) выселяет чужие корзины
+static LOGIN_LIMITER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn attempt_state_counts_down_and_reports_lock() {
+    // spec 041: экран входа показывает, сколько попыток осталось (порог по умолчанию 5), после порога — блокировку
+    let _guard = LOGIN_LIMITER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let user = "count@local";
+    assert_eq!(login_attempt_state(user), (5, 0));
+    for left in [4, 3, 2, 1] {
+        login_record_failure(user);
+        assert_eq!(login_attempt_state(user), (left, 0));
+    }
+    login_record_failure(user);
+    let (left, locked_ms) = login_attempt_state(user);
+    assert_eq!(left, 0);
+    assert!(locked_ms > 0, "после порога вход закрыт на время");
+    login_record_success(user);
+    assert_eq!(login_attempt_state(user), (5, 0));
+}
 
 // ── адреса: ник без домена, правила ников, чужой домен ──
 
@@ -1063,6 +1083,7 @@ fn v2_server_descriptor_is_signed_and_key_file_private() {
 #[test]
 fn login_limiter_does_not_grow_on_unique_logins() {
     // ID-02: уникальные логины не должны накапливаться в карте навсегда.
+    let _guard = LOGIN_LIMITER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     for i in 0..LIMITER_MAX_ENTRIES + 100 {
         let _ = login_gate_check(&format!("id02-{i}@local"));
     }

@@ -104,6 +104,8 @@ async function runBase() {
   const passwordStep = screen(page, 'auth-password-form');
   await visible(passwordStep.locator('[role="alert"]'), 'ошибка пароля под полем');
   assert.equal(await passwordStep.locator('#sign-in-parvane-address').inputValue(), nick, 'ник остался в форме');
+  // spec 041: сервер сообщает, сколько попыток осталось до временной блокировки входа (порог 5)
+  assert.match(await passwordStep.locator('[role="alert"]').innerText(), /4 (attempts left|попытки)/, 'счётчик попыток');
   assert.equal(await page.locator('#LeftColumn').count(), 0, 'неверный пароль не должен входить');
   await shootAuthScreen(page, 'login-error');
 

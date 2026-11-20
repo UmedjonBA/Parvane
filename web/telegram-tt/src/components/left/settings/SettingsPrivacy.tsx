@@ -14,7 +14,6 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
-import AccountDeleteModal from '../../parvane/account/AccountDeleteModal';
 import PrivacySignIn from './profile/PrivacySignIn';
 import ProfileChoiceSheet from './profile/ProfileChoiceSheet';
 import ProfileIcon from './profile/ProfileIcon';
@@ -62,7 +61,6 @@ const SettingsPrivacy = ({
   const lang = useLang();
   const oldLang = useOldLang();
 
-  const [isAccountDeleteOpen, setIsAccountDeleteOpen] = useState(false);
   const [openChoice, setOpenChoice] = useState<ChoiceRow | undefined>();
   const [ownFingerprint, setOwnFingerprint] = useState('');
   // Согласие на добавление в группы: сервер отклоняет добавление без него
@@ -272,17 +270,6 @@ const SettingsPrivacy = ({
         />
       </div>
 
-      <div className={styles.group}>
-        <button
-          type="button"
-          className={buildClassName(rowClass, styles.danger)}
-          data-delete-account-open
-          onClick={() => setIsAccountDeleteOpen(true)}
-        >
-          <span className={styles.setTitle}>{lang('ParvaneDeleteAccountTitle')}</span>
-        </button>
-      </div>
-
       <ProfileChoiceSheet
         isOpen={Boolean(sheet)}
         title={sheet?.title || ''}
@@ -292,7 +279,6 @@ const SettingsPrivacy = ({
         onSelect={handleChoice}
         onClose={() => setOpenChoice(undefined)}
       />
-      <AccountDeleteModal isOpen={isAccountDeleteOpen} onClose={() => setIsAccountDeleteOpen(false)} />
     </div>
   );
 };

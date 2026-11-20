@@ -22,17 +22,22 @@
 
 <body>
   <main id="page" class="page" data-link-page data-state="loading">
-    <header class="brand">parvane</header>
+    <header class="brand" data-link-brand><span class="logo" aria-label="Parvane">P</span></header>
     <section id="status" class="status" role="status"></section>
     <section id="content" class="content" hidden></section>
     <noscript>
       <p>Turn on JavaScript to open the files: they are decrypted in your browser.</p>
       <p>Включите JavaScript, чтобы открыть файлы: они расшифровываются в вашем браузере.</p>
     </noscript>
-    <footer class="foot">
-      <span id="foot-note"></span>
-      <span id="foot-key"></span>
-    </footer>
+    <span class="grow"></span>
+    <aside id="trouble" class="card trouble" hidden>
+      <span class="dot" aria-hidden="true"></span>
+      <span class="trouble-text">
+        <strong id="trouble-title" class="trouble-title"></strong>
+        <span id="trouble-hint" class="trouble-hint"></span>
+      </span>
+    </aside>
+    <footer id="foot-note" class="foot"></footer>
   </main>
   <script type="module" src="./src/publicLink/index.ts"></script>
 </body>

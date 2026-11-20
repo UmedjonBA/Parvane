@@ -7,7 +7,9 @@ import { MAIN_THREAD_ID } from '../../../api/types';
 import { buildShareNoteText, buildShareNoteTitle } from '../../../util/shareTarget';
 import { callApi } from '../../../api/gramjs';
 import buildAttachment from '../../middle/composer/helpers/buildAttachment';
-import { getCloudData, getNodes, loadCloud, refreshCloud, uploadCloudFilesTo } from '../cloud/cloudStore';
+import {
+  getCloudData, getNodes, loadCloud, refreshCloud, uploadCloudFilesTo, waitForCloudDrive,
+} from '../cloud/cloudStore';
 import { createNote, getNotes, loadNotes, saveNote } from '../notes/notesStore';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -36,6 +38,8 @@ export async function sendSharedToChats(chatIds: string[], text: string, files: 
 /** «В „Файлы“»: файлы — в папку `folderName` в корне «Моего диска» (создаётся, если её нет). */
 export async function saveSharedToFiles(files: File[], folderName: string, userId?: string) {
   await loadCloud(userId);
+  // Экран «Поделиться» открывается сразу после запуска: корень диска правится только после его сверки
+  if (!await waitForCloudDrive()) return false;
   const folder = await ensureRootFolder(folderName);
   if (!folder) return false;
   const names = await uploadCloudFilesTo(getCloudData()?.rootId || ROOT_CONTAINER, folder, files);

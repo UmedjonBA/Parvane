@@ -162,6 +162,11 @@ IssueResult issueSession(const std::string &gatewayUrl, const IssueRequest &req,
         out.confirmRequired = true;
         return out;
     }
+    // spec 041: неверный пароль — ответ без токена со счётчиком попыток; для клиента это прежний отказ FORBIDDEN
+    if (flag2(r, "passwordWrong", "password_wrong")) {
+        out.errorCode = "ERROR_CODE_FORBIDDEN";
+        return out;
+    }
     const auto deletionAt = int2(r, "deletionAtMs", "deletion_at_ms");
     out.token = str(r, "token");
     if (deletionAt > 0 && out.token.empty()) {

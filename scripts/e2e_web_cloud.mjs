@@ -289,8 +289,27 @@ try {
   await menuAction(SECRET_NAME, 'Move');
   const folderMove = page.locator('.Modal').filter({ hasText: 'Move here' });
   assert.ok(await folderMove.getByRole('listitem').filter({ hasText: SECRET_NAME }).isDisabled(), 'папка не может быть целью самой себя');
+  // Окно переноса на компьютере (доска `ZdFilesX`): откуда переносят, пометка «здесь сейчас», подсказка про мышь
+  await folderMove.locator('[data-move-subtitle]').getByText('now in “My drive”').waitFor({ state: 'visible' });
+  await folderMove.getByText('You can also drag files with the mouse', { exact: false }).waitFor({ state: 'visible' });
   await folderMove.getByRole('button', { name: 'Cancel', exact: true }).click();
   console.log('OK: два выделенных элемента перемещены; папку нельзя переместить в саму себя');
+
+  // ── Дерево папок в колонке мест (доска `XdFiles`): папки корня, путь к открытой раскрыт ──
+  const navTree = cloud.locator('[data-cloud-nav-tree]');
+  const navFolder = (name) => navTree.locator('[data-nav-folder]').filter({ hasText: name });
+  await navFolder(SECRET_NAME).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await navFolder('Внутри').count(), 0, 'вложенная папка закрытой ветки не показана');
+  await navFolder(SECRET_NAME).click();
+  await item('дневник.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await navFolder(SECRET_NAME).getAttribute('aria-current'), 'true', 'открытая папка подсвечена в дереве');
+  await navFolder('Внутри').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.ok(
+    (await navFolder('Внутри').boundingBox()).x >= (await navFolder(SECRET_NAME).boundingBox()).x,
+    'вложенная папка — под своей, с отступом',
+  );
+  await toRoot();
+  console.log('OK: дерево папок в колонке мест открывает папку и раскрывает путь');
 
   // ── Корзина: удалить папку с содержимым, восстановить, стереть файл навсегда ──
   await menuAction(SECRET_NAME, 'Move to trash');
@@ -303,6 +322,8 @@ try {
   assert.deepEqual(await names(), [SECRET_NAME], 'в корзине — папка целиком, а не её содержимое по одному');
   assert.deepEqual(await crumbs(), ['Trash'], 'путь корзины — одно место');
   await item(SECRET_NAME).getByText('Deleted in 30 days').waitFor({ state: 'visible' });
+  // Откуда удалено (доска `RdFiles`): «Восстановить» вернёт туда же
+  await item(SECRET_NAME).getByText('was in “My drive”', { exact: false }).waitFor({ state: 'visible' });
   assert.equal(await item(SECRET_NAME).getAttribute('data-days-left'), '30', 'срок корзины — 30 дней');
   assert.equal(await cloud.getByRole('button', { name: 'Upload', exact: true }).count(), 0, 'в корзину не загружают');
   const usedInTrash = await used();
@@ -488,7 +509,35 @@ try {
   await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await toRoot();
   await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: файл с компьютера загружен перетаскиванием; строка перенесена на папку и обратно на путь');
+  // На любую папку дерева слева (доска `XdFiles`), не только на «Мой диск»
+  await dragTo('перетащенный.txt', navFolder(SECRET_NAME), `Drag onto a folder — «${SECRET_NAME}»`);
+  await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await navFolder(SECRET_NAME).click();
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: файл с компьютера загружен перетаскиванием; строка перенесена на папку списка, путь и дерево');
+
+  // ── «Новая папка» прямо в окне переноса: создаётся и сразу выбрана ──────────
+  await menuAction('перетащенный.txt', 'Move');
+  const newFolderMove = page.locator('.Modal').filter({ has: page.locator('[data-move-list]') });
+  await newFolderMove.locator('[data-move-new-folder]').click();
+  await newFolderMove.locator('[data-move-name-form] input').fill('Из окна');
+  await newFolderMove.locator('[data-move-name-form]').getByRole('button', { name: 'Create', exact: true }).click();
+  const madeRow = newFolderMove.getByRole('listitem').filter({ hasText: 'Из окна' });
+  await madeRow.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await madeRow.getAttribute('aria-current'), 'true', 'новая папка сразу выбрана');
+  await newFolderMove.getByRole('button', { name: 'Move here', exact: true }).click();
+  await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await toRoot();
+  await item('Из окна').click();
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Обратно в корень — дальше сценарий берёт файл оттуда
+  await menuAction('перетащенный.txt', 'Move');
+  await newFolderMove.getByRole('listitem').filter({ hasText: 'My drive' }).click();
+  await newFolderMove.getByRole('button', { name: 'Move here', exact: true }).click();
+  await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await toRoot();
+  await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: новая папка из окна переноса — в корне диска, файл в ней');
   if (shotDir) {
     await item('перетащенный.txt').click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Make a copy', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -573,6 +622,33 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('.Modal.open').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — места чипами, просмотр на весь экран, шторка действий');
+  // Перенос на телефоне — папка за папкой (доска `XpFiles`): путь сверху, стрелка — внутрь, «Новая папка» внизу
+  await item('снимок.png').getByRole('button', { name: 'Actions' }).click();
+  await page.getByRole('menuitem', { name: 'Move', exact: true }).click();
+  const stepMove = page.locator('.Modal').filter({ has: page.locator('[data-move-path]') });
+  await stepMove.locator('[data-move-path]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (shotDir) await page.screenshot({ path: `${shotDir}/files-move-steps.png` });
+  // Файл уже здесь — переносить некуда (кнопка недоступна, когда окно дочитало место переносимого)
+  await stepMove.locator('button[aria-label="Move here"][disabled]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  await stepMove.locator('[data-move-subtitle]').getByText('снимок.png').waitFor({ state: 'visible' });
+  assert.deepEqual(await stepMove.locator('[data-move-path] button').allInnerTexts(), ['My drive']);
+  assert.ok(await stepMove.locator('[data-move-open]').count() > 0, 'на телефоне — шаги со стрелкой внутрь');
+  await stepMove.locator(`[data-move-open="${SECRET_NAME}"]`).click();
+  await stepMove.locator('[data-move-path] button').filter({ hasText: SECRET_NAME }).waitFor({ state: 'visible' });
+  assert.deepEqual(await stepMove.locator('[data-move-path] button').allInnerTexts(), ['My drive', SECRET_NAME]);
+  await stepMove.getByRole('listitem').filter({ hasText: 'Внутри' }).waitFor({ state: 'visible' });
+  await stepMove.locator('[data-move-new-folder]').click();
+  await stepMove.locator('[data-move-name-form] input').fill('С телефона');
+  await stepMove.locator('[data-move-name-form]').getByRole('button', { name: 'Create', exact: true }).click();
+  await stepMove.getByRole('button', { name: 'Move here', exact: true }).getByText('“С телефона”', { exact: false })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await stepMove.getByRole('button', { name: 'Move here', exact: true }).click();
+  await item('снимок.png').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await item(SECRET_NAME).click();
+  await item('С телефона').click();
+  await item('снимок.png').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-nav-place="drive"]').click();
+  console.log('OK: телефон — перенос папка за папкой, новая папка из окна');
   await tabBar.getByRole('button', { name: 'Chats' }).click();
   // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
   await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });

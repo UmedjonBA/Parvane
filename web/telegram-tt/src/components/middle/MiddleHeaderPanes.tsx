@@ -18,6 +18,7 @@ import { applyAnimationState, PANE_GAP_REM, type PaneState } from './hooks/useHe
 
 import AudioPlayer from './panes/AudioPlayer';
 import HeaderPinnedMessage from './panes/HeaderPinnedMessage';
+import KeyChangePane from './panes/KeyChangePane';
 
 import styles from './MiddleHeaderPanes.module.scss';
 
@@ -56,6 +57,7 @@ const MiddleHeaderPanes = ({
 }: OwnProps & StateProps) => {
   const [getAudioPlayerState, setAudioPlayerState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
   const [getPinnedState, setPinnedState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
+  const [getKeyChangeState, setKeyChangeState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
 
   const isFirstRenderRef = useRef(true);
   const prevPanesHeightRef = useRef(0);
@@ -87,9 +89,10 @@ const MiddleHeaderPanes = ({
   useSignalEffect(() => {
     const audioPlayerState = getAudioPlayerState();
     const pinnedState = getPinnedState();
+    const keyChangeState = getKeyChangeState();
 
     // Keep in sync with the order of the panes in the DOM
-    const stateArray = [audioPlayerState, pinnedState];
+    const stateArray = [audioPlayerState, pinnedState, keyChangeState];
 
     const isFirstRender = isFirstRenderRef.current;
     const gapPx = PANE_GAP_REM * REM;
@@ -168,7 +171,7 @@ const MiddleHeaderPanes = ({
         };
       });
     });
-  }, [getAudioPlayerState, getPinnedState]);
+  }, [getAudioPlayerState, getPinnedState, getKeyChangeState]);
 
   if (!shouldRender) return undefined;
 
@@ -196,6 +199,7 @@ const MiddleHeaderPanes = ({
         onPaneStateChange={setPinnedState}
         isReopen={isReopen}
       />
+      <KeyChangePane chatId={chatId} onPaneStateChange={setKeyChangeState} />
     </div>
   );
 };

@@ -329,11 +329,17 @@ export default function useHistoryBack({
     }
   }, [shouldBeReplaced]);
 
+  // Parvane: открыт ли экран сейчас — снятие при размонтировании смотрит на последнее значение, а не на первое.
+  // Окно, смонтированное закрытым, открытое и снятое вместе с родителем в том же кадре, где его закрыли (выбор в
+  // шторке переключает вид), иначе оставляло свою запись: следующее системное «назад» уходило на неё впустую
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+
   // Process back navigation when element is unmounted
   useEffectOnce(() => {
     isFirstRenderRef.current = false;
     return () => {
-      if (!isActive || wasReplacedRef.current) return;
+      if (!isActiveRef.current || wasReplacedRef.current) return;
       processBack();
     };
   });

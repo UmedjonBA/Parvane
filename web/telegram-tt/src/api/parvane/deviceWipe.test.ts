@@ -10,7 +10,8 @@ describe('deviceWipe', () => {
       'parvane:login-address', `parvane:pin-fails:${USER}`, `parvane:device:${USER}`, 'parvane:music-info',
       'parvane:music-offline', 'parvane:music-queue', 'parvane:planner-tab', 'parvane:translate-default',
       'parvane:diag:v2', 'parvane:color-scheme', 'parvane:modules', 'parvane:modules-view',
-      'parvane:modules-server-off', 'parvane:panel-widths', 'parvane:gateway', 'parvane:e2e:ringTimeoutMs',
+      'parvane:modules-server-off', 'parvane:panel-widths', 'parvane:gateway', 'parvane:chat-list-dense',
+      'parvane:e2e:ringTimeoutMs',
       'tt-active-tab', `other:${USER}`,
     ];
     expect(selectAccountStorageKeys(keys, USER)).toEqual([

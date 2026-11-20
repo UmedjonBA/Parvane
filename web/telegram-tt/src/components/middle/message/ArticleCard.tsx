@@ -5,6 +5,7 @@ import type { ApiArticle } from '../../../api/types';
 import type { MdBlock } from '../../parvane/markdown/markdown';
 
 import buildClassName from '../../../util/buildClassName';
+import { getReadingMinutes } from '../../parvane/article/articleReadingTime';
 import { saveArticleToNotes } from '../../parvane/article/articleSave';
 import { inlineText, parseMarkdown } from '../../parvane/markdown/markdown';
 
@@ -36,6 +37,7 @@ const ArticleCard = ({ article }: OwnProps) => {
   const gate = useModuleGate('notes');
 
   const preview = useMemo(() => buildPreview(article), [article]);
+  const minutes = useMemo(() => getReadingMinutes(article.markdown), [article.markdown]);
 
   const handleSave = useLastCallback(async () => {
     setIsSaving(true);
@@ -52,7 +54,11 @@ const ArticleCard = ({ article }: OwnProps) => {
 
   return (
     <div className={styles.root} data-article-card={article.title}>
-      <div className={styles.label}>{lang('ArticleLabel')}</div>
+      <div className={styles.label} data-article-reading-time>
+        {lang('ArticleLabel')}
+        {' · '}
+        {lang('ArticleReadingTime', { count: minutes }, { pluralValue: minutes })}
+      </div>
       <div className={styles.title}>{article.title}</div>
       {preview && <p className={styles.preview}>{preview}</p>}
       <div className={styles.actions}>

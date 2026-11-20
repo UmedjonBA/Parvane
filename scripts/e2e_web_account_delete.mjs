@@ -69,16 +69,21 @@ try {
   console.log('OK: переписка до удаления');
 
   // ── удаление ──
-  await openSettingsScreen(a, 'Privacy and Security');
-  await a.locator('[data-delete-account-open]').click();
+  // spec 041 (`DkSettingsA`, `XpProfile`): «Опасная зона» на «Устройствах и аккаунте» ведёт на экран удаления;
+  // кнопка доступна только с паролем и отметкой «Понимаю»
+  await openSettingsScreen(a, 'Devices and account');
+  await a.locator('[data-delete-account-open]:visible').click();
   const dialog = a.locator('[data-delete-account-dialog]');
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const submit = dialog.locator('[data-delete-account-submit]');
   await dialog.locator('#parvane-delete-password').fill(`${PASSWORD}-wrong`);
-  await dialog.getByRole('button', { name: 'Delete account', exact: true }).click();
+  assert.equal(await submit.isDisabled(), true, 'без «Понимаю» удалить нельзя');
+  await dialog.locator('[data-delete-account-confirm]').check();
+  await submit.click();
   await dialog.locator('[data-delete-account-error="bad_password"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await dialog.locator('#parvane-delete-password').fill(PASSWORD);
   const reloaded = a.waitForEvent('load', { timeout: STEP_TIMEOUT_MS });
-  await dialog.getByRole('button', { name: 'Delete account', exact: true }).click();
+  await submit.click();
   await dialog.locator('[data-delete-account-done]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await reloaded;
   console.log('OK: аккаунт поставлен на удаление, вкладка ушла на вход');

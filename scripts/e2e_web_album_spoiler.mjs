@@ -160,9 +160,17 @@ try {
   const source = `quote-source alpha beta gamma ${suffix}`;
   await sendText(a.page, source);
   await findMessageContainers(b.page, source).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await selectFragmentAndOpenMenu(b.page, source, 'beta gamma');
   const quoteItem = b.page.locator('.MessageContextMenu').getByRole('menuitem', { name: 'Reply with Quote' });
-  await quoteItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Новое сообщение ещё въезжает в ленту (под нагрузкой — дольше): точка выделения, посчитанная до конца сдвига,
+  // уводит правый щелчок мимо выделенного, и меню открывается без цитаты. Выделяем заново, пока меню не с цитатой
+  for (let attempt = 1; ; attempt++) {
+    await selectFragmentAndOpenMenu(b.page, source, 'beta gamma');
+    const isQuote = await quoteItem.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+    if (isQuote) break;
+    assert(attempt < 3, 'QUOTE-1: меню выделенного фрагмента без «Reply with Quote»');
+    await b.page.keyboard.press('Escape');
+    await b.page.waitForTimeout(500);
+  }
   await quoteItem.click();
   const answer = `quote-answer-${suffix}`;
   await sendText(b.page, answer);

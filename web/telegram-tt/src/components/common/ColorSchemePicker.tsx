@@ -19,6 +19,8 @@ type OwnProps = {
   theme: ThemeKey;
 };
 
+const SAMPLE_THEMES: ThemeKey[] = ['light', 'dark'];
+
 // Названия схем — имена собственные, не переводятся
 export const SCHEME_NAMES: Record<ColorScheme, string> = {
   gruvbox: 'Gruvbox',
@@ -28,8 +30,9 @@ export const SCHEME_NAMES: Record<ColorScheme, string> = {
   solarized: 'Solarized',
 };
 
-// Parvane (spec 019): выбор цветовой схемы. Карточка нарисована цветами самой схемы в текущей теме: фон —
-// её панель, подпись — её текст, рамка выбранной — её акцент; сверху образцы
+// Parvane (spec 019; spec 041, доска `DkSettingsA`): выбор цветовой схемы. Образец — «светлая | тёмная половина»:
+// каждая половина — панель схемы в своей теме со строкой текста и строкой акцента; рамка выбранной — акцент схемы в
+// текущей теме, под образцом название
 const ColorSchemePicker = ({ theme }: OwnProps) => {
   const current = useDerivedState(getColorScheme);
 
@@ -42,8 +45,7 @@ const ColorSchemePicker = ({ theme }: OwnProps) => {
   return (
     <div className={styles.root} role="radiogroup" aria-label={lang('ParvaneColorScheme')}>
       {COLOR_SCHEMES.map((scheme) => {
-        const swatches = getSchemeSwatches(scheme, theme);
-        const [, panel, accent, text] = swatches;
+        const accent = getSchemeSwatches(scheme, theme)[2];
         const isSelected = scheme === current;
 
         return (
@@ -54,13 +56,23 @@ const ColorSchemePicker = ({ theme }: OwnProps) => {
             aria-checked={isSelected}
             data-scheme={scheme}
             className={buildClassName(styles.option, isSelected && styles.selected)}
-            style={`--scheme-panel: ${panel}; --scheme-accent: ${accent}; --scheme-text: ${text}`}
+            style={`--scheme-accent: ${accent}`}
             onClick={handleSelect}
           >
-            <span className={styles.swatches}>
-              {swatches.map((color, i) => (
-                <span key={`${i}-${color}`} className={styles.swatch} style={`background-color: ${color}`} />
-              ))}
+            <span className={styles.sample}>
+              {SAMPLE_THEMES.map((sampleTheme) => {
+                const [, panel, sampleAccent, text] = getSchemeSwatches(scheme, sampleTheme);
+                return (
+                  <span
+                    key={sampleTheme}
+                    className={styles.half}
+                    style={`--half-panel: ${panel}; --half-accent: ${sampleAccent}; --half-text: ${text}`}
+                  >
+                    <span className={styles.line} />
+                    <span className={buildClassName(styles.line, styles.lineAccent)} />
+                  </span>
+                );
+              })}
             </span>
             <span className={styles.label}>
               {SCHEME_NAMES[scheme]}

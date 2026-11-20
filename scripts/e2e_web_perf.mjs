@@ -449,7 +449,11 @@ try {
   });
   await openSection('Notes');
   await openTab('Canvas');
-  await visible(card, 'карточка холста');
+  // После перезагрузки вкладка «Холст» открывает список холстов (макет `RpNotes`, `ZdNotesX`) — холст из графа берётся из него
+  await timed('CPU×4: холст из списка', async () => {
+    await knowledge.locator('[data-canvas-list] [data-canvas-id]').first().click();
+    await visible(card, 'карточка холста');
+  });
   await framed('CPU×4: холст: перетащить карточку (40 шагов)', async () => {
     const box = await card.boundingBox();
     const from = { x: box.x + 20, y: box.y + 12 };

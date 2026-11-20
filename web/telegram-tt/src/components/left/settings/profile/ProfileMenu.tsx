@@ -4,14 +4,12 @@ import { getActions } from '../../../../global';
 import type { ProfileItem, ProfileItemId } from './profileMenu';
 
 import buildClassName from '../../../../util/buildClassName';
-import { openBugReport } from '../../../../util/parvaneDiag';
 import { PROFILE_GROUPS } from './profileMenu';
 
 import useFlag from '../../../../hooks/useFlag';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 
-import DataExportModal from '../../../parvane/export/DataExportModal';
 import ProfileIcon from './ProfileIcon';
 import ProfileSignOutDialog from './ProfileSignOutDialog';
 
@@ -27,7 +25,6 @@ type OwnProps = {
 const ProfileMenu = ({ variant, activeId, values }: OwnProps) => {
   const { openSettingsScreen } = getActions();
   const lang = useLang();
-  const [isExportOpen, openExport, closeExport] = useFlag();
   const [isSignOutOpen, openSignOut, closeSignOut] = useFlag();
   const isNav = variant === 'nav';
 
@@ -37,10 +34,6 @@ const ProfileMenu = ({ variant, activeId, values }: OwnProps) => {
     if (!item) return;
     if (item.screen !== undefined) {
       openSettingsScreen({ screen: item.screen });
-    } else if (id === 'export') {
-      openExport();
-    } else if (id === 'bug') {
-      openBugReport();
     } else if (id === 'signOut') {
       openSignOut();
     }
@@ -88,7 +81,6 @@ const ProfileMenu = ({ variant, activeId, values }: OwnProps) => {
           </div>
         );
       })}
-      <DataExportModal isOpen={isExportOpen} onClose={closeExport} />
       <ProfileSignOutDialog isOpen={isSignOutOpen} onClose={closeSignOut} />
     </>
   );

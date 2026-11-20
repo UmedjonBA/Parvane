@@ -1,6 +1,7 @@
 // «План»: экраны по доскам spec 041 E1 — «Расписание на неделю» (текст → повторяющиеся события, непонятое красным),
 // поиск по плану с чипами, «Найти свободное время» в карточке записи, «Задачи» (по срокам, без даты, группы) и
-// запланированная тренировка в «Активности» «Здоровья». Разбор, подбор окон и поиск — в движке (PLANNER-2).
+// запланированная тренировка в «Активности» «Здоровья»; колонка разделов, задача на шкалу дня, меню записи по правой
+// кнопке, образец напоминания и карточка записи строками на телефоне. Разбор, подбор окон и поиск — в движке (PLANNER-2).
 // Компьютер и телефон, снимки — в PARVANE_E2E_SHOT_DIR. Запуск: scripts/run_web_planner_more_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -126,6 +127,58 @@ try {
   await tasks.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: «Задачи» — без даты, «На сегодня», по срокам, группы; Escape закрывает');
 
+  // ── Колонка разделов на компьютере (DkPlanMore), задача на шкалу (RdPlan), меню записи (ZdPlanX) ────
+  await planner.locator('[data-planner-tasks-open]').click();
+  const sections = planner.locator('[data-planner-sections]');
+  await visible(sections, 'колонка разделов «Плана»');
+  await sections.locator('[data-section="deadlines"]').click();
+  await visible(planner.locator('[data-planner-tasks="deadlines"]'), 'раздел «Задачи по срокам»');
+  await sections.locator('[data-section="import"]').click();
+  await visible(planner.locator('[data-planner-import]'), 'раздел «Расписание на неделю»');
+  await visible(sections.locator('[data-section="import"][aria-current="page"]'), 'раздел отмечен');
+  await sections.locator('[data-section="today"]').click();
+  await sections.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  const dayAside = planner.locator('[data-planner-day-aside]');
+  await visible(dayAside.locator('[data-drag-hint]'), 'подсказка «Перетащите задачу на шкалу»');
+  const shoeRow = dayAside.locator('[data-today-untimed] [data-task-id]').filter({ hasText: 'Купить кроссовки' });
+  const column = planner.locator('[data-grid-day]').first();
+  const columnBox = await column.boundingBox();
+  await shoeRow.first().dragTo(column, { targetPosition: { x: 40, y: Math.round(columnBox.height / 2) } });
+  const shoeBlock = column.locator('button[data-kind="task"]').filter({ hasText: 'Купить кроссовки' });
+  await visible(shoeBlock, 'задача встала на шкалу');
+  assert.match(await shoeBlock.first().innerText(), /\d\d:\d[05]–/, 'время по месту броска, шаг 15 минут');
+  await shot('plan-drag-wide');
+  const menu = page.getByRole('menu');
+  const menuItem = (name) => menu.getByRole('menuitem', { name, exact: true });
+  await shoeBlock.first().click({ button: 'right' });
+  for (const name of ['Open', 'Mark done', 'Move to tomorrow', 'Find free time…', 'Duplicate', 'Change layer',
+    'Offer to a contact…', 'Delete']) {
+    await visible(menuItem(name), `пункт меню «${name}»`);
+  }
+  await shot('plan-menu-wide');
+  await menuItem('Duplicate').click();
+  await visible(planner.getByText('Duplicated: Купить кроссовки'), 'копия записи');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-grid-day] button[data-kind="task"]')]
+    .filter((el) => el.textContent.includes('Купить кроссовки')).length === 2, undefined, { timeout: STEP_TIMEOUT_MS });
+  await shoeBlock.first().click({ button: 'right' });
+  await menuItem('Move to tomorrow').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-grid-day] button[data-kind="task"]')]
+    .filter((el) => el.textContent.includes('Купить кроссовки')).length === 1, undefined, { timeout: STEP_TIMEOUT_MS });
+  const gym = column.locator('button[data-kind="event"]').filter({ hasText: 'Силовая в зале' }).first();
+  await gym.click({ button: 'right' });
+  await menuItem('Change layer').click();
+  await menuItem('Спорт').click();
+  await visible(planner.getByText('Силовая в зале · Спорт'), 'слой ряда сменён');
+  await column.click({ button: 'right', position: { x: 10, y: 5 } });
+  await visible(menu.getByRole('menuitem', { name: /^New entry at \d\d:\d\d$/ }), 'меню пустого места шкалы');
+  await menuItem('Find free time…').click();
+  await visible(page.locator('.Modal [data-free-time] [data-free-slot]'), 'окна для новой записи');
+  await page.locator('.Modal').getByRole('button', { name: 'Close' }).click();
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await visible(sidePane.locator('[data-reminder-sample]'), 'образец напоминания в настройках');
+  await closeSide();
+  console.log('OK: колонка разделов, задача на шкалу, меню записи и пустого места шкалы, образец напоминания');
+
   // ── Телефон: экраны на весь экран, свободное время шторкой ───────────────
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(600);
@@ -133,9 +186,15 @@ try {
   await planner.locator('[data-planner-search-open]').click();
   await search.locator('[data-planner-search-input]').fill('зале');
   await visible(ahead.locator('[data-key]'), 'поиск на телефоне');
-  assert.equal(await tabBar.isVisible(), false, 'поиск закрывает ленту модулей');
+  // Лента уходит после перерисовки раздела — ждём, а не проверяем мгновенно
+  await tabBar.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('поиск закрывает ленту модулей'));
   await shot('plan-search-phone');
   await ahead.locator('[data-key]').first().click();
+  // Карточка на телефоне — строки настроек, «Сохранить» в шапке вместо кнопки под формой (PhPlanMore)
+  await visible(sidePane.locator('[data-side-save]').filter({ hasText: 'Save' }), '«Сохранить» в шапке карточки');
+  assert.equal(await sidePane.getByRole('button', { name: 'Save', exact: true }).count(), 1, 'одна «Сохранить»');
+  await shot('plan-editor-phone');
   await sidePane.locator('[data-free-time-open]').click();
   const sheet = page.locator('.Modal [data-free-time]');
   await visible(sheet.locator('[data-free-slot]'), 'окна в шторке');

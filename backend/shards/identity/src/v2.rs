@@ -597,6 +597,12 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if s(&v, "error").contains("не подтвержд") {
                 return Ok(pb::SessionIssueResponse { confirm_required: true, ..Default::default() }.encode_to_vec());
             }
+            // spec 041: неверный пароль и временная блокировка входа — шаг входа со счётчиком попыток
+            let error = s(&v, "error");
+            if v["ok"].as_bool() != Some(true) && (error.contains("неверный логин или пароль") || error.contains("неудачных попыток")) {
+                let (attempts_left, locked_ms) = login_attempt_state(&login);
+                return Ok(pb::SessionIssueResponse { password_wrong: true, attempts_left, locked_ms, ..Default::default() }.encode_to_vec());
+            }
             v1_ok(&v)?;
             // Аккаунт ждёт удаления (spec 027): пароль верен, но токен — только с явной отменой удаления
             if let Some(at) = delete::pending_until(&ctx.v2, &login).await {

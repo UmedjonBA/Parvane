@@ -362,3 +362,42 @@
 #Settings .settings-main-scroll.with-notch::before {
   display: none;
 }
+
+// «Изменить профиль» (доска `XpProfile`): «Готово» в шапке, «Убрать фото» под аватаром, ник своим блоком
+#Settings .pv-header-done {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0.375rem 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+#Settings .parvane-avatar-remove {
+  cursor: var(--custom-cursor, pointer);
+
+  display: block;
+
+  margin: 0.5rem auto 0;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-red);
+
+  background: none;
+}
+
+#Settings [data-edit-profile] [data-rename-dialog] {
+  margin-inline: 1rem;
+}

@@ -1,4 +1,4 @@
-// «Профиль» по макету (spec 041 E3). Компьютер: «Профиль» занимает окно — колонка разделов слева, экран справа;
+// «Профиль» по макету (spec 041 E3 и хвосты: экраны выгрузки, справки, отчёта об ошибке, удаления, карточки аккаунта). Компьютер: «Профиль» занимает окно — колонка разделов слева, экран справа;
 // «Обзор», «Оформление» (режим, размер текста, фон чатов), вложенные экраны возвращаются по карте возвратов,
 // «Копия ключей», «О приложении», выгрузка и выход — пункты списка. Телефон: аккаунт с плитками, разделы списком,
 // лента модулей только на главном экране, ничего не выходит за ширину экрана.
@@ -88,8 +88,20 @@ try {
   await overview.waitFor({ state: 'hidden', timeout: WAIT_MS });
   console.log('OK: «Оформление» — режим и размер текста');
 
-  // Вложенный экран: стрелка есть, пункт колонки остаётся выбранным, Escape идёт по карте возвратов
-  await appearance.locator('[data-appearance-row="background"]').click();
+  // spec 041 (`DkSettingsA`): схемы образцами «светлая | тёмная половина», плотный список чатов
+  assert.equal(await appearance.locator('[data-scheme] > span:first-child > span').count() >= 10, true,
+    'образец схемы — две половины');
+  const dense = appearance.locator('[data-appearance-row="dense"]');
+  await dense.click();
+  await page.waitForFunction(() => document.documentElement.classList.contains('chat-list-dense'), undefined, { timeout: WAIT_MS });
+  await dense.click();
+  await page.waitForFunction(() => !document.documentElement.classList.contains('chat-list-dense'), undefined, { timeout: WAIT_MS });
+  console.log('OK: схемы половинами, плотный список чатов');
+
+  // Вложенный экран: стрелка есть, пункт колонки остаётся выбранным, Escape идёт по карте возвратов. «Фон чатов» —
+  // переключатель: «Рисунок» открывает выбор рисунка
+  await appearance.locator('[data-appearance-row="background"]').getByRole('button', { name: 'Pattern', exact: true })
+    .click();
   await shown(page.locator('[data-bg-pattern]').first());
   await shown(back);
   await shown(current('appearance'));
@@ -120,6 +132,17 @@ try {
   await profileRow(page, 'Devices and account').click();
   await shown(page.locator('.SettingsActiveSessions'));
   await shown(current('devices'));
+  // spec 041 (`DkSettingsA`): карточки аккаунта и «Опасная зона»; удаление — экраном
+  await shown(page.locator('[data-account-card] [data-account-row="nick"]').getByText(/^@profile-vera-/));
+  await page.locator('[data-delete-account-open]:visible').click();
+  await shown(page.locator('[data-delete-account-dialog]'));
+  await shown(current('devices'));
+  await back.click();
+  await shown(page.locator('.SettingsActiveSessions'));
+  await page.locator('[data-account-row="password"]').click();
+  await shown(page.locator('[data-password-form]'));
+  await profileRow(page, 'Devices and account').click();
+  await shown(page.locator('.SettingsActiveSessions'));
   await profileRow(page, 'Privacy and Security').click();
   await shown(page.locator('#Settings').getByText('Blocked Users').first());
   assert.equal(await page.locator('#Settings').getByText(/E2E Keys/).count(), 0, 'копия ключей осталась в «Конфиденциальности»');
@@ -128,8 +151,27 @@ try {
   await profileRow(page, 'Export my data').click();
   const exportDialog = page.locator('[data-export-dialog]');
   await shown(exportDialog);
+  await shown(current('export'));
   await page.keyboard.press('Escape');
   await hidden(exportDialog);
+
+  // spec 041: «Справка Parvane» и «Сообщить об ошибке» — экраны; «Формат» в «Языке»
+  await profileRow(page, 'Parvane help').click();
+  const help = page.locator('[data-settings-help]');
+  await shown(help);
+  assert.equal(await help.locator('[data-help-note]').count() >= 10, true, 'список заметок справки');
+  await shown(help.locator('[data-help-restore]'));
+  await profileRow(page, 'Report a Bug').click();
+  const bug = page.locator('[data-bug-report]');
+  await shown(bug);
+  assert.equal(await bug.locator('[data-bug-send]').isDisabled(), true, 'пустой отчёт не отправляется');
+  await bug.locator('[data-area="notes"]').click();
+  await shown(bug.locator('[data-area="notes"][aria-pressed="true"]'));
+  await bug.locator('[data-bug-preview]').click();
+  await shown(bug.getByText(/^Parvane \S+ · \S+ · \S+/));
+  await profileRow(page, 'Language').click();
+  await shown(page.locator('[data-language-time-format]'));
+  console.log('OK: справка, отчёт об ошибке, формат времени');
   await profileRow(page, 'Log Out').click();
   const logOutButton = page.locator('.Modal').getByRole('button', { name: 'Log Out' }).last();
   await shown(logOutButton);
@@ -232,11 +274,13 @@ try {
   await shown(ribbon);
   assert.equal(await mobile.locator('[data-profile-menu="nav"]').count(), 0, 'на телефоне есть колонка разделов');
   for (const id of ['saved', 'contacts', 'archive', 'modules', 'appearance', 'notifications', 'language', 'devices',
-    'privacy', 'keys', 'data', 'export', 'messenger', 'bug', 'about', 'signOut']) {
+    'privacy', 'keys', 'data', 'export', 'messenger', 'help', 'bug', 'about', 'signOut']) {
     assert.equal(await list.locator(`[data-profile-item="${id}"]`).count(), 1, `нет пункта ${id}`);
   }
   assert.equal(await list.locator('[data-profile-item="overview"]').count(), 0, '«Обзор» — пункт только компьютера');
   await shown(list.locator('[data-profile-item="modules"]').getByText(/^\d+ of \d+$/));
+  // Значения строк: копии ключей с этого устройства ещё не было, объём данных — из оценки браузера
+  await shown(list.locator('[data-profile-item="keys"]').getByText('none', { exact: true }));
   await expectNoOverflow(mobile, 'главный экран');
   console.log('OK: телефон — аккаунт с плитками и разделы списком');
 
@@ -254,7 +298,8 @@ try {
   await shown(list);
   await shown(ribbon);
 
-  for (const id of ['notifications', 'devices', 'privacy', 'keys', 'data', 'messenger', 'about']) {
+  for (const id of ['notifications', 'devices', 'privacy', 'keys', 'data', 'export', 'messenger', 'help', 'bug',
+    'about']) {
     await list.locator(`[data-profile-item="${id}"]`).click();
     await shown(mobileBack);
     await expectNoOverflow(mobile, `экран ${id}`);
@@ -262,7 +307,15 @@ try {
     await shown(list);
   }
   await openEditProfile(mobile);
-  await mobileBack.click();
+  // spec 041 (`XpProfile`): «Мой профиль» с «Готово», ник своим блоком — смена ника видна только при новом нике
+  await shown(mobile.locator('[data-profile-done]'));
+  const nickInput = mobile.locator('#parvane-rename-nick');
+  await nickInput.fill(`profile-free-${suffix.replace(/\D/g, '').slice(-8)}`);
+  await shown(mobile.locator('[data-rename-nick-state="free"]'));
+  await nickInput.fill('x');
+  await shown(mobile.locator('[data-rename-nick-state="invalid"]'));
+  await expectNoOverflow(mobile, '«Мой профиль»');
+  await mobile.locator('[data-profile-done]').click();
   await shown(list);
   console.log('OK: телефон — экраны открываются на весь экран и возвращаются в «Профиль»');
 

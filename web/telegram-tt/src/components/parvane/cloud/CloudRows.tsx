@@ -178,6 +178,8 @@ const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
     link.kind && lang(link.kind === 'folder' ? 'ParvaneCloudFolder' : 'ParvaneCloudLinkKindFile'),
     link.createdAt > 0 && lang('ParvaneCloudLinkCreated', { date: dateText(link.createdAt) }),
     term,
+    // Доски `RdFiles`, `RpFiles`: «до 22 ноября · открытий: 0»
+    link.state !== 'preparing' && lang('ParvaneCloudLinkOpens', { count: link.opens }),
   ].filter(Boolean).join(' · ');
 
   const handleOpen = useLastCallback(() => onOpen(link.id));
@@ -207,6 +209,7 @@ const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
       data-link-state={link.state}
       data-name={link.name}
       data-bytes={link.bytes}
+      data-opens={link.opens}
       onClick={handleOpen}
       onKeyDown={handleKeyDown}
     >

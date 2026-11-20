@@ -186,7 +186,7 @@ try {
   const abandonContext = await browser.newContext();
   const abandonSession = await openLoginPage(abandonContext, bobNick);
   const bobPasswordScreen = abandonSession.page.locator('.Transition_slide-active > #auth-password-form');
-  await bobPasswordScreen.getByText('Invalid password', { exact: false })
+  await bobPasswordScreen.getByText('Wrong password', { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await pressAuthButton(abandonSession.page, bobPasswordScreen, 'Create account', '#auth-registration-form');
   const bobRegisterScreen = await waitRegisterScreen(abandonSession.page);

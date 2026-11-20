@@ -1,33 +1,52 @@
 import { memo } from '../../../lib/teact/teact';
 
+import buildClassName from '../../../util/buildClassName';
 import { getCallInitial } from './callTypes';
 
+import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
 import CallButton from './CallButton';
 
+import kit from '../notes/PvKit.module.scss';
 import styles from './Call.module.scss';
 
 type OwnProps = {
   peerName: string;
   status: string;
+  // `@ник` звонящего и «в контактах» (личный звонок)
+  handle?: string;
+  isContact?: boolean;
   onAccept: NoneToVoidFunction;
   onDecline: NoneToVoidFunction;
+  // Отклонить и открыть чат со звонящим; нет чата — кнопки нет
+  onReplyWithMessage?: NoneToVoidFunction;
 };
 
-// Входящий звонок (доска `RpCalls`): кто звонит и две кнопки с подписями
+// Входящий звонок (доска `RpCalls`): кто звонит, «Ответить сообщением» и две кнопки с подписями
 const CallIncoming = ({
-  peerName, status, onAccept, onDecline,
+  peerName, status, handle, isContact, onAccept, onDecline, onReplyWithMessage,
 }: OwnProps) => {
   const lang = useOldLang();
+  const langNew = useLang();
 
   return (
     <div className={styles.incoming}>
       <div className={styles.note}>{lang('ParvaneCallIncomingTitle')}</div>
       <div className={styles.avatarLarge} aria-hidden>{getCallInitial(peerName)}</div>
       <div className={styles.nameLarge}>{peerName}</div>
+      {handle && (
+        <div className={styles.handle} data-call-handle>
+          {isContact ? langNew('ParvaneCallHandleContact', { handle }) : handle}
+        </div>
+      )}
       <div className={styles.status}>{status}</div>
       <div className={styles.spacer} />
+      {onReplyWithMessage && (
+        <button type="button" className={buildClassName(kit.chip, styles.replyChip)} onClick={onReplyWithMessage}>
+          {langNew('ParvaneCallReplyWithMessage')}
+        </button>
+      )}
       <div className={styles.answer}>
         <CallButton
           icon="icon-phone-discard"

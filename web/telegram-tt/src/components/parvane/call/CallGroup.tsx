@@ -3,8 +3,11 @@ import { memo } from '../../../lib/teact/teact';
 
 import type { CallInfo } from './callTypes';
 
+import buildClassName from '../../../util/buildClassName';
+import { GROUP_CALL_MAX_PARTICIPANTS } from '../../../api/parvane/groupcall';
 import { hasVideoTrack } from './callTypes';
 
+import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
 import CallButton from './CallButton';
@@ -15,12 +18,18 @@ import styles from './Call.module.scss';
 type OwnProps = {
   call: CallInfo;
   time: string;
+  // Участники, которые сейчас говорят; `self` — своя плитка
+  speakers: string[];
   onToggleMute: NoneToVoidFunction;
   onToggleCamera: NoneToVoidFunction;
   extraControls?: TeactNode;
   onMinimize: NoneToVoidFunction;
   onHangup: NoneToVoidFunction;
+  // Позвать участника группы; группа неизвестна — кнопки и свободного места нет
+  onInvite?: NoneToVoidFunction;
 };
+
+export const SELF_SPEAKER = 'self';
 
 const PEER_STATE_KEYS: Record<string, string> = {
   active: 'ParvaneCallConnected',
@@ -29,16 +38,20 @@ const PEER_STATE_KEYS: Record<string, string> = {
   declined: 'ParvaneGroupPeerDeclined',
 };
 
-// Групповой звонок (доски `PhCalls`, `DkCalls`): шапка с числом участников на связи, плитки, полоса кнопок
+// Групповой звонок (доски `PhCalls`, `DkCalls`): шапка с числом участников на связи и «Позвать участника», плитки
+// (говорящий — с рамкой, свободное место — зовёт участника), полоса кнопок
 const CallGroup = ({
-  call, time, onToggleMute, onToggleCamera, onHangup, extraControls, onMinimize,
+  call, time, speakers, onToggleMute, onToggleCamera, onHangup, extraControls, onMinimize, onInvite,
 }: OwnProps) => {
   const lang = useOldLang();
+  const langNew = useLang();
 
   const group = call.group!;
   const peers = Object.keys(group.peerNames);
   const hasCamera = hasVideoTrack(call.localStream);
   const activeCount = peers.filter((peer) => group.peerStates[peer] === 'active').length + 1;
+  const hasFreePlace = Boolean(onInvite) && peers.length + 1 < GROUP_CALL_MAX_PARTICIPANTS;
+  const inviteLabel = langNew('ParvaneCallInvite');
 
   return (
     <div className={styles.group}>
@@ -61,6 +74,12 @@ const CallGroup = ({
             <span>{time}</span>
           </div>
         </div>
+        {onInvite && (
+          <button type="button" className={styles.groupInvite} aria-label={inviteLabel} onClick={onInvite}>
+            <i className="icon icon-add-user" aria-hidden />
+            <span className={styles.groupInviteText}>{inviteLabel}</span>
+          </button>
+        )}
       </div>
       <div className={styles.tiles}>
         <CallPeerTile
@@ -68,22 +87,39 @@ const CallGroup = ({
           status={lang('ParvaneCallConnected')}
           stream={call.screenStream || (hasCamera && !call.isCameraOff ? call.localStream : undefined)}
           isMuted={call.isMuted}
+          isSpeaking={speakers.includes(SELF_SPEAKER)}
         />
         {peers.map((peer, index) => {
           const peerState = group.peerStates[peer] || 'connecting';
+          const isSpeaking = peerState === 'active' && speakers.includes(peer);
           return (
             <CallPeerTile
               key={peer}
               peer={peer}
               peerState={peerState}
               name={group.peerNames[peer]}
-              status={lang(PEER_STATE_KEYS[peerState] || PEER_STATE_KEYS.connecting)}
+              status={isSpeaking
+                ? langNew('ParvaneCallSpeaking')
+                : lang(PEER_STATE_KEYS[peerState] || PEER_STATE_KEYS.connecting)}
               stream={call.groupStreams?.[peer]}
               isCameraOff={call.groupVideoMuted?.[peer] ?? !hasCamera}
+              isSpeaking={isSpeaking}
               tone={index + 1}
             />
           );
         })}
+        {hasFreePlace && (
+          <button
+            type="button"
+            className={buildClassName(styles.tile, styles.tileAway, styles.tileFree)}
+            data-call-free-place
+            onClick={onInvite}
+          >
+            <span className={buildClassName(styles.tileAvatar, styles.tileFreeAvatar)} aria-hidden>+</span>
+            <span className={styles.tileName}>{langNew('ParvaneCallFreePlace')}</span>
+            <span className={styles.tileStatus}>{langNew('ParvaneCallFreePlaceHint')}</span>
+          </button>
+        )}
       </div>
       <div className={styles.groupBar}>
         <CallButton

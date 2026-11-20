@@ -190,7 +190,19 @@ const CanvasCard = ({
         className={buildClassName(cardClass, styles.canvasCardText)}
         style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
       >
-        <CanvasLinkBody url={node.url || ''} />
+        {inline ? (
+          <input
+            className={styles.canvasGroupInput}
+            type="url"
+            value={inline.text}
+            placeholder={lang('KnowledgeCanvasLinkUrl')}
+            aria-label={lang('KnowledgeCanvasLinkUrl')}
+            data-canvas-inline
+            onChange={onInlineChange}
+            onBlur={onInlineBlur}
+            onKeyDown={onInlineKey}
+          />
+        ) : <CanvasLinkBody url={node.url || ''} />}
         {ports}
         {handles}
       </div>

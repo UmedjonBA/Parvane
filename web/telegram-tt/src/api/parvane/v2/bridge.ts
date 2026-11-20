@@ -239,6 +239,15 @@ export class V2Bridge {
           };
         }
         if (flag(r, 'confirmRequired', 'confirm_required')) return fail('почта не подтверждена');
+        // spec 041: неверный пароль — со счётчиком попыток до временной блокировки входа
+        if (flag(r, 'passwordWrong', 'password_wrong')) {
+          return {
+            ...fail('неверный логин или пароль'),
+            password_wrong: true,
+            attempts_left: int(r, 'attemptsLeft', 'attempts_left'),
+            locked_ms: int(r, 'lockedMs', 'locked_ms'),
+          };
+        }
         // spec 027: аккаунт ждёт удаления — пароль верен, токена нет без явной отмены удаления
         const deletionAt = int(r, 'deletionAtMs', 'deletion_at_ms');
         if (deletionAt && !str(r, 'token')) return { ok: false, deletion_at_ms: deletionAt };

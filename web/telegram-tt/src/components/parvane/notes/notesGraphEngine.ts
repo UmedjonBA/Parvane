@@ -23,6 +23,8 @@ export type NotesGraphNote = {
   isDaily?: boolean;
 };
 
+export type NotesGraphPin = { id: string; x: number; y: number };
+
 export type NotesGraphRecord = { id: string; title: string; links: string[]; type?: string };
 
 // Вход обоих вызовов. Размеры — в единицах поля (пиксели при масштабе 1); не заданы — значения движка
@@ -44,6 +46,8 @@ export type NotesGraphInput = {
   charWidth?: number;
   labelMaxWidth?: number;
   labelHeight?: number;
+  // Закреплённые точки (spec 040 T10): переставленные руками стоят ровно здесь, их группа раскладывается вокруг
+  pinned?: NotesGraphPin[];
   // Холст: размер карточки (250 × 140), просвет (60) и шаг сетки (10)
   cardWidth?: number;
   cardHeight?: number;
@@ -133,9 +137,14 @@ export type NotesGraphCanvasLayout = {
 
 export const NOTES_GRAPH_DEFAULT_SEED = 1;
 
+/** Вход вызова раскладки: зерно по умолчанию подставлено (то же и во втором потоке). */
+export function graphLayoutArgs(input: NotesGraphInput) {
+  return { ...input, seed: input.seed ?? NOTES_GRAPH_DEFAULT_SEED };
+}
+
 /** Раскладка графа: узлы с подписями, линии связей, блоки и размер поля. */
 export function layoutNotesGraph(input: NotesGraphInput) {
-  return engineStatic<NotesGraphLayout>('notesGraphLayout', { ...input, seed: input.seed ?? NOTES_GRAPH_DEFAULT_SEED });
+  return engineStatic<NotesGraphLayout>('notesGraphLayout', graphLayoutArgs(input));
 }
 
 /** Раскладка «холста из графа»: карточки существующих заметок той же области и стрелки между ними. */

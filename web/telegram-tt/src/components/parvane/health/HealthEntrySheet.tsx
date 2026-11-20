@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import { memo, useLayoutEffect, useState } from '../../../lib/teact/teact';
 
 import type { HealthExtraForm } from './healthDayFormat';
 import type { HealthDraft, HealthEntry } from './healthTypes';
@@ -84,7 +84,9 @@ const HealthEntrySheet = ({ target, today, onClose }: OwnProps) => {
   // Пояс записи; у нового сна — пояс устройства на момент открытия окна
   const [tzMin, setTzMin] = useState(0);
 
-  useEffect(() => {
+  // Поля окна ставятся в кадре его появления: обычный эффект шёл кадром позже и затирал уже набранное (день
+  // дневного сна возвращался к сегодняшнему, и запись в будущем отклонялась)
+  useLayoutEffect(() => {
     if (!target) return;
     setProblem(undefined);
     setIsSaving(false);

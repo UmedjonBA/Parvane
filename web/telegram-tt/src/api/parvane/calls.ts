@@ -2,6 +2,7 @@ import type { ApiMessage, ApiUpdate } from '../types';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
+import { switchCallCamera } from './callCameraSwitch';
 import {
   CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, RING_TIMEOUT_MS, type WireCallSignal,
 } from './callengine';
@@ -60,6 +61,11 @@ const BUSY_OVERLAY_MS = 2500;
 // окне одного таймаута вызова не бывает
 const BUSY_GROUP_CALL_LIMIT = 64;
 const MAX_BUFFERED_GROUP_SIGNALS = 256;
+// Отклонённое приглашение глушит повторы того же звонка недолго: дальше «Позвать участника» зовёт снова
+const DECLINED_SILENCE_MS = 2500;
+const AWAY_PEER_STATES = new Set(['ended', 'declined', 'busy', 'security_failed']);
+
+export type CallAction = 'candidates' | 'invite' | 'switchCamera' | 'acceptWaiting' | 'declineWaiting';
 
 type CallWindowState = {
   state: string;
@@ -67,7 +73,14 @@ type CallWindowState = {
   remoteStream?: MediaStream;
   localStream?: MediaStream;
   peerName?: string;
-  sas?: string;
+  // Чат собеседника (личный звонок) либо группы звонка: «Ответить сообщением» и «Открыть чат» (доски `RpCalls`,
+  // `DkCalls`); `undefined` — группа звонка неизвестна устройству
+  peerChatId?: string;
+  // `@ник` собеседника и «в контактах» — у входящего (доска `RpCalls`)
+  peerHandle?: string;
+  isPeerContact?: boolean;
+  // Отпечатки DTLS обеих сторон: слова сверки по ним считает движок (CALL-2)
+  sasFingerprints?: [string, string];
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
@@ -84,9 +97,13 @@ type CallWindowState = {
   // Название группы, если приглашённый в ней состоит: в WireGroupInvite поля
   // с названием нет (провод не меняем), берём из локального стора
   pendingGroupTitle?: string;
+  // Приглашение в другой групповой звонок во время разговора — карточка поверх звонка (доска `DkCalls`)
+  waitingInvite?: { from: string; fromName: string; title?: string };
   group?: {
     groupCallId: string;
     title: string;
+    // Группа звонка (`v2g:…`), если она известна устройству: из неё зовут участников
+    address?: string;
     peerStates: Record<string, GroupPeerState>;
     peerNames: Record<string, string>;
   };
@@ -103,11 +120,7 @@ export function createCallController(deps: CallDependencies) {
   let engine: CallEngine | undefined;
   let groupEngine: GroupCallEngine | undefined;
   const screenShare = createCallScreenShare({
-    getSenders: () => {
-      if (groupEngine?.currentGroupCallId) return groupEngine.getVideoSenders();
-      const sender = engine?.getVideoSender();
-      return sender ? [sender] : [];
-    },
+    getSenders: getVideoSenders,
     getCamera: () => getLocalStream()?.getVideoTracks()[0],
     onChange: (screenStream) => {
       emitWindowState({ screenStream, hasScreenShareError: undefined });
@@ -124,11 +137,16 @@ export function createCallController(deps: CallDependencies) {
     media: CallMedia;
     // Название для окна звонка (своё по группе, иначе из приглашения)
     title?: string;
+    // Группа звонка, если пригласивший в ней действует и устройство её знает
+    group?: string;
     // `isAuthenticated` — сигнал пришёл по v2 (отправителя проверил движок)
     buffered: Array<{ from: string; signal: WireCallSignal; isAuthenticated?: boolean }>;
     timer?: number;
   };
   let pendingGroupInvite: PendingGroupInvite | undefined;
+  // Приглашение в другой групповой звонок во время разговора (доска `DkCalls`): карточка поверх звонка; «Принять»
+  // выходит из текущего звонка, без ответа — «занят» по таймауту вызова
+  let waitingInvite: PendingGroupInvite | undefined;
   // Групповые звонки, приглашение в которые уже отработано (отклонили или были
   // заняты): id → момент, после которого запись протухает. Вечная запись
   // навсегда гасила бы экран входящего для этого звонка — освободившийся
@@ -140,7 +158,7 @@ export function createCallController(deps: CallDependencies) {
     onRemoteStream: (_stream: MediaStream) => {},
     onLocalStream: (_stream: MediaStream) => {},
     onIncoming: (_from: string, _callId: string, _media: CallMedia) => {},
-    onSas: (_sas?: string) => {},
+    onSas: (_fingerprints?: [string, string]) => {},
   };
 
   let cachedIceServers: RTCIceServer[] | undefined;
@@ -318,11 +336,11 @@ export function createCallController(deps: CallDependencies) {
       }
       callWindow.parvaneCall!.incoming = { from, callId, media };
       callWindow.parvaneCall!.state = 'incoming';
-      callWindow.parvaneCall!.peerName = deps.getStore().getDisplayName(from);
+      Object.assign(callWindow.parvaneCall!, describePeer(from));
       emit();
     };
-    listeners.onSas = (sas) => {
-      callWindow.parvaneCall!.sas = sas;
+    listeners.onSas = (fingerprints) => {
+      callWindow.parvaneCall!.sasFingerprints = fingerprints;
       emit();
     };
 
@@ -342,7 +360,7 @@ export function createCallController(deps: CallDependencies) {
       onState: (state) => listeners.onState(state),
       onRemoteStream: (stream) => listeners.onRemoteStream(stream),
       onIncoming: (from, callId, media) => listeners.onIncoming(from, callId, media),
-      onSas: (sas) => listeners.onSas(sas),
+      onSas: (fingerprints) => listeners.onSas(fingerprints),
       onRemoteMedia: ({ isAudioMuted, isVideoMuted }) => {
         callWindow.parvaneCall!.isRemoteMuted = isAudioMuted;
         callWindow.parvaneCall!.isRemoteCameraOff = isVideoMuted;
@@ -542,7 +560,7 @@ export function createCallController(deps: CallDependencies) {
         if (meshGroupByCall.size >= MESH_CALL_MEMORY) meshGroupByCall.clear();
         meshGroupByCall.set(signal.call_id, groupCallId);
       }
-      handleGroupSignal(from, signal, true);
+      handleGroupSignal(from, signal, true, groupCallId);
       return;
     }
     // Блокировку отрабатывает onIncoming (авто-отбой)
@@ -613,13 +631,15 @@ export function createCallController(deps: CallDependencies) {
     deps.recordV2Call?.(record);
   }
 
-  function ensureGroupWindowState(groupCallId: string, participants: string[], title?: string) {
+  function ensureGroupWindowState(groupCallId: string, participants: string[], title?: string, address?: string) {
     const callWindow = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall;
     if (!callWindow || callWindow.group?.groupCallId === groupCallId) return;
     const store = deps.getStore();
     const others = participants.filter((peer) => peer !== store.self);
+    callWindow.peerChatId = address ? store.getIdForAddress(address, 'group') : undefined;
     callWindow.group = {
       groupCallId,
+      address,
       title: title || others.map((peer) => store.getDisplayName(peer)).join(', '),
       peerStates: {},
       peerNames: Object.fromEntries(others.map((peer) => [peer, store.getDisplayName(peer)])),
@@ -650,7 +670,9 @@ export function createCallController(deps: CallDependencies) {
 
   function silenceGroupCall(groupCallId: string, reason: 'busy' | 'declined' | 'quiet') {
     busyGroupCallIds.set(groupCallId, {
-      until: Date.now() + getRingTimeoutMs(), isBusy: reason === 'busy', isQuiet: reason === 'quiet' || undefined,
+      until: Date.now() + (reason === 'declined' ? DECLINED_SILENCE_MS : getRingTimeoutMs()),
+      isBusy: reason === 'busy',
+      isQuiet: reason === 'quiet' || undefined,
     });
     pruneSilencedGroupCalls();
   }
@@ -711,7 +733,7 @@ export function createCallController(deps: CallDependencies) {
     }
     clearPendingGroupInvite();
     notifyOwnDevices(pending.groupCallId, 'answered_elsewhere');
-    ensureGroupWindowState(pending.groupCallId, pending.participants, pending.title);
+    ensureGroupWindowState(pending.groupCallId, pending.participants, pending.title, pending.group);
     groupEngine.joinMesh(pending.groupCallId, pending.participants, pending.media);
     pending.buffered.forEach(({ from, signal, isAuthenticated }) => {
       void groupEngine?.handleSignal(from, signal, isAuthenticated).catch((error) => {
@@ -737,42 +759,131 @@ export function createCallController(deps: CallDependencies) {
     return best?.title;
   }
 
-  function startPendingGroupInvite(from: string, invite: WireGroupInvite) {
+  function buildGroupInvite(from: string, invite: WireGroupInvite): PendingGroupInvite {
     const store = deps.getStore();
-    const callWindow = windowCall();
-    if (!callWindow) return;
-    pendingGroupInvite = {
+    // Своя группа — только если пригласивший действует в ней; иначе приглашению нельзя подставить чужую знакомую
+    const isSenderMember = (group: string) => Boolean(store.getGroupInfo(group)?.members
+      .some((m) => m.address === from && m.role !== 'banned'));
+    const group = invite.group && isSenderMember(invite.group) ? invite.group : undefined;
+    return {
       from,
       groupCallId: invite.group_call_id,
       participants: invite.participants,
       media: invite.media || 'audio',
+      title: inviteGroupTitle(
+        invite,
+        (address) => (isSenderMember(address) ? store.getGroupInfo(address)!.name : undefined),
+        () => findGroupTitleForParticipants(invite.participants),
+      ),
+      group,
       buffered: [],
     };
+  }
+
+  function startPendingGroupInvite(from: string, invite: WireGroupInvite) {
+    const store = deps.getStore();
+    const callWindow = windowCall();
+    if (!callWindow) return;
+    pendingGroupInvite = buildGroupInvite(from, invite);
     pendingGroupInvite.timer = window.setTimeout(() => {
       if (pendingGroupInvite?.groupCallId === invite.group_call_id) declineGroupInvite();
     }, getRingTimeoutMs());
     const others = invite.participants.filter((peer) => peer !== store.self);
     callWindow.pendingGroup = true;
-    callWindow.pendingGroupTitle = inviteGroupTitle(
-      invite,
-      // Своё название — только если пригласивший действует в этой группе; иначе приглашению
-      // нельзя подставить имя чужой знакомой группы
-      (group) => {
-        const info = store.getGroupInfo(group);
-        return info?.members.some((m) => m.address === from && m.role !== 'banned') ? info.name : undefined;
-      },
-      () => findGroupTitleForParticipants(invite.participants),
-    );
-    pendingGroupInvite.title = callWindow.pendingGroupTitle;
+    callWindow.pendingGroupTitle = pendingGroupInvite.title;
     callWindow.incoming = { from, callId: invite.group_call_id, media: invite.media };
     callWindow.peerName = others.map((peer) => store.getDisplayName(peer)).join(', ');
+    const { group } = pendingGroupInvite;
+    callWindow.peerChatId = group ? store.getIdForAddress(group, 'group') : undefined;
+    callWindow.peerHandle = undefined;
+    callWindow.isPeerContact = undefined;
     callWindow.state = 'incoming';
     window.dispatchEvent(new CustomEvent('parvane-call'));
   }
 
+  function startWaitingInvite(from: string, invite: WireGroupInvite) {
+    const waiting = buildGroupInvite(from, invite);
+    waitingInvite = waiting;
+    waiting.timer = window.setTimeout(() => {
+      if (waitingInvite === waiting) declineWaitingInvite();
+    }, getRingTimeoutMs());
+    emitWindowState({
+      waitingInvite: { from, fromName: deps.getStore().getDisplayName(from), title: waiting.title },
+    });
+  }
+
+  function clearWaitingInvite() {
+    if (waitingInvite?.timer) window.clearTimeout(waitingInvite.timer);
+    waitingInvite = undefined;
+    emitWindowState({ waitingInvite: undefined });
+  }
+
+  // Отказ с карточки поверх звонка — «занят»: человек в другом разговоре
+  function declineWaitingInvite() {
+    const waiting = waitingInvite;
+    if (!waiting || !groupEngine) return;
+    waiting.buffered.forEach(({ from, signal }) => {
+      if (signal.type === 'invite') groupEngine!.rejectInvite(from, signal.call_id, 'busy');
+    });
+    groupEngine.declineCall(waiting.groupCallId, waiting.participants, 'busy');
+    silenceGroupCall(waiting.groupCallId, 'declined');
+    clearWaitingInvite();
+  }
+
+  // «Принять» на карточке: текущий звонок завершается, приглашение принимается как обычное
+  function acceptWaitingInvite() {
+    const waiting = waitingInvite;
+    if (!waiting) return undefined;
+    clearWaitingInvite();
+    if (groupEngine?.currentGroupCallId) groupEngine.leave();
+    else engine?.hangUp();
+    pendingGroupInvite = waiting;
+    return acceptGroupInvite();
+  }
+
+  // Кто ещё в звонке (не ушёл, не отказал): им и новому участнику уходит приглашение с дополненным списком
+  function getGroupCallPeers() {
+    const group = windowCall()?.group;
+    if (!group) return [];
+    return Object.keys(group.peerNames).filter((peer) => !AWAY_PEER_STATES.has(group.peerStates[peer] || ''));
+  }
+
+  // «Позвать участника» (доски `PhCalls`, `DkCalls`): участники группы звонка, которых в нём нет
+  function getGroupCallCandidates() {
+    const store = deps.getStore();
+    const address = windowCall()?.group?.address;
+    const info = address ? store.getGroupInfo(address) : undefined;
+    if (!info) return [];
+    const inCall = new Set([store.self, ...getGroupCallPeers()]);
+    return getActiveGroupMemberAddresses(info.members)
+      .filter((peer) => !inCall.has(peer))
+      .map((peer) => ({ address: peer, name: store.getDisplayName(peer) }));
+  }
+
+  // Приглашение уходит всем участникам: идущие достраивают mesh (только от уже допущенного участника), новый —
+  // видит экран входящего. Отказавшего раньше можно позвать снова
+  function inviteToGroupCall(address: string) {
+    const callWindow = windowCall();
+    const group = callWindow?.group;
+    const groupCallId = groupEngine?.currentGroupCallId;
+    if (!group || !groupEngine || !groupCallId || groupCallId !== group.groupCallId) return false;
+    if (!getGroupCallCandidates().some((candidate) => candidate.address === address)) return false;
+    const store = deps.getStore();
+    const participants = [store.self, ...getGroupCallPeers(), address];
+    if (participants.length > GROUP_CALL_MAX_PARTICIPANTS) return false;
+    group.peerStates = { ...group.peerStates, [address]: 'connecting' };
+    group.peerNames = { ...group.peerNames, [address]: store.getDisplayName(address) };
+    const groupRef = group.address ? { address: group.address, title: group.title } : undefined;
+    groupEngine.startCall(groupCallId, participants, groupEngine.currentMedia, groupRef);
+    window.dispatchEvent(new CustomEvent('parvane-call'));
+    return true;
+  }
+
   // `isAuthenticated` — сигнал пришёл по v2: подписи SDP в нём нет, отправителя
   // проверил движок
-  function handleGroupSignal(from: string, signal: WireCallSignal | WireGroupInvite, isAuthenticated: boolean) {
+  function handleGroupSignal(
+    from: string, signal: WireCallSignal | WireGroupInvite, isAuthenticated: boolean, groupCallId?: string,
+  ) {
     if (!groupEngine) return;
     if (signal.type === 'group_invite') {
       // Приглашение от заблокированного контакта: молча игнорируем, как и
@@ -784,6 +895,13 @@ export function createCallController(deps: CallDependencies) {
       if (signal.participants.length > GROUP_CALL_MAX_PARTICIPANTS || !signal.participants.includes(from)) return;
       if (groupEngine.currentGroupCallId === signal.group_call_id) {
         void groupEngine.handleSignal(from, signal);
+        return;
+      }
+      if (waitingInvite?.groupCallId === signal.group_call_id) return;
+      // Идёт разговор и ничего не ждёт ответа — карточка поверх звонка (доска `DkCalls`)
+      const isTalking = Boolean(groupEngine.currentGroupCallId) || windowCall()?.state === 'active';
+      if (isTalking && !pendingGroupInvite && !waitingInvite && !isGroupCallSilenced(signal.group_call_id)) {
+        startWaitingInvite(from, signal);
         return;
       }
       // Уже в звонке или уже ждём решения по другому приглашению — «занят»
@@ -801,6 +919,13 @@ export function createCallController(deps: CallDependencies) {
       }
       if (isGroupCallSilenced(signal.group_call_id)) return;
       startPendingGroupInvite(from, signal);
+      return;
+    }
+    // Парные сигналы звонка с карточки поверх разговора — в её буфер до решения
+    if (waitingInvite && groupCallId === waitingInvite.groupCallId) {
+      if (waitingInvite.buffered.length < MAX_BUFFERED_GROUP_SIGNALS) {
+        waitingInvite.buffered.push({ from, signal, isAuthenticated });
+      }
       return;
     }
     // Парные сигналы участников до решения пользователя — в буфер
@@ -852,7 +977,7 @@ export function createCallController(deps: CallDependencies) {
       return undefined;
     }
     const groupCallId = crypto.randomUUID();
-    ensureGroupWindowState(groupCallId, members, info.name);
+    ensureGroupWindowState(groupCallId, members, info.name, groupAddress);
     groupEngine.startCall(
       groupCallId, members, isVideo ? 'video' : 'audio', { address: groupAddress, title: info.name },
     );
@@ -870,11 +995,27 @@ export function createCallController(deps: CallDependencies) {
     if (!toAddress || !engine) return undefined;
     // Уже в звонке — повторный вызов затёр бы состояние движка
     if (engine.currentCallId || groupEngine?.currentGroupCallId) return undefined;
-    if (store.isGroupAddress(toAddress)) return placeGroupCall(toAddress, isVideo);
     const callState = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall!;
-    callState.peerName = store.getDisplayName(toAddress);
+    if (store.isGroupAddress(toAddress)) {
+      callState.peerChatId = chatId;
+      return placeGroupCall(toAddress, isVideo);
+    }
+    Object.assign(callState, describePeer(toAddress));
     await engine.placeCall(toAddress, isVideo ? 'video' : 'audio');
     return true;
+  }
+
+  // Кто звонит или кому звоним: имя, чат, `@ник` и «в контактах» (доска `RpCalls`)
+  function describePeer(address: string): Partial<CallWindowState> {
+    const store = deps.getStore();
+    const [nick, domain] = address.split('@');
+    const isLocal = domain === store.self.split('@')[1];
+    return {
+      peerName: store.getDisplayName(address),
+      peerChatId: store.getIdForAddress(address),
+      peerHandle: `@${isLocal ? nick : address}`,
+      isPeerContact: store.isContact(address) || undefined,
+    };
   }
 
   function emitWindowState(patch: Partial<CallWindowState>) {
@@ -886,6 +1027,37 @@ export function createCallController(deps: CallDependencies) {
 
   function getLocalStream() {
     return groupEngine?.currentGroupCallId ? groupEngine.getLocalStream() : engine?.getLocalStream();
+  }
+
+  function getVideoSenders() {
+    if (groupEngine?.currentGroupCallId) return groupEngine.getVideoSenders();
+    const sender = engine?.getVideoSender();
+    return sender ? [sender] : [];
+  }
+
+  async function switchCamera() {
+    const stream = getLocalStream();
+    if (!stream) return false;
+    try {
+      const isSwitched = await switchCallCamera(stream, getVideoSenders(), Boolean(windowCall()?.screenStream));
+      if (isSwitched) emitWindowState({ localStream: stream });
+      return isSwitched;
+    } catch (error) {
+      deps.log(`Камера не сменилась: ${String(error)}`);
+      return false;
+    }
+  }
+
+  // Действия звонка по макету (spec 041): позвать участника, сменить камеру, приглашение поверх разговора
+  function act(action: CallAction, address?: string) {
+    switch (action) {
+      case 'candidates': return getGroupCallCandidates();
+      case 'invite': return address ? inviteToGroupCall(address) : false;
+      case 'switchCamera': return switchCamera();
+      case 'acceptWaiting': return acceptWaitingInvite();
+      case 'declineWaiting': return declineWaitingInvite();
+      default: return undefined;
+    }
   }
 
   function toggleMute() {
@@ -938,6 +1110,7 @@ export function createCallController(deps: CallDependencies) {
   }
 
   return {
+    act,
     applyCallRecords,
     acceptIncoming: () => {
       if (pendingGroupInvite) return acceptGroupInvite();

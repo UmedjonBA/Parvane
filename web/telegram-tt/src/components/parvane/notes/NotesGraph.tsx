@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { PlannerState } from '../planner/plannerModel';
@@ -38,6 +38,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useResizeObserver from '../../../hooks/useResizeObserver';
+import { useStateRef } from '../../../hooks/useStateRef';
 
 import { edgeKey, edgePair, GraphEdges, GraphNodes } from './NotesGraphLayers';
 import NotesGraphScope, { NotesGraphScopeChip } from './NotesGraphScope';
@@ -206,9 +207,20 @@ const NotesGraph = ({
   const plannerForGraph = withRecords ? planner : undefined;
   const records = useMemo(() => (plannerForGraph ? recordsOf(plannerForGraph) : NO_RECORDS), [plannerForGraph]);
 
+  // Переставленные руками точки уходят в движок закреплёнными, когда раскладка и так пересчитывается (новая связь,
+  // другая область): сама перестановка граф не перекладывает — точка просто стоит, где её отпустили. «Разложить
+  // заново» снимает закрепление — раскладка считается без него
+  const placesRef = useStateRef(places);
+  const hasPins = Object.keys(places).length > 0;
+  const [relayoutCount, setRelayoutCount] = useState(0);
   const input = useMemo(() => buildGraphInput(sources, records, filter, {
-    withDays, withRecords, aspect: isNarrow ? NOTES_GRAPH_ASPECT_TALL : NOTES_GRAPH_ASPECT_WIDE,
-  }), [sources, records, filter, withDays, withRecords, isNarrow]);
+    withDays,
+    withRecords,
+    aspect: isNarrow ? NOTES_GRAPH_ASPECT_TALL : NOTES_GRAPH_ASPECT_WIDE,
+    places: placesRef.current,
+  // `relayoutCount` — пересчёт после «Разложить заново» (места уже сняты)
+  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }), [sources, records, filter, withDays, withRecords, isNarrow, placesRef, relayoutCount]);
   const { layout, isBusy } = useNotesGraphLayout(input);
 
   const graph = useMemo(() => applyGraphPlaces(layout || EMPTY_LAYOUT, places), [layout, places]);
@@ -626,7 +638,7 @@ const NotesGraph = ({
     return undefined;
   });
   const hasEscapeTarget = Boolean(newAt || isScopeOpen || linkFromId || pickedEdge || pickedId);
-  useEffect(() => (hasEscapeTarget ? captureEscKeyListener(handleEscape) : undefined), [hasEscapeTarget]);
+  useLayoutEffect(() => (hasEscapeTarget ? captureEscKeyListener(handleEscape) : undefined), [hasEscapeTarget]);
 
   // Delete убирает выбранную связь
   const handleKey = useLastCallback((e: KeyboardEvent) => {
@@ -654,8 +666,8 @@ const NotesGraph = ({
   const handleRelayout = useLastCallback(() => {
     shouldFitRef.current = true;
     savePlaces({});
+    setRelayoutCount((count) => count + 1);
   });
-  const hasPlaces = Object.keys(places).length > 0;
   useEffect(() => {
     if (!shouldFitRef.current) return;
     shouldFitRef.current = false;
@@ -731,7 +743,7 @@ const NotesGraph = ({
     );
   }
 
-  const relayoutChip = renderChip(lang('KnowledgeGraphRelayout'), handleRelayout, 'data-graph-relayout', !hasPlaces);
+  const relayoutChip = renderChip(lang('KnowledgeGraphRelayout'), handleRelayout, 'data-graph-relayout', !hasPins);
   const canvasChip = renderChip(
     lang('KnowledgeGraphToCanvas'), handleMakeCanvas, 'data-graph-to-canvas', !hasCanvasNotes,
   );

@@ -7,6 +7,7 @@ import { getActions } from '../../../global';
 import { SettingsScreens } from '../../../types';
 
 import buildClassName from '../../../util/buildClassName';
+import { runProfileSave } from './profile/profileRequests';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useLang from '../../../hooks/useLang';
@@ -60,8 +61,16 @@ const SettingsHeader: FC<OwnProps> = ({
 
   function renderHeaderContent() {
     switch (currentScreen) {
+      // Parvane (spec 041, `XpProfile`): «Мой профиль» и «Готово» справа — сохраняет сам экран
       case SettingsScreens.EditProfile:
-        return <h3>{oldLang('lng_settings_information')}</h3>;
+        return (
+          <div className="settings-main-header">
+            <h3>{lang('ParvaneProfileMine')}</h3>
+            <button type="button" className="pv-header-done" data-profile-done onClick={runProfileSave}>
+              {lang('ParvaneProfileDone')}
+            </button>
+          </div>
+        );
       case SettingsScreens.General:
         return <h3>{lang('ParvaneProfileMessengerSettings')}</h3>;
       case SettingsScreens.QuickReaction:
@@ -152,6 +161,14 @@ const SettingsHeader: FC<OwnProps> = ({
         return <h3>{lang('ParvaneProfileKeys')}</h3>;
       case SettingsScreens.ParvaneAbout:
         return <h3>{lang('ParvaneProfileAbout')}</h3>;
+      case SettingsScreens.ParvaneDeleteAccount:
+        return <h3>{lang('ParvaneDeleteAccountTitle')}</h3>;
+      case SettingsScreens.ParvaneExport:
+        return <h3>{lang('ParvaneExportData')}</h3>;
+      case SettingsScreens.ParvaneBugReport:
+        return <h3>{lang('MenuReportBug')}</h3>;
+      case SettingsScreens.ParvaneHelp:
+        return <h3>{lang('ParvaneHelpTitle')}</h3>;
       case SettingsScreens.Performance:
         return <h3>{lang('MenuAnimations')}</h3>;
 

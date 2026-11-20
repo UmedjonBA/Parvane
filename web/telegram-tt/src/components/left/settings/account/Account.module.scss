@@ -1,0 +1,228 @@
+// Parvane (spec 041): «Устройства и аккаунт» — карточки аккаунта и «Опасная зона» (`DkSettingsA`), экраны «Удалить
+// аккаунт», «Сообщить об ошибке» и ник в «Изменить профиль» (`XpProfile`). Цвета — токены схемы `--pv-*`
+
+// Две карточки рядом на компьютере, одна под другой на телефоне
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.card {
+  min-width: 0;
+}
+
+.danger {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+}
+
+.dangerCaption {
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dangerHint {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+// Экраны-формы: колонка с отступами, кнопки внизу
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.box {
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+  background: var(--pv-panel);
+}
+
+.boxDanger {
+  border-color: var(--pv-red);
+}
+
+.boxTitle {
+  margin: 0 0 0.5rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.steps {
+  counter-reset: step;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  margin: 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  gap: 0.625rem;
+  font-size: var(--pv-font-size-small);
+  line-height: 1.4;
+
+  &::before {
+    content: counter(step);
+    counter-increment: step;
+
+    flex: none;
+
+    min-width: 1rem;
+
+    font-family: var(--font-family-monospace);
+    color: var(--pv-muted);
+  }
+}
+
+.boxRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.boxText {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+}
+
+.muted {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.label {
+  margin: 0 0 0.375rem;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.check {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+
+  font-size: var(--pv-font-size-small);
+  line-height: 1.4;
+}
+
+.checkBox {
+  flex: none;
+
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0.125rem 0 0;
+
+  accent-color: var(--pv-at);
+}
+
+.error {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-red);
+}
+
+.done {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-green);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.dangerFill {
+  border-color: transparent;
+  color: var(--pv-accent-ink);
+  background: var(--pv-red);
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--pv-red) 88%, var(--pv-fg));
+  }
+}
+
+// Ник в «Изменить профиль»: свой блок с полем, состоянием «свободен / занят», паролем и ключом
+.nickBox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nickState {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.nickFree {
+  color: var(--pv-green);
+}
+
+.nickTaken {
+  color: var(--pv-red);
+}
+
+// «Сообщить об ошибке»: чипы «Где», журнал, что уйдёт
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.preview {
+  overflow-x: auto;
+
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--pv-radius);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  white-space: pre-wrap;
+
+  background: var(--pv-bg);
+}
+
+// «Справка Parvane»: нумерованный список заметок
+.helpNumber {
+  flex: none;
+  min-width: 1.5rem;
+  font-family: var(--font-family-monospace);
+  color: var(--pv-muted);
+}

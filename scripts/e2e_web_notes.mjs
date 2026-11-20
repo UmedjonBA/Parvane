@@ -732,6 +732,18 @@ try {
 
   // «Холст из графа» при выбранной папке: на холсте только её заметка
   const graphChip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
+  // Список холстов (плитки на телефоне, строки на компьютере): из открытого холста — кнопкой «назад» шапки
+  const toCanvasList = async () => {
+    const back = knowledge.locator('[data-canvas-back]');
+    if (await back.count()) await back.click();
+    await visible(knowledge.locator('[data-canvas-list]'), 'список холстов');
+  };
+  const pickCanvas = async (name) => {
+    await toCanvasList();
+    await knowledge.locator(`[data-canvas-tile="${name}"][data-canvas-id], [data-canvas-tile="${name}"] [data-canvas-id]`)
+      .first().click();
+    await visible(graphChip(name), `открыт холст «${name}»`);
+  };
   const graphBoard = knowledge.locator('[data-canvas-board]');
   await graph.locator('[data-graph-to-canvas]').click();
   await visible(graphBoard, 'холст, созданный с графа');
@@ -774,7 +786,7 @@ try {
 
   // Убрать за собой: холсты, заметку и папку — дальше сценарий идёт с прежним набором
   for (const [name, renamed] of [['Link graph 2', 'С графа 2'], ['Link graph', 'С графа 1']]) {
-    await graphChip(name).click();
+    await pickCanvas(name);
     await knowledge.locator('[data-canvas-menu]').click();
     await page.locator('#knowledge-canvas-name').fill(renamed);
     await page.locator('#knowledge-canvas-name').press('Enter');
@@ -802,7 +814,7 @@ try {
   const chip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
   // Группа обводит свои карточки — в проверках «ничего не накладывается» участвуют узлы без групп
   const fileCardsOnly = '[data-canvas-node]:not([data-canvas-type="group"])';
-  await knowledge.locator('[data-notes-canvas="empty"] [data-canvas-from-graph]').click();
+  await knowledge.locator('[data-canvas-list] [data-canvas-from-graph]').click();
   const board = knowledge.locator('[data-canvas-board]');
   await visible(board, 'поле холста');
   await visible(chip('Link graph'), 'холст из графа назван «Link graph»');
@@ -819,7 +831,8 @@ try {
   }));
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-graph.png` });
   // Ещё раз — новый холст со следующим свободным названием
-  await knowledge.locator('[data-board-tools] [data-canvas-from-graph]').click();
+  await toCanvasList();
+  await knowledge.locator('[data-canvas-list] [data-canvas-from-graph]').click();
   await visible(chip('Link graph 2'), 'второй холст из графа');
   console.log('OK: холст из графа — карточки заметок и стрелки ссылок');
 
@@ -835,12 +848,12 @@ try {
   await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
   await chip('Карта проекта').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('удалённый холст остался в списке'));
-  // После удаления открыт оставшийся холст
-  await visible(chip('Link graph'), 'оставшийся холст');
-  assert.equal(await chip('Link graph').getAttribute('aria-pressed'), 'true', 'после удаления открыт другой холст');
+  // После удаления — список холстов, в нём оставшийся
+  await visible(knowledge.locator('[data-canvas-list]'), 'после удаления холста — список холстов');
+  assert.equal(await knowledge.locator('[data-canvas-tile]').count(), 1, 'холст остался один');
+  await pickCanvas('Link graph');
   await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'оставшийся холст не показан');
-  assert.equal(await knowledge.locator('[data-canvas-chip]').count(), 1, 'холст остался один');
-  console.log('OK: холст переименован и удалён, открыт оставшийся');
+  console.log('OK: холст переименован и удалён, оставшийся открывается из списка');
 
   // ── «Обновить из графа»: новое из заметок появляется, сделанное руками остаётся на месте ──
   const CASE = 'Корпус';
@@ -976,6 +989,7 @@ try {
   console.log('OK: «Обновить из графа» — новая карточка и стрелка, своё на месте, исчезнувшая ссылка убрана, отмена');
 
   // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
+  await toCanvasList();
   await knowledge.getByRole('button', { name: 'New canvas' }).click();
   await visible(chip('Canvas 2'), 'новый пустой холст');
   await canvasCount('[data-canvas-node]', 0, 'новый холст не пуст');
@@ -1000,7 +1014,7 @@ try {
   await knowledge.getByRole('button', { name: 'Note', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: NOTE }).click();
   await visible(board.locator('[data-canvas-type="file"]').getByText('Бюджетный сервер под LLM'), 'карточка заметки с началом текста');
-  await knowledge.getByRole('button', { name: 'Connect' }).click();
+  await knowledge.getByRole('button', { name: 'Connect', exact: true }).click();
   await board.locator('[data-canvas-type="text"]').click({ position: { x: 5, y: 5 } });
   await board.locator('[data-canvas-type="file"]').click({ position: { x: 5, y: 5 } });
   await page.waitForFunction(() => document.querySelectorAll('[data-canvas-edge]').length === 1, undefined, {
@@ -1436,6 +1450,7 @@ try {
   // карточки и стрелки на «Canvas 2»
   const MADE_ON_CANVAS = 'Заметка с холста';
   const MADE_BY_ARROW = 'Заметка от стрелки';
+  await toCanvasList();
   await knowledge.getByRole('button', { name: 'New canvas' }).click();
   await visible(chip('Canvas 3'), 'холст для новых заметок');
   await canvasCount('[data-canvas-node]', 0, 'новый холст не пуст');
@@ -1481,7 +1496,7 @@ try {
     (await body.innerText()).includes(MADE_BY_ARROW), false, 'стрелка холста записала ссылку в текст заметки',
   );
   await openTab('Canvas');
-  await chip('Canvas 3').click();
+  await visible(chip('Canvas 3'), 'вкладка «Холст» вернула открытый холст');
   await canvasCount('[data-canvas-note="found"]', 2, 'карточки новых заметок после возврата на холст');
   console.log('OK: новая заметка с холста кнопкой и стрелкой, брошенной на пустом месте');
 
@@ -1506,7 +1521,7 @@ try {
   await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
   await chip('Canvas 3').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('холст для новых заметок не удалён'));
-  await visible(chip('Canvas 2'), 'холст после удаления временного');
+  await pickCanvas('Canvas 2');
   console.log('OK: настройка качества картинок холста');
 
   // ── «Запланировать» в заметке: окно ввода поверх «Знаний», запись — в «Запланировано» и в «Плане» ──
@@ -1584,6 +1599,10 @@ try {
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');
   await visible(note.locator('[data-note-planned]').getByText(PLANNED_TASK), 'запись из «Запланировать» после перезагрузки');
   await openTab('Canvas');
+  // После перезагрузки вкладка открывает список холстов
+  await visible(knowledge.locator('[data-canvas-list]'), 'список холстов после перезагрузки');
+  assert.equal(await knowledge.locator('[data-canvas-tile="Карта проекта"]').count(), 0, 'удалённый холст вернулся после перезагрузки');
+  await pickCanvas('Canvas 2');
   await visible(board.locator('[data-canvas-type="file"]'), 'карточка холста после перезагрузки');
   await visible(
     board.locator('[data-canvas-note="found"]').filter({ hasText: 'Строка с холста' }),
@@ -1597,10 +1616,8 @@ try {
   );
   await visible(groupNamed('Пара').locator('[data-canvas-group-label]'), 'группа из выделенного после перезагрузки');
   assert.equal(await cardNamed('Гамма').count(), 0, 'удалённая карточка не вернулась после перезагрузки');
-  assert.equal(await chip('Canvas 2').getAttribute('aria-pressed'), 'true', 'после перезагрузки открыт первый по названию холст');
   await visible(board.locator('[data-canvas-type="text"]').getByText('Идея 2', { exact: true }), 'текст карточки после перезагрузки');
   await visible(board.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'название группы после перезагрузки');
-  assert.equal(await chip('Карта проекта').count(), 0, 'удалённый холст не вернулся после перезагрузки');
   console.log('OK: заметки и холст пережили перезагрузку');
 
   // ── Поиск по холсту: подсветка, приглушение и переезд к находке ──────────

@@ -479,8 +479,8 @@ pub(crate) async fn publish(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, 
 pub(crate) async fn list(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
     let owner = owner(req)?;
     let _: LinkListRequest = body(req)?;
-    let rows: Vec<(String, i64, i64, i64, Option<Vec<u8>>, i64, i64)> = sqlx::query_as(
-        "SELECT l.link_id, l.state, l.created_at, l.expires_at, l.owner_record,
+    let rows: Vec<(String, i64, i64, i64, Option<Vec<u8>>, i64, i64, i64)> = sqlx::query_as(
+        "SELECT l.link_id, l.state, l.created_at, l.expires_at, l.owner_record, l.opens,
                 (SELECT COALESCE(SUM(b.size), 0) FROM link_blobs b WHERE b.link_key = l.key),
                 (SELECT COUNT(*) FROM link_blobs b WHERE b.link_key = l.key)
          FROM links l WHERE l.owner = ? ORDER BY l.created_at DESC, l.link_id LIMIT ?",
@@ -493,7 +493,7 @@ pub(crate) async fn list(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, Err
     let now = now_unix();
     let links = rows
         .into_iter()
-        .map(|(link_id, state, created_at, expires_at, owner_record, bytes, files)| LinkInfo {
+        .map(|(link_id, state, created_at, expires_at, owner_record, opens, bytes, files)| LinkInfo {
             link_id,
             state: match state {
                 STATE_PREPARING => LinkState::Preparing,
@@ -505,6 +505,7 @@ pub(crate) async fn list(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, Err
             bytes: bytes.max(0) as u64,
             files: u32::try_from(files).unwrap_or(0),
             owner_record: owner_record.unwrap_or_default(),
+            opens: opens.max(0) as u64,
         })
         .collect();
     Ok(LinkListResponse { links }.encode_to_vec())
@@ -617,6 +618,15 @@ pub(crate) async fn get(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, Refu
         .map_err(db_code(WHAT))?;
     // Отозвали между двумя запросами — как будто её не было.
     let manifest = manifest.flatten().ok_or(ErrorCode::NotFound)?;
+    // Открытие — для числа в «Моих ссылках»; кто открывал, не хранится. Не записалось — список всё равно отдаётся.
+    if let Err(e) = sqlx::query("UPDATE links SET opens = opens + 1 WHERE key = ? AND state = ?")
+        .bind(&link.key[..])
+        .bind(STATE_ACTIVE)
+        .execute(&ctx.pool_v2)
+        .await
+    {
+        error!("v2: {WHAT}: открытие не учтено: {e}");
+    }
     Ok(LinkGetResponse { manifest, expires_at, expired: false }.encode_to_vec())
 }
 
@@ -835,11 +845,14 @@ mod tests {
         // Снимок: источник удалён — ссылка отдаёт прежнее.
         super::super::delete(&c, &req("cloud.blob.delete", ALICE, DeleteRequest { file_id: source.clone() })).await.unwrap();
         assert_eq!(fetch(&c, &link, &made.file_id).await.unwrap(), b"AAAABBBBCC");
-        // Владелец видит ссылку в списке (вторая — ещё готовится).
+        // Владелец видит ссылку в списке (вторая — ещё готовится) и число открытий: одно выше.
         let mine = list_of(&c, ALICE).await;
         assert_eq!(mine.len(), 2);
         let info = mine.iter().find(|l| l.link_id == link).unwrap();
         assert_eq!((info.state, info.bytes, info.files, info.expires_at), (LinkState::Active as i32, 10, 1, expires));
+        assert_eq!(info.opens, 1);
+        get_of(&c, &link).await.unwrap();
+        assert_eq!(list_of(&c, ALICE).await.iter().find(|l| l.link_id == link).unwrap().opens, 2);
         assert_eq!(info.owner_record, b"owner-record");
         assert!(info.created_at >= before - 5 && info.created_at <= before + 5);
         let other = mine.iter().find(|l| l.link_id != link).unwrap();

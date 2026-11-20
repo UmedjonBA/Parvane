@@ -191,6 +191,7 @@ import Album from './Album';
 import AnimatedCustomEmoji from './AnimatedCustomEmoji';
 import AnimatedEmoji from './AnimatedEmoji';
 import ArticleCard from './ArticleCard';
+import CloudInviteCard from './CloudInviteCard';
 import CommentButton from './CommentButton';
 import Contact from './Contact';
 import ContextMenuContainer from './ContextMenuContainer.async';
@@ -206,6 +207,7 @@ import MessageAppendix from './MessageAppendix';
 import MessageEffect from './MessageEffect';
 import MessageMeta from './MessageMeta';
 import MessagePhoneCall from './MessagePhoneCall';
+import MessageSendFailed from './MessageSendFailed';
 import ModReportCard from './ModReportCard';
 import MusicPlaylistCard from './MusicPlaylistCard';
 import MusicTrackCard from './MusicTrackCard';
@@ -591,7 +593,7 @@ const Message = ({
     voice, document, sticker, contact,
     invoice, location,
     action, game, storyData, giveaway,
-    giveawayResults, todo, dice, taskOffer, article, modReport, musicTrack, musicPlaylist,
+    giveawayResults, todo, dice, taskOffer, article, modReport, musicTrack, musicPlaylist, cloudInvite,
   } = getMessageContent(message);
 
   const messageReplyInfo = getMessageReplyInfo(message);
@@ -1489,6 +1491,9 @@ const Message = ({
         {musicPlaylist && (
           <MusicPlaylistCard playlist={musicPlaylist} />
         )}
+        {cloudInvite && (
+          <CloudInviteCard invite={cloudInvite} isOwn={message.isOutgoing} />
+        )}
         {modReport && (
           <ModReportCard report={modReport} />
         )}
@@ -2021,6 +2026,7 @@ const Message = ({
           )}
           {renderContent()}
           {!isInDocumentGroupNotLast && metaPosition === 'standalone' && !isStoryMention && renderReactionsAndMeta()}
+          {outgoingStatus === 'failed' && <MessageSendFailed chatId={chatId} messageId={messageId} />}
           {canShowActionButton && (
             <div className="message-action-buttons-container">
               <div className="message-action-buttons-sticky-zone">

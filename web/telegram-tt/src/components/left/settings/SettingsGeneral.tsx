@@ -5,8 +5,6 @@ import {
 import { getActions, withGlobal } from '../../../global';
 
 import type { SharedSettings } from '../../../global/types';
-import type { TimeFormat } from '../../../types';
-import type { IRadioOption } from '../../ui/RadioGroup';
 import { SettingsScreens } from '../../../types';
 
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
@@ -27,16 +25,11 @@ type OwnProps = {
   onReset: () => void;
 };
 
-type StateProps =
-  Pick<SharedSettings, (
-    'messageSendKeyCombo' |
-    'timeFormat'
-  )>;
+type StateProps = Pick<SharedSettings, 'messageSendKeyCombo'>;
 
 const SettingsGeneral: FC<OwnProps & StateProps> = ({
   isActive,
   messageSendKeyCombo,
-  timeFormat,
   onReset,
 }) => {
   const {
@@ -48,14 +41,6 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
   const { isMobile } = useAppLayout();
   const isMobileDevice = isMobile && (IS_IOS || IS_ANDROID);
 
-  const timeFormatOptions: IRadioOption[] = [{
-    label: lang('SettingsTimeFormat12'),
-    value: '12h',
-  }, {
-    label: lang('SettingsTimeFormat24'),
-    value: '24h',
-  }];
-
   const keyboardSendOptions = !isMobileDevice ? [
     { value: 'enter', label: lang('SettingsSendEnter'), subLabel: lang('SettingsSendEnterDescription') },
     {
@@ -64,11 +49,6 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
       subLabel: lang('SettingsSendPlusEnterDescription'),
     },
   ] : undefined;
-
-  const handleTimeFormatChange = useCallback((newTimeFormat: string) => {
-    setSharedSettingOption({ timeFormat: newTimeFormat as TimeFormat });
-    setSharedSettingOption({ wasTimeFormatSetManually: true });
-  }, []);
 
   const handleMessageSendComboChange = useCallback((newCombo: string) => {
     setSharedSettingOption({ messageSendKeyCombo: newCombo as SharedSettings['messageSendKeyCombo'] });
@@ -90,16 +70,6 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
         </ListItem>
       </Island>
 
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('SettingsTimeFormat')}</IslandTitle>
-      <Island>
-        <RadioGroup
-          name="timeformat"
-          options={timeFormatOptions}
-          selected={timeFormat}
-          onChange={handleTimeFormatChange}
-        />
-      </Island>
-
       {keyboardSendOptions && (
         <>
           <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('SettingsKeyboard')}</IslandTitle>
@@ -119,8 +89,8 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { messageSendKeyCombo, timeFormat } = selectSharedSettings(global);
+    const { messageSendKeyCombo } = selectSharedSettings(global);
 
-    return { messageSendKeyCombo, timeFormat };
+    return { messageSendKeyCombo };
   },
 )(SettingsGeneral));

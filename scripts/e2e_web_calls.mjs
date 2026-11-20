@@ -1,5 +1,5 @@
 // Двухбраузерный звонок 1-на-1: вызов из шапки чата, входящий оверлей,
-// принятие с fake-микрофоном, совпадение SAS-эмодзи, mute, видеозвонок с
+// принятие с fake-микрофоном, совпадение слов сверки, mute, видеозвонок с
 // рендером потоков, завершение/отклонение и история звонков в чате
 // (включая персист после reload).
 import assert from 'node:assert/strict';
@@ -12,6 +12,7 @@ import {
   expectSharedScreen,
   findCallTimer,
   mockCallMedia,
+  mockSecondCamera,
   saveCallState,
 } from './e2e_web_call_media.mjs';
 
@@ -46,6 +47,7 @@ const browser = await chromium.launch({
 const aliceContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
 const bobContext = await browser.newContext({ permissions: ['microphone', 'camera'] });
 await mockCallMedia(aliceContext);
+await mockSecondCamera(aliceContext);
 await bobContext.addInitScript(() => {
   Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', { value: undefined, configurable: true });
   navigator.mediaDevices.getDisplayMedia = undefined;
@@ -119,7 +121,9 @@ try {
   const aliceSasText = (await aliceSas.innerText()).trim();
   const bobSasText = (await bobSas.innerText()).trim();
   assert(aliceSasText.length > 0, 'SAS is empty on the caller side');
-  assert.equal(aliceSasText, bobSasText, 'SAS emoji differ between the two peers');
+  assert.equal(aliceSasText, bobSasText, 'SAS words differ between the two peers');
+  // Сверка словами (CALL-3), а не значками: четыре слова через « · »
+  assert.match(aliceSasText, /[a-z]+ · [a-z]+ · [a-z]+ · [a-z]+$/, `SAS is not four words: ${aliceSasText}`);
 
   for (const name of ['Audio output', 'Share screen']) {
     assert.equal(await bobSession.page.getByRole('button', { name, exact: true }).count(), 0,
@@ -145,6 +149,14 @@ try {
   await carolSession.page.getByText('Line busy', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await carolContext.close();
+
+  // ── «Открыть чат» из звонка (доска `DkCalls`): звонок в плашке, открыт чат собеседника ──
+  await bobSession.page.getByRole('button', { name: 'Open chat', exact: true }).click();
+  await bobSession.page.locator('[data-call-minimized]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('[data-call-minimized]').click();
+  await bobSession.page.locator('[data-call-screen="voice"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: чат из звонка и возврат к звонку');
 
   // ── Mute: кнопка переключается и меняет aria ───────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
@@ -198,6 +210,13 @@ try {
   await bobSession.page.locator('[data-remote-camera-off]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
   console.log('OK: «камера выключена» у собеседника');
+  // «Сменить камеру»: у собеседника картинка второй камеры, повторное нажатие возвращает первую
+  await aliceSession.page.getByRole('button', { name: 'Switch camera', exact: true }).click();
+  await expectSharedScreen(bobSession.page, '[data-call-screen="video"] video');
+  await aliceSession.page.getByRole('button', { name: 'Switch camera', exact: true }).click();
+  await expectSharedScreen(bobSession.page, '[data-call-screen="video"] video', false);
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  console.log('OK: смена камеры доходит до собеседника');
   // Микрофон выкл → у Боба «микрофон выключен»
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
   await bobSession.page.locator('[data-remote-muted]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -217,6 +236,19 @@ try {
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.getByRole('button', { name: 'Accept' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── «@ник · в контактах» и «Ответить сообщением» у входящего (доска `RpCalls`) ──
+  await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
+  await bobSession.page.getByText('is calling you...', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const handle = await bobSession.page.locator('[data-call-handle]').innerText();
+  assert.equal(handle.trim(), `@${alice.split('@')[0]} · in contacts`, `входящий без «@ник · в контактах»: ${handle}`);
+  await bobSession.page.getByRole('button', { name: 'Reply with message', exact: true }).click();
+  await aliceSession.page.getByRole('button', { name: 'End Call' })
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('[data-call-screen]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: «Ответить сообщением» отклоняет вызов и открывает чат');
 
   // ── История звонков в чате: статусы у обеих сторон ─────────────────────────
   await findHistoryEntry(aliceSession.page, 'Outgoing Call')

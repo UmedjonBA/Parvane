@@ -1,7 +1,7 @@
 import type {
   CloudDriveState, CloudErrorCode, CloudLinkInfo, CloudLinkProgress, CloudResult, CloudTransferEvent, CloudUsage,
 } from '../../../api/parvane/cloudDrive';
-import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
+import type { CloudContainerInfo, CloudDriveCheck } from '../../../api/parvane/v2/cloud';
 
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
@@ -47,6 +47,9 @@ const LINKING_POLL_MS = 3000;
 const NOTICE_HIDE_MS = 4000;
 const DONE_HIDE_MS = 4000;
 const USAGE_REFRESH_MS = 1600;
+// Ожидание сверки личного диска перед правкой его корня (сохранение из «Поделиться» сразу после запуска)
+const DRIVE_WAIT_MS = 30000;
+const DRIVE_POLL_MS = 500;
 // Файлы крупнее сохраняются сразу на диск (если браузер умеет), а не через память
 const STREAM_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PREFS: CloudPrefs = { sort: { key: 'name', isDescending: false } };
@@ -280,6 +283,24 @@ export async function refreshCloudUsage() {
   if (usage) setCloudUsage(usage);
 }
 
+/**
+ * Личный диск сверен с сервером (`synced`) либо его точно ещё нет (`none`) — только тогда правка корня диска не
+ * ошибётся. Сразу после запуска приложения свой контейнер уже виден в списке сервера, а запись журнала состояния о
+ * нём ещё не дочитана (`unknown`): правка корня в это время отвергается («Поделиться → Файлы» сразу после запуска).
+ * Ждёт сверки до `DRIVE_WAIT_MS`; не дождался (нет связи, устройство не привязано) — `undefined`.
+ */
+export async function waitForCloudDrive(): Promise<Exclude<CloudDriveCheck, 'unknown'> | undefined> {
+  const deadline = Date.now() + DRIVE_WAIT_MS;
+  for (;;) {
+    const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as CloudDriveCheck | undefined;
+    if (check && check !== 'unknown') return check;
+    if (Date.now() >= deadline || getCloudStatus() === 'needs-linking') return undefined;
+    await new Promise((resolve) => {
+      setTimeout(resolve, DRIVE_POLL_MS);
+    });
+  }
+}
+
 // ── дерево ───────────────────────────────────────────────────────────────────
 
 /** Контейнер текущего места: совместная папка либо личный диск. */
@@ -329,13 +350,19 @@ function newNodeId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function createCloudFolder(name: string) {
+export async function createCloudFolder(name: string) {
   const place = getCloudPlace();
-  const container = getActiveContainerId(place);
-  const taken = namesIn(getNodes(container), place.folder);
-  return applyOps(container, [{
-    op: 'create', id: newNodeId(), kind: 'folder', parent: place.folder, name: freeName(taken, name),
+  return Boolean(await createCloudFolderAt(getActiveContainerId(place), place.folder, name));
+}
+
+/** Новая папка в папке `parent` контейнера (окно переноса: «Новая папка»); итог — её id либо `undefined`. */
+export async function createCloudFolderAt(container: string | undefined, parent: string | undefined, name: string) {
+  const id = newNodeId();
+  const taken = namesIn(getNodes(container), parent);
+  const isDone = await applyOps(container, [{
+    op: 'create', id, kind: 'folder', parent, name: freeName(taken, name),
   }]);
+  return isDone ? id : undefined;
 }
 
 export function renameCloudNode(container: string, node: CloudNode, name: string) {

@@ -5,11 +5,14 @@ import {
 import type { GlobalState } from '../../../global/types';
 import type { PlannerLayer } from './plannerLayers';
 import type { PlannerCalendarView } from './plannerModel';
+import type { PlannerMenuTarget } from './PlannerRecordMenu';
+import type { PlannerSection } from './PlannerSections';
 import type { SwipePoint } from './plannerSwipe';
 import type { PlannerFormParams } from './PlannerTaskForm';
 import type { PlannerTasksTab } from './PlannerTasks';
 
 import buildClassName from '../../../util/buildClassName';
+import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import {
   consumePlannerAddRequest, consumePlannerSettingsRequest, getIsParvaneScreenShown, getParvaneSection,
   getPlannerAddRequest, getPlannerCalendarView, getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView,
@@ -25,10 +28,12 @@ import {
 import { getDayBudget } from './plannerHealth';
 import { withHealthDays } from './plannerHealthDays';
 import { readLayers, saveLayers } from './plannerLayers';
+import { getMenuTarget } from './plannerMenuTarget';
 import {
-  detachInstance, eventInstance, fromDayKey, getDayEntry, getWeekKeys, hasInstanceOn,
+  detachInstance, eventInstance, fromDayKey, getDayEntry, getUndatedTasks, getWeekKeys, hasInstanceOn,
   PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance, toDayKey,
 } from './plannerModel';
+import { findRecord, moveRecord } from './plannerRecordActions';
 import {
   getHasQuickLines, getIsPlannerCached, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState,
   getPlannerStatus,
@@ -50,6 +55,7 @@ import PvOfflineBar from '../notes/PvOfflineBar';
 import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import SectionHistoryBack from '../SectionHistoryBack';
 import PlannerAgenda from './PlannerAgenda';
+import { PLANNER_SIDE_FORM_ID } from './PlannerCardRow';
 import PlannerDay from './PlannerDay';
 import PlannerDayPanel from './PlannerDayPanel';
 import PlannerDayStrip from './PlannerDayStrip';
@@ -59,7 +65,9 @@ import PlannerImport from './PlannerImport';
 import PlannerMonth from './PlannerMonth';
 import PlannerQuickInput from './PlannerQuickInput';
 import PlannerRail from './PlannerRail';
+import PlannerRecordMenu from './PlannerRecordMenu';
 import PlannerSearch from './PlannerSearch';
+import PlannerSections from './PlannerSections';
 import PlannerSettings from './PlannerSettings';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
@@ -178,6 +186,8 @@ const Planner = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [screen, setScreen] = useState<PlannerScreen>();
   const [tasksTab, setTasksTab] = useState<PlannerTasksTab>('undated');
+  // Меню по правой кнопке: запись либо пустое место шкалы (компьютер, доска `ZdPlanX`)
+  const [menuTarget, setMenuTarget] = useState<PlannerMenuTarget>();
   // Начатый жест листания (телефон): что листается и где палец коснулся экрана
   const swipeRef = useRef<{ period: SwipePeriod; start: SwipePoint }>();
   const contentRef = useRef<HTMLDivElement>();
@@ -269,10 +279,32 @@ const Planner = () => {
     openForm({ day });
   });
 
-  // Нажатие на свободное время в сетке дня: новое дело с этого времени на час
-  const handleCreateAt = useLastCallback((day: string, start: number) => {
+  // Нажатие на свободное время в сетке дня: новое дело с этого времени на час (либо до `end`: окно из
+  // «Найти свободное время» меню шкалы)
+  const handleCreateAt = useLastCallback((day: string, start: number, end?: number) => {
     setPicked(day);
-    openForm({ day, slot: { day, start, end: start + MINUTES_IN_HOUR } });
+    openForm({ day, slot: { day, start, end: end ?? start + MINUTES_IN_HOUR } });
+  });
+
+  const handleContextMenu = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const element = e.target as HTMLElement;
+    // Поля ввода и карточка записи оставляют меню браузера
+    if (isNarrow || !isLoaded || element.closest('input, textarea, [data-planner-side]')) return;
+    const target = getMenuTarget(element, e.clientX, e.clientY);
+    if (!target) return;
+    e.preventDefault();
+    setMenuTarget(target);
+  });
+
+  const handleCloseMenu = useLastCallback(() => {
+    setMenuTarget(undefined);
+  });
+
+  // Задача из колонки «Без времени» на шкале дня: день и время по месту броска
+  const handlePlaceTask = useLastCallback((taskKey: string, day: string, minute: number) => {
+    const [id, instanceDay] = taskKey.split('@');
+    const record = findRecord(state, { kind: 'task', id, day: instanceDay });
+    if (record) moveRecord(lang, record, today, 'place', day, minute);
   });
 
   const handleAddToDay = useLastCallback(() => {
@@ -461,17 +493,43 @@ const Planner = () => {
     setScreen(undefined);
   });
 
-  // Escape закрывает экран, если поверх него нет окна и нажатие не в карточке записи
-  useEffect(() => {
-    if (!screen) return undefined;
-    const handleEscape = (e: KeyboardEvent) => {
-      const target = e.target instanceof HTMLElement ? e.target : undefined;
-      if (e.key !== 'Escape' || document.querySelector('.Modal') || target?.closest('[data-planner-side]')) return;
+  // Колонка разделов на компьютере: «Сегодня» и «Календарь» — к видам, остальное — экраны
+  const isSectionsShown = hasContent && !isNarrow && (screen === 'tasks' || screen === 'import');
+  const undatedCount = useMemo(() => (isSectionsShown ? getUndatedTasks(state).length : 0), [isSectionsShown, state]);
+
+  const handleSelectSection = useLastCallback((section: PlannerSection) => {
+    if (section === 'settings') {
+      handleOpenSettings();
+      return;
+    }
+    if (section === 'today' || section === 'calendar') {
       setScreen(undefined);
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [screen]);
+      if (section === 'today') setPlannerView('today');
+      else handleSwitchCalendarView(calendarView);
+      return;
+    }
+    if (section === 'import') {
+      setScreen('import');
+      return;
+    }
+    setTasksTab(section);
+    setScreen('tasks');
+  });
+
+  // Escape закрывает экран, если «План» на экране, поверх нет окна (закрывающееся не в счёт) и нажатие не в
+  // карточке записи. Обработчик стоит в общей очереди Escape (`captureKeyboardListeners`) последним: слушатели
+  // других модулей, оставшиеся смонтированными, раньше перехватывали клавишу, и экран не закрывался
+  const handleScreenEscape = useLastCallback((e: KeyboardEvent) => {
+    const target = e.target instanceof HTMLElement ? e.target : undefined;
+    if (!getIsParvaneScreenShown('planner') || document.querySelector('.Modal:not(.closing)')
+      || target?.closest('[data-planner-side]')) {
+      return false;
+    }
+    setScreen(undefined);
+    return undefined;
+  });
+  // Слушатель встаёт в кадре появления экрана: поставленный обычным эффектом, он пропускал Escape, нажатый сразу
+  useLayoutEffect(() => (screen ? captureKeyboardListeners({ onEsc: handleScreenEscape }) : undefined), [screen]);
 
   // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
   // Полная форма — по «Подробнее» в окне ввода, по «Добавить на этот день» и по нажатию на свободное время
@@ -688,6 +746,7 @@ const Planner = () => {
         onOpenTask={handleOpenTask}
         onOpenEvent={handleOpenEvent}
         onOpenSleep={handleOpenSleep}
+        onPlaceTask={handlePlaceTask}
       />
     );
   }
@@ -723,9 +782,33 @@ const Planner = () => {
     );
   }
 
+  // Телефон: карточка записи — строки настроек, в шапке «Запись» и «Сохранить» (доска `PhPlanMore`). Задача
+  // сохраняется по месту, «Сохранить» её закрывает; событие и новая запись — отправка формы
+  function renderPhoneSideHeader() {
+    return (
+      <div className={buildClassName(styles.hdr, styles.sideHdr)}>
+        <button type="button" className={styles.ib} aria-label={lang('Close')} onClick={handleCloseSide}>
+          <Icon name="close" />
+        </button>
+        <h2 className={styles.sideTitle}>{lang(side === 'form' ? 'PlannerTitleNew' : 'PlannerTitleRecord')}</h2>
+        <span className={styles.grow} />
+        {side === 'task' ? (
+          <button type="button" className={styles.sideSave} data-side-save onClick={handleCloseSide}>
+            {lang('Save')}
+          </button>
+        ) : (
+          <button type="submit" form={PLANNER_SIDE_FORM_ID} className={styles.sideSave} data-side-save>
+            {lang(side === 'form' ? 'PlannerCreate' : 'Save')}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   function renderSide() {
     const sideDay = side === 'task' ? editedTask!.instanceDay || editedTask!.day
       : side === 'event' ? eventEditor!.day : undefined;
+    const isRows = isNarrow && side !== 'settings';
     return (
       <aside
         className={buildClassName(
@@ -734,28 +817,32 @@ const Planner = () => {
         data-planner-side={side}
       >
         {!isSheet && <PvResizer panel="planner-side" edge="start" min={PLANNER_SIDE_MIN} max={PLANNER_SIDE_MAX} />}
-        <div className={buildClassName(styles.hdr, styles.sideHdr)}>
-          {side === 'task' || side === 'event' ? (
-            <>
-              <span className={buildClassName(styles.typePill, side === 'task' ? styles.kindTask : styles.kindEvent)}>
-                <Icon name={side === 'task' ? 'check' : 'calendar'} />
-                {lang(side === 'task' ? 'PlannerTitleTask' : 'PlannerTitleEvent')}
-              </span>
-              <span className={styles.hdrOver}>
-                {sideDay ? formatDayLabel(lang, sideDay) : side === 'task' ? lang('PlannerUndatedShort') : ''}
-              </span>
-            </>
-          ) : (
-            <h2 className={styles.sideTitle}>
-              {lang(side === 'settings' ? 'PlannerSettings' : 'PlannerTitleNew')}
-            </h2>
-          )}
-          <span className={styles.grow} />
-          <button type="button" className={styles.ib} aria-label={lang('Close')} onClick={handleCloseSide}>
-            <Icon name="close" />
-          </button>
-        </div>
-        <div className={buildClassName(styles.content, styles.sideContent, 'custom-scroll')}>
+        {isRows ? renderPhoneSideHeader() : (
+          <div className={buildClassName(styles.hdr, styles.sideHdr)}>
+            {side === 'task' || side === 'event' ? (
+              <>
+                <span className={buildClassName(styles.typePill, side === 'task' ? styles.kindTask : styles.kindEvent)}>
+                  <Icon name={side === 'task' ? 'check' : 'calendar'} />
+                  {lang(side === 'task' ? 'PlannerTitleTask' : 'PlannerTitleEvent')}
+                </span>
+                <span className={styles.hdrOver}>
+                  {sideDay ? formatDayLabel(lang, sideDay) : side === 'task' ? lang('PlannerUndatedShort') : ''}
+                </span>
+              </>
+            ) : (
+              <h2 className={styles.sideTitle}>
+                {lang(side === 'settings' ? 'PlannerSettings' : 'PlannerTitleNew')}
+              </h2>
+            )}
+            <span className={styles.grow} />
+            <button type="button" className={styles.ib} aria-label={lang('Close')} onClick={handleCloseSide}>
+              <Icon name="close" />
+            </button>
+          </div>
+        )}
+        <div
+          className={buildClassName(styles.content, styles.sideContent, isRows && styles.sideRows, 'custom-scroll')}
+        >
           {side === 'settings' ? (
             <PlannerSettings
               state={ownState}
@@ -817,9 +904,17 @@ const Planner = () => {
       data-loaded={isLoaded ? '1' : '0'}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onContextMenu={handleContextMenu}
     >
       {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={styles.body}>
+        {isSectionsShown && (
+          <PlannerSections
+            active={screen === 'import' ? 'import' : tasksTab}
+            undatedCount={undatedCount}
+            onSelect={handleSelectSection}
+          />
+        )}
         {isRailShown && (
           <PlannerRail
             state={state}
@@ -885,6 +980,7 @@ const Planner = () => {
                   onOpenSleep={handleOpenSleep}
                   onOpenUndated={openUndated}
                   onQuick={handleQuickText}
+                  onPlaceTask={handlePlaceTask}
                 />
               )}
             </div>
@@ -907,6 +1003,17 @@ const Planner = () => {
             <button type="button" className={styles.toastUndo} onClick={handleUndo}>{lang('PlannerUndo')}</button>
           )}
         </div>
+      )}
+      {menuTarget && (
+        <PlannerRecordMenu
+          state={state}
+          today={today}
+          target={menuTarget}
+          onOpenTask={handleOpenTask}
+          onOpenEvent={handleOpenEvent}
+          onCreateAt={handleCreateAt}
+          onClose={handleCloseMenu}
+        />
       )}
       <PlannerQuickInput
         isOpen={isQuickOpen}

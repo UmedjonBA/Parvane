@@ -15,6 +15,7 @@ const TEXT_KEYS = {
   plan: { body: 'ModuleOffBodyPlan', enable: 'ModuleOffEnablePlan' },
   notes: { body: 'ModuleOffBodyNotes', enable: 'ModuleOffEnableNotes' },
   music: { body: 'ModuleOffBodyMusic', enable: 'ModuleOffEnableMusic' },
+  files: { body: 'ModuleOffBodyFiles', enable: 'ModuleOffEnableFiles' },
 } as const;
 
 type OwnProps = {

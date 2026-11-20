@@ -709,6 +709,9 @@ pub fn call_static(name: &str, args: &Value) -> R {
         // Сведение заметки с двух устройств (NOTES-2): расхождения и решённый текст считает движок
         "notesMerge" => crate::notes_merge::merge_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
         "notesMergeResolve" => crate::notes_merge::resolve_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
+        "notesCanvasMerge" => crate::notes_canvas_merge::merge_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
+        // Сверка ключей звонка словами (CALL-3): слова от отпечатков DTLS — одни на все клиенты
+        "callSasWords" => crate::call_sas::words_json(args),
         "protoMajor" => json!(crate::PROTO_MAJOR),
         // spec 035: пять осей версий (то же, что WASM `engineInfo` и C ABI `pv_engine_info`).
         "engineInfo" => serde_json::to_value(crate::engine_info()).map_err(|_| err(ProtoError::Malformed))?,

@@ -5,7 +5,11 @@ export type CallInfo = {
   incoming?: { from: string; callId: string; media: string };
   remoteStream?: MediaStream;
   localStream?: MediaStream;
-  sas?: string;
+  sasFingerprints?: [string, string];
+  peerChatId?: string;
+  peerHandle?: string;
+  isPeerContact?: boolean;
+  waitingInvite?: { from: string; fromName: string; title?: string };
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
@@ -20,6 +24,7 @@ export type CallInfo = {
   group?: {
     groupCallId: string;
     title: string;
+    address?: string;
     peerStates: Record<string, string>;
     peerNames: Record<string, string>;
   };

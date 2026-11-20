@@ -67,6 +67,10 @@ type GroupCallCallbacks = {
 export const GROUP_CALL_MAX_PARTICIPANTS = 8;
 const PEER_CONNECT_TIMEOUT_MS = 45000;
 const MAX_PENDING_CANDIDATES = 64;
+// Журнал устройств участника, с которым не было переписки, читается по сети: сбой чтения — не повод закрывать пару
+// «проверка не пройдена», проверяем ещё раз
+const SEALED_CHECK_ATTEMPTS = 3;
+const SEALED_CHECK_RETRY_MS = 1000;
 // Сколько ждать восстановления попарного соединения после `disconnected`
 export const PEER_DISCONNECT_GRACE_MS = 10000;
 
@@ -108,7 +112,7 @@ class MeshPeerSession {
   async startOffer(media: CallMedia) {
     this.callId = crypto.randomUUID();
     try {
-      if (!await this.loadKey() && !await this.cb.isSealedPeer?.(this.peer).catch(() => false)) {
+      if (!await this.loadKey() && !await this.checkSealedPeer()) {
         return this.fail();
       }
       const pc = await this.createPc(media);
@@ -287,6 +291,16 @@ class MeshPeerSession {
     this.pendingCandidates = [];
   }
 
+  private async checkSealedPeer() {
+    for (let attempt = 1; ; attempt++) {
+      if (await this.cb.isSealedPeer?.(this.peer).catch(() => false)) return true;
+      if (attempt >= SEALED_CHECK_ATTEMPTS || this.isEnded || !this.cb.isSealedPeer) return false;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, SEALED_CHECK_RETRY_MS);
+      });
+    }
+  }
+
   private loadKey = async () => {
     try {
       this.peerSigningKeys = await this.cb.getPeerSigningKeys(this.peer);
@@ -356,6 +370,10 @@ export class GroupCallEngine {
 
   get currentGroupCallId() {
     return this.groupCallId;
+  }
+
+  get currentMedia() {
+    return this.media;
   }
 
   getVideoSender(peer: string) {

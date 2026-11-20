@@ -29,6 +29,7 @@ import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
 import { parseCanvas, serializeCanvas } from './notesCanvas';
 import { freeCanvasTitle, renameCanvasFolder, renameCanvasNote } from './notesCanvasGraph';
+import { mergeCanvasTexts } from './notesCanvasMerge';
 import { checkFolderName, folderContents, listNoteFolders } from './notesFolders';
 import {
   buildGuideMarker, findGuideOverview, GUIDE_MARKER_MIME, GUIDE_MARKER_NAME, GUIDE_MARKER_NODE_ID, hasGuideMarker,
@@ -57,7 +58,8 @@ export type NoteEntry = NoteSource & {
   fileId: string;
   isDaily: boolean;
 };
-export type CanvasEntry = { id: string; title: string; text: string; fileId: string };
+// `updatedAt` — время правки файла в облаке (строка и плитка списка холстов)
+export type CanvasEntry = { id: string; title: string; text: string; fileId: string; updatedAt: number };
 export type NotesStatus = 'loading' | 'ready';
 export type NotesNotice = {
   code: 'conflict' | 'failed' | 'merged' | 'folder-files' | 'guide-failed'; title: string; at: number;
@@ -490,8 +492,8 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
     if (!isNote) {
       const previous = previousCanvases.get(node.id);
       canvases.push(previous && previous.fileId === content.fileId && previous.text === content.text
-        && previous.title === title ? previous : {
-          id: node.id, title, text: content.text, fileId: content.fileId,
+        && previous.title === title && previous.updatedAt === node.mtime ? previous : {
+          id: node.id, title, text: content.text, fileId: content.fileId, updatedAt: node.mtime,
         });
       return;
     }
@@ -1271,19 +1273,29 @@ export async function deleteNoteFolder(
 }
 
 /** Холст: создать либо сохранить (`canvasId` не задан — новый). Текст, равный записанному, не пишется. */
-export async function saveCanvas(title: string, text: string, vaultName: string, canvasId?: string) {
+export async function saveCanvas(title: string, draft: string, vaultName: string, canvasId?: string) {
+  let text = draft;
   const vault = await ensureFolder(vaultName);
   if (!vault) return undefined;
   const existing = canvasId ? getCanvases().find(({ id }) => id === canvasId) : undefined;
   if (existing && existing.text === text) return existing.id;
-  const result = await callParvane('parvaneCloudWriteText', {
+  const write = (body: string, expectedFileId?: string) => callParvane('parvaneCloudWriteText', {
     container: rootIdOf() || ROOT,
     parent: vault,
     node: existing?.id,
     name: `${existing?.title || title}${CANVAS_EXTENSION}`,
-    text,
+    text: body,
     mime: CANVAS_MIME,
-  }).catch(() => undefined) as WriteResult;
+    expectedFileId,
+  }).catch(() => undefined) as Promise<WriteResult>;
+  let result = await write(text, existing?.fileId);
+  // Холст тем временем записало другое устройство: правки сводятся от версии, которую видело это (NOTES-3);
+  // второе расхождение подряд — пишется своё
+  if (existing && result?.ok && result.conflict !== undefined) {
+    text = mergeCanvasOrMine(existing.text, text, result.conflict);
+    result = await write(text, result.fileId);
+    if (result?.ok && result.conflict !== undefined) result = await write(text);
+  }
   if (!result?.ok || !result.node) {
     notify('failed', title);
     return undefined;
@@ -1291,12 +1303,21 @@ export async function saveCanvas(title: string, text: string, vaultName: string,
   rememberText(result.node, { fileId: result.fileId!, text });
   if (existing) {
     setCanvases(getCanvases().map((entry) => (entry.id === existing.id
-      ? { ...entry, text, fileId: result.fileId! } : entry)));
+      ? { ...entry, text, fileId: result.fileId!, updatedAt: Date.now() } : entry)));
   } else {
     await refreshCloud();
     await queueSync();
   }
   return result.node;
+}
+
+// Движок ещё не загружен (сведение считает он) — остаётся своя версия, как до сведения
+function mergeCanvasOrMine(base: string, mine: string, theirs: string) {
+  try {
+    return mergeCanvasTexts(base, mine, theirs).text;
+  } catch (err) {
+    return mine;
+  }
 }
 
 /** Переименовать холст; занятое название получает номер. Пустое название — отказ. */

@@ -322,3 +322,91 @@
 
   background: var(--pv-panel);
 }
+
+// Колонка разделов «Плана» на компьютере (доска `DkPlanMore`): панель 220 px, пункты 38 px
+.sections {
+  overflow: hidden auto;
+  display: flex;
+  flex: 0 0 13.75rem;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  width: 13.75rem;
+  min-height: 0;
+  padding: 0.75rem 0.5rem;
+  border-inline-end: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.navItem {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: 100%;
+  height: var(--pv-nav-item-height);
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: 0.625rem;
+
+  font: inherit;
+  color: var(--pv-muted);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+}
+
+.navItemOn {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  background: var(--pv-raised);
+}
+
+.navLabel {
+  overflow: hidden;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navCount {
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-normal);
+}
+
+.navGap {
+  flex: 1 1 auto;
+}
+
+// «Так выглядит напоминание» в настройках (доска `RpPlan`)
+.reminderSample {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.reminderApp {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.reminderTitle {
+  font-weight: var(--font-weight-semibold);
+}
+
+.reminderDetails {
+  margin-bottom: 0.375rem;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}

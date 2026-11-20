@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useRef, useState,
+  memo, useLayoutEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { FolderSubmitError, NoteFolder } from './notesFolders';
@@ -40,7 +40,8 @@ const NoteFolderSheet = ({
 
   const lang = useLang();
 
-  useEffect(() => {
+  // Поля ставятся в кадре появления шторки: обычный эффект затирал название, введённое сразу после открытия
+  useLayoutEffect(() => {
     if (!isOpen) return;
     setName(folder?.name || '');
     setError(undefined);

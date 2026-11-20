@@ -41,6 +41,8 @@ type OwnProps = {
   onOpenUndated: NoneToVoidFunction;
   // Ввод текстом с готовым началом строки
   onQuick: (text: string) => void;
+  // Задача, брошенная на шкалу дня (компьютер)
+  onPlaceTask: (taskKey: string, day: string, minute: number) => void;
 };
 
 // Сколько задач без даты из очереди показывать прямо в дне
@@ -50,7 +52,7 @@ const UNDATED_SHOWN = 5;
 // задачами «в работе» без даты), «Без даты» и заметка дня
 const PlannerDay = ({
   state, day, today, layers, isNarrow, noAside, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
-  onOpenSleep, onOpenUndated, onQuick,
+  onOpenSleep, onOpenUndated, onQuick, onPlaceTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -159,6 +161,7 @@ const PlannerDay = ({
             onOpenTask={onOpenTask}
             onOpenEvent={onOpenEvent}
             onOpenSleep={onOpenSleep}
+            onPlaceTask={onPlaceTask}
           />
         </div>
         {!noAside && (
@@ -175,6 +178,7 @@ const PlannerDay = ({
             />
             {untimedHead}
             {untimedRows}
+            {hasUntimed && <p className={pv.hint} data-drag-hint>{lang('PlannerDragToGrid')}</p>}
             {undatedButton}
             <PlannerDailyNote day={day} />
           </aside>

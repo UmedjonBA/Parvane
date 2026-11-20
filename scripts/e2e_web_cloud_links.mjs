@@ -241,9 +241,18 @@ try {
   await visitor.waitState('ready');
   assert.ok(visitor.page.url().includes(`/s.html?id=${fileLinkId}#k=${fileLinkKey}`), 'адрес переведён на страницу, ключ остался');
   assert.equal(await visitor.page.locator('[data-link-name]').innerText(), FILE_NAME);
-  await visitor.page.getByText('parvane', { exact: true }).waitFor({ state: 'visible' });
+  // Вид по доске `RpFiles`: знак, «Вам прислали файл», срок, «Скачать» во всю ширину, карточки внизу
+  await visitor.page.locator('[data-link-brand]').waitFor({ state: 'visible' });
+  await visitor.page.getByText('You were sent a file').waitFor({ state: 'visible' });
   await visitor.page.getByText(/link valid until /).waitFor({ state: 'visible' });
+  await visitor.page.getByText('The file is encrypted.', { exact: false }).waitFor({ state: 'visible' });
+  await visitor.page.getByText('If the link does not work').waitFor({ state: 'visible' });
+  await visitor.page.getByText('Stored in Parvane · no account needed').waitFor({ state: 'visible' });
   assert.equal(await visitor.page.locator('[data-file-path]').count(), 1);
+  const heroBox = await visitor.fileRow(FILE_NAME).locator('[data-download]').boundingBox();
+  const pageBox = await visitor.page.locator('[data-link-page]').boundingBox();
+  assert.ok(heroBox.width > pageBox.width * 0.8, 'единственный файл — «Скачать» во всю ширину');
+  if (SHOT_DIR) await visitor.page.screenshot({ path: `${SHOT_DIR}/links-recipient.png` });
   // Картинка и текст смотрятся на странице, остальное — только скачивается
   assert.equal(await visitor.fileRow(FILE_NAME).locator('[data-view]').count(), 0);
   const fromLink = await visitor.download(FILE_NAME);
@@ -265,6 +274,7 @@ try {
   visitor = await openAsVisitor(`${BASE_URL}/s/${fileLinkId}`);
   await visitor.waitState('incomplete');
   await visitor.page.getByText('The link is incomplete').waitFor({ state: 'visible' });
+  assert.ok(await visitor.page.locator('#trouble').isHidden(), 'у ошибки своё объяснение — карточки «не работает» нет');
   assert.equal(visitor.sockets.length, 0, 'без ключа страница к серверу не обращается');
   assert.ok(!(await visitor.root.innerText()).includes(FILE_NAME));
   await visitor.close();
@@ -368,6 +378,14 @@ try {
   assert.equal(Number(await row(fileLinkId).getAttribute('data-bytes')), fileCopyBytes, 'размер строки — размер копий');
   assert.ok(Number(await row(folderLinkId).getAttribute('data-bytes')) > 0);
   await row(fileLinkId).getByText(/File · created .+ · until .+/).waitFor({ state: 'visible' });
+  // Число открытий считает сервер (`LinkInfo.opens`): посетитель открывал ссылку на файл трижды — с ключом, с чужим
+  // ключом (список сервер отдал, расшифровать не вышло) и после удаления исходника; без ключа запроса нет
+  await pollUntil(() => row(fileLinkId).getAttribute('data-opens').then(Number), (n) => n === 3, 'открытия ссылки на файл');
+  await row(fileLinkId).getByText(/ · opened: 3/).waitFor({ state: 'visible' });
+  // Список места сперва показывается из памяти, свежий приходит следом: папку открывали уже после последнего чтения
+  await pollUntil(
+    () => row(folderLinkId).getAttribute('data-opens').then(Number), (n) => n >= 1, 'открытия ссылки на папку', STEP_TIMEOUT_MS,
+  );
   await row(folderLinkId).getByText(/Folder · created /).waitFor({ state: 'visible' });
   await row(fileLinkId).click();
   await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

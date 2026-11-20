@@ -108,6 +108,9 @@ const SYNC_PAGES = 50;
 const MAX_OPS_PER_BATCH = 400;
 // Запрос без ответа (обрыв во время реконнекта) не должен вешать очередь модуля
 const CALL_TIMEOUT_MS = 20000;
+// Первая правка диска ждёт запись журнала состояния о своём контейнере, уже видном на сервере
+const ROOT_ENTRY_WAIT_MS = 15000;
+const ROOT_ENTRY_POLL_MS = 500;
 // Срок корзины проверяется раз в час (и при первом синке контейнера), а не каждый опрос
 const TRASH_CHECK_MS = 60 * 60 * 1000;
 
@@ -323,6 +326,9 @@ export function createCloudSync(deps: Deps) {
     deps.onChanged();
   }
 
+  // Чужие папки, вновь открытые после выхода, отказа либо отзыва (`discover`): один раз за сеанс
+  const reinvited = new Set<string>();
+
   let remoteDomains: Set<string> | undefined;
 
   async function loadRemoteDomains() {
@@ -392,8 +398,20 @@ export function createCloudSync(deps: Deps) {
     const entries = deps.stateEntries();
     for (const [id, owner] of onServer) {
       const entry = entries.find((e) => e.id === id);
-      // Отклонённое приглашение и удалённую свою папку не подключаем
-      if (entry?.isRemoved || entry?.status === 'declined') continue;
+      const isClosed = entry?.isRemoved || entry?.status === 'declined';
+      // Удалённую свою папку не подключаем. Чужая папка в списке сервера после выхода, отказа либо отзыва доступа —
+      // это новый грант: владелец пригласил снова. Запись «вышел / отклонено» навсегда скрывала бы и новое
+      // приглашение — она заменяется записью без ответа (папка снова приглашение)
+      if (isClosed && owner === self) continue;
+      if (isClosed && !reinvited.has(id)) {
+        reinvited.add(id);
+        deps.recordEntry({
+          id, domain: entry.domain, role: 'shared', owner,
+        });
+        deps.log(`облако: новое приглашение в ${id.slice(0, 8)}… после прежнего выхода`);
+        // Раздача ключа нового гранта могла уже подключить контейнер, а пометка «пропал» от выхода осталась
+        lost.delete(id);
+      }
       // Свой контейнер без записи состояния: другой свой клиент ещё не дописал журнал — подождём запись
       if (owner === self && !entry) continue;
       if (!client.cloudIsAttached(id)) {
@@ -470,6 +488,16 @@ export function createCloudSync(deps: Deps) {
     // Новый диск — только когда его точно нет: свой контейнер без записи журнала состояния может оказаться диском,
     // запись которого ещё не дочитана. Второй диск с меньшим id подменил бы настоящий на всех устройствах
     await discover();
+    // Сразу после запуска свой контейнер уже виден в списке сервера, а запись журнала состояния о нём ещё
+    // дочитывается: подождать её, а не отказывать первой правке («Поделиться → Файлы», «Новая папка» сразу после
+    // запуска получали «не сохранено»)
+    const deadline = Date.now() + ROOT_ENTRY_WAIT_MS;
+    while (!rootId() && ownWithoutEntry > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, ROOT_ENTRY_POLL_MS);
+      });
+      await discover();
+    }
     if (rootId()) return ensureRoot(false);
     if (ownWithoutEntry > 0) {
       deps.log('облако: личный диск не создан — на сервере есть свой контейнер без записи журнала состояния');
@@ -956,8 +984,32 @@ export function createCloudSync(deps: Deps) {
       };
       if (!accept) await leaveNow(id);
       deps.recordEntry(entry);
+      // Отметка «принял» на сервере владельца: без неё он видит приглашение ждущим ответа (spec 041 E2). Не дошла —
+      // доступ от этого не зависит, принятие на своих устройствах уже записано
+      if (accept) {
+        await call('id', 'domain.grant.accept', encode('domain.grant.accept', { container: refJson(id) }), domainOf(id))
+          .catch((e) => deps.log(`облако: отметка «принял» не записана: ${String(e)}`));
+      }
       deps.onChanged();
     });
+  }
+
+  /** Кому из участников своей папки приглашение ещё не принято (адреса); не вышло спросить — `undefined`. */
+  async function pendingInvites(id: string): Promise<string[] | undefined> {
+    const pv = deps.pv();
+    if (!pv) return undefined;
+    try {
+      const resp = await call('id', 'domain.grant.pending', encode(
+        'domain.grant.pending', { container: refJson(id) },
+      ), domainOf(id));
+      const got = JSON.parse(pv.decodeMethodResponse('domain.grant.pending', resp)) as {
+        users?: { address?: string }[];
+      };
+      return (got.users || []).map((u) => u.address || '').filter(Boolean);
+    } catch (e) {
+      deps.log(`облако: список ждущих ответа не получен: ${String(e)}`);
+      return undefined;
+    }
   }
 
   async function leaveNow(id: string) {
@@ -1109,6 +1161,7 @@ export function createCloudSync(deps: Deps) {
     share,
     unshare,
     answerInvite,
+    pendingInvites,
     noteRemoteDomain,
     noteOwnBlob,
     leave,

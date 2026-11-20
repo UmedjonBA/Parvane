@@ -2008,8 +2008,8 @@
       "id": "NOTES-1",
       "title": "«Заметки»: раскладку графа и холста из графа считает движок, клиент рисует по координатам",
       "kind": "ui",
-      "record": "движок: статические вызовы без состояния notesGraphLayout и notesGraphCanvas (WASM staticCall, C ABI pv_call); вход — JSON {notes[{id, title, folder, links, tags, isDaily}], records[{id, title, links, type}], scope{kind: all | folder{folder} | around{note, depth 1–3} | tag{tag}}, hideOrphans, hideMissing, withDays, withRecords, seed, aspect, charWidth, labelMaxWidth, labelHeight, cardWidth, cardHeight, gap, grid}; выход графа — {nodes[{id, title, kind, group, degree, x, y, r, label{x, y, w, h, side, show}, block}], edges[{from, to, mutual, x1, y1, cx, cy, x2, y2, curved}], blocks, bounds, folders, tags}; выход холста — {cards[{id, title, kind, folder, x, y, width, height, level, block}], edges[{from, to, mutual, fromSide, toSide}], blocks, bounds, folders, tags}",
-      "behaviour": "Клиент передаёт заметки (ссылки и метки он уже знает), область и зерно и рисует ответ — сам узлы не раскладывает, подписи не расставляет, связи не строит. Один вход даёт один ответ на любом устройстве (координаты — целые). Кружки и показанные подписи разных узлов не накладываются; подпись, которой места не нашлось, приходит с show: false. Связные группы раскладываются порознь, заметки без связей — отдельным рядом по папкам, блоки упакованы без наложений. Область: все заметки, папка с подпапками, заметка с соседями до глубины 1–3, метка с вложенными; ссылка на заметку вне области не рисуется; заметки дней включает withDays, выбор папки и метки их не касается. Холст из графа — карточки только существующих заметок той же области: связная группа уровнями от заметки с наибольшим числом связей, заметки без связей сеткой, места кратны шагу сетки",
+      "record": "движок: статические вызовы без состояния notesGraphLayout и notesGraphCanvas (WASM staticCall, C ABI pv_call); вход — JSON {notes[{id, title, folder, links, tags, isDaily}], records[{id, title, links, type}], scope{kind: all | folder{folder} | around{note, depth 1–3} | tag{tag}}, hideOrphans, hideMissing, withDays, withRecords, seed, aspect, charWidth, labelMaxWidth, labelHeight, cardWidth, cardHeight, gap, grid, pinned[{id, x, y}]}; выход графа — {nodes[{id, title, kind, group, degree, x, y, r, label{x, y, w, h, side, show}, block}], edges[{from, to, mutual, x1, y1, cx, cy, x2, y2, curved}], blocks, bounds, folders, tags}; выход холста — {cards[{id, title, kind, folder, x, y, width, height, level, block}], edges[{from, to, mutual, fromSide, toSide}], blocks, bounds, folders, tags}",
+      "behaviour": "Клиент передаёт заметки (ссылки и метки он уже знает), область и зерно и рисует ответ — сам узлы не раскладывает, подписи не расставляет, связи не строит. Один вход даёт один ответ на любом устройстве (координаты — целые). Кружки и показанные подписи разных узлов не накладываются; подпись, которой места не нашлось, приходит с show: false. Связные группы раскладываются порознь, заметки без связей — отдельным рядом по папкам, блоки упакованы без наложений. Область: все заметки, папка с подпапками, заметка с соседями до глубины 1–3, метка с вложенными; ссылка на заметку вне области не рисуется; заметки дней включает withDays, выбор папки и метки их не касается. Холст из графа — карточки только существующих заметок той же области: связная группа уровнями от заметки с наибольшим числом связей, заметки без связей сеткой, места кратны шагу сетки. Закреплённые узлы (pinned, spec 040 T10) стоят ровно на заданных местах, их связная группа раскладывается заново от своих мест вокруг них; свободные блоки стоят там же, где в раскладке без закрепления, а узлы свободного блока, на которые легли закреплённые, отходят от них; угол поля — bounds.x, bounds.y",
       "sample": "conformance/notes-graph/cases.json",
       "status": "18 ноя 2026: движок — сделано (backend/protocol/src/notes_graph/, тест tests/notes_graph_vectors.rs); web — обёртка и тест по общему образцу сделаны, экраны графа и холста ещё рисуют прежней раскладкой (spec 040 T6, этап D2); desktop и android — открыто (свои порты раскладки удаляются на их этапе)",
       "clients": {
@@ -2033,15 +2033,43 @@
       }
     },
     {
+      "id": "NOTES-3",
+      "title": "«Заметки»: холст, правленный на двух устройствах, сводит движок по карточкам и стрелкам",
+      "kind": "ui",
+      "record": "движок: статический вызов notesCanvasMerge {base, mine, theirs} (тексты .canvas) → {doc, conflicts}",
+      "behaviour": "Трёхстороннее слияние по id карточек и стрелок: поле, изменённое одной стороной, — её; обеими по-разному — моё; удалённое и не тронутое другой — удалено, изменённое другой — остаётся; стрелки к ушедшим карточкам убираются; незнакомые поля сохраняются. Запись файла — со сверкой версии и сведением при расхождении",
+      "sample": "conformance/notes-canvas-merge/cases.json",
+      "status": "20 ноя 2026: движок и web — сделано (spec 040 T9); desktop и android — открыто",
+      "clients": {
+        "web": "components/parvane/notes/notesCanvasMerge.ts (вызов движка), notesStore.ts saveCanvas (сверка версии и сведение), NotesCanvas.tsx (сведение пришедшей правки с несохранённой); тест notesCanvasMerge.test.ts (общий образец); сценарий scripts/run_web_notes_sync_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
       "id": "PLANNER-2",
       "title": "«План»: свободное время, расписание текстом, поиск и тренировки для «Здоровья» считает движок",
       "kind": "ui",
-      "record": "движок: статические вызовы без состояния plannerFreeTime {minutes, days[{day, busy[[от, до)], load}], dayStart, dayEnd, budget, margin, part: any|morning|evening|weekend, limit, today, nowMinute} → {slots[{day, weekday, start, end, isFreeAfter, isBeforeFirst, load, budget}], total}; plannerScheduleParse {text, today} → {items[{weekday, start, end, name, description, isEndGuessed}], problems[{text, weekday}], until}; plannerSearch {query, filter: all|events|tasks|done, items[{key, kind, series, name, description, group, day, due, start, end, isDone}], today, nowMinute, aheadLimit, pastLimit} → {ahead[ключи], past[ключи], aheadTotal, pastTotal}; plannerWorkouts {items[{key, name, day, start, minutes, isDone}], today, nowMinute, days} → [{key, name, day, weekday, start, minutes, tag}]",
-      "behaviour": "Клиент раскрывает повторы своей моделью и передаёт готовые промежутки и записи, движок решает остальное. Свободное время: день, где запись перебрала бы бюджет, пропускается; окно — внутри окна дня (утро — до 12:00, вечер — с 17:00, выходные — сб и вс), сегодня — не раньше текущей минуты, начало округлено до 5 минут, запас margin до и после занятого; первые окна разных дней идут первыми. Расписание: кусок — строка либо часть между «·» и «;», день недели действует до следующего, «18:30 зал» — событие на час, непонятое — в problems, срок «до …» с годом и без. Поиск: каждое слово запроса — подстрока названия, описания либо группы; «Впереди» по дате (без даты — в конце), ряд — ближайшим экземпляром; «Прошло» — сначала недавнее. Тренировка — запись со словом тренировки из разбора «Здоровья», невыполненная, с сегодняшнего дня на days дней, сегодняшняя — пока не закончилась",
+      "record": "движок: статические вызовы без состояния plannerFreeTime {minutes, days[{day, busy[[от, до)], load}], dayStart, dayEnd, budget, margin, part: any|morning|evening|weekend, limit, today, nowMinute} → {slots[{day, weekday, start, end, isFreeAfter, isBeforeFirst, load, budget}], total}; plannerScheduleParse {text, today} → {items[{weekday, start, end, name, description, isEndGuessed}], problems[{text, weekday}], until}; plannerSearch {query, filter: all|events|tasks|done, items[{key, kind, series, name, description, group, day, due, start, end, isDone}], today, nowMinute, aheadLimit, pastLimit} → {ahead[ключи], past[ключи], aheadTotal, pastTotal}; plannerWorkouts {items[{key, name, day, start, minutes, isDone}], today, nowMinute, days} → [{key, name, day, weekday, start, minutes, tag}]; plannerRecordAction {action: tomorrow|place|duplicate, today, day, instanceDay, isSeries, due, minutes, dropDay, dropMinute, step, record} → {mode: move|detach|copy|none, day, start, minutes, due, record}",
+      "behaviour": "Клиент раскрывает повторы своей моделью и передаёт готовые промежутки и записи, движок решает остальное. Свободное время: день, где запись перебрала бы бюджет, пропускается; окно — внутри окна дня (утро — до 12:00, вечер — с 17:00, выходные — сб и вс), сегодня — не раньше текущей минуты, начало округлено до 5 минут, запас margin до и после занятого; первые окна разных дней идут первыми. Расписание: кусок — строка либо часть между «·» и «;», день недели действует до следующего, «18:30 зал» — событие на час, непонятое — в problems, срок «до …» с годом и без. Поиск: каждое слово запроса — подстрока названия, описания либо группы; «Впереди» по дате (без даты — в конце), ряд — ближайшим экземпляром; «Прошло» — сначала недавнее. Тренировка — запись со словом тренировки из разбора «Здоровья», невыполненная, с сегодняшнего дня на days дней, сегодняшняя — пока не закончилась. Действие над записью: «Перенести на завтра» — день после дня записи, но не раньше завтра; задача на шкалу — минута вниз с шагом 15, длительность своя либо час, конец до полуночи; срок раньше нового дня сдвигается; день ряда отделяется; «Дублировать» — копия без идентичности и состояния дней, день ряда — разовой записью, задача — невыполненной",
       "sample": "conformance/planner-tools/cases.json",
-      "status": "19 ноя 2026: движок (backend/protocol/src/planner_tools/, тест tests/planner_tools_vectors.rs) и web — сделано; desktop и android — открыто",
+      "status": "19 ноя 2026: движок (backend/protocol/src/planner_tools/, тест tests/planner_tools_vectors.rs) и web — сделано; 20 ноя 2026: plannerRecordAction (record.rs) — движок и web; desktop и android — открыто",
       "clients": {
-        "web": "components/parvane/planner/plannerTools.ts (сборка входа и вызов), тест plannerTools.test.ts (общий образец через WASM); экраны PlannerFreeTime.tsx, PlannerImport.tsx, PlannerSearch.tsx, health/useHealthPlannedWorkouts.ts; прежние findSlots и plannerSchedule.ts удалены; сценарий scripts/run_web_planner_more_e2e.sh",
+        "web": "components/parvane/planner/plannerTools.ts (сборка входа и вызов), тест plannerTools.test.ts (общий образец через WASM); экраны PlannerFreeTime.tsx, PlannerImport.tsx, PlannerSearch.tsx, health/useHealthPlannedWorkouts.ts, plannerRecordActions.ts и PlannerRecordMenu.tsx (меню записи, задача на шкалу); прежние findSlots и plannerSchedule.ts удалены; сценарий scripts/run_web_planner_more_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "CALL-3",
+      "title": "Сверка ключей звонка словами считает движок",
+      "kind": "ui",
+      "record": "движок: статический вызов callSasWords {local, remote} → [четыре слова] | null",
+      "behaviour": "Отпечатки DTLS обеих сторон сортируются и склеиваются через |, от SHA-256 берутся первые четыре байта — номера слов в одном общем списке из 256 английских слов, от языка интерфейса не зависит. Клиент показывает слова через « · » и не считает их сам",
+      "sample": "conformance/call-sas/cases.json",
+      "status": "20 ноя 2026: движок и web — сделано (spec 041); desktop и android — открыто",
+      "clients": {
+        "web": "api/parvane/callengine.ts (отпечатки — onSas), components/parvane/call/callSas.ts (вызов движка), CallActive.tsx; тест callSas.test.ts (общий образец), сценарий scripts/run_web_calls_e2e.sh",
         "desktop": "открыто",
         "android": "открыто"
       }

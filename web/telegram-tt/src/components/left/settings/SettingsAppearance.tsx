@@ -8,14 +8,18 @@ import { ANIMATION_LEVEL_MAX, ANIMATION_LEVEL_MIN } from '../../../config';
 import { INITIAL_PERFORMANCE_STATE_MAX, INITIAL_PERFORMANCE_STATE_MIN } from '../../../global/initialState';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import buildClassName from '../../../util/buildClassName';
+import { getIsChatListDense, setChatListDense } from '../../../util/chatListDensity';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvSwitch from '../../parvane/notes/PvSwitch';
+import AppearanceBackgroundRow from './profile/AppearanceBackgroundRow';
 import ProfileAppearance from './profile/ProfileAppearance';
 import ProfileIcon from './profile/ProfileIcon';
+import ProfileSwitchRow from './profile/ProfileSwitchRow';
 
 import styles from './profile/Profile.module.scss';
 
@@ -34,6 +38,7 @@ const SettingsAppearance = ({ isActive, animationLevel, onReset }: OwnProps & St
   const { openSettingsScreen, setSharedSettingOption, updatePerformanceSettings } = getActions();
   const lang = useLang();
   const isAnimated = animationLevel !== ANIMATION_LEVEL_MIN;
+  const isDense = useDerivedState(getIsChatListDense);
 
   useHistoryBack({ isActive, onBack: onReset });
 
@@ -41,10 +46,6 @@ const SettingsAppearance = ({ isActive, animationLevel, onReset }: OwnProps & St
     const level = isAnimated ? ANIMATION_LEVEL_MIN : ANIMATION_LEVEL_MAX;
     setSharedSettingOption({ animationLevel: level as AnimationLevel, wasAnimationLevelSetManually: true });
     updatePerformanceSettings(isAnimated ? INITIAL_PERFORMANCE_STATE_MIN : INITIAL_PERFORMANCE_STATE_MAX);
-  });
-
-  const handleOpenBackground = useLastCallback(() => {
-    openSettingsScreen({ screen: SettingsScreens.GeneralChatBackground });
   });
 
   const handleOpenPerformance = useLastCallback(() => {
@@ -62,10 +63,7 @@ const SettingsAppearance = ({ isActive, animationLevel, onReset }: OwnProps & St
       <div className={styles.caption}>{lang('ParvaneAppearanceTextAndChats')}</div>
       <div className={styles.group}>
         <ProfileAppearance part="rows" />
-        <button type="button" className={rowClass} data-appearance-row="background" onClick={handleOpenBackground}>
-          <span className={styles.setTitle}>{lang('ParvaneAppearanceChatBackground')}</span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
+        <AppearanceBackgroundRow />
         <div className={styles.setRow}>
           <span className={styles.setText}>
             <span className={styles.setTitle}>{lang('MenuUIFeaturesSwitch')}</span>
@@ -79,6 +77,13 @@ const SettingsAppearance = ({ isActive, animationLevel, onReset }: OwnProps & St
           <span className={styles.setTitle}>{lang('MenuAnimations')}</span>
           <ProfileIcon name="right" isSmall className={styles.menuChevron} />
         </button>
+        <ProfileSwitchRow
+          title={lang('ParvaneAppearanceDense')}
+          hint={lang('ParvaneAppearanceDenseHint')}
+          isOn={isDense}
+          onChange={setChatListDense}
+          data-appearance-row="dense"
+        />
       </div>
       <div className={styles.hint}>{lang('ParvaneAppearanceFontHint')}</div>
     </div>

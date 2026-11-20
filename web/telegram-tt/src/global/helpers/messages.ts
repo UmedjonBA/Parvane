@@ -72,7 +72,7 @@ export function hasMessageText(message: MediaContainer) {
   const {
     action, text, sticker, photo, video, audio, voice, document, pollId, todo, dice,
     webPage, contact, invoice, location, game, storyData, giveaway, giveawayResults, paidMedia, taskOffer, article,
-    modReport, musicTrack, musicPlaylist,
+    modReport, musicTrack, musicPlaylist, cloudInvite,
   } = message.content;
 
   if (pollId) return false;
@@ -80,7 +80,7 @@ export function hasMessageText(message: MediaContainer) {
   return Boolean(text) || !(
     sticker || photo || video || audio || voice || document || contact || pollId || todo || webPage
     || invoice || location || game || storyData || giveaway || giveawayResults || dice
-    || paidMedia || taskOffer || article || modReport || musicTrack || musicPlaylist
+    || paidMedia || taskOffer || article || modReport || musicTrack || musicPlaylist || cloudInvite
     || action?.type === 'phoneCall'
   );
 }

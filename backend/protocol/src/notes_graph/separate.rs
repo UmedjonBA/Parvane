@@ -75,31 +75,45 @@ fn candidates(shapes: &[Shape]) -> Vec<(usize, usize)> {
     pairs
 }
 
-/// Один проход: раздвигает пересекающиеся пары; возвращает оставшиеся до сдвига наложения.
-fn pass(shapes: &mut [Shape]) -> Vec<(usize, usize)> {
+/// Один проход: раздвигает пересекающиеся пары; возвращает оставшиеся до сдвига наложения. Закреплённый узел
+/// (`fixed`) не двигается: отходит другой узел пары на весь шаг; два закреплённых остаются как есть.
+fn pass(shapes: &mut [Shape], fixed: &[bool]) -> Vec<(usize, usize)> {
     let mut hits = Vec::new();
     for (i, j) in candidates(shapes) {
         let Some((along_x, amount, i_first)) = push_of(&shapes[i], &shapes[j]) else { continue };
+        let (i_fixed, j_fixed) = (fixed.get(i) == Some(&true), fixed.get(j) == Some(&true));
+        if i_fixed && j_fixed {
+            continue;
+        }
         hits.push((i, j));
         let half = amount / 2.0 + 0.25;
         let step = if i_first { -half } else { half };
-        if along_x {
-            shapes[i].x += step;
-            shapes[j].x -= step;
+        let (step_i, step_j) = if i_fixed {
+            (0.0, step * 2.0)
+        } else if j_fixed {
+            (step * 2.0, 0.0)
         } else {
-            shapes[i].y += step;
-            shapes[j].y -= step;
+            (step, step)
+        };
+        if along_x {
+            shapes[i].x += step_i;
+            shapes[j].x -= step_j;
+        } else {
+            shapes[i].y += step_i;
+            shapes[j].y -= step_j;
         }
     }
     hits
 }
 
-/// Раздвигает узлы группы до отсутствия наложений.
-pub(crate) fn run(shapes: &mut [Shape]) {
-    // Тесную раскладку сначала растягивают целиком: так сохраняется её рисунок, а проходам остаётся мелочь
+/// Раздвигает узлы группы до отсутствия наложений; закреплённые (`fixed`) стоят на месте.
+pub(crate) fn run(shapes: &mut [Shape], fixed: &[bool]) {
+    // Тесную раскладку сначала растягивают целиком: так сохраняется её рисунок, а проходам остаётся мелочь.
+    // С закреплёнными узлами не растягивают — их места заданы
+    let has_fixed = fixed.contains(&true);
     for _ in 0..SPREAD_STEPS {
         let crowded = candidates(shapes).into_iter().filter(|&(i, j)| push_of(&shapes[i], &shapes[j]).is_some()).count();
-        if shapes.len() < SPREAD_FROM || crowded * SPREAD_UNTIL <= shapes.len() {
+        if has_fixed || shapes.len() < SPREAD_FROM || crowded * SPREAD_UNTIL <= shapes.len() {
             break;
         }
         for s in shapes.iter_mut() {
@@ -110,7 +124,7 @@ pub(crate) fn run(shapes: &mut [Shape]) {
     for round in 0..ROUNDS {
         let mut left = Vec::new();
         for _ in 0..PASSES {
-            left = pass(shapes);
+            left = pass(shapes, fixed);
             if left.is_empty() {
                 return;
             }

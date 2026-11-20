@@ -22,7 +22,7 @@ import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
-import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import { PLANNER_SIDE_FORM_ID, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
@@ -213,7 +213,11 @@ const PlannerTaskForm = ({
   const hasDate = repeatDraft.kind === 'none';
 
   return (
-    <form className={buildClassName(styles.form, styles.eventCard)} onSubmit={handleSubmit}>
+    <form
+      id={PLANNER_SIDE_FORM_ID}
+      className={buildClassName(styles.form, styles.eventCard)}
+      onSubmit={handleSubmit}
+    >
       <div className={styles.kindSwitch} role="radiogroup" aria-label={lang('PlannerFieldKind')}>
         {(['task', 'event'] as const).map((item) => (
           <button
@@ -323,7 +327,7 @@ const PlannerTaskForm = ({
 
       {error && <p className={styles.error} role="alert">{error}</p>}
       <div className={styles.actions}>
-        <Button type="submit" size="smaller">{lang('PlannerCreate')}</Button>
+        <Button type="submit" size="smaller" className={styles.footSave}>{lang('PlannerCreate')}</Button>
         <Button isText size="smaller" onClick={onCancel}>{lang('Cancel')}</Button>
       </div>
     </form>

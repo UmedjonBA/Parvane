@@ -15,9 +15,21 @@ import PlannerField from '../planner/PlannerField';
 
 import styles from './TaskOfferModal.module.scss';
 
+// Поля, заполненные заранее: «Предложить собеседнику…» из меню записи «Плана»
+export type TaskOfferDraft = {
+  name: string;
+  description?: string;
+  steps?: string[];
+  day?: string;
+  start?: string;
+  minutes?: number;
+  due?: string;
+};
+
 type OwnProps = {
   isOpen: boolean;
   chatId: string;
+  initial?: TaskOfferDraft;
   onClose: NoneToVoidFunction;
 };
 
@@ -36,7 +48,9 @@ const TASK_ERROR_KEYS = {
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Parvane (spec 011, US3): форма задания в чат — поля как у задачи планировщика
-const TaskOfferModal = ({ isOpen, chatId, onClose }: OwnProps) => {
+const TaskOfferModal = ({
+  isOpen, chatId, initial, onClose,
+}: OwnProps) => {
   const lang = useLang();
 
   const [name, setName] = useState('');
@@ -50,6 +64,16 @@ const TaskOfferModal = ({ isOpen, chatId, onClose }: OwnProps) => {
   const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
+    if (isOpen && initial) {
+      setName(initial.name);
+      setDescription(initial.description || '');
+      setSteps((initial.steps || []).join('\n'));
+      setDay(initial.day || '');
+      setStart(initial.start || '');
+      setMinutes(initial.minutes === undefined ? '' : String(initial.minutes));
+      setDue(initial.due || '');
+      return;
+    }
     if (isOpen) return;
     setName('');
     setDescription('');
@@ -59,7 +83,7 @@ const TaskOfferModal = ({ isOpen, chatId, onClose }: OwnProps) => {
     setMinutes('');
     setDue('');
     setError(undefined);
-  }, [isOpen]);
+  }, [isOpen, initial]);
 
   const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.currentTarget.value);

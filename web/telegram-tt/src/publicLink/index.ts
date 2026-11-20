@@ -15,6 +15,7 @@ import {
 } from './strings';
 import { archiveFileName, canZip, createZipWriter } from './zip';
 
+import '../assets/fonts/parvane.css';
 import './style.css';
 
 // Parvane (spec 022): публичная страница ссылки на файлы облака — для людей
@@ -62,6 +63,7 @@ const strings = stringsFor(lang);
 const page = document.getElementById('page')!;
 const statusBox = document.getElementById('status')!;
 const contentBox = document.getElementById('content')!;
+const troubleBox = document.getElementById('trouble')!;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K, className?: string, text?: string, attrs?: Record<string, string>,
@@ -117,6 +119,8 @@ function toneOf(file: LinkManifestFile): Tone {
 
 function setState(state: PageState) {
   page.dataset.state = state;
+  // «Если ссылка не работает» — под открытой ссылкой (доска `RpFiles`); у ошибок своё объяснение
+  troubleBox.hidden = state !== 'ready';
 }
 
 function showStatus(state: PageState, title: string, text?: string, onRetry?: () => void) {
@@ -204,22 +208,31 @@ function saveBlob(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), OBJECT_URL_LIFETIME_MS);
 }
 
-function renderFileRow(linkId: string, node: LinkTreeNode, file: LinkManifestFile) {
-  const row = el('li', 'item file', undefined, { 'data-file-path': file.path, 'data-file-state': 'idle' });
+// Строка файла папки либо единственный файл ссылки (`isHero`: без строки названия — оно в шапке, «Скачать» —
+// крупной кнопкой во всю ширину, доска `RpFiles`)
+function renderFileRow(linkId: string, node: LinkTreeNode, file: LinkManifestFile, isHero?: boolean) {
+  const row = el(isHero ? 'div' : 'li', isHero ? 'item file hero' : 'item file', undefined, {
+    'data-file-path': file.path, 'data-file-state': 'idle',
+  });
   const line = el('div', 'line');
-  const tile = el('span', `tile tone-${toneOf(file)}`, undefined, { 'aria-hidden': 'true' });
-  attachThumb(tile, linkId, file);
-  line.append(
-    tile,
-    el('span', 'name', node.name, { dir: 'auto' }),
-    el('span', 'meta', sizeText(strings, file.size)),
-  );
   const actions = el('span', 'actions');
   const kind = previewKind(file);
   const viewButton = kind ? el('button', 'btn ghost', strings.view, { type: 'button', 'data-view': '' }) : undefined;
   const downloadButton = el('button', 'btn acc', strings.download, { type: 'button', 'data-download': '' });
-  if (viewButton) actions.append(viewButton);
-  actions.append(downloadButton);
+  if (isHero) {
+    actions.append(downloadButton);
+    if (viewButton) actions.append(viewButton);
+  } else {
+    const tile = el('span', `tile tone-${toneOf(file)}`, undefined, { 'aria-hidden': 'true' });
+    attachThumb(tile, linkId, file);
+    line.append(
+      tile,
+      el('span', 'name', node.name, { dir: 'auto' }),
+      el('span', 'meta', sizeText(strings, file.size)),
+    );
+    if (viewButton) actions.append(viewButton);
+    actions.append(downloadButton);
+  }
   line.append(actions);
 
   const progress = el('div', 'progress');
@@ -470,7 +483,6 @@ function showManifest(linkId: string, manifest: LinkManifest, expiresAt: number)
   const isFolder = manifest.kind === 'folder';
   document.title = `${manifest.name} — Parvane`;
 
-  const head = el('div', 'head');
   const titles = el('div', 'titles');
   const facts = [
     isFolder ? filesText(lang, files.length) : undefined,
@@ -480,22 +492,21 @@ function showManifest(linkId: string, manifest: LinkManifest, expiresAt: number)
     }) : undefined,
   ].filter(Boolean).join(' · ');
   titles.append(
+    el('p', 'lead', isFolder ? strings.sharedFolder : strings.sharedFile),
     el('h1', 'title', manifest.name, { dir: 'auto', 'data-link-name': '' }),
     el('div', 'facts', facts, { 'data-link-facts': '' }),
   );
-  head.append(
-    el('span', `tile big tone-${isFolder ? 'folder' : files[0] ? toneOf(files[0]) : 'file'}`, undefined, {
-      'aria-hidden': 'true',
-    }),
-    titles,
-  );
 
   const tree = buildLinkTree(manifest.items);
-  contentBox.replaceChildren(
-    el('p', 'lead', isFolder ? strings.sharedFolder : strings.sharedFile),
-    head,
+  const single = !isFolder && tree.length === 1 ? tree[0] : undefined;
+  const body = single?.file ? [renderFileRow(linkId, single, single.file, true)] : [
     ...(isFolder && files.length > 1 ? [renderDownloadAll(linkId, manifest, files)] : []),
     tree.length ? renderTree(linkId, tree, false) : el('p', 'empty', strings.emptyFolder),
+  ];
+  contentBox.replaceChildren(
+    titles,
+    ...body,
+    el('p', 'card secure', isFolder ? strings.encryptedFolder : strings.encryptedFile),
   );
   statusBox.hidden = true;
   contentBox.hidden = false;
@@ -545,7 +556,8 @@ async function openLink() {
 document.documentElement.lang = lang;
 document.title = strings.pageTitle;
 document.getElementById('foot-note')!.textContent = strings.footNote;
-document.getElementById('foot-key')!.textContent = strings.footKey;
+document.getElementById('trouble-title')!.textContent = strings.troubleTitle;
+document.getElementById('trouble-hint')!.textContent = strings.troubleText;
 // Другой ключ в адресе той же вкладки — открыть заново
 window.addEventListener('hashchange', () => void openLink());
 void openLink();

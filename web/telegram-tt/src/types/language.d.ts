@@ -2799,6 +2799,17 @@ export interface LangPair {
   'ParvaneCloudMakeCopy': undefined;
   'ParvaneCloudAttachToNote': undefined;
   'ParvaneCloudDragHint': undefined;
+  'ParvaneCloudMoveShared': undefined;
+  'ParvaneCloudMoveNoFolders': undefined;
+  'ParvaneCloudMoveDragHint': undefined;
+  'ParvaneCloudNickLabel': undefined;
+  'ParvaneCloudNickInvite': undefined;
+  'ParvaneCloudFromContacts': undefined;
+  'ParvaneCloudNickInvalid': undefined;
+  'ParvaneCloudNickNotFound': undefined;
+  'ParvaneCloudInvitations': undefined;
+  'ParvaneCloudInviteWaiting': undefined;
+  'ParvaneCloudInviteCancel': undefined;
   'PlannerAdd': undefined;
   'PlannerAddEntry': undefined;
   'PlannerAddTaskForDay': undefined;
@@ -3271,7 +3282,6 @@ export interface LangPair {
   'KnowledgeCanvasOpenNote': undefined;
   'KnowledgeCanvasGroupName': undefined;
   'KnowledgeCanvasEdgesHint': undefined;
-  'KnowledgeCanvasRemoveEdge': undefined;
   'KnowledgeCanvasAlreadyOn': undefined;
   'KnowledgeCanvasLinkCard': undefined;
   'KnowledgeCanvasFileCard': undefined;
@@ -3415,10 +3425,6 @@ export interface LangPair {
   'ParvaneModFailed': undefined;
   'ParvaneReportFailed': undefined;
   'ParvaneCallTorUnavailable': undefined;
-  'ParvaneChangeUsername': undefined;
-  'ParvaneRenameTitle': undefined;
-  'ParvaneRenameHint': undefined;
-  'ParvaneRenameNick': undefined;
   'ParvaneRenameNickRule': undefined;
   'ParvaneRenamePassword': undefined;
   'ParvaneRenameRecoveryKey': undefined;
@@ -3431,26 +3437,16 @@ export interface LangPair {
   'ParvaneRenameErrorInvalid': undefined;
   'ParvaneRenameErrorFailed': undefined;
   'ParvaneDeleteAccountTitle': undefined;
-  'ParvaneDeleteAccountHint': undefined;
-  'ParvaneDeleteAccountPointData': undefined;
-  'ParvaneDeleteAccountPointNick': undefined;
-  'ParvaneDeleteAccountPointRestore': undefined;
-  'ParvaneDeleteAccountPointExport': undefined;
-  'ParvaneDeleteAccountSubmit': undefined;
   'ParvaneDeleteAccountErrorPassword': undefined;
   'ParvaneDeleteAccountErrorFailed': undefined;
   'ParvaneRestoreAccount': undefined;
   'ParvaneGroupPeerDeclined': undefined;
   'ParvaneExportData': undefined;
-  'ParvaneExportTitle': undefined;
   'ParvaneExportHint': undefined;
   'ParvaneExportMedia': undefined;
   'ParvaneExportCloud': undefined;
-  'ParvaneExportCloudHint': undefined;
   'ParvaneExportStart': undefined;
   'ParvaneExportStagePrepare': undefined;
-  'ParvaneExportStagePlanner': undefined;
-  'ParvaneExportStageContacts': undefined;
   'ParvaneExportStageFinishing': undefined;
   'ParvaneExportErrorCanceled': undefined;
   'ParvaneExportErrorTooLarge': undefined;
@@ -3649,6 +3645,145 @@ export interface LangPair {
   'ParvaneCallAudioOutput': undefined;
   'ParvaneCallDefaultAudio': undefined;
   'ParvaneCallAudioError': undefined;
+  'PlannerMenuOpen': undefined;
+  'PlannerMenuDone': undefined;
+  'PlannerMenuUndone': undefined;
+  'PlannerMenuTomorrow': undefined;
+  'PlannerMenuFreeTime': undefined;
+  'PlannerMenuDuplicate': undefined;
+  'PlannerMenuLayer': undefined;
+  'PlannerMenuOffer': undefined;
+  'PlannerMenuOfferTitle': undefined;
+  'PlannerMenuDelete': undefined;
+  'PlannerKeySpace': undefined;
+  'PlannerDragToGrid': undefined;
+  'PlannerSectionDeadlines': undefined;
+  'PlannerSectionUndated': undefined;
+  'PlannerSectionsLabel': undefined;
+  'PlannerReminderSampleTitle': undefined;
+  'PlannerReminderSampleName': undefined;
+  'PlannerReminderSampleDetails': undefined;
+  'PlannerReminderSampleApp': undefined;
+  'PlannerReminderSampleDone': undefined;
+  'PlannerReminderSampleSnooze': undefined;
+  'PlannerReminderSampleOpen': undefined;
+  'PlannerTitleRecord': undefined;
+  'HealthFirstEntry': undefined;
+  'HealthFirstSubtitle': undefined;
+  'ParvaneCallReplyWithMessage': undefined;
+  'ParvaneCallSwitchCamera': undefined;
+  'ParvaneCallOpenChat': undefined;
+  'ParvaneCallInvite': undefined;
+  'ParvaneCallInviteEmpty': undefined;
+  'ParvaneCallFreePlace': undefined;
+  'ParvaneCallFreePlaceHint': undefined;
+  'ParvaneCallSpeaking': undefined;
+  'ParvaneCallWaitingLabel': undefined;
+  'ParvaneCallWaitingGroup': undefined;
+  'ParvaneCallWaitingDecline': undefined;
+  'ParvaneCallWaitingAccept': undefined;
+  'KnowledgeCanvasListTitle': undefined;
+  'KnowledgeCanvasListSubtitle': undefined;
+  'KnowledgeCanvasListHint': undefined;
+  'KnowledgeCanvasFromGraphHint': undefined;
+  'KnowledgeCanvasOpen': undefined;
+  'KnowledgeCanvasBack': undefined;
+  'KnowledgeCanvasNewNoteShort': undefined;
+  'KnowledgeCanvasSelectShort': undefined;
+  'KnowledgeCanvasConnectArrow': undefined;
+  'KnowledgeCanvasDistribute': undefined;
+  'KnowledgeCanvasRemoveFromCanvas': undefined;
+  'KnowledgeCanvasDirForward': undefined;
+  'KnowledgeCanvasDirBack': undefined;
+  'KnowledgeCanvasDirBoth': undefined;
+  'KnowledgeCanvasDirNone': undefined;
+  'KnowledgeCanvasLine': undefined;
+  'KnowledgeCanvasLineSolid': undefined;
+  'KnowledgeCanvasLineDashed': undefined;
+  'KnowledgeCanvasEdgeFrom': undefined;
+  'KnowledgeCanvasEdgeTo': undefined;
+  'KnowledgeCanvasSwapEnds': undefined;
+  'KnowledgeCanvasRemoveEdge': undefined;
+  'KnowledgeCanvasMinimap': undefined;
+  'KnowledgeCanvasZoomImagesFull': undefined;
+  'KnowledgeCanvasZoomImagesThumb': undefined;
+  'MessageNotePickTitle': undefined;
+  'MessageNoteNew': undefined;
+  'CloudInviteLabel': undefined;
+  'CloudInviteOpen': undefined;
+  'CloudInviteOpenFiles': undefined;
+  'ModuleOffHintCloudInvite': undefined;
+  'ParvaneAccountNick': undefined;
+  'ParvaneAccountPassword': undefined;
+  'ParvaneAccountChange': undefined;
+  'ParvaneAccountSigningKey': undefined;
+  'ParvaneAccountDangerZone': undefined;
+  'ParvaneAccountSignOutHere': undefined;
+  'ParvaneAccountDeleteHint': undefined;
+  'ParvaneDeleteWhatHappens': undefined;
+  'ParvaneDeleteStepSignOut': undefined;
+  'ParvaneDeleteStepWait': undefined;
+  'ParvaneDeleteStepErase': undefined;
+  'ParvaneDeleteStepMusic': undefined;
+  'ParvaneDeleteSaveFirst': undefined;
+  'ParvaneDeleteSaveFirstHint': undefined;
+  'ParvaneDeleteExport': undefined;
+  'ParvaneDeleteUnderstand': undefined;
+  'ParvaneDeleteSubmitLater': undefined;
+  'ParvaneExportChats': undefined;
+  'ParvaneExportChatsFormat': undefined;
+  'ParvaneExportMediaFormat': undefined;
+  'ParvaneExportPlanner': undefined;
+  'ParvaneExportPlannerFormat': undefined;
+  'ParvaneExportNotes': undefined;
+  'ParvaneExportNotesFormat': undefined;
+  'ParvaneExportCloudFormat': undefined;
+  'ParvaneExportContacts': undefined;
+  'ParvaneExportContactsFormat': undefined;
+  'ParvaneExportWhere': undefined;
+  'ParvaneBugAreaOther': undefined;
+  'ParvaneBugWhere': undefined;
+  'ParvaneBugWhat': undefined;
+  'ParvaneBugAttachLog': undefined;
+  'ParvaneBugAttachLogHint': undefined;
+  'ParvaneBugWhatIsSent': undefined;
+  'ParvaneBugShow': undefined;
+  'ParvaneBugSentWithLog': undefined;
+  'ParvaneBugSentNoLog': undefined;
+  'ParvaneBugSend': undefined;
+  'ParvaneBugReportNoAddress': undefined;
+  'ParvaneHelpTitle': undefined;
+  'ParvaneHelpRestore': undefined;
+  'ParvaneHelpRestored': undefined;
+  'ParvaneHelpRestoreFailed': undefined;
+  'ParvaneNickFree': undefined;
+  'ParvaneNickChecking': undefined;
+  'ParvaneNickPassword': undefined;
+  'ParvaneProfileMine': undefined;
+  'ParvaneProfileDone': undefined;
+  'ParvaneProfileRemovePhoto': undefined;
+  'ParvaneBackgroundDefault': undefined;
+  'ParvaneBackgroundPattern': undefined;
+  'ParvaneBackgroundOwn': undefined;
+  'ParvaneAppearanceDense': undefined;
+  'ParvaneAppearanceDenseHint': undefined;
+  'ParvaneLanguageFormat': undefined;
+  'ParvaneKeysBackupNone': undefined;
+  'ParvaneKeysBackupNoneShort': undefined;
+  'ParvanePinAutoLock': undefined;
+  'ParvanePinAutoLockOff': undefined;
+  'ModuleOffEnableFiles': undefined;
+  'ModuleOffBodyFiles': undefined;
+  'MusicPlaylistChipsTitle': undefined;
+  'MusicPlaylistChipNew': undefined;
+  'KeyChangedVerify': undefined;
+  'MessageSendFailed': undefined;
+  'MessageSendCancel': undefined;
+  'ParvaneContactsHint': undefined;
+  'ParvaneContactsRemote': undefined;
+  'ParvaneContactsRemoteLabel': undefined;
+  'ParvaneContactsRemotePlaceholder': undefined;
+  'ParvaneContactsRemoteHint': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5635,6 +5770,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudDragOnto': {
     'name': V;
   };
+  'ParvaneCloudMoveNow': {
+    'place': V;
+  };
+  'ParvaneCloudMoveOpen': {
+    'name': V;
+  };
+  'ParvaneCloudTrashWasIn': {
+    'name': V;
+  };
+  'ParvaneCloudLinkOpens': {
+    'count': V;
+  };
   'PlannerAriaDay': {
     'date': V;
     'hours': V;
@@ -6112,18 +6259,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneAccountDeletionPending': {
     'date': V;
   };
-  'ParvaneExportStageChats': {
-    'done': V;
-    'total': V;
-  };
-  'ParvaneExportStageNotes': {
-    'done': V;
-    'total': V;
-  };
-  'ParvaneExportStageCloud': {
-    'done': V;
-    'total': V;
-  };
   'ParvaneExportWritten': {
     'size': V;
   };
@@ -6200,6 +6335,51 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneCallAudioDevice': {
     'number': V;
+  };
+  'PlannerMenuNewAt': {
+    'time': V;
+  };
+  'PlannerNoticeDuplicated': {
+    'name': V;
+  };
+  'PlannerNoticeGroupSet': {
+    'name': V;
+    'group': V;
+  };
+  'PlannerReminderSampleIn': {
+    'name': V;
+    'time': V;
+  };
+  'ParvaneCallHandleContact': {
+    'handle': V;
+  };
+  'ParvaneCallWaitingNamed': {
+    'title': V;
+  };
+  'KnowledgeCanvasSelected': {
+    'count': V;
+  };
+  'ParvaneExportRunning': {
+    'section': V;
+  };
+  'ParvaneExportSectionOf': {
+    'done': V;
+    'total': V;
+  };
+  'ParvaneHelpHint': {
+    'folder': V;
+  };
+  'ParvaneNickOldHint': {
+    'nick': V;
+  };
+  'ParvaneKeysBackupSavedAt': {
+    'date': V;
+  };
+  'KeyChangedPane': {
+    'name': V;
+  };
+  'MessageSendFailedReason': {
+    'reason': V;
   };
 }
 
@@ -6739,6 +6919,13 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'ParvaneCloudDropFiles': {
     'count': V;
   };
+  'ParvaneCloudMoveWhat': {
+    'name': V;
+    'count': V;
+  };
+  'ParvaneCloudMoveSharedNote': {
+    'count': V;
+  };
   'PlannerDaysValue': {
     'days': V;
   };
@@ -6757,6 +6944,27 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'KnowledgeMissingRefs': {
     'count': V;
     'names': V;
+  };
+  'ArticleReadingTime': {
+    'count': V;
+  };
+  'KnowledgeCanvasCards': {
+    'count': V;
+  };
+  'KnowledgeCanvasArrows': {
+    'count': V;
+  };
+  'ParvaneLoginAttemptsLeft': {
+    'count': V;
+  };
+  'ParvaneLoginLocked': {
+    'count': V;
+  };
+  'ParvanePinAutoLockMinutes': {
+    'count': V;
+  };
+  'ParvaneContactsCount': {
+    'count': V;
   };
 }
 export type RegularLangKey = keyof LangPair;

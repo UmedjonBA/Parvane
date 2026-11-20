@@ -1,9 +1,10 @@
-import { memo } from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { memo, useState } from '../../../lib/teact/teact';
+import { getActions, getGlobal } from '../../../global';
 
 import buildClassName from '../../../util/buildClassName';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
+import { formatBackupDate, getKeysBackupSavedAt, markKeysBackupSaved } from './profile/profileStatus';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -29,6 +30,9 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
   const lang = useLang();
   const oldLang = useOldLang();
 
+  const userId = getGlobal().currentUserId;
+  const [savedAt, setSavedAt] = useState(() => getKeysBackupSavedAt(userId));
+
   useHistoryBack({ isActive, onBack: onReset });
 
   const handleExport = useLastCallback(async () => {
@@ -50,6 +54,8 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
     anchor.download = 'parvane-e2e-keys.json';
     anchor.click();
     URL.revokeObjectURL(anchor.href);
+    markKeysBackupSaved(userId);
+    setSavedAt(getKeysBackupSavedAt(userId));
     showNotification({ message: oldLang('ParvaneKeysExported') });
   });
 
@@ -73,6 +79,11 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
 
   return (
     <div className={buildClassName('settings-content custom-scroll', styles.screen)} data-settings-keys>
+      <div className={styles.hint} data-keys-saved-at={savedAt || undefined}>
+        {savedAt
+          ? lang('ParvaneKeysBackupSavedAt', { date: formatBackupDate(savedAt, lang.code) })
+          : lang('ParvaneKeysBackupNone')}
+      </div>
       <div className={styles.hint}>{lang('ParvaneKeysBackupHint')}</div>
       <div className={styles.group}>
         <button type="button" className={rowClass} data-keys-action="save" onClick={handleExport}>

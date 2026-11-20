@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf, fileTypeLabel,
-  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, normalizeName, pathOf, searchNodes, sizeOf,
-  sortNodes,
+  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, navTreeOf, normalizeName, pathOf, searchNodes,
+  sizeOf, sortNodes,
   subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
@@ -239,5 +239,16 @@ describe('облако: служебные файлы Parvane', () => {
 
   it('без служебных файлов список возвращается тем же массивом', () => {
     expect(listedNodes(TREE)).toBe(TREE);
+  });
+
+  it('дерево колонки мест: папки корня, вложенные — только на пути к открытой', () => {
+    const tree = [...TREE, node('i', 'folder', 'Вложенная', 'b'), node('j', 'folder', 'Бэкапы')];
+    expect(navTreeOf(tree)).toEqual([
+      { id: 'j', name: 'Бэкапы', depth: 0 },
+      { id: 'a', name: 'Документы', depth: 0 },
+    ]);
+    expect(navTreeOf(tree, 'b').map((r) => `${r.depth}:${r.name}`)).toEqual([
+      '0:Бэкапы', '0:Документы', '1:Архив', '2:Вложенная',
+    ]);
   });
 });

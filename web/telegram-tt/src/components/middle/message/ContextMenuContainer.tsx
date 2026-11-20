@@ -86,7 +86,7 @@ import { callApi } from '../../../api/gramjs';
 import { buildCloudChatFile, requestCloudSave } from '../../parvane/cloud/cloudBridge';
 import { getSelectionAsFormattedText } from './helpers/getSelectionAsFormattedText';
 import { isSelectionRangeInsideMessage } from './helpers/isSelectionRangeInsideMessage';
-import { openMessageInPlan, saveMessageToNote } from './helpers/messageModules';
+import { openMessageInPlan, requestMessageToNote } from './helpers/messageModules';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -649,10 +649,9 @@ const ContextMenuContainer: FC<OwnProps & StateProps> = ({
     closeMenu();
   });
 
-  const handleToNote = useLastCallback(async () => {
+  const handleToNote = useLastCallback(() => {
     closeMenu();
-    const title = await saveMessageToNote(messageText!, lang);
-    showNotification({ message: title ? lang('ArticleSaved', { title }) : lang('MessageNoteFailed') });
+    requestMessageToNote(messageText!);
   });
 
   const handleSaveToCloud = useLastCallback(() => {

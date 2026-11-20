@@ -193,7 +193,13 @@ function LeftColumn({
         case SettingsScreens.ParvaneAppearance:
         case SettingsScreens.ParvaneKeysBackup:
         case SettingsScreens.ParvaneAbout:
+        case SettingsScreens.ParvaneExport:
+        case SettingsScreens.ParvaneBugReport:
+        case SettingsScreens.ParvaneHelp:
           openSettingsScreen({ screen: SettingsScreens.Main });
+          return;
+        case SettingsScreens.ParvaneDeleteAccount:
+          openSettingsScreen({ screen: SettingsScreens.ActiveSessions });
           return;
 
         // Parvane (spec 041 E3): папки и стикеры открываются из «Настроек мессенджера», фон чатов и

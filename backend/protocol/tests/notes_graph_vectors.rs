@@ -37,6 +37,7 @@ fn node_rects(node: &Value) -> Vec<Rect> {
 /// Граф: узлы и показанные подписи не накладываются и лежат в поле, связи ведут к узлам.
 fn check_graph(name: &str, out: &Value) {
     let nodes = list(out, "nodes");
+    let (bx, by) = (num(&out["bounds"], "x"), num(&out["bounds"], "y"));
     let (w, h) = (num(&out["bounds"], "w"), num(&out["bounds"], "h"));
     let rects: Vec<Vec<Rect>> = nodes.iter().map(node_rects).collect();
     let mut order: Vec<usize> = (0..nodes.len()).collect();
@@ -44,7 +45,7 @@ fn check_graph(name: &str, out: &Value) {
     for (at, &i) in order.iter().enumerate() {
         let right = rects[i].iter().map(|r| r.2).max().unwrap_or(0);
         for r in &rects[i] {
-            assert!(r.0 >= 0 && r.1 >= 0 && r.2 <= w && r.3 <= h, "{name}: узел {} вне поля {w}×{h}: {r:?}", nodes[i]["id"]);
+            assert!(r.0 >= bx && r.1 >= by && r.2 <= bx + w && r.3 <= by + h, "{name}: узел {} вне поля {w}×{h}: {r:?}", nodes[i]["id"]);
         }
         for &j in &order[at + 1..] {
             if rects[j].iter().map(|r| r.0).min().unwrap_or(0) >= right {
@@ -174,6 +175,43 @@ fn scope_and_seed_change_the_result() {
     // Негодный вход — отказ, а не паника
     assert!(call_static("notesGraphLayout", &json!({"notes": "не список"})).is_err());
     assert!(call_static("notesGraphCanvas", &json!({"scope": {"kind": "неизвестная"}})).is_err());
+}
+
+/// T10: точки, переставленные руками, после новой связи стоят там же; остальное раскладывается вокруг без наложений
+#[test]
+fn pinned_nodes_stay_after_a_new_link() {
+    let sample: Value = serde_json::from_str(&std::fs::read_to_string(SAMPLE).expect("образец")).expect("JSON");
+    let args = sample["cases"][0]["args"].clone();
+    let node = |out: &Value, id: &str| -> (i64, i64) {
+        let found = list(out, "nodes").iter().find(|n| n["id"] == json!(id)).unwrap_or_else(|| panic!("нет узла {id}"));
+        (num(found, "x"), num(found, "y"))
+    };
+    let before = call_static("notesGraphLayout", &args).expect("раскладка");
+    let (x1, y1) = node(&before, "n1");
+    let (x5, y5) = node(&before, "n5");
+    // n1 переставлен руками, n5 закреплён на своём месте; в n5 появилась ссылка на n8 (другая группа)
+    let mut pinned = args.clone();
+    pinned["pinned"] = json!([{"id": "n1", "x": x1 + 40, "y": y1 + 30}, {"id": "n5", "x": x5, "y": y5}]);
+    let notes = pinned["notes"].as_array_mut().expect("заметки");
+    let n5 = notes.iter_mut().find(|n| n["id"] == json!("n5")).expect("n5");
+    let title8 = sample["cases"][0]["args"]["notes"].as_array().expect("заметки").iter().find(|n| n["id"] == json!("n8")).expect("n8")["title"].clone();
+    n5["links"].as_array_mut().expect("ссылки").push(title8);
+    let after = call_static("notesGraphLayout", &pinned).expect("раскладка с закреплёнными");
+    check_graph("закреплённые", &after);
+    assert_eq!(node(&after, "n1"), (x1 + 40, y1 + 30), "переставленная точка сдвинулась");
+    assert_eq!(node(&after, "n5"), (x5, y5), "закреплённая точка сдвинулась");
+    assert_eq!(after, call_static("notesGraphLayout", &pinned).expect("повтор"), "повтор дал другое");
+    // Свободная группа (n8 — n9) стоит, где стояла: перестановка точки другой группы её не трогает
+    let mut moved_only = args.clone();
+    moved_only["pinned"] = json!([{"id": "n1", "x": x1 + 40, "y": y1 + 30}]);
+    let moved = call_static("notesGraphLayout", &moved_only).expect("раскладка с одной закреплённой");
+    check_graph("одна закреплённая", &moved);
+    assert_eq!(node(&moved, "n1"), (x1 + 40, y1 + 30));
+    assert_eq!(node(&moved, "n9"), node(&before, "n9"), "свободная группа сдвинулась");
+    // Закрепление неизвестного узла и нечисловое место ничего не ломают
+    let mut odd = args.clone();
+    odd["pinned"] = json!([{"id": "нет такого", "x": 1, "y": 2}]);
+    assert_eq!(call_static("notesGraphLayout", &odd).expect("неизвестный"), before);
 }
 
 /// Выдуманный граф: `count` заметок в 12 папках, у каждой 25-й много ссылок, каждая десятая — одиночка.

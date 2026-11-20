@@ -92,16 +92,45 @@ function readVersion(grant: GrantJson, field: string) {
   return typeof grant[field] === 'number' ? grant[field] : 0;
 }
 
+type FormerStateKey = { k: string; v: number };
+
+const FORMER_STATE_KEYS_MAX = 16;
+
+function readFormerStateKeys(grant: GrantJson): FormerStateKey[] {
+  const list = Array.isArray(grant.fsk) ? grant.fsk as unknown[] : [];
+  return list.filter((entry): entry is FormerStateKey => Boolean(entry) && typeof entry === 'object'
+    && typeof (entry as FormerStateKey).k === 'string' && typeof (entry as FormerStateKey).v === 'number');
+}
+
+/** Прежние ключи личного состояния (`fsk`) обеих копий и вытесненный текущий: без них новое устройство не читает
+ * журнал истории до смены ключа. Текущий ключ в прежние не попадает; новые сначала. */
+function mergeFormerStateKeys(ownGrant: GrantJson, serverGrant: GrantJson, replaced?: FormerStateKey) {
+  const all = [...readFormerStateKeys(ownGrant), ...readFormerStateKeys(serverGrant), ...(replaced ? [replaced] : [])];
+  const merged: FormerStateKey[] = [];
+  all.forEach((entry) => {
+    if (entry.k !== ownGrant.sk && !merged.some((m) => m.k === entry.k)) merged.push({ k: entry.k, v: entry.v });
+  });
+  return merged.sort((a, b) => b.v - a.v).slice(0, FORMER_STATE_KEYS_MAX);
+}
+
 /** Грант копии — свой, но ключи уровня аккаунта (личного состояния и доставки) — более новой версии из двух. */
 function mergeGrant(own: string, server: string | undefined): string {
   const ownGrant = parseGrant(own);
   const serverGrant = parseGrant(server);
   if (!ownGrant || !serverGrant) return own;
   let isChanged = false;
+  let replaced: FormerStateKey | undefined;
   if (typeof serverGrant.sk === 'string'
     && (typeof ownGrant.sk !== 'string' || readVersion(serverGrant, 'skv') > readVersion(ownGrant, 'skv'))) {
+    if (typeof ownGrant.sk === 'string') replaced = { k: ownGrant.sk, v: readVersion(ownGrant, 'skv') };
     ownGrant.sk = serverGrant.sk;
     ownGrant.skv = serverGrant.skv;
+    isChanged = true;
+  }
+  const formerKeys = mergeFormerStateKeys(ownGrant, serverGrant, replaced);
+  if (JSON.stringify(formerKeys) !== JSON.stringify(readFormerStateKeys(ownGrant))) {
+    if (formerKeys.length) ownGrant.fsk = formerKeys;
+    else delete ownGrant.fsk;
     isChanged = true;
   }
   if (typeof serverGrant.dk === 'string' && readVersion(serverGrant, 'gen') > readVersion(ownGrant, 'gen')) {
@@ -117,7 +146,8 @@ function mergeGrant(own: string, server: string | undefined): string {
  * ещё нет, с сервера. Только что вошедшее устройство не должно стирать из копии «План» и «Облако», которые само ещё
  * не получило, — иначе следующее новое устройство видело бы их через минуты (отзыв 23–24 окт 2026).
  * Правила (общие с ядром, вектор `keybundle-merge.json`): грант — свой, но ключ личного состояния (`sk`/`skv`) и ключ
- * доставки (`dk`/`gen`) — более новой версии из двух (отставшее устройство не откатывает их у следующих); «План» —
+ * доставки (`dk`/`gen`) — более новой версии из двух, прежние ключи личного состояния (`fsk`) — объединение с
+ * вытесненным текущим (отставшее устройство не откатывает их у следующих); «План» —
  * свой, если есть, но серверный при том же контейнере с бо́льшим числом эпох; «Облако» — объединение по `id`, у общего —
  * с бо́льшим числом эпох. Поле `history` (снимок истории до spec 033) не пишется и не читается: правило «больший
  * снимок победил» возвращало удалённое (HIST-1).

@@ -566,9 +566,11 @@
   }
 
   [role="radio"] {
-    gap: 0.375rem;
-    padding: 0.375rem;
-    border-radius: var(--pv-radius-sm);
+    gap: 0.25rem;
+  }
+
+  [role="radio"] > :first-child {
+    height: 2rem;
   }
 
   [role="radio"] > :last-child {

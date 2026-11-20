@@ -142,11 +142,32 @@ impl Sim<'_> {
     }
 }
 
-/// Места центров узлов группы (вокруг нуля). `edges` — пары номеров узлов группы.
-pub(crate) fn run(bodies: &[Body], edges: &[(usize, usize)], rng: &mut Rng) -> Vec<(f64, f64)> {
+/// Места центров узлов группы (вокруг нуля). `edges` — пары номеров узлов группы. `fixed[i]` — закреплённое место
+/// узла: он стоит там с первого шага до последнего, остальные раскладываются вокруг середины закреплённых. `start` —
+/// места, с которых начать (прежняя раскладка группы): закреплённая группа остаётся похожей на себя.
+pub(crate) fn run(
+    bodies: &[Body],
+    edges: &[(usize, usize)],
+    fixed: &[Option<(f64, f64)>],
+    start: Option<&[(f64, f64)]>,
+    rng: &mut Rng,
+) -> Vec<(f64, f64)> {
     let n = bodies.len();
     let spread = sqrt_of(n) * 110.0;
-    let pos = (0..n).map(|_| ((rng.unit() - 0.5) * spread, (rng.unit() - 0.5) * spread)).collect();
+    let pins: Vec<(f64, f64)> = fixed.iter().flatten().copied().collect();
+    let centre = if pins.is_empty() {
+        (0.0, 0.0)
+    } else {
+        let count = pins.len() as f64;
+        (pins.iter().map(|p| p.0).sum::<f64>() / count, pins.iter().map(|p| p.1).sum::<f64>() / count)
+    };
+    let pos = (0..n)
+        .map(|i| {
+            let free = (centre.0 + (rng.unit() - 0.5) * spread, centre.1 + (rng.unit() - 0.5) * spread);
+            let from = start.and_then(|places| places.get(i).copied()).unwrap_or(free);
+            fixed.get(i).copied().flatten().unwrap_or(from)
+        })
+        .collect();
     let mut sim = Sim { bodies, weight: bodies.iter().map(|b| 1.0 + 0.25 * sqrt_of(b.degree)).collect(), pos, disp: vec![(0.0, 0.0); n] };
     let edges: Vec<(usize, usize, f64)> = edges.iter().filter(|&&(a, b)| a < n && b < n).map(|&(a, b)| (a, b, ideal_length(&bodies[a], &bodies[b]))).collect();
     let cluster_count = bodies.iter().map(|b| b.cluster + 1).max().unwrap_or(0);
@@ -193,8 +214,11 @@ pub(crate) fn run(bodies: &[Body], edges: &[(usize, usize)], rng: &mut Rng) -> V
             }
         }
         for i in 0..n {
+            if fixed.get(i).copied().flatten().is_some() {
+                continue;
+            }
             let (x, y) = sim.pos[i];
-            let (fx, fy) = (sim.disp[i].0 - x * GRAVITY, sim.disp[i].1 - y * GRAVITY);
+            let (fx, fy) = (sim.disp[i].0 - (x - centre.0) * GRAVITY, sim.disp[i].1 - (y - centre.1) * GRAVITY);
             let length = (fx * fx + fy * fy).sqrt();
             if length > 1e-9 && length.is_finite() {
                 let step = length.min(temperature) / length;

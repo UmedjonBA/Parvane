@@ -34,7 +34,7 @@ test('keeps the saved address after reload and rejects an invalid password', asy
   await submitPassword(page, WRONG_PASSWORD);
 
   // Неверный пароль: наблюдаемая ошибка, сессии нет, регистрация не происходит
-  await expect(passwordScreen.getByText('Invalid password, please try again'))
+  await expect(passwordScreen.getByText(/^Wrong password. \d+ attempts? left/))
     .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   await expect(page.locator('#LeftColumn')).toHaveCount(0);
 

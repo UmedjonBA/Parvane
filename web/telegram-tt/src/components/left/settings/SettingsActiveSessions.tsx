@@ -24,6 +24,7 @@ import useOldLang from '../../../hooks/useOldLang';
 import PvSheet from '../../parvane/notes/PvSheet';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import SecretForm from '../../ui/SecretForm';
+import AccountCards from './account/AccountCards';
 import DeviceConfirmSignIn from './devices/DeviceConfirmSignIn';
 import { DeviceKeyDialog, ResetIdentityDialog } from './devices/DeviceDialogs';
 import ProfileIcon from './profile/ProfileIcon';
@@ -315,6 +316,7 @@ const SettingsActiveSessions = ({
           {Boolean(linkStatus?.hasEscrow) && isRotationNeeded && (
             <div className={profile.hint}>{oldLang('ParvaneLostKeyAdmin')}</div>
           )}
+          <AccountCards canRotateSsk={Boolean(sskState?.hasBackup)} onRotateSsk={() => setKeyDialogMode('rotate')} />
         </>
       )}
 

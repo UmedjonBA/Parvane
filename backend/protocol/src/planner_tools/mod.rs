@@ -1,12 +1,15 @@
 //! Подсказки «Плана» без состояния (spec 041 E1, хвосты): подбор свободного времени, разбор расписания на неделю
-//! текстом, поиск по записям, тренировки «Плана» для активности «Здоровья». Правила — здесь, один раз для всех
-//! клиентов; клиент передаёт готовые данные (повторы «Плана» он раскрывает сам) и показывает ответ.
+//! текстом, поиск по записям, тренировки «Плана» для активности «Здоровья», действия над одной записью (перенос на
+//! завтра, дублирование, задача на шкале дня). Правила — здесь, один раз для всех клиентов; клиент передаёт готовые
+//! данные (повторы «Плана» он раскрывает сам) и показывает ответ.
 //!
 //! Вызовы без состояния (`host::call::call_static`): `plannerFreeTime`, `plannerScheduleParse`, `plannerSearch`,
-//! `plannerWorkouts`; вход и выход — JSON. Даты — строки `YYYY-MM-DD`, время — минуты от начала суток, дни недели
-//! — как у `Date.getDay` (0 — воскресенье). Общий образец — `conformance/planner-tools/cases.json`.
+//! `plannerWorkouts`, `plannerRecordAction`; вход и выход — JSON. Даты — строки `YYYY-MM-DD`, время — минуты от
+//! начала суток, дни недели — как у `Date.getDay` (0 — воскресенье). Общий образец —
+//! `conformance/planner-tools/cases.json`.
 
 mod free_time;
+mod record;
 mod schedule;
 mod search;
 mod workouts;
@@ -17,7 +20,8 @@ use serde_json::Value;
 use crate::domain::health::{civil_from_days, days_from_civil};
 
 /// Имена вызовов модуля.
-pub const NAMES: &[&str] = &["plannerFreeTime", "plannerScheduleParse", "plannerSearch", "plannerWorkouts"];
+pub const NAMES: &[&str] =
+    &["plannerFreeTime", "plannerScheduleParse", "plannerSearch", "plannerWorkouts", "plannerRecordAction"];
 
 /// Вызов по имени; негодный вход либо чужое имя — `None`.
 pub fn call(name: &str, args: &Value) -> Option<Value> {
@@ -26,6 +30,7 @@ pub fn call(name: &str, args: &Value) -> Option<Value> {
         "plannerScheduleParse" => Some(schedule::run(&input(args)?)),
         "plannerSearch" => Some(search::run(&input(args)?)),
         "plannerWorkouts" => Some(workouts::run(&input(args)?)),
+        "plannerRecordAction" => Some(record::run(&input(args)?)),
         _ => None,
     }
 }

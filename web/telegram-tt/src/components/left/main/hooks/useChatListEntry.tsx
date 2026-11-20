@@ -8,7 +8,6 @@ import type {
 } from '../../../../api/types';
 import type { ObserveFn } from '../../../../hooks/useIntersectionObserver';
 
-import { CHAT_HEIGHT_PX } from '../../../../config';
 import { requestMutation } from '../../../../lib/fasterdom/fasterdom';
 import {
   getMessageIsSpoiler,
@@ -19,6 +18,7 @@ import {
 import { getMessageSenderName } from '../../../../global/helpers/peers';
 import { waitStartingTransitionsEnd } from '../../../../util/animations/waitTransitionEnd';
 import buildClassName from '../../../../util/buildClassName';
+import { getChatRowHeight } from '../../../../util/chatListDensity';
 import { isUserId } from '../../../../util/entities/ids';
 import renderText from '../../../common/helpers/renderText';
 import { renderTextWithEntities } from '../../../common/helpers/renderTextWithEntities';
@@ -225,7 +225,7 @@ export default function useChatListEntry({
     }
 
     if (animationType === ChatAnimationTypes.Move) {
-      element.style.transform = `translate3d(0, ${-orderDiff * CHAT_HEIGHT_PX - shiftDiff}px, 0)`;
+      element.style.transform = `translate3d(0, ${-orderDiff * getChatRowHeight() - shiftDiff}px, 0)`;
 
       requestMutation(() => {
         if (isCancelled) return;

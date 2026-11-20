@@ -32,6 +32,8 @@ type OwnProps = {
   // Сама запись (её место в дне не считается занятым)
   exceptKey?: string;
   onPick: (day: string, start: number, end: number) => void;
+  // Отдельная шторка (меню записи и пустое место шкалы, доска `ZdPlanX`): открыта сразу, закрывается этим
+  onClose?: NoneToVoidFunction;
 };
 
 const PARTS: { value: FreeTimePart; key: 'PlannerFreeTimeAny' | 'PlannerFreeTimeMorning' | 'PlannerFreeTimeEvening'
@@ -51,7 +53,7 @@ const EMPTY_RESULT: FreeTimeResult = { slots: [], total: 0 };
 // «Найти свободное время» (доски `ZpPlanX`, `DkPlanMore`): окна считает движок (`plannerFreeTime`). На компьютере —
 // блок в карточке записи, на телефоне — кнопка и шторка
 const PlannerFreeTime = ({
-  state, name, minutes, fromDay, today, exceptKey, onPick,
+  state, name, minutes, fromDay, today, exceptKey, onPick, onClose,
 }: OwnProps) => {
   const lang = useLang();
   const [part, setPart] = useState<FreeTimePart>('any');
@@ -60,7 +62,7 @@ const PlannerFreeTime = ({
   const [isSheetOpen, openSheet, closeSheet] = useFlag();
   const { width } = useWindowSize();
   const isNarrow = width <= NARROW_WIDTH;
-  const isShown = !isNarrow || isSheetOpen;
+  const isShown = !isNarrow || isSheetOpen || Boolean(onClose);
   const base = fromDay > today ? fromDay : today;
 
   const result = useMemo(() => {
@@ -176,6 +178,14 @@ const PlannerFreeTime = ({
           </button>
         )}
       </>
+    );
+  }
+
+  if (onClose) {
+    return (
+      <PvSheet isOpen title={lang('PlannerFreeTimeTitle')} onClose={onClose}>
+        <div className={styles.freeTime} data-free-time>{renderBody()}</div>
+      </PvSheet>
     );
   }
 

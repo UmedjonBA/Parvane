@@ -9,13 +9,16 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  disconnectWhileOffline,
   dismissRecoveryKeyDialog,
   expectToast,
   findMessageContainer,
   openMessageMenuOn,
   openSavedMessages,
   preparePage,
+  reloadPage,
   sendText,
+  waitForSocketCount,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-chat-design-e2e-1';
@@ -49,6 +52,19 @@ try {
   await page.getByRole('menuitem', { name: 'New Group' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   console.log('OK: шапка списка чатов на компьютере — поле поиска 40 px');
+  // «Новое сообщение» (доска `ZpChat2`): «Новая группа», «Новый канал», контакты и ник с другого сервера
+  await page.locator('[data-add-for="chats"]').click();
+  await page.getByRole('menuitem', { name: 'New Message' }).click();
+  const remote = page.locator('#LeftColumn [data-contacts-remote]');
+  await remote.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const name of ['New Group', 'New Channel']) {
+    await page.locator('#LeftColumn .ListItem').filter({ hasText: name }).first()
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await remote.getByPlaceholder('@nick@server').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await remote.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Новое сообщение» — группа, канал, контакты и ник с другого сервера');
 
   await openSavedMessages(page);
   const noteText = `Сверить копии ${suffix}`;
@@ -57,21 +73,33 @@ try {
   const menu = page.locator('.MessageContextMenu');
   const toNote = menu.getByRole('menuitem', { name: /^To a note/ });
   await toNote.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal((await toNote.locator('.MessageContextMenu--hint').innerText()).trim(), 'new note');
+  assert.equal((await toNote.locator('.MessageContextMenu--hint').innerText()).trim(), 'new or existing');
   assert.equal(
     (await menu.getByRole('menuitem', { name: /^To plan/ }).locator('.MessageContextMenu--hint').innerText()).trim(),
     'task from the text',
   );
   await toNote.click();
+  // Выбор: новая заметка либо существующая (доска `ZpChat`: «новая или в существующую»)
+  await page.locator('[data-note-pick-new]').click();
+  await expectToast(page, `Saved to notes: «${noteText}»`);
+  // Второе сообщение дописывается в ту же заметку
+  const moreText = `Ещё строка ${suffix}`;
+  await sendText(page, moreText);
+  await openMessageMenuOn(findMessageContainer(page, moreText));
+  await menu.getByRole('menuitem', { name: /^To a note/ }).click();
+  await page.locator(`[data-article-notes] [data-article-note="${noteText}"]`)
+    .click({ timeout: 60000 });
   await expectToast(page, `Saved to notes: «${noteText}»`);
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   const noteRow = page.locator(`#ParvaneKnowledge [data-note-row="${noteText}"]`).first();
   await noteRow.waitFor({ state: 'visible', timeout: 60000 });
   await noteRow.click();
-  await page.locator('#ParvaneKnowledge [data-note-body]').getByText(noteText).first()
-    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const text of [noteText, moreText]) {
+    await page.locator('#ParvaneKnowledge [data-note-body]').getByText(text).first()
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
-  console.log('OK: «В заметку» создаёт заметку с текстом сообщения');
+  console.log('OK: «В заметку» — новая заметка и дописывание в существующую');
 
   const planText = `Проверить диск ${suffix} завтра 12:00`;
   await sendText(page, planText);
@@ -85,6 +113,41 @@ try {
   ).catch(async () => assert.equal(await quick.inputValue(), planText, 'окно ввода «Плана» несёт текст сообщения'));
   await page.keyboard.press('Escape');
   console.log('OK: «В план» открывает окно ввода с текстом сообщения');
+
+  // Плашка «ключ безопасности изменился · Сверить» (доска `ZpChat`): отметку смены ключа ставит синхронизация;
+  // здесь она подставлена в память устройства для своего чата, проверяется показ и «Сверить»
+  await page.evaluate(() => {
+    localStorage.setItem('parvane:key-changed', JSON.stringify([window.__parvaneGetGlobal().currentUserId]));
+  });
+  await reloadPage(page);
+  await openSavedMessages(page);
+  const keyPane = page.locator('[data-key-change-pane]');
+  await keyPane.getByText('security key has changed', { exact: false }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await keyPane.getByRole('button', { name: 'Verify', exact: true }).click();
+  await keyPane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#RightColumn').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await page.evaluate(() => localStorage.getItem('parvane:key-changed')), '[]');
+  console.log('OK: плашка смены ключа и «Сверить» открывает профиль');
+
+  // «Не доставлено · Отменить отправку» (доска `ZpChat`): без связи отправка не удаётся — под сообщением строка
+  // с кнопкой, она убирает неотправленное
+  await page.keyboard.press('Escape');
+  await openSavedMessages(page);
+  await disconnectWhileOffline(wide, page);
+  await waitForSocketCount(page, 'closed', 1);
+  const lostText = `Без связи ${suffix}`;
+  await sendText(page, lostText);
+  const failedRow = findMessageContainer(page, lostText).locator('[data-message-send-failed]');
+  await failedRow.getByText('Not delivered', { exact: false }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await wide.setOffline(false);
+  await failedRow.getByRole('button', { name: 'Cancel sending', exact: true }).click();
+  await page.waitForFunction(
+    (text) => ![...document.querySelectorAll('.Transition_slide-active > .MessageList .Message')]
+      .some((element) => element.textContent.includes(text)),
+    lostText,
+    { timeout: STEP_TIMEOUT_MS },
+  );
+  console.log('OK: «Не доставлено · Отменить отправку» убирает неотправленное');
   await wide.close();
 
   // ── Телефон ──────────────────────────────────────────────────────────────────

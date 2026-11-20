@@ -169,6 +169,17 @@ pub(crate) fn login_record_failure(user: &str) {
     }
 }
 
+/// spec 041: сколько неверных попыток осталось до лок-аута и сколько мс он ещё продлится (для экрана входа).
+pub(crate) fn login_attempt_state(user: &str) -> (u32, u32) {
+    let threshold = env_u64("PARVANE_LOGIN_LOCK_THRESHOLD", 5) as u32;
+    let now = now_unix();
+    let map = login_limiter();
+    let guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(bucket) = guard.get(&limiter_key(user)) else { return (threshold, 0) };
+    let locked_ms = u32::try_from((bucket.locked_until - now).max(0).saturating_mul(1000)).unwrap_or(u32::MAX);
+    (threshold.saturating_sub(bucket.fails), locked_ms)
+}
+
 /// Верный пароль: снимаем лок-аут и счётчик неудач для этого логина.
 pub(crate) fn login_record_success(user: &str) {
     let map = login_limiter();

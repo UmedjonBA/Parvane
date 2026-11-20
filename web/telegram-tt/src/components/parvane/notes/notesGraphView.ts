@@ -38,8 +38,9 @@ const ALL_NOTES: NotesGraphScope = { kind: 'all' };
 /** Вход движка для графа: заметки как есть, размеры подписи макета. */
 export function buildGraphInput(
   notes: GraphNoteSource[], records: NotesGraphRecord[], filter: GraphFilter,
-  options: { withDays: boolean; withRecords: boolean; aspect: number },
+  options: { withDays: boolean; withRecords: boolean; aspect: number; places?: GraphPlaces },
 ): NotesGraphInput {
+  const pinned = options.places ? Object.entries(options.places).map(([id, { x, y }]) => ({ id, x, y })) : [];
   return {
     notes: notes.map(toEngineNote),
     records,
@@ -49,6 +50,7 @@ export function buildGraphInput(
     withDays: options.withDays,
     withRecords: options.withRecords,
     aspect: options.aspect,
+    pinned: pinned.length ? pinned : undefined,
     ...NOTES_GRAPH_METRICS,
   };
 }
@@ -154,11 +156,14 @@ export function edgePoint(edge: NotesGraphEdge, share = 0.5): GraphPoint {
 }
 
 /**
- * Ручная расстановка поверх раскладки движка: точка, которую человек поставил сам, стоит на своём месте, её
- * подпись едет за ней, её связи — прямые от края кружка до края кружка. Остальное — как дал движок.
+ * Ручная расстановка поверх раскладки движка. Движок держит закреплённые точки на их местах сам (`pinned`), так что
+ * обычно здесь двигать нечего; точка, чьё место ещё не дошло до движка (раскладка большого графа считается после
+ * кадра), стоит на своём месте, её подпись едет за ней, её связи — прямые от края кружка до края кружка.
  */
 export function applyGraphPlaces(layout: NotesGraphLayout, places: GraphPlaces): NotesGraphLayout {
-  const movedIds = new Set(layout.nodes.filter(({ id }) => places[id]).map(({ id }) => id));
+  const movedIds = new Set(layout.nodes.filter(({ id, x, y }) => (
+    places[id] && (places[id].x !== x || places[id].y !== y)
+  )).map(({ id }) => id));
   if (!movedIds.size) return layout;
   const nodes = layout.nodes.map((node) => (movedIds.has(node.id) ? moveGraphNode(node, places[node.id]) : node));
   const byId = new Map(nodes.map((node) => [node.id, node]));
