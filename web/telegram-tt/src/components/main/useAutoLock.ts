@@ -1,4 +1,4 @@
-import { useEffect } from '../../lib/teact/teact';
+import { useLayoutEffect } from '../../lib/teact/teact';
 
 import { getIsAutoLockDue, getIsLockHotkey, lockAppNow } from '../../util/autoLock';
 import { callApi } from '../../api/gramjs';
@@ -11,16 +11,23 @@ const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as con
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 
 export default function useAutoLock() {
-  useEffect(() => {
+  // Слушатель клавиш ставится до первого кадра: Ctrl+L сразу после запуска не должен уйти мимо
+  useLayoutEffect(() => {
     let lastActivityAt = Date.now();
     let isPinEnabled = false;
+    // Ответ о PIN ещё не пришёл (первые мгновения после запуска)
+    let pinRequest: Promise<void> | undefined;
 
     const refreshPin = () => {
-      void (callParvane('parvaneGetStoragePin', {}) as Promise<{ enabled: boolean } | undefined>)
+      const request = (callParvane('parvaneGetStoragePin', {}) as Promise<{ enabled: boolean } | undefined>)
         .then((state) => {
           isPinEnabled = Boolean(state?.enabled);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          if (pinRequest === request) pinRequest = undefined;
+        });
+      pinRequest = request;
     };
 
     const lockIfDue = () => {
@@ -32,7 +39,16 @@ export default function useAutoLock() {
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isPinEnabled || !getIsLockHotkey(e)) return;
+      if (!getIsLockHotkey(e)) return;
+      // Состояние PIN ещё запрошено: клавиша не теряется — блокировка сработает, как только придёт ответ
+      if (pinRequest && !isPinEnabled) {
+        e.preventDefault();
+        void pinRequest.then(() => {
+          if (isPinEnabled) lockAppNow();
+        });
+        return;
+      }
+      if (!isPinEnabled) return;
       e.preventDefault();
       lockAppNow();
     };
