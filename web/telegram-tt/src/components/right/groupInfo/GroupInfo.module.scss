@@ -1,0 +1,155 @@
+// Parvane: сведения о группе и канале по доске `ZpChat2` — группы строк 52 px на панели с линиями, подписи разделов
+// прописными, значение справа; «Покинуть» — тихая красная кнопка во всю ширину
+
+.root {
+  padding-bottom: 0.75rem;
+  background: var(--pv-bg);
+}
+
+.head {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 1rem 0.25rem;
+}
+
+.avatar {
+  cursor: var(--custom-cursor, pointer);
+}
+
+.grp {
+  margin-top: 0.75rem;
+  border-block: 1px solid var(--pv-line);
+  background: var(--pv-panel);
+}
+
+.cap + .grp {
+  margin-top: 0;
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 1rem;
+  border: 0;
+
+  font: inherit;
+  font-size: var(--pv-font-size);
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  & + & {
+    border-top: 1px solid var(--pv-line);
+  }
+}
+
+.rowButton {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: -2px;
+  }
+}
+
+.text {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about {
+  user-select: text;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.sub {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.value {
+  overflow: hidden;
+  flex: 0 1 auto;
+
+  max-width: 50%;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-family-monospace);
+}
+
+.chevron {
+  flex: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--pv-muted);
+}
+
+.cap {
+  padding: 0.875rem 1rem 0.375rem;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem 1rem 0;
+}
+
+.leave {
+  cursor: var(--custom-cursor, pointer);
+
+  height: var(--pv-button-height);
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-red);
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: color-mix(in srgb, var(--pv-red) 12%, var(--pv-raised));
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+}

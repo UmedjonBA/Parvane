@@ -7,11 +7,12 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import {
-  preparePage,
-  openPrivateChatStrict,
-  openMessageMenu,
-  dumpDiagJournal,
   LOGIN_TIMEOUT_MS,
+  dumpDiagJournal,
+  openMessageMenu,
+  openPrivateChatStrict,
+  preparePage,
+  sendLocation,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-live-location-e2e-password';
@@ -36,9 +37,7 @@ try {
   await openPrivateChatStrict(bobSession.page, alice);
 
   console.log('[live-location] статичная точка + карта');
-  await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-  await aliceSession.page.getByRole('menuitem', { name: 'Current location' }).click();
+  await sendLocation(aliceSession.page);
   const bobStatic = locationBubbles(bobSession.page).first();
   await bobStatic.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobStatic.locator('img.map[src^="blob:"]').waitFor({ state: 'visible', timeout: LIVE_UPDATE_TIMEOUT_MS });
@@ -46,11 +45,7 @@ try {
     .first().waitFor({ state: 'visible', timeout: LIVE_UPDATE_TIMEOUT_MS });
 
   console.log('[live-location] live на 15 минут');
-  await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-  const period = aliceSession.page.getByRole('menuitem', { name: 'Share live for 15 minutes' });
-  await period.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await period.click();
+  await sendLocation(aliceSession.page, { period: '15 min' });
   const bobLive = locationBubbles(bobSession.page).nth(1);
   await bobLive.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobLive.locator('.geo-countdown').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -75,7 +70,8 @@ try {
   await bobLive.locator('.geo-countdown').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   console.log('[live-location] Stop Sharing Location');
-  await openMessageMenu(aliceSession.page, 'Live Location');
+  // Карточка трансляции по доске `ZpChat`: «Вы показываете, где вы», «обновлено … · ещё N мин»
+  await openMessageMenu(aliceSession.page, 'You are sharing your location');
   const stopItem = aliceSession.page.locator('.MessageContextMenu').getByRole('menuitem', { name: 'Stop Sharing Location' });
   await stopItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await stopItem.click();

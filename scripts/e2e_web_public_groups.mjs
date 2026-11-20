@@ -93,7 +93,8 @@ try {
   const right = await openGroupManagement(page, title);
   await right.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
   const screen = right.locator('.Management').last();
-  await screen.getByText('Public Group', { exact: true }).first().click();
+  // Тип — сегмент «Закрытая / Публичная» (доска `XpChat`)
+  await screen.getByRole('radio', { name: 'Public', exact: true }).first().click();
   const linkInput = screen.locator('.settings-input input');
   await linkInput.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const origin = new URL(page.url()).origin;

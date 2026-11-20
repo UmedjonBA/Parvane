@@ -95,6 +95,9 @@ type StateProps = {
   canEditTopic?: boolean;
   isSavedMessages?: boolean;
   isOwnProfile?: boolean;
+  groupTitle?: string;
+  groupMembersCount?: number;
+  joinRequestsCount?: number;
 };
 
 const HISTORY_SETTLE_MS = 500;
@@ -183,6 +186,9 @@ const RightHeader: FC<OwnProps & StateProps> = ({
   canUseGiftFilter,
   canUseGiftAdminFilter,
   isOwnProfile,
+  groupTitle,
+  groupMembersCount,
+  joinRequestsCount,
   onClose,
   onScreenSelect,
 }) => {
@@ -413,6 +419,10 @@ const RightHeader: FC<OwnProps & StateProps> = ({
       onClick={toggleEditTopic}
       iconName="edit"
     />
+  ) : canManage && groupTitle !== undefined ? (
+    <button type="button" className="pv-header-action" onClick={handleToggleManagement}>
+      {oldLang('Edit')}
+    </button>
   ) : (canManage || canEditBot) ? (
     <Button
       round
@@ -502,7 +512,14 @@ const RightHeader: FC<OwnProps & StateProps> = ({
           </>
         );
       case HeaderContent.ManageJoinRequests:
-        return <h3 className="title">{isChannel ? oldLang('SubscribeRequests') : oldLang('MemberRequests')}</h3>;
+        return (
+          <div className="header">
+            <h3 className="title">{isChannel ? oldLang('SubscribeRequests') : oldLang('MemberRequests')}</h3>
+            {groupTitle !== undefined && (
+              <div className="subtitle">{`${groupTitle} · ${joinRequestsCount ?? 0}`}</div>
+            )}
+          </div>
+        );
       case HeaderContent.ManageGroupAddAdmins:
         return <h3 className="title">{oldLang('Channel.Management.AddModerator')}</h3>;
       case HeaderContent.StickerSearch:
@@ -656,9 +673,21 @@ const RightHeader: FC<OwnProps & StateProps> = ({
       default:
         return (
           <>
-            <h3 className="title">
-              {getHeaderTitle()}
-            </h3>
+            {groupTitle !== undefined && contentKey === HeaderContent.Profile ? (
+              // Parvane: сведения группы и канала — название и «группа · N участников» (доска `ZpChat2`)
+              <div className="header">
+                <h3 className="title">{groupTitle}</h3>
+                <div className="subtitle">
+                  {lang(isChannel ? 'ParvaneChannelInfoSubtitle' : 'ParvaneGroupInfoSubtitle', {
+                    count: groupMembersCount ?? 0,
+                  }, { pluralValue: groupMembersCount ?? 0 })}
+                </div>
+              </div>
+            ) : (
+              <h3 className="title">
+                {getHeaderTitle()}
+              </h3>
+            )}
             <section className="tools">
               {canAddContact && (
                 <Button
@@ -760,6 +789,7 @@ export default withGlobal<OwnProps>(
     const canEditBot = isBot && user?.canEditBot;
 
     const canAddContact = user && getCanAddContact(user);
+    const isGroupChat = chat && !user && !isInsideTopic && !chat.isMonoforum;
     const canManage = Boolean(!isManagement && isProfile && chatId && selectCanManage(global, chatId));
 
     const isEditingInvite = Boolean(chatId && tabState.management.byChatId[chatId]?.editingInvite);
@@ -794,6 +824,9 @@ export default withGlobal<OwnProps>(
       canUseGiftFilter,
       canUseGiftAdminFilter,
       isOwnProfile,
+      groupTitle: isGroupChat ? chat.title : undefined,
+      groupMembersCount: isGroupChat ? chat.membersCount : undefined,
+      joinRequestsCount: chat?.joinRequests?.length,
     };
   },
 )(RightHeader);

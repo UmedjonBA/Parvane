@@ -161,6 +161,15 @@ try {
   await shown(help);
   assert.equal(await help.locator('[data-help-note]').count() >= 10, true, 'список заметок справки');
   await shown(help.locator('[data-help-restore]'));
+  // Поиск по справке: слова запроса в названии либо тексте, найденная строка — под названием
+  const helpCount = await help.locator('[data-help-note]').count();
+  await help.locator('[data-help-search]').fill('Ctrl');
+  await help.locator('[data-help-snippet]').first().waitFor({ state: 'visible', timeout: WAIT_MS });
+  assert.ok(await help.locator('[data-help-note]').count() < helpCount, 'поиск по справке не сузил список');
+  await help.locator('[data-help-search]').fill('несуществующееслово');
+  await shown(help.locator('[data-help-nothing]'));
+  await help.locator('[data-help-search]').fill('');
+  await help.locator('[data-help-note]').nth(helpCount - 1).waitFor({ state: 'visible', timeout: WAIT_MS });
   await profileRow(page, 'Report a Bug').click();
   const bug = page.locator('[data-bug-report]');
   await shown(bug);
@@ -319,7 +328,54 @@ try {
   await shown(list);
   console.log('OK: телефон — экраны открываются на весь экран и возвращаются в «Профиль»');
 
+  // ── «Копия ключей»: что в копии ключей аккаунта и новый ключ восстановления (`ZdProfileX`) ──────────────────
+  const keysContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // Метка протокола в seed — диалог ключа сценарий закрывает сам и читает ключ
+  sessions.keys = await preparePage(keysContext, `profile-keys-${suffix}@local`, PASSWORD, {
+    seedLocalStorage: { 'parvane:proto': 'v2' },
+  });
+  const keysPage = sessions.keys.page;
+  const keyOf = (text) => text?.match(/[0-9A-Z]{4}(?:-[0-9A-Z]{4}){9}/)?.[0];
+  const firstKey = keyOf(await dismissRecoveryKeyDialog(keysPage, 30_000));
+  assert.ok(firstKey, 'ключ восстановления не показан');
+  const bundleWrites = () => sessions.keys.logs.filter((line) => line.includes('копия ключей аккаунта обновлена')).length;
+  const waitBundleWrites = async (count) => {
+    const deadline = Date.now() + 60_000;
+    while (bundleWrites() < count && Date.now() < deadline) await keysPage.waitForTimeout(500);
+    assert.ok(bundleWrites() >= count, `копия ключей аккаунта не записана (${bundleWrites()} < ${count})`);
+  };
+  await waitBundleWrites(1);
+  const openKeys = async () => {
+    await openProfile(keysPage);
+    await profileRow(keysPage, 'About').click();
+    await profileRow(keysPage, 'Key backup').click();
+    await shown(keysPage.locator('[data-keys-bundle] [data-bundle-part="chats"]').getByText('yes'));
+  };
+  await openKeys();
+  assert.equal(
+    await keysPage.locator('[data-keys-bundle] [data-bundle-part]').count(), 6, 'строки «Что в копии»',
+  );
+  const renewDialog = keysPage.locator('.Modal .modal-dialog').filter({ hasText: 'Enter your current recovery key' });
+  const renewWith = async (key) => {
+    await keysPage.locator('[data-keys-action="renew"]').click();
+    await renewDialog.locator('input').fill(key);
+    await renewDialog.getByRole('button', { name: 'Create new key' }).click();
+    await hidden(renewDialog);
+  };
+  await renewWith(firstKey.replace(/.$/, (c) => (c === '2' ? '3' : '2')));
+  await shown(keysPage.getByText('This recovery key does not match.').first());
+  await renewWith(firstKey);
+  const secondKey = keyOf(await dismissRecoveryKeyDialog(keysPage, 30_000));
+  assert.ok(secondKey && secondKey !== firstKey, `новый ключ не показан: ${secondKey}`);
+  await shown(keysPage.getByText('New recovery key created. Save it from the window.').first());
+  // Копия ключей переписана под новым ключом (её открывает новый ключ копии); прежний ключ больше не подходит
+  await openKeys();
+  await renewWith(firstKey);
+  await shown(keysPage.getByText('This recovery key does not match.').first());
+  console.log('OK: «Копия ключей» — состав копии, новый ключ восстановления, прежний больше не подходит');
+
   assertNoPageErrors(sessions);
+
   console.log('OK: «Профиль» по макету — компьютер и телефон');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;

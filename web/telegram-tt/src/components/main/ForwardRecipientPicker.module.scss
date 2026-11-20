@@ -27,3 +27,13 @@
   align-items: center;
   justify-content: center;
 }
+
+// Настройки пересылки на экране «Кому отправить»: без имени отправителя, без подписи
+.options {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--pv-line);
+}

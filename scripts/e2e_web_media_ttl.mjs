@@ -9,11 +9,12 @@ import zlib from 'node:zlib';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  relogin,
   LOGIN_TIMEOUT_MS,
+  relogin,
   findMessageContainers,
   openPrivateChat,
   preparePage,
+  sendLocation,
   sendText,
 } from './e2e_web_helpers.mjs';
 
@@ -214,9 +215,7 @@ try {
   await aliceList.locator('.Message video').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  await bobSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await bobSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-  await bobSession.page.getByRole('menuitem', { name: 'Current location' }).click();
+  await sendLocation(bobSession.page);
   await aliceList.locator('.Message .Location').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

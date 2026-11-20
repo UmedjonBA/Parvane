@@ -250,7 +250,24 @@ try {
   await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
   await row(NOTE).click();
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста');
-  console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте');
+  // Меню строки списка по правой кнопке (`ZdNotesX`): список и холст рядом не стоят — на холст кладут отсюда
+  await row(NOTE).click({ button: 'right' });
+  await visible(menuItem('canvas'), 'меню строки');
+  assert.deepEqual(
+    await page.locator('[data-note-menu-list] [data-note-action]').evaluateAll((items) => items.map((item) => item.dataset.noteAction)),
+    ['open', 'canvas'], 'состав меню строки',
+  );
+  await menuItem('canvas').click();
+  await page.locator('[data-note-canvas-sheet] [data-canvas-option-new]').click();
+  await page.waitForFunction(
+    () => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === 'canvas', undefined,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('после «Добавить на холст» из строки не открылся холст'));
+  await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки из строки');
+  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста из строки');
+  console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте; из меню строки — на холст');
 
   // ── Телефон: шапка, виды, папки, заметка на весь экран ───────────────────
   await page.setViewportSize(PHONE);

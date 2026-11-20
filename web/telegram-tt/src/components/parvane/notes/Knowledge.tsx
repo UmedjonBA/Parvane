@@ -59,6 +59,7 @@ import NoteFolderRemoval from './NoteFolderRemoval';
 import NoteFolderSheet from './NoteFolderSheet';
 import NoteLinks from './NoteLinks';
 import NoteMissingSheet from './NoteMissingSheet';
+import NoteRowMenu from './NoteRowMenu';
 import NotesCanvas from './NotesCanvas';
 import NotesGraph from './NotesGraph';
 import NotesList from './NotesList';
@@ -366,6 +367,10 @@ const Knowledge = () => {
   const handleBack = useLastCallback(() => {
     setOpenId(undefined);
   });
+
+  // Меню строки списка (правая кнопка на компьютере): «Открыть», «Добавить на холст…»
+  const [rowMenuId, setRowMenuId] = useState<string>();
+  const closeRowMenu = useLastCallback(() => setRowMenuId(undefined));
 
   const handleSave = useLastCallback((noteId: string, text: string, base?: string) => (
     saveNote(noteId, text, vaultName, base)
@@ -702,6 +707,7 @@ const Knowledge = () => {
         onFolderMenu={handleFolderMenu}
         onNewInFolder={createIn}
         onMoveNote={handleMoveNote}
+        onNoteMenu={setRowMenuId}
         onGuide={handleGuide}
         onGuideDismiss={markGuide}
       />
@@ -936,6 +942,12 @@ const Knowledge = () => {
           onPickFolder={handleAskMove}
         />
       )}
+      <NoteRowMenu
+        note={rowMenuId ? notes.find(({ id }) => id === rowMenuId) : undefined}
+        onOpen={handlePick}
+        onOpenCanvas={openCanvasFromNote}
+        onClose={closeRowMenu}
+      />
       <NoteFolderSheet
         isOpen={isFolderSheetOpen}
         folder={sheetFolder}

@@ -73,17 +73,28 @@ try {
   await openPrivateChatStrict(b, alice);
   const received = findMessageContainer(b, 'договор.txt');
   await received.waitFor({ state: 'visible', timeout: STEP });
+  // Подпись «из „Файлов“» у файла (`Media.from_cloud`, доска `ZpChat`)
+  await received.locator('[data-file-note]').filter({ hasText: 'from Files' })
+    .waitFor({ state: 'visible', timeout: STEP });
   assert.equal(blobCounts()['alice:0'] >= 1, true, 'сообщение ссылается на свою копию блоба в медиа чатов');
   console.log('OK: «Из облака» — собеседник получил обычное сообщение с файлом');
 
   // ── «Отправить в чат» из раздела ──────────────────────────────────────────
   await ac.open();
   await ac.menu('смета.txt', 'Send to chat');
-  const recipients = a.locator('.Modal').filter({ has: a.locator('.ChatOrUserPicker-item') });
-  await recipients.locator('.ChatOrUserPicker-item').filter({ hasText: bob.split('@')[0] }).first().click();
+  // «Кому отправить» (доска `RpPick`): карточка файла, галочка у чата, подпись, «Отправить в 1 чат»
+  const recipients = a.locator('.Modal').filter({ has: a.locator('[data-send-picker]') });
+  await recipients.locator('[data-send-preview]').filter({ hasText: 'смета.txt' })
+    .waitFor({ state: 'visible', timeout: STEP });
+  await recipients.locator('[data-send-search]').fill(bob.split('@')[0]);
+  await recipients.locator('[data-send-row]').filter({ hasText: bob.split('@')[0] }).first()
+    .locator('input[type="checkbox"]').check();
+  await recipients.locator('[data-send-caption]').fill(`смета-подпись-${suffix}`);
+  await recipients.locator('[data-send-submit]').click();
   await ac.cloud.getByText('Sent', { exact: true }).waitFor({ state: 'visible', timeout: STEP });
   await ac.close();
   await findMessageContainer(b, 'смета.txt').waitFor({ state: 'visible', timeout: STEP });
+  await findMessageContainer(b, `смета-подпись-${suffix}`).waitFor({ state: 'visible', timeout: STEP });
   console.log('OK: «Отправить в чат» из раздела');
 
   // ── Боб сохраняет файл сообщения в своё облако и скачивает его оттуда ─────

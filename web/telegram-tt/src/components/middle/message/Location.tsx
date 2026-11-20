@@ -23,6 +23,7 @@ import { getServerTime } from '../../../util/serverTime';
 import useInterval from '../../../hooks/schedulers/useInterval';
 import useTimeout from '../../../hooks/schedulers/useTimeout';
 import useForceUpdate from '../../../hooks/useForceUpdate';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 import useOldLang from '../../../hooks/useOldLang';
@@ -36,8 +37,6 @@ import './Location.scss';
 
 import mapPin from '../../../assets/map-pin.svg';
 
-const TIMER_RADIUS = 12;
-const TIMER_CIRCUMFERENCE = TIMER_RADIUS * 2 * Math.PI;
 const MOVE_THRESHOLD = 0.0001; // ~11m
 const DEFAULT_MAP_CONFIG = {
   width: 400,
@@ -59,8 +58,9 @@ const Location: FC<OwnProps> = ({
 }) => {
   const { openMapModal } = getActions();
   const ref = useRef<HTMLDivElement>();
-  const countdownRef = useRef<HTMLDivElement>();
+  const countdownRef = useRef<HTMLSpanElement>();
   const lang = useOldLang();
+  const newLang = useLang();
   const forceUpdate = useForceUpdate();
 
   const location = getMessageLocation(message)!;
@@ -95,16 +95,11 @@ const Location: FC<OwnProps> = ({
     openMapModal({ geoPoint: point, zoom });
   };
 
-  const updateCountdown = useLastCallback((countdownEl: HTMLDivElement) => {
+  // «ещё 42 мин» (доска `ZpChat`): остаток трансляции текстом
+  const updateCountdown = useLastCallback((countdownEl: HTMLSpanElement) => {
     if (mediaType !== 'geoLive') return;
-    const svgEl = countdownEl.lastElementChild!;
-    const timerEl = countdownEl.firstElementChild!;
-
     const timeLeft = message.date + location.period - getServerTime();
-    const strokeDashOffset = (1 - timeLeft / location.period) * TIMER_CIRCUMFERENCE;
-    const text = formatCountdownShort(lang, timeLeft * 1000);
-    timerEl.textContent = text;
-    svgEl.firstElementChild!.setAttribute('stroke-dashoffset', `-${strokeDashOffset}`);
+    countdownEl.textContent = newLang('LocationLiveLeft', { time: formatCountdownShort(lang, timeLeft * 1000) });
   });
 
   useLayoutEffect(() => {
@@ -155,28 +150,21 @@ const Location: FC<OwnProps> = ({
       );
     }
     if (mediaType === 'geoLive') {
+      // Карточка «показывает, где он» (доска `ZpChat`): кто, «обновлено … · ещё N мин»
       return (
         <div className="location-info">
-          <div className="location-info-title">{lang('AttachLiveLocation')}</div>
+          <div className="location-info-title">
+            {newLang(message.isOutgoing ? 'LocationLiveOwn' : 'LocationLiveTitle')}
+          </div>
           <div className="location-info-subtitle">
             {formatLocationLastUpdate(lang, serverTime, message.editDate)}
+            {!isExpired && (
+              <>
+                {' · '}
+                <span className="geo-countdown" ref={countdownRef} />
+              </>
+            )}
           </div>
-          {!isExpired && (
-            <div className="geo-countdown" ref={countdownRef}>
-              <span className="geo-countdown-text" />
-              <svg width="32px" height="32px">
-                <circle
-                  cx="16"
-                  cy="16"
-                  r={TIMER_RADIUS}
-                  className="geo-countdown-progress"
-                  transform="rotate(-90, 16, 16)"
-                  stroke-dasharray={TIMER_CIRCUMFERENCE}
-                  stroke-dashoffset="0"
-                />
-              </svg>
-            </div>
-          )}
         </div>
       );
     }
@@ -251,7 +239,7 @@ const Location: FC<OwnProps> = ({
   return (
     <div
       ref={ref}
-      className="Location media-inner interactive"
+      className={buildClassName('Location media-inner interactive', mediaType === 'geoLive' && 'Location--live')}
       onClick={handleClick}
     >
       <div className="map-wrapper">

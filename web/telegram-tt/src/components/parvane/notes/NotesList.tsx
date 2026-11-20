@@ -60,6 +60,8 @@ type OwnProps = {
   onFolderMenu: (folderId: string) => void;
   onNewInFolder: (folderId?: string) => void;
   onMoveNote: (noteId: string, folderId?: string) => void;
+  // Правая кнопка по строке заметки (компьютер): меню строки
+  onNoteMenu: (noteId: string) => void;
   onGuide: NoneToVoidFunction;
   onGuideDismiss: NoneToVoidFunction;
 };
@@ -68,7 +70,8 @@ type OwnProps = {
 // заметки; открытая папка — её заметки; поиск — найденное одним списком
 const NotesList = ({
   notes, folders, index, plannedIndex, today, found, openId, openGroupKey, vaultName, guideNoticeFolder, hasGuide,
-  isNarrow, onPick, onOpenGroup, onNewFolder, onFolderMenu, onNewInFolder, onMoveNote, onGuide, onGuideDismiss,
+  isNarrow, onPick, onOpenGroup, onNewFolder, onFolderMenu, onNewInFolder, onMoveNote, onNoteMenu, onGuide,
+  onGuideDismiss,
 }: OwnProps) => {
   // Папка под указателем при перетаскивании заметки
   const [dropKey, setDropKey] = useState<string>();
@@ -97,6 +100,11 @@ const NotesList = ({
 
   const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onPick(e.currentTarget.dataset.id!);
+  });
+
+  const handleRowMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    onNoteMenu(e.currentTarget.dataset.id!);
   });
 
   const handleOpenGroup = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -168,6 +176,7 @@ const NotesList = ({
         data-pinned={pinned.includes(note.id) || undefined}
         onClick={handlePick}
         onDragStart={handleDragStart}
+        onContextMenu={isNarrow ? undefined : handleRowMenu}
       >
         <span className={styles.rowTop}>
           <span className={styles.rowTitle}>{displayTitle(lang, note)}</span>

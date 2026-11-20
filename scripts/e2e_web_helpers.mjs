@@ -584,21 +584,40 @@ export async function pinMessage(page, text) {
   await confirm.click();
 }
 
-export async function pickForwardRecipientAndSend(page, address) {
+// Экран «Кому отправить» (доска `RpPick`): поиск, галочка у чата, «Отправить в 1 чат» — пересылка уходит сразу,
+// после неё открывается чат получателя. `options` — выключатели настроек пересылки по `data-forward-option`
+export async function pickForwardRecipientAndSend(page, address, { caption, options = [] } = {}) {
   const displayName = address.split('@')[0];
-  const picker = page.locator('.Modal').filter({ has: page.locator('.ChatOrUserPicker-item') });
-  await picker.locator('.search-input').fill(displayName);
-  const recipient = picker.locator('.Transition_slide-active .ChatOrUserPicker-item')
-    .filter({ hasText: displayName }).last();
+  const picker = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
+  await picker.locator('[data-send-search]').fill(displayName);
+  const recipient = picker.locator('[data-send-row]').filter({ hasText: displayName }).last();
   await recipient.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await recipient.click();
-  await recipient.locator('.picker-checkbox.selected').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await picker.locator('.picker-footer-button').click();
-  const embedded = page.locator('.Transition_slide-active .ComposerEmbeddedMessage');
-  await embedded.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('.Transition_slide-active .Composer')
-    .getByRole('button', { name: 'Forward', exact: true }).click();
-  await embedded.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await recipient.locator('input[type="checkbox"]').check();
+  for (const option of options) {
+    await picker.locator(`[data-forward-option="${option}"]`).click();
+  }
+  if (caption) await picker.locator('[data-send-caption]').fill(caption);
+  await picker.locator('[data-send-submit]').click();
+  await picker.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// Экран «Место» (доска `RpChat`) из меню вложений: текущее место либо трансляция `period` — подпись сегмента
+// ('15 min' | '1 hour' | '8 hours')
+export async function sendLocation(page, { period } = {}) {
+  await page.getByRole('button', { name: 'Add an attachment' }).click();
+  await page.getByRole('menuitem', { name: 'Location', exact: true }).click();
+  const screen = page.locator('.Modal').filter({ has: page.locator('[data-location-map]') });
+  if (period) {
+    await screen.getByRole('button', { name: period, exact: true }).click();
+    const live = screen.locator('[data-location-live]');
+    await live.and(page.locator(':enabled')).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await live.click();
+  } else {
+    const current = screen.locator('[data-location-send]');
+    await current.and(page.locator(':enabled')).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await current.click();
+  }
+  await screen.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
 export async function forwardMessage(page, text, address) {
@@ -1121,7 +1140,9 @@ export async function createGroupViaUi(page, title, memberNames, options = {}) {
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await nameInput.fill(title);
   if (options.publicName) {
-    // Публичное имя (spec 023): группа сразу публичная
+    // Публичное имя (spec 023): группа сразу публичная — сегмент «Публичная», затем поле имени (доска `ZpChat2`)
+    await page.locator('#LeftColumn').getByRole('radio', { name: 'Public', exact: true })
+      .locator('visible=true').first().click();
     await page.locator('#new-chat-public-name').locator('visible=true').first().fill(options.publicName);
   }
   if (options.isJoinRequestNeeded) {

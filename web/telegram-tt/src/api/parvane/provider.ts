@@ -4057,6 +4057,15 @@ const methods = {
     return v2Controller.storeEscrowCopy(pickRecoveryKey(recoveryKey));
   },
 
+  // «Профиль → Копия ключей» (`ZdProfileX`): новый ключ восстановления взамен прежнего и состав копии на сервере
+  parvaneRenewRecoveryKey({ recoveryKey }: { recoveryKey: string }) {
+    return v2Controller.renewRecoveryKey(pickRecoveryKey(recoveryKey));
+  },
+
+  parvaneKeyBundleContents() {
+    return v2Controller.keyBundleContents().catch(() => undefined);
+  },
+
   parvaneRotateSsk({ recoveryKey }: { recoveryKey: string }) {
     return v2Controller.rotateSsk(pickRecoveryKey(recoveryKey));
   },

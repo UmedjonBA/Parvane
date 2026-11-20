@@ -195,6 +195,16 @@ try {
   await visible(sidePane.locator('[data-side-save]').filter({ hasText: 'Save' }), '«Сохранить» в шапке карточки');
   assert.equal(await sidePane.getByRole('button', { name: 'Save', exact: true }).count(), 1, 'одна «Сохранить»');
   await shot('plan-editor-phone');
+  // Строки настроек по доске: подпись «Повтор и напоминание», у выбора подпись слева и значение справа в одной строке
+  await visible(sidePane.locator('[data-card-caption]'), 'подпись «Повтор и напоминание»');
+  const remindRow = sidePane.locator('[data-card-row="remind"] .input-group');
+  const remindLabel = await remindRow.locator('label').boundingBox();
+  const remindValue = await remindRow.locator('select').boundingBox();
+  const middleOf = (box) => box.y + box.height / 2;
+  assert.ok(
+    remindLabel.x < remindValue.x && Math.abs(middleOf(remindLabel) - middleOf(remindValue)) < 8,
+    `«Напомнить» строкой: ${JSON.stringify({ remindLabel, remindValue })}`,
+  );
   await sidePane.locator('[data-free-time-open]').click();
   const sheet = page.locator('.Modal [data-free-time]');
   await visible(sheet.locator('[data-free-slot]'), 'окна в шторке');
@@ -202,6 +212,18 @@ try {
   await shot('plan-freetime-phone');
   await page.locator('.Modal').getByRole('button', { name: 'Close' }).click();
   await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  // Карточка задачи на телефоне: «Статус» строкой, «Шаги · N» подписью, «Добавить шаг» — строка ввода
+  await search.locator('[data-filter="all"]').click();
+  await search.locator('[data-planner-search-input]').fill('кроссовки');
+  await search.locator('[data-key]').filter({ hasText: 'Купить кроссовки' }).first().click();
+  await visible(sidePane.locator('[data-card-row="status"] select'), 'статус задачи строкой');
+  const stepsRow = sidePane.locator('[data-card-row="steps"]');
+  await stepsRow.getByPlaceholder('Add step').fill('Взять форму');
+  await stepsRow.getByPlaceholder('Add step').press('Enter');
+  await visible(stepsRow.locator('label').filter({ hasText: 'Взять форму' }), 'шаг строкой');
+  await visible(stepsRow.getByText('Steps · 0/1'), 'подпись «Шаги · N»');
+  await shot('plan-task-phone');
   await closeSide();
   await search.getByRole('button', { name: 'Back' }).click();
   await planner.locator('[data-planner-tasks-open]').click();

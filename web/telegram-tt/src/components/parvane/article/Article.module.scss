@@ -5,21 +5,36 @@
 
 .viewer :global(.modal-dialog) {
   max-width: 42rem;
+  background: var(--pv-panel);
 }
 
-.viewerContent {
-  overflow-y: auto;
-  max-height: min(80vh, 60rem);
-}
-
-.viewerActions {
+// Страница статьи по доске `XpChat`: поля 20 px, название 24 px, строка «минуты чтения · дата» моноширинным
+.viewerPage {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 1rem;
+  flex-direction: column;
+  gap: 0.75rem;
 
-  :global(.Button) {
-    width: auto;
-  }
+  padding: 1.25rem;
+
+  line-height: 1.6;
+}
+
+.viewerTitle {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+}
+
+.viewerMeta {
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.viewerAction {
+  display: flex;
+  flex: 1 1 0;
 }
 
 .picker :global(.modal-dialog) {
@@ -94,4 +109,53 @@
   color: var(--color-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+// «Отправить заметку» (доска `RpPick`): поиск под шапкой, выбранная заметка — фон и галочка
+.pickTop {
+  flex: none;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--pv-line);
+  background: var(--pv-panel);
+}
+
+.pickOn {
+  background: var(--pv-raised);
+}
+
+.pickTitle {
+  overflow: hidden;
+  display: block;
+
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pickMeta {
+  overflow: hidden;
+  display: block;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pickCheck {
+  flex: none;
+
+  width: 1.375rem;
+  height: 1.375rem;
+
+  fill: none;
+  stroke: var(--pv-accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.pickPad {
+  flex: none;
+  padding: 0 1rem;
 }

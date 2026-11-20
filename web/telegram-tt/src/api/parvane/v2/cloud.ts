@@ -524,30 +524,34 @@ export function createCloudSync(deps: Deps) {
     for (const user of users) await deps.refreshPeerLog(user).catch(() => undefined);
   }
 
-  async function pull(id: string): Promise<boolean> {
-    const client = deps.client();
-    if (!client?.cloudIsAttached(id)) return false;
-    let changed = false;
+  /** Догнать журнал грантов; участник ушёл сам — сменить эпоху. Возвращает, менялся ли журнал. */
+  async function catchUpGrants(id: string): Promise<boolean> {
+    const client = deps.client()!;
     const versionBefore = client.cloudGrantVersion(id);
     const before = engineContainers().find((c) => c.id === id);
     await pullGrants(id);
-    if (client.cloudGrantVersion(id) !== versionBefore) {
-      changed = true;
-      touch();
-      // Участник ушёл сам (состав уменьшился, эпоха прежняя): владелец меняет
-      // эпоху, чтобы ушедший не читал новое
-      const after = engineContainers().find((c) => c.id === id);
-      const hasLeft = before && after && after.role === 'owner'
-        && after.members.length < before.members.length && after.epoch === before.epoch;
-      if (hasLeft && client.cloudHasKey(id)) {
-        try {
-          await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
-          deps.log(`облако: участник покинул папку ${id.slice(0, 8)}… — эпоха ключа сменена`);
-        } catch (e) {
-          deps.log(`облако: смена эпохи после выхода участника не удалась: ${String(e)}`);
-        }
+    if (client.cloudGrantVersion(id) === versionBefore) return false;
+    touch();
+    // Участник ушёл сам (состав уменьшился, эпоха прежняя): владелец меняет
+    // эпоху, чтобы ушедший не читал новое
+    const after = engineContainers().find((c) => c.id === id);
+    const hasLeft = before && after && after.role === 'owner'
+      && after.members.length < before.members.length && after.epoch === before.epoch;
+    if (hasLeft && client.cloudHasKey(id)) {
+      try {
+        await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
+        deps.log(`облако: участник покинул папку ${id.slice(0, 8)}… — эпоха ключа сменена`);
+      } catch (e) {
+        deps.log(`облако: смена эпохи после выхода участника не удалась: ${String(e)}`);
       }
     }
+    return true;
+  }
+
+  async function pull(id: string): Promise<boolean> {
+    const client = deps.client();
+    if (!client?.cloudIsAttached(id)) return false;
+    let changed = await catchUpGrants(id);
     if (!snapshotTried.has(id) && client.cloudHeadSeq(id) === 0 && client.cloudHasKey(id)) {
       snapshotTried.add(id);
       const body = encode('domain.snapshot.get', { container: refJson(id) });
@@ -938,6 +942,9 @@ export function createCloudSync(deps: Deps) {
     return serial(async () => {
       const client = deps.client();
       if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      // Журнал грантов сначала догоняется: участник, отказавшийся либо вышедший после последнего опроса, иначе
+      // числился бы с той же ролью, и движок счёл бы новое приглашение повтором (ничего не отправив)
+      await catchUpGrants(id);
       const reqs = await deps.withNeeds(
         () => client.cloudGrant(id, user, role === 'editor', inviteText, Date.now()) as OutReq[],
       );

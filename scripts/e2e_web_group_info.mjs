@@ -419,7 +419,7 @@ try {
   await requestsItem.click();
   const requestRow = rightReq.locator('.ListItem, .JoinRequest').filter({ hasText: nick('carol') }).first();
   await requestRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await rightReq.getByRole('button', { name: 'Add to group' }).first().click();
+  await rightReq.getByRole('button', { name: 'Accept', exact: true }).first().click();
   await sessions.carol.page.locator('#LeftColumn .ListItem').filter({ hasText: groupTitle }).first()
     .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   await rightReq.locator('.ListItem, .JoinRequest').filter({ hasText: nick('carol') }).first()
@@ -436,14 +436,14 @@ try {
   await sessions.grace.page.goto(approvalUrl, { waitUntil: 'domcontentloaded' });
   await acceptInviteModal(sessions.grace.page, /request to join/i);
   await expectToast(sessions.grace.page, /approves your request/);
-  // Отклонение — нативно на экране Join Requests («Dismiss request»)
+  // Отклонение — на экране заявок (доска `RpPick`: «Отклонить» под заявкой)
   const rightDecline = await openGroupManagement(alicePage, groupTitle);
   const requestsItem2 = rightDecline.locator('.ListItem').filter({ hasText: 'Join Requests' }).first();
   await requestsItem2.waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   await requestsItem2.click();
   await rightDecline.locator('.ListItem, .JoinRequest').filter({ hasText: nick('grace') }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await rightDecline.getByRole('button', { name: 'Dismiss request' }).first().click();
+  await rightDecline.getByRole('button', { name: 'Decline', exact: true }).first().click();
   await rightDecline.locator('.ListItem, .JoinRequest').filter({ hasText: nick('grace') }).first()
     .waitFor({ state: 'detached', timeout: CONVERGENCE_TIMEOUT_MS });
   await closeRightColumn(alicePage);
@@ -478,10 +478,12 @@ try {
     return list.result?.invites?.find((item) => item.isPermanent);
   };
   const toggleJoinMode = async (expected) => {
+    // «Вступление по заявке» — в разделе «Доступ» экрана «Тип группы» (доска `XpChat`)
     const rightMode = await openGroupManagement(alicePage, groupTitle);
-    const row = rightMode.locator('.ListItem', { hasText: 'Join by request' }).first();
-    await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await rightMode.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await rightMode.locator('.ListItem').filter({ hasText: 'Group Type' }).first().click();
+    const row = rightMode.locator('.Management .ListItem', { hasText: 'Join by request' }).first();
+    await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await pollUntil(async () => !(await row.getAttribute('class')).includes('disabled'), 'переключатель режима недоступен');
     await row.locator('.ListItem-button').click();
     await alicePage.locator('.Modal .modal-dialog').getByRole('button', { name: 'Confirm' }).click();
@@ -490,7 +492,13 @@ try {
     if (process.env.PARVANE_E2E_SHOT_DIR) {
       await alicePage.setViewportSize({ width: 390, height: 844 });
       await alicePage.waitForTimeout(800);
-      // Смена ширины возвращает колонку к профилю — открываем управление заново
+      await alicePage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/group-type-${expected ? 'request' : 'open'}.png` });
+      // Значок камеры — на экране управления: с экрана «Тип группы» назад, а если смена ширины вернула колонку к
+      // профилю — управление заново
+      if (await alicePage.locator('#RightColumn .pv-type-seg').isVisible().catch(() => false)) {
+        await alicePage.locator('#RightColumn').getByRole('button', { name: /Back/ }).first().click();
+        await alicePage.waitForTimeout(600);
+      }
       if (!(await alicePage.locator('#RightColumn .Management').isVisible())) {
         await alicePage.locator('#RightColumn').getByRole('button', { name: 'Edit' }).click();
         await alicePage.locator('#RightColumn .Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

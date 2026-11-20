@@ -19,6 +19,7 @@ import { preloadDocumentMedia } from './helpers/preloadDocumentMedia';
 
 import useFlag from '../../hooks/useFlag';
 import { useIsIntersecting } from '../../hooks/useIntersectionObserver';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useMediaWithLoadProgress from '../../hooks/useMediaWithLoadProgress';
 import useOldLang from '../../hooks/useOldLang';
@@ -81,6 +82,7 @@ const Document = ({
 
   const ref = useRef<HTMLDivElement>();
 
+  const lang = useLang();
   const oldLang = useOldLang();
   const [isFileIpDialogOpen, openFileIpDialog, closeFileIpDialog] = useFlag();
   const [shouldNotWarnAboutFiles, setShouldNotWarnAboutFiles] = useState(false);
@@ -207,6 +209,7 @@ const Document = ({
         isTransferring={isTransferring}
         isUploading={isUploading}
         transferProgress={transferProgress}
+        sizeNote={document.isFromCloud ? lang('FileFromCloud') : undefined}
         className={className}
         sender={sender}
         isSelectable={isSelectable}

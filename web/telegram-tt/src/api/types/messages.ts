@@ -174,6 +174,8 @@ export interface ApiDocument {
   previewBlobUrl?: string;
   innerMediaType?: 'photo' | 'video';
   mediaSize?: ApiDimensions & { fromDocumentAttribute?: boolean; fromPreload?: true };
+  // Parvane: файл отправлен из «Файлов» (`Media.from_cloud`) — подпись «из „Файлов“»
+  isFromCloud?: boolean;
 }
 
 export interface ApiContact {

@@ -1,0 +1,359 @@
+// Parvane: экран чата по доскам `XpChat`, `RpPick`, `RpChat` (`.ph` макета) — окно по центру на компьютере,
+// весь экран на телефоне; строки и подписи — `.grp` / `.sr` / `.cap` / `.hint` из `pv.css`
+
+.screen {
+  font-family: var(--font-family);
+  font-size: var(--pv-font-size);
+  line-height: 1.45;
+  color: var(--pv-fg);
+
+  :global(.modal-container) {
+    align-items: center;
+    padding: 1rem;
+  }
+
+  :global(.modal-backdrop) {
+    background-color: var(--pv-scrim);
+  }
+
+  :global(.modal-dialog) {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    width: 100%;
+    max-width: 30rem;
+    height: min(85vh, 50rem);
+    margin: 0 auto;
+    border-radius: var(--pv-radius-dialog);
+
+    background: var(--pv-bg);
+    box-shadow: var(--pv-outline);
+  }
+
+  :global(.modal-content) {
+    overflow: hidden;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+
+    min-height: 0;
+    max-height: none;
+    padding: 0;
+  }
+
+  @media (max-width: 760px) {
+    :global(.modal-container) {
+      padding: 0;
+    }
+
+    // Наименьшая ширина сильнее наибольшей: узкие экраны мессенджер сужает правилом с `!important`
+    :global(.modal-dialog) {
+      min-width: 100%;
+      max-width: none;
+      height: 100%;
+      border-radius: 0;
+
+      box-shadow: none;
+    }
+  }
+}
+
+.head {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+
+  height: var(--pv-header-height);
+  padding: 0 0.375rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+}
+
+.headText {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.title {
+  overflow: hidden;
+
+  margin: 0;
+
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtitle {
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: var(--pv-touch-size);
+  padding: 0 0.75rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: -2px;
+  }
+}
+
+.body {
+  overflow-y: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-height: 0;
+  padding-bottom: 0.75rem;
+}
+
+.footer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+// ── части экрана ─────────────────────────────────────────────────────────────
+
+.grp {
+  flex: none;
+  border-block: 1px solid var(--pv-line);
+  background: var(--pv-panel);
+}
+
+.sr {
+  cursor: default;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3.25rem;
+  padding: 0.375rem 1rem;
+  border: 0;
+  border-top: 1px solid var(--pv-line);
+
+  font: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+.srButton {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover,
+  &:focus-visible {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: -2px;
+  }
+}
+
+.srAccent {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+.srMain {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.srValue {
+  overflow: hidden;
+  flex: 0 1 auto;
+
+  max-width: 12rem;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-family-monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.cap {
+  flex: none;
+
+  padding: 0.875rem 1rem 0.375rem;
+
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hint {
+  flex: none;
+  padding: 0.5rem 1rem 0;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.pad {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.625rem;
+
+  padding: 0.75rem 1rem;
+}
+
+.fld {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.inp {
+  width: 100%;
+  min-width: 0;
+  height: var(--pv-input-height);
+  padding: 0 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-size: var(--pv-font-size);
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-muted);
+  }
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.note {
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  font-size: 0.8125rem;
+
+  background: var(--pv-raised);
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--pv-red);
+}
+
+.btn {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+
+  height: var(--pv-button-height);
+  padding: 0 1.125rem;
+  border: 1px solid transparent;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  white-space: nowrap;
+
+  background: var(--pv-at);
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--pv-at) 88%, var(--pv-fg));
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: 2px;
+  }
+}
+
+.btnQuiet {
+  border-color: var(--pv-line2);
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-fg);
+  background: var(--pv-raised);
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+}
+
+.buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+// Кнопки в ряд делят ширину поровну
+.buttonsItem {
+  flex: 1 1 0;
+}

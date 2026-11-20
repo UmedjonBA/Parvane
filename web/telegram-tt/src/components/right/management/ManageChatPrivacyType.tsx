@@ -1,20 +1,22 @@
-import type { ChangeEvent } from 'react';
 import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useCallback, useEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
-import type { ApiChat, ApiUser } from '../../../api/types';
+import type { ApiChat, ApiExportedInvite, ApiUser } from '../../../api/types';
 import { ManagementProgress } from '../../../types';
 
 import { PURCHASE_USERNAME, TME_LINK_PREFIX, USERNAME_PURCHASE_ERROR } from '../../../config';
-import { getMainUsername, isChatChannel, isChatPublic } from '../../../global/helpers';
+import {
+  getHasAdminRight, getMainUsername, isChatChannel, isChatPublic,
+} from '../../../global/helpers';
 import {
   selectChat, selectChatFullInfo,
   selectManagement, selectTabState, selectUser,
 } from '../../../global/selectors';
 import { selectCurrentLimit } from '../../../global/selectors/limits';
+import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
 
 import useFlag from '../../../hooks/useFlag';
@@ -22,6 +24,7 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
+import useParvaneChatL2 from '../../../hooks/useParvaneChatL2';
 import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
 
 import LinkField from '../../common/LinkField';
@@ -29,6 +32,7 @@ import ManageUsernames from '../../common/ManageUsernames';
 import SafeLink from '../../common/SafeLink';
 import UsernameInput from '../../common/UsernameInput';
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
+import Switch from '../../gili/primitives/Switch';
 import SwitchField from '../../gili/templates/SwitchField';
 import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
@@ -37,6 +41,7 @@ import ListItem from '../../ui/ListItem';
 import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
 import RadioGroup from '../../ui/RadioGroup';
+import ManageJoinMode from './ManageJoinMode';
 
 // Parvane (spec 023): приватной ссылки на этом экране нет (ссылки — экран «Ссылки-приглашения»), коллекционных
 // имён, бота-привратника и запрета пересылки — тоже
@@ -71,6 +76,10 @@ type StateProps = {
   guardBot?: ApiUser;
   invitesCount?: number;
   areInvitesLoaded?: boolean;
+  exportedInvites?: ApiExportedInvite[];
+  canEditType?: boolean;
+  canInvite?: boolean;
+  canChangeInfo?: boolean;
   maxPublicLinks: number;
   privateInviteLink?: string;
 };
@@ -88,6 +97,10 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   guardBot,
   invitesCount,
   areInvitesLoaded,
+  exportedInvites,
+  canEditType,
+  canInvite,
+  canChangeInfo,
   maxPublicLinks,
   privateInviteLink,
   onClose,
@@ -187,22 +200,26 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     }
   }, [chat.id, error]);
 
-  const handleOptionChange = useCallback((value: string, e: ChangeEvent<HTMLInputElement>) => {
+  // Parvane: «Закрытая / Публичная» — переключатель-сегмент по доске `XpChat` вместо списка с кружками
+  const handleTypeSelect = useLastCallback((value: PrivacyType) => {
+    if (value === privacyType) return;
     const myChats = Object.values(getGlobal().chats.byId)
       .filter(({ isCreator, usernames }) => isCreator && usernames?.some((c) => c.isActive));
 
     if (myChats.length >= maxPublicLinks && value === 'public') {
       openLimitReachedModal({ limit: 'channelsPublic' });
-      const radioGroup = e.currentTarget.closest('.radio-group') as HTMLDivElement;
-      // Patch for Teact bug with controlled inputs
-      // TODO Teact support added, this can now be removed
-      (radioGroup.querySelector('[value=public]') as HTMLInputElement).checked = false;
-      (radioGroup.querySelector('[value=private]') as HTMLInputElement).checked = true;
       return;
     }
-    setPrivacyType(value as PrivacyType);
+    setPrivacyType(value);
     setIsProfileFieldsTouched(true);
-  }, [maxPublicLinks, openLimitReachedModal]);
+  });
+
+  const handleSelectPrivate = useLastCallback(() => handleTypeSelect('private'));
+  const handleSelectPublic = useLastCallback(() => handleTypeSelect('public'));
+
+  // Защита (доска `XpChat`): усиленная приватность группы v2 — меняет тот, кто вправе менять сведения; в публичной
+  // группе её не включить (переписку читает любой вступивший), уже включённую можно выключить
+  const [groupL2, handleToggleL2] = useParvaneChatL2(!isChannel && canChangeInfo ? chat.id : undefined, 'isActive');
 
   const handleForwardingOptionChange = useCallback((value: string) => {
     toggleIsProtected({
@@ -267,11 +284,6 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     : guardBot?.firstName;
   const approvalInfo = lang(getApprovalInfoKey(isChannel, Boolean(isPublic)));
 
-  const options = [
-    { value: 'private', label: oldLang(`${langPrefix1}Private`), subLabel: oldLang(`${langPrefix1}PrivateInfo`) },
-    { value: 'public', label: oldLang(`${langPrefix1}Public`), subLabel: oldLang(`${langPrefix1}PublicInfo`) },
-  ];
-
   const forwardingOptions = [{
     value: 'allowed',
     label: oldLang('ChannelVisibility.Forwarding.Enabled'),
@@ -301,15 +313,28 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang(`${langPrefix2}Type`)}</IslandTitle>
-        <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
-          <RadioGroup
-            selected={privacyType}
-            name="channel-type"
-            options={options}
-            onChange={handleOptionChange}
-          />
-        </Island>
+        <div className="pv-type-seg" role="radiogroup" aria-label={oldLang(`${langPrefix2}Type`)}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={privacyType === 'private'}
+            className={buildClassName('pv-type-seg-item', privacyType === 'private' && 'pv-type-seg-item-on')}
+            disabled={!canEditType}
+            onClick={handleSelectPrivate}
+          >
+            {lang(isChannel ? 'ParvaneChannelTypeClosed' : 'ParvaneGroupTypeClosed')}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={privacyType === 'public'}
+            className={buildClassName('pv-type-seg-item', privacyType === 'public' && 'pv-type-seg-item-on')}
+            disabled={!canEditType}
+            onClick={handleSelectPublic}
+          >
+            {lang(isChannel ? 'ParvaneChannelTypePublic' : 'ParvaneGroupTypePublic')}
+          </button>
+        </div>
         {privacyType === 'private' && !IS_PRIVATE_LINK_SUPPORTED ? (
           <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
             {lang('ParvanePrivateGroupInfo')}
@@ -345,19 +370,26 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
           </>
         ) : (
           <>
-            <Island>
-              <div className="settings-input">
-                <UsernameInput
-                  asLink
-                  linkPrefix={PUBLIC_LINK_PREFIX}
-                  currentUsername={currentUsername}
-                  isLoading={isLoading}
-                  isUsernameAvailable={isUsernameAvailable}
-                  checkedUsername={checkedUsername}
-                  onChange={handleUsernameChange}
-                />
-              </div>
-            </Island>
+            <div className="pv-type-field">
+              <span className="pv-type-label">
+                {lang(isChannel ? 'ParvaneChannelServerName' : 'ParvaneGroupServerName')}
+              </span>
+              {canEditType ? (
+                <div className="settings-input">
+                  <UsernameInput
+                    asLink
+                    linkPrefix={PUBLIC_LINK_PREFIX}
+                    currentUsername={currentUsername}
+                    isLoading={isLoading}
+                    isUsernameAvailable={isUsernameAvailable}
+                    checkedUsername={checkedUsername}
+                    onChange={handleUsernameChange}
+                  />
+                </div>
+              ) : (
+                <div className="pv-type-name">{currentUsername}</div>
+              )}
+            </div>
             {error === USERNAME_PURCHASE_ERROR && renderPurchaseLink()}
             <IslandDescription dir="auto">
               {lang('ParvanePublicLinkHelp')}
@@ -365,9 +397,14 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             <IslandDescription dir="auto" data-public-warning>
               {lang('ParvanePublicGroupWarning')}
             </IslandDescription>
-            {isPublic && (
-              <>
-                <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+          </>
+        )}
+        {((isPublic && canChangeInfo) || canInvite) && (
+          <>
+            <IslandTitle>{lang('ParvaneTypeAccess')}</IslandTitle>
+            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+              {isPublic && canChangeInfo && (
+                <>
                   <SwitchField
                     checked={Boolean(publicOptions.isPreview)}
                     onChange={handlePreviewChange}
@@ -382,12 +419,33 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
                     data-public-option="history"
                     teactExperimentControlled
                   />
-                </Island>
-                <IslandDescription dir="auto">
-                  {lang('ParvanePublicOptionsInfo')}
-                </IslandDescription>
-              </>
+                </>
+              )}
+              {canInvite && <ManageJoinMode chatId={chat.id} exportedInvites={exportedInvites} />}
+            </Island>
+            {isPublic && canChangeInfo && (
+              <IslandDescription dir="auto">
+                {lang('ParvanePublicOptionsInfo')}
+              </IslandDescription>
             )}
+          </>
+        )}
+        {groupL2?.isAvailable && (
+          <>
+            <IslandTitle>{lang('ParvaneTypeProtection')}</IslandTitle>
+            <Island>
+              <ListItem
+                ripple
+                multiline={isPublic}
+                disabled={isPublic && !groupL2.isActive}
+                rightElement={<Switch checked={Boolean(groupL2.isActive)} />}
+                onClick={handleToggleL2}
+              >
+                <span className="title">{oldLang('ParvaneL2Toggle')}</span>
+                {isPublic && <span className="subtitle">{lang('ParvaneTypeL2Public')}</span>}
+              </ListItem>
+            </Island>
+            <IslandDescription>{oldLang('ParvaneL2Info')}</IslandDescription>
           </>
         )}
         {IS_USERNAMES_MANAGE_SUPPORTED && shouldRenderUsernamesManage && (
@@ -444,7 +502,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         )}
       </div>
       <FloatingActionButton
-        isShown={canUpdate}
+        isShown={canUpdate && Boolean(canEditType)}
         disabled={isLoading}
         ariaLabel={oldLang('Save')}
         onClick={handleSave}
@@ -521,6 +579,10 @@ export default memo(withGlobal<OwnProps>(
       areInvitesLoaded: selectTabState(global).management.byChatId[chatId]?.invites !== undefined,
       maxPublicLinks: selectCurrentLimit(global, 'channelsPublic'),
       privateInviteLink: fullInfo?.inviteLink,
+      exportedInvites: selectTabState(global).management.byChatId[chatId]?.invites,
+      canEditType: chat.isCreator,
+      canInvite: chat.isCreator || getHasAdminRight(chat, 'inviteUsers'),
+      canChangeInfo: chat.isCreator || getHasAdminRight(chat, 'changeInfo'),
     };
   },
   (global, { chatId }) => {

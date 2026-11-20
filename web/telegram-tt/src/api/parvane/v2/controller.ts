@@ -62,8 +62,8 @@ import {
   encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
 } from './historyModel';
 import {
-  buildBundleMark, deriveBundleKey, isBundleRolledBack, type KeyBundlePayload,
-  mergeKeyBundlePayload, openKeyBundle, readBundleSeq,
+  buildBundleMark, deriveBundleKey, describeKeyBundle, isBundleRolledBack, type KeyBundleContents,
+  type KeyBundlePayload, mergeKeyBundlePayload, openKeyBundle, readBundleSeq,
   readGrantBundleKey,
   sealKeyBundle,
   withBundleKey, withFreshLog,
@@ -309,6 +309,8 @@ type RevokeOutcome = {
   stateKeyVersion?: number;
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+// Новый ключ восстановления (`ZdProfileX`): `telegram` — ушёл владельцу в Telegram, `shown` — показан окном
+export type RecoveryKeyRenewal = 'telegram' | 'shown' | 'bad_key' | 'no_backup' | 'failed';
 /** Смена ника (spec 026): `ok` несёт новый адрес и токен — провайдер переносит локальное и перезагружает. */
 export type DeleteAccountResult =
   | { result: 'ok'; deletionAtMs: number }
@@ -2251,6 +2253,7 @@ export function createV2Controller(deps: Deps) {
       material.fill(0);
       const mark = await buildBundleMark(payload);
       if (!force && await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
+      if (await dropStaleBundleKey()) return;
       // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако» или группы (только
       // что вошло), не должно стирать их из копии для следующих устройств. Истории в копии нет (spec 033): новое
       // устройство берёт её из журнала истории аккаунта
@@ -2287,6 +2290,33 @@ export function createV2Controller(deps: Deps) {
     } catch (e) {
       deps.log(`v2: копия ключей аккаунта не обновлена: ${String(e)}`);
     }
+  }
+
+  /** Ключ восстановления сменён на другом своём устройстве (копия корня на сервере не та, что здесь, и копию ключей
+   * прежним ключом копии не открыть): ключ копии здесь больше не годится — забыть его, иначе устройство затёрло бы
+   * копию под новым ключом своей, нечитаемой новым ключом. */
+  async function dropStaleBundleKey() {
+    const state = await fetchRootBackupState().catch(() => undefined);
+    if (!state?.backup || !rootBackupB64 || !bundleKeyB64 || state.backup === rootBackupB64) return false;
+    if (state.key_bundle) {
+      try {
+        await openKeyBundle(unb64(bundleKeyB64), deps.getSelf(), unb64(state.key_bundle));
+        return false;
+      } catch {
+        // Не открывается — ключ копии прежний
+      }
+    }
+    bundleKeyB64 = undefined;
+    await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
+    deps.log('v2: ключ восстановления сменён на другом устройстве — копию ключей аккаунта ведёт оно');
+    return true;
+  }
+
+  /** Что лежит в копии ключей аккаунта на сервере (экран «Копия ключей»); копии нет либо ключа копии
+   * здесь нет — `undefined`. */
+  async function keyBundleContents(): Promise<KeyBundleContents | undefined> {
+    const payload = await fetchKeyBundle();
+    return payload ? describeKeyBundle(payload) : undefined;
   }
 
   /** После запуска: копия корня на сервер, ключ восстановления — владельцу в
@@ -2682,6 +2712,43 @@ export function createV2Controller(deps: Deps) {
     } finally {
       client?.forgetRoot();
     }
+  }
+
+  /** Новый ключ восстановления взамен прежнего (`ZdProfileX`): корень открывается прежним ключом только на время
+   * операции, копия корня и копия ключей аккаунта переписываются под новым; прежний ключ перестаёт работать. Новый
+   * ключ уходит владельцу в Telegram, иначе показывается окном. */
+  async function renewRecoveryKey(currentKey: string): Promise<RecoveryKeyRenewal> {
+    if (!client || !ready || !pv || !storage) return 'failed';
+    const backup = await fetchServerRootBackup().catch(() => undefined) || rootBackupB64;
+    if (!backup) return 'no_backup';
+    try {
+      client.importRootBackup(unb64(backup), currentKey.trim()).fill(0);
+    } catch {
+      client.forgetRoot();
+      return 'bad_key';
+    }
+    let recoveryKey: string;
+    try {
+      recoveryKey = pv.generateRecoveryKey();
+      rootBackupB64 = b64(client.exportRootBackup(recoveryKey));
+      await sealRootEscrow(client);
+      await uploadRootBackup();
+      await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+    } catch (e) {
+      deps.log(`v2: новый ключ восстановления не создан: ${String(e)}`);
+      rootBackupB64 = backup;
+      return 'failed';
+    } finally {
+      client?.forgetRoot();
+    }
+    // Сервер, приняв другую копию корня, стёр копию ключей аккаунта — она пишется заново под новым ключом
+    await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+    await rememberBundleKey(recoveryKey);
+    await refreshKeyBundle(true);
+    await queueRecoveryKey(recoveryKey);
+    await flushTelegramKey();
+    deps.log('v2: ключ восстановления заменён новым');
+    return isRecoveryKeyShown ? 'shown' : 'telegram';
   }
 
   /** Восстановление по ключу восстановления: корень — из копии на сервере,
@@ -5239,6 +5306,8 @@ export function createV2Controller(deps: Deps) {
     hasEscrow,
     isEscrowCopyMissing,
     storeEscrowCopy,
+    renewRecoveryKey,
+    keyBundleContents,
     exportBackup,
     importBackup,
     // Дождаться записи состояния движка (перед стиранием хранилища устройства)

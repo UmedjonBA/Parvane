@@ -8,10 +8,14 @@ import type { ForwardTarget, ThreadId } from '../../types';
 import type { ChatSelectionKey } from '../../util/keys/chatSelectionKey';
 
 import { getChatTitle, getUserFirstOrLastName } from '../../global/helpers';
+import { getMessageStatefulContent } from '../../global/helpers/messages';
+import { getMessageSummaryText } from '../../global/helpers/messageSummary';
+import { getPeerFullTitle } from '../../global/helpers/peers';
 import {
   selectCanCopyMessageLink,
   selectChat,
   selectChatMessages,
+  selectPeer,
   selectPeerPaidMessagesStars,
   selectTabState,
   selectUser,
@@ -31,10 +35,12 @@ import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 import AnimatedCounter from '../common/AnimatedCounter';
 import Icon from '../common/icons/Icon';
 import RecipientPicker from '../common/RecipientPicker';
+import PvSwitch from '../parvane/notes/PvSwitch';
 import Button from '../ui/Button';
 import Checkbox from '../ui/Checkbox';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import Transition from '../ui/Transition';
+import SendRecipientScreen, { type SendPreview } from './SendRecipientScreen';
 
 import styles from './ForwardRecipientPicker.module.scss';
 
@@ -50,7 +56,11 @@ interface StateProps {
   fromChatId?: string;
   forwardMessageIds?: number[];
   shouldPaidMessageAutoApprove?: boolean;
+  isNoAuthors?: boolean;
+  isNoCaptions?: boolean;
 }
+
+const PREVIEW_LENGTH = 80;
 
 const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
   isOpen,
@@ -61,6 +71,8 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
   fromChatId,
   forwardMessageIds,
   shouldPaidMessageAutoApprove,
+  isNoAuthors,
+  isNoCaptions,
 }) => {
   const {
     openChatOrTopicWithReplyInDraft,
@@ -73,6 +85,9 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
     copyMessageLink,
     openStarsBalanceModal,
     setPaidMessageAutoApprove,
+    setForwardNoAuthors,
+    setForwardNoCaptions,
+    openChat,
   } = getActions();
 
   const lang = useLang();
@@ -364,8 +379,57 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
   }, [isForwarding, isStory, selectedCount, showComposer, caption, canCopyLink, displayedTotalStars,
     paidChatsInfo, handleForwardToMultiple, handleCopyLink, lang, oldLang]);
 
+  // Пересылка сообщений — экран «Кому отправить» (доска `RpPick`): сразу в выбранные чаты, с подписью
+  const forwardPreview = useMemo((): SendPreview | undefined => {
+    if (!isOpen || !fromChatId || !forwardMessageIds?.length) return undefined;
+    const global = getGlobal();
+    const messages = selectChatMessages(global, fromChatId);
+    const first = messages?.[forwardMessageIds[0]];
+    if (!first) return undefined;
+    const sender = first.senderId ? selectPeer(global, first.senderId) : undefined;
+    const text = getMessageSummaryText(lang, first, getMessageStatefulContent(global, first), false, PREVIEW_LENGTH);
+    const count = forwardMessageIds.length;
+    return count > 1
+      ? { title: lang('SendPickerMessages', { count }, { pluralValue: count }), subtitle: text }
+      : { title: text, subtitle: sender ? getPeerFullTitle(lang, sender) : undefined };
+  }, [isOpen, fromChatId, forwardMessageIds, lang]);
+
+  const handleSendToChats = useLastCallback((chatIds: string[], comment: string) => {
+    forwardToMultipleChats({ targets: chatIds.map((chatId) => ({ chatId })), comment: comment || undefined });
+    showNotification({
+      message: lang('FwdMessagesToChats', { count: chatIds.length }, { pluralValue: chatIds.length }),
+    });
+    exitForwardMode();
+    // Один чат — открывается, как после пересылки в Telegram
+    if (chatIds.length === 1) openChat({ id: chatIds[0] });
+  });
+
+  const handleNoAuthorsChange = useLastCallback((isOn: boolean) => setForwardNoAuthors({ noAuthors: isOn }));
+  const handleNoCaptionsChange = useLastCallback((isOn: boolean) => setForwardNoCaptions({ noCaptions: isOn }));
+
   if (!isOpen && !isShown) {
     return undefined;
+  }
+
+  if (isForwarding && !renderingIsStory) {
+    return (
+      <SendRecipientScreen
+        isOpen={isOpen}
+        preview={forwardPreview}
+        options={(
+          <div className={styles.options}>
+            <PvSwitch isOn={Boolean(isNoAuthors)} data-forward-option="no-authors" onChange={handleNoAuthorsChange}>
+              {lang('HideSendersName')}
+            </PvSwitch>
+            <PvSwitch isOn={Boolean(isNoCaptions)} data-forward-option="no-captions" onChange={handleNoCaptionsChange}>
+              {lang('HideCaption')}
+            </PvSwitch>
+          </div>
+        )}
+        onSend={handleSendToChats}
+        onClose={handleClose}
+      />
+    );
   }
 
   const confirmPaymentMessage = paidChatsInfo.totalStars > 0 ? lang(
@@ -429,7 +493,9 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
 };
 
 export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => {
-  const { messageIds, storyId, fromChatId } = selectTabState(global).forwardMessages;
+  const {
+    messageIds, storyId, fromChatId, noAuthors, noCaptions,
+  } = selectTabState(global).forwardMessages;
   const isForwarding = (messageIds && messageIds.length > 0);
 
   return {
@@ -440,5 +506,7 @@ export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => {
     fromChatId,
     forwardMessageIds: messageIds,
     shouldPaidMessageAutoApprove: global.settings.byKey.shouldPaidMessageAutoApprove,
+    isNoAuthors: noAuthors,
+    isNoCaptions: noCaptions,
   };
 })(ForwardRecipientPicker));

@@ -26,7 +26,9 @@ import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import TextArea from '../../ui/TextArea';
-import { PLANNER_SIDE_FORM_ID, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import {
+  PLANNER_SIDE_FORM_ID, PlannerCardCaption, PlannerCardRow, PlannerRepeatRow,
+} from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerFreeTime from './PlannerFreeTime';
@@ -345,15 +347,16 @@ const PlannerEventEditor = ({
         />
       )}
 
+      <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
       <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
+
+      <PlannerCardRow icon="schedule" row="remind">
+        <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
+      </PlannerCardRow>
 
       <PlannerCardRow icon="folder" row="group">
         <PlannerListPicker id="planner-event-list" state={state} value={project} onChange={setProject} />
         {!project && <PlannerColorSwatches value={color} onChange={setColor} />}
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="schedule" row="remind">
-        <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
       </PlannerCardRow>
 
       <PlannerCardRow icon="info" row="description">

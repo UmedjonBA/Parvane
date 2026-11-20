@@ -220,7 +220,7 @@ try {
   await channelSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await channelSearch.fill(bobName);
   await selectPickerRow(aliceSession.page, '#LeftColumn', bobName);
-  await aliceSession.page.locator('#LeftColumn .FloatingActionButton').click();
+  await aliceSession.page.getByRole('button', { name: 'Continue To Channel Info' }).click();
   // Шаг 2: имя канала (label tt не связан с input — берём поле напрямую),
   // floating — создать
   await aliceSession.page.getByRole('heading', { name: 'New Channel' })

@@ -2238,6 +2238,44 @@ fn cloud_shared_folder_roles_revoke_and_leave() {
     assert_eq!(restored.cloud_state_json(&id), alice.cloud_state_json(&id));
 }
 
+/// Приглашение после отказа (выхода записью «leave»): ключ нового гранта принимается, папка читается с названием.
+/// Ключ приходит раньше подключения контейнера и после него.
+#[test]
+fn cloud_reinvite_after_decline_delivers_key() {
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    bob_learn(&mut alice, "bob@local", bob_dk);
+    let (id, create) = alice.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    cloud_edit(&mut cloud, &mut srv, &mut alice, &id, serde_json::json!([{"op": "meta", "name": "Проект"}, cloud_file(1, None, "план.txt")]));
+    let attach = |cloud: &mut MiniCloud, srv: &mut Server, bob: &mut Client| {
+        let (get, grants) = (cloud.get(&id).get_response(), cloud.get(&id).grants_response(0));
+        run_cloud(cloud, srv, bob, &mut |c| c.cloud_attach(&get, &grants).map(|_| vec![]));
+    };
+    for (round, key_first) in [(0i64, true), (1, false), (2, true)] {
+        let ts = 10 + round * 10;
+        run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", false, "Приглашение", ts));
+        if key_first {
+            drain(&mut srv, &mut bob);
+            attach(&mut cloud, &mut srv, &mut bob);
+        } else {
+            attach(&mut cloud, &mut srv, &mut bob);
+            drain(&mut srv, &mut bob);
+        }
+        assert!(bob.cloud_has_key(&id), "раунд {round}: ключ не принят: {:?}", bob.last_error);
+        cloud_pull(&cloud, &mut srv, &mut bob, &id);
+        assert_eq!(cloud_names(&bob, &id), vec!["план.txt"], "раунд {round}");
+        // Отказ — выход записью «leave»; Алиса узнаёт о нём своим опросом журнала грантов.
+        let leave = bob.cloud_leave(&id, ts + 1).unwrap();
+        cloud.handle(&mut srv, "bob@local", "d1", &leave);
+        cloud_pull(&cloud, &mut srv, &mut alice, &id);
+    }
+}
+
 /// spec 026: смена ника. Личные чаты, ключи и группы переезжают на новый адрес; конверт на прежний адрес
 /// открывается; собеседник узнаёт о смене по журналу прежнего адреса без предупреждения о смене ключа; своё
 /// второе устройство переходит само.

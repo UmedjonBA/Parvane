@@ -33,6 +33,8 @@ import './File.scss';
 
 type FileSize = 'small' | 'medium' | 'large';
 
+const PERCENT = 100;
+
 type OwnProps = {
   ref?: ElementRef<HTMLDivElement>;
   id?: string;
@@ -51,6 +53,8 @@ type OwnProps = {
   isSelectable?: boolean;
   isSelected?: boolean;
   transferProgress?: number;
+  // Parvane: пометка после размера («из „Файлов“», доска `ZpChat`)
+  sizeNote?: string;
   actionIcon?: IconName;
   contextActions?: MenuItemContextAction[];
   onClick?: () => void;
@@ -74,6 +78,7 @@ const File = ({
   isSelectable,
   isSelected,
   transferProgress,
+  sizeNote,
   actionIcon,
   contextActions,
   observeIntersection,
@@ -167,7 +172,17 @@ const File = ({
       <div className="file-info">
         <div className="file-title" dir="auto" title={name}>{renderText(name)}</div>
         <div className="file-subtitle" dir="auto">
-          <AnimatedFileSize size={size} progress={isTransferring ? transferProgress : undefined} />
+          {isUploading && transferProgress !== undefined ? (
+            // Ход отправки текстом: вложение шифруется на устройстве и уходит (доска `ZpChat`)
+            <span className="file-upload-progress" data-upload-progress>
+              {lang('FileEncryptingSending', { percent: Math.round(transferProgress * PERCENT) })}
+            </span>
+          ) : (
+            <AnimatedFileSize size={size} progress={isTransferring ? transferProgress : undefined} />
+          )}
+          {sizeNote && !isUploading && (
+            <span className="file-size-note" data-file-note>{` · ${sizeNote}`}</span>
+          )}
           {sender && (
             <>
               <span className="bullet">&bull;</span>

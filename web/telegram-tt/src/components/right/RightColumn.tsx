@@ -39,6 +39,7 @@ import RightHeader from './RightHeader';
 import StickerSearch from './StickerSearch.async';
 
 import './RightColumn.scss';
+import './RightPv.scss';
 
 interface OwnProps {
   isMobile?: boolean;

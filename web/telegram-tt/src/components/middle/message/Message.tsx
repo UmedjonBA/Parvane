@@ -1483,7 +1483,7 @@ const Message = ({
           <TaskOffer message={message} taskOffer={taskOffer} />
         )}
         {article && (
-          <ArticleCard article={article} />
+          <ArticleCard article={article} message={message} />
         )}
         {musicTrack && (
           <MusicTrackCard track={musicTrack} />

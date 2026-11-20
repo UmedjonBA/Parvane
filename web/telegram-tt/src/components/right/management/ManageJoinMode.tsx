@@ -57,7 +57,6 @@ const ManageJoinMode = ({ chatId, exportedInvites }: OwnProps) => {
   return (
     <>
       <ListItem
-        icon="add-user"
         ripple
         disabled={!primary || pendingValue !== undefined}
         onClick={openConfirm}

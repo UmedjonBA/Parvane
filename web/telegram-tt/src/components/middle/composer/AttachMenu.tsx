@@ -1,7 +1,7 @@
 import {
   memo, useEffect,
 } from '../../../lib/teact/teact';
-import { getActions, getGlobal } from '../../../global';
+import { getActions } from '../../../global';
 
 import type { ApiMessage } from '../../../api/types';
 import type { MessageListType, ThreadId } from '../../../types';
@@ -21,7 +21,6 @@ import buildClassName from '../../../util/buildClassName';
 import { getDebugLogs } from '../../../util/debugConsole';
 import { validateFiles } from '../../../util/files';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
-import { callApi } from '../../../api/gramjs';
 import { requestCloudAttach } from '../../parvane/cloud/cloudBridge';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -34,10 +33,10 @@ import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Icon from '../../common/icons/Icon';
 import ArticlePickerModal from '../../parvane/article/ArticlePickerModal';
+import LocationScreen from '../../parvane/chatScreen/LocationScreen';
 import TaskOfferModal from '../../parvane/taskOffer/TaskOfferModal';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
-import NestedMenuItem from '../../ui/NestedMenuItem';
 import ResponsiveHoverButton from '../../ui/ResponsiveHoverButton';
 
 import './AttachMenu.scss';
@@ -67,7 +66,6 @@ export type OwnProps = {
 };
 
 // Live-локация: длительность трансляции (сек), как в Telegram
-const LIVE_LOCATION_PERIODS = [15 * 60, 60 * 60, 8 * 60 * 60];
 
 const AttachMenu = ({
   chatId,
@@ -106,6 +104,7 @@ const AttachMenu = ({
   const isNotesOn = enabledModules.includes('notes');
   const isPlanOn = enabledModules.includes('plan');
   const [isArticleOpen, openArticle, closeArticle] = useFlag();
+  const [isLocationOpen, openLocation, closeLocation] = useFlag();
 
   const canSendVideoAndPhoto = canSendPhotos && canSendVideos;
   const canSendVideoOrPhoto = canSendPhotos || canSendVideos;
@@ -148,29 +147,6 @@ const AttachMenu = ({
       onFileSelect(validatedFiles);
     }
   });
-
-  const sendParvaneLocation = useLastCallback((period?: number) => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition((pos) => {
-      const chat = getGlobal().chats.byId[chatId];
-      if (!chat) return;
-      const heading = typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
-        ? Math.round(pos.coords.heading) : undefined;
-      void (callApi as unknown as (n: string, a: unknown) => void)('parvaneSendLocation', {
-        chat,
-        lat: pos.coords.latitude,
-        long: pos.coords.longitude,
-        period,
-        heading,
-        accuracy: pos.coords.accuracy ? Math.round(pos.coords.accuracy) : undefined,
-      });
-    }, undefined, { enableHighAccuracy: Boolean(period) });
-  });
-
-  const handleParvaneLocation = useLastCallback(() => sendParvaneLocation());
-  const handleParvaneLiveLocation15 = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[0]));
-  const handleParvaneLiveLocation1h = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[1]));
-  const handleParvaneLiveLocation8h = useLastCallback(() => sendParvaneLocation(LIVE_LOCATION_PERIODS[2]));
 
   const handleQuickSelect = useLastCallback(() => {
     updateAttachmentSettings({ shouldCompress: true });
@@ -229,7 +205,7 @@ const AttachMenu = ({
     openArticle();
   });
 
-  if (!isButtonVisible && !isTaskOfferOpen && !isArticleOpen) {
+  if (!isButtonVisible && !isTaskOfferOpen && !isArticleOpen && !isLocationOpen) {
     return undefined;
   }
 
@@ -324,20 +300,9 @@ const AttachMenu = ({
               <MenuItem icon="poll" className="attach-tile--poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
             )}
             {!editingMessage && (
-              <NestedMenuItem
-                icon="location"
-                className="attach-tile--place"
-                submenu={(
-                  <>
-                    <MenuItem onClick={handleParvaneLocation}>{lang('ParvaneLocationCurrent')}</MenuItem>
-                    <MenuItem onClick={handleParvaneLiveLocation15}>{lang('ParvaneLiveLocation15Min')}</MenuItem>
-                    <MenuItem onClick={handleParvaneLiveLocation1h}>{lang('ParvaneLiveLocation1Hour')}</MenuItem>
-                    <MenuItem onClick={handleParvaneLiveLocation8h}>{lang('ParvaneLiveLocation8Hours')}</MenuItem>
-                  </>
-                )}
-              >
+              <MenuItem icon="location" className="attach-tile--place" onClick={openLocation}>
                 {lang('AttachLocation')}
-              </NestedMenuItem>
+              </MenuItem>
             )}
             {canAttachToDoLists && !editingMessage && (
               <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
@@ -360,6 +325,7 @@ const AttachMenu = ({
         </>
       )}
       <TaskOfferModal isOpen={isTaskOfferOpen} chatId={chatId} onClose={closeTaskOffer} />
+      <LocationScreen isOpen={isLocationOpen} chatId={chatId} onClose={closeLocation} />
       <ArticlePickerModal isOpen={isArticleOpen} chatId={chatId} onClose={closeArticle} />
     </div>
   );

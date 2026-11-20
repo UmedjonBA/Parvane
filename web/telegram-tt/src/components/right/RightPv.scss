@@ -1,0 +1,355 @@
+// Parvane (spec 041): правая колонка по макету — шапка 56 px с линией, экраны управления группой и каналом как
+// экраны настроек (доски `ZpChat2`, `XpChat`, `RpPick`): фон окна, подпись раздела прописными (`.cap`), группа строк
+// на панели с линиями (`.grp`), строка 52 px (`.sr`), пояснение мелким (`.hint`). Экраны наследованы от форка: их
+// разметка прежняя, здесь — только обвязка. Острова помечены постоянными классами `pv-island*`
+
+#RightColumn .RightHeader {
+  height: var(--pv-header-height);
+  padding: 0 0.375rem;
+  border-bottom: 1px solid var(--pv-line);
+  background: var(--pv-panel);
+
+  > .close-button {
+    width: var(--pv-touch-size);
+    height: var(--pv-touch-size);
+    border-radius: var(--pv-radius);
+  }
+
+  .title {
+    margin-left: 0.25rem;
+    font-size: 1.0625rem;
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-fg);
+  }
+
+  .header {
+    overflow: hidden;
+    min-width: 0;
+    margin-left: 0.25rem;
+    line-height: 1.2;
+
+    .title {
+      overflow: hidden;
+
+      margin-left: 0;
+
+      font-size: 1.0625rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .subtitle {
+      overflow: hidden;
+
+      font-size: var(--pv-font-size-small);
+      color: var(--pv-muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  // «Изменить» текстом в цвете акцента (доска `ZpChat2`)
+  .pv-header-action {
+    cursor: var(--custom-cursor, pointer);
+
+    flex: none;
+
+    height: var(--pv-touch-size);
+    padding: 0 0.75rem;
+    border: 0;
+    border-radius: var(--pv-radius);
+
+    font: inherit;
+    font-size: var(--pv-font-size);
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-at);
+
+    background: none;
+
+    &:hover {
+      background: var(--pv-hover);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--pv-blue);
+      outline-offset: -2px;
+    }
+  }
+}
+
+// ── сведения группы: вкладки участников и медиа под блоком `GroupInfo` ──────────
+
+#RightColumn .pv-group-profile {
+  background: var(--pv-bg);
+
+  .shared-media-tabs {
+    --fade-mask-color: var(--pv-bg);
+
+    top: 0;
+
+    margin-top: 0.875rem;
+    padding-inline: 0;
+    border-block: 1px solid var(--pv-line);
+
+    background: var(--pv-panel);
+
+    &::before {
+      display: none;
+    }
+
+    .TabList {
+      border-radius: 0;
+      background: none;
+      box-shadow: none;
+    }
+  }
+
+  .pv-island {
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+// ── экраны управления ─────────────────────────────────────────────────────────
+
+#RightColumn .Management {
+  > .custom-scroll,
+  > .panel-content {
+    padding: 0 0 5.5rem;
+    background: var(--pv-bg);
+  }
+
+  .pv-island-title,
+  .section-heading {
+    margin: 0;
+    padding: 0.875rem 1rem 0.375rem;
+
+    font-size: var(--pv-font-size-caption);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.35;
+    color: var(--pv-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .pv-island-description {
+    margin: 0;
+    padding: 0.5rem 1rem 0;
+
+    font-size: var(--pv-font-size-caption);
+    line-height: 1.4;
+    color: var(--pv-muted);
+  }
+
+  .pv-island {
+    margin: 0.875rem 0 0;
+    padding: 0;
+    border-block: 1px solid var(--pv-line);
+    border-radius: 0;
+
+    background: var(--pv-panel);
+    box-shadow: none;
+  }
+
+  .pv-island-title + .pv-island {
+    margin-top: 0;
+  }
+
+  .pv-island .pv-island-description {
+    padding: 0.625rem 1rem;
+    font-size: var(--pv-font-size-small);
+  }
+
+  .pv-island .ListItem {
+    margin: 0;
+
+    & + .ListItem {
+      border-top: 1px solid var(--pv-line);
+    }
+  }
+
+  .pv-island .ListItem-button {
+    gap: 0.75rem;
+
+    min-height: var(--pv-settings-row-height);
+    padding: 0.375rem 1rem;
+    border-radius: 0;
+
+    font-size: var(--pv-font-size);
+    color: var(--pv-fg);
+
+    > .icon,
+    > .ListItem-main-icon {
+      margin-inline: 0;
+      font-size: 1.375rem;
+      color: var(--pv-muted);
+    }
+  }
+
+  .pv-island .ListItem.destructive .ListItem-button,
+  .pv-island .ListItem.destructive .ListItem-button > .icon {
+    color: var(--pv-red);
+  }
+
+  .pv-island .ListItem:not(.inactive) .ListItem-button:hover {
+    background: var(--pv-hover);
+  }
+
+  .pv-island .multiline-item .title {
+    font-size: var(--pv-font-size);
+    line-height: 1.35;
+  }
+
+  .pv-island .multiline-item .subtitle {
+    font-size: var(--pv-font-size-caption);
+    line-height: 1.35;
+    color: var(--pv-muted);
+  }
+
+  .pv-island > .Checkbox,
+  .pv-island > .Radio,
+  .pv-island .radio-group > .Radio {
+    min-height: var(--pv-settings-row-height);
+    margin: 0;
+
+    & + .Checkbox,
+    & + .Radio,
+    & + .ListItem {
+      border-top: 1px solid var(--pv-line);
+    }
+  }
+
+  // Поля ввода: подпись над полем, поле 48 px на фоне окна (`.fld` / `.inp` макета)
+  .settings-edit,
+  .settings-input {
+    padding: 0.75rem 1rem;
+  }
+
+  .input-group {
+    margin-bottom: 0.75rem;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .form-control {
+    min-height: var(--pv-input-height);
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius);
+
+    color: var(--pv-fg);
+
+    background: var(--pv-bg);
+    box-shadow: none;
+
+    &:focus {
+      border-color: var(--pv-accent);
+    }
+  }
+
+  .AvatarEditable {
+    margin-top: 1rem;
+  }
+
+  // Наклейка-заставка Telegram над списками не нужна (заявки, ссылки); у наклейки свой `display: block !important`
+  .section-icon {
+    display: none !important;
+  }
+}
+
+// «Сохранить» экранов управления — квадрат 52 px цвета акцента, как «+» макета
+#RightColumn .FloatingActionButton {
+  width: var(--pv-fab-size);
+  height: var(--pv-fab-size);
+  border: 2px solid var(--pv-bg);
+  border-radius: var(--pv-radius-dialog);
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+  box-shadow: none;
+}
+
+// «Тип группы» (доска `XpChat`): сегмент «Закрытая / Публичная», поле «Имя группы на сервере» с подписью над ним
+#RightColumn .Management {
+  .pv-type-seg {
+    display: flex;
+
+    margin: 0.75rem 1rem 0;
+    padding: 0.125rem;
+    border: 1px solid var(--pv-line);
+    border-radius: var(--pv-radius-md);
+
+    background: var(--pv-bg);
+  }
+
+  .pv-type-seg-item {
+    cursor: var(--custom-cursor, pointer);
+
+    flex: 1 1 0;
+
+    height: var(--pv-seg-item-height);
+    padding: 0 0.625rem;
+    border: 0;
+    border-radius: var(--pv-radius-sm);
+
+    font: inherit;
+    font-size: var(--pv-font-size-small);
+    color: var(--pv-muted);
+    text-align: center;
+    white-space: nowrap;
+
+    background: none;
+
+    &:focus-visible {
+      outline: 2px solid var(--pv-blue);
+      outline-offset: -2px;
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+  }
+
+  .pv-type-seg-item-on {
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-fg);
+    background: var(--pv-panel);
+  }
+
+  .pv-type-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    padding: 0.875rem 1rem 0;
+
+    .settings-input {
+      padding: 0;
+    }
+
+    .input-group {
+      margin: 0;
+    }
+  }
+
+  .pv-type-label {
+    font-size: var(--pv-font-size-small);
+    color: var(--pv-muted);
+  }
+
+  .pv-type-name {
+    display: flex;
+    align-items: center;
+
+    min-height: var(--pv-input-height);
+    padding: 0 0.875rem;
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius);
+
+    font-family: var(--font-family-monospace);
+    color: var(--pv-muted);
+
+    background: var(--pv-bg);
+  }
+}

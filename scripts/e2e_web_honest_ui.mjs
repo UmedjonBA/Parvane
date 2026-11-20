@@ -110,7 +110,7 @@ try {
   await page.locator('[data-add-for="chats"]').click();
   await page.getByRole('menuitem', { name: 'New Channel' }).click();
   await selectPickerRow(page, '#LeftColumn', bobName);
-  await page.locator('#LeftColumn .FloatingActionButton').click();
+  await page.getByRole('button', { name: 'Continue To Channel Info' }).click();
   const channelName = page.locator('#LeftColumn .input-group:has(label:has-text("Channel name")) input');
   await channelName.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await channelName.fill(channelTitle);

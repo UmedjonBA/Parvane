@@ -369,8 +369,20 @@ try {
   await declineCard.getByRole('button', { name: 'Accept', exact: true }).waitFor({ state: 'detached', timeout: SYNC });
   await declineInvited.waitFor({ state: 'detached', timeout: SYNC });
   await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'отклонённое приглашение осталось на сервере');
+  // Пригласить снова после отказа: приглашение доходит с названием папки (ключ нового гранта принят)
+  await declineDialog.locator('[data-share-nick] input').fill(`@${bob.split('@')[0]}`);
+  await declineDialog.locator('[data-share-nick] input').press('Enter');
+  await declineInvited.waitFor({ state: 'visible', timeout: SYNC });
   await declineDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
-  console.log('OK: приглашение отклонено карточкой в чате, у владельца оно ушло');
+  await bc.open();
+  await bc.root();
+  await bc.openShared();
+  await bc.folderRow('Отказ').waitFor({ state: 'visible', timeout: SYNC });
+  assert.equal(await bc.folderRow('Отказ').getAttribute('data-container-kind'), 'invite', 'приглашение после отказа дошло');
+  await bc.folderRow('Отказ').getByRole('button', { name: 'Decline', exact: true }).click();
+  await bc.folderRow('Отказ').waitFor({ state: 'detached', timeout: SYNC });
+  await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'второй отказ не снял грант');
+  console.log('OK: приглашение отклонено карточкой в чате, у владельца оно ушло; новое приглашение после отказа доходит');
 
   // ── «Отменить» ждущее ответа приглашение: грант снят, у получателя приглашения нет ──
   await ac.root();

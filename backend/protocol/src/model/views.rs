@@ -240,6 +240,9 @@ fn media_to_wire(m: &Media) -> Map<String, Value> {
         o.insert("capability".into(), json!(b64(&m.capability)));
     }
     put(&mut o, "blob_domain", json!(m.blob_domain));
+    if m.from_cloud {
+        o.insert("from_cloud".into(), json!(true));
+    }
     if m.spoiler && spoiler_kind(kind) {
         o.insert("spoiler".into(), json!(true));
     }
@@ -634,6 +637,9 @@ fn media_to_v2(c: &Map<String, Value>, kind: &str) -> Map<String, Value> {
     set(&mut o, "performer", c.get("audio_performer"));
     set(&mut o, "thumbnail", c.get("thumbnail"));
     set(&mut o, "capability", c.get("capability"));
+    if bool_of(c, "from_cloud") {
+        o.insert("from_cloud".into(), json!(true));
+    }
     // MEDIA-2: спойлер и альбом — только у фото/видео/GIF/файлов (не у голосовых и кружков)
     if bool_of(c, "spoiler") && spoiler_kind(kind) {
         o.insert("spoiler".into(), json!(true));
@@ -1191,6 +1197,7 @@ fn media_from_view(m: &ViewMedia) -> Media {
         performer: m.performer.clone(),
         capability: m.capability.clone(),
         blob_domain: m.blob_domain.clone(),
+        from_cloud: false,
     }
 }
 
@@ -1303,6 +1310,22 @@ mod tests {
         assert_eq!(b, text_body("Задание: Дело".into()));
         let b = wire_to_body(offer.as_object().unwrap(), &|f| f == "task_offer").unwrap();
         assert!(matches!(b.kind, Some(view_body::Kind::TaskOffer(_))));
+    }
+
+    /// Файл из «Файлов» (spec 041, `Media.from_cloud`): признак проходит туда и обратно, у обычного файла его нет.
+    #[test]
+    fn media_from_cloud_roundtrip() {
+        let wire = json!({
+            "kind": "file", "file_id": "f1", "filename": "wg0.conf", "mime": "text/plain", "size_bytes": 412,
+            "from_cloud": true,
+        });
+        let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
+        let Some(content::Kind::Media(m)) = &content.kind else { panic!("не вложение: {content:?}") };
+        assert!(m.from_cloud);
+        assert_eq!(content_to_wire(&content).unwrap()["from_cloud"], json!(true));
+        let plain = json!({"kind": "file", "file_id": "f2", "filename": "a.txt", "mime": "text/plain", "size_bytes": 1});
+        let content = wire_to_content(plain.as_object().unwrap(), None).unwrap();
+        assert!(content_to_wire(&content).unwrap().get("from_cloud").is_none());
     }
 
     /// TRACK-1: трек «Музыки» проходит туда и обратно; клиент без раздела получает текст.

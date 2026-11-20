@@ -15,6 +15,7 @@ import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes } from '../types';
 
+import { getMessageKey } from '../../util/keys/messageKey';
 import { noteSendFailure } from '../../util/parvaneSendFailures';
 import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
@@ -955,7 +956,7 @@ export function createMessageController(deps: MessageDependencies) {
     return sendMessage(params, undefined, uuid);
   }
 
-  async function sendMessage(params: SendMessageParams, _onProgress?: ApiOnProgress, fixedUuid?: string) {
+  async function sendMessage(params: SendMessageParams, onProgress?: ApiOnProgress, fixedUuid?: string) {
     if (params.scheduledAt && params.chat) {
       deps.localState.scheduleMessage(params);
       return;
@@ -978,13 +979,15 @@ export function createMessageController(deps: MessageDependencies) {
     // Место в очереди альбома берётся синхронно, в порядке вызовов элементов (MEDIA-2)
     const albumTurn = params.groupedId ? albumQueue.enter(params.groupedId) : undefined;
     try {
-      await sendRegularMessage(params, fixedUuid, albumTurn?.ready);
+      await sendRegularMessage(params, fixedUuid, albumTurn?.ready, onProgress);
     } finally {
       albumTurn?.done();
     }
   }
 
-  async function sendRegularMessage(params: SendMessageParams, fixedUuid?: string, albumReady?: Promise<void>) {
+  async function sendRegularMessage(
+    params: SendMessageParams, fixedUuid?: string, albumReady?: Promise<void>, onProgress?: ApiOnProgress,
+  ) {
     const isSilent = Boolean(params.isSilent);
     const localMessage = params.localMessage || await sendMessageLocal(params, fixedUuid);
     const { chat, attachment } = params;
@@ -1031,7 +1034,11 @@ export function createMessageController(deps: MessageDependencies) {
           blob,
           attachment.filename,
           attachment.mimeType,
-          mediaUploadOptions(),
+          {
+            ...mediaUploadOptions(),
+            // Ход отправки у пузыря: tt держит его по ключу локального сообщения
+            onProgress: onProgress ? (fraction) => onProgress(fraction, getMessageKey(localMessage)) : undefined,
+          },
         );
         const thumbnail = await thumbnailPending;
         const mediaCrypto = mediaKeys
@@ -2000,6 +2007,7 @@ export function createMessageController(deps: MessageDependencies) {
       chatId: string;
       file: {
         fileId: string; key: string; nonce: string; capability: string; name: string; mime: string; size: number;
+        caption?: string;
       };
     }) {
       const currentStore = store();
@@ -2016,6 +2024,9 @@ export function createMessageController(deps: MessageDependencies) {
         file_key: file.key,
         file_nonce: file.nonce,
         capability: file.capability,
+        caption: file.caption || undefined,
+        // Подпись «из „Файлов“» у получателя (`Media.from_cloud`)
+        from_cloud: true,
         ttl_secs: ttlSecs || undefined,
       };
       deps.media.rememberKeys(content);

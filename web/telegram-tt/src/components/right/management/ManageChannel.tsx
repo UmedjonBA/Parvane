@@ -28,7 +28,6 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
-import ManageJoinMode from './ManageJoinMode';
 
 import './Management.scss';
 
@@ -229,13 +228,12 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               />
             )}
           </div>
-          {IS_CHANNEL_TYPE_SUPPORTED && chat.isCreator && (
+          {IS_CHANNEL_TYPE_SUPPORTED && (chat.isCreator || canInvite) && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('ChannelType')}</span>
               <span className="subtitle">{isChannelPublic ? lang('TypePublic') : lang('TypePrivate')}</span>
             </ListItem>
           )}
-          {canInvite && <ManageJoinMode chatId={chatId} exportedInvites={exportedInvites} />}
           {IS_CHANNEL_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"

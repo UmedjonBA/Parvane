@@ -24,15 +24,20 @@ export type CipherSource = {
   range: (from: number, to: number) => Promise<Uint8Array>;
 };
 
+// `onProgress` — доля отправленных чанков (0…1): ход «шифруется и отправляется» у сообщения (доска `ZpChat`)
 export async function uploadAttachmentStream(
   transport: AttachmentUploadTransport, source: CipherSource, capability: Uint8Array,
-  chunkBytes = ATTACHMENT_CHUNK_BYTES,
+  chunkBytes = ATTACHMENT_CHUNK_BYTES, onProgress?: (fraction: number) => void,
 ): Promise<string> {
   const chunks = Math.max(1, Math.ceil(source.cipherSize / chunkBytes));
+  let sentChunks = 0;
 
   async function sendChunk(uploadId: string, index: number) {
     const data = await source.range(index * chunkBytes, (index + 1) * chunkBytes);
-    return withRetry(() => transport.uploadBlobChunk(uploadId, index, data));
+    const result = await withRetry(() => transport.uploadBlobChunk(uploadId, index, data));
+    sentChunks += 1;
+    onProgress?.(sentChunks / chunks);
+    return result;
   }
 
   // Первый чанк заводит загрузку — остальные знают её id

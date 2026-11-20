@@ -49,7 +49,11 @@ async function sendTaskOffer(page, name, { day, start, minutes, steps } = {}) {
   if (day) await dialog.getByLabel('Work date').fill(day);
   if (start) await dialog.getByLabel('Start', { exact: true }).fill(start);
   if (minutes) await dialog.getByLabel('Duration, min').fill(String(minutes));
-  if (steps) await dialog.getByLabel('Steps, one per line').fill(steps.join('\n'));
+  // Шаги — списком по доске `XpChat`: «Новый шаг» + Enter
+  for (const step of steps || []) {
+    await dialog.getByLabel('New step', { exact: true }).fill(step);
+    await dialog.getByLabel('New step', { exact: true }).press('Enter');
+  }
   await dialog.getByRole('button', { name: 'Send', exact: true }).click();
   await dialog.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   const card = findMessageContainers(page, name).locator('[data-task-offer]').first();
@@ -170,6 +174,21 @@ try {
 
   // ── Личный чат: карточка у обоих, Боб принимает ──────────────────────────
   await openPrivateChat(sessions.alice.page, bob);
+  // «Одной строкой» (доска `XpChat`): разбор «Плана» заполняет строки экрана; закрыть без отправки
+  {
+    const page = sessions.alice.page;
+    await page.getByRole('button', { name: 'Add an attachment' }).click();
+    await page.getByRole('menuitem', { name: 'Suggest for plan', exact: true }).click();
+    const screen = page.getByRole('dialog');
+    await screen.locator('[data-task-offer-quick]').fill('check backups tomorrow 12:00 3 hours');
+    await screen.locator('[data-task-offer-understood]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    assert.equal(await screen.locator('#task-offer-name').inputValue(), 'check backups', 'название из строки');
+    assert.equal(await screen.getByLabel('Start', { exact: true }).inputValue(), '12:00', 'начало из строки');
+    assert.equal(await screen.getByLabel('Duration, min').inputValue(), '180', 'длительность из строки');
+    await screen.getByRole('button', { name: 'Close', exact: true }).click();
+    await screen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+    console.log('OK: «Одной строкой» заполняет экран задания');
+  }
   const aliceCardA = await sendTaskOffer(sessions.alice.page, offerA, {
     day: today, start: '10:00', minutes: 60, steps: [stepText, 'второй шаг'],
   });

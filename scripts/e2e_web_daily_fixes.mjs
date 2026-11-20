@@ -12,6 +12,7 @@ import {
   dumpDiagJournal,
   findMessageContainers,
   openPrivateChatStrict,
+  pickForwardRecipientAndSend,
   preparePage,
   selectMessageAction,
   sendText,
@@ -67,29 +68,11 @@ async function waitChatMessage(page, peerNick, predicate, what) {
   }
 }
 
-// Пересылка из открытого чата в чат с `address` с пунктом меню плашки пересылки (или без)
-async function forwardWithOption(page, sourceText, address, optionName) {
+// Пересылка из открытого чата в чат с `address`; `option` — выключатель экрана «Кому отправить»
+// (`no-authors` — «Скрыть имя отправителя», `no-captions` — «Скрыть подпись»)
+async function forwardWithOption(page, sourceText, address, option) {
   await selectMessageAction(page, sourceText, 'Forward');
-  const displayName = address.split('@')[0];
-  const picker = page.locator('.Modal').filter({ has: page.locator('.ChatOrUserPicker-item') });
-  await picker.locator('.search-input').fill(displayName);
-  const recipient = picker.locator('.Transition_slide-active .ChatOrUserPicker-item')
-    .filter({ hasText: displayName }).last();
-  await recipient.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await recipient.click();
-  await recipient.locator('.picker-checkbox.selected').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await picker.locator('.picker-footer-button').click();
-  const embedded = page.locator('.Transition_slide-active .ComposerEmbeddedMessage');
-  await embedded.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  if (optionName) {
-    await embedded.locator('.embedded-message, .EmbeddedMessage').first().click();
-    await page.getByRole('menuitem', { name: optionName }).click();
-    await page.locator('.forward-context-menu .bubble').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS })
-      .catch(() => page.keyboard.press('Escape'));
-  }
-  await page.locator('.Transition_slide-active .Composer')
-    .getByRole('button', { name: 'Forward', exact: true }).click();
-  await embedded.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await pickForwardRecipientAndSend(page, address, { options: option ? [option] : [] });
 }
 
 const browser = await chromium.launch();
@@ -127,7 +110,7 @@ try {
   await findMessageContainers(b.page, caption).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── A3: «Скрыть имя отправителя» — у получателя копия без «Переслано от» ───
-  await forwardWithOption(b.page, plain, carol, 'Hide Sender Name');
+  await forwardWithOption(b.page, plain, carol, 'no-authors');
   const copy = await waitChatMessage(c.page, nick(bob), (m) => m.text === plain, 'A3: копия текста у carol');
   assert.equal(copy.hasForward, false, 'A3: «Скрыть имя отправителя» — у получателя заголовок пересылки');
   console.log('OK: A3 — пересылка без имени отправителя дошла копией');
@@ -136,7 +119,7 @@ try {
   const photosBefore = (await chatMessages(c.page, nick(bob))).filter((m) => m.hasPhoto).length;
   // После пересылки tt открывает чат получателя — назад к исходному
   await openPrivateChatStrict(b.page, alice);
-  await forwardWithOption(b.page, caption, carol, 'Hide Caption');
+  await forwardWithOption(b.page, caption, carol, 'no-captions');
   const bare = await waitChatMessage(
     c.page, nick(bob), (m) => m.hasPhoto && !m.isOutgoing, 'A3: фото без подписи у carol',
   );

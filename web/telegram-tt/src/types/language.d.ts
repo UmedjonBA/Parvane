@@ -2948,6 +2948,7 @@ export interface LangPair {
   'PlannerRepeatKindWeekly': undefined;
   'PlannerRepeatKindYearly': undefined;
   'PlannerRepeatLabel': undefined;
+  'PlannerRepeatAndRemind': undefined;
   'PlannerRepeatMark': undefined;
   'PlannerRepeatMonthDay': undefined;
   'PlannerRepeatMonthDayFromStart': undefined;
@@ -3029,7 +3030,6 @@ export interface LangPair {
   'TaskOfferMenuItem': undefined;
   'TaskOfferNeedsPlanner': undefined;
   'TaskOfferSend': undefined;
-  'TaskOfferSteps': undefined;
   'TaskOfferTitle': undefined;
   'TaskOfferToCalendar': undefined;
   'TaskOfferToPlan': undefined;
@@ -3360,10 +3360,6 @@ export interface LangPair {
   'KnowledgeFilesShareNote': undefined;
   'KnowledgeFilesRole': undefined;
   'ParvaneResizePanel': undefined;
-  'ParvaneLocationCurrent': undefined;
-  'ParvaneLiveLocation15Min': undefined;
-  'ParvaneLiveLocation1Hour': undefined;
-  'ParvaneLiveLocation8Hours': undefined;
   'KnowledgeFolderDeleteWithNotes': undefined;
   'KnowledgeGuideReturn': undefined;
   'ArticleMenuItem': undefined;
@@ -3371,8 +3367,6 @@ export interface LangPair {
   'ArticleRead': undefined;
   'ArticleSaveToNotes': undefined;
   'ArticleSaveFailed': undefined;
-  'ArticlePickTitle': undefined;
-  'ArticlePickHint': undefined;
   'ArticleSearch': undefined;
   'ArticleNoNotes': undefined;
   'ArticleTooLong': undefined;
@@ -3784,6 +3778,105 @@ export interface LangPair {
   'ParvaneContactsRemoteLabel': undefined;
   'ParvaneContactsRemotePlaceholder': undefined;
   'ParvaneContactsRemoteHint': undefined;
+  'ArticleFromYou': undefined;
+  'TaskOfferQuick': undefined;
+  'TaskOfferQuickPlaceholder': undefined;
+  'TaskOfferUnderstood': undefined;
+  'TaskOfferWhat': undefined;
+  'TaskOfferDayAndStart': undefined;
+  'TaskOfferDuration': undefined;
+  'TaskOfferStepsTitle': undefined;
+  'TaskOfferRemoveStep': undefined;
+  'TaskOfferNewStep': undefined;
+  'TaskOfferAddStep': undefined;
+  'TaskOfferHint': undefined;
+  'SendPickerTitle': undefined;
+  'SendPickerSearch': undefined;
+  'SendPickerCaption': undefined;
+  'SendPickerNothing': undefined;
+  'FileFromCloud': undefined;
+  'LocationLiveTitle': undefined;
+  'LocationLiveOwn': undefined;
+  'LocationScreenTitle': undefined;
+  'LocationMapLabel': undefined;
+  'LocationSendCurrent': undefined;
+  'LocationLocating': undefined;
+  'LocationUnknown': undefined;
+  'LocationShareFor': undefined;
+  'LocationPeriod15Min': undefined;
+  'LocationPeriod1Hour': undefined;
+  'LocationPeriod8Hours': undefined;
+  'LocationStart15Min': undefined;
+  'LocationStart1Hour': undefined;
+  'LocationStart8Hours': undefined;
+  'LocationHint': undefined;
+  'LocationManual': undefined;
+  'LocationManualLabel': undefined;
+  'LocationManualInvalid': undefined;
+  'LocationUnavailable': undefined;
+  'NoteSendTitle': undefined;
+  'NoteSendHow': undefined;
+  'NoteSendAsArticle': undefined;
+  'NoteSendAsFile': undefined;
+  'NoteSendArticleHint': undefined;
+  'NoteSendFileHint': undefined;
+  'NoteSendPick': undefined;
+  'NoteSendNoFolder': undefined;
+  'ParvaneGroupTypeClosed': undefined;
+  'ParvaneGroupTypePublic': undefined;
+  'ParvaneChannelTypeClosed': undefined;
+  'ParvaneChannelTypePublic': undefined;
+  'ParvaneGroupType': undefined;
+  'ParvaneChannelType': undefined;
+  'ParvaneGroupInfoAbout': undefined;
+  'ParvaneGroupInfoServerName': undefined;
+  'ParvaneGroupInfoInviteLink': undefined;
+  'ParvaneGroupInfoLinkCopied': undefined;
+  'ParvaneGroupInfoShared': undefined;
+  'ParvaneChannelInfoShared': undefined;
+  'ParvaneGroupInfoMedia': undefined;
+  'ParvaneGroupLeave': undefined;
+  'ParvaneChannelLeave': undefined;
+  'ParvaneGroupServerName': undefined;
+  'ParvaneChannelServerName': undefined;
+  'ParvaneTypeAccess': undefined;
+  'ParvaneTypeProtection': undefined;
+  'ParvaneTypeL2Public': undefined;
+  'ParvaneJoinRequestAccept': undefined;
+  'ParvaneJoinRequestDecline': undefined;
+  'ParvaneJoinRequestsHint': undefined;
+  'ParvaneNewGroupStep1': undefined;
+  'ParvaneNewChannelStep1': undefined;
+  'ParvaneNewGroupStep2': undefined;
+  'ParvaneNewChannelStep2': undefined;
+  'ParvaneNewGroupStep1Hint': undefined;
+  'ParvaneNewChannelStep1Hint': undefined;
+  'ParvaneNewChatNext': undefined;
+  'ParvaneNewChatCreate': undefined;
+  'ParvaneNewChatSearchPlaceholder': undefined;
+  'ParvaneNewChatType': undefined;
+  'ParvaneNewChannelPublicInfo': undefined;
+  'ParvaneRecoveryKeyCaption': undefined;
+  'ParvaneRecoveryKeyRenew': undefined;
+  'ParvaneRecoveryKeyRenewHint': undefined;
+  'ParvaneRecoveryKeyAbout': undefined;
+  'ParvaneKeysBundleCaption': undefined;
+  'ParvaneKeysBundleChats': undefined;
+  'ParvaneKeysBundleFiles': undefined;
+  'ParvaneKeysBundlePlanner': undefined;
+  'ParvaneKeysBundleHealth': undefined;
+  'ParvaneKeysBundleMusic': undefined;
+  'ParvaneKeysBundleGroups': undefined;
+  'ParvaneKeysBundleYes': undefined;
+  'ParvaneKeysBundleNo': undefined;
+  'ParvaneKeysBundleNone': undefined;
+  'ParvaneKeysBundleHint': undefined;
+  'ParvaneRenewKeyText': undefined;
+  'ParvaneRenewKeyAction': undefined;
+  'ParvaneRenewKeyDone': undefined;
+  'ParvaneRenewKeyDoneTelegram': undefined;
+  'ParvaneHelpSearch': undefined;
+  'ParvaneHelpNothing': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -6381,6 +6474,27 @@ export interface LangPairWithVariables<V = LangVariable> {
   'MessageSendFailedReason': {
     'reason': V;
   };
+  'TaskOfferFor': {
+    'name': V;
+  };
+  'SendPickerFromFiles': {
+    'size': V;
+  };
+  'FileEncryptingSending': {
+    'percent': V;
+  };
+  'LocationLiveLeft': {
+    'time': V;
+  };
+  'LocationAccuracy': {
+    'meters': V;
+  };
+  'NoteSendTo': {
+    'chat': V;
+  };
+  'NoteSendNamed': {
+    'title': V;
+  };
 }
 
 export interface LangPairPlural {
@@ -6964,6 +7078,21 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'ParvaneContactsCount': {
+    'count': V;
+  };
+  'SendPickerSendTo': {
+    'count': V;
+  };
+  'SendPickerMessages': {
+    'count': V;
+  };
+  'SendPickerFiles': {
+    'count': V;
+  };
+  'ParvaneGroupInfoSubtitle': {
+    'count': V;
+  };
+  'ParvaneChannelInfoSubtitle': {
     'count': V;
   };
 }

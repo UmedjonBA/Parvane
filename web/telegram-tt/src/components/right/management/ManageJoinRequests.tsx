@@ -4,17 +4,15 @@ import { getActions, withGlobal } from '../../../global';
 
 import type { ApiChat } from '../../../api/types';
 
-import { STICKER_SIZE_JOIN_REQUESTS } from '../../../config';
 import { isChatChannel } from '../../../global/helpers';
 import { selectChat } from '../../../global/selectors';
 import { isUserId } from '../../../util/entities/ids';
-import { LOCAL_TGS_URLS } from '../../common/helpers/animatedAssets';
 
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
+import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
-import AnimatedIconWithPreview from '../../common/AnimatedIconWithPreview';
 import Island, { IslandDescription } from '../../gili/layout/Island';
 import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
@@ -44,6 +42,7 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
   const [isRejectAllDialogOpen, openRejectAllDialog, closeRejectAllDialog] = useFlag();
 
   const lang = useOldLang();
+  const newLang = useLang();
 
   useHistoryBack({
     isActive,
@@ -69,47 +68,40 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management ManageJoinRequests">
       <div className="custom-scroll">
-        <Island>
-          <AnimatedIconWithPreview
-            tgsUrl={LOCAL_TGS_URLS.JoinRequest}
-            size={STICKER_SIZE_JOIN_REQUESTS}
-            className="section-icon"
-          />
-          {Boolean(chat?.joinRequests?.length) && (
-            <div className="bulk-actions">
-              <Button className="bulk-action-button" onClick={openAcceptAllDialog}>
-                {lang('ParvaneJoinRequestsAcceptAll')}
-              </Button>
-              <Button className="bulk-action-button" onClick={openRejectAllDialog} isText>
-                {lang('ParvaneJoinRequestsDismissAll')}
-              </Button>
-            </div>
-          )}
-        </Island>
+        {/* Parvane: заявки по доске `RpPick` — «Принять все / Отклонить все» сверху, строки с кнопками под именем */}
+        {Boolean(chat?.joinRequests?.length) && (
+          <div className="bulk-actions">
+            <Button className="bulk-action-button" onClick={openAcceptAllDialog}>
+              {lang('ParvaneJoinRequestsAcceptAll')}
+            </Button>
+            <Button className="bulk-action-button bulk-action-danger" onClick={openRejectAllDialog}>
+              {lang('ParvaneJoinRequestsDismissAll')}
+            </Button>
+          </div>
+        )}
         <Island teactFastList>
-          <p key="title">
-            {!chat?.joinRequests ? lang('Loading') : chat.joinRequests.length
-              ? lang('JoinRequests', chat.joinRequests.length) : lang('NoMemberRequests')}
-          </p>
           {!chat?.joinRequests && (
             <ParvaneMascot key="loading" />
           )}
           {chat?.joinRequests?.length === 0 && (
-            <IslandDescription key="empty">
-              {isChannel ? lang('NoSubscribeRequestsDescription') : lang('NoMemberRequestsDescription')}
-            </IslandDescription>
+            <div key="empty" className="join-requests-empty">
+              <p className="join-requests-empty-title">{lang('NoMemberRequests')}</p>
+              <IslandDescription>
+                {isChannel ? lang('NoSubscribeRequestsDescription') : lang('NoMemberRequestsDescription')}
+              </IslandDescription>
+            </div>
           )}
           {chat?.joinRequests?.map(({ userId, about, date }) => (
             <JoinRequest
               userId={userId}
               about={about}
               date={date}
-              isChannel={isChannel}
               chatId={chatId}
               key={userId}
             />
           ))}
         </Island>
+        <IslandDescription>{newLang('ParvaneJoinRequestsHint')}</IslandDescription>
       </div>
       <ConfirmDialog
         isOpen={isAcceptAllDialogOpen}

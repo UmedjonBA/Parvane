@@ -6,15 +6,16 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  relogin,
   LOGIN_TIMEOUT_MS,
+  relogin,
   findMessage,
   findMessageContainers,
   openPrivateChat,
-  preparePage,
-  sendText,
   openProfile,
   openSettingsScreen,
+  preparePage,
+  sendLocation,
+  sendText,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-content-e2e-password';
@@ -91,9 +92,7 @@ try {
   await bobSession.page.locator('.SymbolMenu').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
 
   // ── Геолокация: статичная точка ────────────────────────────────────────────
-  await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-  await aliceSession.page.getByRole('menuitem', { name: 'Current location' }).click();
+  await sendLocation(aliceSession.page);
   await bobSession.page.locator('.Transition_slide-active > .MessageList .Message .Location')
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

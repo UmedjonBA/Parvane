@@ -1,10 +1,11 @@
-import { memo, useState } from '../../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../../global';
 
 import buildClassName from '../../../../util/buildClassName';
 import { openNote } from '../../../../util/parvaneSection';
 import { buildGuide, getGuideLang } from '../../../parvane/notes/notesGuide';
 import { loadNotes, restoreGuide } from '../../../parvane/notes/notesStore';
+import { searchHelp } from './helpSearch';
 
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
@@ -28,10 +29,17 @@ const SettingsHelp = ({ isActive, onReset }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const [isRestoring, setIsRestoring] = useState(false);
+  const [query, setQuery] = useState('');
 
   useHistoryBack({ isActive, onBack: onReset });
 
-  const guide = buildGuide(getGuideLang(lang.code));
+  const guide = useMemo(() => buildGuide(getGuideLang(lang.code)), [lang.code]);
+  const matches = useMemo(() => searchHelp(guide.notes, query), [guide, query]);
+  const numberOf = (key: string) => guide.notes.findIndex((note) => note.key === key) + 1;
+
+  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.currentTarget.value);
+  });
 
   const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const { title } = e.currentTarget.dataset;
@@ -56,22 +64,39 @@ const SettingsHelp = ({ isActive, onReset }: OwnProps) => {
   return (
     <div className={buildClassName('settings-content custom-scroll', profile.screen)} data-settings-help>
       <div className={profile.hint}>{lang('ParvaneHelpHint', { folder: guide.folderName })}</div>
-      <div className={profile.group}>
-        {guide.notes.map((note, index) => (
-          <button
-            key={note.key}
-            type="button"
-            className={buildClassName(profile.setRow, profile.setRowAction)}
-            data-help-note={note.key}
-            data-title={note.title}
-            onClick={handleOpen}
-          >
-            <span className={styles.helpNumber}>{index + 1}</span>
-            <span className={profile.setTitle}>{note.title}</span>
-            <ProfileIcon name="right" isSmall className={profile.menuChevron} />
-          </button>
-        ))}
+      <div className={styles.screen}>
+        <input
+          type="search"
+          className={kit.input}
+          value={query}
+          placeholder={lang('ParvaneHelpSearch')}
+          aria-label={lang('ParvaneHelpSearch')}
+          data-help-search
+          onChange={handleQuery}
+        />
       </div>
+      {!matches.length && <div className={profile.hint} data-help-nothing>{lang('ParvaneHelpNothing')}</div>}
+      {Boolean(matches.length) && (
+        <div className={profile.group}>
+          {matches.map(({ note, snippet }) => (
+            <button
+              key={note.key}
+              type="button"
+              className={buildClassName(profile.setRow, profile.setRowAction)}
+              data-help-note={note.key}
+              data-title={note.title}
+              onClick={handleOpen}
+            >
+              <span className={styles.helpNumber}>{numberOf(note.key)}</span>
+              <span className={profile.setText}>
+                <span className={profile.setTitle}>{note.title}</span>
+                {snippet && <span className={profile.setHint} data-help-snippet>{snippet}</span>}
+              </span>
+              <ProfileIcon name="right" isSmall className={profile.menuChevron} />
+            </button>
+          ))}
+        </div>
+      )}
       <div className={styles.screen}>
         <button
           type="button"

@@ -182,33 +182,27 @@
   }
 
   .geo-countdown {
-    position: relative;
-    grid-area: 1 / 2 / 3 / 3;
-    width: 2rem;
-    height: 2rem;
+    white-space: nowrap;
   }
+}
 
-  .geo-countdown-text {
-    position: absolute;
-    top: 50%;
-    left: 0;
-    transform: translateY(-50%);
-
+// Трансляция места (доска `ZpChat`): карта низкой полосой 96 px, точка по центру
+.Location--live {
+  .map-wrapper {
     width: 100%;
-
-    font-size: 0.875rem;
-    font-weight: var(--font-weight-medium);
-    line-height: 1;
-    color: var(--accent-color);
-    text-align: center;
+    height: 6rem;
   }
 
-  .geo-countdown-progress {
-    fill: transparent;
-    stroke: var(--accent-color);
-    stroke-linecap: round;
-    stroke-width: 2;
+  .map {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover;
+  }
 
-    transition: stroke-dashoffset 2s, stroke 0.2s;
+  // Метка с кружком автора уменьшена под низкую карту; основание метки — на точке
+  .pin {
+    top: 80%;
+    transform-origin: 50% 100%;
+    transform: translate(-50%, -100%) scale(0.6);
   }
 }

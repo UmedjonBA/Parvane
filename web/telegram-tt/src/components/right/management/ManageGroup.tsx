@@ -26,17 +26,14 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 import useOldLang from '../../../hooks/useOldLang';
-import useParvaneChatL2 from '../../../hooks/useParvaneChatL2';
 
-import Island, { IslandDescription } from '../../gili/layout/Island';
-import Switch from '../../gili/primitives/Switch';
+import Island from '../../gili/layout/Island';
 import AvatarEditable from '../../ui/AvatarEditable';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 import TextArea from '../../ui/TextArea';
-import ManageJoinMode from './ManageJoinMode';
 
 import './Management.scss';
 
@@ -126,9 +123,6 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   const currentAvatarBlobUrl = useMedia(imageHash, false, ApiMediaFormat.BlobUrl);
   const isPublicGroup = useMemo(() => isChatPublic(chat), [chat]);
   const lang = useOldLang();
-  // Parvane: политика «усиленная приватность» (L2) группы протокола v2 —
-  // меняет тот, кто вправе менять сведения группы
-  const [groupL2, handleToggleL2] = useParvaneChatL2(canChangeInfo ? chatId : undefined, 'isActive');
 
   useHistoryBack({
     isActive,
@@ -287,7 +281,9 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               />
             )}
           </div>
-          {IS_GROUP_TYPE_SUPPORTED && chat.isCreator && (
+          {/* Parvane: «Тип группы» (доска `XpChat`) несёт и доступ (вступление по заявке), и защиту (усиленная
+              приватность) — открывает его и админ с правом приглашать или менять сведения */}
+          {IS_GROUP_TYPE_SUPPORTED && (chat.isCreator || canInvite || canChangeInfo) && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('GroupType')}</span>
               <span className="subtitle">{isPublicGroup ? lang('TypePublic') : lang('TypePrivate')}</span>
@@ -329,7 +325,6 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               </span>
             </ListItem>
           )}
-          {canInvite && <ManageJoinMode chatId={chatId} exportedInvites={exportedInvites} />}
           {IS_GROUP_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
               icon="add-user-filled"
@@ -341,15 +336,6 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
                 {formatInteger(chat.joinRequests.length)}
               </span>
             </ListItem>
-          )}
-          {groupL2?.isAvailable && (
-            <>
-              <ListItem icon="lock" ripple onClick={handleToggleL2}>
-                <span>{lang('ParvaneL2Toggle')}</span>
-                <Switch checked={Boolean(groupL2.isActive)} />
-              </ListItem>
-              <IslandDescription>{lang('ParvaneL2Info')}</IslandDescription>
-            </>
           )}
         </Island>
         <Island>

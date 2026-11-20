@@ -1,4 +1,4 @@
-import { memo, useState } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
 
 import buildClassName from '../../../util/buildClassName';
@@ -11,6 +11,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
+import { DeviceKeyDialog } from './devices/DeviceDialogs';
 import ProfileIcon from './profile/ProfileIcon';
 
 import styles from './profile/Profile.module.scss';
@@ -20,8 +21,26 @@ type OwnProps = {
   onReset: NoneToVoidFunction;
 };
 
-const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
+// Состав копии ключей аккаунта на сервере (`v2/keyBundle.ts describeKeyBundle`)
+type KeyBundleContents = {
+  hasChats: boolean;
+  hasFiles: boolean;
+  hasPlanner: boolean;
+  hasHealth: boolean;
+  hasMusic: boolean;
+  groups: number;
+};
+
+const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 const KEYS_PASSWORD_MIN_LENGTH = 8;
+// «Что в копии»: строка — признак состава и её название
+const BUNDLE_ROWS = [
+  { part: 'chats', key: 'ParvaneKeysBundleChats' },
+  { part: 'files', key: 'ParvaneKeysBundleFiles' },
+  { part: 'planner', key: 'ParvaneKeysBundlePlanner' },
+  { part: 'health', key: 'ParvaneKeysBundleHealth' },
+  { part: 'music', key: 'ParvaneKeysBundleMusic' },
+] as const;
 
 // Parvane (spec 041 E3): «Профиль → Копия ключей» (доски `RpProfileB`, `ZdProfileX`) — файл под паролем с
 // ключами и историей устройства. Прежде обе строки стояли на экране «Конфиденциальность»
@@ -33,7 +52,24 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
   const userId = getGlobal().currentUserId;
   const [savedAt, setSavedAt] = useState(() => getKeysBackupSavedAt(userId));
 
+  const [isRenewOpen, setIsRenewOpen] = useState(false);
+  const [contents, setContents] = useState<KeyBundleContents>();
+  const [isContentsLoaded, setIsContentsLoaded] = useState(false);
+
   useHistoryBack({ isActive, onBack: onReset });
+
+  const loadContents = useLastCallback(async () => {
+    const result = await callParvane('parvaneKeyBundleContents') as KeyBundleContents | undefined;
+    setContents(result);
+    setIsContentsLoaded(true);
+  });
+
+  useEffect(() => {
+    if (isActive) void loadContents();
+  }, [isActive, loadContents]);
+
+  const openRenew = useLastCallback(() => setIsRenewOpen(true));
+  const closeRenew = useLastCallback(() => setIsRenewOpen(false));
 
   const handleExport = useLastCallback(async () => {
     const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
@@ -98,8 +134,55 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
           <ProfileIcon name="right" isSmall className={styles.menuChevron} />
         </button>
       </div>
+
+      <div className={styles.caption}>{lang('ParvaneRecoveryKeyCaption')}</div>
+      <div className={styles.group}>
+        <button type="button" className={rowClass} data-keys-action="renew" onClick={openRenew}>
+          <span className={styles.setText}>
+            <span className={styles.setTitle}>{lang('ParvaneRecoveryKeyRenew')}</span>
+            <span className={styles.setHint}>{lang('ParvaneRecoveryKeyRenewHint')}</span>
+          </span>
+          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+        </button>
+      </div>
+      <div className={styles.hint}>{lang('ParvaneRecoveryKeyAbout')}</div>
+
+      <div className={styles.caption}>{lang('ParvaneKeysBundleCaption')}</div>
+      {contents ? (
+        <div className={styles.group} data-keys-bundle>
+          {BUNDLE_ROWS.map(({ part, key }) => (
+            <div key={part} className={styles.setRow} data-bundle-part={part}>
+              <span className={styles.setTitle}>{lang(key)}</span>
+              <span className={styles.setValue}>
+                {lang(hasPart(contents, part) ? 'ParvaneKeysBundleYes' : 'ParvaneKeysBundleNo')}
+              </span>
+            </div>
+          ))}
+          <div className={styles.setRow} data-bundle-part="groups">
+            <span className={styles.setTitle}>{lang('ParvaneKeysBundleGroups')}</span>
+            <span className={styles.setValue}>{contents.groups}</span>
+          </div>
+        </div>
+      ) : (
+        <div className={styles.hint} data-keys-bundle-none={isContentsLoaded || undefined}>
+          {lang(isContentsLoaded ? 'ParvaneKeysBundleNone' : 'Loading')}
+        </div>
+      )}
+      <div className={styles.hint}>{lang('ParvaneKeysBundleHint')}</div>
+
+      <DeviceKeyDialog mode={isRenewOpen ? 'renew' : undefined} onClose={closeRenew} onDone={loadContents} />
     </div>
   );
 };
+
+function hasPart(contents: KeyBundleContents, part: typeof BUNDLE_ROWS[number]['part']) {
+  switch (part) {
+    case 'chats': return contents.hasChats;
+    case 'files': return contents.hasFiles;
+    case 'planner': return contents.hasPlanner;
+    case 'health': return contents.hasHealth;
+    default: return contents.hasMusic;
+  }
+}
 
 export default memo(SettingsKeysBackup);

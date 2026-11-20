@@ -1,10 +1,13 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { getActions, getGlobal } from '../../../global';
 
-import type { ApiArticle } from '../../../api/types';
+import type { ApiArticle, ApiMessage } from '../../../api/types';
 import type { MdBlock } from '../../parvane/markdown/markdown';
 
+import { getChatTitle, getUserFirstOrLastName } from '../../../global/helpers';
+import { selectChat, selectUser } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
+import { isUserId } from '../../../util/entities/ids';
 import { getReadingMinutes } from '../../parvane/article/articleReadingTime';
 import { saveArticleToNotes } from '../../parvane/article/articleSave';
 import { inlineText, parseMarkdown } from '../../parvane/markdown/markdown';
@@ -22,6 +25,7 @@ import styles from './ArticleCard.module.scss';
 
 type OwnProps = {
   article: ApiArticle;
+  message: ApiMessage;
 };
 
 const PREVIEW_LINES = 3;
@@ -29,8 +33,8 @@ const PREVIEW_MAX_LENGTH = 220;
 
 // Parvane (ARTICLE-1): статья в чате — карточка с началом текста, «Читать» и «В заметки» (доска `ZpChat`);
 // замена «Статьи» Telegram, где вместо редактора статей — заметки
-const ArticleCard = ({ article }: OwnProps) => {
-  const { showNotification } = getActions();
+const ArticleCard = ({ article, message }: OwnProps) => {
+  const { showNotification, openForwardMenu } = getActions();
   const lang = useLang();
   const [isOpen, open, close] = useFlag();
   const [isSaving, setIsSaving] = useState(false);
@@ -48,6 +52,21 @@ const ArticleCard = ({ article }: OwnProps) => {
       setIsSaving(false);
     }
   });
+
+  const handleForward = useLastCallback(() => {
+    close();
+    openForwardMenu({ fromChatId: message.chatId, messageIds: [message.id] });
+  });
+
+  // «Тимур · Linux-чат»: автор и, в группе, её название (родительного падежа имени у нас нет)
+  const subtitle = useMemo(() => {
+    if (!isOpen) return undefined;
+    const global = getGlobal();
+    const sender = message.senderId ? selectUser(global, message.senderId) : undefined;
+    const author = message.isOutgoing ? lang('ArticleFromYou') : getUserFirstOrLastName(sender) || '';
+    const chat = selectChat(global, message.chatId);
+    return chat && !isUserId(chat.id) ? `${author} · ${getChatTitle(lang, chat)}` : author;
+  }, [isOpen, message, lang]);
 
   // «Заметки» выключены на устройстве: кнопка ведёт в лист «Модуль выключен», после включения статья сохраняется
   const handleSaveClick = useLastCallback(() => gate.run(handleSave));
@@ -84,6 +103,9 @@ const ArticleCard = ({ article }: OwnProps) => {
         title={article.title}
         markdown={article.markdown}
         media={article.media}
+        subtitle={subtitle}
+        date={message.date}
+        onForward={handleForward}
         onClose={close}
       />
       <PvModuleOff

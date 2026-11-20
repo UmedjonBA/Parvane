@@ -95,7 +95,7 @@ export type CloudResult<T = object> = ({ ok: true } & T) | { ok: false; error: C
 
 export type CloudMoveItem = { id: string; name: string };
 export type CloudChatFile = { fileId: string; name: string; mime: string; size: number };
-type SentFile = CloudBlobKeys & { fileId: string; name: string; mime: string; size: number };
+type SentFile = CloudBlobKeys & { fileId: string; name: string; mime: string; size: number; caption?: string };
 
 type Deps = {
   log: (message: string) => void;
@@ -1412,8 +1412,10 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     },
 
     /** Файлы облака — в чат: копия блоба в медиа чатов и сообщение-файл. */
-    async parvaneCloudSendToChat({ container, nodes, chatId }: {
-      container: string; nodes: string[]; chatId: string;
+    async parvaneCloudSendToChat({
+      container, nodes, chatId, caption,
+    }: {
+      container: string; nodes: string[]; chatId: string; caption?: string;
     }): Promise<CloudResult<{ sent: number }>> {
       let sent = 0;
       try {
@@ -1437,6 +1439,8 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
             name: found.name,
             mime: found.mime || 'application/octet-stream',
             size: found.size,
+            // Подпись — у первого файла, как у альбома
+            caption: sent === 0 ? caption : undefined,
           });
           if (!isSent) throw new V2Error('ERROR_CODE_NOT_FOUND');
           sent += 1;

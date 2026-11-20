@@ -915,6 +915,7 @@ function buildMessageContent(
           size: content.size_bytes || 0,
           mimeType: content.mime || 'application/octet-stream',
           timestamp: ts,
+          isFromCloud: content.from_cloud || undefined,
         },
       };
     case 'poll':

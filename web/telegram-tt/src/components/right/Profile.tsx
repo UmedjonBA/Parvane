@@ -26,6 +26,7 @@ import { MAIN_THREAD_ID } from '../../api/types';
 import { AudioOrigin, LoadMoreDirection, MediaViewerOrigin, NewChatMembersProgress } from '../../types';
 
 import { MEMBERS_SLICE, PROFILE_SENSITIVE_AREA, SHARED_MEDIA_SLICE, SLIDE_TRANSITION_DURATION } from '../../config';
+import { requestMutation } from '../../lib/fasterdom/fasterdom';
 import {
   getHasAdminRight,
   getIsDownloading,
@@ -124,6 +125,7 @@ import TabList, { type TabWithProperties } from '../ui/TabList';
 import Transition from '../ui/Transition';
 import DeleteMemberModal from './DeleteMemberModal';
 import StarGiftCollectionList from './gifts/StarGiftCollectionList';
+import GroupInfo from './groupInfo/GroupInfo';
 import StoryAlbumList from './stories/StoryAlbumList';
 
 import styles from './Profile.module.scss';
@@ -142,6 +144,7 @@ type StateProps = {
   monoforumChannel?: ApiChat;
   theme: ThemeKey;
   isChannel?: boolean;
+  isGroupProfile?: boolean;
   isBot?: boolean;
   currentUserId?: string;
   messagesById?: Record<number, ApiMessage>;
@@ -275,6 +278,7 @@ const Profile = ({
   theme,
   monoforumChannel,
   isChannel,
+  isGroupProfile,
   isBot,
   currentUserId,
   messagesById,
@@ -740,6 +744,14 @@ const Profile = ({
     }];
   });
 
+  // Parvane: «Файлы и медиа» в сведениях группы — вкладка медиа и прокрутка к вкладкам
+  const handleOpenMedia = useLastCallback(() => {
+    setActiveTab('media');
+    requestMutation(() => {
+      containerRef.current?.querySelector('.shared-media-tabs')?.scrollIntoView({ block: 'start' });
+    });
+  });
+
   const handleDeleteMembersModalClose = useLastCallback(() => {
     setDeletingUserId(undefined);
   });
@@ -753,7 +765,7 @@ const Profile = ({
     onOverscroll: handleExpandProfile,
     onReset: handleCollapseProfile,
     isOverscrolled: isProfileExpanded,
-    isDisabled: !hasAvatar || !shouldRenderProfileInfo,
+    isDisabled: !hasAvatar || !shouldRenderProfileInfo || isGroupProfile,
   });
 
   useEffect(() => {
@@ -1336,10 +1348,15 @@ const Profile = ({
       ref={containerRef}
       scrollable
       noPadding
-      className={buildClassName(styles.root, 'Profile', isGeneralSavedMessages && 'is-saved-messages')}
+      className={buildClassName(
+        styles.root, 'Profile', isGeneralSavedMessages && 'is-saved-messages', isGroupProfile && 'pv-group-profile',
+      )}
       onScroll={handleScroll}
     >
-      {!noProfileInfo && !isSavedMessages && (
+      {!noProfileInfo && !isSavedMessages && isGroupProfile && (
+        <GroupInfo chatId={profileId} onOpenMedia={handleOpenMedia} />
+      )}
+      {!noProfileInfo && !isSavedMessages && !isGroupProfile && (
         renderProfileInfo(
           monoforumChannel?.id || profileId,
           isRightColumnShown && canRenderContent,
@@ -1428,6 +1445,8 @@ export default memo(withGlobal<OwnProps>(
 
     const isGroup = chat && isChatGroup(chat);
     const isChannel = chat && isChatChannel(chat);
+    // Parvane: сведения группы и канала — свой блок по доске `ZpChat2` (`groupInfo/GroupInfo.tsx`)
+    const isGroupProfile = Boolean(chat && (isGroup || isChannel) && !isTopicInfo && !chat.isMonoforum);
     const isBot = user && isUserBot(user);
     const hasMembersTab = !isTopicInfo && !isSavedDialog && isGroup && !chat?.isMonoforum;
     const members = chatFullInfo?.members;
@@ -1480,6 +1499,7 @@ export default memo(withGlobal<OwnProps>(
     return {
       theme: selectTheme(global),
       isChannel,
+      isGroupProfile,
       isBot,
       messagesById,
       foundIds,

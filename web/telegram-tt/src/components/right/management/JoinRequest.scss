@@ -1,27 +1,27 @@
+// Parvane: заявка на вступление по доске `RpPick` — аватар 36 px, имя и «@ник · когда», под ними «Принять» и
+// «Отклонить» тихими кнопками в половину ширины; строки разделены линией
 .JoinRequest {
   display: flex;
   flex-direction: column;
-  padding: 1rem 0;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem 0.75rem;
 
   &:not(:last-child) {
-    border-bottom: 1px solid var(--color-borders);
+    border-bottom: 1px solid var(--pv-line);
   }
 
   &__top {
     cursor: var(--custom-cursor, pointer);
     display: flex;
-    padding: 0.5rem;
-    border-radius: 0.5rem;
-
-    &:hover {
-      background-color: var(--color-chat-hover);
-    }
   }
 
   &__user {
     overflow: hidden;
     display: flex;
     flex-grow: 1;
+    gap: 0.75rem;
+    align-items: center;
+
     min-width: 0;
   }
 
@@ -30,39 +30,88 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-
-    margin-left: 1rem;
   }
 
   &__user-subtitle {
     overflow: hidden;
-    color: var(--color-text-secondary);
+
+    font-size: var(--pv-font-size-caption);
+    color: var(--pv-muted);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   &__user-name {
     overflow: hidden;
+    font-weight: var(--font-weight-medium);
     text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__date {
-    margin-left: 1rem;
-    font-size: 0.875rem;
-    color: var(--color-text-secondary);
     white-space: nowrap;
   }
 
   &__buttons {
     display: flex;
     gap: 0.5rem;
-    justify-content: space-evenly;
-    margin-top: 1rem;
+    padding-inline-start: 3rem;
   }
 
-  &__button {
+  &__button.Button {
+    flex: 1 1 0;
+
     width: auto;
-    height: auto;
+    height: 2.25rem;
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius);
+
+    font-size: var(--pv-font-size-small);
+    font-weight: var(--font-weight-medium);
+    color: var(--pv-fg);
+    text-transform: none;
+
+    background: var(--pv-raised);
+
+    &:hover {
+      background: var(--pv-hover);
+    }
+  }
+}
+
+.ManageJoinRequests {
+  .bulk-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem 0;
+  }
+
+  .bulk-action-button.Button {
+    flex: 1 1 0;
+
+    width: auto;
+    height: var(--pv-button-height);
+    border: 1px solid var(--pv-line2);
+    border-radius: var(--pv-radius);
+
+    font-size: var(--pv-font-size);
+    font-weight: var(--font-weight-medium);
+    color: var(--pv-fg);
+    text-transform: none;
+
+    background: var(--pv-raised);
+
+    &:hover {
+      background: var(--pv-hover);
+    }
+  }
+
+  .bulk-action-danger.Button {
+    color: var(--pv-red);
+  }
+
+  .join-requests-empty {
+    padding: 0.875rem 1rem 0.5rem;
+  }
+
+  .join-requests-empty-title {
+    margin: 0;
+    font-weight: var(--font-weight-medium);
   }
 }

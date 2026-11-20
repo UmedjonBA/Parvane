@@ -9,11 +9,11 @@ import { unique } from '../../../util/iteratees';
 import sortChatIds from '../../common/helpers/sortChatIds';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
+import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
 import PeerPicker from '../../common/pickers/PeerPicker';
 import Button from '../../ui/Button';
-import FloatingActionButton from '../../ui/FloatingActionButton';
 
 export type OwnProps = {
   isChannel?: boolean;
@@ -50,6 +50,7 @@ const NewChatStep1: FC<OwnProps & StateProps> = ({
   } = getActions();
 
   const lang = useOldLang();
+  const newLang = useLang();
 
   useHistoryBack({
     isActive,
@@ -91,23 +92,37 @@ const NewChatStep1: FC<OwnProps & StateProps> = ({
 
   return (
     <div className="NewChat step-1">
-      <div className="left-header">
+      {/* Parvane: шапка по доске `ZpChat2` — «Новая группа · шаг 1 из 2 · участники» и «Далее» текстом */}
+      <div className="left-header pv-new-chat-header">
         <Button
           round
           size="smaller"
           color="translucent"
           onClick={onReset}
           ariaLabel="Return to Chat List"
-          iconName="arrow-left"
+          iconName="close"
         />
-        <h3>{lang('GroupAddMembers')}</h3>
+        <div className="pv-new-chat-title">
+          <h3 className="pv-new-chat-heading">{lang(isChannel ? 'NewChannel' : 'NewGroup')}</h3>
+          <span className="pv-new-chat-step">
+            {newLang(isChannel ? 'ParvaneNewChannelStep1' : 'ParvaneNewGroupStep1')}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="pv-new-chat-action"
+          aria-label={isChannel ? 'Continue To Channel Info' : 'Continue To Group Info'}
+          onClick={handleNextStep}
+        >
+          {newLang('ParvaneNewChatNext')}
+        </button>
       </div>
       <div className="NewChat-inner step-1">
         <PeerPicker
           itemIds={displayedIds}
           selectedIds={selectedMemberIds}
           filterValue={searchQuery}
-          filterPlaceholder={lang('SendMessageTo')}
+          filterPlaceholder={newLang('ParvaneNewChatSearchPlaceholder')}
           searchInputId="new-group-picker-search"
           isLoading={isSearching}
           isSearchable
@@ -118,13 +133,9 @@ const NewChatStep1: FC<OwnProps & StateProps> = ({
           onSelectedIdsChange={onSelectedMemberIdsChange}
           onFilterChange={handleFilterChange}
         />
-
-        <FloatingActionButton
-          isShown
-          onClick={handleNextStep}
-          ariaLabel={isChannel ? 'Continue To Channel Info' : 'Continue To Group Info'}
-          iconName="arrow-right"
-        />
+        <p className="pv-new-chat-hint">
+          {newLang(isChannel ? 'ParvaneNewChannelStep1Hint' : 'ParvaneNewGroupStep1Hint')}
+        </p>
       </div>
     </div>
   );

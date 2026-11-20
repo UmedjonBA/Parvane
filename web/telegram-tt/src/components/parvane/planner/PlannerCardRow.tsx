@@ -32,6 +32,11 @@ export const PlannerCardRow = ({ icon, row, children }: RowProps) => (
   </div>
 );
 
+// Подпись группы строк карточки на телефоне («Повтор и напоминание», доска `PhPlanMore`); на компьютере скрыта
+export const PlannerCardCaption = ({ children }: { children: TeactNode }) => (
+  <div className={styles.cardCaption} data-card-caption>{children}</div>
+);
+
 type RepeatProps = {
   value: PlannerRepeatDraft;
   onChange: (update: (previous: PlannerRepeatDraft) => PlannerRepeatDraft) => void;
@@ -59,6 +64,8 @@ const PlannerRepeatRowInner = ({ value, onChange, children }: RepeatProps) => {
         data-repeat-toggle
         onClick={handleToggle}
       >
+        {/* Подпись строки видна только строкой настроек на телефоне */}
+        <span className={styles.cardRowButtonLabel}>{lang('PlannerRepeatLabel')}</span>
         <span className={styles.cardRowButtonText}>
           {repeat ? formatRepeat(lang, repeat) : lang('PlannerRepeatKindNone')}
         </span>

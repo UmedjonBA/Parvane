@@ -319,3 +319,36 @@ export async function digestHex(text: string): Promise<string> {
 export function buildBundleMark(payload: KeyBundlePayload): Promise<string> {
   return digestHex(JSON.stringify(payload));
 }
+
+// Состав копии ключей аккаунта для экрана «Копия ключей» (доска `ZdProfileX`, «Что в копии»)
+export type KeyBundleContents = {
+  // Ключи устройства и переписки (материал привязки)
+  hasChats: boolean;
+  hasFiles: boolean;
+  hasPlanner: boolean;
+  hasHealth: boolean;
+  hasMusic: boolean;
+  groups: number;
+};
+
+export function describeKeyBundle(payload: KeyBundlePayload): KeyBundleContents {
+  return {
+    hasChats: Boolean(payload.grant),
+    hasFiles: countExported(payload.cloud) > 0,
+    hasPlanner: countExported(payload.planner) > 0,
+    hasHealth: countExported(payload.health) > 0,
+    hasMusic: countExported(payload.music) > 0,
+    groups: countExported(payload.groups),
+  };
+}
+
+// Ключи модуля в копии — JSON-массив либо объект движка; пусто, `[]`, `null` и нечитаемое — ключей нет
+function countExported(json?: string) {
+  if (!json) return 0;
+  try {
+    const value = JSON.parse(json) as unknown;
+    return Array.isArray(value) ? value.length : value ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}

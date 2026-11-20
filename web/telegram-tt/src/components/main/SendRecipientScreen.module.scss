@@ -1,0 +1,105 @@
+// «Кому отправить» по доске `RpPick`: карточка того, что отправляется, поиск, строки чатов 60 px с галочкой справа
+
+.root :global(.modal-dialog) {
+  background: var(--pv-panel);
+}
+
+.top {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-raised);
+}
+
+.previewTitle {
+  overflow: hidden;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewSub {
+  overflow: hidden;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 3.75rem;
+  padding: 0 1rem;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.rowOn {
+  background: var(--pv-raised);
+}
+
+.rowText {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+}
+
+.rowTitle {
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowSub {
+  overflow: hidden;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.check {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+
+  accent-color: var(--pv-at);
+}

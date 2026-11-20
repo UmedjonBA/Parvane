@@ -45,6 +45,7 @@ export type V2Media = {
   title?: string;
   performer?: string;
   capability?: string;
+  from_cloud?: boolean;
 };
 export type V2Text = {
   text?: string;

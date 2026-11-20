@@ -22,7 +22,9 @@ import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
-import { PLANNER_SIDE_FORM_ID, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import {
+  PLANNER_SIDE_FORM_ID, PlannerCardCaption, PlannerCardRow, PlannerRepeatRow,
+} from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
@@ -288,28 +290,30 @@ const PlannerTaskForm = ({
         </PlannerCardRow>
       )}
 
+      {kind === 'task' && (
+        <PlannerCardRow icon="flag" row="status">
+          <Select
+            id="planner-new-status"
+            label={lang('PlannerFieldStatus')}
+            value={status}
+            hasArrow
+            onChange={handleStatusChange}
+          >
+            {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
+          </Select>
+        </PlannerCardRow>
+      )}
+
+      <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
       <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
+
+      <PlannerCardRow icon="schedule" row="remind">
+        <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
+      </PlannerCardRow>
 
       <PlannerCardRow icon="folder" row="group">
         <PlannerListPicker id="planner-new-list" state={state} value={project} onChange={setProject} />
         {kind === 'event' && !project && <PlannerColorSwatches value={eventColor} onChange={setEventColor} />}
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="schedule" row="remind">
-        <div className={buildClassName(kind === 'task' && styles.fields)}>
-          {kind === 'task' && (
-            <Select
-              id="planner-new-status"
-              label={lang('PlannerFieldStatus')}
-              value={status}
-              hasArrow
-              onChange={handleStatusChange}
-            >
-              {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
-            </Select>
-          )}
-          <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
-        </div>
       </PlannerCardRow>
 
       <PlannerCardRow icon="info" row="description">

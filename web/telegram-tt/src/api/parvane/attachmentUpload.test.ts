@@ -78,4 +78,16 @@ describe('attachment upload stream (perf A7)', () => {
     expect(fake.received.size).toBe(1);
     expect(fake.completed()?.chunks).toBe(1);
   });
+
+  it('reports the sent share after every chunk, ending at one (board `ZpChat`)', async () => {
+    const chunkBytes = 64 * 1024;
+    const source = createCipherSource(new Blob([new Uint8Array(200_000)]), new Uint8Array(32), new Uint8Array(12));
+    const fake = makeTransport();
+    const shares: number[] = [];
+    await uploadAttachmentStream(fake.transport, source, new Uint8Array(32), chunkBytes, (share) => shares.push(share));
+    const chunks = Math.ceil(source.cipherSize / chunkBytes);
+    expect(shares).toHaveLength(chunks);
+    expect(shares).toEqual([...shares].sort((a, b) => a - b));
+    expect(shares[shares.length - 1]).toBe(1);
+  });
 });

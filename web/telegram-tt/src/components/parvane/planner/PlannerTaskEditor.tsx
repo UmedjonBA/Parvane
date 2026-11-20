@@ -30,7 +30,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Icon from '../../common/icons/Icon';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
-import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import { PlannerCardCaption, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerFreeTime from './PlannerFreeTime';
@@ -305,8 +305,11 @@ const PlannerTaskEditor = ({
 
   const handleStepSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const text = stepText.trim();
+    // Текст — из поля: Enter сразу после набора приходит раньше перерисовки, и состояние ещё пустое
+    const input = e.currentTarget.querySelector('input');
+    const text = (input?.value ?? stepText).trim();
     if (!text) return;
+    if (input) input.value = '';
     const steps = [
       ...task.steps.map((step) => ({ text: step.text, isDone: isInstance ? false : step.isDone })),
       { text, isDone: false },
@@ -454,6 +457,19 @@ const PlannerTaskEditor = ({
         )}
       </PlannerCardRow>
 
+      <PlannerCardRow icon="flag" row="status">
+        <Select
+          id="planner-task-status"
+          label={lang('PlannerFieldStatus')}
+          value={task.status}
+          hasArrow
+          onChange={handleStatus}
+        >
+          {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
+        </Select>
+      </PlannerCardRow>
+
+      <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
       <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft}>
         {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
         <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
@@ -467,47 +483,18 @@ const PlannerTaskEditor = ({
         </button>
       )}
 
+      <PlannerCardRow icon="schedule" row="remind">
+        <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
+      </PlannerCardRow>
+
       <PlannerCardRow icon="folder" row="group">
         <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
       </PlannerCardRow>
 
-      <PlannerCardRow icon="schedule" row="status">
-        <div className={styles.fields}>
-          <Select
-            id="planner-task-status"
-            label={lang('PlannerFieldStatus')}
-            value={task.status}
-            hasArrow
-            onChange={handleStatus}
-          >
-            {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
-          </Select>
-          <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
-        </div>
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="info" row="description">
-        <TextArea
-          label={lang('PlannerFieldDescription')}
-          value={isInstance ? descriptionDraft : task.description}
-          onChange={handleDescription}
-        />
-        {descriptionScope && (
-          <PlannerDescriptionScope
-            scope={descriptionScope}
-            shouldConfirmAll={!isInstance}
-            onChange={handleDescriptionScope}
-          />
-        )}
-        {isInstance && descriptionDraft !== task.description && (
-          <button type="button" className={styles.btn} data-description-save onClick={handleDescriptionSave}>
-            {lang('PlannerDescriptionSave')}
-          </button>
-        )}
-      </PlannerCardRow>
-
       <PlannerCardRow icon="check" row="steps">
-        <span className={styles.fieldLabel}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</span>
+        <span className={buildClassName(styles.fieldLabel, styles.stepsCaption)}>
+          {lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}
+        </span>
         {task.steps.map((step, index) => (
           <label
             key={`${index}${step.text}`}
@@ -529,12 +516,33 @@ const PlannerTaskEditor = ({
             type="text"
             value={stepText}
             maxLength={STEP_MAX_LENGTH}
+            placeholder={lang('PlannerStepAdd')}
             onInput={setStepText}
           />
           <button type="submit" className={styles.ib} aria-label={lang('PlannerStepAdd')}>
             <Icon name="add" />
           </button>
         </form>
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="info" row="description">
+        <TextArea
+          label={lang('PlannerFieldDescription')}
+          value={isInstance ? descriptionDraft : task.description}
+          onChange={handleDescription}
+        />
+        {descriptionScope && (
+          <PlannerDescriptionScope
+            scope={descriptionScope}
+            shouldConfirmAll={!isInstance}
+            onChange={handleDescriptionScope}
+          />
+        )}
+        {isInstance && descriptionDraft !== task.description && (
+          <button type="button" className={styles.btn} data-description-save onClick={handleDescriptionSave}>
+            {lang('PlannerDescriptionSave')}
+          </button>
+        )}
       </PlannerCardRow>
 
       <PlannerFreeTime

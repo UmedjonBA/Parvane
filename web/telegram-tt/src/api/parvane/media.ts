@@ -64,6 +64,8 @@ type CloudUploadOptions = {
   // Чат v2: вместо списка получателей — секрет скачивания (возвращается в
   // `capability`, едет внутри E2E-содержимого). Только вместе с `encrypt`
   withCapability?: boolean;
+  // Доля отправленного вложения чата (0…1)
+  onProgress?: (fraction: number) => void;
 };
 
 // Чанков блоба за один запрос скачивания по capability (потолок схемы)
@@ -247,7 +249,9 @@ export function createMediaService(deps: MediaDependencies) {
     mimeType: string,
     options: CloudUploadOptions = {},
   ) {
-    const { encrypt = false, publicAccess = false, withCapability = false } = options;
+    const {
+      encrypt = false, publicAccess = false, withCapability = false, onProgress,
+    } = options;
     requireConnection();
     let mediaKeys: { keyB64: string; nonceB64: string } | undefined;
     const v2 = withCapability && encrypt ? deps.getV2?.() : undefined;
@@ -260,7 +264,9 @@ export function createMediaService(deps: MediaDependencies) {
       const rawKey = crypto.getRandomValues(new Uint8Array(BLOB_KEY_LEN));
       const nonce = crypto.getRandomValues(new Uint8Array(BLOB_NONCE_LEN));
       const capability = crypto.getRandomValues(new Uint8Array(32));
-      fileId = await uploadAttachmentStream(v2, createCipherSource(blob, rawKey, nonce), capability);
+      fileId = await uploadAttachmentStream(
+        v2, createCipherSource(blob, rawKey, nonce), capability, undefined, onProgress,
+      );
       mediaKeys = { keyB64: encodeBase64(rawKey), nonceB64: encodeBase64(nonce) };
       capabilityB64 = encodeBase64(capability);
       capByFileId.set(fileId, capabilityB64);

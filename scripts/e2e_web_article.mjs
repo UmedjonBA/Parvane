@@ -156,15 +156,16 @@ try {
   await openPrivateChatStrict(page, bob);
   await page.getByRole('button', { name: 'Add an attachment' }).click();
   if (SHOT_DIR) {
-    await page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-    await page.getByRole('menuitem', { name: 'Current location' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('menuitem', { name: 'Location', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await shoot(page, 'attach-menu');
   }
   await page.getByRole('menuitem', { name: 'Article', exact: true }).click();
   const picker = page.getByRole('dialog');
   await picker.locator('[data-article-search]').fill(title.slice(0, 8));
   await shoot(page, 'picker');
+  // «Отправить заметку» (доска `RpPick`): заметка с галочкой, «Статьёй», кнопка «Отправить «название»»
   await picker.locator(`[data-article-note="${title}"]`).click();
+  await picker.locator('[data-article-send]').click();
   await picker.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   const aliceCard = page.locator(`.Transition_slide-active [data-article-card="${title}"]`).first();
   await aliceCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -228,10 +229,12 @@ try {
   assert.equal(await articleBody.locator('table td').filter({ hasText: '2 л' }).count(), 1, 'таблица в статье');
   assert.equal(await articleBody.getByRole('heading', { name: title }).count(), 0, 'заголовок-название не повторяется');
   await shoot(bobPage, 'viewer');
-  await viewer.locator('[data-article-save] button').click();
+  await bobPage.locator('[data-article-save] button').click();
   await bobPage.getByText(`Saved to notes: «${title}»`).first().waitFor({ state: 'visible', timeout: 60000 });
-  // Escape забирает висящее уведомление «Сохранено» — окно закрывается крестиком
-  await bobPage.locator('.Modal').filter({ has: viewer }).getByRole('button', { name: 'Close' }).click();
+  // Статья — экран на весь экран (доска `XpChat`): «Переслать» внизу, закрывается стрелкой «Назад»
+  // (Escape забирает висящее уведомление «Сохранено»)
+  await bobPage.locator('[data-article-forward]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bobPage.locator('.Modal').filter({ has: viewer }).getByRole('button', { name: 'Back' }).click();
   await viewer.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await bobPage.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
   const bobRow = bobPage.locator(`#ParvaneKnowledge [data-note-row="${title}"]`).first();
@@ -274,7 +277,7 @@ try {
   const offCard = bobPage.locator(`.Transition_slide-active [data-article-card="${title}"]`).first();
   await offCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await offCard.locator('[data-article-read] button').click();
-  await viewer.locator('[data-article-save] button').click();
+  await bobPage.locator('[data-article-save] button').click();
   const notesOff = bobPage.locator('[data-module-off="notes"]');
   await notesOff.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await notesOff.getByRole('button', { name: 'Not now' }).click();

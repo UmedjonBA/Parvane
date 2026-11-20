@@ -16,13 +16,14 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  LOGIN_TIMEOUT_MS,
+  relogin,
   dumpDiagJournal,
   findMessage,
-  LOGIN_TIMEOUT_MS,
   openDevicesScreen,
   openPrivateChatStrict,
   preparePage,
-  relogin,
+  sendLocation,
   terminateSessionWithPassword,
 } from './e2e_web_helpers.mjs';
 
@@ -150,9 +151,7 @@ try {
 
   // ── live-локация web→desktop ───────────────────────────────────────────────
   const logBeforeLive = readDesktopLog(desktopWorkdir).length;
-  await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
-  await aliceSession.page.getByRole('menuitem', { name: 'Share live for 15 minutes' }).click();
+  await sendLocation(aliceSession.page, { period: '15 min' });
   const live = await waitDesktopLog(
     desktopWorkdir, /live-локация live_period=(\d+) lat=([\d.]+) long=([\d.]+)/, 60000, desktop, { after: logBeforeLive },
   );

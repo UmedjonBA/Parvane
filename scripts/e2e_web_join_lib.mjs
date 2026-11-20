@@ -276,7 +276,7 @@ export async function createChannel(page, title, memberName) {
     else await row.click({ force: true }).catch(() => {});
     await page.waitForTimeout(500);
   }
-  await page.locator('#LeftColumn .FloatingActionButton').click();
+  await page.getByRole('button', { name: 'Continue To Channel Info' }).click();
   const name = page.locator('#LeftColumn .input-group:has(label:has-text("Channel name")) input');
   await name.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await name.fill(title);

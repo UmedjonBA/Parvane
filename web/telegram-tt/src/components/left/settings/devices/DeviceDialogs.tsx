@@ -10,15 +10,19 @@ import ConfirmDialog from '../../../ui/ConfirmDialog';
 import SecretForm from '../../../ui/SecretForm';
 
 // Диалоги экрана «Устройства», которым нужен ключ восстановления либо пароль: обновление ключа подписи (T128),
-// страховочная копия для администратора, ключ в Telegram (spec 015) и сброс защищённой личности (T130)
-export type KeyDialogMode = 'rotate' | 'escrow' | 'telegram';
+// страховочная копия для администратора, ключ в Telegram (spec 015), новый ключ восстановления («Копия ключей»,
+// `ZdProfileX`) и сброс защищённой личности (T130)
+export type KeyDialogMode = 'rotate' | 'escrow' | 'telegram' | 'renew';
 
-type KeyResult = 'ok' | 'bad_key' | 'no_backup' | 'failed' | 'no_telegram';
+// `telegram` / `shown` — новый ключ восстановления создан и ушёл в Telegram либо показан окном
+type KeyResult = 'ok' | 'telegram' | 'shown' | 'bad_key' | 'no_backup' | 'failed' | 'no_telegram';
 type ResetResult = 'ok' | 'bad_password' | 'failed';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-const KEY_DIALOG: Record<KeyDialogMode, { method: string; text: string; action: string; done: string }> = {
+type KeyDialog = { method: string; text: string; action: string; done: string; doneTelegram?: string };
+
+const KEY_DIALOG: Record<KeyDialogMode, KeyDialog> = {
   rotate: {
     method: 'parvaneRotateSsk',
     text: 'ParvaneSskRotationText',
@@ -37,9 +41,16 @@ const KEY_DIALOG: Record<KeyDialogMode, { method: string; text: string; action: 
     action: 'ParvaneTgSendAction',
     done: 'ParvaneTgSendDone',
   },
+  renew: {
+    method: 'parvaneRenewRecoveryKey',
+    text: 'ParvaneRenewKeyText',
+    action: 'ParvaneRenewKeyAction',
+    done: 'ParvaneRenewKeyDone',
+    doneTelegram: 'ParvaneRenewKeyDoneTelegram',
+  },
 };
 
-const KEY_FAILURE_KEYS: Record<Exclude<KeyResult, 'ok'>, string> = {
+const KEY_FAILURE_KEYS: Record<Exclude<KeyResult, 'ok' | 'telegram' | 'shown'>, string> = {
   bad_key: 'ParvaneSskRotationBadKey',
   no_backup: 'ParvaneSskRotationNoBackup',
   failed: 'ParvaneSskRotationFailed',
@@ -74,7 +85,8 @@ export const DeviceKeyDialog = memo(({ mode, onClose, onDone }: KeyDialogProps) 
     handleClose();
     if (!key) return;
     const result = await callParvane(dialog.method, { recoveryKey: key }) as KeyResult | undefined;
-    const resultKey = result === 'ok' ? dialog.done : KEY_FAILURE_KEYS[result || 'failed'];
+    const resultKey = result === 'telegram' ? dialog.doneTelegram || dialog.done
+      : result === 'ok' || result === 'shown' ? dialog.done : KEY_FAILURE_KEYS[result || 'failed'];
     showNotification({ message: oldLang(resultKey) });
     onDone();
   });
