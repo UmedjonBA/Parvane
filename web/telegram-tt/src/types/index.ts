@@ -519,6 +519,8 @@ export enum ManagementScreens {
   InviteInfo,
   JoinRequests,
   NewDiscussionGroup,
+  // Parvane (REPORT-2): жалобы участников у админа
+  Reports,
 }
 
 export type ManagementType = 'user' | 'group' | 'channel' | 'bot';

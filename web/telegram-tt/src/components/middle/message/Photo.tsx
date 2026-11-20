@@ -19,6 +19,7 @@ import { calculateMediaDimensions, MIN_MEDIA_HEIGHT } from './helpers/mediaDimen
 import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import { useIsIntersecting } from '../../../hooks/useIntersectionObserver';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useLayoutEffectWithPrevDeps from '../../../hooks/useLayoutEffectWithPrevDeps';
 import useMediaTransition from '../../../hooks/useMediaTransition';
@@ -104,6 +105,7 @@ const Photo = <T,>({
   const isIntersecting = useIsIntersecting(ref, observeIntersection);
 
   const { isMobile } = useAppLayout();
+  const lang = useLang();
   const [isLoadAllowed, setIsLoadAllowed] = useState(canAutoLoad);
   const shouldLoad = isLoadAllowed && isIntersecting && !isPaidPreview;
   const {
@@ -317,7 +319,12 @@ const Photo = <T,>({
       />
       {shouldRenderTransferProgress && (
         <MediaBadge ref={transferProgressRef} className="message-transfer-progress">
-          {`${Math.round(transferProgress * 100)}%`}
+          {isUploading ? (
+            // Ход отправки текстом, как у файла (доска `ZpChat`)
+            <span data-upload-progress>
+              {lang('FileEncryptingSending', { percent: Math.round(transferProgress * 100) })}
+            </span>
+          ) : `${Math.round(transferProgress * 100)}%`}
         </MediaBadge>
       )}
       <SensitiveContentConfirmModal

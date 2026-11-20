@@ -368,7 +368,7 @@ const Knowledge = () => {
     setOpenId(undefined);
   });
 
-  // Меню строки списка (правая кнопка на компьютере): «Открыть», «Добавить на холст…»
+  // Меню строки списка (правая кнопка на компьютере): действия заметки без её открытия (доска `ZdNotesX`)
   const [rowMenuId, setRowMenuId] = useState<string>();
   const closeRowMenu = useLastCallback(() => setRowMenuId(undefined));
 
@@ -447,8 +447,9 @@ const Knowledge = () => {
     void renameNote(noteId, title, vaultName);
   });
 
+  // Из меню строки удаляют и не открытую заметку: открытая остаётся
   const handleDelete = useLastCallback((noteId: string) => {
-    setOpenId(undefined);
+    setOpenId((current) => (current === noteId ? undefined : current));
     void deleteNote(noteId);
   });
 
@@ -952,6 +953,9 @@ const Knowledge = () => {
         note={rowMenuId ? notes.find(({ id }) => id === rowMenuId) : undefined}
         onOpen={handlePick}
         onOpenCanvas={openCanvasFromNote}
+        onRename={handleRename}
+        onPickFolder={handleAskMove}
+        onDelete={handleDelete}
         onClose={closeRowMenu}
       />
       <NoteFolderSheet

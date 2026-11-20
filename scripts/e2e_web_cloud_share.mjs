@@ -322,20 +322,42 @@ try {
   }
   await aliceSearch.fill('');
   await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
+  // Вторая версия файла (CLOUD-3): перенос уносит историю — обе версии копиями блобов
+  await a.evaluate(async (node) => {
+    const state = await window.__parvaneDiagCallApi('parvaneCloudState');
+    const done = await window.__parvaneDiagCallApi('parvaneCloudWriteText', {
+      container: state.rootId, node, name: 'личный.txt', text: 'вторая версия', mime: 'text/plain',
+    });
+    if (!done?.ok) throw new Error(`версия не записана: ${JSON.stringify(done)}`);
+  }, await ac.item('личный.txt').getAttribute('data-node-id'));
+  const versionRows = a.locator('[data-cloud-versions] [data-version]');
+  const expectVersions = async (what) => {
+    await ac.menu('личный.txt', 'Version history');
+    await a.waitForFunction(
+      () => document.querySelectorAll('[data-cloud-versions] [data-version]').length === 2, undefined, { timeout: SYNC },
+    ).catch(() => assert.fail(what));
+    await versionRows.nth(1).locator('[data-version-open]').click();
+    await a.locator('[data-cloud-versions] [data-version-text]').getByText('с личного диска')
+      .waitFor({ state: 'visible', timeout: STEP });
+    await a.keyboard.press('Escape');
+    await a.locator('[data-cloud-versions]').waitFor({ state: 'hidden', timeout: STEP });
+  };
+  await expectVersions('у файла личного диска нет двух версий');
   await moveTo('личный.txt', ARCHIVE);
   await bc.item('личный.txt').waitFor({ state: 'visible', timeout: SYNC });
-  assert.equal((await bc.download('личный.txt')).toString(), 'с личного диска', 'участник читает перенесённый файл');
+  assert.equal((await bc.download('личный.txt')).toString(), 'вторая версия', 'участник читает перенесённый файл');
   await ac.folderRow(ARCHIVE).click();
   await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
+  await expectVersions('перенос в совместную папку потерял историю версий');
   await moveTo('отчёт.txt', 'My drive');
   await bc.item('отчёт.txt').waitFor({ state: 'detached', timeout: SYNC });
   await toMyFiles();
   assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл вернулся на личный диск целым');
-  // Три файла — три блоба: копии источника стёрты
+  // Три файла, у одного две версии, — четыре блоба: копии источника стёрты
   await waitFor(
-    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 3, 'после переноса остались лишние блобы',
+    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 4, 'после переноса остались лишние блобы',
   );
-  console.log('OK: перенос между личным диском и совместной папкой в обе стороны, лишних блобов нет');
+  console.log('OK: перенос между личным диском и совместной папкой в обе стороны с историей версий, лишних блобов нет');
 
   // ── Совместная папка снова становится обычной: содержимое на диске, участник теряет доступ ──
   await ac.folderRow(ARCHIVE).getByRole('button', { name: 'Sharing', exact: true }).click();
@@ -345,14 +367,16 @@ try {
   await ac.item(ARCHIVE).waitFor({ state: 'visible', timeout: SYNC });
   await ac.folderRow(ARCHIVE).waitFor({ state: 'detached', timeout: SYNC });
   await ac.item(ARCHIVE).click();
-  assert.equal((await ac.download('личный.txt')).toString(), 'с личного диска', 'файл на месте в обычной папке');
+  assert.equal((await ac.download('личный.txt')).toString(), 'вторая версия', 'файл на месте в обычной папке');
+  await expectVersions('закрытие доступа к папке потеряло историю версий');
   await ac.item('Вложенная').click();
   assert.equal((await ac.download('глубоко.txt')).toString(), 'файл в глубине', 'вложенный файл на месте');
   await toMyFiles();
   await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
   await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'грант не снят после закрытия доступа');
+  // Версия «личного» переехала вместе с ним: блобов по-прежнему четыре
   await waitFor(
-    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 3, 'после закрытия доступа остались лишние блобы',
+    () => Promise.resolve(driveBlobs(alice) - blobsBefore), (n) => n === 4, 'после закрытия доступа остались лишние блобы',
   );
   console.log('OK: совместная папка снова обычная — содержимое на диске, участник потерял доступ');
 

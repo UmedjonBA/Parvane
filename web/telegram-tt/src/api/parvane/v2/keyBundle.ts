@@ -38,7 +38,16 @@ export type KeyBundlePayload = {
   // Монотонный номер записи копии (A0073-2): устройство помнит наибольший виденный и не принимает копию с меньшим
   // (откат сервера на старую версию). Нет поля — копия старого формата, номер 0.
   seq?: number;
+  // Копия выключена владельцем: на сервере только эта пометка, без ключей (`grant` пуст). Устройства её не
+  // переписывают, пока копию не включат снова; вход по ключу восстановления идёт без копии
+  off?: boolean;
 };
+
+/** Пометка «копия выключена» вместо копии: ключей в ней нет. Метода удаления копии у сервера нет, а пустая
+ * `key_bundle` значит «не менять» — поэтому на месте копии лежит эта запись. */
+export function buildOffBundle(seq: number): KeyBundlePayload {
+  return { grant: '', off: true, seq };
+}
 
 type DomainKeysJson = { id?: string; keys?: unknown[] };
 
@@ -257,6 +266,7 @@ export async function openKeyBundle(
       toBuffer(bytes.subarray(HEADER_LEN + NONCE_LEN)),
     );
     const payload = JSON.parse(new TextDecoder().decode(opened)) as Partial<KeyBundlePayload>;
+    if (payload.off === true) return buildOffBundle(readBundleSeq(payload.seq));
     if (typeof payload.grant !== 'string' || !payload.grant) return undefined;
     return {
       grant: payload.grant,
@@ -329,10 +339,13 @@ export type KeyBundleContents = {
   hasHealth: boolean;
   hasMusic: boolean;
   groups: number;
+  // Копия выключена владельцем (на сервере только пометка)
+  isOff: boolean;
 };
 
 export function describeKeyBundle(payload: KeyBundlePayload): KeyBundleContents {
   return {
+    isOff: Boolean(payload.off),
     hasChats: Boolean(payload.grant),
     hasFiles: countExported(payload.cloud) > 0,
     hasPlanner: countExported(payload.planner) > 0,

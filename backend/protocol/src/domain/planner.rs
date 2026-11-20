@@ -170,11 +170,7 @@ fn check_task(t: &Task) -> Result<()> {
         }
     }
     check_remind(t.remind.as_ref())?;
-    if let Some(steps) = &t.steps {
-        if steps.items.len() > 100 || steps.items.iter().any(|s| s.text.is_empty() || s.text.len() > 160) {
-            return Err(ProtoError::InvalidField("steps"));
-        }
-    }
+    check_steps(t.steps.as_ref())?;
     if let Some(r) = &t.repeat {
         check_repeat(r)?;
     }
@@ -185,6 +181,16 @@ fn check_task(t: &Task) -> Result<()> {
     if let Some(src) = &t.source {
         if src.chat.len() > MAX_CHAT || src.op_id.len() > 32 || (!src.op_id.is_empty() && !src.op_id.bytes().all(|b| b.is_ascii_hexdigit())) {
             return Err(ProtoError::InvalidField("source"));
+        }
+    }
+    Ok(())
+}
+
+/// Шаги задачи либо события: до 100, текст непустой и не длиннее 160 байт.
+fn check_steps(steps: Option<&Steps>) -> Result<()> {
+    if let Some(steps) = steps {
+        if steps.items.len() > 100 || steps.items.iter().any(|s| s.text.is_empty() || s.text.len() > 160) {
+            return Err(ProtoError::InvalidField("steps"));
         }
     }
     Ok(())
@@ -246,6 +252,7 @@ fn check_event(e: &Event) -> Result<()> {
     check_str(&e.start, 5, is_time)?;
     check_str(&e.end, 5, is_time)?;
     check_str(&e.day, 10, |s| s.is_empty() || is_day(s))?;
+    check_steps(e.steps.as_ref())?;
     if let Some(w) = &e.weekdays {
         if w.days.len() > 7 || w.days.iter().any(|d| *d > 6) {
             return Err(ProtoError::InvalidField("weekdays"));
@@ -444,6 +451,7 @@ impl PlannerState {
             .chain(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.color.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(e.steps.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
         {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
@@ -595,6 +603,7 @@ impl PlannerState {
         merge_reg!(cur.description, inc.description, Str);
         merge_reg!(cur.remind, inc.remind, U32);
         merge_reg!(cur.list_id, inc.list_id, Str);
+        merge_reg!(cur.steps, inc.steps, Steps);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -837,6 +846,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.steps.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &e.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -978,6 +988,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     f.stamp = Some(pb.clone());
                 }
                 if let Some(f) = &mut e.remind {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.steps {
                     f.stamp = Some(pb.clone());
                 }
                 for o in &mut e.occurrences {

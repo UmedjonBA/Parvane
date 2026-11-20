@@ -212,6 +212,20 @@ try {
   await shot('plan-freetime-phone');
   await page.locator('.Modal').getByRole('button', { name: 'Close' }).click();
   await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Шаги у события (PhPlanMore): Enter добавляет шаг, а не сохраняет карточку; отметка — сразу, у дня ряда — по дню
+  const eventSteps = sidePane.locator('[data-card-row="steps"]');
+  await eventSteps.getByPlaceholder('Add step').fill('Собрать сумку');
+  await eventSteps.getByPlaceholder('Add step').press('Enter');
+  const eventStep = eventSteps.locator('label').filter({ hasText: 'Собрать сумку' });
+  await visible(eventStep, 'шаг события');
+  await visible(eventSteps.getByText('Steps · 0/1'), 'подпись шагов события');
+  await visible(sidePane.locator('[data-side-save]'), 'карточка события открыта после Enter в шаге');
+  await eventStep.getByText('Собрать сумку').click();
+  await visible(eventSteps.getByText('Steps · 1/1'), 'шаг события отмечен');
+  await shot('plan-event-steps-phone');
+  await closeSide();
+  await ahead.locator('[data-key]').first().click();
+  await visible(sidePane.locator('[data-card-row="steps"]').getByText('Steps · 1/1'), 'шаги события после повторного открытия');
   await closeSide();
   // Карточка задачи на телефоне: «Статус» строкой, «Шаги · N» подписью, «Добавить шаг» — строка ввода
   await search.locator('[data-filter="all"]').click();

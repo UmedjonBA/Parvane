@@ -222,6 +222,10 @@ const RightColumn: FC<OwnProps & StateProps> = ({
           case ManagementScreens.ChannelRemovedUsers:
             setManagementScreen(ManagementScreens.Initial);
             break;
+          // Жалобы открываются с экрана «Тип группы» (доска `XpChat`)
+          case ManagementScreens.Reports:
+            setManagementScreen(ManagementScreens.ChatPrivacyType);
+            break;
           case ManagementScreens.GroupUserPermissionsCreate:
           case ManagementScreens.GroupRemovedUsers:
           case ManagementScreens.GroupUserPermissions:

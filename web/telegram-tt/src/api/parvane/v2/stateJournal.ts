@@ -27,6 +27,7 @@ import {
   b64ToUuid, contentOfWire, uuidToB64, type V2Content, type V2Text, wireOfContent,
 } from './contentMap';
 import { isV2GroupAddress } from './controller';
+import { engineStatic } from './engine';
 import { isTimerSyncMode, pollDelay } from './l2';
 import {
   carriedObjects, favedOf, hasPersonalState, isScheduledSent, K, managedKinds, MARK_CHAT_CLEARED,
@@ -702,6 +703,34 @@ export function createStateJournal(deps: Deps) {
     }).catch((e: unknown) => deps.log(`v2: запись очистки чата в журнал состояния: ${String(e)}`));
   }
 
+  // ── закрытые жалобы группы (REPORT-2): объект-признак, общий для устройств админа ─────────────────────
+  /** Ключ группы в личном состоянии (`g:<домен>:<hex>`); '' — не группа. */
+  function groupKeyOf(address: string) {
+    return isV2GroupAddress(address) ? peerKeyOf(peerOf(address)) : '';
+  }
+
+  /** `op_id` закрытых жалоб группы (ключ объекта — `<ключ группы>/<op_id>`, раскладку задаёт движок). */
+  function reportClosedOps(address: string): string[] {
+    const prefix = `${groupKeyOf(address)}/`;
+    if (prefix === '/') return [];
+    return objectsOf(readView(), K.reportClosed).map((o) => o.key)
+      .filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length));
+  }
+
+  /** Отметить жалобы на сообщения группы закрытыми; false — журнал не подключён либо ключ негоден. */
+  function closeReports(address: string, opIds: string[]) {
+    return serial(async () => {
+      const group = groupKeyOf(address);
+      if (!session || !group || !opIds.length) return false;
+      const keys = opIds.map((uuid) => engineStatic<string | null>('reportClosedKey', { group, uuid }))
+        .filter((key): key is string => Boolean(key));
+      if (!keys.length) return false;
+      await put(keys.map((key) => ({ kind: K.reportClosed, key, value: {} })));
+      invalidateView();
+      return true;
+    });
+  }
+
   // ── ссылки-приглашения групп v2 (T160) ─────────────────────────────────────
   // Секрет ссылки знает только создавшее её устройство: запись журнала делит
   // ссылку между своими устройствами (в v1 основная ссылка у аккаунта одна).
@@ -1249,6 +1278,8 @@ export function createStateJournal(deps: Deps) {
     showOffline,
     recordCall,
     recordChatCleared,
+    reportClosedOps,
+    closeReports,
     recordGroupInvite,
     removeGroupInvite,
     plannerContainer,

@@ -4,7 +4,9 @@ import {
 import { getActions } from '../../global';
 
 import { PIN_LENGTH, PIN_MAX_ATTEMPTS } from '../../util/pinAttempts';
-import { getPinRequest, submitPin, subscribeToPinRequest } from '../../api/parvane/pinGate';
+import {
+  getPinRequest, submitBiometric, submitPin, subscribeToPinRequest,
+} from '../../api/parvane/pinGate';
 
 import useFlag from '../../hooks/useFlag';
 import useLang from '../../hooks/useLang';
@@ -22,7 +24,8 @@ export type OwnProps = {
 const LOGO_LETTER = 'P';
 
 // Экран «PIN при запуске» (spec 041 E6, доска `ZpSystem`): PIN хранилища — четыре цифры. Пять неверных вводов
-// подряд — выход из аккаунта на этом устройстве; счётчик (`util/pinAttempts`) переживает перезагрузку страницы
+// подряд — выход из аккаунта на этом устройстве; счётчик (`util/pinAttempts`) переживает перезагрузку страницы.
+// Включён вход по отпечатку (`RpProfileB`) — под клавиатурой кнопка; его отмена и отказ попыткой PIN не считаются
 const LockScreen = ({ isLocked }: OwnProps) => {
   const { signOut } = getActions();
   const lang = useLang();
@@ -33,6 +36,8 @@ const LockScreen = ({ isLocked }: OwnProps) => {
   const [isChecking, markChecking, unmarkChecking] = useFlag();
   const [isSigningOut, markSigningOut] = useFlag();
   const [isForgotOpen, openForgot, closeForgot] = useFlag();
+  const [hasBiometric, setHasBiometric] = useState(() => Boolean(getPinRequest()?.hasBiometric));
+  const [isBiometricFailed, markBiometricFailed, unmarkBiometricFailed] = useFlag();
   // Цифры, набранные до следующего кадра после полного PIN, второй проверки не начинают
   const isCheckingRef = useRef(false);
 
@@ -46,7 +51,9 @@ const LockScreen = ({ isLocked }: OwnProps) => {
   useEffect(() => {
     const update = () => {
       const request = getPinRequest();
-      if (request) setAttemptsLeft(request.attemptsLeft);
+      if (!request) return;
+      setAttemptsLeft(request.attemptsLeft);
+      setHasBiometric(request.hasBiometric);
     };
     update();
     return subscribeToPinRequest(update);
@@ -57,9 +64,22 @@ const LockScreen = ({ isLocked }: OwnProps) => {
     if (isLocked && !attemptsLeft) signOutHere();
   }, [isLocked, attemptsLeft]);
 
+  const handleBiometric = useLastCallback(async () => {
+    if (isCheckingRef.current) return;
+    isCheckingRef.current = true;
+    markChecking();
+    unmarkWrong();
+    unmarkBiometricFailed();
+    const result = await submitBiometric();
+    isCheckingRef.current = false;
+    unmarkChecking();
+    if (result === 'failed') markBiometricFailed();
+  });
+
   const handleChange = useLastCallback(async (value: string) => {
     if (isCheckingRef.current) return;
     setPin(value);
+    if (value) unmarkBiometricFailed();
     if (value.length < PIN_LENGTH) {
       if (value) unmarkWrong();
       return;
@@ -81,7 +101,8 @@ const LockScreen = ({ isLocked }: OwnProps) => {
   const isCountShown = attemptsLeft < PIN_MAX_ATTEMPTS;
   const message = isSigningOut ? lang('ParvanePinSigningOut')
     : isWrong ? lang('ParvanePinWrong', { count: attemptsLeft })
-      : isCountShown ? lang('ParvanePinAttemptsLeft', { count: attemptsLeft }) : undefined;
+      : isBiometricFailed ? lang('ParvaneBioLockFailed')
+        : isCountShown ? lang('ParvanePinAttemptsLeft', { count: attemptsLeft }) : undefined;
 
   return (
     <div className={styles.root} data-pin-lock data-pin-attempts-left={attemptsLeft}>
@@ -95,6 +116,17 @@ const LockScreen = ({ isLocked }: OwnProps) => {
           isDisabled={isBusy}
           onChange={handleChange}
         />
+        {hasBiometric && (
+          <button
+            type="button"
+            className={styles.biometric}
+            data-pin-biometric
+            disabled={isBusy}
+            onClick={handleBiometric}
+          >
+            {lang('ParvaneBioLockButton')}
+          </button>
+        )}
         <span className={styles.spacer} />
         <button
           type="button"

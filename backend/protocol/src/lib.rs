@@ -47,6 +47,8 @@ pub mod recovery;
 pub mod recovery_tg;
 pub mod registry_gen;
 pub mod report;
+// Жалобы: кому уходит и список у админа группы (REPORT-2, spec 041)
+pub mod report_inbox;
 pub mod routing;
 pub mod schema;
 pub mod seal;

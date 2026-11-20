@@ -132,6 +132,8 @@ type ReportOptionsSection = {
     text: string;
     option: string;
   }[];
+  // Parvane (REPORT-2): адресаты жалобы для окна одной формой
+  targets?: string[];
 };
 
 type ReportCommentSection = {

@@ -109,6 +109,7 @@ import { findFirstMessageIdAfterDate, searchMessages } from './localSearch';
 import { createLocalState } from './localState';
 import { createMediaService } from './media';
 import { createMessageController } from './messages';
+import { createModReports } from './modReports';
 import { createMusicApi } from './musicApi';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { hydratePersonal } from './personalStore';
@@ -182,6 +183,9 @@ import {
   isBuiltinStickerId,
   renderBuiltinStickerBlob,
 } from './stickers';
+import {
+  disableBiometric, enableBiometric, getBiometricState, hasBiometricUnlock, unlockWithBiometric,
+} from './storageBiometric';
 import {
   buildReactorsList, compareStoredOrder, ParvaneStore, setTaskOfferResolver,
 } from './store';
@@ -1797,7 +1801,9 @@ async function ensureStorageUnlocked(user: string) {
 
 async function promptStorageUnlock(user: string) {
   if (!(await hasStoragePin(user).catch(() => false)) || isStorageUnlocked(user)) return true;
-  return requestPinUnlock(user, (pin) => unlockStorageWithPin(user, pin).catch(() => false));
+  // Вход по отпечатку (WebAuthn PRF) — только когда он включён на этом устройстве; PIN работает всегда
+  const tryBiometric = await hasBiometricUnlock(user) ? () => unlockWithBiometric(user) : undefined;
+  return requestPinUnlock(user, (pin) => unlockStorageWithPin(user, pin).catch(() => false), tryBiometric);
 }
 
 // «Keep me signed in» (P-39): при включённом флаге сохраняем JWT сессии
@@ -2018,8 +2024,9 @@ const TELEGRAM_KEY_POLL_MAX_MS = 30000;
 const TELEGRAM_KEY_POLL_GROWTH = 1.5;
 const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
 
+// `bundle_off` — копия ключей аккаунта выключена владельцем: по ключу восстановления устройство не входит
 type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired'
-  | 'intercepted';
+  | 'intercepted' | 'bundle_off';
 const telegramRecovery: { state: TelegramRecoveryState; timer?: number; generation: number; startedAt?: number } = {
   state: 'idle', generation: 0,
 };
@@ -2215,7 +2222,7 @@ async function joinWithTelegramKey(generation: number, recoveryKey: string) {
   }
   if (generation !== telegramRecovery.generation) return;
   logDebug(`ключ восстановления: вход не удался (${outcome.result})`);
-  setTelegramRecoveryState('failed');
+  setTelegramRecoveryState(outcome.result === 'bundle_off' ? 'bundle_off' : 'failed');
 }
 
 // Устройство каталога: `label` и `login_at` — как оно назвало себя при входе
@@ -2713,6 +2720,21 @@ const musicMethods = createMusicApi({
   log: logDebug,
 });
 
+// Жалобы у админа группы (REPORT-2): список из полученных карточек, закрытые — в журнале личного состояния
+const modReports = createModReports({
+  getStore: () => store,
+  ensureAllLoaded: () => syncController.ensureAllLoaded(),
+  closedOps: (address) => stateJournal.reportClosedOps(address),
+  close: (address, opIds) => stateJournal.closeReports(address, opIds),
+  findRow: (uuid) => messageIndex.find(uuid),
+  onCardRebuilt: (message) => {
+    store.putMessage(message);
+    sendUpdate({
+      '@type': 'updateMessage', chatId: message.chatId, id: message.id, isFull: true, message,
+    });
+  },
+});
+
 const methods = {
   ...healthMethods,
   ...musicMethods,
@@ -3039,6 +3061,7 @@ const methods = {
   deleteChatMember: groupController.deleteChatMember,
   updateChatMemberBannedRights: groupController.updateChatMemberBannedRights,
   parvaneModBan: groupController.banFromReport,
+  ...modReports,
   exportChatInvite: groupController.exportChatInvite,
   fetchExportedChatInvites: groupController.fetchExportedChatInvites,
   fetchMembers: groupController.fetchMembers,
@@ -4055,13 +4078,14 @@ const methods = {
 
   // Копия корня для администратора у аккаунта, созданного до включения страховки. Пустой ключ — корень на
   // устройстве (RECOVER-1 п. 8; так же у смены ключа подписи, нового ключа и смены ника)
-  parvaneStoreEscrowCopy({ recoveryKey = '' }: { recoveryKey?: string }) {
-    return v2Controller.storeEscrowCopy(pickRecoveryKey(recoveryKey));
+  parvaneStoreEscrowCopy({ recoveryKey = '', password = '' }: { recoveryKey?: string; password?: string }) {
+    return v2Controller.storeEscrowCopy(pickRecoveryKey(recoveryKey), password);
   },
 
-  // «Профиль → Копия ключей» (`ZdProfileX`): новый ключ восстановления взамен прежнего и состав копии на сервере
-  parvaneRenewRecoveryKey({ recoveryKey = '' }: { recoveryKey?: string }) {
-    return v2Controller.renewRecoveryKey(pickRecoveryKey(recoveryKey));
+  // «Профиль → Копия ключей» (`ZdProfileX`): новый ключ восстановления взамен прежнего и состав копии на сервере.
+  // С корнем на устройстве вместо прежнего ключа — пароль аккаунта (RECOVER-1 п. 8)
+  parvaneRenewRecoveryKey({ recoveryKey = '', password = '' }: { recoveryKey?: string; password?: string }) {
+    return v2Controller.renewRecoveryKey(pickRecoveryKey(recoveryKey), password);
   },
 
   // Корень аккаунта на этом устройстве: тогда ключ восстановления операции корнем не спрашивают. Промисом: `callApi`
@@ -4072,6 +4096,15 @@ const methods = {
 
   parvaneKeyBundleContents() {
     return v2Controller.keyBundleContents().catch(() => undefined);
+  },
+
+  // «Выключить копию» ключей аккаунта (`ZdProfileX`) — с паролем аккаунта; «Включить» — снова копия на сервере
+  parvaneDisableKeyBundle({ password }: { password: string }) {
+    return v2Controller.disableKeyBundle(password);
+  },
+
+  parvaneEnableKeyBundle() {
+    return v2Controller.enableKeyBundle();
   },
 
   parvaneRotateSsk({ recoveryKey = '' }: { recoveryKey?: string }) {
@@ -4822,6 +4855,23 @@ const methods = {
   async parvaneCheckStoragePin({ pin }: { pin: string }) {
     if (!store.self) return false;
     return checkStoragePin(store.self, pin).catch(() => false);
+  },
+
+  // Вход по отпечатку в хранилище (WebAuthn PRF, spec 041): состояние, включение по PIN, выключение
+  parvaneGetStorageBiometric() {
+    if (!store.self) return Promise.resolve({ isOffered: false, isEnabled: false });
+    return getBiometricState(store.self);
+  },
+
+  parvaneEnableStorageBiometric({ pin }: { pin: string }) {
+    if (!store.self) return Promise.resolve('failed');
+    return enableBiometric(store.self, pin);
+  },
+
+  async parvaneDisableStorageBiometric() {
+    if (!store.self) return false;
+    await disableBiometric(store.self);
+    return true;
   },
 
   // spec 035 T044: ход фоновой смены ключа хранилища после установки PIN (экран хода в настройках)

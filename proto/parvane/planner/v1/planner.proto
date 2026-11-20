@@ -50,7 +50,7 @@ message Step {
   bool is_done = 2;
 }
 
-// Шаги задачи — список целиком под одной меткой.
+// Шаги задачи и события — список целиком под одной меткой.
 message Steps {
   parvane.core.v2.LwwStamp stamp = 1;
   repeated Step items = 2 [(parvane.core.v2.max_items) = 100];
@@ -165,7 +165,7 @@ message Event {
   // разовая дата YYYY-MM-DD; пусто — повтор по дням недели
   Str day = 6;
   parvane.core.v2.LwwStamp deleted = 7;
-  // spec 011: у события используется только `excluded` экземпляров
+  // spec 011: у события — `excluded` экземпляров, с 20 ноя 2026 и `done_steps` (шаги ряда по дню)
   Repeat repeat = 8;
   repeated Occurrence occurrences = 9 [(parvane.core.v2.max_items) = 2000];
   Origin origin = 10;
@@ -184,6 +184,8 @@ message Event {
   // 16 окт 2026: группа (список) события, как `Task.list_id`; пусто — без группы. Цвет события — цвет группы,
   // `color` действует только без группы
   Str list_id = 16;
+  // 20 ноя 2026 (spec 041): шаги события, как у задачи; у ряда отметки шагов — по дню (`Occurrence.done_steps`)
+  Steps steps = 17;
 }
 
 message List {

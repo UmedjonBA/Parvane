@@ -20,6 +20,7 @@ import useUnsupportedMedia from '../../../hooks/media/useUnsupportedMedia';
 import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import { useIsIntersecting } from '../../../hooks/useIntersectionObserver';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 import useMediaTransition from '../../../hooks/useMediaTransition';
@@ -95,6 +96,7 @@ const Video = <T,>({
   const { cancelMediaDownload, updateContentSettings, openAgeVerificationModal } = getActions();
   const ref = useRef<HTMLDivElement>();
   const videoRef = useRef<HTMLVideoElement>();
+  const lang = useLang();
   const [isNsfwModalOpen, openNsfwModal, closeNsfwModal] = useFlag();
   const [shouldAlwaysShowNsfw, setShouldAlwaysShowNsfw] = useState(false);
 
@@ -363,7 +365,12 @@ const Video = <T,>({
       )}
       {shouldRenderTransferProgress ? (
         <MediaBadge key="transfer-progress" ref={transferProgressRef} className="message-transfer-progress">
-          {(isUploading || isDownloading) ? `${Math.round(transferProgress * 100)}%` : '...'}
+          {isUploading ? (
+            // Ход отправки текстом, как у файла (доска `ZpChat`)
+            <span data-upload-progress>
+              {lang('FileEncryptingSending', { percent: Math.round(transferProgress * 100) })}
+            </span>
+          ) : isDownloading ? `${Math.round(transferProgress * 100)}%` : '...'}
         </MediaBadge>
       ) : (
         <MediaBadge key="duration" className="message-media-duration">

@@ -19,6 +19,7 @@ import { getMessageKey } from '../../util/keys/messageKey';
 import { noteSendFailure } from '../../util/parvaneSendFailures';
 import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
+import { engineStatic } from './v2/engine';
 import { withAutoEntities } from './autoEntities';
 import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
@@ -149,22 +150,19 @@ const ARTICLE_MEDIA_MAX = 32;
 
 // Собеседник без журнала устройств v2 (протокол v1 отключён, T110) — доставить нечем
 const V2_PEER_REQUIRED = 'The recipient has no devices on protocol v2.';
-// Жалобы (spec 024): коды причин схемы и ключи строк окна жалобы
-const REPORT_REASONS = [
-  'spam', 'violence', 'porn', 'child', 'copyright', 'illegal', 'personal', 'fake', 'other',
-] as const;
-const REPORT_REASON_KEYS: Record<typeof REPORT_REASONS[number], string> = {
-  spam: 'ParvaneReportReasonSpam',
-  violence: 'ParvaneReportReasonViolence',
-  porn: 'ParvaneReportReasonPorn',
-  child: 'ParvaneReportReasonChild',
-  copyright: 'ParvaneReportReasonCopyright',
-  illegal: 'ParvaneReportReasonIllegal',
-  personal: 'ParvaneReportReasonPersonal',
-  fake: 'ParvaneReportReasonFake',
-  other: 'ParvaneReportReasonOther',
+// Жалобы (REPORT-2): ключи строк причин окна жалобы; прежние коды (spec 024) — прежними строками
+const REPORT_REASON_KEYS: Record<string, string> = {
+  spam: 'ParvaneReportChipSpam',
+  fraud: 'ParvaneReportChipFraud',
+  insult: 'ParvaneReportChipInsult',
+  illegal: 'ParvaneReportChipIllegal',
+  other: 'ParvaneReportChipOther',
 };
 const REPORT_SUBMIT_MARK = ':send';
+
+function reportReasonKey(reason: string) {
+  return REPORT_REASON_KEYS[reason] || REPORT_REASON_KEYS.other;
+}
 const REPORT_COMMENT_MAX = 1024;
 const REPORT_TEXT_MAX = 4096;
 const REPORT_FALLBACK_MAX = 600;
@@ -223,15 +221,17 @@ export function createMessageController(deps: MessageDependencies) {
   }
 
   // Стек v2 обязан принять операцию чата; иначе — отказ (без v1 понижать некуда)
-  // Админы группы, которым уходит жалоба на её сообщения: владелец и админы с правом удалять или банить,
-  // кроме себя. Пусто — жалоба уходит администратору сервера
-  function reportAdmins(address: string) {
-    if (!deps.v2?.isV2GroupAddress(address)) return [];
-    const self = store().self;
-    return (deps.v2.groupInfo(address)?.members || [])
-      .filter(({ address: member, role, admin_rights: rights }) => member !== self && (role === 'owner'
-        || (role === 'admin' && (!rights || rights.delete_messages || rights.ban_users))))
-      .map(({ address: member }) => member);
+  // Кому может уйти жалоба (REPORT-2): админы группы с правом удалять или банить (кроме себя) — только для
+  // сообщений группы v2; администратор сервера — если сервер принимает жалобы. Решает движок
+  async function reportForm(address: string, hasMessages: boolean) {
+    const isGroupMessage = hasMessages && Boolean(deps.v2?.isV2GroupAddress(address));
+    const serverAccepts = Boolean(await deps.v2?.canReportToServer().catch(() => false));
+    return engineStatic<{ targets: string[]; target: string; admins: string[]; reasons: string[] }>('reportForm', {
+      self: store().self,
+      members: isGroupMessage ? deps.v2!.groupInfo(address)?.members || [] : [],
+      isGroupMessage,
+      serverAccepts,
+    });
   }
 
   // Удаление не прошло (сбой связи, движок отказал): сообщение остаётся, пользователь видит причину
@@ -1837,30 +1837,34 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
-    // Жалоба (spec 024, REPORT-1): шаги окна Telegram — причина, комментарий, отправка. Сообщения группы —
-    // её админам карточкой `mod_report` (личным сообщением каждому), остальное — администратору сервера
-    // шифртекстом под его ключом. Ключи строк окна (`Parvane…`) переводит само окно
+    // Жалоба (spec 024 REPORT-1, spec 041 REPORT-2): окно одной формой — причина, комментарий, адресат. Первый
+    // вызов без причины отдаёт причины и адресатов (их выбирает движок, `reportForm`), второй — отправка. Админам
+    // группы — карточкой `mod_report` (личным сообщением каждому), администратору сервера — шифртекстом под его
+    // ключом. Ключи строк окна (`Parvane…`) переводит само окно
     async reportMessages({
-      peer, messageIds, description, option,
-    }: { peer: ApiChat; messageIds: number[]; description?: string; option?: string }) {
+      peer, messageIds, description, option, target,
+    }: { peer: ApiChat; messageIds: number[]; description?: string; option?: string; target?: string }) {
       const currentStore = store();
       const address = currentStore.getAddressForId(peer.id);
       if (!address) return undefined;
-      const admins = messageIds.length ? reportAdmins(address) : [];
+      const form = await reportForm(address, messageIds.length > 0);
       if (!option) {
         return {
           result: {
             type: 'selectOption' as const,
-            title: admins.length ? 'ParvaneReportToAdminsTitle' : 'ParvaneReportToServerTitle',
-            options: REPORT_REASONS.map((reason) => ({ text: REPORT_REASON_KEYS[reason], option: reason })),
+            title: form.target === 'admins' ? 'ParvaneReportToAdminsTitle' : 'ParvaneReportToServerTitle',
+            options: form.reasons.map((reason) => ({ text: reportReasonKey(reason), option: reason })),
+            targets: form.targets,
           },
         };
       }
-      // Второй шаг — необязательный комментарий; отметка в `option` отличает отправку от него
-      if (!option.endsWith(REPORT_SUBMIT_MARK)) {
-        return { result: { type: 'comment' as const, isOptional: true, option: `${option}${REPORT_SUBMIT_MARK}` } };
+      const reason = option.endsWith(REPORT_SUBMIT_MARK) ? option.slice(0, -REPORT_SUBMIT_MARK.length) : option;
+      const chosen = target && form.targets.includes(target) ? target : form.target;
+      if (!chosen) {
+        notifyReport('unavailable');
+        return undefined;
       }
-      const reason = option.slice(0, -REPORT_SUBMIT_MARK.length);
+      const admins = chosen === 'admins' ? form.admins : [];
       const comment = (description || '').slice(0, REPORT_COMMENT_MAX);
       // Подпись автора (A0008-2): хранится рядом с полученным сообщением; без неё получатель жалобы
       // видит сообщение «не подтверждённым» (своё сообщение и пересланное без подписи — тоже)
@@ -1882,7 +1886,11 @@ export function createMessageController(deps: MessageDependencies) {
           delete m.proof;
         });
       }
-      if (admins.length && reported.length) {
+      if (chosen === 'admins') {
+        if (!admins.length || !reported.length) {
+          notifyReport('failed');
+          return undefined;
+        }
         const groupHex = address.slice(V2_GROUP_PREFIX.length);
         const content: WireMessageContent = {
           kind: 'mod_report',

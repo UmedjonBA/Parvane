@@ -1263,12 +1263,15 @@ export async function expectToast(page, text, timeout = LOGIN_TIMEOUT_MS) {
 }
 
 // Минимальный валидный PNG (сплошной цвет) — фикстура фото группы
-export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee]) {
+// `isNoise` — случайные точки вместо заливки: файл не сжимается (большой файл для хода отправки)
+export function buildPngBuffer(size = 64, rgb = [0x2a, 0xab, 0xee], { isNoise } = {}) {
   const { deflateSync } = zlib;
   const raw = Buffer.alloc((size * 3 + 1) * size);
   for (let y = 0; y < size; y++) {
     raw[y * (size * 3 + 1)] = 0;
-    for (let x = 0; x < size; x++) raw.set(rgb, y * (size * 3 + 1) + 1 + x * 3);
+    for (let x = 0; x < size; x++) {
+      raw.set(isNoise ? [Math.random() * 256, Math.random() * 256, Math.random() * 256] : rgb, y * (size * 3 + 1) + 1 + x * 3);
+    }
   }
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n;

@@ -21,6 +21,7 @@ import ManageInvite from './ManageInvite';
 import ManageInviteInfo from './ManageInviteInfo';
 import ManageInvites from './ManageInvites';
 import ManageJoinRequests from './ManageJoinRequests';
+import ManageReports from './ManageReports';
 import ManageUser from './ManageUser';
 
 export type OwnProps = {
@@ -244,6 +245,14 @@ const Management: FC<OwnProps & StateProps> = ({
     case ManagementScreens.JoinRequests:
       return (
         <ManageJoinRequests
+          chatId={chatId}
+          isActive={isActive}
+          onClose={onClose}
+        />
+      );
+    case ManagementScreens.Reports:
+      return (
+        <ManageReports
           chatId={chatId}
           isActive={isActive}
           onClose={onClose}

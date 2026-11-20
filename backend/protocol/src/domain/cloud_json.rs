@@ -9,9 +9,10 @@
 //!   приславшего файл копией, пусто — свой; `purgedBlobs` — блобы стёртых узлов и вытесненных версий),
 //! где `blob = {fileId, key, nonce, capability, size, chunks, mime, sha256, uploader}`,
 //! `thumb = {fileId, nonce, capability, width, height}`.
-//! Правки: `{ops:[{op:"create", id, kind, parent|null, name, blob?, thumb?, mtime?, from?} |
+//! Правки: `{ops:[{op:"create", id, kind, parent|null, name, blob?, thumb?, mtime?, from?, versions?} |
 //! {op:"move", id, parent|null, name} | {op:"setBlob", id, blob, thumb?, mtime?, keep?} |
-//! {op:"trash", id, trashed, at} | {op:"purge", id, at} | {op:"meta", name}]}`.
+//! {op:"trash", id, trashed, at} | {op:"purge", id, at} | {op:"meta", name}]}`; `versions` создания —
+//! `[{blob, thumb?, mtime}]` от новой к старой (перенос файла с историей, `push_op`).
 
 use std::collections::BTreeSet;
 
@@ -19,7 +20,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Map, Value};
 
-use super::cloud::{CloudState, NodeId};
+use super::cloud::{CloudState, NodeId, VERSIONS_KEEP};
 use crate::error::{ProtoError, Result};
 use crate::pb::parvane::cloud::v1::{
     cloud_op, CloudBatch, CloudBlobRef, CloudCreate, CloudMeta, CloudMove, CloudNodeKind, CloudOp, CloudPurge, CloudSetBlob, CloudThumb,
@@ -204,8 +205,69 @@ pub fn batch_with_keep(json: &str) -> Result<(CloudBatch, BTreeSet<usize>)> {
     if ops.is_empty() || ops.len() > 500 {
         return Err(bad("ops"));
     }
-    let keep = ops.iter().enumerate().filter(|(_, o)| o.get("keep").and_then(Value::as_bool) == Some(true)).map(|(i, _)| i).collect();
-    Ok((CloudBatch { ops: ops.iter().map(|o| op_of(o).map(|op| CloudOp { op: Some(op) })).collect::<Result<_>>()? }, keep))
+    let mut out = Vec::with_capacity(ops.len());
+    let mut keep = BTreeSet::new();
+    for o in ops {
+        push_op(o, &mut out, &mut keep)?;
+    }
+    if out.len() > 500 {
+        return Err(bad("ops"));
+    }
+    Ok((CloudBatch { ops: out }, keep))
+}
+
+/// Одна правка хоста. Создание файла с `versions` (прежние версии от новой к старой, как в состоянии, CLOUD-3) —
+/// перенос файла с историей в другой контейнер: разворачивается в создание старейшей версией и `setBlob` с `keep`
+/// для каждой следующей, последней — текущей. Метки идут по порядку пакета, поэтому порядок версий сохраняется,
+/// а окно черновика (`coalesce_local`) их не сливает.
+fn push_op(v: &Value, out: &mut Vec<CloudOp>, keep: &mut BTreeSet<usize>) -> Result<()> {
+    let op = op_of(v)?;
+    if v.get("keep").and_then(Value::as_bool) == Some(true) {
+        keep.insert(out.len());
+    }
+    let versions = match v.get("versions") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(a)) => a.as_slice(),
+        Some(_) => return Err(bad("versions")),
+    };
+    if versions.is_empty() {
+        out.push(CloudOp { op: Some(op) });
+        return Ok(());
+    }
+    let cloud_op::Op::Create(mut create) = op else { return Err(bad("versions")) };
+    if versions.len() >= VERSIONS_KEEP {
+        return Err(bad("versions"));
+    }
+    let current = (create.blob.take().ok_or(bad("versions"))?, create.thumb.take(), create.mtime_ms);
+    let mut chain = Vec::with_capacity(versions.len() + 1);
+    for ver in versions.iter().rev() {
+        let vo = ver.as_object().ok_or(bad("versions"))?;
+        chain.push((blob_of(vo.get("blob").ok_or(bad("blob"))?)?, thumb_of(vo)?, u64_of(vo, "mtime")?));
+    }
+    chain.push(current);
+    let node_id = create.node_id.clone();
+    for (i, (blob, thumb, mtime_ms)) in chain.into_iter().enumerate() {
+        if i == 0 {
+            create.blob = Some(blob);
+            create.thumb = thumb;
+            create.mtime_ms = mtime_ms;
+            out.push(CloudOp { op: Some(cloud_op::Op::Create(create.clone())) });
+            continue;
+        }
+        keep.insert(out.len());
+        out.push(CloudOp {
+            op: Some(cloud_op::Op::SetBlob(CloudSetBlob {
+                node_id: node_id.clone(),
+                blob: Some(blob),
+                stamp: None,
+                thumb,
+                mtime_ms,
+                supersedes: Vec::new(),
+                draft_since_ms: 0,
+            })),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

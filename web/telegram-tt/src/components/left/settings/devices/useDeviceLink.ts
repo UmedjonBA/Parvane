@@ -5,7 +5,7 @@ import { callApi } from '../../../../api/gramjs';
 import useLastCallback from '../../../../hooks/useLastCallback';
 
 export type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit'
-  | 'expired' | 'intercepted';
+  | 'expired' | 'intercepted' | 'bundle_off';
 
 export type LinkStatus = {
   isPending: boolean;

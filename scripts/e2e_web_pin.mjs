@@ -3,7 +3,8 @@
 // неверный ввод уменьшает счётчик, счётчик переживает перезагрузку, верный ввод его сбрасывает, выключение,
 // пятый неверный ввод подряд — выход на экран входа со стиранием данных аккаунта на устройстве (базы IndexedDB,
 // кэши кроме оболочки PWA, ключи хранилищ страницы) и вход заново. Телефон: экран блокировки помещается в ширину,
-// «Забыли PIN? Выйти и войти заново» выводит на экран входа и тоже стирает данные.
+// «Забыли PIN? Выйти и войти заново» выводит на экран входа и тоже стирает данные. Вход по отпечатку (WebAuthn PRF,
+// виртуальный аутентификатор Chromium): включение по PIN, открытие отпечатком, отказ не тратит попытку, выключение.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -209,6 +210,7 @@ try {
   await shown(lock(page).getByRole('button', { name: 'Forgot PIN? Sign out and sign in again' }));
   await shown(lock(page).getByText(/^After five wrong attempts/));
   assert.equal(await lock(page).locator('[data-pin-key]').count(), 11, 'клавиатура: десять цифр и «стереть»');
+  assert.equal(await lock(page).locator('[data-pin-biometric]').count(), 0, 'кнопка отпечатка без включённого входа');
   assert.equal(await page.locator('#LeftColumn').count(), 0, 'под экраном блокировки открыт список чатов');
 
   // Прежний PIN больше не подходит; каждый неверный ввод уменьшает счётчик
@@ -301,6 +303,78 @@ try {
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   assert.equal(await lock(page).count(), 0, 'после входа заново экран блокировки');
   console.log('OK: вход заново после стирания');
+
+  // ── Вход по отпечатку (WebAuthn PRF, `RpProfileB` «Открывать отпечатком») ──────────────────────────────
+  // Ключ WebAuthn не привязывается к IP-адресу — страница на `localhost` того же сервера сборки. Виртуальный
+  // аутентификатор Chromium с PRF и проверкой пользователя (CDP `WebAuthn`)
+  const bioContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const bioUser = `pin-bio-${suffix}@local`;
+  const bioUrl = process.env.PARVANE_E2E_BASE_URL.replace('127.0.0.1', 'localhost');
+  sessions.bio = await preparePage(bioContext, bioUser, PASSWORD, { startUrl: bioUrl });
+  const bio = sessions.bio.page;
+  await dismissRecoveryKeyDialog(bio).catch(() => undefined);
+  const cdp = await bioContext.newCDPSession(bio);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      ctap2Version: 'ctap2_1',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      hasPrf: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+  await enablePin(bio, '2580');
+  const bioToggle = slide(bio).locator('[data-pin-biometric-toggle]');
+  await shown(bioToggle);
+  await bioToggle.click();
+  await shown(step(bio, 'biometric'));
+  await tapPin(step(bio, 'biometric'), '0000');
+  await shown(step(bio, 'biometric').getByText('Wrong PIN', { exact: true }));
+  await tapPin(step(bio, 'biometric'), '2580');
+  await shown(bio.getByText('Fingerprint unlock is on').first(), LOGIN_TIMEOUT_MS);
+  await shown(slide(bio).locator('[data-pin-biometric-state="on"][aria-checked="true"]'));
+  await shot(bio, 'desktop-biometric');
+  console.log('OK: вход по отпечатку включён — неверный PIN не включает, верный включает');
+
+  // Экран блокировки: кнопка отпечатка; отмена на аутентификаторе (отказ браузера `NotAllowedError` — виртуальный
+  // аутентификатор без проверки пользователя не отвечает до срока) попыткой PIN не считается
+  await reloadToLock(bio, 5);
+  await shown(lock(bio).locator('[data-pin-biometric]'));
+  await tapPin(lock(bio), '0000');
+  await shown(lockWithLeft(bio, 4));
+  await bio.evaluate(() => {
+    const nativeGet = navigator.credentials.get.bind(navigator.credentials);
+    navigator.credentials.get = (options) => {
+      navigator.credentials.get = nativeGet;
+      return Promise.reject(new DOMException('cancelled by e2e', 'NotAllowedError'));
+    };
+  });
+  await lock(bio).locator('[data-pin-biometric]').click();
+  await shown(lock(bio).locator('[data-pin-biometric]:not([disabled])'));
+  await shown(lockWithLeft(bio, 4));
+  assert.equal(await lock(bio).getByText('Could not unlock with fingerprint', { exact: false }).count(), 0);
+  await lock(bio).locator('[data-pin-biometric]').click();
+  await waitForChatList(bio);
+  assert.deepEqual(await failedKeys(bio), [], 'вход отпечатком не вернул попытки PIN');
+  console.log('OK: отпечаток открывает хранилище, отмена не тратит попытку PIN');
+
+  // PIN по-прежнему работает; выключение без PIN, после него кнопки нет
+  await reloadToLock(bio, 5);
+  await tapPin(lock(bio), '2580');
+  await waitForChatList(bio);
+  await openPinScreen(bio);
+  await shown(slide(bio).locator('[data-pin-biometric-state="on"]'));
+  await slide(bio).locator('[data-pin-biometric-toggle]').click();
+  await shown(slide(bio).locator('[data-pin-biometric-state="off"][aria-checked="false"]'));
+  await reloadToLock(bio, 5);
+  assert.equal(await lock(bio).locator('[data-pin-biometric]').count(), 0, 'кнопка отпечатка после выключения');
+  await tapPin(lock(bio), '2580');
+  await waitForChatList(bio);
+  console.log('OK: PIN работает рядом с отпечатком; выключение убирает кнопку');
 
   // ── Телефон ───────────────────────────────────────────────────────────────
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });

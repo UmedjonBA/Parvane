@@ -177,6 +177,7 @@ const PlannerRecordMenu = ({
       return {
         name: formatPlainName(item.name),
         description: item.description,
+        steps: item.steps?.map((step) => step.text),
         day,
         start: item.isAllDay ? undefined : item.start,
         minutes: item.isAllDay ? undefined : toMinutes(item.end) - toMinutes(item.start),

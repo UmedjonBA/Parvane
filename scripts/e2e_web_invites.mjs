@@ -270,10 +270,14 @@ try {
   await linkName.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await alicePage.waitForTimeout(700);
   await linkName.fill(`limit-1-${suffix.slice(-4)}`);
-  // Лимит использований: радио «1»
-  const usageOne = right.locator('input[name="usageOptions"][value="1"]').first();
-  await usageOne.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
-  await usageOne.check({ force: true });
+  // Срок и лимит — чипами (spec 041): срок «7 дней», лимит «1»
+  // Выбор отрисовывается следующим кадром — ждём `aria-checked`, а не читаем сразу
+  for (const chip of ['[data-invite-expire="week"]', '[data-invite-usage="1"]']) {
+    const locator = right.locator(chip).first();
+    await locator.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await locator.click();
+    await right.locator(`${chip}[aria-checked="true"]`).first().waitFor({ state: 'visible', timeout: 5000 });
+  }
   await right.getByRole('button', { name: 'Create Link' }).click();
   // В списке появилась ссылка с названием и лимитом
   const limitedRow = invitesScreen.locator('.ListItem').filter({ hasText: `limit-1-${suffix.slice(-4)}` }).first();
@@ -281,6 +285,9 @@ try {
   const limitedLinks = await callProviderForChat(alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' });
   const limited = limitedLinks.result.invites.find((invite) => invite.title === `limit-1-${suffix.slice(-4)}`);
   assert(limited && limited.usageLimit === 1, `limited link not listed: ${JSON.stringify(limitedLinks)}`);
+  // Срок «7 дней» — от 6 до 8 суток от сейчас
+  const weekLeft = (limited.expireDate || 0) - Date.now() / 1000;
+  assert(weekLeft > 6 * 86400 && weekLeft < 8 * 86400, `срок ссылки не 7 дней: ${limited.expireDate}`);
   const limitedLink = limited.link.startsWith('http') ? limited.link : `https://${limited.link}`;
   await alicePage.keyboard.press('Escape');
   await alicePage.keyboard.press('Escape');

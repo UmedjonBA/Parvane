@@ -12,6 +12,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
 import { DeviceKeyDialog } from './devices/DeviceDialogs';
+import KeysBundleOffDialog from './KeysBundleOffDialog';
 import ProfileIcon from './profile/ProfileIcon';
 
 import styles from './profile/Profile.module.scss';
@@ -29,6 +30,7 @@ type KeyBundleContents = {
   hasHealth: boolean;
   hasMusic: boolean;
   groups: number;
+  isOff: boolean;
 };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -53,6 +55,7 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
   const [savedAt, setSavedAt] = useState(() => getKeysBackupSavedAt(userId));
 
   const [isRenewOpen, setIsRenewOpen] = useState(false);
+  const [isOffOpen, setIsOffOpen] = useState(false);
   const [contents, setContents] = useState<KeyBundleContents>();
   const [isContentsLoaded, setIsContentsLoaded] = useState(false);
   // Корень аккаунта на устройстве (RECOVER-1 п. 8): новый ключ создаётся без прежнего
@@ -73,6 +76,14 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
 
   const openRenew = useLastCallback(() => setIsRenewOpen(true));
   const closeRenew = useLastCallback(() => setIsRenewOpen(false));
+  const openOff = useLastCallback(() => setIsOffOpen(true));
+  const closeOff = useLastCallback(() => setIsOffOpen(false));
+
+  const handleEnable = useLastCallback(async () => {
+    const isEnabled = await callParvane('parvaneEnableKeyBundle') as boolean | undefined;
+    showNotification({ message: lang(isEnabled ? 'ParvaneKeysOnDone' : 'ParvaneKeysOnFailed') });
+    void loadContents();
+  });
 
   const handleExport = useLastCallback(async () => {
     const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
@@ -151,7 +162,20 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
       <div className={styles.hint}>{lang('ParvaneRecoveryKeyAbout')}</div>
 
       <div className={styles.caption}>{lang('ParvaneKeysBundleCaption')}</div>
-      {contents ? (
+      {contents?.isOff ? (
+        <>
+          <div className={styles.hint} data-keys-bundle-off>{lang('ParvaneKeysOffState')}</div>
+          <div className={styles.group}>
+            <button type="button" className={rowClass} data-keys-action="bundle-on" onClick={handleEnable}>
+              <span className={styles.setText}>
+                <span className={styles.setTitle}>{lang('ParvaneKeysOnAction')}</span>
+                <span className={styles.setHint}>{lang('ParvaneKeysOnHint')}</span>
+              </span>
+              <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+            </button>
+          </div>
+        </>
+      ) : contents ? (
         <div className={styles.group} data-keys-bundle>
           {BUNDLE_ROWS.map(({ part, key }) => (
             <div key={part} className={styles.setRow} data-bundle-part={part}>
@@ -171,6 +195,18 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
           {lang(isContentsLoaded ? 'ParvaneKeysBundleNone' : 'Loading')}
         </div>
       )}
+      {contents && !contents.isOff && (
+        <div className={styles.group}>
+          <button
+            type="button"
+            className={buildClassName(rowClass, styles.danger)}
+            data-keys-action="bundle-off"
+            onClick={openOff}
+          >
+            <span className={styles.setTitle}>{lang('ParvaneKeysOffAction')}</span>
+          </button>
+        </div>
+      )}
       <div className={styles.hint}>{lang('ParvaneKeysBundleHint')}</div>
 
       <DeviceKeyDialog
@@ -179,6 +215,7 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
         onClose={closeRenew}
         onDone={loadContents}
       />
+      <KeysBundleOffDialog isOpen={isOffOpen} onClose={closeOff} onDone={loadContents} />
     </div>
   );
 };

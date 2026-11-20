@@ -95,6 +95,12 @@ try {
   await rowsOf('Лекция').first().click();
   await page.locator('#planner-event-list').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.locator('#planner-event-list').inputValue(), 'Учёба', 'группа в карточке события');
+  // Точка цвета группы перед названием (PhPlanMore): цвет — из данных группы
+  const groupDot = sidePane.locator('[data-card-row="group"] [data-group-color]');
+  await groupDot.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('нет точки цвета группы в карточке события'));
+  const dotImage = await groupDot.locator('select').evaluate((el) => getComputedStyle(el).backgroundImage);
+  assert.match(dotImage, /radial-gradient/, `точка цвета группы нарисована: ${dotImage}`);
   // Туда и обратно на «Без группы»: пункт один, кружки цвета возвращаются (раньше пустой `value` пункта снимался
   // при перерисовке — выбиралась «группа» с именем «Без группы»)
   await page.locator('#planner-event-list').selectOption({ label: 'No group' });
@@ -104,6 +110,7 @@ try {
   await page.locator('#planner-event-list').selectOption({ label: 'No group' });
   await sidePane.getByRole('radiogroup', { name: 'Group color' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.locator('#planner-event-list option').filter({ hasText: 'No group' }).count(), 1, '«Без группы» — один');
+  assert.equal(await groupDot.count(), 0, 'точка цвета у «Без группы»');
   assert.equal(await page.locator('#planner-event-remind').evaluate((el) => el.selectedOptions[0]?.textContent), 'No reminder');
   await closeSide();
   // Панель групп справа от ленты, кнопка «Добавить в группу» — в её шапке

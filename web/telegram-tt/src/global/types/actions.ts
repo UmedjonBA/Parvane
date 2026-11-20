@@ -635,6 +635,8 @@ export interface ActionPayloads {
     messageIds: number[];
     description?: string;
     option?: string;
+    // Parvane (REPORT-2): кому уходит жалоба — `admins` | `server`
+    target?: string;
   } & WithTabId;
 
   rejectSuggestedPost: {

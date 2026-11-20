@@ -39,6 +39,7 @@ import PlannerName from './PlannerName';
 import PlannerRemindSelect from './PlannerRemindSelect';
 import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
+import PlannerSteps from './PlannerSteps';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
@@ -62,7 +63,6 @@ type Pending = { kind: 'patch' | 'copy'; changes: Partial<PlannerTask>; notice: 
   | { kind: 'delete' }
   | { kind: 'rule'; repeat?: PlannerRepeat };
 
-const STEP_MAX_LENGTH = 160;
 const NAME_MAX_LENGTH = 160;
 
 const PlannerTaskEditor = ({
@@ -86,7 +86,6 @@ const PlannerTaskEditor = ({
     setIsNameEditing(false);
   }, [task.id]);
 
-  const [stepText, setStepText] = useState('');
   const [pending, setPending] = useState<Pending>();
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(task.repeat, task.day || today),
@@ -295,27 +294,18 @@ const PlannerTaskEditor = ({
   });
 
   // Шаги экземпляра отмечаются по дню, без выбора объёма (FR-005)
-  const handleStepToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const index = Number(e.currentTarget.value);
-    const isDone = e.currentTarget.checked;
+  const handleStepToggle = useLastCallback((index: number, isDone: boolean) => {
     updatePlanner((draft) => {
       setTaskStepDone(draft, task, index, isDone);
     }, lang('PlannerNoticeStepUpdated', { name: task.steps[index].text }));
   });
 
-  const handleStepSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    // Текст — из поля: Enter сразу после набора приходит раньше перерисовки, и состояние ещё пустое
-    const input = e.currentTarget.querySelector('input');
-    const text = (input?.value ?? stepText).trim();
-    if (!text) return;
-    if (input) input.value = '';
+  const handleStepAdd = useLastCallback((text: string) => {
     const steps = [
       ...task.steps.map((step) => ({ text: step.text, isDone: isInstance ? false : step.isDone })),
       { text, isDone: false },
     ];
     patch({ steps }, lang('PlannerNoticeStepAdded'));
-    setStepText('');
   });
 
   const handleStatus = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -391,7 +381,6 @@ const PlannerTaskEditor = ({
 
   const isDone = task.status === 'done';
 
-  const doneSteps = task.steps.filter((step) => step.isDone).length;
   return (
     <div className={buildClassName(styles.editor, styles.eventCard)}>
       {isNameEditing ? (
@@ -491,39 +480,7 @@ const PlannerTaskEditor = ({
         <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
       </PlannerCardRow>
 
-      <PlannerCardRow icon="check" row="steps">
-        <span className={buildClassName(styles.fieldLabel, styles.stepsCaption)}>
-          {lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}
-        </span>
-        {task.steps.map((step, index) => (
-          <label
-            key={`${index}${step.text}`}
-            className={buildClassName(styles.row, styles.rowButton, styles.rowStep, step.isDone && styles.rowDone)}
-          >
-            <input
-              type="checkbox"
-              className={buildClassName(styles.check, styles.checkSmall)}
-              value={String(index)}
-              checked={step.isDone}
-              onChange={handleStepToggle}
-            />
-            <span className={styles.rowTitle}>{step.text}</span>
-          </label>
-        ))}
-        <form className={styles.stepForm} onSubmit={handleStepSubmit}>
-          <PlannerField
-            label={lang('PlannerStepNew')}
-            type="text"
-            value={stepText}
-            maxLength={STEP_MAX_LENGTH}
-            placeholder={lang('PlannerStepAdd')}
-            onInput={setStepText}
-          />
-          <button type="submit" className={styles.ib} aria-label={lang('PlannerStepAdd')}>
-            <Icon name="add" />
-          </button>
-        </form>
-      </PlannerCardRow>
+      <PlannerSteps steps={task.steps} onToggle={handleStepToggle} onAdd={handleStepAdd} />
 
       <PlannerCardRow icon="info" row="description">
         <TextArea

@@ -1,231 +1,177 @@
 import type { ChangeEvent } from 'react';
-import {
-  memo, useEffect, useMemo, useRef, useState,
-} from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { memo, useLayoutEffect, useState } from '../../../lib/teact/teact';
+import { getActions, withGlobal } from '../../../global';
 
 import type { TabState } from '../../../global/types';
+import type { RegularLangKey } from '../../../types/language';
 
-import { requestMeasure, requestMutation } from '../../../lib/fasterdom/fasterdom';
+import { getUserFullName } from '../../../global/helpers';
+import { selectChatMessage, selectUser } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import { LOCAL_TGS_URLS } from '../../common/helpers/animatedAssets';
 
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
-import AnimatedIconWithPreview from '../../common/AnimatedIconWithPreview';
-import Button from '../../ui/Button';
-import ListItem from '../../ui/ListItem';
-import Modal from '../../ui/Modal';
-import TextArea from '../../ui/TextArea';
-import Transition, { ACTIVE_SLIDE_CLASS_NAME, TO_SLIDE_CLASS_NAME } from '../../ui/Transition';
+import PvSheet from '../../parvane/notes/PvSheet';
 
+import kit from '../../parvane/notes/PvKit.module.scss';
 import styles from './ReportModal.module.scss';
 
-const MAX_DESCRIPTION = 512;
-const ADDED_PADDING = 20;
+const MAX_DESCRIPTION = 1024;
+const QUOTE_MAX = 60;
+const SUBMIT_MARK = ':send';
+const TARGET_KEYS: Record<string, RegularLangKey> = {
+  admins: 'ParvaneReportTargetAdmins',
+  server: 'ParvaneReportTargetServer',
+};
 
 export type OwnProps = {
   modal: TabState['reportModal'];
 };
 
+type StateProps = {
+  authorName?: string;
+  messageText?: string;
+};
+
+// Parvane (spec 041, доска `XdChat`; REPORT-2): жалоба одной формой — причина чипами, комментарий, кому уходит.
+// Причины и адресатов отдаёт провайдер (их выбирает движок), окно только показывает и отправляет
 const ReportModal = ({
-  modal,
-}: OwnProps) => {
-  const {
-    reportMessages, closeReportModal, openPreviousReportModal,
-  } = getActions();
-  const lang = useOldLang();
-  const isOpen = Boolean(modal);
+  modal, authorName, messageText,
+}: OwnProps & StateProps) => {
+  const { reportMessages, closeReportModal } = getActions();
+  const lang = useLang();
 
-  const transitionRef = useRef<HTMLDivElement>();
+  const section = modal?.sections[0];
+  const options = section?.type === 'options' ? section.options : undefined;
+  const targets = section?.type === 'options' ? section.targets || [] : [];
 
+  const [reason, setReason] = useState<string | undefined>();
+  const [target, setTarget] = useState<string | undefined>();
   const [text, setText] = useState('');
 
-  const handleOptionClick = useLastCallback((e, option: string) => {
-    const {
-      messageIds, subject, chatId,
-    } = modal!;
-    if (!messageIds) return;
-    switch (subject) {
-      case 'message':
-        reportMessages({ chatId: chatId!, messageIds, option });
-        break;
-    }
-  });
-
-  const [renderingSection, renderingDepth] = useMemo(() => {
-    if (!modal) return [undefined, 0];
-    const sectionDepth = modal.sections.length - 1;
-    return [modal?.sections[sectionDepth], sectionDepth];
-  }, [modal]);
-  const isOptionsSection = renderingSection?.type === 'options';
-  const isCommentSection = renderingSection?.type === 'comment';
-
-  const handleBackClick = useLastCallback(() => {
-    openPreviousReportModal();
-  });
-
-  const handleCloseClick = useLastCallback(() => {
-    closeReportModal();
-  });
-
-  const header = useMemo(() => {
-    if (!modal) {
-      return undefined;
-    }
-
-    const hasSubtitle = Boolean(isOptionsSection && renderingSection.subtitle);
-
-    return (
-      <div className="modal-header-condensed">
-        {renderingDepth ? (
-          <Button
-            round
-            color="translucent"
-            size="tiny"
-            ariaLabel={lang('Back')}
-            onClick={handleBackClick}
-            iconName="arrow-left"
-          />
-        ) : (
-          <Button
-            round
-            color="translucent"
-            size="tiny"
-            ariaLabel={lang('Close')}
-            onClick={handleCloseClick}
-            iconName="close"
-          />
-        )}
-        <div className={buildClassName('modal-title', styles.modalTitle, hasSubtitle && styles.titleMultiline)}>
-          <h3 className={buildClassName(styles.title, renderingDepth && styles.hasDepth)}>
-            {isOptionsSection
-              ? lang('Report')
-              : translateParvane(lang, renderingSection?.title)}
-          </h3>
-          {isOptionsSection && renderingSection.subtitle && (
-            <span className={styles.subtitle}>{translateParvane(lang, renderingSection.subtitle)}</span>
-          )}
-        </div>
-      </div>
-    );
-  }, [isOptionsSection, lang, modal, renderingDepth, renderingSection]);
+  // Начальные значения формы — до первого кадра (правило экрана spec 041)
+  useLayoutEffect(() => {
+    const isOptions = section?.type === 'options';
+    setReason(isOptions ? section.options[0]?.option : undefined);
+    setTarget(isOptions ? section.targets?.[0] : undefined);
+    setText('');
+  }, [section]);
 
   const handleTextChange = useLastCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
   });
 
-  useEffect(() => {
-    if (!modal) return;
-    const slide = document.querySelector<HTMLElement>(`.${ACTIVE_SLIDE_CLASS_NAME} > .${styles.slide}`);
-    if (!slide) return;
-
-    const height = slide.scrollHeight;
-    requestMutation(() => {
-      transitionRef.current!.style.height = `${height}px`;
-    });
-  }, [modal]);
-
-  const handleAnimationStart = useLastCallback(() => {
-    const slide = document.querySelector<HTMLElement>(`.${TO_SLIDE_CLASS_NAME} > .${styles.slide}`)!;
-
-    requestMeasure(() => {
-      const height = slide.scrollHeight;
-      requestMutation(() => {
-        transitionRef.current!.style.height = `${height + ADDED_PADDING}px`;
-      });
-    });
-  });
-
-  const closeReportMessageModalHandler = useLastCallback(() => {
-    setText('');
+  const handleClose = useLastCallback(() => {
     closeReportModal();
   });
 
-  const sendMessageReportHandler = useLastCallback(() => {
-    const {
-      messageIds, subject, chatId,
-    } = modal!;
-    const option = isCommentSection ? renderingSection.option : undefined;
-    switch (subject) {
-      case 'message':
-        reportMessages({
-          chatId: chatId!, messageIds, option, description: text,
-        });
-        break;
-    }
-    closeReportMessageModalHandler();
+  const handleSend = useLastCallback(() => {
+    if (!modal?.chatId || !reason || !target) return;
+    reportMessages({
+      chatId: modal.chatId,
+      messageIds: modal.messageIds,
+      option: `${reason}${SUBMIT_MARK}`,
+      description: text.trim(),
+      target,
+    });
+    closeReportModal();
   });
 
+  const hasMessage = Boolean(modal?.messageIds.length);
+  const quote = messageText && messageText.length > QUOTE_MAX ? `${messageText.slice(0, QUOTE_MAX)}…` : messageText;
+
   return (
-    <Modal
-      isOpen={isOpen}
-      header={header}
-      onClose={closeReportMessageModalHandler}
-      contentClassName={styles.content}
+    <PvSheet
+      isOpen={Boolean(modal)}
+      title={lang(hasMessage ? 'ParvaneReportMessageTitle' : 'ParvaneReportChatTitle')}
       className={styles.root}
+      onClose={handleClose}
     >
-      <Transition
-        name="slide"
-        className={styles.transition}
-        ref={transitionRef}
-        activeKey={renderingDepth}
-        onStart={handleAnimationStart}
-      >
-        <div className={styles.slide}>
-          {isOptionsSection
-            ? <h3 className={styles.sectionTitle}>{translateParvane(lang, renderingSection.title)}</h3> : undefined}
-          {isOptionsSection && renderingSection.options.map((option) => (
-            <ListItem
-              narrow
-              nonInteractive
-              secondaryIcon="next"
-              className={styles.option}
-              buttonClassName={styles.optionButton}
-              clickArg={option.option}
-              onClick={handleOptionClick}
-            >
-              <div className={styles.optionText}>{translateParvane(lang, option.text)}</div>
-            </ListItem>
-          ))}
-          {isCommentSection ? (
-            <div className={styles.block}>
-              <AnimatedIconWithPreview
-                tgsUrl={LOCAL_TGS_URLS.Report}
-                size={100}
-                className={styles.reportIcon}
-                nonInteractive
-                forceAlways
-                noLoop={false}
-              />
-              <TextArea
-                id="option"
-                className={styles.optionInfo}
-                label={renderingSection.isOptional ? lang('Report2CommentOptional') : lang('Report2Comment')}
-                onChange={handleTextChange}
-                value={text}
-                maxLength={MAX_DESCRIPTION}
-                maxLengthIndicator={(MAX_DESCRIPTION - text.length).toString()}
-                noReplaceNewlines
-              />
-              <Button
-                onClick={sendMessageReportHandler}
-                disabled={!renderingSection.isOptional ? !text.length : undefined}
-              >
-                {lang('ReportSend')}
-              </Button>
-            </div>
-          ) : undefined}
+      {hasMessage && (authorName || quote) && (
+        <div className={buildClassName(kit.small, kit.muted, styles.subject)} dir="auto" data-report-subject>
+          {[authorName, quote && `«${quote}»`].filter(Boolean).join(' · ')}
         </div>
-      </Transition>
-    </Modal>
+      )}
+      <div className={kit.caps}>{lang('ParvaneReportReasonLabel')}</div>
+      <div className={kit.chips} role="radiogroup" aria-label={lang('ParvaneReportReasonLabel')}>
+        {options?.map((option) => (
+          <button
+            key={option.option}
+            type="button"
+            role="radio"
+            aria-checked={option.option === reason}
+            className={buildClassName(kit.chip, option.option === reason && kit.chipOn)}
+            data-report-reason={option.option}
+            onClick={() => setReason(option.option)}
+          >
+            {translateParvane(lang, option.text)}
+          </button>
+        ))}
+      </div>
+      <label className={styles.field}>
+        <span className={buildClassName(kit.small, kit.muted)}>{lang('ParvaneReportCommentLabel')}</span>
+        <textarea
+          className={buildClassName(kit.textarea, styles.comment)}
+          placeholder={lang('ParvaneReportCommentHint')}
+          value={text}
+          maxLength={MAX_DESCRIPTION}
+          data-report-comment
+          onChange={handleTextChange}
+        />
+      </label>
+      {targets.length > 0 && (
+        <>
+          <div className={kit.caps}>{lang('ParvaneReportTargetLabel')}</div>
+          <div className={buildClassName(kit.seg, styles.targets)} role="radiogroup">
+            {targets.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="radio"
+                aria-checked={item === target}
+                className={buildClassName(kit.segItem, styles.target, item === target && kit.segItemOn)}
+                data-report-target={item}
+                onClick={() => setTarget(item)}
+              >
+                {TARGET_KEYS[item] ? lang(TARGET_KEYS[item]) : item}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <div className={buildClassName(kit.small, kit.muted, styles.note)} data-report-note>
+        {lang(!target
+          ? 'ParvaneReportNowhere'
+          : target === 'admins' ? 'ParvaneReportNoteAdmins' : 'ParvaneReportNoteServer')}
+      </div>
+      <div className={buildClassName(kit.sheetButtons, styles.buttons)}>
+        <button type="button" className={kit.btn} onClick={handleClose}>{lang('Cancel')}</button>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc)}
+          disabled={!reason || !target}
+          data-report-send
+          onClick={handleSend}
+        >
+          {lang('ParvaneReportSend')}
+        </button>
+      </div>
+    </PvSheet>
   );
 };
 
-export default memo(ReportModal);
+export default memo(withGlobal<OwnProps>((global, { modal }): Complete<StateProps> => {
+  const messageId = modal?.messageIds[0];
+  const message = modal?.chatId && messageId ? selectChatMessage(global, modal.chatId, messageId) : undefined;
+  const author = message?.senderId ? selectUser(global, message.senderId) : undefined;
+  return {
+    authorName: author ? getUserFullName(author) : undefined,
+    messageText: message?.content.text?.text,
+  };
+})(ReportModal));
 
-// Parvane (spec 024): причины и заголовки жалоб провайдер отдаёт ключами строк — переводит окно
-function translateParvane(lang: (key: string) => string, text?: string) {
-  return text?.startsWith('Parvane') ? lang(text) : text;
+// Причины провайдер отдаёт ключами строк (`Parvane…`) — переводит окно
+function translateParvane(lang: ReturnType<typeof useLang>, text: string) {
+  return text.startsWith('Parvane') ? lang(text as RegularLangKey) : text;
 }

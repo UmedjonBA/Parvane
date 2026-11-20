@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { PlannerState } from './plannerModel';
 
-import { createEmptyPlannerState, eventInstance } from './plannerModel';
+import {
+  createEmptyPlannerState, detachInstance, eventInstance, setEventStepDone,
+} from './plannerModel';
 import { addEntry, setDescription } from './plannerSeriesEdit';
 import {
   diffChanges, type EngineState, fromEngineState, hasEngineQuickLines, isLegacyPlannerRecord, legacyToChanges,
@@ -218,6 +220,47 @@ describe('планировщик ↔ движок (spec 010)', () => {
       id: 'e8', name: 'врач', start: '10:30', end: '11:30', day: '2026-10-09', description: 'взять полис',
     });
     expect((diffChanges(state, created)[0].event as { description: string }).description).toBe('взять полис');
+  });
+
+  it('шаги события: из движка и обратно отдельным полем; у дня ряда отметка — по дню', () => {
+    const state = fromEngineState({
+      ...ENGINE,
+      events: [{
+        id: 'e9',
+        name: 'Зал',
+        start: '18:00',
+        end: '19:30',
+        weekdays: null,
+        day: '',
+        repeat: {
+          kind: 'weekly', interval: 1, weekdays: [0], monthDay: 0, startDay: '2026-11-15', endDay: '', count: 0,
+        },
+        steps: [{ text: 'Собрать сумку', isDone: false }, { text: 'Разминка', isDone: false }],
+      }, {
+        id: 'e10', name: 'созвон', start: '10:00', end: '11:00', weekdays: null, day: '2026-11-16', steps: [],
+      }],
+    });
+    expect(state.events.map(({ steps }) => steps?.length)).toEqual([2, undefined]);
+    // Отметка шага у дня ряда — отметка дня, шаги ряда не меняются
+    const marked = structuredClone(state);
+    expect(setEventStepDone(marked, eventInstance(marked.events[0], '2026-11-22'), 1, true)).toBe(true);
+    expect(eventInstance(marked.events[0], '2026-11-22').steps!.map(({ isDone }) => isDone)).toEqual([false, true]);
+    expect(eventInstance(marked.events[0], '2026-11-29').steps!.map(({ isDone }) => isDone)).toEqual([false, false]);
+    const markChange = diffChanges(state, marked)[0].event as Record<string, unknown>;
+    expect(Object.keys(markChange).sort()).toEqual(['id', 'occurrences', 'repeat', 'weekdays']);
+    expect(markChange.occurrences).toEqual([{ day: '2026-11-22', excluded: false, done: false, doneSteps: [1] }]);
+    // Отделённый день уносит отметки дня
+    const detached = structuredClone(marked);
+    const copy = detachInstance(detached, 'event', 'e9', '2026-11-22', { start: '19:00' })!;
+    expect(copy.steps!.map(({ isDone }) => isDone)).toEqual([false, true]);
+    // Новый шаг разового события — только поле шагов
+    const added = structuredClone(state);
+    added.events[1].steps = [{ text: 'Повестка', isDone: false }];
+    expect(diffChanges(state, added)).toEqual([
+      { event: { id: 'e10', weekdays: null, repeat: null, steps: [{ text: 'Повестка', isDone: false }] } },
+    ]);
+    expect(setEventStepDone(added, added.events[1], 0, true)).toBe(true);
+    expect(added.events[1].steps[0].isDone).toBe(true);
   });
 
   it('правка одного поля не переписывает остальные (сведение по полям между устройствами)', () => {

@@ -19,7 +19,7 @@ type OwnProps = {
   onResetIdentity: NoneToVoidFunction;
 };
 
-type RecoverResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+type RecoverResult = 'ok' | 'bad_key' | 'no_backup' | 'bundle_off' | 'failed';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
@@ -32,12 +32,14 @@ const TELEGRAM_STATE_KEYS: Partial<Record<TelegramRecoveryState, string>> = {
   limit: 'ParvaneTgRecoverLimit',
   expired: 'ParvaneTgRecoverExpired',
   intercepted: 'ParvaneTgRecoverIntercepted',
+  bundle_off: 'ParvaneRecoverBundleOff',
 };
 
 const RECOVER_RESULT_KEYS: Record<RecoverResult, string> = {
   ok: 'ParvaneRecoverDone',
   bad_key: 'ParvaneSskRotationBadKey',
   no_backup: 'ParvaneRecoverNoBackup',
+  bundle_off: 'ParvaneRecoverBundleOff',
   failed: 'ParvaneSskRotationFailed',
 };
 

@@ -7,13 +7,11 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiChat, ApiExportedInvite } from '../../../api/types';
 import { ManagementScreens } from '../../../types';
 
-import { STICKER_SIZE_INVITES } from '../../../config';
 import { getMainUsername, getPublicChatLink, isChatChannel } from '../../../global/helpers';
 import { selectChat, selectTabState } from '../../../global/selectors';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatCountdown, MILLISECONDS_IN_DAY } from '../../../util/dates/oldDateFormat';
 import { getServerTime } from '../../../util/serverTime';
-import { LOCAL_TGS_URLS } from '../../common/helpers/animatedAssets';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
 import useFlag from '../../../hooks/useFlag';
@@ -22,7 +20,6 @@ import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
-import AnimatedIconWithPreview from '../../common/AnimatedIconWithPreview';
 import Icon from '../../common/icons/Icon';
 import LinkField from '../../common/LinkField';
 import NothingFound from '../../common/NothingFound';
@@ -284,16 +281,10 @@ const ManageInvites: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management ManageInvites">
       <div className="panel-content custom-scroll">
-        <Island>
-          <AnimatedIconWithPreview
-            tgsUrl={LOCAL_TGS_URLS.Invite}
-            size={STICKER_SIZE_INVITES}
-            className="section-icon"
-          />
-          <IslandDescription>
-            {isChannel ? oldLang('PrimaryLinkHelpChannel') : oldLang('PrimaryLinkHelp')}
-          </IslandDescription>
-        </Island>
+        {/* Parvane (spec 041): без наклейки Telegram — пояснение строкой, как на экранах заявок и типа группы */}
+        <IslandDescription>
+          {isChannel ? oldLang('PrimaryLinkHelpChannel') : oldLang('PrimaryLinkHelp')}
+        </IslandDescription>
         {primaryInviteLink && (
           <>
             <IslandTitle>

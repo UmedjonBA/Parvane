@@ -105,6 +105,8 @@ export type PlannerEvent = {
   remind?: number;
   // Группа (имя списка), как `PlannerTask.project`; цвет события — цвет группы, `color` — только без группы
   project?: string;
+  // Шаги, как у задачи (нет значения — шагов нет); у экземпляра ряда отметки — по дню
+  steps?: PlannerStep[];
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -691,7 +693,7 @@ export function getStateCache<T>(state: PlannerState, key: string, build: () => 
 
 // Поля экземпляра, которые берутся не из шаблона
 const TASK_INSTANCE_OWN = new Set(['day', 'due', 'status', 'steps', 'instanceDay']);
-const EVENT_INSTANCE_OWN = new Set(['day', 'instanceDay']);
+const EVENT_INSTANCE_OWN = new Set(['day', 'steps', 'instanceDay']);
 
 // Экземпляр ещё отвечает шаблону: все унаследованные поля те же, отметка дня та же
 function isFresh<T extends PlannerSeriesItem>(
@@ -753,12 +755,27 @@ export function eventInstance(event: PlannerEvent, day: string): PlannerEvent {
   }
   const occurrence = getOccurrence(event, day);
   const entry = byDay.get(day);
-  if (entry && isFresh(entry, event, occurrence, EVENT_INSTANCE_OWN)) return entry.instance;
-  const instance: PlannerEvent = { ...event, day, instanceDay: day };
+  if (entry && isFresh(entry, event, occurrence, EVENT_INSTANCE_OWN) && hasSameStepTexts(entry.instance, event)) {
+    return entry.instance;
+  }
+  const doneSteps = new Set(occurrence?.doneSteps || []);
+  const instance: PlannerEvent = {
+    ...event,
+    day,
+    steps: event.steps?.map((step, index) => ({ text: step.text, isDone: doneSteps.has(index) })),
+    instanceDay: day,
+  };
   byDay.set(day, {
     instance, occurrence, done: occurrence?.done, doneSteps: occurrence?.doneSteps,
   });
   return instance;
+}
+
+// Шаги шаблона правятся на месте: экземпляр ещё отвечает им, пока тексты те же
+function hasSameStepTexts(instance: PlannerEvent, event: PlannerEvent) {
+  const steps = event.steps || [];
+  const own = instance.steps || [];
+  return own.length === steps.length && own.every((step, index) => step.text === steps[index].text);
 }
 
 export function isInstanceDone(task: PlannerTask, day: string) {
@@ -851,8 +868,9 @@ export function detachInstance(
     excludeInstance(state, kind, id, day);
     return detached;
   }
+  // Отметки шагов дня переходят в отделённую копию
   const detached: PlannerEvent = {
-    ...stripSeries(item as PlannerEvent), ...patch, id: newId(), origin, day: patch.day ?? day,
+    ...stripSeries(eventInstance(item as PlannerEvent, day)), ...patch, id: newId(), origin, day: patch.day ?? day,
   };
   state.events.push(detached);
   excludeInstance(state, kind, id, day);
@@ -997,15 +1015,27 @@ export function setTaskDone(state: PlannerState, task: PlannerTask, isDone: bool
 
 /** Отметить шаг задачи (или экземпляра ряда — по дню). */
 export function setTaskStepDone(state: PlannerState, task: PlannerTask, index: number, isDone: boolean) {
-  if (task.repeat && task.instanceDay) {
-    const current = new Set(getOccurrence(task, task.instanceDay)?.doneSteps || []);
+  return setStepDone(state, 'task', task, index, isDone);
+}
+
+/** Отметить шаг события (или экземпляра ряда — по дню). */
+export function setEventStepDone(state: PlannerState, event: PlannerEvent, index: number, isDone: boolean) {
+  return setStepDone(state, 'event', event, index, isDone);
+}
+
+function setStepDone(
+  state: PlannerState, kind: 'task' | 'event', item: PlannerSeriesItem, index: number, isDone: boolean,
+) {
+  if (item.repeat && item.instanceDay) {
+    const current = new Set(getOccurrence(item, item.instanceDay)?.doneSteps || []);
     if (isDone) current.add(index);
     else current.delete(index);
-    return setOccurrence(state, 'task', task.id, task.instanceDay, { doneSteps: [...current].sort((a, b) => a - b) });
+    return setOccurrence(state, kind, item.id, item.instanceDay, { doneSteps: [...current].sort((a, b) => a - b) });
   }
-  const target = state.tasks.find((t) => t.id === task.id);
-  if (!target?.steps[index]) return false;
-  target.steps[index].isDone = isDone;
+  const target = seriesOf(state, kind, item.id);
+  const step = target?.steps?.[index];
+  if (!step) return false;
+  step.isDone = isDone;
   return true;
 }
 

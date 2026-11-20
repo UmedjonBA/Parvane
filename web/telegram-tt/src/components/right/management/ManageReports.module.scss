@@ -1,0 +1,92 @@
+// Жалобы участников у админа (доска `RpChat`): карточка на сообщение, кнопки набора PvKit
+
+.root {
+  background: var(--pv-bg);
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.author {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reason {
+  flex: none;
+
+  padding: 0.125rem 0.625rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 1rem;
+
+  font-size: var(--pv-font-size-small);
+
+  background: var(--pv-bg);
+}
+
+.quote {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+  overflow-wrap: anywhere;
+
+  background: var(--pv-bg);
+
+  &:not(:disabled) {
+    cursor: pointer;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+}
+
+.comment {
+  padding-inline-start: 0.625rem;
+  border-inline-start: 2px solid var(--pv-line2);
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.empty {
+  padding: 1rem 0.25rem;
+}
+
+.footer {
+  padding: 0 0.25rem;
+}

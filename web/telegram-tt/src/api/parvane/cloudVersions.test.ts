@@ -106,6 +106,13 @@ describe('cloud received copies', () => {
         calls.push([method, request]);
         return Promise.resolve({ file_id: 'drive-1', chunks: 1 } as T);
       },
+      downloadBlobCap: (fileId, capability, first) => {
+        calls.push(['download', { fileId, capability, first }]);
+        return Promise.resolve({ size: 40, chunks: 1, parts: new Map([[0, new Uint8Array(40)]]) });
+      },
+      setBlobDomain: (fileId, domain) => {
+        calls.push(['domain', { fileId, domain }]);
+      },
       serverDomain: () => 'local',
       loadRecord: <T, >(key: string) => Promise.resolve(saved.get(key) as T | undefined),
       saveRecord: (key, value) => {
@@ -136,16 +143,31 @@ describe('cloud received copies', () => {
       .toEqual(['aliya@local', 'регламент_обновлений.md', undefined, 'drive-1', 'bob@local']);
   });
 
-  it('skips a node another device already made and a blob of another server', async () => {
+  it('skips a node another device already made', async () => {
     const applied: unknown[][] = [];
     const calls: unknown[] = [];
     const id = await receivedNodeId('op-2');
     await receiver(applied, calls, { nodes: [{ id }] }).receive({
       wire, from: 'aliya@local', opId: 'op-2', self: 'bob@local',
     });
+    expect([applied.length, calls.length]).toEqual([0, 0]);
+  });
+
+  it('relays a blob of another server through the device into the own drive', async () => {
+    const applied: unknown[][] = [];
+    const calls: [string, Record<string, unknown>][] = [];
     await receiver(applied, calls).receive({
       wire: { ...wire, blob_domain: 'far.example' }, from: 'aliya@far.example', opId: 'op-3', self: 'bob@local',
     });
-    expect([applied.length, calls.length]).toEqual([0, 0]);
+    expect(calls.map((c) => c[0])).toEqual([
+      'domain', 'download', 'cloud.blob.upload_chunk', 'cloud.blob.upload_complete',
+    ]);
+    expect(calls[0][1]).toEqual({ fileId: 'media-1', domain: 'far.example' });
+    expect(calls[1][1]).toEqual({ fileId: 'media-1', capability: 'Y2Fw', first: 0 });
+    expect(calls.some((c) => c[0] === 'cloud.blob.copy')).toBe(false);
+    const [, op] = applied[0] as [string, { from: string; blob: CloudBlobInfo }];
+    expect([op.from, op.blob.fileId, op.blob.key, op.blob.uploader, op.blob.chunks])
+      .toEqual(['aliya@far.example', 'drive-1', 'a2V5', 'bob@local', 1]);
+    expect(op.blob.capability).not.toBe('Y2Fw');
   });
 });

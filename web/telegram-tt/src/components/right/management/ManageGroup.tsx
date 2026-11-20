@@ -282,8 +282,10 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
             )}
           </div>
           {/* Parvane: «Тип группы» (доска `XpChat`) несёт и доступ (вступление по заявке), и защиту (усиленная
-              приватность) — открывает его и админ с правом приглашать или менять сведения */}
-          {IS_GROUP_TYPE_SUPPORTED && (chat.isCreator || canInvite || canChangeInfo) && (
+              приватность), и жалобы участников (REPORT-2) — открывает его и админ с правом приглашать, менять сведения,
+              удалять сообщения или блокировать */}
+          {IS_GROUP_TYPE_SUPPORTED && (chat.isCreator || canInvite || canChangeInfo || canBanUsers
+            || getHasAdminRight(chat, 'deleteMessages')) && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('GroupType')}</span>
               <span className="subtitle">{isPublicGroup ? lang('TypePublic') : lang('TypePrivate')}</span>

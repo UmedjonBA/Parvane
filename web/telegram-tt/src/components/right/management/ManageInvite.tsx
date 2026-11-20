@@ -8,6 +8,7 @@ import { ManagementScreens } from '../../../types';
 
 import { isChatChannel, isChatPublic } from '../../../global/helpers';
 import { selectChat, selectTabState } from '../../../global/selectors';
+import buildClassName from '../../../util/buildClassName';
 import { formatFullDate, formatTime } from '../../../util/dates/oldDateFormat';
 import { getServerTime } from '../../../util/serverTime';
 
@@ -21,16 +22,21 @@ import CalendarModal from '../../common/CalendarModal';
 import Island, { IslandDescription, IslandTitle } from '../../gili/layout/Island';
 import SwitchField from '../../gili/templates/SwitchField';
 import Button from '../../ui/Button';
-import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
-import RadioGroup from '../../ui/RadioGroup';
+
+import kit from '../../parvane/notes/PvKit.module.scss';
+import styles from './ManageInvite.module.scss';
 
 const DEFAULT_USAGE_LIMITS = [1, 10, 100];
 const DEFAULT_EXPIRE_DATE = {
   hour: 3600000,
   day: 86400000,
   week: 604800000,
+  month: 2592000000,
 };
+// Parvane: сроки — как у ссылок «Файлов» (1 / 7 / 30 дней, без срока) плюс час и своя дата
+const EXPIRE_OPTIONS = ['hour', 'day', 'week', 'month', 'unlimited', 'custom'] as const;
+const USAGE_OPTIONS = ['0', ...DEFAULT_USAGE_LIMITS.map(String), 'custom'];
 const DEFAULT_CUSTOM_EXPIRE_DATE = DEFAULT_EXPIRE_DATE.hour;
 
 type OwnProps = {
@@ -132,6 +138,7 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
       case 'hour':
       case 'day':
       case 'week':
+      case 'month':
         expireDate = getServerTime() + DEFAULT_EXPIRE_DATE[selectedExpireOption] / 1000;
         break;
       case 'unlimited':
@@ -165,6 +172,17 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
     exportChatInvite, effectiveIsRequestNeeded, selectedExpireOption, selectedUsageOption, title, onScreenSelect,
   ]);
 
+  function renderExpireLabel(option: typeof EXPIRE_OPTIONS[number]) {
+    switch (option) {
+      case 'hour': return oldLang('Hours', 1);
+      case 'day': return oldLang('Days', 1);
+      case 'week': return oldLang('Days', 7);
+      case 'month': return oldLang('Days', 30);
+      case 'unlimited': return oldLang('NoLimit');
+      default: return oldLang('lng_group_invite_expire_custom');
+    }
+  }
+
   return (
     <div className="Management ManageInvite">
       <div className="panel-content custom-scroll">
@@ -196,34 +214,27 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
         </Island>
         <IslandDescription>{oldLang('LinkNameHelp')}</IslandDescription>
         <IslandTitle>{oldLang('LimitByPeriod')}</IslandTitle>
+        {/* Parvane (spec 041): срок и лимит — чипами, как у ссылок «Файлов» (доски `PhFilesMore`, `DkFilesDialogs`) */}
         <Island>
-          <RadioGroup
-            name="expireOptions"
-            options={[
-              {
-                value: 'hour',
-                label: oldLang('Hours', 1),
-              },
-              {
-                value: 'day',
-                label: oldLang('Days', 1),
-              },
-              {
-                value: 'week',
-                label: oldLang('Weeks', 1),
-              },
-              {
-                value: 'unlimited',
-                label: oldLang('NoLimit'),
-              },
-              {
-                value: 'custom',
-                label: oldLang('lng_group_invite_expire_custom'),
-              },
-            ]}
-            onChange={setSelectedExpireOption}
-            selected={selectedExpireOption}
-          />
+          <div
+            className={buildClassName(kit.chips, styles.chips)}
+            role="radiogroup"
+            aria-label={oldLang('LimitByPeriod')}
+          >
+            {EXPIRE_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={selectedExpireOption === option}
+                className={buildClassName(kit.chip, selectedExpireOption === option && kit.chipOn)}
+                data-invite-expire={option}
+                onClick={() => setSelectedExpireOption(option)}
+              >
+                {renderExpireLabel(option)}
+              </button>
+            ))}
+          </div>
           {selectedExpireOption === 'custom' && (
             <Button className="expire-limit" isText onClick={openCalendar}>
               {formatFullDate(oldLang, customExpireDate)}
@@ -237,29 +248,34 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
           <>
             <IslandTitle>{oldLang('LimitNumberOfUses')}</IslandTitle>
             <Island>
-              <RadioGroup
-                name="usageOptions"
-                options={[
-                  ...DEFAULT_USAGE_LIMITS.map((n) => ({ value: n.toString(), label: n })),
-                  {
-                    value: '0',
-                    label: oldLang('NoLimit'),
-                  },
-                  {
-                    value: 'custom',
-                    label: oldLang('lng_group_invite_usage_custom'),
-                  },
-                ]}
-                onChange={setSelectedUsageOption}
-                selected={selectedUsageOption}
-              />
+              <div
+                className={buildClassName(kit.chips, styles.chips)}
+                role="radiogroup"
+                aria-label={oldLang('LimitNumberOfUses')}
+              >
+                {USAGE_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="radio"
+                    aria-checked={selectedUsageOption === option}
+                    className={buildClassName(kit.chip, selectedUsageOption === option && kit.chipOn)}
+                    data-invite-usage={option}
+                    onClick={() => setSelectedUsageOption(option)}
+                  >
+                    {option === '0' ? oldLang('NoLimit')
+                      : option === 'custom' ? oldLang('lng_group_invite_usage_custom') : option}
+                  </button>
+                ))}
+              </div>
               {selectedUsageOption === 'custom' && (
                 <input
-                  className="form-control usage-limit"
+                  className={buildClassName(kit.input, styles.usageInput)}
                   type="number"
                   min="1"
                   max="99999"
                   value={customUsageLimit}
+                  data-invite-usage-custom
                   onChange={handleCustomUsageLimitChange}
                 />
               )}
@@ -267,13 +283,17 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
             <IslandDescription>{oldLang('UsesLimitHelp')}</IslandDescription>
           </>
         )}
-        <FloatingActionButton
-          isShown
-          onClick={handleSaveClick}
-          disabled={isSubmitBlocked}
-          ariaLabel={editingInvite ? oldLang('SaveLink') : oldLang('CreateLink')}
-          iconName="check"
-        />
+        <div className={styles.submit}>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}
+            disabled={isSubmitBlocked}
+            data-invite-submit
+            onClick={handleSaveClick}
+          >
+            {editingInvite ? oldLang('SaveLink') : oldLang('CreateLink')}
+          </button>
+        </div>
       </div>
       <CalendarModal
         isOpen={isCalendarOpened}

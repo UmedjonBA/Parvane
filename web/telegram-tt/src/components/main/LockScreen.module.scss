@@ -95,3 +95,29 @@
   color: var(--pv-muted);
   text-align: center;
 }
+
+// «Открыть отпечатком» (вход по отпечатку включён в «PIN хранилища»)
+.biometric {
+  cursor: var(--custom-cursor, pointer);
+
+  min-height: 2.75rem;
+  padding: 0 1.25rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+  outline: none;
+
+  &:focus-visible {
+    box-shadow: var(--pv-focus-ring);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}

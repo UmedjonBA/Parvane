@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  buildPngBuffer,
   dumpDiagJournal,
   relogin,
   LOGIN_TIMEOUT_MS,
@@ -131,11 +132,13 @@ function makeWav(seconds = 2, rate = 8000) {
 }
 
 // Playwright-Chromium без H.264 — генерируем VP9-in-MP4
-function makeMp4(dir) {
-  const path = join(dir, 'e2e-video.mp4');
+// `isLarge` — шум с высоким битрейтом: файл в несколько блоков загрузки (ход отправки)
+function makeMp4(dir, isLarge) {
+  const path = join(dir, isLarge ? 'e2e-video-large.mp4' : 'e2e-video.mp4');
   execFileSync('ffmpeg', [
     '-y', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=15',
-    '-c:v', 'libvpx-vp9', '-b:v', '120k', '-pix_fmt', 'yuv420p', path,
+    ...(isLarge ? ['-vf', 'noise=alls=100:allf=t'] : []),
+    '-c:v', 'libvpx-vp9', '-b:v', isLarge ? '8M' : '120k', '-pix_fmt', 'yuv420p', path,
   ], { stdio: 'ignore' });
   return readFileSync(path);
 }
@@ -190,6 +193,18 @@ try {
   await openPrivateChat(aliceSession.page, bob);
   await openPrivateChat(bobSession.page, alice);
 
+  // Ход отправки фото и видео текстом: пузырь отправки живёт доли секунды — тексты собирает наблюдатель
+  await aliceSession.page.evaluate(() => {
+    const seen = [];
+    globalThis.__parvaneUploadTexts = seen;
+    new MutationObserver(() => {
+      document.querySelectorAll('.Message [data-upload-progress]').forEach((item) => {
+        const kind = item.closest('.media-inner')?.classList.contains('dark') ? 'video' : 'photo';
+        seen.push(`${kind}:${item.textContent}`);
+      });
+
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
   // ── Обычное видео с подписью ────────────────────────────────────────────────
   const videoBuffer = makeMp4(fixtureDir);
   await attachFile(aliceSession.page, 'Photo or Video', {
@@ -226,6 +241,52 @@ try {
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   }
   await expectThumbnailQueue(bobSession.page, 'bob', 3);
+
+  // ── Ход отправки фото и видео текстом («шифруется и отправляется · N%», доска `ZpChat`) ──
+  const photoCaption = `${videoCaption}-photo`;
+  // Шум не сжимается: файл в несколько блоков загрузки. Локальный стек принимает блоки за миллисекунды — крупные
+  // кадры сокета на время отправки идут с паузой (порядок кадров сохраняется), чтобы ход успел отрисоваться
+  await aliceSession.page.evaluate(() => {
+    // Сокеты сценария (`preparePage`) держат `send` своим полем — оборачивается поле каждого открытого
+    const restores = [];
+    let chain = Promise.resolve();
+    for (const socket of globalThis.__parvaneE2eSockets.active) {
+      const send = socket.send;
+      socket.send = (data) => {
+        const size = data?.byteLength ?? data?.size ?? data?.length ?? 0;
+        chain = chain.then(() => new Promise((resolve) => { setTimeout(resolve, size > 65536 ? 400 : 0); }))
+          .then(() => send(data));
+      };
+      restores.push(() => { socket.send = send; });
+    }
+    globalThis.__parvaneRestoreSend = () => restores.forEach((restore) => restore());
+  });
+  await attachFile(aliceSession.page, 'Photo or Video', {
+    name: 'e2e-noise.png', mimeType: 'image/png', buffer: buildPngBuffer(1200, undefined, { isNoise: true }),
+  }, photoCaption);
+  await findMessageContainers(bobSession.page, photoCaption).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const largeVideo = makeMp4(fixtureDir, true);
+  assert.ok(largeVideo.length > 1024 * 1024, `видео для хода отправки — не меньше 1 МБ: ${largeVideo.length}`);
+  await attachFile(aliceSession.page, 'Photo or Video', {
+    name: 'e2e-video-large.mp4', mimeType: 'video/mp4', buffer: largeVideo,
+  }, `${videoCaption}-large`);
+  await findMessageContainers(bobSession.page, `${videoCaption}-large`).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.evaluate(() => globalThis.__parvaneRestoreSend());
+  const uploadTexts = await aliceSession.page.evaluate(() => globalThis.__parvaneUploadTexts);
+  assert.ok(
+    uploadTexts.some((text) => /^photo:encrypting and sending · \d+%$/.test(text)),
+    `ход отправки фото текстом: ${JSON.stringify(uploadTexts.slice(-5))}`,
+  );
+  assert.ok(
+    uploadTexts.some((text) => /^video:encrypting and sending · \d+%$/.test(text)),
+    `ход отправки видео текстом: ${JSON.stringify(uploadTexts.slice(-5))}`,
+  );
+  assert.equal(
+    await findMessageContainers(aliceSession.page, photoCaption).first().locator('[data-upload-progress]').count(), 0,
+    'текст хода остался после отправки фото',
+  );
 
   // ── Аудиофайл: нативный плеер с title и playback ───────────────────────────
   await attachFile(aliceSession.page, 'Document', {

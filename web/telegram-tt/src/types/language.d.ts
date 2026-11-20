@@ -3632,6 +3632,7 @@ export interface LangPair {
   'ParvaneAuthTelegramQrHide': undefined;
   'ParvaneAuthTelegramQrHint': undefined;
   'ParvaneNotifySound': undefined;
+  'ParvaneCallMinimize': undefined;
   'ParvaneCallReturn': undefined;
   'ParvaneCallShareScreen': undefined;
   'ParvaneCallStopSharing': undefined;
@@ -3879,9 +3880,9 @@ export interface LangPair {
   'ParvaneHelpNothing': undefined;
   'ParvaneNickKeyStoredHint': undefined;
   'ParvaneRenameDoneNewKey': undefined;
-  'ParvaneRenewKeyTextStored': undefined;
   'ParvaneSskRotationTextStored': undefined;
-  'ParvaneEscrowTextStored': undefined;
+  'ParvaneEscrowTextPassword': undefined;
+  'ParvaneEscrowBadPassword': undefined;
   'ParvaneCloudShareCopy': undefined;
   'ParvaneCloudShareCopyNote': undefined;
   'ParvaneCloudShareCopySend': undefined;
@@ -3893,6 +3894,56 @@ export interface LangPair {
   'ParvaneCloudVersionsEmpty': undefined;
   'ParvaneCloudVersionRestore': undefined;
   'ParvaneCloudVersionRestored': undefined;
+  'ParvaneRenewKeyTextPassword': undefined;
+  'ParvaneRenewKeyBadPassword': undefined;
+  'ParvaneBioUnlock': undefined;
+  'ParvaneBioUnlockHint': undefined;
+  'ParvaneBioEnterPin': undefined;
+  'ParvaneBioOn': undefined;
+  'ParvaneBioOff': undefined;
+  'ParvaneBioUnsupported': undefined;
+  'ParvaneBioCancelled': undefined;
+  'ParvaneBioFailed': undefined;
+  'ParvaneBioLockButton': undefined;
+  'ParvaneBioLockFailed': undefined;
+  'ParvaneReportChipSpam': undefined;
+  'ParvaneReportChipFraud': undefined;
+  'ParvaneReportChipInsult': undefined;
+  'ParvaneReportChipIllegal': undefined;
+  'ParvaneReportChipOther': undefined;
+  'ParvaneReportMessageTitle': undefined;
+  'ParvaneReportChatTitle': undefined;
+  'ParvaneReportReasonLabel': undefined;
+  'ParvaneReportCommentLabel': undefined;
+  'ParvaneReportCommentHint': undefined;
+  'ParvaneReportTargetLabel': undefined;
+  'ParvaneReportTargetAdmins': undefined;
+  'ParvaneReportTargetServer': undefined;
+  'ParvaneReportNoteAdmins': undefined;
+  'ParvaneReportNoteServer': undefined;
+  'ParvaneReportNowhere': undefined;
+  'ParvaneReportSend': undefined;
+  'ParvaneReportsTitle': undefined;
+  'ParvaneReportsEntry': undefined;
+  'ParvaneReportsDelete': undefined;
+  'ParvaneReportsDismiss': undefined;
+  'ParvaneReportsOpen': undefined;
+  'ParvaneReportsEmpty': undefined;
+  'ParvaneReportsFooter': undefined;
+  'ParvaneKeysOffAction': undefined;
+  'ParvaneKeysOffTitle': undefined;
+  'ParvaneKeysOffText': undefined;
+  'ParvaneKeysOffLossHistory': undefined;
+  'ParvaneKeysOffLossTelegram': undefined;
+  'ParvaneKeysOffLossDevices': undefined;
+  'ParvaneKeysOffDone': undefined;
+  'ParvaneKeysOffFailed': undefined;
+  'ParvaneKeysOffBadPassword': undefined;
+  'ParvaneKeysOffState': undefined;
+  'ParvaneKeysOnAction': undefined;
+  'ParvaneKeysOnHint': undefined;
+  'ParvaneKeysOnDone': undefined;
+  'ParvaneKeysOnFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -6526,6 +6577,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneNickOldHintStored': {
     'nick': V;
   };
+  'ParvaneReportsSubtitle': {
+    'group': V;
+  };
 }
 
 export interface LangPairPlural {
@@ -7124,6 +7178,12 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'ParvaneChannelInfoSubtitle': {
+    'count': V;
+  };
+  'ParvaneReportsNew': {
+    'count': V;
+  };
+  'ParvaneReportsCount': {
     'count': V;
   };
 }

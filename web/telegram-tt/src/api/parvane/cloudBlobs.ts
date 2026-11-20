@@ -232,17 +232,7 @@ export async function uploadCloudBlob(
 
   async function sendChunk(uploadId: string, index: number) {
     const data = await source.range(index * CLOUD_CHUNK_BYTES, (index + 1) * CLOUD_CHUNK_BYTES);
-    const sendBinary = transport.uploadBlobChunk;
-    const nextId = await withRetry(async () => {
-      if (sendBinary) return sendBinary(uploadId, index, data, BUCKET_DRIVE);
-      const got = await transport.blobCall<{ uploadId?: string; upload_id?: string }>(
-        'cloud.blob.upload_chunk',
-        {
-          upload_id: uploadId, index, data: toBase64(data), bucket: 'BLOB_BUCKET_DRIVE',
-        },
-      );
-      return got.uploadId || got.upload_id || uploadId;
-    }, signal);
+    const nextId = await sendDriveChunk(transport, uploadId, index, data, signal);
     sent += data.length;
     options.onProgress?.(Math.min(sent, source.cipherSize), source.cipherSize);
     return nextId;
@@ -286,22 +276,96 @@ export async function uploadCloudBlob(
   if (failure) throw failure instanceof Error ? failure : new V2Error('ERROR_CODE_UNAVAILABLE');
   checkAborted(signal);
 
+  const fileId = await completeDriveUpload(transport, uploadId, chunks, source.cipherSize, capability, signal);
+  return {
+    ...keys, fileId, size: file.size, chunks,
+  };
+}
+
+/** Чанк загрузки в диск (bucket DRIVE); пустой `uploadId` заводит загрузку. Возвращает uploadId. */
+function sendDriveChunk(
+  transport: Pick<CloudBlobTransport, 'blobCall' | 'uploadBlobChunk'>,
+  uploadId: string, index: number, data: Uint8Array, signal?: AbortSignal,
+) {
+  const sendBinary = transport.uploadBlobChunk;
+  return withRetry(async () => {
+    if (sendBinary) return sendBinary(uploadId, index, data, BUCKET_DRIVE);
+    const got = await transport.blobCall<{ uploadId?: string; upload_id?: string }>(
+      'cloud.blob.upload_chunk',
+      {
+        upload_id: uploadId, index, data: toBase64(data), bucket: 'BLOB_BUCKET_DRIVE',
+      },
+    );
+    return got.uploadId || got.upload_id || uploadId;
+  }, signal);
+}
+
+/** Завершить загрузку в диск под секретом доступа; возвращает file_id. */
+async function completeDriveUpload(
+  transport: Pick<CloudBlobTransport, 'blobCall'>,
+  uploadId: string, chunks: number, cipherSize: number, capability: Uint8Array<ArrayBuffer>, signal?: AbortSignal,
+) {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability));
   const done = await withRetry(() => transport.blobCall<{ fileId?: string; file_id?: string }>(
     'cloud.blob.upload_complete',
     {
       upload_id: uploadId,
       chunks,
-      size: String(source.cipherSize),
+      size: String(cipherSize),
       visibility: 'VISIBILITY_PRIVATE',
       capability_hash: toBase64(hash),
     },
   ), signal);
   const fileId = done.fileId || done.file_id;
   if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
-  return {
-    ...keys, fileId, size: file.size, chunks,
+  return fileId;
+}
+
+/**
+ * Блоб другого сервера — в свой диск тем же шифртекстом (серверной копии между серверами нет): окна чанков с
+ * сервера блоба по его секрету, куски по `CLOUD_CHUNK_BYTES` — своему серверу в bucket DRIVE под новым секретом.
+ * Ключ и nonce файла прежние, расшифровки нет. Сервер блоба выбирает транспорт (`setBlobDomain` до вызова).
+ */
+export async function relayCloudBlob(
+  transport: BlobSession & Pick<CloudBlobTransport, 'blobCall' | 'uploadBlobChunk'>,
+  source: { fileId: string; capability: string },
+  signal?: AbortSignal,
+): Promise<{ fileId: string; capability: string; chunks: number }> {
+  const capability = crypto.getRandomValues(new Uint8Array(CAPABILITY_LEN));
+  let uploadId = '';
+  let index = 0;
+  let cipherSize = 0;
+  let carry = new Uint8Array(0);
+  const send = async (data: Uint8Array) => {
+    uploadId = await sendDriveChunk(transport, uploadId, index, data, signal);
+    index += 1;
   };
+  let total = 1;
+  for (let first = 0; first < total; first += DOWNLOAD_WINDOW_CHUNKS) {
+    checkAborted(signal);
+    const got = await withRetry(
+      () => transport.downloadBlobCap(source.fileId, source.capability, first, DOWNLOAD_WINDOW_CHUNKS), signal,
+    );
+    total = got.chunks;
+    if (!total) throw new V2Error('ERROR_CODE_INVALID');
+    const parts: Uint8Array[] = [carry];
+    for (let i = first; i < Math.min(total, first + DOWNLOAD_WINDOW_CHUNKS); i++) {
+      const part = got.parts.get(i);
+      if (!part) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      cipherSize += part.length;
+      parts.push(part);
+    }
+    let buffer = concat(parts);
+    while (buffer.length >= CLOUD_CHUNK_BYTES) {
+      await send(buffer.subarray(0, CLOUD_CHUNK_BYTES));
+      buffer = buffer.subarray(CLOUD_CHUNK_BYTES);
+    }
+    carry = buffer.slice();
+  }
+  if (carry.length || !index) await send(carry);
+  checkAborted(signal);
+  const fileId = await completeDriveUpload(transport, uploadId, index, cipherSize, capability, signal);
+  return { fileId, capability: toBase64(capability), chunks: index };
 }
 
 /**

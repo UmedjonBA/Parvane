@@ -63,7 +63,7 @@ import {
   encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
 } from './historyModel';
 import {
-  buildBundleMark, deriveBundleKey, describeKeyBundle, isBundleRolledBack, type KeyBundleContents,
+  buildBundleMark, buildOffBundle, deriveBundleKey, describeKeyBundle, isBundleRolledBack, type KeyBundleContents,
   type KeyBundlePayload, mergeKeyBundlePayload, openKeyBundle, readBundleSeq,
   readGrantBundleKey,
   sealKeyBundle,
@@ -294,8 +294,9 @@ type PendingJoin = {
   // Первое устройство аккаунта: новый корень, ключ восстановления ещё не у владельца
   recoveryKey?: string;
 };
+// `bundle_off` — копия ключей аккаунта выключена владельцем: по ключу восстановления устройство не входит
 export type KeyJoinOutcome = {
-  result: SskRotationResult;
+  result: SskRotationResult | 'bundle_off';
   planner?: string;
   health?: string;
   music?: string;
@@ -313,7 +314,7 @@ type RevokeOutcome = {
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
 // Новый ключ восстановления (`ZdProfileX`): `telegram` — ушёл владельцу в Telegram, `shown` — показан окном
-export type RecoveryKeyRenewal = 'telegram' | 'shown' | 'bad_key' | 'no_backup' | 'failed';
+export type RecoveryKeyRenewal = 'telegram' | 'shown' | 'bad_key' | 'bad_password' | 'no_backup' | 'failed';
 /** Смена ника (spec 026): `ok` несёт новый адрес и токен — провайдер переносит локальное и перезагружает. */
 export type DeleteAccountResult =
   | { result: 'ok'; deletionAtMs: number }
@@ -487,6 +488,9 @@ const BUNDLE_KEY_RECORD = 'v2-bundle-key';
 const BUNDLE_SENT_RECORD = 'v2-bundle-sent';
 // Наибольший номер копии ключей аккаунта, виденный этим устройством (A0073-2: защита от отката сервером)
 const BUNDLE_SEQ_RECORD = 'v2-bundle-seq';
+// Копия ключей аккаунта выключена владельцем (видено здесь либо на сервере): после смены ключа восстановления, когда
+// сервер стёр копию, на её место снова пишется пометка, а не ключи
+const BUNDLE_OFF_RECORD = 'v2-bundle-off';
 const BUNDLE_FIRST_DELAY_MS = 8000;
 const BUNDLE_REFRESH_MS = 60 * 1000;
 const BUNDLE_MAX_BYTES = 250000;
@@ -1647,6 +1651,9 @@ export function createV2Controller(deps: Deps) {
     log: deps.log,
     cloud: () => cloud,
     blobCall,
+    downloadBlobCap,
+    uploadBlobChunk,
+    setBlobDomain,
     serverDomain: () => serverDomain,
     loadRecord: async (key) => storage?.loadRecord(key),
     saveRecord: async (key, value) => {
@@ -2151,6 +2158,10 @@ export function createV2Controller(deps: Deps) {
     // Полученная грантом копия корня не пишется (только страховка для администратора, если есть)
     const isReceived = await storage.loadRecord<string>(ROOT_BACKUP_RECEIVED_RECORD) === rootBackupB64;
     if (isReceived && !escrow) return;
+    // Новая копия корня стирает на сервере копию ключей аккаунта — и пометку «выключена»: запомнить, какая была
+    const bundle = isReceived ? undefined : await fetchKeyBundle();
+    if (bundle?.off) await storage.saveRecord(BUNDLE_OFF_RECORD, true);
+    else if (bundle) await storage.deleteRecord(BUNDLE_OFF_RECORD).catch(() => undefined);
     await call('id', 'identity.root.backup_set', pv.encodeMessage(
       'parvane.identity.v2.RootBackupSetRequest',
       JSON.stringify({ backup: isReceived ? undefined : rootBackupB64, escrow }),
@@ -2191,6 +2202,11 @@ export function createV2Controller(deps: Deps) {
       });
     }
     return reportKey;
+  }
+
+  /** Принимает ли сервер жалобы администратору (объявлен ключ; REPORT-2 — выбор адресата в окне жалобы). */
+  async function canReportToServer() {
+    return Boolean(await loadReportKey());
   }
 
   /** Жалоба администратору сервера (spec 024): JSON запечатывается его ключом, сервер видит только шифртекст.
@@ -2255,7 +2271,7 @@ export function createV2Controller(deps: Deps) {
   /** Обновить копию ключей аккаунта на сервере: материал привязки устройства,
    * ключи планировщика и указатель на снимок истории. Пишет только устройство,
    * держащее ключ копии и ключ подписи устройств; неизменившуюся копию не шлёт. */
-  async function refreshKeyBundle(force: boolean) {
+  async function refreshKeyBundle(force: boolean, isEnabling?: boolean) {
     if (!ready || !client || !pv || !storage || !bundleKeyB64) return;
     try {
       // Без перечитки журнала с сервера (проверка идёт раз в минуту): журнал в
@@ -2279,7 +2295,9 @@ export function createV2Controller(deps: Deps) {
       // что вошло), не должно стирать их из копии для следующих устройств. Истории в копии нет (spec 033): новое
       // устройство берёт её из журнала истории аккаунта
       const seen = await loadSeenBundleSeq();
-      const server = await fetchKeyBundle();
+      const fetched = await fetchKeyBundle();
+      if (!isEnabling && await keepBundleOff(fetched, mark)) return;
+      const server = fetched?.off ? undefined : fetched;
       const merged = mergeKeyBundlePayload(payload, server);
       // Номер записи строго больше виденного (своего и серверного): откат сервера не спрячет новую копию
       merged.seq = Math.max(seen, readBundleSeq(server?.seq)) + 1;
@@ -2307,10 +2325,70 @@ export function createV2Controller(deps: Deps) {
       ));
       await storage.saveRecord(BUNDLE_SENT_RECORD, mark);
       await storage.saveRecord(BUNDLE_SEQ_RECORD, merged.seq);
+      await storage.deleteRecord(BUNDLE_OFF_RECORD).catch(() => undefined);
       deps.log('v2: копия ключей аккаунта обновлена на сервере');
     } catch (e) {
       deps.log(`v2: копия ключей аккаунта не обновлена: ${String(e)}`);
     }
+  }
+
+  /** Копия выключена владельцем (пометка на сервере либо здесь): ключи на сервер не пишутся. Сервер стёр пометку
+   * (новый ключ восстановления) — она пишется снова. Обычная копия на сервере — копию включили на другом устройстве. */
+  async function keepBundleOff(server: KeyBundlePayload | undefined, mark: string) {
+    if (server && !server.off) {
+      await storage?.deleteRecord(BUNDLE_OFF_RECORD).catch(() => undefined);
+      return false;
+    }
+    if (!server?.off && !await storage?.loadRecord<boolean>(BUNDLE_OFF_RECORD).catch(() => undefined)) return false;
+    await storage?.saveRecord(BUNDLE_OFF_RECORD, true);
+    if (!server) await writeOffBundle();
+    // Пометка видна — до перемен содержимого копию с сервера больше не перечитываем
+    await storage?.saveRecord(BUNDLE_SENT_RECORD, mark);
+    return true;
+  }
+
+  async function writeOffBundle() {
+    if (!pv || !storage || !bundleKeyB64) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const server = await fetchKeyBundle();
+    const seq = Math.max(await loadSeenBundleSeq(), readBundleSeq(server?.seq)) + 1;
+    const sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), buildOffBundle(seq));
+    await call('id', 'identity.root.backup_set', pv.encodeMessage(
+      'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ key_bundle: b64(sealed) }),
+    ));
+    await storage.saveRecord(BUNDLE_SEQ_RECORD, seq);
+    await storage.saveRecord(BUNDLE_OFF_RECORD, true);
+    deps.log('v2: копия ключей аккаунта выключена — на сервере пометка без ключей');
+  }
+
+  /** «Выключить копию» (`ZdProfileX`): на месте копии ключей аккаунта — пометка без ключей, после проверки пароля
+   * аккаунта. Без копии новое устройство по ключу восстановления (и ответом боту в Telegram) не входит
+   * (`joinWithRecoveryKey` → `bundle_off`); привязка с другого своего устройства работает как прежде. */
+  async function disableKeyBundle(password: string): Promise<'ok' | 'bad_password' | 'no_key' | 'failed'> {
+    if (!ready || !pv || !storage) return 'failed';
+    if (!bundleKeyB64) return 'no_key';
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+    } catch {
+      return 'bad_password';
+    }
+    try {
+      await writeOffBundle();
+      return 'ok';
+    } catch (e) {
+      deps.log(`v2: копия ключей аккаунта не выключена: ${String(e)}`);
+      return 'failed';
+    }
+  }
+
+  /** «Включить копию»: копия ключей аккаунта снова пишется на сервер (поверх пометки). */
+  async function enableKeyBundle(): Promise<boolean> {
+    if (!ready || !storage || !bundleKeyB64) return false;
+    await storage.deleteRecord(BUNDLE_OFF_RECORD).catch(() => undefined);
+    await refreshKeyBundle(true, true);
+    const server = await fetchKeyBundle();
+    return Boolean(server && !server.off);
   }
 
   /** Ключ восстановления сменён на другом своём устройстве (копия корня на сервере не та, что здесь, и копию ключей
@@ -2663,6 +2741,12 @@ export function createV2Controller(deps: Deps) {
     // Копия открылась, но старее виденной: сервер откатил её. «Восстановление корнем» отозвало бы все прежние
     // устройства, поэтому отказываем (A0073-2)
     if (opened && !payload) return { result: 'failed' };
+    // Копия выключена владельцем: «восстановление корнем» отозвало бы все прежние устройства — отказываем, вход
+    // остаётся привязкой с другого своего устройства (решение пользователя 20 ноя 2026)
+    if (payload?.off) {
+      deps.log('v2: копия ключей аккаунта выключена владельцем — вход по ключу восстановления отклонён');
+      return { result: 'bundle_off' };
+    }
     if (bundleKey && !payload && viaTelegram) {
       deps.log('v2: копии ключей аккаунта на сервере нет — ждём, заведёт ли её другое устройство');
       const deadline = Date.now() + LEGACY_BUNDLE_WAIT_MS;
@@ -2713,11 +2797,26 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  /** Создать копию корня для администратора: корень — сохранённый на устройстве либо из копии под ключом
-   * восстановления. */
-  async function storeEscrowCopy(recoveryKey = ''): Promise<SskRotationResult> {
+  /** Пароль аккаунта верен (проверяет сервер): им подтверждаются операции корнем, сохранённым на устройстве. */
+  async function isPasswordRight(password: string) {
+    if (!pv || !password) return false;
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Создать копию корня для администратора: корень — сохранённый на устройстве (тогда вместо ключа восстановления
+   * нужен пароль аккаунта: копия даёт администратору право выдать новый ключ, разблокированное чужими руками
+   * устройство создать её не должно) либо из копии под ключом восстановления. */
+  async function storeEscrowCopy(recoveryKey = '', password = ''): Promise<SskRotationResult | 'bad_password'> {
     if (!client || !ready) return 'failed';
     if (!rootBackupB64) return 'no_backup';
+    if (client.hasRoot() && !await isPasswordRight(password)) return 'bad_password';
     const opened = await openRoot(recoveryKey);
     if (opened !== 'ok') return opened;
     try {
@@ -2782,11 +2881,13 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** Новый ключ восстановления взамен прежнего (`ZdProfileX`): корень — сохранённый на устройстве (тогда прежний
-   * ключ не нужен: его могли потерять), иначе открывается прежним ключом; копия корня и копия ключей аккаунта
-   * переписываются под новым, прежний ключ перестаёт работать. Новый ключ уходит владельцу в Telegram, иначе
-   * показывается окном. */
-  async function renewRecoveryKey(currentKey = ''): Promise<RecoveryKeyRenewal> {
+   * ключ не нужен: его могли потерять, но нужен пароль аккаунта — сервер проверяет его до выпуска ключа, чтобы
+   * разблокированное чужими руками устройство не перевыпустило ключ), иначе открывается прежним ключом; копия корня и
+   * копия ключей аккаунта переписываются под новым, прежний ключ перестаёт работать. Новый ключ уходит владельцу в
+   * Telegram, иначе показывается окном. */
+  async function renewRecoveryKey(currentKey = '', password = ''): Promise<RecoveryKeyRenewal> {
     if (!client || !ready || !pv || !storage) return 'failed';
+    if (client.hasRoot() && !await isPasswordRight(password)) return 'bad_password';
     const opened = await openRoot(currentKey);
     if (opened !== 'ok') return opened;
     const backup = rootBackupB64;
@@ -5332,6 +5433,8 @@ export function createV2Controller(deps: Deps) {
     recoverWithKey,
     joinWithRecoveryKey,
     refreshKeyBundle,
+    disableKeyBundle,
+    enableKeyBundle,
     fetchKeyBundle,
     ackJoined,
     waitJoined,
@@ -5411,6 +5514,7 @@ export function createV2Controller(deps: Deps) {
     trySendCall,
     trySendCallOwn,
     submitReport,
+    canReportToServer,
     uploadBlobChunk,
     completeBlobUpload,
     downloadBlobCap,

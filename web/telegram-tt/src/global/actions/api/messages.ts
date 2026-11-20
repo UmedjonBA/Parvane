@@ -1178,7 +1178,7 @@ addActionHandler('deleteSavedHistory', async (global, actions, payload): Promise
 
 addActionHandler('reportMessages', async (global, actions, payload): Promise<void> => {
   const {
-    messageIds, description = '', option = '', chatId, tabId = getCurrentTabId(),
+    messageIds, description = '', option = '', target, chatId, tabId = getCurrentTabId(),
   } = payload;
   const chat = selectChat(global, chatId)!;
   const { selectedMessages, reportModal } = selectTabState(global, tabId);
@@ -1206,7 +1206,7 @@ addActionHandler('reportMessages', async (global, actions, payload): Promise<voi
   let response;
   try {
     response = await callApi('reportMessages', {
-      peer: chat, messageIds, description, option,
+      peer: chat, messageIds, description, option, target,
     });
   } catch (err) {
     actions.closeReportModal({ tabId });
@@ -1287,6 +1287,7 @@ addActionHandler('reportMessages', async (global, actions, payload): Promise<voi
       title: result.title,
       options: result.options,
       subtitle: reportTitle,
+      targets: result.targets,
     } satisfies ReportSection;
     global = updateTabState(global, {
       selectedMessages: reportContext ? undefined : selectTabState(global, tabId).selectedMessages,

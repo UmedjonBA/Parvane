@@ -11,11 +11,13 @@ import {
   assertNoPageErrors,
   dismissRecoveryKeyDialog,
   linkSecondDevice,
+  openDevicesScreen,
   openEditProfile,
   openProfile,
   openSettingsScreen,
   preparePage,
   profileRow,
+  relogin,
   waitForChatList,
 } from './e2e_web_helpers.mjs';
 
@@ -356,21 +358,34 @@ try {
   assert.equal(
     await keysPage.locator('[data-keys-bundle] [data-bundle-part]').count(), 6, 'строки «Что в копии»',
   );
-  // Устройство-создатель держит корень аккаунта (RECOVER-1 п. 8): новый ключ — без прежнего, окно только подтверждает
+  // Устройство-создатель держит корень аккаунта (RECOVER-1 п. 8): новый ключ — без прежнего, но с паролем аккаунта;
+  // неверный пароль — ошибка в окне, ключ не выпускается
   const keylessDialog = (on) => on.locator('.Modal .modal-dialog').filter({ hasText: 'Create a new recovery key?' });
   const renewKeyless = async (on) => {
     await on.locator('[data-keys-action="renew"]').click();
     const dialog = keylessDialog(on);
     await shown(dialog);
-    assert.equal(await dialog.locator('input').count(), 0, 'с корнем на устройстве поле ключа не нужно');
-    await dialog.getByRole('button', { name: 'Create new key' }).click();
+    assert.equal(await dialog.locator('input').count(), 1, 'с корнем на устройстве — одно поле, пароль');
+    const submit = dialog.getByRole('button', { name: 'Create new key' });
+    assert.ok(await submit.isDisabled(), 'без пароля ключ не выпускается');
+    const renewalsBefore = sessions.keys.logs.filter((line) => line.includes('ключ восстановления заменён новым')).length;
+    await dialog.locator('[data-renew-password]').fill(`${PASSWORD}x`);
+    await submit.click();
+    await shown(dialog.locator('[data-renew-error="bad_password"]'));
+    await shown(dialog);
+    assert.equal(
+      sessions.keys.logs.filter((line) => line.includes('ключ восстановления заменён новым')).length, renewalsBefore,
+      'неверный пароль выпустил новый ключ',
+    );
+    await dialog.locator('[data-renew-password]').fill(PASSWORD);
+    await submit.click();
     await hidden(dialog);
   };
   await renewKeyless(keysPage);
   const secondKey = keyOf(await dismissRecoveryKeyDialog(keysPage, 30_000));
   assert.ok(secondKey && secondKey !== firstKey, `новый ключ не показан: ${secondKey}`);
   await shown(keysPage.getByText('New recovery key created. Save it from the window.').first());
-  console.log('OK: «Копия ключей» — новый ключ без прежнего на устройстве-создателе');
+  console.log('OK: «Копия ключей» — новый ключ без прежнего на устройстве-создателе (пароль проверен, неверный отклонён)');
 
   // Привязанное грантом устройство корня не получает: ключ спрашивается; прежний больше не подходит
   const linkedContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -403,10 +418,70 @@ try {
   // Ключ введён — корень запомнен: следующий новый ключ уже без прежнего
   await openKeysOn(linkedPage);
   await linkedPage.locator('[data-keys-action="renew"]').click();
-  await shown(keylessDialog(linkedPage));
+  await shown(keylessDialog(linkedPage).locator('[data-renew-password]'));
   await linkedPage.keyboard.press('Escape');
   await hidden(keylessDialog(linkedPage));
   console.log('OK: «Копия ключей» — привязанное устройство: прежний ключ не подходит, нынешний — новый ключ, затем без ключа');
+
+  // «Выключить копию» (`ZdProfileX`): пароль аккаунта, на сервере — пометка без ключей; после перезагрузки устройство
+  // копию не переписывает; «Включить» возвращает ключи. Копию ведёт привязанное устройство (новый ключ — его)
+  // Журнал страницы ограничен по длине — считаем строки после своей метки
+  const markLogs = (label) => sessions.linked.logs.push(`--- ${label}`);
+  const countSince = (label, text) => {
+    const { logs } = sessions.linked;
+    return logs.slice(logs.lastIndexOf(`--- ${label}`) + 1).filter((line) => line.includes(text)).length;
+  };
+  markLogs('off');
+  const offLogs = () => countSince('off', 'копия ключей аккаунта выключена');
+  await openKeysOn(linkedPage);
+  await shown(linkedPage.locator('[data-keys-bundle] [data-bundle-part="chats"]').getByText('yes'));
+  await linkedPage.locator('[data-keys-action="bundle-off"]').click();
+  const offDialog = linkedPage.locator('.Modal .modal-dialog')
+    .filter({ has: linkedPage.locator('[data-keys-off-dialog]') });
+  await shown(offDialog);
+  assert.equal(await offDialog.locator('[data-keys-off-dialog] li').count(), 3, 'последствия выключения');
+  const offSubmit = offDialog.getByRole('button', { name: 'Turn off the copy' });
+  assert.ok(await offSubmit.isDisabled(), 'без пароля копия не выключается');
+  await offDialog.locator('[data-keys-off-password]').fill(`${PASSWORD}x`);
+  await offSubmit.click();
+  await shown(offDialog.locator('[data-keys-off-error="bad_password"]'));
+  assert.equal(offLogs(), 0, 'неверный пароль выключил копию');
+  await offDialog.locator('[data-keys-off-password]').fill(PASSWORD);
+  await offSubmit.click();
+  await hidden(offDialog);
+  await shown(linkedPage.locator('[data-keys-bundle-off]'));
+  assert.equal(offLogs(), 1, 'пометка «выключена» не записана');
+  markLogs('reload');
+  await relogin(linkedPage, PASSWORD);
+  // Первая сверка копии после запуска — через 8 с; ключи на сервер не уходят
+  await linkedPage.waitForTimeout(12_000);
+  assert.equal(
+    countSince('reload', 'копия ключей аккаунта обновлена'), 0, 'выключенную копию устройство переписало ключами',
+  );
+  // При выключенной копии новое устройство по ключу восстановления не входит (решение 20 ноя 2026): подсказка
+  // «привяжите с другого устройства», прежние устройства не отзываются
+  const strayContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  sessions.stray = await preparePage(strayContext, `profile-keys-${suffix}@local`, PASSWORD, {
+    seedLocalStorage: { 'parvane:proto': 'v2' },
+  });
+  const strayPage = sessions.stray.page;
+  const strayScreen = await openDevicesScreen(strayPage);
+  await strayScreen.locator('[data-recover-key-input]').fill(thirdKey);
+  await strayScreen.locator('[data-recover-key-submit]').click();
+  await shown(strayPage.getByText('The account key copy is turned off').first());
+  await shown(strayScreen.locator('[data-confirm-sign-in]'));
+  assert.equal(
+    sessions.stray.logs.filter((line) => line.includes('прежние устройства отозваны')).length, 0,
+    'вход по ключу при выключенной копии отозвал прежние устройства',
+  );
+  await strayContext.close();
+  delete sessions.stray;
+  await openKeysOn(linkedPage);
+  await shown(linkedPage.locator('[data-keys-bundle-off]'));
+  await linkedPage.locator('[data-keys-action="bundle-on"]').click();
+  await shown(linkedPage.locator('[data-keys-bundle] [data-bundle-part="chats"]').getByText('yes'));
+  await shown(linkedPage.locator('[data-keys-action="bundle-off"]'));
+  console.log('OK: «Копия ключей» — выключение с паролем, не переписывается после перезагрузки, вход по ключу отклонён, включение');
 
   assertNoPageErrors(sessions);
 

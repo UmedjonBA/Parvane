@@ -1326,7 +1326,8 @@ export async function toggleSuggestedPostApproval({
 export async function reportMessages({
   peer, messageIds, description, option,
 }: {
-  peer: ApiPeer; messageIds: number[]; description: string; option: string;
+  // Parvane (REPORT-2): адресат жалобы — читает только провайдер Parvane
+  peer: ApiPeer; messageIds: number[]; description: string; option: string; target?: string;
 }) {
   try {
     const result = await invokeRequest(new GramJs.messages.Report({

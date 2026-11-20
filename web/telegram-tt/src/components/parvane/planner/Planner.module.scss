@@ -2722,6 +2722,11 @@
   gap: 0.375rem;
 }
 
+// Выбор группы записи: точка цвета группы перед названием (доска `PhPlanMore`)
+.listPick {
+  min-width: 0;
+}
+
 .swatch {
   cursor: var(--custom-cursor, pointer);
 
@@ -2815,6 +2820,16 @@
 
 .sheetPane:not(.sheetPaneCentered) :global(.input-group) > :global(.form-control) {
   background: var(--pv-panel);
+}
+
+// После общих правил поля: они задают `background` и `padding` целиком
+.root .listPickColored :global(.input-group) > :global(.form-control) {
+  padding-inline-start: 2.25rem;
+
+  background-image: radial-gradient(circle closest-side, var(--planner-list-color) 96%, transparent 100%);
+  background-repeat: no-repeat;
+  background-position: left 0.875rem center;
+  background-size: 0.625rem 0.625rem;
 }
 
 .root :global(.input-group) > :global(textarea.form-control) {
@@ -3257,6 +3272,18 @@
     text-align-last: end;
 
     background: none;
+  }
+
+  // Точка цвета группы — перед значением справа
+  // Ширина — по выбранному названию (иначе по самому длинному пункту, и точка стоит далеко от названия)
+  .listPickColored :global(.input-group.with-arrow) > :global(.form-control) {
+    field-sizing: content;
+    padding-inline-start: 1.125rem;
+
+    background-image: radial-gradient(circle closest-side, var(--planner-list-color) 96%, transparent 100%);
+    background-repeat: no-repeat;
+    background-position: left center;
+    background-size: 0.625rem 0.625rem;
   }
 
   // Описание — подписанное поле под строками

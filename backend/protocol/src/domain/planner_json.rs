@@ -8,7 +8,7 @@
 //! `{tasks:[{id,name,description,steps:[{text,isDone}],status,listId,rank,day,start,due,minutes|null,
 //!     repeat|null,occurrences:[{day,excluded,done,doneSteps}],origin|null,source|null}],
 //!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday,color,
-//!     description,listId}],
+//!     description,listId,steps:[{text,isDone}]}],
 //!   lists:[{id,name,order,color}],
 //!   settings:{dayStart,dayEnd,lunchStart,lunchEnd,margin,budget}|null,
 //!   learned:[{id,kind,kindCount,minutes|null,minutesCount,touched}],
@@ -73,6 +73,10 @@ fn occurrences_json(items: &[Occurrence]) -> Value {
         .collect::<Vec<_>>())
 }
 
+fn steps_json(steps: &Option<Steps>) -> Value {
+    json!(steps.as_ref().map(|s| s.items.iter().map(|i| json!({"text": i.text, "isDone": i.is_done})).collect::<Vec<_>>()).unwrap_or_default())
+}
+
 fn origin_json(o: &Option<Origin>) -> Value {
     o.as_ref().filter(|o| !o.series_id.is_empty()).map(|o| json!({"seriesId": o.series_id, "day": o.day})).unwrap_or(Value::Null)
 }
@@ -90,7 +94,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
         .map(|t| {
             json!({
                 "id": t.id, "name": sv(&t.name), "description": sv(&t.description),
-                "steps": t.steps.as_ref().map(|s| s.items.iter().map(|i| json!({"text": i.text, "isDone": i.is_done})).collect::<Vec<_>>()).unwrap_or_default(),
+                "steps": steps_json(&t.steps),
                 "status": t.status.as_ref().map(|s| s.value.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| "queue".into()),
                 "listId": sv(&t.list_id), "rank": t.rank.as_ref().map(|r| r.value).unwrap_or(0),
                 "day": sv(&t.day), "start": sv(&t.start), "due": sv(&t.due),
@@ -116,6 +120,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "description": sv(&e.description),
                 "remind": u32_json(&e.remind),
                 "listId": sv(&e.list_id),
+                "steps": steps_json(&e.steps),
             })
         })
         .collect();
@@ -293,18 +298,23 @@ fn source_of(o: &Map<String, Value>) -> Result<Option<Source>> {
     }
 }
 
-fn task_of(o: &Map<String, Value>) -> Result<Task> {
-    let steps = match o.get("steps") {
-        None | Some(Value::Null) => None,
-        Some(Value::Array(items)) => Some(Steps {
+/// Шаги задачи либо события: присутствующий список — правка регистра целиком.
+fn steps_of(o: &Map<String, Value>) -> Result<Option<Steps>> {
+    match o.get("steps") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => Ok(Some(Steps {
             stamp: None,
             items: items
                 .iter()
                 .map(|i| Ok(Step { text: i.get("text").and_then(Value::as_str).ok_or(ProtoError::Malformed)?.to_string(), is_done: i.get("isDone").and_then(Value::as_bool).unwrap_or(false) }))
                 .collect::<Result<Vec<_>>>()?,
-        }),
-        Some(_) => return Err(ProtoError::Malformed),
-    };
+        })),
+        Some(_) => Err(ProtoError::Malformed),
+    }
+}
+
+fn task_of(o: &Map<String, Value>) -> Result<Task> {
+    let steps = steps_of(o)?;
     Ok(Task {
         id: id_of(o)?,
         name: str_field(o, "name")?,
@@ -350,6 +360,7 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         description: str_field(o, "description")?,
         remind: u32_field(o, "remind")?,
         list_id: str_field(o, "listId")?,
+        steps: steps_of(o)?,
     })
 }
 
@@ -587,6 +598,49 @@ mod tests {
         assert_eq!(out["tasks"].as_array().unwrap().len(), 2);
         let t3 = out["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t3").unwrap();
         assert!(t3["repeat"].is_null());
+    }
+
+    /// Шаги события (20 ноя 2026): регистр списка целиком, как у задачи; отметки шагов ряда — по дню;
+    /// правка шагов с другого устройства не трогает время, а пустой шаг — негодное изменение.
+    #[test]
+    fn event_steps_roundtrip_and_merge_per_field() {
+        let apply = |st: &mut PlannerState, at: u64, device: &str, body: &str| {
+            let mut op = op_from_json(body).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(at, device));
+            st.apply_op(&op, device).unwrap()
+        };
+        let mut a = PlannerState::default();
+        let created = r#"{"changes":[{"event":{"id":"e1","name":"Зал","start":"18:00","end":"19:30",
+          "repeat":{"kind":"weekly","interval":1,"weekdays":[0],"startDay":"2026-11-15"},
+          "steps":[{"text":"Собрать сумку","isDone":false},{"text":"Разминка","isDone":false}]}}]}"#;
+        assert_eq!(apply(&mut a, 1, "d1", created), 1);
+        let mut b = a.clone();
+        // A отмечает первый шаг дня ряда, B переносит время: обе правки сходятся
+        apply(&mut a, 2, "d1", r#"{"changes":[{"event":{"id":"e1","occurrences":[{"day":"2026-11-15","doneSteps":[0]}]}}]}"#);
+        apply(&mut b, 2, "d2", r#"{"changes":[{"event":{"id":"e1","start":"18:30","end":"20:00"}}]}"#);
+        a.merge_snapshot(&b.to_snapshot()).unwrap();
+        let out: Value = serde_json::from_str(&state_json(&a, 2)).unwrap();
+        let e1 = &out["events"][0];
+        assert_eq!(e1["steps"], json!([{"text": "Собрать сумку", "isDone": false}, {"text": "Разминка", "isDone": false}]));
+        assert_eq!(e1["occurrences"][0]["doneSteps"], json!([0]));
+        assert_eq!(e1["start"], json!("18:30"));
+        // Список шагов заменяется целиком; событие без шагов отдаёт пустой список
+        apply(&mut a, 3, "d1", r#"{"changes":[{"event":{"id":"e1","steps":[{"text":"Взять воду","isDone":true}]}},
+          {"event":{"id":"e2","name":"Созвон","start":"10:00","end":"10:30","day":"2026-11-16"}}]}"#);
+        let out: Value = serde_json::from_str(&state_json(&a, 3)).unwrap();
+        let find = |id: &str| out["events"].as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+        assert_eq!(find("e1")["steps"], json!([{"text": "Взять воду", "isDone": true}]));
+        assert_eq!(find("e2")["steps"], json!([]));
+        // Пустой шаг и больше 100 шагов — негодные изменения
+        let many: Vec<Value> = (0..101).map(|i| json!({"text": format!("шаг {i}")})).collect();
+        let too_many = json!({"changes": [{"event": {"id": "e1", "steps": many}}]}).to_string();
+        for bad in [r#"{"changes":[{"event":{"id":"e1","steps":[{"text":""}]}}]}"#, too_many.as_str()] {
+            assert_eq!(apply(&mut a, 4, "d1", bad), 0);
+        }
+        // Шаги — правка события: новее надгробия и возвращает его
+        apply(&mut a, 5, "d1", r#"{"changes":[{"event":{"id":"e2","deleted":true}}]}"#);
+        apply(&mut a, 6, "d2", r#"{"changes":[{"event":{"id":"e2","steps":[{"text":"Повестка"}]}}]}"#);
+        assert!(PlannerState::is_event_alive(&a.events["e2"]));
     }
 
     /// Словарь правок ввода текстом: слова проходят через состояние, правка несёт только присланные

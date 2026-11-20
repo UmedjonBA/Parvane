@@ -303,8 +303,45 @@ try {
   await visible(menuItem('canvas'), 'меню строки');
   assert.deepEqual(
     await page.locator('[data-note-menu-list] [data-note-action]').evaluateAll((items) => items.map((item) => item.dataset.noteAction)),
-    ['open', 'canvas'], 'состав меню строки',
+    ['open', 'rename', 'move', 'pin', 'copy', 'article', 'canvas', 'versions', 'delete'], 'состав меню строки',
   );
+  await shotBoth('desk-row-menu');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
+  await page.locator('[data-note-menu-list]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  // «Переименовать» из строки — шторкой, заметка не открывается; потом назад
+  const renameSheet = page.locator('[data-note-rename]');
+  const renameRow = async (from, to) => {
+    await row(from).click({ button: 'right' });
+    await menuItem('rename').click();
+    await visible(renameSheet, 'шторка названия из строки');
+    await renameSheet.locator('input').fill(to);
+    await renameSheet.locator('input').press('Enter');
+    await gone(renameSheet, 'шторка названия не закрылась');
+    await visible(row(to), `строка после переименования в «${to}»`);
+  };
+  await renameRow(NOTE, `${NOTE} 2`);
+  await renameRow(`${NOTE} 2`, NOTE);
+  // «Перенести», «Скопировать ссылку», «История версий», «В корзину» (с отменой) — из строки
+  await row(NOTE).click({ button: 'right' });
+  await menuItem('move').click();
+  await visible(page.locator('[data-folder-picker]'), 'выбор папки из меню строки');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-folder-picker]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await row(NOTE).click({ button: 'right' });
+  await menuItem('copy').click();
+  await visible(page.getByText('Link copied').first(), 'ссылка скопирована из меню строки');
+  await row(NOTE).click({ button: 'right' });
+  await menuItem('versions').click();
+  await visible(page.locator('[data-cloud-versions] [data-version]'), 'история версий из меню строки');
+  await page.keyboard.press('Escape');
+  await gone(page.locator('[data-cloud-versions]'), 'окно истории из строки не закрылось');
+  await row(NOTE).click({ button: 'right' });
+  await menuItem('delete').click();
+  const rowDelete = page.locator('.confirm-dialog-button').filter({ hasText: 'Cancel' });
+  await visible(rowDelete, 'вопрос перед удалением из строки');
+  await rowDelete.click();
+  await visible(row(NOTE), 'заметка на месте после отмены удаления');
+  await row(NOTE).click({ button: 'right' });
   await menuItem('canvas').click();
   await page.locator('[data-note-canvas-sheet] [data-canvas-option-new]').click();
   await page.waitForFunction(

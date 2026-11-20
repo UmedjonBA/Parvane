@@ -42,6 +42,7 @@ import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
 import RadioGroup from '../../ui/RadioGroup';
 import ManageJoinMode from './ManageJoinMode';
+import ManageReportsEntry from './ManageReportsEntry';
 
 // Parvane (spec 023): приватной ссылки на этом экране нет (ссылки — экран «Ссылки-приглашения»), коллекционных
 // имён, бота-привратника и запрета пересылки — тоже
@@ -80,6 +81,7 @@ type StateProps = {
   canEditType?: boolean;
   canInvite?: boolean;
   canChangeInfo?: boolean;
+  canModerate?: boolean;
   maxPublicLinks: number;
   privateInviteLink?: string;
 };
@@ -101,6 +103,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   canEditType,
   canInvite,
   canChangeInfo,
+  canModerate,
   maxPublicLinks,
   privateInviteLink,
   onClose,
@@ -448,6 +451,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             <IslandDescription>{oldLang('ParvaneL2Info')}</IslandDescription>
           </>
         )}
+        {canModerate && <ManageReportsEntry chatId={chat.id} isActive={isActive} />}
         {IS_USERNAMES_MANAGE_SUPPORTED && shouldRenderUsernamesManage && (
           <ManageUsernames
             chatId={chat.id}
@@ -583,6 +587,7 @@ export default memo(withGlobal<OwnProps>(
       canEditType: chat.isCreator,
       canInvite: chat.isCreator || getHasAdminRight(chat, 'inviteUsers'),
       canChangeInfo: chat.isCreator || getHasAdminRight(chat, 'changeInfo'),
+      canModerate: chat.isCreator || getHasAdminRight(chat, 'deleteMessages') || getHasAdminRight(chat, 'banUsers'),
     };
   },
   (global, { chatId }) => {

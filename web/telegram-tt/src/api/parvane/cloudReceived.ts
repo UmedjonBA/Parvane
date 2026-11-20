@@ -1,15 +1,23 @@
+import type { BlobSession, CloudBlobTransport } from './cloudBlobs';
 import type { CloudSync } from './v2/cloud';
 import type { WireMessageContent } from './wire';
+
+import { relayCloudBlob } from './cloudBlobs';
 
 // Parvane (spec 041, CLOUD-3): доступ к файлу копией. Собеседник прислал файл «Файлов» сообщением с
 // `Media.to_files` — устройство получателя кладёт серверную копию блоба (`cloud.blob.copy` по секрету вложения,
 // в квоту получателя) в корень своего диска узлом с `from` = автор; экран показывает такой файл в «Доступных мне».
 // Узел получает id из id сообщения: другие устройства получателя и повторный показ сообщения узел не удваивают.
+// Файл с другого сервера (федерация) серверной копией не взять — устройство получателя переливает тот же шифртекст
+// со своего сервера на свой (`relayCloudBlob`, квота получателя); ключ файла прежний.
 
 type Deps = {
   log: (message: string) => void;
   cloud: () => CloudSync;
   blobCall: <T>(method: string, request: unknown) => Promise<T>;
+  downloadBlobCap: BlobSession['downloadBlobCap'];
+  uploadBlobChunk?: CloudBlobTransport['uploadBlobChunk'];
+  setBlobDomain: (fileId: string, domain?: string) => void;
   serverDomain: () => string | undefined;
   loadRecord: <T>(key: string) => Promise<T | undefined>;
   saveRecord: (key: string, value: unknown) => Promise<void>;
@@ -76,9 +84,12 @@ export function createCloudReceiver(deps: Deps) {
     return Boolean(json && (JSON.parse(json) as { nodes?: { id: string }[] }).nodes?.some((n) => n.id === id));
   }
 
-  async function copy(wire: WireMessageContent, from: string, opId: string, self: string) {
-    const id = await receivedNodeId(opId);
-    if (hasNode(id)) return;
+  /** Копия блоба вложения в свой диск: на своём сервере — серверная, с другого — переливом через устройство. */
+  async function copyBlob(wire: WireMessageContent, isForeign: boolean) {
+    if (isForeign) {
+      deps.setBlobDomain(wire.file_id!, wire.blob_domain);
+      return relayCloudBlob(deps, { fileId: wire.file_id!, capability: wire.capability! });
+    }
     const capability = crypto.getRandomValues(new Uint8Array(CAPABILITY_BYTES));
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability));
     const reply = await deps.blobCall<CopyReply>('cloud.blob.copy', {
@@ -86,6 +97,13 @@ export function createCloudReceiver(deps: Deps) {
     });
     const fileId = reply.fileId || reply.file_id;
     if (!fileId) throw new Error('copy: no file id');
+    return { fileId, capability: toBase64(capability), chunks: reply.chunks || 1 };
+  }
+
+  async function copy(wire: WireMessageContent, from: string, opId: string, self: string, isForeign: boolean) {
+    const id = await receivedNodeId(opId);
+    if (hasNode(id)) return;
+    const { fileId, capability, chunks } = await copyBlob(wire, isForeign);
     const size = Number(wire.size_bytes || 0);
     await deps.cloud().apply('root', [{
       op: 'create',
@@ -98,9 +116,9 @@ export function createCloudReceiver(deps: Deps) {
         fileId,
         key: wire.file_key,
         nonce: wire.file_nonce,
-        capability: toBase64(capability),
+        capability,
         size,
-        chunks: reply.chunks || 1,
+        chunks,
         mime: wire.mime || 'application/octet-stream',
         // Копия — блоб получателя: стирает её (корзина, вытесненная версия) его устройство
         uploader: self,
@@ -108,22 +126,18 @@ export function createCloudReceiver(deps: Deps) {
     }]);
   }
 
-  /** Файл из сообщения с `to_files` — копией в «Доступные мне». Вложение с чужого сервера не копируется
-   * (копия блоба — только на своём сервере): файл остаётся в чате. */
+  /** Файл из сообщения с `to_files` — копией в «Доступные мне» (вложение с чужого сервера — переливом). */
   async function receive(args: { wire: WireMessageContent; from: string; opId: string; self: string }, attempt = 0) {
     const {
       wire, from, opId, self,
     } = args;
     if (!wire.file_id || !wire.capability || !wire.file_key || !wire.file_nonce) return;
     const own = deps.serverDomain()?.toLowerCase();
-    if (wire.blob_domain && own && wire.blob_domain.toLowerCase() !== own) {
-      deps.log('облако: файл с другого сервера в «Файлы» не скопирован — он остаётся в чате');
-      return;
-    }
+    const isForeign = Boolean(wire.blob_domain && own && wire.blob_domain.toLowerCase() !== own);
     if (running.has(opId) || await isDone(opId)) return;
     running.add(opId);
     try {
-      await copy(wire, from, opId, self);
+      await copy(wire, from, opId, self, isForeign);
       await markDone(opId);
       deps.log('облако: присланный файл скопирован в «Доступные мне»');
     } catch (e) {

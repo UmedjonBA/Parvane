@@ -140,6 +140,7 @@ enum HeaderContent {
   ManageReactions,
   ManageInviteInfo,
   ManageJoinRequests,
+  ManageReports,
   CreateTopic,
   EditTopic,
   SavedDialogs,
@@ -350,6 +351,8 @@ const RightHeader: FC<OwnProps & StateProps> = ({
       HeaderContent.ManageInviteInfo
     ) : managementScreen === ManagementScreens.JoinRequests ? (
       HeaderContent.ManageJoinRequests
+    ) : managementScreen === ManagementScreens.Reports ? (
+      HeaderContent.ManageReports
     ) : managementScreen === ManagementScreens.NewDiscussionGroup ? (
       HeaderContent.NewDiscussionGroup
     ) : undefined // Never reached
@@ -517,6 +520,15 @@ const RightHeader: FC<OwnProps & StateProps> = ({
             <h3 className="title">{isChannel ? oldLang('SubscribeRequests') : oldLang('MemberRequests')}</h3>
             {groupTitle !== undefined && (
               <div className="subtitle">{`${groupTitle} · ${joinRequestsCount ?? 0}`}</div>
+            )}
+          </div>
+        );
+      case HeaderContent.ManageReports:
+        return (
+          <div className="header">
+            <h3 className="title">{lang('ParvaneReportsTitle')}</h3>
+            {groupTitle !== undefined && (
+              <div className="subtitle">{lang('ParvaneReportsSubtitle', { group: groupTitle })}</div>
             )}
           </div>
         );

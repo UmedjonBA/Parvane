@@ -38,11 +38,21 @@ const ModReportCard = ({
 
   const authorIds = Array.from(new Set(report.messages.map((m) => m.authorId)));
 
+  // Сделанное по карточке закрывает жалобу и в списке жалоб группы (REPORT-2)
+  const closeReports = useLastCallback(() => {
+    void callParvane('parvaneReportClose', {
+      chatId: report.groupChatId, uuids: report.messages.map((m) => m.uuid),
+    });
+  });
+
   const handleDelete = useLastCallback(async () => {
     const isDone = await callParvane('parvaneModDelete', {
       groupChatId: report.groupChatId, uuids: report.messages.map((m) => m.uuid),
     });
-    if (isDone) setIsDeleted(true);
+    if (isDone) {
+      setIsDeleted(true);
+      closeReports();
+    }
     showNotification({ message: lang(isDone ? 'ParvaneModDeleted' : 'ParvaneModFailed') });
   });
 
@@ -51,7 +61,10 @@ const ModReportCard = ({
     for (const userId of authorIds) {
       isDone = Boolean(await callParvane('parvaneModBan', { groupChatId: report.groupChatId, userId })) && isDone;
     }
-    if (isDone) setIsBanned(true);
+    if (isDone) {
+      setIsBanned(true);
+      closeReports();
+    }
     showNotification({ message: lang(isDone ? 'ParvaneModBanned' : 'ParvaneModFailed') });
   });
 
@@ -110,6 +123,9 @@ const REASON_KEYS = {
   personal: 'ParvaneReportReasonPersonal',
   fake: 'ParvaneReportReasonFake',
   other: 'ParvaneReportReasonOther',
+  // REPORT-2: причины окна одной формой
+  fraud: 'ParvaneReportChipFraud',
+  insult: 'ParvaneReportChipInsult',
 } as const;
 
 function reasonKey(reason: string) {

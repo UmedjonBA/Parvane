@@ -21,6 +21,7 @@ import PvSegment from '../../../parvane/notes/PvSegment';
 import PvSwitch from '../../../parvane/notes/PvSwitch';
 import Loading from '../../../ui/Loading';
 import ProfileIcon from '../profile/ProfileIcon';
+import SettingsPasscodeBiometric from './SettingsPasscodeBiometric';
 
 import styles from '../profile/Profile.module.scss';
 import ownStyles from './SettingsPasscode.module.scss';
@@ -161,6 +162,7 @@ const SettingsPasscodeHub = ({
         )}
       </div>
       <div className={styles.hint}>{lang('ParvanePinLimitNote')}</div>
+      {isEnabled && <SettingsPasscodeBiometric isActive={isActive} />}
       {isMigrating && (
         <div className={ownStyles.migration}>
           <Loading />

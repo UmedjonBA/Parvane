@@ -26,6 +26,9 @@ import { storeOpen } from '../../lib/parvane-protocol/parvane_protocol';
 import { loadProtocol } from './v2/engine';
 import { openStoreIdb, STORE_DB } from './v2/storeIdb';
 import { createStorageSignal } from './v2/tabSignal';
+import {
+  decodeBiometricRecord, encodeBiometricRecord, openWithPrf, sealWithPrf,
+} from './storagePrfWrap';
 // Новый PIN — не короче. По макету (spec 041 E6) PIN — четыре цифры: копию профиля с таким PIN перебирают
 // офлайн за минуты (WEB-15 ослаблен решением «по макету»), он закрывает приложение, а не диск от разбора
 export const STORAGE_PIN_MIN_LENGTH = 4;
@@ -35,6 +38,9 @@ const WRITE_BATCH = 512;
 const SLOW_WRITE_MS = 3000;
 // Ключ записи устройства в базе профиля (вне пространства ключей движка `root`, `g*/`)
 const DEVICE_KEY = 'device';
+// Вход по отпечатку (spec 041, 20 ноя 2026): KEK обёртки PIN, завёрнутый секретом PRF аутентификатора
+// (`storagePrfWrap.ts`). Любая смена обёртки (новый PIN, снятие PIN) стирает запись той же транзакцией
+const BIOMETRIC_KEY = 'biometric';
 const ROOT_KEY = 'root';
 // Записи по имени: вид хранилища движка (data-model.md §2); прочее — `engine-core`
 const KINDS = ['engine-core', 'history-row', 'outbox', 'draft-local', 'state-object', 'group-view'] as const;
@@ -707,7 +713,7 @@ async function setPinIn(ctx: Ctx, user: string, pin: string) {
       if (p.engine.state() !== 'ready') throw new Error('Storage is locked: unlock with the current PIN first.');
       // Одна транзакция: обёртка PIN в корне вместо обёртки устройства и удаление записи устройства
       const batch = p.engine.storeSetPin(salt, PIN_ITERATIONS, kek) as JsBatch;
-      batch.deletes.push(DEVICE_KEY);
+      batch.deletes.push(DEVICE_KEY, BIOMETRIC_KEY);
       await commit(ctx, p, batch);
       p.signal.post('storage-wrap-changed');
       // Смена DEK поколением (P1): копия профиля, снятая до PIN, не откроет записи после переноса
@@ -728,9 +734,81 @@ async function setPinIn(ctx: Ctx, user: string, pin: string) {
     if (p.engine.state() !== 'ready') throw new Error('Storage is locked: unlock with the current PIN first.');
     const batch = p.engine.storeRemovePin(raw) as JsBatch;
     batch.puts.push({ key: DEVICE_KEY, value: sealed });
+    batch.deletes.push(BIOMETRIC_KEY);
     await commit(ctx, p, batch);
     p.signal.post('storage-wrap-changed');
   }).finally(() => raw.fill(0));
+}
+
+// ── вход по отпечатку (WebAuthn PRF) ─────────────────────────────────────────────────────────────────────
+// Включение: верный PIN даёт KEK, секрет аутентификатора его заворачивает. Неверный PIN — `false`, запись не пишется
+async function enrollBiometricIn(
+  ctx: Ctx, user: string, pin: string, credential: { credentialId: Uint8Array; prfSalt: Uint8Array; prf: Uint8Array },
+) {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return false;
+  const i = info(p);
+  if (!i.wraps.includes('pin') || !i.pinSalt || !i.pinIterations) return false;
+  const kek = await pinKek(pin, unhex(i.pinSalt), i.pinIterations);
+  const probe = storeOpen(p.engine.rootBytes());
+  try {
+    probe.storeUnlock(kek, true);
+  } catch {
+    kek.fill(0);
+    return false;
+  } finally {
+    probe.free();
+  }
+  const binding = { profileId: p.id, pinSalt: i.pinSalt, credentialId: credential.credentialId };
+  const sealed = await sealWithPrf(credential.prf, binding, kek).finally(() => kek.fill(0));
+  const value = encodeBiometricRecord({
+    credentialId: credential.credentialId, prfSalt: credential.prfSalt, pinSalt: i.pinSalt, sealed,
+  });
+  await exclusive(p, async () => {
+    await syncRoot(ctx, p);
+    // PIN сменили, пока шла проверка на аутентификаторе — запись прежнего PIN не нужна
+    if (info(p).pinSalt !== i.pinSalt) throw new Error('Storage PIN changed during enrollment.');
+    await p.idb.commit({ batchId: '0', puts: [{ key: BIOMETRIC_KEY, value }], deletes: [] });
+  });
+  return true;
+}
+
+// Параметры запроса к аутентификатору; запись прежнего PIN (соль не та) — как нет записи
+async function readBiometricIn(ctx: Ctx, user: string) {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return undefined;
+  const bytes = await readKey(p.idb, BIOMETRIC_KEY);
+  const record = bytes && decodeBiometricRecord(bytes);
+  const { pinSalt } = info(p);
+  if (!record || !pinSalt || record.pinSalt !== pinSalt) return undefined;
+  return { credentialId: record.credentialId, prfSalt: record.prfSalt };
+}
+
+async function unlockWithBiometricIn(ctx: Ctx, user: string, prf: Uint8Array): Promise<boolean> {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return false;
+  if (p.engine.state() === 'ready') return true;
+  const bytes = await readKey(p.idb, BIOMETRIC_KEY);
+  const record = bytes && decodeBiometricRecord(bytes);
+  const { pinSalt } = info(p);
+  if (!record || !pinSalt || record.pinSalt !== pinSalt) return false;
+  const kek = await openWithPrf(prf, { profileId: p.id, pinSalt, credentialId: record.credentialId }, record.sealed);
+  if (!kek) return false;
+  try {
+    p.engine.storeUnlock(kek, true);
+  } catch {
+    return false;
+  } finally {
+    kek.fill(0);
+  }
+  resumeRotation(ctx, p);
+  return true;
+}
+
+async function removeBiometricIn(ctx: Ctx, user: string) {
+  const p = await openProfile(ctx, user, false);
+  if (!p) return;
+  await exclusive(p, () => p.idb.commit({ batchId: '0', puts: [], deletes: [BIOMETRIC_KEY] }));
 }
 
 // Смена ника (spec 026 → spec 035 T047): AAD записей не зависит от адреса — переносится только указатель
@@ -793,6 +871,12 @@ function makeApi(ctx: Ctx) {
     checkStoragePin: (user: string, pin: string) => checkPinIn(ctx, user, pin),
     lockStorage: (user: string) => lockIn(ctx, user),
     setStoragePin: (user: string, pin: string) => setPinIn(ctx, user, pin),
+    enrollStorageBiometric: (
+      user: string, pin: string, credential: { credentialId: Uint8Array; prfSalt: Uint8Array; prf: Uint8Array },
+    ) => enrollBiometricIn(ctx, user, pin, credential),
+    readStorageBiometric: (user: string) => readBiometricIn(ctx, user),
+    unlockStorageWithBiometric: (user: string, prf: Uint8Array) => unlockWithBiometricIn(ctx, user, prf),
+    removeStorageBiometric: (user: string) => removeBiometricIn(ctx, user),
     renameStorageUser: (oldUser: string, newUser: string) => renameIn(ctx, oldUser, newUser),
     saveTrustSecret: (user: string, secret: string) => saveSecretIn(ctx, user, 'trust-secret', secret),
     loadTrustSecret: (user: string) => loadSecretIn(ctx, user, 'trust-secret'),
@@ -810,6 +894,7 @@ function makeApi(ctx: Ctx) {
 const api = makeApi(DEFAULT_CTX);
 export const {
   hasStoragePin, isStorageUnlocked, unlockStorageWithPin, checkStoragePin, lockStorage, setStoragePin,
+  enrollStorageBiometric, readStorageBiometric, unlockStorageWithBiometric, removeStorageBiometric,
   renameStorageUser,
   saveTrustSecret, loadTrustSecret, clearTrustSecret, saveSecureSession, loadSecureSession, clearSecureSession,
   getStorageMigration,
@@ -898,6 +983,11 @@ export const secureStorageInternals = {
   kindOf,
   keysStore: KEYS,
   profileIdOf: (user: string) => profileIdOf(DEFAULT_CTX, user),
+  // Тесты: сырая запись входа по отпечатку на носителе
+  biometricRecord: async (user: string) => {
+    const p = await openProfile(DEFAULT_CTX, user, false);
+    return p ? readKey(p.idb, BIOMETRIC_KEY) : undefined;
+  },
   // Тесты: запись устройства (`device`) в базе профиля есть
   hasDeviceRecord: async (user: string) => {
     const p = await openProfile(DEFAULT_CTX, user, false);

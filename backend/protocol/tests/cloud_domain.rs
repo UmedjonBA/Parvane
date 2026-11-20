@@ -8,6 +8,7 @@ use prost::Message;
 use proptest::prelude::*;
 
 use parvane_protocol::domain::cloud::{self, CloudState, NodeId, ViewNode};
+use parvane_protocol::domain::cloud_json;
 use parvane_protocol::domain::{LamportGuard, Stamp, MAX_SNAPSHOT_PLAINTEXT};
 use parvane_protocol::pb::parvane::cloud::v1::{
     cloud_op, CloudBatch, CloudBlobRef, CloudCreate, CloudMeta, CloudMove, CloudNodeKind, CloudOp, CloudPurge, CloudSetBlob, CloudThumb,
@@ -622,4 +623,137 @@ fn restore_moves_version_to_top() {
     assert_eq!(v.blob.as_ref().unwrap().file_id, "f1");
     assert_eq!(v.versions.iter().map(|x| x.blob.file_id.as_str()).collect::<Vec<_>>(), vec!["v3", "v2"]);
     assert!(st.purged_blobs().is_empty());
+}
+
+// ── перенос файла с историей между контейнерами (CLOUD-3) ──────────────────
+
+/// Узел состояния `cloud_json::state_json` по id.
+fn json_node(st: &CloudState, n: u8) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_str(&cloud_json::state_json(st)).unwrap();
+    v["nodes"].as_array().unwrap().iter().find(|x| x["id"] == hex::encode(id(n))).unwrap().clone()
+}
+
+/// Правка переноса так, как её строит хост: блобы версий — копии (`c-<прежний>`), загрузивший — переносящий.
+fn transfer_json(src: &serde_json::Value, new_id: u8, with_history: bool) -> String {
+    let copy = |b: &serde_json::Value| {
+        let mut b = b.clone();
+        b["fileId"] = format!("c-{}", b["fileId"].as_str().unwrap()).into();
+        b["uploader"] = "bob@local".into();
+        b
+    };
+    let versions: Vec<serde_json::Value> = if with_history {
+        src["versions"].as_array().unwrap().iter().map(|v| serde_json::json!({"blob": copy(&v["blob"]), "mtime": v["mtime"]})).collect()
+    } else {
+        Vec::new()
+    };
+    serde_json::json!({"ops": [{
+        "op": "create", "id": hex::encode(id(new_id)), "kind": "file", "parent": null, "name": src["name"],
+        "mtime": src["mtime"], "blob": copy(&src["blob"]), "versions": versions,
+    }]})
+    .to_string()
+}
+
+/// Локальная правка целиком: разбор, окно черновика, метки, проверка, применение.
+fn apply_local(st: &mut CloudState, json: &str, dev: &str, guard: &mut LamportGuard) -> CloudBatch {
+    let (mut batch, keep) = cloud_json::batch_with_keep(json).unwrap();
+    st.coalesce_local(&mut batch, dev, &keep);
+    cloud::stamp_batch(&mut batch, dev, guard);
+    st.check_local(&batch).unwrap();
+    st.apply_batch(&batch, dev).unwrap();
+    batch
+}
+
+fn version_ids(v: &ViewNode) -> Vec<String> {
+    v.versions.iter().map(|x| x.blob.file_id.clone()).collect()
+}
+
+/// Перенос уносит историю: те же версии в том же порядке и с теми же временами — копиями блобов; в назначении
+/// ничего не собирается, источник после стирания отдаёт в сборку все свои версии. Без `versions` (копия
+/// файла, «Сделать копию») — новый файл с чистой историей.
+#[test]
+fn transfer_carries_history_and_copy_starts_clean() {
+    let src = apply_all(&[file(1, None, "план.md", 1, "x"), set_blob(1, "v2", 2, "x", 200), set_blob(1, "v3", 3, "y", 300)]);
+    let node = json_node(&src, 1);
+    let mut dst = CloudState::default();
+    let mut guard = LamportGuard::default();
+    apply_local(&mut dst, &transfer_json(&node, 9, true), "z", &mut guard);
+    let moved = node_of(&dst, 9);
+    assert_eq!(moved.blob.as_ref().unwrap().file_id, "c-v3");
+    assert_eq!(moved.mtime_ms, 300);
+    assert_eq!(version_ids(&moved), vec!["c-v2", "c-f1"]);
+    assert_eq!(moved.versions.iter().map(|v| v.mtime_ms).collect::<Vec<_>>(), vec![200, 1]);
+    assert!(dst.purged_blobs().is_empty());
+    // Перенесённые версии не черновик: правка сразу после переноса — отдельная версия
+    let edit = serde_json::json!({"ops": [{"op": "setBlob", "id": hex::encode(id(9)), "mtime": 301,
+        "blob": json_node(&dst, 9)["blob"].clone()}]});
+    let mut fresh = edit.clone();
+    fresh["ops"][0]["blob"]["fileId"] = "e1".into();
+    apply_local(&mut dst, &fresh.to_string(), "z", &mut guard);
+    assert_eq!(version_ids(&node_of(&dst, 9)), vec!["c-v3", "c-v2", "c-f1"]);
+    assert!(dst.purged_blobs().is_empty());
+    // Снимок назначения несёт перенесённую историю
+    assert_eq!(CloudState::from_snapshot(&dst.to_snapshot(0)).unwrap().view(), dst.view());
+    // Источник: стирание узла — все версии в сборку
+    let mut src = src;
+    src.apply(&purge(1, 10, "x")).unwrap();
+    assert_eq!(purged_ids(&src), vec!["f1".to_string(), "v2".into(), "v3".into()]);
+    // Копия — только текущая версия
+    apply_local(&mut dst, &transfer_json(&node, 8, false), "z", &mut guard);
+    let copy = node_of(&dst, 8);
+    assert_eq!(copy.blob.as_ref().unwrap().file_id, "c-v3");
+    assert!(copy.versions.is_empty());
+}
+
+/// Негодный перенос: история у папки и у перемещения, больше `VERSIONS_KEEP - 1` прежних версий.
+#[test]
+fn transfer_rejects_bad_versions() {
+    let st = apply_all(&[file(1, None, "a.txt", 1, "x"), set_blob(1, "v2", 2, "x", 2)]);
+    let node = json_node(&st, 1);
+    let mut too_many: serde_json::Value = serde_json::from_str(&transfer_json(&node, 9, true)).unwrap();
+    let one = too_many["ops"][0]["versions"][0].clone();
+    too_many["ops"][0]["versions"] = vec![one; cloud::VERSIONS_KEEP].into();
+    let a = hex::encode(id(2));
+    let v = serde_json::json!([{"blob": node["blob"], "mtime": 1}]);
+    for bad in [
+        too_many,
+        serde_json::json!({"ops": [{"op": "create", "id": a, "kind": "folder", "parent": null, "name": "x", "versions": v}]}),
+        serde_json::json!({"ops": [{"op": "move", "id": a, "parent": null, "name": "x", "versions": v}]}),
+        serde_json::json!({"ops": [{"op": "create", "id": a, "kind": "file", "parent": null, "name": "x", "blob": node["blob"], "versions": 5}]}),
+    ] {
+        assert!(cloud_json::batch_with_keep(&bad.to_string()).is_err(), "{bad}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// Перенос с любым числом версий: в назначении та же история (порядок, времена), применение операций пакета в
+    /// любом порядке и снимок дают то же состояние, сборка в назначении пуста.
+    #[test]
+    fn transfer_history_is_order_independent(
+        (edits, perm) in (0usize..cloud::VERSIONS_KEEP + 3).prop_flat_map(|n| {
+            let ops = n.min(cloud::VERSIONS_KEEP - 1) + 1;
+            (Just(n), Just((0..ops).collect::<Vec<_>>()).prop_shuffle())
+        })
+    ) {
+        let mut src = apply_all(&[file(1, None, "a.md", 1, "x")]);
+        for i in 0..edits as u64 {
+            src.apply(&set_blob(1, &format!("v{i}"), 10 + i, if i % 2 == 0 { "x" } else { "y" }, 100 + i)).unwrap();
+        }
+        let before = node_of(&src, 1);
+        let mut dst = CloudState::default();
+        let batch = apply_local(&mut dst, &transfer_json(&json_node(&src, 1), 9, true), "z", &mut LamportGuard::default());
+        prop_assert_eq!(batch.ops.len(), perm.len());
+        let moved = node_of(&dst, 9);
+        let want: Vec<String> = version_ids(&before).iter().map(|f| format!("c-{f}")).collect();
+        prop_assert_eq!(version_ids(&moved), want);
+        prop_assert_eq!(moved.versions.iter().map(|v| v.mtime_ms).collect::<Vec<_>>(), before.versions.iter().map(|v| v.mtime_ms).collect::<Vec<_>>());
+        prop_assert!(dst.purged_blobs().is_empty());
+        let mut shuffled = CloudState::default();
+        for i in &perm {
+            shuffled.apply(&batch.ops[*i]).unwrap();
+        }
+        prop_assert_eq!(&shuffled.view(), &dst.view());
+        prop_assert_eq!(CloudState::from_snapshot(&dst.to_snapshot(0)).unwrap().view(), dst.view());
+    }
 }

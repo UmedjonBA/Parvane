@@ -3,8 +3,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildBundleMark, canonicalRecoveryKey, deriveBundleKey, isBundleRolledBack, mergeKeyBundlePayload, openKeyBundle,
-  pickRecoveryKey, readBundleSeq, readGrantBundleKey, sealKeyBundle, withBundleKey, withFreshLog,
+  buildBundleMark, buildOffBundle, canonicalRecoveryKey, deriveBundleKey, describeKeyBundle, isBundleRolledBack,
+  mergeKeyBundlePayload, openKeyBundle, pickRecoveryKey, readBundleSeq, readGrantBundleKey, sealKeyBundle,
+  withBundleKey, withFreshLog,
 } from './keyBundle';
 
 const KEY = '0123-4567-89AB-CDEF-GHJK-MNPQ-RSTV-WXYZ-0123-4567';
@@ -152,5 +153,20 @@ describe('номер копии ключей аккаунта: защита от
     expect(isBundleRolledBack({ seq: 5 }, 5)).toBe(false);
     expect(isBundleRolledBack({ seq: 6 }, 5)).toBe(false);
     expect(isBundleRolledBack({}, 0)).toBe(false);
+  });
+
+  it('«Выключить копию»: пометка без ключей открывается своим ключом, в составе — «выключена»', async () => {
+    const key = (await deriveBundleKey(KEY, ADDRESS))!;
+    const sealed = await sealKeyBundle(key, ADDRESS, buildOffBundle(7));
+    const opened = (await openKeyBundle(key, ADDRESS, sealed))!;
+    expect([opened.off, opened.grant, readBundleSeq(opened.seq)]).toEqual([true, '', 7]);
+    expect(describeKeyBundle(opened)).toMatchObject({
+      isOff: true, hasChats: false, hasFiles: false, hasPlanner: false, groups: 0,
+    });
+    expect(isBundleRolledBack(opened, 8)).toBe(true);
+    // Обычная копия не выключена; пометку чужим ключом не открыть
+    expect(describeKeyBundle({ grant: 'Z3JhbnQ=' }).isOff).toBe(false);
+    expect(await openKeyBundle((await deriveBundleKey(KEY.replace(/7$/, '8'), ADDRESS))!, ADDRESS, sealed))
+      .toBeUndefined();
   });
 });

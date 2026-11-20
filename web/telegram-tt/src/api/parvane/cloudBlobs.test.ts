@@ -4,7 +4,7 @@ import { V2Error } from './v2/transport';
 import { decryptBlob, encryptBlobWithKey } from './blobcrypt';
 import {
   CLOUD_CHUNK_BYTES, CloudAbortError, type CloudBlobTransport, cloudCipherSize, cloudPlainSize, createBlobSink,
-  createCipherSource, createLimiter, downloadCloudBlob, uploadCloudBlob,
+  createCipherSource, createLimiter, downloadCloudBlob, relayCloudBlob, uploadCloudBlob,
 } from './cloudBlobs';
 
 function bytesOf(length: number) {
@@ -300,5 +300,31 @@ describe('блобы облака: потоковый PVB2', () => {
     // Заявленный размер больше настоящего — отказ, а не усечённый файл
     server.files.get(up.fileId)![1][100] ^= 1;
     await expect(download(server, { ...up, size: up.size + 1 })).rejects.toBeDefined();
+  }, 30000);
+  it('перелив с другого сервера: тот же шифртекст кусками облака под новым секретом, ключ файла прежний', async () => {
+    const far = createServer();
+    const own = createServer();
+    const key = bytesOf(32);
+    const nonce = bytesOf(12);
+    const plain = bytesOf(3 * CLOUD_CHUNK_BYTES + 777);
+    const cipher = await encryptBlobWithKey(plain, key, nonce);
+    // Чанки медиа другого сервера — своего размера; больше 64 штук: три окна скачивания
+    const step = Math.floor(cipher.length / 70);
+    far.files.set('far-1', Array.from({ length: Math.ceil(cipher.length / step) }, (_, i) => (
+      cipher.slice(i * step, (i + 1) * step)
+    )));
+    const relayed = await relayCloudBlob(
+      { downloadBlobCap: far.transport.downloadBlobCap, blobCall: own.transport.blobCall },
+      { fileId: 'far-1', capability: 'Y2Fw' },
+    );
+    expect(relayed.chunks).toBe(Math.ceil(cipher.length / CLOUD_CHUNK_BYTES));
+    expect(unb64(relayed.capability)).toHaveLength(32);
+    expect(Buffer.compare(Buffer.from(own.cipherOf(relayed.fileId)), Buffer.from(cipher))).toBe(0);
+    expect(far.calls.filter((c) => c.method === 'download').map((c) => c.index)).toEqual([0, 32, 64]);
+    const got = await download(own, {
+      fileId: relayed.fileId, key: b64(key), nonce: b64(nonce), capability: relayed.capability,
+      size: plain.length, chunks: relayed.chunks,
+    });
+    expect(Buffer.compare(Buffer.from(got), Buffer.from(plain))).toBe(0);
   }, 30000);
 });

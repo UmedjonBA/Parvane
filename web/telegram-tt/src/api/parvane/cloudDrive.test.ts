@@ -305,3 +305,94 @@ describe('провайдер облака: дерево, серии, кэши', 
     await expect(failing(() => Promise.resolve())).rejects.toThrow('нет связи');
   });
 });
+
+// CLOUD-3: перенос между контейнерами уносит историю версий копиями блобов, «Сделать копию» — только текущую
+describe('провайдер облака: перенос с историей', () => {
+  function blobOf(fileId: string, size: number) {
+    return {
+      fileId, key: 'a2V5', nonce: 'bm9uY2U=', capability: `cap-${fileId}`, size, chunks: 1, mime: 'text/markdown',
+      uploader: 'bob@test',
+    };
+  }
+
+  const NODE: CloudNodeJson = {
+    id: 'aa'.repeat(16),
+    kind: 'file',
+    name: 'план.md',
+    size: 30,
+    mime: 'text/markdown',
+    mtime: 300,
+    trashed: false,
+    trashTop: false,
+    trashedAt: 0,
+    blob: blobOf('cur', 30),
+    versions: [
+      { blob: blobOf('old', 20), mtime: 200, size: 20, device: 'd1' },
+      { blob: blobOf('first', 10), mtime: 100, size: 10, device: 'd2' },
+    ],
+  };
+
+  function createMoveDrive() {
+    const applied: [string, Record<string, unknown>[]][] = [];
+    const copies: string[] = [];
+    const cloud = {
+      revision: () => 1,
+      stateJson: (id: string) => (
+        id === 'shared' ? JSON.stringify({ name: 'shared', count: 1, nodes: [NODE] }) : undefined
+      ),
+      apply: (container: string, ops: Record<string, unknown>[]) => {
+        applied.push([container, ops]);
+        return Promise.resolve(container);
+      },
+      flush: () => Promise.resolve(true),
+    } as unknown as CloudSync;
+    const transport: CloudBlobTransport = {
+      blobCall: <T, >(method: string, request: unknown) => {
+        if (method !== 'cloud.blob.copy') throw new Error(method);
+        const from = (request as { file_id: string }).file_id;
+        copies.push(from);
+        return Promise.resolve({ file_id: `copy-${from}` } as T);
+      },
+      downloadBlobCap: () => Promise.reject(new Error('не нужно')),
+    };
+    const drive = createCloudDrive({
+      log: () => undefined,
+      self: () => 'alice@test',
+      cloud: () => cloud,
+      transport: () => transport,
+      mediaKeys: () => undefined,
+      downloadMedia: () => Promise.resolve(undefined),
+      sendFile: () => Promise.resolve(true),
+      addressOf: () => undefined,
+    });
+    return { drive, applied, copies };
+  }
+
+  it('перенос — версии копиями в назначение, источник стирается', async () => {
+    const { drive, applied, copies } = createMoveDrive();
+    const result = await drive.parvaneCloudMove({
+      from: 'shared', items: [{ id: NODE.id, name: NODE.name }], to: 'root', transferId: 't1',
+    });
+    expect(result).toEqual({ ok: true });
+    expect(copies).toEqual(['cur', 'old', 'first']);
+    const [container, [create]] = applied[0];
+    expect(container).toBe('root');
+    const versions = create.versions as {
+      blob: { fileId: string; uploader: string; capability: string }; mtime: number;
+    }[];
+    expect(versions.map((v) => [v.blob.fileId, v.blob.uploader, v.mtime]))
+      .toEqual([['copy-old', 'alice@test', 200], ['copy-first', 'alice@test', 100]]);
+    expect(versions[0].blob.capability).not.toBe('cap-old');
+    expect(applied[1]).toEqual(['shared', [expect.objectContaining({ op: 'purge', id: NODE.id })]]);
+  });
+
+  it('«Сделать копию» — новый файл с чистой историей', async () => {
+    const { drive, applied, copies } = createMoveDrive();
+    await drive.parvaneCloudCopy({
+      container: 'shared', items: [{ id: NODE.id, name: 'план (копия).md' }], transferId: 't2',
+    });
+    expect(copies).toEqual(['cur']);
+    expect(applied).toHaveLength(1);
+    expect(applied[0][1][0].versions).toEqual([]);
+  });
+});

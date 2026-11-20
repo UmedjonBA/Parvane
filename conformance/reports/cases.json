@@ -1,0 +1,337 @@
+{
+  "about": "Жалобы: кому уходит (reportForm), список у админа группы (reportInbox), ключ закрытой (reportClosedKey). Ожидаемое пересоздаёт REPORT_REGEN=1 cargo test -p parvane-protocol --test report_vectors; тот же файл читает web (modReports.test.ts).",
+  "cases": [
+    {
+      "args": {
+        "isGroupMessage": true,
+        "members": [
+          {
+            "address": "owner@demo.test",
+            "role": "owner"
+          },
+          {
+            "address": "mod@demo.test",
+            "admin_rights": {
+              "delete_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "pin@demo.test",
+            "admin_rights": {
+              "pin_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "guest@demo.test",
+            "role": "member"
+          }
+        ],
+        "self": "guest@demo.test",
+        "serverAccepts": true
+      },
+      "call": "reportForm",
+      "expect": {
+        "admins": [
+          "owner@demo.test",
+          "mod@demo.test"
+        ],
+        "reasons": [
+          "spam",
+          "fraud",
+          "insult",
+          "illegal",
+          "other"
+        ],
+        "target": "admins",
+        "targets": [
+          "admins",
+          "server"
+        ]
+      },
+      "name": "жалоба на сообщение группы: админам и серверу"
+    },
+    {
+      "args": {
+        "isGroupMessage": true,
+        "members": [
+          {
+            "address": "owner@demo.test",
+            "role": "owner"
+          },
+          {
+            "address": "mod@demo.test",
+            "admin_rights": {
+              "delete_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "pin@demo.test",
+            "admin_rights": {
+              "pin_messages": true
+            },
+            "role": "admin"
+          },
+          {
+            "address": "guest@demo.test",
+            "role": "member"
+          }
+        ],
+        "self": "owner@demo.test",
+        "serverAccepts": false
+      },
+      "call": "reportForm",
+      "expect": {
+        "admins": [
+          "mod@demo.test"
+        ],
+        "reasons": [
+          "spam",
+          "fraud",
+          "insult",
+          "illegal",
+          "other"
+        ],
+        "target": "admins",
+        "targets": [
+          "admins"
+        ]
+      },
+      "name": "жалобу шлёт сам админ: остальные админы"
+    },
+    {
+      "args": {
+        "isGroupMessage": false,
+        "members": [],
+        "self": "guest@demo.test",
+        "serverAccepts": true
+      },
+      "call": "reportForm",
+      "expect": {
+        "admins": [],
+        "reasons": [
+          "spam",
+          "fraud",
+          "insult",
+          "illegal",
+          "other"
+        ],
+        "target": "server",
+        "targets": [
+          "server"
+        ]
+      },
+      "name": "личный чат: только сервер"
+    },
+    {
+      "args": {
+        "isGroupMessage": true,
+        "members": [
+          {
+            "address": "guest@demo.test",
+            "role": "owner"
+          }
+        ],
+        "self": "guest@demo.test",
+        "serverAccepts": false
+      },
+      "call": "reportForm",
+      "expect": {
+        "admins": [],
+        "reasons": [
+          "spam",
+          "fraud",
+          "insult",
+          "illegal",
+          "other"
+        ],
+        "target": "",
+        "targets": []
+      },
+      "name": "некуда отправить"
+    },
+    {
+      "args": {
+        "closed": [
+          "0192a0b0-c0d0-e0f0-0112-233445566700"
+        ],
+        "reports": [
+          {
+            "comment": "реклама",
+            "id": "r1",
+            "messages": [
+              {
+                "author": "spammer@demo.test",
+                "text": "Купите вентилятор",
+                "ts": 900,
+                "uuid": "0192a0b0c0d0e0f00112233445566778"
+              }
+            ],
+            "reason": "spam",
+            "reporter": "ann@demo.test",
+            "ts": 1000
+          },
+          {
+            "id": "r2",
+            "messages": [
+              {
+                "author": "spammer@demo.test",
+                "text": "Купите вентилятор",
+                "ts": 900,
+                "uuid": "0192a0b0c0d0e0f00112233445566778"
+              }
+            ],
+            "reason": "fraud",
+            "reporter": "bob@demo.test",
+            "ts": 1100
+          },
+          {
+            "comment": "",
+            "id": "r3",
+            "messages": [
+              {
+                "author": "spammer@demo.test",
+                "text": "Купите вентилятор",
+                "ts": 900,
+                "uuid": "0192a0b0c0d0e0f00112233445566778"
+              }
+            ],
+            "reason": "spam",
+            "reporter": "cid@demo.test",
+            "ts": 1200
+          },
+          {
+            "comment": "ещё раз",
+            "id": "r4",
+            "messages": [
+              {
+                "author": "spammer@demo.test",
+                "text": "Купите вентилятор",
+                "ts": 900,
+                "uuid": "0192a0b0c0d0e0f00112233445566778"
+              }
+            ],
+            "reason": "spam",
+            "reporter": "ann@demo.test",
+            "ts": 1300
+          },
+          {
+            "id": "r5",
+            "messages": [
+              {
+                "author": "rude@demo.test",
+                "text": "Грубость про погоду",
+                "ts": 950,
+                "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667aa"
+              }
+            ],
+            "reason": "violence",
+            "reporter": "bob@demo.test",
+            "ts": 1250
+          },
+          {
+            "id": "r6",
+            "messages": [
+              {
+                "author": "old@demo.test",
+                "text": "Старое",
+                "ts": 700,
+                "uuid": "0192a0b0c0d0e0f00112233445566700"
+              }
+            ],
+            "reason": "other",
+            "reporter": "ann@demo.test",
+            "ts": 800
+          }
+        ]
+      },
+      "call": "reportInbox",
+      "expect": {
+        "closed": 1,
+        "items": [
+          {
+            "author": "spammer@demo.test",
+            "comments": [
+              {
+                "reporter": "ann@demo.test",
+                "text": "реклама"
+              }
+            ],
+            "count": 3,
+            "lastTs": 1300,
+            "reason": "spam",
+            "reasons": [
+              {
+                "count": 2,
+                "reason": "spam"
+              },
+              {
+                "count": 1,
+                "reason": "fraud"
+              }
+            ],
+            "reportIds": [
+              "r1",
+              "r2",
+              "r3",
+              "r4"
+            ],
+            "reporters": [
+              "ann@demo.test",
+              "bob@demo.test",
+              "cid@demo.test"
+            ],
+            "text": "Купите вентилятор",
+            "ts": 900,
+            "uuid": "0192a0b0c0d0e0f00112233445566778"
+          },
+          {
+            "author": "rude@demo.test",
+            "comments": [],
+            "count": 1,
+            "lastTs": 1250,
+            "reason": "insult",
+            "reasons": [
+              {
+                "count": 1,
+                "reason": "insult"
+              }
+            ],
+            "reportIds": [
+              "r5"
+            ],
+            "reporters": [
+              "bob@demo.test"
+            ],
+            "text": "Грубость про погоду",
+            "ts": 950,
+            "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667aa"
+          }
+        ],
+        "open": 2
+      },
+      "name": "список: одно сообщение от троих, повтор и закрытое"
+    },
+    {
+      "args": {
+        "group": "g:demo.test:0a0b0c",
+        "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667aa"
+      },
+      "call": "reportClosedKey",
+      "expect": "g:demo.test:0a0b0c/0192a0b0c0d0e0f001122334455667aa",
+      "name": "ключ закрытой жалобы"
+    },
+    {
+      "args": {
+        "group": "u:ann@demo.test",
+        "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667aa"
+      },
+      "call": "reportClosedKey",
+      "expect": null,
+      "name": "ключ закрытой жалобы: не группа"
+    }
+  ],
+  "rule": "REPORT-2"
+}

@@ -713,6 +713,8 @@ pub fn call_static(name: &str, args: &Value) -> R {
         "notesCanvasMerge" => crate::notes_canvas_merge::merge_json(args).ok_or_else(|| err(ProtoError::Malformed))?,
         // Сверка ключей звонка словами (CALL-3): слова от отпечатков DTLS — одни на все клиенты
         "callSasWords" => crate::call_sas::words_json(args),
+        // Жалобы (REPORT-2): кому может уйти жалоба и список жалоб группы у админа — одни на все клиенты
+        name if crate::report_inbox::NAMES.contains(&name) => crate::report_inbox::call(name, args).ok_or_else(|| err(ProtoError::Malformed))?,
         "protoMajor" => json!(crate::PROTO_MAJOR),
         // spec 035: пять осей версий (то же, что WASM `engineInfo` и C ABI `pv_engine_info`).
         "engineInfo" => serde_json::to_value(crate::engine_info()).map_err(|_| err(ProtoError::Malformed))?,

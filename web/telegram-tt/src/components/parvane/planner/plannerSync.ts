@@ -44,7 +44,7 @@ type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
   allDay?: boolean; isHoliday?: boolean; color?: number; description?: string; remind?: number | null;
-  listId?: string;
+  listId?: string; steps?: { text: string; isDone: boolean }[];
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 // Слово словаря правок ввода текстом: `kind` пуст и `minutes: null` — «не выучено»
@@ -186,6 +186,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
         remind: e.remind ?? undefined,
         // Группа — по id списка, как у задачи; движок прежней сборки поля не отдаёт
         project: (e.listId && nameById.get(e.listId)) || undefined,
+        steps: e.steps?.length ? e.steps.map((step) => ({ text: step.text, isDone: step.isDone })) : undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
@@ -283,23 +284,26 @@ function taskChange(state: PlannerState, t: PlannerTask, previous?: PlannerTask)
 }
 
 function eventChange(state: PlannerState, e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
-  return {
-    event: {
-      id: e.id,
-      name: e.name,
-      start: e.start,
-      end: e.end,
-      weekdays: null,
-      day: e.day || '',
-      ...seriesFields(e, previous),
-      allDay: Boolean(e.isAllDay),
-      isHoliday: Boolean(e.isHoliday),
-      color: e.color || 0,
-      description: e.description || '',
-      remind: e.remind === undefined ? null : e.remind,
-      listId: listIdOf(state, e.project || ''),
-    },
+  const event: Record<string, unknown> = {
+    id: e.id,
+    name: e.name,
+    start: e.start,
+    end: e.end,
+    weekdays: null,
+    day: e.day || '',
+    ...seriesFields(e, previous),
+    allDay: Boolean(e.isAllDay),
+    isHoliday: Boolean(e.isHoliday),
+    color: e.color || 0,
+    description: e.description || '',
+    remind: e.remind === undefined ? null : e.remind,
+    listId: listIdOf(state, e.project || ''),
   };
+  // Шаги — только у события, у которого они есть или были: событие без шагов уходит без поля
+  if (e.steps?.length || previous?.steps?.length) {
+    event.steps = (e.steps || []).map((step) => ({ text: step.text, isDone: step.isDone }));
+  }
+  return { event };
 }
 
 function listChange(l: PlannerList): PlannerChange {

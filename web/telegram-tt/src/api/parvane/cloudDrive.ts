@@ -615,7 +615,9 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         op: 'create', kind: 'folder', mtime: n.mtime || undefined, ...placeOf(n),
       })));
     }
-    const total = files.reduce((sum, n) => sum + n.size, 0);
+    const total = files.reduce((sum, n) => (
+      sum + n.size + (args.isCopy ? 0 : (n.versions || []).reduce((all, v) => all + v.blob.size, 0))
+    ), 0);
     let done = 0;
     args.onProgress?.(0, total);
     const self = deps.self() || '';
@@ -641,6 +643,8 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
               deps.log(`облако: миниатюра не перенесена: ${String(e)}`);
             }
           }
+          // Перенос уносит историю версий (CLOUD-3), копия файла начинается с чистой
+          const versions = args.isCopy ? [] : await copyVersions(node, copied, args.signal);
           creates.push({
             op: 'create',
             kind: 'file',
@@ -648,9 +652,10 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
             ...placeOf(node),
             blob: { ...blob, ...copy, uploader: self },
             thumb,
+            versions,
           });
           purges.push({ op: 'purge', id: node.id, at: Date.now() });
-          bytes += node.size;
+          bytes += node.size + versions.reduce((sum, v) => sum + v.blob.size, 0);
           start += 1;
         }
         await cloud.apply(args.to, creates);
@@ -684,6 +689,36 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       await cloud.flush(args.from);
     }
     return total;
+  }
+
+  /** Прежние версии файла копиями блобов (от новой к старой, как в узле) — для переноса с историей; движок
+   * разворачивает их в правки назначения. Версия, чей блоб не скопировался, пропускается: перенос важнее. */
+  async function copyVersions(node: CloudNodeJson, copied: string[], signal?: AbortSignal) {
+    const self = deps.self() || '';
+    const out: { blob: CloudBlobInfo; thumb?: CloudThumbInfo; mtime: number }[] = [];
+    for (const version of node.versions || []) {
+      try {
+        const copy = await copyDriveBlob(version.blob.fileId, version.blob.capability, signal);
+        copied.push(copy.fileId);
+        let thumb: CloudThumbInfo | undefined;
+        if (version.thumb) {
+          const thumbCopy = await copyDriveBlob(version.thumb.fileId, version.thumb.capability, signal)
+            .catch((e: unknown) => {
+              if (e instanceof CloudAbortError) throw e;
+              return undefined;
+            });
+          if (thumbCopy) {
+            copied.push(thumbCopy.fileId);
+            thumb = { ...version.thumb, ...thumbCopy };
+          }
+        }
+        out.push({ blob: { ...version.blob, ...copy, uploader: self }, thumb, mtime: version.mtime });
+      } catch (e) {
+        if (e instanceof CloudAbortError) throw e;
+        deps.log(`облако: версия файла не перенесена: ${String(e)}`);
+      }
+    }
+    return out;
   }
 
   async function removeShared(container: string) {

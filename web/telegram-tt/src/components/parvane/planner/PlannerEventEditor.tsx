@@ -1,7 +1,7 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type {
-  PlannerEvent, PlannerEventError, PlannerRepeat, PlannerState,
+  PlannerEvent, PlannerEventError, PlannerRepeat, PlannerState, PlannerStep,
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
@@ -9,8 +9,8 @@ import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, instanceKey, removeSeries, splitSeries, toDayKey,
-  toMinutes, toTime, truncateSeries, updateSeries, validateEvent,
+  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, instanceKey, removeSeries, setEventStepDone, splitSeries,
+  toDayKey, toMinutes, toTime, truncateSeries, updateSeries, validateEvent,
 } from './plannerModel';
 import {
   changedFields, detachWithDescription, getDescriptionScope, patchCopies, seriesOfCopy,
@@ -36,6 +36,7 @@ import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRemindSelect from './PlannerRemindSelect';
 import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
+import PlannerSteps from './PlannerSteps';
 
 import styles from './Planner.module.scss';
 
@@ -59,6 +60,7 @@ const EVENT_ERROR_KEYS = {
 } as const satisfies Record<PlannerEventError, string>;
 
 const NAME_MAX_LENGTH = 160;
+const NO_STEPS: PlannerStep[] = [];
 // Движок принимает до 4000 байт: запас на кириллицу
 const DESCRIPTION_MAX_LENGTH = 2000;
 
@@ -266,6 +268,21 @@ const PlannerEventEditor = ({
     return target;
   }
 
+  // Шаги пишутся сразу, без «Сохранить» (как у задачи): отметка дня ряда — по дню, новый шаг — всему ряду
+  const handleStepToggle = useLastCallback((index: number, isDone: boolean) => {
+    updatePlanner((draft) => {
+      setEventStepDone(draft, event, index, isDone);
+    }, lang('PlannerNoticeStepUpdated', { name: event.steps![index].text }));
+  });
+
+  const handleStepAdd = useLastCallback((text: string) => {
+    updatePlanner((draft) => {
+      const target = draft.events.find(({ id }) => id === event.id);
+      if (!target) return;
+      target.steps = [...(target.steps || []).map((step) => ({ ...step })), { text, isDone: false }];
+    }, lang('PlannerNoticeStepAdded'));
+  });
+
   const handleDelete = useLastCallback(() => {
     if (isInstance) {
       setPending({ kind: 'delete' });
@@ -358,6 +375,8 @@ const PlannerEventEditor = ({
         <PlannerListPicker id="planner-event-list" state={state} value={project} onChange={setProject} />
         {!project && <PlannerColorSwatches value={color} onChange={setColor} />}
       </PlannerCardRow>
+
+      <PlannerSteps steps={event.steps || NO_STEPS} onToggle={handleStepToggle} onAdd={handleStepAdd} />
 
       <PlannerCardRow icon="info" row="description">
         <TextArea

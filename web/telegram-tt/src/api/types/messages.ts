@@ -1059,6 +1059,8 @@ export type ApiMessageReportResult = {
     text: string;
     option: string;
   }[];
+  // Parvane (REPORT-2): кому может уйти жалоба (`admins` | `server`), первое — по умолчанию
+  targets?: string[];
 };
 
 export type ApiMessageOutgoingStatus = 'read' | 'succeeded' | 'pending' | 'failed';

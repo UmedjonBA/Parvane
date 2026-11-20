@@ -130,20 +130,28 @@ const PlannerListPicker = ({
   // Только что созданный список попадает в состояние на следующей отрисовке — его пункт нужен сразу,
   // иначе выбор остаётся на прежнем значении
   const projects = state.projects.includes(value) ? state.projects : [...state.projects, value];
+  // Точка цвета группы перед её названием (доска `PhPlanMore`); цвет — в данных группы, общий для устройств
+  const groupColor = value ? state.lists.find((list) => list.name === value)?.color : undefined;
 
   return (
-    <Select
-      id={id}
-      label={lang('PlannerFieldList')}
-      value={value || NO_LIST_VALUE}
-      hasArrow
-      onChange={handleSelect}
+    <div
+      className={buildClassName(styles.listPick, groupColor && styles.listPickColored)}
+      style={listColorStyle(groupColor)}
+      data-group-color={groupColor || undefined}
     >
-      {projects.map((item) => (
-        <option key={item || NO_LIST_VALUE} value={item || NO_LIST_VALUE}>{formatProject(lang, item)}</option>
-      ))}
-      <option value={NEW_LIST_VALUE}>{lang('PlannerCreateListOption')}</option>
-    </Select>
+      <Select
+        id={id}
+        label={lang('PlannerFieldList')}
+        value={value || NO_LIST_VALUE}
+        hasArrow
+        onChange={handleSelect}
+      >
+        {projects.map((item) => (
+          <option key={item || NO_LIST_VALUE} value={item || NO_LIST_VALUE}>{formatProject(lang, item)}</option>
+        ))}
+        <option value={NEW_LIST_VALUE}>{lang('PlannerCreateListOption')}</option>
+      </Select>
+    </div>
   );
 };
 
