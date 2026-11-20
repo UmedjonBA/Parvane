@@ -632,8 +632,8 @@ const Knowledge = () => {
   const isList = view === 'notes';
   const isNoteShown = isList && Boolean(openNote);
   const isNoteAlone = isNarrow && isNoteShown;
-  // Открытый холст на телефоне: инструменты внизу вместо ленты модулей (доска `XpNotes`); шапка модуля остаётся —
-  // в ней поиск по холсту
+  // Открытый холст на телефоне: инструменты внизу вместо ленты модулей (доска `XpNotes`), шапки модуля нет — холст
+  // во весь экран; поиск по холсту открывается из меню холста и на это время занимает строку сверху
   const isCanvasOpen = view === 'canvas' && Boolean(graphCanvasId) && canvases.some(({ id }) => id === graphCanvasId);
   const isCanvasAlone = isNarrow && isCanvasOpen;
   // Правка заметки: колонка «Связи» убрана, место — редактору и просмотру
@@ -739,7 +739,12 @@ const Knowledge = () => {
   function renderPhone() {
     return (
       <div className={styles.page}>
-        {!isNoteAlone && (
+        {isCanvasAlone && isSearchShown && (
+          <header className={styles.head} data-canvas-search-row>
+            <div className={styles.headRow}>{renderSearch()}</div>
+          </header>
+        )}
+        {!isNoteAlone && !isCanvasAlone && (
           <header className={styles.head}>
             <div className={styles.headRow}>
               {!isSearchShown && <h1 className={styles.headTitle}>{lang('ParvaneModuleNotes')}</h1>}
@@ -873,6 +878,7 @@ const Knowledge = () => {
         onOpenCanvas={setGraphCanvasId}
         query={canvasQuery}
         searchStep={searchStep}
+        onSearch={openSearch}
       />
     );
   }

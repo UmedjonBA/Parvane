@@ -446,6 +446,9 @@ message CloudCreate {
   CloudThumb thumb = 7;
   // Время изменения файла на устройстве, мс.
   uint64 mtime_ms = 8;
+  // Файл прислан собеседником копией (spec 041, CLOUD-3): его адрес — автор сообщения, как его проверил
+  // клиент получателя. Пусто — свой файл. Показ: такой файл в корне личного диска лежит в «Доступных мне».
+  string from = 9 [(parvane.core.v2.max_len) = 255];
 }
 
 // Перемещение/переименование: LWW-регистр (parent_id, name) узла.
@@ -456,13 +459,22 @@ message CloudMove {
   parvane.core.v2.LwwStamp stamp = 4;
 }
 
-// Новое содержимое файла: LWW-регистр (blob, thumb, mtime).
+// Новое содержимое файла: LWW-регистр (blob, thumb, mtime) и запись истории версий узла (CLOUD-3:
+// не больше `VERSIONS_KEEP` версий, вытесненные — надгробия `CloudGone`, их блобы стирает загрузивший).
 message CloudSetBlob {
   bytes node_id = 1 [(parvane.core.v2.max_len) = 16];
   CloudBlobRef blob = 2;
   parvane.core.v2.LwwStamp stamp = 3;
   CloudThumb thumb = 4;
   uint64 mtime_ms = 5;
+  // Блобы (содержимое и миниатюра) черновой версии, которую эта заменяет: правки одного устройства подряд
+  // в пределах окна черновика — одна версия. Решает движок при локальной правке (`coalesce_local`).
+  repeated string supersedes = 6 [
+    (parvane.core.v2.max_items) = 2,
+    (parvane.core.v2.max_len) = 64
+  ];
+  // Начало окна черновика, мс; 0 — версия не черновая (возврат прежней версии), её не заменяют.
+  uint64 draft_since_ms = 7;
 }
 
 // Корзина: LWW-регистр (trashed, at_ms). Восстановление — trashed = false.
@@ -522,6 +534,24 @@ message CloudNode {
   parvane.core.v2.LwwStamp blob_stamp = 8;
 }
 
+// Прежняя версия файла в снимке (CLOUD-3); метка — индекс устройства в CloudSnapshot.devices.
+message CloudVersion {
+  CloudBlobRef blob = 1;
+  CloudThumb thumb = 2;
+  uint64 mtime_ms = 3;
+  uint64 lamport = 4;
+  uint32 dev = 5;
+  uint64 draft_since_ms = 6;
+}
+
+// Надгробие вытесненной либо заменённой версии: блоб `file_id` стирает устройство `uploader`.
+message CloudGone {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  string uploader = 2 [(parvane.core.v2.max_len) = 255];
+  uint64 lamport = 3;
+  uint32 dev = 4;
+}
+
 // Узел в снимке: итоговое состояние регистров. Устройства меток — индексы
 // в CloudSnapshot.devices.
 message CloudEntry {
@@ -544,6 +574,13 @@ message CloudEntry {
   uint32 blob_dev = 17;
   uint64 trash_lamport = 18;
   uint32 trash_dev = 19;
+  // Окно черновика текущей версии (поля 5–7, 16–17).
+  uint64 draft_since_ms = 20;
+  // Прежние версии, от новой к старой (CLOUD-3).
+  repeated CloudVersion versions = 22 [(parvane.core.v2.max_items) = 16];
+  repeated CloudGone gone = 23 [(parvane.core.v2.max_items) = 64];
+  // Создание: файл прислан собеседником (`CloudCreate.from`).
+  string from = 24 [(parvane.core.v2.max_len) = 255];
 }
 
 message CloudSnapshot {

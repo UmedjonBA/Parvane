@@ -100,6 +100,19 @@ export function listedNodes(nodes: CloudNode[]) {
   return nodes.some(isServiceNode) ? nodes.filter((node) => !isServiceNode(node)) : nodes;
 }
 
+/** Адрес из поля «Ник собеседника»: `@nick` — свой сервер, `nick@сервер` — как есть; пусто — `undefined`. */
+export function addressOfNick(text: string, selfDomain?: string) {
+  const nick = text.trim().replace(/^@/, '');
+  if (!nick || /\s/.test(nick)) return undefined;
+  if (nick.includes('@')) return nick;
+  return selfDomain ? `${nick}@${selfDomain}` : undefined;
+}
+
+/** Файл, присланный собеседником копией (CLOUD-3), пока лежит в корне диска: показывается в «Доступных мне». */
+export function isReceivedNode(node: CloudNode) {
+  return Boolean(node.from) && !node.parent && !node.trashed;
+}
+
 /** Имена, занятые в папке (для подбора свободного). */
 export function namesIn(nodes: CloudNode[], parent?: string, exceptId?: string) {
   return childrenOf(nodes, parent).filter((n) => n.id !== exceptId).map((n) => n.name);

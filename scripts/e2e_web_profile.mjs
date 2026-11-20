@@ -10,6 +10,7 @@ import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
   dismissRecoveryKeyDialog,
+  linkSecondDevice,
   openEditProfile,
   openProfile,
   openSettingsScreen,
@@ -355,24 +356,57 @@ try {
   assert.equal(
     await keysPage.locator('[data-keys-bundle] [data-bundle-part]').count(), 6, 'строки «Что в копии»',
   );
-  const renewDialog = keysPage.locator('.Modal .modal-dialog').filter({ hasText: 'Enter your current recovery key' });
+  // Устройство-создатель держит корень аккаунта (RECOVER-1 п. 8): новый ключ — без прежнего, окно только подтверждает
+  const keylessDialog = (on) => on.locator('.Modal .modal-dialog').filter({ hasText: 'Create a new recovery key?' });
+  const renewKeyless = async (on) => {
+    await on.locator('[data-keys-action="renew"]').click();
+    const dialog = keylessDialog(on);
+    await shown(dialog);
+    assert.equal(await dialog.locator('input').count(), 0, 'с корнем на устройстве поле ключа не нужно');
+    await dialog.getByRole('button', { name: 'Create new key' }).click();
+    await hidden(dialog);
+  };
+  await renewKeyless(keysPage);
+  const secondKey = keyOf(await dismissRecoveryKeyDialog(keysPage, 30_000));
+  assert.ok(secondKey && secondKey !== firstKey, `новый ключ не показан: ${secondKey}`);
+  await shown(keysPage.getByText('New recovery key created. Save it from the window.').first());
+  console.log('OK: «Копия ключей» — новый ключ без прежнего на устройстве-создателе');
+
+  // Привязанное грантом устройство корня не получает: ключ спрашивается; прежний больше не подходит
+  const linkedContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  sessions.linked = await preparePage(linkedContext, `profile-keys-${suffix}@local`, PASSWORD, {
+    seedLocalStorage: { 'parvane:proto': 'v2' },
+  });
+  const linkedPage = sessions.linked.page;
+  await linkSecondDevice(keysPage, linkedPage);
+  const openKeysOn = async (on) => {
+    await openProfile(on);
+    await profileRow(on, 'About').click();
+    await profileRow(on, 'Key backup').click();
+    await shown(on.locator('[data-keys-action="renew"]'));
+  };
+  await openKeysOn(linkedPage);
+  const renewDialog = linkedPage.locator('.Modal .modal-dialog').filter({ hasText: 'Enter your current recovery key' });
   const renewWith = async (key) => {
-    await keysPage.locator('[data-keys-action="renew"]').click();
+    await linkedPage.locator('[data-keys-action="renew"]').click();
     await renewDialog.locator('input').fill(key);
     await renewDialog.getByRole('button', { name: 'Create new key' }).click();
     await hidden(renewDialog);
   };
-  await renewWith(firstKey.replace(/.$/, (c) => (c === '2' ? '3' : '2')));
-  await shown(keysPage.getByText('This recovery key does not match.').first());
+  await renewWith(secondKey.replace(/.$/, (c) => (c === '2' ? '3' : '2')));
+  await shown(linkedPage.getByText('This recovery key does not match.').first());
   await renewWith(firstKey);
-  const secondKey = keyOf(await dismissRecoveryKeyDialog(keysPage, 30_000));
-  assert.ok(secondKey && secondKey !== firstKey, `новый ключ не показан: ${secondKey}`);
-  await shown(keysPage.getByText('New recovery key created. Save it from the window.').first());
-  // Копия ключей переписана под новым ключом (её открывает новый ключ копии); прежний ключ больше не подходит
-  await openKeys();
-  await renewWith(firstKey);
-  await shown(keysPage.getByText('This recovery key does not match.').first());
-  console.log('OK: «Копия ключей» — состав копии, новый ключ восстановления, прежний больше не подходит');
+  await shown(linkedPage.getByText('This recovery key does not match.').first());
+  await renewWith(secondKey);
+  const thirdKey = keyOf(await dismissRecoveryKeyDialog(linkedPage, 30_000));
+  assert.ok(thirdKey && thirdKey !== secondKey, `новый ключ не показан на привязанном: ${thirdKey}`);
+  // Ключ введён — корень запомнен: следующий новый ключ уже без прежнего
+  await openKeysOn(linkedPage);
+  await linkedPage.locator('[data-keys-action="renew"]').click();
+  await shown(keylessDialog(linkedPage));
+  await linkedPage.keyboard.press('Escape');
+  await hidden(keylessDialog(linkedPage));
+  console.log('OK: «Копия ключей» — привязанное устройство: прежний ключ не подходит, нынешний — новый ключ, затем без ключа');
 
   assertNoPageErrors(sessions);
 

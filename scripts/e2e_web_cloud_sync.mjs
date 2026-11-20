@@ -20,6 +20,8 @@ const PASSWORD = 'Parvane-cloud-sync-1';
 const WIDE = { width: 1440, height: 900 };
 const STEP_TIMEOUT_MS = 20000;
 const SYNC_TIMEOUT_MS = 30000;
+// Строка папки, прочитанная при обходе, не нажимается столько — проверить, не переехала ли она
+const STALE_ROW_MS = 5000;
 const BACKEND_DIR = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
 assert.ok(BACKEND_DIR, 'нужен PARVANE_E2E_BACKEND_LOG_DIR (каталог баз стенда)');
 
@@ -83,7 +85,9 @@ function driver(page) {
       await cloud.locator('input[type="file"]').setInputFiles([{ name, mimeType: 'text/plain', buffer: Buffer.from(text) }]);
       await item(name).waitFor({ state: 'visible', timeout: 60000 });
     },
-    // Всё дерево диска: «папка/…/имя» по всем узлам (обход по экрану)
+    // Всё дерево диска: «папка/…/имя» по всем узлам (обход по экрану). Обход не мгновенный: пока устройства
+    // сходятся, папка из прочитанного списка может законно переехать (взаимное перемещение без связи) — тогда
+    // `undefined`, и вызывающий обходит заново
     tree: async () => {
       const out = [];
       const walk = async (prefix) => {
@@ -92,7 +96,10 @@ function driver(page) {
         for (const row of rows) {
           out.push(`${prefix}${row.name}`);
           if (row.kind !== 'folder') continue;
-          await item(row.name).click();
+          await item(row.name).click({ timeout: STALE_ROW_MS }).catch(async (error) => {
+            if (await item(row.name).count()) throw error;
+            throw new StaleTreeError(`${prefix}${row.name}`);
+          });
           await cloud.locator('nav').getByRole('button', { name: row.name }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
           await walk(`${prefix}${row.name}/`);
           const crumbs = cloud.locator('nav').getByRole('button');
@@ -101,7 +108,12 @@ function driver(page) {
         }
       };
       await api.root();
-      await walk('');
+      try {
+        await walk('');
+      } catch (error) {
+        if (error instanceof StaleTreeError) return undefined;
+        throw error;
+      }
       return out.sort();
     },
   };
@@ -131,6 +143,9 @@ function plaintextLeaks(words) {
   }
   return found;
 }
+
+// Папка переехала посреди обхода дерева: обход начинается заново
+class StaleTreeError extends Error {}
 
 async function waitTree(d, expected, message, timeout = SYNC_TIMEOUT_MS) {
   const started = Date.now();
@@ -227,7 +242,7 @@ try {
   while (Date.now() - started < SYNC_TIMEOUT_MS) {
     treeA = await a.tree();
     treeB = await b.tree();
-    if (JSON.stringify(treeA) === JSON.stringify(treeB)) break;
+    if (treeA && treeB && JSON.stringify(treeA) === JSON.stringify(treeB)) break;
     await new Promise((resolve) => setTimeout(resolve, 1500));
   }
   assert.deepEqual(treeA, treeB, 'деревья устройств должны совпасть');

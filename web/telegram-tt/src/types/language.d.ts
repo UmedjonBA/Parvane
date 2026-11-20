@@ -3877,6 +3877,22 @@ export interface LangPair {
   'ParvaneRenewKeyDoneTelegram': undefined;
   'ParvaneHelpSearch': undefined;
   'ParvaneHelpNothing': undefined;
+  'ParvaneNickKeyStoredHint': undefined;
+  'ParvaneRenameDoneNewKey': undefined;
+  'ParvaneRenewKeyTextStored': undefined;
+  'ParvaneSskRotationTextStored': undefined;
+  'ParvaneEscrowTextStored': undefined;
+  'ParvaneCloudShareCopy': undefined;
+  'ParvaneCloudShareCopyNote': undefined;
+  'ParvaneCloudShareCopySend': undefined;
+  'ParvaneCloudCopySent': undefined;
+  'ParvaneCloudSharedFolders': undefined;
+  'ParvaneCloudSharedFiles': undefined;
+  'ParvaneCloudVersions': undefined;
+  'ParvaneCloudVersionCurrent': undefined;
+  'ParvaneCloudVersionsEmpty': undefined;
+  'ParvaneCloudVersionRestore': undefined;
+  'ParvaneCloudVersionRestored': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -6494,6 +6510,21 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'NoteSendNamed': {
     'title': V;
+  };
+  'ParvaneCloudShareCopyTitle': {
+    'name': V;
+  };
+  'ParvaneCloudVersionsCount': {
+    'count': V;
+  };
+  'ParvaneCloudVersionsTitle': {
+    'name': V;
+  };
+  'ParvaneCloudVersionsNote': {
+    'count': V;
+  };
+  'ParvaneNickOldHintStored': {
+    'nick': V;
   };
 }
 

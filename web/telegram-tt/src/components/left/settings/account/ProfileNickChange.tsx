@@ -39,10 +39,11 @@ const STATE_KEYS = {
   checking: 'ParvaneNickChecking',
 } as const;
 
-// Parvane (spec 041, доска `XpProfile`): ник в «Изменить профиль» своим блоком — поле ника с «Свободен / Занят»,
-// пароль для подтверждения и ключ восстановления. Смена (spec 026) подписывается корнем личности, а корень на
-// устройстве не хранится, поэтому ключ восстановления нужен всегда (расхождение с доской: там его спрашивают, «только
-// если пароль не подойдёт»). Прежний ник 30 дней ведёт на новый; после смены вкладка перезагружается
+// Parvane (spec 041, доска `XpProfile`): ник в «Изменить профиль» своим блоком — поле ника с «Свободен / Занят» и
+// пароль для подтверждения. Смена (spec 026) подписывается корнем личности: ключ восстановления спрашивается, только
+// когда корня на устройстве нет (RECOVER-1 п. 8; доска: «спросим, только если пароль не подойдёт»). С корнем на
+// устройстве копия корня под новым адресом пишется под новым ключом восстановления — он уходит в Telegram либо
+// показывается окном после перезагрузки. Прежний ник 30 дней ведёт на новый; после смены вкладка перезагружается
 const ProfileNickChange = ({ currentNick }: OwnProps) => {
   const lang = useLang();
   const [nick, setNick] = useState(currentNick || '');
@@ -52,6 +53,9 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
   const [error, setError] = useState<Exclude<RenameResult, 'ok'> | undefined>();
   const [isBusy, setIsBusy] = useState(false);
   const [isDone, setIsDone] = useState(false);
+  const [isNewKey, setIsNewKey] = useState(false);
+  // Корень аккаунта на устройстве: ключ восстановления не нужен (пока не известно — поле ключа показывается)
+  const [hasRoot, setHasRoot] = useState(false);
 
   useEffect(() => {
     setNick(currentNick || '');
@@ -60,8 +64,13 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
 
   const normalized = nick.trim().replace(/^@/, '').toLowerCase();
   const isChanged = Boolean(normalized) && normalized !== currentNick;
+
+  // Спрашивается при вводе нового ника: экран профиля монтируется до запуска v2
+  const refreshRoot = useLastCallback(async () => {
+    setHasRoot(Boolean(await callParvane('parvaneHasStoredRoot').catch(() => false)));
+  });
   const canSubmit = isChanged && nickState !== 'taken' && nickState !== 'invalid' && Boolean(password)
-    && Boolean(recoveryKey.trim()) && !isBusy && !isDone;
+    && (hasRoot || Boolean(recoveryKey.trim())) && !isBusy && !isDone;
 
   const getNormalized = useLastCallback(() => normalized);
 
@@ -82,6 +91,7 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
     }
     setNickState('checking');
     checkNick(clean);
+    void refreshRoot();
   });
 
   const handlePassword = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -97,11 +107,13 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
   const handleSubmit = useLastCallback(async () => {
     if (!canSubmit) return;
     setIsBusy(true);
-    const out = await callParvane('parvaneRenameAccount', { nick: normalized, password, recoveryKey })
-      .catch(() => undefined) as { result?: RenameResult } | undefined;
+    const out = await callParvane('parvaneRenameAccount', {
+      nick: normalized, password, recoveryKey: hasRoot ? '' : recoveryKey,
+    }).catch(() => undefined) as { result?: RenameResult; isNewKey?: boolean } | undefined;
     setIsBusy(false);
     const result = out?.result || 'failed';
     if (result === 'ok') {
+      setIsNewKey(Boolean(out?.isNewKey));
       setIsDone(true);
       return;
     }
@@ -147,22 +159,37 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
             disabled={isDone}
             onChange={handlePassword}
           />
-          <label className={styles.label} htmlFor="parvane-rename-key">{lang('ParvaneRenameRecoveryKey')}</label>
-          <input
-            id="parvane-rename-key"
-            type="password"
-            className={kit.input}
-            autoComplete="off"
-            spellCheck={false}
-            value={recoveryKey}
-            disabled={isDone}
-            onChange={handleKey}
-          />
+          {!hasRoot && (
+            <>
+              <label className={styles.label} htmlFor="parvane-rename-key">{lang('ParvaneRenameRecoveryKey')}</label>
+              <input
+                id="parvane-rename-key"
+                type="password"
+                className={kit.input}
+                autoComplete="off"
+                spellCheck={false}
+                value={recoveryKey}
+                disabled={isDone}
+                onChange={handleKey}
+              />
+            </>
+          )}
         </SecretForm>
       )}
-      {currentNick && <p className={styles.muted}>{lang('ParvaneNickOldHint', { nick: currentNick })}</p>}
+      {isChanged && hasRoot && !isDone && (
+        <p className={styles.muted} data-rename-key-stored>{lang('ParvaneNickKeyStoredHint')}</p>
+      )}
+      {currentNick && (
+        <p className={styles.muted}>
+          {lang(hasRoot ? 'ParvaneNickOldHintStored' : 'ParvaneNickOldHint', { nick: currentNick })}
+        </p>
+      )}
       {error && <p className={styles.error} data-rename-error={error}>{lang(ERROR_KEYS[error])}</p>}
-      {isDone && <p className={styles.done} data-rename-done>{lang('ParvaneRenameDone')}</p>}
+      {isDone && (
+        <p className={styles.done} data-rename-done data-rename-new-key={isNewKey || undefined}>
+          {lang(isNewKey ? 'ParvaneRenameDoneNewKey' : 'ParvaneRenameDone')}
+        </p>
+      )}
       {isChanged && (
         <span data-rename-submit-wrap>
           <button

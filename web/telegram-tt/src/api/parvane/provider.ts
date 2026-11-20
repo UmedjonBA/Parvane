@@ -1424,6 +1424,7 @@ const v2Controller = createV2Controller({
   // Облако (spec 016): контейнеры объявляются в журнале состояния
   cloudEntriesFromState: () => stateJournal.cloudEntries(),
   recordCloudEntry: (entry) => stateJournal.recordCloudEntry(entry),
+  isStateAttached: () => stateJournal.isAttached(),
   onCloudChanged: () => {
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-cloud-changed'));
   },
@@ -4052,27 +4053,36 @@ const methods = {
     };
   },
 
-  // Копия корня для администратора у аккаунта, созданного до включения страховки
-  parvaneStoreEscrowCopy({ recoveryKey }: { recoveryKey: string }) {
+  // Копия корня для администратора у аккаунта, созданного до включения страховки. Пустой ключ — корень на
+  // устройстве (RECOVER-1 п. 8; так же у смены ключа подписи, нового ключа и смены ника)
+  parvaneStoreEscrowCopy({ recoveryKey = '' }: { recoveryKey?: string }) {
     return v2Controller.storeEscrowCopy(pickRecoveryKey(recoveryKey));
   },
 
   // «Профиль → Копия ключей» (`ZdProfileX`): новый ключ восстановления взамен прежнего и состав копии на сервере
-  parvaneRenewRecoveryKey({ recoveryKey }: { recoveryKey: string }) {
+  parvaneRenewRecoveryKey({ recoveryKey = '' }: { recoveryKey?: string }) {
     return v2Controller.renewRecoveryKey(pickRecoveryKey(recoveryKey));
+  },
+
+  // Корень аккаунта на этом устройстве: тогда ключ восстановления операции корнем не спрашивают. Промисом: `callApi`
+  // отдаёт результат метода как есть, а вызывающие ждут промис (`.catch`)
+  parvaneHasStoredRoot() {
+    return Promise.resolve(v2Controller.hasStoredRoot());
   },
 
   parvaneKeyBundleContents() {
     return v2Controller.keyBundleContents().catch(() => undefined);
   },
 
-  parvaneRotateSsk({ recoveryKey }: { recoveryKey: string }) {
+  parvaneRotateSsk({ recoveryKey = '' }: { recoveryKey?: string }) {
     return v2Controller.rotateSsk(pickRecoveryKey(recoveryKey));
   },
 
   // Смена ника (spec 026): после успеха локальное переезжает под новый адрес, вкладка перезагружается с токеном
   // нового адреса (сессия прежнего сервер закрывает)
-  async parvaneRenameAccount({ nick, password, recoveryKey }: { nick: string; password: string; recoveryKey: string }) {
+  async parvaneRenameAccount({ nick, password, recoveryKey = '' }: {
+    nick: string; password: string; recoveryKey?: string;
+  }) {
     const oldAddress = store.self;
     const out = await v2Controller.renameAccount(nick.trim().toLowerCase(), password, pickRecoveryKey(recoveryKey));
     if (out.result !== 'ok') return { result: out.result };
@@ -4080,7 +4090,7 @@ const methods = {
     await moveAccountLocal(oldAddress, out.address);
     if (out.token) await persistSessionCredential(out.address, '');
     window.setTimeout(() => window.location.reload(), 400);
-    return { result: 'ok', address: out.address };
+    return { result: 'ok', address: out.address, isNewKey: Boolean(out.isNewKey) };
   },
 
   // spec 041 (`XpProfile`): «Свободен» под полем ника до смены. Занят — сервер знает такой адрес (профиль

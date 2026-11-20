@@ -31,7 +31,7 @@ export type CloudTransfer = {
   state: CloudTransferEvent['state'];
   error?: CloudErrorCode;
 };
-export type CloudNotice = { code: CloudErrorCode | 'saved' | 'sent'; at: number };
+export type CloudNotice = { code: CloudErrorCode | 'saved' | 'sent' | 'copySent' | 'restored'; at: number };
 
 type UploadSpec = { container: string; parent?: string; name: string; file: File };
 
@@ -631,7 +631,8 @@ export function cancelCloudTransfer(transfer: CloudTransfer) {
 type SavePicker = (options: { suggestedName: string }) => Promise<FileSystemFileHandle>;
 
 /** Скачать файл на устройство: большой — потоком в выбранный файл, иначе через память. */
-export async function downloadCloudNode(container: string, node: CloudNode, maxMemoryBytes: number) {
+/** Скачать файл; `fileId` — прежняя версия (CLOUD-3), `node` тогда — узел с её содержимым. */
+export async function downloadCloudNode(container: string, node: CloudNode, maxMemoryBytes: number, fileId?: string) {
   const picker = (window as unknown as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
   let handle: FileSystemFileHandle | undefined;
   if (picker && node.size > STREAM_DOWNLOAD_BYTES) {
@@ -651,7 +652,7 @@ export async function downloadCloudNode(container: string, node: CloudNode, maxM
     id, kind: 'download', name: node.name, done: 0, total: node.size, state: 'active',
   }]);
   const result = await callParvane('parvaneCloudDownload', {
-    container, node: node.id, handle, transferId: id,
+    container, node: node.id, handle, transferId: id, fileId,
   }).catch(() => undefined) as CloudResult<{ blob?: Blob; name: string }> | undefined;
   if (!result?.ok || !result.blob) return;
   const url = URL.createObjectURL(result.blob);

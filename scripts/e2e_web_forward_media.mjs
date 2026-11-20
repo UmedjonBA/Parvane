@@ -99,12 +99,18 @@ async function expectVideoPlays(page, caption, who) {
   await bubble.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const video = bubble.locator('video.full-media');
   await video.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
-  // Прямой play(): проверяем, что расшифрованные байты декодируются
-  await video.evaluate((element) => element.play());
+  // Прямой play(): проверяем, что расшифрованные байты декодируются. Приложение само ставит встроенное видео на
+  // паузу на время тяжёлой анимации (`useVideoAutoPause`: открытие чата, прокрутка ленты) — под нагрузкой эта пауза
+  // прерывает наш play() (AbortError). Это не отказ декодирования: пока видео стоит, play() повторяется
   await video.evaluate(
     (element) => new Promise((resolve, reject) => {
+      const play = () => element.play().catch((error) => {
+        if (error?.name !== 'AbortError') reject(error);
+      });
+      play();
       const deadline = setTimeout(() => reject(new Error(`video stuck at ${element.currentTime}`)), 30000);
       const timer = setInterval(() => {
+        if (element.paused && !element.ended && element.currentTime <= 0.3) play();
         if (element.currentTime > 0.3) {
           clearTimeout(deadline);
           clearInterval(timer);

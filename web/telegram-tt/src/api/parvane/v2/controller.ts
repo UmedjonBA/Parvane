@@ -34,6 +34,7 @@ import type { PersonalDeps } from './personalSync';
 import type { StateJournalHost } from './stateJournal';
 
 import { withDetectedLinks } from '../autoEntities';
+import { createCloudReceiver } from '../cloudReceived';
 import { SecureE2eStorage } from '../secureStorage';
 import { newMessageId } from '../wire';
 import {
@@ -148,7 +149,9 @@ type Deps = {
   onMusicChanged?: () => void;
   /** Облако (spec 016): контейнеры из журнала личного состояния и их запись. */
   cloudEntriesFromState?: () => CloudStateEntry[];
-  recordCloudEntry?: (entry: CloudStateEntry) => void;
+  recordCloudEntry?: (entry: CloudStateEntry) => void | Promise<void>;
+  /** Журнал личного состояния подключён (облако не создаёт контейнер раньше: запись о нём некуда писать). */
+  isStateAttached?: () => boolean;
   /** Дерево, состав или статус облака изменились — UI перечитает. */
   onCloudChanged?: () => void;
   /** Ссылка-приглашение создана/отозвана здесь — остальным своим устройствам (T160). */
@@ -316,7 +319,7 @@ export type DeleteAccountResult =
   | { result: 'ok'; deletionAtMs: number }
   | { result: 'bad_password' | 'failed' };
 export type RenameResult =
-  | { result: 'ok'; address: string; token: string }
+  | { result: 'ok'; address: string; token: string; isNewKey?: boolean }
   | { result: 'bad_password' | 'bad_key' | 'no_backup' | 'taken' | 'invalid' | 'failed' };
 // Скачивание/загрузка блобов (чанки до 700 КиБ)
 // parvane.msg.v2.TypingAction
@@ -1278,13 +1281,11 @@ export function createV2Controller(deps: Deps) {
           if (!(await finishJoin(join))) return;
         } else {
           const created = client.createIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
-          // C1-06 / D-12: корень не лежит на устройстве — только копия под ключом
-          // восстановления (≥ 128 бит, без парольной фразы), ключ показывается
-          // пользователю один раз
+          // D-12: копия корня под ключом восстановления (≥ 128 бит, без парольной фразы), ключ показывается
+          // пользователю один раз. Сам корень модель держит в хранилище этого устройства (RECOVER-1 п. 8)
           const recoveryKey = pv.generateRecoveryKey();
           const rootBackup = b64(client.exportRootBackup(recoveryKey, created.rootSecret));
           await sealRootEscrow(client);
-          client.forgetRoot();
           created.rootSecret.fill(0);
           // Ключи устройства и ключ восстановления — на диск ДО записи журнала на
           // сервере: вкладка, выгруженная после записи (телефон, вернувшийся из
@@ -1405,6 +1406,9 @@ export function createV2Controller(deps: Deps) {
     await storage.deleteRecord(DROPPED_STATE_RECORD).catch(() => undefined);
     if (join.recoveryKey) {
       await reloadAfterCreateForTest();
+      // Вкладка могла выгрузиться после создания корня: вступление повторено из сохранённого состояния, в котором
+      // корня нет, — он открывается копией тем же ключом (RECOVER-1 п. 8)
+      if (join.rootBackup && !client?.hasRoot()) await keepRootOpenedBy(join.rootBackup, join.recoveryKey);
       await rememberBundleKey(join.recoveryKey);
       await queueRecoveryKey(join.recoveryKey);
     } else {
@@ -1455,6 +1459,11 @@ export function createV2Controller(deps: Deps) {
     const authorDomain = destForUser(author, serverDomain);
     if (authorDomain && wire.kind === 'cloud_invite' && wire.container?.domain?.toLowerCase() === authorDomain) {
       void cloud.noteRemoteDomain(authorDomain);
+    }
+    if (wire.to_files && self && author !== self && !isGroup && ev.opId) {
+      void cloudReceiver.receive({
+        wire: { ...wire, blob_domain: wire.blob_domain || authorDomain }, from: author, opId: ev.opId, self,
+      });
     }
     if (wire.ttl_secs) {
       if (authorDomain && wire.file_id && !wire.blob_domain) wire.blob_domain = authorDomain;
@@ -1626,11 +1635,23 @@ export function createV2Controller(deps: Deps) {
       await storage?.deleteRecord(key);
     },
     stateEntries: () => deps.cloudEntriesFromState?.() || [],
+    isStateReady: () => deps.isStateAttached?.() ?? true,
     recordEntry: (entry) => deps.recordCloudEntry?.(entry),
     deleteBlob: async (fileId) => {
       await blobCall('cloud.blob.delete', { file_id: fileId });
     },
     onChanged: () => deps.onCloudChanged?.(),
+  });
+  // Доступ к файлу копией (CLOUD-3): присланный файл — копией в «Доступные мне»
+  const cloudReceiver = createCloudReceiver({
+    log: deps.log,
+    cloud: () => cloud,
+    blobCall,
+    serverDomain: () => serverDomain,
+    loadRecord: async (key) => storage?.loadRecord(key),
+    saveRecord: async (key, value) => {
+      await storage?.saveRecord(key, value);
+    },
   });
 
   /** Перечитать журнал устройств собеседника (новое устройство участника папки). */
@@ -2353,12 +2374,12 @@ export function createV2Controller(deps: Deps) {
     const key = (await pollTelegramKey(false))?.recovery_key;
     if (!key || bundleKeyB64) return;
     try {
+      // Корень, открытый ключом владельца, остаётся на устройстве (RECOVER-1 п. 8)
       client.importRootBackup(unb64(rootBackupB64), key).fill(0);
     } catch {
       return;
-    } finally {
-      client?.forgetRoot();
     }
+    await persistUrgent();
     await rememberBundleKey(key);
     deps.log('v2: ключ восстановления получен из ответа владельца боту — заводим копию ключей аккаунта');
     await refreshKeyBundle(true);
@@ -2666,6 +2687,7 @@ export function createV2Controller(deps: Deps) {
       ));
       const material = withBundleKey(withFreshLog(unb64(payload.grant), ownLog), b64(bundleKey));
       if (!(await joinWithGrant(material))) return { result: 'failed' };
+      await keepRootOpenedBy(state.backup, recoveryKey);
     } catch (e) {
       deps.log(`v2: вход по ключу восстановления не удался: ${String(e)}`);
       return { result: 'failed' };
@@ -2691,16 +2713,13 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  /** Создать копию корня для администратора: корень — из копии под ключом
-   * восстановления, в памяти только на время операции. */
-  async function storeEscrowCopy(recoveryKey: string): Promise<SskRotationResult> {
+  /** Создать копию корня для администратора: корень — сохранённый на устройстве либо из копии под ключом
+   * восстановления. */
+  async function storeEscrowCopy(recoveryKey = ''): Promise<SskRotationResult> {
     if (!client || !ready) return 'failed';
     if (!rootBackupB64) return 'no_backup';
-    try {
-      client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);
-    } catch {
-      return 'bad_key';
-    }
+    const opened = await openRoot(recoveryKey);
+    if (opened !== 'ok') return opened;
     try {
       await sealRootEscrow(client);
       await uploadRootBackup();
@@ -2709,24 +2728,68 @@ export function createV2Controller(deps: Deps) {
     } catch (e) {
       deps.log(`v2: копия корня для администратора не отправлена: ${String(e)}`);
       return 'failed';
-    } finally {
-      client?.forgetRoot();
     }
   }
 
-  /** Новый ключ восстановления взамен прежнего (`ZdProfileX`): корень открывается прежним ключом только на время
-   * операции, копия корня и копия ключей аккаунта переписываются под новым; прежний ключ перестаёт работать. Новый
-   * ключ уходит владельцу в Telegram, иначе показывается окном. */
-  async function renewRecoveryKey(currentKey: string): Promise<RecoveryKeyRenewal> {
-    if (!client || !ready || !pv || !storage) return 'failed';
-    const backup = await fetchServerRootBackup().catch(() => undefined) || rootBackupB64;
-    if (!backup) return 'no_backup';
-    try {
-      client.importRootBackup(unb64(backup), currentKey.trim()).fill(0);
-    } catch {
-      client.forgetRoot();
-      return 'bad_key';
+  // ── корень на устройстве (RECOVER-1 п. 8, решение пользователя 20 ноя 2026) ─────────────────────────────
+
+  /** Корень своего журнала есть на этом устройстве: оно создавало или сбрасывало личность либо ключ
+   * восстановления здесь уже вводили. Тогда операции корнем ключ не спрашивают. */
+  function hasStoredRoot() {
+    return Boolean(ready && client?.hasRoot());
+  }
+
+  /** Корень для операции: сохранённый на устройстве, иначе — из копии под ключом восстановления (своя, затем с
+   * сервера: ключ могли сменить на другом устройстве либо выписать заново администратором). Открытый ключом корень
+   * устройство запоминает в хранилище модели. */
+  async function openRoot(recoveryKey: string): Promise<'ok' | 'bad_key' | 'no_backup'> {
+    if (!client) return 'no_backup';
+    if (client.hasRoot()) return 'ok';
+    const key = recoveryKey.trim();
+    const local = rootBackupB64;
+    let server: string | undefined;
+    if (!local) {
+      server = await fetchServerRootBackup().catch(() => undefined);
+      if (!server) return 'no_backup';
     }
+    if (!key) return 'bad_key';
+    if (local && tryImportRoot(local, key)) {
+      await persistUrgent();
+      return 'ok';
+    }
+    server = server || await fetchServerRootBackup().catch(() => undefined);
+    if (!server || server === local || !tryImportRoot(server, key)) return 'bad_key';
+    rootBackupB64 = server;
+    await storage?.saveRecord(ROOT_BACKUP_RECORD, server);
+    await storage?.saveRecord(ROOT_BACKUP_SENT_RECORD, server);
+    await persistUrgent();
+    return 'ok';
+  }
+
+  function tryImportRoot(backup: string, key: string) {
+    try {
+      client!.importRootBackup(unb64(backup), key).fill(0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Устройство вошло по ключу восстановления: корень, открытый этим ключом, — на устройство. */
+  async function keepRootOpenedBy(backup: string, recoveryKey: string) {
+    if (!client || !tryImportRoot(backup, recoveryKey.trim())) return;
+    await persistUrgent();
+  }
+
+  /** Новый ключ восстановления взамен прежнего (`ZdProfileX`): корень — сохранённый на устройстве (тогда прежний
+   * ключ не нужен: его могли потерять), иначе открывается прежним ключом; копия корня и копия ключей аккаунта
+   * переписываются под новым, прежний ключ перестаёт работать. Новый ключ уходит владельцу в Telegram, иначе
+   * показывается окном. */
+  async function renewRecoveryKey(currentKey = ''): Promise<RecoveryKeyRenewal> {
+    if (!client || !ready || !pv || !storage) return 'failed';
+    const opened = await openRoot(currentKey);
+    if (opened !== 'ok') return opened;
+    const backup = rootBackupB64;
     let recoveryKey: string;
     try {
       recoveryKey = pv.generateRecoveryKey();
@@ -2738,8 +2801,6 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: новый ключ восстановления не создан: ${String(e)}`);
       rootBackupB64 = backup;
       return 'failed';
-    } finally {
-      client?.forgetRoot();
     }
     // Сервер, приняв другую копию корня, стёр копию ключей аккаунта — она пишется заново под новым ключом
     await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
@@ -2780,7 +2841,7 @@ export function createV2Controller(deps: Deps) {
       ));
       await run(fresh.recoverWithRoot(ownLog, OTK_COUNT) as OutReq[]);
       await sealRootEscrow(fresh);
-      fresh.forgetRoot();
+      // Корень, открытый ключом, остаётся на устройстве (RECOVER-1 п. 8) — пишется вместе с состоянием
       await saveFreshEngineState(storage);
       rootBackupB64 = b64(backup);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
@@ -2792,8 +2853,6 @@ export function createV2Controller(deps: Deps) {
       // Полусделанное восстановление не должно стать «сохранённой личностью» при следующем запуске
       host?.clientReplace('new');
       return 'failed';
-    } finally {
-      fresh.forgetRoot();
     }
     return (await restart()) ? 'ok' : 'failed';
   }
@@ -2821,7 +2880,6 @@ export function createV2Controller(deps: Deps) {
       recoveryKey = pv.generateRecoveryKey();
       rootBackupB64 = b64(fresh.exportRootBackup(recoveryKey, created.rootSecret));
       await sealRootEscrow(fresh);
-      fresh.forgetRoot();
       created.rootSecret.fill(0);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
       await saveFreshEngineState(storage);
@@ -2834,8 +2892,6 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: сброс личности не удался: ${String(e)}`);
       host?.clientReplace('new');
       return 'failed';
-    } finally {
-      fresh.forgetRoot();
     }
     if (!(await restart())) return 'failed';
     return 'ok';
@@ -2929,7 +2985,10 @@ export function createV2Controller(deps: Deps) {
         deps.onStateReady?.(stateHost, 'self');
       }
     });
-    if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
+    if (!client?.ownSskExposed()) return;
+    // Корень на устройстве — ключ подписи устройств меняется сразу, без ключа восстановления (REVOKE-1 п. 4)
+    if (client.hasRoot() && await rotateSsk() === 'ok') return;
+    deps.onSskRotationNeeded?.();
   }
 
   /**
@@ -2995,7 +3054,7 @@ export function createV2Controller(deps: Deps) {
         rootBackupB64 = b64(client!.exportRootBackup(recoveryKey, created.rootSecret));
         await target.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
         await sealRootEscrow(client!);
-        client!.forgetRoot();
+        // Новый корень остаётся на устройстве (RECOVER-1 п. 8): прежний модель заменила им же
         created.rootSecret.fill(0);
         await persistUrgent();
       });
@@ -3046,29 +3105,16 @@ export function createV2Controller(deps: Deps) {
     return {
       isRotationNeeded: Boolean(ready && client?.ownSskExposed()),
       hasBackup: Boolean(rootBackupB64),
+      hasRoot: hasStoredRoot(),
     };
   }
 
-  /** Сменить SSK корнем (D-12): корень — из копии под ключом восстановления,
-   * в памяти только на время операции. */
-  async function rotateSsk(recoveryKey: string): Promise<SskRotationResult> {
+  /** Сменить SSK корнем (D-12): корень — сохранённый на устройстве, иначе из копии под ключом восстановления
+   * (ключ мог быть выписан заново — тогда копия под ним на сервере). */
+  async function rotateSsk(recoveryKey = ''): Promise<SskRotationResult> {
     if (!client || !ready) return 'failed';
-    if (!rootBackupB64) return 'no_backup';
-    try {
-      client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);
-    } catch {
-      // Ключ мог быть выписан администратором заново: тогда копия под ним — на сервере
-      const serverBackup = await fetchServerRootBackup().catch(() => undefined);
-      if (!serverBackup || serverBackup === rootBackupB64) return 'bad_key';
-      try {
-        client.importRootBackup(unb64(serverBackup), recoveryKey.trim()).fill(0);
-      } catch {
-        return 'bad_key';
-      }
-      rootBackupB64 = serverBackup;
-      await storage?.saveRecord(ROOT_BACKUP_RECORD, serverBackup);
-      await storage?.saveRecord(ROOT_BACKUP_SENT_RECORD, serverBackup);
-    }
+    const opened = await openRoot(recoveryKey);
+    if (opened !== 'ok') return opened;
     try {
       await sealRootEscrow(client);
       await serial(async () => {
@@ -3082,8 +3128,8 @@ export function createV2Controller(deps: Deps) {
         await persistUrgent();
       });
       deps.log('v2: SSK сменён корнем');
-      // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
-      await rememberBundleKey(recoveryKey);
+      // Новый SSK — в копию ключей аккаунта (ключ копии — от введённого ключа либо уже на устройстве)
+      if (recoveryKey.trim()) await rememberBundleKey(recoveryKey);
       // Сначала копия корня, потом копия ключей: запись другой копии корня стирает на сервере копию ключей
       void uploadRootBackup()
         .catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`))
@@ -3092,17 +3138,18 @@ export function createV2Controller(deps: Deps) {
     } catch (e) {
       deps.log(`v2: смена SSK не удалась: ${String(e)}`);
       return 'failed';
-    } finally {
-      client?.forgetRoot();
     }
   }
 
   // ── смена ника (spec 026) ─────────────────────────────────────────────────
 
-  /** Сменить ник: подтверждение паролем, корень из копии под ключом восстановления, записи двух журналов на
-   * сервер одним запросом. После `ok` движок уже живёт под новым адресом (состояние на диске); группам
-   * `RenameMember` уходит после перезагрузки (`renameGroupsPending`) — сессия прежнего адреса закрывается. */
-  async function renameAccount(nick: string, password: string, recoveryKey: string): Promise<RenameResult> {
+  /** Сменить ник: подтверждение паролем, корень — сохранённый на устройстве либо из копии под ключом
+   * восстановления, записи двух журналов на сервер одним запросом. Копия корня и ключ копии ключей аккаунта
+   * привязаны к адресу: без введённого ключа (корень на устройстве) под новым адресом выпускается новый ключ
+   * восстановления — он уходит в Telegram либо показывается окном после перезагрузки (`isNewKey`). После `ok` движок
+   * уже живёт под новым адресом (состояние на диске); группам `RenameMember` уходит после перезагрузки
+   * (`renameGroupsPending`) — сессия прежнего адреса закрывается. */
+  async function renameAccount(nick: string, password: string, recoveryKey = ''): Promise<RenameResult> {
     if (!pv || !client || !ready || !storage) return { result: 'failed' };
     const codec = pv;
     const newAddress = `${nick}@${serverDomain}`;
@@ -3113,62 +3160,59 @@ export function createV2Controller(deps: Deps) {
     } catch {
       return { result: 'bad_password' };
     }
-    const backup = rootBackupB64 || await fetchServerRootBackup().catch(() => undefined);
-    if (!backup) return { result: 'no_backup' };
-    try {
-      client.importRootBackup(unb64(backup), recoveryKey.trim()).fill(0);
-    } catch {
-      const serverBackup = await fetchServerRootBackup().catch(() => undefined);
-      if (!serverBackup || serverBackup === backup) return { result: 'bad_key' };
+    const isNewKey = client.hasRoot();
+    if (!isNewKey) {
+      const opened = await openRoot(recoveryKey);
+      if (opened !== 'ok') return { result: opened };
+    }
+    const key = isNewKey ? codec.generateRecoveryKey() : recoveryKey.trim();
+    return serial(async (): Promise<RenameResult> => {
+      let body: Uint8Array;
       try {
-        client.importRootBackup(unb64(serverBackup), recoveryKey.trim()).fill(0);
+        body = client!.renamePrepare(newAddress, nick, key);
       } catch {
-        return { result: 'bad_key' };
+        return { result: 'invalid' };
       }
-    }
-    try {
-      return await serial(async (): Promise<RenameResult> => {
-        let body: Uint8Array;
-        try {
-          body = client!.renamePrepare(newAddress, nick, recoveryKey.trim());
-        } catch {
-          return { result: 'invalid' };
-        }
-        let resp: Uint8Array;
-        try {
-          resp = await call('id', 'identity.account.rename', body);
-        } catch (e) {
-          const code = String(e);
-          if (code.includes('DUPLICATE')) return { result: 'taken' };
-          if (code.includes('INVALID')) return { result: 'invalid' };
-          deps.log(`v2: смена ника не принята: ${code}`);
-          return { result: 'failed' };
-        }
-        const r = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameResponse', resp)) as
-          { token?: string; address?: string };
-        client!.renameApply();
-        // Копия корня под новым адресом уже на сервере (в том же запросе); ключ копии ключей аккаунта — от
-        // нового адреса, копия отправится заново
-        const sent = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameRequest', body)) as
-          { root_backup?: string };
-        if (sent.root_backup) {
-          rootBackupB64 = sent.root_backup;
-          await storage!.saveRecord(ROOT_BACKUP_RECORD, sent.root_backup);
-          await storage!.saveRecord(ROOT_BACKUP_SENT_RECORD, sent.root_backup);
-        }
-        const bundleKey = await deriveBundleKey(recoveryKey.trim(), newAddress).catch(() => undefined);
-        if (bundleKey) {
-          bundleKeyB64 = b64(bundleKey);
-          await storage!.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
-        }
-        await storage!.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
-        await persistUrgent();
-        deps.log('v2: ник сменён');
-        return { result: 'ok', address: r.address || newAddress, token: r.token || '' };
-      });
-    } finally {
-      client?.forgetRoot();
-    }
+      let resp: Uint8Array;
+      try {
+        resp = await call('id', 'identity.account.rename', body);
+      } catch (e) {
+        const code = String(e);
+        if (code.includes('DUPLICATE')) return { result: 'taken' };
+        if (code.includes('INVALID')) return { result: 'invalid' };
+        deps.log(`v2: смена ника не принята: ${code}`);
+        return { result: 'failed' };
+      }
+      const r = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameResponse', resp)) as
+        { token?: string; address?: string };
+      client!.renameApply();
+      // Копия корня под новым адресом уже на сервере (в том же запросе); ключ копии ключей аккаунта — от
+      // нового адреса, копия отправится заново
+      const sent = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameRequest', body)) as
+        { root_backup?: string };
+      if (sent.root_backup) {
+        rootBackupB64 = sent.root_backup;
+        await storage!.saveRecord(ROOT_BACKUP_RECORD, sent.root_backup);
+        await storage!.saveRecord(ROOT_BACKUP_SENT_RECORD, sent.root_backup);
+      }
+      const bundleKey = await deriveBundleKey(key, newAddress).catch(() => undefined);
+      if (bundleKey) {
+        bundleKeyB64 = b64(bundleKey);
+        await storage!.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
+      }
+      await storage!.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+      // Новый ключ — владельцу после перезагрузки (`flushTelegramKey`: Telegram, иначе окно): вкладка сейчас
+      // перезагрузится, окно до неё не дожило бы
+      if (isNewKey) {
+        telegramKey = key;
+        await storage!.saveRecord(PENDING_RECOVERY_KEY_RECORD, key);
+      }
+      await persistUrgent();
+      deps.log(isNewKey ? 'v2: ник сменён, ключ восстановления заменён новым' : 'v2: ник сменён');
+      return {
+        result: 'ok', address: r.address || newAddress, token: r.token || '', isNewKey,
+      };
+    });
   }
 
   /** Ник сменён другим своим устройством, пока это было выключено: движок живёт под прежним адресом — журнал
@@ -5307,6 +5351,7 @@ export function createV2Controller(deps: Deps) {
     isEscrowCopyMissing,
     storeEscrowCopy,
     renewRecoveryKey,
+    hasStoredRoot,
     keyBundleContents,
     exportBackup,
     importBackup,

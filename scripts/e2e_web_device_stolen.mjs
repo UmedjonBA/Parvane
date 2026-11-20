@@ -47,12 +47,14 @@ try {
   await left.first().click();
   await device1.page.locator('.Modal').getByRole('button', { name: 'This device was stolen' }).click();
   await expectToast(device1.page, 'Device marked as stolen');
-  await screen.getByText('Device signing key', { exact: true })
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await left.first().waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  // Корень аккаунта хранится на этом устройстве (здесь аккаунт создан): ключ подписи устройств меняется сразу,
+  // просьбы сменить его с вводом ключа восстановления нет
+  await device1.page.waitForTimeout(3000);
+  assert.equal(await screen.getByText('Device signing key', { exact: true }).count(), 0, 'смена ключа подписи не прошла сама');
 
   assertNoPageErrors({ 'bob-device-1': device1 });
-  console.log('OK: вышедшее устройство видно в «Signed-out devices», отметка «украдено» требует смены ключа подписи устройств');
+  console.log('OK: вышедшее устройство видно в «Signed-out devices», отметка «украдено» меняет ключ подписи устройств сама');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['bob-dev1', device1Context], ['bob-dev2', device2Context]]) {

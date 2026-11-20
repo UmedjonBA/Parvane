@@ -69,6 +69,7 @@ fn file(n: u8, parent: Option<u8>, name: &str, l: u64, dev: &str) -> CloudOp {
         stamp: stamp(l, dev),
         thumb: None,
         mtime_ms: 1,
+        from: String::new(),
     }))
 }
 
@@ -193,6 +194,7 @@ fn purged_folder_takes_descendants_and_reports_their_blobs() {
             stamp: stamp(2, "d"),
             thumb: Some(CloudThumb { file_id: "t2".into(), nonce: vec![5; 12], capability: vec![6; 32], width: 10, height: 10 }),
             mtime_ms: 3,
+            from: String::new(),
         })),
         purge(1, 3, "d"),
     ]);
@@ -351,6 +353,7 @@ fn eight_thousand_nodes_fit_the_snapshot_and_view_is_fast() {
                 }),
                 mtime_ms: 1_791_000_000_000,
                 stamp: None,
+                from: String::new(),
             }))],
         };
         cloud::stamp_batch(&mut batch, dev, &mut guard);
@@ -387,12 +390,15 @@ fn arb_op() -> impl Strategy<Value = CloudOp> {
         (node.clone(), parent, name, lamport.clone(), dev.clone()).prop_map(|(n, p, name, l, d)| mv(n, p, name, l, d)),
         (node.clone(), any::<bool>(), lamport.clone(), dev.clone()).prop_map(|(n, t, l, d)| trash(n, t, l, d)),
         (node.clone(), lamport.clone(), dev.clone()).prop_map(|(n, l, d)| purge(n, l, d)),
-        (node, lamport, dev, 0u8..3).prop_map(|(n, l, d, f)| wrap(cloud_op::Op::SetBlob(CloudSetBlob {
+        (node, lamport, dev, 0u8..14, prop::option::of(0u8..14)).prop_map(|(n, l, d, f, sup)| wrap(cloud_op::Op::SetBlob(CloudSetBlob {
             node_id: id(n),
             blob: Some(blob(&format!("s{f}"))),
             stamp: stamp(l, d),
             thumb: None,
             mtime_ms: u64::from(f),
+            // Замена черновика (CLOUD-3): ссылка на блоб другой правки
+            supersedes: sup.map(|g| vec![format!("s{g}")]).unwrap_or_default(),
+            draft_since_ms: 1,
         }))),
     ]
 }
@@ -492,4 +498,128 @@ fn epoch_boundary_rejects_old_epoch_after_cut() {
     let mut legacy = acc.clone();
     legacy.apply(&sign_revoke(&a, &legacy, &bob, 4).unwrap(), &res, &no_groups).unwrap();
     assert!(legacy.check_op_author(&with_seq(99), &res, &no_groups).is_ok());
+}
+
+// ── история версий (CLOUD-3) ────────────────────────────────────────────────
+
+fn set_blob(n: u8, file: &str, l: u64, dev: &str, mtime: u64) -> CloudOp {
+    wrap(cloud_op::Op::SetBlob(CloudSetBlob { node_id: id(n), blob: Some(blob(file)), stamp: stamp(l, dev), mtime_ms: mtime, ..Default::default() }))
+}
+
+fn node_of(st: &CloudState, n: u8) -> ViewNode {
+    st.view().into_iter().find(|v| v.id == nid(n)).unwrap()
+}
+
+fn purged_ids(st: &CloudState) -> Vec<String> {
+    st.purged_blobs().into_iter().map(|b| b.file_id).collect()
+}
+
+/// Версий не больше `VERSIONS_KEEP`: старшие уходят в сборку блобов, текущая — новейшая, прежние — от новой к старой.
+#[test]
+fn versions_keep_latest_and_collect_evicted() {
+    let mut st = apply_all(&[file(1, None, "план.md", 1, "x")]);
+    for i in 0..12u64 {
+        st.apply(&set_blob(1, &format!("v{i}"), 10 + i, "x", 100 + i)).unwrap();
+    }
+    let v = node_of(&st, 1);
+    assert_eq!(v.blob.as_ref().unwrap().file_id, "v11");
+    let files: Vec<String> = v.versions.iter().map(|x| x.blob.file_id.clone()).collect();
+    assert_eq!(files.len(), cloud::VERSIONS_KEEP - 1);
+    assert_eq!(files[0], "v10");
+    assert_eq!(files.last().unwrap(), "v2");
+    // Вытеснены создание и две первые правки
+    assert_eq!(purged_ids(&st), vec!["f1".to_string(), "v0".into(), "v1".into()]);
+    // Снимок несёт историю и надгробия
+    let again = CloudState::from_snapshot(&st.to_snapshot(0)).unwrap();
+    assert_eq!(again.view(), st.view());
+    assert_eq!(again.purged_blobs(), st.purged_blobs());
+    // Стёртый узел отдаёт все свои версии
+    st.apply(&purge(1, 40, "x")).unwrap();
+    assert_eq!(purged_ids(&st).len(), 13);
+}
+
+/// Правки одного устройства в окне черновика — одна версия; другое устройство, «оставить» и правка после окна —
+/// отдельные версии. Решение принимает движок до меток.
+#[test]
+fn coalesce_local_replaces_drafts_of_same_device() {
+    let keep = std::collections::BTreeSet::new();
+    let mut st = apply_all(&[file(1, None, "заметка.md", 1, "x")]);
+    let mut guard = LamportGuard::default();
+    guard.raise(1);
+    let mut write = |st: &mut CloudState, file: &str, dev: &str, mtime: u64, keep: &std::collections::BTreeSet<usize>| {
+        let mut batch = CloudBatch { ops: vec![set_blob(1, file, 0, dev, mtime)] };
+        st.coalesce_local(&mut batch, dev, keep);
+        cloud::stamp_batch(&mut batch, dev, &mut guard);
+        st.apply_batch(&batch, dev).unwrap();
+    };
+    let minute = 60_000;
+    // Первая правка после создания — версия (создание черновиком не бывает)
+    write(&mut st, "a", "x", 10 * minute, &keep);
+    write(&mut st, "b", "x", 12 * minute, &keep);
+    write(&mut st, "c", "x", 15 * minute, &keep);
+    let v = node_of(&st, 1);
+    assert_eq!(v.blob.as_ref().unwrap().file_id, "c");
+    assert_eq!(v.versions.iter().map(|x| x.blob.file_id.as_str()).collect::<Vec<_>>(), vec!["f1"]);
+    assert_eq!(purged_ids(&st), vec!["a".to_string(), "b".into()]);
+    // Окно считается от начала черновика: через 10 минут — новая версия
+    write(&mut st, "d", "x", 21 * minute, &keep);
+    // Другое устройство — своя версия
+    write(&mut st, "e", "y", 22 * minute, &keep);
+    // «Оставить» (возврат прежней) — не черновик: следующая правка её не заменит
+    write(&mut st, "f", "x", 23 * minute, &[0].into_iter().collect());
+    write(&mut st, "g", "x", 24 * minute, &keep);
+    let v = node_of(&st, 1);
+    assert_eq!(v.versions.iter().map(|x| x.blob.file_id.as_str()).collect::<Vec<_>>(), vec!["f", "e", "d", "c", "f1"]);
+    assert_eq!(v.versions[0].device, "x");
+}
+
+/// Чужой автор не может заменить блоб другого загрузившего: надгробие получает загрузившего новой версии,
+/// и сборка чужого блоба не стирает.
+#[test]
+fn supersedes_uses_uploader_of_new_version() {
+    let mut st = apply_all(&[file(1, None, "a.txt", 1, "x")]);
+    let evil = CloudBlobRef { uploader: "mallory@local".into(), ..blob("m1") };
+    st.apply(&wrap(cloud_op::Op::SetBlob(CloudSetBlob {
+        node_id: id(1),
+        blob: Some(evil),
+        stamp: stamp(5, "m"),
+        supersedes: vec!["f1".into()],
+        ..Default::default()
+    })))
+    .unwrap();
+    let gone = st.purged_blobs();
+    assert_eq!(gone.len(), 1);
+    assert_eq!((gone[0].file_id.as_str(), gone[0].uploader.as_str()), ("f1", "mallory@local"));
+}
+
+/// Создание с `from` (файл прислан копией) переживает снимок.
+#[test]
+fn received_file_keeps_from() {
+    let op = wrap(cloud_op::Op::Create(CloudCreate {
+        node_id: id(3),
+        kind: CloudNodeKind::File as i32,
+        name: "регламент.md".into(),
+        blob: Some(blob("c1")),
+        stamp: stamp(3, "x"),
+        mtime_ms: 5,
+        from: "aliya@local".into(),
+        ..Default::default()
+    }));
+    let st = apply_all(&[op]);
+    assert_eq!(node_of(&st, 3).from, "aliya@local");
+    let again = CloudState::from_snapshot(&st.to_snapshot(0)).unwrap();
+    assert_eq!(node_of(&again, 3).from, "aliya@local");
+}
+
+/// Возврат прежней версии тем же блобом: она снова текущая, прежняя текущая — в истории, повтора нет.
+#[test]
+fn restore_moves_version_to_top() {
+    let mut st = apply_all(&[file(1, None, "a.txt", 1, "x"), set_blob(1, "v2", 2, "x", 2), set_blob(1, "v3", 3, "x", 3)]);
+    let old = node_of(&st, 1).versions[1].blob.clone();
+    assert_eq!(old.file_id, "f1");
+    st.apply(&wrap(cloud_op::Op::SetBlob(CloudSetBlob { node_id: id(1), blob: Some(old), stamp: stamp(4, "x"), mtime_ms: 4, ..Default::default() }))).unwrap();
+    let v = node_of(&st, 1);
+    assert_eq!(v.blob.as_ref().unwrap().file_id, "f1");
+    assert_eq!(v.versions.iter().map(|x| x.blob.file_id.as_str()).collect::<Vec<_>>(), vec!["v3", "v2"]);
+    assert!(st.purged_blobs().is_empty());
 }

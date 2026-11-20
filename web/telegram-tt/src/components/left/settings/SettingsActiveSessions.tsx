@@ -84,6 +84,8 @@ const SettingsActiveSessions = ({
   const visibleOffers = linkOffers.filter((offer) => !declinedOffers.includes(getOfferKey(offer)));
   const isUnconfirmed = Boolean(linkStatus?.canRecover);
   const isRotationNeeded = Boolean(sskState?.isRotationNeeded);
+  // Ключ подписи меняется корнем: сохранённым на устройстве либо из копии под ключом восстановления
+  const canRotateSsk = Boolean(sskState?.hasBackup || sskState?.hasRoot);
 
   const handleGrantLink = useLastCallback(async (offer: LinkOffer) => {
     const result = await callParvane('parvaneGrantLink', { deviceId: offer.deviceId });
@@ -287,11 +289,11 @@ const SettingsActiveSessions = ({
           <div className={profile.group}>
             {isRotationNeeded && renderKeyRow(
               oldLang('ParvaneSskRotationTitle'),
-              oldLang(sskState.hasBackup ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup'),
+              oldLang(canRotateSsk ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup'),
               [
                 { label: oldLang('ParvaneSskRotationAction'), onClick: () => setKeyDialogMode('rotate') },
                 { label: oldLang('ParvaneResetAction'), onClick: openReset },
-              ].filter((_, index) => index > 0 || sskState.hasBackup),
+              ].filter((_, index) => index > 0 || canRotateSsk),
             )}
             {Boolean(sskState?.isEscrowCopyMissing) && !isRotationNeeded && renderKeyRow(
               oldLang('ParvaneEscrowTitle'),
@@ -316,7 +318,7 @@ const SettingsActiveSessions = ({
           {Boolean(linkStatus?.hasEscrow) && isRotationNeeded && (
             <div className={profile.hint}>{oldLang('ParvaneLostKeyAdmin')}</div>
           )}
-          <AccountCards canRotateSsk={Boolean(sskState?.hasBackup)} onRotateSsk={() => setKeyDialogMode('rotate')} />
+          <AccountCards canRotateSsk={canRotateSsk} onRotateSsk={() => setKeyDialogMode('rotate')} />
         </>
       )}
 
@@ -354,7 +356,12 @@ const SettingsActiveSessions = ({
         confirmHandler={handleReportStolen}
         confirmIsDestructive
       />
-      <DeviceKeyDialog mode={keyDialogMode} onClose={() => setKeyDialogMode(undefined)} onDone={refresh} />
+      <DeviceKeyDialog
+        mode={keyDialogMode}
+        hasRoot={sskState?.hasRoot}
+        onClose={() => setKeyDialogMode(undefined)}
+        onDone={refresh}
+      />
       <ResetIdentityDialog isOpen={isResetOpen} onClose={closeReset} onDone={refresh} />
       <SettingsActiveSession
         isOpen={Boolean(openedSessionHash)}

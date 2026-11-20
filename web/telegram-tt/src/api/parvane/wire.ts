@@ -80,6 +80,8 @@ export type WireMessageContent = {
   blob_domain?: string;
   // Файл отправлен из «Файлов» (`Media.from_cloud`): получатель подписывает его «из „Файлов“»
   from_cloud?: boolean;
+  // Доступ к файлу копией (`Media.to_files`, CLOUD-3): получатель кладёт копию в «Доступные мне»
+  to_files?: boolean;
   file_nonce?: string;
   // Миниатюра фото/видео (perf A10): JPEG ≤ 320 px и ≤ 16 КиБ, base64 —
   // `Media.thumbnail` схемы v2, внутри шифрования; старые сообщения — без неё

@@ -455,7 +455,21 @@ try {
   await page.waitForTimeout(800);
   // Открытый холст на телефоне: инструменты нижней панелью вместо ленты модулей; «назад» — к плиткам холстов
   await visible(knowledge.locator('[data-canvas-bottom-tools] [data-canvas-tool="text"]'), 'инструменты внизу холста');
+  // Шапки модуля над холстом нет — холст во весь экран; поиск по холсту открывается из меню холста
+  assert.equal(await knowledge.locator('[data-section-search-open], [data-section-search]').count(), 0, 'шапка модуля осталась над холстом телефона');
   await shotBoth('phone-canvas');
+  await knowledge.locator('[data-canvas-menu]').click();
+  await page.locator('[data-canvas-search]').click();
+  const phoneCanvasSearch = knowledge.locator('[data-canvas-search-row] [data-section-search]');
+  await visible(phoneCanvasSearch, 'строка поиска по холсту на телефоне');
+  await phoneCanvasSearch.fill('buoy');
+  await visible(board.locator('[data-search="found"]').filter({ hasText: 'buoy' }), 'поиск на телефоне подсветил карточку');
+  await page.evaluate(() => window.history.back());
+  await knowledge.locator('[data-canvas-search-row]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('«назад» не закрыло поиск по холсту'));
+  await visible(knowledge.locator('[data-canvas-bottom-tools] [data-canvas-tool="text"]'), 'холст после закрытия поиска');
+  // Запись раздела в истории ставится заново следующей отрисовкой — второе «назад» не раньше неё
+  await page.waitForTimeout(400);
   await page.evaluate(() => window.history.back());
   await visible(knowledge.locator('[data-canvas-list] [data-canvas-new]'), '«назад» с холста — к плиткам холстов');
   await shotBoth('phone-canvas-list');

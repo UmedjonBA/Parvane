@@ -82,7 +82,13 @@ impl Engine {
             IK::GroupJoinByLink(j) => self.intent_join(j, &mut w)?,
             IK::DomainOp(d) => self.intent_domain(d, &mut w)?,
             IK::RotateSsk(r) => {
-                let secret: [u8; 32] = r.root_secret.as_slice().try_into().map_err(|_| ProtoError::InvalidField("root_secret"))?;
+                // Пустой `root_secret` — корень, который модель держит сама (RECOVER-1 п. 8)
+                let secret: [u8; 32] = if r.root_secret.is_empty() {
+                    **self.root.as_ref().ok_or(ProtoError::NotFound)?
+                } else {
+                    r.root_secret.as_slice().try_into().map_err(|_| ProtoError::InvalidField("root_secret"))?
+                };
+                let secret = zeroize::Zeroizing::new(secret);
                 let c = self.client.as_mut().ok_or(ProtoError::NotFound)?;
                 let reqs = c.rotate_ssk_with_secret(&secret)?;
                 self.dirty.client = true;

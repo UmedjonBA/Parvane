@@ -11,7 +11,8 @@ import SecretForm from '../../../ui/SecretForm';
 
 // Диалоги экрана «Устройства», которым нужен ключ восстановления либо пароль: обновление ключа подписи (T128),
 // страховочная копия для администратора, ключ в Telegram (spec 015), новый ключ восстановления («Копия ключей»,
-// `ZdProfileX`) и сброс защищённой личности (T130)
+// `ZdProfileX`) и сброс защищённой личности (T130). Корень аккаунта на устройстве (RECOVER-1 п. 8) — смена ключа
+// подписи, страховочная копия и новый ключ идут без ключа восстановления: окно только подтверждает
 export type KeyDialogMode = 'rotate' | 'escrow' | 'telegram' | 'renew';
 
 // `telegram` / `shown` — новый ключ восстановления создан и ушёл в Telegram либо показан окном
@@ -20,18 +21,23 @@ type ResetResult = 'ok' | 'bad_password' | 'failed';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-type KeyDialog = { method: string; text: string; action: string; done: string; doneTelegram?: string };
+// `storedText` — текст окна, когда корень на устройстве и ключ не нужен (у `telegram` его нет: туда уходит сам ключ)
+type KeyDialog = {
+  method: string; text: string; storedText?: string; action: string; done: string; doneTelegram?: string;
+};
 
 const KEY_DIALOG: Record<KeyDialogMode, KeyDialog> = {
   rotate: {
     method: 'parvaneRotateSsk',
     text: 'ParvaneSskRotationText',
+    storedText: 'ParvaneSskRotationTextStored',
     action: 'ParvaneSskRotationAction',
     done: 'ParvaneSskRotationDone',
   },
   escrow: {
     method: 'parvaneStoreEscrowCopy',
     text: 'ParvaneEscrowText',
+    storedText: 'ParvaneEscrowTextStored',
     action: 'ParvaneEscrowAction',
     done: 'ParvaneEscrowDone',
   },
@@ -44,6 +50,7 @@ const KEY_DIALOG: Record<KeyDialogMode, KeyDialog> = {
   renew: {
     method: 'parvaneRenewRecoveryKey',
     text: 'ParvaneRenewKeyText',
+    storedText: 'ParvaneRenewKeyTextStored',
     action: 'ParvaneRenewKeyAction',
     done: 'ParvaneRenewKeyDone',
     doneTelegram: 'ParvaneRenewKeyDoneTelegram',
@@ -65,15 +72,19 @@ const RESET_RESULT_KEYS: Record<ResetResult, string> = {
 
 type KeyDialogProps = {
   mode?: KeyDialogMode;
+  hasRoot?: boolean;
   onClose: NoneToVoidFunction;
   onDone: NoneToVoidFunction;
 };
 
-export const DeviceKeyDialog = memo(({ mode, onClose, onDone }: KeyDialogProps) => {
+export const DeviceKeyDialog = memo(({
+  mode, hasRoot, onClose, onDone,
+}: KeyDialogProps) => {
   const { showNotification } = getActions();
   const oldLang = useOldLang();
   const [recoveryKey, setRecoveryKey] = useState('');
   const dialog = KEY_DIALOG[mode || 'rotate'];
+  const isKeyless = Boolean(hasRoot && dialog.storedText);
 
   const handleClose = useLastCallback(() => {
     setRecoveryKey('');
@@ -81,9 +92,9 @@ export const DeviceKeyDialog = memo(({ mode, onClose, onDone }: KeyDialogProps) 
   });
 
   const handleConfirm = useLastCallback(async () => {
-    const key = recoveryKey;
+    const key = isKeyless ? '' : recoveryKey;
     handleClose();
-    if (!key) return;
+    if (!key && !isKeyless) return;
     const result = await callParvane(dialog.method, { recoveryKey: key }) as KeyResult | undefined;
     const resultKey = result === 'telegram' ? dialog.doneTelegram || dialog.done
       : result === 'ok' || result === 'shown' ? dialog.done : KEY_FAILURE_KEYS[result || 'failed'];
@@ -95,22 +106,24 @@ export const DeviceKeyDialog = memo(({ mode, onClose, onDone }: KeyDialogProps) 
     <ConfirmDialog
       isOpen={Boolean(mode)}
       onClose={handleClose}
-      text={oldLang(dialog.text)}
+      text={oldLang(isKeyless ? dialog.storedText! : dialog.text)}
       confirmLabel={oldLang(dialog.action)}
       confirmHandler={handleConfirm}
-      isConfirmDisabled={!recoveryKey}
+      isConfirmDisabled={!isKeyless && !recoveryKey}
       areButtonsInColumn
     >
-      <input
-        type="text"
-        className="form-control"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={oldLang('ParvaneSskRotationPlaceholder')}
-        aria-label={oldLang('ParvaneSskRotationPlaceholder')}
-        value={recoveryKey}
-        onChange={(e) => setRecoveryKey(e.currentTarget.value)}
-      />
+      {!isKeyless && (
+        <input
+          type="text"
+          className="form-control"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={oldLang('ParvaneSskRotationPlaceholder')}
+          aria-label={oldLang('ParvaneSskRotationPlaceholder')}
+          value={recoveryKey}
+          onChange={(e) => setRecoveryKey(e.currentTarget.value)}
+        />
+      )}
     </ConfirmDialog>
   );
 });

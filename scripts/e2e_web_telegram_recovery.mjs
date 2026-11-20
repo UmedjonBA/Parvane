@@ -234,6 +234,9 @@ try {
   // ключи устройства и ключ восстановления переживают перезагрузку, переписка ниже это проверяет
   const bob = await register(bobContext, bobNick, TG_BOB, { isReloadedAfterCreate: true });
   sessions.bob = bob;
+  // Корень нового аккаунта пережил перезагрузку (вступление повторено из сохранённого состояния — RECOVER-1 п. 8)
+  const bobRoot = await bob.page.evaluate(() => window.__parvaneDiagCallApi?.('parvaneHasStoredRoot'));
+  assert.equal(bobRoot, true, 'после перезагрузки сразу за созданием корня на устройстве нет');
   console.log('OK: перезагрузка сразу после записи журнала — устройство поднялось само, ключ ушёл в Telegram');
 
   // Счётчики — ДО переписки: по S7-3 своё и входящее уходят в журнал истории одной пачкой (окно стенда 1–3 с), и пачка
@@ -308,7 +311,10 @@ try {
     await alice2.page.waitForTimeout(300);
   }
   await shoot(alice2.page, 'devices-done-wide');
-  console.log('OK: новое устройство вошло по ответу боту, первое устройство выключено');
+  // Корень, открытый ключом при входе, остаётся на новом устройстве (RECOVER-1 п. 8)
+  const hasRoot = await alice2.page.evaluate(() => window.__parvaneDiagCallApi?.('parvaneHasStoredRoot'));
+  assert.equal(hasRoot, true, 'после входа по ключу корень на устройстве не запомнен');
+  console.log('OK: новое устройство вошло по ответу боту, первое устройство выключено, корень на нём');
   await closeSettings(alice2.page);
 
   // Прежняя переписка видна, отправка и приём работают

@@ -1,15 +1,15 @@
 // Протокол v2 (spec 007, T128/T130, FR-066; D-11, D-12, D-16): отзыв своего
 // устройства и обновление ключа подписи устройств ключом восстановления.
 // alice — web v2; bob1 — первое v2-устройство bob (ключ восстановления показан
-// ему), bob2 — второе, привязано грантом LINK-1.
-// (1) bob1 завершает сеанс bob2 в Settings → Devices: кроме v1-отзыва, в журнал
+// ему, корень аккаунта — у него, RECOVER-1 п. 8), bob2 — второе, привязано грантом LINK-1 (корня нет).
+// (1) bob2 завершает сеанс bob1 в Settings → Devices: кроме v1-отзыва, в журнал
 //     устройств v2 уходит запись отзыва, меняются ключ доступа к доставке и
 //     ключ личного состояния;
 // (2) отозванное устройство новых сообщений не получает, живое — получает;
-// (3) bob2 держал SSK → на экране Devices появляется блок «Device signing key»;
-//     неверный ключ восстановления отклоняется, верный — меняет SSK корнем;
+// (3) bob1 держал SSK, а корня у bob2 нет → на экране Devices появляется блок «Device signing key»;
+//     неверный ключ восстановления отклоняется, верный — меняет SSK корнем, и корень остаётся на bob2;
 // (4) после смены SSK переписка продолжается (alice принимает новый журнал
-//     bob без предупреждения о смене корня), а личное состояние bob1 живо.
+//     bob без предупреждения о смене корня), а личное состояние bob2 живо.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -130,7 +130,7 @@ try {
   const dev2Screen = await openDevicesScreen(bob2Page);
   await dev2Screen.getByText(/Waiting for your other device/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  let dev1Screen = await openDevicesScreen(bob1Page);
+  const dev1Screen = await openDevicesScreen(bob1Page);
   const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const offerItem = dev1Screen.locator('[data-link-offer]:not([data-link-code=""])').first();
@@ -150,43 +150,49 @@ try {
   await openPrivateChatStrict(bob2Page, alice);
   await findMessage(bob2Page, linked).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
-  // ── (1) bob1 завершает сеанс bob2 ───────────────────────────────────────────
-  dev1Screen = await openDevicesScreen(bob1Page);
-  const otherSession = dev1Screen.locator('[data-session-row]:not([data-session-current])').first();
-  await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD, { rotateKeys: true });
-  await waitLog('bob1', 'v2: устройство отозвано');
-  assert.ok(!logs.bob1.some((l) => l.includes('отзыв устройства в журнале не выполнен')), logs.bob1.join(' | '));
-
-  // ── (3) bob2 держал SSK: блок обновления ключа, неверный и верный ключ ─────
-  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const wrongKey = recoveryKey.replace(/.$/, (c) => (c === '2' ? '3' : '2'));
-  await submitRecoveryKey(bob1Page, dev1Screen, wrongKey);
-  await expectToast(bob1Page, 'This recovery key does not match');
-  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await submitRecoveryKey(bob1Page, dev1Screen, recoveryKey);
-  await expectToast(bob1Page, 'Device signing key renewed');
-  await waitLog('bob1', 'v2: SSK сменён корнем');
-  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // ── (1) bob2 (привязан грантом, корня нет) завершает сеанс bob1 ─────────────
   await closeSettings(bob1Page);
+  let dev2 = await openDevicesScreen(bob2Page);
+  const otherSession = dev2.locator('[data-session-row]:not([data-session-current])').first();
+  await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await terminateSessionWithPassword(bob2Page, otherSession, PASSWORD, { rotateKeys: true });
+  await waitLog('bob2', 'v2: устройство отозвано');
+  assert.ok(!logs.bob2.some((l) => l.includes('отзыв устройства в журнале не выполнен')), logs.bob2.join(' | '));
+  assert.ok(!logs.bob2.some((l) => l.includes('SSK сменён корнем')), 'без корня на устройстве SSK сменился сам');
+
+  // ── (3) bob1 держал SSK: блок обновления ключа, неверный и верный ключ ─────
+  dev2 = await openDevicesScreen(bob2Page);
+  await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const wrongKey = recoveryKey.replace(/.$/, (c) => (c === '2' ? '3' : '2'));
+  await submitRecoveryKey(bob2Page, dev2, wrongKey);
+  await expectToast(bob2Page, 'This recovery key does not match');
+  await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await submitRecoveryKey(bob2Page, dev2, recoveryKey);
+  await expectToast(bob2Page, 'Device signing key renewed');
+  await waitLog('bob2', 'v2: SSK сменён корнем');
+  await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // Ключ введён — корень остаётся на устройстве (RECOVER-1 п. 8)
+  const ssk = await bob2Page.evaluate(() => window.__parvaneDiagCallApi?.('parvaneGetSskState'));
+  assert.ok(ssk?.hasRoot, `bob2: корень не запомнен после ввода ключа: ${JSON.stringify(ssk)}`);
+  await closeSettings(bob2Page);
 
   // ── (2)+(4) После отзыва и смены SSK: живое устройство читает, отозванное — нет
   await alicePage.waitForTimeout(PEER_LOG_REFRESH_MS);
   const after = `rv-after-${suffix}`;
   await openPrivateChatStrict(alicePage, bob);
   await sendText(alicePage, after);
-  await openPrivateChatStrict(bob1Page, alice);
-  await findMessage(bob1Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openPrivateChatStrict(bob2Page, alice);
+  await findMessage(bob2Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const reply = `rv-reply-${suffix}`;
-  await sendText(bob1Page, reply);
+  await sendText(bob2Page, reply);
   await findMessage(alicePage, reply).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await bob2Page.waitForTimeout(REVOKED_SETTLE_MS);
-  assert.equal(await findMessage(bob2Page, after).count(), 0, 'отозванное устройство получило новое сообщение');
-  assert.equal(await findMessage(bob2Page, reply).count(), 0, 'отозванное устройство получило исходящее живого');
+  await bob1Page.waitForTimeout(REVOKED_SETTLE_MS);
+  assert.equal(await findMessage(bob1Page, after).count(), 0, 'отозванное устройство получило новое сообщение');
+  assert.equal(await findMessage(bob1Page, reply).count(), 0, 'отозванное устройство получило исходящее живого');
 
   // Смена SSK — не смена корня: предупреждения о смене ключа у alice нет
   assert.ok(!logs.alice.some((l) => /смен[аы] корня|rootChanged/i.test(l)), logs.alice.slice(-20).join(' | '));
-  for (const who of ['alice', 'bob1']) {
+  for (const who of ['alice', 'bob2']) {
     assert.ok(!logs[who].some((l) => l.includes('запуск не удался')), `${who}: ${logs[who].join(' | ')}`);
   }
   console.log('e2e_protocol_revoke: OK');

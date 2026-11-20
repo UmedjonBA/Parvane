@@ -28,6 +28,9 @@ assert.ok(BACKEND_DIR, 'нужен PARVANE_E2E_BACKEND_LOG_DIR (каталог �
 const FOLDER = 'Общий проект';
 const CONTENT = 'Содержимое общего файла a71b';
 const ARCHIVE = 'Архив b93c';
+// Доступ к одиночному файлу копией (CLOUD-3)
+const SHARED_FILE = 'регламент-обновлений.md';
+const SHARED_TEXT = 'Регламент обновлений c42d';
 
 function serverView() {
   const db = new DatabaseSync(`${BACKEND_DIR}/domains.db-v2.db`, { readOnly: true });
@@ -41,7 +44,8 @@ function serverView() {
         texts.push(bytes.toString('latin1'), bytes.toString('utf8'));
       }
     }
-    return { grants, leaks: [FOLDER, CONTENT, 'план.txt', 'от Боба', ARCHIVE, 'отчёт.txt', 'глубоко'].filter((w) => texts.some((t) => t.includes(w))) };
+    const words = [FOLDER, CONTENT, 'план.txt', 'от Боба', ARCHIVE, 'отчёт.txt', 'глубоко', SHARED_FILE, SHARED_TEXT];
+    return { grants, leaks: words.filter((w) => texts.some((t) => t.includes(w))) };
   } finally {
     db.close();
   }
@@ -409,6 +413,36 @@ try {
   await bc.folderRow('Отмена').waitFor({ state: 'visible', timeout: SYNC });
   assert.equal(await bc.folderRow('Отмена').getAttribute('data-container-kind'), 'invite', 'повторное приглашение дошло');
   console.log('OK: ждущее ответа приглашение отменено владельцем; новое приглашение после отмены доходит');
+
+  // ── Доступ к одиночному файлу копией (CLOUD-3): у Боба копия в «Доступных мне» → «Файлы», у Алисы файл на месте ──
+  await ac.open();
+  await ac.root();
+  await ac.upload(SHARED_FILE, SHARED_TEXT, 'text/markdown');
+  const bobBlobsBefore = driveBlobs(bob);
+  await ac.menu(SHARED_FILE, 'Share with people…');
+  const copyForm = a.locator('[data-share-copy]');
+  await copyForm.locator('input').waitFor({ state: 'visible', timeout: STEP });
+  await copyForm.locator('input').fill(`@${bobName}`);
+  await copyForm.locator('input').press('Enter');
+  await copyForm.waitFor({ state: 'detached', timeout: SYNC });
+  await bc.open();
+  await bc.openShared();
+  await bc.cloud.locator('[data-shared-files]').waitFor({ state: 'visible', timeout: SYNC });
+  await bc.item(SHARED_FILE).waitFor({ state: 'visible', timeout: SYNC });
+  assert.match(await bc.item(SHARED_FILE).innerText(), new RegExp(aliceName), 'в строке копии нет отправителя');
+  assert.equal((await bc.download(SHARED_FILE)).toString(), SHARED_TEXT, 'копия у Боба с другим содержимым');
+  assert.ok(driveBlobs(bob) > bobBlobsBefore, 'копия не легла в квоту Боба');
+  await bc.root();
+  assert.ok(!(await bc.names()).includes(SHARED_FILE), 'копия видна и в корне «Моего диска»');
+  // У Алисы файл остаётся на месте, общей папки не появилось
+  await ac.item(SHARED_FILE).waitFor({ state: 'visible', timeout: STEP });
+  assert.equal(await ac.folderRow(SHARED_FILE).count(), 0, 'файл ушёл в общую папку');
+  // Боб кладёт копию в корзину — она уходит из «Доступных мне», у Алисы файл остаётся
+  await bc.openShared();
+  await bc.menu(SHARED_FILE, 'Move to trash');
+  await bc.item(SHARED_FILE).waitFor({ state: 'detached', timeout: SYNC });
+  await ac.item(SHARED_FILE).waitFor({ state: 'visible', timeout: STEP });
+  console.log('OK: файл отдан копией — у получателя в «Доступных мне», у владельца на месте');
 
   // ── Сервер видит состав, но не имена и не содержимое ──────────────────────
   assert.deepEqual(serverView().leaks, [], 'в базе сервера найден открытый текст');

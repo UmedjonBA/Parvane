@@ -18,7 +18,7 @@ import profile from '../profile/Profile.module.scss';
 import styles from './Account.module.scss';
 
 type OwnProps = {
-  // Смена ключа подписи устройств возможна только при копии корня на устройстве (`sskState.hasBackup`)
+  // Смена ключа подписи устройств возможна только корнем: он на устройстве либо есть его копия (`sskState`)
   canRotateSsk?: boolean;
   onRotateSsk: NoneToVoidFunction;
 };

@@ -243,6 +243,9 @@ fn media_to_wire(m: &Media) -> Map<String, Value> {
     if m.from_cloud {
         o.insert("from_cloud".into(), json!(true));
     }
+    if m.to_files {
+        o.insert("to_files".into(), json!(true));
+    }
     if m.spoiler && spoiler_kind(kind) {
         o.insert("spoiler".into(), json!(true));
     }
@@ -639,6 +642,10 @@ fn media_to_v2(c: &Map<String, Value>, kind: &str) -> Map<String, Value> {
     set(&mut o, "capability", c.get("capability"));
     if bool_of(c, "from_cloud") {
         o.insert("from_cloud".into(), json!(true));
+    }
+    // Доступ к файлу копией (CLOUD-3): получатель кладёт копию в «Файлы»
+    if bool_of(c, "to_files") {
+        o.insert("to_files".into(), json!(true));
     }
     // MEDIA-2: спойлер и альбом — только у фото/видео/GIF/файлов (не у голосовых и кружков)
     if bool_of(c, "spoiler") && spoiler_kind(kind) {
@@ -1198,6 +1205,7 @@ fn media_from_view(m: &ViewMedia) -> Media {
         capability: m.capability.clone(),
         blob_domain: m.blob_domain.clone(),
         from_cloud: false,
+        to_files: false,
     }
 }
 
@@ -1326,6 +1334,11 @@ mod tests {
         let plain = json!({"kind": "file", "file_id": "f2", "filename": "a.txt", "mime": "text/plain", "size_bytes": 1});
         let content = wire_to_content(plain.as_object().unwrap(), None).unwrap();
         assert!(content_to_wire(&content).unwrap().get("from_cloud").is_none());
+        // Доступ к файлу копией (CLOUD-3)
+        let shared = json!({"kind": "file", "file_id": "f3", "filename": "b.md", "mime": "text/markdown", "size_bytes": 4,
+            "from_cloud": true, "to_files": true});
+        let content = wire_to_content(shared.as_object().unwrap(), None).unwrap();
+        assert_eq!(content_to_wire(&content).unwrap()["to_files"], json!(true));
     }
 
     /// TRACK-1: трек «Музыки» проходит туда и обратно; клиент без раздела получает текст.

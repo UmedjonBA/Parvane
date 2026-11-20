@@ -74,6 +74,9 @@ pub const OTK_COUNT: usize = 50;
 /// Имя записи ядра (`engine-core`).
 const CORE_CLIENT: &str = "client";
 const CORE_META: &str = "meta";
+/// Корень личности (32 байта) — на устройстве, где он уже был открыт (решение пользователя 20 ноя 2026, RECOVER-1
+/// п. 8): под DEK хранилища, как остальные секреты; пишется, только пока корень — корень своего журнала устройств.
+const CORE_ROOT: &str = "root";
 const STATE_SNAPSHOT: &str = "snapshot";
 
 /// Зачем отправлен запрос (ответ приходит `ingest{RESPONSE, req_id}`).
@@ -253,8 +256,11 @@ pub struct Engine {
     pending_root: Option<StoreBatch>,
     /// Свои операции личного состояния, ещё не принятые сервером (вид `state-raw`, имя — hex op_id).
     pub(crate) state_unsent: BTreeMap<String, Vec<u8>>,
-    /// Корень личности после createIdentity/importRootBackup — только в памяти (C1-06), `clientCall`.
+    /// Корень личности (`clientCall`): после createIdentity/resetIdentity/importRootBackup и с диска
+    /// (`engine-core/root`, RECOVER-1 п. 8). На диск — только корень своего журнала устройств ([`Client::owns_root`]).
     pub(crate) root: Option<zeroize::Zeroizing<[u8; 32]>>,
+    /// Открытый ключ корня, лежащего на диске (`None` — записи нет): запись меняется, только когда он другой.
+    stored_root: Option<[u8; 32]>,
     /// Подготовленная смена ника (spec 026) до ответа сервера, `clientCall`.
     pub(crate) rename_plan: Option<crate::client::RenamePlan>,
     /// Режим хоста: страница журнала инбокса кончилась на ждущих записях — следующая после `retry`.
@@ -301,6 +307,11 @@ pub(crate) fn user_peer(address: &str) -> Peer {
 
 pub(crate) fn group_peer(group: &Ref) -> Peer {
     Peer { kind: Some(peer::Kind::Group(group.clone())) }
+}
+
+/// Открытый ключ корня личности.
+fn root_pub(secret: &[u8; 32]) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(secret).verifying_key().to_bytes()
 }
 
 /// Ключ записи строки в хранилище.
@@ -409,6 +420,7 @@ impl Engine {
             pending_root: None,
             state_unsent: BTreeMap::new(),
             root: None,
+            stored_root: None,
             rename_plan: None,
             inbox_more: false,
         })
@@ -614,6 +626,7 @@ impl Engine {
     fn records_loaded(&mut self, l: &StoreLoaded, w: &mut Work) -> Result<()> {
         let st = self.store.as_ref().ok_or(ProtoError::NotFound)?;
         let mut client_blob = None;
+        let mut root_blob: Option<zeroize::Zeroizing<Vec<u8>>> = None;
         let mut rows = vec![];
         for e in &l.entries {
             let Some((_, kind, name)) = store::parse_key(&e.key) else { continue };
@@ -625,6 +638,7 @@ impl Engine {
             };
             match (kind, name) {
                 ("engine-core", CORE_CLIENT) => client_blob = Some(plain),
+                ("engine-core", CORE_ROOT) => root_blob = Some(zeroize::Zeroizing::new(plain)),
                 ("engine-core", CORE_META) => {
                     self.meta = serde_json::from_slice(&plain).unwrap_or_default();
                     // Не отправленное до остановки — снова в очередь (пачка — с первым тактом после чтения журнала)
@@ -668,6 +682,9 @@ impl Engine {
                 Client::new(&self.cfg.user, &self.cfg.device_id, &self.cfg.domain)?
             }
         });
+        if let Some(b) = root_blob {
+            self.load_root(&b);
+        }
         if self.cfg.vectors {
             self.ensure_state_key();
         }
@@ -709,6 +726,26 @@ impl Engine {
             self.send_state_raw(&op_hex, &pt, w);
         }
         Ok(())
+    }
+
+    /// Корень с диска: в памяти — только корень своего журнала; чужой либо прежний (личность сброшена другим
+    /// устройством) сотрётся с диска следующей пачкой.
+    fn load_root(&mut self, b: &[u8]) {
+        let Ok(secret) = <[u8; 32]>::try_from(b) else {
+            self.stored_root = Some([0; 32]);
+            return;
+        };
+        let secret = zeroize::Zeroizing::new(secret);
+        self.stored_root = Some(root_pub(&secret));
+        if self.client.as_ref().is_some_and(|c| c.owns_root(&secret)) {
+            self.root = Some(secret);
+        }
+    }
+
+    /// Корень, который должен лежать на диске: корень своего журнала устройств.
+    fn root_to_store(&self) -> Option<zeroize::Zeroizing<[u8; 32]>> {
+        let c = self.client.as_ref()?;
+        self.root.as_ref().filter(|r| c.owns_root(r)).cloned()
     }
 
     pub(crate) fn ensure_state_key(&mut self) {
@@ -795,6 +832,15 @@ impl Engine {
         if d.meta {
             puts.push(("engine-core".into(), CORE_META.into(), serde_json::to_vec(&self.meta).unwrap_or_default()));
         }
+        // Корень (RECOVER-1 п. 8): запись меняется, только когда корень на диске не тот, что должен лежать
+        let want_root = self.root_to_store();
+        let want_pub = want_root.as_ref().map(|r| root_pub(r));
+        if want_pub != self.stored_root {
+            match &want_root {
+                Some(r) => puts.push(("engine-core".into(), CORE_ROOT.into(), r.to_vec())),
+                None => deletes.push(("engine-core".into(), CORE_ROOT.into())),
+            }
+        }
         if d.state {
             puts.push(("state-object".into(), STATE_SNAPSHOT.into(), self.state.snapshot_bytes()));
         }
@@ -842,7 +888,14 @@ impl Engine {
         let st = self.store.as_mut().ok_or(ProtoError::NotFound)?;
         let p: Vec<(&str, &str, &[u8])> = puts.iter().map(|(k, n, v)| (k.as_str(), n.as_str(), v.as_slice())).collect();
         let dl: Vec<(&str, &str)> = deletes.iter().map(|(k, n)| (k.as_str(), n.as_str())).collect();
-        let mut b = st.write(&p, &dl)?;
+        let written = st.write(&p, &dl);
+        for (k, n, v) in puts.iter_mut() {
+            if k == "engine-core" && n == CORE_ROOT {
+                zeroize::Zeroize::zeroize(v);
+            }
+        }
+        let mut b = written?;
+        self.stored_root = want_pub;
         if let Some(mut r) = root {
             // Корень нового профиля — в той же транзакции, первым
             r.puts.append(&mut b.puts);

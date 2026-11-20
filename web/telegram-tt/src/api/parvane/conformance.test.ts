@@ -1390,8 +1390,11 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     expect(controller).toContain('const [entry, ...rotations] = outcome.requests;');
     expect(controller).toContain('const [entry] = (client!.signOutDevice(deviceId) as RevokeOutcome).requests;');
     expect(controller).toMatch(/await call\(entry\.chan[\s\S]{0,400}idConn\?\.close\(\);\s*throw e;/);
-    expect(controller).toContain('client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);');
-    expect(controller).toContain('client?.forgetRoot();');
+    // RECOVER-1 п. 8: корень — сохранённый на устройстве, иначе из копии под ключом; открытый корень не забывается
+    expect(controller).toMatch(/async function openRoot[\s\S]{0,200}if \(client\.hasRoot\(\)\) return 'ok';/);
+    expect(controller).toContain('client!.importRootBackup(unb64(backup), key).fill(0);');
+    expect(controller).toMatch(/function rotateSsk\(recoveryKey = ''\)[\s\S]{0,200}await openRoot\(recoveryKey\)/);
+    expect(controller).not.toMatch(/\bclient[!?]?\.forgetRoot\(\)/);
     expect(controller).toContain('pv.grantWithRootBackup(keyed, unb64(rootBackupB64))');
     expect(controller).toContain('pv.grantRootBackup(material)');
     r.sskResults.forEach((result) => expect(controller, result).toContain(`'${result}'`));
@@ -1479,6 +1482,12 @@ describe('RECOVER-1: смена корня собеседника, восста�
     expect(controller).toContain('fresh.importRootBackupFor(backup, recoveryKey.trim());');
     expect(controller).toContain('fresh.recoverWithRoot(ownLog, OTK_COUNT)');
     expect(controller).toContain('fresh.resetIdentity(OTK_COUNT)');
+    expect(controller).not.toMatch(/\bfresh\.forgetRoot\(\)/);
+    // П. 8: корень — запись модели движка, только корень своего журнала
+    expect(r.rootOnDevice?.record).toContain('engine-core/root');
+    const model = readRepo('backend/protocol/src/model/mod.rs');
+    expect(model).toContain('const CORE_ROOT: &str = "root";');
+    expect(model).toMatch(/fn root_to_store[\s\S]{0,200}c\.owns_root\(r\)/);
     [...r.recoverResults, ...r.resetResults].forEach((result) => expect(controller, result).toContain(`'${result}'`));
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toContain('onPeerRootChanged: (user) => syncController.announceKeyChange(user),');

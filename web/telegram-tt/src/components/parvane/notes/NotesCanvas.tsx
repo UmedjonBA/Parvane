@@ -108,6 +108,8 @@ type OwnProps = {
   searchStep: number;
   onOpenTitle: (title: string) => void;
   onOpenCanvas: (canvasId?: string) => void;
+  // Телефон: у открытого холста шапки модуля нет — поиск открывается из меню холста
+  onSearch: NoneToVoidFunction;
 };
 
 // Жест на поле от нажатия до отпускания. Сдвиг и размер до отпускания живут в `live` — документ, история и
@@ -224,7 +226,7 @@ function isTypingElement(element: Element | undefined) {
 // Холст (JSON Canvas): карточки заметок, файлов и ссылок, текстовые карточки, группы и стрелки с подписями.
 // Файл `.canvas` лежит в папке «Знания»; правки сохраняются сами через паузу
 const NotesCanvas = ({
-  canvases: allCanvases, notes, isNarrow, openId, query, searchStep, onOpenTitle, onOpenCanvas,
+  canvases: allCanvases, notes, isNarrow, openId, query, searchStep, onOpenTitle, onOpenCanvas, onSearch,
 }: OwnProps) => {
   const { showNotification } = getActions();
   const boardRef = useRef<HTMLDivElement>();
@@ -929,6 +931,11 @@ const NotesCanvas = ({
   const handleMenuRefresh = useLastCallback(() => {
     closeMenu();
     handleRefreshGraph();
+  });
+
+  const handleMenuSearch = useLastCallback(() => {
+    closeMenu();
+    onSearch();
   });
 
   const handleAskDelete = useLastCallback(() => {
@@ -2631,6 +2638,12 @@ const NotesCanvas = ({
           <PvIcon name="edit" isSmall />
           {lang('KnowledgeCanvasRename')}
         </button>
+        {isNarrow && (
+          <button type="button" className={kit.btn} data-canvas-search onClick={handleMenuSearch}>
+            <PvIcon name="search" isSmall />
+            {lang('KnowledgeCanvasSearch')}
+          </button>
+        )}
         {isFromGraph && isNarrow && (
           <button type="button" className={kit.btn} data-canvas-refresh onClick={handleMenuRefresh}>
             <PvIcon name="refresh" isSmall />

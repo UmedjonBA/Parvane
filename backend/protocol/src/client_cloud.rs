@@ -565,7 +565,7 @@ impl Client {
     /// проверка (родитель — папка, без циклов, предел узлов), применение
     /// сразу (офлайн-first); байты пакета — хосту в очередь отправки.
     pub fn cloud_prepare_local(&mut self, id: &[u8], ops_json: &str) -> CResult<PlannerLocalOp> {
-        let mut batch = cloud_json::batch_from_json(ops_json)?;
+        let (mut batch, keep) = cloud_json::batch_with_keep(ops_json)?;
         let dev = self.device_id.clone();
         let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
@@ -573,6 +573,8 @@ impl Client {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
         let mut guard = c.guard.clone();
+        // Версии истории (CLOUD-3): правки подряд в окне черновика — одна версия
+        c.state.coalesce_local(&mut batch, &dev, &keep);
         cloud::stamp_batch(&mut batch, &dev, &mut guard);
         c.state.check_local(&batch)?;
         let applied = c.state.apply_batch(&batch, &dev)?;

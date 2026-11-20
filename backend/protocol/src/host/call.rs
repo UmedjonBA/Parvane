@@ -167,7 +167,8 @@ impl HostClient {
                 self.root = None;
                 Value::Null
             }
-            "hasRoot" => json!(self.root.is_some()),
+            // Корень своего журнала устройств есть на этом устройстве (в памяти; модель держит его и на диске)
+            "hasRoot" => json!(self.root.as_ref().is_some_and(|r| c.owns_root(r))),
             // Корень — аргументом `rootSecret` (desktop/android: корень из своего хранилища) либо уже открытый в памяти
             "recoverWithRoot" => {
                 let root = self.root_or(a.bo("rootSecret")?)?;

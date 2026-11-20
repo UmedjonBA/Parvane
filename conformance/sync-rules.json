@@ -1094,6 +1094,20 @@
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (acceptPeerRoot, runDirect, dropIdentity, recoverWithKey, resetIdentity), SettingsActiveSessions.tsx",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (acceptPeerRootLocked, runDirectLocked, dropIdentityLocked, recoverWithKey, resetIdentity); tdesktop parvane_client.cpp (peerRootChanged)",
         "android": "spec 031: событие сессии peerRootChanged → peer_root_changed (android/jni/jni_session.cpp) → служебное сообщение (android/libtd/src/main/java/org/drinkless/tdlib/Client.kt); вход по ключу и сброс личности — android/jni/jni_account.cpp nativeRecoverWithKey (joinWithRecoveryKey), nativeResetIdentity, копия корня — nativeStoreEscrowCopy (то же ядро)"
+      },
+      "rootOnDevice": {
+        "since": "2026-11-20",
+        "record": "engine-core/root (хранилище модели движка, под DEK профиля)",
+        "keptWhen": "корень своего журнала устройств (Client::owns_root): создание, сброс личности, вход/восстановление по ключу, успешный ввод ключа",
+        "notIn": [
+          "linkGrantMaterial",
+          "копия ключей аккаунта (key_bundle)",
+          "export клиента"
+        ],
+        "hasRootCall": "hasRoot",
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (openRoot, hasStoredRoot, keepRootOpenedBy, renewRecoveryKey, rotateSsk, renameAccount, storeEscrowCopy); DeviceDialogs.tsx (окно без поля ключа), ProfileNickChange.tsx",
+        "tests": "backend/protocol/tests/model_client.rs (root_is_kept_on_disk_only_sealed_and_only_for_own_log, root_goes_with_a_fresh_device_and_foreign_root_is_not_kept)",
+        "desktopAndroid": "ядро зовёт forgetRoot после операций — корень на устройстве не остаётся до своей правки"
       }
     },
     {
@@ -2070,6 +2084,19 @@
       "status": "20 ноя 2026: движок и web — сделано (spec 041); desktop и android — открыто",
       "clients": {
         "web": "api/parvane/callengine.ts (отпечатки — onSas), components/parvane/call/callSas.ts (вызов движка), CallActive.tsx; тест callSas.test.ts (общий образец), сценарий scripts/run_web_calls_e2e.sh",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "CLOUD-3",
+      "title": "История версий файла и заметки и доступ к одиночному файлу копией: сколько хранить и что стирать решает движок; клиент без «Файлов» показывает присланный файл обычным вложением",
+      "kind": "data",
+      "record": "cloud.v1: CloudSetBlob.supersedes = 6 (блобы заменённого черновика, ≤ 2), CloudSetBlob.draft_since_ms = 7; CloudCreate.from = 9 (адрес приславшего); снимок CloudEntry.draft_since_ms = 20, versions = 22 (CloudVersion), gone = 23 (CloudGone), from = 24. msg.v2: Media.to_files = 22",
+      "behaviour": "Версии узла — множество содержимых, текущее — наибольшее по метке; хранится не больше 10 (с текущей), старшие и заменённые черновики — надгробия (не больше 32 на узел), их блобы стирает устройство загрузившего (надгробие получает загрузившего НОВОЙ версии — чужой блоб так не стереть). Правки одного устройства подряд в 10 минут от начала окна черновика — одна версия (решает движок при локальной правке, coalesce_local); возврат прежней версии — правка keep (не черновик). Копия файла собеседнику — сообщение-файл с Media.to_files в личный чат; устройство получателя с «Файлами» делает серверную копию блоба (cloud.blob.copy по секрету вложения, в свою квоту) узлом корня диска с from = автор и id из id сообщения; такой узел в корне показывается в «Доступных мне». Перенос в общую папку не делается; правки у владельца и получателя расходятся",
+      "status": "20 ноя 2026: движок (backend/protocol/src/domain/cloud.rs, тесты tests/cloud_domain.rs) и web — сделано; desktop и android — открыто (движок общий: версии сводятся и собираются; присланный копией файл они показывают обычным вложением, в свой диск не кладут)",
+      "clients": {
+        "web": "api/parvane/cloudVersions.ts (выбор и возврат версии), cloudReceived.ts (копия присланного в «Доступные мне», вызов из v2/controller.ts afterEngineRow), cloudDrive.ts (parvaneCloudSendToChat isCopyToFiles, parvaneCloudDownload fileId); components/parvane/cloud/CloudVersionsDialog.tsx (и меню заметки NoteView.tsx), CloudShareCopyDialog.tsx, Cloud.tsx («Доступные мне» → «Файлы»); сценарии scripts/e2e_web_cloud_share.mjs, e2e_web_notes_screens.mjs",
         "desktop": "открыто",
         "android": "открыто"
       }

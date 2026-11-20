@@ -658,8 +658,8 @@ export function createStateJournal(deps: Deps) {
   }
 
   /** Записать контейнер облака (множество по ссылке, запись целиком по метке). */
-  function recordCloudEntry(entry: CloudStateEntry) {
-    void serial(async () => {
+  function recordCloudEntry(entry: CloudStateEntry): Promise<void> {
+    return serial(async () => {
       const id = hexToB64(entry.id);
       if (!id) return;
       await put([{

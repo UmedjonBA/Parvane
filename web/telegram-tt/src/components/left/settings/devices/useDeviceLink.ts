@@ -18,9 +18,11 @@ export type LinkStatus = {
 
 export type LinkOffer = { deviceId: string; code?: string };
 
-// Ключ подписи устройств (T128, D-12): отозвано устройство, державшее его, — ключ обновляется корнем из копии
+// Ключ подписи устройств (T128, D-12): отозвано устройство, державшее его, — ключ обновляется корнем (`hasRoot` —
+// корень на устройстве, RECOVER-1 п. 8; иначе — из копии под ключом восстановления)
 export type SskState = {
-  isRotationNeeded: boolean; hasBackup: boolean; isEscrowCopyMissing?: boolean; canSendKeyToTelegram?: boolean;
+  isRotationNeeded: boolean; hasBackup: boolean; hasRoot?: boolean; isEscrowCopyMissing?: boolean;
+  canSendKeyToTelegram?: boolean;
 };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;

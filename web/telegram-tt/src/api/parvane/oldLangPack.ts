@@ -582,6 +582,12 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneSskRotationDone: 'Device signing key renewed.',
   ParvaneSskRotationBadKey: 'This recovery key does not match.',
   ParvaneSskRotationFailed: 'Could not renew the key. Try again later.',
+  ParvaneRenewKeyTextStored: 'Create a new recovery key? Your account root is on this device, so the old key is not '
+    + 'needed. The old key will stop working.',
+  ParvaneSskRotationTextStored: 'A removed device held the key that signs your devices. Your account root is on this '
+    + 'device — renew the key without a recovery key.',
+  ParvaneEscrowTextStored: 'Create a safety copy for the server administrator? If you lose your recovery key, the '
+    + 'administrator can issue a new one. Your account root is on this device — no recovery key needed.',
   ParvaneInviteInvalid: 'This invite link is invalid',
   ParvaneMediaTampered: 'This media file is damaged or was tampered with',
   ParvaneMediaUnverified: 'Could not verify this file — it opened without an integrity check',
@@ -1992,6 +1998,13 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneSskRotationDone: 'Ключ подписи устройств обновлён.',
   ParvaneSskRotationBadKey: 'Ключ восстановления не подходит.',
   ParvaneSskRotationFailed: 'Не удалось обновить ключ. Попробуйте позже.',
+  ParvaneRenewKeyTextStored: 'Создать новый ключ восстановления? Корень аккаунта есть на этом устройстве — старый '
+    + 'ключ не нужен. Старый ключ перестанет работать.',
+  ParvaneSskRotationTextStored: 'Удалённое устройство держало ключ, которым подписываются ваши устройства. Корень '
+    + 'аккаунта есть на этом устройстве — ключ обновится без ключа восстановления.',
+  ParvaneEscrowTextStored: 'Создать страховочную копию для администратора сервера? Если вы потеряете ключ '
+    + 'восстановления, администратор сможет выдать новый. Корень аккаунта есть на этом устройстве — ключ '
+    + 'восстановления не нужен.',
   ParvaneInviteInvalid: 'Ссылка-приглашение недействительна',
   ParvaneMediaTampered: 'Файл повреждён или подменён',
   ParvaneMediaUnverified: 'Не удалось проверить целостность файла — он открылся без проверки',

@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-import { dismissRecoveryKeyDialog, preparePage, waitForChatList } from './e2e_web_helpers.mjs';
+import {
+  dismissRecoveryKeyDialog, dumpDiagJournal, preparePage, waitForChatList,
+} from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-pwa-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -193,6 +195,13 @@ try {
   assert.equal(isAlive, true, 'живая страница отвечает service worker');
   console.log('OK: страница отвечает на вопрос service worker перед показом push');
   console.log('e2e_web_pwa: OK');
+} catch (err) {
+  const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+  for (const [index, failedPage] of browser.contexts().flatMap((context) => context.pages()).entries()) {
+    await failedPage.screenshot({ path: `${dir}pwa-${index}.png` }).catch(() => {});
+    await dumpDiagJournal(failedPage, `pwa-${index}`, 80);
+  }
+  throw err;
 } finally {
   await browser.close();
 }

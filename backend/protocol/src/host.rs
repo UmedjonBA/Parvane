@@ -369,7 +369,7 @@ pub fn group_info_value(c: &Client, gid: &[u8]) -> Result<Value, ProtoError> {
 /// Обёртка клиента для нативных хостов.
 pub struct HostClient {
     pub inner: Client,
-    /// Корень после createIdentity/importRootBackup — только в памяти (как у WASM-обвязки, C1-06).
+    /// Корень после createIdentity/importRootBackup; модель движка держит его и на диске (RECOVER-1 п. 8).
     root: Option<zeroize::Zeroizing<[u8; 32]>>,
     /// Подготовленная смена ника (spec 026) до ответа сервера.
     rename_plan: Option<crate::client::RenamePlan>,

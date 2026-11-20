@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
+import { cloudDriver } from './e2e_web_cloud_lib.mjs';
 import { dismissRecoveryKeyDialog, preparePage } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notes-screens-1';
@@ -207,7 +208,7 @@ try {
   await visible(menuItem('rename'), 'меню заметки');
   assert.deepEqual(
     await page.locator('[data-note-menu-list] [data-note-action]').evaluateAll((items) => items.map((item) => item.dataset.noteAction)),
-    ['rename', 'move', 'plan', 'pin', 'article', 'canvas', 'copy', 'delete'], 'состав меню заметки',
+    ['rename', 'move', 'plan', 'pin', 'article', 'canvas', 'copy', 'versions', 'delete'], 'состав меню заметки',
   );
   await shotBoth('desk-menu');
   await menuItem('rename').click();
@@ -225,6 +226,53 @@ try {
   await menuItem('copy').click();
   await visible(page.getByText('Link copied').first(), 'уведомление о скопированной ссылке');
   console.log('OK: меню заметки — переименовать, перенести, скопировать ссылку');
+
+  // ── История версий заметки (CLOUD-3): создание и правки одного устройства подряд — две версии ─────────
+  const versions = page.locator('[data-cloud-versions]');
+  const versionRows = versions.locator('[data-version]');
+  const versionCount = (count, what) => page.waitForFunction(
+    (wanted) => document.querySelectorAll('[data-cloud-versions] [data-version]').length === wanted, count,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail(what));
+  await bar.locator('[data-note-menu]').click();
+  await menuItem('versions').click();
+  await visible(versions, 'окно истории версий');
+  // Правки в окне черновика (10 минут одного устройства) — одна версия поверх созданной
+  await versionCount(2, 'в истории не текущая и созданная версии');
+  assert.equal(await versionRows.first().getAttribute('data-version-current'), 'true', 'первая строка — не текущая');
+  await shotBoth('desk-versions');
+  await versionRows.nth(1).locator('[data-version-open]').click();
+  await visible(versions.locator('[data-version-text]'), 'текст прежней версии');
+  await page.waitForFunction(
+    () => !/Загрузка|Loading/.test(document.querySelector('[data-cloud-versions] [data-version-text]')?.textContent || 'Loading'),
+    undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('текст прежней версии не загрузился'));
+  assert.ok(!(await versions.locator('[data-version-text]').innerText()).includes(WORD), 'в прежней версии уже есть правка');
+  // Вернуть прежнюю: правка уходит из заметки, она сама — в историю
+  await versionRows.nth(1).locator('[data-version-restore]').click();
+  await gone(body.getByText(WORD, { exact: false }), 'возврат версии не сменил текст заметки');
+  await versionCount(2, 'после возврата в истории не две версии');
+  // И обратно — правленную
+  await versionRows.nth(1).locator('[data-version-restore]').click();
+  await visible(body.getByText(WORD, { exact: false }), 'возврат правленной версии');
+  await page.keyboard.press('Escape');
+  await gone(versions, 'окно истории не закрылось');
+  // Та же история — у файла заметки в «Файлах»
+  await sidebar.getByRole('tab', { name: 'Files' }).click();
+  const files = cloudDriver(page);
+  await files.open();
+  await files.root();
+  const vault = (await files.names()).find((name) => ['Знания', 'Knowledge'].includes(name));
+  assert.ok(vault, 'нет папки хранилища заметок в «Файлах»');
+  await files.item(vault).click();
+  await files.item(FOLDER).click();
+  await files.menu(`${NOTE}.md`, 'Version history');
+  await versionCount(2, 'история файла заметки в «Файлах»');
+  await page.keyboard.press('Escape');
+  await gone(versions, 'окно истории «Файлов» не закрылось');
+  await sidebar.getByRole('tab', { name: 'Notes' }).click();
+  await visible(knowledge, '«Заметки» после «Файлов»');
+  console.log('OK: история версий заметки — открыть прежнюю, вернуть и обратно; та же история в «Файлах»');
 
   // ── «Отправить статьёй в чат» и «Добавить на холст» из меню ───────────────
   // Нарочно до шагов телефона: шторка холста, снятая вместе с заметкой при выборе, оставляла запись в истории, и

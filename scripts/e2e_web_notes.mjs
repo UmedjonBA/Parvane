@@ -1653,9 +1653,10 @@ try {
   console.log('OK: поиск по холсту — подсветка, приглушение, переезд к находке');
 
   // ── Телефон: список либо заметка, со стрелкой назад ───────────────────────
+  // К списку — до смены ширины: над открытым холстом на телефоне шапки модуля с видами нет
+  await openTab('Notes');
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
-  await openTab('Notes');
   // Заметка осталась открытой с широкого экрана: на телефоне виден либо список, либо она
   await visible(note.getByRole('button', { name: 'Back to notes' }), 'стрелка назад на телефоне');
   assert.equal(await row(NOTE).isVisible(), false, 'на телефоне список скрыт, пока открыта заметка');
@@ -1742,12 +1743,21 @@ try {
   const phoneBoard = knowledge.locator('[data-canvas-board]');
   await visible(phoneBoard, 'холст на телефоне');
   const hasX99Card = await phoneBoard.locator('[data-canvas-node]', { hasText: 'X99' }).count();
-  await knowledgeHeader.locator('[data-section-search-open]').click();
-  await headerSearch.fill('X99');
+  // Над открытым холстом телефона шапки модуля нет: поиск — из меню холста, строкой над ним
+  await knowledge.locator('[data-canvas-menu]').click();
+  await page.locator('[data-canvas-search]').click();
+  const canvasSearchRow = knowledge.locator('[data-canvas-search-row]');
+  await canvasSearchRow.locator('[data-section-search]').fill('X99');
   if (hasX99Card) {
     await visible(phoneBoard.locator('[data-search="found"]').first(), 'холст подсветил найденную карточку');
   }
-  await knowledgeHeader.locator('[data-section-search-close]').click();
+  await canvasSearchRow.locator('[data-section-search-close]').click();
+  await canvasSearchRow.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('поиск по холсту не закрылся'));
+  // С холста — к списку холстов, там шапка с видами на месте
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.history.back());
+  await visible(knowledge.locator('[data-canvas-list]'), 'список холстов после «назад»');
   await openTab('Graph');
   await visible(phoneGraph, 'граф после поиска на холсте');
   console.log(`OK: лупа в шапке ищет по вкладке (граф, холст${hasX99Card ? ' с находкой' : ''}), «назад» закрывает поиск`);

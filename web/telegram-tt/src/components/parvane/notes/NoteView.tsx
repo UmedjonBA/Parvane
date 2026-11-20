@@ -39,6 +39,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
+import CloudVersionsDialog from '../cloud/CloudVersionsDialog';
 import MarkdownBlocks from '../markdown/MarkdownBlocks';
 import CanvasFilePicker from './CanvasFilePicker';
 import NoteArticleDialog from './NoteArticleDialog';
@@ -123,7 +124,7 @@ const NoteView = ({
   const [isMenuOpen, openMenu, closeMenu] = useFlag();
   const [isCloudPickerOpen, openCloudPicker, closeCloudPicker] = useFlag();
   // Действие меню в своей шторке: статьёй в чат, на холст
-  const [menuSheet, setMenuSheet] = useState<'article' | 'canvas'>();
+  const [menuSheet, setMenuSheet] = useState<'article' | 'canvas' | 'versions'>();
   const [isConflictOpen, openConflict, closeConflict] = useFlag();
   const conflict = useDerivedState(getNoteConflicts).get(note.id);
   const isPinned = useDerivedState(getNotesMeta).pinned.includes(note.id);
@@ -357,6 +358,7 @@ const NoteView = ({
         break;
       case 'article':
       case 'canvas':
+      case 'versions':
         setMenuSheet(action);
         break;
       case 'copy':
@@ -503,6 +505,8 @@ const NoteView = ({
     items.push({ action: 'article', label: lang('KnowledgeSendArticle'), icon: 'chat' });
     items.push({ action: 'canvas', label: lang('KnowledgeAddToCanvas'), icon: 'board' });
     items.push({ action: 'copy', label: lang('KnowledgeCopyLink'), icon: 'link' });
+    // История версий заметки (CLOUD-3): тот же механизм, что у файлов «Файлов»
+    items.push({ action: 'versions', label: lang('ParvaneCloudVersions'), icon: 'restore' });
     items.push({
       action: 'delete', label: lang('KnowledgeDelete'), icon: 'trash', isDanger: true,
     });
@@ -828,6 +832,11 @@ const NoteView = ({
         </div>
       ) : renderReading()}
       <NoteArticleDialog note={menuSheet === 'article' ? note : undefined} onClose={closeMenuSheet} />
+      <CloudVersionsDialog
+        container={menuSheet === 'versions' ? driveId : undefined}
+        nodeId={note.id}
+        onClose={closeMenuSheet}
+      />
       <NoteCanvasSheet
         note={menuSheet === 'canvas' ? note : undefined}
         onOpenCanvas={onOpenCanvas}

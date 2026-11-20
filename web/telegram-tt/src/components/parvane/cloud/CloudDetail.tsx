@@ -135,6 +135,10 @@ const CloudDetail = ({
       {renderButton('download', lang('ParvaneCloudDownload'), kit.btnAcc)}
       {renderButton('open', lang('ParvaneCloudView'))}
       {renderButton('send', lang('ParvaneCloudSendToChat'))}
+      {renderButton('shareCopy', lang('ParvaneCloudShareCopy'))}
+      {Boolean(node.versions?.length) && renderButton(
+        'versions', lang('ParvaneCloudVersionsCount', { count: node.versions.length + 1 }),
+      )}
       {canEdit && renderButton('rename', lang('ParvaneCloudRename'))}
       {canEdit && !isFixed && renderButton('move', lang('ParvaneCloudMove'))}
       <span className={styles.detailSpace} />

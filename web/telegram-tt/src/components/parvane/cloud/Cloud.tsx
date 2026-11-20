@@ -21,8 +21,8 @@ import {
 import { formatFileSize } from '../../../util/textFormat';
 import { dropPlaceTitle } from './cloudDrop';
 import {
-  childrenOf, fileTypeLabel, folderStats, listedNodes, navTreeOf, pathOf, searchNodes, sortNodes, trashDaysLeft,
-  usageOf,
+  childrenOf, fileTypeLabel, folderStats, isReceivedNode, listedNodes, navTreeOf, pathOf, searchNodes, sortNodes,
+  trashDaysLeft, usageOf,
 } from './cloudModel';
 import {
   canEditContainer, copyCloudNode, createCloudFolder, createCloudFolderAt, downloadCloudNode, emptyCloudTrash,
@@ -64,9 +64,11 @@ import CloudNoteDialog from './CloudNoteDialog';
 import CloudPreview from './CloudPreview';
 import { CloudContainerRow, CloudInviteCard, CloudLinkRow } from './CloudRows';
 import CloudSendDialog from './CloudSendDialog';
+import CloudShareCopyDialog from './CloudShareCopyDialog';
 import CloudShareDialog from './CloudShareDialog';
 import CloudTransfers, { CLOUD_ERROR_KEYS } from './CloudTransfers';
 import CloudUsage, { getIsCloudAlmostFull } from './CloudUsage';
+import CloudVersionsDialog from './CloudVersionsDialog';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
@@ -93,7 +95,9 @@ type Dialog =
   | { type: 'leave'; container: string }
   | { type: 'link'; target: CloudLinkTarget }
   | { type: 'send'; entries: Entry[] }
-  | { type: 'note'; entry: Entry };
+  | { type: 'note'; entry: Entry }
+  | { type: 'versions'; entry: Entry }
+  | { type: 'shareCopy'; entry: Entry };
 
 const SORT_KEYS: CloudSortKey[] = ['name', 'date', 'size'];
 // Просмотр держит файл в памяти: на телефоне предел ниже
@@ -231,6 +235,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const sharedFolders = useMemo(() => (allContainers || []).filter((c) => c.kind === 'shared'), [allContainers]);
   const invites = useMemo(() => (allContainers || []).filter((c) => c.kind === 'invite'), [allContainers]);
   const trash = useMemo(() => getTrash(data), [data]);
+  // Файлы, присланные копией (CLOUD-3): корень диска, «Доступные мне» → «Файлы»
+  const driveId = data?.rootId;
+  const received = useMemo(() => getNodes(driveId, data).filter(isReceivedNode), [driveId, data]);
   // Счётчики папок (число детей, размер поддерева) — одним проходом по каждому контейнеру
   const statsByContainer = useMemo(() => new Map(
     (allContainers || []).map((c) => [c.id, folderStats(getNodes(c.id, data))]),
@@ -246,11 +253,17 @@ const Cloud = ({ isMobile }: OwnProps) => {
       return sortNodes(Array.from(owners.keys()), prefs.sort).map((node) => ({ container: owners.get(node)!, node }));
     }
     if (isTrash) return trash;
+    if (isSharedList) return sortNodes(received, prefs.sort).map((node) => ({ container: driveId!, node }));
     if (!containerId) return [];
-    // Служебные файлы Parvane (отметка справки в хранилище заметок) в списке не показываются
-    return sortNodes(childrenOf(listedNodes(nodes), place.folder), prefs.sort)
-      .map((node) => ({ container: containerId, node }));
-  }, [trimmedQuery, allContainers, data, prefs.sort, isTrash, trash, containerId, nodes, place.folder]);
+    // Служебные файлы Parvane (отметка справки в хранилище заметок) в списке не показываются; присланные копией
+    // лежат в корне диска, но показываются в «Доступных мне»
+    const isDriveRoot = containerId === driveId && !place.folder;
+    const shown = childrenOf(listedNodes(nodes), place.folder).filter((n) => !isDriveRoot || !isReceivedNode(n));
+    return sortNodes(shown, prefs.sort).map((node) => ({ container: containerId, node }));
+  }, [
+    trimmedQuery, allContainers, data, prefs.sort, isTrash, trash, isSharedList, received, driveId, containerId, nodes,
+    place.folder,
+  ]);
 
   // Куда можно переносить: личный диск и совместные папки с правом записи
   const movePlaces: CloudMovePlace[] = useMemo(() => (
@@ -274,10 +287,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
 
   const navCounts: CloudNavCounts = useMemo(() => ({
     owned: ownedFolders.length,
-    shared: sharedFolders.length + invites.length,
+    shared: sharedFolders.length + invites.length + received.length,
     links: links?.length || 0,
     trash: trash.length,
-  }), [ownedFolders, sharedFolders, invites, links, trash]);
+  }), [ownedFolders, sharedFolders, invites, received, links, trash]);
 
   const selectedEntries = entries.filter((e) => selected.includes(keyOf(e)));
   const current = !isNarrow && !isTrash && !selectedEntries.length
@@ -410,6 +423,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (action === 'share') setDialog({ type: 'shareFolder', entry });
     if (action === 'copy') void copyCloudNode(entryContainer, node);
     if (action === 'note') setDialog({ type: 'note', entry });
+    if (action === 'versions') setDialog({ type: 'versions', entry });
+    if (action === 'shareCopy') setDialog({ type: 'shareCopy', entry });
     if (action === 'link') {
       setDialog({ type: 'link', target: { source: { container: entryContainer, node: node.id, name: node.name } } });
     }
@@ -640,6 +655,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
       return link.expiresAt
         ? lang('ParvaneCloudAccessLinkUntil', { date: dayText(link.expiresAt) }) : lang('ParvaneCloudAccessLink');
     }
+    if (entry.node.from && entry.container === driveId) {
+      return lang('KnowledgeFilesFrom', { name: peerLabel(entry.node.from) });
+    }
     const c = getContainer(entry.container, data);
     if (!c || c.kind === 'root') return lang('KnowledgeFilesOnlyYou');
     if (c.kind !== 'owned') return lang('KnowledgeFilesFrom', { name: peerLabel(c.owner) });
@@ -699,6 +717,12 @@ const Cloud = ({ isMobile }: OwnProps) => {
       canEditThis && !isFixed && item('move', 'move', lang('ParvaneCloudMove')),
       canEditThis && !isFixed && item('copy', 'copy', lang('ParvaneCloudMakeCopy')),
       !isFolder && item('send', 'chat', lang('ParvaneCloudSendToChat')),
+      // Доступ к файлу копией и история версий (CLOUD-3)
+      !isFolder && item('shareCopy', 'users', lang('ParvaneCloudShareCopy')),
+      !isFolder && item(
+        'versions', 'restore', lang('ParvaneCloudVersions'), undefined,
+        entry.node.versions?.length ? String(entry.node.versions.length + 1) : undefined,
+      ),
       !isFolder && canAttachToNote && item('note', 'note', lang('ParvaneCloudAttachToNote')),
       IS_TOUCH_ENV && item('select', 'check', lang('ParvaneCloudSelect')),
       canEditThis && !isFixed && item('delete', 'trash', lang('ParvaneCloudToTrash'), true),
@@ -1002,6 +1026,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
           <div className={styles.list} role="list">
             {shownInvites?.map((c) => <CloudInviteCard key={c.id} info={c} />)}
             <CloudTransfers />
+            {isSharedList && received.length > 0 && Boolean(listedFolders?.length) && (
+              <h3 className={styles.caption}>{lang('ParvaneCloudSharedFolders')}</h3>
+            )}
             {listedFolders?.map((c) => (
               <CloudContainerRow
                 key={c.id}
@@ -1014,6 +1041,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
                 onMenu={handleContainerMenu}
               />
             ))}
+            {isSharedList && received.length > 0 && (
+              <h3 className={styles.caption} data-shared-files>{lang('ParvaneCloudSharedFiles')}</h3>
+            )}
             {isLinksList && links?.map((link) => (
               <CloudLinkRow key={link.id} link={link} isNarrow={isNarrow} onOpen={handleOpenLink} />
             ))}
@@ -1082,7 +1112,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
         {notice && (
           <div className={styles.notice} role="alert" onClick={hideCloudNotice}>
             {notice.code === 'saved' ? lang('ParvaneCloudSavedToCloud')
-              : notice.code === 'sent' ? lang('ParvaneCloudSentToChat') : lang(CLOUD_ERROR_KEYS[notice.code])}
+              : notice.code === 'sent' ? lang('ParvaneCloudSentToChat')
+                : notice.code === 'copySent' ? lang('ParvaneCloudCopySent')
+                  : notice.code === 'restored' ? lang('ParvaneCloudVersionRestored')
+                    : lang(CLOUD_ERROR_KEYS[notice.code])}
           </div>
         )}
       </div>
@@ -1189,6 +1222,16 @@ const Cloud = ({ isMobile }: OwnProps) => {
         onClose={handleCloseDialog}
       />
       <CloudNoteDialog entry={dialog?.type === 'note' ? dialog.entry : undefined} onClose={handleCloseDialog} />
+      <CloudVersionsDialog
+        container={dialog?.type === 'versions' ? dialog.entry.container : undefined}
+        nodeId={dialog?.type === 'versions' ? dialog.entry.node.id : undefined}
+        onOpen={handlePreviewNavigate}
+        onClose={handleCloseDialog}
+      />
+      <CloudShareCopyDialog
+        entry={dialog?.type === 'shareCopy' ? dialog.entry : undefined}
+        onClose={handleCloseDialog}
+      />
       <CloudPreview
         container={preview?.container}
         node={preview?.node}

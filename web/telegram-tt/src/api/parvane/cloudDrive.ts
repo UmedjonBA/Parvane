@@ -18,6 +18,7 @@ import {
   LINK_MAX_FILES, LINK_MAX_THUMBS, LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, type LinkManifestThumb, newLinkKey,
   openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
+import { createCloudVersions, pickCloudVersion } from './cloudVersions';
 
 // Parvane (spec 016): методы провайдера раздела «Облако». Дерево и доступ — в
 // движке (`v2/cloud.ts`), содержимое файлов — потоковые блобы (`cloudBlobs.ts`);
@@ -46,6 +47,13 @@ export type CloudNodeJson = {
   trashedAt: number;
   blob?: CloudBlobInfo;
   thumb?: CloudThumbInfo;
+  // Файл прислан собеседником копией (CLOUD-3): его адрес; пусто — свой
+  from?: string;
+  // Прежние версии, от новой к старой (CLOUD-3)
+  versions?: CloudVersionJson[];
+};
+export type CloudVersionJson = {
+  blob: CloudBlobInfo; thumb?: CloudThumbInfo; mtime: number; size: number; device: string;
 };
 export type CloudStateJson = { name: string; count: number; nodes: CloudNodeJson[] };
 export type CloudDriveState = {
@@ -95,7 +103,11 @@ export type CloudResult<T = object> = ({ ok: true } & T) | { ok: false; error: C
 
 export type CloudMoveItem = { id: string; name: string };
 export type CloudChatFile = { fileId: string; name: string; mime: string; size: number };
-type SentFile = CloudBlobKeys & { fileId: string; name: string; mime: string; size: number; caption?: string };
+type SentFile = CloudBlobKeys & {
+  fileId: string; name: string; mime: string; size: number; caption?: string;
+  // Доступ к файлу копией (CLOUD-3): получатель кладёт копию в «Доступные мне»
+  isCopyToFiles?: boolean;
+};
 
 type Deps = {
   log: (message: string) => void;
@@ -879,6 +891,16 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
   }
 
   return {
+    // История версий (CLOUD-3)
+    ...createCloudVersions({
+      log: deps.log,
+      self: deps.self,
+      cloud: deps.cloud,
+      findNode,
+      copyBlob: (fileId, capability) => copyDriveBlob(fileId, capability),
+      errorOf,
+    }),
+
     /** Состояние раздела; первый вызов запускает подключение и синхронизацию. */
     parvaneCloudState(): Promise<CloudDriveState> {
       const cloud = deps.cloud();
@@ -954,11 +976,13 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       return Promise.resolve(true);
     },
 
-    /** Скачать файл: в выбранный файл на диске (`handle`) либо в память. */
-    async parvaneCloudDownload({ container, node, handle, transferId }: {
-      container: string; node: string; handle?: FileSystemFileHandle; transferId: string;
+    /** Скачать файл: в выбранный файл на диске (`handle`) либо в память; `fileId` — прежняя версия (CLOUD-3). */
+    async parvaneCloudDownload({
+      container, node, handle, transferId, fileId,
+    }: {
+      container: string; node: string; handle?: FileSystemFileHandle; transferId: string; fileId?: string;
     }): Promise<CloudResult<{ blob?: Blob; name: string }>> {
-      const found = findNode(container, node);
+      const found = pickCloudVersion(findNode(container, node), fileId);
       if (!found?.blob) return { ok: false, error: 'not-found' };
       const abort = new AbortController();
       downloads.set(transferId, abort);
@@ -1411,11 +1435,12 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       }
     },
 
-    /** Файлы облака — в чат: копия блоба в медиа чатов и сообщение-файл. */
+    /** Файлы облака — в чат: копия блоба в медиа чатов и сообщение-файл. `isCopyToFiles` — доступ к файлу
+     * копией (CLOUD-3): получатель кладёт копию в «Доступные мне», дальше правки у каждого свои. */
     async parvaneCloudSendToChat({
-      container, nodes, chatId, caption,
+      container, nodes, chatId, caption, isCopyToFiles,
     }: {
-      container: string; nodes: string[]; chatId: string; caption?: string;
+      container: string; nodes: string[]; chatId: string; caption?: string; isCopyToFiles?: boolean;
     }): Promise<CloudResult<{ sent: number }>> {
       let sent = 0;
       try {
@@ -1441,6 +1466,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
             size: found.size,
             // Подпись — у первого файла, как у альбома
             caption: sent === 0 ? caption : undefined,
+            isCopyToFiles,
           });
           if (!isSent) throw new V2Error('ERROR_CODE_NOT_FOUND');
           sent += 1;

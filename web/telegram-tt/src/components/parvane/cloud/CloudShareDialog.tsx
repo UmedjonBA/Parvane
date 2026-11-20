@@ -7,7 +7,7 @@ import type { CloudRole } from '../../../api/parvane/v2/cloud';
 
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
-import { validateName } from './cloudModel';
+import { addressOfNick, validateName } from './cloudModel';
 import {
   getCloudData, getCloudLinks, getCloudPlace, getContainer, linkOfSource, peerLabel, setCloudPlace, showCloudNotice,
   unshareCloudFolder,
@@ -51,14 +51,6 @@ function nameOf(address: string) {
 
 function initialOf(name: string) {
   return (Array.from(name)[0] || '').toUpperCase();
-}
-
-/** Адрес из поля «Ник собеседника»: `@nick` — свой сервер, `nick@сервер` — как есть; пусто — `undefined`. */
-function addressOfNick(text: string, selfDomain?: string) {
-  const nick = text.trim().replace(/^@/, '');
-  if (!nick || /\s/.test(nick)) return undefined;
-  if (nick.includes('@')) return nick;
-  return selfDomain ? `${nick}@${selfDomain}` : undefined;
 }
 
 // Шторка доступа к совместной папке: создание, участники и их права «Просмотр / Правка» (владелец),

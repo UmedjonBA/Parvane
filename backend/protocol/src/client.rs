@@ -745,7 +745,7 @@ impl Client {
 
     /// C1-06: резервная копия корня под ключом восстановления (≥ 128 бит,
     /// [`crate::recovery::RecoveryKey::generate`]). Корень сверяется с журналом
-    /// устройств; после подтверждения копии хост удаляет корень с устройства.
+    /// устройств.
     pub fn export_root_backup(&self, root_secret: &[u8; 32], key: &crate::recovery::RecoveryKey) -> Result<Vec<u8>> {
         if SigningKey::from_bytes(root_secret).verifying_key().to_bytes() != self.own_log.root_key {
             return Err(ProtoError::RootMismatch);
@@ -2159,6 +2159,12 @@ impl Client {
     pub fn rotate_ssk_with_secret(&mut self, root_secret: &[u8; 32]) -> Result<Vec<OutRequest>> {
         let root = RootIdentity { user: self.user.clone(), root: SigningKey::from_bytes(root_secret), self_signing: sign::generate_signing_key() };
         self.rotate_ssk(&root)
+    }
+
+    /// Корень — корень своего журнала устройств (журнал есть, его корень — этот): такой корень устройство держит
+    /// у себя (RECOVER-1 п. 8); чужой либо прежний (личность сброшена) — нет.
+    pub fn owns_root(&self, root_secret: &[u8; 32]) -> bool {
+        self.own_log.version > 0 && SigningKey::from_bytes(root_secret).verifying_key().to_bytes() == self.own_log.root_key
     }
 
     /// Свой SSK раскрыт (отозвано устройство, державшее его) и ещё не сменён:

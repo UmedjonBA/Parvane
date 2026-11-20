@@ -1,7 +1,7 @@
 //! spec 035 (T113, T125, T135; contracts/engine-api.md): клиентское ядро живёт в модели движка. Хост не держит
 //! прежний клиент (`PvClient` / `pv_client_*`): действия клиента — вызов `clientCall` модели теми же именами и
 //! аргументами, что единая точка входа нативных хостов (`host::call`), состояние клиента — в хранилище модели
-//! (переживает перезапуск, корень — только в памяти), события сервера — `ingest`.
+//! (переживает перезапуск, корень своего журнала — тоже, RECOVER-1 п. 8), события сервера — `ingest`.
 //!
 //! Режим хоста (`host_driven`, переходный период T113/T125/T135): историю и показ ведёт хост, модель отдаёт ему
 //! события записей инбокса (`client_events`) и нужды, которые добирает хост (`needs{kind: client}`); запись,
@@ -172,10 +172,10 @@ fn client_lives_in_the_model_and_survives_reopen() {
     assert_eq!(cc(&mut e, "selfAddress", json!({})).unwrap(), json!("alice@local"));
     let st = flush(&mut host, &mut e);
     assert!(st.puts.contains(&"engine-core".to_string()), "состояние клиента — в пачке хранилища модели: {:?}", st.puts);
-    // Перезапуск над тем же хранилищем: личность та же, корень на диск не попал (C1-06)
+    // Перезапуск над тем же хранилищем: личность та же, корень своего журнала — тоже (RECOVER-1 п. 8)
     let (mut e2, _) = host.open(&cfg("alice@local", 3));
     assert_eq!(cc(&mut e2, "logVersion", json!({"user": "alice@local"})).unwrap().as_u64().unwrap(), v);
-    assert_eq!(cc(&mut e2, "hasRoot", json!({})).unwrap(), json!(false), "корень — только в памяти");
+    assert_eq!(cc(&mut e2, "hasRoot", json!({})).unwrap(), json!(true), "корень пережил перезапуск");
     // Чтение клиента состояние не меняет — пачки нет
     let st = flush(&mut host, &mut e2);
     assert_eq!(st.batches, 0, "чтение не пишет на диск: {:?}", st.puts);
@@ -183,6 +183,65 @@ fn client_lives_in_the_model_and_survives_reopen() {
     cc(&mut e2, "ensureStateKey", json!({})).unwrap();
     let st = flush(&mut host, &mut e2);
     assert!(st.puts.contains(&"engine-core".to_string()));
+}
+
+/// Ключи хранилища с записью корня (`g<поколение>/engine-core/root`).
+fn root_keys(host: &Host) -> Vec<String> {
+    host.store.keys().filter(|k| k.ends_with("/engine-core/root")).cloned().collect()
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn root_is_kept_on_disk_only_sealed_and_only_for_own_log() {
+    let mut srv = Server::default();
+    let mut host = Host::default();
+    let (mut e, _) = host.open(&cfg("alice@local", 3));
+    let created = act(&mut e, &mut srv, "alice@local", "createIdentity", json!({"otkCount": 5}));
+    let secret = b64d(created["rootSecret"].as_str().unwrap());
+    flush(&mut host, &mut e);
+    assert_eq!(root_keys(&host).len(), 1, "корень — своей записью хранилища: {:?}", host.store.keys().collect::<Vec<_>>());
+    // Под DEK хранилища: открытого корня на носителе нет ни в одной записи
+    assert!(host.store.values().all(|v| !contains(v, &secret)), "корень на носителе открытым текстом");
+    // Другим ключом устройства хранилище не открывается — и корень с ним
+    let (mut locked, _) = host.clone().open(&cfg("alice@local", 9));
+    assert!(cc(&mut locked, "hasRoot", json!({})).is_err(), "запертое хранилище корень не отдаёт");
+    // Грант привязки корень не несёт (его получают только открытым копией либо созданием)
+    let mat = b64d(cc(&mut e, "linkGrantMaterial", json!({})).unwrap().as_str().unwrap());
+    assert!(!contains(&mat, &secret) && !contains(&mat, hex::encode(&secret).as_bytes()), "корень в гранте привязки");
+    // Корень, открытый на этом устройстве, переживает перезапуск и даёт сменить SSK без ключа восстановления
+    let (mut e2, _) = host.open(&cfg("alice@local", 3));
+    assert_eq!(cc(&mut e2, "hasRoot", json!({})).unwrap(), json!(true));
+    let rotated = act(&mut e2, &mut srv, "alice@local", "rotateSsk", json!({}));
+    assert!(rotated.as_array().is_some_and(|r| !r.is_empty()), "смена SSK сохранённым корнем: {rotated}");
+    // Забыть корень — стереть и с диска
+    cc(&mut e2, "forgetRoot", json!({})).unwrap();
+    let st = flush(&mut host, &mut e2);
+    assert!(st.deletes.contains(&"engine-core".to_string()) && root_keys(&host).is_empty(), "{:?}", st.deletes);
+    let (mut e3, _) = host.open(&cfg("alice@local", 3));
+    assert_eq!(cc(&mut e3, "hasRoot", json!({})).unwrap(), json!(false));
+}
+
+#[test]
+fn root_goes_with_a_fresh_device_and_foreign_root_is_not_kept() {
+    let mut srv = Server::default();
+    let mut host = Host::default();
+    let mut e = identity(&mut host, &mut srv, "alice@local", 3);
+    let key = cc(&mut e, "generateRecoveryKey", json!({})).unwrap();
+    let backup = cc(&mut e, "exportRootBackup", json!({"recoveryKey": key})).unwrap();
+    flush(&mut host, &mut e);
+    assert_eq!(root_keys(&host).len(), 1);
+    // Новое устройство (сброс, привязка заново): корня нет ни в памяти, ни на диске
+    raw(&mut e, "clientReplace", &json!({"mode": "new"}));
+    flush(&mut host, &mut e);
+    assert!(root_keys(&host).is_empty(), "корень прежнего устройства остался на диске");
+    // Корень, открытый копией до вступления в журнал, — ещё не корень своего журнала: не на диск и не `hasRoot`
+    cc(&mut e, "importRootBackupFor", json!({"blob": backup, "recoveryKey": key})).unwrap();
+    assert_eq!(cc(&mut e, "hasRoot", json!({})).unwrap(), json!(false));
+    flush(&mut host, &mut e);
+    assert!(root_keys(&host).is_empty(), "корень без своего журнала записан");
 }
 
 #[test]

@@ -20,7 +20,7 @@ import PvIcon from '../notes/PvIcon';
 import styles from './Cloud.module.scss';
 
 export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send'
-  | 'share' | 'select' | 'link' | 'copy' | 'note';
+  | 'share' | 'select' | 'link' | 'copy' | 'note' | 'versions' | 'shareCopy';
 
 type OwnProps = {
   container: string;

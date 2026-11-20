@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf, fileTypeLabel,
-  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, navTreeOf, normalizeName, pathOf, searchNodes,
-  sizeOf, sortNodes,
-  subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
+  addressOfNick, canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf,
+  fileTypeLabel, folderStats, freeName, isReceivedNode, isServiceNode, kindOfFile, listedNodes, namesIn, navTreeOf,
+  normalizeName, pathOf, searchNodes, sizeOf, sortNodes, subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
 function node(
@@ -250,5 +249,22 @@ describe('облако: служебные файлы Parvane', () => {
     expect(navTreeOf(tree, 'b').map((r) => `${r.depth}:${r.name}`)).toEqual([
       '0:Бэкапы', '0:Документы', '1:Архив', '2:Вложенная',
     ]);
+  });
+});
+
+describe('облако: присланное копией и ник (CLOUD-3)', () => {
+  it('присланный файл в корне — «Доступные мне», в папке и в корзине — нет', () => {
+    expect(isReceivedNode(node('r', 'file', 'регламент.md', undefined, { from: 'aliya@local' }))).toBe(true);
+    expect(isReceivedNode(node('r', 'file', 'регламент.md', 'a', { from: 'aliya@local' }))).toBe(false);
+    expect(isReceivedNode(node('r', 'file', 'регламент.md', undefined, { from: 'aliya@local', trashed: true })))
+      .toBe(false);
+    expect(isReceivedNode(node('r', 'file', 'свой.md', undefined, { from: '' }))).toBe(false);
+  });
+
+  it('ник собеседника — адрес', () => {
+    expect(addressOfNick('@timur', 'local')).toBe('timur@local');
+    expect(addressOfNick('damir@far.example', 'local')).toBe('damir@far.example');
+    expect(addressOfNick('два слова', 'local')).toBeUndefined();
+    expect(addressOfNick('timur')).toBeUndefined();
   });
 });

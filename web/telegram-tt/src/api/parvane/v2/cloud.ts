@@ -81,8 +81,12 @@ type Deps = {
   deleteRecord: (key: string) => Promise<void>;
   /** Контейнеры облака из журнала личного состояния. */
   stateEntries: () => CloudStateEntry[];
-  /** Записать контейнер в журнал личного состояния. */
-  recordEntry: (entry: CloudStateEntry) => void;
+  /** Журнал личного состояния подключён. До него запись о контейнере некуда писать: «готово» транспорта
+   * наступает раньше подключения журнала, и диск, созданный в этом окне, оставался на сервере без записи —
+   * навсегда «свой контейнер без записи журнала», и любая правка диска отвергалась. Не задано — подключён. */
+  isStateReady?: () => boolean;
+  /** Записать контейнер в журнал личного состояния; обещание — запись принята журналом (либо не удалась). */
+  recordEntry: (entry: CloudStateEntry) => void | Promise<void>;
   /** Стереть свой блоб на сервере (файл удалён из облака окончательно). */
   deleteBlob: (fileId: string) => Promise<void>;
   /** Дерево, состав или статус изменились — UI перечитает. */
@@ -181,6 +185,8 @@ export function createCloudSync(deps: Deps) {
   let ownOnServer: number | undefined;
   // Свои контейнеры на сервере без записи журнала состояния (по последнему обходу): новый диск при них не заводим
   let ownWithoutEntry = 0;
+  /** Свои контейнеры сервера без записи журнала состояния. */
+  let ownOrphans: string[] = [];
   let lastError: string | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -440,7 +446,9 @@ export function createCloudSync(deps: Deps) {
       if (c.owner !== self && !onServer.has(c.id) && listed.has(domainOf(c.id).toLowerCase())) dropContainer(c.id);
     });
     ownOnServer = [...onServer.values()].filter((owner) => owner === self).length;
-    ownWithoutEntry = [...onServer].filter(([id, owner]) => owner === self && !entries.some((e) => e.id === id)).length;
+    ownOrphans = [...onServer].filter(([id, owner]) => owner === self && !entries.some((e) => e.id === id))
+      .map(([id]) => id);
+    ownWithoutEntry = ownOrphans.length;
     isDiscovered = true;
   }
 
@@ -454,19 +462,45 @@ export function createCloudSync(deps: Deps) {
     }
   }
 
+  function isStateReady() {
+    return deps.isStateReady?.() ?? true;
+  }
+
+  /** Дождаться подключения журнала личного состояния (не дольше `ROOT_ENTRY_WAIT_MS`). */
+  async function waitStateReady() {
+    const deadline = Date.now() + ROOT_ENTRY_WAIT_MS;
+    while (!isStateReady() && Date.now() < deadline) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, ROOT_ENTRY_POLL_MS);
+      });
+    }
+    return isStateReady();
+  }
+
   async function createContainer(role: 'root' | 'owned', name?: string): Promise<string> {
     const client = deps.client();
     if (!client || !deps.isReady()) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    if (!await waitStateReady()) {
+      deps.log('облако: контейнер не создан — журнал личного состояния не подключён');
+      throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    }
     const made = client.cloudCreate(Date.now()) as { id: string; request: OutReq };
+    // Ключ контейнера сохраняется до запроса: перезагрузка между ответом сервера и записью журнала оставляет
+    // контейнер без записи, и с ключом на устройстве он подхватывается заново (`ensureRoot`), а без ключа был бы
+    // потерян — и диск не создавался бы уже никогда
+    touch();
+    await deps.persist();
     try {
       await call(made.request.chan, made.request.method, made.request.body);
     } catch (e) {
       client.cloudForget(made.id);
+      touch();
+      await deps.persist();
       throw e;
     }
-    touch();
     outboxes.set(made.id, []);
-    deps.recordEntry({ id: made.id, domain: deps.serverDomain() || '', role });
+    // Запись журнала — до первой правки: перезагрузка сразу после создания иначе теряла её
+    await deps.recordEntry({ id: made.id, domain: deps.serverDomain() || '', role });
     isDirty = false;
     await deps.persist();
     deps.log(`облако: контейнер создан (${made.id.slice(0, 8)}…, ${role})`);
@@ -485,6 +519,9 @@ export function createCloudSync(deps: Deps) {
       return undefined;
     }
     if (!createIfMissing) return undefined;
+    // Без журнала состояния записи о дисках других своих устройств не видны, а запись о новом некуда писать
+    if (!await waitStateReady()) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    if (rootId()) return ensureRoot(false);
     // Новый диск — только когда его точно нет: свой контейнер без записи журнала состояния может оказаться диском,
     // запись которого ещё не дочитана. Второй диск с меньшим id подменил бы настоящий на всех устройствах
     await discover();
@@ -499,6 +536,17 @@ export function createCloudSync(deps: Deps) {
       await discover();
     }
     if (rootId()) return ensureRoot(false);
+    // Контейнер без записи, ключ которого есть на этом устройстве, создан здесь же, а запись о нём не успела уйти
+    // (перезагрузка сразу после создания): это не диск другого устройства — он и становится личным диском
+    const adopted = ownOrphans.filter((id) => client.cloudHasKey(id)).sort()[0];
+    if (adopted) {
+      await deps.recordEntry({ id: adopted, domain: deps.serverDomain() || '', role: 'root' });
+      deps.log(`облако: контейнер ${adopted.slice(0, 8)}… без записи журнала подхвачен личным диском`);
+      await discover();
+      const root = await ensureRoot(false);
+      if (root) await shareWithOwnDevices(root);
+      return root;
+    }
     if (ownWithoutEntry > 0) {
       deps.log('облако: личный диск не создан — на сервере есть свой контейнер без записи журнала состояния');
       throw new V2Error('ERROR_CODE_UNAVAILABLE');
@@ -888,6 +936,8 @@ export function createCloudSync(deps: Deps) {
     return serial(async (): Promise<CloudDriveCheck> => {
       const client = deps.client();
       if (!client || !deps.isReady() || deps.needsLinking() || status !== 'ready') return 'unknown';
+      // Журнал состояния ещё не подключён: «диска нет» судить рано
+      if (!isStateReady()) return 'unknown';
       try {
         const root = rootId();
         if (!root) {

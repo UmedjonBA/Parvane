@@ -648,8 +648,7 @@ export async function restoreGuide(): Promise<string | undefined> {
   if (!options) return undefined;
   // Справку может прямо сейчас создавать само хранилище
   await guideRun;
-  const existing = findGuideOverview(getNotes());
-  if (existing) return existing.id;
+  // «Обзор» на месте — ещё не вся справка: удалённые заметки дописывает план, существующие он не трогает
   const run = (async () => {
     const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as GuideDrive | undefined;
     return check && check !== 'unknown' ? writeGuide('restore', check, options) : undefined;

@@ -55,10 +55,13 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
   const [isRenewOpen, setIsRenewOpen] = useState(false);
   const [contents, setContents] = useState<KeyBundleContents>();
   const [isContentsLoaded, setIsContentsLoaded] = useState(false);
+  // Корень аккаунта на устройстве (RECOVER-1 п. 8): новый ключ создаётся без прежнего
+  const [hasRoot, setHasRoot] = useState(false);
 
   useHistoryBack({ isActive, onBack: onReset });
 
   const loadContents = useLastCallback(async () => {
+    setHasRoot(Boolean(await callParvane('parvaneHasStoredRoot')));
     const result = await callParvane('parvaneKeyBundleContents') as KeyBundleContents | undefined;
     setContents(result);
     setIsContentsLoaded(true);
@@ -170,7 +173,12 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
       )}
       <div className={styles.hint}>{lang('ParvaneKeysBundleHint')}</div>
 
-      <DeviceKeyDialog mode={isRenewOpen ? 'renew' : undefined} onClose={closeRenew} onDone={loadContents} />
+      <DeviceKeyDialog
+        mode={isRenewOpen ? 'renew' : undefined}
+        hasRoot={hasRoot}
+        onClose={closeRenew}
+        onDone={loadContents}
+      />
     </div>
   );
 };

@@ -7,7 +7,10 @@
 //!     побеждает меньшая метка);
 //!   - «родитель + имя», «содержимое», «корзина» — LWW-регистры по метке
 //!     `(lamport, device_id)`, при равных метках — по содержимому;
-//!   - purge — необратимое надгробие, стирает узел со всеми потомками.
+//!   - purge — необратимое надгробие, стирает узел со всеми потомками;
+//!   - история версий (CLOUD-3): все известные содержимые узла, не больше
+//!     `VERSIONS_KEEP` (текущее — наибольшее по метке); вытесненные и заменённые
+//!     черновики — надгробия `gone` (их блобы стирает устройство загрузившего).
 //! Узел существует только после создания: регистры узла без создания хранятся,
 //! но в дереве его нет. Видимое дерево (`view`) строится из регистров: узел,
 //! чей родитель неизвестен или не папка, показывается в корне; в цикле
@@ -22,7 +25,8 @@ use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::cloud::v1::{
-    cloud_op, CloudBatch, CloudBlobRef, CloudCreate, CloudEntry, CloudMeta, CloudNodeKind, CloudOp, CloudSnapshot, CloudThumb,
+    cloud_op, CloudBatch, CloudBlobRef, CloudCreate, CloudEntry, CloudGone, CloudMeta, CloudNodeKind, CloudOp, CloudSnapshot,
+    CloudThumb, CloudVersion,
 };
 
 pub const DOMAIN_NAME: &str = "cloud.v1";
@@ -33,6 +37,12 @@ pub const MAX_NODES: usize = 8000;
 /// Сколько живёт в снимке надгробие стёртого узла.
 pub const PURGED_KEEP_MS: u64 = 90 * 24 * 3600 * 1000;
 pub const MAX_NAME_BYTES: usize = 255;
+/// Сколько версий файла хранится (с текущей, CLOUD-3); старше — надгробия, блобы стираются.
+pub const VERSIONS_KEEP: usize = 10;
+/// Сколько надгробий версий хранит узел (новейшие по метке).
+pub const GONE_KEEP: usize = 32;
+/// Окно черновика: правки одного устройства подряд в эти минуты от начала окна — одна версия.
+pub const DRAFT_WINDOW_MS: u64 = 10 * 60 * 1000;
 
 pub type NodeId = [u8; 16];
 
@@ -94,8 +104,8 @@ struct Place {
     name: String,
 }
 
-/// Регистр содержимого файла; `bytes` — каноничная запись для порядка при
-/// равных метках.
+/// Одна версия содержимого файла; `bytes` — каноничная запись для порядка при
+/// равных метках. `draft_since_ms` — начало окна черновика (0 — не черновик).
 #[derive(Debug, Clone, PartialEq)]
 struct Body {
     stamp: Stamp,
@@ -103,13 +113,44 @@ struct Body {
     blob: CloudBlobRef,
     thumb: Option<CloudThumb>,
     mtime_ms: u64,
+    draft_since_ms: u64,
+}
+
+impl Body {
+    fn key(&self) -> (&Stamp, &Vec<u8>) {
+        (&self.stamp, &self.bytes)
+    }
+
+    fn file_ids(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.blob.file_id.as_str()).chain(self.thumb.as_ref().map(|t| t.file_id.as_str()))
+    }
+
+    fn gone(&self) -> Vec<Gone> {
+        self.file_ids().map(|f| Gone { stamp: self.stamp.clone(), file_id: f.to_string(), uploader: self.blob.uploader.clone() }).collect()
+    }
 }
 
 fn body(stamp: Stamp, blob: &CloudBlobRef, thumb: Option<&CloudThumb>, mtime_ms: u64) -> Body {
     let mut bytes = blob.encode_to_vec();
     bytes.extend(thumb.map(Message::encode_to_vec).unwrap_or_default());
     bytes.extend(mtime_ms.to_be_bytes());
-    Body { stamp, bytes, blob: blob.clone(), thumb: thumb.cloned(), mtime_ms }
+    Body { stamp, bytes, blob: blob.clone(), thumb: thumb.cloned(), mtime_ms, draft_since_ms: 0 }
+}
+
+/// Надгробие версии: блоб `file_id` больше не версия узла.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Gone {
+    stamp: Stamp,
+    file_id: String,
+    uploader: String,
+}
+
+/// Создание узла: метка, вид и от кого файл прислан (пусто — свой).
+#[derive(Debug, Clone, PartialEq)]
+struct Created {
+    stamp: Stamp,
+    kind: CloudNodeKind,
+    from: String,
 }
 
 /// Регистр корзины.
@@ -122,13 +163,66 @@ struct Trash {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Node {
-    /// Метка и вид создания; `None` — узел ещё не создан.
-    created: Option<(Stamp, CloudNodeKind)>,
+    /// Создание; `None` — узел ещё не создан.
+    created: Option<Created>,
     place: Option<Place>,
-    body: Option<Body>,
+    /// Версии содержимого от новой к старой (первая — текущая), не больше `VERSIONS_KEEP`.
+    bodies: Vec<Body>,
+    /// Надгробия версий от новых к старым, не больше `GONE_KEEP`, по одному на блоб.
+    gone: Vec<Gone>,
     trash: Option<Trash>,
     /// Время окончательного удаления (наименьшее из пришедших).
     purged_at: Option<u64>,
+}
+
+impl Node {
+    fn body(&self) -> Option<&Body> {
+        self.bodies.first()
+    }
+
+    fn add_gone(&mut self, g: Gone) {
+        match self.gone.iter_mut().find(|x| x.file_id == g.file_id) {
+            Some(cur) if *cur >= g => {}
+            Some(cur) => *cur = g,
+            None => self.gone.push(g),
+        }
+    }
+
+    /// Новая версия; `supersedes` — блобы черновика, который она заменяет. Итог не зависит от порядка:
+    /// версии — множество, из него убираются надгробные блобы и повторы, остаются новейшие.
+    fn put_body(&mut self, value: Body, supersedes: &[String]) {
+        for f in supersedes.iter().filter(|f| **f != value.blob.file_id) {
+            self.add_gone(Gone { stamp: value.stamp.clone(), file_id: f.clone(), uploader: value.blob.uploader.clone() });
+        }
+        self.bodies.push(value);
+        self.normalize();
+    }
+
+    fn normalize(&mut self) {
+        self.bodies.sort_by(|a, b| b.key().cmp(&a.key()));
+        // Один блоб — одна версия (новейшая запись: дописанная миниатюра, возврат прежней версии)
+        let mut seen = BTreeSet::new();
+        self.bodies.retain(|b| seen.insert(b.blob.file_id.clone()));
+        let mut evicted: Vec<Body> = Vec::new();
+        let gone: BTreeSet<String> = self.gone.iter().map(|g| g.file_id.clone()).collect();
+        self.bodies.retain(|b| !gone.contains(&b.blob.file_id));
+        if self.bodies.len() > VERSIONS_KEEP {
+            evicted.extend(self.bodies.split_off(VERSIONS_KEEP));
+        }
+        for b in evicted {
+            for g in b.gone() {
+                self.add_gone(g);
+            }
+        }
+        self.gone.sort_by(|a, b| b.cmp(a));
+        self.gone.truncate(GONE_KEEP);
+    }
+
+    /// Надгробные блобы, на которые не ссылается ни одна версия узла.
+    fn gone_blobs(&self) -> impl Iterator<Item = &Gone> {
+        let live: BTreeSet<&str> = self.bodies.iter().flat_map(Body::file_ids).collect();
+        self.gone.iter().filter(move |g| !live.contains(g.file_id.as_str()))
+    }
 }
 
 fn put_max<T: PartialOrd>(slot: &mut Option<T>, value: T) {
@@ -138,17 +232,10 @@ fn put_max<T: PartialOrd>(slot: &mut Option<T>, value: T) {
     }
 }
 
-/// Создание: побеждает меньшая метка (при равных — меньший вид).
-fn put_created(slot: &mut Option<(Stamp, CloudNodeKind)>, value: (Stamp, CloudNodeKind)) {
+/// Создание: побеждает меньшая метка (при равных — меньший вид, затем меньший `from`).
+fn put_created(slot: &mut Option<Created>, value: Created) {
     match slot {
-        Some((stamp, kind)) if (&*stamp, *kind as i32) <= (&value.0, value.1 as i32) => {}
-        _ => *slot = Some(value),
-    }
-}
-
-fn put_body(slot: &mut Option<Body>, value: Body) {
-    match slot {
-        Some(cur) if (&cur.stamp, &cur.bytes) >= (&value.stamp, &value.bytes) => {}
+        Some(c) if (&c.stamp, c.kind as i32, &c.from) <= (&value.stamp, value.kind as i32, &value.from) => {}
         _ => *slot = Some(value),
     }
 }
@@ -170,6 +257,20 @@ pub struct ViewNode {
     /// В корзину положен именно этот узел.
     pub trash_top: bool,
     pub trashed_at_ms: u64,
+    /// Прежние версии файла, от новой к старой (CLOUD-3).
+    pub versions: Vec<ViewVersion>,
+    /// Файл прислан собеседником (адрес); пусто — свой.
+    pub from: String,
+}
+
+/// Прежняя версия файла в видимом дереве.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewVersion {
+    pub blob: CloudBlobRef,
+    pub thumb: Option<CloudThumb>,
+    pub mtime_ms: u64,
+    /// Устройство, записавшее версию.
+    pub device: String,
 }
 
 /// Блоб стёртого узла: стирает его устройство владельца блоба.
@@ -215,11 +316,14 @@ impl CloudState {
             }
             _ => return Err(ProtoError::InvalidField("kind")),
         }
+        if c.from.len() > MAX_NAME_BYTES {
+            return Err(ProtoError::InvalidField("from"));
+        }
         let node = self.node(id);
-        put_created(&mut node.created, (stamp.clone(), kind));
+        put_created(&mut node.created, Created { stamp: stamp.clone(), kind, from: c.from.clone() });
         put_max(&mut node.place, Place { stamp: stamp.clone(), parent, name: c.name.clone() });
         if let Some(blob) = &c.blob {
-            put_body(&mut node.body, body(stamp, blob, c.thumb.as_ref(), c.mtime_ms));
+            node.put_body(body(stamp, blob, c.thumb.as_ref(), c.mtime_ms), &[]);
         }
         Ok(())
     }
@@ -242,7 +346,11 @@ impl CloudState {
                 let blob = s.blob.as_ref().ok_or(ProtoError::InvalidField("blob"))?;
                 check_blob(blob)?;
                 s.thumb.as_ref().map(check_thumb).transpose()?;
-                put_body(&mut self.node(id).body, body(stamp, blob, s.thumb.as_ref(), s.mtime_ms));
+                if s.supersedes.len() > 2 || s.supersedes.iter().any(|f| f.is_empty() || f.len() > 64) {
+                    return Err(ProtoError::InvalidField("supersedes"));
+                }
+                let value = Body { draft_since_ms: s.draft_since_ms, ..body(stamp, blob, s.thumb.as_ref(), s.mtime_ms) };
+                self.node(id).put_body(value, &s.supersedes);
             }
             cloud_op::Op::Trash(t) => {
                 let id = node_id(&t.node_id)?;
@@ -304,7 +412,37 @@ impl CloudState {
     }
 
     fn is_folder(&self, id: &NodeId) -> bool {
-        self.nodes.get(id).and_then(|n| n.created.as_ref()).is_some_and(|(_, k)| *k == CloudNodeKind::Folder)
+        self.nodes.get(id).and_then(|n| n.created.as_ref()).is_some_and(|c| c.kind == CloudNodeKind::Folder)
+    }
+
+    /// Локальная правка содержимого — версия истории (CLOUD-3): правка того же устройства в окне черновика
+    /// заменяет черновик (`supersedes`), иначе остаётся отдельной версией. `keep` — версия не черновая
+    /// (возврат прежней версии): её следующая правка не заменит. Вызывается до меток (`stamp_batch`).
+    pub fn coalesce_local(&self, batch: &mut CloudBatch, device_id: &str, keep: &BTreeSet<usize>) {
+        for (i, op) in batch.ops.iter_mut().enumerate() {
+            let Some(cloud_op::Op::SetBlob(s)) = op.op.as_mut() else { continue };
+            s.supersedes.clear();
+            s.draft_since_ms = 0;
+            if keep.contains(&i) {
+                continue;
+            }
+            let mtime = s.mtime_ms.max(1);
+            let cur = s.node_id.as_slice().try_into().ok().and_then(|id: NodeId| self.nodes.get(&id)).and_then(Node::body);
+            let new_file = s.blob.as_ref().map_or("", |b| b.file_id.as_str());
+            s.draft_since_ms = match cur {
+                // Та же запись (дописанная миниатюра): окно прежнее
+                Some(c) if c.blob.file_id == new_file => c.draft_since_ms,
+                Some(c) if c.draft_since_ms > 0
+                    && c.stamp.device_id == device_id
+                    && mtime >= c.draft_since_ms
+                    && mtime - c.draft_since_ms < DRAFT_WINDOW_MS =>
+                {
+                    s.supersedes = c.file_ids().map(str::to_string).collect();
+                    c.draft_since_ms
+                }
+                _ => mtime,
+            };
+        }
     }
 
     /// Родители узлов после разбора оторванных и циклов (`None` — корень).
@@ -395,19 +533,31 @@ impl CloudState {
                 continue;
             }
             let node = &self.nodes[id];
-            let Some((_, kind)) = node.created.as_ref() else { continue };
-            let file = *kind == CloudNodeKind::File;
+            let Some(created) = node.created.as_ref() else { continue };
+            let kind = created.kind;
+            let file = kind == CloudNodeKind::File;
+            let versions = if file {
+                node.bodies
+                    .iter()
+                    .skip(1)
+                    .map(|b| ViewVersion { blob: b.blob.clone(), thumb: b.thumb.clone(), mtime_ms: b.mtime_ms, device: b.stamp.device_id.clone() })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             out.push(ViewNode {
                 id: *id,
-                kind: *kind,
+                kind,
                 parent: *parent,
                 name: node.place.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
-                blob: node.body.as_ref().filter(|_| file).map(|b| b.blob.clone()),
-                thumb: node.body.as_ref().filter(|_| file).and_then(|b| b.thumb.clone()),
-                mtime_ms: node.body.as_ref().map_or(0, |b| b.mtime_ms),
+                blob: node.body().filter(|_| file).map(|b| b.blob.clone()),
+                thumb: node.body().filter(|_| file).and_then(|b| b.thumb.clone()),
+                mtime_ms: node.body().map_or(0, |b| b.mtime_ms),
                 trashed,
                 trash_top,
                 trashed_at_ms,
+                versions,
+                from: created.from.clone(),
             });
         }
         // Совпавшие имена соседей вне корзины: старший по созданию хранит
@@ -420,7 +570,7 @@ impl CloudState {
         }
         for mut idx in by_parent.into_values() {
             let raw: BTreeSet<String> = idx.iter().map(|i| out[*i].name.clone()).collect();
-            idx.sort_by_key(|i| (self.nodes[&out[*i].id].created.as_ref().map(|c| c.0.clone()), out[*i].id));
+            idx.sort_by_key(|i| (self.nodes[&out[*i].id].created.as_ref().map(|c| c.stamp.clone()), out[*i].id));
             let mut taken: BTreeSet<String> = BTreeSet::new();
             for i in idx {
                 let name = out[i].name.clone();
@@ -448,19 +598,26 @@ impl CloudState {
         self.fates(&parents).values().filter(|f| !f.0).count()
     }
 
-    /// Блобы стёртых узлов (сами и потомки стёртых папок).
+    /// Блобы, которые пора стереть: все версии стёртых узлов (сами и потомки стёртых папок) и вытесненные
+    /// либо заменённые версии живых (CLOUD-3).
     pub fn purged_blobs(&self) -> Vec<PurgedBlob> {
         let parents = self.parents();
         let fates = self.fates(&parents);
         let mut out = BTreeSet::new();
         for (id, fate) in &fates {
-            if !fate.0 {
-                continue;
-            }
-            if let Some(b) = self.nodes[id].body.as_ref() {
-                out.insert(PurgedBlob { file_id: b.blob.file_id.clone(), uploader: b.blob.uploader.clone() });
-                if let Some(t) = &b.thumb {
-                    out.insert(PurgedBlob { file_id: t.file_id.clone(), uploader: b.blob.uploader.clone() });
+            let node = &self.nodes[id];
+            if fate.0 {
+                for b in &node.bodies {
+                    for f in b.file_ids() {
+                        out.insert(PurgedBlob { file_id: f.to_string(), uploader: b.blob.uploader.clone() });
+                    }
+                }
+                for g in &node.gone {
+                    out.insert(PurgedBlob { file_id: g.file_id.clone(), uploader: g.uploader.clone() });
+                }
+            } else {
+                for g in node.gone_blobs() {
+                    out.insert(PurgedBlob { file_id: g.file_id.clone(), uploader: g.uploader.clone() });
                 }
             }
         }
@@ -507,9 +664,10 @@ impl CloudState {
             // Узел без создания (регистры пришли раньше) — вид не задан, метка создания 0.
             let mut e = CloudEntry {
                 node_id: id.to_vec(),
-                kind: node.created.as_ref().map_or(CloudNodeKind::Unspecified, |c| c.1) as i32,
-                create_lamport: node.created.as_ref().map_or(0, |c| c.0.lamport),
-                create_dev: node.created.as_ref().map_or(0, |c| dev(&c.0)),
+                kind: node.created.as_ref().map_or(CloudNodeKind::Unspecified, |c| c.kind) as i32,
+                create_lamport: node.created.as_ref().map_or(0, |c| c.stamp.lamport),
+                create_dev: node.created.as_ref().map_or(0, |c| dev(&c.stamp)),
+                from: node.created.as_ref().map(|c| c.from.clone()).unwrap_or_default(),
                 purged: node.purged_at.is_some(),
                 purged_at_ms: node.purged_at.unwrap_or(0),
                 ..Default::default()
@@ -520,12 +678,26 @@ impl CloudState {
                 e.move_lamport = p.stamp.lamport;
                 e.move_dev = dev(&p.stamp);
             }
-            if let Some(b) = &node.body {
+            if let Some(b) = node.body() {
                 e.blob = Some(b.blob.clone());
                 e.thumb = b.thumb.clone();
                 e.mtime_ms = b.mtime_ms;
                 e.blob_lamport = b.stamp.lamport;
                 e.blob_dev = dev(&b.stamp);
+                e.draft_since_ms = b.draft_since_ms;
+            }
+            for b in node.bodies.iter().skip(1) {
+                e.versions.push(CloudVersion {
+                    blob: Some(b.blob.clone()),
+                    thumb: b.thumb.clone(),
+                    mtime_ms: b.mtime_ms,
+                    lamport: b.stamp.lamport,
+                    dev: dev(&b.stamp),
+                    draft_since_ms: b.draft_since_ms,
+                });
+            }
+            for g in &node.gone {
+                e.gone.push(CloudGone { file_id: g.file_id.clone(), uploader: g.uploader.clone(), lamport: g.stamp.lamport, dev: dev(&g.stamp) });
             }
             if let Some(t) = &node.trash {
                 e.trashed = t.trashed;
@@ -567,28 +739,48 @@ impl CloudState {
             } else {
                 None
             };
-            let body_reg = match (&e.blob, e.blob_lamport > 0) {
-                (Some(blob), true) => {
-                    check_blob(blob)?;
-                    e.thumb.as_ref().map(check_thumb).transpose()?;
-                    Some(body(stamp(e.blob_lamport, e.blob_dev)?, blob, e.thumb.as_ref(), e.mtime_ms))
+            let mut bodies = Vec::new();
+            if let (Some(blob), true) = (&e.blob, e.blob_lamport > 0) {
+                check_blob(blob)?;
+                e.thumb.as_ref().map(check_thumb).transpose()?;
+                let b = body(stamp(e.blob_lamport, e.blob_dev)?, blob, e.thumb.as_ref(), e.mtime_ms);
+                bodies.push(Body { draft_since_ms: e.draft_since_ms, ..b });
+            }
+            for v in &e.versions {
+                let blob = v.blob.as_ref().ok_or(ProtoError::InvalidField("versions"))?;
+                check_blob(blob)?;
+                v.thumb.as_ref().map(check_thumb).transpose()?;
+                let b = body(stamp(v.lamport, v.dev)?, blob, v.thumb.as_ref(), v.mtime_ms);
+                bodies.push(Body { draft_since_ms: v.draft_since_ms, ..b });
+            }
+            let mut gone = Vec::new();
+            for g in &e.gone {
+                if g.file_id.is_empty() || g.file_id.len() > 64 || g.uploader.len() > MAX_NAME_BYTES {
+                    return Err(ProtoError::InvalidField("gone"));
                 }
-                _ => None,
-            };
+                gone.push(Gone { stamp: stamp(g.lamport, g.dev)?, file_id: g.file_id.clone(), uploader: g.uploader.clone() });
+            }
+            if e.from.len() > MAX_NAME_BYTES {
+                return Err(ProtoError::InvalidField("from"));
+            }
             let trash = if e.trash_lamport > 0 {
                 Some(Trash { stamp: stamp(e.trash_lamport, e.trash_dev)?, trashed: e.trashed, at_ms: e.trashed_at_ms })
             } else {
                 None
             };
             let node = self.node(id);
-            if let Some(created) = created {
-                put_created(&mut node.created, created);
+            if let Some((stamp, kind)) = created {
+                put_created(&mut node.created, Created { stamp, kind, from: e.from.clone() });
             }
             if let Some(p) = place {
                 put_max(&mut node.place, p);
             }
-            if let Some(b) = body_reg {
-                put_body(&mut node.body, b);
+            if !bodies.is_empty() || !gone.is_empty() {
+                for g in gone {
+                    node.add_gone(g);
+                }
+                node.bodies.extend(bodies);
+                node.normalize();
             }
             if let Some(t) = trash {
                 put_max(&mut node.trash, t);
@@ -610,9 +802,10 @@ impl CloudState {
     pub fn max_lamport(&self) -> u64 {
         let node_max = self.nodes.values().flat_map(|n| {
             [
-                n.created.as_ref().map(|c| c.0.lamport),
+                n.created.as_ref().map(|c| c.stamp.lamport),
                 n.place.as_ref().map(|p| p.stamp.lamport),
-                n.body.as_ref().map(|b| b.stamp.lamport),
+                n.bodies.iter().map(|b| b.stamp.lamport).max(),
+                n.gone.iter().map(|g| g.stamp.lamport).max(),
                 n.trash.as_ref().map(|t| t.stamp.lamport),
             ]
         });
@@ -699,6 +892,7 @@ pub fn guard_snapshot(guard: &LamportGuard, s: &CloudSnapshot, upto_seq: u64) ->
     let mut max = s.meta.as_ref().and_then(|m| m.stamp.as_ref()).map_or(0, |x| x.lamport);
     for e in &s.entries {
         max = max.max(e.create_lamport).max(e.move_lamport).max(e.blob_lamport).max(e.trash_lamport);
+        max = e.versions.iter().map(|v| v.lamport).chain(e.gone.iter().map(|g| g.lamport)).fold(max, u64::max);
     }
     let limit = guard.max_seen().saturating_add(super::LAMPORT_MAX_JUMP.saturating_mul(upto_seq.max(1)));
     if max > limit {

@@ -2007,7 +2007,7 @@ export function createMessageController(deps: MessageDependencies) {
       chatId: string;
       file: {
         fileId: string; key: string; nonce: string; capability: string; name: string; mime: string; size: number;
-        caption?: string;
+        caption?: string; isCopyToFiles?: boolean;
       };
     }) {
       const currentStore = store();
@@ -2027,6 +2027,8 @@ export function createMessageController(deps: MessageDependencies) {
         caption: file.caption || undefined,
         // Подпись «из „Файлов“» у получателя (`Media.from_cloud`)
         from_cloud: true,
+        // Доступ к файлу копией (`Media.to_files`, CLOUD-3)
+        to_files: file.isCopyToFiles || undefined,
         ttl_secs: ttlSecs || undefined,
       };
       deps.media.rememberKeys(content);

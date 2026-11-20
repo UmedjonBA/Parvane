@@ -1,4 +1,5 @@
-// Смена ника (spec 026): Алиса меняет ник в «Моём профиле» (пароль + ключ восстановления). Чат с Бобом и группа
+// Смена ника (spec 026): Алиса меняет ник в «Моём профиле» паролем — корень аккаунта на устройстве-создателе, ключ
+// восстановления не спрашивается (RECOVER-1 п. 8), под новым ником выпускается новый ключ. Чат с Бобом и группа
 // остаются; Боб пишет на прежний ник — доходит; Боб видит служебное «сменила ник» и продолжает переписку в том
 // же чате; группа пишется в обе стороны; второе устройство Алисы входит прежним ником и само переходит на новый.
 import assert from 'node:assert/strict';
@@ -63,6 +64,8 @@ try {
   const recoveryKey = keyText?.match(/[0-9A-Z]{4}(?:-[0-9A-Z]{4}){9}/)?.[0];
   assert.ok(recoveryKey, `ключ восстановления не найден: ${keyText}`);
   await autoDismissRecoveryKeyDialog(a);
+  const hasRoot = (page) => page.evaluate(() => window.__parvaneDiagCallApi?.('parvaneHasStoredRoot'));
+  assert.equal(await hasRoot(a), true, 'корень аккаунта не на устройстве-создателе');
   sessions.bob = await preparePage(await browser.newContext(), bob, PASSWORD);
   const b = sessions.bob.page;
   await exchangeMessages(a, alice, b, bob, suffix);
@@ -78,6 +81,8 @@ try {
   sessions.alice2 = await preparePage(await browser.newContext(), alice, PASSWORD);
   const a2 = sessions.alice2.page;
   await linkSecondDevice(a, a2);
+  assert.equal(await hasRoot(a), true, 'после привязки второго устройства корень пропал с создателя');
+  assert.equal(await hasRoot(a2), false, 'привязанное грантом устройство получило корень');
   console.log('OK: второе устройство привязано');
 
   // ── смена ника ──
@@ -88,7 +93,9 @@ try {
   await dialog.locator('#parvane-rename-nick').fill(bob.split('@')[0]);
   await dialog.locator('[data-rename-nick-state="taken"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(PASSWORD);
-  await dialog.locator('#parvane-rename-key').fill(recoveryKey);
+  // Корень на устройстве: поля ключа восстановления нет, вместо него — предупреждение о новом ключе
+  await dialog.locator('[data-rename-key-stored]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await dialog.locator('#parvane-rename-key').count(), 0, 'с корнем на устройстве ключ не спрашивается');
   assert.equal(await dialog.getByRole('button', { name: 'Change', exact: true }).isDisabled(), true,
     'занятый ник не отправляется');
   // Неверный пароль
@@ -98,6 +105,10 @@ try {
   await dialog.getByRole('button', { name: 'Change', exact: true }).click();
   await dialog.locator('[data-rename-error="bad_password"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(PASSWORD);
+  let isNewKeyIssued = false;
+  a.on('console', (m) => {
+    if (m.text().includes('ник сменён, ключ восстановления заменён новым')) isNewKeyIssued = true;
+  });
   const reloaded = a.waitForEvent('load', { timeout: RENAME_TIMEOUT_MS });
   await dialog.getByRole('button', { name: 'Change', exact: true }).click();
   // «Ник сменён» видно ~0,4 с до перезагрузки вкладки — под нагрузкой кадр с ним может не отрисоваться раньше
@@ -109,7 +120,8 @@ try {
   await reloaded;
   await a.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await poll(() => ownUsername(a), (u) => u === newNick, 'свой ник после перезагрузки', RENAME_TIMEOUT_MS);
-  console.log('OK: ник сменён, вкладка вошла под новым адресом без пароля');
+  assert.ok(isNewKeyIssued, 'без ключа восстановления под новым ником не выпущен новый ключ');
+  console.log('OK: ник сменён без ключа восстановления, вкладка вошла под новым адресом без пароля');
 
   // Боб ещё не знает: пишет на прежний адрес — в тот же чат у Алисы
   await showChatList(b);
