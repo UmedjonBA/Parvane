@@ -1279,7 +1279,6 @@ export interface LangPair {
   'ParvaneAuthTelegramStepKeyHint': undefined;
   'ParvaneAuthTelegramStepReturn': undefined;
   'ParvaneAuthTelegramStepReturnHint': undefined;
-  'ParvaneAuthTelegramExpiry': undefined;
   'ParvaneAuthUpgradeTitle': undefined;
   'ParvaneAuthUpgradeAction': undefined;
   'ParvaneL2EnabledYou': undefined;

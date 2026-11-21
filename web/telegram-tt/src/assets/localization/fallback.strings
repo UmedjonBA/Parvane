@@ -1793,7 +1793,6 @@
 "ParvaneAuthTelegramStepKeyHint" = "the next step";
 "ParvaneAuthTelegramStepReturn" = "3. Come back here";
 "ParvaneAuthTelegramStepReturnHint" = "the app will open by itself";
-"ParvaneAuthTelegramExpiry" = "The request is valid for about 15 minutes. If it expires, press «Request again».";
 "ParvaneAuthUpgradeTitle" = "Update the app";
 "ParvaneAuthUpgradeAction" = "Update";
 "ParvaneSecurityKeyChanged" = "The security key of {user} has changed. If you did not expect this, verify the key fingerprint in the profile.";

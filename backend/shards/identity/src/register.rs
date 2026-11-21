@@ -48,7 +48,7 @@ pub(crate) const PENDING_TTL_SECS: i64 = 86_400;
 /// Срок действия кода подтверждения.
 pub(crate) const CODE_TTL_SECS: i64 = 900;
 /// Срок действия токена Telegram deep link.
-pub(crate) const TELEGRAM_LINK_TTL_SECS: i64 = 900;
+pub(crate) const TELEGRAM_LINK_TTL_SECS: i64 = 600;
 /// Попыток ввода кода до принудительного перезапроса.
 pub(crate) const CODE_MAX_ATTEMPTS: i64 = 5;
 

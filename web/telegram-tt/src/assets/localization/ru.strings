@@ -1533,7 +1533,6 @@
 "ParvaneAuthTelegramStepKeyHint" = "следующий шаг";
 "ParvaneAuthTelegramStepReturn" = "3. Вернитесь сюда";
 "ParvaneAuthTelegramStepReturnHint" = "приложение откроется само";
-"ParvaneAuthTelegramExpiry" = "Запрос действует около 15 минут. Истёк — кнопка «Запросить заново».";
 "ParvaneAuthUpgradeTitle" = "Обновите приложение";
 "ParvaneAuthUpgradeAction" = "Обновить";
 "ParvaneSecurityKeyChanged" = "Ключ безопасности {user} изменился. Если вы этого не ожидали, сверьте отпечаток ключа в профиле.";

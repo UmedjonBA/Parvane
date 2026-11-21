@@ -330,7 +330,7 @@ const AuthTelegram = ({ auth }: StateProps) => {
           {link && isQrShown && isMobile && <AuthTelegramQr link={link} />}
           {isLogin && renderLoginExtras()}
           <p className={styles.note}>
-            {lang(isLogin ? 'ParvaneAuthTelegramExpiryLogin' : 'ParvaneAuthTelegramExpiry')}
+            {lang('ParvaneAuthTelegramExpiryLogin')}
           </p>
         </div>
       </div>
