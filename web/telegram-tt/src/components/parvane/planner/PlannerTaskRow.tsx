@@ -38,6 +38,8 @@ type OwnProps = {
   onAssign?: (taskId: string) => void;
   // Вторая кнопка — «Выбрать день» (доска `DkPlanMore`), так же плоскими значениями
   pickLabel?: string;
+  // Экран «Задачи» на телефоне (доска `PhPlanMore`): галочка слева
+  isCheckFirst?: boolean;
   onPick?: (taskId: string) => void;
   // `day` — день экземпляра ряда (spec 011)
   onOpen: (taskId: string, day?: string) => void;
@@ -52,7 +54,8 @@ type CaptionPart = { text: string; isRed?: boolean };
 // « · » — в дне «Задача · 30 мин · срок сегодня», в списках «1 ч · Сервер · срок пт · в работе» («без оценки»,
 // когда длительности нет). На компьютере галочка слева, на телефоне — справа
 const PlannerTaskRow = ({
-  task, context, color, noProject, assignLabel, assignTitle, onAssign, pickLabel, onPick, onOpen,
+  task, context, color, noProject, assignLabel, assignTitle, onAssign, pickLabel, isCheckFirst,
+  onPick, onOpen,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -105,7 +108,9 @@ const PlannerTaskRow = ({
 
   return (
     <div
-      className={buildClassName(styles.row, styles.rowCheckStart, isDone && styles.rowDone)}
+      className={buildClassName(
+        styles.row, styles.rowCheckStart, isCheckFirst && styles.rowCheckFirst, isDone && styles.rowDone,
+      )}
       style={listColorStyle(color)}
       draggable
       data-task-id={task.id}

@@ -14,6 +14,7 @@ import { getDeadlineSections } from './plannerTasksView';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import CalendarModal from '../../common/CalendarModal';
 import PvEmpty from '../notes/PvEmpty';
@@ -45,6 +46,7 @@ const SECTION_KEYS = {
   later: 'PlannerTasksDueLater',
 } as const satisfies Record<DeadlineSection, string>;
 const SECTIONS: DeadlineSection[] = ['overdue', 'today', 'week', 'later'];
+const PHONE_WIDTH = 600;
 const TAB_TITLE_KEYS = {
   deadlines: 'PlannerSectionDeadlines',
   undated: 'PlannerSectionUndated',
@@ -58,6 +60,7 @@ const PlannerTasks = ({
   state, today, tab, isNarrow, onChangeTab, onOpenTask, onOpenSearch, onClose,
 }: OwnProps) => {
   const lang = useLang();
+  const isPhone = useWindowSize().width <= PHONE_WIDTH;
   // Задача, для которой выбирается день
   const [pickingId, setPickingId] = useState<string>();
 
@@ -134,7 +137,8 @@ const PlannerTasks = ({
                 assignLabel={lang('PlannerTasksForToday')}
                 assignTitle={lang('PlannerUndatedAssign', { date: formatDay(lang, today), name: task.name })}
                 onAssign={handleToday}
-                pickLabel={lang('PlannerTasksPickDay')}
+                pickLabel={isPhone ? undefined : lang('PlannerTasksPickDay')}
+                isCheckFirst={isPhone}
                 onPick={handlePick}
                 onOpen={onOpenTask}
               />

@@ -100,6 +100,13 @@
   border: 1px solid var(--pv-line);
   border-radius: var(--pv-radius-card);
   background: var(--pv-panel);
+
+  // Телефон (доска `PhPlanMore`): строки плоской полосой во всю ширину экрана
+  @media (max-width: 600px) {
+    margin-inline: -1rem;
+    border-inline: 0;
+    border-radius: 0;
+  }
 }
 
 .hint {
@@ -203,6 +210,17 @@
 
   @media (min-width: 926px) {
     flex: 0 1 20rem;
+  }
+
+  // Телефон (доска `RpPlan`): запрос набирается прямо в шапке, без рамки поля
+  @media (max-width: 925px) {
+    padding: 0 0.25rem;
+    border: 0;
+
+    font-size: 1.0625rem;
+
+    background: transparent;
+    box-shadow: none;
   }
 }
 

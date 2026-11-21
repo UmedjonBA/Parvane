@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  closePlannerSettings, dismissRecoveryKeyDialog, openHealthModule, openPlannerScreen, openPlannerSettings, preparePage,
+  closePlannerSettings, dismissRecoveryKeyDialog, openHealthModule, openPlannerHeader, openPlannerScreen, openPlannerSettings, preparePage,
 } from './e2e_web_helpers.mjs';
 
 // Выключатель перерисовывается от сигнала либо сохранения — не в тот же кадр, что нажатие
@@ -287,7 +287,7 @@ try {
   // Образец напоминания — сверху страницы настроек на телефоне (доска `RpPlan`)
   await visible((await openPlannerSettings(page)).locator('[data-reminder-sample]'), 'образец напоминания в настройках');
   await closePlannerSettings(page);
-  await planner.locator('[data-planner-search-open]').click();
+  await openPlannerHeader(page, 'search');
   await search.locator('[data-planner-search-input]').fill('зале');
   await visible(ahead.locator('[data-key]'), 'поиск на телефоне');
   // Лента уходит после перерисовки раздела — ждём, а не проверяем мгновенно
@@ -372,7 +372,7 @@ try {
   await noneSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await closeSide();
   await search.getByRole('button', { name: 'Back' }).click();
-  await planner.locator('[data-planner-tasks-open]').click();
+  await openPlannerHeader(page, 'tasks');
   await tasks.getByRole('tab', { name: /^No date/ }).click();
   await visible(tasks.locator('[data-planner-groups]'), 'группы под задачами на телефоне');
   await shot('plan-tasks-phone');

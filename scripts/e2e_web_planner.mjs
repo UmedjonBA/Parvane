@@ -14,7 +14,7 @@ import {
   reloadPage,
   waitForChatList,
   closePlannerSettings,
-  openPlannerScreen,
+  openPlannerHeader, openPlannerScreen,
   openPlannerSettings,
   pickPlannerDay,
   openSettingsScreen,
@@ -991,7 +991,15 @@ try {
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   // Телефон: название модуля и виды чипами в шапке (доска `PhonePlan`); кнопки «+ Запись» нет — «+» над лентой
   const phoneViews = planner.getByRole('group', { name: 'Calendar view' });
-  assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Day', 'Week', 'Month', 'Year', 'List'], 'виды календаря на телефоне');
+  // В шапке помещаются три вида; «Год» и «Список» — в меню «⋯» рядом с поиском, «Задачами» и настройками
+  assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Day', 'Week', 'Month'], 'виды календаря на телефоне');
+  await planner.locator('[data-planner-more]').click();
+  assert.deepEqual(
+    await page.locator('[role="menuitem"][data-action]').evaluateAll((items) => items.map((item) => item.dataset.action)),
+    ['agenda', 'year', 'search', 'tasks', 'settings'], 'меню «⋯» шапки телефона',
+  );
+  await page.keyboard.press('Escape');
+  await page.locator('[role="menuitem"][data-action="year"]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByRole('button', { name: '+ Entry', exact: true }).count(), 0, 'на телефоне кнопки «+ Запись» нет');
   assert.equal(await planner.locator('header h1').innerText(), 'Planner', 'в шапке телефона — название модуля');
   // Месяц: день — карточкой ПОД сеткой месяца (расписание списком), вбок ничего не листается
@@ -1135,7 +1143,7 @@ try {
   await phoneWeek.locator(`[data-week-day="${today}"] button[data-day="${today}"]`).first().click();
   await phoneDay(today).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Год на телефоне (доска `XpPlan`): подпись и легенда под сеткой; нажатие на месяц открывает «Месяц»
-  await phoneViews.getByRole('button', { name: 'Year', exact: true }).click();
+  await openPlannerHeader(page, 'year');
   const phoneYear = planner.locator('[data-planner-view="year"]');
   await phoneYear.locator('[data-year-legend]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await phoneYear.getByText('Tap a month to open it', { exact: false }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -1144,7 +1152,7 @@ try {
   assert.equal(await phoneViews.locator('button[aria-pressed="true"]').innerText(), 'Month', 'месяц года открыл «Месяц»');
   // «Список» на телефоне (доска `RpPlan`): от сегодня, заголовки «Today, Sun 15 November», подписи «Task · 30 min»,
   // подсказка о 30 днях; панели групп нет
-  await phoneViews.getByRole('button', { name: 'List', exact: true }).click();
+  await openPlannerHeader(page, 'agenda');
   const phoneList = planner.locator('[data-planner-view="agenda"]');
   await phoneList.locator(`section[data-day="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await phoneList.locator(`section[data-day="${today}"] > button`).innerText(), /^Today, /i, 'заголовок дня списка (прописными, как .cap доски)');

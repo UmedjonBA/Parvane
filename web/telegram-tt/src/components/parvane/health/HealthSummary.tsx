@@ -175,8 +175,8 @@ const HealthSummary = ({
             <HealthPeriodChart metric={weight} period="month" today={view.today} />
           </button>
         )}
-        <section className={buildClassName(kit.card, styles.card)}>
-          <div className={kit.caps}>{lang('HealthRecentTitle')}</div>
+        <section className={buildClassName(kit.card, styles.cardList)}>
+          <div className={buildClassName(kit.caps, styles.cardListTitle)}>{lang('HealthRecentTitle')}</div>
           <HealthEntries entries={recent.slice(0, RECENT_ON_SUMMARY)} today={view.today} withKind onEdit={onEdit} />
         </section>
       </div>

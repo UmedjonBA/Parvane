@@ -11,6 +11,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
+import CloudMenu from '../cloud/CloudMenu';
 import PvSegment from '../notes/PvSegment';
 import PlannerQuickField from './PlannerQuickField';
 import { PlannerYearLegend } from './PlannerYear';
@@ -29,6 +30,8 @@ type OwnProps = {
   picked: string;
   today: string;
   isNarrow: boolean;
+  // Телефон: три чипа вида и меню «⋯»
+  isPhone?: boolean;
   segments: PlannerSegment[];
   activeSegment: string;
   prevLabel: string;
@@ -52,18 +55,22 @@ type OwnProps = {
 };
 
 const MONTHS_IN_YEAR = 12;
+// Чипы вида в шапке телефона (доска `PhonePlan`); «Список» и «Год» — в меню «⋯»
+const PHONE_SEGMENTS = ['today', 'week', 'month'];
 
 // Шапка «Плана» по макету. Телефон: название модуля и виды чипами (доска `PhonePlan`). Компьютер: период
 // со стрелками, переключатель вида и поле «Запись строкой» с разбором (доска `DeskPlan`); «+ Запись» рядом —
 // окно ввода с подробностями. Поиск, «Задачи» и настройки — функции сверх доски, остаются
 const PlannerHeader = ({
-  title, load, isYear, picked, today, isNarrow, segments, activeSegment, prevLabel, nextLabel, settings, learnedWords,
+  title, load, isYear, picked, today, isNarrow, isPhone, segments, activeSegment, prevLabel, nextLabel, settings,
+  learnedWords,
   onPrev, onNext, onToday, onPickDay, onSwitchSegment, onOpenQuick, onQuickMore, onQuickCreated, onOpenSearch,
   onOpenTasks, onOpenSettings,
 }: OwnProps) => {
   const lang = useLang();
 
   const [isPickerOpen, openPicker, closePicker] = useFlag();
+  const [isMoreOpen, openMore, closeMore] = useFlag();
   const [pickerYear, setPickerYear] = useState(() => fromDayKey(picked).getFullYear());
 
   const handleTitleClick = useLastCallback(() => {
@@ -123,6 +130,83 @@ const PlannerHeader = ({
       <Icon name="check" />
     </button>
   );
+
+  const handleMorePick = useLastCallback((key: string) => {
+    closeMore();
+    if (key === 'search') onOpenSearch();
+    else if (key === 'tasks') onOpenTasks();
+    else if (key === 'settings') onOpenSettings();
+    else onSwitchSegment(key);
+  });
+
+  const handleYearBack = useLastCallback(() => onSwitchSegment('month'));
+
+  const label = (value: string) => segments.find((segment) => segment.value === value)!.label;
+  const moreActions = !isPhone ? [] : [
+    ...(activeSegment === 'today' || activeSegment === 'week' || activeSegment === 'month' ? ['agenda', 'year']
+      : ['week', 'month', activeSegment === 'year' ? 'agenda' : 'year'])
+      .map((value) => ({ key: value, title: label(value) })),
+    { key: 'search', title: lang('PlannerSearchTitle') },
+    { key: 'tasks', title: lang('PlannerTasksTitle') },
+    { key: 'settings', title: lang('PlannerSettings') },
+  ];
+  const moreButton = (
+    <>
+      <button
+        type="button"
+        className={styles.backButton}
+        aria-label={lang('MenuMore')}
+        aria-haspopup="menu"
+        data-planner-more
+        onClick={openMore}
+      >
+        <Icon name="more" />
+      </button>
+      <CloudMenu isOpen={isMoreOpen} actions={moreActions} onPick={handleMorePick} onClose={closeMore} />
+    </>
+  );
+
+  if (isPhone && activeSegment === 'year') {
+    return (
+      <header className={buildClassName(styles.header, styles.headerBack)}>
+        <button type="button" className={styles.backButton} aria-label={lang('Back')} onClick={handleYearBack}>
+          <Icon name="arrow-left" />
+        </button>
+        <h1 className={buildClassName(styles.title, styles.titleGrow)}>{title}</h1>
+        <button type="button" className={styles.backButton} aria-label={prevLabel} onClick={onPrev}>
+          <Icon name="previous" />
+        </button>
+        <button type="button" className={styles.backButton} aria-label={nextLabel} onClick={onNext}>
+          <Icon name="next" />
+        </button>
+        {moreButton}
+      </header>
+    );
+  }
+
+  if (isPhone) {
+    const shown = activeSegment === 'agenda' ? ['today', 'agenda'] : PHONE_SEGMENTS;
+    return (
+      <header className={styles.header}>
+        <h1 className={buildClassName(styles.title, styles.titleGrow)}>{lang('ParvaneSectionPlanner')}</h1>
+        <div className={styles.viewsEnd} role="group" aria-label={lang('PlannerCalView')}>
+          {shown.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={buildClassName(styles.view, value === activeSegment && styles.viewOn)}
+              aria-pressed={value === activeSegment}
+              data-value={value}
+              onClick={handleViewClick}
+            >
+              {label(value)}
+            </button>
+          ))}
+        </div>
+        {moreButton}
+      </header>
+    );
+  }
 
   if (isNarrow) {
     return (

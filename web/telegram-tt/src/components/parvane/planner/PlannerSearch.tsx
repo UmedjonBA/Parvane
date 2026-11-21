@@ -311,9 +311,6 @@ const PlannerSearch = ({
           data-planner-search-input
           onChange={handleInput}
         />
-        {hasQuery && (
-          <button type="button" className={kit.btn} onClick={handleReset}>{lang('PlannerSearchReset')}</button>
-        )}
       </header>
       <div className={buildClassName(kit.chips, styles.segmentBar)} role="group" aria-label={lang('PlannerSearchShow')}>
         {FILTERS.map((item) => (

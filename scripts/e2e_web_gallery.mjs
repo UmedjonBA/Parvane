@@ -9,6 +9,7 @@ import {
   dismissRecoveryKeyDialog,
   LOGIN_TIMEOUT_MS,
   openHealthModule,
+  openPlannerScreen,
   preparePage,
   reloadPage,
 } from './e2e_web_helpers.mjs';
@@ -128,7 +129,8 @@ async function galleryHealth() {
   const setGoal = async (kind, values) => {
     try {
       await toSummary();
-      await card(kind).click({ timeout: STEP_TIMEOUT_MS });
+      await card('weight').click({ timeout: STEP_TIMEOUT_MS });
+      await health.locator(`[data-health-side-item="${kind}"]`).click({ timeout: STEP_TIMEOUT_MS });
       await health.locator(`[data-health-goal-edit="${kind}"]:visible`).first().click({ timeout: STEP_TIMEOUT_MS });
       for (const [field, value] of Object.entries(values)) {
         await page.locator(`[data-health-sheet="goal"] [data-health-goal="${field}"]`).fill(value);
@@ -147,16 +149,21 @@ async function galleryHealth() {
   await setGoal('sleep', { sleep_bed: '23:30', sleep_wake: '07:00' });
   await toSummary();
 
-  // Компьютер
+  // Компьютер: подробные экраны — пунктами левой колонки, период — «Месяц», как на досках
   await step(page, 'DeskHealth-01', async () => undefined);
-  await detail('DeskHealthDetail-01', 'sleep');
-  await detail('RdHealth-01', 'weight');
-  await detail('XdHealth-01', 'pressure');
-  await detail('RdHealth-02', 'steps');
-  // «Самочувствие» на компьютере открывается пунктом левой колонки подробного экрана
-  await step(page, 'XdHealth-02', async () => {
-    await health.locator('[data-health-side-item="mood"]').click({ timeout: STEP_TIMEOUT_MS });
-  });
+  await card('weight').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
+  const side = async (name, kind, period) => {
+    await step(page, name, async () => {
+      await health.locator(`[data-health-side-item="${kind}"]`).click({ timeout: STEP_TIMEOUT_MS });
+      if (period) await health.locator(`[data-health-period="${period}"]`).click({ timeout: STEP_TIMEOUT_MS });
+    });
+  };
+  await side('DeskHealthDetail-01', 'sleep', 'month');
+  await side('RdHealth-01', 'pressure', 'month');
+  await side('RdHealth-02', 'steps', 'month');
+  await side('health-desk-weight', 'weight', 'month');
+  await side('health-desk-mood', 'mood');
+  await health.locator('[data-health-period="week"]').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
   await toSummary();
 
   // Телефон
@@ -172,8 +179,73 @@ async function galleryHealth() {
   await page.context().close();
 }
 
+// ── «План»: доски PhonePlan, PhPlanMore, RpPlan, XpPlan, ZpPlanX, DeskPlan, DkPlanMore, RdPlan, XdPlan, ZdPlanX ──
+async function galleryPlan() {
+  const { page } = await openSession('plan');
+  const planner = await openPlannerScreen(page, 'calendar');
+  const quick = page.locator('#planner-quick-input');
+  const lines = [
+    'План на неделю сегодня 10:00 1 ч', 'Зал сегодня 18:00 1 ч 30 мин каждую неделю', 'Ответить Алие про конфиг 30 мин',
+    'Созвон с командой завтра 10:00 1 ч', 'Обновление сервера послезавтра 14:00 2 ч', 'Разобрать входящие 30 мин',
+    'Продлить домен через 3 дня 9:00 1 ч', 'Обновить nftables 1 ч',
+  ];
+  for (const line of lines) {
+    try {
+      await planner.getByRole('button', { name: '+ Entry', exact: true }).click({ timeout: STEP_TIMEOUT_MS });
+      await quick.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+      await quick.fill(line);
+      await page.waitForTimeout(600);
+      await quick.press('Enter');
+      await quick.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+    } catch (err) {
+      console.log(`WARN: запись «${line}»: ${String(err).split('\n')[0]}`);
+      await page.keyboard.press('Escape').catch(() => undefined);
+    }
+  }
+  await toRussian(page);
+  const plan = await openModule(page, 'plan', 'ParvanePlanner');
+  const view = async (name, value) => {
+    await step(page, name, async () => {
+      await plan.locator(`button[data-value="${value}"]:visible`).first().click({ timeout: STEP_TIMEOUT_MS });
+    });
+  };
+  // Компьютер
+  for (const value of ['today', 'week', 'month', 'year', 'agenda']) await view(`plan-desk-${value}`, value);
+  await step(page, 'plan-desk-tasks', async () => {
+    await plan.locator('[data-planner-tasks-open]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'plan-desk-search', async () => {
+    await plan.locator('[data-planner-search-open]').click({ timeout: STEP_TIMEOUT_MS });
+    await plan.locator('[data-planner-search-input]').fill('зал');
+  });
+  await page.keyboard.press('Escape');
+
+  // Телефон
+  await resize(page, PHONE);
+  await view('PhonePlan-01', 'today');
+  await view('XpPlan-01', 'week');
+  await view('PhPlanMore-01', 'month');
+  // «Год», «Список», поиск и «Задачи» на телефоне — пункты меню «⋯» шапки
+  const more = async (key) => {
+    await plan.locator('[data-planner-more]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator(`[role="menuitem"][data-action="${key}"]`).click({ timeout: STEP_TIMEOUT_MS });
+  };
+  await step(page, 'XpPlan-02', () => more('year'));
+  await plan.locator('button[aria-label="Назад"]:visible').first().click().catch(() => undefined);
+  await step(page, 'RpPlan-01', () => more('agenda'));
+  await step(page, 'RpPlan-02', async () => {
+    await more('search');
+    await plan.locator('[data-planner-search-input]').fill('зал');
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'PhPlanMore-03', () => more('tasks'));
+  await page.context().close();
+}
+
 try {
   if (wants('health')) await galleryHealth();
+  if (wants('plan')) await galleryPlan();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
 } finally {
   await browser.close();

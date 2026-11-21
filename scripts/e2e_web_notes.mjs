@@ -14,6 +14,7 @@ import {
   preparePage,
   relogin,
   reloadPage,
+  openPlannerHeader,
   openPlannerScreen,
   waitPastMidnight,
 } from './e2e_web_helpers.mjs';
@@ -1848,7 +1849,7 @@ try {
   // «План»: открытый экран «Задачи» закрывается «назад», следующее «назад» — к чатам (настройки «Плана» — страница
   // «Профиля», у неё своё «назад»)
   const phonePlanner = await openPlannerScreen(page, 'calendar');
-  await phonePlanner.locator('[data-planner-tasks-open]').first().click();
+  await openPlannerHeader(page, 'tasks');
   const plannerScreen = phonePlanner.locator('[data-planner-screen="tasks"]');
   await visible(plannerScreen, 'экран «Задачи» «Плана»');
   await historyBack();

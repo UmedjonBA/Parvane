@@ -12,6 +12,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   dismissRecoveryKeyDialog,
+  openPlannerHeader,
   openPlannerScreen,
   preparePage,
   relogin,
@@ -343,7 +344,7 @@ try {
   await knowledge.getByRole('button', { name: 'Back to notes' }).click();
   await openPlannerScreen(page, 'calendar');
   // Лупа «Плана» открывает поиск по плану (экран с чипами, spec 041 E1), а не палитру: команд и чатов в нём нет
-  await planner.locator('[data-planner-search-open]').click();
+  await openPlannerHeader(page, 'search');
   const planSearch = planner.locator('[data-planner-search]');
   await visible(planSearch.locator('[data-planner-search-input]'), 'поиск по плану по лупе «Плана» на телефоне');
   await planSearch.locator('[data-planner-search-input]').fill('files');

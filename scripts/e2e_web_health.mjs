@@ -464,7 +464,8 @@ try {
   for (const text of ['Bedtime', 'Wake-up', 'Total', '00:00', '07:00']) {
     await nightCard.filter({ hasText: text }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
-  await nightCard.locator('[data-health-verdict]').filter({ hasText: 'Last night' })
+  // До семи утра подъём «в 7» ещё не наступил: запись относится к предыдущей ночи
+  await nightCard.locator('[data-health-verdict]').filter({ hasText: /Last night|The night before yesterday/ })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await nightCard.locator('[data-health-understood-edit]').click();
   await quickSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });

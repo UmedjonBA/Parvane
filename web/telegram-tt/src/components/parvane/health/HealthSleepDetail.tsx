@@ -172,8 +172,8 @@ const HealthSleepDetail = ({
         </div>
         {renderRegimeCard()}
         <div className={styles.detailPair}>
-          <section className={buildClassName(kit.card, styles.card)}>
-            <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
+          <section className={buildClassName(kit.card, styles.cardList)}>
+            <div className={buildClassName(kit.caps, styles.cardListTitle)}>{lang('HealthEntriesTitle')}</div>
             {records}
           </section>
           <section className={buildClassName(kit.card, styles.card)} data-health-goal-card="sleep">

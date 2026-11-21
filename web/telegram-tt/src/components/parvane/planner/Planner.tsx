@@ -109,6 +109,7 @@ const MS_IN_SECOND = 1000;
 const MINUTES_IN_HOUR = 60;
 // Ширина, до которой раскладка — одна колонка (`Planner.module.scss`, 925px)
 const NARROW_WIDTH = 925;
+const PHONE_WIDTH = 600;
 
 // Вид календаря — настройка устройства; хранилище может быть недоступно
 function readCalendarView(): PlannerCalendarView {
@@ -197,6 +198,9 @@ const Planner = () => {
   const currentUserId = useSelector(selectCurrentUserId);
   const { width: windowWidth } = useWindowSize();
   const isNarrow = windowWidth <= NARROW_WIDTH;
+  // Телефон: в шапке помещаются три чипа вида, остальное — в меню «⋯»; у «Года» шапка своя (доски `PhonePlan`,
+  // `XpPlan`)
+  const isPhone = windowWidth <= PHONE_WIDTH;
   // Слои календаря и выключенные группы: виды календаря показывают состояние без них
   const layers = useMemo(
     () => getEffectiveLayers(layerPrefs.layers, isHealthOn, modulePrefs.healthBlocks, isNarrow),
@@ -621,6 +625,7 @@ const Planner = () => {
         picked={picked}
         today={today}
         isNarrow={isNarrow}
+        isPhone={isPhone}
         segments={calendarSegments}
         activeSegment={isToday ? SEGMENT_TODAY : calendarView}
         prevLabel={lang(isMonthView && isCalendar ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
@@ -980,7 +985,8 @@ const Planner = () => {
                 />
               </div>
             )}
-            {isNarrow && hasContent && isCalendar && (isMonthView || calendarView === 'year') && renderPeriod()}
+            {isNarrow && hasContent && isCalendar && (isMonthView || (calendarView === 'year' && !isPhone))
+              && renderPeriod()}
             <div
               ref={contentRef}
               className={buildClassName(styles.content, isFlush && styles.contentFlush, 'custom-scroll')}

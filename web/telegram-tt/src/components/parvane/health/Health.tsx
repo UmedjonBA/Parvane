@@ -240,7 +240,7 @@ const Health = () => {
               <ParvaneIcon name="left" />
             </button>
           )}
-          <div className={buildClassName(styles.headerTitle, kit.grow)}>
+          <div className={buildClassName(styles.headerTitle, styles.headerTitleGrow)}>
             <h1 className={styles.title} data-health-title>{renderTitle(detailKind)}</h1>
             {isWide && view && period === 'month' && !NO_PERIOD_KINDS.includes(detailKind) && (
               <div className={buildClassName(kit.muted, kit.small)}>

@@ -185,6 +185,13 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   const saved = await page.evaluate(() => localStorage.getItem('parvane:planner-view'));
   const value = screen === 'today' ? 'today' : PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
   const segment = planner.getByRole('group', { name: 'Calendar view' }).locator(`button[data-value="${value}"]`);
+  // Телефон: «Год» и «Список» — в меню «⋯», чипа в шапке у них нет
+  const more = planner.locator('[data-planner-more]');
+  if (['year', 'agenda'].includes(value) && await more.isVisible().catch(() => false)
+    && !(await segment.isVisible().catch(() => false))) {
+    await openPlannerHeader(page, value);
+    return planner;
+  }
   await segment.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   if (await segment.getAttribute('aria-pressed') !== 'true') await segment.click();
   await planner.locator(`button[data-value="${value}"][aria-pressed="true"]`)
@@ -216,11 +223,31 @@ export async function pickPlannerDay(page, day) {
 // в шапке «Плана» открывает её. Возвращает содержимое страницы; уведомления о сохранении — `[role="status"]` в ней
 export async function openPlannerSettings(page) {
   const settings = page.locator('[data-settings-page="plan"]');
-  await clickUntil(
-    page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' }).first(),
-    () => settings.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
-  );
+  const isShown = () => settings.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Телефон: настройки — пункт меню «⋯» шапки
+  if (await page.locator('#ParvanePlanner [data-planner-more]').isVisible().catch(() => false)) {
+    await openPlannerHeader(page, 'settings');
+    await isShown();
+    return settings;
+  }
+  await clickUntil(page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' }).first(), isShown);
   return settings;
+}
+
+// Поиск, «Задачи», настройки и виды «Год» / «Список» шапки «Плана». На компьютере — свои кнопки; на телефоне в шапке
+// три чипа вида, остальное — пункты меню «⋯» (`[data-planner-more]`, доска `PhonePlan`)
+export async function openPlannerHeader(page, key) {
+  const planner = page.locator('#ParvanePlanner');
+  const more = planner.locator('[data-planner-more]');
+  if (await more.isVisible().catch(() => false)) {
+    await more.click();
+    await page.locator(`[role="menuitem"][data-action="${key}"]`).click();
+    return;
+  }
+  const direct = { search: '[data-planner-search-open]', tasks: '[data-planner-tasks-open]' }[key];
+  if (direct) await planner.locator(direct).first().click();
+  else if (key === 'settings') await planner.getByRole('button', { name: 'Planner settings' }).first().click();
+  else await planner.locator(`button[data-value="${key}"]`).click();
 }
 
 // Со страницы настроек — обратно в «План» (тот же вид): «назад» до экрана с панелью модулей, затем «План»
