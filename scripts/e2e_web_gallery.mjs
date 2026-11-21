@@ -6,10 +6,12 @@
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  createGroupViaUi,
   dismissRecoveryKeyDialog,
   LOGIN_TIMEOUT_MS,
   openHealthModule,
   openPlannerScreen,
+  openPrivateChatStrict,
   openSavedMessages,
   preparePage,
   reloadPage,
@@ -55,9 +57,10 @@ async function openSession(tag) {
     Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
     Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
   });
-  const session = await preparePage(context, `gallery-${tag}-${Date.now().toString(36)}@local`, PASSWORD);
+  const user = `gallery-${tag}-${Date.now().toString(36)}@local`;
+  const session = await preparePage(context, user, PASSWORD);
   await dismissRecoveryKeyDialog(session.page).catch(() => undefined);
-  return session;
+  return { ...session, user };
 }
 
 async function toRussian(page) {
@@ -444,8 +447,77 @@ async function galleryShell() {
   await page.context().close();
 }
 
+// ── «Музыка»: доски MusicHome, MusicLibrary, MusicPlayer, MusicPlaylist, MusicSearch, RpMusicA/B, XpMusic, ZpMusicX,
+//    DeskMusic, DeskMusicMore, RdMusic, XdMusic, ZdMusicX. Нужна библиотека сервера: раннер
+//    `run_web_gallery_music_e2e.sh` поднимает поддельный сервер, как у сценария `music` ──
+const MUSIC_VIEWS = ['home', 'starred', 'artists', 'albums', 'offline'];
+
+async function galleryMusic() {
+  const { page } = await openSession('music');
+  await toRussian(page);
+  const music = await openModule(page, 'music', 'ParvaneMusic');
+  await page.locator('#ParvaneMusic[data-music-enabled="true"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(2000);
+  const nav = (view) => music.locator(`[data-music-nav] [data-view="${view}"]:visible`).first();
+  // Компьютер
+  for (const view of MUSIC_VIEWS) {
+    await step(page, `music-desk-${view}`, async () => { await nav(view).click({ timeout: STEP_TIMEOUT_MS }); });
+  }
+  await step(page, 'music-desk-playing', async () => {
+    await nav('albums').click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-music-albums] button').first().click({ timeout: STEP_TIMEOUT_MS });
+    await music.locator('[data-track]').first().getByRole('button').first().click({ timeout: STEP_TIMEOUT_MS });
+    await nav('home').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1500);
+  });
+  // Телефон
+  await resize(page, PHONE);
+  // Телефон: три вкладки «Главная / Поиск / Библиотека» (доска `MusicHome`)
+  const tab = (index) => music.locator('[role="tablist"]').first().locator('[role="tab"]').nth(index);
+  await step(page, 'MusicHome-01', async () => { await tab(0).click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'MusicSearch-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'MusicLibrary-01', async () => { await tab(2).click({ timeout: STEP_TIMEOUT_MS }); });
+  await page.context().close();
+}
+
+// ── Чаты: доски RpChat (профиль собеседника), ZpChat2 (сведения группы), XpChat, ZpChat — два аккаунта ──
+async function galleryChat() {
+  const bob = await openSession('chat-bob');
+  const alice = await openSession('chat-alice');
+  const { page } = alice;
+  const peer = bob.user;
+  try {
+    await openPrivateChatStrict(page, peer);
+    await sendText(page, 'Пришли конфиг, гляну вечером');
+    await createGroupViaUi(page, 'Linux-чат', [peer.split('@')[0]]);
+  } catch (err) {
+    console.log(`WARN: чат: ${String(err).split('\n')[0]}`);
+  }
+  await toRussian(page);
+  const header = page.locator('#MiddleColumn .MiddleHeader .chat-info-wrapper, #MiddleColumn .MiddleHeader .ChatInfo').first();
+  // Компьютер: открытая группа и её сведения
+  await step(page, 'chat-desk-group', async () => {
+    await page.locator('.chat-list .ListItem').filter({ hasText: 'Linux-чат' }).first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'chat-desk-group-info', async () => { await header.click({ timeout: STEP_TIMEOUT_MS }); });
+  await page.keyboard.press('Escape');
+  await step(page, 'chat-desk-peer-info', async () => {
+    await page.locator('.chat-list .ListItem').filter({ hasText: peer.split('@')[0] }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await header.click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  // Телефон
+  await resize(page, PHONE);
+  await step(page, 'RpChat-01', async () => { await header.click({ timeout: STEP_TIMEOUT_MS }); });
+  await page.context().close();
+  await bob.page.context().close();
+}
+
 try {
   if (wants('health')) await galleryHealth();
+  if (wants('chat')) await galleryChat();
+  // «Музыка» — только с библиотекой сервера (раннер `run_web_gallery_music_e2e.sh`)
+  if (wants('music') && process.env.PARVANE_E2E_MUSIC) await galleryMusic();
   if (wants('shell')) await galleryShell();
   if (wants('auth')) await galleryAuth();
   if (wants('profile')) await galleryProfile();

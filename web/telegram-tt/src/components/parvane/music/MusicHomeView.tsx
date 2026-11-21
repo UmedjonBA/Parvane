@@ -157,7 +157,7 @@ const MusicHomeView = ({ info, isPhone, onSendToChat }: OwnProps) => {
       )}
       <section className={styles.mix} data-music-mix>
         <div className={kit.grow}>
-          <div className={kit.caps}>{lang('MusicMixTitle')}</div>
+          <div className={buildClassName(kit.caps, styles.mixCaps)}>{lang('MusicMixTitle')}</div>
           <div className={styles.mixText}>{lang('MusicMixSoon')}</div>
         </div>
       </section>

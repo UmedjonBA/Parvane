@@ -215,14 +215,16 @@ const Music = () => {
         </header>
         {/* Пустая библиотека — без вкладок (доска `RpMusicB`) */}
         {(tab !== 'home' || Boolean(info!.libraryTracks)) && (
-          <PvSegment
-            className={styles.tabs}
-            items={TABS.map((value) => ({ value, label: lang(TAB_KEYS[value]) }))}
-            value={tab}
-            label={lang('ParvaneModuleMusic')}
-            isTabs
-            onChange={handleTab}
-          />
+          <div className={styles.tabsBar}>
+            <PvSegment
+              className={styles.tabs}
+              items={TABS.map((value) => ({ value, label: lang(TAB_KEYS[value]) }))}
+              value={tab}
+              label={lang('ParvaneModuleMusic')}
+              isTabs
+              onChange={handleTab}
+            />
+          </div>
         )}
         <div className={buildClassName(styles.main, 'custom-scroll')} data-music-view={view.kind}>
           {renderView(view)}
