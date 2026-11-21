@@ -13,9 +13,13 @@ import styles from './CanvasParts.module.scss';
 import kit from './PvKit.module.scss';
 
 export type CanvasTool = 'text' | 'note' | 'new-note' | 'link' | 'file' | 'group';
+// Панель выделенного на компьютере: карточка либо её стрелка (переключатель «Карточка · Стрелка», доска `ZdNotesX`)
+export type CanvasPanelKind = 'card' | 'edge';
 
 type OwnProps = {
   title: string;
+  // Под названием: «холст · выбрана стрелка», «холст · выделено: N»
+  subtitle?: string;
   isNarrow: boolean;
   isFromGraph: boolean;
   canUndo: boolean;
@@ -24,6 +28,10 @@ type OwnProps = {
   isConnecting: boolean;
   isSelectMode: boolean;
   hasSelection: boolean;
+  // Выделено что угодно (и стрелки): «Готово» в шапке
+  hasAnySelection: boolean;
+  // Есть что выбрать по переключателю: открытая сейчас панель — `panelKind`
+  panelKind?: CanvasPanelKind;
   onBack: NoneToVoidFunction;
   onUndo: NoneToVoidFunction;
   onRedo: NoneToVoidFunction;
@@ -32,6 +40,9 @@ type OwnProps = {
   onTool: (tool: CanvasTool) => void;
   onConnect: NoneToVoidFunction;
   onSelectMode: NoneToVoidFunction;
+  onPanel: (kind: CanvasPanelKind) => void;
+  // «Готово»: выделение снимается
+  onDone: NoneToVoidFunction;
 };
 
 const TOOLS: { tool: CanvasTool; icon: PvIconName; label: RegularLangKey; title: RegularLangKey }[] = [
@@ -59,10 +70,15 @@ const TOOLS: { tool: CanvasTool; icon: PvIconName; label: RegularLangKey; title:
 // строке инструменты с подписями, «Отменить / Вернуть», «Обновить из графа» (только у холста из графа) и действия
 // с холстом. На телефоне инструменты — нижней панелью с подписями под значками, в шапке — отмена и возврат
 const CanvasHead = ({
-  title, isNarrow, isFromGraph, canUndo, canRedo, canConnect, isConnecting, isSelectMode, hasSelection,
-  onBack, onUndo, onRedo, onRefresh, onMenu, onTool, onConnect, onSelectMode,
+  title, subtitle, isNarrow, isFromGraph, canUndo, canRedo, canConnect, isConnecting, isSelectMode, hasSelection,
+  hasAnySelection, panelKind, onBack, onUndo, onRedo, onRefresh, onMenu, onTool, onConnect, onSelectMode, onPanel,
+  onDone,
 }: OwnProps) => {
   const lang = useLang();
+
+  function handlePanel(e: React.MouseEvent<HTMLButtonElement>) {
+    onPanel(e.currentTarget.dataset.canvasPanel as CanvasPanelKind);
+  }
 
   function handleTool(e: React.MouseEvent<HTMLButtonElement>) {
     onTool(e.currentTarget.dataset.canvasTool as CanvasTool);
@@ -128,7 +144,10 @@ const CanvasHead = ({
         >
           <PvIcon name="left" />
         </button>
-        <h2 className={styles.headTitle} aria-pressed data-canvas-chip={title}>{title}</h2>
+        <div className={styles.headTitleBox}>
+          <h2 className={styles.headTitle} aria-pressed data-canvas-chip={title}>{title}</h2>
+          {subtitle && !isNarrow && <span className={styles.headSub} data-canvas-head-sub>{subtitle}</span>}
+        </div>
         {!isNarrow && (
           <div className={styles.headTools}>
             {tools}
@@ -136,6 +155,29 @@ const CanvasHead = ({
           </div>
         )}
         <div className={styles.headEnd}>
+          {/* Пока что-то выделено (компьютер): «Карточка · Стрелка» переключают панель, «Готово» снимает выделение */}
+          {!isNarrow && panelKind && (
+            <div className={kit.seg} role="radiogroup" data-canvas-panel-switch>
+              {(['card', 'edge'] as const).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  role="radio"
+                  aria-checked={panelKind === kind}
+                  className={buildClassName(kit.segItem, panelKind === kind && kit.segItemOn)}
+                  data-canvas-panel={kind}
+                  onClick={handlePanel}
+                >
+                  {lang(kind === 'card' ? 'KnowledgeCanvasPanelCard' : 'KnowledgeCanvasPanelArrow')}
+                </button>
+              ))}
+            </div>
+          )}
+          {!isNarrow && hasAnySelection && (
+            <button type="button" className={buildClassName(kit.chip, kit.chipOn)} data-canvas-done onClick={onDone}>
+              {lang('Done')}
+            </button>
+          )}
           <button
             type="button"
             className={buildClassName(isNarrow ? kit.ib : kit.chip)}

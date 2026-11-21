@@ -8,6 +8,7 @@ import { formatRepeat } from './plannerFormat';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
 import PlannerRepeatFields, { draftToRepeat } from './PlannerRepeatFields';
@@ -39,21 +40,41 @@ export const PlannerCardCaption = ({ children }: { children: TeactNode }) => (
 
 type RepeatProps = {
   value: PlannerRepeatDraft;
+  // День записи: еженедельно по её дню недели — просто «Каждую неделю»
+  day?: string;
   onChange: (update: (previous: PlannerRepeatDraft) => PlannerRepeatDraft) => void;
   // Под полями повтора (кнопка «Сохранить повтор», ошибка, ссылка на ряд)
   children?: TeactNode;
 };
 
-// Строка повтора: правило одной строкой, настройки раскрываются по нажатию
-const PlannerRepeatRowInner = ({ value, onChange, children }: RepeatProps) => {
+// Ширина, до которой «План» — одна колонка (`Planner.module.scss`)
+const NARROW_WIDTH = 925;
+
+// Строка повтора. Телефон: правило одной строкой «Повтор — Каждую неделю», настройки раскрываются по нажатию
+// (доска `PhPlanMore`). Компьютер: блок «Повтор» раскрыт всегда (доска `DkPlanMore`)
+const PlannerRepeatRowInner = ({
+  value, day, onChange, children,
+}: RepeatProps) => {
   const lang = useLang();
   const [isOpen, setIsOpen] = useState(false);
+  const { width } = useWindowSize();
+  const isNarrow = width <= NARROW_WIDTH;
 
   const handleToggle = useLastCallback(() => {
     setIsOpen((current) => !current);
   });
 
   const repeat = draftToRepeat(value);
+
+  if (!isNarrow) {
+    return (
+      <PlannerCardRow icon="loop" row="repeat">
+        <h4 className={styles.cardBlockTitle}>{lang('PlannerRepeatLabel')}</h4>
+        <PlannerRepeatFields value={value} onChange={onChange} />
+        {children}
+      </PlannerCardRow>
+    );
+  }
 
   return (
     <PlannerCardRow icon="loop" row="repeat">
@@ -67,7 +88,7 @@ const PlannerRepeatRowInner = ({ value, onChange, children }: RepeatProps) => {
         {/* Подпись строки видна только строкой настроек на телефоне */}
         <span className={styles.cardRowButtonLabel}>{lang('PlannerRepeatLabel')}</span>
         <span className={styles.cardRowButtonText}>
-          {repeat ? formatRepeat(lang, repeat) : lang('PlannerRepeatKindNone')}
+          {repeat ? formatRepeat(lang, repeat, day) : lang('PlannerRepeatKindNone')}
         </span>
         <Icon name={isOpen ? 'up' : 'down'} />
       </button>

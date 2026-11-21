@@ -827,7 +827,6 @@ const NotesGraph = ({
             onToggle={handleToggleScope}
           />
           {isNarrow && relayoutChip}
-          {isNarrow && canvasChip}
         </div>
         {isScopeOpen && (
           <NotesGraphScope
@@ -858,7 +857,7 @@ const NotesGraph = ({
         <div className={styles.busy} role="status" data-graph-busy-note>{lang('KnowledgeGraphBusy')}</div>
       )}
       {!nodes.length && !isBusy && <p className={board.boardEmpty}>{lang('KnowledgeGraphEmpty')}</p>}
-      {removals.map(({ from, spot }) => {
+      {!isNarrow && removals.map(({ from, spot }) => {
         const label = removals.length > 1
           ? lang('KnowledgeGraphRemoveLinkFrom', { name: from.title }) : lang('KnowledgeGraphRemoveLink');
         return (
@@ -906,7 +905,13 @@ const NotesGraph = ({
           >
             <PvIcon name="minus" />
           </button>
-          <button type="button" className={styles.zoomTool} aria-label={lang('KnowledgeZoomFit')} onClick={fit}>
+          <button
+            type="button"
+            className={styles.zoomTool}
+            aria-label={lang('KnowledgeZoomFitScreen')}
+            title={lang('KnowledgeZoomFitScreen')}
+            onClick={fit}
+          >
             <PvIcon name="fit" />
           </button>
         </div>
@@ -917,6 +922,44 @@ const NotesGraph = ({
           {renderChip(lang('KnowledgeZoomFit'), fit, 'data-graph-fit')}
           {relayoutChip}
           {canvasChip}
+        </div>
+      )}
+      {isNarrow && (
+        <div className={styles.phoneBottom} data-board-tools>
+          {/* Телефон: выбранная линия — строка «выбрана связь с …» и «Убрать» вместо крестиков на линии (доска
+              `XpNotes`) */}
+          {removals.length > 0 && (
+            <div className={styles.edgeStrip} role="status" data-graph-edge-picked>
+              <div className={styles.edgeStripText}>
+                <span className={kit.ttl}>{removals[0].from.title}</span>
+                <span className={kit.sub}>{lang('KnowledgeGraphEdgePicked', { name: removals[0].to.title })}</span>
+              </div>
+              {removals.map(({ from }) => (
+                <button
+                  key={from.id}
+                  type="button"
+                  className={buildClassName(kit.btn, kit.btnDanger, styles.edgeStripRemove)}
+                  data-graph-edge-remove={from.id}
+                  data-from-title={from.title}
+                  onClick={handleRemoveClick}
+                >
+                  {removals.length > 1
+                    ? lang('KnowledgeGraphRemoveLinkFrom', { name: from.title }) : lang('KnowledgeGraphEdgeUnlink')}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* «Холст из графа» — широкой кнопкой внизу поля, а не чипом в строке сверху */}
+          <button
+            type="button"
+            className={buildClassName(kit.btn, styles.canvasWide)}
+            disabled={!hasCanvasNotes}
+            data-graph-to-canvas
+            onClick={handleMakeCanvas}
+          >
+            <PvIcon name="board" isSmall />
+            {lang('KnowledgeGraphToCanvas')}
+          </button>
         </div>
       )}
     </div>

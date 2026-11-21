@@ -215,6 +215,33 @@ export function buildLinkPlan(
   };
 }
 
+// Источник ссылки на несколько выбранных узлов (доска `XdFiles`: «Ссылка» в панели выделения): `sel:id1,id2`
+export const LINK_SELECTION_PREFIX = 'sel:';
+const SELECTION_TOP_ID = '\u0000selection';
+
+/** Узлы выбора из источника ссылки `sel:…`; обычный узел — `undefined`. */
+export function parseLinkSelection(node: string | undefined) {
+  if (!node?.startsWith(LINK_SELECTION_PREFIX)) return undefined;
+  const ids = node.slice(LINK_SELECTION_PREFIX.length).split(',').filter(Boolean);
+  return ids.length ? ids : undefined;
+}
+
+/**
+ * План ссылки на несколько выбранных узлов одного контейнера: папка `name`, в ней — выбранные файлы и папки со
+ * всем содержимым (как у ссылки на папку). Один выбранный узел — та же ссылка, что на него самого.
+ */
+export function buildSelectionPlan(
+  nodes: LinkSourceNode[], ids: string[], name: string,
+): LinkPlan | { error: LinkPlanError } {
+  if (ids.length === 1) return buildLinkPlan(nodes, ids[0]);
+  const chosen = new Set(ids);
+  if (!ids.every((id) => nodes.some((n) => n.id === id && !n.trashed))) return { error: 'not-found' };
+  const regrouped = nodes.map((n) => (chosen.has(n.id) ? { ...n, parent: SELECTION_TOP_ID } : n));
+  return buildLinkPlan([...regrouped, {
+    id: SELECTION_TOP_ID, kind: 'folder', name, size: 0, mime: '', trashed: false,
+  }], SELECTION_TOP_ID);
+}
+
 /** Список ссылки: папки и файлы плана с указателями на блобы-копии. */
 export function buildManifest(
   plan: LinkPlan,

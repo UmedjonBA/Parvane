@@ -28,10 +28,12 @@ const CloudUsage = ({ usage, trashBytes, isInList }: OwnProps) => {
   const lang = useLang();
   const isWarn = getIsCloudAlmostFull(usage);
   const share = Math.min(1, usage.used / usage.quota);
-  const parts = [
+  // «Корзина: 2,2 ГБ · ссылки: 1,4 ГБ» (доска `RdFiles`): заглавная — только у первой части
+  const partsText = [
     trashBytes > 0 && lang('ParvaneCloudUsageTrash', { size: formatFileSize(lang, trashBytes) }),
     usage.linksBytes > 0 && lang('ParvaneCloudUsageLinks', { size: formatFileSize(lang, usage.linksBytes) }),
-  ].filter(Boolean);
+  ].filter(Boolean).join(' · ');
+  const partsShown = partsText && `${partsText[0].toLocaleUpperCase()}${partsText.slice(1)}`;
 
   return (
     <footer
@@ -53,7 +55,7 @@ const CloudUsage = ({ usage, trashBytes, isInList }: OwnProps) => {
       </div>
       <div className={styles.usageNote}>
         {isWarn && <span className={styles.usageAlert}>{`${lang('ParvaneCloudUsageAlmostFull')} `}</span>}
-        {parts.length > 0 && <span>{`${parts.join(' · ')}. `}</span>}
+        {partsShown && <span>{`${partsShown}. `}</span>}
         {!isWarn && <span>{lang('ParvaneCloudEncryptedNote')}</span>}
       </div>
     </footer>

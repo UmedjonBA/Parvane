@@ -12,6 +12,8 @@ pub struct Added {
     pub artist: String,
     pub title: String,
     pub duration_secs: i64,
+    /// SHA-256 своего файла (hex) — дедупликация загрузок; у скачанного пусто.
+    pub sha256: String,
 }
 
 pub async fn open(db_path: &str) -> anyhow::Result<SqlitePool> {
@@ -31,7 +33,7 @@ pub async fn usage(pool: &SqlitePool, adder: &str, since_ms: i64) -> sqlx::Resul
 }
 
 pub async fn insert(pool: &SqlitePool, row: &Added) -> sqlx::Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO added_tracks (path, adder, bytes, added_ms, track_id, artist, title, duration_secs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT OR REPLACE INTO added_tracks (path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&row.path)
         .bind(&row.adder)
         .bind(row.bytes)
@@ -40,6 +42,7 @@ pub async fn insert(pool: &SqlitePool, row: &Added) -> sqlx::Result<()> {
         .bind(&row.artist)
         .bind(&row.title)
         .bind(row.duration_secs)
+        .bind(&row.sha256)
         .execute(pool)
         .await
         .map(|_| ())
@@ -51,7 +54,7 @@ pub async fn set_track_id(pool: &SqlitePool, path: &str, track_id: &str) -> sqlx
 
 /// Добавленное: свои либо всех, новые первыми.
 pub async fn list(pool: &SqlitePool, adder: Option<&str>, offset: u32, limit: u32) -> sqlx::Result<Vec<Added>> {
-    let base = "SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs FROM added_tracks";
+    let base = "SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks";
     match adder {
         Some(a) => sqlx::query_as(&format!("{base} WHERE adder = ? ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(a).bind(limit).bind(offset).fetch_all(pool).await,
         None => sqlx::query_as(&format!("{base} WHERE track_id != '' ORDER BY added_ms DESC, path LIMIT ? OFFSET ?")).bind(limit).bind(offset).fetch_all(pool).await,
@@ -59,9 +62,14 @@ pub async fn list(pool: &SqlitePool, adder: Option<&str>, offset: u32, limit: u3
 }
 
 pub async fn by_track(pool: &SqlitePool, track_id: &str) -> sqlx::Result<Option<Added>> {
-    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs FROM added_tracks WHERE track_id = ?").bind(track_id).fetch_optional(pool).await
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE track_id = ?").bind(track_id).fetch_optional(pool).await
 }
 
 pub async fn delete(pool: &SqlitePool, path: &str) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM added_tracks WHERE path = ?").bind(path).execute(pool).await.map(|_| ())
+}
+
+/// Свой файл с такой же SHA-256 уже в библиотеке (дедупликация загрузок).
+pub async fn by_sha256(pool: &SqlitePool, sha256: &str) -> sqlx::Result<Option<Added>> {
+    sqlx::query_as("SELECT path, adder, bytes, added_ms, track_id, artist, title, duration_secs, sha256 FROM added_tracks WHERE sha256 = ? AND sha256 != '' LIMIT 1").bind(sha256).fetch_optional(pool).await
 }

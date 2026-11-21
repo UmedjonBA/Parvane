@@ -3,7 +3,7 @@ import { memo } from '../../../lib/teact/teact';
 import type { HealthMetricView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatNumber, WATER_KIND } from './healthFormat';
+import { WATER_KIND } from './healthFormat';
 import { addHealthEntries } from './healthStore';
 
 import useLang from '../../../hooks/useLang';
@@ -15,11 +15,13 @@ import styles from './Health.module.scss';
 type OwnProps = {
   // Показателя нет, пока нет ни записей, ни цели
   metric?: HealthMetricView;
-  onOpen: (kind: string) => void;
+  // Сводка: нажатие открывает «Питание и воду»; на самом экране — без перехода
+  onOpen?: (kind: string) => void;
 };
 
 const GLASS_ML = 250;
 const BOTTLE_ML = 500;
+const ML_IN_LITER = 1000;
 
 // Parvane (spec 041, доска `XdHealth`): блок «Вода» — выпито за день, цель и прибавка стаканом либо бутылкой.
 // Прибавка — отдельная запись, сумму дня считает движок
@@ -29,7 +31,10 @@ const HealthWaterCard = ({ metric, onOpen }: OwnProps) => {
   const goal = metric?.goal;
   const share = goal ? Math.min(1, today / goal) : 0;
 
-  const handleOpen = useLastCallback(() => onOpen(WATER_KIND));
+  const handleOpen = useLastCallback(() => onOpen?.(WATER_KIND));
+  // Литры с одним-двумя знаками: 1,25 из 2,5 л (доска `XdHealth`)
+  const liters = (ml: number) => new Intl.NumberFormat(lang.code, { maximumFractionDigits: 2 })
+    .format(ml / ML_IN_LITER);
 
   const handleAdd = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     void addHealthEntries([{
@@ -46,16 +51,16 @@ const HealthWaterCard = ({ metric, onOpen }: OwnProps) => {
 
   return (
     <section className={buildClassName(kit.card, styles.card)} data-health-card={WATER_KIND}>
-      <button type="button" className={styles.waterHead} onClick={handleOpen}>
+      <button type="button" className={styles.waterHead} disabled={!onOpen} onClick={handleOpen}>
         <span className={buildClassName(kit.caps, kit.grow)}>{lang('HealthKindWater')}</span>
         <span>
-          <span className={buildClassName(kit.mono, styles.metricValue)} data-health-value>
-            {formatNumber(today, lang.code)}
+          <span className={buildClassName(kit.mono, styles.metricValue)} data-health-value={String(today)}>
+            {liters(today)}
           </span>
           <span className={kit.muted}>
             {goal !== undefined
-              ? ` ${lang('HealthWaterOfGoal', { goal: formatNumber(goal, lang.code) })}`
-              : ` ${lang('HealthUnitMl')}`}
+              ? ` ${lang('HealthWaterOfGoalLiters', { goal: liters(goal) })}`
+              : ` ${lang('HealthUnitLiter')}`}
           </span>
         </span>
       </button>

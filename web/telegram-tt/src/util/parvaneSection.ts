@@ -25,9 +25,10 @@ function readSection(): ParvaneSection {
 
 const [getParvaneSection, setSignal] = createSignal<ParvaneSection>(readSection());
 // Запрос «новая запись»: окно ввода текстом «Плана». `text` — заготовка строки; `isInPlace` — окно
-// показывает раздел, из которого пришёл запрос («Заметки»), и после записи пользователь остаётся в нём.
-// Запрос забирает тот, кто показывает окно: «План» либо `PlannerQuickHost` открытого раздела
-export type PlannerAddRequest = { text?: string; isInPlace?: boolean };
+// показывает раздел, из которого пришёл запрос (любой, кроме «Плана»), и после записи пользователь остаётся в нём;
+// `isMore` — сразу полная форма «Плана» («Подробнее» окна поверх другого модуля).
+// Запрос забирает тот, кто показывает окно: «План» либо общий `PlannerQuickHost` (`Main`)
+export type PlannerAddRequest = { text?: string; isInPlace?: boolean; isMore?: boolean };
 const [getPlannerAddRequest, setPlannerAddRequest] = createSignal<PlannerAddRequest | undefined>(undefined);
 
 // Экран «Плана»: «Сегодня», виды календаря либо «Здоровье». «Сегодня» — первый вид «Календаря»: в боковой
@@ -169,15 +170,21 @@ export function requestPlannerAdd(text?: unknown) {
 }
 
 /**
- * Окно ввода текстом поверх модуля «Заметки» («Запланировать» в заметке): раздел не меняется. Из раздела,
- * который окно не держит, запрос открывает «План», как `requestPlannerAdd`.
+ * Окно «Новая запись» поверх открытого модуля («Запланировать» в заметке, Ctrl+N): раздел не меняется. В самом
+ * «Плане» — его обычное окно.
  */
-export function requestPlannerAddInPlace(text: string) {
-  if (getParvaneSection() !== 'notes') {
+export function requestPlannerAddInPlace(text?: string) {
+  if (getParvaneSection() === 'planner') {
     requestPlannerAdd(text);
     return;
   }
   setPlannerAddRequest({ text, isInPlace: true });
+}
+
+/** «Подробнее» окна поверх другого модуля: «План» с полной формой новой записи. */
+export function requestPlannerMore() {
+  setParvaneSection('planner');
+  setPlannerAddRequest({ isMore: true });
 }
 
 /** Окно ввода с готовой строкой («Записать сон» в общем поиске). */
@@ -279,20 +286,19 @@ export function consumeHealthAddRequest() {
   setHealthAddRequest(undefined);
 }
 
-// Запрос «открыть настройки плана» из «Профиля»: «План» открывает свои настройки и сбрасывает запрос
-// (как запрос новой записи). Пока раздел запрос не читает, «Профиль» просто открывает «Сегодня»
-const [getPlannerSettingsRequest, setPlannerSettingsRequest] = createSignal(false);
+// Запрос «открыть Расписание на неделю» со страницы «Профиль → Модули / План» на телефоне: «План» открывает экран
+// импорта и сбрасывает запрос (как запрос новой записи)
+const [getPlannerImportRequest, setPlannerImportRequest] = createSignal(false);
 
-export { getPlannerSettingsRequest };
+export { getPlannerImportRequest };
 
-export function requestPlannerSettings() {
-  setPlannerView('today');
+export function requestPlannerImport() {
   setParvaneSection('planner');
-  setPlannerSettingsRequest(true);
+  setPlannerImportRequest(true);
 }
 
-export function consumePlannerSettingsRequest() {
-  setPlannerSettingsRequest(false);
+export function consumePlannerImportRequest() {
+  setPlannerImportRequest(false);
 }
 
 // «Контакты», открытые из «Профиля»: «назад» возвращает в «Профиль», а не к списку чатов

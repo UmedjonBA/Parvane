@@ -2,6 +2,7 @@ import { memo } from '../../../lib/teact/teact';
 
 import type { EditorTool } from './notesEditorInsert';
 
+import buildClassName from '../../../util/buildClassName';
 import { EDITOR_TOOL_SIGNS, EDITOR_TOOLS } from './notesEditorInsert';
 
 import useLang from '../../../hooks/useLang';
@@ -20,11 +21,13 @@ type OwnProps = {
   onLink: (title: string) => void;
   onFile: NoneToVoidFunction;
   onCloudFile: NoneToVoidFunction;
+  onHelp: NoneToVoidFunction;
 };
 
 const TOOL_LABELS = {
   heading: 'KnowledgeToolHeading',
   bold: 'KnowledgeToolBold',
+  italic: 'KnowledgeToolItalic',
   task: 'KnowledgeToolTask',
   link: 'KnowledgeToolLink',
   code: 'KnowledgeToolCode',
@@ -34,7 +37,7 @@ const TOOL_LABELS = {
 
 // Низ редактора заметки (доска `PhNotesMore`): подсказка заметки для ссылки и кнопки разметки
 const NoteEditorTools = ({
-  linkTitles, newLinkTitle, onTool, onLink, onFile, onCloudFile,
+  linkTitles, newLinkTitle, onTool, onLink, onFile, onCloudFile, onHelp,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -89,6 +92,18 @@ const NoteEditorTools = ({
           </button>
         ))}
         <span className={styles.toolsGap} data-note-insert>
+          {/* «файл» — файл с диска «Файлов» (доска `PhNotesMore`); загрузка с устройства — значком рядом (сверх
+              доски) */}
+          <button
+            type="button"
+            className={buildClassName(styles.tool, styles.toolText)}
+            aria-label={lang('KnowledgeInsertFromCloud')}
+            title={lang('KnowledgeInsertFromCloud')}
+            data-note-insert-cloud
+            onClick={onCloudFile}
+          >
+            {lang('KnowledgeInsertFileShort')}
+          </button>
           <button
             type="button"
             className={styles.tool}
@@ -102,12 +117,12 @@ const NoteEditorTools = ({
           <button
             type="button"
             className={styles.tool}
-            aria-label={lang('KnowledgeInsertFromCloud')}
-            title={lang('KnowledgeInsertFromCloud')}
-            data-note-insert-cloud
-            onClick={onCloudFile}
+            aria-label={lang('KnowledgeMdHelp')}
+            title={lang('KnowledgeMdHelp')}
+            data-note-md-help
+            onClick={onHelp}
           >
-            <PvIcon name="folder" isSmall />
+            ?
           </button>
         </span>
       </div>

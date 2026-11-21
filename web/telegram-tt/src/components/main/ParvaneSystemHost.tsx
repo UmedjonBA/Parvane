@@ -10,10 +10,14 @@ import { takeSharedPayload } from '../../util/sharedInbox';
 import useDerivedState from '../../hooks/useDerivedState';
 import useLastCallback from '../../hooks/useLastCallback';
 
+import NotifyOnboardSheet from '../parvane/permission/NotifyOnboardSheet';
+import PermissionDeniedSheet from '../parvane/permission/PermissionDeniedSheet';
 import ShareSheet from '../parvane/share/ShareSheet';
+import PvTooltipHost from './PvTooltipHost';
 
 // Parvane (spec 041 F2): то, что приходит от системы и ждёт вошедшего приложения, — ярлык «Новое сообщение»
-// и экран «Поделиться в Parvane» (адрес запуска `?open=compose | share`, `util/parvaneSection.ts`)
+// и экран «Поделиться в Parvane» (адрес запуска `?open=compose | share`, `util/parvaneSection.ts`); разрешения
+// браузера («Нет доступа», экран уведомлений после первого входа) и подсказка при наведении (`ZpSysGen`, `ZdMisc`)
 const ParvaneSystemHost = () => {
   const { openLeftColumnContent } = getActions();
   const [shared, setShared] = useState<SharedPayload | undefined>();
@@ -31,7 +35,14 @@ const ParvaneSystemHost = () => {
 
   const handleClose = useLastCallback(() => setShared(undefined));
 
-  return <ShareSheet shared={shared} onClose={handleClose} />;
+  return (
+    <>
+      <ShareSheet shared={shared} onClose={handleClose} />
+      <PermissionDeniedSheet />
+      <NotifyOnboardSheet />
+      <PvTooltipHost />
+    </>
+  );
 };
 
 export default memo(ParvaneSystemHost);

@@ -8,7 +8,7 @@ import type { PvIconName } from './PvIcon';
 import buildClassName from '../../../util/buildClassName';
 import { CANVAS_PRESET_COLORS } from './notesCanvas';
 import { CANVAS_EDGE_DIRECTIONS, CANVAS_EDGE_LINES } from './notesCanvasEdges';
-import { CANVAS_TONES } from './notesCanvasLook';
+import { CANVAS_TONES, colorLabel } from './notesCanvasLook';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -106,12 +106,15 @@ const CanvasSidePanel = ({
     onEdgeLine(e.currentTarget.dataset.line as CanvasEdgeLine);
   });
 
-  function renderAction(action: CanvasPanelAction, text: string, isDanger?: boolean, icon?: PvIconName) {
+  function renderAction(
+    action: CanvasPanelAction, text: string, isDanger?: boolean, icon?: PvIconName, isDisabled?: boolean,
+  ) {
     return (
       <button
         type="button"
         className={buildClassName(kit.chip, styles.panelAction, isDanger && styles.panelDanger)}
         title={text}
+        disabled={isDisabled}
         data-canvas-action={action}
         onClick={handleAction}
       >
@@ -132,7 +135,8 @@ const CanvasSidePanel = ({
             aria-checked={color === item}
             className={buildClassName(styles.swatch, color === item && styles.swatchOn)}
             style={`--c: ${CANVAS_TONES[item]}`}
-            aria-label={`${lang('KnowledgeCanvasColor')} ${item}`}
+            title={colorLabel(lang, item)}
+            aria-label={colorLabel(lang, item)}
             data-color={item}
             data-canvas-color={item}
             onClick={handleColor}
@@ -143,8 +147,8 @@ const CanvasSidePanel = ({
           role="radio"
           aria-checked={!color}
           className={buildClassName(styles.swatch, styles.swatchNone, !color && styles.swatchOn)}
-          title={lang('KnowledgeCanvasNoColor')}
-          aria-label={lang('KnowledgeCanvasNoColor')}
+          title={colorLabel(lang)}
+          aria-label={colorLabel(lang)}
           data-color=""
           data-canvas-color="none"
           onClick={handleColor}
@@ -264,7 +268,10 @@ const CanvasSidePanel = ({
             {lang('KnowledgeCanvasAlignTop')}
           </button>
         )}
-        {canDistribute && renderAction('distribute', lang('KnowledgeCanvasDistribute'))}
+        {/* Распределить — от трёх карточек; при двух кнопка видна, но не действует (доска `XdNotes`) */}
+        {canAlign && renderAction(
+          'distribute', lang('KnowledgeCanvasDistribute'), undefined, undefined, !canDistribute,
+        )}
         {renderAction('duplicate', lang('KnowledgeCanvasDuplicate'))}
         {canFit && renderAction('fit', lang('KnowledgeCanvasFitGroup'))}
         {renderAction('front', lang('KnowledgeCanvasToFront'))}

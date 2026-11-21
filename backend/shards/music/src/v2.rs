@@ -44,13 +44,19 @@ pub(crate) async fn dispatch(ctx: &Ctx, method: &str, req: ShardRequest) -> Repl
     }
     let sub_shared = ctx.sub.as_ref().ok_or(ErrorCode::Unavailable)?;
     let sub: &Subsonic = sub_shared;
-    // Этап B: «Найти и скачать» — только с подключённым сервисом скачивания
-    if method.starts_with("music.fetch.") || method.starts_with("music.added.") {
+    // Общие плейлисты (spec 041, MUSIC-3): права проверяет шард
+    if method.starts_with("music.shared.") {
+        return crate::shared::dispatch(method, &req).await;
+    }
+    // Этап B: добавление треков — нужна папка библиотеки; «Найти и скачать» — ещё и сервис скачивания
+    if method.starts_with("music.fetch.") || method.starts_with("music.added.") || method.starts_with("music.upload.") {
         let fetch = ctx.fetch.as_ref().ok_or(ErrorCode::Unavailable)?;
         return match method {
             "music.fetch.catalog" => fetch.catalog(sub, &user, body(&req)?).await,
             "music.fetch.start" => fetch.start(sub_shared.clone(), &req.user, body(&req)?).await,
             "music.fetch.status" => fetch.status(&req.user),
+            "music.fetch.cancel" => fetch.cancel(&req.user, body(&req)?).await,
+            "music.upload.start" => crate::upload::start(fetch, ctx, &req.user, body(&req)?).await,
             "music.added.list" => fetch.added_list(sub, &req.user, body(&req)?).await,
             "music.added.delete" => fetch.added_delete(sub, &req.user, body(&req)?).await,
             _ => Err(ErrorCode::Unavailable),
@@ -81,11 +87,23 @@ async fn info_reply(ctx: &Ctx, address: &str, user: &str) -> Reply {
             .ok_or(ErrorCode::Unavailable)?,
         None => String::new(),
     };
-    // Добавление треков (этап B): без сервиса скачивания лимиты нулевые («выключено»)
+    // Добавление треков (этап B): без папки библиотеки лимиты нулевые («выключено»)
     let mut info = pb::InfoResponse { enabled: ctx.sub.is_some(), cover_expires_ms: if cover_base.is_empty() { 0 } else { exp }, cover_base, ..Default::default() };
+    // Числа для экранов (spec 041): сбой подсчёта модуль не выключает — числа просто не показываются
+    if let Some(sub) = &ctx.sub {
+        if let Ok(s) = crate::library::stats(sub, user).await {
+            (info.library_tracks, info.library_artists, info.library_albums) = (s.tracks, s.artists, s.albums);
+        }
+        if let Ok(v) = sub.call(user, "getStarred2", &[]).await {
+            info.starred_count = u32::try_from(list(&v, &["starred2", "song"]).len()).unwrap_or(u32::MAX);
+        }
+    }
     if let Some(fetch) = &ctx.fetch {
+        info.admin = fetch.admins.iter().any(|a| a == address);
         let (today, used) = fetch.usage(address).await;
-        info.fetch_enabled = true;
+        info.fetch_enabled = fetch.service.is_some();
+        info.upload_enabled = true;
+        info.upload_max_bytes = fetch.upload_max_bytes;
         info.add_per_day = fetch.add_per_day;
         info.quota_bytes = fetch.quota_bytes;
         info.added_today = today;
@@ -112,10 +130,18 @@ async fn search(sub: &Subsonic, user: &str, r: pb::LibrarySearchRequest) -> Repl
         )
         .await?;
     let cap = PAGE_MAX as usize;
+    let mut artists: Vec<pb::Artist> = list(&v, &["searchResult3", "artist"]).iter().filter_map(artist_of).take(cap).collect();
+    if !artists.is_empty() {
+        if let Ok(s) = crate::library::stats(sub, user).await {
+            for a in &mut artists {
+                a.track_count = s.artist_tracks.get(&a.id).copied().unwrap_or(0);
+            }
+        }
+    }
     Ok(pb::LibrarySearchResponse {
         tracks: list(&v, &["searchResult3", "song"]).iter().filter_map(track_of).take(cap).collect(),
         albums: list(&v, &["searchResult3", "album"]).iter().filter_map(album_of).take(cap).collect(),
-        artists: list(&v, &["searchResult3", "artist"]).iter().filter_map(artist_of).take(cap).collect(),
+        artists,
     }
     .encode_to_vec())
 }
@@ -138,9 +164,15 @@ async fn artist(sub: &Subsonic, user: &str, r: pb::LibraryArtistRequest) -> Repl
     if !valid_id(&r.artist_id, 64) {
         return Err(ErrorCode::Invalid);
     }
-    let v = sub.call(user, "getArtist", &[("id", r.artist_id)]).await?;
+    let v = sub.call(user, "getArtist", &[("id", r.artist_id.clone())]).await?;
     let a = v.get("artist").ok_or(ErrorCode::NotFound)?;
-    Ok(pb::LibraryArtistResponse { artist: artist_of(a), albums: list(a, &["album"]).iter().filter_map(album_of).take(ARTIST_ALBUMS_MAX).collect() }.encode_to_vec())
+    let albums: Vec<pb::Album> = list(a, &["album"]).iter().filter_map(album_of).take(ARTIST_ALBUMS_MAX).collect();
+    let artist = artist_of(a).map(|mut x| {
+        x.track_count = albums.iter().fold(0u32, |n, al| n.saturating_add(al.track_count));
+        x
+    });
+    let popular = crate::library::popular(sub, user, &r.artist_id).await;
+    Ok(pb::LibraryArtistResponse { artist, albums, popular }.encode_to_vec())
 }
 
 async fn song(sub: &Subsonic, user: &str, id: &str) -> Result<pb::Track, ErrorCode> {
@@ -180,6 +212,9 @@ async fn stream_url(ctx: &Ctx, sub: &Subsonic, user: &str, r: pb::StreamUrlReque
     };
     // Трек существует и виден пользователю — иначе ссылку не выдаём
     let t = song(sub, user, &r.track_id).await?;
+    if !r.download {
+        crate::library::record_play(user, &t).await;
+    }
     let exp = now_ms() + token::STREAM_TTL_MS;
     let tok = token::sign(&ctx.key, &Claims { user: user.to_string(), exp_ms: exp, grant: Grant::Stream { track: t.id, opus } }).ok_or(ErrorCode::Unavailable)?;
     let mime = if opus { "audio/ogg".to_string() } else { t.mime };

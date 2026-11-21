@@ -75,8 +75,8 @@ function driver(page) {
       await item(to).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     },
     moveInto: async (name, target) => {
-      await api.menu(name, 'Move');
-      const dialog = page.locator('.Modal').filter({ hasText: 'Move here' });
+      await api.menu(name, 'Move…');
+      const dialog = page.locator('.Modal').filter({ has: page.locator('[data-move-list]') });
       await dialog.getByRole('listitem').filter({ hasText: target }).click();
       await dialog.getByRole('button', { name: 'Move here', exact: true }).click();
       await item(name).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -104,7 +104,10 @@ function driver(page) {
           await walk(`${prefix}${row.name}/`);
           const crumbs = cloud.locator('nav').getByRole('button');
           await crumbs.nth((await crumbs.count()) - 2).click();
-          await item(row.name).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+          // Дерево могло смениться посреди обхода (сведение правок второго устройства) — обход заново
+          await item(row.name).waitFor({ state: 'visible', timeout: STALE_ROW_MS }).catch(() => {
+            throw new StaleTreeError(`${prefix}${row.name}`);
+          });
         }
       };
       await api.root();
@@ -180,7 +183,8 @@ try {
   await sessions.two.page.waitForTimeout(3000);
   const b = driver(sessions.two.page);
   await b.open();
-  await b.cloud.getByText(/will appear after this device is linked/).waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await b.cloud.getByText(/drive key will come from your other device/).waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await b.cloud.getByText('This computer is not linked yet').waitFor({ state: 'visible' });
   assert.equal(await b.item('план.txt').count(), 0, 'непривязанное устройство не видит файлов');
   assert.equal(await b.cloud.getByRole('button', { name: 'Upload', exact: true }).count(), 0, 'и не предлагает начать пустой диск');
   await b.close();

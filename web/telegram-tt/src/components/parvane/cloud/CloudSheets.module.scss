@@ -991,3 +991,91 @@
   color: var(--pv-muted);
   text-align: center;
 }
+
+// ── доводка по сверке досок (20–21 ноя 2026) ────────────────────────────────
+
+// Окно ссылки на компьютере (доска `DkFilesDialogs`): адрес полем рядом с «Скопировать», состояние одной карточкой
+.linkField {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.linkInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+}
+
+.linkCardRow {
+  flex-direction: row;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.linkDot {
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+
+  background: var(--pv-line2);
+}
+
+.linkDotOn {
+  background: var(--pv-aqua, var(--pv-blue));
+}
+
+// Действие словом в карточке ссылки: «Продлить», «Отозвать»
+.linkText {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  padding: 0.25rem 0.375rem;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+// Роль участника — чип с меню «Правка / Просмотр / Убрать из папки» (доски `PhFilesMore`, `DkFilesDialogs`)
+.roleChip {
+  cursor: var(--custom-cursor, pointer);
+  text-align: center;
+  appearance: none;
+}
+
+.switchHint {
+  display: block;
+}
+
+// «Из контактов» и «Позвать всех из чата…» (доска `ZpFilesX`)
+.linkPairStart {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+// «Что занимает место»: размер строки
+.usageBytes {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+}

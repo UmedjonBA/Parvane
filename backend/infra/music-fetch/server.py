@@ -11,6 +11,9 @@
   GET  /candidates?source=&artist=&title=&limit=
                                        файлы источника: youtube, youtube_reupload, soundcloud; источник отказал — 503
   POST /download {"source","id","dest"} скачать в папку библиотеки по пути dest + расширение
+  GET  /progress?dest=                 ход идущей загрузки {"bytes_done","bytes_total"}; нет такой — 404 (spec 041)
+  POST /cancel {"dest"}                остановить загрузку dest (spec 041)
+  Отказ с причиной — {"reason": "..."}: шард показывает её пользователю («Сервер не может скачивать: …»)
 
 Окружение: MUSIC_FETCH_BIND (0.0.0.0:9350), MUSIC_FETCH_LIBRARY_DIR (/music), MUSIC_FETCH_COOLDOWN_SECS (900),
 MUSIC_FETCH_PROXY (необязательный прокси для источников), MUSIC_FETCH_COOKIES_FILE (необязательный файл cookies).
@@ -134,14 +137,34 @@ def safe_dest(dest):
     return full
 
 
+# Ход загрузок по dest и снятые загрузки (spec 041)
+PROGRESS = {}
+CANCELLED = set()
+PROGRESS_LOCK = threading.Lock()
+
+
+class Cancelled(Exception):
+    pass
+
+
 def download(source, item_id, dest):
     target = safe_dest(dest)
     os.makedirs(os.path.dirname(target), exist_ok=True)
+
+    def hook(status):
+        with PROGRESS_LOCK:
+            if dest in CANCELLED:
+                raise Cancelled()
+            done = int(status.get("downloaded_bytes") or 0)
+            total = int(status.get("total_bytes") or status.get("total_bytes_estimate") or 0)
+            PROGRESS[dest] = (done, total)
+
     options = ydl_options({
         # Лучшая звуковая дорожка как есть, без перекодирования: музыкальный сервер играет opus и m4a
         "format": "bestaudio/best",
         "outtmpl": target + ".%(ext)s",
         "overwrites": True,
+        "progress_hooks": [hook],
     })
 
     def fetch():
@@ -149,7 +172,12 @@ def download(source, item_id, dest):
             info = ydl.extract_info(item_id, download=True)
             return info, ydl.prepare_filename(info)
 
-    info, path = guarded(source, fetch)
+    try:
+        info, path = guarded(source, fetch)
+    finally:
+        with PROGRESS_LOCK:
+            PROGRESS.pop(dest, None)
+            CANCELLED.discard(dest)
     return {
         "path": os.path.relpath(path, LIBRARY_DIR),
         "bytes": os.path.getsize(path),
@@ -171,6 +199,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, action())
         except SourceRefused:
             self.reply(503, {"error": "source refused"})
+        except Cancelled:
+            self.reply(409, {"error": "cancelled"})
         except (KeyError, ValueError):
             self.reply(400, {"error": "bad request"})
         except Exception as error:  # noqa: BLE001 — любой сбой источника отдаётся шарду кодом, не роняя сервис
@@ -187,14 +217,26 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_request(lambda: catalog(query["q"], limit))
         elif url.path == "/candidates":
             self.handle_request(lambda: candidates(query["source"], query["artist"], query["title"], limit))
+        elif url.path == "/progress":
+            with PROGRESS_LOCK:
+                done = PROGRESS.get(query.get("dest", ""))
+            if done is None:
+                self.reply(404, {"error": "not found"})
+            else:
+                self.reply(200, {"bytes_done": done[0], "bytes_total": done[1]})
         else:
             self.reply(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
-        if self.path != "/download":
+        if self.path not in ("/download", "/cancel"):
             self.reply(404, {"error": "not found"})
             return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)) or b"{}")
+        if self.path == "/cancel":
+            with PROGRESS_LOCK:
+                CANCELLED.add(str(body.get("dest", "")))
+            self.reply(200, {})
+            return
         self.handle_request(lambda: download(body["source"], body["id"], body["dest"]))
 
     def log_message(self, *_args):

@@ -25,6 +25,9 @@ export type CloudContainerKind = 'root' | 'owned' | 'shared' | 'invite';
 export type CloudDriveCheck = 'unknown' | 'none' | 'synced';
 export type CloudRole = 'owner' | 'editor' | 'reader';
 
+/** Чужая папка, доступ к которой закрыл владелец: показывается строкой «доступ закрыт владельцем». */
+export type CloudClosedFolder = { id: string; name: string; owner: string };
+
 export type CloudContainerInfo = {
   id: string;
   kind: CloudContainerKind;
@@ -103,6 +106,9 @@ const OWN_BLOBS_RECORD = 'cloud-own-blobs';
 // Серверы, приглашавшие в совместные папки (spec 028): папка живёт у владельца, и её видно только в
 // списке его сервера — до подключения домен известен лишь из приглашения
 const REMOTE_DOMAINS_RECORD = 'cloud-remote-domains';
+// Чужие папки, к которым владелец закрыл доступ (доски `ZpFilesX`, `ZdFilesX`): строка «Нет доступа» с «Убрать»
+// стоит, пока пользователь её не уберёт
+const CLOSED_RECORD = 'cloud-closed';
 const GC_KEEP = 2000;
 const OWN_BLOBS_KEEP = 20000;
 const SYNC_ACTIVE_MS = 8000;
@@ -163,6 +169,7 @@ export function createCloudSync(deps: Deps) {
   const snapshotTried = new Set<string>();
   // Чужие контейнеры, в которых доступа больше нет (сервер ответил NOT_FOUND)
   const lost = new Set<string>();
+  let closed: CloudClosedFolder[] | undefined;
   let gcDone: string[] | undefined;
   let ownBlobs: string[] | undefined;
   // Контейнеры, у которых сборка блобов и срок корзины уже проверялись (и когда)
@@ -317,9 +324,40 @@ export function createCloudSync(deps: Deps) {
     return true;
   }
 
+  async function loadClosed() {
+    closed = closed || (await deps.loadRecord<CloudClosedFolder[]>(CLOSED_RECORD).catch(() => undefined)) || [];
+    return closed;
+  }
+
+  async function saveClosed(list: CloudClosedFolder[]) {
+    closed = list;
+    await deps.saveRecord(CLOSED_RECORD, list).catch(() => undefined);
+  }
+
+  /** Принятая чужая папка пропала с сервера (владелец закрыл доступ): запомнить строку «Нет доступа». */
+  function noteClosed(id: string) {
+    const container = engineContainers().find((c) => c.id === id);
+    const entry = liveEntries().find((e) => e.id === id);
+    if (!container || container.owner === deps.self() || entry?.status !== 'accepted') return;
+    void loadClosed().then(async (list) => {
+      if (list.some((c) => c.id === id)) return;
+      await saveClosed([...list, { id, name: container.name, owner: container.owner }]);
+      deps.onChanged();
+    });
+  }
+
+  /** «Убрать» у строки «Нет доступа» (либо папку снова открыли — новый грант). */
+  async function dismissClosed(id: string) {
+    const list = await loadClosed();
+    if (!list.some((c) => c.id === id)) return;
+    await saveClosed(list.filter((c) => c.id !== id));
+    deps.onChanged();
+  }
+
   /** Доступа к контейнеру больше нет: забыть его и снять запись состояния. */
   function dropContainer(id: string) {
     const client = deps.client();
+    noteClosed(id);
     client?.cloudForget(id);
     touch();
     outboxes.delete(id);
@@ -417,6 +455,7 @@ export function createCloudSync(deps: Deps) {
         deps.log(`облако: новое приглашение в ${id.slice(0, 8)}… после прежнего выхода`);
         // Раздача ключа нового гранта могла уже подключить контейнер, а пометка «пропал» от выхода осталась
         lost.delete(id);
+        void dismissClosed(id);
       }
       // Свой контейнер без записи состояния: другой свой клиент ещё не дописал журнал — подождём запись
       if (owner === self && !entry) continue;
@@ -587,6 +626,7 @@ export function createCloudSync(deps: Deps) {
       && after.members.length < before.members.length && after.epoch === before.epoch;
     if (hasLeft && client.cloudHasKey(id)) {
       try {
+        await syncOps(id);
         await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
         deps.log(`облако: участник покинул папку ${id.slice(0, 8)}… — эпоха ключа сменена`);
       } catch (e) {
@@ -616,6 +656,17 @@ export function createCloudSync(deps: Deps) {
         deps.log(`облако: снимок не прочитан: ${String(e)}`);
       }
     }
+    return (await syncOps(id)) || changed;
+  }
+
+  /** Догнать журнал операций до головы сервера. Перед сменой эпохи (выход, отзыв участника) обязательно: граница
+   * эпохи в записи — курсор этого устройства, и своя операция, уже принятая сервером, но ещё не дочитанная, оказалась
+   * бы за границей со старым ключом — остальные участники её отвергают (название новой папки терялось у приглашённого
+   * заново после отказа) */
+  async function syncOps(id: string): Promise<boolean> {
+    const client = deps.client();
+    if (!client?.cloudIsAttached(id)) return false;
+    let changed = false;
     let isStrict = true;
     for (let page = 0; page < SYNC_PAGES; page++) {
       const resp = await call('id', 'domain.op.sync', encode(
@@ -1006,6 +1057,8 @@ export function createCloudSync(deps: Deps) {
     return serial(async () => {
       const client = deps.client();
       if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      // Граница эпохи — после всех своих операций, уже принятых сервером
+      await syncOps(id);
       const reqs = await deps.withNeeds(() => client.cloudRevoke(id, user, Date.now()) as OutReq[]);
       await runGrantRequests(id, reqs);
     });
@@ -1108,6 +1161,7 @@ export function createCloudSync(deps: Deps) {
       const client = deps.client();
       if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
       const container = engineContainers().find((c) => c.id === id);
+      if (container?.members.length) await syncOps(id);
       for (const member of container?.members || []) {
         await run(await deps.withNeeds(() => client.cloudRevoke(id, member.user, Date.now()) as OutReq[]));
       }
@@ -1129,6 +1183,7 @@ export function createCloudSync(deps: Deps) {
     return serial(async () => {
       const client = deps.client();
       if (!client) return;
+      await syncOps(id);
       await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
       touch();
       isDirty = false;
@@ -1182,6 +1237,7 @@ export function createCloudSync(deps: Deps) {
     outboxes.clear();
     snapshotTried.clear();
     lost.clear();
+    closed = undefined;
     gcDone = undefined;
     ownBlobs = undefined;
     gcChecked.clear();
@@ -1204,6 +1260,8 @@ export function createCloudSync(deps: Deps) {
     flush,
     syncNow,
     containers,
+    closedFolders: loadClosed,
+    dismissClosed,
     stateJson,
     /** Ревизия деревьев в движке: растёт при каждом их изменении (ключ кэша разбора). */
     revision: () => revision,

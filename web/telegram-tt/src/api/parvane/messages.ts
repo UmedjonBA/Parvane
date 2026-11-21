@@ -771,7 +771,7 @@ export function createMessageController(deps: MessageDependencies) {
     const json = planner.stateJson();
     // Дубль не создаётся: задача ищется по `source`, событие — по id карточки
     if (findOfferInPlan(json ? JSON.parse(json) : undefined, uuid)) return 'exists';
-    const event = buildOfferEvent(uuid, entry);
+    const event = buildOfferEvent(uuid, entry, toAddress);
     if (event) {
       planner.apply([{ event }]);
       return 'ok';
@@ -1961,11 +1961,11 @@ export function createMessageController(deps: MessageDependencies) {
     // Плейлист «Музыки» в чат (PLAYLIST-1): название и треки библиотеки своего сервера по порядку
     async parvaneSendMusicPlaylist({ chatId, playlist }: {
       chatId: string;
-      playlist: { name: string; tracks: PlaylistShareTrack[] };
+      playlist: { name: string; tracks: PlaylistShareTrack[]; sharedId?: string; joinKey?: string };
     }) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(chatId);
-      if (!toAddress || !playlist.tracks.length) return false;
+      if (!toAddress || (!playlist.tracks.length && !playlist.sharedId)) return false;
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       const uuid = newMessageId();
       const content: WireMessageContent = {
@@ -1973,6 +1973,8 @@ export function createMessageController(deps: MessageDependencies) {
           name: playlist.name,
           server: currentStore.self.split('@')[1] || '',
           tracks: playlist.tracks,
+          sharedId: playlist.sharedId,
+          joinKey: playlist.joinKey,
         }),
         ttl_secs: ttlSecs || undefined,
       };

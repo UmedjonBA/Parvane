@@ -72,6 +72,7 @@ import { getCurrentTrack, getMusicPlayer } from '../parvane/music/musicPlayer';
 import { getIsMusicPlayerOpen } from '../parvane/music/musicPlayerView';
 import { getActiveModule } from './parvaneModuleNav';
 import useAutoLock from './useAutoLock';
+import useNewEntryHotkey from './useNewEntryHotkey';
 
 import useInterval from '../../hooks/schedulers/useInterval';
 import useTimeout from '../../hooks/schedulers/useTimeout';
@@ -89,6 +90,7 @@ import useSyncEffect from '../../hooks/useSyncEffect';
 import useBackgroundMode from '../../hooks/window/useBackgroundMode';
 import useBeforeUnload from '../../hooks/window/useBeforeUnload';
 import { useFullscreenStatus } from '../../hooks/window/useFullscreen';
+import useWindowSize from '../../hooks/window/useWindowSize';
 
 import AuthRecoveryKey from '../auth/AuthRecoveryKey';
 import CustomEmojiSetsModal from '../common/CustomEmojiSetsModal.async';
@@ -111,6 +113,7 @@ import Music from '../parvane/Music.async';
 import MusicPlayerScreen from '../parvane/music/MusicPlayerScreen';
 import ParvanePalette from '../parvane/palette/ParvanePalette.async';
 import Planner from '../parvane/Planner.async';
+import PlannerQuickHost from '../parvane/planner/PlannerQuickHost.async';
 import RightColumn from '../right/RightColumn';
 import DeleteFolderDialog from './DeleteFolderDialog.async';
 import Dialogs from './Dialogs';
@@ -120,6 +123,7 @@ import FoldersSidebar from './FoldersSidebar';
 import ForwardRecipientPicker from './ForwardRecipientPicker.async';
 import HistoryCalendar from './HistoryCalendar.async';
 import NewContactModal from './NewContactModal.async';
+import ParvaneShellHost from './ParvaneShellHost';
 import ParvaneSystemHost from './ParvaneSystemHost';
 import ParvaneTabBar from './ParvaneTabBar';
 import PremiumLimitReachedModal from './premium/common/PremiumLimitReachedModal.async';
@@ -183,6 +187,8 @@ const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
 // Куски разделов нужны при первом же нажатии в боковой панели — грузим сразу после оболочки
 const PARVANE_BUNDLE_LOADING_DELAY_MS = 300;
 const OWN_PROFILE_CLOSE_DURATION = 450;
+// Окно уже этого (px) и без мыши — раскладка телефона с лентой; шире, но в пределах телефонной — узкая панель
+const NARROW_DESKTOP_MIN_WIDTH = 480;
 
 let DEBUG_isLogged = false;
 
@@ -279,7 +285,8 @@ const Main = ({
   const containerRef = useRef<HTMLDivElement>();
   const leftColumnRef = useRef<HTMLDivElement>();
 
-  const { isDesktop } = useAppLayout();
+  const { isDesktop, isTouchScreen } = useAppLayout();
+  const { width: windowWidth } = useWindowSize();
   useEffect(() => {
     if (!isLeftColumnOpen && !isMiddleColumnOpen && !isDesktop) {
       // Always display at least one column
@@ -448,18 +455,7 @@ const Main = ({
     return () => window.removeEventListener('parvane-needs-linking', handleNeedsLinking);
   }, [openSettingsScreen, showNotification]);
 
-  // Parvane: сервер не принимает эту версию протокола — нативный диалог ошибки
-  useEffect(() => {
-    const handleUpgradeRequired = () => {
-      showDialog({ data: { type: 'localized', text: { key: 'ParvaneUpgradeRequired' } } });
-    };
-    void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsUpgradeRequired')
-      .then((isRequired) => {
-        if (isRequired) handleUpgradeRequired();
-      });
-    window.addEventListener('parvane-upgrade-required', handleUpgradeRequired);
-    return () => window.removeEventListener('parvane-upgrade-required', handleUpgradeRequired);
-  }, [showDialog]);
+  // Parvane: сервер не принимает эту версию протокола — окно «Нужно обновить приложение» (`ParvaneShellHost`)
 
   // Parvane (spec 035, T117): журнал личного состояния закрыт более новой версией — правки здесь не сохраняются
   useEffect(() => {
@@ -582,7 +578,6 @@ const Main = ({
       exhausted: 'ParvaneInviteExhausted',
       requested: 'ParvaneInviteRequested',
       declined: 'ParvaneInviteDeclined',
-      editUnsupported: 'ParvaneInviteEditUnsupported',
       failed: 'ParvaneInviteFailed',
       linkFailed: 'ParvaneInviteLinkFailed',
     };
@@ -779,7 +774,10 @@ const Main = ({
   );
 
   // Parvane (spec 009): боковая панель видна всегда (кроме телефона), раздел выбирается в её нижней части
-  const isAppSidebarShown = !isMobile;
+  // Узкое окно компьютера (доска `RdNarrow`, мышь, а не касание): одна колонка, как на телефоне, но слева
+  // узкая панель значков вместо нижней ленты
+  const isNarrowDesktop = Boolean(isMobile) && !isTouchScreen && windowWidth > NARROW_DESKTOP_MIN_WIDTH;
+  const isAppSidebarShown = !isMobile || isNarrowDesktop;
   const parvaneSection = useDerivedState(getParvaneSection);
   // Parvane (spec 019): фон чата и узор берутся из цветовой схемы, пока пользователь не выбрал свои
   const schemeChatColors = getSchemeChatColors(useDerivedState(getColorScheme), theme);
@@ -810,7 +808,8 @@ const Main = ({
   const shouldMountPlanner = isPlannerOpen || isPlannerMountedRef.current;
   isPlannerMountedRef.current = shouldMountPlanner;
   // Мини-плеер над лентой телефона: есть что играть и открыта не сама «Музыка»
-  const isMiniPlayerShown = Boolean(getCurrentTrack(useDerivedState(getMusicPlayer))) && !isMusicOpen;
+  // Мини-плеер — и в самой «Музыке» (доска `MusicHome`)
+  const isMiniPlayerShown = Boolean(getCurrentTrack(useDerivedState(getMusicPlayer)));
   const isMusicMountedRef = useRef(false);
   const shouldMountMusic = isMusicOpen || isMusicMountedRef.current;
   isMusicMountedRef.current = shouldMountMusic;
@@ -827,14 +826,17 @@ const Main = ({
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
     && settingsScreen === SettingsScreens.Main;
+  // «Профиль → Модули»: лента видна и меняется по ходу перетаскивания строки (доска `XpStart`)
+  const isSettingsModulesOpen = leftColumnContentKey === LeftColumnContent.Settings
+    && settingsScreen === SettingsScreens.ParvaneModules;
   // Parvane (spec 041 E3): «Профиль» на компьютере занимает место колонок мессенджера (`SettingsPv.scss`)
   const isProfileWide = isDesktop && parvaneSection === 'messenger'
     && leftColumnContentKey === LeftColumnContent.Settings;
   const isNavCovered = useDerivedState(getIsParvaneNavCovered);
   const isMusicPlayerOpen = useDerivedState(getIsMusicPlayerOpen);
-  const isTabBarShown = Boolean(isMobile) && !isMusicPlayerOpen && !isNavCovered
+  const isTabBarShown = Boolean(isMobile) && !isNarrowDesktop && !isMusicPlayerOpen && !isNavCovered
     && (parvaneSection !== 'messenger' || (!isMiddleColumnOpen
-      && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen)));
+      && (leftColumnContentKey === LeftColumnContent.ChatList || isSettingsMainOpen || isSettingsModulesOpen)));
 
   // Parvane: «Мой профиль» на телефоне открыт поверх чата «Избранное». Пока профиль показан и пока он
   // закрывается, сам чат скрыт — иначе при возврате в список чатов он мелькал под уезжающим профилем
@@ -848,6 +850,7 @@ const Main = ({
     shouldSkipHistoryAnimations && 'history-animation-disabled',
     isFullscreen && 'is-fullscreen',
     isAppSidebarShown && 'folders-sidebar-visible',
+    isNarrowDesktop && 'parvane-narrow-rail',
     isPlannerOpen && 'section-planner',
     isHealthOpen && 'section-health',
     isMusicOpen && 'section-music',
@@ -887,6 +890,7 @@ const Main = ({
   usePreventPinchZoomGesture(isMediaViewerOpen || isStoryViewerOpen);
   // Parvane (spec 041): автоблокировка и Ctrl+L при заданном PIN
   useAutoLock();
+  useNewEntryHotkey();
 
   return (
     <div
@@ -902,18 +906,26 @@ const Main = ({
         className={bgClassName}
         style={customBackgroundValue ? `--custom-background: ${customBackgroundValue}` : undefined}
       />
-      <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
+      <FoldersSidebar
+        isMobile={isMobile}
+        isNarrow={isNarrowDesktop}
+        isActive={isAppSidebarShown}
+        withFolders={isFoldersSidebarShown}
+      />
       {shouldMountPlanner && <Planner />}
       {shouldMountHealth && <Health />}
       {shouldMountMusic && <Music />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
       {shouldMountKnowledge && <Knowledge />}
       {isMusicPlayerOpen && <MusicPlayerScreen />}
-      {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
+      {isTabBarShown && (
+        <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen || isSettingsModulesOpen} />
+      )}
       <CloudChatDialogs />
       <MessageNoteDialog />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}
       <ParvanePalette />
+      <PlannerQuickHost />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
       <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
       <RightColumn isMobile={isMobile} />
@@ -921,6 +933,8 @@ const Main = ({
       <ForwardRecipientPicker isOpen={isForwardModalOpen} />
       <DraftRecipientPicker requestedDraft={requestedDraft} />
       <ParvaneSystemHost />
+      {/* Первый запуск, «Нужно обновить приложение», горячие клавиши (доска `ZdNav`) */}
+      <ParvaneShellHost />
       <AuthRecoveryKey />
       <Dialogs />
       <AudioPlayer noUi />

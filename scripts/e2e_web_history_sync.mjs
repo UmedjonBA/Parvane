@@ -160,6 +160,8 @@ try {
   b.page.on('pageerror', (err) => b.errors.push(err.message));
   await b.page.addInitScript((url) => {
     localStorage.setItem('parvane:gateway', url);
+    // Экран первого запуска (выбор модулей) пройден — его проверяет `e2e_web_first_run.mjs`
+    if (localStorage.getItem('parvane:modules-first-run') === null) localStorage.setItem('parvane:modules-first-run', 'shown');
   }, gatewayUrl);
   await b.page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await relogin(b.page, PASSWORD);

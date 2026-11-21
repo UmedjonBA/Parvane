@@ -6,7 +6,7 @@ import { getActions } from '../../../global';
 import type { CloudNode } from '../cloud/cloudModel';
 import type { BoardRect, BoardView } from './boardView';
 import type { CanvasCommand, CanvasMenuItem } from './CanvasContextMenu';
-import type { CanvasTool } from './CanvasHead';
+import type { CanvasPanelKind, CanvasTool } from './CanvasHead';
 import type { CanvasPanelAction, CanvasPanelEdge } from './CanvasSidePanel';
 import type {
   CanvasDoc, CanvasEdge, CanvasNode, CanvasPoint, CanvasRect, CanvasSide,
@@ -58,7 +58,9 @@ import {
   createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
 import { CANVAS_FULL_IMAGE_MIN_PX, isCanvasImage } from './notesCanvasImages';
-import { arrowPath, CANVAS_TONES, curvePath } from './notesCanvasLook';
+import {
+  arrowPath, CANVAS_TONES, colorLabel, curvePath,
+} from './notesCanvasLook';
 import { mergeCanvasTexts } from './notesCanvasMerge';
 import {
   droppedCardPlace, inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, relinkNoteCards,
@@ -110,6 +112,9 @@ type OwnProps = {
   onOpenCanvas: (canvasId?: string) => void;
   // Телефон: у открытого холста шапки модуля нет — поиск открывается из меню холста
   onSearch: NoneToVoidFunction;
+  // «+» модуля на открытом холсте: карточка заметки с этим названием встаёт в середину видимой части поля и
+  // выбирается; новый `at` — новая просьба
+  addNoteCard?: { title: string; at: number };
 };
 
 // Жест на поле от нажатия до отпускания. Сдвиг и размер до отпускания живут в `live` — документ, история и
@@ -227,6 +232,7 @@ function isTypingElement(element: Element | undefined) {
 // Файл `.canvas` лежит в папке «Знания»; правки сохраняются сами через паузу
 const NotesCanvas = ({
   canvases: allCanvases, notes, isNarrow, openId, query, searchStep, onOpenTitle, onOpenCanvas, onSearch,
+  addNoteCard: addNoteRequest,
 }: OwnProps) => {
   const { showNotification } = getActions();
   const boardRef = useRef<HTMLDivElement>();
@@ -250,6 +256,9 @@ const NotesCanvas = ({
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [editing, setEditing] = useState<Editing>();
   const [menu, setMenu] = useState<Menu>();
+  // Меню по последнему нажатию: два Escape подряд без кадра между ними иначе оба закрывали бы меню
+  const isMenuOpenRef = useRef(false);
+  isMenuOpenRef.current = Boolean(menu);
   const [linkDraft, setLinkDraft] = useState<LinkDraft>();
   const [filePreview, setFilePreview] = useState<{ container: string; node: CloudNode }>();
   const [isPickingNote, setIsPickingNote] = useState(false);
@@ -261,6 +270,8 @@ const NotesCanvas = ({
   const [isMenuOpen, openMenu, closeMenu] = useFlag();
   const [isDeleteOpen, openDelete, closeDelete] = useFlag();
   const [canvasName, setCanvasName] = useState('');
+  // Холст, с которым действуют меню и вопрос об удалении: открытый либо строка списка («···»)
+  const [targetId, setTargetId] = useState<string>();
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   // Текст заметки, отправленный на запись: карточка показывает его, не дожидаясь ответа облака
@@ -705,8 +716,10 @@ const NotesCanvas = ({
     if (!getIsParvaneScreenShown('notes')) return false;
     // Правка началась в этом же кадре — её слушатель ещё не встал в очередь
     if (inlineRef.current) finishInline(true);
-    else if (menu) setMenu(undefined);
-    else if (linkFrom) setLinkFrom(undefined);
+    else if (isMenuOpenRef.current) {
+      isMenuOpenRef.current = false;
+      setMenu(undefined);
+    } else if (linkFrom) setLinkFrom(undefined);
     else if (!isSelectionEmpty(selectionRef.current)) select(CANVAS_EMPTY_SELECTION);
     else if (isSelectMode) setIsSelectMode(false);
     else return false;
@@ -894,10 +907,25 @@ const NotesCanvas = ({
   });
 
   // ── действия с холстом: название и корзина ──
+  // Открытый холст и строка списка («···» на компьютере) пользуются одними окнами: меню с названием и вопросом
+  const menuTarget = targetId ? canvases.find(({ id }) => id === targetId) : undefined;
+
   const handleOpenMenu = useLastCallback(() => {
     finishInline();
+    setTargetId(entry?.id);
     setCanvasName(entry?.title || '');
     openMenu();
+  });
+
+  const handleRowRename = useLastCallback((id: string) => {
+    setTargetId(id);
+    setCanvasName(canvases.find((item) => item.id === id)?.title || '');
+    openMenu();
+  });
+
+  const handleRowDelete = useLastCallback((id: string) => {
+    setTargetId(id);
+    openDelete();
   });
 
   const handleCanvasName = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -909,9 +937,9 @@ const NotesCanvas = ({
     const field = document.querySelector<HTMLInputElement>('#knowledge-canvas-name');
     const title = (field?.value ?? canvasName).trim();
     closeMenu();
-    if (!entry || !title || title === entry.title) return;
-    flushSave();
-    void renameCanvas(entry.id, title);
+    if (!menuTarget || !title || title === menuTarget.title) return;
+    if (menuTarget.id === entry?.id) flushSave();
+    void renameCanvas(menuTarget.id, title);
   });
 
   const handleCanvasNameKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -946,10 +974,12 @@ const NotesCanvas = ({
   // В корзину облака; после этого — список холстов
   const handleDeleteCanvas = useLastCallback(() => {
     closeDelete();
-    if (!entry) return;
-    const { id } = entry;
-    flushSave(true);
-    onOpenCanvas(undefined);
+    if (!menuTarget) return;
+    const { id } = menuTarget;
+    if (id === entry?.id) {
+      flushSave(true);
+      onOpenCanvas(undefined);
+    }
     setRemovedIds((ids) => [...ids, id]);
     void deleteCanvas(id).then((isDone) => {
       // Не удалось — холст возвращается в список
@@ -995,8 +1025,6 @@ const NotesCanvas = ({
     change(wrapped.doc);
     startInline(findNode(wrapped.doc, wrapped.id)!, true);
   };
-
-  const handleAddGroup = useLastCallback(() => addGroup());
 
   // Карточка у конца стрелки, брошенной на пустом месте, и сама стрелка — одним шагом истории
   const addLinked = (
@@ -1080,6 +1108,18 @@ const NotesCanvas = ({
     addNoteCard(getNotes().find((note) => note.id === id)?.title || title, id, at, from);
   });
 
+  // «+» модуля на открытом холсте: карточка заметки в середине видимой части поля, выбрана
+  const addRequestRef = useRef<number>();
+  const addRequestAt = addNoteRequest?.at;
+  useEffect(() => {
+    if (!addNoteRequest || addRequestRef.current === addNoteRequest.at) return;
+    if (!entryId || loadedRef.current !== entryId) return;
+    addRequestRef.current = addNoteRequest.at;
+    const { title } = addNoteRequest;
+    addNoteCard(title, getNotes().find((note) => note.title === title)?.id);
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [addRequestAt, entryId, entryText]);
+
   const pickFile = (at?: CanvasPoint) => {
     finishInline();
     insertAtRef.current = at;
@@ -1140,6 +1180,40 @@ const NotesCanvas = ({
   // «Связать»: от выделенной карточки к той, которую нажмут следующей
   const handleLinkMode = useLastCallback(() => {
     setLinkFrom(linkFrom || !selectedNode || selectedNode.type === 'group' ? undefined : selectedNode.id);
+  });
+
+  // «Связать стрелкой»: две выделенные карточки — стрелка от первой ко второй сразу; одна — режим связи
+  const handleConnect = useLastCallback(() => {
+    const ids = selectionRef.current.nodes;
+    if (ids.length === 2 && !selectionRef.current.edges.length) {
+      change(addEdge(docRef.current, ids[0], ids[1]));
+      return;
+    }
+    handleLinkMode();
+  });
+
+  const handleFront = useLastCallback(() => {
+    change(reorderNodes(docRef.current, selectionRef.current.nodes, 'front'));
+  });
+
+  // «Карточка · Стрелка» в шапке: панель выделенного переходит к карточке стрелки либо к стрелке карточки
+  const handlePanelKind = useLastCallback((kind: CanvasPanelKind) => {
+    const current = selectionRef.current;
+    if (kind === 'card' && current.edges.length === 1 && !current.nodes.length) {
+      const edge = docRef.current.edges.find(({ id }) => id === current.edges[0]);
+      if (edge) selectNodes([edge.fromNode]);
+    } else if (kind === 'edge' && current.nodes.length === 1 && !current.edges.length) {
+      const edge = docRef.current.edges.find(({ fromNode, toNode }) => (
+        fromNode === current.nodes[0] || toNode === current.nodes[0]
+      ));
+      if (edge) select({ nodes: [], edges: [edge.id] });
+    }
+  });
+
+  const handleDone = useLastCallback(() => {
+    finishInline();
+    setMenu(undefined);
+    select(CANVAS_EMPTY_SELECTION);
   });
 
   const handleSelectMode = useLastCallback(() => setIsSelectMode(!isSelectMode));
@@ -1614,7 +1688,7 @@ const NotesCanvas = ({
   // Панель выделенного (компьютер): общие с меню действия — через `handleCommand`
   const handlePanelAction = useLastCallback((action: CanvasPanelAction) => {
     if (action === 'connect') {
-      handleLinkMode();
+      handleConnect();
     } else if (action === 'distribute') {
       const bounds = selectionBounds(docRef.current, selectionRef.current.nodes);
       handleDistribute(bounds && bounds.height > bounds.width ? 'y' : 'x');
@@ -2231,16 +2305,106 @@ const NotesCanvas = ({
     );
   };
 
+  // Меню холста (название, поиск, обновление, картинки, корзина) и вопрос об удалении; у строки списка — только
+  // название и корзина
+  function renderCanvasDialogs() {
+    const isOpenCanvas = Boolean(entry) && menuTarget?.id === entry?.id;
+    return (
+      <>
+        <PvSheet isOpen={isMenuOpen} title={menuTarget?.title || ''} onClose={closeMenu}>
+          <input
+            id="knowledge-canvas-name"
+            className={kit.input}
+            value={canvasName}
+            maxLength={CANVAS_TITLE_MAX}
+            placeholder={lang('KnowledgeCanvasTitle')}
+            aria-label={lang('KnowledgeCanvasTitle')}
+            onChange={handleCanvasName}
+            onKeyDown={handleCanvasNameKey}
+          />
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            data-canvas-rename
+            onClick={handleRenameCanvas}
+          >
+            <PvIcon name="edit" isSmall />
+            {lang('KnowledgeCanvasRename')}
+          </button>
+          {isOpenCanvas && isNarrow && (
+            <button type="button" className={kit.btn} data-canvas-search onClick={handleMenuSearch}>
+              <PvIcon name="search" isSmall />
+              {lang('KnowledgeCanvasSearch')}
+            </button>
+          )}
+          {isOpenCanvas && isFromGraph && isNarrow && (
+            <button type="button" className={kit.btn} data-canvas-refresh onClick={handleMenuRefresh}>
+              <PvIcon name="refresh" isSmall />
+              {lang('KnowledgeCanvasRefresh')}
+            </button>
+          )}
+          {isOpenCanvas && (
+            <>
+              <div className={buildClassName(kit.muted, kit.small)}>{lang('KnowledgeCanvasImages')}</div>
+              <div className={kit.chips} role="radiogroup" aria-label={lang('KnowledgeCanvasImages')}>
+                {IMAGE_QUALITIES.map((quality) => (
+                  <button
+                    key={quality}
+                    type="button"
+                    role="radio"
+                    aria-checked={imageQuality === quality}
+                    className={buildClassName(kit.chip, imageQuality === quality && kit.chipOn)}
+                    data-quality={quality}
+                    data-canvas-images={quality}
+                    onClick={handleImageQuality}
+                  >
+                    {lang(quality === 'full' ? 'KnowledgeCanvasImagesFull' : 'KnowledgeCanvasImagesThumb')}
+                  </button>
+                ))}
+              </div>
+              <div className={buildClassName(kit.faint, kit.small)}>{lang('KnowledgeCanvasImagesHint')}</div>
+            </>
+          )}
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnDanger)}
+            data-canvas-delete
+            onClick={handleAskDelete}
+          >
+            <PvIcon name="trash" isSmall />
+            {lang('KnowledgeDelete')}
+          </button>
+        </PvSheet>
+        <ConfirmDialog
+          isOpen={isDeleteOpen}
+          text={lang('KnowledgeCanvasDeleteConfirm', { name: menuTarget?.title || '' })}
+          confirmLabel={lang('KnowledgeDelete')}
+          confirmIsDestructive
+          confirmHandler={handleDeleteCanvas}
+          onClose={closeDelete}
+        />
+      </>
+    );
+  }
+
+  const isFromGraph = isGraphCanvas(doc);
+
   if (!entry) {
     return (
-      <CanvasList
-        canvases={canvases}
-        isNarrow={isNarrow}
-        hasNotes={Boolean(notes.length)}
-        onOpen={handlePickCanvas}
-        onNew={handleNewCanvas}
-        onFromGraph={handleGraphCanvas}
-      />
+      <>
+        <CanvasList
+          canvases={canvases}
+          isNarrow={isNarrow}
+          hasNotes={Boolean(notes.length)}
+          query={query}
+          onOpen={handlePickCanvas}
+          onRename={handleRowRename}
+          onDelete={handleRowDelete}
+          onNew={handleNewCanvas}
+          onFromGraph={handleGraphCanvas}
+        />
+        {renderCanvasDialogs()}
+      </>
     );
   }
 
@@ -2272,7 +2436,6 @@ const NotesCanvas = ({
   const isBarShown = hasSelection && !live && !inline && !linkFrom && !marquee && !draft;
   const hasGroupSelected = selectedNodes.some(({ type }) => type === 'group');
 
-  const isFromGraph = isGraphCanvas(doc);
   const panelEdgeSource = selection.edges.length === 1 && !selection.nodes.length
     ? doc.edges.find(({ id }) => id === selection.edges[0]) : undefined;
   const panelEdge: CanvasPanelEdge | undefined = panelEdgeSource && {
@@ -2285,6 +2448,8 @@ const NotesCanvas = ({
   const item = (command: CanvasCommand, icon: CanvasMenuItem['icon'], label: string, isDanger?: boolean) => ({
     command, icon, label, isDanger,
   });
+  // Телефон — «Удалить с холста» (доска `XpNotes`), компьютер — «Убрать с холста» (`XdNotes`)
+  const removeLabel = lang(isNarrow ? 'KnowledgeCanvasDeleteFromCanvas' : 'KnowledgeCanvasRemoveFromCanvas');
   let menuItems: CanvasMenuItem[] = [];
   if (menu?.kind === 'board') {
     menuItems = [
@@ -2297,7 +2462,7 @@ const NotesCanvas = ({
       item('paste', 'paste', lang('KnowledgeCanvasPaste')),
       item('selectAll', 'select', lang('KnowledgeCanvasSelectAll')),
       ...(isFromGraph ? [item('refreshGraph', 'refresh', lang('KnowledgeCanvasRefresh'))] : []),
-      item('fitView', 'fit', lang('KnowledgeZoomFit')),
+      item('fitView', 'fit', lang(isNarrow ? 'KnowledgeZoomFitScreen' : 'KnowledgeZoomFit')),
     ];
   } else if (menu?.kind === 'drop') {
     menuItems = [
@@ -2309,7 +2474,7 @@ const NotesCanvas = ({
     menuItems = [
       ...(selectedEdge ? [item('edit', 'edit', lang('KnowledgeCanvasEdgeLabel'))] : []),
       item('direction', 'arrow', lang('KnowledgeCanvasDirection')),
-      item('remove', 'trash', lang('KnowledgeCanvasRemove'), true),
+      item('remove', 'trash', removeLabel, true),
     ];
   } else if (menu) {
     menuItems = [
@@ -2323,9 +2488,20 @@ const NotesCanvas = ({
       item('front', 'front', lang('KnowledgeCanvasToFront')),
       item('back', 'back', lang('KnowledgeCanvasToBack')),
       ...(selectedNode ? [item('props', 'dots', lang('KnowledgeCanvasProps'))] : []),
-      item('remove', 'trash', lang('KnowledgeCanvasRemove'), true),
+      item('remove', 'trash', removeLabel, true),
     ];
   }
+
+  // Две выделенные карточки связываются стрелкой сразу, одна — режимом связи
+  const canConnectSelected = selection.edges.length === 0 && (
+    selectedNodes.length === 1 || selectedNodes.length === 2
+  ) && selectedNodes.every(({ type }) => type !== 'group');
+  const selectionCount = selection.nodes.length + selection.edges.length;
+  const headSubtitle = selectedEdge ? lang('KnowledgeCanvasSubtitleEdge')
+    : selectionCount ? lang('KnowledgeCanvasSubtitleSelected', { count: selectionCount })
+      : lang('KnowledgeCanvasSubtitle');
+  const panelKind: CanvasPanelKind | undefined = selectedEdge ? 'edge'
+    : selectedNode && nodeEdges.length ? 'card' : undefined;
 
   const imagesLabel = imageQuality === 'full'
     ? lang('KnowledgeCanvasZoomImagesFull') : lang('KnowledgeCanvasZoomImagesThumb');
@@ -2341,10 +2517,13 @@ const NotesCanvas = ({
         isFromGraph={isFromGraph}
         canUndo={canUndo}
         canRedo={canRedo}
+        subtitle={headSubtitle}
         canConnect={Boolean(selectedNode && selectedNode.type !== 'group')}
         isConnecting={Boolean(linkFrom)}
         isSelectMode={isSelectMode}
         hasSelection={Boolean(selection.nodes.length)}
+        hasAnySelection={hasSelection}
+        panelKind={panelKind}
         onBack={handleCloseCanvas}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -2353,6 +2532,8 @@ const NotesCanvas = ({
         onTool={handleTool}
         onConnect={handleLinkMode}
         onSelectMode={handleSelectMode}
+        onPanel={handlePanelKind}
+        onDone={handleDone}
       />
       <div
         ref={boardRef}
@@ -2425,7 +2606,7 @@ const NotesCanvas = ({
             editLabel={editLabel}
             canEdit={Boolean(selectedNode && canEditSelected)}
             canOpen={selectedNoteState === 'found'}
-            canConnect={Boolean(selectedNode && selectedNode.type !== 'group')}
+            canConnect={canConnectSelected}
             canAlign={selection.nodes.length > 1}
             canDistribute={selection.nodes.length > 2}
             canFit={hasGroupSelected}
@@ -2439,22 +2620,18 @@ const NotesCanvas = ({
         )}
         {isBarShown && !menu && isNarrow && (
           <CanvasSelectionBar
+            count={selectionCount}
             tones={CANVAS_TONES}
             color={colorOfSelection(doc, selection)}
-            canEdit={canEditSelected}
-            editIcon={editIcon}
-            editLabel={editLabel}
-            canOpen={selectedNoteState === 'found'}
-            canDuplicate={Boolean(selection.nodes.length)}
-            canWrap={Boolean(selection.nodes.length)}
-            canFit={hasGroupSelected}
+            canConnect={canConnectSelected}
+            canAlign={selection.nodes.length > 1}
+            hasNodes={Boolean(selection.nodes.length)}
             canTurn={Boolean(selection.edges.length) && !selection.nodes.length}
             onColor={handleColor}
-            onEdit={handleActivate}
-            onOpen={handleOpenSelected}
+            onConnect={handleConnect}
+            onAlign={handleMore}
+            onFront={handleFront}
             onDuplicate={handleDuplicate}
-            onWrap={handleAddGroup}
-            onFit={handleFitGroups}
             onTurn={handleTurnEdges}
             onRemove={handleRemove}
             onMore={handleMore}
@@ -2481,33 +2658,44 @@ const NotesCanvas = ({
             {lang(isNarrow ? 'KnowledgeCanvasBlankTouch' : 'KnowledgeCanvasBlank')}
           </p>
         )}
+        {/* Телефон: только процент, картинки — в меню холста (доска `XpNotes`) */}
         <div className={buildClassName(kit.chip, kit.mono, look.zoomChip)} data-board-tools data-canvas-zoom>
-          {`${Math.round(view.scale * 100)}% · ${imagesLabel}`}
+          {isNarrow ? `${Math.round(view.scale * 100)}%` : `${Math.round(view.scale * 100)}% · ${imagesLabel}`}
         </div>
+        {selectedEdge && !isNarrow && !inline && (
+          <p className={parts.edgeHint} data-canvas-edge-hint>{lang('KnowledgeCanvasEdgePickedHint')}</p>
+        )}
         {!isNarrow && (
           <CanvasMinimap nodes={shown.nodes} view={view} boardRef={boardRef} onView={handleMinimapView} />
         )}
-        <div className={styles.boardZoom} data-board-tools>
-          <button
-            type="button"
-            className={styles.boardTool}
-            aria-label={lang('KnowledgeZoomIn')}
-            onClick={handleZoomIn}
-          >
-            <PvIcon name="plus" isSmall />
-          </button>
-          <button
-            type="button"
-            className={styles.boardTool}
-            aria-label={lang('KnowledgeZoomOut')}
-            onClick={handleZoomOut}
-          >
-            <PvIcon name="minus" isSmall />
-          </button>
-          <button type="button" className={styles.boardTool} aria-label={lang('KnowledgeZoomFit')} onClick={handleFit}>
-            <PvIcon name="fit" isSmall />
-          </button>
-        </div>
+        {!isNarrow && (
+          <div className={styles.boardZoom} data-board-tools>
+            <button
+              type="button"
+              className={styles.boardTool}
+              aria-label={lang('KnowledgeZoomIn')}
+              onClick={handleZoomIn}
+            >
+              <PvIcon name="plus" isSmall />
+            </button>
+            <button
+              type="button"
+              className={styles.boardTool}
+              aria-label={lang('KnowledgeZoomOut')}
+              onClick={handleZoomOut}
+            >
+              <PvIcon name="minus" isSmall />
+            </button>
+            <button
+              type="button"
+              className={styles.boardTool}
+              aria-label={lang('KnowledgeZoomFit')}
+              onClick={handleFit}
+            >
+              <PvIcon name="fit" isSmall />
+            </button>
+          </div>
+        )}
       </div>
       <PvSheet isOpen={Boolean(editing)} title={editTitle} onClose={handleEditClose}>
         {editNode?.type === 'file' ? (
@@ -2543,7 +2731,8 @@ const NotesCanvas = ({
               className={buildClassName(kit.chip, editing?.color === color && kit.chipOn)}
               style={`--c: ${CANVAS_TONES[color]}`}
               data-color={color}
-              aria-label={`${lang('KnowledgeCanvasColor')} ${color}`}
+              title={colorLabel(lang, color)}
+              aria-label={colorLabel(lang, color)}
               onClick={handleEditColor}
             >
               <span className={kit.dot} />
@@ -2618,74 +2807,7 @@ const NotesCanvas = ({
           {lang(linkDraft?.id ? 'Done' : 'KnowledgeCanvasLinkAdd')}
         </button>
       </PvSheet>
-      <PvSheet isOpen={isMenuOpen} title={entry.title} onClose={closeMenu}>
-        <input
-          id="knowledge-canvas-name"
-          className={kit.input}
-          value={canvasName}
-          maxLength={CANVAS_TITLE_MAX}
-          placeholder={lang('KnowledgeCanvasTitle')}
-          aria-label={lang('KnowledgeCanvasTitle')}
-          onChange={handleCanvasName}
-          onKeyDown={handleCanvasNameKey}
-        />
-        <button
-          type="button"
-          className={buildClassName(kit.btn, kit.btnAcc)}
-          data-canvas-rename
-          onClick={handleRenameCanvas}
-        >
-          <PvIcon name="edit" isSmall />
-          {lang('KnowledgeCanvasRename')}
-        </button>
-        {isNarrow && (
-          <button type="button" className={kit.btn} data-canvas-search onClick={handleMenuSearch}>
-            <PvIcon name="search" isSmall />
-            {lang('KnowledgeCanvasSearch')}
-          </button>
-        )}
-        {isFromGraph && isNarrow && (
-          <button type="button" className={kit.btn} data-canvas-refresh onClick={handleMenuRefresh}>
-            <PvIcon name="refresh" isSmall />
-            {lang('KnowledgeCanvasRefresh')}
-          </button>
-        )}
-        <div className={buildClassName(kit.muted, kit.small)}>{lang('KnowledgeCanvasImages')}</div>
-        <div className={kit.chips} role="radiogroup" aria-label={lang('KnowledgeCanvasImages')}>
-          {IMAGE_QUALITIES.map((quality) => (
-            <button
-              key={quality}
-              type="button"
-              role="radio"
-              aria-checked={imageQuality === quality}
-              className={buildClassName(kit.chip, imageQuality === quality && kit.chipOn)}
-              data-quality={quality}
-              data-canvas-images={quality}
-              onClick={handleImageQuality}
-            >
-              {lang(quality === 'full' ? 'KnowledgeCanvasImagesFull' : 'KnowledgeCanvasImagesThumb')}
-            </button>
-          ))}
-        </div>
-        <div className={buildClassName(kit.faint, kit.small)}>{lang('KnowledgeCanvasImagesHint')}</div>
-        <button
-          type="button"
-          className={buildClassName(kit.btn, kit.btnDanger)}
-          data-canvas-delete
-          onClick={handleAskDelete}
-        >
-          <PvIcon name="trash" isSmall />
-          {lang('KnowledgeDelete')}
-        </button>
-      </PvSheet>
-      <ConfirmDialog
-        isOpen={isDeleteOpen}
-        text={lang('KnowledgeCanvasDeleteConfirm', { name: entry.title })}
-        confirmLabel={lang('KnowledgeDelete')}
-        confirmIsDestructive
-        confirmHandler={handleDeleteCanvas}
-        onClose={closeDelete}
-      />
+      {renderCanvasDialogs()}
       <PvSheet
         isOpen={isPickingNote}
         title={lang('KnowledgeCanvasChooseNote')}

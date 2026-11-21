@@ -65,7 +65,8 @@ async function readLogoutWarning(page) {
   // openProfile ждёт «Профиль» (`[data-profile-menu]`), дальше — строка «Log Out»
   await logOutRow(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await logOutRow(page).click();
-  const dialog = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: 'Log Out' }) }).first();
+  // Шторка выхода (доска `PhProfileB`): «Просто выйти» / «Выйти и сменить ключи» / «Отмена»
+  const dialog = page.locator('.Modal .modal-dialog').filter({ has: page.locator('[data-sign-out-plain]') }).first();
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1500); // признак «единственное устройство» приходит ответом провайдера
   const text = (await dialog.textContent()) || '';

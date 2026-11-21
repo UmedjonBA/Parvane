@@ -6,7 +6,9 @@
 //! `[dayStart, dayEnd]`, сужённого частью дня (`morning` — до 12:00, `evening` — с 17:00, `weekend` — только сб и
 //! вс); у сегодняшнего дня окно не раньше `nowMinute`, начало округляется вверх до 5 минут. Каждый просвет даёт одно
 //! окно — с его начала. Порядок ответа: сначала первые окна каждого дня (по дням), потом вторые и так далее — три
-//! первых ответа приходятся на разные дни. `limit` — сколько вернуть, `total` — сколько всего нашлось.
+//! первых ответа приходятся на разные дни. `limit` — сколько вернуть, `total` — сколько всего нашлось. У окна
+//! `spare` — свободные минуты после него до следующего дела либо до конца окна дня (подпись «запас 30 мин»,
+//! доска `DkPlanMore`).
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -109,6 +111,8 @@ fn day_slots(day: &DayIn, index: i64, from: i64, until: i64, minutes: i64, margi
         if end - start >= minutes {
             let slot_end = start + minutes;
             let next_busy = busy.iter().map(|[a, _]| *a).find(|a| *a >= slot_end);
+            // Запас после окна: до следующего дела либо до конца окна дня
+            let spare = next_busy.map_or(until, |a| a.min(until)) - slot_end;
             out.push(json!({
                 "day": day.day,
                 "weekday": weekday(index),
@@ -118,6 +122,7 @@ fn day_slots(day: &DayIn, index: i64, from: i64, until: i64, minutes: i64, margi
                 "isBeforeFirst": first_busy.is_some_and(|a| slot_end <= a && a < until),
                 "load": day.load.max(0),
                 "budget": input.budget,
+                "spare": spare.max(0),
             }));
         }
         if let Some(block) = padded.iter().find(|[a, _]| *a == gap_end) {
@@ -167,6 +172,7 @@ mod tests {
         assert_eq!(v["total"], 2);
         let slots = v["slots"].as_array().unwrap();
         assert_eq!((slots[0]["start"].as_i64(), slots[0]["isFreeAfter"].as_bool()), (Some(1065), Some(true)), "17:30 + 15 мин запаса");
+        assert_eq!(slots[0]["spare"], 105, "после окна 19:15 свободно до 21:00");
         // 9:00–10:00 свободно, но с запасом до 9:45 — 45 минут, меньше 90: окна во вторник нет
         assert_eq!(slots[1]["day"], "2026-11-18".to_string());
         assert_eq!(v["slots"].as_array().unwrap().len(), 2);

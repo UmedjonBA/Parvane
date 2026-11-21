@@ -22,8 +22,11 @@ type NameProps = {
   initialName?: string;
   // Где появится папка: «в «Мой диск / Сервер»»
   note?: string;
-  // Новая папка в корне диска: выключатель «сразу открыть доступ»
+  // Новая папка личного диска: выключатель «сразу открыть доступ»
   canShare?: boolean;
+  // Имена соседей: совпавшее — ошибка в поле, без номера (доска `ZdFilesX`)
+  takenNames?: string[];
+  isFolder?: boolean;
   onSubmit: (name: string, isShared?: boolean) => void;
   onClose: NoneToVoidFunction;
 };
@@ -32,7 +35,7 @@ const FOCUS_DELAY_MS = 150;
 
 // Название новой папки либо новое имя файла/папки: проверка — как в движке
 const CloudNameDialogBase = ({
-  isOpen, title, label, confirmLabel, initialName, note, canShare, onSubmit, onClose,
+  isOpen, title, label, confirmLabel, initialName, note, canShare, takenNames, isFolder, onSubmit, onClose,
 }: NameProps) => {
   const lang = useLang();
   const [name, setName] = useState('');
@@ -59,13 +62,19 @@ const CloudNameDialogBase = ({
     return () => window.clearTimeout(timer);
   }, [isOpen]);
 
+  const isTaken = (value: string) => value !== initialName && Boolean(takenNames?.includes(value));
   const problem = validateName(name.trim());
-  const errorText = !hasTried || !problem ? undefined
+  const errorText = !hasTried ? undefined
     : problem === 'empty' ? lang('ParvaneCloudErrorNameEmpty')
-      : problem === 'too-long' ? lang('ParvaneCloudErrorNameLong') : lang('ParvaneCloudErrorNameChars');
+      : problem === 'too-long' ? lang('ParvaneCloudErrorNameLong')
+        : problem ? lang('ParvaneCloudErrorNameChars')
+          : isTaken(name.trim())
+            ? lang(isFolder ? 'ParvaneCloudNameTakenFolder' : 'ParvaneCloudNameTakenFile', { name: name.trim() })
+            : undefined;
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.target.value);
+    setHasTried(false);
   });
 
   const handleSubmit = useLastCallback((e?: React.FormEvent) => {
@@ -74,16 +83,22 @@ const CloudNameDialogBase = ({
     const value = (inputRef.current?.value ?? name).trim();
     setName(value);
     setHasTried(true);
-    if (validateName(value)) return;
+    if (validateName(value) || isTaken(value)) return;
     onSubmit(value, canShare && isShared);
   });
 
   const handleToggleShared = useLastCallback((isOn: boolean) => setIsShared(isOn));
 
   return (
-    <PvSheet isOpen={isOpen} title={title} className={styles.narrow} onClose={onClose} onEnter={handleSubmit}>
+    <PvSheet
+      isOpen={isOpen}
+      title={title}
+      subtitle={note}
+      className={styles.narrow}
+      onClose={onClose}
+      onEnter={handleSubmit}
+    >
       <form className={styles.form} onSubmit={handleSubmit}>
-        {note && <div className={styles.note} dir="auto">{note}</div>}
         <label className={styles.field}>
           {label}
           <input
@@ -103,7 +118,9 @@ const CloudNameDialogBase = ({
           <PvSwitch isOn={isShared} className={styles.switchRow} data-share-switch onChange={handleToggleShared}>
             <span className={styles.switchText}>
               {lang('ParvaneCloudShareAtOnce')}
-              <span className={styles.note}>{` ${lang('ParvaneCloudShareAtOnceHint')}`}</span>
+              <span className={buildClassName(styles.note, styles.switchHint)}>
+                {lang('ParvaneCloudShareAtOnceHint')}
+              </span>
             </span>
           </PvSwitch>
         )}

@@ -12,11 +12,13 @@ import { clearSecureSession, SecureE2eStorage } from './secureStorage';
 // (пятый неверный PIN, «Забыли PIN?»). PIN не нужен: хранилище профиля стирается целиком, не расшифровываясь.
 // Остаются только настройки устройства, не аккаунта, и оболочка приложения PWA
 
-// localStorage: схема, набор и порядок модулей (свои у каждого устройства, MODULES-1), ширина колонок, плотность
-// списка чатов, адрес gateway и метки сценариев e2e. Всё прочее `parvane:*` — данные аккаунта и его экранов
+// localStorage: схема, набор и порядок модулей (свои у каждого устройства, MODULES-1) и отметка первого запуска,
+// ширина колонок, плотность списка чатов, адрес gateway и метки сценариев e2e. Всё прочее `parvane:*` — данные аккаунта и его экранов
 const KEPT_LOCAL_KEYS = new Set([
   'parvane:color-scheme', 'parvane:modules', 'parvane:modules-view', 'parvane:modules-server-off',
-  'parvane:panel-widths', 'parvane:gateway', 'parvane:chat-list-dense',
+  'parvane:modules-first-run', 'parvane:panel-widths', 'parvane:gateway', 'parvane:chat-list-dense',
+  // Экран «Уведомления» после первого входа (доска `ZpSysGen`) — один раз на устройство
+  'parvane:notify-onboard',
 ]);
 const KEPT_LOCAL_PREFIXES = ['parvane:e2e:'];
 const ACCOUNT_PREFIX = 'parvane:';

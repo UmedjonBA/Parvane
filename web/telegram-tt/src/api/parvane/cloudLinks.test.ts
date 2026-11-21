@@ -4,9 +4,9 @@ import type { LinkManifestFile, LinkSourceNode } from './cloudLinks';
 
 import { decryptBlob, encryptBlobWithKey } from './blobcrypt';
 import {
-  base64UrlToBytes, buildLinkPlan, buildLinkTree, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url,
-  isLinkDir, isLinkId, LINK_MAX_FILES, LINK_MAX_THUMBS, newLinkKey, openManifest, openOwnerRecord, parseLinkKey,
-  parseManifest, runPool, sealManifest, sealOwnerRecord,
+  base64UrlToBytes, buildLinkPlan, buildLinkTree, buildLinkUrl, buildManifest, buildSelectionPlan, bytesToBase64,
+  bytesToBase64Url, isLinkDir, isLinkId, LINK_MAX_FILES, LINK_MAX_THUMBS, newLinkKey, openManifest, openOwnerRecord,
+  parseLinkKey, parseLinkSelection, parseManifest, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
 
 // Parvane (spec 022): ссылка на файлы облака — план, список, запись владельца, адрес.
@@ -70,6 +70,17 @@ describe('ссылка облака: план', () => {
     expect(plan.dirs.sort()).toEqual(['Пустая', 'Черновики']);
     expect(plan.files.map((f) => f.path).sort()).toEqual(['Черновики/план.md', 'итог.pdf']);
     expect(plan.bytes).toBe(200);
+  });
+
+  it('выбор нескольких — папка с выбранными и их содержимым, корзина не в счёт', () => {
+    const plan = expectPlan(buildSelectionPlan(TREE, ['f6', 'd2'], 'рядом.txt и ещё 1'));
+    expect(plan).toMatchObject({ name: 'рядом.txt и ещё 1', kind: 'folder', bytes: 200 });
+    expect(plan.dirs).toEqual(['Черновики']);
+    expect(plan.files.map((f) => f.path).sort()).toEqual(['Черновики/план.md', 'рядом.txt']);
+    expect(expectPlan(buildSelectionPlan(TREE, ['f6'], 'x')).kind).toBe('file');
+    expect(buildSelectionPlan(TREE, ['f6', 'f3'], 'x')).toEqual({ error: 'not-found' });
+    expect(parseLinkSelection('sel:a,b')).toEqual(['a', 'b']);
+    expect(parseLinkSelection('a')).toBeUndefined();
   });
 
   it('пустая папка — ссылка без файлов', () => {

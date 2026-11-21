@@ -3,6 +3,8 @@
 
 import type { TeactNode } from '../../../lib/teact/teact';
 
+import type { RegularLangKey } from '../../../types/language';
+import type { LangFn } from '../../../util/localization';
 import type { CanvasPoint, CanvasPresetColor, CanvasSide } from './notesCanvas';
 import type { CanvasCurve } from './notesCanvasEdit';
 
@@ -15,15 +17,32 @@ const ARROW_LENGTH = 11;
 const ARROW_HALF_WIDTH = 5;
 const CARD_INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
 
-// Цвета JSON Canvas 1…6: красный, оранжевый, жёлтый, зелёный, синий, фиолетовый
+// Цвета JSON Canvas 1…6: красный, оранжевый, жёлтый, зелёный, бирюзовый (cyan по спецификации), фиолетовый
 export const CANVAS_TONES: Record<CanvasPresetColor, string> = {
   1: 'var(--pv-red)',
   2: 'var(--pv-orange)',
   3: 'var(--pv-yellow)',
   4: 'var(--pv-green)',
-  5: 'var(--pv-blue)',
+  5: 'var(--pv-aqua)',
   6: 'var(--pv-purple)',
 };
+
+// Названия цветов для подписей кружков («Цвет: Бирюзовый», доска `XdNotes`)
+export const CANVAS_TONE_NAMES: Record<CanvasPresetColor, RegularLangKey> = {
+  1: 'KnowledgeCanvasTone1',
+  2: 'KnowledgeCanvasTone2',
+  3: 'KnowledgeCanvasTone3',
+  4: 'KnowledgeCanvasTone4',
+  5: 'KnowledgeCanvasTone5',
+  6: 'KnowledgeCanvasTone6',
+};
+
+/** Подпись кружка цвета: «Цвет: Синий», без цвета — «Цвет: Без цвета». */
+export function colorLabel(lang: LangFn, color?: CanvasPresetColor) {
+  return lang('KnowledgeCanvasColorNamed', {
+    name: lang(color ? CANVAS_TONE_NAMES[color] : 'KnowledgeCanvasToneNone'),
+  });
+}
 
 export function colorStyle(color?: string) {
   return isCanvasPresetColor(color) ? `--gc: ${CANVAS_TONES[color]}; ` : '';

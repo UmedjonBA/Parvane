@@ -1,0 +1,26 @@
+// Разрешения (доска `ZpSysGen`): листы «Доступ к геопозиции», «Нет доступа», «Уведомления» — текст и две кнопки
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+}
+
+.text {
+  margin: 0;
+  font-size: var(--pv-font-size);
+  line-height: 1.4;
+  color: var(--pv-fg);
+}
+
+.warn {
+  color: var(--pv-red);
+}
+
+.buttons {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.25rem;
+}

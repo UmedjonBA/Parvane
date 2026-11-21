@@ -1,0 +1,156 @@
+// «Заметки»: справка по разметке (доска `ZdNotesX`) и корзина заметок
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.screen {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.subtitle {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem 1.5rem;
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.cap {
+  margin: 0.5rem 0 0;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.row {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+
+  min-height: 2.5rem;
+  padding: 0.5rem 0.875rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.sample {
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  white-space: pre-wrap;
+}
+
+.meaning {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+  text-align: end;
+}
+
+.keyMeaning {
+  font-size: var(--pv-font-size-small);
+}
+
+.keys {
+  display: flex;
+  flex: none;
+  gap: 0.25rem;
+}
+
+.kbd {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-xs);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.trashRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 3rem;
+  padding: 0.5rem 0.875rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.trashIcon {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--pv-muted);
+}
+
+.trashText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+}
+
+.trashName {
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trashMeta {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.empty {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

@@ -128,7 +128,7 @@ async function readDeviceData(page) {
 
 // Ключи, которые переживают стирание: настройки устройства, не аккаунта (`deviceWipe.ts KEPT_LOCAL_KEYS`), метки
 // сценариев и журнал диагностики, начатый уже после выхода (адреса аккаунта в значениях нет — проверяется ниже)
-const KEPT_LOCAL = /^parvane:(color-scheme|modules|modules-view|modules-server-off|panel-widths|gateway|e2e:|diag:)/;
+const KEPT_LOCAL = /^parvane:(color-scheme|modules|modules-view|modules-server-off|panel-widths|gateway|notify-onboard|chat-list-dense|e2e:|diag:)/;
 // Записи `tt-data` без данных аккаунта: общие настройки устройства (язык, тема) и настройки, которые выход сразу
 // пишет заново значениями по умолчанию (`global/cache.ts watchParvaneSettings` после сброса состояния)
 const KEPT_TT_DATA = new Set(['tt-shared-state', 'parvane-account-settings', 'parvane-theme-settings']);
@@ -299,7 +299,10 @@ try {
   const passwordScreen = await submitNickUntilPassword(page, deskUser);
   await passwordScreen.locator('#sign-in-password').fill(PASSWORD);
   await passwordScreen.locator('[data-auth-submit]').click();
-  await waitForChatList(page);
+  // Стёртое устройство входит новым: у аккаунта уже есть журнал устройств, и приложение само может открыть
+  // «Устройства» (привязка) вместо списка чатов — вход проверяется по уходу формы и левой колонке
+  await passwordScreen.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   assert.equal(await lock(page).count(), 0, 'после входа заново экран блокировки');
   console.log('OK: вход заново после стирания');
@@ -344,6 +347,10 @@ try {
   // аутентификатор без проверки пользователя не отвечает до срока) попыткой PIN не считается
   await reloadToLock(bio, 5);
   await shown(lock(bio).locator('[data-pin-biometric]'));
+  // Доска `ZpSystem`: отпечаток — левая нижняя клетка цифровой клавиатуры (перед «0»), не кнопка под ней
+  assert.equal(await lock(bio).locator('[data-pin-pad] [data-pin-biometric] + [data-pin-key="0"]').count(), 1,
+    'отпечаток не в клетке клавиатуры слева от «0»');
+  assert.equal(await lock(bio).locator('[data-pin-biometric]').getAttribute('aria-label'), 'Unlock with fingerprint');
   await tapPin(lock(bio), '0000');
   await shown(lockWithLeft(bio, 4));
   await bio.evaluate(() => {

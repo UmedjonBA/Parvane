@@ -1,7 +1,7 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import { memo, useLayoutEffect, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
-import type { NoteMenuItem } from './NoteMenu';
+import type { NoteMenuAnchor, NoteMenuItem } from './NoteMenu';
 import type { NoteEntry } from './notesStore';
 
 import { copyTextToClipboard } from '../../../util/clipboard';
@@ -20,9 +20,15 @@ import NoteCanvasSheet from './NoteCanvasSheet';
 import NoteMenu from './NoteMenu';
 import NoteRenameSheet from './NoteRenameSheet';
 
+export type NoteRowKeyAction = 'rename' | 'delete';
+
 type OwnProps = {
   // Заметка, по строке которой нажата правая кнопка; нет — меню закрыто
   note?: NoteEntry;
+  // Компьютер: меню у курсора; без точки — шторка (телефон)
+  anchor?: NoteMenuAnchor;
+  // F2 / Del по строке: сразу окно пункта, без меню
+  keyAction?: NoteRowKeyAction;
   onOpen: (noteId: string) => void;
   onOpenCanvas: (canvasId: string) => void;
   onRename: (noteId: string, title: string) => void;
@@ -31,13 +37,16 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
+// Сочетания клавиш пунктов меню у строки (доска `ZdNotesX`): названия клавиш не переводятся
+const KEY_HINTS: Record<string, string> = { open: 'Enter', rename: 'F2', delete: 'Del' };
+
 // Окно, открытое пунктом меню: оно живёт дольше самого меню
 type Pending = { kind: 'canvas' | 'article' | 'versions' | 'rename' | 'delete'; note: NoteEntry };
 
 // Меню строки списка заметок на компьютере (доска `ZdNotesX`): те же действия, что в меню открытой заметки, без
 // открытия заметки. Список и холст на компьютере рядом не стоят — заметку на холст кладут отсюда
 const NoteRowMenu = ({
-  note, onOpen, onOpenCanvas, onRename, onPickFolder, onDelete, onClose,
+  note, anchor, keyAction, onOpen, onOpenCanvas, onRename, onPickFolder, onDelete, onClose,
 }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
@@ -56,15 +65,21 @@ const NoteRowMenu = ({
       list.push({ action: 'move', label: lang('KnowledgeMoveNote'), icon: 'folder' });
     }
     list.push({ action: 'pin', label: lang(isPinned ? 'KnowledgeUnpin' : 'KnowledgePin'), icon: 'up' });
-    list.push({ action: 'copy', label: lang('KnowledgeCopyLink'), icon: 'link' });
-    list.push({ action: 'article', label: lang('KnowledgeSendArticle'), icon: 'chat' });
+    list.push({ action: 'copy', label: lang('KnowledgeCopyLink', { title: note?.title || '' }), icon: 'link' });
+    // Меню у строки компьютера — «Отправить в чат…» (`ZdNotesX`), шторка телефона — «Отправить статьёй в чат»
+    list.push({
+      action: 'article', label: lang(anchor ? 'KnowledgeSendToChat' : 'KnowledgeSendArticle'), icon: 'chat',
+    });
     list.push({ action: 'canvas', label: lang('KnowledgeAddToCanvas'), icon: 'board' });
     if (driveId) list.push({ action: 'versions', label: lang('ParvaneCloudVersions'), icon: 'restore' });
     list.push({
       action: 'delete', label: lang('KnowledgeDelete'), icon: 'trash', isDanger: true,
     });
-    return list;
-  }, [lang, isDaily, isPinned, driveId]);
+    // Черта — перед ссылкой и перед корзиной, как на доске
+    return list.map((item) => ({
+      ...item, hint: KEY_HINTS[item.action], hasDivider: item.action === 'copy' || item.action === 'delete',
+    }));
+  }, [lang, isDaily, isPinned, driveId, anchor, note?.title]);
 
   const handlePick = useLastCallback((action: string) => {
     if (!note) return;
@@ -94,6 +109,17 @@ const NoteRowMenu = ({
     }
   });
 
+  // F2 / Del: окно пункта открывается в том же кадре, что и нажатие (правило экрана), меню не показывается
+  useLayoutEffect(() => {
+    if (!note || !keyAction) return;
+    if (keyAction === 'rename' && isDaily) {
+      onClose();
+      return;
+    }
+    setPending({ kind: keyAction, note });
+    onClose();
+  }, [note, keyAction, isDaily, onClose]);
+
   const closePending = useLastCallback(() => {
     setPending(undefined);
   });
@@ -109,10 +135,11 @@ const NoteRowMenu = ({
   return (
     <>
       <NoteMenu
-        isOpen={Boolean(note)}
+        isOpen={Boolean(note) && !keyAction}
         title={note?.title || ''}
         items={items}
-        isSheet
+        isSheet={!anchor}
+        anchor={anchor}
         onPick={handlePick}
         onClose={onClose}
       />

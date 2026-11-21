@@ -178,12 +178,7 @@ fn check_task(t: &Task) -> Result<()> {
     if let Some(o) = &t.origin {
         check_origin(o)?;
     }
-    if let Some(src) = &t.source {
-        if src.chat.len() > MAX_CHAT || src.op_id.len() > 32 || (!src.op_id.is_empty() && !src.op_id.bytes().all(|b| b.is_ascii_hexdigit())) {
-            return Err(ProtoError::InvalidField("source"));
-        }
-    }
-    Ok(())
+    check_source(t.source.as_ref())
 }
 
 /// Шаги задачи либо события: до 100, текст непустой и не длиннее 160 байт.
@@ -268,7 +263,17 @@ fn check_event(e: &Event) -> Result<()> {
     if e.color.as_ref().is_some_and(|c| c.value > MAX_LIST_COLOR) {
         return Err(ProtoError::InvalidField("color"));
     }
+    check_source(e.source.as_ref())?;
     check_remind(e.remind.as_ref())
+}
+
+fn check_source(src: Option<&Source>) -> Result<()> {
+    if let Some(src) = src {
+        if src.chat.len() > MAX_CHAT || src.op_id.len() > 32 || (!src.op_id.is_empty() && !src.op_id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(ProtoError::InvalidField("source"));
+        }
+    }
+    Ok(())
 }
 
 fn check_remind(r: Option<&U32>) -> Result<()> {
@@ -347,6 +352,9 @@ pub fn check_settings(s: &Settings) -> Result<()> {
     }
     if s.margin > MAX_MARGIN || !(MIN_BUDGET..=MINUTES_IN_DAY).contains(&s.budget) {
         return Err(ProtoError::InvalidField("margin"));
+    }
+    if s.event_remind.is_some_and(|m| m > MAX_REMIND_MINUTES) {
+        return Err(ProtoError::InvalidField("event_remind"));
     }
     Ok(())
 }
@@ -452,6 +460,7 @@ impl PlannerState {
             .chain(e.color.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.steps.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(e.source.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
         {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
@@ -604,6 +613,7 @@ impl PlannerState {
         merge_reg!(cur.remind, inc.remind, U32);
         merge_reg!(cur.list_id, inc.list_id, Str);
         merge_reg!(cur.steps, inc.steps, Steps);
+        merge_reg!(cur.source, inc.source, Source);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -847,6 +857,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(e.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.steps.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.source.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &e.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -991,6 +1002,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     f.stamp = Some(pb.clone());
                 }
                 if let Some(f) = &mut e.steps {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.source {
                     f.stamp = Some(pb.clone());
                 }
                 for o in &mut e.occurrences {

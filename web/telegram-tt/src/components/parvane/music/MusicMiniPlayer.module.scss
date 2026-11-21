@@ -151,3 +151,34 @@
   border-radius: 0.125rem;
   background: var(--pv-accent);
 }
+
+// Состояние поверх обложки виджета (доска `DeskMusic`)
+.widget {
+  position: relative;
+}
+
+.widgetState {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+
+  color: var(--pv-fg);
+
+  background: color-mix(in srgb, var(--pv-panel) 55%, transparent);
+}
+
+// Внизу страницы «Музыки» на телефоне: лента модулей закрыта, полоса стоит в потоке
+.barDocked {
+  position: relative;
+  bottom: auto;
+  flex: none;
+}

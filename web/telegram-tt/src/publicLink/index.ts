@@ -484,12 +484,14 @@ function showManifest(linkId: string, manifest: LinkManifest, expiresAt: number)
   document.title = `${manifest.name} — Parvane`;
 
   const titles = el('div', 'titles');
+  // Год — только не текущий (доска `RpFiles`: «до 22 ноября»)
+  const expiry = new Date(expiresAt * 1000);
+  const dateOptions: Intl.DateTimeFormatOptions = expiry.getFullYear() === new Date().getFullYear()
+    ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' };
   const facts = [
     isFolder ? filesText(lang, files.length) : undefined,
     sizeText(strings, totalBytes),
-    expiresAt ? fill(strings.validUntil, {
-      date: new Date(expiresAt * 1000).toLocaleDateString(lang, { day: 'numeric', month: 'long', year: 'numeric' }),
-    }) : undefined,
+    expiresAt ? fill(strings.validUntil, { date: expiry.toLocaleDateString(lang, dateOptions) }) : undefined,
   ].filter(Boolean).join(' · ');
   titles.append(
     el('p', 'lead', isFolder ? strings.sharedFolder : strings.sharedFile),

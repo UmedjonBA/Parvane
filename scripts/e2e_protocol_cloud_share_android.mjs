@@ -218,7 +218,7 @@ try {
   xMark();
   await xWait(new RegExp(`cloud: status=ready .*папки=\\[[^\\]]*${WF}:invite`), 'приглашение web у X');
   await openXFiles();
-  await uiWait(new RegExp(`(приглашает в «${WF}»|invites you to “${WF}”)`), 'строка приглашения');
+  await uiWait(new RegExp(`(приглашает в (папку )?«${WF}»|invites you to (the folder )?“${WF}”)`), 'строка приглашения');
   ok('X: строка приглашения с «Принять» / «Отклонить» в «Облаке»');
   xMark();
   await uiTap(/^(Принять|Accept)$/, 'кнопка «Принять»');

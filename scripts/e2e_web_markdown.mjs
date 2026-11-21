@@ -162,6 +162,18 @@ try {
   }
   assert.equal(await body.locator('details[data-callout="info"]').evaluate((element) => element.open), false,
     'свёрнутый callout закрыт');
+  // «Важно» — оранжевой рамкой и заголовком «Important» (доска `PhNotesMore`)
+  const important = body.locator('[data-callout="important"]');
+  await visible(important.getByText('Important'), 'заголовок выноски «Важно»');
+  assert.equal(await important.evaluate((element) => getComputedStyle(element).borderInlineStartColor),
+    await page.evaluate(() => {
+      const probe = document.createElement('i');
+      probe.style.color = 'var(--pv-orange)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }), 'рамка выноски «Важно» не оранжевая');
   assert.ok(await body.locator('mark').count() >= 2 && await body.locator('sub').count() >= 1
     && await body.locator('sup').count() >= 1 && await body.locator('u').count() >= 1, 'mark, sub, sup, u');
   assert.equal(await body.locator('em strong, strong em').count() >= 4, true, 'вложенные жирный и курсив');
@@ -183,19 +195,11 @@ try {
     (element) => getComputedStyle(element).userSelect), 'text', 'текст заметки выделяется');
   const pythonCode = body.locator('[data-md-code="python"]').first();
   await pythonCode.scrollIntoViewIfNeeded();
-  await pythonCode.hover();
+  // Чип «Копировать код» виден всегда, без наведения (доска `PhNotesMore`)
   const copyButton = pythonCode.locator('[data-md-copy]');
-  await visible(copyButton, 'кнопка «Копировать» у кода при наведении');
-  // Кнопка проявляется плавно (0,15 с) — ждать, а не мерить в первый же момент
-  await copyButton.first().evaluate((element) => new Promise((resolve, reject) => {
-    const deadline = Date.now() + 3000;
-    const check = () => {
-      if (Number(getComputedStyle(element).opacity) > 0.5) resolve(undefined);
-      else if (Date.now() > deadline) reject(new Error('кнопка «Копировать» не проявилась при наведении'));
-      else requestAnimationFrame(check);
-    };
-    check();
-  }));
+  await visible(copyButton.filter({ hasText: 'Copy code' }), 'чип «Копировать код» у кода');
+  assert.equal(Number(await copyButton.evaluate((element) => getComputedStyle(element).opacity)), 1,
+    'чип «Копировать код» скрыт без наведения');
   await copyButton.click();
   await visible(page.getByText('Text copied to clipboard', { exact: false }).first(), 'уведомление о копировании');
   await scrollNote(0.9);
@@ -209,7 +213,7 @@ try {
   await page.locator('[data-note-menu-list]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('Escape не закрыл меню заметки'));
   await scrollNote(0);
-  console.log('OK: текст выделяется, «Копировать» у кода, режимы и меню — в закреплённой шапке');
+  console.log('OK: текст выделяется, чип «Копировать код», режимы и меню — в закреплённой шапке');
 
   // ── Якорь `#раздел` прокручивает к заголовку ──
   await scrollNote(0);

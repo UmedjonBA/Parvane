@@ -13,12 +13,13 @@ export type SharedFileMeta = { name: string; type: string; size: number };
 export type SharedMeta = { title?: string; text?: string; url?: string; files: SharedFileMeta[]; at: number };
 export type SharedPayload = { title?: string; text?: string; url?: string; files: File[] };
 
-export type ShareDestination = 'chat' | 'files' | 'note';
+export type ShareDestination = 'chat' | 'files' | 'note' | 'music';
 
 // Полученное старше этого не показывается: экран «Поделиться» после случайной перезагрузки через день не нужен
 const SHARE_MAX_AGE_MS = 10 * 60 * 1000;
 const NOTE_TITLE_MAX_LENGTH = 60;
 const MAX_FIELD_LENGTH = 100000;
+const AUDIO_EXTENSIONS = ['mp3', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'wav'];
 
 /** Поля формы `share_target`: пустые строки — как отсутствующие. */
 export function readShareForm(form: FormData): { title?: string; text?: string; url?: string; files: File[] } {
@@ -77,14 +78,25 @@ export function buildSharedText(shared: { title?: string; text?: string; url?: s
   return lines.filter(Boolean).join('\n');
 }
 
-/** Куда можно отправить полученное: чат — всегда; «Файлы» — только файлы; заметку — если модуль включён. */
+/**
+ * Куда можно отправить полученное: чат — всегда; «Файлы» — только файлы; заметку — если модуль включён; «Музыку» —
+ * аудиофайлы, когда модуль включён и сервер принимает свои файлы (`canUploadMusic`).
+ */
 export function getShareDestinations(
-  hasFiles: boolean, isModuleOn: (id: ParvaneModuleId) => boolean,
+  files: Pick<File, 'name' | 'type'>[], isModuleOn: (id: ParvaneModuleId) => boolean, canUploadMusic?: boolean,
 ): ShareDestination[] {
   const destinations: ShareDestination[] = ['chat'];
-  if (hasFiles && isModuleOn('files')) destinations.push('files');
+  if (files.length && isModuleOn('files')) destinations.push('files');
   if (isModuleOn('notes')) destinations.push('note');
+  if (canUploadMusic && isModuleOn('music') && files.some(isSharedAudio)) destinations.push('music');
   return destinations;
+}
+
+/** Аудиофайл: по типу либо по расширению (приложения не всегда сообщают тип). */
+export function isSharedAudio(file: Pick<File, 'name' | 'type'>) {
+  if (file.type.startsWith('audio/')) return true;
+  const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : '';
+  return AUDIO_EXTENSIONS.includes(ext);
 }
 
 /** Название новой заметки: заголовок, первая строка текста либо имя первого файла. */

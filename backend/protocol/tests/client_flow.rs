@@ -226,6 +226,41 @@ fn direct_group_multidevice_and_restore() {
     assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "группа после восстановления".into())), "{ev:?}");
 }
 
+/// Два дочитывания журнала с одной версии (очередь хоста и событие модели идут параллельно) отдают одни и те же
+/// записи: повторно пришедшие уже принятые записи журналов устройств и группы пропускаются, а не рвут цепочку
+/// `BrokenChain` (сценарий `task_offer`: отправка в группу у участника падала).
+#[test]
+fn overlapping_log_pages_are_idempotent() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let alice_log = srv.logs["alice@local"].clone();
+    bob.ingest_log("alice@local", alice_log.clone()).unwrap();
+    let version = bob.log_version("alice@local");
+    assert!(version > 0);
+    // Тот же ответ ещё раз (второе дочитывание с версии 0) — и свой журнал тоже
+    bob.ingest_log("alice@local", alice_log).unwrap();
+    assert_eq!(bob.log_version("alice@local"), version);
+    let own = srv.logs["bob@local"].clone();
+    bob.ingest_log("bob@local", own).unwrap();
+
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Двое", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    let group_ref = Ref { domain: "local".into(), id: g.id.clone() };
+    let (entries, hints) = srv.hints(&g.id, 0);
+    bob.group_ingest_hinted(&group_ref, entries.clone(), &hints).unwrap();
+    let group_version = bob.group_version(&g.id);
+    assert!(group_version > 0);
+    assert_eq!(bob.group_ingest_hinted(&group_ref, entries, &hints).unwrap(), group_version);
+    // Ответ, где за уже принятыми записями идёт новая, — новая применяется
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    let (entries, hints) = srv.hints(&g.id, 0);
+    assert!(bob.group_ingest_hinted(&group_ref, entries, &hints).unwrap() > group_version);
+}
+
 /// Грант несёт прежние адреса аккаунта (поле `fa`, spec 026): устройство, вошедшее после смены ника, открывает записи
 /// журнала личного состояния, запечатанные под прежним адресом.
 #[test]
@@ -2646,4 +2681,33 @@ fn music_playlists_container_syncs_between_own_devices() {
     let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
     assert_eq!(restored.music_state_json(), alice.music_state_json());
     assert_eq!(alice.music_keys_export().unwrap().domain, "parvane.music.v1");
+}
+
+/// «Выйти и сменить ключи» (доска PhProfileB): уходящее устройство меняет ключ доставки и раздаёт его своим
+/// устройствам, запись выхода — последней; оставшееся устройство принимает новый ключ и видит выход. Единственное
+/// устройство аккаунта ключей не меняет — только выходит
+#[test]
+fn leave_rotating_rotates_keys_before_leaving() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let before = alice.delivery_key_generation();
+
+    let reqs = run_collect(&mut srv, &mut alice2, &mut |c| c.leave_rotating().map(|o| o.requests));
+    let methods: Vec<&str> = reqs.iter().map(|r| r.method).collect();
+    assert!(methods.contains(&"identity.delivery_key.set"), "{methods:?}");
+    assert_eq!(*methods.last().unwrap(), "identity.device.log_append", "{methods:?}");
+
+    drain(&mut srv, &mut alice);
+    assert!(alice.delivery_key_generation() > before);
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    assert_eq!(alice.log_devices("alice@local"), vec!["d1".to_string()]);
+
+    let only = run_collect(&mut srv, &mut alice, &mut |c| c.leave_rotating().map(|o| o.requests));
+    assert_eq!(only.iter().map(|r| r.method).collect::<Vec<_>>(), vec!["identity.device.log_append"]);
 }

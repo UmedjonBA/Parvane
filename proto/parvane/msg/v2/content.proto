@@ -485,6 +485,10 @@ message MusicPlaylistShare {
   repeated MusicPlaylistShareTrack tracks = 3 [(parvane.core.v2.max_items) = 500];
   // Название и первые треки для клиентов без «Музыки».
   string text = 4 [(parvane.core.v2.max_len) = 600];
+  // Общий плейлист сервера `server` (MUSIC-3): получатель открывает живой плейлист и вступает ключом `join_key`
+  // (роль «добавляет»); снимок `tracks` — для клиентов без общих плейлистов. Пусто — обычный снимок (PLAYLIST-1).
+  string shared_id = 5 [(parvane.core.v2.max_len) = 32];
+  string join_key = 6 [(parvane.core.v2.max_len) = 64];
 }
 
 message MusicPlaylistShareTrack {

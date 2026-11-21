@@ -101,8 +101,9 @@ try {
   };
 
   const invite = async (role) => {
-    await shareDialog.locator('select[data-new-role]').selectOption({ label: role });
-    await shareDialog.getByRole('button', { name: 'Add people', exact: true }).click();
+    // Роль нового участника — сегмент рядом с полем ника, «Из контактов» — кнопкой под ним (доска `DkFilesDialogs`)
+    await shareDialog.locator(`[data-new-role="${role === 'Editor' ? 'editor' : 'reader'}"]`).click();
+    await shareDialog.locator('[data-share-contacts]').click();
     const picker = a.locator('.Modal').filter({ has: a.locator('.ChatOrUserPicker-item') });
     await picker.locator('.ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
     await invited.waitFor({ state: 'visible', timeout: STEP });
@@ -117,8 +118,11 @@ try {
   await shareDialog.getByText('Only you have access so far').waitFor({ state: 'visible', timeout: STEP });
   await invite('Reader');
   assert.equal(await invited.getAttribute('data-role'), 'reader');
-  await invited.getByText('waiting for an answer · Reader').waitFor({ state: 'visible' });
-  await invited.getByRole('button', { name: 'Cancel', exact: true }).waitFor({ state: 'visible' });
+  // Компьютер: приглашённый — в общем списке «@ник · приглашён» с чипом роли (отмена — из чипа)
+  await invited.getByText(/ · invited$/).waitFor({ state: 'visible' });
+  assert.equal(await invited.locator('select').inputValue(), 'reader');
+  await shareDialog.getByText('can upload, rename and delete', { exact: false }).waitFor({ state: 'visible' });
+  assert.equal(await shareDialog.locator('[data-link-block]').count(), 0, 'ссылки в окне доступа нет');
   assert.equal(await member.count(), 0, 'не принявший — не участник');
   await shareDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
   await ac.folderRow(FOLDER).click();
@@ -139,7 +143,7 @@ try {
   const inviteRow = bc.folderRow(FOLDER);
   await inviteRow.waitFor({ state: 'visible', timeout: SYNC });
   assert.equal(await inviteRow.getAttribute('data-container-kind'), 'invite', 'до принятия — приглашение');
-  await inviteRow.getByText(`${aliceName} invites you to “${FOLDER}”`).waitFor({ state: 'visible' });
+  await inviteRow.getByText(`${aliceName} invites you to the folder “${FOLDER}”`).waitFor({ state: 'visible' });
   await inviteRow.getByRole('button', { name: 'Decline', exact: true }).waitFor({ state: 'visible' });
   assert.equal(
     await bc.cloud.locator('[role="list"] > [role="listitem"]').first().getAttribute('data-container-kind'), 'invite',
@@ -198,10 +202,17 @@ try {
 
   // ── Алиса убирает Боба: папка у него исчезает, новое он не получает ───────
   await ac.cloud.locator('[data-share-banner="owned"]').click();
-  await member.getByRole('button', { name: 'Remove' }).click();
+  await member.locator('select').selectOption('remove');
   await member.waitFor({ state: 'detached', timeout: STEP });
   await shareDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
   await ac.upload('после удаления.txt', 'только для владельца');
+  // У Боба папка не исчезает молча: «Нет доступа — владелец закрыл доступ» с «Убрать» (доски `ZpFilesX`, `ZdFilesX`)
+  const closed = bc.cloud.locator('[data-closed-here], [data-closed-folder]').first();
+  await closed.waitFor({ state: 'visible', timeout: SYNC });
+  await closed.getByText(/closed access|access closed by the owner/).waitFor({ state: 'visible' });
+  // Строка перерисовывается опросом сервера — нажатие без ожидания «неподвижности»
+  await closed.locator('[data-closed-dismiss]').click({ force: true });
+  await bc.cloud.locator('[data-closed-here], [data-closed-folder]').first().waitFor({ state: 'detached', timeout: SYNC });
   await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
   assert.equal(await bc.item('после удаления.txt').count(), 0);
   await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'грант не снят на сервере');
@@ -214,8 +225,8 @@ try {
   await a.getByRole('button', { name: 'Create', exact: true }).click();
   const second = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: 'Фото' });
   await second.waitFor({ state: 'visible', timeout: STEP });
-  await second.locator('select[data-new-role]').selectOption({ label: 'Editor' });
-  await second.getByRole('button', { name: 'Add people', exact: true }).click();
+  await second.locator('[data-new-role="editor"]').click();
+  await second.locator('[data-share-contacts]').click();
   await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
   await second.locator(`[data-invited="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
   // Боб принимает карточкой в чате: владелец видит его участником, карточка ведёт в «Файлы»
@@ -250,9 +261,9 @@ try {
   };
   const toMyFiles = () => ac.root();
   const moveTo = async (name, placeName) => {
-    await ac.menu(name, 'Move');
+    await ac.menu(name, 'Move…');
     // Дерево назначения показывает сразу все места: личный диск («Cloud») и совместные папки
-    const dialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Move here' });
+    const dialog = a.locator('.Modal .modal-dialog').filter({ has: a.locator('[data-move-list]') });
     await dialog.locator(`[data-place-id][role="listitem"]`).filter({ hasText: placeName }).click();
     await dialog.getByRole('button', { name: 'Move here', exact: true }).click();
     await ac.item(name).waitFor({ state: 'detached', timeout: SYNC });
@@ -274,10 +285,10 @@ try {
     .waitFor({ state: 'detached', timeout: SYNC });
   const archiveDialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: ARCHIVE });
   await archiveDialog.waitFor({ state: 'visible', timeout: SYNC });
-  await archiveDialog.locator('select[data-new-role]').selectOption({ label: 'Reader' });
-  // Приглашение по нику (доска `PhFilesMore`): неизвестный ник — ошибка в окне, известный — участник
+  await archiveDialog.locator('[data-new-role="reader"]').click();
+  // Приглашение по нику (доски `PhFilesMore`, `DkFilesDialogs`): неизвестный ник — ошибка в окне, известный — участник
   const nickInput = archiveDialog.locator('[data-share-nick] input');
-  assert.equal((await archiveDialog.locator('[data-share-nick-submit]').innerText()).trim(), 'From contacts');
+  assert.equal((await archiveDialog.locator('[data-share-nick-submit]').innerText()).trim(), 'Invite');
   await nickInput.fill('@no-such-person-e2e');
   await nickInput.press('Enter');
   await archiveDialog.locator('[data-share-nick] [role="alert"]').waitFor({ state: 'visible', timeout: SYNC });
@@ -360,7 +371,9 @@ try {
   console.log('OK: перенос между личным диском и совместной папкой в обе стороны с историей версий, лишних блобов нет');
 
   // ── Совместная папка снова становится обычной: содержимое на диске, участник теряет доступ ──
-  await ac.folderRow(ARCHIVE).getByRole('button', { name: 'Sharing', exact: true }).click();
+  // Доступ своей общей папки — пунктом меню строки (в колонке «Доступ» — текст «общая · 1 участник», `DeskFiles`)
+  await ac.folderRow(ARCHIVE).getByText('shared · 1 member').waitFor({ state: 'visible', timeout: SYNC });
+  await ac.folderMenu(ARCHIVE, 'Sharing');
   await archiveDialog.getByRole('button', { name: 'Make private', exact: true }).click();
   await a.locator('.Modal').filter({ hasText: 'becomes a regular folder' })
     .getByRole('button', { name: 'Make private', exact: true }).click();
@@ -372,6 +385,10 @@ try {
   await ac.item('Вложенная').click();
   assert.equal((await ac.download('глубоко.txt')).toString(), 'файл в глубине', 'вложенный файл на месте');
   await toMyFiles();
+  // Участник видит строку «доступ закрыт владельцем» и убирает её сам
+  const closedArchive = bc.cloud.locator(`[data-closed-folder], [data-closed-here]`).first();
+  await closedArchive.waitFor({ state: 'visible', timeout: SYNC });
+  await closedArchive.locator('[data-closed-dismiss]').click({ force: true });
   await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
   await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'грант не снят после закрытия доступа');
   // Версия «личного» переехала вместе с ним: блобов по-прежнему четыре
@@ -415,15 +432,17 @@ try {
   // ── «Отменить» ждущее ответа приглашение: грант снят, у получателя приглашения нет ──
   await ac.root();
   await ac.add('New shared folder');
+  // «Новая общая папка» одним экраном (доска `ZpFilesX`): участник по нику до создания, «Создать» рассылает приглашения
   await a.locator('#parvane-cloud-shared-name').fill('Отмена');
-  await a.getByRole('button', { name: 'Create', exact: true }).click();
+  await a.locator('[data-new-shared-nick] input').fill(`@${bob.split('@')[0]}`);
+  await a.locator('[data-new-shared-nick] input').press('Enter');
+  await a.locator('[data-new-invitee]').waitFor({ state: 'visible', timeout: SYNC });
+  await a.locator('[data-new-shared-group]').waitFor({ state: 'visible' });
+  await a.locator('[data-new-shared-create]').click();
   const cancelDialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: 'Отмена' });
-  await cancelDialog.locator('[data-share-nick] input').waitFor({ state: 'visible', timeout: SYNC });
-  await cancelDialog.locator('[data-share-nick] input').fill(`@${bob.split('@')[0]}`);
-  await cancelDialog.locator('[data-share-nick] input').press('Enter');
   const cancelInvited = cancelDialog.locator(`[data-invited="${bob}"]`);
   await cancelInvited.waitFor({ state: 'visible', timeout: SYNC });
-  await cancelInvited.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await cancelInvited.locator('select').selectOption('remove');
   await cancelInvited.waitFor({ state: 'detached', timeout: SYNC });
   await waitFor(() => Promise.resolve(serverView().grants), (g) => g.length === 0, 'отменённое приглашение осталось на сервере');
   // Пригласить снова сразу после отмены: новое приглашение доходит

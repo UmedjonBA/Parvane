@@ -22,9 +22,9 @@ import { toDayKey } from '../planner/plannerModel';
 import { resolveDrivePath } from './notesCanvasFiles';
 import { nextNoteTitle, NOTE_TITLE_MAX } from './notesCanvasNote';
 import { applyEditorTool, completeOpenLink, findOpenLink } from './notesEditorInsert';
-import { resolveEmbed } from './notesEmbeds';
+import { replaceEmbedTarget, resolveEmbed } from './notesEmbeds';
 import { folderCaption } from './notesFolders';
-import { formatNoteEdited } from './notesList';
+import { countNoteLinks, formatNoteEdited } from './notesList';
 import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
 import { getNoteConflicts } from './notesOutbox';
@@ -35,6 +35,7 @@ import useSplitScrollSync from './useSplitScrollSync';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
+import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -50,9 +51,11 @@ import NoteEditorTools from './NoteEditorTools';
 import NoteEmbed from './NoteEmbed';
 import NoteLinks from './NoteLinks';
 import NoteMenu from './NoteMenu';
+import NotesMarkdownHelp from './NotesMarkdownHelp';
 import NoteUnsentMark from './NoteUnsentMark';
 import PvIcon from './PvIcon';
 import PvSegment from './PvSegment';
+import PvSheet from './PvSheet';
 
 import styles from './Knowledge.module.scss';
 import view from './NoteView.module.scss';
@@ -88,6 +91,8 @@ type OwnProps = {
   onEditingChange?: (isEditing: boolean) => void;
   // Заметку положили на холст из меню: открыть этот холст
   onOpenCanvas?: (canvasId: string) => void;
+  // Щелчок по `#тегу` в тексте — поиск по нему (доска `ZdNotesX`, справка по разметке)
+  onTag?: (tag: string) => void;
 };
 
 const MARKER = / \^(t[a-z0-9]{4,12})\s*$/;
@@ -99,13 +104,15 @@ const EDITOR_LINE_HEIGHT = 22;
 const LINK_SUGGEST_MAX = 3;
 const NEXT_MODE: Record<NoteMode, NoteMode> = { view: 'edit', edit: 'split', split: 'view' };
 const MODE_KEY = 'e';
+// Ctrl+B / Ctrl+I в поле правки — жирный и курсив (доска `ZdNotesX`, справка по разметке)
+const FORMAT_KEYS: Record<string, EditorTool> = { KeyB: 'bold', KeyI: 'italic' };
 
 // Заметка по макету (доски `PhNotesMore`, `DeskNotes`): чтение с живыми ссылками, тегами и галочками; правка —
 // текстом `.md` с кнопками разметки и подсказкой ссылок. На компьютере режимы «Просмотр / Правка / Рядом»
 // переключаются одной кнопкой (Ctrl+E), на телефоне — «Изменить» и глазок просмотра в шапке
 const NoteView = ({
   note, index, planner, planned, layout, hasLinks, isGraphHidden, editRequest, onBack, onOpenTitle, onSave,
-  onRename, onDelete, onPickFolder, onEditingChange, onOpenCanvas,
+  onRename, onDelete, onPickFolder, onEditingChange, onOpenCanvas, onTag,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
   const [mode, setMode] = useState<NoteMode>('view');
@@ -123,10 +130,14 @@ const NoteView = ({
   const [isDeleteOpen, openDelete, closeDelete] = useFlag();
   const [isMenuOpen, openMenu, closeMenu] = useFlag();
   const [isCloudPickerOpen, openCloudPicker, closeCloudPicker] = useFlag();
+  const [isHelpOpen, openHelp, closeHelp] = useFlag();
   // Действие меню в своей шторке: статьёй в чат, на холст
   const [menuSheet, setMenuSheet] = useState<'article' | 'canvas' | 'versions'>();
   const [isConflictOpen, openConflict, closeConflict] = useFlag();
   const conflict = useDerivedState(getNoteConflicts).get(note.id);
+  const isConflictShown = Boolean(conflict) && isConflictOpen;
+  // Телефон: системное «назад» на экране расхождения закрывает его, а не заметку (доска `RpNotes`)
+  useHistoryBack({ isActive: isConflictShown && layout === 'screen', onBack: closeConflict });
   const isPinned = useDerivedState(getNotesMeta).pinned.includes(note.id);
   const fileInputRef = useRef<HTMLInputElement>();
   const { showNotification } = getActions();
@@ -276,6 +287,13 @@ const NoteView = ({
     setCaret(e.currentTarget.selectionStart);
   });
 
+  const handleEditorKey = useLastCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const tool = FORMAT_KEYS[e.code];
+    if (!tool || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    e.preventDefault();
+    handleTool(tool);
+  });
+
   // Правка текста кнопкой. Текст и выделение ставятся в поле сразу, не дожидаясь отрисовки: набор, начатый
   // до неё, иначе продолжился бы с прежнего места
   const applyToEditor = useLastCallback((change: (state: EditorState) => EditorState) => {
@@ -413,8 +431,13 @@ const NoteView = ({
     };
   });
 
+  // «Выбрать заново» у пропавшего файла: в тексте заметки на его место встаёт выбранный файл диска
+  const handleRepickEmbed = useLastCallback((name: string, path: string) => {
+    void onSave(note.id, replaceEmbedTarget(note.text, name, path), note.text);
+  });
+
   const renderEmbed = useLastCallback((embed: MdEmbed) => (
-    <NoteEmbed embed={embed} noteId={note.id} driveId={driveId} nodes={driveNodes} />
+    <NoteEmbed embed={embed} noteId={note.id} driveId={driveId} nodes={driveNodes} onRepick={handleRepickEmbed} />
   ));
 
   // Встроить файлы: строки `![[имя]]` встают на место курсора (отдельными строками)
@@ -502,16 +525,24 @@ const NoteView = ({
       ? { action: 'day', label: lang('KnowledgeOpenDay'), icon: 'cal' }
       : { action: 'plan', label: lang('KnowledgePlan'), icon: 'cal' });
     items.push({ action: 'pin', label: lang(isPinned ? 'KnowledgeUnpin' : 'KnowledgePin'), icon: 'up' });
-    items.push({ action: 'article', label: lang('KnowledgeSendArticle'), icon: 'chat' });
+    // Телефон — «Отправить статьёй в чат» (`XpNotes`), меню компьютера — «Отправить в чат…» (`ZdNotesX`)
+    items.push({
+      action: 'article', label: lang(isCompact ? 'KnowledgeSendArticle' : 'KnowledgeSendToChat'), icon: 'chat',
+    });
     items.push({ action: 'canvas', label: lang('KnowledgeAddToCanvas'), icon: 'board' });
-    items.push({ action: 'copy', label: lang('KnowledgeCopyLink'), icon: 'link' });
+    items.push({ action: 'copy', label: lang('KnowledgeCopyLink', { title: note.title }), icon: 'link' });
     // История версий заметки (CLOUD-3): тот же механизм, что у файлов «Файлов»
     items.push({ action: 'versions', label: lang('ParvaneCloudVersions'), icon: 'restore' });
     items.push({
       action: 'delete', label: lang('KnowledgeDelete'), icon: 'trash', isDanger: true,
     });
     return items;
-  }, [lang, isDaily, onPickFolder, isPinned]);
+  }, [lang, isDaily, onPickFolder, isPinned, isCompact, note.title]);
+
+  // Подзаголовок шторки действий: «папка · N связей» (доска `XpNotes`)
+  const linkCount = countNoteLinks(index, note.id);
+  const linkCaption = lang('KnowledgeLinksCount', { count: linkCount }, { pluralValue: linkCount });
+  const menuSubtitle = `${folderName} · ${linkCaption}`;
 
   function renderMore() {
     return (
@@ -531,6 +562,7 @@ const NoteView = ({
         <NoteMenu
           isOpen={isMenuOpen}
           title={shownTitle}
+          subtitle={menuSubtitle}
           items={menuItems}
           isSheet={isCompact}
           onPick={handleMenuAction}
@@ -552,12 +584,22 @@ const NoteView = ({
   function renderCompactBar() {
     return (
       <header className={buildClassName(view.bar, view.barCompact)} data-note-bar>
-        {isEditing ? (
+        {isConflictShown ? (
           <button
             type="button"
             className={kit.ib}
-            aria-label={lang('Cancel')}
-            title={lang('Cancel')}
+            aria-label={lang('KnowledgeBack')}
+            data-note-conflict-back
+            onClick={closeConflict}
+          >
+            <PvIcon name="left" />
+          </button>
+        ) : isEditing ? (
+          <button
+            type="button"
+            className={kit.ib}
+            aria-label={lang('KnowledgeCancelEdit')}
+            title={lang('KnowledgeCancelEdit')}
             onClick={closeEdit}
           >
             <PvIcon name="x" />
@@ -568,9 +610,9 @@ const NoteView = ({
           </button>
         )}
         <h1 className={buildClassName(view.barTitle, !isEditing && !onBack && view.barTitleLead)}>
-          {layout === 'screen' ? shownTitle : folderName}
+          {layout === 'screen' || isConflictShown ? shownTitle : folderName}
         </h1>
-        {isEditing ? (
+        {isConflictShown ? undefined : isEditing ? (
           <>
             <button
               type="button"
@@ -601,7 +643,23 @@ const NoteView = ({
   function renderPaneBar() {
     return (
       <header className={view.bar} data-note-bar>
-        <span className={view.crumb} title={`${folderName} / ${shownTitle}`}>{`${folderName} / ${shownTitle}`}</span>
+        <span className={view.crumb} title={`${folderName} / ${shownTitle}`}>
+          {/* Папка в пути — кнопка переноса в другую папку (на компьютере строки «папка · изменена» над заголовком
+              нет, доска `DeskNotes`) */}
+          {onPickFolder && !isDaily ? (
+            <button
+              type="button"
+              className={view.crumbFolder}
+              aria-label={`${folderName}. ${lang('KnowledgeMoveNote')}`}
+              title={lang('KnowledgeMoveNote')}
+              data-note-folder={note.folder}
+              onClick={handleFolder}
+            >
+              {folderName}
+            </button>
+          ) : <span data-note-folder={note.folder}>{folderName}</span>}
+          {` / ${shownTitle}`}
+        </span>
         <PvSegment
           className={view.modes}
           items={modeItems}
@@ -636,6 +694,7 @@ const NoteView = ({
           spellCheck={false}
           onChange={handleDraft}
           onSelect={handleCaret}
+          onKeyDown={handleEditorKey}
           onDragOver={handleEditorDragOver}
           onDrop={handleEditorDrop}
           onPaste={handleEditorPaste}
@@ -647,6 +706,7 @@ const NoteView = ({
           onLink={handleLinkSuggest}
           onFile={handleChooseFiles}
           onCloudFile={openCloudPicker}
+          onHelp={openHelp}
         />
         <input
           ref={fileInputRef}
@@ -721,22 +781,27 @@ const NoteView = ({
     return (
       <div className={buildClassName(view.scroll, layout !== 'panel' && 'custom-scroll')}>
         <div className={view.body}>
-          <div className={view.meta}>
-            {onPickFolder && !isDaily ? (
-              <button
-                type="button"
-                className={view.metaFolder}
-                aria-label={`${folderName}. ${lang('KnowledgeMoveNote')}`}
-                title={lang('KnowledgeMoveNote')}
-                data-note-folder={note.folder}
-                onClick={handleFolder}
-              >
-                {folderName}
-              </button>
-            ) : <span>{folderName}</span>}
-            <span>{` · ${edited}`}</span>
+          {layout === 'pane' ? (
+            // Колонка компьютера: папка — в пути шапки, время правки — внизу «Связей» (доска `DeskNotes`)
             <NoteUnsentMark noteId={note.id} className={view.metaUnsent} />
-          </div>
+          ) : (
+            <div className={view.meta}>
+              {onPickFolder && !isDaily ? (
+                <button
+                  type="button"
+                  className={view.metaFolder}
+                  aria-label={`${folderName}. ${lang('KnowledgeMoveNote')}`}
+                  title={lang('KnowledgeMoveNote')}
+                  data-note-folder={note.folder}
+                  onClick={handleFolder}
+                >
+                  {folderName}
+                </button>
+              ) : <span>{folderName}</span>}
+              <span>{` · ${edited}`}</span>
+              <NoteUnsentMark noteId={note.id} className={view.metaUnsent} />
+            </div>
+          )}
           {isDaily ? (
             <h2 className={view.title}>{shownTitle}</h2>
           ) : (
@@ -772,6 +837,7 @@ const NoteView = ({
               blocks={blocks}
               renderNote={renderNoteLink}
               renderEmbed={renderEmbed}
+              onTag={onTag}
               onToggleTask={handleToggleTask}
               taskTail={taskTail}
             />
@@ -784,6 +850,7 @@ const NoteView = ({
               index={index}
               planned={planned}
               isGraphHidden={isGraphHidden}
+              isBacklinksOnly={layout === 'screen'}
               onOpenTitle={onOpenTitle}
             />
           )}
@@ -796,7 +863,8 @@ const NoteView = ({
             >
               {lang('KnowledgeOpenDay')}
             </button>
-          ) : (
+          ) : layout !== 'pane' && (
+            // На компьютере «Запланировать» — пункт меню «⋮» (доска `DeskNotes` без кнопки внизу)
             <button
               type="button"
               className={buildClassName(kit.btn, view.wideButton)}
@@ -818,10 +886,14 @@ const NoteView = ({
       data-note-title={note.title}
       data-note-mode={isEditing ? (isCompact ? 'edit' : mode) : 'view'}
     >
-      {isCompact ? renderCompactBar() : renderPaneBar()}
+      {isCompact ? renderCompactBar() : !isConflictShown && renderPaneBar()}
       {conflict && !isConflictOpen && <NoteConflictBar onOpen={openConflict} />}
-      {conflict && isConflictOpen ? (
-        <NoteConflictView conflict={conflict} onDone={closeConflict} />
+      {isConflictShown ? (
+        <NoteConflictView
+          conflict={conflict}
+          layout={layout === 'pane' ? 'columns' : 'places'}
+          onDone={closeConflict}
+        />
       ) : isEditing ? (
         <div
           className={buildClassName(view.work, isSplit && view.workSplit)}
@@ -842,6 +914,9 @@ const NoteView = ({
         onOpenCanvas={onOpenCanvas}
         onClose={closeMenuSheet}
       />
+      <PvSheet isOpen={isHelpOpen} title={lang('KnowledgeMdHelp')} isWide onClose={closeHelp}>
+        <NotesMarkdownHelp />
+      </PvSheet>
       <CanvasFilePicker
         isOpen={isCloudPickerOpen}
         nodes={driveNodes}

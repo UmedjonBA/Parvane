@@ -3,8 +3,12 @@ import { getActions } from '../../global';
 
 import buildClassName from '../../util/buildClassName';
 import { copyTextToClipboard } from '../../util/clipboard';
+import {
+  clearRegistrationSteps, getIsFirstRunDone, readRegistrationSteps,
+} from '../../util/parvaneFirstRun';
 import { callApi } from '../../api/gramjs';
 
+import useDerivedState from '../../hooks/useDerivedState';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
@@ -27,12 +31,16 @@ const AuthRecoveryKey = () => {
   const lang = useLang();
   const [taken, setTaken] = useState<TakenKey | undefined>();
   const [isSaved, setIsSaved] = useState(false);
+  // Первый запуск устройства (доски `XpAuth`, `RdAuth`): после ключа — выбор модулей, ключ — последний шаг регистрации
+  const isFirstRunDone = useDerivedState(getIsFirstRunDone);
+  const [totalSteps, setTotalSteps] = useState<number | undefined>();
 
   useEffect(() => {
     const takeKey = async () => {
       const result = await callParvane('parvaneTakeRecoveryKey') as TakenKey | undefined;
       if (!result) return;
       setIsSaved(false);
+      setTotalSteps(readRegistrationSteps());
       setTaken(result);
     };
     // Ключ мог появиться до монтирования экрана
@@ -56,19 +64,23 @@ const AuthRecoveryKey = () => {
   });
 
   const handleDone = useLastCallback(() => {
+    clearRegistrationSteps();
     setTaken(undefined);
   });
 
   if (!taken) return undefined;
 
+  const step = totalSteps ? lang('ParvaneAuthStep', { step: totalSteps, total: totalSteps }) : undefined;
+
   return (
     <Portal>
       <div className={buildClassName(styles.root, styles.overlay)} data-recovery-key-screen>
-        <AuthBar title={lang('ParvaneRecoveryKeyTitle')} />
+        <AuthBar title={lang('ParvaneRecoveryKeyTitle')} step={step} />
         <div className={styles.page}>
           <div className={buildClassName(styles.dialog, styles.dialogCode)}>
             <div className={styles.head}>
               <h1 className={buildClassName(styles.headTitle, styles.grow)}>{lang('ParvaneRecoveryKeyTitle')}</h1>
+              {step && <span className={styles.step} data-recovery-key-step>{step}</span>}
             </div>
             <p className={styles.muted}>{lang('ParvaneRecoveryKeyText')}</p>
             <div className={styles.keyBox} data-recovery-key={taken.recoveryKey}>{taken.recoveryKey}</div>
@@ -113,7 +125,7 @@ const AuthRecoveryKey = () => {
               data-recovery-key-done
               onClick={handleDone}
             >
-              {lang('ParvaneRecoveryKeyDone')}
+              {lang(isFirstRunDone ? 'ParvaneRecoveryKeyDone' : 'ShellRecoveryKeyNext')}
             </button>
           </div>
         </div>

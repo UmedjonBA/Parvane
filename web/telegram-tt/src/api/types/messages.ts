@@ -458,6 +458,9 @@ export interface ApiMusicPlaylistCard {
   // Домен сервера библиотеки
   server: string;
   tracks: { trackId: string; title: string; artist: string; durationSecs: number }[];
+  // Общий плейлист сервера (MUSIC-3): открыть живой плейлист и вступить ключом из карточки
+  sharedId?: string;
+  joinKey?: string;
 }
 
 // Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown

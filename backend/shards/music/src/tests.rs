@@ -24,7 +24,7 @@ fn audio() -> Vec<u8> {
 }
 
 #[derive(Default)]
-struct Fake {
+pub(crate) struct Fake {
     /// Отметки «любимое»: (пользователь, трек).
     starred: Mutex<HashSet<(String, String)>>,
     /// Заведённые пользователи: как у Navidrome, API незнакомого не пускает (отказ 40), а страница `/app/` создаёт.
@@ -85,7 +85,7 @@ async fn fake_serve(fake: Arc<Fake>, req: Request<Incoming>) -> Response<Full<By
             ok(json!({"searchResult3": {"song": songs, "album": [{"id": "al-1", "name": "Альбом", "artist": "Группа", "artistId": "ar-1", "coverArt": "al-1", "songCount": 3, "duration": 645, "year": 2020}],
                 "artist": [{"id": "ar-1", "name": "Группа", "albumCount": 1}]}}))
         }
-        "/rest/getAlbumList2" => ok(json!({"albumList2": {"album": [{"id": "al-1", "name": "Альбом", "artist": "Группа", "songCount": 3}]}})),
+        "/rest/getAlbumList2" => ok(json!({"albumList2": {"album": [{"id": "al-1", "name": "Альбом", "artist": "Группа", "artistId": "ar-1", "songCount": 3}]}})),
         "/rest/getAlbum" if id == "al-1" => ok(json!({"album": {"id": "al-1", "name": "Альбом", "artist": "Группа", "songCount": 3, "song": known.iter().map(|t| song(t, is_starred(t))).collect::<Vec<_>>()}})),
         "/rest/getArtist" if id == "ar-1" => ok(json!({"artist": {"id": "ar-1", "name": "Группа", "albumCount": 1, "album": [{"id": "al-1", "name": "Альбом"}]}})),
         "/rest/getSong" if known.contains(&id.as_str()) => ok(json!({"song": song(&id, is_starred(&id))})),
@@ -126,7 +126,7 @@ async fn fake_serve(fake: Arc<Fake>, req: Request<Incoming>) -> Response<Full<By
     }
 }
 
-async fn spawn_fake() -> (Arc<Fake>, String) {
+pub(crate) async fn spawn_fake() -> (Arc<Fake>, String) {
     let fake = Arc::new(Fake::default());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -148,7 +148,7 @@ async fn spawn_fake() -> (Arc<Fake>, String) {
 }
 
 /// Шард с поддельным сервером; HTTP-ссылки — на случайном порту.
-async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
+pub(crate) async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
     let (fake, base) = spawn_fake().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = format!("http://{}", listener.local_addr().unwrap());
@@ -157,7 +157,7 @@ async fn setup() -> (Arc<Fake>, Arc<Ctx>, String) {
     (fake, ctx, public)
 }
 
-async fn call<R: Message + Default>(ctx: &Ctx, user: &str, method: &str, body: impl Message) -> Result<R, ErrorCode> {
+pub(crate) async fn call<R: Message + Default>(ctx: &Ctx, user: &str, method: &str, body: impl Message) -> Result<R, ErrorCode> {
     let req = ShardRequest { user: user.into(), body: body.encode_to_vec(), ..Default::default() };
     v2::dispatch(ctx, method, req).await.map(|b| R::decode(b.as_slice()).unwrap())
 }
@@ -203,7 +203,7 @@ async fn catalogue_and_stars_are_per_user() {
 async fn stream_links_carry_ranges_and_refuse_foreign_tokens() {
     let (fake, ctx, public) = setup().await;
     let http = reqwest::Client::new();
-    let r: pb::StreamUrlResponse = call(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t2".into(), quality: pb::StreamQuality::Original as i32 }).await.unwrap();
+    let r: pb::StreamUrlResponse = call(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t2".into(), quality: pb::StreamQuality::Original as i32, download: false }).await.unwrap();
     assert!(r.url.starts_with(&format!("{public}/_parvane/music/s/")) && r.mime == "audio/mpeg" && r.expires_ms > now_ms());
     // Целиком
     let full = http.get(&r.url).send().await.unwrap();
@@ -216,13 +216,13 @@ async fn stream_links_carry_ranges_and_refuse_foreign_tokens() {
     assert_eq!(part.headers()["content-range"].to_str().unwrap(), "bytes 100-199/1000");
     assert_eq!(part.bytes().await.unwrap().to_vec(), audio()[100..200].to_vec());
     // Перекодированный поток
-    let o: pb::StreamUrlResponse = call(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t2".into(), quality: pb::StreamQuality::Opus as i32 }).await.unwrap();
+    let o: pb::StreamUrlResponse = call(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t2".into(), quality: pb::StreamQuality::Opus as i32, download: false }).await.unwrap();
     assert_eq!(o.mime, "audio/ogg");
     assert_eq!(http.get(&o.url).send().await.unwrap().headers()["content-type"].to_str().unwrap(), "audio/ogg");
     let q = fake.last_stream.lock().unwrap().clone();
     assert_eq!((q.get("format").map(String::as_str), q.get("maxBitRate").map(String::as_str)), (Some("opus"), Some("128")));
     // Ссылку на несуществующий трек шард не выдаёт
-    assert_eq!(call::<pb::StreamUrlResponse>(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t404".into(), quality: 1 }).await.unwrap_err(), ErrorCode::NotFound);
+    assert_eq!(call::<pb::StreamUrlResponse>(&ctx, "alice@local", "music.stream.url", pb::StreamUrlRequest { track_id: "t404".into(), quality: 1, download: false }).await.unwrap_err(), ErrorCode::NotFound);
 
     // Подделки: чужой ключ, истёкший срок, изменённый жетон, жетон обложек вместо потока, POST
     let user = nd_user("alice@local");
@@ -281,10 +281,10 @@ async fn real_navidrome() {
     let rc: pb::LibraryRecentResponse = call(&ctx, alice, "music.library.recent", pb::LibraryRecentRequest::default()).await.unwrap();
     assert!(!rc.albums.is_empty());
     assert_eq!(call::<pb::LibraryAlbumResponse>(&ctx, alice, "music.library.album", pb::LibraryAlbumRequest { album_id: "no-such-album".into() }).await.unwrap_err(), ErrorCode::NotFound);
-    assert_eq!(call::<pb::StreamUrlResponse>(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: "no-such-track".into(), quality: 1 }).await.unwrap_err(), ErrorCode::NotFound);
+    assert_eq!(call::<pb::StreamUrlResponse>(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: "no-such-track".into(), quality: 1, download: false }).await.unwrap_err(), ErrorCode::NotFound);
 
     // Поток: целиком, диапазоном и перекодированный
-    let s: pb::StreamUrlResponse = call(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: t.id.clone(), quality: 1 }).await.unwrap();
+    let s: pb::StreamUrlResponse = call(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: t.id.clone(), quality: 1, download: false }).await.unwrap();
     let full = http.get(&s.url).send().await.unwrap();
     eprintln!("поток: {} {:?}", full.status(), full.headers());
     assert_eq!(full.status().as_u16(), 200);
@@ -292,7 +292,7 @@ async fn real_navidrome() {
     let part = http.get(&s.url).header("Range", "bytes=100-199").send().await.unwrap();
     assert_eq!(part.status().as_u16(), 206);
     assert_eq!(part.bytes().await.unwrap().len(), 100);
-    let o: pb::StreamUrlResponse = call(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: t.id.clone(), quality: 2 }).await.unwrap();
+    let o: pb::StreamUrlResponse = call(&ctx, alice, "music.stream.url", pb::StreamUrlRequest { track_id: t.id.clone(), quality: 2, download: false }).await.unwrap();
     let opus = http.get(&o.url).send().await.unwrap();
     eprintln!("opus: {} {:?}", opus.status(), opus.headers().get("content-type"));
     assert_eq!(opus.status().as_u16(), 200);
@@ -388,7 +388,7 @@ async fn setup_fetch(per_day: u32, quota: u64) -> (Arc<FakeFetch>, Arc<Ctx>, std
     *fake.library_dir.lock().unwrap() = dir.join("library");
     let pool = crate::fetch::store::open(dir.join("music.db").to_str().unwrap()).await.unwrap();
     let service = crate::fetch::service::FetchService::new(&url).unwrap();
-    let fetch = crate::fetch::jobs::Fetch::new(service, pool, Default::default(), dir.join("library"), per_day, quota, vec!["admin@local".into()]);
+    let fetch = crate::fetch::jobs::Fetch::new(Some(service), pool, Default::default(), dir.join("library"), per_day, quota, u64::MAX, vec!["admin@local".into()], 2);
     let ctx = Arc::new(Ctx { sub: Some(Arc::new(Subsonic::new(&base).unwrap())), fetch: Some(Arc::new(fetch)), key: [9u8; 32], public_base: String::new() });
     (fake, ctx, dir)
 }
@@ -406,7 +406,7 @@ async fn settled(ctx: &Ctx, user: &str, job_id: &str) -> pb::FetchJob {
     for _ in 0..200 {
         let jobs = call::<pb::FetchStatusResponse>(ctx, user, "music.fetch.status", pb::FetchStatusRequest {}).await.unwrap().jobs;
         let job = jobs.into_iter().find(|j| j.job_id == job_id).expect("задача в списке");
-        if !matches!(pb::FetchState::try_from(job.state), Ok(pb::FetchState::Searching | pb::FetchState::Downloading)) {
+        if !matches!(pb::FetchState::try_from(job.state), Ok(pb::FetchState::Searching | pb::FetchState::Downloading | pb::FetchState::Queued)) {
             return job;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -445,7 +445,8 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     // Кавер отброшен сверкой, точное совпадение берётся само
     fake.candidates.lock().unwrap().insert("soundcloud".into(), vec![found("cover", "Группа - Песня t2 (cover)", 215), found("exact", "Группа - Песня t2", 215)]);
     let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
-    assert_eq!(job.state, pb::FetchState::Searching as i32);
+    // Задача сперва встаёт в очередь сервера (spec 041), место берёт сразу
+    assert!([pb::FetchState::Queued as i32, pb::FetchState::Searching as i32].contains(&job.state), "{job:?}");
     let done = settled(&ctx, "alice@local", &job.job_id).await;
     assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
     assert_eq!(done.track_id, "t2");
@@ -522,5 +523,27 @@ async fn fetch_enforces_daily_limit_and_quota() {
     // Без сервиса скачивания методы отвечают UNAVAILABLE
     let (_, plain, _) = setup().await;
     assert_eq!(start(&plain, "alice@local", "Песня t1").await.unwrap_err(), ErrorCode::Unavailable);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Числа библиотеки для экранов, «Популярное на сервере» по прослушиваниям всех (загрузка на устройство не
+/// считается), число треков исполнителя (spec 041).
+#[tokio::test]
+async fn library_counts_and_popular_by_plays_of_everyone() {
+    let (_fake, ctx, _) = setup().await;
+    crate::library::reset_stats();
+    let dir = std::env::temp_dir().join(format!("parvane-music-plays-{}", now_ms()));
+    std::fs::create_dir_all(&dir).unwrap();
+    crate::library::open_plays(dir.join("music.db").to_str().unwrap()).await;
+    let info: pb::InfoResponse = call(&ctx, "alice@local", "music.info", pb::InfoRequest {}).await.unwrap();
+    assert_eq!((info.library_tracks, info.library_artists, info.library_albums, info.starred_count, info.admin), (3, 1, 1, 0, false));
+    let found: pb::LibrarySearchResponse = call(&ctx, "alice@local", "music.library.search", pb::LibrarySearchRequest { query: String::new(), offset: 0, limit: 50 }).await.unwrap();
+    assert_eq!(found.artists[0].track_count, 3, "треки исполнителя — из перечня альбомов");
+    for (user, track, download) in [("alice@local", "t2", false), ("bob@local", "t2", false), ("alice@local", "t2", false), ("alice@local", "t1", false), ("alice@local", "t3", true)] {
+        let _: pb::StreamUrlResponse = call(&ctx, user, "music.stream.url", pb::StreamUrlRequest { track_id: track.into(), quality: 1, download }).await.unwrap();
+    }
+    let ar: pb::LibraryArtistResponse = call(&ctx, "alice@local", "music.library.artist", pb::LibraryArtistRequest { artist_id: "ar-1".into() }).await.unwrap();
+    // t2 слушали двое, t1 — один (повтор того же человека в тот же день не считается), t3 только загружали
+    assert_eq!(ar.popular.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["t2", "t1"]);
     let _ = std::fs::remove_dir_all(dir);
 }

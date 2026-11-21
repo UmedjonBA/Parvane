@@ -331,6 +331,120 @@
       "call": "reportClosedKey",
       "expect": null,
       "name": "ключ закрытой жалобы: не группа"
+    },
+    {
+      "args": {
+        "closed": [],
+        "members": [
+          {
+            "joinedMs": 1763251200000,
+            "user": "7"
+          }
+        ],
+        "reports": [
+          {
+            "comment": "",
+            "id": "r1",
+            "messages": [
+              {
+                "author": "7",
+                "text": "Продам доступ",
+                "ts": 1763299000,
+                "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667bb"
+              }
+            ],
+            "reason": "spam",
+            "reporter": "ann@demo.test",
+            "ts": 1763300000
+          },
+          {
+            "comment": "",
+            "id": "r2",
+            "messages": [
+              {
+                "author": "9",
+                "text": "Сам такой",
+                "ts": 1763299100,
+                "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667cc"
+              }
+            ],
+            "reason": "insult",
+            "reporter": "bo@demo.test",
+            "ts": 1763300100
+          }
+        ]
+      },
+      "call": "reportInbox",
+      "expect": {
+        "closed": 0,
+        "items": [
+          {
+            "author": "9",
+            "comments": [],
+            "count": 1,
+            "lastTs": 1763300100,
+            "reason": "insult",
+            "reasons": [
+              {
+                "count": 1,
+                "reason": "insult"
+              }
+            ],
+            "reportIds": [
+              "r2"
+            ],
+            "reporters": [
+              "bo@demo.test"
+            ],
+            "text": "Сам такой",
+            "ts": 1763299100,
+            "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667cc"
+          },
+          {
+            "author": "7",
+            "comments": [],
+            "count": 1,
+            "lastTs": 1763300000,
+            "memberSinceMs": 1763251200000,
+            "reason": "spam",
+            "reasons": [
+              {
+                "count": 1,
+                "reason": "spam"
+              }
+            ],
+            "reportIds": [
+              "r1"
+            ],
+            "reporters": [
+              "ann@demo.test"
+            ],
+            "text": "Продам доступ",
+            "ts": 1763299000,
+            "uuid": "0192a0b0-c0d0-e0f0-0112-2334455667bb"
+          }
+        ],
+        "open": 2
+      },
+      "name": "список: «участник с …» — время вступления автора из журнала группы"
+    },
+    {
+      "args": {
+        "group": "g:demo.test:0a0b0c",
+        "user": "bo@demo.test"
+      },
+      "call": "reportHiddenKey",
+      "expect": "g:demo.test:0a0b0c/bo@demo.test",
+      "name": "ключ «сообщения участника скрыты у меня»"
+    },
+    {
+      "args": {
+        "group": "u:ann@demo.test",
+        "user": "bo@demo.test"
+      },
+      "call": "reportHiddenKey",
+      "expect": null,
+      "name": "ключ скрытого участника: не группа"
     }
   ],
   "rule": "REPORT-2"

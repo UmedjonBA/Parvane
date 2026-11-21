@@ -4,10 +4,11 @@ import type { PlannerState } from './plannerModel';
 import type { FreeSlot, FreeTimePart, FreeTimeResult } from './plannerTools';
 
 import buildClassName from '../../../util/buildClassName';
+import { formatMinutesFull } from './plannerEditorFormat';
 import {
-  formatDate, formatDay, formatDuration, formatSpan,
+  formatDate, formatDuration, formatHoursNumber,
 } from './plannerFormat';
-import { addDays, fromDayKey, toTime } from './plannerModel';
+import { fromDayKey, toTime } from './plannerModel';
 import { findFreeTime, FREE_TIME_DAYS } from './plannerTools';
 
 import useFlag from '../../../hooks/useFlag';
@@ -63,6 +64,9 @@ const PlannerFreeTime = ({
   const { width } = useWindowSize();
   const isNarrow = width <= NARROW_WIDTH;
   const isShown = !isNarrow || isSheetOpen || Boolean(onClose);
+  // Шторка (телефон, меню записи): подсказка с названием и запасом сверху; блок карточки компьютера — короткая
+  // подсказка под окнами
+  const isCompact = isNarrow || Boolean(onClose);
   const base = fromDay > today ? fromDay : today;
 
   const result = useMemo(() => {
@@ -86,8 +90,6 @@ const PlannerFreeTime = ({
     }
   }, [isShown, minutes, state, base, days, part, limit, today, exceptKey]);
 
-  const lastDay = addDays(base, days - 1);
-
   const handlePart = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setPart(e.currentTarget.dataset.part as FreeTimePart);
     setLimit(FIRST_LIMIT);
@@ -107,29 +109,39 @@ const PlannerFreeTime = ({
     onPick(slot.day, slot.start, slot.end);
   });
 
+  // Подпись окна: компьютер — «запас 30 мин», «перед работой» (доска `DkPlanMore`); телефон — «после — свободно до
+  // конца дня», «до начала рабочего дня», «день загружен на 6 из 8 ч» (доска `ZpPlanX`)
   function describeSlot(slot: FreeSlot) {
+    if (!isNarrow && !onClose) {
+      return slot.isBeforeFirst ? lang('PlannerFreeTimeBeforeWork')
+        : lang('PlannerFreeTimeSpare', { time: formatDuration(lang, slot.spare) });
+    }
     if (slot.isFreeAfter) return lang('PlannerFreeTimeFreeAfter');
-    if (slot.isBeforeFirst) return lang('PlannerFreeTimeBeforeFirst');
-    return lang('PlannerFreeTimeLoad', { load: formatSpan(slot.load), budget: formatSpan(slot.budget) });
+    if (slot.isBeforeFirst) return lang('PlannerFreeTimeBeforeWorkday');
+    return lang('PlannerFreeTimeLoadHours', {
+      load: formatHoursNumber(lang, slot.load), budget: formatHoursNumber(lang, slot.budget),
+    });
   }
 
   function renderBody() {
     if (!minutes) return <p className={styles.hint}>{lang('PlannerErrorNeedMinutes')}</p>;
     return (
       <>
-        <p className={styles.hint}>
-          {lang('PlannerFreeTimeHint', {
-            name,
-            duration: formatDuration(lang, minutes),
-            date: formatDay(lang, lastDay),
-            margin: state.settings.margin,
-          })}
-        </p>
+        {isCompact && (
+          <p className={styles.hint}>
+            {lang('PlannerFreeTimeHintDays', {
+              name,
+              duration: formatDuration(lang, minutes),
+              days,
+              margin: formatMinutesFull(lang, state.settings.margin),
+            }, { pluralValue: days })}
+          </p>
+        )}
         <div className={styles.slots} aria-live="polite">
           {result.slots.map((slot, index) => {
             const date = fromDayKey(slot.day);
-            const label = `${formatDate(lang.code, date, { weekday: 'short' })} ${date.getDate()} · `
-              + `${toTime(slot.start)}–${toTime(slot.end)}`;
+            const weekday = formatDate(lang.code, date, { weekday: 'short' }).replace(/\.$/, '');
+            const label = `${weekday} ${date.getDate()} · ${toTime(slot.start)}–${toTime(slot.end)}`;
             return (
               <div key={`${slot.day}${slot.start}`} className={styles.slot} data-free-slot={slot.day}>
                 <span className={kit.rowText}>
@@ -144,7 +156,7 @@ const PlannerFreeTime = ({
           })}
           {!result.slots.length && (
             <p className={styles.hint} data-free-none>
-              {lang('PlannerFreeTimeNone', { date: formatDay(lang, lastDay) })}
+              {lang('PlannerFreeTimeNoneDays', { days }, { pluralValue: days })}
             </p>
           )}
         </div>
@@ -162,6 +174,9 @@ const PlannerFreeTime = ({
             </button>
           ))}
         </div>
+        {!isCompact && result.slots.length > 0 && (
+          <p className={styles.hint}>{lang('PlannerFreeTimeHintWide', { days }, { pluralValue: days })}</p>
+        )}
         {result.total > result.slots.length && (
           <button type="button" className={buildClassName(kit.btn, styles.wide)} onClick={handleMore}>
             {lang('PlannerFreeTimeMore')}

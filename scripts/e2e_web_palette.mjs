@@ -1,7 +1,10 @@
-// Общий поиск (палитра Ctrl+K): команды-переходы, заметки (по названию и тексту), записи «Плана»
-// (задача, событие), чаты; стрелки и Enter, Escape, кнопка «Поиск» боковой панели и лупа в шапке раздела на
-// телефоне; заметки догружаются, пока «Знания» не открывались; Ctrl+K с выделенным текстом в поле сообщения
-// остаётся редактору («вставить ссылку»).
+// Общий поиск (палитра Ctrl+K; доски `DeskOverlays`, `XpStart`): команды-переходы, заметки (по названию и тексту),
+// файлы «Файлов», записи «Плана» (задача, событие), чаты, треки «Музыки»; стрелки и Enter, Escape, кнопка боковой
+// панели; команды с запросом («Новая заметка «…»» и Ctrl+Enter, «Найти и скачать трек «…»»), Tab «только в этом
+// модуле», подвал клавиш; заметки догружаются, пока «Заметки» не открывались; Ctrl+K с выделенным текстом в поле
+// сообщения остаётся редактору («вставить ссылку»). Телефон: значок поиска в шапке «Чатов» открывает экран поиска
+// с «Назад», «Очистить», чипами модулей и подсказкой; «Искать в сообщениях» ведёт в поиск по чатам; лупы «Плана»
+// и «Файлов» ищут по своему модулю.
 // Запуск: scripts/run_web_palette_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -26,6 +29,8 @@ const NOTE_WORD = 'вентилятор';
 const TASK = 'Проверить работы палитры';
 const EVENT = 'Созвон палитры';
 const COMMANDS = 11;
+const FILE = 'wg0-palette.conf';
+const NEW_NOTE = 'Палитра заметка';
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
@@ -124,7 +129,7 @@ try {
   console.log('OK: Ctrl+K открывает палитру с командами, Escape закрывает');
 
   // ── Кнопка «Поиск» боковой панели; команда-переход; стрелки ───────────────
-  await sidebar.getByRole('button', { name: 'Search' }).click();
+  await sidebar.getByRole('button', { name: /^Global search/ }).click();
   await visible(input, 'палитра по кнопке боковой панели');
   // Перехват стрелок ставится эффектом после открытия окна
   await page.waitForTimeout(300);
@@ -135,9 +140,10 @@ try {
   await selectedIs('settings', 'стрелка вверх с первой строки не ушла на последнюю');
   await input.fill('HEAL');
   await visible(found('command', 'Health'), 'команда «Здоровье» по запросу без учёта регистра');
-  // В заметках справки слово тоже встречается: команды стоят первой группой, выбрана команда
-  await selectedIs('nav:health', 'по запросу выбрана не команда «Здоровье»');
-  await page.keyboard.press('Enter');
+  // Команды при запросе — последней группой (доска `DeskOverlays`): выше — заметки справки со словом
+  const groups = await list.locator('[data-palette-group]').evaluateAll((els) => els.map((el) => el.dataset.paletteGroup));
+  assert.equal(groups[groups.length - 1], 'command', `команды не последние: ${groups.join(',')}`);
+  await found('command', 'Health').first().click();
   await hidden(input, 'Enter не закрыл палитру');
   await visible(page.locator('#ParvaneHealth'), 'модуль «Здоровье» по команде');
   console.log('OK: кнопка боковой панели, стрелки, команда-переход');
@@ -185,14 +191,25 @@ try {
   await visible(planner, '«План» по событию из палитры');
   await sideHasValue('event', EVENT);
   assert.equal(await planner.locator('#planner-event-name').inputValue(), EVENT, 'открыто другое событие');
+  // Шаг события ищется так же, как шаг задачи
+  const eventSteps = side.locator('[data-card-row="steps"]');
+  await eventSteps.getByPlaceholder('Add step').fill('Взять зарядку палитры');
+  await eventSteps.getByPlaceholder('Add step').press('Enter');
+  await visible(eventSteps.getByText('Steps · 0/1'), 'шаг события в карточке');
   await side.getByRole('button', { name: 'Close' }).first().click();
-  console.log('OK: задача и событие открываются карточкой в «Плане»');
+  await openByKeys();
+  await input.fill('зарядку палитры');
+  await visible(found('record', EVENT), 'событие по тексту шага');
+  await page.keyboard.press('Escape');
+  await hidden(input, 'Escape не закрыл палитру после поиска шага');
+  console.log('OK: задача и событие открываются карточкой в «Плане», шаг события находится');
 
   // ── Чат; сочетание в поле сообщения ───────────────────────────────────────
   await openByKeys();
   await input.fill('saved mess');
   await visible(found('chat', 'Saved Messages'), '«Избранное» в палитре');
-  await page.keyboard.press('Enter');
+  // Заметки стоят выше чатов (доска): в справке слово тоже встречается — выбираем строку чата
+  await found('chat', 'Saved Messages').first().click();
   await visible(page.locator('.MiddleHeader').getByText('Saved Messages'), 'чат, открытый из палитры');
   const composer = page.locator('#editable-message-text[contenteditable="true"]');
   await visible(composer, 'поле сообщения');
@@ -226,6 +243,79 @@ try {
   await page.keyboard.press('Escape');
   await hidden(input, 'Escape не закрыл палитру, открытую «/»');
   console.log('OK: «/» открывает палитру вне поля ввода и печатается в поле сообщения');
+
+  // ── Файлы, треки, команды с запросом, Ctrl+Enter, Tab, подвал (доска `DeskOverlays`) ──
+  const cloud = page.locator('#ParvaneCloud');
+  await sidebar.getByRole('tab', { name: 'Files' }).click();
+  await visible(cloud, '«Файлы»');
+  await page.waitForFunction(() => document.querySelector('#ParvaneCloud')?.dataset.loaded === '1', undefined, {
+    timeout: NOTES_TIMEOUT_MS,
+  }).catch(() => assert.fail('«Файлы» не загрузились'));
+  await cloud.locator('input[type="file"]').setInputFiles([
+    { name: FILE, mimeType: 'text/plain', buffer: Buffer.from('[Interface]\nAddress = 10.0.0.2/24\n') },
+  ]);
+  await visible(cloud.locator(`[data-node-id][data-name="${FILE}"]`), 'загруженный файл');
+  await sidebar.getByRole('tab', { name: /^Chats/ }).click();
+  await openByKeys();
+  await visible(page.locator('[data-palette-footer]'), 'подвал клавиш');
+  assert.match(await page.locator('[data-palette-footer]').innerText(), /Enter open.*Tab only in this module/s, 'подвал не по доске');
+  assert.equal(await input.getAttribute('placeholder'), 'Chat, note, event, file or command', 'подсказка поля не по доске');
+  await input.fill('wg0-pal');
+  await visible(found('file', FILE), 'файл «Файлов» в выдаче');
+  assert.match(await found('file', FILE).innerText(), /My drive · \d/, 'у файла нет места и размера');
+  await selectedIs(/^file:/, 'найденный файл не выбран');
+  await visible(selected.locator('kbd').getByText('Enter', { exact: true }), '«Enter» у выбранной строки');
+  await page.keyboard.press('Enter');
+  await visible(cloud.locator(`[data-node-id][data-name="${FILE}"][aria-current="true"]`), 'файл открыт в «Файлах»');
+  console.log('OK: файл находится по имени, Enter открывает его в «Файлах»; подвал и «Enter» у строки');
+
+  // Tab — только в открытом модуле («Файлы»), повторный Tab — снова везде
+  await openByKeys();
+  await input.fill('палитр');
+  await visible(found('note', NOTE).or(found('record', TASK)), 'выдача по всем модулям');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Tab');
+  await page.locator('[data-palette-scope="files"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('Tab не сузил выдачу до «Файлов»'));
+  await page.waitForTimeout(400);
+  assert.equal(await group('record').count(), 0, 'в выдаче «Файлов» остались записи «Плана»');
+  assert.equal(await group('note').count(), 0, 'в выдаче «Файлов» остались заметки');
+  assert.equal(await input.getAttribute('placeholder'), 'Search: Files', 'подсказка не говорит о модуле');
+  await page.keyboard.press('Tab');
+  await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('повторный Tab не вернул выдачу по всему'));
+  await visible(found('record', TASK), 'после повторного Tab — снова записи «Плана»');
+  console.log('OK: Tab сужает выдачу до открытого модуля и возвращает обратно');
+
+  // Команды с запросом: «Новая заметка «…»» (Ctrl+Enter — без выбора строки), «Искать в сообщениях»
+  await input.fill(NEW_NOTE);
+  const newNoteRow = list.locator('[data-palette-item="newnote:query"]');
+  await visible(newNoteRow, 'команда «Новая заметка «…»»');
+  assert.equal(await newNoteRow.locator('kbd').innerText(), 'Ctrl+Enter', 'у новой заметки нет «Ctrl+Enter»');
+  await visible(list.locator('[data-palette-item="chat-search"]'), '«Искать в сообщениях»');
+  await page.keyboard.press('Control+Enter');
+  await hidden(input, 'Ctrl+Enter не закрыл палитру');
+  await visible(knowledge.locator(`[data-note-title="${NEW_NOTE}"]`), 'заметка с названием из запроса');
+  console.log('OK: Ctrl+Enter создаёт заметку с набранным названием');
+
+  // «Музыка» (библиотека поддельного сервера): трек в выдаче с исполнителем, «Найти и скачать трек «…»»
+  await openByKeys();
+  await input.fill('harbor');
+  await visible(found('music', 'Harbor Lights'), 'трек «Музыки» в выдаче');
+  assert.match(await found('music', 'Harbor Lights').innerText(), /Тихий порт · 0:30/, 'у трека нет исполнителя и длительности');
+  const fetchRow = list.locator('[data-palette-item="fetch:query"]');
+  await visible(fetchRow, 'команда «Найти и скачать трек «…»»');
+  await fetchRow.click();
+  await visible(page.locator('#ParvaneMusic'), '«Музыка» по команде «Найти и скачать»');
+  await page.waitForFunction(() => [...document.querySelectorAll('#ParvaneMusic input[type="search"]')]
+    .some((field) => field.value === 'harbor'), undefined, { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('поиск «Музыки» без запроса из палитры'));
+  await openByKeys();
+  await input.fill('harbor');
+  await found('music', 'Glass Harbor').click();
+  await visible(page.locator('[data-music-widget]'), 'трек из палитры играет');
+  console.log('OK: треки «Музыки» в выдаче, «Найти и скачать» открывает поиск с запросом, трек играет');
+  await sidebar.getByRole('tab', { name: /^Chats/ }).click();
 
   // ── После перезагрузки заметки догружаются палитрой, «Знания» не открывались ──
   await sidebar.getByRole('tab', { name: /^Chats/ }).click();
@@ -265,21 +355,69 @@ try {
   await page.keyboard.press('Control+k');
   await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   await input.fill('files');
-  await found('command', 'Files').click();
+  await list.locator('[data-palette-item="nav:cloud"]').click();
   // Команда «Файлы» открывает модуль «Файлы»; лупа в шапке ищет по файлам
-  const cloud = page.locator('#ParvaneCloud');
   await visible(cloud, '«Файлы» по команде на телефоне');
   const cloudHeader = cloud.locator('header');
   await cloudHeader.locator('[data-section-search-open]').click();
-  await visible(cloudHeader.locator('[data-section-search]'), 'поле поиска по файлам в шапке');
-  // Поле встаёт на место названия модуля
-  await hidden(cloudHeader.getByRole('heading', { name: 'Files' }), 'название модуля осталось рядом с полем поиска');
+  // Поиск «Файлов» на телефоне — свой экран с полем (доска `ZpFilesX`, исполнитель files)
+  await visible(cloud.getByPlaceholder('Search files'), 'поле поиска по файлам');
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/palette-phone.png` });
   }
-  await cloudHeader.locator('[data-section-search-close]').click();
-  await visible(cloudHeader.getByRole('heading', { name: 'Files' }), 'название «Файлов» после закрытия поиска');
+  // Экран поиска «Файлов» закрывается своей стрелкой «Назад»
+  await cloudHeader.getByRole('button', { name: 'Back' }).first().click();
+  await hidden(cloud.getByPlaceholder('Search files'), 'экран поиска «Файлов» не закрылся');
   console.log('OK: на телефоне лупа «Плана» ищет по плану, лупа «Файлов» — по файлам, Ctrl+K — везде');
+
+  // ── Телефон: значок поиска в шапке «Чатов» — экран общего поиска (доска `XpStart`) ──
+  await page.locator('[data-module="chats"]').first().click();
+  // На телефоне открытый раньше чат («Избранное» из палитры) закрывает список — к списку стрелкой чата
+  const chatBack = page.locator('#MiddleColumn .MiddleHeader').getByRole('button', { name: 'Back' });
+  if (await chatBack.isVisible().catch(() => false)) await chatBack.click();
+  await waitForChatList(page, STEP_TIMEOUT_MS);
+  await page.locator('#LeftMainHeader #telegram-search-input').click();
+  await visible(input, 'общий поиск по значку шапки «Чатов» на телефоне');
+  assert.equal(await input.getAttribute('placeholder'), 'Chat, note, event, file or track', 'подсказка поля телефона');
+  const back = page.locator('[data-palette-back]');
+  await visible(back, '«Назад» в шапке поиска');
+  await visible(page.locator('[data-palette-hint]'), 'подсказка под выдачей');
+  const chips = await page.locator('[data-palette-filter]').evaluateAll((els) => els.map((el) => el.dataset.paletteFilter));
+  assert.deepEqual(chips, ['all', 'chats', 'plan', 'notes', 'files', 'music'], `чипы не по доске: ${chips}`);
+  // Экран во весь рост
+  const box = await page.locator('[data-palette]').boundingBox();
+  assert.ok(box && box.height >= PHONE.height - 2 && box.width >= PHONE.width - 2, `поиск не во весь экран: ${JSON.stringify(box)}`);
+  await input.fill('палитр');
+  await visible(found('record', TASK), 'запись «Плана» на телефоне');
+  await page.locator('[data-palette-filter="notes"]').click();
+  await page.locator('[data-palette-scope="notes"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  await visible(found('note', NEW_NOTE), 'заметка под чипом «Заметки»');
+  await page.waitForTimeout(400);
+  assert.equal(await group('record').count(), 0, 'чип «Заметки» оставил записи «Плана»');
+  await page.locator('[data-palette-filter="all"]').click();
+  await input.fill('wg0-pal');
+  await visible(found('file', FILE), 'файл на телефоне');
+  await page.locator('[data-palette-clear]').click();
+  // Поле очищается кадром позже нажатия — ждём, а не читаем сразу
+  await page.waitForFunction((el) => el.value === '', await input.elementHandle(), { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('«Очистить» не стёр запрос'));
+  await visible(group('command'), 'после «Очистить» — команды');
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await input.fill('палитр');
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/palette-phone-screen.png` });
+  }
+  await back.click();
+  await hidden(input, '«Назад» не закрыл поиск');
+  // «Искать в сообщениях» — прежний поиск по чатам с этим запросом
+  await page.locator('#LeftMainHeader #telegram-search-input').click();
+  await visible(input, 'общий поиск второй раз');
+  await input.fill('saved');
+  await list.locator('[data-palette-item="chat-search"]').click();
+  await hidden(input, 'поиск в сообщениях не закрыл палитру');
+  await visible(page.locator('.LeftSearch'), 'поиск по чатам с запросом');
+  assert.equal(await page.locator('#telegram-search-input').inputValue(), 'saved', 'запрос не перешёл в поиск по чатам');
+  console.log('OK: телефон — экран поиска значком шапки, чипы, «Очистить», «Назад», поиск в сообщениях');
 
   assert.deepEqual(session.errors, [], `ошибки страницы: ${session.errors.join('; ')}`);
   console.log('e2e_web_palette: OK');

@@ -26,7 +26,7 @@ export type PlaylistShareTrack = {
 };
 
 export function buildMusicPlaylistContent(playlist: {
-  name: string; server: string; tracks: PlaylistShareTrack[];
+  name: string; server: string; tracks: PlaylistShareTrack[]; sharedId?: string; joinKey?: string;
 }): WireMessageContent {
   const name = cutToBytes(playlist.name.trim(), NAME_MAX_BYTES);
   const tracks: WirePlaylistTrack[] = [];
@@ -50,6 +50,9 @@ export function buildMusicPlaylistContent(playlist: {
     track_server: cutToBytes(playlist.server, SERVER_MAX_BYTES),
     playlist_tracks: tracks,
     text: cutToBytes(buildText(name, tracks), TEXT_MAX_BYTES),
+    // Общий плейлист (MUSIC-3): получатель вступает ключом и видит живой плейлист
+    shared_id: playlist.sharedId || undefined,
+    join_key: playlist.joinKey || undefined,
   };
 }
 

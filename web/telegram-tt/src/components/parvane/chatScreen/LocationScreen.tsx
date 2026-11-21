@@ -3,6 +3,7 @@ import { getGlobal } from '../../../global';
 
 import { buildStaticMapHash } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
+import { getIsPermissionError, queryPermission, showPermissionDenied } from '../../../util/permissionPrompt';
 import { callApi } from '../../../api/gramjs';
 import { parseCoordinates } from './locationInput';
 
@@ -11,6 +12,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
 
 import PvSegment from '../notes/PvSegment';
+import LocationAskSheet from '../permission/LocationAskSheet';
 import ChatScreen from './ChatScreen';
 
 import kit from '../notes/PvKit.module.scss';
@@ -25,6 +27,8 @@ type OwnProps = {
 
 type Period = '900' | '3600' | '28800';
 type Position = { lat: number; long: number; accuracy?: number; heading?: number };
+// Доступ к геопозиции (доска `ZpSysGen`): спросить сначала своим листом, запрещён — «Открыть настройки»
+type Access = 'checking' | 'ask' | 'granted' | 'denied';
 
 const PERIODS: Period[] = ['900', '3600', '28800'];
 const PERIOD_KEYS = {
@@ -55,17 +59,10 @@ const LocationScreen = ({ isOpen, chatId, onClose }: OwnProps) => {
   const [period, setPeriod] = useState<Period>('3600');
   const [manual, setManual] = useState('');
   const [error, setError] = useState<string>();
+  const [access, setAccess] = useState<Access>('checking');
 
-  // Место запрашивается при открытии экрана, до первого кадра
-  useLayoutEffect(() => {
-    if (!isOpen) return;
-    setManual('');
-    setError(undefined);
-    setPosition(undefined);
-    if (!navigator.geolocation) {
-      setError(lang('LocationUnavailable'));
-      return;
-    }
+  const locate = useLastCallback(() => {
+    setAccess('granted');
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition((pos) => {
       setIsLocating(false);
@@ -76,11 +73,38 @@ const LocationScreen = ({ isOpen, chatId, onClose }: OwnProps) => {
         accuracy: accuracy ? Math.round(accuracy) : undefined,
         heading: typeof heading === 'number' && !Number.isNaN(heading) ? Math.round(heading) : undefined,
       });
-    }, () => {
+    }, (err) => {
       setIsLocating(false);
+      if (getIsPermissionError(err)) {
+        setAccess('denied');
+        return;
+      }
       setError(lang('LocationUnavailable'));
     }, { enableHighAccuracy: true });
-  }, [isOpen, lang]);
+  });
+
+  // Экран готовится до первого кадра; место берётся сразу, только если доступ уже разрешён, иначе — лист-объяснение
+  // перед системным запросом
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    setManual('');
+    setError(undefined);
+    setPosition(undefined);
+    if (!navigator.geolocation) {
+      setAccess('denied');
+      setError(lang('LocationUnavailable'));
+      return;
+    }
+    setAccess('checking');
+    void queryPermission('location').then((answer) => {
+      if (answer === 'granted') locate();
+      else setAccess(answer === 'denied' ? 'denied' : 'ask');
+    });
+  }, [isOpen, lang, locate]);
+
+  const handleAllow = useLastCallback(() => locate());
+  const handleNotNow = useLastCallback(() => setAccess('denied'));
+  const handleOpenSettings = useLastCallback(() => showPermissionDenied('location'));
 
   const mapHash = position
     ? buildStaticMapHash({ lat: position.lat, long: position.long, accessHash: '0' }, MAP_WIDTH, MAP_HEIGHT, MAP_ZOOM,
@@ -134,7 +158,7 @@ const LocationScreen = ({ isOpen, chatId, onClose }: OwnProps) => {
   const periodItems = PERIODS.map((value) => ({ value, label: lang(PERIOD_KEYS[value]) }));
   const accuracyText = position?.accuracy
     ? lang('LocationAccuracy', { meters: position.accuracy })
-    : lang(isLocating ? 'LocationLocating' : 'LocationUnknown');
+    : lang(isLocating ? 'LocationLocating' : access === 'denied' ? 'PvSysLocationNoAccess' : 'LocationUnknown');
 
   return (
     <ChatScreen isOpen={isOpen} title={lang('LocationScreenTitle')} onClose={onClose}>
@@ -158,6 +182,19 @@ const LocationScreen = ({ isOpen, chatId, onClose }: OwnProps) => {
             <span className={styles.rowSub}>{accuracyText}</span>
           </span>
         </button>
+        {access === 'denied' && Boolean(navigator.geolocation) && (
+          <button
+            type="button"
+            className={buildClassName(screen.sr, screen.srButton)}
+            data-location-settings
+            onClick={handleOpenSettings}
+          >
+            <span className={screen.srMain}>
+              <span className={styles.rowTitle}>{lang('PvSysOpenSettings')}</span>
+              <span className={styles.rowSub}>{lang('PvSysLocationDeniedHint')}</span>
+            </span>
+          </button>
+        )}
       </div>
       <div className={screen.cap}>{lang('LocationShareFor')}</div>
       <div className={styles.padX}>
@@ -192,6 +229,7 @@ const LocationScreen = ({ isOpen, chatId, onClose }: OwnProps) => {
         </label>
       </div>
       {error && <p className={buildClassName(screen.error, styles.error)} role="alert">{error}</p>}
+      <LocationAskSheet isOpen={isOpen && access === 'ask'} onAllow={handleAllow} onClose={handleNotNow} />
     </ChatScreen>
   );
 };

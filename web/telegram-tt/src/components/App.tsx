@@ -29,6 +29,8 @@ import { useSignalEffect } from '../hooks/useSignalEffect';
 import { getIsInBackground } from '../hooks/window/useBackgroundMode';
 
 import Auth from './auth/Auth';
+import AuthSecurityKey from './auth/AuthSecurityKey';
+import AuthSignedOut from './auth/AuthSignedOut';
 import Notifications from './common/Notifications';
 import UiLoader from './common/UiLoader';
 import AppInactive from './main/AppInactive';
@@ -277,6 +279,10 @@ const App = ({
         {renderContent}
       </Transition>
       {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">Test server</div>}
+      {/* Окна поверх экрана входа (`Portal`) — вне перехода экранов: слайд перехода — один элемент `Auth`, иначе
+          после входа без перезагрузки основной экран оставался скрытым */}
+      {activeKey === AppScreens.auth && <AuthSecurityKey />}
+      {activeKey === AppScreens.auth && <AuthSignedOut />}
       <Notifications />
       <ParvaneCallOverlay />
     </UiLoader>

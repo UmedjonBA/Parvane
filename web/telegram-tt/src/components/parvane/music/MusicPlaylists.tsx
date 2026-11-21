@@ -2,15 +2,19 @@ import {
   memo, useEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
 
-import type { MusicPlaylist, MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicTrack } from '../../../api/parvane/musicApi';
+import type { MusicMenuAction } from './MusicMenu';
 
 import buildClassName from '../../../util/buildClassName';
 import { splitListTime } from './musicFormat';
-import { saveTracksOffline } from './musicOffline';
-import { playTracks } from './musicPlayer';
+import { getOfflineHolds, getOfflineState, removeOfflineGroup, saveTracksOffline } from './musicOffline';
+import {
+  getCurrentTrack, getMusicPlayer, playTracks, setTrackStarred,
+} from './musicPlayer';
 import {
   actOnPlaylists, getPlaylists, getPlaylistsStatus, loadPlaylistTracks, refreshPlaylists,
 } from './musicPlaylists';
+import { goBackMusic, openMusicView } from './musicView';
 import useDragReorder from './useDragReorder';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -18,20 +22,27 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ParvaneIcon from '../../main/ParvaneIcon';
 import PvEmpty from '../notes/PvEmpty';
+import PvSheet from '../notes/PvSheet';
 import PvSkeleton from '../notes/PvSkeleton';
+import MusicCover from './MusicCover';
+import MusicMenu from './MusicMenu';
+import MusicOfflineCircle from './MusicOfflineCircle';
+import MusicPlayButtons from './MusicPlayButtons';
+import MusicSectionHead from './MusicSectionHead';
 import MusicSendDialog from './MusicSendDialog';
 import MusicTrackRow from './MusicTrackRow';
+import MusicMakeShared from './shared/MusicMakeShared';
 
+import sheets from '../cloud/CloudSheets.module.scss';
 import kit from '../notes/PvKit.module.scss';
 import styles from './Music.module.scss';
 
 type OwnProps = {
-  // Открытый плейлист; не задан — список плейлистов
-  playlistId?: string;
-  currentTrackId?: string;
-  isPlaying?: boolean;
-  onOpen: (playlistId?: string) => void;
+  playlistId: string;
+  isPhone?: boolean;
+  onSendToChat: (track: MusicTrack) => void;
 };
 
 const STATUS_KEYS = {
@@ -39,34 +50,40 @@ const STATUS_KEYS = {
   'no-key': 'MusicPlaylistsNoKey',
   offline: 'MusicPlaylistsOffline',
 } as const;
+const COVER_PHONE = 96;
+const COVER_DESK = 72;
+const NAME_MAX = 120;
 
-// Parvane (spec 039, этап C): плейлисты пользователя — список и страница плейлиста. Плейлисты лежат в личном
-// контейнере (сервер видит шифртекст) и одинаковы на всех устройствах; порядок и правки считает общая
-// библиотека на устройстве (MUSIC-2)
-const MusicPlaylists = ({
-  playlistId, currentTrackId, isPlaying, onOpen,
-}: OwnProps) => {
+// Parvane (spec 039 этап C, 041; доски `MusicPlaylist`, `DeskMusicMore`): страница плейлиста — обложка тоном,
+// «Мой плейлист», «N треков · время · загружен для офлайна», «Играть / Вперемешку», «Отправить в чат», меню «Ещё»
+// (переименовать, на устройство, удалить), треки с номерами. Плейлисты лежат в личном контейнере (сервер видит
+// шифртекст); порядок и правки считает общая библиотека на устройстве (MUSIC-2). Порядок — перетаскиванием за
+// ручку на компьютере, «Выше / Ниже» в меню трека на телефоне
+const MusicPlaylists = ({ playlistId, isPhone, onSendToChat }: OwnProps) => {
   const lang = useLang();
   const playlists = useDerivedState(getPlaylists);
   const status = useDerivedState(getPlaylistsStatus);
-  const [newName, setNewName] = useState('');
+  const player = useDerivedState(getMusicPlayer);
+  // Перерисовка при смене «Загруженного»: отметка плейлиста читается из `getOfflineHolds`
+  useDerivedState(getOfflineState);
+  const currentId = getCurrentTrack(player)?.id;
   const [libraryTracks, setLibraryTracks] = useState<Map<string, MusicTrack>>();
-  const [isDeleteAsked, askDelete, cancelDelete] = useFlag();
   const [isSendOpen, openSend, closeSend] = useFlag();
-  const playlist = playlistId ? playlists.find((item) => item.id === playlistId) : undefined;
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | true>();
+  const [isRenameOpen, openRename, closeRename] = useFlag();
+  const [isDeleteOpen, openDelete, closeDelete] = useFlag();
+  const [isMakeSharedOpen, openMakeShared, closeMakeShared] = useFlag();
+  const [newName, setNewName] = useState('');
+  const playlist = playlists.find((item) => item.id === playlistId);
   const trackIdsKey = playlist?.items.map((item) => item.trackId).join('\n');
 
   useEffect(() => {
     void refreshPlaylists();
   }, []);
 
-  const handleRetry = useLastCallback(() => {
-    void refreshPlaylists();
-  });
-
-  // Сведения о треках (обложка, отметка «любимое») — с сервера; подписи из плейлиста видны сразу
+  // Сведения о треках (обложка, альбом, отметка «любимое») — с сервера; подписи из плейлиста видны сразу
   useEffect(() => {
-    if (!trackIdsKey) return;
+    if (!trackIdsKey) return undefined;
     let isStale = false;
     void loadPlaylistTracks(trackIdsKey.split('\n')).then((tracks) => {
       if (!isStale) setLibraryTracks(tracks);
@@ -75,8 +92,6 @@ const MusicPlaylists = ({
       isStale = true;
     };
   }, [trackIdsKey]);
-
-  useEffect(cancelDelete, [playlistId, cancelDelete]);
 
   const rows = useMemo(() => (playlist?.items || []).map((item) => {
     const known = libraryTracks?.get(item.trackId);
@@ -96,62 +111,25 @@ const MusicPlaylists = ({
     // Трека нет в ответе сервера — его убрали из библиотеки: строка остаётся, играть нечего
     return { itemId: item.id, track, isMissing: Boolean(libraryTracks) && !known };
   }), [playlist, libraryTracks]);
-
-  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setNewName(e.currentTarget.value);
-  });
-
-  const handleCreate = useLastCallback(async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const name = newName.trim();
-    if (!name) return;
-    setNewName('');
-    const created = await actOnPlaylists({ action: 'create', name });
-    if (created?.id) onOpen(created.id);
-  });
-
-  const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onOpen(e.currentTarget.dataset.playlist);
-  });
-
-  const handleBack = useLastCallback(() => onOpen(undefined));
-
-  const handleRename = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const name = e.currentTarget.value.trim();
-    if (!name || name === playlist!.name) {
-      e.currentTarget.value = playlist!.name;
-      return;
-    }
-    void actOnPlaylists({ action: 'rename', playlistId: playlist!.id, name });
-  });
-
-  const handleRenameKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') e.currentTarget.blur();
-  });
-
-  const handleDelete = useLastCallback(async () => {
-    await actOnPlaylists({ action: 'delete', playlistId: playlist!.id });
-    onOpen(undefined);
-  });
+  const playable = useMemo(() => rows.filter((row) => !row.isMissing).map((row) => row.track), [rows]);
+  const source = { kind: 'playlist' as const, name: playlist?.name };
 
   const handlePlay = useLastCallback((index: number) => {
-    const playable = rows.filter((row) => !row.isMissing);
-    const start = playable.indexOf(rows[index]);
-    if (start >= 0) playTracks(playable.map((row) => row.track), start);
+    const start = playable.indexOf(rows[index].track);
+    if (start >= 0) playTracks(playable, start, { source });
   });
+  const handlePlayAll = useLastCallback(() => playTracks(playable, 0, { source }));
+  const handleShuffle = useLastCallback(() => playTracks(playable, 0, { isShuffled: true, source }));
 
-  const handlePlayAll = useLastCallback(() => {
-    const first = rows.findIndex((row) => !row.isMissing);
-    if (first >= 0) handlePlay(first);
-  });
-
-  const handleSaveOffline = useLastCallback(() => {
-    // Плейлист загружается целиком и дальше следует за составом (`musicOfflineSync.ts`)
-    saveTracksOffline(rows.filter((row) => !row.isMissing).map((row) => row.track), playlist!.id);
-  });
-
-  const handleRemove = useLastCallback((index: number) => {
-    void actOnPlaylists({ action: 'remove', itemId: rows[index].itemId });
+  const handleStar = useLastCallback((track: MusicTrack) => {
+    const isStarred = !track.isStarred;
+    setLibraryTracks((previous) => {
+      if (!previous?.has(track.id)) return previous;
+      const next = new Map(previous);
+      next.set(track.id, { ...track, isStarred });
+      return next;
+    });
+    void setTrackStarred(track, isStarred);
   });
 
   // Место строки считает движок (MUSIC-2): перестановка — правка одной записи
@@ -160,128 +138,239 @@ const MusicPlaylists = ({
   });
   const { handlers: drag, getRowState } = useDragReorder(rows.length, handleMove);
 
-  function renderList(items: MusicPlaylist[]) {
-    return (
-      <>
-        <form className={styles.playlistForm} onSubmit={handleCreate}>
-          <input
-            className={buildClassName(kit.input, kit.grow)}
-            value={newName}
-            maxLength={120}
-            placeholder={lang('MusicPlaylistNewPlaceholder')}
-            aria-label={lang('MusicPlaylistNewPlaceholder')}
-            onChange={handleNameChange}
-          />
-          <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)} disabled={!newName.trim()}>
-            {lang('MusicPlaylistCreate')}
-          </button>
-        </form>
-        {!items.length && <PvEmpty text={lang('MusicPlaylistsEmpty')} data-music-empty />}
-        {Boolean(items.length) && (
-          <ul className={styles.tracks} data-music-playlists>
-            {items.map((item) => {
-              const time = splitListTime(item.durationSecs);
-              return (
-                <li key={item.id} className={styles.track}>
-                  <button type="button" className={styles.trackMain} data-playlist={item.id} onClick={handleOpen}>
-                    <span className={styles.trackText}>
-                      <span className={styles.trackTitle}>{item.name}</span>
-                      <span className={buildClassName(kit.muted, kit.small)}>
-                        {lang('MusicTracksCount', { count: item.count }, { pluralValue: item.count })}
-                      </span>
-                    </span>
-                    <span className={buildClassName(kit.mono, kit.muted, kit.small)}>
-                      {lang('MusicListTime', { hours: time.hours, minutes: time.minutes })}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </>
-    );
-  }
+  const handleMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    setMenuAnchor(isPhone ? true : { x: box.left, y: box.bottom });
+  });
+  const handleCloseMenu = useLastCallback(() => setMenuAnchor(undefined));
 
-  function renderPlaylist(opened: MusicPlaylist) {
-    const time = splitListTime(opened.durationSecs);
-    return (
-      <div className={styles.playlist} data-music-playlist={opened.id}>
-        <div className={styles.listHead}>
-          <button type="button" className={kit.btn} onClick={handleBack}>{lang('MusicPlaylistsAll')}</button>
-          <input
-            key={opened.id}
-            className={buildClassName(kit.input, kit.grow, styles.playlistName)}
-            defaultValue={opened.name}
-            maxLength={120}
-            aria-label={lang('MusicPlaylistName')}
-            onBlur={handleRename}
-            onKeyDown={handleRenameKey}
-          />
-          <span className={buildClassName(kit.muted, kit.small)}>
-            {lang('MusicListTime', { hours: time.hours, minutes: time.minutes })}
-          </span>
-          {Boolean(rows.length) && (
-            <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handlePlayAll}>
-              {lang('MusicPlayAll')}
-            </button>
-          )}
-          {Boolean(rows.length) && (
-            <button type="button" className={kit.btn} data-music-save-offline onClick={handleSaveOffline}>
-              {lang('MusicOfflineSave')}
-            </button>
-          )}
-          {Boolean(rows.length) && (
-            <button type="button" className={kit.btn} data-music-playlist-to-chat onClick={openSend}>
-              {lang('MusicSendToChat')}
-            </button>
-          )}
-          <button
-            type="button"
-            className={buildClassName(kit.btn, isDeleteAsked && kit.btnDanger)}
-            data-playlist-delete={isDeleteAsked ? 'confirm' : 'ask'}
-            onClick={isDeleteAsked ? handleDelete : askDelete}
-          >
-            {lang(isDeleteAsked ? 'MusicPlaylistDeleteConfirm' : 'MusicPlaylistDelete')}
-          </button>
-        </div>
-        {!rows.length && <PvEmpty text={lang('MusicPlaylistEmpty')} data-music-empty />}
-        {Boolean(rows.length) && (
-          <ul className={styles.tracks} data-music-tracks>
-            {rows.map((row, index) => (
-              <MusicTrackRow
-                key={row.itemId}
-                track={row.track}
-                index={index}
-                isCurrent={row.track.id === currentTrackId}
-                isPlaying={isPlaying}
-                isMissing={row.isMissing}
-                note={row.isMissing ? lang('MusicTrackMissing') : undefined}
-                canRemove
-                removeLabel={lang('MusicPlaylistRemove', { name: row.track.title })}
-                dragLabel={lang('MusicPlaylistDrag', { name: row.track.title })}
-                dragState={getRowState(index)}
-                drag={drag}
-                canQueue
-                canSaveOffline
-                onPlay={handlePlay}
-                onRemove={handleRemove}
-              />
-            ))}
-          </ul>
-        )}
-        <MusicSendDialog playlist={isSendOpen ? opened : undefined} onClose={closeSend} />
-      </div>
-    );
-  }
+  const holder = { kind: 'playlist' as const, id: playlistId };
+  const isHeld = Boolean(getOfflineHolds().playlists[playlistId]);
+
+  const handlePick = useLastCallback((key: string) => {
+    setMenuAnchor(undefined);
+    if (key === 'rename') {
+      setNewName(playlist!.name);
+      openRename();
+    } else if (key === 'offline') {
+      if (isHeld) void removeOfflineGroup(holder, playable.map((track) => track.id));
+      else saveTracksOffline(playable, holder);
+    } else if (key === 'delete') {
+      openDelete();
+    } else if (key === 'share') {
+      openMakeShared();
+    }
+  });
+
+  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewName(e.currentTarget.value);
+  });
+
+  const handleRename = useLastCallback((e?: React.FormEvent) => {
+    e?.preventDefault();
+    const name = newName.trim();
+    closeRename();
+    if (name && name !== playlist!.name) void actOnPlaylists({ action: 'rename', playlistId, name });
+  });
+
+  const handleDelete = useLastCallback(async () => {
+    closeDelete();
+    await actOnPlaylists({ action: 'delete', playlistId });
+    if (isPhone) goBackMusic();
+    else openMusicView({ kind: 'home' }, true);
+  });
 
   if (status !== 'ready' && status !== 'loading') {
     return <div className={styles.error} role="status" data-playlists-status={status}>{lang(STATUS_KEYS[status])}</div>;
   }
-  if (status === 'loading' && !playlists.length) {
-    return <PvSkeleton data-playlists-status="loading" onRetry={handleRetry} />;
-  }
-  return playlist ? renderPlaylist(playlist) : renderList(playlists);
+  if (!playlist) return <PvSkeleton data-playlists-status={status} />;
+
+  const time = splitListTime(playlist.durationSecs);
+  const subtitle = [
+    lang('MusicTracksCount', { count: playlist.count }, { pluralValue: playlist.count }),
+    lang('MusicListTime', { hours: time.hours, minutes: time.minutes }),
+    isHeld && !isPhone && lang('MusicPlaylistOfflineMark'),
+  ].filter(Boolean).join(' · ');
+  const menuActions: MusicMenuAction[] = [
+    { key: 'rename', title: lang('MusicPlaylistRename') },
+    {
+      key: 'offline',
+      title: lang(isHeld ? 'MusicOfflineRemovePlaylist' : 'MusicOfflineSavePlaylist'),
+      isDisabled: !playable.length,
+    },
+    // Общий плейлист (MUSIC-3, исполнитель «musicshared»): «Кто видит» и перенос треков на сервер
+    { key: 'share', title: lang('MusicMakeShared') },
+    {
+      key: 'delete', title: lang('MusicPlaylistDelete'), isDanger: true, hasDivider: !isPhone,
+    },
+  ];
+  const moreButton = (
+    <button
+      type="button"
+      className={kit.ib}
+      aria-label={lang('MusicMore')}
+      aria-haspopup="menu"
+      data-music-playlist-menu
+      onClick={handleMenu}
+    >
+      <ParvaneIcon name="more" className={styles.moreIcon} />
+    </button>
+  );
+  const sendButton = (
+    <button
+      type="button"
+      className={kit.ib}
+      aria-label={lang('MusicSendToChat')}
+      data-music-playlist-to-chat
+      disabled={!rows.length}
+      onClick={openSend}
+    >
+      <ParvaneIcon name="send" />
+    </button>
+  );
+
+  return (
+    <div className={styles.view} data-music-playlist={playlist.id}>
+      <MusicSectionHead
+        title={playlist.name}
+        barTitle={lang('MusicPlaylistKicker')}
+        kicker={isPhone ? undefined : lang('MusicPlaylistMineTitle')}
+        cover={(
+          <MusicCover
+            toneId={playlist.id}
+            size={isPhone ? COVER_PHONE : COVER_DESK}
+            glyph="list"
+            className={styles.heroCover}
+          />
+        )}
+        subtitle={isPhone ? (
+          <>
+            <div>{lang('MusicPlaylistMineTitle')}</div>
+            <div>{subtitle}</div>
+          </>
+        ) : subtitle}
+        isPhone={isPhone}
+        barActions={(
+          <>
+            {sendButton}
+            {moreButton}
+          </>
+        )}
+        actions={(
+          <>
+            <MusicPlayButtons isDisabled={!playable.length} onPlay={handlePlayAll} onShuffle={handleShuffle} />
+            {isPhone && <MusicOfflineCircle tracks={playable} holder={holder} />}
+            {!isPhone && (
+              <button
+                type="button"
+                className={kit.btn}
+                data-music-playlist-to-chat
+                disabled={!rows.length}
+                onClick={openSend}
+              >
+                {lang('MusicSendToChat')}
+              </button>
+            )}
+            {!isPhone && (
+              <button type="button" className={kit.btn} data-music-make-shared onClick={openMakeShared}>
+                {lang('MusicMakeShared')}
+              </button>
+            )}
+            {!isPhone && moreButton}
+          </>
+        )}
+        onBack={goBackMusic}
+      />
+      {!rows.length && <PvEmpty text={lang('MusicPlaylistEmpty')} data-music-empty />}
+      {Boolean(rows.length) && !isPhone && (
+        <div className={buildClassName(styles.tableHead, kit.muted, kit.small)} aria-hidden>
+          <span className={styles.trackNo}>#</span>
+          <span className={kit.grow}>{lang('MusicColumnTitle')}</span>
+          <span className={styles.trackCell}>{lang('MusicColumnArtist')}</span>
+          <span className={styles.trackCell}>{lang('MusicColumnAlbum')}</span>
+          <span>{lang('MusicColumnTime')}</span>
+        </div>
+      )}
+      {Boolean(rows.length) && (
+        <ul className={styles.tracks} data-music-tracks>
+          {rows.map((row, index) => (
+            <MusicTrackRow
+              key={row.itemId}
+              track={row.track}
+              index={index}
+              number={index + 1}
+              columns={isPhone ? undefined : ['artist', 'album']}
+              isCurrent={row.track.id === currentId}
+              isPlaying={player.isPlaying}
+              isMissing={row.isMissing}
+              note={row.isMissing ? lang('MusicTrackMissing') : undefined}
+              dragLabel={isPhone ? undefined : lang('MusicPlaylistDrag', { name: row.track.title })}
+              dragState={isPhone ? undefined : getRowState(index)}
+              drag={isPhone ? undefined : drag}
+              extra={{
+                removeLabel: lang('MusicPlaylistRemoveItem'),
+                onRemove: () => void actOnPlaylists({ action: 'remove', itemId: row.itemId }),
+                onMoveUp: isPhone && index > 0 ? () => handleMove(index, index - 1) : undefined,
+                onMoveDown: isPhone && index < rows.length - 1 ? () => handleMove(index, index + 1) : undefined,
+              }}
+              canQueue
+              canSaveOffline
+              onPlay={handlePlay}
+              onStar={handleStar}
+              onSendToChat={onSendToChat}
+            />
+          ))}
+        </ul>
+      )}
+      <MusicMakeShared isOpen={isMakeSharedOpen} playlist={playlist} onClose={closeMakeShared} />
+      {menuAnchor && (
+        <MusicMenu
+          title={playlist.name}
+          actions={menuActions}
+          anchor={menuAnchor === true ? undefined : menuAnchor}
+          onPick={handlePick}
+          onClose={handleCloseMenu}
+        />
+      )}
+      <PvSheet isOpen={isRenameOpen} title={lang('MusicPlaylistRename')} onClose={closeRename}>
+        <form className={sheets.form} onSubmit={handleRename}>
+          <input
+            className={kit.input}
+            value={newName}
+            maxLength={NAME_MAX}
+            aria-label={lang('MusicPlaylistName')}
+            data-music-playlist-name
+            onChange={handleNameChange}
+          />
+          <div className={kit.sheetButtons}>
+            <button type="button" className={kit.btn} onClick={closeRename}>{lang('Cancel')}</button>
+            <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)} disabled={!newName.trim()}>
+              {lang('Save')}
+            </button>
+          </div>
+        </form>
+      </PvSheet>
+      <PvSheet
+        isOpen={isDeleteOpen}
+        title={lang('MusicPlaylistDeleteTitle', { name: playlist.name })}
+        onClose={closeDelete}
+      >
+        <p className={kit.muted}>{lang('MusicPlaylistDeleteText')}</p>
+        <div className={kit.sheetButtons}>
+          <button type="button" className={kit.btn} onClick={closeDelete}>{lang('Cancel')}</button>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnDanger)}
+            data-playlist-delete="confirm"
+            onClick={handleDelete}
+          >
+            {lang('MusicPlaylistDelete')}
+          </button>
+        </div>
+      </PvSheet>
+      <MusicSendDialog playlist={isSendOpen ? playlist : undefined} onClose={closeSend} />
+    </div>
+  );
 };
 
 export default memo(MusicPlaylists);

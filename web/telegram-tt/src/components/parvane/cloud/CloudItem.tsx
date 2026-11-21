@@ -8,6 +8,7 @@ import type { CloudNode } from './cloudModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { callApi } from '../../../api/gramjs';
+import { formatCloudDayShort } from './cloudFormat';
 import { kindOfFile } from './cloudModel';
 import { getCloudUnsent } from './cloudStore';
 
@@ -27,7 +28,7 @@ type OwnProps = {
   node: CloudNode;
   // У кого доступ: «только я», «ссылка, 7 дн.», имя общей папки
   accessText?: string;
-  // Поиск: путь до папки вместо доступа
+  // Поиск: путь до папки вместо доступа (у найденного в корзине — «Корзина · удалится через N дней»)
   hint?: string;
   // Корзина: подпись со сроком и сколько дней осталось до стирания
   trashHint?: string;
@@ -35,6 +36,10 @@ type OwnProps = {
   // Папка: сколько в ней объектов и сколько они занимают
   childCount?: number;
   folderSize?: number;
+  // Папка: последнее изменение внутри (колонка «Изменён»)
+  folderMtime?: number;
+  // Можно править: клавиши F2 и Del на строке
+  canEdit?: boolean;
   isSelected?: boolean;
   // Хотя бы одна строка выделена: флажки видны и без наведения
   isSelecting?: boolean;
@@ -52,7 +57,8 @@ type OwnProps = {
   // Папка принимает перетащенные строки
   isDropTarget?: boolean;
   onOpen: (container: string, node: CloudNode, isForced?: boolean) => void;
-  onToggle: (node: CloudNode) => void;
+  // `isRange` — Shift+щелчок: выделить от последней отмеченной строки до этой
+  onToggle: (node: CloudNode, isRange?: boolean) => void;
   onMenu: (container: string, node: CloudNode, anchor?: CloudMenuAnchor) => void;
   onAction: (action: CloudItemAction, container: string, node: CloudNode) => void;
 };
@@ -63,8 +69,9 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 // «Имя / Доступ / Изменён / Размер», на телефоне — название, строка сведений и размер. Нажатие открывает папку;
 // файл на компьютере сперва выбирается (панель справа), открывается двойным нажатием либо Enter
 const CloudItem = ({
-  container, node, accessText, hint, trashHint, daysLeft, childCount, folderSize, isSelected, isSelecting, isCurrent,
-  isTrash, isNarrow, isVault, isIncoming, isDraggable, isDropTarget, onOpen, onToggle, onMenu, onAction,
+  container, node, accessText, hint, trashHint, daysLeft, childCount, folderSize, folderMtime, canEdit, isSelected,
+  isSelecting, isCurrent, isTrash, isNarrow, isVault, isIncoming, isDraggable, isDropTarget, onOpen, onToggle, onMenu,
+  onAction,
 }: OwnProps) => {
   const lang = useLang();
   const rowRef = useRef<HTMLDivElement>();
@@ -110,7 +117,13 @@ const CloudItem = ({
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [container, node.id, thumbId]);
 
-  const handleOpen = useLastCallback(() => {
+  // Компьютер: Ctrl+щелчок отмечает строку, Shift+щелчок — диапазон (выделение как в файловом менеджере)
+  const handleOpen = useLastCallback((e: React.MouseEvent) => {
+    if (!isNarrow && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+      e.preventDefault();
+      onToggle(node, e.shiftKey);
+      return;
+    }
     if (isTrash) onMenu(container, node);
     else onOpen(container, node);
   });
@@ -145,19 +158,49 @@ const CloudItem = ({
     onAction('purge', container, node);
   });
 
-  const handleKeyDown = useLastCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.target === e.currentTarget) handleForcedOpen();
+  const handleLinkClick = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAction('link', container, node);
   });
 
-  const dateText = node.mtime
-    ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '')
-    : '';
-  const sizeText = isFolder ? '' : formatFileSize(lang, node.size);
+  const handleDownloadClick = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAction('download', container, node);
+  });
+
+  // Клавиши выбранной строки (доски `XdFiles`, `ZdFilesX`): Enter и пробел — открыть, Ctrl+S — скачать,
+  // F2 — переименовать, Del — в корзину
+  const handleKeyDown = useLastCallback((e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget || isTrash) return;
+    const isMod = e.ctrlKey || e.metaKey;
+    if (e.key === 'Enter' || (e.key === ' ' && !isFolder)) {
+      e.preventDefault();
+      handleForcedOpen();
+    } else if (isMod && e.key.toLowerCase() === 's' && !isFolder) {
+      e.preventDefault();
+      onAction('download', container, node);
+    } else if (e.key === 'F2' && canEdit) {
+      e.preventDefault();
+      onAction('rename', container, node);
+    } else if (e.key === 'Delete' && canEdit && !isVault) {
+      e.preventDefault();
+      onAction('delete', container, node);
+    }
+  });
+
+  const mtime = isFolder ? folderMtime || node.mtime : node.mtime;
+  const dateText = mtime ? formatCloudDayShort(lang.code, mtime) : '';
+  // Размер папки — всё вложенное, только колонкой компьютера (доска `ZdFilesX`); на телефоне у папки размера нет
+  const sizeText = !isFolder ? formatFileSize(lang, node.size)
+    : folderSize && !isNarrow ? formatFileSize(lang, folderSize) : '';
   const place = hint || (isVault ? lang('KnowledgeFilesVault') : accessText);
-  // Телефон: вторая строка — «14 ноя · только я», у папки — «Папка · только я». В корзине срок стоит второй
-  // строкой и на компьютере (в широком окне она встаёт колонкой); на телефоне к нему приписан размер
+  // Телефон: вторая строка — «14 ноя · только я», у папки — «Папка · только я», у присланного и найденного —
+  // сначала откуда («от Алии · 9 ноя», «Мой диск / Сервер · 13 ноя»). В корзине срок стоит второй строкой и на
+  // компьютере (в широком окне она встаёт колонкой); на телефоне к нему приписан размер
+  const isPlaceFirst = Boolean(hint) || Boolean(node.from);
   const subParts = isTrash ? [trashHint, isNarrow && sizeText]
-    : [isFolder ? lang('ParvaneCloudFolder') : dateText, place];
+    : isFolder ? [lang('ParvaneCloudFolder'), place]
+      : isPlaceFirst ? [place, dateText] : [dateText, place];
   const countText = isFolder
     ? lang('KnowledgeFilesItems', { count: childCount || 0 }, { pluralValue: childCount || 0 }) : undefined;
 
@@ -189,9 +232,13 @@ const CloudItem = ({
           isFolder && styles.itemIconFolder,
           isIncoming && isFolder && styles.itemIconShared,
           isVault && styles.itemIconVault,
+          // Корзина на компьютере (доска `RdFiles`): серая точка вместо значка
+          isTrash && !isNarrow && styles.itemIconDot,
         )}
       >
-        {thumbUrl ? (
+        {isTrash && !isNarrow ? (
+          <span className={styles.itemDot} />
+        ) : thumbUrl ? (
           <img className={styles.itemThumb} src={thumbUrl} alt="" draggable={false} data-thumb />
         ) : (
           <PvIcon name={isFolder ? 'folder' : fileKind === 'photo' ? 'image' : 'file'} />
@@ -241,8 +288,33 @@ const CloudItem = ({
           )}
         </span>
       )}
-      {!(isNarrow && isTrash) && (
-        <button type="button" className={styles.itemMenu} aria-label={lang('ParvaneCloudActions')} onClick={handleMenu}>
+      {/* Доска `ZdMisc`: под курсором справа — «Ссылка» и «Скачать» (те же действия, что в меню «⋯») */}
+      {!isTrash && !isNarrow && (
+        <span className={styles.itemHoverActions} data-row-actions>
+          {canEdit && (
+            <button type="button" className={styles.textButton} data-row-action="link" onClick={handleLinkClick}>
+              {lang('ParvaneCloudLinkShort')}
+            </button>
+          )}
+          {!isFolder && (
+            <button
+              type="button"
+              className={styles.textButton}
+              data-row-action="download"
+              onClick={handleDownloadClick}
+            >
+              {lang('ParvaneCloudDownload')}
+            </button>
+          )}
+        </span>
+      )}
+      {!isTrash && (
+        <button
+          type="button"
+          className={styles.itemMenu}
+          aria-label={lang('ParvaneCloudFileActions')}
+          onClick={handleMenu}
+        >
           <PvIcon name="dots" />
         </button>
       )}

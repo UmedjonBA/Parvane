@@ -11,6 +11,7 @@
 // ответа прежние формулировки сервера по методу и коду — на них завязаны
 // экраны входа и настройки.
 
+import { formatSecurityKeyStep } from '../securityKeys';
 import { preauth, V2Control, type V2Json } from './control';
 import { V2Error } from './transport';
 
@@ -229,6 +230,9 @@ export class V2Bridge {
           device_proof: proof?.proof,
           proof_ts_ms: proof ? String(proof.tsMs) : undefined,
           cancel_deletion: flag(p, 'cancel_deletion') || undefined,
+          // SECKEY-1: ответ ключа безопасности либо ключ восстановления вместо него
+          seckey: p.seckey,
+          recovery_key: str(p, 'recovery_key') || undefined,
         });
         if (flag(r, 'twofaRequired', 'twofa_required')) {
           return {
@@ -237,6 +241,9 @@ export class V2Bridge {
             login_token: str(r, 'loginToken', 'login_token'),
             telegram_bot: str(r, 'telegramBot', 'telegram_bot'),
           };
+        }
+        if (flag(r, 'seckeyRequired', 'seckey_required')) {
+          return { ...formatSecurityKeyStep(r), trust_secret: str(r, 'trustSecret', 'trust_secret') || undefined };
         }
         if (flag(r, 'confirmRequired', 'confirm_required')) return fail('почта не подтверждена');
         // spec 041: неверный пароль — со счётчиком попыток до временной блокировки входа

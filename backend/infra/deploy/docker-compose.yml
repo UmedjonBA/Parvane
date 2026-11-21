@@ -71,6 +71,10 @@ services:
       # Жалобы администратору (spec 024): открытый ключ `escrow_admin keygen`; пусто — жалобы серверу выключены
       PARVANE_REPORT_PUBLIC_KEY: ${PARVANE_REPORT_PUBLIC_KEY:-}
       PARVANE_DISABLED_MODULES: ${PARVANE_DISABLED_MODULES:-}
+      # SECKEY-1: rpId ключей безопасности WebAuthn (пусто — домен сервера) и явный список источников страниц
+      # (пусто — https на rpId и его поддоменах, любой порт)
+      PARVANE_WEBAUTHN_RP_ID: ${PARVANE_WEBAUTHN_RP_ID:-}
+      PARVANE_WEBAUTHN_ORIGINS: ${PARVANE_WEBAUTHN_ORIGINS:-}
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
@@ -209,6 +213,8 @@ services:
       PARVANE_MUSIC_SOUNDCLOUD_BEFORE: ${PARVANE_MUSIC_SOUNDCLOUD_BEFORE:-}
       PARVANE_MUSIC_SOURCES_RU: ${PARVANE_MUSIC_SOURCES_RU:-}
       PARVANE_MUSIC_SOURCES: ${PARVANE_MUSIC_SOURCES:-}
+      PARVANE_MUSIC_UPLOAD_MAX_BYTES: ${PARVANE_MUSIC_UPLOAD_MAX_BYTES:-314572800}
+      PARVANE_MUSIC_FETCH_PARALLEL: ${PARVANE_MUSIC_FETCH_PARALLEL:-2}
       PARVANE_LOG_LEVEL: info
 
   # Сервис скачивания для «Найти и скачать»: необязательный, выключен по умолчанию. Включается профилем

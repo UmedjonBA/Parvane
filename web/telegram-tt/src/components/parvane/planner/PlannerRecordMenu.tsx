@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useLayoutEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
 
 import type { CloudMenuAction } from '../cloud/CloudMenu';
@@ -41,10 +41,16 @@ const NO_GROUP_KEY = '\u0000';
 // Новая запись с пустого места шкалы и поиск окна — на час
 const GRID_MINUTES = 60;
 const GRID_STEP = 30;
+// Размеры меню у курсора, как в `CloudMenu`: вложенное меню «Сменить слой» встаёт справа от своего пункта
+const POP_ITEM_PX = 36;
+const POP_PADDING_PX = 7;
+const POP_WIDTH_PX = 240;
+const EDGE_PX = 8;
 
-// Меню записи по правой кнопке (доска `ZdPlanX`) и пустого места шкалы дня: «Открыть», «Отметить выполненным»,
-// «Перенести на завтра», «Найти свободное время…», «Дублировать», «Сменить слой», «Предложить собеседнику…»,
-// «Удалить». Пока меню открыто, работают клавиши его подсказок
+// Меню записи по правой кнопке (доска `ZdPlanX`) и пустого места шкалы дня: «Открыть», «Отметить выполненной»,
+// «Перенести на завтра», «Найти свободное время…», «Дублировать», «Сменить слой ›» (вложенное меню справа, первое
+// остаётся открытым), «Предложить собеседнику…», «Удалить» — без значков и заголовка. Пока меню открыто, работают
+// клавиши его подсказок
 const PlannerRecordMenu = ({
   state, today, target, onOpenTask, onOpenEvent, onCreateAt, onClose,
 }: OwnProps) => {
@@ -55,46 +61,48 @@ const PlannerRecordMenu = ({
   const record = target.record ? findRecord(state, target.record) : undefined;
   const gridStart = target.grid ? Math.floor(target.grid.minute / GRID_STEP) * GRID_STEP : 0;
 
+  const layerActions = useMemo((): CloudMenuAction[] => [
+    ...state.lists.map((list) => ({ key: list.name, title: list.name })),
+    { key: NO_GROUP_KEY, title: lang('PlannerNoList') },
+  ], [state.lists, lang]);
+
   const actions = useMemo((): CloudMenuAction[] => {
-    if (stage === 'layer') {
-      return [
-        ...state.lists.map((list) => ({ key: list.name, title: list.name })),
-        { key: NO_GROUP_KEY, title: lang('PlannerNoList') },
-      ];
-    }
     if (!record) {
       return [
-        { key: 'new', icon: 'plus', title: lang('PlannerMenuNewAt', { time: toTime(gridStart) }) },
-        { key: 'freeTime', icon: 'search', title: lang('PlannerMenuFreeTime') },
+        { key: 'new', title: lang('PlannerMenuNewAt', { time: toTime(gridStart) }) },
+        { key: 'freeTime', title: lang('PlannerMenuFreeTime') },
       ];
     }
     const isTask = record.kind === 'task';
     const isDone = isTask && record.item.status === 'done';
     return [
-      { key: 'open', icon: 'open', title: lang('PlannerMenuOpen'), hint: 'Enter' },
+      { key: 'open', title: lang('PlannerMenuOpen'), hint: 'Enter' },
       ...(isTask ? [{
         key: 'done',
-        icon: 'check',
-        title: lang(isDone ? 'PlannerMenuUndone' : 'PlannerMenuDone'),
+        title: lang(isDone ? 'PlannerMenuUndone' : 'PlannerMarkDone'),
         hint: lang('PlannerKeySpace'),
       } satisfies CloudMenuAction] : []),
-      { key: 'tomorrow', icon: 'right', title: lang('PlannerMenuTomorrow') },
-      { key: 'freeTime', icon: 'search', title: lang('PlannerMenuFreeTime') },
-      { key: 'duplicate', icon: 'copy', title: lang('PlannerMenuDuplicate'), hint: 'Ctrl+D' },
-      { key: 'layer', icon: 'folder', title: lang('PlannerMenuLayer'), hint: '›' },
-      { key: 'offer', icon: 'chat', title: lang('PlannerMenuOffer') },
+      { key: 'tomorrow', title: lang('PlannerMenuTomorrow') },
+      { key: 'freeTime', title: lang('PlannerMenuFreeTime') },
+      { key: 'duplicate', title: lang('PlannerMenuDuplicate'), hint: 'Ctrl+D' },
+      { key: 'layer', title: lang('PlannerMenuLayer'), hint: '›' },
+      { key: 'offer', title: lang('PlannerMenuOffer') },
       {
-        key: 'delete', icon: 'trash', title: lang('PlannerMenuDelete'), hint: 'Del', isDanger: true,
+        key: 'delete', title: lang('PlannerMenuDelete'), hint: 'Del', isDanger: true,
       },
     ];
-  }, [stage, state.lists, record, gridStart, lang]);
+  }, [record, gridStart, lang]);
+
+  const handleLayerPick = useLastCallback((key: string) => {
+    if (record) setRecordGroup(lang, record, key === NO_GROUP_KEY ? '' : key);
+    onClose();
+  });
+
+  const handleLayerClose = useLastCallback(() => {
+    setStage('main');
+  });
 
   const handlePick = useLastCallback((key: string) => {
-    if (stage === 'layer') {
-      if (record) setRecordGroup(lang, record, key === NO_GROUP_KEY ? '' : key);
-      onClose();
-      return;
-    }
     if (!record) {
       if (key === 'freeTime') {
         setStage('freeTime');
@@ -139,8 +147,8 @@ const PlannerRecordMenu = ({
     onClose();
   });
 
-  // Клавиши подсказок меню: Enter, пробел, Ctrl+D, Del
-  useEffect(() => {
+  // Клавиши подсказок меню: Enter, пробел, Ctrl+D, Del. Слушатель встаёт в кадре появления меню
+  useLayoutEffect(() => {
     if (stage !== 'main' || !record) return undefined;
     const keys: Record<string, string> = { Enter: 'open', ' ': 'done', Delete: 'delete' };
     const handleKey = (e: KeyboardEvent) => {
@@ -231,15 +239,34 @@ const PlannerRecordMenu = ({
     );
   }
 
+  // Место меню — как его ставит `CloudMenu`: вложенное меню слоёв встаёт справа от пункта «Сменить слой»
+  const mainHeight = actions.length * POP_ITEM_PX + POP_PADDING_PX * 2;
+  const mainLeft = Math.max(EDGE_PX, Math.min(target.x, window.innerWidth - POP_WIDTH_PX - EDGE_PX));
+  const mainTop = Math.max(EDGE_PX, Math.min(target.y, window.innerHeight - mainHeight - EDGE_PX));
+  const layerIndex = actions.findIndex((action) => action.key === 'layer');
+  const subLeft = mainLeft + POP_WIDTH_PX + POP_WIDTH_PX + EDGE_PX > window.innerWidth
+    ? mainLeft - POP_WIDTH_PX : mainLeft + POP_WIDTH_PX;
+
   return (
-    <CloudMenu
-      isOpen
-      title={record ? formatPlainName(record.item.name) : undefined}
-      actions={actions}
-      anchor={{ x: target.x, y: target.y }}
-      onPick={handlePick}
-      onClose={onClose}
-    />
+    <>
+      <CloudMenu
+        isOpen
+        actions={actions}
+        anchor={{ x: target.x, y: target.y }}
+        onPick={handlePick}
+        onClose={onClose}
+      />
+      {stage === 'layer' && (
+        <CloudMenu
+          isOpen
+          title={lang('PlannerMenuLayer')}
+          actions={layerActions}
+          anchor={{ x: subLeft, y: mainTop + layerIndex * POP_ITEM_PX }}
+          onPick={handleLayerPick}
+          onClose={handleLayerClose}
+        />
+      )}
+    </>
   );
 };
 

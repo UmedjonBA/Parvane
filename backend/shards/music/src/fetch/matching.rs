@@ -384,9 +384,50 @@ pub fn verdict(q: &Query, ranked: &[Ranked], rules: &Rules) -> Verdict {
     }
 }
 
+/// Порог сходства запроса с эталоном, ниже которого «Найти и скачать «запрос»» эталон не берёт.
+pub const REFERENCE_MIN: f32 = 0.6;
+
+/// «Найти и скачать «запрос»» (spec 041): какой эталон каталога — то, что человек искал. Сходство строки запроса с
+/// «исполнитель название» (порядок слов не важен) либо с одним названием; другая версия (ремикс, live, караоке…),
+/// которой в запросе нет, отбрасывается; при равных — порядок каталога. Ниже `REFERENCE_MIN` — эталона нет.
+pub fn pick_reference(query: &str, catalog: &[Query]) -> Option<usize> {
+    let qn = normalize(query);
+    if qn.text.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, f32)> = None;
+    for (i, c) in catalog.iter().enumerate() {
+        let whole = normalize(&format!("{} {}", c.artist, c.title));
+        let title = normalize(&c.title);
+        if whole.version.is_some() && whole.version != qn.version {
+            continue;
+        }
+        let score = similarity(&qn, &whole).max(similarity(&qn, &title) - 0.05);
+        if score >= REFERENCE_MIN && best.is_none_or(|(_, s)| score > s + 1e-6) {
+            best = Some((i, score));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_query_picks_reference_from_catalog() {
+        let cat = vec![
+            query("Lampa", "Ночной автобус (Remix)", 200, None),
+            query("Lampa", "Ночной автобус", 222, None),
+            query("Другой", "Автобус", 100, None),
+        ];
+        assert_eq!(pick_reference("lampa ночной автобус", &cat), Some(1), "ремикс без слова «ремикс» в запросе не берётся");
+        assert_eq!(pick_reference("ночной автобус", &cat), Some(1), "одно название тоже находит");
+        assert_eq!(pick_reference("ночной автобус remix", &cat), Some(0));
+        assert_eq!(pick_reference("совсем другое", &cat), None);
+        assert_eq!(pick_reference("", &cat), None);
+        assert_eq!(pick_reference("kino zvezda", &[query("Кино", "Звезда", 0, None)]), Some(0), "латиница и кириллица — одно");
+    }
 
     fn query(artist: &str, title: &str, secs: u32, explicit: Option<bool>) -> Query {
         Query { artist: artist.into(), title: title.into(), album: String::new(), duration_secs: secs, explicit }

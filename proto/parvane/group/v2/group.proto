@@ -296,6 +296,8 @@ message InviteEdit {
   string title = 2 [(parvane.core.v2.max_len) = 64];
   int64 expires_ms = 3;
   uint32 usage_limit = 4;
+  // «По заявке» у действующей ссылки (20 ноя 2026); не задано — прежнее (записи до поля его не меняют).
+  optional bool requires_approval = 5;
 }
 
 // Публичная группа (spec 023): имя в общем пространстве с никами, открытый секрет `secret` (решение пользователя

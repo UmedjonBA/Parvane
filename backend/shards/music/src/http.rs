@@ -1,5 +1,6 @@
 //! HTTP-ссылки «Музыки» (spec 039) за Caddy: `GET /_parvane/music/s/<жетон>` — поток трека (Range),
-//! `GET /_parvane/music/c/<жетон>/<id обложки>[?size=N]` — обложка. Право — подписанный жетон в адресе; тело
+//! `GET /_parvane/music/c/<жетон>/<id обложки>[?size=N]` — обложка, `PUT /_parvane/music/u/<жетон>` — свой файл
+//! (spec 041, `upload.rs`). Право — подписанный жетон в адресе; тело
 //! музыкального сервера пересылается потоком, без буферизации. Жетон в журнал не пишется.
 
 use std::convert::Infallible;
@@ -58,6 +59,11 @@ pub(crate) async fn serve_listener(ctx: Arc<Ctx>, listener: tokio::net::TcpListe
 }
 
 async fn serve(ctx: &Ctx, req: Request<Incoming>) -> Response<Body> {
+    // «Загрузить свои файлы» (spec 041): приём байтов по ссылке из `music.upload.start`
+    if req.method() == Method::PUT {
+        let Some(tok) = req.uri().path().strip_prefix("/_parvane/music/u/").map(str::to_string) else { return plain(StatusCode::METHOD_NOT_ALLOWED) };
+        return plain(crate::upload::receive(ctx, &tok, req).await);
+    }
     if req.method() != Method::GET && req.method() != Method::HEAD {
         return plain(StatusCode::METHOD_NOT_ALLOWED);
     }

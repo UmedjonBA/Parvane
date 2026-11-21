@@ -22,17 +22,15 @@ type OwnProps = {
   today: string;
   layers: PlannerLayers;
   onPickDay: (day: string) => void;
-  onAdd: NoneToVoidFunction;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
-  onOpenSleep: (day: string) => void;
   onOpenUndated: NoneToVoidFunction;
 };
 
 // Левая колонка «Плана» на компьютере (доска `DeskPlan`): месяц с выбранной неделей, загрузка и дела
-// выбранного дня, внизу — «Без даты»
+// выбранного дня одним списком, внизу — «Без даты · N» (всегда, и при нуле). Запись добавляется полем в шапке
 const PlannerRail = ({
-  state, picked, today, layers, onPickDay, onAdd, onOpenTask, onOpenEvent, onOpenSleep, onOpenUndated,
+  state, picked, today, layers, onPickDay, onOpenTask, onOpenEvent, onOpenUndated,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -83,18 +81,14 @@ const PlannerRail = ({
         today={today}
         layers={layers}
         variant="rail"
-        onAdd={onAdd}
         onOpenTask={onOpenTask}
         onOpenEvent={onOpenEvent}
-        onOpenSleep={onOpenSleep}
       />
-      {Boolean(undatedCount) && (
-        <div className={pv.railFoot}>
-          <button type="button" className={pv.wideButton} data-today-undated onClick={onOpenUndated}>
-            {lang('PlannerUndated', { count: undatedCount })}
-          </button>
-        </div>
-      )}
+      <div className={pv.railFoot}>
+        <button type="button" className={pv.wideButton} data-today-undated onClick={onOpenUndated}>
+          {lang('PlannerUndated', { count: undatedCount })}
+        </button>
+      </div>
     </aside>
   );
 };

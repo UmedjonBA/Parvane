@@ -2282,14 +2282,7 @@
   background: rgb(0 0 0 / 40%);
 }
 
-.scrimCentered {
-  @media (min-width: 926px) {
-    align-items: flex-start;
-    padding: 10vh 1rem 1rem;
-  }
-}
-
-// Телефон: карточка записи и настройки — экран целиком (доска `PhPlanMore`, «Запись»)
+// Телефон: карточка записи — экран целиком (доска `PhPlanMore`, «Запись»)
 .sheetPane {
   flex: none;
 
@@ -2300,18 +2293,6 @@
   background: var(--pv-bg);
 
   > .hdr {
-    background: var(--pv-panel);
-  }
-}
-
-.sheetPaneCentered {
-  @media (min-width: 926px) {
-    width: min(35rem, 100%);
-    height: auto;
-    max-height: 80vh;
-    border: 1px solid var(--pv-line2);
-    border-radius: var(--pv-radius-dialog);
-
     background: var(--pv-panel);
   }
 }
@@ -2403,7 +2384,7 @@
 
   background: var(--pv-bg);
 
-  .sheetPane:not(.sheetPaneCentered) & {
+  .sheetPane & {
     background: var(--pv-panel);
   }
 }
@@ -2492,7 +2473,7 @@
     border-color: var(--pv-blue);
   }
 
-  .sheetPane:not(.sheetPaneCentered) & {
+  .sheetPane & {
     background: var(--pv-panel);
   }
 }
@@ -2550,7 +2531,7 @@
     border-color: var(--pv-muted);
   }
 
-  .sheetPane:not(.sheetPaneCentered) & {
+  .sheetPane & {
     background: var(--pv-panel);
   }
 }
@@ -2818,7 +2799,7 @@
   }
 }
 
-.sheetPane:not(.sheetPaneCentered) :global(.input-group) > :global(.form-control) {
+.sheetPane :global(.input-group) > :global(.form-control) {
   background: var(--pv-panel);
 }
 
@@ -3330,4 +3311,85 @@
       }
     }
   }
+}
+
+// ── spec 041, круг сверки досок (форк «screens»): строка задачи и колонка слоёв ──
+
+// Подпись строки задачи одной строкой через « · » (доски `DkPlanMore`, `PhonePlan`)
+.rowSubLine {
+  gap: 0;
+}
+
+.rowSubPart {
+  white-space: pre-wrap;
+}
+
+// На компьютере галочка строки задачи — слева (доска `DkPlanMore`), на телефоне — справа
+@media (min-width: 926px) {
+  .rowCheckStart > .check {
+    order: 0;
+  }
+}
+
+// Шапка дня недели одной строкой «пн 9» (доска `DeskPlan`); загрузка дня — в колонке слева и в подсказке
+.weekDayLine {
+  overflow: hidden;
+
+  min-height: 1.125rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  white-space: nowrap;
+
+  .weekDayToday & {
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-at);
+  }
+
+  .weekDayHoliday & {
+    color: var(--pv-red);
+  }
+}
+
+// День соседнего месяца на компьютере — пустая клетка (доска `RdPlan`)
+.monthCellBlank {
+  cursor: default;
+}
+
+// Карточка записи на месте вида (компьютер, доска `DkPlanMore`): после `.side`, чтобы ширина панели не действовала
+.sideWide {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+// Пояснение выбора объёма правки ряда и «Отмена» текстом (доска `XpPlan`)
+.seriesAsk {
+  margin: 0 0 0.25rem;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.seriesCancel {
+  cursor: var(--custom-cursor, pointer);
+
+  align-self: center;
+
+  height: var(--pv-button-height);
+  padding: 0 1rem;
+  border: 0;
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+}
+
+// Заголовок раскрытого блока карточки на компьютере («Повтор»)
+.cardBlockTitle {
+  margin: 0.375rem 0 0;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 }

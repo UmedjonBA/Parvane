@@ -25,7 +25,7 @@ const LOGO_LETTER = 'P';
 
 // Экран «PIN при запуске» (spec 041 E6, доска `ZpSystem`): PIN хранилища — четыре цифры. Пять неверных вводов
 // подряд — выход из аккаунта на этом устройстве; счётчик (`util/pinAttempts`) переживает перезагрузку страницы.
-// Включён вход по отпечатку (`RpProfileB`) — под клавиатурой кнопка; его отмена и отказ попыткой PIN не считаются
+// Включён вход по отпечатку (`RpProfileB`) — кнопка в левой нижней клетке клавиатуры; его отмена и отказ попыткой PIN не считаются
 const LockScreen = ({ isLocked }: OwnProps) => {
   const { signOut } = getActions();
   const lang = useLang();
@@ -115,18 +115,8 @@ const LockScreen = ({ isLocked }: OwnProps) => {
           isActive={!isForgotOpen}
           isDisabled={isBusy}
           onChange={handleChange}
+          onBiometric={hasBiometric ? handleBiometric : undefined}
         />
-        {hasBiometric && (
-          <button
-            type="button"
-            className={styles.biometric}
-            data-pin-biometric
-            disabled={isBusy}
-            onClick={handleBiometric}
-          >
-            {lang('ParvaneBioLockButton')}
-          </button>
-        )}
         <span className={styles.spacer} />
         <button
           type="button"

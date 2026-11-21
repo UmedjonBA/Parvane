@@ -572,6 +572,11 @@ fn coalesce_local_replaces_drafts_of_same_device() {
     let v = node_of(&st, 1);
     assert_eq!(v.versions.iter().map(|x| x.blob.file_id.as_str()).collect::<Vec<_>>(), vec!["f", "e", "d", "c", "f1"]);
     assert_eq!(v.versions[0].device, "x");
+    // Текущее содержимое записало устройство «x»: экран расхождения заметки называет его
+    assert_eq!(v.device, "x");
+    assert_eq!(json_node(&st, 1)["device"], "x");
+    write(&mut st, "h", "y", 40 * minute, &keep);
+    assert_eq!(json_node(&st, 1)["device"], "y");
 }
 
 /// Чужой автор не может заменить блоб другого загрузившего: надгробие получает загрузившего новой версии,

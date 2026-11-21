@@ -203,7 +203,7 @@ type EngineGroupInfo = {
   avatarKeyId?: string;
   migratedFrom?: string;
   owner: string;
-  members: { user: string; role: number; mutedUntilMs: number; rights?: WireAdminRights }[];
+  members: { user: string; role: number; mutedUntilMs: number; joinedMs?: number; rights?: WireAdminRights }[];
   banned: string[];
   epoch: number;
   epochStale: boolean;
@@ -3184,16 +3184,55 @@ export function createV2Controller(deps: Deps) {
   /** Выход: устройство убирает себя из журнала записью, подписанной своим
    * ключом, — у остальных оно пропадает из списка, ключ восстановления им не
    * нужен. Сервер после записи гасит сессию этого устройства. */
-  async function leave() {
+  // `shouldRotateKeys` — «Выйти и сменить ключи» (доска `PhProfileB`): до записи выхода устройство меняет ключи,
+  // которые держало, и раздаёт их остальным своим устройствам; запись выхода — последним запросом итога
+  async function leave(shouldRotateKeys?: boolean) {
     if (!ready || !client) return;
     try {
       await serial(async () => {
-        await run(client!.leave() as OutReq[]);
+        if (!shouldRotateKeys) {
+          await run(client!.leave() as OutReq[]);
+          return;
+        }
+        const { requests } = await withNeeds(() => client!.leaveRotating() as RevokeOutcome);
+        const exit = requests[requests.length - 1];
+        for (const r of requests.slice(0, -1)) {
+          await call(r.chan, r.method, r.body, r.dest)
+            .catch((e: unknown) => deps.log(`v2: смена ключей при выходе (${r.method}): ${String(e)}`));
+        }
+        await call(exit.chan, exit.method, exit.body, exit.dest);
+        deps.log(`v2: ключи сменены перед выходом (запросов ${requests.length - 1})`);
       });
       deps.log('v2: устройство вышло из журнала устройств');
     } catch (e) {
       deps.log(`v2: выход из журнала устройств не выполнен: ${String(e)}`);
     }
+  }
+
+  /** Это устройство (`deviceId` из отвергнутого токена) отозвано своим другим устройством: журнал устройств аккаунта,
+   * прочитанный анонимным каналом (токен уже не принимается), его не содержит, хотя прежде содержал. Экран «Это
+   * устройство вышло из аккаунта» показывается только тогда; сбой чтения — `false` (обычный повторный вход). */
+  async function checkOwnDeviceRevoked(deviceId: string): Promise<boolean> {
+    if (!pv || !client || !storage || !deviceId) return false;
+    const self = deps.getSelf();
+    const known = await storage.loadRecord<string[]>(OWN_DEVICES_RECORD).catch(() => undefined);
+    if (!self || !known?.includes(deviceId)) return false;
+    try {
+      const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+        'parvane.identity.v2.DeviceLogSyncAnonRequest',
+        JSON.stringify({ user: { address: self }, after_version: String(client.logVersion(self)) }),
+      ));
+      client.ingestLog(self, resp);
+    } catch (e) {
+      deps.log(`v2: журнал своих устройств после отказа токена не прочитан: ${String(e)}`);
+      return false;
+    }
+    // Отозвано — только когда журнал точно прочитан, в нём есть устройства, а этого нет. Пустой либо недоступный
+    // журнал (аккаунт ждёт удаления, ник сменён, движок ещё не поднят) отзывом не считается: иначе данные
+    // устройства стирались бы при любом отказе токена
+    if (client.peerRenamedTo(self)) return false;
+    const devices = (JSON.parse(client.logDevices(self)) as LogDevices).v2;
+    return devices.length > 0 && !devices.includes(deviceId);
   }
 
   /** Сервер держит копию корня для администратора (потерянный ключ можно выписать заново). */
@@ -4085,6 +4124,7 @@ export function createV2Controller(deps: Deps) {
           address: m.user,
           role: ROLE_NAMES[m.role] || 'member',
           admin_rights: m.role === 2 ? expandFlags(ADMIN_RIGHT_FIELDS, m.rights) : undefined,
+          joined_ms: m.joinedMs || undefined,
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
@@ -4674,9 +4714,11 @@ export function createV2Controller(deps: Deps) {
     });
   }
 
-  /** Правка действующей ссылки (spec 024): название, срок, лимит; счётчик вступивших прежний. */
+  /** Правка действующей ссылки (spec 024): название, срок, лимит, «по заявке» (`undefined` — прежнее); счётчик
+   * вступивших прежний. */
   async function editInvite(
-    address: string, url: string, params: { title?: string; expiresAt?: number; usageLimit?: number },
+    address: string, url: string,
+    params: { title?: string; expiresAt?: number; usageLimit?: number; isRequestNeeded?: boolean },
   ) {
     const record = (await loadInvites())[address]?.find((item) => item.url === url);
     if (!record) return false;
@@ -4686,6 +4728,7 @@ export function createV2Controller(deps: Deps) {
         title: params.title || '',
         expires_ms: String((params.expiresAt || 0) * 1000),
         usage_limit: params.usageLimit || 0,
+        requires_approval: params.isRequestNeeded,
       },
     });
   }
@@ -5430,6 +5473,7 @@ export function createV2Controller(deps: Deps) {
     renameAccount,
     deleteAccount,
     checkPeerDeleted,
+    refreshPeerLog,
     recoverWithKey,
     joinWithRecoveryKey,
     refreshKeyBundle,
@@ -5447,6 +5491,7 @@ export function createV2Controller(deps: Deps) {
     getTelegramCode,
     resetIdentity,
     leave,
+    checkOwnDeviceRevoked,
     pollOwnDevices,
     leftSskHolders,
     reportDeviceStolen,

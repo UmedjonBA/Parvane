@@ -90,8 +90,8 @@ describe('сводка холста для списка', () => {
   });
 
   it('пустой и повреждённый холст', () => {
-    expect(summarizeCanvas('')).toEqual({ cards: 0, arrows: 0, preview: [] });
-    expect(summarizeCanvas('{нет')).toEqual({ cards: 0, arrows: 0, preview: [] });
+    expect(summarizeCanvas('')).toEqual({ cards: 0, arrows: 0, preview: [], names: [] });
+    expect(summarizeCanvas('{нет')).toEqual({ cards: 0, arrows: 0, preview: [], names: [] });
   });
 });
 

@@ -60,4 +60,14 @@ describe('ввод текстом: черновик → состояние', () 
     expect(state.tasks).toHaveLength(0);
     expect(state.events).toHaveLength(0);
   });
+
+  it('событие без своего «напомнить» берёт напоминание по умолчанию из настроек, задача — нет', () => {
+    const state = createEmptyPlannerState();
+    state.settings = { ...state.settings, eventRemind: 15 };
+    ['созвон завтра 16:00', 'зал завтра 18:00 напомнить за час', 'купить кабель'].forEach((line) => {
+      applyQuickDraft(state, parseQuickInput(line, CTX));
+    });
+    expect(state.events.map(({ remind }) => remind)).toEqual([15, 60]);
+    expect(state.tasks[0].remind).toBeUndefined();
+  });
 });

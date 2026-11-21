@@ -1,0 +1,180 @@
+// Parvane (spec 041, доски `RdPlanSet`, `PhModSettings`): «Модули / План» — блоки строками «подпись слева —
+// значение справа». Тона — переменные `--pv-*` цветовой схемы
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  max-width: 45rem;
+  padding: 1rem;
+
+  color: var(--pv-fg);
+}
+
+.caps {
+  margin: 0.75rem 0 0;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card {
+  overflow: hidden;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+  background: var(--pv-panel);
+}
+
+.row,
+.switchRow {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.375rem 1rem;
+  border-top: 1px solid var(--pv-line);
+}
+
+.card > :first-child {
+  border-top: none;
+}
+
+.selectRow {
+  padding-top: 0.75rem;
+}
+
+.label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.9375rem;
+}
+
+.text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+
+  text-align: start;
+}
+
+.sub,
+.hint {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--pv-muted);
+}
+
+.hint {
+  margin: 0;
+}
+
+.value {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.input {
+  height: 2.25rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.number {
+  width: 4rem;
+  text-align: end;
+}
+
+.unit {
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
+
+.link {
+  cursor: pointer;
+
+  padding: 0;
+  border: none;
+
+  font-size: 0.875rem;
+  color: var(--pv-accent);
+
+  background: none;
+}
+
+.linkRow {
+  cursor: pointer;
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.75rem;
+  padding: 0.375rem 1rem;
+
+  color: var(--pv-fg);
+  text-align: start;
+}
+
+.arrow {
+  font-size: 1.125rem;
+  color: var(--pv-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.button {
+  cursor: pointer;
+
+  height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
+
+  font-size: 0.875rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.danger {
+  color: var(--pv-red);
+}

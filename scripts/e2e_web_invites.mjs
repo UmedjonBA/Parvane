@@ -306,6 +306,54 @@ try {
   const limitedAfter = afterFrank.result.invites.find((invite) => linkKeyOf(invite.link) === linkKeyOf(limitedLink));
   assert.equal(limitedAfter?.usage, 1, `usage must be 1: ${JSON.stringify(limitedAfter)}`);
 
+  // ── «По заявке» у созданной ссылки (поле правки `InviteEdit.requires_approval`, 20 ноя 2026) ───────────
+  // Экран ссылки: тумблер одобрения доступен и у существующей ссылки; включить его и снять лимит — Грейс по той же
+  // ссылке видит «Request to Join», а не отказ «лимит исчерпан» (у ссылки «по заявке» лимита нет, как в Telegram);
+  // выключить — снова обычная ссылка
+  const limitedName = `limit-1-${suffix.slice(-4)}`;
+  const openLimitedEdit = async () => {
+    const pane = await openGroupManagement(alicePage, groupTitle);
+    await pane.locator('.ListItem').filter({ hasText: 'Invite Links' }).first().click();
+    const list = pane.locator('.ManageInvites');
+    await list.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    // Меню строки ссылки — кнопкой «⋮» строки, как «Revoke» ниже (меню по правой кнопке открывалось под левой колонкой)
+    await list.locator('.ListItem').filter({ hasText: limitedName }).first().locator('.secondary-icon').click();
+    await alicePage.getByRole('menuitem', { name: 'Edit', exact: true }).locator('visible=true').first().click();
+    const approve = pane.locator('.ManageInvite input[type="checkbox"]').first();
+    await approve.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+    await alicePage.waitForTimeout(700);
+    assert.equal(await approve.isDisabled(), false, 'тумблер «по заявке» у созданной ссылки недоступен');
+    return { pane, approve };
+  };
+  const readLimited = async () => (await callProviderForChat(
+    alicePage, 'fetchExportedChatInvites', groupTitle, undefined, { peer: '$chat' },
+  )).result.invites.find((invite) => linkKeyOf(invite.link) === linkKeyOf(limitedLink));
+  let edit = await openLimitedEdit();
+  await edit.approve.setChecked(true, { force: true });
+  await edit.pane.locator('[data-invite-usage]').first().waitFor({ state: 'detached', timeout: 5000 })
+    .catch(() => assert.fail('у ссылки «по заявке» остался выбор лимита'));
+  await edit.pane.getByRole('button', { name: 'Save Link' }).click();
+  await edit.pane.locator('.ManageInvites').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const approvedLink = await readLimited();
+  assert.equal(approvedLink?.isRequestNeeded, true, `ссылка не стала «по заявке»: ${JSON.stringify(approvedLink)}`);
+  assert.equal(approvedLink?.usage, 1, 'счётчик вступивших сохраняется при правке');
+  assert.equal(approvedLink?.usageLimit || 0, 0, `у ссылки «по заявке» остался лимит: ${JSON.stringify(approvedLink)}`);
+  await closeRightColumn(alicePage);
+  await openLinkInAddressBar(sessions.grace.page, baseUrl, limitedLink);
+  const requestModal = sessions.grace.page.locator('.Modal .modal-dialog')
+    .filter({ has: sessions.grace.page.getByRole('button', { name: /request to join/i }) }).first();
+  await requestModal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+  await sessions.grace.page.keyboard.press('Escape');
+  edit = await openLimitedEdit();
+  assert.equal(await edit.approve.isChecked(), true, 'тумблер «по заявке» после правки выключен');
+  await edit.approve.setChecked(false, { force: true });
+  await edit.pane.getByRole('button', { name: 'Save Link' }).click();
+  await edit.pane.locator('.ManageInvites').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const plainAgain = await readLimited();
+  assert.equal(Boolean(plainAgain?.isRequestNeeded), false, `«по заявке» не выключилось: ${JSON.stringify(plainAgain)}`);
+  await closeRightColumn(alicePage);
+  console.log('OK: «по заявке» меняется у созданной ссылки, счётчик прежний, вступающий видит заявку');
+
   // ── Отзыв основной ссылки: раздел «Revoked Links», удаление ───────────────
   const right2 = await openGroupManagement(alicePage, groupTitle);
   await right2.locator('.ListItem').filter({ hasText: 'Invite Links' }).first().click();

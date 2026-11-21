@@ -6,7 +6,8 @@ import type { PaletteItem } from './paletteSearch';
 import { createEmptyPlannerState } from '../planner/plannerModel';
 import { collectPlannerRecords, recordDay } from './paletteRecords';
 import {
-  movePaletteIndex, normalizePaletteText, PALETTE_GROUP_LIMIT, searchPalette, splitByRanges, withNormalized,
+  filterPaletteItems, getModuleFilter, listPaletteFilters, movePaletteIndex, normalizePaletteText, PALETTE_GROUP_LIMIT,
+  searchPalette, splitByRanges, withNormalized,
 } from './paletteSearch';
 
 function item(group: PaletteItem['group'], title: string, text?: string): PaletteItem {
@@ -43,8 +44,8 @@ describe('палитра: сравнение строк', () => {
   });
 
   const rows: [query: string, found: string[]][] = [
-    ['елк', ['Алёна Ёлкина', 'Ёлка и подарки']],
-    ['ЁЛК', ['Алёна Ёлкина', 'Ёлка и подарки']],
+    ['елк', ['Ёлка и подарки', 'Алёна Ёлкина']],
+    ['ЁЛК', ['Ёлка и подарки', 'Алёна Ёлкина']],
     ['алена', ['Алёна Ёлкина']],
     ['СЕМЬЯ', ['Семья']],
     ['x99', ['Сервер X99']],
@@ -83,12 +84,18 @@ describe('палитра: порядок и группы', () => {
     expect(searchPalette(many, '')[0].results).toHaveLength(many.length);
   });
 
-  it('группы идут в постоянном порядке: команды, чаты, заметки, записи', () => {
+  it('группы идут в порядке доски: заметки, файлы, чаты, план, музыка, команды последними', () => {
     expect(titles(ITEMS, 'календарь')).toEqual([
-      ['command', ['Календарь']],
       ['note', ['Ёлка и подарки']],
+      ['command', ['Календарь']],
     ]);
     expect(searchPalette(ITEMS, 'сервер').map(({ group }) => group)).toEqual(['note', 'record']);
+    const all = [
+      item('command', 'wire команда'), item('music', 'Wire трек'), item('record', 'Wire запись'),
+      item('chat', 'Wire чат'), item('file', 'wire.conf'), item('note', 'Wire заметка'),
+    ];
+    expect(searchPalette(all, 'wire').map(({ group }) => group))
+      .toEqual(['note', 'file', 'chat', 'record', 'music', 'command']);
   });
 
   it('начало названия выше начала слова, начало слова выше середины слова, текст — ниже названия', () => {
@@ -128,6 +135,44 @@ describe('палитра: порядок и группы', () => {
     // С запросом предел действует и на команды
     const commands = Array.from({ length: 10 }, (_, i) => item('command', `Команда ${i}`));
     expect(searchPalette(commands, 'команда')[0].results).toHaveLength(PALETTE_GROUP_LIMIT);
+  });
+});
+
+describe('палитра: строки при любом запросе и фильтры', () => {
+  const always = { ...item('command', 'Новая заметка «…»'), isAlways: true };
+  const chatsSearch = { ...item('chat', 'Искать в сообщениях'), isAlways: true };
+
+  it('строка `isAlways` — только при непустом запросе, в конце своей группы и сверх предела', () => {
+    const many = Array.from({ length: PALETTE_GROUP_LIMIT + 2 }, (_, i) => item('command', `Wire ${i}`));
+    const commands = [always, ...many];
+    expect(titles([always], '')).toEqual([]);
+    const [section] = searchPalette(commands, 'wire');
+    expect(section.results).toHaveLength(PALETTE_GROUP_LIMIT + 1);
+    expect(section.results[PALETTE_GROUP_LIMIT].item.title).toBe('Новая заметка «…»');
+    expect(titles([chatsSearch, item('chat', 'Wire чат')], 'wire'))
+      .toEqual([['chat', ['Wire чат', 'Искать в сообщениях']]]);
+    // Ничего не нашлось по названию — строка всё равно видна
+    expect(titles([chatsSearch, item('chat', 'Семья')], 'нет такого')).toEqual([['chat', ['Искать в сообщениях']]]);
+  });
+
+  it('фильтр оставляет записи своего модуля, «Всё» — все', () => {
+    const list = [
+      { ...item('note', 'Wire'), module: 'notes' as const },
+      { ...item('file', 'wire.conf'), module: 'files' as const },
+      { ...item('command', 'Wire команда'), module: 'notes' as const },
+      item('command', 'Без модуля'),
+    ];
+    expect(filterPaletteItems(list, 'all')).toHaveLength(4);
+    expect(filterPaletteItems(list, 'notes').map(({ title }) => title)).toEqual(['Wire', 'Wire команда']);
+    expect(filterPaletteItems(list, 'music')).toEqual([]);
+  });
+
+  it('чипы — «Всё» и включённые модули с поиском; Tab в модуле без записей — «Всё»', () => {
+    expect(listPaletteFilters(['chats', 'plan', 'health', 'files', 'profile']))
+      .toEqual(['all', 'chats', 'plan', 'files']);
+    expect(getModuleFilter('notes')).toBe('notes');
+    expect(getModuleFilter('health')).toBe('all');
+    expect(getModuleFilter('profile')).toBe('all');
   });
 });
 
@@ -224,13 +269,23 @@ describe('палитра: записи «Плана»', () => {
       tasks: [task({
         id: 't1', name: 'Проверить работы', description: 'до пятницы', steps: [{ text: '9 класс', isDone: false }],
       })],
-      events: [event({ id: 'e1', name: 'Созвон', description: 'по серверу', day: '2026-10-09' })],
+      events: [event({
+        id: 'e1',
+        name: 'Созвон',
+        description: 'по серверу',
+        day: '2026-10-09',
+        steps: [{ text: 'Взять ноутбук', isDone: true }],
+      })],
     }), TODAY);
     expect(records.map(({ key, day }) => [key, day])).toEqual([
       ['event:e1', '2026-10-09'],
       ['task:t1', undefined],
     ]);
+    // Начало и модуль — для второй строки и чипа «План»
+    expect(records[0]).toMatchObject({ start: '10:00', module: 'plan' });
     expect(titles(records, '9 класс')).toEqual([['record', ['Проверить работы']]]);
     expect(titles(records, 'серверу')).toEqual([['record', ['Созвон']]]);
+    // Шаги события ищутся так же, как шаги задачи
+    expect(titles(records, 'ноутбук')).toEqual([['record', ['Созвон']]]);
   });
 });

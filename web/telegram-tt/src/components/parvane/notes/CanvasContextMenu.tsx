@@ -8,6 +8,7 @@ import type { PvIconName } from './PvIcon';
 import buildClassName from '../../../util/buildClassName';
 import { CANVAS_PRESET_COLORS } from './notesCanvas';
 import { CANVAS_ALIGNS } from './notesCanvasAlign';
+import { colorLabel } from './notesCanvasLook';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -100,7 +101,8 @@ const CanvasContextMenu = ({
               aria-checked={color === item}
               className={buildClassName(styles.canvasSwatch, color === item && styles.canvasSwatchOn)}
               style={`--c: ${tones[item]}`}
-              aria-label={`${lang('KnowledgeCanvasColor')} ${item}`}
+              title={colorLabel(lang, item)}
+              aria-label={colorLabel(lang, item)}
               data-color={item}
               onClick={handleColor}
             />
@@ -110,8 +112,8 @@ const CanvasContextMenu = ({
             role="radio"
             aria-checked={!color}
             className={buildClassName(styles.canvasSwatch, styles.canvasSwatchNone, !color && styles.canvasSwatchOn)}
-            title={lang('KnowledgeCanvasNoColor')}
-            aria-label={lang('KnowledgeCanvasNoColor')}
+            title={colorLabel(lang)}
+            aria-label={colorLabel(lang)}
             data-color=""
             onClick={handleColor}
           />

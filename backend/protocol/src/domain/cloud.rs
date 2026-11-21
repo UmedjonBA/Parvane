@@ -261,6 +261,8 @@ pub struct ViewNode {
     pub versions: Vec<ViewVersion>,
     /// Файл прислан собеседником (адрес); пусто — свой.
     pub from: String,
+    /// Устройство, записавшее текущее содержимое файла; у папки пусто.
+    pub device: String,
 }
 
 /// Прежняя версия файла в видимом дереве.
@@ -558,6 +560,7 @@ impl CloudState {
                 trashed_at_ms,
                 versions,
                 from: created.from.clone(),
+                device: node.body().filter(|_| file).map(|b| b.stamp.device_id.clone()).unwrap_or_default(),
             });
         }
         // Совпавшие имена соседей вне корзины: старший по созданию хранит

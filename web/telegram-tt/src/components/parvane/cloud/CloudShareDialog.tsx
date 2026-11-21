@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useRef, useState,
+  memo, useEffect, useLayoutEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { CloudResult } from '../../../api/parvane/cloudDrive';
@@ -7,10 +7,10 @@ import type { CloudRole } from '../../../api/parvane/v2/cloud';
 
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
-import { addressOfNick, validateName } from './cloudModel';
+import { addressOfNick } from './cloudModel';
+import { getPeerHandle, getPeerName } from './cloudPeople';
 import {
-  getCloudData, getCloudLinks, getCloudPlace, getContainer, linkOfSource, peerLabel, setCloudPlace, showCloudNotice,
-  unshareCloudFolder,
+  getCloudData, getCloudPlace, getContainer, setCloudPlace, showCloudNotice, unshareCloudFolder,
 } from './cloudStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -20,51 +20,45 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import RecipientPicker from '../../common/RecipientPicker';
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
-import CloudLinkBlock from './CloudLinkBlock';
 
 import kit from '../notes/PvKit.module.scss';
+import seg from '../notes/PvSegment.module.scss';
 import styles from './CloudSheets.module.scss';
 
 type OwnProps = {
   isOpen: boolean;
-  // Не задан — создание новой совместной папки
   containerId?: string;
+  // Телефон (доска `PhFilesMore`): экран на весь экран, приглашённые отдельным разделом
+  isNarrow?: boolean;
   onChanged: () => Promise<unknown>;
   onClose: NoneToVoidFunction;
 };
 
 type ShareRole = Exclude<CloudRole, 'owner'>;
+// Чип роли участника — меню «Правка / Просмотр / Убрать из папки» (у приглашённого — «Отменить приглашение»)
+type RoleChoice = ShareRole | 'remove';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 const USER_CHAT_TYPES = ['users'] as const;
-const SHARE_ROLES: ShareRole[] = ['reader', 'editor'];
+const SHARE_ROLES: ShareRole[] = ['editor', 'reader'];
 const AVATAR_TONES = ['orange', 'purple', 'red', 'aqua', 'green'];
 // Пока окно открыто и есть ждущие ответа — их список перечитывается (получатель принимает у себя)
 const PENDING_POLL_MS = 5000;
 const NO_PENDING: string[] = [];
 
-function nameOf(address: string) {
-  return peerLabel(address);
-}
-
 function initialOf(name: string) {
   return (Array.from(name)[0] || '').toUpperCase();
 }
 
-// Шторка доступа к совместной папке: создание, участники и их права «Просмотр / Правка» (владелец),
-// выход (участник). На приглашение отвечают в строке списка. Сервер видит состав, но не имена и не
-// содержимое файлов.
+// Экран доступа к совместной папке (доски `PhFilesMore`, `DkFilesDialogs`): ник и роль нового участника, участники
+// с ролью-чипом (меню ролей и «Убрать из папки»), приглашённые; «Сделать личной» / «Закрыть доступ», выход
+// (участник). На приглашение отвечают в строке списка. Сервер видит состав, но не имена и не содержимое файлов.
 const CloudShareDialog = ({
-  isOpen, containerId, onChanged, onClose,
+  isOpen, containerId, isNarrow, onChanged, onClose,
 }: OwnProps) => {
   const lang = useLang();
   const data = useDerivedState(getCloudData);
-  const links = useDerivedState(getCloudLinks);
-  const [createdId, setCreatedId] = useState<string>();
-  const [name, setName] = useState('');
-  const [hasTried, setHasTried] = useState(false);
   const [newRole, setNewRole] = useState<ShareRole>('reader');
   const [isBusy, markBusy, unmarkBusy] = useFlag();
   const [isPickerOpen, openPicker, closePicker] = useFlag();
@@ -74,14 +68,11 @@ const CloudShareDialog = ({
   const [nickError, setNickError] = useState<string>();
   // Приглашённые, ещё не принявшие приглашение (сервер владельца); `undefined` — не известно, все — участники
   const [pending, setPending] = useState<string[]>();
-  const nameRef = useRef<HTMLInputElement>();
   const nickRef = useRef<HTMLInputElement>();
 
-  useEffect(() => {
+  // Окно готовится к вводу в кадре появления
+  useLayoutEffect(() => {
     if (!isOpen) return;
-    setCreatedId(undefined);
-    setName('');
-    setHasTried(false);
     setNewRole('reader');
     setConfirm(undefined);
     setHasNick(false);
@@ -89,7 +80,7 @@ const CloudShareDialog = ({
     if (nickRef.current) nickRef.current.value = '';
   }, [isOpen, containerId]);
 
-  const id = containerId || createdId;
+  const id = containerId;
   const container = getContainer(id, data);
   const isOwner = container?.role === 'owner';
   const memberCount = container?.members.length || 0;
@@ -133,30 +124,16 @@ const CloudShareDialog = ({
     }
   };
 
-  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setName(e.target.value);
-  });
-
-  const handleCreate = useLastCallback(async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const value = (nameRef.current?.value ?? name).trim();
-    setName(value);
-    setHasTried(true);
-    if (validateName(value)) return;
-    const result = await run('parvaneCloudCreateShared', { name: value }) as
-      CloudResult<{ container: string }> | undefined;
-    if (result?.ok) setCreatedId(result.container);
+  const invite = (target: { chatId?: string; user?: string }) => run('parvaneCloudShare', {
+    container: id,
+    ...target,
+    role: newRole,
+    inviteText: lang('ParvaneCloudInviteText', { name: folderName, role: roleTitle(newRole).toLocaleLowerCase() }),
   });
 
   const handlePick = useLastCallback((chatId: string) => {
     closePicker();
-    const roleText = roleTitle(newRole).toLocaleLowerCase();
-    void run('parvaneCloudShare', {
-      container: id,
-      chatId,
-      role: newRole,
-      inviteText: lang('ParvaneCloudInviteText', { name: folderName, role: roleText }),
-    });
+    void invite({ chatId });
   });
 
   const handleNickInput = useLastCallback((e: React.FormEvent<HTMLInputElement>) => {
@@ -164,12 +141,14 @@ const CloudShareDialog = ({
     setNickError(undefined);
   });
 
-  // «Ник собеседника» (доска `PhFilesMore`): приглашение по нику без чата с ним; ник своего сервера — `@nick`
+  // «Ник собеседника»: приглашение по нику без чата с ним; ник своего сервера — `@nick`. Пустое поле на телефоне —
+  // «Из контактов»
   const handleNickSubmit = useLastCallback(async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = nickRef.current?.value || '';
     if (!text.trim()) {
-      openPicker();
+      if (isNarrow) openPicker();
+      else nickRef.current?.focus();
       return;
     }
     const selfDomain = getCloudData()?.containers.find((c) => c.kind === 'root')?.owner.split('@')[1];
@@ -187,13 +166,7 @@ const CloudShareDialog = ({
       setNickError(lang('ParvaneCloudNickNotFound'));
       return;
     }
-    const roleText = roleTitle(newRole).toLocaleLowerCase();
-    const result = await run('parvaneCloudShare', {
-      container: id,
-      chatId,
-      role: newRole,
-      inviteText: lang('ParvaneCloudInviteText', { name: folderName, role: roleText }),
-    });
+    const result = await invite({ chatId });
     if (result?.ok) {
       if (nickRef.current) nickRef.current.value = '';
       setHasNick(false);
@@ -202,17 +175,23 @@ const CloudShareDialog = ({
     }
   });
 
-  const handleNewRole = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setNewRole(e.currentTarget.value as ShareRole);
+  const handleNewRole = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setNewRole(e.currentTarget.dataset.newRole as ShareRole);
   });
 
   const handleMemberRole = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const user = e.currentTarget.dataset.user!;
+    const choice = e.currentTarget.value as RoleChoice;
+    if (choice === 'remove') {
+      void run('parvaneCloudUnshare', { container: id, user });
+      return;
+    }
     void run('parvaneCloudShare', {
-      container: id, user: e.currentTarget.dataset.user, role: e.currentTarget.value, inviteText: '',
+      container: id, user, role: choice, inviteText: '',
     });
   });
 
-  const handleRemoveMember = (user: string) => () => {
+  const handleCancelInvite = (user: string) => () => {
     void run('parvaneCloudUnshare', { container: id, user });
   };
 
@@ -238,17 +217,62 @@ const CloudShareDialog = ({
     onClose();
   });
 
-  const nameProblem = hasTried ? validateName(name.trim()) : undefined;
-  const nameError = !nameProblem ? undefined
-    : nameProblem === 'empty' ? lang('ParvaneCloudErrorNameEmpty')
-      : nameProblem === 'too-long' ? lang('ParvaneCloudErrorNameLong') : lang('ParvaneCloudErrorNameChars');
+  // Телефон — «Сделать личной» (`PhFilesMore`), компьютер — «Закрыть доступ» (`DkFilesDialogs`)
+  const privateKey = isNarrow ? 'ParvaneCloudMakePersonal' : 'ParvaneCloudMakePrivate';
+
+  function renderRoleChip(user: string, role: CloudRole, isInvited?: boolean) {
+    const name = getPeerName(user);
+    return (
+      <select
+        className={buildClassName(styles.role, styles.roleChip)}
+        value={role === 'editor' ? 'editor' : 'reader'}
+        disabled={isBusy}
+        aria-label={lang('ParvaneCloudRoleChange', { name })}
+        data-user={user}
+        onChange={handleMemberRole}
+      >
+        {/* Выбор — `selected` у пункта: `value` у `select` Teact ставит до пунктов, и выделялся первый */}
+        {SHARE_ROLES.map((r) => (
+          <option key={r} value={r} selected={r === (role === 'editor' ? 'editor' : 'reader')}>{roleTitle(r)}</option>
+        ))}
+        <option value="remove">
+          {lang(isInvited ? 'ParvaneCloudInviteCancelFull' : 'ParvaneCloudRemoveFromFolder')}
+        </option>
+      </select>
+    );
+  }
+
+  function renderMember(user: string, role: CloudRole, index: number, isInvited?: boolean) {
+    const name = getPeerName(user);
+    return (
+      <div
+        key={user}
+        className={styles.member}
+        role="listitem"
+        data-member={isInvited ? undefined : user}
+        data-invited={isInvited ? user : undefined}
+        data-role={role}
+      >
+        <span className={styles.avatar} style={`--c: var(--pv-${AVATAR_TONES[index % AVATAR_TONES.length]})`}>
+          {initialOf(name)}
+        </span>
+        <span className={styles.memberText}>
+          <span className={styles.memberName} dir="auto">{name}</span>
+          <span className={styles.memberSub} dir="ltr">
+            {isInvited ? `${getPeerHandle(user)} · ${lang('ParvaneCloudInvitedMark')}` : getPeerHandle(user)}
+          </span>
+        </span>
+        {renderRoleChip(user, role, isInvited)}
+      </div>
+    );
+  }
 
   const roleHint = (
     <div className={styles.note}>
       <span className={styles.noteStrong}>{roleTitle('editor')}</span>
-      {` — ${lang('ParvaneCloudRoleEditorHint')}. `}
+      {` — ${lang('ParvaneCloudRoleEditorNote')}. `}
       <span className={styles.noteStrong}>{roleTitle('reader')}</span>
-      {` — ${lang('ParvaneCloudRoleReaderHint')}.`}
+      {` — ${lang('ParvaneCloudRoleReaderNote')}.`}
     </div>
   );
 
@@ -256,35 +280,11 @@ const CloudShareDialog = ({
     <>
       <PvSheet
         isOpen={isOpen && !isPickerOpen}
-        title={container ? lang('ParvaneCloudShareTitle', { name: folderName }) : lang('ParvaneCloudNewShared')}
-        className={buildClassName(styles.narrow, container && styles.full)}
+        title={lang('ParvaneCloudShareTitle', { name: folderName })}
+        className={buildClassName(styles.narrow, styles.full)}
+        startClose={isNarrow ? 'back' : undefined}
         onClose={onClose}
       >
-        {!container && !id && (
-          <form className={styles.form} onSubmit={handleCreate}>
-            <label className={styles.field}>
-              {lang('ParvaneCloudFolderName')}
-              <input
-                ref={nameRef}
-                id="parvane-cloud-shared-name"
-                className={kit.input}
-                value={name}
-                aria-label={lang('ParvaneCloudFolderName')}
-                aria-invalid={Boolean(nameError)}
-                autoComplete="off"
-                onChange={handleNameChange}
-              />
-            </label>
-            {nameError && <div className={kit.fieldError} role="alert">{nameError}</div>}
-            <div className={styles.note}>{lang('KnowledgeFilesShareNote')}</div>
-            <div className={styles.buttons}>
-              <button type="button" className={kit.btn} onClick={onClose}>{lang('Cancel')}</button>
-              <button type="submit" className={buildClassName(kit.btn, kit.btnAcc)} disabled={isBusy}>
-                {lang('ParvaneCloudCreate')}
-              </button>
-            </div>
-          </form>
-        )}
         {container && (
           <div className={styles.share} data-container-id={container.id} data-role={container.role}>
             {isOwner && (
@@ -304,88 +304,72 @@ const CloudShareDialog = ({
                       enterKeyHint="send"
                       onInput={handleNickInput}
                     />
-                    <button type="submit" className={kit.btn} disabled={isBusy} data-share-nick-submit>
-                      {lang(hasNick ? 'ParvaneCloudNickInvite' : 'ParvaneCloudFromContacts')}
+                    {!isNarrow && (
+                      <span className={seg.root} role="group" aria-label={lang('KnowledgeFilesRole')}>
+                        {SHARE_ROLES.map((role) => (
+                          <button
+                            key={role}
+                            type="button"
+                            className={buildClassName(seg.item, newRole === role && seg.itemOn)}
+                            aria-pressed={newRole === role}
+                            data-new-role={role}
+                            onClick={handleNewRole}
+                          >
+                            {roleTitle(role)}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                    <button
+                      type="submit"
+                      className={buildClassName(kit.btn, !isNarrow && kit.btnAcc)}
+                      disabled={isBusy}
+                      data-share-nick-submit
+                    >
+                      {lang(hasNick || !isNarrow ? 'ParvaneCloudNickInvite' : 'ParvaneCloudFromContacts')}
                     </button>
                   </span>
                 </label>
                 {nickError && <div className={kit.fieldError} role="alert">{nickError}</div>}
+                {!isNarrow && (
+                  <button type="button" className={styles.linkPlain} data-share-contacts onClick={openPicker}>
+                    {lang('ParvaneCloudFromContacts')}
+                  </button>
+                )}
               </form>
             )}
-            {isOwner && (
-              <div className={styles.shareAdd}>
-                <select
-                  className={buildClassName(styles.role, styles.shareRole)}
-                  value={newRole}
-                  aria-label={lang('KnowledgeFilesRole')}
-                  data-new-role
-                  onChange={handleNewRole}
-                >
-                  {SHARE_ROLES.map((role) => <option key={role} value={role}>{roleTitle(role)}</option>)}
-                </select>
-                <button
-                  type="button"
-                  className={buildClassName(kit.btn, kit.btnAcc)}
-                  disabled={isBusy}
-                  onClick={openPicker}
-                >
-                  {lang('ParvaneCloudShareAdd')}
-                </button>
-              </div>
+            {isNarrow && (
+              <h3 className={styles.caption}>
+                {lang('ParvaneCloudMembers', { count: (isOwner ? accepted.length : container.members.length) + 1 })}
+              </h3>
             )}
-            <h3 className={styles.caption}>
-              {lang('ParvaneCloudMembers', { count: (isOwner ? accepted.length : container.members.length) + 1 })}
-            </h3>
             <div className={styles.members} role="list">
               <div className={styles.member} role="listitem">
-                <span className={styles.avatar}>{initialOf(nameOf(container.owner))}</span>
+                <span className={styles.avatar}>
+                  {isOwner ? lang('ParvaneCloudMeShort') : initialOf(getPeerName(container.owner))}
+                </span>
                 <span className={styles.memberText}>
                   <span className={styles.memberName} dir="auto">
-                    {isOwner ? lang('ParvaneCloudYou') : nameOf(container.owner)}
+                    {isOwner ? lang('ParvaneCloudYou') : getPeerName(container.owner)}
                   </span>
-                  <span className={styles.memberSub}>{lang('ParvaneCloudFolderOwner')}</span>
+                  {(isNarrow || !isOwner) && (
+                    <span className={styles.memberSub}>
+                      {isOwner ? lang('ParvaneCloudFolderOwner') : getPeerHandle(container.owner)}
+                    </span>
+                  )}
                 </span>
-                <span className={styles.role}>{roleTitle('owner')}</span>
+                <span className={styles.role} aria-label={lang('ParvaneCloudRoleOwnerLabel')}>
+                  {roleTitle('owner')}
+                </span>
               </div>
-              {isOwner && accepted.map((m, index) => (
-                <div
-                  key={m.user}
-                  className={styles.member}
-                  role="listitem"
-                  data-member={m.user}
-                  data-role={m.role}
-                >
-                  <span className={styles.avatar} style={`--c: var(--pv-${AVATAR_TONES[index % AVATAR_TONES.length]})`}>
-                    {initialOf(nameOf(m.user))}
-                  </span>
-                  <span className={styles.memberText}>
-                    <span className={styles.memberName} dir="auto">{nameOf(m.user)}</span>
-                    <span className={styles.memberSub} dir="ltr">{`@${m.user}`}</span>
-                  </span>
-                  <select
-                    className={styles.role}
-                    value={m.role === 'editor' ? 'editor' : 'reader'}
-                    disabled={isBusy}
-                    aria-label={`${lang('KnowledgeFilesRole')}: ${nameOf(m.user)}`}
-                    data-user={m.user}
-                    onChange={handleMemberRole}
-                  >
-                    {SHARE_ROLES.map((role) => <option key={role} value={role}>{roleTitle(role)}</option>)}
-                  </select>
-                  <button
-                    type="button"
-                    className={kit.ib}
-                    disabled={isBusy}
-                    aria-label={lang('ParvaneCloudRemoveMember')}
-                    onClick={handleRemoveMember(m.user)}
-                  >
-                    <PvIcon name="x" isSmall />
-                  </button>
-                </div>
+              {isOwner && accepted.map((m, index) => renderMember(m.user, m.role, index))}
+              {/* Компьютер (`DkFilesDialogs`): приглашённый — в общем списке с пометкой «приглашён» */}
+              {isOwner && !isNarrow && invited.map((m, index) => (
+                renderMember(m.user, m.role, accepted.length + index, true)
               ))}
               {!isOwner && container.role && (
                 <div className={styles.member} role="listitem">
-                  <span className={styles.avatar} style="--c: var(--pv-purple)">{lang('ParvaneCloudYou')[0]}</span>
+                  <span className={styles.avatar} style="--c: var(--pv-purple)">{lang('ParvaneCloudMeShort')}</span>
                   <span className={styles.memberText}>
                     <span className={styles.memberName}>{lang('ParvaneCloudYou')}</span>
                   </span>
@@ -396,7 +380,9 @@ const CloudShareDialog = ({
             {isOwner && !container.members.length && (
               <div className={styles.note}>{lang('ParvaneCloudNoMembers')}</div>
             )}
-            {isOwner && invited.length > 0 && (
+            {roleHint}
+            {/* Телефон (`PhFilesMore`): приглашённые — отдельным разделом с «Отменить» */}
+            {isOwner && isNarrow && invited.length > 0 && (
               <>
                 <h3 className={styles.caption}>{lang('ParvaneCloudInvitations')}</h3>
                 <div className={styles.members} role="list" data-invitations>
@@ -409,7 +395,7 @@ const CloudShareDialog = ({
                       data-role={m.role}
                     >
                       <span className={styles.memberText}>
-                        <span className={styles.memberName} dir="ltr">{`@${nameOf(m.user)}`}</span>
+                        <span className={styles.memberName} dir="ltr">{getPeerHandle(m.user)}</span>
                         <span className={styles.memberSub}>
                           {`${lang('ParvaneCloudInviteWaiting')} · ${roleTitle(m.role)}`}
                         </span>
@@ -419,7 +405,7 @@ const CloudShareDialog = ({
                         className={buildClassName(styles.textDanger)}
                         disabled={isBusy}
                         data-invite-cancel
-                        onClick={handleRemoveMember(m.user)}
+                        onClick={handleCancelInvite(m.user)}
                       >
                         {lang('ParvaneCloudInviteCancel')}
                       </button>
@@ -428,15 +414,6 @@ const CloudShareDialog = ({
                 </div>
               </>
             )}
-            {roleHint}
-            {/* Ссылка для людей без аккаунта (spec 022): снимок всей папки, создаёт владелец либо редактор */}
-            {(isOwner || container.role === 'editor') && (
-              <CloudLinkBlock
-                link={linkOfSource(links, { container: container.id })}
-                source={{ container: container.id, name: folderName }}
-                hasHeading
-              />
-            )}
             <span className={styles.space} />
             <div className={buildClassName(styles.buttons, styles.buttonsColumn)}>
               {isOwner && (
@@ -444,9 +421,10 @@ const CloudShareDialog = ({
                   type="button"
                   className={buildClassName(kit.btn, styles.buttonsStart)}
                   disabled={isBusy}
+                  data-share-private
                   onClick={() => setConfirm('private')}
                 >
-                  {lang('ParvaneCloudMakePrivate')}
+                  {lang(privateKey)}
                 </button>
               )}
               {isOwner && (
@@ -469,7 +447,7 @@ const CloudShareDialog = ({
                   {lang('ParvaneCloudLeave')}
                 </button>
               )}
-              <button type="button" className={buildClassName(kit.btn, kit.hideM)} onClick={onClose}>
+              <button type="button" className={buildClassName(kit.btn, kit.btnAcc, kit.hideM)} onClick={onClose}>
                 {lang('Done')}
               </button>
             </div>
@@ -488,7 +466,7 @@ const CloudShareDialog = ({
       <ConfirmDialog
         isOpen={Boolean(confirm)}
         title={lang(
-          confirm === 'private' ? 'ParvaneCloudMakePrivate'
+          confirm === 'private' ? privateKey
             : confirm === 'remove' ? 'ParvaneCloudStopSharing' : 'ParvaneCloudLeave',
         )}
         text={lang(
@@ -496,7 +474,7 @@ const CloudShareDialog = ({
             : confirm === 'remove' ? 'ParvaneCloudStopSharingConfirm' : 'ParvaneCloudLeaveConfirm',
         )}
         confirmLabel={lang(
-          confirm === 'private' ? 'ParvaneCloudMakePrivate'
+          confirm === 'private' ? privateKey
             : confirm === 'remove' ? 'ParvaneCloudDelete' : 'ParvaneCloudLeave',
         )}
         confirmIsDestructive={confirm !== 'private'}

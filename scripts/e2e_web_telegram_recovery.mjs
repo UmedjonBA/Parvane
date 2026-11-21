@@ -66,6 +66,8 @@ async function openStartPage(context) {
   });
   await page.addInitScript((url) => {
     localStorage.setItem('parvane:gateway', url);
+    // Экран первого запуска (выбор модулей) пройден — его проверяет `e2e_web_first_run.mjs`
+    if (localStorage.getItem('parvane:modules-first-run') === null) localStorage.setItem('parvane:modules-first-run', 'shown');
   }, gatewayUrl);
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   const startScreen = page.locator('.Transition_slide-active > #auth-phone-number-form');

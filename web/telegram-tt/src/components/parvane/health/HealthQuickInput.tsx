@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useRef, useState,
+  memo, useLayoutEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
@@ -15,14 +15,23 @@ import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
 
 type OwnProps = {
-  // Заготовка строки и просьба поставить курсор (кнопка «+», команды поиска)
+  // Заготовка строки и просьба поставить курсор (кнопка «+», команды поиска, примеры)
   request?: { text?: string };
-  onRequestHandled: NoneToVoidFunction;
+  placeholder?: string;
+  // Поле в карточке подробного экрана: разбор под полем мелкими плашками
+  isCompact?: boolean;
+  // Первое открытие: «Как понято» строками с «Сохранить» и «Исправить» (доска `ZdHealthX`)
+  isFirst?: boolean;
+  onRequestHandled?: NoneToVoidFunction;
+  onSaved?: NoneToVoidFunction;
 };
 
-// Parvane (spec 038, HEALTH-2): запись одной строкой. Под полем — как движок понял ввод, до сохранения:
-// что запишется и что не разобрано. Enter сохраняет понятое
-const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
+// Parvane (spec 038, 041, HEALTH-2): запись одной строкой. Как движок понял ввод — до сохранения: одна запись —
+// плашкой с галочкой и «Enter» в поле справа (доска `DeskHealth`), несколько — плашками под полем. Enter сохраняет
+// понятое
+const HealthQuickInput = ({
+  request, placeholder, isCompact, isFirst, onRequestHandled, onSaved,
+}: OwnProps) => {
   const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
   const [text, setText] = useState('');
@@ -30,11 +39,12 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
   const [hasFailed, setHasFailed] = useState(false);
   const { parsed } = useHealthParse(text);
 
-  useEffect(() => {
+  // Заготовка ставится в кадре появления — иначе ввод в этот кадр терялся
+  useLayoutEffect(() => {
     if (!request) return;
     if (request.text !== undefined) setText(request.text);
     inputRef.current?.focus();
-    onRequestHandled();
+    onRequestHandled?.();
   }, [request, onRequestHandled]);
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -42,8 +52,8 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
     setHasFailed(false);
   });
 
-  const handleSubmit = useLastCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = useLastCallback(async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (isSaving || !text.trim()) return;
     setIsSaving(true);
     // Сохраняется разбор именно этой строки, а не тот, что успел показаться
@@ -56,33 +66,79 @@ const HealthQuickInput = ({ request, onRequestHandled }: OwnProps) => {
     }
     // Непонятое остаётся в поле — его можно поправить и записать ещё раз
     setText(result!.unparsed.join(' '));
+    onSaved?.();
   });
 
-  const hasEntries = Boolean(parsed?.entries.length);
+  const handleSave = useLastCallback(() => {
+    void handleSubmit();
+  });
+
+  const handleFix = useLastCallback(() => {
+    inputRef.current?.focus();
+  });
+
+  const entriesCount = parsed?.entries.length || 0;
+  const isInline = !isCompact && !isFirst && entriesCount === 1 && !parsed?.unparsed.length && !hasFailed;
+  const isShown = Boolean(text.trim());
+
+  function renderPreview() {
+    if (isFirst) {
+      return (
+        <div className={styles.firstParsed} data-health-preview>
+          <div className={kit.caps}>{lang('HealthFirstParsed')}</div>
+          {parsed && <HealthParsedChips parsed={parsed} isRows />}
+          {hasFailed && <span className={styles.quickError}>{lang('HealthQuickFailed')}</span>}
+          <div className={styles.cardButtons}>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, kit.btnAcc)}
+              disabled={!entriesCount || isSaving}
+              data-health-quick-save
+              onClick={handleSave}
+            >
+              {lang('Save')}
+            </button>
+            <button type="button" className={kit.btn} onClick={handleFix}>{lang('HealthFirstFix')}</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div
+        className={buildClassName(styles.quickPreview, isInline && styles.quickPreviewInline)}
+        role="status"
+        data-health-preview
+      >
+        {parsed && <HealthParsedChips parsed={parsed} withEnter={isInline} />}
+        {Boolean(entriesCount) && !isSaving && !isInline && (
+          <span className={kit.muted}>{lang('HealthQuickEnter')}</span>
+        )}
+        {parsed && !entriesCount && !parsed.unparsed.length && (
+          <span className={kit.muted}>{lang('HealthQuickNothing')}</span>
+        )}
+        {hasFailed && <span className={styles.quickError}>{lang('HealthQuickFailed')}</span>}
+      </div>
+    );
+  }
 
   return (
-    <form className={styles.quick} data-health-quick onSubmit={handleSubmit}>
+    <form
+      className={buildClassName(styles.quick, isInline && styles.quickWithInline)}
+      data-health-quick
+      onSubmit={handleSubmit}
+    >
       <input
         ref={inputRef}
         className={buildClassName(kit.input, styles.quickInput)}
         type="text"
         value={text}
-        placeholder={lang('HealthQuickPlaceholder')}
+        placeholder={placeholder || lang('HealthQuickPlaceholder')}
         aria-label={lang('HealthQuickLabel')}
         autoComplete="off"
         enterKeyHint="done"
         onChange={handleChange}
       />
-      {Boolean(text.trim()) && (
-        <div className={styles.quickPreview} role="status" data-health-preview>
-          {parsed && <HealthParsedChips parsed={parsed} />}
-          {hasEntries && !isSaving && <span className={kit.muted}>{lang('HealthQuickEnter')}</span>}
-          {parsed && !hasEntries && !parsed.unparsed.length && (
-            <span className={kit.muted}>{lang('HealthQuickNothing')}</span>
-          )}
-          {hasFailed && <span className={styles.quickError}>{lang('HealthQuickFailed')}</span>}
-        </div>
-      )}
+      {isShown && renderPreview()}
     </form>
   );
 };

@@ -31,8 +31,12 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const ADMIN_KEY = path.join(ROOT, 'scripts/e2e_report_admin.key');
 const ESCROW_ADMIN = path.join(ROOT, 'backend/target/debug/escrow_admin');
 
-// Окно жалобы одной формой: причина чипом, комментарий, адресат (`admins` | `server`), «Отправить»
-async function fileReport(page, sourceText, { reason, comment, target, targets }) {
+// Окно жалобы одной формой: причина чипом, комментарий, адресат (`admins` | `server`), «Отправить»;
+// `hideAuthor` — галочка «Скрыть у меня сообщения этого участника» (REPORT-3; есть только у сообщения группы,
+// включена по умолчанию, как на доске `XdChat`): `false` — снять, `undefined` — галочки быть не должно
+async function fileReport(page, sourceText, {
+  reason, comment, target, targets, hideAuthor,
+}) {
   await openMessageMenu(page, sourceText);
   await page.getByRole('menuitem', { name: 'Report' }).click();
   const modal = page.locator('.Modal .modal-dialog').filter({ has: page.locator('[data-report-send]') }).first();
@@ -44,7 +48,24 @@ async function fileReport(page, sourceText, { reason, comment, target, targets }
     assert.deepEqual(shown, targets, 'адресаты жалобы');
   }
   if (target) await modal.locator(`[data-report-target="${target}"]`).click();
+  const hide = modal.locator('[data-report-hide-author]');
+  if (hideAuthor === undefined) {
+    assert.equal(await hide.count(), 0, 'галочка «скрыть сообщения участника» вне группы');
+  } else {
+    assert.equal(await hide.isChecked(), true, 'галочка «скрыть сообщения участника» включена по умолчанию');
+    if (!hideAuthor) await hide.uncheck();
+  }
   await modal.locator('[data-report-send]').click();
+}
+
+// Сообщения участника скрыты у себя / снова показаны — вызовом провайдера (как «Показать» в уведомлении)
+async function setMemberHidden(page, groupTitle, username, isHidden) {
+  return page.evaluate(async ({ t, who, hidden }) => {
+    const global = window.__parvaneGetGlobal();
+    const chat = Object.values(global.chats.byId).find((candidate) => candidate.title === t);
+    const user = Object.values(global.users.byId).find((u) => u.usernames?.some(({ username }) => username === who));
+    return window.__parvaneDiagCallApi('parvaneMemberHide', { chatId: chat?.id, userId: user?.id, isHidden: hidden });
+  }, { t: groupTitle, who: username, hidden: isHidden });
 }
 
 // Профиль группы → Edit → «Group Type» → «Жалобы участников»
@@ -89,13 +110,36 @@ try {
 
   // ── Жалобы на сообщения группы: двое на одно, одна на другое; адресат по умолчанию — админы ──
   await fileReport(c, spam, {
-    reason: 'spam', comment: `реклама ${suffix}`, targets: ['admins', 'server'],
+    reason: 'spam', comment: `реклама ${suffix}`, targets: ['admins', 'server'], hideAuthor: false,
   });
   await expectToast(c, 'Report sent. Thank you!');
-  await fileReport(d, spam, { reason: 'fraud', comment: '', target: 'admins' });
+  // Дэйв оставляет галочку: сообщения Мэллори у него скрыты (оба), «Показать» в уведомлении возвращает их
+  await fileReport(d, spam, {
+    reason: 'fraud', comment: '', target: 'admins', hideAuthor: true,
+  });
   await expectToast(d, 'Report sent. Thank you!');
-  await fileReport(c, spam2, { reason: 'insult', comment: '', target: 'admins' });
+  await expectToast(d, "This member's messages are hidden for you");
+  for (const text of [spam, spam2]) {
+    await findMessageContainer(d, text).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS })
+      .catch(() => assert.fail(`сообщение «${text}» скрытого участника осталось у Дэйва`));
+  }
+  await d.locator('.Notification-container').getByRole('button', { name: 'Show' }).first().click();
+  await findMessage(d, spam2).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => assert.fail('«Показать» не вернуло сообщения участника'));
+  // Скрытие — личное состояние: переживает перезагрузку и не трогает других участников
+  assert.equal(await setMemberHidden(d, title, address('mallory').split('@')[0], true), true, 'скрыть вызовом');
+  await findMessageContainer(d, spam).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await relogin(d, PASSWORD);
+  await openGroupChatByTitle(d, title);
+  await d.locator('.MiddleHeader').getByText(title).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await d.waitForTimeout(1500);
+  assert.equal(await findMessage(d, spam2).count(), 0, 'скрытые сообщения вернулись после перезагрузки');
+  await findMessage(c, spam2).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await fileReport(c, spam2, {
+    reason: 'insult', comment: '', target: 'admins', hideAuthor: false,
+  });
   await expectToast(c, 'Report sent. Thank you!');
+  console.log('OK: «Скрыть у меня сообщения этого участника» — скрывает, «Показать» возвращает, помнится');
   await openPrivateChatStrict(a, address('carol'));
   const card = a.locator('[data-mod-report="spam"]').last();
   await card.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -114,6 +158,11 @@ try {
   assert((await itemOf(reports, spam).locator('[data-report-meta]').innerText()).includes('2 reports'), 'двое пожаловались');
   assert((await itemOf(reports, spam).innerText()).includes(`реклама ${suffix}`), 'комментарий в списке');
   assert.equal(await itemOf(reports, spam2).locator('[data-report-reason]').getAttribute('data-report-reason'), 'insult');
+  // «участник с …» (RpChat): дата вступления автора из журнала группы — сегодняшняя
+  const sinceToday = new Date().toLocaleDateString('en-US', { day: 'numeric', month: 'long' });
+  const meta = await itemOf(reports, spam).locator('[data-report-meta]').innerText();
+  assert(meta.includes('member since '), `нет «участник с …»: ${meta}`);
+  assert(meta.includes(sinceToday) || meta.includes(sinceToday.split(' ').reverse().join(' ')), `дата вступления: ${meta}`);
   console.log('OK: список жалоб у админа сведён по сообщениям');
 
   // «Отклонить» закрывает жалобу; закрытая не возвращается после перезагрузки (журнал личного состояния)
@@ -155,7 +204,7 @@ try {
   await findMessage(c, `private-spam-${suffix}`).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Личный чат: адресат один — администратор сервера
   await fileReport(c, `private-spam-${suffix}`, {
-    reason: 'fraud', comment: `не тот, за кого себя выдаёт ${suffix}`, targets: ['server'],
+    reason: 'fraud', comment: `не тот, за кого себя выдаёт ${suffix}`, targets: ['server'], hideAuthor: undefined,
   });
   await expectToast(c, 'Report sent. Thank you!');
 

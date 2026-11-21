@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
 
-import { consumePlannerAddRequest, getPlannerAddRequest } from '../../../util/parvaneSection';
+import { consumePlannerAddRequest, getPlannerAddRequest, requestPlannerMore } from '../../../util/parvaneSection';
 import { toDayKey } from './plannerModel';
 import {
   getHasQuickLines, getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
@@ -19,9 +19,10 @@ function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
 }
 
-// Окно ввода текстом «Плана» вне самого «Плана»: раздел («Знания») ставит этот компонент у себя, и запрос
-// `requestPlannerAddInPlace` открывает окно поверх него. Запись добавляется, раздел остаётся прежним.
-// Полной формы («Подробнее») здесь нет — она живёт в «Плане»
+// Окно «Новая запись» вне самого «Плана» (доска `DeskOverlays`): смонтировано в `Main`, запрос
+// `requestPlannerAddInPlace` (Ctrl+N, «Запланировать» в заметке) открывает окно поверх открытого модуля. Запись
+// добавляется, раздел остаётся прежним; «Подробнее» переходит в «План» к полной форме. Данные «Плана» читаются
+// при первом запросе, а не при запуске приложения
 const PlannerQuickHost = () => {
   const state = useDerivedState(getPlannerState);
   const isLoaded = useDerivedState(getIsPlannerLoaded);
@@ -34,9 +35,10 @@ const PlannerQuickHost = () => {
   const [text, setText] = useState('');
   const [today, setToday] = useState(() => toDayKey(new Date()));
 
+  const isRequested = Boolean(request?.isInPlace);
   useEffect(() => {
-    void loadPlanner(currentUserId);
-  }, [currentUserId]);
+    if (isRequested) void loadPlanner(currentUserId);
+  }, [isRequested, currentUserId]);
 
   useEffect(() => {
     if (!request?.isInPlace || !isLoaded) return;
@@ -52,6 +54,11 @@ const PlannerQuickHost = () => {
     close();
   });
 
+  const handleMore = useLastCallback(() => {
+    close();
+    requestPlannerMore();
+  });
+
   return (
     <PlannerQuickInput
       isOpen={isOpen}
@@ -65,6 +72,7 @@ const PlannerQuickHost = () => {
       tasks={state.tasks}
       events={state.events}
       onCreated={handleCreated}
+      onMore={handleMore}
       onClose={close}
     />
   );

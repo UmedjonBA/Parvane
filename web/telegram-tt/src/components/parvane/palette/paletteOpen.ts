@@ -1,24 +1,20 @@
 import type { PaletteRecordKind } from './paletteRecords';
+import type { PaletteFilter } from './paletteSearch';
 
 import { openPlannerView } from '../../../util/parvaneSection';
 import { createSignal } from '../../../util/signals';
 
-// Parvane: общий поиск (палитра) — открыт ли он. Открывают Ctrl+K и кнопка «Поиск» боковой панели;
-// лупа в шапке «Плана» открывает её только по записям плана
+// Parvane: общий поиск (палитра) — открыт ли он и чем сужена выдача. Открывают Ctrl+K, «/», кнопка «Общий поиск»
+// боковой панели и значок поиска в шапке «Чатов» на телефоне
 const [getIsPaletteOpen, setIsPaletteOpen] = createSignal(false);
-// Что ищет открытая палитра: всё либо только записи «Плана» (лупа в шапке «Плана» ищет по разделу)
-export type PaletteScope = 'all' | 'plan';
-const [getPaletteScope, setPaletteScope] = createSignal<PaletteScope>('all');
+// Чип выдачи: «Всё» либо модуль (чипы на телефоне, Tab на компьютере)
+const [getPaletteFilter, setPaletteFilter] = createSignal<PaletteFilter>('all');
 
-export { getIsPaletteOpen, getPaletteScope };
+export { getIsPaletteOpen, getPaletteFilter, setPaletteFilter };
 
-export function openPalette() {
-  setPaletteScope('all');
-  setIsPaletteOpen(true);
-}
-
-export function openPlanSearch() {
-  setPaletteScope('plan');
+/** Открыть общий поиск; без фильтра — «Всё». Годится и как обработчик нажатия (событие не читается). */
+export function openPalette(filter?: unknown) {
+  setPaletteFilter(typeof filter === 'string' ? filter as PaletteFilter : 'all');
   setIsPaletteOpen(true);
 }
 

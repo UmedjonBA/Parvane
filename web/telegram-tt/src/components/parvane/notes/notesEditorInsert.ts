@@ -1,7 +1,8 @@
 // Правка заметки: кнопки разметки под редактором (доска `PhNotesMore`) и подсказка заметки для незакрытой
 // ссылки `[[…`. Чистые функции над текстом и выделением — редактор только применяет результат.
 
-export type EditorTool = 'heading' | 'bold' | 'task' | 'link' | 'code' | 'callout' | 'list';
+// `italic` — только сочетанием Ctrl+I (кнопки на доске нет)
+export type EditorTool = 'heading' | 'bold' | 'italic' | 'task' | 'link' | 'code' | 'callout' | 'list';
 export type EditorState = { text: string; from: number; to: number };
 
 export const EDITOR_TOOLS: EditorTool[] = ['heading', 'bold', 'task', 'link', 'code', 'callout', 'list'];
@@ -9,6 +10,7 @@ export const EDITOR_TOOLS: EditorTool[] = ['heading', 'bold', 'task', 'link', 'c
 export const EDITOR_TOOL_SIGNS: Record<EditorTool, string> = {
   heading: '#',
   bold: 'B',
+  italic: 'I',
   task: '[ ]',
   link: '[[ ]]',
   code: '</>',
@@ -24,6 +26,7 @@ const LINE_PREFIXES = {
 } as const;
 const WRAPS = {
   bold: ['**', '**'],
+  italic: ['*', '*'],
   link: ['[[', ']]'],
 } as const;
 const FENCE = '```';
@@ -33,7 +36,9 @@ const OPEN_LINK = /\[\[([^[\]|\n]*)$/;
 /** Применить кнопку разметки: строчные встают в начало строк выделения, парные оборачивают выделение. */
 export function applyEditorTool(state: EditorState, tool: EditorTool): EditorState {
   if (tool === 'code') return applyCode(state);
-  if (tool === 'bold' || tool === 'link') return wrapSelection(state, WRAPS[tool][0], WRAPS[tool][1]);
+  if (tool === 'bold' || tool === 'italic' || tool === 'link') {
+    return wrapSelection(state, WRAPS[tool][0], WRAPS[tool][1]);
+  }
   return prefixLines(state, LINE_PREFIXES[tool]);
 }
 

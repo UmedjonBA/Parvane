@@ -10,6 +10,9 @@ const PRECACHE_LIST_PATH = './precache.json';
 const PRECACHE_MARKER_PATH = './__parvane-app-shell__';
 const PRECACHE_MESSAGE = 'parvanePrecache';
 const PRECACHE_DONE_MESSAGE = 'parvanePrecacheDone';
+// Ход набора (окно «Нужно обновить приложение», доска `ZdNav`): сколько файлов уже в кэше из всех
+const PRECACHE_PROGRESS_MESSAGE = 'parvanePrecacheProgress';
+const PROGRESS_STEP_FILES = 20;
 const PRECACHE_PARALLEL = 6;
 const RE_BUILD_ID = /^[\w.-]{1,64}$/;
 // Хешированные файлы прошлых сборок живут в кэше ещё столько: открытая вкладка той сборки догружает из него свои
@@ -25,12 +28,16 @@ type AppShell = {
 let runningPrecache: Promise<string | undefined> | undefined;
 
 type HashedAssetTest = (url: string) => boolean;
+type ProgressReport = (done: number, total: number) => void;
 
 export function handleClientMessage(e: ExtendableMessageEvent, isHashedAsset: HashedAssetTest) {
   if (e.data?.type !== PRECACHE_MESSAGE) return;
   const { source } = e;
 
-  e.waitUntil(precacheAppShell(isHashedAsset).then((build) => {
+  const reportProgress: ProgressReport = (done, total) => {
+    source?.postMessage({ type: PRECACHE_PROGRESS_MESSAGE, payload: { done, total } });
+  };
+  e.waitUntil(precacheAppShell(isHashedAsset, reportProgress).then((build) => {
     if (build) source?.postMessage({ type: PRECACHE_DONE_MESSAGE, payload: { build } });
   }));
 }
@@ -66,9 +73,9 @@ export async function pruneAppShellCache(isHashedAsset: HashedAssetTest) {
   }));
 }
 
-function precacheAppShell(isHashedAsset: HashedAssetTest) {
+function precacheAppShell(isHashedAsset: HashedAssetTest, reportProgress: ProgressReport) {
   if (!runningPrecache) {
-    runningPrecache = loadAppShell(isHashedAsset)
+    runningPrecache = loadAppShell(isHashedAsset, reportProgress)
       .catch((err) => {
         // eslint-disable-next-line no-console
         console.error('[SW] App shell precache failed', err);
@@ -81,7 +88,7 @@ function precacheAppShell(isHashedAsset: HashedAssetTest) {
   return runningPrecache;
 }
 
-async function loadAppShell(isHashedAsset: HashedAssetTest) {
+async function loadAppShell(isHashedAsset: HashedAssetTest, reportProgress: ProgressReport) {
   const listResponse = await fetch(resolveScopeUrl(PRECACHE_LIST_PATH), { cache: 'no-store' });
   if (!listResponse.ok) return undefined;
   const shell = parseAppShell(await listResponse.text());
@@ -98,17 +105,22 @@ async function loadAppShell(isHashedAsset: HashedAssetTest) {
 
   const hashed = shell.files.filter(isHashedFile);
   let nextIndex = 0;
+  let doneCount = 0;
   let hasFailed = false;
+  reportProgress(0, hashed.length);
   await Promise.all(Array.from({ length: PRECACHE_PARALLEL }, async () => {
     while (nextIndex < hashed.length && !hasFailed) {
       const url = resolveScopeUrl(hashed[nextIndex++]);
-      if (await cache.match(url)) continue;
-      const response = await fetch(url);
-      if (!isAssetResponse(response)) {
-        hasFailed = true;
-        return;
+      if (!await cache.match(url)) {
+        const response = await fetch(url);
+        if (!isAssetResponse(response)) {
+          hasFailed = true;
+          return;
+        }
+        await cache.put(url, response);
       }
-      await cache.put(url, response);
+      doneCount++;
+      if (doneCount % PROGRESS_STEP_FILES === 0) reportProgress(doneCount, hashed.length);
     }
   }));
   // Выкладка посреди набора: список уже не совпадает с сервером. Следующая просьба страницы возьмёт новый

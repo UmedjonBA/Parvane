@@ -1,8 +1,14 @@
+import type { ParvaneModuleId } from '../../../util/parvaneModules';
+
 // Parvane: общий поиск (палитра Ctrl+K) — чистая часть: что и в каком порядке показать по запросу.
 // Запись палитры — название, необязательный текст (описание задачи, текст заметки) и ключ действия
 
-export type PaletteGroup = 'command' | 'chat' | 'note' | 'record';
-export const PALETTE_GROUPS: PaletteGroup[] = ['command', 'chat', 'note', 'record'];
+export type PaletteGroup = 'note' | 'file' | 'chat' | 'record' | 'music' | 'command';
+// Порядок групп — как на досках `XpStart`, `DeskOverlays`: заметки, файлы, чаты, план, музыка; команды — последними
+export const PALETTE_GROUPS: PaletteGroup[] = ['note', 'file', 'chat', 'record', 'music', 'command'];
+// Чипы-фильтры выдачи (телефон) и Tab «только в этом модуле» (компьютер): модуль, по которому сужается выдача
+export type PaletteFilter = 'all' | 'chats' | 'plan' | 'notes' | 'files' | 'music';
+export const PALETTE_FILTERS: PaletteFilter[] = ['all', 'chats', 'plan', 'notes', 'files', 'music'];
 
 export type PaletteItem = {
   // Ключ действия, уникален в пределах палитры: `nav:today`, `chat:<id>`, `note:<id>`, `task:<id>`…
@@ -15,6 +21,11 @@ export type PaletteItem = {
   // нажатие (E2: текст заметок — до мегабайта). Без них поиск нормализует сам
   normTitle?: string;
   normText?: string;
+  // Модуль записи: по нему работают чипы-фильтры и Tab; без модуля запись видна только во «Всём»
+  module?: ParvaneModuleId;
+  // Строка, которая показывается при любом непустом запросе в конце своей группы (команда с запросом,
+  // «Искать в сообщениях»): её название уже содержит запрос
+  isAlways?: boolean;
 };
 
 // Участок совпадения: начало и конец (не включая) в символах строки
@@ -49,6 +60,7 @@ const RANK_WORD_START = 1;
 const RANK_INSIDE = 2;
 const RANK_TEXT_WORD = 3;
 const RANK_TEXT_INSIDE = 4;
+const RANK_ALWAYS = Number.MAX_SAFE_INTEGER;
 
 /** Строка для сравнения: без регистра, «ё» = «е». Длина сохраняется — участки совпадения годятся для исходной. */
 export function normalizePaletteText(value: string) {
@@ -149,10 +161,32 @@ function matchItem<T extends PaletteItem>(
   };
 }
 
+/** Модуль, к которому относится фильтр: чип «Всё» — `undefined`. */
+export function getFilterModule(filter: PaletteFilter): ParvaneModuleId | undefined {
+  return filter === 'all' ? undefined : filter;
+}
+
+/** Фильтр для Tab «только в этом модуле»: у модуля без своих записей в поиске («Здоровье», «Профиль») — «Всё». */
+export function getModuleFilter(module: ParvaneModuleId): PaletteFilter {
+  return (PALETTE_FILTERS as string[]).includes(module) ? module as PaletteFilter : 'all';
+}
+
+/** Чипы выдачи: «Всё» и включённые модули, у которых есть что искать. */
+export function listPaletteFilters(enabled: ParvaneModuleId[]) {
+  return PALETTE_FILTERS.filter((filter) => filter === 'all' || enabled.includes(filter as ParvaneModuleId));
+}
+
+/** Записи выбранного модуля; «Всё» — все записи. */
+export function filterPaletteItems<T extends PaletteItem>(items: T[], filter: PaletteFilter): T[] {
+  const module = getFilterModule(filter);
+  return module ? items.filter((item) => item.module === module) : items;
+}
+
 /**
  * Результаты по группам в порядке `PALETTE_GROUPS`; пустые группы не возвращаются.
  * Внутри группы — по качеству совпадения, при равенстве — в порядке источника (он уже осмыслен:
- * заметки — свежие первыми). Пустой запрос показывает только команды, как в прототипе.
+ * заметки — свежие первыми). Пустой запрос показывает только команды, как в прототипе. Строки `isAlways` —
+ * при любом непустом запросе, в конце своей группы.
  */
 export function searchPalette<T extends PaletteItem>(
   items: T[], query: string, limit = PALETTE_GROUP_LIMIT,
@@ -162,7 +196,11 @@ export function searchPalette<T extends PaletteItem>(
   const byGroup = new Map<PaletteGroup, Match<T>[]>();
   items.forEach((item, order) => {
     let match: Match<T> | undefined;
-    if (terms.length) {
+    if (item.isAlways) {
+      match = terms.length ? {
+        item, ranges: [], rank: RANK_ALWAYS, order,
+      } : undefined;
+    } else if (terms.length) {
       match = matchItem(item, terms, order, withText);
     } else if (item.group === 'command') {
       match = {
@@ -180,7 +218,10 @@ export function searchPalette<T extends PaletteItem>(
     if (!matches) return;
     matches.sort((a, b) => a.rank - b.rank || a.order - b.order);
     // Команд немного, и без запроса они — всё содержимое палитры: их не обрезаем
-    const shown = group === 'command' && !terms.length ? matches : matches.slice(0, limit);
+    // Строки `isAlways` предел не съедает: они стоят в конце группы сверх него
+    const always = matches.filter(({ item }) => item.isAlways);
+    const found = always.length ? matches.filter(({ item }) => !item.isAlways) : matches;
+    const shown = group === 'command' && !terms.length ? matches : [...found.slice(0, limit), ...always];
     sections.push({ group, results: shown.map(({ item, ranges, snippet }) => ({ item, ranges, snippet })) });
   });
   return sections;

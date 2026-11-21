@@ -12,6 +12,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Island, { IslandTitle } from '../../gili/layout/Island';
+import MusicOfflineSettings from '../../parvane/music/MusicOfflineSettings';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
 import RangeSlider from '../../ui/RangeSlider';
@@ -163,6 +164,11 @@ const SettingsDataStorage = ({
         canAutoLoadFileInGroups,
         canAutoLoadFileInChannels,
       )}
+      {/* Parvane (spec 041, доска `XpMusic`): «Загруженное» «Музыки» — предел места, качество, докачка нового */}
+      <IslandTitle>{lang('MusicOfflineSettingsTitle')}</IslandTitle>
+      <Island>
+        <MusicOfflineSettings withLimit withRules />
+      </Island>
       <Island>
         <ListItem
           onClick={handlePurge}

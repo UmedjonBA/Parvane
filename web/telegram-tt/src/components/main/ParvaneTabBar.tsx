@@ -7,9 +7,9 @@ import { LeftColumnContent } from '../../types';
 
 import { ALL_FOLDER_ID } from '../../config';
 import buildClassName from '../../util/buildClassName';
-import {
-  requestHealthAdd, requestModuleAdd, requestPlannerAdd,
-} from '../../util/parvaneSection';
+import { openHealthQuick } from '../../util/parvaneQuick';
+import { requestModuleAdd, requestPlannerAdd } from '../../util/parvaneSection';
+import { requestMusicAdd } from '../parvane/music/musicView';
 import {
   getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
 } from './parvaneModuleNav';
@@ -92,14 +92,16 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
     openModule(e.currentTarget.dataset.module as ParvaneModuleId, Boolean(isSettingsOpen));
   });
 
-  // «+» зависит от модуля: в «Чатах» и «Файлах» — меню, в «Плане» и «Здоровье» — быстрый ввод записи,
+  // «+» зависит от модуля: в «Чатах», «Файлах» и «Музыке» — меню, в «Плане» и «Здоровье» — быстрый ввод записи,
   // в «Заметках» — новая заметка; в «Профиле» кнопки нет
-  const hasAddMenu = activeModule === 'chats' || activeModule === 'files';
-  // «Музыка»: добавление треков появится вместе с загрузкой — пока кнопки нет
+  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'music';
+  // Открытое меню «+» закрывает сама кнопка (на ней тогда «×», доска `PlusModes`). «Здоровье» — шторка быстрого
+  // ввода поверх модуля
   const handleAddClick = useLastCallback(() => {
-    if (hasAddMenu) openAddMenu();
+    if (isAddMenuOpen) closeAddMenu();
+    else if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
-    else if (activeModule === 'health') requestHealthAdd();
+    else if (activeModule === 'health') openHealthQuick();
     else requestPlannerAdd();
   });
 
@@ -116,12 +118,14 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   });
 
   const handleUpload = useLastCallback(() => requestModuleAdd('upload'));
+  const handleMusicFetch = useLastCallback(() => requestMusicAdd('fetch'));
+  const handleMusicPlaylist = useLastCallback(() => requestMusicAdd('playlist'));
   const handleNewFolder = useLastCallback(() => requestModuleAdd('folder'));
 
   return (
     <>
-      {/* Мини-плеер «Музыки»: в самой «Музыке» плеер уже на экране */}
-      {activeModule !== 'music' && <MusicMiniPlayer />}
+      {/* Мини-плеер «Музыки» — во всех модулях, и в самой «Музыке» (доска `MusicHome`) */}
+      <MusicMiniPlayer />
       <nav className={styles.root} aria-label={lang('ParvaneModules')} data-modules={modules.join(' ')}>
         {isScrollable && (
           <button
@@ -148,7 +152,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
               aria-current={id === activeModule ? 'page' : undefined}
               onClick={handleModuleClick}
             >
-              <ParvaneIcon name={MODULE_ICONS[id]} />
+              <ParvaneIcon name={MODULE_ICONS[id]} className={styles.itemIcon} />
               <span className={styles.title}>{lang(MODULE_TITLE_KEYS[id])}</span>
               {id === 'chats' && Boolean(unreadCount) && (
                 <span className={styles.badge}>
@@ -170,27 +174,38 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
           </button>
         )}
       </nav>
-      {activeModule !== 'profile' && activeModule !== 'music' && (
+      {activeModule !== 'profile' && (
         <div className={styles.addWrap}>
           <button
             type="button"
-            className={styles.addButton}
-            aria-label={lang('ParvaneTabBarAdd')}
+            className={buildClassName(styles.addButton, isAddMenuOpen && styles.addButtonOpen)}
+            aria-label={lang(isAddMenuOpen ? 'ParvaneNavCloseMenu'
+              : activeModule === 'plan' ? 'PlannerTabBarAdd'
+                : activeModule === 'files' ? 'ParvaneCloudAddLabel'
+                  : activeModule === 'health' ? 'HealthAddMetric' : 'ParvaneTabBarAdd')}
             aria-haspopup={hasAddMenu ? 'menu' : undefined}
+            aria-expanded={hasAddMenu ? isAddMenuOpen : undefined}
             data-add-for={activeModule}
             onClick={handleAddClick}
           >
-            <ParvaneIcon name="plus" className={styles.addIcon} />
+            <ParvaneIcon name={isAddMenuOpen ? 'close' : 'plus'} className={styles.addIcon} />
           </button>
           <Menu
             isOpen={isAddMenuOpen}
             className={styles.addMenu}
+            bubbleClassName={styles.addMenuBubble}
+            backdropExcludedSelector="[data-add-for]"
             positionX="right"
             positionY="bottom"
             autoClose
             onClose={closeAddMenu}
           >
-            {activeModule === 'files' ? (
+            {activeModule === 'music' ? (
+              <>
+                <MenuItem icon="search" onClick={handleMusicFetch}>{lang('MusicAddFetch')}</MenuItem>
+                <MenuItem icon="add" onClick={handleMusicPlaylist}>{lang('MusicPlaylistNew')}</MenuItem>
+              </>
+            ) : activeModule === 'files' ? (
               <>
                 <MenuItem icon="download" onClick={handleUpload}>{lang('ParvaneAddUpload')}</MenuItem>
                 <MenuItem icon="folder" onClick={handleNewFolder}>{lang('ParvaneAddFolder')}</MenuItem>

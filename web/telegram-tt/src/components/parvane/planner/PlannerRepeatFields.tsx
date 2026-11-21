@@ -1,7 +1,8 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useMemo } from '../../../lib/teact/teact';
 
 import type { PlannerRepeat, PlannerRepeatKind } from './plannerModel';
 
+import buildClassName from '../../../util/buildClassName';
 import { formatRepeat, formatWeekday } from './plannerFormat';
 import {
   MAX_REPEAT_COUNT, MAX_REPEAT_INTERVAL, PLANNER_REPEAT_KINDS, validateRepeat,
@@ -9,13 +10,13 @@ import {
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useUniqueId from '../../../hooks/useUniqueId';
 
-import Checkbox from '../../ui/Checkbox';
-import Select from '../../ui/Select';
+import PvSegment from '../notes/PvSegment';
 import PlannerField from './PlannerField';
 
+import kit from '../notes/PvKit.module.scss';
 import styles from './Planner.module.scss';
+import more from './PlannerEditor.module.scss';
 
 // Черновик правила повтора в форме: числа — строками, как в остальных полях
 export type PlannerRepeatDraft = {
@@ -36,11 +37,18 @@ type OwnProps = {
 };
 
 const KIND_KEYS = {
-  daily: 'PlannerRepeatKindDaily',
-  weekly: 'PlannerRepeatKindWeekly',
-  monthly: 'PlannerRepeatKindMonthly',
-  yearly: 'PlannerRepeatKindYearly',
+  daily: 'PlannerRepeatSegDay',
+  weekly: 'PlannerRepeatSegWeek',
+  monthly: 'PlannerRepeatSegMonth',
+  yearly: 'PlannerRepeatSegYear',
 } as const satisfies Record<PlannerRepeatKind, string>;
+
+const END_KINDS: { value: PlannerRepeatDraft['endKind']; key: 'PlannerRepeatEndNever' | 'PlannerRepeatEndOnDate'
+  | 'PlannerRepeatEndTimes'; }[] = [
+  { value: 'never', key: 'PlannerRepeatEndNever' },
+  { value: 'until', key: 'PlannerRepeatEndOnDate' },
+  { value: 'count', key: 'PlannerRepeatEndTimes' },
+];
 
 // Подпись шага называет единицу: «Повторять каждые (недель)»
 const INTERVAL_KEYS = {
@@ -88,34 +96,38 @@ export function draftToRepeat(draft: PlannerRepeatDraft): PlannerRepeat | undefi
   };
 }
 
-// Поля правила повтора (spec 011): вид, шаг, дни недели или число, начало и конец ряда
+// Поля правила повтора (spec 011; вид — доска `DkPlanMore`): вид переключателем «Нет / День / Неделя / Месяц / Год»,
+// дни недели чипами, конец ряда чипами; шаг, число месяца и начало ряда — второй строкой
 const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
   const lang = useLang();
 
-  const selectId = useUniqueId();
   // Правило словами — как оно будет показано у дела; негодный черновик не описывается
   const repeat = draftToRepeat(value);
   const summary = repeat && !validateRepeat(repeat) ? formatRepeat(lang, repeat) : undefined;
+
+  const kinds = useMemo(() => [
+    { value: 'none' as const, label: lang('PlannerRepeatSegNone') },
+    ...PLANNER_REPEAT_KINDS.map((kind) => ({ value: kind, label: lang(KIND_KEYS[kind]) })),
+  ], [lang]);
 
   const set = useLastCallback((patch: Partial<PlannerRepeatDraft>) => {
     onChange((previous) => ({ ...previous, ...patch }));
   });
 
-  const handleKind = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    set({ kind: e.currentTarget.value as PlannerRepeatDraft['kind'] });
+  const handleKind = useLastCallback((kind: PlannerRepeatDraft['kind']) => {
+    set({ kind });
   });
 
-  const handleEndKind = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    set({ endKind: e.currentTarget.value as PlannerRepeatDraft['endKind'] });
+  const handleEndKind = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    set({ endKind: e.currentTarget.dataset.repeatEnd as PlannerRepeatDraft['endKind'] });
   });
 
-  const handleWeekdayToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const weekday = Number(e.currentTarget.value);
-    const isChecked = e.currentTarget.checked;
+  const handleWeekdayToggle = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const weekday = Number(e.currentTarget.dataset.weekday);
     // От прежнего черновика, а не от пропса: два дня, отмеченные между отрисовками, не затирают друг друга
     onChange((previous) => {
       const rest = previous.weekdays.filter((item) => item !== weekday);
-      return { ...previous, weekdays: isChecked ? [...rest, weekday] : rest };
+      return { ...previous, weekdays: previous.weekdays.includes(weekday) ? rest : [...rest, weekday] };
     });
   });
 
@@ -127,18 +139,53 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
 
   return (
     <div className={styles.repeat} data-repeat-kind={value.kind}>
-      <Select
-        id={`planner-repeat-kind-${selectId}`}
-        label={lang('PlannerRepeatLabel')}
+      <PvSegment
+        items={kinds}
         value={value.kind}
-        hasArrow
+        label={lang('PlannerRepeatLabel')}
+        className={more.repeatKinds}
         onChange={handleKind}
-      >
-        <option value="none">{lang('PlannerRepeatKindNone')}</option>
-        {PLANNER_REPEAT_KINDS.map((kind) => <option key={kind} value={kind}>{lang(KIND_KEYS[kind])}</option>)}
-      </Select>
+      />
+      {value.kind === 'weekly' && (
+        <div
+          className={buildClassName(kit.chips, more.weekdays)}
+          role="group"
+          aria-label={lang('PlannerRepeatWeekdays')}
+        >
+          {WEEKDAYS.map((weekday) => {
+            const isOn = value.weekdays.includes(weekday);
+            return (
+              <button
+                key={weekday}
+                type="button"
+                className={buildClassName(kit.chip, more.weekday, isOn && kit.chipOn)}
+                aria-pressed={isOn}
+                data-weekday={weekday}
+                onClick={handleWeekdayToggle}
+              >
+                {formatWeekday(lang, (weekday + 6) % 7)}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {value.kind !== 'none' && (
         <>
+          <div className={more.repeatEnd} role="group" aria-label={lang('PlannerRepeatEnd')}>
+            <span className={more.repeatEndLabel}>{lang('PlannerRepeatEndLabel')}</span>
+            {END_KINDS.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={buildClassName(kit.chip, value.endKind === item.value && kit.chipOn)}
+                aria-pressed={value.endKind === item.value}
+                data-repeat-end={item.value}
+                onClick={handleEndKind}
+              >
+                {lang(item.key)}
+              </button>
+            ))}
+          </div>
           <div className={styles.fields}>
             <PlannerField
               label={lang(INTERVAL_KEYS[value.kind])}
@@ -147,7 +194,6 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
               min={1}
               max={MAX_REPEAT_INTERVAL}
               step={1}
-
               onInput={handleInterval}
             />
             {value.kind === 'monthly' && (
@@ -159,7 +205,6 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
                 max={31}
                 step={1}
                 placeholder={lang('PlannerRepeatMonthDayFromStart')}
-
                 onInput={handleMonthDay}
               />
             )}
@@ -167,43 +212,13 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
               label={lang('PlannerRepeatStart')}
               type="date"
               value={value.startDay}
-
               onInput={handleStartDay}
             />
-          </div>
-          {value.kind === 'weekly' && (
-            <div className={styles.weekdays}>
-              {WEEKDAYS.map((weekday) => (
-                <Checkbox
-                  key={weekday}
-                  value={String(weekday)}
-                  label={formatWeekday(lang, (weekday + 6) % 7)}
-                  checked={value.weekdays.includes(weekday)}
-
-                  onChange={handleWeekdayToggle}
-                />
-              ))}
-            </div>
-          )}
-          <div className={styles.fields}>
-            <Select
-              id={`planner-repeat-end-${selectId}`}
-              label={lang('PlannerRepeatEnd')}
-              value={value.endKind}
-              hasArrow
-
-              onChange={handleEndKind}
-            >
-              <option value="never">{lang('PlannerRepeatEndNever')}</option>
-              <option value="until">{lang('PlannerRepeatEndUntil')}</option>
-              <option value="count">{lang('PlannerRepeatEndCount')}</option>
-            </Select>
             {value.endKind === 'until' && (
               <PlannerField
                 label={lang('PlannerRepeatEndDate')}
                 type="date"
                 value={value.endDay}
-
                 onInput={handleEndDay}
               />
             )}
@@ -215,7 +230,6 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
                 min={1}
                 max={MAX_REPEAT_COUNT}
                 step={1}
-
                 onInput={handleCount}
               />
             )}

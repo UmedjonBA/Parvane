@@ -1947,11 +1947,11 @@
       "id": "HEALTH-3",
       "title": "«Здоровье»: сводку для экранов и запись разобранного ввода считает движок",
       "kind": "domain",
-      "record": "движок: healthView {nowMs, tzMin} → {today, sleep{goalBedMin, goalWakeMin, goalMinutes, last, lastTotalMinutes, lastDeltaMinutes, week[7], avgMinutes, openStartMs}, metrics[{kind, unit, isSum, last, goal, toGoal, today, weekDelta, monthDelta, series[30 дней]}], recent[], nutrition{day, closed, total, goals, left, meals[], week[7], weekAvg}, activity{stepsToday, stepsGoal, stepsWeek[7], activeMinutes, activeGoal, workoutCount, km, workouts[]}}; healthCompose {entries, nowMs} → {changes} (запись {kind: food_close, day, tzMin, closed} — закрыть либо открыть день питания); healthEntries {kind, limit, nowMs, tzMin} → {entries, hasMore}; healthCheck {entry, nowMs} → {problem: null | value | future | span | form}; цели — Goal с именем вида (weight, steps, water, …) и sleep_bed / sleep_wake (минуты от полуночи); отметки sleep_start / sleep_end; healthRecall {text, nowMs, tzMin} → {entries, unparsed, problems} как у healthParse, у подставленной еды recalled: true и нет guess",
+      "record": "движок: healthView {nowMs, tzMin} → {today, sleep{goalBedMin, goalWakeMin, goalMinutes, last, lastTotalMinutes, lastDeltaMinutes, week[7], avgMinutes, openStartMs}, metrics[{kind, unit, isSum, last, goal, toGoal, today, weekDelta, monthDelta, series[30 дней]}], recent[], nutrition{day, closed, total, goals, left, meals[], week[7], weekAvg}, activity{stepsToday, stepsGoal, stepsWeek[7], activeMinutes, activeGoal, workoutCount, km, workouts[]}}; healthCompose {entries, nowMs} → {changes} (запись {kind: food_close, day, tzMin, closed} — закрыть либо открыть день питания); healthEntries {kind, limit, nowMs, tzMin} → {entries, hasMore}; healthCheck {entry, nowMs} → {problem: null | value | future | span | form}; цели — Goal с именем вида (weight, steps, water, …) и sleep_bed / sleep_wake (минуты от полуночи); отметки sleep_start / sleep_end; healthRecall {text, nowMs, tzMin} → {entries, unparsed, problems} как у healthParse, у подставленной еды recalled: true и нет guess; п. 14 (20 ноя 2026): sleep.stats{periods{week|month|year: nights, avgMinutes, avgBedMin, avgWakeMin, bedDeltaMin, wakeDeltaMin, goalDeltaMin}, regime{state: stable|floating|off|few, bedSpreadMin, wakeSpreadMin, isWakeStable}, lastBedDeltaMin}, sleep.week[].deltaMinutes, sleep.month[] с bedMin/wakeMin; metrics[].periods{week|month|year: avg, avg2, days, count, goalDays, spanDays}, paceWeek, yearDelta, isUpperBound, series[].goalMet; moodSleep{lowSleepMin, lowDays, otherDays, delta}; healthEntries: delta, goalDelta, pulse у записей, days[{day, value, count, mood, moodNote}] у видов-сумм; сон tag: none — «не спал», ночь в ноль минут; общий образец conformance/health-stats/cases.json",
       "behaviour": "Клиент показывает числа из healthView и сам не считает: день записи, главный сон дня (самый длинный; дневной входит в сумму дня), сумму дня у steps и water, отклонение от цели, изменение за неделю и месяц. Разобранные записи клиент пишет через healthCompose: движок даёт каждой записи id, отметку «встал» после незакрытой отметки «лёг» сводит в один сон (отметка «лёг» удаляется), сон отрезком закрывает незакрытое «лёг». Запись из будущего в сводку не входит. Питание и активность: итог дня по приёмам, остаток до цели, среднее недели по полным дням (закрытый либо прошедший с записями), активные минуты, пробег и темп считает движок; закрытый день — регистр close-<день>, клиент его сам не собирает. Какие блоки показывать — настройка устройства (MODULES-1). «Мои продукты»: клиент показывает и пишет разбор healthRecall — еда без чисел с названием прошлой записи еды (точное совпадение без регистра, ё/е и лишних пробелов; самая свежая с калориями) получает её калории, БЖУ и граммы (другие граммы — пропорционально) и пометку recalled; названные в строке калории и БЖУ не меняются; сам клиент прошлые записи не ищет.",
       "status": "17 ноя 2026: движок — сделано (backend/protocol/src/domain/health_view.rs, тесты там же); web — сделано; desktop и android — открыто",
       "clients": {
-        "web": "api/parvane/healthApi.ts, v2/health.ts (контейнер — v2/personalSync.ts), components/parvane/health/*; тесты healthFormat.test.ts, healthDayFormat.test.ts, scripts/run_web_health_e2e.sh",
+        "web": "api/parvane/healthApi.ts, v2/health.ts (контейнер — v2/personalSync.ts), components/parvane/health/*; тесты healthFormat.test.ts, healthDayFormat.test.ts, healthPeriods.test.ts, scripts/run_web_health_e2e.sh; движок п. 14 — backend/protocol/src/domain/health_stats.rs, tests/health_stats_vectors.rs",
         "desktop": "открыто",
         "android": "открыто"
       }
@@ -1982,6 +1982,20 @@
         "web": "api/parvane/v2/musicPlaylists.ts, api/parvane/musicApi.ts (parvaneMusicPlaylists, parvaneMusicPlaylistAct), components/parvane/music/MusicPlaylists.tsx, MusicPlaylistPicker.tsx, musicPlaylists.ts",
         "desktop": "ОТКРЫТО: раздела «Музыка» нет; движок общий, контейнер домена игнорируется без ошибок (DOMAIN-1)",
         "android": "ОТКРЫТО: раздела «Музыка» нет; движок общий, контейнер домена игнорируется без ошибок (DOMAIN-1)"
+      }
+    },
+    {
+      "id": "MUSIC-4",
+      "title": "«Музыка»: списки библиотеки на экранах — порядок, буквы, отбор, страницы, «Загруженное» группами — в движке",
+      "kind": "ui",
+      "record": "движок: статические вызовы musicLibrarySort{kind, by, items} / musicLibraryGroups{items, key?} / musicLibraryFilter{items, query, fields} / musicPageMerge{items, page} / musicSearchRows{tracks, albums, artists, filter} / musicOfflineGroups{entries, holds, playlistOrder}; сервер — числа библиотеки в music.info (library_tracks/artists/albums, starred_count, admin), Artist.track_count, Album.single, LibraryArtistResponse.popular, StreamUrlRequest.download (spec 041)",
+      "behaviour": "Клиент не сортирует, не группирует и не склеивает списки сам: исполнители по имени либо по числу треков, альбомы по исполнителю, треки любимого по исполнителю, группы по первой букве («#» — в конце), отбор «каждое слово запроса в одном из полей», страница к показанному без повторов по id, найденное одним списком по названию с отбором по виду, «Загруженное» — плейлисты (в порядке пользователя), затем альбомы, затем отдельные треки, трек — в первой держащей группе. Длинные списки (исполнители, альбомы, любимое, поиск) читаются страницами по 50 и подгружаются при прокрутке. «Популярное на сервере» — по прослушиваниям всех пользователей сервера (один человек — одно прослушивание трека в сутки, загрузка на устройство не считается)",
+      "sample": "conformance/music-library/cases.json",
+      "status": "21 ноя 2026: движок — сделано (backend/protocol/src/music_library.rs, тест conformance_cases); шард music — сделано (src/library.rs, тест library_counts_and_popular_by_plays_of_everyone); web — сделано; desktop и android — открыто (раздела «Музыка» нет)",
+      "clients": {
+        "web": "components/parvane/music/musicLibrary.ts (вызовы), useMusicPages.ts, MusicBrowseView.tsx, MusicStarredView.tsx, MusicSearchView.tsx, MusicOffline.tsx; тест musicLibrary.test.ts",
+        "desktop": "ОТКРЫТО: раздела «Музыка» нет; движок общий",
+        "android": "ОТКРЫТО: раздела «Музыка» нет; движок общий"
       }
     },
     {
@@ -2106,12 +2120,62 @@
       "title": "Жалобы: адресата выбирает пользователь из предложенных движком, список жалоб у админа группы сводит движок; «закрыта» — объект-признак личного состояния",
       "kind": "behaviour",
       "record": "state.v2: OBJECT_KIND_REPORT_CLOSED = 23, ключ «<g:домен:hex>/<op_id 32 hex>» (объект-признак). Причины жалобы: spam | fraud | insult | illegal | other (поле ModReport.reason, прежние коды сводятся к ближайшей). Движок: report_inbox.rs, вызовы reportForm, reportInbox, reportClosedKey; общий образец conformance/reports/cases.json",
-      "behaviour": "reportForm: адресат «админы группы» — только для сообщений группы, где есть владелец либо админ с правом удалять сообщения или банить (кроме себя); «администратор сервера» — если сервер объявил ключ жалоб. Жалоба админам — как REPORT-1 (личное сообщение mod_report каждому, шифруется как вся переписка), серверу — identity.report.submit. reportInbox: из полученных карточек mod_report группы — строка на сообщение, число разных пожаловавшихся, самая частая причина, время последней жалобы; закрытые не входят. «Отклонить», «Удалить сообщение», «Заблокировать в группе» закрывают жалобу записью REPORT_CLOSED — закрытие видят все устройства админа; другие админы закрывают сами",
+      "behaviour": "reportForm: адресат «админы группы» — только для сообщений группы, где есть владелец либо админ с правом удалять сообщения или банить (кроме себя); «администратор сервера» — если сервер объявил ключ жалоб. Жалоба админам — как REPORT-1 (личное сообщение mod_report каждому, шифруется как вся переписка), серверу — identity.report.submit. reportInbox: из полученных карточек mod_report группы — строка на сообщение, число разных пожаловавшихся, самая частая причина, время последней жалобы; закрытые не входят. «Отклонить», «Удалить сообщение», «Заблокировать в группе» закрывают жалобу записью REPORT_CLOSED — закрытие видят все устройства админа; другие админы закрывают сами. reportInbox принимает необязательных участников группы с временем вступления (members: [{user, joinedMs}] — Member.joined_ms журнала группы) и отдаёт memberSinceMs автора («участник с …», доска RpChat)",
       "status": "20 ноя 2026: движок и web — сделано; desktop и android — открыто (движок общий; окно жалобы у них прежнее, списка нет, неизвестный вид REPORT_CLOSED журнал хранит как есть)",
       "clients": {
         "web": "api/parvane/messages.ts (reportMessages: reportForm движка, адресат из окна), modReports.ts (parvaneReportInbox, parvaneReportClose), v2/stateJournal.ts (reportClosedOps, closeReports), components/modals/reportModal/ReportModal.tsx (окно одной формой), components/right/management/ManageReports.tsx, ManageReportsEntry.tsx (раздел «Жалобы» экрана «Тип группы»), components/middle/message/ModReportCard.tsx (действие закрывает жалобу); тест api/parvane/modReports.test.ts (общий образец); сценарий scripts/e2e_web_reports.mjs",
         "desktop": "открыто",
         "android": "открыто"
+      }
+    },
+    {
+      "id": "REPORT-3",
+      "title": "«Скрыть у меня сообщения этого участника»: личный объект-признак, скрывает приёмный фильтр модели",
+      "kind": "behaviour",
+      "record": "state.v2: OBJECT_KIND_MEMBER_HIDDEN = 24, ключ «<g:домен:hex>/<адрес участника>» (объект-признак; reportHiddenKey движка, проверка state2::check_key)",
+      "behaviour": "Галочка в окне жалобы на сообщение группы (доска XdChat, включена по умолчанию, не для своих сообщений). Объект видят только свои устройства; приёмный фильтр модели contentHidden скрывает любые сообщения этого участника в этой группе (строки модели остаются). Снятие объекта возвращает сообщения из модели. Общий образец — conformance/reports/cases.json (reportHiddenKey)",
+      "status": "20 ноя 2026: движок и web — сделано; desktop и android — открыто (движок общий: их приёмный фильтр через contentHidden скроет сам, галочки в окне жалобы нет)",
+      "clients": {
+        "web": "components/modals/reportModal/ReportModal.tsx (галочка), global/actions/api/messages.ts (parvaneSetMemberHidden, «Показать» в уведомлении), api/parvane/modReports.ts (parvaneMemberHide), v2/stateJournal.ts (setMemberHidden, isMemberHidden), sync.ts (applyMemberHidden); тест api/parvane/modReports.test.ts; сценарий scripts/e2e_web_reports.mjs",
+        "desktop": "открыто",
+        "android": "открыто"
+      }
+    },
+    {
+      "id": "SECKEY-1",
+      "title": "Ключ безопасности WebAuthn — второй фактор входа нового устройства на сервере",
+      "kind": "behaviour",
+      "methods": [
+        "identity.seckey.challenge",
+        "identity.seckey.add",
+        "identity.seckey.list",
+        "identity.seckey.remove",
+        "identity.seckey.set_required"
+      ],
+      "record": "SessionIssueRequest.seckey = 10, recovery_key = 11; SessionIssueResponse.seckey_required = 12 … seckey_recovery = 18; identity migrations_v2/0011_security_keys.sql",
+      "behaviour": "Пароль верен, у аккаунта есть ключ и включено требование, устройство не доказало ключ устройства журнала (ID-01) → шаг без токена с вызовом; повтор с ответом ключа (ES256/EdDSA, источник и rpId, рост счётчика) либо с ключом восстановления (сверка с копией корня). Устройства журнала с доказательством и session.renew ключ не спрашивают. Ключ заводится только при копии корня на сервере",
+      "status": "20 ноя 2026: сервер и web — сделано; desktop и android — ключей не заводят, вход НОВОГО их устройства на аккаунт с ключом — отказ (README SECKEY-1 п. 6)",
+      "clients": {
+        "web": "api/parvane/securityKeys.ts, securityKeyLogin.ts, securityKeySettings.ts, connectionController.ts (setSecondFactor), v2/bridge.ts (seckey, recovery_key); components/auth/AuthSecurityKey.tsx, left/settings/passcode/SettingsSecurityKeys.tsx; тест api/parvane/securityKeys.test.ts; сценарий scripts/e2e_web_seckey.mjs",
+        "desktop": "не заводит ключей (п. 6)",
+        "android": "не заводит ключей (п. 6)"
+      }
+    },
+    {
+      "id": "MUSIC-3",
+      "title": "Общие плейлисты «Музыки» — на сервере, права проверяет сервер; плейлист чата — по ключу из карточки",
+      "kind": "server",
+      "record": "music.v1: методы music.shared.list/get/create/edit/delete/items/member/leave/join (SharedPlaylist, SharedItem, SharedMember, SharedAccess MEMBERS=1 | SERVER=2, SharedRole OWNER=1 | EDITOR=2 | LISTENER=3); msg.v2 MusicPlaylistShare.shared_id = 5, join_key = 6 (строка: shared_id, join_key)",
+      "behaviour": "Общий плейлист хранит шард music открытым текстом (музыка не E2E). Владелец меняет название и доступ, зовёт участников своего сервера по адресу с ролью «добавляет» (EDITOR) либо «слушает» (LISTENER), убирает их, выдаёт и меняет ключ вступления, удаляет плейлист; EDITOR добавляет (повтор трека пропускается), убирает и переставляет треки; LISTENER только читает; участник может выйти. Плейлист SERVER читает любой пользователь сервера, MEMBERS не участнику неотличим от несуществующего (NOT_FOUND). Позванный видит плейлист в списке с invited до первого чтения. Карточка плейлиста в чате несёт shared_id и join_key — получатель вступает (EDITOR) и открывает живой плейлист: это «плейлист чата». Снимок треков в карточке остаётся (PLAYLIST-1). «Сделать общим» / «Сделать личным» — перенос треков клиентом между личным контейнером music.v1 (MUSIC-2) и сервером. Изменения общих плейлистов клиенты узнают перечиткой (get с if_version → unchanged), живых событий нет",
+      "fieldNumbers": {
+        "shared_id": 5,
+        "join_key": 6
+      },
+      "status": "21 ноя 2026: шард music, движок (views.rs) и web — сделано (spec 041); desktop и android общих плейлистов не показывают — карточку с shared_id показывают снимком либо text (PLAYLIST-1), сборками не проверялось",
+      "clients": {
+        "web": "api/parvane/musicSharedApi.ts, components/parvane/music/shared/ (musicShared.ts, MusicSharedPage.tsx, MusicSharedMembers.tsx, MusicAccessPicker.tsx, MusicSharedRows.tsx, MusicMakeShared.tsx, MusicSharedSendDialog.tsx), musicPlaylistContent.ts и store.ts (shared_id, join_key), middle/message/MusicPlaylistCard.tsx («Открыть» вступает); сценарий scripts/run_web_music_shared_e2e.sh",
+        "desktop": "ОТКРЫТО: общих плейлистов нет; карточка с shared_id — как PLAYLIST-1 (снимок либо text общим путём движка)",
+        "android": "ОТКРЫТО: общих плейлистов нет; карточка с shared_id — как PLAYLIST-1 (снимок либо text общим путём движка)"
       }
     }
   ]

@@ -15,13 +15,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  dismissRecoveryKeyDialog,
-  linkSecondDevice,
-  preparePage,
-  reloadPage,
-  relogin,
-  openPlannerScreen,
+  closePlannerSettings, dismissRecoveryKeyDialog, linkSecondDevice, openPlannerScreen, openPlannerSettings,
+  pickPlannerDay, preparePage, reloadPage, relogin, waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-planner-sync-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -71,10 +70,10 @@ async function createTask(page, name, start) {
 
 async function deleteTask(page, name) {
   const planner = await openPlanner(page);
-  await openPlannerScreen(planner.page(), 'calendar');
-  await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
-  await planner.getByRole('button', { name }).first().click();
-  await planner.getByRole('button', { name: 'Delete task' }).click();
+  // День — в колонке недели (`pickPlannerDay`): вид календаря после прошлых шагов может быть любым
+  await pickPlannerDay(planner.page(), todayKey());
+  await planner.locator('[data-planner-day]').getByRole('button', { name }).first().click();
+  await planner.getByRole('button', { name: 'Delete', exact: true }).click();
   await planner.getByRole('heading', { name }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
 }
 
@@ -82,8 +81,7 @@ async function deleteTask(page, name) {
  * Смотрим панель дня, а не ячейку месяца: в ячейке только два превью и «+N». */
 async function expectTaskInDay(page, name, isPresent, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await openPlannerScreen(planner.page(), 'calendar');
-  await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  await pickPlannerDay(planner.page(), todayKey());
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: isPresent ? 'visible' : 'detached', timeout })
     .catch(() => {
@@ -126,7 +124,7 @@ async function quickAdd(page, text, name, time) {
   const input = await openQuick(page);
   await input.fill(text);
   await expectQuickTime(page, time);
-  await page.locator('form[data-quick-kind]').getByRole('button', { name: 'Add', exact: true }).click();
+  await page.locator('form[data-quick-kind]').locator('[data-quick-save]').click();
   await page.locator('#ParvanePlanner').getByText(`Added: ${name}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
 }
@@ -221,11 +219,11 @@ try {
   sessions.bob1 = await preparePage(bob1Context, bob, PASSWORD);
   await dismissRecoveryKeyDialog(sessions.bob1.page).catch(() => undefined);
   await createTask(sessions.bob1.page, taskA, '10:00');
-  const planner1 = sessions.bob1.page.locator('#ParvanePlanner');
-  await planner1.getByRole('button', { name: 'Planner settings' }).click();
-  await planner1.getByLabel('Day starts').fill('08:00');
-  await planner1.getByText('Settings saved').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner1.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await openPlanner(sessions.bob1.page);
+  const settings1 = await openPlannerSettings(sessions.bob1.page);
+  await settings1.getByLabel('Day starts').fill('08:00');
+  await settings1.getByText('Settings saved').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlannerSettings(sessions.bob1.page);
   await closePlanner(sessions.bob1.page);
   console.log('OK: планировщик первого устройства заполнен');
 
@@ -243,13 +241,14 @@ try {
   await linkSecondDevice(sessions.bob1.page, sessions.bob2.page);
   await expectTaskInDay(sessions.bob2.page, taskA, true);
   const planner2b = sessions.bob2.page.locator('#ParvanePlanner');
-  await planner2b.getByRole('button', { name: 'Planner settings' }).click();
-  await planner2b.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await openPlanner(sessions.bob2.page);
+  const settings2 = await openPlannerSettings(sessions.bob2.page);
+  await settings2.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await sessions.bob2.page.waitForFunction(
-    () => document.querySelector('#ParvanePlanner input[type="time"]')?.value === '08:00',
+    () => document.querySelector('[data-settings-page="plan"] input[data-field="dayStart"]')?.value === '08:00',
     undefined, { timeout: SYNC_TIMEOUT_MS },
   );
-  await planner2b.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await closePlannerSettings(sessions.bob2.page);
   await closePlanner(sessions.bob2.page);
   console.log('OK: после привязки второе устройство видит планировщик и настройки');
 
@@ -434,10 +433,11 @@ try {
   console.log('OK: история ввода текстом — подсказки первого устройства на втором, «Забыть» действует на оба');
 
   // Сброс на B: словарь очищен на обоих устройствах
-  await planner2b.getByRole('button', { name: 'Planner settings' }).click();
-  await planner2b.locator('[data-quick-learned-reset]').click();
-  await planner2b.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner2b.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await openPlanner(sessions.bob2.page);
+  const settings2b = await openPlannerSettings(sessions.bob2.page);
+  await settings2b.locator('[data-quick-learned-reset]').click();
+  await settings2b.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlannerSettings(sessions.bob2.page);
   await closePlanner(sessions.bob2.page);
   await waitFor(async () => !(await learnedWordOf(sessions.bob1.page, learnedHead)), SYNC_TIMEOUT_MS, 'на A — словарь правок сброшен с B');
   await openQuick(sessions.bob1.page);

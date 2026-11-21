@@ -285,6 +285,9 @@ export enum SettingsScreens {
   ParvaneExport,
   ParvaneBugReport,
   ParvaneHelp,
+  // Parvane (spec 041, доски `RdPlanSet`, `PhModSettings`): «Модули / План» и «Модули / Здоровье»
+  ParvanePlanSettings,
+  ParvaneHealthGoals,
 }
 
 export type StickerSetOrReactionsSetOrRecent = Pick<ApiStickerSet, (

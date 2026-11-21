@@ -13,7 +13,7 @@ import { ExportError } from './exportZip';
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Заметки — `.md` (и холсты `.canvas`) в папке «Знания» в корне личного диска (`notesStore.ts`)
-const VAULT_NAMES = ['Знания', 'Knowledge'];
+const VAULT_NAMES = ['Заметки', 'Notes', 'Знания', 'Knowledge'];
 const NOTE_FILE = /\.(md|canvas)$/i;
 const READ_TEXTS_BATCH = 40;
 // Движок «Плана» и облака поднимается при первом обращении — столько ждём готовности

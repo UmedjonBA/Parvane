@@ -62,6 +62,7 @@ import captureEscKeyListener from '../../util/captureEscKeyListener';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { isUserId } from '../../util/entities/ids';
 import { getParvaneSection } from '../../util/parvaneSection';
+import { getIsSendBlockedByUpgrade, getUpgradeState } from '../../util/parvaneUpgrade';
 import { resolveTransitionName } from '../../util/resolveTransitionName';
 import { getIsPaletteOpen } from '../parvane/palette/paletteOpen';
 import calculateMiddleFooterTransforms from './helpers/calculateMiddleFooterTransforms';
@@ -70,6 +71,7 @@ import { measureFooterContentHeight, syncMessageListBottomReserve } from './help
 
 import useAppLayout from '../../hooks/useAppLayout';
 import useDebouncedCallback from '../../hooks/useDebouncedCallback';
+import useDerivedState from '../../hooks/useDerivedState';
 import useForceUpdate from '../../hooks/useForceUpdate';
 import useHistoryBack from '../../hooks/useHistoryBack';
 import useLang from '../../hooks/useLang';
@@ -276,8 +278,12 @@ function MiddleColumn({
   const renderingCanStartBot = usePrevDuringAnimation(canStartBot, closeAnimationDuration);
   const renderingCanRestartBot = usePrevDuringAnimation(canRestartBot, closeAnimationDuration);
   const renderingCanUnblock = usePrevDuringAnimation(canUnblock, closeAnimationDuration);
+  // Сервер требует новую версию, обновление отложено «Позже» (доска `ZdNav`): читать можно, отправлять — нет.
+  // Поле ввода уходит вместе с отправкой, черновик остаётся в чате
+  const isSendBlockedByUpgrade = useDerivedState(getIsSendBlockedByUpgrade, [getUpgradeState]);
   const renderingCanPost = usePrevDuringAnimation(canPost, closeAnimationDuration)
-    && !renderingCanRestartBot && !renderingCanStartBot && !renderingCanSubscribe && !renderingCanUnblock
+    && !isSendBlockedByUpgrade && !renderingCanRestartBot && !renderingCanStartBot && !renderingCanSubscribe
+    && !renderingCanUnblock
     && chatId !== TMP_CHAT_ID && !isContactRequirePremium;
   const renderingIsScrollDownShown = usePrevDuringAnimation(
     isScrollDownShown, closeAnimationDuration,
@@ -507,7 +513,8 @@ function MiddleColumn({
     oldLang, chat, threadId, topics, Boolean(draftReplyInfo),
   );
 
-  const composerRestrictionMessage = messageSendingRestrictionReason
+  const composerRestrictionMessage = (isSendBlockedByUpgrade ? lang('ShellUpgradeBanner') : undefined)
+    || messageSendingRestrictionReason
     || forumComposerPlaceholder
     || (shouldBlockSendInMonoforum ? lang('MonoforumComposerPlaceholder') : undefined);
 

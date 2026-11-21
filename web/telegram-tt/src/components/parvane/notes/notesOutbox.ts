@@ -28,6 +28,9 @@ export type NoteConflict = {
   mine: string;
   theirs: string;
   at: number;
+  // Когда и каким устройством записана чужая версия (из облака); прежние записи их не несут
+  theirsAt?: number;
+  theirsDevice?: string;
 };
 
 type StorageGetter = () => Promise<SecureE2eStorage | undefined>;

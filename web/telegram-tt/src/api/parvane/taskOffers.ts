@@ -157,10 +157,10 @@ export function getOfferEventEnd(start: string, minutes?: number) {
 }
 
 /**
- * Правка движка планировщика для карточки-события. У события в домене нет поля
- * `source`, поэтому его id — uuid карточки: повторное добавление ложится в тот же объект.
+ * Правка движка планировщика для карточки-события: id — uuid карточки (повторное добавление ложится в тот же
+ * объект), `source` — чат и uuid без дефисов (запись «из чата» в поиске «Плана», доска `ZdPlanX`).
  */
-export function buildOfferEvent(uuid: string, offer: OfferFields) {
+export function buildOfferEvent(uuid: string, offer: OfferFields, chat: string) {
   if (getTaskOfferKind(offer) !== 'event') return undefined;
   /* eslint-disable no-null/no-null -- JSON движка: null = «не задано» */
   return {
@@ -176,6 +176,7 @@ export function buildOfferEvent(uuid: string, offer: OfferFields) {
     allDay: false,
     isHoliday: false,
     color: 0,
+    source: { chat, opId: uuid.replace(/-/g, '') },
   };
   /* eslint-enable no-null/no-null */
 }

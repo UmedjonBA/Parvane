@@ -22,6 +22,8 @@ type OwnProps = {
   className?: string;
   // Только карточки: рядом уже стоит большой граф
   isGraphHidden?: boolean;
+  // Телефон (доска `PhNotesMore`): «Ссылаются сюда · N» — только кто ссылается на заметку, списком без графа
+  isBacklinksOnly?: boolean;
   onOpenTitle: (title: string) => void;
 };
 
@@ -34,11 +36,14 @@ const WAY_KEYS = {
 // «Связи» заметки по макету (доски `DeskNotes`, `PhNotesMore`): малый граф и карточки — на кого заметка
 // ссылается, кто ссылается на неё, записи «Плана» со ссылкой сюда
 const NoteLinks = ({
-  note, index, planned, className, isGraphHidden, onOpenTitle,
+  note, index, planned, className, isGraphHidden, isBacklinksOnly, onOpenTitle,
 }: OwnProps) => {
   const lang = useLang();
 
-  const items = useMemo(() => listNoteLinks(note.id, index, planned), [note.id, index, planned]);
+  const items = useMemo(() => {
+    const all = listNoteLinks(note.id, index, planned);
+    return isBacklinksOnly ? all.filter((item) => item.way === 'in' || item.way === 'both') : all;
+  }, [note.id, index, planned, isBacklinksOnly]);
 
   const handleOpen = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onOpenTitle(e.currentTarget.dataset.title!);
@@ -46,8 +51,10 @@ const NoteLinks = ({
 
   return (
     <div className={buildClassName(styles.root, className)} data-note-links={items.length}>
-      <h3 className={kit.caps}>{lang('KnowledgeLinksTitle', { count: items.length })}</h3>
-      {!isGraphHidden && items.length > 0 && (
+      <h3 className={kit.caps}>
+        {lang(isBacklinksOnly ? 'KnowledgeBacklinksTitle' : 'KnowledgeLinksTitle', { count: items.length })}
+      </h3>
+      {!isGraphHidden && !isBacklinksOnly && items.length > 0 && (
         <NoteLinksGraph note={note} index={index} planned={planned} onOpenTitle={onOpenTitle} />
       )}
       {!items.length && <p className={styles.empty}>{lang('KnowledgeBacklinksEmpty')}</p>}
@@ -69,7 +76,7 @@ const NoteLinks = ({
             onClick={handleOpen}
           >
             <span className={styles.cardTitle}>{item.title}</span>
-            <span className={styles.cardSub}>{lang(WAY_KEYS[item.way])}</span>
+            {!isBacklinksOnly && <span className={styles.cardSub}>{lang(WAY_KEYS[item.way])}</span>}
           </button>
         )))}
       </div>

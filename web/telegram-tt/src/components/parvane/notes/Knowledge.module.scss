@@ -89,10 +89,6 @@
   padding: 0.5rem 0.75rem;
 }
 
-.headBoard .boardTabs {
-  flex: 0 0 16rem;
-}
-
 // Подсказка графа и холста: одна строка, не помещается — обрезается (целиком — во всплывающей подписи)
 .headHint {
   overflow: hidden;
@@ -113,6 +109,48 @@
   min-width: 0;
 }
 
+// ── компьютер (доска `ZdNotesX`): шапка «папка · число», поиск, «Список / Граф», «Новая заметка» ──
+
+.deskTitle {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 0.625rem;
+  align-items: baseline;
+
+  min-width: 0;
+}
+
+.deskCount {
+  flex: none;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.headBoard .searchRow {
+  margin-inline-start: auto;
+}
+
+.headBoard .deskViews {
+  flex: 0 0 12rem;
+}
+
+.headBoard .deskNew {
+  flex: none;
+  height: 2.25rem;
+  padding: 0 0.875rem;
+}
+
+// Под шапкой: таблица заметок, либо колонка списка, заметка и «Связи», либо граф
+.deskBody {
+  position: relative;
+
+  display: flex;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  min-height: 0;
+}
+
 // ── список слева, заметка, «Связи» справа ────────────────────────────────────
 
 .listPane {
@@ -126,34 +164,9 @@
   background: var(--pv-panel);
 }
 
-.listHead {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 0.5rem;
-
-  padding: 0.625rem 0.75rem;
-  border-bottom: 1px solid var(--pv-line);
-}
-
-.listHead .searchRow {
-  flex: none;
-}
-
-// Поле поиска в колонке списка — во всю её ширину (`SearchForm` места не занимает)
-.listHead .searchRow > :global(.SearchForm) > * {
-  flex: 1 1 auto;
-}
-
 // Ручка ширины списка лежит рядом с ним (сам список прокручивается), на его правой границе
 .listResizer {
   inset-inline-start: calc(var(--pv-panel-notes-list, 17.5rem) - 0.3125rem);
-}
-
-.pickNote {
-  max-width: 52ch;
-  margin: 2.5rem 1.75rem 0;
-  color: var(--pv-muted);
 }
 
 .side {
@@ -384,7 +397,6 @@
 }
 
 .link,
-.linkSample,
 .cardLink {
   border-bottom: 1px dashed color-mix(in srgb, var(--pv-purple) 50%, transparent);
   color: var(--pv-purple);

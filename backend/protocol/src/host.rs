@@ -347,7 +347,7 @@ pub fn group_info_value(c: &Client, gid: &[u8]) -> Result<Value, ProtoError> {
     let members: Vec<Value> = s
         .members
         .iter()
-        .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
+        .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "joinedMs": m.joined_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
         .collect();
     Ok(json!({
         "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&c.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,

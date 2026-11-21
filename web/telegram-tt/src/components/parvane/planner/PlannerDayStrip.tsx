@@ -75,7 +75,7 @@ const PlannerDayStrip = ({
   return (
     <div ref={stripRef} className={styles.dayStrip} data-day-strip>
       {cells.map(({
-        day, load, budget, isHoliday, fraction,
+        day, isHoliday, fraction,
       }) => {
         return (
           <button
@@ -94,12 +94,7 @@ const PlannerDayStrip = ({
           >
             <span className={styles.dayStripWeekday}>{formatWeekday(lang, (fromDayKey(day).getDay() + 6) % 7)}</span>
             <span className={styles.dayStripNumber}>{fromDayKey(day).getDate()}</span>
-            <span className={styles.dayStripLoad} data-load={Math.round(fraction * PERCENT)}>
-              <span
-                className={buildClassName(styles.dayStripLoadFill, load > budget && styles.dayStripLoadOver)}
-                style={`width: ${fraction * PERCENT}%`}
-              />
-            </span>
+            <span className={styles.dayStripLoad} data-load={Math.round(fraction * PERCENT)} />
           </button>
         );
       })}

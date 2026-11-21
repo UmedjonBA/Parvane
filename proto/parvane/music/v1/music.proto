@@ -53,6 +53,40 @@ service MusicService {
   rpc AddedDelete(AddedDeleteRequest) returns (AddedDeleteResponse) {
     option (parvane.core.v2.method) = {name: "music.added.delete" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
   }
+  // ── spec 041: отмена задачи скачивания, свои файлы, общие плейлисты (MUSIC-3) ──
+  rpc FetchCancel(FetchCancelRequest) returns (FetchCancelResponse) {
+    option (parvane.core.v2.method) = {name: "music.fetch.cancel" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc UploadStart(UploadStartRequest) returns (UploadStartResponse) {
+    option (parvane.core.v2.method) = {name: "music.upload.start" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedList(SharedListRequest) returns (SharedListResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.list" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedGet(SharedGetRequest) returns (SharedGetResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.get" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedCreate(SharedCreateRequest) returns (SharedCreateResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.create" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedEdit(SharedEditRequest) returns (SharedEditResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.edit" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedDelete(SharedDeleteRequest) returns (SharedDeleteResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.delete" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedItems(SharedItemsRequest) returns (SharedItemsResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.items" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedMember(SharedMemberRequest) returns (SharedMemberResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.member" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedLeave(SharedLeaveRequest) returns (SharedLeaveResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.leave" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
+  rpc SharedJoin(SharedJoinRequest) returns (SharedJoinResponse) {
+    option (parvane.core.v2.method) = {name: "music.shared.join" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "music"};
+  }
 }
 
 message Track {
@@ -84,6 +118,8 @@ message Album {
   uint32 track_count = 6;
   uint32 duration_secs = 7;
   uint32 year = 8;
+  // Сингл (тип релиза у музыкального сервера): экраны собирают синглы исполнителя в одну плитку (spec 041).
+  bool single = 9;
 }
 
 message Artist {
@@ -91,6 +127,8 @@ message Artist {
   string name = 2 [(parvane.core.v2.max_len) = 512];
   string cover_id = 3 [(parvane.core.v2.max_len) = 96];
   uint32 album_count = 4;
+  // Треков исполнителя в библиотеке; 0 — неизвестно (spec 041).
+  uint32 track_count = 5;
 }
 
 message InfoRequest {}
@@ -107,6 +145,17 @@ message InfoResponse {
   uint64 used_bytes = 7;
   // Сервис скачивания подключён: «Найти и скачать» доступно.
   bool fetch_enabled = 8;
+  // «Загрузить свои файлы» (spec 041): папка библиотеки подключена; файл не больше `upload_max_bytes`. Загрузка
+  // расходует те же суточный лимит и место, что и «Найти и скачать».
+  bool upload_enabled = 9;
+  uint64 upload_max_bytes = 10;
+  // Экраны «Музыки» (spec 041): сколько в библиотеке треков, исполнителей и альбомов, сколько любимых у
+  // пользователя; 0 — неизвестно. `admin` — пользователь может удалять чужие добавленные треки.
+  uint32 library_tracks = 20;
+  uint32 library_artists = 21;
+  uint32 library_albums = 22;
+  uint32 starred_count = 23;
+  bool admin = 24;
 }
 
 message LibrarySearchRequest {
@@ -143,6 +192,8 @@ message LibraryArtistRequest {
 message LibraryArtistResponse {
   Artist artist = 1;
   repeated Album albums = 2 [(parvane.core.v2.max_items) = 500];
+  // «Популярное на сервере»: треки исполнителя по числу прослушиваний всеми пользователями сервера.
+  repeated Track popular = 3 [(parvane.core.v2.max_items) = 10];
 }
 
 message TrackGetRequest {
@@ -167,6 +218,8 @@ enum StreamQuality {
 message StreamUrlRequest {
   string track_id = 1 [(parvane.core.v2.max_len) = 64];
   StreamQuality quality = 2;
+  // Загрузка на устройство, а не прослушивание: в «Популярное на сервере» не считается.
+  bool download = 3;
 }
 message StreamUrlResponse {
   // HTTPS-ссылка с подписью: GET с Range, без заголовков авторизации.
@@ -248,6 +301,8 @@ enum FetchState {
   // Трек в библиотеке: `track_id`.
   FETCH_STATE_DONE = 4;
   FETCH_STATE_FAILED = 5;
+  // Ждёт своей очереди на сервере (идёт не больше `PARVANE_MUSIC_FETCH_PARALLEL` задач разом): `queue_ahead`.
+  FETCH_STATE_QUEUED = 6;
 }
 
 // Почему не скачалось (текста ошибок в протоколе нет).
@@ -261,6 +316,10 @@ enum FetchFailure {
   FETCH_FAILURE_LIBRARY = 3;
   // Файл не поместился в место, отведённое пользователю.
   FETCH_FAILURE_LIMIT = 4;
+  // Свой файл: не звук либо формат, которого библиотека не читает.
+  FETCH_FAILURE_FORMAT = 5;
+  // Свой файл: такой файл уже есть в библиотеке (`track_id` — его трек).
+  FETCH_FAILURE_DUPLICATE = 6;
 }
 
 message FetchJob {
@@ -270,6 +329,18 @@ message FetchJob {
   repeated FetchCandidate candidates = 4 [(parvane.core.v2.max_items) = 10];
   string track_id = 5 [(parvane.core.v2.max_len) = 64];
   FetchFailure failure = 6;
+  // Ход загрузки (spec 041): байт получено и всего; 0 — сервис не сообщил.
+  uint64 bytes_done = 7;
+  uint64 bytes_total = 8;
+  // Задач в очереди сервера перед этой (состояние QUEUED).
+  uint32 queue_ahead = 9;
+  // Причина отказа словами сервиса скачивания либо администратора («Сервер не может скачивать: …»); пусто — нет.
+  string failure_detail = 10 [(parvane.core.v2.max_len) = 200];
+  // Задача по строке запроса: эталон сервер выбирает сам; до выбора `track` пуст.
+  string query = 11 [(parvane.core.v2.max_len) = 256];
+  int64 updated_ms = 12;
+  // Свой файл (`music.upload.start`): имя файла; пусто — «Найти и скачать».
+  string upload_name = 13 [(parvane.core.v2.max_len) = 255];
 }
 
 message FetchStartRequest {
@@ -278,6 +349,8 @@ message FetchStartRequest {
   // Продолжить задачу выбранным кандидатом (состояние NEEDS_CHOICE).
   string job_id = 2 [(parvane.core.v2.max_len) = 32];
   string candidate_id = 3 [(parvane.core.v2.max_len) = 256];
+  // «Найти и скачать «запрос»»: эталон сервер берёт из каталога сам (лучшее совпадение со строкой); `track` не нужен.
+  string query = 4 [(parvane.core.v2.max_len) = 256];
 }
 // Отказы: LIMIT — исчерпан суточный лимит либо место; DUPLICATE — трек уже качается.
 message FetchStartResponse {
@@ -313,3 +386,204 @@ message AddedDeleteRequest {
   string track_id = 1 [(parvane.core.v2.max_len) = 64];
 }
 message AddedDeleteResponse {}
+
+// ── spec 041: отмена задачи ─────────────────────────────────────────────────
+
+// Идущая задача (в очереди, поиск, загрузка) останавливается, недокачанный файл стирается; законченная — убирается
+// из списка «Загрузки на сервер». Чужая задача — NOT_FOUND.
+message FetchCancelRequest {
+  string job_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message FetchCancelResponse {}
+
+// ── spec 041: свои файлы ────────────────────────────────────────────────────
+
+// Начать загрузку своего файла в общую библиотеку. Теги клиент прочёл на устройстве (`musicReadTags`) — сервер
+// перечитывает их сам из принятого файла. Отказы: LIMIT (суточный лимит, место, размер), INVALID (расширение).
+// Файл с той же SHA-256 уже в библиотеке — ответ без `url`, задача FAILED / DUPLICATE с `track_id` того трека.
+message UploadStartRequest {
+  string file_name = 1 [(parvane.core.v2.max_len) = 255];
+  uint64 bytes = 2;
+  // SHA-256 всего файла, 64 hex: дедупликация и проверка принятого.
+  string sha256 = 3 [(parvane.core.v2.max_len) = 64];
+  string title = 4 [(parvane.core.v2.max_len) = 512];
+  string artist = 5 [(parvane.core.v2.max_len) = 512];
+  uint32 duration_secs = 6;
+}
+message UploadStartResponse {
+  // Задача в «Загрузках на сервер» (`upload_name` заполнен).
+  FetchJob job = 1;
+  // Куда отправить байты: `PUT` тела файла целиком, без заголовков авторизации; ссылка действует до `expires_ms`.
+  string url = 2 [(parvane.core.v2.max_len) = 1024];
+  int64 expires_ms = 3;
+}
+
+// ── spec 041: общие плейлисты (MUSIC-3) ─────────────────────────────────────
+// Общий плейлист хранится у шарда music открытым текстом (музыка — не E2E: сервер и так видит треки). Права проверяет
+// сервер: владелец меняет всё; «добавляет» (EDITOR) — правит треки; «слушает» (LISTENER) — только слушает. Плейлист
+// «все на сервере» читает любой пользователь сервера; плейлист чата — тот, кто знает `join_key` из карточки в чате
+// (вступивший получает роль EDITOR). Личные плейлисты остаются в контейнере `music.v1` (MUSIC-2).
+
+enum SharedAccess {
+  SHARED_ACCESS_UNSPECIFIED = 0;
+  // Только участники (приглашённые владельцем либо вступившие по ключу чата).
+  SHARED_ACCESS_MEMBERS = 1;
+  // Все на сервере: в разделе «Общие плейлисты сервера», слушать может любой.
+  SHARED_ACCESS_SERVER = 2;
+}
+
+enum SharedRole {
+  SHARED_ROLE_UNSPECIFIED = 0;
+  SHARED_ROLE_OWNER = 1;
+  SHARED_ROLE_EDITOR = 2;
+  SHARED_ROLE_LISTENER = 3;
+}
+
+message SharedPlaylist {
+  string id = 1 [(parvane.core.v2.max_len) = 32];
+  string name = 2 [(parvane.core.v2.max_len) = 240];
+  // Адрес владельца `ник@сервер`.
+  string owner = 3 [(parvane.core.v2.max_len) = 320];
+  SharedAccess access = 4;
+  // Роль вызывающего; UNSPECIFIED — не участник (плейлист «все на сервере»).
+  SharedRole my_role = 5;
+  uint32 member_count = 6;
+  uint32 track_count = 7;
+  uint32 duration_secs = 8;
+  int64 created_ms = 9;
+  int64 updated_ms = 10;
+  // Растёт с каждой правкой: `music.shared.get` с тем же `if_version` отвечает `unchanged`.
+  uint64 version = 11;
+  // Ключ вступления для карточки в чате — только владельцу; пусто — ссылки в чат ещё не было.
+  string join_key = 12 [(parvane.core.v2.max_len) = 64];
+  // Вызывающий приглашён и ещё не открывал плейлист.
+  bool invited = 13;
+}
+
+message SharedMember {
+  string address = 1 [(parvane.core.v2.max_len) = 320];
+  SharedRole role = 2;
+  // Приглашён, ещё не открыл.
+  bool invited = 3;
+  // Сколько треков плейлиста добавил.
+  uint32 added_count = 4;
+  int64 joined_ms = 5;
+}
+
+message SharedItem {
+  string id = 1 [(parvane.core.v2.max_len) = 32];
+  string track_id = 2 [(parvane.core.v2.max_len) = 128];
+  // Домен сервера библиотеки; пусто — этот сервер.
+  string server = 3 [(parvane.core.v2.max_len) = 253];
+  string title = 4 [(parvane.core.v2.max_len) = 600];
+  string artist = 5 [(parvane.core.v2.max_len) = 600];
+  uint32 duration_secs = 6;
+  // Кто добавил (адрес).
+  string adder = 7 [(parvane.core.v2.max_len) = 320];
+  int64 added_ms = 8;
+}
+
+// Трек для добавления: подписи — на случай, если библиотека его не знает либо он с другого сервера.
+message SharedItemAdd {
+  string track_id = 1 [(parvane.core.v2.max_len) = 128];
+  string server = 2 [(parvane.core.v2.max_len) = 253];
+  string title = 3 [(parvane.core.v2.max_len) = 600];
+  string artist = 4 [(parvane.core.v2.max_len) = 600];
+  uint32 duration_secs = 5;
+}
+
+message SharedListRequest {
+  // Ещё и плейлисты «все на сервере», где вызывающий не участник.
+  bool server_wide = 1;
+}
+message SharedListResponse {
+  repeated SharedPlaylist playlists = 1 [(parvane.core.v2.max_items) = 500];
+}
+
+message SharedGetRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+  uint64 if_version = 2;
+}
+message SharedGetResponse {
+  SharedPlaylist playlist = 1;
+  // Треки по порядку.
+  repeated SharedItem items = 2 [(parvane.core.v2.max_items) = 2000];
+  // Владелец первым, дальше по времени вступления.
+  repeated SharedMember members = 3 [(parvane.core.v2.max_items) = 500];
+  // Версия совпала с `if_version`: остальные поля пусты.
+  bool unchanged = 4;
+}
+
+// Новый общий плейлист; `items` — сразу (сделать общим личный: треки по порядку).
+message SharedCreateRequest {
+  string name = 1 [(parvane.core.v2.max_len) = 240];
+  SharedAccess access = 2;
+  repeated SharedItemAdd items = 3 [(parvane.core.v2.max_items) = 2000];
+}
+message SharedCreateResponse {
+  SharedPlaylist playlist = 1;
+}
+
+// Владелец: новое название, доступ, ключ вступления для чата. Пустое `name` и UNSPECIFIED `access` — не менять.
+message SharedEditRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+  string name = 2 [(parvane.core.v2.max_len) = 240];
+  SharedAccess access = 3;
+  // Выдать ключ вступления (если его ещё нет); прежний остаётся.
+  bool issue_join_key = 4;
+  // Сменить ключ: прежние карточки в чатах больше не впускают.
+  bool rotate_join_key = 5;
+}
+message SharedEditResponse {
+  SharedPlaylist playlist = 1;
+}
+
+// Владелец: плейлист удаляется у всех.
+message SharedDeleteRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message SharedDeleteResponse {}
+
+// Владелец и «добавляет»: добавить в конец (повтор того же трека пропускается), убрать, переставить.
+message SharedItemsRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+  repeated SharedItemAdd add = 2 [(parvane.core.v2.max_items) = 500];
+  repeated string remove = 3 [
+    (parvane.core.v2.max_items) = 500,
+    (parvane.core.v2.max_len) = 32
+  ];
+  // Переставить запись `move_id` перед `move_before_id` (пусто — в конец).
+  string move_id = 4 [(parvane.core.v2.max_len) = 32];
+  string move_before_id = 5 [(parvane.core.v2.max_len) = 32];
+}
+message SharedItemsResponse {
+  SharedPlaylist playlist = 1;
+  // Сколько добавлений пропущено как повторы.
+  uint32 skipped = 2;
+}
+
+// Владелец: позвать (роль EDITOR либо LISTENER), сменить роль, убрать (`remove`). Адрес — этого сервера.
+message SharedMemberRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+  string address = 2 [(parvane.core.v2.max_len) = 320];
+  SharedRole role = 3;
+  bool remove = 4;
+}
+message SharedMemberResponse {
+  SharedPlaylist playlist = 1;
+}
+
+// Участник (не владелец) выходит из плейлиста.
+message SharedLeaveRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message SharedLeaveResponse {}
+
+// Вступить по ключу из карточки плейлиста в чате: роль EDITOR. Уже участник — роль не меняется.
+message SharedJoinRequest {
+  string playlist_id = 1 [(parvane.core.v2.max_len) = 32];
+  string join_key = 2 [(parvane.core.v2.max_len) = 64];
+}
+message SharedJoinResponse {
+  SharedPlaylist playlist = 1;
+}

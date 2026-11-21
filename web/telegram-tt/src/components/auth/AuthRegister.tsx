@@ -8,6 +8,7 @@ import type { ParvaneServerInfo } from '../../api/parvane/authApi';
 import type { GlobalState } from '../../global/types';
 
 import { IS_TOUCH_ENV } from '../../util/browser/windowEnvironment';
+import { markRegistrationSteps } from '../../util/parvaneFirstRun';
 import { fetchParvaneAuthContext, fetchParvaneServerInfo } from '../../api/parvane/authApi';
 import {
   checkIsEmail, checkIsNickOrAddress, countRegistrationSteps, MIN_PASSWORD_LENGTH, readFormValue,
@@ -104,6 +105,8 @@ const AuthRegister = ({ auth }: StateProps) => {
     setHasTried(true);
     if (!checkIsNickOrAddress(typedNick) || (isEmailRequired && !checkIsEmail(typedEmail))
       || typedPassword.length < MIN_PASSWORD_LENGTH) return;
+    // Экран ключа восстановления после регистрации — её последний шаг («шаг 3 из 3»)
+    markRegistrationSteps(countRegistrationSteps(confirm));
     parvaneRegister({ nick: typedNick, email: typedEmail, password: typedPassword });
   });
 

@@ -3,7 +3,7 @@ import type {
 import {
   memo, useEffect, useMemo, useState,
 } from '@teact';
-import { getActions, withGlobal } from '../../global';
+import { getActions, getGlobal, withGlobal } from '../../global';
 
 import type { GlobalState } from '../../global/types';
 import type { FoldersActions } from '../../hooks/reducers/useFoldersReducer';
@@ -134,6 +134,9 @@ function LeftColumn({
   }
 
   const handleReset = useLastCallback((forceReturnToChatList?: true | Event) => {
+    // Escape сразу после смены экрана приходит раньше перерисовки: экран берётся из глобального состояния, а не
+    // из пропсов прошлого кадра (иначе со «Стикеров» уходило в «Обзор», а не в «Настройки мессенджера»)
+    const { contentKey: currentKey, settingsScreen: currentScreen } = selectTabState(getGlobal()).leftColumn;
     function fullReset() {
       openLeftColumnContent({ contentKey: undefined });
       openSettingsScreen({ screen: undefined });
@@ -155,7 +158,7 @@ function LeftColumn({
     }
 
     // Parvane: «Контакты» из «Профиля» возвращают в «Профиль»
-    if (contentKey === LeftColumnContent.Contacts && getIsContactsFromProfile()) {
+    if (currentKey === LeftColumnContent.Contacts && getIsContactsFromProfile()) {
       markContactsFromProfile(false);
       setContactsFilter('');
       openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
@@ -163,25 +166,25 @@ function LeftColumn({
       return;
     }
 
-    if (contentKey === LeftColumnContent.NewGroupStep2) {
+    if (currentKey === LeftColumnContent.NewGroupStep2) {
       openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
       return;
     }
 
-    if (contentKey === LeftColumnContent.NewChannelStep2) {
+    if (currentKey === LeftColumnContent.NewChannelStep2) {
       openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
       return;
     }
 
-    if (contentKey === LeftColumnContent.NewGroupStep1) {
+    if (currentKey === LeftColumnContent.NewGroupStep1) {
       const pickerSearchInput = document.getElementById('new-group-picker-search');
       if (pickerSearchInput) {
         pickerSearchInput.blur();
       }
     }
 
-    if (contentKey === LeftColumnContent.Settings) {
-      switch (settingsScreen) {
+    if (currentKey === LeftColumnContent.Settings) {
+      switch (currentScreen) {
         case SettingsScreens.EditProfile:
         case SettingsScreens.General:
         case SettingsScreens.Notifications:
@@ -200,6 +203,10 @@ function LeftColumn({
           return;
         case SettingsScreens.ParvaneDeleteAccount:
           openSettingsScreen({ screen: SettingsScreens.ActiveSessions });
+          return;
+        case SettingsScreens.ParvanePlanSettings:
+        case SettingsScreens.ParvaneHealthGoals:
+          openSettingsScreen({ screen: SettingsScreens.ParvaneModules });
           return;
 
         // Parvane (spec 041 E3): папки и стикеры открываются из «Настроек мессенджера», фон чатов и
@@ -385,7 +392,7 @@ function LeftColumn({
       }
     }
 
-    if (contentKey === LeftColumnContent.ChatList && isFirstChatFolderActive) {
+    if (currentKey === LeftColumnContent.ChatList && isFirstChatFolderActive) {
       openLeftColumnContent({ contentKey: LeftColumnContent.GlobalSearch });
 
       return;

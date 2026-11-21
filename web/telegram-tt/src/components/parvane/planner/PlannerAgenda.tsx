@@ -7,12 +7,12 @@ import type {
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatDuration, formatProject, formatRelativeDay, listColorStyle,
+  formatDayHeading, formatKind, formatRecordCaption, joinCaption, listColorStyle,
 } from './plannerFormat';
 import { assignToGroup } from './plannerGroups';
 import { formatDescriptionLine } from './plannerLinks';
 import {
-  addDays, AGENDA_DAYS, getDayIndex, getEventColor, getListColor, instanceKey, toMinutes, toTime,
+  addDays, AGENDA_DAYS, getDayIndex, getEventColor, getListColor, instanceKey, toMinutes,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -29,9 +29,11 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
-  // Первый день списка
+  // Первый день списка (на телефоне — сегодня: «ближайшие 30 дней», доска `RpPlan`)
   day: string;
   today: string;
+  // Телефон: без панели групп над списком — группы на экране «Задачи» (доска `PhPlanMore`)
+  isNarrow: boolean;
   onPickDay: (day: string) => void;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
@@ -44,7 +46,7 @@ type Picked = GroupPick & { name: string };
 // блок цвета записи; срок задачи — красной строкой. Сверху — группы (16 окт 2026): правка группы и режим
 // «Добавить в группу» — галочки у записей, предварительный список, «вместе с повторами»
 const PlannerAgenda = ({
-  state, day, today, onPickDay, onOpenTask, onOpenEvent,
+  state, day, today, isNarrow, onPickDay, onOpenTask, onOpenEvent,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -174,10 +176,10 @@ const PlannerAgenda = ({
           onClick={handleEventClick}
         >
           <span className={styles.feedBlockName}><PlannerName name={event.name} /></span>
-          <span className={styles.feedBlockSub}>
-            {event.isAllDay ? lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')
-              : `${event.start}–${event.end}`}
-            {event.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
+          <span className={styles.feedBlockSub} data-block-caption>
+            {event.isAllDay
+              ? joinCaption([formatKind(lang, 'event'), lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')])
+              : formatRecordCaption(lang, { kind: 'event', minutes: toMinutes(event.end) - toMinutes(event.start) })}
           </span>
           {event.description && (
             <span className={styles.feedBlockNote} data-block-note>{formatDescriptionLine(event.description)}</span>
@@ -188,7 +190,6 @@ const PlannerAgenda = ({
   );
 
   const renderTask = (task: PlannerTask) => {
-    const isTimed = Boolean(task.start) && task.minutes !== undefined;
     return (
       <div
         key={`t${instanceKey(task)}`}
@@ -213,13 +214,8 @@ const PlannerAgenda = ({
             onClick={handleTaskClick}
           >
             <span className={styles.feedBlockName}><PlannerName name={task.name} /></span>
-            <span className={styles.feedBlockSub}>
-              {isTimed ? `${task.start}–${toTime(toMinutes(task.start!) + task.minutes!)}`
-                : [
-                  lang('PlannerKindTask').toLowerCase(),
-                  task.minutes === undefined ? undefined : formatDuration(lang, task.minutes),
-                ].filter(Boolean).join(' · ')}
-              {task.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
+            <span className={styles.feedBlockSub} data-block-caption>
+              {formatRecordCaption(lang, { kind: 'task', minutes: task.minutes, isDone: task.status === 'done' })}
             </span>
             {task.description && (
               <span className={styles.feedBlockNote} data-block-note>{formatDescriptionLine(task.description)}</span>
@@ -238,52 +234,54 @@ const PlannerAgenda = ({
 
   return (
     <div className={styles.agendaLayout} data-planner-view="agenda">
-      <aside className={styles.agendaSide}>
-        <PlannerGroupBar state={state} stats={groupStats} isPicking={isPicking} onStartPick={handleStartPick} />
-        {isPicking && (
-          <div className={styles.groupPick} data-group-picking>
-            <p className={styles.sheetHint}>{lang('PlannerGroupPickHint')}</p>
-            {Boolean(previewNames.length) && (
-              <ul className={styles.groupPreview} data-group-preview>
-                {previewNames.map((name) => <li key={name} className={styles.groupPreviewItem}>{name}</li>)}
-              </ul>
-            )}
-            <div className={styles.groupPickControls}>
-              <span className={styles.small}>{lang('PlannerGroupPicked', { count: pickedList.length })}</span>
-              <Select
-                id="planner-group-target"
-                label={lang('PlannerFieldList')}
-                value={target}
-                hasArrow
-                onChange={handleTarget}
-              >
-                {state.lists.map((list) => <option key={list.id} value={list.name}>{list.name}</option>)}
-              </Select>
-              {hasRepeatPicked && (
-                <Checkbox label={lang('PlannerGroupWithRepeats')} checked={withRepeats} onCheck={setWithRepeats} />
+      {!isNarrow && (
+        <aside className={styles.agendaSide}>
+          <PlannerGroupBar state={state} stats={groupStats} isPicking={isPicking} onStartPick={handleStartPick} />
+          {isPicking && (
+            <div className={styles.groupPick} data-group-picking>
+              <p className={styles.sheetHint}>{lang('PlannerGroupPickHint')}</p>
+              {Boolean(previewNames.length) && (
+                <ul className={styles.groupPreview} data-group-preview>
+                  {previewNames.map((name) => <li key={name} className={styles.groupPreviewItem}>{name}</li>)}
+                </ul>
               )}
-              <div className={styles.actions}>
-                <button
-                  type="button"
-                  className={buildClassName(styles.btn, styles.btnAccent)}
-                  data-group-apply
-                  disabled={!pickedList.length || !target}
-                  onClick={handleApply}
+              <div className={styles.groupPickControls}>
+                <span className={styles.small}>{lang('PlannerGroupPicked', { count: pickedList.length })}</span>
+                <Select
+                  id="planner-group-target"
+                  label={lang('PlannerFieldList')}
+                  value={target}
+                  hasArrow
+                  onChange={handleTarget}
                 >
-                  {lang('PlannerGroupApply')}
-                </button>
-                <button
-                  type="button"
-                  className={buildClassName(styles.btn, styles.btnGhost)}
-                  onClick={handleCancelPick}
-                >
-                  {lang('Cancel')}
-                </button>
+                  {state.lists.map((list) => <option key={list.id} value={list.name}>{list.name}</option>)}
+                </Select>
+                {hasRepeatPicked && (
+                  <Checkbox label={lang('PlannerGroupWithRepeats')} checked={withRepeats} onCheck={setWithRepeats} />
+                )}
+                <div className={styles.actions}>
+                  <button
+                    type="button"
+                    className={buildClassName(styles.btn, styles.btnAccent)}
+                    data-group-apply
+                    disabled={!pickedList.length || !target}
+                    onClick={handleApply}
+                  >
+                    {lang('PlannerGroupApply')}
+                  </button>
+                  <button
+                    type="button"
+                    className={buildClassName(styles.btn, styles.btnGhost)}
+                    onClick={handleCancelPick}
+                  >
+                    {lang('Cancel')}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </aside>
+          )}
+        </aside>
+      )}
       <div className={styles.agenda}>
         {!days.length && <PvEmpty title={lang('PlannerAgendaEmpty')} data-agenda-empty />}
         {days.map(([key, entry]) => (
@@ -296,12 +294,12 @@ const PlannerAgenda = ({
               data-day={key}
               onClick={handleDayClick}
             >
-              {`${formatRelativeDay(lang, key, today)}, ${formatDay(lang, key)}`}
+              {formatDayHeading(lang, key, today)}
             </button>
             {renderDayRows(entry, key)}
             {entry.deadlines.map((task) => (
-              <div key={`due-${task.id}`} className={styles.feedLine}>
-                <span className={buildClassName(styles.feedTime, styles.red)}>{lang('PlannerDueTiny')}</span>
+              <div key={`due-${task.id}`} className={styles.feedLine} data-agenda-due>
+                <span className={styles.feedTime}>—</span>
                 <div className={buildClassName(styles.feedBlock, styles.kindDue)}>
                   <button
                     type="button"
@@ -310,13 +308,16 @@ const PlannerAgenda = ({
                     onClick={handleTaskClick}
                   >
                     <span className={styles.feedBlockName}><PlannerName name={task.name} /></span>
-                    <span className={styles.feedBlockSub}>{formatProject(lang, task.project)}</span>
+                    <span className={styles.feedBlockSub} data-block-caption>
+                      {joinCaption([formatKind(lang, 'task'), lang('PlannerDueTiny')])}
+                    </span>
                   </button>
                 </div>
               </div>
             ))}
           </section>
         ))}
+        {Boolean(days.length) && <p className={styles.sheetHint} data-agenda-hint>{lang('PlannerAgendaHint')}</p>}
       </div>
     </div>
   );

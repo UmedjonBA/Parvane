@@ -14,18 +14,13 @@ import { join } from 'node:path';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  createGroupViaUi,
-  dismissRecoveryKeyDialog,
-  findMessageContainers,
-  linkSecondDevice,
-  LOGIN_TIMEOUT_MS,
-  openGroupChatByTitle,
-  openPrivateChat,
-  preparePage,
-  relogin,
-  sendText,
-  openPlannerScreen,
+  createGroupViaUi, dismissRecoveryKeyDialog, findMessageContainers, linkSecondDevice, LOGIN_TIMEOUT_MS,
+  openGroupChatByTitle, openPlannerScreen, openPrivateChat, pickPlannerDay, preparePage, relogin, sendText,
+  waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-task-offer-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -81,11 +76,30 @@ async function closePlanner(page) {
   await page.locator('#ParvanePlanner').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
 }
 
+/** Запись из чата видна в поиске «Плана», пока включено «Предложения из чатов», и пропадает без него (ZdPlanX). */
+async function expectFromChatInSearch(page, name) {
+  const planner = await openPlanner(page);
+  await planner.locator('[data-planner-search-open]').click();
+  const search = planner.locator('[data-planner-search]');
+  await search.locator('[data-planner-search-input]').fill(name);
+  const row = search.locator('[data-key]').filter({ hasText: name });
+  await row.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(`${name}: запись из чата в поиске`));
+  const offers = search.locator('[data-planner-layers="search"] [data-show="offers"]');
+  await offers.click();
+  await row.first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(`${name}: без «Предложения из чатов» запись из чата не видна`));
+  await offers.click();
+  await row.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await search.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closePlanner(page);
+}
+
 /** Задача есть в расписании сегодняшнего дня (панель дня). */
 async function expectTaskInPlan(page, name, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await openPlannerScreen(planner.page(), 'calendar');
-  await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  await pickPlannerDay(planner.page(), todayKey());
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: 'visible', timeout })
     .catch(() => assert.fail(`${name}: ожидалось в расписании дня`));
@@ -207,6 +221,7 @@ try {
   await findMessageContainers(sessions.alice.page, 'Принято: задание').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerA);
+  await expectFromChatInSearch(sessions.bob.page, offerA);
   // Повторное добавление не делает второй задачи: кнопка уже заменена на «В плане · открыть»
   assert.equal(await bobCardA.getByRole('button', { name: 'To plan' }).count(), 0);
   assert.equal(await bobCardA.getByRole('button', { name: 'Decline' }).count(), 0);
@@ -247,6 +262,8 @@ try {
   await findMessageContainers(sessions.bob.page, 'Принято: событие').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerB);
+  // Событие из карточки несёт источник (`Event.source`): тоже «предложение из чата»
+  await expectFromChatInSearch(sessions.bob.page, offerB);
   // В плане — событие календаря, а не задача
   await openPlanFromCard(sessions.bob.page, bobCardB, offerB, 'event');
   console.log('OK: отклонённое событие можно добавить позже — событие в календаре, «открыть» ведёт к нему');

@@ -15,7 +15,7 @@
 //! `Event`; «нужно ещё» — ошибкой `Need` (хост добирает данные и повторяет).
 //! Состояние экспортируется целиком, зашифрованным ключом хранилища хоста.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -878,7 +878,12 @@ impl Client {
     pub fn ingest_log(&mut self, user: &str, entries: Vec<SignedOp>) -> Result<LogVerdict> {
         if user == self.user {
             let before: Vec<String> = self.own_log.devices.keys().cloned().collect();
+            let known: HashSet<[u8; 32]> = self.own_entries.iter().map(identity::device_log_hash).collect();
             for e in entries {
+                // Уже принятая запись (ответ параллельного дочитывания): повтор не ошибка
+                if known.contains(&identity::device_log_hash(&e)) {
+                    continue;
+                }
                 self.own_log.apply(&e)?;
                 self.own_entries.push(e);
             }
@@ -897,8 +902,15 @@ impl Client {
             Some(l) => l,
             None => DeviceLog::new(user)?,
         };
+        // Два дочитывания журнала с одной версии (очередь хоста и событие модели) отдают одни и те же записи: уже
+        // принятые пропускаются, а не рвут цепочку `BrokenChain` (отправка в группу падала у участника)
+        let known: HashSet<[u8; 32]> =
+            self.peers.get(user).map(|p| p.entries.iter().map(identity::device_log_hash).collect()).unwrap_or_default();
         let mut appended = vec![];
         for e in entries {
+            if known.contains(&identity::device_log_hash(&e)) {
+                continue;
+            }
             log.apply(&e)?;
             appended.push(e);
         }
@@ -2020,6 +2032,46 @@ impl Client {
         Ok(o)
     }
 
+    /// Выход этого устройства со сменой ключей («Выйти и сменить ключи», доска `PhProfileB`): устройство могло
+    /// попасть в чужие руки раньше, поэтому до записи выхода оно само меняет ключ доступа к доставке, ключ
+    /// личного состояния и ключи своих контейнеров и раздаёт их остальным своим устройствам и собеседникам.
+    /// Запись выхода — ПОСЛЕДНИЙ запрос: после неё сервер этому устройству не отвечает. Группам новую эпоху
+    /// дают оставшиеся устройства (ENG-06). Других своих устройств нет — обычный выход.
+    pub fn leave_rotating(&mut self) -> CResult<RevocationOutcome> {
+        if self.own_log.active(&self.device_id).is_none() {
+            return Err(ClientError::Proto(ProtoError::NotFound));
+        }
+        let me = self.device_id.clone();
+        let mut o = RevocationOutcome::default();
+        if self.own_log.devices.keys().any(|d| *d != me) {
+            self.own_sessions_ready(&me)?;
+            self.check_peer(&self.user.clone())?;
+            let targets = self.dk.rotate(&[]);
+            o.requests.push(OutRequest::id("identity.delivery_key.set", &ipb::DeliveryKeySetRequest { delivery_key: self.dk.key().to_vec() }));
+            let dkc = self.delivery_key_content();
+            o.requests.extend(self.seal_to_own_devices(&dkc)?);
+            if let Some(v) = self.state_key.as_ref().map(|(_, v)| v.saturating_add(1)) {
+                let k = StateKey::generate();
+                let share = k.to_share(&self.user, v)?;
+                self.replace_state_key(k, v);
+                let c = Content { kind: Some(content::Kind::StateKey(share)), ..Default::default() };
+                o.requests.extend(self.seal_to_own_devices(&c)?);
+                o.state_key_version = Some(v);
+            }
+            o.requests.extend(self.personal_rotate_all_on_revoke(now_ms()));
+            o.requests.extend(self.cloud_rotate_on_revoke(now_ms()));
+            for p in targets {
+                // После выхода раздать отложенное некому: собеседник без нового ключа получит его от своего
+                // следующего сообщения оставшимся устройствам
+                if let Ok(r) = self.share_delivery_key(&p) {
+                    o.requests.extend(r);
+                }
+            }
+        }
+        o.requests.push(self.leave_request()?);
+        Ok(o)
+    }
+
     /// Последствия отзыва своего устройства (запись отзыва уже в своём
     /// журнале). Выполняет устройство, которое отзывало (одно — иначе ключи
     /// разойдутся); остальные свои устройства получают новые ключи по E2E.
@@ -2680,8 +2732,17 @@ impl Client {
     /// вступление по ссылке). Подписант проверяется по ключу устройства.
     pub fn group_ingest_hinted(&mut self, group: &Ref, entries: Vec<GroupStateEntry>, hints: &[String]) -> CResult<u64> {
         let mut state = self.group_state(&group.id).cloned();
+        // Записи, уже принятые параллельным дочитыванием журнала с той же версии, пропускаются (иначе `BrokenChain`)
+        let known: HashSet<[u8; 32]> = self
+            .groups
+            .get(&group.id)
+            .map(|g| g.entries.iter().filter_map(|e| e.change.as_ref()).map(group::entry_hash).collect())
+            .unwrap_or_default();
         let mut accepted = vec![];
         for (i, e) in entries.into_iter().enumerate() {
+            if e.change.as_ref().is_some_and(|c| known.contains(&group::entry_hash(c))) {
+                continue;
+            }
             let hint: [u8; 32] = e.change.as_ref().and_then(|c| c.signer_key.as_slice().try_into().ok()).ok_or(ProtoError::InvalidField("signer"))?;
             let claimed = entry_signer_version(&e);
             // spec 026: журналы адреса-подсказки и прежнего адреса (`RenameMember`) — прочитать

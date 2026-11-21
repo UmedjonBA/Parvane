@@ -111,7 +111,7 @@ export const GUIDE_EN: GuideSet = {
         '## Today',
         '- Day cards, the schedule as a list, tasks of the day and undated tasks that are in progress.',
         '- The “No date” row opens tasks without a day; the button next to a task puts it on the selected day.',
-        '- “Daily note” starts a dated note in “Knowledge” — [[Notes]].',
+        '- “Daily note” starts a dated note in “Notes” — [[Notes]].',
         '',
         '## Tasks and events',
         '- A task is something to do: a tick, a deadline, steps, a list. Day and time are optional.',
@@ -231,7 +231,7 @@ export const GUIDE_EN: GuideSet = {
         '# Notes',
         '',
         p(
-          'The “Knowledge” section, the “Notes” tab. A note is a plain `.md` file in the “Knowledge” folder of your',
+          'The “Notes” module, the “List” view. A note is a plain `.md` file in the “Notes” folder of your',
           'cloud; it is encrypted like every other file. #guide',
         ),
         '',
@@ -286,7 +286,7 @@ export const GUIDE_EN: GuideSet = {
       lines: [
         '# Graph and Canvas',
         '',
-        'Two tabs of the “Knowledge” section. #guide',
+        'Two views of the “Notes” module. #guide',
         '',
         '## Graph',
         '- Notes are dots, links between them are lines.',
@@ -296,7 +296,7 @@ export const GUIDE_EN: GuideSet = {
         '',
         '## Canvas',
         p(
-          '- A board with cards and arrows. It is a `.canvas` file in the “Knowledge” folder; the format is JSON',
+          '- A board with cards and arrows. It is a `.canvas` file in the “Notes” folder; the format is JSON',
           'Canvas, which other apps read too.',
         ),
         '- Cards: text, a note, a link to a page with a preview, a cloud file. A group is a named frame.',
@@ -324,7 +324,7 @@ export const GUIDE_EN: GuideSet = {
         '# Files and Cloud',
         '',
         p(
-          '“Cloud” in the sidebar, which is also the “Files” tab of “Knowledge”. A personal drive: 20 GB per account,',
+          '“Cloud” in the sidebar, which is also the “Files” module. A personal drive: 20 GB per account,',
           'one file up to 4 GB. Files are encrypted on the device: the server sees neither names nor content. #guide',
         ),
         '',
@@ -332,7 +332,7 @@ export const GUIDE_EN: GuideSet = {
         '- Folders, uploads, renaming, moving, search and sorting.',
         '- Preview inside the app: photos, video, audio, PDF and text files. Everything else is downloaded.',
         '- The trash keeps deleted items for 30 days; until then everything can be restored.',
-        '- The “Knowledge” folder on the drive is the notes vault: [[Notes]].',
+        '- The “Notes” folder on the drive is the notes vault: [[Notes]].',
         '',
         '## Shared folders',
         '- “Sharing” on a folder makes it shared. A member is a “Reader” or an “Editor”.',
@@ -393,7 +393,7 @@ export const GUIDE_EN: GuideSet = {
         '- The text input window is shared: plans go to the planner, health lines go to the “Health” section.',
         '',
         '## Notes ↔ files ↔ canvas',
-        '- Note → cloud: notes are files of the “Knowledge” folder; they show in the “Files” tab and share its trash.',
+        '- Note → cloud: notes are files of the “Notes” folder; they show in the “Files” module and share its trash.',
         p(
           '- Notes → graph → canvas: the graph draws the links between notes, “Canvas from graph” turns it into a',
           'board. See [[Graph and Canvas]].',

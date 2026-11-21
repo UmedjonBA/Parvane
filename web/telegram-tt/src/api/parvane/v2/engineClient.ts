@@ -419,6 +419,10 @@ export class EngineClient {
     return reqs(this.c('leave', {}));
   }
 
+  leaveRotating(): any {
+    return reqs(this.c('leaveRotating', {}));
+  }
+
   leftSskHolders(): Array<any> {
     return reqs(this.c('leftSskHolders', {}));
   }

@@ -14,8 +14,6 @@ export const PERIOD_KEYS = {
   year: 'HealthPeriodYear',
 } as const;
 
-const WEEK_DAYS = 7;
-
 /** День `ГГГГ-ММ-ДД`, сдвинутый на `days` суток. */
 export function shiftDay(day: string, days: number) {
   const date = new Date(`${day}T12:00:00`);
@@ -23,17 +21,38 @@ export function shiftDay(day: string, days: number) {
   return localDayKey(date);
 }
 
-/** Значения показателя за период по порядку времени: дни без записей в ряд не входят. */
-export function metricPoints(metric: Pick<HealthMetricView, 'series' | 'year'>, period: HealthPeriod, today: string) {
+// Ячейка графика: день (`ГГГГ-ММ-ДД`) либо месяц (`ГГГГ-ММ`) с его значениями; пропуск — без значения
+export type HealthChartSlot = { key: string; weekday: number; value?: number; value2?: number; goalMet?: boolean };
+
+const PERIOD_DAYS = { week: 7, month: 30 } as const;
+
+/** Ячейки графика за период: у недели и месяца — каждый день (пропуски пустые), у года — месяцы. */
+export function chartSlots(
+  { metric, sleep }: {
+    metric?: Pick<HealthMetricView, 'series' | 'year'>;
+    sleep?: Pick<HealthSleepView, 'month' | 'year'>;
+  },
+  period: HealthPeriod,
+  today: string,
+): HealthChartSlot[] {
   if (period === 'year') {
-    return metric.year.filter((item) => item.value !== undefined).map((item) => item.value!);
+    const months = sleep ? sleep.year.map((item) => ({ key: item.month, value: item.minutes }))
+      : metric!.year.map((item) => ({ key: item.month, value: item.value, value2: item.value2 }));
+    return months.map((item) => ({ ...item, weekday: 0 }));
   }
-  const from = period === 'week' ? shiftDay(today, 1 - WEEK_DAYS) : '';
-  return metric.series.filter((point) => point.day >= from).map((point) => point.value);
+  const days = PERIOD_DAYS[period];
+  return Array.from({ length: days }, (_item, index) => {
+    const day = shiftDay(today, index - days + 1);
+    const weekday = (new Date(`${day}T12:00:00`).getDay() + 6) % 7;
+    if (sleep) return { key: day, weekday, value: sleep.month.find((item) => item.day === day)?.minutes };
+    const point = metric!.series.find((item) => item.day === day);
+    return {
+      key: day, weekday, value: point?.value, value2: point?.value2, goalMet: point?.goalMet,
+    };
+  });
 }
 
-/** Минуты сна по дням месяца либо по месяцам года; пропуск — `undefined`. Неделю показывает карточка сна. */
-export function sleepPoints(sleep: Pick<HealthSleepView, 'month' | 'year'>, period: HealthPeriod) {
-  if (period === 'year') return sleep.year.map((item) => item.minutes);
-  return period === 'month' ? sleep.month.map((item) => item.minutes) : [];
+/** Ряд сна за период для режима: неделя — дни недели сводки, месяц — 30 дней. */
+export function sleepDays(sleep: Pick<HealthSleepView, 'week' | 'month'>, period: HealthPeriod) {
+  return period === 'week' ? sleep.week : sleep.month;
 }

@@ -71,16 +71,19 @@ const HealthMoodScale = () => {
           </button>
         ))}
       </div>
-      <input
-        className={kit.input}
-        type="text"
-        value={note}
-        maxLength={NOTE_MAX}
-        placeholder={lang('HealthMoodNote')}
-        aria-label={lang('HealthFieldNote')}
-        autoComplete="off"
-        onChange={handleNote}
-      />
+      <label className={styles.field}>
+        <span className={buildClassName(kit.muted, kit.small)}>{lang('HealthMoodNote')}</span>
+        <input
+          className={kit.input}
+          type="text"
+          value={note}
+          maxLength={NOTE_MAX}
+          placeholder={lang('HealthMoodNoteExample')}
+          autoComplete="off"
+          data-health-mood-note
+          onChange={handleNote}
+        />
+      </label>
       <button
         type="submit"
         className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}

@@ -24,6 +24,9 @@ pub mod history;
 pub mod health_parse;
 pub mod modules;
 pub mod music_queue;
+pub mod music_tags;
+/// Списки библиотеки «Музыки» на экранах (spec 041): порядок, буквы, отбор, страницы, «Загруженное».
+pub mod music_library;
 /// Сверка ключей звонка словами (CALL-3, spec 041).
 pub mod call_sas;
 /// Раскладка графа заметок и холста из графа (spec 040).

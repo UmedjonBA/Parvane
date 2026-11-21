@@ -130,6 +130,17 @@ try {
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const noteBody = note.locator('[data-note-body]');
   await expectImageEmbed(noteBody, 'карта.png');
+  // Картинка открывается на весь экран просмотром «Файлов» (доска `ZpNotesX`)
+  await noteBody.locator('[data-md-embed="карта.png"] [data-embed-open]').click();
+  await page.locator('[data-preview-kind="photo"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('картинка заметки не открылась на весь экран'));
+  await shoot(page, 'note-image-open');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-preview-kind]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('просмотр картинки не закрылся'));
+  // Длительность небольшого видео — на кадре до воспроизведения
+  await noteBody.locator('[data-md-embed="клип.webm"] [data-embed-duration]').filter({ hasText: '0:02' })
+    .waitFor({ state: 'visible', timeout: 60000 }).catch(() => assert.fail('нет длительности видео на кадре'));
   await expectVideoEmbed(noteBody, 'клип.webm');
   assert.equal(await noteBody.locator('table td').filter({ hasText: '2 л' }).count(), 1, 'таблица в заметке');
   await shoot(page, 'note-media');
@@ -284,6 +295,44 @@ try {
   await notesOff.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await viewer.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: окно чтения при выключенных «Заметках» — лист «Модуль выключен»');
+
+  // ── Пропавший файл в заметке: «файл не найден — удалён или перемещён» и «Выбрать заново» (доска `ZpNotesX`) ──
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();
+  await knowledge.locator(`[data-note-row="${title}"]`).first().click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
+  await editor.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Обычный файл — карточкой «файл с диска · размер» и текстовой «Скачать» (доска `PhNotesMore`)
+  await editor.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
+  await note.locator('[data-note-insert-input]').setInputFiles([
+    { name: 'список.txt', mimeType: 'text/plain', buffer: Buffer.from('палатка\nспальник\n') },
+  ]);
+  await page.waitForFunction(() => (document.querySelector('#knowledge-note-editor')?.value || '').includes('![[список.txt]]'),
+    undefined, { timeout: 60000 }).catch(() => assert.fail('текстовый файл не вставился в заметку'));
+  await editor.fill(`${await editor.inputValue()}\n\n![[старая-карта.png|схема]]\n`);
+  await note.getByRole('button', { name: 'Save' }).first().click();
+  const fileCard = noteBody.locator('[data-md-embed="список.txt"] [data-embed-state="file"]');
+  await fileCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('нет карточки файла'));
+  assert.match(await fileCard.locator('[data-embed-meta]').innerText(), /^file from the drive · \d/, 'подпись карточки файла');
+  assert.equal(await fileCard.locator('[data-embed-download]').innerText(), 'Download', '«Скачать» текстом');
+  const missing = noteBody.locator('[data-md-embed="старая-карта.png"] [data-embed-state="missing"]');
+  await missing.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('нет карточки пропавшего файла'));
+  assert.ok((await missing.innerText()).includes('file not found — deleted or moved'), 'текст пропавшего файла');
+  await shoot(page, 'note-file-missing');
+  await missing.locator('[data-embed-repick]').click();
+  const fileRow = page.locator('[data-canvas-file-row="карта.png"]');
+  // Файл лежит рядом с заметкой — в папке хранилища заметок: открыть папки по пути
+  for (let depth = 0; depth < 3 && !(await fileRow.count()); depth++) {
+    await page.locator('[data-canvas-file-row]').first().click();
+    await page.waitForTimeout(300);
+  }
+  await fileRow.click();
+  await page.waitForFunction(() => {
+    const body = document.querySelector('#ParvaneKnowledge [data-note-body]');
+    return body && !body.querySelector('[data-embed-state="missing"]')
+      && [...body.querySelectorAll('[data-md-embed]')].some((item) => item.getAttribute('data-md-embed')?.endsWith('/карта.png'));
+  }, undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«Выбрать заново» не заменило файл в заметке'));
+  console.log('OK: картинка на весь экран, длительность видео, «Выбрать заново» у пропавшего файла');
 
   for (const [name, s] of Object.entries(sessions)) {
     assert.deepEqual(s.errors, [], `${name} page errors: ${s.errors.join('; ')}`);

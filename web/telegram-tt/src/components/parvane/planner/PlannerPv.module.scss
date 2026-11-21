@@ -119,10 +119,8 @@
   min-width: 0;
 }
 
-// Поле «Запись строкой» в шапке компьютера: нажатие открывает окно ввода
-.quick {
-  cursor: text;
-
+// Поле «Запись строкой» в шапке компьютера (доска `DeskPlan`): ввод и разбор справа внутри поля
+.quickField {
   overflow: hidden;
   display: flex;
   flex: 1 1 auto;
@@ -131,33 +129,65 @@
 
   min-width: 14rem;
   height: 2.5rem;
-  padding: 0 0.875rem;
+  padding: 0 0.625rem 0 0.75rem;
   border: 1px solid var(--pv-line2);
   border-radius: var(--pv-radius);
 
-  font: inherit;
   color: var(--pv-muted);
-  text-align: start;
-  text-overflow: ellipsis;
   white-space: nowrap;
 
   background: var(--pv-bg);
 
-  &:hover {
-    border-color: var(--pv-muted);
-  }
-
-  &:focus-visible {
-    outline: none;
+  &:focus-within {
+    border-color: var(--pv-accent);
     box-shadow: var(--pv-focus-ring);
   }
 }
 
-.quickText {
-  overflow: hidden;
+.quickFieldIcon {
+  flex: none;
+  font-size: 1.125rem;
+}
+
+.quickFieldInput {
   flex: 1 1 auto;
+
   min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: var(--pv-fg);
+
+  background: none;
+
+  &::placeholder {
+    color: var(--pv-muted);
+  }
+
+  &:focus {
+    outline: none;
+  }
+}
+
+.quickFieldParse {
+  overflow: hidden;
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: 0.25rem;
+  align-items: center;
+
+  min-width: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-green);
   text-overflow: ellipsis;
+}
+
+.quickFieldParseMuted {
+  color: var(--pv-muted);
 }
 
 .quickKey {
@@ -864,4 +894,149 @@
   color: var(--pv-orange);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+// ── список дел дня (колонка компьютера, день под месяцем на телефоне), заметка дня, строка сна ──────────
+
+.dayListRows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dayListRow {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border-top: 1px solid var(--pv-line);
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+.dayListTime {
+  flex: none;
+
+  width: 2.75rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.dayListName {
+  cursor: var(--custom-cursor, pointer);
+
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
+}
+
+.dayListTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dayListMinutes {
+  flex: none;
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.dayListDot {
+  flex: none;
+
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+
+  background: color-mix(in srgb, var(--planner-list-color, var(--pv-event)) 30%, transparent);
+}
+
+.noteCard {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3.75rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  font: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: var(--pv-panel);
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.noteCardIcon {
+  flex: none;
+  font-size: 1.375rem;
+  color: var(--pv-accent);
+}
+
+.noteCardText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+}
+
+.noteCardTitle {
+  font-weight: var(--font-weight-medium);
+}
+
+.noteCardSub {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sleepLine {
+  flex: none;
+
+  margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.sleepLineShort {
+  color: var(--pv-red);
 }

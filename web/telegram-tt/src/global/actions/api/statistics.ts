@@ -1,3 +1,5 @@
+import type { RegularLangFnParameters } from '../../../util/localization/types';
+
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { callApi } from '../../../api/gramjs';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
@@ -260,11 +262,11 @@ addActionHandler('processMonetizationRevenueWithdrawalUrl', async (global, actio
     return;
   }
 
+  // Без условного выражения: объединение ветвей с полным списком ключей слишком велико для проверки типов
+  let errorKey: RegularLangFnParameters | undefined;
+  if ('error' in result) errorKey = result.messageKey;
   global = getGlobal();
-  global = updateVerifyMonetizationModal(global, {
-    isLoading: false,
-    errorKey: 'error' in result ? result.messageKey : undefined,
-  }, tabId);
+  global = updateVerifyMonetizationModal(global, { isLoading: false, errorKey }, tabId);
   setGlobal(global);
 
   if ('url' in result) {

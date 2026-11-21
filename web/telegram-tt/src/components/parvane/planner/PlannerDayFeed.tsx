@@ -5,7 +5,9 @@ import type { PlannerLayers } from './plannerLayers';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDuration, formatSpan, listColorStyle } from './plannerFormat';
+import {
+  formatDuration, formatRecordCaption, formatSpan, listColorStyle,
+} from './plannerFormat';
 import { getDailyRecord, getWorkouts, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine } from './plannerLinks';
 import {
@@ -86,7 +88,7 @@ const PlannerDayFeed = ({
   });
 
   const rows: FeedRow[] = [];
-  const allDay = layers.work ? entry.allDay : [];
+  const allDay = entry.allDay;
 
   const handleOpenSleep = () => onOpenSleep?.(day);
   const sleep = layers.sleep && !isAllDayOnly ? getDailyRecord(state, 'sleep', day) : undefined;
@@ -133,7 +135,7 @@ const PlannerDayFeed = ({
     });
   }
 
-  if (layers.work && !isAllDayOnly) {
+  if (!isAllDayOnly) {
     entry.timed.forEach((item) => {
       const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
       const color = item.task ? getListColor(state, item.task.project) : getEventColor(state, item.event!);
@@ -171,8 +173,15 @@ const PlannerDayFeed = ({
                 onClick={handleItemClick}
               >
                 <span className={styles.feedBlockName}><PlannerName name={item.name} /></span>
-                <span className={styles.feedBlockSub}>
-                  <span>{`${item.start}–${item.end}`}</span>
+                <span className={styles.feedBlockSub} data-block-caption>
+                  <span>
+                    {formatRecordCaption(lang, {
+                      kind: item.task ? 'task' : 'event',
+                      minutes: toMinutes(item.end) - toMinutes(item.start),
+                      group: item.task ? item.task.project : item.event!.project,
+                      repeat: item.task ? item.task.repeat : item.event!.repeat,
+                    })}
+                  </span>
                   {item.task?.description.includes('[[') && <PlannerName name={item.task.description} onlyLinks />}
                 </span>
                 {note && <span className={styles.feedBlockNote} data-block-note>{note}</span>}

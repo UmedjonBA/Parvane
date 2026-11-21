@@ -673,12 +673,15 @@ export function createGroupController(deps: GroupDependencies) {
       if (!(await v2.revokeInvite(groupId, link))) return undefined;
       return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(record, false, true) };
     }
-    // Правка действующей ссылки (spec 024): название, срок, лимит; «по заявке» — как при создании
-    if (Boolean(isRequestNeeded) !== Boolean(record.isRequestNeeded)) {
-      reportInviteError('editUnsupported');
+    // Правка действующей ссылки (spec 024): название, срок, лимит и «по заявке» (поле правки
+    // `requires_approval`, 20 ноя 2026: пишется только изменившееся)
+    const isApprovalChanged = Boolean(isRequestNeeded) !== Boolean(record.isRequestNeeded);
+    const approval = isApprovalChanged ? Boolean(isRequestNeeded) : undefined;
+    if (!(await v2.editInvite(groupId, link, {
+      title, expiresAt: expireDate, usageLimit, isRequestNeeded: approval,
+    }))) {
       return undefined;
     }
-    if (!(await v2.editInvite(groupId, link, { title, expiresAt: expireDate, usageLimit }))) return undefined;
     const updated = (await v2.listInvites(groupId)).find((item) => item.url === link) || record;
     return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(updated) };
   }
@@ -764,7 +767,7 @@ export function createGroupController(deps: GroupDependencies) {
     return true;
   }
 
-  function reportInviteError(code: InviteErrorCode | 'editUnsupported' | 'linkFailed') {
+  function reportInviteError(code: InviteErrorCode | 'linkFailed') {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('parvane-invite-error', { detail: { code } }));
   }

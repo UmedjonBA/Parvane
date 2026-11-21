@@ -6,6 +6,10 @@
 //! «прошла», если её день раньше `today` либо сегодня и её конец (начало, если конца нет) не позже `nowMinute`.
 //! День записи — `day`, без него — `due`. Клиент сам раскрывает повторы и шлёт экземпляры ряда отдельными записями
 //! с общим `series`: в «Впереди» остаётся только ближайший экземпляр ряда, в «Прошло» — каждый.
+//!
+//! Колонка «Слои / Что показывать» компьютера (доска `ZdPlanX`, 21 ноя 2026): `show` — набор вместо `filter`
+//! (`events`, `tasks`, `done`, `offers`): вид записи включён, выполненное — только при `done`, запись из
+//! чата (`fromChat`) — только при `offers`; `hiddenGroups` — выключенные слои (группы; `""` — без группы).
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -22,6 +26,8 @@ pub struct Input {
     pub now_minute: i64,
     pub ahead_limit: usize,
     pub past_limit: usize,
+    pub show: Option<Vec<String>>,
+    pub hidden_groups: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -43,6 +49,8 @@ pub struct Item {
     pub is_done: bool,
     /// Ряд, к которому относится экземпляр; пусто — запись сама по себе.
     pub series: String,
+    /// Запись создана из задания, присланного в чат.
+    pub from_chat: bool,
 }
 
 fn none() -> i64 {
@@ -61,7 +69,11 @@ pub fn run(input: &Input) -> Value {
     let mut ahead: Vec<&Item> = Vec::new();
     let mut past: Vec<&Item> = Vec::new();
     for item in &input.items {
-        if !passes(item, &input.filter) {
+        let shown = match &input.show {
+            Some(show) => passes_show(item, show),
+            None => passes(item, &input.filter),
+        };
+        if !shown || input.hidden_groups.iter().any(|g| *g == item.group) {
             continue;
         }
         let text = fold(&format!("{} {} {}", item.name, item.description, item.group));
@@ -95,6 +107,12 @@ fn passes(item: &Item, filter: &str) -> bool {
         "done" => item.is_done,
         _ => true,
     }
+}
+
+fn passes_show(item: &Item, show: &[String]) -> bool {
+    let has = |what: &str| show.iter().any(|s| s == what);
+    let kind = if item.kind == "event" { "events" } else { "tasks" };
+    has(kind) && (!item.is_done || has("done")) && (!item.from_chat || has("offers"))
 }
 
 fn when(item: &Item) -> &str {
@@ -135,7 +153,7 @@ mod tests {
             Item { series: "s".into(), ..item("g1", "event", "Зал по средам", "2026-11-25", 600, false) },
             Item { series: "s".into(), ..item("g0", "event", "Зал по средам", "2026-11-18", 600, false) },
         ];
-        let mut input = Input { query: "зал".into(), filter: "all".into(), items, today: "2026-11-15".into(), now_minute: 700, ahead_limit: 10, past_limit: 1 };
+        let mut input = Input { query: "зал".into(), filter: "all".into(), items, today: "2026-11-15".into(), now_minute: 700, ahead_limit: 10, past_limit: 1, ..Input::default() };
         assert_eq!(run(&input), json!({"ahead": ["f", "g0", "a", "b"], "past": ["c"], "aheadTotal": 4, "pastTotal": 2}));
         input.filter = "done".into();
         assert_eq!(run(&input)["past"], json!(["d"]));
@@ -143,5 +161,21 @@ mod tests {
         assert_eq!(run(&input)["ahead"], json!(["b"]));
         input.query = "  ".into();
         assert_eq!(run(&input)["aheadTotal"], 0);
+    }
+
+    #[test]
+    fn show_set_and_hidden_groups() {
+        let items = vec![
+            Item { group: "Спорт".into(), ..item("a", "event", "Зал", "2026-11-18", 1080, false) },
+            Item { group: "Учёба".into(), ..item("b", "event", "Зал лекций", "2026-11-19", 600, false) },
+            Item { from_chat: true, ..item("c", "task", "Зал: продлить", "2026-11-20", -1, false) },
+            item("d", "task", "Зал", "2026-11-21", 1080, true),
+        ];
+        let show = |list: &[&str]| Some(list.iter().map(|s| s.to_string()).collect());
+        let mut input = Input { query: "зал".into(), items, today: "2026-11-15".into(), ahead_limit: 10, past_limit: 10, show: show(&["events", "tasks", "offers"]), ..Input::default() };
+        assert_eq!(run(&input)["ahead"], json!(["a", "b", "c"]));
+        input.hidden_groups = vec!["Учёба".into()];
+        input.show = show(&["events", "tasks", "done"]);
+        assert_eq!(run(&input)["ahead"], json!(["a", "d"]));
     }
 }

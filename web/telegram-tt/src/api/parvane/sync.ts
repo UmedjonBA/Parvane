@@ -1024,8 +1024,26 @@ export function createSyncController(deps: SyncDependencies) {
     return applyStoredUpdate(stored);
   }
 
+  /** Сообщения участника группы скрыты либо снова показаны у себя (REPORT-3; решает приёмный фильтр модели):
+   * скрытые уходят из стора и с экрана (строки модели остаются), показанные снова читаются из модели — экран
+   * забирает их `fetchMessages`. */
+  async function applyMemberHidden(chatId: string, author: string, isHidden: boolean) {
+    const store = deps.getStore();
+    if (!isHidden) {
+      loadedChatIds.delete(chatId);
+      await ensureChatLoaded(chatId);
+      return;
+    }
+    const ids = store.getMessages(chatId)
+      .filter((message) => message.senderId && store.getAddressForId(message.senderId) === author)
+      .map(({ id }) => id);
+    ids.forEach((id) => store.removeMessage(chatId, id));
+    if (ids.length) deps.sendUpdate({ '@type': 'deleteMessages', ids, chatId });
+  }
+
   return {
     applyExternal,
+    applyMemberHidden,
     showRow,
     restoreLate,
     ensureChatLoaded,

@@ -155,6 +155,10 @@ const SettingsHeader: FC<OwnProps> = ({
 
       case SettingsScreens.ParvaneModules:
         return <h3>{lang('ParvaneModules')}</h3>;
+      case SettingsScreens.ParvanePlanSettings:
+        return <h3>{lang('ParvaneModuleCrumb', { module: lang('ParvaneSectionPlanner') })}</h3>;
+      case SettingsScreens.ParvaneHealthGoals:
+        return <h3>{lang('ParvaneModuleCrumb', { module: lang('PlannerHealth') })}</h3>;
       case SettingsScreens.ParvaneAppearance:
         return <h3>{lang('ParvaneAppearance')}</h3>;
       case SettingsScreens.ParvaneKeysBackup:

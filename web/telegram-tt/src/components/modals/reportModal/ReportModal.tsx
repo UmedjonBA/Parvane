@@ -5,8 +5,8 @@ import { getActions, withGlobal } from '../../../global';
 import type { TabState } from '../../../global/types';
 import type { RegularLangKey } from '../../../types/language';
 
-import { getUserFullName } from '../../../global/helpers';
-import { selectChatMessage, selectUser } from '../../../global/selectors';
+import { getUserFullName, isChatGroup } from '../../../global/helpers';
+import { selectChat, selectChatMessage, selectUser } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 
 import useLang from '../../../hooks/useLang';
@@ -32,14 +32,16 @@ export type OwnProps = {
 type StateProps = {
   authorName?: string;
   messageText?: string;
+  // Автор сообщения группы, чьи сообщения можно скрыть у себя (не сам пользователь)
+  hideableAuthorId?: string;
 };
 
 // Parvane (spec 041, доска `XdChat`; REPORT-2): жалоба одной формой — причина чипами, комментарий, кому уходит.
 // Причины и адресатов отдаёт провайдер (их выбирает движок), окно только показывает и отправляет
 const ReportModal = ({
-  modal, authorName, messageText,
+  modal, authorName, messageText, hideableAuthorId,
 }: OwnProps & StateProps) => {
-  const { reportMessages, closeReportModal } = getActions();
+  const { reportMessages, closeReportModal, parvaneSetMemberHidden } = getActions();
   const lang = useLang();
 
   const section = modal?.sections[0];
@@ -49,6 +51,8 @@ const ReportModal = ({
   const [reason, setReason] = useState<string | undefined>();
   const [target, setTarget] = useState<string | undefined>();
   const [text, setText] = useState('');
+  // «Скрыть у меня сообщения этого участника» — включено по умолчанию, как на доске `XdChat`
+  const [shouldHideAuthor, setShouldHideAuthor] = useState(true);
 
   // Начальные значения формы — до первого кадра (правило экрана spec 041)
   useLayoutEffect(() => {
@@ -56,6 +60,7 @@ const ReportModal = ({
     setReason(isOptions ? section.options[0]?.option : undefined);
     setTarget(isOptions ? section.targets?.[0] : undefined);
     setText('');
+    setShouldHideAuthor(true);
   }, [section]);
 
   const handleTextChange = useLastCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
@@ -66,8 +71,15 @@ const ReportModal = ({
     closeReportModal();
   });
 
+  const handleHideChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setShouldHideAuthor(e.target.checked);
+  });
+
   const handleSend = useLastCallback(() => {
     if (!modal?.chatId || !reason || !target) return;
+    if (hideableAuthorId && shouldHideAuthor) {
+      parvaneSetMemberHidden({ chatId: modal.chatId, userId: hideableAuthorId, isHidden: true });
+    }
     reportMessages({
       chatId: modal.chatId,
       messageIds: modal.messageIds,
@@ -146,6 +158,18 @@ const ReportModal = ({
           : target === 'admins' ? 'ParvaneReportNoteAdmins' : 'ParvaneReportNoteServer')}
       </div>
       <div className={buildClassName(kit.sheetButtons, styles.buttons)}>
+        {hideableAuthorId && (
+          <label className={buildClassName(kit.small, styles.hideAuthor)}>
+            <input
+              type="checkbox"
+              className={styles.hideAuthorCheck}
+              checked={shouldHideAuthor}
+              data-report-hide-author
+              onChange={handleHideChange}
+            />
+            {lang('ParvaneReportHideAuthor')}
+          </label>
+        )}
         <button type="button" className={kit.btn} onClick={handleClose}>{lang('Cancel')}</button>
         <button
           type="button"
@@ -165,9 +189,12 @@ export default memo(withGlobal<OwnProps>((global, { modal }): Complete<StateProp
   const messageId = modal?.messageIds[0];
   const message = modal?.chatId && messageId ? selectChatMessage(global, modal.chatId, messageId) : undefined;
   const author = message?.senderId ? selectUser(global, message.senderId) : undefined;
+  const chat = modal?.chatId ? selectChat(global, modal.chatId) : undefined;
+  const isOthersGroupMessage = Boolean(chat && isChatGroup(chat) && author && author.id !== global.currentUserId);
   return {
     authorName: author ? getUserFullName(author) : undefined,
     messageText: message?.content.text?.text,
+    hideableAuthorId: isOthersGroupMessage ? author!.id : undefined,
   };
 })(ReportModal));
 

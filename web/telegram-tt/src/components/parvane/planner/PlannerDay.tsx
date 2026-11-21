@@ -4,7 +4,7 @@ import type { PlannerLayers } from './plannerLayers';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDayLong, formatRelativeDay } from './plannerFormat';
+import { formatDayHeading } from './plannerFormat';
 import { getDayBudget } from './plannerHealth';
 import {
   getDayEntry, getListColor, getUndatedTasks, instanceKey,
@@ -18,6 +18,7 @@ import PlannerDailyNote from './PlannerDailyNote';
 import PlannerDayFeed from './PlannerDayFeed';
 import PlannerDayTags from './PlannerDayTags';
 import PlannerLoad from './PlannerLoad';
+import PlannerSleepLine from './PlannerSleepLine';
 import PlannerTaskRow from './PlannerTaskRow';
 import PlannerWeek from './PlannerWeek';
 
@@ -63,7 +64,7 @@ const PlannerDay = ({
   const queued = useMemo(() => (
     undated.filter(({ status }) => status === 'queue').slice(0, UNDATED_SHOWN)
   ), [undated]);
-  const untimed = layers.work ? entry.untimed : [];
+  const untimed = entry.untimed;
   const days = useMemo(() => [day], [day]);
   const hasUntimed = Boolean(untimed.length || active.length || queued.length);
 
@@ -118,7 +119,7 @@ const PlannerDay = ({
       <div className={pv.dayRoot} data-planner-today={day}>
         <div className={pv.dayList} data-today-tasks>
           <PlannerLoad
-            title={`${formatRelativeDay(lang, day, today)}, ${formatDayLong(lang, day).toLowerCase()}`}
+            title={formatDayHeading(lang, day, today)}
             minutes={entry.minutes}
             budget={getDayBudget(state, day)}
             withFree
@@ -139,7 +140,7 @@ const PlannerDay = ({
           {untimedHead}
           {untimedRows}
           {undatedButton}
-          <PlannerDailyNote day={day} />
+          <PlannerDailyNote day={day} variant="card" />
         </div>
       </div>
     );
@@ -166,7 +167,7 @@ const PlannerDay = ({
         </div>
         {!noAside && (
           <aside className={buildClassName(pv.dayAside, 'custom-scroll')} data-planner-day-aside>
-            <PlannerDayTags state={state} day={day} layers={layers} onOpenTask={onOpenTask} />
+            <PlannerDayTags state={state} day={day} layers={layers} noSleep onOpenTask={onOpenTask} />
             <PlannerDayFeed
               state={state}
               day={day}
@@ -180,7 +181,8 @@ const PlannerDay = ({
             {untimedRows}
             {hasUntimed && <p className={pv.hint} data-drag-hint>{lang('PlannerDragToGrid')}</p>}
             {undatedButton}
-            <PlannerDailyNote day={day} />
+            <PlannerDailyNote day={day} variant="field" />
+            {layers.sleep && <PlannerSleepLine state={state} day={day} />}
           </aside>
         )}
       </div>

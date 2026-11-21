@@ -1,5 +1,7 @@
 import type { ChangeEvent } from 'react';
-import { memo, useEffect, useState } from '../../../../lib/teact/teact';
+import {
+  memo, useLayoutEffect, useRef, useState,
+} from '../../../../lib/teact/teact';
 
 import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
@@ -57,7 +59,11 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
   // Корень аккаунта на устройстве: ключ восстановления не нужен (пока не известно — поле ключа показывается)
   const [hasRoot, setHasRoot] = useState(false);
 
-  useEffect(() => {
+  // Набранный ник не затирается: поле ставится в кадре появления (обычный эффект шёл кадром позже и стирал ввод,
+  // сделанный сразу после открытия), а ник профиля, пришедший позже, подставляется, только пока поле не тронуто
+  const isEditedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (isEditedRef.current) return;
     setNick(currentNick || '');
     setNickState('own');
   }, [currentNick]);
@@ -82,6 +88,7 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
 
   const handleNick = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/^@/, '');
+    isEditedRef.current = true;
     setNick(value);
     setError(undefined);
     const clean = value.trim().toLowerCase();

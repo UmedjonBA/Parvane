@@ -10,6 +10,8 @@ type Deps = {
   call: (method: string, request: Json) => Promise<Json>;
   // Домен сервера аккаунта: его библиотеку и играет «Музыка»
   selfDomain: () => string;
+  // Свой ник: «добавил я» у своих треков
+  selfName: () => string;
   // Плейлисты — личный контейнер пользователя (сервер видит шифртекст)
   playlists: () => MusicPlaylistsSync;
   log: (message: string) => void;
@@ -61,6 +63,8 @@ export type MusicAlbum = {
   trackCount: number;
   durationSecs: number;
   year: number;
+  // Сингл (тип релиза у сервера): синглы исполнителя — одной плиткой (spec 041)
+  isSingle: boolean;
 };
 
 export type MusicArtist = {
@@ -68,21 +72,35 @@ export type MusicArtist = {
   name: string;
   coverId: string;
   albumCount: number;
+  // Треков исполнителя в библиотеке; 0 — неизвестно
+  trackCount: number;
 };
 
 export type MusicInfo = {
   isEnabled: boolean;
   // Домен сервера библиотеки (сервер аккаунта): карточка трека в чате играет только треки этого сервера
   server: string;
+  // Свой ник (как `adder` у добавленных треков)
+  selfName: string;
   // База ссылок обложек: `<coverBase>/<coverId>?size=N`; пусто — обложек нет
   coverBase: string;
   coverExpiresMs: number;
   // «Найти и скачать»: сервис скачивания подключён; лимиты и расход пользователя
   isFetchEnabled: boolean;
+  // «Загрузить свои файлы» (spec 041): папка библиотеки подключена; предел одного файла
+  isUploadEnabled: boolean;
+  uploadMaxBytes: number;
   addPerDay: number;
   addedToday: number;
   quotaBytes: number;
   usedBytes: number;
+  // Числа для экранов (spec 041): треки, исполнители и альбомы библиотеки, любимое пользователя; 0 — неизвестно
+  libraryTracks: number;
+  libraryArtists: number;
+  libraryAlbums: number;
+  starredCount: number;
+  // Может удалять чужие добавленные треки
+  isAdmin: boolean;
   // Сервер не ответил: модуль показывает «Нет ответа от сервера» с «Повторить», а не «не подключена»
   isFailed?: boolean;
 };
@@ -114,8 +132,8 @@ export type MusicFetchCandidate = {
   isTrustedOriginal: boolean;
 };
 
-export type MusicFetchState = 'searching' | 'choice' | 'downloading' | 'done' | 'failed';
-export type MusicFetchFailure = 'notFound' | 'source' | 'library' | 'limit';
+export type MusicFetchState = 'queued' | 'searching' | 'choice' | 'downloading' | 'done' | 'failed';
+export type MusicFetchFailure = 'notFound' | 'source' | 'library' | 'limit' | 'format' | 'duplicate';
 
 export type MusicFetchJob = {
   jobId: string;
@@ -124,6 +142,15 @@ export type MusicFetchJob = {
   candidates: MusicFetchCandidate[];
   trackId?: string;
   failure?: MusicFetchFailure;
+  // spec 041: ход загрузки (байты; 0 — сервер не знает), место в очереди сервера, причина отказа словами сервера,
+  // строка запроса («Найти и скачать «запрос»»), имя своего файла (`music.upload.start`), время последней перемены
+  bytesDone: number;
+  bytesTotal: number;
+  queueAhead: number;
+  failureDetail?: string;
+  query?: string;
+  uploadName?: string;
+  updatedMs: number;
 };
 
 export type MusicAddedTrack = {
@@ -138,6 +165,7 @@ export type MusicStreamQuality = 'original' | 'opus';
 
 const PAGE = 50;
 const FETCH_STATES: Record<string, MusicFetchState> = {
+  FETCH_STATE_QUEUED: 'queued',
   FETCH_STATE_SEARCHING: 'searching',
   FETCH_STATE_NEEDS_CHOICE: 'choice',
   FETCH_STATE_DOWNLOADING: 'downloading',
@@ -149,6 +177,8 @@ const FETCH_FAILURES: Record<string, MusicFetchFailure> = {
   FETCH_FAILURE_SOURCE: 'source',
   FETCH_FAILURE_LIBRARY: 'library',
   FETCH_FAILURE_LIMIT: 'limit',
+  FETCH_FAILURE_FORMAT: 'format',
+  FETCH_FAILURE_DUPLICATE: 'duplicate',
 };
 const EXPLICIT_NAMES = { yes: 'EXPLICIT_YES', no: 'EXPLICIT_NO' };
 const QUALITY_NAMES: Record<MusicStreamQuality, string> = {
@@ -197,12 +227,17 @@ function toAlbum(raw: Json): MusicAlbum {
     trackCount: count(raw, 'track_count'),
     durationSecs: count(raw, 'duration_secs'),
     year: count(raw, 'year'),
+    isSingle: Boolean(field(raw, 'single')),
   };
 }
 
 function toArtist(raw: Json): MusicArtist {
   return {
-    id: text(raw, 'id'), name: text(raw, 'name'), coverId: text(raw, 'cover_id'), albumCount: count(raw, 'album_count'),
+    id: text(raw, 'id'),
+    name: text(raw, 'name'),
+    coverId: text(raw, 'cover_id'),
+    albumCount: count(raw, 'album_count'),
+    trackCount: count(raw, 'track_count'),
   };
 }
 
@@ -248,6 +283,13 @@ function toFetchJob(raw: Json): MusicFetchJob {
     })),
     trackId: text(raw, 'track_id') || undefined,
     failure: FETCH_FAILURES[text(raw, 'failure')],
+    bytesDone: count(raw, 'bytes_done'),
+    bytesTotal: count(raw, 'bytes_total'),
+    queueAhead: count(raw, 'queue_ahead'),
+    failureDetail: text(raw, 'failure_detail') || undefined,
+    query: text(raw, 'query') || undefined,
+    uploadName: text(raw, 'upload_name') || undefined,
+    updatedMs: count(raw, 'updated_ms'),
   };
 }
 
@@ -276,13 +318,21 @@ export function createMusicApi(deps: Deps) {
         return {
           isEnabled: Boolean(field(reply, 'enabled')),
           server: deps.selfDomain(),
+          selfName: deps.selfName(),
           coverBase: text(reply, 'cover_base'),
           coverExpiresMs: count(reply, 'cover_expires_ms'),
           isFetchEnabled: Boolean(field(reply, 'fetch_enabled')),
+          isUploadEnabled: Boolean(field(reply, 'upload_enabled')),
+          uploadMaxBytes: count(reply, 'upload_max_bytes'),
           addPerDay: count(reply, 'add_per_day'),
           addedToday: count(reply, 'added_today'),
           quotaBytes: count(reply, 'quota_bytes'),
           usedBytes: count(reply, 'used_bytes'),
+          libraryTracks: count(reply, 'library_tracks'),
+          libraryArtists: count(reply, 'library_artists'),
+          libraryAlbums: count(reply, 'library_albums'),
+          starredCount: count(reply, 'starred_count'),
+          isAdmin: Boolean(field(reply, 'admin')),
         };
       } catch (err) {
         deps.log(`музыка: сведения не получены: ${String(err)}`);
@@ -290,13 +340,21 @@ export function createMusicApi(deps: Deps) {
           isEnabled: false,
           isFailed: true,
           server: deps.selfDomain(),
+          selfName: deps.selfName(),
           coverBase: '',
           coverExpiresMs: 0,
           isFetchEnabled: false,
+          isUploadEnabled: false,
+          uploadMaxBytes: 0,
           addPerDay: 0,
           addedToday: 0,
           quotaBytes: 0,
           usedBytes: 0,
+          libraryTracks: 0,
+          libraryArtists: 0,
+          libraryAlbums: 0,
+          starredCount: 0,
+          isAdmin: false,
         };
       }
     },
@@ -332,6 +390,8 @@ export function createMusicApi(deps: Deps) {
       return {
         artist: artist && typeof artist === 'object' ? toArtist(artist as Json) : undefined,
         albums: list(reply, 'albums').map(toAlbum),
+        // «Популярное на сервере»: по прослушиваниям всех пользователей
+        popular: list(reply, 'popular').map(toTrack),
       };
     },
 
@@ -343,9 +403,14 @@ export function createMusicApi(deps: Deps) {
       return trackIds.map((id) => tracks.find((track) => track.id === id)).filter(Boolean);
     },
 
-    /** Ссылка на поток трека: живёт до `expiresMs`, потом берётся новая. */
-    async parvaneMusicStreamUrl({ trackId, quality }: { trackId: string; quality: MusicStreamQuality }) {
-      const reply = await deps.call('music.stream.url', { track_id: trackId, quality: QUALITY_NAMES[quality] });
+    /** Ссылка на поток трека: живёт до `expiresMs`, потом берётся новая. `isDownload` — загрузка на устройство
+     * (в «Популярное на сервере» не считается). */
+    async parvaneMusicStreamUrl({ trackId, quality, isDownload }: {
+      trackId: string; quality: MusicStreamQuality; isDownload?: boolean;
+    }) {
+      const reply = await deps.call('music.stream.url', {
+        track_id: trackId, quality: QUALITY_NAMES[quality], download: isDownload || undefined,
+      });
       return { url: text(reply, 'url'), expiresMs: count(reply, 'expires_ms'), mime: text(reply, 'mime') };
     },
 
@@ -399,6 +464,32 @@ export function createMusicApi(deps: Deps) {
     async parvaneMusicFetchStart({ track }: { track: MusicCatalogTrack }) {
       const reply = await deps.call('music.fetch.start', { track: fromCatalogTrack(track) });
       return toFetchJob(field(reply, 'job') as Json);
+    },
+
+    /** «Найти и скачать «запрос»»: эталон сервер берёт из каталога сам (spec 041). */
+    async parvaneMusicFetchQuery({ query }: { query: string }) {
+      const reply = await deps.call('music.fetch.start', { query });
+      return toFetchJob(field(reply, 'job') as Json);
+    },
+
+    /** Снять задачу: идущая останавливается, законченная убирается из «Загрузок на сервер». */
+    async parvaneMusicFetchCancel({ jobId }: { jobId: string }) {
+      await deps.call('music.fetch.cancel', { job_id: jobId });
+      return true;
+    },
+
+    /** Свой файл: задача и ссылка для `PUT` байтов (без ссылки — такой файл уже в библиотеке). */
+    async parvaneMusicUploadStart({
+      fileName, bytes, sha256, title, artist, durationSecs,
+    }: {
+      fileName: string; bytes: number; sha256: string; title: string; artist: string; durationSecs: number;
+    }) {
+      const reply = await deps.call('music.upload.start', {
+        file_name: fileName, bytes, sha256, title, artist, duration_secs: durationSecs,
+      });
+      return {
+        job: toFetchJob(field(reply, 'job') as Json), url: text(reply, 'url'), expiresMs: count(reply, 'expires_ms'),
+      };
     },
 
     /** Продолжить задачу файлом, который выбрал пользователь. */

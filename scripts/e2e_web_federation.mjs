@@ -254,8 +254,8 @@ try {
   await a.locator('#parvane-cloud-shared-name').fill(FOLDER);
   await a.getByRole('button', { name: 'Create', exact: true }).click();
   await shareDialog.waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
-  await shareDialog.locator('select[data-new-role]').selectOption({ label: 'Editor' });
-  await shareDialog.getByRole('button', { name: 'Add people', exact: true }).click();
+  await shareDialog.locator('[data-new-role="editor"]').click();
+  await shareDialog.locator('[data-share-contacts]').click();
   const picker = a.locator('.Modal').filter({ has: a.locator('.ChatOrUserPicker-item') });
   await picker.locator('.ChatOrUserPicker-item').filter({ hasText: nick(boris) }).first().click();
   // До ответа Бориса он — в «Приглашениях · ждёт ответа» (spec 041 E2)

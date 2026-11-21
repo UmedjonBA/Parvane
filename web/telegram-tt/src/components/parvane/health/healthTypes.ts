@@ -19,7 +19,52 @@ export type HealthEntry = {
   tag: string;
   // Именованные числа: БЖУ и граммы еды, километры и упражнения тренировки
   parts: Record<string, number>;
+  // Только в записях подробного экрана (`healthEntries`): изменение к предыдущей записи вида, отклонение сна от
+  // цели (минуты), пульс той же минуты у давления
+  delta?: number;
+  goalDelta?: number;
+  pulse?: number;
 };
+
+// Итог дня вида-суммы (шаги, вода) с оценкой самочувствия дня
+export type HealthDayTotal = {
+  day: string;
+  weekday: number;
+  value: number;
+  count: number;
+  mood?: number;
+  moodNote?: string;
+};
+
+export type HealthSleepPeriodStats = {
+  nights: number;
+  avgMinutes?: number;
+  avgBedMin?: number;
+  avgWakeMin?: number;
+  bedDeltaMin?: number;
+  wakeDeltaMin?: number;
+  goalDeltaMin?: number;
+};
+
+// Режим сна за неделю по разбросу отбоя
+export type HealthRegimeState = 'stable' | 'floating' | 'off' | 'few';
+
+export type HealthSleepStats = {
+  periods: Record<'week' | 'month' | 'year', HealthSleepPeriodStats>;
+  regime: { state: HealthRegimeState; bedSpreadMin?: number; wakeSpreadMin?: number; isWakeStable: boolean };
+  lastBedDeltaMin?: number;
+};
+
+export type HealthMetricPeriodStats = {
+  avg?: number;
+  avg2?: number;
+  days: number;
+  count: number;
+  goalDays?: number;
+  spanDays: number;
+};
+
+export type HealthMoodSleep = { lowSleepMin: number; lowDays: number; otherDays: number; delta?: number };
 
 export type HealthSleepNight = {
   id: string;
@@ -36,6 +81,7 @@ export type HealthSleepDay = {
   // 0 — понедельник
   weekday: number;
   minutes?: number;
+  deltaMinutes?: number;
   bedMin?: number;
   wakeMin?: number;
 };
@@ -50,9 +96,10 @@ export type HealthSleepView = {
   week: HealthSleepDay[];
   avgMinutes?: number;
   openStartMs?: number;
-  // Сумма сна по дням за 30 дней и средняя ночь по месяцам года
-  month: { day: string; minutes?: number }[];
+  // Сон по дням за 30 дней (сумма, «лёг / встал») и средняя ночь по месяцам года
+  month: HealthSleepDay[];
   year: { month: string; minutes?: number }[];
+  stats: HealthSleepStats;
 };
 
 export type HealthMetricView = {
@@ -65,7 +112,13 @@ export type HealthMetricView = {
   today?: number;
   weekDelta?: number;
   monthDelta?: number;
-  series: { day: string; value: number; value2: number }[];
+  yearDelta?: number;
+  // Темп за неделю (вес)
+  paceWeek?: number;
+  // Цель — верхняя граница (давление)
+  isUpperBound: boolean;
+  periods: Record<'week' | 'month' | 'year', HealthMetricPeriodStats>;
+  series: { day: string; weekday: number; value: number; value2: number; goalMet?: boolean }[];
   // Двенадцать месяцев: среднее значений дней; месяц без записей — без значения
   year: { month: string; value?: number; value2?: number }[];
 };
@@ -110,6 +163,7 @@ export type HealthView = {
   sleep: HealthSleepView;
   metrics: HealthMetricView[];
   recent: HealthEntry[];
+  moodSleep: HealthMoodSleep;
   nutrition: HealthNutritionView;
   activity: HealthActivityView;
 };

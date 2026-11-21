@@ -79,7 +79,8 @@ const MusicControls = ({ isFullScreen }: { isFullScreen?: boolean }) => {
         <button
           type="button"
           className={buildClassName(kit.ib, repeat !== 'off' && styles.modeOn)}
-          aria-label={lang(REPEAT_KEYS[repeat])}
+          aria-label={lang(repeat === 'all' && player.source?.kind === 'playlist'
+            ? 'MusicRepeatAllPlaylist' : REPEAT_KEYS[repeat])}
           data-music-repeat={repeat}
           onClick={cycleRepeat}
         >

@@ -7,6 +7,9 @@
 //!   "uploaded":"ГГГГ-ММ-ДД"|null,"bitrate","explicit"}]}`; источник отказал — 503
 //! - `POST /download {"source","id","dest"}` → `{"path","bytes","duration"}`: файл записан в папку библиотеки по
 //!   пути `dest` + расширение
+//! - (spec 041, необязательно) `GET /progress?dest=` → `{"bytes_done","bytes_total"}` — ход идущей загрузки; нет
+//!   метода (404) — шард смотрит размер файла сам; `POST /cancel {"dest"}` — остановить загрузку
+//! - отказ с телом `{"reason": "…"}` (кроме 503) — причина словами администратора: её видит пользователь
 //!
 //! Сервис ничего не решает: что считать тем самым треком, решает `matching`.
 
@@ -28,6 +31,30 @@ pub enum ServiceError {
     Unavailable,
     /// Источник отказал (блокировка, «не бот»): пробуем следующий.
     SourceRefused,
+    /// Сервис отказал и назвал причину (`{"reason"}`): её показывают пользователю.
+    Failed(String),
+}
+
+/// Ход загрузки по словам сервиса.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+const REASON_MAX: usize = 200;
+
+fn reason_of(bytes: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(bytes).ok()?;
+    let r: String = v.get("reason")?.as_str()?.trim().chars().filter(|c| !c.is_control()).collect();
+    let mut out = String::new();
+    for c in r.chars() {
+        if out.len() + c.len_utf8() > REASON_MAX {
+            break;
+        }
+        out.push(c);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 pub struct FetchService {
@@ -74,7 +101,8 @@ impl FetchService {
             return Err(ServiceError::SourceRefused);
         }
         if !resp.status().is_success() {
-            return Err(ServiceError::Unavailable);
+            let body = resp.bytes().await.unwrap_or_default();
+            return Err(reason_of(&body).map_or(ServiceError::Unavailable, ServiceError::Failed));
         }
         let bytes = resp.bytes().await.map_err(|_| ServiceError::Unavailable)?;
         if bytes.len() > MAX_JSON_BYTES {
@@ -131,5 +159,32 @@ impl FetchService {
             return Err(ServiceError::Unavailable);
         }
         Ok(Downloaded { path, bytes, duration_secs: num(&v, "duration") })
+    }
+
+    /// Ход загрузки в `dest`; `None` — сервис не знает (метода нет либо загрузка не началась).
+    pub async fn progress(&self, dest: &str) -> Option<Progress> {
+        let rq = self.http.get(format!("{}/progress", self.base)).query(&[("dest", dest)]);
+        let v = self.json(rq, Duration::from_secs(5)).await.ok()?;
+        let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+        Some(Progress { bytes_done: n("bytes_done"), bytes_total: n("bytes_total") })
+    }
+
+    /// Остановить загрузку в `dest` (сбой не важен: недокачанное шард сотрёт сам).
+    pub async fn cancel(&self, dest: &str) {
+        let _ = self.http.post(format!("{}/cancel", self.base)).json(&json!({"dest": dest})).timeout(Duration::from_secs(5)).send().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reason_is_trimmed_and_capped() {
+        assert_eq!(reason_of(br#"{"reason":"  YouTube banned this server  "}"#).as_deref(), Some("YouTube banned this server"));
+        assert_eq!(reason_of(br#"{"reason":""}"#), None);
+        assert_eq!(reason_of(b"not json"), None);
+        let long = format!(r#"{{"reason":"{}"}}"#, "я".repeat(300));
+        assert!(reason_of(long.as_bytes()).unwrap().len() <= REASON_MAX);
     }
 }

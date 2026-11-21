@@ -1,7 +1,7 @@
 import type { MusicPlaylist } from '../../../api/parvane/musicApi';
 
 import {
-  getOfflineHolds, isTrackOffline, queueOfflineTracks, removeOffline, setOfflineHolds,
+  getOfflineHolds, getOfflineSettings, isTrackOffline, queueOfflineTracks, removeOffline, setOfflineHolds,
 } from './musicOffline';
 import { syncHolds } from './musicOfflineHolds';
 import {
@@ -35,12 +35,16 @@ async function syncOffline(playlists: MusicPlaylist[]) {
   const holds = getOfflineHolds();
   if (!Object.keys(holds.playlists).length) return;
   const current = new Map(playlists.map((playlist) => [playlist.id, playlist.items.map((item) => item.trackId)]));
-  const result = syncHolds(holds, current);
+  const result = syncHolds(holds, current, getOfflineSettings().shouldFollowNew);
   setOfflineHolds(result.holds);
   if (result.removed.length) await removeOffline(result.removed);
   const missing = result.added.filter((trackId) => !isTrackOffline(trackId));
   if (!missing.length) return;
   // Трека, которого на сервере уже нет, в ответе не будет — качать нечего
   const tracks = await loadPlaylistTracks(missing);
-  queueOfflineTracks(Array.from(tracks.values()));
+  // Докачка — строкой загрузки того плейлиста, к которому трек добавили
+  Object.entries(result.holds.playlists).forEach(([id, ids]) => {
+    const part = ids.map((trackId) => tracks.get(trackId)).filter(Boolean);
+    queueOfflineTracks(part, { kind: 'playlist', id });
+  });
 }

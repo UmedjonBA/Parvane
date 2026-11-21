@@ -17,12 +17,14 @@ import styles from './MusicMiniPlayer.module.scss';
 type OwnProps = {
   // Виджет боковой панели на компьютере: обложка с полоской позиции; иначе — полоса над лентой телефона
   isCompact?: boolean;
+  // Внизу страницы «Музыки» на телефоне (лента модулей закрыта страницей) — в потоке, а не над лентой
+  isDocked?: boolean;
 };
 
 // Parvane (spec 039, 041): плеер вне «Музыки» — играет в любом модуле. Телефон: полоса между содержимым и
 // лентой (название, пауза, следующий). Компьютер: компактный виджет внизу боковой панели. Нажатие открывает
 // полноэкранный плеер. Нечего играть — ничего не рисуется
-const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
+const MusicMiniPlayer = ({ isCompact, isDocked }: OwnProps) => {
   const lang = useLang();
   const player = useDerivedState(getMusicPlayer);
   const { positionSecs, durationSecs } = useDerivedState(getMusicPosition);
@@ -48,6 +50,10 @@ const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
           size={48}
           className={styles.widgetCover}
         />
+        {/* Состояние поверх обложки (доска `DeskMusic`): пауза — играет, треугольник — на паузе */}
+        <span className={styles.widgetState} aria-hidden>
+          <ParvaneIcon name={player.isPlaying ? 'pause' : 'play'} />
+        </span>
         <span className={styles.widgetTrack} aria-hidden>
           <span className={styles.widgetBar} style={`width: ${progress}%`} />
         </span>
@@ -57,7 +63,7 @@ const MusicMiniPlayer = ({ isCompact }: OwnProps) => {
 
   return (
     <div
-      className={styles.bar}
+      className={buildClassName(styles.bar, isDocked && styles.barDocked)}
       style={`--progress: ${progress}%`}
       data-music-mini={player.isPlaying ? 'playing' : 'paused'}
     >

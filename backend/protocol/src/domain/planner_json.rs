@@ -10,7 +10,7 @@
 //!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday,color,
 //!     description,listId,steps:[{text,isDone}]}],
 //!   lists:[{id,name,order,color}],
-//!   settings:{dayStart,dayEnd,lunchStart,lunchEnd,margin,budget}|null,
+//!   settings:{dayStart,dayEnd,lunchStart,lunchEnd,margin,budget,eventRemind|null,remindDeadlines,learnOff}|null,
 //!   learned:[{id,kind,kindCount,minutes|null,minutesCount,touched}],
 //!   quickLines:[{id,text,count,touched,hidden}], reminded:[id], headSeq, sizeBytes}`
 //! (`learned` — словарь правок ввода текстом, не более 200 самых свежих слов;
@@ -121,6 +121,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "remind": u32_json(&e.remind),
                 "listId": sv(&e.list_id),
                 "steps": steps_json(&e.steps),
+                "source": source_json(&e.source),
             })
         })
         .collect();
@@ -136,7 +137,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
         })
         .collect();
     let settings = state.settings.as_ref().map(|s| {
-        json!({"dayStart": s.day_start, "dayEnd": s.day_end, "lunchStart": s.lunch_start, "lunchEnd": s.lunch_end, "margin": s.margin, "budget": s.budget})
+        json!({"dayStart": s.day_start, "dayEnd": s.day_end, "lunchStart": s.lunch_start, "lunchEnd": s.lunch_end, "margin": s.margin, "budget": s.budget, "eventRemind": s.event_remind, "remindDeadlines": s.remind_deadlines, "learnOff": s.learn_off})
     });
     let count = |c: &Option<U32>| c.as_ref().map(|c| c.value).unwrap_or(0);
     let learned: Vec<Value> = state
@@ -361,6 +362,7 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         remind: u32_field(o, "remind")?,
         list_id: str_field(o, "listId")?,
         steps: steps_of(o)?,
+        source: source_of(o)?,
     })
 }
 
@@ -430,6 +432,12 @@ fn settings_of(v: &Value) -> Result<Settings> {
         lunch_end: required_u32(v, "lunchEnd")?,
         margin: required_u32(v, "margin")?,
         budget: required_u32(v, "budget")?,
+        event_remind: match v.get("eventRemind") {
+            None | Some(Value::Null) => None,
+            Some(m) => Some(m.as_u64().and_then(|m| u32::try_from(m).ok()).ok_or(ProtoError::Malformed)?),
+        },
+        remind_deadlines: v.get("remindDeadlines").and_then(Value::as_bool).unwrap_or(false),
+        learn_off: v.get("learnOff").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -641,6 +649,36 @@ mod tests {
         apply(&mut a, 5, "d1", r#"{"changes":[{"event":{"id":"e2","deleted":true}}]}"#);
         apply(&mut a, 6, "d2", r#"{"changes":[{"event":{"id":"e2","steps":[{"text":"Повестка"}]}}]}"#);
         assert!(PlannerState::is_event_alive(&a.events["e2"]));
+    }
+
+    /// Источник события из чата и настройки напоминаний и ввода текстом (21 ноя 2026, spec 041)
+    #[test]
+    fn event_source_and_reminder_settings_roundtrip() {
+        let apply = |st: &mut PlannerState, at: u64, body: &str| {
+            let mut op = op_from_json(body).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(at, "d1"));
+            st.apply_op(&op, "d1").unwrap()
+        };
+        let mut a = PlannerState::default();
+        let body = r#"{"changes":[{"event":{"id":"e1","name":"Созвон","start":"10:00","end":"11:00","day":"2026-11-16",
+          "source":{"chat":"bob@local","opId":"0192abcd"}}},
+          {"settings":{"dayStart":480,"dayEnd":1320,"lunchStart":780,"lunchEnd":840,"margin":15,"budget":480,
+          "eventRemind":15,"remindDeadlines":true,"learnOff":true}}]}"#;
+        assert_eq!(apply(&mut a, 1, body), 2);
+        let out: Value = serde_json::from_str(&state_json(&a, 1)).unwrap();
+        assert_eq!(out["events"][0]["source"], json!({"chat": "bob@local", "opId": "0192abcd"}));
+        assert_eq!(out["settings"]["eventRemind"], json!(15));
+        assert_eq!(out["settings"]["remindDeadlines"], json!(true));
+        assert_eq!(out["settings"]["learnOff"], json!(true));
+        // Без поля — без напоминания по умолчанию; больше недели — негодное значение
+        apply(&mut a, 2, r#"{"changes":[{"settings":{"dayStart":480,"dayEnd":1320,"lunchStart":0,"lunchEnd":0,"margin":15,"budget":480}}]}"#);
+        let out: Value = serde_json::from_str(&state_json(&a, 2)).unwrap();
+        assert_eq!(out["settings"]["eventRemind"], Value::Null);
+        assert_eq!(out["settings"]["learnOff"], json!(false));
+        let bad = r#"{"changes":[{"settings":{"dayStart":480,"dayEnd":1320,"lunchStart":0,"lunchEnd":0,"margin":15,"budget":480,"eventRemind":20000}}]}"#;
+        assert_eq!(apply(&mut a, 3, bad), 0);
+        let bad_source = r#"{"changes":[{"event":{"id":"e1","source":{"chat":"bob@local","opId":"не-hex"}}}]}"#;
+        assert_eq!(apply(&mut a, 4, bad_source), 0);
     }
 
     /// Словарь правок ввода текстом: слова проходят через состояние, правка несёт только присланные

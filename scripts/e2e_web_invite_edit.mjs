@@ -80,9 +80,12 @@ try {
   assert.equal(edited.result?.newInvite?.title, 'Новое', `название не сменилось: ${JSON.stringify(edited)}`);
   assert.equal(edited.result?.newInvite?.usageLimit, 3, 'лимит не сменился');
   assert.equal(edited.result?.newInvite?.usage, 1, 'счётчик вступивших сбросился');
-  // Режим «по заявке» правкой не меняется
+  // Режим «по заявке» меняется правкой (`InviteEdit.requires_approval`); счётчик вступивших прежний
   const modeChange = await provider('editExportedChatInvite', { link, title: 'Новое', isRequestNeeded: true });
-  assert.equal(modeChange.result, null, '«по заявке» поменялся правкой');
+  assert.equal(modeChange.result?.newInvite?.isRequestNeeded, true, `«по заявке» не включился: ${JSON.stringify(modeChange)}`);
+  assert.equal(modeChange.result?.newInvite?.usage, 1, 'счётчик вступивших сбросился сменой режима');
+  const modeBack = await provider('editExportedChatInvite', { link, title: 'Новое', isRequestNeeded: false, usageLimit: 3 });
+  assert.equal(modeBack.result?.newInvite?.isRequestNeeded, false, '«по заявке» не выключился');
   console.log('OK: правка ссылки сохраняет счётчик');
 
   // Экран ссылки: название и вступившая

@@ -13,6 +13,24 @@ export const BODY_KINDS = ['weight', 'pressure', 'pulse', 'steps'];
 export const MOOD_KIND = 'mood';
 export const WATER_KIND = 'water';
 export const MOOD_MAX = 5;
+// Сон «не спал»: ночь в ноль минут (движок, `health_stats::TAG_NO_SLEEP`)
+export const NO_SLEEP_TAG = 'none';
+// Сон, который не входит в сумму сна за сутки
+export const SLEEP_ASIDE_TAG = 'aside';
+// Виды, у которых значение дня — сумма записей
+export const SUM_KINDS = ['steps', 'water'];
+// Показатели левой колонки подробного экрана компьютера и их цвет линии (токены `--pv-*`)
+export const KIND_COLORS: Record<string, string> = {
+  sleep: 'green',
+  weight: 'red',
+  pressure: 'purple',
+  pulse: 'orange',
+  steps: 'blue',
+  mood: 'yellow',
+  water: 'aqua',
+  food: 'accent',
+  workout: 'aqua',
+};
 // Блоки модуля (экран «Модули») → виды записей
 export const BLOCK_KINDS: Record<string, string[]> = {
   water: ['water'],
@@ -53,6 +71,7 @@ const UNIT_KEYS = {
   pct: 'HealthUnitPercent',
   kcal: 'HealthUnitKcal',
   min: 'HealthUnitMin',
+  score: 'HealthUnitScore',
 } as const;
 
 // Дни недели сводки: 0 — понедельник
@@ -129,11 +148,11 @@ export function orderMetrics(metrics: HealthMetricView[]) {
   return metrics.slice().sort((a, b) => rank(a.kind) - rank(b.kind) || a.kind.localeCompare(b.kind));
 }
 
-/** Точки ломаной графика в рамке `width × height`: значения растянуты между минимумом и максимумом ряда. */
-export function buildSparkline(values: number[], width: number, height: number, padding = 2) {
+/** Точки ломаной графика в рамке `width × height`: значения растянуты между минимумом и максимумом `range`. */
+export function buildSparkline(values: number[], width: number, height: number, padding = 2, range = values) {
   if (!values.length) return '';
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = Math.min(...range);
+  const max = Math.max(...range);
   const span = max - min || 1;
   const step = values.length > 1 ? (width - padding * 2) / (values.length - 1) : 0;
   return values.map((value, index) => {
@@ -143,14 +162,47 @@ export function buildSparkline(values: number[], width: number, height: number, 
   }).join(' ');
 }
 
-/** Полоса сна на шкале суток «с 20:00 до 12:00»: доли ширины для начала и длины. */
-export function sleepBar(bedMin: number, wakeMin: number) {
-  const axisStart = 20 * MINUTES_IN_HOUR;
-  const axisSpan = 16 * MINUTES_IN_HOUR;
-  const from = ((bedMin - axisStart) % MINUTES_IN_DAY + MINUTES_IN_DAY) % MINUTES_IN_DAY;
-  const length = ((wakeMin - bedMin) % MINUTES_IN_DAY + MINUTES_IN_DAY) % MINUTES_IN_DAY;
-  const left = Math.min(1, from / axisSpan);
-  return { left, width: Math.max(0, Math.min(1 - left, length / axisSpan)) };
+export type SleepAxis = { start: number; span: number };
+
+// Шкала режима по доскам: 22:00–08:00; ночи раньше и позже расширяют её до чётного часа
+const AXIS_START = 22 * MINUTES_IN_HOUR;
+const AXIS_SPAN = 10 * MINUTES_IN_HOUR;
+const AXIS_STEP = 2 * MINUTES_IN_HOUR;
+
+function fromAxis(minute: number, start: number) {
+  return ((minute - start) % MINUTES_IN_DAY + MINUTES_IN_DAY) % MINUTES_IN_DAY;
+}
+
+/** Шкала режима сна: 22:00–08:00, расширенная под отбои и подъёмы ряда. */
+export function sleepAxis(spans: { bedMin?: number; wakeMin?: number }[]): SleepAxis {
+  // Смещения от полудня: отбой 23:30 и 00:10 рядом
+  const noon = 12 * MINUTES_IN_HOUR;
+  let from = fromAxis(AXIS_START, noon);
+  let to = from + AXIS_SPAN;
+  spans.forEach(({ bedMin, wakeMin }) => {
+    if (bedMin === undefined || wakeMin === undefined) return;
+    const bed = fromAxis(bedMin, noon);
+    from = Math.min(from, Math.floor(bed / AXIS_STEP) * AXIS_STEP);
+    to = Math.max(to, Math.ceil((bed + fromAxis(wakeMin, bedMin)) / AXIS_STEP) * AXIS_STEP);
+  });
+  return { start: (from + noon) % MINUTES_IN_DAY, span: Math.min(MINUTES_IN_DAY, to - from) };
+}
+
+/** Подписи шкалы через два часа: «22», «00», «02» … */
+export function sleepAxisLabels(axis: SleepAxis) {
+  const labels: string[] = [];
+  for (let at = 0; at <= axis.span; at += AXIS_STEP) {
+    labels.push(String(Math.floor(((axis.start + at) % MINUTES_IN_DAY) / MINUTES_IN_HOUR)).padStart(2, '0'));
+  }
+  return labels;
+}
+
+/** Полоса сна на шкале: доли ширины для начала и длины. */
+export function sleepBar(bedMin: number, wakeMin: number, axis: SleepAxis = { start: AXIS_START, span: AXIS_SPAN }) {
+  const from = fromAxis(bedMin, axis.start);
+  const length = fromAxis(wakeMin, bedMin);
+  const left = Math.min(1, from / axis.span);
+  return { left, width: Math.max(0, Math.min(1 - left, length / axis.span)) };
 }
 
 /** Одна строка «как понято» для разобранной записи: значение без подписи вида. */

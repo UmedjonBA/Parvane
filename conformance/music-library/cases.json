@@ -1,0 +1,144 @@
+[
+  {
+    "title": "исполнители по имени: без регистра, равные по id",
+    "call": "musicLibrarySort",
+    "args": {"kind": "artists", "by": "name", "items": [
+      {"id": "a3", "name": "Тихий порт", "trackCount": 18},
+      {"id": "a1", "name": "lampa", "trackCount": 9},
+      {"id": "a2", "name": "Kora Mesh", "trackCount": 31}
+    ]},
+    "expect": [
+      {"id": "a2", "name": "Kora Mesh", "trackCount": 31},
+      {"id": "a1", "name": "lampa", "trackCount": 9},
+      {"id": "a3", "name": "Тихий порт", "trackCount": 18}
+    ]
+  },
+  {
+    "title": "исполнители по числу треков: больше — выше, равные по имени",
+    "call": "musicLibrarySort",
+    "args": {"kind": "artists", "by": "tracks", "items": [
+      {"id": "a1", "name": "Полдень", "trackCount": 9},
+      {"id": "a2", "name": "Kora Mesh", "trackCount": 31},
+      {"id": "a3", "name": "Lampa", "trackCount": 9}
+    ]},
+    "expect": [
+      {"id": "a2", "name": "Kora Mesh", "trackCount": 31},
+      {"id": "a3", "name": "Lampa", "trackCount": 9},
+      {"id": "a1", "name": "Полдень", "trackCount": 9}
+    ]
+  },
+  {
+    "title": "альбомы по исполнителю, затем по году",
+    "call": "musicLibrarySort",
+    "args": {"kind": "albums", "by": "artist", "items": [
+      {"id": "b1", "title": "Static Bloom", "artist": "Kora Mesh", "year": 2024},
+      {"id": "b2", "title": "Маршруты", "artist": "Lampa", "year": 2025},
+      {"id": "b3", "title": "Tide Tables", "artist": "Kora Mesh", "year": 2022}
+    ]},
+    "expect": [
+      {"id": "b3", "title": "Tide Tables", "artist": "Kora Mesh", "year": 2022},
+      {"id": "b1", "title": "Static Bloom", "artist": "Kora Mesh", "year": 2024},
+      {"id": "b2", "title": "Маршруты", "artist": "Lampa", "year": 2025}
+    ]
+  },
+  {
+    "title": "треки любимого по исполнителю, альбому и номеру",
+    "call": "musicLibrarySort",
+    "args": {"kind": "tracks", "by": "artist", "items": [
+      {"id": "t3", "title": "Соль", "artist": "Полдень", "album": "Соль", "trackNo": 1},
+      {"id": "t2", "title": "Берег", "artist": "Тихий порт", "album": "Harbor Lights", "trackNo": 2},
+      {"id": "t1", "title": "Северный ветер", "artist": "Тихий порт", "album": "Harbor Lights", "trackNo": 1}
+    ]},
+    "expect": [
+      {"id": "t3", "title": "Соль", "artist": "Полдень", "album": "Соль", "trackNo": 1},
+      {"id": "t1", "title": "Северный ветер", "artist": "Тихий порт", "album": "Harbor Lights", "trackNo": 1},
+      {"id": "t2", "title": "Берег", "artist": "Тихий порт", "album": "Harbor Lights", "trackNo": 2}
+    ]
+  },
+  {
+    "title": "группы по первой букве, «#» в конце",
+    "call": "musicLibraryGroups",
+    "args": {"items": [
+      {"id": "a4", "name": "Тихий порт"},
+      {"id": "a1", "name": "Kora Mesh"},
+      {"id": "a5", "name": "5 утра"},
+      {"id": "a3", "name": "пятый этаж"},
+      {"id": "a2", "name": "Полдень"}
+    ]},
+    "expect": [
+      {"letter": "K", "ids": ["a1"]},
+      {"letter": "П", "ids": ["a2", "a3"]},
+      {"letter": "Т", "ids": ["a4"]},
+      {"letter": "#", "ids": ["a5"]}
+    ]
+  },
+  {
+    "title": "отбор: каждое слово запроса в одном из полей",
+    "call": "musicLibraryFilter",
+    "args": {"query": "harbor ТИХИЙ", "fields": ["title", "artist"], "items": [
+      {"id": "t1", "title": "Harbor Lights", "artist": "Тихий порт"},
+      {"id": "t2", "title": "Glass Harbor", "artist": "Kora Mesh"},
+      {"id": "t3", "title": "Тихий берег", "artist": "Harbor Band"}
+    ]},
+    "expect": [
+      {"id": "t1", "title": "Harbor Lights", "artist": "Тихий порт"},
+      {"id": "t3", "title": "Тихий берег", "artist": "Harbor Band"}
+    ]
+  },
+  {
+    "title": "пустой запрос отбора — всё",
+    "call": "musicLibraryFilter",
+    "args": {"query": "  ", "fields": ["name"], "items": [{"id": "a1", "name": "Lampa"}]},
+    "expect": [{"id": "a1", "name": "Lampa"}]
+  },
+  {
+    "title": "склейка страниц без повторов",
+    "call": "musicPageMerge",
+    "args": {"items": [{"id": "a1"}, {"id": "a2"}], "page": [{"id": "a2"}, {"id": "a3"}]},
+    "expect": [{"id": "a1"}, {"id": "a2"}, {"id": "a3"}]
+  },
+  {
+    "title": "найденное одним списком по названию",
+    "call": "musicSearchRows",
+    "args": {"filter": "all",
+      "tracks": [{"id": "t4", "title": "Glass Harbor"}, {"id": "t9", "title": "Harbor Song"}],
+      "albums": [{"id": "al-1", "title": "Harbor Lights"}],
+      "artists": [{"id": "ar-2", "name": "Harbor Band"}]},
+    "expect": [
+      {"kind": "track", "id": "t4"},
+      {"kind": "artist", "id": "ar-2"},
+      {"kind": "album", "id": "al-1"},
+      {"kind": "track", "id": "t9"}
+    ]
+  },
+  {
+    "title": "найденное: только альбомы",
+    "call": "musicSearchRows",
+    "args": {"filter": "albums",
+      "tracks": [{"id": "t4", "title": "Glass Harbor"}],
+      "albums": [{"id": "al-1", "title": "Harbor Lights"}],
+      "artists": []},
+    "expect": [{"kind": "album", "id": "al-1"}]
+  },
+  {
+    "title": "«Загруженное» группами: плейлисты по порядку, альбомы, отдельные треки; трек — в первой группе",
+    "call": "musicOfflineGroups",
+    "args": {
+      "entries": [
+        {"id": "t1", "bytes": 100}, {"id": "t2", "bytes": 200}, {"id": "t3", "bytes": 300},
+        {"id": "t4", "bytes": 400}, {"id": "t5", "bytes": 500}
+      ],
+      "holds": {
+        "playlists": {"p1": ["t1", "t2", "t9"], "p2": ["t2", "t3"]},
+        "albums": {"al-1": ["t3", "t4"], "al-2": ["t8"]}
+      },
+      "playlistOrder": ["p2", "p1"]
+    },
+    "expect": [
+      {"kind": "playlist", "id": "p2", "trackIds": ["t2", "t3"], "bytes": 500},
+      {"kind": "playlist", "id": "p1", "trackIds": ["t1"], "bytes": 100},
+      {"kind": "album", "id": "al-1", "trackIds": ["t4"], "bytes": 400},
+      {"kind": "tracks", "id": "", "trackIds": ["t5"], "bytes": 500}
+    ]
+  }
+]

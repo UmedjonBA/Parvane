@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useLayoutEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
@@ -21,27 +21,26 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Icon from '../../common/icons/Icon';
 
 import styles from './Planner.module.scss';
+import pv from './PlannerPv.module.scss';
 
 type OwnProps = {
   day: string;
+  // `field` — колонка дня компьютера (доска `RdPlan`): поле видно сразу, сохраняется по месту; `card` — телефон
+  // (доска `PhonePlan`): карточка «Заметка дня» с первой строкой, нажатие раскрывает правку
+  variant: 'field' | 'card';
 };
 
 // Текст заметки дня: `text` нет — заметки на этот день ещё нет
 type Peek = { day: string; text?: string };
 
-// Столько строк начала заметки видно на карточке
-const PREVIEW_LINES = 6;
-
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
 }
 
-// Карточка «Заметка дня» на «Сегодня»: начало текста заметки выбранного дня. Хранилище «Знаний» ради неё
-// не открывается: по дереву облака читается один файл, экран его не ждёт. Нажатие на текст открывает
-// заметку в «Знаниях»; «Изменить» — правка прямо здесь, как в прототипе (тогда хранилище читается: запись
-// идёт тем же путём, что в «Знаниях», со сведением чужой версии). Правка меняет дерево облака — текст
-// перечитывается
-const PlannerDailyNote = ({ day }: OwnProps) => {
+// Заметка дня в «Плане»: текст заметки выбранного дня. Хранилище «Заметок» ради неё не открывается: по дереву
+// облака читается один файл. Запись — тем же путём, что в «Заметках», со сведением чужой версии; правка меняет
+// дерево облака — текст перечитывается
+const PlannerDailyNote = ({ day, variant }: OwnProps) => {
   const cloudData = useDerivedState(getCloudData);
   const currentUserId = useSelector(selectCurrentUserId);
   const [peek, setPeek] = useState<Peek>();
@@ -64,18 +63,18 @@ const PlannerDailyNote = ({ day }: OwnProps) => {
 
   // Текст другого дня (до ответа облака) не показывается
   const known = peek?.day === day ? peek : undefined;
-  const preview = useMemo(() => (
+  const firstLine = useMemo(() => (
     known?.text === undefined ? undefined
-      : previewLines({ title: dailyNoteTitle(day), text: known.text }, PREVIEW_LINES)
+      : previewLines({ title: dailyNoteTitle(day), text: known.text }, 1).lines[0]?.text
   ), [known, day]);
-  const lines = preview?.lines || [];
-  const hasText = lines.length > 0;
+  const hasText = Boolean(firstLine);
+  const isField = variant === 'field';
 
   const handleOpen = useLastCallback(() => {
     openNote(dailyNoteTitle(day));
   });
 
-  // Правка на месте: черновик от текста, который был на экране, — он же основа сведения с чужой версией
+  // Правка: черновик от текста, который был на экране, — он же основа сведения с чужой версией
   const [edit, setEdit] = useState<{ day: string; base?: string; draft: string }>();
   const [isSaving, setIsSaving] = useState(false);
   const editing = edit?.day === day ? edit : undefined;
@@ -88,7 +87,9 @@ const PlannerDailyNote = ({ day }: OwnProps) => {
 
   const handleDraft = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const { value } = e.currentTarget;
-    setEdit((current) => (current ? { ...current, draft: value } : current));
+    setEdit((current) => (current?.day === day ? { ...current, draft: value } : {
+      day, base: known?.text, draft: value,
+    }));
   });
 
   const handleDone = useLastCallback(async () => {
@@ -115,22 +116,78 @@ const PlannerDailyNote = ({ day }: OwnProps) => {
     }
   });
 
+  // Поле компьютера сохраняется, когда фокус уходит
+  const handleBlur = useLastCallback(() => {
+    void handleDone();
+  });
+
+  // Escape отменяет набранное. Общая очередь клавиш (`captureKeyboardListeners`) ловит Escape на документе в фазе
+  // перехвата раньше поля, поэтому клавиша поля берётся ещё раньше — на `window`
+  const handleWindowKey = useLastCallback((e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || !(e.target instanceof HTMLTextAreaElement)
+      || !e.target.matches('[data-today-note-editor]') || !e.target.closest('[data-today-note]')) {
+      return;
+    }
+    e.stopPropagation();
+    setEdit(undefined);
+  });
+
+  useLayoutEffect(() => {
+    window.addEventListener('keydown', handleWindowKey, true);
+    return () => window.removeEventListener('keydown', handleWindowKey, true);
+  }, [handleWindowKey]);
+
   const handleEditorKey = useLastCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      setEdit(undefined);
-    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void handleDone();
     }
   });
 
-  return (
-    <section className={styles.card} data-today-note={hasText ? 'text' : known ? 'empty' : 'loading'}>
-      <div className={styles.cardHead}>
-        <h3 className={styles.cardTitle}>{lang('PlannerDailyNote')}</h3>
-        <span className={styles.grow} />
-        {editing ? (
+  const noteState = hasText ? 'text' : known ? 'empty' : 'loading';
+  const openButton = (
+    <button
+      type="button"
+      className={buildClassName(styles.btn, styles.btnGhost)}
+      data-today-note-open
+      disabled={!known}
+      onClick={handleOpen}
+    >
+      {lang('PlannerDailyNoteOpen')}
+    </button>
+  );
+
+  if (isField) {
+    return (
+      <section className={styles.card} data-today-note={noteState}>
+        <div className={styles.cardHead}>
+          <h3 className={styles.cardTitle}>{lang('PlannerDailyNote')}</h3>
+          <span className={styles.grow} />
+          {openButton}
+        </div>
+        <textarea
+          className={styles.dailyEditor}
+          data-today-note-editor
+          value={editing ? editing.draft : known?.text || ''}
+          aria-label={lang('PlannerDailyNote')}
+          placeholder={lang('PlannerDailyNoteField')}
+          disabled={!known && !editing}
+          readOnly={isSaving}
+          onChange={handleDraft}
+          onBlur={handleBlur}
+          onKeyDown={handleEditorKey}
+        />
+      </section>
+    );
+  }
+
+  if (editing) {
+    return (
+      <section className={styles.card} data-today-note={noteState}>
+        <div className={styles.cardHead}>
+          <h3 className={styles.cardTitle}>{lang('PlannerDailyNote')}</h3>
+          <span className={styles.grow} />
+          {openButton}
           <button
             type="button"
             className={buildClassName(styles.btn, styles.btnGhost)}
@@ -141,57 +198,38 @@ const PlannerDailyNote = ({ day }: OwnProps) => {
             <Icon name="check" />
             {lang('Done')}
           </button>
-        ) : (
-          <button
-            type="button"
-            className={buildClassName(styles.btn, styles.btnGhost)}
-            data-today-daily
-            disabled={!known}
-            onClick={handleEdit}
-          >
-            <Icon name="edit" />
-            {lang('Edit')}
-          </button>
-        )}
-      </div>
-      {editing ? (
+        </div>
         <textarea
           className={styles.dailyEditor}
           data-today-note-editor
           value={editing.draft}
           aria-label={lang('PlannerDailyNote')}
-          placeholder={lang('PlannerDailyNotePlaceholder')}
+          placeholder={lang('PlannerDailyNoteField')}
           autoFocus
           onChange={handleDraft}
           onKeyDown={handleEditorKey}
         />
-      ) : hasText ? (
-        <button type="button" className={styles.dailyText} data-today-note-text onClick={handleOpen}>
-          {lines.map((line, i) => (
-            <span
-              key={`${i}:${line.text}`}
-              className={buildClassName(
-                styles.dailyLine,
-                line.mark === 'heading' && styles.dailyHeading,
-                line.mark === 'done' && styles.dailyDone,
-              )}
-            >
-              {line.mark && line.mark !== 'heading' && (
-                <span className={styles.dailyMark} data-mark={line.mark} aria-hidden />
-              )}
-              <span className={styles.dailyLineText}>{line.text}</span>
-            </span>
-          ))}
-          {preview?.hasMore && <span className={styles.dailyMore} aria-hidden>…</span>}
-        </button>
-      ) : known ? (
-        <button type="button" className={styles.dailyEmpty} data-today-note-empty onClick={handleOpen}>
-          {lang('PlannerDailyNoteWrite')}
-        </button>
-      ) : (
-        <p className={styles.muted}>{lang('PlannerDailyNoteHint')}</p>
-      )}
-    </section>
+      </section>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={pv.noteCard}
+      data-today-note={noteState}
+      data-today-daily
+      disabled={!known}
+      onClick={handleEdit}
+    >
+      <Icon name="document" className={pv.noteCardIcon} />
+      <span className={pv.noteCardText}>
+        <span className={pv.noteCardTitle}>{lang('PlannerDailyNote')}</span>
+        <span className={pv.noteCardSub} data-today-note-text={hasText || undefined}>
+          {hasText ? firstLine : known ? lang('PlannerDailyNoteEmpty') : lang('PlannerDailyNoteHint')}
+        </span>
+      </span>
+    </button>
   );
 };
 

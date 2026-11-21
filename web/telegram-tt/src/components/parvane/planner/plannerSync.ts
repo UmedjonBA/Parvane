@@ -44,7 +44,7 @@ type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
   allDay?: boolean; isHoliday?: boolean; color?: number; description?: string; remind?: number | null;
-  listId?: string; steps?: { text: string; isDone: boolean }[];
+  listId?: string; steps?: { text: string; isDone: boolean }[]; source?: EngineSource;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 // Слово словаря правок ввода текстом: `kind` пуст и `minutes: null` — «не выучено»
@@ -57,6 +57,8 @@ type EngineQuickLine = {
 };
 type EngineSettings = {
   dayStart: number; dayEnd: number; lunchStart: number; lunchEnd: number; margin: number; budget: number;
+  // Движок прежней сборки полей не отдаёт
+  eventRemind?: number | null; remindDeadlines?: boolean; learnOff?: boolean;
 } | null;
 export type EngineState = {
   tasks: EngineTask[]; events: EngineEvent[]; lists: EngineList[]; settings: EngineSettings;
@@ -187,13 +189,21 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
         // Группа — по id списка, как у задачи; движок прежней сборки поля не отдаёт
         project: (e.listId && nameById.get(e.listId)) || undefined,
         steps: e.steps?.length ? e.steps.map((step) => ({ text: step.text, isDone: step.isDone })) : undefined,
+        source: e.source ? { chat: e.source.chat, opId: e.source.opId } : undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
     lists,
     budget: s?.budget ?? empty.budget,
     settings: s ? {
-      dayStart: s.dayStart, dayEnd: s.dayEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd, margin: s.margin,
+      dayStart: s.dayStart,
+      dayEnd: s.dayEnd,
+      lunchStart: s.lunchStart,
+      lunchEnd: s.lunchEnd,
+      margin: s.margin,
+      eventRemind: s.eventRemind ?? undefined,
+      shouldRemindDeadlines: s.remindDeadlines || undefined,
+      isLearnOff: s.learnOff || undefined,
     } : { ...DEFAULT_PLANNER_SETTINGS },
     learned: normalizeLearned((engine.learned || []).map((word) => ({
       ...word, kind: word.kind as PlannerLearnedWord['kind'], minutes: word.minutes ?? undefined,
@@ -303,6 +313,8 @@ function eventChange(state: PlannerState, e: PlannerEvent, previous?: PlannerEve
   if (e.steps?.length || previous?.steps?.length) {
     event.steps = (e.steps || []).map((step) => ({ text: step.text, isDone: step.isDone }));
   }
+  // Источник — тоже только у события из чата
+  if (e.source || previous?.source) event.source = e.source ? { chat: e.source.chat, opId: e.source.opId } : null;
   return { event };
 }
 
@@ -340,8 +352,19 @@ function quickLineChange(line: PlannerQuickLine): PlannerChange {
   };
 }
 
+// Настройки — регистр целиком: поле по умолчанию (нет напоминания, выключатели выключены) не уходит, движок
+// читает его отсутствие тем же значением
 function settingsChange(state: PlannerState): PlannerChange {
-  return { settings: { ...state.settings, budget: state.budget } };
+  const {
+    dayStart, dayEnd, lunchStart, lunchEnd, margin, eventRemind, shouldRemindDeadlines, isLearnOff,
+  } = state.settings;
+  const settings: Record<string, unknown> = {
+    dayStart, dayEnd, lunchStart, lunchEnd, margin, budget: state.budget,
+  };
+  if (eventRemind !== undefined) settings.eventRemind = eventRemind;
+  if (shouldRemindDeadlines) settings.remindDeadlines = true;
+  if (isLearnOff) settings.learnOff = true;
+  return { settings };
 }
 
 /** Разница состояний → изменения для движка (объект целиком — LWW по полям у движка). */

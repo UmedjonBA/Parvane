@@ -8,12 +8,17 @@
 
 mod fetch;
 mod http;
+mod library;
+mod shared;
 mod subsonic;
 mod token;
+mod upload;
 mod v2;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_spec041;
 
 use std::sync::Arc;
 
@@ -70,21 +75,27 @@ fn env_list(name: &str) -> Option<Vec<String>> {
     env_nonempty(name).map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
 }
 
-/// «Найти и скачать»: включается адресом сервиса скачивания. Правила сверки — значения по умолчанию из
-/// `matching::Rules`, даты и порядок источников переопределяются окружением.
+/// Добавление треков: нужна папка библиотеки (`PARVANE_MUSIC_LIBRARY_DIR`) — тогда работают «Загрузить свои файлы» и
+/// учёт добавленного; «Найти и скачать» — ещё и адрес сервиса скачивания (`PARVANE_MUSIC_FETCH_URL`). Правила
+/// сверки — значения по умолчанию из `matching::Rules`, даты и порядок источников переопределяются окружением.
 async fn open_fetch() -> Result<Option<Arc<fetch::jobs::Fetch>>> {
-    let Some(url) = env_nonempty("PARVANE_MUSIC_FETCH_URL") else {
-        info!("PARVANE_MUSIC_FETCH_URL не задан — «Найти и скачать» выключено");
-        return Ok(None);
-    };
     let Some(library_dir) = env_nonempty("PARVANE_MUSIC_LIBRARY_DIR") else {
-        error!("PARVANE_MUSIC_LIBRARY_DIR не задан — «Найти и скачать» выключено: шарду нужна папка библиотеки");
+        info!("PARVANE_MUSIC_LIBRARY_DIR не задан — добавлять треки на сервер нельзя («Найти и скачать» и свои файлы выключены)");
         return Ok(None);
     };
-    let service = fetch::service::FetchService::new(&url).context("клиент сервиса скачивания")?;
-    if !service.health().await {
-        warn!("сервис скачивания пока не отвечает — запросы будут получать UNAVAILABLE до его готовности");
-    }
+    let service = match env_nonempty("PARVANE_MUSIC_FETCH_URL") {
+        Some(url) => {
+            let service = fetch::service::FetchService::new(&url).context("клиент сервиса скачивания")?;
+            if !service.health().await {
+                warn!("сервис скачивания пока не отвечает — запросы будут получать UNAVAILABLE до его готовности");
+            }
+            Some(service)
+        }
+        None => {
+            info!("PARVANE_MUSIC_FETCH_URL не задан — «Найти и скачать» выключено, свои файлы загружать можно");
+            None
+        }
+    };
     let db_path = std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./music.db".to_string());
     let pool = fetch::store::open(&db_path).await.context("база шарда music")?;
     let mut rules = fetch::matching::Rules::default();
@@ -103,9 +114,12 @@ async fn open_fetch() -> Result<Option<Arc<fetch::jobs::Fetch>>> {
     let env_num = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default);
     let add_per_day = env_num("PARVANE_MUSIC_ADD_PER_DAY", 30).min(u64::from(u32::MAX)) as u32;
     let quota_bytes = env_num("PARVANE_MUSIC_QUOTA_BYTES", 5 * 1024 * 1024 * 1024);
+    let upload_max = env_num("PARVANE_MUSIC_UPLOAD_MAX_BYTES", 300 * 1024 * 1024);
+    // Сколько задач «Найти и скачать» сервер ведёт разом; остальные ждут в очереди
+    let parallel = env_num("PARVANE_MUSIC_FETCH_PARALLEL", 2).clamp(1, 16) as usize;
     let admins = env_list("PARVANE_MUSIC_ADMINS").unwrap_or_default();
-    info!("«Найти и скачать» включено: {add_per_day} треков в сутки, {quota_bytes} байт на человека");
-    Ok(Some(Arc::new(fetch::jobs::Fetch::new(service, pool, rules, library_dir.into(), add_per_day, quota_bytes, admins))))
+    info!("добавление треков включено: {add_per_day} треков в сутки, {quota_bytes} байт на человека, файл до {upload_max} байт, {parallel} загрузки разом");
+    Ok(Some(Arc::new(fetch::jobs::Fetch::new(service, pool, rules, library_dir.into(), add_per_day, quota_bytes, upload_max, admins, parallel))))
 }
 
 #[tokio::main]
@@ -131,6 +145,12 @@ async fn main() -> Result<()> {
         error!("PARVANE_MUSIC_PUBLIC_BASE не задан — ссылки на поток будут относительными и вне браузера не откроются");
     }
     let fetch = if sub.is_some() { open_fetch().await? } else { None };
+    // «Популярное на сервере» (spec 041): прослушивания — в базе шарда
+    if sub.is_some() {
+        library::open_plays(&std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./music.db".to_string())).await;
+        // Общие плейлисты (spec 041, MUSIC-3) — в той же базе
+        shared::open(&std::env::var("PARVANE_DB_PATH").unwrap_or_else(|_| "./music.db".to_string())).await;
+    }
     let ctx = Arc::new(Ctx { sub, fetch, key, public_base });
 
     // Свежий музыкальный сервер делает администратором первого пришедшего — пусть это будет служебный пользователь

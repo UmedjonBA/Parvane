@@ -1,13 +1,18 @@
 import { memo } from '../../../lib/teact/teact';
 
-import type { CloudLinkInfo } from '../../../api/parvane/cloudDrive';
-import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
+import type { CloudClosedFolder, CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import type { CloudMenuAnchor } from './CloudMenu';
+import type { FolderStats } from './cloudModel';
+import type { CloudShownLink } from './cloudStore';
 
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatFileSize } from '../../../util/textFormat';
-import { answerCloudInvite, peerLabel, revokeCloudLink } from './cloudStore';
+import { LINK_DEFAULT_TTL_DAYS } from '../../../api/parvane/cloudLinks';
+import { formatCloudDayLong, formatCloudDayShort } from './cloudFormat';
+import {
+  answerCloudInvite, dismissCloudClosed, dismissRevokedCloudLink, extendCloudLink, peerLabel, revokeCloudLink,
+} from './cloudStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -19,30 +24,43 @@ import styles from './Cloud.module.scss';
 
 type ContainerProps = {
   info: CloudContainerInfo;
-  count: number;
+  // Сколько в папке и сколько она занимает, когда менялась (`mtime` — последнее изменение внутри)
+  stats?: FolderStats;
   isNarrow?: boolean;
   // Строка стоит среди файлов диска: колонки «Доступ» и «Изменён», как у них
   hasFileColumns?: boolean;
   onOpen: (id: string) => void;
-  onAccess: (id: string) => void;
+  onLeave: (id: string) => void;
   onMenu: (id: string, anchor?: CloudMenuAnchor) => void;
 };
 
-// Общая папка строкой списка: своя (с участниками) либо чужая («от Алии · просмотр»)
+/** «общая · 3 участника» (доска `ZdFilesX`); без участников — «общая, пока без участников». */
+export function useSharedLabel() {
+  const lang = useLang();
+  return (members: number) => (members
+    ? lang('KnowledgeFilesSharedMembers', { count: members }, { pluralValue: members })
+    : lang('KnowledgeFilesSharedAlone'));
+}
+
+// Общая папка строкой списка (доски `PhoneFiles`, `DeskFiles`, `RpFiles`, `ZdFilesX`): своя — «общая · 3 участника»,
+// чужая — «от Алии · просмотр»; размер — всё содержимое, дата — последнее изменение внутри. У чужой папки на
+// компьютере при наведении — «Открыть» и «Выйти из папки»
 const CloudContainerRowBase = ({
-  info, count, isNarrow, hasFileColumns, onOpen, onAccess, onMenu,
+  info, stats, isNarrow, hasFileColumns, onOpen, onLeave, onMenu,
 }: ContainerProps) => {
   const lang = useLang();
+  const sharedLabel = useSharedLabel();
   const isOwned = info.kind === 'owned';
   const name = info.name || lang('ParvaneCloudSharedFolder');
   const roleText = lang(info.role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader')
     .toLocaleLowerCase();
-  const accessText = isOwned
-    ? (info.members.length
-      ? lang('KnowledgeFilesSharedWith', { count: info.members.length })
-      : lang('KnowledgeFilesSharedAlone'))
+  const accessText = isOwned ? sharedLabel(info.members.length)
     : `${lang('KnowledgeFilesFrom', { name: peerLabel(info.owner) })} · ${roleText}`;
+  const count = stats?.count || 0;
   const countText = lang('KnowledgeFilesItems', { count }, { pluralValue: count });
+  const sizeText = stats?.size ? formatFileSize(lang, stats.size) : '—';
+  const dateText = stats?.mtime ? formatCloudDayShort(lang.code, stats.mtime) : '';
+  const canHoverActions = !isNarrow && !isOwned;
 
   const handleOpen = useLastCallback(() => onOpen(info.id));
 
@@ -50,9 +68,14 @@ const CloudContainerRowBase = ({
     if (e.key === 'Enter' && e.target === e.currentTarget) onOpen(info.id);
   });
 
-  const handleAccess = useLastCallback((e: React.MouseEvent) => {
+  const handleOpenButton = useLastCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onAccess(info.id);
+    onOpen(info.id);
+  });
+
+  const handleLeave = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onLeave(info.id);
   });
 
   const handleMenu = useLastCallback((e: React.MouseEvent) => {
@@ -68,7 +91,7 @@ const CloudContainerRowBase = ({
 
   return (
     <div
-      className={styles.item}
+      className={buildClassName(styles.item, canHoverActions && styles.itemHover)}
       role="listitem"
       tabIndex={0}
       data-container-id={info.id}
@@ -86,28 +109,30 @@ const CloudContainerRowBase = ({
       <span className={buildClassName(styles.itemText, !hasFileColumns && styles.itemTextWide)}>
         <span className={styles.itemTitle} dir="auto">{name}</span>
         {(isNarrow || !hasFileColumns) && (
-          <span className={styles.itemSub} dir="auto">{isNarrow ? `${countText} · ${accessText}` : accessText}</span>
+          <span className={styles.itemSub} dir="auto">
+            {isNarrow && isOwned ? `${lang('ParvaneCloudFolder')} · ${accessText}` : accessText}
+          </span>
         )}
       </span>
-      {!isNarrow && hasFileColumns && (isOwned ? (
-        <button
-          type="button"
-          className={buildClassName(styles.cellAccess, styles.cellButton)}
-          aria-label={lang('ParvaneCloudShare')}
-          title={accessText}
-          onClick={handleAccess}
-        >
-          {accessText}
-        </button>
-      ) : (
-        <span className={styles.cellAccess} dir="auto">{accessText}</span>
-      ))}
-      {!isNarrow && hasFileColumns && <span className={styles.cellDate} />}
-      {!isNarrow && <span className={styles.cellSize} title={countText}>—</span>}
-      {(isNarrow || !hasFileColumns) && isOwned && (
-        <button type="button" className={styles.itemMenu} aria-label={lang('ParvaneCloudShare')} onClick={handleAccess}>
-          <PvIcon name="users" isSmall />
-        </button>
+      {!isNarrow && hasFileColumns && (
+        <span className={styles.cellAccess} title={accessText} dir="auto">{accessText}</span>
+      )}
+      {!isNarrow && hasFileColumns && <span className={styles.cellDate}>{dateText}</span>}
+      {!isNarrow && <span className={styles.cellSize} title={countText}>{sizeText}</span>}
+      {canHoverActions && (
+        <span className={styles.rowHoverActions}>
+          <button type="button" className={styles.textButton} data-row-open onClick={handleOpenButton}>
+            {lang('Open')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(styles.textButton, styles.textButtonDanger)}
+            data-row-leave
+            onClick={handleLeave}
+          >
+            {lang('ParvaneCloudLeave')}
+          </button>
+        </span>
       )}
       <button type="button" className={styles.itemMenu} aria-label={lang('ParvaneCloudActions')} onClick={handleMenu}>
         <PvIcon name="dots" />
@@ -118,19 +143,41 @@ const CloudContainerRowBase = ({
 
 type InviteProps = {
   info: CloudContainerInfo;
+  // Сведения о папке, если ключ уже пришёл (число файлов и объём)
+  stats?: FolderStats;
+  isNarrow?: boolean;
 };
 
-// Приглашение в чужую папку (доска `RpFiles`): карточка с правами и ответом
-const CloudInviteCardBase = ({ info }: InviteProps) => {
+// Приглашение в чужую папку: телефон (доска `RpFiles`) — карточка с правами от второго лица, «Отклонить / Принять»;
+// компьютер (`ZdFilesX`) — полоса «Дамир приглашает в папку «Проект» · просмотр · 240 МБ» с «Принять / Отклонить»
+const CloudInviteCardBase = ({ info, stats, isNarrow }: InviteProps) => {
   const lang = useLang();
   const isEditor = info.role === 'editor';
+  const title = lang('ParvaneCloudInviteFrom', {
+    name: peerLabel(info.owner), folder: info.name || lang('ParvaneCloudSharedFolder'),
+  });
+  const roleText = lang(isEditor ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader').toLocaleLowerCase();
+  const sizeText = stats?.size ? formatFileSize(lang, stats.size) : undefined;
+  const countText = stats?.count
+    ? lang('ParvaneCloudInviteFiles', { count: stats.count, size: formatFileSize(lang, stats.size) },
+      { pluralValue: stats.count })
+    : undefined;
 
   const handleDecline = useLastCallback(() => void answerCloudInvite(info.id, false));
   const handleAccept = useLastCallback(() => void answerCloudInvite(info.id, true));
 
+  const decline = (
+    <button type="button" className={kit.btn} onClick={handleDecline}>{lang('ParvaneCloudDecline')}</button>
+  );
+  const accept = (
+    <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleAccept}>
+      {lang('ParvaneCloudAccept')}
+    </button>
+  );
+
   return (
     <div
-      className={styles.invite}
+      className={buildClassName(styles.invite, !isNarrow && styles.inviteStrip)}
       role="listitem"
       data-container-id={info.id}
       data-container-kind={info.kind}
@@ -138,54 +185,91 @@ const CloudInviteCardBase = ({ info }: InviteProps) => {
     >
       <span className={styles.inviteText}>
         <span className={styles.inviteTitle} dir="auto">
-          {lang('ParvaneCloudInviteFrom', {
-            name: peerLabel(info.owner), folder: info.name || lang('ParvaneCloudSharedFolder'),
-          })}
+          {isNarrow ? title : [title, roleText, sizeText].filter(Boolean).join(' · ')}
         </span>
-        <span className={styles.inviteNote}>
-          {`${lang(isEditor ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader')} — ${
-            lang(isEditor ? 'ParvaneCloudRoleEditorHint' : 'ParvaneCloudRoleReaderHint')}. ${
-            lang('ParvaneCloudInviteNoSpace')}`}
-        </span>
+        {isNarrow && (
+          <span className={styles.inviteNote}>
+            {[
+              lang(isEditor ? 'ParvaneCloudInviteRightsEditor' : 'ParvaneCloudInviteRightsReader'),
+              countText,
+              lang('ParvaneCloudInviteNoSpace'),
+            ].filter(Boolean).join(' ')}
+          </span>
+        )}
       </span>
       <span className={styles.inviteButtons}>
-        <button type="button" className={kit.btn} onClick={handleDecline}>{lang('ParvaneCloudDecline')}</button>
-        <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleAccept}>
-          {lang('ParvaneCloudAccept')}
-        </button>
+        {isNarrow ? decline : accept}
+        {isNarrow ? accept : decline}
       </span>
     </div>
   );
 };
 
-type LinkProps = {
-  link: CloudLinkInfo;
-  isNarrow?: boolean;
-  onOpen: (id: string) => void;
+type ClosedProps = {
+  info: CloudClosedFolder;
 };
 
-// Строка «Моих ссылок» (доски `RdFiles`, `RpFiles`): точка состояния, название, срок, размер; действия справа
-const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
+// Чужая папка, к которой владелец закрыл доступ (доски `ZpFilesX`, `ZdFilesX`): «доступ закрыт владельцем» и «Убрать»
+const CloudClosedRowBase = ({ info }: ClosedProps) => {
   const lang = useLang();
-  const dateText = (seconds: number) => new Date(seconds * 1000)
-    .toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '');
+  const handleDismiss = useLastCallback(() => void dismissCloudClosed(info.id));
+
+  return (
+    <div
+      className={buildClassName(styles.item, styles.itemPlain, styles.itemUnavailable)}
+      role="listitem"
+      aria-disabled
+      data-closed-folder={info.id}
+    >
+      <span className={buildClassName(styles.itemIcon, styles.itemIconMuted)}>
+        <PvIcon name="folder" />
+      </span>
+      <span className={buildClassName(styles.itemText, styles.itemTextWide)}>
+        <span className={styles.itemTitle} dir="auto">{info.name || lang('ParvaneCloudSharedFolder')}</span>
+        <span className={buildClassName(styles.itemSub, styles.itemBad)}>{lang('ParvaneCloudClosedByOwner')}</span>
+      </span>
+      <button type="button" className={styles.textButton} data-closed-dismiss onClick={handleDismiss}>
+        {lang('ParvaneCloudDismiss')}
+      </button>
+    </div>
+  );
+};
+
+type LinkProps = {
+  link: CloudShownLink;
+  isNarrow?: boolean;
+  onOpen: (id: string) => void;
+  // Источник отозванной ссылки ещё есть: «Создать новую» — окно ссылки на тот же источник
+  canRecreate?: boolean;
+  onRecreate: (link: CloudShownLink) => void;
+};
+
+// Строка «Моих ссылок» (доски `RdFiles`, `RpFiles`): точка состояния, название, «до 22 ноября · открытий: 0»
+// («истекла 10 ноября», «отозвана 2 ноября»), размер; на компьютере — действия по состоянию
+const CloudLinkRowBase = ({
+  link, isNarrow, canRecreate, onOpen, onRecreate,
+}: LinkProps) => {
+  const lang = useLang();
+  const day = (seconds: number) => formatCloudDayLong(lang.code, seconds * 1000);
   const isActive = link.state === 'active';
   const term = link.state === 'preparing' ? lang('ParvaneCloudLinkUnfinished')
-    : link.state === 'expired' ? lang('ParvaneCloudLinkStateExpired')
-      : link.expiresAt ? lang('ParvaneCloudLinkStateUntil', { date: dateText(link.expiresAt) })
-        : lang('ParvaneCloudLinkStateForever');
+    : link.state === 'revoked' ? lang('ParvaneCloudLinkStateRevoked', { date: day(link.revokedAt || 0) })
+      : link.state === 'expired' ? lang('ParvaneCloudLinkStateExpiredOn', { date: day(link.expiresAt) })
+        : link.expiresAt ? lang('ParvaneCloudLinkStateUntil', { date: day(link.expiresAt) })
+          : lang('ParvaneCloudLinkStateForever');
   const facts = [
-    link.kind && lang(link.kind === 'folder' ? 'ParvaneCloudFolder' : 'ParvaneCloudLinkKindFile'),
-    link.createdAt > 0 && lang('ParvaneCloudLinkCreated', { date: dateText(link.createdAt) }),
     term,
-    // Доски `RdFiles`, `RpFiles`: «до 22 ноября · открытий: 0»
-    link.state !== 'preparing' && lang('ParvaneCloudLinkOpens', { count: link.opens }),
+    isActive && lang('ParvaneCloudLinkOpens', { count: link.opens }),
   ].filter(Boolean).join(' · ');
 
-  const handleOpen = useLastCallback(() => onOpen(link.id));
+  // Отозванная ссылка не открывается: нажатие — «Создать новую» на тот же источник
+  const handleOpen = useLastCallback(() => {
+    if (link.state !== 'revoked') onOpen(link.id);
+    else if (canRecreate) onRecreate(link);
+  });
 
   const handleKeyDown = useLastCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && e.target === e.currentTarget) onOpen(link.id);
+    if (e.key === 'Enter' && e.target === e.currentTarget) handleOpen();
   });
 
   const handleCopy = useLastCallback((e: React.MouseEvent) => {
@@ -197,7 +281,18 @@ const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
   const handleRevoke = useLastCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (isActive) onOpen(link.id);
+    else if (link.state === 'revoked') dismissRevokedCloudLink(link.id);
     else void revokeCloudLink(link.id);
+  });
+
+  const handleExtend = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    void extendCloudLink(link.id, LINK_DEFAULT_TTL_DAYS);
+  });
+
+  const handleRecreate = useLastCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onRecreate(link);
   });
 
   return (
@@ -226,9 +321,19 @@ const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
               {lang('ParvaneCloudLinkCopy')}
             </button>
           )}
+          {link.state === 'expired' && (
+            <button type="button" className={styles.textButton} data-row-extend onClick={handleExtend}>
+              {lang('ParvaneCloudLinkExtend')}
+            </button>
+          )}
+          {link.state === 'revoked' && canRecreate && (
+            <button type="button" className={styles.textButton} data-row-recreate onClick={handleRecreate}>
+              {lang('ParvaneCloudLinkRecreate')}
+            </button>
+          )}
           <button
             type="button"
-            className={buildClassName(styles.textButton, styles.textButtonDanger)}
+            className={buildClassName(styles.textButton, isActive && styles.textButtonDanger)}
             data-row-revoke
             onClick={handleRevoke}
           >
@@ -242,4 +347,5 @@ const CloudLinkRowBase = ({ link, isNarrow, onOpen }: LinkProps) => {
 
 export const CloudContainerRow = memo(CloudContainerRowBase);
 export const CloudInviteCard = memo(CloudInviteCardBase);
+export const CloudClosedRow = memo(CloudClosedRowBase);
 export const CloudLinkRow = memo(CloudLinkRowBase);

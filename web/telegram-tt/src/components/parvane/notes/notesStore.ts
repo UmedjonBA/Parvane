@@ -57,6 +57,8 @@ export type NoteEntry = NoteSource & {
   // Версия содержимого, от которой идёт следующая правка
   fileId: string;
   isDaily: boolean;
+  // Устройство, записавшее текущий текст (экран двух версий)
+  device?: string;
 };
 // `updatedAt` — время правки файла в облаке (строка и плитка списка холстов)
 export type CanvasEntry = { id: string; title: string; text: string; fileId: string; updatedAt: number };
@@ -82,7 +84,12 @@ type BatchTextItem = { id: string; text?: string; fileId?: string; error?: strin
 // Запись кэша текстов в хранилище устройства: узел, версия файла, текст
 type CachedText = TextContent & { node: string };
 type GuideResult = { status: 'retry' | 'skipped' } | { status: 'done'; isFreshVault: boolean; overviewId?: string };
-type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string; error?: string } | undefined;
+type WriteResult = {
+  ok: boolean; node?: string; fileId?: string; conflict?: string; conflictMtime?: number; conflictDevice?: string;
+  error?: string;
+} | undefined;
+// Чужая версия при записи: текст и откуда она
+type TheirVersion = { text: string; at?: number; device?: string };
 // Итог отправки текста: `queued` — связи нет, текст ждёт в очереди устройства
 type PushResult = { status: 'sent'; text: string; fileId: string } | { status: 'queued' | 'failed' };
 type VaultFile = { node: CloudNode; folder: string; isNote: boolean };
@@ -90,7 +97,8 @@ type VaultFile = { node: CloudNode; folder: string; isNote: boolean };
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Папка хранилища в корне личного диска; создаётся под названием на языке интерфейса
-const VAULT_NAMES = ['Знания', 'Knowledge'];
+// Папка хранилища в корне диска: «Заметки» (с 21 ноя 2026, доски `PhNotesMore`), прежние — «Знания»
+const VAULT_NAMES = ['Заметки', 'Notes', 'Знания', 'Knowledge'];
 const DAILY_FOLDER_NAMES = ['Ежедневные', 'Daily'];
 const NOTE_EXTENSION = '.md';
 const CANVAS_EXTENSION = '.canvas';
@@ -167,6 +175,17 @@ function findVault(nodes: CloudNode[]) {
   return nodes.find((node) => (
     node.kind === 'folder' && !node.parent && !node.trashed && VAULT_NAMES.includes(node.name)
   ));
+}
+
+/** Название папки хранилища на диске («Заметки»; у хранилищ до 21 ноя 2026 — «Знания»); её ещё нет — пусто. */
+export function getVaultFolderName(data = getCloudData()) {
+  return findVault(getNodes(rootIdOf(data), data))?.name;
+}
+
+/** Личный диск и папка хранилища на нём (корзина «Заметок» отбирает узлы хранилища). */
+export function getVaultPlace(data = getCloudData()) {
+  const drive = rootIdOf(data);
+  return { drive, vault: drive ? findVault(getNodes(drive, data))?.id : undefined };
 }
 
 function newNodeId() {
@@ -499,7 +518,8 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
     }
     const previous = previousNotes.get(node.id);
     const isSame = previous && previous.fileId === content.fileId && previous.text === content.text
-      && previous.title === title && previous.folder === folder && previous.updatedAt === node.mtime;
+      && previous.title === title && previous.folder === folder && previous.updatedAt === node.mtime
+      && previous.device === node.device;
     notes.push(isSame ? previous : {
       id: node.id,
       title,
@@ -508,6 +528,7 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
       updatedAt: node.mtime,
       fileId: content.fileId,
       isDaily: DAY_KEY.test(title),
+      device: node.device,
     });
   });
   notes.sort((a, b) => b.updatedAt - a.updatedAt || (a.title < b.title ? -1 : 1));
@@ -912,15 +933,19 @@ function quickContext() {
   };
 }
 
-async function writeNote(note: NoteEntry, text: string, expectedFileId?: string): Promise<WriteResult> {
+// `keep` — версия не черновая: запись не вытесняет предыдущую версию этого же устройства из истории (CLOUD-3)
+async function writeNote(note: NoteEntry, text: string, expectedFileId?: string, keep?: boolean): Promise<WriteResult> {
   return callParvane('parvaneCloudWriteText', {
-    container: rootIdOf() || ROOT, node: note.id, name: `${note.title}${NOTE_EXTENSION}`, text, expectedFileId,
+    container: rootIdOf() || ROOT, node: note.id, name: `${note.title}${NOTE_EXTENSION}`, text, expectedFileId, keep,
   }).catch(() => undefined) as Promise<WriteResult>;
 }
 
 // Правка и чужая версия заметки от общей основы: сводятся построчно; изменено одно и то же место — остаётся
 // своя правка, чужая версия сохраняется рядом копией «… (конфликт …)»
-async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs: string, vaultName: string) {
+async function reconcileNote(
+  note: NoteEntry, base: string, mine: string, their: TheirVersion, vaultName: string,
+) {
+  const theirs = their.text;
   const merged = mergeNotes(base, mine, theirs);
   if (merged.hasConflict) {
     // Чужая версия — копией рядом (видна на всех устройствах), расхождение ждёт решения на этом устройстве
@@ -928,7 +953,15 @@ async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs
     const copyTitle = `${note.title} (${word} ${new Date().toLocaleString()})`;
     const copyId = await createNote(copyTitle, vaultName, { text: theirs });
     void saveNoteConflict({
-      node: note.id, title: note.title, copyId, base, mine, theirs, at: Date.now(),
+      node: note.id,
+      title: note.title,
+      copyId,
+      base,
+      mine,
+      theirs,
+      at: Date.now(),
+      theirsAt: their.at,
+      theirsDevice: their.device,
     });
     notify('conflict', note.title);
     return mine;
@@ -942,7 +975,7 @@ async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs
  * `baseText` — текст, с которого начата правка: если заметка с тех пор изменилась (другое устройство,
  * галочка из «Плана»), правка сводится с этими изменениями, а не затирает их. */
 export async function saveNote(
-  noteId: string, draft: string, vaultName: string, baseText?: string,
+  noteId: string, draft: string, vaultName: string, baseText?: string, keep?: boolean,
 ): Promise<boolean> {
   const note = getNotes().find(({ id }) => id === noteId);
   if (!note) return false;
@@ -951,10 +984,11 @@ export async function saveNote(
   let planned = planNoteTasks(draft, ctx);
   let text = planned.text;
   if (baseText !== undefined && baseText !== note.text && text !== note.text) {
-    text = await reconcileNote(note, baseText, text, note.text, vaultName);
+    const their = { text: note.text, at: note.updatedAt, device: note.device };
+    text = await reconcileNote(note, baseText, text, their, vaultName);
   }
   if (text === note.text) return true;
-  const pushed = await pushNoteText(note, text, vaultName);
+  const pushed = await pushNoteText(note, text, vaultName, keep);
   if (pushed.status === 'failed') {
     notify('failed', note.title);
     return false;
@@ -980,7 +1014,7 @@ export async function saveNote(
 
 // Текст в облако от версии, с которой шла правка (для текста из очереди — от версии до неё). Заметку тем временем
 // изменило другое устройство — сводим построчно от общей версии; связи нет — текст ждёт в очереди устройства
-async function pushNoteText(note: NoteEntry, draft: string, vaultName: string): Promise<PushResult> {
+async function pushNoteText(note: NoteEntry, draft: string, vaultName: string, keep?: boolean): Promise<PushResult> {
   const pending = getQueuedText(note.id);
   const base = pending ? pending.base : note.text;
   const baseFileId = pending ? pending.baseFileId : note.fileId;
@@ -997,7 +1031,7 @@ async function pushNoteText(note: NoteEntry, draft: string, vaultName: string): 
   };
   // Облако без связи: запись ждала бы соединения — текст сразу в очередь
   if (isCloudOffline()) return queue();
-  const sending = sendNoteText(note, draft, base, baseFileId, vaultName);
+  const sending = sendNoteText(note, draft, base, baseFileId, vaultName, keep);
   const outcome = await Promise.race([sending, pause(WRITE_WAIT_MS).then(() => undefined)]);
   if (outcome) return outcome;
   // Облако молчит (связь пропала посреди записи): текст ждёт в очереди; запись, дошедшая позже, её снимает
@@ -1011,15 +1045,17 @@ async function pushNoteText(note: NoteEntry, draft: string, vaultName: string): 
 
 // Запись текста с одним сведением: заметку тем временем изменило другое устройство — сводим от общей версии
 async function sendNoteText(
-  note: NoteEntry, draft: string, base: string, baseFileId: string, vaultName: string,
+  note: NoteEntry, draft: string, base: string, baseFileId: string, vaultName: string, keep?: boolean,
 ): Promise<PushResult> {
   let text = draft;
   let fromText = base;
   let fromFileId = baseFileId;
-  let result = await writeNote(note, text, fromFileId);
+  let result = await writeNote(note, text, fromFileId, keep);
   if (result?.ok && result.conflict !== undefined) {
     const theirs = result.conflict;
-    text = await reconcileNote(note, fromText, text, theirs, vaultName);
+    text = await reconcileNote(note, fromText, text, {
+      text: theirs, at: result.conflictMtime, device: result.conflictDevice,
+    }, vaultName);
     fromText = theirs;
     fromFileId = result.fileId || fromFileId;
     result = await writeNote(note, text, fromFileId);
@@ -1120,6 +1156,21 @@ export async function resolveNoteConflict(
     if (!(await saveNote(noteId, text, vaultName, conflict.mine))) return false;
     if (conflict.copyId) await deleteNote(conflict.copyId);
   }
+  await dropNoteConflict(noteId);
+  return true;
+}
+
+/** «Оставить эту» на экране двух версий (доска `ZdNotesX`): заметка получает выбранную версию целиком, копия
+ * «… (конфликт …)» — в корзину. Вторая версия остаётся в истории заметки: запись не черновая (`keep`) и не
+ * вытесняет из истории прежнюю версию этого устройства. */
+export async function keepNoteConflictVersion(
+  noteId: string, version: 'mine' | 'theirs', vaultName = getNotesVaultName(),
+) {
+  const conflict = getNoteConflict(noteId);
+  if (!conflict) return false;
+  const text = version === 'mine' ? conflict.mine : conflict.theirs;
+  if (!(await saveNote(noteId, text, vaultName, undefined, true))) return false;
+  if (conflict.copyId) await deleteNote(conflict.copyId);
   await dropNoteConflict(noteId);
   return true;
 }

@@ -20,6 +20,8 @@ type OwnProps = {
   state: PlannerState;
   day: string;
   layers: PlannerLayers;
+  // Сон — строкой внизу колонки дня компьютера (`PlannerSleepLine`), не меткой
+  noSleep?: boolean;
   onOpenTask: (taskId: string, day?: string) => void;
 };
 
@@ -30,7 +32,7 @@ function stopPropagation(e: React.PointerEvent) {
 // Метки дня под полосой загрузки: дела без оценки, сон (недосып — красная метка с подсказкой по нажатию),
 // калории и сроки задач. Пустой день меток не показывает
 const PlannerDayTags = ({
-  state, day, layers, onOpenTask,
+  state, day, layers, noSleep, onOpenTask,
 }: OwnProps) => {
   const lang = useLang();
   const [isSleepHintShown, setIsSleepHintShown] = useState(false);
@@ -53,10 +55,10 @@ const PlannerDayTags = ({
   });
 
   const entry = getDayEntry(state, day);
-  const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
+  const sleep = layers.sleep && !noSleep ? getDailyRecord(state, 'sleep', day) : undefined;
   const isShort = isShortSleep(state, day);
   const kcal = layers.food ? Math.round(getNutrientTotal(state, day, 'kcal').value) : 0;
-  const deadlines = layers.work ? entry.deadlines : [];
+  const deadlines = entry.deadlines;
 
   if (!entry.unrated && !sleep && !kcal && !deadlines.length) return undefined;
 

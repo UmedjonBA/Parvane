@@ -130,3 +130,17 @@ export function buildNoteGroups<T extends GroupedNote>({
   }
   return result;
 }
+
+/** Сколько заметок вне папки (и её подпапок) ссылаются на заметки папки: каждая считается один раз. */
+export function countOutsideRefs<T extends { id: string; folder: string }>(
+  notes: T[], path: string, backlinks: (noteId: string) => { id: string; folder: string }[],
+) {
+  const from = new Set<string>();
+  notes.forEach((note) => {
+    if (!isInFolder(note.folder, path)) return;
+    backlinks(note.id).forEach((source) => {
+      if (!isInFolder(source.folder, path)) from.add(source.id);
+    });
+  });
+  return from.size;
+}

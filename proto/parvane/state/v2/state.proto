@@ -76,6 +76,7 @@ enum ObjectKind {
   OBJECT_KIND_HEALTH_CONTAINER = 21;  // одиночка; PlannerContainer (ссылка на контейнер «Здоровья», spec 038)
   OBJECT_KIND_MUSIC_CONTAINER = 22;   // одиночка; PlannerContainer (ссылка на контейнер плейлистов «Музыки», spec 039)
   OBJECT_KIND_REPORT_CLOSED = 23;     // ключ: "<g:домен:hex>/<op_id 32 hex>" (объект-признак) — жалоба на сообщение группы закрыта админом (REPORT-2)
+  OBJECT_KIND_MEMBER_HIDDEN = 24;     // ключ: "<g:домен:hex>/<адрес участника>" (объект-признак) — сообщения участника группы скрыты у себя (REPORT-3)
 }
 
 message ObjectKey {

@@ -143,9 +143,9 @@ const PlannerGroupsPane = ({ state, today, isWide }: OwnProps) => {
                 <span className={styles.groupDot} />
                 <span className={buildClassName(kit.rowText, kit.ttl)}>{list.name}</span>
                 <span className={buildClassName(kit.sub, kit.mono)}>
-                  {item ? lang('PlannerTasksGroupStats', {
+                  {item ? lang('PlannerTasksGroupStatsLine', {
                     count: item.count, hours: formatHoursNumber(lang, item.minutes),
-                  }) : '—'}
+                  }, { pluralValue: item.count }) : '—'}
                 </span>
               </button>
               {editing?.from === list.name && renderEditor()}
@@ -159,7 +159,6 @@ const PlannerGroupsPane = ({ state, today, isWide }: OwnProps) => {
         )}
       </div>
       {editing && !editing.from && renderEditor()}
-      <p className={styles.hint}>{lang('PlannerTasksGroupsHint')}</p>
       <ConfirmDialog
         isOpen={isDeleteOpen}
         onClose={closeDelete}

@@ -57,6 +57,9 @@ pub struct Member {
     pub role: Role,
     pub rights: AdminRights,
     pub muted_until_ms: i64,
+    /// Когда вступил: подписанное время записи журнала, добавившей участника («участник с …» списка жалоб, `RpChat`).
+    /// Смена ника время не меняет.
+    pub joined_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -505,10 +508,10 @@ pub fn apply_with(
                 return Err(ProtoError::InvalidField("kind"));
             }
             let mut members = BTreeMap::new();
-            members.insert(signer.user.clone(), Member { role: Role::Owner, rights: full_rights(), muted_until_ms: 0 });
+            members.insert(signer.user.clone(), Member { role: Role::Owner, rights: full_rights(), muted_until_ms: 0, joined_ms: now });
             for m in &cr.members {
                 let a = user_of(&Some(m.clone()))?;
-                members.entry(a).or_insert(Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
+                members.entry(a).or_insert(Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
             }
             if members.len() > MAX_MEMBERS {
                 return Err(ProtoError::FieldLimit("members"));
@@ -587,7 +590,7 @@ pub fn apply_with(
                     l.note_join(m.clone(), now);
                 }
             }
-            s.members.insert(m, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
+            s.members.insert(m, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
             // Новому участнику нужны ключи новой эпохи (не читает прошлое).
             s.epoch_stale = true;
         }
@@ -843,6 +846,9 @@ pub fn apply_with(
                 l.announce.title = e.title.clone();
                 l.announce.expires_ms = e.expires_ms;
                 l.announce.usage_limit = e.usage_limit;
+                if let Some(approval) = e.requires_approval {
+                    l.announce.requires_approval = approval;
+                }
             }
         }
         Change::JoinByInvite(j) if s.public.as_ref().is_some_and(|p| p.link_public_key.as_slice() == j.link_public_key.as_slice()) => {
@@ -856,7 +862,7 @@ pub fn apply_with(
             }
             let parts = join_signing_parts(&s.group, entry.version, &entry.prev_hash, &j.joiner_root_key);
             sign::verify_ctx(&j.link_public_key, &j.link_signature, ctx::GROUP_JOIN, &[&parts])?;
-            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
+            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
         }
         Change::JoinByInvite(j) => {
             let id = link_id(&j.link_public_key);
@@ -878,7 +884,7 @@ pub fn apply_with(
             if let Some(l) = s.invite_links.get_mut(&id) {
                 l.note_join(actor.clone(), now);
             }
-            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
+            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
             s.epoch_stale = true;
         }
         Change::Leave(_) => {
@@ -1534,7 +1540,7 @@ mod tests {
         let e = build_entry(w.k("dave@x"), Some(&s), "x", Change::JoinByInvite(join), 3).unwrap();
         let s = apply(Some(&s), &e, &w.resolve()).unwrap();
         // Правка: участник без права не может, владелец — может, счётчик и вступившие остаются
-        let edit = |title: &str, limit: u32| InviteEdit { link_id: id.clone(), title: title.into(), expires_ms: 0, usage_limit: limit };
+        let edit = |title: &str, limit: u32| InviteEdit { link_id: id.clone(), title: title.into(), expires_ms: 0, usage_limit: limit, requires_approval: None };
         let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::InviteEdit(edit("чужая", 5)), 4).unwrap();
         assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "участник без invite_users");
         let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("после", 5)), 4).unwrap();
@@ -1542,6 +1548,20 @@ mod tests {
         let l = &s.invite_links[&link_id(&pubkey)];
         assert_eq!((l.announce.title.as_str(), l.announce.usage_limit, l.uses), ("после", 5, 1));
         assert_eq!(l.joins.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(), ["dave@x"]);
+        assert!(!l.announce.requires_approval, "правка без поля «по заявке» его не меняет");
+        // Вступивший помнит время записи, добавившей его («участник с …»)
+        assert_eq!(s.members["dave@x"].joined_ms, 3);
+        // «По заявке» правкой: включить и выключить; правка без поля прежнее не трогает
+        let approval = |on: bool| InviteEdit { requires_approval: Some(on), ..edit("после", 5) };
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(approval(true)), 4).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert!(s.invite_links[&link_id(&pubkey)].announce.requires_approval);
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("после", 5)), 4).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert!(s.invite_links[&link_id(&pubkey)].announce.requires_approval);
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(approval(false)), 4).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert!(!s.invite_links[&link_id(&pubkey)].announce.requires_approval);
         // Ссылка не «по заявке»: via_link_id не накручивает её счётчик
         let add = AddMember { via_link_id: id.clone(), member: ur("frank@x") };
         let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(add), 5).unwrap();

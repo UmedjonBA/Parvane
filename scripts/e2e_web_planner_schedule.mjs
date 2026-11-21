@@ -8,8 +8,12 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  dismissRecoveryKeyDialog, openPlannerScreen, preparePage, reloadPage,
+  closePlannerSettings, dismissRecoveryKeyDialog, openPlannerScreen, openPlannerSettings, preparePage, reloadPage,
+  waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-planner-schedule-1';
 const STEP_TIMEOUT_MS = 15000;
@@ -61,17 +65,8 @@ try {
   const { page, errors } = await preparePage(context, user, PASSWORD);
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
   const planner = page.locator('#ParvanePlanner');
-  const sidePane = planner.locator('[data-planner-side]');
   const week = planner.locator('[data-planner-view="week"]');
-  const openSettings = async () => {
-    await planner.getByRole('button', { name: 'Planner settings' }).click();
-    await sidePane.locator('[data-schedule-open]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  };
   const importScreen = planner.locator('[data-planner-import]');
-  const closeSide = async () => {
-    await sidePane.getByRole('button', { name: 'Close' }).first().click();
-    await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  };
   // После перезагрузки вкладка открывается в «Плане» (раздел запомнен) — списка чатов нет
   const reload = async () => {
     await reloadPage(page);
@@ -85,11 +80,12 @@ try {
     await planner.getByRole('button', { name: 'Next period' }).click();
   };
 
+  // «Расписание на неделю» на компьютере — пункт колонки разделов экрана «Задачи» (DkPlanMore)
   await openPlannerScreen(page, 'calendar');
-  await openSettings();
-  await sidePane.locator('[data-schedule-open]').click();
+  await planner.locator('[data-planner-tasks-open]').click();
+  await planner.locator('[data-planner-sections] [data-section="import"]').click();
   await importScreen.locator('[data-schedule-input]').fill(SCHEDULE);
-  await importScreen.locator('[data-import-summary]').filter({ hasText: 'Understood events: 12 · until' })
+  await importScreen.locator('[data-import-summary]').filter({ hasText: 'Understood: 12 events · until' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await importScreen.locator('[data-import-problem]').count(), 0, 'всё расписание понято');
   await importScreen.locator('[data-schedule-add]').click();
@@ -108,12 +104,12 @@ try {
   await week.getByText('Рисование', { exact: true }).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: занятия на следующей неделе и после перезагрузки');
 
-  // «Очистить план» — подтверждение, всё стёрто
-  await openSettings();
-  await sidePane.locator('[data-planner-clear]').click();
+  // «Очистить план» — страница «Модули / План», подтверждение, всё стёрто
+  const settingsPage = await openPlannerSettings(page);
+  await settingsPage.locator('[data-planner-clear]').click();
   await page.locator('.Modal').getByRole('button', { name: 'Clear plan' }).click();
-  await planner.getByText('Plan cleared').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await closeSide();
+  await settingsPage.getByText('Plan cleared').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlannerSettings(page);
   await showNextWeek();
   await week.getByText('Рисование', { exact: true }).first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: план очищен');

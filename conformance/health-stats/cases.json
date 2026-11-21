@@ -1,0 +1,147 @@
+{
+  "_comment": "HEALTH-3 п. 14: расчёты подробных экранов «Здоровья» — движок (`domain/health_stats.rs`). Сейчас — 2026-11-15 12:00 по UTC+3 (воскресенье). Записи: `at` / `from` / `to` — [сдвиг дня от сегодня, часы, минуты]. Проверки — путь в JSON через точку: `view` — `healthView`, `entries:<вид>` — `healthEntries` вида.",
+  "nowMs": 1794733200000,
+  "tzMin": 180,
+  "cases": [
+    {
+      "name": "средний отбой и подъём недели, отклонение от цели, режим «плавает»",
+      "goals": { "sleep_bed": 1410, "sleep_wake": 420 },
+      "entries": [
+        { "kind": "sleep", "from": [-6, 23, 40], "to": [-5, 7, 5] },
+        { "kind": "sleep", "from": [-5, 0, 20], "to": [-4, 7, 10] },
+        { "kind": "sleep", "from": [-4, 23, 25], "to": [-3, 7, 0] },
+        { "kind": "sleep", "from": [-2, 1, 0], "to": [-2, 7, 10] },
+        { "kind": "sleep", "from": [-1, 0, 30], "to": [-1, 8, 50] },
+        { "kind": "sleep", "from": [-1, 14, 0], "to": [-1, 15, 0], "tag": "aside", "_comment": "дневной сон «не в сумму» — не ночь" },
+        { "kind": "sleep", "from": [0, 0, 10], "to": [0, 7, 5] }
+      ],
+      "expect": {
+        "view": {
+          "sleep.stats.periods.week.nights": 6,
+          "sleep.stats.periods.week.avgBedMin": 11,
+          "sleep.stats.periods.week.bedDeltaMin": 41,
+          "sleep.stats.periods.week.avgWakeMin": 443,
+          "sleep.stats.lastBedDeltaMin": 40,
+          "sleep.stats.regime.state": "floating",
+          "sleep.stats.regime.bedSpreadMin": 95,
+          "sleep.week.6.deltaMinutes": -35,
+          "sleep.month.29.bedMin": 10
+        },
+        "entries:sleep": {
+          "entries.0.goalDelta": -35
+        }
+      }
+    },
+    {
+      "name": "мало ночей — «мало данных»; «не спал» — ночь в ноль минут",
+      "goals": { "sleep_bed": 1410, "sleep_wake": 420 },
+      "entries": [
+        { "kind": "sleep", "from": [-1, 23, 30], "to": [0, 7, 0] },
+        { "kind": "sleep", "at": [-1, 0, 0], "value": 0, "tag": "none" }
+      ],
+      "expect": {
+        "view": {
+          "sleep.stats.regime.state": "few",
+          "sleep.week.5.minutes": 0,
+          "sleep.week.5.deltaMinutes": -450,
+          "sleep.stats.periods.week.nights": 2,
+          "sleep.stats.periods.week.avgMinutes": 225
+        }
+      }
+    },
+    {
+      "name": "вес: изменение к предыдущей записи, темп за неделю, среднее и число измерений месяца",
+      "goals": { "weight": 70 },
+      "entries": [
+        { "kind": "weight", "at": [-28, 7, 0], "value": 73.0 },
+        { "kind": "weight", "at": [-14, 7, 0], "value": 72.4 },
+        { "kind": "weight", "at": [-2, 7, 30], "value": 72.3 },
+        { "kind": "weight", "at": [0, 7, 20], "value": 71.8 }
+      ],
+      "expect": {
+        "view": {
+          "metrics.0.paceWeek": -0.2,
+          "metrics.0.periods.month.avg": 72.4,
+          "metrics.0.periods.month.count": 4,
+          "metrics.0.weekDelta": -0.6,
+          "metrics.0.toGoal": 1.8
+        },
+        "entries:weight": {
+          "entries.0.delta": -0.5,
+          "entries.1.delta": -0.1,
+          "entries.3.delta": null
+        }
+      }
+    },
+    {
+      "name": "шаги: итог дня, дни с целью, самочувствие дня в итогах",
+      "goals": { "steps": 10000 },
+      "entries": [
+        { "kind": "steps", "at": [-1, 9, 0], "value": 6000 },
+        { "kind": "steps", "at": [-1, 19, 0], "value": 5800 },
+        { "kind": "steps", "at": [0, 11, 0], "value": 8400 },
+        { "kind": "mood", "at": [-1, 21, 0], "value": 2, "note": "мало спал" }
+      ],
+      "expect": {
+        "view": {
+          "metrics.1.kind": "steps",
+          "metrics.1.periods.month.goalDays": 1,
+          "metrics.1.periods.month.days": 2,
+          "metrics.1.periods.month.avg": 10100,
+          "metrics.1.series.0.goalMet": true,
+          "metrics.1.series.1.goalMet": false
+        },
+        "entries:steps": {
+          "days.0.value": 8400,
+          "days.1.value": 11800,
+          "days.1.count": 2,
+          "days.1.mood": 2,
+          "days.1.moodNote": "мало спал"
+        }
+      }
+    },
+    {
+      "name": "давление: среднее месяца, пульс той же минуты, верхняя граница",
+      "goals": { "pressure": 125 },
+      "entries": [
+        { "kind": "pressure", "at": [-1, 21, 40], "value": 120, "value2": 80 },
+        { "kind": "pulse", "at": [-1, 21, 45], "value": 72 },
+        { "kind": "pressure", "at": [-2, 8, 55], "value": 130, "value2": 82 }
+      ],
+      "expect": {
+        "view": {
+          "metrics.0.kind": "pressure",
+          "metrics.0.isUpperBound": true,
+          "metrics.0.periods.month.avg": 125,
+          "metrics.0.periods.month.avg2": 81,
+          "metrics.0.periods.month.goalDays": 1,
+          "metrics.0.series.0.goalMet": false
+        },
+        "entries:pressure": {
+          "entries.0.pulse": 72,
+          "entries.1.pulse": null
+        }
+      }
+    },
+    {
+      "name": "самочувствие ниже в дни со сном меньше шести часов",
+      "entries": [
+        { "kind": "sleep", "from": [-4, 2, 0], "to": [-4, 7, 0] },
+        { "kind": "sleep", "from": [-3, 2, 0], "to": [-3, 7, 0] },
+        { "kind": "sleep", "from": [-2, 23, 0], "to": [-1, 7, 0] },
+        { "kind": "sleep", "from": [-1, 23, 0], "to": [0, 7, 0] },
+        { "kind": "mood", "at": [-4, 20, 0], "value": 2 },
+        { "kind": "mood", "at": [-3, 20, 0], "value": 3 },
+        { "kind": "mood", "at": [-1, 20, 0], "value": 4 },
+        { "kind": "mood", "at": [0, 10, 0], "value": 3 }
+      ],
+      "expect": {
+        "view": {
+          "moodSleep.lowDays": 2,
+          "moodSleep.otherDays": 2,
+          "moodSleep.delta": -1
+        }
+      }
+    }
+  ]
+}

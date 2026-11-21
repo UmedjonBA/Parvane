@@ -5,8 +5,8 @@ import { getTranslationFn } from './localization';
 import { getIsNotifyAllowedNow } from './notifyPrefs';
 import { buildNotifyButtons, buildNotifyTitle } from './systemNotify';
 
-// Системные уведомления, которые показывает открытое приложение (spec 041 F2, доска `ZpSystem`): звонок и
-// напоминание «Плана». Показывает их service worker страницы — тогда нажатия (и кнопки) приходят в
+// Системные уведомления, которые показывает открытое приложение (spec 041 F2, доска `ZpSystem`): звонок, напоминание
+// «Плана» и «Трек скачан на сервер». Показывает их service worker страницы — тогда нажатия (и кнопки) приходят в
 // `serviceWorker/pushNotification.ts handleNotificationClick`, как у уведомлений закрытого приложения
 
 const NOTIFY_ACTION_KEYS = {
@@ -16,6 +16,7 @@ const NOTIFY_ACTION_KEYS = {
   decline: 'NotifyActionDecline',
   done: 'NotifyActionDone',
   snooze: 'NotifyActionSnooze',
+  listen: 'PvSysActionListen',
 } as const satisfies Record<NotifyButton['action'], string>;
 
 const ICON = 'icon-192x192.png';
@@ -56,6 +57,24 @@ export function showReminderNotification({ key, title, text }: { key: string; ti
     tag: `reminder:${key}`,
     data: { kind: 'reminder', reminderKey: key, reminderTitle: title } satisfies NotifyData,
     actions: buildPageNotifyButtons('reminder'),
+  });
+}
+
+/**
+ * «Найти и скачать» закончилось, а окно скрыто: «Parvane · Музыка», «Трек скачан на сервер», название и исполнитель,
+ * «Слушать» (доска `ZpSystem`). Закрытому приложению сервер об этом не сообщает — нужен push с нагрузкой.
+ */
+export function showMusicTrackNotification({ jobId, trackId, title, artist }: {
+  jobId: string; trackId?: string; title: string; artist?: string;
+}) {
+  if (document.visibilityState === 'visible' || !getIsNotifyAllowedNow('music')) return;
+  const lang = getTranslationFn();
+  const readyText: string = lang('PvSysTrackReady');
+  void showPageNotification(buildNotifyTitle(APP_NAME, lang('ParvaneModuleMusic')), {
+    body: `${readyText}\n${[title, artist].filter(Boolean).join(' · ')}`,
+    tag: `music-fetch:${jobId}`,
+    data: { kind: 'music', trackId } satisfies NotifyData,
+    actions: trackId ? buildPageNotifyButtons('music') : undefined,
   });
 }
 

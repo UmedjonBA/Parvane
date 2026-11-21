@@ -193,6 +193,8 @@ pub fn album_of(v: &Value) -> Option<Album> {
         track_count: num32(v, "songCount"),
         duration_secs: num32(v, "duration"),
         year: num32(v, "year"),
+        // Тип релиза — расширение OpenSubsonic (Navidrome): `releaseTypes: ["Single"]`
+        single: list(v, &["releaseTypes"]).iter().any(|t| t.as_str().is_some_and(|s| s.eq_ignore_ascii_case("single"))),
     })
 }
 
@@ -201,7 +203,7 @@ pub fn artist_of(v: &Value) -> Option<Artist> {
     if id_.is_empty() {
         return None;
     }
-    Some(Artist { id: id_, name: text(v, "name", TEXT_MAX), cover_id: id(v, "coverArt", COVER_MAX), album_count: num32(v, "albumCount") })
+    Some(Artist { id: id_, name: text(v, "name", TEXT_MAX), cover_id: id(v, "coverArt", COVER_MAX), album_count: num32(v, "albumCount"), track_count: 0 })
 }
 
 /// Массив по пути `a.b` (у Subsonic пустой список может отсутствовать вовсе).
@@ -238,5 +240,12 @@ mod tests {
         assert!(t.title.len() <= 512 && t.title.is_char_boundary(t.title.len()));
         assert!(t.starred && t.duration_secs == 215 && t.album_id.is_empty());
         assert!(!valid_id("", 64) && !valid_id("a/b", 64) && !valid_id("a?b", 64));
+    }
+
+    #[test]
+    fn single_is_read_from_release_types() {
+        assert!(album_of(&serde_json::json!({"id": "al-9", "releaseTypes": ["Single"]})).unwrap().single);
+        assert!(!album_of(&serde_json::json!({"id": "al-9", "releaseTypes": ["Album"]})).unwrap().single);
+        assert!(!album_of(&serde_json::json!({"id": "al-9"})).unwrap().single);
     }
 }

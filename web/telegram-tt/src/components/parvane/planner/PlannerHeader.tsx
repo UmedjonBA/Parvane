@@ -1,5 +1,7 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
+import type { PlannerLearnedWord, PlannerSettings } from './plannerModel';
+
 import buildClassName from '../../../util/buildClassName';
 import { formatMonthShort } from './plannerFormat';
 import { fromDayKey, getYearMonths, shiftPeriod, toDayKey } from './plannerModel';
@@ -10,6 +12,8 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
 import PvSegment from '../notes/PvSegment';
+import PlannerQuickField from './PlannerQuickField';
+import { PlannerYearLegend } from './PlannerYear';
 
 import styles from './PlannerPv.module.scss';
 
@@ -20,6 +24,8 @@ type OwnProps = {
   title: string;
   // Справа от переключателя на компьютере: загрузка дня («2:30 из 8:00») в виде «День»
   load?: string;
+  // Вид «Год» на компьютере: легенда ступеней загрузки справа от переключателя (доска `XdPlan`)
+  isYear?: boolean;
   picked: string;
   today: string;
   isNarrow: boolean;
@@ -32,7 +38,13 @@ type OwnProps = {
   onToday: NoneToVoidFunction;
   onPickDay: (day: string) => void;
   onSwitchSegment: (value: string) => void;
+  // Поле «Запись строкой» на компьютере: разбор по настройкам дня и словарю правок
+  settings: PlannerSettings;
+  learnedWords: PlannerLearnedWord[];
+  // Окно ввода текстом: пустое («+ Запись») либо со строкой из поля
   onOpenQuick: NoneToVoidFunction;
+  onQuickMore: (text: string) => void;
+  onQuickCreated: (day?: string) => void;
   onOpenSearch: NoneToVoidFunction;
   // Экран «Задачи» (по срокам, без даты, группы)
   onOpenTasks: NoneToVoidFunction;
@@ -42,10 +54,12 @@ type OwnProps = {
 const MONTHS_IN_YEAR = 12;
 
 // Шапка «Плана» по макету. Телефон: название модуля и виды чипами (доска `PhonePlan`). Компьютер: период
-// со стрелками, переключатель вида и поле «Запись строкой» (доска `DeskPlan`)
+// со стрелками, переключатель вида и поле «Запись строкой» с разбором (доска `DeskPlan`); «+ Запись» рядом —
+// окно ввода с подробностями. Поиск, «Задачи» и настройки — функции сверх доски, остаются
 const PlannerHeader = ({
-  title, load, picked, today, isNarrow, segments, activeSegment, prevLabel, nextLabel,
-  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onOpenQuick, onOpenSearch, onOpenTasks, onOpenSettings,
+  title, load, isYear, picked, today, isNarrow, segments, activeSegment, prevLabel, nextLabel, settings, learnedWords,
+  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onOpenQuick, onQuickMore, onQuickCreated, onOpenSearch,
+  onOpenTasks, onOpenSettings,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -210,9 +224,22 @@ const PlannerHeader = ({
         onChange={onSwitchSegment}
       />
       {load !== undefined && <span className={styles.load}>{load}</span>}
-      <button type="button" className={styles.quick} aria-label={lang('PlannerAddEntry')} onClick={onOpenQuick}>
-        <span className={styles.quickText}>{lang('PlannerQuickField')}</span>
-        <span className={styles.quickKey}>Enter</span>
+      {isYear && <PlannerYearLegend />}
+      <PlannerQuickField
+        today={today}
+        settings={settings}
+        learnedWords={learnedWords}
+        onMore={onQuickMore}
+        onCreated={onQuickCreated}
+      />
+      <button
+        type="button"
+        className={styles.navButton}
+        aria-label={lang('PlannerAddEntry')}
+        title={lang('PlannerQuickMoreTitle')}
+        onClick={onOpenQuick}
+      >
+        <Icon name="add" />
       </button>
       {searchButton}
       {tasksButton}

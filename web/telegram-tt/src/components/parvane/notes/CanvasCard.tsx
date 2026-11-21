@@ -21,6 +21,7 @@ import CanvasFileBody from './CanvasFileBody';
 import CanvasLinkBody from './CanvasLinkBody';
 import PvIcon from './PvIcon';
 
+import parts from './CanvasParts.module.scss';
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
 
@@ -110,6 +111,8 @@ const CanvasCard = ({
     const body = savingText === undefined ? parseNoteCached(note).body : parseNote(savingText).body;
     return notePreviewLines(body, note.title, PREVIEW_LINES);
   }, [note, savingText]);
+  // Подпись под названием: «заметка · #первая метка» (доска `XpNotes`)
+  const firstTag = note ? parseNoteCached(note).tags[0] : undefined;
 
   const place = `left: ${node.x}px; top: ${node.y}px; width: ${node.width}px`;
   const handles = hasGrips && (node.type === 'group' ? CANVAS_CORNER_HANDLES : CANVAS_HANDLES).map((handle) => (
@@ -317,6 +320,11 @@ const CanvasCard = ({
           </button>
         )}
       </div>
+      {note && !isEditingText && (
+        <div className={parts.cardKind} data-canvas-note-kind>
+          {firstTag ? `${lang('KnowledgeCanvasNoteKind')} · #${firstTag}` : lang('KnowledgeCanvasNoteKind')}
+        </div>
+      )}
       {isEditingText ? (
         <div
           className={styles.canvasNoteBox}

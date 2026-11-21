@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { FolderNode } from './notesFolders';
 
 import {
-  buildNoteGroups, checkFolderName, DAILY_GROUP_KEY, folderCaption, folderContents, isInFolder, listNoteFolders,
+  buildNoteGroups, checkFolderName, countOutsideRefs, DAILY_GROUP_KEY, folderCaption, folderContents, isInFolder,
+  listNoteFolders,
 } from './notesFolders';
 
 const folder = (id: string, name: string, parent?: string, trashed = false): FolderNode => ({
@@ -97,5 +98,16 @@ describe('папки заметок', () => {
   it('заметка с названием-датой вне заметок дня остаётся в своей папке', () => {
     const groups = buildNoteGroups({ notes: [note('2026-10-12', 'Работа')], folders: [], dailyFolders: [] });
     expect(groups.map(({ key, isDaily }) => [key, isDaily])).toEqual([['Работа', false]]);
+  });
+
+  it('ссылки на заметки папки извне: каждая заметка-источник один раз, ссылки изнутри папки не считаются', () => {
+    const notes = [
+      { id: 'a', folder: 'Сеть' }, { id: 'b', folder: 'Сеть/Старое' }, { id: 'c', folder: 'Сервер' },
+      { id: 'd', folder: '' }, { id: 'e', folder: 'Сетевое' },
+    ];
+    const links: Record<string, string[]> = { a: ['b', 'c', 'd'], b: ['c', 'e'] };
+    const backlinks = (id: string) => (links[id] || []).map((from) => notes.find((item) => item.id === from)!);
+    expect(countOutsideRefs(notes, 'Сеть', backlinks)).toBe(3);
+    expect(countOutsideRefs(notes, 'Сервер', backlinks)).toBe(0);
   });
 });

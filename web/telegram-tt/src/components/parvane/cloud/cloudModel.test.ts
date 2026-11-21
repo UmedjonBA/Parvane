@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  addressOfNick, canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf,
-  fileTypeLabel, folderStats, freeName, isReceivedNode, isServiceNode, kindOfFile, listedNodes, namesIn, navTreeOf,
-  normalizeName, pathOf, searchNodes, sizeOf, sortNodes, subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
+  addressOfNick, canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS,
+  type CloudNode, containerStats, decodeTextPreview, expiredTrashOf, fileTypeLabel, folderStats, freeName,
+  isReceivedNode, isServiceNode, kindOfFile, listedNodes, namesIn, navTreeOf, normalizeName, pathOf, searchNodes,
+  searchTrash, sizeOf, sortNodes, subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
 function node(
@@ -72,11 +73,23 @@ describe('облако: модель дерева', () => {
         count: childrenOf(listedNodes(tree), folder.id).length,
         size: sizeOf(tree, folder.id),
       };
-      expect(stats.get(folder.id) || { count: 0, size: 0 }).toEqual(expected);
+      const got = stats.get(folder.id);
+      expect(got ? { count: got.count, size: got.size } : { count: 0, size: 0 }).toEqual(expected);
     });
-    expect(stats.get('a')).toEqual({ count: 1, size: 307 });
-    expect(stats.get('b')).toEqual({ count: 1, size: 300 });
-    expect(stats.get('f')).toEqual({ count: 0, size: 7 });
+    // Дата папки — последнее изменение внутри (корзина не в счёт)
+    expect(stats.get('a')).toEqual({ count: 1, size: 307, mtime: 5 });
+    expect(stats.get('b')).toEqual({ count: 1, size: 300, mtime: 5 });
+    expect(stats.get('f')).toEqual({ count: 0, size: 7, mtime: 0 });
+  });
+
+  it('поиск в корзине — только положенное в неё явно', () => {
+    expect(searchTrash(TREE, 'ста').map((n) => n.id)).toEqual(['f']);
+    expect(searchTrash(TREE, 'черновик')).toEqual([]);
+    expect(searchTrash(TREE, '  ')).toEqual([]);
+  });
+
+  it('совместная папка целиком: объекты корня, объём и дата без корзины', () => {
+    expect(containerStats(TREE)).toEqual({ count: 3, size: 370, mtime: 9 });
   });
 
   it('содержимое папки, путь и поддерево без корзины', () => {

@@ -6,7 +6,10 @@ import {
 } from './plannerModel';
 import { quickDescription } from './plannerQuick';
 
-/** Записать черновик ввода текстом в состояние: задача либо событие; с ошибкой — ничего. */
+/**
+ * Записать черновик ввода текстом в состояние: задача либо событие; с ошибкой — ничего. Событие без своего
+ * «напомнить» берёт напоминание по умолчанию из настроек (`eventRemind`, доска `RdPlanSet`).
+ */
 export function applyQuickDraft(state: PlannerState, draft: QuickDraft) {
   if (draft.error) return;
   const { repeat } = draft;
@@ -17,7 +20,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft) {
       name: draft.name,
       project: project || undefined,
       description: quickDescription(draft),
-      remind: draft.remind,
+      remind: draft.remind ?? state.settings.eventRemind,
       start: draft.isAllDay ? ALL_DAY_START : draft.start!,
       end: draft.isAllDay ? ALL_DAY_END : draft.end!,
       day: repeat ? undefined : draft.day,

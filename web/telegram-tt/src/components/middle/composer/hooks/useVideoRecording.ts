@@ -4,6 +4,7 @@ import { getActions } from '../../../../global';
 import { MAX_ROUND_VIDEO_RECORDING_DURATION } from '../../../../config';
 import { createCallbackManager } from '../../../../util/callbacks';
 import captureEscKeyListener from '../../../../util/captureEscKeyListener';
+import { getIsPermissionError, showPermissionDenied } from '../../../../util/permissionPrompt';
 import * as videoRecording from '../../../../util/videoRecording/videoRecording';
 
 import useLastCallback from '../../../../hooks/useLastCallback';
@@ -97,10 +98,9 @@ const useVideoRecording = () => {
         return;
       }
 
-      const isPermissionDenied = err instanceof DOMException && err.name === 'NotAllowedError';
-      showNotification({
-        message: { key: isPermissionDenied ? 'VideoMessagePermissionDenied' : 'VideoMessageRecordError' },
-      });
+      // Parvane (доска `ZpSysGen`): запрет в браузере — «Нет доступа» с инструкцией вместо повторного запроса
+      if (getIsPermissionError(err)) showPermissionDenied('camera');
+      else showNotification({ message: { key: 'VideoMessageRecordError' } });
       // eslint-disable-next-line no-console
       console.error(err);
     } finally {

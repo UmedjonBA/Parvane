@@ -1,4 +1,4 @@
-import type { PlannerSeriesItem, PlannerState } from '../planner/plannerModel';
+import type { PlannerSeriesItem, PlannerState, PlannerStep } from '../planner/plannerModel';
 import type { PaletteItem } from './paletteSearch';
 
 import { addDays, hasInstanceOn, REPEAT_HORIZON_DAYS } from '../planner/plannerModel';
@@ -12,6 +12,8 @@ export type PaletteRecordItem = PaletteItem & {
   id: string;
   // День, на котором запись откроется; у задачи без даты его нет
   day?: string;
+  // Начало `HH:MM` — вторая строка в палитре («Задача · вт, 14:00»)
+  start?: string;
 };
 
 const MS_IN_DAY = 86400000;
@@ -35,20 +37,24 @@ export function collectPlannerRecords(state: PlannerState, today: string): Palet
   const events = state.events.map((event): PaletteRecordItem => ({
     key: `event:${event.id}`,
     group: 'record',
+    module: 'plan',
     kind: 'event',
     id: event.id,
     title: event.name,
-    text: event.description,
+    text: joinRecordText(event.description, event.steps),
     day: recordDay(event, today),
+    start: event.start || undefined,
   }));
   const tasks = state.tasks.map((task): PaletteRecordItem => ({
     key: `task:${task.id}`,
     group: 'record',
+    module: 'plan',
     kind: 'task',
     id: task.id,
     title: task.name,
-    text: [task.description, ...task.steps.map(({ text }) => text)].filter(Boolean).join('\n'),
+    text: joinRecordText(task.description, task.steps),
     day: recordDay(task, today),
+    start: task.start,
   }));
   // Ближайшие к сегодня — первыми: при равном совпадении порядок источника решает, что видно
   const todayNumber = dayNumber(today);
@@ -60,4 +66,9 @@ export function collectPlannerRecords(state: PlannerState, today: string): Palet
     const db = distance(b);
     return da === db ? 0 : da - db;
   });
+}
+
+// Ищется описание и шаги записи — у задачи и у события
+function joinRecordText(description: string | undefined, steps: PlannerStep[] | undefined) {
+  return [description, ...(steps || []).map(({ text }) => text)].filter(Boolean).join('\n');
 }

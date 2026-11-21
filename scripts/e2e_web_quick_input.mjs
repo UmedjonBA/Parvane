@@ -6,12 +6,12 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  dismissRecoveryKeyDialog,
-  preparePage,
-  relogin,
-  reloadPage,
-  openPlannerScreen,
+  closePlannerSettings, dismissRecoveryKeyDialog, openPlannerScreen, openPlannerSettings, pickPlannerDay,
+  preparePage, reloadPage, relogin, waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-quick-e2e-1';
 const PHONE = { width: 390, height: 800 };
@@ -43,10 +43,11 @@ try {
   const input = page.locator('#planner-quick-input');
   const form = page.locator('form[data-quick-kind]');
   const chip = (field) => form.locator(`[data-quick-chip="${field}"]`);
-  const addButton = form.getByRole('button', { name: 'Add', exact: true });
+  // «Сохранить» окна «Новая запись» (доска `DeskOverlays`)
+  const addButton = form.locator('[data-quick-save]');
 
   const openQuick = async () => {
-    await page.getByRole('button', { name: 'New entry' }).click();
+    await page.locator('[data-add-for]').click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   };
   const expectKind = async (kind) => {
@@ -97,7 +98,7 @@ try {
   // ── «+» из списка чатов открывает «План» и строку ввода ───────────────────
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // На списке чатов «+» открывает меню, запись в план — его пункт
-  await page.getByRole('button', { name: 'New entry' }).click();
+  await page.locator('[data-add-for]').click();
   await page.getByRole('menuitem', { name: 'Planner entry' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -375,10 +376,7 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   const sidebar = page.locator('#FoldersSidebar');
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
-  await openPlannerScreen(page, 'calendar');
-  await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
-  await planner.locator(`[role="gridcell"][data-day="${dayKey(1)}"]`).click({ position: { x: 10, y: 10 } });
+  await pickPlannerDay(page, dayKey(1));
   await planner.locator('[data-planner-day]').getByText('Быстрый созвон').first()
     .waitFor({ state: 'visible', timeout: 30000 });
   // Задачи без даты — в шторке «Без даты» экрана «Сегодня»
@@ -434,10 +432,13 @@ try {
   ), undefined, { timeout: STEP_TIMEOUT_MS });
   assert.equal((await readSuggestions())[0].source, 'history');
   await closeQuickWide();
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await planner.locator('[data-quick-learned-reset]').click();
-  await planner.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  const settingsPage = await openPlannerSettings(page);
+  await settingsPage.locator('[data-quick-learned-reset]').click();
+  await settingsPage.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Выученное стёрто — счётчик правил ноль
+  await settingsPage.locator('[data-settings-learned-count]').filter({ hasText: 'Rules learned: 0' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlannerSettings(page);
   await openQuickWide();
   await input.fill('летучка завтра 15:00');
   await expectKind('event');
@@ -476,12 +477,11 @@ try {
   console.log('OK: запись полной формы и ряд событий предлагаются строками из данных «Плана»');
 
   // ── Событие с описанием после перезагрузки: строка в расписании дня и карточка события ──
-  await openPlannerScreen(page, 'calendar');
-  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
-  await planner.locator(`[role="gridcell"][data-day="${nextTuesdayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  await pickPlannerDay(page, nextTuesdayKey());
   const ownerBlock = planner.locator('[data-planner-day] [data-block]', { hasText: OWNER_NAME });
   await ownerBlock.waitFor({ state: 'visible', timeout: 30000 });
-  assert.match(await ownerBlock.innerText(), /15:00–16:45/);
+  // Строка колонки дня (доска `DeskPlan`): под названием «15:00 · 1 ч 45 мин»
+  assert.match(await ownerBlock.innerText(), /15:00 · 1 h 45 min/);
   assert.equal((await ownerBlock.locator('[data-block-note]').innerText()).trim(), OWNER_DESCRIPTION);
   await ownerBlock.getByRole('button').click();
   const descriptionField = planner.locator('#planner-event-description');
@@ -490,6 +490,71 @@ try {
   assert.equal(await planner.locator('#planner-event-name').inputValue(), OWNER_NAME);
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/event-description-wide.png` });
   console.log('OK: событие «пара» 15:00–16:45 с описанием пережило перезагрузку');
+
+  // ── Ctrl+N поверх любого модуля (доски `ZdNav`, `DeskOverlays`): окно «Новая запись» не меняет модуль, виды
+  // «Здоровья» и «Заметка», «Понято как … · модуль …», «Другие чтения»; в «Чатах» Ctrl+N — новое сообщение ──
+  const moduleSelected = (id) => page.locator(`#FoldersSidebar [data-module="${id}"][aria-selected="true"]`);
+  await sidebar.locator('[data-module="files"]').click();
+  await moduleSelected('files').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Control+KeyN');
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('.modal-header kbd').filter({ hasText: 'Ctrl+N' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const name of ['Auto', 'Event', 'Task', 'Sleep', 'Weight', 'Blood pressure', 'Pulse', 'Steps', 'Mood', 'Note']) {
+    await form.getByRole('radio', { name, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await form.getByText('The entry goes to the module that was recognized.', { exact: false })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Вид «Вес» и одно число: строка понята со словом вида
+  await form.getByRole('radio', { name: 'Weight', exact: true }).click();
+  await input.fill('71,8');
+  await expectKind('health');
+  const understood = form.locator('[data-health-understood][data-kind="weight"]');
+  await understood.filter({ hasText: 'Understood as “Weight”' }).filter({ hasText: 'module “Health”' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await addButton.click();
+  await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await moduleSelected('files').count(), 1, 'Ctrl+N не уводит из «Файлов»');
+  // «Авто»: строка «Здоровья» с «Другими чтениями» — та же строка записью «Плана»
+  await page.keyboard.press('Control+KeyN');
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await input.fill('пульс 64');
+  await expectKind('health');
+  await form.locator('[data-health-understood][data-kind="pulse"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await form.locator('[data-quick-other]').click();
+  await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind !== 'health',
+    undefined, { timeout: STEP_TIMEOUT_MS });
+  await form.locator('[data-quick-understood]').filter({ hasText: 'module “' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Ночь: раскладка «Отбой / Подъём / Всего» и вывод «Last night»
+  await form.getByRole('radio', { name: 'Auto', exact: true }).click();
+  await input.fill('лёг в 23:30 встал в 7');
+  await expectKind('health');
+  const nightCard = form.locator('[data-health-understood][data-kind="sleep"]');
+  for (const text of ['Understood as “Sleep”', 'Total', '23:30', '07:00']) {
+    await nightCard.filter({ hasText: text }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await nightCard.locator('[data-health-verdict]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeQuickWide();
+  // Вид «Заметка»: строка — название новой заметки, открываются «Заметки»
+  await page.keyboard.press('Control+KeyN');
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await form.getByRole('radio', { name: 'Note', exact: true }).click();
+  await input.fill('Заметка из окна записи');
+  await expectKind('note');
+  await addButton.click();
+  await moduleSelected('notes').waitFor({ state: 'visible', timeout: 30000 });
+  // «Чаты»: Ctrl+N — «Новое сообщение»
+  await sidebar.locator('[data-module="chats"]').click();
+  await moduleSelected('chats').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Control+KeyN');
+  await page.locator('#LeftColumn [data-contacts-remote]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await input.count(), 0, 'в «Чатах» Ctrl+N не открывает окно записи');
+  await page.keyboard.press('Escape');
+  // Вес записан в «Здоровье» из окна над «Файлами»
+  await sidebar.locator('[data-module="health"]').click();
+  await page.locator('#ParvaneHealth [data-health-card="weight"] [data-health-value]').filter({ hasText: '71.8' })
+    .waitFor({ state: 'visible', timeout: 30000 });
+  console.log('OK: Ctrl+N — окно «Новая запись» поверх модуля, виды «Здоровья» и «Заметка», «Понято как», «Новое сообщение» в «Чатах»');
 
   console.log('e2e_web_quick_input: OK');
 } catch (error) {

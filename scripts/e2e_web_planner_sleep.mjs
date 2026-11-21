@@ -8,8 +8,12 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  dismissRecoveryKeyDialog, openPlannerScreen, preparePage,
+  closePlannerSettings, dismissRecoveryKeyDialog, openPlannerScreen, openPlannerSettings, openSettingsScreen,
+  preparePage, waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-planner-sleep-1';
 const STEP_TIMEOUT_MS = 15000;
@@ -52,7 +56,9 @@ try {
   await tag.click();
   const health = page.locator('#ParvaneHealth');
   await health.locator('[data-health-entries] [data-kind="sleep"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await health.locator('[data-health-entries] [data-kind="sleep"]').getByRole('button', { name: /^Delete entry/ }).click();
+  // Удаление — из окна правки записи (крестиков в строках нет, доски `HealthSleep`, `DeskHealth`)
+  await health.locator('[data-health-entries] [data-kind="sleep"] [data-health-entry-edit]').first().click();
+  await page.getByRole('button', { name: 'Delete entry', exact: true }).click();
   await health.locator('[data-health-entries] [data-kind="sleep"]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await openPlannerScreen(page, 'calendar');
   if (new Date().getDay() === 1) await planner.getByRole('button', { name: 'Previous period' }).click();
@@ -79,7 +85,16 @@ try {
   // нет; нажатие на метку показывает подсказку о сниженном бюджете дня. Сон задан длительностью: промежуток
   // «с 3:00 до 6:00» до шести утра лежит в будущем, и разбор относит его на вчера
   await enterQuick('спал 3 часа');
+  // Компьютер (доска `RdPlan`): внизу колонки дня — строка «Сон прошлой ночью: 3:00 — бюджет дня снижен до …»,
+  // метки сна вверху колонки нет
+  await openPlannerScreen(page, 'today');
+  const sleepLine = planner.locator(`[data-planner-day-aside] [data-sleep-line="${dayKey(0)}"]`);
+  await sleepLine.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.match(await sleepLine.innerText(), /^Sleep last night: 3:00 — day budget reduced to /, 'строка сна в колонке дня');
+  assert.equal(await planner.locator('[data-planner-day-aside] [data-sleep-short]').count(), 0, 'метки сна в колонке нет');
   await page.setViewportSize({ width: 360, height: 800 });
+  // Боковая панель уходит перерисовкой после смены размера: пока она видна, openPlannerScreen идёт путём компьютера
+  await page.locator('#FoldersSidebar').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await openPlannerScreen(page, 'today');
   const today = dayKey(0);
   const dayView = planner.locator(`[data-planner-today="${today}"]`);
@@ -102,13 +117,58 @@ try {
   if (process.env.PARVANE_SLEEP_SHOT) await page.screenshot({ path: process.env.PARVANE_SLEEP_SHOT });
   await dayView.locator('[data-day-plan]').click();
   await hint.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  // Слой «Сон» выключается в настройках «Плана»: метка пропадает
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await planner.locator('[data-planner-side="settings"] [data-layer="sleep"]').click();
+  // Слой «Сон» выключается на странице «Модули / План» (телефон, доска `RpPlan`): метка пропадает
+  const settingsPage = await openPlannerSettings(page);
+  await settingsPage.locator('[data-layer="sleep"]').click();
+  // Выключатель перерисовывается от сигнала слоёв — не в тот же кадр, что нажатие
+  await settingsPage.locator('[data-layer="sleep"][aria-checked="false"]')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closePlannerSettings(page);
   await shortTag.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await planner.locator('[data-planner-side="settings"] [data-layer="sleep"]').click();
+  await (await openPlannerSettings(page)).locator('[data-layer="sleep"]').click();
+  await closePlannerSettings(page);
   await shortTag.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — недосып красной меткой дня, подсказка по нажатию, слой «Сон» в настройках');
+  // ── «Профиль → Модули / Здоровье — Цели здоровья» (доски `RdPlanSet`, `PhModSettings`) ──
+  await openSettingsScreen(page, 'Modules');
+  await page.locator('[data-module-settings="health"]').click();
+  const goalsPage = page.locator('[data-settings-page="health"] [data-health-goals]');
+  await goalsPage.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Цели строкой: разбор движка «Здоровья», Enter применяет
+  const goalsLine = goalsPage.locator('[data-health-goals-line]');
+  await goalsLine.fill('вес 70 шаги 10000');
+  const understood = goalsPage.locator('[data-health-goals-understood]');
+  await understood.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('строка целей не разобрана: нет «Понято: …»'));
+  await page.waitForFunction(() => /weight · steps per day/.test(
+    document.querySelector('[data-health-goals-understood]')?.textContent || '',
+  ), undefined, { timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    assert.fail(`разбор целей: «${await understood.innerText()}»`);
+  });
+  await goalsLine.press('Enter');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-health-goals] input[data-goal="weight"]')?.value === '70'
+    && document.querySelector('[data-health-goals] input[data-goal="steps"]')?.value === '10000'
+  ), undefined, { timeout: STEP_TIMEOUT_MS });
+  // Сон: отбой и подъём, длительность считается, «Напоминать об отбое» — настройка устройства
+  await goalsPage.locator('input[data-goal="sleep_bed"]').fill('23:30');
+  await goalsPage.locator('input[data-goal="sleep_wake"]').fill('07:00');
+  await goalsPage.locator('[data-health-goals-duration]').filter({ hasText: '7 h 30 min' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await goalsPage.locator('[data-health-bedtime]').click();
+  await goalsPage.locator('[data-health-bedtime][aria-checked="true"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(
+    await page.evaluate(() => JSON.parse(localStorage.getItem('parvane:bedtime-remind') || '{}').bedMin),
+    23 * 60 + 30, 'напоминание об отбое — по цели отбоя',
+  );
+  // Питание, вода и тренировки по умолчанию выключены: полоса «… выключены, цели сохранены» и «Включить блоки»
+  await goalsPage.locator('[data-health-goals-off]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await goalsPage.locator('input[data-goal="kcal"]').count(), 0, 'цели выключенного блока скрыты');
+  await goalsPage.locator('[data-health-goals-blocks]').click();
+  await page.locator('button[data-block="food"]').click();
+  await page.locator('[data-module-settings="health"]').click();
+  await goalsPage.locator('input[data-goal="kcal"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Цели здоровья» — цели строкой, сон с длительностью, «Напоминать об отбое», «Включить блоки»');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_sleep: OK');
 } finally {

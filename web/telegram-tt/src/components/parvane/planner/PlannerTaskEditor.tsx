@@ -10,8 +10,9 @@ import type { PlannerDescriptionScope as DescriptionScope } from './plannerSerie
 import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
+import { formatDurationValue, parseDuration } from './plannerEditorFormat';
 import {
-  formatDay, formatStatus,
+  formatDay, formatRepeatShort, formatStatus,
 } from './plannerFormat';
 import {
   detachInstance, excludeInstance, instanceKey, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
@@ -26,11 +27,13 @@ import { showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import { PlannerCardCaption, PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
+import PlannerDateField from './PlannerDateField';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerFreeTime from './PlannerFreeTime';
@@ -43,8 +46,11 @@ import PlannerSteps from './PlannerSteps';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
+import more from './PlannerEditor.module.scss';
 
 const SAVED_SHOWN_MS = 2000;
+// Ширина, до которой «План» — одна колонка (`Planner.module.scss`)
+const NARROW_WIDTH = 925;
 
 type OwnProps = {
   state: PlannerState;
@@ -69,6 +75,8 @@ const PlannerTaskEditor = ({
   state, task, today, picked, onBack, onPickDay, onOpenTask,
 }: OwnProps) => {
   const lang = useLang();
+  const { width } = useWindowSize();
+  const isNarrow = width <= NARROW_WIDTH;
 
   // «Сохранено» на пару секунд после правки описания
   const [isSaved, setIsSaved] = useState(false);
@@ -87,6 +95,7 @@ const PlannerTaskEditor = ({
   }, [task.id]);
 
   const [pending, setPending] = useState<Pending>();
+  const [fieldsRevision, setFieldsRevision] = useState(0);
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(task.repeat, task.day || today),
   );
@@ -166,6 +175,11 @@ const PlannerTaskEditor = ({
         detachedId = detachInstance(draft, 'task', task.id, instanceDay, action.changes)?.id;
         return;
       }
+      // «Не повторять с этого дня» (доска `XpPlan`): день — разовой задачей с правкой, ряд кончается
+      if (scope === 'stop') {
+        detachedId = changeSeriesRule(draft, 'task', task.id, instanceDay, undefined, 'stop', action.changes)?.id;
+        return;
+      }
       // Новый день экземпляра переносит ряд (весь либо его продолжение), а не пишется в шаблон
       if (scope === 'following') {
         const fields = { ...action.changes, day: undefined };
@@ -183,6 +197,8 @@ const PlannerTaskEditor = ({
 
   const handleCancelPrompt = useLastCallback(() => {
     setPending(undefined);
+    // Поля времени держат набранное у себя: значение записи прежнее, поэтому поля пересоздаются новым ключом
+    setFieldsRevision((revision) => revision + 1);
   });
 
   const handleDay = useLastCallback((value: string) => {
@@ -211,8 +227,9 @@ const PlannerTaskEditor = ({
     return patch({ start: value || undefined }, lang('PlannerNoticeTimeUpdated', { name: task.name }));
   });
 
+  // Длительность строкой: «90», «1:30», «1 ч 30 мин»
   const handleMinutes = useLastCallback((value: string) => {
-    const minutes = value === '' ? undefined : Number(value);
+    const minutes = parseDuration(value);
     if (minutes !== undefined
       && (!Number.isFinite(minutes) || minutes < MIN_TASK_MINUTES || minutes > MINUTES_IN_DAY)) {
       showPlannerNotice(lang('PlannerErrorMinutes'));
@@ -380,9 +397,94 @@ const PlannerTaskEditor = ({
       : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
 
   const isDone = task.status === 'done';
+  const hasDate = !task.repeat || isInstance;
+  const newTime = pending?.kind === 'patch' && Object.keys(pending.changes).join() === 'start'
+    ? pending.changes.start : undefined;
+
+  const dayField = hasDate && (
+    <PlannerDateField
+      label={lang('PlannerFieldDay')}
+      value={task.day}
+      empty={lang('PlannerUndatedShort')}
+      onChange={handleDay}
+    />
+  );
+  const startField = (
+    <PlannerField
+      key={`start-${fieldsRevision}`}
+      label={lang('PlannerFieldStart')}
+      type="time"
+      value={task.start}
+      onCommit={handleStart}
+    />
+  );
+  const durationField = (
+    <PlannerField
+      key={`duration-${fieldsRevision}`}
+      label={lang('PlannerFieldDuration')}
+      type="text"
+      value={formatDurationValue(lang, task.minutes)}
+      placeholder={lang('PlannerNoEstimate')}
+      onCommit={handleMinutes}
+    />
+  );
+  const dueField = !task.repeat && (
+    <PlannerDateField
+      label={lang('PlannerFieldDue')}
+      value={task.due}
+      empty={lang('PlannerDueNone')}
+      onChange={handleDue}
+    />
+  );
+  const remindField = <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />;
+  const groupField = (
+    <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
+  );
+  const repeatRow = (
+    <PlannerRepeatRow value={repeatDraft} day={task.instanceDay || task.day} onChange={setRepeatDraft}>
+      {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
+      <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
+        <Icon name="loop" />
+        {lang('PlannerRepeatSave')}
+      </button>
+    </PlannerRepeatRow>
+  );
+  const steps = <PlannerSteps steps={task.steps} onToggle={handleStepToggle} onAdd={handleStepAdd} />;
+  const freeTime = (
+    <PlannerFreeTime
+      state={state}
+      name={task.name}
+      minutes={task.minutes}
+      fromDay={task.instanceDay || task.day || picked}
+      today={today}
+      exceptKey={instanceKey(task)}
+      onPick={handleFreeSlot}
+    />
+  );
+  const statusRow = (
+    <PlannerCardRow icon="flag" row="status">
+      <Select
+        id="planner-task-status"
+        label={lang('PlannerFieldStatus')}
+        value={task.status}
+        hasArrow
+        onChange={handleStatus}
+      >
+        {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
+      </Select>
+    </PlannerCardRow>
+  );
 
   return (
-    <div className={buildClassName(styles.editor, styles.eventCard)}>
+    <div className={buildClassName(styles.editor, styles.eventCard, !isNarrow && more.wide)}>
+      {!isNarrow && (
+        <div className={more.top}>
+          <span className={more.topNote} data-task-autosave>
+            {isSaved ? lang('PlannerSaved') : lang('PlannerAutoSaved')}
+          </span>
+          <button type="button" className={more.topDelete} onClick={handleDelete}>{lang('PlannerDeleteShort')}</button>
+        </div>
+      )}
       {isNameEditing ? (
         <input
           id="planner-task-name"
@@ -410,81 +512,73 @@ const PlannerTaskEditor = ({
           <Icon name="edit" className={styles.editorTitleIcon} />
         </h2>
       )}
-      {/* Поля задачи пишутся сразу (у события — кнопка «Сохранить»): об этом нужно сказать */}
-      <p className={styles.small} data-task-autosave>
-        {isSaved ? lang('PlannerSaved') : lang('PlannerAutoSaved')}
-      </p>
+      {/* Поля задачи пишутся сразу: об этом нужно сказать (на компьютере — в строке над названием) */}
+      {isNarrow && (
+        <p className={styles.small} data-task-autosave>
+          {isSaved ? lang('PlannerSaved') : lang('PlannerAutoSaved')}
+        </p>
+      )}
       {task.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
-      {(!task.repeat || isInstance) && (
+      {hasDate && (
         <label className={buildClassName(styles.row, styles.rowButton, isDone && styles.rowDone)}>
           <input type="checkbox" className={styles.check} checked={isDone} onChange={handleDone} />
           <span>{lang(isDone ? 'PlannerStatusDone' : 'PlannerMarkDone')}</span>
         </label>
       )}
 
-      <PlannerCardRow icon="clock" row="when">
-        <div className={buildClassName(styles.fields, (!task.repeat || isInstance) && styles.fieldsThree)}>
-          {(!task.repeat || isInstance) && (
-            <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
-          )}
-          <PlannerField label={lang('PlannerFieldStart')} type="time" value={task.start} onCommit={handleStart} />
-          <PlannerField
-            label={lang('PlannerFieldMinutes')}
-            type="number"
-            value={task.minutes === undefined ? '' : String(task.minutes)}
-            min={MIN_TASK_MINUTES}
-            max={MINUTES_IN_DAY}
-            step={5}
-            placeholder={lang('PlannerNoEstimate')}
-            onCommit={handleMinutes}
-          />
-        </div>
-        {!task.repeat && (
-          <div className={styles.fields}>
-            <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
-          </div>
-        )}
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="flag" row="status">
-        <Select
-          id="planner-task-status"
-          label={lang('PlannerFieldStatus')}
-          value={task.status}
-          hasArrow
-          onChange={handleStatus}
-        >
-          {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
-        </Select>
-      </PlannerCardRow>
-
-      <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
-      <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft}>
-        {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
-        <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
-          <Icon name="loop" />
-          {lang('PlannerRepeatSave')}
-        </button>
-      </PlannerRepeatRow>
+      {isNarrow ? (
+        <>
+          <PlannerCardRow icon="clock" row="when">
+            <div className={buildClassName(styles.fields, hasDate && styles.fieldsThree)}>
+              {dayField}
+              {startField}
+              {durationField}
+            </div>
+            {dueField && <div className={styles.fields}>{dueField}</div>}
+          </PlannerCardRow>
+          {statusRow}
+          <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
+          {repeatRow}
+        </>
+      ) : (
+        <>
+          <PlannerCardRow icon="clock" row="when">
+            <div className={more.grid}>
+              {dayField || <span />}
+              {startField}
+              {durationField}
+              <div className={more.cell} data-card-row="remind">{remindField}</div>
+              <div className={more.cell} data-card-row="group">{groupField}</div>
+              {dueField || <span />}
+            </div>
+          </PlannerCardRow>
+          {statusRow}
+          {repeatRow}
+        </>
+      )}
       {isInstance && (
         <button type="button" className={styles.linkButton} onClick={handleOpenSeries}>
           {lang('PlannerSeriesOpen')}
         </button>
       )}
 
-      <PlannerCardRow icon="schedule" row="remind">
-        <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="folder" row="group">
-        <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
-      </PlannerCardRow>
-
-      <PlannerSteps steps={task.steps} onToggle={handleStepToggle} onAdd={handleStepAdd} />
+      {isNarrow ? (
+        <>
+          <PlannerCardRow icon="schedule" row="remind">{remindField}</PlannerCardRow>
+          <PlannerCardRow icon="folder" row="group">{groupField}</PlannerCardRow>
+          {steps}
+        </>
+      ) : (
+        <div className={more.columns}>
+          {steps}
+          {freeTime}
+        </div>
+      )}
 
       <PlannerCardRow icon="info" row="description">
         <TextArea
           label={lang('PlannerFieldDescription')}
+          placeholder={lang('PlannerOptional')}
           value={isInstance ? descriptionDraft : task.description}
           onChange={handleDescription}
         />
@@ -502,26 +596,23 @@ const PlannerTaskEditor = ({
         )}
       </PlannerCardRow>
 
-      <PlannerFreeTime
-        state={state}
-        name={task.name}
-        minutes={task.minutes}
-        fromDay={task.instanceDay || task.day || picked}
-        today={today}
-        exceptKey={instanceKey(task)}
-        onPick={handleFreeSlot}
-      />
+      {isNarrow && freeTime}
 
-      {promptMode ? (
+      {promptMode && (
         <PlannerSeriesPrompt
           mode={promptMode}
+          name={task.name}
+          rule={task.repeat ? formatRepeatShort(lang, task.repeat) : undefined}
+          day={task.instanceDay}
+          newTime={newTime}
           onChoose={handleScope}
           onCancel={handleCancelPrompt}
         />
-      ) : (
+      )}
+      {isNarrow && !promptMode && (
         <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
           <Icon name="delete" />
-          {lang('PlannerDeleteTask')}
+          {lang('PlannerDeleteRecord')}
         </button>
       )}
     </div>

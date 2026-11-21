@@ -84,8 +84,13 @@
 .sectionActive,
 .sectionActive:hover,
 .sectionActive:focus-visible {
-  color: var(--pv-accent);
+  color: var(--pv-at);
   background: var(--pv-raised);
+}
+
+// Значок открытого модуля — `--accent`, подпись — `--at` (`pv.css` `.rail .ri.on`)
+.sectionActive .sectionIcon {
+  color: var(--pv-accent);
 }
 
 .sectionTitle {
@@ -108,12 +113,43 @@
 
   font-family: var(--font-family-monospace);
   font-size: 0.6875rem;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   line-height: 1.125rem;
-  color: var(--pv-accent-ink);
+  color: var(--pv-panel);
   text-align: center;
 
   background: var(--pv-blue);
+}
+
+// Общий поиск — кнопка-значок 44 × 44 (доска `DeskChats`, `.ib`)
+.searchButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: var(--pv-touch-size);
+  height: var(--pv-touch-size);
+  padding: 0;
+  border: none;
+  border-radius: var(--pv-radius);
+
+  color: var(--pv-muted);
+
+  background: none;
+  outline: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    color: var(--pv-fg);
+    box-shadow: var(--pv-focus-ring);
+  }
 }
 
 // «+» внизу панели: меню либо быстрый ввод — по открытому модулю
@@ -151,6 +187,11 @@
   stroke-width: 2.4;
 }
 
+.addButtonOpen {
+  position: relative;
+  z-index: calc(var(--z-menu-bubble) + 1);
+}
+
 .addMenu {
   position: absolute;
   bottom: 0;
@@ -158,4 +199,42 @@
 
   width: 14.5rem;
   margin-left: 0.5rem;
+}
+
+// Пузырь меню по доске `PlusModes` (`pv.css` `.menu`, `.mi`): рамка вместо тени, радиус карточки, пункты 48 px
+.addMenuBubble {
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card) !important;
+  background: var(--pv-panel) !important;
+  box-shadow: none !important;
+
+  :global(.MenuItem) {
+    min-height: var(--pv-menu-item-height);
+  }
+}
+
+// ── узкое окно компьютера (доска `RdNarrow`): 56 px, значки 44 × 44 без подписей ────────────────────────────
+.rootNarrow {
+  width: var(--pv-rail-narrow-width);
+
+  .section {
+    width: var(--pv-touch-size);
+    min-height: var(--pv-touch-size);
+    padding: 0;
+  }
+
+  .badge {
+    top: 0;
+    left: calc(50% + 0.25rem);
+  }
+
+  .addButton {
+    width: var(--pv-touch-size);
+    height: 2.5rem;
+  }
+}
+
+// Плеер 40 px вместо 48: виджет «Музыки» тот же, уменьшен целиком
+.playerNarrow {
+  zoom: 0.8333;
 }

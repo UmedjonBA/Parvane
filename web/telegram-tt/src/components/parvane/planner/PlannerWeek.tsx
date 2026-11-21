@@ -7,7 +7,8 @@ import type { PlannerDayIndexEntry, PlannerEvent, PlannerState } from './planner
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatHours, formatHoursNumber, formatSpan, formatWeekday, listColorStyle,
+  formatDay, formatHours, formatHoursNumber, formatKind, formatRepeatShort, formatSpan, formatWeekdayShort,
+  joinCaption, listColorStyle,
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
@@ -124,10 +125,10 @@ const PlannerWeek = ({
         ? toMinutes(nextSleep.time) : undefined;
       return {
         day,
-        layout: layers.work ? layoutTimed(entry.timed) : [],
-        allDay: layers.work ? entry.allDay : [],
-        untimed: layers.work ? entry.untimed : [],
-        deadlines: layers.work ? entry.deadlines : [],
+        layout: layoutTimed(entry.timed),
+        allDay: entry.allDay,
+        untimed: entry.untimed,
+        deadlines: entry.deadlines,
         meals: layers.food ? (state.nutrition[day]?.entries || []).filter((item) => item.time) : [],
         kcal: layers.food ? Math.round(getNutrientTotal(state, day, 'kcal').value) : 0,
         sleep,
@@ -243,23 +244,11 @@ const PlannerWeek = ({
                 )}
                 data-day={day}
                 aria-label={formatDay(lang, day)}
+                title={`${formatHoursNumber(lang, load)}/${formatHours(lang, budget)}`}
+                data-over={isOver ? '1' : undefined}
                 onClick={handleDayClick}
               >
-                <span className={styles.weekDayName}>{formatWeekday(lang, (date.getDay() + 6) % 7)}</span>
-                <span className={styles.weekDayRow}>
-                  <span className={styles.weekDayNumber}>{date.getDate()}</span>
-                  <span className={buildClassName(styles.weekDayLoad, isOver && styles.red)}>
-                    {`${formatHoursNumber(lang, load)}/${formatHours(lang, budget)}`}
-                  </span>
-                </span>
-                <span
-                  className={buildClassName(styles.prog, styles.progThin, isOver ? styles.kindDue : styles.kindEvent)}
-                >
-                  <span
-                    className={styles.progFill}
-                    style={`width: ${budget ? Math.min(1, load / budget) * PERCENT : 0}%`}
-                  />
-                </span>
+                <span className={styles.weekDayLine}>{`${formatWeekdayShort(lang, day)} ${date.getDate()}`}</span>
               </button>
             );
           })}
@@ -446,7 +435,15 @@ const PlannerWeek = ({
                       onClick={handleItemClick}
                     >
                       <span className={styles.weekBlockName}><PlannerName name={item.name} /></span>
-                      <span className={styles.weekBlockTime}>{`${item.start}–${item.end}`}</span>
+                      <span className={styles.weekBlockTime}>
+                        {isSingle ? joinCaption([
+                          `${item.start}–${item.end}`,
+                          formatKind(lang, item.task ? 'task' : 'event').toLowerCase(),
+                          item.task?.status === 'done' ? lang('PlannerCaptionDone')
+                            : (item.task || item.event)!.repeat
+                              ? formatRepeatShort(lang, (item.task || item.event)!.repeat!) : undefined,
+                        ]) : `${item.start}–${item.end}`}
+                      </span>
                       {note && <span className={styles.weekBlockNote} data-block-note>{note}</span>}
                     </button>
                   </div>

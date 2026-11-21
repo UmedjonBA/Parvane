@@ -65,6 +65,16 @@ export function formatDuration(lang: LangFn, minutes: number) {
   return minutes % 60 ? `${hours} ${lang('PlannerMinutesValue', { minutes: minutes % 60 })}` : hours;
 }
 
+/** Длительность словами полностью: «15 минут», «1 час 30 минут» (текст напоминания, доска `RpPlan`). */
+export function formatDurationFull(lang: LangFn, minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return [
+    hours ? lang('PlannerHoursFull', { count: hours }, { pluralValue: hours }) : undefined,
+    rest || !hours ? lang('PlannerMinutesFull', { count: rest }, { pluralValue: rest }) : undefined,
+  ].filter(Boolean).join(' ');
+}
+
 /** «Напомнить в начале» / «Напомнить за 15 мин» (сутки и неделя — днями). */
 export function formatRemind(lang: LangFn, minutes: number) {
   if (!minutes) return lang('PlannerRemindAtStart');
@@ -143,10 +153,102 @@ export function formatPeriod(lang: LangFn, view: PlannerCalendarView, day: strin
   return `${short(from, from.getFullYear() !== to.getFullYear())} – ${short(to, true)}`;
 }
 
-// Заголовок недели без года — «12 окт – 18 окт»
+// Заголовок недели без года: один месяц — «9–15 ноября», два — «30 нояб. – 6 дек.» (доска `DeskPlan`)
 export function formatWeekRange(lang: LangFn, day: string) {
   const days = getWeekKeys(day);
-  return `${formatDayShort(lang, days[0])} – ${formatDayShort(lang, days[days.length - 1])}`;
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (first.slice(0, 7) === last.slice(0, 7)) {
+    return `${fromDayKey(first).getDate()}–${formatDay(lang, last)}`;
+  }
+  return `${formatDayShort(lang, first)} – ${formatDayShort(lang, last)}`;
+}
+
+// «вс 15 ноября» — короткий день недели и число (доски `RpPlan`, `RdPlan`, `ZdPlanX`)
+export function formatWeekdayDay(lang: LangFn, day: string) {
+  const weekday = formatDate(lang.code, fromDayKey(day), { weekday: 'short' }).replace(/\.$/, '');
+  return `${weekday} ${formatDay(lang, day)}`;
+}
+
+/** Заголовок дня: «Сегодня, вс 15 ноября», «Завтра, пн 16 ноября», иначе «Вт 17 ноября». */
+export function formatDayHeading(lang: LangFn, day: string, today: string) {
+  const short = formatWeekdayDay(lang, day);
+  if (day === today) return `${lang('PlannerToday')}, ${short}`;
+  if (day === addDays(today, 1)) return `${lang('PlannerTomorrow')}, ${short}`;
+  if (day === addDays(today, -1)) return `${lang('WeekdayYesterday')}, ${short}`;
+  return capitalize(short);
+}
+
+/** День в подписи строки: «сегодня», «завтра», «вчера», иначе «ср 18 ноября». */
+export function formatDayInline(lang: LangFn, day: string, today: string) {
+  if (day === today) return lang('PlannerToday').toLowerCase();
+  if (day === addDays(today, 1)) return lang('PlannerTomorrow').toLowerCase();
+  if (day === addDays(today, -1)) return lang('WeekdayYesterday').toLowerCase();
+  return formatWeekdayDay(lang, day);
+}
+
+/** Срок задачи в подписи: «срок прошёл», «срок сегодня», «срок завтра», в ближайшую неделю — «срок пт», иначе «срок 21 ноября». */
+export function formatDue(lang: LangFn, due: string, today: string) {
+  if (due < today) return lang('PlannerDuePassed');
+  if (due === today) return lang('PlannerDueToday');
+  if (due === addDays(today, 1)) return lang('PlannerDueTomorrow');
+  const date = due <= addDays(today, 6)
+    ? formatDate(lang.code, fromDayKey(due), { weekday: 'short' }).replace(/\.$/, '')
+    : formatDay(lang, due);
+  return lang('PlannerDueValue', { date });
+}
+
+/** Подпись строки записи частями через « · »: «Задача · 30 мин · срок сегодня». Пустые части пропускаются. */
+export function joinCaption(parts: (string | undefined | false)[]) {
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** «Задача» / «Событие». */
+export function formatKind(lang: LangFn, kind: 'task' | 'event') {
+  return lang(kind === 'task' ? 'PlannerKindTask' : 'PlannerKindEvent');
+}
+
+// Повтор каждую неделю по одному дню: «каждый понедельник», «каждую среду», «каждое воскресенье»
+const EVERY_WEEKDAY_KEYS = [
+  'PlannerEveryMonday', 'PlannerEveryTuesday', 'PlannerEveryWednesday', 'PlannerEveryThursday',
+  'PlannerEveryFriday', 'PlannerEverySaturday', 'PlannerEverySunday',
+] as const;
+
+/** Правило повтора для подписи строки: еженедельно по одному дню — «каждую среду», иначе `formatRepeat` строчными. */
+export function formatRepeatShort(lang: LangFn, repeat: PlannerRepeat) {
+  const days = repeat.weekdays || [];
+  if (repeat.kind === 'weekly' && repeat.interval === 1 && days.length === 1 && !repeat.endDay && !repeat.count) {
+    return lang(EVERY_WEEKDAY_KEYS[(days[0] + 6) % 7]);
+  }
+  const text = formatRepeat(lang, repeat);
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+// «пн» — короткий день недели строчными, без точки
+export function formatWeekdayShort(lang: LangFn, day: string) {
+  return formatDate(lang.code, fromDayKey(day), { weekday: 'short' }).replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * Подпись записи в строке дня частями через « · » (доски `PhonePlan`, `RpPlan`): вид с заглавной, длительность,
+ * группа, правило повтора, «выполнено» — «Задача · 1 ч · группа «Дом»», «Событие · 1 ч 30 мин · каждую неделю».
+ */
+export function formatRecordCaption(lang: LangFn, {
+  kind, minutes, group, repeat, isDone,
+}: {
+  kind: 'task' | 'event';
+  minutes?: number;
+  group?: string;
+  repeat?: PlannerRepeat;
+  isDone?: boolean;
+}) {
+  return joinCaption([
+    formatKind(lang, kind),
+    minutes ? formatDuration(lang, minutes) : undefined,
+    group ? lang('PlannerCaptionGroup', { name: group }) : undefined,
+    repeat ? formatRepeatShort(lang, repeat) : undefined,
+    isDone ? lang('PlannerCaptionDone') : undefined,
+  ]);
 }
 
 // Ступени загрузки дня для клеток года и полоски месяца: нет дел, до трети бюджета, до двух третей, больше
@@ -186,19 +288,25 @@ function capitalize(text: string) {
 }
 
 // Правило повтора одной строкой: «Каждые 2 нед.: Пн, Ср · до 31 дек. · 10 раз» (spec 011)
-export function formatRepeat(lang: LangFn, repeat: PlannerRepeat) {
+// Каждую неделю по одному дню, совпадающему с днём записи (`day`), — просто «Каждую неделю» (доска `PhPlanMore`)
+export function formatRepeat(lang: LangFn, repeat: PlannerRepeat, day?: string) {
   const n = repeat.interval;
   let base: string;
+  const weekdays = repeat.weekdays || [];
   if (repeat.kind === 'daily') base = n === 1 ? lang('PlannerRepeatDaily') : lang('PlannerRepeatEveryDays', { n });
-  else if (repeat.kind === 'weekly') {
+  else if (repeat.kind === 'weekly' && n === 1 && weekdays.length === 1 && day
+    && fromDayKey(day).getDay() === weekdays[0]) {
+    base = lang('PlannerRepeatWeeklyPlain');
+  } else if (repeat.kind === 'weekly') {
     const days = [...(repeat.weekdays || [])]
       .sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
       .map((weekday) => formatWeekday(lang, (weekday + 6) % 7))
       .join(', ');
     base = n === 1 ? lang('PlannerRepeatWeekly', { days }) : lang('PlannerRepeatEveryWeeks', { n, days });
   } else if (repeat.kind === 'monthly') {
-    const day = repeat.monthDay || (repeat.startDay ? fromDayKey(repeat.startDay).getDate() : 1);
-    base = n === 1 ? lang('PlannerRepeatMonthly', { day }) : lang('PlannerRepeatEveryMonths', { n, day });
+    const monthDay = repeat.monthDay || (repeat.startDay ? fromDayKey(repeat.startDay).getDate() : 1);
+    base = n === 1 ? lang('PlannerRepeatMonthly', { day: monthDay })
+      : lang('PlannerRepeatEveryMonths', { n, day: monthDay });
   } else {
     const date = repeat.startDay ? formatDay(lang, repeat.startDay) : '';
     base = n === 1 ? lang('PlannerRepeatYearly', { date }) : lang('PlannerRepeatEveryYears', { n, date });

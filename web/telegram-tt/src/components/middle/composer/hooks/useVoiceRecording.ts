@@ -4,6 +4,7 @@ import { getActions } from '../../../../global';
 import { IS_SAFARI, IS_VOICE_RECORDING_SUPPORTED } from '../../../../util/browser/windowEnvironment';
 import { createCallbackManager } from '../../../../util/callbacks';
 import captureEscKeyListener from '../../../../util/captureEscKeyListener';
+import { getIsPermissionError, showPermissionDenied } from '../../../../util/permissionPrompt';
 import * as voiceRecording from '../../../../util/voiceRecording';
 
 import useLastCallback from '../../../../hooks/useLastCallback';
@@ -30,7 +31,12 @@ const useVoiceRecording = () => {
       setIsRecordingPaused(false);
       setActiveVoiceRecording(recording);
     } catch (err) {
-      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'NotFoundError')) {
+      // Parvane (доска `ZpSysGen`): запрет в браузере — «Нет доступа» с инструкцией вместо повторного запроса
+      if (getIsPermissionError(err)) {
+        showPermissionDenied('microphone');
+        return;
+      }
+      if (err instanceof DOMException && err.name === 'NotFoundError') {
         getActions().showNotification({ message: { key: 'VoiceRecordMicError' } });
         return;
       }

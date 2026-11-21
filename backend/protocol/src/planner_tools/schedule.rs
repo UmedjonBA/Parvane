@@ -5,7 +5,9 @@
 //! «с 10 до 11»; одно начало с минутами («18:30») — событие на час (`isEndGuessed`). Остаток — название (с заглавной
 //! буквы), после первой запятой — описание. Срок — «до 31 декабря», «до 15.12.2026», «до 2026-12-15», «until Dec 31»
 //! в любом куске; без года — ближайшая такая дата не раньше `today`. Кусок, который не удалось понять, попадает в
-//! `problems` (на экране — красным, не добавляется), заголовки и пустые строки — никуда.
+//! `problems` (на экране — красным, не добавляется), заголовки и пустые строки — никуда. У события и непонятого куска
+//! `order` — номер непустого куска в тексте: экран ставит непонятое на его место среди понятого (доска `XdPlan`);
+//! у непонятого `rest` — кусок без дня недели (на компьютере день — отдельной колонкой).
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -64,11 +66,14 @@ pub fn run(input: &Input) -> Value {
     let mut problems = Vec::new();
     let mut until: Option<i64> = None;
     let mut current: Option<i64> = None;
+    let mut order = 0usize;
     for piece in text.split(['\n', '·', ';']) {
         let piece = piece.trim();
         if piece.is_empty() {
             continue;
         }
+        order += 1;
+        let order = order - 1;
         let (piece, found) = cut_until(piece, today);
         if let Some(day) = found {
             until = Some(day);
@@ -89,7 +94,7 @@ pub fn run(input: &Input) -> Value {
             let lower = super::fold(rest);
             let is_header = weekday.is_some() && (lower.is_empty() || DAY_OFF.contains(&lower.trim_matches(|c: char| !c.is_alphanumeric())));
             if !is_header {
-                problems.push(json!({"text": piece, "weekday": weekday}));
+                problems.push(json!({"text": piece, "weekday": weekday, "order": order, "rest": rest}));
             }
             continue;
         };
@@ -102,8 +107,9 @@ pub fn run(input: &Input) -> Value {
                 "name": name,
                 "description": description,
                 "isEndGuessed": guessed,
+                "order": order,
             })),
-            _ => problems.push(json!({"text": piece, "weekday": current})),
+            _ => problems.push(json!({"text": piece, "weekday": current, "order": order, "rest": rest})),
         }
     }
     json!({"items": items, "problems": problems, "until": until.map(day_text)})
@@ -252,7 +258,7 @@ mod tests {
         let v = parse("пн 10-11 созвон · вт 14-16 сервер · ср 18:30 зал");
         let items = v["items"].as_array().unwrap();
         assert_eq!(items.len(), 3);
-        assert_eq!(items[0], json!({"weekday": 1, "start": "10:00", "end": "11:00", "name": "Созвон", "description": null, "isEndGuessed": false}));
+        assert_eq!(items[0], json!({"weekday": 1, "start": "10:00", "end": "11:00", "name": "Созвон", "description": null, "isEndGuessed": false, "order": 0}));
         assert_eq!(items[2]["end"], "19:30");
         assert_eq!(items[2]["isEndGuessed"], true);
         assert_eq!(v["until"], Value::Null);
@@ -263,7 +269,7 @@ mod tests {
         let v = parse("Понедельник:\n10:00–11:30 Лекция, корпус Б\nВторник — свободна\nчт вечер ???\nдо 31 декабря");
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
         assert_eq!(v["items"][0]["description"], "корпус Б");
-        assert_eq!(v["problems"], json!([{"text": "чт вечер ???", "weekday": 4}]));
+        assert_eq!(v["problems"], json!([{"text": "чт вечер ???", "weekday": 4, "order": 3, "rest": "вечер ???"}]));
         assert_eq!(v["until"], "2026-12-31");
         assert_eq!(parse("до 10 ноября")["until"], "2027-11-10", "прошедшая дата без года — следующий год");
         assert_eq!(parse("пн 9:00-10:00 a до 15.12.2026")["until"], "2026-12-15");

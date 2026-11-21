@@ -510,3 +510,44 @@
 .scopeMenu .scopeOff {
   visibility: hidden;
 }
+
+// Телефон: низ поля — строка выбранной связи и широкая «Холст из графа» (доска `XpNotes`)
+.phoneBottom {
+  position: absolute;
+  z-index: 5;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.75rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.edgeStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.75rem;
+
+  background: var(--pv-panel);
+}
+
+.edgeStripText {
+  display: flex;
+  flex: 1 1 8rem;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.edgeStripRemove {
+  flex: none;
+}
+
+.canvasWide {
+  width: 100%;
+}

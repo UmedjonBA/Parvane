@@ -357,3 +357,40 @@
 #Main:not(.section-cloud-files) > #ParvaneCloud {
   display: none;
 }
+
+// Parvane (доска `RdNarrow`): узкое окно компьютера — раскладка телефона (одна колонка, «Назад к списку»), но
+// слева узкая панель значков `FoldersSidebar` вместо нижней ленты. Колонки и модули сдвинуты на её ширину
+#Main.parvane-narrow-rail {
+  --folders-sidebar-width: var(--pv-rail-narrow-width);
+
+  left: var(--pv-rail-narrow-width);
+
+  #FoldersSidebar {
+    position: fixed;
+    z-index: var(--z-chat-float-button);
+    top: 0;
+    bottom: 0;
+    left: 0;
+    transform: none;
+
+    height: auto;
+  }
+
+  > #LeftColumn {
+    --left-column-max-width: calc(100vw - var(--pv-rail-narrow-width));
+
+    left: var(--pv-rail-narrow-width) !important;
+    width: calc(100vw - var(--pv-rail-narrow-width)) !important;
+  }
+
+  // Колонка чата в раскладке телефона закреплена от края окна (`position: fixed`) — иначе её шапка с «Назад»
+  // уходила под панель значков
+  > #MiddleColumn,
+  > #ParvanePlanner,
+  > #ParvaneHealth,
+  > #ParvaneMusic,
+  > #ParvaneKnowledge,
+  > #ParvaneCloud {
+    left: var(--pv-rail-narrow-width);
+  }
+}

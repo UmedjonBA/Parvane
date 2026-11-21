@@ -6,6 +6,8 @@ import buildClassName from '../../../util/buildClassName';
 import { coverTone, formatTrackTime, splitListTime } from '../../parvane/music/musicFormat';
 import { getMusicInfo, loadMusicInfo, playTracks } from '../../parvane/music/musicPlayer';
 import { loadSharedTracks } from '../../parvane/music/musicSharedPlaylist';
+import { goToMusicView } from '../../parvane/music/musicView';
+import { joinSharedPlaylist } from '../../parvane/music/shared/musicShared';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
@@ -34,7 +36,7 @@ const MusicPlaylistCard = ({ playlist }: OwnProps) => {
   const lang = useLang();
   const gate = useModuleGate('music');
   const info = useDerivedState(getMusicInfo);
-  const [problem, setProblem] = useState<'missing' | 'failed'>();
+  const [problem, setProblem] = useState<'missing' | 'failed' | 'shared'>();
   const [isOpen, open, close] = useFlag();
   const isMusicOn = gate.isOn;
   // Чей это плейлист, известно после сведений о «Музыке»: до них карточка только показывает
@@ -57,7 +59,7 @@ const MusicPlaylistCard = ({ playlist }: OwnProps) => {
         return;
       }
       setProblem(undefined);
-      playTracks(tracks, 0);
+      playTracks(tracks, 0, { source: { kind: 'playlist', name: playlist.name } });
     } catch {
       setProblem('failed');
     }
@@ -71,17 +73,35 @@ const MusicPlaylistCard = ({ playlist }: OwnProps) => {
     });
   });
 
-  const handleOpenClick = useLastCallback(() => gate.run(open));
+  // Общий плейлист сервера (MUSIC-3): вступить ключом из карточки и открыть живой плейлист
+  const handleOpenShared = useLastCallback(async () => {
+    const joined = await joinSharedPlaylist(playlist.sharedId!, playlist.joinKey || '');
+    if (!joined) {
+      setProblem('shared');
+      return;
+    }
+    setProblem(undefined);
+    goToMusicView({ kind: 'shared', id: joined.id });
+  });
+
+  const handleOpenClick = useLastCallback(() => {
+    gate.run(() => {
+      if (playlist.sharedId && canPlay) void handleOpenShared();
+      else open();
+    });
+  });
 
   const isActionable = canPlay || gate.canEnable;
   return (
-    <div className={styles.root} data-music-playlist-card={playlist.name}>
+    <div className={styles.root} data-music-playlist-card={playlist.name} data-music-shared-card={playlist.sharedId}>
       <div className={styles.head}>
         <span className={styles.cover} style={`--cover-tone: ${coverTone(playlist.name)}`}>
           <ParvaneIcon name="list" />
         </span>
         <div className={styles.titles}>
-          <div className={styles.label}>{lang('MusicPlaylistCardLabel')}</div>
+          <div className={styles.label}>
+            {lang(playlist.sharedId ? 'MusicPlaylistCardShared' : 'MusicPlaylistCardLabel')}
+          </div>
           <div className={styles.name}>{playlist.name}</div>
           <div className={buildClassName(styles.label, kit.mono)}>
             {`${lang('MusicTracksCount', { count }, { pluralValue: count })} · `}
@@ -122,7 +142,8 @@ const MusicPlaylistCard = ({ playlist }: OwnProps) => {
       )}
       {problem && (
         <p className={styles.note} role="status" data-playlist-problem={problem}>
-          {lang(problem === 'missing' ? 'MusicPlaylistCardMissing' : 'MusicTrackCardFailed')}
+          {lang(problem === 'missing' ? 'MusicPlaylistCardMissing'
+            : problem === 'shared' ? 'MusicSharedJoinFailed' : 'MusicTrackCardFailed')}
         </p>
       )}
       <MusicPlaylistSheet

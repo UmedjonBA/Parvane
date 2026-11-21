@@ -132,7 +132,8 @@ enum class ObjectKind(val number: Int) {
     OBJECT_KIND_FAVED_STICKER(20),
     OBJECT_KIND_HEALTH_CONTAINER(21),
     OBJECT_KIND_MUSIC_CONTAINER(22),
-    OBJECT_KIND_REPORT_CLOSED(23);
+    OBJECT_KIND_REPORT_CLOSED(23),
+    OBJECT_KIND_MEMBER_HIDDEN(24);
 
     companion object {
         fun fromJson(v: Any?): ObjectKind = values().firstOrNull { it.name == v?.toString() }

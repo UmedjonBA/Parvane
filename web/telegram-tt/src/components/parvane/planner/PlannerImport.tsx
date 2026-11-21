@@ -1,14 +1,14 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
 
-import type { PlannerEvent, PlannerState } from './plannerModel';
-import type { ParsedSchedule, ScheduleItem } from './plannerTools';
+import type { PlannerEvent } from './plannerModel';
+import type { ParsedSchedule, ScheduleItem, ScheduleProblem } from './plannerTools';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatRepeat, formatWeekday, listColorStyle,
+  formatDay, formatRepeatShort, formatWeekday, joinCaption,
 } from './plannerFormat';
 import {
-  fromDayKey, getListColor, newId, toDayKey, validateRepeat,
+  fromDayKey, newId, toDayKey, validateRepeat,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 import { parseScheduleText } from './plannerTools';
@@ -18,13 +18,11 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvIcon from '../notes/PvIcon';
 import PlannerField from './PlannerField';
-import PlannerListPicker from './PlannerListPicker';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './PlannerMore.module.scss';
 
 type OwnProps = {
-  state: PlannerState;
   today: string;
   isNarrow: boolean;
   onClose: NoneToVoidFunction;
@@ -39,15 +37,18 @@ const UNTIL_KEYS = {
 } as const satisfies Record<Until, string>;
 const EMPTY_SCHEDULE: ParsedSchedule = { items: [], problems: [] };
 
+// Строка разбора: событие либо непонятый кусок — по порядку текста
+type ParsedRow = { item: ScheduleItem; problem?: undefined } | { item?: undefined; problem: ScheduleProblem };
+
 // «Расписание на неделю» (доски `ZpPlanX`, `XdPlan`): текст → еженедельные события. Текст разбирает движок
-// (`plannerScheduleParse`); непонятое — красным и не добавляется. Телефон — экран на весь экран, компьютер — текст
-// слева и разбор справа
+// (`plannerScheduleParse`); непонятое — красным, на своём месте по порядку текста и не добавляется. Телефон — экран
+// на весь экран, компьютер — текст слева и разбор справа строками «пн | 10:00–11:00 | Созвон». Группы у расписания
+// нет (ни одна доска её не показывает), срок — чипами (доска `ZpPlanX`, новее `XdPlan`)
 const PlannerImport = ({
-  state, today, isNarrow, onClose,
+  today, isNarrow, onClose,
 }: OwnProps) => {
   const lang = useLang();
   const [text, setText] = useState('');
-  const [group, setGroup] = useState('');
   // Выбор срока; `date` без выбранной даты берёт срок из текста
   const [untilMode, setUntilMode] = useState<Until>();
   const [pickedDate, setPickedDate] = useState<string>();
@@ -67,7 +68,10 @@ const PlannerImport = ({
     : mode === 'month' ? monthEnd(today)
       : pickedDate || parsed.until;
   const count = parsed.items.length;
-  const color = getListColor(state, group);
+  const rows = useMemo(() => [
+    ...parsed.items.map((item): ParsedRow => ({ item })),
+    ...parsed.problems.map((problem): ParsedRow => ({ problem })),
+  ].sort((a, b) => (a.item || a.problem).order - (b.item || b.problem).order), [parsed]);
 
   const handleText = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.currentTarget.value);
@@ -87,58 +91,93 @@ const PlannerImport = ({
       showPlannerNotice(lang('PlannerErrorScheduleUntil'));
       return;
     }
-    const events = buildScheduleEvents(parsed.items, today, endDay, group);
+    const events = buildScheduleEvents(parsed.items, today, endDay);
     updatePlanner((draft) => {
       draft.events.push(...events);
     }, lang('PlannerNoticeScheduleAdded', { count: events.length }));
     onClose();
   });
 
-  function renderItem(item: ScheduleItem, index: number) {
+  function renderItem(item: ScheduleItem) {
     const repeat = {
       kind: 'weekly' as const, interval: 1, weekdays: [item.weekday], startDay: today,
     };
+    const time = `${item.start}–${item.end}`;
+    const className = buildClassName(styles.importRow, item.isEndGuessed && styles.importGuessed);
+    if (!isNarrow) {
+      return (
+        <div key={`i${item.order}`} className={className} data-import-item>
+          <span className={buildClassName(kit.mono, kit.sub, styles.importDay)}>{weekdayOf(item.weekday)}</span>
+          <span className={buildClassName(kit.mono, styles.importTime)}>{time}</span>
+          <span className={kit.rowText}>
+            <span className={kit.ttl}>{item.name}</span>
+            {item.isEndGuessed && <span className={kit.sub}>{lang('PlannerImportGuessedEnd')}</span>}
+          </span>
+        </div>
+      );
+    }
     return (
-      <div key={index} className={styles.importRow} style={listColorStyle(color)} data-import-item>
+      <div key={`i${item.order}`} className={className} data-import-item>
         <span className={styles.groupDot} />
         <span className={kit.rowText}>
           <span className={kit.ttl}>{item.name}</span>
           <span className={kit.sub}>
-            {item.isEndGuessed ? lang('PlannerImportGuessedEnd') : formatRepeat(lang, repeat)}
+            {item.isEndGuessed ? lang('PlannerImportGuessedEnd') : formatRepeatShort(lang, repeat)}
           </span>
         </span>
-        <span className={buildClassName(kit.mono, kit.sub)}>{`${item.start}–${item.end}`}</span>
+        <span className={buildClassName(kit.mono, kit.sub)}>{time}</span>
       </div>
     );
   }
 
+  function renderProblem(problem: ScheduleProblem) {
+    return (
+      <div
+        key={`p${problem.order}`}
+        className={buildClassName(styles.importRow, styles.importProblem)}
+        data-import-problem
+      >
+        {isNarrow ? <span className={styles.groupDot} /> : (
+          <>
+            <span className={buildClassName(kit.mono, kit.sub, styles.importDay)}>
+              {problem.weekday !== undefined ? weekdayOf(problem.weekday) : '—'}
+            </span>
+            <span className={buildClassName(kit.mono, styles.importTime)}>—</span>
+          </>
+        )}
+        <span className={buildClassName(kit.rowText, kit.ttl)}>
+          {isNarrow || problem.weekday === undefined ? problem.text : problem.rest || problem.text}
+        </span>
+        <span className={styles.problemMark}>{lang('PlannerImportNotUnderstood')}</span>
+      </div>
+    );
+  }
+
+  function weekdayOf(weekday: number) {
+    return formatWeekday(lang, (weekday + 6) % 7).toLowerCase();
+  }
+
+  // «Понято: 5 событий · до 31 декабря»; без срока на телефоне — «· без конца» (доска `ZpPlanX`)
+  const eventsText = lang('PlannerImportEvents', { count }, { pluralValue: count });
+  const summary = joinCaption([
+    lang('PlannerImportUnderstoodCount', { events: eventsText }),
+    endDay ? lang('PlannerImportUntilDate', { date: formatDay(lang, endDay) })
+      : isNarrow ? lang('PlannerImportNoEnd').toLowerCase() : undefined,
+  ]);
+  const problems = parsed.problems;
+  // Компьютер: подсказка называет непонятую строку (доска `XdPlan`); телефон — общая, всегда под сроком
+  const problemHint = !problems.length ? undefined : problems.length === 1
+    ? lang('PlannerImportProblemLine', { text: problems[0].text })
+    : lang('PlannerImportProblemLines', { text: problems[0].text, count: problems.length - 1 });
+
   function renderParsed() {
-    const summary = endDay
-      ? lang('PlannerImportUnderstoodUntil', { count, date: formatDay(lang, endDay) })
-      : lang('PlannerImportUnderstood', { count });
     return (
       <>
         <h3 className={kit.grp} data-import-summary>{summary}</h3>
         <div className={styles.list}>
-          {parsed.items.map(renderItem)}
-          {parsed.problems.map((problem, index) => (
-            <div
-              key={`p${index}`}
-              className={buildClassName(styles.importRow, styles.importProblem)}
-              data-import-problem
-            >
-              <span className={styles.groupDot} />
-              {problem.weekday !== undefined && (
-                <span className={buildClassName(kit.mono, kit.sub)}>
-                  {formatWeekday(lang, (problem.weekday + 6) % 7)}
-                </span>
-              )}
-              <span className={buildClassName(kit.rowText, kit.ttl)}>{problem.text}</span>
-              <span className={styles.problemMark}>{lang('PlannerImportNotUnderstood')}</span>
-            </div>
-          ))}
+          {rows.map((row) => (row.item ? renderItem(row.item) : renderProblem(row.problem)))}
         </div>
-        {Boolean(parsed.problems.length) && <p className={styles.hint}>{lang('PlannerImportProblemsHint')}</p>}
+        {!isNarrow && Boolean(problemHint) && <p className={styles.hint} data-import-hint>{problemHint}</p>}
       </>
     );
   }
@@ -164,19 +203,21 @@ const PlannerImport = ({
         {mode === 'date' && (
           <PlannerField label={lang('PlannerScheduleUntil')} type="date" value={endDay} onCommit={setPickedDate} />
         )}
-        <PlannerListPicker id="planner-schedule-list" state={state} value={group} onChange={setGroup} />
+        {isNarrow && <p className={styles.hint} data-import-hint>{lang('PlannerImportProblemsHint')}</p>}
       </>
     );
   }
 
-  const addLabel = isNarrow ? lang('PlannerImportAdd') : lang('PlannerImportAddCount', { count });
+  const addLabel = isNarrow ? lang('PlannerImportAdd') : lang('PlannerImportAddEvents', { events: eventsText });
 
   return (
     <div className={styles.screen} data-planner-import>
       <header className={styles.head}>
-        <button type="button" className={kit.ib} aria-label={lang('Close')} onClick={onClose}>
-          <PvIcon name="x" />
-        </button>
+        {isNarrow && (
+          <button type="button" className={kit.ib} aria-label={lang('Close')} onClick={onClose}>
+            <PvIcon name="x" />
+          </button>
+        )}
         <div className={styles.titleBlock}>
           <h2 className={styles.title}>{lang('PlannerScheduleTitle')}</h2>
           {!isNarrow && <span className={kit.sub}>{lang('PlannerImportIntro')}</span>}
@@ -225,12 +266,11 @@ const PlannerImport = ({
   );
 };
 
-/** События расписания: каждое — еженедельный ряд в свой день с `startDay` (по `endDay` включительно), в группе. */
-function buildScheduleEvents(items: ScheduleItem[], startDay: string, endDay?: string, project?: string) {
+/** События расписания: каждое — еженедельный ряд в свой день с `startDay` (по `endDay` включительно). */
+function buildScheduleEvents(items: ScheduleItem[], startDay: string, endDay?: string) {
   return items.map((item): PlannerEvent => ({
     id: newId(),
     name: item.name,
-    project: project || undefined,
     description: item.description,
     start: item.start,
     end: item.end,

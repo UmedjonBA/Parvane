@@ -69,7 +69,8 @@
             "isFreeAfter": true,
             "load": 300,
             "start": 1065,
-            "weekday": 1
+            "weekday": 1,
+            "spare": 105
           },
           {
             "budget": 480,
@@ -79,7 +80,8 @@
             "isFreeAfter": false,
             "load": 360,
             "start": 615,
-            "weekday": 4
+            "weekday": 4,
+            "spare": 315
           },
           {
             "budget": 480,
@@ -89,7 +91,8 @@
             "isFreeAfter": true,
             "load": 360,
             "start": 1095,
-            "weekday": 4
+            "weekday": 4,
+            "spare": 75
           }
         ],
         "total": 3
@@ -146,7 +149,8 @@
             "isFreeAfter": false,
             "load": 60,
             "start": 1005,
-            "weekday": 6
+            "weekday": 6,
+            "spare": 15
           },
           {
             "budget": 600,
@@ -156,7 +160,8 @@
             "isFreeAfter": true,
             "load": 120,
             "start": 1200,
-            "weekday": 0
+            "weekday": 0,
+            "spare": 60
           },
           {
             "budget": 600,
@@ -166,7 +171,8 @@
             "isFreeAfter": true,
             "load": 60,
             "start": 1140,
-            "weekday": 6
+            "weekday": 6,
+            "spare": 120
           }
         ],
         "total": 3
@@ -187,7 +193,8 @@
             "isEndGuessed": false,
             "name": "Созвон",
             "start": "10:00",
-            "weekday": 1
+            "weekday": 1,
+            "order": 0
           },
           {
             "description": null,
@@ -195,7 +202,8 @@
             "isEndGuessed": false,
             "name": "Сервер",
             "start": "14:00",
-            "weekday": 2
+            "weekday": 2,
+            "order": 1
           },
           {
             "description": null,
@@ -203,7 +211,8 @@
             "isEndGuessed": true,
             "name": "Зал",
             "start": "18:30",
-            "weekday": 3
+            "weekday": 3,
+            "order": 2
           }
         ],
         "problems": [],
@@ -225,7 +234,8 @@
             "isEndGuessed": false,
             "name": "Лекция",
             "start": "10:00",
-            "weekday": 1
+            "weekday": 1,
+            "order": 1
           },
           {
             "description": null,
@@ -233,7 +243,8 @@
             "isEndGuessed": false,
             "name": "Обед",
             "start": "12:00",
-            "weekday": 1
+            "weekday": 1,
+            "order": 2
           },
           {
             "description": null,
@@ -241,7 +252,8 @@
             "isEndGuessed": false,
             "name": "Standup",
             "start": "09:00",
-            "weekday": 5
+            "weekday": 5,
+            "order": 5
           },
           {
             "description": null,
@@ -249,13 +261,16 @@
             "isEndGuessed": false,
             "name": "Тренировка",
             "start": "18:00",
-            "weekday": 5
+            "weekday": 5,
+            "order": 6
           }
         ],
         "problems": [
           {
             "text": "чт вечер ???",
-            "weekday": 4
+            "weekday": 4,
+            "order": 4,
+            "rest": "вечер ???"
           }
         ],
         "until": "2026-12-31"
@@ -273,15 +288,21 @@
         "problems": [
           {
             "text": "09:00-10:00 зарядка",
-            "weekday": null
+            "weekday": null,
+            "order": 0,
+            "rest": "09:00-10:00 зарядка"
           },
           {
             "text": "ср 25:00-26:00 ночь",
-            "weekday": 3
+            "weekday": 3,
+            "order": 1,
+            "rest": "25:00-26:00 ночь"
           },
           {
             "text": "вс 10:00-09:00 наоборот",
-            "weekday": 0
+            "weekday": 0,
+            "order": 2,
+            "rest": "10:00-09:00 наоборот"
           }
         ],
         "until": "2026-12-15"
@@ -433,6 +454,69 @@
         "pastTotal": 0
       },
       "name": "поиск: несколько слов и фильтр задач"
+    },
+    {
+      "name": "поиск: слои-группы и «Что показывать» (ZdPlanX)",
+      "call": "plannerSearch",
+      "args": {
+        "query": "зал",
+        "filter": "all",
+        "today": "2026-11-15",
+        "nowMinute": 700,
+        "aheadLimit": 10,
+        "pastLimit": 10,
+        "show": [
+          "events",
+          "tasks",
+          "offers"
+        ],
+        "hiddenGroups": [
+          "Учёба"
+        ],
+        "items": [
+          {
+            "key": "a",
+            "kind": "event",
+            "name": "Зал",
+            "group": "Спорт",
+            "day": "2026-11-18",
+            "start": 1080,
+            "end": 1170
+          },
+          {
+            "key": "b",
+            "kind": "event",
+            "name": "Зал лекций",
+            "group": "Учёба",
+            "day": "2026-11-19",
+            "start": 600,
+            "end": 660
+          },
+          {
+            "key": "c",
+            "kind": "task",
+            "name": "Зал: продлить",
+            "day": "2026-11-20",
+            "fromChat": true
+          },
+          {
+            "key": "d",
+            "kind": "task",
+            "name": "Зал",
+            "day": "2026-11-21",
+            "isDone": true
+          }
+        ]
+      },
+      "expect": {
+        "ahead": [
+          "a",
+          "c"
+        ],
+        "aheadTotal": 2,
+        "past": [],
+        "pastTotal": 0
+      }
     },
     {
       "args": {

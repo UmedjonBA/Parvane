@@ -107,6 +107,8 @@ export type PlannerEvent = {
   project?: string;
   // Шаги, как у задачи (нет значения — шагов нет); у экземпляра ряда отметки — по дню
   steps?: PlannerStep[];
+  // Задание чата, из которого создано событие (как `PlannerTask.source`)
+  source?: PlannerSource;
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -181,6 +183,12 @@ export type PlannerSettings = {
   lunchEnd: number;
   // Запас до и после каждого дела при поиске окна, минут
   margin: number;
+  // Напоминание новых событий по умолчанию, минут до начала (нет — без напоминания)
+  eventRemind?: number;
+  // Напоминать о сроках задач: в день срока, в начале дня
+  shouldRemindDeadlines?: boolean;
+  // «Запоминать мои правки» выключено: окно ввода текстом не учится и не подставляет выученное
+  isLearnOff?: boolean;
 };
 
 // Список задач: `projects` (имена, '' — «Без списка») — вид для экранов,

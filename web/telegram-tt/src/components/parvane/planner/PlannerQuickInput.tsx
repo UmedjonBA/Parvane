@@ -11,15 +11,19 @@ import type {
 } from './plannerQuick';
 import type { LearnStore } from './plannerQuickLearn';
 import type { QuickCandidate, QuickHistory } from './plannerQuickSuggest';
+import type { QuickChoice, QuickHealthKind } from './quickKinds';
 
+import { IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import { getIsModuleOn } from '../../../util/parvaneModules';
+import { openNote } from '../../../util/parvaneSection';
+import { MODULE_TITLE_KEYS } from '../../main/parvaneModuleNav';
 import { addHealthEntries, parseHealthInput } from '../health/healthStore';
 import useHealthParse, { isWholeHealthLine } from '../health/useHealthParse';
 import {
-  formatDay, formatDayLabel, formatDuration, formatRemind, formatRepeat,
+  formatDay, formatDuration, formatRemind, formatRepeat,
 } from './plannerFormat';
 import { toMinutes } from './plannerModel';
 import { getQuickLang, parseQuickInput, QUICK_REPEAT_END } from './plannerQuick';
@@ -34,17 +38,22 @@ import {
   saveHistory,
 } from './plannerQuickSuggest';
 import { canSyncLearned, canSyncQuickHistory, updatePlanner } from './plannerStore';
+import {
+  isHealthChoice, isPlanChoice, listQuickChoices, pickHealthParse,
+} from './quickKinds';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useParvaneModules from '../../../hooks/useParvaneModules';
 
 import Icon from '../../common/icons/Icon';
 import Modal from '../../ui/Modal';
-import HealthParsedChips from '../health/HealthParsedChips';
+import HealthUnderstood from '../health/HealthUnderstood';
 import { EVENT_ERROR_KEYS, TASK_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
+import extra from './PlannerQuickExtras.module.scss';
 
 type OwnProps = {
   isOpen: boolean;
@@ -70,7 +79,7 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-type KindChoice = 'auto' | QuickKind;
+type KindChoice = QuickChoice;
 type Chip = {
   field: QuickField;
   text: string;
@@ -79,12 +88,27 @@ type Chip = {
   isLearned?: boolean;
 };
 
-const KIND_CHOICES: KindChoice[] = ['auto', 'event', 'task'];
 const KIND_LABELS = {
   auto: 'PlannerQuickAuto',
   event: 'PlannerKindEvent',
   task: 'PlannerKindTask',
+  sleep: 'HealthKindSleep',
+  weight: 'HealthKindWeight',
+  pressure: 'HealthKindPressure',
+  pulse: 'HealthKindPulse',
+  steps: 'HealthKindSteps',
+  mood: 'HealthKindMood',
+  note: 'PvQuickKindNote',
 } as const satisfies Record<KindChoice, string>;
+// Строка выбранного вида «Здоровья» со словом вида: «72» при виде «Вес» — «вес 72»
+const HEALTH_WORD_KEYS = {
+  sleep: 'PvQuickAsSleep',
+  weight: 'PvQuickAsWeight',
+  pressure: 'PvQuickAsPressure',
+  pulse: 'PvQuickAsPulse',
+  steps: 'PvQuickAsSteps',
+  mood: 'PvQuickAsMood',
+} as const satisfies Record<QuickHealthKind, string>;
 const KIND_CLASSES = {
   event: styles.kindEvent,
   task: styles.kindTask,
@@ -109,14 +133,28 @@ const PlannerQuickInput = ({
   isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, quickLines, tasks, events, onCreated,
   onMore, onClose,
 }: OwnProps) => {
+  const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
   const suggestionsRef = useRef<HTMLDivElement>();
   const [text, setText] = useState('');
   const [choice, setChoice] = useState<KindChoice>('auto');
-  // Строка «Здоровья»: вид не выбран вручную, модуль включён, движок понял строку целиком
-  const canBeHealth = isOpen && choice === 'auto' && getIsModuleOn('health');
+  const { enabled: enabledModules, prefs: modulePrefs } = useParvaneModules();
+  const isPlanOn = enabledModules.includes('plan');
+  const kindChoices = useMemo(() => listQuickChoices({
+    isPlanOn,
+    isHealthOn: enabledModules.includes('health'),
+    isNotesOn: enabledModules.includes('notes'),
+  }, modulePrefs.healthBlocks), [isPlanOn, enabledModules, modulePrefs.healthBlocks]);
+  // Строка «Здоровья»: модуль включён и вид не выбран вручную (движок понял строку целиком) либо выбран вид
+  // «Здоровья» (строка понята как этот вид — как есть либо со словом вида)
+  const healthChoice = isHealthChoice(choice) ? choice : undefined;
+  const canBeHealth = isOpen && (choice === 'auto' || Boolean(healthChoice)) && getIsModuleOn('health');
   const { parsed: healthParsed, isCurrent: isHealthCurrent } = useHealthParse(text, !canBeHealth);
-  const healthLine = isHealthCurrent && healthParsed && isWholeHealthLine(healthParsed) ? healthParsed : undefined;
+  const wordText = healthChoice && text.trim() ? lang(HEALTH_WORD_KEYS[healthChoice], { text: text.trim() }) : '';
+  const { parsed: wordParsed, isCurrent: isWordCurrent } = useHealthParse(wordText, !canBeHealth || !healthChoice);
+  const healthLine = !isHealthCurrent || !healthParsed ? undefined
+    : healthChoice ? (isWordCurrent ? pickHealthParse(healthChoice, healthParsed, wordParsed) : undefined)
+      : isWholeHealthLine(healthParsed) ? healthParsed : undefined;
   const [hasHealthFailed, setHasHealthFailed] = useState(false);
   const isSubmittingRef = useRef(false);
   const [skip, setSkip] = useState<QuickField[]>([]);
@@ -130,13 +168,14 @@ const PlannerQuickInput = ({
   // Словарь правок читается в момент открытия окна, а не кадром позже: иначе первый разбор шёл бы по
   // словарю прошлого открытия (например, уже сброшенному в настройках). Источник — данные «Плана» вместе
   // с ещё не перенесённой записью устройства; пока «План» недоступен — только запись устройства
+  // «Запоминать мои правки» выключено в настройках — выученное не подставляется и правки не запоминаются
+  const isLearnOff = Boolean(settings.isLearnOff);
   const learnStore = useMemo<LearnStore | undefined>(() => {
-    if (!isOpen) return undefined;
+    if (!isOpen || isLearnOff) return undefined;
     const local = readLearned(userId);
     return isLearnedSynced ? mergeLearnStores(learnStoreFromWords(learnedWords), local) : local;
-  }, [isOpen, userId, isLearnedSynced, learnedWords]);
+  }, [isOpen, isLearnOff, userId, isLearnedSynced, learnedWords]);
 
-  const lang = useLang();
   const learned = useMemo(() => learnStore && learnedDefaults(learnStore), [learnStore]);
 
   // Строку успели набрать до эффекта открытия (быстрый набор, вставка): эффект её не затирает
@@ -175,7 +214,7 @@ const PlannerQuickInput = ({
 
   const parse = useLastCallback((value: string) => parseQuickInput(value, {
     ...baseContext(),
-    kind: choice === 'auto' ? undefined : choice,
+    kind: isPlanChoice(choice) ? choice : undefined,
     skip,
     pick,
     learned,
@@ -196,7 +235,10 @@ const PlannerQuickInput = ({
   const errorKey = !hasText || !draft.error ? undefined
     : EVENT_ERROR_KEYS[draft.error as keyof typeof EVENT_ERROR_KEYS]
       || TASK_ERROR_KEYS[draft.error as keyof typeof TASK_ERROR_KEYS];
-  const canSubmit = hasText && (Boolean(healthLine) || (!draft.error && !isNameTooLong));
+  const isNoteChoice = choice === 'note';
+  // Вид «Здоровья» без понятой строки и запись «Плана» при выключенном «Плане» не сохраняются
+  const canSubmit = hasText && (Boolean(healthLine) || isNoteChoice
+    || (!healthChoice && isPlanOn && !draft.error && !isNameTooLong));
   const isKindLearned = Boolean(draft.learned?.includes('kind'));
   const altsOf = (field: QuickField) => draft.alternatives?.filter((alt) => alt.field === field) || [];
   const kindLabel = lang(KIND_LABELS[draft.kind]);
@@ -239,7 +281,13 @@ const PlannerQuickInput = ({
     if (!value.trim() || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
     try {
-      if (!await saveHealthLine(value)) savePlannerEntry(value);
+      if (choice === 'note') {
+        // Вид «Заметка»: строка — название новой заметки, она и откроется
+        openNote(value.trim());
+        onCreated();
+      } else if (!await saveHealthLine(value) && isPlanOn) {
+        savePlannerEntry(value);
+      }
     } finally {
       isSubmittingRef.current = false;
     }
@@ -248,10 +296,16 @@ const PlannerQuickInput = ({
   // «Здоровье» — отдельный модуль (spec 041): строка, понятая его движком целиком, пишется в его контейнер,
   // календарь «Плана» читает её оттуда. `true` — строка была строкой «Здоровья» (записана либо показана ошибка)
   const saveHealthLine = useLastCallback(async (value: string) => {
-    if (choice !== 'auto' || !getIsModuleOn('health')) return false;
+    if ((choice !== 'auto' && !healthChoice) || !getIsModuleOn('health')) return false;
     // Разбирается именно эта строка: показанный разбор мог относиться к прежней
-    const parsed = await parseHealthInput(value);
-    if (!parsed || !isWholeHealthLine(parsed)) return false;
+    const plain = await parseHealthInput(value);
+    const parsed = healthChoice
+      ? pickHealthParse(healthChoice, plain, await parseHealthInput(lang(HEALTH_WORD_KEYS[healthChoice], {
+        text: value.trim(),
+      })))
+      : plain && isWholeHealthLine(plain) ? plain : undefined;
+    // Выбран вид «Здоровья», а строка им не понята — в «План» она не уходит
+    if (!parsed) return Boolean(healthChoice);
     if (await addHealthEntries(parsed.entries)) {
       const [first] = parsed.entries;
       onCreated(first.endDay || first.day);
@@ -269,7 +323,7 @@ const PlannerQuickInput = ({
     const local = readLearned(userId);
     // Состояние «Плана» берётся в момент записи: окно могло открыться раньше, чем он стал доступен
     const isSynced = canSyncLearned();
-    if (!isSynced) {
+    if (!isSynced && !isLearnOff) {
       const corrected = recordCorrection(local, auto, entry);
       if (corrected !== local) saveLearned(userId, corrected);
     }
@@ -282,7 +336,7 @@ const PlannerQuickInput = ({
     updatePlanner((state) => {
       applyQuickDraft(state, entry);
       // Правка словаря — в той же правке «Плана», что и запись: одна операция, одна отмена
-      const words = isSynced ? correctWords(state.learned, local, auto, entry) : undefined;
+      const words = isSynced && !isLearnOff ? correctWords(state.learned, local, auto, entry) : undefined;
       if (words) state.learned = words;
       // Строка истории — тоже: «Отменить» убирает запись вместе с её подсказкой
       if (isHistorySynced) state.quickLines = recordQuickLine(state.quickLines, localHistory, value, historyKey);
@@ -375,13 +429,19 @@ const PlannerQuickInput = ({
   const candidates = idleCandidates || quickCandidates;
   const suggestions = useMemo(() => {
     if (!candidates) return [];
-    return filterSuggestions(text, candidates, undefined, choice === 'auto' ? undefined : [choice]);
+    return filterSuggestions(text, candidates, undefined, isPlanChoice(choice) ? [choice] : undefined);
   }, [candidates, text, choice]);
   const hasExamples = suggestions.some(({ source }) => source === 'example');
   const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');
 
   const handleChoice = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setChoice(e.currentTarget.dataset.kind as KindChoice);
+    inputRef.current?.focus();
+  });
+
+  // «Другие чтения» у строки «Здоровья» — та же строка записью «Плана»
+  const handleOtherReading = useLastCallback(() => {
+    setChoice(draft.kind);
     inputRef.current?.focus();
   });
 
@@ -455,12 +515,16 @@ const PlannerQuickInput = ({
   return (
     <Modal
       isOpen={isOpen}
-      title={lang('PlannerQuickTitle')}
+      title={[lang('PlannerQuickTitle'), <kbd key="hotkey" className={extra.kbd}>{IS_MAC_OS ? '⌘N' : 'Ctrl+N'}</kbd>]}
       className={styles.quick}
       hasCloseButton
       onClose={onClose}
     >
-      <form className={styles.quickForm} data-quick-kind={healthLine ? 'health' : draft.kind} onSubmit={handleSubmit}>
+      <form
+        className={styles.quickForm}
+        data-quick-kind={healthLine || healthChoice ? 'health' : isNoteChoice ? 'note' : draft.kind}
+        onSubmit={handleSubmit}
+      >
         <input
           ref={inputRef}
           id="planner-quick-input"
@@ -478,12 +542,33 @@ const PlannerQuickInput = ({
         <div className={styles.quickPreview} aria-live="polite">
           {healthLine ? (
             <>
-              <HealthParsedChips parsed={healthLine} />
-              <span className={styles.muted}>{lang('PlannerQuickToHealth')}</span>
+              <HealthUnderstood
+                parsed={healthLine}
+                withModule
+                onAlternatives={choice === 'auto' && isPlanOn ? handleOtherReading : undefined}
+              />
               {hasHealthFailed && <div className={styles.quickError} role="alert">{lang('HealthQuickFailed')}</div>}
             </>
+          ) : healthChoice && hasText ? (
+            <span className={styles.muted} data-quick-not-understood>{lang('PvQuickNotHealth')}</span>
+          ) : isNoteChoice && hasText ? (
+            <div className={extra.understood} data-quick-understood="note">
+              {lang('PvQuickUnderstood', { kind: lang('PvQuickKindNote') })}
+              <span className={styles.muted}>
+                {' · '}
+                {lang('PvQuickInModule', { module: lang(MODULE_TITLE_KEYS.notes) })}
+              </span>
+              <div className={buildClassName(styles.quickPartText, styles.quickPartName)} dir="auto">{text.trim()}</div>
+            </div>
           ) : hasText ? (
             <>
+              <div className={extra.understood} data-quick-understood={draft.kind}>
+                {lang('PvQuickUnderstood', { kind: kindLabel })}
+                <span className={styles.muted}>
+                  {' · '}
+                  {lang('PvQuickInModule', { module: lang(MODULE_TITLE_KEYS.plan) })}
+                </span>
+              </div>
               <span
                 className={buildClassName(styles.tag, styles.tagLarge, KIND_CLASSES[draft.kind])}
                 data-quick-chip={isKindLearned ? 'kind' : undefined}
@@ -581,8 +666,9 @@ const PlannerQuickInput = ({
           )}
         </div>
         <div className={buildClassName(styles.hscroll, 'no-scrollbar')} role="radiogroup">
-          {KIND_CHOICES.map((kind) => {
-            const isActive = choice === kind || (choice === 'auto' && hasText && !healthLine && draft.kind === kind);
+          {kindChoices.map((kind) => {
+            const autoKind = healthLine ? healthChoiceOf(healthLine.entries[0].kind) : draft.kind;
+            const isActive = choice === kind || (choice === 'auto' && hasText && autoKind === kind);
             return (
               <button
                 key={kind}
@@ -591,7 +677,7 @@ const PlannerQuickInput = ({
                 aria-checked={choice === kind}
                 data-kind={kind}
                 className={buildClassName(
-                  styles.chip, kind !== 'auto' && KIND_CLASSES[kind], isActive && styles.chipOn,
+                  styles.chip, isPlanChoice(kind) && KIND_CLASSES[kind], isActive && styles.chipOn,
                 )}
                 onClick={handleChoice}
               >
@@ -640,30 +726,34 @@ const PlannerQuickInput = ({
           </div>
         )}
         <div className={styles.quickFooter}>
-          <span className={buildClassName(styles.muted, styles.grow)}>
-            {lang('PlannerQuickDefault', { date: formatDayLabel(lang, today) })}
+          <span className={buildClassName(styles.muted, styles.grow, extra.hint)}>
+            {lang('PvQuickModuleHint')}
           </span>
           {onMore && (
             <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
               {lang('PlannerQuickMore')}
             </button>
           )}
-          <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onClose}>
-            {lang('Cancel')}
-          </button>
           <button
             type="button"
             className={buildClassName(styles.btn, styles.btnAccent)}
             disabled={!canSubmit}
+            data-quick-save
             onClick={handleSubmitClick}
           >
-            {lang('PlannerAdd')}
+            {lang('Save')}
           </button>
         </div>
       </form>
     </Modal>
   );
 };
+
+// Вид разбора «Здоровья» → вид выбора окна (отметки «лёг» и «встал» — сон)
+function healthChoiceOf(kind: string): KindChoice | undefined {
+  if (kind === 'sleep_start' || kind === 'sleep_end') return 'sleep';
+  return isHealthChoice(kind as KindChoice) ? kind as KindChoice : undefined;
+}
 
 // Подпись другого чтения — так же, как его показал бы чип
 function formatAlt(lang: ReturnType<typeof useLang>, draft: QuickDraft, alt: QuickAlt) {

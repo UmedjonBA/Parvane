@@ -457,6 +457,9 @@ pub fn content_to_wire(c: &Content) -> Option<Value> {
                 .collect();
             o.insert("playlist_tracks".into(), Value::Array(tracks));
             put(&mut o, "text", json!(p.text));
+            // MUSIC-3: общий плейлист сервера — id и ключ вступления
+            put(&mut o, "shared_id", json!(p.shared_id));
+            put(&mut o, "join_key", json!(p.join_key));
             o
         }
         K::Article(a) => {
@@ -813,6 +816,8 @@ pub fn wire_to_content_json(c: &Map<String, Value>, reply_to: Option<&str>) -> R
                 set(&mut p, "tracks", Some(&Value::Array(tracks)));
             }
             set(&mut p, "text", c.get("text"));
+            set(&mut p, "shared_id", c.get("shared_id"));
+            set(&mut p, "join_key", c.get("join_key"));
             ("music_playlist", Value::Object(p))
         }
         "article" => {
@@ -1369,9 +1374,11 @@ mod tests {
                 {"track_id": "t1", "title": "Берег"},
             ],
             "text": "🎵 Для работы",
+            "shared_id": "0a1b2c3d4e5f6a7b", "join_key": "k-secret-1",
         });
         let content = wire_to_content(wire.as_object().unwrap(), None).unwrap();
         let Some(content::Kind::MusicPlaylist(p)) = &content.kind else { panic!("не плейлист: {content:?}") };
+        assert_eq!((p.shared_id.as_str(), p.join_key.as_str()), ("0a1b2c3d4e5f6a7b", "k-secret-1"));
         assert_eq!((p.name.as_str(), p.server.as_str(), p.tracks.len()), ("Для работы", "music.example", 2));
         assert_eq!((p.tracks[0].track_id.as_str(), p.tracks[1].track_id.as_str()), ("t2", "t1"));
         assert_eq!(content_to_wire(&content).unwrap(), wire);

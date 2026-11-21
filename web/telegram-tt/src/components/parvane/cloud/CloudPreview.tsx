@@ -1,4 +1,6 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useLayoutEffect, useState,
+} from '../../../lib/teact/teact';
 
 import type { PvIconName } from '../notes/PvIcon';
 import type { CloudItemAction } from './CloudItem';
@@ -7,6 +9,7 @@ import type { CloudNode } from './cloudModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { callApi } from '../../../api/gramjs';
+import { formatCloudDayShort } from './cloudFormat';
 import {
   CLOUD_TEXT_PREVIEW_MAX_BYTES, decodeTextPreview, fileTypeLabel, kindOfFile,
 } from './cloudModel';
@@ -108,44 +111,62 @@ const CloudPreview = ({
     onAction(e.currentTarget.dataset.previewAction as CloudItemAction, container!, node!);
   });
 
-  // Стрелки клавиатуры листают файлы папки
-  useEffect(() => {
-    if (!isOpen || !hasNeighbours) return undefined;
+  // Стрелки клавиатуры листают файлы папки, пробел закрывает просмотр (доска `XdFiles`); слушатель — в кадре
+  // появления просмотра. Пробел в проигрывателе видео и звука остаётся его клавишей
+  useLayoutEffect(() => {
+    if (!isOpen) return undefined;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowLeft') handlePrevious();
       if (e.key === 'ArrowRight') handleNext();
+      const target = e.target as HTMLElement | undefined;
+      if (e.key === ' ' && !e.repeat && !target?.closest?.('video, audio, input, textarea, button')) {
+        e.preventDefault();
+        onClose();
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isOpen, hasNeighbours, handlePrevious, handleNext]);
+  }, [isOpen, handlePrevious, handleNext, onClose]);
 
   const typeLabel = node ? fileTypeLabel(node.name) : '';
   const stubText = isTooLarge ? lang('ParvaneCloudPreviewTooLarge')
     : kind === 'other' && typeLabel ? lang('ParvaneCloudPreviewNoViewer', { type: typeLabel })
       : lang('ParvaneCloudPreviewUnavailable');
-  const dateText = node?.mtime
-    ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '') : '';
+  const dateText = node?.mtime ? formatCloudDayShort(lang.code, node.mtime) : '';
   const facts = [
     hasNeighbours && lang('ParvaneCloudPreviewPosition', { index: position + 1, count: siblings!.length }),
     node && formatFileSize(lang, node.size),
     !isNarrow && dateText,
   ].filter(Boolean).join(' · ');
-  const actions: PreviewAction[] = [
-    { action: 'download', icon: 'download', title: lang('ParvaneCloudDownload') },
-    ...(isDownloadOnly ? [] : [
-      { action: 'send', icon: 'chat', title: lang('KnowledgeFilesToChat') },
-    ] satisfies PreviewAction[]),
-    ...(canEdit && !isDownloadOnly ? [
-      { action: 'link', icon: 'link', title: lang('ParvaneCloudLinkShort') },
-      { action: 'delete', icon: 'trash', title: lang('ParvaneCloudToTrashShort'), isDanger: true },
-    ] satisfies PreviewAction[] : []),
-  ];
+  // Порядок по доскам: компьютер (`XdFiles`) — «Скачать, Ссылка, В чат, В корзину», телефон (`XpFiles`) —
+  // «Скачать, В чат, Ссылка, В корзину»
+  const send: PreviewAction | undefined = isDownloadOnly ? undefined
+    : { action: 'send', icon: 'chat', title: lang('KnowledgeFilesToChat') };
+  const link: PreviewAction | undefined = canEdit && !isDownloadOnly
+    ? { action: 'link', icon: 'link', title: lang('ParvaneCloudLinkShort') } : undefined;
+  const actions = [
+    { action: 'download', icon: 'download', title: lang('ParvaneCloudDownload') } satisfies PreviewAction,
+    ...(isNarrow ? [send, link] : [link, send]),
+    canEdit && !isDownloadOnly ? {
+      action: 'delete', icon: 'trash', title: lang('ParvaneCloudToTrashShort'), isDanger: true,
+    } satisfies PreviewAction : undefined,
+  ].filter((item): item is PreviewAction => Boolean(item));
+  const keysText = [
+    hasNeighbours && lang('ParvaneCloudPreviewArrows'),
+    lang('ParvaneCloudPreviewSpace'),
+    lang('ParvaneCloudPreviewEsc'),
+  ].filter(Boolean).join(' · ');
 
   return (
     <Modal isOpen={isOpen} className={styles.preview} onClose={onClose}>
       <div className={styles.previewBar} data-preview={node?.id}>
         {isNarrow && (
-          <button type="button" className={styles.previewIcon} aria-label={lang('Close')} onClick={onClose}>
+          <button
+            type="button"
+            className={styles.previewIcon}
+            aria-label={lang('ParvaneCloudPreviewClose')}
+            onClick={onClose}
+          >
             <PvIcon name="x" />
           </button>
         )}
@@ -170,7 +191,12 @@ const CloudPreview = ({
           </button>
         )}
         {!isNarrow && (
-          <button type="button" className={styles.previewIcon} aria-label={lang('Close')} onClick={onClose}>
+          <button
+            type="button"
+            className={styles.previewIcon}
+            aria-label={lang('ParvaneCloudPreviewClose')}
+            onClick={onClose}
+          >
             <PvIcon name="x" />
           </button>
         )}
@@ -222,9 +248,7 @@ const CloudPreview = ({
           </button>
         )}
       </div>
-      <div className={styles.previewFoot}>
-        {`${hasNeighbours ? `${lang('ParvaneCloudPreviewKeys')} · ` : ''}${lang('KnowledgeFilesDecryptedHere')}`}
-      </div>
+      {!isNarrow && <div className={styles.previewFoot}>{keysText}</div>}
       {isNarrow && (
         <div className={styles.previewTabs}>
           {actions.map((item) => (

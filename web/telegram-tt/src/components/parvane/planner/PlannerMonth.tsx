@@ -26,6 +26,9 @@ type OwnProps = {
   picked: string;
   today: string;
   layers: PlannerLayers;
+  // Телефон: плитки-числа с полоской загрузки (доска `PhPlanMore`); компьютер — клетки без часов и полоски,
+  // дни соседних месяцев пустые (доска `RdPlan`)
+  isNarrow: boolean;
   onPickDay: (day: string) => void;
   onCreateForDay: (day: string) => void;
   onOpenTask: (taskId: string, day: string) => void;
@@ -55,10 +58,10 @@ const EMPTY_ENTRY: PlannerDayIndexEntry = {
   conflicts: 0, unrated: 0,
 };
 
-// Месяц: в клетке — число, занятые часы, сон и первые дела дня с точкой цвета записи; на телефоне — число
-// и точки. Праздник заливает клетку
+// Месяц: на компьютере в клетке — число и первые дела дня с полосой цвета записи; на телефоне — число, часы и
+// полоска загрузки. Праздник заливает клетку
 const PlannerMonth = ({
-  state, month, picked, today, layers, onPickDay, onCreateForDay, onOpenTask, onMoveTask,
+  state, month, picked, today, layers, isNarrow, onPickDay, onCreateForDay, onOpenTask, onMoveTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -129,7 +132,7 @@ const PlannerMonth = ({
         color: 0,
         order: '',
       }));
-      const entries = layers.work ? [...dayItems, ...dueItems] : [];
+      const entries = [...dayItems, ...dueItems];
       return {
         day,
         minutes: entry.minutes,
@@ -153,6 +156,10 @@ const PlannerMonth = ({
       {cells.map(({
         day, minutes, unrated, conflicts, budget, sleep, isShort, holiday, allDayCount, entries,
       }) => {
+        const isOutside = !day.startsWith(monthPrefix);
+        if (isOutside && !isNarrow) {
+          return <div key={day} className={buildClassName(styles.monthCell, styles.monthCellBlank)} aria-hidden />;
+        }
         return (
           <div
             key={day}
@@ -161,7 +168,7 @@ const PlannerMonth = ({
               day === today && styles.monthCellToday,
               day === picked && styles.monthCellPicked,
               holiday && styles.monthCellHoliday,
-              !day.startsWith(monthPrefix) && styles.monthCellOutside,
+              isOutside && styles.monthCellOutside,
             )}
             style={holiday?.color ? `--planner-holiday-color: var(--color-peer-${holiday.color - 1})` : undefined}
             data-day={day}
@@ -178,7 +185,7 @@ const PlannerMonth = ({
           >
             <span className={styles.monthHead}>
               <span className={styles.monthNumber}>{fromDayKey(day).getDate()}</span>
-              {Boolean(minutes) && (
+              {Boolean(minutes) && isNarrow && (
                 <span className={buildClassName(styles.monthHours, minutes > budget && styles.red)}>
                   {conflicts ? '! ' : ''}
                   {formatHours(lang, minutes)}
@@ -222,6 +229,7 @@ const PlannerMonth = ({
                 {`+${entries.length - PREVIEW_COUNT}`}
               </span>
             )}
+            {/* Полоска загрузки видна только на телефоне (стили); метка событий на весь день — для обоих */}
             <span
               className={styles.monthLoad}
               data-level={getLoadLevel(minutes, budget)}

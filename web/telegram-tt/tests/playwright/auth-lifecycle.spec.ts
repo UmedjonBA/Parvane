@@ -68,7 +68,8 @@ test('logs out through settings and clears the local session state', async ({ pa
   await openProfile(page);
   // «Log Out» — последняя строка экрана «Профиль», затем подтверждение в диалоге
   await page.locator('[data-settings-sign-out]:visible').first().click();
-  await page.locator('.Modal').getByRole('button', { name: 'Log Out', exact: true }).click();
+  // Шторка выхода (доска `PhProfileB`): «Просто выйти»
+  await page.locator('.Modal [data-sign-out-plain]').click();
 
   // Инвариант logout — очистка локального состояния; вид переходного экрана
   // авторизации отличается между движками и проверяется после reload

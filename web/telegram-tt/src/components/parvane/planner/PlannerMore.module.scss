@@ -410,3 +410,55 @@
   font-size: var(--pv-font-size-small);
   color: var(--pv-muted);
 }
+
+// ── spec 041, круг сверки досок (форк «screens») ──
+
+// Поиск на компьютере: слева колонка «Слои / Что показывать», справа выдача (доска `ZdPlanX`)
+.screenRow {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.resultName {
+  overflow: hidden;
+  flex: 1 1 40%;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultMeta {
+  overflow: hidden;
+  flex: 1 1 35%;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultWhen {
+  flex: none;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+// Расписание на компьютере: «пн | 10:00–11:00 | Созвон» (доска `XdPlan`); подставленный конец — красная точка
+.importDay {
+  flex: none;
+  width: 1.75rem;
+}
+
+.importTime {
+  flex: none;
+  width: 6.5rem;
+  font-size: var(--pv-font-size-small);
+}
+
+.importGuessed {
+  --planner-list-color: var(--pv-red);
+}

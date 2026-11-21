@@ -138,6 +138,7 @@ const GraphPanel = ({
           onPickTitle={onOpenTitle}
           onLink={onLinkTitle!}
           onUnlink={onUnlink!}
+          isSheet={isSheet}
         />
       )}
       <NoteView

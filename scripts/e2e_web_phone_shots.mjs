@@ -99,7 +99,7 @@ try {
   ];
   const navTo = async (name) => {
     const probe = name.source.replace(/^\^\(|\)\$$/g, '').split('|')[0];
-    if (/New entry|Новая запись/.test(probe)) {
+    if (/Add record|New entry|Новая запись/.test(probe)) {
       await page.locator('[data-add-for]').evaluate((el) => el.click());
       return;
     }
@@ -117,7 +117,7 @@ try {
     await navTo(/^(Chats|Чаты)$/);
     await page.waitForTimeout(3000);
   });
-  await step(page, 'chats-plus-menu', () => navTo(/^(New entry|Новая запись)$/));
+  await step(page, 'chats-plus-menu', () => navTo(/^(Add record|New entry in the plan|Новая запись|Новая запись в план)$/));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(500);
   await step(page, 'chat-open', async () => {
@@ -147,12 +147,12 @@ try {
   const planner = page.locator('#ParvanePlanner');
   await navTo(/^(Planner|План)$/);
   await page.waitForTimeout(1500);
-  await step(page, 'plus', () => navTo(/^(New entry|Новая запись)$/));
+  await step(page, 'plus', () => navTo(/^(Add record|New entry in the plan|Новая запись|Новая запись в план)$/));
   await step(page, 'quick-typed', () => page.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес'));
   await closeModal();
   for (const line of ['созвон 16:00 45 мин', 'задача сдать отчёт до пт', 'пробежка завтра 8:00 30 мин',
     'обед гречка 150г б30 ж10 у60 520 ккал', 'вода 500 мл', 'сон 23:40-07:30', 'вес 72,4']) {
-    await navTo(/^(New entry|Новая запись)$/);
+    await navTo(/^(Add record|New entry in the plan|Новая запись|Новая запись в план)$/);
     await page.locator('#planner-quick-input').fill(line);
     await page.locator('#planner-quick-input').press('Enter');
     await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: 20000 })

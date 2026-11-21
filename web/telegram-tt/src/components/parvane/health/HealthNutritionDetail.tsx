@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
-import type { HealthNutritionView } from './healthTypes';
+import type { HealthMetricView, HealthNutritionView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -16,6 +16,8 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import PvSheet from '../notes/PvSheet';
 import HealthGoalInput from './HealthGoalInput';
+import HealthQuickInput from './HealthQuickInput';
+import HealthWaterCard from './HealthWaterCard';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
@@ -23,17 +25,24 @@ import styles from './Health.module.scss';
 type OwnProps = {
   // Питание сегодняшнего дня; прошлый день экран запрашивает у движка сам
   nutrition: HealthNutritionView;
-  // Заготовка строки ввода: «ужин »
-  onExample: (text: string) => void;
+  // Вода — карточкой рядом с приёмами пищи (доска `XdHealth`)
+  water?: HealthMetricView;
+  isWide?: boolean;
+  // Блок «Питание» включён; выключен — экран показывает только воду
+  hasFood?: boolean;
 };
 
 // Parvane (spec 041 B3; доски `XdHealth`, `ZpHealthX`, `PhModSettings`): питание за день — калории и БЖУ против
 // целей, приёмы пищи, закрытие дня и калории за неделю. Все числа — из движка (`healthView.nutrition`); прошлый
 // день — та же сводка на конец того дня
-const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProps) => {
+const HealthNutritionDetail = ({
+  nutrition: todayNutrition, water, isWide, hasFood,
+}: OwnProps) => {
   const today = todayNutrition.day;
   const { lang, dayTitle } = useHealthLabels(today);
   const [isClosing, setIsClosing] = useState(false);
+  // Заготовка строки ввода экрана: «ужин »
+  const [lineRequest, setLineRequest] = useState<{ text?: string }>();
   const [pastDay, setPastDay] = useState<string>();
   const [past, setPast] = useState<HealthNutritionView>();
   // Данные сменились (запись, закрытие дня) — прошлый день перечитывается
@@ -62,8 +71,10 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
   const missing = meals.filter((meal) => !meal.entries.length);
 
   const handleAdd = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onExample(`${e.currentTarget.dataset.title!.toLowerCase()} `);
+    setIsClosing(false);
+    setLineRequest({ text: `${e.currentTarget.dataset.title!.toLowerCase()} ` });
   });
+  const handleLineHandled = useLastCallback(() => setLineRequest(undefined));
   const handleAskClose = useLastCallback(() => setIsClosing(true));
   const handleCancelClose = useLastCallback(() => setIsClosing(false));
   const handleClose = useLastCallback(() => {
@@ -75,9 +86,28 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
   });
 
   const shares = barShares(week.map((item) => item.kcal), goals.kcal);
+  const top = Math.max(goals.kcal || 0, ...week.map((item) => item.kcal || 0)) || 1;
+  const line = (
+    <HealthQuickInput
+      isCompact
+      placeholder={lang('HealthLineFood')}
+      request={lineRequest}
+      onRequestHandled={handleLineHandled}
+    />
+  );
+
+  if (!hasFood) {
+    return (
+      <div className={styles.detail}>
+        <HealthWaterCard metric={water} />
+        {line}
+      </div>
+    );
+  }
 
   return (
-    <>
+    <div className={styles.detail}>
+      {line}
       <div className={styles.dayNav} data-health-day={nutrition.day}>
         <button type="button" className={kit.ib} aria-label={lang('HealthDayPrev')} onClick={handlePrevDay}>
           <ParvaneIcon name="left" isSmall />
@@ -93,13 +123,20 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
           <ParvaneIcon name="right" isSmall />
         </button>
       </div>
-      <section className={buildClassName(kit.card, styles.card)} data-health-card="food">
+      <section
+        className={buildClassName(isWide ? styles.tiles : kit.card, !isWide && styles.card)}
+        data-health-card="food"
+      >
         {MACROS.map((macro) => {
           const goal = goals[macro];
           const unit = macro === 'kcal' ? '' : ` ${lang('HealthUnitGram')}`;
           return (
-            <div key={macro} className={styles.macroRow} data-health-macro={macro}>
-              <span className={kit.grow}>{lang(MACRO_KEYS[macro])}</span>
+            <div
+              key={macro}
+              className={buildClassName(styles.macroRow, isWide && kit.card, isWide && styles.macroTile)}
+              data-health-macro={macro}
+            >
+              <span className={buildClassName(kit.grow, isWide && kit.muted)}>{lang(MACRO_KEYS[macro])}</span>
               <span className={kit.mono} data-health-value>
                 {goal !== undefined ? `${number(total[macro])} / ${number(goal)}` : number(total[macro])}
                 {unit}
@@ -111,80 +148,98 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
           );
         })}
       </section>
-      <section className={buildClassName(kit.card, styles.card)}>
-        <div className={kit.caps}>{lang('HealthMealsTitle')}</div>
-        {meals.map((meal) => {
-          const title = lang(mealTitleKey(meal.meal));
-          const isEmpty = !meal.entries.length;
-          return (
-            <div key={meal.meal} className={styles.mealRow} data-health-meal={meal.meal}>
-              <span className={styles.mealTitle}>{title}</span>
-              <span className={buildClassName(kit.muted, kit.grow, styles.mealNames)}>
-                {isEmpty ? lang('HealthMealEmpty') : meal.names}
-              </span>
-              {isEmpty && isPast ? undefined : isEmpty ? (
-                <button type="button" className={kit.btn} data-title={title} onClick={handleAdd}>
-                  {lang('HealthMealAdd')}
+      <div className={isWide ? styles.detailPair : styles.detail}>
+        <section className={buildClassName(kit.card, styles.card)}>
+          <div className={kit.caps}>{lang('HealthMealsTitle')}</div>
+          {meals.map((meal) => {
+            const title = lang(mealTitleKey(meal.meal));
+            const isEmpty = !meal.entries.length;
+            if (isEmpty) {
+              return (
+                <button
+                  key={meal.meal}
+                  type="button"
+                  className={buildClassName(styles.mealRow, styles.mealRowEmpty)}
+                  data-health-meal={meal.meal}
+                  data-title={title}
+                  disabled={isPast}
+                  aria-label={`${lang('HealthMealAdd')}: ${title}`}
+                  onClick={handleAdd}
+                >
+                  <span className={styles.mealTitle}>{title}</span>
+                  <span className={buildClassName(kit.muted, kit.grow, styles.mealNames)}>
+                    {lang('HealthMealEmpty')}
+                  </span>
+                  <span className={buildClassName(kit.mono, styles.mealKcal)}>—</span>
                 </button>
-              ) : (
-                <>
-                  <span className={buildClassName(kit.muted, kit.mono, kit.small)}>
-                    {lang('HealthMacrosShort', {
-                      protein: number(meal.protein), fat: number(meal.fat), carbs: number(meal.carbs),
-                    })}
-                  </span>
-                  <span className={buildClassName(kit.mono, styles.mealKcal)} data-health-value>
-                    {number(meal.kcal)}
-                  </span>
-                </>
-              )}
-            </div>
-          );
-        })}
-        {isClosed ? (
-          <div className={styles.cardButtons}>
-            <span className={buildClassName(kit.muted, kit.grow)} data-health-day-closed>
-              {lang('HealthDayClosed')}
-            </span>
-            <button type="button" className={kit.btn} data-health-action="reopen-day" onClick={handleReopen}>
-              {lang('HealthDayReopen')}
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className={buildClassName(kit.btn, styles.more)}
-            data-health-action="close-day"
-            onClick={handleAskClose}
-          >
-            {lang('HealthDayClose')}
-          </button>
-        )}
-      </section>
-      <section className={buildClassName(kit.card, styles.card)}>
-        <div className={styles.cardHead}>
-          <span className={buildClassName(kit.caps, kit.grow)}>{lang('HealthKcalWeekTitle')}</span>
-          {weekAvg !== undefined && (
-            <span className={buildClassName(kit.muted, kit.small)} data-health-week-avg>
-              {goals.kcal !== undefined
-                ? lang('HealthKcalWeekAvgGoal', { avg: number(weekAvg), goal: number(goals.kcal) })
-                : lang('HealthKcalWeekAvg', { avg: number(weekAvg) })}
-            </span>
-          )}
-        </div>
-        <div className={styles.bars} role="img" aria-label={lang('HealthKcalWeekTitle')}>
-          {week.map((item, index) => (
-            <span key={item.day} className={styles.barColumn} data-day={item.day}>
-              <span className={styles.barTrack}>
-                <span
-                  className={buildClassName(styles.bar, item.full && styles.barFull)}
-                  style={`height: ${shares[index] * 100}%`}
-                />
+              );
+            }
+            return (
+              <div key={meal.meal} className={styles.mealRow} data-health-meal={meal.meal}>
+                <span className={styles.mealTitle}>{title}</span>
+                <span className={buildClassName(kit.muted, kit.grow, styles.mealNames)}>{meal.names}</span>
+                <span className={buildClassName(kit.muted, kit.mono, kit.small)}>
+                  {lang('HealthMacrosShort', {
+                    protein: number(meal.protein), fat: number(meal.fat), carbs: number(meal.carbs),
+                  })}
+                </span>
+                <span className={buildClassName(kit.mono, styles.mealKcal)} data-health-value>
+                  {number(meal.kcal)}
+                </span>
+              </div>
+            );
+          })}
+          {isClosed ? (
+            <div className={styles.cardButtons}>
+              <span className={buildClassName(kit.muted, kit.grow)} data-health-day-closed>
+                {lang('HealthDayClosed')}
               </span>
-              <span className={buildClassName(kit.mono, styles.barLabel)}>{lang(WEEKDAY_KEYS[item.weekday])}</span>
-            </span>
-          ))}
+              <button type="button" className={kit.btn} data-health-action="reopen-day" onClick={handleReopen}>
+                {lang('HealthDayReopen')}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={styles.linkAction}
+              data-health-action="close-day"
+              onClick={handleAskClose}
+            >
+              {lang('HealthDayClose')}
+            </button>
+          )}
+        </section>
+        <HealthWaterCard metric={water} />
+      </div>
+      <section className={buildClassName(kit.card, styles.card)}>
+        <div className={kit.caps}>{lang('HealthKcalWeekTitle')}</div>
+        <div className={styles.chartBars} style="--health-color: var(--pv-accent)">
+          <div className={styles.bars} role="img" aria-label={lang('HealthKcalWeekTitle')}>
+            {goals.kcal !== undefined && (
+              <span className={styles.goalLine} style={`bottom: ${(goals.kcal / top) * 100}%`} />
+            )}
+            {week.map((item, index) => (
+              <span key={item.day} className={styles.barColumn} data-day={item.day}>
+                <span className={styles.barTrack}>
+                  <span
+                    className={buildClassName(
+                      styles.bar, item.full && styles.barFull, item.day === today && styles.barToday,
+                    )}
+                    style={`height: ${shares[index] * 100}%`}
+                  />
+                </span>
+                <span className={buildClassName(kit.mono, styles.barLabel)}>{lang(WEEKDAY_KEYS[item.weekday])}</span>
+              </span>
+            ))}
+          </div>
         </div>
+        {weekAvg !== undefined && (
+          <span className={buildClassName(kit.muted, kit.small)} data-health-week-avg>
+            {goals.kcal !== undefined
+              ? lang('HealthKcalWeekAvgGoal', { avg: number(weekAvg), goal: number(goals.kcal) })
+              : lang('HealthKcalWeekAvg', { avg: number(weekAvg) })}
+          </span>
+        )}
       </section>
       <section className={buildClassName(kit.card, styles.card)}>
         <div className={kit.caps}>{lang('HealthNutritionGoals')}</div>
@@ -216,7 +271,7 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
                 <span className={kit.grow}>{lang('HealthDayGoal')}</span>
                 <span className={kit.mono}>{lang('HealthKcalValue', { value: number(goals.kcal) })}</span>
               </div>
-              <div className={styles.macroRow} data-health-day-delta>
+              <div className={buildClassName(styles.macroRow, styles.warn)} data-health-day-delta>
                 <span className={kit.grow}>{lang(left >= 0 ? 'HealthDayUnder' : 'HealthDayOver')}</span>
                 <span className={kit.mono}>{lang('HealthKcalValue', { value: number(Math.abs(left)) })}</span>
               </div>
@@ -226,24 +281,34 @@ const HealthNutritionDetail = ({ nutrition: todayNutrition, onExample }: OwnProp
             <div key={meal.meal} className={styles.macroRow}>
               <span className={kit.grow}>{lang(mealTitleKey(meal.meal))}</span>
               <span className={kit.muted}>{lang('HealthMealEmpty')}</span>
+              <button
+                type="button"
+                className={kit.chip}
+                data-title={lang(mealTitleKey(meal.meal))}
+                data-health-action="close-day-add"
+                onClick={handleAdd}
+              >
+                {lang('HealthMealAdd')}
+              </button>
             </div>
           ))}
           <div className={buildClassName(kit.muted, kit.small)}>{lang('HealthDayReopenHint')}</div>
         </div>
-        <div className={kit.sheetButtons}>
-          <span className={kit.grow} />
-          <button type="button" className={kit.btn} onClick={handleCancelClose}>{lang('HealthDayCloseCancel')}</button>
+        <div className={buildClassName(kit.sheetButtons, styles.sheetColumn)}>
           <button
             type="button"
-            className={buildClassName(kit.btn, kit.btnAcc)}
+            className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}
             data-health-action="confirm-close-day"
             onClick={handleClose}
           >
             {lang('HealthDayCloseConfirm')}
           </button>
+          <button type="button" className={buildClassName(kit.btn, kit.btnWide)} onClick={handleCancelClose}>
+            {lang('HealthDayCloseCancel')}
+          </button>
         </div>
       </PvSheet>
-    </>
+    </div>
   );
 };
 

@@ -1,0 +1,20 @@
+// Parvane: окно «Новая запись» по доске `DeskOverlays` — то, чего нет в `Planner.module.scss`. Цвета — `--pv-*`
+
+.kbd {
+  margin-inline-start: 0.5rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-xs);
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.understood {
+  font-weight: var(--font-weight-medium);
+}
+
+.hint {
+  font-size: 0.8125rem;
+}

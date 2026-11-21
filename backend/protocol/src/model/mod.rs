@@ -1352,6 +1352,13 @@ impl Engine {
         let Some(peer::Kind::Group(g)) = &chat.kind else { return Ok(false) };
         let from = v.get("from").and_then(Value::as_str).unwrap_or("");
         let Some(Value::Object(wire)) = v.get("wire") else { return Err(ProtoError::InvalidField("wire")) };
+        // «Скрыть у меня сообщения этого участника» (REPORT-3): объект личного состояния, любое содержимое
+        if let Ok(pk) = crate::state::peer_key(&chat) {
+            let hidden = crate::report_inbox::hidden_member_key(&pk, from);
+            if hidden.is_some_and(|k| self.state.view_object(ObjectKind::MemberHidden as i32, &k).is_some()) {
+                return Ok(true);
+            }
+        }
         let Some(f) = self.live_group_facts(&g.id) else { return Ok(false) };
         // Вид, которого движок не знает (служебное «режим чата» и прочее), правами по типу не скрывается
         let Ok(content) = views::wire_to_content(wire, None) else { return Ok(false) };

@@ -23,7 +23,7 @@ export const MODULE_ICONS: Record<ParvaneModuleId, ParvaneIconName> = {
 
 export const MODULE_TITLE_KEYS = {
   chats: 'ParvaneSectionMessenger',
-  plan: 'ParvaneSectionPlanner',
+  plan: 'ParvaneNavPlan',
   health: 'PlannerHealth',
   notes: 'ParvaneModuleNotes',
   files: 'ParvaneModuleFiles',

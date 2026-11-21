@@ -23,6 +23,8 @@ export type FreeSlot = {
   isBeforeFirst: boolean;
   load: number;
   budget: number;
+  // Свободные минуты после окна до следующего дела либо до конца окна дня
+  spare: number;
 };
 
 export type FreeTimeResult = { slots: FreeSlot[]; total: number };
@@ -35,13 +37,18 @@ export type ScheduleItem = {
   description?: string;
   // Конца в тексте не было — подставлен час
   isEndGuessed: boolean;
+  // Номер куска в тексте: непонятое встаёт на своё место среди понятого
+  order: number;
 };
 
-export type ScheduleProblem = { text: string; weekday?: number };
+// `rest` — кусок без дня недели
+export type ScheduleProblem = { text: string; weekday?: number; order: number; rest: string };
 
 export type ParsedSchedule = { items: ScheduleItem[]; problems: ScheduleProblem[]; until?: string };
 
 export type PlannerSearchFilter = 'all' | 'events' | 'tasks' | 'done';
+// «Что показывать» компьютера (доска `ZdPlanX`): несколько сразу
+export type PlannerSearchShow = 'events' | 'tasks' | 'done' | 'offers';
 
 export type PlannerSearchItem = {
   key: string;
@@ -55,6 +62,8 @@ export type PlannerSearchItem = {
   start?: number;
   end?: number;
   isDone?: boolean;
+  // Запись из задания, присланного в чат
+  isFromChat?: boolean;
   // Не уходит в движок: запись для показа и открытия
   task?: PlannerTask;
   event?: PlannerEvent;
@@ -122,9 +131,16 @@ export function parseScheduleText(text: string, today: string) {
   // Движок пишет отсутствующее значение как `null`
   return {
     items: parsed.items.map((item) => ({ ...item, description: item.description || undefined })),
-    problems: parsed.problems.map((problem) => ({ text: problem.text, weekday: problem.weekday ?? undefined })),
+    problems: parsed.problems.map((problem) => ({
+      text: problem.text, weekday: problem.weekday ?? undefined, order: problem.order, rest: problem.rest,
+    })),
     until: parsed.until || undefined,
   };
+}
+
+// Задача либо событие из карточки задания в чате; задачи из пунктов заметок (`note:*`) — не из чата
+function isFromChat(record: PlannerTask | PlannerEvent) {
+  return Boolean(record.source && !record.source.chat.startsWith('note:'));
 }
 
 /** Записи «Плана» для поиска: задачи без повтора целиком, ряды и события — экземплярами за 90 дней назад и год вперёд. */
@@ -145,6 +161,7 @@ export function buildSearchItems(state: PlannerState, today: string): PlannerSea
       start,
       end: start !== undefined && task.minutes !== undefined ? start + task.minutes : undefined,
       isDone: task.status === 'done',
+      isFromChat: isFromChat(task),
       task,
     });
   });
@@ -163,6 +180,7 @@ export function buildSearchItems(state: PlannerState, today: string): PlannerSea
         start,
         end: start !== undefined && task.minutes !== undefined ? start + task.minutes : undefined,
         isDone: isInstanceDone(task, day),
+        isFromChat: isFromChat(task),
         task,
       });
     });
@@ -177,6 +195,7 @@ export function buildSearchItems(state: PlannerState, today: string): PlannerSea
         day,
         start: event.isAllDay ? undefined : toMinutes(event.start),
         end: event.isAllDay ? undefined : toMinutes(event.end),
+        isFromChat: isFromChat(event),
         event,
       });
     });
@@ -185,11 +204,14 @@ export function buildSearchItems(state: PlannerState, today: string): PlannerSea
 }
 
 export function searchPlanner({
-  items, query, filter, today, nowMinute, aheadLimit, pastLimit,
+  items, query, filter, show, hiddenGroups, today, nowMinute, aheadLimit, pastLimit,
 }: {
   items: PlannerSearchItem[];
   query: string;
   filter: PlannerSearchFilter;
+  // Колонка «Слои / Что показывать» (компьютер): набор вместо `filter` и выключенные группы ('' — без группы)
+  show?: PlannerSearchShow[];
+  hiddenGroups?: string[];
   today: string;
   nowMinute: number;
   aheadLimit: number;
@@ -198,6 +220,8 @@ export function searchPlanner({
   return engineStatic<PlannerSearchResult>('plannerSearch', {
     query,
     filter,
+    show,
+    hiddenGroups: hiddenGroups || [],
     today,
     nowMinute,
     aheadLimit,
@@ -214,6 +238,7 @@ export function searchPlanner({
       start: item.start ?? -1,
       end: item.end ?? -1,
       isDone: item.isDone,
+      fromChat: item.isFromChat,
     })),
   });
 }

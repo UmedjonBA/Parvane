@@ -3,6 +3,7 @@
 // SDP/ICE через call.signal → call.user.<to>. Wire-совместимо с десктопом:
 // CallSignal Invite/Answer/Ice/Hangup/Reject.
 
+import { getIsPermissionError, showPermissionDenied } from '../../util/permissionPrompt';
 import { getCallVideoSender, prepareCallVideo } from './callScreenShare';
 import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
 
@@ -147,7 +148,8 @@ export class CallEngine {
           this.hangUp();
         }
       }, this.cb.getRingTimeoutMs?.() ?? RING_TIMEOUT_MS);
-    } catch {
+    } catch (err) {
+      showMediaDenied(err, media);
       if (this.isCurrentCall(peer, callId)) this.endAfterMediaFailure();
     }
   }
@@ -180,7 +182,8 @@ export class CallEngine {
       }
       this.cb.sendSignal(from, { type: 'answer', call_id: callId, sdp, sig: signature });
       this.emitSas(callId);
-    } catch {
+    } catch (err) {
+      showMediaDenied(err, media);
       if (this.isCurrentCall(from, callId)) this.endAfterMediaFailure('reject');
     }
   }
@@ -530,4 +533,9 @@ function buildSignedData(callId: string, sdp: string) {
 function parseFingerprint(sdp: string) {
   const match = sdp.match(/^a=fingerprint:[^ ]+ (.+)\r?$/m);
   return match?.[1];
+}
+
+// Браузер запретил микрофон или камеру: вместо повторного запроса — «Нет доступа» с инструкцией (доска `ZpSysGen`)
+function showMediaDenied(err: unknown, media: CallMedia) {
+  if (getIsPermissionError(err)) showPermissionDenied(media === 'video' ? 'camera' : 'microphone');
 }

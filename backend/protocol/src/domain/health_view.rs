@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use super::health::{self, HealthState};
 use super::health_day;
+use super::health_stats::{self, DayValue, Night, TAG_NO_SLEEP};
 use super::health_json::entry_json;
 use crate::pb::parvane::health::v1::Entry;
 
@@ -25,7 +26,10 @@ pub const KIND_SLEEP: &str = "sleep";
 pub const KIND_SLEEP_START: &str = "sleep_start";
 pub const KIND_SLEEP_END: &str = "sleep_end";
 /// Виды, у которых значение дня — сумма записей.
-const SUM_KINDS: [&str; 2] = ["steps", "water"];
+pub(super) const SUM_KINDS: [&str; 2] = ["steps", "water"];
+/// Виды, у которых цель — верхняя граница: дни выше неё подсвечиваются.
+const UPPER_BOUND_KINDS: [&str; 1] = ["pressure"];
+pub(super) const KIND_MOOD: &str = "mood";
 const GOAL_SLEEP_BED: &str = "sleep_bed";
 const GOAL_SLEEP_WAKE: &str = "sleep_wake";
 /// Цели, которые показывают свои блоки (сон, питание, активность), а не список показателей.
@@ -38,6 +42,8 @@ const YEAR_MONTHS: i64 = 12;
 pub const TAG_SLEEP_ASIDE: &str = "aside";
 const DAY_MIN: i64 = 1440;
 const DAY_MS: i64 = 86_400_000;
+/// Сон короче десяти минут не записывается (как и в проверке формы, `health_parse::sleep_in_range`).
+const MIN_SLEEP_MS: i64 = 10 * 60_000;
 
 pub(super) fn day_index(ms: i64, tz_min: i32) -> i64 {
     (ms + i64::from(tz_min) * 60_000).div_euclid(DAY_MS)
@@ -119,8 +125,29 @@ fn sleep_json(e: &Entry) -> Value {
     })
 }
 
+/// Сон, который входит в ночь дня: не «не в сумму» и с длительностью; «не спал» — ночь в ноль минут.
+fn counts_as_sleep(e: &Entry) -> bool {
+    e.kind == KIND_SLEEP && e.tag != TAG_SLEEP_ASIDE && (sleep_minutes(e) > 0 || e.tag == TAG_NO_SLEEP)
+}
+
+/// Ночи по дням пробуждения до `today`: сумма сна дня и «лёг / встал» самого длинного сна.
+pub(super) fn nights_by_day(entries: &[&Entry], today: i64) -> BTreeMap<i64, Night> {
+    let mut by_day: BTreeMap<i64, Vec<&Entry>> = BTreeMap::new();
+    for e in entries.iter().copied().filter(|e| counts_as_sleep(e) && entry_day_index(e) <= today) {
+        by_day.entry(entry_day_index(e)).or_default().push(e);
+    }
+    by_day
+        .into_iter()
+        .filter_map(|(day, list)| {
+            let main = list.iter().max_by_key(|e| (sleep_minutes(e), e.at_ms))?;
+            let clock_of = |ms: i64| has_span(main).then(|| i64::from(health::minute_of_day(ms, main.tz_min)));
+            Some((day, Night { total: list.iter().map(|e| sleep_minutes(e)).sum(), bed: clock_of(main.at_ms), wake: clock_of(main.end_ms) }))
+        })
+        .collect()
+}
+
 fn sleep_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64, now_ms: i64) -> Value {
-    let sleeps: Vec<&&Entry> = entries.iter().filter(|e| e.kind == KIND_SLEEP && e.tag != TAG_SLEEP_ASIDE && sleep_minutes(e) > 0 && entry_day_index(e) <= today).collect();
+    let sleeps: Vec<&&Entry> = entries.iter().filter(|e| counts_as_sleep(e) && entry_day_index(e) <= today).collect();
     // Главный сон дня — самый длинный; дневной сон входит в сумму дня, но не в «лёг / встал»
     let main_of = |day: i64| sleeps.iter().filter(|e| entry_day_index(e) == day).max_by_key(|e| (sleep_minutes(e), e.at_ms));
     let total_of = |day: i64| sleeps.iter().filter(|e| entry_day_index(e) == day).map(|e| sleep_minutes(e)).sum::<i64>();
@@ -135,6 +162,8 @@ fn sleep_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64, now_m
                 // 0 — понедельник (1970-01-01 — четверг)
                 "weekday": (day + 3).rem_euclid(7),
                 "minutes": if main.is_some() { json!(total_of(day)) } else { Value::Null },
+                // Отклонение ночи от цели (минуты)
+                "deltaMinutes": main.and(goal_minutes).map(|goal| total_of(day) - goal),
                 "bedMin": main.map_or(Value::Null, |e| clock(e, e.at_ms)),
                 "wakeMin": main.map_or(Value::Null, |e| clock(e, e.end_ms)),
             })
@@ -151,14 +180,42 @@ fn sleep_view(entries: &[&Entry], goals: &BTreeMap<&str, f64>, today: i64, now_m
         "lastDeltaMinutes": last_day.zip(goal_minutes).map(|(day, goal)| total_of(day) - goal),
         "week": week,
         "avgMinutes": avg,
-        "month": (today - SERIES_DAYS + 1..=today).map(|day| json!({"day": day_text(day), "minutes": main_of(day).map(|_| total_of(day))})).collect::<Vec<_>>(),
+        // Месяц по дням: сумма сна и «лёг / встал» главного сна — режим за месяц
+        "month": (today - SERIES_DAYS + 1..=today).map(|day| {
+            let main = main_of(day);
+            json!({
+                "day": day_text(day), "weekday": (day + 3).rem_euclid(7), "minutes": main.map(|_| total_of(day)),
+                "deltaMinutes": main.and(goal_minutes).map(|goal| total_of(day) - goal),
+                "bedMin": main.map_or(Value::Null, |e| clock(e, e.at_ms)),
+                "wakeMin": main.map_or(Value::Null, |e| clock(e, e.end_ms)),
+            })
+        }).collect::<Vec<_>>(),
         "year": year_months(today).into_iter().map(|(month, from, to)| {
             let nights: Vec<f64> = (from..to.min(today + 1)).filter(|d| main_of(*d).is_some()).map(|d| total_of(d) as f64).collect();
             json!({"month": month, "minutes": mean(&nights).map(f64::round)})
         }).collect::<Vec<_>>(),
         // Отмечено «лёг», а «встал» ещё нет: экран предлагает «Встал»
         "openStartMs": open_sleep_start(entries, now_ms).map(|e| e.at_ms),
+        "stats": health_stats::sleep_stats(
+            &nights_by_day(entries, today), today,
+            goals.get(GOAL_SLEEP_BED).map(|v| *v as i64), goals.get(GOAL_SLEEP_WAKE).map(|v| *v as i64), goal_minutes,
+        ),
     })
+}
+
+/// Значения дней показателя: сумма у видов-сумм, иначе последняя запись дня; и число записей дня.
+fn day_values(of_kind: &[&&Entry], is_sum: bool) -> BTreeMap<i64, DayValue> {
+    let mut by_day: BTreeMap<i64, Vec<&Entry>> = BTreeMap::new();
+    for e in of_kind {
+        by_day.entry(entry_day_index(e)).or_default().push(e);
+    }
+    by_day
+        .into_iter()
+        .filter_map(|(day, list)| {
+            let refs: Vec<&&Entry> = list.iter().collect();
+            day_value(&refs, is_sum).map(|(v, v2)| (day, (v, v2, list.len())))
+        })
+        .collect()
 }
 
 /// Значение дня: сумма записей у видов-сумм, иначе последняя запись дня.
@@ -187,8 +244,15 @@ fn metric_view(kind: &str, entries: &[&Entry], goals: &BTreeMap<&str, f64>, toda
         }
     };
     let goal = goals.get(kind).copied();
-    let series: Vec<Value> = (today - SERIES_DAYS + 1..=today)
-        .filter_map(|day| value_on(day).map(|(v, v2)| json!({"day": day_text(day), "value": round1(v), "value2": round1(v2)})))
+    let is_upper_bound = UPPER_BOUND_KINDS.contains(&kind);
+    let days = day_values(&of_kind, is_sum);
+    // `goalMet` — у сумм набрано не меньше цели, у верхней границы (давление) — не выше; без цели — нет
+    let series: Vec<Value> = days
+        .range(today - SERIES_DAYS + 1..=today)
+        .map(|(day, (v, v2, _))| {
+            let met = goal.filter(|_| is_sum || is_upper_bound).map(|g| health_stats::goal_met(*v, g, is_upper_bound));
+            json!({"day": day_text(*day), "weekday": (day + 3).rem_euclid(7), "value": round1(*v), "value2": round1(*v2), "goalMet": met})
+        })
         .collect();
     let today_value = value_on(today).map(|v| round1(v.0));
     json!({
@@ -202,6 +266,11 @@ fn metric_view(kind: &str, entries: &[&Entry], goals: &BTreeMap<&str, f64>, toda
         "today": today_value,
         "weekDelta": delta(7),
         "monthDelta": delta(30),
+        "yearDelta": delta(365),
+        // Темп за неделю по прямой через дни месяца (вес); у сумм — нет
+        "paceWeek": if is_sum { None } else { health_stats::pace_week(&days, today) },
+        "isUpperBound": is_upper_bound,
+        "periods": health_stats::metric_periods(&days, today, goal, is_sum, is_upper_bound),
         "series": series,
         // Год по месяцам: среднее значений дней (у сумм — среднее дневных итогов); месяц без записей — пусто
         "year": year_months(today).into_iter().map(|(month, from, to)| {
@@ -230,10 +299,18 @@ pub fn view_json(state: &HealthState, now_ms: i64, tz_min: i32) -> String {
         "sleep": sleep_view(&entries, &goals, today, now_ms),
         "metrics": kinds.iter().map(|k| metric_view(k, &entries, &goals, today)).collect::<Vec<_>>(),
         "recent": recent,
+        "moodSleep": mood_sleep_view(&entries, today),
         "nutrition": health_day::nutrition_view(&entries, &goals, today),
         "activity": health_day::activity_view(&entries, &goals, today),
     })
     .to_string()
+}
+
+/// Связь самочувствия со сном за месяц (`health_stats::mood_sleep`): оценка дня — последняя запись дня.
+fn mood_sleep_view(entries: &[&Entry], today: i64) -> Value {
+    let moods: Vec<&&Entry> = entries.iter().filter(|e| e.kind == KIND_MOOD && entry_day_index(e) <= today).collect();
+    let mood_days: BTreeMap<i64, f64> = day_values(&moods, false).into_iter().map(|(d, v)| (d, v.0)).collect();
+    health_stats::mood_sleep(&mood_days, &nights_by_day(entries, today), today)
 }
 
 /// Изменения для записи разобранного ввода (`health_parse::parse_json` → поле `entries`): каждой записи —
@@ -268,6 +345,10 @@ pub fn compose_changes(state: &HealthState, parsed: &[Value], now_ms: i64) -> Va
         if closes {
             let (id, start_ms, _) = open.take().unwrap_or_default();
             changes.push(json!({"entry": {"id": id, "deleted": true}}));
+            // «Встал» через минуты после «лёг» — передумал ложиться: отметка снимается, сна нет
+            if kind == KIND_SLEEP_END && at_ms - start_ms < MIN_SLEEP_MS {
+                continue;
+            }
             if kind == KIND_SLEEP_END {
                 entry["kind"] = json!(KIND_SLEEP);
                 entry["atMs"] = json!(start_ms);
@@ -406,6 +487,10 @@ mod tests {
         let after: Value = serde_json::from_str(&view_json(&next, at(0, 7, 30), TZ)).unwrap();
         assert_eq!(after["sleep"]["openStartMs"], Value::Null);
         assert_eq!(after["sleep"]["last"]["minutes"], 460);
+        // «Встал» через пять минут после «лёг» — отметка снята, сна нет
+        let quick = json!({"kind": "sleep_end", "atMs": at(-1, 23, 45), "endMs": 0, "tzMin": TZ, "value": 0, "value2": 0, "unit": "", "source": "button"});
+        let cancelled = compose_changes(&st, &[quick], at(-1, 23, 46));
+        assert_eq!(cancelled["changes"], json!([{"entry": {"id": "start", "deleted": true}}]));
         // Без незакрытого «лёг» отметка «встал» остаётся отметкой; у каждой записи свой id
         let lone = compose_changes(&HealthState::default(), &[woke.clone(), woke], at(0, 7, 30));
         assert_eq!(lone["changes"][0]["entry"]["kind"], "sleep_end");
@@ -437,7 +522,9 @@ mod tests {
         // Сон «не в сумму» виден в записях, но ночь остаётся 8 часов
         assert_eq!(v["sleep"]["lastTotalMinutes"], 480);
         assert_eq!(v["sleep"]["month"].as_array().unwrap().len(), 30);
-        assert_eq!(v["sleep"]["month"][29], json!({"day": "2026-11-15", "minutes": 480}));
+        assert_eq!(v["sleep"]["month"][29]["day"], "2026-11-15");
+        assert_eq!(v["sleep"]["month"][29]["minutes"], 480);
+        assert_eq!(v["sleep"]["month"][29]["bedMin"], 1380, "режим за месяц — «лёг» главного сна");
         assert_eq!(v["sleep"]["year"][11], json!({"month": "2026-11", "minutes": 480.0}));
         assert!(v["recent"].as_array().unwrap().iter().any(|e| e["id"] == "nap"));
     }

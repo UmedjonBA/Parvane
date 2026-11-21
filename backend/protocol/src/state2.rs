@@ -215,7 +215,7 @@ pub fn value_type(kind: i32) -> Option<&'static str> {
         K::FolderOrder => "parvane.state.v1.FolderOrder",
         K::ChatCleared => "parvane.state.v1.ChatCleared",
         K::FavedSticker => "parvane.state.v2.FavedSticker",
-        K::Archive | K::UnreadMark | K::ReportClosed | K::Unspecified => return None,
+        K::Archive | K::UnreadMark | K::ReportClosed | K::MemberHidden | K::Unspecified => return None,
     })
 }
 
@@ -257,6 +257,7 @@ fn check_key(object: &Option<ObjectKey>) -> Result<(i32, String)> {
         Ok(K::GroupInvite) => is_hex(k, 64),
         Ok(K::CloudContainer | K::StickerPack) => !k.is_empty(),
         Ok(K::ReportClosed) => crate::report_inbox::is_closed_key(k),
+        Ok(K::MemberHidden) => crate::report_inbox::is_hidden_member_key(k),
         Ok(K::SavedGif) => k.len() > 2 && k.starts_with("g:"),
         Ok(K::FavedSticker) => k.split_once('/').is_some_and(|(a, b)| !a.is_empty() && !b.is_empty()),
         // Вид новее этой версии: ключ хранится как есть (лимит длины — схема).

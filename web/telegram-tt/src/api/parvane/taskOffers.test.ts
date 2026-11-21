@@ -74,7 +74,8 @@ describe('задание в чат (spec 011, TASK-1)', () => {
 
   it('событие для плана: id карточки, конец по длительности, час по умолчанию, не позже конца суток', () => {
     const uuid = '0192f0e4-1a2b-7c3d-8e4f-001122334455';
-    expect(buildOfferEvent(uuid, { name: 'Созвон', day: '2026-10-20', start: '10:00', minutes: 45 })).toEqual({
+    const offer = { name: 'Созвон', day: '2026-10-20', start: '10:00', minutes: 45 };
+    expect(buildOfferEvent(uuid, offer, 'bob@local')).toEqual({
       id: uuid,
       name: 'Созвон',
       start: '10:00',
@@ -87,9 +88,11 @@ describe('задание в чат (spec 011, TASK-1)', () => {
       allDay: false,
       isHoliday: false,
       color: 0,
+      source: { chat: 'bob@local', opId: uuid.replace(/-/g, '') },
     });
-    expect(buildOfferEvent(uuid, { name: 'Отчёт', day: '2026-10-20', minutes: 60 })).toBeUndefined();
-    expect(buildOfferEvent(uuid, { name: 'Отчёт', day: '2026-10-20', start: '10:00', steps: ['а'] })).toBeUndefined();
+    expect(buildOfferEvent(uuid, { name: 'Отчёт', day: '2026-10-20', minutes: 60 }, 'bob@local')).toBeUndefined();
+    expect(buildOfferEvent(uuid, { name: 'Отчёт', day: '2026-10-20', start: '10:00', steps: ['а'] }, 'bob@local'))
+      .toBeUndefined();
     expect(getOfferEventEnd('09:30')).toBe('10:30');
     expect(getOfferEventEnd('09:30', 0)).toBe('10:30');
     expect(getOfferEventEnd('23:30', 120)).toBe('23:59');

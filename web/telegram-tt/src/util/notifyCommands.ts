@@ -38,6 +38,9 @@ export function runNotifyCommand(command: NotifyCommand) {
     case 'reminder':
       runReminderCommand(command);
       break;
+    case 'music':
+      runMusicCommand(command);
+      break;
     case 'wake':
       setParvaneSection('messenger');
       break;
@@ -84,6 +87,18 @@ function runReminderCommand({ action, reminderKey, reminderTitle }: NotifyComman
     return;
   }
   openPlannerView('today');
+}
+
+// «Трек скачан на сервер»: «Слушать» играет трек, нажатие на уведомление открывает «Музыку»
+function runMusicCommand({ action, trackId }: NotifyCommand) {
+  if (!getIsModuleOn('music')) return;
+  setParvaneSection('music');
+  if (action !== 'listen' || !trackId) return;
+  // «Музыка» — отдельная часть сборки: грузится, только когда нужна
+  void import('../components/parvane/music/musicPlayer').then(async ({ callMusic, playTracks }) => {
+    const tracks = await callMusic('parvaneMusicTracks', { trackIds: [trackId] }).catch(() => undefined);
+    if (tracks?.length) playTracks(tracks);
+  });
 }
 
 function focusComposer() {

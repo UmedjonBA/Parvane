@@ -155,7 +155,18 @@ async function runBase() {
   await form.locator('#sign-up-parvane-password').fill(PASSWORD);
   await form.locator('[data-auth-submit]').click();
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  console.log('OK: телефон — без горизонтальной прокрутки, регистрация входит');
+  // Ключ восстановления — последний шаг регистрации, дальше — выбор модулей (доски `XpAuth`, `XpStart`)
+  const keyScreen = page.locator('[data-recovery-key-screen]');
+  await visible(keyScreen, 'экран ключа восстановления после регистрации');
+  // На телефоне шаг — в шапке экрана (`AuthBar`), подпись окна скрыта
+  await visible(keyScreen.getByText(/^(step 2 of 2|шаг 2 из 2)$/).filter({ visible: true }).first(), '«шаг N из N» на экране ключа');
+  await keyScreen.locator('[data-recovery-key-saved]').check();
+  const keyDone = keyScreen.locator('[data-recovery-key-done]');
+  // Телефон сценария — на русском (язык браузера)
+  assert.match((await keyDone.textContent()).trim(), /^(Next: choose modules|Дальше: выбрать модули)$/, 'кнопка ведёт к выбору модулей');
+  await keyDone.click();
+  await visible(page.locator('[data-first-run="phone"]'), 'выбор модулей после ключа');
+  console.log('OK: телефон — без горизонтальной прокрутки, регистрация входит, ключ ведёт к выбору модулей');
   await phone.context.close();
 }
 

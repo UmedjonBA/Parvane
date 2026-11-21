@@ -10,11 +10,16 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   dismissRecoveryKeyDialog,
+  openNotesView,
   preparePage,
   relogin,
   reloadPage,
   openPlannerScreen,
+  waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-notes-e2e-1';
 const WIDE = { width: 1600, height: 900 };
@@ -62,10 +67,10 @@ try {
       return;
     }
     if (!(await knowledge.isVisible().catch(() => false))) await moduleButton('Notes').click();
-    const tabs = knowledge.locator('[role="tablist"]');
+    const isDesk = await knowledge.locator('[data-notes-column]').isVisible().catch(() => false);
     // Заметка на весь экран телефона: видов над ней нет, открыт и так список
-    if (name === 'Notes' && !(await tabs.count())) return;
-    await tabs.getByRole('tab', { name: VIEW_TABS[name], exact: true }).click();
+    if (!isDesk && name === 'Notes' && !(await knowledge.locator('[role="tablist"]').count())) return;
+    await openNotesView(knowledge, VIEW_TABS[name]);
   };
 
   // ── «Заметки» и «Файлы» — отдельные модули боковой панели; в «Заметках» виды: список, граф, холст ──
@@ -74,10 +79,12 @@ try {
   assert.equal(await cloud.locator('[role="tab"][data-view]').count(), 0, 'в «Файлах» остались вкладки заметок');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'модуль «Заметки»');
+  // Компьютер (`ZdNotesX`): «Список / Граф» в шапке, «Холсты» — в колонке «Ещё»
   assert.deepEqual(
-    await knowledge.locator('[role="tablist"] [role="tab"]').allInnerTexts(), ['List', 'Graph', 'Canvas'],
-    'виды «Заметок» — не «Список / Граф / Холст»',
+    await knowledge.locator('[data-notes-desk-head] [role="tab"]').allInnerTexts(), ['List', 'Graph'],
+    'виды «Заметок» в шапке — не «Список / Граф»',
   );
+  await visible(knowledge.locator('[data-notes-column] [data-notes-place="canvas"]'), '«Холсты» в колонке');
   console.log('OK: «Заметки» и «Файлы» — отдельные модули, в «Заметках» три вида');
 
   // ── Новое хранилище встречает папкой «Справка Parvane»: заметки о продукте, связанные ссылками ──
@@ -102,7 +109,9 @@ try {
   ).catch(() => assert.fail(what));
   const openFolder = knowledge.locator('[data-folder-open]');
   const closeFolder = async () => {
-    if (await openFolder.count()) await knowledge.locator('[data-folder-back]').click();
+    // Компьютер: папки — в колонке, «Все заметки» снимает выбор; телефон — стрелка назад из папки
+    const isDesk = await knowledge.locator('[data-notes-column]').isVisible().catch(() => false);
+    if (await openFolder.count()) await knowledge.locator(isDesk ? '[data-notes-all]' : '[data-folder-back]').click();
     await openFolder.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   };
   const enterFolder = async (name) => {
@@ -184,7 +193,8 @@ try {
   // Папка открывается: в списке остаются только её заметки, стрелка возвращает к папкам
   await enterFolder(GUIDE_FOLDER);
   await waitRows(ALL_ROWS, GUIDE_NOTES, 'открытая папка показывает не свои заметки');
-  assert.equal(await knowledge.locator('[data-notes-folders]').count(), 0, 'под открытой папкой остался список папок');
+  // Папки на компьютере остаются в колонке, выбранная подсвечена
+  assert.equal(await guide.getAttribute('aria-current'), 'true', 'папка не выбрана в колонке');
   await closeFolder();
   await visible(guide, 'папки после возврата из открытой');
   // Новая папка: пустая видна в списке и предлагает добавить заметку
@@ -223,8 +233,24 @@ try {
   await row(DRAFT).click();
   await chipOf(FOLDER).click();
   await visible(picker, 'выбор папки для заметки');
-  assert.equal(await picker.locator(`[data-folder-option="${FOLDER}"]`).getAttribute('aria-current'), 'true', 'текущая папка в выборе не отмечена');
+  // Шторка переноса по доске `ZpNotesX`: «Перенести в папку» с названием заметки, поиск, счётчики, «заметка сейчас
+  // здесь», выбор в два шага
+  assert.equal(await page.locator('[data-sheet-subtitle]').filter({ hasText: DRAFT }).count(), 1, 'нет названия заметки под заголовком переноса');
+  const current = picker.locator(`[data-folder-option="${FOLDER}"]`);
+  assert.equal(await current.getAttribute('aria-current'), 'true', 'текущая папка в выборе не отмечена');
+  await visible(current.locator('[data-folder-here]'), 'подпись «заметка сейчас здесь»');
+  assert.equal(await current.locator('[data-folder-option-count]').innerText(), '1', 'счётчик заметок у папки в переносе');
+  assert.equal(await picker.locator('[data-folder-move]').isDisabled(), true, 'перенос в ту же папку доступен');
+  await picker.locator('[data-folder-search]').fill(FOLDER.slice(0, 3));
+  await visible(current, 'папка по поиску');
+  await gone(picker.locator('[data-folder-option=""]'), 'поиск не отсеял «Без папки»');
+  await picker.locator('[data-folder-search]').fill('');
   await picker.locator('[data-folder-option=""]').click();
+  // Нажатие строки только отмечает папку — заметка ещё на месте
+  await visible(picker.locator('[data-folder-option=""][aria-pressed="true"]'), 'строка не отмечена');
+  await page.waitForTimeout(300);
+  await visible(chipOf(FOLDER), 'заметка перенеслась без кнопки «Перенести»');
+  await picker.locator('[data-folder-move=""]').click();
   await visible(rowsIn('').and(row(DRAFT)), 'заметка перенесена в «Без папки»');
   await visible(chipOf(''), 'у заметки нет папки');
   await folderCount(FOLDER, 0, 'папка после переноса не пуста');
@@ -239,6 +265,8 @@ try {
   // Переименование папки: заметка остаётся в ней
   await folderMenu(FOLDER_NEW);
   await visible(page.locator('[data-folder-sheet="edit"]'), 'шторка папки');
+  // Действия с папкой строками: «Переименовать» раскрывает поле
+  await page.locator('[data-folder-sheet="edit"] [data-folder-rename]').click();
   await folderName.fill(FOLDER);
   await folderName.press('Enter');
   await visible(page.locator('[data-folder-error="taken"]'), 'отказ занятому названию папки');
@@ -252,6 +280,9 @@ try {
   // Удаление папки с заметкой: после вопроса заметка переезжает в «Без папки»
   await folderMenu(FOLDER_RENAMED);
   await page.locator('[data-folder-delete]').click();
+  // Вопрос по доске: число заметок словами и ссылки на них снаружи, ниже — другие действия с папкой
+  await visible(page.locator('[data-folder-removal-text]').filter({ hasText: 'It holds 1 note.' }), 'текст вопроса об удалении папки');
+  await visible(page.locator('[data-folder-removal] [data-folder-actions] [data-folder-rename]'), 'другие действия в вопросе');
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.locator('#knowledge-folder-delete-move').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(600);
@@ -346,10 +377,11 @@ try {
   await page.keyboard.press('Escape');
   console.log('OK: пункт со сроком — задача «Плана», галочка ходит в обе стороны');
 
-  // ── Заметка дня: кнопка на «Сегодня» создаёт её по шаблону в папке «Ежедневные» ──
-  // Заметки дня ещё нет: карточка приглашает её написать
-  await visible(planner.locator('[data-today-note="empty"]').getByText('Write the daily note'), 'приглашение написать заметку дня');
-  await planner.locator('[data-today-note-empty]').click();
+  // ── Заметка дня: на компьютере в колонке дня — сразу поле (доска `RdPlan`), «Открыть» создаёт её по шаблону ──
+  const dailyEditor = planner.locator('[data-today-note-editor]');
+  await visible(planner.locator('[data-today-note="empty"]'), 'пустая заметка дня');
+  assert.equal(await dailyEditor.getAttribute('placeholder'), 'What matters today', 'подсказка поля заметки дня');
+  await planner.locator('[data-today-note-open]').click();
   const dayKey = await page.evaluate(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -357,21 +389,31 @@ try {
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
   await visible(folderOf('Daily'), 'папка ежедневных заметок');
   await openPlannerScreen(page, 'today');
-  // Заметка по шаблону пуста: приглашение остаётся; «Изменить» — правка на месте (как в прототипе), Escape отменяет
+  // Заметка по шаблону пуста: в поле — её текст; Escape отменяет набранное
   await visible(planner.locator('[data-today-note="empty"]'), 'карточка пустой заметки дня');
-  const dailyEditor = planner.locator('[data-today-note-editor]');
-  await planner.locator('[data-today-daily]').click();
-  await visible(dailyEditor, 'поле заметки дня на «Сегодня»');
+  await page.waitForFunction(() => document.querySelector('[data-today-note-editor]')?.value.startsWith('# '), undefined, {
+    timeout: STEP_TIMEOUT_MS,
+  });
   assert.ok((await dailyEditor.inputValue()).startsWith(`# ${dayKey}`), 'в поле не текст заметки дня');
+  // Открытая только что заметка в скрытых «Заметках» ещё ставит курсор в свой редактор: ввод в поле «Плана» —
+  // после того, как фокус в нём держится (уход фокуса сохраняет поле, и Escape уже нечего отменять)
+  const isEditorFocused = () => page.evaluate(() => document.activeElement?.matches('[data-today-note-editor]'));
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await dailyEditor.click();
+    await page.waitForTimeout(600);
+    if (await isEditorFocused()) break;
+  }
+  await dailyEditor.press('Control+End');
+  await dailyEditor.pressSequentially('черновик');
+  assert.ok(await isEditorFocused(), 'фокус ушёл из поля заметки дня во время ввода');
   await dailyEditor.press('Escape');
-  await dailyEditor.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  // Нажатие на приглашение по-прежнему открывает саму заметку в «Знаниях»
-  await planner.locator('[data-today-note-empty]').click();
-  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по нажатию на приглашение');
+  // Поле перерисовывается после отмены не в тот же кадр
+  await page.waitForFunction(() => !document.querySelector('[data-today-note-editor]')?.value.includes('черновик'),
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('Escape не отменил набранное'));
   console.log('OK: заметка дня создаётся с экрана «Сегодня»');
 
-  // ── Текст заметки дня виден на «Сегодня»; нажатие на него открывает заметку ──
-  const DAILY_TEXT = 'Выспался, день спокойный';
+  // ── Текст заметки дня виден в поле «Сегодня»; «Открыть» открывает заметку ──
+  await planner.locator('[data-today-note-open]').click();
   await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill([
     `# ${dayKey}`, '', 'Выспался, **день** спокойный', '', '- [ ] разобрать почту', '- [x] зарядка',
@@ -380,33 +422,30 @@ try {
   await visible(body.getByText('разобрать почту'), 'текст заметки дня в «Знаниях»');
   await openPlannerScreen(page, 'today');
   const dailyCard = planner.locator('[data-today-note="text"]');
-  await visible(dailyCard.getByText(DAILY_TEXT), 'текст заметки дня на «Сегодня» (разметка упрощена)');
-  await visible(dailyCard.getByText('разобрать почту'), 'пункт заметки дня на «Сегодня»');
-  await visible(dailyCard.locator('[data-mark="done"]'), 'отмеченный пункт заметки дня');
-  assert.equal(await dailyCard.getByText(dayKey).count(), 0, 'заголовок с датой на карточке заметки дня повторён');
-  assert.equal(await planner.locator('[data-today-note-empty]').count(), 0, 'приглашение осталось при написанной заметке');
-  await dailyCard.locator('[data-today-note-text]').click();
-  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по нажатию на её текст');
+  await visible(dailyCard, 'заметка дня с текстом');
+  assert.ok((await dailyEditor.inputValue()).includes('разобрать почту'), 'текст заметки дня в поле «Сегодня»');
+  await dailyCard.locator('[data-today-note-open]').click();
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по «Открыть»');
   await openPlannerScreen(page, 'today');
-  await visible(dailyCard.getByText(DAILY_TEXT), 'текст заметки дня после возврата на «Сегодня»');
-  console.log('OK: текст заметки дня на «Сегодня», нажатие открывает заметку');
+  await visible(dailyCard, 'заметка дня после возврата на «Сегодня»');
+  console.log('OK: текст заметки дня на «Сегодня», «Открыть» открывает заметку');
 
-  // ── Правка заметки дня прямо на «Сегодня»; «Открыть день» у заметки дня ───
+  // ── Правка заметки дня прямо на «Сегодня» (сохраняется, когда фокус уходит); «Открыть день» ───
   const ADDED_LINE = 'дописано на экране Сегодня';
-  await planner.locator('[data-today-daily]').click();
-  await visible(dailyEditor, 'поле заметки дня с текстом');
-  assert.ok((await dailyEditor.inputValue()).includes('разобрать почту'), 'в поле не прежний текст заметки');
+  await dailyEditor.click();
   await dailyEditor.press('Control+End');
   await dailyEditor.pressSequentially(`\n${ADDED_LINE}`);
-  await planner.locator('[data-today-daily-done]').click();
-  await dailyEditor.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await visible(dailyCard.getByText(ADDED_LINE), 'дописанная строка на карточке');
-  await dailyCard.locator('[data-today-note-text]').click();
+  await planner.locator('[data-planner-day-aside] h3').first().click();
+  await page.waitForFunction((line) => !document.querySelector('[data-today-note-editor]')?.disabled
+    && document.querySelector('[data-today-note-editor]')?.value.includes(line), ADDED_LINE, { timeout: STEP_TIMEOUT_MS });
+  await dailyCard.locator('[data-today-note-open]').click();
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня после правки на «Сегодня»');
   await visible(body.getByText(ADDED_LINE), 'правка с «Сегодня» в самой заметке');
   await visible(body.getByText('разобрать почту'), 'прежний текст заметки после правки на «Сегодня»');
   await note.locator('[data-note-open-day]').click();
-  await visible(planner.locator('[data-today-note="text"]').getByText(ADDED_LINE), '«Открыть день» — «Сегодня» этого дня');
+  await page.waitForFunction((line) => document.querySelector('[data-today-note-editor]')?.value.includes(line), ADDED_LINE, {
+    timeout: STEP_TIMEOUT_MS,
+  });
   console.log('OK: заметка дня правится на «Сегодня»; «Открыть день» ведёт в «План»');
 
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────
@@ -1530,7 +1569,9 @@ try {
   await openTab('Notes');
   await row(NOTE).click();
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка перед «Запланировать»');
-  await note.locator('[data-note-plan]').click();
+  // На компьютере «Запланировать» — пункт меню «⋮» (`DeskNotes`: кнопки внизу заметки нет)
+  assert.equal(await note.locator('[data-note-plan]').count(), 0, 'кнопка «Запланировать» внизу заметки на компьютере');
+  await noteAction(note, 'plan');
   await visible(quickInput, 'окно ввода текстом поверх заметки');
   // Заготовка приходит в поле эффектом после показа окна
   await page.waitForFunction(
@@ -1558,10 +1599,10 @@ try {
 
   // ── «Файлы»: хранилище — обычная папка облака с файлами .md ───────────────
   await openTab('Files');
-  await visible(cloud.getByText('Knowledge', { exact: true }), 'папка хранилища в облаке');
+  await visible(cloud.getByText('Notes', { exact: true }), 'папка хранилища в облаке');
   // Служебная отметка справки (`.parvane-guide.json` в корне хранилища) в «Файлах» не видна: ни в папке,
   // ни в поиске
-  await cloud.locator('[data-node-id][data-name="Knowledge"]').click();
+  await cloud.locator('[data-node-id][data-name="Notes"]').click();
   await visible(cloud.locator('[data-node-id][data-name$=".md"]'), 'заметки в папке хранилища');
   assert.equal(
     await cloud.locator('[data-node-id][data-name^=".parvane-"]').count(), 0, 'служебный файл виден в папке хранилища',
@@ -1574,7 +1615,7 @@ try {
   assert.equal(await cloud.locator('[data-node-id]').count(), 0, 'служебный файл найден поиском');
   await cloud.getByRole('searchbox').fill('');
   await visible(cloud.locator('[data-node-id][data-name$=".md"]'), 'папка хранилища после сброса поиска');
-  console.log('OK: хранилище заметок — папка «Знания» в облаке');
+  console.log('OK: хранилище заметок — папка «Заметки» в облаке');
 
   // ── Всё пережило перезагрузку ─────────────────────────────────────────────
   await page.waitForTimeout(1500);
@@ -1583,10 +1624,9 @@ try {
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   // «Знания» после перезагрузки ещё не открывались: «Сегодня» читает одну заметку дня само
   await openPlannerScreen(page, 'today');
-  await visible(
-    planner.locator('[data-today-note="text"]').getByText(DAILY_TEXT),
-    'текст заметки дня на «Сегодня» после перезагрузки',
-  );
+  await page.waitForFunction((text) => document.querySelector('[data-today-note-editor]')?.value.includes(text),
+    'спокойный', { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('текст заметки дня на «Сегодня» после перезагрузки'));
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');
@@ -1789,7 +1829,7 @@ try {
   ).catch(async () => {
     assert.fail(`${what}: ${(await crumbTexts()).join(' / ')}; история ${await historyDump()}`);
   });
-  await cloudRow('Knowledge').click();
+  await cloudRow('Notes').click();
   await waitCrumbs(2, 'папка хранилища открыта');
   await cloud.locator('[data-node-id][data-kind="folder"]').first().click();
   await waitCrumbs(3, 'вложенная папка открыта');
@@ -1805,15 +1845,16 @@ try {
     .catch(() => assert.fail('после «назад» не видно списка чатов'));
   console.log('OK: системное «назад» — заметка, папки, раздел');
 
-  // «План»: открытые настройки закрываются «назад», следующее «назад» — к чатам
+  // «План»: открытый экран «Задачи» закрывается «назад», следующее «назад» — к чатам (настройки «Плана» — страница
+  // «Профиля», у неё своё «назад»)
   const phonePlanner = await openPlannerScreen(page, 'calendar');
-  await phonePlanner.getByRole('button', { name: 'Planner settings' }).first().click();
-  const plannerSide = phonePlanner.locator('[data-planner-side="settings"]');
-  await visible(plannerSide, 'настройки «Плана»');
+  await phonePlanner.locator('[data-planner-tasks-open]').first().click();
+  const plannerScreen = phonePlanner.locator('[data-planner-screen="tasks"]');
+  await visible(plannerScreen, 'экран «Задачи» «Плана»');
   await historyBack();
-  await plannerSide.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
-    .catch(() => assert.fail('«назад» не закрыло настройки «Плана»'));
-  assert.ok(await phonePlanner.isVisible(), '«План» остаётся открытым после «назад» из настроек');
+  await plannerScreen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('«назад» не закрыло экран «Задачи»'));
+  assert.ok(await phonePlanner.isVisible(), '«План» остаётся открытым после «назад» из экрана');
   await historyBack();
   await phonePlanner.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('«назад» из «Плана» не вернуло к чатам'));

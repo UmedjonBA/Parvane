@@ -100,7 +100,7 @@ const NoteMissingSheet = ({
         {Boolean(sources.length) && (
           <div className={styles.hint}>
             {lang('KnowledgeMissingRefs', {
-              count: sources.length, names: sources.map((source) => `«${source}»`).join(', '),
+              count: sources.length, names: lang.conjunction(sources.map((source) => `«${source}»`)),
             }, { pluralValue: sources.length })}
           </div>
         )}

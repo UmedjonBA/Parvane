@@ -6,3 +6,4 @@ export { default as Music } from '../components/parvane/music/Music';
 export { default as Knowledge } from '../components/parvane/notes/Knowledge';
 export { default as Cloud } from '../components/parvane/cloud/Cloud';
 export { default as ParvanePalette } from '../components/parvane/palette/ParvanePalette';
+export { default as PlannerQuickHost } from '../components/parvane/planner/PlannerQuickHost';

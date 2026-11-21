@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { LangFn } from '../../../util/localization';
 
 import {
-  formatDate, formatDay, formatDayLabel, formatDayLong, formatDayShort, formatMonth, formatMonthShort, formatNumber,
-  formatPeriod, formatRelativeDay, formatWeekday, formatWeekNumber, getLoadLevel,
+  formatDate, formatDay, formatDayHeading, formatDayLabel, formatDayLong, formatDayShort, formatDue, formatDurationFull,
+  formatMonth, formatMonthShort, formatNumber, formatPeriod, formatRecordCaption, formatRelativeDay, formatRepeat,
+  formatRepeatShort, formatWeekday, formatWeekdayShort, formatWeekNumber, formatWeekRange, getLoadLevel,
 } from './plannerFormat';
 import { fromDayKey } from './plannerModel';
 
@@ -70,5 +71,35 @@ describe('подписи дат и чисел: кэш Intl даёт то же, �
     expect(getLoadLevel(240, 480)).toBe(2);
     expect(getLoadLevel(400, 480)).toBe(3);
     expect(getLoadLevel(900, 480)).toBe(3);
+  });
+
+  // Ключ с параметрами — «ключ:значения», чтобы подписи было видно в проверке
+  const ruKeys = Object.assign((key: string, vars?: Record<string, unknown>) => (
+    vars ? `${key}:${Object.values(vars).join(',')}` : key
+  ), { code: 'ru' }) as unknown as LangFn;
+
+  it('подписи дней и недель по доскам (`DeskPlan`, `RdPlan`, `RpPlan`)', () => {
+    const lang = langOf('ru');
+    expect(formatWeekRange(lang, '2026-11-11')).toBe('9–15 ноября');
+    expect(formatWeekRange(lang, '2026-12-02')).toBe('30 нояб – 6 дек');
+    expect(formatWeekdayShort(lang, '2026-11-16')).toBe('пн');
+    expect(formatDayHeading(ruKeys, '2026-11-15', '2026-11-15')).toBe('PlannerToday, вс 15 ноября');
+    expect(formatDayHeading(ruKeys, '2026-11-17', '2026-11-15')).toBe('Вт 17 ноября');
+    expect(formatDue(ruKeys, '2026-11-20', '2026-11-15')).toBe('PlannerDueValue:пт');
+    expect(formatDue(ruKeys, '2026-12-20', '2026-11-15')).toBe('PlannerDueValue:20 декабря');
+  });
+
+  it('подпись строки записи, повтор по одному дню, длительность словами', () => {
+    const weekly = { kind: 'weekly' as const, interval: 1, weekdays: [3] };
+    expect(formatRecordCaption(ruKeys, {
+      kind: 'event', minutes: 90, repeat: weekly,
+    })).toBe('PlannerKindEvent · PlannerHoursValue:1 PlannerMinutesValue:30 · PlannerEveryWednesday');
+    expect(formatRecordCaption(ruKeys, { kind: 'task', minutes: 60, group: 'Дом' }))
+      .toBe('PlannerKindTask · PlannerHoursValue:1 · PlannerCaptionGroup:Дом');
+    expect(formatRepeatShort(ruKeys, weekly)).toBe('PlannerEveryWednesday');
+    // День записи — тот же день недели: «Каждую неделю» без перечня
+    expect(formatRepeat(ruKeys, weekly, '2026-11-18')).toBe('PlannerRepeatWeeklyPlain');
+    expect(formatDurationFull(ruKeys, 15)).toBe('PlannerMinutesFull:15');
+    expect(formatDurationFull(ruKeys, 90)).toBe('PlannerHoursFull:1 PlannerMinutesFull:30');
   });
 });

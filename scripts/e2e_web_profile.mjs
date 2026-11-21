@@ -185,7 +185,8 @@ try {
   await shown(page.locator('[data-language-time-format]'));
   console.log('OK: справка, отчёт об ошибке, формат времени');
   await profileRow(page, 'Log Out').click();
-  const logOutButton = page.locator('.Modal').getByRole('button', { name: 'Log Out' }).last();
+  // Шторка выхода (доска `PhProfileB`): «Просто выйти», «Выйти и сменить ключи» (у аккаунта одно устройство — её нет)
+  const logOutButton = page.locator('.Modal [data-sign-out-plain]').last();
   await shown(logOutButton);
   await page.locator('.Modal').getByRole('button', { name: 'Cancel' }).last().click();
   await hidden(logOutButton);
@@ -223,6 +224,15 @@ try {
   await notify.locator('[data-notify-row="quiet"]').click();
   await hidden(quietFrom);
   assert.deepEqual((await readWorkerPrefs())?.off, []);
+  // «Не беспокоить 1 час» (пункт меню трея доски `ZdMisc`): до какого часа — строкой, «Включить» снимает
+  await notify.locator('[data-notify-mute="hour"]').click();
+  await shown(notify.locator('[data-notify-mute="off"]').getByText(/Notifications are off until \d\d:\d\d/));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('parvane:notify-prefs') || '{}').muteUntil > Date.now());
+  assert.ok(((await readWorkerPrefs())?.muteUntil || 0) > Date.now(), 'service worker не получил «Не беспокоить 1 час»');
+  await notify.locator('[data-notify-mute="off"]').click();
+  await shown(notify.locator('[data-notify-mute="morning"]'));
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('parvane:notify-prefs') || '{}').muteUntil === 0);
+  assert.equal((await readWorkerPrefs())?.muteUntil, 0);
   console.log('OK: «Уведомления» — модули и «Не беспокоить» сохраняются и доходят до service worker');
 
   await profileRow(page, 'Privacy and Security').click();

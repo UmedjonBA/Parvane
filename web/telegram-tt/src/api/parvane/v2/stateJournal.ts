@@ -731,6 +731,27 @@ export function createStateJournal(deps: Deps) {
     });
   }
 
+  // ── скрытые у себя участники группы (REPORT-3): объект-признак, общий для своих устройств ───────────────
+  /** Скрыты ли у себя сообщения участника `user` (адрес) в группе. */
+  function isMemberHidden(address: string, user: string) {
+    const group = groupKeyOf(address);
+    const key = group ? engineStatic<string | null>('reportHiddenKey', { group, user }) : undefined;
+    return Boolean(key && objectsOf(readView(), K.memberHidden).some((o) => o.key === key));
+  }
+
+  /** Скрыть либо снова показать у себя сообщения участника группы; false — журнал не подключён либо ключ негоден. */
+  function setMemberHidden(address: string, user: string, shouldHide: boolean) {
+    return serial(async () => {
+      const group = groupKeyOf(address);
+      const key = session && group ? engineStatic<string | null>('reportHiddenKey', { group, user }) : undefined;
+      if (!key) return false;
+      if (shouldHide) await put([{ kind: K.memberHidden, key, value: {} }]);
+      else await commit([{ kind: K.memberHidden, key, delete: true }], []);
+      invalidateView();
+      return true;
+    });
+  }
+
   // ── ссылки-приглашения групп v2 (T160) ─────────────────────────────────────
   // Секрет ссылки знает только создавшее её устройство: запись журнала делит
   // ссылку между своими устройствами (в v1 основная ссылка у аккаунта одна).
@@ -1280,6 +1301,8 @@ export function createStateJournal(deps: Deps) {
     recordChatCleared,
     reportClosedOps,
     closeReports,
+    isMemberHidden,
+    setMemberHidden,
     recordGroupInvite,
     removeGroupInvite,
     plannerContainer,

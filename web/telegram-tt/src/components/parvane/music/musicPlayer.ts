@@ -31,8 +31,15 @@ export type MusicQueue = {
   upcoming: string[];
 };
 
+// Откуда играет очередь (доски `MusicPlayer`, `XdMusic`: «Играет из плейлиста · Для работы»)
+export type MusicQueueSource = {
+  kind: 'playlist' | 'album' | 'artist' | 'starred' | 'offline' | 'search' | 'home' | 'chat';
+  name?: string;
+};
+
 export type MusicPlayerState = {
   queue: MusicQueue;
+  source?: MusicQueueSource;
   // Сведения о треках очереди (сама очередь хранит только id)
   tracksById: Record<string, MusicTrack>;
   isPlaying: boolean;
@@ -44,6 +51,7 @@ const QUEUE_KEY = 'parvane:music-queue';
 // Последние сведения о библиотеке сервера — для запуска без сети
 const INFO_KEY = 'parvane:music-info';
 const RECENT_KEY = 'parvane:music-recent';
+const SOURCE_KEY = 'parvane:music-queue-source';
 const RECENT_LIMIT = 20;
 // Ссылка на поток берётся заново за минуту до конца срока
 const URL_MARGIN_MS = 60 * 1000;
@@ -55,7 +63,7 @@ const EMPTY_QUEUE: MusicQueue = {
 };
 
 const [getMusicPlayer, setMusicPlayer] = createSignal<MusicPlayerState>({
-  queue: EMPTY_QUEUE, tracksById: {}, isPlaying: false, hasError: false,
+  queue: EMPTY_QUEUE, tracksById: {}, isPlaying: false, hasError: false, source: readJson<MusicQueueSource>(SOURCE_KEY),
 });
 // Позиция — отдельным сигналом: меняется каждую секунду и не должна перерисовывать списки
 const [getMusicPosition, setMusicPosition] = createSignal({ positionSecs: 0, durationSecs: 0 });
@@ -235,7 +243,9 @@ async function loadCurrent(shouldPlay: boolean) {
   await player.play().catch(() => setPlaying(false));
 }
 
-function applyQueue(queue: MusicQueue, shouldPlay: boolean, extraTracks: MusicTrack[] = []) {
+function applyQueue(
+  queue: MusicQueue, shouldPlay: boolean, extraTracks: MusicTrack[] = [], source?: MusicQueueSource,
+) {
   const state = getMusicPlayer();
   const tracksById = { ...state.tracksById };
   extraTracks.forEach((track) => {
@@ -245,20 +255,27 @@ function applyQueue(queue: MusicQueue, shouldPlay: boolean, extraTracks: MusicTr
   Object.keys(tracksById).forEach((id) => {
     if (!queue.tracks.includes(id)) delete tracksById[id];
   });
+  // Новая очередь — новый источник; правка очереди источник не меняет, пустая — забывает
+  const nextSource = !queue.tracks.length ? undefined : source || state.source;
   setMusicPlayer({
-    queue, tracksById, isPlaying: state.isPlaying, hasError: false,
+    queue, tracksById, isPlaying: state.isPlaying, hasError: false, source: nextSource,
   });
   saveQueue(queue);
+  if (source || !nextSource) writeJson(SOURCE_KEY, nextSource);
   void loadCurrent(shouldPlay);
 }
 
-/** Играть список с этого трека: очередь заменяется. */
-export function playTracks(tracks: MusicTrack[], startIndex = 0) {
+/** Играть список с этого трека: очередь заменяется. `isShuffled` — «Вперемешку» (порядок задаёт движок); без
+ * него «вперемешку» остаётся, как было. `source` — откуда играет (подпись полного плеера). */
+export function playTracks(
+  tracks: MusicTrack[], startIndex = 0, options: { isShuffled?: boolean; source?: MusicQueueSource } = {},
+) {
   if (!tracks.length) return;
+  const start = options.isShuffled ? Math.floor(Math.random() * tracks.length) : startIndex;
   const queue = queueCall('musicQueueStart', {
-    tracks: tracks.map((track) => track.id), start: startIndex, seed: Date.now(),
+    tracks: tracks.map((track) => track.id), start, seed: Date.now(), shuffle: options.isShuffled || undefined,
   });
-  applyQueue(queue, true, tracks);
+  applyQueue(queue, true, tracks, options.source || { kind: 'home' });
 }
 
 /** Добавить в очередь: следующим после играющего либо в конец. Пустая очередь начинает играть. */
@@ -332,6 +349,8 @@ export async function setTrackStarred(track: MusicTrack, isStarred: boolean) {
   patch(isStarred);
   try {
     await callMusic('parvaneMusicStar', { trackId: track.id, isStarred });
+    // Число любимого в навигации — из сведений сервера
+    void loadMusicInfo().catch(() => undefined);
     return true;
   } catch {
     patch(!isStarred);
@@ -363,6 +382,7 @@ export async function restoreMusicQueue() {
   await loadProtocol();
   const queue = parseQueue(JSON.stringify(engineStatic<MusicQueue>('musicQueueView', { queue: saved })));
   if (!queue.tracks.length || getMusicPlayer().queue.tracks.length) return;
+  const source = readJson<MusicQueueSource>(SOURCE_KEY);
   const tracks: MusicTrack[] = [];
   for (let offset = 0; offset < queue.tracks.length; offset += TRACKS_PER_REQUEST) {
     const part = await callMusic('parvaneMusicTracks', {
@@ -373,7 +393,7 @@ export async function restoreMusicQueue() {
   // Очередь могли начать, пока шли запросы
   if (!tracks.length || getMusicPlayer().queue.tracks.length) return;
   if (tracks.length === queue.tracks.length) {
-    applyQueue(queue, false, tracks);
+    applyQueue(queue, false, tracks, source);
     return;
   }
   // Часть треков с сервера убрали: очередь собирается заново из оставшихся, в прежнем порядке
@@ -381,5 +401,5 @@ export async function restoreMusicQueue() {
   const rebuilt = engineStatic<MusicQueue>('musicQueueStart', {
     queue: saved, tracks: queue.upcoming.filter((id) => known.includes(id)), start: 0, shuffle: false,
   });
-  applyQueue(parseQueue(JSON.stringify(rebuilt)), false, tracks);
+  applyQueue(parseQueue(JSON.stringify(rebuilt)), false, tracks, source);
 }

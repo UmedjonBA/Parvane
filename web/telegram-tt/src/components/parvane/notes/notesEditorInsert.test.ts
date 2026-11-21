@@ -21,6 +21,10 @@ describe('заметки: кнопки разметки', () => {
     expect(applyEditorTool(at('см. ', 4), 'link')).toEqual(at('см. [[]]', 6));
   });
 
+  it('курсив (Ctrl+I) оборачивает выделение одной звёздочкой', () => {
+    expect(applyEditorTool(at('порт открыт', 5, 11), 'italic')).toEqual(at('порт *открыт*', 6, 12));
+  });
+
   it('код: в строке — кавычки, несколько строк и пустая строка — блок', () => {
     expect(applyEditorTool(at('узел wg0 готов', 5, 8), 'code')).toEqual(at('узел `wg0` готов', 6, 9));
     expect(applyEditorTool(at('', 0), 'code')).toEqual(at('```\n\n```', 4));

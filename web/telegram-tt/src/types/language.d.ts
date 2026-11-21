@@ -268,7 +268,6 @@ export interface LangPair {
   'ParvaneStateNeedsUpdate': undefined;
   'ParvaneMessageNeedsUpdate': undefined;
   'ParvaneDeviceLegacy': undefined;
-  'ParvaneInviteEditUnsupported': undefined;
   'ParvaneInviteImportersUnavailable': undefined;
   'ParvaneGroupAboutTooLong': undefined;
   'Channel.Persmission.Denied.SendMessages.DefaultRestrictedText': undefined;
@@ -2527,7 +2526,6 @@ export interface LangPair {
   'HealthSleepBed': undefined;
   'HealthSleepWake': undefined;
   'HealthNoEntries': undefined;
-  'HealthChartMonth': undefined;
   'HealthGoalLabel': undefined;
   'HealthGoalNone': undefined;
   'HealthSleepGoal': undefined;
@@ -2668,8 +2666,6 @@ export interface LangPair {
   'ParvaneCloudEmptyTrashConfirm': undefined;
   'ParvaneCloudDeleteForeverConfirm': undefined;
   'ParvaneCloudClearSelection': undefined;
-  'ParvaneCloudFolderName': undefined;
-  'ParvaneCloudNewName': undefined;
   'ParvaneCloudCreate': undefined;
   'ParvaneCloudSave': undefined;
   'ParvaneCloudErrorNameEmpty': undefined;
@@ -2731,10 +2727,7 @@ export interface LangPair {
   'ParvaneCloudNoMembers': undefined;
   'ParvaneCloudSharedFolder': undefined;
   'ParvaneCloudInviteGone': undefined;
-  'ParvaneCloudLink': undefined;
   'ParvaneCloudLinkHeading': undefined;
-  'ParvaneCloudLinkNote': undefined;
-  'ParvaneCloudLinkKeyNote': undefined;
   'ParvaneCloudLinkTtl': undefined;
   'ParvaneCloudLinkTtlDay': undefined;
   'ParvaneCloudLinkTtlWeek': undefined;
@@ -2746,20 +2739,16 @@ export interface LangPair {
   'ParvaneCloudLinkCopied': undefined;
   'ParvaneCloudLinkForever': undefined;
   'ParvaneCloudLinkExtend': undefined;
-  'ParvaneCloudLinkExtendHint': undefined;
   'ParvaneCloudLinkRevoke': undefined;
   'ParvaneCloudLinkRevokeConfirm': undefined;
   'ParvaneCloudLinkPreview': undefined;
   'ParvaneCloudLinkUnfinished': undefined;
   'ParvaneCloudLinkUnfinishedNote': undefined;
   'ParvaneCloudLinkNoName': undefined;
-  'ParvaneCloudLinkKindFile': undefined;
   'ParvaneCloudLinkStateForever': undefined;
-  'ParvaneCloudLinkStateExpired': undefined;
   'ParvaneCloudLinks': undefined;
   'ParvaneCloudLinksEmpty': undefined;
   'ParvaneCloudLinksEmptyHint': undefined;
-  'ParvaneCloudView': undefined;
   'ParvaneCloudToTrash': undefined;
   'ParvaneCloudTrashNote': undefined;
   'ParvaneCloudTrashExpired': undefined;
@@ -2777,7 +2766,6 @@ export interface LangPair {
   'ParvaneCloudYou': undefined;
   'ParvaneCloudFolderOwner': undefined;
   'ParvaneCloudToTrashShort': undefined;
-  'ParvaneCloudPreviewKeys': undefined;
   'ParvaneCloudInviteNoSpace': undefined;
   'ParvaneCloudStateNotLinked': undefined;
   'ParvaneCloudStateNoKey': undefined;
@@ -2973,9 +2961,7 @@ export interface LangPair {
   'PlannerSettingsBudget': undefined;
   'PlannerSettingsDayEnd': undefined;
   'PlannerSettingsDayStart': undefined;
-  'PlannerSettingsHint': undefined;
   'PlannerSettingsLunchEnd': undefined;
-  'PlannerSettingsLunchHint': undefined;
   'PlannerSettingsLunchStart': undefined;
   'PlannerSettingsMargin': undefined;
   'PlannerSettingsReset': undefined;
@@ -2997,10 +2983,8 @@ export interface LangPair {
   'PlannerErrorScheduleEmpty': undefined;
   'PlannerErrorScheduleUntil': undefined;
   'PlannerClearTitle': undefined;
-  'PlannerClearHint': undefined;
   'PlannerClearConfirm': undefined;
   'PlannerNoticeCleared': undefined;
-  'PlannerSettingsLearnedHint': undefined;
   'PlannerStatTime': undefined;
   'PlannerStatTimeEmpty': undefined;
   'PlannerStatTimeNote': undefined;
@@ -3125,6 +3109,100 @@ export interface LangPair {
   'PlannerDueTomorrow': undefined;
   'PlannerAllDayTiny': undefined;
   'PlannerDueTiny': undefined;
+  'PlannerTabBarAdd': undefined;
+  'PlannerSettingsBudgetHours': undefined;
+  'PlannerSettingsBudgetMinutes': undefined;
+  'PlannerUnitHours': undefined;
+  'PlannerUnitMinutes': undefined;
+  'PlannerSettingsLunch': undefined;
+  'PlannerSettingsBudgetHint': undefined;
+  'PlannerSettingsSleepHint': undefined;
+  'PlannerSettingsReminders': undefined;
+  'PlannerSettingsEventRemind': undefined;
+  'PlannerSettingsRemindDeadlines': undefined;
+  'PlannerSettingsQuickInput': undefined;
+  'PlannerSettingsLearn': undefined;
+  'PlannerSettingsLearnHint': undefined;
+  'PlannerLayerEvents': undefined;
+  'PlannerLayerEventsHint': undefined;
+  'PlannerLayerTasks': undefined;
+  'PlannerLayerTasksHint': undefined;
+  'HealthGoalsTitle': undefined;
+  'HealthGoalsLine': undefined;
+  'HealthGoalsLinePlaceholder': undefined;
+  'HealthGoalsSleep': undefined;
+  'HealthGoalsBed': undefined;
+  'HealthGoalsWake': undefined;
+  'HealthGoalsDuration': undefined;
+  'HealthGoalsBedtime': undefined;
+  'HealthGoalsBedtimeTitle': undefined;
+  'HealthGoalsBody': undefined;
+  'HealthGoalsWeight': undefined;
+  'HealthGoalsSteps': undefined;
+  'HealthGoalsPressure': undefined;
+  'HealthGoalsPulse': undefined;
+  'HealthGoalsWater': undefined;
+  'HealthGoalsActive': undefined;
+  'HealthGoalsFood': undefined;
+  'HealthGoalsKcal': undefined;
+  'HealthGoalsProtein': undefined;
+  'HealthGoalsFat': undefined;
+  'HealthGoalsCarbs': undefined;
+  'HealthGoalsNone': undefined;
+  'HealthGoalsBlocksOff': undefined;
+  'HealthGoalsSomeBlocksOff': undefined;
+  'HealthGoalsEnableBlocks': undefined;
+  'PlannerAgendaHint': undefined;
+  'PlannerYearHint': undefined;
+  'PlannerYearHintPhone': undefined;
+  'PlannerDailyNoteOpen': undefined;
+  'PlannerDailyNoteField': undefined;
+  'PlannerDailyNoteEmpty': undefined;
+  'PlannerQuickMoreTitle': undefined;
+  'PlannerQuickFieldMore': undefined;
+  'PlannerSearchAheadWide': undefined;
+  'PlannerSearchPastWide': undefined;
+  'PlannerSearchPlaceholderShort': undefined;
+  'PlannerLayersGroups': undefined;
+  'PlannerLayerSport': undefined;
+  'PlannerLayerBlockOff': undefined;
+  'PlannerSearchShowDone': undefined;
+  'PlannerSearchShowOffers': undefined;
+  'PlannerNoTime': undefined;
+  'PlannerFieldDay': undefined;
+  'PlannerFieldDuration': undefined;
+  'PlannerDurationPlaceholder': undefined;
+  'PlannerDueNone': undefined;
+  'PlannerDeleteShort': undefined;
+  'PlannerDeleteRecord': undefined;
+  'PlannerOptional': undefined;
+  'PlannerRemindShortStart': undefined;
+  'PlannerSeriesChangeTitle': undefined;
+  'PlannerSeriesDeleteEntryTitle': undefined;
+  'PlannerFreeTimeBeforeWork': undefined;
+  'PlannerFreeTimeBeforeWorkday': undefined;
+  'PlannerEditorDayEmpty': undefined;
+  'PlannerRecordDoneLower': undefined;
+  'PlannerRepeatSegNone': undefined;
+  'PlannerRepeatSegDay': undefined;
+  'PlannerRepeatSegWeek': undefined;
+  'PlannerRepeatSegMonth': undefined;
+  'PlannerRepeatSegYear': undefined;
+  'PlannerRepeatEndLabel': undefined;
+  'PlannerRepeatEndOnDate': undefined;
+  'PlannerRepeatEndTimes': undefined;
+  'PlannerRepeatWeekdays': undefined;
+  'PlannerTasksPickDay': undefined;
+  'PlannerTasksPickDaySubmit': undefined;
+  'PlannerCaptionDone': undefined;
+  'PlannerEveryMonday': undefined;
+  'PlannerEveryTuesday': undefined;
+  'PlannerEveryWednesday': undefined;
+  'PlannerEveryThursday': undefined;
+  'PlannerEveryFriday': undefined;
+  'PlannerEverySaturday': undefined;
+  'PlannerEverySunday': undefined;
+  'PlannerRepeatWeeklyPlain': undefined;
   'PlannerAddForDay': undefined;
   'PlannerNewTask': undefined;
   'PlannerAutoSaved': undefined;
@@ -3136,7 +3214,6 @@ export interface LangPair {
   'KnowledgeOpenDay': undefined;
   'PlannerDailyNotePlaceholder': undefined;
   'PlannerLayers': undefined;
-  'PlannerLayerWork': undefined;
   'PlannerRailToday': undefined;
   'PlannerDayTimed': undefined;
   'PlannerDayUntimed': undefined;
@@ -3145,7 +3222,6 @@ export interface LangPair {
   'PlannerYearLess': undefined;
   'PlannerYearMore': undefined;
   'PlannerLayerFromHealth': undefined;
-  'PlannerLayerWorkHint': undefined;
   'PlannerLayersHint': undefined;
   'PlannerSettingsDay': undefined;
   'PlannerYearLegend': undefined;
@@ -3187,8 +3263,8 @@ export interface LangPair {
   'KnowledgeFolderTaken': undefined;
   'KnowledgeFolderFailed': undefined;
   'KnowledgeMoveNote': undefined;
+  'KnowledgeMoveTitle': undefined;
   'KnowledgeMoveNewFolder': undefined;
-  'KnowledgePickNote': undefined;
   'KnowledgeRoot': undefined;
   'KnowledgeEdit': undefined;
   'KnowledgeSave': undefined;
@@ -3356,8 +3432,6 @@ export interface LangPair {
   'KnowledgeFilesPrevious': undefined;
   'KnowledgeFilesNext': undefined;
   'KnowledgeFilesToChat': undefined;
-  'KnowledgeFilesDecryptedHere': undefined;
-  'KnowledgeFilesShareNote': undefined;
   'KnowledgeFilesRole': undefined;
   'ParvaneResizePanel': undefined;
   'KnowledgeFolderDeleteWithNotes': undefined;
@@ -3392,7 +3466,6 @@ export interface LangPair {
   'ParvanePublicNameInfo': undefined;
   'ParvaneTranslateAbout': undefined;
   'ParvaneTranslateUnavailable': undefined;
-  'ParvaneInviteApprovalFixed': undefined;
   'ParvaneCallPeerCameraOff': undefined;
   'ParvaneCallPeerMuted': undefined;
   'ParvaneReportReasonSpam': undefined;
@@ -3480,7 +3553,6 @@ export interface LangPair {
   'KnowledgeModeEdit': undefined;
   'KnowledgeModeSplit': undefined;
   'KnowledgeEditorLabel': undefined;
-  'KnowledgeCopyLink': undefined;
   'KnowledgeLinkCopied': undefined;
   'KnowledgeLinkSuggest': undefined;
   'KnowledgeTools': undefined;
@@ -3622,9 +3694,22 @@ export interface LangPair {
   'ParvaneRecoveryKeySaved': undefined;
   'ParvaneRecoveryKeyDone': undefined;
   'KnowledgeFolderColor': undefined;
-  'KnowledgeFolderColorAuto': undefined;
   'KnowledgeFolderNest': undefined;
   'KnowledgeFolderNestTop': undefined;
+  'KnowledgeFolderOtherActions': undefined;
+  'KnowledgeToneBlue': undefined;
+  'KnowledgeToneGreen': undefined;
+  'KnowledgeToneOrange': undefined;
+  'KnowledgeTonePurple': undefined;
+  'KnowledgeToneAqua': undefined;
+  'KnowledgeToneRed': undefined;
+  'KnowledgeFolderDeleteNoRefs': undefined;
+  'KnowledgeMoveSearch': undefined;
+  'KnowledgeMoveHere': undefined;
+  'MdCopyCode': undefined;
+  'KnowledgeEmbedMissing': undefined;
+  'KnowledgeEmbedRepick': undefined;
+  'KnowledgeEmbedOpenImage': undefined;
   'KnowledgePin': undefined;
   'KnowledgeUnpin': undefined;
   'KnowledgePinned': undefined;
@@ -3702,6 +3787,23 @@ export interface LangPair {
   'KnowledgeCanvasMinimap': undefined;
   'KnowledgeCanvasZoomImagesFull': undefined;
   'KnowledgeCanvasZoomImagesThumb': undefined;
+  'KnowledgeCanvasDeleteFromCanvas': undefined;
+  'KnowledgeCanvasTone1': undefined;
+  'KnowledgeCanvasTone2': undefined;
+  'KnowledgeCanvasTone3': undefined;
+  'KnowledgeCanvasTone4': undefined;
+  'KnowledgeCanvasTone5': undefined;
+  'KnowledgeCanvasTone6': undefined;
+  'KnowledgeCanvasToneNone': undefined;
+  'KnowledgeCanvasNoteKind': undefined;
+  'KnowledgeCanvasSubtitle': undefined;
+  'KnowledgeCanvasSubtitleEdge': undefined;
+  'KnowledgeCanvasPanelCard': undefined;
+  'KnowledgeCanvasPanelArrow': undefined;
+  'KnowledgeCanvasEdgePickedHint': undefined;
+  'KnowledgeCanvasNothingFound': undefined;
+  'KnowledgeZoomFitScreen': undefined;
+  'KnowledgeGraphEdgeUnlink': undefined;
   'MessageNotePickTitle': undefined;
   'MessageNoteNew': undefined;
   'CloudInviteLabel': undefined;
@@ -3894,6 +3996,63 @@ export interface LangPair {
   'ParvaneCloudVersionsEmpty': undefined;
   'ParvaneCloudVersionRestore': undefined;
   'ParvaneCloudVersionRestored': undefined;
+  'ParvaneCloudAddLabel': undefined;
+  'ParvaneCloudClosedByOwner': undefined;
+  'ParvaneCloudDownloadToDevice': undefined;
+  'ParvaneCloudEmptyTrashShort': undefined;
+  'ParvaneCloudFailOffline': undefined;
+  'ParvaneCloudFileActions': undefined;
+  'ParvaneCloudFreeUpSpace': undefined;
+  'ParvaneCloudInviteCancelFull': undefined;
+  'ParvaneCloudInviteChat': undefined;
+  'ParvaneCloudInvitedMark': undefined;
+  'ParvaneCloudInviteRightsEditor': undefined;
+  'ParvaneCloudInviteRightsReader': undefined;
+  'ParvaneCloudLinkMenu': undefined;
+  'ParvaneCloudLinkMenuPhone': undefined;
+  'ParvaneCloudLinkRecreate': undefined;
+  'ParvaneCloudLinksRemoveDeadShort': undefined;
+  'ParvaneCloudLinkSubtitle': undefined;
+  'ParvaneCloudMakePersonal': undefined;
+  'ParvaneCloudMembersCaption': undefined;
+  'ParvaneCloudMeShort': undefined;
+  'ParvaneCloudMoveFileHere': undefined;
+  'ParvaneCloudMoveFolderHere': undefined;
+  'ParvaneCloudMoveMenu': undefined;
+  'ParvaneCloudNameLabel': undefined;
+  'ParvaneCloudNewSharedNote': undefined;
+  'ParvaneCloudNickAdd': undefined;
+  'ParvaneCloudNoAccess': undefined;
+  'ParvaneCloudNotOnDevice': undefined;
+  'ParvaneCloudOfflineDesktop': undefined;
+  'ParvaneCloudOfflineTitle': undefined;
+  'ParvaneCloudOnDevice': undefined;
+  'ParvaneCloudOpenLinks': undefined;
+  'ParvaneCloudOpenTrash': undefined;
+  'ParvaneCloudPreviewArrows': undefined;
+  'ParvaneCloudPreviewClose': undefined;
+  'ParvaneCloudPreviewEsc': undefined;
+  'ParvaneCloudPreviewSpace': undefined;
+  'ParvaneCloudRemoveFromFolder': undefined;
+  'ParvaneCloudRoleEditorNote': undefined;
+  'ParvaneCloudRoleOwnerLabel': undefined;
+  'ParvaneCloudRoleReaderNote': undefined;
+  'ParvaneCloudSearchNote': undefined;
+  'ParvaneCloudSearchScreen': undefined;
+  'ParvaneCloudSendToChatMenu': undefined;
+  'ParvaneCloudShareCopyPhone': undefined;
+  'ParvaneCloudSharedPhoneHint': undefined;
+  'ParvaneCloudSortChipDate': undefined;
+  'ParvaneCloudStageCopy': undefined;
+  'ParvaneCloudStageDownload': undefined;
+  'ParvaneCloudStageMove': undefined;
+  'ParvaneCloudStageUpload': undefined;
+  'ParvaneCloudStateNotLinkedDesktop': undefined;
+  'ParvaneCloudTrashNoteDesktop': undefined;
+  'ParvaneCloudUsageDialogNote': undefined;
+  'ParvaneCloudUsageFilesRow': undefined;
+  'ParvaneCloudUsageVersionsRow': undefined;
+  'ParvaneCloudWhatTakesSpace': undefined;
   'ParvaneRenewKeyTextPassword': undefined;
   'ParvaneRenewKeyBadPassword': undefined;
   'ParvaneBioUnlock': undefined;
@@ -3944,6 +4103,494 @@ export interface LangPair {
   'ParvaneKeysOnHint': undefined;
   'ParvaneKeysOnDone': undefined;
   'ParvaneKeysOnFailed': undefined;
+  'ParvaneReportHideAuthor': undefined;
+  'ParvaneMemberHidden': undefined;
+  'ParvaneMemberShow': undefined;
+  'ParvaneMemberHideFailed': undefined;
+  'ParvaneSecKeyTitle': undefined;
+  'ParvaneSecKeyRemove': undefined;
+  'ParvaneSecKeyAdd': undefined;
+  'ParvaneSecKeyAddFirst': undefined;
+  'ParvaneSecKeyAddMore': undefined;
+  'ParvaneSecKeyAddHint': undefined;
+  'ParvaneSecKeyRequire': undefined;
+  'ParvaneSecKeyRequireHint': undefined;
+  'ParvaneSecKeyNote': undefined;
+  'ParvaneSecKeyPassword': undefined;
+  'ParvaneSecKeyConfirmAdd': undefined;
+  'ParvaneSecKeyConfirmRemove': undefined;
+  'ParvaneSecKeyConfirmRequired': undefined;
+  'ParvaneSecKeyAdded': undefined;
+  'ParvaneSecKeyRemoved': undefined;
+  'ParvaneSecKeyRequiredChanged': undefined;
+  'ParvaneSecKeyBadPassword': undefined;
+  'ParvaneSecKeyNoRecovery': undefined;
+  'ParvaneSecKeyLimit': undefined;
+  'ParvaneSecKeyDuplicate': undefined;
+  'ParvaneSecKeyNotLinked': undefined;
+  'ParvaneSecKeyCancelled': undefined;
+  'ParvaneSecKeyUnsupported': undefined;
+  'ParvaneSecKeyFailed': undefined;
+  'ParvaneSecKeyLoginTitle': undefined;
+  'ParvaneSecKeyLoginText': undefined;
+  'ParvaneSecKeyLoginUse': undefined;
+  'ParvaneSecKeyLoginLost': undefined;
+  'ParvaneSecKeyLoginCancelled': undefined;
+  'ParvaneSecKeyLoginRejected': undefined;
+  'ParvaneSecKeyLoginFailed': undefined;
+  'ParvaneSecKeyRecoveryText': undefined;
+  'ParvaneSecKeyRecoveryLabel': undefined;
+  'ParvaneSecKeyRecoverySubmit': undefined;
+  'ParvaneSecKeyRecoveryWrong': undefined;
+  'HealthActiveGoalSet': undefined;
+  'HealthAddMetric': undefined;
+  'HealthBlocksAria': undefined;
+  'HealthEntryTitleFood': undefined;
+  'HealthEntryTitleMark': undefined;
+  'HealthEntryTitleMood': undefined;
+  'HealthEntryTitlePressure': undefined;
+  'HealthEntryTitlePulse': undefined;
+  'HealthEntryTitleSteps': undefined;
+  'HealthEntryTitleWater': undefined;
+  'HealthEntryTitleWeight': undefined;
+  'HealthEntryTitleWorkout': undefined;
+  'HealthFirstBlocksHintWide': undefined;
+  'HealthFirstFix': undefined;
+  'HealthFirstMore': undefined;
+  'HealthFirstParsed': undefined;
+  'HealthFirstPlaceholder': undefined;
+  'HealthGoalChange': undefined;
+  'HealthLineFood': undefined;
+  'HealthLinePressure': undefined;
+  'HealthLinePulse': undefined;
+  'HealthLineSleep': undefined;
+  'HealthLineSteps': undefined;
+  'HealthLineWeight': undefined;
+  'HealthMoodNoteExample': undefined;
+  'HealthMoodTwoWeeks': undefined;
+  'HealthNapLineHint': undefined;
+  'HealthNightFri': undefined;
+  'HealthNightMon': undefined;
+  'HealthNightOn': undefined;
+  'HealthNightSat': undefined;
+  'HealthNightSun': undefined;
+  'HealthNightThu': undefined;
+  'HealthNightTue': undefined;
+  'HealthNightWed': undefined;
+  'HealthNoteNone': undefined;
+  'HealthNow': undefined;
+  'HealthOrLine': undefined;
+  'HealthPerMonthSuffix': undefined;
+  'HealthPerWeekSuffix': undefined;
+  'HealthPerYearSuffix': undefined;
+  'HealthPressureByDay': undefined;
+  'HealthPressureChartHint': undefined;
+  'HealthPressureGoalHint': undefined;
+  'HealthPressureGoalNone': undefined;
+  'HealthPressureTitle': undefined;
+  'HealthRecordsFor': undefined;
+  'HealthRegimeFew': undefined;
+  'HealthRegimeFloating': undefined;
+  'HealthRegimeLegend': undefined;
+  'HealthRegimeOff': undefined;
+  'HealthRegimeStable': undefined;
+  'HealthSevenDays': undefined;
+  'HealthSleepAvgBed': undefined;
+  'HealthSleepAvgWake': undefined;
+  'HealthSleepBedAt': undefined;
+  'HealthSleepBedField': undefined;
+  'HealthSleepDeviation': undefined;
+  'HealthSleepLastNight': undefined;
+  'HealthSleepNight': undefined;
+  'HealthSleepNoSleep': undefined;
+  'HealthSleepOther': undefined;
+  'HealthSleepRegimeCaps': undefined;
+  'HealthSleepRegimeMonth': undefined;
+  'HealthSleepRegimeTitle': undefined;
+  'HealthSleepRegimeWeek': undefined;
+  'HealthSleepWakeAt': undefined;
+  'HealthSleepWakeField': undefined;
+  'HealthSleepWakeStable': undefined;
+  'HealthStepsByDayGoal': undefined;
+  'HealthStepsPerDay': undefined;
+  'HealthStepsTitle': undefined;
+  'HealthSummary': undefined;
+  'HealthTileAvg': undefined;
+  'HealthTileCount': undefined;
+  'HealthTileGoalDays': undefined;
+  'HealthTileLast': undefined;
+  'HealthTileMonthAvg': undefined;
+  'HealthTilePace': undefined;
+  'HealthTileToGoal': undefined;
+  'HealthTileToday': undefined;
+  'HealthTileWeekAvg': undefined;
+  'HealthTileYearAvg': undefined;
+  'HealthUnitHour': undefined;
+  'HealthUnitLiter': undefined;
+  'HealthUnitScore': undefined;
+  'HealthWeekShort': undefined;
+  'HealthWeightMonth': undefined;
+  'MusicAddLabel': undefined;
+  'MusicAddFetch': undefined;
+  'MusicPlaylistNew': undefined;
+  'MusicSearch': undefined;
+  'MusicLibrary': undefined;
+  'MusicAddedByMe': undefined;
+  'MusicAddToQueueDesk': undefined;
+  'MusicAlbumFindRest': undefined;
+  'MusicChipSave': undefined;
+  'MusicChipSaved': undefined;
+  'MusicCollapsePlayer': undefined;
+  'MusicColumnAlbum': undefined;
+  'MusicColumnArtist': undefined;
+  'MusicColumnTime': undefined;
+  'MusicColumnTitle': undefined;
+  'MusicEmptyCaption': undefined;
+  'MusicEmptyDeskText': undefined;
+  'MusicEmptyFetchOff': undefined;
+  'MusicEmptyFindHint': undefined;
+  'MusicEmptyFindTitle': undefined;
+  'MusicEmptyPlayerHint': undefined;
+  'MusicEmptySearch': undefined;
+  'MusicFilterAll': undefined;
+  'MusicFilterTracks': undefined;
+  'MusicFilterLabel': undefined;
+  'MusicFindAlbum': undefined;
+  'MusicFindArtist': undefined;
+  'MusicFindInStarred': undefined;
+  'MusicFromPlaylist': undefined;
+  'MusicFromAlbum': undefined;
+  'MusicFromArtist': undefined;
+  'MusicFromStarred': undefined;
+  'MusicFromOffline': undefined;
+  'MusicFromSearch': undefined;
+  'MusicFromHome': undefined;
+  'MusicFromChat': undefined;
+  'MusicGoToAlbumDesk': undefined;
+  'MusicGoToArtistDesk': undefined;
+  'MusicKindAlbum': undefined;
+  'MusicKindAlbumLower': undefined;
+  'MusicKindArtist': undefined;
+  'MusicKindPlaylistLower': undefined;
+  'MusicKindTrack': undefined;
+  'MusicLetterIndex': undefined;
+  'MusicListen': undefined;
+  'MusicListenAll': undefined;
+  'MusicLoadingMore': undefined;
+  'MusicMore': undefined;
+  'MusicMoveDown': undefined;
+  'MusicMoveUp': undefined;
+  'MusicNothingOnServer': undefined;
+  'MusicOfflineChangeLimit': undefined;
+  'MusicOfflineClearShort': undefined;
+  'MusicOfflineDownloading': undefined;
+  'MusicOfflineFollowNew': undefined;
+  'MusicOfflineHide': undefined;
+  'MusicOfflineShow': undefined;
+  'MusicOfflineHint': undefined;
+  'MusicOfflineLimitLink': undefined;
+  'MusicOfflineLimitLabel': undefined;
+  'MusicOfflineOnDevice': undefined;
+  'MusicOfflinePause': undefined;
+  'MusicOfflineResume': undefined;
+  'MusicOfflinePaused': undefined;
+  'MusicOfflineProgressLabel': undefined;
+  'MusicOfflineQuality': undefined;
+  'MusicQualityOriginal': undefined;
+  'MusicQualityOpus': undefined;
+  'MusicOfflineRelease': undefined;
+  'MusicOfflineRemovePlaylist': undefined;
+  'MusicOfflineSaveAlbum': undefined;
+  'MusicOfflineSaveDesk': undefined;
+  'MusicOfflineSavePlaylist': undefined;
+  'MusicOfflineSettingsTitle': undefined;
+  'MusicOfflineSingleTracks': undefined;
+  'MusicOfflineWaitingNetwork': undefined;
+  'MusicPlayEverything': undefined;
+  'MusicPlaylistAddPlaying': undefined;
+  'MusicPlaylistDeleteText': undefined;
+  'MusicPlaylistKicker': undefined;
+  'MusicPlaylistMine': undefined;
+  'MusicPlaylistMineTitle': undefined;
+  'MusicPlaylistNameLabel': undefined;
+  'MusicPlaylistNamePlaceholder': undefined;
+  'MusicPlaylistOfflineMark': undefined;
+  'MusicPlaylistRemoveItem': undefined;
+  'MusicPlaylistRename': undefined;
+  'MusicPlaylistsHint': undefined;
+  'MusicPopularOnServer': undefined;
+  'MusicQueueClearLabel': undefined;
+  'MusicQueueNote': undefined;
+  'MusicQueueRemoveItem': undefined;
+  'MusicRepeatAllPlaylist': undefined;
+  'MusicSendToChatDesk': undefined;
+  'MusicShuffleMix': undefined;
+  'MusicShufflePlay': undefined;
+  'MusicSingles': undefined;
+  'MusicSortByArtist': undefined;
+  'MusicSortByName': undefined;
+  'MusicSortByTracks': undefined;
+  'MusicSortLabel': undefined;
+  'MusicSortNew': undefined;
+  'MusicSortOnlyDownloaded': undefined;
+  'MusicSortRecentlyAdded': undefined;
+  'MusicStarredHint': undefined;
+  'MusicStarredNote': undefined;
+  'MusicStarShort': undefined;
+  'MusicToPlaylist': undefined;
+  'MusicToQueue': undefined;
+  'MusicWholeLibrary': undefined;
+  'MusicSearchBar': undefined;
+  'MusicFetchQueued': undefined;
+  'MusicFetchPickingReference': undefined;
+  'MusicFetchServerDownloading': undefined;
+  'MusicUploadSending': undefined;
+  'MusicFetchAdded': undefined;
+  'MusicFetchAddedMark': undefined;
+  'MusicFetchNotFoundAnywhere': undefined;
+  'MusicFetchSourceDown': undefined;
+  'MusicFetchCancel': undefined;
+  'MusicFetchListen': undefined;
+  'MusicFetchRemove': undefined;
+  'MusicFetchAlreadyGoing': undefined;
+  'MusicFetchDisabledByAdmin': undefined;
+  'MusicFetchFindAndDownload': undefined;
+  'MusicFetchByQueryHint': undefined;
+  'MusicFetchSharedNote': undefined;
+  'MusicFetchUploadsTitle': undefined;
+  'MusicFetchUploadsEmpty': undefined;
+  'MusicRecentQueries': undefined;
+  'MusicUploadOwn': undefined;
+  'MusicUploadOwnHint': undefined;
+  'MusicUploadPick': undefined;
+  'MusicUploadNotAudio': undefined;
+  'MusicUploadDuplicate': undefined;
+  'MusicUploadFailed': undefined;
+  'MusicAccessLabel': undefined;
+  'MusicAccessMe': undefined;
+  'MusicAccessMembers': undefined;
+  'MusicAccessServer': undefined;
+  'MusicAccessMeHint': undefined;
+  'MusicAccessMembersHint': undefined;
+  'MusicAccessServerHint': undefined;
+  'MusicAccessLater': undefined;
+  'MusicMembersOnlyHint': undefined;
+  'MusicMembersServerHint': undefined;
+  'MusicMembersInvite': undefined;
+  'MusicMembersInviteButton': undefined;
+  'MusicMembersUnknownNick': undefined;
+  'MusicMembersInviteFailed': undefined;
+  'MusicMembersServerWide': undefined;
+  'MusicMembersCloseForAll': undefined;
+  'MusicMemberMe': undefined;
+  'MusicMemberYouOwner': undefined;
+  'MusicMemberOwner': undefined;
+  'MusicMemberInvited': undefined;
+  'MusicMemberRole': undefined;
+  'MusicMemberRemove': undefined;
+  'MusicRoleEditor': undefined;
+  'MusicRoleListener': undefined;
+  'MusicRoleNone': undefined;
+  'MusicSharedTitle': undefined;
+  'MusicSharedKicker': undefined;
+  'MusicSharedKickerServer': undefined;
+  'MusicSharedMissing': undefined;
+  'MusicSharedEmpty': undefined;
+  'MusicSharedRecent': undefined;
+  'MusicSharedToday': undefined;
+  'MusicSharedYesterday': undefined;
+  'MusicSharedLeave': undefined;
+  'MusicSharedActionFailed': undefined;
+  'MusicSharedInvitation': undefined;
+  'MusicSharedServerSection': undefined;
+  'MusicMakeShared': undefined;
+  'MusicPlaylistCardShared': undefined;
+  'MusicSharedJoinFailed': undefined;
+  'KnowledgeConflictThisComputer': undefined;
+  'KnowledgeConflictThisPhone': undefined;
+  'KnowledgeConflictPhone': undefined;
+  'KnowledgeConflictComputer': undefined;
+  'KnowledgeConflictSubtitle': undefined;
+  'KnowledgeConflictKeepBoth': undefined;
+  'KnowledgeConflictPick': undefined;
+  'KnowledgeConflictKeepThis': undefined;
+  'KnowledgeMore': undefined;
+  'KnowledgeCanvases': undefined;
+  'KnowledgeMdHelp': undefined;
+  'KnowledgeTrash': undefined;
+  'KnowledgeTrashHint': undefined;
+  'KnowledgeTrashEmpty': undefined;
+  'KnowledgeTrashRestore': undefined;
+  'KnowledgeTrashOpenFiles': undefined;
+  'KnowledgeMdHelpSubtitle': undefined;
+  'KnowledgeMdHelpText': undefined;
+  'KnowledgeMdHelpLinks': undefined;
+  'KnowledgeMdHelpKeys': undefined;
+  'KnowledgeMdHelpHeadingSample': undefined;
+  'KnowledgeMdHelpHeading': undefined;
+  'KnowledgeMdHelpBoldSample': undefined;
+  'KnowledgeMdHelpBold': undefined;
+  'KnowledgeMdHelpListSample': undefined;
+  'KnowledgeMdHelpList': undefined;
+  'KnowledgeMdHelpTaskSample': undefined;
+  'KnowledgeMdHelpTask': undefined;
+  'KnowledgeMdHelpQuoteSample': undefined;
+  'KnowledgeMdHelpQuote': undefined;
+  'KnowledgeMdHelpCodeSample': undefined;
+  'KnowledgeMdHelpCode': undefined;
+  'KnowledgeMdHelpNoteSample': undefined;
+  'KnowledgeMdHelpNote': undefined;
+  'KnowledgeMdHelpTagSample': undefined;
+  'KnowledgeMdHelpTag': undefined;
+  'KnowledgeMdHelpEmbedSample': undefined;
+  'KnowledgeMdHelpEmbed': undefined;
+  'KnowledgeMdHelpWebSample': undefined;
+  'KnowledgeMdHelpWeb': undefined;
+  'KnowledgeMdHelpKeyMode': undefined;
+  'KnowledgeMdHelpKeyBold': undefined;
+  'KnowledgeCancelEdit': undefined;
+  'KnowledgeSendToChat': undefined;
+  'KnowledgeToolItalic': undefined;
+  'KnowledgeInsertFileShort': undefined;
+  'KnowledgeCanvasListSearch': undefined;
+  'PvQuickHealthTitle': undefined;
+  'PvQuickUnderstoodMany': undefined;
+  'PvQuickEdit': undefined;
+  'PvQuickTotal': undefined;
+  'PvQuickWhen': undefined;
+  'PvQuickNightToday': undefined;
+  'PvQuickNightYesterday': undefined;
+  'PvQuickExamplesTitle': undefined;
+  'PvQuickModuleHint': undefined;
+  'PvQuickKindNote': undefined;
+  'PvQuickNotHealth': undefined;
+  'ParvanePalettePlaceholderPhone': undefined;
+  'ParvanePaletteTitle': undefined;
+  'ParvanePaletteFilters': undefined;
+  'ParvanePaletteAll': undefined;
+  'ParvanePaletteHint': undefined;
+  'ParvanePaletteFooterMove': undefined;
+  'ParvanePaletteFooterOpen': undefined;
+  'ParvanePaletteFooterTab': undefined;
+  'ParvanePaletteFooterTabAll': undefined;
+  'ParvanePaletteFooterScope': undefined;
+  'ParvanePaletteClear': undefined;
+  'ParvanePaletteBack': undefined;
+  'ParvaneNavPlan': undefined;
+  'ParvaneNavCloseMenu': undefined;
+  'ParvaneNavDragHint': undefined;
+  'ParvaneNavDropHere': undefined;
+  'ParvaneNavWasHere': undefined;
+  'ParvaneNavHiddenInline': undefined;
+  'ParvaneNavModulesDeskHint': undefined;
+  'ParvaneNavModulesDeskFootnote': undefined;
+  'ParvaneNavBlocks': undefined;
+  'ParvaneNavGoals': undefined;
+  'ParvaneNavStorage': undefined;
+  'ShellSignOutTitle': undefined;
+  'ShellSignOutText': undefined;
+  'ShellSignOutPlain': undefined;
+  'ShellSignOutRotate': undefined;
+  'ShellSignOutRotateHint': undefined;
+  'ShellSignOutRotating': undefined;
+  'ShellFirstRunTitle': undefined;
+  'ShellFirstRunTitleDesktop': undefined;
+  'ShellFirstRunText': undefined;
+  'ShellFirstRunTextDesktop': undefined;
+  'ShellFirstRunChatsOn': undefined;
+  'ShellFirstRunProfileOn': undefined;
+  'ShellFirstRunHintPlan': undefined;
+  'ShellFirstRunHintHealth': undefined;
+  'ShellFirstRunHintNotes': undefined;
+  'ShellFirstRunHintFiles': undefined;
+  'ShellFirstRunHintMusic': undefined;
+  'ShellFirstRunHintPlanDesktop': undefined;
+  'ShellFirstRunHintHealthDesktop': undefined;
+  'ShellFirstRunHintNotesDesktop': undefined;
+  'ShellFirstRunHintFilesDesktop': undefined;
+  'ShellFirstRunStart': undefined;
+  'ShellFirstRunContinue': undefined;
+  'ShellFirstRunAll': undefined;
+  'ShellFirstRunFootDesktop': undefined;
+  'ShellRecoveryKeyNext': undefined;
+  'ShellSignedOutTitle': undefined;
+  'ShellSignedOutTitleDesktop': undefined;
+  'ShellSignedOutWiped': undefined;
+  'ShellSignedOutWipedValue': undefined;
+  'ShellSignedOutServer': undefined;
+  'ShellSignedOutServerValue': undefined;
+  'ShellSignedOutNotYou': undefined;
+  'ShellSignedOutSignIn': undefined;
+  'ShellUpgradeTitle': undefined;
+  'ShellUpgradeText': undefined;
+  'ShellUpgradeYours': undefined;
+  'ShellUpgradeNeeded': undefined;
+  'ShellUpgradeNewer': undefined;
+  'ShellUpgradeDownloading': undefined;
+  'ShellUpgradeReady': undefined;
+  'ShellUpgradeChecking': undefined;
+  'ShellUpgradeMissing': undefined;
+  'ShellUpgradeReadOnly': undefined;
+  'ShellUpgradeLater': undefined;
+  'ShellUpgradeRestart': undefined;
+  'ShellUpgradeBanner': undefined;
+  'ShellHotkeysTitle': undefined;
+  'ShellHotkeysEverywhere': undefined;
+  'ShellKeyModule': undefined;
+  'ShellKeySearch': undefined;
+  'ShellKeySettings': undefined;
+  'ShellKeyBack': undefined;
+  'ShellKeyMusic': undefined;
+  'ShellKeyNewMessage': undefined;
+  'ShellKeyEditLast': undefined;
+  'ShellKeySend': undefined;
+  'ShellKeyNewLine': undefined;
+  'ShellKeyNoteMode': undefined;
+  'ShellKeyNewNote': undefined;
+  'ShellKeyNoteLink': undefined;
+  'ShellKeyNewEntry': undefined;
+  'ShellKeyToday': undefined;
+  'ShellKeyWeek': undefined;
+  'ShellKeyDone': undefined;
+  'ShellKeyUpload': undefined;
+  'ShellKeyRename': undefined;
+  'ShellKeyTrash': undefined;
+  'ShellKeySpace': undefined;
+  'PvSysActionListen': undefined;
+  'PvSysTrackReady': undefined;
+  'PvSysLockedHint': undefined;
+  'PvSysMuteHour': undefined;
+  'PvSysMuteMorning': undefined;
+  'PvSysMuteOff': undefined;
+  'PvSysNotifyMusicHint': undefined;
+  'PvSysShareToMusic': undefined;
+  'PvSysShareToMusicHint': undefined;
+  'PvSysShareSavedToMusic': undefined;
+  'PvSysShareFootnote': undefined;
+  'PvSysPermTitleMicrophone': undefined;
+  'PvSysPermTitleCamera': undefined;
+  'PvSysPermTitleNotifications': undefined;
+  'PvSysPermTitleLocation': undefined;
+  'PvSysPermNameMicrophone': undefined;
+  'PvSysPermNameCamera': undefined;
+  'PvSysPermNameNotifications': undefined;
+  'PvSysPermNameLocation': undefined;
+  'PvSysPermDeniedApp': undefined;
+  'PvSysPermCheck': undefined;
+  'PvSysPermStillDenied': undefined;
+  'PvSysOpenSettings': undefined;
+  'PvSysLocationAskTitle': undefined;
+  'PvSysLocationAskText': undefined;
+  'PvSysLocationNoAccess': undefined;
+  'PvSysLocationDeniedHint': undefined;
+  'PvSysAllow': undefined;
+  'PvSysNotNow': undefined;
+  'PvSysNotifyDenied': undefined;
+  'PvSysNotifyOnboardTitle': undefined;
+  'PvSysNotifyOnboardText': undefined;
+  'PvSysNotifyOnboardBackground': undefined;
+  'PvSysNotifyOnboardBackgroundHint': undefined;
+  'PvSysNotifyOnboardOn': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5667,12 +6314,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneModuleDrag': {
     'name': V;
   };
-  'ParvaneModuleMoveUp': {
-    'name': V;
-  };
-  'ParvaneModuleMoveDown': {
-    'name': V;
-  };
   'ModuleOffTitle': {
     'module': V;
   };
@@ -5761,18 +6402,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'HealthWeekDelta': {
     'delta': V;
   };
-  'HealthMonthDelta': {
-    'delta': V;
-  };
-  'HealthDeleteEntry': {
-    'name': V;
-  };
-  'HealthLeftToGoal': {
-    'delta': V;
-  };
-  'HealthToGoal': {
-    'delta': V;
-  };
   'HealthMoodScore': {
     'value': V;
   };
@@ -5781,12 +6410,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'HealthEntryEditTitle': {
     'name': V;
-  };
-  'HealthSleepDurationValue': {
-    'duration': V;
-  };
-  'HealthWaterOfGoal': {
-    'goal': V;
   };
   'HealthWaterGlass': {
     'ml': V;
@@ -5870,14 +6493,8 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudLinkExpired': {
     'date': V;
   };
-  'ParvaneCloudLinkCreated': {
-    'date': V;
-  };
   'ParvaneCloudLinkStateUntil': {
     'date': V;
-  };
-  'ParvaneCloudLinksCount': {
-    'count': V;
   };
   'ParvaneCloudFound': {
     'count': V;
@@ -5885,9 +6502,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudInviteFrom': {
     'name': V;
     'folder': V;
-  };
-  'ParvaneCloudTrashCount': {
-    'count': V;
   };
   'ParvaneCloudUsedOf': {
     'used': V;
@@ -5913,10 +6527,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudAlmostFull': {
     'used': V;
     'total': V;
-  };
-  'ParvaneCloudCopying': {
-    'percent': V;
-    'size': V;
   };
   'ParvaneCloudAttachedToNote': {
     'name': V;
@@ -6092,8 +6702,8 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'PlannerNoticeMoved': {
-    'date': V;
     'name': V;
+    'date': V;
   };
   'PlannerNoticeReopened': {
     'name': V;
@@ -6247,6 +6857,94 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerFeedWake': {
     'sleep': V;
   };
+  'ParvaneModuleCrumb': {
+    'module': V;
+  };
+  'HealthGoalsUnderstood': {
+    'list': V;
+  };
+  'HealthGoalsDurationValue': {
+    'hours': V;
+    'minutes': V;
+  };
+  'PlannerImportUnderstoodCount': {
+    'events': V;
+  };
+  'PlannerImportUntilDate': {
+    'date': V;
+  };
+  'PlannerImportAddEvents': {
+    'events': V;
+  };
+  'PlannerImportProblemLine': {
+    'text': V;
+  };
+  'PlannerImportProblemLines': {
+    'text': V;
+    'count': V;
+  };
+  'PlannerSleepLineKept': {
+    'sleep': V;
+  };
+  'PlannerSleepLineReduced': {
+    'sleep': V;
+    'budget': V;
+  };
+  'PlannerSearchLayerOff': {
+    'name': V;
+  };
+  'PlannerSearchLayersOff': {
+    'names': V;
+  };
+  'PlannerSearchFoundCount': {
+    'count': V;
+  };
+  'PlannerSearchFoundLayers': {
+    'count': V;
+  };
+  'PlannerSearchUntil': {
+    'date': V;
+  };
+  'PlannerRemindShortBefore': {
+    'amount': V;
+  };
+  'PlannerSeriesAskEdit': {
+    'name': V;
+    'rule': V;
+  };
+  'PlannerSeriesAskTime': {
+    'name': V;
+    'rule': V;
+    'time': V;
+  };
+  'PlannerSeriesAskDelete': {
+    'name': V;
+    'rule': V;
+  };
+  'PlannerSeriesAskRule': {
+    'name': V;
+    'rule': V;
+  };
+  'PlannerSeriesAskStop': {
+    'name': V;
+    'rule': V;
+  };
+  'PlannerSeriesAskCopy': {
+    'name': V;
+  };
+  'PlannerSeriesOnlyThisOn': {
+    'date': V;
+  };
+  'PlannerFreeTimeSpare': {
+    'time': V;
+  };
+  'PlannerFreeTimeLoadHours': {
+    'load': V;
+    'budget': V;
+  };
+  'PlannerCaptionGroup': {
+    'name': V;
+  };
   'PlannerSleepWarn': {
     'sleep': V;
     'budget': V;
@@ -6283,16 +6981,10 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeGuideRestoreText': {
     'name': V;
   };
-  'KnowledgeFolderDeleteConfirm': {
-    'count': V;
-  };
   'KnowledgeFolderActions': {
     'name': V;
   };
   'KnowledgeNoticeFolderFiles': {
-    'name': V;
-  };
-  'KnowledgeMoveTitle': {
     'name': V;
   };
   'KnowledgeDeleteConfirm': {
@@ -6367,9 +7059,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeCanvasNoteRestored': {
     'name': V;
   };
-  'KnowledgeFilesSharedWith': {
-    'count': V;
-  };
   'KnowledgeFilesFrom': {
     'name': V;
   };
@@ -6384,18 +7073,6 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
     'owner': V;
     'rights': V;
-  };
-  'KnowledgeFilesUploading': {
-    'percent': V;
-    'size': V;
-  };
-  'KnowledgeFilesDownloading': {
-    'percent': V;
-    'size': V;
-  };
-  'KnowledgeFilesMoving': {
-    'percent': V;
-    'size': V;
   };
   'KnowledgeFilesMoveTitle': {
     'name': V;
@@ -6435,6 +7112,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeEdited': {
     'when': V;
   };
+  'KnowledgeCopyLink': {
+    'title': V;
+  };
   'KnowledgeLinkNew': {
     'name': V;
   };
@@ -6471,9 +7151,6 @@ export interface LangPairWithVariables<V = LangVariable> {
     'total': V;
     'line': V;
   };
-  'KnowledgeConflictMine': {
-    'when': V;
-  };
   'KnowledgeMissingTitle': {
     'name': V;
   };
@@ -6488,6 +7165,12 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneDeviceSeen': {
     'time': V;
+  };
+  'KnowledgeMoveTo': {
+    'name': V;
+  };
+  'KnowledgeEmbedFromDrive': {
+    'size': V;
   };
   'ParvaneCallReturnTo': {
     'name': V;
@@ -6518,6 +7201,18 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'KnowledgeCanvasSelected': {
     'count': V;
+  };
+  'KnowledgeCanvasCount': {
+    'count': V;
+  };
+  'KnowledgeCanvasColorNamed': {
+    'name': V;
+  };
+  'KnowledgeCanvasSubtitleSelected': {
+    'count': V;
+  };
+  'KnowledgeGraphEdgePicked': {
+    'name': V;
   };
   'ParvaneExportRunning': {
     'section': V;
@@ -6574,11 +7269,349 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudVersionsNote': {
     'count': V;
   };
+  'ParvaneCloudAlmostFullDesktop': {
+    'used': V;
+    'total': V;
+  };
+  'ParvaneCloudDragOntoNav': {
+    'name': V;
+  };
+  'ParvaneCloudFailed': {
+    'reason': V;
+  };
+  'ParvaneCloudFailNoSpace': {
+    'size': V;
+  };
+  'ParvaneCloudFailTooLarge': {
+    'size': V;
+  };
+  'ParvaneCloudLinksPhoneNote': {
+    'size': V;
+  };
+  'ParvaneCloudLinkStateExpiredOn': {
+    'date': V;
+  };
+  'ParvaneCloudLinkStateRevoked': {
+    'date': V;
+  };
+  'ParvaneCloudMoveTo': {
+    'name': V;
+  };
+  'ParvaneCloudNameTakenFile': {
+    'name': V;
+  };
+  'ParvaneCloudNameTakenFolder': {
+    'name': V;
+  };
+  'ParvaneCloudNewFolderIn': {
+    'place': V;
+  };
+  'ParvaneCloudNoAccessText': {
+    'name': V;
+  };
+  'ParvaneCloudProgressOf': {
+    'percent': V;
+    'size': V;
+  };
+  'ParvaneCloudRoleChange': {
+    'name': V;
+  };
+  'ParvaneCloudTrashWasInFolder': {
+    'name': V;
+  };
+  'ParvaneCloudUsedShort': {
+    'used': V;
+    'total': V;
+  };
   'ParvaneNickOldHintStored': {
     'nick': V;
   };
   'ParvaneReportsSubtitle': {
     'group': V;
+  };
+  'ParvaneReportsMemberSince': {
+    'date': V;
+  };
+  'ParvaneSecKeyDefaultName': {
+    'count': V;
+  };
+  'ParvaneSecKeyAddedUsed': {
+    'added': V;
+    'used': V;
+  };
+  'ParvaneSecKeyAddedNotUsed': {
+    'added': V;
+  };
+  'HealthBlockOff': {
+    'blocks': V;
+  };
+  'HealthBlockOffShort': {
+    'blocks': V;
+  };
+  'HealthBlocksOff': {
+    'blocks': V;
+  };
+  'HealthBlocksOffShort': {
+    'blocks': V;
+  };
+  'HealthMoodLowSleepHigher': {
+    'value': V;
+  };
+  'HealthMoodLowSleepLower': {
+    'value': V;
+  };
+  'HealthOfTotal': {
+    'value': V;
+    'total': V;
+  };
+  'HealthPercentOfGoal': {
+    'value': V;
+  };
+  'HealthPressureGoalValue': {
+    'value': V;
+    'unit': V;
+  };
+  'HealthRegimeSpread': {
+    'duration': V;
+  };
+  'HealthSleepBedEarlier': {
+    'duration': V;
+  };
+  'HealthSleepBedLater': {
+    'duration': V;
+  };
+  'HealthSleepFromGoal': {
+    'value': V;
+  };
+  'HealthSleepGoalText': {
+    'bed': V;
+    'wake': V;
+    'duration': V;
+  };
+  'HealthSleepInsightEarlier': {
+    'time': V;
+    'duration': V;
+  };
+  'HealthSleepInsightLater': {
+    'time': V;
+    'duration': V;
+  };
+  'HealthSleepInsightNoGoal': {
+    'time': V;
+  };
+  'HealthSleepInsightOnGoal': {
+    'time': V;
+  };
+  'HealthWaterOfGoalLiters': {
+    'goal': V;
+  };
+  'HealthWeightGoalPace': {
+    'value': V;
+    'pace': V;
+  };
+  'MusicAddedTo': {
+    'name': V;
+  };
+  'MusicAddedToday': {
+    'today': V;
+    'perDay': V;
+  };
+  'MusicAlbumsTitle': {
+    'count': V;
+  };
+  'MusicArtistAlbums': {
+    'name': V;
+  };
+  'MusicArtistFacts': {
+    'albums': V;
+    'tracks': V;
+  };
+  'MusicArtistsTotal': {
+    'count': V;
+  };
+  'MusicOfflineCircleDone': {
+    'done': V;
+    'total': V;
+  };
+  'MusicOfflineDownloadingName': {
+    'name': V;
+  };
+  'MusicOfflineLimitHint': {
+    'limit': V;
+  };
+  'MusicOnServer': {
+    'count': V;
+  };
+  'MusicPlaylistAddTrack': {
+    'name': V;
+  };
+  'MusicPlaylistCreatedWith': {
+    'name': V;
+  };
+  'MusicPlaylistDeleteTitle': {
+    'name': V;
+  };
+  'MusicQueueUpcoming': {
+    'count': V;
+  };
+  'MusicSegmentCount': {
+    'name': V;
+    'count': V;
+  };
+  'MusicSourcePlaylist': {
+    'name': V;
+  };
+  'MusicSourceAlbum': {
+    'name': V;
+  };
+  'MusicSourceArtist': {
+    'name': V;
+  };
+  'MusicSourceSearch': {
+    'name': V;
+  };
+  'MusicSourceStarred': {
+    'name': V;
+  };
+  'MusicFetchBytes': {
+    'done': V;
+    'total': V;
+  };
+  'MusicFetchServerCannot': {
+    'reason': V;
+  };
+  'MusicFetchByQuery': {
+    'query': V;
+  };
+  'MusicFetchDoneNotice': {
+    'name': V;
+  };
+  'MusicFetchFailedNotice': {
+    'name': V;
+  };
+  'MusicRecentForget': {
+    'query': V;
+  };
+  'MusicUploadTooBig': {
+    'size': V;
+  };
+  'MusicMembersTitle': {
+    'name': V;
+  };
+  'MusicMemberRoleOf': {
+    'name': V;
+  };
+  'MusicSharedWhoAdds': {
+    'count': V;
+  };
+  'MusicSharedYourRole': {
+    'role': V;
+  };
+  'MusicMakeSharedTitle': {
+    'name': V;
+  };
+  'KnowledgeConflictWho': {
+    'device': V;
+    'when': V;
+  };
+  'KnowledgeConflictTitle': {
+    'title': V;
+  };
+  'KnowledgeConflictDiff': {
+    'list': V;
+  };
+  'KnowledgeConflictDiffLine': {
+    'line': V;
+  };
+  'KnowledgeConflictDiffNew': {
+    'line': V;
+  };
+  'KnowledgeTrashDeleted': {
+    'when': V;
+  };
+  'KnowledgeBacklinksTitle': {
+    'count': V;
+  };
+  'PvQuickUnderstood': {
+    'kind': V;
+  };
+  'PvQuickInModule': {
+    'module': V;
+  };
+  'PvQuickNightOn': {
+    'date': V;
+  };
+  'PvQuickBedLater': {
+    'duration': V;
+  };
+  'PvQuickBedEarlier': {
+    'duration': V;
+  };
+  'PvQuickAsSleep': {
+    'text': V;
+  };
+  'PvQuickAsWeight': {
+    'text': V;
+  };
+  'PvQuickAsPressure': {
+    'text': V;
+  };
+  'PvQuickAsPulse': {
+    'text': V;
+  };
+  'PvQuickAsSteps': {
+    'text': V;
+  };
+  'PvQuickAsMood': {
+    'text': V;
+  };
+  'ParvanePaletteNewNoteNamed': {
+    'title': V;
+  };
+  'ParvanePaletteFetchTrack': {
+    'title': V;
+  };
+  'ParvanePaletteSearchMessages': {
+    'query': V;
+  };
+  'ParvanePaletteEdited': {
+    'when': V;
+  };
+  'ParvanePaletteIn': {
+    'module': V;
+  };
+  'ParvaneNavGlobalSearch': {
+    'keys': V;
+  };
+  'ParvaneNavDrag': {
+    'name': V;
+  };
+  'ShellFirstRunCountFits': {
+    'selected': V;
+    'total': V;
+  };
+  'ShellFirstRunCountScrolls': {
+    'selected': V;
+    'total': V;
+  };
+  'ShellSignedOutText': {
+    'when': V;
+  };
+  'ShellWhenToday': {
+    'time': V;
+  };
+  'ShellWhenDate': {
+    'date': V;
+    'time': V;
+  };
+  'ShellHotkeysHint': {
+    'keys': V;
+  };
+  'PvSysMutedUntil': {
+    'time': V;
+  };
+  'PvSysPermDeniedText': {
+    'what': V;
   };
 }
 
@@ -6588,6 +7621,7 @@ export interface LangPairPlural {
   'ReactionDeleted': undefined;
   'MediaReplaceInvalidError': undefined;
   'lng': undefined;
+  'HealthStepsUnit': undefined;
 }
 
 export interface LangPairPluralWithVariables<V = LangVariable> {
@@ -7128,6 +8162,34 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'PlannerDaysValue': {
     'days': V;
   };
+  'PlannerSettingsLearnedCount': {
+    'count': V;
+  };
+  'PlannerHoursFull': {
+    'count': V;
+  };
+  'PlannerImportEvents': {
+    'count': V;
+  };
+  'PlannerFreeTimeHintDays': {
+    'name': V;
+    'duration': V;
+    'days': V;
+    'margin': V;
+  };
+  'PlannerFreeTimeHintWide': {
+    'days': V;
+  };
+  'PlannerFreeTimeNoneDays': {
+    'days': V;
+  };
+  'PlannerMinutesFull': {
+    'count': V;
+  };
+  'PlannerTasksGroupStatsLine': {
+    'count': V;
+    'hours': V;
+  };
   'KnowledgeFilesItems': {
     'count': V;
   };
@@ -7143,6 +8205,12 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'KnowledgeMissingRefs': {
     'count': V;
     'names': V;
+  };
+  'KnowledgeFolderDeleteNotes': {
+    'count': V;
+  };
+  'KnowledgeFolderDeleteRefs': {
+    'count': V;
   };
   'ArticleReadingTime': {
     'count': V;
@@ -7180,10 +8248,72 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   'ParvaneChannelInfoSubtitle': {
     'count': V;
   };
+  'KnowledgeFilesSharedMembers': {
+    'count': V;
+  };
+  'ParvaneCloudDropFilesSize': {
+    'count': V;
+    'size': V;
+  };
+  'ParvaneCloudInviteFiles': {
+    'count': V;
+    'size': V;
+  };
+  'ParvaneCloudLinksActive': {
+    'count': V;
+  };
+  'ParvaneCloudLinksDead': {
+    'count': V;
+  };
+  'ParvaneCloudTrashIn': {
+    'count': V;
+  };
+  'ParvaneCloudTrashLeft': {
+    'count': V;
+  };
+  'ParvaneCloudTrashSummary': {
+    'count': V;
+    'size': V;
+  };
   'ParvaneReportsNew': {
     'count': V;
   };
   'ParvaneReportsCount': {
+    'count': V;
+  };
+  'MusicServerTracks': {
+    'count': V;
+  };
+  'MusicAlbumOnServer': {
+    'count': V;
+    'total': V;
+  };
+  'MusicOfflineLeft': {
+    'minutes': V;
+    'size': V;
+  };
+  'MusicStarredNotePhone': {
+    'count': V;
+  };
+  'MusicFetchQueuedAhead': {
+    'count': V;
+  };
+  'MusicFetchUploadsCount': {
+    'count': V;
+  };
+  'MusicUploadStarted': {
+    'count': V;
+  };
+  'MusicMembersCount': {
+    'count': V;
+  };
+  'MusicMemberAdded': {
+    'count': V;
+  };
+  'MusicSharedMark': {
+    'count': V;
+  };
+  'KnowledgeNotesCount': {
     'count': V;
   };
 }

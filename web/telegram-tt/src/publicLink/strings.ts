@@ -7,8 +7,8 @@ const en = {
   incompleteTitle: 'The link is incomplete',
   incompleteText: 'The part after # is missing or damaged — it holds the key, and without it the files cannot be '
     + 'decrypted. Ask the sender for the whole link and open it again.',
-  notFoundTitle: 'The link is not found or has been revoked',
-  notFoundText: 'The owner may have revoked it. Ask them for a new link.',
+  notFoundTitle: 'The link was revoked',
+  notFoundText: 'Or there is a typo in the address. Ask the sender for a new link.',
   expiredTitle: 'The link has expired',
   expiredText: 'Ask the owner to extend it — the address will stay the same.',
   rateTitle: 'Too many requests',
@@ -25,7 +25,7 @@ const en = {
   encryptedFolder: 'The files are encrypted. They are decrypted in your browser with the key from the link — the '
     + 'server never gets the key.',
   troubleTitle: 'If the link does not work',
-  troubleText: 'If the page says the link has expired or was revoked, ask the sender to create a new one.',
+  troubleText: '“The link has expired” or “The link was revoked” — ask the sender to create a new one.',
   validUntil: 'link valid until {date}',
   emptyFolder: 'This folder is empty',
   files_one: '{count} file',
@@ -49,6 +49,7 @@ const en = {
   previewFailed: 'This file cannot be shown here. Download it instead.',
   footNote: 'Stored in Parvane · no account needed',
   bytes: 'B',
+  decimal: '.',
   kb: 'KB',
   mb: 'MB',
   gb: 'GB',
@@ -60,8 +61,8 @@ const ru: typeof en = {
   incompleteTitle: 'Ссылка неполная',
   incompleteText: 'Нет части после # либо она повреждена — в ней ключ, без него файлы не расшифровать. '
     + 'Попросите отправителя прислать ссылку целиком и откройте её снова.',
-  notFoundTitle: 'Ссылка не найдена или отозвана',
-  notFoundText: 'Возможно, владелец её отозвал. Попросите у него новую ссылку.',
+  notFoundTitle: 'Ссылку отозвали',
+  notFoundText: 'Либо в адресе ошибка. Попросите у отправителя новую ссылку.',
   expiredTitle: 'Срок ссылки истёк',
   expiredText: 'Попросите владельца продлить её — адрес останется прежним.',
   rateTitle: 'Слишком часто',
@@ -101,6 +102,7 @@ const ru: typeof en = {
   previewFailed: 'Этот файл не получается показать здесь. Скачайте его.',
   footNote: 'Хранится в Parvane · аккаунт не нужен',
   bytes: 'Б',
+  decimal: ',',
   kb: 'КБ',
   mb: 'МБ',
   gb: 'ГБ',
@@ -142,5 +144,6 @@ export function sizeText(strings: LinkStrings, bytes: number) {
     unit += 1;
   }
   const digits = unit === 0 || value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits)} ${units[unit]}`;
+  // Десятичный знак языка страницы: «1,2 ГБ» (доска `RpFiles`)
+  return `${value.toFixed(digits).replace('.', strings.decimal)} ${units[unit]}`;
 }

@@ -1,6 +1,6 @@
 import type { createHealthApi } from '../../../api/parvane/healthApi';
 import type {
-  HealthDays, HealthDraft, HealthEntry, HealthParseResult, HealthStatus, HealthView,
+  HealthDays, HealthDayTotal, HealthDraft, HealthEntry, HealthParseResult, HealthStatus, HealthView,
 } from './healthTypes';
 
 import { createSignal } from '../../../util/signals';
@@ -176,7 +176,13 @@ export async function loadHealthViewAt(day: string): Promise<HealthView | undefi
   return reply?.view ? parseEngineJson<HealthView>(reply.view) : undefined;
 }
 
-export type HealthEntriesPage = { entries: HealthEntry[]; hasMore: boolean };
+// У видов-сумм ещё итоги дней (`days`) новыми первыми
+export type HealthEntriesPage = {
+  entries: HealthEntry[];
+  hasMore: boolean;
+  days?: HealthDayTotal[];
+  hasMoreDays?: boolean;
+};
 
 /** Записи показателя новыми первыми, не больше `limit`; `sleep` — сон вместе с отметками «лёг» и «встал». */
 export async function loadHealthEntries(kind: string, limit: number): Promise<HealthEntriesPage | undefined> {

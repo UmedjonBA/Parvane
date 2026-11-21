@@ -58,8 +58,9 @@ describe('Жалобы (REPORT-2)', () => {
       [GROUP_CHAT]: [{ id: 5, chatId: GROUP_CHAT, date: 900, content: { text: { text: 'x' } } } as ApiMessage],
     };
     const addresses: Record<string, string> = {
-      'u-ann': 'ann@demo.test', 'u-bob': 'bob@demo.test', [GROUP_CHAT]: 'v2g:0a0b',
+      'u-ann': 'ann@demo.test', 'u-bob': 'bob@demo.test', 'u-spammer': 'spam@demo.test', [GROUP_CHAT]: 'v2g:0a0b',
     };
+    const hidden: string[] = [];
     const store = {
       getChatIds: () => Object.keys(messages),
       getMessages: (id: string) => messages[id],
@@ -76,13 +77,21 @@ describe('Жалобы (REPORT-2)', () => {
         closed = [...closed, ...ops];
         return Promise.resolve(true);
       },
+      members: () => [{ user: 'spam@demo.test', joinedMs: 1_763_251_200_000 }],
+      setMemberHidden: (address, user, isHidden) => {
+        hidden.push(`${address}/${user}/${isHidden}`);
+        return Promise.resolve(true);
+      },
     });
 
     const inbox = await reports.parvaneReportInbox({ chatId: GROUP_CHAT });
     expect(inbox?.open).toBe(1);
     expect(inbox?.items[0]).toMatchObject({
-      uuid: OP, authorId: 'u-spammer', count: 2, lastDate: 1002, messageId: 5,
+      uuid: OP, authorId: 'u-spammer', count: 2, lastDate: 1002, messageId: 5, memberSince: 1_763_251_200,
     });
+    // «Скрыть у меня сообщения участника» (REPORT-3): адреса группы и участника — в личное состояние
+    expect(await reports.parvaneMemberHide({ chatId: GROUP_CHAT, userId: 'u-spammer', isHidden: true })).toBe(true);
+    expect(hidden).toEqual(['v2g:0a0b/spam@demo.test/true']);
 
     expect(await reports.parvaneReportClose({ chatId: GROUP_CHAT, uuids: [OP] })).toBe(true);
     expect((await reports.parvaneReportInbox({ chatId: GROUP_CHAT }))?.items).toEqual([]);

@@ -1,53 +1,53 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
+import type { HealthGoalTarget } from './HealthGoalSheet';
+import type { HealthPeriod } from './healthPeriods';
 import type { HealthEntriesPage } from './healthStore';
 import type { HealthEntry, HealthView } from './healthTypes';
 
 import buildClassName from '../../../util/buildClassName';
 import { FOOD_KIND, WORKOUT_KIND } from './healthDayFormat';
-import {
-  formatClock, formatDelta, formatNumber, formatValue, MOOD_KIND, parseClock,
-} from './healthFormat';
-import { loadHealthEntries, setHealthGoal } from './healthStore';
-import useHealthLabels from './useHealthLabels';
+import { MOOD_KIND, WATER_KIND } from './healthFormat';
+import { loadHealthEntries } from './healthStore';
 
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import HealthActivityDetail from './HealthActivityDetail';
 import HealthEntries from './HealthEntries';
-import HealthMoodScale from './HealthMoodScale';
+import HealthMetricDetail from './HealthMetricDetail';
+import HealthMoodDetail from './HealthMoodDetail';
 import HealthNutritionDetail from './HealthNutritionDetail';
-import HealthPeriodChart from './HealthPeriodChart';
-import HealthSleepCard from './HealthSleepCard';
+import HealthSleepDetail from './HealthSleepDetail';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Health.module.scss';
 
 type OwnProps = {
   view: HealthView;
-  // `sleep` либо вид показателя
+  // `sleep`, `food` (питание и вода), `workout` (активность) либо вид показателя
   kind: string;
+  period: HealthPeriod;
+  isWide?: boolean;
+  hasFood?: boolean;
   onBed: NoneToVoidFunction;
   onWake: NoneToVoidFunction;
   onEdit: (entry: HealthEntry) => void;
   onNap: NoneToVoidFunction;
-  onExample: (text: string) => void;
+  onGoal: (target: HealthGoalTarget) => void;
 };
 
 const SLEEP_KINDS = ['sleep', 'sleep_start', 'sleep_end'];
 const PAGE_SIZE = 30;
 
-// Parvane (spec 038): подробный экран показателя либо сна — крупное значение, график за месяц, цель и записи.
-// Цель правится на месте и сохраняется по выходу из поля; записи приходят из движка страницами
+// Parvane (spec 038, 041): подробный экран — сон, самочувствие, питание и вода, активность либо показатель.
+// Записи приходят из движка страницами (у шагов и воды — ещё итоги дней)
 const HealthDetail = ({
-  view, kind, onBed, onWake, onEdit, onNap, onExample,
+  view, kind, period, isWide, hasFood, onBed, onWake, onEdit, onNap, onGoal,
 }: OwnProps) => {
-  const {
-    lang, kindTitle, unitTitle,
-  } = useHealthLabels(view.today);
+  const lang = useLang();
   const isSleep = kind === 'sleep';
   const metric = view.metrics.find((item) => item.kind === kind);
-  const unit = metric ? unitTitle(metric.unit) : '';
 
   // До ответа движка — записи вида из сводки; сводка сменилась — страница перечитывается
   const [limit, setLimit] = useState(PAGE_SIZE);
@@ -67,166 +67,67 @@ const HealthDetail = ({
   const entries = page?.kind === kind
     ? page.entries
     : view.recent.filter((entry) => (isSleep ? SLEEP_KINDS.includes(entry.kind) : entry.kind === kind));
-  const hasMore = page?.kind === kind && page.hasMore;
+  const hasMore = page?.kind === kind && (page.hasMore || Boolean(page.hasMoreDays));
 
   const handleMore = useLastCallback(() => setLimit(limit + PAGE_SIZE));
 
-  const [goalText, setGoalText] = useState('');
-  const [bedText, setBedText] = useState('');
-  const [wakeText, setWakeText] = useState('');
-  const savedGoal = metric?.goal;
-  const { goalBedMin, goalWakeMin } = view.sleep;
-  useEffect(() => {
-    setGoalText(savedGoal === undefined ? '' : String(savedGoal));
-  }, [savedGoal, kind]);
-  useEffect(() => {
-    setBedText(goalBedMin === undefined ? '' : formatClock(goalBedMin));
-    setWakeText(goalWakeMin === undefined ? '' : formatClock(goalWakeMin));
-  }, [goalBedMin, goalWakeMin]);
-
-  const handleGoalChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setGoalText(e.currentTarget.value);
-  });
-  const handleBedChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setBedText(e.currentTarget.value);
-  });
-  const handleWakeChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setWakeText(e.currentTarget.value);
-  });
-
-  // Значение берётся из самого поля: выход из поля может прийти раньше перерисовки после ввода
-  const handleGoalCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const text = e.currentTarget.value.trim().replace(',', '.');
-    const target = text ? Number(text) : undefined;
-    if (target !== undefined && (!Number.isFinite(target) || target <= 0)) {
-      setGoalText(savedGoal === undefined ? '' : String(savedGoal));
-      return;
-    }
-    if (target !== savedGoal) void setHealthGoal(kind, target);
-  });
-
-  const handleBedCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const { value } = e.currentTarget;
-    const target = value ? parseClock(value) : undefined;
-    if (target !== goalBedMin) void setHealthGoal('sleep_bed', target);
-  });
-
-  const handleWakeCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const { value } = e.currentTarget;
-    const target = value ? parseClock(value) : undefined;
-    if (target !== goalWakeMin) void setHealthGoal('sleep_wake', target);
-  });
-
   function renderBlock() {
-    if (kind === FOOD_KIND) return <HealthNutritionDetail nutrition={view.nutrition} onExample={onExample} />;
-    if (kind === WORKOUT_KIND) return <HealthActivityDetail activity={view.activity} onExample={onExample} />;
+    if (kind === FOOD_KIND || (kind === WATER_KIND && hasFood)) {
+      return (
+        <HealthNutritionDetail
+          nutrition={view.nutrition}
+          water={view.metrics.find((item) => item.kind === WATER_KIND)}
+          isWide={isWide}
+          hasFood={hasFood}
+        />
+      );
+    }
+    if (kind === WORKOUT_KIND) return <HealthActivityDetail activity={view.activity} isWide={isWide} onGoal={onGoal} />;
+    if (isSleep) {
+      return (
+        <HealthSleepDetail
+          view={view}
+          period={period}
+          isWide={isWide}
+          entries={entries}
+          onEdit={onEdit}
+          onGoal={onGoal}
+          onBed={onBed}
+          onWake={onWake}
+          onNap={onNap}
+        />
+      );
+    }
+    if (kind === MOOD_KIND) return <HealthMoodDetail view={view} isWide={isWide} entries={entries} onEdit={onEdit} />;
     return (
-      <>
-        {kind === MOOD_KIND && <HealthMoodScale />}
-        {(metric || kind !== MOOD_KIND) && renderMetric()}
-      </>
+      <HealthMetricDetail
+        view={view}
+        metric={metric}
+        kind={kind}
+        period={period}
+        isWide={isWide}
+        entries={entries}
+        page={page?.kind === kind ? page : undefined}
+        onEdit={onEdit}
+        onGoal={onGoal}
+      />
     );
   }
 
-  function renderTitle() {
-    if (kind === FOOD_KIND) return lang('HealthNutritionTitle');
-    if (kind === WORKOUT_KIND) return lang('HealthActivityTitle');
-    return kindTitle(kind);
-  }
-
-  function renderMetric() {
-    if (!metric) return <div className={kit.muted}>{lang('HealthNoEntries')}</div>;
-    const { last, isSum } = metric;
-    const value = isSum ? formatNumber(metric.today ?? 0, lang.code) : last ? formatValue(last, lang.code) : '—';
-    return (
-      <section className={buildClassName(kit.card, styles.card)} data-health-card={kind}>
-        <div className={styles.sleepLine}>
-          <span className={buildClassName(kit.mono, styles.big)} data-health-value>{value}</span>
-          {Boolean(unit) && kind !== 'pressure' && <span className={kit.muted}>{unit}</span>}
-          {metric.toGoal !== undefined && (
-            <span className={kit.muted} data-health-to-goal>
-              {lang(isSum ? 'HealthLeftToGoal' : 'HealthToGoal', {
-                delta: isSum
-                  ? formatNumber(Math.max(0, metric.toGoal), lang.code) : formatDelta(metric.toGoal, lang.code),
-              })}
-            </span>
-          )}
-        </div>
-        {!isSum && (metric.weekDelta !== undefined || metric.monthDelta !== undefined) && (
-          <div className={buildClassName(kit.muted, kit.small)}>
-            {metric.weekDelta !== undefined
-              && lang('HealthWeekDelta', { delta: formatDelta(metric.weekDelta, lang.code) })}
-            {metric.weekDelta !== undefined && metric.monthDelta !== undefined && ' · '}
-            {metric.monthDelta !== undefined
-              && lang('HealthMonthDelta', { delta: formatDelta(metric.monthDelta, lang.code) })}
-          </div>
-        )}
-        <HealthPeriodChart metric={metric} today={view.today} />
-        <label className={styles.goal}>
-          <span className={kit.muted}>{lang('HealthGoalLabel')}</span>
-          <input
-            className={buildClassName(kit.input, styles.goalInput)}
-            type="text"
-            inputMode="decimal"
-            value={goalText}
-            placeholder={lang('HealthGoalNone')}
-            data-health-goal={kind}
-            onChange={handleGoalChange}
-            onBlur={handleGoalCommit}
-          />
-          {Boolean(unit) && <span className={kit.muted}>{unit}</span>}
-        </label>
-      </section>
-    );
-  }
+  // Еда и тренировки: записи под экраном — правка и удаление окном (сверх досок `XdHealth`)
+  const isDayScreen = kind === FOOD_KIND || kind === WORKOUT_KIND;
+  const hasEntriesList = !(kind === WATER_KIND && hasFood);
 
   return (
-    <div className={styles.detail} data-health-detail={kind}>
-      <h2 className={styles.detailTitle}>{renderTitle()}</h2>
-      {isSleep ? (
+    <div className={styles.detailBody} data-health-detail={kind}>
+      {renderBlock()}
+      {isDayScreen && (
         <>
-          <HealthSleepCard sleep={view.sleep} today={view.today} isDetail onBed={onBed} onWake={onWake} />
-          <HealthPeriodChart sleep={view.sleep} today={view.today} />
-          <section className={buildClassName(kit.card, styles.card)}>
-            <div className={kit.caps}>{lang('HealthSleepGoal')}</div>
-            <div className={styles.goalRow}>
-              <label className={styles.goal}>
-                <span className={kit.muted}>{lang('HealthSleepGoalBed')}</span>
-                <input
-                  className={buildClassName(kit.input, styles.goalInput)}
-                  type="time"
-                  value={bedText}
-                  data-health-goal="sleep_bed"
-                  onChange={handleBedChange}
-                  onBlur={handleBedCommit}
-                />
-              </label>
-              <label className={styles.goal}>
-                <span className={kit.muted}>{lang('HealthSleepGoalWake')}</span>
-                <input
-                  className={buildClassName(kit.input, styles.goalInput)}
-                  type="time"
-                  value={wakeText}
-                  data-health-goal="sleep_wake"
-                  onChange={handleWakeChange}
-                  onBlur={handleWakeCommit}
-                />
-              </label>
-            </div>
-          </section>
-          <button
-            type="button"
-            className={buildClassName(kit.btn, styles.more)}
-            data-health-action="nap"
-            onClick={onNap}
-          >
-            {lang('HealthNapTitle')}
-          </button>
+          <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
+          <HealthEntries entries={entries} today={view.today} isWide={isWide} onEdit={onEdit} />
         </>
-      ) : renderBlock()}
-      <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
-      <HealthEntries entries={entries} today={view.today} onEdit={onEdit} />
-      {hasMore && (
+      )}
+      {hasEntriesList && hasMore && (
         <button type="button" className={buildClassName(kit.btn, styles.more)} data-health-more onClick={handleMore}>
           {lang('HealthEntriesMore')}
         </button>

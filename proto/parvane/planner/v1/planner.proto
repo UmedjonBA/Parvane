@@ -186,6 +186,9 @@ message Event {
   Str list_id = 16;
   // 20 ноя 2026 (spec 041): шаги события, как у задачи; у ряда отметки шагов — по дню (`Occurrence.done_steps`)
   Steps steps = 17;
+  // 21 ноя 2026 (spec 041, доска `ZdPlanX` «Предложения из чатов»): задание чата, из которого создано событие, как
+  // `Task.source`; у события из карточки id = uuid карточки, `op_id` — тот же uuid без дефисов
+  Source source = 18;
 }
 
 message List {
@@ -254,6 +257,11 @@ message Settings {
   uint32 lunch_end = 5;
   uint32 margin = 6;
   uint32 budget = 7;
+  // 21 ноя 2026 (spec 041, доски `RdPlanSet`/`PhModSettings`): напоминание новых событий по умолчанию, минут до
+  // начала (нет — без напоминания); напоминать о сроках задач; «Запоминать мои правки» выключено
+  optional uint32 event_remind = 8;
+  bool remind_deadlines = 9;
+  bool learn_off = 10;
 }
 
 // Отметка переноса данных этапа 1 (информационная).

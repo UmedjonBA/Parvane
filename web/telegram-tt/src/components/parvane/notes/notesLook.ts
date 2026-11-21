@@ -4,13 +4,14 @@ import type { LangFn } from '../../../util/localization';
 import type { NoteEntry } from './notesStore';
 
 import { fromDayKey } from '../planner/plannerModel';
-import { FOLDER_TONES } from './notesMeta';
+import { GUIDE_EN } from './guide/en';
+import { GUIDE_RU } from './guide/ru';
 import { parseNoteCached } from './notesModel';
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const PREVIEW_MAX = 140;
-const HASH_BASE = 31;
-const HASH_SEED = 7;
+// Папка справки на любом языке справки: своим цветом (доска `PhNotesMore`)
+const GUIDE_FOLDERS = new Set([GUIDE_RU.folderName, GUIDE_EN.folderName]);
 
 // Форматы дат — по одному на язык: `toLocaleDateString` создаёт формат на каждый вызов (дорого на тысячу строк)
 const dayTitleFormats = new Map<string, Intl.DateTimeFormat>();
@@ -37,15 +38,15 @@ function formatOf(cache: Map<string, Intl.DateTimeFormat>, locale: string, optio
   return format;
 }
 
-/** Цвет папки: один и тот же у папки на всех экранах; заметки дня и без папки — цвет заметок. */
+/** Цвет папки по доске `PhNotesMore`: заметки дня — акцент, «Без папки» — серый, справка — бирюзовый, свои
+ * папки — синий, если человек не выбрал другой (цвет верхней папки — на всех экранах и у вложенных). */
 export function folderColor(folder: string, isDaily?: boolean) {
   const top = folder.split('/')[0];
-  if (isDaily || !top) return 'var(--pv-note)';
+  if (isDaily) return 'var(--pv-accent)';
+  if (!top) return 'var(--pv-muted)';
   const chosen = chosenTones.get(top);
   if (chosen) return `var(--pv-${chosen})`;
-  let hash = HASH_SEED;
-  for (const char of top) hash = (hash * HASH_BASE + char.codePointAt(0)!) % 0xffff;
-  return `var(--pv-${FOLDER_TONES[hash % FOLDER_TONES.length]})`;
+  return GUIDE_FOLDERS.has(top) ? 'var(--pv-aqua)' : 'var(--pv-blue)';
 }
 
 export function isDayTitle(title: string) {

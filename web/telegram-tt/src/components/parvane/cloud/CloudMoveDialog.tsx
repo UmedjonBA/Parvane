@@ -20,7 +20,11 @@ import PvSheet from '../notes/PvSheet';
 import kit from '../notes/PvKit.module.scss';
 import styles from './CloudSheets.module.scss';
 
-export type CloudMovePlace = { id: string; name: string; isShared?: boolean; members?: number; nodes: CloudNode[] };
+export type CloudMovePlace = {
+  id: string; name: string; isShared?: boolean; members?: number; nodes: CloudNode[];
+  // С кем общая папка («Тимур, Алия»): подпись шага телефона (доска `XpFiles`)
+  memberNames?: string;
+};
 
 type OwnProps = {
   isOpen: boolean;
@@ -35,6 +39,8 @@ type OwnProps = {
   sourcePlace?: string;
   confirmLabel?: string;
   title?: string;
+  // Хранилище заметок в корне диска: пометка «хранилище заметок · .md»
+  vaultId?: string;
   // «Новая папка» внутри окна: папка создаётся в выбранном месте и сразу выбирается; итог — её id
   onCreateFolder?: (place: string | undefined, parent: string | undefined, name: string) => Promise<string | undefined>;
   onSubmit: (target?: string, place?: string) => void;
@@ -50,7 +56,7 @@ const FOCUS_DELAY_MS = 100;
 // и «общая: увидят N участников»; телефон — шаги: путь сверху, папки уровня (нажатие выбирает, стрелка — внутрь),
 // «Новая папка», кнопка «Переместить сюда · «папка»» внизу (без выбора — открытая папка)
 const CloudMoveDialog = ({
-  isOpen, isStepwise, rootName, nodes, movedIds, startFolder, places, sourcePlace, confirmLabel, title,
+  isOpen, isStepwise, rootName, nodes, movedIds, startFolder, places, sourcePlace, confirmLabel, title, vaultId,
   onCreateFolder, onSubmit, onClose,
 }: OwnProps) => {
   const lang = useLang();
@@ -171,14 +177,26 @@ const CloudMoveDialog = ({
 
   const nameProblem = isNaming && hasTriedName ? validateName(newName.trim()) : undefined;
   const actionLabel = confirmLabel || lang('ParvaneCloudMoveHere');
+  const movedNodes = movedIds.map((id) => sources.flatMap((s) => s.nodes).find((n) => n.id === id));
+  // «файл уже здесь» / «папка уже здесь» (доска `ZdFilesX`); несколько — «уже здесь»
+  const hereKey = movedNodes.length !== 1 ? 'KnowledgeFilesHere'
+    : movedNodes[0]?.kind === 'folder' ? 'ParvaneCloudMoveFolderHere' : 'ParvaneCloudMoveFileHere';
+  // Компьютер (`ZdFilesX`): «Переместить в «Сборки»»; телефон и сохранение из чата — «Переместить сюда · «…»»
+  const submitText = !target ? actionLabel
+    : !isStepwise && !confirmLabel ? lang('ParvaneCloudMoveTo', { name: target.name })
+      : lang('ParvaneCloudMoveInto', { action: actionLabel, name: target.name });
 
   function renderRowNote(row: CloudMoveRow) {
-    if (row.isHere) return <span className={styles.treeHere}>{lang('KnowledgeFilesHere')}</span>;
+    if (row.isHere) return <span className={styles.treeHere}>{lang(hereKey)}</span>;
+    if (row.folder && row.folder === vaultId && row.place === sources[0]?.id) {
+      return <span className={styles.treeHere}>{lang('KnowledgeFilesVault')}</span>;
+    }
     if (isStepwise && row.count !== undefined) {
       const items = lang('KnowledgeFilesItems', { count: row.count }, { pluralValue: row.count });
+      const names = places?.find((p) => p.id === row.place)?.memberNames;
       return (
         <span className={styles.treeHere}>
-          {row.isShared ? `${lang('ParvaneCloudMoveShared')} · ${items}` : items}
+          {row.isShared ? `${lang('ParvaneCloudMoveShared')} · ${names || items}` : items}
         </span>
       );
     }
@@ -217,8 +235,8 @@ const CloudMoveDialog = ({
           ref={nameRef}
           className={buildClassName(kit.input, styles.moveNameInput)}
           value={newName}
-          placeholder={lang('ParvaneCloudFolderName')}
-          aria-label={lang('ParvaneCloudFolderName')}
+          placeholder={lang('ParvaneCloudNameLabel')}
+          aria-label={lang('ParvaneCloudNameLabel')}
           aria-invalid={Boolean(nameProblem)}
           autoComplete="off"
           enterKeyHint="done"
@@ -301,10 +319,12 @@ const CloudMoveDialog = ({
     <PvSheet
       isOpen={isOpen}
       title={title || lang('ParvaneCloudMoveTitle')}
+      subtitle={isStepwise ? subtitle : undefined}
       className={buildClassName(styles.narrow, styles.full)}
+      startClose={isStepwise ? 'cancel' : undefined}
       onClose={onClose}
     >
-      {subtitle && <div className={styles.note} dir="auto" data-move-subtitle>{subtitle}</div>}
+      {subtitle && !isStepwise && <div className={styles.note} dir="auto" data-move-subtitle>{subtitle}</div>}
       {isStepwise && (
         <nav className={styles.pickPath} aria-label={lang('ParvaneCloudPath')} data-move-path>
           {crumbs.map((crumb, index) => (
@@ -339,7 +359,7 @@ const CloudMoveDialog = ({
           aria-label={actionLabel}
           onClick={handleSubmit}
         >
-          {target ? lang('ParvaneCloudMoveInto', { action: actionLabel, name: target.name }) : actionLabel}
+          {submitText}
         </button>
       </div>
     </PvSheet>

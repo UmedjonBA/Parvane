@@ -32,7 +32,7 @@ pub(crate) const V1_TABLES: &[&str] = &[
     "device_labels",
 ];
 /// Таблицы v2-хранилища со столбцом `user`, переходящие к новому адресу целиком.
-pub(crate) const V2_TABLES: &[&str] = &["one_time_keys", "fallback_keys", "delivery_keys", "privacy", "token_issuance", "device_key_claims"];
+pub(crate) const V2_TABLES: &[&str] = &["one_time_keys", "fallback_keys", "delivery_keys", "privacy", "token_issuance", "device_key_claims", "security_keys", "seckey_settings"];
 
 fn now_ms() -> i64 {
     now_unix() * 1000

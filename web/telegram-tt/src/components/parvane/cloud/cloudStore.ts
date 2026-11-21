@@ -31,6 +31,12 @@ export type CloudTransfer = {
   state: CloudTransferEvent['state'];
   error?: CloudErrorCode;
 };
+// Строка «Моих ссылок»: ссылки сервера и отозванные на этом устройстве (доски `RpFiles`, `RdFiles`: «отозвана
+// 2 ноября» стоит до «Убрать»; сервер копии уже стёр, запись — только на устройстве)
+export type CloudShownLink = Omit<CloudLinkInfo, 'state'> & {
+  state: CloudLinkInfo['state'] | 'revoked';
+  revokedAt?: number;
+};
 export type CloudNotice = { code: CloudErrorCode | 'saved' | 'sent' | 'copySent' | 'restored'; at: number };
 
 type UploadSpec = { container: string; parent?: string; name: string; file: File };
@@ -41,6 +47,12 @@ const CLOUD_EVENT = 'parvane-cloud-changed';
 const TRANSFER_EVENT = 'parvane-cloud-transfer';
 const LINK_EVENT = 'parvane-cloud-link';
 const PREFS_KEY = 'parvane:cloud-prefs';
+const REVOKED_KEY = 'parvane:cloud-revoked-links:';
+// Файлы, скачанные на этом устройстве (`fileId` содержимого): «на устройстве есть» в меню телефона (доска `XpFiles`)
+const ON_DEVICE_KEY = 'parvane:cloud-on-device:';
+const ON_DEVICE_KEEP = 500;
+// Сколько отозванных ссылок помнит устройство
+const REVOKED_KEEP = 50;
 const LOAD_RETRY_MS = 1000;
 const LOAD_ATTEMPTS = 60;
 const LINKING_POLL_MS = 3000;
@@ -72,13 +84,14 @@ const [getCloudPrefs, setCloudPrefsSignal] = createSignal<CloudPrefs>(readPrefs(
 const [getCloudNotice, setCloudNotice] = createSignal<CloudNotice | undefined>(undefined);
 // Свои ссылки (не загружены — undefined) и ход создаваемой сейчас ссылки: «N из M» файлов
 const [getCloudLinks, setCloudLinks] = createSignal<CloudLinkInfo[] | undefined>(undefined);
+const [getCloudRevokedLinks, setCloudRevokedLinks] = createSignal<CloudShownLink[]>([]);
 const [getCloudLinkProgress, setCloudLinkProgress] = createSignal<
   (CloudLinkProgress & { container: string; node: string }) | undefined
 >(undefined);
 
 export {
   getCloudData, getIsCloudLoaded, getCloudStatus, getCloudPlace, getCloudTransfers, getHasCloudTransfers, getCloudUsage,
-  getCloudPrefs, getCloudNotice, getCloudLinks, getCloudLinkProgress, getCloudUnsent,
+  getCloudPrefs, getCloudNotice, getCloudLinks, getCloudLinkProgress, getCloudUnsent, getCloudRevokedLinks,
 };
 
 function setCloudTransfers(list: CloudTransfer[]) {
@@ -195,6 +208,8 @@ export function retryCloud() {
 /** Открытая папка или контейнер исчезли (удалены, доступ отозван) — подняться выше. */
 function fixPlace(data: CloudDriveState) {
   const place = getCloudPlace();
+  // Владелец закрыл доступ к открытой папке: вместо содержимого — «Нет доступа» с «Убрать» (доска `ZpFilesX`)
+  if (place.container && data.closed?.some((c) => c.id === place.container)) return;
   if (place.container && !data.containers.some((c) => c.id === place.container)) {
     // Чужая папка пропала — остаться в «Доступных мне», своя — в корне
     setCloudPlaceSignal(place.view ? { view: place.view } : {});
@@ -212,6 +227,7 @@ export function loadCloud(userId?: string) {
   if (loadedUserId !== userId) {
     resetCloud();
     loadedUserId = userId;
+    setCloudRevokedLinks(readRevokedLinks());
   }
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
@@ -654,6 +670,7 @@ export async function downloadCloudNode(container: string, node: CloudNode, maxM
   const result = await callParvane('parvaneCloudDownload', {
     container, node: node.id, handle, transferId: id, fileId,
   }).catch(() => undefined) as CloudResult<{ blob?: Blob; name: string }> | undefined;
+  if (result?.ok) markCloudOnDevice(fileId || node.blob?.fileId);
   if (!result?.ok || !result.blob) return;
   const url = URL.createObjectURL(result.blob);
   const link = document.createElement('a');
@@ -715,10 +732,17 @@ export function cancelCloudLinkCreate() {
 }
 
 export async function revokeCloudLink(linkId: string) {
+  const known = getCloudLinks()?.find((l) => l.id === linkId);
   const result = await callParvane('parvaneCloudLinkRevoke', { linkId }).catch(() => undefined) as
     CloudResult | undefined;
   if (!result?.ok) showCloudNotice(result?.error || 'rejected');
   else setCloudLinks((getCloudLinks() || []).filter((l) => l.id !== linkId));
+  // Действующая ссылка остаётся в списке «отозвана {дата}» до «Убрать»
+  if (result?.ok && known?.state === 'active') {
+    saveRevokedLinks([{
+      ...known, state: 'revoked', revokedAt: Math.floor(Date.now() / 1000), url: undefined,
+    }, ...getCloudRevokedLinks()]);
+  }
   void refreshCloudLinks();
   void refreshCloudUsage();
   return Boolean(result?.ok);
@@ -732,10 +756,70 @@ export async function extendCloudLink(linkId: string, ttlDays: number) {
   return Boolean(result?.ok);
 }
 
-/** «Убрать недействующие»: истёкшие и недоделанные ссылки отзываются, их копии перестают занимать место. */
+/** «Убрать недействующие»: истёкшие и недоделанные ссылки отзываются, их копии перестают занимать место;
+ * отозванные уходят из списка. */
 export async function revokeDeadCloudLinks() {
   const dead = (getCloudLinks() || []).filter((l) => l.state !== 'active');
+  saveRevokedLinks([]);
   for (const link of dead) {
     await revokeCloudLink(link.id);
   }
+}
+
+/** «Убрать» у отозванной ссылки. */
+export function dismissRevokedCloudLink(linkId: string) {
+  saveRevokedLinks(getCloudRevokedLinks().filter((l) => l.id !== linkId));
+}
+
+/** Скачан ли этот вариант содержимого на этом устройстве. */
+export function isCloudOnDevice(fileId?: string) {
+  if (!fileId) return false;
+  try {
+    return (JSON.parse(localStorage.getItem(`${ON_DEVICE_KEY}${loadedUserId || ''}`) || '[]') as string[])
+      .includes(fileId);
+  } catch {
+    return false;
+  }
+}
+
+function markCloudOnDevice(fileId?: string) {
+  if (!fileId) return;
+  const key = `${ON_DEVICE_KEY}${loadedUserId || ''}`;
+  try {
+    const known = (JSON.parse(localStorage.getItem(key) || '[]') as string[]).filter((id) => id !== fileId);
+    localStorage.setItem(key, JSON.stringify([fileId, ...known].slice(0, ON_DEVICE_KEEP)));
+  } catch {
+    // Пометка — удобство устройства: без хранилища меню пишет «на устройстве нет»
+  }
+}
+
+function revokedKey() {
+  return `${REVOKED_KEY}${loadedUserId || ''}`;
+}
+
+function readRevokedLinks(): CloudShownLink[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(revokedKey()) || '[]') as CloudShownLink[];
+    return Array.isArray(saved) ? saved.filter((l) => l && typeof l.id === 'string' && l.state === 'revoked') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRevokedLinks(list: CloudShownLink[]) {
+  const kept = list.slice(0, REVOKED_KEEP);
+  setCloudRevokedLinks(kept);
+  try {
+    localStorage.setItem(revokedKey(), JSON.stringify(kept));
+  } catch {
+    // Пометка «отозвана» — удобство устройства: без хранилища она живёт до перезагрузки
+  }
+}
+
+/** «Убрать» у строки «Нет доступа»: строка уходит, из открытой папки — подняться в «Доступные мне». */
+export async function dismissCloudClosed(container: string) {
+  await callParvane('parvaneCloudDismissClosed', { container }).catch(() => undefined);
+  const place = getCloudPlace();
+  if (place.container === container) setCloudPlaceSignal(place.view ? { view: place.view } : {});
+  await refreshCloud();
 }

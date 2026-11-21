@@ -26,10 +26,10 @@
   overflow: auto;
   display: grid;
   grid-template:
-    "art art art" auto
-    "info info info" auto
-    "transport transport transport" auto
-    "star playlist send" auto / auto auto auto;
+    "art" auto
+    "info" auto
+    "transport" auto
+    "chips" auto / auto;
   gap: 0.875rem 0.5rem;
   align-content: safe center;
   justify-content: center;
@@ -69,14 +69,22 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.saved {
+// Компьютер: «В любимом · Скачан · В плейлист · Отправить в чат» (доска `XdMusic`)
+.chips {
   display: flex;
-  gap: 0.25rem;
-  align-items: center;
+  grid-area: chips;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   justify-content: center;
+}
 
-  font-size: var(--pv-font-size-small);
-  color: var(--pv-aqua);
+.heartFilled {
+  fill: currentColor;
+}
+
+.queueNote {
+  flex: none;
+  padding: 0 0.75rem 0.75rem;
 }
 
 .transport {
@@ -91,6 +99,10 @@
 .send { grid-area: send; justify-self: start; }
 
 .on { color: var(--pv-red); }
+
+.queue {
+  flex-direction: column;
+}
 
 .queue {
   overflow: hidden;
@@ -114,9 +126,9 @@
   .stage {
     overflow: visible;
     grid-template:
-      "collapse source source send" auto
+      "collapse source playlist send" auto
       "art art art art" auto
-      "info info star playlist" auto
+      "info info star saved" auto
       "transport transport transport transport" auto / 2.75rem minmax(0, 1fr) 2.75rem 2.75rem;
     flex: none;
     gap: 0.75rem 0;
@@ -127,6 +139,9 @@
   }
 
   .desktopLabel { display: none; }
+
+  .saved { grid-area: saved; }
+  .chips { grid-column: 1 / -1; }
 
   .collapse, .send, .star, .playlist {
     width: 2.75rem;
@@ -159,7 +174,6 @@
 
   .art { width: min(13.5rem, 28dvh); }
   .info { justify-self: start; text-align: start; }
-  .saved { justify-content: flex-start; }
   .title { font-size: 1.25rem; }
   .transport { width: 100%; }
   .queue {
@@ -175,7 +189,7 @@
   .expanded {
     .art, .transport { display: none; }
     .stage {
-      grid-template-areas: "collapse source source send" "info info star playlist";
+      grid-template-areas: "collapse source playlist send" "info info star saved";
       grid-template-rows: auto auto;
     }
   }

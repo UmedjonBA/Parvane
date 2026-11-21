@@ -508,3 +508,79 @@
 .menuItemDanger {
   color: var(--pv-red);
 }
+
+.menuLabel {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+// Меню строки списка у курсора (компьютер, доска `ZdNotesX`)
+.menuPopBackdrop {
+  position: fixed;
+  z-index: var(--z-portal-menu);
+  inset: 0;
+}
+
+.menuPop {
+  position: fixed;
+  z-index: calc(var(--z-portal-menu) + 1);
+
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+
+  min-width: 16.5rem;
+  max-height: calc(100vh - 1rem);
+  padding: 0.375rem 0;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card);
+
+  font-family: var(--font-family);
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.menuPop .menuItem {
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  font-size: var(--pv-font-size-small);
+}
+
+.menuItemDivided {
+  border-block-start: 1px solid var(--pv-line);
+}
+
+.menuHint {
+  flex: none;
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// Кнопка «файл» под редактором — подписью, а не значком (доска `PhNotesMore`)
+.toolText {
+  font-family: var(--font-family);
+  font-weight: var(--font-weight-medium);
+  color: var(--pv-at);
+}
+
+// Папка в пути шапки компьютера — кнопка переноса заметки
+.crumbFolder {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    text-decoration: underline;
+  }
+}

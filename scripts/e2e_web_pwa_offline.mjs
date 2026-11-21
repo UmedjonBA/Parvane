@@ -208,12 +208,33 @@ try {
     });
   await page.locator('#ParvaneKnowledge [data-offline-bar]').getByText('showing the notes saved on this device')
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Файлы» без связи (доски `ZpFilesX`, `ZdFilesX`): полоса «Нет связи с сервером — показано сохранённое на
+  // компьютере» с «Повторить»; загрузка без связи — строка «не загружен: нет связи» с «Повторить»
+  await page.goto(`${BASE_URL}/?open=files`, { waitUntil: 'domcontentloaded' });
+  const filesBar = page.locator('#ParvaneCloud [data-offline-bar]');
+  await filesBar.getByText('No connection to the server').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await filesBar.getByText('showing what is saved on this computer', { exact: false }).waitFor({ state: 'visible' });
+  await page.locator('#ParvaneCloud input[type="file"]').setInputFiles([
+    { name: 'без-связи.txt', mimeType: 'text/plain', buffer: Buffer.from('загрузка без сети') },
+  ]);
+  const offlineRow = page.locator('#ParvaneCloud [data-transfer-state="failed"][data-name="без-связи.txt"]');
+  await offlineRow.getByText('not uploaded: no connection').waitFor({ state: 'visible', timeout: 90000 })
+    .catch(async () => {
+      const rows = await page.locator('#ParvaneCloud [data-transfer-state]').evaluateAll((els) => els.map((el) => (
+        `${el.dataset.transferState}/${el.dataset.transferError}: ${el.textContent}`
+      )));
+      const online = await page.evaluate(() => navigator.onLine);
+      console.log('--- «Файлы» без сети ---', online, JSON.stringify(rows), '\n', session.logs.slice(-40).join('\n'));
+      assert.fail('без сети загрузка не стала строкой «не загружен: нет связи»');
+    });
+  await offlineRow.getByRole('button', { name: 'Retry', exact: true }).click();
+  await offlineRow.getByText('not uploaded: no connection').waitFor({ state: 'visible', timeout: 90000 });
   // Модуль, который при сети не открывали ни разу: его части кода есть только в заранее скачанной оболочке
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Health' }).click();
   await page.locator('#ParvaneHealth').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('без сети не открылся модуль, который раньше не открывали'));
   assert.deepEqual(chunkErrors, [], 'части кода не загрузились без сети');
-  console.log('OK: без сети — чаты с перепиской, «План», «Заметки», неоткрывавшийся модуль');
+  console.log('OK: без сети — чаты с перепиской, «План», «Заметки», «Файлы» с загрузкой «не загружен: нет связи», неоткрывавшийся модуль');
 
   // ── Сеть вернулась ────────────────────────────────────────────────────────
   const whileOffline = `пока-не-было-сети-${stamp}`;

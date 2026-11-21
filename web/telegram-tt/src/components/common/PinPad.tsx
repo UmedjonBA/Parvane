@@ -6,6 +6,8 @@ import { PIN_LENGTH } from '../../util/pinAttempts';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
+import ParvaneIcon from '../main/ParvaneIcon';
+
 import styles from './PinPad.module.scss';
 
 type OwnProps = {
@@ -14,6 +16,8 @@ type OwnProps = {
   isActive?: boolean;
   isDisabled?: boolean;
   onChange: (value: string) => void;
+  // Вход по отпечатку включён: кнопка встаёт в левую нижнюю клетку клавиатуры (доска `ZpSystem`)
+  onBiometric?: NoneToVoidFunction;
 };
 
 const DOTS = Array.from({ length: PIN_LENGTH }, (_, index) => index);
@@ -23,7 +27,7 @@ const ERASE_GLYPH = '←';
 // Ввод PIN по макету (spec 041 E6; доски `ZpSystem`, `RpProfileB`): точки, сообщение и цифровая клавиатура.
 // Цифры принимаются и с настоящей клавиатуры, пока экран активен
 const PinPad = ({
-  value, error, isActive, isDisabled, onChange,
+  value, error, isActive, isDisabled, onChange, onBiometric,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -98,7 +102,21 @@ const PinPad = ({
       <div className={styles.error} role="alert" data-pin-error>{error}</div>
       <div className={styles.keys}>
         {DIGIT_ROWS.map(renderDigit)}
-        <span className={styles.gap} aria-hidden="true" />
+        {onBiometric ? (
+          <button
+            type="button"
+            className={styles.key}
+            aria-label={lang('ParvaneBioLockButton')}
+            title={lang('ParvaneBioLockButton')}
+            data-pin-biometric
+            disabled={isDisabled}
+            onClick={onBiometric}
+          >
+            <ParvaneIcon name="fingerprint" className={styles.keyIcon} />
+          </button>
+        ) : (
+          <span className={styles.gap} aria-hidden="true" />
+        )}
         {renderDigit('0')}
         <button
           type="button"

@@ -45,6 +45,7 @@ import { showReminderNotification } from '../../util/pageNotify';
 import { diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { getIsModuleOn, getModulesView } from '../../util/parvaneModules';
+import { markSignedOut } from '../../util/parvaneSignedOut';
 import {
   isWorkerReminderShown, loadWorkerSnoozes, markWorkerReminderShown, saveWorkerReminders, saveWorkerSnoozes,
 } from '../../util/reminderStore';
@@ -70,6 +71,7 @@ import {
   parseLoginCredentials,
   readLoginAddress,
   readRememberMe,
+  readTokenClaims,
   saveLoginAddress,
   touchSessionActivity,
 } from './authStorage';
@@ -111,6 +113,7 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { createModReports } from './modReports';
 import { createMusicApi } from './musicApi';
+import { createMusicSharedApi } from './musicSharedApi';
 import { mergeNotifyDefault, withNotifyDefaults } from './notifyDefaults';
 import { hydratePersonal } from './personalStore';
 import { dropPinRequest, requestPinUnlock } from './pinGate';
@@ -139,6 +142,9 @@ import {
   saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
+import { createSecurityKeyLogin } from './securityKeyLogin';
+import { SecurityKeyRequiredError } from './securityKeys';
+import { createSecurityKeySettings } from './securityKeySettings';
 import { refreshServerModules } from './serverModules';
 import { createSessionRenewal } from './sessionRenewal';
 import {
@@ -516,6 +522,7 @@ const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
 const FULL_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}@[a-z0-9][a-z0-9.-]{0,126}$/;
 
 // Причины отказа смены пароля: формулировки моста v2 (`bridgeErrorText`) → ключи словаря
+const INCORRECT_PASSWORD_KEY: RegularLangFnParameters = { key: 'ErrorIncorrectPassword' };
 const PASSWORD_CHANGE_REASONS: Record<string, string> = {
   'неверный пароль': 'ParvaneChangePasswordWrong',
   'пароль короче 8 символов': 'ParvaneChangePasswordShort',
@@ -1295,6 +1302,8 @@ ParvaneStore.capabilitiesOf = (address) => v2Controller.chatCapabilities(address
 
 // Ключ восстановления нового корня v2 (D-12): отдаётся UI ровно один раз
 let pendingRecoveryKey: string | undefined;
+// Устройство выходит само: отказ токена после записи выхода — не отзыв другим устройством
+let isLeavingDevice = false;
 // Сервер ответил UPGRADE_REQUIRED (v2) — UI показывает диалог при монтировании
 let isUpgradeRequired = false;
 // Данные устройства записаны более новой версией (модель движка `TOO_NEW`, T117) — то же
@@ -1364,6 +1373,18 @@ const v2Controller = createV2Controller({
     void (async () => {
       // Сначала продление: чаще всего у токена просто вышел срок, а ключ устройства на месте
       if (await sessionRenewal.recoverAfterReject(self, rejected)) {
+        window.location.reload();
+        return;
+      }
+      // Устройство отозвано другим своим устройством (доска `ZdNav`): данные аккаунта здесь стираются, экран входа
+      // объясняет, что случилось. Иначе (срок, смена пароля) — прежний повторный вход паролем, ключи остаются
+      const deviceId = readTokenClaims(rejected)?.dev;
+      if (isLeavingDevice) return;
+      if (deviceId && await v2Controller.checkOwnDeviceRevoked(deviceId)) {
+        logDebug('v2: это устройство отозвано другим устройством аккаунта — данные стираются');
+        await wipeAccountFromDevice(self);
+        if (self) connectionController.forgetDeviceId(self);
+        markSignedOut(Date.now());
         window.location.reload();
         return;
       }
@@ -1582,7 +1603,39 @@ const connectionController = createConnectionController({
   v2: v2Controller,
 });
 
+// Ключ безопасности (SECKEY-1): шаг входа нового устройства и карточка в настройках
+const securityKeyLogin = createSecurityKeyLogin({
+  connectAndLogin: (user, password) => connectionController.connectAndLogin(user, password),
+  setSecondFactor: (factor) => connectionController.setSecondFactor(factor),
+  completeLogin: async (address, password) => {
+    pendingLoginAddress = address;
+    saveLoginAddress(address);
+    await persistSessionCredential(address, password);
+  },
+  showPasswordStep: () => {
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+  },
+  log: logDebug,
+});
+const securityKeySettings = createSecurityKeySettings({
+  call: (method, request) => getV2Bridge().control.call(method, request),
+  selfAddress: () => store.self,
+  log: logDebug,
+});
+
 subscribePresence = connectionController.ensurePresence;
+
+// Смена ника собеседником (spec 026): прежний ник 30 дней находится у сервера новым адресом. Пока журнал прежнего
+// адреса не перечитан, адреса не связаны, и новый получал свой id — у собеседника появлялся второй пользователь с
+// тем же человеком (сценарий `rename` под нагрузкой: поиск по прежнему нику опережал связку). Перечитать журнал
+// известного прежнего адреса до показа результатов: смена ника связывается, и результат встаёт в прежний чат
+async function linkRenamedSearchResult(query: string, users: WireUserInfo[]) {
+  const asked = query.includes('@') ? query : `${query}@${store.self.split('@')[1] || ''}`;
+  const known = store.getKnownUserAddresses();
+  if (!known.includes(asked) || store.canonicalAddress(asked) !== asked) return;
+  if (!users.some((u) => u.username !== asked && !known.includes(u.username))) return;
+  await v2Controller.refreshPeerLog(asked).catch(() => undefined);
+}
 
 // Режим «усиленная приватность» (L2) чата сменился: typing/presence (правило
 // L2-1) и открытые экраны — профиль чата, управление группой
@@ -1647,6 +1700,10 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
     saveLoginAddress(creds.user);
     await persistSessionCredential(creds.user, creds.password);
   } catch (err) {
+    if (err instanceof SecurityKeyRequiredError) {
+      securityKeyLogin.startStep(creds.user, creds.password, err.step);
+      return;
+    }
     if (err instanceof TwoFactorRequiredError) {
       startTelegramConfirmation(creds.user, creds.password, err.loginToken, 'login');
       return;
@@ -1741,6 +1798,11 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
     // Вход выполнен: пароль в памяти модуля больше не нужен
     pendingLoginPassword = '';
   } catch (err) {
+    if (err instanceof SecurityKeyRequiredError) {
+      securityKeyLogin.startStep(user, password, err.step);
+      pendingLoginPassword = '';
+      return true;
+    }
     logDebug(`логин после подтверждения в Telegram не удался: ${String(err)}`);
     pendingLoginAddress = user;
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
@@ -2717,6 +2779,16 @@ const musicMethods = createMusicApi({
   call: (method, request) => getV2Bridge().control.call(method, request),
   playlists: () => v2Controller.music,
   selfDomain: () => store.self.split('@')[1] || '',
+  selfName: () => store.self.split('@')[0] || '',
+  log: logDebug,
+});
+
+// Общие плейлисты «Музыки» (spec 041, MUSIC-3): методы `music.shared.*` — `musicSharedApi.ts`
+const musicSharedMethods = createMusicSharedApi({
+  call: (method, request) => getV2Bridge().control.call(method, request),
+  resolveNick: (nick) => resolveUserAddressByNick(nick),
+  selfAddress: () => store.self,
+  displayName: (address) => store.getDisplayName(address),
   log: logDebug,
 });
 
@@ -2726,6 +2798,10 @@ const modReports = createModReports({
   ensureAllLoaded: () => syncController.ensureAllLoaded(),
   closedOps: (address) => stateJournal.reportClosedOps(address),
   close: (address, opIds) => stateJournal.closeReports(address, opIds),
+  members: (address) => (v2Controller.groupInfo(address)?.members || [])
+    .map((member) => ({ user: member.address, joinedMs: member.joined_ms })),
+  setMemberHidden: (address, user, isHidden) => stateJournal.setMemberHidden(address, user, isHidden),
+  applyMemberHidden: (chatId, user, isHidden) => syncController.applyMemberHidden(chatId, user, isHidden),
   findRow: (uuid) => messageIndex.find(uuid),
   onCardRebuilt: (message) => {
     store.putMessage(message);
@@ -2738,6 +2814,7 @@ const modReports = createModReports({
 const methods = {
   ...healthMethods,
   ...musicMethods,
+  ...musicSharedMethods,
 
   fetchAppConfig({ hash }: { hash?: number }) {
     return Promise.resolve(hash === PARVANE_APP_CONFIG.hash ? undefined : PARVANE_APP_CONFIG);
@@ -3456,6 +3533,7 @@ const methods = {
         .catch(() => []);
       users.push(...resolved.filter((u) => u.username === normalized));
     }
+    await linkRenamedSearchResult(normalized, users);
     const globalResultIds: string[] = [];
     users.forEach((u) => {
       if (u.username === store.self) return;
@@ -4748,6 +4826,14 @@ const methods = {
     return Promise.resolve(isDataTooNew);
   },
 
+  // «Выйти и сменить ключи» (доска `PhProfileB`): до `signOut` устройство меняет ключи, которые держало, раздаёт
+  // их остальным своим устройствам и выходит из журнала устройств; `signOut` затем только стирает данные
+  async parvaneLeaveWithKeyChange() {
+    isLeavingDevice = true;
+    await v2Controller.leave(true);
+    return undefined;
+  },
+
   async parvaneTakeRecoveryKey() {
     const recoveryKey = pendingRecoveryKey;
     pendingRecoveryKey = undefined;
@@ -4868,6 +4954,41 @@ const methods = {
     return enableBiometric(store.self, pin);
   },
 
+  // Ключ безопасности на сервере (SECKEY-1): шаг входа и карточка «Ключ безопасности» в настройках
+  parvaneGetSecurityKeyStep() {
+    return securityKeyLogin.getStep();
+  },
+
+  parvaneUseSecurityKey() {
+    return securityKeyLogin.signInWithKey();
+  },
+
+  parvaneUseRecoveryKeyForLogin({ recoveryKey }: { recoveryKey: string }) {
+    return securityKeyLogin.signInWithRecoveryKey(recoveryKey);
+  },
+
+  parvaneCancelSecurityKey() {
+    securityKeyLogin.cancel();
+    return true;
+  },
+
+  parvaneGetSecurityKeys() {
+    if (!store.self) return Promise.resolve(undefined);
+    return securityKeySettings.getState().catch(() => undefined);
+  },
+
+  parvaneAddSecurityKey({ password, name }: { password: string; name: string }) {
+    return securityKeySettings.addKey(password, name);
+  },
+
+  parvaneRemoveSecurityKey({ password, id }: { password: string; id: string }) {
+    return securityKeySettings.removeKey(password, id);
+  },
+
+  parvaneSetSecurityKeyRequired({ password, isRequired }: { password: string; isRequired: boolean }) {
+    return securityKeySettings.setRequired(password, isRequired);
+  },
+
   async parvaneDisableStorageBiometric() {
     if (!store.self) return false;
     await disableBiometric(store.self);
@@ -4921,6 +5042,11 @@ const methods = {
       saveLoginAddress(address);
       await persistSessionCredential(address, password);
     } catch (err) {
+      if (err instanceof SecurityKeyRequiredError) {
+        // Пароль верен, новому устройству аккаунта нужен ключ безопасности (SECKEY-1)
+        securityKeyLogin.startStep(user, password, err.step);
+        return;
+      }
       if (err instanceof TwoFactorRequiredError) {
         // Пароль верен, включён двухфакторный вход — экран Telegram (deep link)
         const info = connectionController.getLastServerInfo();
@@ -4967,11 +5093,10 @@ const methods = {
       // Повторный WaitPassword сбрасывает auth.isLoading, чтобы форма дала
       // ввести пароль ещё раз
       sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
-      sendUpdate({
-        '@type': 'updateAuthorizationError',
-        errorKey: err instanceof PasswordRejectedError
-          ? buildPasswordRejectedKey(err) : { key: 'ErrorIncorrectPassword' },
-      });
+      // Без условного выражения: объединение ветвей с полным списком ключей слишком велико для проверки типов
+      let errorKey: RegularLangFnParameters = INCORRECT_PASSWORD_KEY;
+      if (err instanceof PasswordRejectedError) errorKey = buildPasswordRejectedKey(err);
+      sendUpdate({ '@type': 'updateAuthorizationError', errorKey });
     }
   },
 
@@ -5322,6 +5447,7 @@ const methods = {
     // не дольше LEAVE_TIMEOUT_MS: локальное стирание идёт в любом случае (WEB-11)
     reminderScheduler.stop();
     if (!noSessionClear) {
+      isLeavingDevice = true;
       // Оба сетевых шага идут одновременно: вместе они ждут не дольше LEAVE_TIMEOUT_MS, и выход (`signOut`
       // ждёт destroy ограниченное время) не оставляет ключи устройства на диске при плохой связи
       const withTimeout = (run: Promise<unknown>) => Promise.race([

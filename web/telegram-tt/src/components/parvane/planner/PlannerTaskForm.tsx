@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type {
-  PlannerEventError, PlannerRepeatError, PlannerSlot, PlannerState, PlannerStatus, PlannerTaskError,
+  PlannerEventError, PlannerRepeatError, PlannerSlot, PlannerState, PlannerStatus, PlannerStep, PlannerTaskError,
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
@@ -30,6 +30,7 @@ import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRemindSelect from './PlannerRemindSelect';
 import { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
+import PlannerSteps from './PlannerSteps';
 
 import styles from './Planner.module.scss';
 
@@ -100,7 +101,12 @@ const PlannerTaskForm = ({
   const [isAllDay, setIsAllDay] = useState(false);
   const [isHoliday, setIsHoliday] = useState(false);
   const [eventColor, setEventColor] = useState(0);
-  const [remind, setRemind] = useState<number>();
+  // Напоминание: у события по умолчанию — из настроек «Плана» (`eventRemind`, доски `RdPlanSet`, `PhModSettings`),
+  // пока его не выбрали в форме
+  const [chosenRemind, setChosenRemind] = useState<{ value?: number }>();
+  const remind = chosenRemind ? chosenRemind.value : kind === 'event' ? state.settings.eventRemind : undefined;
+  // Шаги новой записи (доска `PhPlanMore`): у задачи и у события, пишутся вместе с записью по «Создать»
+  const [steps, setSteps] = useState<PlannerStep[]>([]);
   // Конец события следует за началом (+1 ч), пока пользователь не задал его сам
   const [isEndTouched, setIsEndTouched] = useState(Boolean(slot));
   const [error, setError] = useState<string>();
@@ -135,6 +141,18 @@ const PlannerTaskForm = ({
     setError(undefined);
   });
 
+  const handleStepToggle = useLastCallback((index: number, isDone: boolean) => {
+    setSteps((prev) => prev.map((step, i) => (i === index ? { ...step, isDone } : step)));
+  });
+
+  const handleStepAdd = useLastCallback((text: string) => {
+    setSteps((prev) => [...prev, { text, isDone: false }]);
+  });
+
+  const handleRemind = useLastCallback((value: number | undefined) => {
+    setChosenRemind({ value });
+  });
+
   const handleStatusChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setStatus(e.currentTarget.value as PlannerStatus);
   });
@@ -158,6 +176,7 @@ const PlannerTaskForm = ({
         color: project ? undefined : eventColor || undefined,
         project: project || undefined,
         remind,
+        steps: steps.length ? steps : undefined,
       };
       const eventError = validateEvent(event);
       if (eventError) {
@@ -200,7 +219,7 @@ const PlannerTaskForm = ({
         ...task,
         id: taskId,
         description: description.trim(),
-        steps: [],
+        steps,
         status,
         project,
         repeat,
@@ -308,7 +327,7 @@ const PlannerTaskForm = ({
       <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
 
       <PlannerCardRow icon="schedule" row="remind">
-        <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
+        <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={handleRemind} />
       </PlannerCardRow>
 
       <PlannerCardRow icon="folder" row="group">
@@ -316,10 +335,13 @@ const PlannerTaskForm = ({
         {kind === 'event' && !project && <PlannerColorSwatches value={eventColor} onChange={setEventColor} />}
       </PlannerCardRow>
 
+      <PlannerSteps steps={steps} onToggle={handleStepToggle} onAdd={handleStepAdd} />
+
       <PlannerCardRow icon="info" row="description">
         <TextArea
           id="planner-new-description"
           label={lang('PlannerFieldDescription')}
+          placeholder={lang('PlannerOptional')}
           value={description}
           onChange={handleDescriptionChange}
           noReplaceNewlines

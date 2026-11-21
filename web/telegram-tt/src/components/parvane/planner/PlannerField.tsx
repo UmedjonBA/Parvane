@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from '../../../lib/teact/teact';
+import { useLayoutEffect, useRef, useState } from '../../../lib/teact/teact';
 
 import buildClassName from '../../../util/buildClassName';
 
@@ -37,7 +37,8 @@ const PlannerField = ({
   // e2e) приходили до перерисовки и применяли устаревший черновик
   const draftRef = useRef(value || '');
 
-  useEffect(() => {
+  // Значение записи — в кадре отрисовки: обычный эффект шёл кадром позже и затирал уже набранное в поле
+  useLayoutEffect(() => {
     setDraft(value || '');
     draftRef.current = value || '';
   }, [value]);

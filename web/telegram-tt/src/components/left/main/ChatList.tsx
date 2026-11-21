@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from '@teact';
+import { memo, useMemo, useRef } from '@teact';
 import { getActions } from '../../../global';
 
 import type { GlobalState } from '../../../global/types';
@@ -12,7 +12,6 @@ import {
   CHAT_LIST_SLICE,
   SAVED_FOLDER_ID,
 } from '../../../config';
-import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { getChatRowHeight, getIsChatListDense } from '../../../util/chatListDensity';
 import { onDragEnter, onDragLeave } from '../../../util/dragNDropHandlers';
@@ -58,7 +57,6 @@ type OwnProps = {
 };
 
 const INTERSECTION_THROTTLE = 200;
-const RESERVED_HOTKEYS = new Set(['9', '0']);
 
 const ChatList = ({
   className,
@@ -68,7 +66,6 @@ const ChatList = ({
   isForumPanelOpen,
   canDisplayArchive,
   archiveSettings,
-  isMainList,
   withTags,
   isFoldersSidebarShown,
   isStoryRibbonShown,
@@ -128,41 +125,7 @@ const ChatList = ({
     },
   } : undefined), [isActive, orderedIds]));
 
-  // Support <Cmd>+<Digit> to navigate between chats
-  useEffect(() => {
-    if (!isActive || isSaved || !orderedIds || !IS_APP) {
-      return undefined;
-    }
-
-    function handleKeyDown(e: KeyboardEvent) {
-      if (((IS_MAC_OS && e.metaKey) || (!IS_MAC_OS && e.ctrlKey)) && e.code.startsWith('Digit')) {
-        const [, digit] = e.code.match(/Digit(\d)/) || [];
-        if (!digit || RESERVED_HOTKEYS.has(digit)) return;
-
-        const isArchiveInList = shouldDisplayArchive && archiveSettings && !archiveSettings.isMinimized;
-
-        const shift = isArchiveInList ? -1 : 0;
-        const position = Number(digit) + shift - 1;
-
-        if (isArchiveInList && position === -1) {
-          if (isMainList) openLeftColumnContent({ contentKey: LeftColumnContent.Archived });
-          return;
-        }
-
-        if (position > orderedIds!.length - 1) return;
-
-        openChat({ id: orderedIds![position], shouldReplaceHistory: true });
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [
-    archiveSettings, isSaved, isActive, openChat, openNextChat, orderedIds, shouldDisplayArchive, isMainList,
-  ]);
+  // Parvane: Ctrl+цифра переключает модули (`useGlobalHotkeys`, доска `ZdNav`) — переключения чатов цифрой нет
 
   const { observe } = useIntersectionObserver({
     rootRef: containerRef,

@@ -8,6 +8,7 @@ import { writeFileSync } from 'node:fs';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  openNotesView,
   openPlannerScreen,
   openSavedMessages,
   preparePage,
@@ -235,7 +236,7 @@ try {
       return;
     }
     if (!(await knowledge.isVisible().catch(() => false))) await openSection('Notes');
-    await knowledge.locator('[role="tablist"]').getByRole('tab', { name: VIEW_TABS[name], exact: true }).click();
+    await openNotesView(knowledge, VIEW_TABS[name]);
   };
 
   // ── Старт ──────────────────────────────────────────────────────────────────

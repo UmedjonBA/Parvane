@@ -5,6 +5,7 @@ import type { PvIconName } from './PvIcon';
 
 import buildClassName from '../../../util/buildClassName';
 import { CANVAS_PRESET_COLORS, isCanvasPresetColor } from './notesCanvas';
+import { colorLabel } from './notesCanvasLook';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -12,38 +13,39 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import PvIcon from './PvIcon';
 
+import parts from './CanvasParts.module.scss';
 import styles from './Knowledge.module.scss';
 
 type OwnProps = {
   // Место панели на поле (`left`, `top`); на телефоне панель прижата к низу поля
   place?: string;
+  // Сколько выделено: «N шт.»
+  count: number;
   tones: Record<CanvasPresetColor, string>;
   color?: string;
-  canEdit?: boolean;
-  // Значок и подпись «Изменить»: у карточки заметки — правка её текста либо «Создать заметку»
-  editIcon?: PvIconName;
-  editLabel?: string;
-  // «Открыть заметку» — у карточки заметки
-  canOpen?: boolean;
-  canDuplicate?: boolean;
-  canWrap?: boolean;
-  canFit?: boolean;
+  // «Связать стрелкой»: от одной карточки к следующей нажатой либо между двумя выделенными
+  canConnect?: boolean;
+  // «Выровнять» — от двух карточек
+  canAlign?: boolean;
+  // Карточки в выделении: «На передний план» и «Дублировать»
+  hasNodes?: boolean;
+  // Только стрелки: вместо действий карточек — направление
   canTurn?: boolean;
   onColor: (color?: string) => void;
-  onEdit: NoneToVoidFunction;
-  onOpen?: NoneToVoidFunction;
+  onConnect: NoneToVoidFunction;
+  onAlign: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onFront: NoneToVoidFunction;
   onDuplicate: NoneToVoidFunction;
-  onWrap: NoneToVoidFunction;
-  onFit: NoneToVoidFunction;
   onTurn: NoneToVoidFunction;
   onRemove: NoneToVoidFunction;
   onMore: (e: React.MouseEvent<HTMLButtonElement>) => void;
 };
 
-// Панель у выделенного: цвет, правка, копия, группа, удаление; остальное — в меню «⋯»
+// Полоса выделенного на телефоне (доска `XpNotes`): «N шт.», «Цвет», «Связать стрелкой», «Выровнять» (от двух),
+// «На передний план», «Дублировать», «Удалить с холста»; прочее (правка, группа, копирование) — в меню «⋯»
 const CanvasSelectionBar = ({
-  place, tones, color, canEdit, editIcon = 'edit', editLabel, canOpen, canDuplicate, canWrap, canFit, canTurn,
-  onColor, onEdit, onOpen, onDuplicate, onWrap, onFit, onTurn, onRemove, onMore,
+  place, count, tones, color, canConnect, canAlign, hasNodes, canTurn,
+  onColor, onConnect, onAlign, onFront, onDuplicate, onTurn, onRemove, onMore,
 }: OwnProps) => {
   const lang = useLang();
   const [isPaletteOpen, openPalette, closePalette] = useFlag();
@@ -56,11 +58,12 @@ const CanvasSelectionBar = ({
   });
 
   const renderButton = (
-    name: string, icon: PvIconName, label: string, onClick?: NoneToVoidFunction,
+    name: string, icon: PvIconName, label: string, onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void,
+    isDanger?: boolean,
   ) => (
     <button
       type="button"
-      className={styles.canvasBarButton}
+      className={buildClassName(styles.canvasBarButton, isDanger && styles.canvasMenuDanger)}
       title={label}
       aria-label={label}
       data-canvas-action={name}
@@ -89,7 +92,8 @@ const CanvasSelectionBar = ({
               aria-checked={color === item}
               className={buildClassName(styles.canvasSwatch, color === item && styles.canvasSwatchOn)}
               style={`--c: ${tones[item]}`}
-              aria-label={`${lang('KnowledgeCanvasColor')} ${item}`}
+              title={colorLabel(lang, item)}
+              aria-label={colorLabel(lang, item)}
               data-color={item}
               data-canvas-color={item}
               onClick={handleColor}
@@ -100,8 +104,8 @@ const CanvasSelectionBar = ({
             role="radio"
             aria-checked={!color}
             className={buildClassName(styles.canvasSwatch, styles.canvasSwatchNone, !color && styles.canvasSwatchOn)}
-            title={lang('KnowledgeCanvasNoColor')}
-            aria-label={lang('KnowledgeCanvasNoColor')}
+            title={colorLabel(lang)}
+            aria-label={colorLabel(lang)}
             data-color=""
             data-canvas-color="none"
             onClick={handleColor}
@@ -109,6 +113,9 @@ const CanvasSelectionBar = ({
         </div>
       )}
       <div className={styles.canvasBarRow}>
+        <span className={parts.barCount} data-canvas-selection-count={count}>
+          {lang('KnowledgeCanvasCount', { count })}
+        </span>
         <button
           type="button"
           className={styles.canvasBarButton}
@@ -123,23 +130,13 @@ const CanvasSelectionBar = ({
             style={isCanvasPresetColor(color) ? `--c: ${tones[color]}` : undefined}
           />
         </button>
-        {canEdit && renderButton('edit', editIcon, editLabel || lang('KnowledgeCanvasEdit'), onEdit)}
-        {canOpen && renderButton('open', 'open', lang('KnowledgeCanvasOpenNote'), onOpen)}
+        {canConnect && renderButton('connect', 'arrow', lang('KnowledgeCanvasConnectArrow'), onConnect)}
         {canTurn && renderButton('direction', 'arrow', lang('KnowledgeCanvasDirection'), onTurn)}
-        {canDuplicate && renderButton('duplicate', 'copy', lang('KnowledgeCanvasDuplicate'), onDuplicate)}
-        {canWrap && renderButton('wrap', 'group', lang('KnowledgeCanvasWrap'), onWrap)}
-        {canFit && renderButton('fit', 'fit', lang('KnowledgeCanvasFitGroup'), onFit)}
-        {renderButton('remove', 'trash', lang('KnowledgeCanvasRemove'), onRemove)}
-        <button
-          type="button"
-          className={styles.canvasBarButton}
-          title={lang('KnowledgeCanvasMore')}
-          aria-label={lang('KnowledgeCanvasMore')}
-          data-canvas-action="more"
-          onClick={onMore}
-        >
-          <PvIcon name="dots" isSmall />
-        </button>
+        {canAlign && renderButton('align', 'alignLeft', lang('KnowledgeCanvasAlign'), onAlign)}
+        {hasNodes && renderButton('front', 'front', lang('KnowledgeCanvasToFront'), onFront)}
+        {hasNodes && renderButton('duplicate', 'copy', lang('KnowledgeCanvasDuplicate'), onDuplicate)}
+        {renderButton('remove', 'trash', lang('KnowledgeCanvasDeleteFromCanvas'), onRemove, true)}
+        {renderButton('more', 'dots', lang('KnowledgeCanvasMore'), onMore)}
       </div>
     </div>
   );

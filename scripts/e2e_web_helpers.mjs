@@ -10,7 +10,7 @@ export const RECONNECT_TIMEOUT_MS = 30000;
 
 // --- Оболочка: меню «☰» в шапке списка чатов нет, его пункты — в «Профиле» (главный экран настроек).
 // «Профиль» — модуль `Profile`: на компьютере — вкладка боковой панели `#FoldersSidebar`, на телефоне — кнопка
-// нижней ленты (`navigation` `Modules`). Вернуться к списку чатов — вкладка/кнопка `Chats` там же. «+» (`New entry`)
+// нижней ленты (`navigation` `Modules`). Вернуться к списку чатов — вкладка/кнопка `Chats` там же. «+» (`[data-add-for]`, «Add record»)
 // — отдельная кнопка `[data-add-for]`: на телефоне плавает над лентой, на компьютере стоит внизу панели.
 
 // Признак «показан список чатов»: заголовок «Чаты» в шапке списка. Он есть на обеих ширинах и только в
@@ -159,10 +159,10 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   const planner = page.locator('#ParvanePlanner');
   const rail = page.locator('#FoldersSidebar');
   if (await rail.isVisible().catch(() => false)) {
-    await rail.getByRole('tab', { name: 'Planner', exact: true }).click();
+    await rail.getByRole('tab', { name: 'Plan', exact: true }).click();
   } else {
     if (!(await planner.isVisible().catch(() => false))) {
-      await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Planner' }).click();
+      await page.getByRole('navigation', { name: 'Modules' }).getByRole('button', { name: 'Plan', exact: true }).click();
     }
   }
   await planner.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -173,6 +173,64 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   if (await segment.getAttribute('aria-pressed') !== 'true') await segment.click();
   await planner.locator(`button[data-value="${value}"][aria-pressed="true"]`)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  return planner;
+}
+
+// День в левой колонке «Плана» на компьютере (`[data-planner-day]`): колонка есть только у недели (доска `RdPlan`:
+// «Месяц» — сетка на всю ширину), день выбирается в её мини-месяце; день другого месяца — листанием недель
+export async function pickPlannerDay(page, day) {
+  const planner = await openPlannerScreen(page, 'calendar');
+  const week = planner.getByRole('group', { name: 'Calendar view' }).locator('button[data-value="week"]');
+  if (await week.getAttribute('aria-pressed') !== 'true') await week.click();
+  await planner.locator('[data-planner-rail]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await planner.locator('header').getByRole('button', { name: 'Current date', exact: true }).click();
+  for (let step = 0; step < 6; step += 1) {
+    const cell = planner.locator(`[data-mini-day="${day}"]`);
+    if (await cell.isVisible().catch(() => false)) {
+      await cell.click();
+      await planner.locator(`[data-planner-day="${day}"]`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+      return planner;
+    }
+    await planner.getByRole('button', { name: 'Next period' }).click();
+  }
+  throw new Error(`день ${day} не найден в мини-месяце «Плана»`);
+}
+
+// Настройки «Плана» — страница «Профиль → Модули / План» (spec 041, доски `RdPlanSet`, `PhModSettings`): шестерёнка
+// в шапке «Плана» открывает её. Возвращает содержимое страницы; уведомления о сохранении — `[role="status"]` в ней
+export async function openPlannerSettings(page) {
+  const settings = page.locator('[data-settings-page="plan"]');
+  await clickUntil(
+    page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' }).first(),
+    () => settings.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  );
+  return settings;
+}
+
+// Со страницы настроек — обратно в «План» (тот же вид): «назад» до экрана с панелью модулей, затем «План»
+export async function closePlannerSettings(page) {
+  const planner = page.locator('#ParvanePlanner');
+  const rail = page.locator('#FoldersSidebar');
+  const tabBar = page.getByRole('navigation', { name: 'Modules' });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await rail.isVisible().catch(() => false)) {
+      // eslint-disable-next-line no-await-in-loop
+      await rail.getByRole('tab', { name: 'Plan', exact: true }).click();
+      break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    if (await tabBar.isVisible().catch(() => false)) {
+      // eslint-disable-next-line no-await-in-loop
+      await tabBar.getByRole('button', { name: 'Plan', exact: true }).click();
+      break;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await page.keyboard.press('Escape');
+    // eslint-disable-next-line no-await-in-loop
+    await page.waitForTimeout(400);
+  }
+  await planner.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return planner;
 }
 
@@ -187,7 +245,8 @@ export async function logOut(page) {
   await logOutRow(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await logOutRow(page).click();
   await clickUntil(
-    page.locator('.Modal').getByRole('button', { name: 'Log Out' }).last(),
+    // Шторка выхода (доска `PhProfileB`): «Просто выйти»
+    page.locator('.Modal [data-sign-out-plain]').last(),
     () => page.locator('.Transition_slide-active > #auth-phone-number-form')
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },
@@ -264,6 +323,14 @@ export async function preparePage(context, user, password, options = {}) {
     }
     // Блок «Повтор и детали» карточки записи раскрыт: сценарии правят поля внутри него
     if (!localStorage.getItem('parvane:planner-details')) localStorage.setItem('parvane:planner-details', '1');
+    // Первый запуск «Что вам нужно в Parvane?» (доски `XpStart`, `ZdNav`) пройден: сценарии ждут чаты сразу.
+    // Сам экран проверяет `e2e_web_first_run.mjs` (сид `parvane:modules-first-run` пустой)
+    if (localStorage.getItem('parvane:modules-first-run') === null) {
+      localStorage.setItem('parvane:modules-first-run', 'shown');
+    }
+    // Экран «Уведомления» после первого входа (spec 041 `ZpSysGen`) перекрыл бы сценарии — отмечен показанным; свой
+    // шаг его проверяет, сняв отметку (`seed`)
+    if (!localStorage.getItem('parvane:notify-onboard')) localStorage.setItem('parvane:notify-onboard', '1');
     Object.entries(seed || {}).forEach(([key, value]) => {
       localStorage.setItem(key, value);
     });
@@ -430,16 +497,29 @@ export async function openPrivateChat(page, address) {
   const pane = page.locator('.LeftSearch');
   // Панель открывается по фокусу: если поле уже в фокусе (прошлый вызов),
   // клик её не откроет — снимаем фокус и кликаем снова
+  // Телефон: значок поиска в шапке «Чатов» открывает общий поиск — поиск по чатам идёт его строкой
+  // «Искать в сообщениях» (spec 041, доска `XpStart`)
+  const palette = page.locator('#parvane-palette-search');
+  let isFromPalette = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     await search.click();
-    const isOpen = await pane.waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false);
-    if (isOpen) break;
+    const opened = await Promise.race([
+      pane.waitFor({ state: 'visible', timeout: 3000 }).then(() => 'pane'),
+      palette.waitFor({ state: 'visible', timeout: 3000 }).then(() => 'palette'),
+    ]).catch(() => undefined);
+    if (opened === 'palette') {
+      await palette.fill(displayName);
+      await page.locator('[data-palette-item="chat-search"]').click();
+      isFromPalette = true;
+      break;
+    }
+    if (opened === 'pane') break;
     await search.evaluate((el) => el.blur());
     await page.waitForTimeout(300);
   }
   await pane.waitFor({ state: 'visible', timeout: 10000 });
   await page.waitForTimeout(250);
-  await search.fill(displayName);
+  if (!isFromPalette) await search.fill(displayName);
   const result = page.locator('.LeftSearch .search-result').filter({ hasText: displayName }).first();
   await result.waitFor({ state: 'visible', timeout: 15000 });
   await result.locator('.ListItem-button').click();
@@ -1380,9 +1460,15 @@ async function closeRecoveryKeyScreen(screen) {
   await screen.locator('[data-recovery-key-done]').click();
 }
 
-// Обработчик закрывает экран ключа перед любым действием Playwright, когда бы он ни появился
+// Обработчик закрывает экран ключа перед любым действием Playwright, когда бы он ни появился. Заодно — экран
+// первого запуска (выбор модулей): сценарии со своей страницей без сида `preparePage` проходят его «Начать»
 export async function autoDismissRecoveryKeyDialog(page) {
   await page.addLocatorHandler(recoveryKeyScreen(page), closeRecoveryKeyScreen);
+  // Сид `parvane:modules-first-run` пустой — сценарий проверяет экран сам (`e2e_web_first_run.mjs`)
+  const isFirstRunChecked = await page.evaluate(() => localStorage.getItem('parvane:modules-first-run') === '')
+    .catch(() => false);
+  if (isFirstRunChecked) return;
+  await page.addLocatorHandler(page.locator('[data-first-run]'), (screen) => screen.locator('[data-first-run-done]').click());
 }
 
 // Текст экрана (в нём ключ) — сценарии берут ключ из него
@@ -1426,4 +1512,42 @@ export async function dumpHistoryCacheKeys(page, label) {
     return out;
   }).catch((e) => [`unavailable: ${e.message}`]);
   console.log(`--- history cache ${label} ---\n${keys.join('\n')}`);
+}
+
+// ── Смена даты посреди сценария (flaky, 20 ноя 2026) ─────────────────────────────────────────────────────────────
+// Сценарии «Плана», «Здоровья», «Заметок» вычисляют «сегодня» один раз; прогон, перешедший через полночь, сверял бы
+// прежний день с новым. До полуночи меньше `marginMin` минут — дождаться начала нового дня
+const MIDNIGHT_SETTLE_MS = 30000;
+
+export async function waitPastMidnight(marginMin = 12) {
+  const now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+  const left = midnight - now.getTime();
+  if (left > marginMin * 60000) return;
+  console.log(`--- до полуночи ${Math.ceil(left / 1000)} с: сценарий ждёт начала нового дня ---`);
+  await new Promise((resolve) => {
+    setTimeout(resolve, left + MIDNIGHT_SETTLE_MS);
+  });
+}
+
+/** «Заметки»: открыть вид «List» / «Graph» / «Canvas». На компьютере (доска `ZdNotesX`) холсты — пункт колонки
+ * «Холсты», список и граф — кнопки шапки; с холстов, справки и корзины к спискам ведёт «Все заметки» колонки. На
+ * телефоне — вкладки под шапкой. `knowledge` — локатор `#ParvaneKnowledge`. */
+export async function openNotesView(knowledge, name, timeout = 20000) {
+  const column = knowledge.locator('[data-notes-column]');
+  const isDesk = await column.isVisible().catch(() => false);
+  if (!isDesk) {
+    await knowledge.locator('[role="tablist"]').first().getByRole('tab', { name, exact: true }).click({ timeout });
+  } else if (name === 'Canvas') {
+    await column.locator('[data-notes-place="canvas"]').click({ timeout });
+  } else {
+    const head = knowledge.locator('[data-notes-desk-head]');
+    if (!(await head.isVisible().catch(() => false))) await column.locator('[data-notes-all]').click({ timeout });
+    await head.getByRole('tab', { name, exact: true }).click({ timeout });
+  }
+  const view = { List: 'notes', Graph: 'graph', Canvas: 'canvas' }[name];
+  await knowledge.page().waitForFunction(
+    (wanted) => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === wanted,
+    view, { timeout },
+  );
 }

@@ -14,16 +14,17 @@ type OwnProps = {
   className?: string;
 };
 
-// Виды модуля «Заметки»: список, граф связей, холст (доски `Notes`, `DeskNotes`)
+// Виды модуля «Заметки» на телефоне: список, граф связей, холст. Без значков — по доске `PhNotesMore` (более
+// поздней, чем `Notes`, где значки были)
 const KnowledgeTabs = ({ className }: OwnProps) => {
   const view = useDerivedState(getKnowledgeView);
 
   const lang = useLang();
 
   const items = useMemo((): PvSegmentItem<KnowledgeView>[] => [
-    { value: 'notes', label: lang('KnowledgeList'), icon: 'list' },
-    { value: 'graph', label: lang('KnowledgeGraph'), icon: 'graph' },
-    { value: 'canvas', label: lang('KnowledgeCanvas'), icon: 'board' },
+    { value: 'notes', label: lang('KnowledgeList') },
+    { value: 'graph', label: lang('KnowledgeGraph') },
+    { value: 'canvas', label: lang('KnowledgeCanvas') },
   ], [lang]);
 
   return (

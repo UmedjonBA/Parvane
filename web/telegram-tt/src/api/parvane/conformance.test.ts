@@ -2249,6 +2249,27 @@ describe('PLAYLIST-1: плейлист «Музыки» — видимое со�
   });
 });
 
+describe('MUSIC-3: общие плейлисты — на сервере, плейлист чата по ключу из карточки', () => {
+  const r = rule('MUSIC-3') as unknown as { fieldNumbers: Record<string, number> };
+
+  it('схема, шард, движок и web согласованы', () => {
+    const content = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(content).toContain(`string shared_id = ${r.fieldNumbers.shared_id} [`);
+    expect(content).toContain(`string join_key = ${r.fieldNumbers.join_key} [`);
+    const music = readRepo('proto/parvane/music/v1/music.proto');
+    ['list', 'get', 'create', 'edit', 'delete', 'items', 'member', 'leave', 'join']
+      .forEach((action) => expect(music).toContain(`name: "music.shared.${action}"`));
+    // Права — у шарда: роль проверяется в каждой правке
+    const shard = readRepo('backend/shards/music/src/shared.rs');
+    expect(shard).toContain('need(me, &[pb::SharedRole::Owner, pb::SharedRole::Editor])?;');
+    const views = readRepo('backend/protocol/src/model/views.rs');
+    expect(views).toContain('put(&mut o, "shared_id", json!(p.shared_id));');
+    const playlistContent = readRepo('web/telegram-tt/src/api/parvane/musicPlaylistContent.ts');
+    expect(playlistContent).toContain('shared_id: playlist.sharedId');
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('sharedId: content.shared_id || undefined,');
+  });
+});
+
 describe('ARTICLE-1: статья — видимое сообщение, клиент без окна чтения показывает текст', () => {
   const r = rule('ARTICLE-1') as unknown as {
     kinds: string[];
@@ -3872,5 +3893,32 @@ describe('ENGINE-1: android — смысл решает движок', () => {
     expect(journal).toContain('fun objects(kind: String, shown: JSONArray,');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/StateJournalTest.kt'))
       .toContain('fun editsGoThroughEngineModelWithShownBase()');
+  });
+});
+
+// SECKEY-1: ключ безопасности — второй фактор входа нового устройства; продление сессии ключ не спрашивает
+describe('SECKEY-1: ключ безопасности на сервере', () => {
+  const r = rule('SECKEY-1') as ReturnType<typeof rule> & { methods: string[] };
+
+  it('схема, реестр и сервер', () => {
+    const proto = readRepo('proto/parvane/identity/v2/identity.proto');
+    expect(proto).toContain('SecKeyAssertion seckey = 10;');
+    expect(proto).toContain('bool seckey_required = 12;');
+    const nats = readRepo('backend/infra/nats/server.prod.conf');
+    r.methods.forEach((method) => {
+      expect(proto).toContain(`name: "${method}"`);
+      expect(nats).toContain(`"v2.${method}"`);
+    });
+    const shard = readRepo('backend/shards/identity/src/v2.rs');
+    expect(shard).toContain('seckey::login_step(ctx, &login, &r.device_id, proven, &r,');
+    expect(readRepo('backend/shards/identity/src/v2/seckey.rs')).toContain('has_root_backup');
+  });
+
+  it('web: второй фактор только во входе паролем, шаг показывается', () => {
+    const bridge = readRepo('web/telegram-tt/src/api/parvane/v2/bridge.ts');
+    expect(bridge).toContain('seckey: p.seckey,');
+    expect(readRepo('web/telegram-tt/src/api/parvane/sessionRenewal.ts')).not.toContain('seckey');
+    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts')).toContain('securityKeyLogin.startStep(');
+    expect(r.clients.web).toContain('e2e_web_seckey.mjs');
   });
 });

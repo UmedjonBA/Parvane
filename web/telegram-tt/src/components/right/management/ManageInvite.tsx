@@ -129,7 +129,9 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
 
   const handleSaveClick = useCallback(() => {
     setIsSubmitBlocked(true);
-    const usageLimit = selectedUsageOption === 'custom' ? customUsageLimit : Number(selectedUsageOption);
+    // Ссылка «по заявке» без лимита вступлений (как в Telegram): лимит скрыт и не уходит
+    const usageLimit = effectiveIsRequestNeeded ? 0
+      : selectedUsageOption === 'custom' ? customUsageLimit : Number(selectedUsageOption);
     let expireDate;
     switch (selectedExpireOption) {
       case 'custom':
@@ -193,14 +195,12 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
                 checked={effectiveIsRequestNeeded}
                 onChange={handleIsRequestChange}
                 label={oldLang('ApproveNewMembers')}
-                // Parvane: «по заявке» задаётся при создании ссылки и потом не меняется (spec 024)
-                disabled={isPublic || Boolean(editingInvite)}
+                // Parvane: «по заявке» меняется и у созданной ссылки (поле `InviteEdit.requires_approval`)
+                disabled={isPublic}
               />
             </Island>
             <IslandDescription>
-              {isPublic
-                ? lang('ApproveNewMembersPublicUnavailable')
-                : editingInvite ? lang('ParvaneInviteApprovalFixed') : oldLang('ApproveNewMembersDescription')}
+              {isPublic ? lang('ApproveNewMembersPublicUnavailable') : oldLang('ApproveNewMembersDescription')}
             </IslandDescription>
           </>
         )}

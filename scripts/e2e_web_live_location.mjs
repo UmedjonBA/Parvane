@@ -82,6 +82,25 @@ try {
   assert.equal(await locationBubbles(bobSession.page).count(), 2, 'both location bubbles remain');
 
   console.log('OK: location map, live location start/update/stop');
+
+  // Доска `ZpSysGen`: у Боба доступа к геопозиции нет — сначала лист «Доступ к геопозиции» (до запроса браузера),
+  // «Не сейчас» оставляет ручной ввод и «Открыть настройки» с инструкцией вместо повторного запроса
+  console.log('[live-location] лист перед запросом геопозиции');
+  const bobPage = bobSession.page;
+  await bobPage.getByRole('button', { name: 'Add an attachment' }).click();
+  await bobPage.getByRole('menuitem', { name: 'Location', exact: true }).click();
+  const ask = bobPage.locator('[data-location-ask-sheet]');
+  await ask.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await ask.getByText('Needed to send a place to the chat').waitFor({ state: 'visible' });
+  await ask.locator('[data-location-ask="later"]').click();
+  await ask.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await bobPage.locator('[data-location-settings]').click();
+  const denied = bobPage.locator('[data-permission-denied="location"]');
+  await denied.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await denied.getByRole('button', { name: 'OK', exact: true }).click();
+  await denied.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await bobPage.locator('[data-location-manual]').isVisible(), true, 'ручной ввод точки пропал');
+  console.log('OK: лист «Доступ к геопозиции» и «Открыть настройки» без разрешения');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {

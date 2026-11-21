@@ -1,7 +1,7 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type {
-  PlannerEvent, PlannerEventError, PlannerRepeat, PlannerState, PlannerStep,
+  PlannerEvent, PlannerEventError, PlannerRepeat, PlannerSeriesItem, PlannerState, PlannerStep,
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
@@ -9,26 +9,31 @@ import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, instanceKey, removeSeries, setEventStepDone, splitSeries,
-  toDayKey, toMinutes, toTime, truncateSeries, updateSeries, validateEvent,
+  formatDurationValue, getEndByDuration, getOnlyNewTime, getSpanMinutes, parseDuration,
+} from './plannerEditorFormat';
+import { formatRepeatShort } from './plannerFormat';
+import {
+  ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, instanceKey, removeSeries, setEventStepDone,
+  splitSeries, toDayKey, toTime, truncateSeries, updateSeries, validateEvent, validateRepeat,
 } from './plannerModel';
 import {
   changedFields, detachWithDescription, getDescriptionScope, patchCopies, seriesOfCopy,
   setDescription as writeDescription, updateFromCopy,
 } from './plannerSeriesEdit';
-import { changeSeriesRule, sameRepeat } from './plannerSeriesRule';
+import { changeSeriesRule, nearestSeriesDay, sameRepeat } from './plannerSeriesRule';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
 import TextArea from '../../ui/TextArea';
+import PvSwitch from '../notes/PvSwitch';
 import {
   PLANNER_SIDE_FORM_ID, PlannerCardCaption, PlannerCardRow, PlannerRepeatRow,
 } from './PlannerCardRow';
+import PlannerDateField from './PlannerDateField';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerFreeTime from './PlannerFreeTime';
@@ -37,14 +42,18 @@ import PlannerRemindSelect from './PlannerRemindSelect';
 import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import PlannerSteps from './PlannerSteps';
+import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
+import more from './PlannerEditor.module.scss';
 
 type OwnProps = {
   state: PlannerState;
   // Событие либо экземпляр ряда (`instanceDay`)
   event: PlannerEvent;
   onBack: NoneToVoidFunction;
+  // Правка создала другую запись (отделённый день, продолжение ряда): карточка переходит на неё
+  onOpenEvent: (eventId: string, day: string) => void;
 };
 
 const EVENT_ERROR_KEYS = {
@@ -63,36 +72,60 @@ const NAME_MAX_LENGTH = 160;
 const NO_STEPS: PlannerStep[] = [];
 // Движок принимает до 4000 байт: запас на кириллицу
 const DESCRIPTION_MAX_LENGTH = 2000;
+// Событие, снятое с «весь день», получает обычное время
+const DEFAULT_START = '09:00';
+const DEFAULT_END = '10:00';
+// Ширина, до которой «План» — одна колонка (`Planner.module.scss`)
+const NARROW_WIDTH = 925;
+
+// Поля карточки, которые пишутся правкой
+type Values = {
+  name: string;
+  description: string;
+  start: string;
+  end: string;
+  day: string;
+  isAllDay: boolean;
+  isHoliday: boolean;
+  color: number;
+  project: string;
+  remind?: number;
+};
 
 // `ownDescription` — описание только этого дня: остальные поля правятся в выбранном объёме, день отделяется
 // `rule` — вместе с полями меняется правило повтора; без правила — «Не повторяется»
-type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string }
-  | { kind: 'rule'; repeat?: PlannerRepeat; patch: Partial<PlannerEvent>; ownDescription?: string }
+type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string; targetDay: string }
+  | { kind: 'rule'; repeat?: PlannerRepeat; patch: Partial<PlannerEvent>; ownDescription?: string; targetDay: string }
   | { kind: 'delete' }
   // Отделённый день ряда: `next` — вся карточка, `fields` — изменённое, что можно отдать всему ряду
   | { kind: 'copy'; next: Partial<PlannerEvent>; fields: Partial<PlannerEvent> };
 
-// Правка события (spec 011): поля, правило повтора; у экземпляра ряда — выбор объёма правки
+// Правка события (spec 011; по месту — доска `DkPlanMore`): каждое поле пишется сразу по завершении ввода, у
+// экземпляра ряда — после выбора объёма правки. Правило повтора — кнопкой «Сохранить повтор», как у задачи
 const PlannerEventEditor = ({
-  state, event, onBack,
+  state, event, onBack, onOpenEvent,
 }: OwnProps) => {
   const lang = useLang();
+  const { width } = useWindowSize();
+  const isNarrow = width <= NARROW_WIDTH;
 
-  const [name, setName] = useState(event.name);
-  const [description, setDescription] = useState(event.description || '');
+  const [fieldsRevision, setFieldsRevision] = useState(0);
+  const [values, setValues] = useState<Values>(() => ({
+    name: event.name,
+    description: event.description || '',
+    start: event.start,
+    end: event.end,
+    day: event.instanceDay || event.day || '',
+    isAllDay: Boolean(event.isAllDay),
+    isHoliday: Boolean(event.isHoliday),
+    color: event.color || 0,
+    project: event.project || '',
+    remind: event.remind,
+  }));
   // Чьё описание: всех повторов либо только этого дня; `undefined` — запись не из ряда, галочки нет
   const [descriptionScope, setDescriptionScope] = useState<DescriptionScope | undefined>(
     () => getDescriptionScope(state, 'event', event),
   );
-  const [start, setStart] = useState(event.start);
-  const [end, setEnd] = useState(event.end);
-  const [day, setDay] = useState(event.instanceDay || event.day || '');
-  const [isAllDay, setIsAllDay] = useState(Boolean(event.isAllDay));
-  const [isHoliday, setIsHoliday] = useState(Boolean(event.isHoliday));
-  const [color, setColor] = useState(event.color || 0);
-  const [project, setProject] = useState(event.project || '');
-
-  const [remind, setRemind] = useState(event.remind);
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(event.repeat, event.day || ''),
   );
@@ -101,21 +134,22 @@ const PlannerEventEditor = ({
   const [today] = useState(() => toDayKey(new Date()));
 
   const isInstance = Boolean(event.repeat && event.instanceDay);
+  const instanceDay = event.instanceDay;
 
-  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setName(e.currentTarget.value);
-  });
-
-  const handleDescriptionChange = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setDescription(e.currentTarget.value);
-  });
+  // Карточка остаётся на записи этого дня: отделённой копии, продолжении ряда либо самом ряде
+  function reopen(item: PlannerSeriesItem | undefined, day = today) {
+    if (!item) {
+      onBack();
+      return;
+    }
+    onOpenEvent(item.id, item.repeat ? nearestSeriesDay(item, day) || day : (item.day || day));
+  }
 
   const applyScope = useLastCallback((scope: PlannerPromptScope, action: Pending) => {
-    const instanceDay = event.instanceDay!;
     if (action.kind === 'delete') {
       updatePlanner((draft) => {
-        if (scope === 'one') excludeInstance(draft, 'event', event.id, instanceDay);
-        else if (scope === 'following') truncateSeries(draft, 'event', event.id, instanceDay);
+        if (scope === 'one') excludeInstance(draft, 'event', event.id, instanceDay!);
+        else if (scope === 'following') truncateSeries(draft, 'event', event.id, instanceDay!);
         else removeSeries(draft, 'event', event.id);
       }, lang('PlannerNoticeEventDeleted'));
       onBack();
@@ -126,135 +160,142 @@ const PlannerEventEditor = ({
         const target = saveOwn(draft, action.next);
         if (target && scope === 'all') updateFromCopy(draft, 'event', target, action.fields);
       }, lang('PlannerNoticeEventUpdated', { name: action.next.name || event.name }));
-      onBack();
       return;
     }
-    const { patch, ownDescription } = action;
-    const targetDay = day || instanceDay;
+    const { patch, ownDescription, targetDay } = action;
     const own = ownDescription === undefined ? {} : { description: ownDescription || undefined };
+    let result: PlannerSeriesItem | undefined;
     if (action.kind === 'rule') {
       const { repeat } = action;
       updatePlanner((draft) => {
         if (!repeat) {
           // Без повтора: день остаётся разовой записью со всеми правками карточки
-          changeSeriesRule(draft, 'event', event.id, instanceDay, undefined, scope === 'stop' ? 'stop' : 'one', {
+          const ruleScope = scope === 'stop' ? 'stop' : 'one';
+          result = changeSeriesRule(draft, 'event', event.id, instanceDay!, undefined, ruleScope, {
             ...patch, ...own, day: targetDay,
           });
           return;
         }
         // Дни ряда задаёт новое правило: дата из карточки на него не влияет
-        const series = changeSeriesRule(
-          draft, 'event', event.id, instanceDay, repeat, scope === 'following' ? 'following' : 'all', patch,
+        result = changeSeriesRule(
+          draft, 'event', event.id, instanceDay!, repeat, scope === 'following' ? 'following' : 'all', patch,
         );
-        if (series && ownDescription !== undefined) {
-          detachWithDescription(draft, 'event', series.id, instanceDay, ownDescription);
+        if (result && ownDescription !== undefined) {
+          detachWithDescription(draft, 'event', result.id, instanceDay!, ownDescription);
         }
       }, lang(repeat ? 'PlannerNoticeEventUpdated' : 'PlannerNoticeRepeatStopped', { name: patch.name || event.name }));
-      onBack();
+      reopen(result, instanceDay);
       return;
     }
     updatePlanner((draft) => {
-      if (scope === 'one') {
-        detachInstance(draft, 'event', event.id, instanceDay, {
-          ...patch, ...own, repeat: undefined, day: targetDay,
-        });
+      if (scope === 'one' || scope === 'stop') {
+        // «Не повторять с этого дня» (доска `XpPlan`): день — разовой записью с правкой, ряд кончается
+        result = scope === 'stop'
+          ? changeSeriesRule(draft, 'event', event.id, instanceDay!, undefined, 'stop', {
+            ...patch, ...own, day: targetDay,
+          })
+          : detachInstance(draft, 'event', event.id, instanceDay!, {
+            ...patch, ...own, repeat: undefined, day: targetDay,
+          });
         return;
       }
       // Новый день экземпляра переносит ряд (весь либо его продолжение)
-      const seriesId = scope === 'following'
-        ? splitSeries(draft, 'event', event.id, instanceDay, patch)?.id || event.id : event.id;
-      updateSeries(draft, 'event', seriesId, instanceDay, { ...patch, day: targetDay });
+      const series = scope === 'following'
+        ? splitSeries(draft, 'event', event.id, instanceDay!, patch) : undefined;
+      const seriesId = series?.id || event.id;
+      updateSeries(draft, 'event', seriesId, instanceDay!, { ...patch, day: targetDay });
       // Уже отделённые дни ряда (всего либо с этого дня) получают те же изменённые поля
       patchCopies(
         draft, 'event', event.id, changedFields(event, patch), scope === 'following' ? instanceDay : undefined,
       );
       if (ownDescription !== undefined) detachWithDescription(draft, 'event', seriesId, targetDay, ownDescription);
+      result = draft.events.find(({ id }) => id === seriesId);
     }, lang('PlannerNoticeEventUpdated', { name: patch.name || event.name }));
-    onBack();
+    reopen(result, targetDay);
   });
 
-  const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const repeat = draftToRepeat(repeatDraft);
-    // Событие, бывшее «весь день», получает обычное время заново
-    const wasAllDay = event.isAllDay && !isAllDay && start === ALL_DAY_START && end === ALL_DAY_END;
-    if (wasAllDay) {
-      setError(lang('PlannerErrorEventTime'));
-      return;
-    }
-    const next = {
-      name: name.trim(),
-      description: description.trim() || undefined,
-      start: isAllDay ? ALL_DAY_START : start,
-      end: isAllDay ? ALL_DAY_END : end,
+  // Запись правки: `changes` — изменённые поля карточки; правило повтора — только с `repeat`
+  const save = useLastCallback((changes: Partial<Values>, nextRepeat?: PlannerRepeat | 'none') => {
+    const next = { ...values, ...changes };
+    setValues(next);
+    const repeat = nextRepeat === undefined ? event.repeat : nextRepeat === 'none' ? undefined : nextRepeat;
+    const item = {
+      name: next.name.trim(),
+      description: next.description.trim() || undefined,
+      start: next.isAllDay ? ALL_DAY_START : next.start,
+      end: next.isAllDay ? ALL_DAY_END : next.end,
       repeat,
-      day: repeat ? undefined : (day || undefined),
-      isAllDay: isAllDay || undefined,
-      isHoliday: isHoliday || undefined,
+      day: repeat ? undefined : (next.day || undefined),
+      isAllDay: next.isAllDay || undefined,
+      isHoliday: next.isHoliday || undefined,
       // Цвет — у группы; свой цвет события — только без группы
-      color: project ? undefined : color || undefined,
-      project: project || undefined,
-      remind,
+      color: next.project ? undefined : next.color || undefined,
+      project: next.project || undefined,
+      remind: next.remind,
     };
-    const eventError = validateEvent(next);
+    const eventError = validateEvent(item);
     if (eventError) {
       setError(lang(EVENT_ERROR_KEYS[eventError]));
       return;
     }
     setError(undefined);
     if (isInstance) {
-      const instanceDay = event.instanceDay!;
-      const nextDescription = next.description || '';
+      const nextDescription = item.description || '';
       const isDescriptionChanged = nextDescription !== (event.description || '');
-      const hasOtherChanges = next.name !== event.name || next.start !== event.start || next.end !== event.end
-        || Boolean(next.isAllDay) !== Boolean(event.isAllDay) || Boolean(next.isHoliday) !== Boolean(event.isHoliday)
-        || (next.color || 0) !== (event.color || 0) || (day || instanceDay) !== instanceDay
-        || next.remind !== event.remind || (next.project || '') !== (event.project || '');
+      const targetDay = next.day || instanceDay!;
+      const hasOtherChanges = item.name !== event.name || item.start !== event.start || item.end !== event.end
+        || Boolean(item.isAllDay) !== Boolean(event.isAllDay) || Boolean(item.isHoliday) !== Boolean(event.isHoliday)
+        || (item.color || 0) !== (event.color || 0) || targetDay !== instanceDay
+        || item.remind !== event.remind || (item.project || '') !== (event.project || '');
       const isOwnDescription = isDescriptionChanged && descriptionScope === 'one';
-      const patch = {
-        name: next.name,
-        ...(isOwnDescription ? undefined : { description: next.description }),
-        start: next.start,
-        end: next.end,
-        isAllDay: next.isAllDay,
-        isHoliday: next.isHoliday,
-        color: next.color,
-        project: next.project,
-        remind: next.remind,
+      const patch: Partial<PlannerEvent> = {
+        name: item.name,
+        description: isOwnDescription ? event.description : item.description,
+        start: item.start,
+        end: item.end,
+        isAllDay: item.isAllDay,
+        isHoliday: item.isHoliday,
+        color: item.color,
+        project: item.project,
+        remind: item.remind,
       };
       const ownDescription = isOwnDescription ? nextDescription : undefined;
       // Новое правило повтора (сравнение — с правилом в том виде, в каком его показывает форма): объём —
       // «это и последующие» или «все в серии», для «Не повторяется» — с какого дня ряда больше нет
-      if (!sameRepeat(repeat, draftToRepeat(repeatToDraft(event.repeat)))) {
+      if (nextRepeat !== undefined && !sameRepeat(repeat, draftToRepeat(repeatToDraft(event.repeat)))) {
         setPending({
-          kind: 'rule', repeat, patch, ownDescription,
+          kind: 'rule', repeat, patch, ownDescription, targetDay,
         });
         return;
       }
       // Одно описание объёма не спрашивает: его задаёт галочка у поля
       if (isDescriptionChanged && !hasOtherChanges) {
+        let saved: PlannerSeriesItem | undefined;
         updatePlanner((draft) => {
-          writeDescription(draft, 'event', event, nextDescription, descriptionScope || 'all');
-        }, lang('PlannerNoticeEventUpdated', { name: next.name }));
-        onBack();
+          saved = writeDescription(draft, 'event', event, nextDescription, descriptionScope || 'all');
+        }, lang('PlannerNoticeEventUpdated', { name: item.name }));
+        if (saved && saved.id !== event.id) reopen(saved, instanceDay);
         return;
       }
-      setPending({ kind: 'save', patch, ownDescription });
+      if (!hasOtherChanges) return;
+      setPending({
+        kind: 'save', patch, ownDescription, targetDay,
+      });
       return;
     }
     // Отделённый день ряда: правку можно отдать всему ряду; описание — только если галочка «для всех»
     if (!repeat && seriesOfCopy(state, 'event', event)) {
-      const fields = changedFields(event, next);
+      const fields = changedFields(event, item);
       if (descriptionScope === 'one') delete fields.description;
       if (Object.keys(fields).length) {
-        setPending({ kind: 'copy', next, fields });
+        setPending({ kind: 'copy', next: item, fields });
         return;
       }
     }
+    if (!Object.keys(changedFields(event, item)).length && sameRepeat(repeat, event.repeat)) return;
     updatePlanner((draft) => {
-      saveOwn(draft, next);
-    }, lang('PlannerNoticeEventUpdated', { name: next.name }));
-    onBack();
+      saveOwn(draft, item);
+    }, lang('PlannerNoticeEventUpdated', { name: item.name }));
   });
 
   // Правка самой записи (разовой, шаблона ряда либо отделённого дня)
@@ -268,7 +309,96 @@ const PlannerEventEditor = ({
     return target;
   }
 
-  // Шаги пишутся сразу, без «Сохранить» (как у задачи): отметка дня ряда — по дню, новый шаг — всему ряду
+  // Enter в поле названия и «Сохранить» отправляют форму: всё уже записано по месту, остаётся название
+  const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    save({});
+  });
+
+  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setValues((current) => ({ ...current, name: e.currentTarget.value }));
+  });
+
+  // Значение — из поля: состояние обновится только к следующему кадру
+  const handleNameBlur = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    const name = e.currentTarget.value;
+    if (!name.trim()) {
+      setValues((current) => ({ ...current, name: event.name }));
+      return;
+    }
+    if (name.trim() !== event.name) save({ name });
+  });
+
+  const handleDescriptionChange = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setValues((current) => ({ ...current, description: e.currentTarget.value }));
+  });
+
+  const handleDescriptionBlur = useLastCallback((e: React.FocusEvent<HTMLTextAreaElement>) => {
+    const description = e.currentTarget.value;
+    if (description.trim() !== (event.description || '')) save({ description });
+  });
+
+  const handleDay = useLastCallback((day: string) => {
+    if (day) save({ day });
+  });
+
+  // Начало переносит событие целиком: длительность остаётся прежней
+  const handleStart = useLastCallback((start: string) => {
+    if (!start) return false;
+    const span = getSpanMinutes(values.start, values.end) || getSpanMinutes(DEFAULT_START, DEFAULT_END)!;
+    const end = getEndByDuration(start, span);
+    if (!end) {
+      setError(lang('PlannerErrorPastMidnight'));
+      return false;
+    }
+    save({ start, end });
+    return undefined;
+  });
+
+  const handleDuration = useLastCallback((text: string) => {
+    const minutes = parseDuration(text);
+    const end = minutes === undefined || Number.isNaN(minutes) ? undefined : getEndByDuration(values.start, minutes);
+    if (!end) {
+      setError(lang(minutes && minutes > 0 ? 'PlannerErrorPastMidnight' : 'PlannerErrorEventTime'));
+      return false;
+    }
+    save({ end });
+    return undefined;
+  });
+
+  const handleAllDay = useLastCallback((isAllDay: boolean) => {
+    // Событие, бывшее «весь день», получает обычное время
+    const isPlaceholderTime = values.start === ALL_DAY_START && values.end === ALL_DAY_END;
+    save(isAllDay || !isPlaceholderTime ? { isAllDay } : { isAllDay, start: DEFAULT_START, end: DEFAULT_END });
+  });
+
+  const handleHoliday = useLastCallback((isHoliday: boolean) => {
+    save({ isHoliday });
+  });
+
+  const handleRemind = useLastCallback((remind: number | undefined) => {
+    save({ remind });
+  });
+
+  const handleProject = useLastCallback((project: string) => {
+    save({ project });
+  });
+
+  const handleColor = useLastCallback((color: number) => {
+    save({ color });
+  });
+
+  const handleRepeatSave = useLastCallback(() => {
+    const repeat = draftToRepeat(repeatDraft);
+    const problem = repeat && validateRepeat(repeat);
+    if (problem) {
+      setError(lang(REPEAT_ERROR_KEYS[problem]));
+      return;
+    }
+    save({}, repeat || 'none');
+  });
+
+  // Шаги пишутся сразу (как у задачи): отметка дня ряда — по дню, новый шаг — всему ряду
   const handleStepToggle = useLastCallback((index: number, isDone: boolean) => {
     updatePlanner((draft) => {
       setEventStepDone(draft, event, index, isDone);
@@ -300,92 +430,175 @@ const PlannerEventEditor = ({
     applyScope(scope, action);
   });
 
+  // Отказ от правки: поля возвращаются к записи
   const handleCancelPrompt = useLastCallback(() => {
     setPending(undefined);
+    // Поля времени держат набранное у себя: с прежним значением записи они не перерисовались бы — новый ключ
+    setFieldsRevision((revision) => revision + 1);
+    setValues({
+      name: event.name,
+      description: event.description || '',
+      start: event.start,
+      end: event.end,
+      day: event.instanceDay || event.day || '',
+      isAllDay: Boolean(event.isAllDay),
+      isHoliday: Boolean(event.isHoliday),
+      color: event.color || 0,
+      project: event.project || '',
+      remind: event.remind,
+    });
   });
 
   // О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
   const promptMode = !pending ? undefined
     : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
       : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
+  const newTime = pending?.kind === 'save' ? getOnlyNewTime(pending.patch, event) : undefined;
 
   const hasDate = !event.repeat || isInstance;
-  const spanMinutes = toMinutes(end) - toMinutes(start);
+  const spanMinutes = getSpanMinutes(values.start, values.end);
 
-  // Окно из «Найти свободное время» ставится в поля формы; запись — по «Сохранить»
+  // Окно из «Найти свободное время» — сразу день и время события
   const handleFreeSlot = useLastCallback((slotDay: string, slotStart: number, slotEnd: number) => {
-    setDay(slotDay);
-    setStart(toTime(slotStart));
-    setEnd(toTime(slotEnd));
+    save({ day: slotDay, start: toTime(slotStart), end: toTime(slotEnd) });
   });
+
+  const dayField = hasDate && (
+    <PlannerDateField
+      label={lang('PlannerFieldDay')}
+      value={values.day}
+      empty={lang('PlannerUndatedShort')}
+      onChange={handleDay}
+    />
+  );
+  const startField = !values.isAllDay && (
+    <PlannerField
+      key={`start-${fieldsRevision}`}
+      label={lang('PlannerFieldStart')}
+      type="time"
+      value={values.start}
+      onCommit={handleStart}
+    />
+  );
+  const durationField = !values.isAllDay && (
+    <PlannerField
+      key={`duration-${fieldsRevision}`}
+      label={lang('PlannerFieldDuration')}
+      type="text"
+      value={formatDurationValue(lang, spanMinutes)}
+      placeholder={lang('PlannerDurationPlaceholder')}
+      onCommit={handleDuration}
+    />
+  );
+  const switches = (
+    <div className={more.switches}>
+      <PvSwitch isOn={values.isAllDay} className={more.switch} data-all-day-switch onChange={handleAllDay}>
+        <span>{lang('PlannerAllDay')}</span>
+      </PvSwitch>
+      <PvSwitch isOn={values.isHoliday} className={more.switch} data-holiday-switch onChange={handleHoliday}>
+        <span>{lang('PlannerHoliday')}</span>
+      </PvSwitch>
+    </div>
+  );
+  const remindField = <PlannerRemindSelect id="planner-event-remind" value={values.remind} onChange={handleRemind} />;
+  const groupField = (
+    <>
+      <PlannerListPicker id="planner-event-list" state={state} value={values.project} onChange={handleProject} />
+      {!values.project && <PlannerColorSwatches value={values.color} onChange={handleColor} />}
+    </>
+  );
+  const repeatRow = (
+    <PlannerRepeatRow value={repeatDraft} day={values.day} onChange={setRepeatDraft}>
+      <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
+        <Icon name="loop" />
+        {lang('PlannerRepeatSave')}
+      </button>
+    </PlannerRepeatRow>
+  );
+  const steps = <PlannerSteps steps={event.steps || NO_STEPS} onToggle={handleStepToggle} onAdd={handleStepAdd} />;
+  const freeTime = hasDate && !values.isAllDay && (
+    <PlannerFreeTime
+      state={state}
+      name={values.name.trim() || event.name}
+      minutes={spanMinutes}
+      fromDay={values.day || today}
+      today={today}
+      exceptKey={instanceKey(event)}
+      onPick={handleFreeSlot}
+    />
+  );
 
   return (
     <form
       id={PLANNER_SIDE_FORM_ID}
-      className={buildClassName(styles.editor, styles.eventCard)}
+      className={buildClassName(styles.editor, styles.eventCard, !isNarrow && more.wide)}
       onSubmit={handleSubmit}
     >
+      {!isNarrow && (
+        <div className={more.top}>
+          <span className={more.topNote} data-event-autosave>{lang('PlannerAutoSaved')}</span>
+          <button type="button" className={more.topDelete} onClick={handleDelete}>{lang('PlannerDeleteShort')}</button>
+        </div>
+      )}
       <input
         id="planner-event-name"
         className={styles.cardTitleInput}
-        value={name}
+        value={values.name}
         maxLength={NAME_MAX_LENGTH}
         aria-label={lang('PlannerFieldEventName')}
         placeholder={lang('PlannerFieldEventName')}
         onChange={handleNameChange}
+        onBlur={handleNameBlur}
       />
       {event.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
 
-      <PlannerCardRow icon="clock" row="when">
-        <div className={buildClassName(styles.fields, hasDate && !isAllDay && styles.fieldsThree)}>
-          {hasDate && (
-            <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
-          )}
-          {!isAllDay && (
-            <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
-          )}
-          {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}
-        </div>
-        <div className={styles.checks}>
-          <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
-          <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
-        </div>
-      </PlannerCardRow>
-
-      {hasDate && !isAllDay && (
-        <PlannerFreeTime
-          state={state}
-          name={name.trim() || event.name}
-          minutes={spanMinutes > 0 ? spanMinutes : undefined}
-          fromDay={day || today}
-          today={today}
-          exceptKey={instanceKey(event)}
-          onPick={handleFreeSlot}
-        />
+      {isNarrow ? (
+        <>
+          <PlannerCardRow icon="clock" row="when">
+            <div className={buildClassName(styles.fields, hasDate && !values.isAllDay && styles.fieldsThree)}>
+              {dayField}
+              {startField}
+              {durationField}
+            </div>
+            {switches}
+          </PlannerCardRow>
+          {freeTime}
+          <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
+          {repeatRow}
+          <PlannerCardRow icon="schedule" row="remind">{remindField}</PlannerCardRow>
+          <PlannerCardRow icon="folder" row="group">{groupField}</PlannerCardRow>
+          {steps}
+        </>
+      ) : (
+        <>
+          <PlannerCardRow icon="clock" row="when">
+            <div className={more.grid}>
+              {dayField || <span />}
+              {startField || <span />}
+              {durationField || <span />}
+              <div className={more.cell} data-card-row="remind">{remindField}</div>
+              <div className={more.cell} data-card-row="group">{groupField}</div>
+              <div className={more.cell}>{switches}</div>
+            </div>
+          </PlannerCardRow>
+          {repeatRow}
+          <div className={more.columns}>
+            {steps}
+            {freeTime}
+          </div>
+        </>
       )}
-
-      <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
-      <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
-
-      <PlannerCardRow icon="schedule" row="remind">
-        <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
-      </PlannerCardRow>
-
-      <PlannerCardRow icon="folder" row="group">
-        <PlannerListPicker id="planner-event-list" state={state} value={project} onChange={setProject} />
-        {!project && <PlannerColorSwatches value={color} onChange={setColor} />}
-      </PlannerCardRow>
-
-      <PlannerSteps steps={event.steps || NO_STEPS} onToggle={handleStepToggle} onAdd={handleStepAdd} />
 
       <PlannerCardRow icon="info" row="description">
         <TextArea
           id="planner-event-description"
           label={lang('PlannerFieldDescription')}
-          value={description}
+          placeholder={lang('PlannerOptional')}
+          value={values.description}
           maxLength={DESCRIPTION_MAX_LENGTH}
           noReplaceNewlines
           onChange={handleDescriptionChange}
+          onBlur={handleDescriptionBlur}
         />
         {descriptionScope && (
           <PlannerDescriptionScope
@@ -397,20 +610,22 @@ const PlannerEventEditor = ({
       </PlannerCardRow>
 
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {promptMode ? (
+      {promptMode && (
         <PlannerSeriesPrompt
           mode={promptMode}
+          name={event.name}
+          rule={event.repeat ? formatRepeatShort(lang, event.repeat) : undefined}
+          day={instanceDay}
+          newTime={newTime}
           onChoose={handleScope}
           onCancel={handleCancelPrompt}
         />
-      ) : (
-        <div className={styles.actions}>
-          <Button type="submit" size="smaller" className={styles.footSave}>{lang('Save')}</Button>
-          <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
-            <Icon name="delete" />
-            {lang('PlannerDeleteEvent')}
-          </button>
-        </div>
+      )}
+      {isNarrow && !promptMode && (
+        <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
+          <Icon name="delete" />
+          {lang('PlannerDeleteRecord')}
+        </button>
       )}
     </form>
   );

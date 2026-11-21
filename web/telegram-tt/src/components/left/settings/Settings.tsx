@@ -20,6 +20,8 @@ import SettingsBugReport from './account/SettingsBugReport';
 import SettingsDeleteAccount from './account/SettingsDeleteAccount';
 import SettingsHelp from './account/SettingsHelp';
 import SettingsFolders from './folders/SettingsFolders';
+import SettingsHealthGoals from './modules/SettingsHealthGoals';
+import SettingsPlanner from './modules/SettingsPlanner';
 import SettingsPasscode from './passcode/SettingsPasscode';
 import ProfileNav from './profile/ProfileNav';
 import SettingsAbout from './SettingsAbout';
@@ -404,6 +406,10 @@ const Settings: FC<OwnProps> = ({
         return <SettingsBugReport isActive={isScreenActive} onReset={handleReset} />;
       case SettingsScreens.ParvaneHelp:
         return <SettingsHelp isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvanePlanSettings:
+        return <SettingsPlanner isActive={isScreenActive} onReset={handleReset} />;
+      case SettingsScreens.ParvaneHealthGoals:
+        return <SettingsHealthGoals isActive={isScreenActive} onReset={handleReset} />;
 
       default:
         return undefined;

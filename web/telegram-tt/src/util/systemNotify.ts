@@ -4,9 +4,9 @@
 // Действия (`actions`) показывают Chromium на Android и компьютере; Safari и iOS их не показывают — там
 // работает только нажатие на само уведомление
 
-export type NotifyKind = 'message' | 'call' | 'reminder' | 'wake';
+export type NotifyKind = 'message' | 'call' | 'reminder' | 'music' | 'wake';
 // Пустая строка — нажатие на само уведомление, а не на кнопку
-export type NotifyAction = '' | 'reply' | 'read' | 'answer' | 'decline' | 'done' | 'snooze';
+export type NotifyAction = '' | 'reply' | 'read' | 'answer' | 'decline' | 'done' | 'snooze' | 'listen';
 
 // То, что лежит в `notification.data`: по нему service worker и страница решают, что открыть
 export type NotifyData = {
@@ -16,6 +16,8 @@ export type NotifyData = {
   callId?: string;
   reminderKey?: string;
   reminderTitle?: string;
+  // «Трек скачан на сервер» (доска `ZpSystem`): «Слушать» играет этот трек
+  trackId?: string;
 };
 
 // Команда странице: что сделать по нажатию (`util/notifyCommands.ts`)
@@ -29,6 +31,7 @@ const ACTIONS: Record<NotifyKind, Exclude<NotifyAction, ''>[]> = {
   message: ['reply', 'read'],
   call: ['answer', 'decline'],
   reminder: ['done', 'snooze'],
+  music: ['listen'],
   // Пробуждение сервера пустое (E2E): ни чата, ни текста — делать с ним нечего, только открыть приложение
   wake: [],
 };
@@ -36,7 +39,7 @@ const ACTIONS: Record<NotifyKind, Exclude<NotifyAction, ''>[]> = {
 // Действия, которым не нужно показывать приложение: страница выполнит их в фоне
 const BACKGROUND_ACTIONS = new Set<NotifyAction>(['read', 'decline', 'done', 'snooze']);
 const KNOWN_KINDS = new Set<string>(Object.keys(ACTIONS));
-const KNOWN_ACTIONS = new Set<string>(['', 'reply', 'read', 'answer', 'decline', 'done', 'snooze']);
+const KNOWN_ACTIONS = new Set<string>(['', 'reply', 'read', 'answer', 'decline', 'done', 'snooze', 'listen']);
 
 /** Заголовок уведомления: «Parvane · Чаты». */
 export function buildNotifyTitle(appName: string, moduleName: string) {
@@ -45,10 +48,11 @@ export function buildNotifyTitle(appName: string, moduleName: string) {
 
 /**
  * Текст уведомления о сообщении: чат первой строкой, затем текст. Текст — только если он включён в настройках
- * уведомлений, иначе «Новое сообщение». Экран заблокирован PIN — ни чата, ни текста.
+ * уведомлений, иначе «Новое сообщение». Экран заблокирован PIN — ни чата, ни текста, только «Новое сообщение» и
+ * подсказка второй строкой («Разблокируйте, чтобы прочитать», доска `ZpSystem`).
  */
 export function buildMessageNotifyBody({
-  chatTitle, senderName, summary, isTextShown, isLocked, hiddenText,
+  chatTitle, senderName, summary, isTextShown, isLocked, hiddenText, lockedHint,
 }: {
   chatTitle: string;
   // Автор в группе; в личном чате совпадает с названием чата и не повторяется
@@ -57,8 +61,9 @@ export function buildMessageNotifyBody({
   isTextShown: boolean;
   isLocked: boolean;
   hiddenText: string;
+  lockedHint?: string;
 }) {
-  if (isLocked) return hiddenText;
+  if (isLocked) return lockedHint ? `${hiddenText}\n${lockedHint}` : hiddenText;
   if (!isTextShown) return `${chatTitle}\n${hiddenText}`;
   const author = senderName && senderName !== chatTitle ? `${senderName}: ` : '';
   return `${chatTitle}\n${author}${summary}`;
@@ -100,6 +105,7 @@ export function readNotifyData(raw: unknown): NotifyData {
     callId: readString(data.callId),
     reminderKey: readString(data.reminderKey),
     reminderTitle: readString(data.reminderTitle),
+    trackId: readString(data.trackId),
   };
 }
 
@@ -114,8 +120,9 @@ export function parseReminderKey(key: string): { id: string; day: string } | und
 }
 
 // Настройки уведомлений устройства (spec 041 E3, доски `PhProfileA`, `DkSettingsB`): выключенные модули и «Не
-// беспокоить». Хранит их `util/notifyPrefs.ts`, копию для service worker — `reminderStore.ts`
-export type NotifyModule = 'chats' | 'plan';
+// беспокоить». Хранит их `util/notifyPrefs.ts`, копию для service worker — `reminderStore.ts`. «Музыка» — уведомление
+// «Трек скачан на сервер»
+export type NotifyModule = 'chats' | 'plan' | 'music';
 
 export type NotifyPrefs = {
   off: NotifyModule[];
@@ -123,13 +130,17 @@ export type NotifyPrefs = {
   // Минуты от полуночи; конец раньше начала — тишина через полночь
   quietFrom: number;
   quietTo: number;
+  // «Не беспокоить 1 час / до утра» (доска `ZdMisc`): до этого момента (мс) уведомлений нет; 0 — не включено
+  muteUntil: number;
 };
 
 const MINUTES_IN_DAY = 24 * 60;
-const NOTIFY_MODULES = new Set<string>(['chats', 'plan']);
+const NOTIFY_MODULES = new Set<string>(['chats', 'plan', 'music']);
+const MS_IN_MINUTE = 60 * 1000;
+const MS_IN_HOUR = 60 * MS_IN_MINUTE;
 
 export const DEFAULT_NOTIFY_PREFS: NotifyPrefs = {
-  off: [], isQuietOn: false, quietFrom: 23 * 60 + 30, quietTo: 7 * 60,
+  off: [], isQuietOn: false, quietFrom: 23 * 60 + 30, quietTo: 7 * 60, muteUntil: 0,
 };
 
 /** Сохранённые настройки любой версии: неизвестное и испорченное — по умолчанию. */
@@ -146,6 +157,8 @@ export function readNotifyPrefs(raw: unknown): NotifyPrefs {
     isQuietOn: data.isQuietOn === true,
     quietFrom: readMinutes(data.quietFrom, DEFAULT_NOTIFY_PREFS.quietFrom),
     quietTo: readMinutes(data.quietTo, DEFAULT_NOTIFY_PREFS.quietTo),
+    muteUntil: typeof data.muteUntil === 'number' && Number.isFinite(data.muteUntil) && data.muteUntil > 0
+      ? data.muteUntil : 0,
   };
 }
 
@@ -156,9 +169,22 @@ export function getIsQuietMinute(prefs: NotifyPrefs, minute: number) {
   return minute >= prefs.quietFrom || minute < prefs.quietTo;
 }
 
-/** Показывать ли системное уведомление модуля сейчас: модуль не выключен и не время «Не беспокоить». */
+/**
+ * «Не беспокоить на время»: час от сейчас либо до утра — до ближайшего конца тишины по расписанию (по умолчанию 07:00;
+ * в 02:00 — сегодня утром, днём — завтра утром).
+ */
+export function buildMuteUntil(span: 'hour' | 'morning', prefs: NotifyPrefs, now: Date) {
+  if (span === 'hour') return now.getTime() + MS_IN_HOUR;
+  const morning = new Date(now);
+  morning.setHours(Math.floor(prefs.quietTo / 60), prefs.quietTo % 60, 0, 0);
+  if (morning.getTime() <= now.getTime()) morning.setDate(morning.getDate() + 1);
+  return morning.getTime();
+}
+
+/** Показывать ли уведомление модуля сейчас: модуль не выключен, нет «Не беспокоить» на время и по расписанию. */
 export function getIsNotifyAllowed(prefs: NotifyPrefs, module: NotifyModule, now: Date) {
   if (prefs.off.includes(module)) return false;
+  if (now.getTime() < prefs.muteUntil) return false;
   return !getIsQuietMinute(prefs, now.getHours() * 60 + now.getMinutes());
 }
 

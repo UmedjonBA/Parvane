@@ -17,6 +17,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useModuleGate from '../../../hooks/useModuleGate';
 
 import Icon from '../../common/icons/Icon';
+import ParvaneIcon from '../../main/ParvaneIcon';
 import MusicOfflineButton from '../../parvane/music/MusicOfflineButton';
 import PvModuleOff from '../../parvane/notes/PvModuleOff';
 
@@ -65,7 +66,7 @@ const MusicTrackCard = ({ track }: OwnProps) => {
         return;
       }
       setProblem(undefined);
-      playTracks(found, 0);
+      playTracks(found, 0, { source: { kind: 'chat' } });
     } catch {
       setProblem('failed');
     }
@@ -104,7 +105,7 @@ const MusicTrackCard = ({ track }: OwnProps) => {
         {canPlay && <MusicOfflineButton track={offlineTrack} />}
       </div>
       <div className={styles.source}>
-        <Icon name="volume-1" className={styles.sourceIcon} />
+        <ParvaneIcon name="music" isSmall className={styles.sourceIcon} />
         <span>
           {`${lang('MusicTrackCardLabel')} · `}
           <span className={kit.mono}>{formatTrackTime(track.durationSecs)}</span>

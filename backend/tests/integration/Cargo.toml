@@ -25,5 +25,7 @@ parvane-protocol = { path = "../../protocol", features = ["test-inject"] }
 prost = "0.14"
 sha2 = "0.10"
 base64 = "0.22"
+# SECKEY-1: программный аутентификатор WebAuthn (P-256) в v2_seckey_live
+p256 = { version = "0.13", features = ["ecdsa"] }
 # spec 035 T100: записи замороженного журнала state.v1 — прямо в базу messenger (state.append отвергается)
 sqlx = { workspace = true }

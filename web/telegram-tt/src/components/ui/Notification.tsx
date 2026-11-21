@@ -188,6 +188,7 @@ const Notification = ({
     }
 
     return actionText;
+  // @ts-expect-error -- Lang Parameters are too complex
   }, [lang, actionText]);
 
   const renderedIcon = useMemo(() => {

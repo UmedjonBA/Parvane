@@ -10,6 +10,8 @@ import {
   playNotifySound,
 } from '../../../util/notifications';
 import { getNotifyPrefs, setNotifyModuleOn, updateNotifyPrefs } from '../../../util/notifyPrefs';
+import { showPermissionDenied } from '../../../util/permissionPrompt';
+import { buildMuteUntil } from '../../../util/systemNotify';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -48,8 +50,9 @@ const MINUTES_IN_HOUR = 60;
 
 // Parvane (spec 041 E3): «Профиль → Уведомления» по доскам `PhProfileA`, `DkSettingsB`. Выключатели по модулям и
 // «Не беспокоить» — настройка устройства (`util/notifyPrefs.ts`), действуют и в service worker; показ текста, звук
-// и типы чатов — прежние настройки (`notifyDefaults`, `settings.byKey`). «Здоровье», «Файлы» и «Музыка» системных
-// уведомлений не присылают — в списке модулей их нет
+// и типы чатов — прежние настройки (`notifyDefaults`, `settings.byKey`). «Музыка» — «Трек скачан на сервер»;
+// «Здоровье» и «Файлы» системных уведомлений не присылают — в списке модулей их нет. «Не беспокоить 1 час / до утра» —
+// пункты меню значка в трее с доски `ZdMisc` (трея у браузера нет)
 const SettingsNotifications = ({
   isActive,
   onReset,
@@ -136,6 +139,18 @@ const SettingsNotifications = ({
     if (minutes !== undefined) updateNotifyPrefs({ quietTo: minutes });
   });
 
+  const handleMute = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const span = e.currentTarget.dataset.notifyMute;
+    updateNotifyPrefs({
+      muteUntil: span === 'hour' || span === 'morning' ? buildMuteUntil(span, prefs, new Date()) : 0,
+    });
+  });
+
+  const isMuted = prefs.muteUntil > Date.now();
+  // Браузер запомнил отказ: вместо повторного запроса — «Открыть настройки» с инструкцией (доска `ZpSysGen`)
+  const isBrowserDenied = typeof Notification !== 'undefined' && Notification.permission === 'denied';
+  const handleOpenSettings = useLastCallback(() => showPermissionDenied('notifications'));
+
   const offlineHint = areOfflineNotificationsSupported
     ? lang('ParvaneNotifyOfflineHint')
     : lang('SettingsOfflineNotificationUnsupported');
@@ -160,6 +175,17 @@ const SettingsNotifications = ({
           onChange={handleOfflineChange}
           data-notify-row="offline"
         />
+        {isBrowserDenied && (
+          <button
+            type="button"
+            className={buildClassName(styles.setRow, styles.setRowAction)}
+            data-notify-denied
+            onClick={handleOpenSettings}
+          >
+            <span className={styles.setTitle}>{lang('PvSysNotifyDenied')}</span>
+            <span className={styles.setValue}>{lang('PvSysOpenSettings')}</span>
+          </button>
+        )}
       </div>
 
       <div className={styles.caption}>{lang('ParvaneNotifyByModule')}</div>
@@ -178,6 +204,15 @@ const SettingsNotifications = ({
             isOn={!prefs.off.includes('plan')}
             onChange={(isOn) => setNotifyModuleOn('plan', isOn)}
             data-notify-module="plan"
+          />
+        )}
+        {enabled.includes('music') && (
+          <ProfileSwitchRow
+            title={lang('ParvaneModuleMusic')}
+            hint={lang('PvSysNotifyMusicHint')}
+            isOn={!prefs.off.includes('music')}
+            onChange={(isOn) => setNotifyModuleOn('music', isOn)}
+            data-notify-module="music"
           />
         )}
       </div>
@@ -259,6 +294,38 @@ const SettingsNotifications = ({
             </label>
           </div>
         )}
+        {isMuted ? (
+          <button
+            type="button"
+            className={buildClassName(styles.setRow, styles.setRowAction)}
+            data-notify-mute="off"
+            onClick={handleMute}
+          >
+            <span className={styles.setTitle}>
+              {lang('PvSysMutedUntil', { time: formatTime(minutesOfDay(prefs.muteUntil)) })}
+            </span>
+            <span className={styles.setValue}>{lang('PvSysMuteOff')}</span>
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className={buildClassName(styles.setRow, styles.setRowAction)}
+              data-notify-mute="hour"
+              onClick={handleMute}
+            >
+              <span className={styles.setTitle}>{lang('PvSysMuteHour')}</span>
+            </button>
+            <button
+              type="button"
+              className={buildClassName(styles.setRow, styles.setRowAction)}
+              data-notify-mute="morning"
+              onClick={handleMute}
+            >
+              <span className={styles.setTitle}>{lang('PvSysMuteMorning')}</span>
+            </button>
+          </>
+        )}
       </div>
       <div className={styles.hint}>{lang('ParvaneNotifyQuietHint')}</div>
     </div>
@@ -268,6 +335,11 @@ const SettingsNotifications = ({
 function formatTime(minutes: number) {
   const hours = Math.floor(minutes / MINUTES_IN_HOUR);
   return `${String(hours).padStart(2, '0')}:${String(minutes % MINUTES_IN_HOUR).padStart(2, '0')}`;
+}
+
+function minutesOfDay(time: number) {
+  const date = new Date(time);
+  return date.getHours() * MINUTES_IN_HOUR + date.getMinutes();
 }
 
 function parseTime(value: string) {

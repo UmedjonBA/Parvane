@@ -16,6 +16,8 @@ import styles from './Health.module.scss';
 
 type OwnProps = {
   blocks: HealthBlockId[];
+  // Компьютер: «Как понято» и «Ещё примеры» под полем (доска `ZdHealthX`)
+  isWide?: boolean;
   // Заготовка строки первой записи (пример, кнопка «+»)
   request?: { text?: string };
   onExample: (text: string) => void;
@@ -39,7 +41,7 @@ const BLOCK_TITLE_KEYS = {
 // ввода, примеры, поле первой записи с показом разбора и «Что считать» выключателями (компьютер — две колонки).
 // Блоки — настройка устройства, та же, что в «Профиль → Модули»
 const HealthFirst = ({
-  blocks, request, onExample, onRequestHandled, onDone,
+  blocks, isWide, request, onExample, onRequestHandled, onDone,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -51,18 +53,32 @@ const HealthFirst = ({
     setHealthBlockOn(e.currentTarget.dataset.block as HealthBlockId, isOn);
   });
 
+  function renderExamples(keys: readonly typeof EXAMPLE_KEYS[number][]) {
+    return (
+      <>
+        <div className={kit.caps}>{lang(isWide ? 'HealthFirstMore' : 'HealthFirstTry')}</div>
+        <div className={styles.examples}>
+          {keys.map((key) => (
+            <button key={key} type="button" className={kit.chip} onClick={handleExample}>{lang(key)}</button>
+          ))}
+        </div>
+      </>
+    );
+  }
+
   return (
     <section className={styles.first} data-health-first>
       <div className={styles.firstColumn}>
         <div>{lang('HealthFirstText')}</div>
-        <div className={kit.caps}>{lang('HealthFirstTry')}</div>
-        <div className={styles.examples}>
-          {EXAMPLE_KEYS.map((key) => (
-            <button key={key} type="button" className={kit.chip} onClick={handleExample}>{lang(key)}</button>
-          ))}
-        </div>
-        <div className={buildClassName(kit.muted, kit.small)}>{lang('HealthFirstEntry')}</div>
-        <HealthQuickInput request={request} onRequestHandled={onRequestHandled} />
+        {!isWide && renderExamples(EXAMPLE_KEYS)}
+        <label className={styles.firstLabel}>{lang('HealthFirstEntry')}</label>
+        <HealthQuickInput
+          request={request}
+          placeholder={lang('HealthFirstPlaceholder')}
+          isFirst={isWide}
+          onRequestHandled={onRequestHandled}
+        />
+        {isWide && renderExamples(EXAMPLE_KEYS.filter((key) => key !== 'HealthExampleSleep'))}
       </div>
       <div className={styles.firstColumn}>
         <div className={kit.caps}>{lang('HealthFirstBlocks')}</div>
@@ -79,12 +95,17 @@ const HealthFirst = ({
             </PvSwitch>
           ))}
         </div>
-        <div className={buildClassName(kit.muted, kit.small)}>{lang('HealthFirstBlocksHint')}</div>
-        <div className={styles.cardButtons}>
-          <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} data-health-first-done onClick={onDone}>
-            {lang('HealthFirstDone')}
-          </button>
+        <div className={buildClassName(kit.muted, kit.small)}>
+          {lang(isWide ? 'HealthFirstBlocksHintWide' : 'HealthFirstBlocksHint')}
         </div>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}
+          data-health-first-done
+          onClick={onDone}
+        >
+          {lang('HealthFirstDone')}
+        </button>
       </div>
     </section>
   );

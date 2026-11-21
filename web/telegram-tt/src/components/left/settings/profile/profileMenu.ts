@@ -97,7 +97,10 @@ export function getIsProfileRootScreen(screen: SettingsScreens) {
 /** Пункт «Профиля», которому принадлежит экран настроек (вложенные экраны — пункт своего раздела). */
 export function getProfileItemId(screen: SettingsScreens): ProfileItemId {
   const name = SettingsScreens[screen];
-  if (screen === SettingsScreens.ParvaneModules) return 'modules';
+  if (screen === SettingsScreens.ParvaneModules || screen === SettingsScreens.ParvanePlanSettings
+    || screen === SettingsScreens.ParvaneHealthGoals) {
+    return 'modules';
+  }
   if (APPEARANCE_SCREENS.includes(screen)) return 'appearance';
   if (screen === SettingsScreens.Notifications) return 'notifications';
   if (screen === SettingsScreens.Language || screen === SettingsScreens.DoNotTranslate) return 'language';

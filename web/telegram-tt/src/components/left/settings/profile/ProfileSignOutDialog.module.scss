@@ -1,0 +1,19 @@
+// Parvane: шторка выхода (доска `PhProfileB`)
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.text {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
+
+.hint {
+  margin: -0.25rem 0 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}

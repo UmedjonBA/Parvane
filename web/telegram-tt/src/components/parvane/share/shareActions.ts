@@ -7,9 +7,11 @@ import { MAIN_THREAD_ID } from '../../../api/types';
 import { buildShareNoteText, buildShareNoteTitle } from '../../../util/shareTarget';
 import { callApi } from '../../../api/gramjs';
 import buildAttachment from '../../middle/composer/helpers/buildAttachment';
+import { appendEmbed } from '../cloud/cloudNoteAttach';
 import {
   getCloudData, getNodes, loadCloud, refreshCloud, uploadCloudFilesTo, waitForCloudDrive,
 } from '../cloud/cloudStore';
+import { uploadMusicFiles } from '../music/fetch/musicUpload';
 import { createNote, getNotes, loadNotes, saveNote } from '../notes/notesStore';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -66,6 +68,33 @@ export async function saveSharedToNote(
   const names = uploaded.filter((name): name is string => Boolean(name));
   const isSaved = await saveNote(noteId, buildShareNoteText(title, text, names), vaultName);
   return isSaved && names.length === shared.files.length ? savedTitle : undefined;
+}
+
+/**
+ * «В заметку» → существующая (доска `ZpSysGen`): полученный текст абзацем в конец заметки, файлы — в облако рядом с
+ * ней и вложениями `![[имя]]` после текста. Возвращает название заметки либо `undefined`.
+ */
+export async function saveSharedToExistingNote(
+  shared: SharedPayload, text: string, noteId: string, vaultName: string, userId?: string,
+) {
+  await loadNotes(userId);
+  const note = getNotes().find(({ id }) => id === noteId);
+  if (!note) return undefined;
+  const rootId = getCloudData()?.rootId;
+  const parent = getNodes(rootId).find((node) => node.id === noteId)?.parent || undefined;
+  const uploaded = shared.files.length ? await uploadCloudFilesTo(rootId || ROOT_CONTAINER, parent, shared.files) : [];
+  const names = uploaded.filter((name): name is string => Boolean(name));
+  const body = note.text.replace(/\s+$/, '');
+  const withText = text ? `${body}${body ? '\n\n' : ''}${text}\n` : note.text;
+  const next = names.reduce(appendEmbed, withText);
+  const isSaved = await saveNote(noteId, next, vaultName, note.text);
+  return isSaved && names.length === shared.files.length ? note.title : undefined;
+}
+
+/** «В „Музыку“»: аудиофайлы — в общую библиотеку сервера, как «Загрузить свои файлы». */
+export async function saveSharedToMusic(files: File[]) {
+  const outcomes = await uploadMusicFiles(files);
+  return outcomes.some((outcome) => outcome === 'ok' || outcome === 'duplicate');
 }
 
 function newNodeId() {

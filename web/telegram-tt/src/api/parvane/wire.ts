@@ -155,6 +155,9 @@ export type WireMessageContent = {
   // kind=music_playlist (spec 041 C4, PLAYLIST-1): плейлист — `name`, домен сервера библиотеки (`track_server`),
   // треки по порядку; `text` — для клиентов без «Музыки»
   playlist_tracks?: WirePlaylistTrack[];
+  // Общий плейлист сервера (spec 041, MUSIC-3): id и ключ вступления; снимок треков — для клиентов без общих
+  shared_id?: string;
+  join_key?: string;
   // kind=cloud_invite (spec 016, CLOUD-1): приглашение в совместную папку
   // облака — `container` (ссылка на контейнер, id в base64), `name`, `role`
   // (1 — читатель, 2 — редактор), `text` — для клиентов без раздела
@@ -246,6 +249,8 @@ export type WireGroupMember = {
   role: string;
   admin_rights?: WireAdminRights;
   promoted_by?: string;
+  // Когда вступил, мс (время записи журнала группы; «участник с …» списка жалоб)
+  joined_ms?: number;
 };
 
 export type WireGroupInfo = {

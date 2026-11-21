@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-import { dismissRecoveryKeyDialog, preparePage, reloadPage, relogin } from './e2e_web_helpers.mjs';
+import {
+  dismissRecoveryKeyDialog, openNotesView, preparePage, reloadPage, relogin,
+} from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notes-graph-1';
 // Размеры досок макета: окно компьютера и телефон
@@ -52,7 +54,8 @@ try {
     ([query, number]) => document.querySelectorAll(query).length === number, [selector, wanted],
     { timeout: STEP_TIMEOUT_MS },
   ).catch(async () => assert.fail(`${what}: ${await page.locator(selector).count()} вместо ${wanted}`));
-  const openTab = (name) => knowledge.getByRole('tab', { name, exact: true }).click();
+  // Компьютер: «Граф» — кнопка шапки, «Холсты» — колонка (`ZdNotesX`); телефон — вкладки (общий помощник)
+  const openTab = (name) => openNotesView(knowledge, name);
   const shot = async (name) => {
     if (!SHOT_DIR) return;
     await page.waitForTimeout(400);
@@ -395,6 +398,12 @@ try {
   // Панель выделенного сбоку поля: «Выделено: 1», «Связать стрелкой» — от карточки к следующей нажатой
   await noteCard(HUB).click({ position: { x: 20, y: 10 } });
   await visible(sidePanel.getByText('Selected: 1'), 'панель выделенного');
+  // Кружки цвета подписаны названиями (доска `XdNotes`), карточка заметки — «заметка · #метка» (доска `XpNotes`)
+  await visible(sidePanel.locator('[aria-label="Color: Turquoise"]'), 'кружок цвета с названием');
+  await visible(sidePanel.locator('[aria-label="Color: No color"]'), 'кружок «без цвета» с названием');
+  assert.equal(await noteCard(HUB).locator('[data-canvas-note-kind]').innerText(), 'note', 'подпись карточки без метки');
+  assert.equal(await noteCard(STORE).locator('[data-canvas-note-kind]').innerText(), 'note · #порт/склад', 'подпись карточки с меткой');
+  assert.equal(await knowledge.locator('[data-canvas-head-sub]').innerText(), 'canvas · selected: 1', 'подзаголовок шапки при выделенной карточке');
   await visible(knowledge.locator('[data-canvas-minimap] [data-canvas-minimap-view]'), 'мини-карта с видимой частью');
   await shotBoth('desk-canvas-panel');
   await sidePanel.locator('[data-canvas-action="connect"]').click();
@@ -411,6 +420,14 @@ try {
   await visible(edgePanel, 'панель стрелки');
   assert.equal(await edgePanel.locator('[data-canvas-edge-from]').innerText(), HUB, 'начало стрелки в панели');
   assert.equal(await edgePanel.locator('[data-canvas-edge-to]').innerText(), PIER, 'конец стрелки в панели');
+  // Выбранная стрелка (доска `ZdNotesX`): подзаголовок шапки, подсказка у поля, «Карточка · Стрелка · Готово»
+  assert.equal(await knowledge.locator('[data-canvas-head-sub]').innerText(), 'canvas · arrow selected', 'подзаголовок «выбрана стрелка»');
+  await visible(knowledge.locator('[data-canvas-edge-hint]').getByText('Double-click an arrow'), 'подсказка выбранной стрелки');
+  await knowledge.locator('[data-canvas-panel="card"]').click();
+  await visible(sidePanel.getByText('Selected: 1'), '«Карточка» — панель карточки стрелки');
+  await gone(knowledge.locator('[data-canvas-edge-hint]'), 'подсказка стрелки осталась при выбранной карточке');
+  await knowledge.locator('[data-canvas-panel="edge"]').click();
+  await visible(edgePanel, '«Стрелка» — снова панель стрелки');
   await edgePanel.locator('[data-canvas-edge-label]').fill('ведёт к');
   await edgePanel.locator('[data-canvas-edge-label]').press('Enter');
   await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт к' }), 'подпись стрелки из панели');
@@ -437,6 +454,28 @@ try {
   await page.mouse.up();
   await page.waitForFunction((title) => document.querySelector('#ParvaneKnowledge [data-canvas-edge-to]')?.textContent === title,
     STORE, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('конец стрелки не перецепился на другую карточку'));
+  // Две выделенные карточки (доска `XdNotes`): «Связать стрелкой» сразу ставит стрелку между ними, «По верху»
+  // выравнивает, «Распределить» действует от трёх; «Готово» в шапке снимает выделение
+  const edgesBefore = await board.locator('[data-canvas-edge]').count();
+  await noteCard(HUB).click({ position: { x: 20, y: 10 } });
+  await noteCard(STORE).click({ position: { x: 20, y: 10 }, modifiers: ['Shift'] });
+  await visible(sidePanel.getByText('Selected: 2'), 'панель двух выделенных');
+  assert.equal(await sidePanel.locator('[data-canvas-action="distribute"]').isDisabled(), true, '«Распределить» действует при двух');
+  await sidePanel.locator('[data-canvas-action="connect"]').click();
+  await count('#ParvaneKnowledge [data-canvas-edge]', edgesBefore + 1, '«Связать стрелкой» при двух выделенных не поставило стрелку');
+  await sidePanel.locator('[data-canvas-align="top"]').click();
+  await page.waitForFunction(([a, b]) => {
+    const tops = [a, b].map((title) => Array.from(document.querySelectorAll('#ParvaneKnowledge [data-canvas-type="file"]'))
+      .find((card) => card.querySelector('[data-canvas-note-title]')?.textContent === title)?.style.top);
+    return tops[0] && tops[0] === tops[1];
+  }, [HUB, STORE], { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«По верху» не выровняло карточки'));
+  await noteCard(PIER).click({ position: { x: 20, y: 10 }, modifiers: ['Shift'] });
+  await visible(sidePanel.getByText('Selected: 3'), 'панель трёх выделенных');
+  assert.equal(await sidePanel.locator('[data-canvas-action="distribute"]').isDisabled(), false, '«Распределить» не действует при трёх');
+  await sidePanel.locator('[data-canvas-action="distribute"]').click();
+  await knowledge.locator('[data-canvas-done]').click();
+  await gone(sidePanel, '«Готово» не сняло выделение');
+  assert.equal(await knowledge.locator('[data-canvas-head-sub]').innerText(), 'canvas', 'подзаголовок шапки без выделения');
   // Картинка из буфера обмена — файлом в облако и карточкой на холсте
   const filesBefore = await board.locator('[data-canvas-type="file"]').count();
   await page.mouse.move(boardBox2.x + boardBox2.width * 0.3, boardBox2.y + boardBox2.height * 0.7);
@@ -450,6 +489,41 @@ try {
   await visible(board.locator('[data-canvas-type="file"]').filter({ hasText: 'buoy' }), 'карточка вставленной картинки');
   console.log('OK: холст по макету — заметки перетаскиванием, панель выделенного и стрелки, перецепление, мини-карта, картинка из буфера');
 
+  // ── Список холстов (доски `RpNotes`, `ZdNotesX`): поиск по холстам, «···» у строки, дата днём ──
+  // Холст из графа уже был — новый получил номер 2
+  const MANUAL = 'Canvas 2';
+  const RENAMED = 'Причалы и маяки';
+  const GRAPH_CANVAS = 'Link graph';
+  const canvasRow = (title) => knowledge.locator(`[data-canvas-list] [data-canvas-tile="${title}"]`);
+  await knowledge.locator('[data-canvas-back]').click();
+  await visible(canvasRow(MANUAL), 'строка холста, сделанного руками');
+  await visible(canvasRow(GRAPH_CANVAS), 'строка холста из графа');
+  await visible(canvasRow(MANUAL).getByText('today', { exact: true }), 'дата правки холста — «сегодня»');
+  await visible(knowledge.locator('[data-canvas-from-graph]').getByText('Build canvas from graph'), '«Собрать холст из графа»');
+  // Поиск ищет и по карточкам холста: «buoy» есть только на холсте, сделанном руками
+  const canvasSearch = knowledge.locator('[data-section-search]');
+  if (!(await canvasSearch.isVisible())) await knowledge.locator('[data-section-search-open]').click();
+  await canvasSearch.fill('buoy');
+  await gone(canvasRow(GRAPH_CANVAS), 'поиск по холстам не скрыл холст без находки');
+  await visible(canvasRow(MANUAL), 'поиск по карточке не нашёл холст');
+  await canvasSearch.fill('нет такого');
+  await visible(knowledge.locator('[data-canvas-nothing-found]'), '«Холстов по запросу нет»');
+  await canvasSearch.fill('');
+  await visible(canvasRow(GRAPH_CANVAS), 'очищенный поиск не вернул холсты');
+  // «···» у строки: переименовать и в корзину — без открытия холста
+  await canvasRow(MANUAL).locator('[data-canvas-row-more]').click();
+  await page.locator('[data-canvas-row-menu] [data-canvas-row-rename]').click();
+  await page.locator('#knowledge-canvas-name').fill(RENAMED);
+  await page.locator('[data-canvas-rename]').click();
+  await visible(canvasRow(RENAMED), 'холст переименован из меню строки');
+  await canvasRow(GRAPH_CANVAS).locator('[data-canvas-row-more]').click();
+  await page.locator('[data-canvas-row-menu] [data-canvas-row-delete]').click();
+  await page.locator('.Modal').getByRole('button', { name: 'Move to trash', exact: true }).click();
+  await gone(canvasRow(GRAPH_CANVAS), 'холст из графа не ушёл в корзину из меню строки');
+  await canvasRow(RENAMED).locator('[data-canvas-id]').first().click();
+  await visible(board, 'холст открыт снова после переименования');
+  console.log('OK: список холстов — поиск по карточкам, «···» с переименованием и корзиной, дата днём');
+
   // ── Телефон ───────────────────────────────────────────────────────────────
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
@@ -457,6 +531,25 @@ try {
   await visible(knowledge.locator('[data-canvas-bottom-tools] [data-canvas-tool="text"]'), 'инструменты внизу холста');
   // Шапки модуля над холстом нет — холст во весь экран; поиск по холсту открывается из меню холста
   assert.equal(await knowledge.locator('[data-section-search-open], [data-section-search]').count(), 0, 'шапка модуля осталась над холстом телефона');
+  // Масштаб на телефоне — только процент, кнопок масштаба нет; нижняя панель листается, а не ломает экран
+  assert.match(await zoomChip.innerText(), /^\d+%$/, 'на телефоне в чипе масштаба не только процент');
+  assert.equal(await board.getByRole('button', { name: 'Zoom in' }).count(), 0, 'кнопки масштаба на холсте телефона');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth) <= 1, 'холст телефона шире экрана');
+  // Полоса выделенного (доска `XpNotes`): «N шт.», цвет, «Связать стрелкой», «На передний план», «Дублировать»,
+  // «Удалить с холста», «Ещё»; «Выровнять» — от двух
+  await noteCard(HUB).click({ position: { x: 20, y: 10 } });
+  const phoneBar = board.locator('[data-canvas-selection-bar]');
+  await visible(phoneBar.locator('[data-canvas-selection-count]').getByText('1 sel.'), 'счётчик полосы выделенного');
+  const barActions = await phoneBar.locator('[data-canvas-action]').evaluateAll((buttons) => buttons.map((button) => button.dataset.canvasAction));
+  assert.deepEqual(barActions, ['color', 'connect', 'front', 'duplicate', 'remove', 'more'], `состав полосы телефона: ${barActions}`);
+  assert.equal(await phoneBar.locator('[data-canvas-action="remove"]').getAttribute('aria-label'), 'Delete from canvas', 'подпись удаления на телефоне');
+  await noteCard(PIER).click({ position: { x: 20, y: 10 }, modifiers: ['Shift'] });
+  await visible(phoneBar.locator('[data-canvas-action="align"]'), '«Выровнять» при двух выделенных');
+  await phoneBar.locator('[data-canvas-action="align"]').click();
+  await visible(board.locator('[data-canvas-context] [data-canvas-align="top"]'), 'выравнивание из «Выровнять»');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await gone(phoneBar, 'полоса выделенного не ушла по Escape');
   await shotBoth('phone-canvas');
   await knowledge.locator('[data-canvas-menu]').click();
   await page.locator('[data-canvas-search]').click();
@@ -472,6 +565,8 @@ try {
   await page.waitForTimeout(400);
   await page.evaluate(() => window.history.back());
   await visible(knowledge.locator('[data-canvas-list] [data-canvas-new]'), '«назад» с холста — к плиткам холстов');
+  // Плитка телефона — «N карточек · сегодня», без стрелок (доска `RpNotes`)
+  assert.match(await canvasRow(RENAMED).innerText(), /\d+ cards? · today$/, 'подпись плитки телефона');
   await shotBoth('phone-canvas-list');
   await openTab('Graph');
   await visible(graph, 'граф на телефоне');
@@ -481,7 +576,24 @@ try {
   assert.ok(zoomButton.width >= 44 && zoomButton.height >= 44, `цель нажатия кнопки масштаба ${zoomButton.width}×${zoomButton.height}`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 1, `экран шире телефона на ${overflow}px`);
+  await visible(graph.getByRole('button', { name: 'Fit to screen' }), '«Вписать в экран» на телефоне');
+  // «Холст из графа» на телефоне — широкой кнопкой внизу поля, не чипом в строке сверху (доска `XpNotes`)
+  assert.equal(await graph.locator('[data-graph-tool-row] [data-graph-to-canvas]').count(), 0, 'чип «Холст из графа» в строке сверху');
+  await visible(graph.locator('[data-graph-to-canvas]').getByText('Canvas from graph'), 'широкая «Холст из графа»');
   await shotBoth('phone-graph');
+  // Нажатая линия на телефоне — строка «выбрана связь с …» и «Убрать» (доска `XpNotes`)
+  const lonePath = gedge(HUB, LONE).locator('[data-edge-line]').last();
+  const loneMid = await lonePath.evaluate((path) => {
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM();
+    return { x: point.x * matrix.a + point.y * matrix.c + matrix.e, y: point.x * matrix.b + point.y * matrix.d + matrix.f };
+  });
+  await page.mouse.click(loneMid.x, loneMid.y);
+  const edgeStrip = graph.locator('[data-graph-edge-picked]');
+  await visible(edgeStrip.getByText(`link with “${LONE}” selected`), 'строка выбранной связи на телефоне');
+  await shotBoth('phone-graph-edge');
+  await edgeStrip.getByRole('button', { name: 'Remove', exact: true }).click();
+  await gone(gedge(HUB, LONE), '«Убрать» не убрало связь на телефоне');
   // Выбранная точка — лист снизу со связями
   for (let attempt = 0; attempt < 4; attempt++) {
     await clickNode(HUB);

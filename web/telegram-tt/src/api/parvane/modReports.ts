@@ -25,6 +25,8 @@ export type ParvaneReportItem = {
   comments: { reporterId: string; text: string }[];
   /** Сообщение есть в своей истории группы — можно открыть. */
   messageId?: number;
+  /** Когда автор вступил в группу, с (журнал группы; «участник с …», доска `RpChat`). */
+  memberSince?: number;
 };
 
 // Начало `text` карточки `mod_report` (см. `messages.ts reportMessages`)
@@ -35,6 +37,7 @@ export type ParvaneReportInbox = { items: ParvaneReportItem[]; open: number };
 type EngineItem = {
   uuid: string; author: string; text: string; ts: number; lastTs: number; reason: string; count: number;
   comments: { reporter: string; text: string }[];
+  memberSinceMs?: number;
 };
 
 export type ModReportsDeps = {
@@ -47,6 +50,11 @@ export type ModReportsDeps = {
   /** Пересобранная карточка — в стор и на экран (иначе в чате она так и осталась бы текстом). */
   onCardRebuilt?: (message: ApiMessage) => void;
   close: (address: string, opIds: string[]) => Promise<boolean>;
+  /** Участники группы из её журнала: адрес и время вступления, мс. */
+  members?: (address: string) => { user: string; joinedMs?: number }[];
+  /** «Скрыть у меня сообщения этого участника» (REPORT-3): объект личного состояния и показ. */
+  setMemberHidden?: (address: string, user: string, isHidden: boolean) => Promise<boolean>;
+  applyMemberHidden?: (chatId: string, user: string, isHidden: boolean) => Promise<void>;
 };
 
 export function createModReports(deps: ModReportsDeps) {
@@ -88,8 +96,12 @@ export function createModReports(deps: ModReportsDeps) {
     const address = store.getAddressForId(groupChatId);
     if (!address) return undefined;
     await deps.ensureAllLoaded();
+    // Автор в карточке — id пользователя: участники группы — в том же виде
+    const members = (deps.members?.(address) || []).map(({ user, joinedMs }) => ({
+      user: store.getIdForAddress(user, 'user'), joinedMs: joinedMs || 0,
+    }));
     const result = engineStatic<{ items: EngineItem[]; open: number }>('reportInbox', {
-      reports: await reportsOf(groupChatId), closed: deps.closedOps(address),
+      reports: await reportsOf(groupChatId), closed: deps.closedOps(address), members,
     });
     const items = result.items.map((i): ParvaneReportItem => {
       const local = store.getMessageByUuid(i.uuid);
@@ -106,6 +118,7 @@ export function createModReports(deps: ModReportsDeps) {
           reporterId: c.reporter ? store.getIdForAddress(c.reporter, 'user') : '', text: c.text,
         })),
         messageId: local && local.chatId === groupChatId ? local.id : undefined,
+        memberSince: i.memberSinceMs ? Math.floor(i.memberSinceMs / 1000) : undefined,
       };
     });
     return { items, open: result.open };
@@ -121,6 +134,16 @@ export function createModReports(deps: ModReportsDeps) {
       const address = deps.getStore().getAddressForId(chatId);
       if (!address || !uuids.length) return false;
       return deps.close(address, uuids);
+    },
+    /** Скрыть либо снова показать у себя сообщения участника группы (REPORT-3, окно жалобы). */
+    async parvaneMemberHide({ chatId, userId, isHidden }: { chatId: string; userId: string; isHidden: boolean }) {
+      const store = deps.getStore();
+      const address = store.getAddressForId(chatId);
+      const user = store.getAddressForId(userId);
+      if (!address || !user || user === store.self || !deps.setMemberHidden) return false;
+      if (!(await deps.setMemberHidden(address, user, isHidden))) return false;
+      await deps.applyMemberHidden?.(chatId, user, isHidden);
+      return true;
     },
   };
 }

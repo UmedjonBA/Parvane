@@ -3,7 +3,7 @@ import { memo, useMemo } from '../../../lib/teact/teact';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDuration } from './plannerFormat';
+import { formatDurationFull } from './plannerFormat';
 import { formatPlainName } from './plannerLinks';
 import { getReminders } from './plannerReminders';
 
@@ -53,7 +53,7 @@ const PlannerReminderSample = ({ state }: OwnProps) => {
       <span className={styles.reminderApp}>{lang('PlannerReminderSampleApp')}</span>
       <span className={styles.reminderTitle}>
         {sample.minutes
-          ? lang('PlannerReminderSampleIn', { name: sample.name, time: formatDuration(lang, sample.minutes) })
+          ? lang('PlannerReminderSampleIn', { name: sample.name, time: formatDurationFull(lang, sample.minutes) })
           : sample.name}
       </span>
       {sample.details && <span className={styles.reminderDetails}>{sample.details}</span>}

@@ -42,6 +42,8 @@ fn bundle_rate() -> usize {
 
 mod delete;
 mod rename;
+mod seckey;
+pub(crate) mod webauthn;
 pub(crate) use delete::deletion_pending;
 #[cfg(test)]
 pub(crate) use delete::deletion_pending_in;
@@ -554,22 +556,29 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let typed = canonical_user(&r.login, &server_domain());
             // Прежний ник 30 дней ведёт на новый адрес (spec 026)
             let login = rename::canonical_address(&ctx.v2, &typed).await;
-            if device_proof_required() && log_has_active_device(&login, &r.device_id).await? {
-                let log = load_log(&ctx, &login).await?;
-                let dev = log.active(&r.device_id).ok_or(ErrorCode::Forbidden)?;
-                let ed = dev.olm_ed25519().map_err(|_| ErrorCode::Invalid)?;
-                let reason = if r.device_proof.is_empty() {
-                    Some("нет доказательства")
-                } else if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000) {
-                    Some("доказательство несвежее")
-                } else if ![&login, &typed].iter().any(|a| parvane_protocol::client::verify_session_proof(&ed, a, &r.device_id, r.proof_ts_ms, &r.device_proof)) {
-                    Some("подпись не сошлась")
-                } else {
-                    None
+            // SECKEY-1: устройство журнала, доказавшее свой ключ, ключ безопасности не предъявляет
+            let mut proven = false;
+            let strict = device_proof_required();
+            if (strict || !r.device_proof.is_empty()) && log_has_active_device(&login, &r.device_id).await? {
+                let log = load_log(ctx, &login).await?;
+                let ed = log.active(&r.device_id).map(|dev| dev.olm_ed25519());
+                let reason = match ed {
+                    None => Some("устройства нет в журнале"),
+                    Some(Err(_)) => Some("ключ устройства негоден"),
+                    Some(Ok(_)) if r.device_proof.is_empty() => Some("нет доказательства"),
+                    Some(Ok(_)) if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000) => Some("доказательство несвежее"),
+                    Some(Ok(ed)) if ![&login, &typed].iter().any(|a| parvane_protocol::client::verify_session_proof(&ed, a, &r.device_id, r.proof_ts_ms, &r.device_proof)) => {
+                        Some("подпись не сошлась")
+                    }
+                    Some(Ok(_)) => None,
                 };
-                if let Some(reason) = reason {
-                    warn!("identity v2: вход устройства из журнала отвергнут (ID-01): {reason}");
-                    return Err(ErrorCode::Forbidden);
+                match reason {
+                    None => proven = true,
+                    Some(reason) if strict => {
+                        warn!("identity v2: вход устройства из журнала отвергнут (ID-01): {reason}");
+                        return Err(ErrorCode::Forbidden);
+                    }
+                    Some(_) => {}
                 }
             }
             let mut p = json!({"user": login, "password": r.password, "device_id": r.device_id, "client_ip": req.client_ip});
@@ -604,6 +613,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 return Ok(pb::SessionIssueResponse { password_wrong: true, attempts_left, locked_ms, ..Default::default() }.encode_to_vec());
             }
             v1_ok(&v)?;
+            // SECKEY-1: пароль (и Telegram) пройдены; новому устройству аккаунта с ключом — шаг «ключ безопасности».
+            // Выписанный токен не уходит; секрет доверия 2FA — уходит (прежний уже израсходован).
+            if let Some(step) = seckey::login_step(ctx, &login, &r.device_id, proven, &r, s(&v, "trust_secret")).await? {
+                return Ok(step.encode_to_vec());
+            }
             // Аккаунт ждёт удаления (spec 027): пароль верен, но токен — только с явной отменой удаления
             if let Some(at) = delete::pending_until(&ctx.v2, &login).await {
                 if !r.cancel_deletion {
@@ -675,6 +689,12 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             .encode_to_vec())
         }
         "identity.account.delete" => delete::account_delete(ctx, &req).await,
+        // ── ключ безопасности (SECKEY-1) ──
+        "identity.seckey.challenge" => seckey::challenge(ctx, &req).await,
+        "identity.seckey.add" => seckey::add(ctx, &req).await,
+        "identity.seckey.list" => seckey::list(ctx, &req).await,
+        "identity.seckey.remove" => seckey::remove(ctx, &req).await,
+        "identity.seckey.set_required" => seckey::set_required(ctx, &req).await,
         "identity.account.rename" => {
             let r: pb::AccountRenameRequest = body(&req)?;
             rename::account_rename(ctx, &req, r).await

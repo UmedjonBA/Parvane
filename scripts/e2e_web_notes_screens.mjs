@@ -1,4 +1,5 @@
-// Экраны модуля «Заметки» по макету (spec 041 D1; доски `Notes`, `PhNotesMore`, `XpNotes`, `DeskNotes`):
+// Экраны модуля «Заметки» по макету (spec 041 D1; доски `Notes`, `PhNotesMore`, `XpNotes`, `DeskNotes`, `ZdNotesX`):
+// на компьютере колонка «Папки / Ещё» (холсты, справка по разметке, корзина), таблица заметок, Ctrl+N, Ctrl+B/I;
 // «Заметки» и «Файлы» — отдельные модули; список — папки со счётчиком и недавние заметки, открытая папка, поиск
 // одним списком; заметка на компьютере — режимы «Просмотр / Правка / Рядом» одной кнопкой (Ctrl+E), кнопки
 // разметки и подсказка заметки для ссылки `[[…`, меню «Ещё»; на телефоне — шапка с названием, виды под ней,
@@ -10,11 +11,12 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import { cloudDriver } from './e2e_web_cloud_lib.mjs';
-import { dismissRecoveryKeyDialog, preparePage } from './e2e_web_helpers.mjs';
+import { dismissRecoveryKeyDialog, openNotesView, preparePage } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notes-screens-1';
 // Размеры досок макета: окно компьютера и телефон
-const DESK = { width: 1120, height: 700 };
+// Компьютер — с колонкой папок и «Связями» справа (доска `ZdNotesX`)
+const DESK = { width: 1440, height: 800 };
 const PHONE = { width: 360, height: 800 };
 const STEP_TIMEOUT_MS = 20000;
 const SHOT_DIR = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR || '';
@@ -92,9 +94,14 @@ try {
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   await visible(knowledge, 'модуль «Заметки»');
   assert.equal(await cloud.isVisible(), false, '«Файлы» видны под «Заметками»');
+  // Компьютер (`ZdNotesX`): «Список / Граф» в шапке, холсты, справка и корзина — в колонке «Ещё»
   assert.deepEqual(
-    await knowledge.locator('[role="tablist"] [role="tab"]').allInnerTexts(), ['List', 'Graph', 'Canvas'],
-    'виды «Заметок» — не «Список / Граф / Холст»',
+    await knowledge.locator('[data-notes-desk-head] [role="tab"]').allInnerTexts(), ['List', 'Graph'],
+    'виды «Заметок» в шапке — не «Список / Граф»',
+  );
+  assert.deepEqual(
+    await knowledge.locator('[data-notes-column] [data-notes-place]').evaluateAll((items) => items.map((item) => item.dataset.notesPlace)),
+    ['canvas', 'help', 'trash'], 'пункты «Ещё» колонки',
   );
   // Вид переживает уход в «Файлы» и обратно: у «Заметок» свой переключатель
   await knowledge.getByRole('tab', { name: 'Graph', exact: true }).click();
@@ -103,7 +110,7 @@ try {
   await visible(cloud, '«Файлы» после графа');
   await sidebar.getByRole('tab', { name: 'Notes' }).click();
   assert.equal(await knowledge.getAttribute('data-knowledge-view'), 'graph', 'возврат в «Заметки» сбросил вид');
-  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await openNotesView(knowledge, 'List');
   console.log('OK: «Заметки» и «Файлы» — отдельные модули, вид заметок хранится отдельно');
 
   // ── Список: папки со счётчиком, недавние, открытая папка ──────────────────
@@ -127,7 +134,7 @@ try {
   await visible(knowledge.locator('[data-note-title="New note"]'), 'вторая заметка');
   await setNoteTitle(OTHER);
   assert.equal(await knowledge.locator('[data-note-row]').count(), 2, 'в открытой папке не две заметки');
-  await knowledge.locator('[data-folder-back]').click();
+  await knowledge.locator('[data-notes-all]').click();
   await visible(folderRow(FOLDER), 'папки после возврата');
   assert.equal(await folderRow(FOLDER).locator('[data-folder-count]').innerText(), '2', 'счётчик папки с заметками');
   console.log('OK: список — папки со счётчиком, недавние, открытая папка, «+» кладёт заметку в открытую папку');
@@ -151,6 +158,21 @@ try {
   await page.waitForFunction(() => document.querySelector('#knowledge-note-editor').value.endsWith('- [ ] проверить связь'),
     undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('кнопка «Задача» не поставила пункт'));
   assert.equal(await editor.evaluate((element) => document.activeElement === element), true, 'кнопка разметки увела фокус');
+  // Ctrl+B и Ctrl+I — жирный и курсив вокруг выделения (`ZdNotesX`, справка по разметке)
+  await editor.pressSequentially('\nважно');
+  for (let i = 0; i < 5; i++) await editor.press('Shift+ArrowLeft');
+  await editor.press('Control+b');
+  await editor.press('Control+i');
+  await page.waitForFunction(() => document.querySelector('#knowledge-note-editor').value.endsWith('***важно***'),
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('Ctrl+B / Ctrl+I не обернули выделение'));
+  // Справка по разметке из редактора — шторкой
+  await note.locator('[data-note-md-help]').click();
+  const helpSheet = page.getByRole('dialog').locator('[data-notes-md-help]');
+  await visible(helpSheet, 'справка по разметке из редактора');
+  assert.equal(await helpSheet.locator('[data-md-help-row]').count(), 10, 'строк справки не десять');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
+  await gone(page.locator('[data-notes-md-help]'), 'справка из редактора не закрылась');
+  await editor.press('Control+End');
   // Подсказка заметки для незакрытой ссылки
   await editor.pressSequentially('\nсм. [[Резерв');
   const suggest = note.locator('[data-note-link-suggest]');
@@ -197,11 +219,17 @@ try {
   await visible(knowledge.locator('[data-notes-found]'), 'найденное одним списком');
   await page.waitForFunction(() => document.querySelectorAll('#ParvaneKnowledge [data-note-row]').length === 1,
     undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('поиск показал лишние заметки'));
-  assert.equal(await knowledge.locator('[data-notes-folders]').count(), 0, 'при поиске видны папки');
   await shot('desk-search-light');
   await knowledge.locator('#knowledge-search').fill('');
-  await visible(knowledge.locator('[data-notes-folders]'), 'папки после очистки поиска');
-  console.log('OK: строка списка, колонка «Связи», поиск одним списком');
+  await visible(knowledge.locator('[data-notes-recent]'), 'все заметки после очистки поиска');
+  // Щелчок по `#тегу` в заметке — поиск по нему (`ZdNotesX`: «тег, ищется по щелчку»)
+  await body.locator('[data-md-tag="сеть"]').click();
+  await page.waitForFunction(() => document.querySelector('#knowledge-search')?.value === '#сеть', undefined,
+    { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('щелчок по тегу не начал поиск'));
+  await visible(knowledge.locator('[data-notes-found]').locator(`[data-note-row="${NOTE}"]`), 'заметка с тегом найдена');
+  await knowledge.locator('#knowledge-search').fill('');
+  await visible(knowledge.locator('[data-notes-recent]'), 'все заметки после поиска по тегу');
+  console.log('OK: строка списка, колонка «Связи», поиск одним списком, поиск по щелчку на теге');
 
   // ── Меню заметки ──────────────────────────────────────────────────────────
   await bar.locator('[data-note-menu]').click();
@@ -262,7 +290,8 @@ try {
   const files = cloudDriver(page);
   await files.open();
   await files.root();
-  const vault = (await files.names()).find((name) => ['Знания', 'Knowledge'].includes(name));
+  const vault = (await files.names()).find((name) => ['Заметки', 'Notes', 'Знания', 'Knowledge'].includes(name));
+  assert.equal(vault, 'Notes', 'папка хранилища нового аккаунта — не «Notes»');
   assert.ok(vault, 'нет папки хранилища заметок в «Файлах»');
   await files.item(vault).click();
   await files.item(FOLDER).click();
@@ -295,7 +324,7 @@ try {
     { timeout: STEP_TIMEOUT_MS },
   ).catch(() => assert.fail('после «Добавить на холст» не открылся холст'));
   await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки на холсте');
-  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await openNotesView(knowledge, 'List');
   await row(NOTE).click();
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста');
   // Меню строки списка по правой кнопке (`ZdNotesX`): список и холст рядом не стоят — на холст кладут отсюда
@@ -305,8 +334,20 @@ try {
     await page.locator('[data-note-menu-list] [data-note-action]').evaluateAll((items) => items.map((item) => item.dataset.noteAction)),
     ['open', 'rename', 'move', 'pin', 'copy', 'article', 'canvas', 'versions', 'delete'], 'состав меню строки',
   );
+  // Меню выпадает у самой строки (не шторкой), у пунктов — сочетания клавиш, как на доске
+  assert.equal(await page.getByRole('dialog').locator('[data-note-menu-list]').count(), 0, 'меню строки — шторкой');
+  const rowBox = await row(NOTE).boundingBox();
+  const popBox = await page.locator('[data-note-menu-pop]').boundingBox();
+  assert.ok(
+    popBox.y >= rowBox.y - 1 && popBox.y <= rowBox.y + rowBox.height + 1 && popBox.x >= rowBox.x,
+    `меню не у строки: ${JSON.stringify({ rowBox, popBox })}`,
+  );
+  const hints = await page.locator('[data-note-menu-pop] [data-note-action]').evaluateAll((items) => Object.fromEntries(
+    items.map((item) => [item.dataset.noteAction, item.querySelector('kbd')?.textContent || '']),
+  ));
+  assert.deepEqual([hints.open, hints.rename, hints.delete, hints.move], ['Enter', 'F2', 'Del', ''], 'подсказки клавиш');
   await shotBoth('desk-row-menu');
-  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
+  await page.keyboard.press('Escape');
   await page.locator('[data-note-menu-list]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // «Переименовать» из строки — шторкой, заметка не открывается; потом назад
   const renameSheet = page.locator('[data-note-rename]');
@@ -320,7 +361,22 @@ try {
     await visible(row(to), `строка после переименования в «${to}»`);
   };
   await renameRow(NOTE, `${NOTE} 2`);
-  await renameRow(`${NOTE} 2`, NOTE);
+  // F2 по строке под указателем — то же окно названия, без меню
+  await row(`${NOTE} 2`).hover();
+  await page.keyboard.press('F2');
+  await visible(renameSheet, 'шторка названия по F2');
+  assert.equal(await page.locator('[data-note-menu-pop]').count(), 0, 'F2 открыл меню');
+  await renameSheet.locator('input').fill(NOTE);
+  await renameSheet.locator('input').press('Enter');
+  await gone(renameSheet, 'шторка названия после F2 не закрылась');
+  await visible(row(NOTE), 'строка после переименования по F2');
+  // Del по строке в фокусе — вопрос «В корзину», отмена оставляет заметку
+  await row(NOTE).focus();
+  await page.keyboard.press('Delete');
+  const keyDelete = page.locator('.confirm-dialog-button').filter({ hasText: 'Cancel' });
+  await visible(keyDelete, 'вопрос перед удалением по Del');
+  await keyDelete.click();
+  await visible(row(NOTE), 'заметка на месте после отмены Del');
   // «Перенести», «Скопировать ссылку», «История версий», «В корзину» (с отменой) — из строки
   await row(NOTE).click({ button: 'right' });
   await menuItem('move').click();
@@ -349,7 +405,7 @@ try {
     { timeout: STEP_TIMEOUT_MS },
   ).catch(() => assert.fail('после «Добавить на холст» из строки не открылся холст'));
   await visible(knowledge.locator('[data-canvas-note="found"]').filter({ hasText: NOTE }), 'карточка заметки из строки');
-  await knowledge.getByRole('tab', { name: 'List', exact: true }).click();
+  await openNotesView(knowledge, 'List');
   await row(NOTE).click();
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после холста из строки');
   console.log('OK: из меню заметки — выбор чата для статьи, карточка на новом холсте; из меню строки — на холст');
@@ -360,10 +416,15 @@ try {
   await visible(note.getByRole('button', { name: 'Back to notes' }), 'заметка на весь экран телефона');
   assert.equal(await knowledge.locator('[role="tablist"]').count(), 0, 'над заметкой на телефоне видны виды');
   await visible(note.locator('[data-note-bar]').getByRole('heading', { name: NOTE }), 'название заметки в шапке');
+  // Телефон (`PhNotesMore`): «Ссылаются сюда · N» списком без малого графа
+  await visible(note.locator('[data-note-links]').getByText(/Linked here · \d/), '«Ссылаются сюда» на телефоне');
+  assert.equal(await note.locator('[data-note-links] svg').count(), 0, 'малый граф на телефоне');
   await shotBoth('phone-view');
   // Действия — шторкой снизу
   await note.locator('[data-note-menu]').click();
   await visible(page.getByRole('dialog').locator('[data-note-action="delete"]'), 'шторка действий');
+  assert.match(await page.getByRole('dialog').locator('[data-sheet-subtitle]').innerText(), new RegExp(`${FOLDER} · \\d+ link`),
+    'подзаголовок шторки «папка · N связей»');
   await shotBoth('phone-menu');
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
   await page.locator('[data-note-menu-list]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
@@ -385,6 +446,9 @@ try {
   await visible(head.getByRole('heading', { name: 'Notes' }), 'название модуля в шапке телефона');
   await visible(head.locator('[role="tablist"]'), 'виды под шапкой');
   await visible(folderRow(FOLDER), 'папки на телефоне');
+  // Строка «Недавних» (`PhNotesMore`): название и «папка · когда», без начала текста
+  assert.match(await knowledge.locator(`[data-notes-recent] [data-note-row="${NOTE}"] [data-row-sub]`).innerText(),
+    new RegExp(`^(Pinned · )?${FOLDER} · `), 'строка недавних — не «папка · когда»');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 1, `экран шире телефона на ${overflow}px`);
   await shotBoth('phone-list');
@@ -401,6 +465,45 @@ try {
   await page.evaluate(() => window.history.back());
   await visible(folderRow(FOLDER), '«назад» из папки — к папкам');
   await visible(knowledge, '«назад» из папки увёл из модуля');
+  // Статья в чат из заметки в папке: окно выбора чата закрыто — «назад» ведёт к папке, затем к папкам
+  // (дефект 20 ноя: запись окна оставалась в истории, и «назад» в папке тратилось на неё впустую)
+  const historyDump = () => page.evaluate(() => JSON.stringify({
+    cursor: window.TEST_getHistoryCursor?.(),
+    state: window.TEST_getHistoryState?.()?.map(({ index, isClosed, shouldBeReplaced }) => ({ index, isClosed, shouldBeReplaced })),
+    real: window.history.state,
+  }));
+  // Окно выбора чата — с полем поиска (шторка меню заметки тоже несёт пункт «Send to chat as article»)
+  const phoneRecipients = page.locator('.Modal .modal-dialog').filter({ hasText: 'Send to chat as article' })
+    .filter({ has: page.getByPlaceholder('Search') });
+  // Окно закрывают крестиком, Escape и системным «назад» — после каждого «назад» ведёт к папке, затем к папкам
+  const closeWays = {
+    cross: () => phoneRecipients.getByRole('button', { name: 'Close' }).first().click(),
+    escape: () => page.keyboard.press('Escape'),
+    back: () => page.evaluate(() => window.history.back()),
+  };
+  for (const [way, closePicker] of Object.entries(closeWays)) {
+    await folderRow(FOLDER).click();
+    await visible(knowledge.locator(`[data-folder-open="${FOLDER}"]`), `папка для статьи на телефоне (${way})`);
+    await row(NOTE).click();
+    await visible(note.getByRole('button', { name: 'Back to notes' }), `заметка из папки на весь экран (${way})`);
+    await note.locator('[data-note-menu]').click();
+    await page.getByRole('dialog').locator('[data-note-action="article"]').click();
+    await visible(phoneRecipients, `выбор чата для статьи на телефоне (${way})`);
+    await page.waitForTimeout(300);
+    await closePicker();
+    await phoneRecipients.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+    await visible(note.getByRole('button', { name: 'Back to notes' }), `заметка осталась после окна (${way})`);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.history.back());
+    await note.getByRole('button', { name: 'Back to notes' }).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+      .catch(async () => assert.fail(`«назад» не закрыл заметку после окна (${way}): ${await historyDump()}`));
+    await visible(knowledge.locator(`[data-folder-open="${FOLDER}"]`), `«назад» после выбора чата — к папке (${way})`);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.history.back());
+    await knowledge.locator(`[data-folder-open="${FOLDER}"]`).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+      .catch(async () => assert.fail(`«назад» не закрыл папку после выбора чата (${way}): ${await historyDump()}`));
+    await visible(folderRow(FOLDER), `папки после «назад» из папки (${way})`);
+  }
   // Поиск — лупой в шапке, на месте названия
   await head.locator('[data-section-search-open]').click();
   await head.locator('[data-section-search]').fill(WORD);
@@ -457,7 +560,32 @@ try {
   await menuItem('delete').click();
   await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
   await gone(row(OTHER), 'заметка не удалена из меню');
-  console.log('OK: удаление заметки из меню');
+  // Заметка не открыта — список таблицей во всю ширину: «название · папка · #тег · дата» (`ZdNotesX`)
+  await visible(knowledge.locator('[data-notes-list][data-notes-layout="table"]'), 'таблица заметок без открытой');
+  assert.match(await row(NOTE).innerText(), new RegExp(`${NOTE}[\\s\\S]*${FOLDER}[\\s\\S]*#сеть`), 'строка таблицы');
+  await shotBoth('desk-table');
+  // «Корзина» колонки: удалённая заметка лежит там, «Восстановить» возвращает её
+  await knowledge.locator('[data-notes-place="trash"]').click();
+  const trashItem = knowledge.locator(`[data-notes-trash-item="${OTHER}"]`);
+  await visible(trashItem, 'удалённая заметка в корзине «Заметок»');
+  await shotBoth('desk-trash');
+  await trashItem.locator('[data-notes-trash-restore]').click();
+  await gone(trashItem, 'заметка не ушла из корзины');
+  // «Справка по разметке» колонки — экран шпаргалки
+  await knowledge.locator('[data-notes-place="help"]').click();
+  await visible(knowledge.locator('[data-notes-md-help] [data-md-help-key]'), 'экран справки по разметке');
+  assert.equal(await knowledge.locator('[data-notes-md-help] [data-md-help-row]').count(), 10, 'строки справки');
+  await shotBoth('desk-md-help');
+  // «Холсты» колонки — список холстов
+  // «Холсты» из другого места возвращают открытый там холст, ещё раз — список холстов
+  await knowledge.locator('[data-notes-place="canvas"]').click();
+  await page.waitForFunction(() => document.querySelector('#ParvaneKnowledge')?.getAttribute('data-knowledge-view') === 'canvas',
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«Холсты» не открыли холсты'));
+  if (!(await knowledge.locator('[data-canvas-list]').isVisible())) await knowledge.locator('[data-notes-place="canvas"]').click();
+  await visible(knowledge.locator('[data-canvas-list]'), 'список холстов из колонки');
+  await knowledge.locator('[data-notes-all]').click();
+  await visible(row(OTHER), 'восстановленная заметка в списке');
+  console.log('OK: удаление заметки из меню, таблица, корзина с восстановлением, справка по разметке, холсты');
 
   // ── Закрепить вверху, цвет папки, «Вложить в другую папку» ────────────────
   await row(NOTE).click();
@@ -477,7 +605,11 @@ try {
   await knowledge.locator('[data-folder-menu]').first().click();
   const actions = page.locator('[data-folder-actions]');
   await visible(actions, 'другие действия с папкой');
+  // «Цвет папки» строкой со значением словом (доска `ZpNotesX`): по умолчанию свои папки синие, кружки — в раскрытии
+  await visible(actions.locator('[data-folder-color="blue"]').filter({ hasText: 'blue' }), 'цвет папки словом');
+  await actions.locator('[data-folder-color]').click();
   await actions.locator('[data-tone="red"]').click();
+  await visible(actions.locator('[data-folder-color="red"]').filter({ hasText: 'red' }), 'выбранный цвет словом');
   await page.waitForFunction(
     () => document.querySelector('[data-folder-actions] [data-tone="red"]')?.getAttribute('aria-pressed') === 'true',
     undefined, { timeout: STEP_TIMEOUT_MS },
@@ -492,6 +624,35 @@ try {
   await visible(note.locator(`[data-note-folder="${ARCHIVE}/${FOLDER}"]`), 'папка вложена в другую — путь заметки');
   await knowledge.locator('#knowledge-search').fill('');
   console.log('OK: закрепление, цвет папки, вложение папки в другую');
+
+  // ── «Новая заметка» там, где стоит человек: в графе — точка в панели, на холсте — карточка, Ctrl+N ────────
+  await openNotesView(knowledge, 'Graph');
+  await knowledge.locator('[data-notes-new]').click();
+  await visible(knowledge.locator('[data-graph-panel] [data-note-title^="New note"]'), 'новая заметка выбрана в графе');
+  assert.equal(await knowledge.getAttribute('data-knowledge-view'), 'graph', '«Новая заметка» увела из графа');
+  await openNotesView(knowledge, 'Canvas');
+  await knowledge.locator('[data-canvas-tile] [data-canvas-id]').first().click();
+  await visible(knowledge.locator('[data-canvas-note]'), 'открытый холст');
+  const cardsBefore = await knowledge.locator('[data-canvas-note]').count();
+  await sidebar.locator('[data-add-for="notes"]').click();
+  await page.waitForFunction((count) => document.querySelectorAll('#ParvaneKnowledge [data-canvas-note]').length > count,
+    cardsBefore, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«+» на холсте не поставил карточку'));
+  assert.equal(await knowledge.getAttribute('data-knowledge-view'), 'canvas', '«+» увёл с холста');
+  await openNotesView(knowledge, 'List');
+  await knowledge.locator('[data-notes-all]').click();
+  await visible(knowledge.locator('[data-notes-all][aria-current="true"]'), '«Все заметки» выбраны');
+  const notesBefore = await knowledge.locator('[data-note-row^="New note"]').count();
+  await page.keyboard.press('Control+n');
+  await visible(knowledge.locator('[data-note-id][data-note-title^="New note"]'), 'Ctrl+N открыл новую заметку');
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('#ParvaneKnowledge [data-note-row^="New note"]').length > count,
+    notesBefore, { timeout: STEP_TIMEOUT_MS },
+  ).catch(async () => assert.fail(`Ctrl+N не добавил заметку: ${await page.evaluate(() => JSON.stringify({
+    body: document.body.className,
+    active: document.activeElement?.outerHTML.slice(0, 120),
+    rows: [...document.querySelectorAll('#ParvaneKnowledge [data-note-row]')].map((el) => el.dataset.noteRow),
+  }))}`));
+  console.log('OK: «Новая заметка» в графе и на холсте, Ctrl+N');
 
   console.log('e2e_web_notes_screens: OK');
 } catch (error) {

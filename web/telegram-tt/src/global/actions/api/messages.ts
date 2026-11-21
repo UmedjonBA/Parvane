@@ -1324,6 +1324,29 @@ addActionHandler('reportMessages', async (global, actions, payload): Promise<voi
   }
 });
 
+// Parvane (REPORT-3): «Скрыть у меня сообщения этого участника» из окна жалобы; «Показать» в уведомлении — обратно
+addActionHandler('parvaneSetMemberHidden', async (global, actions, payload): Promise<void> => {
+  const {
+    chatId, userId, isHidden, tabId = getCurrentTabId(),
+  } = payload;
+  const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<boolean | undefined>;
+  const isDone = await callParvane('parvaneMemberHide', { chatId, userId, isHidden });
+  if (!isDone) {
+    actions.showNotification({ message: { key: 'ParvaneMemberHideFailed' }, tabId });
+    return;
+  }
+  if (!isHidden) {
+    actions.loadViewportMessages({ chatId, threadId: MAIN_THREAD_ID, tabId });
+    return;
+  }
+  actions.showNotification({
+    message: { key: 'ParvaneMemberHidden' },
+    actionText: { key: 'ParvaneMemberShow' },
+    action: { action: 'parvaneSetMemberHidden', payload: { chatId, userId, isHidden: false } },
+    tabId,
+  });
+});
+
 addActionHandler('sendMessageAction', async (global, actions, payload): Promise<void> => {
   const { action, chatId, threadId } = payload;
   if (global.connectionState !== 'connectionStateReady') return;
@@ -2112,11 +2135,14 @@ async function sendMessagesWithNotification<T extends GlobalState>(
     }
   }
 
-  const titleKey: RegularLangFnParameters = storySendMessage || {
+  const paidTitleKey: RegularLangFnParameters = {
     key: 'MessageSentPaidToastTitle',
     variables: { count: messagesCount },
     options: { pluralValue: messagesCount },
   };
+  // Без `||`: объединение ветвей с полным списком ключей слишком велико для проверки типов
+  let titleKey: RegularLangFnParameters = paidTitleKey;
+  if (storySendMessage) titleKey = storySendMessage;
 
   getActions().sendMessages({ sendParams });
 

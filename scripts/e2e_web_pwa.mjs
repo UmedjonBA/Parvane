@@ -115,25 +115,28 @@ try {
 
   // ── «Поделиться в Parvane»: POST `share/` (как от системы) → экран выбора → «В „Файлы“» ─────────
   // Форма — со страницы без политики безопасности приложения (у него `form-action 'none'`), как POST от системы
-  await page.goto('about:blank');
-  await page.evaluate(({ action, text, fileName }) => {
-    const form = document.createElement('form');
-    form.method = 'post';
-    form.enctype = 'multipart/form-data';
-    form.action = action;
-    const textInput = document.createElement('input');
-    textInput.name = 'text';
-    textInput.value = text;
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.name = 'files';
-    const transfer = new DataTransfer();
-    transfer.items.add(new File([`${text}\n`], fileName, { type: 'text/plain' }));
-    fileInput.files = transfer.files;
-    form.append(textInput, fileInput);
-    document.body.append(form);
-    form.submit();
-  }, { action: `${BASE_URL}/share/`, text: SHARED_TEXT, fileName: SHARED_FILE });
+  const postShare = async (text) => {
+    await page.goto('about:blank');
+    await page.evaluate(({ action, text: shared, fileName }) => {
+      const form = document.createElement('form');
+      form.method = 'post';
+      form.enctype = 'multipart/form-data';
+      form.action = action;
+      const textInput = document.createElement('input');
+      textInput.name = 'text';
+      textInput.value = shared;
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.name = 'files';
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([`${shared}\n`], fileName, { type: 'text/plain' }));
+      fileInput.files = transfer.files;
+      form.append(textInput, fileInput);
+      document.body.append(form);
+      form.submit();
+    }, { action: `${BASE_URL}/share/`, text, fileName: SHARED_FILE });
+  };
+  await postShare(SHARED_TEXT);
   const shareSheet = page.locator('[data-share-sheet]');
   await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await shareSheet.locator('[data-share-content]').getByText(SHARED_FILE).waitFor({ state: 'visible' });
@@ -141,11 +144,36 @@ try {
   for (const destination of ['chat', 'files', 'note']) {
     assert.equal(await shareSheet.locator(`[data-share-to="${destination}"]`).count(), 1, `нет пункта ${destination}`);
   }
+  // Подписи доски `ZpSysGen`: чатов — несколько, заметка — новая или существующая, подпись о модулях внизу
+  await shareSheet.locator('[data-share-to="chat"]').getByText('choose one or several').waitFor({ state: 'visible' });
+  await shareSheet.locator('[data-share-to="note"]').getByText('as an attachment to a new or existing note')
+    .waitFor({ state: 'visible' });
+  await shareSheet.getByText('Files and Note are shown only if the module is on').waitFor({ state: 'visible' });
   await shareSheet.locator('[data-share-to="files"]').click();
   await page.locator('.Notification').getByText('Saved to Files').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await shareSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: «Поделиться» — экран выбора, файл сохранён в «Файлы» (Мой диск / Входящие)');
+
+  // «В заметку» (доска `ZpSysGen`): сначала новая заметка, затем то же — вложением в уже существующую
+  await postShare(SHARED_TEXT);
+  await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await shareSheet.locator('[data-share-to="note"]').click();
+  await shareSheet.locator('[data-share-note-picker]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await shareSheet.locator('[data-share-note-new]').click();
+  await page.locator('.Notification').getByText(`Saved to the note «${SHARED_TEXT}»`).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await shareSheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  const moreText = `${SHARED_TEXT} ещё`;
+  await postShare(moreText);
+  await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await shareSheet.locator('[data-share-to="note"]').click();
+  await shareSheet.locator(`[data-share-note="${SHARED_TEXT}"]`).click({ timeout: STEP_TIMEOUT_MS });
+  await page.locator('.Notification').getByText(`Saved to the note «${SHARED_TEXT}»`).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await page.locator('#ParvaneKnowledge, [data-note-view]').getByText(moreText).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Поделиться → В заметку» — новой заметкой и вложением в существующую');
 
   // ── Нажатие на уведомление открывает нужное место ─────────────────────────
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');

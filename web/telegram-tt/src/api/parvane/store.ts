@@ -959,13 +959,15 @@ function buildMessageContent(
         : { text: { text: content.text || `🎵 ${content.title || ''}` } };
     // PLAYLIST-1: плейлист «Музыки» — карточка; треки играют из библиотеки сервера этого аккаунта
     case 'music_playlist':
-      return content.playlist_tracks?.length
+      return content.playlist_tracks?.length || content.shared_id
         ? {
           musicPlaylist: {
             mediaType: 'musicPlaylist',
             name: content.name || '',
             server: content.track_server || '',
-            tracks: content.playlist_tracks.map((track) => ({
+            sharedId: content.shared_id || undefined,
+            joinKey: content.join_key || undefined,
+            tracks: (content.playlist_tracks || []).map((track) => ({
               trackId: track.track_id,
               title: track.title || '',
               artist: track.artist || '',

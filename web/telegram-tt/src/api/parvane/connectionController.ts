@@ -5,6 +5,9 @@ import type { TaskOfferStore } from './taskOffers';
 
 import { GatewayConnection } from './gateway';
 import { loadTrustSecret, saveTrustSecret } from './secureStorage';
+import {
+  buildSecondFactorRequest, parseSecurityKeyStep, type SecondFactor, SecurityKeyRequiredError,
+} from './securityKeys';
 import { ParvaneStore } from './store';
 import {
   TOPIC_DEVICE_LIST,
@@ -216,6 +219,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   let isServerInfoFallback = false;
   // spec 027: следующий вход паролем отменяет удаление аккаунта
   let shouldCancelDeletion = false;
+  // SECKEY-1: второй фактор следующего входа паролем (ответ ключа безопасности либо ключ восстановления)
+  let pendingSecondFactor: SecondFactor | undefined;
 
   async function issueToken(
     activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean, loginToken = '',
@@ -240,6 +245,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
           login_token: loginToken || undefined,
           trust_secret: (await readTrustSecretAsync(user)) || undefined,
           cancel_deletion: shouldCancelDeletion || undefined,
+          ...buildSecondFactorRequest(pendingSecondFactor),
         }),
       );
       const parsed = JSON.parse(raw) as {
@@ -263,6 +269,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
     let response = await issue();
     shouldCancelDeletion = false;
+    pendingSecondFactor = undefined;
+    const securityKeyStep = parseSecurityKeyStep(response);
+    if (securityKeyStep) throw new SecurityKeyRequiredError(securityKeyStep);
     if (response.deletion_at_ms) throw new AccountDeletionPendingError(response.deletion_at_ms);
     if (response.twofa_required && response.login_token) {
       throw new TwoFactorRequiredError(response.login_token, response.telegram_bot || '');
@@ -626,6 +635,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
     connectAndLogin,
     cancelDeletionOnNextLogin: () => {
       shouldCancelDeletion = true;
+    },
+    setSecondFactor: (factor: SecondFactor | undefined) => {
+      pendingSecondFactor = factor;
     },
     writeTrustSecret: writeTrustSecretAsync,
     registerAccount,

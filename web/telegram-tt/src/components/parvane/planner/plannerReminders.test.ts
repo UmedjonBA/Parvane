@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { PlannerEvent, PlannerTask } from './plannerModel';
 
 import { createEmptyPlannerState } from './plannerModel';
-import { getDueReminders, getReminders, reminderKey } from './plannerReminders';
+import {
+  getBedtimeReminders, getDueReminders, getReminders, reminderKey,
+} from './plannerReminders';
 
 const at = (day: string, time: string) => new Date(`${day}T${time}:00`).getTime();
 
@@ -47,5 +49,32 @@ describe('напоминания «Плана»', () => {
     };
     const due = getDueReminders(state, at('2026-10-21', '16:00'), at('2026-10-19', '00:00'));
     expect(due.map(({ key }) => key)).toEqual([reminderKey('e1', '2026-10-21', 10)]);
+  });
+
+  it('«Напоминать о сроках задач»: в день срока в начале дня; выключено — нет; выполненное — нет', () => {
+    const state = {
+      ...createEmptyPlannerState(),
+      tasks: [
+        task({ due: '2026-10-22' }),
+        task({ id: 't2', name: 'Готово', due: '2026-10-22', status: 'done' }),
+      ],
+    };
+    const range = [at('2026-10-22', '00:00'), at('2026-10-22', '23:59')] as const;
+    expect(getReminders(state, ...range)).toEqual([]);
+    state.settings = { ...state.settings, shouldRemindDeadlines: true };
+    const list = getReminders(state, ...range);
+    expect(list.map(({ key, at: moment }) => [key, new Date(moment).toTimeString().slice(0, 5)])).toEqual([
+      [reminderKey('t1~due', '2026-10-22', 0), '09:00'],
+    ]);
+  });
+
+  it('отбой — каждый вечер во время цели отбоя', () => {
+    const list = getBedtimeReminders(
+      { bedMin: 23 * 60 + 30, title: 'Пора ко сну' }, at('2026-10-20', '12:00'), at('2026-10-22', '12:00'),
+    );
+    expect(list.map(({ key, title }) => [key, title])).toEqual([
+      [reminderKey('bedtime', '2026-10-20', 0), 'Пора ко сну'],
+      [reminderKey('bedtime', '2026-10-21', 0), 'Пора ко сну'],
+    ]);
   });
 });

@@ -489,7 +489,8 @@ function buildCloudVector() {
     trashDaysLeft: Object.fromEntries(trashOf(nodes).map((n) => [n.id, trashDaysLeft(n, CLOUD_NOW)])),
     usage: usageOf(nodes),
     sizeOf: { docs: sizeOf(nodes, 'f-docs'), photo: sizeOf(nodes, 'f-photo'), old: sizeOf(nodes, 'f-old') },
-    folderStats: folderStats(nodes),
+    // Вектор общий с desktop: число и размер; дата папки (`mtime`, доска `DeskFiles`) — только web
+    folderStats: Object.fromEntries([...folderStats(nodes)].map(([id, { count, size }]) => [id, { count, size }])),
     kinds: kindCases.map(([mime, name]) => ({ mime, name, kind: kindOfFile(mime, name) })),
     typeLabels: ['модель.3mf', 'отчёт.pdf', 'архив.tar.gz', 'без', 'x.verylongextension', 'файл.ЁЛКА']
       .map((name) => ({ name, label: fileTypeLabel(name) })),

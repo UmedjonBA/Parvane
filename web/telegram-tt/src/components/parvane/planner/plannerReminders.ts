@@ -1,6 +1,7 @@
 // Напоминания «Плана» (этап 4 плана 15 окт 2026): чистый расчёт моментов. Напоминание — у задачи или события с
 // `remind` (минут до начала); начала нет (задача без времени, событие на весь день) — начало дня по настройкам.
 // Ключ `<id>@<день>@<минут>` одинаков на всех устройствах: им помечается «уже напомнено» в данных «Плана».
+import type { BedtimeReminder } from '../../../util/bedtimeReminder';
 import type { PlannerState } from './plannerModel';
 import type { EngineState } from './plannerSync';
 
@@ -23,6 +24,9 @@ export type PlannerReminder = {
 };
 
 const MINUTE_MS = 60 * 1000;
+// Напоминание о сроке задачи («Напомнить о сроках задач»): в день срока в начале дня, ключ — свой у задачи
+const DEADLINE_SUFFIX = '~due';
+const BEDTIME_ID = 'bedtime';
 
 export function reminderKey(id: string, day: string, minutes: number) {
   return `${id}@${day}@${minutes}`;
@@ -62,8 +66,27 @@ export function getReminders(state: PlannerState, fromMs: number, toMs: number):
     getEventsForDay(state, day).forEach((event) => {
       add('event', event.id, event.name, event.remind, event.isAllDay ? undefined : event.start);
     });
+    if (state.settings.shouldRemindDeadlines) {
+      state.tasks.forEach((task) => {
+        if (task.due === day && task.status !== 'done') add('task', `${task.id}${DEADLINE_SUFFIX}`, task.name, 0);
+      });
+    }
   }
   return out.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
+}
+
+/** Напоминания об отбое в промежутке `[fromMs, toMs]`: каждый вечер во время цели отбоя, только звонок. */
+export function getBedtimeReminders(bedtime: BedtimeReminder, fromMs: number, toMs: number): PlannerReminder[] {
+  const out: PlannerReminder[] = [];
+  const lastDay = toDayKey(new Date(toMs));
+  for (let day = toDayKey(new Date(fromMs)); day <= lastDay; day = addDays(day, 1)) {
+    const at = momentOf(day, bedtime.bedMin);
+    if (at < fromMs || at > toMs) continue;
+    out.push({
+      key: reminderKey(BEDTIME_ID, day, 0), at, startsAt: at, title: bedtime.title, kind: 'event', day,
+    });
+  }
+  return out;
 }
 
 /** Сработавшие и ещё не отмеченные: момент прошёл, но не раньше `sinceMs` (старые не догоняются). */
@@ -79,12 +102,20 @@ const CATCH_UP_MS = 48 * 60 * 60 * 1000;
 const MAX_UPCOMING = 64;
 
 /** Для провайдера (кусок грузится лениво): из JSON движка — ближайшие и наступившие неотмеченные. */
-export function readReminders(json: string, nowMs: number, freshMs: number) {
+// Отбой (`bedtime`, настройка устройства) — в ближайших и свежих, но не в «Избранное»: это не запись «Плана»
+export function readReminders(json: string, nowMs: number, freshMs: number, bedtime?: BedtimeReminder) {
   const state = fromEngineState(JSON.parse(json) as EngineState);
+  const byTime = (a: PlannerReminder, b: PlannerReminder) => a.at - b.at || a.key.localeCompare(b.key);
+  const upcoming = getReminders(state, nowMs, nowMs + HORIZON_MS);
+  const fresh = getReminders(state, nowMs - freshMs, nowMs);
+  if (bedtime) {
+    upcoming.push(...getBedtimeReminders(bedtime, nowMs, nowMs + HORIZON_MS));
+    fresh.push(...getBedtimeReminders(bedtime, nowMs - freshMs, nowMs));
+  }
   return {
-    upcoming: getReminders(state, nowMs, nowMs + HORIZON_MS).slice(0, MAX_UPCOMING),
+    upcoming: upcoming.sort(byTime).slice(0, MAX_UPCOMING),
     due: getDueReminders(state, nowMs, nowMs - CATCH_UP_MS),
     // Наступившие недавно — и отмеченные другим устройством: звенят на каждом открытом
-    fresh: getReminders(state, nowMs - freshMs, nowMs),
+    fresh: fresh.sort(byTime),
   };
 }

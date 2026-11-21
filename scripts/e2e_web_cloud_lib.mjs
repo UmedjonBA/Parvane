@@ -45,12 +45,12 @@ export function cloudDriver(page) {
     names: () => cloud.locator('[data-node-id]').evaluateAll((els) => els.map((el) => el.dataset.name).sort()),
     menu: async (name, action) => {
       await item(name).hover();
-      await item(name).getByRole('button', { name: 'Actions' }).click();
+      await item(name).getByRole('button', { name: /^(File actions|Actions)$/ }).click();
       await page.getByRole('menuitem', { name: action, exact: true }).click();
     },
     hasMenuAction: async (name, action) => {
       await item(name).hover();
-      await item(name).getByRole('button', { name: 'Actions' }).click();
+      await item(name).getByRole('button', { name: /^(File actions|Actions)$/ }).click();
       await page.getByRole('menuitem', { name: /^(Open|View)$/ }).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
       const found = await page.getByRole('menuitem', { name: action, exact: true }).count();
       // Шторка действий закрывается нажатием мимо неё (по затемнению в углу экрана)
@@ -63,11 +63,11 @@ export function cloudDriver(page) {
     },
     // Шторка «⋯» строки совместной папки (своей в корне, чужой в «Доступных мне»)
     folderMenu: async (name, action) => {
-      await folderRow(name).getByRole('button', { name: 'Actions' }).click();
+      await folderRow(name).getByRole('button', { name: /^(File actions|Actions)$/ }).click();
       await page.getByRole('menuitem', { name: action, exact: true }).click();
     },
     hasFolderMenuAction: async (name, action) => {
-      await folderRow(name).getByRole('button', { name: 'Actions' }).click();
+      await folderRow(name).getByRole('button', { name: /^(File actions|Actions)$/ }).click();
       await page.getByRole('menuitem', { name: 'Open', exact: true }).waitFor({ state: 'visible', timeout: CLOUD_STEP_TIMEOUT_MS });
       const found = await page.getByRole('menuitem', { name: action, exact: true }).count();
       await page.mouse.click(8, 8);

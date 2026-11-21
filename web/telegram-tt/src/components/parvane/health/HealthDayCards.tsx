@@ -37,7 +37,7 @@ export const HealthNutritionCard = memo(({ nutrition, onOpen }: NutritionProps) 
   return (
     <section className={buildClassName(kit.card, styles.card)} data-health-card={FOOD_KIND}>
       <button type="button" className={styles.waterHead} onClick={handleOpen}>
-        <span className={buildClassName(kit.caps, kit.grow)}>{lang('HealthNutritionTitle')}</span>
+        <span className={buildClassName(kit.caps, kit.grow)}>{lang('ParvaneHealthBlockFood')}</span>
         <span>
           <span className={buildClassName(kit.mono, styles.metricValue)} data-health-value>{number(total.kcal)}</span>
           <span className={kit.muted}>{` ${lang('HealthUnitKcal')}`}</span>

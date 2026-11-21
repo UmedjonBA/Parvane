@@ -14,7 +14,6 @@ import useAsync from '../../../hooks/useAsync';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Icon from '../../common/icons/Icon';
 import MarkdownLink from './MarkdownLink';
 
 import '../../common/code/CodeBlock.scss';
@@ -30,14 +29,17 @@ type OwnProps = {
   onToggleTask?: (line: number, isDone: boolean) => void;
   // Пункт, ставший задачей «Плана»: текст без служебной метки и хвост (дата)
   taskTail?: (text: string) => { text: string; tail?: TeactNode };
+  // Щелчок по `#тегу` (тег без `#`): с обработчиком тег — кнопка
+  onTag?: (tag: string) => void;
 };
 
 type Context = Pick<OwnProps, 'renderNote' | 'renderEmbed' | 'taskTail'> & {
   hasToggle: boolean;
+  hasTag: boolean;
   calloutTitle: (callout: MdCallout) => string;
 };
 
-// Виды callouts GitHub и Obsidian → тон рамки; прочие — акцент
+// Виды callouts GitHub и Obsidian → тон рамки; прочие — акцент. «Важно» — оранжевая (доска `PhNotesMore`)
 const CALLOUT_TONES: Record<string, string> = {
   note: 'blue',
   info: 'blue',
@@ -50,7 +52,7 @@ const CALLOUT_TONES: Record<string, string> = {
   success: 'green',
   check: 'green',
   done: 'green',
-  important: 'purple',
+  important: 'orange',
   question: 'yellow',
   help: 'yellow',
   faq: 'yellow',
@@ -86,7 +88,7 @@ const STYLE_TAGS: [number, string][] = [
 
 // Показ Markdown заметки и статьи (этап 6 плана 15 окт 2026; доработка 6 ноя 2026): один вид для обоих
 const MarkdownBlocks = ({
-  blocks, className, renderNote, renderEmbed, onToggleTask, taskTail,
+  blocks, className, renderNote, renderEmbed, onToggleTask, taskTail, onTag,
 }: OwnProps) => {
   const rootRef = useRef<HTMLDivElement>();
   const lang = useLang();
@@ -97,6 +99,11 @@ const MarkdownBlocks = ({
 
   // Якорь `#раздел` — прокрутка к заголовку этого же текста
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const tag = (e.target as HTMLElement).closest<HTMLElement>('[data-md-tag]');
+    if (tag && onTag) {
+      onTag(tag.dataset.mdTag!);
+      return;
+    }
     const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[data-md-anchor]');
     if (!link) return;
     e.preventDefault();
@@ -113,7 +120,7 @@ const MarkdownBlocks = ({
   });
 
   const context: Context = {
-    renderNote, renderEmbed, taskTail, hasToggle: Boolean(onToggleTask), calloutTitle,
+    renderNote, renderEmbed, taskTail, hasToggle: Boolean(onToggleTask), hasTag: Boolean(onTag), calloutTitle,
   };
 
   return (
@@ -309,7 +316,17 @@ function renderInline(text: string, context: Context): TeactNode[] {
       nodes.push(context.renderNote ? context.renderNote({ text: part.text, target: part.target! }, key)
         : <span key={key} className={styles.note}>{renderStyled(part.text, part.style, '0')}</span>);
     } else if (part.type === 'tag') {
-      nodes.push(<span key={key} className={styles.tag}>{renderStyled(part.text, part.style, '0')}</span>);
+      const content = renderStyled(part.text, part.style, '0');
+      nodes.push(context.hasTag ? (
+        <button
+          key={key}
+          type="button"
+          className={buildClassName(styles.tag, styles.tagButton)}
+          data-md-tag={part.text.replace(/^#/, '')}
+        >
+          {content}
+        </button>
+      ) : <span key={key} className={styles.tag}>{content}</span>);
     } else {
       nodes.push(renderStyled(part.text, part.style, key));
     }
@@ -357,16 +374,14 @@ const CodeView = memo(({ text, language, line }: { text: string; language?: stri
   return (
     <div className={styles.codeBlock} data-md-code={language} data-md-line={line}>
       {language && <span className={styles.codeLang}>{language}</span>}
-      {/* Как на GitHub: кнопка появляется при наведении, справа сверху внутри блока */}
+      {/* Чип «Копировать код» справа сверху внутри блока, виден всегда (доска `PhNotesMore`) */}
       <button
         type="button"
         className={styles.codeCopy}
-        aria-label={lang('Copy')}
-        title={lang('Copy')}
         data-md-copy
         onClick={handleCopy}
       >
-        <Icon name="copy" />
+        {lang('MdCopyCode')}
       </button>
       <pre className={styles.pre}>{highlighted ?? text}</pre>
     </div>

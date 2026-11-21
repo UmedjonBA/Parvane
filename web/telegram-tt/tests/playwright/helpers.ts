@@ -13,6 +13,10 @@ export async function openApp(page: Page, gatewayUrl: string): Promise<string[]>
   page.on('pageerror', (err) => pageErrors.push(err.message));
   await page.addInitScript((url) => {
     localStorage.setItem('parvane:gateway', url);
+    // Экран «Уведомления» после первого входа (spec 041 `ZpSysGen`) перекрыл бы проверки — отмечен показанным
+    localStorage.setItem('parvane:notify-onboard', '1');
+    // Первый запуск «Что вам нужно в Parvane?» (доски `XpStart`, `ZdNav`) пройден
+    localStorage.setItem('parvane:modules-first-run', 'shown');
   }, gatewayUrl);
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {
     await route.fulfill({ contentType: 'application/javascript', body: '' });

@@ -2,7 +2,7 @@ import type {
   BlobSession, CloudBlobKeys, CloudBlobTransport, CloudUploadResult,
 } from './cloudBlobs';
 import type {
-  CloudContainerInfo, CloudDriveCheck, CloudSync, CloudSyncStatus,
+  CloudClosedFolder, CloudContainerInfo, CloudDriveCheck, CloudSync, CloudSyncStatus,
 } from './v2/cloud';
 import type { WireMessageContent } from './wire';
 
@@ -13,10 +13,11 @@ import {
   downloadCloudBlob, uploadCloudBlob, withRetry,
 } from './cloudBlobs';
 import {
-  base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, isLinkId,
+  base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, buildSelectionPlan, bytesToBase64, bytesToBase64Url,
+  isLinkId,
   LINK_MANIFEST_MAX_BYTES,
   LINK_MAX_FILES, LINK_MAX_THUMBS, LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, type LinkManifestThumb, newLinkKey,
-  openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
+  openOwnerRecord, parseLinkSelection, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
 import { createCloudVersions, pickCloudVersion } from './cloudVersions';
 
@@ -51,6 +52,8 @@ export type CloudNodeJson = {
   from?: string;
   // Прежние версии, от новой к старой (CLOUD-3)
   versions?: CloudVersionJson[];
+  // Устройство, записавшее текущее содержимое файла
+  device?: string;
 };
 export type CloudVersionJson = {
   blob: CloudBlobInfo; thumb?: CloudThumbInfo; mtime: number; size: number; device: string;
@@ -64,6 +67,8 @@ export type CloudDriveState = {
   // Узлы, правки которых не ушли из-за связи (пометка «не отправлено»); у снимка для запуска без сети нет
   unsentIds?: string[];
   error?: string;
+  // Чужие папки, к которым владелец закрыл доступ (строка «Нет доступа» до «Убрать»)
+  closed?: CloudClosedFolder[];
 };
 export type CloudUsage = {
   used: number; quota: number; maxFile: number;
@@ -434,6 +439,9 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     });
     job.isRunning = true;
     try {
+      // Без сети запрос к серверу ждал бы связи без конца: строка сразу «не загружен: нет связи» с «Повторить»
+      // (доски `PhFilesMore`, `ZpFilesX`)
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new V2Error('ERROR_CODE_UNAVAILABLE');
       // Отказ до начала: предел файла и свободное место (FR-022)
       const limits = await fetchUsage(true);
       if (limits.maxFile && total > limits.maxFile) throw new V2Error('TOO_LARGE');
@@ -815,7 +823,11 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
   }): Promise<CloudLinkInfo> {
     const { signal } = args;
     const transport = deps.transport();
-    const plan = buildLinkPlan(readTree(args.container)?.nodes || [], args.node || undefined, args.name);
+    const treeNodes = readTree(args.container)?.nodes || [];
+    // Источник `sel:…` — несколько выбранных узлов одной ссылкой (доска `XdFiles`)
+    const selection = parseLinkSelection(args.node);
+    const plan = selection ? buildSelectionPlan(treeNodes, selection, args.name || '')
+      : buildLinkPlan(treeNodes, args.node || undefined, args.name);
     if ('error' in plan) throw new V2Error(plan.error === 'too-many' ? 'LINK_TOO_MANY' : 'ERROR_CODE_NOT_FOUND');
     // Отказ до начала: места должно хватить на все копии
     const limits = await fetchUsage(true);
@@ -937,7 +949,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     }),
 
     /** Состояние раздела; первый вызов запускает подключение и синхронизацию. */
-    parvaneCloudState(): Promise<CloudDriveState> {
+    async parvaneCloudState(): Promise<CloudDriveState> {
       const cloud = deps.cloud();
       const status = cloud.status();
       if (status !== 'needs-linking' && status !== 'loading' && !isEnsureStarted) {
@@ -951,14 +963,21 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         const tree = readTree(c.id);
         if (tree) trees[c.id] = tree;
       });
-      return Promise.resolve({
+      return {
         status,
         rootId: cloud.rootId(),
         containers,
         trees,
         unsentIds: status === 'ready' ? [] : cloud.unsentIds(),
         error: cloud.lastError(),
-      });
+        closed: await cloud.closedFolders(),
+      };
+    },
+
+    /** «Убрать» у строки «Нет доступа». */
+    async parvaneCloudDismissClosed({ container }: { container: string }) {
+      await deps.cloud().dismissClosed(container);
+      return true;
     },
 
     /** Раздел открыт/закрыт: частый либо редкий опрос. */
@@ -1095,7 +1114,12 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       newNodeId?: string;
       // Папка, создаваемая той же правкой, что и файл (он ложится в неё): либо появятся оба узла, либо ни одного
       newFolder?: { id: string; name: string };
-    }): Promise<CloudResult<{ container: string; node: string; fileId: string; conflict?: string }>> {
+      // Версия не черновая: не вытесняет прежнюю версию этого же устройства (выбор версии заметки, CLOUD-3)
+      keep?: boolean;
+    }): Promise<CloudResult<{
+      container: string; node: string; fileId: string;
+      conflict?: string; conflictMtime?: number; conflictDevice?: string;
+    }>> {
       try {
         const existing = args.node ? findNode(args.container, args.node) : undefined;
         if (args.node && !existing) return { ok: false, error: 'not-found' };
@@ -1111,6 +1135,9 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
             node: args.node!,
             fileId: node.blob.fileId,
             conflict: await current.text(),
+            // Когда и каким устройством записана чужая версия (экран двух версий заметки)
+            conflictMtime: node.mtime,
+            conflictDevice: node.device,
           };
         };
         const before = await readConflict();
@@ -1135,7 +1162,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         const folder = existing ? undefined : args.newFolder;
         const container = await deps.cloud().apply(args.container, existing
           ? [{
-            op: 'setBlob', id: node, blob, mtime,
+            op: 'setBlob', id: node, blob, mtime, keep: args.keep || undefined,
           }]
           : [
             ...(folder ? [{

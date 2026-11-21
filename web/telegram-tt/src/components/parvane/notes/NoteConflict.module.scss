@@ -1,0 +1,101 @@
+// «Заметки»: экран двух версий на компьютере (доска `ZdNotesX`) и пояснение над выбором на телефоне (`RpNotes`)
+
+.root {
+  overflow-y: auto;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1rem;
+
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.head {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.headText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.subtitle {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.note {
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius);
+
+  font-size: var(--pv-font-size-small);
+
+  background: var(--pv-raised);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.version {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.who {
+  margin: 0;
+
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.text {
+  overflow: auto;
+
+  margin: 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius);
+
+  font-family: var(--font-family-monospace);
+  font-size: var(--pv-font-size-small);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+
+  background: var(--pv-panel);
+}
+
+.textMarked {
+  border-color: var(--pv-accent);
+}
+
+.keep {
+  align-self: flex-start;
+}
+
+.diff {
+  margin: 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}

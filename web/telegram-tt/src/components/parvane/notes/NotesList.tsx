@@ -1,14 +1,20 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import {
+  memo, useLayoutEffect, useMemo, useRef, useState,
+} from '../../../lib/teact/teact';
 
+import type { NoteMenuAnchor } from './NoteMenu';
+import type { NoteRowKeyAction } from './NoteRowMenu';
 import type { NoteFolder, NoteGroup } from './notesFolders';
 import type { NotesIndex } from './notesModel';
 import type { PlannedIndex } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import { getIsParvaneScreenShown } from '../../../util/parvaneSection';
+import { fromDayKey } from '../planner/plannerModel';
 import { buildNoteGroups, folderCaption, ROOT_FOLDER } from './notesFolders';
 import {
-  countNoteLinks, firstTagOf, formatNoteTime, sortByRecent,
+  countNoteLinks, firstTagOf, formatNoteEdited, formatNoteTime, sortByRecent,
 } from './notesList';
 import {
   displayTitle, folderColor, formatDayShort, isDayTitle, previewOf,
@@ -22,6 +28,7 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import { NOTE_DRAG_TYPE } from './NotesColumn';
 import NoteUnsentMark from './NoteUnsentMark';
 import PvEmpty from './PvEmpty';
 import PvIcon from './PvIcon';
@@ -31,9 +38,9 @@ import kit from './PvKit.module.scss';
 
 // Столько недавних заметок видно в общем списке, пока не попросили все
 const RECENT_SHOWN = 50;
-const NOTE_DRAG_TYPE = 'application/x-parvane-note';
 // Названия папки заметок дня на обоих языках (как в `notesStore`)
 const DAILY_FOLDERS = ['Ежедневные', 'Daily'];
+const ROW_KEYS: Record<string, NoteRowKeyAction> = { F2: 'rename', Delete: 'delete' };
 
 type Group = NoteGroup<NoteEntry>;
 
@@ -52,16 +59,20 @@ type OwnProps = {
   // Сообщение о появившейся справке и её папка
   guideNoticeFolder?: string;
   hasGuide: boolean;
-  // Телефон: кнопка «Новая папка» стоит в шапке, строки не перетаскиваются
+  // Телефон: папки и недавние строками, кнопка «Новая папка» в шапке, строки не перетаскиваются
   isNarrow: boolean;
+  // Компьютер (доска `ZdNotesX`): папки — в колонке слева, здесь — заметки выбранной папки (либо все) плоским
+  // списком: `table` — таблицей во всю ширину «название · папка · #тег · дата», `column` — колонкой рядом с заметкой
+  deskLayout?: 'table' | 'column';
   onPick: (noteId: string) => void;
   onOpenGroup: (key?: string) => void;
-  onNewFolder: NoneToVoidFunction;
   onFolderMenu: (folderId: string) => void;
   onNewInFolder: (folderId?: string) => void;
   onMoveNote: (noteId: string, folderId?: string) => void;
-  // Правая кнопка по строке заметки (компьютер): меню строки
-  onNoteMenu: (noteId: string) => void;
+  // Правая кнопка по строке заметки: меню у курсора (компьютер) либо шторка (телефон, долгое нажатие)
+  onNoteMenu: (noteId: string, anchor?: NoteMenuAnchor) => void;
+  // F2 / Del по выделенной либо наведённой строке (компьютер)
+  onNoteKey: (noteId: string, action: NoteRowKeyAction) => void;
   onGuide: NoneToVoidFunction;
   onGuideDismiss: NoneToVoidFunction;
 };
@@ -70,8 +81,8 @@ type OwnProps = {
 // заметки; открытая папка — её заметки; поиск — найденное одним списком
 const NotesList = ({
   notes, folders, index, plannedIndex, today, found, openId, openGroupKey, vaultName, guideNoticeFolder, hasGuide,
-  isNarrow, onPick, onOpenGroup, onNewFolder, onFolderMenu, onNewInFolder, onMoveNote, onNoteMenu, onGuide,
-  onGuideDismiss,
+  isNarrow, deskLayout = 'column', onPick, onOpenGroup, onFolderMenu, onNewInFolder, onMoveNote, onNoteMenu, onNoteKey,
+  onGuide, onGuideDismiss,
 }: OwnProps) => {
   // Папка под указателем при перетаскивании заметки
   const [dropKey, setDropKey] = useState<string>();
@@ -79,6 +90,7 @@ const NotesList = ({
   const [now] = useState(() => Date.now());
 
   const lang = useLang();
+  const dayFormat = useMemo(() => new Intl.DateTimeFormat(lang.code, { day: 'numeric', month: 'long' }), [lang.code]);
 
   const groups = useMemo(() => buildNoteGroups({ notes, folders, dailyFolders: DAILY_FOLDERS }), [notes, folders]);
   // Закреплённые заметки (меню заметки «Закрепить вверху») стоят первыми
@@ -104,8 +116,44 @@ const NotesList = ({
 
   const handleRowMenu = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
-    onNoteMenu(e.currentTarget.dataset.id!);
+    if (isNarrow) {
+      onNoteMenu(e.currentTarget.dataset.id!);
+      return;
+    }
+    // Меню с клавиатуры (Shift+F10) приходит без точки курсора — меню встаёт под строкой
+    const isFromKeyboard = !e.clientX && !e.clientY;
+    const box = isFromKeyboard ? e.currentTarget.getBoundingClientRect() : undefined;
+    onNoteMenu(e.currentTarget.dataset.id!, box ? { x: box.left, y: box.bottom } : { x: e.clientX, y: e.clientY });
   });
+
+  // Строка под указателем — цель F2 / Del, если фокус не на строке
+  const hoveredIdRef = useRef<string>();
+  const handleRowEnter = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    hoveredIdRef.current = e.currentTarget.dataset.id;
+  });
+  const handleRowLeave = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    if (hoveredIdRef.current === e.currentTarget.dataset.id) hoveredIdRef.current = undefined;
+  });
+
+  // F2 — переименовать, Del — в корзину (доска `ZdNotesX`): строка в фокусе, под указателем либо открытая.
+  // Слушатель ставится до первого кадра списка (правило экрана)
+  const handleListKey = useLastCallback((e: KeyboardEvent) => {
+    const action = ROW_KEYS[e.key];
+    if (!action || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (!getIsParvaneScreenShown('notes') || document.body.classList.contains('has-open-dialog')) return;
+    const target = e.target as HTMLElement | undefined;
+    if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    const focusedId = target?.closest?.<HTMLElement>('[data-note-row]')?.dataset.id;
+    const noteId = focusedId || hoveredIdRef.current || openId;
+    if (!noteId || !notes.some(({ id }) => id === noteId)) return;
+    e.preventDefault();
+    onNoteKey(noteId, action);
+  });
+  useLayoutEffect(() => {
+    if (isNarrow) return undefined;
+    document.addEventListener('keydown', handleListKey);
+    return () => document.removeEventListener('keydown', handleListKey);
+  }, [isNarrow, handleListKey]);
 
   const handleOpenGroup = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onOpenGroup(e.currentTarget.dataset.groupKey);
@@ -150,16 +198,38 @@ const NotesList = ({
     onMoveNote(noteId, e.currentTarget.dataset.folderId || undefined);
   });
 
-  function renderRow(note: NoteEntry, hasFolder?: boolean) {
+  function folderOf(note: NoteEntry) {
+    if (note.isDaily && isDayTitle(note.title)) return lang('KnowledgeDailyFolder');
+    return note.folder ? folderCaption(note.folder) : lang('KnowledgeRoot');
+  }
+
+  // Общие признаки строки заметки: выбор, меню по правой кнопке, перетаскивание в папку, цель F2 / Del
+  function rowProps(note: NoteEntry) {
     const isDaily = note.isDaily && isDayTitle(note.title);
+    return {
+      type: 'button' as const,
+      draggable: !isNarrow && !isDaily,
+      'data-id': note.id,
+      'data-note-row': note.title,
+      'data-row-folder': note.folder,
+      'data-pinned': pinned.includes(note.id) || undefined,
+      onClick: handlePick,
+      onDragStart: handleDragStart,
+      onContextMenu: handleRowMenu,
+      onMouseEnter: isNarrow ? undefined : handleRowEnter,
+      onMouseLeave: isNarrow ? undefined : handleRowLeave,
+    };
+  }
+
+  // Строка заметки (доски `Notes`, `DeskNotes`): название и время, начало текста, синим — тег и связи;
+  // `hasFolder` — в мете и папка (поиск по всем заметкам)
+  function renderRow(note: NoteEntry, hasFolder?: boolean) {
     const next = nearestPlanned(plannedOf(plannedIndex, note), today);
     const tag = firstTagOf(note);
     const linkCount = countNoteLinks(index, note.id);
-    const folder = !hasFolder ? undefined
-      : isDaily ? lang('KnowledgeDailyFolder') : note.folder ? folderCaption(note.folder) : undefined;
     const meta = [
       pinned.includes(note.id) ? lang('KnowledgePinned') : undefined,
-      folder,
+      hasFolder ? folderOf(note) : undefined,
       tag && `#${tag}`,
       linkCount ? lang('KnowledgeLinksCount', { count: linkCount }, { pluralValue: linkCount }) : undefined,
       next?.day && `${lang('KnowledgeNearest')} ${formatDayShort(lang, next.day)}`,
@@ -167,16 +237,8 @@ const NotesList = ({
     return (
       <button
         key={note.id}
-        type="button"
         className={buildClassName(styles.row, note.id === openId && styles.rowOn)}
-        draggable={!isNarrow && !isDaily}
-        data-id={note.id}
-        data-note-row={note.title}
-        data-row-folder={note.folder}
-        data-pinned={pinned.includes(note.id) || undefined}
-        onClick={handlePick}
-        onDragStart={handleDragStart}
-        onContextMenu={isNarrow ? undefined : handleRowMenu}
+        {...rowProps(note)}
       >
         <span className={styles.rowTop}>
           <span className={styles.rowTitle}>{displayTitle(lang, note)}</span>
@@ -185,6 +247,48 @@ const NotesList = ({
         <span className={styles.rowPreview}>{previewOf(note) || lang('KnowledgeNoteEmpty')}</span>
         {meta && <span className={styles.rowMeta}>{meta}</span>}
         <NoteUnsentMark noteId={note.id} />
+      </button>
+    );
+  }
+
+  // Строка «Недавних» телефона (доска `PhNotesMore`): название и одной серой строкой «папка · когда»; заметка дня —
+  // «15 ноября» и «Ежедневные · заметка дня»
+  function renderRecentRow(note: NoteEntry) {
+    const isDaily = note.isDaily && isDayTitle(note.title);
+    const sub = isDaily ? `${lang('KnowledgeDailyFolder')} · ${lang('KnowledgeDaily').toLowerCase()}`
+      : `${folderOf(note)} · ${formatNoteEdited(lang, note.updatedAt, now)}`;
+    return (
+      <button
+        key={note.id}
+        className={buildClassName(styles.row, note.id === openId && styles.rowOn)}
+        {...rowProps(note)}
+      >
+        <span className={styles.rowTitle}>{isDaily ? dayFormat.format(fromDayKey(note.title)) : note.title}</span>
+        <span className={styles.rowPreview} data-row-sub>
+          {pinned.includes(note.id) ? `${lang('KnowledgePinned')} · ${sub}` : sub}
+        </span>
+        <NoteUnsentMark noteId={note.id} />
+      </button>
+    );
+  }
+
+  // Строка таблицы компьютера (доска `ZdNotesX`): значок, название, папка, тег, дата
+  function renderTableRow(note: NoteEntry) {
+    const tag = firstTagOf(note);
+    return (
+      <button
+        key={note.id}
+        className={buildClassName(styles.tableRow, note.id === openId && styles.rowOn)}
+        {...rowProps(note)}
+      >
+        <PvIcon name="note" className={styles.tableIcon} />
+        <span className={styles.tableTitle}>
+          {displayTitle(lang, note)}
+          <NoteUnsentMark noteId={note.id} />
+        </span>
+        <span className={styles.tableCell}>{folderOf(note)}</span>
+        <span className={buildClassName(styles.tableCell, styles.tableTag)}>{tag ? `#${tag}` : ''}</span>
+        <span className={styles.tableDate}>{formatNoteTime(lang, note.updatedAt, now)}</span>
       </button>
     );
   }
@@ -209,6 +313,21 @@ const NotesList = ({
         <PvIcon name="folder" className={styles.folderIcon} />
         <span className={styles.folderName}>{caption}</span>
         <span className={styles.folderCount} data-folder-count>{group.items.length}</span>
+      </button>
+    );
+  }
+
+  function renderGroupEmpty(group: Group) {
+    return (
+      <button
+        type="button"
+        className={styles.groupEmpty}
+        disabled={!isTarget(group)}
+        data-folder-empty
+        data-folder-id={group.folderId}
+        onClick={handleNewInFolder}
+      >
+        {lang('KnowledgeFolderEmpty')}
       </button>
     );
   }
@@ -246,80 +365,41 @@ const NotesList = ({
           )}
         </div>
         {groupNotes!.map((note) => renderRow(note))}
-        {!group.items.length && (
-          <button
-            type="button"
-            className={styles.groupEmpty}
-            disabled={!canAdd}
-            data-folder-empty
-            data-folder-id={group.folderId}
-            onClick={handleNewInFolder}
-          >
-            {lang('KnowledgeFolderEmpty')}
-          </button>
-        )}
+        {!group.items.length && renderGroupEmpty(group)}
       </section>
     );
   }
 
-  function renderRoot() {
-    const shown = areAllShown ? recent : recent.slice(0, RECENT_SHOWN);
+  function renderGuideNotice() {
+    if (!guideNoticeFolder) return undefined;
+    return (
+      <div className={styles.guideNotice} role="status" data-notes-guide-notice>
+        <span className={styles.guideNoticeText}>{lang('KnowledgeGuideAdded', { name: guideNoticeFolder })}</span>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, styles.guideNoticeButton)}
+          data-notes-guide-open
+          onClick={onGuide}
+        >
+          {lang('KnowledgeGuideOpen')}
+        </button>
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('KnowledgeGuideDismiss')}
+          title={lang('KnowledgeGuideDismiss')}
+          data-notes-guide-dismiss
+          onClick={onGuideDismiss}
+        >
+          <PvIcon name="x" isSmall />
+        </button>
+      </div>
+    );
+  }
+
+  function renderTail() {
     return (
       <>
-        {guideNoticeFolder && (
-          <div className={styles.guideNotice} role="status" data-notes-guide-notice>
-            <span className={styles.guideNoticeText}>{lang('KnowledgeGuideAdded', { name: guideNoticeFolder })}</span>
-            <button
-              type="button"
-              className={buildClassName(kit.btn, kit.btnAcc, styles.guideNoticeButton)}
-              data-notes-guide-open
-              onClick={onGuide}
-            >
-              {lang('KnowledgeGuideOpen')}
-            </button>
-            <button
-              type="button"
-              className={kit.ib}
-              aria-label={lang('KnowledgeGuideDismiss')}
-              title={lang('KnowledgeGuideDismiss')}
-              data-notes-guide-dismiss
-              onClick={onGuideDismiss}
-            >
-              <PvIcon name="x" isSmall />
-            </button>
-          </div>
-        )}
-        {(hasFolders || !isNarrow) && (
-          <div className={styles.cap}>
-            <h2 className={styles.capTitle}>{lang('KnowledgeFolders')}</h2>
-            {!isNarrow && (
-              <button
-                type="button"
-                className={buildClassName(kit.ib, styles.capButton)}
-                aria-label={lang('KnowledgeNewFolder')}
-                title={lang('KnowledgeNewFolder')}
-                data-notes-new-folder
-                onClick={onNewFolder}
-              >
-                <PvIcon name="plus" isSmall />
-              </button>
-            )}
-          </div>
-        )}
-        {hasFolders && <div className={styles.block} data-notes-folders>{groups.map(renderFolderRow)}</div>}
-        {Boolean(notes.length) && (
-          <>
-            <h2 className={buildClassName(styles.cap, styles.capTitle)}>{lang('KnowledgeRecent')}</h2>
-            <div className={styles.block} data-notes-recent>
-              {shown.map((note) => renderRow(note, true))}
-            </div>
-          </>
-        )}
-        {recent.length > shown.length && (
-          <button type="button" className={buildClassName(kit.btn, kit.btnGhost, styles.wideButton)} onClick={showAll}>
-            {lang('KnowledgeShowAll', { count: recent.length })}
-          </button>
-        )}
         {!notes.length && (
           <PvEmpty
             title={lang('KnowledgeEmptyTitle')}
@@ -347,9 +427,73 @@ const NotesList = ({
     );
   }
 
+  function renderShowAll(total: number, shownCount: number) {
+    if (total <= shownCount) return undefined;
+    return (
+      <button type="button" className={buildClassName(kit.btn, kit.btnGhost, styles.wideButton)} onClick={showAll}>
+        {lang('KnowledgeShowAll', { count: total })}
+      </button>
+    );
+  }
+
+  // Телефон: папки строками со счётчиком и недавние заметки
+  function renderRoot() {
+    const shown = areAllShown ? recent : recent.slice(0, RECENT_SHOWN);
+    return (
+      <>
+        {renderGuideNotice()}
+        {hasFolders && (
+          <>
+            <h2 className={buildClassName(styles.cap, styles.capTitle)}>{lang('KnowledgeFolders')}</h2>
+            <div className={styles.block} data-notes-folders>{groups.map(renderFolderRow)}</div>
+          </>
+        )}
+        {Boolean(notes.length) && (
+          <>
+            <h2 className={buildClassName(styles.cap, styles.capTitle)}>{lang('KnowledgeRecent')}</h2>
+            <div className={styles.block} data-notes-recent>{shown.map(renderRecentRow)}</div>
+          </>
+        )}
+        {renderShowAll(recent.length, shown.length)}
+        {renderTail()}
+      </>
+    );
+  }
+
+  // Компьютер: заметки выбранной папки либо все, без строк папок (папки — в колонке слева)
+  function renderDesk() {
+    const isTable = deskLayout === 'table';
+    const list = found || (openGroup ? groupNotes! : recent);
+    const shown = found || openGroup || areAllShown ? list : list.slice(0, RECENT_SHOWN);
+    const renderOne = isTable ? renderTableRow : (note: NoteEntry) => renderRow(note, !openGroup);
+    return (
+      <>
+        {!found && renderGuideNotice()}
+        <div
+          className={buildClassName(styles.block, isTable && styles.table)}
+          data-notes-recent={!found && !openGroup ? true : undefined}
+          data-notes-found={found ? true : undefined}
+        >
+          {shown.map(renderOne)}
+        </div>
+        {!found && openGroup && !openGroup.items.length && renderGroupEmpty(openGroup)}
+        {found && !found.length && <PvEmpty title={lang('KnowledgeNothingFound')} data-notes-nothing />}
+        {!found && renderShowAll(list.length, shown.length)}
+        {!found && isTable && renderTail()}
+      </>
+    );
+  }
+
   return (
-    <div className={buildClassName(styles.root, 'custom-scroll')} data-notes-list>
-      {found ? (
+    <div
+      className={buildClassName(styles.root, 'custom-scroll')}
+      data-notes-list
+      data-notes-layout={isNarrow ? 'phone' : deskLayout}
+      // Компьютер: выбранная в колонке папка (на телефоне — у раздела открытой папки)
+      data-folder-open={!isNarrow && !found ? openGroup?.folder : undefined}
+      data-folder-id={!isNarrow && !found ? openGroup?.folderId : undefined}
+    >
+      {!isNarrow ? renderDesk() : found ? (
         <div className={styles.block} data-notes-found>
           {found.map((note) => renderRow(note, true))}
           {!found.length && <PvEmpty title={lang('KnowledgeNothingFound')} data-notes-nothing />}

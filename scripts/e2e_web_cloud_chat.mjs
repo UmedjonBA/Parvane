@@ -64,7 +64,7 @@ try {
   // ── «Из облака» во вложениях: файл уходит в чат копией на сервере ─────────
   await openPrivateChatStrict(a, bob);
   await a.getByRole('button', { name: 'Add an attachment' }).click();
-  await a.getByRole('menuitem', { name: 'From Cloud', exact: true }).click();
+  await a.getByRole('menuitem', { name: 'From Files', exact: true }).click();
   const picker = a.locator('.Modal').filter({ hasText: 'Choose files' });
   await picker.locator('[data-name="договор.txt"]').click();
   await picker.getByRole('button', { name: 'Send', exact: true }).click();
@@ -81,7 +81,7 @@ try {
 
   // ── «Отправить в чат» из раздела ──────────────────────────────────────────
   await ac.open();
-  await ac.menu('смета.txt', 'Send to chat');
+  await ac.menu('смета.txt', 'Send to chat…');
   // «Кому отправить» (доска `RpPick`): карточка файла, галочка у чата, подпись, «Отправить в 1 чат»
   const recipients = a.locator('.Modal').filter({ has: a.locator('[data-send-picker]') });
   await recipients.locator('[data-send-preview]').filter({ hasText: 'смета.txt' })
@@ -98,10 +98,10 @@ try {
   console.log('OK: «Отправить в чат» из раздела');
 
   // ── Боб сохраняет файл сообщения в своё облако и скачивает его оттуда ─────
-  await selectMessageActionOn(b, received, 'Save to Cloud');
+  await selectMessageActionOn(b, received, 'Save to Files');
   const saveDialog = b.locator('.Modal').filter({ hasText: 'Choose a folder' });
   await saveDialog.getByRole('button', { name: 'Save here', exact: true }).click();
-  await b.locator('.Notification-container').getByText('Saved to Cloud').first().waitFor({ state: 'visible', timeout: STEP });
+  await b.locator('.Notification-container').getByText('Saved to Files').first().waitFor({ state: 'visible', timeout: STEP });
   const bc = cloudDriver(b);
   await bc.open();
   await bc.item('договор.txt').waitFor({ state: 'visible', timeout: STEP });
@@ -113,7 +113,7 @@ try {
   await ac.open();
   await ac.menu('договор.txt', 'Move to trash');
   await ac.openTrash();
-  await ac.menu('договор.txt', 'Delete forever');
+  await ac.item('договор.txt').locator('[data-purge]').click();
   await a.locator('.Modal').getByRole('button', { name: 'Delete forever', exact: true }).click();
   await ac.item('договор.txt').waitFor({ state: 'detached', timeout: STEP });
   const started = Date.now();

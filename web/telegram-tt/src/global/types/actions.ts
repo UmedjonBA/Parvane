@@ -638,6 +638,12 @@ export interface ActionPayloads {
     // Parvane (REPORT-2): кому уходит жалоба — `admins` | `server`
     target?: string;
   } & WithTabId;
+  // Parvane (REPORT-3): скрыть у себя сообщения участника группы либо снова показать
+  parvaneSetMemberHidden: {
+    chatId: string;
+    userId: string;
+    isHidden: boolean;
+  } & WithTabId;
 
   rejectSuggestedPost: {
     chatId: string;

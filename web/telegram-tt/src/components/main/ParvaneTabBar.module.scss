@@ -71,6 +71,11 @@
 .itemActive,
 .itemActive:focus-visible {
   font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+}
+
+// Значок открытого модуля — `--accent`, подпись — `--at` (доска `Main`, `pv.css` `.ri.on`)
+.itemActive .itemIcon {
   color: var(--pv-accent);
 }
 
@@ -100,7 +105,7 @@
   font-size: 0.6875rem;
   font-weight: var(--font-weight-semibold);
   line-height: 1.125rem;
-  color: var(--pv-accent-ink);
+  color: var(--pv-panel);
   text-align: center;
 
   background: var(--pv-blue);
@@ -178,10 +183,28 @@
   stroke-width: 2.4;
 }
 
+// Открытое меню: на кнопке «×», она над подложкой меню и закрывает его
+.addButtonOpen {
+  position: relative;
+  z-index: calc(var(--z-menu-bubble) + 1);
+}
+
 // Меню «+»: над кнопкой, у правого края
 .addMenu {
   position: absolute;
   right: 0;
   bottom: 100%;
   width: 14.5rem;
+}
+
+// Пузырь меню по доске `PlusModes` (`pv.css` `.menu`, `.mi`): рамка вместо тени, радиус карточки, пункты 48 px
+.addMenuBubble {
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-card) !important;
+  background: var(--pv-panel) !important;
+  box-shadow: none !important;
+
+  :global(.MenuItem) {
+    min-height: var(--pv-menu-item-height);
+  }
 }

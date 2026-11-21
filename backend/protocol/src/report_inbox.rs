@@ -3,6 +3,9 @@
 //! админу (REPORT-1, шифруется как вся переписка), администратору сервера — `identity.report.submit` под его ключом.
 //! Нового серверного хранилища нет: список у админа собирается из полученных `mod_report`, «закрыта» — объект-признак
 //! `OBJECT_KIND_REPORT_CLOSED` личного состояния (ключ — [`closed_key`]), общий для устройств админа.
+//! «Скрыть у меня сообщения этого участника» (окно жалобы, `XdChat`; REPORT-3) — объект-признак
+//! `OBJECT_KIND_MEMBER_HIDDEN` личного состояния (ключ — [`hidden_member_key`]): видят только свои устройства,
+//! приёмный фильтр модели (`contentHidden`) не показывает сообщения этого участника в этой группе.
 //! Общий образец — `conformance/reports/cases.json`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +42,23 @@ pub fn closed_key(group_key: &str, op_id: &str) -> Option<String> {
         return None;
     }
     Some(format!("{group_key}/{op}"))
+}
+
+/// Ключ объекта «сообщения участника скрыты у меня»: `<ключ группы g:домен:hex>/<адрес участника>`; `None` —
+/// негодный вход.
+pub fn hidden_member_key(group_key: &str, user: &str) -> Option<String> {
+    let group_ok = group_key.strip_prefix("g:").and_then(|rest| rest.rsplit_once(':')).is_some_and(|(domain, id)| {
+        !domain.is_empty() && !id.is_empty() && id.len() % 2 == 0 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    });
+    if !group_ok || !crate::address::is_valid_address(user) {
+        return None;
+    }
+    Some(format!("{group_key}/{user}"))
+}
+
+/// Годен ли ключ объекта «сообщения участника скрыты» (проверка `state2::check_key`).
+pub fn is_hidden_member_key(key: &str) -> bool {
+    key.rsplit_once('/').is_some_and(|(group, user)| hidden_member_key(group, user).as_deref() == Some(key))
 }
 
 /// Годен ли ключ объекта «жалоба закрыта» (проверка `state2::check_key`).
@@ -105,9 +125,13 @@ pub fn form_json(args: &Value) -> Value {
 /// историей) и закрытые сообщения. Одно сообщение — одна строка: число жалоб — разных пожаловавшихся, причина — самая
 /// частая (при равенстве — по порядку [`REASONS`]), время — последней жалобы. Закрытые в список не входят.
 /// Ответ: `{items: [{uuid, author, text, ts, reason, reasons: [{reason, count}], count, lastTs, reporters,
-/// comments, reportIds}], open, closed}`; порядок — сначала свежие.
+/// comments, reportIds, memberSinceMs?}], open, closed}`; порядок — сначала свежие. `memberSinceMs` — когда автор
+/// вступил в группу (по необязательному `members: [{user, joinedMs}]` — участники из журнала группы, `user` в том же
+/// виде, что `author`); автора нет среди участников либо время неизвестно — поля нет («участник с …», `RpChat`).
 pub fn inbox_json(args: &Value) -> Value {
     let closed: BTreeSet<String> = list(args, "closed").iter().filter_map(Value::as_str).map(op_norm).collect();
+    let joined: BTreeMap<&str, i64> =
+        list(args, "members").iter().map(|m| (s(m, "user"), n(m, "joinedMs"))).filter(|(u, ts)| !u.is_empty() && *ts > 0).collect();
     struct Item {
         uuid: String,
         author: String,
@@ -181,6 +205,9 @@ pub fn inbox_json(args: &Value) -> Value {
             o.insert("reporters".into(), json!(i.reporters.into_iter().filter(|r| !r.is_empty()).collect::<Vec<_>>()));
             o.insert("comments".into(), Value::Array(i.comments));
             o.insert("reportIds".into(), json!(i.report_ids));
+            if let Some(ts) = joined.get(i.author.as_str()) {
+                o.insert("memberSinceMs".into(), json!(ts));
+            }
             Value::Object(o)
         })
         .collect();
@@ -191,18 +218,20 @@ fn op_norm(op: &str) -> String {
     op.replace('-', "").to_ascii_lowercase()
 }
 
-/// Вызов из обвязок: `reportForm`, `reportInbox`, `reportClosedKey` (`{group, uuid}` → ключ либо `null`).
+/// Вызов из обвязок: `reportForm`, `reportInbox`, `reportClosedKey` (`{group, uuid}` → ключ либо `null`),
+/// `reportHiddenKey` (`{group, user}` → ключ либо `null`).
 pub fn call(name: &str, args: &Value) -> Option<Value> {
     Some(match name {
         "reportForm" => form_json(args),
         "reportInbox" => inbox_json(args),
         "reportClosedKey" => closed_key(s(args, "group"), s(args, "uuid")).map_or(Value::Null, Value::from),
+        "reportHiddenKey" => hidden_member_key(s(args, "group"), s(args, "user")).map_or(Value::Null, Value::from),
         _ => return None,
     })
 }
 
 /// Имена вызовов модуля.
-pub const NAMES: [&str; 3] = ["reportForm", "reportInbox", "reportClosedKey"];
+pub const NAMES: [&str; 4] = ["reportForm", "reportInbox", "reportClosedKey", "reportHiddenKey"];
 
 #[cfg(test)]
 mod tests {
@@ -239,5 +268,27 @@ mod tests {
         assert!(is_closed_key(&k));
         assert!(closed_key("u:a@x", "0123456789abcdef0123456789abcdef").is_none());
         assert!(!is_closed_key("g:x:0a0b/zz"));
+    }
+
+    #[test]
+    fn hidden_member_key_is_group_and_address() {
+        let k = hidden_member_key("g:x:0a0b", "bo@x").unwrap();
+        assert_eq!(k, "g:x:0a0b/bo@x");
+        assert!(is_hidden_member_key(&k));
+        assert!(hidden_member_key("u:a@x", "bo@x").is_none());
+        assert!(hidden_member_key("g:x:0A0B", "bo@x").is_none());
+        assert!(hidden_member_key("g:x:0a0b", "").is_none());
+        assert!(!is_hidden_member_key("g:x:0a0b/"));
+    }
+
+    #[test]
+    fn inbox_carries_member_since_of_author() {
+        let report = |author: &str| json!({"reporter": "r@x", "ts": 10, "reason": "spam",
+            "messages": [{"uuid": format!("{:0>32}", author.len()), "author": author, "text": "t", "ts": 5}]});
+        let v = inbox_json(&json!({"reports": [report("a1"), report("b22")], "members": [{"user": "a1", "joinedMs": 1700}]}));
+        let items = v["items"].as_array().unwrap();
+        let of = |a: &str| items.iter().find(|i| i["author"] == a).unwrap();
+        assert_eq!(of("a1")["memberSinceMs"], 1700);
+        assert!(of("b22").get("memberSinceMs").is_none());
     }
 }

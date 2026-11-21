@@ -403,6 +403,7 @@ function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: A
     isTextShown,
     isLocked: Boolean(isScreenLocked),
     hiddenText: lang('NotificationMessageTextHidden'),
+    lockedHint: lang('PvSysLockedHint'),
   });
 
   let title = buildNotifyTitle(APP_NAME, lang('ParvaneSectionMessenger'));

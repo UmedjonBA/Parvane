@@ -61,8 +61,33 @@ function albumOf(id) {
   const album = ALBUMS.find((item) => item.id === id);
   const songs = SONGS.filter((song) => song.albumId === id);
   return {
-    ...album, coverArt: id, songCount: songs.length, duration: songs.reduce((sum, song) => sum + song.duration, 0),
+    ...album,
+    coverArt: id,
+    songCount: songs.length,
+    duration: songs.reduce((sum, song) => sum + song.duration, 0),
+    // Тип релиза — расширение OpenSubsonic (Navidrome)
+    releaseTypes: [album.isSingle ? 'Single' : 'Album'],
   };
+}
+
+// Сценарии (spec 041): `/__e2e/library?extra=N` — ещё N исполнителей с синглом из одного трека (подгрузка списков
+// страницами), `?empty=1` — библиотека пуста (главная пустой библиотеки)
+function changeLibrary(q) {
+  if (q.get('empty') === '1') {
+    SONGS.length = 0;
+    ALBUMS.length = 0;
+    ARTISTS.length = 0;
+    return;
+  }
+  const extra = Number(q.get('extra')) || 0;
+  for (let i = 1; i <= extra; i++) {
+    const n = String(i).padStart(2, '0');
+    const artistId = `ar-x${n}`;
+    ARTISTS.push({ id: artistId, name: `Echo ${n}` });
+    ALBUMS.push({ id: `al-x${n}`, name: `Echo ${n} — сингл`, artist: `Echo ${n}`, artistId, year: 2026, isSingle: true });
+    SONGS.push({ id: `x${n}`, title: `Echo ${n}`, albumId: `al-x${n}`, duration: 30 });
+    AUDIO.set(`x${n}`, wav(30));
+  }
 }
 
 function songOf(song, user) {
@@ -128,6 +153,11 @@ const page = (items, offset, size) => items.slice(Number(offset) || 0, (Number(o
 
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://local');
+  if (url.pathname === '/__e2e/library') {
+    changeLibrary(url.searchParams);
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    return res.end('ok');
+  }
   const user = String(req.headers['remote-user'] || '');
   if (!user) return fail(res, 40);
   if (url.pathname === '/app/') {
@@ -160,8 +190,12 @@ http.createServer((req, res) => {
         },
       });
     }
-    case '/rest/getAlbumList2':
-      return reply(res, { albumList2: { album: page(ALBUMS, q.get('offset'), q.get('size')).map((album) => albumOf(album.id)) } });
+    case '/rest/getAlbumList2': {
+      // Как у сервера: «по названию» — по алфавиту, «новые» — последние добавленные первыми
+      const ordered = q.get('type') === 'alphabeticalByName'
+        ? [...ALBUMS].sort((a, b) => a.name.localeCompare(b.name)) : [...ALBUMS].reverse();
+      return reply(res, { albumList2: { album: page(ordered, q.get('offset'), q.get('size')).map((album) => albumOf(album.id)) } });
+    }
     case '/rest/getAlbum':
       if (!ALBUMS.some((album) => album.id === id)) return fail(res, 70);
       return reply(res, {

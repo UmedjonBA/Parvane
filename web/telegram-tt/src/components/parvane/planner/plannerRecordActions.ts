@@ -4,7 +4,7 @@ import type { RecordActionKind } from './plannerTools';
 
 import { formatDay } from './plannerFormat';
 import {
-  detachInstance, eventInstance, excludeInstance, newId, setTaskDone, taskInstance, toMinutes, toTime,
+  addDays, detachInstance, eventInstance, excludeInstance, newId, setTaskDone, taskInstance, toMinutes, toTime,
 } from './plannerModel';
 import { getPlannerState, updatePlanner } from './plannerStore';
 import { getRecordAction } from './plannerTools';
@@ -53,7 +53,11 @@ export function moveRecord(
     const target = kind === 'task'
       ? draft.tasks.find(({ id }) => id === item.id) : draft.events.find(({ id }) => id === item.id);
     if (target) Object.assign(target, patch);
-  }, lang('PlannerNoticeMoved', { date: formatDay(lang, result.day), name: item.name }));
+  }, lang('PlannerNoticeMoved', {
+    // «Перенести на завтра» — словом, как на доске `PhStates` («„Зал“ перенесён на завтра»)
+    date: result.day === addDays(today, 1) ? lang('PlannerTomorrow').toLowerCase() : formatDay(lang, result.day),
+    name: item.name,
+  }));
   return true;
 }
 

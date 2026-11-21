@@ -1,0 +1,96 @@
+import type { MusicTrack } from '../../../api/parvane/musicApi';
+
+import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
+import { setParvaneSection } from '../../../util/parvaneSection';
+import { createSignal } from '../../../util/signals';
+
+// Parvane (spec 041, доски `MusicHome`, `MusicLibrary`, `DeskMusic`): что открыто в «Музыке». Экран один на
+// приложение, переходы идут и извне (меню трека в плеере, «+» модуля), поэтому вид — сигнал с историей «назад».
+// Телефон: вкладки «Главная / Поиск / Библиотека», остальное — страницы поверх вкладки со своей шапкой
+
+export type MusicTab = 'home' | 'search' | 'library';
+
+export type MusicView =
+  | { kind: MusicTab | 'starred' | 'artists' | 'albums' | 'offline' | 'added' | 'playlists' | 'uploads' }
+  | { kind: 'playlist' | 'album' | 'artist' | 'singles' | 'shared'; id: string };
+
+export type MusicViewKind = MusicView['kind'];
+
+// «+» модуля: «Найти и скачать» (поиск с курсором в поле) либо «Новый плейлист»
+export type MusicAddRequest = 'fetch' | 'playlist';
+
+const HOME: MusicView = { kind: 'home' };
+
+const [getMusicView, setMusicView] = createSignal<MusicView>(HOME);
+const [getMusicAddRequest, setMusicAddRequest] = createSignal<MusicAddRequest | undefined>(undefined);
+// Окно «Новый плейлист»: открыто и для какого трека («Сразу добавить …»)
+const [getNewPlaylist, setNewPlaylist] = createSignal<{ track?: MusicTrack } | undefined>(undefined);
+// Строка поиска по библиотеке: одна на «Главную» (компьютер) и вкладку «Поиск»
+const [getMusicQuery, setMusicQuery] = createSignal('');
+
+export {
+  getMusicAddRequest, getMusicQuery, getMusicView, getNewPlaylist, setMusicQuery,
+};
+
+let history: MusicView[] = [];
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(ACCOUNT_WIPED_EVENT, () => {
+    history = [];
+    setMusicView(HOME);
+    setNewPlaylist(undefined);
+    setMusicQuery('');
+  });
+}
+
+/** Вкладка телефона, к которой относится вид: главная и поиск — свои, остальное — «Библиотека». */
+export function getMusicTab(view: MusicView): MusicTab {
+  if (view.kind === 'home' || view.kind === 'search') return view.kind;
+  // «Загрузки на сервер» открываются из «Поиска» (доска `ZpMusicX`)
+  if (view.kind === 'uploads') return 'search';
+  return 'library';
+}
+
+/** Телефон: вид — страница поверх вкладки (своя шапка с «назад», без ленты модулей). */
+export function getIsMusicPage(view: MusicView) {
+  return view.kind !== 'home' && view.kind !== 'search' && view.kind !== 'library';
+}
+
+/** Открыть вид: `isRoot` — раздел навигации (история сбрасывается), иначе переход вглубь с возвратом «назад». */
+export function openMusicView(view: MusicView, isRoot?: boolean) {
+  const current = getMusicView();
+  if (isRoot) history = [];
+  else if (current.kind !== view.kind || ('id' in current && 'id' in view && current.id !== view.id)) {
+    history.push(current);
+  }
+  setMusicView(view);
+}
+
+/** «Назад» страницы: предыдущий вид; истории нет — вкладка, к которой относится страница. */
+export function goBackMusic() {
+  const previous = history.pop();
+  setMusicView(previous || { kind: getMusicTab(getMusicView()) });
+}
+
+/** Переход в «Музыку» извне (меню трека в плеере, карточка в чате). */
+export function goToMusicView(view: MusicView) {
+  setParvaneSection('music');
+  openMusicView(view);
+}
+
+export function requestMusicAdd(request: MusicAddRequest) {
+  setParvaneSection('music');
+  setMusicAddRequest(request);
+}
+
+export function consumeMusicAddRequest() {
+  setMusicAddRequest(undefined);
+}
+
+export function openNewPlaylist(track?: MusicTrack) {
+  setNewPlaylist({ track });
+}
+
+export function closeNewPlaylist() {
+  setNewPlaylist(undefined);
+}

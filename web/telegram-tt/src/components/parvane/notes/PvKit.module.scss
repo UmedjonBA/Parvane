@@ -817,6 +817,27 @@
   white-space: nowrap;
 }
 
+// Название с подписью под ним (`PvSheet subtitle`)
+.sheetTitles {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+}
+
+.sheetSubtitle {
+  overflow: hidden;
+
+  margin: 0;
+
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sheetButtons {
   display: flex;
   flex-wrap: wrap;

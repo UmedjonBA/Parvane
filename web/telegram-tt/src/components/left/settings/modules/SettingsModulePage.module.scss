@@ -1,0 +1,22 @@
+// Parvane (spec 041): страницы «Модули / План» и «Модули / Здоровье» в «Профиле»
+
+.root {
+  position: relative;
+  color: var(--pv-fg);
+  background: var(--pv-bg);
+}
+
+.notice {
+  position: sticky;
+  bottom: 1rem;
+
+  width: fit-content;
+  margin: 0 auto 1rem;
+  padding: 0.5rem 1rem;
+  border-radius: var(--pv-radius);
+
+  font-size: 0.875rem;
+  color: var(--pv-bg);
+
+  background: var(--pv-fg);
+}

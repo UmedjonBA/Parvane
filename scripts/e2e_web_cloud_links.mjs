@@ -171,23 +171,31 @@ try {
     await page.locator('.Modal.open').getByRole('button', { name: 'Close', exact: true }).click();
     await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   };
-  /** Создать ссылку из меню узла; возвращает полный адрес. */
+  const linkUrl = () => sheet.locator('[data-link-url]').getAttribute('data-link-url');
+  /** Ссылка из меню узла (доски `PhFilesMore`, `DkFilesDialogs`): окно сразу создаёт её на 7 дней, срок виден всегда;
+   * другой срок — нажатием чипа у готовой ссылки. Возвращает полный адрес. */
   const createLink = async (name, ttlDays) => {
-    await drive.menu(name, 'Link…');
+    await drive.menu(name, 'Link for people without an account…');
     await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await sheet.locator('[data-link-create]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    assert.equal(
-      await sheet.locator('[data-link-ttl="7"]').getAttribute('aria-pressed'), 'true', 'срок по умолчанию — 7 дней',
-    );
     assert.deepEqual(
       await sheet.locator('[data-link-ttl]').evaluateAll((els) => els.map((el) => el.dataset.linkTtl)),
       ['1', '7', '30', '0'], 'сроки: 1 / 7 / 30 дней / без срока',
     );
-    if (ttlDays !== 7) await sheet.locator(`[data-link-ttl="${ttlDays}"]`).click();
-    await sheet.locator('[data-link-create]').click();
-    await sheet.locator('[data-link-url]').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
-    await sheet.locator('[data-link-block][data-link-state="active"]').waitFor({ state: 'visible' });
-    return (await sheet.locator('[data-link-url]').innerText()).trim();
+    await sheet.locator('[data-link-block][data-link-state="active"]').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+    assert.equal(
+      await sheet.locator('[data-link-ttl="7"]').getAttribute('aria-pressed'), 'true', 'срок по умолчанию — 7 дней',
+    );
+    assert.equal(await sheet.locator('[data-link-create]').count(), 0, 'создание — без отдельного шага');
+    if (ttlDays !== 7) {
+      const termBefore = Number(await sheet.locator('[data-link-term]').getAttribute('data-link-term'));
+      await sheet.locator(`[data-link-ttl="${ttlDays}"]`).click();
+      await pollUntil(
+        () => sheet.locator('[data-link-term]').getAttribute('data-link-term').then(Number),
+        (n) => n !== termBefore, `срок ссылки сменён на ${ttlDays}`,
+      );
+      assert.equal(await sheet.locator(`[data-link-ttl="${ttlDays}"]`).getAttribute('aria-pressed'), 'true');
+    }
+    return linkUrl();
   };
 
   // ── Исходники: файл, текст, папка с файлом и вложенной папкой ─────────────
@@ -226,13 +234,19 @@ try {
   await sheet.getByText(/^Valid until /).waitFor({ state: 'visible' });
   await closeSheet();
   // Шторка того же файла снова показывает готовую ссылку, а не предлагает создать вторую
-  await drive.menu(FILE_NAME, 'Link…');
-  assert.equal((await sheet.locator('[data-link-url]').innerText()).trim(), fileUrl);
+  await drive.menu(FILE_NAME, 'Link for people without an account…');
+  assert.equal(await linkUrl(), fileUrl);
   assert.equal(await sheet.locator('[data-link-create]').count(), 0);
+  // Срок готовой ссылки выделяется, когда окно дочитает её с сервера
+  await sheet.locator('[data-link-ttl="1"][aria-pressed="true"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('выделен срок ссылки'));
+  await sheet.locator('[data-link-done]').waitFor({ state: 'visible' });
+  await page.locator('[data-sheet-subtitle]').getByText('For people without an account.', { exact: false })
+    .waitFor({ state: 'visible' });
   await closeSheet();
   const fileCopyBytes = await pollUntil(linksBytes, (n) => n > fileBytes.length, 'место копий ссылки');
   const usedWithLink = await pollUntil(used, (n) => n >= usedBefore + fileCopyBytes, 'копия занимает место владельца');
-  await usage.getByText(/Links: /).waitFor({ state: 'visible' });
+  await usage.getByText(/links: /i).waitFor({ state: 'visible' });
   if (SHOT_DIR) await session.page.screenshot({ path: `${SHOT_DIR}/links-sheet.png` });
   console.log('OK: ссылка на файл создана, копия учтена в занятом месте');
 
@@ -286,7 +300,7 @@ try {
   await visitor.close();
   visitor = await openAsVisitor(`${BASE_URL}/s/${'A'.repeat(22)}#k=${strangerKey}`);
   await visitor.waitState('not-found');
-  await visitor.page.getByText('The link is not found or has been revoked').waitFor({ state: 'visible' });
+  await visitor.page.getByText('The link was revoked', { exact: true }).waitFor({ state: 'visible' });
   await visitor.close();
   console.log('OK: без ключа и с чужим ключом страница ничего не показывает');
 
@@ -298,7 +312,7 @@ try {
   await drive.menu('другое имя.bin', 'Move to trash');
   await drive.item('другое имя.bin').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await drive.openTrash();
-  await drive.menu('другое имя.bin', 'Delete forever');
+  await drive.item('другое имя.bin').locator('[data-purge]').click();
   await page.locator('.Modal').getByRole('button', { name: 'Delete forever', exact: true }).click();
   await drive.item('другое имя.bin').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await drive.root();
@@ -377,7 +391,9 @@ try {
   assert.equal(await row(fileLinkId).getAttribute('data-link-state'), 'active');
   assert.equal(Number(await row(fileLinkId).getAttribute('data-bytes')), fileCopyBytes, 'размер строки — размер копий');
   assert.ok(Number(await row(folderLinkId).getAttribute('data-bytes')) > 0);
-  await row(fileLinkId).getByText(/File · created .+ · until .+/).waitFor({ state: 'visible' });
+  // Доски `RpFiles`, `RdFiles`: «до 22 ноября · открытий: 0», без вида и даты создания
+  await row(fileLinkId).getByText(/^until .+ · opened: \d+$/).waitFor({ state: 'visible' });
+  await cloud.locator('[data-place-note]').getByText(/^2 active/).waitFor({ state: 'visible' });
   // Число открытий считает сервер (`LinkInfo.opens`): посетитель открывал ссылку на файл трижды — с ключом, с чужим
   // ключом (список сервер отдал, расшифровать не вышло) и после удаления исходника; без ключа запроса нет
   await pollUntil(() => row(fileLinkId).getAttribute('data-opens').then(Number), (n) => n === 3, 'открытия ссылки на файл');
@@ -386,18 +402,16 @@ try {
   await pollUntil(
     () => row(folderLinkId).getAttribute('data-opens').then(Number), (n) => n >= 1, 'открытия ссылки на папку', STEP_TIMEOUT_MS,
   );
-  await row(folderLinkId).getByText(/Folder · created /).waitFor({ state: 'visible' });
+  await row(folderLinkId).getByText(/^until /).waitFor({ state: 'visible' });
   await row(fileLinkId).click();
   await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal((await sheet.locator('[data-link-url]').innerText()).trim(), fileUrl, 'полный адрес собирается заново');
+  assert.equal(await linkUrl(), fileUrl, 'полный адрес собирается заново');
   const termBefore = Number(await sheet.locator('[data-link-term]').getAttribute('data-link-term'));
-  await sheet.locator('[data-link-extend]').click();
   await sheet.locator('[data-link-ttl="30"]').click();
   await pollUntil(
     () => sheet.locator('[data-link-term]').getAttribute('data-link-term').then(Number),
     (n) => n > termBefore + 20 * 24 * 3600, 'срок продлён на 30 дней',
   );
-  await sheet.locator('[data-link-extend]').click();
   await sheet.locator('[data-link-ttl="0"]').click();
   await sheet.getByText(/^Valid with no expiry/).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // «Как увидит получатель» открывает тот же адрес в новой вкладке
@@ -422,8 +436,11 @@ try {
   await sheet.locator('[data-link-revoke]').click();
   await page.locator('.Modal.confirm').getByRole('button', { name: 'Revoke', exact: true }).click();
   await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await row(fileLinkId).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await cloud.locator('[data-link-row]').count(), 1);
+  // Отозванная остаётся строкой «отозвана {дата}» до «Убрать» (доски `RpFiles`, `RdFiles`)
+  await cloud.locator(`[data-link-row="${fileLinkId}"][data-link-state="revoked"]`)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await row(fileLinkId).getByText(/^revoked /).waitFor({ state: 'visible' });
+  assert.equal(await cloud.locator('[data-link-row][data-link-state="active"]').count(), 1);
   await pollUntil(used, (n) => n <= usedBeforeRevoke - fileCopyBytes, 'место копий возвращено', LINK_TIMEOUT_MS);
   await pollUntil(linksBytes, (n) => n > 0 && n < fileCopyBytes, 'в ссылках осталась только папка');
   visitor = await openAsVisitor(fileUrl);
@@ -436,10 +453,27 @@ try {
   await visitor.close();
   console.log('OK: отзыв — страница «не найдена», место вернулось, другая ссылка работает');
 
-  // ── Последняя ссылка отозвана — список пуст ───────────────────────────────
+  // ── «Создать новую» у отозванной, «Убрать недействующие», последняя ссылка отозвана — список пуст ─────
+  // Исходник файла стёрт выше — у его отозванной ссылки «Создать новую» нет; у папки — есть
+  assert.equal(await row(fileLinkId).locator('[data-row-recreate]').count(), 0, 'исходника нет — новой ссылки не создать');
   await row(folderLinkId).click();
   await sheet.locator('[data-link-revoke]').click();
   await page.locator('.Modal.confirm').getByRole('button', { name: 'Revoke', exact: true }).click();
+  await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await row(folderLinkId).locator('[data-row-recreate]').click();
+  await sheet.locator('[data-link-block][data-link-state="active"]').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+  const recreatedUrl = await linkUrl();
+  assert.notEqual(recreatedUrl, folderUrl, 'новая ссылка — новый адрес');
+  await closeSheet();
+  await row(folderLinkId).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  const recreatedId = recreatedUrl.match(URL_RE)[1];
+  await row(recreatedId).click();
+  await sheet.locator('[data-link-revoke]').click();
+  await page.locator('.Modal.confirm').getByRole('button', { name: 'Revoke', exact: true }).click();
+  await sheet.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator(`[data-link-row="${recreatedId}"][data-link-state="revoked"]`)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await cloud.locator('[data-place-action]').getByText('Remove inactive', { exact: true }).click();
   await cloud.getByText('You have not created any links yet').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await pollUntil(linksBytes, (n) => n === 0, 'копий ссылок не осталось', LINK_TIMEOUT_MS);
 

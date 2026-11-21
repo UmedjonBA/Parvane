@@ -63,6 +63,8 @@ export const K = {
   favedSticker: 'OBJECT_KIND_FAVED_STICKER',
   // Жалоба группы закрыта админом (REPORT-2, объект-признак)
   reportClosed: 'OBJECT_KIND_REPORT_CLOSED',
+  // Сообщения участника группы скрыты у себя (REPORT-3, объект-признак)
+  memberHidden: 'OBJECT_KIND_MEMBER_HIDDEN',
 } as const;
 
 /** Виды модели, которыми управляет имя вида localState (как `managed` моста движка). */

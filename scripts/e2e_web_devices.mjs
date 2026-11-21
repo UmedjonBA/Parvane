@@ -192,19 +192,18 @@ try {
     0,
     'revoked device must not read new group messages after Megolm rotation',
   );
-  // В v2 отозванное устройство узнаёт об отзыве отказом соединения v2
-  // (`ERROR_CODE_REVOKED`) и уходит на экран пароля — как desktop; ключи и история
-  // остаются на устройстве до повторного входа. В v1 оно остаётся в чате
-  const isLoggedOut = await bobDevice2.page.locator('.Transition_slide-active > #auth-password-form')
-    .waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
-  if (!isLoggedOut) {
-    // Старая история при этом на месте (отзыв не трогает уже полученное)
-    assert.equal(
-      await findMessage(bobDevice2.page, groupBefore).count(),
-      1,
-      'history received before revoke stays readable on the revoked device',
-    );
-  }
+  // Отозванное устройство узнаёт об отзыве отказом соединения v2 (`ERROR_CODE_REVOKED`): журнал своих устройств
+  // (анонимным каналом) его больше не содержит — данные аккаунта стираются, экран входа объясняет, что случилось
+  // (доска `ZdNav`, «Вы вышли на этом компьютере»), «Войти заново» открывает форму входа
+  const signedOut = bobDevice2.page.locator('[data-signed-out]');
+  await signedOut.waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
+  await signedOut.getByText('wiped', { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
+  await signedOut.locator('[data-signed-out-sign-in]').click();
+  await signedOut.waitFor({ state: 'detached', timeout: 10000 });
+  await bobDevice2.page.locator('.Transition_slide-active > #auth-phone-number-form')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await bobDevice2.page.evaluate(() => localStorage.getItem('parvane:signed-out')), null,
+    '«Войти заново» снимает отметку');
 
   assertNoPageErrors({
     alice: aliceSession,

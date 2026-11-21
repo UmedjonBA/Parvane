@@ -18,6 +18,7 @@ import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
+import { openPalette } from '../../parvane/palette/paletteOpen';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useConnectionStatus from '../../../hooks/useConnectionStatus';
@@ -143,6 +144,13 @@ const LeftMainHeader = ({
   });
 
   const handleSearchFocus = useLastCallback(() => {
+    // Телефон (доска `XpStart`): значок поиска в шапке «Чатов» открывает общий поиск. Поиск по чатам и
+    // сообщениям — строкой «Искать в сообщениях» в его выдаче
+    if (isMobile && isChatsHeader) {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      openPalette();
+      return;
+    }
     if (!searchQuery) {
       onSearchQuery('');
     }

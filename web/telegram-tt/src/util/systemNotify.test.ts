@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildMessageNotifyBody, buildNotifyButtons, buildNotifyTitle, DEFAULT_NOTIFY_PREFS, getIsNotifyAllowed,
-  getIsQuietMinute, getWorkerNotifyTexts, parseReminderKey, readNotifyData, readNotifyPrefs, resolveNotifyClick,
+  buildMessageNotifyBody, buildMuteUntil, buildNotifyButtons, buildNotifyTitle, DEFAULT_NOTIFY_PREFS,
+  getIsNotifyAllowed, getIsQuietMinute, getWorkerNotifyTexts, parseReminderKey, readNotifyData, readNotifyPrefs,
+  resolveNotifyClick,
 } from './systemNotify';
 
 const BODY = {
@@ -21,6 +22,8 @@ describe('системные уведомления', () => {
     expect(buildMessageNotifyBody({ ...BODY, senderName: 'Алия' })).toBe('Алия\nПришли конфиг');
     expect(buildMessageNotifyBody({ ...BODY, isTextShown: false })).toBe('Алия\nНовое сообщение');
     expect(buildMessageNotifyBody({ ...BODY, isLocked: true })).toBe('Новое сообщение');
+    expect(buildMessageNotifyBody({ ...BODY, isLocked: true, lockedHint: 'Разблокируйте, чтобы прочитать' }))
+      .toBe('Новое сообщение\nРазблокируйте, чтобы прочитать');
   });
 
   it('кнопки по виду уведомления; у пробуждения сервера кнопок нет', () => {
@@ -94,6 +97,23 @@ describe('системные уведомления', () => {
     expect(readNotifyPrefs(undefined)).toEqual(DEFAULT_NOTIFY_PREFS);
     expect(readNotifyPrefs({ off: ['chats', 'evil', 3], isQuietOn: 'yes', quietFrom: 1440, quietTo: 60 })).toEqual({
       ...DEFAULT_NOTIFY_PREFS, off: ['chats'], quietTo: 60,
+    });
+  });
+
+  it('«Не беспокоить» на время: час и до утра (ночью — сегодня, днём — завтра); «Трек скачан» — «Слушать»', () => {
+    const at = (day: number, hours: number) => new Date(2026, 10, day, hours, 0);
+    expect(buildMuteUntil('hour', DEFAULT_NOTIFY_PREFS, at(19, 14))).toBe(at(19, 15).getTime());
+    expect(buildMuteUntil('morning', DEFAULT_NOTIFY_PREFS, at(19, 2))).toBe(at(19, 7).getTime());
+    expect(buildMuteUntil('morning', DEFAULT_NOTIFY_PREFS, at(19, 14))).toBe(at(20, 7).getTime());
+    const muted = { ...DEFAULT_NOTIFY_PREFS, muteUntil: at(19, 15).getTime() };
+    expect(getIsNotifyAllowed(muted, 'chats', at(19, 14))).toBe(false);
+    expect(getIsNotifyAllowed(muted, 'chats', at(19, 15))).toBe(true);
+    expect(readNotifyPrefs({ muteUntil: 'soon' }).muteUntil).toBe(0);
+    expect(readNotifyPrefs({ off: ['music'], muteUntil: 5 }))
+      .toEqual({ ...DEFAULT_NOTIFY_PREFS, off: ['music'], muteUntil: 5 });
+    expect(buildNotifyButtons('music', (action) => action).map(({ action }) => action)).toEqual(['listen']);
+    expect(resolveNotifyClick({ kind: 'music', trackId: 't1' }, 'listen')).toEqual({
+      command: { kind: 'music', trackId: 't1', action: 'listen' }, shouldFocus: true,
     });
   });
 });

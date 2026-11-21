@@ -8,9 +8,11 @@ import { ALL_FOLDER_ID } from '../../config';
 import { selectLeftColumnContentKey } from '../../global/selectors';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
+import { openHealthQuick } from '../../util/parvaneQuick';
 import {
-  getParvaneSection, requestHealthAdd, requestModuleAdd, requestPlannerAdd, setParvaneSection,
+  getParvaneSection, requestModuleAdd, requestPlannerAdd, setParvaneSection,
 } from '../../util/parvaneSection';
+import { requestMusicAdd } from '../parvane/music/musicView';
 import { openPalette } from '../parvane/palette/paletteOpen';
 import {
   getActiveModule, MODULE_ICONS, MODULE_TITLE_KEYS, openModule,
@@ -38,6 +40,8 @@ type StateProps = {
 type OwnProps = {
   isActive: boolean;
   isMobile?: boolean;
+  // Узкое окно компьютера (доска `RdNarrow`): панель 56 px только значками, плеер 40 px, «+» 44 × 40
+  isNarrow?: boolean;
   // Прежнее положение папок «слева»: папки теперь всегда полосой над списком чатов, значение не читается
   withFolders?: boolean;
 };
@@ -48,8 +52,8 @@ const MAX_BADGE_COUNT = 99;
 // (`parvaneModules`), внизу общий поиск (палитра Ctrl+K) и «+». «Профиль» — такой же модуль, как остальные.
 // Папок чатов здесь нет — они над списком чатов.
 // На телефоне модули в нижней ленте (`ParvaneTabBar`)
-const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => {
-  const { openLeftColumnContent } = getActions();
+const FoldersSidebar = ({ isActive, isNarrow, isSettingsOpen }: OwnProps & StateProps) => {
+  const { openChat, openLeftColumnContent } = getActions();
 
   const lang = useLang();
 
@@ -61,17 +65,21 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   const [isAddMenuOpen, openAddMenu, closeAddMenu] = useFlag();
 
   const handleModuleClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    openModule(e.currentTarget.dataset.module as ParvaneModuleId, isSettingsOpen);
+    const id = e.currentTarget.dataset.module as ParvaneModuleId;
+    // Узкое окно — одна колонка (доска `RdNarrow`): «Чаты» в «Чатах» возвращают из открытого чата к списку
+    if (isNarrow && id === 'chats' && activeModule === 'chats') openChat({ id: undefined });
+    openModule(id, isSettingsOpen);
   });
 
-  // «+» зависит от модуля, как на телефоне: меню в «Чатах», «Файлах» и «Профиле», быстрый ввод записи
-  // в «Плане» и «Здоровье», новая заметка в «Заметках»
-  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'profile'
-    || activeModule === 'music';
+  // «+» зависит от модуля, как на телефоне: меню в «Чатах», «Файлах» и «Музыке», быстрый ввод записи
+  // в «Плане», шторка «Запись в здоровье» в «Здоровье», новая заметка в «Заметках»; в «Профиле» кнопки нет.
+  // Открытое меню закрывает сама кнопка (на ней тогда «×»)
+  const hasAddMenu = activeModule === 'chats' || activeModule === 'files' || activeModule === 'music';
   const handleAddClick = useLastCallback(() => {
-    if (hasAddMenu) openAddMenu();
+    if (isAddMenuOpen) closeAddMenu();
+    else if (hasAddMenu) openAddMenu();
     else if (activeModule === 'notes') requestModuleAdd('note');
-    else if (activeModule === 'health') requestHealthAdd();
+    else if (activeModule === 'health') openHealthQuick();
     else requestPlannerAdd();
   });
 
@@ -91,14 +99,18 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   });
 
   const handleUpload = useLastCallback(() => requestModuleAdd('upload'));
+  const handleMusicFetch = useLastCallback(() => requestMusicAdd('fetch'));
+  const handleMusicPlaylist = useLastCallback(() => requestMusicAdd('playlist'));
   const handleNewFolder = useLastCallback(() => requestModuleAdd('folder'));
 
   if (!isActive) {
     return undefined;
   }
 
+  const searchLabel = lang('ParvaneNavGlobalSearch', { keys: IS_MAC_OS ? '⌘K' : 'Ctrl+K' });
+
   return (
-    <div className={styles.root} id="FoldersSidebar">
+    <div className={buildClassName(styles.root, isNarrow && styles.rootNarrow)} id="FoldersSidebar">
       <div
         className={styles.sections}
         role="tablist"
@@ -112,11 +124,13 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
             role="tab"
             data-module={id}
             aria-selected={id === activeModule}
+            aria-label={isNarrow ? lang(MODULE_TITLE_KEYS[id]) : undefined}
+            title={isNarrow ? lang(MODULE_TITLE_KEYS[id]) : undefined}
             className={buildClassName(styles.section, id === activeModule && styles.sectionActive)}
             onClick={handleModuleClick}
           >
-            <ParvaneIcon name={MODULE_ICONS[id]} />
-            <span className={styles.sectionTitle}>{lang(MODULE_TITLE_KEYS[id])}</span>
+            <ParvaneIcon name={MODULE_ICONS[id]} className={styles.sectionIcon} />
+            {!isNarrow && <span className={styles.sectionTitle}>{lang(MODULE_TITLE_KEYS[id])}</span>}
             {id === 'chats' && Boolean(unreadCount) && (
               <span className={styles.badge}>
                 {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
@@ -126,51 +140,71 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
         ))}
       </div>
       <div className={styles.spacer} />
-      <MusicMiniPlayer isCompact />
-      {/* Общий поиск (палитра): заметки, записи «Плана», чаты и команды. То же — Ctrl+K */}
-      <button
-        type="button"
-        className={styles.section}
-        title={`${lang('Search')} (${IS_MAC_OS ? '⌘K' : 'Ctrl+K'})`}
-        aria-label={lang('Search')}
-        onClick={openPalette}
-      >
-        <ParvaneIcon name="search" />
-      </button>
-      <div className={styles.addWrap}>
+      <div className={buildClassName(isNarrow && styles.playerNarrow)}>
+        <MusicMiniPlayer isCompact />
+      </div>
+      {/* Общий поиск (палитра): заметки, записи «Плана», чаты, файлы, треки и команды. То же — Ctrl+K. В узком
+          окне кнопки нет: поиск — в шапке колонки (доска `RdNarrow`) */}
+      {!isNarrow && (
         <button
           type="button"
-          className={styles.addButton}
-          aria-label={lang('ParvaneTabBarAdd')}
-          aria-haspopup={hasAddMenu ? 'menu' : undefined}
-          data-add-for={activeModule}
-          onClick={handleAddClick}
+          className={styles.searchButton}
+          title={searchLabel}
+          aria-label={searchLabel}
+          onClick={openPalette}
         >
-          <ParvaneIcon name="plus" className={styles.addIcon} />
+          <ParvaneIcon name="search" />
         </button>
-        <Menu
-          isOpen={isAddMenuOpen}
-          className={styles.addMenu}
-          positionX="left"
-          positionY="bottom"
-          autoClose
-          onClose={closeAddMenu}
-        >
-          {activeModule === 'files' ? (
-            <>
-              <MenuItem icon="download" onClick={handleUpload}>{lang('ParvaneAddUpload')}</MenuItem>
-              <MenuItem icon="folder" onClick={handleNewFolder}>{lang('ParvaneAddFolder')}</MenuItem>
-            </>
-          ) : (
-            <>
-              <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
-              <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
-              <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
-              <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
-            </>
-          )}
-        </Menu>
-      </div>
+      )}
+      {activeModule !== 'profile' && (
+        <div className={styles.addWrap}>
+          <button
+            type="button"
+            className={buildClassName(styles.addButton, isAddMenuOpen && styles.addButtonOpen)}
+            aria-label={lang(
+              isAddMenuOpen ? 'ParvaneNavCloseMenu'
+                : activeModule === 'music' ? 'MusicAddLabel'
+                  : activeModule === 'files' ? 'ParvaneCloudAddLabel'
+                    : activeModule === 'health' ? 'HealthAddMetric' : 'ParvaneTabBarAdd',
+            )}
+            aria-haspopup={hasAddMenu ? 'menu' : undefined}
+            aria-expanded={hasAddMenu ? isAddMenuOpen : undefined}
+            data-add-for={activeModule}
+            onClick={handleAddClick}
+          >
+            <ParvaneIcon name={isAddMenuOpen ? 'close' : 'plus'} className={styles.addIcon} />
+          </button>
+          <Menu
+            isOpen={isAddMenuOpen}
+            className={styles.addMenu}
+            bubbleClassName={styles.addMenuBubble}
+            backdropExcludedSelector="[data-add-for]"
+            positionX="left"
+            positionY="bottom"
+            autoClose
+            onClose={closeAddMenu}
+          >
+            {activeModule === 'music' ? (
+              <>
+                <MenuItem icon="search" onClick={handleMusicFetch}>{lang('MusicAddFetch')}</MenuItem>
+                <MenuItem icon="add" onClick={handleMusicPlaylist}>{lang('MusicPlaylistNew')}</MenuItem>
+              </>
+            ) : activeModule === 'files' ? (
+              <>
+                <MenuItem icon="download" onClick={handleUpload}>{lang('ParvaneAddUpload')}</MenuItem>
+                <MenuItem icon="folder" onClick={handleNewFolder}>{lang('ParvaneAddFolder')}</MenuItem>
+              </>
+            ) : (
+              <>
+                <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
+                <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
+                <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
+                <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
+              </>
+            )}
+          </Menu>
+        </div>
+      )}
     </div>
   );
 };

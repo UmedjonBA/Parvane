@@ -11,6 +11,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   dismissRecoveryKeyDialog,
   linkSecondDevice,
+  openNotesView,
   preparePage,
 } from './e2e_web_helpers.mjs';
 
@@ -160,9 +161,18 @@ try {
   await a.note.locator('[data-note-conflict-open]').click();
   const view = a.note.locator('[data-note-conflict-view]');
   await a.visible(view, 'экран расхождения');
-  assert.equal(await view.locator('[data-conflict-place]').count(), 1, 'расхождение не одно');
-  assert.match(await view.locator('[data-conflict-choice="mine"]').innerText(), /Порт = 51821/, 'моя строка');
-  assert.match(await view.locator('[data-conflict-choice="theirs"]').innerText(), /Порт = 51822/, 'их строка');
+  // Компьютер (`ZdNotesX`): две версии целиком, устройство и время у каждой, «Оставить эту» / «Оставить обе»
+  assert.equal(await view.getAttribute('data-note-conflict-view'), 'columns', 'на компьютере не две колонки');
+  const mineColumn = view.locator('[data-conflict-version="mine"]');
+  const theirColumn = view.locator('[data-conflict-version="theirs"]');
+  assert.match(await mineColumn.innerText(), /This computer · [\s\S]*Порт = 51821/i, 'моя версия с устройством');
+  await a.page.waitForFunction(() => /Computer · /i.test(
+    document.querySelector('[data-conflict-version="theirs"]')?.textContent || '',
+  ), undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('у чужой версии нет устройства и времени'));
+  assert.match(await theirColumn.innerText(), /Порт = 51822[\s\S]*Ключ = новый/, 'чужая версия целиком');
+  assert.match(await view.locator('[data-conflict-diff]').innerText(), /Differences: line \d+/, 'строка «Отличия»');
+  await a.visible(view.locator('[data-conflict-keep]').filter({ hasText: 'Keep both' }), '«Оставить обе»');
+  assert.equal(await a.note.locator('[data-note-bar]').count(), 0, 'шапка заметки над экраном двух версий');
   await a.shot('desk-conflict');
   // Смена ширины перерисовывает заметку (колонка ↔ весь экран) — экран расхождения открывается снова
   const reopenConflict = async () => {
@@ -172,11 +182,25 @@ try {
   };
   await a.page.setViewportSize(PHONE);
   await reopenConflict();
+  // Телефон (`RpNotes`): место за местом, пояснение сверху, в шапке только «назад» и название
+  assert.equal(await view.getAttribute('data-note-conflict-view'), 'places', 'на телефоне не место за местом');
+  assert.equal(await view.locator('[data-conflict-place]').count(), 1, 'расхождение не одно');
+  assert.match(await view.locator('[data-conflict-choice="mine"]').innerText(), /This computer · [\s\S]*Порт = 51821/i, 'моя строка');
+  assert.match(await view.locator('[data-conflict-choice="theirs"]').innerText(), /Computer · [\s\S]*Порт = 51822/i, 'их строка');
+  await a.visible(view.getByText('This note was changed on two devices.'), 'пояснение на экране расхождения');
+  const phoneBar = a.note.locator('[data-note-bar]');
+  assert.equal(await phoneBar.locator('[data-note-bar-edit], [data-note-menu]').count(), 0, '«Изменить» и «⋮» над расхождением');
+  await a.visible(phoneBar.getByRole('heading', { name: NOTE }), 'название заметки в шапке расхождения');
   await a.shot('phone-conflict');
+  // Системное «назад» закрывает экран расхождения, заметка остаётся
+  await a.page.waitForTimeout(300);
+  await a.page.evaluate(() => window.history.back());
+  await view.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('«назад» не закрыл расхождение'));
+  await a.visible(a.note.locator('[data-note-conflict]'), 'заметка с полосой после «назад»');
   await a.page.setViewportSize(DESK);
   await reopenConflict();
-  await view.locator('[data-conflict-choice="theirs"]').click();
-  await view.locator('[data-conflict-save]').click();
+  // «Оставить эту» у чужой версии: заметка — она целиком, своя — в истории заметки
+  await theirColumn.locator('[data-conflict-keep-version="theirs"]').click();
   await view.waitFor({ state: 'detached', timeout: SYNC_TIMEOUT_MS }).catch(() => assert.fail('экран расхождения не закрылся'));
   await a.expectText('Порт = 51822', 'выбранная строка не легла в заметку');
   await a.expectText('Ключ = новый', 'сведённая сама правка второго устройства потерялась');
@@ -187,7 +211,12 @@ try {
   assert.equal(
     await b.body.innerText().then((text) => text.includes('Порт = 51821')), false, 'на втором устройстве — отвергнутая строка',
   );
-  console.log('OK: расхождение правок — экран с выбором, объединённая заметка на обоих устройствах, копия убрана');
+  await a.note.locator('[data-note-menu]').click();
+  await a.page.locator('[data-note-menu-list] [data-note-action="versions"]').click();
+  await a.page.waitForFunction(() => document.querySelectorAll('[data-cloud-versions] [data-version]').length >= 3,
+    undefined, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('своя версия не осталась в истории'));
+  await a.page.keyboard.press('Escape');
+  console.log('OK: расхождение правок — две версии с устройствами на компьютере, место за местом на телефоне, «назад»; копия убрана');
 
   // ── Холст на двух устройствах: карточки, добавленные почти одновременно, есть на обоих (NOTES-3) ─────
   const canvasCard = (d, text) => d.knowledge.locator('[data-canvas-board] [data-canvas-type="text"]').filter({ hasText: text });
@@ -199,11 +228,11 @@ try {
     await field.press('Enter');
     await d.visible(canvasCard(d, text), `карточка «${text}»`);
   };
-  await a.knowledge.getByRole('tab', { name: 'Canvas', exact: true }).click();
+  await openNotesView(a.knowledge, 'Canvas');
   await a.knowledge.locator('[data-canvas-list] [data-canvas-new]').first().click();
   await a.visible(a.knowledge.locator('[data-canvas-chip="Canvas 1"]'), 'новый холст');
   await addTextCard(a, 'Север');
-  await b.knowledge.getByRole('tab', { name: 'Canvas', exact: true }).click();
+  await openNotesView(b.knowledge, 'Canvas');
   const tile = b.knowledge.locator('[data-canvas-tile="Canvas 1"][data-canvas-id], [data-canvas-tile="Canvas 1"] [data-canvas-id]');
   await b.visible(tile, 'холст первого устройства в списке второго', SYNC_TIMEOUT_MS);
   await tile.first().click();

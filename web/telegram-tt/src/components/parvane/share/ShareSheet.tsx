@@ -12,7 +12,9 @@ import { getIsModuleOn } from '../../../util/parvaneModules';
 import { openNote } from '../../../util/parvaneSection';
 import { buildSharedText, getShareDestinations } from '../../../util/shareTarget';
 import { formatFileSize } from '../../../util/textFormat';
+import { getMusicInfo } from '../music/musicPlayer';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import { useFolderManagerForOrderedIds } from '../../../hooks/useFolderManager';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -20,6 +22,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Avatar from '../../common/Avatar';
 import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
+import ShareNotePicker from './ShareNotePicker';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './ShareSheet.module.scss';
@@ -42,15 +45,19 @@ function loadShareActions() {
 }
 const TEXT_PREVIEW_LENGTH = 160;
 
-const DESTINATION_ICONS = { chat: 'chat', files: 'folder', note: 'note' } as const;
+const DESTINATION_ICONS = {
+  chat: 'chat', files: 'folder', note: 'note', music: 'play',
+} as const;
 const DESTINATION_KEYS = {
   chat: { title: 'ShareToChat', hint: 'ShareToChatHint' },
   files: { title: 'ShareToFiles', hint: 'ShareToFilesHint' },
   note: { title: 'ShareToNote', hint: 'ShareToNoteHint' },
+  music: { title: 'PvSysShareToMusic', hint: 'PvSysShareToMusicHint' },
 } as const;
 
 // Parvane (spec 041 F2, доска `ZpSysGen`): «Поделиться в Parvane» — что получено, куда отправить (чат,
-// «Файлы», заметка; «Файлы» и «Заметка» — только при включённых модулях), недавние чаты с выбором и подписью
+// «Файлы», заметка — новая либо существующая, аудио — в «Музыку»; «Файлы», «Заметка» и «Музыка» — только при
+// включённых модулях), недавние чаты с выбором и подписью
 const ShareSheet = ({
   shared, chatsById, currentUserId, onClose,
 }: OwnProps & StateProps) => {
@@ -58,6 +65,8 @@ const ShareSheet = ({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [caption, setCaption] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  const [isNotePicking, setIsNotePicking] = useState(false);
+  const musicInfo = useDerivedState(getMusicInfo);
   const lang = useLang();
 
   const orderedIds = useFolderManagerForOrderedIds(ALL_FOLDER_ID);
@@ -66,7 +75,7 @@ const ShareSheet = ({
 
   const files = shared?.files || [];
   const sharedText = shared ? buildSharedText(shared) : '';
-  const destinations = getShareDestinations(Boolean(files.length), getIsModuleOn);
+  const destinations = getShareDestinations(files, getIsModuleOn, Boolean(musicInfo?.isUploadEnabled));
 
   const getTitle = (chatId: string) => getChatTitle(lang, chatsById[chatId], chatId === currentUserId);
 
@@ -74,6 +83,7 @@ const ShareSheet = ({
   const handleClose = useLastCallback(() => {
     setSelectedIds([]);
     setCaption('');
+    setIsNotePicking(false);
     onClose();
   });
 
@@ -102,6 +112,18 @@ const ShareSheet = ({
       });
       return;
     }
+    if (destination === 'music') {
+      void runSave(async () => {
+        const { saveSharedToMusic } = await loadShareActions();
+        return await saveSharedToMusic(files) ? lang('PvSysShareSavedToMusic') : undefined;
+      });
+      return;
+    }
+    setIsNotePicking(true);
+  });
+
+  const handleNewNote = useLastCallback(() => {
+    if (!shared) return;
     void runSave(async () => {
       const { saveSharedToNote } = await loadShareActions();
       const title = await saveSharedToNote(
@@ -111,6 +133,23 @@ const ShareSheet = ({
       openNote(title);
       return lang('ShareSavedToNote', { title });
     });
+  });
+
+  const handlePickNote = useLastCallback((noteId: string) => {
+    if (!shared) return;
+    void runSave(async () => {
+      const { saveSharedToExistingNote } = await loadShareActions();
+      const title = await saveSharedToExistingNote(
+        shared, sharedText, noteId, lang('KnowledgeVaultName'), currentUserId,
+      );
+      if (!title) return undefined;
+      openNote(title);
+      return lang('ShareSavedToNote', { title });
+    });
+  });
+
+  const handleNoteBack = useLastCallback(() => {
+    setIsNotePicking(false);
   });
 
   const handleToggleChat = useLastCallback((chatId: string) => {
@@ -156,7 +195,23 @@ const ShareSheet = ({
     : lang('ShareSendToCount', { count: selectedIds.length }, { pluralValue: selectedIds.length });
 
   return (
-    <PvSheet isOpen={Boolean(shared)} title={lang('ShareTitle')} isTight onClose={handleClose}>
+    <PvSheet
+      isOpen={Boolean(shared)}
+      title={lang(isNotePicking ? 'ShareToNote' : 'ShareTitle')}
+      isTight
+      startClose={isNotePicking ? 'back' : undefined}
+      onClose={isNotePicking ? handleNoteBack : handleClose}
+    >
+      {isNotePicking ? (
+        <div className={styles.root} data-share-sheet>
+          <ShareNotePicker isBusy={isBusy} onNew={handleNewNote} onPick={handlePickNote} />
+        </div>
+      ) : renderMain()}
+    </PvSheet>
+  );
+
+  function renderMain() {
+    return (
       <div className={styles.root} data-share-sheet>
         <div className={styles.group} data-share-content>{renderShared()}</div>
         <p className={kit.grp}>{lang('ShareWhere')}</p>
@@ -217,9 +272,10 @@ const ShareSheet = ({
             </button>
           </>
         )}
+        <p className={buildClassName(kit.muted, kit.small, styles.footnote)}>{lang('PvSysShareFootnote')}</p>
       </div>
-    </PvSheet>
-  );
+    );
+  }
 };
 
 export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => ({

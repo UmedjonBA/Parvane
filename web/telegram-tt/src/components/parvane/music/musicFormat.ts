@@ -32,3 +32,12 @@ export function splitBytes(bytes: number) {
   if (megabytes >= 1024) return { value: megabytes / 1024, isGigabytes: true };
   return { value: Math.round(megabytes), isGigabytes: false };
 }
+
+/** Сколько осталось качать на устройство: по средней скорости и среднему размеру уже скачанных треков; данных
+ * мало — `undefined`. Минуты — не меньше одной. */
+export function estimateOfflineLeft(doneBytes: number, busyMs: number, doneCount: number, leftCount: number) {
+  if (!doneCount || !busyMs || !doneBytes || !leftCount) return undefined;
+  const bytes = Math.round((doneBytes / doneCount) * leftCount);
+  const minutes = Math.max(1, Math.round((bytes / (doneBytes / busyMs)) / 60000));
+  return { bytes, minutes };
+}

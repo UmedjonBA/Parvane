@@ -308,6 +308,8 @@ impl HostClient {
 
             // ── свои устройства ──
             "leave" => reqs(&[c.leave_request().map_err(err)?]),
+            // Выход со сменой ключей: запись выхода — последний запрос итога (доска `PhProfileB`)
+            "leaveRotating" => parsed(revocation_json(&c.leave_rotating().map_err(cerr)?)),
             "revokeDevice" => parsed(revocation_json(&c.revoke_device(a.s("deviceId")?).map_err(cerr)?)),
             "signOutDevice" => parsed(revocation_json(&c.sign_out_device(a.s("deviceId")?).map_err(cerr)?)),
             "reportDeviceStolen" => parsed(revocation_json(&c.report_device_stolen(a.s("deviceId")?).map_err(cerr)?)),
@@ -697,6 +699,10 @@ pub fn call_static(name: &str, args: &Value) -> R {
         "version" => json!(crate::version()),
         // Очередь плеера «Музыки» (MUSIC-1): порядок воспроизведения — один на все клиенты
         name if name.starts_with("musicQueue") => music_queue_call(name, &a)?,
+        // Теги своего аудиофайла (spec 041, «Загрузить свои файлы»): то же чтение, что у шарда music
+        "musicReadTags" => crate::music_tags::read_json(&a.b("head")?, &a.b("tail").unwrap_or_default(), a.se("fileName")),
+        // Списки библиотеки «Музыки» (spec 041): порядок, буквы, отбор, страницы, «Загруженное» группами
+        name if crate::music_library::NAMES.contains(&name) => crate::music_library::call(name, args).ok_or_else(|| err(ProtoError::Malformed))?,
         // Модули приложения (MODULES-1): правила списка — одни на все клиенты, клиент хранит настройки как JSON
         "modulesView" => serde_json::to_value(crate::modules::view(a.raw("prefs"), a.raw("serverOff"), a.raw("available"))).map_err(|_| err(ProtoError::Malformed))?,
         "modulesSetOn" => serde_json::to_value(crate::modules::set_on(a.raw("prefs"), a.s("id")?, a.flag("on")?)).map_err(|_| err(ProtoError::Malformed))?,

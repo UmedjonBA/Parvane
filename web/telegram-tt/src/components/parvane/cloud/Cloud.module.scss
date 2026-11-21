@@ -567,6 +567,8 @@
 .item {
   cursor: var(--custom-cursor, pointer);
 
+  position: relative;
+
   display: flex;
   flex: none;
   gap: 0.75rem;
@@ -1140,4 +1142,127 @@
 .detailNote {
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
+}
+
+// ── доводка по сверке досок (20–21 ноя 2026) ────────────────────────────────
+
+// «Передачи»: «Отмена» и «Убрать» значком, что происходит — под полосой (доска `PhFilesMore`)
+.transferIcon {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pv-radius-sm);
+
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+  }
+}
+
+.transferStage {
+  flex: 1 0 100%;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+// Корзина на компьютере: серая точка вместо значка (доска `RdFiles`); папка, к которой закрыт доступ
+.itemIconDot,
+.itemIconMuted {
+  color: var(--pv-muted);
+}
+
+.itemDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--pv-line2);
+}
+
+// Чужая папка на компьютере: «Открыть» и «Выйти из папки» при наведении (доска `ZdFilesX`)
+.rowHoverActions {
+  display: none;
+  flex: none;
+  gap: 0.375rem;
+}
+
+.itemHover:hover .rowHoverActions,
+.itemHover:focus-within .rowHoverActions {
+  display: flex;
+}
+
+// Приглашение на компьютере — полосой (доска `ZdFilesX`)
+.inviteStrip {
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+// Действие места в шапке телефона: «Очистить» у корзины (доска `PhFilesMore`)
+.headLink {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: 2.25rem;
+  margin-inline-start: auto;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+
+  background: none;
+}
+
+// Поле экрана поиска телефона (доска `ZpFilesX`)
+.searchField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+}
+
+.searchLabel {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+// Доска `ZdMisc`: действия строки при наведении («Ссылка», «Скачать») — поверх колонок даты и размера, слева от «⋯»
+.itemHoverActions {
+  position: absolute;
+  top: 50%;
+  right: 3rem;
+  transform: translateY(-50%);
+
+  display: none;
+  gap: 0.375rem;
+
+  padding-left: 0.5rem;
+
+  background: var(--pv-hover);
+
+  .item:hover &,
+  .item:focus-within & {
+    display: flex;
+  }
+}
+
+// Строка, с которой пока ничего не сделать: файл ещё загружается, доступ к папке закрыт (доска `ZdMisc`)
+.itemUnavailable {
+  .itemTitle,
+  .itemIcon {
+    opacity: 0.55;
+  }
 }

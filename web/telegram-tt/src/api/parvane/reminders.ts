@@ -7,6 +7,7 @@
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { WorkerReminder } from '../../util/reminderStore';
 
+import { readBedtimeReminder } from '../../util/bedtimeReminder';
 import { NOTIFY_SNOOZE_MS } from '../../util/systemNotify';
 
 type Deps = {
@@ -66,7 +67,7 @@ export function createReminderScheduler(deps: Deps) {
     const json = deps.stateJson();
     if (!json || !deps.isReady()) return undefined;
     const { readReminders } = await loadModule();
-    return readReminders(json, Date.now(), FRESH_MS);
+    return readReminders(json, Date.now(), FRESH_MS, readBedtimeReminder());
   }
 
   async function readSnoozes() {

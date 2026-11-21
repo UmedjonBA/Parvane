@@ -215,9 +215,9 @@ fn invalid_change_is_skipped_but_others_apply() {
     assert_eq!(a.tasks.keys().collect::<Vec<_>>(), vec!["ok"]);
 
     // Настройки: конец дня раньше начала — отказ; перерыв вне окон — отказ.
-    let bad_settings = Settings { stamp: st(2, "d1"), day_start: 1260, day_end: 540, lunch_start: 0, lunch_end: 0, margin: 15, budget: 600 };
+    let bad_settings = Settings { stamp: st(2, "d1"), day_start: 1260, day_end: 540, lunch_start: 0, lunch_end: 0, margin: 15, budget: 600, ..Default::default() };
     assert_eq!(a.apply_op(&op(vec![change::Change::Settings(bad_settings)]), "d1").unwrap(), 0);
-    let ok_settings = Settings { stamp: st(2, "d1"), day_start: 480, day_end: 1200, lunch_start: 0, lunch_end: 0, margin: 10, budget: 480 };
+    let ok_settings = Settings { stamp: st(2, "d1"), day_start: 480, day_end: 1200, lunch_start: 0, lunch_end: 0, margin: 10, budget: 480, ..Default::default() };
     assert_eq!(a.apply_op(&op(vec![change::Change::Settings(ok_settings)]), "d1").unwrap(), 1);
     assert_eq!(a.settings.as_ref().unwrap().day_start, 480);
 }
@@ -759,7 +759,7 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
                 ..Default::default()
             }),
             8 => change::Change::Learned(LearnedWord { id: id.clone(), deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }).or(st(lamport, &dev)), ..Default::default() }),
-            _ => change::Change::Settings(Settings { stamp: st(lamport, &dev), day_start: 540, day_end: 1260, lunch_start: 780, lunch_end: 840, margin: 15, budget: 600 + lamport as u32 }),
+            _ => change::Change::Settings(Settings { stamp: st(lamport, &dev), day_start: 540, day_end: 1260, lunch_start: 780, lunch_end: 840, margin: 15, budget: 600 + lamport as u32, ..Default::default() }),
         };
         (change, dev)
     })

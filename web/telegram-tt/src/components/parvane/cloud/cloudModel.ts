@@ -178,6 +178,13 @@ export function searchNodes(nodes: CloudNode[], query: string) {
   return nodes.filter((n) => !n.trashed && n.name.toLocaleLowerCase().includes(needle));
 }
 
+/** Найденное в корзине (доска `ZpFilesX`: поиск идёт «во всех папках», корзина тоже): то, что положили в неё явно. */
+export function searchTrash(nodes: CloudNode[], query: string) {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [];
+  return nodes.filter((n) => n.trashTop && n.name.toLocaleLowerCase().includes(needle));
+}
+
 /** Корзина: то, что положили в неё явно (потомки идут вместе с папкой). */
 export function trashOf(nodes: CloudNode[]) {
   return nodes.filter((n) => n.trashTop).sort((a, b) => b.trashedAt - a.trashedAt);
@@ -235,17 +242,17 @@ export function navTreeOf(nodes: CloudNode[], openFolder?: string): CloudTreeRow
   return rows;
 }
 
-export type FolderStats = { count: number; size: number };
+export type FolderStats = { count: number; size: number; mtime: number };
 
-/** Счётчики всех папок одним проходом: `count` — показываемые дети (как `childrenOf(listedNodes())`),
- * `size` — всё поддерево, с корзиной и служебными файлами (как `sizeOf`). Папки без детей в ответе нет. */
+/** Счётчики папок одним проходом: сколько в папке объектов (без корзины и служебных), сколько занимает всё
+ * вложенное (с корзиной: место она занимает) и когда внутри последний раз что-то менялось (дата «Изменён» у папки, доска `DeskFiles`). */
 export function folderStats(nodes: CloudNode[]): Map<string, FolderStats> {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const stats = new Map<string, FolderStats>();
   const statsOf = (id: string) => {
     let known = stats.get(id);
     if (!known) {
-      known = { count: 0, size: 0 };
+      known = { count: 0, size: 0, mtime: byId.get(id)?.mtime || 0 };
       stats.set(id, known);
     }
     return known;
@@ -254,14 +261,26 @@ export function folderStats(nodes: CloudNode[]): Map<string, FolderStats> {
   nodes.forEach((n) => {
     if (!n.parent) return;
     if (!n.trashed && !(hasService && isServiceNode(n))) statsOf(n.parent).count += 1;
-    if (!n.size) return;
+    if (!n.size && n.trashed) return;
     let ancestor = byId.get(n.parent);
     for (let guard = 0; ancestor && guard <= nodes.length; guard++) {
-      statsOf(ancestor.id).size += n.size;
+      const known = statsOf(ancestor.id);
+      known.size += n.size;
+      if (!n.trashed) known.mtime = Math.max(known.mtime, n.mtime || 0);
       ancestor = ancestor.parent ? byId.get(ancestor.parent) : undefined;
     }
   });
   return stats;
+}
+
+/** Совместная папка целиком (строка контейнера): объекты корня, объём всего вне корзины, последнее изменение. */
+export function containerStats(nodes: CloudNode[]): FolderStats {
+  const listed = listedNodes(nodes);
+  return listed.reduce((acc, n) => (n.trashed ? acc : {
+    count: acc.count + (n.parent ? 0 : 1),
+    size: acc.size + n.size,
+    mtime: Math.max(acc.mtime, n.mtime || 0),
+  }), { count: 0, size: 0, mtime: 0 });
 }
 
 export function kindOfFile(mime: string, name: string): CloudFileKind {

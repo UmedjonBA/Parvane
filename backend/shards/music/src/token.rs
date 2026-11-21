@@ -19,6 +19,8 @@ pub enum Grant {
     Stream { track: String, opus: bool },
     /// Обложки (любые): база ссылок пользователя.
     Covers,
+    /// Приём одного своего файла (spec 041): задача `music.upload.start`.
+    Upload { job: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +43,7 @@ pub fn sign(key: &[u8; 32], c: &Claims) -> Option<String> {
     let (kind, flag, track) = match &c.grant {
         Grant::Stream { track, opus } => (1u8, u8::from(*opus), track.as_bytes()),
         Grant::Covers => (2u8, 0u8, &[][..]),
+        Grant::Upload { job } => (3u8, 0u8, job.as_bytes()),
     };
     let mut body = Vec::with_capacity(12 + user.len() + track.len() + MAC_LEN);
     body.extend_from_slice(&[VERSION, kind, flag]);
@@ -76,6 +79,7 @@ pub fn verify(key: &[u8; 32], token: &str, now_ms: i64) -> Option<Claims> {
     let grant = match (head.get(1)?, head.get(2)?) {
         (1, flag) if !track.is_empty() => Grant::Stream { track, opus: *flag == 1 },
         (2, _) if track.is_empty() => Grant::Covers,
+        (3, _) if !track.is_empty() => Grant::Upload { job: track },
         _ => return None,
     };
     Some(Claims { user, exp_ms, grant })
@@ -102,6 +106,8 @@ mod tests {
         // Жетон обложек не открывает поток и наоборот — виды различаются
         let covers = sign(&key, &Claims { user: "bob".into(), exp_ms: 9_000, grant: Grant::Covers }).unwrap();
         assert_eq!(verify(&key, &covers, 1_000).unwrap().grant, Grant::Covers);
+        let up = sign(&key, &Claims { user: "bob".into(), exp_ms: 9_000, grant: Grant::Upload { job: "0a1b".into() } }).unwrap();
+        assert_eq!(verify(&key, &up, 1_000).unwrap().grant, Grant::Upload { job: "0a1b".into() });
         assert_eq!(verify(&key, "", 0), None);
         assert_eq!(verify(&key, "не base64", 0), None);
     }

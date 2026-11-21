@@ -5,8 +5,11 @@
 use serde_json::{json, Value};
 
 use super::health::{self, HealthState};
+use std::collections::BTreeMap;
+
 use super::health_json::{entry_json, entry_of};
-use super::health_view::{day_index, entry_day_index, KIND_SLEEP, KIND_SLEEP_END, KIND_SLEEP_START};
+use super::health_stats::{self, TAG_NO_SLEEP};
+use super::health_view::{day_index, day_text, entry_day_index, KIND_MOOD, KIND_SLEEP, KIND_SLEEP_END, KIND_SLEEP_START, SUM_KINDS};
 use crate::health_parse;
 use crate::pb::parvane::health::v1::Entry;
 
@@ -17,8 +20,13 @@ const SLEEP_KINDS: [&str; 3] = [KIND_SLEEP, KIND_SLEEP_START, KIND_SLEEP_END];
 /// Запись формы ещё без id (id даёт `compose_changes`).
 const DRAFT_ID: &str = "draft";
 
+/// Виды, у которых запись — не число показателя: изменение к предыдущей им не считается.
+const NO_DELTA_KINDS: [&str; 6] = [KIND_SLEEP, KIND_SLEEP_START, KIND_SLEEP_END, "food", "workout", KIND_MOOD];
+
 /// Записи вида новыми первыми, не больше `limit`: `{"entries":[…], "hasMore":bool}`. Пустой вид — все записи.
-/// Запись из будущего не входит, как и в сводку.
+/// Запись из будущего не входит, как и в сводку. У записи показателя — `delta` (к предыдущей записи того же вида),
+/// у сна — `goalDelta` (минуты к цели режима), у давления — `pulse` (пульс той же минуты). У видов-сумм ещё
+/// `days` — итоги дней новыми первыми с оценкой самочувствия дня и её заметкой (`hasMoreDays`).
 pub fn entries_json(state: &HealthState, kind: &str, limit: usize, now_ms: i64, tz_min: i32) -> String {
     let today = day_index(now_ms, tz_min.clamp(health::TZ_MIN, health::TZ_MAX));
     let limit = limit.min(MAX_PAGE);
@@ -29,11 +37,57 @@ pub fn entries_json(state: &HealthState, kind: &str, limit: usize, now_ms: i64, 
     };
     let mut entries: Vec<&Entry> = state.live_entries().filter(|e| wanted(e) && entry_day_index(e) <= today).collect();
     entries.sort_by(|a, b| (b.at_ms, &b.id).cmp(&(a.at_ms, &a.id)));
-    json!({
-        "entries": entries.iter().take(limit).map(|e| entry_json(e)).collect::<Vec<_>>(),
-        "hasMore": entries.len() > limit,
-    })
-    .to_string()
+    let all: Vec<&Entry> = state.live_entries().filter(|e| entry_day_index(e) <= today).collect();
+    let goals: BTreeMap<&str, f64> = state.live_goals().map(|g| (g.id.as_str(), g.target)).collect();
+    let goal_sleep = goals.get("sleep_bed").zip(goals.get("sleep_wake")).map(|(b, w)| (*w as i64 - *b as i64).rem_euclid(1440)).filter(|m| *m > 0);
+    let pulses: Vec<&Entry> = all.iter().copied().filter(|e| e.kind == "pulse").collect();
+    let page: Vec<Value> = entries.iter().take(limit).map(|e| enriched(e, &all, goal_sleep, &pulses)).collect();
+    let mut out = json!({"entries": page, "hasMore": entries.len() > limit});
+    if SUM_KINDS.contains(&kind) {
+        let (days, has_more) = day_totals(&entries, &all, limit);
+        out["days"] = json!(days);
+        out["hasMoreDays"] = json!(has_more);
+    }
+    out.to_string()
+}
+
+fn enriched(e: &Entry, all: &[&Entry], goal_sleep: Option<i64>, pulses: &[&Entry]) -> Value {
+    let mut v = entry_json(e);
+    if e.kind == KIND_SLEEP {
+        let minutes = if e.end_ms > e.at_ms { (e.end_ms - e.at_ms) / 60_000 } else { e.value.max(0.0) as i64 };
+        v["goalDelta"] = json!(goal_sleep.map(|g| minutes - g));
+    } else if !NO_DELTA_KINDS.contains(&e.kind.as_str()) && !SUM_KINDS.contains(&e.kind.as_str()) {
+        let previous = all.iter().filter(|p| p.kind == e.kind && (p.at_ms, &p.id) < (e.at_ms, &e.id)).max_by_key(|p| (p.at_ms, &p.id));
+        v["delta"] = json!(previous.map(|p| super::health_view::round1(e.value - p.value)));
+    }
+    if e.kind == "pressure" {
+        v["pulse"] = json!(health_stats::paired_pulse(e.at_ms, pulses).map(|p| p.value));
+    }
+    v
+}
+
+/// Итоги дней вида-суммы новыми первыми (не больше `limit`) с оценкой самочувствия дня и заметкой к ней.
+fn day_totals(entries: &[&Entry], all: &[&Entry], limit: usize) -> (Vec<Value>, bool) {
+    let mut by_day: BTreeMap<i64, (f64, usize)> = BTreeMap::new();
+    for e in entries {
+        let slot = by_day.entry(entry_day_index(e)).or_default();
+        slot.0 += e.value;
+        slot.1 += 1;
+    }
+    let mood_of = |day: i64| all.iter().filter(|m| m.kind == KIND_MOOD && entry_day_index(m) == day).max_by_key(|m| (m.at_ms, &m.id));
+    let days = by_day
+        .iter()
+        .rev()
+        .take(limit)
+        .map(|(day, (value, count))| {
+            let mood = mood_of(*day);
+            json!({
+                "day": day_text(*day), "weekday": (day + 3).rem_euclid(7), "value": super::health_view::round1(*value), "count": count,
+                "mood": mood.map(|m| m.value), "moodNote": mood.map(|m| m.note.clone()),
+            })
+        })
+        .collect();
+    (days, by_day.len() > limit)
 }
 
 /// Проверка записи формы: `{"problem": null}` — можно сохранять, иначе код: `form` (вид, время, заметка не
@@ -52,6 +106,10 @@ fn problem_of(entry: &Value, now_ms: i64) -> Option<&'static str> {
     }
     if e.at_ms.max(e.end_ms) > now_ms + health_parse::FUTURE_SLACK_MS {
         return Some("future");
+    }
+    if e.kind == KIND_SLEEP && e.tag == TAG_NO_SLEEP && e.end_ms == 0 && e.value == 0.0 {
+        // «Не спал»: ночь без сна — запись в ноль минут
+        return None;
     }
     if e.kind == KIND_SLEEP {
         let minutes = if e.end_ms != 0 { ((e.end_ms - e.at_ms) / 60_000) as f64 } else { e.value };

@@ -5,6 +5,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   dismissRecoveryKeyDialog,
+  openNotesView,
   preparePage,
   sendText,
   openSavedMessages,
@@ -76,7 +77,7 @@ try {
       // Новому аккаунту «Знания» сами открывают заметку-инструкцию
       await knowledge.locator('[data-note-body]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await shot('note');
-      await page.getByRole('tab', { name: 'Canvas' }).first().click();
+      await openNotesView(knowledge, 'Canvas');
       await knowledge.locator('[data-canvas-from-graph]').first().click().catch(() => undefined);
       await shot('canvas');
       // Настройки: выбор схемы
@@ -99,16 +100,16 @@ try {
       await phone('chats', () => bar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }));
       await phone('profile', () => bar.getByRole('button', { name: 'Profile' }).click());
       await phone('chats2', () => bar.getByRole('button', { name: 'Chats' }).click());
-      await phone('plus', () => phonePage.getByRole('button', { name: 'New entry' }).click());
+      await phone('plus', () => phonePage.locator('[data-add-for]').click());
       await phonePage.keyboard.press('Escape');
       await phone('today', async () => {
-        await bar.getByRole('button', { name: 'Planner' }).click();
+        await bar.getByRole('button', { name: 'Plan', exact: true }).click();
         await openPlannerScreen(phonePage, 'today');
       });
       await phone('calendar', () => openPlannerScreen(phonePage, 'calendar'));
       await phone('health', () => bar.getByRole('button', { name: 'Health' }).click());
       await phone('quick', async () => {
-        await phonePage.getByRole('button', { name: 'New entry' }).click();
+        await phonePage.locator('[data-add-for]').click();
         await phonePage.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
       });
       await phonePage.keyboard.press('Escape');

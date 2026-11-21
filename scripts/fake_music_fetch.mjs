@@ -16,10 +16,19 @@ const CATALOG = [
   { artist: 'Полдень', title: 'Громкая песня', album: 'Двор', duration: 30, explicit: true },
   { artist: 'Никто', title: 'Пустой трек', album: '', duration: 30, explicit: null },
   { artist: 'Lampa', title: 'Утро', album: 'Маршрут', duration: 30, explicit: null },
+  // spec 041: качается медленно (ход в процентах, отмена) и сервис отказывает с причиной
+  { artist: 'Тихий порт', title: 'Медленный берег', album: '', duration: 30, explicit: null },
+  { artist: 'Тихий порт', title: 'Закрытый берег', album: '', duration: 30, explicit: null },
 ];
 
 // Трек → источник → файлы. Чего нет в таблице — источник отвечает пустым списком
 const CANDIDATES = {
+  'Медленный берег': {
+    soundcloud: [{ id: 'slow-1', title: 'Тихий порт - Медленный берег', uploader: 'Тихий порт', duration: 30, uploaded: '2025-02-01' }],
+  },
+  'Закрытый берег': {
+    soundcloud: [{ id: 'refuse-1', title: 'Тихий порт - Закрытый берег', uploader: 'Тихий порт', duration: 30, uploaded: '2025-02-01' }],
+  },
   'Ночной автобус': {
     soundcloud: [
       { id: 'cover-1', title: 'Lampa - Ночной автобус (cover)', uploader: 'кто-то', duration: 30, uploaded: '2025-02-01' },
@@ -44,6 +53,21 @@ function reply(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Ход медленных загрузок (`dest` → байты) и снятые загрузки
+const PROGRESS = new Map();
+const CANCELLED = new Set();
+const SLOW_BYTES = 8 * 1024 * 1024;
+const SLOW_STEPS = 40;
+const SLOW_STEP_MS = 500;
+
+function readBody(req, handle) {
+  let raw = '';
+  req.on('data', (chunk) => {
+    raw += chunk;
+  });
+  req.on('end', () => handle(JSON.parse(raw || '{}')));
+}
+
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://local');
   if (url.pathname === '/health') return reply(res, 200, { ok: true });
@@ -56,13 +80,39 @@ http.createServer((req, res) => {
     const found = CANDIDATES[url.searchParams.get('title')]?.[url.searchParams.get('source')] || [];
     return reply(res, 200, { candidates: found });
   }
+  if (url.pathname === '/progress') {
+    const done = PROGRESS.get(url.searchParams.get('dest'));
+    return done === undefined ? reply(res, 404, {}) : reply(res, 200, { bytes_done: done, bytes_total: SLOW_BYTES });
+  }
+  if (url.pathname === '/cancel' && req.method === 'POST') {
+    readBody(req, ({ dest }) => {
+      CANCELLED.add(dest);
+      reply(res, 200, {});
+    });
+    return undefined;
+  }
   if (url.pathname === '/download' && req.method === 'POST') {
     let raw = '';
     req.on('data', (chunk) => {
       raw += chunk;
     });
-    req.on('end', () => {
-      const { dest } = JSON.parse(raw);
+    req.on('end', async () => {
+      const { dest, id } = JSON.parse(raw);
+      if (id.startsWith('refuse')) {
+        reply(res, 500, { reason: 'источник закрыт администратором' });
+        return;
+      }
+      if (id.startsWith('slow')) {
+        for (let step = 1; step <= SLOW_STEPS && !CANCELLED.has(dest); step++) {
+          PROGRESS.set(dest, Math.round((SLOW_BYTES * step) / SLOW_STEPS));
+          await new Promise((resolve) => { setTimeout(resolve, SLOW_STEP_MS); });
+        }
+        PROGRESS.delete(dest);
+        if (CANCELLED.has(dest)) {
+          reply(res, 500, { reason: 'отменено' });
+          return;
+        }
+      }
       const relative = `${dest}.opus`;
       const full = path.join(LIBRARY_DIR, relative);
       fs.mkdirSync(path.dirname(full), { recursive: true });

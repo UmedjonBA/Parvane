@@ -1,4 +1,6 @@
-import { memo, useMemo, useRef } from '../../../lib/teact/teact';
+import {
+  memo, useMemo, useRef, useState,
+} from '../../../lib/teact/teact';
 
 import type { NotesIndex } from './notesModel';
 import type { PlannedItem } from './notesPlanned';
@@ -7,6 +9,7 @@ import type { NoteEntry } from './notesStore';
 import buildClassName from '../../../util/buildClassName';
 import { folderCaption, ROOT_FOLDER } from './notesFolders';
 import { listNoteLinks } from './notesLinksView';
+import { formatNoteEdited } from './notesList';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -26,6 +29,9 @@ type OwnProps = {
   // Ссылка из этой заметки на заметку с названием (новую либо существующую)
   onLink: (fromId: string, title: string) => void;
   onUnlink: (fromId: string, toTitle: string) => void;
+  // Лист телефона: под названием — «папка · N связей» (доска `XpNotes`); панель компьютера — «папка · изменена …»
+  // (доска `XdNotes`)
+  isSheet?: boolean;
 };
 
 const TITLE_MAX = 120;
@@ -34,9 +40,10 @@ const TITLE_MAX = 120;
 // ссылки отдельной строкой «Убрать связь», у ссылки внутри текста пометка «из текста», — и поле «Связать с
 // заметкой». Текст самой заметки стоит ниже (чтение и правка на месте — сверх макета)
 const GraphPanelLinks = ({
-  note, index, planned, onOpenInNotes, onPickTitle, onLink, onUnlink,
+  note, index, planned, onOpenInNotes, onPickTitle, onLink, onUnlink, isSheet,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
+  const [now] = useState(() => Date.now());
 
   const lang = useLang();
 
@@ -64,8 +71,10 @@ const GraphPanelLinks = ({
 
   return (
     <div className={styles.root} data-graph-panel-links={items.length}>
-      <div className={styles.sub}>
-        {`${folder} · ${lang('KnowledgeLinksCount', { count: items.length }, { pluralValue: items.length })}`}
+      <div className={styles.sub} data-graph-panel-sub>
+        {`${folder} · ${isSheet
+          ? lang('KnowledgeLinksCount', { count: items.length }, { pluralValue: items.length })
+          : lang('KnowledgeEdited', { when: formatNoteEdited(lang, note.updatedAt, now) })}`}
       </div>
       <button
         type="button"

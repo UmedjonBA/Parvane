@@ -4,7 +4,7 @@ import type { HealthMetricView } from './healthTypes';
 
 import {
   buildSleepSpan, buildSparkline, dayRelation, formatClock, formatDelta, formatDurationShort, formatValue,
-  fromLocalParts, orderMetrics, parseNumber, sleepBar, splitDuration, toLocalParts,
+  fromLocalParts, orderMetrics, parseNumber, sleepAxis, sleepAxisLabels, sleepBar, splitDuration, toLocalParts,
 } from './healthFormat';
 
 describe('Оформление значений «Здоровья»', () => {
@@ -35,11 +35,20 @@ describe('Оформление значений «Здоровья»', () => {
     expect(buildSparkline([], 100, 20)).toBe('');
     expect(buildSparkline([1, 3, 2], 102, 22)).toBe('2.0,20.0 51.0,2.0 100.0,11.0');
     expect(buildSparkline([5], 100, 20)).toBe('2.0,18.0');
-    // Лёг в 00:10, встал в 07:05 на шкале 20:00–12:00
+    // Лёг в 00:10, встал в 07:05 на шкале досок 22:00–08:00
     const bar = sleepBar(10, 425);
-    expect(bar.left).toBeCloseTo(250 / 960);
-    expect(bar.width).toBeCloseTo(415 / 960);
-    expect(sleepBar(1410, 420).left).toBeCloseTo(210 / 960);
+    expect(bar.left).toBeCloseTo(130 / 600);
+    expect(bar.width).toBeCloseTo(415 / 600);
+    expect(sleepBar(1410, 420).left).toBeCloseTo(90 / 600);
+  });
+
+  it('шкала режима расширяется под ночи и подписана через два часа', () => {
+    expect(sleepAxis([{ bedMin: 1410, wakeMin: 420 }])).toEqual({ start: 1320, span: 600 });
+    expect(sleepAxisLabels(sleepAxis([]))).toEqual(['22', '00', '02', '04', '06', '08']);
+    // Лёг в 21:10, встал в 08:50: шкала 20:00–10:00
+    const wide = sleepAxis([{ bedMin: 1270, wakeMin: 530 }, {}]);
+    expect(wide).toEqual({ start: 1200, span: 840 });
+    expect(sleepAxisLabels(wide)[0]).toBe('20');
   });
 
   it('день относительно сегодняшнего', () => {

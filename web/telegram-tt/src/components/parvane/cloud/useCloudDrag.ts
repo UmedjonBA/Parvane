@@ -23,6 +23,8 @@ type Options = {
 
 // Строки тащат с этим типом: зона загрузки файлов его не принимает
 const ROW_TYPE = 'application/x-parvane-cloud-rows';
+// Размер браузер даёт только при отпускании: зона ещё столько стоит с ним (доска `ZdMisc`: «3 файла · 48 МБ»)
+const DROPPED_SHOW_MS = 1500;
 
 /**
  * Перетаскивание в «Файлах» (доски `ZdMisc`, `XdFiles`), все события — на корне раздела. Файлы с компьютера:
@@ -35,8 +37,12 @@ export default function useCloudDrag({
 }: Options) {
   // Сколько файлов тащат над окном; `undefined` — не тащат
   const [uploadCount, setUploadCount] = useState<number>();
+  // Только что отпущенные файлы: сколько и сколько весят
+  const [dropped, setDropped] = useState<{ count: number; bytes: number }>();
+  const droppedTimerRef = useRef<number>();
   // Тащат строки: название папки под курсором, если на неё можно отпустить
-  const [rowDrag, setRowDrag] = useState<{ target?: string }>();
+  // `isNav` — цель в колонке мест слева («Перетащите на папку слева — «…»», доска `XdFiles`)
+  const [rowDrag, setRowDrag] = useState<{ target?: string; isNav?: boolean }>();
   const depthRef = useRef(0);
   const draggedRef = useRef<CloudDragEntry[]>();
   const overRef = useRef<HTMLElement>();
@@ -67,7 +73,10 @@ export default function useCloudDrag({
     };
     if (!canEdit(target.container)) return undefined;
     const plan = planCloudDrop(dragged, target, nodesOf);
-    return plan ? { element, plan, name: element.dataset.dropName || element.dataset.name } : undefined;
+    return plan ? {
+      element, plan, name: element.dataset.dropName || element.dataset.name,
+      isNav: Boolean(element.closest('[data-cloud-nav]')),
+    } : undefined;
   };
 
   const onDragStart = useLastCallback((e: React.DragEvent) => {
@@ -98,7 +107,9 @@ export default function useCloudDrag({
     }
     const drop = findDrop(e);
     markOver(drop?.element);
-    if (rowDrag?.target !== drop?.name) setRowDrag({ target: drop?.name });
+    if (rowDrag?.target !== drop?.name || rowDrag?.isNav !== drop?.isNav) {
+      setRowDrag({ target: drop?.name, isNav: drop?.isNav });
+    }
     if (!drop) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
@@ -126,11 +137,16 @@ export default function useCloudDrag({
     if (!canUpload || !hasFiles(e)) return;
     e.preventDefault();
     const files = Array.from(e.dataTransfer?.files || []);
-    if (files.length) onUpload(files);
+    if (!files.length) return;
+    setDropped({ count: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0) });
+    window.clearTimeout(droppedTimerRef.current);
+    droppedTimerRef.current = window.setTimeout(() => setDropped(undefined), DROPPED_SHOW_MS);
+    onUpload(files);
   });
 
   return {
     uploadCount,
+    dropped,
     rowDrag,
     handlers: {
       onDragStart, onDragEnd, onDragEnter, onDragOver, onDragLeave, onDrop,

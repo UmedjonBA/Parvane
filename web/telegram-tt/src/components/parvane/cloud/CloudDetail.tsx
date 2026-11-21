@@ -1,4 +1,6 @@
-import { memo, useEffect, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useLayoutEffect, useState,
+} from '../../../lib/teact/teact';
 
 import type { CloudLinkInfo } from '../../../api/parvane/cloudDrive';
 import type { CloudItemAction } from './CloudItem';
@@ -8,15 +10,16 @@ import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatFileSize } from '../../../util/textFormat';
 import { LINK_DEFAULT_TTL_DAYS, LINK_TTL_DAYS } from '../../../api/parvane/cloudLinks';
+import { formatCloudDayShort } from './cloudFormat';
 import { fileTypeLabel } from './cloudModel';
-import { createCloudLink, getCloudLinkProgress } from './cloudStore';
+import { createCloudLink, extendCloudLink, getCloudLinkProgress } from './cloudStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import { CLOUD_LINK_TTL_KEYS } from './CloudLinkBlock';
+import { CLOUD_LINK_TTL_KEYS, guessLinkTtl } from './CloudLinkBlock';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
@@ -32,8 +35,13 @@ type OwnProps = {
 };
 
 const COPIED_HIDE_MS = 2500;
+// Клавиши действий выбранной строки (`CloudItem`): подсказка при наведении показывает их (доска `ZdMisc`)
+const DETAIL_KEYS: Partial<Record<CloudItemAction, string>> = {
+  download: 'Control+S', rename: 'F2', delete: 'Delete',
+};
 
-// Панель выбранного файла на компьютере (доска `DeskFiles`): название и сведения, ссылка со сроком, действия
+// Панель выбранного файла на компьютере (доска `DeskFiles`): название и сведения, ссылка со сроком (чипы видны
+// всегда; у действующей ссылки выделен её срок, нажатие — новый срок от сегодня), действия
 const CloudDetail = ({
   container, node, link, canEdit, isFixed, onAction,
 }: OwnProps) => {
@@ -41,6 +49,16 @@ const CloudDetail = ({
   const progress = useDerivedState(getCloudLinkProgress);
   const [ttl, setTtl] = useState<number>(LINK_DEFAULT_TTL_DAYS);
   const [isCopied, markCopied, unmarkCopied] = useFlag();
+  const [isBusy, markBusy, unmarkBusy] = useFlag();
+
+  const isActive = link?.state === 'active';
+  const linkId = isActive ? link.id : undefined;
+  // У действующей ссылки чип — её срок; выставляется в кадре появления панели
+  useLayoutEffect(() => {
+    setTtl(isActive ? guessLinkTtl(link) : LINK_DEFAULT_TTL_DAYS);
+    // Срок пересчитывается при смене ссылки, не при каждом обновлении списка
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [linkId, node.id]);
 
   useEffect(() => {
     if (!isCopied) return undefined;
@@ -48,8 +66,13 @@ const CloudDetail = ({
     return () => clearTimeout(timer);
   }, [isCopied, unmarkCopied]);
 
-  const handleTtl = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setTtl(Number(e.currentTarget.dataset.ttl));
+  const handleTtl = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const days = Number(e.currentTarget.dataset.ttl);
+    setTtl(days);
+    if (!isActive) return;
+    markBusy();
+    await extendCloudLink(link.id, days);
+    unmarkBusy();
   });
 
   // Ссылки ещё нет — создаётся на выбранный срок и сразу копируется
@@ -65,15 +88,8 @@ const CloudDetail = ({
     onAction(e.currentTarget.dataset.detailAction as CloudItemAction, container, node);
   });
 
-  const dateText = node.mtime
-    ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '')
-    : '';
+  const dateText = node.mtime ? formatCloudDayShort(lang.code, node.mtime) : '';
   const facts = [fileTypeLabel(node.name).toLowerCase(), formatFileSize(lang, node.size), dateText].filter(Boolean);
-  const isActive = link?.state === 'active';
-  const termText = !isActive ? undefined
-    : link.expiresAt ? lang('ParvaneCloudLinkStateUntil', {
-      date: new Date(link.expiresAt * 1000).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }),
-    }) : lang('ParvaneCloudLinkStateForever');
 
   function renderButton(action: CloudItemAction, title: string, className?: string) {
     return (
@@ -81,6 +97,7 @@ const CloudDetail = ({
         type="button"
         className={buildClassName(kit.btn, styles.detailButton, className)}
         data-detail-action={action}
+        aria-keyshortcuts={DETAIL_KEYS[action]}
         onClick={handleAction}
       >
         {title}
@@ -97,24 +114,21 @@ const CloudDetail = ({
       {canEdit && (
         <div className={styles.detailCard}>
           <div className={styles.detailCaption}>{lang('ParvaneCloudLinkShort')}</div>
-          {isActive ? (
-            <div className={styles.detailNote}>{termText}</div>
-          ) : (
-            <div className={styles.detailChips} role="group" aria-label={lang('ParvaneCloudLinkTtl')}>
-              {LINK_TTL_DAYS.map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  className={buildClassName(kit.chip, ttl === days && kit.chipOn)}
-                  aria-pressed={ttl === days}
-                  data-ttl={days}
-                  onClick={handleTtl}
-                >
-                  {lang(CLOUD_LINK_TTL_KEYS[days])}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className={styles.detailChips} role="group" aria-label={lang('ParvaneCloudLinkTtl')}>
+            {LINK_TTL_DAYS.map((days) => (
+              <button
+                key={days}
+                type="button"
+                className={buildClassName(kit.chip, ttl === days && kit.chipOn)}
+                aria-pressed={ttl === days}
+                disabled={isBusy}
+                data-ttl={days}
+                onClick={handleTtl}
+              >
+                {lang(CLOUD_LINK_TTL_KEYS[days])}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className={buildClassName(kit.btn, styles.detailButton)}
@@ -132,15 +146,15 @@ const CloudDetail = ({
           )}
         </div>
       )}
+      {/* Порядок доски `DeskFiles`; «Переместить», «Доступ собеседникам», «История версий» — после её кнопок */}
       {renderButton('download', lang('ParvaneCloudDownload'), kit.btnAcc)}
-      {renderButton('open', lang('ParvaneCloudView'))}
       {renderButton('send', lang('ParvaneCloudSendToChat'))}
+      {canEdit && renderButton('rename', lang('ParvaneCloudRename'))}
+      {canEdit && !isFixed && renderButton('move', lang('ParvaneCloudMoveMenu'))}
       {renderButton('shareCopy', lang('ParvaneCloudShareCopy'))}
       {Boolean(node.versions?.length) && renderButton(
         'versions', lang('ParvaneCloudVersionsCount', { count: node.versions.length + 1 }),
       )}
-      {canEdit && renderButton('rename', lang('ParvaneCloudRename'))}
-      {canEdit && !isFixed && renderButton('move', lang('ParvaneCloudMove'))}
       <span className={styles.detailSpace} />
       {canEdit && !isFixed && renderButton('delete', lang('ParvaneCloudToTrash'), styles.chipDanger)}
       {canEdit && !isFixed && <div className={styles.detailNote}>{lang('ParvaneCloudTrashKeeps')}</div>}

@@ -7,8 +7,11 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
-  dismissRecoveryKeyDialog, openPlannerScreen, preparePage, reloadPage,
+  dismissRecoveryKeyDialog, openPlannerScreen, preparePage, reloadPage, waitPastMidnight,
 } from './e2e_web_helpers.mjs';
+
+// Сценарий считает «сегодня» один раз: прогон не должен переходить через полночь
+await waitPastMidnight();
 
 const PASSWORD = 'Parvane-planner-groups-1';
 const STEP_TIMEOUT_MS = 15000;
@@ -50,8 +53,8 @@ try {
 
   // Расписание без группы
   await openPlannerScreen(page, 'calendar');
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await sidePane.locator('[data-schedule-open]').click();
+  await planner.locator('[data-planner-tasks-open]').click();
+  await planner.locator('[data-planner-sections] [data-section="import"]').click();
   const importScreen = planner.locator('[data-planner-import]');
   await importScreen.locator('[data-schedule-input]').fill(SCHEDULE);
   await importScreen.locator('[data-schedule-add]').click();
@@ -155,15 +158,11 @@ try {
   // широкого экрана и ждёт уже снятую вкладку
   await page.locator('#FoldersSidebar').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await openList();
-  const chipTops = await groupBar.locator('[data-group]').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
-  assert.equal(new Set(chipTops.map(Math.round)).size, 1, `группы на телефоне одной строкой: ${chipTops}`);
-  const row = await groupBar.locator('[data-group]').first().evaluate((el) => {
-    const box = el.parentElement;
-    return { scroll: box.scrollWidth, client: box.clientWidth, overflow: getComputedStyle(box).overflowX };
-  });
-  assert(row.scroll > row.client && row.overflow === 'auto', `строка групп прокручивается: ${JSON.stringify(row)}`);
-  await groupBar.locator('[data-group-pick]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: телефон — группы одной строкой со свайпом');
+  // На телефоне над «Списком» групп нет (доска `RpPlan`): группы — на экране «Задачи»; внизу подсказка о 30 днях
+  await agenda.locator('[data-agenda-hint]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Раскладка телефона перерисовывается после смены размера: панель уходит не в тот же кадр
+  await groupBar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — «Список» без панели групп, с подсказкой о 30 днях');
   // Длинное название на «Сегодня» не уходит за край блока
   await openPlannerScreen(page, 'today');
   const longBlock = planner.locator('button[data-kind="event"]').filter({ hasText: 'Очень длинное название' }).first();

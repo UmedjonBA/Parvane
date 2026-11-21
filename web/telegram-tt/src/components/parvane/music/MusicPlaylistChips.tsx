@@ -3,6 +3,9 @@ import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import type { MusicTrack } from '../../../api/parvane/musicApi';
 
 import buildClassName from '../../../util/buildClassName';
+import {
+  addTracksToShared, canEditTracks, getSharedDetails, getSharedPlaylists, refreshSharedPlaylists, toTrackInput,
+} from './shared/musicShared';
 import { addTracksToPlaylist, getPlaylists, refreshPlaylists } from './musicPlaylists';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -23,17 +26,22 @@ type OwnProps = {
 const MusicPlaylistChips = ({ track, onNew, onDone }: OwnProps) => {
   const lang = useLang();
   const playlists = useDerivedState(getPlaylists);
+  // Общие плейлисты, где можно добавлять (MUSIC-3)
+  const shared = useDerivedState(getSharedPlaylists).filter((playlist) => canEditTracks(playlist.myRole));
+  const sharedDetails = useDerivedState(getSharedDetails);
   const [isAdding, setIsAdding] = useState(false);
 
   useEffect(() => {
     void refreshPlaylists();
+    void refreshSharedPlaylists();
   }, []);
 
   const handlePick = useLastCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
-    const { playlist } = e.currentTarget.dataset;
+    const { playlist, shared: sharedId } = e.currentTarget.dataset;
     setIsAdding(true);
     try {
-      await addTracksToPlaylist(playlist!, [track]);
+      if (sharedId) await addTracksToShared(sharedId, [toTrackInput(track)]);
+      else await addTracksToPlaylist(playlist!, [track]);
     } finally {
       setIsAdding(false);
     }
@@ -54,6 +62,22 @@ const MusicPlaylistChips = ({ track, onNew, onDone }: OwnProps) => {
               aria-pressed={hasTrack}
               disabled={isAdding || hasTrack}
               data-playlist={playlist.id}
+              onClick={handlePick}
+            >
+              {playlist.name}
+            </button>
+          );
+        })}
+        {shared.map((playlist) => {
+          const hasTrack = Boolean(sharedDetails[playlist.id]?.items.some((item) => item.trackId === track.id));
+          return (
+            <button
+              key={playlist.id}
+              type="button"
+              className={buildClassName(kit.chip, hasTrack && kit.chipOn)}
+              aria-pressed={hasTrack}
+              disabled={isAdding || hasTrack}
+              data-shared={playlist.id}
               onClick={handlePick}
             >
               {playlist.name}

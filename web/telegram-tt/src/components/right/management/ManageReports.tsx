@@ -7,7 +7,9 @@ import type { RegularLangKey } from '../../../types/language';
 import { getHasAdminRight, getUserFullName } from '../../../global/helpers';
 import { selectChat, selectUser } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import { formatHumanDate, formatTime, isToday } from '../../../util/dates/oldDateFormat';
+import {
+  formatDateToString, formatHumanDate, formatTime, isToday,
+} from '../../../util/dates/oldDateFormat';
 import { callApi } from '../../../api/gramjs';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -89,6 +91,13 @@ const ManageReports = ({
     return isToday(new Date(ms)) ? formatTime(oldLang, ms) : formatHumanDate(oldLang, ms, true, false, true);
   }
 
+  // «участник с 16 ноября» (доска `RpChat`): год — только у прошлых лет
+  function formatMemberSince(dateSecs: number) {
+    const ms = dateSecs * 1000;
+    const isThisYear = new Date(ms).getFullYear() === new Date().getFullYear();
+    return lang('ParvaneReportsMemberSince', { date: formatDateToString(ms, oldLang.code, isThisYear, 'long') });
+  }
+
   function renderItem(item: ParvaneReportItem) {
     const author = selectUser(getGlobal(), item.authorId);
     const isBusy = busyUuid === item.uuid;
@@ -112,8 +121,11 @@ const ManageReports = ({
           {item.text}
         </button>
         <div className={buildClassName(kit.small, kit.muted)} data-report-meta>
-          {[lang('ParvaneReportsCount', { count: item.count }, { pluralValue: item.count }), formatWhen(item.lastDate)]
-            .join(' · ')}
+          {[
+            lang('ParvaneReportsCount', { count: item.count }, { pluralValue: item.count }),
+            formatWhen(item.lastDate),
+            item.memberSince ? formatMemberSince(item.memberSince) : undefined,
+          ].filter(Boolean).join(' · ')}
         </div>
         {item.comments.map((comment) => (
           <div key={`${comment.reporterId}:${comment.text}`} className={styles.comment} dir="auto">

@@ -317,6 +317,57 @@ service IdentityService {
     };
   }
 
+  // ── ключ безопасности (правило SECKEY-1, spec 041): аппаратный ключ WebAuthn — второй фактор входа ──
+  // Вызов для регистрации нового ключа (действует 5 минут, один на сессию).
+  rpc SecKeyChallenge(SecKeyChallengeRequest) returns (SecKeyChallengeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.seckey.challenge"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc SecKeyAdd(SecKeyAddRequest) returns (SecKeyAddResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.seckey.add"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc SecKeyList(SecKeyListRequest) returns (SecKeyListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.seckey.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc SecKeyRemove(SecKeyRemoveRequest) returns (SecKeyRemoveResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.seckey.remove"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+  rpc SecKeySetRequired(SecKeySetRequiredRequest) returns (SecKeySetRequiredResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.seckey.set_required"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
+
   // ── линковка (LINK-1 v2) ──
   rpc LinkOffer(LinkOfferRequest) returns (LinkOfferResponse) {
     option (parvane.core.v2.method) = {
@@ -483,6 +534,12 @@ message SessionIssueRequest {
   // Аккаунт ждёт удаления (spec 027): вход с этим флагом отменяет удаление; без него ответ несёт только
   // `deletion_at_ms` (сохранённый пароль другого устройства не отменяет удаление сам).
   bool cancel_deletion = 9;
+  // SECKEY-1: ответ ключа безопасности на вызов из `SessionIssueResponse.seckey_challenge` (вход нового устройства на
+  // аккаунт, где требуется ключ).
+  SecKeyAssertion seckey = 10;
+  // SECKEY-1: ключ безопасности потерян — вход нового устройства ключом восстановления вместо ключа безопасности
+  // (сервер сверяет его с копией корня, как в RECOVER-2).
+  string recovery_key = 11 [(parvane.core.v2.max_len) = 128];
 }
 message SessionIssueResponse {
   string token = 1 [(parvane.core.v2.max_len) = 4096];
@@ -507,6 +564,31 @@ message SessionIssueResponse {
   uint32 attempts_left = 10;
   // Вход временно закрыт после серии неудач: через сколько миллисекунд можно повторить (0 — не закрыт).
   uint32 locked_ms = 11;
+  // SECKEY-1: пароль верен, но новому устройству нужен ключ безопасности — токена нет. Повторить вход с
+  // `SessionIssueRequest.seckey` (подпись этого вызова) либо с `recovery_key`. `trust_secret` в ответе сохраняется.
+  bool seckey_required = 12;
+  bytes seckey_challenge = 13 [(parvane.core.v2.max_len) = 64];
+  // Ключи аккаунта (credential id) — `allowCredentials` для `navigator.credentials.get`.
+  repeated bytes seckey_ids = 14 [
+    (parvane.core.v2.max_items) = 16,
+    (parvane.core.v2.max_len) = 1024
+  ];
+  string seckey_rp_id = 15 [(parvane.core.v2.max_len) = 255];
+  // Ответ ключа был, но не принят (подпись, источник, счётчик, просроченный вызов) — новый вызов в этом ответе.
+  bool seckey_rejected = 16;
+  // Ключ восстановления был, но не подошёл.
+  bool recovery_key_wrong = 17;
+  // Вход ключом восстановления вместо ключа безопасности возможен (у аккаунта есть копия корня на сервере).
+  bool seckey_recovery = 18;
+}
+
+// SECKEY-1: ответ аутентификатора WebAuthn (`AuthenticatorAssertionResponse`) — как отдал браузер.
+message SecKeyAssertion {
+  bytes credential_id = 1 [(parvane.core.v2.max_len) = 1024];
+  bytes client_data_json = 2 [(parvane.core.v2.max_len) = 4096];
+  bytes authenticator_data = 3 [(parvane.core.v2.max_len) = 4096];
+  // ES256 — DER, Ed25519 — 64 байта.
+  bytes signature = 4 [(parvane.core.v2.max_len) = 256];
 }
 
 // Продление: токен этого же устройства (подпись сервера обязательна, срок — нет,
@@ -863,6 +945,59 @@ message AccountChangePasswordRequest {
   string new_password = 2 [(parvane.core.v2.max_len) = 1024];
 }
 message AccountChangePasswordResponse {}
+
+// ── ключ безопасности (SECKEY-1) ──
+// Заводят и снимают ключи только устройства журнала (действующие); добавление, удаление и выключатель — со
+// свежим паролем. Первый ключ включает «Требовать ключ при входе»; ключ нельзя добавить, пока у аккаунта нет
+// копии корня на сервере (иначе потеря ключа запирала бы вход новых устройств).
+message SecKeyChallengeRequest {}
+message SecKeyChallengeResponse {
+  bytes challenge = 1 [(parvane.core.v2.max_len) = 64];
+  // rpId WebAuthn сервера (`PARVANE_WEBAUTHN_RP_ID`, по умолчанию домен сервера).
+  string rp_id = 2 [(parvane.core.v2.max_len) = 255];
+  // `user.id` для `navigator.credentials.create` (непрозрачный, из адреса аккаунта).
+  bytes user_handle = 3 [(parvane.core.v2.max_len) = 64];
+  // Уже заведённые ключи — `excludeCredentials`.
+  repeated bytes exclude_ids = 4 [
+    (parvane.core.v2.max_items) = 16,
+    (parvane.core.v2.max_len) = 1024
+  ];
+}
+// Ответ `navigator.credentials.create` (attestation «none»): ключ и credential id сервер берёт из
+// `authenticator_data` (attested credential data), вызов и источник — из `client_data_json`.
+message SecKeyAddRequest {
+  string name = 1 [(parvane.core.v2.max_len) = 64];
+  bytes client_data_json = 2 [(parvane.core.v2.max_len) = 4096];
+  bytes authenticator_data = 3 [(parvane.core.v2.max_len) = 4096];
+}
+message SecKeyInfo {
+  bytes credential_id = 1 [(parvane.core.v2.max_len) = 1024];
+  string name = 2 [(parvane.core.v2.max_len) = 64];
+  int64 created_ms = 3;
+  // 0 — ещё не использовался для входа.
+  int64 last_used_ms = 4;
+  // COSE: -7 (ES256) | -8 (EdDSA).
+  int32 alg = 5;
+}
+message SecKeyAddResponse {
+  SecKeyInfo key = 1;
+}
+message SecKeyListRequest {}
+message SecKeyListResponse {
+  repeated SecKeyInfo keys = 1 [(parvane.core.v2.max_items) = 16];
+  // «Требовать ключ при входе» (действует, только пока есть хоть один ключ).
+  bool required = 2;
+  // У аккаунта есть копия корня на сервере — можно добавить ключ (вход без него — ключом восстановления).
+  bool recovery_ready = 3;
+}
+message SecKeyRemoveRequest {
+  bytes credential_id = 1 [(parvane.core.v2.max_len) = 1024];
+}
+message SecKeyRemoveResponse {}
+message SecKeySetRequiredRequest {
+  bool required = 1;
+}
+message SecKeySetRequiredResponse {}
 
 message AccountDeleteRequest {}
 message AccountDeleteResponse {

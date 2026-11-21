@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildSharedMeta, buildSharedText, buildShareNoteText, buildShareNoteTitle, getShareDestinations, parseSharedMeta,
-  readShareForm,
+  buildSharedMeta, buildSharedText, buildShareNoteText, buildShareNoteTitle, getShareDestinations, isSharedAudio,
+  parseSharedMeta, readShareForm,
 } from './shareTarget';
 
 const NOW = 1_800_000_000_000;
@@ -41,9 +41,17 @@ describe('«Поделиться в Parvane»', () => {
 
   it('куда: «Файлы» — только с файлами, модули — только включённые', () => {
     const allOn = () => true;
-    expect(getShareDestinations(true, allOn)).toEqual(['chat', 'files', 'note']);
-    expect(getShareDestinations(false, allOn)).toEqual(['chat', 'note']);
-    expect(getShareDestinations(true, (id) => id !== 'files' && id !== 'notes')).toEqual(['chat']);
+    const pdf = [{ name: 'report.pdf', type: 'application/pdf' }];
+    const audio = [{ name: 'Harbor.FLAC', type: '' }];
+    expect(getShareDestinations(pdf, allOn)).toEqual(['chat', 'files', 'note']);
+    expect(getShareDestinations([], allOn)).toEqual(['chat', 'note']);
+    expect(getShareDestinations(pdf, (id) => id !== 'files' && id !== 'notes')).toEqual(['chat']);
+    // Аудио — в «Музыку», только когда сервер принимает свои файлы и модуль включён
+    expect(getShareDestinations(audio, allOn, true)).toEqual(['chat', 'files', 'note', 'music']);
+    expect(getShareDestinations(audio, allOn)).toEqual(['chat', 'files', 'note']);
+    expect(getShareDestinations(pdf, allOn, true)).toEqual(['chat', 'files', 'note']);
+    expect(getShareDestinations(audio, (id) => id !== 'music', true)).toEqual(['chat', 'files', 'note']);
+    expect(isSharedAudio({ name: 'x', type: 'audio/mpeg' })).toBe(true);
   });
 
   it('заметка: название из заголовка, текста или имени файла; файлы вложениями', () => {

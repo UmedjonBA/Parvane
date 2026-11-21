@@ -6,11 +6,13 @@ import {
 import type { CloudFileKind } from '../cloud/cloudModel';
 
 import buildClassName from '../../../util/buildClassName';
+import { formatMediaDuration } from '../../../util/dates/oldDateFormat';
 import { fileTypeLabel } from '../cloud/cloudModel';
 import { formatCardSize } from '../notes/notesCanvasFiles';
 import { CANVAS_IMAGE_MAX_BYTES, getCanvasImageCache } from '../notes/notesCanvasImages';
 
 import useAppLayout from '../../../hooks/useAppLayout';
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -29,7 +31,13 @@ type OwnProps = {
   cacheKey?: string;
   load?: () => Promise<Blob | undefined>;
   loadThumb?: () => Promise<string | undefined>;
+  // Файл личного диска (заметка): подпись «файл с диска · размер»
+  isFromDrive?: boolean;
   onDownload?: NoneToVoidFunction;
+  // Картинка открывается на весь экран
+  onOpen?: NoneToVoidFunction;
+  // Файла нет: выбрать другой файл диска на его место
+  onRepick?: NoneToVoidFunction;
 };
 
 // Столько встроенный файл, ушедший с экрана, ещё держит картинку
@@ -37,11 +45,16 @@ const OFFSCREEN_KEEP_MS = 4000;
 // Видео и аудио читаются целиком в память: больше этого — только скачать
 const PLAYER_MAX_BYTES_DESKTOP = 256 * 1024 * 1024;
 const PLAYER_MAX_BYTES_MOBILE = 64 * 1024 * 1024;
+// Видео не больше этого читается заранее, чтобы показать длительность на кадре (доска `ZpNotesX`); крупнее —
+// длительность видна после первого воспроизведения
+const DURATION_PROBE_MAX_BYTES = 16 * 1024 * 1024;
 
 // Встроенный файл заметки и статьи (этап 6 плана 15 окт 2026): картинка — сама (миниатюра — пока читается),
-// видео и аудио — проигрыватель по нажатию (до того — миниатюра и кнопка), прочее — карточка с «Скачать»
+// видео и аудио — проигрыватель по нажатию (до того — миниатюра, длительность и кнопка), прочее — карточка с
+// «Скачать». Картинка по нажатию открывается крупно; на месте пропавшего файла — «Выбрать заново»
 const MediaEmbed = ({
-  name, alt, isMissing, kind = 'other', size = 0, cacheKey, load, loadThumb, onDownload,
+  name, alt, isMissing, kind = 'other', size = 0, cacheKey, load, loadThumb, isFromDrive, onDownload, onOpen,
+  onRepick,
 }: OwnProps) => {
   const lang = useLang();
   const { isMobile } = useAppLayout();
@@ -51,6 +64,10 @@ const MediaEmbed = ({
   const [imageUrl, setImageUrl] = useState<string>();
   const [playerUrl, setPlayerUrl] = useState<string>();
   const [state, setState] = useState<'idle' | 'loading' | 'failed'>('idle');
+  // Видео, прочитанное ради длительности: по нажатию проигрывается без повторного чтения
+  const probeUrlRef = useRef<string>();
+  const [isProbed, markProbed] = useFlag();
+  const [duration, setDuration] = useState<number>();
   const isPlayable = kind === 'video' || kind === 'audio';
   const isTooLarge = isPlayable && size > (isMobile ? PLAYER_MAX_BYTES_MOBILE : PLAYER_MAX_BYTES_DESKTOP);
   const isImage = kind === 'photo' && size <= CANVAS_IMAGE_MAX_BYTES;
@@ -107,7 +124,43 @@ const MediaEmbed = ({
     if (playerUrl) URL.revokeObjectURL(playerUrl);
   }, [playerUrl]);
 
+  useEffect(() => () => {
+    if (probeUrlRef.current) URL.revokeObjectURL(probeUrlRef.current);
+  }, []);
+
+  // Длительность небольшого видео — из его метаданных, до воспроизведения
+  useEffect(() => {
+    if (!isOnScreen || kind !== 'video' || !load || isMissing || size > DURATION_PROBE_MAX_BYTES
+      || isProbed || playerUrl) return undefined;
+    let isActual = true;
+    void load().then((blob) => {
+      if (!isActual || !blob) return;
+      markProbed();
+      const url = URL.createObjectURL(blob);
+      const probe = document.createElement('video');
+      probe.preload = 'metadata';
+      probe.onloadedmetadata = () => {
+        if (Number.isFinite(probe.duration)) setDuration(probe.duration);
+      };
+      probe.src = url;
+      probeUrlRef.current = url;
+    }).catch(() => undefined);
+    return () => {
+      isActual = false;
+    };
+  }, [isOnScreen, kind, load, isMissing, size, isProbed, playerUrl]);
+
+  const handleMetadata = useLastCallback((e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const value = e.currentTarget.duration;
+    if (Number.isFinite(value)) setDuration(value);
+  });
+
   const handlePlay = useLastCallback(async () => {
+    if (probeUrlRef.current) {
+      setPlayerUrl(probeUrlRef.current);
+      probeUrlRef.current = undefined;
+      return;
+    }
     if (!load || state === 'loading') return;
     setState('loading');
     const blob = await load().catch(() => undefined);
@@ -125,9 +178,18 @@ const MediaEmbed = ({
     if (isMissing) {
       return ['missing', (
         <div className={buildClassName(styles.card, styles.missing)}>
-          <PvIcon name="x" />
-          <span className={styles.cardName}>{name}</span>
-          <span className={styles.cardMeta}>{lang('KnowledgeCanvasFileMissing')}</span>
+          <span className={styles.cardIcon}>
+            <PvIcon name="file" />
+          </span>
+          <span className={styles.cardText}>
+            <span className={styles.cardName}>{name}</span>
+            <span className={styles.cardMeta}>{lang('KnowledgeEmbedMissing')}</span>
+          </span>
+          {onRepick && (
+            <button type="button" className={styles.cardButton} data-embed-repick onClick={onRepick}>
+              {lang('KnowledgeEmbedRepick')}
+            </button>
+          )}
         </div>
       )];
     }
@@ -135,7 +197,18 @@ const MediaEmbed = ({
       const url = imageUrl || thumbUrl;
       return [imageUrl ? 'image' : url ? 'thumb' : 'loading', (
         <figure className={styles.figure}>
-          {url ? <img className={styles.image} src={url} alt={caption || name} />
+          {url && onOpen ? (
+            <button
+              type="button"
+              className={styles.imageButton}
+              aria-label={`${lang('KnowledgeEmbedOpenImage')}: ${name}`}
+              title={lang('KnowledgeEmbedOpenImage')}
+              data-embed-open
+              onClick={onOpen}
+            >
+              <img className={styles.image} src={url} alt={caption || name} />
+            </button>
+          ) : url ? <img className={styles.image} src={url} alt={caption || name} />
             : <span className={styles.placeholder} />}
           {caption && <figcaption className={styles.caption}>{caption}</figcaption>}
         </figure>
@@ -145,7 +218,15 @@ const MediaEmbed = ({
       return ['player', (
         <figure className={styles.figure}>
           {kind === 'video' ? (
-            <video className={styles.video} src={playerUrl} poster={thumbUrl} controls autoPlay playsInline />
+            <video
+              className={styles.video}
+              src={playerUrl}
+              poster={thumbUrl}
+              controls
+              autoPlay
+              playsInline
+              onLoadedMetadata={handleMetadata}
+            />
           ) : (
             <audio className={styles.audio} src={playerUrl} controls autoPlay />
           )}
@@ -167,6 +248,9 @@ const MediaEmbed = ({
             <span className={styles.playButton}>
               <PvIcon name={state === 'loading' ? 'refresh' : 'play'} />
             </span>
+            {kind === 'video' && duration !== undefined && (
+              <span className={styles.duration} data-embed-duration>{formatMediaDuration(duration)}</span>
+            )}
             {kind === 'audio' && <span className={styles.cardName}>{name}</span>}
           </button>
           <figcaption className={styles.caption}>
@@ -181,16 +265,21 @@ const MediaEmbed = ({
           <PvIcon name="file" />
           <span className={styles.cardType}>{fileTypeLabel(name)}</span>
         </span>
-        <span className={styles.cardName}>{name}</span>
-        <span className={styles.cardMeta}>{formatCardSize(size)}</span>
+        <span className={styles.cardText}>
+          <span className={styles.cardName}>{name}</span>
+          <span className={styles.cardMeta} data-embed-meta>
+            {isFromDrive ? lang('KnowledgeEmbedFromDrive', { size: formatCardSize(size) }) : formatCardSize(size)}
+          </span>
+        </span>
         {onDownload && (
           <button
             type="button"
-            className={styles.cardButton}
+            className={buildClassName(styles.cardButton, styles.cardButtonAccent)}
             aria-label={`${lang('KnowledgeEmbedDownload')}: ${name}`}
+            data-embed-download
             onClick={onDownload}
           >
-            <PvIcon name="download" isSmall />
+            {lang('KnowledgeEmbedDownload')}
           </button>
         )}
       </div>

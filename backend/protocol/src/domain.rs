@@ -1079,6 +1079,8 @@ pub mod health_day;
 pub mod health_recall;
 pub mod health_form;
 pub mod health_view;
+/// Расчёты подробных экранов «Здоровья»: средние, режим сна, темп, дни с целью (HEALTH-3 п. 14).
+pub mod health_stats;
 /// Плейлисты «Музыки» `parvane.music.v1` (spec 039, этап C).
 pub mod music;
 pub mod music_json;

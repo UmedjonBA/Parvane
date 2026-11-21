@@ -4,9 +4,9 @@
 //!
 //! Состояние:
 //! `{name, count, nodes:[{id, kind:"folder"|"file", parent|null, name, size, mime, mtime,
-//!   trashed, trashTop, trashedAt, blob|null, thumb|null, from, versions:[{blob, thumb|null, mtime, size, device}]}],
+//!   trashed, trashTop, trashedAt, blob|null, thumb|null, from, device, versions:[{blob, thumb|null, mtime, size, device}]}],
 //!   purgedBlobs:[{fileId, uploader}]}` (`versions` — прежние версии от новой к старой, CLOUD-3; `from` — адрес
-//!   приславшего файл копией, пусто — свой; `purgedBlobs` — блобы стёртых узлов и вытесненных версий),
+//!   приславшего файл копией, пусто — свой; `device` — устройство, записавшее текущее содержимое файла; `purgedBlobs` — блобы стёртых узлов и вытесненных версий),
 //! где `blob = {fileId, key, nonce, capability, size, chunks, mime, sha256, uploader}`,
 //! `thumb = {fileId, nonce, capability, width, height}`.
 //! Правки: `{ops:[{op:"create", id, kind, parent|null, name, blob?, thumb?, mtime?, from?, versions?} |
@@ -62,6 +62,7 @@ pub fn state_json(state: &CloudState) -> String {
                 "blob": n.blob.as_ref().map(blob_json),
                 "thumb": n.thumb.as_ref().map(thumb_json),
                 "from": n.from,
+                "device": n.device,
                 "versions": n.versions.iter().map(|v| json!({
                     "blob": blob_json(&v.blob), "thumb": v.thumb.as_ref().map(thumb_json), "mtime": v.mtime_ms,
                     "size": v.blob.size, "device": v.device,
