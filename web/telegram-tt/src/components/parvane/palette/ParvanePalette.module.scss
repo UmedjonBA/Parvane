@@ -137,13 +137,16 @@
   flex-direction: column;
 }
 
+// Подпись группы — прописными, как `.sec` макета (доска `DeskOverlays`)
 .caption {
   margin: 0;
   padding: 0.625rem 1rem 0.25rem;
 
-  font-size: var(--pv-font-size-small);
-  font-weight: var(--font-weight-medium);
+  font-size: var(--pv-font-size-caption);
+  font-weight: var(--font-weight-semibold);
   color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 // Строка: значок, название и подпись в одну линию, справа — клавиша (компьютер); на телефоне — две строки
@@ -171,10 +174,29 @@
     outline-offset: -2px;
   }
 
+  // Телефон (доска `XpStart`): строки полосой панели с линиями, подписи групп и подсказка — на фоне экрана
   .rootPhone & {
-    min-height: 3.5rem;
+    min-height: 3.25rem;
     padding-block: 0.375rem;
+    border-bottom: 1px solid var(--pv-line);
+    background: var(--pv-panel);
   }
+}
+
+.rootPhone .list {
+  background: var(--pv-bg);
+}
+
+.rootPhone .group {
+  border-top: 1px solid var(--pv-line);
+
+  &:first-child {
+    border-top: 0;
+  }
+}
+
+.rootPhone .caption {
+  padding: 0.875rem 1rem 0.375rem;
 }
 
 .rowSel {
@@ -246,6 +268,7 @@
 
 .kbdBare {
   font-family: inherit;
+  font-size: inherit;
   color: var(--pv-fg);
 }
 
@@ -276,6 +299,7 @@
   font-family: var(--font-family-monospace);
   font-size: 0.75rem;
   color: var(--pv-muted);
+  white-space: nowrap;
 }
 
 .footerGrow {

@@ -153,6 +153,9 @@
   }
 
   @media (max-width: 600px) {
+    // Шапка телефона — 56 px, как у остальных модулей (`pv.css .hd`)
+    height: 3.5rem;
+    min-height: 3.5rem;
     padding-inline: 1rem 0.375rem;
 
     .left-header-title {

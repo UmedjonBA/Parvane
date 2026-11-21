@@ -10,8 +10,10 @@ import {
   LOGIN_TIMEOUT_MS,
   openHealthModule,
   openPlannerScreen,
+  openSavedMessages,
   preparePage,
   reloadPage,
+  sendText,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-gallery-e2e-1';
@@ -378,8 +380,74 @@ async function galleryProfile() {
   await page.context().close();
 }
 
+// ── Вход и регистрация: доски PhAuth, XpAuth, ZpAuthX, DkAuth, RdAuth, ZdAuthX — экраны до входа, без аккаунта ──
+async function galleryAuth() {
+  for (const [tag, size] of [['desk', DESK], ['phone', PHONE]]) {
+    const context = await browser.newContext({ viewport: size, colorScheme: 'light' });
+    await context.addInitScript((gatewayUrl) => {
+      localStorage.setItem('parvane:gateway', gatewayUrl);
+      localStorage.setItem('parvane:language-system', '1');
+      Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
+      Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+    }, process.env.PARVANE_E2E_GATEWAY_URL);
+    const page = await context.newPage();
+    await page.goto(process.env.PARVANE_E2E_BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-auth-submit]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await step(page, `auth-${tag}-login`, async () => undefined);
+    await step(page, `auth-${tag}-register`, async () => {
+      await page.locator('[data-auth-register]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    });
+    await context.close();
+  }
+}
+
+// ── Оболочка и чаты: доски Main, Ribbon, PlusModes, XpStart, DeskChats, Desktop, DeskOverlays, ZdNav ──
+async function galleryShell() {
+  const { page } = await openSession('shell');
+  await openSavedMessages(page);
+  await sendText(page, 'Пришли конфиг, гляну вечером');
+  await toRussian(page);
+  // Компьютер: список чатов без открытого чата, общий поиск, окно горячих клавиш
+  await step(page, 'shell-desk-chats', async () => undefined);
+  await step(page, 'shell-desk-palette', async () => {
+    await page.keyboard.press('Control+k');
+    await page.locator('[data-palette]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-palette] input').first().fill('план');
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'shell-desk-hotkeys', async () => {
+    await page.keyboard.press('Control+/');
+    await page.waitForTimeout(600);
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'shell-desk-plus', async () => {
+    await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+
+  // Телефон: лента, «+», общий поиск
+  await resize(page, PHONE);
+  // На телефоне открытый чат закрывает список — к списку стрелкой чата
+  await page.locator('#MiddleColumn .MiddleHeader button[aria-label="Назад"]:visible').first()
+    .click({ timeout: 5000 }).catch(() => undefined);
+  await page.locator('#LeftMainHeader #telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => undefined);
+  await step(page, 'Main-01', async () => undefined);
+  await step(page, 'PlusModes-01', async () => {
+    await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: 5000 }).catch(() => undefined);
+  await step(page, 'XpStart-01', async () => {
+    await page.locator('#LeftMainHeader #telegram-search-input').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-palette] input').first().fill('план');
+  });
+  await page.context().close();
+}
+
 try {
   if (wants('health')) await galleryHealth();
+  if (wants('shell')) await galleryShell();
+  if (wants('auth')) await galleryAuth();
   if (wants('profile')) await galleryProfile();
   if (wants('files')) await galleryFiles();
   if (wants('notes')) await galleryNotes();
