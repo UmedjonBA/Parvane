@@ -29,7 +29,9 @@ import styles from './GroupInfo.module.scss';
 
 type OwnProps = {
   chatId: string;
-  onOpenMedia: NoneToVoidFunction;
+  // Только «Покинуть группу»: на доске `ZpChat2` кнопка стоит после участников, которых рисует панель
+  isLeaveOnly?: boolean;
+  onOpenMedia?: NoneToVoidFunction;
 };
 
 type StateProps = {
@@ -52,7 +54,7 @@ const callParvane = callApi as unknown as (method: string, args: unknown) => Pro
 // Сведения о группе и канале по доске `ZpChat2` («Linux-чат · группа · 214 участников»): уведомления, тип, имя на
 // сервере, описание и ссылка строками; общее в группе; «Покинуть». Участники и медиа — вкладки профиля ниже
 const GroupInfo = ({
-  chatId, chat, about, inviteLink, isMuted, canOpenType, canInvite, onOpenMedia,
+  chatId, chat, about, inviteLink, isMuted, canOpenType, canInvite, isLeaveOnly, onOpenMedia,
 }: OwnProps & StateProps) => {
   const {
     updateChatMutedState, requestNextManagementScreen, showNotification, openMediaViewer, loadMoreProfilePhotos,
@@ -112,6 +114,18 @@ const GroupInfo = ({
   function copyLink() {
     copyTextToClipboard(link!);
     showNotification({ message: lang('ParvaneGroupInfoLinkCopied') });
+  }
+
+  if (isLeaveOnly) {
+    if (chat.isNotJoined) return undefined;
+    return (
+      <div className={styles.actions}>
+        <button type="button" className={styles.leave} onClick={openLeave} data-group-leave>
+          {lang(isChannel ? 'ParvaneChannelLeave' : 'ParvaneGroupLeave')}
+        </button>
+        <DeleteChatModal isOpen={isLeaveOpen} chat={chat} onClose={closeLeave} />
+      </div>
+    );
   }
 
   return (
@@ -191,14 +205,6 @@ const GroupInfo = ({
         </button>
       </div>
 
-      {!chat.isNotJoined && (
-        <div className={styles.actions}>
-          <button type="button" className={styles.leave} onClick={openLeave} data-group-leave>
-            {lang(isChannel ? 'ParvaneChannelLeave' : 'ParvaneGroupLeave')}
-          </button>
-        </div>
-      )}
-      <DeleteChatModal isOpen={isLeaveOpen} chat={chat} onClose={closeLeave} />
     </div>
   );
 };

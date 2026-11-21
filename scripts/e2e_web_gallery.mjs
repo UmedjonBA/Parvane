@@ -506,9 +506,26 @@ async function galleryChat() {
     await header.click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
-  // Телефон
+  // Телефон: профиль собеседника (доска `RpChat`) и сведения группы (доска `ZpChat2`) — экранами поверх чата
   await resize(page, PHONE);
-  await step(page, 'RpChat-01', async () => { await header.click({ timeout: STEP_TIMEOUT_MS }); });
+  const phoneInfo = async (name, title) => {
+    await step(page, name, async () => {
+      const row = page.locator('.chat-list .ListItem').filter({ hasText: title }).first();
+      // К списку чатов: закрыть правую панель и открытый чат, пока строка чата не видна
+      for (let attempt = 0; attempt < 4 && !(await row.isVisible().catch(() => false)); attempt++) {
+        await page.locator('#RightColumn .close-button:visible, #MiddleColumn .MiddleHeader .back-button button:visible')
+          .first().click({ timeout: 2000 }).catch(() => undefined);
+        await page.waitForTimeout(600);
+      }
+      await row.click({ timeout: STEP_TIMEOUT_MS });
+      await page.locator('#MiddleColumn .MiddleHeader .ChatInfo:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+      await page.waitForTimeout(800);
+    });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+  };
+  await phoneInfo('RpChat-02', peer.split('@')[0]);
+  await phoneInfo('ZpChat2-03', 'Linux-чат');
   await page.context().close();
   await bob.page.context().close();
 }

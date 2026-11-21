@@ -1400,6 +1400,7 @@ const Profile = ({
         <GroupInfo chatId={profileId} onOpenMedia={handleOpenMedia} />
       )}
       {!noProfileInfo && !isSavedMessages && isGroupProfile && hasMembersTab && renderGroupMembers()}
+      {!noProfileInfo && !isSavedMessages && isGroupProfile && <GroupInfo chatId={profileId} isLeaveOnly />}
       {!noProfileInfo && !isSavedMessages && isPeerProfile && (
         <PeerInfo userId={profileId} isActive={isActive} onOpenMedia={handleOpenMedia} />
       )}

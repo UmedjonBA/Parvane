@@ -353,9 +353,12 @@ try {
   const bobOpenProfile = await openGroupProfile(sessions.bob.page, groupTitle);
   // Блок сведений по доске `ZpChat2`: уведомления, тип, «Файлы и медиа · N», участники строками, «Покинуть»
   const info = bobOpenProfile.locator('[data-group-info]');
-  for (const row of ['[data-group-notifications]', '[data-group-type]', '[data-group-media]', '[data-group-leave]']) {
+  for (const row of ['[data-group-notifications]', '[data-group-type]', '[data-group-media]']) {
     await info.locator(row).first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   }
+  // «Покинуть группу» — после участников, как на доске
+  await bobOpenProfile.locator('[data-group-members] ~ * [data-group-leave], [data-group-members] ~ [data-group-leave]')
+    .first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   await info.locator('[data-group-media-count]').waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   assert.match(await info.locator('[data-group-media-count]').innerText(), /^\d+$/, 'счётчик «Файлы и медиа»');
   await bobOpenProfile.locator('[data-group-members] .contact-list-item').first()
