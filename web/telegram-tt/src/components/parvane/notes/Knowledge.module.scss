@@ -126,7 +126,10 @@
   color: var(--pv-muted);
 }
 
+// Поле поиска сжимается раньше названия папки: в окне 1120 px название обрезалось до «Все замет…»
 .headBoard .searchRow {
+  flex-shrink: 6;
+  min-width: 6rem;
   margin-inline-start: auto;
 }
 

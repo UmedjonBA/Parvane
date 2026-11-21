@@ -37,6 +37,11 @@
   letter-spacing: 0.04em;
 }
 
+// Заголовок «Ещё» сам строка колонки: растягиваться по высоте ему нельзя — блок уезжал вниз (доска `ZdNotesX`)
+.capFlat {
+  flex: none;
+}
+
 .cap .capButton {
   width: 2rem;
   height: 2rem;

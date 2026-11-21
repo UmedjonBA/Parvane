@@ -167,7 +167,7 @@ const NotesColumn = ({
           );
         })}
       </div>
-      <h2 className={buildClassName(styles.cap, styles.capTitle)}>{lang('KnowledgeMore')}</h2>
+      <h2 className={buildClassName(styles.cap, styles.capTitle, styles.capFlat)}>{lang('KnowledgeMore')}</h2>
       {renderPlace('canvas', 'board', lang('KnowledgeCanvases'), canvasCount)}
       {renderPlace('help', 'text', lang('KnowledgeMdHelp'))}
       {renderPlace('trash', 'trash', lang('KnowledgeTrash'))}

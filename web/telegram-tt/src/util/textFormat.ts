@@ -50,9 +50,10 @@ export function formatFileSize(lang: LangFn, bytes: number, decimals = 1): strin
   }
 
   const k = 1024;
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), FILE_SIZE_UNITS.length - 1);
   const v = (bytes / (k ** i));
-  const value = v.toFixed(Math.max(decimals, 0));
+  // Число по правилам языка («2,1 КБ»), без хвостового нуля («412 Б», «48 МБ»); байты — целым числом
+  const value = lang.number(Number(v.toFixed(i ? Math.max(decimals, 0) : 0)));
 
   return lang(`MediaSize${FILE_SIZE_UNITS[i]}`, { size: value }, { pluralValue: v });
 }

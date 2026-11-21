@@ -262,24 +262,25 @@ async function galleryNotes() {
   });
   await notes.locator('[data-notes-all]').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
   await tab(0).click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
-  await step(page, 'notes-desk-edit', async () => {
+  await step(page, 'notes-desk-note', async () => {
     await notes.locator('[data-note-row]').first().click({ timeout: STEP_TIMEOUT_MS });
-    await notes.locator('[data-note-bar-edit]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
   });
-  await page.keyboard.press('Control+e');
 
   // Телефон
   await resize(page, PHONE);
+  // К списку: стрелка «К заметкам», пока список папок не показан (первое нажатие может лишь закрыть правку)
   const back = async () => {
-    const button = notes.locator('[data-note-id] button[aria-label]:visible').first();
-    await button.click({ timeout: 5000 }).catch(() => undefined);
-    await page.waitForTimeout(500);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (await notes.locator('[data-notes-folders]').first().isVisible().catch(() => false)) return;
+      await notes.getByRole('button', { name: 'К заметкам' }).first().click({ timeout: 5000 }).catch(() => undefined);
+      await page.waitForTimeout(700);
+    }
   };
   await step(page, 'PhNotesMore-02', async () => undefined);
   await step(page, 'PhNotesMore-03', async () => {
-    await notes.locator('[data-note-bar-edit]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await notes.getByRole('button', { name: 'Изменить' }).first().click({ timeout: STEP_TIMEOUT_MS });
   });
-  await page.keyboard.press('Control+e');
+  await notes.getByRole('button', { name: 'Готово' }).first().click({ timeout: 5000 }).catch(() => undefined);
   await back();
   await step(page, 'PhNotesMore-01', async () => undefined);
   await step(page, 'XpNotes-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
@@ -287,8 +288,100 @@ async function galleryNotes() {
   await page.context().close();
 }
 
+// ── «Файлы»: доски PhoneFiles, PhFilesMore, RpFiles, XpFiles, ZpFilesX, DeskFiles, DkFilesDialogs, RdFiles,
+//    XdFiles, ZdFilesX ──
+async function galleryFiles() {
+  const { page } = await openSession('files');
+  const cloud = await openModule(page, 'files', 'ParvaneCloud');
+  const item = (name) => cloud.locator(`[data-node-id][data-name="${name}"]`);
+  await cloud.locator('input[type="file"]').waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
+  for (const name of ['Конфиги', 'Резервные копии', 'Сборки']) {
+    try {
+      await cloud.getByRole('button', { name: 'New folder', exact: true }).click({ timeout: STEP_TIMEOUT_MS });
+      await page.locator('#parvane-cloud-name').fill(name);
+      await page.getByRole('button', { name: 'Create', exact: true }).click();
+      await item(name).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    } catch (err) {
+      console.log(`WARN: папка «${name}»: ${String(err).split('\n')[0]}`);
+      await page.keyboard.press('Escape').catch(() => undefined);
+    }
+  }
+  const files = [
+    ['backup-2026-11.tar.zst', 300000], ['wg0.conf', 412], ['nftables.conf', 2100], ['parvane-android-arm64.apk', 48000],
+  ].map(([name, size]) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 7) }));
+  await cloud.locator('input[type="file"]').first().setInputFiles(files);
+  await item('wg0.conf').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => console.log('WARN: файлы не загрузились'));
+  await cloud.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
+  await toRussian(page);
+  const files2 = await openModule(page, 'files', 'ParvaneCloud');
+  await files2.locator('[data-node-id][data-name="wg0.conf"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(1500);
+
+  // Компьютер
+  await step(page, 'files-desk-root', async () => undefined);
+  await step(page, 'files-desk-file', async () => {
+    await files2.locator('[data-node-id][data-name="wg0.conf"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+
+  // Телефон
+  await resize(page, PHONE);
+  await step(page, 'PhoneFiles-01', async () => undefined);
+  await step(page, 'files-phone-menu', async () => {
+    await files2.locator('[data-node-id][data-name="wg0.conf"]').getByRole('button').last().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await page.context().close();
+}
+
+// ── «Профиль» и настройки: доски PhoneProfile, PhProfileA/B, RpProfileA/B/C, XpProfile, ZdProfileX/Y,
+//    DeskProfile, DkSettingsA/B, RdProfile, Modules ──
+const PROFILE_ITEMS = [
+  'overview', 'modules', 'appearance', 'notifications', 'language', 'devices', 'privacy', 'keys', 'data', 'export',
+  'bug', 'about',
+];
+
+async function galleryProfile() {
+  const { page } = await openSession('profile');
+  await toRussian(page);
+  const open = async () => {
+    await page.locator('[data-module="profile"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-profile-item]:visible').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  };
+  await open();
+  // Компьютер: разделы — пунктами левой колонки
+  for (const id of PROFILE_ITEMS) {
+    await step(page, `profile-desk-${id}`, async () => {
+      await page.locator(`[data-profile-item="${id}"]:visible`).first().click({ timeout: STEP_TIMEOUT_MS });
+    });
+  }
+  await page.locator('[data-profile-item="overview"]:visible').first().click({ timeout: 5000 }).catch(() => undefined);
+
+  // Телефон: список разделов, каждый — своим экраном со стрелкой «назад»
+  await resize(page, PHONE);
+  await open().catch(() => undefined);
+  await step(page, 'profile-phone-main', async () => undefined);
+  for (const id of PROFILE_ITEMS.slice(1)) {
+    await step(page, `profile-phone-${id}`, async () => {
+      const item = page.locator(`[data-profile-item="${id}"]:visible`).first();
+      await item.scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
+      await item.click({ timeout: STEP_TIMEOUT_MS });
+    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (await page.locator('[data-profile-item="modules"]:visible').first().isVisible().catch(() => false)) break;
+      await page.locator('#Settings button[aria-label="Назад"]:visible, #Settings .Button.translucent:visible').first()
+        .click({ timeout: 3000 }).catch(() => undefined);
+      await page.waitForTimeout(600);
+    }
+  }
+  await page.context().close();
+}
+
 try {
   if (wants('health')) await galleryHealth();
+  if (wants('profile')) await galleryProfile();
+  if (wants('files')) await galleryFiles();
   if (wants('notes')) await galleryNotes();
   if (wants('plan')) await galleryPlan();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
