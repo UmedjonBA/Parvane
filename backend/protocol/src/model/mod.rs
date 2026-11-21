@@ -1078,7 +1078,7 @@ impl Engine {
     pub(crate) fn chat_view(&self, chat: &str) -> Option<ChatView> {
         let peer = self.peers.get(chat)?.clone();
         let rows = self.chats.get(chat);
-        let last = rows.and_then(|c| self.last_shown(c)).and_then(|r| self.message_view(chat, r));
+        let last = rows.and_then(|c| self.last_shown(&peer, c)).and_then(|r| self.message_view(chat, r));
         let title = match &peer.kind {
             Some(peer::Kind::User(u)) => u.address.clone(),
             Some(peer::Kind::Group(g)) => self.groups.get(&g.id).map(|f| f.title.clone()).unwrap_or_default(),
@@ -1231,11 +1231,32 @@ impl Engine {
 
     /// Последняя строка чата для списка: видимая; у хоста с `wire_rows` — и показываемая (служебная строка ленты —
     /// голос опроса — последней не бывает).
-    fn last_shown<'a>(&self, c: &'a ChatRows) -> Option<&'a Row> {
+    fn last_shown<'a>(&self, peer: &Peer, c: &'a ChatRows) -> Option<&'a Row> {
+        // Сообщения участника, скрытого у себя (REPORT-3), не становятся превью чата в списке
+        let hidden = self.hidden_authors(peer);
+        let shown = |r: &Row| hidden.is_empty() || r.state.row.as_ref().is_none_or(|m| !hidden.contains(&m.from));
         if !self.has_feature(features::WIRE_ROWS) {
-            return c.last_visible();
+            if hidden.is_empty() {
+                return c.last_visible();
+            }
+            return c.rows_rev().find(|r| r.visible() && shown(r));
         }
-        c.rows_rev().find(|r| self.message_view_as(r, false).is_some())
+        c.rows_rev().find(|r| shown(r) && self.message_view_as(r, false).is_some())
+    }
+
+    /// Участники группы, чьи сообщения скрыты у себя (объекты `MemberHidden` с ключом `<ключ группы>/<адрес>`).
+    fn hidden_authors(&self, peer: &Peer) -> Vec<String> {
+        if !matches!(peer.kind, Some(peer::Kind::Group(_))) {
+            return vec![];
+        }
+        let Ok(pk) = crate::state::peer_key(peer) else { return vec![] };
+        let prefix = format!("{pk}/");
+        self.state
+            .view()
+            .into_iter()
+            .filter(|v| v.kind == ObjectKind::MemberHidden as i32)
+            .filter_map(|v| v.key.strip_prefix(&prefix).map(str::to_string))
+            .collect()
     }
 
     /// Список чатов (E3): закреплённые — первыми по месту в списке закрепа, затем по `order` (новые выше).
@@ -1551,6 +1572,9 @@ impl Engine {
             w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_checkpoint_rejected".into(), detail: cp.id.to_string() }));
             return Ok(());
         }
+        if ing.rejected > 0 {
+            w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_unreadable".into(), detail: ing.rejected.to_string() }));
+        }
         let got: BTreeSet<u64> = ing.records.iter().map(|r| r.seq).collect();
         self.cp_entry_note(&ing.ops);
         // Сегменты под прежним ключом/адресом — следующая точка их перезальёт
@@ -1845,6 +1869,11 @@ impl Engine {
         if ing.chains.gaps > 0 {
             w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_gap".into(), detail: ing.chains.gaps.to_string() }));
         }
+        // Записи, которые не открылись ни текущим, ни прежними ключами (вытесненный ключ, порча) — в диагностику
+        // хоста, а не молча
+        if ing.rejected > 0 {
+            w.delta.push(Change::Notice(epb::Notice { chat: None, kind: "history_unreadable".into(), detail: ing.rejected.to_string() }));
+        }
         self.meta.history_chains = book.to_value();
         for rec in &ing.records {
             self.meta.history_cursor = self.meta.history_cursor.max(rec.seq);
@@ -2049,6 +2078,12 @@ impl Engine {
             self.dirty.chats.extend(all);
         } else if let Some(chat) = self.peers.iter().find(|(_, p)| crate::state::peer_key(p).ok().as_deref() == Some(key)).map(|(k, _)| k.clone()) {
             self.dirty.chats.insert(chat);
+        } else if kind == ObjectKind::MemberHidden as i32 {
+            // Скрытый участник меняет превью своей группы: ключ — `<ключ группы>/<адрес>`
+            let group = key.split_once('/').map(|(g, _)| g).unwrap_or_default();
+            if let Some(chat) = self.peers.iter().find(|(_, p)| crate::state::peer_key(p).ok().as_deref() == Some(group)).map(|(k, _)| k.clone()) {
+                self.dirty.chats.insert(chat);
+            }
         } else if kind == ObjectKind::Draft as i32 {
             // Черновик чата без строк: чат появляется в списке
             if let Some(d) = self.state_value::<crate::pb::parvane::state::v1::Draft>(ObjectKind::Draft, key) {
@@ -2181,6 +2216,32 @@ impl Engine {
     #[doc(hidden)]
     pub fn debug_rows(&self, chat: &Peer) -> usize {
         history::history_chat_key(chat).ok().and_then(|k| self.chats.get(&k)).map(ChatRows::len).unwrap_or(0)
+    }
+
+    /// Сменить ключ личного состояния `rotations` раз (прежние остаются среди прежних), как после отзывов устройств.
+    #[doc(hidden)]
+    pub fn debug_rotate_state_key(&mut self, rotations: u32) {
+        if let Some(c) = &mut self.client {
+            let start = c.state_key().map(|(_, v)| v).unwrap_or(0);
+            for i in 1..=rotations {
+                c.set_state_key(crate::state::StateKey::generate(), start + i);
+            }
+            self.dirty.client = true;
+        }
+        self.history_session = None;
+    }
+
+    #[doc(hidden)]
+    pub fn debug_drop_former_state_keys(&mut self) {
+        if let Some(c) = &mut self.client {
+            c.debug_clear_former_state_keys();
+        }
+        self.history_session = None;
+    }
+
+    #[doc(hidden)]
+    pub fn debug_former_state_keys(&self) -> usize {
+        self.client.as_ref().map_or(0, |c| c.former_state_keys().len())
     }
 }
 

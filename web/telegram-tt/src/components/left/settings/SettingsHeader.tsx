@@ -7,15 +7,18 @@ import { getActions } from '../../../global';
 import { SettingsScreens } from '../../../types';
 
 import buildClassName from '../../../util/buildClassName';
-import { runProfileSave } from './profile/profileRequests';
+import { getIsConfirmSignInScreen } from './devices/confirmSignInScreen';
+import { runProfileSave, toggleHelpSearch } from './profile/profileRequests';
 
 import useAppLayout from '../../../hooks/useAppLayout';
+import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
 import DropdownMenu from '../../ui/DropdownMenu';
 import MenuItem from '../../ui/MenuItem';
+import ProfileIcon from './profile/ProfileIcon';
 
 type OwnProps = {
   currentScreen: SettingsScreens;
@@ -58,6 +61,8 @@ const SettingsHeader: FC<OwnProps> = ({
 
   const oldLang = useOldLang();
   const lang = useLang();
+  // Телефон: «Устройства» нового устройства — экран «Подтвердите вход» (доска `PhAuth`)
+  const isConfirmSignInScreen = useDerivedState(getIsConfirmSignInScreen);
 
   function renderHeaderContent() {
     switch (currentScreen) {
@@ -172,12 +177,25 @@ const SettingsHeader: FC<OwnProps> = ({
       case SettingsScreens.ParvaneBugReport:
         return <h3>{lang('MenuReportBug')}</h3>;
       case SettingsScreens.ParvaneHelp:
-        return <h3>{lang('ParvaneHelpTitle')}</h3>;
+        return (
+          <div className="settings-main-header">
+            <h3>{lang('ParvaneHelpTitle')}</h3>
+            <button
+              type="button"
+              className="pv-header-icon"
+              aria-label={lang('ParvaneHelpSearch')}
+              data-help-search-open
+              onClick={toggleHelpSearch}
+            >
+              <ProfileIcon name="search" />
+            </button>
+          </div>
+        );
       case SettingsScreens.Performance:
         return <h3>{lang('MenuAnimations')}</h3>;
 
       case SettingsScreens.ActiveSessions:
-        return <h3>{lang('ParvaneProfileDevices')}</h3>;
+        return <h3>{lang(isConfirmSignInScreen ? 'ParvaneConfirmSignInTitle' : 'ParvaneProfileDevices')}</h3>;
       case SettingsScreens.ActiveWebsites:
         return <h3>{oldLang('OtherWebSessions')}</h3>;
       case SettingsScreens.PrivacyBlockedUsers:

@@ -198,7 +198,8 @@ try {
     await screen.locator('[data-task-offer-understood]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     assert.equal(await screen.locator('#task-offer-name').inputValue(), 'check backups', 'название из строки');
     assert.equal(await screen.getByLabel('Start', { exact: true }).inputValue(), '12:00', 'начало из строки');
-    assert.equal(await screen.getByLabel('Duration, min').inputValue(), '180', 'длительность из строки');
+    // «Длительность · 3 ч» значением (доска `XpChat`), правка — минутами или «1 ч 30 мин»
+    assert.match(await screen.getByLabel('Duration, min').inputValue(), /^3\s?h$/, 'длительность из строки');
     await screen.getByRole('button', { name: 'Close', exact: true }).click();
     await screen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
     console.log('OK: «Одной строкой» заполняет экран задания');
@@ -208,10 +209,13 @@ try {
   });
   // Шаги есть только у задачи: карточка со временем и шагами остаётся «Заданием»
   assert.equal(await aliceCardA.getAttribute('data-kind'), 'task');
-  await aliceCardA.getByText('Task', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await aliceCardA.getByText('Plan proposal', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Доска `PhCalls`: число шагов — в строке срока, сами шаги свёрнуты
+  assert.match(await aliceCardA.innerText(), /2 steps/, 'число шагов в строке карточки');
   await aliceCardA.getByRole('button', { name: 'To plan' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const bobCardA = cardOf(sessions.bob.page, offerA);
   await bobCardA.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await bobCardA.locator('[data-task-offer-steps] summary').click();
   assert.match(await bobCardA.innerText(), new RegExp(stepText), 'шаги задания видны получателю');
   await bobCardA.getByRole('button', { name: 'To plan' }).click();
   await inPlanButton(bobCardA).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

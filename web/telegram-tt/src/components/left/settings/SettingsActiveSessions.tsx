@@ -1,20 +1,26 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useLayoutEffect, useMemo, useState,
+} from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiSession } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
 import type { KeyDialogMode } from './devices/DeviceDialogs';
+import type { StolenTarget } from './devices/DeviceStolenWizard';
+import type { DeviceTitle } from './devices/deviceTitle';
 import type { LinkOffer } from './devices/useDeviceLink';
 import type { ProfileIconName } from './profile/ProfileIcon';
 import { SettingsScreens } from '../../../types';
 
+import { PARVANE_LEGACY_APP_VERSION } from '../../../config';
 import buildClassName from '../../../util/buildClassName';
-import { formatPastTimeShort } from '../../../util/dates/oldDateFormat';
 import { callApi } from '../../../api/gramjs';
+import { setIsConfirmSignInScreen } from './devices/confirmSignInScreen';
+import { buildDeviceTitle, formatSeenAt, parseDeviceLabel } from './devices/deviceTitle';
 import useDeviceLink from './devices/useDeviceLink';
-import getSessionAppLine from './helpers/getSessionAppLine';
-import getSessionIcon from './helpers/getSessionIcon';
+import { getKeysBackupSavedAt } from './profile/profileStatus';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -27,6 +33,7 @@ import SecretForm from '../../ui/SecretForm';
 import AccountCards from './account/AccountCards';
 import DeviceConfirmSignIn from './devices/DeviceConfirmSignIn';
 import { DeviceKeyDialog, ResetIdentityDialog } from './devices/DeviceDialogs';
+import DeviceStolenWizard from './devices/DeviceStolenWizard';
 import ProfileIcon from './profile/ProfileIcon';
 import SessionSignOutMode, { type SignOutMode } from './SessionSignOutMode';
 import SettingsActiveSession from './SettingsActiveSession';
@@ -39,28 +46,39 @@ type OwnProps = {
   onReset: () => void;
 };
 
-type StateProps = Pick<GlobalState['activeSessions'], 'byHash' | 'orderedHashes'>;
+type StateProps = Pick<GlobalState['activeSessions'], 'byHash' | 'orderedHashes'> & {
+  currentUserId?: string;
+};
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
-const PHONE_ICONS = new Set(['android', 'apple']);
-const BROWSER_ICONS = new Set(['chrome', 'brave', 'vivaldi', 'safari', 'firefox', 'opera', 'samsung']);
 const DEVICE_ID_PREVIEW = 8;
+const KIND_KEYS = {
+  phone: 'ParvaneDeviceKindPhone',
+  computer: 'ParvaneDeviceKindComputer',
+  browser: 'ParvaneDeviceKindBrowser',
+} as const;
+const KIND_ICONS: Record<DeviceTitle['kind'], ProfileIconName> = {
+  phone: 'phone', computer: 'laptop', browser: 'globe',
+};
 
 // Parvane (spec 041 E3): «Профиль → Устройства» по доскам `PhProfileA`, `DkSettingsA`: запрос нового своего
-// устройства карточкой с кодом сверки, «Мои устройства» с «Выйти на нём» и «Украдено», «Привязать новое
-// устройство», «Завершить другие сеансы», ключи. Это устройство ещё не подтверждено — сверху «Подтвердите вход»
-// (`devices/DeviceConfirmSignIn.tsx`). Действия прежние: провайдер (LINK-1, RECOVER-1/2, REVOKE-1, P-07 — отзыв
-// устройства только с текущим паролем)
+// устройства карточкой с кодом сверки («Отклонить» — отказ на сервере, новое устройство о нём узнаёт), список
+// устройств с «Выйти на нём» и «Украдено» (мастер `devices/DeviceStolenWizard.tsx` — и для живых сеансов, и для
+// вышедших сами), «Привязать новое устройство», «Завершить другие сеансы», ключи. Это устройство ещё не подтверждено —
+// «Подтвердите вход» (`devices/DeviceConfirmSignIn.tsx`; на телефоне — без остального экрана, доска `PhAuth`).
+// Действия прежние: провайдер (LINK-1, RECOVER-1/2, REVOKE-1, P-07 — отзыв устройства только с текущим паролем)
 const SettingsActiveSessions = ({
   isActive,
   onReset,
   byHash,
   orderedHashes,
+  currentUserId,
 }: OwnProps & StateProps) => {
   const { terminateAllAuthorizations, showNotification, openSettingsScreen } = getActions();
 
   const lang = useLang();
   const oldLang = useOldLang();
+  const { isMobile } = useAppLayout();
   const {
     linkStatus, linkOffers, sskState, leftDevices, refresh,
   } = useDeviceLink(isActive);
@@ -72,9 +90,11 @@ const SettingsActiveSessions = ({
   const [isLinkSheetOpen, openLinkSheet, closeLinkSheet] = useFlag();
   const [keyDialogMode, setKeyDialogMode] = useState<KeyDialogMode | undefined>();
   const [isResetOpen, openReset, closeReset] = useFlag();
-  const [stolenDevice, setStolenDevice] = useState<string | undefined>();
-  // «Отклонить» запрос: сервер отказа не принимает, запрос просто скрывается здесь до истечения
+  const [stolenTarget, setStolenTarget] = useState<StolenTarget | undefined>();
+  // «Отклонить» ушёл серверу — до следующего опроса запрос здесь уже не показывается
   const [declinedOffers, setDeclinedOffers] = useState<string[]>([]);
+  // «Копия ключей · сохранена» (доска `PhProfileA`): копия ключей аккаунта на сервере либо файл с этого устройства
+  const [isKeysBackupSaved, setIsKeysBackupSaved] = useState<boolean | undefined>();
 
   useHistoryBack({ isActive, onBack: onReset });
 
@@ -110,18 +130,23 @@ const SettingsActiveSessions = ({
     void refresh();
   });
 
-  const handleReportStolen = useLastCallback(async () => {
-    const deviceId = stolenDevice;
-    setStolenDevice(undefined);
-    if (!deviceId) return;
-    const isDone = await callParvane('parvaneReportDeviceStolen', { deviceId });
-    showNotification({
-      message: oldLang(isDone ? 'ParvaneLeftDeviceStolenDone' : 'ParvaneLeftDeviceStolenFailed'),
-    });
+  const handleDecline = useLastCallback(async (offer: LinkOffer) => {
+    setDeclinedOffers([...declinedOffers, getOfferKey(offer)]);
+    const isDone = await callParvane('parvaneDeclineLink', { deviceId: offer.deviceId });
+    showNotification({ message: lang(isDone ? 'ParvaneDeviceDeclined' : 'ParvaneDeviceDeclineFailed') });
+    if (!isDone) setDeclinedOffers((current) => current.filter((key) => key !== getOfferKey(offer)));
     void refresh();
   });
 
+  useEffect(() => {
+    if (!isActive || !isMobile) return;
+    void (callParvane('parvaneKeyBundleContents') as Promise<{ isOff?: boolean } | undefined>).then((contents) => {
+      setIsKeysBackupSaved(Boolean(contents && !contents.isOff) || Boolean(getKeysBackupSavedAt(currentUserId)));
+    });
+  }, [isActive, isMobile, currentUserId]);
+
   function renderOffer(offer: LinkOffer) {
+    const offerName = formatTitle(parseDeviceLabel(offer.label)) || getDeviceLabel(offer.deviceId);
     return (
       <div
         key={offer.deviceId}
@@ -131,9 +156,10 @@ const SettingsActiveSessions = ({
       >
         <div className={styles.offerText}>
           <div className={styles.cardTitle}>
-            {lang('ParvaneDeviceOfferTitle', { name: getDeviceLabel(offer.deviceId) })}
+            {isMobile ? lang('ParvaneDeviceOfferTitlePhone') : lang('ParvaneDeviceOfferTitle', { name: offerName })}
           </div>
           <p className={styles.cardText}>
+            {isMobile && `${offerName}. `}
             {offer.code ? lang('ParvaneDeviceOfferText') : oldLang('ParvaneLinkOfferWait')}
           </p>
         </div>
@@ -143,7 +169,7 @@ const SettingsActiveSessions = ({
             type="button"
             className={styles.button}
             data-link-decline
-            onClick={() => setDeclinedOffers([...declinedOffers, getOfferKey(offer)])}
+            onClick={() => handleDecline(offer)}
           >
             {lang('ParvaneDeviceDecline')}
           </button>
@@ -161,13 +187,46 @@ const SettingsActiveSessions = ({
     );
   }
 
+  function formatTitle(title?: DeviceTitle) {
+    return title ? `${lang(KIND_KEYS[title.kind])} · ${title.name}` : undefined;
+  }
+
+  function formatSeen(atSec: number) {
+    return formatSeenAt(atSec * 1000, Date.now(), lang.code, (time) => lang('ParvaneDeviceSeenToday', { time }));
+  }
+
+  // Телефон: «Телефон · Android» и «был в сети сегодня, 13:40»; компьютер — одной строкой «Телефон · Android · был
+  // сегодня, 13:40 · старая версия», это устройство — «Этот компьютер · Linux · в сети сейчас»
+  function describeSession(session: ApiSession) {
+    const title = buildDeviceTitle(session.deviceModel, session.platform);
+    const isLegacy = session.appVersion === PARVANE_LEGACY_APP_VERSION;
+    const seen = formatSeen(session.dateActive);
+    if (isMobile) {
+      const hint = session.isCurrent ? lang('ParvaneDeviceThis') : lang('ParvaneDeviceSeen', { time: seen });
+      const fullHint = isLegacy ? `${hint} · ${lang('ParvaneDeviceOldVersion')}` : hint;
+      return { name: formatTitle(title)!, hint: fullHint, seen };
+    }
+    const name = session.isCurrent
+      ? `${lang('ParvaneDeviceThisComputer')} · ${session.platform || title.name}`
+      : formatTitle(title)!;
+    const parts = [
+      name,
+      session.isCurrent ? lang('ParvaneDeviceOnlineNow') : lang('ParvaneDeviceSeenShort', { time: seen }),
+      isLegacy ? lang('ParvaneDeviceOldVersion') : undefined,
+    ];
+    return { name: parts.filter(Boolean).join(' · '), hint: undefined, seen };
+  }
+
+  const openStolen = useLastCallback((deviceId: string, title: DeviceTitle, seen?: string, hasLeft?: boolean) => {
+    setStolenTarget({
+      deviceId, title: formatTitle(title)!, kindTitle: lang(KIND_KEYS[title.kind]), seen, hasLeft,
+    });
+  });
+
   function renderSession(session: ApiSession) {
     const { isCurrent } = session;
-    const appLine = getSessionAppLine(lang, session);
-    const hint = isCurrent
-      ? lang('ParvaneDeviceThis')
-      : [appLine, lang('ParvaneDeviceSeen', { time: formatPastTimeShort(oldLang, session.dateActive * 1000) })]
-        .filter(Boolean).join(' · ');
+    const { name, hint, seen } = describeSession(session);
+    const title = buildDeviceTitle(session.deviceModel, session.platform);
     return (
       <div
         key={session.hash}
@@ -177,8 +236,8 @@ const SettingsActiveSessions = ({
       >
         <ProfileIcon name={getDeviceIcon(session)} className={styles.deviceIcon} />
         <span className={styles.deviceText}>
-          <span className={styles.deviceName} dir="auto">{session.deviceModel}</span>
-          <span className={styles.deviceHint}>{hint}</span>
+          <span className={styles.deviceName} dir="auto">{name}</span>
+          {hint && <span className={styles.deviceHint}>{hint}</span>}
         </span>
         {!isCurrent && (
           <button
@@ -190,13 +249,24 @@ const SettingsActiveSessions = ({
             {lang('ParvaneDeviceSignOutOn')}
           </button>
         )}
+        {!isCurrent && (
+          <button
+            type="button"
+            className={buildClassName(styles.chip, styles.chipDanger)}
+            data-session-stolen={session.hash}
+            onClick={() => openStolen(session.hash, title, lang('ParvaneDeviceSeen', { time: seen }))}
+          >
+            {lang('ParvaneDeviceStolen')}
+          </button>
+        )}
       </div>
     );
   }
 
   function renderLeftDevice(deviceId: string) {
+    const title: DeviceTitle = { kind: 'computer', name: getDeviceLabel(deviceId) };
     return (
-      <div key={deviceId} className={styles.deviceRow}>
+      <div key={deviceId} className={styles.deviceRow} data-left-device-row={deviceId}>
         <ProfileIcon name="globe" className={styles.deviceIcon} />
         <span className={styles.deviceText}>
           <span className={styles.deviceName}>{getDeviceLabel(deviceId)}</span>
@@ -206,7 +276,7 @@ const SettingsActiveSessions = ({
           type="button"
           className={buildClassName(styles.chip, styles.chipDanger)}
           data-left-device={deviceId}
-          onClick={() => setStolenDevice(deviceId)}
+          onClick={() => openStolen(deviceId, title, oldLang('ParvaneLeftDeviceSignedOut'), true)}
         >
           {lang('ParvaneDeviceStolen')}
         </button>
@@ -231,6 +301,18 @@ const SettingsActiveSessions = ({
   }
 
   const keysRowClass = buildClassName(profile.setRow, profile.setRowAction);
+  const hasSskRow = isRotationNeeded;
+  const hasEscrowRow = Boolean(sskState?.isEscrowCopyMissing) && !isRotationNeeded;
+  const hasTelegramRow = Boolean(sskState?.canSendKeyToTelegram) && !isRotationNeeded;
+  // Компьютер (`DkSettingsA`): служебные строки ключей — только когда нужны, «Копия ключей» — в колонке разделов
+  const hasKeysGroup = isMobile || hasSskRow || hasEscrowRow || hasTelegramRow;
+  // Телефон (`PhAuth`): «Подтвердите вход» — отдельный экран, без списка устройств и ключей
+  const isConfirmOnly = isUnconfirmed && isMobile;
+
+  useLayoutEffect(() => {
+    setIsConfirmSignInScreen(Boolean(isActive && isConfirmOnly));
+    return () => setIsConfirmSignInScreen(false);
+  }, [isActive, isConfirmOnly]);
 
   return (
     <div className={buildClassName('settings-content custom-scroll SettingsActiveSessions', profile.screen)}>
@@ -244,13 +326,15 @@ const SettingsActiveSessions = ({
 
       {visibleOffers.map(renderOffer)}
 
-      <div className={profile.caption}>{lang('ParvaneDeviceMine')}</div>
-      <div className={profile.group}>
-        {currentSession && renderSession(currentSession)}
-        {otherSessions.map(renderSession)}
-        {leftDevices.map(renderLeftDevice)}
-      </div>
-      {Boolean(leftDevices.length) && (
+      {isMobile && !isConfirmOnly && <div className={profile.caption}>{lang('ParvaneDeviceMine')}</div>}
+      {!isConfirmOnly && (
+        <div className={buildClassName(profile.group, !isMobile && styles.listGap)}>
+          {currentSession && renderSession(currentSession)}
+          {otherSessions.map(renderSession)}
+          {leftDevices.map(renderLeftDevice)}
+        </div>
+      )}
+      {Boolean(leftDevices.length) && !isConfirmOnly && (
         <div className={profile.hint}>
           {oldLang('ParvaneLeftDevicesHint')}
           {' '}
@@ -277,7 +361,7 @@ const SettingsActiveSessions = ({
               data-terminate-all
               onClick={openTerminateAll}
             >
-              {lang('TerminateAllSessions')}
+              {lang('ParvaneDeviceTerminateOthers')}
             </button>
           )}
         </div>
@@ -285,36 +369,48 @@ const SettingsActiveSessions = ({
 
       {!isUnconfirmed && (
         <>
-          <div className={profile.caption}>{lang('ParvaneDeviceKeys')}</div>
-          <div className={profile.group}>
-            {isRotationNeeded && renderKeyRow(
-              oldLang('ParvaneSskRotationTitle'),
-              oldLang(canRotateSsk ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup'),
-              [
-                { label: oldLang('ParvaneSskRotationAction'), onClick: () => setKeyDialogMode('rotate') },
-                { label: oldLang('ParvaneResetAction'), onClick: openReset },
-              ].filter((_, index) => index > 0 || canRotateSsk),
-            )}
-            {Boolean(sskState?.isEscrowCopyMissing) && !isRotationNeeded && renderKeyRow(
-              oldLang('ParvaneEscrowTitle'),
-              oldLang('ParvaneEscrowText'),
-              [{ label: oldLang('ParvaneEscrowAction'), onClick: () => setKeyDialogMode('escrow') }],
-            )}
-            {Boolean(sskState?.canSendKeyToTelegram) && !isRotationNeeded && renderKeyRow(
-              oldLang('ParvaneTgSendTitle'),
-              oldLang('ParvaneTgSendText'),
-              [{ label: oldLang('ParvaneTgSendAction'), onClick: () => setKeyDialogMode('telegram') }],
-            )}
-            <button
-              type="button"
-              className={keysRowClass}
-              data-device-keys-backup
-              onClick={() => openSettingsScreen({ screen: SettingsScreens.ParvaneKeysBackup })}
-            >
-              <span className={profile.setTitle}>{lang('ParvaneProfileKeys')}</span>
-              <ProfileIcon name="right" isSmall className={profile.menuChevron} />
-            </button>
-          </div>
+          {isMobile && <div className={profile.caption}>{lang('ParvaneDeviceKeys')}</div>}
+          {hasKeysGroup && (
+            <div className={buildClassName(profile.group, !isMobile && styles.listGap)}>
+              {hasSskRow && renderKeyRow(
+                oldLang('ParvaneSskRotationTitle'),
+                oldLang(canRotateSsk ? 'ParvaneSskRotationText' : 'ParvaneSskRotationNoBackup'),
+                [
+                  { label: oldLang('ParvaneSskRotationAction'), onClick: () => setKeyDialogMode('rotate') },
+                  { label: oldLang('ParvaneResetAction'), onClick: openReset },
+                ].filter((_, index) => index > 0 || canRotateSsk),
+              )}
+              {hasEscrowRow && renderKeyRow(
+                oldLang('ParvaneEscrowTitle'),
+                oldLang('ParvaneEscrowText'),
+                [{ label: oldLang('ParvaneEscrowAction'), onClick: () => setKeyDialogMode('escrow') }],
+              )}
+              {hasTelegramRow && renderKeyRow(
+                oldLang('ParvaneTgSendTitle'),
+                oldLang('ParvaneTgSendText'),
+                [{ label: oldLang('ParvaneTgSendAction'), onClick: () => setKeyDialogMode('telegram') }],
+              )}
+              {isMobile && (
+                <button
+                  type="button"
+                  className={keysRowClass}
+                  data-device-keys-backup
+                  onClick={() => openSettingsScreen({ screen: SettingsScreens.ParvaneKeysBackup })}
+                >
+                  <span className={profile.setTitle}>{lang('ParvaneProfileKeys')}</span>
+                  {isKeysBackupSaved !== undefined && (
+                    <span
+                      className={profile.setValue}
+                      data-device-keys-backup-state={isKeysBackupSaved ? 'saved' : 'none'}
+                    >
+                      {lang(isKeysBackupSaved ? 'ParvaneDeviceKeysSaved' : 'ParvaneKeysBackupNoneShort')}
+                    </span>
+                  )}
+                  <ProfileIcon name="right" isSmall className={profile.menuChevron} />
+                </button>
+              )}
+            </div>
+          )}
           {Boolean(linkStatus?.hasEscrow) && isRotationNeeded && (
             <div className={profile.hint}>{oldLang('ParvaneLostKeyAdmin')}</div>
           )}
@@ -348,13 +444,12 @@ const SettingsActiveSessions = ({
           />
         </SecretForm>
       </ConfirmDialog>
-      <ConfirmDialog
-        isOpen={Boolean(stolenDevice)}
-        onClose={() => setStolenDevice(undefined)}
-        text={stolenDevice ? oldLang('ParvaneLeftDeviceStolenConfirm', getDeviceLabel(stolenDevice)) : ''}
-        confirmLabel={oldLang('ParvaneLeftDeviceStolen')}
-        confirmHandler={handleReportStolen}
-        confirmIsDestructive
+      <DeviceStolenWizard
+        target={stolenTarget}
+        hasRoot={sskState?.hasRoot}
+        onSignOutOnly={setOpenedSessionHash}
+        onClose={() => setStolenTarget(undefined)}
+        onDone={refresh}
       />
       <DeviceKeyDialog
         mode={keyDialogMode}
@@ -382,16 +477,13 @@ function getDeviceLabel(deviceId: string) {
 }
 
 function getDeviceIcon(session: ApiSession): ProfileIconName {
-  const icon = getSessionIcon(session);
-  if (PHONE_ICONS.has(icon) && /android|iphone|ipad|ios/i.test(`${session.platform} ${session.deviceModel}`)) {
-    return 'phone';
-  }
-  return BROWSER_ICONS.has(icon) ? 'globe' : 'laptop';
+  return KIND_ICONS[buildDeviceTitle(session.deviceModel, session.platform).kind];
 }
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => ({
     byHash: global.activeSessions.byHash,
     orderedHashes: global.activeSessions.orderedHashes,
+    currentUserId: global.currentUserId,
   }),
 )(SettingsActiveSessions));

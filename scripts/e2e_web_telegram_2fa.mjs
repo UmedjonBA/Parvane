@@ -19,7 +19,7 @@ import {
   openProfile,
   waitForChatList,
 } from './e2e_web_helpers.mjs';
-import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
+import { botConfirmV2, botPullV2 } from './e2e_tg_confirm_v2.mjs';
 import { shootAuthScreen } from './e2e_web_auth_shots.mjs';
 
 const PASSWORD = 'Parvane-telegram-2fa-password';
@@ -28,6 +28,20 @@ const BOT = process.env.PARVANE_TELEGRAM_BOT;
 assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');
 const TG_OWNER = 2001;
 const TG_STRANGER = 2002;
+const KEY_PATTERN = /[0-9A-Z]{4}(?:-[0-9A-Z]{4}){9}/;
+
+// «Бот» забирает у сервера ключ восстановления владельца (spec 015: ключ уходит ему в Telegram)
+async function pullRecoveryKey(telegramId) {
+  const { gatewayUrl } = requireEnv();
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    const messages = await botPullV2(gatewayUrl, SECRET, [], 2000);
+    if (messages.length) await botPullV2(gatewayUrl, SECRET, messages.map((m) => m.id), 0);
+    const key = messages.find((m) => m.telegramId === telegramId && KEY_PATTERN.test(m.recoveryKey || ''));
+    if (key) return key.recoveryKey;
+    assert(Date.now() < deadline, 'бот не получил ключ восстановления');
+  }
+}
 
 // «Бот»: один запрос подтверждения через gateway по протоколу v2
 // (`identity.account.confirm_telegram`, канал PRE) — как настоящий бот на VPS
@@ -249,6 +263,7 @@ try {
   const { token: regToken } = await waitTelegramScreen(s1.page, 'Confirm your account');
   assert.equal((await botConfirm(regToken, TG_OWNER)).ok, true);
   await signedIn(s1.page);
+  const recoveryKey = await pullRecoveryKey(TG_OWNER);
 
   // ── Включаем 2FA в Settings → Privacy ──
   await enableTwoFactor(s1.page);
@@ -318,10 +333,30 @@ try {
   const ctx2 = await browser.newContext();
   const s2 = await openStartPage(ctx2);
   await loginWithPassword(s2.page, nick);
-  const { token: loginToken2 } = await waitTelegramScreen(s2.page, 'Confirm sign-in');
-  assert.equal((await botConfirm(loginToken2, TG_OWNER)).ok, true);
+  const { telegramScreen: screen2, token: loginToken2 } = await waitTelegramScreen(s2.page, 'Confirm sign-in');
+  // Доски `ZpAuthX`, `ZdAuthX`: «Прислать ещё раз» — новая ссылка без ввода пароля; подсказка «кто-то знает пароль»
+  await screen2.getByText(/Someone knows your password/).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await screen2.locator('[data-telegram-again]').click();
+  const deadline2 = Date.now() + LOGIN_TIMEOUT_MS;
+  let renewedToken = loginToken2;
+  while (renewedToken === loginToken2) {
+    assert(Date.now() < deadline2, '«Прислать ещё раз» не выдал новую ссылку');
+    await s2.page.waitForTimeout(300);
+    const href = await screen2.locator('#auth-telegram-link').getAttribute('href');
+    renewedToken = /start=([A-Za-z0-9_-]+)/.exec(href || '')?.[1] || loginToken2;
+  }
+  assert.equal((await botConfirm(loginToken2, TG_OWNER)).ok, false, 'прежняя ссылка погашена новой');
+  // «Войти ключом восстановления» вместо Telegram: неверный ключ — ошибка, верный — вход
+  await screen2.locator('[data-telegram-use-key]').click();
+  const keyInput = screen2.locator('[data-telegram-key-input]');
+  await keyInput.fill(recoveryKey.replace(/^.{4}/, 'ZZZZ'));
+  await screen2.locator('[data-telegram-key-submit]').click();
+  await screen2.locator('[data-telegram-key-error]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await s2.page.locator('#LeftColumn').count(), 0, 'неверный ключ не впускает');
+  await keyInput.fill(recoveryKey);
+  await screen2.locator('[data-telegram-key-submit]').click();
   await signedIn(s2.page);
-  console.log('OK: новое устройство подтверждает вход заново');
+  console.log('OK: новое устройство — «Прислать ещё раз» выдаёт новую ссылку, вход подтверждён ключом восстановления');
 
   // ── Выключаем 2FA (с паролем) — вход без Telegram на третьем устройстве ──
   await disableTwoFactor(s2.page);

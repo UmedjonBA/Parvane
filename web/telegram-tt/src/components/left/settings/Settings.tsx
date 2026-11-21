@@ -24,6 +24,7 @@ import SettingsHealthGoals from './modules/SettingsHealthGoals';
 import SettingsPlanner from './modules/SettingsPlanner';
 import SettingsPasscode from './passcode/SettingsPasscode';
 import ProfileNav from './profile/ProfileNav';
+import ProfileWindows from './profile/ProfileWindows';
 import SettingsAbout from './SettingsAbout';
 import SettingsActiveSessions from './SettingsActiveSessions';
 import SettingsAppearance from './SettingsAppearance';
@@ -455,6 +456,7 @@ const Settings: FC<OwnProps> = ({
     <div className="pv-profile">
       <ProfileNav currentScreen={currentScreen} />
       <div className="pv-profile-pane">{screens}</div>
+      <ProfileWindows />
     </div>
   );
 };

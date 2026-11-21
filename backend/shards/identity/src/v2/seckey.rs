@@ -117,7 +117,7 @@ async fn required_flag(v2: &SqlitePool, user: &str) -> Result<bool, ErrorCode> {
     Ok(row.is_some_and(|(r,)| r != 0))
 }
 
-async fn has_root_backup(v2: &SqlitePool, user: &str) -> Result<bool, ErrorCode> {
+pub(super) async fn has_root_backup(v2: &SqlitePool, user: &str) -> Result<bool, ErrorCode> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_backup WHERE user = ?").bind(user).fetch_optional(v2).await.map_err(db_err)?;
     Ok(row.is_some())
 }

@@ -401,3 +401,27 @@
 #Settings [data-edit-profile] [data-rename-dialog] {
   margin-inline: 1rem;
 }
+
+// Значок действия в шапке экрана «Профиля» (поиск по «Справке Parvane», доска `RpProfileA`)
+#Settings .pv-header-icon {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.5rem;
+  height: 2.5rem;
+  margin-inline-start: auto;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+  }
+}

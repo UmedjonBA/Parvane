@@ -374,7 +374,8 @@ try {
   await page.locator('[data-module="chats"]').first().click();
   // На телефоне открытый раньше чат («Избранное» из палитры) закрывает список — к списку стрелкой чата
   const chatBack = page.locator('#MiddleColumn .MiddleHeader').getByRole('button', { name: 'Back' });
-  if (await chatBack.isVisible().catch(() => false)) await chatBack.click();
+  // Чат выезжает переходом: стрелку ждать, а не читать сразу (заголовок списка под чатом остаётся «видимым»)
+  if (await chatBack.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) await chatBack.click();
   await waitForChatList(page, STEP_TIMEOUT_MS);
   await page.locator('#LeftMainHeader #telegram-search-input').click();
   await visible(input, 'общий поиск по значку шапки «Чатов» на телефоне');

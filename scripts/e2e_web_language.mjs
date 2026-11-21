@@ -79,7 +79,9 @@ async function walkSettingsScreens(page) {
 async function pickLanguage(page, nativeName) {
   await page.locator('[data-profile-item="language"]').click();
   // ItemPicker рендерит пункты как div[role=button] с названием языка
-  const option = page.locator('.settings-language [role="button"]').filter({ hasText: nativeName }).first();
+  // Точное название: у «Как в системе» подпись «сейчас: …» с названием языка
+  const option = page.locator('.settings-language [role="button"]')
+    .filter({ has: page.getByText(nativeName, { exact: true }) }).first();
   await option.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await option.click();
 }

@@ -4,6 +4,7 @@ import type { PlannerLayers } from './plannerLayers';
 import type { PlannerDayIndexEntry, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
+import { getWeekdayOrder } from '../../../util/weekStart';
 import {
   formatDay, formatHours, formatSpan, formatWeekday, getLoadLevel, listColorStyle,
 } from './plannerFormat';
@@ -46,7 +47,6 @@ type Entry = {
   order: string;
 };
 
-const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
 const PREVIEW_COUNT = 2;
 const KIND_CLASSES = {
   event: styles.kindEvent,
@@ -150,7 +150,7 @@ const PlannerMonth = ({
 
   return (
     <div className={styles.month} role="grid">
-      {WEEKDAY_INDEXES.map((index) => (
+      {getWeekdayOrder().map((index) => (
         <span key={`weekday${index}`} className={styles.monthWeekday}>{formatWeekday(lang, index)}</span>
       ))}
       {cells.map(({

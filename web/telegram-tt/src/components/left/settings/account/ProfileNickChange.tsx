@@ -1,4 +1,5 @@
 import type { ChangeEvent } from 'react';
+import type { TeactNode } from '../../../../lib/teact/teact';
 import {
   memo, useLayoutEffect, useRef, useState,
 } from '../../../../lib/teact/teact';
@@ -15,8 +16,14 @@ import SecretForm from '../../../ui/SecretForm';
 import kit from '../../../parvane/notes/PvKit.module.scss';
 import styles from './Account.module.scss';
 
+export type NickSubmit = () => Promise<boolean>;
+
 type OwnProps = {
   currentNick?: string;
+  // Поле перед ником в одной строке (компьютер, доска `RdProfile`: «Имя | Ник»)
+  leading?: TeactNode;
+  // Смена ника по общей «Сохранить» / «Готово» формы профиля: своей кнопки нет, форма вызывает отданную функцию
+  onSubmitChange?: (submit: NickSubmit | undefined) => void;
 };
 
 type RenameResult = 'ok' | 'bad_password' | 'bad_key' | 'no_backup' | 'taken' | 'invalid' | 'failed';
@@ -46,7 +53,7 @@ const STATE_KEYS = {
 // когда корня на устройстве нет (RECOVER-1 п. 8; доска: «спросим, только если пароль не подойдёт»). С корнем на
 // устройстве копия корня под новым адресом пишется под новым ключом восстановления — он уходит в Telegram либо
 // показывается окном после перезагрузки. Прежний ник 30 дней ведёт на новый; после смены вкладка перезагружается
-const ProfileNickChange = ({ currentNick }: OwnProps) => {
+const ProfileNickChange = ({ currentNick, leading, onSubmitChange }: OwnProps) => {
   const lang = useLang();
   const [nick, setNick] = useState(currentNick || '');
   const [password, setPassword] = useState('');
@@ -112,7 +119,7 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
   });
 
   const handleSubmit = useLastCallback(async () => {
-    if (!canSubmit) return;
+    if (!canSubmit) return false;
     setIsBusy(true);
     const out = await callParvane('parvaneRenameAccount', {
       nick: normalized, password, recoveryKey: hasRoot ? '' : recoveryKey,
@@ -122,25 +129,36 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
     if (result === 'ok') {
       setIsNewKey(Boolean(out?.isNewKey));
       setIsDone(true);
-      return;
+      return true;
     }
     setError(result);
+    return false;
   });
+
+  // Форме профиля — смена ника, пока новый ник набран; иначе ей нечего вызывать
+  useLayoutEffect(() => {
+    onSubmitChange?.(isChanged && !isDone ? handleSubmit : undefined);
+  }, [isChanged, isDone, onSubmitChange, handleSubmit]);
 
   const stateKey = nickState in STATE_KEYS ? STATE_KEYS[nickState as keyof typeof STATE_KEYS] : undefined;
 
   return (
     <div className={buildClassName(kit.card, styles.nickBox)} data-rename-dialog>
-      <label className={styles.label} htmlFor="parvane-rename-nick">{lang('ParvaneAccountNick')}</label>
-      <input
-        id="parvane-rename-nick"
-        className={kit.input}
-        autoComplete="off"
-        spellCheck={false}
-        value={nick}
-        disabled={isDone}
-        onChange={handleNick}
-      />
+      <div className={buildClassName(leading !== undefined && styles.nickRow)}>
+        {leading}
+        <div className={styles.nickBox}>
+          <label className={styles.label} htmlFor="parvane-rename-nick">{lang('ParvaneAccountNick')}</label>
+          <input
+            id="parvane-rename-nick"
+            className={kit.input}
+            autoComplete="off"
+            spellCheck={false}
+            value={nick}
+            disabled={isDone}
+            onChange={handleNick}
+          />
+        </div>
+      </div>
       {isChanged && stateKey && (
         <p
           className={buildClassName(
@@ -197,7 +215,7 @@ const ProfileNickChange = ({ currentNick }: OwnProps) => {
           {lang(isNewKey ? 'ParvaneRenameDoneNewKey' : 'ParvaneRenameDone')}
         </p>
       )}
-      {isChanged && (
+      {isChanged && !onSubmitChange && (
         <span data-rename-submit-wrap>
           <button
             type="button"

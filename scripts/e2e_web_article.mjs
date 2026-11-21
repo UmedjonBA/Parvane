@@ -245,6 +245,13 @@ try {
   // Статья — экран на весь экран (доска `XpChat`): «Переслать» внизу, закрывается стрелкой «Назад»
   // (Escape забирает висящее уведомление «Сохранено»)
   await bobPage.locator('[data-article-forward]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Ещё» в шапке статьи (доска `XpChat`): сохранить, переслать, скопировать текст, показать в чате
+  await bobPage.locator('[data-article-more]').click();
+  for (const action of ['save', 'forward', 'copy', 'chat']) {
+    await bobPage.locator(`[data-note-action="${action}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await bobPage.locator('[data-note-action="copy"]').click();
+  await bobPage.getByText('Article text copied').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await bobPage.locator('.Modal').filter({ has: viewer }).getByRole('button', { name: 'Back' }).click();
   await viewer.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await bobPage.locator('#FoldersSidebar').getByRole('tab', { name: 'Notes' }).click();

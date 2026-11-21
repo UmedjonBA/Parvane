@@ -32,6 +32,17 @@ pub(crate) async fn pending_until(pool: &SqlitePool, address: &str) -> Option<i6
         .map(|(t,)| t)
 }
 
+/// Когда владелец запросил удаление (0 — не ждёт); только для показа на экране входа (spec 041).
+pub(crate) async fn requested_at(pool: &SqlitePool, address: &str) -> i64 {
+    sqlx::query_as::<_, (i64,)>("SELECT requested_ms FROM account_deletions WHERE address = ?")
+        .bind(address)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map_or(0, |(t,)| t)
+}
+
 /// Аккаунт ждёт удаления — для проверки токенов из v1-кода. PV-009: ошибка БД — `Err` (токен не принимается),
 /// а не «не ждёт».
 pub(crate) async fn deletion_pending(address: &str) -> Result<bool, sqlx::Error> {

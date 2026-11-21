@@ -2,7 +2,6 @@ import { memo, useEffect, useRef } from '../../lib/teact/teact';
 
 import { createStyledQrCode } from '../../util/qrCode/buildStyledQrCode';
 
-import useFlag from '../../hooks/useFlag';
 import useLang from '../../hooks/useLang';
 
 import styles from './Auth.module.scss';
@@ -13,15 +12,14 @@ type OwnProps = {
 
 const QR_SIZE = 200;
 
-// «Показать QR» экрана Telegram (доска `ZpAuthX`): та же ссылка на бота, что и «Открыть», — для Telegram на другом
-// устройстве (телефоне). Картинку рисует общий построитель QR (`util/qrCode`), как у окна QR мессенджера
+// QR экрана Telegram (доска `ZdAuthX`): та же ссылка на бота, что и «Открыть», — для Telegram на другом устройстве
+// (телефоне). Показ переключает сам экран (чип «Показать QR» в строке шага 1 на компьютере, ссылка на телефоне);
+// картинку рисует общий построитель QR (`util/qrCode`), как у окна QR мессенджера
 const AuthTelegramQr = ({ link }: OwnProps) => {
   const lang = useLang();
   const containerRef = useRef<HTMLDivElement>();
-  const [isShown, show, hide] = useFlag();
 
   useEffect(() => {
-    if (!isShown) return undefined;
     let isCancelled = false;
     void createStyledQrCode({ size: QR_SIZE }).then((qrCode) => {
       const container = containerRef.current;
@@ -33,20 +31,16 @@ const AuthTelegramQr = ({ link }: OwnProps) => {
     return () => {
       isCancelled = true;
     };
-  }, [isShown, link]);
+  }, [link]);
 
   return (
     <div className={styles.qr}>
-      <button
-        type="button"
-        className={styles.linkInline}
-        aria-expanded={isShown}
-        data-telegram-qr
-        onClick={isShown ? hide : show}
-      >
-        {lang(isShown ? 'ParvaneAuthTelegramQrHide' : 'ParvaneAuthTelegramQrShow')}
-      </button>
-      {isShown && <div ref={containerRef} className={styles.qrImage} aria-label={lang('ParvaneAuthTelegramQrHint')} />}
+      <div
+        ref={containerRef}
+        className={styles.qrImage}
+        data-telegram-qr-image
+        aria-label={lang('ParvaneAuthTelegramQrHint')}
+      />
     </div>
   );
 };

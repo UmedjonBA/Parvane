@@ -864,6 +864,29 @@ async fn link_offer_retraction_clears_offer_and_grant() {
     assert!(grant.is_none(), "отзыв гасит невостребованный грант");
 }
 
+// spec 041: «Отклонить» гасит оффер, новое устройство одним опросом видит отказ; новый оффер снимает отметку
+#[tokio::test]
+async fn link_decline_voids_offer_and_reaches_new_device_once() {
+    let pool = test_pool().await;
+    insert_user(&pool, "dana@local").await;
+    assert!(!crate::link::decline_link_offer(&pool, "dana@local", "dev-n").await.unwrap(), "без оффера отказывать нечему");
+    store_link_offer(&pool, "dana@local", "dev-n", "EPH==", "", "", false).await.unwrap();
+    assert!(crate::link::decline_link_offer(&pool, "dana@local", "dev-n").await.unwrap());
+    let (offers, _, _) = poll_link(&pool, "dana@local", "dev-old").await.unwrap();
+    assert!(offers.is_empty(), "отклонённый запрос другим устройствам не виден");
+    assert!(store_link_grant(&pool, "dana@local", "dev-n", "BOX==", "EPH-O==").await.is_err(), "грант после отказа не принимается");
+    let (_, grant, _) = poll_link(&pool, "dana@local", "dev-n").await.unwrap();
+    assert!(grant.is_some_and(|g| g.box_payload.is_empty()), "новое устройство видит отметку отказа");
+    let (_, grant, _) = poll_link(&pool, "dana@local", "dev-n").await.unwrap();
+    assert!(grant.is_none(), "отметка одноразовая");
+
+    store_link_offer(&pool, "dana@local", "dev-n", "EPH==", "", "", false).await.unwrap();
+    assert!(crate::link::decline_link_offer(&pool, "dana@local", "dev-n").await.unwrap());
+    store_link_offer(&pool, "dana@local", "dev-n", "EPH-2==", "", "", false).await.unwrap();
+    let (_, grant, _) = poll_link(&pool, "dana@local", "dev-n").await.unwrap();
+    assert!(grant.is_none(), "новый оффер снимает отказ");
+}
+
 #[tokio::test]
 async fn link_is_scoped_per_user_and_expires() {
     let pool = test_pool().await;

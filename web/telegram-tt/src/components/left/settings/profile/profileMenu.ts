@@ -16,6 +16,9 @@ export type ProfileItem = {
   screen?: SettingsScreens;
   // Только в колонке компьютера: на телефоне «Обзор» — сам экран «Профиля»
   isNavOnly?: boolean;
+  // Только в списке телефона: «Справки Parvane» в колонке компьютера нет (доски `DkSettingsB`, `ZdProfileX`; на
+  // телефоне она есть — `PhProfileB`)
+  isListOnly?: boolean;
   isAccent?: boolean;
   isDanger?: boolean;
 };
@@ -70,8 +73,10 @@ export const PROFILE_GROUPS: ProfileGroup[] = [{
   titleKey: 'MenuMore',
   items: [
     { id: 'messenger', icon: 'chat', titleKey: 'ParvaneProfileMessengerSettings', screen: SettingsScreens.General },
-    { id: 'help', icon: 'help', titleKey: 'ParvaneHelpTitle', screen: SettingsScreens.ParvaneHelp },
     { id: 'bug', icon: 'bug', titleKey: 'MenuReportBug', screen: SettingsScreens.ParvaneBugReport },
+    {
+      id: 'help', icon: 'help', titleKey: 'ParvaneHelpTitle', screen: SettingsScreens.ParvaneHelp, isListOnly: true,
+    },
     { id: 'about', icon: 'info', titleKey: 'ParvaneProfileAbout', screen: SettingsScreens.ParvaneAbout },
     { id: 'signOut', icon: 'logout', titleKey: 'LogOutTitle', isDanger: true },
   ],

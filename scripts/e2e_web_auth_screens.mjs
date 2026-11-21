@@ -160,6 +160,19 @@ async function runBase() {
   await visible(keyScreen, 'экран ключа восстановления после регистрации');
   // На телефоне шаг — в шапке экрана (`AuthBar`), подпись окна скрыта
   await visible(keyScreen.getByText(/^(step 2 of 2|шаг 2 из 2)$/).filter({ visible: true }).first(), '«шаг N из N» на экране ключа');
+  // Телефон (доска `XpAuth`): ключ в две строки, «Скопировать», «В файл», карточка «Где хранить»; печати нет
+  const keyText = await keyScreen.locator('[data-recovery-key]').getAttribute('data-recovery-key');
+  const keyLines = (await keyScreen.locator('[data-recovery-key]').innerText()).split('\n').filter(Boolean);
+  assert.equal(keyLines.length, 2, `ключ в две строки: ${keyLines}`);
+  assert.equal(keyLines.join('-'), keyText, 'строки ключа складываются в ключ');
+  assert.equal(await keyScreen.locator('[data-recovery-key-print]').count(), 0, 'на телефоне печати нет');
+  assert.equal((await keyScreen.locator('[data-recovery-key-file]').textContent()).trim(), 'В файл');
+  const download = page.waitForEvent('download', { timeout: STEP_TIMEOUT_MS });
+  await keyScreen.locator('[data-recovery-key-file]').click();
+  assert.equal((await download).suggestedFilename(), 'parvane-recovery-key.txt', 'ключ сохраняется файлом');
+  await keyScreen.locator('[data-recovery-key-copy]').click();
+  await visible(page.locator('.Notification-container').getByText('Ключ восстановления скопирован'), 'тост «скопирован»');
+  assert.doesNotMatch(await keyScreen.innerText(), /даже у сервера/, 'текст ключа по доске');
   await keyScreen.locator('[data-recovery-key-saved]').check();
   const keyDone = keyScreen.locator('[data-recovery-key-done]');
   // Телефон сценария — на русском (язык браузера)
@@ -168,6 +181,29 @@ async function runBase() {
   await visible(page.locator('[data-first-run="phone"]'), 'выбор модулей после ключа');
   console.log('OK: телефон — без горизонтальной прокрутки, регистрация входит, ключ ведёт к выбору модулей');
   await phone.context.close();
+
+  // ── Компьютер: экран ключа по доске `RdAuth` ──
+  const desk = await openStart(DESKTOP);
+  page = desk.page;
+  form = await openRegistration(page);
+  await form.locator('#sign-up-parvane-nick').fill(`dina-${suffix}`);
+  await form.locator('#sign-up-parvane-password').fill(PASSWORD);
+  await form.locator('[data-auth-submit]').click();
+  const deskKey = page.locator('[data-recovery-key-screen]');
+  await visible(deskKey, 'экран ключа на компьютере');
+  assert.equal(
+    (await deskKey.locator('[data-recovery-key]').innerText()).trim(),
+    await deskKey.locator('[data-recovery-key]').getAttribute('data-recovery-key'),
+    'ключ строкой',
+  );
+  assert.equal((await deskKey.locator('[data-recovery-key-file]').textContent()).trim(), 'Сохранить в файл');
+  await visible(deskKey.locator('[data-recovery-key-print]'), '«Напечатать»');
+  await visible(deskKey.getByText(/^Храните в менеджере паролей или на бумаге/), 'где хранить — строкой');
+  await deskKey.locator('[data-recovery-key-saved]').check();
+  await deskKey.locator('[data-recovery-key-done]').click();
+  await deskKey.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: компьютер — ключ строкой, «Сохранить в файл», «Напечатать», где хранить строкой');
+  await desk.context.close();
 }
 
 async function runEmail() {
@@ -208,13 +244,21 @@ async function runTelegram() {
   assert.match(href || '', /^https:\/\/t\.me\/[^?]+\?start=/, 'ссылка на бота');
   assert.equal(await telegram.locator('[data-telegram-open]').getAttribute('href'), href, 'кнопка «Открыть»');
   assert.equal(await telegram.getAttribute('data-telegram-mode'), 'register');
-  // «Показать QR» (spec 041 E4): та же ссылка картинкой
+  // Компьютер (доска `ZdAuthX`): «Показать QR» — чип в строке шага 1, та же ссылка картинкой; подписи шагов
+  await visible(telegram.getByText(/или наведите телефон на код/), 'подсказка шага 1 про QR');
+  await visible(telegram.getByText('ждём… окно переключится само'), 'подсказка шага 2 на компьютере');
+  await visible(telegram.getByText('3. Сохраните ключ восстановления'), 'шаг 3 на компьютере');
+  await visible(telegram.getByText(/Истёк — кнопка «Запросить заново»/), 'срок запроса');
   await telegram.locator('[data-telegram-qr]').click();
-  await telegram.locator('[data-telegram-qr] + div svg').first().waitFor({ state: 'visible', timeout: 15000 });
+  await telegram.locator('[data-telegram-qr-image] svg').first().waitFor({ state: 'visible', timeout: 15000 });
   await telegram.locator('[data-telegram-qr]').click();
   await shootAuthScreen(page, 'telegram');
+  // Телефон (доска `ZpAuthX`): шапка «Подтверждение · шаг 2 из 3 · Telegram», «3. Вернитесь сюда»
   await page.setViewportSize(PHONE.viewport);
   await expectNoOverflow(page, 'Telegram на телефоне');
+  await visible(telegram.getByText('шаг 2 из 3 · Telegram'), 'шаг в шапке телефона');
+  await visible(telegram.getByText('Подтвердите аккаунт через бота вашего сервера.'), 'текст телефона');
+  await visible(telegram.getByText('экран переключится на ключ восстановления'), 'шаг 3 на телефоне');
   await page.setViewportSize(DESKTOP.viewport);
   await telegram.locator('[data-telegram-check]').click();
   await visible(telegram, 'без подтверждения экран Telegram остаётся');

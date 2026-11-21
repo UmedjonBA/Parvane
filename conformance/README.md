@@ -713,6 +713,19 @@ content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
     `link::tests`, identity `link_challenge_shared_by_all_old_devices`, живой `parvane-integration --test v2_link_live`,
     web `conformance.test.ts` (LINK-1 п. 13), ядро `linking_tests` (обмен закрытой частью).
 
+14. **Отказ в привязке и подпись запроса (spec 041, 21 ноя 2026; web)** — «Отклонить» на своём устройстве журнала —
+    `LinkGrantRequest.decline = 4` (пустые бокс и ключ): identity гасит оффер (у всех старых устройств запрос
+    исчезает) и кладёт новому устройству одноразовую отметку, которую оно видит в любом своём опросе как
+    `LinkPollResponse.declined = 4`; грант под погашенный оффер не принимается, новый оффер снимает отметку. Отказать
+    может только устройство журнала (как и выдать грант): вошедший одним паролем сорвать привязку не может. Новое
+    устройство, увидев отказ, перестаёт опрашивать и показывает «Запросить снова» (новый оффер). Запрос несёт
+    `LinkOffer.label = 8` — как новое устройство назвало себя при входе (`SessionIssueRequest.client_kind`), только
+    показ; отдаётся лишь устройствам журнала. web — `provider.ts parvaneDeclineLink` / `noteLinkDeclined` /
+    `parvaneRequestLinkAgain`, экран `SettingsActiveSessions.tsx`, `devices/DeviceConfirmSignIn.tsx`; desktop и android
+    поля пока не читают (отклонение у них — только локально, как до п. 14). Тесты: identity
+    `link_decline_voids_offer_and_reaches_new_device_once`, живой `v2_link_live link_request_is_declined_by_own_device_live`,
+    сценарий `e2e_web_linking.mjs`.
+
 Legacy-офферы v1 (без `commitment`, 6-значный код от одного ключа) не
 обслуживаются старым устройством. Код сверки не пишется в логи release-сборок.
 

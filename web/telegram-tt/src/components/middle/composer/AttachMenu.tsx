@@ -34,6 +34,7 @@ import useParvaneModules from '../../../hooks/useParvaneModules';
 import Icon from '../../common/icons/Icon';
 import ArticlePickerModal from '../../parvane/article/ArticlePickerModal';
 import LocationScreen from '../../parvane/chatScreen/LocationScreen';
+import MusicTrackPickScreen from '../../parvane/music/MusicTrackPickScreen';
 import TaskOfferModal from '../../parvane/taskOffer/TaskOfferModal';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
@@ -103,8 +104,10 @@ const AttachMenu = ({
   const isFilesOn = enabledModules.includes('files');
   const isNotesOn = enabledModules.includes('notes');
   const isPlanOn = enabledModules.includes('plan');
+  const isMusicOn = enabledModules.includes('music');
   const [isArticleOpen, openArticle, closeArticle] = useFlag();
   const [isLocationOpen, openLocation, closeLocation] = useFlag();
+  const [isTrackPickOpen, openTrackPick, closeTrackPick] = useFlag();
 
   const canSendVideoAndPhoto = canSendPhotos && canSendVideos;
   const canSendVideoOrPhoto = canSendPhotos || canSendVideos;
@@ -279,8 +282,8 @@ const AttachMenu = ({
               <>
                 {canSendVideoOrPhoto && !isFile && (
                   <MenuItem icon="photo" onClick={handleQuickSelect}>
-                    {oldLang(canSendVideoAndPhoto ? 'AttachmentMenu.PhotoOrVideo'
-                      : (canSendPhotos ? 'InputAttach.Popover.Photo' : 'InputAttach.Popover.Video'))}
+                    {canSendVideoAndPhoto ? lang('AttachMenuGallery')
+                      : oldLang(canSendPhotos ? 'InputAttach.Popover.Photo' : 'InputAttach.Popover.Video')}
                   </MenuItem>
                 )}
                 {((canSendDocuments || canSendAudios) && !isPhotoOrVideo)
@@ -296,30 +299,38 @@ const AttachMenu = ({
                 )}
               </>
             )}
-            {canAttachPolls && !editingMessage && (
-              <MenuItem icon="poll" className="attach-tile--poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
-            )}
-            {!editingMessage && (
-              <MenuItem icon="location" className="attach-tile--place" onClick={openLocation}>
-                {lang('AttachLocation')}
-              </MenuItem>
-            )}
-            {canAttachToDoLists && !editingMessage && (
-              <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
-            )}
             {/* GROUP-2: файл из облака уходит документом — без права на документы пункта нет */}
             {isFilesOn && !editingMessage && !isScheduled && canAttachMedia && canSendDocuments && (
-              <MenuItem icon="folder" onClick={handleCloudAttach}>{lang('ParvaneCloudAttachFromCloud')}</MenuItem>
+              <MenuItem icon="folder" className="attach-tile--files" onClick={handleCloudAttach}>
+                {lang('ParvaneCloudAttachFromCloud')}
+              </MenuItem>
             )}
             {isNotesOn && !editingMessage && !isScheduled && (
               <MenuItem icon="document" className="attach-tile--note" onClick={handleArticlePick}>
-                {lang('ArticleMenuItem')}
+                {lang('AttachMenuNote')}
               </MenuItem>
             )}
             {isPlanOn && !editingMessage && !isScheduled && (
               <MenuItem icon="calendar" className="attach-tile--plan" onClick={handleTaskOfferCreate}>
-                {lang('TaskOfferMenuItem')}
+                {lang('AttachMenuPlan')}
               </MenuItem>
+            )}
+            {/* Доска `PhCalls`: «Трек» — при включённой «Музыке»; порядок — модули, затем «Место» и «Опрос» */}
+            {isMusicOn && !editingMessage && !isScheduled && (
+              <MenuItem icon="play" className="attach-tile--track" onClick={openTrackPick}>
+                {lang('AttachMenuTrack')}
+              </MenuItem>
+            )}
+            {!editingMessage && (
+              <MenuItem icon="location" className="attach-tile--place" onClick={openLocation}>
+                {lang('AttachMenuPlace')}
+              </MenuItem>
+            )}
+            {canAttachPolls && !editingMessage && (
+              <MenuItem icon="poll" className="attach-tile--poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
+            )}
+            {canAttachToDoLists && !editingMessage && (
+              <MenuItem icon="select" onClick={onTodoListCreate}>{lang('TitleToDoList')}</MenuItem>
             )}
           </Menu>
         </>
@@ -327,6 +338,7 @@ const AttachMenu = ({
       <TaskOfferModal isOpen={isTaskOfferOpen} chatId={chatId} onClose={closeTaskOffer} />
       <LocationScreen isOpen={isLocationOpen} chatId={chatId} onClose={closeLocation} />
       <ArticlePickerModal isOpen={isArticleOpen} chatId={chatId} onClose={closeArticle} />
+      <MusicTrackPickScreen isOpen={isTrackPickOpen} chatId={chatId} onClose={closeTrackPick} />
     </div>
   );
 };

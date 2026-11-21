@@ -4,7 +4,8 @@ import type { NotifyButton, NotifyCommand, NotifyData } from '../util/systemNoti
 import { APP_NAME, DEBUG, DEBUG_MORE } from '../config';
 import { loadWorkerNotifyPrefs, takeDueWorkerReminders } from '../util/reminderStore';
 import {
-  buildNotifyButtons, buildNotifyTitle, getIsNotifyAllowed, getWorkerNotifyTexts, readNotifyPrefs, resolveNotifyClick,
+  buildNotifyButtons, buildNotifyTitle, getIsNotifyAllowed, getReminderNotifyModule, getWorkerNotifyTexts,
+  readNotifyPrefs, resolveNotifyClick,
 } from '../util/systemNotify';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -230,7 +231,9 @@ export function handlePush(e: PushEvent) {
     const prefs = readNotifyPrefs(await loadWorkerNotifyPrefs().catch(() => undefined));
     const now = new Date();
     if (reminders.length) {
-      if (getIsNotifyAllowed(prefs, 'plan', now)) await Promise.all(reminders.map(showReminder));
+      // Отбой — уведомление «Здоровья», записи — «Плана»: у каждого модуля свой выключатель
+      const allowed = reminders.filter(({ key }) => getIsNotifyAllowed(prefs, getReminderNotifyModule(key), now));
+      await Promise.all(allowed.map(showReminder));
       return;
     }
     if (!getIsNotifyAllowed(prefs, 'chats', now)) return;
@@ -251,7 +254,8 @@ function showReminder(reminder: WorkerReminder) {
     data,
     actions: buildNotifyButtons('reminder', (action) => (action === 'done' ? texts.done : texts.snooze)),
   };
-  return self.registration.showNotification(buildNotifyTitle(APP_NAME, texts.planner), options);
+  const moduleTitle = getReminderNotifyModule(reminder.key) === 'health' ? texts.health : texts.planner;
+  return self.registration.showNotification(buildNotifyTitle(APP_NAME, moduleTitle), options);
 }
 
 async function focusClient(client: WindowClient) {

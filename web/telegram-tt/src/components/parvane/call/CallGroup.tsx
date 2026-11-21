@@ -49,6 +49,7 @@ const CallGroup = ({
   const group = call.group!;
   const peers = Object.keys(group.peerNames);
   const hasCamera = hasVideoTrack(call.localStream);
+  const isCameraShown = hasCamera && !call.isCameraOff;
   const activeCount = peers.filter((peer) => group.peerStates[peer] === 'active').length + 1;
   const hasFreePlace = Boolean(onInvite) && peers.length + 1 < GROUP_CALL_MAX_PARTICIPANTS;
   const inviteLabel = langNew('ParvaneCallInvite');
@@ -67,16 +68,22 @@ const CallGroup = ({
         <div className={styles.groupHeading}>
           <div className={styles.groupTitle}>{group.title}</div>
           <div className={styles.groupMeta}>
-            <span>{lang('ParvaneGroupCall')}</span>
-            {' · '}
+            {/* Доски `PhCalls`, `DkCalls`: «название · 5 из 8 · 12:40»; «Групповой звонок» — для чтения с экрана */}
+            <span className={styles.readerOnly}>{lang('ParvaneGroupCall')}</span>
             <span>{lang('ParvaneGroupCallCount', [activeCount, peers.length + 1])}</span>
             {' · '}
             <span>{time}</span>
           </div>
         </div>
         {onInvite && (
-          <button type="button" className={styles.groupInvite} aria-label={inviteLabel} onClick={onInvite}>
-            <i className="icon icon-add-user" aria-hidden />
+          <button
+            type="button"
+            className={styles.groupInvite}
+            aria-label={inviteLabel}
+            title={inviteLabel}
+            onClick={onInvite}
+          >
+            <span className={styles.groupInvitePlus} aria-hidden>+</span>
             <span className={styles.groupInviteText}>{inviteLabel}</span>
           </button>
         )}
@@ -103,6 +110,7 @@ const CallGroup = ({
                 : lang(PEER_STATE_KEYS[peerState] || PEER_STATE_KEYS.connecting)}
               stream={call.groupStreams?.[peer]}
               isCameraOff={call.groupVideoMuted?.[peer] ?? !hasCamera}
+              isMuted={peerState === 'active' && call.groupAudioMuted?.[peer]}
               isSpeaking={isSpeaking}
               tone={index + 1}
             />
@@ -128,16 +136,15 @@ const CallGroup = ({
           label={lang(call.isMuted ? 'ParvaneCallUnmute' : 'ParvaneCallMute')}
           onClick={onToggleMute}
         />
-        {hasCamera && (
-          <CallButton
-            icon={call.isCameraOff ? 'icon-video-stop' : 'icon-video'}
-            kind={call.isCameraOff ? 'plain' : 'on'}
-            label={lang(call.isCameraOff ? 'ParvaneCallCameraOn' : 'ParvaneCallCameraOff')}
-            onClick={onToggleCamera}
-          />
-        )}
+        {/* Камеру можно включить и в голосовом групповом звонке: видео согласовано с каждым участником */}
+        <CallButton
+          icon={isCameraShown ? 'icon-video' : 'icon-video-stop'}
+          kind={isCameraShown ? 'on' : 'plain'}
+          label={lang(isCameraShown ? 'ParvaneCallCameraOff' : 'ParvaneCallCameraOn')}
+          onClick={onToggleCamera}
+        />
         {extraControls}
-        <CallButton icon="icon-phone-discard" kind="hangup" label={lang('CallEndCall')} onClick={onHangup} />
+        <CallButton icon="icon-phone-discard" kind="hangup" label={langNew('ParvaneCallLeave')} onClick={onHangup} />
       </div>
     </div>
   );

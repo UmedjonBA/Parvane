@@ -1,12 +1,14 @@
-import { memo, useMemo, useState } from '../../../../lib/teact/teact';
+import { memo, useLayoutEffect, useMemo, useState } from '../../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../../global';
 
 import buildClassName from '../../../../util/buildClassName';
 import { openNote } from '../../../../util/parvaneSection';
 import { buildGuide, getGuideLang } from '../../../parvane/notes/notesGuide';
 import { loadNotes, restoreGuide } from '../../../parvane/notes/notesStore';
+import { getIsHelpSearchOpen, setIsHelpSearchOpen } from '../profile/profileRequests';
 import { searchHelp } from './helpSearch';
 
+import useDerivedState from '../../../../hooks/useDerivedState';
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
@@ -24,14 +26,23 @@ type OwnProps = {
 
 // Parvane (spec 041, доски `RpProfileA`, `PhProfileB`): «Справка Parvane» — обычные заметки папки «Справка Parvane»
 // в «Заметках» (их создаёт и восстанавливает сам модуль, `notesGuide.ts`). Здесь — их список: нажатие открывает
-// заметку в «Заметках», «Вернуть справку в исходный вид» дописывает недостающие заметки справки
+// заметку в «Заметках», «Вернуть справку в исходный вид» дописывает недостающие заметки справки. Поиск открывает
+// значок в шапке (`SettingsHeader`, сигнал `profileRequests.ts`)
 const SettingsHelp = ({ isActive, onReset }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const [isRestoring, setIsRestoring] = useState(false);
   const [query, setQuery] = useState('');
+  const isSearchOpen = useDerivedState(getIsHelpSearchOpen);
 
   useHistoryBack({ isActive, onBack: onReset });
+
+  // Уход с экрана закрывает поиск и забывает запрос
+  useLayoutEffect(() => {
+    if (isActive) return;
+    setIsHelpSearchOpen(false);
+    setQuery('');
+  }, [isActive]);
 
   const guide = useMemo(() => buildGuide(getGuideLang(lang.code)), [lang.code]);
   const matches = useMemo(() => searchHelp(guide.notes, query), [guide, query]);
@@ -63,17 +74,24 @@ const SettingsHelp = ({ isActive, onReset }: OwnProps) => {
 
   return (
     <div className={buildClassName('settings-content custom-scroll', profile.screen)} data-settings-help>
-      <div className={profile.hint}>{lang('ParvaneHelpHint', { folder: guide.folderName })}</div>
-      <div className={styles.screen}>
-        <input
-          type="search"
-          className={kit.input}
-          value={query}
-          placeholder={lang('ParvaneHelpSearch')}
-          aria-label={lang('ParvaneHelpSearch')}
-          data-help-search
-          onChange={handleQuery}
-        />
+      {isSearchOpen && (
+        <div className={styles.screen}>
+          <input
+            type="search"
+            className={kit.input}
+            value={query}
+            placeholder={lang('ParvaneHelpSearch')}
+            aria-label={lang('ParvaneHelpSearch')}
+            autoFocus
+            data-help-search
+            onChange={handleQuery}
+          />
+        </div>
+      )}
+      <div className={profile.hint}>
+        {lang('ParvaneHelpHintCount', { count: guide.notes.length, folder: guide.folderName }, {
+          pluralValue: guide.notes.length,
+        })}
       </div>
       {!matches.length && <div className={profile.hint} data-help-nothing>{lang('ParvaneHelpNothing')}</div>}
       {Boolean(matches.length) && (

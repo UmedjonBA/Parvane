@@ -271,6 +271,14 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
   await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Значок «микрофон выключен» на плитке Алисы у остальных (доски `PhCalls`, `DkCalls`)
+  for (const page of [bobSession.page, carolSession.page]) {
+    await page.locator(`[data-peer="${alice}"] [data-peer-muted]`).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
+  console.log('OK: «микрофон выключен» на плитке участника');
+  // «Включить камеру» в групповом звонке без камеры: кнопка видна всегда (видео согласовано с каждым)
+  await bobSession.page.getByRole('button', { name: /^Turn camera (on|off)$/ }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Выход одного участника: mesh остальных живёт ───────────────────────────
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();

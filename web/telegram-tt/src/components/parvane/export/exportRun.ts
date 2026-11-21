@@ -5,9 +5,11 @@
 // внутри потока файла; при отмене или ошибке накопленное выбрасывается.
 
 import type { CloudNodeJson } from '../../../api/parvane/cloudDrive';
+import type { ExportHealthEntry } from './exportCsv';
 import type { ExportChat, ExportContact, ExportIndexSections, ExportLabels, ExportSnapshot } from './exportModel';
 
 import { isServiceNode } from '../cloud/cloudModel';
+import { buildContactsCsv, buildHealthCsv, buildPlannerCsv } from './exportCsv';
 import {
   assignChatDirs, exportArchiveName, renderChatHtml, renderChatJson, renderIndexHtml, sanitizeFileName, uniqueName,
 } from './exportModel';
@@ -69,6 +71,8 @@ export type ExportSource = {
   media: (fileId: string, signal: AbortSignal) => Promise<Blob | undefined>;
   /** Состояние «Плана» (JSON-текст); `undefined` — нет данных. */
   planner: () => Promise<string | undefined>;
+  /** Записи «Здоровья» (раздел «План и здоровье»); нет — модуль не поднялся либо записей нет. */
+  health?: () => Promise<ExportHealthEntry[]>;
   /** Заметки «Знаний» с путями внутри `notes/`. */
   notes: () => Promise<ExportNote[]>;
   cloudFiles: () => Promise<ExportCloudFile[]>;
@@ -232,6 +236,18 @@ export async function runDataExport(args: {
       if (planner) {
         index.planner = 'planner/planner.json';
         await writer.addText(index.planner, prettyJson(planner));
+        const csv = buildPlannerCsv(planner);
+        if (csv) {
+          await writer.addText('planner/tasks.csv', csv.tasks);
+          await writer.addText('planner/events.csv', csv.events);
+        }
+      }
+      // «План и здоровье» (доска `DkSettingsB`): записи «Здоровья» — JSON и CSV рядом с «Планом»
+      const health = await source.health?.().catch(() => []) || [];
+      throwIfAborted(signal);
+      if (health.length) {
+        await writer.addText('health/health.json', JSON.stringify({ entries: health }, undefined, 2));
+        await writer.addText('health/health.csv', buildHealthCsv(health));
       }
       report({ done: 1 });
     }
@@ -257,6 +273,7 @@ export async function runDataExport(args: {
       report({ stage: 'contacts', done: 0, total: 1 });
       index.contacts = 'contacts.json';
       await writer.addText(index.contacts, contactsJson(snapshot.contacts));
+      await writer.addText('contacts.csv', buildContactsCsv(snapshot.contacts));
       report({ done: 1 });
     }
 

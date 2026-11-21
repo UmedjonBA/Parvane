@@ -12,6 +12,7 @@ import {
 import { getNotifyPrefs, setNotifyModuleOn, updateNotifyPrefs } from '../../../util/notifyPrefs';
 import { showPermissionDenied } from '../../../util/permissionPrompt';
 import { buildMuteUntil } from '../../../util/systemNotify';
+import { getHealthDays, watchHealthDays } from '../../parvane/health/healthStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -50,9 +51,10 @@ const MINUTES_IN_HOUR = 60;
 
 // Parvane (spec 041 E3): «Профиль → Уведомления» по доскам `PhProfileA`, `DkSettingsB`. Выключатели по модулям и
 // «Не беспокоить» — настройка устройства (`util/notifyPrefs.ts`), действуют и в service worker; показ текста, звук
-// и типы чатов — прежние настройки (`notifyDefaults`, `settings.byKey`). «Музыка» — «Трек скачан на сервер»;
-// «Здоровье» и «Файлы» системных уведомлений не присылают — в списке модулей их нет. «Не беспокоить 1 час / до утра» —
-// пункты меню значка в трее с доски `ZdMisc` (трея у браузера нет)
+// и типы чатов — прежние настройки (`notifyDefaults`, `settings.byKey`). «Здоровье» — напоминание об отбое (включается в
+// «Целях здоровья»), «Файлы» — приглашение в общую папку и ссылка «Файлов» в чате, «Музыка» — «Трек скачан на
+// сервер». «Не беспокоить» по умолчанию следует режиму сна из «Здоровья», пока часы не заданы вручную.
+// «Не беспокоить 1 час / до утра» — пункты меню значка в трее с доски `ZdMisc` (трея у браузера нет)
 const SettingsNotifications = ({
   isActive,
   onReset,
@@ -72,10 +74,24 @@ const SettingsNotifications = ({
   const lang = useLang();
   const prefs = useDerivedState(getNotifyPrefs);
   const { enabled } = useParvaneModules();
+  const healthDays = useDerivedState(getHealthDays);
+  const sleepBed = healthDays?.goals?.sleep_bed;
+  const sleepWake = healthDays?.goals?.sleep_wake;
 
   useEffect(() => {
     loadNotificationSettings();
   }, [loadNotificationSettings]);
+
+  useEffect(() => {
+    if (isActive && enabled.includes('health')) watchHealthDays();
+  }, [isActive, enabled]);
+
+  // Режим сна «Здоровья» — часы «Не беспокоить» по умолчанию, пока их не меняли вручную
+  useEffect(() => {
+    if (prefs.isQuietCustom || sleepBed === undefined || sleepWake === undefined) return;
+    if (prefs.quietFrom === sleepBed && prefs.quietTo === sleepWake) return;
+    updateNotifyPrefs({ quietFrom: sleepBed, quietTo: sleepWake });
+  }, [prefs, sleepBed, sleepWake]);
 
   useHistoryBack({ isActive, onBack: onReset });
 
@@ -131,12 +147,12 @@ const SettingsNotifications = ({
 
   const handleQuietFromChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const minutes = parseTime(e.currentTarget.value);
-    if (minutes !== undefined) updateNotifyPrefs({ quietFrom: minutes });
+    if (minutes !== undefined) updateNotifyPrefs({ quietFrom: minutes, isQuietCustom: true });
   });
 
   const handleQuietToChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const minutes = parseTime(e.currentTarget.value);
-    if (minutes !== undefined) updateNotifyPrefs({ quietTo: minutes });
+    if (minutes !== undefined) updateNotifyPrefs({ quietTo: minutes, isQuietCustom: true });
   });
 
   const handleMute = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -204,6 +220,24 @@ const SettingsNotifications = ({
             isOn={!prefs.off.includes('plan')}
             onChange={(isOn) => setNotifyModuleOn('plan', isOn)}
             data-notify-module="plan"
+          />
+        )}
+        {enabled.includes('health') && (
+          <ProfileSwitchRow
+            title={lang('PlannerHealth')}
+            hint={lang('ParvaneNotifyHealthHint')}
+            isOn={!prefs.off.includes('health')}
+            onChange={(isOn) => setNotifyModuleOn('health', isOn)}
+            data-notify-module="health"
+          />
+        )}
+        {enabled.includes('files') && (
+          <ProfileSwitchRow
+            title={lang('ParvaneModuleFiles')}
+            hint={lang('ParvaneNotifyFilesHint')}
+            isOn={!prefs.off.includes('files')}
+            onChange={(isOn) => setNotifyModuleOn('files', isOn)}
+            data-notify-module="files"
           />
         )}
         {enabled.includes('music') && (

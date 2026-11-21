@@ -917,6 +917,9 @@ fn l2_mode_direct_and_group() {
     let v = bob.l2_direct("alice@local");
     assert!(v.active && !v.mine && v.pad && !v.ephemeral_allowed, "{v:?}");
     assert_eq!(v.enabled_by, vec!["alice@local".to_string()]);
+    // Профиль собеседника (доска `RpChat`): «Включил собеседник · <дата>» — метка его операции
+    assert!(v.peer_since_ms > 0, "{v:?}");
+    assert_eq!(alice.l2_direct("bob@local").peer_since_ms, 0, "Боб не включал");
     assert!(!bob.presence_allowed());
     let ev = drain(&mut srv, &mut alice2);
     assert_eq!(chat_modes(&ev), vec![("bob@local".into(), "alice@local".into(), true)], "{ev:?}");

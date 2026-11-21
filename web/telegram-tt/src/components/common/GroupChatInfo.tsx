@@ -11,6 +11,7 @@ import {
   getChatTypeLangKey,
   getGroupStatus,
   getMainUsername,
+  isChatPublic,
   isChatSuperGroup,
 } from '../../global/helpers';
 import {
@@ -223,6 +224,10 @@ const GroupChatInfo = ({
           : lang('GroupStatusWithOnline', {
             status: groupStatusElement, onlineCount: onlineStatusElement,
           }, { withNodes: true })}
+        {/* Parvane (доска `XdChat`): «214 участников · публичная» */}
+        {isChatPublic(chat) && (
+          <span className="public-status" data-chat-public>{` · ${lang('ParvanePublicMark')}`}</span>
+        )}
       </span>
     );
   }

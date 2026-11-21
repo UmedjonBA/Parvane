@@ -100,6 +100,14 @@ export class TaskOfferStore {
     responses.set(from, { isAccepted, ts });
   }
 
+  /** Вернуть прежнее решение `from` (своё решение не отправилось); прежнего не было — снять. */
+  restoreResponse(uuid: string, from: string, previous?: { isAccepted: boolean; ts: number }) {
+    const responses = this.byUuid.get(uuid)?.responses;
+    if (!responses) return;
+    if (previous) responses.set(from, previous);
+    else responses.delete(from);
+  }
+
   // Содержимое карточки для нативного UI (как `PollStore.build`)
   build(uuid: string): ApiTaskOffer | undefined {
     const entry = this.byUuid.get(uuid);

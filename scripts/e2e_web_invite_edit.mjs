@@ -85,7 +85,7 @@ try {
   assert.equal(modeChange.result?.newInvite?.isRequestNeeded, true, `«по заявке» не включился: ${JSON.stringify(modeChange)}`);
   assert.equal(modeChange.result?.newInvite?.usage, 1, 'счётчик вступивших сбросился сменой режима');
   const modeBack = await provider('editExportedChatInvite', { link, title: 'Новое', isRequestNeeded: false, usageLimit: 3 });
-  assert.equal(modeBack.result?.newInvite?.isRequestNeeded, false, '«по заявке» не выключился');
+  assert.ok(modeBack.result?.newInvite && !modeBack.result.newInvite.isRequestNeeded, `«по заявке» не выключился: ${JSON.stringify(modeBack)}`);
   console.log('OK: правка ссылки сохраняет счётчик');
 
   // Экран ссылки: название и вступившая

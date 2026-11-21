@@ -27,6 +27,10 @@ const WAIT_MS = 15_000;
 const browser = await chromium.launch();
 const sessions = {};
 
+// Снимки экранов по доскам — для сверки глазами (каталог результатов, не проверка)
+const SHOTS_DIR = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
+const shot = (on, name) => on.screenshot({ path: `${SHOTS_DIR}profile-shot-${name}.png` }).catch(() => undefined);
+
 const shown = (locator) => locator.waitFor({ state: 'visible', timeout: WAIT_MS });
 const hidden = (locator) => locator.waitFor({ state: 'hidden', timeout: WAIT_MS });
 
@@ -127,24 +131,91 @@ try {
   await shown(page.locator('[data-settings-general]'));
   console.log('OK: папки и стикеры — из «Настроек мессенджера» и обратно');
 
+  // «Копия ключей» на компьютере (`ZdProfileX`): состояние копии ключей аккаунта, «Ключ восстановления»; файл копии —
+  // на «Данных и памяти» (`DkSettingsB`)
   await profileRow(page, 'Key backup').click();
-  await shown(page.locator('[data-keys-action="save"]'));
-  await shown(page.locator('[data-keys-action="restore"]'));
+  await shown(page.locator('[data-keys-bundle-state]'));
+  await shown(page.locator('[data-keys-action="renew"]'));
+  assert.equal(await page.locator('[data-keys-file-form]').count(), 0, 'форма файла копии на экране компьютера');
+  await shot(page, 'desk-keys');
+  await profileRow(page, 'Data and Storage').click();
+  const data = page.locator('[data-settings-data]');
+  await shown(data);
+  await shown(current('data'));
+  for (const kind of ['media', 'music', 'cloud', 'other']) {
+    await shown(data.locator(`[data-cache-row="${kind}"] [data-cache-size]`));
+  }
+  await data.locator('[data-storage-row="autoload"]').click();
+  await page.locator('[role="radiogroup"] [data-choice="never"]').click();
+  await shown(data.locator('[data-storage-row="autoload"] [data-storage-value="never"]'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('parvane:autoload')), 'never');
+  await data.locator('[data-storage-row="autoload"]').click();
+  await page.locator('[role="radiogroup"] [data-choice="always"]').click();
+  await data.locator('[data-storage-row="keep"]').click();
+  await page.locator('[role="radiogroup"] [data-choice="week"]').click();
+  await shown(data.locator('[data-storage-row="keep"] [data-storage-value="week"]'));
+  // Файл копии ключей: окно с паролем и повтором (вместо `window.prompt`), файл уходит в загрузки
+  await shown(data.locator('[data-keys-file-card="none"]'));
+  await data.locator('[data-keys-action="save"]').click();
+  const keysForm = page.locator('.Modal [data-keys-file-form="save"]');
+  await shown(keysForm);
+  const keysSubmit = keysForm.locator('[data-keys-submit="save"]');
+  await keysForm.locator('[data-keys-password]').fill('copy-pass-1');
+  await keysForm.locator('[data-keys-password-repeat]').fill('copy-pass-2');
+  await shown(keysForm.locator('[data-keys-error="mismatch"]'));
+  assert.ok(await keysSubmit.isDisabled(), 'файл копии сохраняется при несовпадающих паролях');
+  await keysForm.locator('[data-keys-password-repeat]').fill('copy-pass-1');
+  const download = page.waitForEvent('download', { timeout: WAIT_MS });
+  await keysSubmit.click();
+  assert.equal((await download).suggestedFilename(), 'parvane-e2e-keys.json');
+  await hidden(keysForm);
+  await shown(data.locator('[data-keys-file-card="ok"]'));
+  await shot(page, 'desk-data');
+  console.log('OK: «Данные и память» — кэш по видам, автозагрузка и срок, файл копии ключей окном');
+
   await profileRow(page, 'About').click();
-  await shown(page.locator('[data-about-version]').getByText(/^version \S+/));
+  await shown(page.locator('[data-about-version]').getByText(/^version \S+ · build \S+/));
+  await page.waitForFunction(() => document.querySelector('[data-about-server-version]')
+    ?.getAttribute('data-about-server-version'), undefined, { timeout: WAIT_MS });
+  await shot(page, 'desk-about');
+  await page.locator('[data-about-action="check"]').click();
+  await shown(page.locator('[data-about-update]').getByText(/checked today at/));
+  await shown(page.locator('[data-about-row="licenses"]'));
+  await page.locator('[data-about-row="licenses"]').click();
+  await shown(page.locator('.Modal [data-licenses]'));
+  await page.keyboard.press('Escape');
+  await hidden(page.locator('.Modal [data-licenses]'));
+  await page.locator('[data-about-row="hotkeys"]').click();
+  await shown(page.locator('[data-hotkeys-group]').first());
+  await page.keyboard.press('Escape');
+  await hidden(page.locator('[data-hotkeys-group]').first());
   await profileRow(page, 'Devices and account').click();
   await shown(page.locator('.SettingsActiveSessions'));
   await shown(current('devices'));
   // spec 041 (`DkSettingsA`): карточки аккаунта и «Опасная зона»; удаление — экраном
   await shown(page.locator('[data-account-card] [data-account-row="nick"]').getByText(/^@profile-vera-/));
+  // «Удалить аккаунт» на компьютере — окно поверх «Профиля» (`RdProfile`): без подписи «Что произойдёт»
   await page.locator('[data-delete-account-open]:visible').click();
-  await shown(page.locator('[data-delete-account-dialog]'));
+  const deleteWindow = page.locator('.Modal [data-delete-account-dialog]');
+  await shown(deleteWindow);
+  await shown(deleteWindow.locator('[data-delete-account-submit]').getByText('Delete in 7 days'));
   await shown(current('devices'));
-  await back.click();
+  await page.keyboard.press('Escape');
+  await hidden(deleteWindow);
   await shown(page.locator('.SettingsActiveSessions'));
+  // «Сменить пароль» — окно поверх экрана (`ZdProfileX`): надёжность, «Пароли не совпадают»
   await page.locator('[data-account-row="password"]').click();
-  await shown(page.locator('[data-password-form]'));
-  await profileRow(page, 'Devices and account').click();
+  const passwordForm = page.locator('.Modal [data-password-form]');
+  await shown(passwordForm);
+  await passwordForm.locator('[data-password-field="new"]').fill('short');
+  await shown(passwordForm.locator('[data-password-strength="short"]'));
+  await passwordForm.locator('[data-password-field="new"]').fill('example-pass-42');
+  await shown(passwordForm.locator('[data-password-strength="strong"]').getByText(/^Strong: 15 characters/));
+  await passwordForm.locator('[data-password-field="repeat"]').fill('example-pass-43');
+  await shown(passwordForm.locator('[data-password-error="mismatch"]'));
+  await shot(page, 'desk-password');
+  await page.keyboard.press('Escape');
+  await hidden(passwordForm);
   await shown(page.locator('.SettingsActiveSessions'));
   await profileRow(page, 'Privacy and Security').click();
   await shown(page.locator('#Settings').getByText('Blocked Users').first());
@@ -158,32 +229,52 @@ try {
   await page.keyboard.press('Escape');
   await hidden(exportDialog);
 
-  // spec 041: «Справка Parvane» и «Сообщить об ошибке» — экраны; «Формат» в «Языке»
-  await profileRow(page, 'Parvane help').click();
-  const help = page.locator('[data-settings-help]');
-  await shown(help);
-  assert.equal(await help.locator('[data-help-note]').count() >= 10, true, 'список заметок справки');
-  await shown(help.locator('[data-help-restore]'));
-  // Поиск по справке: слова запроса в названии либо тексте, найденная строка — под названием
-  const helpCount = await help.locator('[data-help-note]').count();
-  await help.locator('[data-help-search]').fill('Ctrl');
-  await help.locator('[data-help-snippet]').first().waitFor({ state: 'visible', timeout: WAIT_MS });
-  assert.ok(await help.locator('[data-help-note]').count() < helpCount, 'поиск по справке не сузил список');
-  await help.locator('[data-help-search]').fill('несуществующееслово');
-  await shown(help.locator('[data-help-nothing]'));
-  await help.locator('[data-help-search]').fill('');
-  await help.locator('[data-help-note]').nth(helpCount - 1).waitFor({ state: 'visible', timeout: WAIT_MS });
+  // «Справки Parvane» в колонке компьютера нет (`DkSettingsB`, `ZdProfileX`) — она в списке телефона
+  assert.equal(await nav.locator('[data-profile-item="help"]').count(), 0, '«Справка» в колонке компьютера');
+  // «Сообщить об ошибке» (`ZdProfileY`): две колонки, два поля, что приложим, сохранить в файл
   await profileRow(page, 'Report a Bug').click();
   const bug = page.locator('[data-bug-report]');
   await shown(bug);
+  await shown(bug.locator('[data-bug-recipient]').getByText(/^The report goes to bugs@/));
   assert.equal(await bug.locator('[data-bug-send]').isDisabled(), true, 'пустой отчёт не отправляется');
   await bug.locator('[data-area="notes"]').click();
   await shown(bug.locator('[data-area="notes"][aria-pressed="true"]'));
+  await shown(bug.locator('[data-bug-environment]').getByText(/^Parvane \S+ · \S+ · \S+/));
   await bug.locator('[data-bug-preview]').click();
-  await shown(bug.getByText(/^Parvane \S+ · \S+ · \S+/));
+  await shown(bug.locator('pre').getByText(/Parvane \S+ · \S+ · \S+/));
+  await bug.locator('[data-bug-text]').fill('Плеер молчит');
+  await bug.locator('[data-bug-steps]').fill('открыл музыку');
+  const bugFile = page.waitForEvent('download', { timeout: WAIT_MS });
+  await bug.locator('[data-bug-save]').click();
+  const bugReport = JSON.parse(await (await (await bugFile).createReadStream()).toArray()
+    .then((chunks) => Buffer.concat(chunks).toString('utf8')));
+  assert.equal(bugReport.description, 'Плеер молчит');
+  assert.equal(bugReport.steps, 'открыл музыку');
+  assert.equal(bugReport.area, 'notes');
+  assert.ok(Array.isArray(bugReport.log), 'журнал не приложен');
+  await bug.locator('[data-bug-log]').click();
+  await shown(bug.locator('[data-bug-log][aria-checked="false"]'));
+  await shot(page, 'desk-bug');
+  const columns = await bug.evaluate((el) => getComputedStyle(el.children[1]).gridTemplateColumns.split(' ').length);
+  assert.equal(columns, 2, 'отчёт на компьютере — не в две колонки');
+  // «Язык» (`ZdProfileX`): «Как в системе», формат времени, первый день недели, проверка орфографии
   await profileRow(page, 'Language').click();
-  await shown(page.locator('[data-language-time-format]'));
-  console.log('OK: справка, отчёт об ошибке, формат времени');
+  const language = page.locator('.settings-language');
+  await shown(language.locator('[data-language-time-format]'));
+  await shown(language.getByText('As in the system', { exact: true }));
+  await shot(page, 'desk-language');
+  await language.locator('[data-language-week-start]').click();
+  await page.locator('[role="radiogroup"] [data-choice="0"]').click();
+  await shown(language.locator('[data-language-week-start="0"]'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('parvane:first-weekday')), '0');
+  await language.locator('[data-language-week-start]').click();
+  await page.locator('[role="radiogroup"] [data-choice="1"]').click();
+  await shown(language.locator('[data-language-week-start="1"]'));
+  await language.locator('[data-language-spellcheck]').click();
+  await page.waitForFunction(() => !document.documentElement.spellcheck, undefined, { timeout: WAIT_MS });
+  await language.locator('[data-language-spellcheck]').click();
+  await page.waitForFunction(() => document.documentElement.spellcheck, undefined, { timeout: WAIT_MS });
+  console.log('OK: отчёт об ошибке, «Язык» — формат времени, первый день недели, орфография');
   await profileRow(page, 'Log Out').click();
   // Шторка выхода (доска `PhProfileB`): «Просто выйти», «Выйти и сменить ключи» (у аккаунта одно устройство — её нет)
   const logOutButton = page.locator('.Modal [data-sign-out-plain]').last();
@@ -247,14 +338,43 @@ try {
   await groupsRow.click();
   await page.locator('[role="radiogroup"] [data-choice="anyone"]').click();
   await shown(groupsRow.locator('[data-privacy-value="anyone"]'));
+  await shown(privacy.locator('[data-pin-state="off"]').getByText('not set'));
+  // «Звонить мне» — «Только контакты» (`DkSettingsB`)
+  const callsRow = privacy.locator('[data-privacy-row="call"]');
+  await callsRow.click();
+  await page.locator('[role="radiogroup"] [data-choice="contacts"]').click();
+  await shown(callsRow.locator('[data-privacy-value="contacts"]'));
+  await callsRow.click();
+  await page.locator('[role="radiogroup"] [data-choice="anyone"]').click();
+  await shown(callsRow.locator('[data-privacy-value="anyone"]'));
+  // «Показывать, что я в сети» — на сервере; «Звонки только через сервер» — настройка этого устройства
+  const callPolicy = () => page.evaluate(() => window.__parvaneDiagCallApi('parvaneGetCallPresencePolicy', {}));
+  const online = privacy.locator('[data-privacy-row="online"]');
+  await online.click();
+  await shown(privacy.locator('[data-privacy-row="online"][aria-checked="false"]'));
+  assert.equal((await callPolicy())?.isPresenceShown, false, '«в сети» не сохранилось');
+  await online.click();
+  await shown(privacy.locator('[data-privacy-row="online"][aria-checked="true"]'));
+  const relay = privacy.locator('[data-privacy-row="relay"]');
+  const wasRelay = await relay.getAttribute('aria-checked');
+  await relay.click();
+  await page.waitForFunction(async (before) => {
+    const policy = await window.__parvaneDiagCallApi('parvaneGetCallPresencePolicy', {});
+    return String(Boolean(policy?.isRelayOnly)) !== before;
+  }, wasRelay, { timeout: WAIT_MS });
+  await relay.click();
+  await shown(privacy.locator(`[data-privacy-row="relay"][aria-checked="${wasRelay}"]`));
   await privacy.locator('[data-privacy-row="password"]').click();
-  await shown(privacy.locator('[data-password-form] input[type="password"]').first());
+  await shown(page.locator('.Modal [data-password-form] input[type="password"]').first());
+  await page.keyboard.press('Escape');
+  await hidden(page.locator('.Modal [data-password-form]'));
   await shown(privacy.locator('[data-security-key]'));
   console.log('OK: «Конфиденциальность» — строки «кто может» с выбором в шторке, смена пароля, ключ');
 
   await profileRow(page, 'Devices and account').click();
   const devicesScreen = page.locator('.SettingsActiveSessions');
-  await shown(devicesScreen.locator('[data-session-current]').getByText('this device'));
+  // Это устройство: на компьютере «This computer · …» (`DkSettingsA`), на телефоне «this device»
+  await shown(devicesScreen.locator('[data-session-current]').getByText(/this device|This computer/).first());
   assert.equal(await devicesScreen.locator('[data-confirm-sign-in]').count(), 0, 'единственное устройство просят подтвердить');
   await devicesScreen.locator('[data-link-new]').click();
   await shown(page.locator('.Modal').getByText(/sign in with your nick and password/));
@@ -274,9 +394,26 @@ try {
   await hidden(nav);
   console.log('OK: Escape ведёт к «Обзору» и к чатам, «Избранное» открывает чат');
 
+  // «Мой профиль» на компьютере — окно поверх «Обзора» (`RdProfile`): «Отмена» не сохраняет
   await openEditProfile(page);
-  await shown(back);
-  await page.keyboard.press('Escape');
+  const editWindow = page.locator('[data-edit-profile-window]');
+  await shown(editWindow);
+  await shown(editWindow.locator('[data-avatar-change]'));
+  await shot(page, 'desk-edit-window');
+  const firstName = editWindow.getByLabel('First name (required)');
+  const savedName = await firstName.inputValue();
+  await firstName.fill(`${savedName} changed`);
+  await editWindow.locator('[data-profile-cancel]').click();
+  await hidden(editWindow);
+  await openEditProfile(page);
+  assert.equal(await page.locator('[data-edit-profile-window]').getByLabel('First name (required)').inputValue(), savedName,
+    '«Отмена» сохранила имя');
+  await page.locator('[data-edit-profile-window] [data-profile-cancel]').click();
+  await shown(overview);
+  // «Обзор» (`DeskProfile`): строка «Копия ключей … · Открыть» ведёт на «Копию ключей»
+  await overview.locator('[data-overview-keys-open]').click();
+  await shown(page.locator('[data-keys-bundle-state]'));
+  await profileRow(page, 'Overview').click();
   await shown(overview);
   assertNoPageErrors({ desktop: sessions.desktop });
 
@@ -301,8 +438,11 @@ try {
   }
   assert.equal(await list.locator('[data-profile-item="overview"]').count(), 0, '«Обзор» — пункт только компьютера');
   await shown(list.locator('[data-profile-item="modules"]').getByText(/^\d+ of \d+$/));
-  // Значения строк: копии ключей с этого устройства ещё не было, объём данных — из оценки браузера
-  await shown(list.locator('[data-profile-item="keys"]').getByText('none', { exact: true }));
+  // Значения строк: копия ключей — «сохранена», когда копия ключей аккаунта на сервере включена (у нового аккаунта она
+  // пишется вскоре после создания), иначе «нет»; уведомления — где работают
+  await shown(list.locator('[data-profile-item="keys"]').getByText(/^(none|saved)$/));
+  await shown(list.locator('[data-profile-item="notifications"]').getByText(/^(off|while open|in the background)$/));
+  await shown(list.locator('[data-profile-item="help"]').getByText(/^\d+ notes$/));
   await expectNoOverflow(mobile, 'главный экран');
   console.log('OK: телефон — аккаунт с плитками и разделы списком');
 
@@ -328,15 +468,55 @@ try {
     await mobileBack.click();
     await shown(list);
   }
+  // «Справка Parvane» (`RpProfileA`): поиск — значком в шапке
+  await list.locator('[data-profile-item="help"]').click();
+  const help = mobile.locator('[data-settings-help]');
+  await shown(help);
+  assert.equal(await help.locator('[data-help-note]').count(), 12, 'в справке не 12 заметок');
+  await shown(help.getByText(/^Help is 12 ordinary notes/));
+  await shown(help.locator('[data-help-note]').getByText('Music', { exact: true }));
+  await shown(help.locator('[data-help-restore]'));
+  assert.equal(await help.locator('[data-help-search]').count(), 0, 'поле поиска показано без значка');
+  await shot(mobile, 'phone-help');
+  await mobile.locator('[data-help-search-open]').click();
+  const helpCount = await help.locator('[data-help-note]').count();
+  await help.locator('[data-help-search]').fill('Ctrl');
+  await help.locator('[data-help-snippet]').first().waitFor({ state: 'visible', timeout: WAIT_MS });
+  assert.ok(await help.locator('[data-help-note]').count() < helpCount, 'поиск по справке не сузил список');
+  await help.locator('[data-help-search]').fill('несуществующееслово');
+  await shown(help.locator('[data-help-nothing]'));
+  await help.locator('[data-help-search]').fill('');
+  await help.locator('[data-help-note]').nth(helpCount - 1).waitFor({ state: 'visible', timeout: WAIT_MS });
+  await mobileBack.click();
+  await shown(list);
+
+  // «Оформление» телефона (`PhProfileA`): размер «− 15 +», фон строкой со шторкой
+  await list.locator('[data-profile-item="appearance"]').click();
+  await shown(mobileAppearance.locator('[data-text-size]').getByText(/^\d+$/));
+  await shot(mobile, 'phone-appearance');
+  await mobileAppearance.locator('[data-appearance-row="background"]').click();
+  await shown(mobile.locator('[role="radiogroup"] [data-choice="default"]'));
+  await mobile.locator('[role="radiogroup"] [data-choice="default"]').click();
+  await mobileBack.click();
+  await shown(list);
+
   await openEditProfile(mobile);
   // spec 041 (`XpProfile`): «Мой профиль» с «Готово», ник своим блоком — смена ника видна только при новом нике
   await shown(mobile.locator('[data-profile-done]'));
+  await shown(mobile.locator('[data-avatar-change]'));
+  assert.equal(await mobile.getByPlaceholder('a few words, optional').count(), 1, 'нет подсказки в «О себе»');
   const nickInput = mobile.locator('#parvane-rename-nick');
+  const ownNick = await nickInput.inputValue();
   await nickInput.fill(`profile-free-${suffix.replace(/\D/g, '').slice(-8)}`);
   await shown(mobile.locator('[data-rename-nick-state="free"]'));
   await nickInput.fill('x');
   await shown(mobile.locator('[data-rename-nick-state="invalid"]'));
   await expectNoOverflow(mobile, '«Мой профиль»');
+  await shot(mobile, 'phone-edit');
+  // С неверным ником «Готово» не уходит с экрана; прежний ник — сохранять нечего, назад
+  await mobile.locator('[data-profile-done]').click();
+  await shown(mobile.locator('[data-rename-nick-state="invalid"]'));
+  await nickInput.fill(ownNick);
   await mobile.locator('[data-profile-done]').click();
   await shown(list);
   console.log('OK: телефон — экраны открываются на весь экран и возвращаются в «Профиль»');

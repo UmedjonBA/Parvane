@@ -87,6 +87,11 @@ const ContactList: FC<OwnProps & StateProps> = ({
 
   const [viewportIds, getMore] = useInfiniteScroll(undefined, listIds, Boolean(filter));
   const contactCount = listIds?.length || 0;
+  // Доска `ZpChat2`: «На вашем сервере · N» и «С других серверов · N» — по серверу контакта (федерация)
+  const remoteCount = useMemo(() => (listIds || []).filter((id) => usersById[id]?.serverDomain).length,
+    [listIds, usersById]);
+  const localViewportIds = viewportIds?.filter((id) => !usersById[id]?.serverDomain);
+  const remoteViewportIds = viewportIds?.filter((id) => usersById[id]?.serverDomain);
 
   const handleNewGroup = useCallback(() => {
     openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
@@ -95,6 +100,27 @@ const ContactList: FC<OwnProps & StateProps> = ({
   const handleNewChannel = useCallback(() => {
     openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
   }, [openLeftColumnContent]);
+
+  // Строка контакта: «аватар 44 · имя · ник · статус» (доска `ZpChat2`)
+  function renderContact(id: string) {
+    return (
+      <ListItem
+        key={id}
+        className="chat-item-clickable contact-list-item"
+        onClick={() => handleClick(id)}
+      >
+        <PrivateChatInfo
+          userId={id}
+          forceShowSelf
+          avatarSize="medium"
+          withUsername
+          withStory
+          storyViewerOrigin={StoryViewerOrigin.ChatList}
+          ripple={!isMobile}
+        />
+      </ListItem>
+    );
+  }
 
   return (
     <InfiniteScroll items={viewportIds} onLoadMore={getMore} className="chat-list custom-scroll">
@@ -109,34 +135,25 @@ const ContactList: FC<OwnProps & StateProps> = ({
         </div>
       )}
       {Boolean(contactCount) && (
-        <div key="caption" className={styles.caption}>
-          {langNew('ParvaneContactsCount', { count: contactCount }, { pluralValue: contactCount })}
+        <div key="caption" className={styles.caption} data-contacts-local>
+          {remoteCount
+            ? langNew('ParvaneContactsLocal', { count: contactCount - remoteCount })
+            : langNew('ParvaneContactsCount', { count: contactCount }, { pluralValue: contactCount })}
         </div>
       )}
-      {viewportIds?.length ? (
-        viewportIds.map((id) => (
-          <ListItem
-            key={id}
-            className="chat-item-clickable contact-list-item"
-            onClick={() => handleClick(id)}
-          >
-            <PrivateChatInfo
-              userId={id}
-              forceShowSelf
-              avatarSize="large"
-              withStory
-              storyViewerOrigin={StoryViewerOrigin.ChatList}
-              ripple={!isMobile}
-            />
-          </ListItem>
-        ))
-      ) : viewportIds && !viewportIds.length ? (
+      {viewportIds?.length ? localViewportIds!.map(renderContact) : viewportIds && !viewportIds.length ? (
         <p className="no-results" key="no-results" dir="auto">
           {filter.length ? lang('ParvaneContactsNoMatch') : lang('ParvaneContactsEmpty')}
         </p>
       ) : (
         <Loading key="loading" />
       )}
+      {Boolean(remoteCount) && (
+        <div key="caption-remote" className={styles.caption} data-contacts-remote>
+          {langNew('ParvaneContactsOtherServers', { count: remoteCount })}
+        </div>
+      )}
+      {remoteViewportIds?.map(renderContact)}
       {isNewMessage ? <ContactListRemote key="remote" /> : (
         <p key="hint" className={styles.hint}>{langNew('ParvaneContactsHint')}</p>
       )}

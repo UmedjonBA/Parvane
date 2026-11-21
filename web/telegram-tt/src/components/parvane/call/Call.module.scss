@@ -50,6 +50,11 @@
   }
 }
 
+.round:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .roundLarge {
   width: 4.25rem;
   height: 4.25rem;
@@ -200,6 +205,28 @@
 .note {
   font-size: 0.8125rem;
   color: var(--pv-muted);
+}
+
+// На компьютере подпись о маршруте — под кнопками (доска `DkCalls`), на телефоне — над ними (`PhCalls`)
+.routeNote {
+  @media (min-width: 601px) {
+    order: 1;
+    margin-top: 0.75rem;
+  }
+}
+
+// Текст для чтения с экрана и сценариев: на экране не виден, но занимает 1 px
+.readerOnly {
+  position: absolute;
+
+  overflow: hidden;
+
+  width: 1px;
+  height: 1px;
+
+  white-space: nowrap;
+
+  clip-path: inset(50%);
 }
 
 .remoteState {
@@ -354,20 +381,6 @@
 .videoName {
   font-size: 1.125rem;
   font-weight: var(--font-weight-semibold);
-}
-
-.videoSas {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  align-items: baseline;
-
-  font-size: 0.75rem;
-
-  .sasValue {
-    margin-top: 0;
-    font-size: 0.875rem;
-  }
 }
 
 .videoLocal {
@@ -865,6 +878,17 @@
 
 .groupInviteText {
   @media (max-width: 600px) {
+    display: none;
+  }
+}
+
+// На телефоне — «+» значком (доска `PhCalls`), на компьютере — «Позвать участника» текстом (`DkCalls`)
+.groupInvitePlus {
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+
+  @media (min-width: 601px) {
     display: none;
   }
 }

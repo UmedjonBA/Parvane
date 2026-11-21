@@ -7,9 +7,8 @@ import type { RegularLangKey } from '../../../types/language';
 import { getHasAdminRight, getUserFullName } from '../../../global/helpers';
 import { selectChat, selectUser } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import {
-  formatDateToString, formatHumanDate, formatTime, isToday,
-} from '../../../util/dates/oldDateFormat';
+import { formatHumanDate, formatTime, isToday } from '../../../util/dates/oldDateFormat';
+import { formatMemberSince } from '../../../util/parvaneMemberSince';
 import { callApi } from '../../../api/gramjs';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -91,11 +90,10 @@ const ManageReports = ({
     return isToday(new Date(ms)) ? formatTime(oldLang, ms) : formatHumanDate(oldLang, ms, true, false, true);
   }
 
-  // «участник с 16 ноября» (доска `RpChat`): год — только у прошлых лет
-  function formatMemberSince(dateSecs: number) {
-    const ms = dateSecs * 1000;
-    const isThisYear = new Date(ms).getFullYear() === new Date().getFullYear();
-    return lang('ParvaneReportsMemberSince', { date: formatDateToString(ms, oldLang.code, isThisYear, 'long') });
+  // «участник с 16 ноября» / «участник с марта» (доска `RpChat`)
+  function formatSince(dateSecs: number) {
+    const date = formatMemberSince(dateSecs * 1000, Date.now(), oldLang.code || 'en');
+    return lang('ParvaneReportsMemberSince', { date });
   }
 
   function renderItem(item: ParvaneReportItem) {
@@ -124,7 +122,7 @@ const ManageReports = ({
           {[
             lang('ParvaneReportsCount', { count: item.count }, { pluralValue: item.count }),
             formatWhen(item.lastDate),
-            item.memberSince ? formatMemberSince(item.memberSince) : undefined,
+            item.memberSince ? formatSince(item.memberSince) : undefined,
           ].filter(Boolean).join(' · ')}
         </div>
         {item.comments.map((comment) => (

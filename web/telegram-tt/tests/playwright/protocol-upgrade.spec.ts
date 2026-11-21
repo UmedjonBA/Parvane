@@ -12,7 +12,7 @@ import {
 // Протокол v2 (spec 007, T042): клиент ниже `min_supported` сервера получает
 // UPGRADE_REQUIRED в ответ на Hello. С T110 вход тоже идёт по v2: экран ника к
 // серверу не ходит, первый запрос (server.info/session.issue) уходит после
-// пароля — там и показывается текст «версия не поддерживается» вместо
+// пароля — там и показывается плашка «Обновите приложение» вместо
 // «неверный пароль» (после входа — нативный диалог). Нужен gateway с завышенным
 // PARVANE_V2_MIN_MINOR — его поднимает scripts/run_web_protocol_upgrade_e2e.sh
 // (он же выставляет флаг ниже)
@@ -27,7 +27,7 @@ test('v2 client below min_supported shows the native update dialog', async ({ pa
   // Первый же запрос входа получает UPGRADE_REQUIRED — отказ объяснён на экране пароля
   await submitPassword(page, PASSWORD);
   const passwordScreen = page.locator('.Transition_slide-active > #auth-password-form');
-  await expect(passwordScreen.getByText('no longer supported')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+  await expect(passwordScreen.getByText('The server runs a newer version')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   // Плашка «обновите приложение» с одной кнопкой (spec 041 E4)
   await expect(passwordScreen.locator('[data-auth-update]')).toBeVisible();
   const shotDir = process.env.PARVANE_E2E_AUTH_SHOT_DIR;

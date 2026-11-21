@@ -186,6 +186,9 @@ try {
   assert.equal(await view.getAttribute('data-note-conflict-view'), 'places', 'на телефоне не место за местом');
   assert.equal(await view.locator('[data-conflict-place]').count(), 1, 'расхождение не одно');
   assert.match(await view.locator('[data-conflict-choice="mine"]').innerText(), /This computer · [\s\S]*Порт = 51821/i, 'моя строка');
+  // Название чужого устройства подставляется, когда дочитан список своих устройств (до того — «Other device»)
+  await view.locator('[data-conflict-choice="theirs"]').filter({ hasText: /Computer · / })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
   assert.match(await view.locator('[data-conflict-choice="theirs"]').innerText(), /Computer · [\s\S]*Порт = 51822/i, 'их строка');
   await a.visible(view.getByText('This note was changed on two devices.'), 'пояснение на экране расхождения');
   const phoneBar = a.note.locator('[data-note-bar]');

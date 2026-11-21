@@ -2,6 +2,8 @@ import { devices, type PlaywrightTestConfig } from '@playwright/test';
 
 const DEFAULT_WEB_PORT = 1235;
 const webPort = Number(process.env.PARVANE_E2E_WEB_PORT || DEFAULT_WEB_PORT);
+// В серии сценариев сборка общая и уже готова: пересборка посреди серии подменяет `dist` под соседними сценариями
+const buildStep = process.env.PARVANE_E2E_SKIP_WEB_BUILD === '1' ? '' : 'npm run build:production && ';
 
 const config: PlaywrightTestConfig = {
   testDir: 'tests/playwright',
@@ -11,7 +13,7 @@ const config: PlaywrightTestConfig = {
   retries: process.env.CI ? 2 : 1,
   workers: 1,
   webServer: {
-    command: `npm run build:production && vite preview --host 127.0.0.1 --port ${webPort} --strictPort`,
+    command: `${buildStep}vite preview --host 127.0.0.1 --port ${webPort} --strictPort`,
     port: webPort,
     // Сборка production под нагрузкой бывает дольше 2 мин — раннер может поднять
     timeout: Number(process.env.PARVANE_E2E_WEBSERVER_TIMEOUT_MS || 120 * 1000),

@@ -1,11 +1,11 @@
 import { LANG_CACHE_NAME, MEDIA_CACHE_NAME, MEDIA_CACHE_NAME_AVATARS, MEDIA_PROGRESSIVE_CACHE_NAME } from '../config';
 import { yieldToMain } from './browser/scheduler';
+import { getCacheKeepMs } from './cacheKeep';
 import { ACCOUNT_SLOT } from './multiaccount';
 
 const cacheApi = self.caches;
 
 const LAST_ACCESS_HEADER = 'X-Last-Access';
-const CACHE_TTL = 5 * 24 * 60 * 60 * 1000; // 5 days
 const ACCESS_THROTTLE = 24 * 60 * 60 * 1000; // 1 day
 const CLEANUP_INTERVAL = 1 * 60 * 60 * 1000; // 1 hour
 
@@ -162,6 +162,8 @@ export async function cleanup(cacheNames: string[]) {
       const cache = await cacheApi.open(getCacheName(cacheName));
       const keys = await cache.keys();
       const now = Date.now();
+      // Parvane: срок — настройка «Хранить кэш» (`cacheKeep.ts`)
+      const keepMs = getCacheKeepMs();
 
       for (const request of keys) {
         await yieldToMain();
@@ -169,7 +171,7 @@ export async function cleanup(cacheNames: string[]) {
         if (!response) continue;
 
         const lastAccess = Number(response.headers.get(LAST_ACCESS_HEADER));
-        if (lastAccess && now - lastAccess > CACHE_TTL) {
+        if (lastAccess && now - lastAccess > keepMs) {
           await cache.delete(request);
         }
       }
@@ -178,10 +180,6 @@ export async function cleanup(cacheNames: string[]) {
     // eslint-disable-next-line no-console
     console.warn(err);
   }
-}
-
-export function purgeClearableCache() {
-  CLEARABLE_CACHE_NAMES.forEach((cacheName) => clear(cacheName));
 }
 
 function buildCacheRequest(key: string) {

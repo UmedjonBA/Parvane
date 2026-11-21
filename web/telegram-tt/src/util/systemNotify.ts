@@ -121,8 +121,8 @@ export function parseReminderKey(key: string): { id: string; day: string } | und
 
 // Настройки уведомлений устройства (spec 041 E3, доски `PhProfileA`, `DkSettingsB`): выключенные модули и «Не
 // беспокоить». Хранит их `util/notifyPrefs.ts`, копию для service worker — `reminderStore.ts`. «Музыка» — уведомление
-// «Трек скачан на сервер»
-export type NotifyModule = 'chats' | 'plan' | 'music';
+// «Трек скачан на сервер», «Здоровье» — напоминание об отбое, «Файлы» — приглашение в общую папку и ссылка в чате
+export type NotifyModule = 'chats' | 'plan' | 'health' | 'files' | 'music';
 
 export type NotifyPrefs = {
   off: NotifyModule[];
@@ -130,17 +130,24 @@ export type NotifyPrefs = {
   // Минуты от полуночи; конец раньше начала — тишина через полночь
   quietFrom: number;
   quietTo: number;
+  // Часы заданы вручную; иначе «Не беспокоить» следует режиму сна из «Здоровья» (доска `DkSettingsB`)
+  isQuietCustom: boolean;
+  // Текст уведомлений и при экране под PIN (выключатель «Скрывать текст…, пока заблокировано», доска `ZdProfileX`)
+  isLockedTextShown: boolean;
   // «Не беспокоить 1 час / до утра» (доска `ZdMisc`): до этого момента (мс) уведомлений нет; 0 — не включено
   muteUntil: number;
 };
 
 const MINUTES_IN_DAY = 24 * 60;
-const NOTIFY_MODULES = new Set<string>(['chats', 'plan', 'music']);
+const NOTIFY_MODULES = new Set<string>(['chats', 'plan', 'health', 'files', 'music']);
+// Ключ напоминания об отбое (`plannerReminders.ts getBedtimeReminders`)
+const BEDTIME_KEY_PREFIX = 'bedtime@';
 const MS_IN_MINUTE = 60 * 1000;
 const MS_IN_HOUR = 60 * MS_IN_MINUTE;
 
 export const DEFAULT_NOTIFY_PREFS: NotifyPrefs = {
-  off: [], isQuietOn: false, quietFrom: 23 * 60 + 30, quietTo: 7 * 60, muteUntil: 0,
+  off: [], isQuietOn: false, quietFrom: 23 * 60 + 30, quietTo: 7 * 60, isQuietCustom: false, isLockedTextShown: false,
+  muteUntil: 0,
 };
 
 /** Сохранённые настройки любой версии: неизвестное и испорченное — по умолчанию. */
@@ -157,9 +164,16 @@ export function readNotifyPrefs(raw: unknown): NotifyPrefs {
     isQuietOn: data.isQuietOn === true,
     quietFrom: readMinutes(data.quietFrom, DEFAULT_NOTIFY_PREFS.quietFrom),
     quietTo: readMinutes(data.quietTo, DEFAULT_NOTIFY_PREFS.quietTo),
+    isQuietCustom: data.isQuietCustom === true,
+    isLockedTextShown: data.isLockedTextShown === true,
     muteUntil: typeof data.muteUntil === 'number' && Number.isFinite(data.muteUntil) && data.muteUntil > 0
       ? data.muteUntil : 0,
   };
+}
+
+/** Модуль напоминания по его ключу: отбой — «Здоровье», остальное — «План». */
+export function getReminderNotifyModule(key: string): NotifyModule {
+  return key.startsWith(BEDTIME_KEY_PREFIX) ? 'health' : 'plan';
 }
 
 /** Попадает ли минута суток в «Не беспокоить»; начало входит, конец — нет. */
@@ -193,6 +207,7 @@ const WORKER_TEXTS = {
   en: {
     chats: 'Chats',
     planner: 'Planner',
+    health: 'Health',
     newMessage: 'New message',
     reminder: 'Reminder',
     openPlanner: 'Open the Planner',
@@ -202,6 +217,7 @@ const WORKER_TEXTS = {
   ru: {
     chats: 'Чаты',
     planner: 'План',
+    health: 'Здоровье',
     newMessage: 'Новое сообщение',
     reminder: 'Напоминание',
     openPlanner: 'Откройте «План»',

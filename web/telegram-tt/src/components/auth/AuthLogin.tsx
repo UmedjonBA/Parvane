@@ -18,6 +18,7 @@ import useAppLayout from '../../hooks/useAppLayout';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
+import AuthDeletionPending from './AuthDeletionPending';
 import {
   AuthField, AuthLogo, AuthModeSwitch, AuthNotice, AuthSubmit,
 } from './AuthParts';
@@ -43,7 +44,7 @@ const NOTICE_ERRORS = new Set(['ParvaneUpgradeRequired', 'ParvaneAccountDeletion
 const AuthLogin = ({ isPasswordStep, auth }: OwnProps & StateProps) => {
   const {
     setAuthPhoneNumber, setAuthPassword, setAuthRememberMe, returnToAuthPhoneNumber, clearAuthErrorKey,
-    parvaneStartRegistration, parvaneRestoreAccount,
+    parvaneStartRegistration,
   } = getActions();
 
   const nickRef = useRef<HTMLInputElement>();
@@ -114,10 +115,6 @@ const AuthLogin = ({ isPasswordStep, auth }: OwnProps & StateProps) => {
     if (!isLoading) parvaneStartRegistration();
   });
 
-  const handleRestore = useLastCallback(() => {
-    parvaneRestoreAccount();
-  });
-
   const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isLoading) return;
@@ -168,8 +165,16 @@ const AuthLogin = ({ isPasswordStep, auth }: OwnProps & StateProps) => {
             {!isMobile && <AuthPrefs />}
           </div>
           <div className={styles.dialog}>
-            {!isMobile && <AuthModeSwitch onRegister={handleRegister} />}
-            <form className={styles.form} action="" noValidate onSubmit={handleSubmit}>
+            {!isMobile && !isDeletionPending && <AuthModeSwitch onRegister={handleRegister} />}
+            {isDeletionPending && (
+              <AuthDeletionPending />
+            )}
+            <form
+              className={buildClassName(styles.form, isDeletionPending && styles.hidden)}
+              action=""
+              noValidate
+              onSubmit={handleSubmit}
+            >
               <AuthField
                 id="sign-in-parvane-server"
                 label={lang('ParvaneAuthServer')}
@@ -214,22 +219,13 @@ const AuthLogin = ({ isPasswordStep, auth }: OwnProps & StateProps) => {
               <AuthSubmit label={lang('ParvaneAuthLogIn')} isLoading={isLoading} />
             </form>
             {isUpgradeRequired && (
-              <AuthNotice tone="orange" title={lang('ParvaneAuthUpgradeTitle')} text={errorText}>
+              <AuthNotice tone="orange" title={lang('ParvaneAuthUpgradeTitle')} text={lang('ParvaneAuthUpgradeText')}>
                 <button type="button" className={styles.chip} data-auth-update onClick={reloadApp}>
                   {lang('ParvaneAuthUpgradeAction')}
                 </button>
               </AuthNotice>
             )}
-            {isDeletionPending && (
-              <AuthNotice tone="red" title={errorText!}>
-                <span data-restore-account>
-                  <button type="button" className={styles.chip} onClick={handleRestore}>
-                    {lang('ParvaneRestoreAccount')}
-                  </button>
-                </span>
-              </AuthNotice>
-            )}
-            {isMobile && (
+            {isMobile && !isDeletionPending && (
               <button type="button" className={styles.link} data-auth-register onClick={handleRegister}>
                 {lang('ParvaneRegisterTitle')}
               </button>

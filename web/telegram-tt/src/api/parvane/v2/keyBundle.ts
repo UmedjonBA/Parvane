@@ -41,12 +41,18 @@ export type KeyBundlePayload = {
   // Копия выключена владельцем: на сервере только эта пометка, без ключей (`grant` пуст). Устройства её не
   // переписывают, пока копию не включат снова; вход по ключу восстановления идёт без копии
   off?: boolean;
+  // Когда копию записали (мс) и когда создан ключ восстановления, под которым она лежит (доска `ZdProfileX`: «обновлена
+  // сегодня в 14:02», «Ключ создан 2 ноября»). Нет поля — копия старого формата либо дата неизвестна
+  at?: number;
+  keyAt?: number;
 };
 
 /** Пометка «копия выключена» вместо копии: ключей в ней нет. Метода удаления копии у сервера нет, а пустая
  * `key_bundle` значит «не менять» — поэтому на месте копии лежит эта запись. */
-export function buildOffBundle(seq: number): KeyBundlePayload {
-  return { grant: '', off: true, seq };
+export function buildOffBundle(seq: number, keyAt?: number): KeyBundlePayload {
+  return {
+    grant: '', off: true, seq, keyAt,
+  };
 }
 
 type DomainKeysJson = { id?: string; keys?: unknown[] };
@@ -266,7 +272,7 @@ export async function openKeyBundle(
       toBuffer(bytes.subarray(HEADER_LEN + NONCE_LEN)),
     );
     const payload = JSON.parse(new TextDecoder().decode(opened)) as Partial<KeyBundlePayload>;
-    if (payload.off === true) return buildOffBundle(readBundleSeq(payload.seq));
+    if (payload.off === true) return buildOffBundle(readBundleSeq(payload.seq), readBundleTime(payload.keyAt));
     if (typeof payload.grant !== 'string' || !payload.grant) return undefined;
     return {
       grant: payload.grant,
@@ -276,10 +282,17 @@ export async function openKeyBundle(
       cloud: typeof payload.cloud === 'string' ? payload.cloud : undefined,
       groups: typeof payload.groups === 'string' ? payload.groups : undefined,
       seq: readBundleSeq(payload.seq) || undefined,
+      at: readBundleTime(payload.at),
+      keyAt: readBundleTime(payload.keyAt),
     };
   } catch {
     return undefined;
   }
+}
+
+/** Время в копии: положительное целое число миллисекунд; всё прочее — неизвестно. */
+function readBundleTime(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /** Номер записи копии: целое неотрицательное число; всё прочее (нет поля, мусор) — 0, как у копии старого формата. */
@@ -341,6 +354,8 @@ export type KeyBundleContents = {
   groups: number;
   // Копия выключена владельцем (на сервере только пометка)
   isOff: boolean;
+  updatedAt?: number;
+  keyAt?: number;
 };
 
 export function describeKeyBundle(payload: KeyBundlePayload): KeyBundleContents {
@@ -352,6 +367,8 @@ export function describeKeyBundle(payload: KeyBundlePayload): KeyBundleContents 
     hasHealth: countExported(payload.health) > 0,
     hasMusic: countExported(payload.music) > 0,
     groups: countExported(payload.groups),
+    updatedAt: payload.at,
+    keyAt: payload.keyAt,
   };
 }
 

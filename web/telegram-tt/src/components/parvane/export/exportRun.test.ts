@@ -81,7 +81,17 @@ function fakeSource(overrides: Partial<ExportSource> = {}): ExportSource & { med
       mediaCalls.push(fileId);
       return Promise.resolve(fileId === 'photo-1' ? new Blob([PHOTO], { type: 'image/jpeg' }) : undefined);
     },
-    planner: () => Promise.resolve('{"tasks":[{"name":"Water the plants"}]}'),
+    planner: () => Promise.resolve(JSON.stringify({
+      tasks: [{
+        id: 't1', name: 'Water the plants', description: '', steps: [], status: 'queue', listId: '', rank: 1,
+        day: '', start: '', due: '',
+      }],
+      events: [],
+      lists: [],
+    })),
+    health: () => Promise.resolve([{
+      kind: 'weight', day: '2026-03-02', atMs: Date.UTC(2026, 2, 2, 7), value: 71.5, unit: 'kg', parts: {},
+    }]),
     notes: () => Promise.resolve([{ path: 'Garden/Seeds.md', text: '# Seeds\n- basil' }]),
     cloudFiles: () => Promise.resolve([{
       container: 'root', node: 'n1', path: 'cloud/My files/readme.txt', size: 3,
@@ -122,10 +132,15 @@ describe('runDataExport', () => {
       'chats/002-Kestrel/media/00002-photo-2.jpg',
       'chats/002-Kestrel/messages.html',
       'chats/002-Kestrel/messages.json',
+      'contacts.csv',
       'contacts.json',
+      'health/health.csv',
+      'health/health.json',
       'index.html',
       'notes/Garden/Seeds.md',
+      'planner/events.csv',
       'planner/planner.json',
+      'planner/tasks.csv',
     ]);
     expect(Array.from(files['chats/002-Kestrel/media/00002-photo-2.jpg'])).toEqual(Array.from(PHOTO));
     const chat = JSON.parse(decoder.decode(files['chats/002-Kestrel/messages.json']));
@@ -136,6 +151,9 @@ describe('runDataExport', () => {
     expect(JSON.parse(decoder.decode(files['contacts.json'])).contacts[0].address).toBe('kestrel@example.test');
     expect(decoder.decode(files['index.html'])).toContain('chats/002-Kestrel/messages.html');
     expect(decoder.decode(files['notes/Garden/Seeds.md'])).toBe('# Seeds\n- basil');
+    expect(decoder.decode(files['planner/tasks.csv'])).toContain('Water the plants');
+    expect(decoder.decode(files['health/health.csv'])).toContain('2026-03-02,2026-03-02T07:00:00.000Z,weight,71.5');
+    expect(decoder.decode(files['contacts.csv'])).toContain('kestrel@example.test');
   });
 
   it('skips media downloads when media are off and adds cloud files when asked', async () => {

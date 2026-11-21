@@ -18,7 +18,14 @@ export type ParvaneAuthContext = {
   telegramBot: string;
   telegramLink: string;
   telegramMode?: 'register' | 'login';
+  // spec 041: запрос в Telegram истёк; вход с защитой можно подтвердить ключом восстановления
+  isTelegramExpired?: boolean;
+  canUseRecoveryKey?: boolean;
+  isRecoveryWrong?: boolean;
 };
+
+export type ParvaneTelegramRenewResult = 'ok' | 'telegram' | 'bad_key' | 'failed';
+export type ParvaneDeletionPending = { atMs: number; requestedAtMs?: number };
 export type ParvaneRegisterPayload = { nick: string; email: string; password: string };
 
 export function fetchParvaneServerInfo() {
@@ -45,4 +52,22 @@ export function checkParvaneTelegramConfirmation() {
 // spec 027: аккаунт ждёт удаления — войти, отменив удаление
 export function restoreParvaneAccount() {
   return anyCallApi('parvaneRestoreAccount') as Promise<void>;
+}
+
+// spec 041 (доски ZpAuthX, ZdAuthX): новая ссылка в Telegram на том же экране; вход ключом вместо Telegram
+export function renewParvaneTelegramLink() {
+  return anyCallApi('parvaneRenewTelegramLink') as Promise<ParvaneTelegramRenewResult>;
+}
+
+export function confirmParvaneLoginWithKey(recoveryKey: string) {
+  return anyCallApi('parvaneConfirmLoginWithRecoveryKey', { recoveryKey }) as Promise<ParvaneTelegramRenewResult>;
+}
+
+// spec 041 (доска RpProfileC): даты аккаунта, ждущего удаления; «Выйти, удаление продолжится»
+export function fetchParvaneDeletionPending() {
+  return anyCallApi('parvaneGetDeletionPending') as Promise<ParvaneDeletionPending | undefined>;
+}
+
+export function leaveParvaneDeletionPending() {
+  return anyCallApi('parvaneLeaveDeletionPending') as Promise<void>;
 }

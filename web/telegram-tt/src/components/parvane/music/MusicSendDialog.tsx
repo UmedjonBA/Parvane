@@ -1,15 +1,16 @@
-import { memo } from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { memo, useMemo } from '../../../lib/teact/teact';
+import { getActions, getGlobal } from '../../../global';
 
 import type { MusicPlaylist, MusicTrack } from '../../../api/parvane/musicApi';
 import type { PlaylistShareTrack } from '../../../api/parvane/musicPlaylistContent';
+import type { SendPreview } from '../../main/SendRecipientScreen';
 
 import { callApi } from '../../../api/gramjs';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import RecipientPicker from '../../common/RecipientPicker';
+import SendRecipientScreen from '../../main/SendRecipientScreen';
 
 type OwnProps = {
   track?: MusicTrack;
@@ -17,8 +18,9 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-// Parvane (TRACK-1, PLAYLIST-1): «в чат» — выбор чата; уходит карточка трека либо плейлиста, получатель играет
-// треки из библиотеки сервера
+// Parvane (TRACK-1, PLAYLIST-1; доска `RpPick`): «в чат» — экран «Кому отправить» с карточкой «название ·
+// исполнитель · трек», несколькими чатами и подписью; уходит карточка трека либо плейлиста (подпись — сообщением перед
+// ней), получатель играет треки из библиотеки сервера
 type SendMusic = {
   (name: 'parvaneSendMusicTrack', args: {
     chatId: string;
@@ -31,13 +33,30 @@ type SendMusic = {
 };
 // Метод Parvane: типы `callApi` описывают только методы Telegram
 const callSend = callApi as unknown as SendMusic;
+const callText = callApi as unknown as (name: 'sendMessage', args: { chat: unknown; text: string }) => Promise<unknown>;
 
 const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
 
-  const handleSelect = useLastCallback((chatId: string) => {
+  const preview = useMemo<SendPreview | undefined>(() => {
+    if (playlist) {
+      return { title: playlist.name, subtitle: lang('MusicSendPlaylistPreview', { count: playlist.items.length }) };
+    }
+    return track && { title: track.title, subtitle: lang('MusicSendTrackPreview', { artist: track.artist }) };
+  }, [track, playlist, lang]);
+
+  const handleSend = useLastCallback((chatIds: string[], caption: string) => {
     onClose();
+    chatIds.forEach((chatId) => {
+      const chat = getGlobal().chats.byId[chatId];
+      const captionCall = caption && chat ? callText('sendMessage', { chat, text: caption }) : undefined;
+      const captionSent = Promise.resolve(captionCall);
+      void captionSent.catch(() => undefined).then(() => sendTo(chatId));
+    });
+  });
+
+  function sendTo(chatId: string) {
     if (playlist) {
       sendPlaylist(chatId, playlist);
       return;
@@ -53,7 +72,7 @@ const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
     }).catch(() => {
       showNotification({ message: { key: 'MusicTrackNotSent' } });
     });
-  });
+  }
 
   function sendPlaylist(chatId: string, sent: MusicPlaylist) {
     void callSend('parvaneSendMusicPlaylist', {
@@ -72,11 +91,10 @@ const MusicSendDialog = ({ track, playlist, onClose }: OwnProps) => {
   }
 
   return (
-    <RecipientPicker
+    <SendRecipientScreen
       isOpen={Boolean(track || playlist)}
-      title={lang('MusicSendToChat')}
-      searchPlaceholder={lang('Search')}
-      onSelectRecipient={handleSelect}
+      preview={preview}
+      onSend={handleSend}
       onClose={onClose}
     />
   );

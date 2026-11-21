@@ -1,15 +1,18 @@
 import { memo, useEffect, useRef, useState } from '../../../lib/teact/teact';
 
+import type { CloudUsage } from '../../../api/parvane/cloudDrive';
 import type { ExportLabels } from './exportModel';
-import type { ExportOptions, ExportProgress, ExportResult, ExportStage } from './exportRun';
+import type { ExportOptions, ExportProgress, ExportResult, ExportSection, ExportStage } from './exportRun';
 import type { ExportErrorCode } from './exportZip';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
+import { callApi } from '../../../api/gramjs';
 import { getExportSections, runDataExport } from './exportRun';
 import { createProviderSource } from './exportSource';
 import { ExportError } from './exportZip';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -32,22 +35,61 @@ const ERROR_KEYS = {
   failed: 'ParvaneExportErrorFailed',
 } as const;
 
-// Строки выбора: ключ опции, атрибут для сценариев, название и подпись справа (доска `DkSettingsB`)
+// Строки выбора: ключ опции, атрибут для сценариев, название, подпись справа (компьютер, доска `DkSettingsB`) и под
+// названием (телефон, доска `PhProfileB`). У «Файлов диска» подпись — объём диска (`cloud.blob.usage`)
 const OPTION_ROWS = [
-  { key: 'includeChats', mark: 'chats', titleKey: 'ParvaneExportChats', valueKey: 'ParvaneExportChatsFormat' },
-  { key: 'includeMedia', mark: 'media', titleKey: 'ParvaneExportMedia', valueKey: 'ParvaneExportMediaFormat' },
   {
-    key: 'includePlanner', mark: 'planner', titleKey: 'ParvaneExportPlanner', valueKey: 'ParvaneExportPlannerFormat',
+    key: 'includeChats',
+    mark: 'chats',
+    titleKey: 'ParvaneExportChats',
+    valueKey: 'ParvaneExportChatsFormat',
+    hintKey: 'ParvaneExportChatsHint',
   },
-  { key: 'includeNotes', mark: 'notes', titleKey: 'ParvaneExportNotes', valueKey: 'ParvaneExportNotesFormat' },
-  { key: 'includeCloud', mark: 'cloud', titleKey: 'ParvaneExportCloud', valueKey: 'ParvaneExportCloudFormat' },
+  {
+    key: 'includeMedia',
+    mark: 'media',
+    titleKey: 'ParvaneExportMedia',
+    valueKey: 'ParvaneExportMediaFormat',
+    hintKey: 'ParvaneExportMediaHint',
+  },
+  {
+    key: 'includePlanner',
+    mark: 'planner',
+    titleKey: 'ParvaneExportPlanner',
+    valueKey: 'ParvaneExportPlannerFormat',
+    hintKey: 'ParvaneExportPlannerHint',
+  },
+  {
+    key: 'includeNotes',
+    mark: 'notes',
+    titleKey: 'ParvaneExportNotes',
+    valueKey: 'ParvaneExportNotesFormat',
+    hintKey: 'ParvaneExportNotesHint',
+  },
+  {
+    key: 'includeCloud',
+    mark: 'cloud',
+    titleKey: 'ParvaneExportCloud',
+    valueKey: 'ParvaneExportCloudFormat',
+    hintKey: 'ParvaneExportCloudFormat',
+  },
   {
     key: 'includeContacts',
     mark: 'contacts',
     titleKey: 'ParvaneExportContacts',
     valueKey: 'ParvaneExportContactsFormat',
+    hintKey: 'ParvaneExportContactsHint',
   },
 ] as const;
+
+// Строка этапов хода выгрузки: «Чаты ✓ · План ✓ · Заметки… · Контакты · Файлы · Завершение» (доска `PhProfileB`)
+const SECTION_KEYS = {
+  chats: 'ParvaneExportChats',
+  planner: 'ParvaneExportPlannerShort',
+  notes: 'ParvaneExportNotes',
+  contacts: 'ParvaneExportContacts',
+  cloud: 'ParvaneExportCloudShort',
+} as const satisfies Record<ExportSection, string>;
 
 const STAGE_KEYS = {
   prepare: 'ParvaneExportStagePrepare',
@@ -89,6 +131,8 @@ function saveBlob(blob: Blob, fileName: string) {
 // посреди выгрузки — отмена
 const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
   const lang = useLang();
+  const { isDesktop } = useAppLayout();
+  const [driveBytes, setDriveBytes] = useState<number>();
   const [options, setOptions] = useState<ExportOptions>(DEFAULT_OPTIONS);
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState<ExportProgress | undefined>();
@@ -109,6 +153,12 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
   }, [isActive]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void (callApi as unknown as (name: string) => Promise<CloudUsage | undefined>)('parvaneCloudUsage')
+      .then((usage) => setDriveBytes(usage?.used));
+  }, [isActive]);
 
   const isRunning = phase === 'running';
   const hasSections = getExportSections(options).length > 0;
@@ -160,6 +210,25 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
   const percent = progress?.total ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
   const missing = done ? done.mediaFailed + done.cloudFailed : 0;
   const stageName = lang(STAGE_KEYS[progress?.stage || 'prepare']);
+  const sections = getExportSections(options);
+
+  function renderStages() {
+    const stage = progress?.stage || 'prepare';
+    const current = sections.indexOf(stage as ExportSection);
+    const isFinishing = stage === 'finishing';
+    const parts = sections.map((section, index) => {
+      const name = lang(SECTION_KEYS[section]);
+      if (isFinishing || (current >= 0 && index < current)) return `${name} ✓`;
+      return index === current ? `${name}…` : name;
+    });
+    parts.push(isFinishing ? `${lang('ParvaneExportStageEnd')}…` : lang('ParvaneExportStageEnd'));
+    return parts.join(' · ');
+  }
+
+  function renderOptionValue(key: OptionKey, valueKey: string) {
+    if (key === 'includeCloud' && driveBytes !== undefined) return formatFileSize(lang, driveBytes);
+    return lang(valueKey as Parameters<typeof lang>[0]);
+  }
 
   return (
     <div
@@ -168,9 +237,10 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
       data-export-phase={phase}
     >
       <p className={styles.hint}>{lang('ParvaneExportHint')}</p>
+      <div className={styles.caption}>{lang('ParvaneExportWhat')}</div>
       <div className={styles.group}>
         {OPTION_ROWS.map(({
-          key, mark, titleKey, valueKey,
+          key, mark, titleKey, valueKey, hintKey,
         }) => {
           const isMediaOff = key === 'includeMedia' && !options.includeChats;
           return (
@@ -183,8 +253,17 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
                 disabled={isRunning || isMediaOff}
                 onChange={handleToggle}
               />
-              <span className={styles.title}>{lang(titleKey)}</span>
-              <span className={styles.value}>{lang(valueKey)}</span>
+              {isDesktop ? (
+                <>
+                  <span className={styles.title}>{lang(titleKey)}</span>
+                  <span className={styles.value}>{renderOptionValue(key, valueKey)}</span>
+                </>
+              ) : (
+                <span className={styles.titleBlock}>
+                  <span className={styles.titleLine}>{lang(titleKey)}</span>
+                  <span className={styles.titleHint}>{renderOptionValue(key, hintKey)}</span>
+                </span>
+              )}
             </label>
           );
         })}
@@ -204,13 +283,14 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
           <div className={styles.bar}>
             <div className={styles.fill} style={`width: ${percent}%`} />
           </div>
+          <p className={styles.hint} data-export-stages>{renderStages()}</p>
           {progress?.bytes ? (
             <p className={styles.hint}>
               {lang('ParvaneExportWritten', { size: formatFileSize(lang, progress.bytes) })}
             </p>
           ) : undefined}
           <span data-export-cancel>
-            <button type="button" className={kit.btn} onClick={handleCancel}>{lang('Cancel')}</button>
+            <button type="button" className={kit.btn} onClick={handleCancel}>{lang('ParvaneExportCancel')}</button>
           </span>
         </div>
       )}

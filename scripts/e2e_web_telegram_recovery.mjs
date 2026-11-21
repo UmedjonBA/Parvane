@@ -290,6 +290,12 @@ try {
   const garbage = await botReplyV2(gatewayUrl, SECRET, TG_ALICE, 'привет, это не ключ');
   assert.equal(garbage.result, 'bad_key');
   assert.equal(await devices.locator('[data-telegram-recovery="waiting"]').count(), 1, 'после неверного ключа ждём дальше');
+  // «Прислать сообщение ещё раз» (доска `DkAuth`): бот получает просьбу снова, экран по-прежнему ждёт
+  await devices.locator('[data-confirm-way="telegram"]').getByText('Reply to the bot with your recovery key', { exact: false })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await devices.locator('[data-telegram-again]').click();
+  await pullFor(TG_ALICE, 'ask');
+  await devices.locator('[data-telegram-recovery="waiting"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await shoot(alice2.page, 'devices-waiting-wide');
   await alice2.page.setViewportSize(PHONE);
   await alice2.page.waitForTimeout(500);

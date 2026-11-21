@@ -322,6 +322,20 @@ describe('T015: снятие непоказанной строки', () => {
   });
 });
 
+// Записи журнала истории, не открытые ключом, — счётчиком в журнале диагностики (нотис модели `history_unreadable`)
+describe('history_unreadable: счётчик в диагностике', () => {
+  it('нотисы складываются в общий счётчик', async () => {
+    const t = await makeRows();
+    await t.rows.applyModelDelta({ changes: [{ notice: { kind: 'history_unreadable', detail: '2' } }] });
+    await t.rows.applyModelDelta({ changes: [{ notice: { kind: 'history_unreadable', detail: '3' } }] });
+    await t.rows.applyModelDelta({ changes: [{ notice: { kind: 'history_gap', detail: '1' } }] });
+    expect(t.logs.filter((line) => line.includes('не открыто ключом'))).toEqual([
+      'история: не открыто ключом записей — 2, всего 2',
+      'история: не открыто ключом записей — 3, всего 5',
+    ]);
+  });
+});
+
 // C7-2 (ревью 7 ноя 2026): участник общей группы личным сообщением не трогает сообщения группы — строка модели
 // (чат сверяет движок) и строка вне модели (самоуничтожение: чат сверяется по самой строке)
 describe('C7-2: мутация из чужого чата не действует на строку другого чата', () => {

@@ -31,8 +31,17 @@
   white-space: pre-wrap;
 }
 
+.stepsBox {
+  font-size: 0.875rem;
+}
+
+.stepsToggle {
+  cursor: var(--custom-cursor, pointer);
+  color: var(--pv-blue);
+}
+
 .steps {
-  margin: 0;
+  margin: 0.25rem 0 0;
   padding-inline-start: 1.25rem;
   font-size: 0.875rem;
 }

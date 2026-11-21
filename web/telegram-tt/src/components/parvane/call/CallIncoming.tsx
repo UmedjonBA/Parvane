@@ -14,6 +14,8 @@ import styles from './Call.module.scss';
 type OwnProps = {
   peerName: string;
   status: string;
+  // Личный вызов: «звонит вам…» только для чтения с экрана (доска `RpCalls`), у группового приглашения — видно
+  isStatusHidden?: boolean;
   // `@ник` звонящего и «в контактах» (личный звонок)
   handle?: string;
   isContact?: boolean;
@@ -25,7 +27,7 @@ type OwnProps = {
 
 // Входящий звонок (доска `RpCalls`): кто звонит, «Ответить сообщением» и две кнопки с подписями
 const CallIncoming = ({
-  peerName, status, handle, isContact, onAccept, onDecline, onReplyWithMessage,
+  peerName, status, isStatusHidden, handle, isContact, onAccept, onDecline, onReplyWithMessage,
 }: OwnProps) => {
   const lang = useOldLang();
   const langNew = useLang();
@@ -40,7 +42,7 @@ const CallIncoming = ({
           {isContact ? langNew('ParvaneCallHandleContact', { handle }) : handle}
         </div>
       )}
-      <div className={styles.status}>{status}</div>
+      <div className={isStatusHidden ? styles.readerOnly : styles.status}>{status}</div>
       <div className={styles.spacer} />
       {onReplyWithMessage && (
         <button type="button" className={buildClassName(kit.chip, styles.replyChip)} onClick={onReplyWithMessage}>

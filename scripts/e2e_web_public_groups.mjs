@@ -101,10 +101,9 @@ try {
   await linkInput.fill(`${origin}/@${name}`);
   await screen.getByText(/is available/).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await screen.locator('[data-public-warning]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // FAB «Save» выезжает после проверки имени; до класса `revealed` нажатие ему не передаётся
-  const save = screen.locator('.FloatingActionButton.revealed');
+  // «Готово» текстом в шапке (доска `XpChat`) появляется после проверки имени
+  const save = right.locator('[data-type-done]');
   await save.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.waitForTimeout(400);
   await save.click();
   await waitFor(async () => (await chatUsernameOf(page, title)) === name, STEP_TIMEOUT_MS, 'группа не стала публичной');
   console.log(`OK: группа публичная @${name}`);
@@ -116,7 +115,7 @@ try {
   for (const [option, expected] of [['preview', { isPreview: true, isHistory: false }],
     ['history', { isPreview: true, isHistory: true }]]) {
     const toggle = screen.locator(`[data-public-option="${option}"]`);
-    const fallback = screen.locator('label').filter({ hasText: option === 'preview' ? 'Read without joining' : 'History for new members' });
+    const fallback = screen.locator('label').filter({ hasText: option === 'preview' ? 'Read without joining' : 'Members see earlier messages' });
     if (await toggle.count()) await toggle.first().click({ force: true });
     else await fallback.first().click();
     await waitFor(async () => {

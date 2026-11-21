@@ -30,7 +30,7 @@ const OTHER = 'Курс ОГЭ';
 // Справка: папка связанных заметок о продукте (интерфейс сценария английский)
 const GUIDE_FOLDER = 'Parvane guide';
 const GUIDE_OVERVIEW = 'Overview';
-const GUIDE_HUB = 'How sections connect';
+const GUIDE_HUB = 'Links between modules';
 const GUIDE_NOTES = 12;
 // Заметка, которую создаёт связь, брошенная на пустое место графа
 const GRAPH_NOTE = 'Граф-заметка';
@@ -488,8 +488,7 @@ try {
   const gedge = (from, to) => graph.locator(`[data-graph-edge][data-from-title="${from}"][data-to-title="${to}"]`);
   // Точка — её кружок: подпись под ним нажатий не принимает
   // Граф после открытия вкладки и смены ширины вписывается заново: место точки берётся, когда оно устоялось
-  const centreOf = async (title) => {
-    const circle = gnode(title).locator('[data-graph-dot]');
+  const centreOfDot = async (circle) => {
     await circle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     let box = await circle.boundingBox();
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -501,6 +500,7 @@ try {
     }
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   };
+  const centreOf = (title) => centreOfDot(gnode(title).locator('[data-graph-dot]'));
   const clickNode = async (title) => {
     const at = await centreOf(title);
     await page.mouse.click(at.x, at.y);
@@ -650,9 +650,9 @@ try {
   await visible(graph.locator('[data-node][data-kind="record"]'), 'узел записи «Плана»');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-graph.png` });
   // Запись «Плана» в панели: день и время, переход в «План» есть
-  const recordNode = graph.locator('[data-node][data-kind="record"]').locator('[data-graph-dot]').first();
-  const recordBox = await recordNode.boundingBox();
-  await page.mouse.click(recordBox.x + recordBox.width / 2, recordBox.y + recordBox.height / 2);
+  // Включённый слой раскладывает граф заново — место точки берётся, когда оно устоялось (`centreOf`)
+  const recordAt = await centreOfDot(graph.locator('[data-node][data-kind="record"] [data-graph-dot]').first());
+  await page.mouse.click(recordAt.x, recordAt.y);
   await visible(panel.locator('[data-graph-panel-record]').getByText('созвон'), 'запись «Плана» в панели графа');
   await visible(panel.locator('[data-graph-panel-plan]'), 'переход к записи в «План»');
   await panel.locator('[data-graph-panel-close]').click();

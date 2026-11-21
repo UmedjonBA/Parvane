@@ -226,3 +226,111 @@
   font-family: var(--font-family-monospace);
   color: var(--pv-muted);
 }
+
+// Подсказка внизу карточки аккаунта (доска `PhProfileB`: «После смены ника старый ведёт на вас ещё 30 дней.»)
+.cardHint {
+  margin: 0;
+  padding: 0.5rem 1rem 0.75rem;
+  border-top: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size-caption);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+// «Имя | Ник» в одной строке (компьютер, доска `RdProfile`)
+.nickRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+// «Мой профиль» (доски `XpProfile`, `RdProfile`): фото с «Сменить фото / Убрать фото», перетаскивание картинки
+.avatarEdit {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.avatarImage {
+  overflow: hidden;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+
+  font-size: 1.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-panel);
+
+  background: var(--pv-accent);
+}
+
+.avatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatarActions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  align-items: flex-start;
+}
+
+.dropActive {
+  outline: 2px dashed var(--pv-accent);
+  outline-offset: -0.5rem;
+}
+
+// Поля сверх досок (фамилия, день рождения, цвет имени, личный канал, телефон) — под «Ещё»
+.moreToggle {
+  cursor: var(--custom-cursor, pointer);
+
+  align-self: flex-start;
+
+  margin: 0.75rem 1rem 0.25rem;
+  padding: 0;
+  border: 0;
+
+  font: inherit;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-at);
+
+  background: none;
+}
+
+// Низ окна «Мой профиль» на компьютере: «Отмена / Сохранить»
+.windowFooter {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--pv-line);
+}
+
+// «Сообщить об ошибке» на компьютере (доска `ZdProfileY`): форма слева, «Что приложим» справа
+.twoColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.screenColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.buttonsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

@@ -96,13 +96,17 @@ try {
   // Корень на устройстве: поля ключа восстановления нет, вместо него — предупреждение о новом ключе
   await dialog.locator('[data-rename-key-stored]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await dialog.locator('#parvane-rename-key').count(), 0, 'с корнем на устройстве ключ не спрашивается');
-  assert.equal(await dialog.getByRole('button', { name: 'Change', exact: true }).isDisabled(), true,
-    'занятый ник не отправляется');
+  // Ник меняется общей «Сохранить» окна «Мой профиль» (доска `RdProfile`): занятый ник не уходит
+  const save = a.locator('[data-profile-save]:visible, [data-profile-done]:visible').first();
+  await save.click();
+  await a.waitForTimeout(1500);
+  assert.equal(await dialog.locator('[data-rename-done], [data-rename-error]').count(), 0,
+    'занятый ник отправлен');
   // Неверный пароль
   await dialog.locator('#parvane-rename-nick').fill(newNick);
   await dialog.locator('[data-rename-nick-state="free"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(`${PASSWORD}-wrong`);
-  await dialog.getByRole('button', { name: 'Change', exact: true }).click();
+  await save.click();
   await dialog.locator('[data-rename-error="bad_password"]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await dialog.locator('#parvane-rename-password').fill(PASSWORD);
   let isNewKeyIssued = false;
@@ -110,7 +114,7 @@ try {
     if (m.text().includes('ник сменён, ключ восстановления заменён новым')) isNewKeyIssued = true;
   });
   const reloaded = a.waitForEvent('load', { timeout: RENAME_TIMEOUT_MS });
-  await dialog.getByRole('button', { name: 'Change', exact: true }).click();
+  await save.click();
   // «Ник сменён» видно ~0,4 с до перезагрузки вкладки — под нагрузкой кадр с ним может не отрисоваться раньше
   // reload; признак успеха — перезагрузка и новый ник ниже
   await Promise.race([

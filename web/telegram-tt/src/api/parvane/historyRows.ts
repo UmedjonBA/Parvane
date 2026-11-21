@@ -181,6 +181,7 @@ export function createHistoryRows(deps: Deps) {
   const chains = new Map<string, Promise<unknown>>();
   // Счётчики непрочитанного модели (`unread_changed`, spec 036): маркер, число, упоминания — готовыми
   const modelUnread = new Map<string, ModelUnread>();
+  let unreadableTotal = 0;
   let readyOwner = '';
   let ready: Promise<RowsModel | undefined> | undefined;
 
@@ -544,6 +545,7 @@ export function createHistoryRows(deps: Deps) {
    * показ; маркеры перечитываются, когда модель сменила счётчик чата. */
   async function applyModelDelta(delta: Record<string, unknown>) {
     const changes = (delta.changes as Record<string, unknown>[] | undefined) || [];
+    noteUnreadable(changes);
     const rows = changes.some((ch) => ch.message_upsert || ch.message_remove);
     // spec 036 T018: строки списка чатов — готовыми видами модели; показ — вне обработчика (ниже)
     const self = deps.self();
@@ -588,7 +590,19 @@ export function createHistoryRows(deps: Deps) {
     setTimeout(() => deps.onChatsTouched(Array.from(touched)), 0);
   }
 
+  // Записи журнала истории, которые не открылись ни текущим, ни прежними ключами (нотис модели
+  // `history_unreadable`): раньше пропускались молча — теперь счётчик в журнале диагностики
+  function noteUnreadable(changes: Record<string, unknown>[]) {
+    changes.forEach((ch) => {
+      const notice = ch.notice as { kind?: string; detail?: string } | undefined;
+      if (notice?.kind !== 'history_unreadable') return;
+      unreadableTotal += Number(notice.detail) || 0;
+      deps.log(`история: не открыто ключом записей — ${notice.detail}, всего ${unreadableTotal}`);
+    });
+  }
+
   function reset() {
+    unreadableTotal = 0;
     chains.clear();
     modelUnread.clear();
     ready = undefined;

@@ -23,8 +23,9 @@ import styles from './Profile.module.scss';
 export type AppearanceMode = 'auto' | 'light' | 'dark';
 
 type OwnProps = {
-  // Какую часть показать: схемы, строки «Режим» и «Размер текста» либо всё вместе (карточка «Обзора»)
-  part: 'schemes' | 'rows' | 'all';
+  // Какую часть показать: схемы, строки «Режим» и «Размер текста», всё вместе (карточка «Обзора»); на телефоне
+  // (доска `PhProfileA`) — сегмент режима во всю ширину и строка «Размер текста − 15 +» отдельно
+  part: 'schemes' | 'rows' | 'all' | 'mode' | 'size';
 };
 
 type StateProps = {
@@ -78,6 +79,29 @@ const ProfileAppearance = ({
     );
   }
 
+  const modeSegment = (
+    <PvSegment
+      items={modes}
+      value={mode}
+      label={lang('ParvaneAppearanceMode')}
+      className={part === 'mode' ? styles.modeSegment : styles.setSegment}
+      onChange={handleModeChange}
+    />
+  );
+
+  if (part === 'mode') return modeSegment;
+
+  if (part === 'size') {
+    return (
+      <div className={styles.setRow} data-text-size={messageTextSize}>
+        <span className={styles.setTitle}>{lang('ParvaneAppearanceTextSize')}</span>
+        {renderStep(-1, lang('ParvaneAppearanceSmaller'), messageTextSize <= MESSAGE_TEXT_SIZE_MIN)}
+        <span className={styles.sizeNumber}>{messageTextSize}</span>
+        {renderStep(1, lang('ParvaneAppearanceLarger'), messageTextSize >= MESSAGE_TEXT_SIZE_MAX)}
+      </div>
+    );
+  }
+
   return (
     <>
       {part === 'schemes' && <ColorSchemePicker theme={theme} />}
@@ -86,13 +110,7 @@ const ProfileAppearance = ({
         <>
           <div className={buildClassName(styles.setRow, styles.setRowWrap)}>
             <span className={styles.setTitle}>{lang('ParvaneAppearanceMode')}</span>
-            <PvSegment
-              items={modes}
-              value={mode}
-              label={lang('ParvaneAppearanceMode')}
-              className={styles.setSegment}
-              onChange={handleModeChange}
-            />
+            {modeSegment}
           </div>
           <div className={styles.setRow} data-text-size={messageTextSize}>
             <span className={styles.setTitle}>{lang('ParvaneAppearanceTextSize')}</span>

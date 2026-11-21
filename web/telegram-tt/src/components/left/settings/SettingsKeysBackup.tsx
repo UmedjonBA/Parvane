@@ -1,11 +1,14 @@
 import { memo, useEffect, useState } from '../../../lib/teact/teact';
-import { getActions, getGlobal } from '../../../global';
+import { getActions } from '../../../global';
+
+import type { KeysFileTab } from './profile/profileRequests';
 
 import buildClassName from '../../../util/buildClassName';
-import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
+import { formatDateAtTime } from '../../../util/dates/oldDateFormat';
 import { callApi } from '../../../api/gramjs';
-import { formatBackupDate, getKeysBackupSavedAt, markKeysBackupSaved } from './profile/profileStatus';
+import useKeysFileStatus from './profile/useKeysFileStatus';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -13,7 +16,8 @@ import useOldLang from '../../../hooks/useOldLang';
 
 import { DeviceKeyDialog } from './devices/DeviceDialogs';
 import KeysBundleOffDialog from './KeysBundleOffDialog';
-import ProfileIcon from './profile/ProfileIcon';
+import KeysFileCard from './profile/KeysFileCard';
+import KeysFileForm from './profile/KeysFileForm';
 
 import styles from './profile/Profile.module.scss';
 
@@ -31,10 +35,11 @@ type KeyBundleContents = {
   hasMusic: boolean;
   groups: number;
   isOff: boolean;
+  updatedAt?: number;
+  keyAt?: number;
 };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
-const KEYS_PASSWORD_MIN_LENGTH = 8;
 // «Что в копии»: строка — признак состава и её название
 const BUNDLE_ROWS = [
   { part: 'chats', key: 'ParvaneKeysBundleChats' },
@@ -44,15 +49,17 @@ const BUNDLE_ROWS = [
   { part: 'music', key: 'ParvaneKeysBundleMusic' },
 ] as const;
 
-// Parvane (spec 041 E3): «Профиль → Копия ключей» (доски `RpProfileB`, `ZdProfileX`) — файл под паролем с
-// ключами и историей устройства. Прежде обе строки стояли на экране «Конфиденциальность»
+// Parvane (spec 041 E3): «Профиль → Копия ключей». Компьютер — доска `ZdProfileX`: состояние копии ключей аккаунта
+// («включена · обновлена сегодня в 14:02»), «Ключ восстановления» (дата создания, «Создать новый ключ»), «Что в копии»,
+// «Выключить копию»; файл копии на компьютере — на «Данных и памяти» (`DkSettingsB`). Телефон — доска `RpProfileB`:
+// карточка файла копии и форма «Сохранить новую · Восстановить» сверху, ниже то же про копию аккаунта
 const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
   const oldLang = useOldLang();
-
-  const userId = getGlobal().currentUserId;
-  const [savedAt, setSavedAt] = useState(() => getKeysBackupSavedAt(userId));
+  const { isDesktop } = useAppLayout();
+  const fileStatus = useKeysFileStatus(isActive);
+  const [fileTab, setFileTab] = useState<KeysFileTab>('save');
 
   const [isRenewOpen, setIsRenewOpen] = useState(false);
   const [isOffOpen, setIsOffOpen] = useState(false);
@@ -85,127 +92,101 @@ const SettingsKeysBackup = ({ isActive, onReset }: OwnProps) => {
     void loadContents();
   });
 
-  const handleExport = useLastCallback(async () => {
-    const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
-    if (!password) return;
-    // Копия держит закрытые ключи и историю: короткий пароль подбирается офлайн
-    if (password.length < KEYS_PASSWORD_MIN_LENGTH) {
-      showNotification({ message: oldLang('ParvaneKeysPasswordTooShort') });
-      return;
-    }
-    const result = await callParvane('parvaneExportE2eKeys', { password }) as { payload: string } | undefined;
-    if (!result) {
-      showNotification({ message: oldLang('ParvaneKeysExportFailed') });
-      return;
-    }
-    const blob = new Blob([result.payload], { type: 'application/json' });
-    const anchor = document.createElement('a');
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = 'parvane-e2e-keys.json';
-    anchor.click();
-    URL.revokeObjectURL(anchor.href);
-    markKeysBackupSaved(userId);
-    setSavedAt(getKeysBackupSavedAt(userId));
-    showNotification({ message: oldLang('ParvaneKeysExported') });
-  });
-
-  const handleImport = useLastCallback(() => {
-    openSystemFilesDialog('.json', (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      void (async () => {
-        const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
-        if (!password) return;
-        const payload = await file.text();
-        const result = await callParvane('parvaneImportE2eKeys', { payload, password });
-        showNotification({
-          message: oldLang(result ? 'ParvaneKeysImported' : 'ParvaneKeysImportFailed'),
-        });
-      })();
-    }, true);
-  });
-
   const rowClass = buildClassName(styles.setRow, styles.setRowAction);
+  const bundleState = contents ? (contents.isOff ? 'off' : 'on') : 'none';
+  const keyDate = contents?.keyAt
+    ? new Intl.DateTimeFormat(lang.code, { day: 'numeric', month: 'long', year: 'numeric' })
+      .format(new Date(contents.keyAt))
+    : undefined;
+
+  function renderBundleTitle() {
+    if (!isContentsLoaded) return lang('Loading');
+    if (!contents) return lang('ParvaneKeysBundleNone');
+    if (contents.isOff) return lang('ParvaneKeysOffState');
+    return contents.updatedAt
+      ? lang('ParvaneKeysBundleOnAt', { when: formatDateAtTime(oldLang, contents.updatedAt) })
+      : lang('ParvaneKeysBundleOn');
+  }
 
   return (
     <div className={buildClassName('settings-content custom-scroll', styles.screen)} data-settings-keys>
-      <div className={styles.hint} data-keys-saved-at={savedAt || undefined}>
-        {savedAt
-          ? lang('ParvaneKeysBackupSavedAt', { date: formatBackupDate(savedAt, lang.code) })
-          : lang('ParvaneKeysBackupNone')}
-      </div>
-      <div className={styles.hint}>{lang('ParvaneKeysBackupHint')}</div>
-      <div className={styles.group}>
-        <button type="button" className={rowClass} data-keys-action="save" onClick={handleExport}>
-          <span className={styles.setText}>
-            <span className={styles.setTitle}>{lang('ParvaneKeysBackupSave')}</span>
-            <span className={styles.setHint}>{lang('ParvaneKeysBackupSaveHint')}</span>
-          </span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
-        <button type="button" className={rowClass} data-keys-action="restore" onClick={handleImport}>
-          <span className={styles.setTitle}>{lang('ParvaneKeysBackupRestore')}</span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
+      {!isDesktop && (
+        <>
+          <KeysFileCard savedAt={fileStatus.savedAt} isStale={fileStatus.isStale} />
+          <KeysFileForm user={fileStatus.user} tab={fileTab} onTabChange={setFileTab} onDone={fileStatus.refresh} />
+          <div className={styles.caption}>{lang('ParvaneKeysAccountCaption')}</div>
+        </>
+      )}
+      {isDesktop && <div className={styles.hint}>{lang('ParvaneKeysScreenHint')}</div>}
+      <div
+        className={styles.statusCard}
+        data-keys-bundle-state={bundleState}
+        data-keys-bundle-none={isContentsLoaded && !contents ? true : undefined}
+        data-keys-bundle-off={contents?.isOff || undefined}
+      >
+        <div className={styles.statusHead}>
+          <span
+            className={buildClassName(styles.statusDot, bundleState === 'on' && styles.statusDotOk)}
+            aria-hidden
+          />
+          <span className={styles.statusTitle}>{renderBundleTitle()}</span>
+        </div>
+        {contents?.isOff && (
+          <button type="button" className={styles.statusLink} data-keys-action="bundle-on" onClick={handleEnable}>
+            {lang('ParvaneKeysOnAction')}
+          </button>
+        )}
+        {contents?.isOff && <div className={styles.statusText}>{lang('ParvaneKeysOnHint')}</div>}
       </div>
 
       <div className={styles.caption}>{lang('ParvaneRecoveryKeyCaption')}</div>
       <div className={styles.group}>
-        <button type="button" className={rowClass} data-keys-action="renew" onClick={openRenew}>
+        {keyDate && (
+          <div className={styles.setRow} data-keys-key-created>
+            <span className={styles.setTitle}>{lang('ParvaneRecoveryKeyCreated')}</span>
+            <span className={styles.setValue}>{keyDate}</span>
+          </div>
+        )}
+        <div className={styles.setRow}>
           <span className={styles.setText}>
             <span className={styles.setTitle}>{lang('ParvaneRecoveryKeyRenew')}</span>
             <span className={styles.setHint}>{lang('ParvaneRecoveryKeyRenewHint')}</span>
           </span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
+          <button type="button" className={styles.chip} data-keys-action="renew" onClick={openRenew}>
+            {lang('ParvaneRecoveryKeyCreate')}
+          </button>
+        </div>
       </div>
       <div className={styles.hint}>{lang('ParvaneRecoveryKeyAbout')}</div>
 
-      <div className={styles.caption}>{lang('ParvaneKeysBundleCaption')}</div>
-      {contents?.isOff ? (
+      {contents && !contents.isOff && (
         <>
-          <div className={styles.hint} data-keys-bundle-off>{lang('ParvaneKeysOffState')}</div>
+          <div className={styles.caption}>{lang('ParvaneKeysBundleWhat')}</div>
+          <div className={styles.group} data-keys-bundle>
+            {BUNDLE_ROWS.map(({ part, key }) => (
+              <div key={part} className={styles.setRow} data-bundle-part={part}>
+                <span className={styles.setTitle}>{lang(key)}</span>
+                <span className={styles.setValue}>
+                  {lang(hasPart(contents, part) ? 'ParvaneKeysBundleYes' : 'ParvaneKeysBundleNo')}
+                </span>
+              </div>
+            ))}
+            <div className={styles.setRow} data-bundle-part="groups">
+              <span className={styles.setTitle}>{lang('ParvaneKeysBundleGroups')}</span>
+              <span className={styles.setValue}>{contents.groups}</span>
+            </div>
+          </div>
           <div className={styles.group}>
-            <button type="button" className={rowClass} data-keys-action="bundle-on" onClick={handleEnable}>
-              <span className={styles.setText}>
-                <span className={styles.setTitle}>{lang('ParvaneKeysOnAction')}</span>
-                <span className={styles.setHint}>{lang('ParvaneKeysOnHint')}</span>
-              </span>
-              <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+            <button
+              type="button"
+              className={buildClassName(rowClass, styles.danger)}
+              data-keys-action="bundle-off"
+              onClick={openOff}
+            >
+              <span className={styles.setTitle}>{lang('ParvaneKeysOffAction')}</span>
             </button>
           </div>
         </>
-      ) : contents ? (
-        <div className={styles.group} data-keys-bundle>
-          {BUNDLE_ROWS.map(({ part, key }) => (
-            <div key={part} className={styles.setRow} data-bundle-part={part}>
-              <span className={styles.setTitle}>{lang(key)}</span>
-              <span className={styles.setValue}>
-                {lang(hasPart(contents, part) ? 'ParvaneKeysBundleYes' : 'ParvaneKeysBundleNo')}
-              </span>
-            </div>
-          ))}
-          <div className={styles.setRow} data-bundle-part="groups">
-            <span className={styles.setTitle}>{lang('ParvaneKeysBundleGroups')}</span>
-            <span className={styles.setValue}>{contents.groups}</span>
-          </div>
-        </div>
-      ) : (
-        <div className={styles.hint} data-keys-bundle-none={isContentsLoaded || undefined}>
-          {lang(isContentsLoaded ? 'ParvaneKeysBundleNone' : 'Loading')}
-        </div>
-      )}
-      {contents && !contents.isOff && (
-        <div className={styles.group}>
-          <button
-            type="button"
-            className={buildClassName(rowClass, styles.danger)}
-            data-keys-action="bundle-off"
-            onClick={openOff}
-          >
-            <span className={styles.setTitle}>{lang('ParvaneKeysOffAction')}</span>
-          </button>
-        </div>
       )}
       <div className={styles.hint}>{lang('ParvaneKeysBundleHint')}</div>
 

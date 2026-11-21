@@ -347,3 +347,153 @@
   line-height: 1.4;
   color: var(--pv-muted);
 }
+
+.buttonRed {
+  border-color: transparent;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  background: var(--pv-red);
+
+  &:hover:not(:disabled) {
+    color: var(--pv-accent-ink);
+    background: color-mix(in srgb, var(--pv-red) 88%, var(--pv-fg));
+  }
+}
+
+.error {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-red);
+}
+
+// ── «Телефон потерян или украден» (доски `ZdProfileY`, `RpProfileC`) ───────────
+
+.stolenModal :global(.modal-dialog) {
+  max-width: 32.5rem;
+}
+
+.stolen {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stolenDevice {
+  display: flex;
+  flex-direction: column;
+
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.stolenSteps {
+  overflow: hidden;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+  background: var(--pv-raised);
+}
+
+.stolenStep {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0.3125rem 0.875rem;
+
+  color: var(--pv-fg);
+
+  & + & {
+    border-top: 1px solid var(--pv-line);
+  }
+}
+
+.stolenDot {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+}
+
+.dotRed {
+  background: var(--pv-red);
+}
+
+.dotOrange {
+  background: var(--pv-orange);
+}
+
+.dotAccent {
+  background: var(--pv-accent);
+}
+
+.stolenStepTitle {
+  font-size: var(--pv-font-size);
+}
+
+.stolenStepHint {
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}
+
+.stolenCheck {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--pv-at);
+}
+
+.stolenForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.stolenField {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.stolenFieldLabel {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.stolenButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.stolenSignOutOnly {
+  margin-inline-end: auto;
+}
+
+// ── «Подтвердите вход»: подпись поля ключа и отказ другого устройства ──────────
+
+.fieldLabel {
+  margin: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.declined {
+  border-color: var(--pv-red);
+}
+
+// Компьютер: список без подписи раздела над ним
+.listGap {
+  margin-top: 0.75rem;
+}

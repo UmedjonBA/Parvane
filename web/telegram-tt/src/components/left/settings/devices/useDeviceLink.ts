@@ -14,9 +14,12 @@ export type LinkStatus = {
   hasEscrow?: boolean;
   telegram?: TelegramRecoveryState;
   telegramCode?: string;
+  // spec 041: своё устройство отклонило запрос этого устройства
+  isDeclined?: boolean;
 };
 
-export type LinkOffer = { deviceId: string; code?: string };
+// `label` — как новое устройство назвало себя при входе («Firefox, Linux»)
+export type LinkOffer = { deviceId: string; code?: string; label?: string };
 
 // Ключ подписи устройств (T128, D-12): отозвано устройство, державшее его, — ключ обновляется корнем (`hasRoot` —
 // корень на устройстве, RECOVER-1 п. 8; иначе — из копии под ключом восстановления)

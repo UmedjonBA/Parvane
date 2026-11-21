@@ -70,7 +70,7 @@ const ProfileMenu = ({ variant, activeId, values }: OwnProps) => {
   return (
     <>
       {PROFILE_GROUPS.map((group) => {
-        const items = group.items.filter((item) => isNav || !item.isNavOnly);
+        const items = group.items.filter((item) => (isNav ? !item.isListOnly : !item.isNavOnly));
         if (!items.length) return undefined;
         return (
           <div key={group.id} className={isNav ? styles.navGroup : styles.menuGroup}>

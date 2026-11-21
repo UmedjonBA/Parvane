@@ -12,14 +12,22 @@ import { validateFiles } from '../../../../util/files';
 import { isUploadedWallpaper } from '../../../../util/parvaneWallpaper';
 import { openSystemFilesDialog } from '../../../../util/systemFilesDialog';
 
+import useFlag from '../../../../hooks/useFlag';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 
 import PvSegment from '../../../parvane/notes/PvSegment';
+import ProfileChoiceSheet from './ProfileChoiceSheet';
+import ProfileIcon from './ProfileIcon';
 
 import styles from './Profile.module.scss';
 
 type BackgroundMode = 'default' | 'pattern' | 'own';
+
+type OwnProps = {
+  // Телефон (доска `PhProfileA`): строка «Фон чатов · По умолчанию» со шторкой выбора вместо сегмента
+  isCompact?: boolean;
+};
 
 type StateProps = {
   theme: ThemeKey;
@@ -31,9 +39,10 @@ const SUPPORTED_TYPES = 'image/jpeg';
 // Parvane (spec 041, доска `DkSettingsA`): «Фон чатов» переключателем «По умолчанию / Рисунок / Своя картинка».
 // «По умолчанию» снимает фон сразу, «Рисунок» открывает выбор цвета и рисунка (прежний экран фона), «Своя картинка» —
 // выбор файла; загруженная картинка появляется первой на экране фона
-const AppearanceBackgroundRow = ({ theme, background }: StateProps) => {
+const AppearanceBackgroundRow = ({ isCompact, theme, background }: OwnProps & StateProps) => {
   const { setThemeSettings, openSettingsScreen, uploadWallpaper } = getActions();
   const lang = useLang();
+  const [isSheetOpen, openSheet, closeSheet] = useFlag();
   const mode: BackgroundMode = !background ? 'default' : isUploadedWallpaper(background) ? 'own' : 'pattern';
 
   const items = useMemo<PvSegmentItem<BackgroundMode>[]>(() => [
@@ -65,6 +74,31 @@ const AppearanceBackgroundRow = ({ theme, background }: StateProps) => {
     }
   });
 
+  if (isCompact) {
+    return (
+      <>
+        <button
+          type="button"
+          className={buildClassName(styles.setRow, styles.setRowAction)}
+          data-appearance-row="background"
+          onClick={openSheet}
+        >
+          <span className={styles.setTitle}>{lang('ParvaneAppearanceChatBackground')}</span>
+          <span className={styles.menuValue}>{items.find((item) => item.value === mode)!.label}</span>
+          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+        </button>
+        <ProfileChoiceSheet
+          isOpen={isSheetOpen}
+          title={lang('ParvaneAppearanceChatBackground')}
+          options={items}
+          selected={mode}
+          onSelect={handleChange as (value: string) => void}
+          onClose={closeSheet}
+        />
+      </>
+    );
+  }
+
   return (
     <div className={buildClassName(styles.setRow, styles.setRowWrap)} data-appearance-row="background">
       <span className={styles.setTitle}>{lang('ParvaneAppearanceChatBackground')}</span>
@@ -79,7 +113,7 @@ const AppearanceBackgroundRow = ({ theme, background }: StateProps) => {
   );
 };
 
-export default memo(withGlobal(
+export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
     const theme = selectTheme(global);
     return { theme, background: selectThemeValues(global, theme)?.background };

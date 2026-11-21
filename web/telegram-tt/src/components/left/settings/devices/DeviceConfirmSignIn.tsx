@@ -7,6 +7,7 @@ import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
 import { fetchParvaneServerInfo } from '../../../../api/parvane/authApi';
 
+import useAppLayout from '../../../../hooks/useAppLayout';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
@@ -51,6 +52,7 @@ const DeviceConfirmSignIn = ({ linkStatus, onRefresh, onResetIdentity }: OwnProp
   const { showNotification } = getActions();
   const lang = useLang();
   const oldLang = useOldLang();
+  const { isMobile } = useAppLayout();
   const [recoveryKey, setRecoveryKey] = useState('');
   const [isRecovering, setIsRecovering] = useState(false);
   const [bot, setBot] = useState('');
@@ -76,32 +78,61 @@ const DeviceConfirmSignIn = ({ linkStatus, onRefresh, onResetIdentity }: OwnProp
     onRefresh();
   });
 
-  const { code, telegram, telegramCode } = linkStatus;
+  const handleRequestAgain = useLastCallback(async () => {
+    await callParvane('parvaneRequestLinkAgain');
+    onRefresh();
+  });
+
+  const {
+    code, telegram, telegramCode, isDeclined,
+  } = linkStatus;
   const telegramKey = telegram ? TELEGRAM_STATE_KEYS[telegram] : undefined;
   const canRequestAgain = telegram !== 'joining' && telegram !== 'done';
+  // Карточка бота есть всегда (доски `PhAuth`, `DkAuth`); прячется, только когда сервер без бота
+  const hasTelegramCard = telegram !== 'unavailable';
 
   return (
     <section className={styles.confirm} data-confirm-sign-in>
       <div className={styles.confirmHead}>
-        <h2 className={styles.confirmTitle}>{lang('ParvaneConfirmSignInTitle')}</h2>
+        {!isMobile && <h2 className={styles.confirmTitle}>{lang('ParvaneConfirmSignInTitle')}</h2>}
         <p className={styles.muted}>{lang('ParvaneConfirmSignInText')}</p>
       </div>
       <div className={styles.confirmCards}>
-        <div className={buildClassName(styles.card, styles.cardActive)} data-confirm-way="device">
+        <div
+          className={buildClassName(styles.card, isDeclined ? styles.declined : styles.cardActive)}
+          data-confirm-way="device"
+          data-link-declined={isDeclined ? 'true' : undefined}
+        >
           <h3 className={styles.cardTitle}>{lang('ParvaneConfirmWayDevice')}</h3>
-          <p className={styles.cardText}>{lang('ParvaneConfirmWayDeviceText')}</p>
-          <div className={styles.bigCode} data-link-code={code || ''}>{code || '···· ···· ····'}</div>
-          <p className={styles.status}>
-            <span className={styles.statusDot} />
-            {lang('ParvaneConfirmWaiting')}
-          </p>
+          {isDeclined ? (
+            <>
+              <p className={styles.cardText} role="alert">{lang('ParvaneConfirmDeclinedText')}</p>
+              <div className={styles.cardSpacer} />
+              <button type="button" className={styles.button} data-link-again onClick={handleRequestAgain}>
+                {lang('ParvaneConfirmRequestAgain')}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className={styles.cardText}>{lang('ParvaneConfirmWayDeviceText')}</p>
+              <div className={styles.bigCode} data-link-code={code || ''}>{code || '···· ···· ····'}</div>
+              <p className={styles.status}>
+                <span className={styles.statusDot} />
+                {lang('ParvaneConfirmWaiting')}
+              </p>
+            </>
+          )}
         </div>
 
         <form className={styles.card} action="" data-confirm-way="key" onSubmit={handleRecover}>
           <h3 className={styles.cardTitle}>{lang('ParvaneConfirmWayKey')}</h3>
-          <p className={styles.cardText}>{lang('ParvaneConfirmWayKeyText')}</p>
+          {!isMobile && <p className={styles.cardText}>{lang('ParvaneConfirmWayKeyText')}</p>}
           {linkStatus.hasEscrow && <p className={styles.cardText}>{oldLang('ParvaneLostKeyAdmin')}</p>}
+          <label className={styles.fieldLabel} htmlFor="parvane-confirm-recovery-key">
+            {lang(isMobile ? 'ParvaneConfirmWayKeyTextShort' : 'ParvaneConfirmKeyLabel')}
+          </label>
           <input
+            id="parvane-confirm-recovery-key"
             className={styles.keyInput}
             type="text"
             value={recoveryKey}
@@ -109,7 +140,6 @@ const DeviceConfirmSignIn = ({ linkStatus, onRefresh, onResetIdentity }: OwnProp
             autoComplete="off"
             autoCapitalize="none"
             spellCheck={false}
-            aria-label={oldLang('ParvaneSskRotationPlaceholder')}
             data-recover-key-input
             onChange={(e) => setRecoveryKey(e.currentTarget.value)}
           />
@@ -119,14 +149,17 @@ const DeviceConfirmSignIn = ({ linkStatus, onRefresh, onResetIdentity }: OwnProp
             disabled={!recoveryKey.trim() || isRecovering}
             data-recover-key-submit
           >
-            {oldLang('ParvaneRecoverAction')}
+            {lang('ParvaneConfirmKeySubmit')}
           </button>
         </form>
 
-        {telegramKey && (
+        {hasTelegramCard && (
           <div className={styles.card} data-confirm-way="telegram">
             <h3 className={styles.cardTitle}>{lang('ParvaneConfirmWayTelegram')}</h3>
-            <p className={styles.cardText} data-telegram-recovery={telegram}>{oldLang(telegramKey)}</p>
+            <p className={styles.cardText}>{lang('ParvaneConfirmWayTelegramText')}</p>
+            {telegramKey && (
+              <p className={styles.cardText} data-telegram-recovery={telegram}>{oldLang(telegramKey)}</p>
+            )}
             {telegram === 'waiting' && Boolean(telegramCode) && (
               <p className={styles.cardText} data-telegram-code={telegramCode}>
                 {oldLang('ParvaneTgRecoverCode', telegramCode)}

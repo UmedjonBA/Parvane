@@ -1,6 +1,7 @@
 import { getActions, getGlobal } from '../../../../global';
 
 import type { GlobalState } from '../../../../global/types';
+import type { DiagEntry } from '../../../../util/parvaneDiag';
 import { MAIN_THREAD_ID } from '../../../../api/types';
 
 import {
@@ -26,47 +27,112 @@ export type BugReportResult = 'sent' | 'no-address' | 'failed';
 
 const callParvane = callApi as unknown as (name: string, args: unknown) => Promise<unknown>;
 
+// «Журнал приложения · последний час» (доска `ZdProfileY`)
+const LOG_WINDOW_MS = 60 * 60 * 1000;
+const FRAME_WAIT_MS = 300;
+
+export type BugReportInput = {
+  description: string;
+  steps: string;
+  area: BugReportArea;
+  withLog: boolean;
+  scheme: string;
+};
+
 /** Первая строка того, что уйдёт: версия, система, схема — показ «Что будет отправлено». */
 export function describeBugReportEnvironment(scheme: string) {
   return `Parvane ${APP_VERSION} · ${describePlatform()} · ${scheme}`;
 }
 
-export async function sendBugReport({ description, area, withLog, scheme }: {
-  description: string;
-  area: BugReportArea;
-  withLog: boolean;
-  scheme: string;
-}): Promise<BugReportResult> {
+/** Журнал действий за последний час (без текста сообщений и записей — его там нет и так). */
+export function selectRecentDiag(entries: DiagEntry[], now: number) {
+  return entries.filter((entry) => now - entry.t <= LOG_WINDOW_MS);
+}
+
+/** Отчёт целиком — то, что уйдёт вложением и что сохраняется в файл. */
+export async function buildBugReport({
+  description, steps, area, withLog, scheme,
+}: BugReportInput) {
+  const snapshot = buildStateSnapshot(getGlobal());
+  const storeInfo = withLog ? await callParvane('fetchParvaneDiagStoreInfo', {
+    chatId: 'chatId' in snapshot ? snapshot.chatId : undefined,
+  }).catch(() => undefined) : undefined;
+  const now = Date.now();
+  return {
+    version: APP_VERSION,
+    environment: describeBugReportEnvironment(scheme),
+    userAgent: navigator.userAgent,
+    reportedAt: new Date(now).toISOString(),
+    area,
+    description,
+    steps: steps || undefined,
+    snapshot: withLog ? snapshot : undefined,
+    storeInfo,
+    log: withLog ? selectRecentDiag(getDiagEntries(), now) : undefined,
+  };
+}
+
+export async function sendBugReport(input: BugReportInput & { screenshot?: Blob }): Promise<BugReportResult> {
   // Точное совпадение адреса: первый результат поиска выбирает сервер
   const targetChatId = await callParvane('parvaneResolveExactAddress', { address: PARVANE_BUG_REPORT_ADDRESS })
     .catch(() => undefined) as string | undefined;
   if (!targetChatId) return 'no-address';
   try {
-    const snapshot = buildStateSnapshot(getGlobal());
-    const storeInfo = withLog ? await callParvane('fetchParvaneDiagStoreInfo', {
-      chatId: 'chatId' in snapshot ? snapshot.chatId : undefined,
-    }) : undefined;
-    const report = {
-      version: APP_VERSION,
-      environment: describeBugReportEnvironment(scheme),
-      userAgent: navigator.userAgent,
-      reportedAt: new Date().toISOString(),
-      area,
-      description,
-      snapshot: withLog ? snapshot : undefined,
-      storeInfo,
-      log: withLog ? getDiagEntries() : undefined,
-    };
+    const report = await buildBugReport(input);
     const blob = new Blob([JSON.stringify(report, undefined, 1)], { type: 'application/json' });
-    const attachment = await buildAttachment(`parvane-bug-${Date.now()}.json`, blob);
+    const attachments = [await buildAttachment(`parvane-bug-${Date.now()}.json`, blob)];
+    if (input.screenshot) attachments.push(await buildAttachment(`parvane-bug-${Date.now()}.png`, input.screenshot));
     getActions().sendMessage({
       messageList: { chatId: targetChatId, threadId: MAIN_THREAD_ID, type: 'thread' },
-      text: `🐞 [${area}] ${description}`,
-      attachments: [attachment],
+      text: `🐞 [${input.area}] ${input.description}`,
+      attachments,
     });
     return 'sent';
   } catch {
     return 'failed';
+  }
+}
+
+/** «Сохранить в файл»: тот же отчёт JSON-файлом в загрузки браузера. */
+export async function saveBugReport(input: BugReportInput) {
+  const report = await buildBugReport(input);
+  const url = URL.createObjectURL(new Blob([JSON.stringify(report, undefined, 1)], { type: 'application/json' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `parvane-bug-${Date.now()}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * «Снимок этого окна»: один кадр вкладки через выбор экрана браузера (`getDisplayMedia`, вкладка предлагается первой).
+ * Без своей библиотеки отрисовать страницу в картинку нельзя; отказ либо нет поддержки — `undefined`.
+ */
+export async function captureWindow(): Promise<Blob | undefined> {
+  if (!navigator.mediaDevices?.getDisplayMedia) return undefined;
+  let stream: MediaStream | undefined;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser' }, audio: false, preferCurrentTab: true,
+    } as DisplayMediaStreamOptions);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.srcObject = stream;
+    await video.play();
+    await new Promise((resolve) => {
+      setTimeout(resolve, FRAME_WAIT_MS);
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0);
+    return await new Promise<Blob | undefined>((resolve) => {
+      canvas.toBlob((blob) => resolve(blob || undefined), 'image/png');
+    });
+  } catch {
+    return undefined;
+  } finally {
+    stream?.getTracks().forEach((track) => track.stop());
   }
 }
 

@@ -16,6 +16,9 @@ import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes } from '../types';
 
 import { getMessageKey } from '../../util/keys/messageKey';
+import {
+  clearFederationRefusal, getForeignDomain, noteFederationRefusal,
+} from '../../util/parvaneFederationBlock';
 import { noteSendFailure } from '../../util/parvaneSendFailures';
 import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
@@ -99,6 +102,9 @@ const MS_IN_SECOND = 1000;
 const DELETE_TARGETS_MAX = 500;
 // Квитанция прочтения собеседнику — до успеха (READ-1 п. 3): повтор с растущей паузой
 const RECEIPT_RETRY_MS = 5000;
+// Решение по заданию: повторы отправки, пока ключ свежей группы не дошёл
+const RESPONSE_SEND_ATTEMPTS = 4;
+const RESPONSE_RETRY_MS = 1500;
 const RECEIPT_RETRY_MAX_MS = 120000;
 const RECEIPT_PENDING_CAP = 2000;
 
@@ -444,6 +450,20 @@ export function createMessageController(deps: MessageDependencies) {
     return uuid;
   }
 
+  async function publishWithRetry(toAddress: string, content: WireMessageContent, replyTo: string) {
+    const uuid = newMessageId();
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await publishInner(toAddress, content, uuid, replyTo);
+      } catch (err) {
+        if (attempt >= RESPONSE_SEND_ATTEMPTS) throw err;
+        await new Promise((resolve) => {
+          setTimeout(resolve, RESPONSE_RETRY_MS);
+        });
+      }
+    }
+  }
+
   // Гидратация сохранённых GIF из IndexedDB — один раз на пользователя;
   // до её завершения персист не пишем, чтобы не затереть сохранённое.
   // Пришедшие до гидратации гифы этой сессии остаются в начале списка
@@ -760,7 +780,7 @@ export function createMessageController(deps: MessageDependencies) {
 
   // Принятое задание — задача в планировщике получателя (spec 011, FR-019): один
   // раз на аккаунт (поле `source` задачи), на других устройствах — через контейнер
-  type TaskOfferPlanResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable';
+  type TaskOfferPlanResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable' | 'failed';
 
   function addTaskOfferToPlan(uuid: string, toAddress: string): TaskOfferPlanResult {
     const entry = deps.taskOffers.get(uuid);
@@ -902,6 +922,12 @@ export function createMessageController(deps: MessageDependencies) {
     deps.sendUpdate({ '@type': 'newMessage', chatId: chat.id, id, message, poll: deps.polls.build(uuid) });
   }
 
+  // Сервер собеседника личного чата, если он не свой (плашка отказа федерации, доска `ZpChat`)
+  function foreignDomainOf(chatId: string) {
+    const currentStore = store();
+    return getForeignDomain(currentStore.getAddressForId(chatId), currentStore.self.split('@')[1] || '');
+  }
+
   function reportEncryptionSendFailure(chatId: string, localId: number, detail?: unknown) {
     // Отказ федерации (spec 028) — с понятной причиной: другой сервер недоступен, заблокирован…
     const reason = federationReason(detail);
@@ -911,6 +937,7 @@ export function createMessageController(deps: MessageDependencies) {
     const detailMessage = detail instanceof Error ? detail.message : '';
     deps.log(`${E2E_SEND_ERROR}${detailMessage ? ` ${detailMessage}` : ''}`);
     noteSendFailure(chatId, localId, reason);
+    noteFederationRefusal(foreignDomainOf(chatId), reason);
     deps.sendUpdate({
       '@type': 'updateMessageSendFailed', chatId, localId, error: E2E_SEND_ERROR,
     });
@@ -1222,6 +1249,7 @@ export function createMessageController(deps: MessageDependencies) {
     }
     const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
     currentStore.putMessage(sentMessage);
+    clearFederationRefusal(foreignDomainOf(chat.id));
     deps.sendUpdate({
       '@type': 'updateMessageSendSucceeded',
       chatId: chat.id,
@@ -2069,11 +2097,22 @@ export function createMessageController(deps: MessageDependencies) {
         refreshTaskOfferMessage(uuid);
         return 'ok';
       }
+      const previous = entry.responses.get(currentStore.self);
       deps.taskOffers.applyResponse(uuid, currentStore.self, isAccepted, Math.floor(Date.now() / 1000));
       refreshTaskOfferMessage(uuid);
       const text = taskResponseText(entry.name, isAccepted, getTaskOfferKind(entry));
       const content: WireMessageContent = { kind: 'task_response', offer: uuid, accepted: isAccepted, text };
-      const responseUuid = await publishInner(toAddress, content, undefined, uuid);
+      // Решение, которое не ушло (группа только что создана и её ключ ещё не дошёл, обрыв), не остаётся только
+      // на своей карточке: повтор, затем откат и сообщение (плавающее «Отклонено» не доходило до автора)
+      let responseUuid: string;
+      try {
+        responseUuid = await publishWithRetry(toAddress, content, uuid);
+      } catch (err) {
+        deps.log(`задание: решение не отправлено: ${String(err)}`);
+        deps.taskOffers.restoreResponse(uuid, currentStore.self, previous);
+        refreshTaskOfferMessage(uuid);
+        return 'failed';
+      }
       await deps.sync.applyExternal({
         id: responseUuid,
         from: currentStore.self,

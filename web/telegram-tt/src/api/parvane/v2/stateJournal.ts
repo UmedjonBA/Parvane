@@ -58,6 +58,9 @@ type Deps = {
   applyCallRecords?: (records: WireCallRecord[]) => void;
   /** Чат очищен на другом своём устройстве: скрыть сообщения не позже границы (мс). */
   applyChatCleared?: (address: string, untilMs: number) => void;
+  /** Участник группы скрыт (либо снова показан) у себя на другом своём устройстве (REPORT-3): убрать уже
+   * показанные сообщения без перезагрузки либо перечитать чат. */
+  applyMemberHidden?: (address: string, user: string, isHidden: boolean) => void;
   /** Ссылки-приглашения групп v2 (T160): действующие ссылки этого устройства и
    * приём ссылок, созданных другими своими устройствами. */
   sharedInvites?: {
@@ -199,6 +202,9 @@ export function createStateJournal(deps: Deps) {
   // сведённым, иначе устаревшая локальная копия откатила бы правку другого устройства, пришедшую после показа (US2);
   // удаляются только показанные объекты
   let shown: Map<string, StateObject[]> | undefined;
+  // Ключи скрытых у себя участников, уже применённые к показу (REPORT-3); `undefined` — первый показ (сообщения и
+  // так прочитаны из модели с приёмным фильтром)
+  let shownHidden: Set<string> | undefined;
   let cloudEntriesCache: { view: StateModelView | undefined; entries: CloudStateEntry[] } | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -442,6 +448,7 @@ export function createStateJournal(deps: Deps) {
     flushTimer = undefined;
     syncTimer = undefined;
     showTimer = undefined;
+    shownHidden = undefined;
     deps.localState.setChangeListener(undefined);
     deps.localState.setScheduledHooks(undefined);
     session?.onChange(undefined);
@@ -739,6 +746,14 @@ export function createStateJournal(deps: Deps) {
     return Boolean(key && objectsOf(readView(), K.memberHidden).some((o) => o.key === key));
   }
 
+  /** Группы (адреса), где у себя скрыты сообщения участника `user` (REPORT-3: «Показать» из его профиля). */
+  function hiddenMemberGroups(user: string) {
+    return objectsOf(readView(), K.memberHidden).map((o) => o.key)
+      .filter((key) => key.endsWith(`/${user}`))
+      .map((key) => addressOf(peerOfKey(key.slice(0, key.indexOf('/'))) as SPeer | undefined))
+      .filter((address): address is string => Boolean(address));
+  }
+
   /** Скрыть либо снова показать у себя сообщения участника группы; false — журнал не подключён либо ключ негоден. */
   function setMemberHidden(address: string, user: string, shouldHide: boolean) {
     return serial(async () => {
@@ -748,6 +763,9 @@ export function createStateJournal(deps: Deps) {
       if (shouldHide) await put([{ kind: K.memberHidden, key, value: {} }]);
       else await commit([{ kind: K.memberHidden, key, delete: true }], []);
       invalidateView();
+      // Показ этого устройства обновляет вызывающий — повторно из журнала не применять
+      if (shouldHide) shownHidden?.add(key);
+      else shownHidden?.delete(key);
       return true;
     });
   }
@@ -788,6 +806,28 @@ export function createStateJournal(deps: Deps) {
       if (!address || !(untilMs > 0)) return;
       if (deps.localState.saveClearedUntil(address, untilMs)) deps.applyChatCleared?.(address, untilMs);
     });
+  }
+
+  function showMemberHidden() {
+    const keys = new Set(objectsOf(readView(), K.memberHidden).map((o) => o.key));
+    const before = shownHidden;
+    shownHidden = keys;
+    if (!before) return;
+    keys.forEach((key) => {
+      if (!before.has(key)) applyHiddenKey(key, true);
+    });
+    before.forEach((key) => {
+      if (!keys.has(key)) applyHiddenKey(key, false);
+    });
+  }
+
+  // Ключ `<ключ группы>/<адрес участника>` (раскладка движка `reportHiddenKey`)
+  function applyHiddenKey(key: string, shouldHide: boolean) {
+    const at = key.indexOf('/');
+    if (at < 0) return;
+    const address = addressOf(peerOfKey(key.slice(0, at)) as SPeer | undefined);
+    const user = key.slice(at + 1);
+    if (address && user) deps.applyMemberHidden?.(address, user, shouldHide);
   }
 
   function callToState(record: WireCallRecord): SCall | undefined {
@@ -978,6 +1018,7 @@ export function createStateJournal(deps: Deps) {
     showWriteBlocked();
     showCalls();
     showCleared();
+    showMemberHidden();
     void showInvites()
       .catch((e: unknown) => deps.log(`v2: ссылки-приглашения из журнала состояния: ${String(e)}`));
   }
@@ -1302,6 +1343,7 @@ export function createStateJournal(deps: Deps) {
     reportClosedOps,
     closeReports,
     isMemberHidden,
+    hiddenMemberGroups,
     setMemberHidden,
     recordGroupInvite,
     removeGroupInvite,

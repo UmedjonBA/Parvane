@@ -98,29 +98,31 @@ try {
 
   // ── Профиль собеседника: отпечаток ключа безопасности (12 групп hex) ──────
   await page.locator('#MiddleColumn .ChatInfo, #MiddleColumn .chat-info-wrapper, #MiddleColumn .MiddleHeader').first().click();
-  const securityRow = page.locator('#RightColumn').getByText('Security key', { exact: true });
-  await securityRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('#RightColumn').getByText(/^([0-9a-f]{4} ){11}[0-9a-f]{4}$/).first()
+  // Профиль по доске `RpChat`: «Защита переписки» → «Код безопасности · сверить» раскрывает отпечатки
+  const right = page.locator('#RightColumn');
+  await right.locator('[data-peer-info]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await right.locator('[data-peer-status]').getByText(`@${nick(bob)}`, { exact: false })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  console.log('OK: в профиле показан отпечаток ключа безопасности');
+  await right.locator('[data-peer-code]').click();
+  await right.locator('[data-peer-code-list]').getByText(/^([0-9a-f]{4} ){11}[0-9a-f]{4}$/).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  for (const row of ['[data-peer-shared]', '[data-peer-block]']) {
+    await right.locator(row).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  }
+  console.log('OK: в профиле показан код безопасности, «Общие файлы и заметки», «Заблокировать»');
 
-  // ── «Изменить» → «Заметка»: сохраняется и показывается в профиле ─────────
+  // ── «Заметка — видна только вам» правится прямо в профиле, сохраняется по уходу из поля ─────────
   const noteText = 'Plays the cello on Fridays';
-  await page.locator('#RightColumn').getByRole('button', { name: 'Edit' }).first().click();
-  const noteInput = page.locator('#RightColumn #user-note');
+  const noteInput = right.locator('[data-peer-note]');
   await noteInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await noteInput.fill(noteText);
-  const saveButton = page.locator('#RightColumn').getByRole('button', { name: 'Save' });
-  await saveButton.click();
-  // Кнопка сохранения после «Готово» уезжает анимацией, но в DOM остаётся — ждём саму заметку в fullInfo
+  await noteInput.press('Tab');
   await page.waitForFunction((text) => {
     const g = window.__parvaneGetGlobal?.();
     return Object.values(g?.users.fullInfoById || {}).some((info) => info?.note?.text === text);
   }, noteText, { timeout: LOGIN_TIMEOUT_MS });
-  // Экран «Изменить» после сохранения остаётся открытым (как в Telegram) — назад к профилю
-  await page.locator('#RightColumn').getByRole('button', { name: 'Back' }).first().click();
-  await page.locator('#RightColumn').getByText(noteText).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  console.log('OK: заметка о контакте сохранена и видна в профиле');
+  assert.equal(await noteInput.inputValue(), noteText);
+  console.log('OK: заметка о контакте сохранена на месте');
   await page.keyboard.press('Escape');
 
   // ── Переписка делает собеседника контактом ────────────────────────────────
@@ -146,7 +148,8 @@ try {
   await contactRow(page, ownName).first().click();
   await page.locator('#MiddleColumn').getByText(ownName).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#MiddleColumn .ChatInfo, #MiddleColumn .chat-info-wrapper, #MiddleColumn .MiddleHeader').first().click();
-  await page.locator('#RightColumn').getByText(noteText).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForFunction((text) => document.querySelector('#RightColumn [data-peer-note]')?.value === text,
+    noteText, { timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: своё имя контакта и заметка пережили reload');
   await page.keyboard.press('Escape');
 

@@ -35,8 +35,9 @@ function trackFrames(context) {
 
 const deliveries = (frames, since) => frames.filter((f) => f.at >= since && f.text.includes('msg.deliver_sealed'));
 
+// Профиль собеседника по доске `RpChat`: выключатель «Усиленная приватность»
 function l2Row(page) {
-  return page.locator('#RightColumn .ListItem').filter({ hasText: 'Enhanced privacy' });
+  return page.locator('#RightColumn [data-peer-l2]');
 }
 
 async function toggleL2(page) {
@@ -44,7 +45,7 @@ async function toggleL2(page) {
     await page.locator('.MiddleHeader .ChatInfo').first().click();
   }
   await l2Row(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await l2Row(page).locator('.ListItem-button').click();
+  await l2Row(page).click();
 }
 
 const browser = await chromium.launch();

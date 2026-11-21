@@ -7,6 +7,7 @@ import buildClassName from '../../../util/buildClassName';
 import { getCallSasWords } from './callSas';
 import { getCallInitial, hasVideoTrack } from './callTypes';
 
+import useLang from '../../../hooks/useLang';
 import useOldLang from '../../../hooks/useOldLang';
 
 import CallButton from './CallButton';
@@ -26,6 +27,11 @@ type OwnProps = {
   onHangup: NoneToVoidFunction;
 };
 
+const ROUTE_KEYS = {
+  relay: 'ParvaneCallRelayed',
+  direct: 'ParvaneCallDirect',
+} as const;
+
 const STATUS_KEYS: Record<string, string> = {
   requesting: 'CallStatusRequesting',
   ringing: 'CallStatusRinging',
@@ -39,12 +45,14 @@ const CallActive = ({
   call, peerName, time, hasRemoteVideo, onToggleMute, onToggleCamera, onHangup, extraControls, onMinimize,
 }: OwnProps) => {
   const lang = useOldLang();
+  const langNew = useLang();
 
   const { state } = call;
   const isActive = state === 'active';
   const isConnected = isActive || state === 'connecting';
   const hasLocalVideo = hasVideoTrack(call.localStream);
   const preview = call.screenStream || (!call.isCameraOff && hasLocalVideo ? call.localStream : undefined);
+  const isCameraShown = hasLocalVideo && !call.isCameraOff;
   const showRemoteCameraOff = hasLocalVideo && call.isRemoteCameraOff;
   const statusKey = STATUS_KEYS[state];
 
@@ -93,16 +101,17 @@ const CallActive = ({
             onClick={onToggleMute}
           />
         )}
-        {isConnected && hasLocalVideo && (
+        {/* В голосовом звонке камеру можно включить: видео согласовано заранее */}
+        {isConnected && (
           <CallButton
-            icon={call.isCameraOff ? 'icon-video-stop' : 'icon-video'}
-            kind={call.isCameraOff ? 'plain' : 'on'}
-            label={lang(call.isCameraOff ? 'ParvaneCallCameraOn' : 'ParvaneCallCameraOff')}
+            icon={isCameraShown ? 'icon-video' : 'icon-video-stop'}
+            kind={isCameraShown ? 'on' : 'plain'}
+            label={lang(isCameraShown ? 'ParvaneCallCameraOff' : 'ParvaneCallCameraOn')}
             onClick={onToggleCamera}
           />
         )}
         {extraControls}
-        <CallButton icon="icon-phone-discard" kind="hangup" label={lang('CallEndCall')} onClick={onHangup} />
+        <CallButton icon="icon-phone-discard" kind="hangup" label={langNew('ParvaneCallEnd')} onClick={onHangup} />
       </div>
     );
   }
@@ -122,13 +131,30 @@ const CallActive = ({
   }
 
   // Сверка ключей словами (CALL-3): четыре слова одинаковы у обоих собеседников
-  function renderSas(className: string, noHint?: boolean) {
+  function renderSas(className: string) {
     const words = getCallSasWords(call.sasFingerprints);
     if (!words) return undefined;
     return (
       <div className={className} title={lang('CallEmojiKeyTooltip', peerName)} data-call-sas>
-        {!noHint && <div className={styles.sasHint}>{lang('ParvaneCallSasHint')}</div>}
+        <div className={styles.sasHint}>{lang('ParvaneCallSasHint')}</div>
         <div className={styles.sasValue}>{words.join(' · ')}</div>
+      </div>
+    );
+  }
+
+  // Видеоэкран (доска `RpCalls`): время и слова сверки одной моноширинной строкой, без «на связи»
+  function renderVideoStatus() {
+    const words = getCallSasWords(call.sasFingerprints);
+    if (!isActive) return renderStatus();
+    return (
+      <div className={styles.status} data-call-video-status>
+        <span>{time}</span>
+        {words && (
+          <>
+            {' · '}
+            <span title={lang('CallEmojiKeyTooltip', peerName)} data-call-sas>{words.join(' · ')}</span>
+          </>
+        )}
       </div>
     );
   }
@@ -139,8 +165,7 @@ const CallActive = ({
         <CallVideo stream={call.remoteStream!} className={styles.videoRemote} isSilent />
         <div className={styles.videoHead}>
           <div className={styles.videoName}>{peerName}</div>
-          {renderStatus()}
-          {renderSas(styles.videoSas, true)}
+          {renderVideoStatus()}
           {renderRemoteState()}
         </div>
         {renderMinimize()}
@@ -159,7 +184,11 @@ const CallActive = ({
       {renderRemoteState()}
       {renderSas(styles.sas)}
       <div className={styles.spacer} />
-      {isConnected && <div className={styles.note}>{lang('ParvaneCallEncrypted')}</div>}
+      {isConnected && (
+        <div className={buildClassName(styles.note, styles.routeNote)} data-call-route={call.route}>
+          {call.route ? langNew(ROUTE_KEYS[call.route]) : lang('ParvaneCallEncrypted')}
+        </div>
+      )}
       {renderControls()}
       {/* Своя камера при выключенной у собеседника: превью в углу */}
       {preview && isConnected && (

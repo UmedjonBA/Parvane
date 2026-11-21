@@ -7,7 +7,9 @@ import {
   clearRegistrationSteps, getIsFirstRunDone, readRegistrationSteps,
 } from '../../util/parvaneFirstRun';
 import { callApi } from '../../api/gramjs';
+import { printRecoveryKey, splitRecoveryKey } from './recoveryKeyPrint';
 
+import useAppLayout from '../../hooks/useAppLayout';
 import useDerivedState from '../../hooks/useDerivedState';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
@@ -25,10 +27,13 @@ const KEY_FILE_NAME = 'parvane-recovery-key.txt';
 
 // Parvane (spec 041 E4): ключ восстановления отдельным экраном по доскам `XpAuth`, `RdAuth` — вместо окна. Ключ
 // приходит от провайдера один раз (новая личность: регистрация, сброс) и только когда он не ушёл владельцу в
-// Telegram (spec 015). «Скопировать», «В файл», где хранить; закрывается, только когда отмечено «Я сохранил ключ»
+// Telegram (spec 015). Телефон (`XpAuth`): ключ в две строки, «Скопировать», «В файл», карточка «Где хранить»;
+// компьютер (`RdAuth`): ключ строкой, «Скопировать», «Сохранить в файл», «Напечатать» (печатается только ключ —
+// отдельным документом), где хранить — строкой. Закрывается, только когда отмечено «Я сохранил ключ»
 const AuthRecoveryKey = () => {
   const { showNotification } = getActions();
   const lang = useLang();
+  const { isMobile } = useAppLayout();
   const [taken, setTaken] = useState<TakenKey | undefined>();
   const [isSaved, setIsSaved] = useState(false);
   // Первый запуск устройства (доски `XpAuth`, `RdAuth`): после ключа — выбор модулей, ключ — последний шаг регистрации
@@ -63,6 +68,10 @@ const AuthRecoveryKey = () => {
     URL.revokeObjectURL(anchor.href);
   });
 
+  const handlePrint = useLastCallback(() => {
+    printRecoveryKey(lang('ParvaneRecoveryKeyTitle'), taken!.recoveryKey, lang('ParvaneRecoveryKeyWhereLine'));
+  });
+
   const handleDone = useLastCallback(() => {
     clearRegistrationSteps();
     setTaken(undefined);
@@ -83,7 +92,13 @@ const AuthRecoveryKey = () => {
               {step && <span className={styles.step} data-recovery-key-step>{step}</span>}
             </div>
             <p className={styles.muted}>{lang('ParvaneRecoveryKeyText')}</p>
-            <div className={styles.keyBox} data-recovery-key={taken.recoveryKey}>{taken.recoveryKey}</div>
+            <div className={styles.keyBox} data-recovery-key={taken.recoveryKey}>
+              {isMobile
+                ? splitRecoveryKey(taken.recoveryKey).map((line) => (
+                  <span key={line} className={styles.keyLine}>{line}</span>
+                ))
+                : taken.recoveryKey}
+            </div>
             <div className={styles.keyActions}>
               <button
                 type="button"
@@ -99,14 +114,31 @@ const AuthRecoveryKey = () => {
                 data-recovery-key-file
                 onClick={handleSaveFile}
               >
-                {lang('ParvaneRecoveryKeyFile')}
+                {lang(isMobile ? 'ParvaneRecoveryKeyFile' : 'ParvaneRecoveryKeyFileDesktop')}
               </button>
+              {!isMobile && (
+                <button
+                  type="button"
+                  className={buildClassName(styles.button, styles.buttonQuiet, styles.grow)}
+                  data-recovery-key-print
+                  onClick={handlePrint}
+                >
+                  {lang('ParvaneRecoveryKeyPrint')}
+                </button>
+              )}
             </div>
-            <div className={styles.card}>
-              <p className={styles.caps}>{lang('ParvaneRecoveryKeyWhereTitle')}</p>
-              <p className={styles.small}>{lang('ParvaneRecoveryKeyWhere')}</p>
-              {taken.hasEscrow && <p className={styles.small}>{lang('ParvaneRecoveryKeyAdminHint')}</p>}
-            </div>
+            {isMobile ? (
+              <div className={styles.card}>
+                <p className={styles.caps}>{lang('ParvaneRecoveryKeyWhereTitle')}</p>
+                <p className={styles.small}>{lang('ParvaneRecoveryKeyWhere')}</p>
+                {taken.hasEscrow && <p className={styles.small}>{lang('ParvaneRecoveryKeyAdminHint')}</p>}
+              </div>
+            ) : (
+              <p className={styles.small}>
+                {lang('ParvaneRecoveryKeyWhereLine')}
+                {taken.hasEscrow && ` ${lang('ParvaneRecoveryKeyAdminHint')}`}
+              </p>
+            )}
             <div className={styles.spacer} />
             <label className={styles.check}>
               <input

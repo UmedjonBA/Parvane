@@ -42,6 +42,7 @@ import {
 import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { showReminderNotification } from '../../util/pageNotify';
+import { rememberAccountEmail } from '../../util/parvaneAccountEmail';
 import { diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { DATA_TOO_NEW_EVENT, STATE_WRITE_BLOCKED_EVENT } from '../../util/parvaneEvents';
 import { getIsModuleOn, getModulesView } from '../../util/parvaneModules';
@@ -420,6 +421,18 @@ function callsPolicyKey(user: string) {
   return `parvane:calls_from:${user}`;
 }
 
+// «Звонить мне» (доски `PhProfileB`, `DkSettingsB`): кто угодно, только контакты (`store.isContact`) либо никто
+type CallsAudience = 'anyone' | 'contacts' | 'nobody';
+
+function readCallsFrom(): CallsAudience {
+  try {
+    const value = localStorage.getItem(callsPolicyKey(store.self));
+    return value === 'nobody' || value === 'contacts' ? value : 'anyone';
+  } catch {
+    return 'anyone';
+  }
+}
+
 // WEB-14: «звонки только через сервер» — настройка устройства (свой транспорт), на сервер не уходит;
 // «nobody» — прямых соединений нет ни с кем
 function callsRelayKey(user: string) {
@@ -456,7 +469,7 @@ async function pushV2Privacy(): Promise<boolean> {
     await v2Controller.setPrivacy({
       groupAdd: readGroupAddPolicy(),
       strangers: readStrangersAllowed(),
-      callsFrom: readAudience(callsPolicyKey(store.self)),
+      callsFrom: readCallsFrom(),
       presence: readAudience(presencePolicyKey(store.self)),
     });
     return true;
@@ -490,7 +503,7 @@ async function refreshV2Privacy() {
     if (!remote) return;
     localStorage.setItem(groupAddPolicyKey(store.self), remote.groupAdd);
     localStorage.setItem(strangersPolicyKey(store.self), remote.strangers ? 'anyone' : 'nobody');
-    writeAudience(callsPolicyKey(store.self), remote.callsFrom);
+    writeLocalPolicy(callsPolicyKey(store.self), remote.callsFrom);
     writeAudience(presencePolicyKey(store.self), remote.presence);
   } catch (err) {
     logDebug(`v2: приватность не прочитана: ${String(err)}`);
@@ -507,6 +520,13 @@ let pendingEmail = '';
 let pendingTelegramToken = '';
 // Зачем Telegram: подтверждение регистрации или двухфакторный вход
 let pendingTelegramMode: 'register' | 'login' = 'register';
+// spec 041 (доски ZpAuthX, ZdAuthX): запрос в Telegram истёк — экран ждёт «Запросить заново»; вход с защитой можно
+// подтвердить ключом восстановления (`canUseRecoveryKey` — сервер его примет)
+let isTelegramExpired = false;
+let twofaRecovery: { canUseRecoveryKey?: boolean; isRecoveryWrong?: boolean } = {};
+// spec 041 (доска RpProfileC): аккаунт ждёт удаления — даты для экрана входа
+let pendingDeletion: { atMs: number; requestedAtMs?: number } | undefined;
+const TELEGRAM_STEP_EVENT = 'parvane-telegram-step';
 let telegramPollTimer: number | undefined;
 let telegramPollGeneration = 0;
 const TELEGRAM_POLL_INTERVAL_MS = 2000;
@@ -594,6 +614,11 @@ const stateJournal = createStateJournal({
   applyCallRecords: (records) => callController.applyCallRecords(records),
   applyChatCleared: (address, untilMs) => {
     void applyChatCleared(address, untilMs).catch((e: unknown) => logDebug(`v2: очистка чата: ${String(e)}`));
+  },
+  // REPORT-3: скрытие участника с другого своего устройства — показанные сообщения уходят без перезагрузки
+  applyMemberHidden: (address, user, isHidden) => {
+    void syncController.applyMemberHidden(store.getIdForAddress(address, 'group'), user, isHidden)
+      .catch((e: unknown) => logDebug(`v2: скрытие участника: ${String(e)}`));
   },
   // v2Controller создаётся ниже; вызывается только после подключения журнала
   sharedInvites: {
@@ -1056,7 +1081,9 @@ const callController = createCallController({
   getToken: () => token,
   isIdentityReady: () => isCallIdentityReady,
   // «Звонки — никто» (FR-040): входящий отклоняется так же, как от заблокированного
-  isBlocked: (address) => localState.isBlocked(address) || readAudience(callsPolicyKey(store.self)) === 'nobody',
+  // «Только контакты» — так же для звонящего не из контактов
+  isBlocked: (address) => localState.isBlocked(address) || readCallsFrom() === 'nobody'
+    || (readCallsFrom() === 'contacts' && !store.isContact(address)),
   isRelayOnly: () => readAudience(callsRelayKey(store.self)) === 'nobody',
   sendUpdate,
   pushReadState: (chatId) => syncController.pushReadState(chatId),
@@ -1705,11 +1732,11 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
       return;
     }
     if (err instanceof TwoFactorRequiredError) {
-      startTelegramConfirmation(creds.user, creds.password, err.loginToken, 'login');
+      startTelegramConfirmation(creds.user, creds.password, err.loginToken, 'login', err);
       return;
     }
     if (err instanceof AccountDeletionPendingError) {
-      reportDeletionPending(creds.user, creds.password, err.deletionAtMs);
+      reportDeletionPending(creds.user, creds.password, err);
       return;
     }
     // eslint-disable-next-line no-console
@@ -1737,29 +1764,27 @@ function stopTelegramPolling() {
 
 function startTelegramConfirmation(
   user: string, password: string, linkToken: string, mode: 'register' | 'login' = 'register',
+  recovery?: TwoFactorRequiredError,
 ) {
   stopTelegramPolling();
   pendingLoginAddress = user;
   pendingLoginPassword = password;
   pendingTelegramToken = linkToken;
   pendingTelegramMode = mode;
+  isTelegramExpired = false;
+  twofaRecovery = { canUseRecoveryKey: recovery?.canUseRecoveryKey, isRecoveryWrong: recovery?.isRecoveryWrong };
+  notifyTelegramStep();
   const generation = telegramPollGeneration;
   sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitQrCode' });
   const startedAt = Date.now();
   const tick = async () => {
     if (generation !== telegramPollGeneration) return;
     if (Date.now() - startedAt > TELEGRAM_POLL_MAX_MS) {
-      const isLogin = pendingTelegramMode === 'login';
-      logDebug(`Telegram: токен истёк, обратно на ${isLogin ? 'экран пароля' : 'форму регистрации'}`);
+      // Экран остаётся: «Запросить заново» выпускает новую ссылку без повторного ввода (доски ZpAuthX, ZdAuthX)
+      logDebug('Telegram: токен истёк — ждём «Запросить заново»');
       stopTelegramPolling();
-      sendUpdate({
-        '@type': 'updateAuthorizationState',
-        authorizationState: isLogin ? 'authorizationStateWaitPassword' : 'authorizationStateWaitRegistration',
-      });
-      sendUpdate({
-        '@type': 'updateAuthorizationError',
-        errorKey: { key: isLogin ? 'ParvaneTelegramLoginExpired' : 'ParvaneTelegramExpired' },
-      });
+      isTelegramExpired = true;
+      notifyTelegramStep();
       return;
     }
     const done = await pollTelegramConfirmation(generation);
@@ -1772,6 +1797,50 @@ function startTelegramConfirmation(
   telegramPollTimer = window.setTimeout(() => {
     void tick();
   }, TELEGRAM_POLL_INTERVAL_MS);
+}
+
+function notifyTelegramStep() {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(TELEGRAM_STEP_EVENT));
+}
+
+// spec 041 (доски ZpAuthX, ZdAuthX): новая ссылка в Telegram на том же экране — регистрация повторяется тем же
+// паролем (сервер перевыпускает токен неподтверждённого аккаунта), вход с защитой — повтором входа паролем; либо
+// вход ключом восстановления вместо Telegram. `bad_key` — ключ не подошёл, экран Telegram остаётся
+async function renewTelegramStep(recoveryKey?: string): Promise<'ok' | 'telegram' | 'bad_key' | 'failed'> {
+  const user = pendingLoginAddress;
+  const password = pendingLoginPassword;
+  const mode = pendingTelegramMode;
+  if (!user || !password) return 'failed';
+  try {
+    if (mode === 'register') {
+      const result = await connectionController.registerAccount(user, password, '');
+      if (!result.telegramToken) return 'failed';
+      startTelegramConfirmation(user, password, result.telegramToken, 'register');
+      return 'telegram';
+    }
+    stopTelegramPolling();
+    if (recoveryKey) connectionController.setSecondFactor({ recoveryKey });
+    const address = await connectionController.connectAndLogin(user, password);
+    saveLoginAddress(address);
+    await persistSessionCredential(address, password);
+    pendingLoginPassword = '';
+    return 'ok';
+  } catch (err) {
+    connectionController.setSecondFactor(undefined);
+    if (err instanceof TwoFactorRequiredError) {
+      startTelegramConfirmation(user, password, err.loginToken, 'login', err);
+      return recoveryKey ? 'bad_key' : 'telegram';
+    }
+    if (err instanceof SecurityKeyRequiredError) {
+      securityKeyLogin.startStep(user, password, err.step);
+      pendingLoginPassword = '';
+      return 'ok';
+    }
+    logDebug(`Telegram: новая ссылка или вход ключом не удались: ${String(err)}`);
+    isTelegramExpired = true;
+    notifyTelegramStep();
+    return 'failed';
+  }
 }
 
 // true — подтверждено и логин запущен (или опрос уже неактуален)
@@ -1825,11 +1894,12 @@ function buildPasswordRejectedKey({ attemptsLeft, lockedMs }: PasswordRejectedEr
   };
 }
 
-function reportDeletionPending(user: string, password: string, deletionAtMs: number) {
+function reportDeletionPending(user: string, password: string, err: AccountDeletionPendingError) {
   pendingLoginAddress = user;
   pendingLoginPassword = password;
+  pendingDeletion = { atMs: err.deletionAtMs, requestedAtMs: err.requestedAtMs };
   const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
-    .format(new Date(deletionAtMs));
+    .format(new Date(err.deletionAtMs));
   sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
   sendUpdate({
     '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneAccountDeletionPending', variables: { date } },
@@ -2369,6 +2439,8 @@ const linkRuntime: LinkRuntime = { generation: 0 };
 // офферов (экран «Устройства») тоже. Такой грант не теряем: его заберёт
 // ближайший опрос своего оффера
 let pendingLinkGrant: { box_payload: string; eph_pub: string } | undefined;
+// spec 041: своё устройство отклонило запрос этого устройства — опрос остановлен до «Запросить снова»
+let isLinkDeclined = false;
 
 // Старое устройство: ключ challenge на каждый оффер (по целевому устройству) — свой либо (LINK-1 п. 13) ключ
 // challenge другого своего устройства из обёртки под SSK: запрос виден и подтверждаем на любом старом устройстве,
@@ -2386,6 +2458,8 @@ type LinkOfferWire = {
   signing_key?: string;
   challenge_pub?: string;
   challenge_wrap?: string;
+  // Как новое устройство назвало себя при входе («Firefox, Linux»)
+  label?: string;
 };
 
 function stopHistoryLink() {
@@ -2398,6 +2472,12 @@ function stopHistoryLink() {
   linkRuntime.challenge = undefined;
   linkRuntime.code = undefined;
   pendingLinkGrant = undefined;
+}
+
+function noteLinkDeclined() {
+  logDebug('линковка: запрос отклонён на другом своём устройстве');
+  stopHistoryLink();
+  isLinkDeclined = true;
 }
 
 // Устройство вошло в журнал: оффер привязки отзываем сразу, а не на следующем опросе — иначе другие устройства
@@ -2484,8 +2564,13 @@ async function pollHistoryLinkGrant(generation: number) {
       ok: boolean;
       grant?: { box_payload: string; eph_pub: string };
       challenge?: string;
+      declined?: boolean;
     };
     if (!response.ok) return;
+    if (response.declined) {
+      noteLinkDeclined();
+      return;
+    }
     grant = response.grant || pendingLinkGrant;
     challenge = response.challenge;
   } catch {
@@ -2585,7 +2670,9 @@ async function joinV2WithLinkGrant(coords: LinkBoxPayload['v2']) {
 // challenge приложен и ключ нового устройства раскрыт и совпал с обязательством.
 // Legacy-офферы (v1, без обязательства) не обслуживаются: их код зависел
 // только от ключа, который сервер мог подменить.
-async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: string; code?: string } | undefined> {
+async function describeLinkOffer(
+  offer: LinkOfferWire,
+): Promise<{ deviceId: string; code?: string; label?: string } | undefined> {
   if (!offer.commitment) return undefined;
   let own = linkChallenges.get(offer.device_id);
   if (own && own.commitment !== offer.commitment) {
@@ -2628,15 +2715,15 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
       return undefined;
     }
     linkChallenges.set(offer.device_id, state);
-    return { deviceId: offer.device_id };
+    return { deviceId: offer.device_id, label: offer.label };
   }
-  if (!offer.eph_pub) return { deviceId: offer.device_id };
+  if (!offer.eph_pub) return { deviceId: offer.device_id, label: offer.label };
   if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) {
     logDebug(`линковка: ключ оффера ${offer.device_id} не соответствует обязательству`);
     return undefined;
   }
   own.shownEph = offer.eph_pub;
-  return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
+  return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub), label: offer.label };
 }
 
 // LINK-1 п. 13: ключ challenge другого своего устройства — из обёртки, открываемой ключом из SSK. Открытие
@@ -2802,6 +2889,7 @@ const modReports = createModReports({
     .map((member) => ({ user: member.address, joinedMs: member.joined_ms })),
   setMemberHidden: (address, user, isHidden) => stateJournal.setMemberHidden(address, user, isHidden),
   applyMemberHidden: (chatId, user, isHidden) => syncController.applyMemberHidden(chatId, user, isHidden),
+  hiddenGroups: (user) => stateJournal.hiddenMemberGroups(user),
   findRow: (uuid) => messageIndex.find(uuid),
   onCardRebuilt: (message) => {
     store.putMessage(message);
@@ -4176,6 +4264,18 @@ const methods = {
     return v2Controller.keyBundleContents().catch(() => undefined);
   },
 
+  // Отметка набора своих устройств (корень и устройства журнала): файл копии ключей, сохранённый при другой отметке,
+  // устарел — устройства отзывались или добавлялись, ключи менялись (доска `RpProfileB`: «с тех пор ключи не менялись»)
+  // «О приложении»: версия протокола своего сервера из описателя (доски `RpProfileA`, `ZdProfileX`)
+  parvaneServerVersion() {
+    return Promise.resolve(v2Controller.serverProtoVersion());
+  },
+
+  parvaneKeysMark() {
+    const devices = v2Controller.isReady() ? v2Controller.logDevices(store.self) : undefined;
+    return Promise.resolve(devices ? `${devices.root || ''}|${[...devices.v2].sort().join(',')}` : undefined);
+  },
+
   // «Выключить копию» ключей аккаунта (`ZdProfileX`) — с паролем аккаунта; «Включить» — снова копия на сервере
   parvaneDisableKeyBundle({ password }: { password: string }) {
     return v2Controller.disableKeyBundle(password);
@@ -4238,6 +4338,7 @@ const methods = {
   async parvaneRestoreAccount() {
     if (!pendingLoginPassword) return;
     connectionController.cancelDeletionOnNextLogin();
+    pendingDeletion = undefined;
     await methods.provideAuthPassword(pendingLoginPassword);
   },
 
@@ -4259,7 +4360,31 @@ const methods = {
       // v2: у аккаунта есть журнал устройств, а это устройство в него не входит —
       // кроме линковки, есть вход по ключу восстановления и сброс личности
       canRecover: v2Controller.needsLinking(),
+      isDeclined: isLinkDeclined && v2Controller.needsLinking(),
     }));
+  },
+
+  // spec 041: «Отклонить» запрос нового своего устройства — сервер гасит запрос, новое устройство узнаёт об отказе
+  async parvaneDeclineLink({ deviceId }: { deviceId: string }) {
+    if (!connection) return undefined;
+    try {
+      const raw = await connection.request(TOPIC_LINK_GRANT, JSON.stringify({
+        token, device_id: deviceId, decline: true,
+      }));
+      const isDone = Boolean((JSON.parse(raw) as { ok?: boolean }).ok);
+      if (isDone) linkChallenges.delete(deviceId);
+      return isDone || undefined;
+    } catch (err) {
+      logDebug(`линковка: отказ не записан: ${String(err)}`);
+      return undefined;
+    }
+  },
+
+  // Новое устройство после отказа: новый запрос привязки
+  parvaneRequestLinkAgain() {
+    isLinkDeclined = false;
+    if (v2Controller.needsLinking()) void startHistoryLinkOffer();
+    return Promise.resolve(true);
   },
 
   // Это единственное устройство аккаунта в журнале v2: выход с него стирает ключи,
@@ -4315,10 +4440,12 @@ const methods = {
         token, device_id: ownDeviceId(),
       }));
       const response = JSON.parse(raw) as {
-        ok: boolean; offers?: LinkOfferWire[]; grant?: { box_payload: string; eph_pub: string };
+        ok: boolean; offers?: LinkOfferWire[]; grant?: { box_payload: string; eph_pub: string }; declined?: boolean;
       };
       // Свой грант пришёл в опросе чужих офферов — оставляем опросу своего оффера
       if (response.ok && response.grant && linkRuntime.timer) pendingLinkGrant = response.grant;
+      // Отметку отказа сервер отдаёт один раз — в любом опросе этого устройства
+      if (response.ok && response.declined && linkRuntime.timer) noteLinkDeclined();
       if (!response.ok || !response.offers) return undefined;
       // Уже вошедшие в журнал своих устройств (ключом восстановления, подтверждением) — не запрос: их оффер мог
       // остаться на сервере до отзыва, а «новое устройство просит привязку» для них только путает
@@ -4759,7 +4886,34 @@ const methods = {
         ? `https://t.me/${bot}?start=${encodeURIComponent(pendingTelegramToken)}`
         : '',
       telegramMode: pendingTelegramMode,
+      isTelegramExpired,
+      canUseRecoveryKey: pendingTelegramMode === 'login' && Boolean(twofaRecovery.canUseRecoveryKey),
+      isRecoveryWrong: Boolean(twofaRecovery.isRecoveryWrong),
     });
+  },
+
+  // spec 041: «Запросить заново» / «Прислать ещё раз» на экране Telegram
+  parvaneRenewTelegramLink() {
+    return renewTelegramStep();
+  },
+
+  // spec 041: вход с защитой — ключом восстановления вместо подтверждения в Telegram
+  parvaneConfirmLoginWithRecoveryKey({ recoveryKey }: { recoveryKey: string }) {
+    const key = recoveryKey.trim();
+    return key ? renewTelegramStep(key) : Promise.resolve('bad_key' as const);
+  },
+
+  // spec 041 (доска RpProfileC): даты аккаунта, ждущего удаления, для экрана входа
+  parvaneGetDeletionPending() {
+    return Promise.resolve(pendingDeletion);
+  },
+
+  // «Выйти, удаление продолжится»: пароль забыт, экран входа — сначала
+  parvaneLeaveDeletionPending() {
+    pendingDeletion = undefined;
+    pendingLoginPassword = '';
+    sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPhoneNumber' });
+    return Promise.resolve(undefined);
   },
 
   // ── ключи безопасности (отпечатки identity-ключей) ──────────────────────
@@ -4845,7 +4999,7 @@ const methods = {
     await refreshV2Privacy();
     return {
       isAvailable: v2Controller.isReady(),
-      areCallsAllowed: readAudience(callsPolicyKey(store.self)) !== 'nobody',
+      callsFrom: readCallsFrom(),
       isRelayOnly: readAudience(callsRelayKey(store.self)) === 'nobody',
       isPresenceShown: readAudience(presencePolicyKey(store.self)) !== 'nobody',
     };
@@ -4856,14 +5010,8 @@ const methods = {
     return Promise.resolve(true);
   },
 
-  parvaneSetCallsPolicy({ isAllowed }: { isAllowed: boolean }) {
-    const key = callsPolicyKey(store.self);
-    return savePrivacySetting<'anyone' | 'nobody'>({
-      read: () => readAudience(key),
-      write: (value) => writeAudience(key, value),
-      next: isAllowed ? 'anyone' : 'nobody',
-      push: pushV2Privacy,
-    });
+  parvaneSetCallsPolicy({ callsFrom }: { callsFrom: CallsAudience }) {
+    return savePrivacyValue(callsPolicyKey(store.self), readCallsFrom, callsFrom);
   },
 
   parvaneSetPresencePolicy({ isShown }: { isShown: boolean }) {
@@ -4902,7 +5050,9 @@ const methods = {
     }
     const state = v2Controller.l2State(address);
     if (!state) return { isAvailable: false };
-    return { isAvailable: true, isActive: state.active, isMine: state.mine };
+    return {
+      isAvailable: true, isActive: state.active, isMine: state.mine, peerSinceMs: state.peerSinceMs || undefined,
+    };
   },
 
   async parvaneSetChatL2({ chatId, isEnabled }: { chatId: string; isEnabled: boolean }) {
@@ -5051,11 +5201,11 @@ const methods = {
         // Пароль верен, включён двухфакторный вход — экран Telegram (deep link)
         const info = connectionController.getLastServerInfo();
         const address = canonicalAddress(user, info?.domain || '');
-        startTelegramConfirmation(address, password, err.loginToken, 'login');
+        startTelegramConfirmation(address, password, err.loginToken, 'login', err);
         return;
       }
       if (err instanceof AccountDeletionPendingError) {
-        reportDeletionPending(user, password, err.deletionAtMs);
+        reportDeletionPending(user, password, err);
         return;
       }
       const message = String(err);
@@ -5133,6 +5283,7 @@ const methods = {
     pendingLoginAddress = user;
     pendingLoginPassword = password;
     pendingEmail = cleanEmail;
+    rememberAccountEmail(user.split('@')[0], cleanEmail);
     try {
       const result = await connectionController.registerAccount(user, password, cleanEmail);
       if (result.telegramToken) {

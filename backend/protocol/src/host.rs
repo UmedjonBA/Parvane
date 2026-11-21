@@ -251,9 +251,11 @@ pub(crate) fn events(ev: &[Event]) -> String {
     Value::Array(ev.iter().map(event_json).collect()).to_string()
 }
 
-/// Состояние L2 чата → `{"active","mine","enabledBy","pad","ephemeralAllowed"}`.
+/// Состояние L2 чата → `{"active","mine","enabledBy","pad","ephemeralAllowed","peerSinceMs"}`.
 pub fn l2_view_json(v: &L2View) -> String {
-    json!({"active": v.active, "mine": v.mine, "enabledBy": v.enabled_by, "pad": v.pad, "ephemeralAllowed": v.ephemeral_allowed}).to_string()
+    json!({"active": v.active, "mine": v.mine, "enabledBy": v.enabled_by, "pad": v.pad, "ephemeralAllowed": v.ephemeral_allowed,
+        "peerSinceMs": v.peer_since_ms.to_string()})
+    .to_string()
 }
 
 /// spec 026: прежние адреса аккаунта — в материал гранта (поле `fa`): устройство, вошедшее после смены ника, читает

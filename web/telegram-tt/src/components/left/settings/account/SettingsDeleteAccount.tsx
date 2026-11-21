@@ -19,6 +19,8 @@ import styles from './Account.module.scss';
 
 type OwnProps = {
   isActive?: boolean;
+  // Окно поверх «Профиля» на компьютере (доска `RdProfile`): без подписи «Что произойдёт», кнопка «Удалить через 7 дней»
+  isWindow?: boolean;
   onReset: NoneToVoidFunction;
 };
 
@@ -38,7 +40,7 @@ const STEP_KEYS = [
 // Parvane (spec 041, доска `XpProfile`): «Удалить аккаунт» экраном — что произойдёт, «Сначала сохранить данные»
 // (выгрузка), пароль, подтверждение «Понимаю» и кнопка «Удалить аккаунт через 7 дней». Логика прежняя (spec 027):
 // аккаунт сразу выходит со всех устройств, через 7 дней стирается; вход паролем до срока предлагает восстановить
-const SettingsDeleteAccount = ({ isActive, onReset }: OwnProps) => {
+const SettingsDeleteAccount = ({ isActive, isWindow, onReset }: OwnProps) => {
   const { openSettingsScreen } = getActions();
   const lang = useLang();
   const [password, setPassword] = useState('');
@@ -65,6 +67,7 @@ const SettingsDeleteAccount = ({ isActive, onReset }: OwnProps) => {
   });
 
   const handleExport = useLastCallback(() => {
+    if (isWindow) onReset();
     openSettingsScreen({ screen: SettingsScreens.ParvaneExport });
   });
 
@@ -89,7 +92,7 @@ const SettingsDeleteAccount = ({ isActive, onReset }: OwnProps) => {
       data-delete-account-dialog
     >
       <div className={buildClassName(styles.box, styles.boxDanger)}>
-        <p className={styles.boxTitle}>{lang('ParvaneDeleteWhatHappens')}</p>
+        {!isWindow && <p className={styles.boxTitle}>{lang('ParvaneDeleteWhatHappens')}</p>}
         <ol className={styles.steps}>
           {STEP_KEYS.map((key) => <li key={key} className={styles.step}>{lang(key)}</li>)}
         </ol>
@@ -141,7 +144,7 @@ const SettingsDeleteAccount = ({ isActive, onReset }: OwnProps) => {
           data-delete-account-submit
           onClick={handleSubmit}
         >
-          {lang('ParvaneDeleteSubmitLater')}
+          {lang(isWindow ? 'ParvaneDeleteSubmitShort' : 'ParvaneDeleteSubmitLater')}
         </button>
         <button
           type="button"

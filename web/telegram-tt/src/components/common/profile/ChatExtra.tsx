@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, useMemo, useRef,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -44,7 +44,6 @@ import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatPhoneNumberWithCode } from '../../../util/phoneNumber';
 import stopEvent from '../../../util/stopEvent';
 import { extractCurrentThemeParams } from '../../../util/themeStyle';
-import { callApi } from '../../../api/gramjs';
 import { ChatAnimationTypes } from '../../left/main/hooks';
 import formatUsername from '../helpers/formatUsername';
 import renderText from '../helpers/renderText';
@@ -57,7 +56,6 @@ import useEffectWithPrevDeps from '../../../hooks/useEffectWithPrevDeps';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
-import useParvaneChatL2 from '../../../hooks/useParvaneChatL2';
 
 import Island from '../../gili/layout/Island';
 import Switch from '../../gili/primitives/Switch';
@@ -338,35 +336,6 @@ const ChatExtra = ({
     });
   });
 
-  // Parvane: отпечатки identity-ключей устройств собеседника для ручной сверки
-  type SecurityInfo = { own: string; devices: { deviceId: string; fingerprint: string }[] };
-  const [securityInfo, setSecurityInfo] = useState<SecurityInfo | undefined>();
-  const showSecurityKey = Boolean(user && !isSelf && chatId);
-  useEffect(() => {
-    // Отпечаток прежнего собеседника не показываем новому, пока не пришёл ответ (или если запрос упал)
-    setSecurityInfo(undefined);
-    if (!showSecurityKey) return;
-    let isCancelled = false;
-    const fetchSecurity = callApi as unknown as (method: string, args: unknown) => Promise<SecurityInfo | undefined>;
-    void fetchSecurity('parvaneFetchSecurityInfo', { chatId }).then((info) => {
-      if (!isCancelled && info) setSecurityInfo(info);
-    }).catch(() => undefined);
-    return () => {
-      isCancelled = true;
-    };
-  }, [chatId, showSecurityKey]);
-
-  const handleCopySecurityKey = useLastCallback(() => {
-    const text = securityInfo?.devices.map((d) => d.fingerprint).join('\n');
-    if (text) copyTextToClipboard(text);
-  });
-
-  // Parvane: режим «усиленная приватность» (L2) личного чата — переключатель
-  // своего предпочтения; пункт есть, когда собеседник на протоколе v2
-  const [chatL2, handleToggleL2] = useParvaneChatL2(
-    showSecurityKey && !isOwnProfile && !isInSettings ? chatId : undefined, 'isMine',
-  );
-
   const appTermsInfo = lang('ProfileOpenAppAbout', {
     terms: (
       <SafeLink
@@ -379,24 +348,6 @@ const ChatExtra = ({
   const isRestricted = chatId ? selectIsChatRestricted(getGlobal(), chatId) : false;
   if (isRestricted || (isSelf && !isOwnProfile && !isInSettings)) {
     return undefined;
-  }
-
-  function renderSecurityKey() {
-    if (!showSecurityKey) return undefined;
-    const devices = securityInfo?.devices || [];
-    return (
-      <ListItem icon="lock" multiline narrow ripple onClick={handleCopySecurityKey}>
-        <span className="title" dir="auto">{oldLang('ParvaneSecurityKeyTitle')}</span>
-        {devices.length ? devices.map((device) => (
-          <span key={device.deviceId} className="subtitle" style="font-family: var(--font-monospace)">
-            {device.fingerprint}
-          </span>
-        )) : (
-          <span className="subtitle">{oldLang('ParvaneSecurityKeyNoDevices')}</span>
-        )}
-        <span className="subtitle">{oldLang('ParvaneSecurityKeyHint')}</span>
-      </ListItem>
-    );
   }
 
   function renderUsernames(usernameList: ApiUsername[], isChat?: boolean) {
@@ -508,7 +459,6 @@ const ChatExtra = ({
           </ListItem>
         )}
         {activeUsernames && renderUsernames(activeUsernames)}
-        {renderSecurityKey()}
         {description && Boolean(description.length) && (
           <ListItem
             icon="info"
@@ -583,21 +533,6 @@ const ChatExtra = ({
               checked={!isMuted}
               className={styles.switch}
             />
-          </ListItem>
-        )}
-        {chatL2?.isAvailable && (
-          <ListItem
-            icon="lock"
-            multiline
-            narrow
-            ripple
-            rightElement={<Switch checked={Boolean(chatL2.isMine)} className={styles.switch} />}
-            onClick={handleToggleL2}
-          >
-            <span className="title" dir="auto">{oldLang('ParvaneL2Toggle')}</span>
-            <span className="subtitle">
-              {oldLang(chatL2.isActive && !chatL2.isMine ? 'ParvaneL2ByPeer' : 'ParvaneL2Info')}
-            </span>
           </ListItem>
         )}
         {businessWorkHours && (

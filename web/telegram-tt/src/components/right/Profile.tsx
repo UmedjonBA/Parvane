@@ -37,6 +37,7 @@ import {
   isChatGroup,
   isUserBot,
   isUserRightBanned,
+  sortUserIds,
 } from '../../global/helpers';
 import { getSavedGiftKey } from '../../global/helpers/stars';
 import {
@@ -126,6 +127,7 @@ import Transition from '../ui/Transition';
 import DeleteMemberModal from './DeleteMemberModal';
 import StarGiftCollectionList from './gifts/StarGiftCollectionList';
 import GroupInfo from './groupInfo/GroupInfo';
+import PeerInfo from './peerInfo/PeerInfo';
 import StoryAlbumList from './stories/StoryAlbumList';
 
 import styles from './Profile.module.scss';
@@ -145,6 +147,7 @@ type StateProps = {
   theme: ThemeKey;
   isChannel?: boolean;
   isGroupProfile?: boolean;
+  isPeerProfile?: boolean;
   isBot?: boolean;
   currentUserId?: string;
   messagesById?: Record<number, ApiMessage>;
@@ -279,6 +282,7 @@ const Profile = ({
   monoforumChannel,
   isChannel,
   isGroupProfile,
+  isPeerProfile,
   isBot,
   currentUserId,
   messagesById,
@@ -398,7 +402,8 @@ const Profile = ({
       arr.push({ type: 'storiesArchive', key: 'ProfileTabStoriesArchive' });
     }
 
-    if (hasMembersTab && !isOwnProfile) {
+    // Parvane (доска `ZpChat2`): в сведениях группы участники — строками в блоке, а не вкладкой
+    if (hasMembersTab && !isOwnProfile && !isGroupProfile) {
       arr.push({ type: 'members', key: 'ProfileTabMembers' });
     }
 
@@ -461,7 +466,7 @@ const Profile = ({
   }, [
     hasStoriesTab, hasGiftsTab, hasMembersTab, hasPreviewMediaTab, isTopicInfo,
     hasCommonChatsTab, isChannel, isBot, similarChannels?.length, similarBots?.length, lang, isOwnProfile,
-    mainTab, chatId, canUpdateMainTab, validMainTabTypes,
+    mainTab, chatId, canUpdateMainTab, validMainTabTypes, isGroupProfile,
   ]);
 
   const [allowAutoScrollToTabs, startAutoScrollToTabsIfNeeded, stopAutoScrollToTabs] = useFlag(false);
@@ -533,6 +538,10 @@ const Profile = ({
   const [renderingGifts, setRenderingGifts] = useState(gifts);
   const { startViewTransition } = useViewTransition();
   const { createVtnStyle } = useVtn();
+
+  const groupMemberIds = useMemo(() => (isGroupProfile && members
+    ? sortUserIds(members.map(({ userId }) => userId), usersById, userStatusesById)
+    : undefined), [isGroupProfile, members, usersById, userStatusesById]);
 
   const membersById = useMemo(() => {
     return members && buildCollectionByKey(members, 'userId');
@@ -1288,6 +1297,37 @@ const Profile = ({
     return 0;
   })();
 
+  // Участники группы строками «аватар · имя · админ · в сети» под сведениями (доска `ZpChat2`); меню строки —
+  // как у прежней вкладки
+  function renderGroupMembers() {
+    if (!groupMemberIds?.length) return undefined;
+    return (
+      <div className="pv-group-members" data-group-members>
+        <div className="pv-group-members-cap">
+          {lang('ParvaneGroupMembersCount', { count: groupMemberIds.length }, { pluralValue: groupMemberIds.length })}
+        </div>
+        <div className="pv-group-members-list">
+          {groupMemberIds.map((id) => (
+            <ListItem
+              key={id}
+              className="chat-item-clickable contact-list-item small-icon"
+              onClick={() => handleMemberClick(id)}
+              contextActions={getMemberContextAction(id)}
+              withPortalForMenu
+            >
+              <PrivateChatInfo
+                userId={id}
+                chatMemberOriginId={chatId}
+                chatMember={adminMembersById?.[id] || membersById?.[id]}
+                forceShowSelf
+              />
+            </ListItem>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   function renderProfileInfo(peerId: string, isReady: boolean) {
     return (
       <div className={buildClassName(styles.profileInfo, 'profile-info')}>
@@ -1349,14 +1389,21 @@ const Profile = ({
       scrollable
       noPadding
       className={buildClassName(
-        styles.root, 'Profile', isGeneralSavedMessages && 'is-saved-messages', isGroupProfile && 'pv-group-profile',
+        styles.root,
+        'Profile',
+        isGeneralSavedMessages && 'is-saved-messages',
+        (isGroupProfile || isPeerProfile) && 'pv-group-profile',
       )}
       onScroll={handleScroll}
     >
       {!noProfileInfo && !isSavedMessages && isGroupProfile && (
         <GroupInfo chatId={profileId} onOpenMedia={handleOpenMedia} />
       )}
-      {!noProfileInfo && !isSavedMessages && !isGroupProfile && (
+      {!noProfileInfo && !isSavedMessages && isGroupProfile && hasMembersTab && renderGroupMembers()}
+      {!noProfileInfo && !isSavedMessages && isPeerProfile && (
+        <PeerInfo userId={profileId} isActive={isActive} onOpenMedia={handleOpenMedia} />
+      )}
+      {!noProfileInfo && !isSavedMessages && !isGroupProfile && !isPeerProfile && (
         renderProfileInfo(
           monoforumChannel?.id || profileId,
           isRightColumnShown && canRenderContent,
@@ -1448,6 +1495,8 @@ export default memo(withGlobal<OwnProps>(
     // Parvane: сведения группы и канала — свой блок по доске `ZpChat2` (`groupInfo/GroupInfo.tsx`)
     const isGroupProfile = Boolean(chat && (isGroup || isChannel) && !isTopicInfo && !chat.isMonoforum);
     const isBot = user && isUserBot(user);
+    // Parvane: профиль собеседника — свой блок по доске `RpChat` (`peerInfo/PeerInfo.tsx`)
+    const isPeerProfile = Boolean(user && !user.isSelf && !isBot && !isOwnProfile && !isSavedDialog);
     const hasMembersTab = !isTopicInfo && !isSavedDialog && isGroup && !chat?.isMonoforum;
     const members = chatFullInfo?.members;
     const adminMembersById = chatFullInfo?.adminMembersById;
@@ -1500,6 +1549,7 @@ export default memo(withGlobal<OwnProps>(
       theme: selectTheme(global),
       isChannel,
       isGroupProfile,
+      isPeerProfile,
       isBot,
       messagesById,
       foundIds,

@@ -542,6 +542,20 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(server).toContain('Под зафиксированный challenge — только его ключом');
   });
 
+  // LINK-1 п. 14 (spec 041): «Отклонить» — отказ на сервере, новое устройство о нём узнаёт; отказывает только
+  // устройство журнала
+  it('п. 14: отказ в привязке доходит до нового устройства', () => {
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('token, device_id: deviceId, decline: true');
+    expect(provider).toContain('if (response.declined) {');
+    const bridge = readRepo('web/telegram-tt/src/api/parvane/v2/bridge.ts');
+    expect(bridge).toContain('decline: p.decline === true || undefined');
+    expect(bridge).toContain('if (flag(r, \'declined\')) out.declined = true;');
+    const server = readRepo('backend/shards/identity/src/v2.rs');
+    const grant = server.slice(server.indexOf('"identity.link.grant" =>'));
+    expect(grant.indexOf('log_has_active_device')).toBeLessThan(grant.indexOf('if r.decline {'));
+  });
+
   it('правило LINK-1 задокументировано в sync-rules.json', () => {
     expect(r.sasDigits).toBe(12);
     expect(r.sasInfo).toBe('parvane-link-sas-v2');

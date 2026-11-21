@@ -781,3 +781,199 @@
 .offItem {
   line-height: 1.35;
 }
+
+// Сверка досок профиля (21 ноя): «Оформление» на телефоне — режим во всю ширину, размер текста «− 15 +»
+.modeWide {
+  padding: 0 1rem;
+}
+
+.modeSegment {
+  width: 100%;
+}
+
+.sizeNumber {
+  min-width: 2rem;
+  font-family: var(--font-family-monospace);
+  text-align: center;
+}
+
+// Текст строки, который открывает подробный экран, рядом с выключателем
+.setTextButton {
+  @include plain-button;
+
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+}
+
+// Поля окон «Сменить пароль» и «Копия ключей»: подпись над полем, подсказка и ошибка под ним
+.fieldForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.fieldLabel {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+.fieldHint {
+  margin-top: 0.25rem;
+  font-size: var(--pv-font-size-caption);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+.fieldError {
+  margin-top: 0.25rem;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-red);
+}
+
+.dialogGroup {
+  overflow: hidden;
+  margin-top: 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-md);
+}
+
+// Карточка состояния (`.card` с точкой на досках `RpProfileB`, `DkSettingsB`, `ZdProfileX`)
+.statusCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  margin: 0.625rem 1rem 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pv-line);
+  border-radius: var(--pv-radius-card);
+
+  background: var(--pv-panel);
+
+  // Компьютер: по краю карточек-групп экрана (ширина содержимого до 45rem)
+  @media (min-width: 926px) {
+    max-width: 45rem;
+    margin-inline: 0;
+  }
+}
+
+.statusHead {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.statusDot {
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+
+  background: var(--pv-muted);
+}
+
+.statusDotOk {
+  background: var(--pv-aqua);
+}
+
+.statusDotStale {
+  background: var(--pv-yellow);
+}
+
+.statusTitle {
+  font-weight: var(--font-weight-semibold);
+}
+
+.statusSub,
+.statusText {
+  font-size: var(--pv-font-size-small);
+  line-height: 1.35;
+  color: var(--pv-muted);
+}
+
+.statusButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+// Форма файла копии ключей
+.keysForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0;
+}
+
+.fileRow {
+  padding-inline: 0;
+  border-top: 0;
+}
+
+// Кнопка-чип в конце строки (`.chip`: «Создать», «Очистить»)
+.chip {
+  @include plain-button;
+
+  flex: none;
+
+  height: var(--pv-chip-height);
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius-md);
+
+  font-size: var(--pv-font-size-small);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+.statusLink {
+  @include plain-button;
+
+  align-self: flex-start;
+  color: var(--pv-accent);
+}
+
+.chipDanger {
+  color: var(--pv-red);
+}
+
+// «Обзор» на компьютере: строка «Копия ключей сохранена … · Открыть» внизу карточки устройств (доска `DeskProfile`)
+.cardFooter {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--pv-line);
+}
+
+.cardFooterText {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+// Окна «Мой профиль» и «Удалить аккаунт» поверх «Профиля» (доска `RdProfile`)
+.profileWindow {
+  :global(.modal-dialog) {
+    max-width: 35rem;
+  }
+}

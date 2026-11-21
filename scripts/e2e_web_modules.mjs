@@ -277,7 +277,16 @@ async function runServerOffPart(suffix) {
   await mobile.getByText('Hold the handle and drag. The ribbon below changes at once.')
     .waitFor({ state: 'visible', timeout: WAIT_MS });
   const filesHandle = mobile.getByRole('button', { name: 'Drag: Files' });
-  const touchFrom = centerOf(await filesHandle.boundingBox());
+  // Экран «Модули» въезжает переходом: место ручки меряется, когда она перестала двигаться, — иначе касание
+  // начиналось мимо ручки и перетаскивания не было
+  let handleBox = await filesHandle.boundingBox();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await mobile.waitForTimeout(150);
+    const next = await filesHandle.boundingBox();
+    if (next && handleBox && next.x === handleBox.x && next.y === handleBox.y) break;
+    handleBox = next;
+  }
+  const touchFrom = centerOf(handleBox);
   const phonePlanBox = await mobile.locator('[data-module-row="plan"] > [data-module="plan"]').boundingBox();
   await touchDrag(mobile, touchFrom, { x: touchFrom.x, y: phonePlanBox.y + 6 }, async () => {
     await expectModules(mobile, RIBBON, ['chats', 'files', 'plan', 'health', 'profile'], 'лента не меняется по ходу касания');

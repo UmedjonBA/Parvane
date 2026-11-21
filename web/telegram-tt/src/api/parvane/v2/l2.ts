@@ -16,6 +16,8 @@ export type L2State = {
   enabledBy: string[];
   pad: boolean;
   ephemeralAllowed: boolean;
+  // Личный чат: когда собеседник включил режим (мс); 0 — не включал
+  peerSinceMs: number;
 };
 
 type L2Memo = {
@@ -43,6 +45,7 @@ export function parseL2State(json: string): L2State | undefined {
       enabledBy: Array.isArray(raw.enabledBy) ? raw.enabledBy : [],
       pad: Boolean(raw.pad),
       ephemeralAllowed: raw.ephemeralAllowed !== false,
+      peerSinceMs: Number((raw as { peerSinceMs?: unknown }).peerSinceMs) || 0,
     };
   } catch {
     return undefined;

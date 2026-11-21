@@ -13,6 +13,7 @@ import useCallAudioOutput from './call/useCallAudioOutput';
 import useCallSpeakers from './call/useCallSpeakers';
 import { getMusicPlayer, togglePlay } from './music/musicPlayer';
 
+import useAppLayout from '../../hooks/useAppLayout';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useOldLang from '../../hooks/useOldLang';
@@ -51,6 +52,7 @@ const ParvaneCallOverlay = () => {
   const [candidates, setCandidates] = useState<CallCandidate[] | undefined>();
   const langNew = useLang();
   const lang = useOldLang();
+  const { isMobile } = useAppLayout();
 
   useEffect(() => {
     const updateCall = () => {
@@ -219,6 +221,7 @@ const ParvaneCallOverlay = () => {
         <CallIncoming
           peerName={peerName}
           status={call.pendingGroup ? groupText : lang('CallStatusIncoming')}
+          isStatusHidden={!call.pendingGroup}
           handle={call.peerHandle}
           isContact={call.isPeerContact}
           onAccept={handleAccept}
@@ -239,11 +242,15 @@ const ParvaneCallOverlay = () => {
       {canSwitchCamera && (
         <CallButton icon="icon-flip" label={langNew('ParvaneCallSwitchCamera')} onClick={handleSwitchCamera} />
       )}
-      {output.canChooseOutput && (
+      {/* На телефоне — «Громкая связь» всегда (доски `PhCalls`, `RpCalls`); выбрать вывод можно, только если браузер
+        даёт `setSinkId` и выходов несколько, иначе кнопка недоступна с объяснением */}
+      {(output.canChooseOutput || isMobile) && (
         <CallButton
           icon="icon-speaker"
           kind={output.sinkId ? 'on' : 'plain'}
-          label={langNew('ParvaneCallAudioOutput')}
+          label={langNew(isMobile ? 'ParvaneCallSpeaker' : 'ParvaneCallAudioOutput')}
+          isDisabled={!output.canChooseOutput}
+          hint={output.canChooseOutput ? undefined : langNew('ParvaneCallSpeakerUnavailable')}
           onClick={output.toggleOutput}
         />
       )}

@@ -267,3 +267,30 @@ fn rows_by_chat_and_id_and_read_state_from_model() {
     assert_eq!((r["unread"].as_u64(), r["newly_read"].clone()), (Some(0), json!([ID2])), "{r}");
     assert_eq!(r["mark"]["up_to_id"], ID2);
 }
+
+/// REPORT-3: последнее сообщение участника, скрытого у себя, не становится превью группы в списке чатов; объект
+/// снят — превью снова его
+#[test]
+fn hidden_member_is_not_chat_preview() {
+    let (mut host, mut e) = open();
+    let group = json!({"group": {"domain": "local", "id": b64e(&[0x0a; 16])}});
+    let hidden_key = format!("g:local:{}/spam@local", "0a".repeat(16));
+    let grow = |id: &str, from: &str, ts: i64, t: &str| {
+        json!({"row": {"id": id, "chat": group, "from": from, "ts_ms": ts.to_string(), "body": body(text(t))}})
+    };
+    ops(&mut host, &mut e, json!([grow(ID1, PEER, NOW - 5_000, "обычное"), grow(ID2, "spam@local", NOW - 4_000, "реклама")]), NOW);
+    let last = |e: &mut Engine| {
+        let list = call(e, "chatList", &json!({"limit": 10})).unwrap();
+        wire(&list["chats"][0]["last"])["content"]["text"].clone()
+    };
+    assert_eq!(last(&mut e), "реклама");
+    let hidden = json!({"kind": "OBJECT_KIND_MEMBER_HIDDEN", "key": hidden_key, "value": {}});
+    let out = call(&mut e, "stateSet", &hidden).unwrap();
+    let st = host.drive(&mut e, out, true);
+    let upsert = st.changes.iter().find_map(|c| c.get("chat_upsert")).cloned().unwrap_or_else(|| panic!("chat_upsert: {:?}", st.changes));
+    assert_eq!(wire(&upsert["last"])["content"]["text"], "обычное", "{upsert}");
+    assert_eq!(last(&mut e), "обычное");
+    let out = call(&mut e, "stateSet", &json!({"kind": "OBJECT_KIND_MEMBER_HIDDEN", "key": hidden_key, "delete": true})).unwrap();
+    host.drive(&mut e, out, true);
+    assert_eq!(last(&mut e), "реклама");
+}

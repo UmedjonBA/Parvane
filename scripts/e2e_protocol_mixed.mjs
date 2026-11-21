@@ -241,8 +241,13 @@ function serviceMessage(page, text) {
   return page.locator('.Transition_slide-active > .MessageList .ActionMessage').filter({ hasText: text });
 }
 
+// Профиль собеседника по доске `RpChat`: выключатель «Усиленная приватность» и строка «Включил собеседник»
 function l2Row(page) {
-  return page.locator('#RightColumn .ListItem').filter({ hasText: 'Enhanced privacy' });
+  return page.locator('#RightColumn [data-peer-l2]');
+}
+
+function l2ByPeer(page) {
+  return page.locator('#RightColumn [data-peer-l2-by]').filter({ hasText: /yes, / });
 }
 
 async function openChatProfile(page) {
@@ -277,19 +282,18 @@ async function runL2Scenario(alicePage, bobPage) {
   await typingStatus(bobPage).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 
   await openChatProfile(alicePage);
-  await l2Row(alicePage).locator('.ListItem-button').click();
+  await l2Row(alicePage).click();
   await serviceMessage(alicePage, 'You enabled enhanced privacy')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await serviceMessage(bobPage, 'enabled enhanced privacy')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await l2Row(alicePage).locator('input[type="checkbox"]').isChecked(), true,
+  assert.equal(await l2Row(alicePage).getAttribute('aria-checked'), 'true',
     'alice: переключатель показывает своё предпочтение');
 
   // У B режим активен из-за собеседника: подпись есть, свой переключатель выключен
   await openChatProfile(bobPage);
-  await l2Row(bobPage).getByText('Turned on by the other participant')
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await l2Row(bobPage).locator('input[type="checkbox"]').isChecked(), false,
+  await l2ByPeer(bobPage).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await l2Row(bobPage).getAttribute('aria-checked'), 'false',
     'bob: своё предпочтение не включено');
 
   // L2-1: typing не уходит и не показывается, присутствие не публикуется.
@@ -313,13 +317,12 @@ async function runL2Scenario(alicePage, bobPage) {
 
   // A выключает: служебное сообщение у обоих, подпись у B пропадает
   await openChatProfile(alicePage);
-  await l2Row(alicePage).locator('.ListItem-button').click();
+  await l2Row(alicePage).click();
   await serviceMessage(alicePage, 'You disabled enhanced privacy')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await serviceMessage(bobPage, 'disabled enhanced privacy')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await l2Row(bobPage).getByText('Turned on by the other participant')
-    .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await l2ByPeer(bobPage).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 
   // Режим снят — «печатает» снова доходит
   await typeDraft(alicePage, 'typing-after-l2');

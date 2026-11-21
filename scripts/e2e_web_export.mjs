@@ -177,7 +177,12 @@ try {
 
   assert.ok(files['planner/planner.json'], `нет «Плана»: ${names.join(', ')}`);
   assert.ok(text('planner/planner.json').includes(taskName), 'задачи нет в planner.json');
-  console.log('OK: в архиве «План» с задачей');
+  // «План и здоровье — JSON и CSV», «Контакты — список в CSV» (доски `PhProfileB`, `DkSettingsB`)
+  assert.ok(text('planner/tasks.csv').includes(taskName), `задачи нет в tasks.csv: ${names.join(', ')}`);
+  assert.ok(files['planner/events.csv'], 'нет events.csv');
+  assert.ok(text('contacts.csv').split('\r\n')[0].endsWith('name,address,added'), 'шапка contacts.csv');
+  assert.ok(text('contacts.csv').includes(bobNick), 'Боба нет в contacts.csv');
+  console.log('OK: в архиве «План» с задачей, CSV плана и контактов');
 
   // ── отмена ── (диаг-сборка: задержка перед сбором данных, чтобы «Отмена» гарантированно пришлась на ход)
   await a.evaluate(() => localStorage.setItem('parvane:e2e:exportDelayMs', '8000'));
@@ -186,6 +191,8 @@ try {
   await dialog.locator('[data-export-start] button').click();
   await dialog.locator('[data-export-progress]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.match(await dialog.locator('[data-export-progress]').innerText(), /Exporting:/, 'ход выгрузки разделом');
+  // Строка этапов: «Chats · Plan · Notes · Contacts · Files · Finishing» с отметками пройденного
+  assert.match(await dialog.locator('[data-export-stages]').innerText(), /Chats.*Finishing/, 'строка этапов');
   await dialog.locator('[data-export-cancel] button').click();
   await dialog.locator('[data-export-error="canceled"]').waitFor({ state: 'visible', timeout: EXPORT_TIMEOUT_MS });
   assert.equal(await dialog.locator('[data-export-done]').count(), 0, 'отменённая выгрузка не скачивается');

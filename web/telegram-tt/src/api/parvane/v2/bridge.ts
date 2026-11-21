@@ -240,6 +240,9 @@ export class V2Bridge {
             twofa_required: true,
             login_token: str(r, 'loginToken', 'login_token'),
             telegram_bot: str(r, 'telegramBot', 'telegram_bot'),
+            // spec 041: вход можно подтвердить ключом восстановления вместо Telegram; присланный ключ не подошёл
+            twofa_recovery: flag(r, 'twofaRecovery', 'twofa_recovery') || undefined,
+            recovery_key_wrong: flag(r, 'recoveryKeyWrong', 'recovery_key_wrong') || undefined,
           };
         }
         if (flag(r, 'seckeyRequired', 'seckey_required')) {
@@ -257,7 +260,13 @@ export class V2Bridge {
         }
         // spec 027: аккаунт ждёт удаления — пароль верен, токена нет без явной отмены удаления
         const deletionAt = int(r, 'deletionAtMs', 'deletion_at_ms');
-        if (deletionAt && !str(r, 'token')) return { ok: false, deletion_at_ms: deletionAt };
+        if (deletionAt && !str(r, 'token')) {
+          return {
+            ok: false,
+            deletion_at_ms: deletionAt,
+            deletion_requested_ms: int(r, 'deletionRequestedMs', 'deletion_requested_ms') || undefined,
+          };
+        }
         const out: V2Json = { ok: true, token: str(r, 'token') };
         // spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый)
         const address = str(r, 'address');
@@ -397,8 +406,11 @@ export class V2Bridge {
             created_at: Math.floor(int(o, 'createdMs', 'created_ms') / 1000),
             challenge_pub: str(o, 'challengePub', 'challenge_pub'),
             challenge_wrap: str(o, 'challengeWrap', 'challenge_wrap'),
+            label: str(o, 'label') || undefined,
           })),
         };
+        // spec 041: своё устройство отклонило запрос этого устройства
+        if (flag(r, 'declined')) out.declined = true;
         const grant = r.grant as V2Json | undefined;
         if (grant && typeof grant === 'object') {
           out.grant = {
@@ -416,7 +428,10 @@ export class V2Bridge {
         return { ok: true };
       case 'identity.link.grant':
         await c.call('identity.link.grant', {
-          device_id: str(p, 'device_id'), box_payload: str(p, 'box_payload'), eph_pub: str(p, 'eph_pub'),
+          device_id: str(p, 'device_id'),
+          box_payload: str(p, 'box_payload'),
+          eph_pub: str(p, 'eph_pub'),
+          decline: p.decline === true || undefined,
         });
         return { ok: true };
       case 'preview.link.fetch': {

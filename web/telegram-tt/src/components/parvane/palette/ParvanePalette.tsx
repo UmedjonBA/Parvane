@@ -325,17 +325,10 @@ const ParvanePalette = () => {
   // Поиск идёт с задержкой после последнего нажатия (E2): ввод не ждёт перебора списка. Пока задержка не
   // вышла, показан прежний результат; Enter в это время ищет по набранному сам (`runAt`)
   const [searchQuery, setSearchQuery] = useState('');
-  const searchTimeoutRef = useRef<number>();
   useEffect(() => {
     if (query === searchQuery) return undefined;
-    searchTimeoutRef.current = window.setTimeout(() => {
-      searchTimeoutRef.current = undefined;
-      setSearchQuery(query);
-    }, SEARCH_DELAY_MS);
-    return () => {
-      window.clearTimeout(searchTimeoutRef.current);
-      searchTimeoutRef.current = undefined;
-    };
+    const timeout = window.setTimeout(() => setSearchQuery(query), SEARCH_DELAY_MS);
+    return () => window.clearTimeout(timeout);
   }, [query, searchQuery]);
 
   const { tracks, isMusicReady } = usePaletteMusic(isOpen ? searchQuery : '', isMusicOn);
@@ -433,9 +426,11 @@ const ParvanePalette = () => {
   const runAt = useLastCallback((index: number) => {
     // Enter приходит дважды — клавишей окна и отправкой формы: второй раз палитра уже закрыта
     if (!getIsPaletteOpen()) return;
-    // Набранное ещё не искалось — результат по нему считается сейчас, иначе выбор пошёл бы по прежнему списку
-    const list = searchTimeoutRef.current !== undefined
-      ? searchPalette(items, query).flatMap(({ results }) => results)
+    // Набранное ещё не искалось — результат по нему считается сейчас, иначе выбор пошёл бы по прежнему списку.
+    // Набранное берётся из поля: клавиша может прийти раньше кадра, в котором обновится `query`
+    const typed = inputRef.current!.value;
+    const list = typed !== searchQuery
+      ? searchPalette(items, typed).flatMap(({ results }) => results)
       : flat;
     const entry = list[Math.min(index, Math.max(0, list.length - 1))]?.item;
     if (!entry) return;
@@ -480,7 +475,8 @@ const ParvanePalette = () => {
   // остаётся окну. Слушатель — на `window` при погружении: раньше перехвата клавиш окна, который Enter забирает
   const handleModEnter = useLastCallback((e: KeyboardEvent) => {
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !isNotesOn) return;
-    const text = query.trim();
+    // Из поля, а не из `query`: клавиша может прийти раньше кадра с набранным
+    const text = inputRef.current!.value.trim();
     if (!text) return;
     e.preventDefault();
     e.stopPropagation();

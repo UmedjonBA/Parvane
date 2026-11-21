@@ -166,6 +166,24 @@ try {
   await aliceSession.page.getByRole('button', { name: 'Mute', exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Маршрут звонка (доски `PhCalls`, `DkCalls`): «через сервер» либо «напрямую» по выбранной паре ICE ──
+  await bobSession.page.locator('[data-call-route="direct"], [data-call-route="relay"]')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── «Включить камеру» в голосовом звонке: видео уходит без ренеготиации, у собеседника — видеоэкран ──
+  await aliceSession.page.getByRole('button', { name: 'Turn camera on', exact: true }).click();
+  await aliceSession.page.getByRole('button', { name: 'Turn camera off', exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.locator('[data-call-screen="video"] video').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  // Видеоэкран: время и слова сверки одной строкой (доска `RpCalls`)
+  await bobSession.page.locator('[data-call-video-status] [data-call-sas]')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByRole('button', { name: 'Turn camera off', exact: true }).click();
+  await bobSession.page.locator('[data-call-screen="voice"]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: камера включается в голосовом звонке и выключается обратно');
+
   // ── Завершение звонка ──────────────────────────────────────────────────────
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await aliceSession.page.getByRole('button', { name: 'End Call' })

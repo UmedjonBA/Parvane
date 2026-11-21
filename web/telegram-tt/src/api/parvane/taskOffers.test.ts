@@ -143,6 +143,23 @@ describe('задание в чат (spec 011, TASK-1)', () => {
   });
 });
 
+describe('своё решение не отправилось', () => {
+  it('откат к прежнему решению либо снятие', () => {
+    const store = new TaskOfferStore();
+    store.setSelf('carol@local');
+    store.setPeerIdResolver((address) => address);
+    store.register('u9', 'chat', { kind: 'task_offer', name: 'Сборка' }, 'alice@local');
+    store.applyResponse('u9', 'carol@local', false, 20);
+    store.restoreResponse('u9', 'carol@local', undefined);
+    expect(store.build('u9')?.myDecision).toBeUndefined();
+    store.applyResponse('u9', 'carol@local', true, 30);
+    const previous = store.get('u9')!.responses.get('carol@local');
+    store.applyResponse('u9', 'carol@local', false, 40);
+    store.restoreResponse('u9', 'carol@local', previous);
+    expect(store.build('u9')?.myDecision).toBe(true);
+  });
+});
+
 describe('день чужой карточки', () => {
   it('негодный day отбрасывается при регистрации', () => {
     const store = new TaskOfferStore();

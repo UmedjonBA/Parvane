@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from '../../../../lib/teact/teact';
 import { getActions } from '../../../../global';
 
-import type { PvSegmentItem } from '../../../parvane/notes/PvSegment';
+import type { ProfileChoice } from '../profile/ProfileChoiceSheet';
 import { SettingsScreens } from '../../../../types';
 
 import {
@@ -9,18 +9,21 @@ import {
 } from '../../../../util/autoLock';
 import { IS_MAC_OS } from '../../../../util/browser/windowEnvironment';
 import buildClassName from '../../../../util/buildClassName';
+import { getNotifyPrefs, updateNotifyPrefs } from '../../../../util/notifyPrefs';
 import { callApi } from '../../../../api/gramjs';
 
 import useDerivedState from '../../../../hooks/useDerivedState';
+import useFlag from '../../../../hooks/useFlag';
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
-import PvSegment from '../../../parvane/notes/PvSegment';
 import PvSwitch from '../../../parvane/notes/PvSwitch';
 import Loading from '../../../ui/Loading';
+import ProfileChoiceSheet from '../profile/ProfileChoiceSheet';
 import ProfileIcon from '../profile/ProfileIcon';
+import ProfileSwitchRow from '../profile/ProfileSwitchRow';
 import SettingsPasscodeBiometric from './SettingsPasscodeBiometric';
 import SettingsSecurityKeys from './SettingsSecurityKeys';
 
@@ -47,6 +50,7 @@ const SettingsPasscodeHub = ({
 }: OwnProps) => {
   const { openSettingsScreen, showNotification } = getActions();
   const lang = useLang();
+  const notifyPrefs = useDerivedState(getNotifyPrefs);
   const oldLang = useOldLang();
 
   const [isEnabled, setIsEnabled] = useState<boolean | undefined>();
@@ -96,7 +100,7 @@ const SettingsPasscodeHub = ({
   });
 
   const autoLockMinutes = useDerivedState(getAutoLockMinutes);
-  const autoLockItems = useMemo<PvSegmentItem<string>[]>(() => AUTO_LOCK_CHOICES.map((minutes) => ({
+  const autoLockItems = useMemo<ProfileChoice[]>(() => AUTO_LOCK_CHOICES.map((minutes) => ({
     value: String(minutes),
     label: minutes
       ? lang('ParvanePinAutoLockMinutes', { count: minutes }, { pluralValue: minutes })
@@ -107,6 +111,9 @@ const SettingsPasscodeHub = ({
     setAutoLockMinutes(Number(value));
   });
 
+  // «Блокировать · через 5 минут без действий ▾» (доска `ZdProfileX`): строка со шторкой выбора
+  const [isAutoLockOpen, openAutoLock, closeAutoLock] = useFlag();
+
   // Ключ хранилища живёт только в памяти вкладки: перезагрузка закрывает его, запуск спросит PIN
   const handleLockNow = useLastCallback(() => {
     lockAppNow();
@@ -114,6 +121,11 @@ const SettingsPasscodeHub = ({
 
   const handleChange = useLastCallback(() => {
     openSettingsScreen({ screen: SettingsScreens.PasscodeChangePasscodeCurrent });
+  });
+
+  // «Скрывать текст в уведомлениях, пока заблокировано» — настройка уведомлений устройства (`notifyPrefs.ts`)
+  const handleHideText = useLastCallback((isHidden: boolean) => {
+    updateNotifyPrefs({ isLockedTextShown: !isHidden });
   });
 
   const actionRowClass = buildClassName(styles.setRow, styles.setRowAction);
@@ -138,22 +150,36 @@ const SettingsPasscodeHub = ({
           />
         </div>
         {isEnabled && (
-          <div className={buildClassName(styles.setRow, styles.setRowWrap)} data-pin-autolock={autoLockMinutes}>
+          <button
+            type="button"
+            className={actionRowClass}
+            data-pin-autolock={autoLockMinutes}
+            onClick={openAutoLock}
+          >
             <span className={styles.setTitle}>{lang('ParvanePinAutoLock')}</span>
-            <PvSegment
-              items={autoLockItems}
-              value={String(autoLockMinutes)}
-              label={lang('ParvanePinAutoLock')}
-              className={styles.setSegment}
-              onChange={handleAutoLockChange}
-            />
-          </div>
+            <span className={styles.menuValue}>
+              {autoLockMinutes
+                ? lang('ParvanePinAutoLockAfter', {
+                  time: lang('ParvanePinAutoLockMinutes', { count: autoLockMinutes }, { pluralValue: autoLockMinutes }),
+                })
+                : lang('ParvanePinAutoLockOff')}
+            </span>
+            <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+          </button>
         )}
         {isEnabled && (
           <button type="button" className={actionRowClass} data-pin-lock-now onClick={handleLockNow}>
             <span className={styles.setTitle}>{lang('ParvanePinLockNow')}</span>
             <span className={styles.setValue}>{IS_MAC_OS ? '⌘L' : 'Ctrl+L'}</span>
           </button>
+        )}
+        {isEnabled && (
+          <ProfileSwitchRow
+            title={lang('ParvanePinHideText')}
+            isOn={!notifyPrefs.isLockedTextShown}
+            onChange={handleHideText}
+            data-pin-hide-text
+          />
         )}
         {isEnabled && (
           <button type="button" className={actionRowClass} data-pin-change onClick={handleChange}>
@@ -165,6 +191,14 @@ const SettingsPasscodeHub = ({
       <div className={styles.hint}>{lang('ParvanePinLimitNote')}</div>
       {isEnabled && <SettingsPasscodeBiometric isActive={isActive} />}
       <SettingsSecurityKeys isActive={isActive} />
+      <ProfileChoiceSheet
+        isOpen={isAutoLockOpen}
+        title={lang('ParvanePinAutoLock')}
+        options={autoLockItems}
+        selected={String(autoLockMinutes)}
+        onSelect={handleAutoLockChange}
+        onClose={closeAutoLock}
+      />
       {isMigrating && (
         <div className={ownStyles.migration}>
           <Loading />

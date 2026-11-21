@@ -351,6 +351,17 @@ try {
 
   // ══ US6: изменения доходят до открытых экранов и отсутствовавшего устройства ═
   const bobOpenProfile = await openGroupProfile(sessions.bob.page, groupTitle);
+  // Блок сведений по доске `ZpChat2`: уведомления, тип, «Файлы и медиа · N», участники строками, «Покинуть»
+  const info = bobOpenProfile.locator('[data-group-info]');
+  for (const row of ['[data-group-notifications]', '[data-group-type]', '[data-group-media]', '[data-group-leave]']) {
+    await info.locator(row).first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  }
+  await info.locator('[data-group-media-count]').waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  assert.match(await info.locator('[data-group-media-count]').innerText(), /^\d+$/, 'счётчик «Файлы и медиа»');
+  await bobOpenProfile.locator('[data-group-members] .contact-list-item').first()
+    .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  assert.equal(await bobOpenProfile.locator('.Tab').filter({ hasText: 'Members' }).count(), 0, 'участники — не вкладкой');
+  console.log('OK: блок сведений группы по доске');
   const about2 = `Обновлено ${suffix.slice(-6)}`;
   const changedAt = Date.now();
   await setDescriptionViaUi(alicePage, groupTitle, about2);

@@ -4,6 +4,7 @@
 // CallSignal Invite/Answer/Ice/Hangup/Reject.
 
 import { getIsPermissionError, showPermissionDenied } from '../../util/permissionPrompt';
+import { readCallRoute } from './callRoute';
 import { getCallVideoSender, prepareCallVideo } from './callScreenShare';
 import { decodeIceCandidate, encodeIceCandidate } from './iceCandidate';
 
@@ -444,6 +445,10 @@ export class CallEngine {
 
   getVideoSender() {
     return getCallVideoSender(this.pc);
+  }
+
+  getRoute() {
+    return readCallRoute(this.pc);
   }
 
   getLocalStream() {

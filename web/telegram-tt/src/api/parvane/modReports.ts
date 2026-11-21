@@ -55,6 +55,8 @@ export type ModReportsDeps = {
   /** «Скрыть у меня сообщения этого участника» (REPORT-3): объект личного состояния и показ. */
   setMemberHidden?: (address: string, user: string, isHidden: boolean) => Promise<boolean>;
   applyMemberHidden?: (chatId: string, user: string, isHidden: boolean) => Promise<void>;
+  /** Группы, где сообщения участника скрыты у себя (адреса групп). */
+  hiddenGroups?: (user: string) => string[];
 };
 
 export function createModReports(deps: ModReportsDeps) {
@@ -134,6 +136,13 @@ export function createModReports(deps: ModReportsDeps) {
       const address = deps.getStore().getAddressForId(chatId);
       if (!address || !uuids.length) return false;
       return deps.close(address, uuids);
+    },
+    /** Чаты групп, где сообщения участника скрыты у себя: профиль участника предлагает показать их снова. */
+    parvaneMemberHiddenChats({ userId }: { userId: string }) {
+      const store = deps.getStore();
+      const user = store.getAddressForId(userId);
+      if (!user || !deps.hiddenGroups) return Promise.resolve([]);
+      return Promise.resolve(deps.hiddenGroups(user).map((address) => store.getIdForAddress(address, 'group')));
     },
     /** Скрыть либо снова показать у себя сообщения участника группы (REPORT-3, окно жалобы). */
     async parvaneMemberHide({ chatId, userId, isHidden }: { chatId: string; userId: string; isHidden: boolean }) {

@@ -13,6 +13,8 @@ import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironme
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
 import { formatFileSize } from '../../../util/textFormat';
+import { callApi } from '../../../api/gramjs';
+import { buildGuide, getGuideLang } from '../../parvane/notes/notesGuide';
 import { fetchStorageUsage, formatBackupDate, getKeysBackupSavedAt } from './profile/profileStatus';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -40,6 +42,8 @@ type StateProps = {
   theme: ThemeKey;
   shouldUseSystemTheme?: boolean;
   deviceCount: number;
+  hasWebNotifications: boolean;
+  hasPushNotifications: boolean;
 };
 
 const VERSION = IS_BETA ? `${APP_VERSION} Beta (${APP_REVISION})` : (DEBUG ? APP_REVISION : APP_VERSION);
@@ -54,6 +58,8 @@ const SettingsMain = ({
   theme,
   shouldUseSystemTheme,
   deviceCount,
+  hasWebNotifications,
+  hasPushNotifications,
   onReset,
 }: OwnProps & StateProps) => {
   const { loadAuthorizations, loadMoreProfilePhotos } = getActions();
@@ -64,10 +70,14 @@ const SettingsMain = ({
   const { states: modules } = useParvaneModules();
   const [storageUsage, setStorageUsage] = useState<number | undefined>();
   const keysSavedAt = isActive ? getKeysBackupSavedAt(currentUserId) : undefined;
+  // Копия ключей аккаунта на сервере включена — «сохранена» и на устройстве, откуда файл копии не сохраняли
+  const [isBundleOn, setIsBundleOn] = useState(false);
 
   useEffect(() => {
     if (!isActive) return;
     void fetchStorageUsage().then(setStorageUsage);
+    void (callApi as unknown as (name: string) => Promise<{ isOff: boolean } | undefined>)('parvaneKeyBundleContents')
+      .then((contents) => setIsBundleOn(Boolean(contents && !contents.isOff)));
   }, [isActive]);
 
   useEffect(() => {
@@ -89,6 +99,8 @@ const SettingsMain = ({
     onBack: onReset,
   });
 
+  const helpCount = useMemo(() => buildGuide(getGuideLang(lang.code)).notes.length, [lang.code]);
+
   const modeName = lang(shouldUseSystemTheme ? 'ParvaneThemeAuto' : theme === 'dark'
     ? 'ParvaneThemeDark' : 'ParvaneThemeLight').toLowerCase();
 
@@ -99,10 +111,18 @@ const SettingsMain = ({
     appearance: `${SCHEME_NAMES[colorScheme]} · ${modeName}`,
     language: lang.languageInfo.nativeName,
     devices: deviceCount ? String(deviceCount) : undefined,
-    keys: keysSavedAt ? formatBackupDate(keysSavedAt, lang.code) : lang('ParvaneKeysBackupNoneShort'),
+    notifications: lang(!hasWebNotifications ? 'ParvaneNotifyValueOff'
+      : hasPushNotifications ? 'ParvaneNotifyValueBackground' : 'ParvaneNotifyValueOpen'),
+    keys: isBundleOn ? lang('ParvaneKeysValueSaved')
+      : keysSavedAt ? formatBackupDate(keysSavedAt, lang.code) : lang('ParvaneKeysBackupNoneShort'),
     data: storageUsage !== undefined ? formatFileSize(lang, storageUsage) : undefined,
     export: 'ZIP',
-  }), [lang, modules, colorScheme, modeName, deviceCount, keysSavedAt, storageUsage]);
+    help: lang('ParvaneHelpNotesCount', { count: helpCount }, { pluralValue: helpCount }),
+    about: APP_VERSION,
+  }), [
+    lang, helpCount, modules, colorScheme, modeName, deviceCount, keysSavedAt, storageUsage, isBundleOn,
+    hasWebNotifications, hasPushNotifications,
+  ]);
 
   if (isDesktop) return <ProfileOverview />;
 
@@ -127,6 +147,8 @@ export default memo(withGlobal<OwnProps>(
       theme: selectTheme(global),
       shouldUseSystemTheme,
       deviceCount: activeSessions.orderedHashes.length,
+      hasWebNotifications: global.settings.byKey.hasWebNotifications,
+      hasPushNotifications: global.settings.byKey.hasPushNotifications,
     };
   },
 )(SettingsMain));

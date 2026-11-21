@@ -29,8 +29,15 @@ async function openPrivacySettings(page) {
     .then(() => true, () => false)) {
     await closeSettings(page);
   }
+  // Файл копии ключей на компьютере — карточка «Данных и памяти» (доска `DkSettingsB`), пароль — окном
   await openProfile(page);
-  await page.locator('[data-profile-item="keys"]:visible').click();
+  await page.locator('[data-profile-item="data"]:visible').click();
+}
+
+async function fillKeysPassword(form) {
+  await form.locator('[data-keys-password]').fill(BACKUP_PASSWORD);
+  const repeat = form.locator('[data-keys-password-repeat]');
+  if (await repeat.count()) await repeat.fill(BACKUP_PASSWORD);
 }
 
 const browser = await chromium.launch();
@@ -56,10 +63,13 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Экспорт ключей у Боба ──────────────────────────────────────────────────
-  bobSession.page.on('dialog', (dialog) => dialog.accept(BACKUP_PASSWORD));
   await openPrivacySettings(bobSession.page);
   const downloadPromise = bobSession.page.waitForEvent('download', { timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.locator('[data-keys-action="save"]').click();
+  const saveForm = bobSession.page.locator('.Modal [data-keys-file-form="save"]');
+  await saveForm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await fillKeysPassword(saveForm);
+  await saveForm.locator('[data-keys-submit="save"]').click();
   const download = await downloadPromise;
   const backupDir = await mkdtemp(join(tmpdir(), 'parvane-keys-'));
   const backupPath = join(backupDir, 'parvane-e2e-keys.json');
@@ -77,12 +87,16 @@ try {
   );
 
   // ── Импорт бэкапа → ресинк → история читается ──────────────────────────────
-  newDevice.page.on('dialog', (dialog) => dialog.accept(BACKUP_PASSWORD));
   await openPrivacySettings(newDevice.page);
-  const fileChooserPromise = newDevice.page.waitForEvent('filechooser');
   await newDevice.page.locator('[data-keys-action="restore"]').click();
+  const restoreForm = newDevice.page.locator('.Modal [data-keys-file-form="restore"]');
+  await restoreForm.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const fileChooserPromise = newDevice.page.waitForEvent('filechooser');
+  await restoreForm.locator('[data-keys-file-pick]').click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles(backupPath);
+  await fillKeysPassword(restoreForm);
+  await restoreForm.locator('[data-keys-submit="restore"]').click();
   await newDevice.page.locator('.Notification').filter({ hasText: 'imported' }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

@@ -4,7 +4,6 @@ import { getActions, withGlobal } from '../../../global';
 import { SettingsScreens } from '../../../types';
 
 import { selectIsCurrentUserFrozen } from '../../../global/selectors';
-import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { callApi } from '../../../api/gramjs';
@@ -28,18 +27,23 @@ type OwnProps = {
 
 type StateProps = {
   blockedCount: number;
-  canDisplayChatInTitle?: boolean;
   isCurrentUserFrozen?: boolean;
 };
 
-type Audience = 'anyone' | 'nobody';
+// «Только контакты» у звонков соблюдает клиент владельца (как и «никто», FR-040): сервер звонящего не видит
+type Audience = 'anyone' | 'contacts' | 'nobody';
 type ChoiceRow = 'message' | 'call' | 'groups';
 type CallPresencePolicy = {
-  isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean; isRelayOnly?: boolean;
+  isAvailable: boolean; callsFrom: Audience; isPresenceShown: boolean; isRelayOnly?: boolean;
 };
 
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 const CHOICE_ROWS: ChoiceRow[] = ['message', 'call', 'groups'];
+const CHOICE_OPTIONS: Record<ChoiceRow, Audience[]> = {
+  message: ['anyone', 'contacts'],
+  call: ['anyone', 'contacts', 'nobody'],
+  groups: ['anyone', 'nobody'],
+};
 // Начало отпечатка в строке, весь — в буфер обмена
 const KEY_PREVIEW_LENGTH = 4;
 
@@ -50,12 +54,11 @@ const KEY_PREVIEW_LENGTH = 4;
 const SettingsPrivacy = ({
   isActive,
   blockedCount,
-  canDisplayChatInTitle,
   isCurrentUserFrozen,
   onReset,
 }: OwnProps & StateProps) => {
   const {
-    loadBlockedUsers, setSharedSettingOption, openSettingsScreen, showNotification,
+    loadBlockedUsers, openSettingsScreen, showNotification,
   } = getActions();
 
   const lang = useLang();
@@ -117,12 +120,13 @@ const SettingsPrivacy = ({
     });
   });
 
-  const handleCallsChange = useLastCallback((isAllowed: boolean) => {
+  const handleCallsChange = useLastCallback((callsFrom: Audience) => {
     const isPresenceShown = callPresence?.isPresenceShown ?? true;
-    setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed }));
-    void callParvane('parvaneSetCallsPolicy', { isAllowed }).then((isSaved) => {
+    const previous = callPresence?.callsFrom ?? 'anyone';
+    setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, callsFrom }));
+    void callParvane('parvaneSetCallsPolicy', { callsFrom }).then((isSaved) => {
       if (isSaved) return;
-      setCallPresence((current) => (current ? { ...current, areCallsAllowed: !isAllowed } : current));
+      setCallPresence((current) => (current ? { ...current, callsFrom: previous } : current));
       notifyPrivacyFailed();
     });
   });
@@ -133,8 +137,8 @@ const SettingsPrivacy = ({
   });
 
   const handlePresenceChange = useLastCallback((isShown: boolean) => {
-    const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
-    setCallPresence((current) => ({ ...current, isAvailable: true, areCallsAllowed, isPresenceShown: isShown }));
+    const callsFrom = callPresence?.callsFrom ?? 'anyone';
+    setCallPresence((current) => ({ ...current, isAvailable: true, callsFrom, isPresenceShown: isShown }));
     void callParvane('parvaneSetPresencePolicy', { isShown }).then((isSaved) => {
       if (isSaved) return;
       setCallPresence((current) => (current ? { ...current, isPresenceShown: !isShown } : current));
@@ -143,9 +147,9 @@ const SettingsPrivacy = ({
   });
 
   const handleChoice = useLastCallback((value: string) => {
-    const isAllowed = (value as Audience) === 'anyone';
+    const isAllowed = value === 'anyone';
     if (openChoice === 'message') handleStrangersChange(isAllowed);
-    if (openChoice === 'call') handleCallsChange(isAllowed);
+    if (openChoice === 'call') handleCallsChange(value as Audience);
     if (openChoice === 'groups') handleGroupAddChange(isAllowed);
   });
 
@@ -155,42 +159,38 @@ const SettingsPrivacy = ({
     showNotification({ message: lang('ParvanePrivacyKeyCopied') });
   });
 
-  const handleChatInTitleChange = useLastCallback((isOn: boolean) => {
-    setSharedSettingOption({ canDisplayChatInTitle: isOn });
-  });
-
   const rowClass = buildClassName(styles.setRow, styles.setRowAction);
-  const anyoneLabel = lang('ParvanePrivacyEveryone');
-  const nobodyLabel = lang('ParvanePrivacyNobody');
-  const choices: Record<ChoiceRow, { title: string; hint: string; isAllowed: boolean; nobody: string }> = {
+  const labels = useMemo<Record<Audience, string>>(() => ({
+    anyone: lang('ParvanePrivacyEveryone'),
+    contacts: lang('ParvanePrivacyContacts'),
+    nobody: lang('ParvanePrivacyNobody'),
+  }), [lang]);
+  // «Писать мне»: ограничение сервера — сообщения только от тех, кому писали вы; в Parvane это и есть контакты
+  // (`store.isContact`: явно добавленные и все, с кем есть переписка), поэтому вариант назван «Только контакты»
+  const choices: Record<ChoiceRow, { title: string; hint: string; value: Audience }> = {
     message: {
       title: lang('ParvanePrivacyMessageMe'),
-      hint: oldLang('ParvaneStrangersInfo'),
-      isAllowed: Boolean(strangers?.isAllowed),
-      nobody: lang('ParvanePrivacyWrittenTo'),
+      hint: lang('ParvanePrivacyMessageHint'),
+      value: strangers?.isAllowed ? 'anyone' : 'contacts',
     },
     call: {
       title: lang('ParvanePrivacyCallMe'),
-      hint: oldLang('ParvaneCallsInfo'),
-      isAllowed: Boolean(callPresence?.areCallsAllowed),
-      nobody: nobodyLabel,
+      hint: lang('ParvanePrivacyCallHint'),
+      value: callPresence?.callsFrom ?? 'anyone',
     },
     groups: {
       title: lang('ParvanePrivacyAddToGroups'),
       hint: oldLang('ParvaneGroupAddInfo'),
-      isAllowed: isGroupAddAllowed,
-      nobody: nobodyLabel,
+      value: isGroupAddAllowed ? 'anyone' : 'nobody',
     },
   };
   const visibleChoices = CHOICE_ROWS.filter((row) => (
     (row !== 'message' || strangers?.isAvailable) && (row !== 'call' || callPresence?.isAvailable)
   ));
   const sheet = openChoice ? choices[openChoice] : undefined;
-  const sheetNobody = sheet?.nobody || nobodyLabel;
-  const sheetOptions = useMemo(() => [
-    { value: 'anyone', label: anyoneLabel },
-    { value: 'nobody', label: sheetNobody },
-  ], [anyoneLabel, sheetNobody]);
+  const sheetOptions = useMemo(() => (
+    openChoice ? CHOICE_OPTIONS[openChoice].map((value) => ({ value, label: labels[value] })) : []
+  ), [openChoice, labels]);
 
   return (
     <div className={buildClassName('settings-content custom-scroll', styles.screen)} data-settings-privacy>
@@ -205,8 +205,8 @@ const SettingsPrivacy = ({
             onClick={() => setOpenChoice(row)}
           >
             <span className={styles.setTitle}>{choices[row].title}</span>
-            <span className={styles.menuValue} data-privacy-value={choices[row].isAllowed ? 'anyone' : 'nobody'}>
-              {choices[row].isAllowed ? anyoneLabel : choices[row].nobody}
+            <span className={styles.menuValue} data-privacy-value={choices[row].value}>
+              {labels[choices[row].value]}
             </span>
             <ProfileIcon name="right" isSmall className={styles.menuChevron} />
           </button>
@@ -260,22 +260,12 @@ const SettingsPrivacy = ({
       </div>
       <div className={styles.hint}>{lang('ParvanePrivacyEncryptionHint')}</div>
 
-      <div className={styles.caption}>{oldLang('lng_settings_window_system')}</div>
-      <div className={styles.group}>
-        <ProfileSwitchRow
-          title={oldLang('lng_settings_title_chat_name')}
-          isOn={Boolean(canDisplayChatInTitle)}
-          onChange={handleChatInTitleChange}
-          data-privacy-row="title"
-        />
-      </div>
-
       <ProfileChoiceSheet
         isOpen={Boolean(sheet)}
         title={sheet?.title || ''}
         hint={sheet?.hint}
         options={sheetOptions}
-        selected={sheet?.isAllowed ? 'anyone' : 'nobody'}
+        selected={sheet?.value || 'anyone'}
         onSelect={handleChoice}
         onClose={() => setOpenChoice(undefined)}
       />
@@ -285,10 +275,8 @@ const SettingsPrivacy = ({
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { canDisplayChatInTitle } = selectSharedSettings(global);
     return {
       blockedCount: global.blocked.totalCount,
-      canDisplayChatInTitle,
       isCurrentUserFrozen: selectIsCurrentUserFrozen(global),
     };
   },

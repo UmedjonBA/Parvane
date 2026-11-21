@@ -3,13 +3,31 @@
 // приложение занимает в браузере (`navigator.storage.estimate`)
 
 const KEYS_BACKUP_PREFIX = 'parvane:keys-backup-at:';
+// Набор своих устройств на момент сохранения файла (`parvaneKeysMark`): другой набор — ключи с тех пор менялись
+const KEYS_MARK_PREFIX = 'parvane:keys-backup-mark:';
 
-export function markKeysBackupSaved(user: string | undefined, at = Date.now()) {
+export function markKeysBackupSaved(user: string | undefined, keysMark?: string, at = Date.now()) {
   if (!user) return;
   try {
     localStorage.setItem(`${KEYS_BACKUP_PREFIX}${user}`, String(at));
+    if (keysMark) {
+      localStorage.setItem(`${KEYS_MARK_PREFIX}${user}`, keysMark);
+    } else {
+      localStorage.removeItem(`${KEYS_MARK_PREFIX}${user}`);
+    }
   } catch {
     // Отметка просто не появится
+  }
+}
+
+/** Менялись ли ключи после сохранения файла копии; `undefined` — неизвестно (нет отметки или движок не готов). */
+export function getIsKeysBackupStale(user: string | undefined, currentMark: string | undefined) {
+  if (!user || !currentMark) return undefined;
+  try {
+    const saved = localStorage.getItem(`${KEYS_MARK_PREFIX}${user}`);
+    return saved ? saved !== currentMark : undefined;
+  } catch {
+    return undefined;
   }
 }
 

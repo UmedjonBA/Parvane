@@ -1,4 +1,4 @@
-import { memo, useEffect } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiChat } from '../../../api/types';
@@ -14,6 +14,7 @@ import {
 } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../util/clipboard';
+import { callApi } from '../../../api/gramjs';
 import renderText from '../../common/helpers/renderText';
 
 import useFlag from '../../../hooks/useFlag';
@@ -43,6 +44,10 @@ type StateProps = {
 // Публичная ссылка группы на этом сервере (spec 023): адрес сервера и `@имя`
 const PUBLIC_LINK_PREFIX = `${window.location.origin}/@`;
 const AVATAR_SIZE = 72;
+// «Файлы и медиа · 312» (доска `ZpChat2`): фото и видео плюс файлы
+const MEDIA_COUNT_TYPES = ['media', 'documents'];
+
+const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<{ totalCount?: number }>;
 
 // Сведения о группе и канале по доске `ZpChat2` («Linux-чат · группа · 214 участников»): уведомления, тип, имя на
 // сервере, описание и ссылка строками; общее в группе; «Покинуть». Участники и медиа — вкладки профиля ниже
@@ -54,6 +59,23 @@ const GroupInfo = ({
   } = getActions();
   const lang = useLang();
   const [isLeaveOpen, openLeave, closeLeave] = useFlag();
+  const [mediaCount, setMediaCount] = useState<number>();
+
+  useEffect(() => {
+    setMediaCount(undefined);
+    let isActual = true;
+    void Promise.all(MEDIA_COUNT_TYPES.map((type) => Promise.resolve(
+      callParvane('searchMessagesInChat', { peer: { id: chatId }, type }),
+    )
+      .then((result) => result?.totalCount || 0)
+      .catch(() => 0)))
+      .then((counts) => {
+        if (isActual) setMediaCount(counts.reduce((sum, count) => sum + count, 0));
+      });
+    return () => {
+      isActual = false;
+    };
+  }, [chatId]);
 
   const hasPhoto = Boolean(chat?.avatarPhotoId);
   useEffect(() => {
@@ -164,6 +186,7 @@ const GroupInfo = ({
       <div className={styles.grp}>
         <button type="button" className={rowButtonClass} onClick={onOpenMedia} data-group-media>
           <span className={styles.text}>{lang('ParvaneGroupInfoMedia')}</span>
+          {mediaCount !== undefined && <span className={styles.value} data-group-media-count>{mediaCount}</span>}
           <span className={styles.chevron} aria-hidden>›</span>
         </button>
       </div>

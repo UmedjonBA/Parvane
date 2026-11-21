@@ -1,4 +1,4 @@
-import { memo, useMemo } from '../../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../../global';
 
 import type { ApiUser } from '../../../../api/types';
@@ -9,14 +9,16 @@ import { selectUser } from '../../../../global/selectors';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../../../../util/browser/globalEnvironment';
 import buildClassName from '../../../../util/buildClassName';
 import { formatPastTimeShort } from '../../../../util/dates/oldDateFormat';
-import getSessionAppLine from '../helpers/getSessionAppLine';
 import { getDeviceIcon } from './profileFormat';
+import { formatBackupDate } from './profileStatus';
+import useKeysFileStatus from './useKeysFileStatus';
 
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
 import SettingsAccounts from '../SettingsAccounts';
+import SettingsActiveSession from '../SettingsActiveSession';
 import ProfileAppearance from './ProfileAppearance';
 import ProfileHead from './ProfileHead';
 import ProfileIcon from './ProfileIcon';
@@ -30,21 +32,29 @@ type StateProps = {
 };
 
 // Parvane (spec 041 E3): «Обзор» — главный экран «Профиля» на компьютере (доска `DeskProfile`): аккаунт,
-// «Избранное / Контакты / Архив», оформление и устройства. Завершение сеанса требует пароль, поэтому
-// список устройств здесь только показывает их, действия — на экране «Устройства и аккаунт»
+// «Избранное / Контакты / Архив», оформление и устройства: у чужих — «Завершить» (то же окно сеанса с паролем, что на
+// экране «Устройства и аккаунт»), внизу — «Копия ключей сохранена … · Открыть»
 const ProfileOverview = ({ currentUser, sessionsByHash, sessionHashes }: StateProps) => {
   const { openSettingsScreen } = getActions();
   const lang = useLang();
   const oldLang = useOldLang();
+  const keysFile = useKeysFileStatus(true);
+  const [openedSessionHash, setOpenedSessionHash] = useState<string>();
 
   const ordered = useMemo(() => {
     return sessionHashes.map((hash) => sessionsByHash[hash]).filter(Boolean)
       .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
   }, [sessionsByHash, sessionHashes]);
 
-  const handleOpenDevices = useLastCallback(() => {
-    openSettingsScreen({ screen: SettingsScreens.ActiveSessions });
+  const handleOpenKeys = useLastCallback(() => {
+    openSettingsScreen({ screen: SettingsScreens.ParvaneKeysBackup });
   });
+
+  const handleTerminate = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setOpenedSessionHash(e.currentTarget.dataset.sessionHash);
+  });
+
+  const closeSession = useLastCallback(() => setOpenedSessionHash(undefined));
 
   return (
     <div className={buildClassName(styles.overview, 'settings-main-scroll', 'custom-scroll')} data-profile-overview>
@@ -67,19 +77,37 @@ const ProfileOverview = ({ currentUser, sessionsByHash, sessionHashes }: StatePr
                 <div className={styles.deviceHint}>
                   {session.isCurrent
                     ? lang('ParvaneProfileThisDevice')
-                    : [getSessionAppLine(lang, session), formatPastTimeShort(oldLang, session.dateActive * 1000)]
-                      .filter(Boolean).join(' · ')}
+                    : lang('ParvaneDeviceSeen', { time: formatPastTimeShort(oldLang, session.dateActive * 1000) })}
                 </div>
               </div>
+              {!session.isCurrent && (
+                <button
+                  type="button"
+                  className={buildClassName(styles.chip, styles.chipDanger)}
+                  data-overview-terminate={session.hash}
+                  data-session-hash={session.hash}
+                  onClick={handleTerminate}
+                >
+                  {lang('ParvaneOverviewTerminate')}
+                </button>
+              )}
             </div>
           ))}
           <span className={styles.cardSpacer} />
-          <button type="button" className={styles.cardLink} data-overview-devices onClick={handleOpenDevices}>
-            {lang('ParvaneProfileDevices')}
-            <ProfileIcon name="right" isSmall />
-          </button>
+          <div className={styles.cardFooter} data-overview-keys={keysFile.savedAt ? 'saved' : 'none'}>
+            <span className={styles.cardFooterText}>
+              {keysFile.savedAt
+                ? lang('ParvaneKeysBackupSavedAt', { date: formatBackupDate(keysFile.savedAt, lang.code) })
+                : lang('ParvaneKeysBackupNone')}
+            </span>
+            <button type="button" className={styles.cardLink} data-overview-keys-open onClick={handleOpenKeys}>
+              {lang('ParvaneOverviewOpen')}
+              <ProfileIcon name="right" isSmall />
+            </button>
+          </div>
         </section>
       </div>
+      <SettingsActiveSession isOpen={Boolean(openedSessionHash)} hash={openedSessionHash} onClose={closeSession} />
     </div>
   );
 };

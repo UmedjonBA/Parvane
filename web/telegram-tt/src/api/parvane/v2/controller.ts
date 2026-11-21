@@ -77,6 +77,7 @@ import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createMusicPlaylistsSync } from './musicPlaylists';
 import { createPlannerSync } from './planner';
 import { createReconnectBackoff } from './reconnectBackoff';
+import { readServerProtoVersion } from './serverVersion';
 import { isTelegramCodeIntercepted } from './telegramCode';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
@@ -590,6 +591,8 @@ export function createV2Controller(deps: Deps) {
   const messages = deps.index || createMessageIndex({ loadAll: deps.loadHistory });
   // Домен сервера из описателя (группы v2 живут на нём)
   let serverDomain = '';
+  // Версия протокола сервера из описателя (`serverVersion.ts`, «О приложении»)
+  let serverProto: string | undefined;
   // Группы, уже показанные UI (новая — с updateChatJoin)
   // Устройство подменено копией ключей — ждём входа под его device_id (importBackup)
   let isHalted = false;
@@ -1119,6 +1122,7 @@ export function createV2Controller(deps: Deps) {
     };
     serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
     serverDomain = desc.domain;
+    serverProto = readServerProtoVersion(pv, welcome.serverDescriptor);
     const auth = await conn.auth(token);
     ownDeviceId = auth.deviceId;
     conn.onEvent = (ev) => {
@@ -2301,6 +2305,10 @@ export function createV2Controller(deps: Deps) {
       const merged = mergeKeyBundlePayload(payload, server);
       // Номер записи строго больше виденного (своего и серверного): откат сервера не спрячет новую копию
       merged.seq = Math.max(seen, readBundleSeq(server?.seq)) + 1;
+      // Время записи и дата ключа восстановления («Копия ключей»): копии на сервере нет вовсе — её стёрла новая копия
+      // корня, то есть ключ только что создан
+      merged.at = Date.now();
+      merged.keyAt = fetched ? fetched.keyAt : merged.at;
       if (server?.groups) {
         try {
           const groups = client.groupKeysMerge(payload.groups || '[]', server.groups);
@@ -2351,7 +2359,7 @@ export function createV2Controller(deps: Deps) {
     if (!pv || !storage || !bundleKeyB64) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const server = await fetchKeyBundle();
     const seq = Math.max(await loadSeenBundleSeq(), readBundleSeq(server?.seq)) + 1;
-    const sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), buildOffBundle(seq));
+    const sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), buildOffBundle(seq, server?.keyAt));
     await call('id', 'identity.root.backup_set', pv.encodeMessage(
       'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ key_bundle: b64(sealed) }),
     ));
@@ -5236,10 +5244,13 @@ export function createV2Controller(deps: Deps) {
   // Приватность v2 (T079): сервер хранит её в identity и применяет к
   // доставке (жетоны незнакомцев) и добавлению в группы
   async function setPrivacy(settings: {
-    groupAdd: 'anyone' | 'nobody'; strangers: boolean; callsFrom: 'anyone' | 'nobody'; presence: 'anyone' | 'nobody';
+    groupAdd: 'anyone' | 'nobody'; strangers: boolean; callsFrom: 'anyone' | 'contacts' | 'nobody';
+    presence: 'anyone' | 'nobody';
   }) {
     if (!pv || !ready) return false;
-    const audience = (value: 'anyone' | 'nobody') => (value === 'nobody' ? 'AUDIENCE_NOBODY' : 'AUDIENCE_EVERYBODY');
+    const audience = (value: 'anyone' | 'contacts' | 'nobody') => (
+      value === 'nobody' ? 'AUDIENCE_NOBODY' : value === 'contacts' ? 'AUDIENCE_CONTACTS' : 'AUDIENCE_EVERYBODY'
+    );
     await call('id', 'identity.privacy.set', pv.encodeMessage('parvane.identity.v2.PrivacySetRequest', JSON.stringify({
       settings: {
         group_add: audience(settings.groupAdd),
@@ -5270,7 +5281,8 @@ export function createV2Controller(deps: Deps) {
       strangers: Boolean(got.settings?.messages_from_strangers),
       // FR-040 (T137): «кто может звонить» и «кто видит, что я в сети» — их
       // соблюдает клиент владельца (сервер v2 не видит ни звонящего, ни зрителя)
-      callsFrom: audience(got.settings?.calls_from),
+      callsFrom: got.settings?.calls_from === 'AUDIENCE_CONTACTS'
+        ? 'contacts' as const : audience(got.settings?.calls_from),
       presence: audience(got.settings?.presence_visibility),
     };
   }
@@ -5438,6 +5450,8 @@ export function createV2Controller(deps: Deps) {
     deviceId: () => ownDeviceId,
     /** Домен своего сервера (группы v2 живут на нём). */
     serverDomain: () => serverDomain,
+    /** Версия протокола своего сервера («3.1»); соединения ещё не было — `undefined`. */
+    serverProtoVersion: () => serverProto,
     /** Строки истории модели профиля (spec 035 T114). */
     rowsModel,
     /** Ключ из ответа боту — до окончания входа (переживает перезагрузку). */

@@ -128,7 +128,7 @@ try {
   const bob2Page = sessions.bob2.page;
   await waitLog('bob2', 'нужна линковка этого устройства');
   const dev2Screen = await openDevicesScreen(bob2Page);
-  await dev2Screen.getByText(/Waiting for your other device/)
+  await dev2Screen.getByText(/Waiting for confirmation/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const dev1Screen = await openDevicesScreen(bob1Page);
   const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');

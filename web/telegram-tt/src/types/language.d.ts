@@ -2280,8 +2280,6 @@ export interface LangPair {
   'ParvaneRegisterFailed': undefined;
   'ParvaneCodeInvalid': undefined;
   'ParvaneTelegramCheck': undefined;
-  'ParvaneTelegramExpired': undefined;
-  'ParvaneTelegramLoginExpired': undefined;
   'ParvaneAuthLogIn': undefined;
   'ParvaneAuthTabLogIn': undefined;
   'ParvaneAuthModeLabel': undefined;
@@ -3011,7 +3009,6 @@ export interface LangPair {
   'TaskOfferEventLabel': undefined;
   'TaskOfferInPlanOpen': undefined;
   'TaskOfferLabel': undefined;
-  'TaskOfferMenuItem': undefined;
   'TaskOfferNeedsPlanner': undefined;
   'TaskOfferSend': undefined;
   'TaskOfferTitle': undefined;
@@ -3095,9 +3092,6 @@ export interface LangPair {
   'ParvaneAppearanceAnimationsOff': undefined;
   'ParvaneAppearanceFontHint': undefined;
   'ParvaneKeysBackupHint': undefined;
-  'ParvaneKeysBackupSave': undefined;
-  'ParvaneKeysBackupSaveHint': undefined;
-  'ParvaneKeysBackupRestore': undefined;
   'ParvaneAboutServer': undefined;
   'ParvaneCompose': undefined;
   'PlannerHealth': undefined;
@@ -3436,7 +3430,6 @@ export interface LangPair {
   'ParvaneResizePanel': undefined;
   'KnowledgeFolderDeleteWithNotes': undefined;
   'KnowledgeGuideReturn': undefined;
-  'ArticleMenuItem': undefined;
   'ArticleLabel': undefined;
   'ArticleRead': undefined;
   'ArticleSaveToNotes': undefined;
@@ -3458,10 +3451,8 @@ export interface LangPair {
   'ParvanePublicGroupWarning': undefined;
   'ParvanePublicPreview': undefined;
   'ParvanePublicHistory': undefined;
-  'ParvanePublicOptionsInfo': undefined;
   'ParvanePublicNameTaken': undefined;
   'ParvanePublicNameInvalid': undefined;
-  'ParvanePublicLinkHelp': undefined;
   'ParvanePublicNameOptional': undefined;
   'ParvanePublicNameInfo': undefined;
   'ParvaneTranslateAbout': undefined;
@@ -3650,7 +3641,6 @@ export interface LangPair {
   'ParvanePrivacyAddToGroups': undefined;
   'ParvanePrivacyEveryone': undefined;
   'ParvanePrivacyNobody': undefined;
-  'ParvanePrivacyWrittenTo': undefined;
   'ParvanePrivacyOnline': undefined;
   'ParvanePrivacyRelay': undefined;
   'ParvanePrivacyRelayHint': undefined;
@@ -3963,7 +3953,6 @@ export interface LangPair {
   'ParvaneRecoveryKeyRenew': undefined;
   'ParvaneRecoveryKeyRenewHint': undefined;
   'ParvaneRecoveryKeyAbout': undefined;
-  'ParvaneKeysBundleCaption': undefined;
   'ParvaneKeysBundleChats': undefined;
   'ParvaneKeysBundleFiles': undefined;
   'ParvaneKeysBundlePlanner': undefined;
@@ -4591,6 +4580,221 @@ export interface LangPair {
   'PvSysNotifyOnboardBackground': undefined;
   'PvSysNotifyOnboardBackgroundHint': undefined;
   'PvSysNotifyOnboardOn': undefined;
+  'ParvaneCallEnd': undefined;
+  'ParvaneCallLeave': undefined;
+  'ParvaneCallSpeaker': undefined;
+  'ParvaneCallSpeakerUnavailable': undefined;
+  'ParvaneCallRelayed': undefined;
+  'ParvaneCallDirect': undefined;
+  'ParvanePeerNote': undefined;
+  'ParvanePeerNotePlaceholder': undefined;
+  'ParvanePeerBio': undefined;
+  'ParvanePeerProtection': undefined;
+  'ParvanePeerL2ByPeer': undefined;
+  'ParvanePeerL2No': undefined;
+  'ParvanePeerCode': undefined;
+  'ParvanePeerCodeVerify': undefined;
+  'ParvanePeerCodeCopied': undefined;
+  'ParvanePeerProtectionHint': undefined;
+  'ParvanePeerShared': undefined;
+  'ParvanePeerShowHidden': undefined;
+  'ParvanePeerBlock': undefined;
+  'ParvanePeerUnblock': undefined;
+  'ParvaneDeviceKindPhone': undefined;
+  'ParvaneDeviceKindComputer': undefined;
+  'ParvaneDeviceKindBrowser': undefined;
+  'ParvaneDeviceThisComputer': undefined;
+  'ParvaneDeviceOnlineNow': undefined;
+  'ParvaneDeviceOldVersion': undefined;
+  'ParvaneDeviceTerminateOthers': undefined;
+  'ParvaneDeviceOfferTitlePhone': undefined;
+  'ParvaneDeviceKeysSaved': undefined;
+  'ParvaneDeviceDeclined': undefined;
+  'ParvaneDeviceDeclineFailed': undefined;
+  'ParvaneAccountSignOutComputer': undefined;
+  'ParvaneStolenLead': undefined;
+  'ParvaneStolenStepSignOutHint': undefined;
+  'ParvaneStolenStepMarkHint': undefined;
+  'ParvaneStolenStepPassword': undefined;
+  'ParvaneStolenStepPasswordHint': undefined;
+  'ParvaneStolenStepKey': undefined;
+  'ParvaneStolenStepKeyHint': undefined;
+  'ParvaneStolenPassword': undefined;
+  'ParvaneStolenRecoveryKey': undefined;
+  'ParvaneStolenNote': undefined;
+  'ParvaneStolenSubmit': undefined;
+  'ParvaneStolenContinue': undefined;
+  'ParvaneStolenJustSignOut': undefined;
+  'ParvaneStolenFailed': undefined;
+  'ParvaneConfirmWayKeyTextShort': undefined;
+  'ParvaneConfirmKeyLabel': undefined;
+  'ParvaneConfirmKeySubmit': undefined;
+  'ParvaneConfirmWayTelegramText': undefined;
+  'ParvaneConfirmDeclinedText': undefined;
+  'ParvaneConfirmRequestAgain': undefined;
+  'ParvaneRecoveryKeyFileDesktop': undefined;
+  'ParvaneRecoveryKeyPrint': undefined;
+  'ParvaneRecoveryKeyWhereLine': undefined;
+  'ParvaneAuthTelegramAccountTextPhone': undefined;
+  'ParvaneAuthTelegramStepOpenQrHint': undefined;
+  'ParvaneAuthTelegramStepStartHintDesktop': undefined;
+  'ParvaneAuthTelegramStepReturnKeyHint': undefined;
+  'ParvaneAuthTelegramQrChip': undefined;
+  'ParvaneAuthTelegramQrChipHide': undefined;
+  'ParvaneAuthTelegramExpiryLogin': undefined;
+  'ParvaneAuthTelegramExpired': undefined;
+  'ParvaneAuthTelegramRenew': undefined;
+  'ParvaneAuthTelegramRenewFailed': undefined;
+  'ParvaneAuthTelegramAgain': undefined;
+  'ParvaneAuthTelegramAgainShort': undefined;
+  'ParvaneAuthTelegramUseKey': undefined;
+  'ParvaneAuthTelegramKeyWrong': undefined;
+  'ParvaneAuthTelegramNotYou': undefined;
+  'ParvaneAuthUpgradeText': undefined;
+  'ParvaneDeletionDaysHint': undefined;
+  'ParvaneDeletionExportNote': undefined;
+  'ParvaneDeletionExportConfirm': undefined;
+  'ParvaneDeletionLeave': undefined;
+  'ParvaneCloudSaveHint': undefined;
+  'MessageSendFailedUnreachable': undefined;
+  'ParvaneFederationBlockedPane': undefined;
+  'ParvaneJoinRequestLocal': undefined;
+  'ParvaneJoinRequestRemote': undefined;
+  'TaskOfferStepsShow': undefined;
+  'TaskOfferNoDue': undefined;
+  'ParvaneTypeDone': undefined;
+  'ParvanePublicMark': undefined;
+  'ParvaneNewChannelInfo': undefined;
+  'AttachMenuGallery': undefined;
+  'AttachMenuNote': undefined;
+  'AttachMenuPlan': undefined;
+  'AttachMenuPlace': undefined;
+  'AttachMenuTrack': undefined;
+  'AttachMenuTrackTitle': undefined;
+  'AttachMenuTrackSearch': undefined;
+  'AttachMenuTrackStarred': undefined;
+  'AttachMenuTrackEmpty': undefined;
+  'ArticleMore': undefined;
+  'ArticleCopyText': undefined;
+  'ArticleTextCopied': undefined;
+  'ArticleOpenInChat': undefined;
+  'ParvanePrivacyContacts': undefined;
+  'ParvanePrivacyMessageHint': undefined;
+  'ParvanePrivacyCallHint': undefined;
+  'ParvanePasswordCurrent': undefined;
+  'ParvanePasswordNew': undefined;
+  'ParvanePasswordRepeat': undefined;
+  'ParvanePasswordRule': undefined;
+  'ParvanePasswordHasDigits': undefined;
+  'ParvanePasswordHasSymbols': undefined;
+  'ParvanePasswordMismatch': undefined;
+  'ParvanePasswordSignOutOthers': undefined;
+  'ParvanePasswordKeysHint': undefined;
+  'ParvanePasswordOthersFailed': undefined;
+  'ParvaneAccountEmail': undefined;
+  'ParvaneAccountNickHint': undefined;
+  'ParvaneKeysScreenHint': undefined;
+  'ParvaneKeysAccountCaption': undefined;
+  'ParvaneKeysBundleOn': undefined;
+  'ParvaneKeysBundleWhat': undefined;
+  'ParvaneRecoveryKeyCreated': undefined;
+  'ParvaneRecoveryKeyCreate': undefined;
+  'ParvaneKeysFileFresh': undefined;
+  'ParvaneKeysFileStale': undefined;
+  'ParvaneKeysFileSaveNew': undefined;
+  'ParvaneKeysFileRestore': undefined;
+  'ParvaneKeysFileTitle': undefined;
+  'ParvaneKeysFileChoose': undefined;
+  'ParvaneKeysFileNotChosen': undefined;
+  'ParvaneKeysFilePassword': undefined;
+  'ParvaneKeysFilePasswordRule': undefined;
+  'ParvaneKeysFileRepeat': undefined;
+  'ParvaneKeysFileWhere': undefined;
+  'ParvaneKeysFileDownloads': undefined;
+  'ParvaneKeysFileSaveButton': undefined;
+  'ParvaneKeysFileRestoreButton': undefined;
+  'ParvaneKeysFileForgetHint': undefined;
+  'ParvaneStorageCaption': undefined;
+  'ParvaneStorageMedia': undefined;
+  'ParvaneStorageMusic': undefined;
+  'ParvaneStorageCloud': undefined;
+  'ParvaneStorageOther': undefined;
+  'ParvaneStorageClear': undefined;
+  'ParvaneStorageHint': undefined;
+  'ParvaneAutoloadTitle': undefined;
+  'ParvaneAutoloadAlways': undefined;
+  'ParvaneAutoloadWifi': undefined;
+  'ParvaneAutoloadNever': undefined;
+  'ParvaneAutoloadHint': undefined;
+  'ParvaneCacheKeepTitle': undefined;
+  'ParvaneCacheKeepWeek': undefined;
+  'ParvaneCacheKeepMonth': undefined;
+  'ParvaneCacheKeepQuarter': undefined;
+  'ParvaneCacheKeepForever': undefined;
+  'ParvaneLanguageSystem': undefined;
+  'ParvaneLanguageInstant': undefined;
+  'ParvaneLanguageModulesHint': undefined;
+  'ParvaneLanguageTime': undefined;
+  'ParvaneLanguageWeekStart': undefined;
+  'ParvaneWeekStartMonday': undefined;
+  'ParvaneWeekStartSunday': undefined;
+  'ParvaneWeekStartSaturday': undefined;
+  'ParvaneLanguageUnits': undefined;
+  'ParvaneLanguageUnitsMetric': undefined;
+  'ParvaneLanguageSpellcheck': undefined;
+  'ParvaneLanguageInputHint': undefined;
+  'ParvaneLanguageTranslate': undefined;
+  'ParvaneAboutAppVersion': undefined;
+  'ParvaneAboutServerVersion': undefined;
+  'ParvaneAboutUpdate': undefined;
+  'ParvaneAboutUpdateAvailable': undefined;
+  'ParvaneAboutUpdateFrom': undefined;
+  'ParvaneAboutUpdateNone': undefined;
+  'ParvaneAboutUpdateNever': undefined;
+  'ParvaneAboutUpdateApply': undefined;
+  'ParvaneAboutUpdateCheck': undefined;
+  'ParvaneAboutAutoUpdate': undefined;
+  'ParvaneAboutAutoUpdateHint': undefined;
+  'ParvaneAboutWhatsNew': undefined;
+  'ParvaneAboutWhatsNewHint': undefined;
+  'ParvaneAboutSource': undefined;
+  'ParvaneAboutLicenses': undefined;
+  'ParvaneAboutLicensesHint': undefined;
+  'ParvaneAboutHotkeys': undefined;
+  'ParvaneNotifyHealthHint': undefined;
+  'ParvaneNotifyFilesHint': undefined;
+  'ParvaneNotifyValueBackground': undefined;
+  'ParvaneNotifyValueOpen': undefined;
+  'ParvaneNotifyValueOff': undefined;
+  'ParvaneKeysValueSaved': undefined;
+  'ParvaneOverviewTerminate': undefined;
+  'ParvaneOverviewOpen': undefined;
+  'ParvaneExportWhat': undefined;
+  'ParvaneExportChatsHint': undefined;
+  'ParvaneExportMediaHint': undefined;
+  'ParvaneExportPlannerHint': undefined;
+  'ParvaneExportNotesHint': undefined;
+  'ParvaneExportContactsHint': undefined;
+  'ParvaneExportPlannerShort': undefined;
+  'ParvaneExportCloudShort': undefined;
+  'ParvaneExportStageEnd': undefined;
+  'ParvaneExportCancel': undefined;
+  'ParvaneProfileChangePhoto': undefined;
+  'ParvaneProfileDropHint': undefined;
+  'ParvaneProfileBioPlaceholder': undefined;
+  'ParvaneProfileMoreFields': undefined;
+  'ParvaneProfileSave': undefined;
+  'ParvaneDeleteSubmitShort': undefined;
+  'ParvaneBugSteps': undefined;
+  'ParvaneBugStepsPlaceholder': undefined;
+  'ParvaneBugAttach': undefined;
+  'ParvaneBugAttachShot': undefined;
+  'ParvaneBugAttachShotHint': undefined;
+  'ParvaneBugEnvironment': undefined;
+  'ParvaneBugSentShot': undefined;
+  'ParvaneBugSaveFile': undefined;
+  'ParvanePinHideText': undefined;
+  'TaskOfferResponseFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -6841,9 +7045,6 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
     'version': V;
   };
-  'ParvaneAboutVersion': {
-    'version': V;
-  };
   'PlannerHealthKcal': {
     'value': V;
   };
@@ -7220,9 +7421,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneExportSectionOf': {
     'done': V;
     'total': V;
-  };
-  'ParvaneHelpHint': {
-    'folder': V;
   };
   'ParvaneNickOldHint': {
     'nick': V;
@@ -7612,6 +7810,81 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PvSysPermDeniedText': {
     'what': V;
+  };
+  'ParvanePeerL2Since': {
+    'date': V;
+  };
+  'ParvanePeerHiddenIn': {
+    'title': V;
+  };
+  'ParvaneDeviceSeenShort': {
+    'time': V;
+  };
+  'ParvaneDeviceSeenToday': {
+    'time': V;
+  };
+  'ParvaneStolenTitle': {
+    'kind': V;
+  };
+  'ParvaneStolenStepSignOut': {
+    'name': V;
+  };
+  'ParvaneStolenStepMark': {
+    'name': V;
+  };
+  'ParvaneStolenSignedOut': {
+    'name': V;
+  };
+  'ParvaneAuthStepTelegram': {
+    'step': V;
+    'total': V;
+  };
+  'ParvaneDeletionTitle': {
+    'date': V;
+  };
+  'ParvaneDeletionText': {
+    'requested': V;
+    'date': V;
+  };
+  'ParvaneDeletionTextNoRequested': {
+    'date': V;
+  };
+  'ParvaneContactsLocal': {
+    'count': V;
+  };
+  'ParvaneContactsOtherServers': {
+    'count': V;
+  };
+  'MusicSendTrackPreview': {
+    'artist': V;
+  };
+  'MusicSendPlaylistPreview': {
+    'count': V;
+  };
+  'ParvaneKeysBundleOnAt': {
+    'when': V;
+  };
+  'ParvaneLanguageSystemNow': {
+    'language': V;
+  };
+  'ParvaneAboutVersionBuild': {
+    'version': V;
+    'build': V;
+  };
+  'ParvaneAboutProtocol': {
+    'version': V;
+  };
+  'ParvaneAboutUpdateChecked': {
+    'when': V;
+  };
+  'ParvaneAboutAdmin': {
+    'address': V;
+  };
+  'ParvaneBugRecipient': {
+    'address': V;
+  };
+  'ParvanePinAutoLockAfter': {
+    'time': V;
   };
 }
 
@@ -8314,6 +8587,31 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'KnowledgeNotesCount': {
+    'count': V;
+  };
+  'ParvaneDeletionDays': {
+    'count': V;
+  };
+  'TaskOfferStepCount': {
+    'count': V;
+  };
+  'ParvaneGroupMembersCount': {
+    'count': V;
+  };
+  'ParvanePasswordShort': {
+    'count': V;
+  };
+  'ParvanePasswordFair': {
+    'count': V;
+  };
+  'ParvanePasswordStrong': {
+    'count': V;
+  };
+  'ParvaneHelpHintCount': {
+    'count': V;
+    'folder': V;
+  };
+  'ParvaneHelpNotesCount': {
     'count': V;
   };
 }

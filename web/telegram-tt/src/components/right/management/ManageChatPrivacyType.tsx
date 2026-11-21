@@ -1,6 +1,6 @@
 import type { FC } from '../../../lib/teact/teact';
 import {
-  memo, useCallback, useEffect, useMemo, useState,
+  memo, useCallback, useEffect, useLayoutEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -18,6 +18,7 @@ import {
 import { selectCurrentLimit } from '../../../global/selectors/limits';
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
+import { setRightHeaderAction } from '../rightHeaderAction';
 
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -36,7 +37,6 @@ import Switch from '../../gili/primitives/Switch';
 import SwitchField from '../../gili/templates/SwitchField';
 import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
-import FloatingActionButton from '../../ui/FloatingActionButton';
 import ListItem from '../../ui/ListItem';
 import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
@@ -296,6 +296,15 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   }];
 
   const isLoading = progress === ManagementProgress.InProgress;
+
+  // «Готово» текстом в шапке (доска `XpChat`): видно, когда есть что сохранить
+  const isSaveShown = isActive && canUpdate && Boolean(canEditType);
+  useLayoutEffect(() => {
+    setRightHeaderAction(isSaveShown
+      ? { label: lang('ParvaneTypeDone'), isDisabled: isLoading, onClick: handleSave }
+      : undefined);
+  }, [isSaveShown, isLoading, handleSave, lang]);
+  useLayoutEffect(() => () => setRightHeaderAction(undefined), []);
   const shouldRenderUsernamesManage = privacyType === 'public' && chat.usernames && chat.usernames.length > 0;
 
   function renderPurchaseLink() {
@@ -394,9 +403,8 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
               )}
             </div>
             {error === USERNAME_PURCHASE_ERROR && renderPurchaseLink()}
-            <IslandDescription dir="auto">
-              {lang('ParvanePublicLinkHelp')}
-            </IslandDescription>
+            {/* Доски `XpChat`, `XdChat`: одно пояснение. Текст доски «сообщения шифруются для участников» не
+              ставим: секрет публичной группы открыт (PUBLIC-1) — остаётся честное предупреждение */}
             <IslandDescription dir="auto" data-public-warning>
               {lang('ParvanePublicGroupWarning')}
             </IslandDescription>
@@ -426,11 +434,6 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
               )}
               {canInvite && <ManageJoinMode chatId={chat.id} exportedInvites={exportedInvites} />}
             </Island>
-            {isPublic && canChangeInfo && (
-              <IslandDescription dir="auto">
-                {lang('ParvanePublicOptionsInfo')}
-              </IslandDescription>
-            )}
           </>
         )}
         {groupL2?.isAvailable && (
@@ -505,14 +508,6 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
           </>
         )}
       </div>
-      <FloatingActionButton
-        isShown={canUpdate && Boolean(canEditType)}
-        disabled={isLoading}
-        ariaLabel={oldLang('Save')}
-        onClick={handleSave}
-        iconName="check"
-        isLoading={isLoading}
-      />
       <ConfirmDialog
         isOpen={isUsernameLostDialogOpen}
         onClose={closeUsernameLostDialog}

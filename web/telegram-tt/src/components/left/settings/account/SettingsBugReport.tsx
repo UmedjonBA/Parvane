@@ -1,13 +1,18 @@
 import { memo, useEffect, useState } from '../../../../lib/teact/teact';
 import { getActions } from '../../../../global';
 
-import type { BugReportArea } from './bugReport';
+import type { BugReportArea, BugReportInput } from './bugReport';
 
 import buildClassName from '../../../../util/buildClassName';
 import { readStoredColorScheme } from '../../../../util/colorScheme';
+import { PARVANE_BUG_REPORT_ADDRESS } from '../../../../util/parvaneDiag';
 import { MODULE_TITLE_KEYS } from '../../../main/parvaneModuleNav';
-import { BUG_REPORT_AREAS, describeBugReportEnvironment, sendBugReport } from './bugReport';
+import { getProfileServer } from '../profile/profileFormat';
+import {
+  BUG_REPORT_AREAS, captureWindow, describeBugReportEnvironment, saveBugReport, sendBugReport,
+} from './bugReport';
 
+import useAppLayout from '../../../../hooks/useAppLayout';
 import useFlag from '../../../../hooks/useFlag';
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
@@ -37,15 +42,20 @@ const AREA_KEYS = {
   other: 'ParvaneBugAreaOther',
 } as const satisfies Record<BugReportArea, string>;
 
-// Parvane (spec 041, доска `XpProfile`): «Сообщить об ошибке» экраном — где (чипы модулей), что пошло не так,
-// «Приложить журнал приложения» (без текста сообщений и записей), «Что будет отправлено · посмотреть» и «Отправить
-// администратору сервера». Отчёт уходит сообщением с вложением на адрес отчётов сервера (`bugReport.ts`)
+// Parvane (доски `XpProfile`, `ZdProfileY`): «Сообщить об ошибке» — кому уйдёт отчёт, «Что случилось» и «Что делали
+// перед этим», «Где» (чипы модулей), «Что приложим»: журнал приложения за последний час (без текста сообщений и
+// ключей), снимок окна (кадр вкладки через выбор экрана браузера), версия и система, «Посмотреть, что уйдёт».
+// «Отправить отчёт» — сообщением с вложением на адрес отчётов сервера (`bugReport.ts`), «Сохранить в файл» — тот же
+// JSON в загрузки. На компьютере — две колонки: форма слева, «Что приложим» справа
 const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
   const { showNotification } = getActions();
   const lang = useLang();
+  const { isDesktop } = useAppLayout();
   const [area, setArea] = useState<BugReportArea>('chats');
   const [description, setDescription] = useState('');
+  const [steps, setSteps] = useState('');
   const [isLogAttached, setIsLogAttached] = useState(true);
+  const [isShotAttached, setIsShotAttached] = useState(false);
   const [isPreviewShown, showPreview, hidePreview] = useFlag();
   const [isSending, setIsSending] = useState(false);
 
@@ -58,6 +68,13 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
 
   const scheme = SCHEME_NAMES[readStoredColorScheme()];
   const text = description.trim();
+  const server = getProfileServer();
+  const recipient = PARVANE_BUG_REPORT_ADDRESS.includes('@') || !server
+    ? PARVANE_BUG_REPORT_ADDRESS : `${PARVANE_BUG_REPORT_ADDRESS}@${server}`;
+
+  const buildInput = (): BugReportInput => ({
+    description: text, steps: steps.trim(), area, withLog: isLogAttached, scheme,
+  });
 
   const handleArea = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setArea(e.currentTarget.dataset.area as BugReportArea);
@@ -66,13 +83,13 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
   const handleSend = useLastCallback(async () => {
     if (!text || isSending) return;
     setIsSending(true);
-    const result = await sendBugReport({
-      description: text, area, withLog: isLogAttached, scheme,
-    });
+    const screenshot = isShotAttached ? await captureWindow() : undefined;
+    const result = await sendBugReport({ ...buildInput(), screenshot });
     setIsSending(false);
     if (result === 'sent') {
       showNotification({ message: lang('ParvaneBugReportSent') });
       setDescription('');
+      setSteps('');
       onReset();
       return;
     }
@@ -81,11 +98,64 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
     });
   });
 
-  return (
-    <div
-      className={buildClassName('settings-content custom-scroll', profile.screen, styles.screen)}
-      data-bug-report
-    >
+  const handleSave = useLastCallback(() => {
+    if (!text) return;
+    void saveBugReport(buildInput());
+  });
+
+  const environment = describeBugReportEnvironment(scheme);
+
+  function renderButtons() {
+    return (
+      <div className={styles.buttonsRow}>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc, !isDesktop && kit.btnWide)}
+          disabled={!text || isSending}
+          data-bug-send
+          onClick={handleSend}
+        >
+          {lang(isSending ? 'ParvaneBugReportSending' : 'ParvaneBugSend')}
+        </button>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, !isDesktop && kit.btnWide)}
+          disabled={!text}
+          data-bug-save
+          onClick={handleSave}
+        >
+          {lang('ParvaneBugSaveFile')}
+        </button>
+      </div>
+    );
+  }
+
+  const form = (
+    <div className={styles.screenColumn}>
+      <div className={styles.field}>
+        <label className={styles.label} htmlFor="parvane-bug-text">{lang('ParvaneBugWhat')}</label>
+        <textarea
+          id="parvane-bug-text"
+          className={kit.textarea}
+          placeholder={lang('ParvaneBugReportPlaceholder')}
+          maxLength={DESCRIPTION_MAX_LENGTH}
+          value={description}
+          data-bug-text
+          onChange={(e) => setDescription(e.currentTarget.value)}
+        />
+      </div>
+      <div className={styles.field}>
+        <label className={styles.label} htmlFor="parvane-bug-steps">{lang('ParvaneBugSteps')}</label>
+        <textarea
+          id="parvane-bug-steps"
+          className={kit.textarea}
+          placeholder={lang('ParvaneBugStepsPlaceholder')}
+          maxLength={DESCRIPTION_MAX_LENGTH}
+          value={steps}
+          data-bug-steps
+          onChange={(e) => setSteps(e.currentTarget.value)}
+        />
+      </div>
       <div className={styles.field}>
         <p className={styles.label}>{lang('ParvaneBugWhere')}</p>
         <div className={styles.chips} role="group" aria-label={lang('ParvaneBugWhere')}>
@@ -103,18 +173,13 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
           ))}
         </div>
       </div>
-      <div className={styles.field}>
-        <label className={styles.label} htmlFor="parvane-bug-text">{lang('ParvaneBugWhat')}</label>
-        <textarea
-          id="parvane-bug-text"
-          className={kit.textarea}
-          placeholder={lang('ParvaneBugReportPlaceholder')}
-          maxLength={DESCRIPTION_MAX_LENGTH}
-          value={description}
-          data-bug-text
-          onChange={(e) => setDescription(e.currentTarget.value)}
-        />
-      </div>
+      {isDesktop && renderButtons()}
+    </div>
+  );
+
+  const attachments = (
+    <div className={styles.screenColumn}>
+      <p className={styles.label}>{lang('ParvaneBugAttach')}</p>
       <div className={profile.group}>
         <ProfileSwitchRow
           title={lang('ParvaneBugAttachLog')}
@@ -123,6 +188,17 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
           onChange={setIsLogAttached}
           data-bug-log
         />
+        <ProfileSwitchRow
+          title={lang('ParvaneBugAttachShot')}
+          hint={lang('ParvaneBugAttachShotHint')}
+          isOn={isShotAttached}
+          onChange={setIsShotAttached}
+          data-bug-shot
+        />
+        <div className={profile.setRow} data-bug-environment>
+          <span className={profile.setTitle}>{lang('ParvaneBugEnvironment')}</span>
+          <span className={profile.setValue}>{environment}</span>
+        </div>
         <button
           type="button"
           className={buildClassName(profile.setRow, profile.setRowAction)}
@@ -137,21 +213,27 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
       {isPreviewShown && (
         <pre className={styles.preview}>
           {[
-            describeBugReportEnvironment(scheme),
+            environment,
             lang(isLogAttached ? 'ParvaneBugSentWithLog' : 'ParvaneBugSentNoLog'),
-          ].join('\n')}
+            isShotAttached ? lang('ParvaneBugSentShot') : undefined,
+          ].filter(Boolean).join('\n')}
         </pre>
       )}
       <p className={profile.hint}>{lang('ParvaneBugReportAbout')}</p>
-      <button
-        type="button"
-        className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}
-        disabled={!text || isSending}
-        data-bug-send
-        onClick={handleSend}
-      >
-        {lang(isSending ? 'ParvaneBugReportSending' : 'ParvaneBugSend')}
-      </button>
+    </div>
+  );
+
+  return (
+    <div
+      className={buildClassName('settings-content custom-scroll', profile.screen, styles.screen)}
+      data-bug-report
+    >
+      <p className={profile.hint} data-bug-recipient>{lang('ParvaneBugRecipient', { address: recipient })}</p>
+      <div className={buildClassName(isDesktop && styles.twoColumns)}>
+        {form}
+        {attachments}
+      </div>
+      {!isDesktop && renderButtons()}
     </div>
   );
 };

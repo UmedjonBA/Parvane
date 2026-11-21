@@ -559,6 +559,7 @@ export class ParvaneStore {
       ...this.buildUserName(address),
       // Username = local-part адреса: включает @-автокомплит и упоминания
       usernames: [{ username: address.split('@')[0], isActive: true, isEditable: false }],
+      serverDomain: this.foreignDomainOf(address),
       phoneNumber: this.profileByAddress.get(address)?.phone || '',
       color: {
         type: 'regular',
@@ -566,6 +567,13 @@ export class ParvaneStore {
       },
       avatarPhotoId: this.avatarByAddress.get(address),
     };
+  }
+
+  // Сервер адреса, если он не свой; свой адрес ещё неизвестен — не помечать
+  private foreignDomainOf(address: string) {
+    const own = this.self.split('@')[1];
+    const domain = address.split('@')[1];
+    return own && domain && domain !== own ? domain : undefined;
   }
 
   private buildUserName(address: string): Pick<ApiUser, 'firstName' | 'lastName'> {

@@ -3,6 +3,8 @@
 // только их вид для показа в календаре.
 // Референс возможностей — макет пользователя planner.html (вариант «списки»).
 
+import { getWeekPosition } from '../../../util/weekStart';
+
 // Три статуса (spec 013); прежние `later` и `waiting` читаются как `queue`
 export type PlannerStatus = 'queue' | 'active' | 'done';
 export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'done'];
@@ -346,15 +348,15 @@ export function getMonthKeys(month: Date) {
   return Array.from({ length: count }, (_, i) => toDayKey(new Date(month.getFullYear(), month.getMonth(), i + 1)));
 }
 
-// Смещение первого дня месяца при неделе с понедельника
+// Смещение первого дня месяца от начала недели (первый день недели — настройка «Языка», `util/weekStart.ts`)
 export function getMonthOffset(month: Date) {
-  return (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
+  return getWeekPosition(new Date(month.getFullYear(), month.getMonth(), 1).getDay());
 }
 
-/** Неделя дня с понедельника по воскресенье. */
+/** Неделя дня, начиная с первого дня недели из настроек (по умолчанию — с понедельника). */
 export function getWeekKeys(day: string) {
-  const monday = addDays(day, -mondayBased(weekdayOf(day)));
-  return Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+  const first = addDays(day, -getWeekPosition(weekdayOf(day)));
+  return Array.from({ length: 7 }, (_, i) => addDays(first, i));
 }
 
 export function getYearMonths(year: number) {

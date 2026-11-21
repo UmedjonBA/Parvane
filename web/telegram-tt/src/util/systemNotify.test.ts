@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildMessageNotifyBody, buildMuteUntil, buildNotifyButtons, buildNotifyTitle, DEFAULT_NOTIFY_PREFS,
-  getIsNotifyAllowed, getIsQuietMinute, getWorkerNotifyTexts, parseReminderKey, readNotifyData, readNotifyPrefs,
-  resolveNotifyClick,
+  getIsNotifyAllowed, getIsQuietMinute, getReminderNotifyModule, getWorkerNotifyTexts, parseReminderKey, readNotifyData,
+  readNotifyPrefs, resolveNotifyClick,
 } from './systemNotify';
 
 const BODY = {
@@ -115,5 +115,16 @@ describe('системные уведомления', () => {
     expect(resolveNotifyClick({ kind: 'music', trackId: 't1' }, 'listen')).toEqual({
       command: { kind: 'music', trackId: 't1', action: 'listen' }, shouldFocus: true,
     });
+  });
+
+  it('отбой — модуль «Здоровье», записи — «План»; модули «Здоровье» и «Файлы» выключаются отдельно', () => {
+    expect(getReminderNotifyModule('bedtime@2026-11-21@0')).toBe('health');
+    expect(getReminderNotifyModule('task1@2026-11-21@15')).toBe('plan');
+    const prefs = readNotifyPrefs({ off: ['health', 'files'], isQuietCustom: true });
+    expect(prefs.off).toEqual(['health', 'files']);
+    expect(prefs.isQuietCustom).toBe(true);
+    const noon = new Date(2026, 10, 21, 12, 0);
+    expect(getIsNotifyAllowed(prefs, 'health', noon)).toBe(false);
+    expect(getIsNotifyAllowed(prefs, 'plan', noon)).toBe(true);
   });
 });

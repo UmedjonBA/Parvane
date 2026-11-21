@@ -51,6 +51,8 @@ export interface ApiUser {
   canManageBotForumTopics?: boolean;
   isGuestChatBot?: boolean;
   isGuardBot?: boolean;
+  // Parvane: сервер пользователя, если он не свой (федерация): «С других серверов», «другой сервер» у заявки
+  serverDomain?: string;
 }
 
 export interface ApiUserFullInfo {

@@ -82,17 +82,22 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
   await lastNameInput.fill(NEW_LAST_NAME);
 
   if (withAvatar) {
-    await page.locator('.AvatarEditable input[type="file"]').setInputFiles({
+    // «Сменить фото» (доски `XpProfile`, `RdProfile`): выбор файла, затем обрезка
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('[data-avatar-change]').click();
+    await (await chooser).setFiles({
       name: 'avatar.png',
       mimeType: 'image/png',
       buffer: makeSolidPng(AVATAR_SIZE, [200, 40, 40]),
     });
     await page.getByRole('button', { name: 'Crop' }).click();
-    await expect(page.locator('.AvatarEditable img')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+    await expect(page.locator('[data-edit-profile] [data-avatar-image] img'))
+      .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   }
 
-  // «Готово» в шапке (spec 041, `XpProfile`): сохранение завершилось, когда экран снял отметку несохранённого
-  await page.locator('[data-profile-done]:visible').click();
+  // «Готово» в шапке (телефон, `XpProfile`) либо «Сохранить» окна (компьютер, `RdProfile`): сохранение завершилось,
+  // когда форма сняла отметку несохранённого
+  await page.locator('[data-profile-done]:visible, [data-profile-save]:visible').first().click();
   await expect(page.locator('[data-edit-profile][data-dirty]')).toHaveCount(0, { timeout: LOGIN_TIMEOUT_MS });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -108,6 +113,7 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
   );
   if (withAvatar) {
     // Аватар пришёл с сервера (identity resolve + cloud download)
-    await expect(page.locator('.AvatarEditable img')).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+    await expect(page.locator('[data-edit-profile] [data-avatar-image] img'))
+      .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
   }
 });

@@ -10,6 +10,7 @@ import { selectUser, selectUserFullInfo } from '../../../../global/selectors';
 import buildClassName from '../../../../util/buildClassName';
 import { markContactsFromProfile } from '../../../../util/parvaneSection';
 import { formatProfileAddress, getProfileServer } from './profileFormat';
+import { openProfileWindow } from './profileRequests';
 
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
@@ -42,7 +43,12 @@ const ProfileHead = ({
   } = getActions();
   const lang = useLang();
 
+  // Компьютер — окно «Мой профиль» поверх «Обзора» (доска `RdProfile`), телефон — экран (`XpProfile`)
   const handleEdit = useLastCallback(() => {
+    if (variant === 'desk') {
+      openProfileWindow('edit');
+      return;
+    }
     openSettingsScreen({ screen: SettingsScreens.EditProfile });
   });
 

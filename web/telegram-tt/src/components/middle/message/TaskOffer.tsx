@@ -32,7 +32,7 @@ type StateProps = {
   usersById: Record<string, ApiUser>;
 };
 
-type RespondResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable';
+type RespondResult = 'ok' | 'exists' | 'needs-linking' | 'no-key' | 'unavailable' | 'failed';
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
@@ -82,6 +82,8 @@ const TaskOffer = ({
         showNotification({ message: lang('TaskOfferNeedsPlanner') });
       } else if (result === 'unavailable') {
         showNotification({ message: lang('TaskOfferUnavailable') });
+      } else if (result === 'failed') {
+        showNotification({ message: lang('TaskOfferResponseFailed') });
       } else if (isAccepted) {
         setIsAdded(true);
         const isKnown = result === 'exists';
@@ -165,10 +167,14 @@ const TaskOffer = ({
       <div className={styles.name}>{taskOffer.name}</div>
       {meta && <div className={buildClassName(styles.meta, kit.mono)}>{meta}</div>}
       {taskOffer.description && <p className={styles.description}>{taskOffer.description}</p>}
+      {/* Число шагов — в строке срока; сами шаги свёрнуты (доска `PhCalls`) */}
       {Boolean(taskOffer.steps.length) && (
-        <ol className={styles.steps}>
-          {taskOffer.steps.map((step, index) => <li key={`${index}${step}`}>{step}</li>)}
-        </ol>
+        <details className={styles.stepsBox} data-task-offer-steps>
+          <summary className={styles.stepsToggle}>{lang('TaskOfferStepsShow')}</summary>
+          <ol className={styles.steps}>
+            {taskOffer.steps.map((step, index) => <li key={`${index}${step}`}>{step}</li>)}
+          </ol>
+        </details>
       )}
       {/* «План» выключен сервером — карточка остаётся текстом, без действий (MODULES-1) */}
       {(gate.isOn || gate.canEnable) && renderActions()}

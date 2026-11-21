@@ -3,6 +3,8 @@ import { memo } from '../../../lib/teact/teact';
 import buildClassName from '../../../util/buildClassName';
 import { getCallInitial, hasVideoTrack } from './callTypes';
 
+import useLang from '../../../hooks/useLang';
+
 import CallVideo from './CallVideo';
 
 import styles from './Call.module.scss';
@@ -30,7 +32,9 @@ const TONE_CLASSES = [
 const CallPeerTile = ({
   peer, peerState, name, status, stream, isMuted, isCameraOff, isSpeaking, tone = 0,
 }: OwnProps) => {
+  const lang = useLang();
   const isPictureShown = hasVideoTrack(stream) && !isCameraOff;
+  const mutedLabel = lang('ParvaneCallPeerMuted');
   const isAway = peerState === 'busy' || peerState === 'declined';
 
   return (
@@ -60,7 +64,15 @@ const CallPeerTile = ({
       )}
       <span className={styles.tileName}>{name}</span>
       <span className={styles.tileStatus}>{status}</span>
-      {isMuted && <i className={buildClassName('icon icon-microphone-alt', styles.tileMuted)} aria-hidden />}
+      {isMuted && (
+        <i
+          className={buildClassName('icon icon-microphone-alt', styles.tileMuted)}
+          role="img"
+          aria-label={mutedLabel}
+          title={mutedLabel}
+          data-peer-muted
+        />
+      )}
     </div>
   );
 };

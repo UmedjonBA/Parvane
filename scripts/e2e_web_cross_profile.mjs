@@ -176,7 +176,7 @@ try {
   await openEditProfile(bobWeb.page);
   await bobWeb.page.getByLabel('Bio').fill(bobBio);
   await bobWeb.page.getByLabel('Phone', { exact: true }).fill(bobPhone);
-  await saveEditProfile(bobWeb.page);
+  // Цвет и канал сохраняются сразу; «Сохранить» окна — последним: после него окно закрывается
   await bobWeb.page.locator('.ListItem').filter({ hasText: 'Name color' }).first().click();
   // Палитра начинается с цвета 1, поэтому выбираем по классу цвета, а не по
   // позиции: ниже десктоп ждёт именно `color=2`
@@ -185,6 +185,7 @@ try {
   const picker = bobWeb.page.locator('.modal-dialog').filter({ has: bobWeb.page.locator('.ChatOrUserPicker-item') });
   await picker.locator('.ChatOrUserPicker-item').filter({ hasText: groupTitle }).first().click();
   await picker.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await saveEditProfile(bobWeb.page);
   await bobWeb.page.waitForTimeout(2000);
 
   // Десктоп перечитывает профиль собеседника при запуске/входящем сообщении

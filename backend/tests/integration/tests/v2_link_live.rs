@@ -204,15 +204,64 @@ async fn link_request_reaches_every_old_device_and_any_grants_live() {
         // Подмена сервером (другой оффер) не открывается
         assert!(d2.client.link_challenge_unwrap("d3", &b64.encode([1u8; 32]), &o.challenge_pub, &b64.decode(&o.challenge_wrap).unwrap()).is_err());
         // Грант под ключ проигравшего challenge — отказ, запрос жив
-        let bad = d2.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), box_payload: "BOX".into(), eph_pub: b64.encode([7u8; 65]) }.encode_to_vec());
+        let bad = d2.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), box_payload: "BOX".into(), eph_pub: b64.encode([7u8; 65]), ..Default::default() }.encode_to_vec());
         assert!(bad.is_err());
         assert_eq!(poll(&mut d1).offers.len(), 1);
         // d2 (не выставлявшее challenge) выдаёт грант ключом общего challenge
-        d2.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), box_payload: "BOX".into(), eph_pub: c_pub.clone() }.encode_to_vec()).expect("grant d2");
+        d2.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), box_payload: "BOX".into(), eph_pub: c_pub.clone(), ..Default::default() }.encode_to_vec()).expect("grant d2");
         assert!(poll(&mut d1).offers.is_empty(), "у d1 запрос исчез");
         assert!(poll(&mut d2).offers.is_empty(), "у d2 запрос исчез");
         let g = poll(&mut d3).grant.expect("грант новому устройству");
         assert_eq!(g.eph_pub, c_pub);
+    })
+    .await;
+    if result.is_err() {
+        eprintln!("журналы стека: {}", dir.display());
+    }
+    drop(stack);
+    result.unwrap();
+}
+
+/// spec 041: «Отклонить» на своём устройстве — запрос исчезает у всех, новое устройство узнаёт об отказе одним
+/// опросом; сессия вне журнала отказать не может; у запроса — подпись нового устройства.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn link_request_is_declined_by_own_device_live() {
+    let Some((stack, _nc)) = start().await else { return };
+    let addr = stack.gateway_tcp.clone();
+    let user = format!("decliner{}@local", free_port());
+    let dir = stack.dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let mut d1 = Device::register(&addr, &user, "d1");
+        // Новое устройство называет себя при входе
+        let (mut id, _) = Conn::connect(&addr, Channel::Identified);
+        let issue = ipb::SessionIssueRequest {
+            login: user.clone(), password: PASSWORD.into(), device_id: "d3".into(), client_kind: "Firefox, Linux".into(), ..Default::default()
+        };
+        let tok = id.call("identity.session.issue", issue.encode_to_vec())
+            .map(|b| ipb::SessionIssueResponse::decode(b.as_slice()).unwrap_or_default().token)
+            .expect("session.issue d3");
+        id.send(frame::Kind::Auth(Auth { token: tok }));
+        assert!(matches!(id.recv().and_then(|f| f.kind), Some(frame::Kind::AuthOk(_))), "auth d3");
+        let commitment = b64.encode(Sha256::digest([4u8; 65]));
+        id.call("identity.link.offer", ipb::LinkOfferRequest { commitment, signing_key: "S".into(), ..Default::default() }.encode_to_vec()).expect("offer");
+        let p = poll(&mut d1);
+        assert_eq!(p.offers.len(), 1);
+        assert_eq!(p.offers[0].label, "Firefox, Linux", "запрос несёт подпись нового устройства");
+        // Вошедший паролем вне журнала отказать не может
+        let outsider = login(&addr, &user, "d9");
+        let mut outsider_id = outsider.id;
+        let refused = outsider_id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), decline: true, ..Default::default() }.encode_to_vec());
+        assert!(refused.is_err(), "отказ — только устройством журнала");
+        d1.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), decline: true, ..Default::default() }.encode_to_vec()).expect("decline");
+        assert!(poll(&mut d1).offers.is_empty(), "отклонённый запрос исчез");
+        let b = id.call("identity.link.poll", ipb::LinkPollRequest {}.encode_to_vec()).expect("poll d3");
+        let r = ipb::LinkPollResponse::decode(b.as_slice()).unwrap();
+        assert!(r.declined && r.grant.is_none(), "новое устройство видит отказ");
+        let b = id.call("identity.link.poll", ipb::LinkPollRequest {}.encode_to_vec()).expect("poll d3 again");
+        assert!(!ipb::LinkPollResponse::decode(b.as_slice()).unwrap().declined, "отметка одноразовая");
+        let again = d1.id.call("identity.link.grant", ipb::LinkGrantRequest { device_id: "d3".into(), decline: true, ..Default::default() }.encode_to_vec());
+        assert!(again.is_err(), "без живого запроса отказывать нечему");
     })
     .await;
     if result.is_err() {

@@ -34,7 +34,7 @@ const PREVIEW_MAX_LENGTH = 220;
 // Parvane (ARTICLE-1): статья в чате — карточка с началом текста, «Читать» и «В заметки» (доска `ZpChat`);
 // замена «Статьи» Telegram, где вместо редактора статей — заметки
 const ArticleCard = ({ article, message }: OwnProps) => {
-  const { showNotification, openForwardMenu } = getActions();
+  const { showNotification, openForwardMenu, focusMessage } = getActions();
   const lang = useLang();
   const [isOpen, open, close] = useFlag();
   const [isSaving, setIsSaving] = useState(false);
@@ -51,6 +51,11 @@ const ArticleCard = ({ article, message }: OwnProps) => {
     } finally {
       setIsSaving(false);
     }
+  });
+
+  const handleOpenInChat = useLastCallback(() => {
+    close();
+    focusMessage({ chatId: message.chatId, messageId: message.id });
   });
 
   const handleForward = useLastCallback(() => {
@@ -106,6 +111,7 @@ const ArticleCard = ({ article, message }: OwnProps) => {
         subtitle={subtitle}
         date={message.date}
         onForward={handleForward}
+        onOpenInChat={handleOpenInChat}
         onClose={close}
       />
       <PvModuleOff

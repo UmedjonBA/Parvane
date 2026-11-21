@@ -12,6 +12,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   assertNoPageErrors,
+  closeRightColumn,
   createGroupViaUi,
   expectToast,
   findMessage,
@@ -134,6 +135,22 @@ try {
   await d.locator('.MiddleHeader').getByText(title).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await d.waitForTimeout(1500);
   assert.equal(await findMessage(d, spam2).count(), 0, 'скрытые сообщения вернулись после перезагрузки');
+  // Превью группы в списке чатов не берёт последнее сообщение скрытого участника (модель, `chat_view`)
+  const groupRow = d.locator('#LeftColumn .ListItem').filter({ hasText: title }).first();
+  await groupRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert(!(await groupRow.innerText()).includes(spam2), 'превью группы показывает сообщение скрытого участника');
+  // «Показать сообщения участника» — из его профиля (доска `RpChat`), а не только из уведомления
+  await openPrivateChatStrict(d, address('mallory'));
+  await d.locator('.MiddleHeader .ChatInfo').first().click();
+  const hiddenRow = d.locator('#RightColumn [data-peer-hidden-in]');
+  await hiddenRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await hiddenRow.click();
+  await hiddenRow.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await closeRightColumn(d);
+  await openGroupChatByTitle(d, title);
+  await findMessage(d, spam2).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => assert.fail('«Показать» из профиля не вернуло сообщения участника'));
+  console.log('OK: превью без скрытого участника, «Показать» из его профиля');
   await findMessage(c, spam2).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await fileReport(c, spam2, {
     reason: 'insult', comment: '', target: 'admins', hideAuthor: false,

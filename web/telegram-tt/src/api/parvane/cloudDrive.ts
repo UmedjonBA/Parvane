@@ -948,6 +948,18 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       errorOf,
     }),
 
+    /** «Файлы диска на устройстве» в «Данных и памяти» (доска `DkSettingsB`): web держит открытые файлы только в
+     * памяти вкладки — столько байт содержимого для просмотра сейчас там. */
+    parvaneCloudCacheBytes() {
+      return Promise.resolve(previewBytes);
+    },
+
+    /** «Очистить»: забыть содержимое для просмотра (снова откроется — скачается заново). */
+    parvaneCloudCacheClear() {
+      [...previews.keys()].forEach(forgetPreview);
+      return Promise.resolve(true);
+    },
+
     /** Состояние раздела; первый вызов запускает подключение и синхронизацию. */
     async parvaneCloudState(): Promise<CloudDriveState> {
       const cloud = deps.cloud();

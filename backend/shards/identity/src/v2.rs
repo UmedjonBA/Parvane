@@ -591,15 +591,26 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !r.client_kind.is_empty() {
                 p["client"] = json!(r.client_kind);
             }
-            let v = v1_call(nc, p, |msg| handle_issue(nc, pool, &ctx.encoding, msg)).await?;
+            let mut v = v1_call(nc, p.clone(), |msg| handle_issue(nc, pool, &ctx.encoding, msg)).await?;
             if v["twofa_required"].as_bool() == Some(true) {
-                return Ok(pb::SessionIssueResponse {
-                    twofa_required: true,
-                    login_token: s(&v, "login_token"),
-                    telegram_bot: s(&v, "telegram_bot"),
-                    ..Default::default()
+                // spec 041: пароль верен, вход ждёт Telegram — ключ восстановления подтверждает его вместо бота
+                match twofa_by_recovery_key(ctx, pool, &login, &r, &s(&v, "login_token")).await? {
+                    Some(token) => {
+                        p["login_token"] = json!(token);
+                        v = v1_call(nc, p, |msg| handle_issue(nc, pool, &ctx.encoding, msg)).await?;
+                    }
+                    None => {
+                        return Ok(pb::SessionIssueResponse {
+                            twofa_required: true,
+                            login_token: s(&v, "login_token"),
+                            telegram_bot: s(&v, "telegram_bot"),
+                            recovery_key_wrong: !r.recovery_key.is_empty(),
+                            twofa_recovery: seckey::has_root_backup(&ctx.v2, &login).await?,
+                            ..Default::default()
+                        }
+                        .encode_to_vec());
+                    }
                 }
-                .encode_to_vec());
             }
             // Аккаунт ждёт подтверждения — не отказ, а шаг входа (текста ошибок
             // в протоколе нет, кодом это от неверного пароля не отличить).
@@ -621,7 +632,14 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             // Аккаунт ждёт удаления (spec 027): пароль верен, но токен — только с явной отменой удаления
             if let Some(at) = delete::pending_until(&ctx.v2, &login).await {
                 if !r.cancel_deletion {
-                    return Ok(pb::SessionIssueResponse { deletion_at_ms: at, address: login, ..Default::default() }.encode_to_vec());
+                    let requested = delete::requested_at(&ctx.v2, &login).await;
+                    return Ok(pb::SessionIssueResponse {
+                        deletion_at_ms: at,
+                        deletion_requested_ms: requested,
+                        address: login,
+                        ..Default::default()
+                    }
+                    .encode_to_vec());
                 }
                 delete::cancel(&ctx.v2, &login).await?;
             }
@@ -785,6 +803,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             // привязку может только оно. Вошедший одним паролем видит лишь свой challenge и грант: иначе он
             // узнавал `device_id` нового устройства и входил «как» оно.
             let sees_offers = log_has_active_device(&req.user, &req.device_id).await.unwrap_or(false);
+            let labels = if sees_offers { crate::devices::device_labels(&ctx.pool, &req.user).await } else { Default::default() };
             let offers = v["offers"]
                 .as_array()
                 .cloned()
@@ -800,6 +819,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     created_ms: o["created_at"].as_i64().unwrap_or(0) * 1000,
                     challenge_pub: s(o, "challenge_pub"),
                     challenge_wrap: s(o, "challenge_wrap"),
+                    label: labels.get(&s(o, "device_id")).map(|(label, _)| label.clone()).unwrap_or_default(),
                 })
                 .collect();
             let grant = v.get("grant").filter(|g| g.is_object()).map(|g| pb::LinkGrant {
@@ -807,7 +827,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 box_payload: s(g, "box_payload"),
                 eph_pub: s(g, "eph_pub"),
             });
-            Ok(pb::LinkPollResponse { offers, grant, challenge: s(&v, "challenge") }.encode_to_vec())
+            // spec 041: грант с пустым боксом — отметка отказа (`link::decline_link_offer`), а не грант
+            let declined = grant.as_ref().is_some_and(|g| g.box_payload.is_empty());
+            let grant = grant.filter(|g| !g.box_payload.is_empty());
+            Ok(pb::LinkPollResponse { offers, grant, challenge: s(&v, "challenge"), declined }.encode_to_vec())
         }
         "identity.link.challenge" => {
             require_user(&req)?;
@@ -828,6 +851,18 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             // может занять чужой оффер своим challenge или грантом (срыв привязки нового устройства).
             if !log_has_active_device(&req.user, &req.device_id).await? {
                 return Err(ErrorCode::Forbidden);
+            }
+            // spec 041: «Отклонить» на своём устройстве — запрос гасится, новое устройство узнаёт об отказе
+            if r.decline {
+                let declined = crate::link::decline_link_offer(pool, &req.user, &r.device_id).await.map_err(|e| {
+                    warn!("identity v2: отказ в привязке не записан: {e}");
+                    ErrorCode::NotFound
+                })?;
+                if !declined {
+                    return Err(ErrorCode::NotFound);
+                }
+                info!("identity v2: своё устройство отклонило запрос привязки");
+                return Ok(pb::LinkGrantResponse {}.encode_to_vec());
             }
             let p = json!({"token": req.token, "device_id": r.device_id, "box_payload": r.box_payload, "eph_pub": r.eph_pub});
             let v = v1_call(nc, p, |msg| handle_link_grant(nc, pool, dec, msg)).await?;
@@ -1738,6 +1773,39 @@ fn bot_secret_ok(secret: &str, client_ip: &str) -> Result<(), ErrorCode> {
         return Err(ErrorCode::Forbidden);
     }
     Ok(())
+}
+
+/// spec 041: вход ждёт подтверждения в Telegram, а клиент прислал ключ восстановления. Ключ подошёл — выданный
+/// этому устройству токен входа помечается подтверждённым (как ответом бота), и вход повторяется с ним; `None` —
+/// ключа нет либо он не подошёл. Пароль к этому моменту уже проверен.
+async fn twofa_by_recovery_key(
+    ctx: &V2Ctx,
+    pool: &SqlitePool,
+    login: &str,
+    r: &pb::SessionIssueRequest,
+    login_token: &str,
+) -> Result<Option<String>, ErrorCode> {
+    if r.recovery_key.is_empty() || login_token.is_empty() {
+        return Ok(None);
+    }
+    if !window_rate_ok("twofa-recovery", login, env_u64("PARVANE_TWOFA_RECOVERY_RATE", 5) as usize) {
+        return Err(ErrorCode::RateLimited);
+    }
+    let log = load_log(ctx, login).await?;
+    match verified_recovery_key(ctx, login, &r.recovery_key, &log).await {
+        Ok(Some(_)) => {}
+        Ok(None) | Err(ErrorCode::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    sqlx::query("UPDATE login_links SET confirmed = 1 WHERE token = ? AND username = ? AND device_id = ?")
+        .bind(login_token)
+        .bind(login)
+        .bind(&r.device_id)
+        .execute(pool)
+        .await
+        .map_err(db_err)?;
+    info!("identity: вход подтверждён ключом восстановления вместо Telegram");
+    Ok(Some(login_token.to_string()))
 }
 
 /// Ключ восстановления, проверенный копией корня на сервере: открывает копию,

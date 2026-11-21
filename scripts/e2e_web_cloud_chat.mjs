@@ -98,7 +98,8 @@ try {
   console.log('OK: «Отправить в чат» из раздела');
 
   // ── Боб сохраняет файл сообщения в своё облако и скачивает его оттуда ─────
-  await selectMessageActionOn(b, received, 'Save to Files');
+  // Пояснение «только для вложений» входит в доступное имя пункта (доска `ZpChat`)
+  await selectMessageActionOn(b, received, /^Save to Files/);
   const saveDialog = b.locator('.Modal').filter({ hasText: 'Choose a folder' });
   await saveDialog.getByRole('button', { name: 'Save here', exact: true }).click();
   await b.locator('.Notification-container').getByText('Saved to Files').first().waitFor({ state: 'visible', timeout: STEP });

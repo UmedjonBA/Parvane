@@ -449,3 +449,68 @@ fn checkpoint_carries_writer_chains_for_new_device() {
     let (_, _, s) = device_b(&ha, &mut j);
     assert!(s.notices.iter().any(|n| n == "history_gap:1"), "сводка несёт цепочки писателей: {:?}", s.notices);
 }
+
+/// Прежних ключей личного состояния почти предел (`FORMER_STATE_KEYS_MAX` = 16): следующая точка строится без
+/// ожидания срока и перезапечатывает ВСЕ сегменты текущим ключом — иначе сегмент, оставшийся под вытесненным ключом,
+/// перестал бы открываться. После перезапечатки — обычный срок; новое устройство только с текущим ключом входит по
+/// точке и видит всё.
+#[test]
+fn near_former_keys_limit_reseals_checkpoint_with_current_key() {
+    let mut j = HistoryJournal { now_ms: NOW, ..Default::default() };
+    let (mut ha, mut a) = device_a(&mut j);
+    tick_build(&mut ha, &mut a, &mut j, NOW + 1000, &mut no_hook());
+    assert_eq!(j.checkpoint.as_ref().map(|c| c.id), Some(1));
+
+    // Мало прежних ключей — одна запись до срока точку не строит
+    a.debug_rotate_state_key(1);
+    put(&mut a, &mut j, vec![history::row_op(row(6, "bob@local", bob_ts(6)))]);
+    pull(&mut ha, &mut a, &mut j);
+    let s = tick_build(&mut ha, &mut a, &mut j, NOW + 2000, &mut no_hook());
+    assert!(s.commits.is_empty(), "до срока и предела точка не строится: {:?}", s.methods);
+
+    // Двенадцать прежних ключей — точка сразу, оба сегмента (bob и carol) перезалиты
+    a.debug_rotate_state_key(11);
+    assert_eq!(a.debug_former_state_keys(), 12);
+    put(&mut a, &mut j, vec![history::row_op(row(7, "bob@local", bob_ts(7)))]);
+    pull(&mut ha, &mut a, &mut j);
+    let s = tick_build(&mut ha, &mut a, &mut j, NOW + 3000, &mut no_hook());
+    assert_eq!(j.checkpoint.as_ref().map(|c| c.id), Some(2), "{:?}", s.methods);
+    assert_eq!(s.methods.iter().filter(|m| *m == "history.append:chunk").count(), 3, "два сегмента и сводка: {:?}", s.methods);
+
+    // Перезапечатано — дальше снова по сроку
+    put(&mut a, &mut j, vec![history::row_op(row(8, "bob@local", bob_ts(8)))]);
+    pull(&mut ha, &mut a, &mut j);
+    let s = tick_build(&mut ha, &mut a, &mut j, NOW + 4000, &mut no_hook());
+    assert!(s.commits.is_empty(), "повторной перезапечатки нет: {:?}", s.methods);
+
+    // Устройство только с текущим ключом (прежние вытеснены) открывает точку целиком
+    let mut store = ha.store.clone();
+    store.retain(|k, _| {
+        let mut it = k.split('/').skip(1);
+        let (kind, name) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+        !(kind == "history-row" || kind == "history-mark" || (kind == "engine-core" && name == "meta"))
+    });
+    let mut hb = Host { store, ..Default::default() };
+    let (mut b, _) = hb.open(&cfg());
+    b.debug_drop_former_state_keys();
+    let s = pull(&mut hb, &mut b, &mut j);
+    assert!(!s.notices.iter().any(|n| n.starts_with("history_unreadable")), "{:?}", s.notices);
+    assert_eq!(b.debug_rows(&user("carol@local")), 1, "сегмент carol под текущим ключом");
+    assert_eq!(b.debug_rows(&user("bob@local")), 7);
+}
+
+/// Запись под ключом, которого у устройства нет, не пропадает молча: нотис `history_unreadable` с числом записей.
+#[test]
+fn unreadable_history_record_is_reported() {
+    let mut j = HistoryJournal { now_ms: NOW, ..Default::default() };
+    let (mut ha, mut a) = device_a(&mut j);
+    a.debug_rotate_state_key(1);
+    put(&mut a, &mut j, vec![history::row_op(row(6, "bob@local", bob_ts(6)))]);
+    a.debug_drop_former_state_keys();
+    a.debug_rotate_state_key(1);
+    a.debug_drop_former_state_keys();
+    put(&mut a, &mut j, vec![history::row_op(row(9, "bob@local", bob_ts(9)))]);
+    let s = pull(&mut ha, &mut a, &mut j);
+    assert!(s.notices.iter().any(|n| n == "history_unreadable:1"), "{:?}", s.notices);
+    assert_eq!(a.debug_rows(&user("bob@local")), 6, "читаемая запись применена");
+}

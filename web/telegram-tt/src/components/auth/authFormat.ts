@@ -36,3 +36,10 @@ export function countRegistrationSteps(confirm: 'none' | 'email' | 'telegram' | 
 export function readFormValue(form: HTMLFormElement, id: string) {
   return (form.elements.namedItem(id) as HTMLInputElement).value;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Сколько дней осталось до удаления аккаунта (неполный день считается целым; прошедший срок — 0). */
+export function countDaysLeft(atMs: number, nowMs: number) {
+  return Math.max(0, Math.ceil((atMs - nowMs) / DAY_MS));
+}

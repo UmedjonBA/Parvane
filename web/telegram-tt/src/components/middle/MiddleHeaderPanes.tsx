@@ -17,6 +17,7 @@ import { useSignalEffect } from '../../hooks/useSignalEffect';
 import { applyAnimationState, PANE_GAP_REM, type PaneState } from './hooks/useHeaderPane';
 
 import AudioPlayer from './panes/AudioPlayer';
+import FederationBlockPane from './panes/FederationBlockPane';
 import HeaderPinnedMessage from './panes/HeaderPinnedMessage';
 import KeyChangePane from './panes/KeyChangePane';
 
@@ -58,6 +59,7 @@ const MiddleHeaderPanes = ({
   const [getAudioPlayerState, setAudioPlayerState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
   const [getPinnedState, setPinnedState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
   const [getKeyChangeState, setKeyChangeState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
+  const [getFederationState, setFederationState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
 
   const isFirstRenderRef = useRef(true);
   const prevPanesHeightRef = useRef(0);
@@ -90,9 +92,10 @@ const MiddleHeaderPanes = ({
     const audioPlayerState = getAudioPlayerState();
     const pinnedState = getPinnedState();
     const keyChangeState = getKeyChangeState();
+    const federationState = getFederationState();
 
     // Keep in sync with the order of the panes in the DOM
-    const stateArray = [audioPlayerState, pinnedState, keyChangeState];
+    const stateArray = [audioPlayerState, pinnedState, keyChangeState, federationState];
 
     const isFirstRender = isFirstRenderRef.current;
     const gapPx = PANE_GAP_REM * REM;
@@ -171,7 +174,7 @@ const MiddleHeaderPanes = ({
         };
       });
     });
-  }, [getAudioPlayerState, getPinnedState, getKeyChangeState]);
+  }, [getAudioPlayerState, getPinnedState, getKeyChangeState, getFederationState]);
 
   if (!shouldRender) return undefined;
 
@@ -200,6 +203,7 @@ const MiddleHeaderPanes = ({
         isReopen={isReopen}
       />
       <KeyChangePane chatId={chatId} onPaneStateChange={setKeyChangeState} />
+      <FederationBlockPane chatId={chatId} onPaneStateChange={setFederationState} />
     </div>
   );
 };

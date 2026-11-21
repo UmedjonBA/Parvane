@@ -566,7 +566,10 @@ const MessageContextMenu: FC<OwnProps> = ({
           </MenuItem>
         )}
         {canSaveToCloud && (
-          <MenuItem icon="folder" onClick={onSaveToCloud}>{lang('ParvaneCloudSaveToCloud')}</MenuItem>
+          <MenuItem icon="folder" onClick={onSaveToCloud}>
+            {lang('ParvaneCloudSaveToCloud')}
+            <span className="MessageContextMenu--hint">{lang('ParvaneCloudSaveHint')}</span>
+          </MenuItem>
         )}
         {hasModuleItems && (canReport || canDelete) && <MenuSeparator />}
         {canReport && <MenuItem icon="flag" onClick={onReport}>{oldLang('lng_context_report_msg')}</MenuItem>}

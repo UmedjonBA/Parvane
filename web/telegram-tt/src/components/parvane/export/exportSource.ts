@@ -3,6 +3,7 @@
 // же путём, что и при просмотре.
 
 import type { CloudDriveState } from '../../../api/parvane/cloudDrive';
+import type { ExportHealthEntry } from './exportCsv';
 import type { ExportSnapshot } from './exportModel';
 import type { ExportCloudFile, ExportNote, ExportSource } from './exportRun';
 
@@ -35,6 +36,10 @@ function e2eDelayMs() {
 }
 
 type PlannerReply = { status?: string; raw?: string };
+type HealthReply = { status?: string };
+// Записей «Здоровья» за один запрос движок отдаёт не больше (`health_form.rs MAX_PAGE`)
+const HEALTH_LIMIT = 2000;
+const MINUTES_IN_MS = 60000;
 type TextReply = { id: string; text?: string };
 
 function sleep(ms: number) {
@@ -136,6 +141,21 @@ export function createProviderSource(names: { drive: string }): ExportSource {
     return cached ? JSON.stringify(cached) : undefined;
   }
 
+  // Записи «Здоровья» всех видов новыми первыми: контейнер поднимается при первом обращении — ждём готовности
+  async function health() {
+    const nowMs = Date.now();
+    const tzMin = -new Date(nowMs).getTimezoneOffset();
+    await waitFor(
+      () => callParvane('parvaneHealthState', { nowMs, tzMin }) as Promise<HealthReply | undefined>,
+      (state) => Boolean(state.status) && state.status !== 'loading',
+    );
+    const json = await callParvane('parvaneHealthEntries', {
+      kind: '', limit: HEALTH_LIMIT, nowMs: nowMs + MINUTES_IN_MS, tzMin,
+    }) as string | undefined;
+    if (!json) return [];
+    return (JSON.parse(json) as { entries?: ExportHealthEntry[] }).entries || [];
+  }
+
   return {
     snapshot: async () => {
       const delay = e2eDelayMs();
@@ -144,6 +164,7 @@ export function createProviderSource(names: { drive: string }): ExportSource {
     },
     media: (fileId) => callParvane('parvaneExportMedia', { fileId }) as Promise<Blob | undefined>,
     planner,
+    health,
     notes,
     cloudFiles,
     cloudBlob,

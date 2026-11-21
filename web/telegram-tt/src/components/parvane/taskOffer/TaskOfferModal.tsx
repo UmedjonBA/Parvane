@@ -4,6 +4,7 @@ import { getGlobal } from '../../../global';
 import { getChatTitle } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
+import { formatDurationValue, parseDuration } from '../planner/plannerEditorFormat';
 import {
   DEFAULT_PLANNER_SETTINGS, MINUTES_IN_DAY, toDayKey, toTime, validateTask,
 } from '../planner/plannerModel';
@@ -79,6 +80,9 @@ const TaskOfferModal = ({
   const [newStep, setNewStep] = useState('');
   const [error, setError] = useState<string>();
   const [isSending, setIsSending] = useState(false);
+  // «Длительность · 3 ч» (доска `XpChat`): значением, пока поле не в правке; правка — как в «Плане» («90», «1:30»,
+  // «1 ч 30 мин»)
+  const [isMinutesEditing, setIsMinutesEditing] = useState(false);
 
   // Начальные значения ставятся до первого кадра экрана: ввод в кадр появления не теряется
   useLayoutEffect(() => {
@@ -133,6 +137,9 @@ const TaskOfferModal = ({
     setFields((prev) => ({ ...prev, [key]: value }));
   });
 
+  const handleMinutesFocus = useLastCallback(() => setIsMinutesEditing(true));
+  const handleMinutesBlur = useLastCallback(() => setIsMinutesEditing(false));
+
   const handleNewStepChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setNewStep(e.currentTarget.value);
   });
@@ -163,7 +170,7 @@ const TaskOfferModal = ({
     if (isSending) return;
     const task = {
       name: fields.name.trim(),
-      minutes: fields.minutes === '' ? undefined : Number(fields.minutes),
+      minutes: parseDuration(fields.minutes),
       day: fields.day || undefined,
       start: fields.start || undefined,
       due: fields.due || undefined,
@@ -194,7 +201,8 @@ const TaskOfferModal = ({
     }
   });
 
-  const minutes = Number(fields.minutes) || undefined;
+  const minutes = parseDuration(fields.minutes) || undefined;
+  const minutesValue = !isMinutesEditing && minutes ? formatDurationValue(lang, minutes) : fields.minutes;
   const understood = quick.trim() && fields.name ? [
     lang('PlannerKindTask'),
     fields.name,
@@ -273,14 +281,14 @@ const TaskOfferModal = ({
           <span className={screen.srMain}>{lang('TaskOfferDuration')}</span>
           <input
             className={buildClassName(styles.cellInput, styles.cellNumber, screen.mono)}
-            type="number"
-            min={5}
-            max={1440}
-            step={5}
+            type="text"
+            inputMode="text"
             aria-label={lang('PlannerFieldMinutes')}
             placeholder={lang('PlannerNoEstimate')}
-            value={fields.minutes}
+            value={minutesValue}
             data-field="minutes"
+            onFocus={handleMinutesFocus}
+            onBlur={handleMinutesBlur}
             onChange={handleFieldChange}
           />
         </label>
@@ -294,6 +302,7 @@ const TaskOfferModal = ({
             data-field="due"
             onChange={handleFieldChange}
           />
+          {!fields.due && <span className={styles.muted} data-task-offer-no-due>{lang('TaskOfferNoDue')}</span>}
         </label>
       </div>
       <div className={screen.cap}>{lang('TaskOfferStepsTitle')}</div>

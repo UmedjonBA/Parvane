@@ -170,11 +170,33 @@ try {
   // v2 (LINK-1): код появляется только после challenge старого устройства —
   // сначала оба открывают Настройки → Устройства, потом сверяем 12 цифр.
   const dev2Screen = await openDevicesScreen(bobDevice2.page);
-  await dev2Screen.getByText(/Waiting for your other device/)
+  await dev2Screen.getByText(/Waiting for confirmation/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const dev1Screen = await openDevicesScreen(bobDevice1.page);
   const pendingText = dev2Screen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
   await pendingText.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // ── «Отклонить» (spec 041): отказ доходит до нового устройства, «Запросить снова» — новый запрос ──────────
+  const declinedOffer = dev1Screen.locator('[data-link-offer]:not([data-link-code=""])').first();
+  await declinedOffer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Запрос называет новое устройство так, как оно назвало себя при входе (подпись браузера и системы)
+  assert.match(await declinedOffer.innerText(), /Browser · Chrome/, 'в запросе — вид и название нового устройства');
+  await declinedOffer.locator('[data-link-decline]').click();
+  await bobDevice1.page.getByText('Request declined').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const declined = dev2Screen.locator('[data-confirm-sign-in] [data-link-declined]');
+  await declined.waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
+  assert.equal(await dev1Screen.locator('[data-link-offer]').count(), 0, 'отклонённый запрос исчез у старого устройства');
+  // Телефон (доска `PhAuth`): «Подтвердите вход» — отдельный экран, без списка устройств, шапка «Confirm sign-in»
+  const deskSize = bobDevice2.page.viewportSize();
+  await bobDevice2.page.setViewportSize({ width: 390, height: 800 });
+  await bobDevice2.page.locator('.settings-header, .left-header').getByText('Confirm sign-in', { exact: true }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await dev2Screen.locator('[data-session-row]').count(), 0, 'на телефоне — без списка устройств');
+  await bobDevice2.page.setViewportSize(deskSize);
+  await dev2Screen.locator('[data-session-row]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await declined.locator('[data-link-again]').click();
+  await declined.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await pendingText.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
   const dev2Code = await pendingText.getAttribute('data-link-code');
 
   // ── Старое устройство видит запрос с тем же кодом и подтверждает ──────────
@@ -216,7 +238,7 @@ try {
   // показывает тот же код и выдаёт грант; у первого запрос пропадает
   const bobDevice3 = await preparePage(bobDevice3Context, bob, PASSWORD);
   const dev3Screen = await openDevicesScreen(bobDevice3.page);
-  await dev3Screen.getByText(/Waiting for your other device/)
+  await dev3Screen.getByText(/Waiting for confirmation/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const firstOld = await openDevicesScreen(bobDevice1.page);
   const firstOffer = firstOld.locator('[data-link-offer]:not([data-link-code=""])').first();

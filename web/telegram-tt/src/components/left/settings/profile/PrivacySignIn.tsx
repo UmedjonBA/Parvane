@@ -5,7 +5,6 @@ import { SettingsScreens } from '../../../../types';
 
 import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
-import { consumePasswordFormRequest } from './profileRequests';
 
 import useFlag from '../../../../hooks/useFlag';
 import useLang from '../../../../hooks/useLang';
@@ -14,6 +13,7 @@ import useOldLang from '../../../../hooks/useOldLang';
 
 import Button from '../../../ui/Button';
 import SecretForm from '../../../ui/SecretForm';
+import ChangePasswordDialog from './ChangePasswordDialog';
 import ProfileIcon from './ProfileIcon';
 import ProfileSwitchRow from './ProfileSwitchRow';
 
@@ -26,10 +26,9 @@ type OwnProps = {
 type TwoFactorState = { enabled: boolean; telegramLinked: boolean };
 
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
-const PASSWORD_MIN_LENGTH = 8;
 
 // Parvane (spec 041 E3): «Конфиденциальность → Защита входа» по доске `PhProfileB` — подтверждение входа в Telegram,
-// смена пароля, PIN хранилища. Логика прежняя: смена 2FA и пароля — только с текущим паролем (P-07), метод v2
+// смена пароля (окно `ChangePasswordDialog`), PIN хранилища «установлен / не установлен». Логика прежняя: смена 2FA и пароля — только с текущим паролем (P-07), метод v2
 // `set_2fa` принимает лишь свежий пароль (E6-1)
 const PrivacySignIn = ({ isActive }: OwnProps) => {
   const { showNotification, openSettingsScreen } = getActions();
@@ -40,25 +39,8 @@ const PrivacySignIn = ({ isActive }: OwnProps) => {
   const [isTwoFactorBusy, setIsTwoFactorBusy] = useState(false);
   const [twoFactorPassword, setTwoFactorPassword] = useState('');
   const [pendingTwoFactor, setPendingTwoFactor] = useState<boolean | undefined>();
-  const [isPasswordFormOpen, openPasswordForm, closePasswordForm] = useFlag();
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [newPasswordRepeat, setNewPasswordRepeat] = useState('');
-  const [isPasswordBusy, setIsPasswordBusy] = useState(false);
+  const [isPasswordOpen, openPassword, closePassword] = useFlag();
   const [isPinEnabled, setIsPinEnabled] = useState(false);
-
-  const canChangePassword = Boolean(oldPassword) && newPassword.length >= PASSWORD_MIN_LENGTH
-    && newPassword === newPasswordRepeat;
-
-  // Форма пароля раскрыта — только пока экран открыт: при уходе она сворачивается, по просьбе карточки аккаунта
-  // («Пароль · сменить») раскрывается при входе
-  useEffect(() => {
-    if (!isActive) {
-      closePasswordForm();
-      return;
-    }
-    if (consumePasswordFormRequest()) openPasswordForm();
-  }, [isActive, openPasswordForm, closePasswordForm]);
 
   useEffect(() => {
     if (!isActive) return undefined;
@@ -104,26 +86,6 @@ const PrivacySignIn = ({ isActive }: OwnProps) => {
     void applyTwoFactor(pendingTwoFactor, twoFactorPassword);
   });
 
-  const handleChangePassword = useLastCallback(async () => {
-    if (!canChangePassword) return;
-    setIsPasswordBusy(true);
-    try {
-      await callParvane('parvaneChangePassword', { oldPassword, newPassword });
-      setOldPassword('');
-      setNewPassword('');
-      setNewPasswordRepeat('');
-      closePasswordForm();
-      showNotification({ message: oldLang('ParvaneChangePasswordDone') });
-    } catch (error) {
-      // Провайдер отдаёт причину ключом словаря (пусто — причина неизвестна)
-      const reasonKey = (error as Error)?.message;
-      const failed = oldLang('ParvaneChangePasswordFailed');
-      showNotification({ message: reasonKey ? `${failed}: ${oldLang(reasonKey)}` : failed });
-    } finally {
-      setIsPasswordBusy(false);
-    }
-  });
-
   const handleOpenPin = useLastCallback(() => {
     openSettingsScreen({ screen: SettingsScreens.PasscodeEnabled });
   });
@@ -163,59 +125,10 @@ const PrivacySignIn = ({ isActive }: OwnProps) => {
             </SecretForm>
           </div>
         )}
-        <button
-          type="button"
-          className={rowClass}
-          aria-expanded={isPasswordFormOpen}
-          data-privacy-row="password"
-          onClick={isPasswordFormOpen ? closePasswordForm : openPasswordForm}
-        >
+        <button type="button" className={rowClass} data-privacy-row="password" onClick={openPassword}>
           <span className={styles.setTitle}>{lang('ParvanePrivacyChangePassword')}</span>
-          <ProfileIcon
-            name="right"
-            isSmall
-            className={buildClassName(styles.menuChevron, isPasswordFormOpen && styles.chevronOpen)}
-          />
+          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
         </button>
-        {isPasswordFormOpen && (
-          <div className={styles.formRow} data-password-form>
-            <SecretForm className={styles.form}>
-              <input
-                type="password"
-                className="form-control"
-                autoComplete="current-password"
-                placeholder={oldLang('ParvaneChangePasswordOld')}
-                aria-label={oldLang('ParvaneChangePasswordOld')}
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.currentTarget.value)}
-                disabled={isPasswordBusy}
-              />
-              <input
-                type="password"
-                className="form-control"
-                autoComplete="new-password"
-                placeholder={oldLang('ParvaneChangePasswordNew')}
-                aria-label={oldLang('ParvaneChangePasswordNew')}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.currentTarget.value)}
-                disabled={isPasswordBusy}
-              />
-              <input
-                type="password"
-                className="form-control"
-                autoComplete="new-password"
-                placeholder={oldLang('ParvaneChangePasswordRepeat')}
-                aria-label={oldLang('ParvaneChangePasswordRepeat')}
-                value={newPasswordRepeat}
-                onChange={(e) => setNewPasswordRepeat(e.currentTarget.value)}
-                disabled={isPasswordBusy}
-              />
-              <Button size="smaller" disabled={!canChangePassword || isPasswordBusy} onClick={handleChangePassword}>
-                {oldLang('ParvaneChangePasswordButton')}
-              </Button>
-            </SecretForm>
-          </div>
-        )}
         <button type="button" className={rowClass} data-privacy-row="pin" onClick={handleOpenPin}>
           <span className={styles.setTitle}>{oldLang('ParvaneStoragePinTitle')}</span>
           <span className={styles.menuValue} data-pin-state={isPinEnabled ? 'on' : 'off'}>
@@ -224,6 +137,7 @@ const PrivacySignIn = ({ isActive }: OwnProps) => {
           <ProfileIcon name="right" isSmall className={styles.menuChevron} />
         </button>
       </div>
+      <ChangePasswordDialog isOpen={isPasswordOpen} onClose={closePassword} />
     </>
   );
 };

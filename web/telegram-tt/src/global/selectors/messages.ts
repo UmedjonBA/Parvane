@@ -26,6 +26,7 @@ import {
   SERVICE_NOTIFICATIONS_USER_ID,
   WEB_APP_PLATFORM,
 } from '../../config';
+import { getIsAutoloadAllowedNow } from '../../util/autoloadMode';
 import { IS_TRANSLATION_SUPPORTED } from '../../util/browser/windowEnvironment';
 import { isUserId } from '../../util/entities/ids';
 import { getCurrentTabId } from '../../util/establishMultitabRole';
@@ -1047,6 +1048,9 @@ export function selectCanAutoLoadMedia<T extends GlobalState>(
   if (!chat) {
     return undefined;
   }
+
+  // Parvane: «Автозагрузка медиа» устройства (всегда / только Wi-Fi / никогда) — поверх выключателей по типам чатов
+  if (!getIsAutoloadAllowedNow()) return false;
 
   const sender = 'id' in message ? selectSender(global, message) : undefined;
 

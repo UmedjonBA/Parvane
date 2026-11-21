@@ -89,8 +89,14 @@ export async function openSettingsScreen(page, name) {
 // К списку чатов из «Профиля» (кнопка `Chats`) и из поиска или контактов (стрелка «назад» в шапке)
 export async function showChatList(page) {
   const back = page.locator('#LeftMainHeader').getByRole('button', { name: 'Return to chat list' });
+  // Окно «Изменить профиль» компьютера (`RdProfile`) перекрывает панель модулей: без сохранения его закрывает «Отмена»
+  const profileCancel = page.locator('[data-edit-profile-window] [data-profile-cancel]');
   for (let attempt = 0; attempt < 4; attempt++) {
     if (await isChatListShown(page)) return;
+    if (await profileCancel.isVisible().catch(() => false)) {
+      await profileCancel.click({ timeout: 5000 }).catch(() => {});
+      await profileCancel.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+    }
     const target = await back.isVisible().catch(() => false) ? back : shellButton(page, 'Chats');
     await target.click({ timeout: 5000 }).catch(() => {});
     await waitForChatList(page, 3000).catch(() => {});
@@ -117,17 +123,21 @@ export async function openContacts(page) {
 }
 
 // Правка своего профиля: карандаш в шапке «Профиля» на телефоне, «Изменить» в «Обзоре» на компьютере
+// «Мой профиль»: на телефоне — экран, на компьютере — окно поверх «Профиля» (доска `RdProfile`)
 export async function openEditProfile(page) {
   await openProfile(page);
   await page.locator('[data-profile-edit]:visible').first().click();
-  await page.locator('#Settings').getByLabel('First name (required)')
+  await page.locator('[data-edit-profile]').getByLabel('First name (required)')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Поля сверх досок (фамилия, день рождения, цвет имени, личный канал, телефон) — под «Ещё»: раскрыть
+  const more = page.locator('[data-edit-profile] [data-profile-more][aria-expanded="false"]');
+  if (await more.isVisible().catch(() => false)) await more.click();
 }
 
-// «Готово» в шапке «Изменить профиль» (spec 041, `XpProfile`): сохраняет и ждёт, пока экран перестанет помнить
-// несохранённое (`data-dirty` снимается после ответа сервера)
+// «Готово» в шапке экрана (`XpProfile`) либо «Сохранить» окна (`RdProfile`): сохраняет и ждёт, пока форма перестанет
+// помнить несохранённое (`data-dirty` снимается после ответа сервера; окно после сохранения закрывается)
 export async function saveEditProfile(page) {
-  await page.locator('[data-profile-done]:visible').click();
+  await page.locator('[data-profile-done]:visible, [data-profile-save]:visible').first().click();
   await page.locator('[data-edit-profile][data-dirty]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 }
 
@@ -1412,9 +1422,19 @@ export async function openDevicesScreen(page) {
 
 // Из настроек — обратно к списку чатов
 export async function closeSettings(page) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+  // Escape на самом списке чатов открывает общий поиск (поведение приложения): если настройки закрылись сами
+  // между проверкой и нажатием, лишнее нажатие уводит в поиск — выходим из него тем же Escape и не считаем
+  // поле поиска признаком списка, пока открыт экран поиска
+  // Экран поиска остаётся в разметке и после выхода из него — «открыт» только в активном слайде перехода
+  const isSearchOpen = () => page.evaluate(() => {
+    const search = document.querySelector('#LeftColumn .LeftSearch');
+    const slide = search?.closest('.Transition_slide');
+    return Boolean(search && (!slide || slide.classList.contains('Transition_slide-active')));
+  }).catch(() => false);
+  const isAtChatList = async () => await page.locator('#telegram-search-input').isVisible() && !(await isSearchOpen());
+  for (let attempt = 0; attempt < 8; attempt++) {
     // eslint-disable-next-line no-await-in-loop
-    if (await page.locator('#telegram-search-input').isVisible()) return;
+    if (await isAtChatList()) return;
     // eslint-disable-next-line no-await-in-loop
     await page.keyboard.press('Escape');
     // eslint-disable-next-line no-await-in-loop
@@ -1431,7 +1451,7 @@ const LINK_DEVICE_TIMEOUT_MS = 90000;
 
 export async function linkSecondDevice(oldPage, newPage) {
   const newScreen = await openDevicesScreen(newPage);
-  await newScreen.getByText(/Waiting for your other device/)
+  await newScreen.getByText(/Waiting for confirmation/)
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const oldScreen = await openDevicesScreen(oldPage);
   const pendingText = newScreen.locator('[data-confirm-sign-in] [data-link-code]:not([data-link-code=""])');
@@ -1455,15 +1475,15 @@ export async function linkSecondDevice(oldPage, newPage) {
 // Экран ключа восстановления (spec 041 E4) перекрывает интерфейс — закрывается отметкой «Я сохранил ключ»
 const recoveryKeyScreen = (page) => page.locator('[data-recovery-key-screen]');
 
-async function closeRecoveryKeyScreen(screen) {
-  await screen.locator('[data-recovery-key-saved]').check();
-  await screen.locator('[data-recovery-key-done]').click();
+async function closeRecoveryKeyScreen(screen, timeout) {
+  await screen.locator('[data-recovery-key-saved]').check({ timeout });
+  await screen.locator('[data-recovery-key-done]').click({ timeout });
 }
 
 // Обработчик закрывает экран ключа перед любым действием Playwright, когда бы он ни появился. Заодно — экран
 // первого запуска (выбор модулей): сценарии со своей страницей без сида `preparePage` проходят его «Начать»
 export async function autoDismissRecoveryKeyDialog(page) {
-  await page.addLocatorHandler(recoveryKeyScreen(page), closeRecoveryKeyScreen);
+  await page.addLocatorHandler(recoveryKeyScreen(page), (screen) => closeRecoveryKeyScreen(screen));
   // Сид `parvane:modules-first-run` пустой — сценарий проверяет экран сам (`e2e_web_first_run.mjs`)
   const isFirstRunChecked = await page.evaluate(() => localStorage.getItem('parvane:modules-first-run') === '')
     .catch(() => false);
@@ -1479,8 +1499,13 @@ export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
   } catch {
     return undefined;
   }
-  const text = await screen.innerText();
-  await closeRecoveryKeyScreen(screen);
+  // На телефоне ключ — в две строки (доска `XpAuth`): целиком он в атрибуте, его — первым
+  const key = await screen.locator('[data-recovery-key]').getAttribute('data-recovery-key').catch(() => undefined);
+  const text = `${key || ''}\n${await screen.innerText()}`;
+  // Экран мог закрыть обработчик `autoDismissRecoveryKeyDialog` посреди этих нажатий — тогда закрывать уже нечего
+  await closeRecoveryKeyScreen(screen, 5000).catch(async (err) => {
+    if (await screen.isVisible().catch(() => false)) throw err;
+  });
   await screen.waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
   return text;
 }

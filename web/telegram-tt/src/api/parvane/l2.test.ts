@@ -52,10 +52,10 @@ const testLocalStorage = {
 };
 
 const ON: L2State = {
-  active: true, mine: false, enabledBy: [PEER], pad: true, ephemeralAllowed: false,
+  active: true, mine: false, enabledBy: [PEER], pad: true, ephemeralAllowed: false, peerSinceMs: 0,
 };
 const OFF: L2State = {
-  active: false, mine: false, enabledBy: [], pad: false, ephemeralAllowed: true,
+  active: false, mine: false, enabledBy: [], pad: false, ephemeralAllowed: true, peerSinceMs: 0,
 };
 
 type FakeEngine = { states?: Record<string, L2State>; presence?: boolean; isReady: boolean };
@@ -87,8 +87,9 @@ describe('L2: состояние режима по движку', () => {
   it('битый JSON — состояние неизвестно; отсутствующее поле не запрещает эфемерные каналы', () => {
     expect(parseL2State('не json')).toBeUndefined();
     expect(parseL2State('{"active":true}')).toEqual({
-      active: true, mine: false, enabledBy: [], pad: false, ephemeralAllowed: true,
+      active: true, mine: false, enabledBy: [], pad: false, ephemeralAllowed: true, peerSinceMs: 0,
     });
+    expect(parseL2State('{"active":true,"peerSinceMs":"1800000000000"}')?.peerSinceMs).toBe(1800000000000);
   });
 });
 

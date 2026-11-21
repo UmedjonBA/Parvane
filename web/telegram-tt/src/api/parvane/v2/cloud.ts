@@ -192,6 +192,8 @@ export function createCloudSync(deps: Deps) {
   let ownOnServer: number | undefined;
   // Свои контейнеры на сервере без записи журнала состояния (по последнему обходу): новый диск при них не заводим
   let ownWithoutEntry = 0;
+  // Записи журнала состояния, о которых экран уже извещён (`syncNow`)
+  let notifiedEntries: CloudStateEntry[] | undefined;
   /** Свои контейнеры сервера без записи журнала состояния. */
   let ownOrphans: string[] = [];
   let lastError: string | undefined;
@@ -893,6 +895,14 @@ export function createCloudSync(deps: Deps) {
         const hasMissingKey = engineContainers().some((c) => c.id === rootId() && !c.hasKey);
         setStatus(hasMissingKey ? 'no-key' : 'ready');
         lastError = undefined;
+        // Записи журнала состояния сменились (пришла запись личного диска, принято приглашение на другом
+        // устройстве): вид контейнеров другой и без новых операций — экран перечитывает список. Иначе на только что
+        // привязанном устройстве личный диск оставался безымянной «общей папкой», пока в нём что-нибудь не изменят
+        const entries = deps.stateEntries();
+        if (entries !== notifiedEntries) {
+          notifiedEntries = entries;
+          changed = true;
+        }
         if (changed) deps.onChanged();
       } catch (e) {
         lastError = String(e);

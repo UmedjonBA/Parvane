@@ -103,8 +103,11 @@ export async function openProfile(page: Page) {
 export async function openEditProfile(page: Page) {
   await openProfile(page);
   await page.locator('[data-profile-edit]:visible').first().click();
-  await expect(page.locator('#Settings').getByLabel('First name (required)'))
+  await expect(page.locator('[data-edit-profile]').getByLabel('First name (required)'))
     .toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
+  // Поля сверх досок — под «Ещё» (доски `XpProfile`, `RdProfile`)
+  const more = page.locator('[data-edit-profile] [data-profile-more][aria-expanded="false"]');
+  if (await more.isVisible()) await more.click();
 }
 
 export function uniqueUser(prefix: string, projectName: string) {

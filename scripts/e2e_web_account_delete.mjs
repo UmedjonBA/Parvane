@@ -88,13 +88,26 @@ try {
   await reloaded;
   console.log('OK: аккаунт поставлен на удаление, вкладка ушла на вход');
 
-  // Вход паролем — не ошибка пароля, а дата удаления и «Восстановить аккаунт»
+  // Вход паролем — не ошибка пароля, а экран «Аккаунт будет удалён» (доска `RpProfileC`): дата, когда запрошено,
+  // сколько дней осталось, «Восстановить аккаунт», «Выгрузить мои данные», «Выйти, удаление продолжится»
   const form = await submitPassword(a);
-  await a.locator('[data-restore-account]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const notice = await form.innerText();
-  assert.match(notice, /will be deleted on/, `текст экрана: ${notice}`);
+  const pending = a.locator('[data-deletion-pending]');
+  await pending.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const notice = await pending.innerText();
+  assert.match(notice, /The account will be deleted on/, `текст экрана: ${notice}`);
+  assert.match(notice, /You requested deletion on .+\. Until .+ it can be cancelled/, `дата запроса: ${notice}`);
+  assert.equal(await pending.locator('[data-deletion-days]').getAttribute('data-deletion-days'), '7', 'семь дней до удаления');
+  assert.equal(await form.locator('#sign-in-password').isVisible(), false, 'форма входа скрыта');
+  await pending.locator('[data-restore-account] button').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await shootAuthScreen(a, 'deletion-pending');
-  console.log('OK: вход предлагает восстановить аккаунт');
+  // «Выйти, удаление продолжится» — снова форма входа, пароль не запомнен; вход снова показывает экран удаления
+  await pending.locator('[data-deletion-leave]').click();
+  await a.locator('.Transition_slide-active > #auth-phone-number-form').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await a.locator('#sign-in-parvane-address').fill(aliceNick);
+  await a.locator('#sign-in-password').fill(PASSWORD);
+  await a.locator('[data-auth-submit]').click();
+  await pending.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: вход предлагает восстановить аккаунт, «Выйти» удаление не отменяет');
 
   // Боб: Алиса — «Удалённый аккаунт» (профиль не находится, журнал с признаком deleted)
   await reloadPage(b);
@@ -105,9 +118,14 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: у Боба — «Удалённый аккаунт»');
 
-  // Восстановление на том же устройстве: история на месте
-  await a.locator('[data-restore-account] button').click();
+  // «Выгрузить мои данные»: экран говорит, что вход отменит удаление; «Войти и выгрузить» восстанавливает аккаунт и
+  // сразу открывает выгрузку
+  await pending.locator('[data-deletion-export]').click();
+  await pending.locator('[data-deletion-export-note]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await pending.locator('[data-deletion-export-confirm]').click();
   await a.locator('#LeftColumn').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await a.locator('[data-export-option="chats"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «Выгрузить мои данные» — вход с отменой удаления и экран выгрузки');
   await showChatList(a);
   await openPrivateChatStrict(a, bob);
   await findMessage(a, `hello-from-b-${suffix}`).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

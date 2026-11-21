@@ -250,8 +250,12 @@ try {
   const fullPicker = page.locator('.Modal [data-playlist-picker]');
   await fullPicker.getByRole('button', { name: 'Close' }).click();
   await full.getByRole('button', { name: 'Send to a chat' }).click();
-  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().waitFor();
+  // «Кому отправить» (доска `RpPick`): карточка «название · исполнитель · трек», чаты с галочками
+  const sendScreen = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
+  await sendScreen.locator('[data-send-preview]').getByText('Соль').waitFor();
+  await sendScreen.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first().waitFor();
   await page.keyboard.press('Escape');
+  await sendScreen.waitFor({ state: 'hidden' });
   const slider = full.getByRole('slider');
   await slider.press('Home');
   await slider.press('ArrowRight');
@@ -566,7 +570,10 @@ try {
   await wide2('albums');
   await again2.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
   await pickTrackAction(page, again2.locator('[data-music-tracks] [data-track="t2"]'), 'Send to a chat…');
-  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().click();
+  const trackSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
+  await trackSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
+    .locator('input[type="checkbox"]').check();
+  await trackSend.locator('[data-send-submit]').click();
   await page.getByText('Track sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
@@ -590,7 +597,10 @@ try {
   await pause(page);
   await backInMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'В дорогу' }).click();
   await backInMusic.locator('[data-music-playlist] [data-music-playlist-to-chat]').click();
-  await page.locator('.Modal .modal-dialog').getByText('Saved Messages').first().click();
+  const playlistSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
+  await playlistSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
+    .locator('input[type="checkbox"]').check();
+  await playlistSend.locator('[data-send-submit]').click();
   await page.getByText('Playlist sent').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
   await page.locator('#LeftColumn .chat-list').getByText('Saved Messages').first().click();
@@ -653,7 +663,9 @@ try {
   console.log('OK: альбом загружен на устройство одной группой и играет без сети');
 
   // ── Приложение запущено без сети: «Загруженное» на месте и играет ─────────
-  await page.goto(process.env.PARVANE_E2E_BASE_URL, { waitUntil: 'domcontentloaded' });
+  // `reloadPage`, а не `goto`: закрытие полного плеера в `pause` снимает запись истории отложенным переходом, и
+  // выданная в этот момент навигация обрывалась `net::ERR_ABORTED`
+  await reloadPage(page);
   const offlineMusic = await openMusic(page);
   await offlineMusic.locator('[data-music-nav] [data-view="offline"]').click();
   await offlineMusic.locator('[data-music-offline="3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

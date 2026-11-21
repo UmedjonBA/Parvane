@@ -52,7 +52,9 @@ const JoinRequest: FC<OwnProps & StateProps> = ({
     ? formatTime(lang, fixedDate) : formatHumanDate(lang, fixedDate, true, false, true);
 
   const username = user && getMainUsername(user);
-  const subtitle = [username && `@${username}`, dateString].filter(Boolean).join(' · ');
+  // Доска `RpPick`: «@ник · наш сервер · сегодня» / «· другой сервер ·» (федерация)
+  const server = user && newLang(user.serverDomain ? 'ParvaneJoinRequestRemote' : 'ParvaneJoinRequestLocal');
+  const subtitle = [username && `@${username}`, server, dateString].filter(Boolean).join(' · ');
 
   const handleUserClick = () => {
     openChat({ id: userId });

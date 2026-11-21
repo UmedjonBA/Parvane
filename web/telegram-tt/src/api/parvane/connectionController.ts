@@ -80,8 +80,14 @@ export type RegisterResult = { confirmRequired: boolean; telegramToken?: string 
 // Пароль верен, но включён двухфакторный вход: нужен Start в привязанном
 // Telegram по deep link t.me/<bot>?start=<loginToken>, затем повторный логин с
 // loginToken
+// `canUseRecoveryKey` — сервер примет ключ восстановления вместо Telegram, `isRecoveryWrong` — присланный не подошёл
 export class TwoFactorRequiredError extends Error {
-  constructor(public loginToken: string, public telegramBot: string) {
+  constructor(
+    public loginToken: string,
+    public telegramBot: string,
+    public canUseRecoveryKey?: boolean,
+    public isRecoveryWrong?: boolean,
+  ) {
     super('нужно подтверждение входа в Telegram');
     this.name = 'TwoFactorRequiredError';
   }
@@ -97,7 +103,7 @@ export class PasswordRejectedError extends Error {
 
 /** Аккаунт ждёт удаления (spec 027): пароль верен, вход — только с отменой удаления. */
 export class AccountDeletionPendingError extends Error {
-  constructor(public deletionAtMs: number) {
+  constructor(public deletionAtMs: number, public requestedAtMs?: number) {
     super('аккаунт ждёт удаления');
     this.name = 'AccountDeletionPendingError';
   }
@@ -258,6 +264,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
         trust_secret?: string;
         address?: string;
         deletion_at_ms?: number;
+        deletion_requested_ms?: number;
+        twofa_recovery?: boolean;
+        recovery_key_wrong?: boolean;
         password_wrong?: boolean;
         attempts_left?: number;
         locked_ms?: number;
@@ -272,9 +281,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
     pendingSecondFactor = undefined;
     const securityKeyStep = parseSecurityKeyStep(response);
     if (securityKeyStep) throw new SecurityKeyRequiredError(securityKeyStep);
-    if (response.deletion_at_ms) throw new AccountDeletionPendingError(response.deletion_at_ms);
+    if (response.deletion_at_ms) {
+      throw new AccountDeletionPendingError(response.deletion_at_ms, response.deletion_requested_ms);
+    }
     if (response.twofa_required && response.login_token) {
-      throw new TwoFactorRequiredError(response.login_token, response.telegram_bot || '');
+      throw new TwoFactorRequiredError(
+        response.login_token, response.telegram_bot || '', response.twofa_recovery, response.recovery_key_wrong,
+      );
     }
     if (!response.ok && implicitRegister) {
       const raw = await activeConnection.request(

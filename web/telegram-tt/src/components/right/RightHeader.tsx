@@ -31,9 +31,11 @@ import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import { isUserId } from '../../util/entities/ids';
 import { dropChatLocationHash } from '../../util/routing';
+import { getRightHeaderAction } from './rightHeaderAction';
 
 import useAppLayout from '../../hooks/useAppLayout';
 import useCurrentOrPrev from '../../hooks/useCurrentOrPrev';
+import useDerivedState from '../../hooks/useDerivedState';
 import useFlag from '../../hooks/useFlag';
 import { useFolderManagerForChatsCount } from '../../hooks/useFolderManager';
 import useLang from '../../hooks/useLang';
@@ -285,6 +287,8 @@ const RightHeader: FC<OwnProps & StateProps> = ({
   }, [isColumnOpen]);
 
   const oldLang = useOldLang();
+  // «Готово» экрана «Тип группы» (доска `XpChat`) — ставит сам экран
+  const headerAction = useDerivedState(getRightHeaderAction);
   const lang = useLang();
 
   const isSecondaryBackground = headerBackground === 'secondary';
@@ -450,7 +454,22 @@ const RightHeader: FC<OwnProps & StateProps> = ({
       case HeaderContent.ManageInitial:
         return <h3 className="title">{oldLang('Edit')}</h3>;
       case HeaderContent.ManageChatPrivacyType:
-        return <h3 className="title">{oldLang(isChannel ? 'ChannelTypeHeader' : 'GroupTypeHeader')}</h3>;
+        return (
+          <>
+            <h3 className="title">{oldLang(isChannel ? 'ChannelTypeHeader' : 'GroupTypeHeader')}</h3>
+            {headerAction && (
+              <button
+                type="button"
+                className="pv-header-action"
+                disabled={headerAction.isDisabled}
+                onClick={headerAction.onClick}
+                data-type-done
+              >
+                {headerAction.label}
+              </button>
+            )}
+          </>
+        );
       case HeaderContent.ManageDiscussion:
         return <h3 className="title">{oldLang('Discussion')}</h3>;
       case HeaderContent.ManageChatAdministrators:

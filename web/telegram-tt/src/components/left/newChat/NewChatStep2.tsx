@@ -294,7 +294,12 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
             />
           </div>
         )}
-        <p className="note">{lang(isPublic ? 'ParvanePublicGroupWarning' : 'ParvanePublicNameInfo')}</p>
+        {/* Канал — пояснение доски `ZpChat2`; у публичного остаётся честное предупреждение (PUBLIC-1) */}
+        {isChannel && !isPublic ? (
+          <p className="note">{newLang('ParvaneNewChannelInfo')}</p>
+        ) : (
+          <p className="note">{lang(isPublic ? 'ParvanePublicGroupWarning' : 'ParvanePublicNameInfo')}</p>
+        )}
 
         <div className="pv-new-chat-grp">
           <Checkbox

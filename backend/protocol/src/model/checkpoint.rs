@@ -66,6 +66,9 @@ const SEGMENT_PART_BYTES: usize = 150 * 1024;
 const RETRY_MS: i64 = 60_000;
 /// Сборка без ответа дольше этого — брошена (ответ потерян), следующая — по сроку.
 const BUILD_TIMEOUT_MS: i64 = 10 * 60_000;
+/// Прежних ключей личного состояния столько (из `FORMER_STATE_KEYS_MAX` = 16), что пора перезапечатать сегменты точки
+/// текущим: самый старый ключ скоро вытеснится, а сегменты, оставшиеся под ним, перестанут открываться.
+pub const RESEAL_FORMER_KEYS: usize = 12;
 /// Код `ERROR_CODE_DUPLICATE` (CAS точки проигран).
 const ERR_DUPLICATE: i32 = crate::pb::parvane::core::v2::ErrorCode::Duplicate as i32;
 
@@ -107,6 +110,10 @@ pub(crate) struct CpMeta {
     /// Следующая точка перезаливает все сегменты (ключ истории сменён этим устройством).
     #[serde(default)]
     pub force_reupload: bool,
+    /// Версия ключа личного состояния, текущая, когда учёт сегментов стал верным (своя точка принята либо вход по
+    /// чужой — её сегменты под другим ключом лежат в `stale`); 0 — неизвестна (учёт до этого поля).
+    #[serde(default)]
+    pub sealed_key_version: u32,
     /// CAS проигран при этом id точки — не повторять, пока id не сменится.
     #[serde(default)]
     pub cas_failed_for: Option<u64>,
@@ -147,6 +154,8 @@ pub(crate) struct Build {
     summary_seq: u64,
     /// Книга цепочек на момент снимка.
     chains: ChainBook,
+    /// Версия ключа, которым запечатаны новые сегменты снимка.
+    key_version: u32,
 }
 
 /// Сборка точки в памяти модели.
@@ -220,12 +229,14 @@ impl Engine {
 
     /// Точка применена при входе (сводка и сегменты): её учёт — основа следующей.
     pub(crate) fn cp_adopt_entered(&mut self, cp: &Checkpoint) {
+        let key_version = self.state_key_version();
         let seen = self.cp.seen.take().filter(|(id, _)| *id == cp.id).map(|(_, refs)| refs).unwrap_or_default();
         let m = &mut self.meta.history_cp;
         m.upto = cp.upto_seq;
         m.created_ms = cp.created_ms;
         m.segments = seen.iter().map(SegMeta::of).collect();
         m.stale = std::mem::take(&mut self.cp.seen_stale);
+        m.sealed_key_version = key_version;
         m.cas_failed_for = None;
         m.head = m.head.max(cp.upto_seq);
         self.dirty.meta = true;
@@ -251,11 +262,23 @@ impl Engine {
         if after == 0 {
             return false;
         }
-        if m.force_reupload || after > self.cp_records() {
+        if m.force_reupload || after > self.cp_records() || self.cp_reseal_due() {
             return true;
         }
         // Первой точки нет: короткий журнал новое устройство прочтёт целиком — первая только по числу записей
         id != 0 && self.now_ms.saturating_sub(m.created_ms) >= self.cp_age_ms()
+    }
+
+    /// Прежних ключей почти предел, а сегменты точки запечатаны не текущим ключом: следующая точка перезаливает все
+    /// сегменты текущим (иначе вытесненный ключ унёс бы их с собой).
+    fn cp_reseal_due(&self) -> bool {
+        let Some(c) = self.client.as_ref() else { return false };
+        let Some((_, version)) = c.state_key() else { return false };
+        c.former_state_keys().len() >= RESEAL_FORMER_KEYS && self.meta.history_cp.sealed_key_version != version
+    }
+
+    fn state_key_version(&self) -> u32 {
+        self.client.as_ref().and_then(|c| c.state_key()).map(|(_, v)| v).unwrap_or(0)
     }
 
     /// Ход по `tick`: срок → задержка → `history.head`.
@@ -440,6 +463,7 @@ impl Engine {
                 m.segments = b.refs.iter().map(SegMeta::of).collect();
                 m.stale.clear();
                 m.force_reupload = false;
+                m.sealed_key_version = b.key_version;
                 m.cas_failed_for = None;
                 m.head = m.head.max(b.summary_seq);
                 self.dirty.meta = true;
@@ -472,8 +496,8 @@ impl Engine {
             Ok(p) => p,
             Err(_) => return self.cp_postpone("segments", w),
         };
+        let force = self.meta.history_cp.force_reupload || self.cp_reseal_due();
         let m = &self.meta.history_cp;
-        let force = m.force_reupload;
         let prev: BTreeMap<(String, Vec<u8>), SegMeta> =
             m.segments.iter().filter(|s| !m.stale.contains(&s.seq)).map(|s| ((s.key.clone(), s.digest.clone()), s.clone())).collect();
         let mut refs = vec![];
@@ -496,7 +520,9 @@ impl Engine {
         }
         let expected = self.meta.history_checkpoint;
         let chains_now = self.chain_book();
+        let key_version = self.state_key_version();
         let Some(b) = self.cp.build.as_mut() else { return };
+        b.key_version = key_version;
         b.now_ms = now;
         b.expected = expected;
         b.chains = chains_now;

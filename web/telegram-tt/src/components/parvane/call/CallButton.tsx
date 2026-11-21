@@ -9,6 +9,9 @@ type OwnProps = {
   label: string;
   kind?: 'plain' | 'on' | 'hangup' | 'accept';
   isLarge?: boolean;
+  // Недоступно в этом браузере: кнопка видна, но не нажимается; причина — в `hint`
+  isDisabled?: boolean;
+  hint?: string;
   // Подпись под кнопкой (экран входящего звонка)
   caption?: string;
   onClick: NoneToVoidFunction;
@@ -16,14 +19,15 @@ type OwnProps = {
 
 // Круглая кнопка звонка (доски `PhCalls`, `RpCalls`, `DkCalls`)
 const CallButton = ({
-  icon, label, kind = 'plain', isLarge, caption, onClick,
+  icon, label, kind = 'plain', isLarge, isDisabled, hint, caption, onClick,
 }: OwnProps) => {
   const button = (
     <button
       type="button"
       className={buildClassName(styles.round, styles[kind], isLarge && styles.roundLarge)}
       aria-label={label}
-      title={label}
+      title={hint || label}
+      disabled={isDisabled}
       onClick={onClick}
     >
       <i className={buildClassName('icon', icon)} aria-hidden />

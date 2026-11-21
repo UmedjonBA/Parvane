@@ -39,6 +39,7 @@ import {
   selectThemeValues,
 } from '../../global/selectors';
 import { selectSharedSettings } from '../../global/selectors/sharedState';
+import { startAutoUpdate } from '../../util/appUpdate';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_ANDROID, IS_WAVE_TRANSFORM_SUPPORTED } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
@@ -46,6 +47,7 @@ import buildStyle from '../../util/buildStyle';
 import { getColorScheme, getSchemeChatColors } from '../../util/colorScheme';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
+import { startLanguagePrefs } from '../../util/languagePrefs';
 import * as mediaLoader from '../../util/mediaLoader';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
 import { oldTranslate } from '../../util/oldLangProvider';
@@ -298,6 +300,13 @@ const Main = ({
   }, [isDesktop, isLeftColumnOpen, isMiddleColumnOpen, isMobile, toggleLeftColumn]);
 
   useInterval(checkAppVersion, isMasterTab ? APP_OUTDATED_TIMEOUT_MS : undefined, true);
+
+  // Parvane (доски `RpProfileA`, `ZdProfileX`): язык «как в системе», проверка орфографии устройства и
+  // «Обновлять автоматически»
+  useEffect(() => {
+    startLanguagePrefs();
+    startAutoUpdate();
+  }, []);
 
   // Initial API calls
   // Parvane (B5): после синка tt запускал ~40 загрузчиков Telegram (stories, промо, подарки, Stars, реакции-теги,

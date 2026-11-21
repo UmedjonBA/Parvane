@@ -16,6 +16,8 @@ export type CallInfo = {
   isRemoteMuted?: boolean;
   isRemoteCameraOff?: boolean;
   groupVideoMuted?: Record<string, boolean>;
+  groupAudioMuted?: Record<string, boolean>;
+  route?: 'relay' | 'direct';
   screenStream?: MediaStream;
   canShareScreen?: boolean;
   hasScreenShareError?: boolean;

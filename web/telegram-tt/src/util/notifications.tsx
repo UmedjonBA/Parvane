@@ -38,7 +38,7 @@ import jsxToHtml from './element/jsxToHtml';
 import { buildCollectionByKey } from './iteratees';
 import { getTranslationFn } from './localization';
 import * as mediaLoader from './mediaLoader';
-import { getIsNotifyAllowedNow } from './notifyPrefs';
+import { getIsNotifyAllowedNow, getNotifyPrefs } from './notifyPrefs';
 import { oldTranslate } from './oldLangProvider';
 import { buildPageNotifyButtons } from './pageNotify';
 import { debounce } from './schedulers';
@@ -373,7 +373,9 @@ function checkIfShouldNotify(chat: ApiChat, message: Partial<ApiMessage>) {
   return !document.hasFocus();
 }
 
-function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: ApiPeerReaction) {
+function getNotificationContent(
+  chat: ApiChat, message: ApiMessage, reaction?: ApiPeerReaction, notifyModule: MessageNotifyModule = 'chats',
+) {
   const global = getGlobal();
   let sender = selectSender(global, message);
   const hasReaction = Boolean(reaction);
@@ -381,7 +383,8 @@ function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: A
     sender = selectPeer(global, reaction.peerId);
   }
 
-  const { isScreenLocked } = global.passcode;
+  // «Скрывать текст в уведомлениях, пока заблокировано» (доска `ZdProfileX`) выключен — уведомление как без блокировки
+  const isScreenLocked = global.passcode.isScreenLocked && !getNotifyPrefs().isLockedTextShown;
   const isSelf = chat.id === global.currentUserId;
 
   // Доска `ZpSystem` (spec 041 F2): «Parvane · Чаты», чат первой строкой; текст — только если он включён в
@@ -406,7 +409,8 @@ function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: A
     lockedHint: lang('PvSysLockedHint'),
   });
 
-  let title = buildNotifyTitle(APP_NAME, lang('ParvaneSectionMessenger'));
+  const moduleTitle = lang(notifyModule === 'files' ? 'ParvaneModuleFiles' : 'ParvaneSectionMessenger');
+  let title = buildNotifyTitle(APP_NAME, moduleTitle);
 
   if (message.isSilent) {
     title += ' 🔕';
@@ -472,6 +476,17 @@ export async function notifyAboutCall({
   };
 }
 
+type MessageNotifyModule = 'chats' | 'files';
+
+// Ссылка «Файлов» для людей без аккаунта (spec 022): `https://<сервер>/s/<id>#k=<ключ>`
+const CLOUD_LINK_RE = /\/s\/[\w-]+#k=/;
+
+function getMessageNotifyModule(message: Partial<ApiMessage>): MessageNotifyModule {
+  const { content } = message;
+  if (content?.cloudInvite) return 'files';
+  return content?.text?.text && CLOUD_LINK_RE.test(content.text.text) ? 'files' : 'chats';
+}
+
 export async function notifyAboutMessage({
   chat,
   message,
@@ -480,8 +495,10 @@ export async function notifyAboutMessage({
   const global = getGlobal();
   const { hasWebNotifications } = selectSettingsKeys(global);
   if (!checkIfShouldNotify(chat, message)) return;
-  // Модуль «Чаты» выключен в «Уведомлениях» либо идёт «Не беспокоить» — ни уведомления, ни звука
-  if (!getIsNotifyAllowedNow('chats')) return;
+  // Модуль выключен в «Уведомлениях» либо идёт «Не беспокоить» — ни уведомления, ни звука. Приглашение в общую
+  // папку и ссылка «Файлов» — уведомление модуля «Файлы» (доски `PhProfileA`, `DkSettingsB`), остальное — «Чаты»
+  const notifyModule = getMessageNotifyModule(message);
+  if (!getIsNotifyAllowedNow(notifyModule)) return;
   const isChatSilent = getIsChatSilent(
     chat, selectNotifyDefaults(getGlobal()), selectNotifyException(getGlobal(), chat.id),
   );
@@ -515,7 +532,7 @@ export async function notifyAboutMessage({
   const {
     title,
     body,
-  } = getNotificationContent(chat, message as ApiMessage, activeReaction);
+  } = getNotificationContent(chat, message as ApiMessage, activeReaction, notifyModule);
 
   if (checkIfPushSupported()) {
     if (navigator.serviceWorker?.controller) {

@@ -538,7 +538,8 @@ message SessionIssueRequest {
   // аккаунт, где требуется ключ).
   SecKeyAssertion seckey = 10;
   // SECKEY-1: ключ безопасности потерян — вход нового устройства ключом восстановления вместо ключа безопасности
-  // (сервер сверяет его с копией корня, как в RECOVER-2).
+  // (сервер сверяет его с копией корня, как в RECOVER-2). spec 041: так же — вместо подтверждения входа в Telegram
+  // (`SessionIssueResponse.twofa_recovery`).
   string recovery_key = 11 [(parvane.core.v2.max_len) = 128];
 }
 message SessionIssueResponse {
@@ -580,6 +581,11 @@ message SessionIssueResponse {
   bool recovery_key_wrong = 17;
   // Вход ключом восстановления вместо ключа безопасности возможен (у аккаунта есть копия корня на сервере).
   bool seckey_recovery = 18;
+  // spec 041 (доска RpProfileC): когда владелец запросил удаление (вместе с `deletion_at_ms`).
+  int64 deletion_requested_ms = 19;
+  // spec 041 (доски ZpAuthX, ZdAuthX): при `twofa_required` вход можно подтвердить ключом восстановления вместо
+  // Telegram — повторить с `SessionIssueRequest.recovery_key` (у аккаунта есть копия корня на сервере).
+  bool twofa_recovery = 20;
 }
 
 // SECKEY-1: ответ аутентификатора WebAuthn (`AuthenticatorAssertionResponse`) — как отдал браузер.
@@ -1048,6 +1054,8 @@ message LinkOffer {
   // LINK-1 п. 13: закрытая часть ключа challenge, зашифрованная ключом из SSK аккаунта (base64). Другие старые
   // устройства с тем же SSK открывают её, показывают тот же код сверки и могут выдать грант.
   string challenge_wrap = 7 [(parvane.core.v2.max_len) = 512];
+  // spec 041 (доска DkSettingsA): как новое устройство назвало себя при входе («Firefox, Linux») — только показ.
+  string label = 8 [(parvane.core.v2.max_len) = 64];
 }
 
 message LinkGrant {
@@ -1064,6 +1072,8 @@ message LinkPollResponse {
   LinkGrant grant = 2;
   // Ключ challenge старого устройства для этого устройства.
   string challenge = 3 [(parvane.core.v2.max_len) = 512];
+  // spec 041: своё устройство аккаунта отклонило запрос этого устройства (оффер погашен; новый оффер снимает отметку).
+  bool declined = 4;
 }
 
 message LinkChallengeRequest {
@@ -1080,6 +1090,9 @@ message LinkGrantRequest {
   // Шифртекст на ключ challenge: сертификат нового устройства + ключ состояния.
   string box_payload = 2 [(parvane.core.v2.max_len) = 131072];
   string eph_pub = 3 [(parvane.core.v2.max_len) = 512];
+  // spec 041: не грант, а отказ — запрос гасится, новое устройство узнаёт об этом из `LinkPollResponse.declined`
+  // (`box_payload` и `eph_pub` пустые).
+  bool decline = 4;
 }
 message LinkGrantResponse {}
 

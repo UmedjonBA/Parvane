@@ -169,4 +169,20 @@ describe('номер копии ключей аккаунта: защита от
     expect(await openKeyBundle((await deriveBundleKey(KEY.replace(/7$/, '8'), ADDRESS))!, ADDRESS, sealed))
       .toBeUndefined();
   });
+
+  it('время записи и дата ключа переживают запечатывание, пометка выключения хранит дату ключа', async () => {
+    const key = (await deriveBundleKey(KEY, ADDRESS))!;
+    const opened = (await openKeyBundle(key, ADDRESS, await sealKeyBundle(key, ADDRESS, {
+      grant: 'Z3JhbnQ=', at: 1_700_000_100_000, keyAt: 1_700_000_000_000,
+    })))!;
+    expect(describeKeyBundle(opened)).toMatchObject({ updatedAt: 1_700_000_100_000, keyAt: 1_700_000_000_000 });
+    const offSealed = await sealKeyBundle(key, ADDRESS, buildOffBundle(3, 1_700_000_000_000));
+    const off = (await openKeyBundle(key, ADDRESS, offSealed))!;
+    expect(off.keyAt).toBe(1_700_000_000_000);
+    // Мусор вместо времени — дата неизвестна
+    const junk = (await openKeyBundle(key, ADDRESS, await sealKeyBundle(key, ADDRESS, {
+      grant: 'Z3JhbnQ=', at: -5, keyAt: 1.5,
+    })))!;
+    expect([junk.at, junk.keyAt]).toEqual([undefined, undefined]);
+  });
 });

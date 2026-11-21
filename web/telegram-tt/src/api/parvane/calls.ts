@@ -1,7 +1,9 @@
 import type { ApiMessage, ApiUpdate } from '../types';
+import type { CallRoute } from './callRoute';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
 
+import { addCallCamera } from './callCameraEnable';
 import { switchCallCamera } from './callCameraSwitch';
 import {
   CallEngine, type CallMedia, FALLBACK_ICE_SERVERS, RING_TIMEOUT_MS, type WireCallSignal,
@@ -63,6 +65,7 @@ const BUSY_GROUP_CALL_LIMIT = 64;
 const MAX_BUFFERED_GROUP_SIGNALS = 256;
 // Отклонённое приглашение глушит повторы того же звонка недолго: дальше «Позвать участника» зовёт снова
 const DECLINED_SILENCE_MS = 2500;
+const ROUTE_CHECK_MS = 3000;
 const AWAY_PEER_STATES = new Set(['ended', 'declined', 'busy', 'security_failed']);
 
 export type CallAction = 'candidates' | 'invite' | 'switchCamera' | 'acceptWaiting' | 'declineWaiting';
@@ -87,8 +90,11 @@ type CallWindowState = {
   // Собеседник выключил микрофон или камеру (spec 024)
   isRemoteMuted?: boolean;
   isRemoteCameraOff?: boolean;
-  // Участники группового звонка с выключенной камерой (spec 024)
+  // Участники группового звонка с выключенной камерой и микрофоном (spec 024)
   groupVideoMuted?: Record<string, boolean>;
+  groupAudioMuted?: Record<string, boolean>;
+  // Звонок идёт через TURN-сервер либо напрямую — по выбранной паре ICE
+  route?: CallRoute;
   screenStream?: MediaStream;
   canShareScreen?: boolean;
   hasScreenShareError?: boolean;
@@ -306,7 +312,12 @@ export function createCallController(deps: CallDependencies) {
           callWindow.parvaneCall!.screenStream = undefined;
         }
       }
-      if (state === 'active') callWindow.parvaneCall!.canShareScreen = Boolean(engine?.getVideoSender());
+      if (state === 'active') {
+        callWindow.parvaneCall!.canShareScreen = Boolean(engine?.getVideoSender());
+        watchRoute();
+      } else {
+        callWindow.parvaneCall!.route = undefined;
+      }
       if (state === 'busy') {
         // Показываем «занято» пару секунд, затем закрываем оверлей
         window.setTimeout(() => {
@@ -405,10 +416,13 @@ export function createCallController(deps: CallDependencies) {
         }
         emit();
       },
-      onPeerMedia: (peer, { isVideoMuted }) => {
-        // Камера участника выключена — его плитка без застывшего кадра (spec 024)
+      onPeerMedia: (peer, { isAudioMuted, isVideoMuted }) => {
+        // Камера участника выключена — его плитка без застывшего кадра (spec 024); микрофон — значок на плитке
         callWindow.parvaneCall!.groupVideoMuted = {
           ...callWindow.parvaneCall!.groupVideoMuted, [peer]: isVideoMuted,
+        };
+        callWindow.parvaneCall!.groupAudioMuted = {
+          ...callWindow.parvaneCall!.groupAudioMuted, [peer]: isAudioMuted,
         };
         emit();
       },
@@ -424,6 +438,7 @@ export function createCallController(deps: CallDependencies) {
         callWindow.parvaneCall!.group = undefined;
         callWindow.parvaneCall!.groupStreams = undefined;
         callWindow.parvaneCall!.groupVideoMuted = undefined;
+        callWindow.parvaneCall!.groupAudioMuted = undefined;
         callWindow.parvaneCall!.screenStream = undefined;
         callWindow.parvaneCall!.canShareScreen = undefined;
         callWindow.parvaneCall!.hasScreenShareError = undefined;
@@ -1076,7 +1091,7 @@ export function createCallController(deps: CallDependencies) {
     // В mesh камеру гасим через track.enabled (без ренеготиации): пиры видят
     // застывший/пустой кадр, звук не трогаем
     const tracks = getLocalStream()?.getVideoTracks() || [];
-    if (!tracks.length) return undefined;
+    if (!tracks.length) return enableCamera();
     const shouldDisable = tracks.some((track) => track.enabled);
     tracks.forEach((track) => {
       track.enabled = !shouldDisable;
@@ -1084,6 +1099,41 @@ export function createCallController(deps: CallDependencies) {
     emitWindowState({ isCameraOff: shouldDisable });
     sendMediaState();
     return shouldDisable;
+  }
+
+  // Маршрут личного звонка опрашивается, пока он идёт: ICE может перейти с прямой пары на TURN и обратно
+  let routeTimer: number | undefined;
+  function watchRoute() {
+    if (routeTimer) return;
+    const check = () => {
+      if (windowCall()?.state !== 'active') {
+        window.clearInterval(routeTimer);
+        routeTimer = undefined;
+        return;
+      }
+      void engine?.getRoute().then((route) => {
+        if (route && windowCall()?.state === 'active' && windowCall()?.route !== route) emitWindowState({ route });
+      });
+    };
+    routeTimer = window.setInterval(check, ROUTE_CHECK_MS);
+    check();
+  }
+
+  // Голосовой звонок: камеры ещё нет — включаем её в уже согласованное видео (доски `PhCalls`, `DkCalls`)
+  async function enableCamera() {
+    const stream = getLocalStream();
+    if (!stream) return undefined;
+    try {
+      const isAdded = await addCallCamera(stream, getVideoSenders(), Boolean(windowCall()?.screenStream));
+      if (!isAdded) return undefined;
+    } catch (error) {
+      deps.log(`Камера не включилась: ${String(error)}`);
+      window.dispatchEvent(new CustomEvent('parvane-call-media-error'));
+      return undefined;
+    }
+    emitWindowState({ localStream: stream, isCameraOff: false });
+    sendMediaState();
+    return false;
   }
 
   // Состояние своих микрофона и камеры — собеседнику (spec 024): у него «камера выключена» вместо

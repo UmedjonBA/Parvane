@@ -3,7 +3,7 @@ import type { NotifyButton, NotifyData, NotifyKind } from './systemNotify';
 import { APP_NAME } from '../config';
 import { getTranslationFn } from './localization';
 import { getIsNotifyAllowedNow } from './notifyPrefs';
-import { buildNotifyButtons, buildNotifyTitle } from './systemNotify';
+import { buildNotifyButtons, buildNotifyTitle, getReminderNotifyModule } from './systemNotify';
 
 // Системные уведомления, которые показывает открытое приложение (spec 041 F2, доска `ZpSystem`): звонок, напоминание
 // «Плана» и «Трек скачан на сервер». Показывает их service worker страницы — тогда нажатия (и кнопки) приходят в
@@ -50,9 +50,11 @@ export function closeCallNotification() {
 
 /** Напоминание «Плана» при скрытом окне: «Parvane · План», текст, «Готово» и «Через 10 мин». */
 export function showReminderNotification({ key, title, text }: { key: string; title: string; text: string }) {
-  if (document.visibilityState === 'visible' || !getIsNotifyAllowedNow('plan')) return;
+  const notifyModule = getReminderNotifyModule(key);
+  if (document.visibilityState === 'visible' || !getIsNotifyAllowedNow(notifyModule)) return;
   const lang = getTranslationFn();
-  void showPageNotification(buildNotifyTitle(APP_NAME, lang('ParvaneSectionPlanner')), {
+  const moduleTitle = lang(notifyModule === 'health' ? 'PlannerHealth' : 'ParvaneSectionPlanner');
+  void showPageNotification(buildNotifyTitle(APP_NAME, moduleTitle), {
     body: text,
     tag: `reminder:${key}`,
     data: { kind: 'reminder', reminderKey: key, reminderTitle: title } satisfies NotifyData,

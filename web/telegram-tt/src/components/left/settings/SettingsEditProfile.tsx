@@ -1,9 +1,10 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiBirthday, ApiPhoto, ApiUsername } from '../../../api/types';
+import type { NickSubmit } from './account/ProfileNickChange';
 import { ApiMediaFormat } from '../../../api/types';
 import { ProfileEditProgress } from '../../../types';
 
@@ -13,9 +14,9 @@ import { selectCurrentLimit } from '../../../global/selectors/limits';
 import buildClassName from '../../../util/buildClassName';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
 import { throttle } from '../../../util/schedulers';
+import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { callApi } from '../../../api/gramjs';
 import { buildParvaneUserLink } from '../../common/helpers/formatUsername';
-import renderText from '../../common/helpers/renderText';
 import { setProfileSaveHandler } from './profile/profileRequests';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -27,16 +28,20 @@ import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
 
 import ManageUsernames from '../../common/ManageUsernames';
 import ChatOrUserPicker from '../../common/pickers/ChatOrUserPicker';
-import Island, { IslandDescription, IslandOutside, IslandTitle } from '../../gili/layout/Island';
+import Island, { IslandDescription, IslandOutside } from '../../gili/layout/Island';
 import Surface from '../../gili/layout/Surface';
-import AvatarEditable from '../../ui/AvatarEditable';
+import CropModal from '../../ui/CropModal';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
-import TextArea from '../../ui/TextArea';
 import ProfileNickChange from './account/ProfileNickChange';
+
+import kit from '../../parvane/notes/PvKit.module.scss';
+import styles from './account/Account.module.scss';
 
 type OwnProps = {
   isActive: boolean;
+  // Окно поверх «Профиля» на компьютере (доска `RdProfile`): «Отмена / Сохранить» внизу, перетаскивание картинки
+  isWindow?: boolean;
   onReset: () => void;
 };
 
@@ -79,9 +84,15 @@ const updateParvaneProfile = (fields: ParvaneProfileFields) => (
 const runThrottled = throttle((cb) => cb(), 60000, true);
 
 const ERROR_FIRST_NAME_MISSING = 'Please provide your first name';
+const PHOTO_TYPES = 'image/png, image/jpeg';
 
+// Parvane (spec 041, доски `XpProfile`, `RdProfile`): «Мой профиль» — фото («Сменить фото», «Убрать фото», картинку
+// можно перетащить), «Имя», «О себе», ник своим блоком (`ProfileNickChange`: «Свободен», пароль при новом нике) и одна
+// «Готово» / «Сохранить» для всего, в том числе ника. Поля, которых нет на досках (фамилия, день рождения, цвет имени,
+// личный канал, телефон), — ниже под «Ещё». На телефоне — экран с «Готово» в шапке, на компьютере — окно
 const SettingsEditProfile = ({
   isActive,
+  isWindow,
   currentAvatarHash,
   currentAvatarPhotoId,
   currentFirstName,
@@ -122,6 +133,11 @@ const SettingsEditProfile = ({
   const [error, setError] = useState<string | undefined>();
 
   const [photo, setPhoto] = useState<File | undefined>();
+  const [pickedPhoto, setPickedPhoto] = useState<File | undefined>();
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const nickSubmitRef = useRef<NickSubmit | undefined>();
+  const [hasNickChange, setHasNickChange] = useState(false);
   const [firstName, setFirstName] = useState(currentFirstName || '');
   const [lastName, setLastName] = useState(currentLastName || '');
   const [bio, setBio] = useState(currentBio || '');
@@ -147,9 +163,17 @@ const SettingsEditProfile = ({
       return false;
     }
 
-    return Boolean(photo) || isProfileFieldsTouched || isPhoneTouched
+    return Boolean(photo) || isProfileFieldsTouched || isPhoneTouched || hasNickChange
       || (isUsernameTouched && renderingIsUsernameAvailable === true);
-  }, [isUsernameError, photo, isProfileFieldsTouched, isPhoneTouched, isUsernameTouched, renderingIsUsernameAvailable]);
+  }, [
+    isUsernameError, photo, isProfileFieldsTouched, isPhoneTouched, isUsernameTouched, renderingIsUsernameAvailable,
+    hasNickChange,
+  ]);
+
+  const photoPreviewUrl = useMemo(() => (photo ? URL.createObjectURL(photo) : undefined), [photo]);
+  useEffect(() => () => {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+  }, [photoPreviewUrl]);
 
   useHistoryBack({
     isActive,
@@ -206,7 +230,42 @@ const SettingsEditProfile = ({
   }, [currentBirthday, lang]);
 
   const handlePhotoChange = useLastCallback((newPhoto: File) => {
+    setPickedPhoto(undefined);
     setPhoto(newPhoto);
+  });
+
+  const closeCrop = useLastCallback(() => setPickedPhoto(undefined));
+
+  const handlePickPhoto = useLastCallback(() => {
+    openSystemFilesDialog(PHOTO_TYPES, (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) setPickedPhoto(file);
+    });
+  });
+
+  // Картинку можно перетащить в окно (доска `RdProfile`): дальше — та же обрезка, что у «Сменить фото»
+  const handleDragOver = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    setIsDragOver(true);
+  });
+
+  const handleDragLeave = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDragOver(false);
+  });
+
+  const handleDrop = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
+    setIsDragOver(false);
+    const file = Array.from(e.dataTransfer?.files || []).find(({ type }) => type.startsWith('image/'));
+    if (!file) return;
+    e.preventDefault();
+    setPickedPhoto(file);
+  });
+
+  const handleNickSubmitChange = useLastCallback((submit: NickSubmit | undefined) => {
+    nickSubmitRef.current = submit;
+    setHasNickChange(Boolean(submit));
   });
 
   const handleFirstNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -255,6 +314,7 @@ const SettingsEditProfile = ({
     deleteProfilePhoto({ photo: { id: currentAvatarPhotoId! } as ApiPhoto });
   });
 
+  // Сохранить профиль; `false` — сохранять нечего либо имя пустое
   const handleProfileSave = useLastCallback(() => {
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
@@ -262,18 +322,18 @@ const SettingsEditProfile = ({
 
     // Parvane: у пользователей нет username — пустая строка не должна блокировать
     // сохранение; блокирует только невалидный ввод (false)
-    if (editableUsername === false) return;
+    if (editableUsername === false) return false;
 
     if (!trimmedFirstName.length) {
       setError(ERROR_FIRST_NAME_MISSING);
-      return;
+      return false;
     }
 
     if (isPhoneTouched) {
       setIsPhoneTouched(false);
       void updateParvaneProfile({ phone: phone.trim() });
-      if (!photo && !isProfileFieldsTouched) return;
     }
+    if (!photo && !isProfileFieldsTouched && !isUsernameTouched) return true;
 
     updateProfile({
       photo,
@@ -286,155 +346,235 @@ const SettingsEditProfile = ({
         username: editableUsername,
       }),
     });
+    return true;
   });
 
-  // «Готово» шапки: есть что сохранить — сохранить, иначе назад
-  const handleDone = useLastCallback(() => {
-    if (isSaveButtonShown && !isLoading) handleProfileSave();
-    else onReset();
+  // «Готово» шапки и «Сохранить» окна: профиль, затем ник (после смены ника вкладка перезагрузится); нечего
+  // сохранять — назад. Окно закрывается после удачного сохранения
+  const handleDone = useLastCallback(async () => {
+    if (!isSaveButtonShown || isLoading) {
+      onReset();
+      return;
+    }
+    if (!handleProfileSave()) return;
+    const submitNick = nickSubmitRef.current;
+    if (submitNick && !await submitNick()) return;
+    if (isWindow && !submitNick) onReset();
   });
 
-  useEffect(() => {
-    if (!isActive) return undefined;
+  // Окно: «Отмена» не сохраняет — набранное забывается
+  const handleCancel = useLastCallback(() => {
+    areProfileFieldsDirtyRef.current = false;
+    setFirstName(currentFirstName || '');
+    setLastName(currentLastName || '');
+    setBio(currentBio || '');
+    setPhoto(undefined);
+    setIsProfileFieldsTouched(false);
+    setIsPhoneTouched(false);
+    onReset();
+  });
+
+  useLayoutEffect(() => {
+    if (!isActive || isWindow) return undefined;
     setProfileSaveHandler(handleDone);
     return () => setProfileSaveHandler(undefined);
-  }, [isActive, handleDone]);
+  }, [isActive, isWindow, handleDone]);
+
+  const avatarUrl = photoPreviewUrl || currentAvatarBlobUrl;
+  const nameField = (
+    <InputText
+      value={firstName}
+      onChange={handleFirstNameChange}
+      label={oldLang('FirstName')}
+      disabled={isLoading}
+      error={error === ERROR_FIRST_NAME_MISSING ? error : undefined}
+    />
+  );
+  // Ник своим блоком: смена (spec 026) с паролем — по общей «Готово» / «Сохранить»
+  const nickBlock = (
+    <ProfileNickChange
+      currentNick={readOnlyUsername}
+      leading={isWindow ? nameField : undefined}
+      onSubmitChange={handleNickSubmitChange}
+    />
+  );
 
   return (
-    <div className="settings-fab-wrapper" data-edit-profile data-dirty={isSaveButtonShown ? '' : undefined}>
+    <div
+      className={buildClassName('settings-fab-wrapper', isDragOver && styles.dropActive)}
+      data-edit-profile
+      data-edit-profile-window={isWindow || undefined}
+      data-dirty={isSaveButtonShown ? '' : undefined}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <Surface scrollable className="settings-content no-border">
-        <IslandOutside className="settings-content-header">
-          <AvatarEditable
-            currentAvatarBlobUrl={currentAvatarBlobUrl}
-            onChange={handlePhotoChange}
-            title={lang('AriaSettingsEditProfilePhoto')}
-            disabled={isLoading}
-          />
-          {currentAvatarPhotoId && !photo && (
-            <button type="button" className="parvane-avatar-remove" data-avatar-remove onClick={handleAvatarRemove}>
-              {lang('ParvaneProfileRemovePhoto')}
+        <IslandOutside className={buildClassName('settings-content-header', styles.avatarEdit)}>
+          <span className={styles.avatarImage} data-avatar-image>
+            {avatarUrl
+              ? <img className={styles.avatarImg} src={avatarUrl} alt="" draggable={false} />
+              : (firstName || '?').slice(0, 1)}
+          </span>
+          <span className={styles.avatarActions}>
+            <button
+              type="button"
+              className={kit.btn}
+              disabled={isLoading}
+              data-avatar-change
+              onClick={handlePickPhoto}
+            >
+              {lang('ParvaneProfileChangePhoto')}
             </button>
-          )}
-        </IslandOutside>
-        <Island>
-          <div className="settings-input">
-            <InputText
-              value={firstName}
-              onChange={handleFirstNameChange}
-              label={oldLang('FirstName')}
-              disabled={isLoading}
-              error={error === ERROR_FIRST_NAME_MISSING ? error : undefined}
-            />
-            <InputText
-              value={lastName}
-              onChange={handleLastNameChange}
-              label={oldLang('LastName')}
-              disabled={isLoading}
-            />
-            <TextArea
-              value={bio}
-              onChange={handleBioChange}
-              label={oldLang('UserBio')}
-              disabled={isLoading}
-              maxLength={maxBioLength}
-              maxLengthIndicator={maxBioLength ? (maxBioLength - bio.length).toString() : undefined}
-            />
-          </div>
-        </Island>
-        <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-          {renderText(oldLang('lng_settings_about_bio'), ['br', 'simple_markdown'])}
-        </IslandDescription>
-
-        {/* Parvane (spec 041, `XpProfile`): ник — своим блоком, смена (spec 026) с паролем и ключом восстановления */}
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang('Username')}</IslandTitle>
-        <ProfileNickChange currentNick={readOnlyUsername} />
-        {readOnlyUsername && (
-          <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-            {oldLang('lng_username_link')}
-            <br />
-            <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
-          </IslandDescription>
-        )}
-
-        <Island>
-          <ListItem
-            icon="gift"
-            narrow
-            rightElement={formattedBirthday ?
-              <span className="settings-birthday-date">{formattedBirthday}</span>
-              : undefined}
-            onClick={handleBirthdayClick}
-          >
-            <span className="flex-grow">{lang('SettingsBirthday')}</span>
-          </ListItem>
-        </Island>
-        {/* Parvane: настроек приватности даты рождения нет (серверной приватности нет) */}
-
-        <Island>
-          <ListItem
-            icon="colorize"
-            narrow
-            className="parvane-name-color"
-            rightElement={(
-              <span
-                className={buildClassName('parvane-name-color-swatch', `peer-color-${currentNameColor ?? 0}`)}
-              />
-            )}
-            onClick={() => setIsColorPickerOpen(!isColorPickerOpen)}
-          >
-            <span className="flex-grow">{oldLang('ParvaneNameColor')}</span>
-          </ListItem>
-          {isColorPickerOpen && (
-            <div className="parvane-name-color-palette">
-              {Array.from({ length: PEER_COLOR_COUNT }, (_, index) => index + FIRST_SELECTABLE_COLOR).map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className={buildClassName('parvane-name-color-option', `peer-color-${color}`)}
-                  aria-label={`${oldLang('ParvaneNameColor')} ${color}`}
-                  onClick={() => handleNameColorSelect(color)}
-                />
-              ))}
-              <button type="button" className="parvane-name-color-default" onClick={() => handleNameColorSelect(-1)}>
-                {oldLang('ParvaneNameColorDefault')}
+            {currentAvatarPhotoId && !photo && (
+              <button
+                type="button"
+                className={buildClassName(kit.btn, kit.btnGhost)}
+                data-avatar-remove
+                onClick={handleAvatarRemove}
+              >
+                {lang('ParvaneProfileRemovePhoto')}
               </button>
-            </div>
-          )}
-          <ListItem
-            icon="channel"
-            narrow
-            className="parvane-personal-channel"
-            rightElement={currentPersonalChannelTitle
-              ? <span className="settings-birthday-date">{currentPersonalChannelTitle}</span>
-              : undefined}
-            onClick={() => setIsChannelPickerOpen(true)}
-          >
-            <span className="flex-grow">{oldLang('ParvanePersonalChannel')}</span>
-          </ListItem>
-          {currentPersonalChannelId && (
-            <ListItem icon="delete" narrow destructive onClick={handlePersonalChannelRemove}>
-              <span className="flex-grow">{oldLang('ParvanePersonalChannelRemove')}</span>
-            </ListItem>
-          )}
-          <div className="settings-input">
-            <InputText
-              value={phone}
-              onChange={handlePhoneChange}
-              label={oldLang('ParvanePhone')}
-              disabled={isLoading}
+            )}
+            {isWindow && <span className={styles.muted}>{lang('ParvaneProfileDropHint')}</span>}
+          </span>
+        </IslandOutside>
+        {!isWindow && (
+          <Island>
+            <div className="settings-input">{nameField}</div>
+          </Island>
+        )}
+        {/* Окно компьютера (`RdProfile`): «Имя | Ник» строкой, затем «О себе»; телефон (`XpProfile`): имя, о себе, ник */}
+        {isWindow && nickBlock}
+        <div className={buildClassName(kit.card, styles.nickBox)}>
+          <label className={styles.label} htmlFor="parvane-profile-bio">{oldLang('UserBio')}</label>
+          <textarea
+            id="parvane-profile-bio"
+            className={kit.textarea}
+            value={bio}
+            placeholder={lang('ParvaneProfileBioPlaceholder')}
+            maxLength={maxBioLength || undefined}
+            disabled={isLoading}
+            onChange={handleBioChange}
+          />
+        </div>
+        {!isWindow && nickBlock}
+
+        <button
+          type="button"
+          className={styles.moreToggle}
+          aria-expanded={isMoreOpen}
+          data-profile-more
+          onClick={() => setIsMoreOpen(!isMoreOpen)}
+        >
+          {lang('ParvaneProfileMoreFields')}
+        </button>
+        {isMoreOpen && (
+          <>
+            <Island>
+              <div className="settings-input">
+                <InputText
+                  value={lastName}
+                  onChange={handleLastNameChange}
+                  label={oldLang('LastName')}
+                  disabled={isLoading}
+                />
+              </div>
+            </Island>
+            {readOnlyUsername && (
+              <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+                {oldLang('lng_username_link')}
+                <br />
+                <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
+              </IslandDescription>
+            )}
+            <Island>
+              <ListItem
+                icon="gift"
+                narrow
+                rightElement={formattedBirthday ?
+                  <span className="settings-birthday-date">{formattedBirthday}</span>
+                  : undefined}
+                onClick={handleBirthdayClick}
+              >
+                <span className="flex-grow">{lang('SettingsBirthday')}</span>
+              </ListItem>
+            </Island>
+            {/* Parvane: настроек приватности даты рождения нет (серверной приватности нет) */}
+
+            <Island>
+              <ListItem
+                icon="colorize"
+                narrow
+                className="parvane-name-color"
+                rightElement={(
+                  <span
+                    className={buildClassName('parvane-name-color-swatch', `peer-color-${currentNameColor ?? 0}`)}
+                  />
+                )}
+                onClick={() => setIsColorPickerOpen(!isColorPickerOpen)}
+              >
+                <span className="flex-grow">{oldLang('ParvaneNameColor')}</span>
+              </ListItem>
+              {isColorPickerOpen && (
+                <div className="parvane-name-color-palette">
+                  {Array.from(
+                    { length: PEER_COLOR_COUNT }, (_, index) => index + FIRST_SELECTABLE_COLOR,
+                  ).map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={buildClassName('parvane-name-color-option', `peer-color-${color}`)}
+                      aria-label={`${oldLang('ParvaneNameColor')} ${color}`}
+                      onClick={() => handleNameColorSelect(color)}
+                    />
+                  ))}
+                  <button
+                    type="button"
+                    className="parvane-name-color-default"
+                    onClick={() => handleNameColorSelect(-1)}
+                  >
+                    {oldLang('ParvaneNameColorDefault')}
+                  </button>
+                </div>
+              )}
+              <ListItem
+                icon="channel"
+                narrow
+                className="parvane-personal-channel"
+                rightElement={currentPersonalChannelTitle
+                  ? <span className="settings-birthday-date">{currentPersonalChannelTitle}</span>
+                  : undefined}
+                onClick={() => setIsChannelPickerOpen(true)}
+              >
+                <span className="flex-grow">{oldLang('ParvanePersonalChannel')}</span>
+              </ListItem>
+              {currentPersonalChannelId && (
+                <ListItem icon="delete" narrow destructive onClick={handlePersonalChannelRemove}>
+                  <span className="flex-grow">{oldLang('ParvanePersonalChannelRemove')}</span>
+                </ListItem>
+              )}
+              <div className="settings-input">
+                <InputText
+                  value={phone}
+                  onChange={handlePhoneChange}
+                  label={oldLang('ParvanePhone')}
+                  disabled={isLoading}
+                />
+              </div>
+            </Island>
+            <ChatOrUserPicker
+              isOpen={isChannelPickerOpen}
+              chatOrUserIds={channelIds}
+              title={oldLang('ParvanePersonalChannel')}
+              searchPlaceholder={oldLang('Search')}
+              search={channelSearch}
+              onSearchChange={setChannelSearch}
+              onSelectChatOrUser={handlePersonalChannelSelect}
+              onClose={() => setIsChannelPickerOpen(false)}
             />
-          </div>
-        </Island>
-        <ChatOrUserPicker
-          isOpen={isChannelPickerOpen}
-          chatOrUserIds={channelIds}
-          title={oldLang('ParvanePersonalChannel')}
-          searchPlaceholder={oldLang('Search')}
-          search={channelSearch}
-          onSearchChange={setChannelSearch}
-          onSelectChatOrUser={handlePersonalChannelSelect}
-          onClose={() => setIsChannelPickerOpen(false)}
-        />
+          </>
+        )}
 
         {shouldRenderUsernamesManage && (
           <ManageUsernames
@@ -443,7 +583,23 @@ const SettingsEditProfile = ({
           />
         )}
       </Surface>
-
+      {isWindow && (
+        <div className={styles.windowFooter}>
+          <button type="button" className={kit.btn} data-profile-cancel onClick={handleCancel}>
+            {oldLang('Cancel')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            disabled={isLoading}
+            data-profile-save
+            onClick={handleDone}
+          >
+            {lang('ParvaneProfileSave')}
+          </button>
+        </div>
+      )}
+      <CropModal file={pickedPhoto} onClose={closeCrop} onChange={handlePhotoChange} />
     </div>
   );
 };

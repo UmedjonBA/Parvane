@@ -203,6 +203,8 @@ pub struct L2View {
     pub pad: bool,
     /// typing/presence в этом чате разрешены.
     pub ephemeral_allowed: bool,
+    /// Личный чат: когда собеседник включил своё предпочтение (метка его операции, мс); 0 — не включал.
+    pub peer_since_ms: i64,
 }
 
 /// Параметры подготовки личного сообщения.
@@ -1691,7 +1693,9 @@ impl Client {
         };
         let mut enabled_by: Vec<String> = parts.iter().filter(|u| s.pref(u).enabled).map(|u| u.to_string()).collect();
         enabled_by.dedup();
-        L2View { active: s.active(&parts), mine: s.pref(me).enabled, enabled_by, pad: s.must_pad(me, &parts), ephemeral_allowed: s.ephemeral_allowed(&parts) }
+        let theirs = s.pref(peer);
+        let peer_since_ms = if theirs.enabled { theirs.ts_ms } else { 0 };
+        L2View { active: s.active(&parts), mine: s.pref(me).enabled, enabled_by, pad: s.must_pad(me, &parts), ephemeral_allowed: s.ephemeral_allowed(&parts), peer_since_ms }
     }
 
     /// Состояние L2 группы: политика журнала (`GroupChange.set_privacy_mode`
@@ -1704,7 +1708,7 @@ impl Client {
         let me = self.user.as_str();
         let active = s.active(&[]);
         let enabled_by = if active && !state.l2_by.is_empty() { vec![state.l2_by.clone()] } else { vec![] };
-        L2View { active, mine: s.pref(me).enabled, enabled_by, pad: s.must_pad(me, &[]), ephemeral_allowed: s.ephemeral_allowed(&[]) }
+        L2View { active, mine: s.pref(me).enabled, enabled_by, pad: s.must_pad(me, &[]), ephemeral_allowed: s.ephemeral_allowed(&[]), peer_since_ms: 0 }
     }
 
     /// Личное предпочтение L2 в группе: свои исходящие выравниваются, даже
@@ -1961,6 +1965,11 @@ impl Client {
         }
         self.former_state_keys.sort_by(|a, b| b.1.cmp(&a.1));
         self.former_state_keys.truncate(FORMER_STATE_KEYS_MAX);
+    }
+
+    #[doc(hidden)]
+    pub fn debug_clear_former_state_keys(&mut self) {
+        self.former_state_keys.clear();
     }
 
     /// Сменить ключ личного состояния, сохранив прежний среди прежних (если он другой).

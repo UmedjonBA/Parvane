@@ -274,6 +274,29 @@ pub(crate) async fn store_link_grant(
     Ok(())
 }
 
+/// spec 041: своё устройство отклонило запрос привязки. Оффер гасится, на его месте — отметка отказа (грант с
+/// пустым боксом; настоящий грант пустым не бывает): её одним опросом забирает новое устройство. Новый оффер
+/// снимает отметку. `false` — живого оффера нет.
+pub(crate) async fn decline_link_offer(pool: &SqlitePool, username: &str, target_device: &str) -> Result<bool> {
+    purge_stale_links(pool).await?;
+    let removed = sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(target_device)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if removed == 0 {
+        return Ok(false);
+    }
+    sqlx::query("INSERT OR REPLACE INTO link_grants (username, device_id, box, eph_pub, created_at) VALUES (?, ?, '', '', ?)")
+        .bind(username)
+        .bind(target_device)
+        .bind(now_unix())
+        .execute(pool)
+        .await?;
+    Ok(true)
+}
+
 pub(crate) async fn handle_link_offer(
     nc: &Client,
     pool: &SqlitePool,

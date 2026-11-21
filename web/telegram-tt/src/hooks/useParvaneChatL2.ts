@@ -9,6 +9,8 @@ type ParvaneChatL2 = {
   isAvailable: boolean;
   isActive?: boolean;
   isMine?: boolean;
+  // Личный чат: когда собеседник включил режим (мс)
+  peerSinceMs?: number;
 };
 
 // Режим сменился (собеседник, своё другое устройство, журнал группы) —

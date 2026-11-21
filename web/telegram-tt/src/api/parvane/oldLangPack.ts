@@ -245,7 +245,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'after a safety copy is created. Enter your recovery key once to create it.',
   ParvaneEscrowAction: 'Create safety copy',
   ParvaneEscrowDone: 'Safety copy created.',
-  ParvaneRecoverAction: 'Use recovery key',
   ParvaneRecoverDone: 'This device is now signed in with your recovery key.',
   ParvaneRecoverNoBackup: 'No recovery copy is stored for this account.',
   ParvaneRecoverBundleOff: 'The account key copy is turned off, so the recovery key cannot sign this device in. '
@@ -270,17 +269,10 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'other devices will stop trusting its keys. If nobody stole them, remove them from the list.',
   ParvaneLeftDeviceSignedOut: 'Signed out',
   ParvaneLeftDevicesDismiss: 'Nobody stole them — remove from list',
-  ParvaneLeftDeviceStolen: 'This device was stolen',
-  ParvaneLeftDeviceStolenConfirm: 'Mark %@ as stolen? You will need your recovery key to replace the device signing '
-    + 'key; until then new devices can\'t be added and contacts see a warning.',
-  ParvaneLeftDeviceStolenDone: 'Device marked as stolen',
-  ParvaneLeftDeviceStolenFailed: 'Could not mark the device as stolen',
   ParvaneLinkGranted: 'History transferred',
   ParvaneLinkFailed: 'History transfer failed',
-  ParvaneKeysPasswordPrompt: 'Backup password',
   ParvaneKeysExported: 'E2E keys exported',
   ParvaneKeysExportFailed: 'Could not export E2E keys',
-  ParvaneKeysPasswordTooShort: 'The backup password must be at least 8 characters',
   ParvaneKeysImported: 'E2E keys imported, resyncing history',
   ParvaneKeysImportFailed: 'Could not import E2E keys',
   ParvanePackNamePrompt: 'Sticker pack name',
@@ -537,9 +529,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneTwoFactorEnableConfirm: 'Enable two-factor',
   ParvaneSessionPasswordHint: 'Enter your current password to terminate the session.',
   ParvaneSessionTerminateFailed: 'Could not terminate the session. Check the password and try again.',
-  ParvaneChangePasswordOld: 'Current password',
-  ParvaneChangePasswordNew: 'New password (at least 8 characters)',
-  ParvaneChangePasswordRepeat: 'Repeat new password',
   ParvaneChangePasswordButton: 'Change password',
   ParvaneGroupAddTitle: 'Groups',
   ParvaneGroupAddInfo: 'When off, you can only join groups yourself via an invite link.',
@@ -562,7 +551,6 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvanePrivacySaveFailed: 'The server did not save the setting. Check the connection and try again',
   ParvaneChangePasswordDone: 'Password changed. Devices trusted for two-factor must confirm sign-in again.',
   ParvaneChangePasswordFailed: 'Could not change the password',
-  ParvaneSecurityKeyTitle: 'Security key',
   ParvaneSecurityKeyHint: 'Compare these fingerprints with the ones shown on the other person\'s device '
     + '(by voice or another channel). A mismatch means someone may be in the middle.',
   ParvaneSecurityKeyOwn: 'Your security key',
@@ -572,12 +560,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneRateLimited: 'Too many actions, please slow down.',
   ParvaneUpgradeAvailable: 'A new version of Parvane is available. Update the app: '
     + 'this version will stop working soon.',
-  ParvaneStrangersInfo: 'When off, only people you have written to can message you.',
-  ParvaneCallsInfo: 'When off, nobody can call you: calls are declined without ringing.',
   ParvaneL2Toggle: 'Enhanced privacy',
   ParvaneL2Info: 'Message sizes are padded to a fixed grid; typing and online status are not sent in this chat. '
     + 'The mode is visible to all participants.',
-  ParvaneL2ByPeer: 'Turned on by the other participant',
   ParvaneNewDevice: 'A new device was added to your account. If it wasn\'t you, revoke it in Settings → Devices.',
   // Смена ключа подписи устройств после отзыва (Settings → Devices)
   ParvaneSskRotationNotice: 'A device was removed. Enter your recovery key in Settings → Devices to renew '
@@ -1497,7 +1482,7 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneGroupCallIncoming: 'приглашает в групповой звонок...',
   ParvaneGroupCallIncomingNamed: '%1$s: групповой звонок',
   ParvaneGroupPeerBusy: 'занят',
-  ParvaneGroupPeerDeclined: 'отклонено',
+  ParvaneGroupPeerDeclined: 'отклонил',
   ChannelAdministrators: 'Администраторы',
   ChannelCreator: 'Владелец',
   ChannelAdmin: 'Администратор',
@@ -1646,7 +1631,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'только после создания страховочной копии. Введите ключ восстановления один раз, чтобы её создать.',
   ParvaneEscrowAction: 'Создать страховочную копию',
   ParvaneEscrowDone: 'Страховочная копия создана.',
-  ParvaneRecoverAction: 'Ввести ключ восстановления',
   ParvaneRecoverDone: 'Устройство подключено по ключу восстановления.',
   ParvaneRecoverNoBackup: 'Для этого аккаунта нет копии для восстановления.',
   ParvaneRecoverBundleOff: 'Копия ключей аккаунта выключена — по ключу восстановления устройство не подключить. '
@@ -1671,17 +1655,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'другие устройства перестанут доверять его ключам. Если их никто не крал, уберите их из списка.',
   ParvaneLeftDeviceSignedOut: 'Вышло само',
   ParvaneLeftDevicesDismiss: 'Их никто не крал — убрать из списка',
-  ParvaneLeftDeviceStolen: 'Это устройство украли',
-  ParvaneLeftDeviceStolenConfirm: 'Отметить %@ украденным? Для смены ключа подписи устройств понадобится '
-    + 'ключ восстановления; до смены новые устройства не добавляются, а собеседники видят предупреждение.',
-  ParvaneLeftDeviceStolenDone: 'Устройство отмечено украденным',
-  ParvaneLeftDeviceStolenFailed: 'Не удалось отметить устройство украденным',
   ParvaneLinkGranted: 'История перенесена',
   ParvaneLinkFailed: 'Не удалось перенести историю',
-  ParvaneKeysPasswordPrompt: 'Пароль резервной копии',
   ParvaneKeysExported: 'Ключи E2E экспортированы',
   ParvaneKeysExportFailed: 'Не удалось экспортировать ключи E2E',
-  ParvaneKeysPasswordTooShort: 'Пароль копии ключей — не короче 8 знаков',
   ParvaneKeysImported: 'Ключи E2E импортированы, история синхронизируется заново',
   ParvaneKeysImportFailed: 'Не удалось импортировать ключи E2E',
   ParvanePackNamePrompt: 'Название набора стикеров',
@@ -1968,9 +1945,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneTwoFactorEnableConfirm: 'Включить двухфакторный вход',
   ParvaneSessionPasswordHint: 'Введите текущий пароль, чтобы завершить сеанс.',
   ParvaneSessionTerminateFailed: 'Не удалось завершить сеанс. Проверьте пароль и попробуйте ещё раз.',
-  ParvaneChangePasswordOld: 'Текущий пароль',
-  ParvaneChangePasswordNew: 'Новый пароль (не короче 8 символов)',
-  ParvaneChangePasswordRepeat: 'Повторите новый пароль',
   ParvaneChangePasswordButton: 'Сменить пароль',
   ParvaneGroupAddTitle: 'Группы',
   ParvaneGroupAddInfo: 'Если выключено, попасть в группу можно только самому по инвайт-ссылке.',
@@ -1989,7 +1963,6 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvanePrivacySaveFailed: 'Сервер не сохранил настройку. Проверьте связь и попробуйте ещё раз',
   ParvaneChangePasswordDone: 'Пароль изменён. Доверенные для 2FA устройства подтвердят вход заново.',
   ParvaneChangePasswordFailed: 'Не удалось сменить пароль',
-  ParvaneSecurityKeyTitle: 'Ключ безопасности',
   ParvaneSecurityKeyHint: 'Сверьте эти отпечатки с тем, что показано на устройстве собеседника '
     + '(голосом или по другому каналу). Несовпадение — признак подмены.',
   ParvaneSecurityKeyOwn: 'Ваш ключ безопасности',
@@ -1998,12 +1971,9 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneSecurityKeyDevice: 'Устройство %@',
   ParvaneRateLimited: 'Слишком много действий, подождите немного.',
   ParvaneUpgradeAvailable: 'Доступна новая версия Parvane. Обновите приложение: эта версия скоро перестанет работать.',
-  ParvaneStrangersInfo: 'Если выключено, писать вам могут только те, кому писали вы.',
-  ParvaneCallsInfo: 'Если выключено, вам никто не может позвонить: вызовы отклоняются без звонка.',
   ParvaneL2Toggle: 'Усиленная приватность',
   ParvaneL2Info: 'Размеры сообщений выравниваются по фиксированной сетке, «печатает» и статус «в сети» в этом чате '
     + 'не передаются. Режим виден всем участникам.',
-  ParvaneL2ByPeer: 'Включена собеседником',
   ParvaneNewDevice: 'К аккаунту добавлено новое устройство. Если это были не вы, '
     + 'отзовите его в Настройки → Устройства.',
   ParvaneSskRotationNotice: 'Устройство удалено. Введите ключ восстановления в Настройки → Устройства, '

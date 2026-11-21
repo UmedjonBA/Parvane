@@ -151,5 +151,13 @@
     .attach-tile--poll .icon {
       color: var(--pv-orange);
     }
+
+    .attach-tile--files .icon {
+      color: var(--pv-blue);
+    }
+
+    .attach-tile--track .icon {
+      color: var(--pv-green);
+    }
   }
 }

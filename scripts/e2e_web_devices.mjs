@@ -141,7 +141,19 @@ try {
   const sessionsScreen = bobDevice1.page.locator('.SettingsActiveSessions');
   await sessionsScreen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // «Мои устройства» (spec 041 E3): это устройство помечено `data-session-current`, второе — строкой с «Выйти на нём»
-  await sessionsScreen.locator('[data-session-current]').getByText('this device')
+  // Компьютер (доска `DkSettingsA`): это устройство — «This computer · <система> · online now», другое — «<вид> ·
+  // <название> · seen …» с «Выйти на нём» и «Украдено»; подписи «Мои устройства» и строки «Копия ключей» нет
+  await sessionsScreen.locator('[data-session-current]').getByText(/^This computer · .+ · online now$/)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await sessionsScreen.getByText('My devices', { exact: true }).count(), 0, 'без подписи «Мои устройства»');
+  assert.equal(await sessionsScreen.locator('[data-device-keys-backup]').count(), 0, '«Копия ключей» — в колонке');
+  assert.match(
+    await sessionsScreen.locator('[data-session-row]:not([data-session-current])').first().innerText(),
+    /Browser · Chrome · seen /,
+    'строка другого устройства одной строкой',
+  );
+  assert.equal(await sessionsScreen.locator('[data-session-stolen]').count(), 1, '«Украдено» у другого устройства');
+  await sessionsScreen.locator('[data-danger-zone]').getByText('Sign out on this computer', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const otherSession = sessionsScreen.locator('[data-session-row]:not([data-session-current])').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -160,6 +172,9 @@ try {
   await sessionsScreen.locator('[data-left-device]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await sessionsScreen.getByText('Device signing key', { exact: true }).count(), 0,
     'simple sign-out must not require replacing the device signing key');
+  // «Их никто не крал — убрать из списка»: вышедшее устройство пропадает из списка на этом устройстве
+  await sessionsScreen.locator('[data-left-devices-dismiss]').click();
+  await sessionsScreen.locator('[data-left-device]').first().waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
 
   // Обратно в чаты (и заодно проверяем персист после revoke)
   await relogin(bobDevice1.page, PASSWORD);

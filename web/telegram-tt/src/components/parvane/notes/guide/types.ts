@@ -5,7 +5,7 @@ export type GuideLang = 'ru' | 'en';
 
 // Постоянное имя заметки справки: по нему совпадают языки, проверяются ссылки и строится идентификатор узла
 export type GuideKey = 'overview' | 'chats' | 'calendar' | 'input' | 'health' | 'notes' | 'boards' | 'files'
-  | 'connections' | 'security' | 'appearance' | 'shortcuts';
+  | 'music' | 'connections' | 'security' | 'shortcuts';
 
 export type GuideSource = {
   key: GuideKey;

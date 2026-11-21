@@ -29,6 +29,7 @@ const PATHS = {
   right: 'M9 5l7 7-7 7',
   left: 'M15 5l-7 7 7 7',
   check: 'M5 12.5l4.5 4.5L19 7.5',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM16 16l4 4',
 } satisfies Record<string, string>;
 
 export type ProfileIconName = keyof typeof PATHS;
