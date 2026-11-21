@@ -102,114 +102,129 @@ const SettingsAbout = ({
 
   return (
     <div className={buildClassName('settings-content custom-scroll', styles.screen)} data-settings-about>
-      <div className={styles.about}>
-        <span className={styles.aboutLogo} aria-hidden>P</span>
-        <div className={styles.aboutName}>{APP_NAME}</div>
-        <div className={styles.aboutVersion} data-about-version onClick={handleVersionClick}>
-          {lang('ParvaneAboutVersionBuild', { version: APP_VERSION, build: APP_REVISION })}
+      {isDesktop ? (
+        <div className={styles.aboutSub} data-about-version onClick={handleVersionClick}>
+          {lang('ParvaneAboutForDesktop')}
         </div>
-      </div>
-      <div className={styles.group}>
-        {isDesktop && (
-          <div className={styles.setRow}>
-            <span className={styles.setTitle}>{lang('ParvaneAboutAppVersion')}</span>
-            <span className={styles.setValue}>{APP_VERSION}</span>
+      ) : (
+        <div className={styles.about}>
+          <span className={styles.aboutLogo} aria-hidden>P</span>
+          <div className={styles.aboutName}>{APP_NAME}</div>
+          <div className={styles.aboutVersion} data-about-version onClick={handleVersionClick}>
+            {lang('ParvaneAboutVersionBuild', { version: APP_VERSION, build: APP_REVISION })}
           </div>
-        )}
-        {server && (
-          <div className={styles.setRow}>
-            <span className={styles.setTitle}>{lang('ParvaneAboutServer')}</span>
-            <span className={styles.setValue}>{server}</span>
-          </div>
-        )}
-        <div className={styles.setRow} data-about-server-version={serverVersion}>
-          <span className={styles.setTitle}>{lang('ParvaneAboutServerVersion')}</span>
-          <span className={styles.setValue}>
-            {serverVersion ? lang('ParvaneAboutProtocol', { version: serverVersion }) : '—'}
-          </span>
         </div>
-      </div>
+      )}
+      <div className={isDesktop ? styles.aboutColumns : undefined}>
+        <div className={isDesktop ? styles.aboutColumn : undefined}>
+          <div className={buildClassName(styles.group, isDesktop && styles.aboutJoinTop)}>
+            {isDesktop && (
+              <div className={styles.setRow}>
+                <span className={styles.setTitle}>{lang('ParvaneAboutAppVersion')}</span>
+                <span className={styles.setValue} data-about-app-version>{APP_VERSION}</span>
+              </div>
+            )}
+            {server && (
+              <div className={styles.setRow}>
+                <span className={styles.setTitle}>{lang('ParvaneAboutServer')}</span>
+                <span className={styles.setValue}>{server}</span>
+              </div>
+            )}
+            <div className={styles.setRow} data-about-server-version={serverVersion}>
+              <span className={styles.setTitle}>{lang('ParvaneAboutServerVersion')}</span>
+              <span className={styles.setValue}>
+                {serverVersion ? lang('ParvaneAboutProtocol', { version: serverVersion }) : '—'}
+              </span>
+            </div>
+          </div>
 
-      <div className={styles.caption}>{lang('ParvaneAboutUpdate')}</div>
-      <div className={styles.group} data-about-update={isUpdateAvailable ? 'available' : 'none'}>
-        <div className={styles.setRow}>
-          <span className={styles.setText}>
-            <span className={styles.setTitle}>
-              {lang(isUpdateAvailable ? 'ParvaneAboutUpdateAvailable' : 'ParvaneAboutUpdateNone')}
-            </span>
-            <span className={styles.setHint}>
-              {isUpdateAvailable ? lang('ParvaneAboutUpdateFrom')
-                : checkedAt ? lang('ParvaneAboutUpdateChecked', { when: formatDateAtTime(oldLang, checkedAt) })
-                  : lang('ParvaneAboutUpdateNever')}
-            </span>
-          </span>
-          {isUpdateAvailable ? (
-            <button type="button" className={styles.chip} data-about-action="update" onClick={applyAppUpdate}>
-              {lang('ParvaneAboutUpdateApply')}
-            </button>
-          ) : (
+          {!isDesktop && <div className={styles.caption}>{lang('ParvaneAboutUpdate')}</div>}
+          <div
+            className={buildClassName(styles.group, isDesktop && styles.aboutJoinBottom)}
+            data-about-update={isUpdateAvailable ? 'available' : 'none'}
+          >
+            <div className={styles.setRow}>
+              <span className={styles.setText}>
+                <span className={styles.setTitle}>
+                  {lang(isUpdateAvailable ? 'ParvaneAboutUpdateAvailable' : 'ParvaneAboutUpdateNone')}
+                </span>
+                <span className={styles.setHint}>
+                  {isUpdateAvailable ? lang('ParvaneAboutUpdateFrom')
+                    : checkedAt ? lang('ParvaneAboutUpdateChecked', { when: formatDateAtTime(oldLang, checkedAt) })
+                      : lang('ParvaneAboutUpdateNever')}
+                </span>
+              </span>
+              {isUpdateAvailable ? (
+                <button type="button" className={styles.chip} data-about-action="update" onClick={applyAppUpdate}>
+                  {lang('ParvaneAboutUpdateApply')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.chip}
+                  disabled={isChecking}
+                  data-about-action="check"
+                  onClick={handleCheck}
+                >
+                  {lang('ParvaneAboutUpdateCheck')}
+                </button>
+              )}
+            </div>
+            <ProfileSwitchRow
+              title={lang('ParvaneAboutAutoUpdate')}
+              hint={lang('ParvaneAboutAutoUpdateHint')}
+              isOn={isAutoUpdate}
+              onChange={handleAutoUpdate}
+              data-about-auto-update
+            />
+          </div>
+        </div>
+
+        <div className={isDesktop ? styles.aboutColumn : undefined}>
+          <div className={styles.group}>
             <button
               type="button"
-              className={styles.chip}
-              disabled={isChecking}
-              data-about-action="check"
-              onClick={handleCheck}
+              className={rowClass}
+              data-about-row="changelog"
+              data-url={CHANGELOG_URL}
+              onClick={handleOpenUrl}
             >
-              {lang('ParvaneAboutUpdateCheck')}
+              <span className={styles.setText}>
+                <span className={styles.setTitle}>{lang('ParvaneAboutWhatsNew')}</span>
+                <span className={styles.setHint}>{lang('ParvaneAboutWhatsNewHint')}</span>
+              </span>
+              <ProfileIcon name="right" isSmall className={styles.menuChevron} />
             </button>
-          )}
+            <button
+              type="button"
+              className={rowClass}
+              data-about-row="source"
+              data-url={SOURCE_URL}
+              onClick={handleOpenUrl}
+            >
+              <span className={styles.setTitle}>{lang('ParvaneAboutSource')}</span>
+              <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+            </button>
+            <button type="button" className={rowClass} data-about-row="licenses" onClick={openLicenses}>
+              <span className={styles.setTitle}>{lang('ParvaneAboutLicenses')}</span>
+              <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+            </button>
+            {isDesktop && (
+              <button type="button" className={rowClass} data-about-row="hotkeys" onClick={openHotkeys}>
+                <span className={styles.setTitle}>{lang('ParvaneAboutHotkeys')}</span>
+                <span className={styles.setValue}>Ctrl+/</span>
+              </button>
+            )}
+            {canInstall && (
+              <button type="button" className={rowClass} onClick={handleInstallClick}>
+                <span className={styles.setTitle}>{lang('MenuInstallApp')}</span>
+                <ProfileIcon name="right" isSmall className={styles.menuChevron} />
+              </button>
+            )}
+          </div>
+          <div className={styles.hint} data-about-admin>{lang('ParvaneAboutAdmin', { address: adminAddress })}</div>
         </div>
-        <ProfileSwitchRow
-          title={lang('ParvaneAboutAutoUpdate')}
-          hint={lang('ParvaneAboutAutoUpdateHint')}
-          isOn={isAutoUpdate}
-          onChange={handleAutoUpdate}
-          data-about-auto-update
-        />
       </div>
-
-      <div className={styles.group}>
-        <button
-          type="button"
-          className={rowClass}
-          data-about-row="changelog"
-          data-url={CHANGELOG_URL}
-          onClick={handleOpenUrl}
-        >
-          <span className={styles.setText}>
-            <span className={styles.setTitle}>{lang('ParvaneAboutWhatsNew')}</span>
-            <span className={styles.setHint}>{lang('ParvaneAboutWhatsNewHint')}</span>
-          </span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
-        <button
-          type="button"
-          className={rowClass}
-          data-about-row="source"
-          data-url={SOURCE_URL}
-          onClick={handleOpenUrl}
-        >
-          <span className={styles.setTitle}>{lang('ParvaneAboutSource')}</span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
-        <button type="button" className={rowClass} data-about-row="licenses" onClick={openLicenses}>
-          <span className={styles.setTitle}>{lang('ParvaneAboutLicenses')}</span>
-          <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-        </button>
-        {isDesktop && (
-          <button type="button" className={rowClass} data-about-row="hotkeys" onClick={openHotkeys}>
-            <span className={styles.setTitle}>{lang('ParvaneAboutHotkeys')}</span>
-            <span className={styles.setValue}>Ctrl+/</span>
-          </button>
-        )}
-        {canInstall && (
-          <button type="button" className={rowClass} onClick={handleInstallClick}>
-            <span className={styles.setTitle}>{lang('MenuInstallApp')}</span>
-            <ProfileIcon name="right" isSmall className={styles.menuChevron} />
-          </button>
-        )}
-      </div>
-      <div className={styles.hint} data-about-admin>{lang('ParvaneAboutAdmin', { address: adminAddress })}</div>
 
       <LicensesDialog isOpen={isLicensesOpen} onClose={closeLicenses} />
       <HotkeysDialog isOpen={isHotkeysOpen} onClose={closeHotkeys} />

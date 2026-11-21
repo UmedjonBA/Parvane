@@ -314,7 +314,7 @@ const DataExportScreen = ({ isActive, onReset }: OwnProps) => {
       {error && <p className={styles.error} data-export-error={error}>{lang(ERROR_KEYS[error])}</p>}
 
       {!isRunning && (
-        <span data-export-start>
+        <span className={styles.start} data-export-start>
           <button
             type="button"
             className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}

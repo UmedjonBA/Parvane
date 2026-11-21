@@ -162,7 +162,9 @@ const KeysFileForm = ({
             )}
             <div className={buildClassName(styles.setRow, styles.fileRow)}>
               <span className={styles.setTitle}>{lang('ParvaneKeysFileWhere')}</span>
-              <span className={styles.setValue}>{lang('ParvaneKeysFileDownloads')}</span>
+              <span className={buildClassName(styles.setValue, styles.setValueWord)}>
+                {lang('ParvaneKeysFileDownloads')}
+              </span>
             </div>
           </>
         )}

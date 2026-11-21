@@ -295,7 +295,7 @@ const SettingsHeader: FC<OwnProps> = ({
         color="translucent"
         onClick={onReset}
         ariaLabel={oldLang('AccDescrGoBack')}
-        iconName="arrow-left"
+        iconName="previous"
       />
       {renderHeaderContent()}
     </div>

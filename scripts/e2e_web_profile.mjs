@@ -174,7 +174,9 @@ try {
   console.log('OK: «Данные и память» — кэш по видам, автозагрузка и срок, файл копии ключей окном');
 
   await profileRow(page, 'About').click();
-  await shown(page.locator('[data-about-version]').getByText(/^version \S+ · build \S+/));
+  // Компьютер (доска `ZdProfileX`): подзаголовок вместо логотипа, версия — строкой карточки
+  await shown(page.locator('[data-about-version]').getByText('Parvane for desktop', { exact: true }));
+  assert.match(await page.locator('[data-about-app-version]').innerText(), /^\d+\.\d+/, 'версия приложения');
   await page.waitForFunction(() => document.querySelector('[data-about-server-version]')
     ?.getAttribute('data-about-server-version'), undefined, { timeout: WAIT_MS });
   await shot(page, 'desk-about');

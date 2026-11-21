@@ -87,12 +87,14 @@ const AccountCards = ({
         )}
         <button type="button" className={rowClass} data-account-row="password" onClick={openPassword}>
           <span className={profile.setTitle}>{lang('ParvaneAccountPassword')}</span>
-          <span className={profile.setValue}>{lang('ParvaneAccountChange')}</span>
+          <span className={buildClassName(profile.setValue, profile.setValueWord)}>{lang('ParvaneAccountChange')}</span>
         </button>
         {canRotateSsk && (
           <button type="button" className={rowClass} data-account-row="ssk" onClick={onRotateSsk}>
             <span className={profile.setTitle}>{lang('ParvaneAccountSigningKey')}</span>
-            <span className={profile.setValue}>{lang('ParvaneAccountChange')}</span>
+            <span className={buildClassName(profile.setValue, profile.setValueWord)}>
+              {lang('ParvaneAccountChange')}
+            </span>
           </button>
         )}
         <p className={styles.cardHint}>{lang('ParvaneAccountNickHint')}</p>

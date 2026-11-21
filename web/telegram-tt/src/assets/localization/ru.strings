@@ -4613,6 +4613,7 @@
 "ParvaneLanguageTranslate" = "Перевод";
 "ParvaneAboutVersionBuild" = "версия {version} · сборка {build}";
 "ParvaneAboutAppVersion" = "Версия приложения";
+"ParvaneAboutForDesktop" = "Parvane для компьютера";
 "ParvaneAboutServerVersion" = "Версия сервера";
 "ParvaneAboutProtocol" = "протокол {version}";
 "ParvaneAboutUpdate" = "Обновление";

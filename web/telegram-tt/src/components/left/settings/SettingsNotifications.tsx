@@ -199,7 +199,7 @@ const SettingsNotifications = ({
             onClick={handleOpenSettings}
           >
             <span className={styles.setTitle}>{lang('PvSysNotifyDenied')}</span>
-            <span className={styles.setValue}>{lang('PvSysOpenSettings')}</span>
+            <span className={buildClassName(styles.setValue, styles.setValueWord)}>{lang('PvSysOpenSettings')}</span>
           </button>
         )}
       </div>
@@ -338,7 +338,7 @@ const SettingsNotifications = ({
             <span className={styles.setTitle}>
               {lang('PvSysMutedUntil', { time: formatTime(minutesOfDay(prefs.muteUntil)) })}
             </span>
-            <span className={styles.setValue}>{lang('PvSysMuteOff')}</span>
+            <span className={buildClassName(styles.setValue, styles.setValueWord)}>{lang('PvSysMuteOff')}</span>
           </button>
         ) : (
           <>

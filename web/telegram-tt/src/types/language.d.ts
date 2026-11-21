@@ -3650,6 +3650,7 @@ export interface LangPair {
   'ParvaneLanguageInputHint': undefined;
   'ParvaneLanguageTranslate': undefined;
   'ParvaneAboutAppVersion': undefined;
+  'ParvaneAboutForDesktop': undefined;
   'ParvaneAboutServerVersion': undefined;
   'ParvaneAboutUpdate': undefined;
   'ParvaneAboutUpdateAvailable': undefined;

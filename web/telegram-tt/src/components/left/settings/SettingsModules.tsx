@@ -343,7 +343,7 @@ const SettingsModules = ({ isActive, onReset }: OwnProps) => {
       ) : (
         <>
           <div className={styles.hint}>
-            <ParvaneIcon name="warn" isSmall className={styles.hintIcon} />
+            <ParvaneIcon name="info" isSmall className={styles.hintIcon} />
             <span>{lang('ParvaneModulesHint', undefined, { withNodes: true, withMarkdown: true })}</span>
           </div>
           <div className={styles.dragHint}>{lang('ParvaneNavDragHint')}</div>

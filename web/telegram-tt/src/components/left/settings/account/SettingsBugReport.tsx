@@ -207,7 +207,7 @@ const SettingsBugReport = ({ isActive, onReset }: OwnProps) => {
           onClick={isPreviewShown ? hidePreview : showPreview}
         >
           <span className={profile.setTitle}>{lang('ParvaneBugWhatIsSent')}</span>
-          <span className={profile.setValue}>{lang('ParvaneBugShow')}</span>
+          <span className={buildClassName(profile.setValue, profile.setValueWord)}>{lang('ParvaneBugShow')}</span>
         </button>
       </div>
       {isPreviewShown && (

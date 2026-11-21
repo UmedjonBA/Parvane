@@ -145,3 +145,35 @@
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
 }
+
+.start {
+  display: block;
+}
+
+// Телефон (доска `PhProfileB`): у экрана настроек нет боковых полей — группа плоской полосой во всю ширину,
+// подписи, карточка хода и кнопка — с полями 16 px
+@media (max-width: 600px) {
+  .hint,
+  .caption,
+  .error,
+  .start {
+    padding-inline: 1rem;
+  }
+
+  .caption {
+    padding-top: 0.5rem;
+  }
+
+  .group {
+    border-inline: 0;
+    border-radius: 0;
+  }
+
+  .card {
+    margin-inline: 1rem;
+  }
+
+  .card .hint {
+    padding-inline: 0;
+  }
+}

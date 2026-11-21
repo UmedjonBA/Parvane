@@ -55,11 +55,12 @@ const ProfileMenu = ({ variant, activeId, values }: OwnProps) => {
         aria-current={isOn ? 'page' : undefined}
         onClick={handleClick}
       >
-        <ProfileIcon
-          name={item.icon}
-          isSmall={isNav}
-          className={buildClassName(styles.menuIcon, !isNav && item.isAccent && styles.menuIconAccent)}
-        />
+        {!isNav && (
+          <ProfileIcon
+            name={item.icon}
+            className={buildClassName(styles.menuIcon, item.isAccent && styles.menuIconAccent)}
+          />
+        )}
         <span className={styles.menuTitle}>{lang(item.titleKey)}</span>
         {!isNav && value && <span className={styles.menuValue}>{value}</span>}
         {!isNav && <ProfileIcon name="right" isSmall className={styles.menuChevron} />}
