@@ -101,7 +101,10 @@ try {
   const ahead = search.locator('[data-search-section="ahead"]');
   await visible(ahead.getByText('Ahead', { exact: true }), 'впереди — без числа (число — в «найдено»)');
   assert.equal(await ahead.locator('[data-key]').count(), 7, 'ряд — одной строкой');
-  await visible(search.locator('[data-search-found]').filter({ hasText: /^found 7$/ }), '«найдено 7»');
+  // «Найдено» — впереди и прошедшее вместе: вечером сегодняшнее занятие ряда уже прошло и стоит в «Прошедшем»
+  const pastCount = await search.locator('[data-search-section="past"] [data-key]').count();
+  await visible(search.locator('[data-search-found]').filter({ hasText: new RegExp(`^found ${7 + pastCount}$`) }),
+    `«найдено ${7 + pastCount}»`);
   await visible(ahead.locator('[data-result-meta]').filter({ hasText: /every / }), 'середина строки — группа и повтор');
   assert.equal(await search.getByRole('button', { name: 'Back' }).count(), 0, 'на компьютере нет «назад»');
   const showEvents = search.locator('[data-planner-layers="search"] [data-show="events"]');
@@ -250,15 +253,16 @@ try {
   // Слой-группа выключен в колонке поиска — ряд группы «Спорт» в выдачу не попадает (ZdPlanX)
   await planner.locator('[data-planner-search-open]').click();
   await search.locator('[data-planner-search-input]').fill('Силовая');
-  await visible(search.locator('[data-search-found]').filter({ hasText: /^found 7$/ }), 'семь рядов найдено');
+  // Вечером сегодняшнее занятие ряда уже прошло и считается отдельно («Прошедшее»): число — семь либо восемь
+  await visible(search.locator('[data-search-found]').filter({ hasText: /^found [78]$/ }), 'семь рядов найдено');
   const sportLayer = search.locator('[data-planner-layers="search"] [data-layer-group="Спорт"]');
   await sportLayer.click();
-  await visible(search.locator('[data-search-found]').filter({ hasText: 'found 6 · in layers that are on' }),
+  await visible(search.locator('[data-search-found]').filter({ hasText: /^found [67] · in layers that are on$/ }),
     'ряд выключенного слоя «Спорт» в выдачу не попадает');
   await visible(search.locator('[data-search-hint]').filter({ hasText: 'The «Спорт» layer is off on the left' }),
     'подсказка называет выключенный слой');
   await sportLayer.click();
-  await visible(search.locator('[data-search-found]').filter({ hasText: /^found 7$/ }), 'слой включён — ряд снова найден');
+  await visible(search.locator('[data-search-found]').filter({ hasText: /^found [78]$/ }), 'слой включён — ряд снова найден');
   await page.keyboard.press('Escape');
   await search.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   // Слои календаря вида «День» — колонка слева (ZdPlanX): «Задачи» прячет задачу шкалы, событие остаётся

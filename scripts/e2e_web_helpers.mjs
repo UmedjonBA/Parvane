@@ -20,12 +20,18 @@ export function chatListMarker(page) {
   return page.locator('#LeftMainHeader .left-header-title');
 }
 
+// На компьютере «Профиль» открыт поверх списка чатов: заголовок списка под ним остаётся «видимым», поэтому список
+// считается показанным, только когда нет ни меню «Профиля», ни окна «Мой профиль»
+const profileCover = (page) => page.locator('[data-profile-menu]:visible, [data-edit-profile-window]:visible');
+
 export async function isChatListShown(page) {
+  if (await profileCover(page).first().isVisible().catch(() => false)) return false;
   return chatListMarker(page).isVisible().catch(() => false);
 }
 
 export async function waitForChatList(page, timeout = LOGIN_TIMEOUT_MS) {
   await chatListMarker(page).waitFor({ state: 'visible', timeout });
+  await profileCover(page).first().waitFor({ state: 'hidden', timeout });
 }
 
 // Кнопка раздела оболочки (`Chats`, `Profile`): боковая панель либо нижняя панель телефона. У «Чатов» в

@@ -86,7 +86,8 @@ try {
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   const input = page.locator('#planner-quick-input');
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await input.fill(`${title} today ${clock(start)} remind me 1 min before`);
+  // Длительность задана явно: час по умолчанию поздним вечером уводит конец события за полночь — запись не сохраняется
+  await input.fill(`${title} today ${clock(start)} 10 min remind me 1 min before`);
   await page.locator('[data-quick-chip="remind"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await input.press('Enter');
   await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
