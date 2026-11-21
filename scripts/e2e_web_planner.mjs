@@ -485,7 +485,9 @@ try {
   };
   // «Текущая дата» — кнопка шапки календаря; «Сегодня» (`Today`) — пункт переключателя вида
   const backToThisMonth = async () => {
-    await planner.getByRole('button', { name: 'Current date' }).click();
+    // Кнопки нет, когда выбран сегодняшний день
+    const toToday = planner.getByRole('button', { name: 'Current date' });
+    if (await toToday.isVisible().catch(() => false)) await toToday.click();
   };
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
   await openPlannerScreen(page, 'calendar');
@@ -994,6 +996,7 @@ try {
   // В шапке помещаются три вида; «Год» и «Список» — в меню «⋯» рядом с поиском, «Задачами» и настройками
   assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Day', 'Week', 'Month'], 'виды календаря на телефоне');
   await planner.locator('[data-planner-more]').click();
+  await page.locator('[role="menuitem"][data-action="year"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.deepEqual(
     await page.locator('[role="menuitem"][data-action]').evaluateAll((items) => items.map((item) => item.dataset.action)),
     ['agenda', 'year', 'search', 'tasks', 'settings'], 'меню «⋯» шапки телефона',

@@ -206,7 +206,9 @@ export async function pickPlannerDay(page, day) {
   const week = planner.getByRole('group', { name: 'Calendar view' }).locator('button[data-value="week"]');
   if (await week.getAttribute('aria-pressed') !== 'true') await week.click();
   await planner.locator('[data-planner-rail]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await planner.locator('header').getByRole('button', { name: 'Current date', exact: true }).click();
+  // «Текущая дата» есть в шапке, только когда выбран другой день
+  const toToday = planner.locator('header').getByRole('button', { name: 'Current date', exact: true });
+  if (await toToday.isVisible().catch(() => false)) await toToday.click();
   for (let step = 0; step < 6; step += 1) {
     const cell = planner.locator(`[data-mini-day="${day}"]`);
     if (await cell.isVisible().catch(() => false)) {

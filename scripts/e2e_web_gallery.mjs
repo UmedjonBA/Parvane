@@ -243,8 +243,53 @@ async function galleryPlan() {
   await page.context().close();
 }
 
+// ── «Заметки»: доски Notes, PhNotesMore, RpNotes, XpNotes, ZpNotesX, DeskNotes, XdNotes, ZdNotesX ──
+// Новое хранилище само получает папку справки из связанных заметок — на ней и снимаются список, заметка и граф;
+// язык ставится до первого открытия модуля, чтобы справка была русской
+async function galleryNotes() {
+  const { page } = await openSession('notes');
+  await toRussian(page);
+  const notes = await openModule(page, 'notes', 'ParvaneKnowledge');
+  await notes.locator('[data-note-row]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.waitForTimeout(3000);
+  const tab = (index) => notes.locator('[role="tablist"]').first().locator('[role="tab"]').nth(index);
+
+  // Компьютер
+  await step(page, 'notes-desk-list', async () => undefined);
+  await step(page, 'notes-desk-graph', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'notes-desk-canvas', async () => {
+    await notes.locator('[data-notes-place="canvas"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await notes.locator('[data-notes-all]').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
+  await tab(0).click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
+  await step(page, 'notes-desk-edit', async () => {
+    await notes.locator('[data-note-row]').first().click({ timeout: STEP_TIMEOUT_MS });
+    await notes.locator('[data-note-bar-edit]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Control+e');
+
+  // Телефон
+  await resize(page, PHONE);
+  const back = async () => {
+    const button = notes.locator('[data-note-id] button[aria-label]:visible').first();
+    await button.click({ timeout: 5000 }).catch(() => undefined);
+    await page.waitForTimeout(500);
+  };
+  await step(page, 'PhNotesMore-02', async () => undefined);
+  await step(page, 'PhNotesMore-03', async () => {
+    await notes.locator('[data-note-bar-edit]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Control+e');
+  await back();
+  await step(page, 'PhNotesMore-01', async () => undefined);
+  await step(page, 'XpNotes-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'RpNotes-01', async () => { await tab(2).click({ timeout: STEP_TIMEOUT_MS }); });
+  await page.context().close();
+}
+
 try {
   if (wants('health')) await galleryHealth();
+  if (wants('notes')) await galleryNotes();
   if (wants('plan')) await galleryPlan();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
 } finally {

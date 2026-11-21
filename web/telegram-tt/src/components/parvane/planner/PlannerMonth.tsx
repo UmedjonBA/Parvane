@@ -6,7 +6,7 @@ import type { PlannerDayIndexEntry, PlannerState } from './plannerModel';
 import buildClassName from '../../../util/buildClassName';
 import { getWeekdayOrder } from '../../../util/weekStart';
 import {
-  formatDay, formatHours, formatSpan, formatWeekday, getLoadLevel, listColorStyle,
+  formatDay, formatHours, formatSpan, formatWeekday, getLoadLevel, listColorStyle, listColorVar,
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatPlainName } from './plannerLinks';
@@ -170,7 +170,7 @@ const PlannerMonth = ({
               holiday && styles.monthCellHoliday,
               isOutside && styles.monthCellOutside,
             )}
-            style={holiday?.color ? `--planner-holiday-color: var(--color-peer-${holiday.color - 1})` : undefined}
+            style={holiday?.color ? `--planner-holiday-color: ${listColorVar(holiday.color)}` : undefined}
             data-day={day}
             data-holiday={holiday ? '1' : undefined}
             role="gridcell"

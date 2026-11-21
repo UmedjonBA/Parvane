@@ -8,7 +8,7 @@ import type { PlannerDayIndexEntry, PlannerEvent, PlannerState } from './planner
 import buildClassName from '../../../util/buildClassName';
 import {
   formatDay, formatHours, formatHoursNumber, formatKind, formatRepeatShort, formatSpan, formatWeekdayShort,
-  joinCaption, listColorStyle,
+  joinCaption, listColorStyle, listColorVar,
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
@@ -82,7 +82,7 @@ function allDayFillStyle(state: PlannerState, events: PlannerEvent[]) {
   const stops = events.map((event, index) => {
     const eventColor = getEventColor(state, event);
     const color = eventColor
-      ? `var(--color-peer-${eventColor - 1})` : `var(--pv-${event.isHoliday ? 'red' : 'event'})`;
+      ? listColorVar(eventColor) : `var(--pv-${event.isHoliday ? 'red' : 'event'})`;
     const tone = `color-mix(in srgb, ${color} ${ALL_DAY_FILL_PERCENT}%, transparent)`;
     return `${tone} ${index * share}% ${(index + 1) * share}%`;
   });

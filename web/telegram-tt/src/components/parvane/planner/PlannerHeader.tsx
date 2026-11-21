@@ -256,9 +256,12 @@ const PlannerHeader = ({
         <button type="button" className={styles.navButton} aria-label={nextLabel} onClick={onNext}>
           <Icon name="next" />
         </button>
-        <button type="button" className={styles.today} onClick={onToday}>
-          {lang('PlannerJumpToday')}
-        </button>
+        {/* «Текущая дата» — только когда выбран другой день: иначе шапка не помещается в одну строку (доска `DeskPlan`) */}
+        {picked !== today && (
+          <button type="button" className={styles.today} onClick={onToday}>
+            {lang('PlannerJumpToday')}
+          </button>
+        )}
         {isPickerOpen && (
           <div className={styles.picker} role="dialog" aria-label={lang('PlannerPickPeriod')}>
             <div className={styles.pickerYear}>

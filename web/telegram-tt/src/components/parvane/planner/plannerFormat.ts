@@ -272,9 +272,16 @@ export function formatWeekNumber(day: string) {
   return Math.ceil(((thursday.getTime() - yearStart.getTime()) / MS_IN_DAY + 1) / DAYS_IN_WEEK);
 }
 
-// Цвет списка — переменная палитры собеседников (`--color-peer-0…7`)
+// Цвета групп — палитра макета (доска `DkPlanMore`: синий, фиолетовый, оранжевый, зелёный, оливковый, красный);
+// седьмой и восьмой номера — акцент и приглушённый
+const LIST_COLOR_TOKENS = ['blue', 'purple', 'orange', 'aqua', 'green', 'red', 'accent', 'muted'];
+
+export function listColorVar(color: number) {
+  return `var(--pv-${LIST_COLOR_TOKENS[color - 1]})`;
+}
+
 export function listColorStyle(color?: number) {
-  return color ? `--planner-list-color: var(--color-peer-${color - 1})` : undefined;
+  return color ? `--planner-list-color: ${listColorVar(color)}` : undefined;
 }
 
 // Понедельник — первым; `index` 0…6
