@@ -42,6 +42,27 @@ function argsAfterKey(source: string, start: number) {
   return source.slice(start, i - 1).replace(/\s+/g, ' ').trim();
 }
 
+// Место первой запятой вне скобок и строк; `-1` — аргумент один
+function findTopLevelComma(text: string) {
+  let depth = 0;
+  let quote = '';
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote && text[i - 1] !== '\\') quote = '';
+    } else if (char === '\'' || char === '"' || char === '`') {
+      quote = char;
+    } else if (char === '(' || char === '[' || char === '{') {
+      depth++;
+    } else if (char === ')' || char === ']' || char === '}') {
+      depth--;
+    } else if (char === ',' && depth === 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function collectCalls(): Call[] {
   const calls: Call[] = [];
   walk(SRC).forEach((file) => {
@@ -59,6 +80,24 @@ function collectCalls(): Call[] {
           file: path.relative(SRC, file),
           args: argsAfterKey(source, match.index + match[0].length),
         });
+      }
+      // Ключ выбирается условием: `lang(isOn ? 'A' : 'B', …)` — проверяются обе ветви
+      for (const match of source.matchAll(new RegExp(`\\b${name}\\((?!\\s*')`, 'g'))) {
+        const all = argsAfterKey(source, match.index + match[0].length);
+        const firstArgEnd = findTopLevelComma(all);
+        const firstArg = firstArgEnd < 0 ? all : all.slice(0, firstArgEnd);
+        if (!firstArg.includes('?')) continue;
+        // Висячая запятая после единственного аргумента значением не считается
+        const rest = firstArgEnd < 0 ? '' : all.slice(firstArgEnd);
+        const args = /^,\s*$/.test(rest) ? '' : rest;
+        for (const branch of firstArg.matchAll(/[?:]\s*'([^']+)'/g)) {
+          if (SYNTHESIZED.test(branch[1])) continue;
+          calls.push({
+            key: branch[1],
+            file: path.relative(SRC, file),
+            args,
+          });
+        }
       }
     });
   });

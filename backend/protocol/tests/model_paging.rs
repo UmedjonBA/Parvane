@@ -99,11 +99,13 @@ fn walk(dir: &str) {
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "в отладочной сборке 8–12 минут: cargo test --release -p parvane-protocol --test model_paging")]
 fn paging_older_without_gaps_or_repeats() {
     walk("PAGE_DIRECTION_OLDER");
 }
 
 #[test]
+#[cfg_attr(debug_assertions, ignore = "в отладочной сборке 8–12 минут: cargo test --release -p parvane-protocol --test model_paging")]
 fn paging_newer_without_gaps_or_repeats() {
     walk("PAGE_DIRECTION_NEWER");
 }
