@@ -1781,6 +1781,7 @@
 "HealthNoEntries" = "Записей пока нет";
 "HealthGoalLabel" = "Цель";
 "HealthGoalNone" = "не задана";
+"HealthGoalEmpty" = "Без цели";
 "HealthSleepGoal" = "Цель режима сна";
 "HealthSleepGoalBed" = "Отбой";
 "HealthSleepGoalWake" = "Подъём";
@@ -1811,6 +1812,8 @@
 "HealthFieldNote" = "Заметка";
 "HealthPressureUpper" = "Верхнее, мм рт. ст.";
 "HealthPressureLower" = "Нижнее, мм рт. ст.";
+"HealthPressureUpperShort" = "Верхнее";
+"HealthPressureLowerShort" = "Нижнее";
 "HealthSleepDuration" = "Длительность";
 "HealthSleepWakeDay" = "День пробуждения";
 "HealthSleepFrom" = "С";

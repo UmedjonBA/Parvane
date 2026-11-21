@@ -11,8 +11,8 @@ import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import ParvaneIcon from '../../main/ParvaneIcon';
 import HealthEntries from './HealthEntries';
+import HealthGoalRow from './HealthGoalRow';
 import HealthPeriodChart from './HealthPeriodChart';
 import HealthQuickInput from './HealthQuickInput';
 import HealthRegimeChart from './HealthRegimeChart';
@@ -218,21 +218,13 @@ const HealthSleepDetail = ({
         </span>
       </div>
       {renderRegimeCard()}
-      <section className={buildClassName(kit.card, styles.card)} data-health-goal-card="sleep">
-        <div className={styles.cardHead}>
-          <span className={buildClassName(kit.muted, kit.grow)}>{lang('HealthGoalLabel')}</span>
-          <button
-            type="button"
-            className={kit.ib}
-            aria-label={lang('HealthGoalChange')}
-            data-health-goal-edit="sleep"
-            onClick={handleGoal}
-          >
-            <ParvaneIcon name="pen" isSmall />
-          </button>
-        </div>
-        <div className={kit.mono} data-health-goal-text>{renderGoalText()}</div>
-      </section>
+      <HealthGoalRow
+        kind="sleep"
+        text={hasGoal ? `${formatClock(goalBedMin)} → ${formatClock(goalWakeMin)}` : lang('HealthGoalEmpty')}
+        aside={hasGoal ? duration(goalMinutes ?? 0) : undefined}
+        isMono={hasGoal}
+        onEdit={handleGoal}
+      />
       <HealthSleepButtons sleep={sleep} onBed={onBed} onWake={onWake} onOther={onNap} />
       <div className={kit.caps}>{lang('HealthEntriesTitle')}</div>
       {records}

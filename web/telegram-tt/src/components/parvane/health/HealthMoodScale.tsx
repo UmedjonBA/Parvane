@@ -54,7 +54,7 @@ const HealthMoodScale = () => {
 
   return (
     <form className={buildClassName(kit.card, styles.card)} data-health-mood-scale onSubmit={handleSave}>
-      <div className={kit.caps}>{lang('HealthMoodAsk')}</div>
+      <div className={styles.moodAsk}>{lang('HealthMoodAsk')}</div>
       <div className={styles.moodScale} role="radiogroup" aria-label={lang('HealthKindMood')}>
         {SCORE_KEYS.map((key, index) => (
           <button
@@ -67,7 +67,7 @@ const HealthMoodScale = () => {
             onClick={handlePick}
           >
             <span className={buildClassName(kit.mono, styles.moodNumber)}>{index + 1}</span>
-            <span className={kit.small}>{lang(key)}</span>
+            <span className={styles.moodLabel}>{lang(key)}</span>
           </button>
         ))}
       </div>

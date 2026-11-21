@@ -2035,6 +2035,7 @@
 "HealthNoEntries" = "No entries yet";
 "HealthGoalLabel" = "Goal";
 "HealthGoalNone" = "not set";
+"HealthGoalEmpty" = "No goal";
 "HealthSleepGoal" = "Sleep schedule goal";
 "HealthSleepGoalBed" = "Bedtime";
 "HealthSleepGoalWake" = "Wake-up";
@@ -2065,6 +2066,8 @@
 "HealthFieldNote" = "Note";
 "HealthPressureUpper" = "Upper, mmHg";
 "HealthPressureLower" = "Lower, mmHg";
+"HealthPressureUpperShort" = "Upper";
+"HealthPressureLowerShort" = "Lower";
 "HealthSleepDuration" = "Duration";
 "HealthSleepWakeDay" = "Wake-up day";
 "HealthSleepFrom" = "From";

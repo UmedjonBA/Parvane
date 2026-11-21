@@ -1486,6 +1486,7 @@ export interface LangPair {
   'HealthNoEntries': undefined;
   'HealthGoalLabel': undefined;
   'HealthGoalNone': undefined;
+  'HealthGoalEmpty': undefined;
   'HealthSleepGoal': undefined;
   'HealthSleepGoalBed': undefined;
   'HealthSleepGoalWake': undefined;
@@ -1513,6 +1514,8 @@ export interface LangPair {
   'HealthFieldNote': undefined;
   'HealthPressureUpper': undefined;
   'HealthPressureLower': undefined;
+  'HealthPressureUpperShort': undefined;
+  'HealthPressureLowerShort': undefined;
   'HealthSleepDuration': undefined;
   'HealthSleepWakeDay': undefined;
   'HealthSleepFrom': undefined;

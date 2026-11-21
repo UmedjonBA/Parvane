@@ -129,20 +129,22 @@ async function galleryHealth() {
     try {
       await toSummary();
       await card(kind).click({ timeout: STEP_TIMEOUT_MS });
-      await health.locator(`[data-health-goal-edit="${kind}"]`).first().click({ timeout: STEP_TIMEOUT_MS });
+      await health.locator(`[data-health-goal-edit="${kind}"]:visible`).first().click({ timeout: STEP_TIMEOUT_MS });
       for (const [field, value] of Object.entries(values)) {
         await page.locator(`[data-health-sheet="goal"] [data-health-goal="${field}"]`).fill(value);
       }
       await page.locator('[data-health-goal-save]').click();
       await page.locator('[data-health-sheet="goal"]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
     } catch (err) {
-      console.log(`WARN: цель ${kind}: ${String(err).split('\n')[0]}`);
+      console.log(`WARN: цель ${kind}: ${String(err).split('\n').slice(0, 4).join(' | ')}`);
       await page.keyboard.press('Escape').catch(() => undefined);
     }
   };
-  await setGoal('sleep', { sleep_bed: '23:30', sleep_wake: '07:00' });
+  await input.fill('');
+  await page.waitForTimeout(1500);
   await setGoal('weight', { weight: '70' });
   await setGoal('steps', { steps: '10000' });
+  await setGoal('sleep', { sleep_bed: '23:30', sleep_wake: '07:00' });
   await toSummary();
 
   // Компьютер
@@ -151,7 +153,10 @@ async function galleryHealth() {
   await detail('RdHealth-01', 'weight');
   await detail('XdHealth-01', 'pressure');
   await detail('RdHealth-02', 'steps');
-  await detail('XdHealth-02', 'mood');
+  // «Самочувствие» на компьютере открывается пунктом левой колонки подробного экрана
+  await step(page, 'XdHealth-02', async () => {
+    await health.locator('[data-health-side-item="mood"]').click({ timeout: STEP_TIMEOUT_MS });
+  });
   await toSummary();
 
   // Телефон

@@ -38,7 +38,7 @@ const HealthDayTotals = ({
   if (!days.length) return <div className={buildClassName(kit.muted, styles.empty)}>{lang('HealthNoEntries')}</div>;
 
   return (
-    <ul className={styles.entries} data-health-day-totals>
+    <ul className={buildClassName(styles.entries, !isWide && styles.entriesNarrow)} data-health-day-totals>
       {days.map((total) => (
         <li key={total.day} className={styles.entryDay} data-day={total.day}>
           <button

@@ -13,9 +13,9 @@ import useHealthLabels from './useHealthLabels';
 
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import ParvaneIcon from '../../main/ParvaneIcon';
 import HealthDayTotals from './HealthDayTotals';
 import HealthEntries from './HealthEntries';
+import HealthGoalRow from './HealthGoalRow';
 import HealthPeriodChart from './HealthPeriodChart';
 import HealthQuickInput from './HealthQuickInput';
 import HealthRecordForm from './HealthRecordForm';
@@ -176,39 +176,28 @@ const HealthMetricDetail = ({
   });
 
   function renderGoalCard() {
+    if (!isWide) {
+      const isUnset = goal === undefined;
+      return <HealthGoalRow kind={kind} text={isUnset ? lang('HealthGoalEmpty') : goalText()} onEdit={handleGoal} />;
+    }
     return (
       <section className={buildClassName(kit.card, styles.card)} data-health-goal-card={kind}>
         <div className={styles.cardHead}>
-          <span className={buildClassName(isWide ? kit.caps : kit.muted, kit.grow)}>{lang('HealthGoalLabel')}</span>
-          {!isWide && (
-            <button
-              type="button"
-              className={kit.ib}
-              aria-label={lang('HealthGoalChange')}
-              data-health-goal-edit={kind}
-              onClick={handleGoal}
-            >
-              <ParvaneIcon name="pen" isSmall />
-            </button>
-          )}
+          <span className={buildClassName(kit.caps, kit.grow)}>{lang('HealthGoalLabel')}</span>
         </div>
         <div className={kit.mono} data-health-goal-text>{goalText()}</div>
-        {isWide && (
-          <>
-            <button
-              type="button"
-              className={buildClassName(kit.btn, kit.btnWide)}
-              data-health-goal-edit={kind}
-              onClick={handleGoal}
-            >
-              {lang('HealthGoalChange')}
-            </button>
-            <HealthRecordForm kind={kind} metric={metric} />
-            <span className={kit.grow} />
-            <div className={buildClassName(kit.muted, kit.small)}>{lang('HealthQuickLine')}</div>
-            <HealthQuickInput isCompact placeholder={lineExample()} />
-          </>
-        )}
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnWide)}
+          data-health-goal-edit={kind}
+          onClick={handleGoal}
+        >
+          {lang('HealthGoalChange')}
+        </button>
+        <HealthRecordForm kind={kind} metric={metric} />
+        <span className={kit.grow} />
+        <div className={buildClassName(kit.muted, kit.small)}>{lang('HealthQuickLine')}</div>
+        <HealthQuickInput isCompact placeholder={lineExample()} />
       </section>
     );
   }

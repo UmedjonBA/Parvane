@@ -64,7 +64,7 @@ const HealthPeriodChart = ({
     return (
       <div className={styles.chartBars}>
         <div className={styles.bars}>
-          {goal !== undefined && <span className={styles.goalLine} style={`bottom: ${(goal / top) * 100}%`} />}
+          {goal !== undefined && <span className={styles.goalLine} style={`--goal-share: ${goal / top}`} />}
           {slots.map((slot, index) => (
             <span key={slot.key} className={styles.barColumn} data-day={slot.key}>
               <span className={styles.barTrack}>
@@ -99,7 +99,7 @@ const HealthPeriodChart = ({
           {[high, (high + low) / 2, low].map((tick) => <span key={tick}>{formatNumber(tick, lang.code)}</span>)}
         </div>
         <div className={styles.bars}>
-          {goal !== undefined && <span className={styles.goalLine} style={`bottom: ${share(goal) * 100}%`} />}
+          {goal !== undefined && <span className={styles.goalLine} style={`--goal-share: ${share(goal)}`} />}
           {slots.map((slot, index) => (
             <span key={slot.key} className={styles.barColumn} data-day={slot.key}>
               <span className={styles.barTrack}>

@@ -12,7 +12,8 @@ import { LeftColumnContent, SettingsScreens } from '../../../types';
 import buildClassName from '../../../util/buildClassName';
 import { openHealthQuick } from '../../../util/parvaneQuick';
 import {
-  consumeHealthAddRequest, getHealthAddRequest, getIsParvaneScreenShown, getParvaneSection, setParvaneSection,
+  consumeHealthAddRequest, getHealthAddRequest, getIsParvaneScreenShown, getParvaneSection, setParvaneNavCovered,
+  setParvaneSection,
 } from '../../../util/parvaneSection';
 import { formatDate } from '../planner/plannerFormat';
 import { FOOD_KIND, WORKOUT_KIND } from './healthDayFormat';
@@ -61,6 +62,8 @@ const STATUS_KEYS = {
 } as const;
 // Экраны без выбора периода
 const NO_PERIOD_KINDS = [MOOD_KIND, FOOD_KIND, WORKOUT_KIND];
+// Названия, рядом с которыми три чипа периода в шапке телефона не помещаются
+const LONG_TITLE_KINDS = ['pressure'];
 
 // Parvane (spec 038, 041): модуль «Здоровье» — сводка, запись одной строкой и подробные экраны. На компьютере у
 // подробного экрана слева колонка показателей с «‹ Сводка» (доска `DeskHealthDetail`), в шапке — название и период.
@@ -102,6 +105,13 @@ const Health = () => {
   // «+» и команды общего поиска открывают шторку «Запись в здоровье» (доска `PlusModes`); на первом открытии
   // строка ввода — на самом экране
   const isQuickInSheet = !isFirst;
+  // Подробный экран и «первое открытие» на телефоне — во весь рост: ленты модулей и «+» под ними нет
+  // (доски `HealthSleep`, `ZpHealthX`)
+  const isNavCovered = isShown && isPhone && (Boolean(detailKind) || isFirst);
+  useEffect(() => {
+    setParvaneNavCovered(isNavCovered);
+    return () => setParvaneNavCovered(false);
+  }, [isNavCovered]);
 
   useLayoutEffect(() => {
     if (!pending || !isQuickInSheet) return;
@@ -127,6 +137,8 @@ const Health = () => {
 
   const handleOpen = useLastCallback((kind: string) => setDetailKind(kind));
   const handleBack = useLastCallback(() => setDetailKind(undefined));
+  // «Первое открытие» на телефоне (доска `ZpHealthX`): стрелка шапки возвращает к чатам
+  const handleLeave = useLastCallback(() => setParvaneSection('messenger'));
 
   const handleOpenBlocks = useLastCallback(() => {
     setParvaneSection('messenger');
@@ -147,6 +159,10 @@ const Health = () => {
 
   const handlePeriod = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setPeriod(e.currentTarget.dataset.healthPeriod as HealthPeriod);
+  });
+
+  const handlePeriodNext = useLastCallback(() => {
+    setPeriod(PERIODS[(PERIODS.indexOf(period) + 1) % PERIODS.length]);
   });
 
   const handleEdit = useLastCallback((entry: HealthEntry) => setSheetTarget({ entry }));
@@ -181,6 +197,19 @@ const Health = () => {
       return <span className={buildClassName(kit.chip, kit.chipOn)}>{lang('HealthSevenDays')}</span>;
     }
     if (NO_PERIOD_KINDS.includes(kind) || kind === WATER_KIND) return undefined;
+    // Длинное название («Давление и пульс») на телефоне: один чип с периодом, нажатие — следующий (доска `XpHealth`)
+    if (isPhone && LONG_TITLE_KINDS.includes(kind)) {
+      return (
+        <button
+          type="button"
+          className={buildClassName(kit.chip, kit.chipOn, styles.periodChips)}
+          data-health-period={period}
+          onClick={handlePeriodNext}
+        >
+          {lang(PERIOD_KEYS[period])}
+        </button>
+      );
+    }
     return (
       <div className={styles.periodChips} role="tablist">
         {PERIODS.map((item) => (
@@ -203,7 +232,9 @@ const Health = () => {
   function renderHeader() {
     if (detailKind) {
       return (
-        <header className={styles.header}>
+        <header
+          className={buildClassName(styles.header, !isWide && styles.headerBar, !isWide && styles.headerBack)}
+        >
           {!isWide && (
             <button type="button" className={kit.ib} aria-label={lang('Back')} onClick={handleBack}>
               <ParvaneIcon name="left" />
@@ -224,8 +255,15 @@ const Health = () => {
       );
     }
     return (
-      <header className={styles.header}>
-        <div className={styles.headerTitle}>
+      <header
+        className={buildClassName(styles.header, isPhone && styles.headerBar, isFirst && isPhone && styles.headerBack)}
+      >
+        {isFirst && isPhone && (
+          <button type="button" className={kit.ib} aria-label={lang('Back')} onClick={handleLeave}>
+            <ParvaneIcon name="left" />
+          </button>
+        )}
+        <div className={buildClassName(styles.headerTitle, isPhone && kit.grow)}>
           <h1 className={styles.title}>{lang('PlannerHealth')}</h1>
           {(!isPhone || isFirst) && (
             <div className={buildClassName(kit.muted, kit.small)}>

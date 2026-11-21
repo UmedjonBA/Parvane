@@ -71,7 +71,10 @@ const HealthEntries = ({
     if (entry.kind === 'sleep') {
       if (entry.goalDelta === undefined || !entry.goalDelta) return undefined;
       return (
-        <span className={entry.goalDelta < 0 ? styles.warn : styles.good} data-health-entry-delta>
+        <span
+          className={buildClassName(styles.entryDelta, entry.goalDelta < 0 ? styles.warn : styles.good)}
+          data-health-entry-delta
+        >
           {`${formatDelta(entry.goalDelta, lang.code)} ${lang('HealthUnitMin')}`}
         </span>
       );
@@ -86,7 +89,12 @@ const HealthEntries = ({
     if (entry.delta === undefined || Math.abs(entry.delta) < 0.05) return undefined;
     const isToGoal = goal !== undefined && (entry.delta < 0) === (entry.value - entry.delta > goal);
     return (
-      <span className={goal === undefined ? kit.muted : isToGoal ? styles.good : styles.warn} data-health-entry-delta>
+      <span
+        className={buildClassName(
+          styles.entryDelta, goal === undefined ? kit.muted : isToGoal ? styles.good : styles.warn,
+        )}
+        data-health-entry-delta
+      >
         {formatDelta(entry.delta, lang.code)}
       </span>
     );
@@ -145,7 +153,10 @@ const HealthEntries = ({
   }
 
   return (
-    <ul className={buildClassName(styles.entries, isWide && styles.entriesWide)} data-health-entries>
+    <ul
+      className={buildClassName(styles.entries, isWide ? styles.entriesWide : styles.entriesNarrow)}
+      data-health-entries
+    >
       {entries.map((entry) => (
         <li
           key={entry.id}

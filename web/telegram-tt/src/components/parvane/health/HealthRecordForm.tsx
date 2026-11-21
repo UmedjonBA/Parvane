@@ -115,7 +115,7 @@ const HealthRecordForm = ({ kind, metric }: OwnProps) => {
   function renderInput(name: string, text: string, label?: string, placeholder?: string) {
     const input = (
       <input
-        className={buildClassName(kit.input, styles.recordInput)}
+        className={buildClassName(kit.input, styles.recordInput, isWeight && styles.recordInputBig)}
         type="text"
         inputMode="decimal"
         name={name}
@@ -139,7 +139,7 @@ const HealthRecordForm = ({ kind, metric }: OwnProps) => {
   const saveButton = (
     <button
       type="submit"
-      className={buildClassName(kit.btn, kit.btnAcc, isPressure && kit.btnWide)}
+      className={buildClassName(kit.btn, kit.btnAcc, isPressure ? kit.btnWide : styles.recordSave)}
       disabled={isSaving || !value.trim()}
       data-health-record-save
     >
@@ -152,8 +152,8 @@ const HealthRecordForm = ({ kind, metric }: OwnProps) => {
       {isPressure ? (
         <>
           <div className={styles.fieldRow}>
-            {renderInput('value', value, lang('HealthPressureUpper'), '120')}
-            {renderInput('value2', value2, lang('HealthPressureLower'), '80')}
+            {renderInput('value', value, lang('HealthPressureUpperShort'), '120')}
+            {renderInput('value2', value2, lang('HealthPressureLowerShort'), '80')}
             {renderInput('pulse', pulse, lang('HealthKindPulse'), '—')}
           </div>
           {saveButton}
@@ -161,13 +161,25 @@ const HealthRecordForm = ({ kind, metric }: OwnProps) => {
       ) : (
         <div className={styles.recordRow}>
           {isWeight && (
-            <button type="button" className={kit.btn} data-step="-1" data-health-record-step="-" onClick={handleStep}>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, styles.recordStep)}
+              data-step="-1"
+              data-health-record-step="-"
+              onClick={handleStep}
+            >
               {`−${formatNumber(WEIGHT_STEP, lang.code)}`}
             </button>
           )}
           {renderInput('value', value, undefined, PLACEHOLDERS[kind])}
           {isWeight && (
-            <button type="button" className={kit.btn} data-step="1" data-health-record-step="+" onClick={handleStep}>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, styles.recordStep)}
+              data-step="1"
+              data-health-record-step="+"
+              onClick={handleStep}
+            >
               {`+${formatNumber(WEIGHT_STEP, lang.code)}`}
             </button>
           )}
