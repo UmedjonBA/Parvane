@@ -39,6 +39,9 @@ async function expectModules(page, root, expected, message) {
 // Закрыть меню «+». Пункты закрытого меню остаются в разметке, поэтому признак закрытия — подложка меню: она
 // есть, только пока меню открыто, и перехватывает нажатия. Escape, а если фокус ушёл — нажатие мимо меню
 async function closeAddMenu(page) {
+  // Пункты меню лежат в разметке и до открытия: ждём, пока кнопка «+» сама покажет открытое меню, иначе «закрытие»
+  // приходилось на ещё не открытое меню, и оно открывалось уже после шага, перекрывая ленту модулей
+  await page.locator('[data-add-for][aria-expanded="true"]').waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
   const backdrop = page.locator('.Menu .backdrop');
   const isClosed = () => backdrop.count().then((count) => count === 0);
   // Открытое меню «+» закрывает сама кнопка («×», доска `PlusModes`)
@@ -222,6 +225,11 @@ async function runServerOffPart(suffix) {
   await moduleOff.getByText('The task will go to your plan once the module is on')
     .waitFor({ state: 'visible', timeout: WAIT_MS });
   await page.getByText('Plan is turned off', { exact: true }).waitFor({ state: 'visible', timeout: WAIT_MS });
+  // Кадр «Модуль выключен» для сверки с доской `PhStates-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/module-off.png` });
+  }
   await moduleOff.getByRole('button', { name: 'Not now' }).click();
   await moduleOff.waitFor({ state: 'hidden', timeout: WAIT_MS });
   await page.waitForTimeout(500);
