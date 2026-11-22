@@ -908,12 +908,24 @@ async function galleryStates() {
       await page.waitForTimeout(1500);
     });
   }
+  // «Файлы»: загрузка без связи — строка файла с причиной и «Повторить» (доски `ZdFilesX-02`, `ZpFilesX-03`)
+  await step(page, 'ZdFilesX-02', async () => {
+    const cloud = await openModule(page, 'files', 'ParvaneCloud');
+    await cloud.locator('input[type="file"]').first().setInputFiles([
+      { name: 'схема-сети.png', mimeType: 'image/png', buffer: buildPngBuffer(96, [0x2a, 0x2a, 0x2a]) },
+      { name: 'backup-2026-12.tar.zst', mimeType: 'application/octet-stream', buffer: Buffer.alloc(300000, 7) },
+    ]);
+    await page.waitForTimeout(8000);
+  });
   await step(page, 'states-desk-offline-chats', async () => {
     await page.locator('[data-module="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
   await resize(page, PHONE);
-  for (const [module, rootId] of modules) {
+  // «Здоровье» — последним: его страница первого открытия на телефоне без ленты модулей
+  const phoneOrder = [...modules].sort((x, y) => Number(x[0] === 'health') - Number(y[0] === 'health')).reverse()
+    .sort((x, y) => Number(x[0] === 'health') - Number(y[0] === 'health'));
+  for (const [module, rootId] of phoneOrder) {
     await step(page, `states-phone-offline-${module}`, async () => {
       // Страница без ленты модулей (первое открытие «Здоровья») закрывается стрелкой «назад»
       await page.getByRole('button', { name: 'Назад' }).first().click({ timeout: 1500 }).catch(() => undefined);

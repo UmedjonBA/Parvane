@@ -34,6 +34,9 @@ export const CLOUD_ERROR_KEYS = {
 } as const satisfies Record<CloudErrorCode, string>;
 
 // Состояние под полосой хода (доска `PhFilesMore`): «шифруется и загружается»
+// Действие у строки передачи: кнопка-слово, на телефоне — пилюля (доска `ZpFilesX`)
+const ACTION_CLASS = buildClassName(styles.textButton, styles.textButtonPill);
+
 const STAGE_KEYS = {
   upload: 'ParvaneCloudStageUpload',
   download: 'ParvaneCloudStageDownload',
@@ -107,17 +110,17 @@ const CloudTransfers = ({ isNarrow, onFreeUp }: OwnProps) => {
               </span>
             )}
             {canRetry && (
-              <button type="button" className={styles.textButton} onClick={() => retryCloudUpload(t.id)}>
+              <button type="button" className={ACTION_CLASS} onClick={() => retryCloudUpload(t.id)}>
                 {lang('ParvaneCloudRetry')}
               </button>
             )}
             {canFree && (
-              <button type="button" className={styles.textButton} data-transfer-free onClick={onFreeUp}>
+              <button type="button" className={ACTION_CLASS} data-transfer-free onClick={onFreeUp}>
                 {lang(isNarrow ? 'ParvaneCloudFreeUp' : 'ParvaneCloudFreeUpSpace')}
               </button>
             )}
             {isDismissMain && (
-              <button type="button" className={styles.textButton} onClick={() => cancelCloudTransfer(t)}>
+              <button type="button" className={ACTION_CLASS} onClick={() => cancelCloudTransfer(t)}>
                 {lang('ParvaneCloudDismiss')}
               </button>
             )}

@@ -869,6 +869,20 @@
   }
 }
 
+// Действие у строки передачи на телефоне — пилюля, как на компьютере (доска `ZpFilesX`)
+.textButtonPill {
+  @media (max-width: 760px) {
+    height: 2.25rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--pv-line);
+
+    font-weight: var(--font-weight-normal);
+    color: var(--pv-fg);
+
+    background: var(--pv-raised);
+  }
+}
+
 .textButtonDanger {
   color: var(--pv-red);
 
