@@ -26,6 +26,26 @@ REMOTE_DIR=parvane
 
 log() { printf '\n== %s ==\n' "$*"; }
 
+# Точка отката (backend/CLAUDE.md): прежние образ шардов, web-dist и docker-compose.yml с суффиксом prev-<дата>.
+# Делается до любой заливки; при повторной выкладке в тот же день — новая буква суффикса
+log "Точка отката на сервере"
+"${SSH[@]}" bash -s <<'SNAPSHOT'
+set -Eeuo pipefail
+cd parvane
+stamp="prev-$(date +%Y%m%d)"
+for letter in a b c d e f g h i j; do
+  [[ -e "web-dist.$stamp$letter" ]] || { stamp="$stamp$letter"; break; }
+done
+if docker image inspect localhost/parvane-shards:latest >/dev/null 2>&1; then
+  docker tag localhost/parvane-shards:latest "localhost/parvane-shards:$stamp"
+fi
+[[ -d web-dist ]] && cp -a web-dist "web-dist.$stamp"
+[[ -f web-dist.assets ]] && cp -a web-dist.assets "web-dist.assets.$stamp"
+[[ -f docker-compose.yml ]] && cp -a docker-compose.yml "docker-compose.yml.$stamp"
+[[ -f Caddyfile ]] && cp -a Caddyfile "Caddyfile.$stamp"
+echo "точка отката: $stamp (web $(cat web-dist/version.txt 2>/dev/null || echo ?))"
+SNAPSHOT
+
 if [[ "${PARVANE_DEPLOY_SKIP_WEB_BUILD:-0}" != "1" ]]; then
   log "Web dist (npm run build:production)"
   (cd "$REPO/web/telegram-tt" && npm run build:production)
