@@ -8,6 +8,14 @@
 .group {
   display: flex;
   flex-direction: column;
+
+  // Телефон: экран — страница на фоне, группы строк — полосами панели до краёв (доска `ZpSysGen`)
+  @media (max-width: 760px) {
+    margin: 0 -1rem;
+    padding: 0 0.5rem;
+    border-block: 1px solid var(--pv-line);
+    background: var(--pv-panel);
+  }
 }
 
 .text {

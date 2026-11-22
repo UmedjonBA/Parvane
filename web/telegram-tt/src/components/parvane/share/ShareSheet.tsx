@@ -14,6 +14,7 @@ import { buildSharedText, getShareDestinations } from '../../../util/shareTarget
 import { formatFileSize } from '../../../util/textFormat';
 import { getMusicInfo } from '../music/musicPlayer';
 
+import useAppLayout from '../../../hooks/useAppLayout';
 import useDerivedState from '../../../hooks/useDerivedState';
 import { useFolderManagerForOrderedIds } from '../../../hooks/useFolderManager';
 import useLang from '../../../hooks/useLang';
@@ -68,6 +69,8 @@ const ShareSheet = ({
   const [isNotePicking, setIsNotePicking] = useState(false);
   const musicInfo = useDerivedState(getMusicInfo);
   const lang = useLang();
+  // Телефон: страница во весь экран с «✕» слева (доска `ZpSysGen`)
+  const { isMobile } = useAppLayout();
 
   const orderedIds = useFolderManagerForOrderedIds(ALL_FOLDER_ID);
   const recentIds = useMemo(() => (orderedIds || []).filter((id) => chatsById[id]).slice(0, RECENT_CHATS_COUNT),
@@ -199,7 +202,8 @@ const ShareSheet = ({
       isOpen={Boolean(shared)}
       title={lang(isNotePicking ? 'ShareToNote' : 'ShareTitle')}
       isTight
-      startClose={isNotePicking ? 'back' : undefined}
+      isPage
+      startClose={isNotePicking ? 'back' : isMobile ? 'cancel' : undefined}
       onClose={isNotePicking ? handleNoteBack : handleClose}
     >
       {isNotePicking ? (

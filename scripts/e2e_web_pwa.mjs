@@ -140,6 +140,17 @@ try {
   const shareSheet = page.locator('[data-share-sheet]');
   await shareSheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await shareSheet.locator('[data-share-content]').getByText(SHARED_FILE).waitFor({ state: 'visible' });
+  // Кадры «Поделиться в Parvane» для сверки с доской `ZpSysGen-01` (компьютер и телефон)
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    const size = page.viewportSize();
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/share-sheet-desk.png` });
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.waitForTimeout(1200);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/share-sheet-phone.png` });
+    await page.setViewportSize(size);
+    await page.waitForTimeout(1200);
+  }
   assert.equal(new URL(page.url()).searchParams.get('open'), null, 'параметр «Поделиться» остался в адресе');
   for (const destination of ['chat', 'files', 'note']) {
     assert.equal(await shareSheet.locator(`[data-share-to="${destination}"]`).count(), 1, `нет пункта ${destination}`);

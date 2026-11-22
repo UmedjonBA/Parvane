@@ -92,6 +92,17 @@ try {
   const ask = bobPage.locator('[data-location-ask-sheet]');
   await ask.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await ask.getByText('Needed to send a place to the chat').waitFor({ state: 'visible' });
+  // Кадры «Доступ к геопозиции» для сверки с доской `ZpSysGen-02`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    const size = bobPage.viewportSize();
+    await bobPage.waitForTimeout(800);
+    await bobPage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/location-ask-desk.png` });
+    await bobPage.setViewportSize({ width: 360, height: 800 });
+    await bobPage.waitForTimeout(1200);
+    await bobPage.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/location-ask-phone.png` });
+    await bobPage.setViewportSize(size);
+    await bobPage.waitForTimeout(1200);
+  }
   await ask.locator('[data-location-ask="later"]').click();
   await ask.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await bobPage.locator('[data-location-settings]').click();

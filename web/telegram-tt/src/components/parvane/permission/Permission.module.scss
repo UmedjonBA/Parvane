@@ -23,4 +23,9 @@
   gap: 0.5rem;
   justify-content: flex-end;
   margin-top: 0.25rem;
+
+  // Телефон: кнопки столбиком во всю ширину, главная сверху (доска `ZpSysGen`)
+  @media (max-width: 760px) {
+    flex-direction: column-reverse;
+  }
 }
