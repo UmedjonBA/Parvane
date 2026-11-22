@@ -263,9 +263,12 @@ pub(crate) async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey
     // ID-06: прежние JWT (iat < now) гаснут, кроме токенов этого устройства —
     // владелец, сменивший пароль после компрометации, выкидывает чужие сессии.
     // PV-018: поколение растёт — гаснут и токены, выданные в ту же секунду или по уже проверенному прежнему паролю.
-    sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_changed_dev = ?, cred_gen = cred_gen + 1 WHERE username = ?")
+    // `password_set_at` — время смены именно пароля (его видит владелец); `password_changed_at` двигает и смена ника.
+    let now = now_unix();
+    sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_set_at = ?, password_changed_dev = ?, cred_gen = cred_gen + 1 WHERE username = ?")
         .bind(&hash)
-        .bind(now_unix())
+        .bind(now)
+        .bind(now)
         .bind(claims.dev.as_deref().unwrap_or(""))
         .bind(&username)
         .execute(&mut *tx)

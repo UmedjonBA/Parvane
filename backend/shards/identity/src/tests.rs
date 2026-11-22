@@ -625,8 +625,16 @@ async fn password_change_requires_old_password_and_resets_trust() {
     // Неверный старый пароль — отказ; слабый новый — отказ.
     assert!(do_password_change(&pool, &dec, &body("nope", "new-password-9")).await.is_err());
     assert!(do_password_change(&pool, &dec, &body("old-password-1", "short")).await.is_err());
+    // До смены отметки «пароль менялся» нет — её ставит только сама смена пароля.
+    let set_at = || async {
+        let (at,): (i64,) = sqlx::query_as("SELECT password_set_at FROM users WHERE username = ?")
+            .bind("chg@local").fetch_one(&pool).await.unwrap();
+        at
+    };
+    assert_eq!(set_at().await, 0, "пароль не меняли — отметки нет");
     // Верная смена: новый хэш действует, доверие 2FA сброшено.
     do_password_change(&pool, &dec, &body("old-password-1", "new-password-9")).await.unwrap();
+    assert!(set_at().await >= now as i64, "смена пароля ставит отметку времени для владельца");
     assert!(require_password(&pool, "chg@local", Some("new-password-9")).await.is_ok());
     assert!(require_password(&pool, "chg@local", Some("old-password-1")).await.is_err());
     let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM trusted_devices WHERE username = ?")

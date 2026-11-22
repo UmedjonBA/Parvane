@@ -701,7 +701,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             v1_ok(&v)?;
             // Почта и время смены пароля — тем же чтением, только владельцу (экран «Устройства и аккаунт»)
             let account: Option<(Option<String>, Option<i64>)> =
-                sqlx::query_as("SELECT email, password_changed_at FROM users WHERE username = ?")
+                sqlx::query_as("SELECT email, password_set_at FROM users WHERE username = ?")
                     .bind(&req.user)
                     .fetch_optional(pool)
                     .await
