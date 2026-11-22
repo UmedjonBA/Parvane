@@ -16,6 +16,8 @@ type WorkerAction = {
 };
 
 const IGNORE_WORKER_PATH = '/k/';
+// Сколько ждать, пока только что активированный воркер возьмёт страницу под управление
+const CONTROLLER_WAIT_MS = 5000;
 const SERVICE_WORKER_OPTIONS: RegistrationOptions = import.meta.env.DEV
   ? { scope: './', type: 'module' }
   : { type: 'module' };
@@ -83,6 +85,10 @@ if (IS_SERVICE_WORKER_SUPPORTED) {
       // Wait for registration to be available
       await navigator.serviceWorker.getRegistration();
 
+      // `ready` наступает, как только воркер начал активироваться, а страницу он забирает (`clients.claim()`) в конце
+      // активации: при первом визите управления здесь ещё нет — подождать его, прежде чем считать воркер выключенным
+      if (!navigator.serviceWorker.controller) await waitForController();
+
       if (navigator.serviceWorker.controller) {
         if (DEBUG) {
           // eslint-disable-next-line no-console
@@ -109,5 +115,18 @@ if (IS_SERVICE_WORKER_SUPPORTED) {
   window.addEventListener('focus', async () => {
     await navigator.serviceWorker.ready;
     subscribeToWorker();
+  });
+}
+
+function waitForController() {
+  return new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(finish, CONTROLLER_WAIT_MS);
+    navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
+
+    function finish() {
+      window.clearTimeout(timeout);
+      navigator.serviceWorker.removeEventListener('controllerchange', finish);
+      resolve();
+    }
   });
 }

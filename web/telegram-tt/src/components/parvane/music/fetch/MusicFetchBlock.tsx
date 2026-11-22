@@ -53,14 +53,16 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
   useEffect(() => {
     if (!isEnabled || !query) return;
     const id = ++requestIdRef.current;
-    setTracks(undefined);
+    // Прежний список каталога остаётся, пока не пришёл новый: иначе при наборе он сменялся «Ищем…» и прыгал
     setIsFailed(false);
     setNotice(undefined);
     rememberQuery(query);
     void callMusic('parvaneMusicFetchCatalog', { query }).then((found) => {
       if (id === requestIdRef.current) setTracks(found);
     }).catch(() => {
-      if (id === requestIdRef.current) setIsFailed(true);
+      if (id !== requestIdRef.current) return;
+      setTracks(undefined);
+      setIsFailed(true);
     });
     void refreshFetchJobs();
   }, [isEnabled, query]);

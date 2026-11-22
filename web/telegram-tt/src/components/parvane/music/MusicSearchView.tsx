@@ -120,13 +120,15 @@ const MusicSearchView = ({
     openMusicView({ kind: 'home' }, true);
   });
 
-  const shown = found?.query === effective ? found : undefined;
+  // Пока идёт запрос нового текста, на экране остаются прежние результаты (без заглушки между нажатиями — список
+  // не прыгал при наборе); неудачный прежний запрос не держим
+  const shown = found && (found.query === effective || !found.isFailed) ? found : undefined;
   const rows = useMemo(() => (shown ? buildSearchRows(shown, filter) : []), [shown, filter]);
   const playable = useMemo(() => rows.filter((row) => row.kind === 'track')
     .map((row) => shown!.tracks.find((track) => track.id === row.id)!), [rows, shown]);
 
   const handlePlay = useLastCallback((index: number) => {
-    playTracks(playable, index, { source: { kind: 'search', name: effective } });
+    playTracks(playable, index, { source: { kind: 'search', name: shown!.query } });
   });
 
   const handleStar = useLastCallback((track: MusicTrack) => {
@@ -254,7 +256,7 @@ const MusicSearchView = ({
           </ul>
         )}
         {shown.hasMore && <MusicLoadMore onMore={handleMore} />}
-        <MusicFetch query={effective} onPlayLibraryTrack={handlePlayLibraryTrack} />
+        <MusicFetch query={shown.query} onPlayLibraryTrack={handlePlayLibraryTrack} />
       </>
     );
   }
