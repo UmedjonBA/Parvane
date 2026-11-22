@@ -872,6 +872,67 @@ async function galleryMusic() {
   await page.context().close();
 }
 
+// ── Состояния: «нет связи» в модулях (доски `PhStates-02`, `ZpFilesX-03`, `ZdFilesX-02`), первый запуск (`XpStart-02`) ──
+async function galleryStates() {
+  const { page } = await openSession('states');
+  await toRussian(page);
+  const modules = [['plan', 'ParvanePlanner'], ['health', 'ParvaneHealth'], ['notes', 'ParvaneKnowledge'], ['files', 'ParvaneCloud']];
+  // Каждый модуль открыт один раз со связью: без неё показывается сохранённое на устройстве
+  for (const [module, rootId] of modules) {
+    await openModule(page, module, rootId).catch((err) => console.log(`WARN: ${module}: ${String(err).split('\n')[0]}`));
+    await page.waitForTimeout(1500);
+  }
+  // Файл тащат в окно (доска `ZdMisc-01`)
+  await step(page, 'ZdMisc-01', async () => {
+    await page.evaluate(() => {
+      const data = new DataTransfer();
+      data.items.add(new File(['x'], 'backup.tar.zst'));
+      const target = document.querySelector('#ParvaneCloud');
+      ['dragenter', 'dragover'].forEach((type) => {
+        target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data }));
+      });
+    });
+    await page.waitForTimeout(600);
+  });
+  await page.evaluate(() => {
+    document.querySelector('#ParvaneCloud').dispatchEvent(new DragEvent('dragleave', { bubbles: true }));
+    window.dispatchEvent(new DragEvent('dragend', { bubbles: true }));
+  });
+  await page.keyboard.press('Escape');
+  // Открытое соединение браузер стенда не рвёт: обрыв клиент замечает по молчанию сервера, на это уходит время
+  await page.context().setOffline(true);
+  await page.waitForTimeout(50000);
+  for (const [module, rootId] of modules) {
+    await step(page, `states-desk-offline-${module}`, async () => {
+      await openModule(page, module, rootId);
+      await page.waitForTimeout(1500);
+    });
+  }
+  await step(page, 'states-desk-offline-chats', async () => {
+    await page.locator('[data-module="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await resize(page, PHONE);
+  for (const [module, rootId] of modules) {
+    await step(page, `states-phone-offline-${module}`, async () => {
+      // Страница без ленты модулей (первое открытие «Здоровья») закрывается стрелкой «назад»
+      await page.getByRole('button', { name: 'Назад' }).first().click({ timeout: 1500 }).catch(() => undefined);
+      await openModule(page, module, rootId);
+      await page.waitForTimeout(1500);
+    });
+  }
+  await page.context().setOffline(false);
+  // Первый запуск «Что вам нужно?»: отметка показа снята, страница перезагружена
+  await step(page, 'XpStart-02', async () => {
+    await page.evaluate(() => localStorage.setItem('parvane:modules-first-run', ''));
+    await reloadPage(page);
+    await page.waitForTimeout(4000);
+  });
+  await resize(page, DESK);
+  await step(page, 'states-desk-first-run', async () => { await page.waitForTimeout(800); });
+  await page.context().close();
+}
+
 // ── Чаты: доски RpChat (профиль собеседника), ZpChat2 (сведения группы), XpChat, ZpChat — два аккаунта ──
 async function galleryChat() {
   const bob = await openSession('chat-bob');
@@ -960,6 +1021,7 @@ try {
   if (wants('files')) await galleryFiles();
   if (wants('notes')) await galleryNotes();
   if (wants('plan')) await galleryPlan();
+  if (wants('states')) await galleryStates();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
 } finally {
   await browser.close();
