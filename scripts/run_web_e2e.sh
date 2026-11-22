@@ -21,6 +21,27 @@ TEMP_ROOT="$(mktemp -d "$TEMP_PARENT/parvane-web-e2e.XXXXXX")"
 PIDS=()
 ALLOCATED_PORTS=()
 
+# Занятые раннерами порты — файлами с pid раннера в общем каталоге: параллельные раннеры (`web_par.sh`) иначе
+# получали от системы один и тот же свободный порт и второй падал на «Port … is already in use»
+PORT_RESERVE_DIR="$ROOT/local-workdirs/e2e-ports"
+RESERVED_PORT_FILES=()
+
+reserve_port() {
+  local port="$1"
+  local file="$PORT_RESERVE_DIR/$port"
+  mkdir -p "$PORT_RESERVE_DIR"
+  # Запись раннера, которого уже нет, — не занятость
+  if [[ -f "$file" ]] && ! kill -0 "$(cat "$file" 2>/dev/null)" 2>/dev/null; then
+    rm -f "$file"
+  fi
+  # `noclobber`: создать файл может только один раннер
+  if ( set -o noclobber; echo "$$" > "$file" ) 2>/dev/null; then
+    RESERVED_PORT_FILES+=("$file")
+    return 0
+  fi
+  return 1
+}
+
 allocate_port() {
   local destination="$1"
   local override_name="$2"
@@ -36,6 +57,9 @@ allocate_port() {
       });
     ')"
     if [[ " ${ALLOCATED_PORTS[*]} " == *" $candidate "* ]]; then
+      candidate=""
+    elif ! reserve_port "$candidate"; then
+      # Порт уже занял параллельный раннер: между выбором порта и его открытием проходят минуты (сборка, шарды)
       candidate=""
     fi
   done
@@ -92,6 +116,9 @@ cleanup() {
   done
   for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
+  done
+  for reserved in "${RESERVED_PORT_FILES[@]}"; do
+    rm -f "$reserved"
   done
   for pid in "${PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
