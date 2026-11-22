@@ -172,6 +172,8 @@ try {
   await itemOf(reports, spam).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await itemOf(reports, spam2).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await reports.locator('[data-report-item]').count(), 2, 'по строке на сообщение');
+  // Кадр списка жалоб для сверки с доской `RpChat-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) await a.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/reports-list.png` });
   assert((await itemOf(reports, spam).locator('[data-report-meta]').innerText()).includes('2 reports'), 'двое пожаловались');
   assert((await itemOf(reports, spam).innerText()).includes(`реклама ${suffix}`), 'комментарий в списке');
   assert.equal(await itemOf(reports, spam2).locator('[data-report-reason]').getAttribute('data-report-reason'), 'insult');
