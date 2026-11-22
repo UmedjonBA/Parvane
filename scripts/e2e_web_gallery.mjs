@@ -943,6 +943,7 @@ async function galleryChat() {
     await openPrivateChatStrict(page, peer);
     await sendText(page, 'Пришли конфиг, гляну вечером');
     await createGroupViaUi(page, 'Linux-чат', [peer.split('@')[0]]);
+    await sendText(page, 'Собрал клиент под aarch64, выложу в «Файлы» вечером');
   } catch (err) {
     console.log(`WARN: чат: ${String(err).split('\n')[0]}`);
   }
@@ -981,6 +982,43 @@ async function galleryChat() {
   };
   await phoneInfo('RpChat-02', peer.split('@')[0]);
   await phoneInfo('ZpChat2-04', 'Linux-чат');
+  // К чату из любого места: закрыть панели, пока строку чата нельзя нажать
+  const openChat = async (title) => {
+    const row = page.locator('.chat-list .ListItem').filter({ hasText: title }).first();
+    const isReachable = () => row.click({ trial: true, timeout: 1500 }).then(() => true, () => false);
+    for (let attempt = 0; attempt < 4 && !(await isReachable()); attempt++) {
+      await page.locator('#RightColumn .close-button:visible, #MiddleColumn .MiddleHeader .back-button button:visible')
+        .first().click({ timeout: 2000 }).catch(() => page.keyboard.press('Escape'));
+      await page.waitForTimeout(600);
+    }
+    await row.click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  };
+  // Телефон: «Тип группы» из сведений группы (доска `XpChat-01`)
+  await step(page, 'XpChat-01', async () => {
+    await openChat('Linux-чат');
+    await page.locator('#MiddleColumn .MiddleHeader .ChatInfo:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#RightColumn').getByText('Тип группы', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  // Телефон: меню сообщения и его пункты (доски `ZpChat-02`, `RpPick-02`, `XpChat-02`) — в личном чате
+  const lastMessage = page.locator('#MiddleColumn .Message .message-content:visible').last();
+  const messageMenu = async () => {
+    await openChat(peer.split('@')[0]);
+    await lastMessage.click({ button: 'right', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  };
+  await step(page, 'ZpChat-02', messageMenu);
+  await page.keyboard.press('Escape');
+  for (const [name, item] of [['RpPick-02', 'Переслать'], ['XpChat-02', 'В план'], ['chat-phone-to-note', 'В заметку']]) {
+    await step(page, name, async () => {
+      await messageMenu();
+      await page.getByText(item, { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+      await page.waitForTimeout(1200);
+    });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+  }
   // Телефон: «Новое сообщение», новая группа и новый канал (доска `ZpChat2`)
   const toChatList = async () => {
     for (let attempt = 0; attempt < 4; attempt++) {

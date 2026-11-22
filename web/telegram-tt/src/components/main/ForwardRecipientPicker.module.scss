@@ -34,6 +34,15 @@
   flex: none;
   flex-direction: column;
 
-  padding: 0.25rem 1rem;
+  padding: 0 1rem;
   border-bottom: 1px solid var(--pv-line);
+
+  // Выключатели пересылки — строки настроек 52 px с линией между ними (вид макета, доска `RpPick`)
+  > * {
+    min-height: var(--pv-settings-row-height);
+  }
+
+  > * + * {
+    border-top: 1px solid var(--pv-line);
+  }
 }
