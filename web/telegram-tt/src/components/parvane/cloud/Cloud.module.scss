@@ -1040,6 +1040,19 @@
   padding-block: 0.5rem;
 }
 
+// Название передачи сжимается, а не выталкивает действия на новую строку (перенос оставлен только полосе хода)
+.transfer > .itemText {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+// Причина сбоя читается целиком: переносится, а не обрезается многоточием
+.transfer .itemSub {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .transferBar {
   overflow: hidden;
   flex: 1 0 100%;

@@ -481,6 +481,12 @@ async function galleryFiles() {
   });
   await files2.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
+  // С заниженным пределом диска (`PARVANE_E2E_CLOUD_DRIVE_QUOTA_BYTES`) вторая большая загрузка не помещается:
+  // строка «не хватает … · Освободить место» (доски `ZdFilesX-02`, `ZpFilesX-03`)
+  await step(page, 'files-phone-nospace', async () => { await page.waitForTimeout(1500); });
+  await resize(page, DESK);
+  await step(page, 'files-desk-nospace', async () => { await page.waitForTimeout(800); });
+  await resize(page, PHONE);
   await step(page, 'PhoneFiles-01', async () => undefined);
   await step(page, 'files-phone-menu', async () => {
     await files2.locator('[data-node-id][data-name="wg0.conf"]').getByRole('button').last().click({ timeout: STEP_TIMEOUT_MS });

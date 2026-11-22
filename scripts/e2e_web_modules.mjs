@@ -299,6 +299,10 @@ async function runServerOffPart(suffix) {
   await touchDrag(mobile, touchFrom, { x: touchFrom.x, y: phonePlanBox.y + 6 }, async () => {
     await expectModules(mobile, RIBBON, ['chats', 'files', 'plan', 'health', 'profile'], 'лента не меняется по ходу касания');
     await mobile.locator('[data-module-trace]').waitFor({ state: 'visible', timeout: WAIT_MS });
+    // Кадр строки модуля во время перетаскивания для сверки с доской `XpStart-03`
+    if (process.env.PARVANE_E2E_SHOT_DIR) {
+      await mobile.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/module-drag.png` });
+    }
   });
   await mobile.locator('[data-module-trace]').waitFor({ state: 'detached', timeout: WAIT_MS });
   await expectModules(mobile, RIBBON, ['chats', 'files', 'plan', 'health', 'profile'], 'касание не переставило модуль');
