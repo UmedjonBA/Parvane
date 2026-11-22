@@ -476,6 +476,10 @@ try {
   await failed.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Сбой по причине (доска `ZpFilesX`): «not uploaded: file is larger than …», без «Повторить»
   await failed.getByText(/^not uploaded: file is larger than /).waitFor({ state: 'visible' });
+  // Кадр строки «файл больше предела» для сверки с досками `ZdFilesX-02`, `ZpFilesX-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/cloud-too-large.png` });
+  }
   assert.equal(await failed.getByRole('button', { name: 'Retry', exact: true }).count(), 0, 'большой файл не повторяют');
   assert.equal(await item('большой.bin').count(), 0, 'отказанный файл в списке не появился');
   assert.deepEqual(counts(), beforeBig, 'отказ до начала: на сервере ничего не изменилось');
