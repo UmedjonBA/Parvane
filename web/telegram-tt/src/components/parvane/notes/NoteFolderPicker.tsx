@@ -49,7 +49,11 @@ const NoteFolderPicker = ({
   const inputRef = useRef<HTMLInputElement>();
 
   const [query, setQuery] = useState('');
-  const [pickedPath, setPickedPath] = useState(currentPath);
+  const [statePickedPath, setPickedPath] = useState(currentPath);
+  // Шторка остаётся смонтированной между открытиями: в кадре открытия выбор — текущая папка, а не прошлый выбор
+  // (сброс состояния ниже применяется только после этого кадра — кнопка переноса на миг была доступна)
+  const wasOpenRef = useRef(false);
+  const pickedPath = isOpen && !wasOpenRef.current ? currentPath : statePickedPath;
   const [isCreating, startCreating, stopCreating] = useFlag();
   const [isBusy, markBusy, unmarkBusy] = useFlag();
   const [error, setError] = useState<FolderSubmitError>();
@@ -65,6 +69,10 @@ const NoteFolderPicker = ({
     setQuery('');
     setPickedPath(currentPath);
   }, [isOpen, currentPath]);
+
+  useLayoutEffect(() => {
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
 
   useEffect(() => {
     if (isCreating) inputRef.current?.focus();
