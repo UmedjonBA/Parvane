@@ -184,7 +184,8 @@ const CloudNewSharedDialog = ({
   const createButton = (
     <button
       type="button"
-      className={buildClassName(kit.btn, kit.btnAcc)}
+      // Телефон: «Создать» текстом акцента в шапке (доска `ZpFilesX`)
+      className={isNarrow ? styles.headTextAction : buildClassName(kit.btn, kit.btnAcc)}
       disabled={isBusy}
       data-new-shared-create
       onClick={handleCreate}
@@ -221,6 +222,7 @@ const CloudNewSharedDialog = ({
         </form>
         <h3 className={styles.caption}>{lang('ParvaneCloudMembersCaption')}</h3>
         <form className={styles.shareNick} onSubmit={handleNick} data-new-shared-nick>
+          {isNarrow && <span className={styles.shareNickLabel}>{lang('ParvaneCloudNickLabel')}</span>}
           <span className={styles.shareNickRow}>
             <input
               ref={nickRef}
@@ -273,7 +275,7 @@ const CloudNewSharedDialog = ({
             ))}
           </div>
         )}
-        <div className={styles.linkPairStart}>
+        <div className={buildClassName(styles.linkPairStart, isNarrow && styles.linkPairColumn)}>
           <button type="button" className={kit.btn} data-new-shared-contacts onClick={() => setPicker('contacts')}>
             {lang('ParvaneCloudFromContacts')}
           </button>

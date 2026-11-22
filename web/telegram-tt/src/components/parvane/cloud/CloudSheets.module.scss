@@ -1073,6 +1073,39 @@
   gap: 0.5rem;
 }
 
+// Телефон: обе кнопки во всю ширину, одна под другой
+.linkPairColumn {
+  flex-direction: column;
+}
+
+// Подпись над полем ника на телефоне
+.shareNickLabel {
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
+// Действие шапки шторки текстом акцента: «Создать»
+.headTextAction {
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  height: 2.25rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--pv-radius);
+
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-at);
+
+  background: none;
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
 // «Что занимает место»: размер строки
 .usageBytes {
   flex: none;

@@ -337,6 +337,42 @@ async function galleryFiles() {
     await files2.locator('[data-node-id][data-name="wg0.conf"]').getByRole('button').last().click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
+  // Телефон: шторки и экраны (доски `PhFilesMore`, `RpFiles`, `XpFiles`, `ZpFilesX`) — пункт меню файла по названию
+  const fileAction = async (name, action) => {
+    await files2.locator(`[data-node-id][data-name="${name}"]`).getByRole('button').last().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(action, { exact: true }).last().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  };
+  const filesChip = (label) => files2.getByText(label, { exact: true }).first();
+  await step(page, 'PhFilesMore-01', async () => { await fileAction('backup-2026-11.tar.zst', 'Ссылка для всех'); });
+  await page.keyboard.press('Escape');
+  await step(page, 'XpFiles-02', async () => { await fileAction('nftables.conf', 'Переместить'); });
+  await page.keyboard.press('Escape');
+  await step(page, 'PhFilesMore-03', async () => {
+    await fileAction('parvane-android-arm64.apk', 'В корзину');
+    await filesChip('Корзина').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  // Корзина, «Мои ссылки» — страницы с «назад»: к вкладкам возвращает стрелка
+  const filesBack = () => files2.locator('[data-cloud-back]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  await step(page, 'RpFiles-01', async () => {
+    await filesBack();
+    await filesChip('Мои ссылки').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'files-phone-owned', async () => {
+    await filesBack();
+    await filesChip('Общие папки').click({ timeout: STEP_TIMEOUT_MS });
+  });
+  await step(page, 'ZpFilesX-01', async () => {
+    await page.getByRole('button', { name: /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'ZpFilesX-02', async () => {
+    await filesBack();
+    await filesChip('Мой диск').click({ timeout: STEP_TIMEOUT_MS });
+    await files2.getByRole('button', { name: 'Поиск по файлам' }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#ParvaneCloud input[type="search"], #ParvaneCloud input[type="text"]').first().fill('conf');
+  });
   await page.context().close();
 }
 
