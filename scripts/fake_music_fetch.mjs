@@ -73,7 +73,11 @@ http.createServer((req, res) => {
   if (url.pathname === '/health') return reply(res, 200, { ok: true });
   if (url.pathname === '/catalog') {
     const query = (url.searchParams.get('q') || '').toLowerCase();
-    const tracks = CATALOG.filter((track) => `${track.artist} ${track.title}`.toLowerCase().includes(query));
+    // Чип поиска: `artist:"…"`, `album:"…"`, `track:"…"` — по одному полю (как music-fetch)
+    const field = query.match(/^(artist|album|track):"([^"]*)"$/);
+    const tracks = field
+      ? CATALOG.filter((track) => track[field[1] === 'track' ? 'title' : field[1]].toLowerCase().includes(field[2]))
+      : CATALOG.filter((track) => `${track.artist} ${track.title}`.toLowerCase().includes(query));
     return reply(res, 200, { tracks });
   }
   if (url.pathname === '/candidates') {

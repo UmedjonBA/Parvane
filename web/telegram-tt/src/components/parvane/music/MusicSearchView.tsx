@@ -256,7 +256,7 @@ const MusicSearchView = ({
           </ul>
         )}
         {shown.hasMore && <MusicLoadMore onMore={handleMore} />}
-        <MusicFetch query={shown.query} onPlayLibraryTrack={handlePlayLibraryTrack} />
+        <MusicFetch query={shown.query} filter={filter} onPlayLibraryTrack={handlePlayLibraryTrack} />
       </>
     );
   }

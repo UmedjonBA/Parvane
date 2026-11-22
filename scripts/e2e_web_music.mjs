@@ -343,6 +343,11 @@ try {
   // «Нет на сервере» на телефоне: ход загрузки в процентах и отмена (блок «Найти и скачать»)
   await phone.locator('[data-music-search]').getByRole('searchbox').fill('медленный берег');
   const phoneFetch = phone.locator('[data-music-fetch]');
+  // Чипы поиска действуют и на каталог: «Исполнители» ищет по исполнителю — трека с таким названием там нет
+  await phoneFetch.locator('[data-fetch-track="Медленный берег"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await phone.getByRole('button', { name: 'Artists', exact: true }).click();
+  await phoneFetch.locator('[data-fetch-track="Медленный берег"]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await phone.getByRole('button', { name: 'All', exact: true }).click();
   await phoneFetch.locator('[data-fetch-track="Медленный берег"] [data-fetch-download]').click();
   const slowJob = phoneFetch.locator('[data-fetch-job][data-fetch-state="downloading"]').first();
   await slowJob.locator('[data-fetch-percent]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });

@@ -3,6 +3,7 @@ import {
 } from '../../../../lib/teact/teact';
 
 import type { MusicCatalogTrack, MusicFetchJob } from '../../../../api/parvane/musicApi';
+import type { MusicSearchFilter } from '../musicLibrary';
 
 import buildClassName from '../../../../util/buildClassName';
 import { formatTrackTime } from '../musicFormat';
@@ -24,6 +25,8 @@ import styles from './MusicFetch.module.scss';
 
 type OwnProps = {
   query: string;
+  // Чип поиска («Треки», «Исполнители», «Альбомы») — каталог ищет по тому же полю
+  filter?: MusicSearchFilter;
   // Трек появился в библиотеке: его можно сыграть
   onPlayLibraryTrack: (trackId: string) => void;
 };
@@ -40,7 +43,12 @@ const NOTICE_KEYS = {
 // результатами поиска. Большая кнопка «Найти и скачать «запрос»» — эталон сервер берёт из каталога сам; ниже строки
 // каталога с «Найти и скачать» у каждой (уточнение). Ход в процентах, очередь сервера, отмена, выбор файла при
 // спорном совпадении, «✓ Добавлен». Скачивание выключено администратором — одна строка вместо блока
-const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
+// Поле поиска каталога (Deezer: `artist:"…"`) для чипа поиска; «Всё» — по всем полям
+const CATALOG_FIELDS: Partial<Record<MusicSearchFilter, string>> = {
+  tracks: 'track', artists: 'artist', albums: 'album',
+};
+
+const MusicFetchBlock = ({ query, filter, onPlayLibraryTrack }: OwnProps) => {
   const lang = useLang();
   const info = useDerivedState(getMusicInfo);
   const jobs = useDerivedState(getFetchJobs);
@@ -57,7 +65,9 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
     setIsFailed(false);
     setNotice(undefined);
     rememberQuery(query);
-    void callMusic('parvaneMusicFetchCatalog', { query }).then((found) => {
+    const field = filter && CATALOG_FIELDS[filter];
+    const catalogQuery = field ? `${field}:"${query.replace(/"/g, '')}"` : query;
+    void callMusic('parvaneMusicFetchCatalog', { query: catalogQuery }).then((found) => {
       if (id === requestIdRef.current) setTracks(found);
     }).catch(() => {
       if (id !== requestIdRef.current) return;
@@ -65,7 +75,7 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
       setIsFailed(true);
     });
     void refreshFetchJobs();
-  }, [isEnabled, query]);
+  }, [isEnabled, query, filter]);
 
   const handleByQuery = useLastCallback(async () => {
     const result = await startFetchByQuery(query);
@@ -170,7 +180,13 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
                   <span className={styles.text}>
                     <span className={styles.title}>{track.title}</span>
                     <span className={styles.sub}>
-                      {[track.artist, formatTrackTime(track.durationSecs)].filter(Boolean).join(' · ')}
+                      {[
+                        lang('MusicKindTrack'),
+                        track.artist,
+                        // Альбом — если это не сингл с тем же названием: видно, откуда трек, при поиске по альбому
+                        track.album.toLowerCase() !== track.title.toLowerCase() ? track.album : undefined,
+                        formatTrackTime(track.durationSecs),
+                      ].filter(Boolean).join(' · ')}
                     </span>
                   </span>
                   {renderCatalogAction(track, index, job)}

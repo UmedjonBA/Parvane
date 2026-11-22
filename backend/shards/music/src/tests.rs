@@ -349,6 +349,10 @@ async fn fake_fetch_serve(fake: Arc<FakeFetch>, req: Request<Incoming>) -> Respo
         "/download" => {
             let body = req.into_body().collect().await.unwrap().to_bytes();
             let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            // «drm» в id — источник файл не отдаёт (официальные загрузки SoundCloud под DRM)
+            if v["id"].as_str().unwrap_or("").contains("drm") {
+                return reply(500, json!({"error": "DRM protected"}));
+            }
             let rel = format!("{}.mp3", v["dest"].as_str().unwrap());
             let full = fake.library_dir.lock().unwrap().join(&rel);
             std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -467,6 +471,36 @@ async fn fetch_takes_confident_match_and_tracks_who_added_it() {
     del("alice@local").await.unwrap();
     assert_eq!(files("alice@local"), 0);
     assert_eq!(del("alice@local").await.unwrap_err(), ErrorCode::NotFound);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn fetch_skips_files_the_source_will_not_give() {
+    // Уверенный файл под DRM — берётся следующий уверенный того же источника
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("soundcloud".into(), vec![found("drm-1", "Группа - Песня t2", 215), found("reup", "Группа - Песня t2", 214)]);
+    let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
+    let done = settled(&ctx, "alice@local", &job.job_id).await;
+    assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // В SoundCloud скачать нечего — следующий источник
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("soundcloud".into(), vec![found("drm-1", "Группа - Песня t2", 215)]);
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("yt-1", "Группа - Песня t2", 215)]);
+    let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
+    let done = settled(&ctx, "alice@local", &job.job_id).await;
+    assert_eq!(done.state, pb::FetchState::Done as i32, "{done:?}");
+    assert_eq!(fake.asked_sources.lock().unwrap()[..], ["soundcloud", "youtube_reupload", "youtube"]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    // Ни один источник не отдал файл — отказ «источник», а не «не найдено»
+    let (fake, ctx, dir) = setup_fetch(30, u64::MAX).await;
+    fake.candidates.lock().unwrap().insert("soundcloud".into(), vec![found("drm-1", "Группа - Песня t2", 215)]);
+    fake.candidates.lock().unwrap().insert("youtube".into(), vec![found("drm-2", "Группа - Песня t2", 215)]);
+    let job = start(&ctx, "alice@local", "Песня t2").await.unwrap();
+    let done = settled(&ctx, "alice@local", &job.job_id).await;
+    assert_eq!((done.state, done.failure), (pb::FetchState::Failed as i32, pb::FetchFailure::Source as i32), "{done:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
 

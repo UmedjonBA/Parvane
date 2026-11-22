@@ -33,6 +33,9 @@ const CATALOG_MAX: u32 = 10;
 /// Сколько эталонов каталога смотрим, выбирая эталон по строке запроса.
 const REFERENCE_CATALOG: u32 = 5;
 const CANDIDATES_PER_SOURCE: u32 = 5;
+/// Сколько уверенных файлов одного источника пробовать, если скачать не вышло (у SoundCloud официальные загрузки
+/// лейблов под DRM — следующий в списке обычно перезалив, который скачивается)
+const DOWNLOAD_TRIES: usize = 3;
 const CHOICE_MAX: usize = 10;
 const JOB_KEEP_MS: i64 = 3_600_000;
 const JOBS_PER_USER: usize = 50;
@@ -373,7 +376,9 @@ impl Fetch {
             self.spawn(&r.job_id, async move {
                 let Some(_slot) = this.take_slot(&id).await else { return };
                 this.update(&id, |j| j.state = pb::FetchState::Downloading);
-                this.download(&sub, &id, chosen.candidate).await;
+                if let Err(e) = this.download(&sub, &id, chosen.candidate).await {
+                    this.fail_with(&id, pb::FetchFailure::Source, detail_of(&e));
+                }
             });
             return self.job_reply(&r.job_id);
         }
@@ -531,11 +536,15 @@ impl Fetch {
         total
     }
 
-    /// Кандидаты из источников по порядку: первый источник с уверенным совпадением заканчивает поиск.
+    /// Кандидаты из источников по порядку: первый источник с уверенным совпадением заканчивает поиск. Уверенный файл не
+    /// скачался (DRM, удалён, источник оборвал) — следующий уверенный того же источника, затем следующий источник;
+    /// не скачалось ничего — выбор человеку из оставшихся либо отказ с причиной последней неудачи.
     async fn search(self: &Arc<Self>, sub: &Subsonic, id: &str) {
         let Ok(service) = self.service() else { return };
         let Some(query) = self.job(id).map(|j| j.query) else { return };
         let mut all: Vec<Candidate> = Vec::new();
+        let mut tried: Vec<String> = Vec::new();
+        let mut last_error: Option<ServiceError> = None;
         for source in matching::source_order(&query, &self.rules) {
             match service.candidates(source, &query, CANDIDATES_PER_SOURCE).await {
                 Ok(found) => all.extend(found),
@@ -548,20 +557,36 @@ impl Fetch {
                     return;
                 }
             }
+            all.retain(|c| !tried.contains(&c.id));
             let ranked = matching::rank(&query, &all, &self.rules);
-            if matching::verdict(&query, &ranked, &self.rules) == Verdict::Auto {
-                let best = ranked[0].candidate.clone();
-                self.update(id, |j| {
-                    j.ranked = ranked;
-                    j.state = pb::FetchState::Downloading;
-                });
-                self.download(sub, id, best).await;
-                return;
+            if matching::verdict(&query, &ranked, &self.rules) != Verdict::Auto {
+                continue;
             }
+            let sure: Vec<Candidate> = ranked
+                .iter()
+                .filter(|r| r.score >= self.rules.auto_threshold && (!matching::needs_uncensored(&query) || r.trusted_original))
+                .take(DOWNLOAD_TRIES)
+                .map(|r| r.candidate.clone())
+                .collect();
+            self.update(id, |j| {
+                j.ranked = ranked;
+                j.state = pb::FetchState::Downloading;
+            });
+            for candidate in sure {
+                tried.push(candidate.id.clone());
+                match self.download(sub, id, candidate).await {
+                    Ok(()) => return,
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            all.retain(|c| !tried.contains(&c.id));
         }
         let ranked = matching::rank(&query, &all, &self.rules);
         if ranked.is_empty() {
-            self.fail(id, pb::FetchFailure::NotFound);
+            match last_error {
+                Some(e) => self.fail_with(id, pb::FetchFailure::Source, detail_of(&e)),
+                None => self.fail(id, pb::FetchFailure::NotFound),
+            }
         } else {
             self.update(id, |j| {
                 j.ranked = ranked;
@@ -577,9 +602,11 @@ impl Fetch {
         }
     }
 
-    async fn download(self: &Arc<Self>, sub: &Subsonic, id: &str, candidate: Candidate) {
-        let Ok(service) = self.service() else { return };
-        let Some((user, query)) = self.job(id).map(|j| (j.user, j.query)) else { return };
+    /// Скачать файл в библиотеку. `Err` — источник файл не отдал (недокачанное убрано, задача не закрыта: вызывающий
+    /// пробует другой файл либо закрывает её сам); остальные исходы задача получает здесь же.
+    async fn download(self: &Arc<Self>, sub: &Subsonic, id: &str, candidate: Candidate) -> Result<(), ServiceError> {
+        let Ok(service) = self.service() else { return Ok(()) };
+        let Some((user, query)) = self.job(id).map(|j| (j.user, j.query)) else { return Ok(()) };
         let dest = format!("{}/{} [{}]", nd_user(&user), file_stem(&query.artist, &query.title), id);
         self.update(id, |j| j.dest = dest.clone());
         let fetched = {
@@ -605,8 +632,7 @@ impl Fetch {
             Err(e) => {
                 warn!("музыка: загрузка из {} не удалась: {e:?}", candidate.source);
                 self.remove_partial(&dest).await;
-                self.fail_with(id, pb::FetchFailure::Source, detail_of(&e));
-                return;
+                return Err(e);
             }
         };
         self.update(id, |j| {
@@ -620,7 +646,7 @@ impl Fetch {
         if too_short || over_quota {
             self.remove_file(&file.path).await;
             self.fail(id, if over_quota { pb::FetchFailure::Limit } else { pb::FetchFailure::Source });
-            return;
+            return Ok(());
         }
         let row = Added {
             path: file.path.clone(),
@@ -637,10 +663,11 @@ impl Fetch {
             error!("музыка: добавленный трек не записан: {e}");
             self.remove_file(&file.path).await;
             self.fail(id, pb::FetchFailure::Library);
-            return;
+            return Ok(());
         }
         info!("музыка: трек скачан ({} байт, источник {})", file.bytes, candidate.source);
         self.finish_in_library(sub, id, &user, &file.path, &query).await;
+        Ok(())
     }
 
     /// Файл записан и учтён: ждём, пока музыкальный сервер его увидит, и отмечаем задачу готовой.

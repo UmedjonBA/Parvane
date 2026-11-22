@@ -20,6 +20,7 @@ MUSIC_FETCH_PROXY (необязательный прокси для источн
 """
 
 import json
+import re
 import os
 import threading
 import time
@@ -33,7 +34,11 @@ LIBRARY_DIR = os.path.realpath(os.environ.get("MUSIC_FETCH_LIBRARY_DIR", "/music
 COOLDOWN_SECS = int(os.environ.get("MUSIC_FETCH_COOLDOWN_SECS", "900"))
 PROXY = os.environ.get("MUSIC_FETCH_PROXY") or None
 COOKIES_FILE = os.environ.get("MUSIC_FETCH_COOKIES_FILE") or None
-CATALOG_URL = "https://api.deezer.com/search"
+DEEZER_API = "https://api.deezer.com"
+# Чип поиска: `artist:"…"`, `album:"…"`, `track:"…"`
+FIELD_QUERY = re.compile(r'^(artist|album|track):"([^"]*)"$')
+# Сколько результатов обычного поиска перебрать для отбора по полю (у Deezer не больше 100)
+FIELD_SEARCH_LIMIT = 100
 MAX_LIMIT = 10
 # Запрос источнику: (префикс поиска yt-dlp, добавка к строке)
 SOURCES = {
@@ -85,12 +90,34 @@ def upload_day(info):
     return f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else None
 
 
-def catalog(query, limit):
-    url = f"{CATALOG_URL}?{urllib.parse.urlencode({'q': query, 'limit': limit})}"
+def deezer(path, **params):
+    url = f"{DEEZER_API}{path}?{urllib.parse.urlencode(params)}"
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "parvane-music-fetch"}), timeout=15) as response:
-        data = json.load(response)
+        return json.load(response).get("data", [])
+
+
+def catalog(query, limit):
+    """Эталоны треков. Запрос `artist:"…"`, `album:"…"`, `track:"…"` — чипы поиска «Музыки»: поиск Deezer по полю
+    выдаёт постороннее, а популярное исполнителя и треки альбома с сервера приходят урезанными (ограничение по стране),
+    поэтому обычный поиск пошире и только треки с текстом в нужном поле."""
+    match = FIELD_QUERY.match(query.strip())
+    if not match:
+        return {"tracks": to_tracks(deezer("/search", q=query, limit=limit), limit)}
+    field, text = match.group(1), match.group(2).strip()
+    needle = text.casefold()
+    found = [item for item in deezer("/search", q=text, limit=FIELD_SEARCH_LIMIT) if needle in field_value(item, field).casefold()]
+    return {"tracks": to_tracks(found, limit)}
+
+
+def field_value(item, field):
+    if field == "track":
+        return item.get("title", "")
+    return (item.get(field) or {}).get("name" if field == "artist" else "title", "")
+
+
+def to_tracks(items, limit):
     tracks = []
-    for item in data.get("data", [])[:limit]:
+    for item in items[:limit]:
         album = item.get("album") or {}
         tracks.append({
             "artist": (item.get("artist") or {}).get("name", ""),
@@ -101,7 +128,7 @@ def catalog(query, limit):
             "explicit": {1: True, 0: False, 3: False}.get(item.get("explicit_content_lyrics")),
             "year": 0,
         })
-    return {"tracks": tracks}
+    return tracks
 
 
 def candidates(source, artist, title, limit):
