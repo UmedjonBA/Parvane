@@ -408,7 +408,10 @@ try {
   assert.equal(await cloud.getByRole('button', { name: 'Tiles' }).count(), 0, 'переключателя на плитку нет');
   assert.equal(await cloud.getByRole('button', { name: 'List' }).count(), 0, 'переключателя вида нет');
   await item('снимок.png').locator('img[data-thumb]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await cloud.locator('[data-node-id] img').count(), 1, 'миниатюра — только у картинки');
+  // Строка, смонтированная заново (смена списка), берёт адрес миниатюры у провайдера снова — счёт ждём, а не снимаем разом
+  await page.waitForFunction(
+    () => document.querySelectorAll('#ParvaneCloud [data-node-id] img').length === 1, undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('миниатюра — только у картинки'));
   await sortBy('By size');
   await reloadPage(page);
   await dismissRecoveryKeyDialog(page).catch(() => undefined);

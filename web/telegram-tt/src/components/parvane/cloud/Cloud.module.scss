@@ -1206,6 +1206,23 @@
 .inviteStrip {
   gap: 0.75rem;
   padding: 0.5rem 0.75rem;
+  border-color: var(--pv-line);
+
+  &::before {
+    content: "";
+
+    flex: none;
+
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+
+    background: var(--pv-blue);
+  }
+
+  .inviteTitle {
+    font-weight: var(--font-weight-normal);
+  }
 }
 
 // Действие места в шапке телефона: «Очистить» у корзины (доска `PhFilesMore`)

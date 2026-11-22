@@ -170,7 +170,7 @@ const CloudInviteCardBase = ({ info, stats, isNarrow }: InviteProps) => {
     <button type="button" className={kit.btn} onClick={handleDecline}>{lang('ParvaneCloudDecline')}</button>
   );
   const accept = (
-    <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleAccept}>
+    <button type="button" className={buildClassName(kit.btn, isNarrow && kit.btnAcc)} onClick={handleAccept}>
       {lang('ParvaneCloudAccept')}
     </button>
   );

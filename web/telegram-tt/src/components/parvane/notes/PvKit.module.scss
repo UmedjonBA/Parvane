@@ -678,6 +678,11 @@
   &:focus {
     border-color: var(--pv-accent);
   }
+
+  // Поле с ошибкой — красная рамка (доска `ZdFilesX`)
+  &[aria-invalid="true"] {
+    border-color: var(--pv-red);
+  }
 }
 
 .textarea {
@@ -864,6 +869,11 @@
   color: var(--pv-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  // Окно компьютера: подпись целиком, в несколько строк (доска `DkFilesDialogs`)
+  @media (min-width: 761px) {
+    white-space: normal;
+  }
 }
 
 .sheetButtons {

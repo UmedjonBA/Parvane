@@ -180,7 +180,8 @@ const CloudLinkBlock = ({
   const revokeButton = (
     <button
       type="button"
-      className={buildClassName(isWide ? styles.linkText : kit.btn, styles.danger)}
+      className={isWide
+        ? buildClassName(styles.linkText, styles.linkTextDanger) : buildClassName(kit.btn, styles.danger)}
       disabled={isBusy}
       data-link-revoke
       onClick={openConfirm}
@@ -285,7 +286,7 @@ const CloudLinkBlock = ({
               </button>
             )}
             {onDone && (
-              <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} data-link-done onClick={onDone}>
+              <button type="button" className={kit.btn} data-link-done onClick={onDone}>
                 {lang('Done')}
               </button>
             )}

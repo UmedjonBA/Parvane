@@ -42,7 +42,7 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-type PreviewAction = { action: CloudItemAction; icon: PvIconName; title: string; isDanger?: boolean };
+type PreviewAction = { action: CloudItemAction; icon: PvIconName; title: string };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
@@ -148,7 +148,7 @@ const CloudPreview = ({
     { action: 'download', icon: 'download', title: lang('ParvaneCloudDownload') } satisfies PreviewAction,
     ...(isNarrow ? [send, link] : [link, send]),
     canEdit && !isDownloadOnly ? {
-      action: 'delete', icon: 'trash', title: lang('ParvaneCloudToTrashShort'), isDanger: true,
+      action: 'delete', icon: 'trash', title: lang('ParvaneCloudToTrashShort'),
     } satisfies PreviewAction : undefined,
   ].filter((item): item is PreviewAction => Boolean(item));
   const keysText = [
@@ -178,7 +178,7 @@ const CloudPreview = ({
           <button
             key={item.action}
             type="button"
-            className={buildClassName(styles.previewChip, item.isDanger && styles.previewDanger)}
+            className={styles.previewChip}
             data-preview-action={item.action}
             onClick={handleAction}
           >
@@ -255,7 +255,7 @@ const CloudPreview = ({
             <button
               key={item.action}
               type="button"
-              className={buildClassName(styles.previewTab, item.isDanger && styles.previewDanger)}
+              className={styles.previewTab}
               data-preview-action={item.action}
               onClick={handleAction}
             >

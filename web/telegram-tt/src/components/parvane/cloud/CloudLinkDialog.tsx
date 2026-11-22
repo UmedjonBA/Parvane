@@ -43,7 +43,7 @@ const CloudLinkDialog = ({ target, onClose }: OwnProps) => {
   return (
     <PvSheet
       isOpen={Boolean(target)}
-      className={styles.narrow}
+      className={styles.medium}
       title={name ? lang('ParvaneCloudLinkTitle', { name }) : lang('ParvaneCloudLinkHeading')}
       subtitle={lang('ParvaneCloudLinkSubtitle')}
       onClose={onClose}

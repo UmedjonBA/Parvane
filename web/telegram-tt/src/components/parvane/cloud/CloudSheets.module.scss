@@ -7,6 +7,11 @@
   max-width: 27.5rem;
 }
 
+// Окна ссылки, доступа и переноса на компьютере — 520 px (доски `DkFilesDialogs`, `ZdFilesX`)
+.medium :global(.modal-dialog) {
+  max-width: 32.5rem;
+}
+
 .note {
   font-size: var(--pv-font-size-small);
   color: var(--pv-muted);
@@ -35,6 +40,7 @@
 // Кнопки окна: на компьютере справа, на телефоне во всю ширину
 .buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   justify-content: flex-end;
 
@@ -205,6 +211,11 @@
   gap: 0.75rem;
 }
 
+// Ошибка вплотную под полем (доска `ZdFilesX`)
+.fieldErrorTight {
+  margin-top: -0.375rem;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -244,6 +255,14 @@
 
   @media (max-width: 760px) {
     max-height: none;
+  }
+
+  // Компьютер: дерево карточкой внутри окна (доска `ZdFilesX`)
+  @media (min-width: 761px) {
+    margin: 0;
+    border: 1px solid var(--pv-line);
+    border-radius: var(--pv-radius-card);
+    background: var(--pv-raised);
   }
 }
 
@@ -530,6 +549,14 @@
   @media (max-width: 760px) {
     background: var(--pv-panel);
   }
+
+  // Компьютер: список карточкой внутри окна (доска `DkFilesDialogs`)
+  @media (min-width: 761px) {
+    overflow: hidden;
+    margin: 0;
+    border: 1px solid var(--pv-line);
+    border-radius: var(--pv-radius-card);
+  }
 }
 
 .member {
@@ -619,7 +646,6 @@
   --cloud-preview-line: rgb(80 73 69);
   --cloud-preview-fg: rgb(235 219 178);
   --cloud-preview-muted: rgb(168 153 132);
-  --cloud-preview-red: rgb(251 73 52);
 
   :global(.modal-container) {
     padding: 0;
@@ -758,10 +784,6 @@
   @media (max-width: 760px) {
     display: none;
   }
-}
-
-.previewDanger {
-  color: var(--cloud-preview-red);
 }
 
 .previewStage {
@@ -1047,6 +1069,10 @@
     cursor: default;
     opacity: 0.5;
   }
+}
+
+.linkTextDanger {
+  color: var(--pv-red);
 }
 
 // Роль участника — чип с меню «Правка / Просмотр / Убрать из папки» (доски `PhFilesMore`, `DkFilesDialogs`)

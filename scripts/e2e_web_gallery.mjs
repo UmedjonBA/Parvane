@@ -6,6 +6,7 @@
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  buildPngBuffer,
   createGroupViaUi,
   dismissRecoveryKeyDialog,
   LOGIN_TIMEOUT_MS,
@@ -297,6 +298,9 @@ async function galleryNotes() {
 // ── «Файлы»: доски PhoneFiles, PhFilesMore, RpFiles, XpFiles, ZpFilesX, DeskFiles, DkFilesDialogs, RdFiles,
 //    XdFiles, ZdFilesX ──
 async function galleryFiles() {
+  // Гость — получатель приглашения в общую папку (доски `RpFiles-02`, `ZdFilesX-01`)
+  const guest = await openSession('filesb');
+  await toRussian(guest.page);
   const { page } = await openSession('files');
   const cloud = await openModule(page, 'files', 'ParvaneCloud');
   const item = (name) => cloud.locator(`[data-node-id][data-name="${name}"]`);
@@ -315,6 +319,7 @@ async function galleryFiles() {
   const files = [
     ['backup-2026-11.tar.zst', 300000], ['wg0.conf', 412], ['nftables.conf', 2100], ['parvane-android-arm64.apk', 48000],
   ].map(([name, size]) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 7) }));
+  files.push({ name: 'схема-сети.png', mimeType: 'image/png', buffer: buildPngBuffer(96, [0x2a, 0x2a, 0x2a]) });
   await cloud.locator('input[type="file"]').first().setInputFiles(files);
   await item('wg0.conf').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => console.log('WARN: файлы не загрузились'));
   await cloud.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
@@ -330,6 +335,88 @@ async function galleryFiles() {
     await files2.locator('[data-node-id][data-name="wg0.conf"]').click({ timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
+  const row = (name) => files2.locator(`[data-node-id][data-name="${name}"]`);
+  const deskMenu = async (name, action) => {
+    await row(name).click({ button: 'right', timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('menuitem', { name: action }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  };
+  await step(page, 'ZdFilesX-03', async () => { await row('wg0.conf').click({ button: 'right', timeout: STEP_TIMEOUT_MS }); });
+  await page.keyboard.press('Escape');
+  await step(page, 'XdFiles-01', async () => {
+    await row('схема-сети.png').dblclick({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-preview-kind="photo"] img').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'XdFiles-02', async () => {
+    for (const name of ['backup-2026-11.tar.zst', 'nftables.conf', 'wg0.conf']) {
+      await row(name).hover();
+      await row(name).getByRole('checkbox').click({ timeout: STEP_TIMEOUT_MS });
+    }
+  });
+  await page.keyboard.press('Escape');
+  await files2.getByRole('button', { name: 'Снять выделение' }).click({ timeout: 2000 }).catch(() => undefined);
+  await step(page, 'ZdFilesX-05', async () => { await deskMenu('wg0.conf', /^Переместить/); });
+  await page.keyboard.press('Escape');
+  await step(page, 'ZdFilesX-04', async () => {
+    // Выбранный файл снимается нажатием на место «Мой диск»: с открытой панелью файла «Новой папки» в шапке нет
+    await files2.locator('[data-nav-place="drive"]').click({ timeout: STEP_TIMEOUT_MS });
+    await files2.getByRole('button', { name: 'Новая папка', exact: true }).click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#parvane-cloud-name').fill('Сборки');
+    await page.locator('.Modal.open').getByRole('button', { name: 'Создать', exact: true }).click();
+  });
+  await page.keyboard.press('Escape');
+  let linkUrl;
+  await step(page, 'DkFilesDialogs-01', async () => {
+    await deskMenu('backup-2026-11.tar.zst', /^Ссылка/);
+    const url = page.locator('[data-cloud-link-sheet] [data-link-url]');
+    await url.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    linkUrl = await url.getAttribute('data-link-url');
+  });
+  await page.keyboard.press('Escape');
+  // Страница получателя ссылки — в чистом браузере без аккаунта (доска `RpFiles-03`)
+  if (linkUrl) {
+    const visitor = await browser.newContext({ viewport: PHONE, colorScheme: 'light', locale: 'ru-RU' });
+    // Адрес gateway стенда: публичная страница читает его только в диагностической сборке
+    await visitor.addInitScript((gatewayUrl) => {
+      localStorage.setItem('parvane:gateway', gatewayUrl);
+    }, process.env.PARVANE_E2E_GATEWAY_URL);
+    const linkPage = await visitor.newPage();
+    await step(linkPage, 'RpFiles-03', async () => {
+      await linkPage.goto(linkUrl);
+      await linkPage.locator('[data-link-page][data-state="ready"], [data-link-name]').first()
+        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    });
+    await resize(linkPage, DESK);
+    await step(linkPage, 'files-link-desk', async () => undefined);
+    await visitor.close();
+  }
+  // Общая папка с приглашённым гостем: окно создания и окно доступа (доски `ZdFilesX`, `DkFilesDialogs-02`)
+  await step(page, 'files-desk-new-shared', async () => {
+    await files2.locator('[data-virtual="owned"]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('button', { name: /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#parvane-cloud-shared-name').fill('Прошивки');
+    await page.locator('[data-new-shared-nick] input').fill(`@${guest.user.split('@')[0]}`);
+    await page.locator('[data-new-shared-nick] input').press('Enter');
+    await page.locator('[data-new-invitee]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  });
+  await step(page, 'DkFilesDialogs-02', async () => {
+    await page.locator('[data-new-shared-create]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-invited]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'files-desk-owned', async () => undefined);
+  await files2.locator('[data-nav-place="drive"]').click({ timeout: STEP_TIMEOUT_MS }).catch(() => undefined);
+  // Гость: приглашение карточкой в «Доступных мне» на компьютере и телефоне
+  const guestFiles = await openModule(guest.page, 'files', 'ParvaneCloud');
+  await step(guest.page, 'ZdFilesX-01', async () => {
+    await guestFiles.locator('[data-virtual="shared"]').click({ timeout: STEP_TIMEOUT_MS });
+    await guestFiles.locator('[data-container-kind="invite"][data-name="Прошивки"]')
+      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  });
+  await resize(guest.page, PHONE);
+  await step(guest.page, 'RpFiles-02', async () => undefined);
+  await guest.page.context().close();
 
   // Телефон
   await resize(page, PHONE);
@@ -346,6 +433,11 @@ async function galleryFiles() {
   };
   const filesChip = (label) => files2.getByText(label, { exact: true }).first();
   await step(page, 'PhFilesMore-01', async () => { await fileAction('backup-2026-11.tar.zst', 'Ссылка для всех'); });
+  await page.keyboard.press('Escape');
+  await step(page, 'XpFiles-03', async () => {
+    await row('схема-сети.png').click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-preview-kind="photo"] img').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await page.keyboard.press('Escape');
   await step(page, 'XpFiles-02', async () => { await fileAction('nftables.conf', 'Переместить'); });
   await page.keyboard.press('Escape');

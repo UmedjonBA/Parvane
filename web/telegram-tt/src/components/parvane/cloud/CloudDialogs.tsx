@@ -116,7 +116,9 @@ const CloudNameDialogBase = ({
             onChange={handleChange}
           />
         </label>
-        {errorText && <div className={kit.fieldError} role="alert">{errorText}</div>}
+        {errorText && (
+          <div className={buildClassName(kit.fieldError, styles.fieldErrorTight)} role="alert">{errorText}</div>
+        )}
         {canShare && (
           <PvSwitch isOn={isShared} className={styles.switchRow} data-share-switch onChange={handleToggleShared}>
             <span className={styles.switchText}>

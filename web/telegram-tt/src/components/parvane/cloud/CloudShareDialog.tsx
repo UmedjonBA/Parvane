@@ -281,7 +281,7 @@ const CloudShareDialog = ({
       <PvSheet
         isOpen={isOpen && !isPickerOpen}
         title={lang('ParvaneCloudShareTitle', { name: folderName })}
-        className={styles.narrow}
+        className={styles.medium}
         isPage
         startClose={isNarrow ? 'back' : undefined}
         onClose={onClose}
