@@ -153,3 +153,10 @@
     outline-offset: 2px;
   }
 }
+
+// Подсказка в окне выбора общей папки и плейлиста: своих пока нет
+.pickHint {
+  margin: 0.5rem 1rem 0;
+  font-size: var(--pv-font-size-caption);
+  color: var(--pv-muted);
+}

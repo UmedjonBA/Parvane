@@ -24,6 +24,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Avatar from '../../common/Avatar';
 import DeleteChatModal from '../../common/DeleteChatModal';
 import PvSwitch from '../../parvane/notes/PvSwitch';
+import GroupInfoShared from './GroupInfoShared';
 
 import styles from './GroupInfo.module.scss';
 
@@ -41,6 +42,10 @@ type StateProps = {
   isMuted?: boolean;
   canOpenType?: boolean;
   canInvite?: boolean;
+  // «Общее в группе»: привязанные папка и плейлист и право их менять
+  shared?: { folder?: string; playlistId?: string; playlistKey?: string };
+  canChangeShared?: boolean;
+  currentUserId?: string;
 };
 
 // Публичная ссылка группы на этом сервере (spec 023): адрес сервера и `@имя`
@@ -54,7 +59,8 @@ const callParvane = callApi as unknown as (method: string, args: unknown) => Pro
 // Сведения о группе и канале по доске `ZpChat2` («Linux-чат · группа · 214 участников»): уведомления, тип, имя на
 // сервере, описание и ссылка строками; общее в группе; «Покинуть». Участники и медиа — вкладки профиля ниже
 const GroupInfo = ({
-  chatId, chat, about, inviteLink, isMuted, canOpenType, canInvite, isLeaveOnly, onOpenMedia,
+  chatId, chat, about, inviteLink, isMuted, canOpenType, canInvite, isLeaveOnly, shared, canChangeShared, currentUserId,
+  onOpenMedia,
 }: OwnProps & StateProps) => {
   const {
     updateChatMutedState, requestNextManagementScreen, showNotification, openMediaViewer, loadMoreProfilePhotos,
@@ -203,6 +209,7 @@ const GroupInfo = ({
           {mediaCount !== undefined && <span className={styles.value} data-group-media-count>{mediaCount}</span>}
           <span className={styles.chevron} aria-hidden>›</span>
         </button>
+        <GroupInfoShared chat={chat} shared={shared} canChange={canChangeShared} currentUserId={currentUserId} />
       </div>
 
     </div>
@@ -227,6 +234,9 @@ export default memo(withGlobal<OwnProps>(
       isMuted,
       canOpenType: Boolean(canChangeInfo || canInviteAsAdmin),
       canInvite,
+      shared: fullInfo?.parvaneShared,
+      canChangeShared: Boolean(canChangeInfo && !chat?.isNotJoined),
+      currentUserId: global.currentUserId,
     };
   },
 )(GroupInfo));

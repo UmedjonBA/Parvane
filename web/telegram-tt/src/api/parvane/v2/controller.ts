@@ -221,6 +221,10 @@ type EngineGroupInfo = {
     /** Кто вступил по ссылке (spec 024): адрес и время записи журнала. */
     joins?: { user: string; tsMs: number }[];
   }[];
+  // «Общее в группе» (`SetShared`): контейнер общей папки, общий плейлист и ключ вступления; пусто — нет
+  sharedFolder?: string;
+  sharedPlaylist?: string;
+  sharedPlaylistKey?: string;
   // Политика «усиленная приватность» (L2) и кто задал её последним
   l2?: boolean;
   l2By?: string;
@@ -4148,6 +4152,9 @@ export function createV2Controller(deps: Deps) {
       public_name: g.publicName || undefined,
       public_preview: g.publicName ? Boolean(g.publicPreview) : undefined,
       public_history: g.publicName ? Boolean(g.publicHistory) : undefined,
+      shared_folder: g.sharedFolder || undefined,
+      shared_playlist: g.sharedPlaylist || undefined,
+      shared_playlist_key: g.sharedPlaylistKey || undefined,
     };
   }
 

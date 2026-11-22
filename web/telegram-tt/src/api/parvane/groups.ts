@@ -138,6 +138,9 @@ export function createGroupController(deps: GroupDependencies) {
       enabledReactions: { type: 'all' as const },
       about: info.about || undefined,
       requestsPending: info.pending_requests,
+      parvaneShared: info.shared_folder || info.shared_playlist ? {
+        folder: info.shared_folder, playlistId: info.shared_playlist, playlistKey: info.shared_playlist_key,
+      } : undefined,
     };
   }
 
@@ -240,6 +243,19 @@ export function createGroupController(deps: GroupDependencies) {
       await setChannelWriter({ chat: channel, user, isWriter: true });
     }
     return { channel: await makePublicAfterCreate(channel, publicName), missingUsers: [] };
+  }
+
+  // «Общее в группе»: привязать общую папку и общий плейлист (запись журнала заменяет оба значения)
+  async function setGroupShared({
+    chat, folder = '', playlistId = '', playlistKey = '',
+  }: { chat: ApiChat; folder?: string; playlistId?: string; playlistKey?: string }) {
+    const groupId = deps.getStore().getAddressForId(chat.id);
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (!groupId || !v2) return undefined;
+    const isDone = await v2.changeGroup(groupId, {
+      set_shared: { folder, playlist_id: playlistId, playlist_join_key: playlistId ? playlistKey : '' },
+    });
+    return isDone || undefined;
   }
 
   // Канал: дать либо снять участнику право писать (`SetRole.writer`); админские права не затрагиваются
@@ -1076,6 +1092,7 @@ export function createGroupController(deps: GroupDependencies) {
     register,
     setChannelWriter,
     setGroupInfo,
+    setGroupShared,
     setJoinByRequest,
     updateChatAbout,
     updateChatAdmin,

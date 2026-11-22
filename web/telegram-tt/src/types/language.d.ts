@@ -2832,6 +2832,18 @@ export interface LangPair {
   'ParvaneGroupInfoShared': undefined;
   'ParvaneChannelInfoShared': undefined;
   'ParvaneGroupInfoMedia': undefined;
+  'ParvaneGroupSharedFolderSub': undefined;
+  'ParvaneGroupSharedFolderNone': undefined;
+  'ParvaneGroupSharedFolderNoAccess': undefined;
+  'ParvaneGroupSharedPlaylistSub': undefined;
+  'ParvaneGroupSharedPlaylistNone': undefined;
+  'ParvaneGroupSharedNotSet': undefined;
+  'ParvaneGroupSharedPickFolder': undefined;
+  'ParvaneGroupSharedPickPlaylist': undefined;
+  'ParvaneGroupSharedPickNone': undefined;
+  'ParvaneGroupSharedPickFolderEmpty': undefined;
+  'ParvaneGroupSharedPickPlaylistEmpty': undefined;
+  'ParvaneGroupSharedFailed': undefined;
   'ParvaneGroupLeave': undefined;
   'ParvaneChannelLeave': undefined;
   'ParvaneGroupServerName': undefined;
@@ -5620,6 +5632,15 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'NoteSendNamed': {
     'title': V;
+  };
+  'ParvaneGroupSharedFolder': {
+    'name': V;
+  };
+  'ParvaneGroupSharedPlaylist': {
+    'name': V;
+  };
+  'ParvaneGroupSharedInvite': {
+    'group': V;
   };
   'ParvaneCloudShareCopyTitle': {
     'name': V;

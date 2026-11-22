@@ -141,6 +141,10 @@ pub struct GroupState {
     /// Политика «усиленная приватность» (L2) группы и кто её задал последним.
     pub l2: bool,
     pub l2_by: String,
+    /// «Общее в группе» (`SetShared`): контейнер общей папки, общий плейлист и ключ вступления; пусто — нет.
+    pub shared_folder: String,
+    pub shared_playlist: String,
+    pub shared_playlist_key: String,
     /// Публичная группа (spec 023); `None` — частная.
     pub public: Option<PublicInfo>,
     /// Комплекты эпох публичной группы (эпоха → комплект), последние `MAX_PUBLIC_BUNDLES`.
@@ -545,6 +549,9 @@ pub fn apply_with(
                 deleted: false,
                 l2: false,
                 l2_by: String::new(),
+                shared_folder: String::new(),
+                shared_playlist: String::new(),
+                shared_playlist_key: String::new(),
                 public: None,
                 public_bundles: BTreeMap::new(),
                 signer_versions: if sc.signer_log_version > 0 {
@@ -711,6 +718,21 @@ pub fn apply_with(
             }
             s.avatar_file_id = i.avatar_file_id.clone();
             s.avatar_key_id = i.avatar_key_id.clone();
+        }
+        Change::SetShared(sh) => {
+            let ok = s.admin_can(&actor, |r| r.change_info)
+                || (is_member && s.kind == GroupKind::Group && s.default_permissions.change_info);
+            if !ok {
+                return forbid();
+            }
+            let plain = |v: &str| !v.chars().any(|c| c.is_control() || c.is_whitespace());
+            if !plain(&sh.folder) || !plain(&sh.playlist_id) || !plain(&sh.playlist_join_key) {
+                return Err(ProtoError::InvalidField("shared"));
+            }
+            // Ключ вступления без плейлиста не хранится
+            s.shared_folder = sh.folder.clone();
+            s.shared_playlist = sh.playlist_id.clone();
+            s.shared_playlist_key = if sh.playlist_id.is_empty() { String::new() } else { sh.playlist_join_key.clone() };
         }
         Change::SetPrivacyMode(m) => {
             // Право — как у изменения сведений группы; новой эпохи не требует
@@ -1541,6 +1563,27 @@ mod tests {
         let e = build_entry(w.k("alice@x"), Some(&s), "x", ch, 2).unwrap();
         let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
         assert!(!s2.members["bob@x"].writer);
+    }
+
+    /// «Общее в группе»: привязку меняет тот, кто вправе менять сведения; запись заменяет оба значения.
+    #[test]
+    fn shared_folder_and_playlist() {
+        let w = World::new(&["alice@x", "bob@x"]);
+        let s = genesis(&w);
+        let set = |s: &GroupState, by: &str, folder: &str, playlist: &str, key: &str, at: i64| {
+            let ch = Change::SetShared(crate::pb::parvane::group::v2::SetShared { folder: folder.into(), playlist_id: playlist.into(), playlist_join_key: key.into() });
+            build_entry(w.k(by), Some(s), "x", ch, at).and_then(|e| apply(Some(s), &e, &w.resolve()))
+        };
+        let s2 = set(&s, "alice@x", "c-folder", "pl-1", "join-1", 2).unwrap();
+        assert_eq!((s2.shared_folder.as_str(), s2.shared_playlist.as_str(), s2.shared_playlist_key.as_str()), ("c-folder", "pl-1", "join-1"));
+        assert_eq!(s2.epoch_stale, s.epoch_stale, "привязка новой эпохи не требует");
+        // Участник без права менять сведения — отказ (в `perms()` его нет)
+        assert_eq!(perms().change_info, false);
+        assert!(set(&s2, "bob@x", "", "", "", 3).is_err());
+        // Запись целиком: папка снята, ключ без плейлиста не хранится
+        let s3 = set(&s2, "alice@x", "", "", "join-1", 3).unwrap();
+        assert!(s3.shared_folder.is_empty() && s3.shared_playlist.is_empty() && s3.shared_playlist_key.is_empty());
+        assert!(set(&s3, "alice@x", "bad id", "", "", 4).is_err());
     }
 
     #[test]

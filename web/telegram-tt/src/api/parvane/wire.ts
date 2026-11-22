@@ -275,6 +275,10 @@ export type WireGroupInfo = {
   public_name?: string;
   public_preview?: boolean;
   public_history?: boolean;
+  // «Общее в группе»: общая папка «Файлов» (контейнер облака), общий плейлист «Музыки» и ключ вступления в него
+  shared_folder?: string;
+  shared_playlist?: string;
+  shared_playlist_key?: string;
 };
 
 // Инвайт-ссылка группы (group.invite.list / group.invite.create)

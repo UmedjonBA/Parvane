@@ -160,6 +160,8 @@ export interface ApiChatFullInfo {
   canViewMonetization?: boolean;
   recentRequesterIds?: string[];
   requestsPending?: number;
+  // Parvane: «Общее в группе» — привязанные общая папка «Файлов» и общий плейлист «Музыки»
+  parvaneShared?: { folder?: string; playlistId?: string; playlistKey?: string };
   statisticsDcId?: number;
   stickerSet?: ApiStickerSet;
   emojiSet?: ApiStickerSet;
