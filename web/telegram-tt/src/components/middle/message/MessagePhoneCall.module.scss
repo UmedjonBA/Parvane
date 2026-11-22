@@ -26,7 +26,7 @@
   transform: rotateZ(-45deg);
   display: inline-block;
   font-size: 1.125rem;
-  color: #4fae4e;
+  color: var(--color-text-green);
 
   &.incoming {
     transform: rotateZ(135deg);

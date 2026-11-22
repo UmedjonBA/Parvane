@@ -269,11 +269,7 @@
     padding: 0 0.125rem;
     border-radius: 0.25rem;
     color: var(--color-text);
-    background: #cae3f7;
-
-    .theme-dark & {
-      --color-text: #000;
-    }
+    background: var(--pv-mark);
   }
 
   .matching-text-highlight.is-quote {
@@ -282,14 +278,9 @@
 
     &.animate {
       color: var(--color-text);
-      background-color: #cae3f7;
+      background-color: var(--pv-mark);
       animation: quote-highlight 0.5s;
       animation-delay: 1.5s;
-
-      .theme-dark & {
-        color: #000;
-        animation-name: quote-highlight-dark;
-      }
     }
   }
 
@@ -1110,22 +1101,10 @@ blockquote, .blockquote {
 
 @keyframes quote-highlight {
   0% {
-    background-color: #cae3f7;
+    background-color: var(--pv-mark);
   }
 
   100% {
-    background-color: transparent;
-  }
-}
-
-@keyframes quote-highlight-dark {
-  0% {
-    color: #000;
-    background-color: #cae3f7;
-  }
-
-  100% {
-    color: var(--color-text);
     background-color: transparent;
   }
 }

@@ -297,12 +297,13 @@
 }
 
 .video {
-  --call-bg: #1d2021;
-  --call-fg: #ebdbb2;
-  --call-muted: #a89984;
-  --call-raised: #504945;
-  --call-line: #665c54;
-  --call-red: #fb4934;
+  // Тёмная палитра выбранной схемы при любой теме
+  --call-bg: var(--pv-dk-bg);
+  --call-fg: var(--pv-dk-fg);
+  --call-muted: var(--pv-dk-muted);
+  --call-raised: var(--pv-dk-line2);
+  --call-line: var(--pv-dk-faint);
+  --call-red: var(--pv-dk-red);
 
   position: relative;
 
@@ -355,7 +356,7 @@
   height: 100%;
 
   object-fit: contain;
-  background: #32302f;
+  background: var(--pv-dk-raised);
 }
 
 .videoHead {

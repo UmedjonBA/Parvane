@@ -37,8 +37,8 @@
     --hover-color-reaction: rgb(255, 255, 255, 0.2);
     --text-color-reaction: var(--color-text);
 
-    --color-reaction-chosen: #3390ec;
-    --hover-color-reaction-chosen: #4096ec;
+    --color-reaction-chosen: var(--color-primary);
+    --hover-color-reaction-chosen: var(--color-primary-shade);
   }
 
   &.is-swiped {

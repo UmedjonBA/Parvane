@@ -30,6 +30,7 @@ import { selectMessageMediaDuration } from '../../global/selectors/media';
 import { makeTrackId } from '../../util/audioPlayer';
 import buildClassName from '../../util/buildClassName';
 import { captureEvents } from '../../util/captureEvents';
+import { getColorScheme, getSchemeWaveColors } from '../../util/colorScheme';
 import { formatMediaDateTime, formatMediaDuration, formatPastTimeShort } from '../../util/dates/oldDateFormat';
 import { decodeWaveform, interpolateArray } from '../../util/waveform';
 import { LOCAL_TGS_URLS } from './helpers/animatedAssets';
@@ -732,10 +733,12 @@ function useWaveformCanvas(
       return;
     }
 
-    const fillColor = theme === 'dark' ? '#494A78' : '#ADD3F7';
-    const fillOwnColor = theme === 'dark' ? '#B7ABED' : '#AEDFA4';
-    const progressFillColor = theme === 'dark' ? '#8774E1' : '#3390EC';
-    const progressFillOwnColor = theme === 'dark' ? '#FFFFFF' : '#4FAE4E';
+    // Parvane: волна в тонах цветовой схемы; у «Telegram» — прежние цвета
+    const schemeColors = getSchemeWaveColors(getColorScheme(), theme);
+    const fillColor = schemeColors?.fill || (theme === 'dark' ? '#494A78' : '#ADD3F7');
+    const fillOwnColor = schemeColors?.fillOwn || (theme === 'dark' ? '#B7ABED' : '#AEDFA4');
+    const progressFillColor = schemeColors?.progress || (theme === 'dark' ? '#8774E1' : '#3390EC');
+    const progressFillOwnColor = schemeColors?.progressOwn || (theme === 'dark' ? '#FFFFFF' : '#4FAE4E');
 
     const fillStyle = isOwn ? fillOwnColor : fillColor;
     const progressFillStyle = isOwn ? progressFillOwnColor : progressFillColor;

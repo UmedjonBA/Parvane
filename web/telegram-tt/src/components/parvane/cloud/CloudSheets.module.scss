@@ -640,12 +640,12 @@
 // ── просмотр файла: всегда тёмный, на весь экран ─────────────────────────────
 
 .preview {
-  // Цвета тёмной схемы макета: просмотр не зависит от выбранной схемы
-  --cloud-preview-bg: rgb(29 32 33);
-  --cloud-preview-panel: rgb(40 40 40);
-  --cloud-preview-line: rgb(80 73 69);
-  --cloud-preview-fg: rgb(235 219 178);
-  --cloud-preview-muted: rgb(168 153 132);
+  // Тёмная палитра выбранной схемы: просмотр тёмный и в светлой теме
+  --cloud-preview-bg: var(--pv-dk-bg);
+  --cloud-preview-panel: var(--pv-dk-panel);
+  --cloud-preview-line: var(--pv-dk-line2);
+  --cloud-preview-fg: var(--pv-dk-fg);
+  --cloud-preview-muted: var(--pv-dk-muted);
 
   :global(.modal-container) {
     padding: 0;

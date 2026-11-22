@@ -178,22 +178,22 @@
     padding: 0.5rem;
     border-radius: 50%;
 
-    color: white !important;
+    color: var(--pv-panel) !important;
 
     &-gray {
-      background-color: #707579;
+      background-color: var(--pv-muted);
     }
 
     &-green {
-      background-color: #4fae4e;
+      background-color: var(--pv-green);
     }
 
     &-red {
-      background-color: #e17076;
+      background-color: var(--pv-red);
     }
 
     &-blue {
-      background-color: #3390ec;
+      background-color: var(--pv-blue);
     }
   }
 
