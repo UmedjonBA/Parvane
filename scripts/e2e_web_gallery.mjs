@@ -954,6 +954,16 @@ async function galleryChat() {
     await page.locator('.chat-list .ListItem').filter({ hasText: 'Linux-чат' }).first().click({ timeout: STEP_TIMEOUT_MS });
   });
   await step(page, 'chat-desk-group-info', async () => { await header.click({ timeout: STEP_TIMEOUT_MS }); });
+  await step(page, 'chat-desk-group-edit', async () => {
+    await page.locator('#RightColumn .pv-header-action').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#RightColumn .Management').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  // С экрана «Изменить» назад к сведениям и закрыть панель
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.locator('#RightColumn .close-button:visible').first().click({ timeout: 2000 }).catch(() => undefined);
+    await page.waitForTimeout(500);
+  }
   await page.keyboard.press('Escape');
   await step(page, 'chat-desk-peer-info', async () => {
     await page.locator('.chat-list .ListItem').filter({ hasText: peer.split('@')[0] }).first().click({ timeout: STEP_TIMEOUT_MS });
