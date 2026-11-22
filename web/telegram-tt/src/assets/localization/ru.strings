@@ -3360,6 +3360,7 @@
 "ModuleOffHintCloudInvite" = "Папка откроется, когда модуль включится";
 "ParvaneAccountNick" = "Ник";
 "ParvaneAccountPassword" = "Пароль";
+"ParvaneAccountPasswordChanged" = "менялся {date}";
 "ParvaneAccountChange" = "сменить";
 "ParvaneAccountSigningKey" = "Ключ подписи устройств";
 "ParvaneAccountDangerZone" = "Опасная зона";

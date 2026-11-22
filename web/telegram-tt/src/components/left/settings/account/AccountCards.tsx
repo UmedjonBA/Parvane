@@ -1,4 +1,4 @@
-import { memo } from '../../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../../global';
 
 import { SettingsScreens } from '../../../../types';
@@ -6,6 +6,7 @@ import { SettingsScreens } from '../../../../types';
 import { selectUser } from '../../../../global/selectors';
 import buildClassName from '../../../../util/buildClassName';
 import { readAccountEmail } from '../../../../util/parvaneAccountEmail';
+import { callApi } from '../../../../api/gramjs';
 import { getProfileServer } from '../profile/profileFormat';
 import { openProfileWindow } from '../profile/profileRequests';
 
@@ -31,10 +32,12 @@ type StateProps = {
   nick?: string;
 };
 
+type AccountInfo = { email?: string; passwordChangedAt?: number };
+
 // Parvane (spec 041, доска `DkSettingsA`): «Устройства и аккаунт» — карточка аккаунта (ник, пароль, ключ подписи
 // устройств) и «Опасная зона» (выйти на этом устройстве, удалить аккаунт). Строки ведут на прежние действия: ник
 // меняется в «Изменить профиль», пароль — окном «Сменить пароль» поверх экрана (`ZdProfileX`), ключ подписи — окном
-// ключа восстановления. Почта (её помнит устройство, где аккаунт создавали) и сервер — с доски `PhProfileB`.
+// ключа восстановления. Почта и «менялся …» у пароля приходят с сервера (доски `PhProfileB`, `ZdProfileX`).
 // Строки «Ключ восстановления · показать» нет: ключ на устройстве не хранится
 const AccountCards = ({
   canRotateSsk, nick, onRotateSsk,
@@ -44,7 +47,22 @@ const AccountCards = ({
   const [isSignOutOpen, openSignOut, closeSignOut] = useFlag();
   const [isPasswordOpen, openPassword, closePassword] = useFlag();
   const { isDesktop } = useAppLayout();
-  const email = readAccountEmail(nick);
+  // Почта и дата смены пароля — с сервера (на всех устройствах); пока ответа нет, почту помнит устройство, где
+  // аккаунт создавали
+  const [info, setInfo] = useState<AccountInfo>();
+  useEffect(() => {
+    const load = () => {
+      void (callApi as unknown as (name: string) => Promise<AccountInfo | undefined>)('parvaneFetchAccountInfo')
+        .then(setInfo);
+    };
+    load();
+    // Пароль меняют и отсюда, и из мастера «Украдено» — окно одно и то же
+    window.addEventListener('parvane-password-changed', load);
+    return () => window.removeEventListener('parvane-password-changed', load);
+  }, []);
+  const email = info?.email || readAccountEmail(nick);
+  const passwordChanged = info?.passwordChangedAt
+    ? new Intl.DateTimeFormat(lang.code, { day: 'numeric', month: 'long' }).format(info.passwordChangedAt) : undefined;
   const server = getProfileServer();
 
   // Компьютер — окна поверх «Профиля» (доска `RdProfile`), телефон — экраны
@@ -86,7 +104,14 @@ const AccountCards = ({
           </div>
         )}
         <button type="button" className={rowClass} data-account-row="password" onClick={openPassword}>
-          <span className={profile.setTitle}>{lang('ParvaneAccountPassword')}</span>
+          <span className={profile.setText}>
+            <span className={profile.setTitle}>{lang('ParvaneAccountPassword')}</span>
+            {passwordChanged && (
+              <span className={profile.setHint} data-account-password-changed>
+                {lang('ParvaneAccountPasswordChanged', { date: passwordChanged })}
+              </span>
+            )}
+          </span>
           <span className={buildClassName(profile.setValue, profile.setValueWord)}>{lang('ParvaneAccountChange')}</span>
         </button>
         {canRotateSsk && (

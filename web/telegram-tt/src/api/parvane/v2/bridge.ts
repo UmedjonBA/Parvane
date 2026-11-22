@@ -130,6 +130,11 @@ function twofaToV1(r: V2Json) {
   if (bot) out.telegram_bot = bot;
   const secret = str(r, 'trustSecret', 'trust_secret');
   if (secret) out.trust_secret = secret;
+  // Сведения аккаунта (только чтение `get_2fa`): почта и время смены пароля в секундах
+  const email = str(r, 'email');
+  if (email) out.email = email;
+  const changedAt = Number(r.passwordChangedAt ?? r.password_changed_at ?? 0);
+  if (changedAt > 0) out.password_changed_at = changedAt;
   return out;
 }
 

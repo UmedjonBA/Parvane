@@ -699,10 +699,23 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             require_user(&req)?;
             let v = v1_call(nc, json!({"token": req.token}), |msg| handle_twofa(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
+            // Почта и время смены пароля — тем же чтением, только владельцу (экран «Устройства и аккаунт»)
+            let account: Option<(Option<String>, Option<i64>)> =
+                sqlx::query_as("SELECT email, password_changed_at FROM users WHERE username = ?")
+                    .bind(&req.user)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("identity.account.get_2fa: чтение сведений аккаунта: {e}");
+                        ErrorCode::Unavailable
+                    })?;
+            let (email, password_changed_at) = account.unwrap_or_default();
             Ok(pb::AccountGet2faResponse {
                 enabled: v["enabled"].as_bool().unwrap_or(false),
                 telegram_linked: v["telegram_linked"].as_bool().unwrap_or(false),
                 telegram_bot: telegram_bot().unwrap_or_default(),
+                email: email.unwrap_or_default(),
+                password_changed_at: password_changed_at.unwrap_or(0),
             }
             .encode_to_vec())
         }

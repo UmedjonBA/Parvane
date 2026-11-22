@@ -196,6 +196,7 @@ try {
   await shown(current('devices'));
   // spec 041 (`DkSettingsA`): карточки аккаунта и «Опасная зона»; удаление — экраном
   await shown(page.locator('[data-account-card] [data-account-row="nick"]').getByText(/^@profile-vera-/));
+  assert.equal(await page.locator('[data-account-password-changed]').count(), 0, 'пароль не меняли — подписи «менялся» нет');
   // «Удалить аккаунт» на компьютере — окно поверх «Профиля» (`RdProfile`): без подписи «Что произойдёт»
   await page.locator('[data-delete-account-open]:visible').click();
   const deleteWindow = page.locator('.Modal [data-delete-account-dialog]');

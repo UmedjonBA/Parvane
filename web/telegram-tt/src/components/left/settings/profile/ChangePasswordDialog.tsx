@@ -85,6 +85,8 @@ const ChangePasswordDialog = ({ isOpen, sessions, onClose }: OwnProps & StatePro
       setIsBusy(false);
       return;
     }
+    // Карточка аккаунта перечитывает «менялся …»
+    window.dispatchEvent(new Event('parvane-password-changed'));
     if (shouldSignOutOthers && otherDevices.length) {
       const isDone = await callParvane('terminateAllAuthorizations', values.new);
       if (!isDone) showNotification({ message: lang('ParvanePasswordOthersFailed') });

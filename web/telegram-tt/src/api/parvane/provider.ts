@@ -4941,6 +4941,19 @@ const methods = {
     return { enabled: Boolean(response.enabled), telegramLinked: Boolean(response.telegram_linked) };
   },
 
+  // Почта аккаунта и время последней смены пароля (мс) — с сервера, одинаково на всех устройствах; то же чтение,
+  // что у состояния второго фактора (`AccountGet2faResponse`)
+  async parvaneFetchAccountInfo() {
+    if (!connection) return undefined;
+    const raw = await connection.request(TOPIC_IDENTITY_TWOFA, JSON.stringify({ token }));
+    const response = JSON.parse(raw) as { ok: boolean; email?: string; password_changed_at?: number };
+    if (!response.ok) return undefined;
+    return {
+      email: response.email || undefined,
+      passwordChangedAt: response.password_changed_at ? response.password_changed_at * 1000 : undefined,
+    };
+  },
+
   // P-07: смена настройки 2FA требует текущий пароль (один украденный JWT не
   // должен снимать второй фактор; метод v2 без свежего пароля не включает и
   // 2FA). P-39: только введённый пароль, сохранённого нет.

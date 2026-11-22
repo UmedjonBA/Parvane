@@ -125,6 +125,10 @@ try {
   await screen.locator('[data-session-stolen]').first().waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await device3.page.locator('[data-signed-out]').waitFor({ state: 'visible', timeout: SIGNED_OUT_TIMEOUT_MS });
 
+  // «Пароль · менялся …» — время смены приходит с сервера (поле identity), строка появляется без перезагрузки
+  await device1.page.locator('[data-account-row="password"] [data-account-password-changed]')
+    .getByText(/^changed \S+/).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   assertNoPageErrors({ 'bob-device-1': device1 });
   console.log('OK: «Украдено» — мастер для вышедшего и для живого устройства: отзыв со сменой ключей, пароль, новый ключ');
 } catch (err) {

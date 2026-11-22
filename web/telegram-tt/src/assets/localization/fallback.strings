@@ -3533,6 +3533,7 @@
 "ModuleOffHintCloudInvite" = "The folder will open once the module is on";
 "ParvaneAccountNick" = "Username";
 "ParvaneAccountPassword" = "Password";
+"ParvaneAccountPasswordChanged" = "changed {date}";
 "ParvaneAccountChange" = "change";
 "ParvaneAccountSigningKey" = "Signing key for devices";
 "ParvaneAccountDangerZone" = "Danger zone";

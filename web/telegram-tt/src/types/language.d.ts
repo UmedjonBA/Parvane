@@ -5568,6 +5568,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeGraphEdgePicked': {
     'name': V;
   };
+  'ParvaneAccountPasswordChanged': {
+    'date': V;
+  };
   'ParvaneExportRunning': {
     'section': V;
   };

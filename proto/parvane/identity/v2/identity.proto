@@ -932,6 +932,11 @@ message AccountGet2faResponse {
   bool enabled = 1;
   bool telegram_linked = 2;
   string telegram_bot = 3 [(parvane.core.v2.max_len) = 64];
+  // Сведения аккаунта для экрана «Устройства и аккаунт» — только владельцу, тем же чтением:
+  // почта, указанная при регистрации (пусто — не задана), и время последней смены пароля
+  // (секунды Unix; 0 — пароль не меняли с создания аккаунта).
+  string email = 4 [(parvane.core.v2.max_len) = 255];
+  int64 password_changed_at = 5;
 }
 message AccountSet2faResponse {
   bool enabled = 1;
