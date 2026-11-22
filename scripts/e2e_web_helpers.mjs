@@ -328,6 +328,9 @@ export async function clickUntil(locator, isDone, { attempts = 4, settleMs = 300
 // Сколько ждать исхода запуска v2 после входа и появления диалога ключа после него
 const V2_STARTUP_TIMEOUT_MS = 30000;
 const RECOVERY_DIALOG_SETTLE_MS = 3000;
+// Закрытие экрана ключа: весь срок и ожидание кнопки «Готово» после одного нажатия отметки
+const RECOVERY_CLOSE_TIMEOUT_MS = 30000;
+const RECOVERY_CHECK_SETTLE_MS = 2000;
 
 export function requireEnv() {
   const baseUrl = process.env.PARVANE_E2E_BASE_URL;
@@ -1515,9 +1518,25 @@ export async function linkSecondDevice(oldPage, newPage) {
 // Экран ключа восстановления (spec 041 E4) перекрывает интерфейс — закрывается отметкой «Я сохранил ключ»
 const recoveryKeyScreen = (page) => page.locator('[data-recovery-key-screen]');
 
-async function closeRecoveryKeyScreen(screen, timeout) {
-  await screen.locator('[data-recovery-key-saved]').check({ timeout });
-  await screen.locator('[data-recovery-key-done]').click({ timeout });
+// Отметка «Я сохранил ключ» ставится нажатием и считается поставленной по включившейся кнопке «Готово». `check()`
+// падал под нагрузкой на «Clicking the checkbox did not change its state» — из обработчика `addLocatorHandler`
+// это роняло весь сценарий; теперь нажатие повторяется, пока отметка не встала, а каждое неудачное — в журнал
+async function closeRecoveryKeyScreen(screen, timeout = RECOVERY_CLOSE_TIMEOUT_MS) {
+  const saved = screen.locator('[data-recovery-key-saved]');
+  const done = screen.locator('[data-recovery-key-done]:not([disabled])');
+  const deadline = Date.now() + timeout;
+  for (let attempt = 1; ; attempt++) {
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await saved.isChecked({ timeout }))) await saved.click({ timeout });
+    // eslint-disable-next-line no-await-in-loop
+    if (await done.waitFor({ state: 'visible', timeout: RECOVERY_CHECK_SETTLE_MS }).then(() => true, () => false)) break;
+    // eslint-disable-next-line no-await-in-loop
+    const state = await saved.evaluate((el) => ({ checked: el.checked, connected: el.isConnected }))
+      .catch((err) => String(err).split('\n')[0]);
+    console.log(`e2e: «Я сохранил ключ» не включила «Готово» (попытка ${attempt}): ${JSON.stringify(state)}`);
+    if (Date.now() > deadline) throw new Error('экран ключа восстановления не закрылся: отметка не встаёт');
+  }
+  await done.click({ timeout });
 }
 
 // Обработчик закрывает экран ключа перед любым действием Playwright, когда бы он ни появился. Заодно — экран
