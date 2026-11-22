@@ -321,6 +321,17 @@ async function galleryNotes() {
     await notes.getByRole('button', { name: 'Изменить' }).first().click({ timeout: STEP_TIMEOUT_MS });
   });
   await notes.getByRole('button', { name: 'Готово' }).first().click({ timeout: 5000 }).catch(() => undefined);
+  // Меню заметки и «Перенести в папку» на телефоне (доска `ZpNotesX-02`)
+  await step(page, 'notes-phone-note-menu', async () => {
+    await notes.locator('[data-note-menu]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(700);
+  });
+  await step(page, 'ZpNotesX-02', async () => {
+    await page.locator('[role="menu"] >> text=/^Перенести/').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
   await back();
   await step(page, 'PhNotesMore-01', async () => undefined);
   await step(page, 'XpNotes-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });

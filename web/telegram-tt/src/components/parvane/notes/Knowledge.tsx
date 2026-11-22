@@ -1150,6 +1150,7 @@ const Knowledge = () => {
       <NoteFolderPicker
         isOpen={isPickerOpen}
         noteTitle={movedNote?.title || ''}
+        isNarrow={isNarrow}
         notes={notes}
         currentPath={movedNote?.folder || ROOT_FOLDER}
         folders={folders}

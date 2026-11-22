@@ -22,6 +22,8 @@ import extra from './NoteExtras.module.scss';
 import kit from './PvKit.module.scss';
 
 type OwnProps = {
+  // Телефон: страница во весь экран с «✕» слева (доска `ZpNotesX`)
+  isNarrow?: boolean;
   isOpen: boolean;
   noteTitle: string;
   // Путь папки, где заметка лежит сейчас
@@ -42,7 +44,7 @@ type Option = { path: string; folderId?: string; caption: string; isDaily: boole
 // первой, «Без папки» — последней), у текущей подпись «заметка сейчас здесь». Выбор в два шага: строка
 // отмечается, перенос — кнопкой «Перенести в «…»»; «Новая папка» создаёт папку и переносит сразу
 const NoteFolderPicker = ({
-  isOpen, noteTitle, currentPath, folders, notes, onPick, onCreate, onClose,
+  isOpen, noteTitle, currentPath, folders, notes, isNarrow, onPick, onCreate, onClose,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
 
@@ -164,6 +166,8 @@ const NoteFolderPicker = ({
       title={lang('KnowledgeMoveTitle')}
       subtitle={`«${noteTitle}»`}
       isTight
+      isPage
+      startClose={isNarrow ? 'cancel' : undefined}
       onClose={onClose}
     >
       <div className={styles.folderPicker} data-folder-picker>
