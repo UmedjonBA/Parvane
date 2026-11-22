@@ -680,6 +680,7 @@ fn invite_links_are_shared_with_invite_admins_and_revoked_are_kept() {
             member: user("bob@local"),
             role: gpb::Role::Admin as i32,
             rights: Some(gpb::AdminRights { invite_users: true, ..Default::default() }),
+            writer: false,
         }))
         .unwrap();
     srv.handle("alice@local", "d1", &promote);

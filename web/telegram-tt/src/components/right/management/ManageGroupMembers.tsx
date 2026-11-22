@@ -12,8 +12,9 @@ import {
   isChatChannel, isUserBot, isUserRightBanned, sortUserIds,
 } from '../../../global/helpers';
 import { filterPeersByQuery } from '../../../global/helpers/peers';
-import { selectChat, selectChatFullInfo, selectTabState } from '../../../global/selectors';
+import { selectChat, selectChatFullInfo, selectTabState, selectUser } from '../../../global/selectors';
 import { unique } from '../../../util/iteratees';
+import { callApi } from '../../../api/gramjs';
 import sortChatIds from '../../common/helpers/sortChatIds';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -55,6 +56,7 @@ type StateProps = {
   globalUserIds?: string[];
   currentUserId?: string;
   canDeleteMembers?: boolean;
+  canSetWriters?: boolean;
 };
 
 const ManageGroupMembers: FC<OwnProps & StateProps> = ({
@@ -73,13 +75,14 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
   searchQuery,
   currentUserId,
   canDeleteMembers,
+  canSetWriters,
   onClose,
   onScreenSelect,
   onChatMemberSelect,
 }) => {
   const {
     openChat, setUserSearchQuery, closeManagement,
-    setNewChatMembersDialogState, toggleManagement,
+    setNewChatMembersDialogState, toggleManagement, loadFullChat,
   } = getActions();
   const oldLang = useOldLang();
   const lang = useLang();
@@ -171,13 +174,37 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
   });
 
   function getMemberContextAction(memberId: string): MenuItemContextAction[] | undefined {
-    return memberId === currentUserId || !canDeleteMembers ? undefined : [{
-      title: oldLang('lng_context_remove_from_group'),
-      icon: 'stop',
-      handler: () => {
-        setDeletingUserId(memberId);
-      },
-    }];
+    if (memberId === currentUserId) return undefined;
+    const actions: MenuItemContextAction[] = [];
+    // Parvane: в канале владелец и админ с правом назначать админов дают участнику право писать
+    // («Кто пишет: я и выбранные участники», доска `ZpChat2`)
+    const member = members?.find(({ userId }) => userId === memberId);
+    if (isChannel && canSetWriters && member && !member.isAdmin && !member.isOwner) {
+      const isWriter = Boolean(member.isWriter);
+      actions.push({
+        title: lang(isWriter ? 'ParvaneChannelDenyWriting' : 'ParvaneChannelAllowWriting'),
+        icon: isWriter ? 'mute' : 'edit',
+        handler: () => {
+          const global = getGlobal();
+          const chat = selectChat(global, chatId);
+          const user = selectUser(global, memberId);
+          if (!chat || !user) return;
+          void (callApi as unknown as (name: string, args: unknown) => Promise<unknown>)(
+            'parvaneSetChannelWriter', { chat, user, isWriter: !isWriter },
+          ).then(() => loadFullChat({ chatId, force: true }));
+        },
+      });
+    }
+    if (canDeleteMembers) {
+      actions.push({
+        title: oldLang('lng_context_remove_from_group'),
+        icon: 'stop',
+        handler: () => {
+          setDeletingUserId(memberId);
+        },
+      });
+    }
+    return actions.length ? actions : undefined;
   }
 
   function renderSearchField() {
@@ -216,7 +243,13 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
                   contextActions={getMemberContextAction(id)}
                   withPortalForMenu
                 >
-                  <PrivateChatInfo userId={id} forceShowSelf withStory />
+                  <PrivateChatInfo
+                    userId={id}
+                    forceShowSelf
+                    withStory
+                    chatMemberOriginId={chatId}
+                    chatMember={members?.find(({ userId }) => userId === id)}
+                  />
                 </ListItem>
               ))}
             </InfiniteScroll>
@@ -260,6 +293,7 @@ export default memo(withGlobal<OwnProps>(
     const { userIds: localContactIds } = global.contactList || {};
 
     const canDeleteMembers = chat && (chat.isCreator || getHasAdminRight(chat, 'banUsers'));
+    const canSetWriters = chat && (chat.isCreator || getHasAdminRight(chat, 'addAdmins'));
 
     const canAddMembers = chat && ((getHasAdminRight(chat, 'inviteUsers')
       || (!isChannel && !isUserRightBanned(chat, 'inviteUsers')))
@@ -285,6 +319,7 @@ export default memo(withGlobal<OwnProps>(
       globalUserIds,
       localUserIds,
       canDeleteMembers,
+      canSetWriters,
       currentUserId: global.currentUserId,
     };
   },

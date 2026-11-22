@@ -60,6 +60,8 @@ pub struct Member {
     /// Когда вступил: подписанное время записи журнала, добавившей участника («участник с …» списка жалоб, `RpChat`).
     /// Смена ника время не меняет.
     pub joined_ms: i64,
+    /// Канал: участник без админских прав, которому разрешено писать (`SetRole.writer`).
+    pub writer: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -353,7 +355,10 @@ impl GroupState {
         if self.is_admin(u) {
             return true;
         }
-        self.kind == GroupKind::Group && self.default_permissions.send_messages
+        if self.kind == GroupKind::Channel {
+            return m.writer;
+        }
+        self.default_permissions.send_messages
     }
 
     /// Кому раздавать приватный ключ отправки эпохи.
@@ -508,10 +513,10 @@ pub fn apply_with(
                 return Err(ProtoError::InvalidField("kind"));
             }
             let mut members = BTreeMap::new();
-            members.insert(signer.user.clone(), Member { role: Role::Owner, rights: full_rights(), muted_until_ms: 0, joined_ms: now });
+            members.insert(signer.user.clone(), Member { role: Role::Owner, rights: full_rights(), muted_until_ms: 0, joined_ms: now, writer: false });
             for m in &cr.members {
                 let a = user_of(&Some(m.clone()))?;
-                members.entry(a).or_insert(Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
+                members.entry(a).or_insert(Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now, writer: false });
             }
             if members.len() > MAX_MEMBERS {
                 return Err(ProtoError::FieldLimit("members"));
@@ -590,7 +595,7 @@ pub fn apply_with(
                     l.note_join(m.clone(), now);
                 }
             }
-            s.members.insert(m, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
+            s.members.insert(m, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now, writer: false });
             // Новому участнику нужны ключи новой эпохи (не читает прошлое).
             s.epoch_stale = true;
         }
@@ -629,21 +634,28 @@ pub fn apply_with(
                         return forbid();
                     }
                     let owner = s.is_owner(&actor);
+                    // «Вправе писать в канале» — только у участника канала; у админа и в группе флаг не хранится
+                    let writer = r.writer && role == Role::Member && s.kind == GroupKind::Channel;
                     if !owner {
                         let own = s.member(&actor).map(|x| x.rights).unwrap_or_default();
-                        // Админ с add_admins: только повышает участников и в пределах своих прав.
-                        let ok = s.admin_can(&actor, |x| x.add_admins)
-                            && target.role == Role::Member
-                            && role == Role::Admin
-                            && rights_subset(&rights, &own);
-                        if !ok {
+                        // Админ с add_admins: только повышает участников и в пределах своих прав либо
+                        // даёт и снимает участнику право писать в канале.
+                        let promote = target.role == Role::Member && role == Role::Admin && rights_subset(&rights, &own);
+                        let rewrite = target.role == Role::Member && role == Role::Member && s.kind == GroupKind::Channel;
+                        if !(s.admin_can(&actor, |x| x.add_admins) && (promote || rewrite)) {
                             return forbid();
                         }
                     }
-                    let demote = target.role == Role::Admin && role == Role::Member;
+                    // Терявший право писать (разжалованный админ, снятый автор канала) ещё держит ключ отправки; в канале
+                    // и получивший его (новый админ, новый автор) ждёт ключ — он раздаётся только с новой эпохой
+                    let wrote = target.role == Role::Admin || target.writer;
+                    let writes = role == Role::Admin || writer;
+                    let demote = (target.role == Role::Admin && role == Role::Member && !writer)
+                        || (s.kind == GroupKind::Channel && wrote != writes);
                     if let Some(t) = s.members.get_mut(&m) {
                         t.role = role;
                         t.rights = if role == Role::Admin { rights } else { AdminRights::default() };
+                        t.writer = writer;
                     }
                     if demote {
                         s.epoch_stale = true;
@@ -862,7 +874,7 @@ pub fn apply_with(
             }
             let parts = join_signing_parts(&s.group, entry.version, &entry.prev_hash, &j.joiner_root_key);
             sign::verify_ctx(&j.link_public_key, &j.link_signature, ctx::GROUP_JOIN, &[&parts])?;
-            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
+            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now, writer: false });
         }
         Change::JoinByInvite(j) => {
             let id = link_id(&j.link_public_key);
@@ -884,7 +896,7 @@ pub fn apply_with(
             if let Some(l) = s.invite_links.get_mut(&id) {
                 l.note_join(actor.clone(), now);
             }
-            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now });
+            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0, joined_ms: now, writer: false });
             s.epoch_stale = true;
         }
         Change::Leave(_) => {
@@ -1203,7 +1215,7 @@ mod tests {
         let g = build_entry_at(w.k("alice@x"), None, "x", Change::Create(create), 1, 0).unwrap();
         let s = apply(None, &g, &resolve).unwrap();
         let rights = AdminRights { change_info: true, ..Default::default() };
-        let promo = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(rights) }), 1).unwrap();
+        let promo = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(rights), writer: false }), 1).unwrap();
         let s = apply(Some(&s), &promo, &resolve).unwrap();
         // Боб (старая эра, версия 2) пишет законно
         let old = build_entry_at(w.k("bob@x"), Some(&s), "x", Change::SetInfo(SetInfo { name: "n".into(), ..Default::default() }), 2, 2).unwrap();
@@ -1257,7 +1269,7 @@ mod tests {
         let mut s = apply(None, &g, &resolve).unwrap();
         let mod_rights = AdminRights { ban_users: true, change_info: true, ..Default::default() };
         for who in ["bob@x", "carol@x"] {
-            let e = build_entry_at(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur(who), role: Role::Admin as i32, rights: Some(mod_rights.clone()) }), 2, 1).unwrap();
+            let e = build_entry_at(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur(who), role: Role::Admin as i32, rights: Some(mod_rights.clone()), writer: false }), 2, 1).unwrap();
             s = apply(Some(&s), &e, &resolve).unwrap();
         }
         let floor = |u: &str, v: u64| RevokedFloor { user: u.into(), min_log_version: v };
@@ -1278,7 +1290,7 @@ mod tests {
         assert_eq!(s2.signer_versions.get("carol@x"), None, "порог другому админу от админа не принят");
         assert_eq!(s2.signer_versions.get("dave@x"), Some(&7), "участнику — принят");
         // Владелец своей настоящей версией снимает Боба
-        let demote = build_entry_at(w.k("alice@x"), Some(&s2), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None }), 4, 1).unwrap();
+        let demote = build_entry_at(w.k("alice@x"), Some(&s2), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None, writer: false }), 4, 1).unwrap();
         let s3 = apply(Some(&s2), &demote, &resolve).expect("владелец не заморожен");
         // Владелец ставит порог админу Кэрол
         let mark = build_entry_full(w.k("alice@x"), Some(&s3), "x", Change::SetInfo(SetInfo { name: "m".into(), ..Default::default() }), 5, 1, "", vec![floor("carol@x", 9)]).unwrap();
@@ -1437,7 +1449,7 @@ mod tests {
     fn position_is_signed() {
         let w = World::new(&["alice@x", "bob@x"]);
         let s = genesis(&w);
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(full_rights()) }), 2).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(full_rights()), writer: false }), 2).unwrap();
         let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
         // Повтор той же записи позже (перестановка сервером).
         assert_eq!(apply(Some(&s2), &e, &w.resolve()).err(), Some(ProtoError::BrokenChain));
@@ -1482,6 +1494,53 @@ mod tests {
         assert_eq!(verify_envelope(&env, 2, &send1.verifying_key().to_bytes()), Err(ProtoError::Expired));
         // Снаружи нет id Megolm-сессии.
         assert!(!env.epoch_aead_ciphertext.windows(3).any(|w| w == b"sid"));
+    }
+
+    /// Канал: пишут админы и участники, которым это разрешено (`SetRole.writer`); выдача и снятие права требуют
+    /// новой эпохи (ключ отправки раздаётся только с ней).
+    #[test]
+    fn channel_writer_flag() {
+        let w = World::new(&["alice@x", "bob@x", "carol@x"]);
+        let create = Change::Create(Create {
+            kind: GroupKind::Channel as i32,
+            name: "Новости".into(),
+            default_permissions: Some(Permissions::default()),
+            members: vec![UserRef { address: "bob@x".into() }, UserRef { address: "carol@x".into() }],
+            ..Default::default()
+        });
+        let e = build_entry(w.k("alice@x"), None, "x", create, 1).unwrap();
+        let mut s = apply(None, &e, &w.resolve()).unwrap();
+        // Эпоха считается свежей: проверяем, что её делает устаревшей именно снятие права
+        s.epoch_stale = false;
+        assert!(s.can_write("alice@x", 10) && !s.can_write("bob@x", 10), "в канале пишет только владелец");
+        let set = |s: &GroupState, who: &str, by: &str, writer: bool, at: i64| {
+            let ch = Change::SetRole(SetRole { member: ur(who), role: Role::Member as i32, rights: None, writer });
+            build_entry(w.k(by), Some(s), "x", ch, at).and_then(|e| apply(Some(s), &e, &w.resolve()))
+        };
+        // Участник сам себе право не выдаёт
+        assert!(set(&s, "bob@x", "bob@x", true, 2).is_err());
+        let s2 = set(&s, "bob@x", "alice@x", true, 2).unwrap();
+        assert!(s2.can_write("bob@x", 10) && !s2.can_write("carol@x", 10));
+        assert!(s2.writers(10).contains(&"bob@x".to_string()));
+        assert!(s2.epoch_stale, "новому автору нужен ключ отправки — он раздаётся с новой эпохой");
+        let mut s2 = s2;
+        s2.epoch_stale = false;
+        // Автор — не админ: чужие роли не меняет
+        assert!(set(&s2, "carol@x", "bob@x", true, 3).is_err());
+        let s3 = set(&s2, "bob@x", "alice@x", false, 3).unwrap();
+        assert!(!s3.can_write("bob@x", 10));
+        assert!(s3.epoch_stale, "снятый автор ещё держит ключ отправки — нужна новая эпоха");
+    }
+
+    /// В группе флаг «вправе писать» не хранится: там пишут по правам по умолчанию.
+    #[test]
+    fn writer_flag_is_ignored_in_group() {
+        let w = World::new(&["alice@x", "bob@x"]);
+        let s = genesis(&w);
+        let ch = Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None, writer: true });
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", ch, 2).unwrap();
+        let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert!(!s2.members["bob@x"].writer);
     }
 
     #[test]
@@ -1662,12 +1721,12 @@ mod tests {
         assert!(s2.l2 && s2.l2_by == "alice@x" && !s2.epoch_stale && s2.version == s.version + 1);
         // Админ с change_info выключает; админ без него — нет.
         let rights = AdminRights { change_info: true, ..Default::default() };
-        let e = build_entry(w.k("alice@x"), Some(&s2), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(rights) }), 3_000).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s2), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(rights), writer: false }), 3_000).unwrap();
         let s3 = apply(Some(&s2), &e, &w.resolve()).unwrap();
         let e = build_entry(w.k("bob@x"), Some(&s3), "x", Change::SetPrivacyMode(SetPrivacyMode { l2: false }), 4_000).unwrap();
         let s4 = apply(Some(&s3), &e, &w.resolve()).unwrap();
         assert!(!s4.l2 && s4.l2_by == "bob@x");
-        let e = build_entry(w.k("alice@x"), Some(&s4), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(AdminRights { pin_messages: true, ..Default::default() }) }), 5_000).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s4), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(AdminRights { pin_messages: true, ..Default::default() }), writer: false }), 5_000).unwrap();
         let s5 = apply(Some(&s4), &e, &w.resolve()).unwrap();
         let e = build_entry(w.k("bob@x"), Some(&s5), "x", Change::SetPrivacyMode(SetPrivacyMode { l2: true }), 6_000).unwrap();
         assert_eq!(apply(Some(&s5), &e, &w.resolve()), Err(ProtoError::Forbidden));
@@ -1681,7 +1740,7 @@ mod tests {
         )
         .unwrap();
         let s6 = apply(Some(&s5), &e, &w.resolve()).unwrap();
-        let e = build_entry(w.k("alice@x"), Some(&s6), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None }), 8_000).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s6), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Member as i32, rights: None, writer: false }), 8_000).unwrap();
         let s7 = apply(Some(&s6), &e, &w.resolve()).unwrap();
         let e = build_entry(w.k("bob@x"), Some(&s7), "x", Change::SetPrivacyMode(SetPrivacyMode { l2: true }), 9_000).unwrap();
         assert!(apply(Some(&s7), &e, &w.resolve()).unwrap().l2);

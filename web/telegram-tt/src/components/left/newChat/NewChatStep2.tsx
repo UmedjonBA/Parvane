@@ -7,7 +7,7 @@ import { getActions, getGlobal, withGlobal } from '../../../global';
 
 import { ChatCreationProgress } from '../../../types';
 
-import { getUserFirstOrLastName } from '../../../global/helpers';
+import { getUserFirstOrLastName, getUserFullName } from '../../../global/helpers';
 import { selectTabState } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 
@@ -82,6 +82,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
   // Parvane (spec 023): публичное имя — группа сразу публичная (пусто — частная); «Закрытая / Публичная» по
   // доске `ZpChat2` — поле имени видно только у публичной
   const [isPublic, setIsPublic] = useState(false);
+  // Канал (доска `ZpChat2`): «Кто пишет» — только создатель либо он и отмеченные участники
+  const [isWritersSelected, setIsWritersSelected] = useState(false);
+  const [writerIds, setWriterIds] = useState<string[]>([]);
   const [publicName, setPublicName] = useState('');
   const [photo, setPhoto] = useState<File | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -178,9 +181,18 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
       isChannel: true,
       isJoinRequestNeeded,
       publicName: isPublic && publicName ? publicName : undefined,
+      writerIds: isWritersSelected ? writerIds.filter((id) => memberIds.includes(id)) : undefined,
     });
   }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded, isPublic,
-    publicName]);
+    publicName, isWritersSelected, writerIds]);
+
+  const handleWritersMe = useCallback(() => setIsWritersSelected(false), []);
+  const handleWritersSelected = useCallback(() => setIsWritersSelected(true), []);
+  const handleWriterToggle = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const { value, checked } = e.currentTarget;
+    setWriterIds((current) => (checked ? [...current.filter((id) => id !== value), value]
+      : current.filter((id) => id !== value)));
+  }, []);
 
   // Parvane: отметка «создано» снимается здесь же, а колонка сбрасывается, только пока мастер на экране:
   // иначе подтверждение, пришедшее позже, закрывало только что открытый «Профиль»
@@ -299,6 +311,36 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
           <p className="note">{newLang('ParvaneNewChannelInfo')}</p>
         ) : (
           <p className="note">{lang(isPublic ? 'ParvanePublicGroupWarning' : 'ParvanePublicNameInfo')}</p>
+        )}
+
+        {isChannel && (
+          <>
+            <div className="pv-new-chat-cap">{newLang('ParvaneChannelWhoWrites')}</div>
+            <div className="pv-new-chat-grp" data-new-chat-writers={isWritersSelected ? 'selected' : 'me'}>
+              <Checkbox
+                label={newLang('ParvaneChannelWritesMe')}
+                checked={!isWritersSelected}
+                onCheck={handleWritersMe}
+              />
+              <Checkbox
+                label={newLang('ParvaneChannelWritesSelected')}
+                checked={isWritersSelected}
+                onCheck={handleWritersSelected}
+              />
+              {isWritersSelected && memberIds.map((id) => (
+                <Checkbox
+                  key={id}
+                  value={id}
+                  label={getUserFullName(getGlobal().users.byId[id]) || id}
+                  checked={writerIds.includes(id)}
+                  onChange={handleWriterToggle}
+                />
+              ))}
+            </div>
+            {isWritersSelected && !memberIds.length && (
+              <p className="note">{newLang('ParvaneChannelWritesEmpty')}</p>
+            )}
+          </>
         )}
 
         <div className="pv-new-chat-grp">

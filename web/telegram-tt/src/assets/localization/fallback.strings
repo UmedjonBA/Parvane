@@ -4603,6 +4603,13 @@
 "ParvaneTypeDone" = "Done";
 "ParvanePublicMark" = "public";
 "ParvaneNewChannelInfo" = "Everyone subscribed sees the messages of a channel. Enhanced privacy is not available for channels.";
+"ParvaneChannelAuthor" = "author";
+"ParvaneChannelWhoWrites" = "Who posts";
+"ParvaneChannelWritesMe" = "Only me";
+"ParvaneChannelWritesSelected" = "Me and selected members";
+"ParvaneChannelWritesEmpty" = "Add members on the previous step, or allow posting later from a member's menu.";
+"ParvaneChannelAllowWriting" = "Allow posting";
+"ParvaneChannelDenyWriting" = "Forbid posting";
 "ParvaneGroupMembersCount_one" = "Members · {count}";
 "ParvaneGroupMembersCount_other" = "Members · {count}";
 "MusicSendTrackPreview" = "{artist} · track";

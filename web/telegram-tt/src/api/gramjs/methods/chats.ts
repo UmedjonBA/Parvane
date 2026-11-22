@@ -888,6 +888,8 @@ export async function createChannel({
   isJoinRequestNeeded?: boolean;
   // Parvane (spec 023): публичное имя — провайдер Parvane делает группу публичной
   publicName?: string;
+  // Parvane: кому из участников разрешено писать в канале
+  writers?: ApiUser[];
 }) {
   const result = await invokeRequest(new GramJs.channels.CreateChannel({
     broadcast: isBroadcast,

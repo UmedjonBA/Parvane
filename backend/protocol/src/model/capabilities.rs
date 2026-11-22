@@ -18,6 +18,8 @@ pub struct GroupFacts {
     pub about: String,
     pub owner: String,
     pub members: BTreeMap<String, (i32, AdminRights, i64)>,
+    /// Канал: участники без админских прав, которым разрешено писать (`SetRole.writer`).
+    pub writers: std::collections::BTreeSet<String>,
     pub banned: Vec<String>,
     pub perms: Permissions,
     pub deleted: bool,
@@ -39,6 +41,7 @@ impl GroupFacts {
             about: s.about.clone(),
             owner: s.owner.clone(),
             members: s.members.iter().map(|(u, m)| (u.clone(), (m.role as i32, m.rights, m.muted_until_ms))).collect(),
+            writers: s.members.iter().filter(|(_, m)| m.writer).map(|(u, _)| u.clone()).collect(),
             banned: s.banned.iter().cloned().collect(),
             perms: s.default_permissions,
             deleted: s.deleted,
@@ -93,7 +96,7 @@ impl GroupFacts {
         if self.deleted || self.banned.iter().any(|b| b == u) || muted > now_ms {
             return false;
         }
-        self.is_admin(u) || (!self.channel && self.perms.send_messages)
+        self.is_admin(u) || if self.channel { self.writers.contains(u) } else { self.perms.send_messages }
     }
 
     /// Права по типу содержимого (GROUP-2; та же формула, что `GroupState::content_allowed`).

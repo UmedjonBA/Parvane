@@ -3221,6 +3221,7 @@ const methods = {
 
   createGroupChat: groupController.createGroupChat,
   createChannel: groupController.createChannel,
+  parvaneSetChannelWriter: groupController.setChannelWriter,
   fetchFullChat: groupController.fetchFullChat,
   addChatMembers: groupController.addChatMembers,
   deleteChatMember: groupController.deleteChatMember,

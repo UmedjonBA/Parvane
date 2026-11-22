@@ -76,6 +76,8 @@ export interface ApiChat {
   isNotJoined?: boolean;
   isListed?: boolean;
   isCreator?: boolean;
+  // Parvane: участнику канала разрешено писать, не будучи админом
+  isParvaneWriter?: true;
   isForbidden?: boolean; // Forbidden - can't send messages (user was kicked, for example)
   isRestricted?: boolean; // Restricted - can't access the chat (user was banned or chat is violating rules)
   restrictionReasons?: ApiRestrictionReason[];
@@ -189,6 +191,8 @@ export interface ApiChatMember {
   adminRights?: ApiChatAdminRights;
   isAdmin?: true;
   isOwner?: true;
+  // Parvane: участнику канала разрешено писать («Кто пишет: я и выбранные участники»)
+  isWriter?: true;
   isViaRequest?: true;
 }
 

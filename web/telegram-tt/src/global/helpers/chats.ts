@@ -172,7 +172,8 @@ export function getCanPostInChat(
   }
 
   if (isChatChannel(chat)) {
-    return getHasAdminRight(chat, 'postMessages');
+    // Parvane: в канале пишет и участник, которому это разрешено («я и выбранные участники»)
+    return getHasAdminRight(chat, 'postMessages') || Boolean(chat.isParvaneWriter);
   }
 
   return isChatAdmin(chat) || !isUserRightBanned(chat, 'sendMessages', chatFullInfo);

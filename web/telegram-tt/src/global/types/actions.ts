@@ -756,6 +756,8 @@ export interface ActionPayloads {
     isJoinRequestNeeded?: boolean;
     // Parvane (spec 023): публичное имя — группа сразу публичная
     publicName?: string;
+    // Parvane: кому из участников разрешено писать в канале («Я и выбранные участники»)
+    writerIds?: string[];
   } & (
     { isChannel: true } | { isSuperGroup: true }
   ) & WithTabId;

@@ -14,6 +14,7 @@ import {
   openPrivateChat,
   preparePage,
   sendText,
+  showChatList,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-group-admin-e2e-password';
@@ -246,6 +247,62 @@ try {
   await channelManage.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await channelManage.locator('#channel-title').isDisabled(), false, 'название канала недоступно владельцу');
   await closeRightColumn(aliceSession.page);
+
+  // ── «Кто пишет: я и выбранные участники» (доска `ZpChat2`): отмеченный участник пишет в канал, не будучи админом ──
+  const writersTitle = `CW-${suffix.slice(-6)}`;
+  const writerPost = `writer-post-${suffix}`;
+  await showChatList(aliceSession.page);
+  await aliceSession.page.locator('#LeftColumn').hover();
+  await aliceSession.page.locator('[data-add-for="chats"]').click();
+  await aliceSession.page.getByRole('menuitem', { name: 'New Channel' }).click();
+  const writersSearch = aliceSession.page.locator('#new-group-picker-search');
+  await writersSearch.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  for (const name of [bobName, carolName]) {
+    await writersSearch.fill(name);
+    const row = aliceSession.page.locator('#LeftColumn .PeerPickerItem, #LeftColumn .ItemPickerItem')
+      .filter({ hasText: name }).first();
+    await row.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    for (let attempt = 0; attempt < 6 && !(await row.locator('input[type="checkbox"]:checked').count()); attempt++) {
+      if (attempt % 2 === 0) await row.press(' ').catch(() => {});
+      else await row.click({ force: true }).catch(() => {});
+      await aliceSession.page.waitForTimeout(500);
+    }
+  }
+  await aliceSession.page.getByRole('button', { name: 'Continue To Channel Info' }).click();
+  const writersName = aliceSession.page
+    .locator('#LeftColumn .input-group:has(label:has-text("Channel name")) input').locator('visible=true').first();
+  await writersName.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await writersName.fill(writersTitle);
+  const whoWrites = aliceSession.page.locator('[data-new-chat-writers]').locator('visible=true').first();
+  assert.equal(await whoWrites.getAttribute('data-new-chat-writers'), 'me', 'по умолчанию пишет только создатель');
+  await whoWrites.getByText('Me and selected members', { exact: true }).click();
+  await aliceSession.page.locator('[data-new-chat-writers="selected"]').locator('visible=true').first()
+    .getByText(bobName, { exact: true }).click();
+  await aliceSession.page.getByRole('button', { name: 'Create Channel', exact: true }).click();
+  await aliceSession.page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
+  // Боб отмечен — у него есть поле ввода, его пост доходит; Кэрол — подписчик без поля ввода
+  await showChatList(bobSession.page);
+  await openChatByTitle(bobSession.page, writersTitle);
+  await bobSession.page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  await sendText(bobSession.page, writerPost);
+  await findMessage(aliceSession.page, writerPost).first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  await showChatList(carolSession.page);
+  await openChatByTitle(carolSession.page, writersTitle);
+  await findMessage(carolSession.page, writerPost).first().waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
+  assert.equal(await carolSession.page.locator('#editable-message-text').count(), 0, 'у неотмеченного подписчика есть поле ввода');
+  // Владелец снимает право из меню подписчика: у Боба подпись «author» пропадает вместе с полем ввода
+  const writersManage = await openGroupManagement(aliceSession.page, writersTitle);
+  await writersManage.getByText('Subscribers', { exact: true }).first().click();
+  const writerRow = aliceSession.page.locator('#RightColumn .ManageGroupMembers .ListItem').filter({ hasText: bobName }).first();
+  await writerRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await writerRow.getByText('author', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await writerRow.click({ button: 'right' });
+  await aliceSession.page.getByRole('menuitem', { name: 'Forbid posting' }).click();
+  await bobSession.page.locator('#editable-message-text').waitFor({ state: 'detached', timeout: CONVERGENCE_TIMEOUT_MS });
+  await writerRow.getByText('author', { exact: true }).waitFor({ state: 'detached', timeout: CONVERGENCE_TIMEOUT_MS });
+  await closeRightColumn(aliceSession.page);
+  console.log('OK: канал «я и выбранные участники» — отмеченный участник пишет, остальные только читают');
 
   assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);

@@ -765,7 +765,8 @@ addActionHandler('updateTopicMutedState', (global, actions, payload): ActionRetu
 
 addActionHandler('createChannel', async (global, actions, payload): Promise<void> => {
   const {
-    title, about, photo, memberIds, discussionChannelId, isJoinRequestNeeded, publicName, tabId = getCurrentTabId(),
+    title, about, photo, memberIds, discussionChannelId, isJoinRequestNeeded, publicName, writerIds,
+    tabId = getCurrentTabId(),
   } = payload;
   const isChannel = 'isChannel' in payload ? payload.isChannel : undefined;
   const isSuperGroup = 'isSuperGroup' in payload ? payload.isSuperGroup : undefined;
@@ -791,6 +792,7 @@ addActionHandler('createChannel', async (global, actions, payload): Promise<void
       isMegagroup: isSuperGroup,
       isJoinRequestNeeded,
       publicName,
+      writers: writerIds?.map((id) => selectUser(global, id)).filter(Boolean),
     });
     createdChannel = result?.channel;
     missingInvitedUsers = result?.missingUsers;

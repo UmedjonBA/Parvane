@@ -269,6 +269,7 @@ const PrivateChatInfo = ({
             userId={chatMember.userId}
             isAdmin={chatMember.isAdmin}
             isOwner={chatMember.isOwner}
+            isWriter={chatMember.isWriter}
             rank={chatMember.rank}
           />
         </div>

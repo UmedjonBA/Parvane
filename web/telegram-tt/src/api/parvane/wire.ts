@@ -251,6 +251,8 @@ export type WireGroupMember = {
   promoted_by?: string;
   // Когда вступил, мс (время записи журнала группы; «участник с …» списка жалоб)
   joined_ms?: number;
+  // Канал: участнику разрешено писать (`SetRole.writer`)
+  writer?: boolean;
 };
 
 export type WireGroupInfo = {

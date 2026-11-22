@@ -615,6 +615,8 @@ export class ParvaneStore {
       title: info.name,
       isListed: true,
       isCreator: info.created_by === this.self ? true : undefined,
+      // Канал: участнику разрешено писать, не будучи админом (`SetRole.writer`)
+      isParvaneWriter: isChannel && selfMember?.writer && selfRole === 'member' ? true : undefined,
       // tt узнаёт админа только по adminRights: Manage-экраны, постинг в
       // канале, кнопки модерации. Права гранулярные (spec 003); legacy-админ
       // без явного набора от сервера приходит с полным

@@ -204,7 +204,9 @@ type EngineGroupInfo = {
   avatarKeyId?: string;
   migratedFrom?: string;
   owner: string;
-  members: { user: string; role: number; mutedUntilMs: number; joinedMs?: number; rights?: WireAdminRights }[];
+  members: {
+    user: string; role: number; mutedUntilMs: number; joinedMs?: number; rights?: WireAdminRights; writer?: boolean;
+  }[];
   banned: string[];
   epoch: number;
   epochStale: boolean;
@@ -4133,6 +4135,7 @@ export function createV2Controller(deps: Deps) {
           role: ROLE_NAMES[m.role] || 'member',
           admin_rights: m.role === 2 ? expandFlags(ADMIN_RIGHT_FIELDS, m.rights) : undefined,
           joined_ms: m.joinedMs || undefined,
+          writer: m.writer || undefined,
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],

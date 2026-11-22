@@ -251,7 +251,6 @@ void pv_store_free(struct PvStoreHandle *h);
  */
 char *pv_store_info(struct PvStoreHandle *h);
 
-
 /**
  * Разблокировать ключом устройства (32 байта: desktop — производная локального ключа tdata, android —
  * ключ под Android Keystore; тот же, что у `storecrypt::setKey`).
@@ -261,7 +260,6 @@ bool pv_store_unlock_device(struct PvStoreHandle *h,
                             uintptr_t len,
                             char **err);
 
-
 /**
  * Обернуть DEK ключом устройства (новый профиль, снятие PIN) — пачка только с корнем (JSON `StoreBatch`).
  */
@@ -269,9 +267,6 @@ char *pv_store_wrap_device(struct PvStoreHandle *h,
                            const uint8_t *key,
                            uintptr_t len,
                            char **err);
-
-
-
 
 /**
  * Пачка записей и удалений: `{"puts": [{"kind", "name", "value"(base64)}], "deletes": [{"kind", "name"}]}` →

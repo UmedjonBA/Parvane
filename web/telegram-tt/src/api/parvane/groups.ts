@@ -119,6 +119,7 @@ export function createGroupController(deps: GroupDependencies) {
       userId: store.getIdForAddress(member.address),
       isOwner: member.role === 'owner' ? true as const : undefined,
       isAdmin: member.role === 'admin' ? true as const : undefined,
+      isWriter: member.writer ? true as const : undefined,
       adminRights: member.role === 'admin' ? toAdminRights(member.admin_rights) : undefined,
       promotedByUserId: member.role === 'admin' && member.promoted_by
         ? store.getIdForAddress(member.promoted_by) : undefined,
@@ -227,10 +228,33 @@ export function createGroupController(deps: GroupDependencies) {
   }
 
   async function createChannel({
-    title, about, users, isJoinRequestNeeded, publicName,
-  }: { title: string; about?: string; users?: ApiUser[]; isJoinRequestNeeded?: boolean; publicName?: string }) {
+    title, about, users, isJoinRequestNeeded, publicName, writers,
+  }: {
+    title: string; about?: string; users?: ApiUser[]; isJoinRequestNeeded?: boolean; publicName?: string;
+    writers?: ApiUser[];
+  }) {
     const channel = await createGroupKind(title, users || [], 'channel', about, isJoinRequestNeeded);
-    return channel ? { channel: await makePublicAfterCreate(channel, publicName), missingUsers: [] } : undefined;
+    if (!channel) return undefined;
+    // «Кто пишет: я и выбранные участники» — право писать выдаётся записями журнала сразу после создания
+    for (const user of writers || []) {
+      await setChannelWriter({ chat: channel, user, isWriter: true });
+    }
+    return { channel: await makePublicAfterCreate(channel, publicName), missingUsers: [] };
+  }
+
+  // Канал: дать либо снять участнику право писать (`SetRole.writer`); админские права не затрагиваются
+  async function setChannelWriter({ chat, user, isWriter }: { chat: ApiChat; user: ApiUser; isWriter: boolean }) {
+    const store = deps.getStore();
+    const groupId = store.getAddressForId(chat.id);
+    const member = store.getAddressForId(user.id);
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (!groupId || !member || !v2) return undefined;
+    const isDone = await v2.changeGroup(groupId, {
+      set_role: {
+        member: { address: member }, role: 'ROLE_MEMBER', rights: {}, writer: isWriter,
+      },
+    });
+    return isDone || undefined;
   }
 
   // Публичное имя из мастера создания (spec 023): группа сразу публичная; занятое имя — тост, группа остаётся
@@ -1050,6 +1074,7 @@ export function createGroupController(deps: GroupDependencies) {
     pushGroupUpdates,
     refresh,
     register,
+    setChannelWriter,
     setGroupInfo,
     setJoinByRequest,
     updateChatAbout,

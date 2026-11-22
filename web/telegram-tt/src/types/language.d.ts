@@ -3569,6 +3569,13 @@ export interface LangPair {
   'ParvaneTypeDone': undefined;
   'ParvanePublicMark': undefined;
   'ParvaneNewChannelInfo': undefined;
+  'ParvaneChannelAuthor': undefined;
+  'ParvaneChannelWhoWrites': undefined;
+  'ParvaneChannelWritesMe': undefined;
+  'ParvaneChannelWritesSelected': undefined;
+  'ParvaneChannelWritesEmpty': undefined;
+  'ParvaneChannelAllowWriting': undefined;
+  'ParvaneChannelDenyWriting': undefined;
   'AttachMenuGallery': undefined;
   'AttachMenuNote': undefined;
   'AttachMenuPlan': undefined;
