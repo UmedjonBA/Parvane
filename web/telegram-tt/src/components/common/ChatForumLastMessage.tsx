@@ -123,7 +123,6 @@ const ChatForumLastMessage = ({
         isReversedCorner && styles.reverseCorner,
         overwrittenWidth && styles.overwrittenWidth,
       )}
-      dir={lang.isRtl ? 'rtl' : undefined}
       style={overwrittenWidth ? `--overwritten-width: ${overwrittenWidth}px` : undefined}
     >
       {

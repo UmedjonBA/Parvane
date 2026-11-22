@@ -30,11 +30,6 @@
     border-left: 0;
     border-radius: 0 0 1rem 1rem;
 
-    &--isRtl {
-      right: auto;
-      left: 1.5rem;
-    }
-
     @media (max-width: 600px) {
       display: none;
     }
@@ -52,11 +47,6 @@
     width: 0.5rem;
     height: 0.5rem;
     border-radius: 50%;
-
-    &--isRtl {
-      right: auto;
-      left: 2.125rem;
-    }
 
     @media (max-width: 600px) {
       display: none;

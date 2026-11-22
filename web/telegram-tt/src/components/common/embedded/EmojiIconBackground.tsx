@@ -12,7 +12,6 @@ import useDynamicColorListener from '../../../hooks/stickers/useDynamicColorList
 import { useThrottleForHeavyAnimation } from '../../../hooks/useHeavyAnimation';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
-import useOldLang from '../../../hooks/useOldLang';
 import useResizeObserver from '../../../hooks/useResizeObserver';
 import useDevicePixelRatio from '../../../hooks/window/useDevicePixelRatio';
 import useCustomEmoji from '../hooks/useCustomEmoji';
@@ -76,8 +75,6 @@ const EmojiIconBackground = ({
 
   const dpr = useDevicePixelRatio();
 
-  const lang = useOldLang();
-
   const { customEmoji } = useCustomEmoji(emojiDocumentId);
   const previewMediaHash = customEmoji ? getStickerMediaHash(customEmoji, 'preview') : undefined;
   const previewUrl = useMedia(previewMediaHash);
@@ -106,7 +103,7 @@ const EmojiIconBackground = ({
       inline, block, opacity, scale,
     }) => {
       const xShift = withEmojiSpace ? -EMOJI_SPACE : 0;
-      const x = ((lang.isRtl ? inline : width / dpr - inline) + xShift) * dpr;
+      const x = ((width / dpr - inline) + xShift) * dpr;
       const y = block * dpr;
 
       const emojiSize = EMOJI_SIZE * dpr;
@@ -132,7 +129,7 @@ const EmojiIconBackground = ({
 
   useEffect(() => {
     updateCanvasAfterHeavyAnimation();
-  }, [emojiImage, lang.isRtl, customColor, updateCanvasAfterHeavyAnimation, withEmojiSpace]);
+  }, [emojiImage, customColor, updateCanvasAfterHeavyAnimation, withEmojiSpace]);
 
   const updateCanvasSize = useThrottleForHeavyAnimation((parentWidth: number, parentHeight: number) => {
     requestMutation(() => {

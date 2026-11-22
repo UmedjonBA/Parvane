@@ -419,7 +419,6 @@ const PeerPicker = <CategoryType extends string = CustomPeerType>({
           {(!withIslands || selectedIds.length > 0 || (selectedCategories && selectedCategories.length > 0)) && (
             <SearchWrapper
               className={buildClassName(withIslands ? styles.islandHeader : styles.header, 'custom-scroll')}
-              dir={oldLang.isRtl ? 'rtl' : undefined}
             >
               {selectedCategories?.map((category) => (
                 <PeerChip

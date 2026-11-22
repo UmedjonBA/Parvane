@@ -215,7 +215,6 @@ const EmojiPicker: FC<OwnProps & StateProps> = ({
           <div
             ref={headerRef}
             className={headerClassName}
-            dir={lang.isRtl ? 'rtl' : undefined}
           >
             {allCategories.map(renderCategoryButton)}
           </div>

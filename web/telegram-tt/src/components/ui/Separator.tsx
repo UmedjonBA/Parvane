@@ -1,7 +1,5 @@
 import buildClassName from '../../util/buildClassName';
 
-import useOldLang from '../../hooks/useOldLang';
-
 import styles from './Separator.module.scss';
 
 type OwnProps = {
@@ -10,11 +8,8 @@ type OwnProps = {
 };
 
 function Separator({ children, className }: OwnProps) {
-  const lang = useOldLang();
-
   return (
     <div
-      dir={lang.isRtl ? 'rtl' : undefined}
       className={buildClassName(styles.separator, className)}
     >
       {children}

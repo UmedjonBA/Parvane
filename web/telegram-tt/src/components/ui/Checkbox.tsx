@@ -15,7 +15,6 @@ import { REM } from '../common/helpers/mediaDimensions';
 import renderText from '../common/helpers/renderText';
 
 import useCurrentOrPrev from '../../hooks/useCurrentOrPrev';
-import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Avatar from '../common/Avatar';
@@ -84,7 +83,6 @@ const Checkbox: FC<OwnProps> = ({
   onCheck,
   onClickLabel,
 }) => {
-  const lang = useLang();
   const labelRef = useRef<HTMLLabelElement>();
   const inputRef = useRef<HTMLInputElement>();
   const [showNested, setShowNested] = useState(false);
@@ -142,7 +140,6 @@ const Checkbox: FC<OwnProps> = ({
     <>
       <label
         className={labelClassName}
-        dir={lang.isRtl ? 'rtl' : undefined}
         onClick={onClickLabel ? handleClick : undefined}
         ref={labelRef}
       >

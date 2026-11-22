@@ -4,8 +4,6 @@ import { memo } from '../../lib/teact/teact';
 
 import buildClassName from '../../util/buildClassName';
 
-import useLang from '../../hooks/useLang';
-
 import Spinner from './Spinner';
 
 import './Radio.scss';
@@ -49,8 +47,6 @@ const Radio: FC<OwnProps> = ({
   onSubLabelClick,
   isCanCheckedInDisabled,
 }) => {
-  const lang = useLang();
-
   const fullClassName = buildClassName(
     'Radio',
     className,
@@ -64,7 +60,7 @@ const Radio: FC<OwnProps> = ({
   );
 
   return (
-    <label className={fullClassName} dir={lang.isRtl ? 'rtl' : undefined}>
+    <label className={fullClassName}>
       <input
         type="radio"
         name={name}
@@ -75,11 +71,10 @@ const Radio: FC<OwnProps> = ({
         disabled={disabled || hidden}
       />
       <div className="Radio-main">
-        <span className="label" dir={lang.isRtl ? 'auto' : undefined}>{label}</span>
+        <span className="label">{label}</span>
         {Boolean(subLabel) && (
           <span
             className={buildClassName(subLabelClassName, 'subLabel', isLink ? 'subLabelLink' : undefined)}
-            dir={lang.isRtl ? 'auto' : undefined}
             onClick={isLink ? onSubLabelClick : undefined}
           >
             {subLabel}

@@ -89,34 +89,6 @@
     pointer-events: none;
     opacity: 0.5;
   }
-
-  &[dir="rtl"] {
-    input {
-      text-align: right;
-    }
-
-    label {
-      right: 0.75rem;
-      left: auto;
-    }
-
-    &.with-arrow {
-      &::after {
-        right: auto;
-        left: 2rem;
-        border-right: 1px var(--color-text-secondary) solid;
-        border-left: none;
-      }
-    }
-
-    &.touched label,
-    &.error label,
-    &.success label,
-    .form-control:focus + label,
-    .form-control.focus + label {
-      transform: scale(0.75) translate(1.5rem, -2.25rem);
-    }
-  }
 }
 
 .form-control {
@@ -257,18 +229,6 @@ textarea.form-control {
     &:hover,
     &:focus {
       opacity: 1;
-    }
-  }
-
-  &[dir="rtl"] {
-    .form-control {
-      padding-right: calc(0.9rem - var(--border-width));
-      padding-left: 3.375rem;
-    }
-
-    .toggle-password {
-      right: auto;
-      left: 0;
     }
   }
 }

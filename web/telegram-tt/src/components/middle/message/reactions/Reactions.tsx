@@ -202,7 +202,7 @@ const Reactions: FC<OwnProps> = ({
         withServiceReactions && 'is-service',
       )}
       style={maxWidth ? `max-width: ${maxWidth}px` : undefined}
-      dir={lang.isRtl ? 'rtl' : 'ltr'}
+      dir="ltr"
     >
       {props.map(({
         reaction, recentReactors, messageKey, reactionKey, isChosen, tag,

@@ -6,7 +6,6 @@ import type { IconName } from '../../../types/icons';
 import buildClassName from '../../../util/buildClassName';
 
 import useContext from '../../../hooks/data/useContext';
-import useLang from '../../../hooks/useLang';
 import useUniqueId from '../../../hooks/useUniqueId';
 
 import Icon from '../../common/icons/Icon';
@@ -40,7 +39,6 @@ const Control = ({
   children,
 }: ControlProps) => {
   const uniqueId = useUniqueId();
-  const lang = useLang();
   const interactive = useInteractiveContext();
   const id = `control-${uniqueId}`;
 
@@ -57,7 +55,6 @@ const Control = ({
           inputEnd && styles.inputEnd,
           className,
         )}
-        dir={lang.isRtl ? 'rtl' : undefined}
       >
         {interactive?.isLoading && <Spinner className={styles.spinner} />}
         {children}

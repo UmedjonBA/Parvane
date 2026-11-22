@@ -51,7 +51,6 @@ const StickerSetCard: FC<OwnProps> = ({
         <Button
           ariaLabel={stickerSet.title}
           color="translucent"
-          isRtl={lang.isRtl}
         >
           <StickerSetCover
             stickerSet={stickerSet}

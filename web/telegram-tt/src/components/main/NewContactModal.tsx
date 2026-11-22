@@ -139,7 +139,7 @@ const NewContactModal: FC<OwnProps & StateProps> = ({
   function renderAddContact() {
     return (
       <>
-        <div className="NewContactModal__profile" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="NewContactModal__profile">
           <Avatar
             size="jumbo"
             peer={renderingUser}
@@ -204,7 +204,7 @@ const NewContactModal: FC<OwnProps & StateProps> = ({
 
   function renderCreateContact() {
     return (
-      <div className="NewContactModal__new-contact" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="NewContactModal__new-contact">
         <Avatar size="jumbo" text={`${firstName} ${lastName}`} />
         <div className="NewContactModal__new-contact-fieldset">
           <InputText

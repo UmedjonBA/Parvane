@@ -558,7 +558,7 @@ const Poll = ({
         >
           <Transition
             activeKey={Number(isViewingAuthorResults)}
-            name={lang.isRtl ? 'slideRtl' : 'slide'}
+            name="slide"
             shouldCleanup
             slideClassName={styles.footerContentSlide}
           >
@@ -637,7 +637,7 @@ const Poll = ({
   return (
     <>
       {attachedMediaEl}
-      <div className={styles.root} dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className={styles.root}>
         {isExplanationOpen && canShowExplanation && (
           <PeerColorWrapper className={styles.explanation} shouldReset>
             <div className={styles.explanationHeader}>

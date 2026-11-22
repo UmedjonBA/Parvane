@@ -375,7 +375,6 @@ const ChatResults: FC<OwnProps & StateProps> = ({
       {Boolean(localResults.length) && !isChannelList && (
         <div
           className="chat-selection no-scrollbar"
-          dir={lang.isRtl ? 'rtl' : undefined}
           ref={chatSelectionRef}
         >
           {localResults.map((id) => (
@@ -390,7 +389,7 @@ const ChatResults: FC<OwnProps & StateProps> = ({
       )}
       {Boolean(localResults.length) && (
         <div className="search-section">
-          <h3 className="section-heading" dir={lang.isRtl ? 'auto' : undefined}>
+          <h3 className="section-heading">
             {localResults.length > LESS_LIST_ITEMS_AMOUNT && (
               <Link className="Link" onClick={handleClickShowMoreLocal}>
                 {lang(shouldShowMoreLocal ? 'ChatListSearchShowLess' : 'ChatListSearchShowMore')}
@@ -415,7 +414,7 @@ const ChatResults: FC<OwnProps & StateProps> = ({
       )}
       {Boolean(globalResults.length) && (
         <div className="search-section">
-          <h3 className="section-heading" dir={lang.isRtl ? 'auto' : undefined}>
+          <h3 className="section-heading">
             {globalResults.length > LESS_LIST_ITEMS_AMOUNT && (
               <Link className="Link" onClick={handleClickShowMoreGlobal}>
                 {lang(shouldShowMoreGlobal ? 'ChatListSearchShowLess' : 'ChatListSearchShowMore')}
@@ -440,7 +439,7 @@ const ChatResults: FC<OwnProps & StateProps> = ({
       )}
       {Boolean(suggestedChannelIds?.length) && !searchQuery && (
         <div className="search-section">
-          <h3 className="section-heading" dir={lang.isRtl ? 'auto' : undefined}>
+          <h3 className="section-heading">
             {lang('SearchResultRecommendedChannels')}
           </h3>
           {suggestedChannelIds.map((id) => {
@@ -458,7 +457,7 @@ const ChatResults: FC<OwnProps & StateProps> = ({
         {renderContextMenu()}
         {shouldRenderMessagesSection && (
           <div className="search-section">
-            <h3 className="section-heading" dir={lang.isRtl ? 'auto' : undefined}>
+            <h3 className="section-heading">
               {!isChannelList && (
                 <Link className="Link menuTrigger dropDownLink" onClick={handleClickContext}>
                   {lang('SearchContextCaption', {

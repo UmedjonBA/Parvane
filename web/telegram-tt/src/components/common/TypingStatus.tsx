@@ -92,7 +92,7 @@ const TypingStatus = ({ typingStatusByPeerId, isPrivate }: OwnProps) => {
   const shouldRenderTypingStatusIcon = shouldRenderGroupedTyping || shouldRenderTypingIcon(latestTypingStatus);
 
   return (
-    <span className={buildClassName(styles.typingStatus, 'typing-status')} dir={lang.isRtl ? 'rtl' : 'auto'}>
+    <span className={buildClassName(styles.typingStatus, 'typing-status')} dir="auto">
       {shouldRenderTypingStatusIcon && (
         <AnimatedIconWithPreview
           className={styles.typingIcon}

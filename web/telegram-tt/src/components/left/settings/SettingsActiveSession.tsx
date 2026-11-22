@@ -65,7 +65,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
   function renderHeader() {
     return (
-      <div className="modal-header-condensed" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="modal-header-condensed">
         <Button
           round
           color="translucent"

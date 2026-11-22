@@ -154,7 +154,6 @@ const WebLink = ({
       ref={ref}
       className={className}
       data-initial={siteTitle[0]}
-      dir={lang.isRtl ? 'rtl' : undefined}
       onMouseDown={handleBeforeContextMenu}
       onContextMenu={contextActions ? handleContextMenu : undefined}
     >
@@ -167,11 +166,11 @@ const WebLink = ({
         />
       )}
       <div className="content">
-        <Link isRtl={lang.isRtl} className="site-title" onClick={handleMessageClick}>
+        <Link className="site-title" onClick={handleMessageClick}>
           {renderText(siteTitle)}
         </Link>
         {(truncatedDescription || formattedDescription) && (
-          <Link isRtl={lang.isRtl} className="site-description" onClick={handleMessageClick}>
+          <Link className="site-description" onClick={handleMessageClick}>
             {formattedDescription || (truncatedDescription && renderText(truncatedDescription))}
           </Link>
         )}
@@ -179,7 +178,6 @@ const WebLink = ({
           url={url}
           className="site-name"
           text={safeLinkContent}
-          isRtl={lang.isRtl}
         />
         {senderTitle && <div className="sender-name">{renderText(senderTitle)}</div>}
       </div>
@@ -188,7 +186,6 @@ const WebLink = ({
           <Link
             className="date"
             onClick={handleMessageClick}
-            isRtl={lang.isRtl}
           >
             {formatPastTimeShort(oldLang, message.date * 1000)}
           </Link>

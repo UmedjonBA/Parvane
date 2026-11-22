@@ -57,7 +57,6 @@ type OwnProps = {
   withChatType?: boolean;
   noEmojiStatus?: boolean;
   emojiStatusSize?: number;
-  noRtl?: boolean;
   noAvatar?: boolean;
   noStatusOrTyping?: boolean;
   withStory?: boolean;
@@ -91,7 +90,6 @@ const GroupChatInfo = ({
   withFullInfo,
   withUpdatingStatus,
   withChatType,
-  noRtl,
   chat: realChat,
   onlineCount,
   areMessagesLoaded,
@@ -237,7 +235,6 @@ const GroupChatInfo = ({
       className={
         buildClassName('ChatInfo', className)
       }
-      dir={!noRtl && lang.isRtl ? 'rtl' : undefined}
       onClick={onClick}
     >
       {!noAvatar && !isTopic && (

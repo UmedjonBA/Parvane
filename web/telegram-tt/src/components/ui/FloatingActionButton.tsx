@@ -3,8 +3,6 @@ import type { OwnProps as ButtonProps } from './Button';
 
 import buildClassName from '../../util/buildClassName';
 
-import useOldLang from '../../hooks/useOldLang';
-
 import IconWithSpinner from '../common/IconWithSpinner';
 import Button from './Button';
 
@@ -33,8 +31,6 @@ const FloatingActionButton = ({
   isLoading,
   onClick,
 }: OwnProps) => {
-  const lang = useOldLang();
-
   const buttonClassName = buildClassName(
     'FloatingActionButton',
     isShown && 'revealed',
@@ -51,7 +47,6 @@ const FloatingActionButton = ({
       onClick={isShown && !disabled ? onClick : undefined}
       ariaLabel={ariaLabel}
       tabIndex={-1}
-      isRtl={lang.isRtl}
     >
       <IconWithSpinner iconName={iconName} isLoading={isLoading} />
     </Button>

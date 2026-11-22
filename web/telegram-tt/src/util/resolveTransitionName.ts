@@ -7,17 +7,12 @@ export function resolveTransitionName(
   name: 'slideOptimized' | 'slide' | 'layers',
   animationLevel: AnimationLevel,
   isDisabled = false,
-  isRtl = false,
 ) {
   if (isDisabled || animationLevel === ANIMATION_LEVEL_MIN) return 'none';
 
   if (animationLevel === ANIMATION_LEVEL_MED) return 'slideFade';
 
-  return name === 'slideOptimized' ? (
-    isRtl ? 'slideOptimizedRtl' : 'slideOptimized'
-  ) : name === 'slide' ? (
-    isRtl ? 'slideRtl' : 'slide'
-  ) : (
+  return name === 'slideOptimized' ? 'slideOptimized' : name === 'slide' ? 'slide' : (
     IS_ANDROID ? 'slideFade' : IS_IOS ? 'slideLayers' : 'pushSlide'
   );
 }

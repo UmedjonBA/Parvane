@@ -630,7 +630,7 @@ const AttachmentModal = ({
     }
 
     return (
-      <div className="modal-header-condensed-wide" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="modal-header-condensed-wide">
         <Button
           round
           color="translucent"

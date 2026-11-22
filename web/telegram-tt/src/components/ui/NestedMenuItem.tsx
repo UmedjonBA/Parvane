@@ -10,7 +10,6 @@ import buildClassName from '../../util/buildClassName';
 import { REM } from '../common/helpers/mediaDimensions';
 
 import useFlag from '../../hooks/useFlag';
-import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useUniqueId from '../../hooks/useUniqueId';
 import useWindowSize from '../../hooks/window/useWindowSize';
@@ -49,8 +48,6 @@ const NestedMenuItem = ({
   ariaLabel,
   footer,
 }: OwnProps) => {
-  const lang = useLang();
-
   const itemRef = useRef<HTMLDivElement>();
   const closeTimeoutRef = useRef<number>();
   const openTimeoutRef = useRef<number>();
@@ -75,7 +72,7 @@ const NestedMenuItem = ({
       const overlap = REM;
 
       setSubmenuAnchor({
-        x: lang.isRtl ? rect.left + overlap : rect.right - overlap,
+        x: rect.right - overlap,
         y: rect.top,
         width: rect.width - overlap * 2,
         height: rect.height,
@@ -87,7 +84,7 @@ const NestedMenuItem = ({
     if (isSubmenuOpen && !isResizing) {
       updateAnchor();
     }
-  }, [isSubmenuOpen, lang.isRtl, updateAnchor, isResizing]);
+  }, [isSubmenuOpen, updateAnchor, isResizing]);
 
   const cancelOpen = useLastCallback(() => {
     clearTimeout(openTimeoutRef.current);
@@ -194,14 +191,14 @@ const NestedMenuItem = ({
         onClick={handleClick}
       >
         {children}
-        <Icon name={submenuIcon || (lang.isRtl ? 'previous' : 'next')} className="submenu-icon" />
+        <Icon name={submenuIcon || 'next'} className="submenu-icon" />
         {submenuAnchor && (
           <Menu
             id={submenuId}
             isOpen={isSubmenuOpen}
             className={buildClassName('submenu', submenuClassName)}
             anchor={submenuAnchor}
-            positionX={lang.isRtl ? 'left' : 'right'}
+            positionX="right"
             getTriggerElement={getTriggerElement}
             getRootElement={getRootElement}
             getMenuElement={getMenuElement}

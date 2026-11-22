@@ -800,7 +800,7 @@ const MediaEditor = ({
           <div className={styles.panelTabs}>
             <Transition
               ref={transitionRef}
-              name={resolveTransitionName('slideOptimized', animationLevel, undefined, lang.isRtl)}
+              name={resolveTransitionName('slideOptimized', animationLevel)}
               activeKey={activeTabIndex}
               shouldRestoreHeight
               className={styles.panelContent}

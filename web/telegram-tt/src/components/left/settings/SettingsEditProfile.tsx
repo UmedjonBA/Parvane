@@ -482,7 +482,7 @@ const SettingsEditProfile = ({
               </div>
             </Island>
             {readOnlyUsername && (
-              <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+              <IslandDescription>
                 {oldLang('lng_username_link')}
                 <br />
                 <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>

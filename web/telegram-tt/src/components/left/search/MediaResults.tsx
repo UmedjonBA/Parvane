@@ -104,7 +104,7 @@ const MediaResults: FC<OwnProps & StateProps> = ({
 
   function renderGallery() {
     return (
-      <div className="media-list" dir={oldLang.isRtl ? 'rtl' : undefined}>
+      <div className="media-list">
         {foundMessages.map((message) => (
           <Media
             key={`${message.chatId}-${message.id}`}

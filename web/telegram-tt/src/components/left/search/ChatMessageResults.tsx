@@ -119,7 +119,7 @@ const ChatMessageResults: FC<OwnProps & StateProps> = ({
         )}
         {Boolean(foundMessages.length) && (
           <div className="pb-2">
-            <h3 className="section-heading topic-search-heading" dir={lang.isRtl ? 'auto' : undefined}>
+            <h3 className="section-heading topic-search-heading">
               {lang('SearchMessages')}
             </h3>
             {foundMessages.map(renderFoundMessage)}

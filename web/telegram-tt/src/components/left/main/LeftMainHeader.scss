@@ -90,11 +90,6 @@
     padding-right: 0;
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
-
-    &[dir="rtl"] {
-      right: -0.125rem;
-      left: auto;
-    }
   }
 }
 

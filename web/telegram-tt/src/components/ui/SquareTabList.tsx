@@ -8,7 +8,6 @@ import type { MenuItemContextAction } from './ListItem';
 import buildClassName from '../../util/buildClassName';
 
 import useHorizontalScroll from '../../hooks/useHorizontalScroll';
-import useLang from '../../hooks/useLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 import useScrollToActiveTab from '../../hooks/useScrollToActiveTab';
 
@@ -52,8 +51,6 @@ const SquareTabList = ({
   const containerRef = ref || internalRef;
   const previousActiveTab = usePreviousDeprecated(activeTab);
 
-  const lang = useLang();
-
   useHorizontalScroll(containerRef, undefined, true);
   useScrollToActiveTab(containerRef, activeTab);
 
@@ -61,7 +58,6 @@ const SquareTabList = ({
     <div
       className={buildClassName('SquareTabList', 'no-scrollbar', className)}
       ref={containerRef}
-      dir={lang.isRtl ? 'rtl' : undefined}
     >
       {tabs.map((tab, i) => (
         <Tab

@@ -235,7 +235,6 @@ const HeaderPinnedMessage = ({
         className={buildClassName(styles.pinnedMessage, noHoverColor && styles.noHover)}
         onClick={handleClick}
         onMouseDown={handleMouseDown}
-        dir={lang.isRtl ? 'rtl' : undefined}
       >
         <PinnedMessageNavigation
           count={pinnedMessagesCount}
@@ -251,9 +250,8 @@ const HeaderPinnedMessage = ({
         </Transition>
         <div
           className={buildClassName(styles.messageText, hasPictogram && styles.withMedia)}
-          dir={lang.isRtl ? 'rtl' : undefined}
         >
-          <div className={styles.title} dir={lang.isRtl ? 'rtl' : undefined}>
+          <div className={styles.title}>
             {!topMessageTitle && (
               <AnimatedCounter
                 text={pinnedMessagesCount === 1

@@ -234,7 +234,7 @@ const ItemPicker = ({
         withIslands ? (
           <Island>{renderSearchInput()}</Island>
         ) : (
-          <div className={buildClassName(styles.header, 'custom-scroll')} dir={lang.isRtl ? 'rtl' : undefined}>
+          <div className={buildClassName(styles.header, 'custom-scroll')}>
             {renderSearchInput()}
           </div>
         )

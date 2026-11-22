@@ -276,7 +276,7 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
         ) : undefined}
         <Transition
           ref={transitionRef}
-          name={resolveTransitionName('slideOptimized', animationLevel, shouldSkipHistoryAnimations, lang.isRtl)}
+          name={resolveTransitionName('slideOptimized', animationLevel, shouldSkipHistoryAnimations)}
           activeKey={activeChatFolder}
           renderCount={hasFolders ? folderTabs.length : undefined}
         >

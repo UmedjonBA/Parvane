@@ -11,7 +11,6 @@ import renderText from '../common/helpers/renderText';
 import useContextMenuHandlers from '../../hooks/useContextMenuHandlers';
 import { useFastClick } from '../../hooks/useFastClick';
 import useFlag from '../../hooks/useFlag';
-import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Icon from '../common/icons/Icon';
@@ -198,8 +197,6 @@ const ListItem = ({
     }
   });
 
-  const lang = useLang();
-
   const fullClassName = buildClassName(
     'ListItem',
     className,
@@ -224,7 +221,6 @@ const ListItem = ({
     <div
       ref={containerRef}
       className={fullClassName}
-      dir={lang.isRtl ? 'rtl' : undefined}
       style={style}
       onMouseDown={onMouseDown}
       onDragEnter={onDragEnter}

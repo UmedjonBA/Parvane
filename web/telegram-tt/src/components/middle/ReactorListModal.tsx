@@ -199,7 +199,6 @@ const ReactorListModal: FC<OwnProps & StateProps> = ({
         <div
           ref={reactionsRef}
           className={buildClassName('Reactions', 'no-scrollbar')}
-          dir={lang.isRtl ? 'rtl' : undefined}
         >
           <Button
             color={chosenTab ? 'adaptive' : 'primary'}
@@ -243,12 +242,11 @@ const ReactorListModal: FC<OwnProps & StateProps> = ({
 
       <div
         ref={containerRef}
-        dir={lang.isRtl ? 'rtl' : undefined}
         className="reactor-list-wrapper"
       >
         <Transition
           activeKey={contentActiveKey}
-          name={resolveTransitionName('slide', animationLevel, undefined, lang.isRtl)}
+          name={resolveTransitionName('slide', animationLevel)}
         >
           {viewportIds?.length ? (
             <InfiniteScroll

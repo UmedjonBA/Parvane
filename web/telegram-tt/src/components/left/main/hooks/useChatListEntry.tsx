@@ -126,7 +126,7 @@ export default function useChatListEntry({
 
     if (canDisplayDraft) {
       return (
-        <p className="last-message" dir={lang.isRtl ? 'auto' : 'ltr'}>
+        <p className="last-message" dir="ltr">
           <span className="draft">{lang('ChatDraftPrefix')}</span>
           <span className="last-message-summary" dir="auto">
             {renderTextWithEntities({
@@ -149,7 +149,7 @@ export default function useChatListEntry({
       : undefined;
 
     return (
-      <p className="last-message shared-canvas-container" dir={lang.isRtl ? 'auto' : 'ltr'}>
+      <p className="last-message shared-canvas-container" dir="ltr">
         {senderName && (
           <>
             <span className="sender-name">{renderText(senderName)}</span>

@@ -446,7 +446,6 @@ const MessageContextMenu: FC<OwnProps> = ({
         className={buildClassName(
           'MessageContextMenu_items scrollable-content custom-scroll',
         )}
-        dir={lang.isRtl ? 'rtl' : undefined}
       >
         {shouldShowGiftButton
           && (
@@ -606,7 +605,7 @@ const MessageContextMenu: FC<OwnProps> = ({
               disabled={!canShowReactionsCount && !seenByDatesCount}
             >
               <span className="MessageContextMenu--seen-by-label-wrapper">
-                <span className="MessageContextMenu--seen-by-label" dir={lang.isRtl ? 'rtl' : undefined}>
+                <span className="MessageContextMenu--seen-by-label">
                   {canShowReactionsCount && message.reactors?.count ? (
                     canShowSeenBy && seenByDatesCount
                       ? lang(

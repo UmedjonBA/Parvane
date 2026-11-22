@@ -250,29 +250,6 @@
     }
   }
 
-  &[dir="rtl"] {
-    &.loading {
-      .Spinner {
-        right: 0.375rem;
-        left: auto;
-      }
-    }
-
-    .label,
-    .subLabel {
-      text-align: right;
-    }
-
-    .Checkbox-main {
-      .user-avatar,
-      &::before,
-      &::after {
-        right: 1rem;
-        left: auto;
-      }
-    }
-  }
-
   &.nested {
     display: flex;
     gap: 0.3125rem;

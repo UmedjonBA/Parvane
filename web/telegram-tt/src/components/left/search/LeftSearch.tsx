@@ -121,7 +121,7 @@ const LeftSearch: FC<OwnProps & StateProps> = ({
     <div className="LeftSearch" ref={containerRef} onKeyDown={handleKeyDown}>
       <SquareTabList activeTab={activeTab} tabs={tabs} onSwitchTab={handleSwitchTab} />
       <Transition
-        name={resolveTransitionName('slideOptimized', animationLevel, undefined, lang.isRtl)}
+        name={resolveTransitionName('slideOptimized', animationLevel)}
         renderCount={tabs.length}
         activeKey={currentContent}
       >

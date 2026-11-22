@@ -85,10 +85,4 @@
     display: flex;
     justify-content: space-between;
   }
-
-  &[dir="rtl"] {
-    .subtitle {
-      text-align: right;
-    }
-  }
 }

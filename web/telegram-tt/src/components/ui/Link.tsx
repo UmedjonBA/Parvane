@@ -7,14 +7,13 @@ import styles from './Link.module.scss';
 type OwnProps = {
   children: React.ReactNode;
   className?: string;
-  isRtl?: boolean;
   isPrimary?: boolean;
   withMultilineFix?: boolean;
   onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 };
 
 const Link = ({
-  children, isPrimary, className, isRtl, withMultilineFix, onClick,
+  children, isPrimary, className, withMultilineFix, onClick,
 }: OwnProps) => {
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
     e.preventDefault();
@@ -25,7 +24,7 @@ const Link = ({
     <a
       href="#"
       className={buildClassName('Link', styles.link, className, isPrimary && styles.isPrimary)}
-      dir={!withMultilineFix ? (isRtl ? 'rtl' : 'auto') : undefined}
+      dir={!withMultilineFix ? 'auto' : undefined}
       onClick={onClick ? handleClick : undefined}
     >
       {children}

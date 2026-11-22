@@ -395,7 +395,7 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
           />
 
           {isCreating && (
-            <p className="settings-item-description mb-3" dir={lang.isRtl ? 'rtl' : undefined}>
+            <p className="settings-item-description mb-3">
               {lang('FilterIncludeInfo')}
             </p>
           )}
@@ -409,7 +409,7 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
               error={state.error && state.error === ERROR_NO_TITLE ? ERROR_NO_TITLE : undefined}
             />
 
-            <div className="settings-folders-icon-picker" dir={lang.isRtl ? 'rtl' : undefined}>
+            <div className="settings-folders-icon-picker">
               <div
                 className="settings-folders-icon-picker-button"
                 onClick={handleIconPickerOpen}
@@ -432,12 +432,12 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
         {!isOnlyInvites && (
           <>
             {state.error && state.error === ERROR_NO_CHATS && (
-              <IslandDescription className="color-danger" dir={lang.isRtl ? 'rtl' : undefined}>
+              <IslandDescription className="color-danger">
                 {oldLang(state.error)}
               </IslandDescription>
             )}
 
-            <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('FilterInclude')}</IslandTitle>
+            <IslandTitle>{lang('FilterInclude')}</IslandTitle>
             <Island>
               <ListItem
                 className="settings-folders-list-item color-primary"
@@ -455,7 +455,7 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
 
         {!isOnlyInvites && !isEditingChatList && (
           <>
-            <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('FilterExclude')}</IslandTitle>
+            <IslandTitle>{lang('FilterExclude')}</IslandTitle>
             <Island>
               <ListItem
                 className="settings-folders-list-item color-primary"
@@ -471,7 +471,7 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
           </>
         )}
 
-        <IslandTitle className="color-picker-header" dir={lang.isRtl ? 'rtl' : undefined}>
+        <IslandTitle className="color-picker-header">
           <span className="color-picker-title-text">{lang('FilterColorTitle')}</span>
           <div className={buildClassName(
             'color-picker-title',
@@ -535,14 +535,14 @@ const SettingsFoldersEdit: FC<OwnProps & StateProps> = ({
             </button>
           </div>
         </Island>
-        <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
+        <IslandDescription>
           {lang('FilterColorHint')}
         </IslandDescription>
 
         {/* Parvane: ссылки на папки (chatlist invites) — серверная функция
             Telegram, у нас её нет; секцию не показываем */}
         {IS_FOLDER_LINKS_SUPPORTED && (
-          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          <IslandTitle>
             {oldLang('FolderLinkScreen.Title')}
           </IslandTitle>
         )}

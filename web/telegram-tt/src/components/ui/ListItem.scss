@@ -336,7 +336,6 @@
         font-size: 0.875rem;
         line-height: 1.25rem;
 
-        &[dir="rtl"],
         &[dir="auto"] {
           width: 100%;
           text-align: initial;
@@ -360,12 +359,6 @@
       body.is-ios &,
       body.is-macos & {
         font-size: 0.9375rem;
-      }
-    }
-
-    &[dir="rtl"] {
-      .info > .status {
-        width: 100%;
       }
     }
   }
@@ -394,13 +387,6 @@
     .withSubLabel {
       height: 2.5rem;
     }
-
-    &[dir="rtl"] {
-      .Checkbox {
-        padding-right: 4rem;
-        padding-left: 0;
-      }
-    }
   }
 
   &.chat-item {
@@ -427,10 +413,6 @@
     .subtitle {
       display: block;
       text-align: initial;
-
-      &[dir="rtl"] {
-        text-align: right;
-      }
     }
 
     .title {

@@ -86,7 +86,7 @@ const ManageChatRemovedUsers: FC<OwnProps & StateProps> = ({
       <div className="panel-content custom-scroll">
         <IslandDescription>{lang(isChannel ? 'NoBlockedChannel2' : 'NoBlockedGroup2')}</IslandDescription>
         {Boolean(removedMembers.length) && (
-          <Island dir={lang.isRtl ? 'rtl' : undefined}>
+          <Island>
             {removedMembers.map((member) => (
               <ListItem
                 key={member.userId}

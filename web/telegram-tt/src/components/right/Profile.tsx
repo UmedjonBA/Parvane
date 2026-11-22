@@ -1063,7 +1063,6 @@ const Profile = ({
           shouldShowContentPanel && styles.showContentPanel,
           noTransition && styles.noTransition,
         )}
-        dir={lang.isRtl && (resultType === 'media' || resultType === 'gif') ? 'rtl' : undefined}
       >
         {resultType === 'media' || resultType === 'gif' ? (
           (viewportIds as number[]).filter((id) => Boolean(messagesById[id])).map((id, i, ids) => (
@@ -1359,7 +1358,7 @@ const Profile = ({
         <Transition
           className={CONTENT_LIST_CLASS[resultType]}
           activeKey={contentTransitionKey}
-          name={resolveTransitionName('slideOptimized', animationLevel, undefined, lang.isRtl)}
+          name={resolveTransitionName('slideOptimized', animationLevel)}
           contentSelector={`.Transition > .Transition_slide-active > .${styles.content}`}
         >
           <Transition
@@ -1427,7 +1426,7 @@ const Profile = ({
             <Transition
               ref={transitionRef}
               name={shouldSkipTransitionRef.current ? 'none'
-                : resolveTransitionName('slideOptimized', animationLevel, undefined, lang.isRtl)}
+                : resolveTransitionName('slideOptimized', animationLevel)}
               activeKey={activeKey}
               renderCount={tabs.length}
               className="shared-media-transition"

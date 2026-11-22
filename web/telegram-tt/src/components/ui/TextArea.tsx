@@ -9,7 +9,6 @@ import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import buildClassName from '../../util/buildClassName';
 
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 
 import AnimatedCounter from '../common/AnimatedCounter';
 
@@ -69,7 +68,6 @@ const TextArea: FC<OwnProps> = ({
     textareaRef = ref;
   }
 
-  const lang = useOldLang();
   const labelText = error || success || label;
   const fullClassName = buildClassName(
     'input-group',
@@ -112,7 +110,7 @@ const TextArea: FC<OwnProps> = ({
   }, [noReplaceNewlines, onChange]);
 
   return (
-    <div className={fullClassName} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className={fullClassName}>
       <textarea
         ref={textareaRef}
         className="form-control"

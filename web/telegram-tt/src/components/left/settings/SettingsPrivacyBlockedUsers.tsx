@@ -123,7 +123,7 @@ const SettingsPrivacyBlockedUsers: FC<OwnProps & StateProps> = ({
   return (
     <div className="settings-fab-wrapper">
       <Surface className={styles.surface}>
-        <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
+        <IslandDescription>
           {lang('BlockedUsersInfo')}
         </IslandDescription>
 

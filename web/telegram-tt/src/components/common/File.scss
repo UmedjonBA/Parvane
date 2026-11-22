@@ -248,8 +248,7 @@
     }
   }
 
-  &:dir(rtl),
-  &[dir="rtl"] {
+  &:dir(rtl) {
     .file-progress,
     .file-icon,
     .file-preview {

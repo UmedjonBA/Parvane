@@ -150,7 +150,7 @@ const GifSearch = ({
   const hasResults = Boolean(query !== undefined && results && results.length);
 
   return (
-    <div className={styles.root} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className={styles.root}>
       <InfiniteScroll
         ref={containerRef}
         className={buildClassName(styles.container, 'custom-scroll', hasResults && styles.grid)}

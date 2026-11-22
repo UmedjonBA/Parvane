@@ -209,7 +209,7 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
 
   function renderSearchField() {
     return (
-      <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+      <Island>
         <InputText
           ref={inputRef}
           value={searchQuery}

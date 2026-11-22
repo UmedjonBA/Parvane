@@ -855,16 +855,6 @@
     }
   }
 
-  &[dir="rtl"] {
-    .placeholder-text {
-      right: 0;
-    }
-
-    .touched ~ .placeholder-text {
-      transform: translateX(-1rem);
-    }
-  }
-
   .text-entity-link {
     cursor: var(--custom-cursor, default);
     color: var(--color-links) !important;

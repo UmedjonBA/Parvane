@@ -171,7 +171,7 @@ const MessageMeta = ({
   return (
     <span
       className={fullClassName}
-      dir={lang.isRtl ? 'rtl' : 'ltr'}
+      dir="ltr"
       onClick={onClick}
       data-ignore-on-paste
     >

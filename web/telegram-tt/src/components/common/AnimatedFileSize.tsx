@@ -75,7 +75,7 @@ const AnimatedFileSize = ({
   }
 
   return (
-    <span className={className} dir={lang.isRtl ? 'rtl' : undefined}>
+    <span className={className}>
       {lang('FileTransferProgress', {
         currentSize: currentSizeString,
         totalSize: totalSizeString,

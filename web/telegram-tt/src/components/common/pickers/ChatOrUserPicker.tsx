@@ -325,7 +325,7 @@ const ChatOrUserPicker = ({
   function renderTopicList() {
     return (
       <>
-        <div className="picker-header" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="picker-header">
           {renderSearchRow ? renderSearchRow({
             inputRef: topicSearchRef,
             value: topicSearch,
@@ -412,7 +412,7 @@ const ChatOrUserPicker = ({
   function renderChatList() {
     return (
       <>
-        <div className="picker-header" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="picker-header">
           {renderSearchRow ? renderSearchRow({
             inputRef: searchRef,
             value: search,
@@ -440,7 +440,7 @@ const ChatOrUserPicker = ({
         </div>
         <Transition
           activeKey={listActiveKey || 0}
-          name={resolveTransitionName('slideOptimized', animationLevel, shouldSkipHistoryAnimations, lang.isRtl)}
+          name={resolveTransitionName('slideOptimized', animationLevel, shouldSkipHistoryAnimations)}
           slideClassName="ChatOrUserPicker_slide"
         >
           <ChatListContent

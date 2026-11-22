@@ -183,24 +183,12 @@
       left: env(safe-area-inset-left);
       background-image: url("../../assets/media_navigation_previous.svg");
       background-position: 1.25rem calc(50% - 2rem);
-
-      &[dir="rtl"] {
-        right: env(safe-area-inset-right);
-        left: auto;
-        transform: scaleX(-1);
-      }
     }
 
     &.next {
       right: env(safe-area-inset-right);
       background-image: url("../../assets/media_navigation_next.svg");
       background-position: calc(100% - 1.25rem) calc(50% - 2rem);
-
-      &[dir="rtl"] {
-        right: auto;
-        left: env(safe-area-inset-left);
-        transform: scaleX(-1);
-      }
     }
 
     &.inline {

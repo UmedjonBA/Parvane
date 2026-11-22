@@ -68,7 +68,7 @@ function SeenByModal({
       className={buildClassName(styles.modal, 'narrow')}
       title={`Seen by ${memberIds?.length} users`}
     >
-      <div dir={lang.isRtl ? 'rtl' : undefined}>
+      <div>
         {memberIds && memberIds.map((userId) => (
           <ListItem
             key={userId}

@@ -67,16 +67,12 @@ const ArchivedChats = ({
           isScrolled && 'left-header-shadow',
         )}
       >
-        {lang.isRtl && <div className="DropdownMenuFiller" />}
         <Button
           round
           size="smaller"
           color="translucent"
           onClick={onReset}
           ariaLabel="Return to chat list"
-          className={buildClassName(
-            lang.isRtl && 'rtl',
-          )}
           iconName="arrow-left"
         />
         {shouldRenderTitle && <h3 className={titleClassNames}>{lang('ArchivedChats')}</h3>}

@@ -189,12 +189,12 @@ const ReactionSelector: FC<OwnProps> = ({
 
   return (
     <div className={buildClassName(cn('&'), className)} ref={ref}>
-      <div className={cn('bubble-small', lang.isRtl && 'isRtl')} />
+      <div className={cn('bubble-small')} />
       <div className={cn('items-wrapper')}>
-        <div className={cn('bubble-big', lang.isRtl && 'isRtl')} />
+        <div className={cn('bubble-big')} />
         <div className={cn('items')}>
           {hintText && <div className={cn('hint')}>{hintText}</div>}
-          <div className={cn('reactions')} dir={lang.isRtl ? 'rtl' : undefined}>
+          <div className={cn('reactions')}>
             {reactionsToRender.map((reaction, i) => (
               'reaction' in reaction ? (
                 <ReactionSelectorReaction

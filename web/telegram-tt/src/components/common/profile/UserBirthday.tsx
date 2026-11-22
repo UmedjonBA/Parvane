@@ -182,7 +182,7 @@ const UserBirthday = ({
         isStatic={isStatic}
         onSecondaryIconClick={handleOpenGiftModal}
       >
-        <div className="title" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="title">
           {renderText(value)}
         </div>
         <span className="subtitle">{lang(isToday ? 'ProfileBirthdayToday' : 'ProfileBirthday')}</span>

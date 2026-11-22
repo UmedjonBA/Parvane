@@ -4,7 +4,6 @@ import { IS_TEST } from '../../config';
 import buildClassName from '../../util/buildClassName';
 
 import useAppLayout from '../../hooks/useAppLayout';
-import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Icon from '../common/icons/Icon';
@@ -56,7 +55,6 @@ const MenuItem = (props: MenuItemProps) => {
     onContextMenu,
   } = props;
 
-  const lang = useLang();
   const { isTouchScreen } = useAppLayout();
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (disabled || !onClick) {
@@ -115,7 +113,6 @@ const MenuItem = (props: MenuItemProps) => {
         title={ariaLabel}
         target={target || (href.startsWith(window.location.origin) || IS_TEST ? '_self' : '_blank')}
         rel={rel}
-        dir={lang.isRtl ? 'rtl' : undefined}
         onClick={onClick}
         onMouseDown={handleMouseDown}
       >
@@ -135,7 +132,6 @@ const MenuItem = (props: MenuItemProps) => {
       onContextMenu={onContextMenu}
       aria-label={ariaLabel}
       title={ariaLabel}
-      dir={lang.isRtl ? 'rtl' : undefined}
     >
       {content}
     </div>

@@ -7,8 +7,6 @@ import { memo } from '../../lib/teact/teact';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import buildClassName from '../../util/buildClassName';
 
-import useLang from '../../hooks/useLang';
-
 import AnimatedCounter from '../common/AnimatedCounter';
 
 type OwnProps = {
@@ -68,7 +66,6 @@ const InputText = ({
   onPaste,
   onClick,
 }: OwnProps) => {
-  const lang = useLang();
   const labelText = error || success || label;
   const fullClassName = buildClassName(
     'input-group',
@@ -82,7 +79,7 @@ const InputText = ({
   );
 
   return (
-    <div className={fullClassName} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className={fullClassName}>
       <input
         ref={ref}
         className="form-control"

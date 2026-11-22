@@ -46,11 +46,6 @@
     background: none;
   }
 
-  &[dir="rtl"] .right-badge {
-    margin-right: auto;
-    margin-left: 0;
-  }
-
   .icon {
     margin-right: 2rem;
     font-size: 1.5rem;
@@ -101,18 +96,6 @@
     font-weight: normal;
     line-height: normal;
     color: var(--color-primary);
-  }
-
-  &[dir="rtl"] {
-    .icon {
-      margin-right: 0;
-      margin-left: 2rem;
-    }
-
-    .menu-item-name {
-      margin-right: 0;
-      margin-left: 2rem;
-    }
   }
 
   .submenu-icon {

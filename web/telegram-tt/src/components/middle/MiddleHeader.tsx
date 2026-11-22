@@ -307,7 +307,6 @@ const MiddleHeader = ({
               isSavedDialog={isSavedDialog}
               storyViewerOrigin={StoryViewerOrigin.MiddleHeaderAvatar}
               emojiStatusSize={EMOJI_STATUS_SIZE}
-              noRtl
               onEmojiStatusClick={handleUserStatusClick}
             />
           ) : (
@@ -327,7 +326,6 @@ const MiddleHeader = ({
               storyViewerOrigin={StoryViewerOrigin.MiddleHeaderAvatar}
               emojiStatusSize={EMOJI_STATUS_SIZE}
               onEmojiStatusClick={handleChannelStatusClick}
-              noRtl
             />
           )}
         </div>

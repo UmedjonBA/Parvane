@@ -213,7 +213,7 @@ const WebPage = ({
     <PeerColorWrapper
       className={className}
       data-initial={(siteName || displayUrl)[0]}
-      dir={lang.isRtl ? 'rtl' : 'auto'}
+      dir="auto"
       onClick={handleContainerClick}
     >
       <div className={buildClassName(

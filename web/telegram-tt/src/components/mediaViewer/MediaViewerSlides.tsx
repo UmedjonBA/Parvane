@@ -764,7 +764,6 @@ const MediaViewerSlides: FC<OwnProps> = ({
           type="button"
           className={`navigation prev ${isVideo && !isGif && 'inline'}`}
           aria-label={lang('AccDescrPrevious')}
-          dir={lang.isRtl ? 'rtl' : undefined}
         />
       )}
       {hasNext && !isScaled && !IS_TOUCH_ENV && (
@@ -772,7 +771,6 @@ const MediaViewerSlides: FC<OwnProps> = ({
           type="button"
           className={`navigation next ${isVideo && !isGif && 'inline'}`}
           aria-label={lang('Next')}
-          dir={lang.isRtl ? 'rtl' : undefined}
         />
       )}
     </div>

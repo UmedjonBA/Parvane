@@ -124,7 +124,7 @@ const DeleteChatModal = ({
 
   function renderHeader() {
     return (
-      <div className="modal-header" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="modal-header">
         <Avatar
           size="tiny"
           peer={chat}

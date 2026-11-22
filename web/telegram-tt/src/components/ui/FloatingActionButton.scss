@@ -21,9 +21,4 @@
   &.revealed {
     transform: translateY(0);
   }
-
-  &[dir="rtl"] {
-    right: auto;
-    left: 1rem;
-  }
 }

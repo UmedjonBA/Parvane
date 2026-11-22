@@ -15,7 +15,6 @@ type OwnProps = {
   text: string;
   className?: string;
   children?: TeactNode;
-  isRtl?: boolean;
   shouldSkipModal?: boolean;
   tryInstantView?: boolean;
   previewId?: string;
@@ -31,7 +30,6 @@ const SafeLink = ({
   text,
   className,
   children,
-  isRtl,
   shouldSkipModal,
   tryInstantView,
   previewId,
@@ -89,7 +87,7 @@ const SafeLink = ({
       className={classNames}
       onClick={handleClick}
       onAuxClick={handleAuxClick}
-      dir={isRtl ? 'rtl' : 'auto'}
+      dir="auto"
       data-entity-type={entityType}
     >
       {content}

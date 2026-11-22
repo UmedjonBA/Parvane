@@ -210,24 +210,12 @@
     left: 0;
     background-image: url("../../../assets/media_navigation_previous.svg");
     background-position: 1.25rem 50%;
-
-    &[dir="rtl"] {
-      right: 0;
-      left: auto;
-      transform: scaleX(-1);
-    }
   }
 
   &_next {
     right: 0;
     background-image: url("../../../assets/media_navigation_next.svg");
     background-position: calc(100% - 1.25rem) 50%;
-
-    &[dir="rtl"] {
-      right: auto;
-      left: 0;
-      transform: scaleX(-1);
-    }
   }
 }
 
@@ -251,13 +239,6 @@
   @include mixins.with-vt-type('profileAvatar');
 
   &:dir(rtl) {
-    .status {
-      unicode-bidi: plaintext;
-      text-align: right;
-    }
-  }
-
-  &[dir="rtl"] {
     .status {
       unicode-bidi: plaintext;
       text-align: right;

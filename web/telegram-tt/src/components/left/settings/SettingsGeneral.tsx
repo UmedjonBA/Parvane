@@ -72,7 +72,7 @@ const SettingsGeneral: FC<OwnProps & StateProps> = ({
 
       {keyboardSendOptions && (
         <>
-          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('SettingsKeyboard')}</IslandTitle>
+          <IslandTitle>{lang('SettingsKeyboard')}</IslandTitle>
           <Island>
             <RadioGroup
               name="keyboard-send-settings"

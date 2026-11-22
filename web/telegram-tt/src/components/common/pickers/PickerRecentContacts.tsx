@@ -49,7 +49,7 @@ const PickerRecentContacts = ({
   }
 
   return (
-    <div className={buildClassName(styles.root, className)} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className={buildClassName(styles.root, className)}>
       <div ref={containerRef} className={styles.scrollContainer}>
         {displayIds.map((peerId) => {
           const global = getGlobal();

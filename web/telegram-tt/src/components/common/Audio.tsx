@@ -336,7 +336,7 @@ const Audio = ({
   function renderSecondLine() {
     if (isVoice) {
       return (
-        <div className="meta" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="meta">
           {formatMediaDuration((voice || video)!.duration)}
         </div>
       );
@@ -345,7 +345,7 @@ const Audio = ({
     const { performer } = audio!;
 
     return (
-      <div className="meta" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="meta">
         {formatMediaDuration(duration)}
         <span className="bullet">&bull;</span>
         {performer && <span className="performer" title={performer}>{renderText(performer)}</span>}
@@ -394,7 +394,7 @@ const Audio = ({
         </div>
 
         {withSeekline && (
-          <div className="meta search-result" dir={lang.isRtl ? 'rtl' : undefined}>
+          <div className="meta search-result">
             <span className="duration with-seekline" dir="auto">
               {playProgress < 1 && formatMediaDuration(duration * playProgress, duration)}
             </span>
@@ -417,7 +417,6 @@ const Audio = ({
           color={coverBlobUrl ? 'translucent-white' : 'primary'}
           ariaLabel={isPlaying ? 'Pause audio' : 'Play audio'}
           onClick={handleButtonClick}
-          isRtl={lang.isRtl}
           backgroundImage={coverBlobUrl}
           nonInteractive={isInOneTimeModal}
         >
@@ -444,7 +443,7 @@ const Audio = ({
     <div
       ref={containerRef}
       className={fullClassName}
-      dir={lang.isRtl ? 'rtl' : 'ltr'}
+      dir="ltr"
       onMouseDown={handleBeforeContextMenu}
       onContextMenu={contextActions ? handleContextMenu : undefined}
     >
@@ -584,13 +583,12 @@ function renderAudio(
     title, performer, fileName,
   } = audio;
   const showSeekline = isPlaying || (playProgress > 0 && playProgress < 1);
-  const { isRtl } = lang;
 
   return (
     <div className="content">
       <p className="title" dir="auto" title={title}>{renderText(title || fileName)}</p>
       {showSeekline && (
-        <div className="meta" dir={isRtl ? 'rtl' : undefined}>
+        <div className="meta">
           <span className="duration with-seekline" dir="auto">
             {formatMediaDuration(duration * playProgress, duration)}
           </span>
@@ -601,7 +599,7 @@ function renderAudio(
         <AnimatedFileSize className="meta" size={audio.size} progress={progress} />
       )}
       {!showSeekline && !showProgress && (
-        <div className="meta" dir={isRtl ? 'rtl' : undefined}>
+        <div className="meta">
           <span className="duration" dir="auto">{formatMediaDuration(duration)}</span>
           {performer && (
             <>

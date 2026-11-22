@@ -547,7 +547,6 @@ const MediaViewer = ({
     <>
       <div
         className="media-viewer-head"
-        dir={lang.isRtl ? 'rtl' : undefined}
         data-tauri-drag-region={IS_TAURI && IS_MAC_OS ? true : undefined}
       >
         {isMobile && (

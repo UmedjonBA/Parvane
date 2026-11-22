@@ -26,9 +26,7 @@
   }
 
   &-slideOptimized,
-  &-slideOptimizedBackwards,
-  &-slideOptimizedRtl,
-  &-slideOptimizedRtlBackwards {
+  &-slideOptimizedBackwards {
     transform: translate3d(0, 0, 0);
     #root & > .Transition_slide {
       position: absolute;
@@ -54,28 +52,6 @@
   &-slideBackwards {
     > .Transition_slide-to {
       transform: translateX(-100%);
-      animation: slide-out-backwards var(--slide-transition);
-    }
-
-    > .Transition_slide-from {
-      animation: slide-in-backwards var(--slide-transition);
-    }
-  }
-
-  &-slideRtl {
-    > .Transition_slide-to {
-      transform: translateX(-100%);
-      animation: slide-in var(--slide-transition);
-    }
-
-    > .Transition_slide-from {
-      animation: slide-out var(--slide-transition);
-    }
-  }
-
-  &-slideRtlBackwards {
-    > .Transition_slide-to {
-      transform: translateX(100%);
       animation: slide-out-backwards var(--slide-transition);
     }
 

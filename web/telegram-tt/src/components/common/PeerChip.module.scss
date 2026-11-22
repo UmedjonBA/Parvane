@@ -129,24 +129,4 @@
       border-radius: 0.625rem;
     }
   }
-
-  &[dir="rtl"] {
-    padding-right: 0;
-    padding-left: 1rem;
-
-    &.minimized {
-      padding-right: 0;
-      padding-left: 0;
-    }
-
-    .name {
-      margin-right: 0.5rem;
-      margin-left: 0;
-    }
-
-    .remove {
-      right: 0;
-      left: auto;
-    }
-  }
 }

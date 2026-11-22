@@ -164,37 +164,6 @@
     }
   }
 
-  &[dir="rtl"] {
-    .Radio-main {
-      text-align: right;
-
-      &::before {
-        right: 1.0625rem;
-        left: auto;
-      }
-
-      &::after {
-        right: 1.375rem;
-        left: auto;
-      }
-    }
-
-    .label,
-    .subLabel {
-      text-align: right;
-    }
-
-    &.loading .Spinner {
-      right: 1.0625rem;
-      left: auto;
-    }
-
-    &.onlyInput .Radio-main::after {
-      right: 0.3125rem;
-      left: auto;
-    }
-  }
-
   &.onlyInput {
     position: relative;
 

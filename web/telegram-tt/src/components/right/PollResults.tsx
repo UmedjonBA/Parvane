@@ -9,7 +9,6 @@ import {
 import { renderTextWithEntities } from '../common/helpers/renderTextWithEntities';
 
 import useHistoryBack from '../../hooks/useHistoryBack';
-import useOldLang from '../../hooks/useOldLang';
 
 import { IslandOutside } from '../gili/layout/Island';
 import Loading from '../ui/Loading';
@@ -35,8 +34,6 @@ const PollResults = ({
   poll,
   onClose,
 }: OwnProps & StateProps) => {
-  const lang = useOldLang();
-
   useHistoryBack({
     isActive,
     onBack: onClose,
@@ -52,7 +49,7 @@ const PollResults = ({
   }
 
   return (
-    <div className="PollResults custom-scroll" dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className="PollResults custom-scroll">
       <IslandOutside className="poll-results-content">
         <h3 className="poll-question" dir="auto">
           {renderTextWithEntities({

@@ -98,7 +98,6 @@ const FileResults: FC<OwnProps & StateProps> = ({
           {shouldDrawDateDivider && (
             <p
               className="section-heading"
-              dir={lang.isRtl ? 'rtl' : undefined}
               key={message.date}
             >
               {formatMonthAndYear(lang, new Date(message.date * 1000))}

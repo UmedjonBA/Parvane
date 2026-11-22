@@ -166,7 +166,7 @@ function SettingsPerformance({
 
   return (
     <div className="settings-content custom-scroll">
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+      <IslandTitle>
         {lang('SettingsPerformanceSliderTitle')}
       </IslandTitle>
       <Island>
@@ -176,7 +176,7 @@ function SettingsPerformance({
           onChange={handleAnimationLevelChange}
         />
       </Island>
-      <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
+      <IslandDescription>
         {lang('SettingsPerformanceSliderSubtitle')}
       </IslandDescription>
 

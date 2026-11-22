@@ -168,7 +168,6 @@ export type LangFn = {
   timeFormat: TimeFormat;
   internalFormatters: LangFormatters;
   // Письмо справа налево не поддерживается: флаг никогда не выставляется, остался для разметки форка
-  isRtl?: boolean;
   rawCode: string;
   code: string;
   languageInfo: InterfaceLanguage;

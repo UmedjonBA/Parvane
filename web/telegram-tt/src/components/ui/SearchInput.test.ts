@@ -13,7 +13,7 @@ import { SEARCH_FIELD_PROPS } from '../../util/searchField';
 
 const NO_COMPONENT = { default: () => undefined };
 
-vi.mock('../../hooks/useLang', () => ({ default: () => Object.assign((key: string) => key, { isRtl: false }) }));
+vi.mock('../../hooks/useLang', () => ({ default: () => (key: string) => key }));
 vi.mock('../../hooks/useOldLang', () => ({ default: () => (key: string) => key }));
 vi.mock('../../hooks/useInputFocusOnOpen', () => ({ default: () => undefined }));
 vi.mock('../common/icons/Icon', () => NO_COMPONENT);

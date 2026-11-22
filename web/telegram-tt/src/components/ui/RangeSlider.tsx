@@ -4,8 +4,6 @@ import { memo, useCallback, useMemo } from '../../lib/teact/teact';
 
 import buildClassName from '../../util/buildClassName';
 
-import useLang from '../../hooks/useLang';
-
 import './RangeSlider.scss';
 
 type OwnProps = {
@@ -39,7 +37,6 @@ const RangeSlider: FC<OwnProps> = ({
   onChange,
   isCenteredLayout,
 }) => {
-  const lang = useLang();
   const handleChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     onChange(Number(event.currentTarget.value));
   }, [onChange]);
@@ -64,7 +61,7 @@ const RangeSlider: FC<OwnProps> = ({
   function renderTopRow() {
     if (isCenteredLayout) {
       return (
-        <div className="slider-top-row" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="slider-top-row">
           {!options && (
             <>
               <span className="value-min" dir="auto">{min}</span>
@@ -81,7 +78,7 @@ const RangeSlider: FC<OwnProps> = ({
     }
 
     return (
-      <div className="slider-top-row" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="slider-top-row">
         <span className="label" dir="auto">{label}</span>
         {!options && (
           <span className="value" dir="auto">{renderValue ? renderValue(value) : value}</span>

@@ -57,7 +57,6 @@ const EmptyFolder: FC<OwnProps & StateProps> = ({
           pill
           iconName="settings"
           onClick={handleEditFolder}
-          isRtl={lang.isRtl}
         >
           <div className={styles.buttonText}>
             {lang('ChatList.EmptyChatListEditFilter')}

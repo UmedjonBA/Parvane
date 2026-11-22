@@ -7,7 +7,6 @@ import buildClassName from '../../util/buildClassName';
 import { throttleWithTickEnd } from '../../util/schedulers';
 
 import useForceUpdate from '../../hooks/useForceUpdate';
-import useLang from '../../hooks/useLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 
 import styles from './AnimatedCounter.module.scss';
@@ -34,8 +33,6 @@ const AnimatedCounter: FC<OwnProps> = ({
   isDisabled,
   ref,
 }) => {
-  const { isRtl } = useLang();
-
   const prevText = usePreviousDeprecated(text);
   const forceUpdate = useForceUpdate();
 
@@ -60,7 +57,7 @@ const AnimatedCounter: FC<OwnProps> = ({
   }, [shouldAnimate, text]);
 
   return (
-    <span ref={ref} className={buildClassName(className, !isDisabled && styles.root)} dir={isRtl ? 'rtl' : undefined}>
+    <span ref={ref} className={buildClassName(className, !isDisabled && styles.root)}>
       {characters}
     </span>
   );

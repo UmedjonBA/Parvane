@@ -11,7 +11,6 @@ import { REM } from './helpers/mediaDimensions';
 
 import { useTransitionActiveKey } from '../../hooks/animations/useTransitionActiveKey';
 import useForceUpdate from '../../hooks/useForceUpdate';
-import useLang from '../../hooks/useLang';
 import usePrevious from '../../hooks/usePrevious';
 import useResizeObserver from '../../hooks/useResizeObserver';
 import useSyncEffect from '../../hooks/useSyncEffect';
@@ -74,8 +73,6 @@ const PremiumProgress: FC<OwnProps> = ({
   const prevLeftText = usePrevious(leftText);
   const prevRightText = usePrevious(rightText);
   const prevIsNegative = usePrevious(isNegative);
-
-  const lang = useLang();
 
   const BEAK_WIDTH_PX = 28;
   const PROGRESS_BORDER_RADIUS_PX = REM;
@@ -302,7 +299,7 @@ const PremiumProgress: FC<OwnProps> = ({
                 >
                   {floatingBadgeIcon && <Icon name={floatingBadgeIcon} className={styles.floatingBadgeIcon} />}
                   {floatingBadgeText && (
-                    <div className={styles.floatingBadgeValue} dir={lang.isRtl ? 'rtl' : undefined}>
+                    <div className={styles.floatingBadgeValue}>
                       {floatingBadgeText}
                     </div>
                   )}

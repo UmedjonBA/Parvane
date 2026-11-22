@@ -308,7 +308,6 @@ const EmbeddedMessage = ({
         composerForwardSenders && 'is-input-forward',
         suggestedPostInfo && 'is-suggested-post',
       )}
-      dir={lang.isRtl ? 'rtl' : undefined}
       onClick={onClick}
     >
       <div className="hover-effect" />

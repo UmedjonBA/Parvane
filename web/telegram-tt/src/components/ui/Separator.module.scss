@@ -18,16 +18,4 @@
   &:not(:empty)::after {
     margin-left: 0.5rem;
   }
-
-  &[dir="rtl"] {
-    &:not(:empty)::before {
-      margin-right: 0;
-      margin-left: 0.5rem;
-    }
-
-    &:not(:empty)::after {
-      margin-right: 0.5rem;
-      margin-left: 0;
-    }
-  }
 }

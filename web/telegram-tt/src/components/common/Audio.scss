@@ -14,10 +14,6 @@
 
     .message-content.no-text & {
       margin-bottom: calc(0.8125rem - 0.375rem);
-
-      &[dir="rtl"] {
-        margin-bottom: 1.5rem;
-      }
     }
   }
 
@@ -448,47 +444,10 @@
       top: 0.1875rem;
       left: 0.1875rem;
     }
-
-    &[dir="rtl"] {
-      .media-loading {
-        right: 0;
-        left: auto !important;
-      }
-    }
   }
 
   .ProgressSpinner.size-s svg {
     width: 2.25rem;
     height: 2.25rem;
-  }
-
-  &[dir="rtl"] {
-    &:last-child {
-      margin-bottom: 0.625rem;
-    }
-
-    .toggle-play {
-      margin-right: 0;
-      margin-left: 0.5rem;
-
-      &.smaller {
-        margin-right: 0;
-        margin-left: 0.75rem;
-      }
-    }
-
-    .meta.duration.with-seekline {
-      margin-inline-start: 0.625rem;
-    }
-
-    .content,
-    .duration {
-      text-align: right;
-    }
-
-    .download-button {
-      right: 2rem;
-      left: auto;
-    }
   }
 }

@@ -313,34 +313,6 @@
     }
   }
 
-  &[dir="rtl"] {
-    .info {
-      .LastMessageMeta {
-        margin-right: auto;
-        margin-left: 0;
-      }
-
-      .title,
-      .subtitle {
-        padding-right: 0;
-        padding-left: 0.125rem;
-      }
-
-      .icon-muted {
-        margin-right: 0.25rem;
-        margin-left: 0;
-      }
-
-      .last-message,
-      .typing-status {
-        unicode-bidi: plaintext;
-        padding-right: 0;
-        padding-left: 0.5rem;
-        text-align: right;
-      }
-    }
-  }
-
   // Super specific selector to override the same in `ListItem`
   @media (min-width: 600px) {
     &:not(.has-ripple):not(.is-static),

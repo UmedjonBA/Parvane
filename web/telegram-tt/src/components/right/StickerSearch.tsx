@@ -97,7 +97,7 @@ const StickerSearch = ({
   }
 
   return (
-    <div ref={containerRef} className="StickerSearch custom-scroll" dir={lang.isRtl ? 'rtl' : undefined}>
+    <div ref={containerRef} className="StickerSearch custom-scroll">
       {renderContent()}
     </div>
   );

@@ -1,7 +1,5 @@
 import type { FC } from '../../lib/teact/teact';
 
-import useOldLang from '../../hooks/useOldLang';
-
 import Button from './Button';
 
 import './ShowMoreButton.scss';
@@ -21,15 +19,12 @@ const ShowMoreButton: FC<OwnProps> = ({
   isLoading,
   onClick,
 }) => {
-  const lang = useOldLang();
-
   return (
     <Button
       className="ShowMoreButton"
       color="translucent"
       isText
       isLoading={isLoading}
-      isRtl={lang.isRtl}
       onClick={onClick}
       iconName="down"
     >

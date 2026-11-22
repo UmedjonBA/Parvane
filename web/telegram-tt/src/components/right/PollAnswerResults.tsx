@@ -112,7 +112,7 @@ const PollAnswerResults: FC<OwnProps & StateProps> = ({
 
   return (
     <div className="PollAnswerResults">
-      <div className="answer-head" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="answer-head">
         <span className="answer-title" dir="auto">
           {lang('PollResultsAnswerTitle', {
             answer: renderTextWithEntities({ text: text.text, entities: text.entities }),

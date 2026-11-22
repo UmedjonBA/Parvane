@@ -341,7 +341,7 @@ const ProfileInfo = ({
           letterClassName={styles.topicIconTitle}
           noLoopLimit
         />
-        <h3 className={styles.topicTitle} dir={lang.isRtl ? 'rtl' : undefined}>{renderText(topic!.title)}</h3>
+        <h3 className={styles.topicTitle}>{renderText(topic!.title)}</h3>
         <p className={styles.topicMessagesCounter}>
           {messagesCount ? oldLang('Chat.Title.Topic', messagesCount, 'i') : oldLang('lng_forum_no_messages')}
         </p>
@@ -496,7 +496,6 @@ const ProfileInfo = ({
         profileColorSet && !isExpanded && `--rating-text-color: ${profileColorSet?.bgColors[0]}`,
         createVtnStyle('profileInfo', true),
       )}
-      dir={lang.isRtl ? 'rtl' : undefined}
     >
       {hasPatternBackground && (
         <RadialPatternBackground
@@ -542,7 +541,7 @@ const ProfileInfo = ({
           )}
           <Transition
             activeKey={currentPhotoIndex}
-            name={resolveTransitionName('slide', animationLevel, !hasSlideAnimation, lang.isRtl)}
+            name={resolveTransitionName('slide', animationLevel, !hasSlideAnimation)}
           >
             {renderPhoto}
           </Transition>
@@ -550,7 +549,6 @@ const ProfileInfo = ({
           {!isFirst && (
             <button
               type="button"
-              dir={lang.isRtl ? 'rtl' : undefined}
               className={buildClassName(styles.navigation, styles.navigation_prev)}
               aria-label={oldLang('AccDescrPrevious')}
               onClick={selectPreviousMedia}
@@ -559,7 +557,6 @@ const ProfileInfo = ({
           {!isLast && (
             <button
               type="button"
-              dir={lang.isRtl ? 'rtl' : undefined}
               className={buildClassName(styles.navigation, styles.navigation_next)}
               aria-label={oldLang('Next')}
               onClick={selectNextMedia}
@@ -583,7 +580,7 @@ const ProfileInfo = ({
 
       <div
         className={styles.info}
-        dir={lang.isRtl ? 'rtl' : 'auto'}
+        dir="auto"
         style={createVtnStyle('info', true)}
       >
         {(user || chat) && (

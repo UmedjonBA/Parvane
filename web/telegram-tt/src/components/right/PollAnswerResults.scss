@@ -39,13 +39,6 @@
       margin-right: 1.75rem;
     }
 
-    &[dir="rtl"] {
-      .ChatInfo .Avatar.size-tiny {
-        margin-right: 0;
-        margin-left: 1.75rem;
-      }
-    }
-
     .vote-date {
       font-size: 0.875rem;
       color: var(--color-text-secondary);
@@ -54,13 +47,6 @@
 
   .ShowMoreButton {
     margin: 0.25rem 0 0;
-
-    &[dir="rtl"] {
-      .icon-down {
-        margin-right: 0;
-        margin-left: 2rem;
-      }
-    }
   }
 
   .icon-down {

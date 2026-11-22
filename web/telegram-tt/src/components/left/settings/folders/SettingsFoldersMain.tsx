@@ -226,7 +226,6 @@ const SettingsFoldersMain = ({
             pill
             fluid
             onClick={handleCreateFolder}
-            isRtl={lang.isRtl}
             iconName="add"
           >
             {lang('CreateNewFilter')}
@@ -234,7 +233,7 @@ const SettingsFoldersMain = ({
         )}
       </IslandOutside>
 
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('Filters')}</IslandTitle>
+      <IslandTitle>{lang('Filters')}</IslandTitle>
       <Island>
         <div className="settings-sortable-container" style={`height: ${(folderIds?.length || 0) * FOLDER_HEIGHT_PX}px`}>
           {userFolders?.length ? userFolders.map((folder, i) => {
@@ -253,7 +252,7 @@ const SettingsFoldersMain = ({
                   onDrag={handleDrag}
                   onDragEnd={handleDragEnd}
                   style={`top: ${isDragged ? draggedTop : top}px;`}
-                  knobStyle={`${lang.isRtl ? 'left' : 'right'}: 0.375rem;`}
+                  knobStyle="right: 0.375rem;"
                   isDisabled={!isActive}
                 >
                   <ListItem
@@ -285,7 +284,7 @@ const SettingsFoldersMain = ({
                 onDrag={handleDrag}
                 onDragEnd={handleDragEnd}
                 style={`top: ${isDragged ? draggedTop : top}px;`}
-                knobStyle={`${lang.isRtl ? 'left' : 'right'}: ${shouldRenderColor ? '4rem' : '2.5rem'};`}
+                knobStyle={`right: ${shouldRenderColor ? '4rem' : '2.5rem'};`}
                 isDisabled={isBlocked || !isActive}
               >
                 <ListItem
@@ -359,7 +358,7 @@ const SettingsFoldersMain = ({
 
       {(recommendedChatFolders && Boolean(recommendedChatFolders.length)) && (
         <>
-          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          <IslandTitle>
             {lang('FilterRecommended')}
           </IslandTitle>
           <Island>
@@ -387,7 +386,6 @@ const SettingsFoldersMain = ({
                     size="tiny"
                     pill
                     fluid
-                    isRtl={lang.isRtl}
                   >
                     {lang('Add')}
                   </Button>

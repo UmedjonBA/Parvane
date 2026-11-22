@@ -10,7 +10,6 @@ import buildClassName from '../../util/buildClassName';
 import { copyTextToClipboard } from '../../util/clipboard';
 import { isBetween } from '../../util/math';
 
-import useLang from '../../hooks/useLang';
 import useOldLang from '../../hooks/useOldLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 
@@ -48,7 +47,6 @@ const ManageUsernames: FC<OwnProps> = ({
     sortChatUsernames,
   } = getActions();
   const oldLang = useOldLang();
-  const lang = useLang();
   const [usernameForConfirm, setUsernameForConfirm] = useState<ApiUsername | undefined>();
 
   const usernameList = useMemo(() => usernames.map(({ username }) => username), [usernames]);
@@ -148,7 +146,7 @@ const ManageUsernames: FC<OwnProps> = ({
 
   return (
     <>
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+      <IslandTitle>
         {oldLang('lng_usernames_subtitle')}
       </IslandTitle>
       <Island className={styles.container}>
@@ -203,7 +201,7 @@ const ManageUsernames: FC<OwnProps> = ({
           })}
         </div>
       </Island>
-      <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
+      <IslandDescription>
         {oldLang('lng_usernames_description')}
       </IslandDescription>
       <ConfirmDialog

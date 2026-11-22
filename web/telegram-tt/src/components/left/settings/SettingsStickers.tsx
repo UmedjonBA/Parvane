@@ -160,7 +160,7 @@ const SettingsStickers: FC<OwnProps & StateProps> = ({
         )}
       </Island>
 
-      <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+      <IslandTitle>
         {lang('InstalledStickers.DynamicPackOrder')}
       </IslandTitle>
       <Island>
@@ -176,7 +176,7 @@ const SettingsStickers: FC<OwnProps & StateProps> = ({
 
       {stickerSets && (
         <>
-          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          <IslandTitle>
             {lang('ChooseStickerMyStickerSets')}
           </IslandTitle>
           <Island>

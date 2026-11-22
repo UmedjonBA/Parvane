@@ -187,7 +187,7 @@ const StickerSetModal: FC<OwnProps & StateProps> = ({
     const fullClassName = buildClassName('modal-header', !shouldHideTopBorder && 'with-top-border');
 
     return (
-      <div className={fullClassName} dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className={fullClassName}>
         <Button
           round
           color="translucent"

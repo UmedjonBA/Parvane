@@ -60,7 +60,6 @@ type BaseOwnProps = {
   emojiStatusSize?: number;
   noStatusOrTyping?: boolean;
   noUserStatus?: boolean;
-  noRtl?: boolean;
   chatMemberOriginId?: string;
   chatMember?: ApiChatMember;
   isSavedDialog?: boolean;
@@ -114,7 +113,6 @@ const PrivateChatInfo = ({
   noEmojiStatus,
   noFake,
   noVerified,
-  noRtl,
   user,
   userStatus,
   self,
@@ -294,7 +292,6 @@ const PrivateChatInfo = ({
   return (
     <div
       className={buildClassName('ChatInfo', className)}
-      dir={!noRtl && lang.isRtl ? 'rtl' : undefined}
       onClick={onClick}
     >
       {isSavedDialog && self && (

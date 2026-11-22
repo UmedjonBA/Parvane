@@ -130,7 +130,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
             ? 'Channel.Management.AddModeratorHelp'
             : 'Group.Management.AddModeratorHelp')}
         </IslandDescription>
-        <Island dir={lang.isRtl ? 'rtl' : undefined}>
+        <Island>
           {adminMembers.map((member) => (
             <ListItem
               key={member.userId}

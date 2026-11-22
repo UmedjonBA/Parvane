@@ -24,10 +24,6 @@
   --offset: calc(0% - var(--half-size) + var(--spacing));
 }
 
-.root[dir="rtl"] .avatar {
-  --offset: calc(100% + var(--half-size) - var(--spacing));
-}
-
 .badge {
   position: absolute;
   right: -1px;

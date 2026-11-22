@@ -117,7 +117,6 @@ const QuickPreviewModalHeader = ({
               withUpdatingStatus
               isSavedDialog={isSavedDialog}
               emojiStatusSize={EMOJI_STATUS_SIZE}
-              noRtl
             />
           ) : (
             <GroupChatInfo
@@ -134,7 +133,6 @@ const QuickPreviewModalHeader = ({
               withStory={false}
               isSavedDialog={isSavedDialog}
               emojiStatusSize={EMOJI_STATUS_SIZE}
-              noRtl
             />
           )}
         </div>

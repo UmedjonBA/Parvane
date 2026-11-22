@@ -53,7 +53,7 @@ function PaidMessagePrice({
 
   return (
     <>
-      <h4 className="settings-item-header" dir={lang.isRtl ? 'rtl' : undefined}>
+      <h4 className="settings-item-header">
         {lang('SectionTitleStarsForForMessages')}
       </h4>
       <PaidMessageSlider
@@ -80,7 +80,7 @@ function PaidMessagePrice({
         </Button>
       )}
       {canChangeChargeForMessages && (
-        <p className="settings-item-description-larger" dir={lang.isRtl ? 'rtl' : undefined}>
+        <p className="settings-item-description-larger">
           {lang(isGroupChat ? 'SetPriceGroupDescription' : 'SectionDescriptionStarsForForMessages', {
             percent: formatPercent(starsPaidMessageCommissionPermille * 100),
             amount: formatCurrencyAsString(

@@ -70,7 +70,7 @@ const SymbolMenuFooter: FC<OwnProps> = ({
   }
 
   return (
-    <div className="SymbolMenu-footer" onClick={stopPropagation} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className="SymbolMenu-footer" onClick={stopPropagation}>
       {/* Parvane: поиск локальный — встроенные и установленные наборы, сохранённые GIF (provider searchStickers/searchGifs) */}
       {activeTab !== SymbolMenuTabs.Emoji && activeTab !== SymbolMenuTabs.CustomEmoji
         && canSearch && (

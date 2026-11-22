@@ -3,8 +3,6 @@ import { memo } from '../../lib/teact/teact';
 
 import type { ConnectionStatus } from '../../hooks/useConnectionStatus';
 
-import useOldLang from '../../hooks/useOldLang';
-
 import Button from '../ui/Button';
 import Spinner from '../ui/Spinner';
 import Transition from '../ui/Transition';
@@ -22,10 +20,8 @@ const ConnectionStatusOverlay: FC<OwnProps> = ({
   connectionStatusText,
   onClick,
 }) => {
-  const lang = useOldLang();
-
   return (
-    <div id="ConnectionStatusOverlay" dir={lang.isRtl ? 'rtl' : undefined} onClick={onClick}>
+    <div id="ConnectionStatusOverlay" onClick={onClick}>
       <Spinner color="black" />
       <div className="state-text">
         <Transition activeKey={connectionStatus} name="slideFade">

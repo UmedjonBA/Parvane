@@ -404,7 +404,7 @@ const ChatExtra = ({
           handleUsernameClick(mainUsername, isChat);
         }}
       >
-        <span className="title" dir={lang.isRtl ? 'rtl' : undefined}>
+        <span className="title">
           {formatUsername(mainUsername.username, isChat)}
         </span>
         <span className="subtitle">
@@ -454,7 +454,7 @@ const ChatExtra = ({
             onClick={handlePhoneClick}
             style={createVtnStyle('phone')}
           >
-            <span className="title" dir={lang.isRtl ? 'rtl' : undefined}>{formattedNumber}</span>
+            <span className="title">{formattedNumber}</span>
             <span className="subtitle">{oldLang('Phone')}</span>
           </ListItem>
         )}
@@ -469,7 +469,7 @@ const ChatExtra = ({
             allowSelection
             style={createVtnStyle('description')}
           >
-            <span className="title word-break allow-selection" dir={lang.isRtl ? 'rtl' : undefined}>
+            <span className="title word-break allow-selection">
               {
                 renderText(description, [
                   'br',
@@ -574,7 +574,6 @@ const ChatExtra = ({
                 isNoteCollapsed && styles.noteTextCollapsed,
               )}
               style={createVtnStyle('noteText', true)}
-              dir={lang.isRtl ? 'rtl' : undefined}
               onClick={canExpandNote ? handleExpandNote : undefined}
             >
               {renderTextWithEntities({

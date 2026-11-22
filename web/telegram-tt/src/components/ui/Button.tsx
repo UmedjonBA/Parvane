@@ -51,7 +51,6 @@ export type OwnProps = {
   ripple?: boolean;
   faded?: boolean;
   tabIndex?: number;
-  isRtl?: boolean;
   isShiny?: boolean;
   isRectangular?: boolean;
   withPremiumGradient?: boolean;
@@ -111,7 +110,6 @@ const Button = ({
   ripple,
   faded,
   tabIndex,
-  isRtl,
   isRectangular,
   noPreventDefault,
   shouldStopPropagation,
@@ -201,7 +199,7 @@ const Button = ({
     if (isLoading) {
       return (
         <div>
-          <span dir={isRtl ? 'auto' : undefined}>{lang('Cache.ClearProgress')}</span>
+          <span>{lang('Cache.ClearProgress')}</span>
           <Spinner color={isText ? 'blue' : 'white'} />
         </div>
       );
@@ -246,7 +244,6 @@ const Button = ({
         download={download}
         tabIndex={tabIndex}
         autoFocus={autoFocus}
-        dir={isRtl ? 'rtl' : undefined}
         aria-label={ariaLabel}
         aria-controls={ariaControls}
         style={style}
@@ -281,7 +278,6 @@ const Button = ({
       aria-selected={ariaSelected}
       title={ariaLabel}
       tabIndex={tabIndex}
-      dir={isRtl ? 'rtl' : undefined}
       style={buildStyle(style, backgroundImage && `background-image: url(${backgroundImage})`) || undefined}
     >
       {content}

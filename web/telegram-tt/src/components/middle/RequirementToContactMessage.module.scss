@@ -41,10 +41,6 @@
   border-radius: 1.5rem;
 
   @include mixins.action-message-bg;
-
-  &[dir="rtl"] {
-    text-align: right;
-  }
 }
 
 .icons-container {

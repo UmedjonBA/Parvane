@@ -6,8 +6,6 @@ import type { IconName } from '../../types/icons';
 
 import buildClassName from '../../util/buildClassName';
 
-import useLang from '../../hooks/useLang';
-
 import Avatar, { type AvatarSize } from './Avatar';
 import Icon from './icons/Icon';
 
@@ -40,7 +38,6 @@ const PeerBadge = ({
   textClassName,
   onClick,
 }: OwnProps) => {
-  const lang = useLang();
   return (
     <div
       className={buildClassName(styles.root, onClick && styles.clickable, className)}
@@ -49,7 +46,7 @@ const PeerBadge = ({
       <div className={styles.top}>
         <Avatar size={avatarSize} peer={avatarPeer} webPhoto={avatarWebPhoto} />
         {badgeText && (
-          <div className={buildClassName(styles.badge, badgeClassName)} dir={lang.isRtl ? 'rtl' : 'ltr'}>
+          <div className={buildClassName(styles.badge, badgeClassName)} dir="ltr">
             {badgeIcon && <Icon name={badgeIcon} className={badgeIconClassName} />}
             {badgeText}
           </div>

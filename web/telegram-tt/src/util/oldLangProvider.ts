@@ -10,7 +10,6 @@ export interface LangFn {
   (key: string, value?: any, format?: 'i', pluralValue?: number): string;
 
   // Письмо справа налево не поддерживается: флаг никогда не выставляется, остался для разметки форка
-  isRtl?: boolean;
   code?: string;
   timeFormat?: TimeFormat;
 }

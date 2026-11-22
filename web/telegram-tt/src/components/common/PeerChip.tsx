@@ -135,7 +135,6 @@ const PeerChip = <T,>({
       style={style}
       onClick={() => onClick?.(clickArg!)}
       title={isMinimized ? titleText : undefined}
-      dir={lang.isRtl ? 'rtl' : undefined}
     >
       {iconElement}
       {!isMinimized && (

@@ -164,7 +164,7 @@ const TodoList = ({
   };
 
   return (
-    <div className="todo-list" dir={lang.isRtl ? 'auto' : 'ltr'}>
+    <div className="todo-list" dir="ltr">
       <div className="todo-list-header">
         <div className="todo-list-title">
           {renderTextWithEntities(title)}

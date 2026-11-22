@@ -128,7 +128,6 @@ const File = ({
       id={id}
       ref={elementRef}
       className={fullClassName}
-      dir={lang.isRtl ? 'rtl' : undefined}
       onMouseDown={handleBeforeContextMenu}
       onContextMenu={contextActions ? handleContextMenu : undefined}
     >

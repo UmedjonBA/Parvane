@@ -131,7 +131,6 @@ const PasswordForm: FC<OwnProps> = ({
     <form action="" onSubmit={onSubmit ? handleSubmit : stopEvent} autoComplete="off">
       <div
         className={buildClassName('input-group password-input', password && 'touched', error && 'error')}
-        dir={lang.isRtl ? 'rtl' : undefined}
       >
         {shouldDisablePasswordManager && renderFakeInput()}
         {username && !shouldDisablePasswordManager && (

@@ -168,7 +168,6 @@ const SearchInput: FC<OwnProps> = ({
       {...SEARCH_FORM_PROPS}
       className={buildClassName('SearchInput', className, isInputFocused && 'has-focus')}
       onClick={onClick}
-      dir={lang.isRtl ? 'rtl' : undefined}
     >
       <Transition
         name="fade"

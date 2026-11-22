@@ -18,8 +18,8 @@ import useSyncEffectWithPrevDeps from '../../hooks/useSyncEffectWithPrevDeps.ts'
 import './Transition.scss';
 
 type AnimationName = (
-  'none' | 'slide' | 'slideRtl' | 'slideFade' | 'zoomFade' | 'zoomBounceSemiFade' | 'slideLayers'
-  | 'fade' | 'pushSlide' | 'reveal' | 'slideOptimized' | 'slideOptimizedRtl' | 'semiFade'
+  'none' | 'slide' | 'slideFade' | 'zoomFade' | 'zoomBounceSemiFade' | 'slideLayers'
+  | 'fade' | 'pushSlide' | 'reveal' | 'slideOptimized' | 'semiFade'
   | 'slideVertical' | 'slideVerticalFade' | 'slideFadeAndroid'
 );
 export type ChildrenFn = (isActive: boolean, isFrom: boolean, currentKey: number, activeKey: number) => React.ReactNode;
@@ -66,8 +66,8 @@ export const ACTIVE_SLIDE_CLASS_NAME = CLASSES.active;
 export const TO_SLIDE_CLASS_NAME = CLASSES.to;
 
 const DISABLEABLE_ANIMATIONS = new Set<AnimationName>([
-  'slide', 'slideRtl', 'slideFade', 'zoomFade', 'zoomBounceSemiFade', 'slideLayers', 'pushSlide', 'reveal',
-  'slideOptimized', 'slideOptimizedRtl', 'slideVertical', 'slideVerticalFade',
+  'slide', 'slideFade', 'zoomFade', 'zoomBounceSemiFade', 'slideLayers', 'pushSlide', 'reveal',
+  'slideOptimized', 'slideVertical', 'slideVerticalFade',
 ]);
 
 function Transition({
@@ -129,8 +129,8 @@ function Transition({
   useSyncEffectWithPrevDeps(([prevName]) => {
     if (!prevName) return;
 
-    const prevIsSliceOptimized = prevName === 'slideOptimized' || prevName === 'slideOptimizedRtl';
-    const isSlideOptimized = name === 'slideOptimized' || name === 'slideOptimizedRtl';
+    const prevIsSliceOptimized = prevName === 'slideOptimized';
+    const isSlideOptimized = name === 'slideOptimized';
     const shouldReset = (prevIsSliceOptimized && !isSlideOptimized) || (!prevIsSliceOptimized && isSlideOptimized);
     if (!shouldReset) return;
 
@@ -140,7 +140,7 @@ function Transition({
       requestMutation(() => {
         const container = containerRef.current!;
 
-        ['slideOptimized', 'slideOptimizedBackwards', 'slideOptimizedRtl', 'slideOptimizedRtlBackwards']
+        ['slideOptimized', 'slideOptimizedBackwards']
           .forEach((cn) => removeExtraClass(container, `Transition-${cn}`));
       });
     }
@@ -167,7 +167,7 @@ function Transition({
       forceUpdate();
     }
 
-    const isSlideOptimized = name === 'slideOptimized' || name === 'slideOptimizedRtl';
+    const isSlideOptimized = name === 'slideOptimized';
     const container = containerRef.current!;
     const keys = Object.keys(rendersRef.current).map(Number);
     const prevActiveIndex = renderCount ? prevActiveKey : keys.indexOf(prevActiveKey);
@@ -424,7 +424,7 @@ export default Transition;
 
 function performSlideOptimized(
   shouldDisableAnimation: boolean,
-  name: 'slideOptimized' | 'slideOptimizedRtl',
+  name: 'slideOptimized',
   isBackwards: boolean,
   cleanup: NoneToVoidFunction,
   activeKey: number,
@@ -461,10 +461,6 @@ function performSlideOptimized(
     cleanup();
 
     return;
-  }
-
-  if (name === 'slideOptimizedRtl') {
-    isBackwards = !isBackwards;
   }
 
   isAnimatingRef.current = true;

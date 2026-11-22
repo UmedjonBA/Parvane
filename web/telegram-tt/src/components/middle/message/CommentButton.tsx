@@ -76,7 +76,7 @@ const CommentButton = ({
   function renderRecentRepliers() {
     return (
       Boolean(recentRepliers?.length) && (
-        <div className="recent-repliers" dir={lang.isRtl ? 'rtl' : 'ltr'}>
+        <div className="recent-repliers" dir="ltr">
           {recentRepliers.map((peer) => (
             <Avatar
               key={peer.id}
@@ -106,7 +106,7 @@ const CommentButton = ({
         isCustomShape && 'CommentButton-custom-shape',
         isLoading && 'loading',
       )}
-      dir={lang.isRtl ? 'rtl' : 'ltr'}
+      dir="ltr"
       onClick={handleClick}
       role="button"
       tabIndex={0}

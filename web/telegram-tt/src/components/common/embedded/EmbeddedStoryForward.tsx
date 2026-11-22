@@ -123,7 +123,6 @@ const EmbeddedStoryForward = ({
         peerColorClass,
       )}
       style={peerColorStyle}
-      dir={lang.isRtl ? 'rtl' : undefined}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
     >

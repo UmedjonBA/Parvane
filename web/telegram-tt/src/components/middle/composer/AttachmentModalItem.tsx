@@ -9,7 +9,6 @@ import { getFileExtension } from '../../common/helpers/documentInfo';
 import { REM } from '../../common/helpers/mediaDimensions';
 
 import useAppLayout from '../../../hooks/useAppLayout';
-import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import File from '../../common/File';
@@ -43,7 +42,6 @@ const AttachmentModalItem = ({
   onToggleSpoiler,
   onEdit,
 }: OwnProps) => {
-  const lang = useLang();
   const { isMobile } = useAppLayout();
   const displayType = getDisplayType(attachment, shouldDisplayCompressed);
 
@@ -119,7 +117,7 @@ const AttachmentModalItem = ({
   );
 
   return (
-    <div className={rootClassName} dir={lang.isRtl ? 'rtl' : undefined}>
+    <div className={rootClassName}>
       {content}
       <MediaSpoiler
         isVisible={shouldDisplaySpoiler}

@@ -11,7 +11,6 @@ import { STICKER_SIZE_SEARCH } from '../../config';
 import { selectIsCurrentUserPremium, selectShouldLoopStickers, selectStickerSet } from '../../global/selectors';
 
 import useLang from '../../hooks/useLang';
-import useOldLang from '../../hooks/useOldLang';
 
 import StickerButton from '../common/StickerButton';
 import Button from '../ui/Button';
@@ -40,7 +39,6 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
 
   const sharedCanvasRef = useRef<HTMLCanvasElement>();
 
-  const lang = useOldLang();
   const newLang = useLang();
   const isAdded = set && !set.isArchived && Boolean(set.installedDate);
   const areStickersLoaded = Boolean(set?.stickers);
@@ -87,7 +85,6 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
     <div
       key={set.id}
       className="sticker-set"
-      dir={lang.isRtl ? 'rtl' : undefined}
       data-sticker-set-id={set.id}
       data-sticker-set-title={set.title}
     >

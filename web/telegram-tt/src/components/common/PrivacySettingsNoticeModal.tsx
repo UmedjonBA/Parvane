@@ -9,7 +9,6 @@ import { selectTabState, selectUser } from '../../global/selectors';
 import { LOCAL_TGS_URLS } from './helpers/animatedAssets';
 import renderText from './helpers/renderText';
 
-import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useOldLang from '../../hooks/useOldLang';
 
@@ -42,7 +41,6 @@ const PrivacySettingsNoticeModal = ({ isOpen, isReadDate, user }: OwnProps & Sta
   } = getActions();
 
   const oldLang = useOldLang();
-  const lang = useLang();
 
   const userName = getUserFirstOrLastName(user);
 
@@ -82,7 +80,7 @@ const PrivacySettingsNoticeModal = ({ isOpen, isReadDate, user }: OwnProps & Sta
 
   return (
     <Modal isSlim isOpen={isOpen} onClose={handleClose}>
-      <div className={styles.container} dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className={styles.container}>
         <Button
           className={styles.closeButton}
           color="translucent"

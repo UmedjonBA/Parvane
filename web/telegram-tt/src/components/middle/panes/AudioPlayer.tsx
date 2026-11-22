@@ -289,7 +289,6 @@ const AudioPlayer: FC<OwnProps & StateProps> = ({
   return (
     <div
       className={buildClassName('AudioPlayer', 'full-width-player', isSettled && 'settled', className)}
-      dir={lang.isRtl ? 'rtl' : undefined}
       ref={ref}
     >
       <div className="AudioPlayer-content" onClick={handleClick}>

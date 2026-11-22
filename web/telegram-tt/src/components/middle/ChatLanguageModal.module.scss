@@ -12,10 +12,6 @@
 
 .list-item {
   text-align: left;
-
-  &[dir="rtl"] {
-    text-align: right;
-  }
 }
 
 .title, .subtitle {

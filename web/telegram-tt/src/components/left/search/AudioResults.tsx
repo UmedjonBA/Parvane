@@ -96,7 +96,6 @@ const AudioResults: FC<OwnProps & StateProps> = ({
             <p
               className="section-heading"
               key={message.date}
-              dir={lang.isRtl ? 'rtl' : undefined}
             >
               {formatMonthAndYear(lang, new Date(message.date * 1000))}
             </p>

@@ -96,7 +96,7 @@ function renderSavedMessages(lang: OldLangFn) {
 function renderGroup(lang: OldLangFn) {
   return (
     <div className="NoMessages">
-      <div className="wrapper" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="wrapper">
         <h3 className="title">{lang('EmptyGroupInfo.Title')}</h3>
         <p className="description">{lang('EmptyGroupInfo.Subtitle')}</p>
         <ul className="list-checkmarks">

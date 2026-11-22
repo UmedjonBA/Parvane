@@ -81,14 +81,13 @@ const RecentContacts = ({
   return (
     <div className="RecentContacts custom-scroll">
       {shouldRenderTopPeers && (
-        <div className="top-peers-section" dir={lang.isRtl ? 'rtl' : undefined}>
+        <div className="top-peers-section">
           <div ref={topPeersRef} className="top-peers">
             {topPeers?.map((peer) => (
               <div
                 key={peer.id}
                 className="top-peer-item"
                 onClick={() => handleClick(peer.id)}
-                dir={lang.isRtl ? 'rtl' : undefined}
               >
                 <Avatar peer={peer} />
                 <div className="top-peer-name">{renderText(getPeerTitle(lang, peer) || NBSP)}</div>
@@ -104,7 +103,6 @@ const RecentContacts = ({
               'section-heading mt-0 recent-chats-header',
               !shouldRenderTopPeers && 'without-border',
             )}
-            dir={lang.isRtl ? 'rtl' : undefined}
           >
             {lang('Recent')}
 
@@ -115,7 +113,6 @@ const RecentContacts = ({
               color="translucent"
               ariaLabel={lang('Clear')}
               onClick={handleClearRecentlyFoundChats}
-              isRtl={lang.isRtl}
               iconName="close"
             />
           </h3>

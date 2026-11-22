@@ -69,7 +69,7 @@ const PaidMessageSlider: FC<OwnProps> = ({
 
   function renderTopRow() {
     return (
-      <div className="slider-top-row" dir={lang.isRtl ? 'rtl' : undefined}>
+      <div className="slider-top-row">
         <span className="value-min" dir="auto">{lang.number(min)}</span>
         <span className="settings-range-value">
           {!canChangeChargeForMessages && (<Icon name="lock-badge" />)}

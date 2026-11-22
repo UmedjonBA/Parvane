@@ -669,7 +669,7 @@ function MiddleColumn({
                   />
                 )}
                 {isPinnedMessageList && canUnpin && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -684,7 +684,7 @@ function MiddleColumn({
                   </div>
                 )}
                 {canShowOpenChatButton && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -708,7 +708,7 @@ function MiddleColumn({
                 {(
                   isMobile && (renderingCanSubscribe || (renderingShouldJoinToSend && !renderingShouldSendJoinRequest))
                 ) && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -721,7 +721,7 @@ function MiddleColumn({
                   </div>
                 )}
                 {isMobile && renderingShouldSendJoinRequest && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -734,7 +734,7 @@ function MiddleColumn({
                   </div>
                 )}
                 {isMobile && renderingCanStartBot && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -747,7 +747,7 @@ function MiddleColumn({
                   </div>
                 )}
                 {isMobile && renderingCanRestartBot && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid
@@ -760,7 +760,7 @@ function MiddleColumn({
                   </div>
                 )}
                 {isMobile && renderingCanUnblock && (
-                  <div className="middle-column-footer-button-container" dir={lang.isRtl ? 'rtl' : undefined}>
+                  <div className="middle-column-footer-button-container">
                     <Button
                       size="tiny"
                       fluid

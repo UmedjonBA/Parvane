@@ -53,12 +53,6 @@
     .status {
       display: none;
     }
-
-    &[dir="rtl"] {
-      .title h3 {
-        text-align: right;
-      }
-    }
   }
 
   .ListItem-button {
@@ -73,13 +67,6 @@
     .icon {
       color: inherit;
       opacity: 1;
-    }
-  }
-
-  &[dir="rtl"] {
-    .Avatar {
-      margin-right: -0.25rem;
-      margin-left: 1.5rem;
     }
   }
 }

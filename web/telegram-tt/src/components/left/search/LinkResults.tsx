@@ -96,14 +96,12 @@ const LinkResults: FC<OwnProps & StateProps> = ({
             <p
               className="section-heading"
               key={message.date}
-              dir={lang.isRtl ? 'rtl' : undefined}
             >
               {formatMonthAndYear(lang, new Date(message.date * 1000))}
             </p>
           )}
           <div
             className="ListItem small-icon"
-            dir={lang.isRtl ? 'rtl' : undefined}
             key={message.id}
           >
             <WebLink

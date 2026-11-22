@@ -211,11 +211,6 @@
     .settings-content.local-passcode & {
       font-size: 1rem;
     }
-
-    &[dir="rtl"] {
-      unicode-bidi: plaintext;
-      text-align: right;
-    }
   }
 
   &-description-larger {
@@ -229,10 +224,6 @@
 
     &.premium-info {
       margin-top: 1rem;
-    }
-
-    &[dir="rtl"] {
-      text-align: right;
     }
 
     .gift-icon {
@@ -359,11 +350,6 @@
 
   .FloatingActionButton {
     right: 1.5rem;
-
-    &[dir="rtl"] {
-      right: auto;
-      left: 1.5rem;
-    }
   }
 }
 
