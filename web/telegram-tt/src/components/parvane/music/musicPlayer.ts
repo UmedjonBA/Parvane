@@ -3,6 +3,7 @@ import type {
 } from '../../../api/parvane/musicApi';
 
 import { ACCOUNT_WIPED_EVENT } from '../../../util/parvaneEvents';
+import { pause } from '../../../util/schedulers';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import { engineStatic, loadProtocol } from '../../../api/parvane/v2/engine';
@@ -76,6 +77,9 @@ export {
 
 let audio: HTMLAudioElement | undefined;
 let loadedTrackId: string | undefined;
+// Восстановление очереди после перезагрузки: попытки запроса треков и пауза между ними
+const RESTORE_ATTEMPTS = 5;
+const RESTORE_RETRY_MS = 2000;
 let isRestored = false;
 const streamUrls = new Map<string, { url: string; expiresMs: number }>();
 
@@ -374,6 +378,23 @@ function updateMediaSession(track: MusicTrack) {
 }
 
 /** Вернуть очередь прошлого запуска: на паузе, с того же трека. Сведения о треках берутся с сервера. */
+// Треки сохранённой очереди по id, частями; сбой части — пустой результат части
+async function fetchQueueTracks(trackIds: string[]) {
+  const tracks: MusicTrack[] = [];
+  let hasFailed = false;
+  for (let offset = 0; offset < trackIds.length; offset += TRACKS_PER_REQUEST) {
+    const part = await callMusic('parvaneMusicTracks', {
+      trackIds: trackIds.slice(offset, offset + TRACKS_PER_REQUEST),
+    }).catch(() => {
+      hasFailed = true;
+      return [];
+    });
+    part.forEach((track) => track && tracks.push(track));
+  }
+  // Сбой запроса — не «треки убраны с сервера»: пусто, чтобы восстановление повторило попытку
+  return hasFailed ? [] : tracks;
+}
+
 export async function restoreMusicQueue() {
   if (isRestored) return;
   isRestored = true;
@@ -383,12 +404,13 @@ export async function restoreMusicQueue() {
   const queue = parseQueue(JSON.stringify(engineStatic<MusicQueue>('musicQueueView', { queue: saved })));
   if (!queue.tracks.length || getMusicPlayer().queue.tracks.length) return;
   const source = readJson<MusicQueueSource>(SOURCE_KEY);
-  const tracks: MusicTrack[] = [];
-  for (let offset = 0; offset < queue.tracks.length; offset += TRACKS_PER_REQUEST) {
-    const part = await callMusic('parvaneMusicTracks', {
-      trackIds: queue.tracks.slice(offset, offset + TRACKS_PER_REQUEST),
-    }).catch(() => []);
-    part.forEach((track) => track && tracks.push(track));
+  // Сразу после перезагрузки связь с сервером ещё поднимается: неудачный запрос треков повторяется — иначе сохранённая
+  // на устройстве очередь пропадала до следующей перезагрузки
+  let tracks: MusicTrack[] = [];
+  for (let attempt = 0; attempt < RESTORE_ATTEMPTS && !tracks.length; attempt++) {
+    if (attempt) await pause(RESTORE_RETRY_MS);
+    if (getMusicPlayer().queue.tracks.length) return;
+    tracks = await fetchQueueTracks(queue.tracks);
   }
   // Очередь могли начать, пока шли запросы
   if (!tracks.length || getMusicPlayer().queue.tracks.length) return;

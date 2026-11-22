@@ -373,7 +373,9 @@ try {
   await openTab('Graph');
   await page.waitForFunction((count) => document.querySelectorAll('[data-notes-graph] [data-node]').length >= count, NOTES, { timeout: STEP_TIMEOUT_MS });
   const graphNode = knowledge.locator('[data-notes-graph] [data-node]').first();
+  // Под нагрузкой точки графа появляются в разметке раньше, чем получают размеры: мерить после показа
   const centre = async (locator) => {
+    await locator.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     const box = await locator.boundingBox();
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   };

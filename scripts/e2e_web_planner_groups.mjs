@@ -86,7 +86,7 @@ try {
   assert.equal(await picking.getByRole('checkbox', { name: 'Together with repeats' }).isChecked(), true, 'повторы — по умолчанию да');
   assert.equal(await page.locator('#planner-group-target').inputValue(), 'Учёба');
   await picking.locator('[data-group-apply]').click();
-  await planner.getByText('Added to «Учёба»: 1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Added to “Учёба”: 1').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await picking.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   const lectureColors = await Promise.all((await rowsOf('Лекция').all()).map(colorOf));
   assert(lectureColors.length > 1, 'у лекции несколько повторов в списке');
