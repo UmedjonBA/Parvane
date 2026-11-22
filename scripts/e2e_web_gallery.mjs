@@ -21,6 +21,7 @@ import {
 const PASSWORD = 'Parvane-gallery-e2e-1';
 const PHONE = { width: 360, height: 800 };
 const DESK = { width: 1120, height: 700 };
+const NARROW = { width: 540, height: 700 };
 const STEP_TIMEOUT_MS = 15000;
 const dir = process.env.PARVANE_E2E_SHOT_DIR;
 const only = (process.env.PARVANE_GALLERY || '').split(',').filter(Boolean);
@@ -526,6 +527,20 @@ async function galleryShell() {
   await step(page, 'XpStart-01', async () => {
     await page.locator('#LeftMainHeader #telegram-search-input').click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-palette] input').first().fill('план');
+  });
+  await page.keyboard.press('Escape');
+  // Узкое окно компьютера (доска `RdNarrow`, 540×700): список чатов, открытый чат, «Заметки»
+  await resize(page, NARROW);
+  await step(page, 'RdNarrow-01', async () => { await page.waitForTimeout(500); });
+  await step(page, 'RdNarrow-02', async () => {
+    await page.locator('.chat-list .ListItem').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await step(page, 'RdNarrow-03', async () => {
+    await page.locator('#MiddleColumn .MiddleHeader .back-button button:visible').first().click({ timeout: 3000 })
+      .catch(() => undefined);
+    await page.locator('[data-module="notes"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1500);
   });
   await page.context().close();
 }
