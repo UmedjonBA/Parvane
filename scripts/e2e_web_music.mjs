@@ -151,7 +151,7 @@ try {
   await deskMenu.getByRole('menuitem', { name: 'Download to this computer' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const deskItems = await deskMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(deskItems.map((text) => text.replace('›', '').trim()), ['Play next', 'Add to queue', 'Add to a playlist',
-    'Add to favorites', 'Go to artist', 'Go to album', 'Send to a chat…', 'Download to this computer'],
+    'Add to favorites', 'Go to artist', 'Go to album', 'Send to chat…', 'Download to this computer'],
   `меню у курсора по доске ZdMusicX: ${deskItems}`);
   await page.keyboard.press('Escape');
   await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -249,7 +249,7 @@ try {
   await full.getByRole('button', { name: 'Add to a playlist', exact: true }).click();
   const fullPicker = page.locator('.Modal [data-playlist-picker]');
   await fullPicker.getByRole('button', { name: 'Close' }).click();
-  await full.getByRole('button', { name: 'Send to a chat' }).click();
+  await full.getByRole('button', { name: 'Send to chat' }).click();
   // «Кому отправить» (доска `RpPick`): карточка «название · исполнитель · трек», чаты с галочками
   const sendScreen = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
   await sendScreen.locator('[data-send-preview]').getByText('Соль').waitFor();
@@ -414,7 +414,7 @@ try {
   await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const sheetItems = await sheetMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(sheetItems.map((text) => text.trim()),
-    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to a chat', 'Go to artist', 'Go to album'],
+    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to chat', 'Go to artist', 'Go to album'],
     `порядок пунктов шторки по доске XpMusic: ${sheetItems}`);
   await page.locator('.Modal [data-playlist-chips] [data-playlist-chip-new]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) {
@@ -572,7 +572,7 @@ try {
   const wide2 = (view) => again2.locator(`[data-music-nav] [data-view="${view}"]`).click();
   await wide2('albums');
   await again2.locator('[data-music-albums]').getByRole('button', { name: /Берег/ }).click();
-  await pickTrackAction(page, again2.locator('[data-music-tracks] [data-track="t2"]'), 'Send to a chat…');
+  await pickTrackAction(page, again2.locator('[data-music-tracks] [data-track="t2"]'), 'Send to chat…');
   const trackSend = page.locator('.Modal').filter({ has: page.locator('[data-send-picker]') });
   await trackSend.locator('[data-send-row]').filter({ hasText: 'Saved Messages' }).first()
     .locator('input[type="checkbox"]').check();

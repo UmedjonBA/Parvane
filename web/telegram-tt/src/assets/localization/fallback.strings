@@ -1862,7 +1862,7 @@
 "MusicOfflineClearConfirm" = "Delete for good";
 "MusicOfflineUsage_one" = "{count} track · {used} of {limit} on this device";
 "MusicOfflineUsage_other" = "{count} tracks · {used} of {limit} on this device";
-"MusicSendToChat" = "Send to a chat";
+"MusicSendToChat" = "Send to chat";
 "MusicTrackSent" = "Track sent";
 "MusicTrackNotSent" = "Could not send the track";
 "MusicTrackSummary" = "Track: {title}";
@@ -2080,7 +2080,7 @@
 "HealthFormProblemForm" = "Not saved. Check the date and time";
 "HealthMoodAsk" = "How are you today?";
 "HealthMoodScore1" = "bad";
-"HealthMoodScore2" = "weak";
+"HealthMoodScore2" = "poor";
 "HealthMoodScore3" = "okay";
 "HealthMoodScore4" = "good";
 "HealthMoodScore5" = "great";
@@ -4187,7 +4187,7 @@
 "MusicQueueUpcoming" = "Up next · {count}";
 "MusicRepeatAllPlaylist" = "Repeat: whole playlist";
 "MusicSegmentCount" = "{name} · {count}";
-"MusicSendToChatDesk" = "Send to a chat…";
+"MusicSendToChatDesk" = "Send to chat…";
 "MusicShuffleMix" = "Shuffle";
 "MusicShufflePlay" = "Shuffle";
 "MusicSingles" = "Singles";
