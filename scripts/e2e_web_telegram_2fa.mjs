@@ -325,8 +325,12 @@ try {
   assert.equal(await s1.page.locator('#LeftColumn').count(), 0, 'после выхода вход прошёл без подтверждения');
   assert.equal((await botConfirm(reloginToken, TG_OWNER)).ok, true);
   await signedIn(s1.page);
-  // После повторного входа — список чатов, а не экран Settings, с которого вышли
-  await waitForChatList(s1.page);
+  // После повторного входа — список чатов либо экран «Устройства», который приложение открывает само: хранилище
+  // стёрто, устройство входит как новое и ждёт привязки. Экран «Профиля», с которого вышли, не возвращается
+  await Promise.race([
+    waitForChatList(s1.page),
+    s1.page.locator('.SettingsActiveSessions').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  ]);
   console.log('OK: после полного выхода вход снова подтверждается в Telegram (на список чатов)');
 
   // ── Новое устройство (другой контекст): снова подтверждение ──

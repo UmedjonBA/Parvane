@@ -487,7 +487,8 @@ try {
   const backToThisMonth = async () => {
     // Кнопки нет, когда выбран сегодняшний день
     const toToday = planner.getByRole('button', { name: 'Current date' });
-    if (await toToday.isVisible().catch(() => false)) await toToday.click();
+    // Кнопка пропадает, как только выбранным становится сегодняшний день, — в том числе посреди нажатия
+    if (await toToday.isVisible().catch(() => false)) await toToday.click({ timeout: 3000 }).catch(() => undefined);
   };
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
   await openPlannerScreen(page, 'calendar');

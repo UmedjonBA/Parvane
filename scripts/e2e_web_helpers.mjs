@@ -208,7 +208,7 @@ export async function pickPlannerDay(page, day) {
   await planner.locator('[data-planner-rail]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // «Текущая дата» есть в шапке, только когда выбран другой день
   const toToday = planner.locator('header').getByRole('button', { name: 'Current date', exact: true });
-  if (await toToday.isVisible().catch(() => false)) await toToday.click();
+  if (await toToday.isVisible().catch(() => false)) await toToday.click({ timeout: 3000 }).catch(() => undefined);
   for (let step = 0; step < 6; step += 1) {
     const cell = planner.locator(`[data-mini-day="${day}"]`);
     if (await cell.isVisible().catch(() => false)) {
@@ -226,8 +226,12 @@ export async function pickPlannerDay(page, day) {
 export async function openPlannerSettings(page) {
   const settings = page.locator('[data-settings-page="plan"]');
   const isShown = () => settings.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Шапка появляется не сразу после закрытия экрана «Задач» либо поиска: ждём «⋯» телефона либо кнопку настроек
+  const more = page.locator('#ParvanePlanner [data-planner-more]');
+  await more.or(page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' })).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
   // Телефон: настройки — пункт меню «⋯» шапки
-  if (await page.locator('#ParvanePlanner [data-planner-more]').isVisible().catch(() => false)) {
+  if (await more.isVisible().catch(() => false)) {
     await openPlannerHeader(page, 'settings');
     await isShown();
     return settings;
@@ -241,12 +245,15 @@ export async function openPlannerSettings(page) {
 export async function openPlannerHeader(page, key) {
   const planner = page.locator('#ParvanePlanner');
   const more = planner.locator('[data-planner-more]');
+  const direct = { search: '[data-planner-search-open]', tasks: '[data-planner-tasks-open]' }[key];
+  // Шапка появляется не сразу после закрытия экрана поиска либо «Задач»: ждём либо «⋯», либо свою кнопку
+  await more.or(planner.locator(direct || 'header button')).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
   if (await more.isVisible().catch(() => false)) {
     await more.click();
     await page.locator(`[role="menuitem"][data-action="${key}"]`).click();
     return;
   }
-  const direct = { search: '[data-planner-search-open]', tasks: '[data-planner-tasks-open]' }[key];
   if (direct) await planner.locator(direct).first().click();
   else if (key === 'settings') await planner.getByRole('button', { name: 'Planner settings' }).first().click();
   else await planner.locator(`button[data-value="${key}"]`).click();
@@ -1535,8 +1542,12 @@ export async function dismissRecoveryKeyDialog(page, timeout = 15000) {
     return undefined;
   }
   // На телефоне ключ — в две строки (доска `XpAuth`): целиком он в атрибуте, его — первым
-  const key = await screen.locator('[data-recovery-key]').getAttribute('data-recovery-key').catch(() => undefined);
-  const text = `${key || ''}\n${await screen.innerText()}`;
+  // Экран может закрыть обработчик `autoDismissRecoveryKeyDialog` в любой момент между этими чтениями: читаем с
+  // коротким сроком, пропавший экран — не ошибка
+  const key = await screen.locator('[data-recovery-key]').getAttribute('data-recovery-key', { timeout: 5000 })
+    .catch(() => undefined);
+  const body = await screen.innerText({ timeout: 5000 }).catch(() => '');
+  const text = `${key || ''}\n${body}`;
   // Экран мог закрыть обработчик `autoDismissRecoveryKeyDialog` посреди этих нажатий — тогда закрывать уже нечего
   await closeRecoveryKeyScreen(screen, 5000).catch(async (err) => {
     if (await screen.isVisible().catch(() => false)) throw err;

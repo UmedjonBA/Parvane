@@ -150,6 +150,18 @@ try {
     document.querySelector('[data-health-goals] input[data-goal="weight"]')?.value === '70'
     && document.querySelector('[data-health-goals] input[data-goal="steps"]')?.value === '10000'
   ), undefined, { timeout: STEP_TIMEOUT_MS });
+  // Слова «отбой» и «подъём» в строке целей — цели времени сна
+  await goalsLine.fill('отбой 23:15 подъём 6:45');
+  await page.waitForFunction(() => /bedtime · wake-up/i.test(
+    document.querySelector('[data-health-goals-understood]')?.textContent || '',
+  ), undefined, { timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    assert.fail(`разбор целей сна: «${await understood.innerText().catch(() => '')}»`);
+  });
+  await goalsLine.press('Enter');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-health-goals] input[data-goal="sleep_bed"]')?.value === '23:15'
+    && document.querySelector('[data-health-goals] input[data-goal="sleep_wake"]')?.value === '06:45'
+  ), undefined, { timeout: STEP_TIMEOUT_MS });
   // Сон: отбой и подъём, длительность считается, «Напоминать об отбое» — настройка устройства
   await goalsPage.locator('input[data-goal="sleep_bed"]').fill('23:30');
   await goalsPage.locator('input[data-goal="sleep_wake"]').fill('07:00');

@@ -29,12 +29,22 @@ const GOAL_OF_KIND: Record<string, string> = {
 };
 const GOAL_LABELS = {
   sleep: 'HealthGoalsSleep',
+  sleep_bed: 'HealthGoalsBed',
+  sleep_wake: 'HealthGoalsWake',
   weight: 'HealthGoalsWeight',
   steps: 'HealthGoalsSteps',
   pulse: 'HealthGoalsPulse',
   pressure: 'HealthGoalsPressure',
   water: 'HealthGoalsWater',
+  kcal: 'HealthGoalsKcal',
+  protein: 'HealthGoalsProtein',
+  fat: 'HealthGoalsFat',
+  carbs: 'HealthGoalsCarbs',
 } as const satisfies Record<string, string>;
+// Отметки сна из разбора («отбой 23:30», «подъём 7») — цели времени отбоя и подъёма
+const CLOCK_GOAL_OF_KIND: Record<string, string> = { sleep_start: 'sleep_bed', sleep_end: 'sleep_wake' };
+const MACRO_GOALS = ['protein', 'fat', 'carbs'];
+const FOOD_KIND = 'food';
 const GOAL_ORDER = Object.keys(GOAL_LABELS);
 const MINUTES_IN_DAY = 1440;
 // Без цели отбоя и подъёма длительность сна ставится от отбоя в 23:00
@@ -302,9 +312,39 @@ const HealthGoalsScreen = () => {
 
 function toGoals(entries: HealthParsedEntry[]): Understood[] {
   const out: Understood[] = [];
-  entries.forEach(({ kind, value }) => {
+  const add = (goal: string, value: number) => {
+    if (!out.some((item) => item.goal === goal)) out.push({ goal, value });
+  };
+  entries.forEach(({
+    kind, value, time, endTime, atMs, endMs, parts,
+  }) => {
+    // «отбой 23:15 подъём 6:45» движок понимает одной ночью: её начало и конец — цели отбоя и подъёма
+    if (kind === 'sleep' && endMs > atMs && endTime) {
+      const bed = parseClock(time);
+      const wake = parseClock(endTime);
+      if (bed !== undefined && wake !== undefined) {
+        add('sleep_bed', bed);
+        add('sleep_wake', wake);
+        return;
+      }
+    }
+    const clockGoal = CLOCK_GOAL_OF_KIND[kind];
+    if (clockGoal) {
+      // Время суток: полночь — ноль минут, это тоже цель
+      const minutes = parseClock(time);
+      if (minutes !== undefined) add(clockGoal, minutes);
+      return;
+    }
+    if (kind === FOOD_KIND) {
+      // «ккал 2200 белки 140»: калории и БЖУ — цели питания
+      if (value > 0) add('kcal', value);
+      MACRO_GOALS.forEach((macro) => {
+        if (parts?.[macro]) add(macro, parts[macro]);
+      });
+      return;
+    }
     const goal = GOAL_OF_KIND[kind];
-    if (goal && value > 0 && !out.some((item) => item.goal === goal)) out.push({ goal, value });
+    if (goal && value > 0) add(goal, value);
   });
   // Порядок — как строки экрана: сон, вес, шаги… (доска `RdPlanSet` «Понято: сон · вес · шаги»)
   return out.sort((a, b) => GOAL_ORDER.indexOf(a.goal) - GOAL_ORDER.indexOf(b.goal));

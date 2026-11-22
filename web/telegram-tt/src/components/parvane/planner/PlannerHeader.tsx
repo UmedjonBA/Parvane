@@ -57,6 +57,8 @@ type OwnProps = {
 const MONTHS_IN_YEAR = 12;
 // Чипы вида в шапке телефона (доска `PhonePlan`); «Список» и «Год» — в меню «⋯»
 const PHONE_SEGMENTS = ['today', 'week', 'month'];
+// Шторка меню закрывается с переходом по истории — действие пункта ждёт его
+const MENU_CLOSE_DELAY_MS = 250;
 
 // Шапка «Плана» по макету. Телефон: название модуля и виды чипами (доска `PhonePlan`). Компьютер: период
 // со стрелками, переключатель вида и поле «Запись строкой» с разбором (доска `DeskPlan`); «+ Запись» рядом —
@@ -131,12 +133,16 @@ const PlannerHeader = ({
     </button>
   );
 
+  // Действие — после закрытия шторки: она снимает свою запись истории отложенным переходом «назад», и переход,
+  // открытый раньше него (страница настроек), этим «назад» тут же закрывался
   const handleMorePick = useLastCallback((key: string) => {
     closeMore();
-    if (key === 'search') onOpenSearch();
-    else if (key === 'tasks') onOpenTasks();
-    else if (key === 'settings') onOpenSettings();
-    else onSwitchSegment(key);
+    window.setTimeout(() => {
+      if (key === 'search') onOpenSearch();
+      else if (key === 'tasks') onOpenTasks();
+      else if (key === 'settings') onOpenSettings();
+      else onSwitchSegment(key);
+    }, MENU_CLOSE_DELAY_MS);
   });
 
   const handleYearBack = useLastCallback(() => onSwitchSegment('month'));
