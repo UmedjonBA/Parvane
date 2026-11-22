@@ -151,6 +151,39 @@ try {
     { timeout: STEP_TIMEOUT_MS },
   );
   console.log('OK: «Не доставлено · Отменить отправку» убирает неотправленное');
+
+  // Широкое окно: строка ввода занимает всю нижнюю полосу (доска `DeskChats`: скрепка у левого края), а не ширину
+  // ленты сообщений по центру
+  await page.setViewportSize({ width: 1896, height: 1030 });
+  await page.waitForFunction(() => {
+    const middle = document.querySelector('#MiddleColumn')?.getBoundingClientRect();
+    const attach = document.querySelector('#MiddleColumn .middle-column-footer .AttachMenu')?.getBoundingClientRect();
+    return middle && attach && attach.left - middle.left < 80;
+  }, undefined, { timeout: STEP_TIMEOUT_MS });
+  console.log('OK: строка ввода на широком окне — во всю нижнюю полосу');
+  // Край колонки чатов перетащен мышью: ширина пишется в `style` колонки, а «Профиль» всё равно во всю ширину
+  const handle = await page.locator('#MiddleColumn .resize-handle').first().boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x - 120, handle.y + handle.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const resized = await page.locator('#LeftColumn').boundingBox();
+  await page.locator('[data-module="profile"]').click();
+  await page.waitForFunction(
+    (narrowWidth) => {
+      const left = document.querySelector('#Main.section-profile > #LeftColumn')?.getBoundingClientRect();
+      return left && left.width > narrowWidth + 600;
+    },
+    resized.width,
+    { timeout: STEP_TIMEOUT_MS },
+  );
+  await page.locator('[data-module="chats"]').click();
+  await page.waitForFunction(
+    (narrowWidth) => Math.abs(document.querySelector('#LeftColumn').getBoundingClientRect().width - narrowWidth) <= 2,
+    resized.width,
+    { timeout: STEP_TIMEOUT_MS },
+  );
+  console.log('OK: «Профиль» во всю ширину и после перетаскивания края колонки чатов');
   await wide.close();
 
   // ── Телефон ──────────────────────────────────────────────────────────────────

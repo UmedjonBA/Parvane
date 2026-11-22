@@ -227,11 +227,13 @@
       --composer-bottom-gap-mobile: 0.5rem;
     }
 
-    // Parvane (spec 041 A6): поле ввода — плоская полоса во всю ширину колонки с линией сверху; само поле
-    // остаётся по ширине ленты сообщений. Кнопки без поля ввода («Вступить» и т. п.) плавают, как раньше
+    // Parvane (spec 041 A6): поле ввода — плоская полоса во всю ширину колонки с линией сверху, и само поле
+    // занимает всю полосу (доска `DeskChats`: скрепка у левого края), а не ширину ленты сообщений. Кнопки без поля
+    // ввода («Вступить» и т. п.) плавают, как раньше
     &:not(.no-composer) {
       --shadow-footer: none;
 
+      max-width: none;
       padding-top: var(--composer-bottom-gap);
       padding-bottom: 0;
 
@@ -249,6 +251,15 @@
         border-top: var(--pv-divider);
 
         background: var(--color-background);
+      }
+
+      // Открытая правая колонка закрывает правую часть средней: полоса уходит из-под неё (сдвиг — правило ниже)
+      @media (min-width: 1276px) {
+        width: 100%;
+
+        #Main.right-column-open & {
+          width: calc(100% - var(--right-column-width));
+        }
       }
 
       @media (max-width: 600px) {
