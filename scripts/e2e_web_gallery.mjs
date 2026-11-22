@@ -366,7 +366,14 @@ async function galleryFiles() {
     await page.getByRole('button', { name: /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
+  // «Создать» создаёт папку и открывает её доступ (доска `PhFilesMore-02`)
+  await step(page, 'PhFilesMore-02', async () => {
+    await page.locator('#parvane-cloud-shared-name').fill('Сборки общие');
+    await page.locator('[data-new-shared-create]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(2500);
+  });
   await page.keyboard.press('Escape');
+  await step(page, 'files-phone-owned-list', async () => { await page.waitForTimeout(500); });
   await step(page, 'ZpFilesX-02', async () => {
     await filesBack();
     await filesChip('Мой диск').click({ timeout: STEP_TIMEOUT_MS });

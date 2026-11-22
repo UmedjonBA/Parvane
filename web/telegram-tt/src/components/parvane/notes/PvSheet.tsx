@@ -23,6 +23,9 @@ type OwnProps = {
   // Экран телефона (доски `PhFilesMore`, `XpFiles`, `ZpFilesX`): закрытие слева — стрелкой «‹» (`back`) либо
   // крестиком «Отмена» (`cancel`), без крестика справа
   startClose?: 'back' | 'cancel';
+  // Телефон: шторка — страница во весь экран (доски `PhFilesMore-02`, `ZpFilesX-01`): полоса шапки на панели,
+  // содержимое на фоне, без ручки
+  isPage?: boolean;
   // Окно без крестика: закрывают кнопки внизу (доска `XdChat`)
   noClose?: boolean;
   // Список строк: строки стоят вплотную
@@ -35,8 +38,8 @@ type OwnProps = {
 // Шторка прототипа: окно сверху по центру на компьютере, лист снизу с ручкой на телефоне.
 // Название слева, крестик справа
 const PvSheet = ({
-  isOpen, title, subtitle, className, headBefore, headAfter, isWide, startClose, noClose, isTight, children, onClose,
-  onEnter,
+  isOpen, title, subtitle, className, headBefore, headAfter, isWide, startClose, isPage, noClose, isTight, children,
+  onClose, onEnter,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -75,7 +78,9 @@ const PvSheet = ({
   return (
     <Modal
       isOpen={isOpen}
-      className={buildClassName(kit.sheet, isWide && kit.sheetWide, isTight && kit.sheetTight, className)}
+      className={buildClassName(
+        kit.sheet, isWide && kit.sheetWide, isTight && kit.sheetTight, isPage && kit.sheetPage, className,
+      )}
       header={header}
       onClose={onClose}
       onEnter={onEnter}

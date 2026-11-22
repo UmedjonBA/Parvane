@@ -199,7 +199,8 @@ const CloudNewSharedDialog = ({
       <PvSheet
         isOpen={isOpen && !picker}
         title={lang('ParvaneCloudNewShared')}
-        className={buildClassName(styles.narrow, styles.full)}
+        className={styles.narrow}
+        isPage
         startClose={isNarrow ? 'cancel' : undefined}
         headAfter={isNarrow ? createButton : undefined}
         onClose={onClose}

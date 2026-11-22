@@ -7,21 +7,6 @@
   max-width: 27.5rem;
 }
 
-// Телефон: экран целиком («Доступ», «Переместить в…»)
-.full {
-  @media (max-width: 760px) {
-    :global(.modal-dialog) {
-      height: 100%;
-      max-height: 100%;
-      border-radius: 0;
-    }
-
-    :global(.modal-content) {
-      flex: 1 1 auto;
-    }
-  }
-}
-
 .note {
   font-size: var(--pv-font-size-small);
   color: var(--pv-muted);
@@ -332,7 +317,11 @@
   display: flex;
   flex: none;
   align-items: stretch;
+
   border-bottom: 1px solid var(--pv-line);
+
+  // Экран переноса на телефоне — страница на фоне: строки папок полосами панели (доска `XpFiles-02`)
+  background: var(--pv-panel);
 }
 
 .moveStepPick {
@@ -536,6 +525,11 @@
   flex-direction: column;
   margin: 0 -1rem;
   border-block: 1px solid var(--pv-line);
+
+  // Телефон: экран — страница на фоне, список участников — полосой панели (доска `PhFilesMore-02`)
+  @media (max-width: 760px) {
+    background: var(--pv-panel);
+  }
 }
 
 .member {

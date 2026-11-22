@@ -320,7 +320,8 @@ const CloudMoveDialog = ({
       isOpen={isOpen}
       title={title || lang('ParvaneCloudMoveTitle')}
       subtitle={isStepwise ? subtitle : undefined}
-      className={buildClassName(styles.narrow, styles.full)}
+      className={styles.narrow}
+      isPage
       startClose={isStepwise ? 'cancel' : undefined}
       onClose={onClose}
     >

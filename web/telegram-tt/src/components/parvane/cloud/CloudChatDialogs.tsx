@@ -130,7 +130,8 @@ const CloudChatDialogs = () => {
       <PvSheet
         isOpen={request?.type === 'attach'}
         title={lang('ParvaneCloudChooseFiles')}
-        className={buildClassName(styles.narrow, styles.full)}
+        className={styles.narrow}
+        isPage
         onClose={closeCloudBridge}
       >
         <div className={styles.pickPath}>

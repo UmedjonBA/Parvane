@@ -774,6 +774,34 @@
   max-width: 56rem;
 }
 
+// Страница во весь экран на телефоне (`PvSheet isPage`): шапка — полоса панели 56 px с линией, содержимое на фоне
+.sheetPage {
+  @media (max-width: 760px) {
+    :global(.modal-dialog) {
+      height: 100%;
+      max-height: 100%;
+      border-radius: 0;
+      background: var(--pv-bg);
+    }
+
+    :global(.modal-content) {
+      flex: 1 1 auto;
+      padding-top: 0.75rem;
+    }
+
+    .sheetGrab {
+      display: none;
+    }
+
+    .sheetHead {
+      min-height: var(--pv-header-height);
+      padding: 0 0.5rem 0 0.375rem;
+      border-bottom: 1px solid var(--pv-line);
+      background: var(--pv-panel);
+    }
+  }
+}
+
 .sheetTight :global(.modal-content) {
   gap: 0.125rem;
 }
