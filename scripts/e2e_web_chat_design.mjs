@@ -123,6 +123,8 @@ try {
   await openSavedMessages(page);
   const keyPane = page.locator('[data-key-change-pane]');
   await keyPane.getByText('security key has changed', { exact: false }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Кадры служебных плашек для сверки с доской `ZpChat-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/chat-key-changed.png` });
   await keyPane.getByRole('button', { name: 'Verify', exact: true }).click();
   await keyPane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await page.locator('#RightColumn').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -139,6 +141,7 @@ try {
   await sendText(page, lostText);
   const failedRow = findMessageContainer(page, lostText).locator('[data-message-send-failed]');
   await failedRow.getByText('Not delivered', { exact: false }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/chat-not-delivered.png` });
   await wide.setOffline(false);
   await failedRow.getByRole('button', { name: 'Cancel sending', exact: true }).click();
   await page.waitForFunction(
@@ -178,6 +181,7 @@ try {
   assert.ok(Math.abs(sheetBox.y + sheetBox.height - PHONE.height) <= 1, `шторка у нижнего края: ${JSON.stringify(sheetBox)}`);
   const tiles = sheet.getByRole('menuitem');
   assert.ok(await tiles.count() >= 4, 'плиток вложений не меньше четырёх');
+  if (process.env.PARVANE_E2E_SHOT_DIR) await phone.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/chat-attach-sheet-phone.png` });
   const [first, second] = [await tiles.nth(0).boundingBox(), await tiles.nth(1).boundingBox()];
   assert.ok(Math.abs(first.y - second.y) <= 1 && second.x > first.x, 'плитки стоят в ряд');
   await phone.keyboard.press('Escape');
