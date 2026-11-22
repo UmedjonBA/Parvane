@@ -852,15 +852,24 @@ async function galleryMusic() {
     await music.locator('[data-music-make-shared]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1500);
   });
-  await step(page, 'ZdMusicX-04b', async () => {
-    await page.locator('.Modal.open button[type="submit"], .Modal.open [data-music-playlist-save]').first()
+  await step(page, 'music-desk-shared', async () => {
+    await page.locator('.Modal.open').getByRole('button', { name: 'Сделать общим', exact: true }).last()
       .click({ timeout: STEP_TIMEOUT_MS });
-    await page.waitForTimeout(2500);
+    await music.locator('[data-music-shared]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await step(page, 'music-desk-shared-members', async () => {
+    await music.locator('[data-music-members-open]').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
   });
   await page.keyboard.press('Escape');
-  await step(page, 'music-desk-shared', async () => { await page.waitForTimeout(500); });
   await resize(page, PHONE);
   await step(page, 'RpMusicB-02', async () => { await page.waitForTimeout(800); });
+  await step(page, 'music-phone-shared-members', async () => {
+    await music.locator('[data-music-members-open]:visible').click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await page.keyboard.press('Escape');
   await step(page, 'music-phone-starred-list', async () => {
     await musicBack();
     await tab(2).click({ timeout: 3000 }).catch(() => undefined);

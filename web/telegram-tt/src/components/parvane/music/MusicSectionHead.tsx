@@ -20,6 +20,8 @@ type OwnProps = {
   cover?: TeactNode;
   // Кнопки справа на компьютере, под шапкой на телефоне: «Играть», «Вперемешку», «Изменить лимит»
   actions?: TeactNode;
+  // Кнопок больше трёх: на телефоне — по две в ряд, без узкой третьей колонки
+  hasManyActions?: boolean;
   // Поле отбора и сортировка раздела (компьютер — в строке шапки)
   tools?: TeactNode;
   // Телефон: верхняя строка страницы — «назад», название страницы, значки справа
@@ -35,7 +37,8 @@ type OwnProps = {
 // раздела «Музыки» — одна на все экраны: название и число, поле отбора, сортировка, «Слушать / Вперемешку».
 // На телефоне сверху строка страницы с «назад»
 const MusicSectionHead = ({
-  title, kicker, subtitle, cover, actions, tools, barTitle, barSubtitle, barActions, isPhone, onBack,
+  title, kicker, subtitle, cover, actions, tools, barTitle, barSubtitle, barActions, isPhone, hasManyActions,
+  onBack,
 }: OwnProps) => {
   const lang = useLang();
   // Телефон: название — в строке страницы; крупная шапка — только с обложкой (плейлист, альбом, исполнитель)
@@ -69,7 +72,9 @@ const MusicSectionHead = ({
           {!isPhone && Boolean(actions) && <div className={styles.actions}>{actions}</div>}
         </div>
       )}
-      {isPhone && Boolean(actions) && <div className={styles.actions}>{actions}</div>}
+      {isPhone && Boolean(actions) && (
+        <div className={buildClassName(styles.actions, hasManyActions && styles.actionsPairs)}>{actions}</div>
+      )}
       {isPhone && Boolean(tools) && <div className={styles.tools}>{tools}</div>}
     </header>
   );

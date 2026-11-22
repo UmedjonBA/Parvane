@@ -182,6 +182,7 @@ const MusicSharedPage = ({ id, isPhone }: OwnProps) => {
         kicker={lang(playlist.access === 'server' ? 'MusicSharedKickerServer' : 'MusicSharedKicker')}
         title={playlist.name}
         cover={<MusicCover toneId={playlist.id} size={72} glyph="list" className={musicStyles.heroCover} />}
+        hasManyActions
         subtitle={(
           <span data-music-shared-meta>
             {[
