@@ -200,6 +200,8 @@ try {
     assert.equal(await screen.getByLabel('Start', { exact: true }).inputValue(), '12:00', 'начало из строки');
     // «Длительность · 3 ч» значением (доска `XpChat`), правка — минутами или «1 ч 30 мин»
     assert.match(await screen.getByLabel('Duration, min').inputValue(), /^3\s?h$/, 'длительность из строки');
+    // Кадр экрана задания для сверки с доской `XpChat-02`
+    if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/task-offer-form.png` });
     await screen.getByRole('button', { name: 'Close', exact: true }).click();
     await screen.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
     console.log('OK: «Одной строкой» заполняет экран задания');

@@ -154,8 +154,11 @@ try {
   await aPage.locator('[data-music-shared-tracks] [data-track="t4"]').getByText(`added by ${bobNick}`)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   await aPage.locator('[data-music-shared-recent]').getByText('Glass Harbor').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Кадры общего плейлиста и окна участников для сверки с досками `RpMusicB-02`, `ZdMusicX-04`
+  if (process.env.PARVANE_E2E_SHOT_DIR) await a.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-shared-page.png` });
   await aPage.locator('[data-music-members-open]').click();
   await bobRow.getByText('Added 1 track').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await a.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-shared-members.png` });
   console.log('OK: bob открыл приглашение и добавил трек; у alice — «добавил(а)» и «Последние добавления»');
 
   // ── Роль «Слушает»: сервер не даёт править ──
@@ -219,6 +222,8 @@ try {
   const uploads = aMusic.locator('[data-music-uploads]');
   await uploads.locator('[data-fetch-job][data-fetch-state="failed"]').getByText(/The server cannot download/)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Кадр «Загрузок на сервер» с задачами для сверки с доской `ZpMusicX-02`
+  if (process.env.PARVANE_E2E_SHOT_DIR) await a.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-uploads-jobs.png` });
   await uploads.locator('[data-fetch-job][data-fetch-state="failed"] [data-fetch-remove]').click();
   await uploads.locator('[data-music-empty="uploads"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: «Недавние запросы» и «Загрузки на сервер» («Убрать»)');

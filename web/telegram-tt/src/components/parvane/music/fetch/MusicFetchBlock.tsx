@@ -105,7 +105,7 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
       return (
         <button
           type="button"
-          className={kit.btnGhost}
+          className={buildClassName(kit.btn, kit.btnGhost)}
           data-library-track={libraryId}
           data-fetch-play
           onClick={handlePlay}
@@ -127,7 +127,12 @@ const MusicFetchBlock = ({ query, onPlayLibraryTrack }: OwnProps) => {
       <div className={styles.headRow}>
         <div className={buildClassName(kit.caps, kit.grow)}>{lang('MusicFetchTitle')}</div>
         {Boolean(jobs.length) && (
-          <button type="button" className={kit.btnGhost} data-fetch-uploads onClick={handleOpenUploads}>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnGhost)}
+            data-fetch-uploads
+            onClick={handleOpenUploads}
+          >
             {lang('MusicFetchUploadsCount', { count: jobs.length }, { pluralValue: jobs.length })}
           </button>
         )}

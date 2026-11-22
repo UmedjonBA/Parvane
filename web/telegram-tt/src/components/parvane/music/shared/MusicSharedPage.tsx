@@ -161,7 +161,7 @@ const MusicSharedPage = ({ id, isPhone }: OwnProps) => {
           </button>
           <button
             type="button"
-            className={kit.btnDanger}
+            className={buildClassName(kit.btn, kit.btnDanger)}
             data-music-shared-delete
             onClick={isDeleteAsked ? handleDelete : askDelete}
           >
@@ -181,7 +181,7 @@ const MusicSharedPage = ({ id, isPhone }: OwnProps) => {
       <MusicSectionHead
         kicker={lang(playlist.access === 'server' ? 'MusicSharedKickerServer' : 'MusicSharedKicker')}
         title={playlist.name}
-        cover={<MusicCover toneId={playlist.id} size={72} glyph="list" />}
+        cover={<MusicCover toneId={playlist.id} size={72} glyph="list" className={musicStyles.heroCover} />}
         subtitle={(
           <span data-music-shared-meta>
             {[

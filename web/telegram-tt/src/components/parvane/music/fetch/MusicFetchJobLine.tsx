@@ -126,7 +126,12 @@ const MusicFetchJobLine = ({
             {lang('MusicFetchRetry')}
           </button>
         )}
-        <button type="button" className={kit.btnGhost} data-fetch-remove onClick={handleCancel}>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnGhost)}
+          data-fetch-remove
+          onClick={handleCancel}
+        >
           {lang('MusicFetchRemove')}
         </button>
       </>

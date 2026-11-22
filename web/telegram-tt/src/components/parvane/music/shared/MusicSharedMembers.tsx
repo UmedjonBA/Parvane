@@ -134,7 +134,7 @@ const MusicSharedMembers = ({
             </select>
             <button
               type="button"
-              className={kit.btnGhost}
+              className={buildClassName(kit.btn, kit.btnGhost)}
               data-address={member.address}
               data-music-member-remove
               onClick={handleRemove}
@@ -191,11 +191,21 @@ const MusicSharedMembers = ({
         )}
         <div className={styles.buttons}>
           {isOwner ? (
-            <button type="button" className={kit.btnDanger} data-music-make-personal onClick={handleClose}>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, kit.btnDanger)}
+              data-music-make-personal
+              onClick={handleClose}
+            >
               {lang('MusicMembersCloseForAll')}
             </button>
           ) : playlist.myRole !== 'none' && (
-            <button type="button" className={kit.btnDanger} data-music-leave onClick={handleLeave}>
+            <button
+              type="button"
+              className={buildClassName(kit.btn, kit.btnDanger)}
+              data-music-leave
+              onClick={handleLeave}
+            >
               {lang('MusicSharedLeave')}
             </button>
           )}

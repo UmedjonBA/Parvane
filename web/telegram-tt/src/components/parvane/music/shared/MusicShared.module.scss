@@ -47,8 +47,20 @@
 
   font-size: 0.8125rem;
   font-weight: var(--font-weight-medium);
+  color: var(--pv-accent-ink);
 
-  background: var(--pv-raised);
+  background: var(--pv-blue);
+}
+
+// Кружки участников разных тонов, как аватары макета (доски `RpMusicB`, `ZdMusicX`)
+.member:nth-child(3n + 2) .initials,
+.stripFace:nth-child(3n + 2) {
+  background: var(--pv-purple);
+}
+
+.member:nth-child(3n) .initials,
+.stripFace:nth-child(3n) {
+  background: var(--pv-aqua);
 }
 
 .memberText {
