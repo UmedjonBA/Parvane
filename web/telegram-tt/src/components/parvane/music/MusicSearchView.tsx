@@ -261,22 +261,23 @@ const MusicSearchView = ({
 
   return (
     <div className={styles.view} data-music-search>
-      {/* Телефон: поиск — страница со своей шапкой «‹ Музыка · поиск» (доска `ZpMusicX`) */}
+      {/* Телефон: поиск — страница со своей шапкой «‹ Музыка / поиск» и подписью над полем (доска `ZpMusicX`) */}
       {isPhone && (
         <MusicSectionHead
-          title={lang('MusicSearchBar')}
-          barTitle={lang('MusicSearchBar')}
+          title={lang('ParvaneModuleMusic')}
+          barSubtitle={lang('MusicSearch').toLowerCase()}
           isPhone
           onBack={handleBack}
         />
       )}
       <div className={styles.searchBar}>
+        {isPhone && <div className={styles.searchLabel}>{lang('MusicSearchPlaceholder')}</div>}
         <input
           ref={inputRef}
           className={buildClassName(kit.input, styles.search)}
           type="search"
           value={query}
-          placeholder={lang('MusicSearchPlaceholder')}
+          placeholder={isPhone ? undefined : lang('MusicSearchPlaceholder')}
           aria-label={lang('MusicSearchPlaceholder')}
           onChange={handleQuery}
         />

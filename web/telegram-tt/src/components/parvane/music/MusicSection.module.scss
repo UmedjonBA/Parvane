@@ -7,30 +7,52 @@
   gap: 0.75rem;
 }
 
-// Телефон: «‹ Плейлист  [значки]» во всю ширину страницы
+// Телефон: «‹ Плейлист  [значки]» — полоса панели 56 px с линией у верхнего края страницы (доски `RpMusicA`,
+// `ZpMusicX`); отрицательные поля снимают поля прокручиваемой области
 .bar {
   position: sticky;
   z-index: 1;
-  top: -0.25rem;
+  top: -0.75rem;
 
   display: flex;
   gap: 0.25rem;
   align-items: center;
 
-  margin: -0.25rem -1rem 0;
-  padding: 0.25rem 0.5rem;
+  min-height: var(--pv-header-height);
+  margin: -0.75rem -1rem 0;
+  padding: 0 0.375rem;
+  border-bottom: 1px solid var(--pv-line);
 
-  background: var(--pv-bg);
+  background: var(--pv-panel);
+}
+
+.barTitles {
+  overflow: hidden;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+
+  min-width: 0;
 }
 
 .barTitle {
   overflow: hidden;
-  flex: 1;
 
   margin: 0;
 
   font-size: 1.0625rem;
   font-weight: var(--font-weight-semibold);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barSubtitle {
+  overflow: hidden;
+
+  font-size: var(--pv-font-size-small);
+  line-height: 1.2;
+  color: var(--pv-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

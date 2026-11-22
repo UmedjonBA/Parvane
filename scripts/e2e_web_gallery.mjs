@@ -476,7 +476,11 @@ async function galleryMusic() {
   const tab = (index) => music.locator('[role="tablist"]').first().locator('[role="tab"]').nth(index);
   await step(page, 'MusicHome-01', async () => { await tab(0).click({ timeout: STEP_TIMEOUT_MS }); });
   await step(page, 'MusicSearch-01', async () => { await tab(1).click({ timeout: STEP_TIMEOUT_MS }); });
-  await step(page, 'MusicLibrary-01', async () => { await tab(2).click({ timeout: STEP_TIMEOUT_MS }); });
+  // Поиск на телефоне — страница без вкладок: к вкладкам возвращает «назад»
+  await step(page, 'MusicLibrary-01', async () => {
+    await music.locator('[data-music-back]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await tab(2).click({ timeout: STEP_TIMEOUT_MS });
+  });
   await page.context().close();
 }
 

@@ -4097,7 +4097,6 @@
 "MusicToPlaylist" = "В плейлист";
 "MusicToQueue" = "В очередь";
 "MusicWholeLibrary" = "Вся библиотека сервера";
-"MusicSearchBar" = "Музыка · поиск";
 "MusicFetchQueued" = "В очереди сервера";
 "MusicFetchQueuedAhead_one" = "В очереди сервера · перед ним {count} трек";
 "MusicFetchQueuedAhead_few" = "В очереди сервера · перед ним {count} трека";

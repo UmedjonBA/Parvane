@@ -223,6 +223,14 @@
   align-items: center;
 }
 
+// Подпись над полем поиска на телефоне (доска `ZpMusicX`)
+.searchLabel {
+  flex: 1 0 100%;
+  margin-bottom: -0.125rem;
+  font-size: var(--pv-font-size-small);
+  color: var(--pv-muted);
+}
+
 .search {
   flex: 1;
   min-width: 12rem;
@@ -893,6 +901,8 @@
 .libraryRows {
   overflow: hidden;
   display: flex;
+  // Не сжимается: при высокой заглушке загрузки плейлистов карточка обрезала свои строки
+  flex: none;
   flex-direction: column;
 
   border: 1px solid var(--pv-line);

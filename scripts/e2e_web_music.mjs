@@ -330,9 +330,10 @@ try {
   await phone.locator('[data-music-back]').click();
   await phone.locator('[data-music-back]').click();
   await ribbon.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // «Поиск» — страница «‹ Музыка · поиск» с полем и чипами
+  // «Поиск» — страница «‹ Музыка / поиск» (две строки шапки, доска `ZpMusicX`) с полем и чипами
   await tabs.getByRole('tab', { name: 'Search' }).click();
-  await phone.locator('[data-music-search]').getByText('Music · search').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await phone.locator('[data-music-search] [data-music-bar-subtitle]').filter({ hasText: 'search' })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await phone.locator('[data-music-search]').getByRole('searchbox').fill('harbor');
   await phone.locator('[data-music-found="2"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await phone.getByRole('button', { name: 'Albums', exact: true }).click();

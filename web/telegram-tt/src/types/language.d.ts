@@ -3245,7 +3245,6 @@ export interface LangPair {
   'MusicToPlaylist': undefined;
   'MusicToQueue': undefined;
   'MusicWholeLibrary': undefined;
-  'MusicSearchBar': undefined;
   'MusicFetchQueued': undefined;
   'MusicFetchPickingReference': undefined;
   'MusicFetchServerDownloading': undefined;
