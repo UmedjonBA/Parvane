@@ -1042,6 +1042,25 @@ async function gallerySkeleton() {
     await page.locator('[data-module="files"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('#ParvaneCloud [data-cloud-nav]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   });
+  // Заглушки списка (доски `ZpStates-01`, `ZdMisc-05`): сеть замедлена, раздел открыт сразу после перезагрузки —
+  // пока движок и связь ещё поднимаются
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 1500, downloadThroughput: 60_000, uploadThroughput: 60_000,
+  });
+  await page.reload({ waitUntil: 'commit' });
+  for (const [name, module, size] of [['desk', 'files', DESK], ['phone', 'notes', PHONE]]) {
+    await resize(page, size);
+    await page.locator(`[data-module="${module}"]:visible`).first().click({ timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
+    for (let shot = 0; shot < 4; shot++) {
+      await step(page, `skeleton-slow-${name}-${shot}`, async () => { await page.waitForTimeout(shot ? 1500 : 100); });
+    }
+  }
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+  });
+  await resize(page, DESK);
   await page.context().setOffline(true);
   for (const [name, module, rootId] of [['files', 'files', 'ParvaneCloud'], ['notes', 'notes', 'ParvaneKnowledge']]) {
     await step(page, `skeleton-desk-${name}`, async () => {

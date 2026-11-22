@@ -21,6 +21,8 @@ import useEffectOnce from '../../hooks/useEffectOnce';
 import useFlag from '../../hooks/useFlag';
 import useShowTransitionDeprecated from '../../hooks/useShowTransitionDeprecated';
 
+import PvLoading from '../parvane/notes/PvLoading';
+
 import appStyles from '../App.module.scss';
 import styles from './UiLoader.module.scss';
 
@@ -161,6 +163,8 @@ const UiLoader: FC<OwnProps & StateProps> = ({
       {children}
       {shouldRenderMask && !shouldSkipHistoryAnimations && Boolean(page) && (
         <div className={buildClassName(styles.mask, transitionClassNames)}>
+          {/* Parvane (доска `PhStates`): старт дольше секунды — призрак и «Загрузка…» вместо пустых панелей */}
+          <PvLoading className={styles.loading} />
           {page === 'main' ? (
             <div className={buildClassName(styles.main, isFoldersSidebarShown && styles.foldersSidebarVisible)}>
               {isFoldersSidebarShown && <div className={styles.foldersSidebar} />}

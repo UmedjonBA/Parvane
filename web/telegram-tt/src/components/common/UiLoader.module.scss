@@ -99,3 +99,22 @@
   flex: 1;
   background-color: var(--color-background);
 }
+
+// Parvane: призрак и «Загрузка…» по центру стартовой маски — показываются, если старт дольше секунды
+.loading {
+  pointer-events: none;
+
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+
+  opacity: 0;
+
+  animation: pv-boot-loading 0.2s linear 1s forwards;
+}
+
+@keyframes pv-boot-loading {
+  to {
+    opacity: 1;
+  }
+}
