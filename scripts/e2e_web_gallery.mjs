@@ -3,6 +3,8 @@
 // именами кадров досок (`<Доска>-<номер>.png`, номера — как у `render_boards.mjs`). Ничего не утверждает, кроме
 // того, что экраны открываются; шаг, который не удался, пишет WARN и снимок `<имя>-fail.png`. Данные — выдуманные.
 // Запуск: PARVANE_E2E_SHOT_DIR=<каталог> [PARVANE_GALLERY=health,plan,…] scripts/run_web_gallery_e2e.sh
+// Другая тема и схема: PARVANE_GALLERY_THEME=dark, PARVANE_GALLERY_SCHEME=nord (gruvbox, telegram, nord, catppuccin,
+// solarized)
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
@@ -28,7 +30,21 @@ const dir = process.env.PARVANE_E2E_SHOT_DIR;
 const only = (process.env.PARVANE_GALLERY || '').split(',').filter(Boolean);
 const wants = (name) => !only.length || only.includes(name);
 
+// Тема и цветовая схема снимков: по умолчанию светлая Gruvbox, как у досок макета
+const THEME = process.env.PARVANE_GALLERY_THEME || 'light';
+const SCHEME = process.env.PARVANE_GALLERY_SCHEME || '';
+
 const browser = await chromium.launch();
+
+async function newGalleryContext(options) {
+  const context = await browser.newContext({ ...options, colorScheme: THEME });
+  if (SCHEME) {
+    await context.addInitScript((scheme) => {
+      try { localStorage.setItem('parvane:color-scheme', scheme); } catch { /* хранилище недоступно */ }
+    }, SCHEME);
+  }
+  return context;
+}
 let failed = 0;
 
 async function snap(page, name) {
@@ -52,7 +68,7 @@ async function step(page, name, action) {
 // Сессия заводится на английском (хелперы ищут английские подписи), затем ставится язык «как в системе» (язык
 // браузера с этой меткой — русский) и страница перезагружается: снимки — на русском, переходы — по атрибутам `data-*`
 async function openSession(tag, contextOptions = {}) {
-  const context = await browser.newContext({ viewport: DESK, colorScheme: 'light', ...contextOptions });
+  const context = await newGalleryContext({ viewport: DESK, ...contextOptions });
   // Язык браузера становится русским вместе с меткой «как в системе»: до неё вход идёт на английском
   await context.addInitScript(() => {
     if (localStorage.getItem('parvane:language-system') !== '1') return;
@@ -420,7 +436,7 @@ async function galleryFiles() {
   await page.keyboard.press('Escape');
   // Страница получателя ссылки — в чистом браузере без аккаунта (доска `RpFiles-03`)
   if (linkUrl) {
-    const visitor = await browser.newContext({ viewport: PHONE, colorScheme: 'light', locale: 'ru-RU' });
+    const visitor = await newGalleryContext({ viewport: PHONE, locale: 'ru-RU' });
     // Адрес gateway стенда: публичная страница читает его только в диагностической сборке
     await visitor.addInitScript((gatewayUrl) => {
       localStorage.setItem('parvane:gateway', gatewayUrl);
@@ -629,7 +645,7 @@ async function galleryProfile() {
 // ── Вход и регистрация: доски PhAuth, XpAuth, ZpAuthX, DkAuth, RdAuth, ZdAuthX — экраны до входа, без аккаунта ──
 async function galleryAuth() {
   for (const [tag, size] of [['desk', DESK], ['phone', PHONE]]) {
-    const context = await browser.newContext({ viewport: size, colorScheme: 'light' });
+    const context = await newGalleryContext({ viewport: size });
     await context.addInitScript((gatewayUrl) => {
       localStorage.setItem('parvane:gateway', gatewayUrl);
       localStorage.setItem('parvane:language-system', '1');
@@ -1008,7 +1024,7 @@ async function galleryUnlinked() {
   // На первом устройстве есть данные: папка «Файлов» и справка «Заметок»
   await openModule(first.page, 'notes', 'ParvaneKnowledge').catch(() => undefined);
   await first.page.waitForTimeout(4000);
-  const context = await browser.newContext({ viewport: DESK, colorScheme: 'light' });
+  const context = await newGalleryContext({ viewport: DESK });
   await context.addInitScript(() => {
     if (localStorage.getItem('parvane:language-system') !== '1') return;
     Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });

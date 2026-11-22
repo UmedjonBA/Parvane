@@ -108,13 +108,19 @@ try {
       });
       await phone('calendar', () => openPlannerScreen(phonePage, 'calendar'));
       await phone('health', () => bar.getByRole('button', { name: 'Health' }).click());
+      // Первый запуск «Здоровья» — страница во весь экран поверх ленты: закрыть, иначе дальше ничего не нажать
+      await phonePage.getByRole('button', { name: 'Done', exact: true }).click({ timeout: STEP_TIMEOUT_MS })
+        .catch((err) => console.log(`WARN: телефон, первый запуск «Здоровья»: ${String(err).split('\n')[0]}`));
+      await phone('health2', () => phonePage.waitForTimeout(300));
       await phone('quick', async () => {
+        // «+» в «Здоровье» открывает его собственный ввод — строка «Плана» открывается из «Плана»
+        await bar.getByRole('button', { name: 'Plan', exact: true }).click();
         await phonePage.locator('[data-add-for]').click();
         await phonePage.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
       });
       await phonePage.keyboard.press('Escape');
       await phone('knowledge', () => bar.getByRole('button', { name: 'Notes' }).click());
-      await phone('files', () => phonePage.getByRole('tab', { name: 'Files' }).first().click());
+      await phone('files', () => bar.getByRole('button', { name: 'Files' }).click());
       console.log(`OK: снимки ${scheme} / ${mode}`);
       await phoneContext.close();
     }
