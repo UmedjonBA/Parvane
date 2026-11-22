@@ -584,7 +584,7 @@ try {
     await planner.getByRole('button', { name: scope, exact: typeof scope === 'string' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   assert.match(
-    await planner.locator('[data-series-ask]').innerText(), /«Зарядка» repeats every day\. What should the new time 12:00 apply to\?/,
+    await planner.locator('[data-series-ask]').innerText(), /“Зарядка” repeats every day\. What should the new time 12:00 apply to\?/,
     'пояснение выбора объёма правки ряда',
   );
   await planner.getByRole('button', { name: 'All in series', exact: true }).click();

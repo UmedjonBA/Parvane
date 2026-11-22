@@ -1303,6 +1303,15 @@
   }
 }
 
+// Под действиями — колонки даты и размера: прячутся целиком, иначе из-под кнопок торчал обрывок даты
+.item:has(.itemHoverActions):hover,
+.item:has(.itemHoverActions):focus-within {
+  .cellDate,
+  .cellSize {
+    visibility: hidden;
+  }
+}
+
 // Строка, с которой пока ничего не сделать: файл ещё загружается, доступ к папке закрыт (доска `ZdMisc`)
 .itemUnavailable {
   .itemTitle,

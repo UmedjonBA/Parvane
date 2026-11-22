@@ -77,7 +77,7 @@ try {
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await device1.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/stolen-desk.png` });
   }
-  assert.match(await wizard.innerText(), /Mark «.+» as stolen/, 'шаг 1 вышедшего — отметка украденным');
+  assert.match(await wizard.innerText(), /Mark “.+” as stolen/, 'шаг 1 вышедшего — отметка украденным');
   assert.equal(await wizard.locator('[data-stolen-password]').count(), 0, 'пароль для отметки не нужен');
   assert.equal(await wizard.locator('[data-stolen-sign-out-only]').count(), 0, '«Просто выйти» вышедшему не нужно');
   await wizard.locator('[data-stolen-step="password"]').uncheck();

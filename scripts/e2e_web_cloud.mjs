@@ -262,7 +262,7 @@ try {
   assert.equal(await item('заметка.txt').count(), 0);
   // Совпавшее имя (доска `ZdFilesX`): ошибка в поле, без номера; окно остаётся открытым
   await rename('отчёт.pdf', 'дневник.txt');
-  await page.getByText('A file «дневник.txt» is already here. Choose another name.')
+  await page.getByText('A file “дневник.txt” is already here. Choose another name.')
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('.Modal.open').getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.locator('#parvane-cloud-name').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });

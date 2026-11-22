@@ -411,4 +411,10 @@
   > #ParvaneCloud {
     left: var(--pv-rail-narrow-width);
   }
+
+  // Ширина колонки чата в раскладке телефона — во всё окно: со сдвигом на панель значков она выходила за правый
+  // край, и время у сообщений обрезалось
+  > #MiddleColumn {
+    width: calc(100vw - var(--pv-rail-narrow-width)) !important;
+  }
 }
