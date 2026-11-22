@@ -154,15 +154,26 @@ try {
   await selectToolbar.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Клик по второму сообщению может промахнуться (анимации) — тогда пересылка
   // уйдёт с ОДНИМ выбранным (известный флак). Добиваемся счётчика «2 …»
-  for (let attempt = 0; attempt < 6; attempt++) {
-    await findMessageContainer(aliceSession.page, multiB).click();
-    await aliceSession.page.waitForTimeout(300);
-    if (/\b2\b/.test(await selectToolbar.innerText())) break;
+  // Повторный щелчок снимает выделение. Под нагрузкой отрисовка отставала от щелчка: счётчик ещё показывал «1»,
+  // второй щелчок снимал выделение, а счётчик успевал показать «2» от первого — пересылалось одно сообщение.
+  // Поэтому щёлкаем, только пока само сообщение не выделено, и ждём, что выделены оба и счётчик это показывает
+  const secondMessage = findMessageContainer(aliceSession.page, multiB);
+  const isSecondSelected = () => secondMessage.evaluate((element) => element.classList.contains('is-selected'));
+  for (let attempt = 0; attempt < 6 && !(await isSecondSelected()); attempt++) {
+    await secondMessage.click();
+    await aliceSession.page.waitForFunction(
+      (element) => element.classList.contains('is-selected'), await secondMessage.elementHandle(), { timeout: 3000 },
+    ).catch(() => undefined);
   }
-  assert.match(
-    await selectToolbar.innerText(), /\b2\b/,
-    'both messages must be selected before multi-forward',
+  assert.ok(await isSecondSelected(), 'второе сообщение не выделено перед пересылкой');
+  assert.equal(
+    await findMessageContainer(aliceSession.page, multiA).evaluate((element) => element.classList.contains('is-selected')),
+    true, 'первое сообщение не выделено перед пересылкой',
   );
+  await aliceSession.page.waitForFunction(
+    () => /\b2\b/.test(document.querySelector('.MessageSelectToolbar')?.textContent || ''),
+    undefined, { timeout: LOGIN_TIMEOUT_MS },
+  ).catch(() => assert.fail('both messages must be selected before multi-forward'));
   await selectToolbar.getByRole('button', { name: 'Forward', exact: true }).click();
   await pickForwardRecipientAndSend(aliceSession.page, bob);
   for (const forwardedText of [multiA, multiB]) {
