@@ -19,6 +19,7 @@ import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
   dismissRecoveryKeyDialog,
+  dumpDiagJournal,
   preparePage,
   reloadPage,
 } from './e2e_web_helpers.mjs';
@@ -709,8 +710,21 @@ try {
   await createForm.getByPlaceholder('for example: For the road').fill('Офлайн');
   await createForm.getByRole('button', { name: 'Create', exact: true }).click();
   await createForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  const toastsAfterCreate = await page.locator('.Notification').allInnerTexts().catch(() => []);
   const offList = offlineMusic.locator('[data-music-playlist]');
-  await offlineMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'Офлайн' }).click();
+  // Под нагрузкой плейлист однажды не появился в навигации после закрытия окна: тогда — состояние плейлистов,
+  // уведомление и журнал диагностики, чтобы было видно, создан ли он
+  const offlineListNav = offlineMusic.locator('[data-music-nav] [data-playlist]').filter({ hasText: 'Офлайн' });
+  await offlineListNav.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    const reply = await page.evaluate(() => window.__parvaneDiagCallApi('parvaneMusicPlaylists')).catch(String);
+    const names = reply?.view ? JSON.parse(reply.view).playlists.map((list) => list.name) : reply;
+    const toasts = await page.locator('.Notification').allInnerTexts().catch(() => []);
+    await dumpDiagJournal(page, 'плейлист «Офлайн»', 80);
+    assert.fail(`плейлиста «Офлайн» нет в навигации: ${JSON.stringify({
+      status: reply?.status, names, toastsAfterCreate, toasts,
+    })}`);
+  });
+  await offlineListNav.click();
   await offList.locator('[data-track="t3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await offList.locator('[data-music-playlist-menu]').click();
   await page.getByRole('menuitem', { name: 'Download the playlist for offline', exact: true }).click();
