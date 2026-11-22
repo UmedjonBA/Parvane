@@ -3582,6 +3582,10 @@ export interface LangPair {
   'ParvanePublicMark': undefined;
   'ParvaneNewChannelInfo': undefined;
   'ParvaneChannelAuthor': undefined;
+  'ParvaneMemberOwner': undefined;
+  'ParvaneMemberAdmin': undefined;
+  'ParvaneMemberYou': undefined;
+  'ParvaneGroupAddMember': undefined;
   'ParvaneChannelWhoWrites': undefined;
   'ParvaneChannelWritesMe': undefined;
   'ParvaneChannelWritesSelected': undefined;

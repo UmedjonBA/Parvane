@@ -4529,6 +4529,10 @@
 "ParvanePublicMark" = "публичная";
 "ParvaneNewChannelInfo" = "В канале сообщения видят все подписчики. Усиленная приватность для каналов недоступна.";
 "ParvaneChannelAuthor" = "автор";
+"ParvaneMemberOwner" = "владелец";
+"ParvaneMemberAdmin" = "админ";
+"ParvaneMemberYou" = "Вы";
+"ParvaneGroupAddMember" = "Добавить участника";
 "ParvaneChannelWhoWrites" = "Кто пишет";
 "ParvaneChannelWritesMe" = "Только я";
 "ParvaneChannelWritesSelected" = "Я и выбранные участники";

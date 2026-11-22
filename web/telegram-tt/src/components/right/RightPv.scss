@@ -80,6 +80,8 @@
 // ── сведения группы: вкладки участников и медиа под блоком `GroupInfo` ──────────
 
 #RightColumn .pv-group-profile {
+  // Строки сведений — до края панели: место под полосу прокрутки занимается, только когда она есть
+  scrollbar-gutter: auto;
   background: var(--pv-bg);
 
   .shared-media-tabs {
@@ -370,9 +372,85 @@
   }
 
   .pv-group-members-list {
-    padding-block: 0.25rem;
     border-block: 1px solid var(--pv-line);
     background: var(--pv-panel);
+  }
+
+  // Строки вплотную с линией между ними, 52 px, без скруглений списка контактов
+  .ListItem {
+    margin: 0;
+
+    & + .ListItem {
+      border-top: 1px solid var(--pv-line);
+    }
+  }
+
+  .ListItem-button {
+    min-height: var(--pv-settings-row-height);
+    padding: 0.375rem 1rem;
+    border-radius: 0;
+  }
+
+  .pv-group-members-add {
+    cursor: var(--custom-cursor, pointer);
+
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+
+    width: 100%;
+    min-height: var(--pv-settings-row-height);
+    padding: 0.375rem 1rem;
+    border: 0;
+    border-bottom: 1px solid var(--pv-line);
+
+    font: inherit;
+    font-size: var(--pv-font-size);
+    color: var(--pv-accent);
+    text-align: start;
+
+    background: none;
+
+    &:hover {
+      background: var(--pv-hover);
+    }
+
+    > .icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      width: 2.25rem;
+
+      font-size: 1.25rem;
+    }
+  }
+}
+
+// Экран «Файлы и медиа» панели: строка возврата к сведениям над вкладками
+#RightColumn .pv-profile-media-back {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: var(--pv-settings-row-height);
+  padding: 0.375rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--pv-line);
+
+  font: inherit;
+  font-size: var(--pv-font-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: var(--pv-panel);
+
+  &:hover {
+    background: var(--pv-hover);
   }
 }
 

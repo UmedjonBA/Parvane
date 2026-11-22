@@ -4619,6 +4619,10 @@
 "ParvanePublicMark" = "public";
 "ParvaneNewChannelInfo" = "Everyone subscribed sees the messages of a channel. Enhanced privacy is not available for channels.";
 "ParvaneChannelAuthor" = "author";
+"ParvaneMemberOwner" = "owner";
+"ParvaneMemberAdmin" = "admin";
+"ParvaneMemberYou" = "You";
+"ParvaneGroupAddMember" = "Add member";
 "ParvaneChannelWhoWrites" = "Who posts";
 "ParvaneChannelWritesMe" = "Only me";
 "ParvaneChannelWritesSelected" = "Me and selected members";

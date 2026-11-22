@@ -141,10 +141,11 @@ try {
   assert.equal(await memberRows.count(), 2, 'group profile: members list must hold exactly the group members');
   const ownerRows = memberRows.filter({ hasText: 'Owner' });
   assert.equal(await ownerRows.count(), 1, 'group profile: exactly one owner badge expected');
-  assert.match(await ownerRows.first().innerText(), new RegExp(aliceName),
+  // Себя участник видит строкой «Вы» (доска `ZpChat2`)
+  assert.match(await ownerRows.first().innerText(), new RegExp(`${aliceName}|\\bYou\\b`),
     'group profile: the owner badge must be on the creator');
   const bobRow = memberRows.filter({ hasText: bobName }).first();
-  assert.doesNotMatch(await bobRow.innerText(), /Owner|Admin/,
+  assert.doesNotMatch(await bobRow.innerText(), /owner|admin/i,
     'group profile: a plain member must carry no rank badge');
 
   await right.getByRole('button', { name: 'Edit' }).click();

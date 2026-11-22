@@ -180,7 +180,8 @@ try {
   // Создание не всегда переключает активный чат — открываем группу явно
   await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.locator('.MiddleHeader .ChatInfo').click();
-  const addMembersButton = aliceSession.page.getByRole('button', { name: 'Add members' });
+  // «Добавить участника» — строкой над списком участников (доска `ZpChat2`), плавающей кнопки нет
+  const addMembersButton = aliceSession.page.locator('#RightColumn [data-group-add-member]');
   await addMembersButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await addMembersButton.click();
   const addSearch = aliceSession.page.locator('#new-members-picker-search');

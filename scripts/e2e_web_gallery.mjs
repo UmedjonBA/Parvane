@@ -511,10 +511,12 @@ async function galleryChat() {
   const phoneInfo = async (name, title) => {
     await step(page, name, async () => {
       const row = page.locator('.chat-list .ListItem').filter({ hasText: title }).first();
-      // К списку чатов: закрыть правую панель и открытый чат, пока строка чата не видна
-      for (let attempt = 0; attempt < 4 && !(await row.isVisible().catch(() => false)); attempt++) {
+      // К списку чатов: закрыть правую панель и открытый чат, пока строку чата нельзя нажать (на телефоне она
+      // «видна» и под открытым чатом — проверяется пробным нажатием)
+      const isReachable = () => row.click({ trial: true, timeout: 1500 }).then(() => true, () => false);
+      for (let attempt = 0; attempt < 4 && !(await isReachable()); attempt++) {
         await page.locator('#RightColumn .close-button:visible, #MiddleColumn .MiddleHeader .back-button button:visible')
-          .first().click({ timeout: 2000 }).catch(() => undefined);
+          .first().click({ timeout: 2000 }).catch(() => page.keyboard.press('Escape'));
         await page.waitForTimeout(600);
       }
       await row.click({ timeout: STEP_TIMEOUT_MS });

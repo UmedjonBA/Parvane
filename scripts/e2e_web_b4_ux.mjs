@@ -114,6 +114,9 @@ try {
   await bobSession.page.locator('.MiddleHeader .chat-info-wrapper').click();
   const rightColumn = bobSession.page.locator('#RightColumn');
   await rightColumn.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Вкладки медиа — отдельным экраном панели: его открывает строка «Общие файлы и заметки» (доска `RpChat`)
+  assert.equal(await rightColumn.locator('.shared-media-tabs').count(), 0, 'в сведениях собеседника вкладок медиа нет');
+  await rightColumn.locator('[data-peer-shared]').click();
 
   await rightColumn.locator('.Media').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

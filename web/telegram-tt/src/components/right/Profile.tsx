@@ -89,6 +89,7 @@ import usePeerStoriesPolling from '../../hooks/polling/usePeerStoriesPolling';
 import useTopOverscroll from '../../hooks/scroll/useTopOverscroll.tsx';
 import useEffectWithPrevDeps from '../../hooks/useEffectWithPrevDeps';
 import useFlag from '../../hooks/useFlag';
+import useHistoryBack from '../../hooks/useHistoryBack';
 import { useIntersectionObserver } from '../../hooks/useIntersectionObserver';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
@@ -105,6 +106,7 @@ import Audio from '../common/Audio';
 import Document from '../common/Document';
 import SavedGift from '../common/gift/SavedGift';
 import GroupChatInfo from '../common/GroupChatInfo';
+import Icon from '../common/icons/Icon';
 import Media from '../common/Media';
 import NothingFound from '../common/NothingFound';
 import PreviewMedia from '../common/PreviewMedia';
@@ -117,7 +119,6 @@ import Surface from '../gili/layout/Surface';
 import ChatList from '../left/main/ChatList';
 import MediaStory from '../story/MediaStory';
 import Button from '../ui/Button';
-import FloatingActionButton from '../ui/FloatingActionButton';
 import InfiniteScroll from '../ui/InfiniteScroll';
 import Link from '../ui/Link';
 import ListItem, { type MenuItemContextAction } from '../ui/ListItem';
@@ -127,6 +128,7 @@ import Transition from '../ui/Transition';
 import DeleteMemberModal from './DeleteMemberModal';
 import StarGiftCollectionList from './gifts/StarGiftCollectionList';
 import GroupInfo from './groupInfo/GroupInfo';
+import GroupMember from './groupInfo/GroupMember';
 import PeerInfo from './peerInfo/PeerInfo';
 import StoryAlbumList from './stories/StoryAlbumList';
 
@@ -753,11 +755,17 @@ const Profile = ({
     }];
   });
 
-  // Parvane: «Файлы и медиа» в сведениях группы — вкладка медиа и прокрутка к вкладкам
+  // Parvane (доски `ZpChat2`, `RpChat`): в сведениях группы и собеседника вкладок медиа нет — их открывает строка
+  // «Файлы и медиа» отдельным экраном панели с возвратом к сведениям
+  const isPvProfile = Boolean(isGroupProfile || isPeerProfile);
+  const [isPvMediaOpen, openPvMedia, closePvMedia] = useFlag();
+  useEffect(closePvMedia, [profileId, closePvMedia]);
+  useHistoryBack({ isActive: isPvMediaOpen, onBack: closePvMedia });
   const handleOpenMedia = useLastCallback(() => {
     setActiveTab('media');
+    openPvMedia();
     requestMutation(() => {
-      containerRef.current?.querySelector('.shared-media-tabs')?.scrollIntoView({ block: 'start' });
+      containerRef.current?.scrollTo({ top: 0 });
     });
   });
 
@@ -1306,20 +1314,26 @@ const Profile = ({
           {lang('ParvaneGroupMembersCount', { count: groupMemberIds.length }, { pluralValue: groupMemberIds.length })}
         </div>
         <div className="pv-group-members-list">
+          {canAddMembers && (
+            <button
+              type="button"
+              className="pv-group-members-add"
+              data-group-add-member
+              onClick={handleNewMemberDialogOpen}
+            >
+              <Icon name="add-user" />
+              {lang('ParvaneGroupAddMember')}
+            </button>
+          )}
           {groupMemberIds.map((id) => (
             <ListItem
               key={id}
-              className="chat-item-clickable contact-list-item small-icon"
+              className="contact-list-item"
               onClick={() => handleMemberClick(id)}
               contextActions={getMemberContextAction(id)}
               withPortalForMenu
             >
-              <PrivateChatInfo
-                userId={id}
-                chatMemberOriginId={chatId}
-                chatMember={adminMembersById?.[id] || membersById?.[id]}
-                forceShowSelf
-              />
+              <GroupMember userId={id} member={adminMembersById?.[id] || membersById?.[id]} />
             </ListItem>
           ))}
         </div>
@@ -1382,6 +1396,8 @@ const Profile = ({
     );
   }
 
+  const isPvInfoShown = !noProfileInfo && !isSavedMessages && !isPvMediaOpen;
+
   return (
     <Surface
       ref={containerRef}
@@ -1395,13 +1411,19 @@ const Profile = ({
       )}
       onScroll={handleScroll}
     >
-      {!noProfileInfo && !isSavedMessages && isGroupProfile && (
+      {isPvInfoShown && isGroupProfile && (
         <GroupInfo chatId={profileId} onOpenMedia={handleOpenMedia} />
       )}
-      {!noProfileInfo && !isSavedMessages && isGroupProfile && hasMembersTab && renderGroupMembers()}
-      {!noProfileInfo && !isSavedMessages && isGroupProfile && <GroupInfo chatId={profileId} isLeaveOnly />}
-      {!noProfileInfo && !isSavedMessages && isPeerProfile && (
+      {isPvInfoShown && isGroupProfile && hasMembersTab && renderGroupMembers()}
+      {isPvInfoShown && isGroupProfile && <GroupInfo chatId={profileId} isLeaveOnly />}
+      {isPvInfoShown && isPeerProfile && (
         <PeerInfo userId={profileId} isActive={isActive} onOpenMedia={handleOpenMedia} />
+      )}
+      {isPvProfile && isPvMediaOpen && (
+        <button type="button" className="pv-profile-media-back" data-profile-media-back onClick={closePvMedia}>
+          <Icon name="previous" />
+          {lang('ParvaneGroupInfoMedia')}
+        </button>
       )}
       {!noProfileInfo && !isSavedMessages && !isGroupProfile && !isPeerProfile && (
         renderProfileInfo(
@@ -1409,7 +1431,7 @@ const Profile = ({
           isRightColumnShown && canRenderContent,
         )
       )}
-      {!isRestricted && (
+      {!isRestricted && (!isPvProfile || isPvMediaOpen) && (
         <>
           <div
             className={buildClassName(styles.sharedMediaTabs, 'shared-media-tabs')}
@@ -1440,16 +1462,6 @@ const Profile = ({
         </>
       )}
 
-      {canAddMembers && (
-        <FloatingActionButton
-          className={buildClassName(!isActive && styles.hidden)}
-          style={createVtnStyle('profileFab')}
-          isShown={canRenderContent}
-          onClick={handleNewMemberDialogOpen}
-          ariaLabel={oldLang('lng_channel_add_users')}
-          iconName="add-user-filled"
-        />
-      )}
       {canDeleteMembers && (
         <DeleteMemberModal
           isOpen={Boolean(deletingUserId)}
