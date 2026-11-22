@@ -1805,6 +1805,7 @@
 "HealthEntryEdit" = "Изменить запись: {name}";
 "HealthEntryEditTitle" = "Запись: {name}";
 "HealthEntryDelete" = "Удалить запись";
+"HealthEntryRecorded" = "записано в {when}";
 "HealthEntriesMore" = "Показать ещё";
 "HealthFieldDate" = "Дата";
 "HealthFieldTime" = "Время";

@@ -335,7 +335,7 @@ pub fn compose_changes(state: &HealthState, parsed: &[Value], now_ms: i64) -> Va
         let mut entry = json!({
             "id": new_id(), "kind": kind, "atMs": at_ms, "endMs": end_ms, "tzMin": field("tzMin"), "value": field("value"),
             "value2": field("value2"), "unit": field("unit"), "source": field("source"), "note": field("note"),
-            "name": field("name"), "tag": field("tag"), "parts": field("parts"),
+            "name": field("name"), "tag": field("tag"), "parts": field("parts"), "createdMs": now_ms,
         });
         let closes = match &open {
             Some((_, start_ms, _)) if kind == KIND_SLEEP_END && at_ms > *start_ms && at_ms - *start_ms <= health::MAX_SPAN_MS => true,

@@ -167,6 +167,7 @@ impl PersonalState {
             }
             Self::Health(st) => {
                 let mut op = health_json::op_from_json(changes_json)?;
+                health::keep_created(&mut op, st);
                 health::stamp_op(&mut op, &dom::Stamp::new(guard.tick(), dev));
                 let applied = st.apply_op(&op, dev)?;
                 Ok((op.encode_to_vec(), applied))

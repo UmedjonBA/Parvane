@@ -221,6 +221,9 @@ try {
   const sheet = page.locator('[data-health-sheet="pulse"]');
   await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.getByText('Pulse entry', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «записано в …» — момент внесения записи хранится у неё самой (доска `RpHealth`)
+  const recordedBefore = await page.locator('[data-health-recorded]').innerText({ timeout: STEP_TIMEOUT_MS });
+  assert.match(recordedBefore, /^recorded \S+,? \d{2}:\d{2}$/, `подпись момента внесения: «${recordedBefore}»`);
   const valueField = sheet.locator('[data-health-field="value"]');
   await page.waitForFunction(() => document.querySelector('[data-health-field="value"]')?.value === '64', undefined, { timeout: STEP_TIMEOUT_MS });
   await valueField.fill('900');

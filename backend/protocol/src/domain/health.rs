@@ -110,6 +110,9 @@ pub fn check_entry(e: &Entry) -> Result<()> {
     if !(TZ_MIN..=TZ_MAX).contains(&e.tz_min) {
         return Err(ProtoError::InvalidField("health_tz"));
     }
+    if e.created_ms != 0 && !(MIN_AT_MS..=MAX_AT_MS).contains(&e.created_ms) {
+        return Err(ProtoError::InvalidField("health_created"));
+    }
     if !is_number(e.value) || !is_number(e.value2) {
         return Err(ProtoError::InvalidField("health_value"));
     }
@@ -386,6 +389,20 @@ pub fn guard_op(guard: &mut LamportGuard, op: &HealthOp) -> Result<()> {
 
 /// Проставить одну метку всем изменениям операции (локальная правка: хост присылает изменения без меток).
 /// У изменения-удаления (`deleted` задан) метка идёт в надгробие, правка не трогается.
+/// Локальная правка не меняет момент внесения записи: у записи, которая уже есть в состоянии, `created_ms`
+/// берётся из неё (в том числе 0 — «неизвестно» у записей старше поля), у новой остаётся присланный хостом.
+pub fn keep_created(op: &mut HealthOp, state: &HealthState) {
+    for c in &mut op.changes {
+        if let Some(change::Change::Entry(e)) = &mut c.change {
+            if e.deleted.is_none() {
+                if let Some(cur) = state.entries.get(&e.id).filter(|cur| HealthState::is_entry_alive(cur)) {
+                    e.created_ms = cur.created_ms;
+                }
+            }
+        }
+    }
+}
+
 pub fn stamp_op(op: &mut HealthOp, stamp: &Stamp) {
     let pb = stamp.to_pb();
     for c in &mut op.changes {

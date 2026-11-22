@@ -352,6 +352,13 @@ const HealthEntrySheet = ({
       onChange={handleField}
     />
   ) : entry && <span>{entryWhen(entry)}</span>;
+  // «записано в сб, 08:55» (доска `RpHealth`): момент внесения записи, у старых записей его нет
+  const recordedMs = !shown?.isNew && entry?.createdMs ? entry.createdMs : undefined;
+  const recorded = recordedMs ? lang('HealthEntryRecorded', {
+    when: new Intl.DateTimeFormat(lang.code, {
+      weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(recordedMs),
+  }) : undefined;
 
   const saveButton = (
     <button
@@ -386,7 +393,10 @@ const HealthEntrySheet = ({
       onClose={onClose}
       onEnter={handleSave}
     >
-      <div className={styles.sheetSubtitle}>{subtitle}</div>
+      <div className={styles.sheetSubtitle}>
+        {subtitle}
+        {recorded && <span className={styles.sheetRecorded} data-health-recorded>{recorded}</span>}
+      </div>
       <div className={styles.fields} data-health-sheet={kind}>
         {isFood && renderField('name', lang('HealthFoodName'), 'text')}
         {hasExtraFields(kind) && renderTag()}

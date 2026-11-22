@@ -16,7 +16,7 @@ pub fn entry_json(e: &Entry) -> Value {
     json!({
         "id": e.id, "kind": e.kind, "atMs": e.at_ms, "endMs": e.end_ms, "tzMin": e.tz_min, "day": health::entry_day(e),
         "value": e.value, "value2": e.value2, "unit": e.unit, "source": e.source, "note": e.note,
-        "name": e.name, "tag": e.tag, "parts": parts,
+        "name": e.name, "tag": e.tag, "parts": parts, "createdMs": e.created_ms,
     })
 }
 
@@ -101,6 +101,8 @@ pub fn entry_of(o: &Map<String, Value>) -> Result<Entry> {
         name: text(o, "name")?,
         tag: text(o, "tag")?,
         parts: parts_of(o)?,
+        // Необязательное: момент внесения записи; у правки его заменит значение прежней версии (`keep_created`)
+        created_ms: if o.contains_key("createdMs") { int(o, "createdMs")? } else { 0 },
         ..Default::default()
     };
     // Локальная правка проверяется сразу: негодное не уходит в журнал

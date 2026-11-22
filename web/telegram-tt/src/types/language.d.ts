@@ -4859,6 +4859,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'HealthEntryEditTitle': {
     'name': V;
   };
+  'HealthEntryRecorded': {
+    'when': V;
+  };
   'HealthWaterGlass': {
     'ml': V;
   };

@@ -2059,6 +2059,7 @@
 "HealthEntryEdit" = "Edit entry: {name}";
 "HealthEntryEditTitle" = "Entry: {name}";
 "HealthEntryDelete" = "Delete entry";
+"HealthEntryRecorded" = "recorded {when}";
 "HealthEntriesMore" = "Show more";
 "HealthFieldDate" = "Date";
 "HealthFieldTime" = "Time";

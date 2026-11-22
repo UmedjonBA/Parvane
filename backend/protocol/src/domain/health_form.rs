@@ -143,6 +143,30 @@ mod tests {
         st
     }
 
+    /// Момент внесения записи ставится при создании и не меняется правкой; запись старше поля остаётся без него.
+    #[test]
+    fn created_time_survives_edits() {
+        let apply = |st: &mut HealthState, lamport: u64, body: &str| {
+            let mut op = op_from_json(&format!(r#"{{"changes":[{{"entry":{body}}}]}}"#)).unwrap();
+            health::keep_created(&mut op, st);
+            health::stamp_op(&mut op, &Stamp::new(lamport, "d1"));
+            st.apply_op(&op, "d1").unwrap();
+        };
+        let entry = |id: &str, value: i64, created: &str| {
+            format!(r#"{{"id":"{id}","kind":"weight","atMs":{NOW},"tzMin":{TZ},"value":{value},"unit":"kg","source":"manual"{created}}}"#)
+        };
+        let mut st = HealthState::default();
+        apply(&mut st, 1, &entry("new", 70, &format!(r#","createdMs":{}"#, NOW + HOUR)));
+        apply(&mut st, 2, &entry("old", 71, ""));
+        // Правка обеих записей с новым «сейчас» от хоста
+        apply(&mut st, 3, &entry("new", 72, &format!(r#","createdMs":{}"#, NOW + 5 * HOUR)));
+        apply(&mut st, 4, &entry("old", 73, &format!(r#","createdMs":{}"#, NOW + 5 * HOUR)));
+        assert_eq!(st.entries["new"].value, 72.0);
+        assert_eq!(st.entries["new"].created_ms, NOW + HOUR, "правка не двигает момент внесения");
+        assert_eq!(st.entries["old"].created_ms, 0, "запись старше поля остаётся без момента внесения");
+        assert_eq!(entry_json(&st.entries["new"])["createdMs"], NOW + HOUR);
+    }
+
     fn page(st: &HealthState, kind: &str, limit: usize) -> Value {
         serde_json::from_str(&entries_json(st, kind, limit, NOW, TZ)).unwrap()
     }

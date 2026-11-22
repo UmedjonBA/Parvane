@@ -1486,10 +1486,20 @@
 }
 
 .sheetSubtitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.75rem;
+  align-items: baseline;
+
   margin-top: -0.5rem;
   margin-bottom: 0.25rem;
+
   font-size: 0.8125rem;
   color: var(--pv-muted);
+}
+
+.sheetRecorded {
+  font-size: var(--pv-font-size-caption);
 }
 
 .sheetDate {

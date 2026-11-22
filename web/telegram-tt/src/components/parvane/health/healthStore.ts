@@ -197,8 +197,17 @@ export function checkHealthEntry(entry: HealthDraft) {
   return callHealth('parvaneHealthCheck', { entry, nowMs: Date.now() }).catch(() => 'form');
 }
 
+// Момент внесения — каждой живой записи: у правки движок вернёт значение прежней версии (`keep_created`)
+function withCreated(changes: unknown[]) {
+  const createdMs = Date.now();
+  return changes.map((change) => {
+    const entry = (change as { entry?: { deleted?: boolean } }).entry;
+    return entry && !entry.deleted ? { entry: { ...entry, createdMs } } : change;
+  });
+}
+
 async function applyChanges(changes: unknown[]) {
-  await callHealth('parvaneHealthApply', { changes });
+  await callHealth('parvaneHealthApply', { changes: withCreated(changes) });
   await callHealth('parvaneHealthFlush');
   await refreshHealth();
 }
