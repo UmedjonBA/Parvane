@@ -14,6 +14,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS,
   assertNoPageErrors,
+  createGroupViaUi,
   dismissRecoveryKeyDialog,
   exchangeMessages,
   preparePage,
@@ -232,6 +233,57 @@ try {
   await uploads.locator('[data-fetch-job][data-fetch-failure="duplicate"]').filter({ hasText: 'копия.mp3' })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
   console.log('OK: свой файл загружен на сервер, повтор — «уже есть в библиотеке»');
+
+  // ── «Общее в группе» (доска `ZpChat2`): общий плейлист, привязанный к группе записью её журнала ──
+  const GROUP_PLAYLIST = 'Группа: общее';
+  const groupTitle = `Радиочат ${suffix.slice(-4)}`;
+  const created = await callApi(a.page, 'parvaneMusicSharedCreate', { name: GROUP_PLAYLIST, access: 'members', tracks: [t1] });
+  const groupPlaylistId = created.result?.id;
+  assert.ok(groupPlaylistId, `общий плейлист для группы не создан: ${JSON.stringify(created)}`);
+  const openGroupInfo = async (page) => {
+    await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+    const item = page.locator('#LeftColumn .ListItem').filter({ has: page.locator('.fullName', { hasText: groupTitle }) }).first();
+    await item.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await item.locator('.ListItem-button').click();
+    const right = page.locator('#RightColumn');
+    // Панель могла ещё открываться либо закрываться после прежнего шага: щёлкаем по шапке, пока сведения не
+    // простоят открытыми полсекунды
+    const media = right.locator('[data-group-media]');
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (!(await media.isVisible().catch(() => false))) {
+        await page.locator('.MiddleHeader .ChatInfo').click();
+        await media.waitFor({ state: 'visible', timeout: 5000 }).catch(() => undefined);
+      }
+      await page.waitForTimeout(600);
+      if (await media.isVisible().catch(() => false)) return right;
+    }
+    await media.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    return right;
+  };
+  await a.page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await createGroupViaUi(a.page, groupTitle, [bobNick]);
+  const aInfo = await openGroupInfo(a.page);
+  await aInfo.locator('[data-group-shared="playlist"][data-group-shared-state="none"]').click();
+  const picker = a.page.locator('[data-group-shared-picker="playlist"]');
+  await picker.getByText(GROUP_PLAYLIST, { exact: true }).click();
+  const aRow = aInfo.locator('[data-group-shared="playlist"][data-group-shared-state="open"]');
+  await aRow.getByText(`Playlist “${GROUP_PLAYLIST}”`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  assert.equal(await aRow.locator('[data-group-shared-count]').innerText(), '1');
+  // Боб в плейлисте не состоит: до вступления сервер названия ему не отдаёт — строка без названия; нажатие —
+  // вступление по ключу из журнала группы и переход в «Музыку»; после него строка с названием и числом треков
+  const bInfo = await openGroupInfo(b.page);
+  const bRow = bInfo.locator('[data-group-shared="playlist"][data-group-shared-state="open"]');
+  await bRow.getByText('Shared playlist', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  await bRow.getByText('shared playlist in Music').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await bRow.locator('[data-group-shared-change]').count(), 0, 'участник привязку не меняет');
+  await bRow.click();
+  await b.page.locator(`#ParvaneMusic [data-music-shared="${groupPlaylistId}"]`)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  const bInfo2 = await openGroupInfo(b.page);
+  const bJoined = bInfo2.locator('[data-group-shared="playlist"][data-group-shared-state="open"]');
+  await bJoined.getByText(`Playlist “${GROUP_PLAYLIST}”`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS * 2 });
+  assert.equal(await bJoined.locator('[data-group-shared-count]').innerText(), '1');
+  console.log('OK: общий плейлист группы — привязка владельцем, участник входит из сведений группы');
 
   sessions.forEach((session) => assertNoPageErrors({ session }));
   console.log('OK: общие плейлисты, «Найти и скачать» и свои файлы');

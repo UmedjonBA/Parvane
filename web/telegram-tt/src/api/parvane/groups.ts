@@ -400,8 +400,9 @@ export function createGroupController(deps: GroupDependencies) {
     const info = v2?.groupInfo(address) || store.getGroupInfo(address);
     if (!info) return undefined;
     if (v2) register(info, true);
-    const members = buildMembers(info.members.filter(({ role }) => role !== 'banned'));
-    const adminMembers = members.filter((member) => member.isOwner || member.isAdmin);
+    // Те же сведения, что уходят обновлением (`buildFullInfo`): иначе ответ на запрос затирал поля, которых в нём
+    // нет (заявки, «Общее в группе»)
+    const base = buildFullInfo(info);
     // Только уже существующая основная ссылка: просмотр сведений группы не пишет в её журнал (создание — по действию
     // пользователя, экран «Ссылки-приглашения»; раньше каждая подгрузка сведений создавала ссылку во всех группах)
     // Ведёт ли себя приглашения — решение модели (`GroupView.can_manage_invites`, spec 036 T020)
@@ -409,17 +410,10 @@ export function createGroupController(deps: GroupDependencies) {
       ? pickPrimaryInvite(await v2.listInvites(address))?.url
       : undefined;
     return {
-      fullInfo: {
-        members,
-        adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
-        canViewMembers: true,
-        enabledReactions: { type: 'all' as const },
-        inviteLink,
-        about: info.about || undefined,
-      },
+      fullInfo: { ...base, inviteLink },
       chats: [store.buildApiChatForGroup(info)],
       userStatusesById: {},
-      membersCount: members.length,
+      membersCount: base.members.length,
     };
   }
 
