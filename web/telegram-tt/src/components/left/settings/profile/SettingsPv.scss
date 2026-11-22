@@ -285,6 +285,11 @@
     > * {
       max-width: 45rem;
     }
+
+    // «Модули / План» — две колонки карточек во всю ширину страницы (доска `RdPlanSet`)
+    &[data-settings-page="plan"] > * {
+      max-width: none;
+    }
   }
 
   .settings-fab-wrapper {

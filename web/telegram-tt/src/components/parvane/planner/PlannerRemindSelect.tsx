@@ -13,6 +13,8 @@ type OwnProps = {
   label?: string;
   // Минут до начала; нет значения — без напоминания
   value?: number;
+  // Простой выбор без плавающей подписи — значение в строке настроек (доска `RdPlanSet`)
+  plainClassName?: string;
   onChange: (value: number | undefined) => void;
 };
 
@@ -24,7 +26,7 @@ const NONE_VALUE = 'none';
 // Поле «Напомнить» карточки задачи и события (этап 4 плана 15 окт 2026): значение без повтора подписи — «За 15 мин»
 // (доска `PhPlanMore`)
 const PlannerRemindSelect = ({
-  id, label, value, onChange,
+  id, label, value, plainClassName, onChange,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -36,18 +38,33 @@ const PlannerRemindSelect = ({
     onChange(raw === NONE_VALUE ? undefined : Number(raw));
   });
 
-  return (
-    <Select
-      id={id}
-      label={label || lang('PlannerRemind')}
-      value={value === undefined ? NONE_VALUE : String(value)}
-      hasArrow
-      onChange={handleChange}
-    >
+  const selected = value === undefined ? NONE_VALUE : String(value);
+  const items = (
+    <>
       <option value={NONE_VALUE}>{lang('PlannerRemindNone')}</option>
       {options.map((minutes) => (
         <option key={minutes} value={String(minutes)}>{formatRemindShort(lang, minutes)}</option>
       ))}
+    </>
+  );
+
+  if (plainClassName) {
+    return (
+      <select
+        id={id}
+        className={plainClassName}
+        value={selected}
+        aria-label={label || lang('PlannerRemind')}
+        onChange={handleChange}
+      >
+        {items}
+      </select>
+    );
+  }
+
+  return (
+    <Select id={id} label={label || lang('PlannerRemind')} value={selected} hasArrow onChange={handleChange}>
+      {items}
     </Select>
   );
 };

@@ -6,7 +6,7 @@
   flex-direction: column;
   gap: 0.5rem;
 
-  max-width: 45rem;
+  max-width: 56rem;
   padding: 1rem;
 
   color: var(--pv-fg);
@@ -41,12 +41,44 @@
   border-top: 1px solid var(--pv-line);
 }
 
+// Значение, которому не хватило места рядом с подписью, уходит на строку ниже, а не под подпись
+.row {
+  flex-wrap: wrap;
+}
+
+.row > .label {
+  flex-basis: 7rem;
+}
+
 .card > :first-child {
   border-top: none;
 }
 
-.selectRow {
-  padding-top: 0.75rem;
+// Компьютер: «Рабочий день» слева, «Напоминания» и «Ввод текстом» справа (доска `RdPlanSet`)
+.cols {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  @media (min-width: 1000px) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.select {
+  cursor: var(--custom-cursor, pointer);
+  flex: none;
+  width: auto;
 }
 
 .label {

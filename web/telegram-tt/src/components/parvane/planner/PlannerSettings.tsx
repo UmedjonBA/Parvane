@@ -213,128 +213,135 @@ const PlannerSettings = ({
         </>
       )}
 
-      <h3 className={styles.caps}>{lang('PlannerSettingsDay')}</h3>
-      <div className={styles.card}>
-        {renderTime('dayStart', lang('PlannerSettingsDayStart'))}
-        {renderTime('dayEnd', lang('PlannerSettingsDayEnd'))}
-        <div className={styles.row}>
-          <span className={styles.label}>{lang('PlannerSettingsBudget')}</span>
-          <span className={styles.value} data-settings-budget>
-            <input
-              className={buildClassName(styles.input, styles.number)}
-              type="number"
-              min={Math.floor(MIN_BUDGET_MINUTES / MINUTES_IN_HOUR)}
-              max={MINUTES_IN_DAY / MINUTES_IN_HOUR}
-              value={String(budgetHours)}
-              aria-label={lang('PlannerSettingsBudgetHours')}
-              data-field="hours"
-              onBlur={handleBudget}
-              onKeyDown={handleEnterCommit}
-            />
-            <span className={styles.unit}>{lang('PlannerUnitHours')}</span>
-            <input
-              className={buildClassName(styles.input, styles.number)}
-              type="number"
-              min={0}
-              max={MINUTES_IN_HOUR - BUDGET_MINUTE_STEP}
-              step={BUDGET_MINUTE_STEP}
-              value={String(budgetMinutes).padStart(2, '0')}
-              aria-label={lang('PlannerSettingsBudgetMinutes')}
-              data-field="minutes"
-              onBlur={handleBudget}
-              onKeyDown={handleEnterCommit}
-            />
-            <span className={styles.unit}>{lang('PlannerUnitMinutes')}</span>
-          </span>
+      <div className={styles.cols}>
+        <div className={styles.col}>
+          <h3 className={styles.caps}>{lang('PlannerSettingsDay')}</h3>
+          <div className={styles.card}>
+            {renderTime('dayStart', lang('PlannerSettingsDayStart'))}
+            {renderTime('dayEnd', lang('PlannerSettingsDayEnd'))}
+            <div className={styles.row}>
+              <span className={styles.label}>{lang('PlannerSettingsBudget')}</span>
+              <span className={styles.value} data-settings-budget>
+                <input
+                  className={buildClassName(styles.input, styles.number)}
+                  type="number"
+                  min={Math.floor(MIN_BUDGET_MINUTES / MINUTES_IN_HOUR)}
+                  max={MINUTES_IN_DAY / MINUTES_IN_HOUR}
+                  value={String(budgetHours)}
+                  aria-label={lang('PlannerSettingsBudgetHours')}
+                  data-field="hours"
+                  onBlur={handleBudget}
+                  onKeyDown={handleEnterCommit}
+                />
+                <span className={styles.unit}>{lang('PlannerUnitHours')}</span>
+                <input
+                  className={buildClassName(styles.input, styles.number)}
+                  type="number"
+                  min={0}
+                  max={MINUTES_IN_HOUR - BUDGET_MINUTE_STEP}
+                  step={BUDGET_MINUTE_STEP}
+                  value={String(budgetMinutes).padStart(2, '0')}
+                  aria-label={lang('PlannerSettingsBudgetMinutes')}
+                  data-field="minutes"
+                  onBlur={handleBudget}
+                  onKeyDown={handleEnterCommit}
+                />
+                <span className={styles.unit}>{lang('PlannerUnitMinutes')}</span>
+              </span>
+            </div>
+            <div className={styles.row}>
+              <span className={styles.label}>{lang('PlannerSettingsLunch')}</span>
+              <span className={styles.value} data-settings-lunch>
+                <input
+                  className={styles.input}
+                  type="time"
+                  value={hasLunch ? toTime(settings.lunchStart) : ''}
+                  aria-label={lang('PlannerSettingsLunchStart')}
+                  data-field="lunchStart"
+                  onChange={handleLunch}
+                />
+                <span className={styles.unit}>–</span>
+                <input
+                  className={styles.input}
+                  type="time"
+                  value={hasLunch ? toTime(settings.lunchEnd) : ''}
+                  aria-label={lang('PlannerSettingsLunchEnd')}
+                  data-field="lunchEnd"
+                  onChange={handleLunch}
+                />
+              </span>
+            </div>
+            <label className={styles.row}>
+              <span className={styles.label}>{lang('PlannerSettingsMargin')}</span>
+              <span className={styles.value}>
+                <input
+                  className={buildClassName(styles.input, styles.number)}
+                  type="number"
+                  min={0}
+                  max={MAX_MARGIN}
+                  step={5}
+                  value={String(settings.margin)}
+                  aria-label={lang('PlannerSettingsMargin')}
+                  data-settings-margin
+                  onBlur={handleMargin}
+                  onKeyDown={handleEnterCommit}
+                />
+                <span className={styles.unit}>{lang('PlannerUnitMinutes')}</span>
+              </span>
+            </label>
+          </div>
+          {isNarrow && <p className={styles.hint}>{lang('PlannerSettingsBudgetHint')}</p>}
         </div>
-        <div className={styles.row}>
-          <span className={styles.label}>{lang('PlannerSettingsLunch')}</span>
-          <span className={styles.value} data-settings-lunch>
-            <input
-              className={styles.input}
-              type="time"
-              value={hasLunch ? toTime(settings.lunchStart) : ''}
-              aria-label={lang('PlannerSettingsLunchStart')}
-              data-field="lunchStart"
-              onChange={handleLunch}
-            />
-            <span className={styles.unit}>–</span>
-            <input
-              className={styles.input}
-              type="time"
-              value={hasLunch ? toTime(settings.lunchEnd) : ''}
-              aria-label={lang('PlannerSettingsLunchEnd')}
-              data-field="lunchEnd"
-              onChange={handleLunch}
-            />
-          </span>
-        </div>
-        <label className={styles.row}>
-          <span className={styles.label}>{lang('PlannerSettingsMargin')}</span>
-          <span className={styles.value}>
-            <input
-              className={buildClassName(styles.input, styles.number)}
-              type="number"
-              min={0}
-              max={MAX_MARGIN}
-              step={5}
-              value={String(settings.margin)}
-              aria-label={lang('PlannerSettingsMargin')}
-              data-settings-margin
-              onBlur={handleMargin}
-              onKeyDown={handleEnterCommit}
-            />
-            <span className={styles.unit}>{lang('PlannerUnitMinutes')}</span>
-          </span>
-        </label>
-      </div>
-      {isNarrow && <p className={styles.hint}>{lang('PlannerSettingsBudgetHint')}</p>}
+        <div className={styles.col}>
+          <h3 className={styles.caps}>{lang('PlannerSettingsReminders')}</h3>
+          <div className={styles.card}>
+            <label className={styles.row} data-settings-event-remind>
+              <span className={styles.label}>{lang('PlannerSettingsEventRemind')}</span>
+              <PlannerRemindSelect
+                id={EVENT_REMIND_ID}
+                label={lang('PlannerSettingsEventRemind')}
+                value={settings.eventRemind}
+                plainClassName={buildClassName(styles.input, styles.select)}
+                onChange={handleEventRemind}
+              />
+            </label>
+            <PvSwitch
+              isOn={Boolean(settings.shouldRemindDeadlines)}
+              className={styles.switchRow}
+              data-settings-deadlines
+              onChange={handleDeadlines}
+            >
+              <span className={styles.label}>{lang('PlannerSettingsRemindDeadlines')}</span>
+            </PvSwitch>
+          </div>
 
-      <h3 className={styles.caps}>{lang('PlannerSettingsReminders')}</h3>
-      <div className={styles.card}>
-        <div className={buildClassName(styles.row, styles.selectRow)} data-settings-event-remind>
-          <PlannerRemindSelect
-            id={EVENT_REMIND_ID}
-            label={lang('PlannerSettingsEventRemind')}
-            value={settings.eventRemind}
-            onChange={handleEventRemind}
-          />
-        </div>
-        <PvSwitch
-          isOn={Boolean(settings.shouldRemindDeadlines)}
-          className={styles.switchRow}
-          data-settings-deadlines
-          onChange={handleDeadlines}
-        >
-          <span className={styles.label}>{lang('PlannerSettingsRemindDeadlines')}</span>
-        </PvSwitch>
-      </div>
-
-      <h3 className={styles.caps}>{lang('PlannerSettingsQuickInput')}</h3>
-      <div className={styles.card}>
-        <PvSwitch
-          isOn={!settings.isLearnOff}
-          className={styles.switchRow}
-          data-settings-learn
-          onChange={handleLearn}
-        >
-          <span className={styles.text}>
-            <span className={styles.label}>{lang('PlannerSettingsLearn')}</span>
-            <span className={styles.sub}>{lang('PlannerSettingsLearnHint')}</span>
-          </span>
-        </PvSwitch>
-        <div className={styles.row}>
-          <span className={styles.label} data-settings-learned-count>
-            {lang('PlannerSettingsLearnedCount', { count: learnedCount }, { pluralValue: learnedCount })}
-          </span>
-          <button
-            type="button"
-            className={styles.link}
-            data-quick-learned-reset
-            onClick={handleLearnedReset}
-          >
-            {lang('PlannerSettingsLearnedReset')}
-          </button>
+          <h3 className={styles.caps}>{lang('PlannerSettingsQuickInput')}</h3>
+          <div className={styles.card}>
+            <PvSwitch
+              isOn={!settings.isLearnOff}
+              className={styles.switchRow}
+              data-settings-learn
+              onChange={handleLearn}
+            >
+              <span className={styles.text}>
+                <span className={styles.label}>{lang('PlannerSettingsLearn')}</span>
+                <span className={styles.sub}>{lang('PlannerSettingsLearnHint')}</span>
+              </span>
+            </PvSwitch>
+            <div className={styles.row}>
+              <span className={styles.label} data-settings-learned-count>
+                {lang('PlannerSettingsLearnedCount', { count: learnedCount }, { pluralValue: learnedCount })}
+              </span>
+              <button
+                type="button"
+                className={styles.link}
+                data-quick-learned-reset
+                onClick={handleLearnedReset}
+              >
+                {lang('PlannerSettingsLearnedReset')}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       {!isNarrow && <p className={styles.hint}>{lang('PlannerSettingsSleepHint')}</p>}

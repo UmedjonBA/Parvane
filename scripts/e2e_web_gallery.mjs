@@ -227,6 +227,33 @@ async function galleryPlan() {
     await plan.locator('[data-planner-search-input]').fill('зал');
   });
   await page.keyboard.press('Escape');
+  // Компьютер: редактор записи, импорт расписания текстом, настройки (доски `DkPlanMore`, `XdPlan`, `RdPlanSet`)
+  await step(page, 'DkPlanMore-01', async () => {
+    await plan.locator('button[data-value="today"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await plan.getByText('Зал', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await plan.getByRole('button', { name: 'Закрыть' }).first().click({ timeout: 3000 }).catch(() => undefined);
+  // «Расписание на неделю» — пункт колонки разделов экрана «Задачи» (доска `XdPlan`)
+  await step(page, 'XdPlan-02', async () => {
+    await plan.locator('[data-planner-tasks-open]').click({ timeout: STEP_TIMEOUT_MS });
+    await plan.locator('[data-planner-sections]').getByText('Расписание на неделю', { exact: true })
+      .click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-planner-import] textarea').fill([
+      'пн 10:00-11:00 созвон с командой', 'вт 14:00-16:00 обновление сервера', 'ср 18:30-20:00 зал', 'чт вечер ???',
+      'пт 11:00-12:00 созвон с командой', 'вс 18:00-19:30 зал', 'до 31 декабря',
+    ].join('\n'));
+    await page.waitForTimeout(1500);
+  });
+  await page.getByRole('button', { name: 'Отмена' }).first().click({ timeout: 3000 }).catch(() => undefined);
+  await page.keyboard.press('Escape');
+  // Настройки — страница «Профиль → Модули / План» (шестерёнка «Плана»)
+  await step(page, 'RdPlanSet-01', async () => {
+    await plan.locator('button[data-value="today"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+    await plan.getByRole('button', { name: 'Настройки плана' }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await openModule(page, 'plan', 'ParvanePlanner');
 
   // Телефон
   await resize(page, PHONE);
@@ -247,6 +274,12 @@ async function galleryPlan() {
   });
   await page.keyboard.press('Escape');
   await step(page, 'PhPlanMore-03', () => more('tasks'));
+  await page.keyboard.press('Escape');
+  await plan.locator('button[aria-label="Назад"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  await step(page, 'RpPlan-03', async () => {
+    await more('settings');
+    await page.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await page.context().close();
 }
 
