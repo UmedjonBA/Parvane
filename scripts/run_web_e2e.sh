@@ -23,7 +23,8 @@ ALLOCATED_PORTS=()
 
 # Занятые раннерами порты — файлами с pid раннера в общем каталоге: параллельные раннеры (`web_par.sh`) иначе
 # получали от системы один и тот же свободный порт и второй падал на «Port … is already in use»
-PORT_RESERVE_DIR="$ROOT/local-workdirs/e2e-ports"
+# Копии репозитория на одной машине резервируют порты в общем каталоге (`PARVANE_E2E_PORT_DIR`)
+PORT_RESERVE_DIR="${PARVANE_E2E_PORT_DIR:-$ROOT/local-workdirs/e2e-ports}"
 RESERVED_PORT_FILES=()
 
 reserve_port() {
