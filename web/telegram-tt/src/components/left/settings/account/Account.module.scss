@@ -122,7 +122,15 @@
   flex-direction: column;
 }
 
-// Текст отчёта — обычным шрифтом (доска `XpProfile`), не моноширинным
+// Поле «Моего профиля» на телефоне (доска `XpProfile`): подпись над полем, поле на фоне страницы
+.plainField {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 1rem 0;
+}
+
+// Текст отчёта и «О себе» — обычным шрифтом (доска `XpProfile`), не моноширинным
+.plainField .area,
 .field .area {
   font-family: inherit;
   font-size: var(--pv-font-size);
@@ -257,6 +265,7 @@
   display: flex;
   gap: 1rem;
   align-items: center;
+  padding: 1rem 1rem 0.25rem;
 }
 
 .avatarImage {

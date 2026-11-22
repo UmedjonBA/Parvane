@@ -423,6 +423,46 @@ async function galleryProfile() {
       await page.waitForTimeout(600);
     }
   }
+  // Телефон: окна и экраны аккаунта (доски `XpProfile`, `RpProfileB`, `RpProfileC`)
+  const backToList = async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (await page.locator('[data-profile-item="modules"]:visible').first().isVisible().catch(() => false)) break;
+      await page.keyboard.press('Escape').catch(() => undefined);
+      await page.waitForTimeout(500);
+      if (await page.locator('[data-profile-item="modules"]:visible').first().isVisible().catch(() => false)) break;
+      await page.locator('#Settings button[aria-label="Назад"]:visible, #Settings .Button.translucent:visible').first()
+        .click({ timeout: 2000 }).catch(() => undefined);
+      await page.waitForTimeout(600);
+    }
+  };
+  const openItem = async (id) => {
+    const item = page.locator(`[data-profile-item="${id}"]:visible`).first();
+    await item.scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
+    await item.click({ timeout: STEP_TIMEOUT_MS });
+  };
+  await step(page, 'XpProfile-01', async () => {
+    await page.locator('[data-profile-edit]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await backToList();
+  await step(page, 'RpProfileB-02', async () => {
+    await openItem('devices');
+    await page.locator('[data-account-row="password"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await page.keyboard.press('Escape');
+  await step(page, 'XpProfile-02', async () => {
+    const button = page.locator('[data-delete-account-open]:visible').first();
+    await button.scrollIntoViewIfNeeded({ timeout: STEP_TIMEOUT_MS });
+    await button.click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
+  await backToList();
+  await step(page, 'RpProfileC-01', async () => {
+    await openItem('privacy');
+    await page.locator('[data-privacy-row="key"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(800);
+  });
   await page.context().close();
 }
 

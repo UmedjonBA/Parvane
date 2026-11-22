@@ -907,6 +907,11 @@
   color: var(--pv-red);
 }
 
+// Растяжка перед кнопкой у нижнего края страницы-шторки
+.sheetSpace {
+  flex: 1 1 auto;
+}
+
 .dialogGroup {
   overflow: hidden;
   margin-top: 0.75rem;

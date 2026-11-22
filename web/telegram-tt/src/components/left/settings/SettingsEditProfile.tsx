@@ -410,7 +410,7 @@ const SettingsEditProfile = ({
       onDrop={handleDrop}
     >
       <Surface scrollable className="settings-content no-border">
-        <IslandOutside className={buildClassName('settings-content-header', styles.avatarEdit)}>
+        <IslandOutside className={buildClassName(isWindow && 'settings-content-header', styles.avatarEdit)}>
           <span className={styles.avatarImage} data-avatar-image>
             {avatarUrl
               ? <img className={styles.avatarImg} src={avatarUrl} alt="" draggable={false} />
@@ -439,18 +439,29 @@ const SettingsEditProfile = ({
             {isWindow && <span className={styles.muted}>{lang('ParvaneProfileDropHint')}</span>}
           </span>
         </IslandOutside>
+        {/* Телефон (доска `XpProfile`): подпись над полем, поле на фоне */}
         {!isWindow && (
-          <Island>
-            <div className="settings-input">{nameField}</div>
-          </Island>
+          <div className={styles.plainField}>
+            <label className={styles.label} htmlFor="parvane-profile-name">{oldLang('FirstName')}</label>
+            <input
+              id="parvane-profile-name"
+              className={kit.input}
+              value={firstName}
+              disabled={isLoading}
+              aria-invalid={error === ERROR_FIRST_NAME_MISSING || undefined}
+              data-profile-name
+              onChange={handleFirstNameChange}
+            />
+            {error === ERROR_FIRST_NAME_MISSING && <div className={kit.fieldError} role="alert">{error}</div>}
+          </div>
         )}
         {/* Окно компьютера (`RdProfile`): «Имя | Ник» строкой, затем «О себе»; телефон (`XpProfile`): имя, о себе, ник */}
         {isWindow && nickBlock}
-        <div className={buildClassName(kit.card, styles.nickBox)}>
+        <div className={isWindow ? buildClassName(kit.card, styles.nickBox) : styles.plainField}>
           <label className={styles.label} htmlFor="parvane-profile-bio">{oldLang('UserBio')}</label>
           <textarea
             id="parvane-profile-bio"
-            className={kit.textarea}
+            className={buildClassName(kit.textarea, styles.area)}
             value={bio}
             placeholder={lang('ParvaneProfileBioPlaceholder')}
             maxLength={maxBioLength || undefined}

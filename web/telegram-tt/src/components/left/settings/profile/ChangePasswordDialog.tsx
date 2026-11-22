@@ -9,14 +9,16 @@ import buildClassName from '../../../../util/buildClassName';
 import { callApi } from '../../../../api/gramjs';
 import { measurePassword } from './passwordStrength';
 
+import useAppLayout from '../../../../hooks/useAppLayout';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
 import useOldLang from '../../../../hooks/useOldLang';
 
-import ConfirmDialog from '../../../ui/ConfirmDialog';
+import PvSheet from '../../../parvane/notes/PvSheet';
 import SecretForm from '../../../ui/SecretForm';
 import ProfileSwitchRow from './ProfileSwitchRow';
 
+import kit from '../../../parvane/notes/PvKit.module.scss';
 import styles from './Profile.module.scss';
 
 type OwnProps = {
@@ -56,6 +58,7 @@ const ChangePasswordDialog = ({ isOpen, sessions, onClose }: OwnProps & StatePro
     .map((session) => session.deviceModel || session.appName), [sessions]);
   const strength = values.new ? measurePassword(values.new) : undefined;
   const isMismatch = Boolean(values.repeat) && values.repeat !== values.new;
+  const { isMobile } = useAppLayout();
   const canSubmit = Boolean(values.old) && strength !== undefined && strength.level !== 'short'
     && values.repeat === values.new && !isBusy;
 
@@ -124,13 +127,14 @@ const ChangePasswordDialog = ({ isOpen, sessions, onClose }: OwnProps & StatePro
   }
 
   return (
-    <ConfirmDialog
+    // Доска `RpProfileB`: на телефоне — страница «‹ Сменить пароль» с кнопкой внизу, на компьютере — окно
+    <PvSheet
       isOpen={isOpen}
       title={lang('ParvanePrivacyChangePassword')}
-      confirmLabel={oldLang('ParvaneChangePasswordButton')}
-      confirmHandler={handleSubmit}
-      isConfirmDisabled={!canSubmit}
+      startClose={isMobile ? 'back' : undefined}
+      isPage
       onClose={handleClose}
+      onEnter={canSubmit ? handleSubmit : undefined}
     >
       <SecretForm className={styles.fieldForm}>
         <div data-password-form>
@@ -158,7 +162,17 @@ const ChangePasswordDialog = ({ isOpen, sessions, onClose }: OwnProps & StatePro
         </div>
       )}
       <div className={styles.fieldHint}>{lang('ParvanePasswordKeysHint')}</div>
-    </ConfirmDialog>
+      <div className={styles.sheetSpace} />
+      <button
+        type="button"
+        className={buildClassName(kit.btn, kit.btnAcc, kit.btnWide)}
+        disabled={!canSubmit}
+        data-password-submit
+        onClick={handleSubmit}
+      >
+        {oldLang('ParvaneChangePasswordButton')}
+      </button>
+    </PvSheet>
   );
 };
 
