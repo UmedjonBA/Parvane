@@ -491,11 +491,21 @@ const PlannerEventEditor = ({
     />
   );
   const switches = (
-    <div className={more.switches}>
-      <PvSwitch isOn={values.isAllDay} className={more.switch} data-all-day-switch onChange={handleAllDay}>
+    <div className={buildClassName(more.switches, isNarrow && more.switchesRows)}>
+      <PvSwitch
+        isOn={values.isAllDay}
+        className={isNarrow ? more.switchRow : more.switch}
+        data-all-day-switch
+        onChange={handleAllDay}
+      >
         <span>{lang('PlannerAllDay')}</span>
       </PvSwitch>
-      <PvSwitch isOn={values.isHoliday} className={more.switch} data-holiday-switch onChange={handleHoliday}>
+      <PvSwitch
+        isOn={values.isHoliday}
+        className={isNarrow ? more.switchRow : more.switch}
+        data-holiday-switch
+        onChange={handleHoliday}
+      >
         <span>{lang('PlannerHoliday')}</span>
       </PvSwitch>
     </div>
@@ -562,7 +572,7 @@ const PlannerEventEditor = ({
             </div>
             {switches}
           </PlannerCardRow>
-          {freeTime}
+          {freeTime && <div className={more.freeTimeRow}>{freeTime}</div>}
           <PlannerCardCaption>{lang('PlannerRepeatAndRemind')}</PlannerCardCaption>
           {repeatRow}
           <PlannerCardRow icon="schedule" row="remind">{remindField}</PlannerCardRow>

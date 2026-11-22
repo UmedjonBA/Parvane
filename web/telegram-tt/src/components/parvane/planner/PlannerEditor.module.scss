@@ -73,6 +73,22 @@
   font-size: 0.875rem;
 }
 
+// Телефон (доска `PhPlanMore-02`): выключатели — такими же строками 52 px на панели, как остальные поля записи
+.switchesRows {
+  gap: 0;
+  margin-inline: -1rem;
+}
+
+.switchRow {
+  min-height: var(--pv-settings-row-height);
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  font-size: var(--pv-font-size);
+
+  background: var(--pv-panel);
+}
+
 // Дата словами поверх родного поля: «вс, 15 ноября»
 .dateField {
   position: relative;
@@ -241,4 +257,9 @@
 .dayCaption {
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
+}
+
+// Телефон: «Найти свободное время» между группами строк
+.freeTimeRow {
+  margin-block: 0.75rem;
 }

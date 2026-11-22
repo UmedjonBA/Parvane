@@ -3184,6 +3184,42 @@
     border-bottom: none;
   }
 
+  // Группы строк — полосы панели во всю ширину экрана, строки вплотную (доска `PhPlanMore-02`); верхнюю линию
+  // группы даёт тень первой строки, она же ложится на нижнюю линию предыдущей
+  .editor,
+  .form {
+    gap: 0;
+  }
+
+  .field,
+  .cardRowButton,
+  .rowStep,
+  .stepForm,
+  :global(.input-group.with-arrow) {
+    margin: 0 -1rem;
+    padding-inline: 1rem;
+    background: var(--pv-panel);
+    box-shadow: 0 -1px 0 var(--pv-line);
+  }
+
+  .cardRowButton,
+  .rowStep {
+    width: calc(100% + 2rem);
+  }
+
+  // Поле нового шага — внутри своей строки-полосы
+  .stepForm > .field {
+    margin: 0;
+    padding-inline: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .cardTitleInput {
+    margin-bottom: 0.75rem;
+    background: var(--pv-bg);
+  }
+
   // Подпись группы строк: «Повтор и напоминание», «Шаги · N»
   .cardCaption,
   .stepsCaption {
@@ -3225,9 +3261,10 @@
     min-height: var(--pv-settings-row-height);
     border-bottom: 1px solid var(--pv-line);
 
+    // Стрелка — в полях строки-полосы, а не у края экрана
     &::after {
       top: 50%;
-      right: 0.25rem;
+      right: 1.25rem;
       bottom: auto;
       margin-top: -0.375rem;
     }
@@ -3274,7 +3311,7 @@
   // Шаги: строки с галочкой слева, «Добавить шаг» — строка ввода акцентом
   .rowStep {
     min-height: var(--pv-settings-row-height);
-    padding-inline: 0;
+    padding-inline: 1rem;
     border-top: none;
     border-bottom: 1px solid var(--pv-line);
 
