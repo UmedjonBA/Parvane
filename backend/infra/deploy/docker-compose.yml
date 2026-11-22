@@ -221,8 +221,12 @@ services:
   # `music-fetch` и переменной PARVANE_MUSIC_FETCH_URL=http://music-fetch:9350. Источники — на ответственности
   # администратора сервера (backend/infra/music-fetch/README.md). Наружу не опубликован
   music-fetch:
+    # Образ собирает и заливает deploy.sh (на сервере не собирать); `build` — для локального запуска
+    image: localhost/parvane-music-fetch:latest
     build: ../music-fetch
     profiles: ["music-fetch"]
+    # Тот же uid, что у шарда music: оба пишут в папку библиотеки
+    user: "10001:10001"
     restart: unless-stopped
     cap_drop: ["ALL"]
     mem_limit: 512m
@@ -232,6 +236,9 @@ services:
     environment:
       MUSIC_FETCH_LIBRARY_DIR: /music
       MUSIC_FETCH_PROXY: ${PARVANE_MUSIC_FETCH_PROXY:-}
+      # Домашнего каталога у uid 10001 нет — кэш yt-dlp во временной папке
+      XDG_CACHE_HOME: /tmp
+      HOME: /tmp
 
   # Музыкальный сервер: наружу не опубликован, пользователя называет только шард music (заголовок Remote-User
   # от доверенной сети compose). Внешние обращения выключены: ни Last.fm, ни Spotify, ни телеметрии.

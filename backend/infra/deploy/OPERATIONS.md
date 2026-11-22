@@ -521,8 +521,10 @@ docker compose exec federation federation_admin unpin <домен>    # прин
 
 ## «Музыка» (spec 039) — необязательный модуль
 
-Включить: в `~/parvane/.env` задать `PARVANE_MUSIC_PUBLIC_BASE=https://<внешний адрес>` и, если музыка лежит в
-каталоге сервера, `PARVANE_MUSIC_DIR=/путь/к/музыке`; затем `docker compose --profile music up -d`. Navidrome наружу
+Включить: в `~/parvane/.env` задать `COMPOSE_PROFILES=music,music-fetch` (без «Найти и скачать» — `music`),
+`PARVANE_MUSIC_PUBLIC_BASE=https://<внешний адрес>` и, если музыка лежит в каталоге сервера,
+`PARVANE_MUSIC_DIR=/путь/к/музыке`; затем `deploy.sh` (он же отдаёт том библиотеки uid шарда 10001 и заливает образ
+`parvane-music-fetch`). На проде включено целиком (`parvane.duckdns.org`). Navidrome наружу
 не опубликован: пользователя ему называет только шард `music` (заголовок `Remote-User`, доверенная сеть —
 `PARVANE_MUSIC_TRUSTED_SOURCES`, по умолчанию `172.16.0.0/12`; сузить до адреса шарда, если в сети compose есть
 посторонние контейнеры). Выключить для всех: `PARVANE_DISABLED_MODULES=music` и остановить оба сервиса. Ключ подписи
@@ -532,7 +534,8 @@ docker compose exec federation federation_admin unpin <домен>    # прин
 ### «Найти и скачать» (spec 039, этап B)
 
 Необязательно и по умолчанию выключено. Включение: профиль `music-fetch` вместе с `music` и
-`PARVANE_MUSIC_FETCH_URL=http://music-fetch:9350` в `.env`. Сервис (`backend/infra/music-fetch`) ищет эталон трека
+`PARVANE_MUSIC_FETCH_URL=http://music-fetch:9350` в `.env`. Образ собирает `deploy.sh` при каждой выкладке (свежий
+yt-dlp); сервис идёт под uid шарда (10001). Сервис (`backend/infra/music-fetch`) ищет эталон трека
 в каталоге и файлы в источниках (YouTube, SoundCloud через yt-dlp) и качает в папку библиотеки; шард `music` сверяет
 найденное с эталоном и ведёт лимиты. Источники — на ответственности администратора.
 Настройки шарда: `PARVANE_MUSIC_ADD_PER_DAY` (30), `PARVANE_MUSIC_QUOTA_BYTES` (5 ГиБ на человека),

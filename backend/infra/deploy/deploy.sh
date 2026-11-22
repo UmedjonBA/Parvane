@@ -59,6 +59,11 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
     --ignorefile "$BACKEND/infra/deploy/shards.dockerignore" \
     -t parvane-shards "$REPO"
 
+  # «Найти и скачать» (spec 039): образ сервиса скачивания — здесь, на сервере не собирать. yt-dlp устаревает
+  # вслед за источниками — каждая выкладка ставит свежий
+  log "Сборка образа music-fetch (podman)"
+  podman build --http-proxy=false --no-cache -t parvane-music-fetch "$BACKEND/infra/music-fetch"
+
   # Скрытый сервис Tor (spec 025): маленький образ alpine + tor
   log "Сборка образа tor (podman)"
   podman build --http-proxy=false -f "$BACKEND/infra/deploy/Dockerfile.tor" -t parvane-tor "$BACKEND/infra/deploy"
@@ -66,6 +71,7 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
   log "Заливка образов на сервер (docker load)"
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
   podman save --format docker-archive parvane-tor | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
+  podman save --format docker-archive parvane-music-fetch | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 fi
 
 # WEB-07: раннер web-e2e собирает в тот же dist диагностическую сборку (хуки
@@ -163,6 +169,12 @@ fi
 # топиками, ловят Subscription Violation (подписка молча отброшена) — HUP ДО up
 docker kill -s HUP parvane-nats-1 >/dev/null 2>&1 || true
 sleep 1
+# «Музыка» (профили compose `music`, `music-fetch` в COMPOSE_PROFILES из .env): в папку библиотеки пишут шард
+# и сервис скачивания (оба — uid 10001), а новый именованный том принадлежит root
+if grep -qE '^COMPOSE_PROFILES=.*music' .env && ! grep -qE '^PARVANE_MUSIC_DIR=.' .env; then
+  docker volume create parvane_music-library >/dev/null
+  docker run --rm -v parvane_music-library:/m alpine chown 10001:10001 /m
+fi
 # Onion-Location (spec 025): файл подключает Caddyfile; без него bind-mount создал бы каталог
 [[ -f onion-location.caddy ]] || : > onion-location.caddy
 # Образа tor ещё нет (деплой только web до первой полной выкладки) — без сервиса tor
