@@ -462,8 +462,25 @@ async function galleryFiles() {
   await step(guest.page, 'RpFiles-02', async () => undefined);
   await guest.page.context().close();
 
+  // Идущая загрузка: строка передачи с полосой хода (доски `ZdFilesX`, `ZpFilesX`) — большой файл, кадр сразу
+  const bigFile = (name) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.alloc(24_000_000, 5) });
+  await step(page, 'files-desk-uploading', async () => {
+    await files2.locator('input[type="file"]').first().setInputFiles([bigFile('видео-с-конференции.mkv')]);
+    await files2.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await files2.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
+
   // Телефон
   await resize(page, PHONE);
+  await step(page, 'files-phone-uploading', async () => {
+    await files2.locator('input[type="file"]').first().setInputFiles([bigFile('сборка-ночная.tar')]);
+    await files2.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
+      .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
+  await files2.locator('[data-transfer-kind="upload"][data-transfer-state="active"]').first()
+    .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
   await step(page, 'PhoneFiles-01', async () => undefined);
   await step(page, 'files-phone-menu', async () => {
     await files2.locator('[data-node-id][data-name="wg0.conf"]').getByRole('button').last().click({ timeout: STEP_TIMEOUT_MS });
