@@ -13,34 +13,32 @@
   overflow-wrap: anywhere;
 }
 
+// Заголовки — цветом текста, полужирные, крупнее по уровню (статья на доске `XpChat`: раздел 18 px)
 .heading {
-  font-weight: 700;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
 }
 
 .heading1 {
   margin: 0.625rem 0 0;
-  font-size: 1.125rem;
-  color: var(--pv-accent);
+  font-size: 1.25rem;
 }
 
 .heading2 {
   margin: 0.5rem 0 0;
-  font-size: 1rem;
-  color: var(--pv-orange);
+  font-size: 1.125rem;
 }
 
 .heading3 {
   margin: 0.375rem 0 0;
-  font-size: 0.9375rem;
-  color: var(--pv-orange);
+  font-size: 1rem;
 }
 
 .heading4,
 .heading5,
 .heading6 {
   margin: 0.25rem 0 0;
-  font-size: 0.875rem;
-  color: var(--pv-yellow);
+  font-size: 0.9375rem;
 }
 
 .heading6 {
@@ -337,8 +335,8 @@
 }
 
 .note {
-  font-weight: var(--font-weight-medium);
-  color: var(--pv-purple);
+  color: var(--pv-blue);
+  text-decoration: underline;
 }
 
 .tag {

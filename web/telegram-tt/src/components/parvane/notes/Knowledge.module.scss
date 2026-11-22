@@ -399,10 +399,11 @@
   height: 0.8125rem;
 }
 
+// Ссылка на заметку — синяя со сплошным подчёркиванием (доски `PhNotesMore`, `DeskNotes`)
 .link,
 .cardLink {
-  border-bottom: 1px dashed color-mix(in srgb, var(--pv-purple) 50%, transparent);
-  color: var(--pv-purple);
+  border-bottom: 1px solid color-mix(in srgb, var(--pv-blue) 60%, transparent);
+  color: var(--pv-blue);
 }
 
 .link {
