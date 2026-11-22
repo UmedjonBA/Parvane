@@ -145,12 +145,14 @@ struct Gone {
     uploader: String,
 }
 
-/// Создание узла: метка, вид и от кого файл прислан (пусто — свой).
+/// Создание узла: метка, вид и от кого файл прислан (пусто — свой). `at_ms` — время создания папки (дата
+/// «Изменён» пустой папки); у файла 0 — его время живёт в содержимом.
 #[derive(Debug, Clone, PartialEq)]
 struct Created {
     stamp: Stamp,
     kind: CloudNodeKind,
     from: String,
+    at_ms: u64,
 }
 
 /// Регистр корзины.
@@ -235,7 +237,7 @@ fn put_max<T: PartialOrd>(slot: &mut Option<T>, value: T) {
 /// Создание: побеждает меньшая метка (при равных — меньший вид, затем меньший `from`).
 fn put_created(slot: &mut Option<Created>, value: Created) {
     match slot {
-        Some(c) if (&c.stamp, c.kind as i32, &c.from) <= (&value.stamp, value.kind as i32, &value.from) => {}
+        Some(c) if (&c.stamp, c.kind as i32, &c.from, c.at_ms) <= (&value.stamp, value.kind as i32, &value.from, value.at_ms) => {}
         _ => *slot = Some(value),
     }
 }
@@ -322,7 +324,8 @@ impl CloudState {
             return Err(ProtoError::InvalidField("from"));
         }
         let node = self.node(id);
-        put_created(&mut node.created, Created { stamp: stamp.clone(), kind, from: c.from.clone() });
+        let at_ms = if kind == CloudNodeKind::Folder { c.mtime_ms } else { 0 };
+        put_created(&mut node.created, Created { stamp: stamp.clone(), kind, from: c.from.clone(), at_ms });
         put_max(&mut node.place, Place { stamp: stamp.clone(), parent, name: c.name.clone() });
         if let Some(blob) = &c.blob {
             node.put_body(body(stamp, blob, c.thumb.as_ref(), c.mtime_ms), &[]);
@@ -554,7 +557,7 @@ impl CloudState {
                 name: node.place.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
                 blob: node.body().filter(|_| file).map(|b| b.blob.clone()),
                 thumb: node.body().filter(|_| file).and_then(|b| b.thumb.clone()),
-                mtime_ms: node.body().map_or(0, |b| b.mtime_ms),
+                mtime_ms: node.body().filter(|_| file).map_or(created.at_ms, |b| b.mtime_ms),
                 trashed,
                 trash_top,
                 trashed_at_ms,
@@ -671,6 +674,7 @@ impl CloudState {
                 create_lamport: node.created.as_ref().map_or(0, |c| c.stamp.lamport),
                 create_dev: node.created.as_ref().map_or(0, |c| dev(&c.stamp)),
                 from: node.created.as_ref().map(|c| c.from.clone()).unwrap_or_default(),
+                created_ms: node.created.as_ref().map_or(0, |c| c.at_ms),
                 purged: node.purged_at.is_some(),
                 purged_at_ms: node.purged_at.unwrap_or(0),
                 ..Default::default()
@@ -773,7 +777,7 @@ impl CloudState {
             };
             let node = self.node(id);
             if let Some((stamp, kind)) = created {
-                put_created(&mut node.created, Created { stamp, kind, from: e.from.clone() });
+                put_created(&mut node.created, Created { stamp, kind, from: e.from.clone(), at_ms: e.created_ms });
             }
             if let Some(p) = place {
                 put_max(&mut node.place, p);

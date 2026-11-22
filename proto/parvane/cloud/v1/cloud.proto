@@ -581,6 +581,8 @@ message CloudEntry {
   repeated CloudGone gone = 23 [(parvane.core.v2.max_items) = 64];
   // Создание: файл прислан собеседником (`CloudCreate.from`).
   string from = 24 [(parvane.core.v2.max_len) = 255];
+  // Создание папки: её время (`CloudCreate.mtime_ms` у папки) — дата «Изменён» пустой папки. У файла 0.
+  uint64 created_ms = 25;
 }
 
 message CloudSnapshot {

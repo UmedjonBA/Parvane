@@ -762,3 +762,22 @@ proptest! {
         prop_assert_eq!(CloudState::from_snapshot(&dst.to_snapshot(0)).unwrap().view(), dst.view());
     }
 }
+
+/// Время создания папки хранится у узла (дата «Изменён» пустой папки): его показывает дерево, переносит снимок, а
+/// время файла по-прежнему берётся из содержимого.
+#[test]
+fn folder_keeps_its_creation_time_through_view_and_snapshot() {
+    let mut dated = folder(1, None, "Конфиги", 1, "a");
+    if let Some(cloud_op::Op::Create(c)) = dated.op.as_mut() {
+        c.mtime_ms = 1_795_000_000_000;
+    }
+    let st = apply_all(&[dated, file(2, Some(1), "wg0.conf", 2, "a"), folder(3, None, "Без времени", 3, "a")]);
+    assert_eq!(node_of(&st, 1).mtime_ms, 1_795_000_000_000);
+    assert_eq!(node_of(&st, 3).mtime_ms, 0);
+
+    let snap = st.to_snapshot(10);
+    let back = CloudState::from_snapshot(&cloud::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
+    assert_eq!(node_of(&back, 1).mtime_ms, 1_795_000_000_000);
+    assert_eq!(node_of(&back, 2).mtime_ms, node_of(&st, 2).mtime_ms);
+    assert_eq!(back.view(), st.view());
+}
