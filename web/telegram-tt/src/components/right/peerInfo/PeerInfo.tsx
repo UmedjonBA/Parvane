@@ -298,7 +298,7 @@ const PeerInfo = ({
       )}
 
       <div className={groupStyles.cap}>{lang('ParvanePeerNote')}</div>
-      <div className={groupStyles.grp}>
+      <div className={styles.noteBox}>
         <textarea
           className={styles.noteInput}
           value={draft}

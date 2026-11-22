@@ -36,6 +36,11 @@
   white-space: nowrap;
 }
 
+// Заметка о контакте (доска `RpChat`): поле в рамке на фоне, без панели группы
+.noteBox {
+  padding: 0 1rem;
+}
+
 .noteInput {
   resize: vertical;
 
@@ -43,15 +48,16 @@
 
   width: 100%;
   min-height: 3.25rem;
-  padding: 0.75rem 1rem;
-  border: 0;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--pv-radius);
 
   font: inherit;
   font-size: var(--pv-font-size);
   line-height: 1.4;
   color: var(--pv-fg);
 
-  background: none;
+  background: var(--pv-panel);
 
   &::placeholder {
     color: var(--pv-muted);

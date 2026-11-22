@@ -11,7 +11,7 @@ import { ManagementScreens, ProfileState, SettingsScreens } from '../../types';
 
 import { ANIMATION_END_DELAY, SAVED_FOLDER_ID } from '../../config';
 import {
-  getCanAddContact, getCanManageTopic, isChatChannel, isUserBot,
+  getCanAddContact, getCanManageTopic, getUserFullName, isChatChannel, isUserBot,
 } from '../../global/helpers';
 import {
   selectCanManage,
@@ -98,6 +98,7 @@ type StateProps = {
   isSavedMessages?: boolean;
   isOwnProfile?: boolean;
   groupTitle?: string;
+  peerTitle?: string;
   groupMembersCount?: number;
   joinRequestsCount?: number;
 };
@@ -190,6 +191,7 @@ const RightHeader: FC<OwnProps & StateProps> = ({
   canUseGiftAdminFilter,
   isOwnProfile,
   groupTitle,
+  peerTitle,
   groupMembersCount,
   joinRequestsCount,
   onClose,
@@ -715,8 +717,9 @@ const RightHeader: FC<OwnProps & StateProps> = ({
                 </div>
               </div>
             ) : (
-              <h3 className="title">
-                {getHeaderTitle()}
+              // Parvane: профиль собеседника — в шапке его имя (доска `RpChat`)
+              <h3 className="title" dir="auto">
+                {peerTitle !== undefined && contentKey === HeaderContent.Profile ? peerTitle : getHeaderTitle()}
               </h3>
             )}
             <section className="tools">
@@ -856,6 +859,8 @@ export default withGlobal<OwnProps>(
       canUseGiftAdminFilter,
       isOwnProfile,
       groupTitle: isGroupChat ? chat.title : undefined,
+      peerTitle: user && !user.isSelf && !isBot && !isOwnProfile && !isSavedMessages
+        ? getUserFullName(user) : undefined,
       groupMembersCount: isGroupChat ? chat.membersCount : undefined,
       joinRequestsCount: chat?.joinRequests?.length,
     };
