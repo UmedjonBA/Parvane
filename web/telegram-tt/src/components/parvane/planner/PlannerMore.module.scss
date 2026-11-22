@@ -32,6 +32,13 @@
   background: none;
 }
 
+// Шапка поиска на компьютере (доска `ZdPlanX`): на фоне, без полосы и линии
+.headBare {
+  padding: 0.5rem 1rem 0.25rem;
+  border-bottom: 0;
+  background: none;
+}
+
 .titleBlock {
   display: flex;
   flex-direction: column;

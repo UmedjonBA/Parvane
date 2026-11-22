@@ -265,7 +265,7 @@ const PlannerSearch = ({
       <div className={styles.screenRow} data-planner-search onKeyDown={handleKeyDown}>
         <PlannerLayersColumn state={state} variant="search" />
         <div className={styles.screen}>
-          <header className={styles.head}>
+          <header className={buildClassName(styles.head, styles.headBare)}>
             <div className={styles.titleBlock}>
               <h2 className={styles.title}>{lang('PlannerSearchTitle')}</h2>
               {hasQuery && (

@@ -30,9 +30,29 @@
 }
 
 .item {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: 100%;
   min-height: 2.25rem;
   padding: 0.25rem 0.625rem;
+  border: 0;
   border-radius: 0.625rem;
+
+  font: inherit;
+  font-size: 0.875rem; // 14 px, как на доске: «Предложения из чатов» помещается
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-blue);
+    outline-offset: -2px;
+  }
 
   &:hover {
     background: var(--pv-raised);
@@ -73,4 +93,18 @@
 .hint {
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
+}
+
+// Выключенный слой: подпись приглушена, точка без цвета, галочки нет
+.itemOff {
+  color: var(--pv-muted);
+
+  .dot {
+    background: var(--pv-line2);
+  }
+}
+
+.check {
+  flex: none;
+  color: var(--pv-fg);
 }
