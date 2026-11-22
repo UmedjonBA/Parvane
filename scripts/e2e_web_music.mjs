@@ -788,7 +788,17 @@ try {
   await page.setViewportSize(PHONE);
   await emptyMusic.locator('[data-music-empty="library"]').getByText('No music on the server yet')
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Кадры пустой библиотеки для сверки с доской `RpMusicB-03`
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    // Пауза — на перестройку с компьютера на телефон: раньше блок ещё стоит с отступом под боковую панель
+    await page.waitForTimeout(2000);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-empty-phone.png` });
+  }
   await page.setViewportSize(WIDE);
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/music-empty-desk.png` });
+  }
   console.log('OK: пустая библиотека — компьютер и телефон по доскам');
 
   assertNoPageErrors({ session });

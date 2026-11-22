@@ -46,7 +46,9 @@
   align-items: center;
   justify-content: center;
 
-  max-width: 24rem;
+  // Не шире своего места: широкое содержимое (карточка, кнопка) иначе раздвигало блок за край телефона
+  box-sizing: border-box;
+  max-width: min(24rem, 100%);
   margin: auto;
   padding: 2rem;
 
