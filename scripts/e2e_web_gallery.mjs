@@ -979,6 +979,26 @@ async function galleryStates() {
   await page.context().close();
 }
 
+// ── Заглушки загрузки (доски `ZpStates-01`, `ZdMisc-05`): модуль впервые открыт без связи — список не приходит ──
+async function gallerySkeleton() {
+  const { page } = await openSession('skeleton');
+  await toRussian(page);
+  await page.context().setOffline(true);
+  for (const [name, module, rootId] of [['files', 'files', 'ParvaneCloud'], ['notes', 'notes', 'ParvaneKnowledge']]) {
+    await step(page, `skeleton-desk-${name}`, async () => {
+      await openModule(page, module, rootId);
+      await page.waitForTimeout(800);
+    });
+    // Дольше трёх секунд — подпись «Загрузка…», дольше десяти — «Нет ответа от сервера» и «Повторить»
+    await step(page, `skeleton-desk-${name}-4s`, async () => { await page.waitForTimeout(3500); });
+    await step(page, `skeleton-desk-${name}-12s`, async () => { await page.waitForTimeout(8000); });
+  }
+  await resize(page, PHONE);
+  await step(page, 'ZpStates-01', async () => { await page.waitForTimeout(800); });
+  await page.context().setOffline(false);
+  await page.context().close();
+}
+
 // ── Чаты: доски RpChat (профиль собеседника), ZpChat2 (сведения группы), XpChat, ZpChat — два аккаунта ──
 async function galleryChat() {
   const bob = await openSession('chat-bob');
@@ -1157,6 +1177,7 @@ try {
   if (wants('notes')) await galleryNotes();
   if (wants('plan')) await galleryPlan();
   if (wants('states')) await galleryStates();
+  if (wants('skeleton')) await gallerySkeleton();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
 } finally {
   await browser.close();

@@ -348,6 +348,24 @@
   margin: 0;
 }
 
+// Parvane: раздел, чей код ещё не подгрузился (`ModuleLoading`), стоит на месте самого раздела
+.pv-module-loading {
+  position: relative;
+  z-index: 1;
+
+  display: flex;
+  grid-column: 2 / -1;
+
+  min-width: 0;
+
+  background: var(--pv-bg);
+
+  @media (max-width: 600px) {
+    position: fixed;
+    inset: 0;
+  }
+}
+
 // Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются
 // смонтированными под другими разделами (см. Main.tsx) — скрываем их так же, как колонки
 #Main:not(.section-planner) > #ParvanePlanner,

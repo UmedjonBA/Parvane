@@ -252,6 +252,11 @@
 
   font-size: var(--pv-font-size-caption);
   color: var(--pv-muted);
+
+  // Телефон: справа внизу плавающая «+» — подпись не заходит под неё
+  @media (max-width: 760px) {
+    padding-inline-end: 5rem;
+  }
 }
 
 // Таблица заметок компьютера (доска `ZdNotesX`): «название · папка · #тег · дата»
