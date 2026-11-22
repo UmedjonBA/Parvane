@@ -198,8 +198,10 @@ const SettingsNotifications = ({
             data-notify-denied
             onClick={handleOpenSettings}
           >
-            <span className={styles.setTitle}>{lang('PvSysNotifyDenied')}</span>
-            <span className={buildClassName(styles.setValue, styles.setValueWord)}>{lang('PvSysOpenSettings')}</span>
+            <span className={styles.setText}>
+              <span className={styles.setTitle}>{lang('PvSysNotifyDenied')}</span>
+              <span className={styles.setHint}>{lang('PvSysOpenSettings')}</span>
+            </span>
           </button>
         )}
       </div>

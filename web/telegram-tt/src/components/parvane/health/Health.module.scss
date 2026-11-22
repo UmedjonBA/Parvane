@@ -220,6 +220,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  padding: 0;
 
   .entries {
     border: 0;
@@ -227,7 +228,9 @@
     background: none;
   }
 
-  .entry {
+  // Строки сводки компьютера (доска `DeskHealth`): 36 px во всю ширину карточки, название колонкой, значение за
+  // ним, время у правого края. Селекторы через `.entries` — сильнее правил телефонного списка
+  .entries .entry {
     min-height: 2.25rem;
     padding: 0 0.875rem;
     border-top: 1px solid var(--pv-line);
@@ -237,10 +240,19 @@
     }
   }
 
-  .entryMain {
+  .entries .entryMain {
     gap: 0.625rem;
     min-height: 2.25rem;
     font-size: 0.875rem;
+  }
+
+  .entries .entryKind {
+    flex: 0 0 6.25rem;
+    font-weight: var(--font-weight-normal);
+  }
+
+  .entries .entryValue {
+    flex: 1 1 auto;
   }
 }
 
@@ -1027,7 +1039,7 @@
 
 .summaryWide {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.875rem;
   align-items: start;
 }
@@ -1117,8 +1129,22 @@
   text-align: start;
 }
 
+// Плитка сводки компьютера (доска `DeskHealth`): число 20 px, подпись одной строкой. Боковые поля 8 px вместо
+// 12 px доски: иначе «уд/мин · сегодня» не помещается в четверть колонки
 .metricCompact {
   gap: 0.125rem;
+  padding: 0.625rem 0.5rem 0.625rem 0.625rem;
+
+  .metricValue {
+    font-size: 1.25rem;
+  }
+
+  > :last-child {
+    overflow: hidden;
+    font-size: var(--pv-font-size-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .moodWord {

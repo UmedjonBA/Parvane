@@ -1178,7 +1178,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
           }]
           : [
             ...(folder ? [{
-              op: 'create', id: folder.id, kind: 'folder', parent: args.parent, name: folder.name,
+              op: 'create', id: folder.id, kind: 'folder', parent: args.parent, name: folder.name, mtime,
             }] : []),
             {
               op: 'create', id: node, kind: 'file', parent: folder?.id || args.parent, name: args.name, mtime, blob,
@@ -1671,7 +1671,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       const error = await runMove(transferId, async (signal, onProgress) => {
         const folder = newCloudNodeId();
         const root = await deps.cloud().apply('root', [{
-          op: 'create', id: folder, kind: 'folder', name,
+          op: 'create', id: folder, kind: 'folder', name, mtime: Date.now(),
         }]);
         const items = (readTree(container)?.nodes || [])
           .filter((n) => !n.parent && !n.trashed)

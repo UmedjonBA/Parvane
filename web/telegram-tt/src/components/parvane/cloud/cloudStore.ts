@@ -376,7 +376,8 @@ export async function createCloudFolderAt(container: string | undefined, parent:
   const id = newNodeId();
   const taken = namesIn(getNodes(container), parent);
   const isDone = await applyOps(container, [{
-    op: 'create', id, kind: 'folder', parent, name: freeName(taken, name),
+    // Время создания — дата «Изменён» пустой папки (доска `DeskFiles`)
+    op: 'create', id, kind: 'folder', parent, name: freeName(taken, name), mtime: Date.now(),
   }]);
   return isDone ? id : undefined;
 }

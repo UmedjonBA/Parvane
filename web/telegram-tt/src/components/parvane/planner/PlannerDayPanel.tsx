@@ -40,7 +40,7 @@ const PlannerDayPanel = ({
   const isRail = variant === 'rail';
 
   return (
-    <section className={isRail ? pv.railDay : pv.dayList} data-planner-day={day}>
+    <section className={isRail ? pv.railDay : pv.dayFlatList} data-planner-day={day}>
       {!isRail && <h3 className={buildClassName(pv.cap, pv.capFlush)}>{formatDayLong(lang, day)}</h3>}
       {isRail && (
         <>
@@ -56,7 +56,7 @@ const PlannerDayPanel = ({
           </h3>
         </>
       )}
-      <div className={isRail ? undefined : pv.dayCard}>
+      <div className={isRail ? undefined : pv.dayFlat}>
         <PlannerDayList
           state={state}
           day={day}

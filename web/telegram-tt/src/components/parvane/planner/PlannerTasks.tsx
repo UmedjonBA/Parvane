@@ -170,19 +170,24 @@ const PlannerTasks = ({
   const title = isNarrow ? lang('PlannerTasksTitle')
     : tab === 'undated' ? lang('PlannerUndated', { count: undated.length }) : lang(TAB_TITLE_KEYS[tab]);
 
+  // Компьютер (доска `DkPlanMore`): заголовок — на фоне над списком, без полосы шапки; колонка групп — во всю высоту
+  const head = (
+    <header className={buildClassName(styles.head, !isNarrow && styles.headPlain)}>
+      {isNarrow && (
+        <button type="button" className={kit.ib} aria-label={lang('Back')} onClick={onClose}>
+          <PvIcon name="left" />
+        </button>
+      )}
+      <h2 className={styles.title} data-tasks-title>{title}</h2>
+      <button type="button" className={kit.ib} aria-label={lang('PlannerSearchTitle')} onClick={onOpenSearch}>
+        <PvIcon name="search" />
+      </button>
+    </header>
+  );
+
   return (
     <div className={styles.screen} data-planner-tasks={tab}>
-      <header className={styles.head}>
-        {isNarrow && (
-          <button type="button" className={kit.ib} aria-label={lang('Back')} onClick={onClose}>
-            <PvIcon name="left" />
-          </button>
-        )}
-        <h2 className={styles.title} data-tasks-title>{title}</h2>
-        <button type="button" className={kit.ib} aria-label={lang('PlannerSearchTitle')} onClick={onOpenSearch}>
-          <PvIcon name="search" />
-        </button>
-      </header>
+      {isNarrow && head}
       {isNarrow && (
         <div className={styles.segmentBar}>
           <PvSegment items={segments} value={tab} label={lang('PlannerTasksTabs')} isTabs onChange={onChangeTab} />
@@ -190,6 +195,7 @@ const PlannerTasks = ({
       )}
       <div className={styles.split}>
         <div className={buildClassName(styles.body, 'custom-scroll')}>
+          {!isNarrow && head}
           {tab === 'deadlines' ? renderDeadlines()
             : tab === 'undated' ? renderUndated()
               : <PlannerGroupsPane state={state} today={today} isWide={!isNarrow} />}

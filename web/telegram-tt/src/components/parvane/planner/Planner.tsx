@@ -722,7 +722,7 @@ const Planner = () => {
           </div>
           {isNarrow && (
             <>
-              <p className={pv.hint}>{lang('PlannerMonthLoadHint')}</p>
+              <p className={styles.monthHint}>{lang('PlannerMonthLoadHint')}</p>
               <div className={styles.monthDay}>
                 <PlannerDayPanel
                   state={calendarState}

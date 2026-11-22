@@ -673,6 +673,37 @@
   background: var(--pv-panel);
 }
 
+// День под сеткой месяца на телефоне (доска `PhPlanMore`): плоские строки 52 px во всю ширину экрана
+.dayFlatList {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dayFlat {
+  flex: none;
+
+  min-width: 0;
+  margin-inline: -1rem;
+  border-block: 1px solid var(--pv-line);
+
+  background: var(--pv-panel);
+
+  .dayListRow {
+    min-height: var(--pv-settings-row-height);
+    padding: 0 1rem;
+  }
+
+  .dayListTime {
+    font-weight: var(--font-weight-semibold);
+    color: var(--pv-fg);
+  }
+
+  .dayListMinutes {
+    font-family: inherit;
+  }
+}
+
 .dayCardPad {
   padding: 0.25rem 0.75rem;
 }
