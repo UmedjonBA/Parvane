@@ -481,6 +481,21 @@
   margin-inline-end: auto;
 }
 
+// Телефон: кнопки мастера столбиком во всю ширину, главная сверху, «Просто выйти на нём» — последней
+@media (max-width: 600px) {
+  .stolenButtons {
+    flex-direction: column-reverse;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+
+  .stolenSignOutOnly {
+    order: -1;
+    margin-inline-end: 0;
+    text-align: center;
+  }
+}
+
 // ── «Подтвердите вход»: подпись поля ключа и отказ другого устройства ──────────
 
 .fieldLabel {

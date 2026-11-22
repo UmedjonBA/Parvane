@@ -326,6 +326,16 @@ try {
     .catch(() => assert.fail('нет карточки пропавшего файла'));
   assert.ok((await missing.innerText()).includes('file not found — deleted or moved'), 'текст пропавшего файла');
   await shoot(page, 'note-file-missing');
+  // Те же вложения на телефоне (доска `ZpNotesX-03`)
+  if (SHOT_DIR) {
+    const size = page.viewportSize();
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.waitForTimeout(1500);
+    await missing.scrollIntoViewIfNeeded().catch(() => undefined);
+    await shoot(page, 'note-media-phone');
+    await page.setViewportSize(size);
+    await page.waitForTimeout(1500);
+  }
   await missing.locator('[data-embed-repick]').click();
   const fileRow = page.locator('[data-canvas-file-row="карта.png"]');
   // Файл лежит рядом с заметкой — в папке хранилища заметок: открыть папки по пути

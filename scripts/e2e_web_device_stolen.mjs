@@ -55,6 +55,21 @@ try {
   // Обычный выход ключ подписи не раскрывает
   assert.equal(await screen.getByText('Device signing key', { exact: true }).count(), 0, 'смена ключа не нужна');
 
+  // Кадр мастера на телефоне (доска `RpProfileC-02`): окно открывается уже в узком окне, затем закрывается
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    const size = device1.page.viewportSize();
+    await device1.page.setViewportSize({ width: 360, height: 800 });
+    await device1.page.waitForTimeout(1500);
+    await left.first().click();
+    await device1.page.locator('[data-stolen-wizard]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await device1.page.waitForTimeout(800);
+    await device1.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/stolen-phone.png` });
+    await device1.page.setViewportSize(size);
+    await device1.page.waitForTimeout(1500);
+    await device1.page.keyboard.press('Escape');
+    await device1.page.locator('[data-stolen-wizard]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
+    screen = await openDevices(device1.page);
+  }
   await left.first().click();
   let wizard = device1.page.locator('[data-stolen-wizard]');
   await wizard.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
