@@ -18,8 +18,8 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Loading from '../../ui/Loading';
-import Modal from '../../ui/Modal';
 import SearchForm from '../../ui/SearchForm';
+import PvSheet from '../notes/PvSheet';
 
 import styles from './Article.module.scss';
 
@@ -84,7 +84,7 @@ const NotePickerModal = ({
   const isLoading = status === 'loading' && !notes.length;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} hasCloseButton className={styles.picker}>
+    <PvSheet isOpen={isOpen} title={title} className={styles.picker} onClose={onClose}>
       {hint && <p className={styles.pickerHint}>{hint}</p>}
       <SearchForm>
         <input
@@ -131,7 +131,7 @@ const NotePickerModal = ({
           </button>
         ))}
       </div>
-    </Modal>
+    </PvSheet>
   );
 };
 

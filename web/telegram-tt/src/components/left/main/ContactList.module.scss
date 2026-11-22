@@ -5,9 +5,17 @@
 
 .caption {
   padding: 0.75rem 1rem 0.375rem;
-  font-size: 0.8125rem;
+
+  font-size: var(--pv-font-size-caption);
   font-weight: var(--font-weight-semibold);
   color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+// Ник и статус контакта разделены точкой: «@nick · в сети»
+.contact :global(.handle.withStatus)::after {
+  content: " · ";
 }
 
 .remote {

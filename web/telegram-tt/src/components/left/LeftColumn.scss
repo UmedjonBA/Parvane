@@ -54,3 +54,16 @@
     padding: 0.5rem;
   }
 }
+
+// Parvane: плавающая кнопка левой колонки — квадрат 52 px цвета акцента, как «+» макета
+#LeftColumn .FloatingActionButton {
+  width: var(--pv-fab-size);
+  height: var(--pv-fab-size);
+  border: 2px solid var(--pv-bg);
+  border-radius: var(--pv-radius-dialog);
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+  box-shadow: none;
+}

@@ -1008,6 +1008,9 @@ async function galleryChat() {
   await phoneInfo('ZpChat2-04', 'Linux-чат');
   // К чату из любого места: закрыть панели, пока строку чата нельзя нажать
   const openChat = async (title) => {
+    // «В план» и «В заметку» уводят в модуль — назад к чатам по ленте модулей
+    await page.keyboard.press('Escape');
+    await page.locator('[data-module="chats"]:visible').first().click({ timeout: 1500 }).catch(() => undefined);
     const row = page.locator('.chat-list .ListItem').filter({ hasText: title }).first();
     const isReachable = () => row.click({ trial: true, timeout: 1500 }).then(() => true, () => false);
     for (let attempt = 0; attempt < 4 && !(await isReachable()); attempt++) {
@@ -1037,7 +1040,9 @@ async function galleryChat() {
   for (const [name, item] of [['RpPick-02', 'Переслать'], ['XpChat-02', 'В план'], ['chat-phone-to-note', 'В заметку']]) {
     await step(page, name, async () => {
       await messageMenu();
-      await page.getByText(item, { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+      // Подпись пункта идёт с пояснением справа («В план · задача из текста») — ищем пункт по началу текста
+      await page.locator('.MenuItem:visible, [role="menuitem"]:visible').filter({ hasText: item }).first()
+        .click({ timeout: STEP_TIMEOUT_MS });
       await page.waitForTimeout(1200);
     });
     await page.keyboard.press('Escape');
@@ -1065,6 +1070,8 @@ async function galleryChat() {
   await resize(page, PHONE);
   // Телефон: «Новое сообщение», новая группа и новый канал (доска `ZpChat2`)
   const toChatList = async () => {
+    await page.keyboard.press('Escape');
+    await page.locator('[data-module="chats"]:visible').first().click({ timeout: 1500 }).catch(() => undefined);
     for (let attempt = 0; attempt < 4; attempt++) {
       if (await page.locator('[data-add-for="chats"]:visible').first().isVisible().catch(() => false)) break;
       await page.locator('#RightColumn .close-button:visible, #MiddleColumn .MiddleHeader .back-button button:visible')
@@ -1087,6 +1094,20 @@ async function galleryChat() {
     await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.getByText('Новая группа', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
+  });
+  // Шаг 2 новой группы: участник выбран, «Далее»
+  await step(page, 'chat-phone-new-group-2', async () => {
+    await page.locator('.pv-new-chat-item:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText('Далее', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
+  });
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await step(page, 'ZpChat2-05', async () => {
+    await toChatList();
+    await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(/^(Контакты|Новое сообщение)$/).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1000);
   });
   await page.context().close();
   await bob.page.context().close();

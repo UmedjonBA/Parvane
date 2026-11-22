@@ -9,6 +9,7 @@ import { LeftColumnContent, StoryViewerOrigin } from '../../../types';
 
 import { sortUserIds } from '../../../global/helpers';
 import { filterPeersByQuery } from '../../../global/helpers/peers';
+import buildClassName from '../../../util/buildClassName';
 import { getIsContactsFromProfile } from '../../../util/parvaneSection';
 
 import useAppLayout from '../../../hooks/useAppLayout';
@@ -106,7 +107,7 @@ const ContactList: FC<OwnProps & StateProps> = ({
     return (
       <ListItem
         key={id}
-        className="chat-item-clickable contact-list-item"
+        className={buildClassName('chat-item-clickable contact-list-item', styles.contact)}
         onClick={() => handleClick(id)}
       >
         <PrivateChatInfo

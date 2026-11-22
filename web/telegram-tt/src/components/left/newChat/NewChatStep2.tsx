@@ -224,7 +224,7 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
           color="translucent"
           onClick={() => onReset()}
           ariaLabel="Return to member selection"
-          iconName="arrow-left"
+          iconName="previous"
         />
         <div className="pv-new-chat-title">
           <h3 className="pv-new-chat-heading">{lang(isChannel ? 'NewChannel' : 'NewGroup')}</h3>
@@ -344,12 +344,17 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
         )}
 
         <div className="pv-new-chat-grp">
-          <Checkbox
-            label={lang('ParvaneJoinByRequest')}
-            subLabel={lang('ParvaneJoinByRequestInfo')}
-            checked={isJoinRequestNeeded}
-            onCheck={setIsJoinRequestNeeded}
-          />
+          <PvSwitch
+            className="pv-new-chat-row"
+            isOn={isJoinRequestNeeded}
+            data-new-chat-join-request
+            onChange={setIsJoinRequestNeeded}
+          >
+            <span className="pv-new-chat-row-text">
+              {lang('ParvaneJoinByRequest')}
+              <span className="pv-new-chat-row-sub">{lang('ParvaneJoinByRequestInfo')}</span>
+            </span>
+          </PvSwitch>
         </div>
 
         {renderedError && (
