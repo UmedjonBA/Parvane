@@ -5,6 +5,7 @@ import {
 import type { PlannerLearnedWord, PlannerSettings } from './plannerModel';
 import type { QuickDraft } from './plannerQuick';
 
+import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import { getIsModuleOn } from '../../../util/parvaneModules';
 import { addHealthEntries, parseHealthInput } from '../health/healthStore';
@@ -122,9 +123,14 @@ const PlannerQuickField = ({
   const handleWindowKey = useLastCallback((e: KeyboardEvent) => {
     if (e.target !== inputRef.current || e.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) return;
     if (e.key === 'Escape') {
-      if (!inputRef.current?.value) return;
+      const input = inputRef.current;
+      if (!input?.value) return;
       e.stopPropagation();
       setText('');
+      // Набранное, не дошедшее до отрисовки, Teact не сотрёт: в разметке осталась та же пустая строка
+      requestMutation(() => {
+        input.value = '';
+      });
       return;
     }
     e.stopPropagation();

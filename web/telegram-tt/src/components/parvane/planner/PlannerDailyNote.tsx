@@ -4,6 +4,7 @@ import {
 
 import type { GlobalState } from '../../../global/types';
 
+import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import { openNote } from '../../../util/parvaneSection';
 import { getCloudData, loadCloud } from '../cloud/cloudStore';
@@ -130,6 +131,14 @@ const PlannerDailyNote = ({ day, variant }: OwnProps) => {
     }
     e.stopPropagation();
     setEdit(undefined);
+    // Teact пишет `value` в поле, только когда значение в разметке сменилось с прошлой отрисовки. Набранное,
+    // которое не успело дойти до отрисовки (под нагрузкой клавиши и Escape попадают в один кадр), осталось бы в
+    // поле: прежнее значение в разметке — тот же текст заметки. Поэтому поле возвращается к нему явно
+    const textarea = e.target;
+    const text = known?.text || '';
+    requestMutation(() => {
+      textarea.value = text;
+    });
   });
 
   useLayoutEffect(() => {
