@@ -52,6 +52,7 @@ import useParvaneModules from '../../../hooks/useParvaneModules';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import Icon from '../../common/icons/Icon';
+import PvEmpty from '../notes/PvEmpty';
 import PvLoading from '../notes/PvLoading';
 import PvOfflineBar from '../notes/PvOfflineBar';
 import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
@@ -995,7 +996,10 @@ const Planner = () => {
               onTouchEnd={handleTouchEnd}
             >
               {!hasContent ? (
-                <PvLoading className={pvStates.loadingFill} onRetry={retryPlanner} />
+                // Без привязки устройства данных не будет — причину говорит полоса выше, «Нет ответа от сервера» неверно
+                syncStatus === 'needs-linking'
+                  ? <PvEmpty title={lang('ParvaneCloudStateNotLinked')} data-planner-not-linked />
+                  : <PvLoading className={pvStates.loadingFill} onRetry={retryPlanner} />
               ) : isCalendar ? renderCalendar() : (
                 <PlannerDay
                   state={calendarState}

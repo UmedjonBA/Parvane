@@ -21,7 +21,9 @@ import {
   consumeModuleAddRequest, consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getModuleAddRequest,
   getNoteRequest, getParvaneSection, setKnowledgeView, setParvaneNavCovered, setParvaneSection,
 } from '../../../util/parvaneSection';
-import { getCloudData, retryCloud, setCloudActive } from '../cloud/cloudStore';
+import {
+  getCloudData, getCloudStatus, retryCloud, setCloudActive,
+} from '../cloud/cloudStore';
 import useCloudOffline from '../cloud/useCloudOffline';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
@@ -70,6 +72,7 @@ import NotesList from './NotesList';
 import NotesMarkdownHelp from './NotesMarkdownHelp';
 import NotesTrash from './NotesTrash';
 import NoteView from './NoteView';
+import PvEmpty from './PvEmpty';
 import PvHeaderSearch from './PvHeaderSearch';
 import PvIcon from './PvIcon';
 import PvLoading from './PvLoading';
@@ -124,6 +127,8 @@ const Knowledge = () => {
   const folders = useDerivedState(getNoteFolders);
   const canvases = useDerivedState(getCanvases);
   const status = useDerivedState(getNotesStatus);
+  // Устройство ещё не привязано: ключа диска нет, заметки не придут — вместо бесконечной «Загрузки…» сказать об этом
+  const isNotLinked = useDerivedState(getCloudStatus) === 'needs-linking';
   const isOffline = useCloudOffline();
   const notice = useDerivedState(getNotesNotice);
   const view = useDerivedState(getKnowledgeView);
@@ -884,7 +889,7 @@ const Knowledge = () => {
         {renderNotice()}
         <div className={styles.content}>
           {status !== 'ready'
-            ? (isList ? <PvSkeleton onRetry={retryCloud} /> : <PvLoading onRetry={retryCloud} />)
+            ? renderPending(isList)
             : isList ? (openNote ? renderNote(openNote) : renderList()) : renderBoard()}
           {renderGraphNotice()}
         </div>
@@ -974,9 +979,7 @@ const Knowledge = () => {
         {renderDeskHead()}
         {renderNotice()}
         <div className={styles.deskBody}>
-          {status !== 'ready' ? (
-            view === 'notes' ? <PvSkeleton onRetry={retryCloud} /> : <PvLoading onRetry={retryCloud} />
-          ) : view === 'graph' ? (
+          {status !== 'ready' ? renderPending(view === 'notes') : view === 'graph' ? (
             <div className={styles.content}>
               {renderBoard()}
               {renderGraphNotice()}
@@ -1023,7 +1026,7 @@ const Knowledge = () => {
         </header>
         {renderNotice()}
         <div className={styles.content}>
-          {status !== 'ready' ? <PvLoading onRetry={retryCloud} /> : renderBoard()}
+          {status !== 'ready' ? renderPending() : renderBoard()}
         </div>
       </>
     );
@@ -1062,6 +1065,20 @@ const Knowledge = () => {
         onSearch={openSearch}
       />
     );
+  }
+
+  // Заметки ещё не готовы: заглушки строк у списка, призрак у графа и холста; без привязки устройства — причина
+  function renderPending(isListView?: boolean) {
+    if (isNotLinked) {
+      return (
+        <PvEmpty
+          title={lang(isNarrow ? 'ParvaneCloudStateNotLinked' : 'ParvaneCloudStateNotLinkedDesktop')}
+          text={lang('ParvaneCloudNeedsLinking')}
+          data-notes-not-linked
+        />
+      );
+    }
+    return isListView ? <PvSkeleton onRetry={retryCloud} /> : <PvLoading onRetry={retryCloud} />;
   }
 
   function renderNotice() {

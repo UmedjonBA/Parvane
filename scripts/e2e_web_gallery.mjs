@@ -1002,6 +1002,40 @@ async function galleryStates() {
   await page.context().close();
 }
 
+// ── Второе устройство до привязки (доски `ZdFilesX-02`, `ZpFilesX-03`: «Этот компьютер ещё не привязан») ──
+async function galleryUnlinked() {
+  const first = await openSession('unlinked');
+  // На первом устройстве есть данные: папка «Файлов» и справка «Заметок»
+  await openModule(first.page, 'notes', 'ParvaneKnowledge').catch(() => undefined);
+  await first.page.waitForTimeout(4000);
+  const context = await browser.newContext({ viewport: DESK, colorScheme: 'light' });
+  await context.addInitScript(() => {
+    if (localStorage.getItem('parvane:language-system') !== '1') return;
+    Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
+    Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
+  });
+  const { page } = await preparePage(context, first.user, PASSWORD);
+  await dismissRecoveryKeyDialog(page).catch(() => undefined);
+  await toRussian(page);
+  const modules = [['files', 'ParvaneCloud'], ['notes', 'ParvaneKnowledge'], ['plan', 'ParvanePlanner'], ['health', 'ParvaneHealth']];
+  for (const [name, size] of [['desk', DESK], ['phone', PHONE]]) {
+    await resize(page, size);
+    for (const [module, rootId] of modules) {
+      await step(page, `unlinked-${name}-${module}`, async () => {
+        await page.getByRole('button', { name: 'Назад' }).first().click({ timeout: 1000 }).catch(() => undefined);
+        await openModule(page, module, rootId);
+        await page.waitForTimeout(2500);
+      });
+    }
+  }
+  await step(page, 'unlinked-phone-chats', async () => {
+    await page.locator('[data-module="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(1500);
+  });
+  await context.close();
+  await first.page.context().close();
+}
+
 // ── Заглушки загрузки (доски `ZpStates-01`, `ZdMisc-05`): модуль впервые открыт без связи — список не приходит ──
 async function gallerySkeleton() {
   // Без сервис-воркера: он отдал бы код разделов из своего хранилища мимо перехвата запросов
@@ -1256,6 +1290,7 @@ try {
   if (wants('plan')) await galleryPlan();
   if (wants('states')) await galleryStates();
   if (wants('skeleton')) await gallerySkeleton();
+  if (wants('unlinked')) await galleryUnlinked();
   console.log(`e2e_web_gallery: OK (не удалось шагов: ${failed})`);
 } finally {
   await browser.close();
