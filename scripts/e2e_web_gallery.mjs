@@ -51,8 +51,8 @@ async function step(page, name, action) {
 
 // Сессия заводится на английском (хелперы ищут английские подписи), затем ставится язык «как в системе» (язык
 // браузера с этой меткой — русский) и страница перезагружается: снимки — на русском, переходы — по атрибутам `data-*`
-async function openSession(tag) {
-  const context = await browser.newContext({ viewport: DESK, colorScheme: 'light' });
+async function openSession(tag, contextOptions = {}) {
+  const context = await browser.newContext({ viewport: DESK, colorScheme: 'light', ...contextOptions });
   // Язык браузера становится русским вместе с меткой «как в системе»: до неё вход идёт на английском
   await context.addInitScript(() => {
     if (localStorage.getItem('parvane:language-system') !== '1') return;
@@ -981,8 +981,44 @@ async function galleryStates() {
 
 // ── Заглушки загрузки (доски `ZpStates-01`, `ZdMisc-05`): модуль впервые открыт без связи — список не приходит ──
 async function gallerySkeleton() {
-  const { page } = await openSession('skeleton');
+  // Без сервис-воркера: он отдал бы код разделов из своего хранилища мимо перехвата запросов
+  const { page } = await openSession('skeleton', { serviceWorkers: 'block' });
+  // Код разделов (бандл `Parvane`) не приходит: на месте раздела — «Загрузка…», затем «Нет ответа от сервера»
+  // Файлов с именем `parvane-*` два, один нужен на старте: обрываем только тот, где лежат сами разделы
+  let isBlocking = true;
+  await page.route(/\/assets\/parvane-[^/]*\.js$/, async (route) => {
+    const response = await route.fetch();
+    const body = await response.text();
+    if (isBlocking && body.includes('data-cloud-nav')) await route.abort();
+    else await route.fulfill({ response, body });
+  });
   await toRussian(page);
+  for (const [name, size] of [['desk', DESK], ['phone', PHONE]]) {
+    await resize(page, size);
+    await step(page, `module-loading-${name}`, async () => {
+      await page.locator('[data-module="files"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+      await page.locator('[data-module-loading]:visible').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    });
+    await step(page, `module-loading-${name}-12s`, async () => {
+      await page.locator('[data-module-loading] [data-no-answer]:visible').first()
+        .waitFor({ state: 'visible', timeout: 20000 });
+    });
+    await page.locator('[data-module="chats"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  }
+  await resize(page, DESK);
+  isBlocking = false;
+  await page.locator('[data-module="files"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  await page.locator('[data-module-loading] [data-no-answer]:visible').first().waitFor({ state: 'visible', timeout: 20000 })
+    .catch(() => undefined);
+  // «Повторить» со связью: раздел подгружается и встаёт на место
+  await step(page, 'module-loading-retry', async () => {
+    await page.locator('[data-module-loading] button:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    // Страница перечитывается; раздел после неё открывается заново
+    await page.locator('#LeftColumn, #Main').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await page.waitForTimeout(3000);
+    await page.locator('[data-module="files"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#ParvaneCloud [data-cloud-nav]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  });
   await page.context().setOffline(true);
   for (const [name, module, rootId] of [['files', 'files', 'ParvaneCloud'], ['notes', 'notes', 'ParvaneKnowledge']]) {
     await step(page, `skeleton-desk-${name}`, async () => {

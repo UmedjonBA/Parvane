@@ -15,8 +15,11 @@ type OwnProps = {
 // Без связи загрузка не приходит — вместо пустой области «Загрузка…», затем «Нет ответа от сервера · Повторить»
 const ModuleLoading = ({ id }: OwnProps) => {
   const handleRetry = useLastCallback(() => {
-    // Успех разойдётся слушателям загрузки бандла — обёртка раздела перерисуется сама
-    void loadBundle(Bundles.Parvane).catch(() => undefined);
+    // Успех разойдётся слушателям загрузки бандла — обёртка раздела перерисуется сама. Неудачную подгрузку кода
+    // браузер запоминает до перезагрузки страницы: при появившейся связи приложение перечитывается целиком
+    void loadBundle(Bundles.Parvane).catch(() => {
+      if (navigator.onLine) window.location.reload();
+    });
   });
 
   return (
