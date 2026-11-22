@@ -175,7 +175,7 @@ try {
   /** Ссылка из меню узла (доски `PhFilesMore`, `DkFilesDialogs`): окно сразу создаёт её на 7 дней, срок виден всегда;
    * другой срок — нажатием чипа у готовой ссылки. Возвращает полный адрес. */
   const createLink = async (name, ttlDays) => {
-    await drive.menu(name, 'Link for people without an account…');
+    await drive.menu(name, 'Link for everyone…');
     await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     assert.deepEqual(
       await sheet.locator('[data-link-ttl]').evaluateAll((els) => els.map((el) => el.dataset.linkTtl)),
@@ -234,7 +234,7 @@ try {
   await sheet.getByText(/^Valid until /).waitFor({ state: 'visible' });
   await closeSheet();
   // Шторка того же файла снова показывает готовую ссылку, а не предлагает создать вторую
-  await drive.menu(FILE_NAME, 'Link for people without an account…');
+  await drive.menu(FILE_NAME, 'Link for everyone…');
   assert.equal(await linkUrl(), fileUrl);
   assert.equal(await sheet.locator('[data-link-create]').count(), 0);
   // Срок готовой ссылки выделяется, когда окно дочитает её с сервера

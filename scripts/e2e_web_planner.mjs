@@ -119,11 +119,11 @@ try {
   await chatsHeader.getByRole('heading', { name: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await chatsHeader.locator('.left-header-compose').count(), 0, '«Написать» в шапке больше нет');
   await page.locator('[data-add-for="chats"]').click();
-  for (const item of ['New Message', 'New Group', 'New Channel', 'Planner entry']) {
+  for (const item of ['New Message', 'New Group', 'New Channel', 'Plan entry']) {
     await page.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   await page.keyboard.press('Escape');
-  await page.getByRole('menuitem', { name: 'Planner entry' }).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await page.getByRole('menuitem', { name: 'Plan entry' }).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.locator('#LeftColumn .NewChatButton').count(), 0, 'карандаша Telegram нет и на компьютере');
   // «Поиск» панели открывает общий поиск (палитру Ctrl+K, сценарий `e2e_web_palette.mjs`); папок чатов в панели нет
   await sidebar.getByRole('button', { name: /^Global search/ }).click();
@@ -438,7 +438,7 @@ try {
   await learn.click();
   await settingsPage.locator('[data-settings-learned-count]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closePlannerSettings(page);
-  // Та же страница — из «Профиля → Модули» строкой «Planner settings» под модулем
+  // Та же страница — из «Профиля → Модули» строкой «Plan settings» под модулем
   await openSettingsScreen(page, 'Modules');
   await page.locator('[data-module-settings="plan"]').click();
   settingsPage = page.locator('[data-settings-page="plan"]');
@@ -1005,7 +1005,7 @@ try {
   await page.keyboard.press('Escape');
   await page.locator('[role="menuitem"][data-action="year"]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByRole('button', { name: '+ Entry', exact: true }).count(), 0, 'на телефоне кнопки «+ Запись» нет');
-  assert.equal(await planner.locator('header h1').innerText(), 'Planner', 'в шапке телефона — название модуля');
+  assert.equal(await planner.locator('header h1').innerText(), 'Plan', 'в шапке телефона — название модуля');
   // Месяц: день — карточкой ПОД сеткой месяца (расписание списком), вбок ничего не листается
   await todayCell.click({ position: { x: 10, y: 10 } });
   await planner.locator(`[data-planner-day="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -1225,7 +1225,7 @@ try {
     await profile.locator(`[data-profile-item="${id}"]`).waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   }
   await profile.locator('[data-profile-item="appearance"]').click();
-  const schemes = page.getByRole('radiogroup', { name: 'Colour scheme' });
+  const schemes = page.getByRole('radiogroup', { name: 'Color scheme' });
   await schemes.getByRole('radio', { name: 'Nord' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.getByRole('group', { name: 'Mode' }).getByRole('button').count(), 3, 'режим: как в системе, светлая, тёмная');
   await page.keyboard.press('Escape');
@@ -1238,15 +1238,15 @@ try {
   await page.locator('[data-add-for]').click();
   // Меню «+» раскрывается у плавающей кнопки, вне ленты
   const addMenu = page;
-  for (const item of ['New Message', 'New Group', 'New Channel', 'Planner entry']) {
+  for (const item of ['New Message', 'New Group', 'New Channel', 'Plan entry']) {
     await addMenu.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   assert.equal(await page.locator('#LeftColumn .NewChatButton button:visible').count(), 0, 'карандаша на телефоне нет');
   // Меню помещается в экран
-  const menuBox = await addMenu.getByRole('menuitem', { name: 'Planner entry' }).boundingBox();
+  const menuBox = await addMenu.getByRole('menuitem', { name: 'Plan entry' }).boundingBox();
   assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= 390, `меню «+» выходит за экран: ${JSON.stringify(menuBox)}`);
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/plus-menu-phone.png` });
-  await addMenu.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await addMenu.getByRole('menuitem', { name: 'Plan entry' }).click();
   await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
   await tabBar.getByRole('button', { name: 'Chats' }).click();

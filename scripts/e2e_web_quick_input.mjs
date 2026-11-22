@@ -99,7 +99,7 @@ try {
   await tabBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // На списке чатов «+» открывает меню, запись в план — его пункт
   await page.locator('[data-add-for]').click();
-  await page.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await page.getByRole('menuitem', { name: 'Plan entry' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await addButton.isDisabled(), true, 'пустую строку добавить нельзя');
@@ -499,7 +499,7 @@ try {
   await page.keyboard.press('Control+KeyN');
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('.modal-header kbd').filter({ hasText: 'Ctrl+N' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  for (const name of ['Auto', 'Event', 'Task', 'Sleep', 'Weight', 'Blood pressure', 'Pulse', 'Steps', 'Mood', 'Note']) {
+  for (const name of ['Auto', 'Event', 'Task', 'Sleep', 'Weight', 'Pressure', 'Pulse', 'Steps', 'Mood', 'Note']) {
     await form.getByRole('radio', { name, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   await form.getByText('The entry goes to the module that was recognized.', { exact: false })

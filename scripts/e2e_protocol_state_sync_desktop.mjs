@@ -89,9 +89,9 @@ async function closeSettings(page) {
   throw new Error('не удалось вернуться из настроек к списку чатов');
 }
 
-// Папка через нативный экран Settings → Chat Folders
+// Папка через нативный экран Settings → Chat folders
 async function createFolder(page, folderName, chatName) {
-  await openSettingsScreen(page, 'Chat Folders');
+  await openSettingsScreen(page, 'Chat folders');
   await page.getByRole('button', { name: 'Create New Folder' }).click();
   const nameInput = page.getByRole('textbox', { name: 'Folder name' });
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

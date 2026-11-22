@@ -202,24 +202,33 @@ function playlistCardContent(playlist: ApiMusicPlaylistCard) {
   });
 }
 
-function articleFields(title: string, markdown: string) {
+type FormatText = (key: string, vars: Record<string, string | number>) => string;
+
+function articleFields(title: string, markdown: string, formatText: FormatText) {
   const cleanTitle = title.trim().slice(0, ARTICLE_TITLE_MAX);
-  return { title: cleanTitle, markdown, text: articleText(cleanTitle, markdown) };
+  return { title: cleanTitle, markdown, text: articleText(cleanTitle, markdown, formatText) };
 }
 
 // Представление статьи для клиентов без чтения статей: название и начало текста без разметки
-function articleText(title: string, markdown: string) {
+function articleText(title: string, markdown: string, formatText: FormatText) {
   const plain = markdown
     .replace(/^---\n[\s\S]*?\n---\n/, '')
     .replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, alias?: string) => alias || target)
     .replace(/[#>*_`]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  const head = `Статья «${title}»`;
+  const head = formatText('ArticleTextHead', { title });
   return `${head}\n${plain}`.slice(0, ARTICLE_TEXT_MAX);
 }
 
 export function createMessageController(deps: MessageDependencies) {
+  // Строка словаря с подставленными переменными — на языке интерфейса отправителя: так идут тексты задания, ответа
+  // и статьи для клиентов без карточек
+  function formatText(key: string, vars: Record<string, string | number>) {
+    const template = deps.getStore().getLangString?.(key) || key;
+    return template.replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? ''));
+  }
+
   // Чат, мутации которого может взять v2: личный или группа v2 (группы v1 —
   // только история, писать в них нечем)
   function isV2Routable(address: string) {
@@ -1741,7 +1750,7 @@ export function createMessageController(deps: MessageDependencies) {
       for (const message of messages) {
         const { article, musicTrack, musicPlaylist } = message.content;
         const wireContent = article
-          ? { kind: 'article', ...articleFields(article.title, article.markdown) }
+          ? { kind: 'article', ...articleFields(article.title, article.markdown, formatText) }
           : musicTrack ? musicTrackContent(musicTrack)
             : musicPlaylist ? playlistCardContent(musicPlaylist) : deps.media.messageToWireContent(message);
         if (!wireContent) continue;
@@ -1838,7 +1847,7 @@ export function createMessageController(deps: MessageDependencies) {
         start: offer.start || undefined,
         minutes: offer.minutes || undefined,
         due: offer.due || undefined,
-        text: taskOfferText(offer),
+        text: taskOfferText(offer, formatText),
         ttl_secs: ttlSecs || undefined,
       };
       deps.taskOffers.register(uuid, chat.id, content, currentStore.self);
@@ -2025,7 +2034,7 @@ export function createMessageController(deps: MessageDependencies) {
       const uuid = newMessageId();
       const content: WireMessageContent = {
         kind: 'article',
-        ...articleFields(title, markdown),
+        ...articleFields(title, markdown, formatText),
         // Файлы, встроенные в текст: копии блобов облака в медиа чатов (этап 6 плана 15 окт 2026)
         article_media: media?.length ? media.slice(0, ARTICLE_MEDIA_MAX) : undefined,
         ttl_secs: ttlSecs || undefined,
@@ -2100,7 +2109,7 @@ export function createMessageController(deps: MessageDependencies) {
       const previous = entry.responses.get(currentStore.self);
       deps.taskOffers.applyResponse(uuid, currentStore.self, isAccepted, Math.floor(Date.now() / 1000));
       refreshTaskOfferMessage(uuid);
-      const text = taskResponseText(entry.name, isAccepted, getTaskOfferKind(entry));
+      const text = taskResponseText(entry.name, isAccepted, formatText, getTaskOfferKind(entry));
       const content: WireMessageContent = { kind: 'task_response', offer: uuid, accepted: isAccepted, text };
       // Решение, которое не ушло (группа только что создана и её ключ ещё не дошёл, обрыв), не остаётся только
       // на своей карточке: повтор, затем откат и сообщение (плавающее «Отклонено» не доходило до автора)

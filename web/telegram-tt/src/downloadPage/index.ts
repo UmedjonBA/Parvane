@@ -18,7 +18,7 @@ const STRINGS = {
   ru: {
     docTitle: 'Parvane для Android',
     title: 'Parvane для Android',
-    lead: 'Мессенджер со сквозным шифрованием, «План», «Здоровье», «Знания» и «Облако» — в телефоне.',
+    lead: 'Мессенджер со сквозным шифрованием, «План», «Здоровье», «Заметки» и «Файлы» — в телефоне.',
     download: 'Скачать APK',
     requirements: 'Android 7.0 и новее · 64-битный телефон (arm64)',
     iosNotice: 'Приложения для iPhone пока нет. Откройте веб-версию в Safari и добавьте её на экран «Домой»: '
@@ -47,7 +47,7 @@ const STRINGS = {
   en: {
     docTitle: 'Parvane for Android',
     title: 'Parvane for Android',
-    lead: 'End-to-end encrypted messenger with Plan, Health, Knowledge and Cloud — on your phone.',
+    lead: 'End-to-end encrypted messenger with Plan, Health, Notes and Files — on your phone.',
     download: 'Download APK',
     requirements: 'Android 7.0 or newer · 64-bit phone (arm64)',
     iosNotice: 'There is no iPhone app yet. Open the web version in Safari and add it to the Home Screen: '

@@ -236,7 +236,7 @@ async function runServerOffPart(suffix) {
   assert.equal(await page.locator(`${SIDE} [data-module="plan"]`).count(), 0, '«Не сейчас» включило модуль');
   assert.equal(await offerCard.getAttribute('data-in-plan'), 'false', '«Не сейчас» добавило задание в план');
   await toPlan.click();
-  await moduleOff.getByRole('button', { name: 'Turn on Planner' }).click();
+  await moduleOff.getByRole('button', { name: 'Turn on Plan' }).click();
   await page.locator(`${SIDE} [data-module="plan"]`).waitFor({ state: 'visible', timeout: WAIT_MS });
   await page.locator(`[data-task-offer][data-in-plan="true"]`).filter({ hasText: offerName })
     .waitFor({ state: 'visible', timeout: WAIT_MS * 2 });
@@ -374,7 +374,7 @@ async function runAllPart(suffix) {
   const SIDE = '#FoldersSidebar';
   await expectModules(page, SIDE, ['chats', 'plan', 'health', 'notes', 'files', 'music', 'profile'], 'семь модулей в панели');
   await page.locator(`${SIDE} [data-add-for="chats"]`).click();
-  await page.getByRole('menuitem', { name: 'Planner entry' }).click();
+  await page.getByRole('menuitem', { name: 'Plan entry' }).click();
   await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: WAIT_MS });
   await page.keyboard.press('Escape');
   await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: WAIT_MS });

@@ -151,7 +151,7 @@ try {
   await deskMenu.getByRole('menuitem', { name: 'Download to this computer' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const deskItems = await deskMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(deskItems.map((text) => text.replace('›', '').trim()), ['Play next', 'Add to queue', 'Add to a playlist',
-    'Add to favourites', 'Go to artist', 'Go to album', 'Send to a chat…', 'Download to this computer'],
+    'Add to favorites', 'Go to artist', 'Go to album', 'Send to a chat…', 'Download to this computer'],
   `меню у курсора по доске ZdMusicX: ${deskItems}`);
   await page.keyboard.press('Escape');
   await page.getByRole('menu').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -176,8 +176,8 @@ try {
     await full.getByRole('button', { name: 'Repeat: off' }).click();
     await full.locator('[data-music-repeat="all"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await full.locator('[data-music-queue-note]').getByText('Source: album «Берег».').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await full.getByRole('button', { name: 'Add to favourites' }).click();
-    await full.getByRole('button', { name: 'Remove from favourites' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await full.getByRole('button', { name: 'Add to favorites' }).click();
+    await full.getByRole('button', { name: 'Remove from favorites' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   console.log('OK: полный плеер — пауза, следующий, повтор, источник очереди, «В любимое»');
 
@@ -187,7 +187,7 @@ try {
   await music.locator('[data-music-view="starred"] [data-track="t3"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await music.locator('[data-music-view="starred"] [data-track]').count(), 1, 'в любимом один трек');
   await main.getByRole('button', { name: 'Listen' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await main.getByPlaceholder('Find in favourites').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await main.getByPlaceholder('Find in favorites').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await main.locator('[data-music-starred-note]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await navBar.locator('[data-view="starred"]').getByText('1', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: любимое — шапка, «Слушать», поиск по любимому, счётчик в навигации');
@@ -414,7 +414,7 @@ try {
   await sheetMenu.getByRole('menuitem', { name: 'Go to artist', exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const sheetItems = await sheetMenu.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(sheetItems.map((text) => text.trim()),
-    ['Play next', 'Add to queue', 'Add to favourites', 'Download for offline', 'Send to a chat', 'Go to artist', 'Go to album'],
+    ['Play next', 'Add to queue', 'Add to favorites', 'Download for offline', 'Send to a chat', 'Go to artist', 'Go to album'],
     `порядок пунктов шторки по доске XpMusic: ${sheetItems}`);
   await page.locator('.Modal [data-playlist-chips] [data-playlist-chip-new]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) {

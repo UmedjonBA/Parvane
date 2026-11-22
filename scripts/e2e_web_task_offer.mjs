@@ -221,10 +221,10 @@ try {
   assert.match(await bobCardA.innerText(), new RegExp(stepText), 'шаги задания видны получателю');
   await bobCardA.getByRole('button', { name: 'To plan' }).click();
   await inPlanButton(bobCardA).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await findMessageContainers(sessions.bob.page, 'Принято: задание').first()
+  await findMessageContainers(sessions.bob.page, 'Accepted: task').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardA.getByText(`Accepted: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await findMessageContainers(sessions.alice.page, 'Принято: задание').first()
+  await findMessageContainers(sessions.alice.page, 'Accepted: task').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerA);
   await expectFromChatInSearch(sessions.bob.page, offerA);
@@ -265,7 +265,7 @@ try {
   await bobCardB.getByRole('button', { name: 'To calendar' }).click();
   await inPlanButton(bobCardB).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await aliceCardB.getByText(`Accepted: ${bobName}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await findMessageContainers(sessions.bob.page, 'Принято: событие').first()
+  await findMessageContainers(sessions.bob.page, 'Accepted: event').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectTaskInPlan(sessions.bob.page, offerB);
   // Событие из карточки несёт источник (`Event.source`): тоже «предложение из чата»

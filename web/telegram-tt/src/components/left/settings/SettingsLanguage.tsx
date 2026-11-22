@@ -101,12 +101,14 @@ const SettingsLanguage = ({
 
   const options = useMemo(() => {
     const names = new Intl.DisplayNames([lang.code], { type: 'language' });
-    const systemName = findLanguage(getBrowserLanguageCode())?.nativeName || '';
+    // Имя языка системы — на языке интерфейса и в его регистре: «English», «английский»
+    const systemCode = findLanguage(getBrowserLanguageCode())?.code;
+    const systemName = systemCode ? names.of(systemCode) || '' : '';
     return [
       {
         value: SYSTEM_VALUE,
         label: lang('ParvaneLanguageSystem'),
-        subLabel: lang('ParvaneLanguageSystemNow', { language: systemName.toLowerCase() }),
+        subLabel: lang('ParvaneLanguageSystemNow', { language: systemName }),
       },
       ...LANGUAGES.map(({ code, nativeName }) => ({
         value: code,

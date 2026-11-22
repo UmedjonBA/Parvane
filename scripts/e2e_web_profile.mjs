@@ -115,17 +115,17 @@ try {
   await page.keyboard.press('Escape');
   await shown(appearance);
   await appearance.locator('[data-appearance-row="performance"]').click();
-  await shown(title.getByText('Animations and Performance'));
+  await shown(title.getByText('Animations and performance'));
   await back.click();
   await shown(appearance);
   console.log('OK: фон чатов и анимации возвращаются в «Оформление»');
 
-  await openSettingsScreen(page, 'Chat Folders');
-  await shown(title.getByText('Chat Folders'));
+  await openSettingsScreen(page, 'Chat folders');
+  await shown(title.getByText('Chat folders'));
   await shown(current('messenger'));
   await back.click();
   await shown(page.locator('[data-settings-general]'));
-  await openSettingsScreen(page, 'Stickers and Emoji');
+  await openSettingsScreen(page, 'Stickers and emoji');
   await shown(current('messenger'));
   await page.keyboard.press('Escape');
   await shown(page.locator('[data-settings-general]'));
@@ -138,7 +138,7 @@ try {
   await shown(page.locator('[data-keys-action="renew"]'));
   assert.equal(await page.locator('[data-keys-file-form]').count(), 0, 'форма файла копии на экране компьютера');
   await shot(page, 'desk-keys');
-  await profileRow(page, 'Data and Storage').click();
+  await profileRow(page, 'Data and storage').click();
   const data = page.locator('[data-settings-data]');
   await shown(data);
   await shown(current('data'));
@@ -220,7 +220,7 @@ try {
   await page.keyboard.press('Escape');
   await hidden(passwordForm);
   await shown(page.locator('.SettingsActiveSessions'));
-  await profileRow(page, 'Privacy and Security').click();
+  await profileRow(page, 'Privacy and security').click();
   await shown(page.locator('#Settings').getByText('Blocked Users').first());
   assert.equal(await page.locator('#Settings').getByText(/E2E Keys/).count(), 0, 'копия ключей осталась в «Конфиденциальности»');
   console.log('OK: «Копия ключей», «О приложении», «Устройства и аккаунт», «Конфиденциальность»');
@@ -235,7 +235,7 @@ try {
   // «Справки Parvane» в колонке компьютера нет (`DkSettingsB`, `ZdProfileX`) — она в списке телефона
   assert.equal(await nav.locator('[data-profile-item="help"]').count(), 0, '«Справка» в колонке компьютера');
   // «Сообщить об ошибке» (`ZdProfileY`): две колонки, два поля, что приложим, сохранить в файл
-  await profileRow(page, 'Report a Bug').click();
+  await profileRow(page, 'Report a bug').click();
   const bug = page.locator('[data-bug-report]');
   await shown(bug);
   await shown(bug.locator('[data-bug-recipient]').getByText(/^The report goes to bugs@/));
@@ -278,7 +278,7 @@ try {
   await language.locator('[data-language-spellcheck]').click();
   await page.waitForFunction(() => document.documentElement.spellcheck, undefined, { timeout: WAIT_MS });
   console.log('OK: отчёт об ошибке, «Язык» — формат времени, первый день недели, орфография');
-  await profileRow(page, 'Log Out').click();
+  await profileRow(page, 'Sign out').click();
   // Шторка выхода (доска `PhProfileB`): «Просто выйти», «Выйти и сменить ключи» (у аккаунта одно устройство — её нет)
   const logOutButton = page.locator('.Modal [data-sign-out-plain]').last();
   await shown(logOutButton);
@@ -329,7 +329,7 @@ try {
   assert.equal((await readWorkerPrefs())?.muteUntil, 0);
   console.log('OK: «Уведомления» — модули и «Не беспокоить» сохраняются и доходят до service worker');
 
-  await profileRow(page, 'Privacy and Security').click();
+  await profileRow(page, 'Privacy and security').click();
   const privacy = page.locator('[data-settings-privacy]');
   const groupsRow = privacy.locator('[data-privacy-row="groups"]');
   await shown(groupsRow.locator('[data-privacy-value="anyone"]'));

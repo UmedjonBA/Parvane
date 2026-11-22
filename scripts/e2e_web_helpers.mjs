@@ -67,13 +67,13 @@ export async function openProfile(page) {
 // Экраны, которые открываются со второго шага: папки и стикеры — из «Настроек мессенджера», фон чатов и
 // подробные анимации — из «Оформления»
 const NESTED_SETTINGS = {
-  'Chat Folders': 'Messenger settings',
-  'Stickers and Emoji': 'Messenger settings',
+  'Chat folders': 'Messenger settings',
+  'Stickers and emoji': 'Messenger settings',
   'Chat background': 'Appearance',
-  'Animations and Performance': 'Appearance',
+  'Animations and performance': 'Appearance',
 };
 
-// Экран настроек по названию пункта «Профиля» (`Devices and account`, `Privacy and Security`, `Language`, …)
+// Экран настроек по названию пункта «Профиля» (`Devices and account`, `Privacy and security`, `Language`, …)
 export async function openSettingsScreen(page, name) {
   await openProfile(page);
   const parent = NESTED_SETTINGS[name];
@@ -228,7 +228,7 @@ export async function openPlannerSettings(page) {
   const isShown = () => settings.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Шапка появляется не сразу после закрытия экрана «Задач» либо поиска: ждём «⋯» телефона либо кнопку настроек
   const more = page.locator('#ParvanePlanner [data-planner-more]');
-  await more.or(page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' })).first()
+  await more.or(page.locator('#ParvanePlanner').getByRole('button', { name: 'Plan settings' })).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
   // Телефон: настройки — пункт меню «⋯» шапки
   if (await more.isVisible().catch(() => false)) {
@@ -236,7 +236,7 @@ export async function openPlannerSettings(page) {
     await isShown();
     return settings;
   }
-  await clickUntil(page.locator('#ParvanePlanner').getByRole('button', { name: 'Planner settings' }).first(), isShown);
+  await clickUntil(page.locator('#ParvanePlanner').getByRole('button', { name: 'Plan settings' }).first(), isShown);
   return settings;
 }
 
@@ -255,7 +255,7 @@ export async function openPlannerHeader(page, key) {
     return;
   }
   if (direct) await planner.locator(direct).first().click();
-  else if (key === 'settings') await planner.getByRole('button', { name: 'Planner settings' }).first().click();
+  else if (key === 'settings') await planner.getByRole('button', { name: 'Plan settings' }).first().click();
   else await planner.locator(`button[data-value="${key}"]`).click();
 }
 

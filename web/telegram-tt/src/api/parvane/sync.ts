@@ -415,7 +415,7 @@ export function createSyncController(deps: SyncDependencies) {
     announcePeer(newAddress);
     const ts = Math.floor(Date.now() / 1000);
     const id = store.allocateMessageId(chatId, `rename:${newAddress}:${ts}`, ts);
-    const template = getLangStringByKey('ParvaneUserRenamed') || '{user} changed username to @{nick}';
+    const template = getLangStringByKey('ParvaneUserRenamed') || '{user} changed nickname to @{nick}';
     const message: ApiMessage = {
       id,
       chatId,

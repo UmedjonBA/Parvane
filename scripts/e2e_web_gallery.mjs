@@ -1,5 +1,5 @@
 // Галерея «экран против доски» (сверка с макетом `local-workdirs/design-2026-11-17/parvane-design`): снимает
-// экраны приложения в размерах макета — телефон 360×800, компьютер 1120×700, русский язык, светлая тема — под
+// экраны приложения в размерах макета — телефон 360×800, компьютер 1120×700, русский язык (`PARVANE_GALLERY_LANG=en` — английский), светлая тема — под
 // именами кадров досок (`<Доска>-<номер>.png`, номера — как у `render_boards.mjs`). Ничего не утверждает, кроме
 // того, что экраны открываются; шаг, который не удался, пишет WARN и снимок `<имя>-fail.png`. Данные — выдуманные.
 // Запуск: PARVANE_E2E_SHOT_DIR=<каталог> [PARVANE_GALLERY=health,plan,…] scripts/run_web_gallery_e2e.sh
@@ -29,6 +29,10 @@ const STEP_TIMEOUT_MS = 15000;
 const dir = process.env.PARVANE_E2E_SHOT_DIR;
 const only = (process.env.PARVANE_GALLERY || '').split(',').filter(Boolean);
 const wants = (name) => !only.length || only.includes(name);
+// `PARVANE_GALLERY_LANG=en` — снимки на английском (основной язык продукта): переключение на русский пропускается,
+// подписи для поиска элементов берутся английские
+const IS_EN = process.env.PARVANE_GALLERY_LANG === 'en';
+const t = (ru, en) => (IS_EN ? en : ru);
 
 // Тема и цветовая схема снимков: по умолчанию светлая Gruvbox, как у досок макета
 const THEME = process.env.PARVANE_GALLERY_THEME || 'light';
@@ -82,7 +86,7 @@ async function openSession(tag, contextOptions = {}) {
 }
 
 async function toRussian(page) {
-  await page.evaluate(() => localStorage.setItem('parvane:language-system', '1'));
+  if (!IS_EN) await page.evaluate(() => localStorage.setItem('parvane:language-system', '1'));
   await reloadPage(page);
   await page.locator('#LeftColumn, #Main').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('html[lang="ru"]').waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS }).catch(() => undefined);
@@ -107,7 +111,7 @@ async function galleryHealth() {
   const { page } = await openSession('health');
   let health = await openHealthModule(page);
   await health.locator('[data-health-first]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.evaluate(() => localStorage.setItem('parvane:language-system', '1'));
+  if (!IS_EN) await page.evaluate(() => localStorage.setItem('parvane:language-system', '1'));
   await reloadPage(page);
   health = await openModule(page, 'health', 'ParvaneHealth');
   await health.locator('[data-health-first]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -138,7 +142,7 @@ async function galleryHealth() {
   // К сводке: на компьютере — «‹ Сводка» колонки, на телефоне — стрелка шапки, пока она есть
   const toSummary = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const back = health.locator('[data-health-side-back]:visible, header button[aria-label="Назад"]:visible').first();
+      const back = health.locator(`[data-health-side-back]:visible, header button[aria-label="${t('Назад', 'Back')}"]:visible`).first();
       if (!(await back.isVisible().catch(() => false))) return;
       await back.click().catch(() => undefined);
       await page.waitForTimeout(500);
@@ -249,11 +253,11 @@ async function galleryPlan() {
     await plan.getByText('Зал', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
-  await plan.getByRole('button', { name: 'Закрыть' }).first().click({ timeout: 3000 }).catch(() => undefined);
+  await plan.getByRole('button', { name: t('Закрыть', 'Close') }).first().click({ timeout: 3000 }).catch(() => undefined);
   // «Расписание на неделю» — пункт колонки разделов экрана «Задачи» (доска `XdPlan`)
   await step(page, 'XdPlan-02', async () => {
     await plan.locator('[data-planner-tasks-open]').click({ timeout: STEP_TIMEOUT_MS });
-    await plan.locator('[data-planner-sections]').getByText('Расписание на неделю', { exact: true })
+    await plan.locator('[data-planner-sections]').getByText(t('Расписание на неделю', 'Weekly schedule'), { exact: true })
       .click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-planner-import] textarea').fill([
       'пн 10:00-11:00 созвон с командой', 'вт 14:00-16:00 обновление сервера', 'ср 18:30-20:00 зал', 'чт вечер ???',
@@ -261,12 +265,12 @@ async function galleryPlan() {
     ].join('\n'));
     await page.waitForTimeout(1500);
   });
-  await page.getByRole('button', { name: 'Отмена' }).first().click({ timeout: 3000 }).catch(() => undefined);
+  await page.getByRole('button', { name: t('Отмена', 'Cancel') }).first().click({ timeout: 3000 }).catch(() => undefined);
   await page.keyboard.press('Escape');
   // Настройки — страница «Профиль → Модули / План» (шестерёнка «Плана»)
   await step(page, 'RdPlanSet-01', async () => {
     await plan.locator('button[data-value="today"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
-    await plan.getByRole('button', { name: 'Настройки плана' }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await plan.getByRole('button', { name: t('Настройки плана', 'Plan settings') }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   await openModule(page, 'plan', 'ParvanePlanner');
@@ -282,7 +286,7 @@ async function galleryPlan() {
     await page.locator(`[role="menuitem"][data-action="${key}"]`).click({ timeout: STEP_TIMEOUT_MS });
   };
   await step(page, 'XpPlan-02', () => more('year'));
-  await plan.locator('button[aria-label="Назад"]:visible').first().click().catch(() => undefined);
+  await plan.locator(`button[aria-label="${t('Назад', 'Back')}"]:visible`).first().click().catch(() => undefined);
   await step(page, 'RpPlan-01', () => more('agenda'));
   await step(page, 'RpPlan-02', async () => {
     await more('search');
@@ -291,7 +295,7 @@ async function galleryPlan() {
   await page.keyboard.press('Escape');
   await step(page, 'PhPlanMore-03', () => more('tasks'));
   await page.keyboard.press('Escape');
-  await plan.locator('button[aria-label="Назад"]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
+  await plan.locator(`button[aria-label="${t('Назад', 'Back')}"]:visible`).first().click({ timeout: 3000 }).catch(() => undefined);
   await step(page, 'RpPlan-03', async () => {
     await more('settings');
     await page.locator('[data-planner-settings]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -328,22 +332,22 @@ async function galleryNotes() {
   const back = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (await notes.locator('[data-notes-folders]').first().isVisible().catch(() => false)) return;
-      await notes.getByRole('button', { name: 'К заметкам' }).first().click({ timeout: 5000 }).catch(() => undefined);
+      await notes.getByRole('button', { name: t('К заметкам', 'Back to notes') }).first().click({ timeout: 5000 }).catch(() => undefined);
       await page.waitForTimeout(700);
     }
   };
   await step(page, 'PhNotesMore-02', async () => undefined);
   await step(page, 'PhNotesMore-03', async () => {
-    await notes.getByRole('button', { name: 'Изменить' }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await notes.getByRole('button', { name: t('Изменить', 'Edit') }).first().click({ timeout: STEP_TIMEOUT_MS });
   });
-  await notes.getByRole('button', { name: 'Готово' }).first().click({ timeout: 5000 }).catch(() => undefined);
+  await notes.getByRole('button', { name: t('Готово', 'Save') }).first().click({ timeout: 5000 }).catch(() => undefined);
   // Меню заметки и «Перенести в папку» на телефоне (доска `ZpNotesX-02`)
   await step(page, 'notes-phone-note-menu', async () => {
     await notes.locator('[data-note-menu]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(700);
   });
   await step(page, 'ZpNotesX-02', async () => {
-    await page.locator('[role="menu"] >> text=/^Перенести/').first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator(`[role="menu"] >> text=/^${t('Перенести', 'Move to')}/`).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
   await page.keyboard.press('Escape');
@@ -415,20 +419,20 @@ async function galleryFiles() {
     }
   });
   await page.keyboard.press('Escape');
-  await files2.getByRole('button', { name: 'Снять выделение' }).click({ timeout: 2000 }).catch(() => undefined);
-  await step(page, 'ZdFilesX-05', async () => { await deskMenu('wg0.conf', /^Переместить/); });
+  await files2.getByRole('button', { name: t('Снять выделение', 'Clear selection') }).click({ timeout: 2000 }).catch(() => undefined);
+  await step(page, 'ZdFilesX-05', async () => { await deskMenu('wg0.conf', IS_EN ? /^Move/ : /^Переместить/); });
   await page.keyboard.press('Escape');
   await step(page, 'ZdFilesX-04', async () => {
     // Выбранный файл снимается нажатием на место «Мой диск»: с открытой панелью файла «Новой папки» в шапке нет
     await files2.locator('[data-nav-place="drive"]').click({ timeout: STEP_TIMEOUT_MS });
-    await files2.getByRole('button', { name: 'Новая папка', exact: true }).click({ timeout: STEP_TIMEOUT_MS });
+    await files2.getByRole('button', { name: t('Новая папка', 'New folder'), exact: true }).click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('#parvane-cloud-name').fill('Сборки');
-    await page.locator('.Modal.open').getByRole('button', { name: 'Создать', exact: true }).click();
+    await page.locator('.Modal.open').getByRole('button', { name: t('Создать', 'Create'), exact: true }).click();
   });
   await page.keyboard.press('Escape');
   let linkUrl;
   await step(page, 'DkFilesDialogs-01', async () => {
-    await deskMenu('backup-2026-11.tar.zst', /^Ссылка/);
+    await deskMenu('backup-2026-11.tar.zst', IS_EN ? /^Link/ : /^Ссылка/);
     const url = page.locator('[data-cloud-link-sheet] [data-link-url]');
     await url.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     linkUrl = await url.getAttribute('data-link-url');
@@ -436,7 +440,7 @@ async function galleryFiles() {
   await page.keyboard.press('Escape');
   // Страница получателя ссылки — в чистом браузере без аккаунта (доска `RpFiles-03`)
   if (linkUrl) {
-    const visitor = await newGalleryContext({ viewport: PHONE, locale: 'ru-RU' });
+    const visitor = await newGalleryContext({ viewport: PHONE, locale: t('ru-RU', 'en-US') });
     // Адрес gateway стенда: публичная страница читает его только в диагностической сборке
     await visitor.addInitScript((gatewayUrl) => {
       localStorage.setItem('parvane:gateway', gatewayUrl);
@@ -454,7 +458,7 @@ async function galleryFiles() {
   // Общая папка с приглашённым гостем: окно создания и окно доступа (доски `ZdFilesX`, `DkFilesDialogs-02`)
   await step(page, 'files-desk-new-shared', async () => {
     await files2.locator('[data-virtual="owned"]').click({ timeout: STEP_TIMEOUT_MS });
-    await page.getByRole('button', { name: /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('button', { name: IS_EN ? /New shared folder/ : /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('#parvane-cloud-shared-name').fill('Прошивки');
     await page.locator('[data-new-shared-nick] input').fill(`@${guest.user.split('@')[0]}`);
     await page.locator('[data-new-shared-nick] input').press('Enter');
@@ -515,31 +519,31 @@ async function galleryFiles() {
     await page.waitForTimeout(800);
   };
   const filesChip = (label) => files2.getByText(label, { exact: true }).first();
-  await step(page, 'PhFilesMore-01', async () => { await fileAction('backup-2026-11.tar.zst', 'Ссылка для всех'); });
+  await step(page, 'PhFilesMore-01', async () => { await fileAction('backup-2026-11.tar.zst', t('Ссылка для всех', 'Link for everyone')); });
   await page.keyboard.press('Escape');
   await step(page, 'XpFiles-03', async () => {
     await row('схема-сети.png').click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('[data-preview-kind="photo"] img').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
   await page.keyboard.press('Escape');
-  await step(page, 'XpFiles-02', async () => { await fileAction('nftables.conf', 'Переместить'); });
+  await step(page, 'XpFiles-02', async () => { await fileAction('nftables.conf', t('Переместить', 'Move')); });
   await page.keyboard.press('Escape');
   await step(page, 'PhFilesMore-03', async () => {
-    await fileAction('parvane-android-arm64.apk', 'В корзину');
-    await filesChip('Корзина').click({ timeout: STEP_TIMEOUT_MS });
+    await fileAction('parvane-android-arm64.apk', t('В корзину', 'Move to trash'));
+    await filesChip(t('Корзина', 'Trash')).click({ timeout: STEP_TIMEOUT_MS });
   });
   // Корзина, «Мои ссылки» — страницы с «назад»: к вкладкам возвращает стрелка
   const filesBack = () => files2.locator('[data-cloud-back]:visible').first().click({ timeout: 3000 }).catch(() => undefined);
   await step(page, 'RpFiles-01', async () => {
     await filesBack();
-    await filesChip('Мои ссылки').click({ timeout: STEP_TIMEOUT_MS });
+    await filesChip(t('Мои ссылки', 'My links')).click({ timeout: STEP_TIMEOUT_MS });
   });
   await step(page, 'files-phone-owned', async () => {
     await filesBack();
-    await filesChip('Общие папки').click({ timeout: STEP_TIMEOUT_MS });
+    await filesChip(t('Общие папки', 'Shared folders')).click({ timeout: STEP_TIMEOUT_MS });
   });
   await step(page, 'ZpFilesX-01', async () => {
-    await page.getByRole('button', { name: /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByRole('button', { name: IS_EN ? /New shared folder/ : /Новая общая папка|Создать общую папку/ }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
   // «Создать» создаёт папку и открывает её доступ (доска `PhFilesMore-02`)
@@ -552,8 +556,8 @@ async function galleryFiles() {
   await step(page, 'files-phone-owned-list', async () => { await page.waitForTimeout(500); });
   await step(page, 'ZpFilesX-02', async () => {
     await filesBack();
-    await filesChip('Мой диск').click({ timeout: STEP_TIMEOUT_MS });
-    await files2.getByRole('button', { name: 'Поиск по файлам' }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await filesChip(t('Мой диск', 'My drive')).click({ timeout: STEP_TIMEOUT_MS });
+    await files2.getByRole('button', { name: t('Поиск по файлам', 'Search files') }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.locator('#ParvaneCloud input[type="search"], #ParvaneCloud input[type="text"]').first().fill('conf');
   });
   await page.context().close();
@@ -594,7 +598,7 @@ async function galleryProfile() {
     });
     for (let attempt = 0; attempt < 3; attempt++) {
       if (await page.locator('[data-profile-item="modules"]:visible').first().isVisible().catch(() => false)) break;
-      await page.locator('#Settings button[aria-label="Назад"]:visible, #Settings .Button.translucent:visible').first()
+      await page.locator(`#Settings button[aria-label="${t('Назад', 'Back')}"]:visible, #Settings .Button.translucent:visible`).first()
         .click({ timeout: 3000 }).catch(() => undefined);
       await page.waitForTimeout(600);
     }
@@ -606,7 +610,7 @@ async function galleryProfile() {
       await page.keyboard.press('Escape').catch(() => undefined);
       await page.waitForTimeout(500);
       if (await page.locator('[data-profile-item="modules"]:visible').first().isVisible().catch(() => false)) break;
-      await page.locator('#Settings button[aria-label="Назад"]:visible, #Settings .Button.translucent:visible').first()
+      await page.locator(`#Settings button[aria-label="${t('Назад', 'Back')}"]:visible, #Settings .Button.translucent:visible`).first()
         .click({ timeout: 2000 }).catch(() => undefined);
       await page.waitForTimeout(600);
     }
@@ -646,12 +650,13 @@ async function galleryProfile() {
 async function galleryAuth() {
   for (const [tag, size] of [['desk', DESK], ['phone', PHONE]]) {
     const context = await newGalleryContext({ viewport: size });
-    await context.addInitScript((gatewayUrl) => {
+    await context.addInitScript(({ gatewayUrl, isEn }) => {
       localStorage.setItem('parvane:gateway', gatewayUrl);
+      if (isEn) return;
       localStorage.setItem('parvane:language-system', '1');
       Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
       Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru'] });
-    }, process.env.PARVANE_E2E_GATEWAY_URL);
+    }, { gatewayUrl: process.env.PARVANE_E2E_GATEWAY_URL, isEn: IS_EN });
     const page = await context.newPage();
     await page.goto(process.env.PARVANE_E2E_BASE_URL, { waitUntil: 'domcontentloaded' });
     await page.locator('[data-auth-submit]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -690,7 +695,7 @@ async function galleryShell() {
   // Телефон: лента, «+», общий поиск
   await resize(page, PHONE);
   // На телефоне открытый чат закрывает список — к списку стрелкой чата
-  await page.locator('#MiddleColumn .MiddleHeader button[aria-label="Назад"]:visible').first()
+  await page.locator(`#MiddleColumn .MiddleHeader button[aria-label="${t('Назад', 'Back')}"]:visible`).first()
     .click({ timeout: 5000 }).catch(() => undefined);
   await page.locator('#LeftMainHeader #telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => undefined);
@@ -815,7 +820,7 @@ async function galleryMusic() {
     await page.locator('.Modal [data-playlist-chips]').getByRole('button', { name: 'Дорога', exact: true })
       .click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
     await trackRow(index).locator('[data-music-menu]').click({ timeout: 3000 }).catch(() => undefined);
-    await page.locator('.Modal [data-action="star"], .Modal [role="menu"] >> text=В любимое').first()
+    await page.locator(`.Modal [data-action="star"], .Modal [role="menu"] >> text=${t('В любимое', 'Add to favorites')}`).first()
       .click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
   }
   await step(page, 'music-phone-starred', async () => {
@@ -892,7 +897,7 @@ async function galleryMusic() {
     await page.waitForTimeout(1500);
   });
   await step(page, 'music-desk-shared', async () => {
-    await page.locator('.Modal.open').getByRole('button', { name: 'Сделать общим', exact: true }).last()
+    await page.locator('.Modal.open').getByRole('button', { name: t('Сделать общим', 'Make shared'), exact: true }).last()
       .click({ timeout: STEP_TIMEOUT_MS });
     await music.locator('[data-music-shared]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await page.waitForTimeout(1000);
@@ -987,7 +992,7 @@ async function galleryStates() {
   for (const [module, rootId] of phoneOrder) {
     await step(page, `states-phone-offline-${module}`, async () => {
       // Страница без ленты модулей (первое открытие «Здоровья») закрывается стрелкой «назад»
-      await page.getByRole('button', { name: 'Назад' }).first().click({ timeout: 1500 }).catch(() => undefined);
+      await page.getByRole('button', { name: t('Назад', 'Back') }).first().click({ timeout: 1500 }).catch(() => undefined);
       await openModule(page, module, rootId);
       await page.waitForTimeout(1500);
     });
@@ -1038,7 +1043,7 @@ async function galleryUnlinked() {
     await resize(page, size);
     for (const [module, rootId] of modules) {
       await step(page, `unlinked-${name}-${module}`, async () => {
-        await page.getByRole('button', { name: 'Назад' }).first().click({ timeout: 1000 }).catch(() => undefined);
+        await page.getByRole('button', { name: t('Назад', 'Back') }).first().click({ timeout: 1000 }).catch(() => undefined);
         await openModule(page, module, rootId);
         await page.waitForTimeout(2500);
       });
@@ -1205,7 +1210,7 @@ async function galleryChat() {
   await step(page, 'XpChat-01', async () => {
     await openChat('Linux-чат');
     await page.locator('#MiddleColumn .MiddleHeader .ChatInfo:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.locator('#RightColumn').getByText('Тип группы', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.locator('#RightColumn').getByText(t('Тип группы', 'Group type'), { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
   // Телефон: меню сообщения и его пункты (доски `ZpChat-02`, `RpPick-02`, `XpChat-02`) — в личном чате
@@ -1217,7 +1222,8 @@ async function galleryChat() {
   };
   await step(page, 'ZpChat-02', messageMenu);
   await page.keyboard.press('Escape');
-  for (const [name, item] of [['RpPick-02', 'Переслать'], ['XpChat-02', 'В план'], ['chat-phone-to-note', 'В заметку']]) {
+  for (const [name, item] of [['RpPick-02', t('Переслать', 'Forward')], ['XpChat-02', t('В план', 'To plan')],
+    ['chat-phone-to-note', t('В заметку', 'To a note')]]) {
     await step(page, name, async () => {
       await messageMenu();
       // Подпись пункта идёт с пояснением справа («В план · задача из текста») — ищем пункт по началу текста
@@ -1265,20 +1271,20 @@ async function galleryChat() {
     await page.waitForTimeout(800);
   });
   await step(page, 'ZpChat2-03', async () => {
-    await page.getByText('Новый канал', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(t('Новый канал', 'New channel'), { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
   await page.keyboard.press('Escape');
   await step(page, 'ZpChat2-02', async () => {
     await toChatList();
     await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.getByText('Новая группа', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(t('Новая группа', 'New group'), { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(800);
   });
   // Шаг 2 новой группы: участник выбран, «Далее»
   await step(page, 'chat-phone-new-group-2', async () => {
     await page.locator('.pv-new-chat-item:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.getByText('Далее', { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(t('Далее', 'Next'), { exact: true }).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
   await page.keyboard.press('Escape');
@@ -1286,7 +1292,7 @@ async function galleryChat() {
   await step(page, 'ZpChat2-05', async () => {
     await toChatList();
     await page.locator('[data-add-for="chats"]:visible').first().click({ timeout: STEP_TIMEOUT_MS });
-    await page.getByText(/^(Контакты|Новое сообщение)$/).first().click({ timeout: STEP_TIMEOUT_MS });
+    await page.getByText(IS_EN ? /^(Contacts|New message)$/ : /^(Контакты|Новое сообщение)$/).first().click({ timeout: STEP_TIMEOUT_MS });
     await page.waitForTimeout(1000);
   });
   await page.context().close();

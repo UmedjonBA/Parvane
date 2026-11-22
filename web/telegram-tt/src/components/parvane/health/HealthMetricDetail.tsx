@@ -323,7 +323,7 @@ const HealthMetricDetail = ({
           </>
         ) : (
           <div className={buildClassName(kit.muted, kit.small)}>
-            {`${lang('HealthOrLine')}: «${lineExample()}»`}
+            {`${lang('HealthOrLine')}: ${lang('PvQuoted', { text: lineExample() })}`}
           </div>
         )}
       </section>

@@ -346,7 +346,7 @@ try {
   // ── Приватность: только работающие пункты ────────────────────────────────
   // Шаг обязательный: не нашли меню или пункт — сценарий падает, а не пропускает
   await openProfile(page);
-  const privacyItem = page.getByText('Privacy and Security', { exact: true }).first();
+  const privacyItem = page.getByText('Privacy and security', { exact: true }).first();
   await privacyItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await privacyItem.click();
   await page.locator('#LeftColumn').getByText('Blocked Users').first()

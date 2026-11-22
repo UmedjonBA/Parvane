@@ -206,11 +206,11 @@ export function getIsNotifyAllowed(prefs: NotifyPrefs, module: NotifyModule, now
 const WORKER_TEXTS = {
   en: {
     chats: 'Chats',
-    planner: 'Planner',
+    planner: 'Plan',
     health: 'Health',
     newMessage: 'New message',
     reminder: 'Reminder',
-    openPlanner: 'Open the Planner',
+    openPlanner: 'Open Plan',
     done: 'Done',
     snooze: 'In 10 min',
   },

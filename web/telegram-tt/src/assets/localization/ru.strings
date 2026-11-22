@@ -2556,7 +2556,7 @@
 "PlannerSearchPlaceholderShort" = "Поиск";
 "PlannerSearchUntil" = "до {date}";
 "PlannerLayersGroups" = "Слои";
-"PlannerLayerSport" = "Спорт";
+"PlannerLayerSport" = "Тренировки";
 "PlannerLayerBlockOff" = "блок выключен";
 "PlannerSearchShowDone" = "Выполненное";
 "PlannerSearchShowOffers" = "Предложения из чатов";
@@ -2648,7 +2648,7 @@
 "PlannerYearLess" = "меньше";
 "PlannerYearMore" = "больше";
 "PlannerLayerFromHealth" = "из «Здоровья»";
-"PlannerLayersHint" = "Слои «Сон», «Еда» и «Спорт» берутся из «Здоровья». Если модуль или блок выключен, слоя нет.";
+"PlannerLayersHint" = "Слои «Сон», «Еда» и «Тренировки» берутся из «Здоровья». Если модуль или блок выключен, слоя нет.";
 "PlannerSettingsDay" = "Рабочий день";
 "PlannerMonthSleep" = "сон {value}";
 "PlannerYearLegend" = "Насыщенность клетки — загрузка дня, красная рамка — праздник, точка — срок задачи. Нажмите на месяц, чтобы открыть его.";
@@ -2697,7 +2697,7 @@
 "KnowledgeEdit" = "Изменить";
 "KnowledgeSave" = "Готово";
 "KnowledgeDelete" = "В корзину";
-"KnowledgeDeleteConfirm" = "Переместить заметку «{name}» в корзину облака?";
+"KnowledgeDeleteConfirm" = "Переместить заметку «{name}» в корзину «Файлов»?";
 "KnowledgeBack" = "К заметкам";
 "KnowledgeEditorPlaceholder" = "Текст, - [ ] пункты, [[ссылки]], #теги";
 "KnowledgePlan" = "Запланировать";
@@ -2735,7 +2735,7 @@
 "KnowledgeCanvasActions" = "Действия с холстом";
 "KnowledgeCanvasTitle" = "Название холста";
 "KnowledgeCanvasRename" = "Переименовать";
-"KnowledgeCanvasDeleteConfirm" = "Переместить холст «{name}» в корзину облака?";
+"KnowledgeCanvasDeleteConfirm" = "Переместить холст «{name}» в корзину «Файлов»?";
 "KnowledgeCanvasText" = "Текст";
 "KnowledgeCanvasNote" = "Заметка";
 "KnowledgeCanvasGroup" = "Группа";
@@ -2972,14 +2972,14 @@
 "ParvaneExportDone" = "Готово. Архив {name} ({size}) скачан.";
 "ParvaneExportDoneMissing" = "Не удалось скачать файлов: {count}";
 "ParvaneExportErrorCanceled" = "Выгрузка отменена";
-"ParvaneExportErrorTooLarge" = "Архив получился бы больше 4 ГБ. Попробуйте без файлов облака или без медиа.";
+"ParvaneExportErrorTooLarge" = "Архив получился бы больше 4 ГБ. Попробуйте без «Файлов» или без медиа.";
 "ParvaneExportErrorFailed" = "Выгрузить не получилось. Попробуйте ещё раз.";
 "ParvaneExportHtmlTitle" = "Выгрузка данных Parvane";
 "ParvaneExportHtmlChats" = "Чаты";
 "ParvaneExportHtmlPlanner" = "План";
 "ParvaneExportHtmlNotes" = "Заметки";
 "ParvaneExportHtmlContacts" = "Контакты";
-"ParvaneExportHtmlCloud" = "Файлы облака";
+"ParvaneExportHtmlCloud" = "Файлы";
 "ParvaneExportHtmlReplyTo" = "В ответ на";
 "ParvaneExportHtmlForwardedFrom" = "Переслано от";
 "ParvaneExportHtmlEdited" = "изменено";
@@ -3276,7 +3276,7 @@
 "PlannerSectionsLabel" = "Разделы плана";
 "PlannerReminderSampleTitle" = "Так выглядит напоминание";
 "PlannerReminderSampleName" = "Зал";
-"PlannerReminderSampleDetails" = "18:00–19:30 · Спорт";
+"PlannerReminderSampleDetails" = "18:00–19:30 · Тренировки";
 "PlannerReminderSampleApp" = "Parvane · План · сейчас";
 "PlannerReminderSampleIn" = "{name} — через {time}";
 "PlannerReminderSampleDone" = "Готово";
@@ -3946,6 +3946,7 @@
 "HealthTileMonthAvg" = "Среднее за месяц";
 "HealthTilePace" = "Темп";
 "HealthTileToGoal" = "До цели";
+"HealthWeightToGoal" = "до цели {value}";
 "HealthTileToday" = "Сегодня";
 "HealthTileWeekAvg" = "Среднее за неделю";
 "HealthTileYearAvg" = "Среднее за год";
@@ -4425,6 +4426,16 @@
 "PvSysNotifyOnboardBackground" = "Работа в фоне";
 "PvSysNotifyOnboardBackgroundHint" = "Уведомления приходят, даже когда Parvane закрыт";
 "PvSysNotifyOnboardOn" = "Включить";
+"PvQuoted" = "«{text}»";
+"TaskOfferTextTask" = "📋 Задание: {name}";
+"TaskOfferTextEvent" = "📅 Событие: {name}";
+"TaskOfferTextMinutes" = "{count} мин";
+"TaskOfferTextDue" = "до {date}";
+"TaskResponseAcceptedTask" = "✅ Принято: задание «{name}»";
+"TaskResponseDeclinedTask" = "❌ Отклонено: задание «{name}»";
+"TaskResponseAcceptedEvent" = "✅ Принято: событие «{name}»";
+"TaskResponseDeclinedEvent" = "❌ Отклонено: событие «{name}»";
+"ArticleTextHead" = "Статья «{title}»";
 "ParvaneCallEnd" = "Завершить звонок";
 "ParvaneCallLeave" = "Выйти из звонка";
 "ParvaneCallSpeaker" = "Громкая связь";

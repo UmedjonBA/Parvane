@@ -210,16 +210,24 @@ export function findOfferInPlan(
   return undefined;
 }
 
+/** Ключи словаря для текста задания и ответа; строка — на языке отправителя. */
+type TaskTextKey = 'TaskOfferTextTask' | 'TaskOfferTextEvent' | 'TaskOfferTextMinutes' | 'TaskOfferTextDue'
+  | 'TaskResponseAcceptedTask' | 'TaskResponseDeclinedTask' | 'TaskResponseAcceptedEvent' | 'TaskResponseDeclinedEvent';
+type TaskTextLang = (key: TaskTextKey, vars: Record<string, string | number>) => string;
+
 /** Текстовое представление задания для клиентов без планировщика (TASK-1). */
-export function taskOfferText(offer: OfferFields) {
-  const parts = [getTaskOfferKind(offer) === 'event' ? `📅 Событие: ${offer.name}` : `📋 Задание: ${offer.name}`];
+export function taskOfferText(offer: OfferFields, lang: TaskTextLang) {
+  const isEvent = getTaskOfferKind(offer) === 'event';
+  const parts = [lang(isEvent ? 'TaskOfferTextEvent' : 'TaskOfferTextTask', { name: offer.name })];
   if (offer.day) parts.push(`${offer.day}${offer.start ? ` ${offer.start}` : ''}`);
-  if (offer.minutes) parts.push(`${offer.minutes} мин`);
-  if (offer.due) parts.push(`до ${offer.due}`);
+  if (offer.minutes) parts.push(lang('TaskOfferTextMinutes', { count: offer.minutes }));
+  if (offer.due) parts.push(lang('TaskOfferTextDue', { date: offer.due }));
   return parts.join(' · ').slice(0, 600);
 }
 
-export function taskResponseText(name: string, isAccepted: boolean, kind: TaskOfferKind = 'task') {
-  const subject = kind === 'event' ? 'событие' : 'задание';
-  return `${isAccepted ? '✅ Принято' : '❌ Отклонено'}: ${subject} «${name}»`.slice(0, 300);
+export function taskResponseText(name: string, isAccepted: boolean, lang: TaskTextLang, kind: TaskOfferKind = 'task') {
+  const key = kind === 'event'
+    ? (isAccepted ? 'TaskResponseAcceptedEvent' : 'TaskResponseDeclinedEvent')
+    : (isAccepted ? 'TaskResponseAcceptedTask' : 'TaskResponseDeclinedTask');
+  return lang(key, { name }).slice(0, 300);
 }

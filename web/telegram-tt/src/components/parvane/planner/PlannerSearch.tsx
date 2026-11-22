@@ -224,7 +224,7 @@ const PlannerSearch = ({
   const offNames = (hiddenGroups || []).map((name) => name || lang('PlannerNoList'));
   const offHint = !offNames.length ? undefined
     : offNames.length === 1 ? lang('PlannerSearchLayerOff', { name: offNames[0] })
-      : lang('PlannerSearchLayersOff', { names: offNames.map((name) => `«${name}»`).join(', ') });
+      : lang('PlannerSearchLayersOff', { names: offNames.map((name) => lang('PvQuoted', { text: name })).join(', ') });
 
   function renderList() {
     return (

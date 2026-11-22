@@ -55,7 +55,7 @@ async function addAuthenticator(context, page) {
 }
 
 async function openLockScreen(page) {
-  await openSettingsScreen(page, 'Privacy and Security');
+  await openSettingsScreen(page, 'Privacy and security');
   await slide(page).locator('[data-pin-state]').click();
   await shown(slide(page).locator('[data-security-keys]'));
 }

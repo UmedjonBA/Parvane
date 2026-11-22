@@ -269,7 +269,7 @@ try {
   await item('отчёт.pdf').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Новая папка с занятым именем — так же ошибкой в поле; в окне — где появится папка
   await addAction('New folder');
-  await page.locator('[data-sheet-subtitle]').getByText('in «My drive»').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('[data-sheet-subtitle]').getByText('in “My drive”').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#parvane-cloud-name').fill(SECRET_NAME);
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await page.getByText(`A folder «${SECRET_NAME}» is already here. Choose another name.`)
@@ -514,7 +514,7 @@ try {
   });
   await cloud.dispatchEvent('dragenter', { dataTransfer: dropData });
   const zone = cloud.locator('[data-cloud-drop-zone]');
-  await zone.getByText('Release to upload to «My drive»').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await zone.getByText('Release to upload to “My drive”').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await zone.getByText('1 file · encrypted on this device').waitFor({ state: 'visible' });
   if (shotDir) await page.screenshot({ path: `${shotDir}/files-drop-zone.png` });
   await cloud.dispatchEvent('drop', { dataTransfer: dropData });
@@ -539,7 +539,7 @@ try {
   await cloud.locator('[data-cloud-drag-hint]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await item(SECRET_NAME).click();
   await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await dragTo('перетащенный.txt', path.getByRole('button', { name: 'My drive' }), 'Drag onto a folder — «My drive»');
+  await dragTo('перетащенный.txt', path.getByRole('button', { name: 'My drive' }), 'Drag onto a folder — “My drive”');
   await item('перетащенный.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await toRoot();
   await item('перетащенный.txt').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

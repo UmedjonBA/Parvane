@@ -142,7 +142,7 @@ try {
   await sendText(a, `from-new-${suffix}`);
   await findMessage(b, `from-new-${suffix}`).first().waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
   await poll(
-    () => b.locator('.ActionMessage').filter({ hasText: `changed username to @${newNick}` }).count(),
+    () => b.locator('.ActionMessage').filter({ hasText: `changed nickname to @${newNick}` }).count(),
     (n) => n > 0,
     'служебное «сменил ник» у Боба',
     RENAME_TIMEOUT_MS,

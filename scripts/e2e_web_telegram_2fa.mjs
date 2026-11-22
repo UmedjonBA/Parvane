@@ -175,7 +175,7 @@ async function reloadToPasswordLogin(page, address, { dropTrustSecret = false } 
 
 async function openPrivacySettings(page) {
   await openProfile(page);
-  await page.getByRole('button', { name: /Privacy and Security/ }).click();
+  await page.getByRole('button', { name: /Privacy and security/ }).click();
   const toggle = page.getByLabel('Confirm sign-in in Telegram');
   await toggle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return toggle;

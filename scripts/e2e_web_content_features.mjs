@@ -119,7 +119,7 @@ try {
     .waitFor({ state: 'visible', timeout: (SCHEDULE_DELAY_SECS + 90) * 1000 });
 
   // ── Папки чатов: локальный персист после reload ────────────────────────────
-  await openSettingsScreen(aliceSession.page, 'Chat Folders');
+  await openSettingsScreen(aliceSession.page, 'Chat folders');
   await aliceSession.page.getByRole('button', { name: 'Create New Folder' }).click();
   const folderNameInput = aliceSession.page.getByRole('textbox', { name: 'Folder name' });
   await folderNameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -188,7 +188,7 @@ try {
 
   // ── Блокировка: список переживает reload ───────────────────────────────────
   await openProfile(aliceSession.page);
-  await aliceSession.page.getByRole('button', { name: 'Privacy and Security' }).click();
+  await aliceSession.page.getByRole('button', { name: 'Privacy and security' }).click();
   await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
   const blockFab = aliceSession.page.getByRole('button', { name: 'Block', exact: true }).last();
   await blockFab.waitFor({ state: 'attached', timeout: LOGIN_TIMEOUT_MS });
@@ -213,7 +213,7 @@ try {
 
   await relogin(aliceSession.page, PASSWORD);
   await openProfile(aliceSession.page);
-  await aliceSession.page.getByRole('button', { name: 'Privacy and Security' }).click();
+  await aliceSession.page.getByRole('button', { name: 'Privacy and security' }).click();
   await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
   await blockedRow.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

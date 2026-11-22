@@ -102,7 +102,7 @@ const ReportModal = ({
     >
       {hasMessage && (authorName || quote) && (
         <div className={buildClassName(kit.small, kit.muted, styles.subject)} dir="auto" data-report-subject>
-          {[authorName, quote && `«${quote}»`].filter(Boolean).join(' · ')}
+          {[authorName, quote && lang('PvQuoted', { text: quote })].filter(Boolean).join(' · ')}
         </div>
       )}
       <div className={kit.caps}>{lang('ParvaneReportReasonLabel')}</div>

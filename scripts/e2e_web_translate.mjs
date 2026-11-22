@@ -102,7 +102,7 @@ try {
 
   // «Язык»: переключатель кнопки перевода
   await openSettingsScreen(a, 'Language');
-  await a.getByText('Show Translate Button', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await a.getByText('Show translate button', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await a.getByText(/translated by your browser on this device/).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: настройка перевода в «Языке»');
 

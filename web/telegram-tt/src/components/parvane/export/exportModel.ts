@@ -114,10 +114,10 @@ export type ExportLabels = {
 export const DEFAULT_EXPORT_LABELS: ExportLabels = {
   title: 'Parvane data export',
   chats: 'Chats',
-  planner: 'Planner',
+  planner: 'Plan',
   notes: 'Notes',
   contacts: 'Contacts',
-  cloud: 'Cloud files',
+  cloud: 'Files',
   savedMessages: 'Saved Messages',
   replyTo: 'In reply to',
   forwardedFrom: 'Forwarded from',

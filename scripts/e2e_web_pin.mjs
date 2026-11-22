@@ -51,7 +51,7 @@ async function tapPin(scope, pin) {
 }
 
 async function openPinScreen(page) {
-  await openSettingsScreen(page, 'Privacy and Security');
+  await openSettingsScreen(page, 'Privacy and security');
   await slide(page).locator('[data-pin-state]').click();
   await shown(slide(page).locator('[data-settings-pin]'));
 }

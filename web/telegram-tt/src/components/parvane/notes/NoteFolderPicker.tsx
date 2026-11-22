@@ -164,7 +164,7 @@ const NoteFolderPicker = ({
     <PvSheet
       isOpen={isOpen}
       title={lang('KnowledgeMoveTitle')}
-      subtitle={`«${noteTitle}»`}
+      subtitle={lang('PvQuoted', { text: noteTitle })}
       isTight
       isPage
       startClose={isNarrow ? 'cancel' : undefined}

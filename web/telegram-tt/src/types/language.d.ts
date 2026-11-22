@@ -5795,6 +5795,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'HealthSleepInsightOnGoal': {
     'time': V;
   };
+  'HealthWeightToGoal': {
+    'value': V;
+  };
   'HealthWaterOfGoalLiters': {
     'goal': V;
   };
@@ -6005,6 +6008,36 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PvSysPermDeniedText': {
     'what': V;
+  };
+  'PvQuoted': {
+    'text': V;
+  };
+  'TaskOfferTextTask': {
+    'name': V;
+  };
+  'TaskOfferTextEvent': {
+    'name': V;
+  };
+  'TaskOfferTextMinutes': {
+    'count': V;
+  };
+  'TaskOfferTextDue': {
+    'date': V;
+  };
+  'TaskResponseAcceptedTask': {
+    'name': V;
+  };
+  'TaskResponseDeclinedTask': {
+    'name': V;
+  };
+  'TaskResponseAcceptedEvent': {
+    'name': V;
+  };
+  'TaskResponseDeclinedEvent': {
+    'name': V;
+  };
+  'ArticleTextHead': {
+    'title': V;
   };
   'ParvanePeerL2Since': {
     'date': V;

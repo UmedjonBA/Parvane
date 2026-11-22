@@ -138,10 +138,10 @@ async function closeSettings(page) {
   throw new Error('не удалось вернуться из настроек к списку чатов');
 }
 
-// Папка через нативный экран Settings → Chat Folders (как e2e_web_content_features)
+// Папка через нативный экран Settings → Chat folders (как e2e_web_content_features)
 async function createFolder(page, folderName, chatName) {
   // С E3 папки — строкой «Настроек мессенджера»
-  await openSettingsScreen(page, 'Chat Folders');
+  await openSettingsScreen(page, 'Chat folders');
   await page.getByRole('button', { name: 'Create New Folder' }).click();
   const nameInput = page.getByRole('textbox', { name: 'Folder name' });
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

@@ -167,7 +167,7 @@ const HealthSummary = ({
                 {[
                   weight.monthDelta !== undefined ? `${formatDelta(weight.monthDelta, lang.code)} ${unit}` : '',
                   weight.toGoal !== undefined
-                    ? `${lang('HealthTileToGoal').toLowerCase()} ${formatNumber(Math.abs(weight.toGoal), lang.code)}`
+                    ? lang('HealthWeightToGoal', { value: formatNumber(Math.abs(weight.toGoal), lang.code) })
                     : '',
                 ].filter(Boolean).join(' · ')}
               </span>

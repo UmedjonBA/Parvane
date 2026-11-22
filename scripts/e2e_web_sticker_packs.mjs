@@ -190,7 +190,7 @@ try {
 
   // ── Алиса создаёт пак из файлов ────────────────────────────────────────────
   aliceSession.page.on('dialog', (dialog) => dialog.accept(packName));
-  await openSettingsScreen(aliceSession.page, 'Stickers and Emoji');
+  await openSettingsScreen(aliceSession.page, 'Stickers and emoji');
   const fileChooserPromise = aliceSession.page.waitForEvent('filechooser');
   await aliceSession.page.getByRole('button', { name: 'Create Sticker Pack' }).click();
   const fileChooser = await fileChooserPromise;

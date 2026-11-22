@@ -10,6 +10,13 @@ import {
   taskResponseText,
 } from './taskOffers';
 
+// Текст задания и ответа — на языке отправителя: здесь словарь `ru.strings`
+const RU_PATH = path.join(process.cwd(), 'src/assets/localization/ru.strings');
+const RU_STRINGS = Object.fromEntries([...readFileSync(RU_PATH, 'utf8')
+  .matchAll(/^"([^"]+)" = "(.*)";$/gm)].map(([, key, value]) => [key, value]));
+const ruLang = (key: string, vars: Record<string, string | number>) => RU_STRINGS[key]
+  .replace(/\{(\w+)\}/g, (_: string, name: string) => String(vars[name]));
+
 // Виды содержимого разбирает движок (spec 035 T114) — WASM нужен и юнит-тестам
 beforeAll(() => {
   initSync({ module: readFileSync(path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm')) });
@@ -50,11 +57,11 @@ describe('задание в чат (spec 011, TASK-1)', () => {
   });
 
   it('текст для клиентов без планировщика и ответа', () => {
-    expect(taskOfferText({ name: 'Отчёт', day: '2026-10-20', start: '10:00', minutes: 60, due: '2026-10-21' }))
+    expect(taskOfferText({ name: 'Отчёт', day: '2026-10-20', start: '10:00', minutes: 60, due: '2026-10-21' }, ruLang))
       .toBe('📋 Задание: Отчёт · 2026-10-20 10:00 · 60 мин · до 2026-10-21');
-    expect(taskOfferText({ name: 'Без даты' })).toBe('📋 Задание: Без даты');
-    expect(taskResponseText('Отчёт', true)).toBe('✅ Принято: задание «Отчёт»');
-    expect(taskResponseText('Отчёт', false)).toBe('❌ Отклонено: задание «Отчёт»');
+    expect(taskOfferText({ name: 'Без даты' }, ruLang)).toBe('📋 Задание: Без даты');
+    expect(taskResponseText('Отчёт', true, ruLang)).toBe('✅ Принято: задание «Отчёт»');
+    expect(taskResponseText('Отчёт', false, ruLang)).toBe('❌ Отклонено: задание «Отчёт»');
   });
 
   it('вид карточки: событие — день и время начала без шагов и срока, иначе задание', () => {
@@ -116,10 +123,10 @@ describe('задание в чат (spec 011, TASK-1)', () => {
   });
 
   it('текст карточки-события и ответа на неё', () => {
-    expect(taskOfferText({ name: 'Созвон', day: '2026-10-20', start: '10:00', minutes: 30 }))
+    expect(taskOfferText({ name: 'Созвон', day: '2026-10-20', start: '10:00', minutes: 30 }, ruLang))
       .toBe('📅 Событие: Созвон · 2026-10-20 10:00 · 30 мин');
-    expect(taskResponseText('Созвон', true, 'event')).toBe('✅ Принято: событие «Созвон»');
-    expect(taskResponseText('Созвон', false, 'event')).toBe('❌ Отклонено: событие «Созвон»');
+    expect(taskResponseText('Созвон', true, ruLang, 'event')).toBe('✅ Принято: событие «Созвон»');
+    expect(taskResponseText('Созвон', false, ruLang, 'event')).toBe('❌ Отклонено: событие «Созвон»');
   });
 
   it('содержимое v2 ↔ wire: задание и решение — видимые сообщения', () => {
